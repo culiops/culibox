@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 func TestSaveLoadRoundTrip(t *testing.T) {
@@ -85,5 +87,42 @@ func TestSaveRefusesSymlinkedTemp(t *testing.T) {
 	}
 	if got, _, err := Load(dir); err != nil || len(got) != 1 {
 		t.Fatalf("file must be a regular file again: %v %v", got, err)
+	}
+}
+
+// A file from a newer CuliBox stays ErrCorrupt (so the read-only handling is
+// unchanged) but is named as newer, not "damaged", even when its body no longer
+// fits this build's types.
+func TestLoadNewerVersion(t *testing.T) {
+	for _, body := range []string{
+		`{"version":2,"shares":[]}`,
+		`{"version":2,"shares":"x"}`,
+	} {
+		dir := t.TempDir()
+		p := filepath.Join(dir, FileName)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, exists, err := Load(dir)
+		if !exists || !errors.Is(err, ErrCorrupt) || !errors.Is(err, datacompat.ErrNewer) {
+			t.Fatalf("%s: exists=%v err=%v", body, exists, err)
+		}
+		if strings.Contains(err.Error(), "damaged") || !strings.Contains(err.Error(), p) {
+			t.Fatalf("%s: message must name the file and not say damaged: %v", body, err)
+		}
+		if after, _ := os.ReadFile(p); string(after) != body {
+			t.Fatalf("%s: file was rewritten to %s", body, after)
+		}
+	}
+}
+
+func TestLoadVersionZeroIsNotNewer(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(`{"version":0,"shares":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, exists, err := Load(dir)
+	if !exists || !errors.Is(err, ErrCorrupt) || errors.Is(err, datacompat.ErrNewer) {
+		t.Fatalf("exists=%v err=%v", exists, err)
 	}
 }
