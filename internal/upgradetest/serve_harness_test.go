@@ -5,6 +5,7 @@ package upgradetest
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -65,6 +66,7 @@ type Server struct {
 	Log       string
 	cmd       *exec.Cmd
 	done      chan struct{}
+	logFrom   int64 // the log's size when this process started
 }
 
 // FreePort returns a loopback port that was free a moment ago.
@@ -127,6 +129,9 @@ func (s *Server) startCmd(t *testing.T, cmd *exec.Cmd) error {
 	if err != nil {
 		return err
 	}
+	if fi, err := f.Stat(); err == nil {
+		s.logFrom = fi.Size()
+	}
 	fmt.Fprintf(f, "==== %s %s\n", time.Now().UTC().Format(time.RFC3339), strings.Join(cmd.Args, " "))
 	cmd.Stdout, cmd.Stderr = f, f
 	if err := cmd.Start(); err != nil {
@@ -151,9 +156,10 @@ func (s *Server) exited() bool {
 	}
 }
 
-// Ready waits for GET /login to answer 200 from this process. A process that
-// exits first fails at once, with its log, so a stale server on the same port
-// is never mistaken for this one.
+// Ready waits until this process logged that it listens on its port and
+// GET /login answers 200. A process that exits first fails at once, with its
+// log, and a server someone else runs on the port is never taken for ours: it
+// answers, but this process never logs the listening line.
 func (s *Server) Ready(timeout time.Duration) error {
 	c := &http.Client{Timeout: 2 * time.Second}
 	deadline := time.Now().Add(timeout)
@@ -161,16 +167,32 @@ func (s *Server) Ready(timeout time.Duration) error {
 		if s.exited() {
 			return fmt.Errorf("process exited (%v):\n%s", s.cmd.ProcessState, LogTail(s.Log, 40))
 		}
-		resp, err := c.Get("http://127.0.0.1:" + s.Port + "/login")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK && !s.exited() {
-				return nil
+		if strings.Contains(s.LogSince(), " listening on 127.0.0.1:"+s.Port+" (allowed hosts") {
+			resp, err := c.Get("http://127.0.0.1:" + s.Port + "/login")
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK && !s.exited() {
+					return nil
+				}
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return fmt.Errorf("no answer on :%s within %v:\n%s", s.Port, timeout, LogTail(s.Log, 40))
+	return fmt.Errorf("not serving on :%s within %v:\n%s", s.Port, timeout, LogTail(s.Log, 40))
+}
+
+// LogSince returns what was logged since this process started.
+func (s *Server) LogSince() string {
+	f, err := os.Open(s.Log)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if _, err := f.Seek(s.logFrom, io.SeekStart); err != nil {
+		return ""
+	}
+	b, _ := io.ReadAll(io.LimitReader(f, 16<<20))
+	return string(b)
 }
 
 // Stop sends SIGTERM and waits up to 15 s; a process still running then is

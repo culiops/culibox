@@ -28,9 +28,11 @@ bash scripts/setup_test.sh
 # The upgrade test (#229): its resolver and build steps offline, then the real thing,
 # which builds the previous release and upgrades a throwaway data root to this
 # checkout (prints SKIP in a clone with no previous tag). The test package carries the
-# upgrade build tag, so the darwin vet below does not reach it: vet it here.
+# upgrade build tag, so neither go vet ./... nor the darwin vet below reaches it:
+# vet it here (a tagless clone SKIPs the run above and would never compile it).
 bash scripts/upgrade-test_test.sh
 bash scripts/upgrade-test.sh
+go vet -tags upgrade ./internal/upgradetest/
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet -tags upgrade ./internal/upgradetest/
 # The CI secret-scan script, against a stub gitleaks and a throwaway repo.
 bash scripts/ci/secret-scan_test.sh

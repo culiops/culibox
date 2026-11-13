@@ -21,6 +21,13 @@
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
+# Paths given relative to the caller's directory: the script cds to the repo,
+# the previous build runs in its own source dir and go test in the package dir.
+abs() { case $1 in /* | '') echo "$1" ;; *) echo "$PWD/$1" ;; esac; }
+AB_PREV_BIN=$(abs "${AB_PREV_BIN:-}")
+AB_CUR_BIN=$(abs "${AB_CUR_BIN:-}")
+AB_UPGRADE_TESTBIN=$(abs "${AB_UPGRADE_TESTBIN:-}")
+AB_UPGRADE_BUILD=$(abs "${AB_UPGRADE_BUILD:-}")
 cd "$repo"
 
 skip() {

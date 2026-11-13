@@ -72,6 +72,7 @@ func testPinnedRoot(t *testing.T, prev, cur string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { KillSessions(root) })
+	cleanupSocketDirs(t, func() []string { return []string{root} })
 	cleanupStoreKeys(t, func() []string { return []string{secretstore.KeyHash(root)} })
 	s.env = Env{Home: s.home, RootEnv: root}
 	WriteConfig(t, root, s.port, s.fake)
@@ -127,10 +128,11 @@ func testDefaultRoot(t *testing.T, prev, cur string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { KillSessions(legacy); KillSessions(newRoot) })
+	cleanupSocketDirs(t, func() []string { return []string{legacy, newRoot} })
 	// The legacy hash is taken now: after the move the legacy path resolves to
 	// the new root. The new root's hash is taken at cleanup, once it exists.
 	legacyHash := secretstore.KeyHash(legacy)
-	cleanupStoreKeys(t, func() []string { return []string{legacyHash, secretstore.KeyHash(newRoot)} })
+	cleanupStoreKeys(t, func() []string { return []string{legacyHash, secretstore.KeyHash(newRoot), carriedKeyHash(newRoot)} })
 	s.env = Env{Home: s.home}
 	WriteConfig(t, legacy, s.port, s.fake)
 

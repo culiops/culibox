@@ -120,6 +120,15 @@ has "prev: $tmp/stubs/good (supplied)" "8: and is used instead of a build"
 run "$r" AB_PREV_REF=v0.1.0 AB_PREV_BIN="$(stub prefix 'agent-box v0.1.0-3-gabc (abc)' 0)"
 expect_rc "$rc" 1 "6: a tag that only prefixes the reported version is a mismatch"
 
+# 11. Relative binary and build paths are taken from the caller's directory: the
+# script cds to the repo and go test runs in the package dir.
+rc=0
+(cd "$tmp" && env AB_UPGRADE_DRYRUN=1 AB_PREV_REF=v0.1.0 AB_PREV_BIN=stubs/good AB_UPGRADE_BUILD=relbuild \
+  bash "$r/scripts/upgrade-test.sh") >"$tmp/out" 2>&1 || rc=$?
+expect_rc "$rc" 0 "11: relative paths dry run exits 0"
+has "prev: $tmp/stubs/good (supplied)" "11: a relative AB_PREV_BIN is made absolute"
+has "-o $tmp/relbuild/cur" "11: a relative AB_UPGRADE_BUILD is made absolute"
+
 # The script is bash 3.2 code that also runs on macOS: lint it when shellcheck is here.
 if command -v shellcheck >/dev/null 2>&1; then
   if shellcheck "$here/upgrade-test.sh" >"$tmp/out" 2>&1; then pass "shellcheck is clean"; else

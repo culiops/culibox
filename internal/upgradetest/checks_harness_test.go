@@ -405,13 +405,14 @@ func compare(t *testing.T, what string, before, after json.RawMessage, rewrite f
 
 // unlockThroughBinary reads UPG_ONE back through the running binary: unlock
 // (Linux), spawn the upg-secret agent, read what it was given. Without a kernel
-// keyring (a box) this is a SKIP, and only when vN-1 could not unlock either.
+// keyring (a box: the probe cannot save a key) this is a SKIP, and only when
+// vN-1 could not unlock either.
 func unlockThroughBinary(t *testing.T, c *Client, f *Fixture) {
 	t.Helper()
 	if runtime.GOOS != "darwin" {
 		_, err := c.Do("POST", "/api/store/unlock", map[string]string{"passphrase": passphrase}, nil)
 		if err != nil {
-			if !f.StoreUnlockable && strings.Contains(LogTail(f.Log, 1000), "kernel keyring add: operation not permitted") {
+			if !f.StoreUnlockable && !keyringUsable() {
 				t.Logf("SKIP store unlock through the binary: no kernel keyring (host row H229-B1)")
 				return
 			}

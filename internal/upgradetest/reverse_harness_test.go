@@ -117,9 +117,8 @@ func Reverse(t *testing.T, scenario string, c *Client, prevBin string, e Env, f 
 		brk("R2", "audit.db", "a store write (which records an audit row) fails: "+err.Error())
 		return
 	}
-	after := auditRows(t, c)
-	if miss := missingRows(before, after); len(miss) > 0 || countOutcome(after, "value_set") != countOutcome(before, "value_set")+1 {
-		brk("R2", "audit.db", fmt.Sprintf("vN-1 lost or did not list audit rows with the added column (missing %v)", miss))
+	if err := oneMore(before, auditRows(t, c), "value_set"); err != nil {
+		brk("R2", "audit.db", "vN-1 lost or did not list audit rows with the added column: "+err.Error())
 		return
 	}
 	t.Logf("PASS R2: vN-1 writes and lists audit rows on an audit.db with an added column (tables: %s)", strings.Join(tables, ", "))
@@ -162,11 +161,11 @@ func r1(t *testing.T, c *Client, f *Fixture, brk func(step, file, reason string)
 	if _, err := c.WithBearer(f.Bearer).Do("GET", "/api/sessions", nil, nil); err != nil {
 		check("tokens.json", err)
 	}
-	before := len(f.Audit)
+	before := auditRows(t, c)
 	if _, err := c.Do("PUT", "/api/store/values/UPG_THREE", map[string]string{"value": "three-229b"}, nil); err != nil {
 		check("store", fmt.Errorf("a new value cannot be stored: %v", err))
-	} else if after := auditRows(t, c); len(after) <= before {
-		check("audit.db", fmt.Errorf("the value_set row for UPG_THREE is not listed (%d rows, had %d)", len(after), before))
+	} else if err := oneMore(before, auditRows(t, c), "value_set"); err != nil {
+		check("audit.db", fmt.Errorf("the value_set row for UPG_THREE: %v", err))
 	}
 	if !t.Failed() {
 		t.Logf("PASS R1: vN-1 starts on vN's data and reads it back")
@@ -179,6 +178,18 @@ func sameRaw(c *Client, path string, want json.RawMessage) error {
 		return err
 	}
 	return sameProjected(string(want), string(got), nil)
+}
+
+// oneMore checks that after holds every before row plus exactly one more row
+// with the given outcome.
+func oneMore(before, after []AuditRow, outcome string) error {
+	if miss := missingRows(before, after); len(miss) > 0 {
+		return fmt.Errorf("rows missing: %+v", miss)
+	}
+	if b, a := countOutcome(before, outcome), countOutcome(after, outcome); a != b+1 {
+		return fmt.Errorf("%d %s rows, want %d", a, outcome, b+1)
+	}
+	return nil
 }
 
 func countOutcome(rows []AuditRow, outcome string) int {

@@ -8,6 +8,10 @@
 // data the current one wrote (binary-only rollback).
 //
 // Every file carries the "upgrade" build tag, so go test ./... never builds it.
+// The harness is test code, so it lives in _test.go files (*_harness_test.go):
+// the repo's source guards (cmd/culibox paths_guard_test.go and
+// clonedir_guard_test.go), which pin where product code writes and deletes,
+// skip test files.
 // Run it through scripts/upgrade-test.sh, which resolves and builds both
 // binaries; go test -tags upgrade alone runs only the unit tests and skips the
 // end-to-end test.

@@ -75,3 +75,16 @@ func TestReportUnbrokenKnownEntries(t *testing.T) {
 		t.Fatalf("a key that broke was reported fixed: %v", r.logs)
 	}
 }
+
+func TestOneMoreRow(t *testing.T) {
+	base := []AuditRow{{TS: 1, Kind: "store", Outcome: "value_set"}, {TS: 2, Kind: "store", Outcome: "unlocked"}}
+	if err := oneMore(base, append(base, AuditRow{TS: 3, Kind: "store", Outcome: "value_set"}), "value_set"); err != nil {
+		t.Fatalf("a new value_set row was refused: %v", err)
+	}
+	if err := oneMore(base, append(base, AuditRow{TS: 3, Kind: "store", Outcome: "unlocked"}), "value_set"); err == nil {
+		t.Fatal("a row of another outcome counted")
+	}
+	if err := oneMore(base, base[1:], "value_set"); err == nil {
+		t.Fatal("a lost row was not reported")
+	}
+}

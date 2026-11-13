@@ -4,8 +4,11 @@ package upgradetest
 
 import (
 	"errors"
+	"os"
+	"strconv"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/culiops/culibox/internal/secretstore"
 )
@@ -31,4 +34,20 @@ func cleanupStoreKeys(t *testing.T, hashes func() []string) {
 			}
 		}
 	})
+}
+
+// cleanupSocketDirs is darwin's: on Linux the abduco sockets live under the
+// data root and go with the throwaway tree.
+func cleanupSocketDirs(t *testing.T, roots func() []string) {}
+
+// keyringUsable reports whether this process can keep a key in the kernel user
+// keyring, which a store unlock needs: it saves and clears a one-second key
+// under a name no store uses. A box's seccomp profile refuses keyctl (EPERM).
+func keyringUsable() bool {
+	k := secretstore.NewKeeperForHash("upgrade-test-probe-" + strconv.Itoa(os.Getpid()))
+	if err := k.Save("probe", time.Second); err != nil {
+		return false
+	}
+	_ = k.Clear()
+	return true
 }

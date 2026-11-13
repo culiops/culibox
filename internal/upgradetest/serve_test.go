@@ -89,12 +89,14 @@ func TestCleanupKillsOnlyRecordedPIDs(t *testing.T) {
 	}
 	defer os.RemoveAll(root)
 	cmd := exec.Command("/bin/sh", "-c", "sleep 30", root)
+	// Its own process group, so the sleep the shell forks is killed with it.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	defer cmd.Process.Kill()
+	defer syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	pid := cmd.Process.Pid
 	writeFile(t, filepath.Join(root, "sessions/pids/a.pid"), fmt.Sprintf("inner=%d srv=%d\n", pid, pid), 0o600)
 	writeFile(t, filepath.Join(root, "sessions/pids/b.pid"), "inner=1 srv=1\n", 0o600)
@@ -138,5 +140,39 @@ func TestClientSendsOriginAndBearer(t *testing.T) {
 	}
 	if got.Get("Authorization") != "Bearer x" {
 		t.Fatalf("Authorization %q", got.Get("Authorization"))
+	}
+}
+
+func TestReadyRejectsAForeignServer(t *testing.T) {
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer foreign.Close()
+	port := foreign.URL[strings.LastIndex(foreign.URL, ":")+1:]
+	s := &Server{Port: port, Log: filepath.Join(t.TempDir(), "serve.log")}
+	cmd := exec.Command("sleep", "5")
+	if err := s.startCmd(t, cmd); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ready(1500 * time.Millisecond); err == nil {
+		t.Fatal("Ready accepted a server that is not this process")
+	}
+}
+
+func TestReadyAcceptsOurListeningLine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+	log := filepath.Join(t.TempDir(), "serve.log")
+	writeFile(t, log, "x culibox listening on 127.0.0.1:"+port+" (old run)\n", 0o600)
+	s := &Server{Port: port, Log: log}
+	// The line before this start's marker must not count; the one after must.
+	if err := s.startCmd(t, exec.Command("sh", "-c", "sleep 0.3; printf '%s listening on 127.0.0.1:%s (allowed hosts: x)\\n' y \"$0\"; exec sleep 5", port)); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := s.Ready(3 * time.Second); err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if d := time.Since(start); d < 250*time.Millisecond {
+		t.Fatalf("Ready returned after %v, before the process logged its listening line", d)
 	}
 }
