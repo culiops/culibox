@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // needBins returns the vN-1 and vN binaries scripts/upgrade-test.sh built, or
@@ -70,6 +72,7 @@ func testPinnedRoot(t *testing.T, prev, cur string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { KillSessions(root) })
+	cleanupStoreKeys(t, func() []string { return []string{secretstore.KeyHash(root)} })
 	s.env = Env{Home: s.home, RootEnv: root}
 	WriteConfig(t, root, s.port, s.fake)
 	f := &Fixture{Root: root, Home: s.home, Fake: s.fake, Log: s.log}
@@ -123,6 +126,10 @@ func testDefaultRoot(t *testing.T, prev, cur string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { KillSessions(legacy); KillSessions(newRoot) })
+	// The legacy hash is taken now: after the move the legacy path resolves to
+	// the new root. The new root's hash is taken at cleanup, once it exists.
+	legacyHash := secretstore.KeyHash(legacy)
+	cleanupStoreKeys(t, func() []string { return []string{legacyHash, secretstore.KeyHash(newRoot)} })
 	s.env = Env{Home: s.home}
 	WriteConfig(t, legacy, s.port, s.fake)
 
