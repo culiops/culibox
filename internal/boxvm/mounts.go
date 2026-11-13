@@ -76,6 +76,10 @@ func ReadMounts(yamlPath string) ([]Mount, error) {
 	for i++; i < len(lines); i++ {
 		l := lines[i]
 		if l == "provision:" {
+			// colima reads an empty list as "mount the home folder read-write".
+			if len(out) == 0 {
+				return bad(i, "empty mounts: block")
+			}
 			return out, nil
 		}
 		loc, ok := strings.CutPrefix(l, `  - location: "`)
@@ -106,4 +110,33 @@ func ReadMounts(yamlPath string) ([]Mount, error) {
 		out = append(out, Mount{loc, w})
 	}
 	return nil, errors.New(yamlPath + ": mounts: block does not end with provision:")
+}
+
+// ErrMountsIncomplete means the written colima.yaml is not one CuliBox wrote:
+// it lacks the four data mounts and does not share the home folder either.
+var ErrMountsIncomplete = errors.New("the box VM's colima.yaml does not hold the folders CuliBox always shares; it was edited or cut short, so its folder list is not trusted")
+
+// checkApplied is nil when ms is a list CuliBox could have written: the four
+// data mounts (and maybe shares), or, for a VM set up by an older CuliBox, a
+// mount that covers the home folder. Anything else, a truncated or hand-edited
+// file, must never read as an applied list.
+func checkApplied(c Config, ms []Mount) error {
+	for _, m := range ms {
+		if vmshares.Within(c.Home, m.Location, c.Fold) {
+			return nil
+		}
+	}
+	for _, d := range DataMounts(c.Root) {
+		found := false
+		for _, m := range ms {
+			if vmshares.Within(m.Location, d.Location, c.Fold) && vmshares.Within(d.Location, m.Location, c.Fold) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return ErrMountsIncomplete
+		}
+	}
+	return nil
 }
