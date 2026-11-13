@@ -112,7 +112,7 @@ func TestMoveDataRootBindsDeps(t *testing.T) {
 
 func TestMoveDataRootSkipsWithEnvHome(t *testing.T) {
 	e := newRootEnv(t)
-	out, err := maybeMoveDataRoot("serve", "/somewhere/else", e.home, e.xdg, "linux", e.logf)
+	out, err := maybeMoveDataRoot("serve", false, "/somewhere/else", e.home, e.xdg, "linux", e.logf)
 	if err != nil || out.Moved || out.Reason != "" {
 		t.Fatalf("%+v %v", out, err)
 	}
@@ -120,7 +120,7 @@ func TestMoveDataRootSkipsWithEnvHome(t *testing.T) {
 		t.Fatal("the legacy root must stay untouched with a root env var")
 	}
 	// Only serve moves.
-	if _, err := maybeMoveDataRoot("doctor", "", e.home, e.xdg, "linux", e.logf); err != nil {
+	if _, err := maybeMoveDataRoot("doctor", false, "", e.home, e.xdg, "linux", e.logf); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Lstat(e.legacy); !fi.IsDir() {
@@ -130,7 +130,7 @@ func TestMoveDataRootSkipsWithEnvHome(t *testing.T) {
 		t.Fatalf("new root exists: %v", err)
 	}
 	// And with no env var, serve does.
-	if out, err := maybeMoveDataRoot("serve", "", e.home, e.xdg, "linux", e.logf); err != nil || !out.Moved {
+	if out, err := maybeMoveDataRoot("serve", false, "", e.home, e.xdg, "linux", e.logf); err != nil || !out.Moved {
 		t.Fatalf("serve: %+v %v", out, err)
 	}
 }
@@ -276,5 +276,35 @@ func TestWarnLeftBehindProfilesUsesResolvedRoot(t *testing.T) {
 	})
 	if !strings.Contains(got, e.newRoot+"/profiles.json") {
 		t.Fatalf("log: %q", got)
+	}
+}
+
+// R7: serve -config x.json loads a file the move cannot inspect, so nothing moves:
+// not the root, not the ~/.config file.
+func TestMoveDataRootSkipsExplicitConfig(t *testing.T) {
+	e := newRootEnv(t)
+	writeFile(t, filepath.Join(e.xdg, "agent-box", "config.json"), `{"bind_addr":"127.0.0.1:8899"}`)
+	called := false
+	real := rootmoveXDG
+	rootmoveXDG = func(base string) (bool, error) { called = true; return real(base) }
+	t.Cleanup(func() { rootmoveXDG = real })
+	out, err := maybeMoveDataRoot("serve", true, "", e.home, e.xdg, "linux", e.logf)
+	if err != nil || out.Moved || !strings.Contains(out.Reason, "-config") {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if called {
+		t.Fatal("the XDG move ran with -config set")
+	}
+	if fi, err := os.Lstat(e.legacy); err != nil || !fi.IsDir() {
+		t.Fatal("the legacy root must stay")
+	}
+	if _, err := os.Lstat(e.newRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("new root exists: %v", err)
+	}
+	if fi, err := os.Lstat(filepath.Join(e.xdg, "agent-box", "config.json")); err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("~/.config/agent-box/config.json touched: %v", err)
+	}
+	if !strings.Contains(strings.Join(e.logs, "\n"), "data root: kept at "+e.legacy+" (serve -config is set") {
+		t.Fatalf("logs: %v", e.logs)
 	}
 }

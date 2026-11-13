@@ -99,7 +99,7 @@ func main() {
 	// credentials and protected list are all built from the new path.
 	var rootNote string
 	if homeErr == nil && envErr == nil {
-		out, err := maybeMoveDataRoot(args.Cmd, envHome, home, xdg, runtime.GOOS, log.Printf)
+		out, err := maybeMoveDataRoot(args.Cmd, args.ConfigSet, envHome, home, xdg, runtime.GOOS, log.Printf)
 		if err != nil {
 			log.Fatalf("culibox: %v", err)
 		}

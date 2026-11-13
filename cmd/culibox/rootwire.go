@@ -24,11 +24,22 @@ var newKeeperForHash = secretstore.NewKeeperForHash
 // rootmoveXDG is rootmove.MoveXDGConfig; a variable so a test can see it run.
 var rootmoveXDG = rootmove.MoveXDGConfig
 
-// maybeMoveDataRoot is main's gate: only `serve`, and only with no root env var
-// (spec D2 precondition (a)), moves anything.
-func maybeMoveDataRoot(cmd, envHome, home, xdg, goos string, logf func(string, ...any)) (rootmove.Outcome, error) {
+// maybeMoveDataRoot is main's gate: only `serve`, only with no root env var
+// (spec D2 precondition (a)), and only without an explicit -config, move
+// anything. With -config the config serve loads is a file the move cannot
+// inspect (the data_dir skip and precondition (e) read the default one), so
+// neither the root nor the ~/.config file moves; the reason is logged and
+// reaches doctor.
+func maybeMoveDataRoot(cmd string, configSet bool, envHome, home, xdg, goos string, logf func(string, ...any)) (rootmove.Outcome, error) {
 	if cmd != "serve" || envHome != "" {
 		return rootmove.Outcome{}, nil
+	}
+	if configSet {
+		out := rootmove.Outcome{Reason: "serve -config is set; the move only reads the default config"}
+		if ri, err := config.ResolveRoot(home, ""); err == nil && ri.Kind == config.RootLegacy {
+			logf("data root: kept at %s (%s); the next serve start tries again", ri.Path, out.Reason)
+		}
+		return out, nil
 	}
 	return moveDataRoot(home, xdg, goos, logf)
 }
