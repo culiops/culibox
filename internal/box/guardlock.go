@@ -45,6 +45,10 @@ import (
 // guardLocksFile is the lock records' file in the data root.
 const guardLocksFile = "inplace-locks.json"
 
+// guardLocksUnreadable is where records that cannot be read are kept, so the
+// next save does not overwrite what they named.
+const guardLocksUnreadable = guardLocksFile + ".unreadable"
+
 // guardLocksVersion is the records' format: one record per file identity (2).
 // Version 1 (the first #96 build, never released) kept one per folder
 // spelling; it loads merged by identity (mergeByFile).
@@ -131,14 +135,26 @@ var guardFlockWait = 2 * time.Second
 // another file): there is nothing of ours to clear.
 var errLockGone = errors.New("the locked file is gone")
 
-// newGuardLocks loads the records under root. Unreadable records are logged
-// and dropped: a flag CuliBox set then reads as the user's and is never
-// cleared, which is the safe direction (doctor names the file to unlock).
+// newGuardLocks loads the records under root. Unreadable records are moved
+// aside (guardLocksUnreadable), never overwritten, and CuliBox starts with
+// none: a flag it set then has no record of ours, so it is never cleared and
+// an in-place spawn in its folder is refused, naming the file (hold). A move
+// fails when the data root cannot be written, and then no save can overwrite
+// them either.
 func newGuardLocks(root string, ops flagOps) *guardLocks {
 	g := &guardLocks{ops: ops, path: filepath.Join(root, guardLocksFile)}
 	recs, err := ReadGuardLocks(root)
 	if err != nil {
-		log.Printf("box: in-place lock records: %v (starting with none; a file CuliBox locked before stays locked until you run chflags nouchg on it)", err)
+		aside := filepath.Join(root, guardLocksUnreadable)
+		if _, serr := os.Lstat(aside); serr == nil {
+			aside += "." + time.Now().UTC().Format("20060102T150405.000000000")
+		}
+		if rerr := os.Rename(g.path, aside); rerr != nil {
+			log.Printf("box: in-place lock records: %v; it cannot be moved aside either: %v", err, rerr)
+		} else {
+			log.Printf("box: in-place lock records: %v (kept as %s; starting with none: a file CuliBox locked before stays "+
+				"locked until you run chflags nouchg on it, and a box in its folder is refused until then)", err, aside)
+		}
 	}
 	g.recs = recs
 	return g

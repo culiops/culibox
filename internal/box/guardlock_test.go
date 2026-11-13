@@ -1101,3 +1101,25 @@ func TestGuardLocksDeviceChangedStaysAsLeftover(t *testing.T) {
 		t.Fatalf("an unflagged file's record goes: %+v", g.all())
 	}
 }
+
+// #247 (also): unreadable records are kept aside, never overwritten by the
+// next save, so what they named is not lost.
+func TestGuardLocksUnreadableRecordsAreKeptAside(t *testing.T) {
+	_, _, ff := lockMgr(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, guardLocksFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := newGuardLocks(dir, ff)
+	ws := lockWS(t)
+	if _, err := g.hold(ws, claudeFile(t, ws), "b1", ""); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, guardLocksUnreadable))
+	if err != nil || string(b) != "{" {
+		t.Fatalf("the unreadable records are kept aside as they were: %q %v", b, err)
+	}
+	if rs := readLocksAt(t, dir); len(rs) != 1 {
+		t.Fatalf("new records are written as usual: %+v", rs)
+	}
+}
