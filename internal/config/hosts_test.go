@@ -58,7 +58,7 @@ func TestValidate_RelativeSocketDir(t *testing.T) {
 }
 
 func TestResolvedDataDir(t *testing.T) {
-	if got := validCfg().ResolvedDataDir("/home/u"); got != "/home/u/.local/share/agent-box" {
+	if got := validCfg().ResolvedDataDir("/home/u"); got != "/home/u/.local/share/culibox" {
 		t.Errorf("got %q", got)
 	}
 	c := validCfg()

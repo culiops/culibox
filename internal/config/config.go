@@ -787,13 +787,18 @@ func isLoopbackHost(h string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// ResolvedDataDir is data_dir, or ~/.local/share/agent-box for a Config that
-// did not come through Resolve (which always fills data_dir).
+// ResolvedDataDir is data_dir, or the default data root (ResolveRoot, no env
+// var) for a Config that did not come through Resolve (which always fills
+// data_dir). When the root cannot be resolved it is the new path.
 func (c Config) ResolvedDataDir(home string) string {
 	if c.DataDir != "" {
 		return c.DataDir
 	}
-	return filepath.Join(home, ".local", "share", "agent-box")
+	if ri, err := ResolveRoot(home, ""); err == nil {
+		return ri.Path
+	}
+	n, _ := DefaultRoots(home)
+	return n
 }
 
 // ResolvedProfilesPath is profiles_path, else profiles.json in the data dir.

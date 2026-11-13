@@ -30,8 +30,7 @@ var pathEscapes = map[string]int{
 	"internal/vmshares/check.go literal .config": 3,
 	"internal/vmshares/check.go literal Library": 1,
 	// Locating the data root itself, and the ~/.config fallback for the config file.
-	"internal/config/config.go literal .local":   1, // ResolvedDataDir, for a Config not built by Resolve
-	"internal/config/resolve.go literal .local":  1,
+	"internal/config/resolve.go literal .local":  1, // DefaultRoots; ResolvedDataDir goes through it
 	"internal/config/resolve.go literal .config": 1,
 	// The bundle reads the user's Claude config (a read, never a write): "~" in
 	// bundle_source, the default ~/.claude source, and refusing a source whose
