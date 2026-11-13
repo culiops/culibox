@@ -214,7 +214,19 @@ func runInit(a cliArgs, home string, in io.Reader, inTTY bool, out io.Writer, d 
 	if !initDepsStep(u, cfg, d) {
 		return 1
 	}
-	if _, ok := initDataRootStep(u, cfg, src, home); !ok {
+	dataDir, ok := initDataRootStep(u, cfg, src, home)
+	if !ok {
+		return 1
+	}
+	cfgFiles, err := config.ConfigFiles(a.ConfigPath, a.ConfigSet, home, d.getenv("XDG_CONFIG_HOME"), envHome)
+	if cfgFiles, err = boxConfigFiles(d.goos, cfgFiles, err); err != nil {
+		fmt.Fprintf(out, "culibox init: config: %v\n", err)
+		return 1
+	}
+	if _, ok := initWorkspaceStep(u, cfg, dataDir, home, cfgFiles, d); !ok {
+		return 1
+	}
+	if _, _, ok := initVMSizeStep(u, cfg, dataDir, d); !ok {
 		return 1
 	}
 	return 0

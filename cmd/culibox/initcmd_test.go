@@ -386,14 +386,19 @@ func TestDepsUnknownMacOSContinues(t *testing.T) {
 
 func initHome(t *testing.T) string {
 	t.Helper()
-	return t.TempDir()
+	h := t.TempDir()
+	t.Setenv("HOME", h) // the box workspace rule reads os.UserHomeDir
+	return h
 }
+
+// wsAnswer answers step 3 with a folder under home that init creates.
+const wsAnswer = "~/work\ny\n"
 
 func TestInitDataRootCreates(t *testing.T) {
 	home := initHome(t)
 	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
 	var out bytes.Buffer
-	code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(""), true, &out, f.deps("linux"))
+	code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer), true, &out, f.deps("linux"))
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
@@ -418,7 +423,7 @@ func TestInitDataRootExisting(t *testing.T) {
 	}
 	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
 	var out bytes.Buffer
-	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(""), true, &out, f.deps("linux")); code != 0 {
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer), true, &out, f.deps("linux")); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 	if !strings.Contains(out.String(), "already done: "+root) {
@@ -431,7 +436,7 @@ func TestInitDataRootEnv(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "relocated")
 	f := &fakeInit{have: allHave("abduco", "docker", "claude"), env: map[string]string{"CULIBOX_HOME": root}}
 	var out bytes.Buffer
-	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(""), true, &out, f.deps("linux")); code != 0 {
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer), true, &out, f.deps("linux")); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 	if _, err := os.Stat(root); err != nil {
@@ -450,7 +455,7 @@ func TestInitDataRootLegacy(t *testing.T) {
 	}
 	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
 	var out bytes.Buffer
-	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(""), true, &out, f.deps("linux")); code != 0 {
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer), true, &out, f.deps("linux")); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 	if !strings.Contains(out.String(), "already done: "+legacy) {
@@ -526,5 +531,31 @@ func TestInitPlaceholderDepsAreConservative(t *testing.T) {
 	}
 	if d.goos == "" || d.getenv == nil || d.lookPath == nil || d.run == nil || d.readSecret == nil || d.hostSize == nil || d.macOSMajor == nil || d.osRelease == nil {
 		t.Fatal("real seams missing")
+	}
+}
+
+func TestInitRunsWorkspaceAndVMSizeSteps(t *testing.T) {
+	home := initHome(t)
+	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
+	var out bytes.Buffer
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer), true, &out, f.deps("linux")); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	for _, w := range []string{"== step 3/8: workspace folder", "== step 4/8: VM size", "skipped: the box VM exists only on macOS"} {
+		if !strings.Contains(out.String(), w) {
+			t.Errorf("missing %q in:\n%s", w, out.String())
+		}
+	}
+}
+
+func TestInitStopsWhenNoWorkspaceIsGiven(t *testing.T) {
+	home := initHome(t)
+	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
+	var out bytes.Buffer
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(""), true, &out, f.deps("linux")); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if strings.Contains(out.String(), "step 4/8") {
+		t.Fatalf("a stopped step must end the chain: %s", out.String())
 	}
 }
