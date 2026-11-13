@@ -11,6 +11,7 @@ import (
 	"time"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
@@ -28,7 +29,13 @@ import (
 //
 // st is the encrypted store when a secret source names it (see StoreFor); nil
 // otherwise. A locked store counts as "does not resolve", never a pass.
-func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
+//
+// An agent that names an account (not "default") also counts that account's own
+// pasted token (account.OwnsStoreToken), read straight from acctStore, the
+// encrypted store opened directly (see AccountStoreFor; nil when there is none),
+// the way the launcher does when secret_sources has no store entry. accts is
+// accounts.json (storerefs.ReadAccounts).
+func ClaudeBoxToken(c config.Config, st credref.StoreGetter, acctStore credref.StoreGetter, accts []account.Account) Result {
 	const check = "boxed claude token"
 	res, rerr := secretchain.New(c.SecretSources, st)
 	var missing []string
@@ -59,6 +66,19 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 				}
 			}
 		}
+		if !found && !isLocked && unavail == nil && a.Account != "" && a.Account != account.Default && acctStore != nil {
+			if i := slices.IndexFunc(accts, func(x account.Account) bool { return x.Name == a.Account }); i >= 0 && accts[i].OwnsStoreToken() {
+				_, err := acctStore.Get(accts[i].TokenSecret)
+				switch {
+				case err == nil:
+					found = true
+				case errors.Is(err, credref.ErrLocked):
+					isLocked = true
+				case errors.Is(err, secretstore.ErrKeeperUnavailable):
+					unavail = err
+				}
+			}
+		}
 		switch {
 		case found:
 		case unavail != nil:
@@ -85,8 +105,8 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 			`: the Claude token is in the store, which is locked — unlock it ("culibox store unlock")`}
 	case len(missing) > 0:
 		return Result{Warn, check, "agent(s) " + strings.Join(missing, ", ") +
-			" have no CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY secret that resolves; a boxed claude will ask to /login. " +
-			"Run `claude setup-token`, store it as a secret source, and list it in the agent's secrets"}
+			" have no Claude token that resolves (account or CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY secret); a boxed claude will ask to /login. " +
+			`Run "culibox init" or paste a setup-token under Settings → Agent accounts`}
 	}
 	return Result{Pass, check, fmt.Sprintf("%d boxed claude agent(s) have a credential", boxed)}
 }

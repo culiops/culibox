@@ -11,8 +11,10 @@ import (
 	"testing"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/vmshares"
 )
@@ -165,21 +167,21 @@ func TestBoxTierLinux(t *testing.T) {
 func TestClaudeBoxToken(t *testing.T) {
 	boxedClaude := config.AgentConfig{Name: "claude", Bin: "claude"}
 	c := config.Config{Agents: []config.AgentConfig{boxedClaude}}
-	if r := ClaudeBoxToken(c, nil); r.Status != Warn || !strings.Contains(r.Detail, "claude setup-token") {
+	if r := ClaudeBoxToken(c, nil, nil, nil); r.Status != Warn || !strings.Contains(r.Detail, "culibox init") {
 		t.Fatalf("no secret configured: %+v", r)
 	}
 	boxedClaude.Secrets = []string{"CLAUDE_CODE_OAUTH_TOKEN"}
 	c = config.Config{Agents: []config.AgentConfig{boxedClaude}, SecretSources: []config.SecretSource{{Type: "env"}}}
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-test-not-real")
-	if r := ClaudeBoxToken(c, nil); r.Status != Pass || strings.Contains(r.Detail, "sk-test") {
+	if r := ClaudeBoxToken(c, nil, nil, nil); r.Status != Pass || strings.Contains(r.Detail, "sk-test") {
 		t.Fatalf("configured token must pass and never print: %+v", r)
 	}
 	os.Unsetenv("CLAUDE_CODE_OAUTH_TOKEN") // t.Setenv above restores it
-	if r := ClaudeBoxToken(c, nil); r.Status != Warn {
+	if r := ClaudeBoxToken(c, nil, nil, nil); r.Status != Warn {
 		t.Fatalf("a secret that does not resolve is not a credential: %+v", r)
 	}
 	host := config.AgentConfig{Name: "claude", Bin: "claude", Runtime: config.RuntimeHost}
-	if r := ClaudeBoxToken(config.Config{Agents: []config.AgentConfig{host}}, nil); r.Status != Pass {
+	if r := ClaudeBoxToken(config.Config{Agents: []config.AgentConfig{host}}, nil, nil, nil); r.Status != Pass {
 		t.Fatalf("no boxed claude agent: nothing to check: %+v", r)
 	}
 }
@@ -208,19 +210,19 @@ func TestClaudeBoxTokenStoreSource(t *testing.T) {
 	c := config.Config{Agents: []config.AgentConfig{boxed}, SecretSources: []config.SecretSource{{Type: "store"}, {Type: "env"}}}
 	os.Unsetenv("CLAUDE_CODE_OAUTH_TOKEN")
 	ok := stubStore{vals: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-store-not-real"}}
-	if r := ClaudeBoxToken(c, ok); r.Status != Pass || strings.Contains(r.Detail, "sk-store") {
+	if r := ClaudeBoxToken(c, ok, nil, nil); r.Status != Pass || strings.Contains(r.Detail, "sk-store") {
 		t.Fatalf("store holds the token: %+v", r)
 	}
-	if r := ClaudeBoxToken(c, stubStore{err: secretstore.ErrLocked}); r.Status != Warn ||
+	if r := ClaudeBoxToken(c, stubStore{err: secretstore.ErrLocked}, nil, nil); r.Status != Warn ||
 		!strings.Contains(r.Detail, "is in the store, which is locked") || strings.Contains(r.Detail, "/login") {
 		t.Fatalf("a locked store does not resolve and must say so: %+v", r)
 	}
-	if r := ClaudeBoxToken(c, nil); r.Status != Warn {
+	if r := ClaudeBoxToken(c, nil, nil, nil); r.Status != Warn {
 		t.Fatalf("a store source with no store: %+v", r)
 	}
 	// A Keychain failure is a FAIL with the fix: neither "locked" nor "/login".
 	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
-	if r := ClaudeBoxToken(c, stubStore{err: ue}); r.Status != Fail || !strings.Contains(r.Detail, ue.Fix()) ||
+	if r := ClaudeBoxToken(c, stubStore{err: ue}, nil, nil); r.Status != Fail || !strings.Contains(r.Detail, ue.Fix()) ||
 		strings.Contains(r.Detail, "locked") || strings.Contains(r.Detail, "/login") {
 		t.Fatalf("an unavailable Keychain must FAIL with the fix: %+v", r)
 	}
@@ -539,5 +541,71 @@ func TestGatherBoxFactsUsesTheProtectedList(t *testing.T) {
 	f := gatherBoxFacts(c, data, home, "darwin", protectedFor(in, data))
 	if f.SharesErr != nil || f.ShareCount != 0 {
 		t.Fatalf("a share over the config dir was counted: count %d, err %v", f.ShareCount, f.SharesErr)
+	}
+}
+
+// An account's own pasted token lives in the encrypted store under
+// account.TokenID, with no secret_sources entry: doctor must count it the way
+// the launcher does (acctTokenStore), or init can never end on a green doctor.
+func TestClaudeBoxTokenAccountOwnedTokenPasses(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude", Bin: "claude", Account: "claude-box"}
+	c := config.Config{Agents: []config.AgentConfig{boxed}}
+	accts := []account.Account{{Name: "claude-box", Provider: "claude", TokenSecret: account.TokenID("claude-box")}}
+	st := stubStore{vals: map[string]string{account.TokenID("claude-box"): "sk-acct-not-real"}}
+	if r := ClaudeBoxToken(c, nil, st, accts); r.Status != Pass || strings.Contains(r.Detail, "sk-acct") {
+		t.Fatalf("an account's own store token must pass and never print: %+v", r)
+	}
+}
+
+func TestClaudeBoxTokenAccountLockedWarns(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude", Bin: "claude", Account: "claude-box"}
+	c := config.Config{Agents: []config.AgentConfig{boxed}}
+	accts := []account.Account{{Name: "claude-box", Provider: "claude", TokenSecret: account.TokenID("claude-box")}}
+	r := ClaudeBoxToken(c, nil, stubStore{err: credref.ErrLocked}, accts)
+	if r.Status != Warn || !strings.Contains(r.Detail, "store unlock") || !strings.Contains(r.Detail, "claude") {
+		t.Fatalf("a locked store must WARN with the unlock fix: %+v", r)
+	}
+}
+
+func TestClaudeBoxTokenAccountUnavailableFails(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude", Bin: "claude", Account: "claude-box"}
+	c := config.Config{Agents: []config.AgentConfig{boxed}}
+	accts := []account.Account{{Name: "claude-box", Provider: "claude", TokenSecret: account.TokenID("claude-box")}}
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
+	if r := ClaudeBoxToken(c, nil, stubStore{err: ue}, accts); r.Status != Fail || !strings.Contains(r.Detail, ue.Fix()) {
+		t.Fatalf("an unavailable Keychain must FAIL with the fix: %+v", r)
+	}
+}
+
+func TestClaudeBoxTokenAccountMissingWarns(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude-ops", Bin: "claude", Account: "claude-box"}
+	c := config.Config{Agents: []config.AgentConfig{boxed}}
+	st := stubStore{vals: map[string]string{account.TokenID("claude-box"): "sk-acct-not-real"}}
+	r := ClaudeBoxToken(c, nil, st, nil) // account not in accounts.json
+	if r.Status != Warn || !strings.Contains(r.Detail, "claude-ops") || !strings.Contains(r.Detail, `"culibox init"`) {
+		t.Fatalf("an unknown account is no credential: %+v", r)
+	}
+	// Known account but no value in the store.
+	accts := []account.Account{{Name: "claude-box", Provider: "claude", TokenSecret: account.TokenID("claude-box")}}
+	if r := ClaudeBoxToken(c, nil, stubStore{}, accts); r.Status != Warn || !strings.Contains(r.Detail, "claude-ops") {
+		t.Fatalf("an account with no stored token is no credential: %+v", r)
+	}
+	// No store at all.
+	if r := ClaudeBoxToken(c, nil, nil, accts); r.Status != Warn {
+		t.Fatalf("no store: %+v", r)
+	}
+}
+
+func TestClaudeBoxTokenAccountNotOwnedWarns(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude", Bin: "claude", Account: "personal"}
+	c := config.Config{Agents: []config.AgentConfig{boxed}}
+	st := stubStore{vals: map[string]string{account.TokenID("personal"): "sk-acct-not-real", "OTHER": "x"}}
+	for _, a := range []account.Account{
+		{Name: "personal", Provider: "claude", InheritPersonal: true},
+		{Name: "personal", Provider: "claude", TokenSecret: "OTHER"}, // another store value, never injected
+	} {
+		if r := ClaudeBoxToken(c, nil, st, []account.Account{a}); r.Status != Warn {
+			t.Fatalf("%+v: a box cannot use a personal login or another store value: %+v", a, r)
+		}
 	}
 }

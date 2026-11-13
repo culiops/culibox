@@ -221,7 +221,7 @@ func Checks(in Input) []Result {
 	out = append(out, checkAWSConnsGate(context.Background(), c, stored, storeErr, boxvm.ExecRunner{},
 		newAWSProber(broker.STSMinter{}, awsprobe.IAMSimulator{}), newSSOGate(broker.STSMinter{}))...)
 	bf := gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS, protectedFor(in, dataDir))
-	out = append(out, boxTierResults(runtime.GOOS, bf, ClaudeBoxToken(c, vst))...)
+	out = append(out, boxTierResults(runtime.GOOS, bf, ClaudeBoxToken(c, vst, AccountStoreFor(c, dataDir), storerefs.ReadAccounts(dataDir)))...)
 	out = append(out, guardLockRows(runtime.GOOS, bf)...)
 	if _, err := box.LookDocker(c.DockerBin); err == nil && runtime.GOOS == "linux" {
 		out = append(out, CheckHostListeners())
