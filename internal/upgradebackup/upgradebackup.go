@@ -83,11 +83,12 @@ func Run(o Options) (Result, error) {
 		return res, nil
 	}
 
-	name, err := copyBackup(root, from, o)
+	name, skipped, err := copyBackup(root, from, o)
 	if err != nil {
 		return res, fmt.Errorf("upgrade backup: %w", err)
 	}
 	res.Taken = true
+	res.AuditSkipped = skipped
 	res.Dir = filepath.Join(o.DataDir, backupsDir, name)
 	if err := writeStamp(root, o.Version, o.Commit); err != nil {
 		return res, fmt.Errorf("upgrade backup: write stamp: %w", err)

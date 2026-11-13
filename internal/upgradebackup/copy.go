@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -64,32 +65,32 @@ func uniqueName(root *os.Root, from, to string, now time.Time) (string, error) {
 // copyBackup builds backups/.tmp-<name>, copies the allowlist into it, fsyncs
 // it, renames it to backups/<name> and fsyncs backups/. It returns <name>. A
 // failed attempt leaves its .tmp- dir for the next attempt to remove.
-func copyBackup(root *os.Root, from string, o Options) (string, error) {
+func copyBackup(root *os.Root, from string, o Options) (name string, auditSkipped int64, err error) {
 	if err := prepareBackupsDir(root); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	name, err := uniqueName(root, from, o.Version, o.Now)
+	name, err = uniqueName(root, from, o.Version, o.Now)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	tmp := filepath.Join(backupsDir, tmpPrefix+name)
 	if err := root.Mkdir(tmp, 0o700); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	c := &copier{root: root, tmp: tmp, logf: o.logf}
+	c := &copier{root: root, tmp: tmp, logf: o.logf, dataDir: o.DataDir, auditMax: o.AuditMaxBytes}
 	if err := c.copyAll(o.IncludeConfig); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if err := c.syncDirs(); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if err := root.Rename(tmp, filepath.Join(backupsDir, name)); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if err := syncDir(root, backupsDir); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return name, nil
+	return name, c.auditSkipped, nil
 }
 
 // prepareBackupsDir makes sure backups/ is a real directory and removes the
@@ -142,6 +143,10 @@ type copier struct {
 	root *os.Root
 	tmp  string
 	logf func(format string, args ...any)
+
+	dataDir      string // absolute data root, for the audit.db snapshot
+	auditMax     int64  // 0 means defaultAuditMax
+	auditSkipped int64  // audit.db size when it was skipped as too large
 }
 
 func (c *copier) copyAll(includeConfig bool) error {
@@ -161,7 +166,7 @@ func (c *copier) copyAll(includeConfig bool) error {
 			return err
 		}
 	}
-	return forEachAccount(c.root, c.logf, func(claudeRel string) error {
+	err := forEachAccount(c.root, c.logf, func(claudeRel string) error {
 		for _, f := range accountFiles {
 			if err := c.file(filepath.Join(claudeRel, f)); err != nil {
 				return err
@@ -169,6 +174,13 @@ func (c *copier) copyAll(includeConfig bool) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// audit.db is a consistent SQLite snapshot, not a byte copy; it lands in
+	// the same tmp dir so the one rename publishes it with everything else.
+	c.auditSkipped, err = snapshotAudit(c.root, c.dataDir, filepath.Join(c.dataDir, c.tmp, auditName), c.auditMax, c.logf)
+	return err
 }
 
 // file copies one regular file; a missing file is skipped silently.
@@ -184,12 +196,22 @@ func (c *copier) file(rel string) error {
 		c.logf("upgrade backup: skipping %s: not a regular file (%s)", rel, fi.Mode().Type())
 		return nil
 	}
-	src, err := c.root.Open(rel)
+	// O_NONBLOCK|O_NOFOLLOW: a FIFO or symlink swapped in after the Lstat
+	// must not block serve at startup or be followed.
+	src, err := c.root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", rel, err)
 	}
 	defer src.Close()
-	if cur, err := src.Stat(); err != nil || !os.SameFile(fi, cur) {
+	cur, err := src.Stat()
+	if err != nil {
+		return fmt.Errorf("read %s: %w", rel, err)
+	}
+	if !cur.Mode().IsRegular() {
+		c.logf("upgrade backup: skipping %s: not a regular file (%s)", rel, cur.Mode().Type())
+		return nil
+	}
+	if !os.SameFile(fi, cur) {
 		return fmt.Errorf("read %s: changed while opening", rel)
 	}
 	if err := c.root.MkdirAll(filepath.Join(c.tmp, filepath.Dir(rel)), 0o700); err != nil {
