@@ -653,10 +653,10 @@ func profileBinds(p config.AgentConfig, kind, name string) bool {
 	return false
 }
 
-// Create saves a new runtime profile. It refuses a name a config seed or a
-// stored profile already holds (ErrProfileExists): a create must never replace
-// a profile it did not see.
-func (m *ProfileManager) Create(p config.AgentConfig) error {
+// Create saves a new runtime profile and returns its revision. It refuses a name
+// a config seed or a stored profile already holds (ErrProfileExists): a create
+// must never replace a profile it did not see.
+func (m *ProfileManager) Create(p config.AgentConfig) (string, error) {
 	return m.save(p, func() error {
 		if _, taken := m.getLocked(p.Name); taken {
 			return ErrProfileExists
@@ -671,8 +671,9 @@ func (m *ProfileManager) Create(p config.AgentConfig) error {
 // ErrProfileChanged and one that was deleted gives ErrProfileGone; either way
 // nothing is saved and nothing of the caller's edit is merged in. A config seed
 // has a revision too, so saving one creates its override. The profile is
-// validated first, so an invalid one is reported as such, not as stale.
-func (m *ProfileManager) Update(p config.AgentConfig, rev string) error {
+// validated first, so an invalid one is reported as such, not as stale. It
+// returns the revision of the profile it stored.
+func (m *ProfileManager) Update(p config.AgentConfig, rev string) (string, error) {
 	return m.save(p, func() error {
 		cur, ok := m.getLocked(p.Name)
 		if !ok {
@@ -688,14 +689,19 @@ func (m *ProfileManager) Update(p config.AgentConfig, rev string) error {
 // Save validates and persists a runtime profile, then refreshes the launcher.
 // It checks no revision and no existing name: the API goes through Create and
 // Update, so Save is for tests and for callers that really mean "overwrite".
-func (m *ProfileManager) Save(p config.AgentConfig) error { return m.save(p, nil) }
+func (m *ProfileManager) Save(p config.AgentConfig) error {
+	_, err := m.save(p, nil)
+	return err
+}
 
 // save is the body of Save, Create and Update. guard, when not nil, runs under
 // m.mu right before the store write, after every validation, so what it checks
-// cannot change before the write; an error from it is returned as it is.
-func (m *ProfileManager) save(p config.AgentConfig, guard func() error) error {
+// cannot change before the write; an error from it is returned as it is. A
+// failed store write comes back as a *storeFailure. On success it returns the
+// revision of the stored profile as Get shows it.
+func (m *ProfileManager) save(p config.AgentConfig, guard func() error) (string, error) {
 	if err := config.ValidateProfile(p, m.optDefs); err != nil {
-		return err
+		return "", err
 	}
 	// ValidateProfile lets a whitespace-only box.image through; it is no image,
 	// so drop it rather than store a blank the config layer would ignore.
@@ -707,40 +713,43 @@ func (m *ProfileManager) save(p config.AgentConfig, guard func() error) error {
 			shares := m.shares
 			m.mu.Unlock()
 			if reason, bad := UnboxableDefaultCwd(p.DefaultCwd, m.home, m.protected, shares); bad {
-				return config.WithField("default_cwd", fmt.Errorf("default working dir cannot be contained: %s", reason))
+				return "", config.WithField("default_cwd", fmt.Errorf("default working dir cannot be contained: %s", reason))
 			}
 		}
 	}
 	if err := m.checkClone(p); err != nil {
-		return err
+		return "", err
 	}
 	if err := m.checkContextPaths(p); err != nil {
-		return err
+		return "", err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := config.CheckGitHubApps(p, m.ghApps); err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return "", fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	if err := config.CheckTokens(p, m.tokens, m.optDefs); err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return "", fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	if err := config.CheckAWSConnections(p, m.awsConns); err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return "", fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	if err := m.checkAccount(p); err != nil {
-		return err
+		return "", err
 	}
 	if guard != nil {
 		if err := guard(); err != nil {
-			return err
+			return "", err
 		}
 	}
 	if err := m.store.Save(p); err != nil {
-		return err
+		return "", profileStoreErr(err)
 	}
 	m.apply(m.merged())
-	return nil
+	// The revision of what was just stored, taken under the lock that wrote it:
+	// a client that keeps it can save again without a read in between.
+	saved, _ := m.getLocked(p.Name)
+	return profileRev(saved), nil
 }
 
 // checkClone is the save-time form of the clone checks: a clone profile must
@@ -873,15 +882,36 @@ func (m *ProfileManager) checkAccount(p config.AgentConfig) error {
 	return nil
 }
 
-// Delete removes a runtime profile (config seeds are not deletable → ErrNotFound).
-func (m *ProfileManager) Delete(name string) error {
+// Delete removes a runtime profile (config seeds are not deletable → ErrNotFound)
+// with no revision check, like Save: for tests and callers that really mean
+// "whatever is there". The API goes through Remove.
+func (m *ProfileManager) Delete(name string) error { return m.remove(name, nil) }
+
+// Remove deletes a runtime profile only if it is still the one the caller
+// opened: rev, from Get's value by profileRev, must equal the revision of the
+// current merged profile. A profile edited since gives ErrProfileChanged and
+// nothing is removed; that matters most for a stored override of a config seed,
+// where the delete reverts the profile to its seed. A name with no stored
+// profile is ErrNotFound, as for Delete; an empty rev for one that is stored
+// is refused (errDeleteRevRequired).
+func (m *ProfileManager) Remove(name, rev string) error { return m.remove(name, &rev) }
+
+func (m *ProfileManager) remove(name string, rev *string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.store.Get(name); !ok {
 		return store.ErrNotFound
 	}
+	if rev != nil {
+		if *rev == "" {
+			return errDeleteRevRequired
+		}
+		if cur, ok := m.getLocked(name); !ok || profileRev(cur) != *rev {
+			return ErrProfileChanged
+		}
+	}
 	if err := m.store.Delete(name); err != nil {
-		return err
+		return profileStoreErr(err)
 	}
 	m.apply(m.merged())
 	return nil
