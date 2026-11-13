@@ -219,10 +219,14 @@ func (v *VM) FilterRules(ctx context.Context) (string, error) {
 	return out, nil
 }
 
+var _ brokerReturnDeleter = (*VM)(nil)
+
 // DeleteBrokerReturn deletes one copy of the DOCKER-USER rule that VMs
 // provisioned before #113 carry for the broker port (the TCP pass-through to
-// the lima gateway above its DROP): the same delete the provision script runs
-// on every start, which a stamped VM never re-runs until it is recreated. Like
+// the lima gateway above its DROP): the same delete the current provision script
+// runs on every start. A VM that was not recreated keeps its old colima.yaml,
+// whose script inserts the rule again at every start, so this runs at every
+// boxed spawn after a start until the VM is recreated. Like
 // FilterRules it runs over `colima ssh`, never starts a VM, and sends fixed
 // arguments only: the rule is built from constants and a port that must be a
 // valid TCP port, so nothing from a rule or an environment reaches the remote

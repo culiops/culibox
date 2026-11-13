@@ -227,11 +227,13 @@ These limits are the same as on Linux and are not configurable.
 - After upgrading, run `culibox box setup -recreate` once when doctor asks
   for it. The rules live in the VM's provisioning, so an existing VM keeps the
   old ones until it is recreated: a VM set up before egress control for all
-  boxes has none, and one set up before the broker fix (see
-  [Token binding](#token-binding)) still lets containers on the VM's default
-  network reach the broker. `culibox doctor` fails ("box VM config", and
+  boxes has none, and `culibox doctor` fails ("box VM config", and
   "box VM firewall" while the VM runs) and every boxed spawn is refused until
-  you do. Sessions still running in boxes after the upgrade lose the egress
+  you recreate it. A VM set up before the broker fix (see
+  [Token binding](#token-binding)) still lets containers on the VM's default
+  network reach the broker: `culibox doctor` fails "box VM config" for it too,
+  but CuliBox deletes the old rule at each boxed spawn, the VM puts it back at
+  each start, and `culibox box setup -recreate` removes it for good. Sessions still running in boxes after the upgrade lose the egress
   proxy until then (the recreate ends them anyway), so end them first.
   Like any recreate, it refuses while a box is running unless you add `-force`,
   and CuliBox must be restarted afterwards. Upgrading to the version with the
@@ -317,9 +319,9 @@ An earlier version's firewall rule let any container on the box VM's default
 Docker network (not the egress network) reach the broker's port directly,
 without the relay. With the handshake such a container can still reach the port,
 but it cannot pass the handshake, so it cannot write a header the broker
-accepts. CuliBox deletes that rule from a VM
-that still has it when it checks the firewall at the next boxed spawn. If that
-delete fails, `culibox doctor` fails "box VM firewall", and every boxed spawn is
+accepts. A VM set up with that rule puts it back
+at every start, until it is recreated, and CuliBox deletes it again when it
+checks the firewall at each boxed spawn. If that delete fails, `culibox doctor` fails "box VM firewall", and every boxed spawn is
 refused until you run `culibox box setup -recreate`.
 
 The credential broker accepts a session's token only from the box that session

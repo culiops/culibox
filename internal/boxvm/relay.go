@@ -461,9 +461,10 @@ type brokerReturnDeleter interface {
 const maxBrokerReturnDeletes = 16
 
 // deleteOldBrokerReturn is the live repair for a VM that was upgraded but not
-// recreated (#117, #116 option b): the provision script deletes the old broker
-// RETURN on every start, but a stamped VM does not run it again, so the rule
-// stays above the gateway DROP. cause is CheckDockerUserRules' refusal of rules.
+// recreated (#117, #116 option b): that VM's colima.yaml still holds the old
+// provision script (only Provision and ApplyMounts rewrite it), which inserts
+// the broker RETURN above the gateway DROP at every VM start, so the rule is
+// back from each start until the first boxed spawn deletes it. cause is CheckDockerUserRules' refusal of rules.
 // When rules hold that exact rule (the gateway, tcp, the broker port, RETURN)
 // each copy is deleted with a fixed, validated `iptables -w -D` and the table is
 // read again: nil only if the fresh table passes CheckDockerUserRules. Anything

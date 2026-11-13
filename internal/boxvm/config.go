@@ -190,9 +190,10 @@ iptables -w -I DOCKER-USER 1 -d "$gw" -p udp --dport 53 -j RETURN
 // is replaced, not repaired: a changed script reaches an existing stamped VM
 // only through `box setup -recreate` (Provision refuses a drifted one; a VM with
 // no stamp gets the new yaml and the delete runs on its next start). Until then
-// the relay's live check (CheckDockerUserRules) refuses boxed spawns on it unless
-// it can delete this one rule itself (Relay.deleteOldBrokerReturn runs the same
-// delete over colima ssh and reads the table again). This block only deletes the
+// the VM's old script puts the rule back at every start, and the relay's live
+// check (CheckDockerUserRules) refuses boxed spawns on it unless it can delete
+// this one rule itself (Relay.deleteOldBrokerReturn runs the same delete over
+// colima ssh and reads the table again, at each spawn after a start). This block only deletes the
 // rule, so the script stays idempotent wherever it runs.
 const provisionBroker = `# credential broker (loopback on the Mac): reached through the relay only; delete
 # the TCP pass-through older versions inserted above the gateway DROP.

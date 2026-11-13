@@ -205,7 +205,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		// The folder list alone changed: "box VM folders" below says how to apply
 		// it, and a recreate is not needed.
 	} else if f.Drifted && f.ProvisionDrifted {
-		out = append(out, Result{Fail, "box VM config", "its firewall rules differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run \"culibox box setup -recreate\" (every boxed spawn is refused until then)"})
+		out = append(out, Result{Fail, "box VM config", "its firewall rules differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run \"culibox box setup -recreate\""})
 	} else if f.Drifted {
 		out = append(out, Result{Warn, "box VM config", "changed since setup (VM size, mounts, extra_ca_certs or the provision script); run `culibox box setup -recreate`"})
 	}
