@@ -169,7 +169,9 @@ boxed sessions have already run in.
   holds the folder of a program CuliBox runs (docker, colima, limactl, or
   CuliBox itself, symlinks followed: if they live in `/opt/homebrew` or
   `/usr/local`, those folders cannot be shared, but a folder inside them
-  can), or that holds keys or sockets: `~/.ssh`, `~/.aws`,
+  can; a `culibox` you built inside a project folder makes that folder
+  unshareable, so keep the binary outside the folders you share), or that
+  holds keys or sockets: `~/.ssh`, `~/.aws`,
   `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.colima`, `~/.lima`, `~/Library`,
   `~/.config/gcloud`, `~/.config/gh`, `~/.azure`, `~/.terraform.d`,
   `~/.password-store`, `~/.config/op`, and `~/.claude` apart from a project's
