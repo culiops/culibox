@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -155,6 +156,8 @@ func TestReclaimBoxStateLogsARepeatedErrorOnce(t *testing.T) {
 
 // A file a box names inside its own home, newline included, must not reach the
 // daemon log through a failed reclaim: the log names the box and the errno.
+var logPrefix = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `)
+
 func TestReclaimBoxStateLogOmitsAgentChosenFileNames(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: permission failure cannot be simulated")
@@ -191,7 +194,7 @@ func TestReclaimBoxStateLogOmitsAgentChosenFileNames(t *testing.T) {
 		t.Fatalf("the log carries a file name chosen inside the home:\n%s", got)
 	}
 	for _, line := range strings.Split(strings.TrimRight(got, "\n"), "\n") {
-		if !strings.HasPrefix(line, time.Now().Format("2006/")) {
+		if !logPrefix.MatchString(line) {
 			t.Fatalf("a log line without the logger's own prefix (a raw newline got in):\n%s", got)
 		}
 	}

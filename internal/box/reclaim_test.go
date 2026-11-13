@@ -1102,6 +1102,41 @@ func TestReclaimErrorOmitsAgentChosenFileNames(t *testing.T) {
 	if !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("the error must still name the box and the errno: %q", err)
 	}
+	if want := fmt.Sprintf("home %q: permission denied", m.stateDir(name)); !strings.Contains(err.Error(), want) {
+		t.Fatalf("the error must say it is the home that is stuck (%s): %q", want, err)
+	}
+}
+
+// The output dir is a second place a box can leave something stuck, and it must be
+// told apart from the home.
+func TestReclaimErrorSaysWhenTheOutputDirIsStuck(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission failure cannot be simulated")
+	}
+	m, _ := newTestManagerWithFake(t)
+	name := "ab-box-ffffffffffff"
+	seedHome(t, m, name, 40*24*time.Hour)
+	out := OutputDir(m.opts.StateRoot, name)
+	stuck := filepath.Join(out, "sub")
+	if err := os.MkdirAll(stuck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, forgedName), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stuck, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
+
+	_, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+	assertNoAgentName(t, err)
+	if want := fmt.Sprintf("output dir %q: permission denied", filepath.Dir(out)); !strings.Contains(err.Error(), want) {
+		t.Fatalf("the error must say it is the output dir that is stuck (%s): %q", want, err)
+	}
+	if strings.Contains(err.Error(), "home ") {
+		t.Fatalf("the home was removed and must not be named as stuck: %q", err)
+	}
 }
 
 // The same for a cache path that will not go: the allowlisted path stays in the

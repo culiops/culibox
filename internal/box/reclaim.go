@@ -214,16 +214,18 @@ func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Dur
 	// The out dir sits beside the home, not in it, so it goes separately. Both
 	// are attempted whatever the first returns: a stubborn home must not keep
 	// the screenshots alive too.
+	outDir := filepath.Dir(OutputDir(m.opts.StateRoot, name))
 	var causes []string
-	for _, rerr := range []error{os.RemoveAll(dir), os.RemoveAll(filepath.Dir(OutputDir(m.opts.StateRoot, name)))} {
-		if rerr != nil {
-			causes = append(causes, removalCause(rerr))
+	for _, r := range []struct{ what, path string }{{"home", dir}, {"output dir", outDir}} {
+		if rerr := os.RemoveAll(r.path); rerr != nil {
+			// Each cause carries the path this package built (StateRoot plus a
+			// validated box name) so the operator can tell the two apart. What
+			// os.RemoveAll names is dropped: it is the file it stopped at, which
+			// the box chose, newlines included, on its way into the daemon log.
+			causes = append(causes, fmt.Sprintf("%s %q: %s", r.what, r.path, removalCause(rerr)))
 		}
 	}
 	if len(causes) > 0 {
-		// The error names the box and the errno, never the path: os.RemoveAll puts
-		// the name of the file it stopped at in its error, and a file in a home is
-		// the box's to name, newlines included, on its way into the daemon log.
 		return nil, fmt.Errorf("box: reclaiming %s: %s", name, strings.Join(causes, "; "))
 	}
 	_ = os.Remove(m.markerPath(name))
