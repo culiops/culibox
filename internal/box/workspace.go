@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"syscall"
 
@@ -34,14 +35,25 @@ type workspace struct {
 }
 
 // resolvePath is cwd made absolute and symlink-resolved: the one spelling a
-// workspace is checked, named and mounted by. An error is the text BoxName has
-// always returned for a path that does not resolve.
+// workspace is checked, named and mounted by. A `..` after a symlink leads where
+// the kernel takes it (the link target's parent): the path is resolved as it
+// stands, never cleaned first, which filepath.Abs does. A relative cwd hangs off
+// the resolved working directory (the process's own spelling of it may go through
+// a link). An error is the text BoxName has always returned for a path that does
+// not resolve.
 func resolvePath(cwd string) (string, error) {
-	abs, err := filepath.Abs(cwd)
-	if err != nil {
-		return "", fmt.Errorf("box: absolute path for %q: %w", cwd, err)
+	p := cwd
+	if !filepath.IsAbs(p) {
+		wd, err := os.Getwd()
+		if err == nil {
+			wd, err = filepath.EvalSymlinks(wd)
+		}
+		if err != nil {
+			return "", fmt.Errorf("box: absolute path for %q: %w", cwd, err)
+		}
+		p = wd + string(filepath.Separator) + cwd // not filepath.Join: it would clean a `..` lexically
 	}
-	real, err := filepath.EvalSymlinks(abs)
+	real, err := filepath.EvalSymlinks(p)
 	if err != nil {
 		return "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
