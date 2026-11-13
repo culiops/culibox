@@ -20,7 +20,7 @@ Every row is a file or folder CuliBox writes. "Backup" says whether the automati
 | `boxed-workspaces.json` | Folders that must run boxed | JSON, `version` 1 | An unknown version or a damaged file stops `serve` (it fails closed). For a newer version the message says it was written by a newer CuliBox | Yes | No |
 | `clone-dirs`, `clone-bases/`, `clone-imports/`, `clone-return/` | Clone mode's records of which folders are clones and what was put in them | Text and small files named by a hash of the clone folder, no version | A record that does not parse is an error for that clone's operation, never trusted | Yes | No |
 | `store/` | The encrypted value store: `recipient`, `identity.age`, `values/*.age` | age files | Not versioned | Yes, as bytes. CuliBox never opens it to back it up | No |
-| `login.token`, `cookie.secret`, `broker.secret`, `egress.secret`, `relay2.secret` | Login token and signing keys | One 32-byte or 43-character value, mode 0600 | An empty file is replaced by a new one. A value in a format this build does not know is refused and never replaced: `serve` stops for `cookie.secret`, `broker.secret` and `login.token`, and boxed sessions are refused for `egress.secret` and `relay2.secret`. A file that cannot be read stops `serve` | Yes | `relay.secret` (an old macOS key) is deleted at start |
+| `login.token`, `cookie.secret`, `broker.secret`, `egress.secret`, `relay2.secret` | Login token and signing keys | One 32-byte or 43-character value, mode 0600 | An empty file is replaced by a new one. A value in a format this build does not know is refused and never replaced. `serve` stops for `cookie.secret`, for `broker.secret` (when boxes are available) and for `login.token` (without `password_env`). Boxed sessions are refused for `egress.secret` and for `relay2.secret` (read only on macOS). A file that cannot be read stops `serve`, except `egress.secret` and `relay2.secret`, whose read failures only refuse boxed sessions | Yes | `relay.secret` (an old macOS key) is deleted at start |
 | `audit.db` | Audit log (credentials, approvals, store, egress) | SQLite, WAL, no version number | Tables and columns are added when missing. Reading a newer file with an older build has not been tested | Yes, as a consistent snapshot (see below) | No |
 | `analytics.db` | Usage numbers rebuilt from transcripts | SQLite, `user_version` 2 | An older file is rebuilt from the transcripts, after a `.pre-dedupe.bak` copy | No: derived data | The rollups may be dropped and rebuilt |
 | `vm-shares.json` (macOS) | Folders the box VM shares | JSON, `version` 1 | A newer version is left alone and the message says it was written by a newer CuliBox. Any other unknown version counts as damaged. In both cases the VM starts with no folders and changes are refused | Yes | No |
@@ -94,19 +94,19 @@ rm -f "$R"/last-version && find "$B" -mindepth 1 -maxdepth 1 ! -name audit.db -e
 
 ## Running an older CuliBox on newer data
 
-Swapping only the binary back (the `.prev` rollback line) runs the older CuliBox on data the newer one may have changed. The supported rollback is to also restore the backup (see "Rolling back" above). If you skip that, a CuliBox from this release on never deletes, regenerates or moves aside a file it cannot read. It says which file, and then it refuses to start, refuses the part that needs the file, or keeps running with that file read-only.
+Swapping only the binary back (the `.prev` rollback line) runs the older CuliBox on data the newer one may have changed. The supported rollback is to also restore the backup (see "Rolling back" above). If you skip that, then for the files below a CuliBox from this release on does not delete, regenerate or move aside content a newer CuliBox wrote. It says which file, and then it refuses to start, refuses the part that needs the file, or keeps running with that file read-only:
 
 | File | What the older CuliBox does |
 |---|---|
-| `credentials.json` | Uses the entries it understands. The Credentials screen will not save until you fix the file or run the newer CuliBox. |
+| `credentials.json` | Uses the entries it understands. The Credentials screen will not save until you fix the file and restart CuliBox, or run the newer CuliBox. |
 | `profiles.json` | If it cannot read the file: starts with the profiles from `config.json` only and refuses profile edits. |
 | `tokens.json` | Refuses to start if a token record has a field it does not know. |
-| `cookie.secret`, `broker.secret`, `egress.secret`, `relay2.secret`, `login.token` | Refuses a secret in a format it does not know: `serve` stops for `cookie.secret`, `broker.secret` and `login.token`, and boxed sessions are refused for `egress.secret` and `relay2.secret`. Delete the file to make a new one (for `cookie.secret` that signs every browser out). |
+| `cookie.secret`, `broker.secret`, `egress.secret`, `relay2.secret`, `login.token` | Refuses a secret in a format it does not know. `serve` stops for `cookie.secret`, for `broker.secret` (when boxes are available) and for `login.token` (without `password_env`). Boxed sessions are refused for `egress.secret` and for `relay2.secret` (read only on macOS). Delete the file to make a new one (for `cookie.secret` that signs every browser out). |
 | `boxed-workspaces.json` | Refuses to start. |
-| `vm-shares.json` (macOS) | Leaves the box VM folder list as it is; it cannot be changed. |
+| `vm-shares.json` (macOS) | Leaves `vm-shares.json` as it is; the folder list cannot be changed. |
 | `inplace-locks.json` (macOS) | Refuses in-place boxes that need a file lock. |
 
-CuliBox releases from before this one behave differently: they move `credentials.json` aside to `credentials.json.bad-<time>` and `profiles.json` to `profiles.json.corrupt`, regenerate a secret they cannot read, and on macOS move `inplace-locks.json` to `inplace-locks.json.unreadable`. If you find a moved-aside file after a rollback, stop CuliBox and rename it back over the new file before starting the newer CuliBox again. A secret they regenerated is gone: restore it from the backup.
+CuliBox releases from before this one behave differently: they move `credentials.json` aside to `credentials.json.bad-<time>` and `profiles.json` to `profiles.json.corrupt`, regenerate a secret they cannot read, and on macOS move `inplace-locks.json` to `inplace-locks.json.unreadable`. If you find a moved-aside file after a rollback, stop CuliBox and put it back in place of the file the older release created before starting the newer CuliBox again. A secret they regenerated is gone: restore it from the backup.
 
 ## macOS
 
@@ -128,7 +128,7 @@ An older build reading what the migration wrote is **not** required to work. The
 Two more rules keep a binary-only rollback safe:
 
 - do not move or rename `store/recipient`. An older `store init` that finds none creates a new identity over `identity.age`;
-- put a restriction on existing `credentials.json` entries inside the entries, never in a new top-level key. An older build ignores a key it does not know and still uses the entries it understands, so the restriction would be lost. Inside an entry, the strict per-entry decode makes the older build refuse that entry.
+- put a restriction on existing `credentials.json` entries inside the entries, never in a new top-level key. A build from this release on ignores a key it does not know and still uses the entries it understands, so the restriction would be lost. Inside an entry, the strict per-entry decode makes that build refuse the entry.
 
 The data root move (the agent-box to culibox rename) runs before the backup by design: the backup holds the moved root, and its rewriters (the `config_dir` in `sessions.json`, the account `statusLine`, the `analytics.db` rows) have already run.
 
