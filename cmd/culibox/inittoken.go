@@ -37,20 +37,17 @@ func initTokenStep(u *initUI, cfg config.Config, dataDir string, d initDeps) (st
 	u.begin("Claude token")
 	tokenID := account.TokenID(initAccountName)
 
-	accts, err := account.Open(filepath.Join(dataDir, "accounts.json"), dataDir, bundle.DefaultSource())
+	// accounts.json is read now to decide, and read again right before it is
+	// written: the login and the paste in between take minutes, and Create
+	// rewrites the whole file from what it loaded.
+	accts, haveAccount, foreign, err := initOpenAccount(dataDir, tokenID)
 	if err != nil {
 		u.stopped(fmt.Sprintf("the accounts file cannot be read (%v); fix that, then run culibox init again", err))
 		return "", false
 	}
-	defer accts.Close()
-	existing, err := accts.Resolve(initAccountName)
-	haveAccount := err == nil
-	if err != nil && !errors.Is(err, account.ErrUnknown) {
-		u.stopped(fmt.Sprintf("the accounts file cannot be read (%v); fix that, then run culibox init again", err))
-		return "", false
-	}
-	if haveAccount && !(existing.Provider == account.ProviderClaude && !existing.InheritPersonal && existing.TokenSecret == tokenID) {
-		u.skipped(fmt.Sprintf("an account named %s already exists and is not the one init makes (it inherits your personal login, or uses another token); in Settings, Agent accounts, give it its own token, or rename it", initAccountName))
+	accts.Close()
+	if foreign {
+		u.skipped(initForeignAccountWhy)
 		return "", true
 	}
 
@@ -96,15 +93,52 @@ func initTokenStep(u *initUI, cfg config.Config, dataDir string, d initDeps) (st
 		return "", false
 	}
 	// The token is in the store first, so the account never points at nothing.
+	accts, haveAccount, foreign, err = initOpenAccount(dataDir, tokenID)
+	if err != nil {
+		u.stopped(fmt.Sprintf("the token is stored as %s but the accounts file cannot be read (%v); run culibox init again", tokenID, err))
+		return "", false
+	}
+	defer accts.Close()
+	if foreign {
+		u.skipped(fmt.Sprintf("the token is stored as %s, but an account named %s appeared meanwhile that is not the one init makes; %s", tokenID, initAccountName, initForeignAccountWhy))
+		return "", true
+	}
+	created := false
 	if !haveAccount {
 		if _, err := accts.Create(account.Account{Name: initAccountName, Provider: account.ProviderClaude, TokenSecret: tokenID}); err != nil {
 			u.stopped(fmt.Sprintf("the token is stored as %s but account %s could not be created (%v); run culibox init again", tokenID, initAccountName, err))
 			return "", false
 		}
+		created = true
 	}
 	u.say("the token is in the encrypted store as %s; account %s uses it", tokenID, initAccountName)
+	if created {
+		u.say("if culibox serve is already running, restart it so it picks up the %s account", initAccountName)
+	}
 	u.done()
 	return initAccountName, true
+}
+
+const initForeignAccountWhy = "it inherits your personal login, or uses another token; in Settings, Agent accounts, give it its own token, or rename it"
+
+// initOpenAccount loads accounts.json fresh and says whether claude-box exists
+// and whether it is NOT the account init makes (a claude account with its own
+// store token and no inherited login). The caller closes the store.
+func initOpenAccount(dataDir, tokenID string) (accts *account.Store, have, foreign bool, err error) {
+	accts, err = account.Open(filepath.Join(dataDir, "accounts.json"), dataDir, bundle.DefaultSource())
+	if err != nil {
+		return nil, false, false, err
+	}
+	r, err := accts.Resolve(initAccountName)
+	if errors.Is(err, account.ErrUnknown) {
+		return accts, false, false, nil
+	}
+	if err != nil {
+		accts.Close()
+		return nil, false, false, err
+	}
+	shaped := r.Provider == account.ProviderClaude && !r.InheritPersonal && r.TokenSecret == tokenID
+	return accts, true, !shaped, nil
 }
 
 // initStoreFailed ends the step on a store error: a Keychain problem says its

@@ -311,8 +311,10 @@ func TestTokenStepFreshLinuxAsksPassphrase(t *testing.T) {
 	if !strings.Contains(out, "at least 12") {
 		t.Fatalf("a short passphrase must be refused with the reason: %s", out)
 	}
-	if strings.Contains(out, "short") && strings.Contains(out, tokPass) {
-		t.Fatalf("a passphrase was echoed: %s", out)
+	for _, secret := range []string{tokPass, "short"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("the passphrase %q was echoed: %s", secret, out)
+		}
 	}
 	st := f.store()
 	if !st.Status().Initialized {
@@ -492,6 +494,74 @@ func TestTokenStepWipesTheTokenBuffer(t *testing.T) {
 	}
 	if strings.Contains(string(held), "TESTTOKEN") {
 		t.Fatalf("token bytes survive in the read buffer: %q", held)
+	}
+}
+
+// addOtherAccount writes another account to accounts.json through its own
+// store, as a Settings save or a second process would.
+func (f *tokFix) addOtherAccount(name string) {
+	f.t.Helper()
+	f.createAccount(account.Account{Name: name, Provider: account.ProviderClaude, InheritPersonal: true})
+}
+
+func (f *tokFix) hasAccount(name string) bool {
+	f.t.Helper()
+	as, err := account.Open(f.accountsPath(), f.dataDir, filepath.Join(f.dataDir, "..", "claude-default"))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer as.Close()
+	_, err = as.Resolve(name)
+	return err == nil
+}
+
+func TestTokenStepKeepsAnAccountAddedWhileItWaited(t *testing.T) {
+	f := newTokFix(t, false, tokTest)
+	d := f.deps()
+	d.run = func(name string, args ...string) error { // the browser login takes minutes
+		f.addOtherAccount("work")
+		return nil
+	}
+	var b bytes.Buffer
+	name, ok := initTokenStep(newTestUI("\n", &b), config.Config{}, f.dataDir, d)
+	noToken(t, b.String())
+	if !ok || name != "claude-box" {
+		t.Fatalf("got %q,%v: %s", name, ok, b.String())
+	}
+	if !f.hasAccount("work") {
+		t.Fatalf("the account added meanwhile was dropped:\n%s", b.String())
+	}
+	f.wantLinked()
+	if !strings.Contains(b.String(), "restart it") {
+		t.Fatalf("a created account must tell the user to restart a running serve: %s", b.String())
+	}
+}
+
+func TestTokenStepForeignAccountAppearingWhileItWaitedIsLeftAlone(t *testing.T) {
+	f := newTokFix(t, false, tokTest)
+	d := f.deps()
+	d.run = func(name string, args ...string) error {
+		f.createAccount(account.Account{Name: "claude-box", Provider: account.ProviderClaude, InheritPersonal: true})
+		return nil
+	}
+	var b bytes.Buffer
+	name, ok := initTokenStep(newTestUI("\n", &b), config.Config{}, f.dataDir, d)
+	noToken(t, b.String())
+	if !ok || name != "" || !strings.Contains(b.String(), "skipped:") {
+		t.Fatalf("got %q,%v: %s", name, ok, b.String())
+	}
+	a, _ := f.account()
+	if !a.InheritPersonal || a.TokenSecret != "" {
+		t.Fatalf("the foreign account was modified: %+v", a)
+	}
+}
+
+func TestTokenStepNoRestartLineWhenNothingWasCreated(t *testing.T) {
+	f := newTokFix(t, false, tokTest)
+	f.seed("")
+	_, ok, out := f.run("y\nn\n", config.Config{})
+	if !ok || strings.Contains(out, "restart") {
+		t.Fatalf("out=%s", out)
 	}
 }
 
