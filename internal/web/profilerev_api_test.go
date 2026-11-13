@@ -79,10 +79,11 @@ func postProfile(s *Server, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
+// deleteProfile is the editor's delete: DELETE with the revision the profile is at
+// now (a client that opened it just before).
 func deleteProfile(s *Server, name string) *httptest.ResponseRecorder {
-	rec := httptest.NewRecorder()
-	s.handleProfile(rec, httptest.NewRequest("DELETE", "/api/profiles/"+name, nil))
-	return rec
+	p, _ := s.Profiles.Get(name)
+	return deleteWithRev(s, name, profileRev(p))
 }
 
 func apiCode(t *testing.T, rec *httptest.ResponseRecorder) string {
@@ -137,8 +138,8 @@ func TestGetProfileCarriesTheRevision(t *testing.T) {
 func TestPutWithTheFreshRevisionSaves(t *testing.T) {
 	s := revServer(t)
 	old := revOf(t, s, "p")
-	if rec := putWithRev(t, s, "p", `{"name":"p","bin":"bash","args":["--one"]}`, old); rec.Code != 204 {
-		t.Fatalf("PUT with the fresh rev: %d %s, want 204", rec.Code, rec.Body)
+	if rec := putWithRev(t, s, "p", `{"name":"p","bin":"bash","args":["--one"]}`, old); rec.Code != 200 {
+		t.Fatalf("PUT with the fresh rev: %d %s, want 200", rec.Code, rec.Body)
 	}
 	if now := revOf(t, s, "p"); now == old {
 		t.Fatal("the rev did not change after a save that changed the profile")
@@ -149,7 +150,7 @@ func TestPutWithTheFreshRevisionSaves(t *testing.T) {
 }
 
 // A profile with a credential binding, so an egress policy on it is not
-// answered with the "no binding" warning and a save is a plain 204.
+// answered with the "no binding" warning and a save answers with the rev alone.
 const revBinding = `"aws":{"source_profile":"sandbox-admin","role_arn":"arn:aws:iam::123456789012:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"]}`
 
 func TestPutWithAStaleRevisionIs409AndMergesNothing(t *testing.T) {
@@ -161,8 +162,8 @@ func TestPutWithAStaleRevisionIs409AndMergesNothing(t *testing.T) {
 	}
 	r1 := revOf(t, s, "p") // both tabs opened the profile here
 
-	if rec := putWithRev(t, s, "p", head+`,"egress_allow":["a.example"]}`, r1); rec.Code != 204 {
-		t.Fatalf("tab 1: %d %s, want 204", rec.Code, rec.Body)
+	if rec := putWithRev(t, s, "p", head+`,"egress_allow":["a.example"]}`, r1); rec.Code != 200 {
+		t.Fatalf("tab 1: %d %s, want 200", rec.Code, rec.Body)
 	}
 	rec := putWithRev(t, s, "p", head+`,"egress_open":true}`, r1)
 	if rec.Code != 409 || apiCode(t, rec) != "profile_changed" || !strings.Contains(rec.Body.String(), "nothing was saved") {

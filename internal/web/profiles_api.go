@@ -34,21 +34,23 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p := doc.AgentConfig
-		if err := s.Profiles.Create(p); err != nil {
+		rev, err := s.Profiles.Create(p)
+		if err != nil {
 			writeSaveErr(w, err)
 			return
 		}
 		created := struct {
 			Name     string   `json:"name"`
+			Rev      string   `json:"rev"`
 			Warnings []string `json:"warnings,omitempty"`
-		}{p.Name, saveWarnings(s, p)}
+		}{p.Name, rev, saveWarnings(s, p)}
 		writeJSON(w, http.StatusCreated, created)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
-// handleProfile serves PUT (update) and DELETE on /api/profiles/{name}.
+// handleProfile serves GET, PUT (update) and DELETE on /api/profiles/{name}.
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/profiles/")
 	if base, ok := strings.CutSuffix(name, convertAWSSuffix); ok && base != "" {
@@ -79,7 +81,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		// again). A missing schema is refused like a missing rev, so a page from
 		// before the schema existed is too.
 		if doc.Schema == nil || *doc.Schema == "" {
-			writeErrCode(w, http.StatusPreconditionRequired, revRequiredMsg, "rev_required")
+			writeErrCode(w, http.StatusPreconditionRequired, schemaRequiredMsg, "rev_required")
 			return
 		}
 		if schemaStale(doc.Schema) {
@@ -92,26 +94,40 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		p := doc.AgentConfig
 		p.Name = name // the path is authoritative for the name
-		if err := s.Profiles.Update(p, *doc.Rev); err != nil {
+		rev, err := s.Profiles.Update(p, *doc.Rev)
+		if err != nil {
 			writeSaveErr(w, err)
 			return
 		}
-		if warnings := saveWarnings(s, p); len(warnings) > 0 {
-			writeJSON(w, http.StatusOK, map[string][]string{"warnings": warnings})
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+		// The revision of what was stored goes back, so a client whose re-read
+		// fails still saves against the right one next time.
+		saved := struct {
+			Rev      string   `json:"rev"`
+			Warnings []string `json:"warnings,omitempty"`
+		}{rev, saveWarnings(s, p)}
+		writeJSON(w, http.StatusOK, saved)
 	case http.MethodDelete:
-		if err := s.Profiles.Delete(name); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
+		// The revision the page opened the profile at, in the query (a DELETE has
+		// no body to rely on). A delete without one is refused like a PUT is: a
+		// page from before it existed must not delete what was edited since.
+		if err := s.Profiles.Remove(name, r.URL.Query().Get("rev")); err != nil {
+			switch {
+			case errors.Is(err, store.ErrNotFound):
 				writeErr(w, http.StatusNotFound, "no such editable profile")
-				return
-			}
-			if errors.Is(err, store.ErrChangedOnDisk) {
+			case errors.Is(err, errDeleteRevRequired):
+				writeErrCode(w, http.StatusPreconditionRequired, deleteRevRequiredMsg, "rev_required")
+			case errors.Is(err, ErrProfileChanged):
+				writeErrCode(w, http.StatusConflict, deleteChangedMsg, "profile_changed")
+			case errors.Is(err, store.ErrChangedOnDisk):
 				writeErrCode(w, http.StatusConflict, profilesFileChangedMsg, "profiles_file_changed")
-				return
+			default:
+				var sf *storeFailure
+				if errors.As(err, &sf) {
+					err = sf.cause
+				}
+				log.Printf("profile delete: %v", err)
+				writeErrCode(w, http.StatusInternalServerError, deleteFailedMsg, "delete_failed")
 			}
-			writeErr(w, http.StatusInternalServerError, "delete failed")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -282,7 +298,7 @@ func (s *Server) handleConvertAWS(w http.ResponseWriter, r *http.Request, name s
 	rev := profileRev(fresh)
 	fresh.AWS = nil
 	fresh.AWSConnections = []string{created}
-	if err := s.Profiles.Update(fresh, rev); err != nil {
+	if _, err := s.Profiles.Update(fresh, rev); err != nil {
 		s.removeConverted(name, created)
 		writeSaveErr(w, err)
 		return

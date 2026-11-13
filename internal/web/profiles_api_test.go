@@ -48,7 +48,7 @@ func TestProfilesAPI_CreateListDelete(t *testing.T) {
 
 	// delete a stored profile → 204
 	rec = httptest.NewRecorder()
-	s.handleProfile(rec, httptest.NewRequest("DELETE", "/api/profiles/myclaude", nil))
+	rec = deleteProfile(s, "myclaude")
 	if rec.Code != 204 {
 		t.Fatalf("delete stored code %d", rec.Code)
 	}
@@ -149,8 +149,8 @@ func TestSaveOnAProfileThatStoresNoRuntime(t *testing.T) {
 			t.Fatalf("a binding with no explicit runtime: code %d body %s, want 400 naming runtime: box", rec.Code, rec.Body)
 		}
 		rec = putProfile(t, s, "p", `{"name":"p","bin":"claude","runtime":"box","tokens":["sentry-corp"]}`)
-		if rec.Code != 204 {
-			t.Fatalf("the shown tier with a token: code %d body %s, want 204", rec.Code, rec.Body)
+		if !savedClean(rec) {
+			t.Fatalf("the shown tier with a token: code %d body %s, want 200 and a rev", rec.Code, rec.Body)
 		}
 		for _, want := range []string{`"runtime":"box"`, `"tokens":["sentry-corp"]`} {
 			if !strings.Contains(get(s), want) {
@@ -168,8 +168,8 @@ func TestSaveOnAProfileThatStoresNoRuntime(t *testing.T) {
 			t.Fatalf("the list shows %q for a profile that stores no runtime, want host", got)
 		}
 		rec := putProfile(t, s, "p", `{"name":"p","bin":"claude","runtime":"host"}`)
-		if rec.Code != 204 {
-			t.Fatalf("the shown tier host: code %d body %s, want 204", rec.Code, rec.Body)
+		if !savedClean(rec) {
+			t.Fatalf("the shown tier host: code %d body %s, want 200 and a rev", rec.Code, rec.Body)
 		}
 		if !strings.Contains(get(s), `"runtime":"host"`) {
 			t.Errorf("GET lost the tier: %s", get(s))
@@ -213,8 +213,8 @@ func TestProfilesAPIShareWarnings(t *testing.T) {
 	}
 
 	rec = putProfile(t, s, "cl", body(`,"clone_share":["docs"]`))
-	if rec.Code != 204 || rec.Body.Len() != 0 {
-		t.Fatalf("PUT without a warning: code %d body %q, want 204 and no body", rec.Code, rec.Body)
+	if !savedClean(rec) {
+		t.Fatalf("PUT without a warning: code %d body %q, want 200 with a rev and no warnings", rec.Code, rec.Body)
 	}
 
 	// The editor loads GET /api/profiles/{name}, which carries the clone fields
@@ -435,8 +435,8 @@ func TestConvertRollbackOnProfileSaveFailure(t *testing.T) {
 	}
 	c.fx.pm.store = failSaveStore{c.fx.pm.store}
 	w := c.convert("dev", "", credCookie, credOrigin)
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "disk full") {
-		t.Fatalf("%d %s", w.Code, w.Body)
+	if w.Code != 500 || strings.Contains(w.Body.String(), "disk full") {
+		t.Fatalf("%d %s, want 500 that does not echo the cause", w.Code, w.Body)
 	}
 	if got := c.fx.file(t).AWSConnections; len(got) != 0 {
 		t.Fatalf("the connection was left behind: %+v", got)
@@ -679,8 +679,8 @@ func TestProfilesAPIContextWarnings(t *testing.T) {
 	}
 
 	rec = putProfile(t, s, "c1", body("c1", clean))
-	if rec.Code != 204 || rec.Body.Len() != 0 {
-		t.Fatalf("PUT clean: code %d body %q, want 204 and no body", rec.Code, rec.Body)
+	if !savedClean(rec) {
+		t.Fatalf("PUT clean: code %d body %q, want 200 with a rev and no warnings", rec.Code, rec.Body)
 	}
 }
 
@@ -734,8 +734,8 @@ func TestSaveWarningsEgressWithoutBinding(t *testing.T) {
 	}
 	rec = put(`{"name":"e1","bin":"claude","runtime":"box","egress_open":true,"aws":{"source_profile":"sandbox-admin",` +
 		`"role_arn":"arn:aws:iam::123456789012:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"]}}`)
-	if rec.Code != 204 || rec.Body.Len() != 0 {
-		t.Fatalf("bound: code %d body %s, want 204", rec.Code, rec.Body)
+	if !savedClean(rec) {
+		t.Fatalf("bound: code %d body %s, want 200 with a rev and no warnings", rec.Code, rec.Body)
 	}
 }
 
@@ -895,4 +895,15 @@ func TestSaveRefusalCarriesFieldPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+// savedClean: a successful PUT answered 200 with a revision and no warnings.
+func savedClean(rec *httptest.ResponseRecorder) bool {
+	var got map[string]any
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+		return false
+	}
+	rev, _ := got["rev"].(string)
+	_, warned := got["warnings"]
+	return rev != "" && !warned
 }

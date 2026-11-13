@@ -95,18 +95,20 @@ test("saveProfile sends the opened revision on PUT and nothing extra on POST", (
   assert.match(b, /JSON\.stringify\(withSchema\(editing \? withRev\(p, pfLoaded\) : p, pfSchema\.get\(\)\)\)/);
 });
 
-// #109: the schema comes from /api/meta, which the page reads at boot (initEnv);
-// the pin keeps the first value, so a later read after a deploy cannot give an
-// old page the new schema.
-test("the page pins profile_schema from the first /api/meta answer", () => {
-  assert.match(APP, /const pfSchema = schemaPin\(\);/);
+// #120: the schema is baked into profileform.js by the server (PROFILE_SCHEMA_BAKED), so the
+// pin comes from the same response as the form's code. /api/meta, read later (and again after
+// a retry), no longer pins: a page loaded while the daemon restarted into a new build could
+// otherwise pin the new schema next to the old form.
+test("the page pins the schema baked into profileform.js, and /api/meta no longer pins", () => {
+  assert.match(APP, /const pfSchema = schemaPin\(\);\s*pfSchema\.pin\(globalThis\.PROFILE_SCHEMA_BAKED\);/);
   const boot = APP.indexOf("(async function initEnv(");
   assert.ok(boot >= 0, "initEnv not found");
-  const pin = APP.indexOf("pfSchema.pin(meta && meta.profile_schema)", boot);
-  assert.ok(pin > boot, "initEnv must pin meta.profile_schema");
-  assert.ok(pin < APP.indexOf("metaLoaded = true", boot), "the pin comes with the first meta answer");
-  // Only the boot read pins: no other /api/meta reader may move it.
+  assert.ok(!/profile_schema/.test(APP.slice(boot, boot + 6000)), "initEnv must not read profile_schema");
   assert.strictEqual((APP.match(/pfSchema\.pin\(/g) || []).length, 1);
+});
+
+test("profileform.js itself has no baked value: the server appends it per response", () => {
+  assert.ok(!/PROFILE_SCHEMA_BAKED\s*=/.test(fs.readFileSync(path.join(__dirname, "..", "static", "profileform.js"), "utf8")));
 });
 
 test("saveProfile shows a stale save on the banner before the per-block lines", () => {
@@ -171,4 +173,35 @@ test("Load latest takes the mobile tap floor", () => {
   const between = before.slice(media);
   const open = (between.match(/\{/g) || []).length - (between.match(/\}/g) || []).length;
   assert.ok(open >= 1, "the @media (max-width: 700px) block is already closed before the rule");
+});
+
+// #120: a delete carries the revision the editor opened the profile at.
+test("deleteProfile sends the loaded revision", () => {
+  const b = body("deleteProfile");
+  assert.match(b, /api\(deletePath\(name, pfLoaded\), \{ method: "DELETE" \}\)/);
+});
+
+// #120: the save's own answer holds the new revision: a failed re-read keeps it, so the next
+// Save is not refused for the user's own save.
+test("saveProfile keeps the revision the save answered with when the re-read fails", () => {
+  const b = body("saveProfile");
+  const keep = b.indexOf("withSavedRev(");
+  assert.ok(keep >= 0, "saveProfile must take the revision from the save's answer");
+  assert.ok(keep < b.indexOf("the profile list could not be refreshed"), "before the re-read can fail");
+  assert.ok(keep > b.search(/method:\s*editing/), "after the write");
+});
+
+// #120: Load latest says why it failed and leaves the banner up, instead of going on with a stale list.
+test("reloadStaleProfile surfaces a failed refetch and keeps the banner", () => {
+  const b = body("reloadStaleProfile");
+  assert.ok(!/\$\("pf-stale"\)\.hidden\s*=\s*true/.test(b), "the banner stays until a load succeeds (fillForm hides it)");
+  assert.match(b, /if \(!\(await loadProfiles\(false\)\)\) \{[^}]*Load latest failed/);
+  assert.match(b, /if \(!\(await editProfile\(name\)\)\)/);
+});
+
+test("editProfile answers whether the profile was loaded", () => {
+  const b = body("editProfile");
+  assert.match(b, /let loaded = true;/);
+  assert.match(b, /loaded = false;/);
+  assert.match(b, /return loaded;/);
 });

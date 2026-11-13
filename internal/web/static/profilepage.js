@@ -754,7 +754,8 @@ async function pfvDelete() {
   const ok = await deleteProfileAsk(name);
   if (!ok) return;
   pfvState.errors = [];
-  try { await api("/api/profiles/" + encodeURIComponent(name), { method: "DELETE" }); }
+  // The delete names the revision the page opened the profile at: a profile edited elsewhere since is not deleted.
+  try { await api(deletePath(name, pfvState.doc), { method: "DELETE" }); }
   catch (e) { pfvState.errors = ["Delete failed: " + e.message]; pfvRender(); return; }
   await pfvMoveOn(name, order);
 }
@@ -2139,8 +2140,9 @@ async function pfvSaveBlock(id) {
       pfvState.doc = fresh;
       pfvState.errors = [];
     } else {
-      // What was sent, still at the old revision: the next save is refused as stale (and offers Reload) rather than overwriting.
-      pfvState.doc = doc;
+      // What was sent, at the revision the save answered with (the old one if it named none): the next save is
+      // checked against what is stored, not refused for this save.
+      pfvState.doc = withSavedRev(doc, saved);
       pfvState.errors = ["Saved, but reloading it failed: " + (reloadErr && reloadErr.message ? reloadErr.message : "no answer")];
     }
     pfvState.warnings = pfvWarnLines(saved);

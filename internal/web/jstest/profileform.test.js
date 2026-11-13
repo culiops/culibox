@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, profileNeedsBox, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, profileNeedsBox, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels, deletePath, withSavedRev } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -588,4 +588,35 @@ test("renderProfileList takes the badge from profileListLabels, not a literal", 
   const b = app.slice(open, end + 1);
   assert.match(b, /profileListLabels\(p\)/);
   assert.doesNotMatch(b, /"built-in"/);
+});
+
+// #120: a delete names the revision the page opened the profile at (?rev=), so a
+// tab that is behind cannot delete what was edited since. The revision comes from
+// the loaded profile only when it is that profile's own.
+test("deletePath carries the loaded profile's revision in the query", () => {
+  assert.strictEqual(deletePath("a b", { name: "a b", rev: "r/1" }), "/api/profiles/a%20b?rev=r%2F1");
+  assert.strictEqual(deletePath("a", { name: "a", rev: "abc" }), "/api/profiles/a?rev=abc");
+});
+
+test("deletePath sends no rev when none is held for that profile, so the server answers", () => {
+  for (const loaded of [null, undefined, {}, { name: "a" }, { name: "a", rev: "" }, { name: "other", rev: "abc" }, { name: "a", rev: 5 }]) {
+    assert.strictEqual(deletePath("a", loaded), "/api/profiles/a", JSON.stringify(loaded));
+  }
+});
+
+// #120: a save answers with the revision of what it stored; the page keeps it, so a
+// failed re-read does not leave the old one (the next Save would be refused for the
+// user's own save).
+test("withSavedRev takes the revision a save answered with, without mutating", () => {
+  const sent = { name: "a", bin: "x", rev: "old" };
+  const got = withSavedRev(sent, { rev: "new", warnings: ["w"] });
+  assert.deepStrictEqual(got, { name: "a", bin: "x", rev: "new" });
+  assert.strictEqual(sent.rev, "old");
+  assert.notStrictEqual(got, sent);
+});
+
+test("withSavedRev keeps the old revision when the answer carries none", () => {
+  for (const saved of [null, undefined, {}, { rev: "" }, { rev: 7 }, "x"]) {
+    assert.deepStrictEqual(withSavedRev({ name: "a", rev: "old" }, saved), { name: "a", rev: "old" }, JSON.stringify(saved));
+  }
 });

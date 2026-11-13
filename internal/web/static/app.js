@@ -3931,8 +3931,10 @@ async function refreshSessionsRun() {
 
 // --- spawn / kill ------------------------------------------------------------
 let profiles = [];
-// pfSchema: the profile schema pinned at boot from /api/meta (see schemaPin).
+// pfSchema: the profile schema this page was loaded with (see schemaPin). The server appends it to
+// profileform.js, so it comes from the same response as the form's code; /api/meta does not pin.
 const pfSchema = schemaPin();
+pfSchema.pin(globalThis.PROFILE_SCHEMA_BAKED); // a global the server defines (no value when profileform.js was not served by it)
 // profilesLoaded distinguishes "the server has no profiles" from "we could not
 // ask". Without it, one transient failure at boot leaves the primary spawn
 // button disabled under a caption that blames the config, and in dev, `air`
@@ -5213,6 +5215,9 @@ async function saveProfile() {
       // The profile now exists, so the editor is no longer a draft even if the
       // reload below fails (a second Save must PUT, not POST again).
       selectedProfile = p.name;
+      // The save answered with the revision of what it stored: hold it, so a re-read that
+      // fails below does not leave the old one (the next Save would be refused for this save).
+      pfLoaded = withSavedRev(editing ? (pfLoaded || p) : p, saved);
       try {
         // No background retry: one that succeeds later would leave the "Saved, but
         // reloading it failed" line on screen next to a good list.
@@ -5245,15 +5250,20 @@ function showPfStale(model) {
 }
 // Load latest: drop the edits and show what the server holds now. The list is
 // refetched first, so a profile deleted meanwhile is noticed and the editor goes
-// back to a blank draft instead of failing to load it. A failed reload keeps the
-// old revision on purpose: the next Save is refused as stale again, which is the
-// safe side.
+// back to a blank draft instead of failing to load it. A load that fails says so
+// and leaves the banner and the form as they were (fillForm, which a successful
+// load runs, is what hides the banner), so the old revision stays and the next
+// Save is refused as stale again, which is the safe side.
 async function reloadStaleProfile() {
   const name = selectedProfileName();
-  $("pf-stale").hidden = true;
-  await loadProfiles(false);
-  if (name && profiles.some((x) => x.name === name)) await editProfile(name);
-  else newProfile();
+  setDialogError("settings-modal", "");
+  if (!(await loadProfiles(false))) {
+    setDialogError("settings-modal", "Load latest failed: the profile list could not be refreshed. Your edits are still here.");
+    return;
+  }
+  if (name && profiles.some((x) => x.name === name)) {
+    if (!(await editProfile(name))) return; // editProfile said why
+  } else newProfile();
 }
 // Duplicate is what makes a read-only built-in useful: a copy you own, seeded
 // with what it does. It opens an UNSAVED draft, as New profile does, so Save
@@ -5299,9 +5309,11 @@ async function editProfile(name) {
   // Same drill-down as newProfile(); inert above 700px, where both columns
   // are already on screen.
   $("settings-modal").classList.add("editing");
+  let loaded = true;
   try { fillForm(await api("/api/profiles/" + encodeURIComponent(name))); openSettings("manage"); }
-  catch (e) { setDialogError("settings-modal", "Load failed: " + e.message); }
+  catch (e) { setDialogError("settings-modal", "Load failed: " + e.message); loaded = false; }
   renderProfileList();
+  return loaded;
 }
 async function deleteProfile(name) {
   // The sibling destructive action (kill session) has always confirmed; this one
@@ -5309,7 +5321,7 @@ async function deleteProfile(name) {
   const ok = await deleteProfileAsk(name);
   if (!ok) return;
   setDialogError("settings-modal", "");
-  try { await api("/api/profiles/" + encodeURIComponent(name), { method: "DELETE" }); }
+  try { await api(deletePath(name, pfLoaded), { method: "DELETE" }); }
   catch (e) { setDialogError("settings-modal", "Delete failed: " + e.message); return; }
   await loadProfiles();
 }
@@ -7171,10 +7183,6 @@ initMobileShell();
   try {
     const seq = ++credListsSeq; // shares the refresh's sequence, so a slower boot answer cannot overwrite a newer one
     const meta = await api("/api/meta");
-    // The profile schema this page was loaded with: the first answer is kept for
-    // the life of the page (no other /api/meta read pins), so a save from a page
-    // that predates an update is refused by the server instead of dropping fields.
-    pfSchema.pin(meta && meta.profile_schema);
     // Whether replies are on gates every reply surface; closed until this answers.
     globalThis.repliesEnabled = !!(meta && meta.replies === true);
     // Quick-shell profile first: it is independent of the env badge, so it must
