@@ -181,8 +181,7 @@ async function loadTokens() {
   setTokErr("");
   // Hide any one-time reveal from a previous create: the secret must not linger
   // in the DOM once the user has moved on (reopened the tab, refreshed the list).
-  const reveal = document.getElementById("tok-reveal");
-  if (reveal) reveal.hidden = true;
+  tokHideReveal();
   let items;
   try {
     items = await api("/api/tokens");
@@ -242,6 +241,30 @@ async function loadTokens() {
   }
 }
 
+// tokHideReveal: hide the one-time reveal and take the secret out of the page with it: the value node's text, and the
+// copy hook's copy of it when that still holds this value. Every way the reveal goes (Done, a repaint, leaving) ends here.
+function tokHideReveal() {
+  const box = document.getElementById("tok-reveal");
+  const val = document.getElementById("tok-reveal-val");
+  if (val) {
+    const held = val.textContent;
+    if (held && typeof window !== "undefined" && window.__lastCopied === held) window.__lastCopied = "";
+    val.textContent = "";
+  }
+  if (box) box.hidden = true;
+}
+
+// How many times the tab has been left: a create that was in flight when it was left must not paint its secret into a
+// panel nobody is looking at.
+let tokLeft = 0;
+
+// tokLeave: the Access-tokens tab (or Settings) is no longer on screen; shell.js calls it from selectSettingsTab and the
+// Settings dialog's close.
+function tokLeave() {
+  tokLeft++;
+  tokHideReveal();
+}
+
 function revealToken(plain) {
   const box = document.getElementById("tok-reveal");
   const val = document.getElementById("tok-reveal-val");
@@ -252,6 +275,7 @@ function revealToken(plain) {
 
 async function createToken() {
   setTokErr("");
+  const left = tokLeft;
   const name = await askPrompt({
     title: "New access token",
     body: "A name to recognise this token later (e.g. \"macbook\", \"cli\").",
@@ -270,6 +294,7 @@ async function createToken() {
     // The list refreshes first, so the new row is on screen; the reveal is the
     // last thing painted and the first thing the next refresh takes away.
     await loadTokens();
+    if (left !== tokLeft) return; // the tab was left meanwhile: the token is not painted anywhere
     revealToken(res.token);
   } catch (e) {
     setTokErr("Create failed: " + e.message);
@@ -337,7 +362,7 @@ function initTokens() {
   if (copyBtn) {
     copyBtn.onclick = () => {
       const val = document.getElementById("tok-reveal-val");
-      if (val) copyText(val.textContent, (ok) => {
+      if (val && val.textContent) copyText(val.textContent, (ok) => {
         copyBtn.textContent = ok ? "Copied" : "Copy failed";
         setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
       });
@@ -351,10 +376,7 @@ function initTokens() {
   if (navLogout) navLogout.onclick = navSignOut;
 
   const done = document.getElementById("tok-done");
-  if (done) done.onclick = () => {
-    const box = document.getElementById("tok-reveal");
-    if (box) box.hidden = true;
-  };
+  if (done) done.onclick = tokHideReveal;
 }
 
 if (typeof document !== "undefined") {

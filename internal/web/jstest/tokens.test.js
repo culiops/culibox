@@ -83,6 +83,7 @@ const settle = () => new Promise((r) => setImmediate(r));
 // phone's modal. `calls` records the requests the code makes.
 function page({ items, asPage = true, api } = {}) {
   const calls = [];
+  const copied = [];
   Node.focused = null;
   const els = {
     "set-act-tokens": Object.assign(new Node("button"), { id: "set-act-tokens" }),
@@ -90,6 +91,10 @@ function page({ items, asPage = true, api } = {}) {
     "tok-list": new Node("ul"),
     "tok-err": new Node("div"),
     "tok-reveal": Object.assign(new Node("div"), { hidden: true }),
+    "tok-reveal-val": new Node("div"),
+    "tok-new": new Node("button"),
+    "tok-copy": Object.assign(new Node("button"), { own: "Copy" }),
+    "tok-done": new Node("button"),
   };
   const ctx = {
     document: {
@@ -99,11 +104,15 @@ function page({ items, asPage = true, api } = {}) {
     },
     api: api ? async (url, opts) => { calls.push([url, (opts && opts.method) || "GET"]); return api(url, (opts && opts.method) || "GET"); }
       : async (url, opts) => { calls.push([url, (opts && opts.method) || "GET"]); return items; },
+    window: {},
+    askPrompt: async () => "laptop",
+    copyText: (text, done) => { ctx.window.__lastCopied = text; copied.push(text); done(true); },
+    setTimeout: () => 0,
     console,
   };
   vm.createContext(ctx);
   new vm.Script(SRC, { filename: "tokens.js" }).runInContext(ctx);
-  return { ctx, els, list: els["tok-list"], calls };
+  return { ctx, els, list: els["tok-list"], calls, copied };
 }
 
 const TOKENS = [
@@ -713,4 +722,82 @@ test("the phone's list has no role, even after the page drew it (the mode can fl
   assert.strictEqual(list.getAttribute("role"), null);
   assert.strictEqual(list.children.length, 3, "the phone's three rows");
   assert.ok(list.children.every((li) => li.getAttribute("role") === null && li.className === "tokrow"));
+});
+
+// --- the one-time reveal leaves no secret in the DOM (#208) ---------------------------------------------------------
+
+const SECRET = "abox_one-time-secret";
+// create(): a page whose POST answers with SECRET, the list refresh answering TOKENS; resolves once the reveal is up.
+async function create(opts = {}) {
+  const p = page({ items: TOKENS, api: async (url, method) => (method === "POST" ? { token: SECRET } : TOKENS), ...opts });
+  await p.els["tok-new"].onclick();
+  return p;
+}
+const shown = (p) => !p.els["tok-reveal"].hidden;
+const value = (p) => p.els["tok-reveal-val"].textContent;
+
+test("a created token is shown in the reveal and stays there while it is visible", async () => {
+  const p = await create();
+  assert.ok(shown(p), "the reveal is up");
+  assert.strictEqual(value(p), SECRET, "with the value, so it can be read and copied");
+  await p.els["tok-copy"].onclick();
+  assert.deepStrictEqual(p.copied, [SECRET], "Copy still copies it");
+});
+
+test("Done hides the reveal and empties the value node (#208)", async () => {
+  const p = await create();
+  p.els["tok-done"].onclick();
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "", "no bearer token text is left in the DOM");
+});
+
+test("a repaint that hides the reveal empties the value node (#208)", async () => {
+  const p = await create();
+  await p.ctx.loadTokens();
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "");
+});
+
+test("leaving the tab empties the value node (#208)", async () => {
+  const p = await create();
+  p.ctx.tokLeave();
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "");
+});
+
+test("the copy hook does not keep the token once the reveal hides, and Copy then copies nothing (#208)", async () => {
+  const p = await create();
+  await p.els["tok-copy"].onclick();
+  assert.strictEqual(p.ctx.window.__lastCopied, SECRET, "fixture: the hook holds the copied token");
+  p.els["tok-done"].onclick();
+  assert.strictEqual(p.ctx.window.__lastCopied, "", "cleared with the reveal");
+  p.copied.length = 0;
+  await p.els["tok-copy"].onclick();
+  assert.deepStrictEqual(p.copied, [], "a hidden reveal has nothing to copy");
+});
+
+test("the hook is left alone when it holds something else (#208)", async () => {
+  const p = await create();
+  p.ctx.window.__lastCopied = "git status";
+  p.els["tok-done"].onclick();
+  assert.strictEqual(p.ctx.window.__lastCopied, "git status");
+});
+
+test("a create that finishes after the user left the tab never paints the token (#208)", async () => {
+  let release;
+  const p = page({ items: TOKENS, api: (url, method) => (method === "POST" ? new Promise((r) => { release = r; }) : Promise.resolve(TOKENS)) });
+  const creating = p.els["tok-new"].onclick();
+  await settle();
+  p.ctx.tokLeave();                                  // the tab is left while the POST is out
+  release({ token: SECRET });
+  await creating;
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "", "the value never reaches a panel nobody is looking at");
+});
+
+test("the shell empties the reveal when another Settings tab is chosen and when Settings closes (#208)", () => {
+  const shell = read("shell.js");
+  const body = (name) => { const at = shell.indexOf("function " + name + "("); return shell.slice(at, shell.indexOf("\n}\n", at) + 2); };
+  assert.match(body("selectSettingsTab"), /if \(name !== "tokens" && typeof tokLeave === "function"\) tokLeave\(\);/);
+  assert.match(body("initDialogs"), /d\.id === "settings-modal" && typeof tokLeave === "function"\) tokLeave\(\);/);
 });
