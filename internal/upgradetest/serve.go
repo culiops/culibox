@@ -95,17 +95,29 @@ func LogTail(path string, n int) string {
 // running.
 func Start(t *testing.T, bin, port string, e Env, logPath string) *Server {
 	t.Helper()
+	s, err := TryStart(t, bin, port, e, logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// TryStart is Start that returns the failure instead of ending the test: the
+// rollback checks record a vN-1 that refuses the data vN wrote as a finding.
+func TryStart(t *testing.T, bin, port string, e Env, logPath string) (*Server, error) {
+	t.Helper()
 	s := &Server{Bin: bin, Port: port, Log: logPath}
 	cmd := exec.Command(bin, "serve")
 	cmd.Env = e.Vars()
 	cmd.Dir = e.Home
 	if err := s.startCmd(t, cmd); err != nil {
-		t.Fatalf("start %s: %v", bin, err)
+		return nil, fmt.Errorf("start %s: %v", bin, err)
 	}
 	if err := s.Ready(20 * time.Second); err != nil {
-		t.Fatalf("%s did not come up: %v", filepath.Base(bin), err)
+		s.Kill()
+		return nil, fmt.Errorf("%s did not come up: %v", filepath.Base(bin), err)
 	}
-	return s
+	return s, nil
 }
 
 // startCmd starts cmd with its output appended to s.Log.

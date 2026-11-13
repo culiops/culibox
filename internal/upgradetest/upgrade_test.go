@@ -106,6 +106,10 @@ func testPinnedRoot(t *testing.T, prev, cur string) {
 	}
 	ReadStoreCopy(t, root, storeValues)
 	phase(t, "S1 upgrade (vN)", start)
+
+	start = time.Now()
+	Reverse(t, "S1", c, prev, s.env, f, root)
+	phase(t, "S1 rollback (vN-1)", start)
 }
 
 // testDefaultRoot is S2: no root env var, so vN-1 uses its default root and vN
@@ -181,6 +185,10 @@ func testDefaultRoot(t *testing.T, prev, cur string) {
 	}
 	ReadStoreCopy(t, root, storeValues)
 	phase(t, "S2 upgrade (vN)", start)
+
+	start = time.Now()
+	Reverse(t, "S2", c, prev, s.env, f, root)
+	phase(t, "S2 rollback (vN-1)", start)
 }
 
 // observeLiveSession records what vN does with a session vN-1 left running.
