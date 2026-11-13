@@ -118,6 +118,11 @@ func TestWrapNeverStartsABoxOnAWorkspaceExchangedWithALink(t *testing.T) {
 		_, _, name, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"claude"}, nil, nil)
 		if err != nil {
 			refused++
+			// A refusal leaves no box behind: whatever the flip let docker
+			// create is removed, never kept for the next spawn to reuse.
+			if left := f.runningBoxes(); len(left) != 0 {
+				t.Errorf("run %d: refused with %v, but boxes are left running: %v", i, err, left)
+			}
 			continue
 		}
 		f.mu.Lock()

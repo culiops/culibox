@@ -311,6 +311,19 @@ func (f *fakeClient) HasRuntime(_ context.Context, name string) bool {
 	return f.sysbox && name == runtimeSysbox
 }
 
+// runningBoxes lists the boxes the fake still runs.
+func (f *fakeClient) runningBoxes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for n, on := range f.running {
+		if on {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func (f *fakeClient) stops() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
