@@ -149,7 +149,7 @@ func TestVMFoldersErrorCodes(t *testing.T) {
 		err    error
 		status int
 		code   string
-	}{{ErrApplyRunning, 409, "apply_running"}, {ErrListCorrupt, 423, "list_corrupt"}} {
+	}{{ErrApplyRunning, 409, "apply_running"}, {ErrListCorrupt, 423, "list_corrupt"}, {ErrSharesChanged, 409, "shares_changed"}} {
 		f.addErr = c.err
 		w := do(s.handleVMFolders, vmReq("POST", "/api/vm-folders", `{"path":"~/a","mode":"rw"}`, "http://"+host, credCookie))
 		if w.Code != c.status || !strings.Contains(w.Body.String(), `"code":"`+c.code+`"`) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -143,6 +144,10 @@ func (s *vmShareSvc) Apply() (web.VMApply, error) {
 		s.mu.Unlock()
 		return web.VMApply{}, errApplyElsewhere{}
 	}
+	if err := s.recheckList(); err != nil {
+		s.mu.Unlock()
+		return web.VMApply{}, err
+	}
 	if _, _, setUp, err := s.ctl.Applied(); err == nil && !setUp {
 		s.mu.Unlock()
 		return web.VMApply{}, web.ErrVMNotSetUp
@@ -161,6 +166,22 @@ func (s *vmShareSvc) Apply() (web.VMApply, error) {
 	s.mu.Unlock()
 	go s.runJob(context.WithoutCancel(context.Background()), id)
 	return out, nil
+}
+
+// recheckList runs the list through the same rules as at load, on the folders
+// as they are now (resolved), just before it is handed to the VM. A folder
+// that changed on disk since it was added (a link retargeted) and is no longer
+// allowed, or no longer a separate entry, refuses the apply. The caller holds s.mu.
+func (s *vmShareSvc) recheckList() error {
+	out, skipped := vmshares.Normalize(s.list, s.env)
+	if len(skipped) == 0 && slices.Equal(out, s.list) {
+		return nil
+	}
+	for _, k := range skipped {
+		s.logf("box VM folders: not applying: %s: %s", k.Path, k.Reason)
+	}
+	s.logf("box VM folders: not applying: the folder list no longer passes the checks")
+	return web.ErrSharesChanged
 }
 
 func (s *vmShareSvc) runJob(ctx context.Context, id int) {

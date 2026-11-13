@@ -52,6 +52,16 @@ var resolveSpelling = Resolve
 // Check returns nil or a *Refused for p. The rules run on both p and its
 // symlink-resolved form; Path in the error is p as given.
 func Check(p string, env Env) error {
+	if !filepath.IsAbs(p) {
+		return checkResolved(p, p, env)
+	}
+	return checkResolved(p, resolveSpelling(filepath.Clean(p)), env)
+}
+
+// checkResolved is Check for a p the caller has already resolved to rp, so a
+// path is resolved once and the value that was checked is the value that is
+// compared and stored (a link retargeted in between cannot give two answers).
+func checkResolved(p, rp string, env Env) error {
 	refuse := func(kind, reason string) error {
 		return &Refused{Path: p, Kind: kind, Reason: reason, home: env.Home}
 	}
@@ -59,7 +69,7 @@ func Check(p string, env Env) error {
 		return refuse(KindRelative, reasonRelative)
 	}
 	p = filepath.Clean(p)
-	for _, c := range []string{p, resolveSpelling(p)} {
+	for _, c := range []string{p, rp} {
 		if box.MountUnsafe(c) != "" || YAMLSafe(c) != nil {
 			return refuse(KindUnsafe, reasonUnsafe)
 		}
@@ -88,7 +98,7 @@ func Check(p string, env Env) error {
 			return refuse(KindProtected, fmt.Sprintf(reasonProtectedFmt, what))
 		}
 	}
-	for _, c := range []string{p, resolveSpelling(p)} {
+	for _, c := range []string{p, rp} {
 		if kind, reason := identityHit(c, env); kind != "" {
 			return refuse(kind, reason)
 		}
@@ -104,10 +114,17 @@ func Check(p string, env Env) error {
 // only be read-only, because the host's own Claude Code loads what is there
 // and a box that could write it could feed that agent instructions.
 func CheckMode(p string, m Mode, env Env) error {
-	if err := Check(p, env); err != nil {
+	if !filepath.IsAbs(p) {
+		return checkModeResolved(p, p, m, env)
+	}
+	return checkModeResolved(p, resolveSpelling(filepath.Clean(p)), m, env)
+}
+
+func checkModeResolved(p, rp string, m Mode, env Env) error {
+	if err := checkResolved(p, rp, env); err != nil {
 		return err
 	}
-	if m == RW && insideClaude(filepath.Clean(p), env) {
+	if m == RW && insideClaude(filepath.Clean(p), rp, env) {
 		return &Refused{Path: p, Kind: KindReadOnly, Reason: reasonReadOnly, home: env.Home}
 	}
 	return nil
@@ -115,13 +132,13 @@ func CheckMode(p string, m Mode, env Env) error {
 
 // insideClaude reports whether p, by spelling, symlink resolution or file
 // identity (a macOS firmlink, a link to the home), is ~/.claude or below it.
-func insideClaude(p string, env Env) bool {
+func insideClaude(p, rp string, env Env) bool {
 	if env.Home == "" {
 		return false
 	}
 	claude := filepath.Join(env.Home, ".claude")
 	ids := idCache{}
-	for _, c := range []string{p, resolveSpelling(p)} {
+	for _, c := range []string{p, rp} {
 		for _, cl := range spellings(claude) {
 			if Within(c, cl, env.Fold) {
 				return true

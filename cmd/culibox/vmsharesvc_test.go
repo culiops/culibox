@@ -551,3 +551,45 @@ func TestBootVMFoldersFailureServesAStub(t *testing.T) {
 		t.Error("a stub has no apply job")
 	}
 }
+
+// #235 item 3: a listed folder is checked again, resolved, when the list is
+// applied: a link that now leads somewhere refused must not reach the VM.
+func TestApplyChecksTheListAgainBeforeItReachesTheVM(t *testing.T) {
+	f := newSvcFixture(t)
+	code, aws := f.sub(t, "code"), f.sub(t, ".aws")
+	link := filepath.Join(f.home, "link")
+	if err := os.Symlink(code, link); err != nil {
+		t.Fatal(err)
+	}
+	s := f.svc(t)
+	if _, _, err := s.Add(link, "rw", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(aws, link); err != nil {
+		t.Fatal(err)
+	}
+	f.ctl.listed = nil
+	if _, err := s.Apply(); !errors.Is(err, web.ErrSharesChanged) {
+		t.Fatalf("Apply = %v, want ErrSharesChanged", err)
+	}
+	if f.ctl.listed != nil {
+		t.Fatalf("the VM was handed %+v", f.ctl.listed)
+	}
+	if s.jobRunning() {
+		t.Fatal("a job started")
+	}
+	// Put the link back: the same list applies.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(code, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(); err != nil {
+		t.Fatalf("an unchanged list must apply: %v", err)
+	}
+	waitJob(t, s)
+}

@@ -218,3 +218,35 @@ func TestClaudeFoldersAreReadOnlyEverywhere(t *testing.T) {
 		t.Errorf("Add rw over the ro entry = %v, want a read-only refusal", err)
 	}
 }
+
+// #235 item 3: a path is resolved once per operation. The value that was
+// checked is the one that is compared and merged, so a link retargeted while an
+// operation runs cannot give the check one answer and the comparison another.
+func TestAddAndNormalizeResolveEachPathOnce(t *testing.T) {
+	env := testEnv(t, false)
+	link := filepath.Join(env.Home, "lnk")
+	if err := os.Symlink(filepath.Join(env.Home, "code"), link); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	old := resolveSpelling
+	resolveSpelling = func(p string) string {
+		if p == link {
+			n++
+		}
+		return old(p)
+	}
+	t.Cleanup(func() { resolveSpelling = old })
+
+	if _, err := Add(nil, Share{Path: link, Mode: RW}, env); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("Add resolved the path %d times, want 1", n)
+	}
+	n = 0
+	Normalize([]Share{{Path: link, Mode: RW}}, env)
+	if n != 1 {
+		t.Errorf("Normalize resolved the path %d times, want 1", n)
+	}
+}

@@ -76,8 +76,9 @@ type VMFolders interface {
 }
 
 var (
-	ErrApplyRunning = errors.New("the VM is already restarting to apply its folders")
-	ErrVMNotSetUp   = errors.New("the box VM is not set up; run `culibox box setup`")
-	ErrListCorrupt  = errors.New("the folder list file is damaged; fix or delete vm-shares.json")
-	ErrVMBadMode    = errors.New("the mode must be rw or ro")
+	ErrApplyRunning  = errors.New("the VM is already restarting to apply its folders")
+	ErrVMNotSetUp    = errors.New("the box VM is not set up; run `culibox box setup`")
+	ErrListCorrupt   = errors.New("the folder list file is damaged; fix or delete vm-shares.json")
+	ErrVMBadMode     = errors.New("the mode must be rw or ro")
+	ErrSharesChanged = errors.New("a shared folder changed on disk since it was added and is no longer allowed; check Settings › VM folders")
 )

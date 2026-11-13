@@ -42,7 +42,7 @@ func sameKey(a, b string, fold bool) bool { return Within(a, b, fold) && Within(
 func keys(list []Share) []string {
 	out := make([]string, len(list))
 	for i, s := range list {
-		out[i] = Resolve(s.Path)
+		out[i] = resolveSpelling(filepath.Clean(s.Path))
 	}
 	return out
 }
@@ -67,10 +67,12 @@ func sorted(list []Share, fold bool) []Share {
 // Add puts s in list under the rule that no share contains another, judged on
 // the resolved paths.
 func Add(list []Share, s Share, env Env) (Outcome, error) {
-	if err := CheckMode(s.Path, s.Mode, env); err != nil {
+	// Resolved once: the value that is checked is the value that is compared.
+	k := resolveSpelling(filepath.Clean(s.Path))
+	if err := checkModeResolved(s.Path, k, s.Mode, env); err != nil {
 		return Outcome{}, err
 	}
-	ks, k := keys(list), Resolve(s.Path)
+	ks := keys(list)
 	for i, e := range list {
 		if sameKey(ks[i], k, env.Fold) {
 			next, err := SetMode(list, e.Path, s.Mode, env)
@@ -108,11 +110,11 @@ func Add(list []Share, s Share, env Env) (Outcome, error) {
 // input is not modified.
 func SetMode(list []Share, path string, m Mode, env Env) ([]Share, error) {
 	out := append([]Share{}, list...)
-	k := Resolve(path)
+	k := resolveSpelling(filepath.Clean(path))
 	for i, rk := range keys(out) {
 		if sameKey(rk, k, env.Fold) {
 			if m == RW {
-				if err := CheckMode(out[i].Path, m, env); err != nil {
+				if err := checkModeResolved(out[i].Path, rk, m, env); err != nil {
 					return nil, err
 				}
 			}
@@ -127,7 +129,7 @@ func SetMode(list []Share, path string, m Mode, env Env) ([]Share, error) {
 func Remove(list []Share, path string, fold bool) ([]Share, error) {
 	out := []Share{}
 	found := false
-	k := Resolve(path)
+	k := resolveSpelling(filepath.Clean(path))
 	for i, rk := range keys(list) {
 		if sameKey(rk, k, fold) {
 			found = true
@@ -153,7 +155,9 @@ func Normalize(list []Share, env Env) (out []Share, skipped []Skip) {
 	var merged []keyed
 outer:
 	for _, s := range list {
-		if err := Check(s.Path, env); err != nil {
+		clean := filepath.Clean(s.Path)
+		k := resolveSpelling(clean) // once: checked, compared and merged on this value
+		if err := checkResolved(s.Path, k, env); err != nil {
 			reason := err.Error()
 			var r *Refused
 			if errors.As(err, &r) {
@@ -162,11 +166,10 @@ outer:
 			skipped = append(skipped, Skip{Path: s.Path, Reason: reason})
 			continue
 		}
-		if s.Mode == RW && insideClaude(filepath.Clean(s.Path), env) {
+		if s.Mode == RW && insideClaude(clean, k, env) {
 			s.Mode = RO
 			skipped = append(skipped, Skip{Path: s.Path, Reason: "made read-only: it " + reasonReadOnly})
 		}
-		k := Resolve(s.Path)
 		for i := range merged {
 			if sameKey(merged[i].key, k, env.Fold) {
 				if s.Mode == RW {

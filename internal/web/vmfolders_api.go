@@ -54,6 +54,8 @@ func writeVMErr(w http.ResponseWriter, err error) {
 		body(http.StatusBadRequest, "rw_in_ro")
 	case errors.Is(err, ErrApplyRunning):
 		writeErrCode(w, http.StatusConflict, err.Error(), "apply_running")
+	case errors.Is(err, ErrSharesChanged):
+		writeErrCode(w, http.StatusConflict, err.Error(), "shares_changed")
 	case errors.Is(err, ErrListCorrupt):
 		writeErrCode(w, http.StatusLocked, err.Error(), "list_corrupt")
 	case errors.Is(err, ErrVMNotSetUp):
