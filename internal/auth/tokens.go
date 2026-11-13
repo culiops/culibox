@@ -73,6 +73,9 @@ func OpenTokenStore(path string) (*TokenStore, error) {
 		return nil, datacompat.Newer(path, "it does not parse as this build's token list: "+err.Error())
 	}
 	for _, r := range list {
+		if r == nil {
+			return nil, datacompat.Newer(path, "it does not parse as this build's token list: a record is null")
+		}
 		s.m[r.ID] = r
 	}
 	return s, nil

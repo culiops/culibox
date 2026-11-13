@@ -117,6 +117,10 @@ func decodeEntries[T any](kind string, raws []json.RawMessage, bad *[]EntryError
 
 // knownKinds are the top-level keys this build reads, in the order their
 // problems are reported.
+// A new kind of entry may be added as a new top-level key: an older build
+// ignores it and goes read-only. A restriction on existing entries must go
+// inside the entries, where the strict per-entry decode refuses it, never in a
+// new top-level key, because an older build activates the entries it understands.
 var knownKinds = []string{"aws_connections", "github_apps", "static_tokens"}
 
 // parse is file-level strict (not JSON, not an object, trailing data: the whole

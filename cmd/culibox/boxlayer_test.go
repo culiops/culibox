@@ -21,6 +21,7 @@ import (
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 	"github.com/culiops/culibox/internal/vmshares"
 )
 
@@ -485,6 +486,33 @@ func TestLoadRelayKeyErrorsNameTheRelaySecretAndItsFix(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "cookie") {
 			t.Errorf("error is worded for the cookie secret: %v", err)
+		}
+	})
+	t.Run("wrong length is a newer CuliBox's file", func(t *testing.T) {
+		dir := shortRoot(t)
+		path := filepath.Join(dir, relaySecretFile)
+		body := bytes.Repeat([]byte{7}, 16)
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		l := freshDarwinLayer(t, dir)
+		err := l.loadRelayKey()
+		if !errors.Is(err, datacompat.ErrNewer) {
+			t.Fatalf("a 16-byte relay2.secret: %v, want ErrNewer", err)
+		}
+		if n := strings.Count(err.Error(), path); n != 1 {
+			t.Errorf("the path appears %d times, want once: %v", n, err)
+		}
+		for _, bad := range []string{"cannot be read or created", "permissions"} {
+			if strings.Contains(err.Error(), bad) {
+				t.Errorf("error says %q, which is wrong for a newer file: %v", bad, err)
+			}
+		}
+		if !l.relayKey.IsZero() {
+			t.Error("the key must stay zero after a failed load")
+		}
+		if b, rerr := os.ReadFile(path); rerr != nil || !bytes.Equal(b, body) {
+			t.Errorf("the file changed (read err %v)", rerr)
 		}
 	})
 	t.Run("all zero", func(t *testing.T) {

@@ -457,7 +457,8 @@ func guardLockRows(goos string, f boxFacts) []Result {
 	}
 	var out []Result
 	if errors.Is(f.LocksErr, datacompat.ErrNewer) {
-		// Left in place, not moved aside: there is no flag to unlock by hand.
+		// Left in place, not moved aside: the records belong to the newer CuliBox,
+		// which unlocks them; this build must not act on them.
 		out = append(out, Result{Warn, ck, "the lock records are from a newer CuliBox and are left as they are, so every in-place box " +
 			"that needs a lock is refused (" + f.LocksErr.Error() + ")"})
 	} else if f.LocksErr != nil {

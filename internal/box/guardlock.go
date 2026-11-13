@@ -314,6 +314,15 @@ func lockRefusal(p, why string) error {
 		"file and can read it, or remove it, or use a clone-mode profile", p, why, otherCase(filepath.Base(p)))
 }
 
+// frozenRefusal is the spawn refusal while the lock records are frozen (written
+// by a newer CuliBox). The folder is fine and nothing in it needs removing: this
+// build just cannot record a lock it could later undo, so the only ways out are
+// the newer CuliBox or a clone-mode profile. why carries the datacompat hint.
+func frozenRefusal(ws string, why error) error {
+	return refuseInPlace("%s was not started in place: the in-place lock records were written by a newer CuliBox "+
+		"and this build cannot record a lock there (%v). Run the newer CuliBox, or use a clone-mode profile", ws, why)
+}
+
 // setRefusal is the refusal for a flag that could not be set on p. A volume
 // without file flags (exFAT, a network share) answers ENOTSUP or EOPNOTSUPP:
 // no owner or permission fix helps there, only clone mode.
@@ -372,7 +381,7 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 		return g.lockedFor(box), nil
 	}
 	if g.frozen != nil {
-		return nil, lockRefusal(ws, g.frozen.Error())
+		return nil, frozenRefusal(ws, g.frozen)
 	}
 	root, err := os.OpenRoot(ws)
 	if err != nil {

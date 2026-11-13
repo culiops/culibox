@@ -104,20 +104,42 @@ func TestOpenTokenStoreUnknownFieldRefused(t *testing.T) {
 
 func TestOpenTokenStoreObjectRefused(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "tokens.json")
-	if err := os.WriteFile(p, []byte(`{"version":2,"tokens":[]}`), 0o600); err != nil {
+	const body = `{"version":2,"tokens":[]}`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := OpenTokenStore(p); !errors.Is(err, datacompat.ErrNewer) {
 		t.Fatalf("err = %v, want ErrNewer", err)
+	}
+	if got := readFile(t, p); got != body {
+		t.Errorf("tokens.json changed: %q", got)
 	}
 }
 
 func TestOpenTokenStoreTrailingDataRefused(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "tokens.json")
-	if err := os.WriteFile(p, []byte(`[{"id":"a","name":"n","created_at":1,"hash":"h"}]x`), 0o600); err != nil {
+	const body = `[{"id":"a","name":"n","created_at":1,"hash":"h"}]x`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := OpenTokenStore(p); !errors.Is(err, datacompat.ErrNewer) {
 		t.Fatalf("err = %v, want ErrNewer", err)
+	}
+	if got := readFile(t, p); got != body {
+		t.Errorf("tokens.json changed: %q", got)
+	}
+}
+
+func TestOpenTokenStoreNullRecordRefused(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "tokens.json")
+	const body = `[null]`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenTokenStore(p); !errors.Is(err, datacompat.ErrNewer) {
+		t.Fatalf("err = %v, want ErrNewer", err)
+	}
+	if got := readFile(t, p); got != body {
+		t.Errorf("tokens.json changed: %q", got)
 	}
 }

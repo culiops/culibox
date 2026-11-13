@@ -590,6 +590,19 @@ func TestGuardLocksNewerVersionFreezes(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "newer CuliBox") {
 			t.Fatalf("%s: hold = %v, want a refusal naming the newer CuliBox", body, err)
 		}
+		if !errors.Is(err, ErrUnboxableWorkspace) {
+			t.Fatalf("%s: hold = %v, want an in-place refusal", body, err)
+		}
+		for _, want := range []string{"clone-mode"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s: refusal lacks %q: %v", body, want, err)
+			}
+		}
+		for _, bad := range []string{"remove it", "own the file"} {
+			if strings.Contains(err.Error(), bad) {
+				t.Fatalf("%s: refusal says %q, which is wrong for a newer file: %v", body, bad, err)
+			}
+		}
 		if fk.sets != 0 || len(g.all()) != 0 {
 			t.Fatalf("%s: a flag or record was set: sets=%d recs=%v", body, fk.sets, g.all())
 		}
