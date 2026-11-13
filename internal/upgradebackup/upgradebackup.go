@@ -93,6 +93,13 @@ func Run(o Options) (Result, error) {
 	if err := writeStamp(root, o.Version, o.Commit); err != nil {
 		return res, fmt.Errorf("upgrade backup: write stamp: %w", err)
 	}
+	// The backup and the stamp are durable; a prune failure only leaves old
+	// backups around, so it is logged and never fails serve.
+	pruned, err := prune(root, o.Now)
+	res.Pruned = pruned
+	if err != nil {
+		o.logf("upgrade backup: retention: %v", err)
+	}
 	return res, nil
 }
 
