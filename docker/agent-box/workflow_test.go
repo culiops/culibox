@@ -274,9 +274,12 @@ var (
 	wfQuotedText = regexp.MustCompile(`"(?:[^"\\]|\\.)*"|'[^']*'`)
 	// The one flow form the guard reads: `key: [a, "b"]` on one line, items plain or
 	// quoted scalars (so no nested collection, pair, alias, anchor or tag in it).
-	wfFlowList     = regexp.MustCompile(`^\s*[\w.-]+:\s*\[\s*(?:` + wfFlowItem + `(?:\s*,\s*` + wfFlowItem + `)*)?\s*\]\s*$`)
-	wfDocMarker    = regexp.MustCompile(`^(?:---|\.\.\.)(?:\s|$)`)
-	wfTopKey       = regexp.MustCompile(`^([\w-]+):`)
+	wfFlowList  = regexp.MustCompile(`^\s*[\w.-]+:\s*\[\s*(?:` + wfFlowItem + `(?:\s*,\s*` + wfFlowItem + `)*)?\s*\]\s*$`)
+	wfDocMarker = regexp.MustCompile(`^(?:---|\.\.\.)(?:\s|$)`)
+	wfTopKey    = regexp.MustCompile(`^([\w-]+):`)
+	// A quote that opens a scalar sits where a value starts: after `key:`, a dash, `[` or `,`.
+	wfOpenQuote    = regexp.MustCompile(`(?:^\s*(?:-\s+)*(?:[\w.-]+:\s*)?|[\[,]\s*)["']`)
+	wfDashSpaces   = regexp.MustCompile(`^\s*-\s{2,}\S`)
 	wfMergeKey     = regexp.MustCompile(`^\s*<<\s*:`)
 	wfSingleRunKey = regexp.MustCompile(`^\s*(?:-\s+)?run:`)
 )
@@ -488,6 +491,15 @@ func checkWorkflowSupplyChain(name, content string) []string {
 			// bare: expressions and quoted text taken out, then the comment, so a brace
 			// or an exclamation mark inside text is not structure.
 			bare := wfTrailing.ReplaceAllString(wfQuotedText.ReplaceAllString(wfExprSpan.ReplaceAllString(l.text, "x"), `""`), "")
+			// A quote still open once expressions, closed spans and the comment are gone
+			// runs to a later line, where a `#` line is string text, not a comment.
+			unquoted := wfTrailing.ReplaceAllString(wfQuotedText.ReplaceAllString(wfExprSpan.ReplaceAllString(l.text, "x"), "x"), "")
+			if wfOpenQuote.MatchString(unquoted) {
+				add(l.n, "multi-line quoted scalar (a quote is left open on this line): the guard cannot tell what is a comment inside it: %q", text)
+			}
+			if wfDashSpaces.MatchString(code) {
+				add(l.n, "more than one space after a list dash: the guard reads the key column as dash+2: %q", text)
+			}
 			if wfBlockOpen.MatchString(bare) && !wfSingleRunKey.MatchString(code) {
 				add(l.n, "block scalar (`|` or `>`) is allowed only on a `run:` key: %q", text)
 			}
@@ -680,6 +692,11 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 			t.Errorf("run: %s script reported: %v", ind, bad)
 		}
 	}
+	// Apostrophes and quotes that do not open a scalar are plain text.
+	quotesOK := top + head + checkout + "      - name: don't \"stop\" # it's fine\n        if: github.event_name == 'push'\n        run: echo \"it's\"\n    env:\n      A: \"x # y\"\n      B: 'it''s'\n"
+	if bad := checkWorkflowSupplyChain("good.yml", quotesOK); len(bad) != 0 {
+		t.Fatalf("quotes that open no scalar reported: %v", bad)
+	}
 	// Shell text and quoted values in a script are not YAML structure.
 	scripted := top + head + checkout + "      - name: s\n        run: |\n          echo \"a: b\" && ls *.go\n          case x in *) : ;; esac\n          x=\"uses :\"\n"
 	if bad := checkWorkflowSupplyChain("good.yml", scripted); len(bad) != 0 {
@@ -759,6 +776,13 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 		"on children misaligned": {"name: x\non:\n    push:\n  issue_comment:\npermissions:\n  contents: read\njobs:\n" + head + checkout, "inconsistent indentation under `on:`"},
 		"tab in indentation":     {"name: x\non:\n  push:\n\tissue_comment:\npermissions:\n  contents: read\njobs:\n" + head + checkout, "tab"},
 		"carriage return":        {strings.Replace(top+head+checkout, "\n", "\r\n", 1), "line break"},
+		// Inside an open quote a `#` line is text, not a comment, so lines that look like
+		// structure can sit inside a string that a later `#"` line closes.
+		"open quote hides persist": {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          ref: \"main\n          persist-credentials: false\n#\"\n", "multi-line quoted scalar"},
+		"open quote hides perms":   {"name: \"x\non:\n  push:\npermissions:\n  contents: read\n#\"\njobs:\n" + head + checkout, "multi-line quoted scalar"},
+		"open single quote":        {top + head + checkout + "    env:\n      A: 'x\n      B: y\n#'\n", "multi-line quoted scalar"},
+		"open quote in a list":     {top + head + checkout + "    needs: [\"a\n", "multi-line quoted scalar"},
+		"dash with two spaces":     {top + head + "      -  run: |\n          echo a\n        uses: actions/checkout@v4\n", "after a list dash"},
 		// A lone CR, NEL, LS or PS ends a YAML line anywhere, a run script included: the
 		// text after it could be a `permissions:` line the guard sees as shell text.
 		"CR inside a run script":  {top + head + checkout + "      - run: |\n          echo a\r    permissions:\r      contents: write\n", "line break"},
