@@ -199,7 +199,7 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 				s.conflictLogged = true
 				log.Printf("egress: %s", msg)
 			}
-			err = fmt.Errorf("%w; %s", err, msg)
+			err = &BindConflictError{Err: err, Port: s.o.Port}
 		}
 		return Endpoint{}, fmt.Errorf("egress: listen %s: %w", addr, err)
 	}
@@ -314,5 +314,16 @@ func listenAddr(goos string, n Net, port int) (string, error) {
 // proxy connections to it. Nothing here guesses who holds the port: it may be an
 // earlier CuliBox still running.
 func LinuxBindConflict(port int) string {
-	return fmt.Sprintf("port %d on the box network's gateway is already in use by another process, so the egress proxy cannot start and boxes cannot reach it. If it is not an earlier CuliBox still running, another account on this host may have taken that address while CuliBox was stopped and could act as the proxy for running boxes; run `culibox doctor` and see docs/SECURITY.md (Services on this host)", port)
+	return fmt.Sprintf("port %d on the box network's gateway is already in use by another process, so the egress proxy cannot start; new fenced sessions are refused, and running boxes send their proxy connections to whatever holds the port. If it is not an earlier CuliBox still running, another account on this host may have taken that address while CuliBox was stopped and could act as the proxy; run `culibox doctor` and see docs/SECURITY.md (Services on this host)", port)
 }
+
+// BindConflictError is a Linux listen error that LinuxBindConflict explains. It
+// wraps the cause, so errors.Is(err, syscall.EADDRINUSE) still holds, and lets a
+// caller that logs the error elsewhere leave the fixed text out of that line.
+type BindConflictError struct {
+	Err  error
+	Port int
+}
+
+func (e *BindConflictError) Error() string { return e.Err.Error() + "; " + LinuxBindConflict(e.Port) }
+func (e *BindConflictError) Unwrap() error { return e.Err }

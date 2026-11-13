@@ -39,6 +39,12 @@ var (
 	egpNoProc = func(string) ([]byte, error) { return []byte(procTCPHeader), nil }
 )
 
+// egpTCP6Wildcard is a [::] LISTEN row: dual-stack unless the socket set IPV6_V6ONLY,
+// which /proc does not show.
+func egpTCP6Wildcard(port, uid int) string {
+	return fmt.Sprintf("   0: 00000000000000000000000000000000:%04X 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 %d 0 1 1\n", port, uid)
+}
+
 func egpProcWith(v4, v6 string) func(string) ([]byte, error) {
 	return func(name string) ([]byte, error) {
 		switch name {
@@ -86,12 +92,11 @@ func TestEgressPortFailsOnAnotherAccountsListener(t *testing.T) {
 
 func TestEgressPortPassesWhenTheListenerIsYoursOrAbsentOrElsewhere(t *testing.T) {
 	cases := map[string]func(string) ([]byte, error){
-		"own account":      egpProcWith(egpTCPRow(egpGW, 9072, 1000, "0A"), ""),
-		"nothing":          egpNoProc,
-		"other port":       egpProcWith(egpTCPRow(egpGW, 9073, 1234, "0A"), ""),
-		"other address":    egpProcWith(egpTCPRow(netip.MustParseAddr("127.0.0.1"), 9072, 1234, "0A"), ""),
-		"not listening":    egpProcWith(egpTCPRow(egpGW, 9072, 1234, "01"), ""), // an established connection
-		"v6 wildcard only": egpProcWith("", "   0: 00000000000000000000000000000000:2370 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 1234 0 1 1\n"),
+		"own account":   egpProcWith(egpTCPRow(egpGW, 9072, 1000, "0A"), ""),
+		"nothing":       egpNoProc,
+		"other port":    egpProcWith(egpTCPRow(egpGW, 9073, 1234, "0A"), ""),
+		"other address": egpProcWith(egpTCPRow(netip.MustParseAddr("127.0.0.1"), 9072, 1234, "0A"), ""),
+		"not listening": egpProcWith(egpTCPRow(egpGW, 9072, 1234, "01"), ""), // an established connection
 	}
 	for name, read := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -178,6 +183,66 @@ func TestCheckEgressPortThroughDockerAndProc(t *testing.T) {
 	c := config.Config{DockerBin: bin, EnvLabel: "DEV", EgressPort: port}
 	r := CheckEgressPort(c)
 	if r.Status != Pass || !strings.Contains(r.Detail, "127.0.0.1") {
+		t.Fatalf("got %+v", r)
+	}
+}
+
+// #131 review: a foreign [::] listener takes IPv4 connects to the gateway unless
+// it is IPv6-only, and /proc cannot tell, so it is a FAIL worded with that doubt;
+// your own is not.
+func TestEgressPortFailsOnAForeignDualStackWildcard(t *testing.T) {
+	r := checkEgressPort(context.Background(), 9072, egpNetOK, egpProcWith("", egpTCP6Wildcard(9072, 1234)), 1000)
+	if r.Status != Fail {
+		t.Fatalf("got %+v, want a FAIL", r)
+	}
+	for _, want := range []string{"1234", "all IPv6 addresses", "unless it is IPv6-only", "172.21.0.1"} {
+		if !strings.Contains(r.Detail, want) {
+			t.Errorf("detail lacks %q: %s", want, r.Detail)
+		}
+	}
+	if r := checkEgressPort(context.Background(), 9072, egpNetOK, egpProcWith("", egpTCP6Wildcard(9072, 1000)), 1000); r.Status != Pass {
+		t.Errorf("own [::] socket: %+v", r)
+	}
+	if r := checkEgressPort(context.Background(), 9072, egpNetOK, egpProcWith("", egpTCP6Wildcard(9073, 1234)), 1000); r.Status != Pass {
+		t.Errorf("[::] on another port: %+v", r)
+	}
+}
+
+// The wording: one "which" fewer, and what the holder does to the boxes.
+func TestEgressPortFailText(t *testing.T) {
+	r := checkEgressPort(context.Background(), 9072, egpNetOK, egpProcWith(egpTCPRow(netip.IPv4Unspecified(), 9072, 1234, "0A"), ""), 1000)
+	if !strings.Contains(r.Detail, "on all addresses, including the gateway 172.21.0.1, the egress proxy's address.") ||
+		!strings.Contains(r.Detail, "new fenced sessions are refused, and running boxes send their proxy connections to it") {
+		t.Errorf("detail: %s", r.Detail)
+	}
+}
+
+// No network yet: the gateway is unknown, but a foreign socket on every address
+// would take the port whatever the gateway turns out to be.
+func TestEgressPortAbsentNetworkStillChecksWildcards(t *testing.T) {
+	absent := func(context.Context) (egress.Net, bool, error) { return egress.Net{}, false, nil }
+	for name, read := range map[string]func(string) ([]byte, error){
+		"v4 wildcard": egpProcWith(egpTCPRow(netip.IPv4Unspecified(), 9072, 1234, "0A"), ""),
+		"v6 wildcard": egpProcWith("", egpTCP6Wildcard(9072, 1234)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := checkEgressPort(context.Background(), 9072, absent, read, 1000)
+			if r.Status != Fail || !strings.Contains(r.Detail, "1234") || strings.Contains(r.Detail, "gateway 172") {
+				t.Fatalf("got %+v", r)
+			}
+		})
+	}
+	// A socket on one specific address is not known to be the gateway: no finding.
+	if r := checkEgressPort(context.Background(), 9072, absent, egpProcWith(egpTCPRow(egpGW, 9072, 1234, "0A"), ""), 1000); r.Status != Pass {
+		t.Errorf("specific address with no network: %+v", r)
+	}
+}
+
+// As root, every other account's socket is "another account", CuliBox's own
+// included, so a holder is a WARN that says to run doctor without sudo.
+func TestEgressPortRootGetsAWarn(t *testing.T) {
+	r := checkEgressPort(context.Background(), 9072, egpNetOK, egpProcWith(egpTCPRow(egpGW, 9072, 1234, "0A"), ""), 0)
+	if r.Status != Warn || !strings.Contains(r.Detail, "1234") || !strings.Contains(r.Detail, "without sudo") {
 		t.Fatalf("got %+v", r)
 	}
 }

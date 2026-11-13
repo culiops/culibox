@@ -862,6 +862,13 @@ func TestReadyLinuxNamesAPortConflict(t *testing.T) {
 	if !strings.Contains(err.Error(), want) {
 		t.Errorf("error lacks the fixed message %q: %v", want, err)
 	}
+	if !strings.Contains(want, "new fenced sessions are refused") {
+		t.Errorf("the message does not say what happens to the boxes: %q", want)
+	}
+	var bc *BindConflictError
+	if !errors.As(err, &bc) || bc.Port != 9072 {
+		t.Errorf("error is not a BindConflictError: %v", err)
+	}
 	if got := strings.Count(buf.String(), want); got != 1 {
 		t.Errorf("log has the fixed message %d times, want once: %q", got, buf.String())
 	}

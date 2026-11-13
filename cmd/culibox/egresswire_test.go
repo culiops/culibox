@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -810,5 +811,19 @@ func TestEgressVerifyDarwinRefusalHintsRecreateOnlyWhenDrifted(t *testing.T) {
 		if got := strings.Contains(err.Error(), hint); got != tc.want {
 			t.Errorf("%s: hint present = %v, want %v: %v", name, got, tc.want, err)
 		}
+	}
+}
+
+// #131: the boot line does not repeat the conflict text Ready logged; any other
+// error keeps its place in the line.
+func TestProxyStartFailureLeavesTheConflictTextToReady(t *testing.T) {
+	conflict := &egress.BindConflictError{Err: fmt.Errorf("egress: listen 172.21.0.1:9072: %w", syscall.EADDRINUSE), Port: 9072}
+	got := proxyStartFailure("agentbox-egress-DEV", conflict)
+	if strings.Contains(got, "9072") || strings.Contains(got, "in use") || !strings.Contains(got, "agentbox-egress-DEV") {
+		t.Errorf("conflict line: %q", got)
+	}
+	got = proxyStartFailure("agentbox-egress-DEV", errors.New("boom"))
+	if !strings.Contains(got, "(boom)") {
+		t.Errorf("other error line: %q", got)
 	}
 }

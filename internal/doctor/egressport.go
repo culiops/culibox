@@ -29,10 +29,11 @@ import (
 // out of scope: the relay proves a key before it forwards anything (#118).
 //
 // Rows it matches, on the port: LISTEN sockets bound to the gateway or to all
-// IPv4 addresses, in the v4 table or as the v4-mapped form in the v6 table. A
-// plain [::] socket is not matched: whether it blocks an IPv4 bind depends on
-// bindv6only, and a false FAIL is worse than missing that case, which the
-// "host listeners" check already lists.
+// IPv4 addresses, in the v4 table or as the v4-mapped form in the v6 table, and
+// a plain [::] socket. The last takes IPv4 connections too unless it set
+// IPV6_V6ONLY, which /proc does not show (bindv6only is only a default), so it
+// is reported with that doubt. Without the network (no gateway yet) only the
+// wildcard sockets are matched.
 const egressPortCheck = "egress port"
 
 // CheckEgressPort is the Linux "egress port" row: it reads the egress network's
@@ -53,12 +54,14 @@ func checkEgressPort(ctx context.Context, port int, inspect func(context.Context
 	if err != nil {
 		return Result{Warn, egressPortCheck, fmt.Sprintf("could not read the egress network (%v), so the proxy's address is unknown", err)}
 	}
-	if !ok {
-		return Result{Pass, egressPortCheck, "the egress network is not created yet; its address is checked once it exists"}
-	}
-	gw := n.Gateway.Unmap()
-	if !gw.Is4() {
-		return Result{Warn, egressPortCheck, "the egress network has no gateway address, so the proxy's address is unknown"}
+	// Without the network the gateway is unknown, but a socket on every address
+	// would take the port whatever the gateway turns out to be.
+	var gw netip.Addr
+	if ok {
+		gw = n.Gateway.Unmap()
+		if !gw.Is4() {
+			return Result{Warn, egressPortCheck, "the egress network has no gateway address, so the proxy's address is unknown"}
+		}
 	}
 	var tables [2][]byte
 	for i, name := range []string{"tcp", "tcp6"} {
@@ -80,13 +83,23 @@ func checkEgressPort(ctx context.Context, port int, inspect func(context.Context
 		}
 	}
 	if len(others) == 0 {
+		if !ok {
+			return Result{Pass, egressPortCheck, fmt.Sprintf("the egress network is not created yet; no other account listens on port %d on all addresses (its own address is checked once it exists)", port)}
+		}
 		return Result{Pass, egressPortCheck, fmt.Sprintf("no other account listens on port %d of %s, the egress proxy's address", port, gw)}
 	}
 	slices.Sort(others)
 	others = slices.Compact(others)
+	uids := strings.Join(others, ", ")
+	if uid == 0 {
+		// Every other uid is "another account" to root, CuliBox's own included.
+		return Result{Warn, egressPortCheck, fmt.Sprintf(
+			"doctor runs as root, so every socket of another uid looks foreign: uid %s has a socket listening on port %d, %s. If that is CuliBox's own, nothing is wrong; run `culibox doctor` without sudo to tell",
+			uids, port, where)}
+	}
 	return Result{Fail, egressPortCheck, fmt.Sprintf(
-		"another account (uid %s) has a socket listening on port %d, on %s, which is the egress proxy's address. The proxy cannot start while it is there, and a box that is still running would send its proxy connections to it. Stop it; see docs/SECURITY.md (Services on this host)",
-		strings.Join(others, ", "), port, where)}
+		"another account (uid %s) has a socket listening on port %d, %s. While it holds that address the proxy cannot start: new fenced sessions are refused, and running boxes send their proxy connections to it. Stop it; see docs/SECURITY.md (Services on this host)",
+		uids, port, where)}
 }
 
 type holder struct {
@@ -95,19 +108,33 @@ type holder struct {
 }
 
 // portHolders returns the LISTEN sockets on port that would block a bind to
-// gw:port: their owners and how each is bound.
+// gw:port: their owners and how each is bound. An invalid gw (no network yet)
+// matches the wildcard sockets only.
 func portHolders(v4, v6 []byte, gw netip.Addr, port int) []holder {
-	b := gw.As4()
-	w4 := binary.NativeEndian.Uint32(b[:])
 	mapped := binary.NativeEndian.Uint32([]byte{0, 0, 0xff, 0xff})
 	hex4 := func(w uint32) string { return fmt.Sprintf("%08X", w) }
-	all := "all addresses, which include the gateway " + gw.String()
+	proxyAddr, gwText := "the egress proxy's address", ""
+	if gw.IsValid() {
+		gwText = "the gateway " + gw.String() + ", "
+		proxyAddr = gwText + proxyAddr
+	}
+	all4 := "on all addresses, including " + proxyAddr
+	// A dual-stack [::] socket takes IPv4 connects (as ::ffff:a.b.c.d) and makes
+	// an IPv4 bind of the port fail. /proc does not show IPV6_V6ONLY, so it is
+	// reported with that doubt.
+	all6 := "on all IPv6 addresses; unless it is IPv6-only, it also takes IPv4 connections to " + proxyAddr
 	match := map[string]string{
-		hex4(w4): "the gateway " + gw.String(),
-		hex4(0):  all,
-		// the v6 table's form of the same two (the first 8 bytes are zero)
-		"0000000000000000" + hex4(mapped) + hex4(w4): "the gateway " + gw.String(),
-		"0000000000000000" + hex4(mapped) + hex4(0):  all,
+		hex4(0): all4,
+		// the v6 table's forms: v4-mapped wildcard, and [::]
+		"0000000000000000" + hex4(mapped) + hex4(0): all4,
+		strings.Repeat("0", 32):                     all6,
+	}
+	if gw.IsValid() {
+		b := gw.As4()
+		w4 := binary.NativeEndian.Uint32(b[:])
+		at := "on " + proxyAddr
+		match[hex4(w4)] = at
+		match["0000000000000000"+hex4(mapped)+hex4(w4)] = at
 	}
 	var hs []holder
 	for _, table := range [][]byte{v4, v6} {
