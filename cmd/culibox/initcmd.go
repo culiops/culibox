@@ -30,21 +30,22 @@ type initDeps struct {
 	goos       string
 	getenv     func(string) string // CULIBOX_HOME, AGENT_BOX_HOME, XDG_CONFIG_HOME
 	lookPath   func(string) (string, error)
-	run        func(name string, args ...string) error // terminal attached (brew, claude setup-token)
-	readSecret func() ([]byte, error)                  // no-echo line read
-	hostSize   func() (cpus int, memBytes uint64)      // boxvm.HostSize
-	macOSMajor func() int                              // 0 = unknown/not darwin
-	osRelease  func() string                           // /etc/os-release ID ("" if none)
-	vmSetUp    func(cfg config.Config, dataDir string) bool
-	boxReady   func(cfg config.Config, dataDir string) bool // darwin: vmSetUp && image present && ClaudeBoxToken Pass; linux: image present && token Pass
-	boxSetup   func(cfg config.Config, cfgFiles []string, w io.Writer) int
-	shareAdd   func(cfg config.Config, dataDir, path string, w io.Writer) (covered bool, err error)
+	run        func(name string, args ...string) error                         // terminal attached (brew, claude setup-token)
+	readSecret func() ([]byte, error)                                          // no-echo line read
+	hostSize   func() (cpus int, memBytes uint64)                              // boxvm.HostSize
+	macOSMajor func() int                                                      // 0 = unknown/not darwin
+	osRelease  func() string                                                   // /etc/os-release ID ("" if none)
+	vmSetUp    func(cfg config.Config, dataDir string) bool                    // never starts the VM
+	boxReady   func(cfg config.Config, cfgFiles []string, dataDir string) bool // see initBoxReady
+	boxSetup   func(cfg config.Config, cfgFiles []string, w io.Writer) int     // `culibox box setup`
+	shareAdd   func(cfg config.Config, cfgFiles []string, dataDir, path string) (coveredBy string, err error)
 	doctor     func(cfg config.Config, src config.Source, cfgFiles []string, w io.Writer) int
 	newKeeper  func(dataDir string) secretstore.Keeper
 }
 
-// realInitDeps wires init to this machine.
-func realInitDeps() initDeps {
+// realInitDeps wires init to this machine; home is the user's home, as main
+// resolved it.
+func realInitDeps(home string) initDeps {
 	return initDeps{
 		goos:     runtime.GOOS,
 		getenv:   os.Getenv,
@@ -65,17 +66,21 @@ func realInitDeps() initDeps {
 			return boxvm.MacOSMajor(ctx) // sw_vers -productVersion; 0 on error
 		},
 		osRelease: osReleaseID,
-		// Task 7 replaces these five with the real wiring; init steps 1-2 never call them.
-		vmSetUp:  func(config.Config, string) bool { return false },
-		boxReady: func(config.Config, string) bool { return false },
-		boxSetup: func(_ config.Config, _ []string, w io.Writer) int {
-			fmt.Fprintln(w, "box setup is not wired into init yet")
-			return 1
+		vmSetUp: func(cfg config.Config, dataDir string) bool {
+			return initVMSetUp(cfg, dataDir, home, runtime.GOOS)
 		},
-		shareAdd: func(config.Config, string, string, io.Writer) (bool, error) {
-			return false, errors.New("box share is not wired into init yet")
+		boxReady: func(cfg config.Config, cfgFiles []string, dataDir string) bool {
+			return initBoxReady(cfg, cfgFiles, dataDir, home, runtime.GOOS)
 		},
-		doctor:    func(config.Config, config.Source, []string, io.Writer) int { return 1 },
+		boxSetup: func(cfg config.Config, cfgFiles []string, w io.Writer) int {
+			return initBoxSetup(cfg, cfgFiles, home, w)
+		},
+		shareAdd: func(cfg config.Config, cfgFiles []string, dataDir, path string) (string, error) {
+			return initShareAdd(cfg, cfgFiles, dataDir, path, home, runtime.GOOS)
+		},
+		doctor: func(cfg config.Config, src config.Source, cfgFiles []string, w io.Writer) int {
+			return initDoctor(cfg, src, cfgFiles, home, w)
+		},
 		newKeeper: func(dataDir string) secretstore.Keeper { return newKeeper(dataDir) },
 	}
 }
@@ -188,7 +193,8 @@ func (u *initUI) stopped(next string) {
 // each printing one result line. Re-running continues from where the machine
 // is. It needs a terminal on stdin (it asks questions): without one it says
 // what it would check and exits 2. A step that stops exits 1 with the command
-// to finish by hand.
+// to finish by hand. A run that gets through all eight steps exits with
+// doctor's code: 0 when no check failed.
 func runInit(a cliArgs, home string, in io.Reader, inTTY bool, out io.Writer, d initDeps) int {
 	if !inTTY {
 		fmt.Fprintln(out, "culibox init checks, in order: the programs it needs (abduco, docker, colima on macOS, claude),")
@@ -223,16 +229,32 @@ func runInit(a cliArgs, home string, in io.Reader, inTTY bool, out io.Writer, d 
 		fmt.Fprintf(out, "culibox init: config: %v\n", err)
 		return 1
 	}
-	if _, ok := initWorkspaceStep(u, cfg, dataDir, home, cfgFiles, d); !ok {
+	workspace, ok := initWorkspaceStep(u, cfg, dataDir, home, cfgFiles, d)
+	if !ok {
 		return 1
 	}
-	if _, _, ok := initVMSizeStep(u, cfg, dataDir, d); !ok {
+	cpus, gib, ok := initVMSizeStep(u, cfg, dataDir, d)
+	if !ok {
 		return 1
 	}
-	if _, ok := initTokenStep(u, cfg, dataDir, d); !ok {
+	acct, ok := initTokenStep(u, cfg, dataDir, d)
+	if !ok {
 		return 1
 	}
-	return 0
+	edit := config.InitEdit{DefaultCwd: workspace, VMCPUs: cpus, VMMemoryGiB: gib, Account: acct}
+	if !initConfigStep(u, initConfigTarget(a, src), edit) {
+		return 1
+	}
+	// Box setup and doctor run with the config as it is on disk now.
+	cfg, src, err = config.Resolve(a.ConfigPath, a.ConfigSet, home, d.getenv("XDG_CONFIG_HOME"), envHome)
+	if err != nil {
+		fmt.Fprintf(out, "culibox init: config: %v\n", err)
+		return 1
+	}
+	if !initBoxStep(u, cfg, cfgFiles, dataDir, workspace, d) {
+		return 1
+	}
+	return initFinishStep(u, cfg, src, cfgFiles, dataDir, d)
 }
 
 // initDataRootStep is step 2: the data root, resolved exactly as the other

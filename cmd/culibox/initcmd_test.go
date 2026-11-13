@@ -52,6 +52,13 @@ func (f *fakeInit) deps(goos string) initDeps {
 		// that answers nothing, so the token is skipped.
 		readSecret: func() ([]byte, error) { return nil, errors.New("no terminal") },
 		newKeeper:  func(string) secretstore.Keeper { return secretstore.NewFakeKeeper(false) },
+		// Steps 7-8: no VM, a box that is not ready yet, a setup and a doctor
+		// that pass, and a workspace the VM already sees.
+		vmSetUp:  func(config.Config, string) bool { return false },
+		boxReady: func(config.Config, []string, string) bool { return false },
+		boxSetup: func(config.Config, []string, io.Writer) int { return 0 },
+		shareAdd: func(_ config.Config, _ []string, _, path string) (string, error) { return path, nil },
+		doctor:   func(config.Config, config.Source, []string, io.Writer) int { return 0 },
 	}
 }
 
@@ -399,11 +406,15 @@ func initHome(t *testing.T) string {
 // wsAnswer answers step 3 with a folder under home that init creates.
 const wsAnswer = "~/work\ny\n"
 
+// initRest answers the rest of a fresh run after wsAnswer: no `claude
+// setup-token` (the token is then skipped) and yes to writing the new config.
+const initRest = "n\n\n"
+
 func TestInitDataRootCreates(t *testing.T) {
 	home := initHome(t)
 	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
 	var out bytes.Buffer
-	code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer), true, &out, f.deps("linux"))
+	code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer+initRest), true, &out, f.deps("linux"))
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
@@ -428,7 +439,7 @@ func TestInitDataRootExisting(t *testing.T) {
 	}
 	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
 	var out bytes.Buffer
-	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer), true, &out, f.deps("linux")); code != 0 {
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer+initRest), true, &out, f.deps("linux")); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 	if !strings.Contains(out.String(), "already done: "+root) {
@@ -441,7 +452,7 @@ func TestInitDataRootEnv(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "relocated")
 	f := &fakeInit{have: allHave("abduco", "docker", "claude"), env: map[string]string{"CULIBOX_HOME": root}}
 	var out bytes.Buffer
-	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer), true, &out, f.deps("linux")); code != 0 {
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer+initRest), true, &out, f.deps("linux")); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 	if _, err := os.Stat(root); err != nil {
@@ -460,7 +471,7 @@ func TestInitDataRootLegacy(t *testing.T) {
 	}
 	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
 	var out bytes.Buffer
-	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer), true, &out, f.deps("linux")); code != 0 {
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer+initRest), true, &out, f.deps("linux")); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 	if !strings.Contains(out.String(), "already done: "+legacy) {
@@ -529,8 +540,8 @@ func TestInitStopsAtDepsWithExit1(t *testing.T) {
 	}
 }
 
-func TestInitPlaceholderDepsAreConservative(t *testing.T) {
-	d := realInitDeps()
+func TestRealInitDepsAreWired(t *testing.T) {
+	d := realInitDeps(t.TempDir())
 	if d.vmSetUp == nil || d.boxReady == nil || d.boxSetup == nil || d.shareAdd == nil || d.doctor == nil || d.newKeeper == nil {
 		t.Fatal("every seam must be wired")
 	}
@@ -543,7 +554,7 @@ func TestInitRunsWorkspaceAndVMSizeSteps(t *testing.T) {
 	home := initHome(t)
 	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
 	var out bytes.Buffer
-	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer), true, &out, f.deps("linux")); code != 0 {
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer+initRest), true, &out, f.deps("linux")); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 	for _, w := range []string{"== step 3/8: workspace folder", "== step 4/8: VM size", "skipped: the box VM exists only on macOS"} {
@@ -581,7 +592,7 @@ func TestInitRunsTheTokenStepAfterVMSize(t *testing.T) {
 		return []byte(r), nil
 	}
 	var out bytes.Buffer
-	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer+"n\n"), true, &out, d); code != 0 {
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer+initRest), true, &out, d); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 	if !strings.Contains(out.String(), "== step 5/8: Claude token") {

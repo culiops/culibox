@@ -609,3 +609,16 @@ func TestClaudeBoxTokenAccountNotOwnedWarns(t *testing.T) {
 		}
 	}
 }
+
+func TestBoxTierWithoutDockerNeverPasses(t *testing.T) {
+	home := t.TempDir()
+	rows := BoxTier(Input{Config: config.Config{DockerBin: "culibox-no-such-docker"}, Home: home})
+	if len(rows) == 0 {
+		t.Fatal("no rows")
+	}
+	for _, r := range rows {
+		if r.Status == Pass {
+			t.Fatalf("a box tier without docker must not pass: %+v", rows)
+		}
+	}
+}

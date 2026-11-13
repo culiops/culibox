@@ -231,6 +231,20 @@ func Checks(in Input) []Result {
 	return out
 }
 
+// BoxTier is doctor's box-tier rows alone (docker, the box VM, its folders,
+// the image, containment, the boxed claude token), exactly as Checks prints
+// them. `culibox init` reads it to tell whether box setup still has work to do.
+// Like every check it never starts the VM.
+func BoxTier(in Input) []Result {
+	c := in.Config
+	dataDir := c.ResolvedDataDir(in.Home)
+	if abs, err := filepath.Abs(dataDir); err == nil {
+		dataDir = abs
+	}
+	bf := gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS, protectedFor(in, dataDir))
+	return boxTierResults(runtime.GOOS, bf, ClaudeBoxToken(c, StoreFor(c, dataDir), AccountStoreFor(c, dataDir), storerefs.ReadAccounts(dataDir)))
+}
+
 func checkDataDir(in Input, dir, goos string) Result {
 	fi, err := os.Stat(dir)
 	if os.IsNotExist(err) {
