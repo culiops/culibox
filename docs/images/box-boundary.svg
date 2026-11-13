@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 660" width="1200" height="660" role="img" aria-labelledby="t d">
+<title id="t">The boundary of one CuliBox box</title>
+<desc id="d">One CuliBox box around the project ~/work/infra. Kept outside: SSH keys, home directory, Docker socket, AWS SSO session, shell history. Inside: the agent (Claude Code today), the project folder read-write, a filtered copy of the agent config. Crossing the wall only through gates: AWS for 15 minutes, GitHub for 1 hour, static tokens for one command, and the internet through the proxy. Every grant goes to a local audit log.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;fill:#121923}
+text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;fill:#121923}
+.tm{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono","DejaVu Sans Mono",monospace}
+.mu{fill:#4a5666}
+.okf{fill:#1b7a4a}
+.amf{fill:#8a5a00}
+.redf{fill:#b3261e}
+.acf{fill:#2f63c9}
+.wf{fill:#f8fafc}
+.sb{font-weight:600}
+.w5{font-weight:500}
+.ln{fill:none;stroke:#121923;stroke-width:1.5}
+.thin{stroke-width:1}
+.lr2{fill:none;stroke:#8995a5;stroke-width:1}
+.lred{fill:none;stroke:#b3261e;stroke-width:1.5;stroke-dasharray:5 4}
+.stop{fill:none;stroke:#b3261e;stroke-width:3.5}
+.lok{fill:none;stroke:#1b7a4a;stroke-width:2}
+.lac{fill:none;stroke:#2f63c9;stroke-width:1.75}
+.tap{fill:none;stroke:#4a5666;stroke-width:1.25;stroke-dasharray:2 4}
+.life{fill:none;stroke:#8995a5;stroke-width:1;stroke-dasharray:4 5}
+.node{fill:#f8fafc;stroke:#121923;stroke-width:1.5}
+.dash{stroke-dasharray:5 3}
+.pam{fill:#fbf0dc;stroke:#8a5a00;stroke-width:2}
+.pok{fill:#e2f2e9;stroke:#1b7a4a;stroke-width:2}
+.wall{fill:url(#hb-hatch)}
+.inner{fill:#f8fafc}
+.grid{fill:url(#hb-gmaj)}
+.tagr{fill:#121923}
+.bgs{fill:#f8fafc}
+</style>
+<defs>
+          <pattern id="hb-gmin" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" fill="none" stroke="#e8edf3" stroke-width="0.75"></path></pattern>
+          <pattern id="hb-gmaj" width="100" height="100" patternUnits="userSpaceOnUse"><rect width="100" height="100" fill="#f8fafc"></rect><rect width="100" height="100" fill="url(#hb-gmin)"></rect><path d="M100 0H0V100" fill="none" stroke="#d9e1ea" stroke-width="1"></path></pattern>
+          <pattern id="hb-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#f8fafc"></rect><line x1="0" y1="0" x2="0" y2="6" stroke="#121923" stroke-width="1.1"></line></pattern>
+          <marker id="hb-ar" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 1L10 5L0 9Z" fill="#121923"></path></marker>
+          <marker id="hb-arok" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 1L10 5L0 9Z" fill="#1b7a4a"></path></marker>
+          <marker id="hb-armu" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 1L10 5L0 9Z" fill="#4a5666"></path></marker>
+          <marker id="hb-arac" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 1L10 5L0 9Z" fill="#2f63c9"></path></marker>
+          <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"></path><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"></circle></symbol>
+          <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></symbol>
+          <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></symbol>
+          <symbol id="i-eyeoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"></path><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"></path><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"></path><path d="m2 2 20 20"></path></symbol>
+          <symbol id="i-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></symbol>
+          <symbol id="i-foldergit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 19a5 5 0 0 1-5-5v8"></path><path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"></path><circle cx="13" cy="12" r="2"></circle><circle cx="20" cy="19" r="2"></circle></symbol>
+          <symbol id="i-filejson" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="M10 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"></path><path d="M14 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"></path></symbol>
+          <symbol id="i-hourglass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"></path><path d="M5 2h14"></path><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"></path><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"></path></symbol>
+          <symbol id="i-shieldcheck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></symbol>
+          <symbol id="i-pr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" x2="6" y1="9" y2="21"></line></symbol>
+          <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5h8"></path><path d="M13 12h8"></path><path d="M13 19h8"></path><path d="m3 17 2 2 4-4"></path><path d="m3 7 2 2 4-4"></path></symbol>
+          <symbol id="hb-logo" viewBox="0 0 16 16"><rect width="16" height="16" rx="3.5" fill="#1e1e2e"></rect><g transform="translate(2 2)"><path d="M11 5V3a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V7" fill="none" stroke="#89b4fa" stroke-width="2"></path><rect x="4" y="4" width="4" height="4" rx="2" fill="#a6e3a1"></rect></g></symbol>
+          <symbol id="hb-logo-amb" viewBox="0 0 16 16"><rect width="16" height="16" rx="3.5" fill="#1e1e2e"></rect><g transform="translate(2 2)"><path d="M11 3.5V3a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V8.5" fill="none" stroke="#89b4fa" stroke-width="2"></path><rect x="9" y="3.5" width="5" height="5" rx="2.5" fill="#f9e2af"></rect></g></symbol>
+        </defs>
+<rect width="1200" height="660" fill="#f8fafc"/>
+
+                <rect class="grid" width="1200" height="660"></rect>
+                <text class="tm mu" x="32" y="52" font-size="13">kept outside, on your machine</text>
+                <text class="tm mu" x="900" y="52" font-size="13">crosses only through a gate</text>
+
+                <!-- box label + wall -->
+                <rect class="tagr" x="360" y="32" width="44" height="24"></rect>
+                <text class="tm sb wf" x="382" y="49" font-size="13" text-anchor="middle">box</text>
+                <text class="tm w5" x="414" y="50" font-size="16">~/work/infra</text>
+                <rect class="inner" x="372" y="82" width="416" height="426"></rect>
+                <path class="wall" fill-rule="evenodd" d="M360 70H800V520H360Z M372 82V508H788V82Z"></path>
+                <rect class="ln" x="360" y="70" width="440" height="450"></rect>
+                <rect class="ln thin" x="372" y="82" width="416" height="426"></rect>
+
+                <!-- kept outside -->
+                <use href="#i-key" x="32" y="101" width="22" height="22" color="#121923"></use>
+                <text class="tm w5" x="64" y="120" font-size="15">~/.ssh</text>
+                <text class="mu" x="64" y="140" font-size="13">your SSH keys</text>
+                <path class="lred" d="M128 115H336"></path><path class="stop" d="M346 104V126"></path>
+
+                <use href="#i-folder" x="32" y="177" width="22" height="22" color="#121923"></use>
+                <text class="tm w5" x="64" y="196" font-size="15">~/</text>
+                <text class="mu" x="64" y="216" font-size="13">your home directory</text>
+                <path class="lred" d="M92 191H336"></path><path class="stop" d="M346 180V202"></path>
+
+                <svg x="32" y="253" width="23" height="23" role="img" fill="#2496ED" viewBox="0 0 24 24"><title>Docker</title><path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"></path></svg>
+                <text class="tm w5" x="64" y="272" font-size="15">/var/run/docker.sock</text>
+                <text class="mu" x="64" y="292" font-size="13">the Docker socket, root on the host</text>
+                <path class="lred" d="M256 267H336"></path><path class="stop" d="M346 256V278"></path>
+
+                <use href="#i-lock" x="32" y="329" width="22" height="22" color="#121923"></use>
+                <text class="tm w5" x="64" y="348" font-size="15">~/.aws/sso/cache</text>
+                <text class="mu" x="64" y="368" font-size="13">your AWS SSO session</text>
+                <path class="lred" d="M220 343H336"></path><path class="stop" d="M346 332V354"></path>
+
+                <use href="#i-eyeoff" x="32" y="405" width="22" height="22" color="#121923"></use>
+                <text class="tm w5" x="64" y="424" font-size="15">~/.zsh_history</text>
+                <text class="mu" x="64" y="444" font-size="13">your shell history</text>
+                <path class="lred" d="M202 419H336"></path><path class="stop" d="M346 408V430"></path>
+
+                <!-- inside the box -->
+                <rect class="node" x="392" y="100" width="260" height="76" rx="3"></rect>
+                <use href="#i-bot" x="406" y="111" width="26" height="26" color="#121923"></use>
+                <text class="tm sb" x="442" y="133" font-size="20">agent</text>
+                <text class="mu" x="638" y="133" font-size="13" text-anchor="end">Claude Code</text>
+                <circle cx="447" cy="157" r="4.5" fill="#1b7a4a"></circle>
+                <text class="tm okf" x="458" y="161.5" font-size="13">working</text>
+
+                <path class="lok" d="M470 181V209" marker-start="url(#hb-arok)" marker-end="url(#hb-arok)"></path>
+
+                <rect class="node" x="392" y="214" width="200" height="64" rx="3"></rect>
+                <use href="#i-foldergit" x="406" y="226" width="22" height="22" color="#121923"></use>
+                <text class="sb" x="440" y="241" font-size="15">project folder</text>
+                <text class="tm okf" x="440" y="263" font-size="13">read-write</text>
+
+                <rect class="node dash" x="392" y="302" width="260" height="64" rx="3"></rect>
+                <use href="#i-filejson" x="406" y="314" width="22" height="22" color="#4a5666"></use>
+                <text class="sb" x="440" y="329" font-size="15">Agent config, filtered</text>
+                <text class="tm mu" x="440" y="351" font-size="12">CLAUDE.md, skills, plugins</text>
+
+                <text class="tm mu" x="392" y="410" font-size="12.5">capabilities</text><text class="tm" x="520" y="410" font-size="12.5">all dropped</text>
+                <text class="tm mu" x="392" y="430" font-size="12.5">root fs</text><text class="tm" x="520" y="430" font-size="12.5">read-only</text>
+                <text class="tm mu" x="392" y="450" font-size="12.5">pids, memory</text><text class="tm" x="520" y="450" font-size="12.5">capped</text>
+                <text class="tm mu" x="392" y="470" font-size="12.5">ping</text><text class="tm" x="520" y="470" font-size="12.5">absent</text>
+
+                <!-- clone mode: branches come home through the floor -->
+                <rect x="686" y="503" width="28" height="22" fill="#f8fafc" stroke="#2f63c9" stroke-width="1.75"></rect>
+                <path class="lac" d="M592 246H700V598" marker-end="url(#hb-arac)"></path>
+                <use href="#i-pr" x="510" y="547" width="17" height="17" color="#2f63c9"></use>
+                <text class="tm w5 acf" x="688" y="561" font-size="14" text-anchor="end">box/fix-flaky-test</text>
+                <text class="mu" x="688" y="581" font-size="13" text-anchor="end">clone mode: comes home for review</text>
+
+                <!-- bus to the gates -->
+                <path class="ln" d="M652 130H780 M750 130V418 M750 226H780 M750 322H780 M750 418H780"></path>
+                <circle cx="750" cy="130" r="3.5" fill="#121923"></circle>
+                <circle cx="750" cy="226" r="3.5" fill="#121923"></circle>
+                <circle cx="750" cy="322" r="3.5" fill="#121923"></circle>
+
+                <!-- audit tap bus -->
+                <path class="tap" d="M822 130V498" marker-end="url(#hb-armu)"></path>
+
+                <!-- gates -->
+                <rect class="pam" x="780" y="117" width="36" height="26"></rect>
+                <use href="#i-hourglass" x="791" y="123" width="14" height="14" color="#8a5a00"></use>
+                <rect class="pam" x="780" y="213" width="36" height="26"></rect>
+                <use href="#i-hourglass" x="791" y="219" width="14" height="14" color="#8a5a00"></use>
+                <rect class="pam" x="780" y="309" width="36" height="26"></rect>
+                <use href="#i-hourglass" x="791" y="315" width="14" height="14" color="#8a5a00"></use>
+                <rect class="pok" x="780" y="405" width="36" height="26"></rect>
+                <use href="#i-shieldcheck" x="791" y="411" width="14" height="14" color="#1b7a4a"></use>
+
+                <path class="ln" d="M816 130H898" marker-end="url(#hb-ar)"></path>
+                <path class="ln" d="M816 226H898" marker-end="url(#hb-ar)"></path>
+                <path class="ln" d="M816 322H898" marker-end="url(#hb-ar)"></path>
+                <path class="ln" d="M816 418H898" marker-end="url(#hb-ar)"></path>
+                <circle cx="822" cy="130" r="3" fill="#4a5666"></circle>
+                <circle cx="822" cy="226" r="3" fill="#4a5666"></circle>
+                <circle cx="822" cy="322" r="3" fill="#4a5666"></circle>
+                <circle cx="822" cy="418" r="3" fill="#4a5666"></circle>
+
+                <text class="sb amf" x="863" y="121" font-size="12" text-anchor="middle">15 min</text>
+                <text class="tm amf" x="863" y="148" font-size="12" text-anchor="middle">15:00</text>
+                <text class="sb amf" x="863" y="217" font-size="12" text-anchor="middle">1 h</text>
+                <text class="mu" x="863" y="244" font-size="12" text-anchor="middle">2 repos</text>
+                <text class="sb amf" x="859" y="313" font-size="10.5" text-anchor="middle">1 command</text>
+                <text class="mu" x="863" y="340" font-size="12" text-anchor="middle">long-lived</text>
+                <text class="sb okf" x="863" y="409" font-size="12" text-anchor="middle">proxy</text>
+                <text class="tm mu" x="863" y="436" font-size="12" text-anchor="middle">443</text>
+
+                <!-- destinations -->
+                <rect class="node" x="900" y="96" width="272" height="68" rx="3"></rect>
+                <svg x="912" y="112" width="36" height="36" viewBox="0 0 80 80" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>AWS IAM</title>
+    <g id="Icon-Architecture/64/Arch_AWS-Identity-and-Access-Management_64" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Icon-Architecture-BG/64/Security-Identity-Compliance" fill="#DD344C">
+            <rect id="Rectangle" x="0" y="0" width="80" height="80"></rect>
+        </g>
+        <path d="M14,59 L66,59 L66,21 L14,21 L14,59 Z M68,20 L68,60 C68,60.552 67.553,61 67,61 L13,61 C12.447,61 12,60.552 12,60 L12,20 C12,19.448 12.447,19 13,19 L67,19 C67.553,19 68,19.448 68,20 L68,20 Z M44,48 L59,48 L59,46 L44,46 L44,48 Z M57,42 L62,42 L62,40 L57,40 L57,42 Z M44,42 L52,42 L52,40 L44,40 L44,42 Z M29,46 C29,45.449 28.552,45 28,45 C27.448,45 27,45.449 27,46 C27,46.551 27.448,47 28,47 C28.552,47 29,46.551 29,46 L29,46 Z M31,46 C31,47.302 30.161,48.401 29,48.816 L29,51 L27,51 L27,48.815 C25.839,48.401 25,47.302 25,46 C25,44.346 26.346,43 28,43 C29.654,43 31,44.346 31,46 L31,46 Z M19,53.993 L36.994,54 L36.996,50 L33,50 L33,48 L36.996,48 L36.998,45 L33,45 L33,43 L36.999,43 L37,40.007 L19.006,40 L19,53.993 Z M22,38.001 L34,38.006 L34,31 C34.001,28.697 31.197,26.677 28,26.675 L27.996,26.675 C24.804,26.675 22.004,28.696 22.002,31 L22,38.001 Z M17,54.992 L17.006,39 C17.006,38.734 17.111,38.48 17.299,38.292 C17.486,38.105 17.741,38 18.006,38 L20,38.001 L20.002,31 C20.004,27.512 23.59,24.675 27.996,24.675 L28,24.675 C32.412,24.677 36.001,27.515 36,31 L36,38.007 L38,38.008 C38.553,38.008 39,38.456 39,39.008 L38.994,55 C38.994,55.266 38.889,55.52 38.701,55.708 C38.514,55.895 38.259,56 37.994,56 L18,55.992 C17.447,55.992 17,55.544 17,54.992 L17,54.992 Z M60,36 L62,36 L62,34 L60,34 L60,36 Z M44,36 L55,36 L55,34 L44,34 L44,36 Z" id="AWS-Identity-and-Access-Management_Icon_64_Squid" fill="#FFFFFF"></path>
+    </g>
+</svg>
+                <text class="sb" x="960" y="116" font-size="14">AWS</text>
+                <text class="tm" x="960" y="134" font-size="12.5">111111111111 lab-read</text>
+                <text class="tm mu" x="960" y="152" font-size="11.5">CloudTrail: agentbox-claude-3</text>
+
+                <rect class="node" x="900" y="192" width="272" height="68" rx="3"></rect>
+                <svg x="914" y="210" width="32" height="32" role="img" fill="#181717" viewBox="0 0 24 24"><title>GitHub</title><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>
+                <text class="sb" x="960" y="212" font-size="14">GitHub</text>
+                <text class="tm" x="960" y="230" font-size="12.5">acme/infra, acme/modules</text>
+                <text class="mu" x="960" y="248" font-size="12.5">App token, read-only</text>
+
+                <rect class="node" x="900" y="288" width="272" height="68" rx="3"></rect>
+                <svg x="921" y="292" width="18" height="18" fill="#F46800" role="img" viewBox="0 0 24 24"><title>Grafana</title><path d="M23.02 10.59a8.578 8.578 0 0 0-.862-3.034 8.911 8.911 0 0 0-1.789-2.445c.337-1.342-.413-2.505-.413-2.505-1.292-.08-2.113.4-2.416.62-.052-.02-.102-.044-.154-.064-.22-.089-.446-.172-.677-.247-.231-.073-.47-.14-.711-.197a9.867 9.867 0 0 0-.875-.161C14.557.753 12.94 0 12.94 0c-1.804 1.145-2.147 2.744-2.147 2.744l-.018.093c-.098.029-.2.057-.298.088-.138.042-.275.094-.413.143-.138.055-.275.107-.41.166a8.869 8.869 0 0 0-1.557.87l-.063-.029c-2.497-.955-4.716.195-4.716.195-.203 2.658.996 4.33 1.235 4.636a11.608 11.608 0 0 0-.607 2.635C1.636 12.677.953 15.014.953 15.014c1.926 2.214 4.171 2.351 4.171 2.351.003-.002.006-.002.006-.005.285.509.615.994.986 1.446.156.19.32.371.488.548-.704 2.009.099 3.68.099 3.68 2.144.08 3.553-.937 3.849-1.173a9.784 9.784 0 0 0 3.164.501h.08l.055-.003.107-.002.103-.005.003.002c1.01 1.44 2.788 1.646 2.788 1.646 1.264-1.332 1.337-2.653 1.337-2.94v-.058c0-.02-.003-.039-.003-.06.265-.187.52-.387.758-.6a7.875 7.875 0 0 0 1.415-1.7c1.43.083 2.437-.885 2.437-.885-.236-1.49-1.085-2.216-1.264-2.354l-.018-.013-.016-.013a.217.217 0 0 1-.031-.02c.008-.092.016-.18.02-.27.011-.162.016-.323.016-.48v-.253l-.005-.098-.008-.135a1.891 1.891 0 0 0-.01-.13c-.003-.042-.008-.083-.013-.125l-.016-.124-.018-.122a6.215 6.215 0 0 0-2.032-3.73 6.015 6.015 0 0 0-3.222-1.46 6.292 6.292 0 0 0-.85-.048l-.107.002h-.063l-.044.003-.104.008a4.777 4.777 0 0 0-3.335 1.695c-.332.4-.592.84-.768 1.297a4.594 4.594 0 0 0-.312 1.817l.003.091c.005.055.007.11.013.164a3.615 3.615 0 0 0 .698 1.82 3.53 3.53 0 0 0 1.827 1.282c.33.098.66.14.971.137.039 0 .078 0 .114-.002l.063-.003c.02 0 .041-.003.062-.003.034-.002.065-.007.099-.01.007 0 .018-.003.028-.003l.031-.005.06-.008a1.18 1.18 0 0 0 .112-.02c.036-.008.072-.013.109-.024a2.634 2.634 0 0 0 .914-.415c.028-.02.056-.041.085-.065a.248.248 0 0 0 .039-.35.244.244 0 0 0-.309-.06l-.078.042c-.09.044-.184.083-.283.116a2.476 2.476 0 0 1-.475.096c-.028.003-.054.006-.083.006l-.083.002c-.026 0-.054 0-.08-.002l-.102-.006h-.012l-.024.006c-.016-.003-.031-.003-.044-.006-.031-.002-.06-.007-.091-.01a2.59 2.59 0 0 1-.724-.213 2.557 2.557 0 0 1-.667-.438 2.52 2.52 0 0 1-.805-1.475 2.306 2.306 0 0 1-.029-.444l.006-.122v-.023l.002-.031c.003-.021.003-.04.005-.06a3.163 3.163 0 0 1 1.352-2.29 3.12 3.12 0 0 1 .937-.43 2.946 2.946 0 0 1 .776-.101h.06l.07.002.045.003h.026l.07.005a4.041 4.041 0 0 1 1.635.49 3.94 3.94 0 0 1 1.602 1.662 3.77 3.77 0 0 1 .397 1.414l.005.076.003.075c.002.026.002.05.002.075 0 .024.003.052 0 .07v.065l-.002.073-.008.174a6.195 6.195 0 0 1-.08.639 5.1 5.1 0 0 1-.267.927 5.31 5.31 0 0 1-.624 1.13 5.052 5.052 0 0 1-3.237 2.014 4.82 4.82 0 0 1-.649.066l-.039.003h-.287a6.607 6.607 0 0 1-1.716-.265 6.776 6.776 0 0 1-3.4-2.274 6.75 6.75 0 0 1-.746-1.15 6.616 6.616 0 0 1-.714-2.596l-.005-.083-.002-.02v-.056l-.003-.073v-.096l-.003-.104v-.07l.003-.163c.008-.22.026-.45.054-.678a8.707 8.707 0 0 1 .28-1.355c.128-.444.286-.872.473-1.277a7.04 7.04 0 0 1 1.456-2.1 5.925 5.925 0 0 1 .953-.763c.169-.111.343-.213.524-.306.089-.05.182-.091.273-.135.047-.02.093-.042.138-.062a7.177 7.177 0 0 1 .714-.267l.145-.045c.049-.015.098-.026.148-.041.098-.029.197-.052.296-.076.049-.013.1-.02.15-.033l.15-.032.151-.028.076-.013.075-.01.153-.024c.057-.01.114-.013.171-.023l.169-.021c.036-.003.073-.008.106-.01l.073-.008.036-.003.042-.002c.057-.003.114-.008.171-.01l.086-.006h.023l.037-.003.145-.007a7.999 7.999 0 0 1 1.708.125 7.917 7.917 0 0 1 2.048.68 8.253 8.253 0 0 1 1.672 1.09l.09.077.089.078c.06.052.114.107.171.159.057.052.112.106.166.16.052.055.107.107.159.164a8.671 8.671 0 0 1 1.41 1.978c.012.026.028.052.04.078l.04.078.075.156c.023.051.05.1.07.153l.065.15a8.848 8.848 0 0 1 .45 1.34.19.19 0 0 0 .201.142.186.186 0 0 0 .172-.184c.01-.246.002-.532-.024-.856z"></path></svg>
+                <svg x="921" y="313" width="18" height="18" fill="#362D59" role="img" viewBox="0 0 24 24"><title>Sentry</title><path d="M13.91 2.505c-.873-1.448-2.972-1.448-3.844 0L6.904 7.92a15.478 15.478 0 0 1 8.53 12.811h-2.221A13.301 13.301 0 0 0 5.784 9.814l-2.926 5.06a7.65 7.65 0 0 1 4.435 5.848H2.194a.365.365 0 0 1-.298-.534l1.413-2.402a5.16 5.16 0 0 0-1.614-.913L.296 19.275a2.182 2.182 0 0 0 .812 2.999 2.24 2.24 0 0 0 1.086.288h6.983a9.322 9.322 0 0 0-3.845-8.318l1.11-1.922a11.47 11.47 0 0 1 4.95 10.24h5.915a17.242 17.242 0 0 0-7.885-15.28l2.244-3.845a.37.37 0 0 1 .504-.13c.255.14 9.75 16.708 9.928 16.9a.365.365 0 0 1-.327.543h-2.287c.029.612.029 1.223 0 1.831h2.297a2.206 2.206 0 0 0 1.922-3.31z"></path></svg>
+                <svg x="921" y="334" width="18" height="18" fill="#0052CC" role="img" viewBox="0 0 24 24"><title>Atlassian</title><path d="M7.12 11.084a.683.683 0 00-1.16.126L.075 22.974a.703.703 0 00.63 1.018h8.19a.678.678 0 00.63-.39c1.767-3.65.696-9.203-2.406-12.52zM11.434.386a15.515 15.515 0 00-.906 15.317l3.95 7.9a.703.703 0 00.628.388h8.19a.703.703 0 00.63-1.017L12.63.38a.664.664 0 00-1.196.006z"></path></svg>
+                <text class="sb" x="960" y="308" font-size="14">Static tokens</text>
+                <text x="960" y="326" font-size="12.5">Grafana, Sentry, Atlassian</text>
+                <text class="mu" x="960" y="344" font-size="12.5">egress to that service only</text>
+
+                <rect class="node" x="900" y="384" width="272" height="68" rx="3"></rect>
+                <use href="#i-shieldcheck" x="914" y="402" width="32" height="32" color="#1b7a4a"></use>
+                <text class="sb" x="960" y="404" font-size="14">Internet, via the proxy</text>
+                <text class="tm" x="960" y="422" font-size="12.5">HTTPS :443 to hostnames</text>
+                <text class="redf" x="960" y="440" font-size="12.5">private addresses refused</text>
+
+                <!-- audit log -->
+                <rect class="node" x="808" y="500" width="364" height="140" rx="3"></rect>
+                <use href="#i-list" x="822" y="511" width="16" height="16" color="#121923"></use>
+                <text class="tm sb" x="844" y="524" font-size="13">audit log</text>
+                <text class="mu" x="1158" y="524" font-size="12" text-anchor="end">local, never the value</text>
+                <path class="lr2" d="M808 535H1172"></path>
+                <text class="tm mu" x="822" y="556" font-size="12">14:02:11</text><text class="tm" x="900" y="556" font-size="12">mint</text><text class="tm" x="972" y="556" font-size="12">aws 111111111111 lab-read</text>
+                <text class="tm mu" x="822" y="576" font-size="12">14:02:40</text><text class="tm" x="900" y="576" font-size="12">token</text><text class="tm" x="972" y="576" font-size="12">github acme/infra</text>
+                <text class="tm mu" x="822" y="596" font-size="12">14:05:03</text><text class="tm redf" x="900" y="596" font-size="12">refused</text><text class="tm" x="972" y="596" font-size="12">aws lab-write, no window</text>
+                <text class="tm mu" x="822" y="616" font-size="12">14:06:18</text><text class="tm" x="900" y="616" font-size="12">fetch</text><text class="tm" x="972" y="616" font-size="12">grafana token, 1 command</text>
+
+                <!-- legend -->
+                <path class="lred" d="M32 552H50"></path><path class="stop" d="M56 544V560"></path>
+                <text class="mu" x="70" y="557" font-size="13">kept outside the box</text>
+                <rect class="pam" x="32" y="571" width="26" height="16"></rect>
+                <text class="mu" x="70" y="584" font-size="13">time-limited grant</text>
+                <rect class="pok" x="32" y="598" width="26" height="16"></rect>
+                <text class="mu" x="70" y="611" font-size="13">allowed through the proxy</text>
+                <path class="tap" d="M32 633H58"></path>
+                <text class="mu" x="70" y="638" font-size="13">recorded in the audit log</text>
+              
+<rect x="0.5" y="0.5" width="1199" height="659" fill="none" stroke="#121923" stroke-width="1"/>
+</svg>

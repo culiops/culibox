@@ -19,17 +19,9 @@ run `brew install go` after an explicit `y`. Read it before you run it. Options:
 release), `--from-source` (build that release instead of downloading a binary,
 see below) and `--prefix DIR` (default `~/.local/bin`, or `$PREFIX`).
 
-**Until a release that has `culibox init` is published, plain `sh setup.sh`
-refuses, by design.** The script knows the first version that ships `init`
-(`MIN_VERSION`, currently `v0.34.0`) and stops with a clear message when the
-newest published release is older, or when there is none. Until then only
-`sh setup.sh --from-source --version <a pushed tag, v0.34.0 or newer>` works.
-
-**While the repository is private,** `raw.githubusercontent.com` answers 404.
-Run the script from a clone (`sh scripts/setup.sh`), or fetch it with the
-GitHub CLI:
-
-    gh api -H "Accept: application/vnd.github.raw" "repos/culiops/culibox/contents/scripts/setup.sh?ref=<tag>" > setup.sh
+**`setup.sh` refuses a release older than `v0.35.0`.** The script knows the first
+version that ships `init` (`MIN_VERSION`, currently `v0.35.0`) and stops with a
+clear message when the release is older, or when there is none.
 
 With `gh` logged in, the script also uses it for the release lookup and downloads.
 
@@ -40,7 +32,7 @@ Each step prints `==> <what>` before it runs. To do it by hand, follow the same 
 1. **Checks the platform.** macOS or Linux, on amd64 (`x86_64`) or arm64. Anything else is refused.
 2. **Picks the version.** `--version` as given (it must look like `vX.Y.Z`), else the newest published release (`gh release view`, or the GitHub releases API). A version older than `MIN_VERSION` is refused. The tag is resolved once and every later URL uses it.
 3. **Stops early when that version is already installed.** It runs `~/.local/bin/culibox version` and, on a match, skips the download and goes straight to `init`.
-4. **Gets the binary.** Into a temporary folder it downloads `culibox_<version>_<os>_<arch>.tar.gz` and `SHA256SUMS` from the release (with `gh release download` when `gh` is logged in, else `curl`). It finds the tarball's one line in `SHA256SUMS` and compares it with `shasum -a 256` (or `sha256sum`); a missing line, a repeated line or a mismatch installs nothing. It then checks the build attestation with `gh attestation verify <tarball> --repo culiops/culibox` once the repository is public (while it is private it prints "skipped"; with `gh` missing or logged out it prints "provenance not checked" and relies on the checksum). Last, it extracts `culibox` from the tarball. Nothing downloaded runs before its checksum matched.
+4. **Gets the binary.** Into a temporary folder it downloads `culibox_<version>_<os>_<arch>.tar.gz` and `SHA256SUMS` from the release (with `gh release download` when `gh` is logged in, else `curl`). It finds the tarball's one line in `SHA256SUMS` and compares it with `shasum -a 256` (or `sha256sum`); a missing line, a repeated line or a mismatch installs nothing. It then checks the build attestation with `gh attestation verify <tarball> --repo culiops/culibox`; a rejected attestation, or a repository whose visibility it cannot read, installs nothing. With `gh` missing, logged out or without `gh attestation`, it prints "provenance not checked" and relies on the checksum. Last, it extracts `culibox` from the tarball. Nothing downloaded runs before its checksum matched.
    With `--from-source` it instead clones the tag (`git clone --depth 1 --branch <tag>`), needs a Go at least as new as the `go` line of that `go.mod`, and builds `CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=<tag> -X main.commit=<sha>" -o <temp>/culibox ./cmd/culibox` in the temporary folder, never in a source tree you keep. If Go is missing or too old it asks `Install go via brew? [y/N]`; it never installs Homebrew (it prints the official install line from <https://brew.sh> and stops).
 5. **Installs.** Into `~/.local/bin/culibox` (creating the folder). If a different `culibox` was there, it first copies it to `culibox.prev` and prints `rollback: mv -f <path>.prev <path>`. It writes a side file and renames it, so a half-written binary is never in place. It prints the `export PATH=...` line to add to your shell's rc file when the folder is not on `PATH`.
 6. **Runs `culibox init`.**

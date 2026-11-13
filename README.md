@@ -4,6 +4,8 @@ A self-hosted web control plane for running, watching, containing and steering A
 
 CuliBox is the safe way to let an AI agent touch your cloud. You start Claude Code sessions from a browser, each one in its own container by default, and you keep an eye on what they are doing and what they cost. AWS access, when you grant it, is short-lived and scoped, and every grant is logged.
 
+**Status:** pre-1.0 and in active development. CuliBox is used every day to build CuliBox itself. Until 1.0, a minor release can change config keys or behaviour, so read the release notes before you upgrade.
+
 ## Why it exists
 
 Letting an agent run commands against real infrastructure is useful and risky. The usual setup is a terminal on a machine that holds your SSH keys, your cloud credentials and your whole home directory, with the agent running as you.
@@ -11,6 +13,8 @@ Letting an agent run commands against real infrastructure is useful and risky. T
 CuliBox puts a boundary around that. Sessions run in a per-project container where only the project folder is mounted writable. Cloud credentials are minted per session, last 15 minutes and are narrower than your own. You see every session in one place, including which ones are waiting for you.
 
 It is built first for ops, cloud, DevOps and SRE work, where you want a control panel rather than an editor.
+
+![Fig. 1: the boundary of one box. Kept outside, on your machine: SSH keys, home directory, Docker socket, AWS SSO session, shell history. Inside the box: the agent, the project folder read-write, a filtered copy of the agent config. Crossing the wall only through gates: AWS for 15 minutes, GitHub for 1 hour, static tokens for one command, and the internet through the proxy. Every grant goes to a local audit log.](docs/images/box-boundary.svg)
 
 **What it is not:** an IDE or a code editor. There is a small file browser and editor for quick fixes, and it is kept deliberately thin. If you want to edit code all day, use an editor.
 
@@ -44,7 +48,7 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 
 **Cloud access, audit and secrets**
 
-- **AWS credential broker.** Per-session credentials that last 15 minutes, minted from your SSO session through a role you create to be read-only, and narrowed further. The box never sees your SSO session. One session can reach several accounts, and a write role can be granted for a fixed window. The opt-in SSO-direct mode is the exception: its credentials keep your SSO role's expiry (hours, not minutes), are not revoked when the session ends, and CloudTrail shows you. See [AWS access](docs/AWS.md).
+- **AWS credential broker.** Per-session credentials that last 15 minutes, minted from your SSO session through a role you create to be read-only, and narrowed further. The box never sees your SSO session. One session can reach several accounts, and a write role can be granted for a fixed window. The opt-in SSO-direct mode is the exception: its credentials keep your SSO role's expiry (hours, not minutes), are not revoked when the session ends, and CloudTrail shows you. See [AWS access](docs/AWS.md), which also has a diagram of how a credential reaches the agent.
 - **GitHub access.** One-hour GitHub App tokens scoped to the repos you list, read-only by default. See [GitHub access](docs/GITHUB.md).
 - **Static tokens.** Grafana, Sentry, Atlassian or a GitHub personal access token, handed to one command at a time, with egress opened only to that service's hosts. The agent can read a bound token, and it is long-lived and not revoked when the session ends. See [Static tokens](docs/STATIC-TOKENS.md).
 - **Audit.** CloudTrail records the agent session rather than you (not in SSO-direct mode), and every mint, refusal and token fetch is written to a local audit log, never the value.
@@ -64,10 +68,10 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 
 Each release on the [Releases page](https://github.com/culiops/culibox/releases) has a tarball for Linux and for macOS, each for amd64 and arm64, and a `SHA256SUMS` file. A tarball holds `culibox`, `LICENSE` and `README.md`. It does not include abduco or Docker; see [Requirements](#requirements). To build from source instead, use [From source (manual)](#from-source-manual). The [Quick start](#quick-start) installer does the download and the check below for you.
 
-On Linux (use `arm64` on an ARM machine, and the release you want in place of `0.1.0`):
+On Linux (use `arm64` on an ARM machine, and the release you want in place of `0.35.0`):
 
 ```sh
-VERSION=0.1.0
+VERSION=0.35.0
 OS=linux
 ARCH=amd64
 base=https://github.com/culiops/culibox/releases/download/v$VERSION
@@ -113,7 +117,7 @@ sh setup.sh
 
 `setup.sh` is a short POSIX `sh` script. It installs a checksum-verified `culibox` into `~/.local/bin` (it never uses `sudo` and installs only under that folder; it downloads and builds in a temporary folder that it removes, and with `--from-source` on macOS it may run `brew install go` after an explicit `y`), then runs `culibox init`. `init` is a guided setup that checks the programs CuliBox needs (offering `brew install` on macOS, one package at a time, and only printing commands on Linux), your workspace folder, the macOS box VM size, a Claude token, the config file, `box setup` and `culibox doctor`. Each of its 8 steps prints one result line, and you can run it again at any time to continue. Every step of both, so you can do it by hand, is in [docs/MACOS.md](docs/MACOS.md#install). Options: `--version vX.Y.Z`, `--from-source` (build that release instead of downloading a binary) and `--prefix DIR`.
 
-Until a release that includes `culibox init` is published (the script requires `v0.34.0` or newer), plain `sh setup.sh` refuses by design. Until then only `sh setup.sh --from-source --version <a pushed tag, v0.34.0 or newer>` works, or follow [From source (manual)](#from-source-manual). While the repository is private, `raw.githubusercontent.com` answers 404: run `sh scripts/setup.sh` from a clone, or fetch the script with `gh api` (see [docs/MACOS.md](docs/MACOS.md#install)).
+`setup.sh` refuses a release older than `v0.35.0`, the first one that includes `culibox init`. To build from source instead, follow [From source (manual)](#from-source-manual).
 
 **2. Start CuliBox.**
 
@@ -201,6 +205,8 @@ Know the limits before you rely on it:
 
 The full model and every known limit: [docs/SECURITY.md](docs/SECURITY.md).
 
+**Report a vulnerability privately**, as described in [`.github/SECURITY.md`](.github/SECURITY.md) (GitHub private vulnerability reporting), never in a public issue.
+
 ## Documentation
 
 | Doc | What it covers |
@@ -219,12 +225,17 @@ The full model and every known limit: [docs/SECURITY.md](docs/SECURITY.md).
 | [Remote access](docs/REMOTE-ACCESS.md) | Reaching CuliBox from another machine, and why notifications need HTTPS or localhost. |
 | [macOS](docs/MACOS.md) | Install, the colima-based boxed tier, rotating credentials. |
 | [Docker](docs/DOCKER.md) | Running CuliBox itself in a container, and keeping sessions across restarts. |
+| [Contributing](CONTRIBUTING.md) | How to file a bug or propose a change. Issues only. |
 
 ## Roadmap
 
 - Verify on a Mac what is built but not yet run there: credentials minted through the broker (AWS, GitHub, static tokens) and the Keychain failure states.
 
 ## Development
+
+CuliBox takes bug reports and proposals as issues; outside pull requests are closed with thanks. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+To run the checks:
 
 ```sh
 scripts/test.sh
