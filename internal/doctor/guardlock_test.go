@@ -1,14 +1,17 @@
 package doctor
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxvm"
 )
 
 func TestGuardLockRows(t *testing.T) {
@@ -108,5 +111,37 @@ func TestGuardLockUnlockCommandPastes(t *testing.T) {
 	want := "nouchg\n" + filepath.Join(ws, "CLAUDE.md") + "\n"
 	if string(out) != want {
 		t.Fatalf("chflags got %q, want %q", out, want)
+	}
+}
+
+// #247 (4): the lock sweep keeps the locks of every box docker still lists,
+// whatever its state, so doctor counts every listed box as holding its locks
+// (a paused box's lock is not a leftover to unlock by hand).
+func TestLockHoldersAreEveryListedBox(t *testing.T) {
+	bin, _ := fakeDocker(t) // ab-box-1 exited, ab-box-2 running
+	got, ok := runningBoxes(context.Background(), box.CLIClient{Bin: bin}, box.LabelInstance)
+	if !ok || !slices.Equal(got, []string{"ab-box-1", "ab-box-2"}) {
+		t.Fatalf("want every listed box, got %v %v", got, ok)
+	}
+}
+
+// #247 (1): only colima's own "not running" answer tells doctor that no box
+// runs; a status that failed otherwise leaves it unknown, so a lock is shown
+// as "cannot be checked", never as a leftover to unlock by hand.
+func TestNoBoxRunsOnlyOnAConfirmedStop(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		st   boxvm.Status
+		err  error
+		want bool
+	}{
+		{"colima says stopped", boxvm.Status{Stopped: true}, nil, true},
+		{"colima failed", boxvm.Status{}, nil, false},
+		{"status error", boxvm.Status{}, errors.New("timeout"), false},
+		{"running", boxvm.Status{Running: true}, nil, false},
+	} {
+		if got := noBoxRuns(tc.st, tc.err); got != tc.want {
+			t.Errorf("%s: noBoxRuns = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
