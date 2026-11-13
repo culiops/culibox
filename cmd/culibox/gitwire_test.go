@@ -3,6 +3,7 @@ package main
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/gitview"
@@ -26,5 +27,17 @@ func TestGitViewForLayer(t *testing.T) {
 	}
 	if r.Image != "ghcr.io/x/box:1" || r.UID != 1001 || r.GID != 1002 {
 		t.Fatalf("runner = %+v", r)
+	}
+}
+
+func TestSweepGitLeftoversAtStart(t *testing.T) {
+	sweepGitLeftovers(nil) // no box layer: nothing to sweep, no panic
+	var delays []time.Duration
+	r := &gitview.Runner{AfterFunc: func(d time.Duration, _ func()) { delays = append(delays, d) }}
+	sweepGitLeftovers(r)
+	// Not right away: a leftover of the restart itself is still younger than
+	// the sweep's grace then, and nothing else would sweep it.
+	if !slices.Equal(delays, []time.Duration{gitview.SweepDelay}) {
+		t.Fatalf("scheduled %v, want one sweep at %v", delays, gitview.SweepDelay)
 	}
 }

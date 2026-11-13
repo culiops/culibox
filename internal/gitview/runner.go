@@ -70,12 +70,16 @@ type Runner struct {
 	Timeout, Reuse, Idle time.Duration
 	MaxParallel          int
 	Now                  func() time.Time
+	// AfterFunc schedules SweepLater's sweep; nil is time.AfterFunc.
+	AfterFunc func(time.Duration, func())
 
-	mu      sync.Mutex
-	cache   map[string]*cached
-	flights map[string]*flight
-	semOnce sync.Once
-	sem     chan struct{}
+	mu           sync.Mutex
+	cache        map[string]*cached
+	flights      map[string]*flight
+	semOnce      sync.Once
+	sem          chan struct{}
+	sweepPending bool
+	sweepAgain   bool
 }
 
 type cached struct {
@@ -235,7 +239,7 @@ func (r *Runner) doStatus(t Target, f *flight) Status {
 	if err != nil {
 		// Killing the docker CLI does not stop the container, so remove it on
 		// every error, even one that still yields a result (the output cap).
-		r.remove(name)
+		r.removeFailed(name)
 	}
 	switch {
 	case out.hit || errors.Is(err, errCapped):
@@ -281,7 +285,7 @@ func (r *Runner) Diff(ctx context.Context, t Target, rel string, untracked bool)
 	// may leave the container running, so it is removed.
 	differs := untracked && exitCode(err) == 1 && len(out.b) > 0 && !out.hit
 	if err != nil && !differs {
-		r.remove(name)
+		r.removeFailed(name)
 	}
 	if err != nil && !errors.Is(err, errCapped) && !(untracked && exitCode(err) == 1) {
 		// A cut-short diff is a result, not a failure; so is exit 1 of --no-index,
@@ -306,6 +310,14 @@ func (r *Runner) acquire(ctx context.Context) (release func(), err error) {
 	}
 }
 
+// removeFailed removes the container of a failed run, and schedules a sweep
+// for the case the rm cannot see: a docker CLI killed while the daemon was
+// still creating the container, which then appears with nobody to start it.
+func (r *Runner) removeFailed(name string) {
+	r.remove(name)
+	r.SweepLater(SweepDelay)
+}
+
 // remove force-removes the named container on a fresh context, since the run's
 // own is already done. docker rm -f of a container that is gone is not an error.
 func (r *Runner) remove(name string) {
@@ -321,7 +333,7 @@ func newName() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		panic("gitview: crypto/rand: " + err.Error())
 	}
-	return "agent-box-git-" + hex.EncodeToString(b[:])
+	return namePrefix + hex.EncodeToString(b[:])
 }
 
 // exitCode is the container's exit status carried by err, or -1.

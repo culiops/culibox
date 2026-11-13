@@ -21,3 +21,13 @@ func gitViewFor(layer *boxLayer, uid, gid int) web.GitView {
 		GID:    gid,
 	}
 }
+
+// sweepGitLeftovers removes, in the background, git containers an earlier run
+// left behind: CuliBox stopping between docker's create and start leaves one in
+// Created, pinning its box image (#254). It waits SweepDelay, so one the
+// restart itself left is old enough by then. No-op without a git runner.
+func sweepGitLeftovers(g web.GitView) {
+	if r, ok := g.(*gitview.Runner); ok {
+		r.SweepLater(gitview.SweepDelay)
+	}
+}

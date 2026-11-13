@@ -880,6 +880,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	api.QuickShell = srv.QuickShell
 	// The file tree's git badges and diffs; nil without the box layer.
 	srv.Git = gitViewFor(layer, os.Getuid(), os.Getgid())
+	sweepGitLeftovers(srv.Git)
 	host, _ := os.Hostname()
 	srv.BugReport = buildBugReport(bugDeps{
 		checks:  func() []doctor.Result { return doctor.Checks(doctorIn) },
