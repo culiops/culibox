@@ -167,18 +167,21 @@ func exists(root *os.Root, rel string) (bool, error) {
 // RestoreCommand is the one-line shell recipe that puts a backup back over the
 // data root: it removes the stamp and copies the backup over, never deleting
 // what is newer. When the backup holds audit.db (a regular file, Lstat), the
-// line also drops audit.db-wal and audit.db-shm: a newer WAL must never be
-// applied to the older restored database. When the backup has no audit.db (it
-// was over the size bound), the live audit.db stays, and so do its sidecars:
-// removing them would lose rows that only the WAL holds. Both paths are
-// single-quoted for POSIX sh.
+// line also drops audit.db-wal and audit.db-shm, and does it BEFORE the copy:
+// cp -a keeps going after a bad entry and then exits non-zero, so a removal
+// placed after it would be skipped, leaving an older restored audit.db next to
+// a newer WAL. Removed first, a part-way failure leaves the WAL gone, and the
+// line is safe to run again. When the backup has no audit.db (it was over the
+// size bound), the live audit.db stays, and so do its sidecars: removing them
+// would lose rows that only the WAL holds. Both paths are single-quoted for
+// POSIX sh.
 func RestoreCommand(dataDir, backupDir string) string {
 	r, b := shQuote(dataDir), shQuote(backupDir)
-	cmd := "rm -f " + r + "/" + StampName + " && cp -a " + b + "/. " + r + "/"
+	rm := "rm -f " + r + "/" + StampName
 	if fi, err := os.Lstat(filepath.Join(backupDir, auditName)); err == nil && fi.Mode().IsRegular() {
-		cmd += " && rm -f " + r + "/" + auditName + "-wal " + r + "/" + auditName + "-shm"
+		rm += " " + r + "/" + auditName + "-wal " + r + "/" + auditName + "-shm"
 	}
-	return cmd
+	return rm + " && cp -a " + b + "/. " + r + "/"
 }
 
 // shQuote single-quotes s for POSIX sh, always, so the result is safe whatever

@@ -1,10 +1,13 @@
 package upgradebackup
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -65,7 +68,14 @@ func writeStamp(root *os.Root, version, commit string) error {
 	}
 	body := []byte(stampField(version) + " " + stampField(commit) + "\n")
 	tmp := StampName + ".tmp"
-	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	// os.Root follows a symlink inside the root, so a planted
+	// last-version.tmp -> credentials.json would be truncated and overwritten.
+	// Remove whatever is at the temp name (a link is removed, never followed),
+	// then create it fresh and refuse a link.
+	if err := root.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
 	}

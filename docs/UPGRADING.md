@@ -1,6 +1,6 @@
 # Upgrading CuliBox
 
-What an upgrade keeps, what it may reset, the backup `culibox serve` takes for you, and how to go back. `<R>` is the data root: `$CULIBOX_HOME`, else `~/.local/share/culibox` (see [Configuration](CONFIG.md)).
+What an upgrade keeps, what it may reset, the backup `culibox serve` takes for you, and how to go back. `<R>` is the data root: `$CULIBOX_HOME`, else `~/.local/share/culibox` (see [Configuration](CONFIG.md)). `<B>` is one backup folder, `<R>/backups/<name>`.
 
 The rule: **rolling back means restoring a snapshot.** Restoring returns the data root to how it was just before the upgrade, and whatever was written after it (new sessions, audit rows, profile edits) is lost. CuliBox does not promise that an older build runs on data a newer build wrote.
 
@@ -51,26 +51,30 @@ Outside `<R>`:
 `culibox serve` takes a backup when the version it runs differs from the version recorded in `<R>/last-version` (one line, `<version> <commit>`).
 
 - **When.** Right after it takes the instance lock and before `serve` changes anything else in `<R>`. The one exception is the data root move from the old agent-box name, which runs first, so the backup holds the moved root.
+- **If you install with `scripts/setup.sh`,** it runs `culibox init` after the install, and that runs before the new `serve` first starts. `init` opens the agent accounts and refreshes the files CuliBox writes in them: the statusline script in `bin/`, the `statusLine` entry in each account's `settings.json` (only when none is set or it is already CuliBox's), `.agentbox-manifest.json`, and, for an account that inherits your personal login, the links, `agentbox-mcp.json`, `.agentbox-statusline-delegate` and the settings keys copied from your default account. So the backup holds those files as `init` wrote them, not as the old build left them; the old build rewrites them at its next start. Anything else `init` changes in `<R>` (`config.json`, after it shows you the change and asks; the store and its token; `accounts.json`, when it creates the `claude-box` account; audit rows for store changes; the box setup) belongs to the steps it prints and asks about, and does not run on its own.
 - **No backup:** a build without a version (a development build), and a fresh install (none of the backed-up files exist yet). A development build writes nothing. A fresh install writes only `last-version`. A missing `last-version` counts as an upgrade from `unknown`. A downgrade is backed up like any other change.
 - **Where.** `<R>/backups/<from>-to-<to>-<UTC time>/`, mode 0700. It mirrors `<R>`, with file modes kept, so restoring is a plain copy. It is built under a `.tmp-` name and renamed when complete. A start logs the path and the restore command.
 - **What it holds.** The files marked "Yes" above. `audit.db` is copied with SQLite's `VACUUM INTO`, which includes rows still in the WAL file. Only regular files are copied: a symlink or any other type at one of these paths is skipped and logged, never followed.
 - **What it leaves out.** `boxstate/`, `vm/`, `docker/`, `bundle/`, `broker/`, `ca/`, `clone-fetch/`, `analytics.db`, `.culibox-move`, runtime state, the transcripts and the Claude login inside accounts, symlinks inside an account's Claude folder (the account setup at start makes them again), and anything outside `<R>`.
 - **Size bound.** An `audit.db` over 512 MB is not snapshotted: the log names its size and skips it. Restoring then keeps your current `audit.db`.
-- **Retention.** After a backup completes, every backup from the last 30 days is kept, the 3 newest are always kept, and at most 20 are kept (the oldest go first). A folder in `backups/` whose name is not in the form above is never touched.
+- **Retention.** After a backup completes, every backup from the last 30 days is kept, the 3 newest are always kept, and at most 20 are kept (the oldest go first). Retention looks only at folders in `backups/` whose name ends in `-<UTC time>` (for example `-20261113T103000Z`), whoever made them, and may remove them. A folder or file with any other name, and any name starting with a dot, is never touched.
+- **Secrets are in the backups.** A backup holds old copies of the login token, the `*.secret` signing keys, the hashes in `tokens.json`, `credentials.json` and the store's encrypted files, for 30 days (one of the 3 newest backups is kept however old), and a restore brings them back. After you rotate a secret or token because it leaked, delete the backups taken before the rotation from `<R>/backups/`.
 - **Fail closed.** If the backup cannot be made (disk full, a listed file that exists but cannot be read, `audit.db` that SQLite cannot read), `serve` refuses to start, before it changes anything else in `<R>`. The message names the cause and the file, points at `<binary>.prev` and at this page. `last-version` is not written, so the next start tries again. Fix the cause and start again, or put the previous binary back.
 
 ## Rolling back
 
 1. **Stop CuliBox** (Ctrl-C, or stop its service).
 2. **Put the previous binary back.** `scripts/setup.sh` keeps it as `culibox.prev` next to `culibox` and prints the line that restores it. `scripts/deploy-prod.sh` does the same for a deployed binary. Either script prints a `data:` line pointing here. Binary only: this does not undo data changes.
-3. **Restore the snapshot,** to also undo what the newer build did to your data. Run the exact line `serve` logged when it took the backup (`upgrade backup: ... then run: ...`). It already matches what that backup holds. It has one of two shapes. `B` is the backup folder (the log names it, or list `<R>/backups/`) and `R` is the data root:
+3. **Restore the snapshot,** to also undo what the newer build did to your data. Run the exact line `serve` logged when it took the backup (`upgrade backup: ... then run: ...`). It already matches what that backup holds, with the real folders filled in. It has one of two shapes. Here `R` stands for `<R>` and `B` for `<B>`, both written out in full in the logged line:
 
 ```sh
 # the backup holds audit.db:
-rm -f "$R"/last-version && cp -a "$B"/. "$R"/ && rm -f "$R"/audit.db-wal "$R"/audit.db-shm
+rm -f "$R"/last-version "$R"/audit.db-wal "$R"/audit.db-shm && cp -a "$B"/. "$R"/
 # the backup has no audit.db (it was over 512 MB): audit.db is left alone
 rm -f "$R"/last-version && cp -a "$B"/. "$R"/
 ```
+
+   The first shape removes the `audit.db` WAL files before it copies, so that a copy that stops part-way never leaves an older `audit.db` next to a newer WAL file. If the line stops with an error, fix the cause (for example free disk space) and run it again: it is safe to run again.
 
 4. **Start the old binary.**
 
@@ -78,7 +82,7 @@ What to know before you run it:
 
 - **Restore does not delete.** It copies the snapshot over `<R>` and leaves everything newer in place: accounts, store values, clone records and box homes made since the upgrade. `<R>` becomes the snapshot plus whatever is newer. Older builds ignore files they do not know.
 - **It also restores `last-version`,** so the next upgrade takes a fresh backup.
-- **Restoring `audit.db` drops the audit rows written since the upgrade.** The first shape also removes `audit.db-wal` and `audit.db-shm`, because a newer WAL file must never be applied to the older database. Without `audit.db` in the backup, the second shape leaves the current `audit.db` and those two files untouched. To keep the current log even though the backup holds one, skip it and leave its `-wal` and `-shm` files alone:
+- **Restoring `audit.db` drops the audit rows written since the upgrade.** The first shape also removes `audit.db-wal` and `audit.db-shm` (first, before the copy), because a newer WAL file must never be applied to the older database. Without `audit.db` in the backup, the second shape leaves the current `audit.db` and those two files untouched. To keep the current log even though the backup holds one, skip it and leave its `-wal` and `-shm` files alone:
 
 ```sh
 rm -f "$R"/last-version && find "$B" -mindepth 1 -maxdepth 1 ! -name audit.db -exec cp -a {} "$R"/ \;
@@ -99,7 +103,7 @@ rm -f "$R"/last-version && find "$B" -mindepth 1 -maxdepth 1 ! -name audit.db -e
 
 A migration is any code that rewrites a persisted file when a new version first reads it. The rule is **copy**: the version-change backup is the copy from before the migration, so a migration does not need its own `.bak`. A new migration must:
 
-- run only in `serve`, after the backup step;
+- run only in `serve`, after the backup step. Do not put a migration in a loader that `culibox init`, `culibox doctor`, the `store` commands or the bug report also call (for example `account.Open`, which refreshes every account's files, or the audit log opener): those run before any backup, and `init` runs right after `setup.sh` installs a new build;
 - be idempotent;
 - be crash-safe (write a temp file, then rename).
 

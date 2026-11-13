@@ -69,10 +69,11 @@ func TestRestoreCommandText(t *testing.T) {
 		t.Fatalf("unexpected text in %s", got)
 	}
 
-	// audit.db in the backup: its WAL files go, so a newer WAL is never applied to it.
+	// audit.db in the backup: its WAL files go BEFORE the copy, so a newer WAL is
+	// never applied to it, even when the copy fails part-way.
 	writeFile(t, b, "audit.db", "snapshot")
 	got = RestoreCommand("/d/r", b)
-	want = `rm -f '/d/r'/last-version && cp -a '` + b + `'/. '/d/r'/ && rm -f '/d/r'/audit.db-wal '/d/r'/audit.db-shm`
+	want = `rm -f '/d/r'/last-version '/d/r'/audit.db-wal '/d/r'/audit.db-shm && cp -a '` + b + `'/. '/d/r'/`
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
@@ -132,6 +133,50 @@ func TestRestoreDropsWALWhenBackupHasAudit(t *testing.T) {
 	for _, n := range []string{"audit.db-wal", "audit.db-shm"} {
 		if _, err := os.Lstat(filepath.Join(r, n)); err == nil {
 			t.Errorf("%s survived the restore", n)
+		}
+	}
+}
+
+// cp -a keeps going after a bad entry and exits non-zero. The WAL files must
+// already be gone by then, and running the line again after the cause is fixed
+// must succeed.
+func TestRestoreCopyFailsPartWayThenRerunSucceeds(t *testing.T) {
+	r, b := t.TempDir(), filepath.Join(t.TempDir(), "b")
+	if err := os.MkdirAll(filepath.Join(b, "store"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, b, "audit.db", "snapshot")
+	writeFile(t, b, filepath.Join("store", "recipient"), "r")
+	writeFile(t, r, "audit.db", "live")
+	writeFile(t, r, "audit.db-wal", "newer wal")
+	writeFile(t, r, "audit.db-shm", "shm")
+	writeFile(t, r, "store", "a regular file where the backup has a folder")
+
+	cmd := RestoreCommand(r, b)
+	if out, err := exec.Command("sh", "-c", cmd).CombinedOutput(); err == nil {
+		t.Fatalf("restore should fail part-way, it printed %q", out)
+	}
+	for _, n := range []string{"audit.db-wal", "audit.db-shm"} {
+		if _, err := os.Lstat(filepath.Join(r, n)); err == nil {
+			t.Errorf("%s survived a failed restore: a newer WAL could meet the older database", n)
+		}
+	}
+
+	if err := os.Remove(filepath.Join(r, "store")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("sh", "-c", cmd).CombinedOutput(); err != nil {
+		t.Fatalf("rerun after fixing the cause: %v\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(r, "audit.db")); string(got) != "snapshot" {
+		t.Errorf("audit.db = %q, want the snapshot", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(r, "store", "recipient")); string(got) != "r" {
+		t.Errorf("store/recipient = %q, want r", got)
+	}
+	for _, n := range []string{"audit.db-wal", "audit.db-shm"} {
+		if _, err := os.Lstat(filepath.Join(r, n)); err == nil {
+			t.Errorf("%s present after the rerun", n)
 		}
 	}
 }
