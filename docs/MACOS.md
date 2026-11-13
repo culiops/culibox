@@ -317,9 +317,10 @@ An earlier version's firewall rule let any container on the box VM's default
 Docker network (not the egress network) reach the broker's port directly,
 without the relay. With the handshake such a container can still reach the port,
 but it cannot pass the handshake, so it cannot write a header the broker
-accepts. A VM set up with that rule keeps it until it is recreated:
-`culibox doctor` fails "box VM firewall", and every boxed spawn is refused
-until you run `culibox box setup -recreate`.
+accepts. CuliBox deletes that rule from a VM
+that still has it when it checks the firewall at the next boxed spawn. If that
+delete fails, `culibox doctor` fails "box VM firewall", and every boxed spawn is
+refused until you run `culibox box setup -recreate`.
 
 The credential broker accepts a session's token only from the box that session
 runs in. On macOS it compares the address in the relay's header with that box's
@@ -345,7 +346,10 @@ Mac that holds a session's token, and an account that can read loopback traffic
 (see above); a process that receives the relay's connection on an address
 other than `127.0.0.1` could sit in the middle, because the proofs bind the port
 and not the address (see above; that the host agent dials `127.0.0.1` is
-inferred, not measured); and while CuliBox does not hold its ports, boxes cannot reach the
+inferred, not measured); a container on the VM's host network or another process in the VM,
+which reaches the Mac's loopback through the VM's own OUTPUT path (the DOCKER-USER
+rules do not apply there) and so can connect to the broker's port, but cannot pass
+the handshake without the relay secret; and while CuliBox does not hold its ports, boxes cannot reach the
 proxy or the broker.
 
 While CuliBox is not listening on its ports (stopped, restarting, or its
