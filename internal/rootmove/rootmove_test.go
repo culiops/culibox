@@ -800,3 +800,112 @@ func TestMoveXDGConfigNoOldFile(t *testing.T) {
 		t.Error("culibox dir created with nothing to move")
 	}
 }
+
+// R16: a symlink planted at <legacy>/.culibox-move is refused, not followed:
+// the file it points to is not written, and nothing moves.
+func TestMoveJournalSymlinkRefused(t *testing.T) {
+	e := newEnv(t, "linux", true)
+	target := filepath.Join(t.TempDir(), "victim")
+	write(t, target, "keep")
+	if err := os.Symlink(target, filepath.Join(e.legacy, JournalName)); err != nil {
+		t.Fatal(err)
+	}
+	out := e.run()
+	if out.Moved || !strings.Contains(out.Reason, "journal could not be written") {
+		t.Fatalf("Outcome = %+v, want the journal refusal", out)
+	}
+	if b, _ := os.ReadFile(target); string(b) != "keep" {
+		t.Errorf("the symlink target was written: %q", b)
+	}
+	if fi, err := os.Lstat(e.legacy); err != nil || !fi.IsDir() || exists(e.newDir) {
+		t.Fatalf("the root moved: %v %v", fi, err)
+	}
+}
+
+// R16: a resume refuses a journal that names another path than the default
+// legacy root: no rewrites, no link, no key copy, and the journal stays.
+func TestResumeRefusesForeignJournal(t *testing.T) {
+	e := newEnv(t, "linux", true)
+	mkdir(t, filepath.Join(e.legacy, "store"))
+	e.saveLegacyKey()
+	foreign := filepath.Join(t.TempDir(), "elsewhere")
+	foreignHash := secretstore.KeyHash(foreign)
+	if err := e.keys.forHash(foreignHash).Save("AGE-SECRET-KEY-1FOREIGN", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(e.legacy, JournalName), foreign+"\n"+foreignHash+"\n")
+	if err := os.Rename(e.legacy, e.newDir); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Run(e.newDir, e.legacy, e.d)
+	if err != nil || out.Moved || out.Resumed || !strings.Contains(out.Reason, foreign) {
+		t.Fatalf("Run = %+v, %v; want a refusal naming %s", out, err, foreign)
+	}
+	if len(e.rewrites) != 0 {
+		t.Errorf("rewrites ran: %v", e.rewrites)
+	}
+	if exists(e.legacy) || exists(foreign) {
+		t.Error("a link was made")
+	}
+	if got := e.keys.loaded(secretstore.KeyHash(e.newDir)); got != "" {
+		t.Errorf("a key was copied: %q", got)
+	}
+	if !exists(filepath.Join(e.newDir, JournalName)) {
+		t.Error("the journal was removed")
+	}
+	e.assertUnlocked(e.newDir)
+}
+
+// R16: ~/.config/culibox is moved into only when it is absent or a real
+// directory of ours that no one else can write.
+func TestMoveXDGConfigRefusesUnsafeNewDir(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, newDir string)
+	}{
+		{"symlink", func(t *testing.T, newDir string) {
+			other := filepath.Join(t.TempDir(), "planted")
+			mkdir(t, other)
+			if err := os.Symlink(other, newDir); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"group-writable", func(t *testing.T, newDir string) {
+			mkdir(t, newDir)
+			if err := os.Chmod(newDir, 0o770); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"not a directory", func(t *testing.T, newDir string) {
+			write(t, newDir, "x")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			xdg := t.TempDir()
+			oldF := filepath.Join(xdg, "agent-box", "config.json")
+			newDir := filepath.Join(xdg, "culibox")
+			write(t, oldF, `{"a":1}`)
+			tc.setup(t, newDir)
+			moved, err := MoveXDGConfig(xdg)
+			if moved || err == nil {
+				t.Fatalf("MoveXDGConfig = %v, %v; want false and a reason", moved, err)
+			}
+			if fi, err := os.Lstat(oldF); err != nil || !fi.Mode().IsRegular() {
+				t.Errorf("the old file was touched: %v %v", fi, err)
+			}
+			if exists(filepath.Join(newDir, "config.json")) {
+				t.Error("config.json written into the unsafe dir")
+			}
+		})
+	}
+}
+
+// An existing, safe ~/.config/culibox (a real 0700 dir of ours) is moved into.
+func TestMoveXDGConfigIntoExistingSafeDir(t *testing.T) {
+	xdg := t.TempDir()
+	write(t, filepath.Join(xdg, "agent-box", "config.json"), `{"a":1}`)
+	mkdir(t, filepath.Join(xdg, "culibox"))
+	if moved, err := MoveXDGConfig(xdg); err != nil || !moved {
+		t.Fatalf("MoveXDGConfig = %v, %v", moved, err)
+	}
+}

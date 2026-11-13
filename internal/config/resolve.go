@@ -297,6 +297,10 @@ func checkRoot(root string) error {
 	return checkOwned("data root "+root, fi)
 }
 
+// CheckOwned is checkOwned for other packages (the ~/.config move checks the
+// directory it moves a config into).
+func CheckOwned(what string, fi os.FileInfo) error { return checkOwned(what, fi) }
+
 // checkOwned refuses what is not ours or is writable by group or others
 // (group too: on macOS group staff is every local user).
 func checkOwned(what string, fi os.FileInfo) error {

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/instancelock"
 	"github.com/culiops/culibox/internal/secretstore"
 )
@@ -313,8 +314,12 @@ func resume(newRoot, legacyArg string, d Deps) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, fmt.Errorf("data root move: the journal %s is unreadable (%v); finish the move by hand or remove the file", journal, err)
 	}
+	// Only the default legacy root ever writes a journal, so one that names
+	// another path is not ours: finishing it would link and rewrite paths, and
+	// copy a key, for a directory serve never moved (R16). It stays for the
+	// user to check; the root in use is the new one either way.
 	if legacy != legacyArg {
-		d.Logf("data root move: the journal names %s (not %s); finishing the move from there", legacy, legacyArg)
+		return Outcome{Reason: fmt.Sprintf("the move journal %s names %s, not %s; check it, then remove it", journal, legacy, legacyArg)}, nil
 	}
 	d.Logf("data root move: finishing an interrupted move from %s to %s", legacy, newRoot)
 	keyPending := recopyKey(newRoot, hash, d)
@@ -416,7 +421,9 @@ func leaveLink(newRoot, legacy string, d Deps) bool {
 // writeJournal writes the two journal lines (legacy path, legacy KeyHash) and
 // makes them durable.
 func writeJournal(path, legacy, hash string) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	// O_NOFOLLOW: a symlink planted at the journal path is refused (ELOOP),
+	// never followed to the file it names (R16).
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
 	}
@@ -485,8 +492,10 @@ func syncDir(dir string) {
 // directory created 0700) and leaves a symlink at the old path. Other files in
 // <xdgBase>/agent-box, such as a key a config names by absolute path, stay
 // where they are. A no-op (false, nil) when the new file already exists or
-// there is no legacy regular file. The caller holds the instance lock (spec D2
-// "Config fallback": preconditions (a) and (c)).
+// there is no legacy regular file. It refuses (false, a reason) when
+// <xdgBase>/culibox exists but is not a real directory of the current user
+// that group and others cannot write (R16). The caller holds the instance lock
+// (spec D2 "Config fallback": preconditions (a) and (c)).
 func MoveXDGConfig(xdgBase string) (moved bool, err error) {
 	oldDir := filepath.Join(xdgBase, "agent-box")
 	newDir := filepath.Join(xdgBase, "culibox")
@@ -506,6 +515,9 @@ func MoveXDGConfig(xdgBase string) (moved bool, err error) {
 	if !fi.Mode().IsRegular() {
 		return false, nil
 	}
+	if err := checkXDGNewDir(newDir); err != nil {
+		return false, err
+	}
 	if err := os.MkdirAll(newDir, 0o700); err != nil {
 		return false, err
 	}
@@ -518,4 +530,24 @@ func MoveXDGConfig(xdgBase string) (moved bool, err error) {
 	}
 	syncDir(oldDir)
 	return true, nil
+}
+
+// checkXDGNewDir is the R16 check on <xdgBase>/culibox before a config file is
+// moved into it: absent, or a real directory (not a symlink) of the current
+// user that group and others cannot write. Otherwise the config stays put.
+func checkXDGNewDir(newDir string) error {
+	fi, err := os.Lstat(newDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		return fmt.Errorf("config not moved: %s is not a real directory", newDir)
+	}
+	if err := config.CheckOwned(newDir, fi); err != nil {
+		return fmt.Errorf("config not moved: %w", err)
+	}
+	return nil
 }
