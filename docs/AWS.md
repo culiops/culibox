@@ -1,5 +1,9 @@
 # AWS access
 
+How a credential reaches the agent. The profile and role names in it are examples.
+
+![How an AWS credential reaches the agent, in seven steps. 1: you sign in with AWS SSO on the host, and the SSO session stays there. 2: a command in the box asks the CuliBox broker over its own socket, carrying no AWS secret. 3: the broker assumes a read-only role, and a session policy narrows it further. 4: AWS returns temporary credentials. 5: the box gets credentials that expire in 15 minutes, and a write role only in a window you grant. 6: the mint is recorded in the audit log (session, account, role), never the value. 7: CloudTrail records the agent session, not you.](images/aws-broker-flow.svg)
+
 ## Several AWS accounts in one session
 
 A boxed profile with the inline `aws` binding reaches one AWS account. To give one session several (a staging account and a production account, say), define **named AWS connections** once in `config.json` and let profiles pick them by name. Each connection is a full binding of its own: its own source profile, role, region, session policy, egress hosts and optional write role. Like the other credential bindings, a bound spawn is refused on the host tier, and on macOS it goes through the egress allowlist (the allowlist is verified on a Mac; AWS credentials through the broker there are not yet; see [docs/MACOS.md](MACOS.md#every-box)).

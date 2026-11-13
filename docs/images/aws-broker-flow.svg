@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 476" width="1200" height="476" role="img" aria-labelledby="t d">
+<title id="t">How an AWS credential reaches the agent</title>
+<desc id="d">Sequence: you sign in with AWS SSO on the host; a command in the box asks the CuliBox broker for AWS access; the broker assumes a read-only role with a narrowing session policy; AWS returns temporary credentials; the box gets credentials that expire in 15 minutes; the mint is written to the audit log; CloudTrail records the agent session.</desc>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;fill:#121923}
+text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;fill:#121923}
+.tm{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono","DejaVu Sans Mono",monospace}
+.mu{fill:#4a5666}
+.okf{fill:#1b7a4a}
+.amf{fill:#8a5a00}
+.redf{fill:#b3261e}
+.acf{fill:#2f63c9}
+.wf{fill:#f8fafc}
+.sb{font-weight:600}
+.w5{font-weight:500}
+.ln{fill:none;stroke:#121923;stroke-width:1.5}
+.thin{stroke-width:1}
+.lr2{fill:none;stroke:#8995a5;stroke-width:1}
+.lred{fill:none;stroke:#b3261e;stroke-width:1.5;stroke-dasharray:5 4}
+.stop{fill:none;stroke:#b3261e;stroke-width:3.5}
+.lok{fill:none;stroke:#1b7a4a;stroke-width:2}
+.lac{fill:none;stroke:#2f63c9;stroke-width:1.75}
+.tap{fill:none;stroke:#4a5666;stroke-width:1.25;stroke-dasharray:2 4}
+.life{fill:none;stroke:#8995a5;stroke-width:1;stroke-dasharray:4 5}
+.node{fill:#f8fafc;stroke:#121923;stroke-width:1.5}
+.dash{stroke-dasharray:5 3}
+.pam{fill:#fbf0dc;stroke:#8a5a00;stroke-width:2}
+.pok{fill:#e2f2e9;stroke:#1b7a4a;stroke-width:2}
+.wall{fill:url(#hb-hatch)}
+.inner{fill:#f8fafc}
+.grid{fill:url(#hb-gmaj)}
+.tagr{fill:#121923}
+.bgs{fill:#f8fafc}
+</style>
+<defs>
+          <pattern id="hb-gmin" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" fill="none" stroke="#e8edf3" stroke-width="0.75"></path></pattern>
+          <pattern id="hb-gmaj" width="100" height="100" patternUnits="userSpaceOnUse"><rect width="100" height="100" fill="#f8fafc"></rect><rect width="100" height="100" fill="url(#hb-gmin)"></rect><path d="M100 0H0V100" fill="none" stroke="#d9e1ea" stroke-width="1"></path></pattern>
+          <pattern id="hb-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#f8fafc"></rect><line x1="0" y1="0" x2="0" y2="6" stroke="#121923" stroke-width="1.1"></line></pattern>
+          <marker id="hb-ar" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 1L10 5L0 9Z" fill="#121923"></path></marker>
+          <marker id="hb-arok" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 1L10 5L0 9Z" fill="#1b7a4a"></path></marker>
+          <marker id="hb-armu" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 1L10 5L0 9Z" fill="#4a5666"></path></marker>
+          <marker id="hb-arac" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0 1L10 5L0 9Z" fill="#2f63c9"></path></marker>
+          <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"></path><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"></circle></symbol>
+          <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></symbol>
+          <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></symbol>
+          <symbol id="i-eyeoff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"></path><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"></path><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"></path><path d="m2 2 20 20"></path></symbol>
+          <symbol id="i-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></symbol>
+          <symbol id="i-foldergit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 19a5 5 0 0 1-5-5v8"></path><path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"></path><circle cx="13" cy="12" r="2"></circle><circle cx="20" cy="19" r="2"></circle></symbol>
+          <symbol id="i-filejson" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="M10 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"></path><path d="M14 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"></path></symbol>
+          <symbol id="i-hourglass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"></path><path d="M5 2h14"></path><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"></path><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"></path></symbol>
+          <symbol id="i-shieldcheck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></symbol>
+          <symbol id="i-pr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" x2="6" y1="9" y2="21"></line></symbol>
+          <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5h8"></path><path d="M13 12h8"></path><path d="M13 19h8"></path><path d="m3 17 2 2 4-4"></path><path d="m3 7 2 2 4-4"></path></symbol>
+          <symbol id="hb-logo" viewBox="0 0 16 16"><rect width="16" height="16" rx="3.5" fill="#1e1e2e"></rect><g transform="translate(2 2)"><path d="M11 5V3a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V7" fill="none" stroke="#89b4fa" stroke-width="2"></path><rect x="4" y="4" width="4" height="4" rx="2" fill="#a6e3a1"></rect></g></symbol>
+          <symbol id="hb-logo-amb" viewBox="0 0 16 16"><rect width="16" height="16" rx="3.5" fill="#1e1e2e"></rect><g transform="translate(2 2)"><path d="M11 3.5V3a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V8.5" fill="none" stroke="#89b4fa" stroke-width="2"></path><rect x="9" y="3.5" width="5" height="5" rx="2.5" fill="#f9e2af"></rect></g></symbol>
+        </defs>
+<rect width="1200" height="476" fill="#f8fafc"/>
+
+                  <rect class="grid" width="1200" height="476"></rect>
+                  <!-- lane heads -->
+                  <rect class="node" x="40" y="18" width="170" height="40" rx="3"></rect>
+                  <use href="#i-key" x="56" y="29" width="18" height="18" color="#121923"></use>
+                  <text class="sb" x="80" y="43" font-size="13">You, on the host</text>
+                  <path class="wall" fill-rule="evenodd" d="M285 18H455V58H285Z M291 24V52H449V24Z"></path>
+                  <rect class="ln" x="285" y="18" width="170" height="40"></rect>
+                  <rect x="291" y="24" width="158" height="28" fill="#f8fafc" stroke="#121923" stroke-width="1"></rect>
+                  <text class="sb" x="370" y="43" font-size="14" text-anchor="middle">Box</text>
+                  <rect class="node" x="535" y="18" width="170" height="40" rx="3"></rect>
+                  <svg x="551" y="29" width="18" height="18" viewBox="0 0 16 16"><use href="#hb-logo"></use></svg>
+                  <text class="sb" x="577" y="43" font-size="14">CuliBox broker</text>
+                  <rect class="node" x="785" y="18" width="170" height="40" rx="3"></rect>
+                  <svg x="801" y="27" width="22" height="22" viewBox="0 0 80 80" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>Icon-Architecture/64/Arch_AWS-Identity-and-Access-Management_64</title>
+    <g id="Icon-Architecture/64/Arch_AWS-Identity-and-Access-Management_64" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Icon-Architecture-BG/64/Security-Identity-Compliance" fill="#DD344C">
+            <rect id="Rectangle" x="0" y="0" width="80" height="80"></rect>
+        </g>
+        <path d="M14,59 L66,59 L66,21 L14,21 L14,59 Z M68,20 L68,60 C68,60.552 67.553,61 67,61 L13,61 C12.447,61 12,60.552 12,60 L12,20 C12,19.448 12.447,19 13,19 L67,19 C67.553,19 68,19.448 68,20 L68,20 Z M44,48 L59,48 L59,46 L44,46 L44,48 Z M57,42 L62,42 L62,40 L57,40 L57,42 Z M44,42 L52,42 L52,40 L44,40 L44,42 Z M29,46 C29,45.449 28.552,45 28,45 C27.448,45 27,45.449 27,46 C27,46.551 27.448,47 28,47 C28.552,47 29,46.551 29,46 L29,46 Z M31,46 C31,47.302 30.161,48.401 29,48.816 L29,51 L27,51 L27,48.815 C25.839,48.401 25,47.302 25,46 C25,44.346 26.346,43 28,43 C29.654,43 31,44.346 31,46 L31,46 Z M19,53.993 L36.994,54 L36.996,50 L33,50 L33,48 L36.996,48 L36.998,45 L33,45 L33,43 L36.999,43 L37,40.007 L19.006,40 L19,53.993 Z M22,38.001 L34,38.006 L34,31 C34.001,28.697 31.197,26.677 28,26.675 L27.996,26.675 C24.804,26.675 22.004,28.696 22.002,31 L22,38.001 Z M17,54.992 L17.006,39 C17.006,38.734 17.111,38.48 17.299,38.292 C17.486,38.105 17.741,38 18.006,38 L20,38.001 L20.002,31 C20.004,27.512 23.59,24.675 27.996,24.675 L28,24.675 C32.412,24.677 36.001,27.515 36,31 L36,38.007 L38,38.008 C38.553,38.008 39,38.456 39,39.008 L38.994,55 C38.994,55.266 38.889,55.52 38.701,55.708 C38.514,55.895 38.259,56 37.994,56 L18,55.992 C17.447,55.992 17,55.544 17,54.992 L17,54.992 Z M60,36 L62,36 L62,34 L60,34 L60,36 Z M44,36 L55,36 L55,34 L44,34 L44,36 Z" id="AWS-Identity-and-Access-Management_Icon_64_Squid" fill="#FFFFFF"></path>
+    </g>
+</svg>
+                  <text class="sb" x="833" y="43" font-size="14">AWS</text>
+                  <rect class="node" x="1005" y="18" width="170" height="40" rx="3"></rect>
+                  <use href="#i-list" x="1021" y="29" width="18" height="18" color="#121923"></use>
+                  <text class="sb" x="1047" y="43" font-size="14">Audit log</text>
+                  <!-- lifelines -->
+                  <path class="life" d="M125 58V414 M370 58V414 M620 58V414 M870 58V414 M1090 58V414"></path>
+
+                  <!-- 1 -->
+                  <circle cx="20" cy="100" r="11" fill="#121923"></circle><text class="tm sb wf" x="20" y="104.5" font-size="12" text-anchor="middle">1</text>
+                  <rect class="bgs" x="138" y="84" width="270" height="40"></rect>
+                  <rect x="119" y="84" width="12" height="34" fill="#f8fafc" stroke="#121923" stroke-width="1.5"></rect>
+                  <text class="tm" x="142" y="98" font-size="13">aws sso login --profile acme-sso</text>
+                  <text class="mu" x="142" y="116" font-size="13">Your SSO session stays on the host.</text>
+                  <!-- 2 -->
+                  <circle cx="20" cy="166" r="11" fill="#121923"></circle><text class="tm sb wf" x="20" y="170.5" font-size="12" text-anchor="middle">2</text>
+                  <path class="ln" d="M370 166H616" marker-end="url(#hb-ar)"></path>
+                  <text class="tm" x="495" y="157" font-size="12.5" text-anchor="middle">aws s3 ls --profile lab-read</text>
+                  <text class="mu" x="495" y="185" font-size="12.5" text-anchor="middle">its own socket, no AWS secret</text>
+                  <!-- 3 -->
+                  <circle cx="20" cy="228" r="11" fill="#121923"></circle><text class="tm sb wf" x="20" y="232.5" font-size="12" text-anchor="middle">3</text>
+                  <path class="ln" d="M620 228H866" marker-end="url(#hb-ar)"></path>
+                  <text x="745" y="219" font-size="13" text-anchor="middle">assume a read-only role</text>
+                  <text class="mu" x="745" y="247" font-size="12.5" text-anchor="middle">a session policy narrows it further</text>
+                  <!-- 4 -->
+                  <circle cx="20" cy="284" r="11" fill="#121923"></circle><text class="tm sb wf" x="20" y="288.5" font-size="12" text-anchor="middle">4</text>
+                  <path class="ln dash" d="M870 284H624" marker-end="url(#hb-ar)"></path>
+                  <text class="mu" x="745" y="275" font-size="12.5" text-anchor="middle">temporary credentials</text>
+                  <!-- 5 -->
+                  <circle cx="20" cy="336" r="11" fill="#121923"></circle><text class="tm sb wf" x="20" y="340.5" font-size="12" text-anchor="middle">5</text>
+                  <path class="ln" d="M620 336H374" marker-end="url(#hb-ar)"></path>
+                  <rect class="pam" x="426" y="312" width="138" height="18"></rect>
+                  <text class="sb amf" x="495" y="325.5" font-size="12.5" text-anchor="middle">expires in 15 min</text>
+                  <text class="mu" x="495" y="355" font-size="12.5" text-anchor="middle">write role only in a window you grant</text>
+                  <!-- 6 -->
+                  <circle cx="20" cy="390" r="11" fill="#121923"></circle><text class="tm sb wf" x="20" y="394.5" font-size="12" text-anchor="middle">6</text>
+                  <path class="ln" d="M620 390H1086" marker-end="url(#hb-ar)"></path>
+                  <rect class="bgs" x="716" y="368" width="290" height="17"></rect>
+                  <text x="861" y="381" font-size="13" text-anchor="middle">mint recorded: session, account, role</text>
+                  <rect class="bgs" x="808" y="398" width="106" height="16"></rect>
+                  <text class="mu" x="861" y="410" font-size="12.5" text-anchor="middle">never the value</text>
+                  <!-- 7 -->
+                  <circle cx="20" cy="440" r="11" fill="#121923"></circle><text class="tm sb wf" x="20" y="444.5" font-size="12" text-anchor="middle">7</text>
+                  <path class="ln thin" d="M870 414V426"></path>
+                  <rect class="node" x="745" y="426" width="250" height="30" rx="3"></rect>
+                  <text class="tm" x="760" y="446" font-size="12.5">CloudTrail: agentbox-claude-3</text>
+                  <text class="mu" x="1007" y="446" font-size="12.5">the agent session, not you</text>
+                
+<rect x="0.5" y="0.5" width="1199" height="475" fill="none" stroke="#121923" stroke-width="1"/>
+</svg>

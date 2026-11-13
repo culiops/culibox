@@ -13,7 +13,7 @@ set -eu
 
 REPO=culiops/culibox
 # first release with "culibox init"; the host confirms when tagging
-MIN_VERSION="v0.34.0"
+MIN_VERSION="v0.35.0"
 
 WORK=
 say() { printf '==> %s\n' "$*"; }

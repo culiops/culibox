@@ -257,7 +257,7 @@ not_called() { # PATTERN MESSAGE
 
 # MIN_VERSION is read from the script, so bumping it on tagging does not break the test.
 min=$(sed -n 's/^MIN_VERSION="\(v[0-9.]*\)".*/\1/p' "$script" 2>/dev/null || true)
-min=${min:-v0.34.0}
+min=${min:-v0.35.0}
 mmaj=${min#v}
 mmaj=${mmaj%%.*}
 mmin=${min#v*.}
