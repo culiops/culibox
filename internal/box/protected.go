@@ -32,22 +32,22 @@ type ProtectedDir struct {
 // script runs as root in the VM), lima's SSH key for the VM user, and by
 // default the config and profiles.
 func DataDirProtected(p string) ProtectedDir {
-	return ProtectedDir{Path: p, What: "agent-box's data directory",
-		Why:    "holds the box VM's controls, its SSH key and, by default, agent-box's config and profiles",
+	return ProtectedDir{Path: p, What: "CuliBox's data directory",
+		Why:    "holds the box VM's controls, its SSH key and, by default, CuliBox's config and profiles",
 		Inside: true}
 }
 
 // ConfigDirProtected is a directory agent-box reads its config file from. The
 // config names the binaries agent-box runs (docker_bin, colima_bin, agents).
 func ConfigDirProtected(p string) ProtectedDir {
-	return ProtectedDir{Path: p, What: "agent-box's config directory",
-		Why: "holds the config that names the binaries agent-box runs"}
+	return ProtectedDir{Path: p, What: "CuliBox's config directory",
+		Why: "holds the config that names the binaries CuliBox runs"}
 }
 
 // ProfilesDirProtected is the directory of profiles.json, which names the
 // binaries sessions run and their tier.
 func ProfilesDirProtected(p string) ProtectedDir {
-	return ProtectedDir{Path: p, What: "agent-box's profiles directory",
+	return ProtectedDir{Path: p, What: "CuliBox's profiles directory",
 		Why: "holds the profiles that name the binaries sessions run and whether they are contained"}
 }
 

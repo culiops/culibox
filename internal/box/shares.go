@@ -56,17 +56,17 @@ func (e *NotSharedError) Error() string {
 	switch {
 	case e.ReadOnly:
 		return d + " is shared read-only with the box VM, but a workspace needs read & write. " +
-			"Switch it in Settings › VM folders, or run `agent-box box share add " + d + "`"
+			"Switch it in Settings › VM folders, or run `culibox box share add " + d + "`"
 	case e.Pending:
 		return d + " was added to the box VM folders but not applied yet: apply it in Settings › VM folders " +
-			"(this restarts the box VM), or run `agent-box box share apply`"
+			"(this restarts the box VM), or run `culibox box share apply`"
 	}
 	ro := ""
 	if !e.NeedWrite {
 		ro = " -ro"
 	}
 	return d + " is not shared with the box VM, so a box can’t use it. " +
-		"Add it in Settings › VM folders, or run `agent-box box share add " + d + ro + "`"
+		"Add it in Settings › VM folders, or run `culibox box share add " + d + ro + "`"
 }
 
 // tildePath shows p with a leading home directory as "~".

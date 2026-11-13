@@ -695,7 +695,7 @@ func TestPassphraselessMissingItemIsKeyLost(t *testing.T) {
 		t.Fatalf("reason %q", st.Unavailable.Reason)
 	}
 	msg := st.Unavailable.Error()
-	if !strings.Contains(msg, filepath.Join(dir, "store")) || !strings.Contains(msg, "agent-box store init") {
+	if !strings.Contains(msg, filepath.Join(dir, "store")) || !strings.Contains(msg, "culibox store init") {
 		t.Fatalf("message lacks the manual steps: %q", msg)
 	}
 	if _, err := s.Get("a"); !errors.Is(err, ErrKeeperUnavailable) || errors.Is(err, ErrLocked) {
@@ -735,11 +735,11 @@ func TestPassphraselessMismatchIsKeyLost(t *testing.T) {
 
 func TestUnavailableErrorFix(t *testing.T) {
 	a := &UnavailableError{Kind: KindAccess, Reason: "r", StoreDir: "/d/store"}
-	if a.Fix() != "Unlock the login keychain (Keychain Access, or log out and in), or click Allow when macOS asks about agent-box, then retry." {
+	if a.Fix() != "Unlock the login keychain (Keychain Access, or log out and in), or click Allow when macOS asks about CuliBox, then retry." {
 		t.Fatalf("access fix %q", a.Fix())
 	}
 	l := &UnavailableError{Kind: KindKeyLost, Reason: "r", StoreDir: "/d/store"}
-	want := `The key for this store is gone, so its stored values cannot be decrypted. To start over: remove /d/store, run "agent-box store init", then add your tokens again.`
+	want := `The key for this store is gone, so its stored values cannot be decrypted. To start over: remove /d/store, run "culibox store init", then add your tokens again.`
 	if l.Fix() != want {
 		t.Fatalf("key-lost fix %q", l.Fix())
 	}

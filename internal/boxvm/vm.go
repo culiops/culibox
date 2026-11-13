@@ -52,7 +52,7 @@ type Status struct {
 }
 
 // ErrNotSetUp means `agent-box box setup` has not provisioned the VM yet.
-var ErrNotSetUp = errors.New("the box VM is not set up; run `agent-box box setup`")
+var ErrNotSetUp = errors.New("the box VM is not set up; run `culibox box setup`")
 
 // VM is agent-box's colima profile. sem (a one-slot lock a waiter can abandon
 // when its context ends) serialises start/stop, so concurrent boxed spawns
@@ -304,7 +304,7 @@ func (v *VM) Provision(ctx context.Context, recreate bool, w io.Writer) error {
 		return err
 	}
 	if _, statErr := os.Stat(cfg.StampPath()); statErr == nil && v.Drifted() && !recreate {
-		return errors.New("the box VM was set up with a different configuration (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate` (deletes the VM's images and cache, not box homes)")
+		return errors.New("the box VM was set up with a different configuration (VM size, mounts, extra_ca_certs or the provision script); run `culibox box setup -recreate` (deletes the VM's images and cache, not box homes)")
 	}
 	if recreate {
 		fmt.Fprintln(w, "deleting the box VM …")

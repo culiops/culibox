@@ -155,7 +155,7 @@ func TestApplyMountsRefusesOtherDrift(t *testing.T) {
 	v.cfg.CPUs = 8
 	before, _ := os.ReadFile(v.Config().YAMLPath())
 	err := v.ApplyMounts(context.Background(), ApplyHooks{})
-	if !errors.Is(err, ErrNeedsRecreate) || !strings.Contains(err.Error(), "agent-box box setup -recreate") {
+	if !errors.Is(err, ErrNeedsRecreate) || !strings.Contains(err.Error(), "culibox box setup -recreate") {
 		t.Fatalf("err = %v", err)
 	}
 	if len(callNames(r)) != 0 {
@@ -387,7 +387,7 @@ func TestApplyMountsRefusesAConcurrentApply(t *testing.T) {
 		t.Error("ApplyLockHeld = false while an apply runs")
 	}
 	err := v2.ApplyMounts(context.Background(), ApplyHooks{})
-	if !errors.Is(err, ErrApplyLocked) || err.Error() != "another agent-box is applying the box VM's folder list; try again when it finishes" {
+	if !errors.Is(err, ErrApplyLocked) || err.Error() != "another CuliBox is applying the box VM's folder list; try again when it finishes" {
 		t.Fatalf("second apply: %v", err)
 	}
 	if len(callNames(r2)) != 0 {

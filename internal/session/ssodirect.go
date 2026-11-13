@@ -74,7 +74,7 @@ func gateSSODirect(hooks BrokerHooks, bs config.Bindings, agent string) (map[str
 	}
 	chk, ok := hooks.(SSODirectChecker)
 	if !ok {
-		return nil, nil, fmt.Errorf("%w: spawn %s: this agent-box cannot check that an SSO permission set is read-only, so it will not hand one out", box.ErrBoxUnavailable, agent)
+		return nil, nil, fmt.Errorf("%w: spawn %s: this CuliBox cannot check that an SSO permission set is read-only, so it will not hand one out", box.ErrBoxUnavailable, agent)
 	}
 	type outcome struct {
 		res awsprobe.GateResult

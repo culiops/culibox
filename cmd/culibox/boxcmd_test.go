@@ -315,7 +315,7 @@ func TestBoxSetupRemoteRebuildRefused(t *testing.T) {
 	if len(pullLines(argvLog(t, log))) != 0 || len(buildLines(argvLog(t, log))) != 0 {
 		t.Fatalf("a refused rebuild still ran docker: %s", argvLog(t, log))
 	}
-	if want := "FAIL image: " + remoteRef + " comes from a registry; agent-box pulls it and never builds it"; !strings.Contains(w.String(), want) {
+	if want := "FAIL image: " + remoteRef + " comes from a registry; CuliBox pulls it and never builds it"; !strings.Contains(w.String(), want) {
 		t.Fatalf("output missing %q:\n%s", want, w.String())
 	}
 }

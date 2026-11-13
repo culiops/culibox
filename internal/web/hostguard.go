@@ -48,7 +48,7 @@ func (g *hostGuard) wrap(next http.Handler) http.Handler {
 		}
 		g.logReject(r.Host)
 		// Never echo r.Host: it is attacker-chosen.
-		http.Error(w, "host not allowed; add it to allowed_hosts in the agent-box config", http.StatusForbidden)
+		http.Error(w, "host not allowed; add it to allowed_hosts in the culibox config", http.StatusForbidden)
 	})
 }
 

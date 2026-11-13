@@ -29,7 +29,7 @@ type StoreGetter interface {
 }
 
 // ErrStoreNotConfigured is returned for a store reference when no store was given.
-var ErrStoreNotConfigured = errors.New("store references need the agent-box store (not configured)")
+var ErrStoreNotConfigured = errors.New("store references need the CuliBox store (not configured)")
 
 // ErrEnvNotSet is what Resolve wraps when an env reference names a variable
 // that is unset or empty. Callers that only report on a reference (doctor) can
@@ -40,7 +40,7 @@ var ErrEnvNotSet = errors.New("environment variable is not set")
 type envNotSetError struct{ v string }
 
 func (e envNotSetError) Error() string {
-	return fmt.Sprintf("env var %q is not set in the agent-box daemon's environment", e.v)
+	return fmt.Sprintf("env var %q is not set in the CuliBox daemon's environment", e.v)
 }
 func (e envNotSetError) Is(target error) bool { return target == ErrEnvNotSet }
 

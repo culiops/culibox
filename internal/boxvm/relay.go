@@ -79,7 +79,7 @@ func RelayName(instance string) string {
 // provisioning writes. Option (a) VMs, VMs provisioned before the egress rules
 // existed, and VMs provisioned for other ports end up here.
 func errRulesMissing(why string) error {
-	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); this VM predates egress control for all boxes, or broker_port or egress_port changed since setup; run `agent-box box setup -recreate`", why)
+	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); this VM predates egress control for all boxes, or broker_port or egress_port changed since setup; run `culibox box setup -recreate`", why)
 }
 
 // CheckInputRules verifies that the first four rules of the INPUT chain in
@@ -143,12 +143,12 @@ func CheckDockerUserRules(out string) error {
 			}
 		}
 		if proto == "tcp" && (target == "RETURN" || target == "ACCEPT") {
-			return fmt.Errorf("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay (DOCKER-USER rule %q); this VM was set up before that rule was removed; run `agent-box box setup -recreate`",
+			return fmt.Errorf("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay (DOCKER-USER rule %q); this VM was set up before that rule was removed; run `culibox box setup -recreate`",
 				strings.Join(f[2:], " "))
 		}
 	}
 	if !drop {
-		return fmt.Errorf("the box VM's firewall has no DOCKER-USER DROP for the lima gateway %s, so containers on its default network may reach the Mac's loopback; run `agent-box box setup -recreate`", LimaHostGateway)
+		return fmt.Errorf("the box VM's firewall has no DOCKER-USER DROP for the lima gateway %s, so containers on its default network may reach the Mac's loopback; run `culibox box setup -recreate`", LimaHostGateway)
 	}
 	return nil
 }

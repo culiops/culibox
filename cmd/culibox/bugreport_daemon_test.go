@@ -56,7 +56,7 @@ func TestBuildBugReportIncludesLiveState(t *testing.T) {
 		}
 	}
 	md, _, _ := buildBugReport(d)(context.Background())
-	for _, want := range []string{"agent-box bug report v1", "producer: daemon", "box/working", "host/waiting", "host/exited", "started", "abc1234"} {
+	for _, want := range []string{"culibox bug report v1", "producer: daemon", "box/working", "host/waiting", "host/exited", "started", "abc1234"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("markdown lacks %q:\n%s", want, md)
 		}

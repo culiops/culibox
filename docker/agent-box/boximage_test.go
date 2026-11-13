@@ -695,7 +695,7 @@ func TestCheckForRemote(t *testing.T) {
 		has   []string
 		exact string // checked only when set
 	}{
-		{"missing", ImageState{}, true, []string{"agent-box box setup", "pull"}, ""},
+		{"missing", ImageState{}, true, []string{"culibox box setup", "pull"}, ""},
 		{"wrong arch", ImageState{Present: true, Arch: "amd64", Hash: Hash()}, true, []string{"amd64", "arm64"}, ""},
 		{"stale", ImageState{Present: true, Arch: "arm64", Hash: "0123456789ab"}, false, nil,
 			"this image was built from an older Dockerfile; pull a newer digest from ghcr"},

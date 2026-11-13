@@ -59,7 +59,7 @@ func boxStatusVM(ctx context.Context, l *boxLayer, w io.Writer) int {
 		fmt.Fprintf(w, "FAIL box VM: %v\n", err)
 		return 1
 	case !l.vm.SetUp():
-		fmt.Fprintln(w, "box VM: not set up (run `agent-box box setup`)")
+		fmt.Fprintln(w, "box VM: not set up (run `culibox box setup`)")
 		return 0
 	case !st.Running:
 		fmt.Fprintln(w, "box VM: stopped (starts on the first boxed spawn)")
@@ -189,11 +189,11 @@ func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, 
 		return 1
 	}
 	if want := l.vm.Config().DockerSocket(); st.DockerSocket != want {
-		fmt.Fprintf(w, "FAIL box VM: docker socket is %q, agent-box expects %q\n", st.DockerSocket, want)
+		fmt.Fprintf(w, "FAIL box VM: docker socket is %q, CuliBox expects %q\n", st.DockerSocket, want)
 		return 1
 	}
 	if st.MountType != "virtiofs" {
-		fmt.Fprintf(w, "WARN box VM: mount type %s (virtiofs is about 3.5x faster); run `agent-box box setup -recreate`\n", st.MountType)
+		fmt.Fprintf(w, "WARN box VM: mount type %s (virtiofs is about 3.5x faster); run `culibox box setup -recreate`\n", st.MountType)
 	}
 	fmt.Fprintf(w, "PASS box VM: running (%s, %s)\n", st.Driver, st.MountType)
 	l.adoptImage(ctx)

@@ -60,7 +60,7 @@ func UnboxableDefaultCwd(dir, home string, protected []box.ProtectedDir, shares 
 	if shares != nil {
 		v, err := shares()
 		if err != nil {
-			return "cannot read the box VM's folder list (" + err.Error() + "); run `agent-box doctor`", true
+			return "cannot read the box VM's folder list (" + err.Error() + "); run `culibox doctor`", true
 		}
 		if err := v.Check(abs, true); err != nil {
 			var ns *box.NotSharedError

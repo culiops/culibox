@@ -30,7 +30,7 @@ const storeActor = "cli"
 // whether stdin is a terminal; out gets every message, errors included.
 func runStore(a cliArgs, cfg config.Config, home string, stdin io.Reader, stdinTTY bool, out io.Writer) int {
 	fail := func(format string, args ...any) int {
-		fmt.Fprintf(out, "agent-box store: "+format+"\n", args...)
+		fmt.Fprintf(out, "culibox store: "+format+"\n", args...)
 		return 1
 	}
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
@@ -52,7 +52,7 @@ func runStore(a cliArgs, cfg config.Config, home string, stdin io.Reader, stdinT
 		s := st.Status()
 		fmt.Fprintf(out, "platform: %s\n", s.Platform)
 		if !s.Initialized {
-			fmt.Fprintln(out, "store: not initialized (run: agent-box store init)")
+			fmt.Fprintln(out, "store: not initialized (run: culibox store init)")
 			return 0
 		}
 		fmt.Fprintln(out, "store: initialized")
@@ -91,7 +91,7 @@ func runStore(a cliArgs, cfg config.Config, home string, stdin io.Reader, stdinT
 		}
 		// Unlock with the passphrase just entered, so there is no second prompt.
 		if err := st.Unlock(pass, cfg.StoreUnlockTTL(), storeActor); err != nil {
-			fmt.Fprintf(out, "store initialized, but unlocking failed: %s\nrun: agent-box store unlock\n", storeErrText(err))
+			fmt.Fprintf(out, "store initialized, but unlocking failed: %s\nrun: culibox store unlock\n", storeErrText(err))
 			return 1
 		}
 		fmt.Fprintf(out, "store initialized and unlocked until %s\n", unlockExpiry(st))
@@ -169,7 +169,7 @@ func runStore(a cliArgs, cfg config.Config, home string, stdin io.Reader, stdinT
 // subcommands that deal in the passphrase.
 func runStorePassphrased(sub string, st *secretstore.Store, cfg config.Config, p *prompter, out io.Writer) int {
 	fail := func(format string, args ...any) int {
-		fmt.Fprintf(out, "agent-box store: "+format+"\n", args...)
+		fmt.Fprintf(out, "culibox store: "+format+"\n", args...)
 		return 1
 	}
 	switch sub {
@@ -245,9 +245,9 @@ func unavailableState(k secretstore.UnavailableKind) string {
 func storeErrText(err error) string {
 	switch {
 	case errors.Is(err, secretstore.ErrNotInitialized):
-		return "the store is not initialized; run: agent-box store init"
+		return "the store is not initialized; run: culibox store init"
 	case errors.Is(err, secretstore.ErrExists):
-		return "the store already exists (to change the passphrase run: agent-box store passwd)"
+		return "the store already exists (to change the passphrase run: culibox store passwd)"
 	case errors.Is(err, secretstore.ErrBadPassphrase):
 		return "wrong passphrase"
 	case errors.Is(err, secretstore.ErrKeeperUnavailable):

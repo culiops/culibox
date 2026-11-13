@@ -856,7 +856,7 @@ func TestPrepareMissingRemoteImageNeverPulls(t *testing.T) {
 	fc.running = true
 	l.image = "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
 	err := l.prepare(context.Background())
-	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "agent-box box setup") {
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "culibox box setup") {
 		t.Fatalf("a missing remote image must fail the spawn and name box setup: %v", err)
 	}
 	for _, line := range strings.Split(d.log(), "\n") {
@@ -1063,7 +1063,7 @@ func TestBoxStatusReportsVMImageAndBoxes(t *testing.T) {
 	d.set(t, "image", "arm64|0ld\n")
 	d.set(t, "ps", "ab-box-1\trunning\t/Users/a/p\t\n")
 	rc, out = runVM(t, l, cliArgs{Sub: "status"})
-	for _, want := range []string{"box VM: running", "virtiofs", "WARN image", "older than this agent-box", "ab-box-1"} {
+	for _, want := range []string{"box VM: running", "virtiofs", "WARN image", "older than this CuliBox", "ab-box-1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status running lacks %q:\n%s", want, out)
 		}
@@ -1169,7 +1169,7 @@ func TestProtectedDirsReachTheBoxManager(t *testing.T) {
 	cfgDir := t.TempDir()
 	prot := protectedDirs(root, []string{filepath.Join(root, "config.json"), filepath.Join(cfgDir, "config.json")},
 		filepath.Join(root, "profiles.json"), "", "")
-	if len(prot) != 2 || prot[0].What != "agent-box's data directory" || prot[1].What != "agent-box's config directory" {
+	if len(prot) != 2 || prot[0].What != "CuliBox's data directory" || prot[1].What != "CuliBox's config directory" {
 		t.Fatalf("want data root + the outside config dir, deduped: %+v", prot)
 	}
 	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, t.TempDir(), "linux", nil, prot)
@@ -1213,9 +1213,9 @@ func TestProtectedDirsFollowSymlinkedConfigAndProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for ws, want := range map[string]string{
-		dots:     "it is agent-box's config directory",
-		xdgDir:   "it is agent-box's config directory",
-		profDots: "it is agent-box's profiles directory",
+		dots:     "it is CuliBox's config directory",
+		xdgDir:   "it is CuliBox's config directory",
+		profDots: "it is CuliBox's profiles directory",
 	} {
 		if reason, bad := l.boxes.Unboxable(ws); !bad || !strings.Contains(reason, want) {
 			t.Errorf("%s: want %q, got %q %v", ws, want, reason, bad)
@@ -1252,7 +1252,7 @@ func TestProfilesInHomeLeavesProjectsBoxable(t *testing.T) {
 	if reason, bad := l.boxes.Unboxable(home); !bad || !strings.Contains(reason, "profiles directory") {
 		t.Fatalf("$HOME itself must be refused as the profiles dir: %q %v", reason, bad)
 	}
-	if reason, bad := l.boxes.Unboxable(filepath.Join(root, "vm")); !bad || !strings.Contains(reason, "inside agent-box's data directory") {
+	if reason, bad := l.boxes.Unboxable(filepath.Join(root, "vm")); !bad || !strings.Contains(reason, "inside CuliBox's data directory") {
 		t.Fatalf("inside the data root must stay refused: %q %v", reason, bad)
 	}
 }

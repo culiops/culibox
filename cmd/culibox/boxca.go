@@ -52,14 +52,14 @@ func printInterceptionHint(ctx context.Context, w io.Writer, output string, conf
 		return
 	}
 	hostTrust := pull && goos != "darwin"
-	rerun := "`agent-box box setup -rebuild`"
+	rerun := "`culibox box setup -rebuild`"
 	if goos == "darwin" {
-		rerun = "`agent-box box setup -recreate`"
+		rerun = "`culibox box setup -recreate`"
 	}
 	switch {
 	case hostTrust:
 		fmt.Fprintln(w, "HINT: HTTPS from the host's docker daemon is being intercepted by a TLS-inspecting proxy.")
-		fmt.Fprintln(w, "      agent-box does not manage the host's trust store: install the proxy's root CA there")
+		fmt.Fprintln(w, "      CuliBox does not manage the host's trust store: install the proxy's root CA there")
 		fmt.Fprintln(w, "      (Debian/Ubuntu: copy it to /usr/local/share/ca-certificates/ as a .crt, run")
 		fmt.Fprintln(w, "      `update-ca-certificates`), then restart docker.")
 	case configured:
@@ -86,7 +86,7 @@ func printInterceptionHint(ctx context.Context, w io.Writer, output string, conf
 	fmt.Fprintf(w, "      The host sees this chain for %s: ... → %s\n", host, subject)
 	// `security` is macOS-only.
 	if cn != "" && goos == "darwin" {
-		fmt.Fprintf(w, "      macOS export: security find-certificate -c %q -p > ~/agent-box-ca.pem\n", cn)
+		fmt.Fprintf(w, "      macOS export: security find-certificate -c %q -p > ~/culibox-ca.pem\n", cn)
 	}
 }
 
@@ -116,7 +116,7 @@ type minimalAgent struct {
 func printNoConfigSample(w io.Writer, path string) {
 	d := config.Defaults()
 	m := minimalConfig{BindAddr: d.BindAddr, DefaultRuntime: d.DefaultRuntime,
-		ExtraCACerts: []string{"/absolute/path/to/agent-box-ca.pem"}}
+		ExtraCACerts: []string{"/absolute/path/to/culibox-ca.pem"}}
 	for _, a := range d.Agents {
 		m.Agents = append(m.Agents, minimalAgent{a.Name, a.Bin})
 	}

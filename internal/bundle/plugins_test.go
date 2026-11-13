@@ -157,7 +157,7 @@ func TestPluginMountsIncompleteSetDropsAll(t *testing.T) {
 // Docker resolves a symlinked bind source on the HOST side, so a planted
 // cache -> ~/.ssh would publish its target. Nothing may be mounted then.
 func TestPluginMountsRefuseSymlinks(t *testing.T) {
-	const reason = "is a symlink on the host; agent-box mounts only real files and directories"
+	const reason = "is a symlink on the host; CuliBox mounts only real files and directories"
 	t.Run("entry", func(t *testing.T) {
 		src := t.TempDir()
 		pluginTree(t, src)
@@ -358,7 +358,7 @@ func TestPluginMountsRefuseCredentialedJSON(t *testing.T) {
 			pluginTree(t, src)
 			writePluginFile(t, src, c.file, `{"m":{"source":{"url":"`+c.url+`"}}}`)
 			ps, _ := snap(t, src)
-			want := Drop{Kind: "plugins", Name: c.file, Reason: "a plugin marketplace URL carries credentials; agent-box never mounts credentials into a box"}
+			want := Drop{Kind: "plugins", Name: c.file, Reason: "a plugin marketplace URL carries credentials; CuliBox never mounts credentials into a box"}
 			if len(ps.mounts) != 0 || len(ps.drops) != 1 || ps.drops[0] != want {
 				t.Fatalf("want no mounts and exactly %+v, got %+v", want, ps)
 			}

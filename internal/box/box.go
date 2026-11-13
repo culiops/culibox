@@ -778,7 +778,7 @@ func unboxableResolved(abs string, protected []ProtectedDir, view func() (*Share
 	if view != nil {
 		v, err := view()
 		if err != nil {
-			return "cannot read the box VM's folder list (" + err.Error() + "); run `agent-box doctor`", nil
+			return "cannot read the box VM's folder list (" + err.Error() + "); run `culibox doctor`", nil
 		}
 		if v != nil {
 			if err := v.Check(abs, true); err != nil {
@@ -1409,7 +1409,7 @@ func (m *Manager) reuseCA(ctx context.Context, name, label string) (State, error
 	live := m.active[name]
 	m.mu.Unlock()
 	if live > 0 {
-		return StateRunning, fmt.Errorf("%w: box %s started with a different CA set (extra_ca_certs changed) and still runs %d session(s); end them, then spawn again (macOS: or run `agent-box box stop`)",
+		return StateRunning, fmt.Errorf("%w: box %s started with a different CA set (extra_ca_certs changed) and still runs %d session(s); end them, then spawn again (macOS: or run `culibox box stop`)",
 			ErrBoxUnavailable, name, live)
 	}
 	if err := m.removeIdle(ctx, name); err != nil {
@@ -1439,7 +1439,7 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 			continue
 		}
 		if b.Unreadable {
-			return fmt.Errorf("%w: container %q carries agent-box labels that cannot be read, so it may be using %s. "+
+			return fmt.Errorf("%w: container %q carries CuliBox labels that cannot be read, so it may be using %s. "+
 				"Remove that container, or use a separate folder or worktree.", ErrWorkspaceHeld, b.Name, cwd)
 		}
 		if knownWorkspace(b.Workspace) && !Overlaps(b.Workspace, cwd) {
@@ -1528,13 +1528,13 @@ func (m *Manager) GrantBlocker(ctx context.Context, cwd, self string) (string, e
 		}
 		switch {
 		case b.Unreadable:
-			return fmt.Sprintf("container %q carries agent-box labels that cannot be read, so it may use %s; remove it first", b.Name, real), nil
+			return fmt.Sprintf("container %q carries CuliBox labels that cannot be read, so it may use %s; remove it first", b.Name, real), nil
 		case !knownWorkspace(b.Workspace):
 			return fmt.Sprintf("a box (instance %s) has no usable workspace label, so it may use %s; stop it first", b.Instance, real), nil
 		case !Overlaps(b.Workspace, real):
 			continue
 		case !b.Claims:
-			return fmt.Sprintf("a box started by an older agent-box (instance %s) uses %s; stop it or upgrade that instance first", b.Instance, b.Workspace), nil
+			return fmt.Sprintf("a box started by an older CuliBox (instance %s) uses %s; stop it or upgrade that instance first", b.Instance, b.Workspace), nil
 		}
 		return fmt.Sprintf("another box (instance %s) uses %s; stop the session in it first", b.Instance, b.Workspace), nil
 	}

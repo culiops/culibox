@@ -668,7 +668,7 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 	}
 	for _, n := range extraca.DeniedEnvNames {
 		if _, set := a.Env[n]; set {
-			return WithField("env", fmt.Errorf("profile %q: env %s is set by agent-box (extra_ca_certs in the config), not per profile", a.Name, n))
+			return WithField("env", fmt.Errorf("profile %q: env %s is set by CuliBox (extra_ca_certs in the config), not per profile", a.Name, n))
 		}
 	}
 	switch a.BasePolicy() {

@@ -12,7 +12,7 @@ import (
 )
 
 // ErrLocked means another live process holds the data dir.
-var ErrLocked = errors.New("instancelock: another agent-box is already serving this data dir")
+var ErrLocked = errors.New("instancelock: another CuliBox is already serving this data dir")
 
 // Acquire takes an exclusive, non-blocking flock on <dataDir>/serve.lock. The
 // kernel drops it when the process exits, however it exits, so a crash leaves

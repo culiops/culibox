@@ -892,7 +892,7 @@ func fastForwardRef(ctx context.Context, g Git, of, branch, ref, tip string) err
 		return err
 	}
 
-	notFF := refused(ReasonNotFF, fmt.Errorf("box/%s on the host has commits %s lacks; not overwritten (agent-box clone fetch overwrites it)", branch, branch))
+	notFF := refused(ReasonNotFF, fmt.Errorf("box/%s on the host has commits %s lacks; not overwritten (culibox clone fetch overwrites it)", branch, branch))
 	if old != "" {
 		if _, err := run("merge-base", "--is-ancestor", old, tip); err != nil {
 			if code, ok := exitCode(err); ok && code == 1 {

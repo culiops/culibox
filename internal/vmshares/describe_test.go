@@ -43,7 +43,7 @@ func TestDescribeOriginalAndAddedByYou(t *testing.T) {
 }
 
 func TestWholeHomeLine(t *testing.T) {
-	want := "the box VM shares your whole home folder; apply the folder list in Settings › VM folders (or `agent-box box share apply`) so it sees only 4 folders"
+	want := "the box VM shares your whole home folder; apply the folder list in Settings › VM folders (or `culibox box share apply`) so it sees only 4 folders"
 	if got := WholeHomeLine(4); got != want {
 		t.Fatalf("%q", got)
 	}

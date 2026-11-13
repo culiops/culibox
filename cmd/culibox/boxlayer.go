@@ -328,7 +328,7 @@ func (l *boxLayer) prepare(ctx context.Context) error {
 	vcancel()
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			return fmt.Errorf("%w: the box VM did not answer within %s; check `agent-box box status`",
+			return fmt.Errorf("%w: the box VM did not answer within %s; check `culibox box status`",
 				box.ErrBoxUnavailable, prepareVMTimeout)
 		}
 		return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
@@ -343,7 +343,7 @@ func (l *boxLayer) prepare(ctx context.Context) error {
 		err := l.verifyMounts(mctx, started)
 		mcancel()
 		if err != nil {
-			return fmt.Errorf("%w: the box VM's folders do not match its folder list (%v); run `agent-box doctor`", box.ErrBoxUnavailable, err)
+			return fmt.Errorf("%w: the box VM's folders do not match its folder list (%v); run `culibox doctor`", box.ErrBoxUnavailable, err)
 		}
 	}
 	ictx, cancel := context.WithTimeout(ctx, imageCheckTimeout)
@@ -458,7 +458,7 @@ func (l *boxLayer) recreateHint() string {
 	if l.vm == nil || !l.vm.Drifted() {
 		return ""
 	}
-	return " (the box VM's provision config is out of date, so its firewall rules may be too; run `agent-box box setup -recreate`)"
+	return " (the box VM's provision config is out of date, so its firewall rules may be too; run `culibox box setup -recreate`)"
 }
 
 // vmStopped reports a darwin VM that is not running. Background passes check it

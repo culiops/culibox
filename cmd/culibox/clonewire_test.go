@@ -1370,14 +1370,14 @@ func TestCheckSharedCloneHintModes(t *testing.T) {
 	}}
 	err := h.checkShared(config.Clone{Of: of, Dir: dir})
 	var ns *box.NotSharedError
-	if !errors.As(err, &ns) || ns.NeedWrite || !strings.HasSuffix(err.Error(), "`agent-box box share add ~/orig -ro`") {
+	if !errors.As(err, &ns) || ns.NeedWrite || !strings.HasSuffix(err.Error(), "`culibox box share add ~/orig -ro`") {
 		t.Errorf("clone_of: %v", err)
 	}
 	h.shares = func() (box.ShareView, error) {
 		return box.ShareView{Applied: []box.VMShare{{Path: of}}, Home: base}, nil
 	}
 	err = h.checkShared(config.Clone{Of: of, Dir: dir})
-	if !errors.As(err, &ns) || !ns.NeedWrite || !strings.HasSuffix(err.Error(), "`agent-box box share add ~/copies/c`") {
+	if !errors.As(err, &ns) || !ns.NeedWrite || !strings.HasSuffix(err.Error(), "`culibox box share add ~/copies/c`") {
 		t.Errorf("copy: %v", err)
 	}
 }

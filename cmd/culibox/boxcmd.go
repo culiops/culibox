@@ -20,12 +20,12 @@ func runBox(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io.W
 		return runBoxDarwin(a, cfg, home, cfgFiles, w)
 	}
 	if a.Sub == "share" {
-		fmt.Fprintln(w, "agent-box box share: only on macOS, where boxes run in agent-box's own VM")
+		fmt.Fprintln(w, "culibox box share: only on macOS, where boxes run in CuliBox's own VM")
 		return 1
 	}
 	bin, err := box.LookDocker(cfg.DockerBin)
 	if err != nil {
-		fmt.Fprintf(w, "agent-box box: %v\n", err)
+		fmt.Fprintf(w, "culibox box: %v\n", err)
 		return 1
 	}
 	ctx := context.Background()
@@ -46,7 +46,7 @@ func runBox(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io.W
 		rc := boxImageStatus(ctx, d, cfg.BoxImageOrDefault(), w)
 		return max(rc, boxListStatus(ctx, box.CLIClient{Bin: bin}, w))
 	default: // stop
-		fmt.Fprintln(w, "agent-box box stop: only on macOS, where boxes run in agent-box's own VM")
+		fmt.Fprintln(w, "culibox box stop: only on macOS, where boxes run in CuliBox's own VM")
 		return 1
 	}
 }
@@ -107,7 +107,7 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 	}
 	repo, err := boximage.Repo(image)
 	if err != nil {
-		fmt.Fprintln(w, "FAIL image: box_image is a digest; agent-box cannot build it")
+		fmt.Fprintln(w, "FAIL image: box_image is a digest; CuliBox cannot build it")
 		return 1
 	}
 	dated, err := d.NextDatedTag(ctx, repo, now, image)
@@ -144,7 +144,7 @@ func boxSetupRemote(ctx context.Context, d boximage.Docker, image, arch string, 
 		fmt.Fprintf(w, "WARN image: %s is a mutable tag; pin box_image by digest (ghcr.io/culiops/culibox@sha256:…)\n", image)
 	}
 	if rebuild {
-		fmt.Fprintf(w, "FAIL image: %s comes from a registry; agent-box pulls it and never builds it\n", image)
+		fmt.Fprintf(w, "FAIL image: %s comes from a registry; CuliBox pulls it and never builds it\n", image)
 		return 1
 	}
 	fatal, msg := st.CheckFor(image, arch)

@@ -211,7 +211,7 @@ func TestClientScriptAgainstBroker(t *testing.T) {
 		t.Fatalf("good token: %v %s", err, out)
 	}
 	_, stderr, err := run("AGENTBOX_BROKER=unix://"+sock, "AGENTBOX_BROKER_TOKEN=garbage")
-	if err == nil || stderr != "agentbox: not an agent-box session\n" {
+	if err == nil || stderr != "agentbox: not a CuliBox session\n" {
 		t.Fatalf("bad token: %v %q", err, stderr)
 	}
 	if strings.Contains(stderr, "garbage") {

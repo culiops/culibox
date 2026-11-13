@@ -61,9 +61,9 @@ func TestBoxTierRows(t *testing.T) {
 		{"status failed", func(f *boxFacts) { f.StatusErr = errors.New("colima status: boom") }, Fail, "boom"},
 		{"drift", func(f *boxFacts) { f.Drifted = true }, Warn, "-recreate"},
 		{"provision drift fails with the firewall reason", func(f *boxFacts) { f.Drifted = true; f.ProvisionDrifted = true }, Fail,
-			`differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run "agent-box box setup -recreate"`},
+			`differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run "culibox box setup -recreate"`},
 		{"stale VM firewall fails", func(f *boxFacts) {
-			f.FirewallErr = errors.New("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay; run `agent-box box setup -recreate`")
+			f.FirewallErr = errors.New("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay; run `culibox box setup -recreate`")
 		}, Fail, "FAIL box VM firewall: the box VM's firewall lets containers"},
 		{"unreadable VM firewall warns", func(f *boxFacts) {
 			f.FirewallReadErr = errors.New("reading the box VM's firewall rules: exit status 255")
@@ -101,7 +101,7 @@ func TestBoxTierRows(t *testing.T) {
 			f.ProbeErr = errors.New("containment check failed: the box can reach the Mac's loopback services")
 		}, Fail, "loopback"},
 		{"context switched", func(f *boxFacts) {
-			f.UserContext = errors.New("your docker CLI's current context is agent-box's box VM")
+			f.UserContext = errors.New("your docker CLI's current context is CuliBox's box VM")
 		}, Fail, "context"},
 		{"context unchecked", func(f *boxFacts) {
 			f.UserContext = fmt.Errorf("%w (docker context show: exit status 1)", boxvm.ErrContextUnchecked)
@@ -289,7 +289,7 @@ func TestGatherBoxFactsDarwinNeverStartsTheVM(t *testing.T) {
 // Review focus 4: whether the user's own docker context is still theirs does not
 // depend on the box VM, so the row appears on every darwin early return too.
 func TestBoxTierContextRowSurvivesEarlyReturns(t *testing.T) {
-	switched := errors.New("your docker CLI's current context is agent-box's box VM")
+	switched := errors.New("your docker CLI's current context is CuliBox's box VM")
 	for name, mod := range map[string]func(*boxFacts){
 		"no colima":       func(f *boxFacts) { f.ColimaErr = errors.New("colima not found") },
 		"old macOS":       func(f *boxFacts) { f.MacOSMajor = 12 },
@@ -366,7 +366,7 @@ func TestBoxTierFoldersUnreadableWarns(t *testing.T) {
 	f := ok()
 	f.FoldersErr = errors.New("bad yaml")
 	d := detail(boxTierResults("darwin", f, tokenOK))
-	if !strings.Contains(d, "WARN box VM folders: cannot read the box VM's folder list (bad yaml); run `agent-box box setup`") || strings.Contains(d, "PASS box VM folders") {
+	if !strings.Contains(d, "WARN box VM folders: cannot read the box VM's folder list (bad yaml); run `culibox box setup`") || strings.Contains(d, "PASS box VM folders") {
 		t.Fatalf("got:\n%s", d)
 	}
 }
@@ -448,7 +448,7 @@ func TestBoxTierFolderMismatchFails(t *testing.T) {
 	f := ok()
 	f.MountsRan, f.MountsErr = true, errors.New("missing /x")
 	d := detail(boxTierResults("darwin", f, tokenOK))
-	want := "FAIL box VM folders: the box VM's folders do not match its folder list (missing /x); run `agent-box box share apply`"
+	want := "FAIL box VM folders: the box VM's folders do not match its folder list (missing /x); run `culibox box share apply`"
 	if !strings.Contains(d, want) || strings.Contains(d, "PASS box VM folders") {
 		t.Fatalf("got:\n%s", d)
 	}

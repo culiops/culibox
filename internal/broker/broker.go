@@ -337,7 +337,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 	sid, nonce, ok := ParseToken(b.secret, tok)
 	if !hasBearer || !ok {
 		b.recordDenied(Row{Time: now, Outcome: OutcomeDeniedToken}) // the claimed id is unverified: never stored
-		replyErr(w, http.StatusUnauthorized, "not an agent-box session")
+		replyErr(w, http.StatusUnauthorized, "not a CuliBox session")
 		return
 	}
 	sv, found := b.lookup(sid)
@@ -469,7 +469,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 			b.mu.Lock()
 			b.eachStatsLocked(ck, func(st *Stats) { st.LastError = "the credential could not be audited, so it was not issued" })
 			b.mu.Unlock()
-			replyErr(w, http.StatusServiceUnavailable, "agent-box could not audit this credential, so it was not issued; retry shortly")
+			replyErr(w, http.StatusServiceUnavailable, "CuliBox could not audit this credential, so it was not issued; retry shortly")
 			return
 		}
 		b.mu.Lock()
@@ -518,7 +518,7 @@ func (b *Broker) noteSSOExpired(row Row, ck connKey, profile string, err error, 
 	b.ssoBad[key], b.ssoNeed[ck] = now, key
 	b.mu.Unlock()
 	boxMsg := fmt.Sprintf(
-		`SSO session for profile %q expired. agent-box has asked a human to sign in; retry after they do (or run "aws sso login --profile %s" on the host).`,
+		`SSO session for profile %q expired. CuliBox has asked a human to sign in; retry after they do (or run "aws sso login --profile %s" on the host).`,
 		profile, profile)
 	hostMsg := boxMsg
 	var me *MintError
@@ -635,7 +635,7 @@ func stsHint(code string) string {
 	case codeNotSSOProfile, codeNotSSOCredentials:
 		return "sso_direct needs an IAM Identity Center (SSO) source profile; fix the profile or the connection"
 	}
-	return "see the agent-box audit log on the host for details"
+	return "see the CuliBox audit log on the host for details"
 }
 
 // eachStatsLocked applies f to the session's aggregate stats and, for a named
@@ -760,7 +760,7 @@ func (b *Broker) recordDenied(r Row) {
 
 // storeLockedMsg is the one message a locked store produces, for the box and
 // for the audit row: it names no id and no path.
-const storeLockedMsg = "agent-box store is locked — ask the operator to unlock it"
+const storeLockedMsg = "CuliBox store is locked — ask the operator to unlock it"
 
 // maxUnavailableLen bounds the Keychain-failure message in the audit row (the
 // host side; the box gets boxUnavailableMsg).
@@ -772,11 +772,11 @@ const maxUnavailableLen = 1024
 func boxUnavailableMsg(k secretstore.UnavailableKind) string {
 	switch k {
 	case secretstore.KindAccess:
-		return "the agent-box store key could not be read from the macOS Keychain on the host; ask the operator to unlock the login keychain or allow agent-box, then retry"
+		return "the CuliBox store key could not be read from the macOS Keychain on the host; ask the operator to unlock the login keychain or allow CuliBox, then retry"
 	case secretstore.KindKeyLost:
-		return "the agent-box store key on the host is lost, so this token cannot be read; ask the operator (agent-box doctor on the host explains the fix)"
+		return "the CuliBox store key on the host is lost, so this token cannot be read; ask the operator (culibox doctor on the host explains the fix)"
 	}
-	return "agent-box cannot read its store on the host; ask the operator (agent-box doctor on the host explains the fix)"
+	return "CuliBox cannot read its store on the host; ask the operator (culibox doctor on the host explains the fix)"
 }
 
 // StoreLockedFor reports whether session sid's last read of the encrypted store

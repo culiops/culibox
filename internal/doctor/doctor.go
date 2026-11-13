@@ -155,7 +155,7 @@ func isPathChar(c byte) bool {
 }
 
 func Checks(in Input) []Result {
-	out := []Result{{Pass, "platform", fmt.Sprintf("%s/%s, %s, agent-box %s",
+	out := []Result{{Pass, "platform", fmt.Sprintf("%s/%s, %s, culibox %s",
 		runtime.GOOS, runtime.GOARCH, runtime.Version(), in.Commit)}}
 	if in.Home == "" {
 		// serve refuses this too; every path below would be built from it.
@@ -312,7 +312,7 @@ func checkPort(c config.Config) Result {
 	conn, err := net.DialTimeout("tcp", c.BindAddr, 300*time.Millisecond)
 	if err == nil {
 		conn.Close()
-		return Result{Warn, "port", c.BindAddr + " is in use (an agent-box may already be running)"}
+		return Result{Warn, "port", c.BindAddr + " is in use (a CuliBox may already be running)"}
 	}
 	return Result{Pass, "port", c.BindAddr + " is free"}
 }
@@ -534,7 +534,7 @@ func checkClaudeRegistry(home string) []Result {
 		if !match {
 			st = Warn
 		}
-		out = append(out, Result{st, "claude registry", fmt.Sprintf("pid %d: claude=%s agent-box=%s match=%v", e.Pid, theirs, ours, match)})
+		out = append(out, Result{st, "claude registry", fmt.Sprintf("pid %d: claude=%s culibox=%s match=%v", e.Pid, theirs, ours, match)})
 	}
 	if len(out) == 0 {
 		return []Result{{Warn, "claude registry", "no running Claude Code session to compare; start `claude` in another terminal and rerun"}}

@@ -107,13 +107,13 @@ func TestHintWithRootNamesExportCommand(t *testing.T) {
 		`"extra_ca_certs"`,
 		"releases.hashicorp.com:443",
 		"CN=Corp Root,O=Corp",
-		`macOS export: security find-certificate -c "Corp Root" -p > ~/agent-box-ca.pem`,
+		`macOS export: security find-certificate -c "Corp Root" -p > ~/culibox-ca.pem`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
 	}
-	if !strings.Contains(out, "`agent-box box setup -recreate`") {
+	if !strings.Contains(out, "`culibox box setup -recreate`") {
 		t.Errorf("darwin wants -recreate:\n%s", out)
 	}
 	if strings.Contains(out, "did not cover") {
@@ -125,7 +125,7 @@ func TestHintLinuxBuildNamesRebuildAndNoMacExport(t *testing.T) {
 	var w bytes.Buffer
 	printInterceptionHint(context.Background(), &w, curl60Host, false, "linux", false, fakeRoot("CN=R", "R", nil))
 	out := w.String()
-	if !strings.Contains(out, "`agent-box box setup -rebuild`") || strings.Contains(out, "-recreate") {
+	if !strings.Contains(out, "`culibox box setup -rebuild`") || strings.Contains(out, "-recreate") {
 		t.Errorf("linux build wants -rebuild only:\n%s", out)
 	}
 	if !strings.Contains(out, "CN=R") || strings.Contains(out, "security find-certificate") {
@@ -202,7 +202,7 @@ func TestHintDarwinWordingNamesRecreate(t *testing.T) {
 		var w bytes.Buffer
 		printInterceptionHint(context.Background(), &w, curl60Host, false, "darwin", pull, fakeRoot("CN=R", "R", nil))
 		out := w.String()
-		if !strings.Contains(out, "`agent-box box setup -recreate`") || strings.Contains(out, "-rebuild") {
+		if !strings.Contains(out, "`culibox box setup -recreate`") || strings.Contains(out, "-rebuild") {
 			t.Errorf("darwin (pull=%v) wants -recreate only:\n%s", pull, out)
 		}
 		if !strings.Contains(out, `"extra_ca_certs"`) || !strings.Contains(out, "security find-certificate") {
@@ -250,7 +250,7 @@ func TestPullFailureHintPerPlatform(t *testing.T) {
 	}{
 		{"linux", []string{"HINT:", "ghcr.io:443", "host's docker daemon", "update-ca-certificates"},
 			[]string{"extra_ca_certs", "-rebuild", "-recreate", "did not cover"}},
-		{"darwin", []string{"HINT:", "ghcr.io:443", `"extra_ca_certs"`, "`agent-box box setup -recreate`", "configured CAs did not cover this chain"},
+		{"darwin", []string{"HINT:", "ghcr.io:443", `"extra_ca_certs"`, "`culibox box setup -recreate`", "configured CAs did not cover this chain"},
 			[]string{"-rebuild", "update-ca-certificates"}},
 	} {
 		var w bytes.Buffer

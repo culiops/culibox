@@ -144,7 +144,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	force := fs.Bool("force", false, "box stop, box setup, box share apply: go ahead even with boxes running or the VM state unknown")
 	ro := fs.Bool("ro", false, "box share add: share the folder read-only")
 	base := fs.String("base", "", "clone fetch: the branch in clone_of the fetched range starts after (default main)")
-	allowOld := fs.Bool("allow-old-history", false, "clone fetch: fetch a branch whose history agent-box cannot verify, or that carries history host main rewrote away (printed as a warning)")
+	allowOld := fs.Bool("allow-old-history", false, "clone fetch: fetch a branch whose history CuliBox cannot verify, or that carries history host main rewrote away (printed as a warning)")
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
 	}

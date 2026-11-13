@@ -143,7 +143,7 @@ func YAMLSafe(p string) error {
 		}
 	}
 	if bad {
-		return fmt.Errorf("path %q contains a character agent-box will not write into the VM config", p)
+		return fmt.Errorf("path %q contains a character CuliBox will not write into the VM config", p)
 	}
 	return nil
 }

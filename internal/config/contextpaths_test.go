@@ -52,8 +52,8 @@ func TestValidateContextPaths(t *testing.T) {
 		{"gh config dir", AgentConfig{ContextPaths: []string{"/tmp/agentbox-gh"}}, "refused: it would shadow /tmp/agentbox-gh"},
 		{"inside gh config dir", AgentConfig{ContextPaths: []string{"/tmp/agentbox-gh/hosts.yml"}}, "refused: it would shadow /tmp/agentbox-gh"},
 		{"gh look-alike is fine", AgentConfig{ContextPaths: []string{"/tmp/agentbox-ghx"}}, ""},
-		{"session pid file", AgentConfig{ContextPaths: []string{"/tmp/ac-session-abc.pid"}}, "agent-box's own files"},
-		{"under ac-session dir", AgentConfig{ContextPaths: []string{"/tmp/ac-session-x/docs"}}, "agent-box's own files"},
+		{"session pid file", AgentConfig{ContextPaths: []string{"/tmp/ac-session-abc.pid"}}, "CuliBox's own files"},
+		{"under ac-session dir", AgentConfig{ContextPaths: []string{"/tmp/ac-session-x/docs"}}, "CuliBox's own files"},
 		{"ac-session deeper is fine", AgentConfig{ContextPaths: []string{"/tmp/proj/ac-session-x"}}, ""},
 	}
 	for _, tc := range cases {

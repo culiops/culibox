@@ -128,7 +128,7 @@ func TestStaticDeniedScopeNoResolve(t *testing.T) {
 
 func TestStaticUnresolvedNoContents(t *testing.T) {
 	b, fr, rec, _ := staticSetup(t, map[string]SessionView{"claude-3": staticSession(grafanaEntry())})
-	msg := `env var "GRAFANA_SA_TOKEN" is not set in the agent-box daemon's environment`
+	msg := `env var "GRAFANA_SA_TOKEN" is not set in the CuliBox daemon's environment`
 	fr.err = errors.New(msg)
 	w := staticCall(b, tokA("claude-3"), grafanaBody)
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "GRAFANA_SA_TOKEN") ||
@@ -276,7 +276,7 @@ func TestStaticValueNeverLogged(t *testing.T) {
 	rec.recErr = errors.New("disk full")
 	staticCall(b, tok, grafanaBody) // audit failure
 	rec.recErr = nil
-	fr.err = errors.New(`env var "GRAFANA_SA_TOKEN" is not set in the agent-box daemon's environment`)
+	fr.err = errors.New(`env var "GRAFANA_SA_TOKEN" is not set in the CuliBox daemon's environment`)
 	staticCall(b, tok, grafanaBody) // unresolved
 	if buf.Len() == 0 {
 		t.Fatal("expected the audit failure to be logged")
@@ -291,7 +291,7 @@ func TestStaticValueNeverLogged(t *testing.T) {
 	}
 }
 
-const wantStoreLockedMsg = "agent-box store is locked — ask the operator to unlock it"
+const wantStoreLockedMsg = "CuliBox store is locked — ask the operator to unlock it"
 
 // A locked store is a fixed message to the box and a store_locked row, with the
 // reference's own error text kept out of both. The flag is per session and the

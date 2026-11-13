@@ -49,7 +49,7 @@ func TestBoxOwned(t *testing.T) {
 			if owned != tc.owned {
 				t.Fatalf("BoxOwned(%q) = %v (%q), want %v", tc.cwd, owned, msg, tc.owned)
 			}
-			if owned && (!strings.Contains(msg, tc.cwd) || !strings.Contains(msg, "host tools must never run there (use agent-box clone fetch)")) {
+			if owned && (!strings.Contains(msg, tc.cwd) || !strings.Contains(msg, "host tools must never run there (use culibox clone fetch)")) {
 				t.Errorf("message %q does not name the cwd and the remedy", msg)
 			}
 		})

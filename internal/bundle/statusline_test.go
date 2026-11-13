@@ -99,7 +99,7 @@ func TestBundleWritesDelegate(t *testing.T) {
 			drop = &b.Lock.Dropped[i]
 		}
 	}
-	if drop == nil || drop.Reason != "replaced: the box runs agent-box's statusLine, which calls yours if it works in the box" {
+	if drop == nil || drop.Reason != "replaced: the box runs CuliBox's statusLine, which calls yours if it works in the box" {
 		t.Fatalf("drop = %+v", drop)
 	}
 }

@@ -25,5 +25,5 @@ func boxUnavailableReason(err error) string {
 	case errors.Is(err, boxvm.ErrColimaNotFound):
 		return "colima is not installed"
 	}
-	return "run `agent-box doctor` for details"
+	return "run `culibox doctor` for details"
 }

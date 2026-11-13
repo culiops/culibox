@@ -1041,8 +1041,8 @@ func TestBringHomeEndpoint(t *testing.T) {
 // like ErrUnboxableWorkspace, instead of the generic message.
 func TestSpawnErrShowsBoxUnavailableMessage(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeSpawnErr(rec, "claude", fmt.Errorf("%w: run agent-box box setup", box.ErrBoxUnavailable))
-	if !strings.Contains(rec.Body.String(), "agent-box box setup") {
+	writeSpawnErr(rec, "claude", fmt.Errorf("%w: run culibox box setup", box.ErrBoxUnavailable))
+	if !strings.Contains(rec.Body.String(), "culibox box setup") {
 		t.Fatalf("the remedy must reach the user: %s", rec.Body.String())
 	}
 }

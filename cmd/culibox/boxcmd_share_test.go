@@ -55,7 +55,7 @@ func TestBoxShareListAddRmAreSavedNotApplied(t *testing.T) {
 		t.Fatalf("list = %d:\n%s", rc, out)
 	}
 	rc, out = runVM(t, l, cliArgs{Cmd: "box", Sub: "share", ShareAction: "add", SharePath: dir, ReadOnly: true})
-	if rc != 0 || !strings.Contains(out, "ro  "+dir) || !strings.Contains(out, "not applied yet: run `agent-box box share apply` (restarts the box VM)") {
+	if rc != 0 || !strings.Contains(out, "ro  "+dir) || !strings.Contains(out, "not applied yet: run `culibox box share apply` (restarts the box VM)") {
 		t.Fatalf("add = %d:\n%s", rc, out)
 	}
 	list, _, err := vmshares.Load(l.dataDir)
@@ -67,7 +67,7 @@ func TestBoxShareListAddRmAreSavedNotApplied(t *testing.T) {
 		t.Fatalf("covered add = %d:\n%s", rc, out)
 	}
 	rc, out = runVM(t, l, shareArgs("list", ""))
-	if rc != 0 || !strings.Contains(out, "changes not applied yet: run agent-box box share apply") {
+	if rc != 0 || !strings.Contains(out, "changes not applied yet: run culibox box share apply") {
 		t.Fatalf("list after add = %d:\n%s", rc, out)
 	}
 	rc, out = runVM(t, l, shareArgs("rm", dir))
@@ -188,7 +188,7 @@ func TestBoxShareOnLinux(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	rc := runBox(shareArgs("list", ""), config.Config{}, t.TempDir(), nil, &buf)
-	if rc != 1 || !strings.Contains(buf.String(), "agent-box box share: only on macOS, where boxes run in agent-box's own VM") {
+	if rc != 1 || !strings.Contains(buf.String(), "culibox box share: only on macOS, where boxes run in CuliBox's own VM") {
 		t.Fatalf("share on Linux = %d:\n%s", rc, buf.String())
 	}
 }
@@ -270,7 +270,7 @@ func TestBoxShareAddRefusesCuliBoxConfigDir(t *testing.T) {
 	cfgDir := otherDir(t)
 	l.protected = []box.ProtectedDir{box.ConfigDirProtected(cfgDir)}
 	rc, out := runVM(t, l, shareArgs("add", cfgDir))
-	if rc != 1 || !strings.Contains(out, "holds CuliBox's own agent-box's config directory, so it can never be shared with the box VM.") {
+	if rc != 1 || !strings.Contains(out, "holds CuliBox's own CuliBox's config directory, so it can never be shared with the box VM.") {
 		t.Fatalf("add config dir = %d:\n%s", rc, out)
 	}
 	if list, _, _ := vmshares.Load(l.dataDir); len(list) != 0 || fc.called("stop") {
@@ -293,7 +293,7 @@ func TestBoxShareApplyRefusedWhileAnotherProcessApplies(t *testing.T) {
 	a := shareArgs("apply", "")
 	a.Force = true
 	rc, out := runVM(t, l, a)
-	if rc != 1 || !strings.Contains(out, "refusing: another agent-box is applying the box VM's folder list; try again when it finishes") {
+	if rc != 1 || !strings.Contains(out, "refusing: another CuliBox is applying the box VM's folder list; try again when it finishes") {
 		t.Fatalf("apply under another's lock = %d:\n%s", rc, out)
 	}
 	if fc.called("stop") || fc.called("start") {
@@ -314,7 +314,7 @@ func TestBoxShareApplyInterruptHintNamesForce(t *testing.T) {
 	if rc := applyShares(ctx, true, s, nil, &out); rc != 1 {
 		t.Fatalf("rc = %d:\n%s", rc, out.String())
 	}
-	if !strings.Contains(out.String(), "run `agent-box box share apply -force` to finish") {
+	if !strings.Contains(out.String(), "run `culibox box share apply -force` to finish") {
 		t.Fatalf("output:\n%s", out.String())
 	}
 }

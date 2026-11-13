@@ -105,7 +105,7 @@ func TestProtectedOverlapResolvedDoesNotFollowALink(t *testing.T) {
 		t.Fatal(err)
 	}
 	dirs := []ProtectedDir{DataDirProtected(state)}
-	if r := ProtectedOverlap(link, dirs); !strings.Contains(r, "inside agent-box's data directory") && !strings.Contains(r, "it is agent-box's data directory") {
+	if r := ProtectedOverlap(link, dirs); !strings.Contains(r, "inside CuliBox's data directory") && !strings.Contains(r, "it is CuliBox's data directory") {
 		t.Fatalf("ProtectedOverlap(link) = %q, want a refusal: it resolves the link", r)
 	}
 	if r := protectedOverlapResolved(link, dirs); r != "" {

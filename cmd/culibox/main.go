@@ -64,7 +64,7 @@ var uidemoVMFolders func(home string) web.VMFolders
 func main() {
 	args, err := parseArgs(os.Args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-box: %v\n%s", err, usage)
+		fmt.Fprintf(os.Stderr, "culibox: %v\n%s", err, usage)
 		os.Exit(2)
 	}
 	if args.Cmd == "version" {
@@ -669,7 +669,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, shutdownSignalsFor(signal.Ignored)...)
 	if signal.Ignored(syscall.SIGHUP) {
-		log.Printf("SIGHUP is ignored (nohup): closing the terminal will not stop agent-box")
+		log.Printf("SIGHUP is ignored (nohup): closing the terminal will not stop culibox")
 	}
 
 	// The audit databases are the other record of which ids were issued: floor
@@ -1040,20 +1040,20 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		},
 	}, log.Printf)
 
-	log.Printf("agent-box listening on %s (allowed hosts: %s)", cfg.BindAddr, strings.Join(cfg.HostAllowlist(), ", "))
+	log.Printf("culibox listening on %s (allowed hosts: %s)", cfg.BindAddr, strings.Join(cfg.HostAllowlist(), ", "))
 	if login.Mode == auth.ModeToken {
 		// The only place the token is ever printed.
 		url, hint := loginURLFor(cfg, login.Secret)
 		if hint != "" {
 			hint = "\n           (" + hint + ")"
 		}
-		fmt.Fprintf(os.Stderr, "\nagent-box: open %s%s\n           (token stored in %s)\n\n",
+		fmt.Fprintf(os.Stderr, "\nculibox: open %s%s\n           (token stored in %s)\n\n",
 			url, hint, login.TokenPath)
 	}
 	if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
-	log.Printf("agent-box stopped")
+	log.Printf("culibox stopped")
 }
 
 // configureServer sets the web server fields that come straight from config.

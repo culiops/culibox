@@ -159,7 +159,7 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	}
 	if s.ln != nil {
 		if n.Gateway != s.ep.Net.Gateway || n.Subnet != s.ep.Net.Subnet {
-			return Endpoint{}, fmt.Errorf("egress network %s changed from %s (%s) to %s (%s) while the proxy was listening; restart agent-box",
+			return Endpoint{}, fmt.Errorf("egress network %s changed from %s (%s) to %s (%s) while the proxy was listening; restart culibox",
 				n.Name, s.ep.Net.Gateway, s.ep.Net.Subnet, n.Gateway, n.Subnet)
 		}
 		return s.ep, nil

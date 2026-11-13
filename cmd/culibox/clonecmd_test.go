@@ -107,7 +107,7 @@ func runCloneArgs(e *cloneEnv, profile, branch, base string) (int, string) {
 func TestRunCloneUnknownProfile(t *testing.T) {
 	e := newCloneEnv(t, nil, nil)
 	rc, out := runCloneArgs(e, "nope", "b", "main")
-	if rc != 1 || out != "agent-box clone: unknown profile \"nope\"\n" {
+	if rc != 1 || out != "culibox clone: unknown profile \"nope\"\n" {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 }
@@ -115,7 +115,7 @@ func TestRunCloneUnknownProfile(t *testing.T) {
 func TestRunCloneNoCloneOf(t *testing.T) {
 	e := newCloneEnv(t, nil, []config.AgentConfig{{Name: "plain", Bin: "claude"}})
 	rc, out := runCloneArgs(e, "plain", "b", "main")
-	if rc != 1 || out != "agent-box clone: profile \"plain\" has no clone_of\n" {
+	if rc != 1 || out != "culibox clone: profile \"plain\" has no clone_of\n" {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 	if e.req.Branch != "" {
@@ -126,7 +126,7 @@ func TestRunCloneNoCloneOf(t *testing.T) {
 func TestRunCloneInvalidProfile(t *testing.T) {
 	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("rel", "relative/path", "/c/d")})
 	rc, out := runCloneArgs(e, "rel", "b", "main")
-	if rc != 1 || !strings.HasPrefix(out, "agent-box clone: ") || !strings.Contains(out, "clone_of") {
+	if rc != 1 || !strings.HasPrefix(out, "culibox clone: ") || !strings.Contains(out, "clone_of") {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 }
@@ -203,7 +203,7 @@ func TestRunCloneFetchError(t *testing.T) {
 	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
 	e.err = errors.New("nothing to fetch")
 	rc, out := runCloneArgs(e, "p", "b", "main")
-	if rc != 1 || out != "agent-box clone: nothing to fetch\n" {
+	if rc != 1 || out != "culibox clone: nothing to fetch\n" {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 }
@@ -214,7 +214,7 @@ func TestRunCloneBackendError(t *testing.T) {
 		return nil, nil, errors.New("git not found")
 	}
 	rc, out := runCloneArgs(e, "p", "b", "main")
-	if rc != 1 || out != "agent-box clone: git not found\n" {
+	if rc != 1 || out != "culibox clone: git not found\n" {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 }
@@ -276,7 +276,7 @@ func TestCloneDockerRefusesAStoppedVM(t *testing.T) {
 	d := newFakeDocker(t)
 	fc := &fakeColima{}
 	_, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, "darwin", root, root, fc, nil)
-	if err == nil || !strings.Contains(err.Error(), "box VM is not running") || !strings.Contains(err.Error(), "agent-box box setup") {
+	if err == nil || !strings.Contains(err.Error(), "box VM is not running") || !strings.Contains(err.Error(), "culibox box setup") {
 		t.Fatalf("err = %v; want the stopped-VM refusal", err)
 	}
 	if fc.called("start") {
@@ -306,7 +306,7 @@ func TestRunCloneUnreadableStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	rc, out := runCloneArgs(e, "p", "b", "main")
-	if rc != 1 || !strings.HasPrefix(out, "agent-box clone: ") {
+	if rc != 1 || !strings.HasPrefix(out, "culibox clone: ") {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 	// Read-only: a corrupt store is reported, never quarantined or rewritten.

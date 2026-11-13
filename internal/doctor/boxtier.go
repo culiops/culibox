@@ -82,7 +82,7 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 			": the Claude token is in the store, but " + unavailable.Error()}
 	case len(locked) > 0:
 		return Result{Warn, check, "agent(s) " + strings.Join(locked, ", ") +
-			`: the Claude token is in the store, which is locked — unlock it ("agent-box store unlock")`}
+			`: the Claude token is in the store, which is locked — unlock it ("culibox store unlock")`}
 	case len(missing) > 0:
 		return Result{Warn, check, "agent(s) " + strings.Join(missing, ", ") +
 			" have no CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY secret that resolves; a boxed claude will ask to /login. " +
@@ -194,7 +194,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	case f.SocketErr != nil:
 		return []Result{{Fail, ck, f.SocketErr.Error()}, userCtx}
 	case !f.SetUp:
-		return []Result{{Warn, ck, "box VM not set up; run `agent-box box setup`"}, userCtx, token}
+		return []Result{{Warn, ck, "box VM not set up; run `culibox box setup`"}, userCtx, token}
 	case f.StatusErr != nil:
 		return []Result{{Fail, ck, "box VM status: " + f.StatusErr.Error()}, userCtx}
 	}
@@ -205,9 +205,9 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		// The folder list alone changed: "box VM folders" below says how to apply
 		// it, and a recreate is not needed.
 	} else if f.Drifted && f.ProvisionDrifted {
-		out = append(out, Result{Fail, "box VM config", "its firewall rules differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run \"agent-box box setup -recreate\" (every boxed spawn is refused until then)"})
+		out = append(out, Result{Fail, "box VM config", "its firewall rules differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run \"culibox box setup -recreate\" (every boxed spawn is refused until then)"})
 	} else if f.Drifted {
-		out = append(out, Result{Warn, "box VM config", "changed since setup (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate`"})
+		out = append(out, Result{Warn, "box VM config", "changed since setup (VM size, mounts, extra_ca_certs or the provision script); run `culibox box setup -recreate`"})
 	}
 	out = append(out, userCtx)
 	out = append(out, folderRows(f)...)
@@ -217,7 +217,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	}
 	out = append(out, Result{Pass, ck, fmt.Sprintf("box VM running (%s, %s)", f.Status.Driver, f.Status.MountType)})
 	if f.Status.MountType != "virtiofs" {
-		out = append(out, Result{Warn, "box VM mounts", f.Status.MountType + " is about 3.5x slower than virtiofs; run `agent-box box setup -recreate`"})
+		out = append(out, Result{Warn, "box VM mounts", f.Status.MountType + " is about 3.5x slower than virtiofs; run `culibox box setup -recreate`"})
 	}
 	if f.ImageErr == nil && !f.Image.Present && f.LegacyName != "" && f.Legacy.Present {
 		// An upgraded install: the next serve (or box setup) tags the old default
@@ -271,19 +271,19 @@ func folderRows(f boxFacts) []Result {
 	switch {
 	case f.MountsRan && f.MountsErr != nil:
 		// Every boxed spawn is refused until this is fixed: it outranks the rest.
-		out = append(out, Result{Fail, ck, "the box VM's folders do not match its folder list (" + f.MountsErr.Error() + "); run `agent-box box share apply`"})
+		out = append(out, Result{Fail, ck, "the box VM's folders do not match its folder list (" + f.MountsErr.Error() + "); run `culibox box share apply`"})
 	case f.WholeHome && f.SharesErr != nil:
 		// Applying would drop the user's folders, so no apply advice.
 		out = append(out, Result{Warn, ck, "the box VM shares your whole home folder; fix vm-shares.json before applying a folder list"})
 	case f.WholeHome:
 		out = append(out, Result{Warn, ck, vmshares.WholeHomeLine(f.ShareCount)})
 	case f.FoldersErr != nil:
-		out = append(out, Result{Warn, ck, "cannot read the box VM's folder list (" + f.FoldersErr.Error() + "); run `agent-box box setup`"})
+		out = append(out, Result{Warn, ck, "cannot read the box VM's folder list (" + f.FoldersErr.Error() + "); run `culibox box setup`"})
 	case f.SharesErr != nil:
 		// No row here: the list row below carries the warning, and "0 folders"
 		// or apply advice would be wrong for a list we cannot read.
 	case f.Drift == boxvm.DriftMountsOnly:
-		out = append(out, Result{Warn, ck, "the folder list changed since the box VM started; apply it in Settings › VM folders (or `agent-box box share apply`)"})
+		out = append(out, Result{Warn, ck, "the folder list changed since the box VM started; apply it in Settings › VM folders (or `culibox box share apply`)"})
 	default:
 		out = append(out, Result{Pass, ck, fmt.Sprintf("the box VM sees %d folders and CuliBox data", f.ShareCount)})
 	}
@@ -491,7 +491,7 @@ func guardLockRows(goos string, f boxFacts) []Result {
 				paths = append(paths, shPath(f.Home, filepath.Join(g.ws, n)))
 			}
 			out = append(out, Result{Warn, ck, g.ws + ": " + files + " still locked, but no box holding the lock runs; " +
-				"agent-box lifts it when it next starts (or the box VM does), or unlock it now: chflags nouchg " + strings.Join(paths, " ")})
+				"CuliBox lifts it when it next starts (or the box VM does), or unlock it now: chflags nouchg " + strings.Join(paths, " ")})
 		}
 	}
 	sort.Strings(notOursWS)

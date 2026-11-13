@@ -315,7 +315,7 @@ func TestPrepareVerifiesMountsAfterStart(t *testing.T) {
 	l, fc, _ := darwinLayer(t, false)
 	fc.mounts = "" // /proc/self/mounts lists nothing: every mount is missing
 	err := l.prepare(context.Background())
-	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "folders do not match its folder list") || !strings.Contains(err.Error(), "agent-box doctor") {
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "folders do not match its folder list") || !strings.Contains(err.Error(), "culibox doctor") {
 		t.Fatalf("%v", err)
 	}
 	if l.foldersVerified() {
@@ -389,7 +389,7 @@ func TestPrepareMissingYAMLAfterStartIsRefused(t *testing.T) {
 }
 
 func TestWholeHomeLine(t *testing.T) {
-	want := "the box VM shares your whole home folder; apply the folder list in Settings › VM folders (or `agent-box box share apply`) so it sees only 3 folders"
+	want := "the box VM shares your whole home folder; apply the folder list in Settings › VM folders (or `culibox box share apply`) so it sees only 3 folders"
 	if got := vmshares.WholeHomeLine(3); got != want {
 		t.Fatalf("%q", got)
 	}
@@ -504,7 +504,7 @@ func TestSvcApplyRefusedWhileAnotherProcessApplies(t *testing.T) {
 	s := f.svc(t)
 	f.ctl.lockHeld = true
 	_, err := s.Apply()
-	if !errors.Is(err, web.ErrApplyRunning) || err.Error() != "another agent-box is applying the box VM's folder list; try again when it finishes" {
+	if !errors.Is(err, web.ErrApplyRunning) || err.Error() != "another CuliBox is applying the box VM's folder list; try again when it finishes" {
 		t.Fatalf("Apply = %v", err)
 	}
 	if j, ok := s.lastJob(); ok {

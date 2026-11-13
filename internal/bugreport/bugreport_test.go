@@ -24,7 +24,7 @@ func TestMarkdownSectionsInOrder(t *testing.T) {
 	in.LogHint = "LOGHINT-XYZ"
 	md := Markdown(in)
 	want := []string{
-		"agent-box bug report v1", "## What happened", WhatHappenedMarker,
+		"culibox bug report v1", "## What happened", WhatHappenedMarker,
 		"## Steps to reproduce", "## Expected vs actual", "## Doctor",
 		"## Config summary", "## For the agent fixing this",
 		"Security problems: do NOT file a public issue — report privately to the maintainer.",
@@ -94,7 +94,7 @@ func TestConfigSummaryIsAllowlist(t *testing.T) {
 func TestDoctorLinesRedacted(t *testing.T) {
 	in := baseInput()
 	in.Doctor = []doctor.Result{{Status: doctor.Warn, Check: "store", Detail: "/Users/alice/.local/share on mbp-alice"}}
-	in.DoctorNote = "doctor timed out after 30s; run `agent-box bug-report` in a terminal"
+	in.DoctorNote = "doctor timed out after 30s; run `culibox bug-report` in a terminal"
 	md := Markdown(in)
 	if !strings.Contains(md, "~/.local/share on <host>") {
 		t.Errorf("detail not redacted:\n%s", md)
@@ -152,7 +152,7 @@ func TestIssueURL(t *testing.T) {
 		t.Errorf("title/labels = %q / %q", q.Get("title"), q.Get("labels"))
 	}
 	body := q.Get("body")
-	for _, w := range []string{"agent-box bug report v1", "FAIL abduco", "WARN port", "full report: paste below", "broken at ~"} {
+	for _, w := range []string{"culibox bug report v1", "FAIL abduco", "WARN port", "full report: paste below", "broken at ~"} {
 		if !strings.Contains(body, w) {
 			t.Errorf("body missing %q:\n%s", w, body)
 		}

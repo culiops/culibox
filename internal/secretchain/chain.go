@@ -61,7 +61,7 @@ func New(sources []config.SecretSource, st credref.StoreGetter) (*Chain, error) 
 	for _, s := range sources {
 		if s.Type == "store" {
 			if st == nil {
-				return nil, errors.New("secretchain: a store secret_source needs the agent-box store")
+				return nil, errors.New("secretchain: a store secret_source needs the CuliBox store")
 			}
 			c.steps = append(c.steps, step{store: st})
 			continue
