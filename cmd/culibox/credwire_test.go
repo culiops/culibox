@@ -183,3 +183,56 @@ func TestValidateBootStillFailsGenuineErrors(t *testing.T) {
 		t.Fatal("invalid runtime accepted")
 	}
 }
+
+// An unknown top-level key or an undecodable entry leaves the rest of the file
+// loaded, so an unrelated name is not "skipped"; a wrong-typed kind or an
+// unparsable file lost web entries, so any name could be one. Either way the
+// summary says the file cannot be saved over.
+func TestSkippedAndSummaryForFilesNotFullyUnderstood(t *testing.T) {
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	typo := `{"name":"typo","value":{"type":"store","id":"typo"},"env":["A_TOKEN"],"egres":[]}`
+	for _, tc := range []struct {
+		name, body string
+		wantBad    bool
+	}{
+		{"unknown key", `{"gcp_connections":[{}]}`, false},
+		{"undecodable entry", `{"static_tokens":[` + typo + `]}`, false},
+		{"wrong-typed kind", `{"static_tokens":{}}`, true},
+		{"unparsable", `{not json`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(credfile.Path(dir), []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, st := mergeCredentials(config.Config{DataDir: dir}, t.TempDir())
+			if st.Bad != tc.wantBad {
+				t.Errorf("Bad = %v, want %v", st.Bad, tc.wantBad)
+			}
+			if got := st.skipped(credfile.KindToken, "unrelated"); got != tc.wantBad {
+				t.Errorf("skipped(unrelated) = %v, want %v", got, tc.wantBad)
+			}
+			if st.File.CanSave() == nil {
+				t.Fatal("CanSave = nil, want a refusal")
+			}
+			if !strings.Contains(st.summary(), "has content this CuliBox cannot read") {
+				t.Errorf("summary = %q", st.summary())
+			}
+		})
+	}
+	// An undecodable entry still excuses its own name.
+	dir := t.TempDir()
+	_ = os.WriteFile(credfile.Path(dir), []byte(`{"static_tokens":[`+typo+`]}`), 0o600)
+	_, st := mergeCredentials(config.Config{DataDir: dir}, t.TempDir())
+	if !st.skipped(credfile.KindToken, "typo") {
+		t.Error("the undecodable entry's own name is not skipped")
+	}
+	// A clean file says nothing about it.
+	dir = t.TempDir()
+	_ = credfile.Save(dir, credfile.File{StaticTokens: []config.StaticToken{{Name: "BAD NAME"}}})
+	_, st = mergeCredentials(config.Config{DataDir: dir}, t.TempDir())
+	if strings.Contains(st.summary(), "cannot read") {
+		t.Errorf("summary = %q", st.summary())
+	}
+}

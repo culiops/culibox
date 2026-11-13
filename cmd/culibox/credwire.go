@@ -6,6 +6,7 @@ import (
 
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credfile"
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 // credState is what loading the web-defined credentials file left behind: where
@@ -14,10 +15,13 @@ import (
 type credState struct {
 	Src  credfile.Sources
 	Errs []credfile.EntryError
-	Bad  bool
+	// Bad: the whole file, or a known kind in it, was lost, so any name could
+	// have been a web entry. An unknown key or an undecodable entry is not Bad:
+	// the rest loaded, and File.CanSave still errs.
+	Bad bool
 	// LoadErr is the file-level problem when Bad is set.
 	LoadErr error
-	// File is what credfile.Load returned (empty when the file is missing or
+	// File is what credfile.Load returned (only NotUnderstood when the file is
 	// unreadable): the credentials screen's manager starts from it.
 	File credfile.File
 }
@@ -45,6 +49,9 @@ func mergeCredentials(cfg config.Config, home string) (config.Config, credState)
 	if err != nil {
 		log.Printf("credentials: %v", err)
 	}
+	if cerr := f.CanSave(); cerr != nil {
+		log.Printf("credentials: %v; the Credentials screen will not save until the file is fixed and CuliBox restarted; %s", cerr, datacompat.Hint)
+	}
 	merged, src, errs := credfile.Merge(cfg, f)
 	for _, e := range errs {
 		log.Printf("credentials: skipped %s %q: %s", e.Kind, e.Name, e.Err)
@@ -69,6 +76,9 @@ func (s credState) summary() string {
 		s.count(credfile.SourceConfig), s.count(credfile.SourceWeb), len(s.Errs))
 	if s.Bad {
 		line += "; credentials.json is unreadable and was ignored"
+	}
+	if s.File.CanSave() != nil {
+		line += "; credentials.json has content this CuliBox cannot read"
 	}
 	return line
 }
@@ -96,7 +106,8 @@ func (s credState) validateBoot(cfg config.Config) (warnings []string, err error
 }
 
 // skipped reports whether a web entry of that kind and name was left out at
-// load. An unreadable file lost every web entry, so any name could be one.
+// load. An unreadable file, or a known kind of the wrong type, lost web entries,
+// so any name could be one. An unknown top-level key lost none.
 func (s credState) skipped(kind, name string) bool {
 	if s.Bad {
 		return true

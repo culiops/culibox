@@ -42,7 +42,7 @@ const GH_APP_HELP = [
   "Generate a private key (.pem) and copy the Client ID into this form.",
   "Protect main with branch protection if agents must not push to it.",
 ];
-const CRED_FILE_BAD = "credentials.json could not be read; it will be kept as a .bad copy on your next save";
+const CRED_FILE_BAD = "credentials.json has content this CuliBox cannot read, so this screen will not save over it. Fix the file, or run the CuliBox that wrote it.";
 // Said under a "writes" base role. Never "read-only" unqualified: a role that
 // has no write access found is not a guarantee, and the word promises one.
 const CRED_D4_REMEDY = "Use a role without write access as the base and put this one under Elevate.";

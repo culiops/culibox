@@ -110,7 +110,7 @@ test("seeds from config.json have no actions; web entries get edit and delete", 
 
 test("the honest N3 line and the file-bad banner are exact", () => {
   assert.strictEqual(CRED_N3, "The agent can read this token. It is long-lived and is not revoked when the session ends.");
-  assert.strictEqual(CRED_FILE_BAD, "credentials.json could not be read; it will be kept as a .bad copy on your next save");
+  assert.strictEqual(CRED_FILE_BAD, "credentials.json has content this CuliBox cannot read, so this screen will not save over it. Fix the file, or run the CuliBox that wrote it.");
 });
 
 test("checkedText: today shows the time, earlier shows the date, none is empty", () => {

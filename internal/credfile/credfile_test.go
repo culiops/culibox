@@ -1,6 +1,7 @@
 package credfile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,7 @@ func TestLoadMissingIsEmpty(t *testing.T) {
 }
 
 func TestLoadBadJSON(t *testing.T) {
-	for _, body := range []string{"{", "", `{"static_tokens":[]} trailing`, `{"typo_field":1}`, `{"static_tokens":{}}`} {
+	for _, body := range []string{"{", "", `{"static_tokens":[]} trailing`, `{"static_tokens":{}}`, `[]`} {
 		dir := t.TempDir()
 		if err := os.WriteFile(Path(dir), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -81,23 +82,90 @@ func TestSaveAtomicMode(t *testing.T) {
 	}
 }
 
-func TestSaveRenamesBadFile(t *testing.T) {
+func TestLoadUnknownTopLevelKeyKeepsKnownEntries(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"static_tokens":[{"name":"good","value":{"type":"store","id":"good"},"env":["B_TOKEN"],"egress":[{"host":"api.example.com"}]}],"gcp_connections":[{}]}`
+	if err := os.WriteFile(Path(dir), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, bad, err := Load(dir)
+	if bad || err != nil {
+		t.Fatalf("Load = bad %v err %v, want the file to stay usable", bad, err)
+	}
+	if len(f.StaticTokens) != 1 {
+		t.Errorf("tokens = %v, want the known entry kept", tokenNames(f.StaticTokens))
+	}
+	if len(f.NotUnderstood) != 1 || !strings.Contains(f.NotUnderstood[0], "gcp_connections") {
+		t.Errorf("NotUnderstood = %q, want one line naming gcp_connections", f.NotUnderstood)
+	}
+	if err := f.CanSave(); !errors.Is(err, ErrNotUnderstood) {
+		t.Errorf("CanSave = %v, want ErrNotUnderstood", err)
+	}
+}
+
+func TestLoadWrongTypedKindIsBad(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"static_tokens":{},"aws_connections":[` + awsEntryJSON + `]}`
+	if err := os.WriteFile(Path(dir), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, bad, err := Load(dir)
+	if !bad || err == nil || !strings.Contains(err.Error(), "static_tokens") {
+		t.Fatalf("Load = bad %v err %v, want bad with an error naming static_tokens", bad, err)
+	}
+	if len(f.StaticTokens) != 0 {
+		t.Errorf("tokens = %v, want none", tokenNames(f.StaticTokens))
+	}
+	if len(f.AWSConnections) != 1 {
+		t.Errorf("aws = %v, want the other known kind to load", f.AWSConnections)
+	}
+	if err := f.CanSave(); !errors.Is(err, ErrNotUnderstood) {
+		t.Errorf("CanSave = %v, want ErrNotUnderstood", err)
+	}
+}
+
+const awsEntryJSON = `{"name":"a1","source_profile":"p","role_arn":"arn:aws:iam::123456789012:role/r","region":"us-east-1"}`
+
+func TestLoadWholeFileFailureCannotBeSaved(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(Path(dir), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Save(dir, File{StaticTokens: []config.StaticToken{tok("a", storeRef("a"))}}); err != nil {
-		t.Fatal(err)
+	f, bad, err := Load(dir)
+	if !bad || err == nil {
+		t.Fatalf("Load = bad %v err %v", bad, err)
 	}
-	bads, _ := filepath.Glob(Path(dir) + ".bad-*")
-	if len(bads) != 1 {
-		t.Fatalf("bad files = %v, want one", bads)
+	if len(f.NotUnderstood) != 1 {
+		t.Errorf("NotUnderstood = %q, want the one whole-file reason", f.NotUnderstood)
 	}
-	if b, _ := os.ReadFile(bads[0]); string(b) != "{" {
-		t.Errorf("bad file content = %q, want the original", b)
+	if !errors.Is(f.CanSave(), ErrNotUnderstood) {
+		t.Errorf("CanSave = %v", f.CanSave())
 	}
-	if _, bad, err := Load(dir); bad || err != nil {
-		t.Errorf("new file not valid: bad %v err %v", bad, err)
+}
+
+func TestSaveRefusesNotUnderstoodFile(t *testing.T) {
+	typo := `{"static_tokens":[{"name":"typo","value":{"type":"store","id":"typo"},"env":["A_TOKEN"],"egres":[{"host":"api.example.com"}]}]}`
+	for name, body := range map[string]string{
+		"not json":      "{",
+		"unknown key":   `{"static_tokens":[],"gcp_connections":[{}]}`,
+		"unknown field": typo,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(Path(dir), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := Save(dir, File{StaticTokens: []config.StaticToken{tok("a", storeRef("a"))}})
+			if !errors.Is(err, ErrNotUnderstood) {
+				t.Fatalf("Save = %v, want ErrNotUnderstood", err)
+			}
+			if b, _ := os.ReadFile(Path(dir)); string(b) != body {
+				t.Errorf("file = %q, want it byte-identical", b)
+			}
+			if bads, _ := filepath.Glob(Path(dir) + ".bad-*"); len(bads) != 0 {
+				t.Errorf("file renamed aside: %v", bads)
+			}
+		})
 	}
 }
 
@@ -253,16 +321,12 @@ func TestLoadUnknownEntryFieldKeepsOtherEntries(t *testing.T) {
 	if len(errs) != 1 || errs[0].Kind != "token" || errs[0].Name != "typo" || !strings.Contains(errs[0].Err, "egres") {
 		t.Errorf("errs = %+v, want one error naming typo and the unknown field", errs)
 	}
-	// The undecodable entry is reported until the next Save, which drops it
-	// without renaming the file (it is not bad) and keeps the good one.
-	if err := Save(dir, f); err != nil {
-		t.Fatal(err)
+	// The undecodable entry keeps the file from being saved over: a save would
+	// drop it, so Save refuses and the file is left as it is.
+	if err := f.CanSave(); !errors.Is(err, ErrNotUnderstood) {
+		t.Errorf("CanSave = %v, want ErrNotUnderstood", err)
 	}
-	if bads, _ := filepath.Glob(Path(dir) + ".bad-*"); len(bads) != 0 {
-		t.Errorf("file renamed aside: %v", bads)
-	}
-	after, _, _ := Load(dir)
-	if len(after.StaticTokens) != 1 || len(after.Undecodable) != 0 {
-		t.Errorf("after save = %+v", after)
+	if err := Save(dir, f); !errors.Is(err, ErrNotUnderstood) {
+		t.Errorf("Save = %v, want ErrNotUnderstood", err)
 	}
 }

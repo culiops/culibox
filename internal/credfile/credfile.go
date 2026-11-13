@@ -16,8 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
-	"time"
+	"sort"
+	"strings"
 
 	"github.com/culiops/culibox/internal/config"
 )
@@ -29,9 +29,30 @@ type File struct {
 	StaticTokens   []config.StaticToken   `json:"static_tokens,omitempty"`
 
 	// Undecodable are entries Load could not decode (e.g. an unknown field).
-	// Merge reports them. They are not written back: the next Save drops them,
-	// after they have been shown as invalid in doctor and the screen.
+	// Merge reports them. They are not written back, so a file that has any
+	// cannot be saved over (CanSave): a save would drop them from disk.
 	Undecodable []EntryError `json:"-"`
+	// NotUnderstood is one line per top-level key this build does not know, per
+	// known kind that is not a list, or for the whole file when it cannot be
+	// read at all. A file with any of these is never saved over (CanSave).
+	NotUnderstood []string `json:"-"`
+}
+
+// ErrNotUnderstood marks a credentials.json with content this build cannot
+// read. Saving would drop that content, so nothing saves over it.
+var ErrNotUnderstood = errors.New("credentials.json has content this CuliBox cannot read")
+
+// CanSave is nil when everything in the file was understood, so a save loses
+// nothing. Otherwise it wraps ErrNotUnderstood and names the first reason.
+func (f File) CanSave() error {
+	switch {
+	case len(f.NotUnderstood) > 0:
+		return fmt.Errorf("%w: %s", ErrNotUnderstood, f.NotUnderstood[0])
+	case len(f.Undecodable) > 0:
+		e := f.Undecodable[0]
+		return fmt.Errorf("%w: %s %s: %s", ErrNotUnderstood, e.Kind, e.Name, e.Err)
+	}
+	return nil
 }
 
 // Entry kinds, as used in Sources keys and EntryError.Kind.
@@ -55,14 +76,6 @@ type EntryError struct{ Kind, Name, Err string }
 
 // Path is where the file lives.
 func Path(dataDir string) string { return filepath.Join(dataDir, "credentials.json") }
-
-// rawFile is File with each entry undecoded, so one bad entry cannot take the
-// others down with it.
-type rawFile struct {
-	AWSConnections []json.RawMessage `json:"aws_connections"`
-	GitHubApps     []json.RawMessage `json:"github_apps"`
-	StaticTokens   []json.RawMessage `json:"static_tokens"`
-}
 
 // decodeStrict is json decoding that refuses unknown fields and trailing data.
 func decodeStrict(b []byte, v any) error {
@@ -102,52 +115,85 @@ func decodeEntries[T any](kind string, raws []json.RawMessage, bad *[]EntryError
 	return out
 }
 
-// parse is file-level strict (not JSON, an unknown top-level key, a wrong
-// top-level type, trailing data: the whole file is bad) and entry-level
-// tolerant (see decodeEntries).
-func parse(b []byte) (File, error) {
-	var r rawFile
-	if err := decodeStrict(b, &r); err != nil {
-		return File{}, err
+// knownKinds are the top-level keys this build reads, in the order their
+// problems are reported.
+var knownKinds = []string{"aws_connections", "github_apps", "static_tokens"}
+
+// parse is file-level strict (not JSON, not an object, trailing data: the whole
+// file is bad) and entry-level tolerant (see decodeEntries). A top-level key it
+// does not know is recorded, not fatal: what it does understand still loads. A
+// known key that is not a list loads nothing for that kind and makes the file
+// bad, with the other kinds still loaded. err is set only when bad is.
+func parse(b []byte) (f File, bad bool, err error) {
+	var top map[string]json.RawMessage
+	if err := decodeStrict(b, &top); err != nil {
+		return File{NotUnderstood: []string{err.Error()}}, true, err
 	}
-	var f File
-	f.AWSConnections = decodeEntries[config.AWSConnection](KindAWS, r.AWSConnections, &f.Undecodable)
-	f.GitHubApps = decodeEntries[config.GitHubApp](KindGitHubApp, r.GitHubApps, &f.Undecodable)
-	f.StaticTokens = decodeEntries[config.StaticToken](KindToken, r.StaticTokens, &f.Undecodable)
-	return f, nil
+	lists := map[string][]json.RawMessage{}
+	var wrong []string
+	for _, k := range knownKinds {
+		raw, ok := top[k]
+		if !ok {
+			continue
+		}
+		var l []json.RawMessage
+		if err := json.Unmarshal(raw, &l); err != nil {
+			wrong = append(wrong, k)
+			f.NotUnderstood = append(f.NotUnderstood, fmt.Sprintf("%q is not a list of entries", k))
+			continue
+		}
+		lists[k] = l
+	}
+	var unknown []string
+	for k := range top {
+		if !slices.Contains(knownKinds, k) {
+			unknown = append(unknown, k)
+		}
+	}
+	sort.Strings(unknown)
+	for _, k := range unknown {
+		f.NotUnderstood = append(f.NotUnderstood, fmt.Sprintf("unknown top-level key %q", k))
+	}
+	f.AWSConnections = decodeEntries[config.AWSConnection](KindAWS, lists["aws_connections"], &f.Undecodable)
+	f.GitHubApps = decodeEntries[config.GitHubApp](KindGitHubApp, lists["github_apps"], &f.Undecodable)
+	f.StaticTokens = decodeEntries[config.StaticToken](KindToken, lists["static_tokens"], &f.Undecodable)
+	if len(wrong) > 0 {
+		return f, true, fmt.Errorf("%s is not a list", strings.Join(wrong, ", "))
+	}
+	return f, false, nil
 }
 
 // Load reads the file. Missing is an empty File. A file that cannot be read or
-// parsed gives an empty File, bad=true and an error saying why: the daemon
-// still starts, and the next Save moves the file aside rather than lose it.
+// is not a JSON object gives a File whose NotUnderstood holds the reason,
+// bad=true and an error saying why; a known kind of the wrong type is bad too,
+// but the other kinds still load. The daemon still starts either way, and Save
+// refuses to write over such a file.
 func Load(dataDir string) (f File, bad bool, err error) {
 	b, err := os.ReadFile(Path(dataDir))
 	if errors.Is(err, os.ErrNotExist) {
 		return File{}, false, nil
 	}
 	if err != nil {
-		return File{}, true, fmt.Errorf("credentials file: %w", err)
+		return File{NotUnderstood: []string{err.Error()}}, true, fmt.Errorf("credentials file: %w", err)
 	}
-	f, err = parse(b)
+	f, bad, err = parse(b)
 	if err != nil {
-		return File{}, true, fmt.Errorf("credentials file %s is not valid: %w", Path(dataDir), err)
+		return f, true, fmt.Errorf("credentials file %s is not valid: %w", Path(dataDir), err)
 	}
 	return f, false, nil
 }
 
 // Save writes the file atomically: tmp 0600, fsync, rename, directory fsync
-// (the same steps as store.flushLocked). A current file that does not parse is
-// first renamed to credentials.json.bad-<unix>, so a save never destroys what a
-// human may want to repair.
+// (the same steps as store.flushLocked). A current file with content this build
+// cannot read is never written over (ErrNotUnderstood): it may be a newer
+// CuliBox's data, or something a human wants to repair.
 func Save(dataDir string, f File) error {
 	path := Path(dataDir)
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
-	if _, bad, _ := Load(dataDir); bad {
-		if err := os.Rename(path, path+".bad-"+strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
-			return err
-		}
+	if cur, _, _ := Load(dataDir); cur.CanSave() != nil {
+		return cur.CanSave()
 	}
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {

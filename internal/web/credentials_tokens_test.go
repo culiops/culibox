@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credfile"
 	"github.com/culiops/culibox/internal/credtemplates"
 	"github.com/culiops/culibox/internal/secretstore"
 )
@@ -812,5 +814,67 @@ func TestTokenForeignStoreRef409(t *testing.T) {
 	}
 	if got := a.fx.file(t).StaticTokens; len(got) != 1 {
 		t.Fatalf("file: %+v", got)
+	}
+}
+
+// A credentials.json with content this build cannot read is read-only for the
+// whole run: every write is refused with the banner text before any store
+// value or audit row, the file is untouched, and fixing it on disk changes
+// nothing until a restart.
+func TestCredentialsReadOnlyWhenFileNotUnderstood(t *testing.T) {
+	a := newTokenRoutes(t)
+	body := `{"static_tokens":[],"gcp_connections":[{}]}`
+	if err := os.WriteFile(credfile.Path(a.fx.dir), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, bad, err := credfile.Load(a.fx.dir)
+	if bad || err != nil || loaded.CanSave() == nil {
+		t.Fatalf("setup: bad %v err %v canSave %v", bad, err, loaded.CanSave())
+	}
+	a.fx.cm = NewCredentialManager(config.Config{}, loaded, a.fx.dir, a.fx.pm, a.fx.vals, a.fx.rec, a.fx.chk,
+		func(config.Config) {}, nil)
+	a.srv.Creds = a.fx.cm
+
+	err = a.fx.cm.PutTokens([]config.StaticToken{withStoreRef(tok("t1", "T1"), "t1")}, map[string][]byte{"t1": []byte("v")}, true)
+	if !errors.Is(err, ErrCredReadOnly) {
+		t.Fatalf("PutTokens = %v, want ErrCredReadOnly", err)
+	}
+	_, err = a.fx.cm.PutAWS(context.Background(), awsConn("a1", "p", arnRead), true, false)
+	if !errors.Is(err, ErrCredReadOnly) {
+		t.Fatalf("PutAWS = %v, want ErrCredReadOnly", err)
+	}
+	if a.fx.chk.n() != 0 {
+		t.Errorf("a read-only manager ran %d base-role checks", a.fx.chk.n())
+	}
+	if got := a.fx.fileBytes(t); got != body {
+		t.Errorf("file = %q, want it untouched", got)
+	}
+	if len(a.fx.vals.m) != 0 || len(a.fx.rec.events) != 0 {
+		t.Errorf("read-only refusal left values %v / audit rows %v", a.fx.vals.m, a.fx.rec.events)
+	}
+	var vb struct {
+		FileBad bool `json:"file_bad"`
+	}
+	w := do(a.srv.handleCredentials, storeReq("GET", pathCreds, "", "", credCookie))
+	if err := json.Unmarshal(w.Body.Bytes(), &vb); err != nil || !vb.FileBad {
+		t.Errorf("file_bad = %v (%v), want true", vb.FileBad, err)
+	}
+
+	// The file is fixed on disk; this run still refuses (no mid-run re-check).
+	if err := os.WriteFile(credfile.Path(a.fx.dir), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = a.fx.cm.PutTokens([]config.StaticToken{withStoreRef(tok("t2", "T2"), "t2")}, map[string][]byte{"t2": []byte("v")}, true)
+	if !errors.Is(err, ErrCredReadOnly) {
+		t.Fatalf("after the file was fixed: PutTokens = %v, want ErrCredReadOnly", err)
+	}
+
+	code, m, raw := a.call("POST", pathTokens+"/from-template", fromTpl("sentry", "sen", map[string]string{"region": "eu"}, "sntrys_value"))
+	const banner = "credentials.json has content this CuliBox cannot read, so this screen will not save over it. Fix the file, or run the CuliBox that wrote it."
+	if code != 409 || m["code"] != "file_read_only" || m["error"] != banner {
+		t.Fatalf("route = %d %s, want 409 file_read_only with the banner", code, raw)
+	}
+	if ErrCredReadOnly.Error() != banner {
+		t.Errorf("ErrCredReadOnly = %q", ErrCredReadOnly)
 	}
 }
