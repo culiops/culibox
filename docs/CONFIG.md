@@ -28,7 +28,7 @@ Everything CuliBox writes lives in one data root: `$CULIBOX_HOME` (an absolute p
 | `bundle_source` | auto-detect | Agent config to bundle into boxes; `off` disables it. |
 | `data_dir` | the data root | Where state lives. |
 | `abduco_bin` | `abduco` | Path to abduco. |
-| `abduco_socket_dir` | `<data root>/abduco` (macOS: a short per-instance folder under `/tmp`) | Folder for the abduco session sockets. It must be a real directory you own with mode `0700`; CuliBox refuses any other. |
+| `abduco_socket_dir` | `<data_dir>/abduco` (macOS: a short per-instance folder under `/tmp`) | Folder for the abduco session sockets, as an absolute path. On macOS, CuliBox refuses a folder that is not a plain directory owned by you with mode `0700`. On Linux it creates the folder if needed and does not check an existing one, so point it only at a folder no other account can write. |
 | `profiles_path` | `profiles.json` in the data root | Where profiles saved from the UI are stored (see below). |
 | `rate_limits_file` | `~/.claude/abtop-rate-limits.json` | The account 5-hour and weekly usage snapshot the quota display reads. |
 | `options` | built-in launch toggles | Launch toggle definitions: a list of `{key, label, type, choices, flag, env, bins, offer_unset}` (see the `agents` paragraph below). |

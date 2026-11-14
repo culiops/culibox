@@ -63,7 +63,7 @@ The profile must also set `"runtime": "box"`.
 ## Which accounts
 
 Only a sandbox or lab account for now. **Do not apply this to a company or production
-account until output redaction exists (it is not built yet):** with read access an agent can still pull data
+account until CuliBox can redact command output, which it cannot yet:** with read access an agent can still pull data
 into its transcript that `ReadOnlyAccess` allows and the session policy does not deny
 (Lambda code URLs, ECR layers, Athena and Glue results, CloudWatch Logs, among others).
 
