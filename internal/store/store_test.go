@@ -5,10 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 func TestStore_CRUD_Persists(t *testing.T) {
@@ -378,5 +380,107 @@ func TestOpenOrReadOnlyOtherReadErrorIsFatal(t *testing.T) {
 	s, parseErr, err := OpenOrReadOnly(path)
 	if err == nil || s != nil || parseErr != nil {
 		t.Fatalf("got s=%v parseErr=%v err=%v, want a plain error", s, parseErr, err)
+	}
+}
+
+// #291: a profiles.json of a higher format version loads no profile, refuses
+// writes, names the file and the way out, and is never touched.
+func TestOpenHigherVersionFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	body := []byte(`{"version":99,"profiles":[{"name":"p","bin":"bash"}],"deny":["x"]}`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, parseErr, err := OpenOrReadOnly(path)
+	if err != nil || !errors.Is(parseErr, datacompat.ErrNewer) {
+		t.Fatalf("OpenOrReadOnly = parseErr %v err %v, want ErrNewer", parseErr, err)
+	}
+	for _, want := range []string{path, "99", datacompat.Hint} {
+		if !strings.Contains(parseErr.Error(), want) {
+			t.Errorf("error %q lacks %q", parseErr, want)
+		}
+	}
+	if len(s.List()) != 0 {
+		t.Errorf("profiles loaded from a newer-format file: %v", s.List())
+	}
+	if err := s.Save(config.AgentConfig{Name: "q", Bin: "bash"}); !errors.Is(err, ErrUnreadable) {
+		t.Errorf("Save = %v, want ErrUnreadable", err)
+	}
+	if _, err := Open(path); !errors.Is(err, datacompat.ErrNewer) {
+		t.Errorf("Open = %v, want ErrNewer", err)
+	}
+	if b, _ := os.ReadFile(path); !bytes.Equal(b, body) {
+		t.Errorf("the newer file was changed: %s", b)
+	}
+}
+
+// A file with no version (a plain list, as every release so far wrote) and an
+// explicit version 1 both load.
+func TestOpenMissingOrCurrentVersionLoads(t *testing.T) {
+	for _, body := range []string{
+		`[{"name":"p","bin":"bash"}]`,
+		`{"version":1,"profiles":[{"name":"p","bin":"bash"}],"label":"x"}`,
+	} {
+		path := filepath.Join(t.TempDir(), "profiles.json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Open(path)
+		if err != nil || len(s.List()) != 1 {
+			t.Errorf("%s: Open = %v, %v", body, s, err)
+		}
+	}
+}
+
+func TestOpenBadVersionFailsClosed(t *testing.T) {
+	for _, v := range []string{`"two"`, `0`, `-1`, `null`} {
+		path := filepath.Join(t.TempDir(), "profiles.json")
+		if err := os.WriteFile(path, []byte(`{"version":`+v+`,"profiles":[{"name":"p","bin":"bash"}]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(path); err == nil {
+			t.Errorf("version %s: Open succeeded", v)
+		}
+	}
+}
+
+// Version 1 is written as a plain list, so a build from before the version
+// existed can read the file after a rollback.
+func TestSaveVersion1WritesPlainList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	s, _ := Open(path)
+	if err := s.Save(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !bytes.HasPrefix(bytes.TrimSpace(b), []byte("[")) {
+		t.Errorf("version 1 file is not a plain list: %s", b)
+	}
+}
+
+// A later version is written as {"version","profiles"} and a rewrite keeps it;
+// a build that knows only version 1 then refuses it.
+func TestRewriteKeepsFutureVersion(t *testing.T) {
+	old := FormatVersion
+	defer func() { FormatVersion = old }()
+	FormatVersion = 3
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	s, _ := Open(path)
+	if err := s.Save(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil || len(s.List()) != 1 {
+		t.Fatalf("reopen = %v, %v", s, err)
+	}
+	if err := s.Save(config.AgentConfig{Name: "q", Bin: "bash"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if !strings.Contains(string(b), `"version": 3`) {
+		t.Errorf("rewrite lost the version: %s", b)
+	}
+	FormatVersion = 1
+	if _, err := Open(path); !errors.Is(err, datacompat.ErrNewer) {
+		t.Errorf("older build: Open = %v, want ErrNewer", err)
 	}
 }

@@ -12,7 +12,9 @@ package doctor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/culiops/culibox/internal/datacompat"
 	"io"
 	"net"
 	"os"
@@ -216,6 +218,7 @@ func Checks(in Input) []Result {
 	if storeErr == nil {
 		stored = st.List()
 	}
+	out = append(out, checkProfilesFormat(storeErr)...)
 	out = append(out, checkAWSConnsGate(context.Background(), c, stored, storeErr, boxvm.ExecRunner{},
 		newAWSProber(broker.STSMinter{}, awsprobe.IAMSimulator{}), newSSOGate(broker.STSMinter{}))...)
 	bt := gatherBoxTier(in, dataDir, vst)
@@ -624,4 +627,15 @@ func checkExtraCA(c config.Config, now time.Time) []Result {
 		}
 	}
 	return out
+}
+
+// checkProfilesFormat is the FAIL row for a profiles.json written by a newer
+// CuliBox: serve refuses every spawn while it is so (#291), because it may hold
+// an override of a config seed that this build cannot read. Any other store
+// error is left to the checks that already report it.
+func checkProfilesFormat(storeErr error) []Result {
+	if !errors.Is(storeErr, datacompat.ErrNewer) {
+		return nil
+	}
+	return []Result{{Fail, "profiles store", "no session can start while this file is from a newer CuliBox: " + storeErr.Error()}}
 }

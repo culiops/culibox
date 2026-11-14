@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -251,5 +252,30 @@ func TestSpawnNeverReplyableWhenRepliesDisabled(t *testing.T) {
 	}
 	if sidecarEntry(t, path, s.ID).Replyable {
 		t.Error("sidecar Replyable=true with the kill-switch off")
+	}
+}
+
+type refusingLauncher struct {
+	fakeLauncher
+	builds int
+}
+
+func (r *refusingLauncher) SpawnRefusal() error { return launcher.ErrProfilesNewer }
+func (r *refusingLauncher) Build(s launcher.SpawnSpec) ([]string, []string, error) {
+	r.builds++
+	return r.fakeLauncher.Build(s)
+}
+
+// A launcher that refuses spawns stops Spawn (and so Restart, which calls it)
+// before the tier, a clone or a box is touched (#291).
+func TestSpawnRefusedBySpawnRefusal(t *testing.T) {
+	rl := &refusingLauncher{}
+	m, boxes := managerWith(t, rl, "", nil, nil)
+	_, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Cwd: t.TempDir()})
+	if !errors.Is(err, launcher.ErrProfilesNewer) {
+		t.Fatalf("Spawn err = %v", err)
+	}
+	if rl.builds != 0 || boxes.wraps != 0 {
+		t.Errorf("work started before the refusal: builds=%d", rl.builds)
 	}
 }

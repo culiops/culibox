@@ -11,10 +11,62 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 )
+
+// FormatVersion is the profiles.json format this build reads and writes (#291).
+//
+// RULE: any new profile field that restricts, scopes or contains something
+// (containment, egress, a credential reference, a deny list) MUST bump this
+// number in the same change. A build that reads a higher version loads no
+// profile and refuses writes (it fails closed), so an older build can never run
+// a profile while dropping a restriction it does not know. A benign field needs
+// no bump. A file with no version is version 1. Version 1 is written as the
+// plain JSON list every release so far wrote, so a rollback to a build from
+// before this rule still reads it; a later version is written as
+// {"version": N, "profiles": [...]}, which such a build refuses (fail closed).
+// See docs/UPGRADING.md. It is a var only so a test can raise it.
+var FormatVersion = 1
+
+// fileDoc is the object form of profiles.json, used from version 2 on.
+type fileDoc struct {
+	Version  int                  `json:"version"`
+	Profiles []config.AgentConfig `json:"profiles"`
+}
+
+// decode reads either form. A version higher than FormatVersion is
+// datacompat.Newer; a version that is not a whole number from 1 is an error.
+func decode(path string, b []byte) ([]config.AgentConfig, error) {
+	var list []config.AgentConfig
+	if err := json.Unmarshal(b, &list); err == nil {
+		return list, nil
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(b, &top); err != nil {
+		return nil, fmt.Errorf("store: parse %s: %w", path, err)
+	}
+	raw, ok := top["version"]
+	if !ok {
+		return nil, fmt.Errorf("store: parse %s: not a list of profiles and has no version", path)
+	}
+	v, err := strconv.Atoi(string(raw))
+	if err != nil || v < 1 {
+		return nil, fmt.Errorf("store: parse %s: version %s is not a whole number from 1", path, raw)
+	}
+	if v > FormatVersion {
+		// Nothing else is read: no profile of a newer format is usable here.
+		return nil, datacompat.Newer(path, fmt.Sprintf("format version %d, this build knows %d", v, FormatVersion))
+	}
+	var doc fileDoc
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, fmt.Errorf("store: parse %s: %w", path, err)
+	}
+	return doc.Profiles, nil
+}
 
 // ErrNotFound is returned by Delete/Get for an unknown profile.
 var ErrNotFound = errors.New("store: profile not found")
@@ -74,9 +126,9 @@ func OpenOrReadOnly(path string) (s *Store, parseErr error, err error) {
 		}
 		return nil, nil, err
 	}
-	var list []config.AgentConfig
-	if err := json.Unmarshal(b, &list); err != nil {
-		parseErr = fmt.Errorf("store: parse %s: %w", path, err)
+	list, err := decode(path, b)
+	if err != nil {
+		parseErr = err
 		s.unreadable = parseErr
 		return s, parseErr, nil
 	}
@@ -184,7 +236,11 @@ func (s *Store) sortedLocked() []config.AgentConfig {
 }
 
 func (s *Store) flushLocked() error {
-	b, err := json.MarshalIndent(s.sortedLocked(), "", "  ")
+	var doc any = s.sortedLocked()
+	if FormatVersion > 1 {
+		doc = fileDoc{Version: FormatVersion, Profiles: s.sortedLocked()}
+	}
+	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err
 	}

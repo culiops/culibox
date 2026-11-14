@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 func tok(name string, v config.KeyRef) config.StaticToken {
@@ -328,5 +329,123 @@ func TestLoadUnknownEntryFieldKeepsOtherEntries(t *testing.T) {
 	}
 	if err := Save(dir, f); !errors.Is(err, ErrNotUnderstood) {
 		t.Errorf("Save = %v, want ErrNotUnderstood", err)
+	}
+}
+
+const oneToken = `"static_tokens":[{"name":"good","value":{"type":"store","id":"good"},"env":["B_TOKEN"],"egress":[{"host":"api.example.com"}]}]`
+
+// #291: a version higher than this build knows fails closed: no entry loads, so
+// none reaches the broker, and the error names the file, the version and the way out.
+func TestLoadHigherVersionFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"version":` + "99" + `,"revoked":["good"],` + oneToken + `}`
+	if err := os.WriteFile(Path(dir), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, bad, err := Load(dir)
+	if !bad || !errors.Is(err, datacompat.ErrNewer) {
+		t.Fatalf("Load = bad %v err %v, want bad and ErrNewer", bad, err)
+	}
+	for _, want := range []string{"credentials.json", "99", datacompat.Hint} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if len(f.StaticTokens)+len(f.AWSConnections)+len(f.GitHubApps) != 0 {
+		t.Errorf("entries loaded from a newer-format file: %+v", f)
+	}
+	merged, _, _ := Merge(config.Config{}, f)
+	if len(merged.StaticTokens) != 0 {
+		t.Errorf("Merge activated %v", tokenNames(merged.StaticTokens))
+	}
+	if err := f.CanSave(); !errors.Is(err, ErrNotUnderstood) {
+		t.Errorf("CanSave = %v, want ErrNotUnderstood", err)
+	}
+	if err := Save(dir, File{}); !errors.Is(err, ErrNotUnderstood) {
+		t.Errorf("Save over a newer file = %v, want ErrNotUnderstood", err)
+	}
+	if b, _ := os.ReadFile(Path(dir)); string(b) != body {
+		t.Errorf("the newer file was changed: %q", b)
+	}
+}
+
+func TestLoadMissingOrCurrentVersionLoads(t *testing.T) {
+	for _, body := range []string{`{` + oneToken + `}`, `{"version":1,` + oneToken + `}`} {
+		dir := t.TempDir()
+		if err := os.WriteFile(Path(dir), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, bad, err := Load(dir)
+		if bad || err != nil || len(f.StaticTokens) != 1 || f.CanSave() != nil {
+			t.Errorf("%s: Load = %+v bad %v err %v", body, f, bad, err)
+		}
+	}
+}
+
+func TestLoadBadVersionFailsClosed(t *testing.T) {
+	for _, v := range []string{`"two"`, `0`, `-1`, `1.5`, `null`} {
+		dir := t.TempDir()
+		if err := os.WriteFile(Path(dir), []byte(`{"version":`+v+`,`+oneToken+`}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, bad, err := Load(dir)
+		if !bad || err == nil || len(f.StaticTokens) != 0 {
+			t.Errorf("version %s: Load = %+v bad %v err %v, want fail closed", v, f, bad, err)
+		}
+	}
+}
+
+// At the current version an unknown key stays tolerated: benign additions need no bump.
+func TestLoadCurrentVersionUnknownKeyStillTolerated(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir), []byte(`{"version":1,"gcp_connections":[{}],`+oneToken+`}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, bad, err := Load(dir)
+	if bad || err != nil || len(f.StaticTokens) != 1 || len(f.NotUnderstood) != 1 {
+		t.Fatalf("Load = %+v bad %v err %v", f, bad, err)
+	}
+}
+
+// Writers: version 1 is written as no version key, so a build from before the
+// version existed can still read the file after a rollback; any later version
+// is written out, and a rewrite keeps it.
+func TestWriteVersion(t *testing.T) {
+	if got := writeVersion(1); got != 0 {
+		t.Errorf("writeVersion(1) = %d, want 0 (omitted)", got)
+	}
+	if got := writeVersion(3); got != 3 {
+		t.Errorf("writeVersion(3) = %d, want 3", got)
+	}
+	dir := t.TempDir()
+	if err := Save(dir, File{StaticTokens: []config.StaticToken{tok("a", storeRef("a"))}}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(Path(dir)); strings.Contains(string(b), "version") {
+		t.Errorf("version 1 file carries a version key: %s", b)
+	}
+}
+
+func TestRewriteKeepsFutureVersion(t *testing.T) {
+	old := FormatVersion
+	FormatVersion = 3
+	defer func() { FormatVersion = old }()
+	dir := t.TempDir()
+	if err := Save(dir, File{StaticTokens: []config.StaticToken{tok("a", storeRef("a"))}}); err != nil {
+		t.Fatal(err)
+	}
+	f, bad, err := Load(dir)
+	if bad || err != nil || f.Version != 3 {
+		t.Fatalf("Load = %+v bad %v err %v, want version 3", f, bad, err)
+	}
+	if err := Save(dir, f); err != nil {
+		t.Fatal(err)
+	}
+	if f, _, _ = Load(dir); f.Version != 3 {
+		t.Errorf("rewrite changed the version to %d", f.Version)
+	}
+	FormatVersion = 1 // an older build now reads the version-3 file
+	if f, bad, err = Load(dir); !bad || !errors.Is(err, datacompat.ErrNewer) || len(f.StaticTokens) != 0 {
+		t.Errorf("older build: Load = %+v bad %v err %v", f, bad, err)
 	}
 }

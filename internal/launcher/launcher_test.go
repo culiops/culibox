@@ -2,6 +2,8 @@ package launcher
 
 import (
 	"errors"
+	"fmt"
+	"github.com/culiops/culibox/internal/datacompat"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -768,5 +770,43 @@ func TestImportsOffFor(t *testing.T) {
 	}
 	if l.ImportsOffFor("plain") || l.ImportsOffFor("missing") {
 		t.Fatal("a profile without the switch, or an unknown one, must report false")
+	}
+}
+
+// A profiles.json from a newer CuliBox is unreadable here, and a stored profile
+// overrides a same-named config seed, so no profile can be trusted to be what
+// the user saved (#291): Build refuses every agent, seeds included.
+func TestBuild_ProfilesNewerRefusesEverySeed(t *testing.T) {
+	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "clean"}}, fakeResolver{}, nil)
+	newer := fmt.Errorf("/d/profiles.json was %w (format version 2, this build knows 1); see docs/UPGRADING.md", datacompat.ErrNewer)
+	l.SetProfilesGate(ProfilesNewerGate(newer))
+	_, _, err := l.Build(SpawnSpec{Agent: "a", Runtime: config.RuntimeHost})
+	if !errors.Is(err, ErrProfilesNewer) {
+		t.Fatalf("Build err = %v, want ErrProfilesNewer", err)
+	}
+	for _, want := range []string{"profiles.json", "format version 2", "this build knows 1", "docs/UPGRADING.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message %q lacks %q", err.Error(), want)
+		}
+	}
+	if !errors.Is(l.SpawnRefusal(), ErrProfilesNewer) {
+		t.Errorf("SpawnRefusal = %v", l.SpawnRefusal())
+	}
+}
+
+func TestProfilesNewerGate_OnlyTheNewerState(t *testing.T) {
+	if ProfilesNewerGate(nil) != nil {
+		t.Error("no error: want no gate")
+	}
+	if ProfilesNewerGate(errors.New("parse error")) != nil {
+		t.Error("a plain parse error keeps today's behaviour: want no gate")
+	}
+	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "clean"}}, fakeResolver{}, nil)
+	l.SetProfilesGate(ProfilesNewerGate(nil))
+	if _, _, err := l.Build(SpawnSpec{Agent: "a", Runtime: config.RuntimeHost}); err != nil {
+		t.Fatalf("normal file: Build = %v", err)
+	}
+	if l.SpawnRefusal() != nil {
+		t.Error("normal file: SpawnRefusal must be nil")
 	}
 }
