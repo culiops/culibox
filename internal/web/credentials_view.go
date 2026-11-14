@@ -170,6 +170,8 @@ type credElevateBody struct {
 	AllowIAM   bool   `json:"allow_iam"`
 	// BoxBucketPrefix has no form field; the Edit form sends it back as read.
 	BoxBucketPrefix string `json:"box_bucket_prefix,omitempty"`
+	// PassRolePrefix (#302) is edited in the form.
+	PassRolePrefix string `json:"pass_role_prefix,omitempty"`
 }
 
 type credAWSBody struct {
@@ -387,7 +389,7 @@ func (s *Server) credView() credViewBody {
 			b.Status = credInvalid
 		}
 		if el := e.conn.Elevate; el != nil {
-			b.Elevate = &credElevateBody{RoleARN: el.RoleARN, MaxMinutes: el.Max(), AllowIAM: el.AllowIAM, BoxBucketPrefix: el.BoxBucketPrefix}
+			b.Elevate = &credElevateBody{RoleARN: el.RoleARN, MaxMinutes: el.Max(), AllowIAM: el.AllowIAM, BoxBucketPrefix: el.BoxBucketPrefix, PassRolePrefix: el.PassRolePrefix}
 		}
 		body.AWS = append(body.AWS, b)
 	}

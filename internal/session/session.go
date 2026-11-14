@@ -625,6 +625,10 @@ type ElevateInfo struct {
 	RoleARN    string `json:"role_arn"`
 	MaxMinutes int    `json:"max_minutes"`
 	AllowIAM   bool   `json:"allow_iam"`
+	// The two opt-in prefixes (#211, #302), shown on the grant panel so the
+	// user sees what a window can reach. Not secrets; omitted when unset.
+	BoxBucketPrefix string `json:"box_bucket_prefix,omitempty"`
+	PassRolePrefix  string `json:"pass_role_prefix,omitempty"`
 }
 
 // elevateInfo is the wire view of an elevate block; nil for none.
@@ -632,7 +636,8 @@ func elevateInfo(e *config.AWSElevate) *ElevateInfo {
 	if e == nil {
 		return nil
 	}
-	return &ElevateInfo{RoleARN: e.RoleARN, MaxMinutes: e.Max(), AllowIAM: e.AllowIAM}
+	return &ElevateInfo{RoleARN: e.RoleARN, MaxMinutes: e.Max(), AllowIAM: e.AllowIAM,
+		BoxBucketPrefix: e.BoxBucketPrefix, PassRolePrefix: e.PassRolePrefix}
 }
 
 // Bundles supplies the pinned agent-config bundle for a boxed session. Nil means

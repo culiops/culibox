@@ -234,6 +234,7 @@ function accRow(c, o) {
     window: accWindowNote(c, aws, nowMs),
     grant: gp ? {
       windows: gp.windows, needLabel: gp.needLabel, label: gp.label, role: gp.role, allowIAM: gp.allowIAM,
+      boxPrefix: gp.boxPrefix, passRolePrefix: gp.passRolePrefix,
       blocked: gp.blocked, blockedText: gp.blockedText || "", extend: !!acts.extend && !acts.elevate,
     } : null,
     hostWarning: gp ? hostWarning : [],

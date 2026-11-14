@@ -383,6 +383,18 @@ function accPanel(r, d, ctx) {
   for (const why of [g.blocked, g.blockedText]) if (why) box.appendChild(accEl("div", "ac-warn", why));
   if (!g.windows.length) box.appendChild(accEl("div", "ac-warn", "This binding allows no window of 30 minutes or more."));
   box.appendChild(accEl("p", "t-sm muted", "Role: " + g.role));
+  // What this window can reach beyond the base role: the user must see the opt-ins and the PassRole limit.
+  const reach = (lead, name, tail) => {
+    const p = accEl("p", "t-sm muted");
+    p.append(document.createTextNode(lead));
+    p.appendChild(accEl("span", "mono", name));
+    if (tail) p.append(document.createTextNode(tail));
+    box.appendChild(p);
+  };
+  if (g.boxPrefix) reach("Can read objects in buckets named ", g.boxPrefix + "*");
+  if (g.passRolePrefix) reach("Can pass roles named ", g.passRolePrefix + "*");
+  else box.appendChild(accEl("p", "t-sm muted", "Cannot pass IAM roles (set pass_role_prefix to allow Lambda/ECS applies)"));
+  if (g.allowIAM) box.appendChild(accEl("div", "ac-warn", "With IAM changes allowed, the agent can create and use its own roles, so data-read blocks are advisory in this window."));
 
   const hint = accEl("p", "ac-hint t-sm muted");
   box.appendChild(hint);

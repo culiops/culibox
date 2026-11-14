@@ -224,6 +224,10 @@ test("awsConnFromRow sends only what is set", () => {
   const boxed = awsConnFromRow({ ...row, elevRole: "arn:aws:iam::1:role/w", elevMinutes: "60", elevBoxPrefix: "culibox-" });
   assert.deepStrictEqual(boxed.elevate, { role_arn: "arn:aws:iam::1:role/w", max_minutes: 60, box_bucket_prefix: "culibox-" });
   assert.strictEqual("box_bucket_prefix" in awsConnFromRow({ ...row, elevRole: "arn:aws:iam::1:role/w" }).elevate, false);
+  // #302: pass_role_prefix is an editor field, trimmed, sent only when set
+  assert.deepStrictEqual(awsConnFromRow({ ...row, elevRole: "arn:aws:iam::1:role/w", elevPass: " lab- " }).elevate,
+    { role_arn: "arn:aws:iam::1:role/w", max_minutes: 60, pass_role_prefix: "lab-" });
+  assert.strictEqual("pass_role_prefix" in awsConnFromRow({ ...row, elevRole: "arn:aws:iam::1:role/w", elevPass: "  " }).elevate, false);
   // with no write role there is no elevate block to carry it in
   assert.strictEqual("elevate" in awsConnFromRow({ ...row, elevBoxPrefix: "culibox-" }), false);
 });

@@ -423,6 +423,8 @@ function awsConnFromRow(row) {
     c.elevate = { role_arn: row.elevRole, max_minutes: parseInt(row.elevMinutes, 10) === 30 ? 30 : 60 };
     if (row.elevIAM) c.elevate.allow_iam = true;
     if (row.elevBoxPrefix) c.elevate.box_bucket_prefix = row.elevBoxPrefix; // no form field: sent back as read
+    const pass = (row.elevPass || "").trim();
+    if (pass) c.elevate.pass_role_prefix = pass;
   }
   return c;
 }
@@ -1854,6 +1856,7 @@ function awsOpenEdit(entry) {
   row.elevMinutes = el && el.max_minutes === 30 ? "30" : "60";
   row.elevIAM = !!(el && el.allow_iam);
   row.elevBoxPrefix = (el && el.box_bucket_prefix) || "";
+  row.elevPass = (el && el.pass_role_prefix) || "";
   row.mode = entry.mode === "sso_direct" ? "sso_direct" : "";
   row.orig = { source_profile: row.source_profile, role_arn: row.role_arn, mode: row.mode };
   awsFlow = { mode: "edit", rows: [row], profiles: [], selected: new Set(), sso: {}, timers: new Set(), saving: false, msg: "", loadErr: "" };
@@ -1862,7 +1865,7 @@ function awsOpenEdit(entry) {
 
 function awsNewRow(base, extra) {
   return {
-    ...base, ...extra, id: ++awsRowSeq, description: "", egress: "", s3: "", elevRole: "", elevMinutes: "60", elevIAM: false, elevBoxPrefix: "",
+    ...base, ...extra, id: ++awsRowSeq, description: "", egress: "", s3: "", elevRole: "", elevMinutes: "60", elevIAM: false, elevBoxPrefix: "", elevPass: "",
     assume: null, verdict: null, actions: [], reason: "", reasonText: "", acked: false,
     mode: "", gate: null, hours: 0,
     busy: "", err: "", roles: null, rolesNote: "", rolesDoc: false, rolesFilter: "", rolesFilterIn: null, signIn: "", el: null, res: null, rolesBox: null, roleInput: null,
@@ -2164,17 +2167,25 @@ function awsBuildRow(row) {
   const icb = document.createElement("input");
   icb.type = "checkbox";
   icb.checked = row.elevIAM;
-  icb.onchange = () => { row.elevIAM = icb.checked; };
   ilab.append(icb, document.createTextNode(" Elevate may change IAM"));
   icol.appendChild(ilab);
+  const iwarn = awsEl("p", "hint", "With IAM changes allowed, the agent can create and use its own roles, so data-read blocks are advisory in this window.");
+  iwarn.hidden = !row.elevIAM;
+  icb.onchange = () => { row.elevIAM = icb.checked; iwarn.hidden = !icb.checked; };
+  icol.appendChild(iwarn);
   adv.appendChild(icol);
+  const pf = awsField(row, "elevPass", "Elevate may pass roles named (prefix, optional)", { full: true, placeholder: "e.g. culibox-",
+    hint: "Empty: the elevated session cannot pass any IAM role, so Lambda and ECS applies fail. A prefix lets it pass only roles named <prefix>*." });
+  adv.appendChild(pf.col);
+  if (row.elevBoxPrefix) adv.appendChild(awsEl("p", "hint full", "This elevate can read objects in buckets named " + row.elevBoxPrefix + "* (elevate.box_bucket_prefix, set in the config file)."));
   // What sso_direct hides and clears: S3 read, elevate and its window and IAM flag.
-  row.modeHidden = [s3f.col, elf.col, mcol, icol];
+  row.modeHidden = [s3f.col, elf.col, mcol, icol, pf.col];
   row.modeClear = () => {
     row.s3 = ""; s3f.inp.value = "";
     row.elevRole = ""; elf.inp.value = "";
     row.elevMinutes = "60"; sel.value = "60";
-    row.elevIAM = false; icb.checked = false;
+    row.elevIAM = false; icb.checked = false; iwarn.hidden = true;
+    row.elevPass = ""; pf.inp.value = "";
   };
   det.appendChild(adv);
   art.appendChild(det);
