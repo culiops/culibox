@@ -3,6 +3,7 @@ package awsscope
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -147,7 +148,7 @@ func TestSessionPolicyBytesUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:s3:::logs-bucket/AWSLogs/*"]},{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect"],"Resource":"*"},{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}}]}`
+	const want = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:s3:::logs-bucket/AWSLogs/*"]},{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:GetParameterHistory","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords"],"Resource":"*"},{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}}]}`
 	if got != want {
 		t.Fatalf("SessionPolicy changed:\n got  %s\n want %s", got, want)
 	}
@@ -283,5 +284,29 @@ func TestElevatedPolicySizeBudget(t *testing.T) {
 	s, err := ElevatedPolicy("aws", []string{"culishop-tfstate"}, false)
 	if err != nil || len(s) > MaxPolicyChars {
 		t.Fatalf("the sandbox binding's policy must fit: %d chars, %v", len(s), err)
+	}
+}
+
+func TestDataReadDeniesCoverEveryValueRead(t *testing.T) {
+	sess, err := SessionPolicy("aws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elev, err := ElevatedPolicy("aws", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]string{"session": sess, "elevated": elev} {
+		for _, a := range []string{"ssm:GetParameterHistory", "dynamodb:GetRecords"} {
+			if !strings.Contains(p, `"`+a+`"`) {
+				t.Errorf("%s policy lacks deny of %s: %s", name, a, p)
+			}
+		}
+	}
+	got := DataReadDenies()
+	for _, a := range []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"} {
+		if !slices.Contains(got, a) {
+			t.Errorf("DataReadDenies lacks %s", a)
+		}
 	}
 }

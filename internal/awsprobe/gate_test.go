@@ -566,8 +566,8 @@ func TestGateRoleARNMustBeTheSSORole(t *testing.T) {
 
 func TestDataReadActions(t *testing.T) {
 	want := []string{"secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
-		"dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PartiQLSelect",
-		"s3:GetObject", "kms:Decrypt"}
+		"ssm:GetParameterHistory", "dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PartiQLSelect",
+		"dynamodb:GetRecords", "s3:GetObject", "kms:Decrypt"}
 	if !slices.Equal(DataReadActions, want) {
 		t.Errorf("DataReadActions = %v", DataReadActions)
 	}

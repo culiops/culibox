@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -23,6 +24,27 @@ import (
 // The derivation fails closed: whatever it cannot read exactly (a symlink a
 // box could re-point, a git config include, a submodule, an unreadable config)
 // refuses in-place boxing instead of guessing.
+
+// inPlaceFold is whether host paths compare ignoring letter case: macOS volumes
+// are case-insensitive by default, so a hooks or git path spelled in another case
+// is the same folder (#299). A variable so Linux tests can stand in for a Mac.
+var inPlaceFold = runtime.GOOS == "darwin"
+
+// sameHostDir reports whether a and b are one directory on disk. A variable so a
+// Linux test can stand in for a case-insensitive volume, where two spellings
+// of a folder are one directory.
+var sameHostDir = func(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
+}
+
+// underWS reports whether the host path p is at or below the workspace ws. Every
+// caller refuses or guards on "inside", so folding case only adds refusals.
+func underWS(p, ws string) bool { return underMount(p, []string{ws}, inPlaceFold) }
 
 // inPlaceTrustedHost is the way out of a refusal that has no local fix.
 const inPlaceTrustedHost = "Run it on the trusted host instead (clone-mode profiles are coming)"
@@ -319,6 +341,9 @@ func hooksGuard(root *os.Root, ws string, gitFi fs.FileInfo) (string, error) {
 		if target, err = hooksTarget(top, core.hooksPath); err != nil {
 			return "", err
 		}
+		if err := dotDotUnder(target, ws, core.hooksPath); err != nil {
+			return "", err
+		}
 	}
 	return guardHooksDir(root, ws, target)
 }
@@ -379,7 +404,7 @@ func enclosingConfig(ws, top string) (cfgs [][]byte, defHooks string, err error)
 	}
 	// A workspace inside the git directory itself writes its config and hooks.
 	for _, d := range []string{gitdir, common} {
-		if UnderMount(ws, []string{d}) {
+		if underWS(ws, d) {
 			return nil, "", refuseInPlace("%s is inside the git directory %s, where a box could write its config and hooks. "+
 				"Pick the repository's working tree instead, or %s", ws, d, lowerFirst(inPlaceTrustedHost))
 		}
@@ -404,7 +429,7 @@ func outsideConfigs(ws, gitdir, common string) ([][]byte, error) {
 }
 
 // hooksTarget is where git looks for hooks given core.hooksPath hp, as an
-// absolute path, or "" for a place that can never be in a workspace. Relative
+// absolute path, NOT cleaned (the .. are still in it, see dotDotUnder), or "" for a place that can never be in a workspace. Relative
 // paths are relative to top, the worktree root.
 func hooksTarget(top, hp string) (string, error) {
 	switch {
@@ -418,7 +443,7 @@ func hooksTarget(top, hp string) (string, error) {
 			return "", refuseInPlace("core.hooksPath of %s is %q, and the home directory it names is unknown (%v). "+
 				"Spell it out in full, or %s", top, hp, err, lowerFirst(inPlaceTrustedHost))
 		}
-		return filepath.Join(home, hp[1:]), nil
+		return home + hp[1:], nil
 	case strings.HasPrefix(hp, "~"):
 		name, rest, _ := strings.Cut(hp[1:], "/")
 		u, err := user.Lookup(name)
@@ -426,12 +451,50 @@ func hooksTarget(top, hp string) (string, error) {
 			return "", refuseInPlace("core.hooksPath of %s is %q, and that user's home is unknown (%v). "+
 				"Spell it out in full, or %s", top, hp, err, lowerFirst(inPlaceTrustedHost))
 		}
-		return filepath.Join(u.HomeDir, rest), nil
+		return u.HomeDir + "/" + rest, nil
 	case filepath.IsAbs(hp):
-		return filepath.Clean(hp), nil
+		return hp, nil
 	default:
-		return filepath.Join(top, hp), nil
+		return top + "/" + hp, nil
 	}
+}
+
+// dotDotUnder refuses raw (the hooks path made absolute, not cleaned) when a
+// ".." follows a component below the workspace (#304). Git resolves ".." on the
+// real filesystem, the guard cleans it as text, and a box can swap any
+// component below ws for a symlink, so the two could name different directories.
+// A ".." right after ws itself is safe: ws is a mount point the box cannot
+// replace, so ws/.. is the parent either way. A ".." wholly outside ws is host
+// territory and stays accepted.
+func dotDotUnder(raw, ws, hp string) error {
+	nws := len(splitPath(ws))
+	cur := string(filepath.Separator)
+	for _, c := range strings.Split(raw, string(filepath.Separator)) {
+		switch c {
+		case "", ".":
+		case "..":
+			if len(splitPath(cur)) > nws && underWS(cur, ws) {
+				return refuseInPlace("core.hooksPath of %s is %q, and its \"..\" follows %s, below the workspace: git resolves "+
+					"\"..\" through the real directory, so a box could swap that component for a symlink and redirect "+
+					"it. Write the path without \"..\", or %s", ws, hp, cur, lowerFirst(inPlaceTrustedHost))
+			}
+			cur = filepath.Dir(cur)
+		default:
+			cur = filepath.Join(cur, c)
+		}
+	}
+	return nil
+}
+
+// respellUnder spells p, which is at or below ws (compared with inPlaceFold),
+// with ws's own spelling for the part they share. filepath.Rel is case-sensitive:
+// ws /T/Repo and p /T/repo/hooks would give ../repo/hooks, not hooks.
+func respellUnder(p, ws string) string {
+	if !inPlaceFold {
+		return p
+	}
+	return filepath.Join(append([]string{string(filepath.Separator) + filepath.Join(splitPath(ws)...)},
+		splitPath(p)[len(splitPath(ws)):]...)...)
 }
 
 // guardHooksDir decides about the hooks directory target (absolute; "" none)
@@ -454,17 +517,31 @@ func guardHooksDir(root *os.Root, ws, target string) (string, error) {
 		return "", nil
 	}
 	target = filepath.Clean(target)
-	if !UnderMount(target, []string{ws}) {
+	// Case-sensitive on purpose: an other-case spelling may be a different
+	// folder (a host symlink, or a case-sensitive volume), so it is resolved
+	// first and only the resolved path is folded.
+	inside := UnderMount(target, []string{ws})
+	// Spelled in another case, but the very directory ws is on disk (a
+	// case-insensitive volume): it gets the same walk as the same-case spelling,
+	// which refuses a symlink. Resolving it instead would follow a link the box
+	// can re-point. A case-sensitive volume has two folders: resolve as below.
+	if !inside && underWS(target, ws) {
+		n := len(splitPath(ws))
+		prefix := string(filepath.Separator) + filepath.Join(splitPath(target)[:n]...)
+		inside = sameHostDir(prefix, ws)
+	}
+	if !inside {
 		real, err := whereCreated(target)
 		if err != nil {
 			return "", refuseInPlace("the git hooks directory %s of %s cannot be resolved (%v). Fix or unset "+
 				"core.hooksPath, or %s", target, ws, err, lowerFirst(inPlaceTrustedHost))
 		}
-		if !UnderMount(real, []string{ws}) {
+		if !underWS(real, ws) {
 			return "", nil
 		}
 		target = real
 	}
+	target = respellUnder(target, ws)
 	rel, err := filepath.Rel(ws, target)
 	if err != nil {
 		return "", refuseInPlace("the git hooks directory %s of %s cannot be placed (%v). %s", target, ws, err, inPlaceTrustedHost)
@@ -545,7 +622,7 @@ func resolveGitfile(ws, base string, b []byte) (gitdir, common string, err error
 // is in the workspace (as spelled, or once resolved), missing, or (wantDir) not
 // a directory.
 func gitPathOutside(ws, p, what string, wantDir bool) (string, error) {
-	if UnderMount(p, []string{ws}) {
+	if underWS(p, ws) {
 		return "", refuseInPlace("%s points git at %s, inside the workspace, where a box can write its config and hooks. %s",
 			what, p, inPlaceTrustedHost)
 	}
@@ -554,7 +631,7 @@ func gitPathOutside(ws, p, what string, wantDir bool) (string, error) {
 		return "", refuseInPlace("%s points git at %s, which cannot be resolved (%v). Fix it, or %s",
 			what, p, err, lowerFirst(inPlaceTrustedHost))
 	}
-	if UnderMount(real, []string{ws}) {
+	if underWS(real, ws) {
 		return "", refuseInPlace("%s points git at %s, which leads into the workspace, where a box can write its config and hooks. %s",
 			what, p, inPlaceTrustedHost)
 	}
@@ -605,7 +682,7 @@ func readOutside(ws, p string) ([]byte, error) {
 	if err != nil {
 		return nil, unreadable(p, err)
 	}
-	if UnderMount(real, []string{ws}) {
+	if underWS(real, ws) {
 		return nil, refuseInPlace("%s leads into the workspace, where a box can write it. %s", p, inPlaceTrustedHost)
 	}
 	f, err := os.Open(real)
