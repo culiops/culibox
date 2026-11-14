@@ -34,7 +34,7 @@
   "comment_bundle": "What a contained session may see of your agent configuration. Sourced by allowlist only: CLAUDE.md, skills/, agents/, commands/, plus a filtered settings.json and the MCP servers that can actually run inside the image. Credentials, history and transcripts are never copied. Empty = auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude); 'off' disables bundling.",
   "bundle_source": "",
 
-  "comment_credentials": "AWS connections, GitHub Apps and static tokens are not set up here. Add them in Settings > Credentials (saved to credentials.json in the data root), then tick them on a profile. See docs/AWS.md, docs/GITHUB.md and docs/STATIC-TOKENS.md.",
+  "comment_credentials": "Add AWS connections, GitHub Apps and static tokens in Settings > Credentials (saved to credentials.json in the data root), then tick them on a profile. config.json entries are only needed for a token file, an env var, an MCP server or a private egress host. See docs/AWS.md, docs/GITHUB.md and docs/STATIC-TOKENS.md.",
 
   "comment_workspace": "default_cwd cannot be your home directory when anything runs contained: the workspace is a box's only writable mount, so a box there would mount your whole home. Point it at a projects directory.",
 
@@ -46,14 +46,13 @@
 
   "agents": [
     {
-      "comment": "default base=inherit (full env). options set defaults shown as toggles on the spawn form, overridable per session. account links the agent to a named agent account (Settings > Agent accounts), which holds its Claude token; create the account there first; culibox init creates one named claude-box.",
+      "comment": "default base=inherit (full env). options set defaults shown as toggles on the spawn form, overridable per session. Add \"account\": \"<name>\" once that agent account exists in Settings > Agent accounts (it holds the Claude token; culibox init creates one named claude-box).",
       "name": "claude",
       "bin": "claude",
-      "account": "claude-box",
       "options": { "skip_permissions": true, "effort": "high", "model": "claude-opus-5-5" }
     },
     {
-      "comment": "opt-in lock-down: base=clean, no inherited secrets; the account supplies the Claude token.",
+      "comment": "opt-in lock-down: base=clean, no inherited secrets; the account supplies the Claude token. Create the claude-box account first (culibox init, or Settings > Agent accounts), or a spawn is refused with unknown account.",
       "name": "claude-locked",
       "bin": "claude",
       "base": "clean",
