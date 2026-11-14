@@ -57,11 +57,16 @@ type AWSElevate struct {
 	// Terraform can refresh what it uploaded. omitempty keeps every existing
 	// binding's hash unchanged.
 	BoxBucketPrefix string `json:"box_bucket_prefix,omitempty"`
+	// PassRolePrefix (#302, opt-in) lets a write window pass IAM roles whose
+	// name starts with it (Lambda, ECS and similar applies). Unset, the window
+	// cannot pass any role. omitempty keeps every existing binding's hash
+	// unchanged.
+	PassRolePrefix string `json:"pass_role_prefix,omitempty"`
 }
 
 // Scope is what the elevated session policy depends on from this block.
 func (e AWSElevate) Scope() awsscope.Elevation {
-	return awsscope.Elevation{AllowIAM: e.AllowIAM, BoxBucketPrefix: e.BoxBucketPrefix}
+	return awsscope.Elevation{AllowIAM: e.AllowIAM, BoxBucketPrefix: e.BoxBucketPrefix, PassRolePrefix: e.PassRolePrefix}
 }
 
 // Max is the longest window a grant may ask for.
@@ -128,6 +133,11 @@ func (b AWSBinding) Validate() error {
 		}
 		if e.BoxBucketPrefix != "" {
 			if err := awsscope.ValidBoxBucketPrefix(e.BoxBucketPrefix); err != nil {
+				return fmt.Errorf("aws.elevate.%w", err)
+			}
+		}
+		if e.PassRolePrefix != "" {
+			if err := awsscope.ValidPassRolePrefix(e.PassRolePrefix); err != nil {
 				return fmt.Errorf("aws.elevate.%w", err)
 			}
 		}

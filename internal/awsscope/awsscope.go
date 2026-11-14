@@ -216,8 +216,7 @@ var elevatedGuardDenies = []string{
 	"cloudtrail:StopLogging", "cloudtrail:DeleteTrail", "cloudtrail:UpdateTrail", "cloudtrail:PutEventSelectors",
 }
 
-// iamWriteDenies are the IAM write prefixes denied unless allow_iam. PassRole
-// is deliberately not among them.
+// iamWriteDenies are the IAM write prefixes denied unless allow_iam.
 var iamWriteDenies = []string{"iam:Create*", "iam:Delete*", "iam:Put*", "iam:Attach*", "iam:Detach*",
 	"iam:Update*", "iam:Add*", "iam:Remove*", "iam:Tag*", "iam:Untag*", "iam:Set*", "iam:Change*"}
 
@@ -228,6 +227,27 @@ type Elevation struct {
 	// BoxBucketPrefix, when set, lets the window read S3 objects in buckets
 	// whose name starts with it (the buckets the box creates). Empty = off.
 	BoxBucketPrefix string
+	// PassRolePrefix, when set, lets the window pass roles whose name starts
+	// with it (Lambda, ECS and similar applies need iam:PassRole). Empty = no
+	// role may be passed (#302).
+	PassRolePrefix string
+}
+
+// rolePrefixRe: IAM role-name characters without a wildcard or "/", 3 to 40.
+var rolePrefixRe = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{3,40}$`)
+
+// ValidPassRolePrefix accepts an elevate.pass_role_prefix. It becomes
+// "arn:<p>:iam::*:role/<prefix>*" in a NotResource, so a wildcard, "/" or
+// anything that could widen it never gets that far, and neither does a stem
+// that covers the agent's own roles or AWS's service roles.
+func ValidPassRolePrefix(s string) error {
+	if !rolePrefixRe.MatchString(s) {
+		return fmt.Errorf("pass_role_prefix %q must be 3 to 40 IAM role-name characters (letters, digits, + = , . @ _ -), with no wildcards or /", s)
+	}
+	if r, ok := reservedStem(s, reservedRoleStems); ok {
+		return fmt.Errorf("pass_role_prefix %q overlaps %q, a role name CuliBox or AWS uses: passing those roles is exactly what this limit prevents; pick your own stem (for example culibox-)", s, r)
+	}
+	return nil
 }
 
 // ssmParamReads are the SSM parameter reads, split out of dataReadDenies in
@@ -273,9 +293,20 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	st[2].Action = rest
 	st = slices.Insert(st, 3, statement{Effect: "Deny", Action: ssmParamReads,
 		NotResource: []string{"arn:" + partition + ":ssm:*::parameter/aws/service/*"}})
+	guards := slices.Clone(elevatedGuardDenies)
+	if el.PassRolePrefix == "" {
+		guards = append(guards, "iam:PassRole") // no role may be passed (#302)
+	}
 	st = append(st,
-		statement{Effect: "Deny", Action: elevatedGuardDenies, Resource: "*"},
+		statement{Effect: "Deny", Action: guards, Resource: "*"},
 		statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
+	if el.PassRolePrefix != "" {
+		if err := ValidPassRolePrefix(el.PassRolePrefix); err != nil {
+			return "", err
+		}
+		st = append(st, statement{Effect: "Deny", Action: "iam:PassRole",
+			NotResource: []string{"arn:" + partition + ":iam::*:role/" + el.PassRolePrefix + "*"}})
+	}
 	if !el.AllowIAM {
 		st = append(st, statement{Effect: "Deny", Action: iamWriteDenies, Resource: "*"})
 	}

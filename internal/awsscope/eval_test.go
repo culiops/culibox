@@ -243,14 +243,19 @@ func TestElevatedPolicyBoxBucketPrefix(t *testing.T) {
 	}
 }
 
-// The copy-path denies above are needed because iam:PassRole is allowed in the
-// window on every role except agentbox-*: ECS and Lambda applies need it. If a
-// later change denies PassRole, this test fails and the denies can be revisited.
+// The copy-path denies above are needed because, with pass_role_prefix set,
+// iam:PassRole stays allowed on roles named <prefix>* (ECS and Lambda applies
+// need it) and a service running as such a role is not bound by the session
+// policy. Without the prefix PassRole is denied (#302) and this reasoning does
+// not apply, but the denies stay: removing them is a separate decision.
 func TestElevatedPolicyPassRoleIsWhyCopyPathsAreDenied(t *testing.T) {
 	for _, iam := range []bool{false, true} {
-		s, _ := ElevatedPolicy("aws", nil, Elevation{AllowIAM: iam, BoxBucketPrefix: "culibox-"})
-		if got := evaluate(t, s, evalReq{"iam:PassRole", "arn:aws:iam::123456789012:role/s3-replication", nil}); got != "allow" {
-			t.Errorf("allow_iam %v: PassRole on a non-agentbox role is %s; the copy-path reasoning assumes allow", iam, got)
+		s, _ := ElevatedPolicy("aws", nil, Elevation{AllowIAM: iam, BoxBucketPrefix: "culibox-", PassRolePrefix: "lab-"})
+		if got := evaluate(t, s, evalReq{"iam:PassRole", "arn:aws:iam::123456789012:role/lab-s3-replication", nil}); got != "allow" {
+			t.Errorf("allow_iam %v: PassRole on a prefixed role is %s; the copy-path reasoning assumes allow", iam, got)
+		}
+		if got := evaluate(t, s, evalReq{"iam:PassRole", "arn:aws:iam::123456789012:role/s3-replication", nil}); got != "deny" {
+			t.Errorf("allow_iam %v: PassRole on another role is %s", iam, got)
 		}
 		if got := evaluate(t, s, evalReq{"iam:PassRole", "arn:aws:iam::123456789012:role/agentbox-agent-write", nil}); got != "deny" {
 			t.Errorf("allow_iam %v: PassRole on the agent's own role is %s", iam, got)

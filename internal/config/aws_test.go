@@ -274,14 +274,31 @@ func TestElevateValidate(t *testing.T) {
 	if err := b.Validate(); err != nil {
 		t.Errorf("box_bucket_prefix culibox- refused: %v", err)
 	}
-	if err := elevBinding().Validate(); err != nil || elevBinding().Elevate.BoxBucketPrefix != "" {
+	for _, bad := range []string{"agentbox-", "aws", "AWSServiceRole", "service-role", "ab", "lab*", "a/b/c"} {
+		b = elevBinding()
+		b.Elevate.PassRolePrefix = bad
+		if err := b.Validate(); err == nil || !strings.Contains(err.Error(), "aws.elevate.pass_role_prefix") {
+			t.Errorf("pass_role_prefix %q: want an aws.elevate.pass_role_prefix error, got %v", bad, err)
+		}
+	}
+	b = elevBinding()
+	b.Elevate.BoxBucketPrefix = "cdk-"
+	if err := b.Validate(); err == nil || !strings.Contains(err.Error(), "aws.elevate.box_bucket_prefix") {
+		t.Errorf("shared box_bucket_prefix cdk- accepted: %v", err)
+	}
+	b = elevBinding()
+	b.Elevate.PassRolePrefix = "culibox-"
+	if err := b.Validate(); err != nil {
+		t.Errorf("pass_role_prefix culibox- refused: %v", err)
+	}
+	if err := elevBinding().Validate(); err != nil || elevBinding().Elevate.BoxBucketPrefix != "" || elevBinding().Elevate.PassRolePrefix != "" {
 		t.Errorf("box_bucket_prefix must be optional and off by default: %v", err)
 	}
 }
 
 func TestElevateScopeCarriesTheElevatedPolicyInputs(t *testing.T) {
-	e := AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/w", AllowIAM: true, BoxBucketPrefix: "culibox-"}
-	if got := e.Scope(); !got.AllowIAM || got.BoxBucketPrefix != "culibox-" {
+	e := AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/w", AllowIAM: true, BoxBucketPrefix: "culibox-", PassRolePrefix: "lab-"}
+	if got := e.Scope(); !got.AllowIAM || got.BoxBucketPrefix != "culibox-" || got.PassRolePrefix != "lab-" {
 		t.Fatalf("Scope %+v", got)
 	}
 }
@@ -306,6 +323,7 @@ func TestHashCoversElevate(t *testing.T) {
 		"max 30":     {RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", MaxMinutes: 30},
 		"allow iam":  {RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", AllowIAM: true},
 		"box prefix": {RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", BoxBucketPrefix: "culibox-"},
+		"pass role":  {RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", PassRolePrefix: "culibox-"},
 	} {
 		b := goodBinding()
 		b.Elevate = e
@@ -327,8 +345,8 @@ func TestHashCoversElevate(t *testing.T) {
 	}
 	// An elevate block without the #211 prefix must hash as it did before
 	// the field existed: the key is left out of the hashed JSON entirely.
-	if j, _ := json.Marshal(elevBinding().normalized()); strings.Contains(string(j), "box_bucket_prefix") {
-		t.Errorf("an unset box_bucket_prefix reached the hash input: %s", j)
+	if j, _ := json.Marshal(elevBinding().normalized()); strings.Contains(string(j), "box_bucket_prefix") || strings.Contains(string(j), "pass_role_prefix") {
+		t.Errorf("an unset prefix reached the hash input: %s", j)
 	}
 }
 
@@ -336,8 +354,8 @@ func TestCloneIsDeep(t *testing.T) {
 	a := elevBinding()
 	a.EgressAllow = []string{"registry.npmjs.org"}
 	c := a.Clone()
-	c.S3Read[0], c.EgressAllow[0], c.Elevate.RoleARN = "x", "y", "z"
-	if a.S3Read[0] == "x" || a.EgressAllow[0] == "y" || a.Elevate.RoleARN == "z" {
+	c.S3Read[0], c.EgressAllow[0], c.Elevate.RoleARN, c.Elevate.PassRolePrefix = "x", "y", "z", "p"
+	if a.Elevate.PassRolePrefix == "p" || a.S3Read[0] == "x" || a.EgressAllow[0] == "y" || a.Elevate.RoleARN == "z" {
 		t.Fatal("Clone shares memory with the original")
 	}
 	if (&AWSBinding{}).Clone().Elevate != nil {
