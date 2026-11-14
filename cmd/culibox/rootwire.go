@@ -45,7 +45,7 @@ func maybeMoveDataRoot(cmd, configPath string, configSet bool, envHome, home, xd
 				logf("data root: the interrupted move in %s was not finished (%s); a serve start that uses that root finishes it", newRoot, why)
 				return rootmove.Outcome{Reason: why}, nil
 			}
-			return runRootMove(home, xdg, goos, logf)
+			return runRootMove(home, xdg, goos, configPath, true, logf)
 		}
 		out := rootmove.Outcome{Reason: "serve -config is set; the move only reads the default config"}
 		if ri, err := config.ResolveRoot(home, ""); err == nil && ri.Kind == config.RootLegacy {
@@ -71,15 +71,31 @@ func moveDataRoot(home, xdg, goos string, logf func(string, ...any)) (rootmove.O
 		return rootmove.Outcome{}, nil
 	}
 	relinked := moveXDGConfig(config.XDGBase(home, xdg), root, logf)
-	out, err := runRootMove(home, xdg, goos, logf)
+	out, err := runRootMove(home, xdg, goos, "", false, logf)
 	out.XDGRelinked = relinked
 	return out, err
 }
 
-// runRootMove runs rootmove.Run on the default roots with the default config's
-// deps (the config a move without -config resolves).
-func runRootMove(home, xdg, goos string, logf func(string, ...any)) (rootmove.Outcome, error) {
-	cfg, src, err := config.Resolve("", false, home, xdg, "")
+// runRootMove runs rootmove.Run on the default roots. Without -config it uses
+// the default config's deps (the config a move without -config resolves). With
+// -config (configSet) it uses the -config file and nothing else: config.ConfigFiles
+// lists only that file as protected for such an instance, so the default
+// config (<root>/config.json, ~/.config/{culibox,agent-box}) is never read, and
+// the -config file is the one serve runs with, so its analytics.db_path and
+// abduco_socket_dir are the instance's own (#283).
+func runRootMove(home, xdg, goos, configPath string, configSet bool, logf func(string, ...any)) (rootmove.Outcome, error) {
+	var (
+		cfg config.Config
+		src config.Source
+		err error
+	)
+	if configSet {
+		newRoot, _ := config.DefaultRoots(home)
+		cfg, err = config.Load(configPath)
+		src = config.Source{Path: configPath, Root: config.RootInfo{Path: newRoot}}
+	} else {
+		cfg, src, err = config.Resolve("", false, home, xdg, "")
+	}
 	if err != nil {
 		return rootmove.Outcome{}, nil
 	}
@@ -89,7 +105,11 @@ func runRootMove(home, xdg, goos string, logf func(string, ...any)) (rootmove.Ou
 		out = rootmove.Outcome{Reason: "config.json sets data_dir"}
 	} else {
 		cfgText, _ := os.ReadFile(src.Path) // "" with built-in defaults
-		credText, _ := os.ReadFile(credfile.Path(legacy))
+		credRoot := legacy
+		if configSet {
+			credRoot = newRoot // the instance's own data dir; legacy is not protected
+		}
+		credText, _ := os.ReadFile(credfile.Path(credRoot))
 		out, err = rootmove.Run(newRoot, legacy, rootmove.Deps{
 			GOOS:          goos,
 			Keeper:        newKeeper,

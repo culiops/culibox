@@ -584,3 +584,59 @@ func TestServeStartWarningsGate(t *testing.T) {
 		t.Error("a config that did not load must not be warned about")
 	}
 }
+
+// #283: a -config resume reads the -config file and no other config. A decoy in
+// ~/.config/culibox (which that instance does not protect) must neither pick the
+// analytics file the rewrite opens nor be read at all.
+func TestResumeUnderExplicitConfigIgnoresDefaultConfigs(t *testing.T) {
+	e := newRootEnv(t)
+	pendingMove(t, e, e.legacy+"\n"+secretstore.KeyHash(e.legacy)+"\n")
+	seed := func(db string) string {
+		st, err := analytics.Open(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		tr := e.legacy + "/boxstate/b/.claude/projects/p/a.jsonl"
+		p := &analytics.Parsed{Tokens: map[analytics.TokKey]*analytics.Tok{}, Attrs: map[analytics.AttrKey]int64{}}
+		if err := st.Apply("S1", "proj", tr, p, 10, 10, 1, nil); err != nil {
+			t.Fatal(err)
+		}
+		return tr
+	}
+	own := filepath.Join(e.home, "own", "analytics.db")
+	decoy := filepath.Join(e.home, "decoy", "analytics.db")
+	writeFile(t, filepath.Join(e.home, "own", ".keep"), "")
+	writeFile(t, filepath.Join(e.home, "decoy", ".keep"), "")
+	tr := seed(own)
+	seed(decoy)
+	// The decoy sits where config.Resolve would look first for this home.
+	writeFile(t, filepath.Join(e.xdg, "culibox", "config.json"),
+		`{"bind_addr":"127.0.0.1:8899","abduco_socket_dir":"/decoy/sockets","analytics":{"db_path":"`+decoy+`"}}`)
+	explicit := filepath.Join(e.home, "x.json")
+	writeFile(t, explicit, `{"bind_addr":"127.0.0.1:8899","analytics":{"db_path":"`+own+`"}}`)
+
+	out, err := maybeMoveDataRoot("serve", explicit, true, "", e.home, e.xdg, "linux", e.logf)
+	if err != nil || !out.Moved || !out.Resumed {
+		t.Fatalf("%+v %v; logs %v", out, err, e.logs)
+	}
+	moved := strings.Replace(tr, e.legacy, e.newRoot, 1)
+	has := func(db, path string) bool {
+		st, err := analytics.Open(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		_, _, ok, _, err := st.State(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if !has(own, moved) {
+		t.Error("the -config file's analytics db was not rewritten")
+	}
+	if has(decoy, moved) {
+		t.Error("the decoy config in ~/.config/culibox picked the rewrite target")
+	}
+}
