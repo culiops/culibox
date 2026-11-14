@@ -112,7 +112,16 @@ func TestCheckFoldsCaseOnDarwin(t *testing.T) {
 		}
 	}
 	env.Fold = false
-	if err := Check(env.Home+"/.SSH", env); err != nil {
+	err := Check(env.Home+"/.SSH", env)
+	if _, statErr := os.Stat(env.Home + "/.SSH"); statErr == nil {
+		// A case-insensitive volume (APFS): ~/.SSH is the ~/.ssh inode, and the
+		// inode rule refuses it whatever Fold says. That is correct.
+		if err == nil {
+			t.Errorf("no fold on a case-insensitive volume: ~/.SSH is ~/.ssh and should be refused")
+		}
+		return
+	}
+	if err != nil {
 		t.Errorf("no fold: ~/.SSH should be allowed, got %v", err)
 	}
 }

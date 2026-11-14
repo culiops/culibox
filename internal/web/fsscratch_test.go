@@ -99,7 +99,7 @@ func TestScratch_HomeLinkIntoScratchIsReadOnly(t *testing.T) {
 
 func TestScratch_LinkOutRefused(t *testing.T) {
 	_, scratch, _, pol := scratchFixture(t)
-	mustSymlink(t, "/etc/hostname", filepath.Join(scratch, "out"))
+	mustSymlink(t, outsideFile(t), filepath.Join(scratch, "out"))
 	if _, err := pol.resolve(filepath.Join(scratch, "out")); !errors.Is(err, errOutsideHome) {
 		t.Fatalf("err = %v, want errOutsideHome", err)
 	}

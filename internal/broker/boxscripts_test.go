@@ -123,6 +123,9 @@ func ghScriptDir(t *testing.T) string {
 // runNode runs node with a minimal env plus extra, returning stdout, stderr and the exit code.
 func runNode(t *testing.T, cwd, stdin string, args []string, env ...string) (string, string, int) {
 	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
 	cmd := exec.Command("node", args...)
 	cmd.Dir = cwd
 	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}, env...)

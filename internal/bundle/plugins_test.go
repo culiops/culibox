@@ -445,9 +445,12 @@ func TestSnapshotHasNoGitMetadataAnywhere(t *testing.T) {
 	writePluginFile(t, src, "cache/a/b/c/d/e/f/.git/config", "[credential]\n\thelper = store\n")
 	writePluginFile(t, src, "cache/a/sub/.git", "gitdir: ../../.git/modules/x\n")
 	writePluginFile(t, src, "cache/a/keep.txt", "kept")
-	// APFS and NTFS are case-insensitive: .GIT is the same directory there.
-	writePluginFile(t, src, "marketplaces/m/.GIT/config", gitConfig("https://tok3@h/y"))
-	writePluginFile(t, src, "cache/a/.Git", "gitdir: elsewhere\n")
+	// APFS and NTFS are case-insensitive: .GIT is the same directory there, so
+	// the differently-cased names can only be created on a case-sensitive volume.
+	if _, err := os.Stat(filepath.Join(src, "marketplaces/m/.GIT")); err != nil {
+		writePluginFile(t, src, "marketplaces/m/.GIT/config", gitConfig("https://tok3@h/y"))
+		writePluginFile(t, src, "cache/a/.Git", "gitdir: elsewhere\n")
+	}
 
 	ps, root := snap(t, src)
 	if len(ps.mounts) != 4 || len(ps.drops) != 0 {
