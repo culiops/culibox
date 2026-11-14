@@ -1,6 +1,6 @@
 # Store
 
-CuliBox can hold secret values itself: tokens, a GitHub App private key, the Claude OAuth token. Anywhere config takes a value reference (`file` or `env`) it can also say `{"type": "store", "id": "<id>"}`, and `secret_sources` accepts `{"type": "store"}`. On disk there is only ciphertext (age), so the store directory is safe to back up.
+CuliBox can hold secret values itself: tokens, a GitHub App private key, the Claude OAuth token. Anywhere config takes a value reference (`file` or `env`) it can also say `{"type": "store", "id": "<id>"}`, and the older `secret_sources` list accepts `{"type": "store"}`. On disk there is only ciphertext (age), so the store directory is safe to back up.
 
 ## What it protects against, and what it does not
 
@@ -8,6 +8,8 @@ CuliBox can hold secret values itself: tokens, a GitHub App private key, the Cla
 - **It does not hide values from agents.** While the store is unlocked, any process running as your user, a host-tier agent included, can read the master key and so every value. Boxed agents cannot. A value still reaches the box the way it always did (env for a declared secret, `agentbox-env` for a static token, the git helper for GitHub).
 - **It only protects what you move into it.** A value that is also in an env file, a shell profile or your home directory is still readable from a snapshot. The same goes for everything else on the machine that CuliBox does not own, such as SSH keys and cloud-CLI caches.
 - It is not a vault product: one machine, one user, no sync.
+
+**From the web UI.** **Settings → Credentials** is the usual way in. Its encrypted-store strip creates the store (**Create the encrypted store**) and, on Linux, locks it (**Lock now**). The forms that take a secret store it for you: **Add token** and the GitHub App form put the pasted value or key in the store. **Stored values → Set a value** adds any other value by id. Values are write-only: you can replace or delete one, never read it back. The CLI below does the same without the browser.
 
 **Commands.** The CLI honours `-config` like the rest of CuliBox, writes the files directly and does not need the daemon running.
 
@@ -28,10 +30,12 @@ An id is 1 to 64 characters of letters, digits, `_` and `-`, starting with a let
 
 **After a reboot the store is locked.** Anything that needs a store value is then refused until someone unlocks: a spawn fails with `store is locked`, and a running boxed session's next token fetch gets a 503. If the Claude token is in the store, that means every Claude session. A host-tier agent hits this too.
 
-**Moving the Claude token into the store.** Out of the box the token comes from the daemon's environment.
+**The Claude token.** The usual way is an agent account: **Settings → Agent accounts** takes a pasted token for a Claude account and stores it as `ACCT_<NAME>_TOKEN` (`culibox init` does this for the `claude-box` account).
 
-1. `printenv CLAUDE_CODE_OAUTH_TOKEN | culibox store set CLAUDE_CODE_OAUTH_TOKEN`
-2. Add `{"type": "store"}` to `secret_sources` **before** the `env` source, and restart CuliBox.
+**Moving a Claude token you keep in the daemon's environment.** If the token still comes from `CLAUDE_CODE_OAUTH_TOKEN` in the daemon's environment, you can move it into the store:
+
+1. Create an agent account in **Settings → Agent accounts** and paste the token on its row (`printenv CLAUDE_CODE_OAUTH_TOKEN` shows it). The token goes into the store as `ACCT_<NAME>_TOKEN`.
+2. Choose that account on your profiles. (A config that still uses the older `secret_sources` list can instead run `printenv CLAUDE_CODE_OAUTH_TOKEN | culibox store set CLAUDE_CODE_OAUTH_TOKEN` and add `{"type": "store"}` before the `env` source; see [Older forms that still load](CONFIG.md#older-forms-that-still-load).)
 3. Delete the value from every env file and shell profile that still holds it (the file your service manager loads as `EnvironmentFile=`, your dev and prod copies, your login shell's profile).
 4. Restart CuliBox and check for leftovers. At start the daemon logs one line for each name the store serves that is still in the daemon's own environment, and Settings shows the same list for the running daemon. `culibox doctor` only checks the environment it is run from, so it does not see what your service manager gives the daemon.
 

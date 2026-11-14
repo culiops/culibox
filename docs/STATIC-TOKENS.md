@@ -1,6 +1,6 @@
 # Static tokens for agents
 
-Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once in `config.json`. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. A bound spawn is refused on the host tier. On macOS it goes through the egress allowlist like on Linux (the allowlist is verified on a Mac; the token wrapper there is not yet; see [docs/MACOS.md](MACOS.md#every-box)).
+Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once, on the Credentials screen. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. A bound spawn is refused on the host tier. On macOS it goes through the egress allowlist like on Linux (the allowlist and the token wrapper are both verified on a Mac; see [docs/MACOS.md](MACOS.md#every-box)).
 
 ## What this does and does not protect against
 
@@ -11,7 +11,9 @@ Some services have no short-lived credential to mint: Grafana service-account to
 
 ## Set up
 
-**1. Define the entry.** Put the token in a file owned by the user that runs CuliBox, a regular file (not a symlink) with mode `0600` or tighter, or in the daemon's own environment. Then declare the entry in `config.json` and restart CuliBox:
+**1. Define the entry.** Open **Settings → Credentials**, choose **Add credential → Add token**, and pick the provider: Sentry, Grafana, Datadog, PagerDuty, a GitHub personal access token, or **Other** (for Atlassian and anything else; you give the provider name, the variable names that carry the token and the hosts). The provider fills in the variable names and the egress host from the Region, URL or Site you enter. Give the entry a name, an optional label, tick **prod** if it is production, and paste the value. The value goes into the [encrypted store](STORE.md) and is never shown again; if there is no store yet, the screen offers to create it (you can add a value while the store is locked). The entry takes effect at once: no restart is needed, and a profile can bind it straight away. An entry made here has no `mcp` server and no `file` or `env` value reference; those are `config.json` only.
+
+An entry can also be declared in `config.json`, which is read at daemon start, so adding or editing one needs a restart. The Credentials screen lists it as defined in `config.json` and does not edit or delete it. This is the only way to use a token file, the daemon's environment, an MCP server or a private egress host. Put the token in a file owned by the user that runs CuliBox, a regular file (not a symlink) with mode `0600` or tighter, in the daemon's own environment, or in the store. The full entry:
 
 ```json
 "static_tokens": [
@@ -35,7 +37,7 @@ Some services have no short-lived credential to mint: Grafana service-account to
 | `provider`, `label`, `description` | Optional, for the UI and `--list`. `provider` is `^[a-z0-9][a-z0-9-]{0,31}$` and groups the picker. `label` is at most 32 characters, `description` at most 200. |
 | `prod` | Optional. Shows a "production" chip in the picker and a `[prod]` mark in `--list`. A label only: it changes no behaviour. |
 
-**2. Bind it to a profile.** Set `"runtime": "box"` explicitly, then tick the entries in the profile form's **Tokens** block, or write the names in `config.json`:
+**2. Bind it to a profile.** Set the profile's runtime to the box, then tick the entries in the profile form's **Tokens** block. In `config.json` or the profile's JSON, set `"runtime": "box"` explicitly and list the names:
 
 ```json
 { "name": "claude-ops", "bin": "claude", "runtime": "box", "tokens": ["grafana-prod"] }
@@ -91,12 +93,12 @@ The two share a variable name, which is fine: the agent picks one per command (`
 
 When you create the token on GitHub, make it a fine-grained one: only the repos you need, Contents read and write, Pull requests read and write, Metadata read; avoid Administration and "All repositories". CuliBox cannot read a fine-grained token's permissions or repository list; scope it on GitHub.
 
-**Audit.** Every fetch writes a row to `audit.db` (session, profile, entry name, outcome) before the value leaves, never the value; if the row cannot be written, no token is returned. That is one row per `agentbox-env` call and per `git` or `gh` call with a PAT owner. There is no pruning yet, so the table grows with use; plan for it.
+**Audit.** Every fetch writes a row to `audit.db` (session, profile, entry name, outcome) before the value leaves, never the value; if the row cannot be written, no token is returned. That is one row per `agentbox-env` call and per `git` or `gh` call with a PAT owner. Only egress rows are pruned (`audit_egress_retention_days` in [Configuration](CONFIG.md)); token fetch rows are kept, so the table grows with use; plan for it.
 
 ## Limits and operations
 
 - A running session keeps the entry it was spawned with, even across a daemon restart. Deleting an entry stops its fetches but not its egress; kill the session to cut an agent off.
-- `static_tokens` is read at daemon start only: adding, removing or editing an entry needs a restart. The token itself is read at each fetch, so rotating a token file takes effect with no restart. An `env` reference is the daemon's environment, so changing it needs a restart too.
+- Entries made on the Credentials screen apply at once. `static_tokens` in `config.json` is read at daemon start only: adding, removing or editing an entry there needs a restart. The token itself is read at each fetch, so rotating a token file takes effect with no restart. An `env` reference is the daemon's environment, so changing it needs a restart too.
 - A session may fetch at most 60 tokens a minute; more are refused with a rate-limit error.
 - `culibox doctor` prints a line per entry: whether its reference resolves (a file problem fails; an `env` variable unset in doctor's own shell is a warning, because the daemon reads its own environment) and a warning for a wide private `cidr`.
-- The box image must ship `agentbox-env` and the MCP server binaries your entries use (Grafana, Sentry, Atlassian): use an image built from v0.35.0 or newer and set `box_image` to it.
+- The box image must ship `agentbox-env` and the MCP server binaries your entries use (Grafana, Sentry, Atlassian): use the image `culibox box setup` builds, or `ghcr.io/culiops/culibox` pinned by digest, and set `box_image` to it.
