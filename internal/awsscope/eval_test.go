@@ -211,16 +211,17 @@ func TestElevatedPolicyBoxBucketPrefix(t *testing.T) {
 		{"s3:GetObject", "arn:aws:s3:::human-data/culibox-x/y", "deny", "deny", "deny"},
 		{"s3:GetObject", "arn:aws:s3:::culiboxer/y", "deny", "deny", "deny"},
 		{"s3:GetObject", "arn:aws:s3:::x-culibox-y/z", "deny", "deny", "deny"},
-		// the laundering paths: copies into a box bucket that never call
-		// s3:GetObject as the session (a table export, or a job run by a passed role)
-		{"dynamodb:ExportTableToPointInTime", "arn:aws:dynamodb:us-east-1:123456789012:table/orders", "deny", "allow", "deny"},
-		{"rds:StartExportTask", "arn:aws:rds:us-east-1:123456789012:snapshot:prod-db", "deny", "allow", "deny"},
-		{"s3:CreateJob", "*", "deny", "allow", "deny"},
-		{"datasync:StartTaskExecution", "arn:aws:datasync:us-east-1:123456789012:task/task-1", "deny", "allow", "deny"},
-		{"backup:StartRestoreJob", "arn:aws:backup:us-east-1:123456789012:recovery-point:rp-1", "deny", "allow", "deny"},
-		{"s3:PutReplicationConfiguration", "arn:aws:s3:::human-data", "deny", "allow", "deny"},
+		// the laundering paths: copies into a readable bucket that never call
+		// s3:GetObject as the session (a table export, or a job run by a passed
+		// role). "off" has an s3_read bucket, which is readable too (#301).
+		{"dynamodb:ExportTableToPointInTime", "arn:aws:dynamodb:us-east-1:123456789012:table/orders", "deny", "deny", "deny"},
+		{"rds:StartExportTask", "arn:aws:rds:us-east-1:123456789012:snapshot:prod-db", "deny", "deny", "deny"},
+		{"s3:CreateJob", "*", "deny", "deny", "deny"},
+		{"datasync:StartTaskExecution", "arn:aws:datasync:us-east-1:123456789012:task/task-1", "deny", "deny", "deny"},
+		{"backup:StartRestoreJob", "arn:aws:backup:us-east-1:123456789012:recovery-point:rp-1", "deny", "deny", "deny"},
+		{"s3:PutReplicationConfiguration", "arn:aws:s3:::human-data", "deny", "deny", "deny"},
 		// replication FROM a box bucket only moves box data: allowed
-		{"s3:PutReplicationConfiguration", "arn:aws:s3:::culibox-lab-1", "allow", "allow", "allow"},
+		{"s3:PutReplicationConfiguration", "arn:aws:s3:::culibox-lab-1", "allow", "deny", "allow"},
 		// everything else the elevated policy denies stays denied
 		{"secretsmanager:GetSecretValue", "arn:aws:secretsmanager:us-east-1:123456789012:secret:culibox-x", "deny", "deny", "deny"},
 		{"kms:Decrypt", "arn:aws:kms:us-east-1:123456789012:key/k", "deny", "deny", "deny"},
@@ -260,6 +261,57 @@ func TestElevatedPolicyPassRoleIsWhyCopyPathsAreDenied(t *testing.T) {
 		if got := evaluate(t, s, evalReq{"iam:PassRole", "arn:aws:iam::123456789012:role/agentbox-agent-write", nil}); got != "deny" {
 			t.Errorf("allow_iam %v: PassRole on the agent's own role is %s", iam, got)
 		}
+	}
+}
+
+// #301: the managed-copy denies follow the session's ability to READ a bucket,
+// not the box prefix: an s3_read bucket alone is enough for an export into it
+// to be read back. With nothing readable (s3_read empty, no prefix) every
+// s3:GetObject is denied, so the denies would protect nothing and are absent.
+func TestElevatedPolicyCopyDeniesFollowReadableBuckets(t *testing.T) {
+	copies := []evalReq{
+		{"dynamodb:ExportTableToPointInTime", "arn:aws:dynamodb:us-east-1:123456789012:table/orders", nil},
+		{"rds:StartExportTask", "arn:aws:rds:us-east-1:123456789012:snapshot:prod-db", nil},
+		{"s3:CreateJob", "*", nil},
+		{"datasync:StartTaskExecution", "arn:aws:datasync:us-east-1:123456789012:task/task-1", nil},
+		{"backup:StartRestoreJob", "arn:aws:backup:us-east-1:123456789012:recovery-point:rp-1", nil},
+		{"s3:PutReplicationConfiguration", "arn:aws:s3:::human-data", nil},
+	}
+	for _, c := range []struct {
+		name string
+		s3   []string
+		el   Elevation
+		want string
+	}{
+		{"neither", nil, Elevation{}, "allow"},
+		{"s3_read only", []string{"culishop-tfstate"}, Elevation{}, "deny"},
+		{"s3_read prefix entry only", []string{"culishop-artifacts/releases/"}, Elevation{AllowIAM: true}, "deny"},
+		{"prefix only", nil, Elevation{BoxBucketPrefix: "culibox-"}, "deny"},
+		{"both", []string{"culishop-tfstate"}, Elevation{BoxBucketPrefix: "culibox-"}, "deny"},
+	} {
+		s, err := ElevatedPolicy("aws", c.s3, c.el)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range copies {
+			if got := evaluate(t, s, r); got != c.want {
+				t.Errorf("%s: %s = %s want %s", c.name, r.action, got, c.want)
+			}
+		}
+	}
+	// Replication FROM a bucket moves only data the session can read where that
+	// is the whole bucket named by box_bucket_prefix; an s3_read entry may be a
+	// prefix of a bucket, so with s3_read alone every replication change is denied.
+	s, _ := ElevatedPolicy("aws", []string{"culishop-tfstate"}, Elevation{})
+	if got := evaluate(t, s, evalReq{"s3:PutReplicationConfiguration", "arn:aws:s3:::culishop-tfstate", nil}); got != "deny" {
+		t.Errorf("replication from an s3_read bucket with no prefix: %s", got)
+	}
+	s, _ = ElevatedPolicy("aws", []string{"culishop-tfstate"}, Elevation{BoxBucketPrefix: "culibox-"})
+	if got := evaluate(t, s, evalReq{"s3:PutReplicationConfiguration", "arn:aws:s3:::culibox-x", nil}); got != "allow" {
+		t.Errorf("replication from a box bucket: %s", got)
+	}
+	if got := evaluate(t, s, evalReq{"s3:PutReplicationConfiguration", "arn:aws:s3:::culishop-tfstate", nil}); got != "deny" {
+		t.Errorf("replication from an s3_read bucket with a prefix set: %s", got)
 	}
 }
 
@@ -316,8 +368,9 @@ func TestValidBoxBucketPrefix(t *testing.T) {
 }
 
 // The largest realistic elevated policy must fit STS's 2,048-character limit:
-// the longest partition, IAM writes denied (more statements), the longest box
-// prefix allowed, and an s3_read list of three long entries.
+// the longest partition, IAM writes denied (more statements), both prefixes at
+// their 40-character maximum, the managed-copy denies on (#301), and an s3_read
+// list of three long entries.
 func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 	prefix := strings.Repeat("p", 39) + "-" // 40, the maximum
 	s3Read := []string{
@@ -325,13 +378,28 @@ func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 		strings.Repeat("l", 50) + "/AWSLogs/123456789012/", // a log bucket, account prefix
 		"culishop-artifacts-ap-southeast-1/releases/",
 	}
-	s, err := ElevatedPolicy("aws-us-gov", s3Read, Elevation{BoxBucketPrefix: prefix})
+	maxEl := Elevation{BoxBucketPrefix: prefix, PassRolePrefix: strings.Repeat("r", 40)}
+	// One 63-character s3_read bucket, every option at its maximum, the longest
+	// partition: measured 1,906 of 2,048 (2026-11-14).
+	one, err := ElevatedPolicy("aws-us-gov", s3Read[:1], maxEl)
+	if err != nil || len(one) > MaxPolicyChars {
+		t.Fatalf("the one-entry maximum must fit: %d chars, %v", len(one), err)
+	}
+	t.Logf("one s3_read bucket, both prefixes at 40 characters: %d of %d", len(one), MaxPolicyChars)
+	// Three long s3_read entries with ordinary 8-character prefixes: measured
+	// 1,973 of 2,048 (2026-11-14).
+	s, err := ElevatedPolicy("aws-us-gov", s3Read, Elevation{BoxBucketPrefix: "culibox-", PassRolePrefix: "culibox-"})
 	if err != nil {
 		t.Fatalf("largest realistic policy refused: %v", err)
 	}
 	t.Logf("largest realistic elevated policy: %d of %d characters", len(s), MaxPolicyChars)
 	if len(s) > MaxPolicyChars {
 		t.Fatalf("%d > %d", len(s), MaxPolicyChars)
+	}
+	// Three long entries AND both prefixes at 40 characters is over (fails closed,
+	// naming the elevated policy): measured 2,069.
+	if _, err := ElevatedPolicy("aws-us-gov", s3Read, maxEl); err == nil || !strings.Contains(err.Error(), "elevated session policy") {
+		t.Fatalf("the all-maximum policy must be refused with the elevated-policy size error, got %v", err)
 	}
 	// and the limit is still enforced with the prefix on
 	var many []string

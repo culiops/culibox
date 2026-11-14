@@ -221,6 +221,8 @@ func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
 			`{"Effect":"Deny","Action":["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:GetParameterHistory"],"NotResource":["arn:aws:ssm:*::parameter/aws/service/*"]},`, 1)
 	// #302: with pass_role_prefix unset, iam:PassRole joins the guard denies.
 	want = strings.Replace(want, `"cloudtrail:PutEventSelectors"],"Resource":"*"}`, `"cloudtrail:PutEventSelectors","iam:PassRole"],"Resource":"*"}`, 1)
+	// #301: an s3_read bucket is readable, so the managed-copy denies are on (no replication exception without a prefix).
+	want = strings.Replace(want, `"Resource":"*"}]}`, `"Resource":"*"},{"Effect":"Deny","Action":["dynamodb:ExportTableToPointInTime","rds:StartExportTask","s3:CreateJob","datasync:StartTaskExecution","backup:StartRestoreJob","s3:PutReplicationConfiguration"],"Resource":"*"}]}`, 1)
 	if want == elevatedBefore211 {
 		t.Fatal("test literal out of date: the replacement did not apply")
 	}

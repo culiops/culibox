@@ -63,6 +63,16 @@ provider "aws" {
 - A session that binds any write-capable connection is exclusive: it gets its own box, even if you never grant a window.
 - A connection other than the elevated one stays on its own `role_arn` while a window is open, so it can write only if that role can (see the base-role check below).
 
+The elevate block takes these optional limits, which the grant panel and the connection editor show:
+
+| `elevate` field | Effect |
+|---|---|
+| `allow_iam` | Lets the window change IAM. The agent can then create and use its own roles, so the data-read blocks are advisory in that window. |
+| `pass_role_prefix` | Roles the window may pass with `iam:PassRole`: only those named `<prefix>*`. Left out, no role can be passed, so Lambda, ECS and instance-profile applies fail. 3 to 40 role-name characters; `agentbox-`, `aws` and `service-role` stems are refused. |
+| `box_bucket_prefix` | Objects in buckets named `<prefix>*` are readable in the window (config file only). Shared stems such as `aws`, `cdk-` and `sagemaker-` are refused. |
+
+Details and what each one weakens: [docs/aws/agent-role](aws/agent-role/README.md).
+
 Read-only comes from the role, not from CuliBox: point each connection's `role_arn` at a read-only role and put write access only in `elevate.role_arn`. The session policy CuliBox adds narrows data reads; it does not remove writes, so a connection whose `role_arn` can write can write at any time.
 
 **Base-role check.** At spawn, CuliBox asks each base role whether it can write. It runs IAM policy simulation of 11 broad write actions (`s3:PutObject`, `s3:DeleteObject`, `s3:CreateBucket`, `ec2:RunInstances`, `ec2:TerminateInstances`, `iam:CreateUser`, `iam:AttachRolePolicy`, `lambda:UpdateFunctionCode`, `rds:DeleteDBInstance`, `dynamodb:PutItem`, `cloudformation:CreateStack`) with the role's own credentials. The UI, `agentbox-env --list` and `culibox doctor` then show one of:
