@@ -1,6 +1,10 @@
 # CI: the same checks as scripts/test.sh, on Linux amd64 and arm64, plus a secret scan.
 #
-# darwin is compile-checked only (vet and build, CGO off); it is never run here.
+# darwin is compile-checked on Linux (job darwin: vet and a build of all four targets,
+# CGO off) and its unit tests run natively on a GitHub-hosted Apple silicon runner (job
+# darwin-test, CGO off like the shipped binaries). Standard runners are free in a public
+# repository. arm64 runners have no nested virtualization, so what needs a VM (colima)
+# or a real box stays on the rented Mac.
 # The abduco-backed Go tests need a real abduco, so it is built from the pinned
 # source first, and AGENT_BOX_REQUIRE_ABDUCO=1 turns a missing abduco into a test
 # failure instead of a silent skip.
@@ -157,6 +161,34 @@ jobs:
             echo "build $goos/$goarch"
             GOOS=$goos GOARCH=$goarch go build -o /dev/null ./cmd/culibox
           done
+
+  # The darwin unit tests, run for real (#293): the shipped darwin binaries are built
+  # CGO_ENABLED=0, so the tests are too. The vet and the four-target build stay in the
+  # darwin job: they cover darwin/amd64 and the uidemo tag, which this runner does not.
+  darwin-test:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: "0"
+      AGENT_BOX_REQUIRE_ABDUCO: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The upgrade test builds the previous release tag, so it needs the tags.
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the pinned abduco
+        run: |
+          scripts/ci/install-abduco.sh "$RUNNER_TEMP/abduco"
+          echo "$RUNNER_TEMP/abduco/bin" >> "$GITHUB_PATH"
+      - name: go test
+        run: go test ./...
+      # bash 3.2 code, the same script the Mac rounds run. A SKIP is a failure.
+      - name: upgrade test (previous release -> this commit)
+        run: AB_UPGRADE_REQUIRE=1 bash scripts/upgrade-test.sh
 
   secrets:
     runs-on: ubuntu-24.04

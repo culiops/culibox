@@ -992,11 +992,28 @@ func TestCIWorkflow(t *testing.T) {
 		}
 	}
 
-	// Runners: the test matrix is exactly the two Linux runners, and no macOS
-	// runner exists anywhere (macOS is verified on a host, never in CI). The one
-	// allowed mention is the offline test of the verify script, which runs on Linux.
-	if strings.Contains(strings.ToLower(strings.ReplaceAll(wf, "scripts/macos-verify_test.sh", "")), "macos") {
-		t.Error("ci.yml must not mention macos (no macOS runners)")
+	// Runners: the test matrix is exactly the two Linux runners. The one macOS
+	// runner is job darwin-test on macos-15 (#293: the darwin unit tests, free on a
+	// public repo); macos-latest would drift, and no other job may use macOS. The
+	// other allowed mention is the offline test of the verify script, which runs on Linux.
+	rest := strings.ReplaceAll(wf, "scripts/macos-verify_test.sh", "")
+	rest = strings.ReplaceAll(rest, jobBlock(t, wf, "darwin-test"), "")
+	// Comments may name macOS; a runner label may not.
+	for _, l := range strings.Split(rest, "\n") {
+		if code, _, _ := strings.Cut(l, "#"); strings.Contains(strings.ToLower(code), "macos") {
+			t.Errorf("ci.yml: only job darwin-test may use a macOS runner: %q", l)
+		}
+	}
+	if m := regexp.MustCompile(`(?m)^    runs-on:\s*(\S+)\s*$`).FindStringSubmatch(jobBlock(t, wf, "darwin-test")); m == nil || m[1] != "macos-15" {
+		t.Errorf("job darwin-test must run on macos-15, got %v", m)
+	}
+	if !strings.Contains(jobBlock(t, wf, "darwin-test"), "CGO_ENABLED: \"0\"") {
+		t.Error("job darwin-test must set CGO_ENABLED: \"0\" (the shipped darwin binaries are built without cgo)")
+	}
+	for _, want := range []string{"go test ./...", "AB_UPGRADE_REQUIRE=1 bash scripts/upgrade-test.sh"} {
+		if !strings.Contains(jobBlock(t, wf, "darwin-test"), want) {
+			t.Errorf("job darwin-test lacks %q", want)
+		}
 	}
 	matrix := regexp.MustCompile(`(?m)^\s+os:\s*\[(.*)\]\s*$`).FindStringSubmatch(jobBlock(t, wf, "test"))
 	if matrix == nil {
@@ -1277,7 +1294,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		t.Error("release.yml should have a setup-go step in jobs build and release")
 	}
 	if strings.Contains(strings.ToLower(wf), "macos") {
-		t.Error("release.yml must not mention macos (no macOS runners)")
+		t.Error("release.yml must not mention macos (the macOS runner is ci.yml's job darwin-test)")
 	}
 
 	// R4: a per-ref group that never cancels. Never github.workflow, which the

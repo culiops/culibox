@@ -21,10 +21,10 @@
 #     exposure; the job's write permissions and the tag ruleset are what bound a
 #     release)
 #
-# Runners: Linux only. There are no macOS runners (the darwin tarballs are
-# cross-compiled here and verified on a real Mac afterwards, see
-# scripts/macos-verify.sh); the notes say darwin is NOT yet verified until
-# that record exists.
+# Runners: Linux only here. The darwin tarballs are cross-compiled here; the darwin
+# unit tests run in ci.yml (the tests job below calls it) and the rest is verified on
+# a real Mac afterwards, see scripts/macos-verify.sh. The notes say darwin is NOT yet
+# verified until that record exists.
 name: release
 
 on:
