@@ -30,6 +30,18 @@ import (
 // is the same folder (#299). A variable so Linux tests can stand in for a Mac.
 var inPlaceFold = runtime.GOOS == "darwin"
 
+// sameHostDir reports whether a and b are one directory on disk. A variable so a
+// Linux test can stand in for a case-insensitive volume, where two spellings
+// of a folder are one directory.
+var sameHostDir = func(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
+}
+
 // underWS reports whether the host path p is at or below the workspace ws. Every
 // caller refuses or guards on "inside", so folding case only adds refusals.
 func underWS(p, ws string) bool { return underMount(p, []string{ws}, inPlaceFold) }
@@ -478,7 +490,17 @@ func guardHooksDir(root *os.Root, ws, target string) (string, error) {
 	// Case-sensitive on purpose: an other-case spelling may be a different
 	// folder (a host symlink, or a case-sensitive volume), so it is resolved
 	// first and only the resolved path is folded.
-	if !UnderMount(target, []string{ws}) {
+	inside := UnderMount(target, []string{ws})
+	// Spelled in another case, but the very directory ws is on disk (a
+	// case-insensitive volume): it gets the same walk as the same-case spelling,
+	// which refuses a symlink. Resolving it instead would follow a link the box
+	// can re-point. A case-sensitive volume has two folders: resolve as below.
+	if !inside && underWS(target, ws) {
+		n := len(splitPath(ws))
+		prefix := string(filepath.Separator) + filepath.Join(splitPath(target)[:n]...)
+		inside = sameHostDir(prefix, ws)
+	}
+	if !inside {
 		real, err := whereCreated(target)
 		if err != nil {
 			return "", refuseInPlace("the git hooks directory %s of %s cannot be resolved (%v). Fix or unset "+

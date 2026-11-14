@@ -138,4 +138,31 @@ func TestInPlaceGuardFoldsCase(t *testing.T) {
 			wantMounts(t, ws, got, ".git", ".claude", "sub")
 		}
 	})
+	t.Run("other-case hooks path that is the workspace on disk is walked like the workspace", func(t *testing.T) {
+		withFold(t, true)
+		old := sameHostDir
+		sameHostDir = func(a, b string) bool { return true }
+		t.Cleanup(func() { sameHostDir = old })
+		msg := func(spelling string) string {
+			tmp := realTemp(t)
+			ws := filepath.Join(tmp, "Repo")
+			mkdirs(t, filepath.Join(tmp, "out", "hooks"))
+			gitRepo(t, ws, "[core]\n\thooksPath = "+filepath.Join(tmp, spelling, "link", "hooks")+"\n")
+			symlink(t, filepath.Join(tmp, "out"), filepath.Join(ws, "link"))
+			if spelling != "Repo" {
+				// Stands in for APFS, where repo/link IS Repo/link: here repo is
+				// its own folder whose link leads out, as resolution would follow.
+				mkdirs(t, filepath.Join(tmp, spelling))
+				symlink(t, filepath.Join(tmp, "out"), filepath.Join(tmp, spelling, "link"))
+			}
+			_, err := inPlaceMounts(ws)
+			if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "reached through the symlink") {
+				t.Fatalf("%s: want a symlink refusal, got %v", spelling, err)
+			}
+			return strings.ReplaceAll(err.Error(), tmp, "<tmp>")
+		}
+		if same, other := msg("Repo"), msg("repo"); same != other {
+			t.Fatalf("other-case refusal differs:\n same  %s\n other %s", same, other)
+		}
+	})
 }
