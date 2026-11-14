@@ -810,3 +810,112 @@ func TestGitConfigValues(t *testing.T) {
 		})
 	}
 }
+
+// #305: git resolves a gitfile's gitdir: and a commondir one component at a
+// time through the real directories (and so does the kernel for a linked
+// config). A path that passes below the workspace on its way, even one that
+// ends outside it, is one the box can redirect by swapping a component for a
+// link, so it is refused; a ".." that leaves ws right after it, or one wholly
+// outside it, is accepted. <ws> and <tmp> are replaced; the main repository's
+// git dir is <tmp>/wt/.git and holds a worktree git dir worktrees/w.
+func TestInPlaceGitfileWalk(t *testing.T) {
+	cases := []struct {
+		name      string
+		gitdir    string      // the gitdir: line of <ws>/.git
+		commondir string      // for worktrees/w; "" = none
+		links     [][2]string // (at, target)
+		config    string      // when set, <tmp>/wt/.git/config is a link to it
+		refuse    string      // a substring of the refusal; "" = accepted
+	}{
+		{name: "relative gitdir outside", gitdir: "../wt/.git"},
+		{name: "relative gitdir with .. right after ws", gitdir: "../Repo/../wt/.git"},
+		{name: "gitdir through a host link to the parent of ws", gitdir: "<tmp>/Alias/wt/.git",
+			links: [][2]string{{"<tmp>/Alias", "<tmp>"}}},
+		{name: "relative worktree commondir", gitdir: "<tmp>/wt/.git/worktrees/w", commondir: "../.."},
+		{name: "gitdir .. after a box dir", gitdir: "sub/../../wt/.git", refuse: "gitdir"},
+		{name: "gitdir .. after a box link", gitdir: "sub/../../wt/.git", refuse: "gitdir",
+			links: [][2]string{{"<ws>/sub", "<ws>/a/b"}}},
+		{name: "gitdir through a host link into ws then .. after a box dir", gitdir: "<tmp>/Lnk/sub/../../wt/.git",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>"}}, refuse: "gitdir"},
+		{name: "gitdir through a host link into ws then a box link out", gitdir: "<tmp>/Lnk/x/wt/.git",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>"}, {"<ws>/x", "<tmp>"}}, refuse: "gitdir"},
+		{name: "commondir .. after a box dir", gitdir: "<tmp>/wt/.git/worktrees/w",
+			commondir: "<ws>/sub/../../wt/.git", refuse: "commondir"},
+		{name: "relative commondir .. after a box dir", gitdir: "<tmp>/wt/.git/worktrees/w",
+			commondir: "../../../../Repo/sub/../../wt/.git", refuse: "commondir"},
+		{name: "config linked through a box dir", gitdir: "../wt/.git", config: "<ws>/sub/../../cfg",
+			refuse: "leads into the workspace"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := realTemp(t)
+			ws := filepath.Join(tmp, "Repo")
+			r := strings.NewReplacer("<ws>", ws, "<tmp>", tmp)
+			main := filepath.Join(tmp, "wt", ".git")
+			mkdirs(t, filepath.Join(ws, "sub"), filepath.Join(ws, "a", "b"), filepath.Join(ws, "wt", ".git"),
+				filepath.Join(main, "hooks"), filepath.Join(main, "worktrees", "w"))
+			writeFile(t, filepath.Join(tmp, "cfg"), "")
+			if tc.config != "" {
+				symlink(t, r.Replace(tc.config), filepath.Join(main, "config"))
+			} else {
+				writeFile(t, filepath.Join(main, "config"), "")
+			}
+			if tc.commondir != "" {
+				writeFile(t, filepath.Join(main, "worktrees", "w", "commondir"), r.Replace(tc.commondir)+"\n")
+			}
+			for _, l := range tc.links {
+				if err := os.RemoveAll(r.Replace(l[0])); err != nil {
+					t.Fatal(err)
+				}
+				symlink(t, r.Replace(l[1]), r.Replace(l[0]))
+			}
+			writeFile(t, filepath.Join(ws, ".git"), "gitdir: "+r.Replace(tc.gitdir)+"\n")
+			got, err := inPlaceMounts(ws)
+			if tc.refuse != "" {
+				if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), tc.refuse) {
+					t.Fatalf("want a refusal mentioning %q, got %v (mounts %v)", tc.refuse, err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMounts(t, ws, got, ".git", ".claude")
+		})
+	}
+}
+
+// The enclosing repository of a workspace below its root: its .git and config
+// are read outside ws, and a host link that passes below ws on its way is
+// refused even when it ends outside.
+func TestInPlaceSubdirGitPathsThroughWorkspace(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, repo string) // ws = <repo>/sub with <repo>/sub/a
+	}{
+		{"config linked through a box dir", func(t *testing.T, repo string) {
+			gitRepo(t, repo, "")
+			writeFile(t, filepath.Join(repo, "cfg"), "")
+			if err := os.Remove(filepath.Join(repo, ".git", "config")); err != nil {
+				t.Fatal(err)
+			}
+			symlink(t, "../sub/a/../../cfg", filepath.Join(repo, ".git", "config"))
+		}},
+		{".git linked through a box dir", func(t *testing.T, repo string) {
+			gitRepo(t, filepath.Join(repo, "real"), "")
+			symlink(t, "sub/a/../../real/.git", filepath.Join(repo, ".git"))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := realTemp(t)
+			ws := filepath.Join(repo, "sub")
+			mkdirs(t, filepath.Join(ws, "a"))
+			tc.setup(t, repo)
+			got, err := inPlaceMounts(ws)
+			if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "leads into the workspace") {
+				t.Fatalf("want a leads-into-the-workspace refusal, got %v (mounts %v)", err, got)
+			}
+		})
+	}
+}

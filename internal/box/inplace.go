@@ -9,7 +9,6 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"syscall"
 )
@@ -41,6 +40,11 @@ var sameHostDir = func(a, b string) bool {
 	fb, err := os.Stat(b)
 	return err == nil && os.SameFile(fa, fb)
 }
+
+// sameDirAsWS reports whether the directory at p (fi, its Lstat) is the
+// workspace on disk (wsFi, its Stat), however p is spelled. A variable so a
+// Linux test can stand in for a host bind mount of the workspace.
+var sameDirAsWS = func(p string, fi, wsFi fs.FileInfo) bool { return os.SameFile(fi, wsFi) }
 
 // underWS reports whether the host path p is at or below the workspace ws. Every
 // caller refuses or guards on "inside", so folding case only adds refusals.
@@ -376,7 +380,7 @@ func enclosingConfig(ws, top string) (cfgs [][]byte, defHooks string, err error)
 		return nil, "", unreadable(filepath.Join(top, ".gitmodules"), err)
 	}
 	dotgit := filepath.Join(top, ".git")
-	real, err := gitPathOutside(ws, dotgit, dotgit, false)
+	real, err := gitPathOutside(ws, top, dotgit, dotgit, false)
 	if err != nil {
 		return nil, "", err
 	}
@@ -504,8 +508,9 @@ func respellUnder(p, ws string) string {
 // a symlink is a redirect the box could re-point, and a missing one is a
 // directory the box could create. Under .git or .claude it is already read-only
 // and needs no mount of its own, but a symlink there still leads out into what
-// the box can write. Outside, it is resolved: a host symlink (which the box
-// cannot touch) leading back in is judged at the real path.
+// the box can write. The path is walked like the kernel walks it
+// (walkGitPath): a host symlink (which the box cannot touch) leading in is
+// judged where it leads, and one that leaves ws again on the way is refused.
 //
 // What is bound is the FIRST component under ws, not the leaf. A mount point
 // cannot be renamed (EBUSY), but its parent can: with only tools/hooks bound,
@@ -516,31 +521,23 @@ func guardHooksDir(root *os.Root, ws, target string) (string, error) {
 	if target == "" {
 		return "", nil
 	}
-	target = filepath.Clean(target)
-	// Case-sensitive on purpose: an other-case spelling may be a different
-	// folder (a host symlink, or a case-sensitive volume), so it is resolved
-	// first and only the resolved path is folded.
-	inside := UnderMount(target, []string{ws})
-	// Spelled in another case, but the very directory ws is on disk (a
-	// case-insensitive volume): it gets the same walk as the same-case spelling,
-	// which refuses a symlink. Resolving it instead would follow a link the box
-	// can re-point. A case-sensitive volume has two folders: resolve as below.
-	if !inside && underWS(target, ws) {
-		n := len(splitPath(ws))
-		prefix := string(filepath.Separator) + filepath.Join(splitPath(target)[:n]...)
-		inside = sameHostDir(prefix, ws)
-	}
-	if !inside {
-		real, err := whereCreated(target)
-		if err != nil {
-			return "", refuseInPlace("the git hooks directory %s of %s cannot be resolved (%v). Fix or unset "+
-				"core.hooksPath, or %s", target, ws, err, lowerFirst(inPlaceTrustedHost))
+	w, err := walkGitPath(string(filepath.Separator), target, ws)
+	var dd *dotDotBelowError
+	switch {
+	case errors.As(err, &dd):
+		return "", refuseInPlace("the git hooks directory %s of %s has a \"..\" after %s, below the workspace: git resolves "+
+			"\"..\" through the real directory, so a box could swap that component for a symlink and redirect it. "+
+			"Write the path without \"..\", or %s", target, ws, dd.at, lowerFirst(inPlaceTrustedHost))
+	case err != nil:
+		return "", refuseInPlace("the git hooks directory %s of %s cannot be resolved (%v). Fix or unset "+
+			"core.hooksPath, or %s", target, ws, err, lowerFirst(inPlaceTrustedHost))
+	case !w.below && w.end != ws:
+		if underWS(w.end, ws) { // never: the walk spells the workspace as ws
+			return "", refuseInPlace("the git hooks directory %s of %s cannot be placed. %s", target, ws, inPlaceTrustedHost)
 		}
-		if !underWS(real, ws) {
-			return "", nil
-		}
-		target = real
+		return "", nil // outside, and never below ws on the way: host territory
 	}
+	target = w.end
 	target = respellUnder(target, ws)
 	rel, err := filepath.Rel(ws, target)
 	if err != nil {
@@ -595,10 +592,7 @@ func resolveGitfile(ws, base string, b []byte) (gitdir, common string, err error
 	if !ok || dir == "" || strings.ContainsAny(dir, "\n\x00") {
 		return "", "", refuseInPlace("%s is not a gitfile (one \"gitdir: <path>\" line). Fix it, or %s", gf, lowerFirst(inPlaceTrustedHost))
 	}
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(base, dir)
-	}
-	if gitdir, err = gitPathOutside(ws, filepath.Clean(dir), gf+" (gitdir)", true); err != nil {
+	if gitdir, err = gitPathOutside(ws, base, dir, gf+" (gitdir)", true); err != nil {
 		return "", "", err
 	}
 	common = gitdir
@@ -608,35 +602,49 @@ func resolveGitfile(ws, base string, b []byte) (gitdir, common string, err error
 	}
 	if cb != nil {
 		c := strings.TrimRight(string(cb), "\r\n")
-		if !filepath.IsAbs(c) {
-			c = filepath.Join(gitdir, c)
-		}
-		if common, err = gitPathOutside(ws, filepath.Clean(c), filepath.Join(gitdir, "commondir"), true); err != nil {
+		if common, err = gitPathOutside(ws, gitdir, c, filepath.Join(gitdir, "commondir"), true); err != nil {
 			return "", "", err
 		}
 	}
 	return gitdir, common, nil
 }
 
-// gitPathOutside resolves p, a git path named by what, and refuses it when it
-// is in the workspace (as spelled, or once resolved), missing, or (wantDir) not
-// a directory.
-func gitPathOutside(ws, p, what string, wantDir bool) (string, error) {
-	if underWS(p, ws) {
-		return "", refuseInPlace("%s points git at %s, inside the workspace, where a box can write its config and hooks. %s",
-			what, p, inPlaceTrustedHost)
+// gitPathOutside resolves p, a git path named by what (relative to base when
+// not absolute), and refuses it when it is in the workspace (as spelled, or once
+// resolved), passes below it on the way, is missing, or (wantDir) is not a
+// directory. It is walked like git and the kernel walk it (walkGitPath), not
+// cleaned as text: a ".." after a component the box can swap for a link lands
+// wherever the box wants.
+func gitPathOutside(ws, base, p, what string, wantDir bool) (string, error) {
+	shown := p // as git reads it, the ".." kept
+	if !filepath.IsAbs(p) {
+		shown = strings.TrimSuffix(base, string(filepath.Separator)) + string(filepath.Separator) + p
 	}
-	real, err := filepath.EvalSymlinks(p)
+	if spelled := filepath.Clean(shown); underWS(spelled, ws) {
+		return "", refuseInPlace("%s points git at %s, inside the workspace, where a box can write its config and hooks. %s",
+			what, spelled, inPlaceTrustedHost)
+	}
+	w, err := walkGitPath(base, p, ws)
+	var dd *dotDotBelowError
+	if errors.As(err, &dd) || err == nil && (w.below || underWS(w.end, ws)) {
+		return "", refuseInPlace("%s points git at %s, which leads into the workspace, where a box can write its config and hooks. %s",
+			what, shown, inPlaceTrustedHost)
+	}
 	if err != nil {
 		return "", refuseInPlace("%s points git at %s, which cannot be resolved (%v). Fix it, or %s",
-			what, p, err, lowerFirst(inPlaceTrustedHost))
+			what, shown, err, lowerFirst(inPlaceTrustedHost))
+	}
+	real, err := filepath.EvalSymlinks(w.end)
+	if err != nil {
+		return "", refuseInPlace("%s points git at %s, which cannot be resolved (%v). Fix it, or %s",
+			what, shown, err, lowerFirst(inPlaceTrustedHost))
 	}
 	if underWS(real, ws) {
 		return "", refuseInPlace("%s points git at %s, which leads into the workspace, where a box can write its config and hooks. %s",
-			what, p, inPlaceTrustedHost)
+			what, shown, inPlaceTrustedHost)
 	}
 	if fi, err := os.Stat(real); wantDir && (err != nil || !fi.IsDir()) {
-		return "", refuseInPlace("%s points git at %s, which is not a directory. Fix it, or %s", what, p, lowerFirst(inPlaceTrustedHost))
+		return "", refuseInPlace("%s points git at %s, which is not a directory. Fix it, or %s", what, shown, lowerFirst(inPlaceTrustedHost))
 	}
 	return real, nil
 }
@@ -670,9 +678,17 @@ func readInRoot(root *os.Root, ws, rel string) ([]byte, error) {
 }
 
 // readOutside reads p, a git file outside the workspace: nil when absent.
-// Nothing in it is the box's to write, unless a symlink leads back in, which is
-// refused.
+// Nothing in it is the box's to write, unless a symlink leads back in, or
+// passes below ws on the way (walkGitPath), which is refused.
 func readOutside(ws, p string) ([]byte, error) {
+	w, err := walkGitPath(string(filepath.Separator), p, ws)
+	var dd *dotDotBelowError
+	if errors.As(err, &dd) || err == nil && (w.below || underWS(w.end, ws)) {
+		return nil, refuseInPlace("%s leads into the workspace, where a box can write it. %s", p, inPlaceTrustedHost)
+	}
+	if err != nil {
+		return nil, unreadable(p, err)
+	}
 	if _, err := os.Lstat(p); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	} else if err != nil {
@@ -714,46 +730,153 @@ func unreadable(p string, err error) error {
 	return refuseInPlace("%s cannot be read (%v), so its read-only guards cannot be derived. %s", p, err, inPlaceTrustedHost)
 }
 
-// whereCreated resolves p's symlinks as far as p exists and appends the
-// missing rest: where p would be if it were created now. A dangling symlink is
-// followed to what it names, since creating p would create that.
-func whereCreated(p string) (string, error) {
-	p = filepath.Clean(p)
-	var tail []string
-	for follows := 0; ; {
-		real, err := filepath.EvalSymlinks(p)
-		if err == nil {
-			slices.Reverse(tail)
-			return filepath.Join(append([]string{real}, tail...)...), nil
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return "", err
-		}
-		if fi, lerr := os.Lstat(p); lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
-			if follows++; follows > maxSymlinkFollows {
-				return "", fmt.Errorf("%s: too many levels of symbolic links", p)
+// gitWalk is where a git path leads, walked as the kernel walks it.
+type gitWalk struct {
+	// end is the physical path (every symlink followed, ".." taken from the real
+	// directory). A missing component and the rest are appended as written:
+	// where it would be if created now. When the walk reaches the workspace, end
+	// spells it as ws.
+	end string
+	// below is whether the walk went strictly below ws. From there on end is ws
+	// joined with the rest as written, NOT walked: those components are the
+	// box's, so they are the caller's to check (guardHooksDir through the
+	// os.Root, which refuses a symlink) or to refuse outright.
+	below bool
+}
+
+// dotDotBelowError is a ".." met strictly below the workspace: git takes it
+// from whatever directory is there when it runs, and the box can make that any
+// directory by swapping a component for a symlink.
+type dotDotBelowError struct{ at string }
+
+func (e *dotDotBelowError) Error() string {
+	return fmt.Sprintf("\"..\" after %s, below the workspace", e.at)
+}
+
+// walkGitPath resolves the git path p (relative to base when not absolute) one
+// component at a time, as the kernel (and git's own realpath) does: every
+// symlink is followed (at most maxSymlinkFollows), its target's components
+// taken next (an absolute target restarts at /, a relative one at the link's
+// directory), and ".." goes to the parent of the physical current directory.
+// Deciding from the end point alone is not enough (#304): a path can pass
+// through ws, where the box can swap any component for a link, and still end
+// outside it. So once the walk steps strictly below ws it stops following
+// anything: a ".." from there on is refused (*dotDotBelowError), and the rest
+// is returned unwalked with below set. A ".." taken at ws itself is safe: ws is
+// a mount point the box can neither replace nor rename, so ws/.. is its parent.
+func walkGitPath(base, p, ws string) (gitWalk, error) {
+	sep := string(filepath.Separator)
+	cur := filepath.Clean(base)
+	if filepath.IsAbs(p) {
+		cur = sep
+	}
+	queue := strings.Split(p, sep)
+	nws := len(splitPath(ws))
+	if UnderMount(cur, []string{ws}) && cur != ws {
+		// Starts below ws (no caller does): all of it is the box's.
+		rel, _ := filepath.Rel(ws, cur)
+		return walkBelow(ws, append(strings.Split(rel, sep), queue...))
+	}
+	// ws on disk: a directory the walk enters that IS ws, however it is spelled
+	// (another Unicode normalization on APFS, a host bind mount), is ws.
+	wsFi, err := os.Stat(ws)
+	if err != nil {
+		return gitWalk{}, err
+	}
+	// atWS: cur is the workspace. Matched by spelling, cur is ws itself; matched
+	// by inode under another path (a host bind mount), cur keeps that path, since
+	// a ".." from there goes to ITS parent, as the kernel takes it.
+	atWS := cur == ws
+	missing := 0 // trailing components of cur that do not exist
+	for follows := 0; len(queue) > 0; {
+		c := queue[0]
+		queue = queue[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			if missing > 0 {
+				missing--
 			}
-			t, err := os.Readlink(p)
-			if err != nil {
-				return "", err
-			}
-			if !filepath.IsAbs(t) {
-				dir, err := filepath.EvalSymlinks(filepath.Dir(p))
-				if err != nil {
-					return "", err
-				}
-				t = filepath.Join(dir, t)
-			}
-			p = filepath.Clean(t)
+			cur, atWS = filepath.Dir(cur), false
 			continue
 		}
-		parent := filepath.Dir(p)
-		if parent == p {
-			return "", err
+		if atWS {
+			return walkBelow(ws, append([]string{c}, queue...))
 		}
-		tail = append(tail, filepath.Base(p))
-		p = parent
+		next := filepath.Join(cur, c)
+		if len(splitPath(next)) == nws && isWS(next, ws) {
+			// An other-case spelling: a plain directory has ws's parent, and a
+			// symlink that is ws leads to ws, so ws stands for it.
+			cur, atWS, missing = ws, true, 0
+			continue
+		}
+		if missing > 0 {
+			cur, missing = next, missing+1
+			continue
+		}
+		fi, err := os.Lstat(next)
+		switch {
+		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
+			cur, missing = next, 1
+			continue
+		case err != nil:
+			return gitWalk{}, err
+		case fi.Mode()&fs.ModeSymlink == 0:
+			cur = next
+			atWS = fi.IsDir() && sameDirAsWS(next, fi, wsFi)
+			continue
+		}
+		if follows++; follows > maxSymlinkFollows {
+			return gitWalk{}, fmt.Errorf("%s: too many levels of symbolic links", next)
+		}
+		t, err := os.Readlink(next)
+		if err != nil {
+			return gitWalk{}, err
+		}
+		if t == "" {
+			return gitWalk{}, fmt.Errorf("%s: empty symbolic link", next)
+		}
+		if filepath.IsAbs(t) {
+			cur = sep
+		}
+		queue = append(strings.Split(t, sep), queue...)
 	}
+	if atWS {
+		return gitWalk{end: ws}, nil
+	}
+	return gitWalk{end: cur}, nil
+}
+
+// walkBelow is the rest of a walk that stepped strictly below ws with rest.
+func walkBelow(ws string, rest []string) (gitWalk, error) {
+	at := ws
+	for _, c := range rest {
+		if c == ".." {
+			return gitWalk{}, &dotDotBelowError{at: at}
+		}
+		at = filepath.Join(at, c)
+	}
+	return gitWalk{end: at, below: true}, nil
+}
+
+// isWS reports whether next, a path as deep as ws, is the workspace: spelled as
+// ws, or (inPlaceFold) spelled in another case and the same directory on disk.
+// An other-case spelling that is a symlink is a separate entry, so it is
+// followed instead; one that is missing or a plain directory is judged as ws,
+// as the guard did before the walk (folding only adds guards and refusals).
+func isWS(next, ws string) bool {
+	if next == ws {
+		return true
+	}
+	if !inPlaceFold || !underWS(next, ws) {
+		return false
+	}
+	if sameHostDir(next, ws) {
+		return true
+	}
+	fi, err := os.Lstat(next)
+	return err != nil || fi.Mode()&fs.ModeSymlink == 0
 }
 
 // gitCore is what the guard derivation needs from one git config file.
