@@ -6,9 +6,11 @@ How a credential reaches the agent. The profile and role names in it are example
 
 ## Several AWS accounts in one session
 
-A boxed profile with the inline `aws` binding reaches one AWS account. To give one session several (a staging account and a production account, say), define **named AWS connections** once in `config.json` and let profiles pick them by name. Each connection is a full binding of its own: its own source profile, role, region, session policy, egress hosts and optional write role. Like the other credential bindings, a bound spawn is refused on the host tier, and on macOS it goes through the egress allowlist (the allowlist is verified on a Mac; AWS credentials through the broker there are not yet; see [docs/MACOS.md](MACOS.md#every-box)).
+An **AWS connection** is a saved, named way into one AWS account: its own source profile, role, region, session policy, egress hosts and optional write role. You create connections once, on the Credentials screen, and a boxed profile lists the ones it may use by name. A profile can list several, so one session can reach a staging account and a production account, say. Like the other credential bindings, a bound spawn is refused on the host tier, and on macOS it goes through the egress allowlist (the allowlist is verified on a Mac; AWS credentials through the broker there are not yet; see [docs/MACOS.md](MACOS.md#every-box)).
 
-**1. Define the connections.** Declare them next to `static_tokens` and restart CuliBox:
+**1. Create the connections.** Open **Settings → Credentials**, choose **Add credential → Add AWS accounts**, and pick the host AWS profiles to use as the source profile (the screen can start the SSO sign-in for one that has expired). For each, choose the role, the region and, under **Advanced**, extra egress hosts, S3 read and an elevate role. Saving runs the base-role check below. The connection is stored in `credentials.json` in CuliBox's data directory and takes effect at once: no restart is needed, and a profile or a new session sees it straight away (sessions already running keep the definition they were spawned with).
+
+Connections can also be declared in `config.json`, next to `static_tokens`. These are read at daemon start, so adding or changing one needs a restart. The Credentials screen lists them as defined in `config.json` and does not edit or delete them:
 
 ```json
 "aws_connections": [
@@ -22,7 +24,7 @@ A boxed profile with the inline `aws` binding reaches one AWS account. To give o
 ]
 ```
 
-Each entry takes the fields of the inline `aws` binding (see [docs/aws/agent-role](aws/agent-role/README.md) for the roles) plus:
+Each entry takes `source_profile`, `role_arn`, `region`, `s3_read`, `egress_allow`, `label`, `prod` and `elevate` (see [docs/aws/agent-role](aws/agent-role/README.md) for the roles), plus:
 
 | Field | Rules |
 |---|---|
@@ -31,13 +33,15 @@ Each entry takes the fields of the inline `aws` binding (see [docs/aws/agent-rol
 | `region` | Required for every connection. |
 | `mode` | Optional. Absent means the agent role. `"sso_direct"` uses the SSO permission set directly (see [SSO role directly](#sso-role-directly-opt-in)); then `role_arn`, `elevate` and `s3_read` must be left out. |
 
-**2. Pick them in a profile.** Set `"runtime": "box"` explicitly, then tick the connections in the profile form, or write the names in `config.json`:
+**2. Pick them in a profile.** Set the profile's runtime to the box, then tick the connections in the profile's **AWS connections** block. In `config.json` or the profile's JSON, set `"runtime": "box"` explicitly and list the names:
 
 ```json
 { "name": "claude-aws", "bin": "claude", "runtime": "box", "aws_connections": ["staging-read", "prod-read"] }
 ```
 
-A profile binds at most 16 connections, with no duplicates, and each must be defined. A profile uses either the inline `aws` binding or `aws_connections`, never both; saving or spawning one that sets both, or that names an undefined connection, is refused.
+A profile binds at most 16 connections, with no duplicates, and each must be defined. Saving or spawning a profile that names an undefined connection is refused. A connection that a profile still uses cannot be deleted.
+
+**Older profiles with an inline `aws` binding.** Before saved connections, a profile carried its AWS settings inline, as an `"aws": { ... }` object. Such a profile still works unchanged. The UI shows it as **Old-style AWS** and offers **Convert to a connection** (**Move to a saved connection** on the profile page): CuliBox creates a connection from the binding (named after the profile) and points the profile at it, and the profile's next session gets a new box. A profile uses either the inline binding or `aws_connections`, never both, so convert or remove the inline binding before adding connections. Use connections for anything new.
 
 **How the agent uses it.** Each connection is an AWS profile of the same name inside the box:
 
@@ -56,7 +60,7 @@ provider "aws" {
 - **No default with two or more connections.** A bare `aws` command fails with `agentbox: several AWS connections are bound — pick one with --profile <name> or AWS_PROFILE; run agentbox-env --list` (the AWS CLI adds its own error text in front). Terraform without a `profile` shows only a generic "No valid credential sources found"; run `agentbox-env --list` to see the names. With exactly one connection bound, `AWS_PROFILE` is set to it, so nothing changes for the agent.
 - **Region.** `AWS_REGION` and `AWS_DEFAULT_REGION` are set only when every bound connection shares one region, because they would override each profile's own region. When regions differ they are left unset and each profile supplies its own. Some scripts read only `AWS_REGION`; pass `--region` (or set it for that one command) there.
 
-**Write access.** A connection with `elevate` can be widened to its write role for a fixed window, as with the inline binding, but only **one connection per session at a time**:
+**Write access.** A connection with `elevate` can be widened to its write role for a fixed window, but only **one connection per session at a time**:
 
 - Granting a different connection while a window is open is refused: drop the first one.
 - After you drop a window, the write credentials already issued stay valid until they expire (15 minutes at most). A *different* connection can be granted only after that; the refusal names the time. Granting the same connection again is allowed at once.
@@ -87,16 +91,18 @@ The result is fixed at spawn and cached for up to 1 hour. Respawn to pick up a r
 
 ### Limits and operations
 
-- `aws_connections` is read at daemon start only: edit `config.json` and restart CuliBox. A running session keeps the definition it was spawned with until you kill it, including a connection you have since removed from `config.json`; saving or spawning a profile that names a removed connection is refused.
+- Connections made on the Credentials screen apply at once. Connections declared in `config.json` are read at daemon start only: edit the file and restart CuliBox. A running session keeps the definition it was spawned with until you kill it, including a connection you have since removed; saving or spawning a profile that names a removed connection is refused.
 - Each connection signs in through its own `source_profile`. If connections use different SSO sessions and one expires, only that connection's credential requests fail, and the UI shows which source to sign in to.
 - `culibox doctor` prints one `aws-connection <name>` line per connection: whether the `source_profile` exists in the host's AWS config (a missing one fails), whether its SSO login is valid or expired (checked once per SSO session, so connections sharing a login cost one check), and whether the connection can be elevated. It reads the shell's own AWS config, not the daemon's environment. A second line, `aws-connection <name> base role`, runs the base-role check above; inline `aws` bindings (from `config.json` and the profile store) get `aws-binding <profile>`. A base role that can write, or one that could not be checked, is a WARN; none found is a PASS. The check is never a FAIL.
-- **Rolling back to an older binary (operator step).** An older CuliBox ignores the `aws_connections` key, so a profile that uses it spawns **unbound**: no AWS credentials, and also no egress allowlist, so its box gets an open network like any unbound profile. Saving such a profile in the old UI drops the key permanently, and restored sessions get a fresh box. So before rolling back, kill every session that uses `aws_connections`, and do not edit those profiles in the old UI until you roll forward. Profiles with the inline `aws` binding are unaffected.
+- **Rolling back to an older binary (operator step).** An older CuliBox ignores the `aws_connections` key, so a profile that uses it spawns **unbound**: no AWS credentials, and also no egress allowlist, so its box gets an open network like any unbound profile. Saving such a profile in the old UI drops the key permanently, and restored sessions get a fresh box. So before rolling back, kill every session that uses `aws_connections`, and do not edit those profiles in the old UI until you roll forward. Profiles with an older inline `aws` binding are unaffected.
 
 ## SSO role directly (opt-in)
 
 The recommended way to give an agent AWS access is the **agent role**: a role you create (see [docs/aws/agent-role](aws/agent-role/README.md)), assumed for 15 minutes at a time with a session policy that narrows it, and recorded in CloudTrail as the agent session. That stays the default.
 
-In some accounts you cannot create that role. For those, a binding can opt in to **`"mode": "sso_direct"`** (in the credentials screen, "SSO role directly" next to "Agent role (recommended)"): the agent is given your SSO permission set's own credentials. It is meant for permission sets that are **read-only**, and CuliBox uses it only when the gate passes: a check of the permission set's own identity policies (see "What the gate does not see" below).
+In some accounts you cannot create that role. For those, a connection can opt in to **`"mode": "sso_direct"`** (on the Credentials screen, "SSO role directly" next to "Agent role (recommended)" under "Credentials the agent gets"): the agent is given your SSO permission set's own credentials. It is meant for permission sets that are **read-only**, and CuliBox uses it only when the gate passes: a check of the permission set's own identity policies (see "What the gate does not see" below).
+
+In `config.json` the same connection reads:
 
 ```json
 "aws_connections": [

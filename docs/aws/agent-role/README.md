@@ -1,13 +1,13 @@
 # agent role for the credential broker
 
-`main.tf` creates the IAM role a boxed CuliBox session works as when its profile has an
-`aws` binding. The broker on the host assumes this role from the engineer's own SSO role,
+`main.tf` creates the IAM role a boxed CuliBox session works as when its profile uses an
+[AWS connection](../../AWS.md#several-aws-accounts-in-one-session). The broker on the host assumes this role from the engineer's own SSO role,
 for 15 minutes at a time, and hands the credentials to the box through `credential_process`.
 
 - **Name:** `agentbox-agent` (variable `role_name`).
 - **Permissions:** the AWS-managed `ReadOnlyAccess` policy. That is the ceiling. Each mint
-  also carries a session policy generated from the binding, which denies data reads
-  (S3 objects outside the binding's `s3_read` allowlist, Secrets Manager values, SSM
+  also carries a session policy generated from the connection, which denies data reads
+  (S3 objects outside the connection's `s3_read` allowlist, Secrets Manager values, SSM
   parameters, DynamoDB items, KMS decrypt outside S3). Effective permissions are the
   intersection of the two.
   CuliBox simulates the role's own policy at spawn to check whether it can write, so a
@@ -23,7 +23,7 @@ for 15 minutes at a time, and hands the credentials to the box through `credenti
 
 ## Apply
 
-Pick the permission set whose SSO profile the binding uses as `source_profile`. Its name is
+Pick the permission set whose SSO profile the connection uses as `source_profile`. Its name is
 the middle part of the role in `aws sts get-caller-identity --profile <profile>`:
 `assumed-role/AWSReservedSSO_<PermissionSet>_<suffix>/<you>`.
 
@@ -45,20 +45,37 @@ outlives the checkout. Check first that no role of that name exists
 (`aws iam get-role --role-name agentbox-agent` must say `NoSuchEntity`); this file does not
 import an existing role.
 
-The `role_arn` output is the value for the binding's `role_arn`; `write_role_arn` is the
-value for the `elevate` block's `role_arn` (see "Write role" below):
+The `role_arn` output is the value for the connection's role; `write_role_arn` is the
+value for the elevate role (see "Write role" below).
+
+Then create the connection on the Credentials screen (**Settings → Credentials → Add
+credential → Add AWS accounts**): pick the host profile as the source profile, choose the
+`agentbox-agent` role (the screen lists the roles the profile can see, or type the ARN) and the
+region, and under **Advanced** add `s3_read` buckets if the agent needs to read objects.
+The connection applies at once, with no restart. Then tick it in a boxed profile's
+**AWS connections** block (the profile must set `"runtime": "box"`). The same connection in
+`config.json`, which is read at daemon start:
 
 ```json
-"aws": {
-  "source_profile": "<profile>",
-  "role_arn": "arn:aws:iam::123456789012:role/agentbox-agent",
-  "region": "<region>",
-  "s3_read": ["<state-bucket>", "<log-bucket>/AWSLogs/"],
-  "label": "sandbox"
-}
+"aws_connections": [
+  {
+    "name": "sandbox",
+    "source_profile": "<profile>",
+    "role_arn": "arn:aws:iam::123456789012:role/agentbox-agent",
+    "region": "<region>",
+    "s3_read": ["<state-bucket>", "<log-bucket>/AWSLogs/"],
+    "label": "sandbox"
+  }
+]
 ```
 
-The profile must also set `"runtime": "box"`.
+```json
+{ "name": "claude-aws", "bin": "claude", "runtime": "box", "aws_connections": ["sandbox"] }
+```
+
+Older profiles may still carry the same fields inline, as an `"aws": { ... }` object on the
+profile. That form still works; the UI shows it as **Old-style AWS** and offers **Convert to a
+connection**. Use a connection for anything new.
 
 ## Which accounts
 
@@ -74,14 +91,14 @@ session policy. It is the recommended mode and the default. Use it whenever you 
 role.
 
 Some accounts do not let you create `agentbox-agent` (a company account, say). For those a
-binding can opt in to `"mode": "sso_direct"`: the agent gets the SSO permission set's **own**
-credentials, with no role to create. It is opt-in per binding, for permission sets that pass a
+connection can opt in to `"mode": "sso_direct"`: the agent gets the SSO permission set's **own**
+credentials, with no role to create. It is opt-in per connection, for permission sets that pass a
 read-only gate (a check of the permission set's own identity policies; see Known limits below),
 and it gives up the protections of the agent role:
 
 - **No narrowing.** There is no session policy and no S3-read scoping. The agent can do
   whatever the permission set allows, and nothing narrows it further.
-- **No elevate.** A binding in this mode cannot be widened to a write role (`role_arn`,
+- **No elevate.** A connection in this mode cannot be widened to a write role (`role_arn`,
   `elevate` and `s3_read` must be empty; the save is refused otherwise).
 - **Lifetime.** The credentials keep the expiry of your SSO role credentials (up to N hours,
   N shown in the UI), not 15 minutes. They cannot be revoked when the agent session ends.
@@ -91,20 +108,25 @@ The UI says this next to the mode choice (`Agent role (recommended)` / `SSO role
 
 > SSO role directly: the agent gets your permission set's own credentials, valid for up to N h. CloudTrail shows you, not the agent, and they cannot be revoked when the session ends. Read-only permission sets only.
 
+On the Credentials screen this is **Credentials the agent gets → SSO role directly**. In
+`config.json`:
+
 ```json
-"aws": {
-  "mode": "sso_direct",
-  "source_profile": "<sso-profile>",
-  "region": "<region>",
-  "label": "company-readonly"
-}
+"aws_connections": [
+  {
+    "name": "company-readonly",
+    "mode": "sso_direct",
+    "source_profile": "<sso-profile>",
+    "region": "<region>",
+    "label": "company-readonly"
+  }
+]
 ```
 
 `source_profile` must be a pure IAM Identity Center profile (`sso_session` or `sso_account_id`
 in `~/.aws/config`). A profile with static keys, a `credential_process`, a `credential_source`
 or an assume-role chain is refused at save, spawn and every mint, so this mode never hands out
-a long-lived key. The same `mode` key works in a named connection (`aws_connections`).
-
+a long-lived key. 
 The "Which accounts" caveat applies to this mode too: agent output can carry anything the
 permission set can read, and output redaction has not shipped.
 
@@ -258,9 +280,9 @@ the agent can do no harm:
 - **Within one box:** processes share a uid and can read each other's
   `/proc/*/environ`, so one session can present another's broker token. Attribution
   (the audit and CloudTrail `SourceIdentity`) is best-effort between sessions that share a
-  box (same binding).
+  box (same connections).
 - **Shared workspace:** two sessions in the same project folder get separate boxes but
-  share that folder read-write. An unbound session, or one with a different binding, can
+  share that folder read-write. An unbound session, or one with different connections, can
   plant a file the bound session will run (for example under `.terraform/`, a git hook, a
   script). That code runs inside the bound box, can read its token and credentials from the
   environment, and so gets the bound session's access. Give a bound session its own
@@ -280,30 +302,34 @@ a boxed session works as while a human has granted it write access.
   15 minutes and is never issued past the grant's window (30 or 60 minutes). The agent cannot
   ask for it on its own.
 
-The binding gets an `elevate` block next to the read role (the `write_role_arn` output is the
-value for `elevate.role_arn`):
+The connection gets an `elevate` block next to the read role (the `write_role_arn` output is the
+value for `elevate.role_arn`; on the Credentials screen it is the **Elevate role ARN** under
+**Advanced**). In `config.json`:
 
 ```json
-"aws": {
-  "source_profile": "<profile>",
-  "role_arn": "arn:aws:iam::123456789012:role/agentbox-agent",
-  "region": "<region>",
-  "s3_read": ["<state-bucket>"],
-  "label": "sandbox",
-  "elevate": {
-    "role_arn": "arn:aws:iam::123456789012:role/agentbox-agent-write",
-    "max_minutes": 60,
-    "allow_iam": false,
-    "box_bucket_prefix": "culibox-",
-    "pass_role_prefix": "culibox-"
+"aws_connections": [
+  {
+    "name": "sandbox",
+    "source_profile": "<profile>",
+    "role_arn": "arn:aws:iam::123456789012:role/agentbox-agent",
+    "region": "<region>",
+    "s3_read": ["<state-bucket>"],
+    "label": "sandbox",
+    "elevate": {
+      "role_arn": "arn:aws:iam::123456789012:role/agentbox-agent-write",
+      "max_minutes": 60,
+      "allow_iam": false,
+      "box_bucket_prefix": "culibox-",
+      "pass_role_prefix": "culibox-"
+    }
   }
-}
+]
 ```
 
 `elevate.role_arn` must be in the same account and partition as `role_arn` and differ from it.
 `max_minutes` is 30 or 60 (default 60). `box_bucket_prefix` is optional and off when left out
 (see the box-bucket exception below). `pass_role_prefix` is optional too: left out, the window
-cannot pass any IAM role (see below). A binding with `elevate` gets one box per session and
+cannot pass any IAM role (see below). A connection with `elevate` gets one box per session and
 refuses shared workspaces: the session needs its own folder or worktree, and a spawn is
 refused while any other box overlaps that folder.
 
@@ -315,7 +341,7 @@ outlive the window), the calls that create long-lived credentials (`iam:CreateAc
 `CreateLoginProfile`, `UpdateLoginProfile`, `CreateServiceSpecificCredential`,
 `UploadSSHPublicKey`), any `iam:*` on `agentbox-*` roles (the agent cannot edit its own
 roles), and the CloudTrail changes that would blind the trail (`StopLogging`, `DeleteTrail`,
-`UpdateTrail`, `PutEventSelectors`). IAM writes are denied too unless the binding sets
+`UpdateTrail`, `PutEventSelectors`). IAM writes are denied too unless the connection sets
 `allow_iam`.
 
 **`iam:PassRole` is denied unless you name a prefix.** A service that runs as a passed role

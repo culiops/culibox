@@ -9,6 +9,8 @@ CuliBox can hold secret values itself: tokens, a GitHub App private key, the Cla
 - **It only protects what you move into it.** A value that is also in an env file, a shell profile or your home directory is still readable from a snapshot. The same goes for everything else on the machine that CuliBox does not own, such as SSH keys and cloud-CLI caches.
 - It is not a vault product: one machine, one user, no sync.
 
+**From the web UI.** **Settings → Credentials** is the usual way in. Its encrypted-store strip creates the store (**Create the encrypted store**) and, on Linux, locks it (**Lock now**). The forms that take a secret store it for you: **Add token** and the GitHub App form put the pasted value or key in the store. **Stored values → Set a value** adds any other value by id. Values are write-only: you can replace or delete one, never read it back. The CLI below does the same without the browser.
+
 **Commands.** The CLI honours `-config` like the rest of CuliBox, writes the files directly and does not need the daemon running.
 
 | Command | What it does |
@@ -28,7 +30,9 @@ An id is 1 to 64 characters of letters, digits, `_` and `-`, starting with a let
 
 **After a reboot the store is locked.** Anything that needs a store value is then refused until someone unlocks: a spawn fails with `store is locked`, and a running boxed session's next token fetch gets a 503. If the Claude token is in the store, that means every Claude session. A host-tier agent hits this too.
 
-**Moving the Claude token into the store.** Out of the box the token comes from the daemon's environment.
+**The Claude token.** The usual way is an agent account: **Settings → Agent accounts** takes a pasted token for a Claude account and stores it as `ACCT_<NAME>_TOKEN` (`culibox init` does this for the `claude-box` account).
+
+**Moving a Claude token you keep in the daemon's environment.** If the token still comes from `CLAUDE_CODE_OAUTH_TOKEN` in the daemon's environment, you can move it into the store:
 
 1. `printenv CLAUDE_CODE_OAUTH_TOKEN | culibox store set CLAUDE_CODE_OAUTH_TOKEN`
 2. Add `{"type": "store"}` to `secret_sources` **before** the `env` source, and restart CuliBox.
