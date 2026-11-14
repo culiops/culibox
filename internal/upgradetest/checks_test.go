@@ -148,11 +148,14 @@ func TestSessionIDsRuleAllowsOnlyGrowth(t *testing.T) {
 	if err := r.Check(before, entryOf(`{"upg-host":1}`)); err != nil {
 		t.Fatalf("an unchanged file was refused: %v", err)
 	}
-	if err := r.Check(before, entryOf(`{"upg-secret":1}`)); err == nil {
-		t.Fatal("a dropped counter was allowed (ids could be reissued)")
+	if err := r.Check(before, entryOf(`{"upg-secret":1}`)); err == nil || !strings.Contains(err.Error(), `"upg-host" dropped`) {
+		t.Fatalf("a dropped counter was not refused by name (ids could be reissued): %v", err)
 	}
-	if err := r.Check(entryOf(`{"upg-host":3}`), entryOf(`{"upg-host":2}`)); err == nil {
-		t.Fatal("a counter going back was allowed (ids could be reissued)")
+	if err := r.Check(entryOf(`{"upg-host":3}`), entryOf(`{"upg-host":2}`)); err == nil || !strings.Contains(err.Error(), `"upg-host" went back 3 -> 2`) {
+		t.Fatalf("a counter going back was not refused by name (ids could be reissued): %v", err)
+	}
+	if err := r.Check(entryOf(`not json`), before); err == nil {
+		t.Fatal("an unreadable before file was allowed")
 	}
 	if err := r.Check(before, entryOf(`{"upg-host":"1"}`)); err == nil {
 		t.Fatal("a counter that is not a number was allowed")
