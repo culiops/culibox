@@ -43,7 +43,7 @@ func runBugReport(in doctor.Input, host, goos string, out, errw io.Writer) int {
 		LogHint:    bugReportLogHint(goos),
 	}
 	fmt.Fprint(out, bugreport.Markdown(bi))
-	fmt.Fprintf(errw, "Issue link (needs access to the repo): %s\n", bugreport.IssueURL(bi))
+	fmt.Fprintf(errw, "Issue link: %s\n", bugreport.IssueURL(bi))
 	fmt.Fprintln(errw, "macOS: culibox bug-report | pbcopy")
 	return 0
 }
