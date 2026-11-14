@@ -217,8 +217,8 @@ func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
 	}
 	want := strings.Replace(elevatedBefore211,
 		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect"],"Resource":"*"},`,
-		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect"],"Resource":"*"},`+
-			`{"Effect":"Deny","Action":["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"],"NotResource":["arn:aws:ssm:*::parameter/aws/service/*"]},`, 1)
+		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords"],"Resource":"*"},`+
+			`{"Effect":"Deny","Action":["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:GetParameterHistory"],"NotResource":["arn:aws:ssm:*::parameter/aws/service/*"]},`, 1)
 	if want == elevatedBefore211 {
 		t.Fatal("test literal out of date: the replacement did not apply")
 	}
@@ -319,7 +319,7 @@ func TestDataReadDeniesCoverEveryValueRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	elev, err := ElevatedPolicy("aws", nil, false)
+	elev, err := ElevatedPolicy("aws", nil, Elevation{})
 	if err != nil {
 		t.Fatal(err)
 	}

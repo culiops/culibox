@@ -162,6 +162,15 @@ func TestElevatedPolicyPublicParametersReadable(t *testing.T) {
 		{"ssm:GetParameter", pubParam, "allow", "deny"},
 		{"ssm:GetParameters", pubParam, "allow", "deny"},
 		{"ssm:GetParametersByPath", pubPath, "allow", "deny"},
+		{"ssm:GetParameterHistory", pubParam, "allow", "deny"},
+		{"ssm:GetParameterHistory", acctParam, "deny", "deny"},
+		// fail closed (#211): if AWS spelled a public parameter's ARN any other
+		// way than an empty account field, the read is denied, never opened
+		{"ssm:GetParameter", "arn:aws:ssm:us-east-1:aws:parameter/aws/service/x", "deny", "deny"},
+		{"ssm:GetParameter", "arn:aws:ssm:us-east-1:*:parameter/aws/service/x", "deny", "deny"},
+		{"ssm:GetParameter", "arn:aws:ssm:us-east-1::parameter/aws/serviceX", "deny", "deny"},
+		{"ssm:GetParameter", "arn:aws:ssm:us-east-1::parameter/x/aws/service/y", "deny", "deny"},
+		{"ssm:GetParameter", "arn:aws:ssm:us-east-1::parameter/culishop/aws/service", "deny", "deny"},
 		{"ssm:GetParameter", acctParam, "deny", "deny"},
 		{"ssm:GetParameters", acctParam, "deny", "deny"},
 		{"ssm:GetParametersByPath", "arn:aws:ssm:ap-southeast-1:123456789012:parameter/culishop", "deny", "deny"},

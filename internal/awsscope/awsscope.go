@@ -203,7 +203,7 @@ type Elevation struct {
 
 // ssmParamReads are the SSM parameter reads, split out of dataReadDenies in
 // the elevated policy so that AWS's public parameters can be carved out.
-var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"}
+var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"}
 
 // boxBucketCopyDenies are, with box_bucket_prefix on, the managed copies that
 // can land data the session may not read in a box bucket without the session
