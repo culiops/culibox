@@ -2,6 +2,7 @@ package box
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -123,6 +124,10 @@ func TestInPlaceGuardFoldsCase(t *testing.T) {
 			withFold(t, fold)
 			tmp := realTemp(t)
 			ws := filepath.Join(tmp, "Repo")
+			mkdirs(t, ws)
+			if _, err := os.Stat(filepath.Join(tmp, "repo")); err == nil {
+				t.Skipf("volume is case-insensitive: Repo and repo are one folder, so no symlink can be named repo")
+			}
 			gitRepo(t, ws, "[core]\n\thooksPath = "+filepath.Join(tmp, "repo", "hooks")+"\n")
 			mkdirs(t, filepath.Join(ws, "hooks"), filepath.Join(ws, "sub", "hooks"))
 			symlink(t, filepath.Join(ws, "sub"), filepath.Join(tmp, "repo"))
