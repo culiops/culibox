@@ -760,7 +760,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if err != nil {
 		log.Fatalf("profiles store: %v", err)
 	}
-	if parseErr != nil {
+	if errors.Is(parseErr, datacompat.ErrNewer) {
+		// The message already names the file, the version and the way out.
+		log.Printf("profiles store: %v; no stored profile is loaded and profile edits are refused until that is fixed and CuliBox restarted", parseErr)
+	} else if parseErr != nil {
 		log.Printf("profiles store %q has content this CuliBox cannot read (%v); profile edits are refused until it is fixed and CuliBox restarted; %s",
 			profilesPath, parseErr, datacompat.Hint)
 	}
