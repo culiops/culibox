@@ -69,10 +69,16 @@ func TestInPlaceGuardFoldsCase(t *testing.T) {
 	})
 	t.Run("without fold the other case is outside", func(t *testing.T) {
 		withFold(t, false)
-		ws, _ := setup(t, "<o>/hooks")
+		ws, other := setup(t, "<o>/hooks")
 		got, err := inPlaceMounts(ws)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if _, err := os.Stat(other); err == nil {
+			// A case-insensitive volume: the other case IS the workspace on disk,
+			// so the walk's inode match guards it even with folding off (#304).
+			wantMounts(t, ws, got, ".git", ".claude", "hooks")
+			return
 		}
 		wantMounts(t, ws, got, ".git", ".claude")
 	})
