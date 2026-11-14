@@ -59,6 +59,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The upgrade test builds the previous release tag, so it needs the tags.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -75,9 +77,15 @@ jobs:
             exit 1
           fi
       - name: go vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          go vet -tags upgrade ./internal/upgradetest/
       - name: go test
         run: go test -race ./...
+      - name: upgrade test (previous release -> this commit)
+        run: |
+          AB_UPGRADE_REQUIRE=1 bash scripts/upgrade-test_test.sh
+          AB_UPGRADE_REQUIRE=1 bash scripts/upgrade-test.sh
 
   web:
     runs-on: ubuntu-24.04
@@ -135,6 +143,7 @@ jobs:
         run: |
           GOOS=darwin GOARCH=arm64 go vet ./...
           GOOS=darwin GOARCH=amd64 go vet ./...
+          GOOS=darwin GOARCH=arm64 go vet -tags upgrade ./internal/upgradetest/
       # The uidemo build tag swaps in the demo UI: both vets that scripts/test.sh runs.
       - name: vet uidemo
         run: |

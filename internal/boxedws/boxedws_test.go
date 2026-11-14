@@ -1,12 +1,15 @@
 package boxedws
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
+
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 func none(string) (string, bool) { return "", false }
@@ -137,6 +140,44 @@ func TestOpenUnknownVersionFails(t *testing.T) {
 	}
 	if _, _, err := Open(data, none); err == nil {
 		t.Fatal("unknown version must fail closed")
+	}
+}
+
+// A version-0 file is not "from the future": it keeps the unknown-version
+// error, without the newer marker.
+func TestOpenVersionZeroIsNotNewer(t *testing.T) {
+	data := t.TempDir()
+	if err := os.WriteFile(filepath.Join(data, "boxed-workspaces.json"), []byte(`{"version":0,"workspaces":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := Open(data, none)
+	if err == nil {
+		t.Fatal("version 0 must fail closed")
+	}
+	if errors.Is(err, datacompat.ErrNewer) {
+		t.Fatalf("version 0 must not read as newer: %v", err)
+	}
+}
+
+// A file from a newer CuliBox is named as such even when its body no longer
+// fits this build's types, and it is left untouched.
+func TestOpenNewerVersionSaysNewer(t *testing.T) {
+	for _, body := range []string{
+		`{"version":2,"workspaces":[]}`,
+		`{"version":2,"workspaces":{"a":1}}`,
+	} {
+		data := t.TempDir()
+		p := filepath.Join(data, "boxed-workspaces.json")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := Open(data, none)
+		if !errors.Is(err, datacompat.ErrNewer) {
+			t.Fatalf("%s: err = %v, want ErrNewer", body, err)
+		}
+		if after, _ := os.ReadFile(p); string(after) != body {
+			t.Fatalf("%s: file was rewritten to %s", body, after)
+		}
 	}
 }
 

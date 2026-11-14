@@ -2,11 +2,14 @@ package auth
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 func TestResolveCred(t *testing.T) {
@@ -57,21 +60,42 @@ func TestCookieAuthPersistedSecretSurvivesRestart(t *testing.T) {
 	}
 }
 
-// A present-but-malformed secret file (torn write / hand-edit) is regenerated to
-// a working 32-byte secret rather than bricking startup.
-func TestCookieAuthMalformedSecretRegenerated(t *testing.T) {
+// An empty secret file (a torn first write) holds nothing to lose, so it is
+// minted into a working 32-byte secret rather than bricking startup.
+func TestCookieAuthEmptySecretMinted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cookie.secret")
-	if err := os.WriteFile(path, []byte("short"), 0o600); err != nil {
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ca, err := NewCookieAuth(path)
 	if err != nil {
-		t.Fatalf("malformed secret should regenerate, got error: %v", err)
+		t.Fatalf("an empty secret file should be minted, got error: %v", err)
 	}
 	if b, err := os.ReadFile(path); err != nil || len(b) != 32 {
-		t.Fatalf("secret not regenerated to 32 bytes: len=%d err=%v", len(b), err)
+		t.Fatalf("secret not minted to 32 bytes: len=%d err=%v", len(b), err)
 	}
 	if len(ca.Secret()) != 32 {
 		t.Fatalf("in-memory secret len=%d, want 32", len(ca.Secret()))
+	}
+}
+
+// A secret of any other length may be a newer CuliBox's format: refuse it and
+// leave it on disk.
+func TestCookieAuthWrongLengthRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cookie.secret")
+	if err := os.WriteFile(path, []byte("short"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewCookieAuth(path)
+	if !errors.Is(err, datacompat.ErrNewer) {
+		t.Fatalf("want ErrNewer, got %v", err)
+	}
+	for _, want := range []string{path, "5 bytes"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if b, _ := os.ReadFile(path); string(b) != "short" {
+		t.Fatalf("a refused secret must stay untouched, file now %q", b)
 	}
 }

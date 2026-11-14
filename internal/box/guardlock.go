@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 // Guard locks (#96, macOS). A Mac volume compares names case-insensitively by
@@ -125,6 +127,11 @@ type guardLocks struct {
 	ops  flagOps
 	path string
 	recs []GuardLock
+	// frozen is set when the records file was written by a newer CuliBox: it
+	// stays as it is (that build set flags it must find records for again),
+	// hold refuses every spawn that needs a lock, and save never writes or
+	// removes it.
+	frozen error
 }
 
 // guardFlockWait is how long a spawn waits for another process that is
@@ -140,11 +147,15 @@ var errLockGone = errors.New("the locked file is gone")
 // none: a flag it set then has no record of ours, so it is never cleared and
 // an in-place spawn in its folder is refused, naming the file (hold). A move
 // fails when the data root cannot be written, and then no save can overwrite
-// them either.
+// them either. Records from a newer CuliBox are not moved: the guard freezes
+// instead (guardLocks.frozen).
 func newGuardLocks(root string, ops flagOps) *guardLocks {
 	g := &guardLocks{ops: ops, path: filepath.Join(root, guardLocksFile)}
 	recs, err := ReadGuardLocks(root)
-	if err != nil {
+	if errors.Is(err, datacompat.ErrNewer) {
+		g.frozen = err
+		log.Printf("box: in-place lock records: %v; every in-place box that needs a lock is refused until then", err)
+	} else if err != nil {
 		aside := filepath.Join(root, guardLocksUnreadable)
 		if _, serr := os.Lstat(aside); serr == nil {
 			aside += "." + time.Now().UTC().Format("20060102T150405.000000000")
@@ -169,6 +180,14 @@ func ReadGuardLocks(dataDir string) ([]GuardLock, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	// Probe the version before the typed decode: a newer CuliBox may have
+	// changed the other fields' types, and that must read as "newer", not as a
+	// parse error. Still an error either way (fail closed).
+	var probe struct{ Version int }
+	if json.Unmarshal(b, &probe) == nil && probe.Version > guardLocksVersion {
+		return nil, datacompat.Newer(filepath.Join(dataDir, guardLocksFile),
+			fmt.Sprintf("version %d, this build knows %d", probe.Version, guardLocksVersion))
 	}
 	var doc guardLockDoc
 	if err := json.Unmarshal(b, &doc); err != nil {
@@ -228,8 +247,11 @@ func (l *GuardLock) addPath(lp LockPath) {
 }
 
 // save writes the records atomically, owner-only; no records removes the file.
-// Caller holds g.mu.
+// Caller holds g.mu. Frozen records are never written or removed.
 func (g *guardLocks) save() error {
+	if g.frozen != nil {
+		return g.frozen
+	}
 	if len(g.recs) == 0 {
 		if err := os.Remove(g.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
@@ -292,6 +314,15 @@ func lockRefusal(p, why string) error {
 		"file and can read it, or remove it, or use a clone-mode profile", p, why, otherCase(filepath.Base(p)))
 }
 
+// frozenRefusal is the spawn refusal while the lock records are frozen (written
+// by a newer CuliBox). The folder is fine and nothing in it needs removing: this
+// build just cannot record a lock it could later undo, so the only ways out are
+// the newer CuliBox or a clone-mode profile. why carries the datacompat hint.
+func frozenRefusal(ws string, why error) error {
+	return refuseInPlace("%s was not started in place: the in-place lock records were written by a newer CuliBox "+
+		"and this build cannot record a lock there (%v). Run the newer CuliBox, or use a clone-mode profile", ws, why)
+}
+
 // setRefusal is the refusal for a flag that could not be set on p. A volume
 // without file flags (exFAT, a network share) answers ENOTSUP or EOPNOTSUPP:
 // no owner or permission fix helps there, only clone mode.
@@ -348,6 +379,9 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 	}
 	if cs, err := g.ops.caseSensitive(ws); err == nil && cs {
 		return g.lockedFor(box), nil
+	}
+	if g.frozen != nil {
+		return nil, frozenRefusal(ws, g.frozen)
 	}
 	root, err := os.OpenRoot(ws)
 	if err != nil {

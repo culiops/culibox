@@ -638,27 +638,28 @@ func TestViewInvalidEntriesAndBadFile(t *testing.T) {
 			t.Errorf("invalid is missing %s: %v", k, inv)
 		}
 	}
-	if b.FileBad {
-		t.Errorf("file_bad is set for a readable file")
+	// typo-tok could not be decoded, so a save would drop it: the screen is
+	// read-only for the run and shows the banner from the start.
+	if !b.FileBad {
+		t.Errorf("file_bad is not set for a file with an entry this build cannot read")
+	}
+	err = cm.PutTokens([]config.StaticToken{tok("fresh", "FRESH")}, map[string][]byte{"fresh": []byte("v")}, true)
+	if !errors.Is(err, ErrCredReadOnly) {
+		t.Fatalf("PutTokens = %v, want ErrCredReadOnly", err)
+	}
+	if got, _ := os.ReadFile(credfile.Path(dir)); string(got) != raw {
+		t.Errorf("the file changed")
 	}
 
-	// A file that is not JSON: no entries, a banner, and a save clears it.
-	cm.SetFileBad(true)
+	// A fully understood file shows no banner; SetFileBad turns it on.
+	clean := NewCredentialManager(base, credfile.File{}, t.TempDir(), fx.pm, fx.vals, fx.rec, fx.chk, func(config.Config) {}, nil)
+	srv.Creds = clean
+	if b = get(); b.FileBad {
+		t.Errorf("file_bad is set for a readable file")
+	}
+	clean.SetFileBad(true)
 	if b = get(); !b.FileBad {
 		t.Errorf("file_bad is not shown")
-	}
-	if err := cm.PutTokens([]config.StaticToken{tok("fresh", "FRESH")}, map[string][]byte{"fresh": []byte("v")}, true); err != nil {
-		t.Fatal(err)
-	}
-	b = get()
-	if b.FileBad {
-		t.Errorf("file_bad survived a successful save")
-	}
-	// The save dropped what could not be loaded; the list follows the file.
-	for _, e := range b.Invalid {
-		if e.Name == "typo-tok" {
-			t.Errorf("a dropped undecodable entry is still listed invalid: %+v", b.Invalid)
-		}
 	}
 }
 

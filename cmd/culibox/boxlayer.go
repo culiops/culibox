@@ -19,6 +19,7 @@ import (
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 	"github.com/culiops/culibox/internal/egress"
 	"github.com/culiops/culibox/internal/proxyline"
 	"github.com/culiops/culibox/internal/vmshares"
@@ -117,7 +118,7 @@ const relaySecretFile = "relay2.secret"
 // on every connection, so whatever held a port while CuliBox did not, or read
 // the loopback interface, may have learned it. It is never loaded again:
 // loadRelayKey deletes it. A new file name, not a stamp inside the old file,
-// because auth.NewCookieAuth owns the 32-byte format and replaces anything that
+// because auth.NewCookieAuth owns the 32-byte format and refuses anything that
 // is not exactly that.
 const retiredRelaySecretFile = "relay.secret"
 
@@ -140,6 +141,11 @@ func (l *boxLayer) loadRelayKey() error {
 	path := filepath.Join(l.dataDir, relaySecretFile)
 	sec, err := auth.NewCookieAuth(path)
 	if err != nil {
+		// A wrong-length file is a newer CuliBox's: the helper's message already
+		// names the path and the way out, and no permission fix applies.
+		if errors.Is(err, datacompat.ErrNewer) {
+			return fmt.Errorf("relay secret: %w", err)
+		}
 		// The helper words its error for the cookie secret and repeats the path.
 		// Keep only the OS error and say what this file is and what fixes it.
 		var pe *fs.PathError

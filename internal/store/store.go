@@ -26,6 +26,11 @@ var ErrNotFound = errors.New("store: profile not found")
 // its in-memory state as it was; reloading means restarting.
 var ErrChangedOnDisk = errors.New("store: the profiles file changed on disk after it was loaded")
 
+// ErrUnreadable is returned by Save and Delete on a store OpenOrReadOnly made
+// read-only: the profiles file has content this build cannot parse, and a write
+// would replace it with what this build knows. The file is left as it is.
+var ErrUnreadable = errors.New("store: the profiles file has content this build cannot read")
+
 // Store is a JSON-file-backed profile store, safe for concurrent use.
 type Store struct {
 	path string
@@ -37,27 +42,49 @@ type Store struct {
 	// with the file as it is now.
 	disk   [sha256.Size]byte
 	onDisk bool
+
+	// unreadable is why the file did not parse; set only by OpenOrReadOnly. A
+	// store with it set is empty and refuses every write.
+	unreadable error
 }
 
 // Open loads the store from path (a missing file is an empty store).
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, m: map[string]config.AgentConfig{}}
+	s, parseErr, err := OpenOrReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	return s, nil
+}
+
+// OpenOrReadOnly is Open for serve: a file that does not parse gives an empty
+// store that refuses Save and Delete (ErrUnreadable) and leaves the file alone,
+// with the parse error as parseErr and a nil err. Any other read error is err,
+// as for Open. The read-only callers (doctor, clone, box share, bug report) keep
+// Open, which fails on a parse error.
+func OpenOrReadOnly(path string) (s *Store, parseErr error, err error) {
+	s = &Store{path: path, m: map[string]config.AgentConfig{}}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return s, nil
+			return s, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	var list []config.AgentConfig
 	if err := json.Unmarshal(b, &list); err != nil {
-		return nil, fmt.Errorf("store: parse %s: %w", path, err)
+		parseErr = fmt.Errorf("store: parse %s: %w", path, err)
+		s.unreadable = parseErr
+		return s, parseErr, nil
 	}
 	for _, p := range list {
 		s.m[p.Name] = p
 	}
 	s.disk, s.onDisk = sha256.Sum256(b), true
-	return s, nil
+	return s, nil, nil
 }
 
 // List returns the stored profiles, sorted by name.
@@ -76,13 +103,16 @@ func (s *Store) Get(name string) (config.AgentConfig, bool) {
 }
 
 // Save creates or updates a profile and persists atomically. It returns
-// ErrChangedOnDisk, changing nothing, when the file was changed behind the
+// ErrUnreadable on a read-only store and ErrChangedOnDisk, changing nothing, when the file was changed behind the
 // store's back. A write that fails leaves the store as it was: the previous
 // profile (or none) is put back, so Get does not serve a value that is not on
 // disk and the next successful write does not persist it.
 func (s *Store) Save(p config.AgentConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.unreadable != nil {
+		return fmt.Errorf("%w: %v", ErrUnreadable, s.unreadable)
+	}
 	if err := s.checkDiskLocked(); err != nil {
 		return err
 	}
@@ -105,6 +135,9 @@ func (s *Store) Save(p config.AgentConfig) error {
 func (s *Store) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.unreadable != nil {
+		return fmt.Errorf("%w: %v", ErrUnreadable, s.unreadable)
+	}
 	prev, ok := s.m[name]
 	if !ok {
 		return ErrNotFound

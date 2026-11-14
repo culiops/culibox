@@ -2,19 +2,22 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 // ErrTokenNotFound is returned by Revoke for an unknown id.
@@ -44,6 +47,10 @@ type TokenStore struct {
 }
 
 // OpenTokenStore loads the store from path (a missing file is an empty store).
+// The file is decoded strictly: a field this build does not know could be a
+// future scope or expiry, and ignoring it would widen that token to full
+// access, so any parse failure is reported as a file a newer CuliBox may have
+// written (tokens.json has no version field to tell the cases apart).
 func OpenTokenStore(path string) (*TokenStore, error) {
 	s := &TokenStore{path: path, m: map[string]*tokenRec{}, now: time.Now}
 	b, err := os.ReadFile(path)
@@ -54,10 +61,21 @@ func OpenTokenStore(path string) (*TokenStore, error) {
 		return nil, err
 	}
 	var list []*tokenRec
-	if err := json.Unmarshal(b, &list); err != nil {
-		return nil, fmt.Errorf("auth: parse %s: %w", path, err)
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	err = dec.Decode(&list)
+	if err == nil {
+		if _, e := dec.Token(); !errors.Is(e, io.EOF) {
+			err = errors.New("unexpected data after the JSON value")
+		}
+	}
+	if err != nil {
+		return nil, datacompat.Newer(path, "it does not parse as this build's token list: "+err.Error())
 	}
 	for _, r := range list {
+		if r == nil {
+			return nil, datacompat.Newer(path, "it does not parse as this build's token list: a record is null")
+		}
 		s.m[r.ID] = r
 	}
 	return s, nil

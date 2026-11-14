@@ -12,6 +12,7 @@ import (
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 func TestGuardLockRows(t *testing.T) {
@@ -66,6 +67,13 @@ func TestGuardLockRows(t *testing.T) {
 	rows = guardLockRows("darwin", boxFacts{LocksErr: errors.New("bad json"), RunningKnown: true})
 	if len(rows) != 1 || rows[0].Status != Warn || !strings.Contains(rows[0].Detail, "chflags nouchg") {
 		t.Fatalf("unreadable records = %+v", rows)
+	}
+	// Records from a newer CuliBox are left in place, so there is nothing to
+	// unlock by hand: the row says why spawns are refused, not "chflags".
+	rows = guardLockRows("darwin", boxFacts{LocksErr: datacompat.Newer("inplace-locks.json", "version 3, this build knows 2"), RunningKnown: true})
+	if len(rows) != 1 || rows[0].Status != Warn || !strings.Contains(rows[0].Detail, "newer CuliBox") ||
+		!strings.Contains(rows[0].Detail, "in-place") || strings.Contains(rows[0].Detail, "chflags") {
+		t.Fatalf("newer records = %+v", rows)
 	}
 }
 

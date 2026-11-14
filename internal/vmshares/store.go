@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 // FileName is the share list, under the data root. Only agent-box writes it.
@@ -19,13 +21,25 @@ const fileVersion = 1
 // rewritten: the user fixes or removes it.
 var ErrCorrupt = errors.New("vm-shares.json is damaged")
 
+// newerError is the Load error for a file from a newer CuliBox. It is still
+// ErrCorrupt, so callers that keep the list read-only on ErrCorrupt are
+// unchanged, but its text is the datacompat message, not "damaged".
+type newerError struct{ err error }
+
+func (e newerError) Error() string { return e.err.Error() }
+func (e newerError) Unwrap() error { return e.err }
+func (e newerError) Is(target error) bool {
+	return target == ErrCorrupt
+}
+
 type fileFormat struct {
 	Version int     `json:"version"`
 	Shares  []Share `json:"shares"`
 }
 
 // Load reads the list. A missing file is (nil, false, nil). A bad file is
-// (nil, true, ErrCorrupt) wrapped with its path.
+// (nil, true, ErrCorrupt) wrapped with its path; a file from a newer
+// CuliBox is also datacompat.ErrNewer, with the newer message.
 func Load(dataDir string) (list []Share, exists bool, err error) {
 	path := filepath.Join(dataDir, FileName)
 	root, err := os.OpenRoot(dataDir)
@@ -49,6 +63,12 @@ func Load(dataDir string) (list []Share, exists bool, err error) {
 		return nil, true, err
 	}
 	corrupt := func(why string) error { return fmt.Errorf("%w: %s: %s", ErrCorrupt, path, why) }
+	// Probe the version before the typed decode: a newer CuliBox may have
+	// changed the other fields' types, and that must read as "newer", not damaged.
+	var probe struct{ Version int }
+	if json.Unmarshal(b, &probe) == nil && probe.Version > fileVersion {
+		return nil, true, newerError{datacompat.Newer(path, fmt.Sprintf("version %d, this build understands %d", probe.Version, fileVersion))}
+	}
 	var ff fileFormat
 	if err := json.Unmarshal(b, &ff); err != nil {
 		return nil, true, corrupt(err.Error())

@@ -175,10 +175,11 @@ type storeFailure struct{ cause error }
 func (e *storeFailure) Error() string { return "profiles store write failed" }
 func (e *storeFailure) Unwrap() error { return e.cause }
 
-// profileStoreErr marks err, a store write failure, as a *storeFailure; the one refusal
-// the store makes on purpose (a profiles file changed by hand) stays as it is.
+// profileStoreErr marks err, a store write failure, as a *storeFailure; the
+// refusals the store makes on purpose (a profiles file changed by hand, one that
+// does not parse) stay as they are.
 func profileStoreErr(err error) error {
-	if err == nil || errors.Is(err, store.ErrChangedOnDisk) {
+	if err == nil || errors.Is(err, store.ErrChangedOnDisk) || errors.Is(err, store.ErrUnreadable) {
 		return err
 	}
 	return &storeFailure{cause: err}
@@ -224,6 +225,11 @@ func writePageOutdated(w http.ResponseWriter) {
 // the store never reloads, so the way back is a restart.
 const profilesFileChangedMsg = "the profiles file was changed on disk after CuliBox loaded it, so nothing was saved; restart CuliBox to load it, then save again"
 
+// profilesFileUnreadableMsg is what a save or delete refused by store.ErrUnreadable
+// says: the file stays as it is, and the way back is to fix it or run the CuliBox
+// that wrote it.
+const profilesFileUnreadableMsg = "profiles.json has content this CuliBox cannot read, so this screen will not save over it. Fix the file, or run the CuliBox that wrote it."
+
 // revRequiredMsg is the 428 body of a PUT that carries no rev. The page that
 // sent it knows the schema (that is checked first), so what is missing is the
 // revision of the profile it opened.
@@ -259,6 +265,8 @@ func writeSaveErr(w http.ResponseWriter, err error) {
 		writeErrCode(w, http.StatusConflict, err.Error(), "profile_exists")
 	case errors.Is(err, store.ErrChangedOnDisk):
 		writeErrCode(w, http.StatusConflict, profilesFileChangedMsg, "profiles_file_changed")
+	case errors.Is(err, store.ErrUnreadable):
+		writeErrCode(w, http.StatusConflict, profilesFileUnreadableMsg, "profiles_file_unreadable")
 	case isStoreFailure(err):
 		// Not the caller's fault and not a validation sentence: the cause (it names
 		// a host path) goes to the log, the answer does not carry it.

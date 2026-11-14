@@ -70,6 +70,11 @@ var (
 	ErrMCPOnWeb = errors.New("an mcp server can only be defined in config.json")
 )
 
+// ErrCredReadOnly refuses every credentials write while credentials.json, as it
+// was when CuliBox started, had content this build cannot read: a save would
+// drop that content. The text is the banner the screen shows.
+var ErrCredReadOnly = errors.New("credentials.json has content this CuliBox cannot read, so this screen will not save over it. Fix the file, or run the CuliBox that wrote it.")
+
 // ErrCredPersist marks a failure to record the audit row or write the file: its
 // text can name a path, so a route shows a fixed sentence and logs the rest.
 var ErrCredPersist = errors.New("could not record or save the change")
@@ -154,9 +159,11 @@ type CredentialManager struct {
 	verdicts map[string]awsprobe.Result
 	// checkLimit charges the base-role checks a save runs itself.
 	checkLimit callLimiter
-	// bad: credentials.json was unreadable at start and has not been replaced by
-	// a save since (the save moves it aside). The screen shows a banner.
+	// bad: set by SetFileBad when credentials.json was unreadable at start.
 	bad bool
+	// readOnly is ErrCredReadOnly when the file at start had content this build
+	// cannot read (web.CanSave); every write is refused for the whole run.
+	readOnly error
 }
 
 // NewCredentialManager wires the manager. base must be the config as read from
@@ -171,11 +178,16 @@ func NewCredentialManager(base config.Config, web credfile.File, dataDir string,
 		apply: apply, accounts: accounts, verdicts: map[string]awsprobe.Result{},
 		checkLimit: callLimiter{max: saveCheckMax, window: time.Minute}}
 	c.merged, c.src, _ = credfile.Merge(base, web)
+	// Decided once from the file as it was at start: fixing the file on disk
+	// takes effect on the next start, never mid-run.
+	if web.CanSave() != nil {
+		c.readOnly = ErrCredReadOnly
+	}
 	return c
 }
 
 // SetFileBad records that credentials.json could not be read at start (the
-// daemon came up with no web entries). The next successful save clears it.
+// daemon came up with no web entries).
 func (c *CredentialManager) SetFileBad(bad bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -283,7 +295,9 @@ func (c *CredentialManager) presence(kind, name string, create bool) error {
 }
 
 // cloneFile is a copy of the file whose lists can be changed without touching
-// c.file. Undecodable is dropped: the next Save drops it from disk.
+// c.file. Undecodable and NotUnderstood are not carried: a file that has any is
+// never saved (readOnly), so a candidate is only ever written from a file that
+// had none.
 func (c *CredentialManager) cloneFile() credfile.File {
 	return credfile.File{
 		AWSConnections: slices.Clone(c.file.AWSConnections),
@@ -363,9 +377,29 @@ func (c *CredentialManager) checkProfilesLocked(merged config.Config) error {
 	return nil
 }
 
+// writableLocked is nil when a write may go ahead. It runs before any side
+// effect (audit row, store value, AWS call), so a refused write changes
+// nothing. Besides the verdict taken at start, it looks at the file on disk: a
+// hand edit made while CuliBox runs can leave content this build cannot read,
+// and Save would refuse it only after those side effects. Once refused it stays
+// refused: a fixed file takes effect on the next start. Caller holds c.mu.
+func (c *CredentialManager) writableLocked() error {
+	if c.readOnly != nil {
+		return c.readOnly
+	}
+	if cur, _, _ := credfile.Load(c.dataDir); cur.CanSave() != nil {
+		c.readOnly = ErrCredReadOnly
+		return c.readOnly
+	}
+	return nil
+}
+
 // persistLocked records the audit rows, saves the file and applies the merged
 // config. A failed row or save changes nothing. Caller holds c.mu.
 func (c *CredentialManager) persistLocked(cand credfile.File, merged config.Config, src credfile.Sources, events []broker.CredEvent) error {
+	if err := c.writableLocked(); err != nil {
+		return err
+	}
 	for _, e := range events {
 		e.Actor = storeActor
 		if err := c.rec.RecordCred(e); err != nil {
@@ -376,7 +410,6 @@ func (c *CredentialManager) persistLocked(cand credfile.File, merged config.Conf
 		return fmt.Errorf("%w: save credentials: %w", ErrCredPersist, err)
 	}
 	c.file, c.merged, c.src = cand, merged, src
-	c.bad = false // Save moved an unreadable file aside
 	c.apply(merged)
 	return nil
 }
@@ -426,6 +459,10 @@ func (c *CredentialManager) refInputsLocked() (config.Config, []account.Account)
 // definition reads, or will read once a store secret_source is added.
 func (c *CredentialManager) setAndPersistLocked(values map[string][]byte, owner map[string]string,
 	cand credfile.File, merged config.Config, src credfile.Sources, events []broker.CredEvent) error {
+	// Before any Set: a replace overwrites a value rollback cannot restore.
+	if err := c.writableLocked(); err != nil {
+		return err
+	}
 	if len(values) > 0 {
 		refs := c.storeClaimsLocked()
 		for _, id := range slices.Sorted(maps.Keys(values)) {
@@ -727,6 +764,9 @@ func (c *CredentialManager) PutGitHubApp(app config.GitHubApp, keyValue []byte, 
 // the base role must be (re)checked: on create, and when source_profile or
 // role_arn changed. Caller holds c.mu.
 func (c *CredentialManager) prepAWS(conn config.AWSConnection, create bool) (needsCheck bool, err error) {
+	if err := c.writableLocked(); err != nil { // before the check's AWS call and audit rows
+		return false, err
+	}
 	if err := c.presence(credfile.KindAWS, conn.Name, create); err != nil {
 		return false, err
 	}

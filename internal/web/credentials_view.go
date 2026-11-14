@@ -85,7 +85,7 @@ func (c *CredentialManager) snapshot() credSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	_, _, errs := credfile.Merge(c.base, c.file)
-	sn := credSnapshot{refs: c.storeRefsLocked(), errs: errs, bad: c.bad}
+	sn := credSnapshot{refs: c.storeRefsLocked(), errs: errs, bad: c.bad || c.readOnly != nil}
 	errFor := func(kind, name string) string {
 		for _, e := range errs {
 			if e.Kind == kind && e.Name == name {
