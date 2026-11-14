@@ -81,7 +81,33 @@ func ValidBoxBucketPrefix(s string) error {
 	if !boxPrefixRe.MatchString(s) {
 		return fmt.Errorf("box_bucket_prefix %q must be 3 to 40 lowercase letters, digits and -, ending in - (for example culibox-), with no wildcards", s)
 	}
+	if r, ok := reservedStem(s, reservedBucketStems); ok {
+		return fmt.Errorf("box_bucket_prefix %q overlaps %q, a name AWS tools or other CuliBox features create in shared buckets: reading every object there is not what this option is for; pick your own stem (for example culibox-)", s, r)
+	}
 	return nil
+}
+
+// reservedBucketStems are bucket-name stems that AWS services and tools create
+// in an account, or that CuliBox itself uses. A box_bucket_prefix that is one
+// of them, starts with one, or is a stem of one would open reads on buckets the
+// box did not create (CDK and CloudFormation assets, SageMaker data, ...).
+var reservedBucketStems = []string{"aws", "cdk-", "sagemaker-", "elasticbeanstalk-", "amplify-",
+	"cf-templates-", "codepipeline-", "config-bucket-", "agentbox-"}
+
+// reservedRoleStems are IAM role-name stems that AWS creates (service-linked
+// and service roles) or that CuliBox's own roles use.
+var reservedRoleStems = []string{"agentbox-", "aws", "service-role"}
+
+// reservedStem reports the reserved stem that s equals, starts with or is a
+// stem of, case-insensitively.
+func reservedStem(s string, stems []string) (string, bool) {
+	l := strings.ToLower(s)
+	for _, r := range stems {
+		if strings.HasPrefix(l, r) || strings.HasPrefix(r, l) {
+			return r, true
+		}
+	}
+	return "", false
 }
 
 // SessionName is the RoleSessionName and SourceIdentity for a session.
@@ -161,6 +187,9 @@ func marshalPolicy(st []statement, what string) (string, error) {
 		return "", err
 	}
 	if len(b) > MaxPolicyChars {
+		if what == "elevated session policy" {
+			return "", fmt.Errorf("the elevated session policy is %d characters; STS allows %d. It grows with every s3_read entry, with elevate.box_bucket_prefix and elevate.pass_role_prefix, and when allow_iam is off — use fewer or shorter s3_read entries or shorter prefixes", len(b), MaxPolicyChars)
+		}
 		return "", fmt.Errorf("the s3_read allowlist makes the %s %d characters; STS allows %d — use fewer or shorter entries", what, len(b), MaxPolicyChars)
 	}
 	return string(b), nil

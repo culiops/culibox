@@ -258,6 +258,41 @@ func TestElevatedPolicyPassRoleIsWhyCopyPathsAreDenied(t *testing.T) {
 	}
 }
 
+func TestValidBoxBucketPrefixRefusesSharedStems(t *testing.T) {
+	for _, s := range []string{"aws-", "awsx-", "cdk-", "cdk-x-", "sagemaker-", "sagemaker-eu-", "elasticbeanstalk-", "amplify-", "amplify-app-",
+		"cf-templates-", "cf-templates-abc-", "codepipeline-", "config-bucket-", "agentbox-", "agentbox-lab-"} {
+		err := ValidBoxBucketPrefix(s)
+		if err == nil || !strings.Contains(err.Error(), "overlaps") {
+			t.Errorf("%q: want an overlap refusal, got %v", s, err)
+		}
+	}
+	// upper case never reaches the stem check: the shape check refuses it
+	if ValidBoxBucketPrefix("AWS-") == nil || ValidBoxBucketPrefix("CDK-") == nil {
+		t.Error("upper-case reserved prefix accepted")
+	}
+	for _, s := range []string{"culibox-", "lab-", "ampl-", "cdx-", "cf-x-"} {
+		if err := ValidBoxBucketPrefix(s); err != nil {
+			t.Errorf("%q refused: %v", s, err)
+		}
+	}
+}
+
+func TestElevatedPolicySizeErrorNamesTheElevatedPolicyAndWhatGrowsIt(t *testing.T) {
+	var many []string
+	for i := 0; i < 12; i++ {
+		many = append(many, strings.Repeat("b", 60)+"/x/")
+	}
+	_, err := ElevatedPolicy("aws", many, Elevation{})
+	if err == nil {
+		t.Fatal("oversized policy accepted")
+	}
+	for _, w := range []string{"elevated session policy", "2048", "s3_read", "box_bucket_prefix", "pass_role_prefix", "allow_iam"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("size error lacks %q: %v", w, err)
+		}
+	}
+}
+
 func TestValidBoxBucketPrefix(t *testing.T) {
 	for _, s := range []string{"culibox-", "lab-", "a1-", "culiops-sandbox-box-" + strings.Repeat("x", 19) + "-"} {
 		if err := ValidBoxBucketPrefix(s); err != nil {
