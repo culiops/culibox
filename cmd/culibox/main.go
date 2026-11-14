@@ -762,11 +762,14 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	}
 	if errors.Is(parseErr, datacompat.ErrNewer) {
 		// The message already names the file, the version and the way out.
-		log.Printf("profiles store: %v; no stored profile is loaded and profile edits are refused until that is fixed and CuliBox restarted", parseErr)
+		log.Printf("profiles store: %v; no stored profile is loaded, profile edits are refused and no session can start until that is fixed and CuliBox restarted", parseErr)
 	} else if parseErr != nil {
 		log.Printf("profiles store %q has content this CuliBox cannot read (%v); profile edits are refused until it is fixed and CuliBox restarted; %s",
 			profilesPath, parseErr, datacompat.Hint)
 	}
+	// A newer profiles.json may hold overrides of the config seeds; with it
+	// unreadable, no spawn can be trusted to match what the user saved (#291).
+	lnch.SetProfilesGate(launcher.ProfilesNewerGate(parseErr))
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	// What CuliBox added itself is "builtin" in the profile list; config.json's own
 	// agents are "config" (#15). Derived every boot, never written to a file.

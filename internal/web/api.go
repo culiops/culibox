@@ -145,6 +145,7 @@ func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 		writeErrCode(w, http.StatusServiceUnavailable, err.Error(), "vm_restarting")
 	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable), errors.Is(err, box.ErrWorkspaceHeld),
 		errors.Is(err, box.ErrBoxOwned),
+		errors.Is(err, launcher.ErrProfilesNewer), // names the file, versions and docs/UPGRADING.md only
 		errors.Is(err, launcher.ErrBadPrompt),
 		errors.Is(err, launcher.ErrPromptUnsupported),
 		errors.Is(err, launcher.ErrCodexAccount), errors.Is(err, account.ErrUnknown),

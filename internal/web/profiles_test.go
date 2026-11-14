@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
 	"github.com/culiops/culibox/internal/session"
 	"github.com/culiops/culibox/internal/store"
 )
@@ -1146,5 +1148,61 @@ func TestMergeProfilesMatchesManagerAll(t *testing.T) {
 	got := MergeProfiles(seeds, fs.List(), opts)
 	if want := pm.All(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("MergeProfiles\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// #291: a profiles.json from a newer CuliBox. The store loads empty, so a
+// config seed would otherwise run from its plain config values, ignoring a
+// stored override the user may have tightened. Every spawn is refused; a normal
+// file spawns as before.
+func newerGateLauncher(t *testing.T, profiles string) *launcher.AgentLauncher {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	if profiles != "" {
+		if err := os.WriteFile(path, []byte(profiles), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, parseErr, err := store.OpenOrReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeds := []config.AgentConfig{{Name: "claude", Bin: "/bin/cat", Base: "clean"}}
+	l := launcher.New(seeds, nil, nil)
+	l.SetProfilesGate(launcher.ProfilesNewerGate(parseErr))
+	NewProfileManager(seeds, nil, config.RuntimeHost, nil, st, l.SetAgents)
+	return l
+}
+
+func TestNewerProfilesFileRefusesConfigSeedSpawn(t *testing.T) {
+	l := newerGateLauncher(t, `{"version": 2, "profiles": [{"name": "claude", "runtime": "box"}]}`)
+	_, _, err := l.Build(launcher.SpawnSpec{Agent: "claude", Runtime: config.RuntimeHost})
+	if !errors.Is(err, launcher.ErrProfilesNewer) {
+		t.Fatalf("Build = %v, want ErrProfilesNewer", err)
+	}
+	for _, want := range []string{"profiles.json", "format version 2", "this build knows 1", "docs/UPGRADING.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message %q lacks %q", err.Error(), want)
+		}
+	}
+	rec := httptest.NewRecorder()
+	writeSpawnErr(rec, "claude", err)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "docs/UPGRADING.md") {
+		t.Errorf("API: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestNormalProfilesFileStillSpawnsConfigSeed(t *testing.T) {
+	for name, content := range map[string]string{
+		"no file":          "",
+		"plain list":       `[{"name": "claude", "bin": "/bin/cat", "base": "clean"}]`,
+		"explicit version": `{"version": 1, "profiles": [{"name": "x", "bin": "/bin/cat"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			l := newerGateLauncher(t, content)
+			if _, _, err := l.Build(launcher.SpawnSpec{Agent: "claude", Runtime: config.RuntimeHost}); err != nil {
+				t.Fatalf("Build = %v", err)
+			}
+		})
 	}
 }
