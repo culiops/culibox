@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -23,6 +24,15 @@ import (
 // The derivation fails closed: whatever it cannot read exactly (a symlink a
 // box could re-point, a git config include, a submodule, an unreadable config)
 // refuses in-place boxing instead of guessing.
+
+// inPlaceFold is whether host paths compare ignoring letter case: macOS volumes
+// are case-insensitive by default, so a hooks or git path spelled in another case
+// is the same folder (#299). A variable so Linux tests can stand in for a Mac.
+var inPlaceFold = runtime.GOOS == "darwin"
+
+// underWS reports whether the host path p is at or below the workspace ws. Every
+// caller refuses or guards on "inside", so folding case only adds refusals.
+func underWS(p, ws string) bool { return underMount(p, []string{ws}, inPlaceFold) }
 
 // inPlaceTrustedHost is the way out of a refusal that has no local fix.
 const inPlaceTrustedHost = "Run it on the trusted host instead (clone-mode profiles are coming)"
@@ -379,7 +389,7 @@ func enclosingConfig(ws, top string) (cfgs [][]byte, defHooks string, err error)
 	}
 	// A workspace inside the git directory itself writes its config and hooks.
 	for _, d := range []string{gitdir, common} {
-		if UnderMount(ws, []string{d}) {
+		if underWS(ws, d) {
 			return nil, "", refuseInPlace("%s is inside the git directory %s, where a box could write its config and hooks. "+
 				"Pick the repository's working tree instead, or %s", ws, d, lowerFirst(inPlaceTrustedHost))
 		}
@@ -434,6 +444,17 @@ func hooksTarget(top, hp string) (string, error) {
 	}
 }
 
+// respellUnder spells p, which is at or below ws (compared with inPlaceFold),
+// with ws's own spelling for the part they share. filepath.Rel is case-sensitive:
+// ws /T/Repo and p /T/repo/hooks would give ../repo/hooks, not hooks.
+func respellUnder(p, ws string) string {
+	if !inPlaceFold {
+		return p
+	}
+	return filepath.Join(append([]string{string(filepath.Separator) + filepath.Join(splitPath(ws)...)},
+		splitPath(p)[len(splitPath(ws)):]...)...)
+}
+
 // guardHooksDir decides about the hooks directory target (absolute; "" none)
 // and returns the directory to bind read-only, "" for none.
 //
@@ -454,17 +475,18 @@ func guardHooksDir(root *os.Root, ws, target string) (string, error) {
 		return "", nil
 	}
 	target = filepath.Clean(target)
-	if !UnderMount(target, []string{ws}) {
+	if !underWS(target, ws) {
 		real, err := whereCreated(target)
 		if err != nil {
 			return "", refuseInPlace("the git hooks directory %s of %s cannot be resolved (%v). Fix or unset "+
 				"core.hooksPath, or %s", target, ws, err, lowerFirst(inPlaceTrustedHost))
 		}
-		if !UnderMount(real, []string{ws}) {
+		if !underWS(real, ws) {
 			return "", nil
 		}
 		target = real
 	}
+	target = respellUnder(target, ws)
 	rel, err := filepath.Rel(ws, target)
 	if err != nil {
 		return "", refuseInPlace("the git hooks directory %s of %s cannot be placed (%v). %s", target, ws, err, inPlaceTrustedHost)
@@ -545,7 +567,7 @@ func resolveGitfile(ws, base string, b []byte) (gitdir, common string, err error
 // is in the workspace (as spelled, or once resolved), missing, or (wantDir) not
 // a directory.
 func gitPathOutside(ws, p, what string, wantDir bool) (string, error) {
-	if UnderMount(p, []string{ws}) {
+	if underWS(p, ws) {
 		return "", refuseInPlace("%s points git at %s, inside the workspace, where a box can write its config and hooks. %s",
 			what, p, inPlaceTrustedHost)
 	}
@@ -554,7 +576,7 @@ func gitPathOutside(ws, p, what string, wantDir bool) (string, error) {
 		return "", refuseInPlace("%s points git at %s, which cannot be resolved (%v). Fix it, or %s",
 			what, p, err, lowerFirst(inPlaceTrustedHost))
 	}
-	if UnderMount(real, []string{ws}) {
+	if underWS(real, ws) {
 		return "", refuseInPlace("%s points git at %s, which leads into the workspace, where a box can write its config and hooks. %s",
 			what, p, inPlaceTrustedHost)
 	}
@@ -605,7 +627,7 @@ func readOutside(ws, p string) ([]byte, error) {
 	if err != nil {
 		return nil, unreadable(p, err)
 	}
-	if UnderMount(real, []string{ws}) {
+	if underWS(real, ws) {
 		return nil, refuseInPlace("%s leads into the workspace, where a box can write it. %s", p, inPlaceTrustedHost)
 	}
 	f, err := os.Open(real)
