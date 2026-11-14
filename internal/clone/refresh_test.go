@@ -31,6 +31,7 @@ func TestRefreshArgs(t *testing.T) {
 		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--label", "io.culiops.agent-box.clonerefresh=DEV",
 		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_NO_REPLACE_OBJECTS=1",
+		"-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory", "-e", "GIT_CONFIG_VALUE_0=/work/clone",
 		"--mount", "type=bind,src=/work/clone,dst=/work/clone",
 		"--mount", "type=bind,src=/src/of/.git,dst=/src/of/.git,readonly",
 		"--entrypoint", "sh", "culiops/agent-box:2026-10-18.2",
@@ -111,6 +112,7 @@ type scriptDocker struct {
 	err     error // when set, returned after the script ran
 	hang    bool
 	stderr  string
+	env     []string // added to the script's env (e.g. GIT_TEST_ASSUME_DIFFERENT_OWNER=1)
 }
 
 func (s *scriptDocker) Remove(_ context.Context, name string) error {
@@ -146,7 +148,7 @@ func (s *scriptDocker) RunStream(ctx context.Context, args []string, stdout io.W
 		s.t.Fatalf("no sh entrypoint in %q", args)
 	}
 	cmd := exec.CommandContext(ctx, "sh", args[i+3:]...)
-	cmd.Env = append(append(CleanEnv(), env...), "HOME="+s.home)
+	cmd.Env = append(append(append(CleanEnv(), env...), "HOME="+s.home), s.env...)
 	cmd.Dir = s.cwd
 	var errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = stdout, &errb
