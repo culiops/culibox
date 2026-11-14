@@ -576,6 +576,7 @@ case_attest_public_no_gh() {
   run_setup
   ok_rc "no gh: the checksum alone installs"
   says "provenance not checked" "the missing provenance check is visible"
+  says "only the checksum was checked" "the line says what was checked"
   installed_is "$min" "installed"
 }
 case_gh_unauthed_is_absent() {

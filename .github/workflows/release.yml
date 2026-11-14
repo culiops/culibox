@@ -171,7 +171,7 @@ jobs:
       - name: Note that attestations are skipped
         if: github.event.repository.visibility != 'public'
         run: |
-          echo "attestations skipped: repository is private" >> "$GITHUB_STEP_SUMMARY"
+          echo "attestations skipped: this repository is not public, build provenance needs a public repository" >> "$GITHUB_STEP_SUMMARY"
       - name: List the earlier releases
         env:
           GH_TOKEN: ${{ github.token }}

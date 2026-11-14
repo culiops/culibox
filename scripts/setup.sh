@@ -200,7 +200,7 @@ verify_provenance() {
     vp_why="this gh has no attestation command"
   fi
   if [ -n "$vp_why" ]; then
-    note "provenance not checked: $vp_why; the checksum was"
+    note "provenance not checked: $vp_why; only the checksum was checked"
     return 0
   fi
   vp_vis=$(gh repo view "$REPO" --json visibility --jq .visibility 2>/dev/null) || vp_vis=

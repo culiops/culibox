@@ -23,7 +23,7 @@ func TestRunBugReportExitsZeroOnDoctorFail(t *testing.T) {
 	if !strings.HasPrefix(out.String(), "culibox bug report v1") {
 		t.Errorf("stdout starts %q", firstLine(out.String()))
 	}
-	for _, want := range []string{"Issue link (needs access to the repo): https://", "pbcopy"} {
+	for _, want := range []string{"Issue link: https://", "pbcopy"} {
 		if !strings.Contains(errw.String(), want) {
 			t.Errorf("stderr missing %q:\n%s", want, errw.String())
 		}

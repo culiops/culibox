@@ -1382,7 +1382,7 @@ func TestReleaseWorkflow(t *testing.T) {
 	if !strings.Contains(att, "subject-path:") || !strings.Contains(att, "culibox_*") {
 		t.Error("the attest step must take the culibox_* tarballs as subject-path")
 	}
-	skip := stepBlock(t, release, "attestations skipped: repository is private")
+	skip := stepBlock(t, release, "attestations skipped: this repository is not public, build provenance needs a public repository")
 	if !strings.Contains(skip, "if: github.event.repository.visibility != 'public'") || !strings.Contains(skip, "GITHUB_STEP_SUMMARY") {
 		t.Error("the private-repository notice must be guarded by `visibility != 'public'` and write to GITHUB_STEP_SUMMARY")
 	}
