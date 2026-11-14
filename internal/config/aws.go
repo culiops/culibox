@@ -52,6 +52,16 @@ type AWSElevate struct {
 	RoleARN    string `json:"role_arn"`
 	MaxMinutes int    `json:"max_minutes,omitempty"` // 30 or 60; 0 means 60
 	AllowIAM   bool   `json:"allow_iam,omitempty"`
+	// BoxBucketPrefix (#211, opt-in) lets a write window read S3 objects in
+	// buckets whose name starts with it, the buckets the box creates, so
+	// Terraform can refresh what it uploaded. omitempty keeps every existing
+	// binding's hash unchanged.
+	BoxBucketPrefix string `json:"box_bucket_prefix,omitempty"`
+}
+
+// Scope is what the elevated session policy depends on from this block.
+func (e AWSElevate) Scope() awsscope.Elevation {
+	return awsscope.Elevation{AllowIAM: e.AllowIAM, BoxBucketPrefix: e.BoxBucketPrefix}
 }
 
 // Max is the longest window a grant may ask for.
@@ -116,7 +126,12 @@ func (b AWSBinding) Validate() error {
 		if b.Prod && b.Label == "" {
 			return errors.New("aws.label is required on a production binding with elevate: a grant asks you to type it")
 		}
-		if _, err := awsscope.ElevatedPolicy(awsscope.PartitionOf(b.RoleARN), b.S3Read, e.AllowIAM); err != nil {
+		if e.BoxBucketPrefix != "" {
+			if err := awsscope.ValidBoxBucketPrefix(e.BoxBucketPrefix); err != nil {
+				return fmt.Errorf("aws.elevate.%w", err)
+			}
+		}
+		if _, err := awsscope.ElevatedPolicy(awsscope.PartitionOf(b.RoleARN), b.S3Read, e.Scope()); err != nil {
 			return fmt.Errorf("aws.elevate: %w", err)
 		}
 	}

@@ -25,6 +25,10 @@ var (
 	bucketRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 	prefixRe    = regexp.MustCompile(`^[A-Za-z0-9._=-]+(/[A-Za-z0-9._=-]+)*/$`)
 	nameBadRe   = regexp.MustCompile(`[^\w+=,.@-]`)
+	// boxPrefixRe: 3 to 40 bucket-name characters ending in "-", so the
+	// prefix names a naming convention ("culibox-"), never a wildcard or a
+	// stem that would match unrelated buckets. Dots are refused.
+	boxPrefixRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,38}-$`)
 )
 
 func ValidRoleARN(s string) error {
@@ -65,6 +69,17 @@ func ValidS3Entry(s string) error {
 	}
 	if hasPrefix && !prefixRe.MatchString(prefix) {
 		return fmt.Errorf("s3_read entry %q: a prefix must end in / and may use letters, digits and . _ = - / only (no wildcards)", s)
+	}
+	return nil
+}
+
+// ValidBoxBucketPrefix accepts an elevate.box_bucket_prefix: lowercase
+// letters, digits and "-", 3 to 40 characters, ending in "-". It becomes
+// "arn:<p>:s3:::<prefix>*/*" in the S3 deny's NotResource, so anything that
+// could widen it (empty, "*", "?", "/") must never get that far.
+func ValidBoxBucketPrefix(s string) error {
+	if !boxPrefixRe.MatchString(s) {
+		return fmt.Errorf("box_bucket_prefix %q must be 3 to 40 lowercase letters, digits and -, ending in - (for example culibox-), with no wildcards", s)
 	}
 	return nil
 }
@@ -177,19 +192,55 @@ var elevatedGuardDenies = []string{
 var iamWriteDenies = []string{"iam:Create*", "iam:Delete*", "iam:Put*", "iam:Attach*", "iam:Detach*",
 	"iam:Update*", "iam:Add*", "iam:Remove*", "iam:Tag*", "iam:Untag*", "iam:Set*", "iam:Change*"}
 
+// Elevation is what a write-role mint's session policy depends on beyond the
+// binding's s3_read: allow_iam and the opt-in box bucket prefix.
+type Elevation struct {
+	AllowIAM bool
+	// BoxBucketPrefix, when set, lets the window read S3 objects in buckets
+	// whose name starts with it (the buckets the box creates). Empty = off.
+	BoxBucketPrefix string
+}
+
+// ssmParamReads are the SSM parameter reads, split out of dataReadDenies in
+// the elevated policy so that AWS's public parameters can be carved out.
+var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"}
+
 // ElevatedPolicy is the session policy for a write-role mint (M3b): the
-// investigate statements unchanged (elevation adds writes, never data reads),
-// the guard denies, and the IAM write denies unless allowIAM.
-func ElevatedPolicy(partition string, s3Read []string, allowIAM bool) (string, error) {
+// investigate statements (elevation adds writes, not data reads), the guard
+// denies, and the IAM write denies unless AllowIAM. Two narrow exceptions
+// (#211), both for running Terraform in the window:
+//   - AWS's public SSM parameters (/aws/service/..., e.g. AMI ids) are
+//     readable. Their ARNs have an empty account field; every parameter in
+//     an account carries its account id, so it stays denied.
+//   - With BoxBucketPrefix, objects in buckets named <prefix>... are
+//     readable, and DynamoDB table exports are denied: an export writes items
+//     into any bucket the caller can write, which would launder the item-read
+//     deny through a box bucket.
+func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, error) {
 	st, err := investigateStatements(partition, s3Read)
 	if err != nil {
 		return "", err
 	}
+	if el.BoxBucketPrefix != "" {
+		if err := ValidBoxBucketPrefix(el.BoxBucketPrefix); err != nil {
+			return "", err
+		}
+		s3 := &st[1]
+		s3.Resource = nil // Resource "*" when s3_read is empty
+		s3.NotResource = append(slices.Clone(s3.NotResource), "arn:"+partition+":s3:::"+el.BoxBucketPrefix+"*/*")
+	}
+	rest := slices.DeleteFunc(slices.Clone(dataReadDenies), func(a string) bool { return slices.Contains(ssmParamReads, a) })
+	st[2].Action = rest
+	st = slices.Insert(st, 3, statement{Effect: "Deny", Action: ssmParamReads,
+		NotResource: []string{"arn:" + partition + ":ssm:*::parameter/aws/service/*"}})
 	st = append(st,
 		statement{Effect: "Deny", Action: elevatedGuardDenies, Resource: "*"},
 		statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
-	if !allowIAM {
+	if !el.AllowIAM {
 		st = append(st, statement{Effect: "Deny", Action: iamWriteDenies, Resource: "*"})
+	}
+	if el.BoxBucketPrefix != "" {
+		st = append(st, statement{Effect: "Deny", Action: "dynamodb:ExportTableToPointInTime", Resource: "*"})
 	}
 	return marshalPolicy(st, "elevated session policy")
 }

@@ -244,6 +244,11 @@ func TestElevateValidate(t *testing.T) {
 		"max 45":          func(b *AWSBinding) { b.Elevate.MaxMinutes = 45 },
 		"max 90":          func(b *AWSBinding) { b.Elevate.MaxMinutes = 90 },
 		"prod no label":   func(b *AWSBinding) { b.Prod, b.Label = true, "" },
+		"prefix star":     func(b *AWSBinding) { b.Elevate.BoxBucketPrefix = "*" },
+		"prefix wildcard": func(b *AWSBinding) { b.Elevate.BoxBucketPrefix = "culibox-*" },
+		"prefix no dash":  func(b *AWSBinding) { b.Elevate.BoxBucketPrefix = "culibox" },
+		"prefix too long": func(b *AWSBinding) { b.Elevate.BoxBucketPrefix = strings.Repeat("c", 40) + "-" },
+		"prefix quote":    func(b *AWSBinding) { b.Elevate.BoxBucketPrefix = `x"],"Effect":"Allow-` },
 	}
 	for name, mut := range cases {
 		b := elevBinding()
@@ -263,6 +268,21 @@ func TestElevateValidate(t *testing.T) {
 	b.Prod, b.Label = true, "prod-acct"
 	if err := b.Validate(); err != nil {
 		t.Errorf("prod with a label refused: %v", err)
+	}
+	b = elevBinding()
+	b.Elevate.BoxBucketPrefix = "culibox-"
+	if err := b.Validate(); err != nil {
+		t.Errorf("box_bucket_prefix culibox- refused: %v", err)
+	}
+	if err := elevBinding().Validate(); err != nil || elevBinding().Elevate.BoxBucketPrefix != "" {
+		t.Errorf("box_bucket_prefix must be optional and off by default: %v", err)
+	}
+}
+
+func TestElevateScopeCarriesTheElevatedPolicyInputs(t *testing.T) {
+	e := AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/w", AllowIAM: true, BoxBucketPrefix: "culibox-"}
+	if got := e.Scope(); !got.AllowIAM || got.BoxBucketPrefix != "culibox-" {
+		t.Fatalf("Scope %+v", got)
 	}
 }
 
@@ -285,6 +305,7 @@ func TestHashCoversElevate(t *testing.T) {
 		"other role": {RoleARN: "arn:aws:iam::123456789012:role/other-write"},
 		"max 30":     {RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", MaxMinutes: 30},
 		"allow iam":  {RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", AllowIAM: true},
+		"box prefix": {RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", BoxBucketPrefix: "culibox-"},
 	} {
 		b := goodBinding()
 		b.Elevate = e
@@ -303,6 +324,11 @@ func TestHashCoversElevate(t *testing.T) {
 	}
 	if a.Elevate.MaxMinutes != 0 {
 		t.Error("Hash must not modify the binding")
+	}
+	// An elevate block without the #211 prefix must hash as it did before
+	// the field existed: the key is left out of the hashed JSON entirely.
+	if j, _ := json.Marshal(elevBinding().normalized()); strings.Contains(string(j), "box_bucket_prefix") {
+		t.Errorf("an unset box_bucket_prefix reached the hash input: %s", j)
 	}
 }
 

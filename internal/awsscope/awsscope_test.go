@@ -202,8 +202,33 @@ func denied(p pol, action string, resource string) bool {
 	return false
 }
 
+// elevatedBefore211 is ElevatedPolicy("aws", ["culishop-tfstate"], allow_iam off)
+// as the pre-#211 code (1d7ed12) rendered it.
+const elevatedBefore211 = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion"],"NotResource":["arn:aws:s3:::culishop-tfstate/*"]},{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect"],"Resource":"*"},{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}},{"Effect":"Deny","Action":["sts:AssumeRole*","sts:GetFederationToken","sts:GetSessionToken","iam:CreateAccessKey","iam:CreateLoginProfile","iam:UpdateLoginProfile","iam:CreateServiceSpecificCredential","iam:UploadSSHPublicKey","cloudtrail:StopLogging","cloudtrail:DeleteTrail","cloudtrail:UpdateTrail","cloudtrail:PutEventSelectors"],"Resource":"*"},{"Effect":"Deny","Action":"iam:*","Resource":"arn:aws:iam::*:role/agentbox-*"},{"Effect":"Deny","Action":["iam:Create*","iam:Delete*","iam:Put*","iam:Attach*","iam:Detach*","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*"],"Resource":"*"}]}`
+
+// #211 acceptance: with box_bucket_prefix unset, the elevated policy is the
+// pre-#211 one plus only the public-parameter carve-out: the three SSM
+// parameter reads move out of the Resource "*" deny into their own deny whose
+// NotResource is AWS's public parameters (empty account field).
+func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
+	got, err := ElevatedPolicy("aws", []string{"culishop-tfstate"}, Elevation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(elevatedBefore211,
+		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect"],"Resource":"*"},`,
+		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect"],"Resource":"*"},`+
+			`{"Effect":"Deny","Action":["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"],"NotResource":["arn:aws:ssm:*::parameter/aws/service/*"]},`, 1)
+	if want == elevatedBefore211 {
+		t.Fatal("test literal out of date: the replacement did not apply")
+	}
+	if got != want {
+		t.Fatalf("ElevatedPolicy (opt-in off) changed beyond the carve-out:\n got  %s\n want %s", got, want)
+	}
+}
+
 func TestElevatedPolicyKeepsTheInvestigateDeniesAndAddsTheGuards(t *testing.T) {
-	s, err := ElevatedPolicy("aws", []string{"culishop-tfstate"}, false)
+	s, err := ElevatedPolicy("aws", []string{"culishop-tfstate"}, Elevation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,11 +238,13 @@ func TestElevatedPolicyKeepsTheInvestigateDeniesAndAddsTheGuards(t *testing.T) {
 	}
 	inv, _ := SessionPolicy("aws", []string{"culishop-tfstate"})
 	invP := parsePol(t, inv)
-	for i := range invP.Statement { // D4: every investigate statement, unchanged and in order
+	// Statements 0, 1 and 3 of the investigate policy are carried unchanged
+	// (the S3 and KMS denies); statement 2 is split by #211 (tested above).
+	for i, j := range map[int]int{0: 0, 1: 1, 3: 4} {
 		a, _ := json.Marshal(invP.Statement[i])
-		b, _ := json.Marshal(p.Statement[i])
+		b, _ := json.Marshal(p.Statement[j])
 		if string(a) != string(b) {
-			t.Fatalf("statement %d differs from the investigate policy:\n %s\n %s", i, a, b)
+			t.Fatalf("investigate statement %d differs in the elevated policy:\n %s\n %s", i, a, b)
 		}
 	}
 	for _, a := range []string{"sts:AssumeRole*", "sts:GetFederationToken", "sts:GetSessionToken",
@@ -243,7 +270,7 @@ func TestElevatedPolicyKeepsTheInvestigateDeniesAndAddsTheGuards(t *testing.T) {
 }
 
 func TestElevatedPolicyAllowIAMDropsOnlyTheIAMWriteDenies(t *testing.T) {
-	s, err := ElevatedPolicy("aws", nil, true)
+	s, err := ElevatedPolicy("aws", nil, Elevation{AllowIAM: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,16 +284,16 @@ func TestElevatedPolicyAllowIAMDropsOnlyTheIAMWriteDenies(t *testing.T) {
 }
 
 func TestElevatedPolicyPartitionAndInjection(t *testing.T) {
-	s, err := ElevatedPolicy("aws-cn", nil, false)
+	s, err := ElevatedPolicy("aws-cn", nil, Elevation{})
 	if err != nil || !strings.Contains(s, "arn:aws-cn:iam::*:role/agentbox-*") {
 		t.Fatalf("partition not carried: %v %s", err, s)
 	}
 	for _, bad := range []string{`x"],"Effect":"Allow`, "b*", "a/../b/", "bucket/pre fix/"} {
-		if _, err := ElevatedPolicy("aws", []string{bad}, false); err == nil {
+		if _, err := ElevatedPolicy("aws", []string{bad}, Elevation{}); err == nil {
 			t.Errorf("s3_read %q accepted", bad)
 		}
 	}
-	if _, err := ElevatedPolicy("aws\"", nil, false); err == nil {
+	if _, err := ElevatedPolicy("aws\"", nil, Elevation{}); err == nil {
 		t.Error("a bad partition was accepted")
 	}
 }
@@ -278,10 +305,10 @@ func TestElevatedPolicySizeBudget(t *testing.T) {
 	for i := 0; len(entries) < 40; i++ {
 		entries = append(entries, fmt.Sprintf("bucket-%02d/logs/%s/", i, strings.Repeat("p", 30)))
 	}
-	if _, err := ElevatedPolicy("aws", entries, false); err == nil || !strings.Contains(err.Error(), "2048") {
+	if _, err := ElevatedPolicy("aws", entries, Elevation{}); err == nil || !strings.Contains(err.Error(), "2048") {
 		t.Fatalf("an oversized policy must be refused naming the limit, got %v", err)
 	}
-	s, err := ElevatedPolicy("aws", []string{"culishop-tfstate"}, false)
+	s, err := ElevatedPolicy("aws", []string{"culishop-tfstate"}, Elevation{})
 	if err != nil || len(s) > MaxPolicyChars {
 		t.Fatalf("the sandbox binding's policy must fit: %d chars, %v", len(s), err)
 	}
