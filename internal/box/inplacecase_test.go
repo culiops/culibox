@@ -166,3 +166,42 @@ func TestInPlaceGuardFoldsCase(t *testing.T) {
 		}
 	})
 }
+
+// #304: git resolves .. on the real filesystem, the guard cleans it as text, so a
+// .. that follows a component below the workspace (one the box can swap for a
+// symlink) is refused. A .. after ws itself is safe: ws is a mount point.
+func TestInPlaceHooksPathDotDot(t *testing.T) {
+	cases := []struct {
+		name, hp string // <ws> and <tmp> are replaced
+		refuse   bool
+		mounts   []string
+	}{
+		{"dotdot after a dir below ws", "sub/../hooks", true, nil},
+		{"absolute dotdot below ws", "<ws>/sub/../hooks", true, nil},
+		{"second dotdot below ws", "sub/x/../../hooks", true, nil},
+		{"dotdot leaving ws then below it again", "../Repo/sub/../hooks", true, nil},
+		{"dotdot outside ws", "<tmp>/other/../other/hooks", false, []string{}},
+		{"relative dotdot from ws itself", "../other/hooks", false, []string{}},
+		{"dotdot after ws itself and back in", "../Repo/hooks", false, []string{"hooks"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := realTemp(t)
+			ws := filepath.Join(tmp, "Repo")
+			hp := strings.NewReplacer("<ws>", ws, "<tmp>", tmp).Replace(tc.hp)
+			gitRepo(t, ws, "[core]\n\thooksPath = "+hp+"\n")
+			mkdirs(t, filepath.Join(ws, "sub", "x"), filepath.Join(ws, "hooks"), filepath.Join(tmp, "other", "hooks"))
+			got, err := inPlaceMounts(ws)
+			if tc.refuse {
+				if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "..") {
+					t.Fatalf("want a .. refusal, got %v (mounts %v)", err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMounts(t, ws, got, append([]string{".git", ".claude"}, tc.mounts...)...)
+		})
+	}
+}

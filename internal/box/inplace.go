@@ -341,6 +341,9 @@ func hooksGuard(root *os.Root, ws string, gitFi fs.FileInfo) (string, error) {
 		if target, err = hooksTarget(top, core.hooksPath); err != nil {
 			return "", err
 		}
+		if err := dotDotUnder(target, ws, core.hooksPath); err != nil {
+			return "", err
+		}
 	}
 	return guardHooksDir(root, ws, target)
 }
@@ -426,7 +429,7 @@ func outsideConfigs(ws, gitdir, common string) ([][]byte, error) {
 }
 
 // hooksTarget is where git looks for hooks given core.hooksPath hp, as an
-// absolute path, or "" for a place that can never be in a workspace. Relative
+// absolute path, NOT cleaned (the .. are still in it, see dotDotUnder), or "" for a place that can never be in a workspace. Relative
 // paths are relative to top, the worktree root.
 func hooksTarget(top, hp string) (string, error) {
 	switch {
@@ -440,7 +443,7 @@ func hooksTarget(top, hp string) (string, error) {
 			return "", refuseInPlace("core.hooksPath of %s is %q, and the home directory it names is unknown (%v). "+
 				"Spell it out in full, or %s", top, hp, err, lowerFirst(inPlaceTrustedHost))
 		}
-		return filepath.Join(home, hp[1:]), nil
+		return home + hp[1:], nil
 	case strings.HasPrefix(hp, "~"):
 		name, rest, _ := strings.Cut(hp[1:], "/")
 		u, err := user.Lookup(name)
@@ -448,12 +451,39 @@ func hooksTarget(top, hp string) (string, error) {
 			return "", refuseInPlace("core.hooksPath of %s is %q, and that user's home is unknown (%v). "+
 				"Spell it out in full, or %s", top, hp, err, lowerFirst(inPlaceTrustedHost))
 		}
-		return filepath.Join(u.HomeDir, rest), nil
+		return u.HomeDir + "/" + rest, nil
 	case filepath.IsAbs(hp):
-		return filepath.Clean(hp), nil
+		return hp, nil
 	default:
-		return filepath.Join(top, hp), nil
+		return top + "/" + hp, nil
 	}
+}
+
+// dotDotUnder refuses raw (the hooks path made absolute, not cleaned) when a
+// ".." follows a component below the workspace (#304). Git resolves ".." on the
+// real filesystem, the guard cleans it as text, and a box can swap any
+// component below ws for a symlink, so the two could name different directories.
+// A ".." right after ws itself is safe: ws is a mount point the box cannot
+// replace, so ws/.. is the parent either way. A ".." wholly outside ws is host
+// territory and stays accepted.
+func dotDotUnder(raw, ws, hp string) error {
+	nws := len(splitPath(ws))
+	cur := string(filepath.Separator)
+	for _, c := range strings.Split(raw, string(filepath.Separator)) {
+		switch c {
+		case "", ".":
+		case "..":
+			if len(splitPath(cur)) > nws && underWS(cur, ws) {
+				return refuseInPlace("core.hooksPath of %s is %q, and its \"..\" follows %s, below the workspace: git resolves "+
+					"\"..\" through the real directory, so a box could swap that component for a symlink and redirect "+
+					"it. Write the path without \"..\", or %s", ws, hp, cur, lowerFirst(inPlaceTrustedHost))
+			}
+			cur = filepath.Dir(cur)
+		default:
+			cur = filepath.Join(cur, c)
+		}
+	}
+	return nil
 }
 
 // respellUnder spells p, which is at or below ws (compared with inPlaceFold),
