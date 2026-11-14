@@ -8,6 +8,12 @@
 # no such tag (a shallow CI checkout) prints SKIP and exits 0, or 1 when
 # AB_UPGRADE_REQUIRE=1.
 #
+# S2 (the legacy ~/.local/share/agent-box root move, #255) needs a vN-1 from before the
+# rename. When the resolved vN-1 already has the culibox layout (v0.35.0 and later: it
+# moves the root and takes the upgrade backup itself) S2 can only observe "no move", so
+# a second pass runs S2 alone with the newest pre-rename release tag. Skipped when
+# AB_PREV_REF, AB_PREV_BIN or AB_UPGRADE_NO_LEGACY=1 chose vN-1 by hand.
+#
 # Environment (all optional):
 #   AB_PREV_REF         use this ref as vN-1 instead of the resolved tag
 #   AB_PREV_BIN         a prebuilt vN-1 binary (skips that build; the Mac row uses it)
@@ -16,6 +22,7 @@
 #   AB_UPGRADE_BUILD    build dir (default: a mktemp dir, removed on exit); in a box use
 #                       one under /home/agent/ext, not the 512 MB /tmp
 #   AB_UPGRADE_KEEP=1   keep the build dir and the test's data roots
+#   AB_UPGRADE_NO_LEGACY=1  skip the second, pre-rename S2 pass
 #   AB_UPGRADE_REQUIRE=1  a SKIP is a failure
 # Bash 3.2 code: it also runs on macOS.
 set -euo pipefail
@@ -136,7 +143,37 @@ fi
 cur_commit=
 if [ -z "${AB_CUR_BIN:-}" ]; then cur_commit=$head; fi
 
-AB_UPGRADE_PREV_BIN=$prev_bin AB_UPGRADE_CUR_BIN=$cur_bin \
-  AB_UPGRADE_PREV_VERSION=$prev AB_UPGRADE_CUR_VERSION=$cur AB_UPGRADE_CUR_COMMIT=$cur_commit \
-  AB_UPGRADE_KEEP=${AB_UPGRADE_KEEP:-} \
-  "${test_cmd[@]}"
+# run_pass PREV_BIN PREV_VERSION [test -run pattern]
+run_pass() {
+  local run=()
+  if [ -n "${3:-}" ]; then
+    if [ -n "${AB_UPGRADE_TESTBIN:-}" ]; then run=(-test.run "$3"); else run=(-run "$3"); fi
+  fi
+  AB_UPGRADE_PREV_BIN=$1 AB_UPGRADE_CUR_BIN=$cur_bin \
+    AB_UPGRADE_PREV_VERSION=$2 AB_UPGRADE_CUR_VERSION=$cur AB_UPGRADE_CUR_COMMIT=$cur_commit \
+    AB_UPGRADE_KEEP=${AB_UPGRADE_KEEP:-} \
+    "${test_cmd[@]}" ${run[@]+"${run[@]}"}
+}
+
+run_pass "$prev_bin" "$prev"
+
+if [ "$prev_pkg" = ./cmd/culibox ] && [ -z "${AB_PREV_REF:-}" ] && [ -z "${AB_PREV_BIN:-}" ] \
+  && [ "${AB_UPGRADE_NO_LEGACY:-}" != 1 ]; then
+  legacy=
+  for t in $(git tag --list 'v[0-9]*' --sort=-v:refname); do
+    if git merge-base --is-ancestor "$t" HEAD 2>/dev/null && ! git cat-file -e "$t:cmd/culibox/main.go" 2>/dev/null; then
+      legacy=$t
+      break
+    fi
+  done
+  if [ -z "$legacy" ]; then
+    skip "S2 legacy-root pass: no pre-rename v* tag reachable from HEAD (CI needs fetch-depth: 0)"
+  fi
+  echo "upgrade-test: S2 legacy-root pass, $legacy (pre-rename) -> $cur"
+  legacy_sha=$(git rev-parse "$legacy^{commit}")
+  rm -rf "$build_dir/src-legacy"
+  mkdir -p "$build_dir/src-legacy"
+  git archive "$legacy" | tar -x -C "$build_dir/src-legacy"
+  (cd "$build_dir/src-legacy" && CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=$legacy -X main.commit=$legacy_sha" -o "$build_dir/legacy" "$(mainpkg "$legacy")")
+  run_pass "$build_dir/legacy" "$legacy" 'TestUpgrade/S2'
+fi

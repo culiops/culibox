@@ -141,8 +141,10 @@ func testDefaultRoot(t *testing.T, prev, cur string) {
 	old := Start(t, prev, s.port, s.env, s.log)
 	// vN-1 serves the root that holds its login token: the legacy one for every
 	// release before the move, the culibox one for a release that already moved.
+	// Lstat, not Stat: a release that already moved leaves the legacy path as a
+	// symlink to the new root, and Stat would follow it to the same login.token.
 	prevRoot := legacy
-	if _, err := os.Stat(filepath.Join(legacy, "login.token")); err != nil {
+	if fi, err := os.Lstat(legacy); err != nil || fi.Mode()&os.ModeSymlink != 0 {
 		prevRoot = newRoot
 	}
 	f := &Fixture{Root: prevRoot, Home: s.home, Fake: s.fake, Log: s.log}
@@ -158,7 +160,10 @@ func testDefaultRoot(t *testing.T, prev, cur string) {
 
 	start = time.Now()
 	srv := Start(t, cur, s.port, s.env, s.log)
-	moved := CheckMoved(t, s.home)
+	// CheckMoved is true for any legacy symlink, including the one vN-1 left when
+	// it moved the root itself (v0.35.0 and later). Only a move by vN counts as
+	// "moved" below: the rewrite, mode and backup-path checks apply to that move.
+	moved := CheckMoved(t, s.home) && prevRoot == legacy
 	root, opts := prevRoot, DiffOptions{}
 	switch {
 	case moved:
