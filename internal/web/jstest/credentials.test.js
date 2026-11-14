@@ -696,6 +696,8 @@ test("awsHoursFromExpiry: whole hours until the expiry, rounded up, 0 when unkno
 test("awsDataReadName maps actions to the friendly names", () => {
   assert.strictEqual(awsDataReadName("secretsmanager:GetSecretValue"), "secret values");
   assert.strictEqual(awsDataReadName("ssm:GetParametersByPath"), "SSM parameters");
+  assert.strictEqual(awsDataReadName("ssm:GetParameterHistory"), "SSM parameters");
+  assert.strictEqual(awsDataReadName("dynamodb:GetRecords"), "DynamoDB items");
   assert.strictEqual(awsDataReadName("DynamoDB:Scan"), "DynamoDB items");
   assert.strictEqual(awsDataReadName("s3:GetObject"), "S3 objects");
   assert.strictEqual(awsDataReadName("kms:Decrypt"), "KMS decrypt");

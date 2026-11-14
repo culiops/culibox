@@ -86,9 +86,16 @@ type statement struct {
 	Condition   map[string]any `json:"Condition,omitempty"`
 }
 
+// dataReadDenies are the actions that return secret values, Parameter Store
+// values (the four value reads: GetParameter, GetParameters,
+// GetParametersByPath and GetParameterHistory, per the SSM
+// ps-retrieval-authorization doc) and DynamoDB item images, including stream
+// records (GetRecords). Explicit names only: the AWS gate simulates each one.
 var dataReadDenies = []string{
 	"secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
+	"ssm:GetParameterHistory",
 	"dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PartiQLSelect",
+	"dynamodb:GetRecords",
 }
 
 // DataReadDenies returns a copy of the data-read actions the investigate scope
