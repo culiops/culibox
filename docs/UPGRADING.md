@@ -135,6 +135,14 @@ CuliBox releases from before this one behave differently: they move `credentials
 - The Keychain item is not copied. A restore into the same path keeps it valid. See "Restore into the same path" above.
 - Security upgrades that change the box VM: see [macOS](MACOS.md), which says when `box setup -recreate` is needed.
 
+## From agent-box
+
+CuliBox was called agent-box before its first public release. An install from that time keeps working with the `culibox` binary:
+
+- **What changes.** The binary and every command are now `culibox`: replace `agent-box` in your service file or scripts. The environment variable is `CULIBOX_HOME`; `AGENT_BOX_HOME` still works and prints a notice, and if both are set to different paths, CuliBox refuses to start. New installs build the box image as `culiops/culibox:base` and pull from `ghcr.io/culiops/culibox`.
+- **What moves on its own.** On the first start of `culibox serve`, the data folder `~/.local/share/agent-box` is moved to `~/.local/share/culibox`, and a link is left at the old path. Your store key, profiles, accounts and history come along. The move waits for a start when no session is running, and it does not move a folder you set with `CULIBOX_HOME`/`AGENT_BOX_HOME`. On a Mac with a box VM the folder stays where it is. `culibox doctor` shows which folder is in use, and why. A `~/.config/agent-box/config.json` moves to `~/.config/culibox/` the same way.
+- **What stays.** A `box_image` you pinned keeps working; if you never set one, your existing image is reused. Some internal names still say agent-box for every install, old or new: the Keychain and keyring entry names, the colima profile `agent-box`, container labels and browser layout settings. Nothing needs to be redone.
+
 ## For contributors: the migration rule
 
 A migration is any code that rewrites a persisted file when a new version first reads it. The rule is **copy**: the version-change backup is the copy from before the migration, so a migration does not need its own `.bak`. A new migration must:
