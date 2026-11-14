@@ -783,6 +783,10 @@ func walkGitPath(base, p, ws string) (gitWalk, error) {
 	if err != nil {
 		return gitWalk{}, err
 	}
+	// atWS: cur is the workspace. Matched by spelling, cur is ws itself; matched
+	// by inode under another path (a host bind mount), cur keeps that path, since
+	// a ".." from there goes to ITS parent, as the kernel takes it.
+	atWS := cur == ws
 	missing := 0 // trailing components of cur that do not exist
 	for follows := 0; len(queue) > 0; {
 		c := queue[0]
@@ -794,17 +798,18 @@ func walkGitPath(base, p, ws string) (gitWalk, error) {
 			if missing > 0 {
 				missing--
 			}
-			cur = filepath.Dir(cur)
+			cur, atWS = filepath.Dir(cur), false
 			continue
+		}
+		if atWS {
+			return walkBelow(ws, append([]string{c}, queue...))
 		}
 		next := filepath.Join(cur, c)
-		n := len(splitPath(next))
-		if n == nws && isWS(next, ws) {
-			cur, missing = ws, 0
+		if len(splitPath(next)) == nws && isWS(next, ws) {
+			// An other-case spelling: a plain directory has ws's parent, and a
+			// symlink that is ws leads to ws, so ws stands for it.
+			cur, atWS, missing = ws, true, 0
 			continue
-		}
-		if cur == ws {
-			return walkBelow(ws, append([]string{c}, queue...))
 		}
 		if missing > 0 {
 			cur, missing = next, missing+1
@@ -819,9 +824,7 @@ func walkGitPath(base, p, ws string) (gitWalk, error) {
 			return gitWalk{}, err
 		case fi.Mode()&fs.ModeSymlink == 0:
 			cur = next
-			if fi.IsDir() && sameDirAsWS(next, fi, wsFi) {
-				cur = ws
-			}
+			atWS = fi.IsDir() && sameDirAsWS(next, fi, wsFi)
 			continue
 		}
 		if follows++; follows > maxSymlinkFollows {
@@ -838,6 +841,9 @@ func walkGitPath(base, p, ws string) (gitWalk, error) {
 			cur = sep
 		}
 		queue = append(strings.Split(t, sep), queue...)
+	}
+	if atWS {
+		return gitWalk{end: ws}, nil
 	}
 	return gitWalk{end: cur}, nil
 }
