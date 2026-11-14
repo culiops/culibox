@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -1841,7 +1842,14 @@ func boundNotListening(t *testing.T) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = syscall.Close(fd) })
+	closed := false
+	closeFd := func() {
+		if !closed {
+			closed = true
+			_ = syscall.Close(fd)
+		}
+	}
+	t.Cleanup(closeFd)
 	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1853,6 +1861,18 @@ func boundNotListening(t *testing.T) int {
 	if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second); err == nil {
 		c.Close()
 		t.Fatal("setup: a bound socket that never listens accepted a connection")
+	} else if ne, isNet := err.(net.Error); isNet && ne.Timeout() && runtime.GOOS == "darwin" {
+		// darwin silently drops the SYN of a connect to a socket that is bound and
+		// never listens (measured on macos-15: i/o timeout, no RST), so there the port
+		// is released and a closed port refuses. The port can be taken by another
+		// process between the close and the relay's dial; that window is the price.
+		closeFd()
+		if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second); err == nil {
+			c.Close()
+			t.Fatal("setup: a closed port accepted a connection")
+		} else if !errors.Is(err, syscall.ECONNREFUSED) {
+			t.Fatalf("setup: dial of a closed port = %v, want connection refused", err)
+		}
 	} else if !errors.Is(err, syscall.ECONNREFUSED) {
 		t.Fatalf("setup: dial = %v, want connection refused", err)
 	}

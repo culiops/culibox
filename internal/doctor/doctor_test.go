@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -53,6 +54,53 @@ func needAbduco(t *testing.T) {
 		}
 		t.Skip("abduco is not on PATH")
 	}
+}
+
+// hostTooLongForSocket is true when the machine's hostname cannot fit abduco's
+// socket path under the platform's limit even in the probe's own best case
+// (/tmp/abdr-<10 digits>/s/abduco/<user>/doctor-1@<host>). A GitHub-hosted Mac has a
+// 67-byte hostname, so there the real roundtrip row fails by design: doctor
+// reports it (and the "socket length" row), which is what the check is for.
+func hostTooLongForSocket() bool {
+	host, _ := os.Hostname()
+	n := len("/tmp/abdr-") + 10 + len("/s/abduco/") + len(abduco.CurrentUser()) + len("/doctor-1@") + len(host)
+	return n > abduco.SocketPathLimit()
+}
+
+// failsExcept returns the FAIL rows of a doctor report other than the named checks.
+func failsExcept(out string, checks ...string) []string {
+	var bad []string
+	for _, l := range strings.Split(out, "\n") {
+		l = strings.TrimSpace(l)
+		if !strings.HasPrefix(l, "FAIL ") {
+			continue
+		}
+		ok := false
+		for _, c := range checks {
+			if strings.HasPrefix(l, "FAIL "+c+":") {
+				ok = true
+			}
+		}
+		if !ok {
+			bad = append(bad, l)
+		}
+	}
+	return bad
+}
+
+// tolerated is the set of rows a darwin CI runner may legitimately FAIL: the boxed
+// tier is a FAIL by design without docker and colima (docs/MACOS.md), and a long
+// hostname fails the two socket rows. Neither is what these tests pin. Never
+// tolerated off darwin.
+func tolerated() []string {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	rows := []string{"boxed tier"}
+	if hostTooLongForSocket() {
+		rows = append(rows, "abduco roundtrip", "socket length")
+	}
+	return rows
 }
 
 func TestDoctor_NeverPrintsSecrets(t *testing.T) {
@@ -107,7 +155,7 @@ func TestDoctor_HealthyLinuxBoxPasses(t *testing.T) {
 	needAbduco(t)
 	in := input(t)
 	out, code := run(in)
-	if code != 0 {
+	if bad := failsExcept(out, tolerated()...); len(bad) != 0 || (code != 0 && len(tolerated()) == 0) {
 		t.Fatalf("expected no FAIL on this box, got:\n%s", out)
 	}
 	for _, check := range []string{"platform", "config", "data dir", "auth", "bind", "abduco binary",
@@ -165,6 +213,10 @@ func TestDoctor_ShellSourceReported(t *testing.T) {
 // The doctor probe must leave nothing behind: no temp dir, no live process.
 func TestDoctor_LeavesNoSessionBehind(t *testing.T) {
 	needAbduco(t)
+	if hostTooLongForSocket() {
+		host, _ := os.Hostname()
+		t.Skipf("hostname is %d bytes: the probe's socket path cannot fit the %d-byte limit here", len(host), abduco.SocketPathLimit())
+	}
 	root, err := os.MkdirTemp("/tmp", "abdp-")
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +228,7 @@ func TestDoctor_LeavesNoSessionBehind(t *testing.T) {
 
 	in := input(t)
 	out, code := run(in)
-	if code != 0 || !strings.Contains(out, "PASS abduco roundtrip") {
+	if bad := failsExcept(out, tolerated()...); len(bad) != 0 || (code != 0 && len(tolerated()) == 0) || !strings.Contains(out, "PASS abduco roundtrip") {
 		t.Fatalf("probe did not run:\n%s", out)
 	}
 	if left, _ := os.ReadDir(root); len(left) != 0 {
@@ -353,7 +405,9 @@ func TestDoctor_HostInsideHomeStillTilded(t *testing.T) {
 	if !strings.Contains(out, "~/.local/share/agent-box") {
 		t.Fatalf("home not shown as ~:\n%s", out)
 	}
-	if strings.Contains(out, "/Users/") {
+	// The home is what is redacted; other home paths (a CI runner's abduco under
+	// its own home) are not this test's business.
+	if strings.Contains(out, "/Users/macuser") {
 		t.Fatalf("home leaked (host redaction ran before ~):\n%s", out)
 	}
 }

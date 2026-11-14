@@ -1,6 +1,8 @@
 package session
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,12 +25,8 @@ func TestReconcile_RealAbduco(t *testing.T) {
 	}
 	// Short /tmp path: t.TempDir() is ~150 bytes on macOS, which would put every
 	// session socket over the 103-byte limit Create enforces.
-	dir, err := os.MkdirTemp("/tmp", "rc-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	ad, err := abduco.New("abduco", filepath.Join(dir, "sock"), filepath.Join(dir, "pids"))
+	dir := shortTempDir(t)
+	ad, err := abduco.New("abduco", dir, filepath.Join(dir, "pids"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,4 +68,32 @@ func TestReconcile_RealAbduco(t *testing.T) {
 	if _, ok := readUntil(out, "PING_RECON", 3*time.Second); !ok {
 		t.Fatal("re-attached session is not interactive (no echo through abduco)")
 	}
+}
+
+// shortTempDir (the same helper as in internal/abduco's tests) makes /tmp/<5 hex digits> (mode 0700, 10 bytes) and removes it when
+// the test ends. abduco names its socket <dir>/abduco/<user>/<id>@<hostname> and
+// darwin's sun_path holds 103 bytes: a GitHub-hosted Mac has a 67-byte hostname, so
+// t.TempDir() (~150 bytes) and even os.MkdirTemp("/tmp", "ab-") (22 bytes) put the
+// path over the limit before the behaviour under test runs. Use it for any
+// directory a socket path is built from.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	for range 64 {
+		var b [3]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			t.Fatal(err)
+		}
+		dir := "/tmp/" + hex.EncodeToString(b[:])[:5]
+		err := os.Mkdir(dir, 0o700)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		return dir
+	}
+	t.Fatal("no free /tmp name after 64 tries")
+	return ""
 }
