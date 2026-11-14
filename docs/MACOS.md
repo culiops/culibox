@@ -241,8 +241,7 @@ boxed sessions have already run in.
 
 ### Every box
 
-Every box, with or without a credential binding (an `aws` binding, named AWS
-connections, a `github` binding or static tokens), gets a locked-down network,
+Every box, with or without a credential binding (AWS connections, a `github` binding or static tokens), gets a locked-down network,
 as on Linux. It sits on an
 internal Docker network inside the VM (`172.29.72.0/24`, gateway `172.29.72.1`),
 with no route to the internet, no DNS, and no route to other boxes. The only
@@ -536,8 +535,8 @@ plain boxed spawn, without context paths, makes that too.
 - Measured on a Mac (macOS 27.2.1, colima 0.10.3, 2026-11-10): the identity the VM
   reports for the workspace and for the guards is the one the box shows. On APFS
   (2026-11-14), a workspace under a symlinked parent starts, and when a parent was
-  swapped for a link while spawns ran, 7 of 8 spawns gave a box that showed the
-  real folder and 1 was refused. Not measured: that the `O_NOFOLLOW_ANY` open
+  swapped for a link while spawns ran, 7 of 8 spawns gave a box whose folder
+  matched the identity checked, and 1 was refused. Not measured: that the `O_NOFOLLOW_ANY` open
   refuses a link in each position of the path.
 - Tested only on Linux, against a stand-in for the VM read: the order of the
   read and of the box's creation, that the workspace is first in it, and the
