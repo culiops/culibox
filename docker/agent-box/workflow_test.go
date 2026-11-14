@@ -135,7 +135,7 @@ func jobBlock(t *testing.T, wf, name string) string {
 		t.Fatalf("no job %q", name)
 	}
 	block := ("\n" + rest)[start+1:]
-	if next := regexp.MustCompile(`\n  [a-z][\w-]*:\n`).FindStringIndex(block[1:]); next != nil {
+	if next := regexp.MustCompile(`\n  [A-Za-z_][\w-]*:[ \t]*(#[^\n]*)?\n`).FindStringIndex(block[1:]); next != nil {
 		block = block[:next[0]+1]
 	}
 	return block
@@ -886,6 +886,64 @@ func otherWorkflowScopeViolations(name, content string) []string {
 	return bad
 }
 
+// macosRunnerViolations is the macOS runner rule for ci.yml. It reads the WHOLE
+// text, never a job block cut out by jobBlock (a job key with a trailing comment
+// or an odd name could otherwise hide inside another job's block): across all
+// non-comment lines the word macos (bar the offline verify-script test) may appear
+// exactly once, and that line must be `    runs-on: macos-15` in job darwin-test,
+// which has exactly one runs-on. Larger runners (macos-15-xlarge) and macos-latest
+// are billed or drift, so each is refused.
+func macosRunnerViolations(t *testing.T, wf string) []string {
+	t.Helper()
+	var out []string
+	var hits []string
+	for _, l := range strings.Split(strings.ReplaceAll(wf, "scripts/macos-verify_test.sh", ""), "\n") {
+		code, _, _ := strings.Cut(l, "#")
+		if strings.Contains(strings.ToLower(code), "macos") {
+			hits = append(hits, strings.TrimRight(code, " \t"))
+		}
+	}
+	if len(hits) != 1 || hits[0] != "    runs-on: macos-15" {
+		out = append(out, fmt.Sprintf("ci.yml: the only macOS mention outside comments must be exactly %q (job darwin-test), got %q", "    runs-on: macos-15", hits))
+	}
+	block := jobBlock(t, wf, "darwin-test")
+	if n := strings.Count(block, "runs-on:"); n != 1 {
+		out = append(out, fmt.Sprintf("job darwin-test has %d runs-on lines, want 1", n))
+	}
+	if m := regexp.MustCompile(`(?m)^    runs-on:\s*(\S+)\s*$`).FindStringSubmatch(block); m == nil || m[1] != "macos-15" {
+		out = append(out, fmt.Sprintf("job darwin-test must run on macos-15, got %v", m))
+	}
+	return out
+}
+
+// The macOS rule must refuse every way a second macOS (or larger) runner could be
+// added: a job whose key has a trailing comment, an underscore or uppercase key,
+// a larger runner, macos-latest.
+func TestWorkflowMacOSRunnerRule(t *testing.T) {
+	b, err := os.ReadFile(ciWorkflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := string(b)
+	if v := macosRunnerViolations(t, wf); len(v) != 0 {
+		t.Fatalf("the real ci.yml violates the rule: %v", v)
+	}
+	extra := func(key, label string) string {
+		return wf + "\n  " + key + "\n    runs-on: " + label + "\n    steps: []\n"
+	}
+	for name, mutated := range map[string]string{
+		"xlarge job with a commented key": extra("big: # why", "macos-15-xlarge"),
+		"underscore job key":              extra("_big:", "macos-15-xlarge"),
+		"uppercase job key":               extra("Big:", "macos-15-xlarge"),
+		"second job on macos-15":          extra("again:", "macos-15"),
+		"macos-latest":                    strings.Replace(wf, "runs-on: macos-15", "runs-on: macos-latest", 1),
+	} {
+		if len(macosRunnerViolations(t, mutated)) == 0 {
+			t.Errorf("%s: no violation, the rule is open", name)
+		}
+	}
+}
+
 func TestWorkflowFilesAreNamedYml(t *testing.T) {
 	files := workflowFiles(t)
 	var names []string
@@ -992,11 +1050,23 @@ func TestCIWorkflow(t *testing.T) {
 		}
 	}
 
-	// Runners: the test matrix is exactly the two Linux runners, and no macOS
-	// runner exists anywhere (macOS is verified on a host, never in CI). The one
-	// allowed mention is the offline test of the verify script, which runs on Linux.
-	if strings.Contains(strings.ToLower(strings.ReplaceAll(wf, "scripts/macos-verify_test.sh", "")), "macos") {
-		t.Error("ci.yml must not mention macos (no macOS runners)")
+	// Runners: the test matrix is exactly the two Linux runners. The one macOS
+	// runner is job darwin-test on macos-15 (#293: the darwin unit tests, free on a
+	// public repo); macos-latest would drift, and no other job may use macOS. The
+	// other allowed mention is the offline test of the verify script, which runs on Linux.
+	for _, v := range macosRunnerViolations(t, wf) {
+		t.Error(v)
+	}
+	if !strings.Contains(jobBlock(t, wf, "darwin-test"), "CGO_ENABLED: \"0\"") {
+		t.Error("job darwin-test must set CGO_ENABLED: \"0\" (the shipped darwin binaries are built without cgo)")
+	}
+	if !strings.Contains(jobBlock(t, wf, "darwin-test"), "run: go test ./...") {
+		t.Error(`job darwin-test lacks "run: go test ./..."`)
+	}
+	// The upgrade test is Linux only: darwin's store is the login Keychain, which a
+	// CI runner cannot use unattended (#293). Bringing it back means solving that first.
+	if strings.Contains(jobBlock(t, wf, "darwin-test"), "upgrade-test.sh") {
+		t.Error("job darwin-test must not run scripts/upgrade-test.sh (the Keychain is not usable on a CI runner)")
 	}
 	matrix := regexp.MustCompile(`(?m)^\s+os:\s*\[(.*)\]\s*$`).FindStringSubmatch(jobBlock(t, wf, "test"))
 	if matrix == nil {
@@ -1277,7 +1347,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		t.Error("release.yml should have a setup-go step in jobs build and release")
 	}
 	if strings.Contains(strings.ToLower(wf), "macos") {
-		t.Error("release.yml must not mention macos (no macOS runners)")
+		t.Error("release.yml must not mention macos (the macOS runner is ci.yml's job darwin-test)")
 	}
 
 	// R4: a per-ref group that never cancels. Never github.workflow, which the

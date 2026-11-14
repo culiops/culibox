@@ -39,7 +39,15 @@ if [ "$got" != "$ABDUCO_SHA256" ]; then
 fi
 
 tar -C "$work" -xzf "$tarball"
-make -C "$work/abduco-${ABDUCO_VERSION}"
+# abduco's config.mk defines _POSIX_C_SOURCE and _XOPEN_SOURCE, which on Darwin hide
+# SIGWINCH and VLNEXT (measured: macos-15 build errors in client.c, server.c and
+# abduco.c). _DARWIN_C_SOURCE restores them. config.mk appends to CFLAGS (`+=`), so an
+# env CFLAGS keeps its own flags. Darwin only: the Linux build is unchanged.
+if [ "$(uname -s)" = Darwin ]; then
+  CFLAGS="-D_DARWIN_C_SOURCE" make -C "$work/abduco-${ABDUCO_VERSION}"
+else
+  make -C "$work/abduco-${ABDUCO_VERSION}"
+fi
 mkdir -p "$prefix/bin"
 install -m 0755 "$work/abduco-${ABDUCO_VERSION}/abduco" "$prefix/bin/abduco"
 

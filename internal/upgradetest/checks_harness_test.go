@@ -464,8 +464,8 @@ func unlockThroughBinary(t *testing.T, c *Client, f *Fixture) {
 	var sess struct {
 		ID string `json:"id"`
 	}
-	if _, err := c.Do("POST", "/api/sessions", map[string]string{"agent": "upg-secret", "runtime": "host", "cwd": f.Home}, &sess); err != nil {
-		t.Errorf("spawn upg-secret on vN: %v", err)
+	if _, err := c.Do("POST", "/api/sessions", map[string]string{"agent": secretAgent, "runtime": "host", "cwd": f.Home}, &sess); err != nil {
+		t.Errorf("spawn %s on vN: %v", secretAgent, err)
 		return
 	}
 	defer c.Do("DELETE", "/api/sessions/"+sess.ID, nil, nil)
@@ -478,7 +478,7 @@ func unlockThroughBinary(t *testing.T, c *Client, f *Fixture) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	b, _ := os.ReadFile(out)
-	t.Errorf("upg-secret got %q, want %q", b, want)
+	t.Errorf("%s got %q, want %q", secretAgent, b, want)
 }
 
 // Relative paths (under HOME) of the data root before and after the #255

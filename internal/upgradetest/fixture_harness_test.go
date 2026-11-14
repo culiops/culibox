@@ -3,6 +3,7 @@
 package upgradetest
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +23,12 @@ const (
 	account    = "alt"
 	tokenName  = "upg"
 )
+
+// secretAgent is the profile that reads UPG_ONE. Its name is short on purpose: on
+// a CI Mac (67-byte hostname) serve refuses to start when the longest profile name
+// plus "-9999" makes an abduco socket path over darwin's 103 bytes, and the
+// profile's fake binary keeps the name upg-secret.
+const secretAgent = "usec"
 
 var storeValues = map[string]string{"UPG_ONE": "one-229b", "UPG_TWO": "two-229b"}
 
@@ -76,8 +84,14 @@ func WriteConfig(t *testing.T, root, port, fake string) {
 		"secret_sources":  []any{map[string]any{"type": "store"}},
 		"agents": []any{
 			map[string]any{"name": "sh", "bin": "/bin/sh"},
-			map[string]any{"name": "upg-secret", "bin": filepath.Join(fake, "upg-secret"), "secrets": []string{"UPG_ONE"}},
+			map[string]any{"name": secretAgent, "bin": filepath.Join(fake, "upg-secret"), "secrets": []string{"UPG_ONE"}},
 		},
+	}
+	if runtime.GOOS == "darwin" {
+		// The default darwin socket dir is /tmp/agent-box-<uid>-<hash> (27 bytes), which
+		// with a long hostname puts every session socket over the limit. A 10-byte dir
+		// leaves room for an id of 11 bytes at a 67-byte hostname.
+		cfg["abduco_socket_dir"] = shortSocketDir(t)
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -282,4 +296,28 @@ func auditRows(t *testing.T, c *Client) []AuditRow {
 	}
 	must(t, c, "GET", "/api/audit", nil, &resp)
 	return resp.Events
+}
+
+// shortSocketDir returns /tmp/<5 hex digits> (10 bytes, mode 0700), removed when
+// the test ends. serve creates and checks it as abduco_socket_dir.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	for range 64 {
+		var b [3]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			t.Fatal(err)
+		}
+		dir := "/tmp/" + hex.EncodeToString(b[:])[:5]
+		err := os.Mkdir(dir, 0o700)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		return dir
+	}
+	t.Fatal("no free /tmp name after 64 tries")
+	return ""
 }

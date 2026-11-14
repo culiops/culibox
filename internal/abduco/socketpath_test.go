@@ -124,12 +124,8 @@ func TestCheckSocketDir(t *testing.T) {
 // find its socket. Uses a short temp dir so the test itself fits the limit.
 func TestSocketPathMatchesAbduco(t *testing.T) {
 	needAbduco(t)
-	dir, err := os.MkdirTemp("/tmp", "abs-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	a, err := New("abduco", filepath.Join(dir, "s"), filepath.Join(dir, "p"))
+	dir := shortTempDir(t)
+	a, err := New("abduco", dir, filepath.Join(dir, "p"))
 	if err != nil {
 		t.Fatal(err)
 	}
