@@ -504,8 +504,13 @@ a git config `include`, and so on). What it covers and what it does not is in
     and starts with none: a file it had locked stays locked, and a spawn in
     its folder is refused naming it, until you unlock it. Records written by
     a newer CuliBox are left as they are, and every in-place box that needs a
-    lock is refused until you run that CuliBox or restore the pre-upgrade
-    backup.
+    lock is refused until you run that CuliBox, or restore the pre-upgrade
+    backup and restart CuliBox (it reads the records once, when it starts).
+    A restore does not bring back records of the locks the newer CuliBox set
+    after the upgrade, so nothing lifts those: end the in-place sessions under
+    the newer CuliBox before you roll back, and check for files left locked
+    afterwards (steps 0 and 5 of
+    [Rolling back](UPGRADING.md#rolling-back)).
 - After upgrading, a box that was started before this guard and still runs
   sessions is refused at the next spawn ("started without ... which this
   session needs") until you end those sessions. An idle one is recreated.
