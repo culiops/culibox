@@ -141,11 +141,14 @@ func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 		errors.As(err, &ns)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "code": "not_shared",
 			"path": vmDisplay(ns.Dir, ns.Home), "pending": ns.Pending, "read_only": ns.ReadOnly, "need_write": ns.NeedWrite})
+	case errors.Is(err, launcher.ErrProfilesNewer):
+		// A fixed text: the wrapped error names the host path of profiles.json,
+		// which stays in the log above (as writeSaveErr does for a save).
+		writeErr(w, http.StatusBadRequest, profilesNewerSpawnMsg)
 	case errors.Is(err, box.ErrVMRestarting):
 		writeErrCode(w, http.StatusServiceUnavailable, err.Error(), "vm_restarting")
 	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable), errors.Is(err, box.ErrWorkspaceHeld),
 		errors.Is(err, box.ErrBoxOwned),
-		errors.Is(err, launcher.ErrProfilesNewer), // names the file, versions and docs/UPGRADING.md only
 		errors.Is(err, launcher.ErrBadPrompt),
 		errors.Is(err, launcher.ErrPromptUnsupported),
 		errors.Is(err, launcher.ErrCodexAccount), errors.Is(err, account.ErrUnknown),
@@ -155,6 +158,10 @@ func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 		writeErr(w, http.StatusBadRequest, "could not start session")
 	}
 }
+
+// profilesNewerSpawnMsg is the spawn refusal shown while profiles.json was
+// written by a newer CuliBox (#291); `culibox doctor` shows the versions.
+const profilesNewerSpawnMsg = "no session can start: profiles.json was written by a newer CuliBox. Run that CuliBox again, or restore the pre-upgrade backup (docs/UPGRADING.md); culibox doctor shows the versions"
 
 // handleSessions serves GET (list) and POST (spawn) on /api/sessions.
 func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {

@@ -637,5 +637,5 @@ func checkProfilesFormat(storeErr error) []Result {
 	if !errors.Is(storeErr, datacompat.ErrNewer) {
 		return nil
 	}
-	return []Result{{Fail, "profiles store", storeErr.Error() + "; no session can start until then"}}
+	return []Result{{Fail, "profiles store", "no session can start while this file is from a newer CuliBox: " + storeErr.Error()}}
 }

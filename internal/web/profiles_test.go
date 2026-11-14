@@ -1190,6 +1190,10 @@ func TestNewerProfilesFileRefusesConfigSeedSpawn(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "docs/UPGRADING.md") {
 		t.Errorf("API: %d %s", rec.Code, rec.Body.String())
 	}
+	// The wrapped error names the host path of profiles.json; the response must not.
+	if strings.Contains(rec.Body.String(), string(filepath.Separator)+"profiles.json") || strings.Contains(rec.Body.String(), os.TempDir()) {
+		t.Errorf("API body names a host path: %s", rec.Body.String())
+	}
 }
 
 func TestNormalProfilesFileStillSpawnsConfigSeed(t *testing.T) {
