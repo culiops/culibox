@@ -867,6 +867,27 @@ test("the grant panel keeps its data-ac fields, the typing guard and Enter; Gran
   assert.deepStrictEqual(box.grants, [{ sid: "s1", name: "culipulse-prod", minutes: 30, reason: "rotate KMS key", confirm_label: "culipulse-prod" }]);
 });
 
+test("the grant panel says what the window can read and pass, and warns when IAM changes are allowed (#211, #302)", async () => {
+  const texts = (p) => [...p.querySelectorAll("p"), ...p.querySelectorAll(".ac-warn")].map((n) => n.textContent);
+  let m = await mount(claudeBox(), status());
+  btn(m.host, "Elevate…").click();
+  let t = texts(m.host.querySelector(".ac-panel"));
+  assert.ok(t.includes("Cannot pass IAM roles (set pass_role_prefix to allow Lambda/ECS applies)"), t.join("|"));
+  assert.ok(!t.some((x) => /Can read objects|Can pass roles|advisory/.test(x)), "nothing extra when no option is set");
+  const BP = "The agent can change bucket policies in this window, so a bucket it may not read can still be exposed.";
+  assert.strictEqual(t.filter((x) => x === BP).length, 1, "bucket-policy line shown in every window (#307)");
+
+  const el = { role_arn: WRITE, max_minutes: 60, allow_iam: true, box_bucket_prefix: "culibox-", pass_role_prefix: "lab-" };
+  m = await mount(claudeBox({ aws_connections: [conn({ elevate: el })] }), status());
+  btn(m.host, "Elevate…").click();
+  t = texts(m.host.querySelector(".ac-panel"));
+  assert.ok(t.includes("Can read objects in buckets named culibox-*"), t.join("|"));
+  assert.ok(t.includes("Can pass roles named lab-*"), t.join("|"));
+  assert.ok(!t.some((x) => /^Cannot pass IAM roles/.test(x)));
+  assert.ok(t.includes(BP), "also with every option on");
+  assert.ok(t.includes("With IAM changes allowed, the agent can create and use its own roles, so data-read blocks are advisory in this window."), t.join("|"));
+});
+
 test("a grant in flight greys Grant and Cancel without disabling them, and the keyboard stays on the field it was in", async () => {
   const { doc, host, box, handle, lex } = await mount(claudeBox(), status());
   btn(host, "Elevate…").click();

@@ -209,6 +209,11 @@ test("awsRoleARN expands a bare role name with the SSO account, and leaves an AR
   assert.strictEqual(awsRoleARN("210987654321", "not a role!"), "not a role!");
 });
 
+test("the editor's read-only box-prefix hint is hidden with the other elevate fields in sso_direct mode (#211)", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/credentials.js"), "utf8");
+  assert.match(src, /row\.modeHidden = \[[^\]]*\]\.concat\(boxHint \? \[boxHint\] : \[\]\)/);
+});
+
 test("awsConnFromRow sends only what is set", () => {
   const row = { name: "sandbox", label: "Lab", source_profile: "sandbox", role_arn: "arn:aws:iam::1:role/r", region: "ap-southeast-1", prod: false, egress: "a.example.com\nb.example.com", s3: "", elevRole: "", elevMinutes: "60", elevIAM: false };
   assert.deepStrictEqual(awsConnFromRow(row), {
@@ -220,6 +225,16 @@ test("awsConnFromRow sends only what is set", () => {
   assert.strictEqual(full.description, "d");
   assert.deepStrictEqual(full.s3_read, ["bucket-a"]);
   assert.deepStrictEqual(full.elevate, { role_arn: "arn:aws:iam::1:role/w", max_minutes: 30, allow_iam: true });
+  // #211: the form has no field for box_bucket_prefix, so it carries the saved one back unchanged.
+  const boxed = awsConnFromRow({ ...row, elevRole: "arn:aws:iam::1:role/w", elevMinutes: "60", elevBoxPrefix: "culibox-" });
+  assert.deepStrictEqual(boxed.elevate, { role_arn: "arn:aws:iam::1:role/w", max_minutes: 60, box_bucket_prefix: "culibox-" });
+  assert.strictEqual("box_bucket_prefix" in awsConnFromRow({ ...row, elevRole: "arn:aws:iam::1:role/w" }).elevate, false);
+  // #302: pass_role_prefix is an editor field, trimmed, sent only when set
+  assert.deepStrictEqual(awsConnFromRow({ ...row, elevRole: "arn:aws:iam::1:role/w", elevPass: " lab- " }).elevate,
+    { role_arn: "arn:aws:iam::1:role/w", max_minutes: 60, pass_role_prefix: "lab-" });
+  assert.strictEqual("pass_role_prefix" in awsConnFromRow({ ...row, elevRole: "arn:aws:iam::1:role/w", elevPass: "  " }).elevate, false);
+  // with no write role there is no elevate block to carry it in
+  assert.strictEqual("elevate" in awsConnFromRow({ ...row, elevBoxPrefix: "culibox-" }), false);
 });
 
 test("awsCheckView: ok + none_found says 'No broad write access found' and nothing about read-only", () => {

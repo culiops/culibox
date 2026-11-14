@@ -1033,3 +1033,50 @@ func TestPutAWSRoutesSSODirectThroughTheGate(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// #211: elevate.box_bucket_prefix is saved as sent, and a prefix that would widen
+// the elevated policy is refused before it reaches the file.
+func TestAWSSaveBoxBucketPrefix(t *testing.T) {
+	a := newAWSRoutes(t)
+	conn := func(prefix string) string {
+		return `{"connection":{"name":"c","source_profile":"p","role_arn":"arn:aws:iam::123456789012:role/R","region":"us-east-1",` +
+			`"elevate":{"role_arn":"arn:aws:iam::123456789012:role/W","box_bucket_prefix":"` + prefix + `"}}}`
+	}
+	if code, body, _ := a.call("POST", pathAWS, conn("culibox-")); code != 201 {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	if el := a.fx.file(t).AWSConnections[0].Elevate; el == nil || el.BoxBucketPrefix != "culibox-" {
+		t.Fatalf("saved elevate %+v", el)
+	}
+	for _, bad := range []string{"*", "culibox-*", "culibox"} {
+		if code, _, _ := a.call("PUT", pathAWS+"/c", conn(bad)); code != 400 {
+			t.Errorf("prefix %q: %d, want 400", bad, code)
+		}
+	}
+	if el := a.fx.file(t).AWSConnections[0].Elevate; el.BoxBucketPrefix != "culibox-" {
+		t.Fatalf("a refused save changed the file: %+v", el)
+	}
+}
+
+// #302: elevate.pass_role_prefix is saved as sent; a stem that overlaps CuliBox's or AWS's own roles is refused.
+func TestAWSSavePassRolePrefix(t *testing.T) {
+	a := newAWSRoutes(t)
+	conn := func(prefix string) string {
+		return `{"connection":{"name":"c","source_profile":"p","role_arn":"arn:aws:iam::123456789012:role/R","region":"us-east-1",` +
+			`"elevate":{"role_arn":"arn:aws:iam::123456789012:role/W","pass_role_prefix":"` + prefix + `"}}}`
+	}
+	if code, body, _ := a.call("POST", pathAWS, conn("lab-")); code != 201 {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	if el := a.fx.file(t).AWSConnections[0].Elevate; el == nil || el.PassRolePrefix != "lab-" {
+		t.Fatalf("saved elevate %+v", el)
+	}
+	for _, bad := range []string{"*", "lab-*", "agentbox-", "aws", "service-role", "ab"} {
+		if code, _, _ := a.call("PUT", pathAWS+"/c", conn(bad)); code != 400 {
+			t.Errorf("prefix %q: %d, want 400", bad, code)
+		}
+	}
+	if el := a.fx.file(t).AWSConnections[0].Elevate; el.PassRolePrefix != "lab-" {
+		t.Fatalf("a refused save changed the file: %+v", el)
+	}
+}

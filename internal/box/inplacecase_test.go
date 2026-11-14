@@ -2,6 +2,7 @@ package box
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,10 +69,16 @@ func TestInPlaceGuardFoldsCase(t *testing.T) {
 	})
 	t.Run("without fold the other case is outside", func(t *testing.T) {
 		withFold(t, false)
-		ws, _ := setup(t, "<o>/hooks")
+		ws, other := setup(t, "<o>/hooks")
 		got, err := inPlaceMounts(ws)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if _, err := os.Stat(other); err == nil {
+			// A case-insensitive volume: the other case IS the workspace on disk,
+			// so the walk's inode match guards it even with folding off (#304).
+			wantMounts(t, ws, got, ".git", ".claude", "hooks")
+			return
 		}
 		wantMounts(t, ws, got, ".git", ".claude")
 	})
@@ -199,6 +206,181 @@ func TestInPlaceHooksPathDotDot(t *testing.T) {
 			if tc.refuse {
 				if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "..") {
 					t.Fatalf("want a .. refusal, got %v (mounts %v)", err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMounts(t, ws, got, append([]string{".git", ".claude"}, tc.mounts...)...)
+		})
+	}
+}
+
+// #304: git hands core.hooksPath to the kernel, which resolves it one component
+// at a time, following every link and taking ".." from the real directory. A
+// host link (one the box cannot touch) can lead the walk into the workspace,
+// where the box can swap any component for a link afterwards: from there on a
+// "..", a symlink or a missing component is refused, whatever the walk's end
+// point. <ws> and <tmp> are replaced; links are made as (at, target).
+func TestInPlaceHooksPathPhysicalWalk(t *testing.T) {
+	cases := []struct {
+		name   string
+		links  [][2]string
+		hp     string
+		refuse string   // a substring of the refusal; "" = accepted
+		mounts []string // besides .git and .claude, when accepted
+	}{
+		{name: "host link into ws then .. after a box link",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>"}, {"<ws>/x", "<ws>/a/b"}},
+			hp:    "<tmp>/Lnk/x/../hooks", refuse: ".."},
+		{name: "host link into ws then .. after a box dir",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>"}},
+			hp:    "<tmp>/Lnk/a/../hooks", refuse: ".."},
+		{name: "host link into a box dir then ..",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>/a/b"}},
+			hp:    "<tmp>/Lnk/../../hooks", refuse: ".."},
+		{name: "host link whose target has .. after a box dir",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>/a/../../out"}},
+			hp:    "<tmp>/Lnk/hooks", refuse: ".."},
+		{name: "host link into ws then a box link out",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>"}, {"<ws>/x", "<tmp>/out"}},
+			hp:    "<tmp>/Lnk/x/hooks", refuse: "reached through the symlink"},
+		{name: "two host links into ws then a box link out",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>"}, {"<tmp>/L2", "Lnk"}, {"<ws>/x", "<tmp>/out"}},
+			hp:    "<tmp>/L2/x/hooks", refuse: "reached through the symlink"},
+		{name: "host link into ws then a dangling box link",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>"}, {"<ws>/x", "<tmp>/nowhere"}},
+			hp:    "<tmp>/Lnk/x/hooks", refuse: "reached through the symlink"},
+		{name: "dangling box link",
+			links: [][2]string{{"<ws>/x", "<tmp>/nowhere"}},
+			hp:    "x/hooks", refuse: "reached through the symlink"},
+		{name: "host link into ws and missing dir below",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>"}},
+			hp:    "<tmp>/Lnk/missing/hooks", refuse: "does not exist"},
+		{name: "host link loop",
+			links: [][2]string{{"<tmp>/L1", "L2"}, {"<tmp>/L2", "L1"}},
+			hp:    "<tmp>/L1/hooks", refuse: "cannot be resolved"},
+		{name: "host link to the parent of ws (like /tmp on macOS)",
+			links: [][2]string{{"<tmp>/Alias", "<tmp>"}},
+			hp:    "<tmp>/Alias/Repo/hooks", mounts: []string{"hooks"}},
+		{name: "host link into a nested dir binds its top dir",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>/a"}},
+			hp:    "<tmp>/Lnk/b", mounts: []string{"a"}},
+		{name: "host link outside ws with ..",
+			links: [][2]string{{"<tmp>/Lnk", "<tmp>/out"}},
+			hp:    "<tmp>/Lnk/x/../hooks"},
+		{name: "host link into ws and .. right after ws",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>"}},
+			hp:    "<tmp>/Lnk/../out/hooks"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := realTemp(t)
+			ws := filepath.Join(tmp, "Repo")
+			r := strings.NewReplacer("<ws>", ws, "<tmp>", tmp)
+			mkdirs(t, filepath.Join(ws, "a", "b"), filepath.Join(ws, "hooks"), filepath.Join(tmp, "out", "x"), filepath.Join(tmp, "out", "hooks"))
+			gitRepo(t, ws, "[core]\n\thooksPath = "+r.Replace(tc.hp)+"\n")
+			for _, l := range tc.links {
+				symlink(t, r.Replace(l[1]), r.Replace(l[0]))
+			}
+			got, err := inPlaceMounts(ws)
+			if tc.refuse != "" {
+				if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), tc.refuse) {
+					t.Fatalf("want a refusal mentioning %q, got %v (mounts %v)", tc.refuse, err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMounts(t, ws, got, append([]string{".git", ".claude"}, tc.mounts...)...)
+		})
+	}
+}
+
+// The same walk when a host link names the workspace in another letter case:
+// on a case-insensitive volume that is the workspace (on Linux the folder does
+// not exist, which the fold seam also judges as the workspace).
+func TestInPlaceHooksPathPhysicalWalkFold(t *testing.T) {
+	cases := []struct {
+		name   string
+		boxTo  string // where the box link <ws>/x points
+		hp     string
+		refuse string
+	}{
+		{"other-case host link into ws then .. after a box link", "<ws>/a/b", "<tmp>/Lnk/x/../hooks", ".."},
+		{"other-case host link into ws then a box link out", "<tmp>/out", "<tmp>/Lnk/x/hooks", "reached through the symlink"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withFold(t, true)
+			tmp := realTemp(t)
+			ws := filepath.Join(tmp, "Repo")
+			r := strings.NewReplacer("<ws>", ws, "<tmp>", tmp)
+			mkdirs(t, filepath.Join(ws, "a", "b"), filepath.Join(ws, "hooks"), filepath.Join(tmp, "out", "hooks"))
+			gitRepo(t, ws, "[core]\n\thooksPath = "+r.Replace(tc.hp)+"\n")
+			symlink(t, filepath.Join(tmp, "repo"), filepath.Join(tmp, "Lnk"))
+			symlink(t, r.Replace(tc.boxTo), filepath.Join(ws, "x"))
+			got, err := inPlaceMounts(ws)
+			if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), tc.refuse) {
+				t.Fatalf("want a refusal mentioning %q, got %v (mounts %v)", tc.refuse, err, got)
+			}
+		})
+	}
+}
+
+// A workspace below a repository root, with a hooks path relative to that root:
+// a ".." that leaves the workspace right after it, or one wholly outside it, is
+// host territory and stays accepted.
+func TestInPlaceSubdirHooksPathDotDot(t *testing.T) {
+	for _, hp := range []string{"sub/../.githooks", "../outhooks", "sub/../sub/../.githooks"} {
+		t.Run(hp, func(t *testing.T) {
+			repo := realTemp(t)
+			ws := filepath.Join(repo, "sub")
+			mkdirs(t, filepath.Join(ws, "hooks"), filepath.Join(repo, ".githooks"))
+			gitRepo(t, repo, "[core]\n\thooksPath = "+hp+"\n")
+			got, err := inPlaceMounts(ws)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMounts(t, ws, got, ".claude")
+		})
+	}
+}
+
+// A directory that is the workspace on disk under another path (a host bind
+// mount, stood in for by the sameDirAsWS seam) is the workspace: a box link in
+// it is refused. A ".." taken there goes to the parent of that path, as the
+// kernel takes it, not to the workspace's own parent (#304 review M1).
+func TestInPlaceHooksPathWorkspaceAlias(t *testing.T) {
+	cases := []struct {
+		name   string
+		hp     string // <tmp> is replaced
+		refuse string
+		mounts []string
+	}{
+		{"box link out in the alias", "<tmp>/mnt/alias/x/hooks", "reached through the symlink", nil},
+		{"hooks in the alias are guarded", "<tmp>/mnt/alias/hooks", "", []string{"hooks"}},
+		{".. after the alias is the alias's parent", "<tmp>/mnt/alias/../back/hooks", "", []string{"hooks"}},
+		{".. after the alias then outside", "<tmp>/mnt/alias/../out/hooks", "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := realTemp(t)
+			ws := filepath.Join(tmp, "Repo")
+			alias := filepath.Join(tmp, "mnt", "alias")
+			mkdirs(t, filepath.Join(ws, "hooks"), alias, filepath.Join(tmp, "mnt", "out", "hooks"), filepath.Join(tmp, "out"))
+			old := sameDirAsWS
+			sameDirAsWS = func(p string, fi, wsFi fs.FileInfo) bool { return p == alias || old(p, fi, wsFi) }
+			t.Cleanup(func() { sameDirAsWS = old })
+			symlink(t, ws, filepath.Join(tmp, "mnt", "back"))
+			symlink(t, filepath.Join(tmp, "out"), filepath.Join(ws, "x"))
+			gitRepo(t, ws, "[core]\n\thooksPath = "+strings.ReplaceAll(tc.hp, "<tmp>", tmp)+"\n")
+			got, err := inPlaceMounts(ws)
+			if tc.refuse != "" {
+				if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), tc.refuse) {
+					t.Fatalf("want a refusal mentioning %q, got %v (mounts %v)", tc.refuse, err, got)
 				}
 				return
 			}
