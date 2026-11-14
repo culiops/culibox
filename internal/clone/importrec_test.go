@@ -2,10 +2,12 @@ package clone
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -228,5 +230,34 @@ func TestRewrittenAwayCommitMap(t *testing.T) {
 	os.Remove(mapPath)
 	if got, err := rewrittenAway(ctx, rec, of, c, nil, boxMade); err != nil || got != "" {
 		t.Errorf("no map: got %q, %v", got, err)
+	}
+}
+
+// A spurious ENOENT on the first creation of .lock (macOS, #293) is retried; a
+// real one (the directory is gone) is returned after the bound.
+func TestOpenCreateRetryENOENT(t *testing.T) {
+	enoent := &os.PathError{Op: "openat", Path: ".lock", Err: syscall.ENOENT}
+	calls := 0
+	f, err := openCreateRetryENOENT(func() (*os.File, error) {
+		calls++
+		if calls < 3 {
+			return nil, enoent
+		}
+		return os.Open(os.DevNull)
+	})
+	if err != nil || f == nil || calls != 3 {
+		t.Fatalf("f=%v err=%v calls=%d; want success on the 3rd try", f, err, calls)
+	}
+	f.Close()
+
+	calls = 0
+	if _, err := openCreateRetryENOENT(func() (*os.File, error) { calls++; return nil, enoent }); !errors.Is(err, syscall.ENOENT) || calls != lockOpenTries {
+		t.Fatalf("err=%v calls=%d; want ENOENT after %d tries", err, calls, lockOpenTries)
+	}
+
+	calls = 0
+	eacces := &os.PathError{Op: "openat", Path: ".lock", Err: syscall.EACCES}
+	if _, err := openCreateRetryENOENT(func() (*os.File, error) { calls++; return nil, eacces }); !errors.Is(err, syscall.EACCES) || calls != 1 {
+		t.Fatalf("err=%v calls=%d; any other error is returned at once", err, calls)
 	}
 }

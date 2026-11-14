@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // The import record is the host's own memory of which commits a box brought
@@ -167,7 +168,9 @@ func lockImports(dataDir string) (*os.Root, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	f, err := dir.OpenFile(".lock", os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	f, err := openCreateRetryENOENT(func() (*os.File, error) {
+		return dir.OpenFile(".lock", os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	})
 	if err != nil {
 		dir.Close()
 		return nil, nil, err
@@ -178,6 +181,33 @@ func lockImports(dataDir string) (*os.Root, func(), error) {
 		return nil, nil, err
 	}
 	return dir, func() { f.Close(); dir.Close() }, nil
+}
+
+// lockOpenTries bounds openCreateRetryENOENT.
+const lockOpenTries = 5
+
+// openCreateRetryENOENT runs open, which is an openat(O_CREAT) of a file in a
+// directory this process holds open, and retries it on ENOENT.
+//
+// Why: macOS returns a spurious ENOENT from a concurrent first creation of the
+// same name (measured on macos-15: 20 goroutines creating .lock in
+// TestImportRecordConcurrentAppends, "openat .lock: no such file or directory").
+// Nothing in this package removes or renames that directory or the lock file, and
+// the directory is held by a Root, so the error is not a missing parent. The cause
+// is inferred from that, not from Apple documentation. Linux never returns it, so
+// there the first call succeeds and nothing changes. A real ENOENT (the directory
+// was removed under us) persists and is returned after lockOpenTries attempts.
+// Only the open is retried: the flock after it is what gives the lock.
+func openCreateRetryENOENT(open func() (*os.File, error)) (*os.File, error) {
+	var f *os.File
+	var err error
+	for i := 0; i < lockOpenTries; i++ {
+		if f, err = open(); !errors.Is(err, syscall.ENOENT) {
+			return f, err
+		}
+		time.Sleep(time.Duration(i+1) * time.Millisecond)
+	}
+	return f, err
 }
 
 // readImportList streams the record, oldest first. A symlink, a non-regular

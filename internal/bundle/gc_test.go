@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1208,4 +1209,52 @@ func TestGCRereadsASnapshotsAgeBeforeCondemning(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.wantKept(snapCache)
+}
+
+// renameWritable (#293): macOS refuses to rename a directory that has no owner-write
+// permission. Linux does not, so its retry path is driven here by a rename that
+// fails for another reason (an unwritable root): the mode must be put back, the
+// error returned, and a symlink must never be chmodded.
+func TestRenameWritableRestoresModeAndSkipsLinks(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores modes")
+	}
+	base := t.TempDir()
+	rootDir := filepath.Join(base, "root")
+	if err := os.Mkdir(rootDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ro := filepath.Join(rootDir, "ro")
+	if err := os.Mkdir(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "outside")
+	if err := os.Mkdir(outside, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(rootDir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := os.Chmod(rootDir, 0o500); err != nil { // every rename in it now fails: EACCES
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(rootDir, 0o700) })
+
+	if err := renameWritable(root, "ro", ".gc-ro"); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("renameWritable = %v, want the permission error", err)
+	}
+	if fi, _ := os.Lstat(ro); fi.Mode().Perm() != 0o500 {
+		t.Errorf("mode after a failed retry = %o, want 500 restored", fi.Mode().Perm())
+	}
+	if err := renameWritable(root, "link", ".gc-link"); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("renameWritable(link) = %v, want the permission error", err)
+	}
+	if fi, _ := os.Lstat(outside); fi.Mode().Perm() != 0o500 {
+		t.Errorf("a symlink target outside the root was chmodded to %o", fi.Mode().Perm())
+	}
 }

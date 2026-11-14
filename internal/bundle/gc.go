@@ -364,7 +364,7 @@ func (m *Manager) condemn(root *os.Root, p gcPair) (ok bool, age time.Duration, 
 		return false, age, nil
 	}
 	for i, name := range p.names {
-		if err := root.Rename(name, gcPrefix+name); err != nil {
+		if err := renameWritable(root, name, gcPrefix+name); err != nil {
 			for _, done := range p.names[:i] {
 				if rerr := root.Rename(gcPrefix+done, done); rerr != nil {
 					err = errors.Join(err, rerr)
@@ -374,6 +374,33 @@ func (m *Manager) condemn(root *os.Root, p gcPair) (ok bool, age time.Duration, 
 		}
 	}
 	return true, age, nil
+}
+
+// renameWritable renames the directory name to to, inside root. macOS refuses to
+// rename a directory that has no owner-write permission (EACCES; measured on
+// macos-15, #293), where Linux does not, and a bundle copied from a read-only tree
+// has such a top directory. So on EACCES only, and only for a real directory
+// (Lstat, never a link), the owner-write bit is added and the rename retried; the
+// mode is put back if it still fails. Linux, and any rename that works at first,
+// never change a mode. Everything goes through root, so nothing outside it is
+// touched, and removeTree makes the tree writable anyway before deleting it.
+func renameWritable(root *os.Root, name, to string) error {
+	err := root.Rename(name, to)
+	if err == nil || !errors.Is(err, fs.ErrPermission) {
+		return err
+	}
+	fi, lerr := root.Lstat(name)
+	if lerr != nil || !fi.IsDir() || fi.Mode().Perm()&0o200 != 0 {
+		return err
+	}
+	if cerr := root.Chmod(name, fi.Mode().Perm()|0o200); cerr != nil {
+		return err
+	}
+	if rerr := root.Rename(name, to); rerr != nil {
+		_ = root.Chmod(name, fi.Mode().Perm())
+		return rerr
+	}
+	return nil
 }
 
 // restore takes a condemned pair back, in the pass that condemned it: its removal
