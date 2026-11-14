@@ -135,3 +135,31 @@ func TestAllowRulesRefuseUnknownRootChanges(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionIDsRuleAllowsOnlyGrowth(t *testing.T) {
+	r := sessionIDsRule()
+	before := entryOf(`{"upg-host":1}`)
+	if err := r.Check(before, entryOf(`{"upg-host":1,"upg-secret":1}`)); err != nil {
+		t.Fatalf("a counter for a session the test spawned on vN was refused: %v", err)
+	}
+	if err := r.Check(before, entryOf(`{"upg-host":2}`)); err != nil {
+		t.Fatalf("a counter moving forward was refused: %v", err)
+	}
+	if err := r.Check(before, entryOf(`{"upg-host":1}`)); err != nil {
+		t.Fatalf("an unchanged file was refused: %v", err)
+	}
+	if err := r.Check(before, entryOf(`{"upg-secret":1}`)); err == nil {
+		t.Fatal("a dropped counter was allowed (ids could be reissued)")
+	}
+	if err := r.Check(entryOf(`{"upg-host":3}`), entryOf(`{"upg-host":2}`)); err == nil {
+		t.Fatal("a counter going back was allowed (ids could be reissued)")
+	}
+	if err := r.Check(before, entryOf(`{"upg-host":"1"}`)); err == nil {
+		t.Fatal("a counter that is not a number was allowed")
+	}
+	moded := entryOf(`{"upg-host":1}`)
+	moded.Mode = 0o644
+	if err := r.Check(before, moded); err == nil {
+		t.Fatal("a mode change was allowed")
+	}
+}

@@ -39,6 +39,7 @@ func AllowRules(rootRel string, rewrite func(string) string) []Rule {
 		{Pattern: p("serve.lock"), Why: "instance lock, empty in both versions", AllowNew: true, Check: emptyBoth},
 		withName(sessionsRule(rewrite), p("sessions.json")),
 		withName(tokensRule(), p("tokens.json")),
+		withName(sessionIDsRule(), p("session-ids.json")),
 		{Pattern: p("last-version"), Why: "part A's version stamp (backupProblems checks it)", AllowNew: true},
 		{Pattern: p("backups"), Why: "part A's pre-upgrade backup (backupProblems checks it)", AllowNew: true},
 		{Pattern: p("backups/**"), Why: "part A's pre-upgrade backup (backupProblems checks it)", AllowNew: true},
@@ -97,6 +98,44 @@ func sessionsRule(rewrite func(string) string) Rule {
 			}
 			if b.Mode != a.Mode {
 				return fmt.Errorf("sessions.json mode %v -> %v", b.Mode, a.Mode)
+			}
+			return nil
+		},
+	}
+}
+
+// sessionIDsRule allows session-ids.json (agent name -> highest session
+// number issued) to grow only: every counter vN-1 wrote is still there and
+// never went back, so no id is reissued. A new counter is allowed because the
+// test itself spawns a session on vN (the store hand-off check, which runs
+// only where a keyring unlocks the store); that is not an upgrade change.
+func sessionIDsRule() Rule {
+	return Rule{
+		Why: "the test's own vN spawn adds or bumps a counter; counters never drop or go back",
+		Check: func(b, a *Entry) error {
+			var before, after map[string]int
+			if err := json.Unmarshal(b.Data, &before); err != nil {
+				return fmt.Errorf("session-ids.json before: %v", err)
+			}
+			if err := json.Unmarshal(a.Data, &after); err != nil {
+				return fmt.Errorf("session-ids.json after: %v", err)
+			}
+			var bad []string
+			for name, n := range before {
+				m, ok := after[name]
+				switch {
+				case !ok:
+					bad = append(bad, fmt.Sprintf("%q dropped", name))
+				case m < n:
+					bad = append(bad, fmt.Sprintf("%q went back %d -> %d", name, n, m))
+				}
+			}
+			if len(bad) > 0 {
+				sort.Strings(bad)
+				return fmt.Errorf("session-ids.json: %s", strings.Join(bad, ", "))
+			}
+			if b.Mode != a.Mode {
+				return fmt.Errorf("session-ids.json mode %v -> %v", b.Mode, a.Mode)
 			}
 			return nil
 		},
