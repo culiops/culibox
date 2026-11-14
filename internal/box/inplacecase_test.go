@@ -145,6 +145,10 @@ func TestInPlaceGuardFoldsCase(t *testing.T) {
 		t.Cleanup(func() { sameHostDir = old })
 		msg := func(spelling string) string {
 			tmp := realTemp(t)
+			mkdirs(t, filepath.Join(tmp, "Repo"))
+			if _, err := os.Stat(filepath.Join(tmp, "repo")); err == nil {
+				t.Skip("volume is case-insensitive: the stand-in repo folder cannot exist beside Repo; TestInPlaceHooksCaseVariantSymlinkIsRefused covers it")
+			}
 			ws := filepath.Join(tmp, "Repo")
 			mkdirs(t, filepath.Join(tmp, "out", "hooks"))
 			gitRepo(t, ws, "[core]\n\thooksPath = "+filepath.Join(tmp, spelling, "link", "hooks")+"\n")
