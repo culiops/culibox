@@ -22,6 +22,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -170,15 +171,18 @@ var ErrWorkspaceHeld = errors.New("workspace held")
 // Overlaps reports whether two workspaces share files: equal, or one is an
 // ancestor of the other, compared component-wise. Callers pass absolute,
 // symlink-resolved paths; Clean takes care of trailing slashes and dot segments.
+// On macOS the comparison ignores case, like ProtectedOverlap: APFS does by
+// default, so /Users/a/Proj is /Users/a/proj. A case-sensitive APFS volume
+// therefore sees a false overlap; that is the safe side and is accepted.
+// Unicode normalisation (NFC/NFD) is not folded.
 func Overlaps(a, b string) bool {
-	a, b = filepath.Clean(a), filepath.Clean(b)
-	if a == b {
-		return true
-	}
-	under := func(p, dir string) bool {
-		return strings.HasPrefix(p, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
-	}
-	return under(a, b) || under(b, a)
+	return overlaps(a, b, runtime.GOOS == "darwin")
+}
+
+// overlaps is Overlaps with the case folding as a parameter, so Linux tests can
+// pin the darwin behaviour. It shares pathWithin with ProtectedOverlap.
+func overlaps(a, b string, fold bool) bool {
+	return pathWithin(a, b, fold) || pathWithin(b, a, fold)
 }
 
 // holdsWorkspace reports whether a box in that docker state keeps its folder
