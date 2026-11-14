@@ -74,6 +74,7 @@ Tested: on a data root filled through the previous release (host tier, no box VM
 
 ## Rolling back
 
+0. **macOS: end the in-place boxed sessions first,** while the newer CuliBox still runs. A box started in place keeps the folder's guarded files locked on the Mac (`chflags uchg`, on a case-insensitive volume, the Mac default) until the box is gone, and the box goes when its last session ends. Then run `culibox doctor`: it should show no `in-place locks` row. If a row says a file is "still locked, but no box holding the lock runs", restart the newer CuliBox (it lifts those locks when it starts); if the row stays, run the `chflags nouchg` line it prints. If you skip this step, a file can stay locked after the rollback with nothing that lifts it (step 5).
 1. **Stop CuliBox** (Ctrl-C, or stop its service).
 2. **Put the previous binary back.** `scripts/setup.sh` keeps it as `culibox.prev` next to `culibox` and prints the line that restores it. `scripts/deploy-prod.sh` does the same for a deployed binary. Either script prints a `data:` line pointing here. Binary only: this does not undo data changes.
 3. **Restore the snapshot,** to also undo what the newer build did to your data. Run the exact line `serve` logged when it took the backup (`upgrade backup: ... then run: ...`). It already matches what that backup holds, with the real folders filled in. It has one of two shapes. Here `R` stands for `<R>` and `B` for `<B>`, both written out in full in the logged line:
@@ -88,6 +89,13 @@ rm -f "$R"/last-version && cp -a "$B"/. "$R"/
    The first shape removes the `audit.db` WAL files before it copies, so that a copy that stops part-way never leaves an older `audit.db` next to a newer WAL file. If the line stops with an error, fix the cause (for example free disk space) and run it again: it is safe to run again.
 
 4. **Start the old binary.**
+5. **macOS: check for files left locked,** when you skipped step 0 or are not sure. In each folder where you ran a box in place, list the guarded files with their flags:
+
+```sh
+ls -lOd CLAUDE.md CLAUDE.local.md AGENTS.md .mcp.json .git
+```
+
+   `ls` reports the names the folder does not have; ignore those. Unlock a file that shows `uchg` with `chflags nouchg <file>` only when no boxed session runs in that folder (in any CuliBox on this Mac) and you did not lock it yourself. Why this can happen: the restored `inplace-locks.json` does not list the locks the newer CuliBox set after the upgrade, so the older CuliBox never lifts them and `culibox doctor` does not list them as left behind. A CuliBox from before this release treats such a flag as yours: an in-place box in that folder still starts, and the file stays locked after it ends. A CuliBox from this release on refuses that box and names the file with the line that unlocks it. If you put back only the binary (no step 3), the newer lock records stay: a CuliBox that reads them lifts those locks itself when it starts, and one that cannot is in [Running an older CuliBox on newer data](#running-an-older-culibox-on-newer-data).
 
 What to know before you run it:
 
@@ -123,6 +131,7 @@ CuliBox releases from before this one behave differently: they move `credentials
 
 - The data root is on the Mac (`~/.local/share/culibox`), not inside the VM, so the backup and the restore work as on Linux.
 - `vm-shares.json` and `inplace-locks.json` exist only on macOS. The backup includes them when present.
+- Before a rollback, end the in-place boxed sessions under the newer CuliBox, and afterwards check for guarded files left locked: steps 0 and 5 of [Rolling back](#rolling-back).
 - The Keychain item is not copied. A restore into the same path keeps it valid. See "Restore into the same path" above.
 - Security upgrades that change the box VM: see [macOS](MACOS.md), which says when `box setup -recreate` is needed.
 
