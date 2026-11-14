@@ -33,7 +33,7 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 
 - **Session persistence.** Sessions run under [abduco](https://www.brain-dump.org/projects/abduco/) and survive a daemon restart or a closed browser.
 - **Steer from the UI.** Interrupt a session, restart an exited one (host-tier Claude Code sessions resume the same conversation), and, with `replies_enabled` on, answer permission prompts from the browser.
-- **Profiles.** Define agents in config or in the UI, with launch flags and env vars as toggles.
+- **Profiles.** Define agents in the UI or in config, with launch flags and env vars as toggles.
 - **Files.** A thin file browser: view, quick edit, upload, download.
 
 **Contain**
@@ -52,7 +52,7 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 - **GitHub access.** One-hour GitHub App tokens scoped to the repos you list, read-only by default. See [GitHub access](docs/GITHUB.md).
 - **Static tokens.** Grafana, Sentry, Atlassian or a GitHub personal access token, handed to one command at a time, with egress opened only to that service's hosts. The agent can read a bound token, and it is long-lived and not revoked when the session ends. See [Static tokens](docs/STATIC-TOKENS.md).
 - **Audit.** CloudTrail records the agent session rather than you (not in SSO-direct mode), and every mint, refusal and token fetch is written to a local audit log, never the value.
-- **Secrets by reference, and an encrypted store.** Config names secrets instead of holding them. An optional encrypted store keeps values unreadable in disk snapshots and backups. See [Store](docs/STORE.md).
+- **Secrets by reference, and an encrypted store.** A credential entry names where its value lives instead of holding it. An optional encrypted store keeps values unreadable in disk snapshots and backups. See [Store](docs/STORE.md).
 - **`culibox doctor`.** A read-only machine check that prints PASS, WARN or FAIL lines, safe to paste into an issue.
 
 ## Requirements
@@ -174,7 +174,7 @@ Then put this in `~/.local/share/culibox/config.json` and run `culibox serve` ag
 }
 ```
 
-Open `http://127.0.0.1:8899` (use the printed login URL the first time). Sessions are boxed unless a profile says `"runtime": "host"`. The workspace folder must not be your home directory, because a box mounts the whole workspace. Claude Code needs a login inside the box: create a long-lived token with `claude setup-token` and paste it on an agent account's row in Settings → Agent accounts, then add `"account": "<name>"` to the claude agent in `config.json` (see [Features](docs/FEATURES.md); `culibox init` does all of this for an account named `claude-box`), or store it as a secret (see `secret_sources` in [Configuration](docs/CONFIG.md)) and list `CLAUDE_CODE_OAUTH_TOKEN` under the agent's `secrets`.
+Open `http://127.0.0.1:8899` (use the printed login URL the first time). Sessions are boxed unless a profile says `"runtime": "host"`. The workspace folder must not be your home directory, because a box mounts the whole workspace. Claude Code needs a login inside the box: create a long-lived token with `claude setup-token` and paste it on an agent account's row in Settings → Agent accounts, then choose that account on the claude profile (Settings → Profiles), or add `"account": "<name>"` to the claude agent in `config.json` (see [Features](docs/FEATURES.md); `culibox init` does all of this for an account named `claude-box`).
 
 Every key is in [Configuration](docs/CONFIG.md); [config.example.json](config.example.json) is a fuller example. Only one CuliBox can serve a data root at a time.
 
@@ -219,7 +219,7 @@ The full model and every known limit: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Roadmap
 
-- Verify on a Mac what is built but not yet run there: credentials minted through the broker (AWS, GitHub, static tokens) and the Keychain failure states.
+- Verify on a Mac what is built but not yet run there: credentials minted through the broker (AWS and GitHub) and the Keychain failure states.
 
 ## Development
 
