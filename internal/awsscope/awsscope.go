@@ -310,19 +310,17 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	if !el.AllowIAM {
 		st = append(st, statement{Effect: "Deny", Action: iamWriteDenies, Resource: "*"})
 	}
-	// The managed-copy denies apply whenever the window can read ANY bucket
-	// (#301): s3_read buckets are as readable as box buckets, so an export into
-	// one is read back just the same. With nothing readable every GetObject is
-	// denied and the copy denies would protect nothing, so they are left out.
-	switch {
-	case el.BoxBucketPrefix != "":
+	// The managed-copy denies are unconditional (#301): a DynamoDB export needs
+	// no PassRole and can target a bucket outside the account or one the agent
+	// made public, so they matter even when no bucket is readable in the window.
+	// Replication has an exception only for box buckets: an s3_read entry may
+	// name just a prefix of a bucket, and replication copies the whole bucket.
+	if el.BoxBucketPrefix != "" {
 		st = append(st,
 			statement{Effect: "Deny", Action: boxBucketCopyDenies, Resource: "*"},
 			statement{Effect: "Deny", Action: "s3:PutReplicationConfiguration",
 				NotResource: []string{"arn:" + partition + ":s3:::" + el.BoxBucketPrefix + "*"}})
-	case len(s3Read) > 0:
-		// Replication has no exception here: an s3_read entry may name only a
-		// prefix of a bucket, and replication copies the whole bucket.
+	} else {
 		st = append(st, statement{Effect: "Deny", Resource: "*",
 			Action: append(slices.Clone(boxBucketCopyDenies), "s3:PutReplicationConfiguration")})
 	}

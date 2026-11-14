@@ -207,7 +207,7 @@ func denied(p pol, action string, resource string) bool {
 const elevatedBefore211 = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion"],"NotResource":["arn:aws:s3:::culishop-tfstate/*"]},{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect"],"Resource":"*"},{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}},{"Effect":"Deny","Action":["sts:AssumeRole*","sts:GetFederationToken","sts:GetSessionToken","iam:CreateAccessKey","iam:CreateLoginProfile","iam:UpdateLoginProfile","iam:CreateServiceSpecificCredential","iam:UploadSSHPublicKey","cloudtrail:StopLogging","cloudtrail:DeleteTrail","cloudtrail:UpdateTrail","cloudtrail:PutEventSelectors"],"Resource":"*"},{"Effect":"Deny","Action":"iam:*","Resource":"arn:aws:iam::*:role/agentbox-*"},{"Effect":"Deny","Action":["iam:Create*","iam:Delete*","iam:Put*","iam:Attach*","iam:Detach*","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*"],"Resource":"*"}]}`
 
 // #211 acceptance: with box_bucket_prefix unset, the elevated policy is the
-// pre-#211 one plus only the public-parameter carve-out (and #302's PassRole deny): the three SSM
+// pre-#211 one plus only the public-parameter carve-out (and #302's PassRole deny, #301's copy denies): the four SSM
 // parameter reads move out of the Resource "*" deny into their own deny whose
 // NotResource is AWS's public parameters (empty account field).
 func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
@@ -305,7 +305,9 @@ func TestElevatedPolicyPassRolePrefix(t *testing.T) {
 			{"other-lambda", "deny", "deny"},
 			{"Culibox-lambda", "deny", "deny"}, // role-name match is case-sensitive here: fail closed
 			{"x-culibox-lambda", "deny", "deny"},
-			{"path/culibox-lambda", "deny", "deny"}, // a role with a path is not named <prefix>*: fail closed
+			{"path/culibox-lambda", "deny", "deny"}, // a path that does not start with the prefix: fail closed
+			// "*" crosses "/": a path that starts with the prefix matches (pinned, so the docs say so)
+			{"culibox-x/Admin", "deny", "allow"},
 			{"agentbox-agent-write", "deny", "deny"},
 			{"AWSServiceRoleForX", "deny", "deny"},
 		} {

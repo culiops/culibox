@@ -325,14 +325,14 @@ policy never limits it, so allowing PassRole on any role makes the data-read den
 Lambda function, an ECS task or an instance profile fails to apply in the window. With
 `"pass_role_prefix": "culibox-"` the window may pass only roles named `culibox-*` (3 to 40 IAM
 role-name characters, no wildcards, no `/`; `agentbox-`, `aws` and `service-role` stems are
-refused). A role with a path in its ARN does not match. Name the roles your labs use with that
+refused). The match is on the text after `role/`, and `*` also matches `/`: `role/culibox-x/Admin` matches `culibox-*`, `role/team/culibox-x` does not. Name the roles your labs use with that
 prefix. Passing is not creating: a role of that name must already exist, or `allow_iam` must be
 on. **With `allow_iam` on, the agent can create a role of that name or any trust and use it, so
 the data-read blocks are advisory in that window**; the grant panel and the editor say so.
 
 Two exceptions let Terraform plan and destroy in the window; the read role has neither:
 
-- **AWS public parameters.** `ssm:GetParameter`, `GetParameters` and `GetParametersByPath`
+- **AWS public parameters.** `ssm:GetParameter`, `GetParameters`, `GetParametersByPath` and `GetParameterHistory`
   work on AWS's public parameters under `/aws/service/` (AMI ids, the ECS-optimized AMI), so a
   `data "aws_ssm_parameter"` on one plans. Every parameter in your account stays denied: a
   public parameter's ARN has an empty account field (`arn:aws:ssm:<region>::parameter/aws/service/...`),
@@ -354,9 +354,8 @@ Two exceptions let Terraform plan and destroy in the window; the read role has n
   bucket policy or ACL cannot grant the session more: an explicit deny in the session policy wins
   over any allow. Managed copies are different. A DynamoDB export runs with your S3 write, and
   the other managed copies run as a role the session passed with `iam:PassRole` (allowed only on
-  `pass_role_prefix` roles, if you set one). The session policy never sees those reads. So whenever
-  the window can read any bucket, that is when `s3_read` lists a bucket or `box_bucket_prefix` is
-  set (#301), the window also denies:
+  `pass_role_prefix` roles, if you set one). The session policy never sees those reads. So the
+  elevated policy always denies (#301):
   - `dynamodb:ExportTableToPointInTime` (table export to S3);
   - `rds:StartExportTask` (snapshot or cluster export to S3);
   - `s3:CreateJob` (S3 Batch Operations, including Batch Replication);
@@ -364,18 +363,21 @@ Two exceptions let Terraform plan and destroy in the window; the read role has n
   - `backup:StartRestoreJob` (an S3 restore can target any bucket). This also blocks restores
     of other resource types from AWS Backup in the window;
   - `s3:PutReplicationConfiguration`. With `box_bucket_prefix` set it is allowed on a box bucket,
-    because replication *from* a box bucket moves only box data. With only `s3_read` it has no
+    because replication *from* a box bucket moves only box data. Without it there is no
     exception: an `s3_read` entry may name just a prefix of a bucket, and replication copies the
     whole bucket.
 
-  A lab that needs one of these in its write window must list no `s3_read` bucket and leave
-  the opt-in off (then no bucket is readable and the denies are left out).
+  These denies are always on, whatever `s3_read` and `box_bucket_prefix` say: a DynamoDB export
+  needs no PassRole and can write to a bucket outside the account that the agent then reads
+  without signing. A lab that needs one of these actions cannot run it in a write window.
 
   **Related route: a public bucket.** `s3:PutBucketPolicy`, `PutBucketAcl` and
   `PutPublicAccessBlock` stay allowed in the window. The agent can make a bucket public, so
   anything the window can read (an `s3_read` bucket, a box bucket) can be exposed to the
-  internet from there. Nothing the session may not read gets in by this route, but treat the
-  readable buckets as exposable in a write window.
+  internet from there. A bucket the session may not read can be exposed too: public access
+  settings, `PutBucketPolicy`, `PutBucketAcl` and `PutObjectAcl` are not limited by the data-read
+  deny, so data that reaches a bucket by another route can be read unsigned. This is a known gap,
+  tracked in #307.
 
 **What the opt-in does not change.** Code run as a passed role (a Lambda function, an ECS task,
 an EC2 instance profile, a Glue or CodeBuild job) reads whatever that role can read and can hand

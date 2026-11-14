@@ -264,10 +264,10 @@ func TestElevatedPolicyPassRoleIsWhyCopyPathsAreDenied(t *testing.T) {
 	}
 }
 
-// #301: the managed-copy denies follow the session's ability to READ a bucket,
-// not the box prefix: an s3_read bucket alone is enough for an export into it
-// to be read back. With nothing readable (s3_read empty, no prefix) every
-// s3:GetObject is denied, so the denies would protect nothing and are absent.
+// #301: the managed-copy denies are unconditional. An s3_read bucket alone is
+// enough for an export into it to be read back, and even with nothing readable
+// an export (no PassRole needed for DynamoDB) can target an outside or
+// self-made public bucket that the agent then fetches unsigned.
 func TestElevatedPolicyCopyDeniesFollowReadableBuckets(t *testing.T) {
 	copies := []evalReq{
 		{"dynamodb:ExportTableToPointInTime", "arn:aws:dynamodb:us-east-1:123456789012:table/orders", nil},
@@ -283,7 +283,7 @@ func TestElevatedPolicyCopyDeniesFollowReadableBuckets(t *testing.T) {
 		el   Elevation
 		want string
 	}{
-		{"neither", nil, Elevation{}, "allow"},
+		{"neither", nil, Elevation{}, "deny"},
 		{"s3_read only", []string{"culishop-tfstate"}, Elevation{}, "deny"},
 		{"s3_read prefix entry only", []string{"culishop-artifacts/releases/"}, Elevation{AllowIAM: true}, "deny"},
 		{"prefix only", nil, Elevation{BoxBucketPrefix: "culibox-"}, "deny"},
@@ -299,9 +299,9 @@ func TestElevatedPolicyCopyDeniesFollowReadableBuckets(t *testing.T) {
 			}
 		}
 	}
-	// Replication FROM a bucket moves only data the session can read where that
-	// is the whole bucket named by box_bucket_prefix; an s3_read entry may be a
-	// prefix of a bucket, so with s3_read alone every replication change is denied.
+	// Replication FROM a bucket is excepted only for the buckets named by
+	// box_bucket_prefix; an s3_read entry may be a prefix of a bucket, so without
+	// the prefix every replication change is denied.
 	s, _ := ElevatedPolicy("aws", []string{"culishop-tfstate"}, Elevation{})
 	if got := evaluate(t, s, evalReq{"s3:PutReplicationConfiguration", "arn:aws:s3:::culishop-tfstate", nil}); got != "deny" {
 		t.Errorf("replication from an s3_read bucket with no prefix: %s", got)
@@ -377,6 +377,12 @@ func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 		strings.Repeat("s", 63),                            // a max-length state bucket
 		strings.Repeat("l", 50) + "/AWSLogs/123456789012/", // a log bucket, account prefix
 		"culishop-artifacts-ap-southeast-1/releases/",
+	}
+	// The smallest policy (no s3_read, no options, IAM writes denied) carries the
+	// copy denies too: measured 1,516 of 2,048 with them (1,317 with allow_iam on).
+	small, err := ElevatedPolicy("aws", nil, Elevation{})
+	if err != nil || len(small) > 1600 || !strings.Contains(small, "dynamodb:ExportTableToPointInTime") {
+		t.Fatalf("smallest policy: %d chars, copy denies present: %v", len(small), err)
 	}
 	maxEl := Elevation{BoxBucketPrefix: prefix, PassRolePrefix: strings.Repeat("r", 40)}
 	// One 63-character s3_read bucket, every option at its maximum, the longest
