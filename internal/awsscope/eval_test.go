@@ -202,8 +202,16 @@ func TestElevatedPolicyBoxBucketPrefix(t *testing.T) {
 		{"s3:GetObject", "arn:aws:s3:::human-data/culibox-x/y", "deny", "deny", "deny"},
 		{"s3:GetObject", "arn:aws:s3:::culiboxer/y", "deny", "deny", "deny"},
 		{"s3:GetObject", "arn:aws:s3:::x-culibox-y/z", "deny", "deny", "deny"},
-		// the laundering path: a table export into a box bucket needs no read
+		// the laundering paths: copies into a box bucket that never call
+		// s3:GetObject as the session (a table export, or a job run by a passed role)
 		{"dynamodb:ExportTableToPointInTime", "arn:aws:dynamodb:us-east-1:123456789012:table/orders", "deny", "allow", "deny"},
+		{"rds:StartExportTask", "arn:aws:rds:us-east-1:123456789012:snapshot:prod-db", "deny", "allow", "deny"},
+		{"s3:CreateJob", "*", "deny", "allow", "deny"},
+		{"datasync:StartTaskExecution", "arn:aws:datasync:us-east-1:123456789012:task/task-1", "deny", "allow", "deny"},
+		{"backup:StartRestoreJob", "arn:aws:backup:us-east-1:123456789012:recovery-point:rp-1", "deny", "allow", "deny"},
+		{"s3:PutReplicationConfiguration", "arn:aws:s3:::human-data", "deny", "allow", "deny"},
+		// replication FROM a box bucket only moves box data: allowed
+		{"s3:PutReplicationConfiguration", "arn:aws:s3:::culibox-lab-1", "allow", "allow", "allow"},
 		// everything else the elevated policy denies stays denied
 		{"secretsmanager:GetSecretValue", "arn:aws:secretsmanager:us-east-1:123456789012:secret:culibox-x", "deny", "deny", "deny"},
 		{"kms:Decrypt", "arn:aws:kms:us-east-1:123456789012:key/k", "deny", "deny", "deny"},
@@ -223,6 +231,21 @@ func TestElevatedPolicyBoxBucketPrefix(t *testing.T) {
 	inv, _ := SessionPolicy("aws", []string{"culishop-tfstate"})
 	if strings.Contains(inv, "culibox-") || strings.Contains(inv, "/aws/service/") || strings.Contains(inv, "Export") {
 		t.Fatalf("the investigate policy must not carry any #211 carve-out: %s", inv)
+	}
+}
+
+// The copy-path denies above are needed because iam:PassRole is allowed in the
+// window on every role except agentbox-*: ECS and Lambda applies need it. If a
+// later change denies PassRole, this test fails and the denies can be revisited.
+func TestElevatedPolicyPassRoleIsWhyCopyPathsAreDenied(t *testing.T) {
+	for _, iam := range []bool{false, true} {
+		s, _ := ElevatedPolicy("aws", nil, Elevation{AllowIAM: iam, BoxBucketPrefix: "culibox-"})
+		if got := evaluate(t, s, evalReq{"iam:PassRole", "arn:aws:iam::123456789012:role/s3-replication", nil}); got != "allow" {
+			t.Errorf("allow_iam %v: PassRole on a non-agentbox role is %s; the copy-path reasoning assumes allow", iam, got)
+		}
+		if got := evaluate(t, s, evalReq{"iam:PassRole", "arn:aws:iam::123456789012:role/agentbox-agent-write", nil}); got != "deny" {
+			t.Errorf("allow_iam %v: PassRole on the agent's own role is %s", iam, got)
+		}
 	}
 }
 

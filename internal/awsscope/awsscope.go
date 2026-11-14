@@ -205,6 +205,17 @@ type Elevation struct {
 // the elevated policy so that AWS's public parameters can be carved out.
 var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"}
 
+// boxBucketCopyDenies are, with box_bucket_prefix on, the managed copies that
+// can land data the session may not read in a box bucket without the session
+// ever calling s3:GetObject on the source: a DynamoDB export runs with the
+// caller's S3 write; the others run as a role passed with iam:PassRole, which
+// the window allows (ECS and Lambda applies need it), so the session policy
+// never reaches their reads. Replication is denied separately, except from a
+// box bucket. Data classes the window does not deny (logs, EC2 disks, RDS
+// rows through SQL) are not listed: denying their exports would protect nothing.
+var boxBucketCopyDenies = []string{"dynamodb:ExportTableToPointInTime", "rds:StartExportTask",
+	"s3:CreateJob", "datasync:StartTaskExecution", "backup:StartRestoreJob"}
+
 // ElevatedPolicy is the session policy for a write-role mint (M3b): the
 // investigate statements (elevation adds writes, not data reads), the guard
 // denies, and the IAM write denies unless AllowIAM. Two narrow exceptions
@@ -213,9 +224,9 @@ var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetPa
 //     readable. Their ARNs have an empty account field; every parameter in
 //     an account carries its account id, so it stays denied.
 //   - With BoxBucketPrefix, objects in buckets named <prefix>... are
-//     readable, and DynamoDB table exports are denied: an export writes items
-//     into any bucket the caller can write, which would launder the item-read
-//     deny through a box bucket.
+//     readable, and the managed copies that could fill such a bucket with data
+//     the session may not read are denied (boxBucketCopyDenies, replication
+//     except from a box bucket).
 func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, error) {
 	st, err := investigateStatements(partition, s3Read)
 	if err != nil {
@@ -240,7 +251,10 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 		st = append(st, statement{Effect: "Deny", Action: iamWriteDenies, Resource: "*"})
 	}
 	if el.BoxBucketPrefix != "" {
-		st = append(st, statement{Effect: "Deny", Action: "dynamodb:ExportTableToPointInTime", Resource: "*"})
+		st = append(st,
+			statement{Effect: "Deny", Action: boxBucketCopyDenies, Resource: "*"},
+			statement{Effect: "Deny", Action: "s3:PutReplicationConfiguration",
+				NotResource: []string{"arn:" + partition + ":s3:::" + el.BoxBucketPrefix + "*"}})
 	}
 	return marshalPolicy(st, "elevated session policy")
 }
