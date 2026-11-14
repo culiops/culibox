@@ -11,7 +11,7 @@
   "comment_replies": "Kill-switch for replying to a waiting session and answering its permission prompts Yes/No from the UI. Off unless true; read at boot, so a restart applies a change. Peek (last-message summary) works either way.",
   "replies_enabled": false,
 
-  "comment_shell": "No shell agent is needed below: at boot the console detects $SHELL and adds a profile for it (named after the shell, e.g. zsh) unless one of the agents already runs that binary. That profile is what the UI's +sh button spawns; define your own shell agent to override the detection.",
+  "comment_shell": "No shell agent is needed below: at boot CuliBox detects $SHELL and adds a profile for it (named after the shell, e.g. zsh) unless one of the agents already runs that binary. That profile is what the UI's +sh button spawns; define your own shell agent to override the detection.",
 
   "comment_persistence": "Sessions run under abduco so they survive a daemon restart. abduco must be installed (the daemon fails fast if not). data_dir and abduco_socket_dir are optional: leave them out and everything lives in the data root ($CULIBOX_HOME, else ~/.local/share/culibox), which is also where this file belongs. Setting them pins a fixed path that CULIBOX_HOME does not change; setting data_dir also turns off the one-time move of the old ~/.local/share/agent-box root to ~/.local/share/culibox.",
   "abduco_bin": "abduco",
@@ -34,26 +34,9 @@
   "comment_bundle": "What a contained session may see of your agent configuration. Sourced by allowlist only: CLAUDE.md, skills/, agents/, commands/, plus a filtered settings.json and the MCP servers that can actually run inside the image. Credentials, history and transcripts are never copied. Empty = auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude); 'off' disables bundling.",
   "bundle_source": "",
 
-  "comment_static_tokens": "A long-lived token a boxed profile may pick by name (profile field 'tokens'). The value is a file (0600, owned by you) or an env var of the daemon, never inline. config_env is NOT secret. egress lists the exact hosts the entry's boxes may reach. Read at daemon start only: a change needs a restart. See docs/STATIC-TOKENS.md.",
-  "static_tokens": [
-    {
-      "name": "grafana-example",
-      "provider": "grafana",
-      "label": "Grafana",
-      "value": { "type": "file", "path": "/etc/agent-box/tokens/grafana-example" },
-      "env": ["GRAFANA_SERVICE_ACCOUNT_TOKEN"],
-      "config_env": { "GRAFANA_URL": "https://grafana.example.com" },
-      "egress": [ { "host": "grafana.example.com" } ],
-      "mcp": { "server": "grafana-example", "command": "mcp-grafana" }
-    }
-  ],
+  "comment_credentials": "AWS connections, GitHub Apps and static tokens are not set up here. Add them in Settings > Credentials (saved to credentials.json in the data root), then tick them on a profile. See docs/AWS.md, docs/GITHUB.md and docs/STATIC-TOKENS.md.",
 
   "comment_workspace": "default_cwd cannot be your home directory when anything runs contained: the workspace is a box's only writable mount, so a box there would mount your whole home. Point it at a projects directory.",
-
-  "secret_sources": [
-    { "type": "env" },
-    { "type": "file", "path": "/etc/agent-box/secrets.env" }
-  ],
 
   "options": [
     { "comment": "bool → append flag when on", "key": "skip_permissions", "label": "Skip permissions", "type": "bool", "flag": "--dangerously-skip-permissions", "bins": ["claude"] },
@@ -63,26 +46,20 @@
 
   "agents": [
     {
-      "comment": "default base=inherit (full env). options set defaults shown as toggles on the spawn form, overridable per session.",
+      "comment": "default base=inherit (full env). options set defaults shown as toggles on the spawn form, overridable per session. account links the agent to a named agent account (Settings > Agent accounts), which holds its Claude token; create the account there first; culibox init creates one named claude-box.",
       "name": "claude",
       "bin": "claude",
+      "account": "claude-box",
       "options": { "skip_permissions": true, "effort": "high", "model": "claude-opus-5-5" }
     },
     {
-      "comment": "opt-in lock-down: base=clean, no inherited secrets; grant only what it needs by name.",
+      "comment": "opt-in lock-down: base=clean, no inherited secrets; the account supplies the Claude token.",
       "name": "claude-locked",
       "bin": "claude",
       "base": "clean",
+      "account": "claude-box",
       "options": { "skip_permissions": true },
-      "env": { "PATH": "/home/you/.nvm/versions/node/v24/bin:/usr/local/bin:/usr/bin:/bin" },
-      "secrets": ["CLAUDE_CODE_OAUTH_TOKEN"]
-    },
-    {
-      "comment": "boxed profile with a static token: runtime must be 'box' explicitly. The agent fetches it per command: agentbox-env grafana-example -- CMD.",
-      "name": "claude-grafana",
-      "bin": "claude",
-      "runtime": "box",
-      "tokens": ["grafana-example"]
+      "env": { "PATH": "/home/you/.nvm/versions/node/v24/bin:/usr/local/bin:/usr/bin:/bin" }
     }
   ]
 }
