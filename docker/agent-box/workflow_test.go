@@ -1010,10 +1010,13 @@ func TestCIWorkflow(t *testing.T) {
 	if !strings.Contains(jobBlock(t, wf, "darwin-test"), "CGO_ENABLED: \"0\"") {
 		t.Error("job darwin-test must set CGO_ENABLED: \"0\" (the shipped darwin binaries are built without cgo)")
 	}
-	for _, want := range []string{"go test ./...", "AB_UPGRADE_REQUIRE=1 bash scripts/upgrade-test.sh"} {
-		if !strings.Contains(jobBlock(t, wf, "darwin-test"), want) {
-			t.Errorf("job darwin-test lacks %q", want)
-		}
+	if !strings.Contains(jobBlock(t, wf, "darwin-test"), "run: go test ./...") {
+		t.Error(`job darwin-test lacks "run: go test ./..."`)
+	}
+	// The upgrade test is Linux only: darwin's store is the login Keychain, which a
+	// CI runner cannot use unattended (#293). Bringing it back means solving that first.
+	if strings.Contains(jobBlock(t, wf, "darwin-test"), "upgrade-test.sh") {
+		t.Error("job darwin-test must not run scripts/upgrade-test.sh (the Keychain is not usable on a CI runner)")
 	}
 	matrix := regexp.MustCompile(`(?m)^\s+os:\s*\[(.*)\]\s*$`).FindStringSubmatch(jobBlock(t, wf, "test"))
 	if matrix == nil {

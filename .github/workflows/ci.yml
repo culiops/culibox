@@ -4,7 +4,9 @@
 # CGO off) and its unit tests run natively on a GitHub-hosted Apple silicon runner (job
 # darwin-test, CGO off like the shipped binaries). Standard runners are free in a public
 # repository. arm64 runners have no nested virtualization, so what needs a VM (colima)
-# or a real box stays on the rented Mac.
+# or a real box stays on the rented Mac. The upgrade test runs on Linux only: on darwin
+# the secret store is the login Keychain, which a CI runner cannot use unattended
+# (POST /api/store/init times out), so it is tracked apart from #293.
 # The abduco-backed Go tests need a real abduco, so it is built from the pinned
 # source first, and AGENT_BOX_REQUIRE_ABDUCO=1 turns a missing abduco into a test
 # failure instead of a silent skip.
@@ -175,8 +177,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The upgrade test builds the previous release tag, so it needs the tags.
-          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -186,9 +186,6 @@ jobs:
           echo "$RUNNER_TEMP/abduco/bin" >> "$GITHUB_PATH"
       - name: go test
         run: go test ./...
-      # bash 3.2 code, the same script the Mac rounds run. A SKIP is a failure.
-      - name: upgrade test (previous release -> this commit)
-        run: AB_UPGRADE_REQUIRE=1 bash scripts/upgrade-test.sh
 
   secrets:
     runs-on: ubuntu-24.04
