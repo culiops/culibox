@@ -106,4 +106,31 @@ func TestInPlaceGuardFoldsCase(t *testing.T) {
 			t.Fatalf("want an inside-the-workspace refusal, got %v", err)
 		}
 	})
+	t.Run("workspace inside an enclosing git dir in other case is refused", func(t *testing.T) {
+		withFold(t, true)
+		tmp := realTemp(t)
+		top := filepath.Join(tmp, "a")
+		ws := filepath.Join(top, "G", "x")
+		mkdirs(t, ws, filepath.Join(top, "g"))
+		writeFile(t, filepath.Join(top, ".git"), "gitdir: "+filepath.Join(top, "g")+"\n")
+		_, err := inPlaceMounts(ws)
+		if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "inside the git directory") {
+			t.Fatalf("want an inside-the-git-directory refusal, got %v", err)
+		}
+	})
+	t.Run("other-case host symlink is resolved before folding", func(t *testing.T) {
+		for _, fold := range []bool{false, true} {
+			withFold(t, fold)
+			tmp := realTemp(t)
+			ws := filepath.Join(tmp, "Repo")
+			gitRepo(t, ws, "[core]\n\thooksPath = "+filepath.Join(tmp, "repo", "hooks")+"\n")
+			mkdirs(t, filepath.Join(ws, "hooks"), filepath.Join(ws, "sub", "hooks"))
+			symlink(t, filepath.Join(ws, "sub"), filepath.Join(tmp, "repo"))
+			got, err := inPlaceMounts(ws)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMounts(t, ws, got, ".git", ".claude", "sub")
+		}
+	})
 }

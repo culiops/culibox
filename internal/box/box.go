@@ -230,8 +230,10 @@ func UnderMount(path string, mounts []string) bool {
 
 // underMount is UnderMount for host paths: with fold set (macOS, where APFS is
 // case-insensitive by default) X and x are one folder, so it ignores letter
-// case, like Overlaps. Unicode normalisation (NFC/NFD) is not folded. In-box and
-// bundle paths keep UnderMount: they are Linux paths.
+// case, like Overlaps. Unicode normalisation (NFC/NFD) is not folded. Bundle
+// keeps the case-sensitive UnderMount on purpose: its host-path checks are mostly
+// "outside, so refuse", where folding would widen access, and its deny list is
+// backed by an identity check.
 func underMount(path string, mounts []string, fold bool) bool {
 	for _, mt := range mounts {
 		if pathWithin(path, mt, fold) {

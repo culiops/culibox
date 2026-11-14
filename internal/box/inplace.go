@@ -475,7 +475,10 @@ func guardHooksDir(root *os.Root, ws, target string) (string, error) {
 		return "", nil
 	}
 	target = filepath.Clean(target)
-	if !underWS(target, ws) {
+	// Case-sensitive on purpose: an other-case spelling may be a different
+	// folder (a host symlink, or a case-sensitive volume), so it is resolved
+	// first and only the resolved path is folded.
+	if !UnderMount(target, []string{ws}) {
 		real, err := whereCreated(target)
 		if err != nil {
 			return "", refuseInPlace("the git hooks directory %s of %s cannot be resolved (%v). Fix or unset "+
