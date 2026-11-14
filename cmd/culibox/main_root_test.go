@@ -591,6 +591,13 @@ func TestServeStartWarningsGate(t *testing.T) {
 func TestResumeUnderExplicitConfigIgnoresDefaultConfigs(t *testing.T) {
 	e := newRootEnv(t)
 	pendingMove(t, e, e.legacy+"\n"+secretstore.KeyHash(e.legacy)+"\n")
+	// pendingMove writes <newRoot>/config.json, and config.Resolve picks that file
+	// before ~/.config/culibox, so it would hide the decoy below from a resume that
+	// wrongly resolves the default config. Remove it so the decoy is what Resolve
+	// would load.
+	if err := os.Remove(filepath.Join(e.newRoot, "config.json")); err != nil {
+		t.Fatal(err)
+	}
 	seed := func(db string) string {
 		st, err := analytics.Open(db)
 		if err != nil {
@@ -610,7 +617,8 @@ func TestResumeUnderExplicitConfigIgnoresDefaultConfigs(t *testing.T) {
 	writeFile(t, filepath.Join(e.home, "decoy", ".keep"), "")
 	tr := seed(own)
 	seed(decoy)
-	// The decoy sits where config.Resolve would look first for this home.
+	// With <newRoot>/config.json gone, this is the first file config.Resolve finds
+	// for this home: a resume that reads the default config loads it.
 	writeFile(t, filepath.Join(e.xdg, "culibox", "config.json"),
 		`{"bind_addr":"127.0.0.1:8899","abduco_socket_dir":"/decoy/sockets","analytics":{"db_path":"`+decoy+`"}}`)
 	explicit := filepath.Join(e.home, "x.json")
