@@ -293,13 +293,15 @@ value for `elevate.role_arn`):
   "elevate": {
     "role_arn": "arn:aws:iam::123456789012:role/agentbox-agent-write",
     "max_minutes": 60,
-    "allow_iam": false
+    "allow_iam": false,
+    "box_bucket_prefix": "culibox-"
   }
 }
 ```
 
 `elevate.role_arn` must be in the same account and partition as `role_arn` and differ from it.
-`max_minutes` is 30 or 60 (default 60). A binding with `elevate` gets one box per session and
+`max_minutes` is 30 or 60 (default 60). `box_bucket_prefix` is optional and off when left out
+(see the box-bucket exception below). A binding with `elevate` gets one box per session and
 refuses shared workspaces: the session needs its own folder or worktree, and a spawn is
 refused while any other box overlaps that folder.
 
@@ -313,6 +315,43 @@ outlive the window), the calls that create long-lived credentials (`iam:CreateAc
 roles), and the CloudTrail changes that would blind the trail (`StopLogging`, `DeleteTrail`,
 `UpdateTrail`, `PutEventSelectors`). IAM writes are denied too unless the binding sets
 `allow_iam`; `iam:PassRole` stays allowed because ECS and Lambda applies need it.
+
+Two exceptions let Terraform plan and destroy in the window; the read role has neither:
+
+- **AWS public parameters.** `ssm:GetParameter`, `GetParameters` and `GetParametersByPath`
+  work on AWS's public parameters under `/aws/service/` (AMI ids, the ECS-optimized AMI), so a
+  `data "aws_ssm_parameter"` on one plans. Every parameter in your account stays denied: a
+  public parameter's ARN has an empty account field (`arn:aws:ssm:<region>::parameter/aws/service/...`),
+  yours carry the account id, and SSM refuses names that start with `aws`.
+- **Box buckets, opt-in.** With `"box_bucket_prefix": "culibox-"` in `elevate`, `s3:GetObject`
+  and `GetObjectVersion` also work in buckets whose name starts with the prefix, the buckets the
+  box creates, so Terraform can refresh the `aws_s3_object`s it uploaded. The prefix is 3 to 40
+  lowercase letters, digits and `-`, ends in `-`, and has no wildcards. Off by default.
+  Turning it on also denies `dynamodb:ExportTableToPointInTime` in the window: an export writes
+  a table's items into any bucket you can write to, so without that deny it would read the
+  items through a box bucket.
+
+**What `box_bucket_prefix` opens, honestly:**
+- Every bucket whose name starts with the prefix is readable in the window. That includes one a
+  human created with that name, and one in another account, because an S3 ARN has no account.
+  Pick a prefix that only the box uses.
+- Copying a human object into a box bucket needs `s3:GetObject` on the source, which stays
+  denied, and so does a bucket policy or ACL that grants the session more: an explicit deny in
+  the session policy wins over any allow. A copy that runs as *another* role can still move
+  data in: S3 replication, S3 Batch Operations, DataSync, or an RDS snapshot export. Each needs
+  `iam:PassRole` on a role that can read the source, and `iam:PassRole` stays allowed. That is
+  the same limit as above, not a new one, but a box bucket makes the copied data readable to
+  the agent.
+
+**Why there is no tag-based exception for secrets, parameters, DynamoDB items or KMS.**
+Terraform tags what it creates, so "read what carries the box tag" looks natural. But in
+Secrets Manager, Parameter Store, DynamoDB and KMS, tagging a resource as you create it needs
+the same permission as tagging an existing one (`secretsmanager:TagResource`,
+`ssm:AddTagsToResource`, `dynamodb:TagResource`, `kms:TagResource`), and no condition key tells
+the two apart. A session policy could not let Terraform tag a new secret without also letting
+the agent put the box tag on a human's secret and then read it. Secret values, your own
+parameters, DynamoDB items and KMS decryption (other than through S3) therefore stay denied in
+the window. A stack whose plan reads one of them cannot run in a write window.
 
 **Honest limit of `allow_iam: true`:** an agent that can `CreateRole` can create a role that
 trusts an outside account. That is persistence past the window, and no session-policy
