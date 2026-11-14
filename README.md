@@ -231,7 +231,7 @@ To run the checks:
 scripts/test.sh
 ```
 
-This runs `gofmt`, `go test ./...`, a macOS cross-build and `go vet`, the browser-side tests (`node --test`) and a lint of the page's script references.
+This runs `gofmt`, `go test ./...`, a macOS cross-build and `go vet`, the browser-side tests (`node --test`) and a lint of the page's script references, and more (the upgrade test, the installer and deploy script tests, secret-scan rules and extra vet builds); see `scripts/test.sh`.
 
 ## License
 

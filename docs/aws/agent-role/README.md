@@ -63,7 +63,7 @@ The profile must also set `"runtime": "box"`.
 ## Which accounts
 
 Only a sandbox or lab account for now. **Do not apply this to a company or production
-account until output redaction (M3c) ships:** with read access an agent can still pull data
+account until output redaction exists (it is not built yet):** with read access an agent can still pull data
 into its transcript that `ReadOnlyAccess` allows and the session policy does not deny
 (Lambda code URLs, ECR layers, Athena and Glue results, CloudWatch Logs, among others).
 
@@ -266,7 +266,7 @@ the agent can do no harm:
   environment, and so gets the bound session's access. Give a bound session its own
   workspace.
 
-## Write role (elevation, M3b)
+## Write role (elevation)
 
 The same module also creates `agentbox-agent-write` (variable `write_role_name`), the identity
 a boxed session works as while a human has granted it write access.
@@ -321,7 +321,7 @@ roles), and the CloudTrail changes that would blind the trail (`StopLogging`, `D
 **`iam:PassRole` is denied unless you name a prefix.** A service that runs as a passed role
 (Lambda, ECS, Glue, CodeBuild, Step Functions) reads whatever that role can read, and the session
 policy never limits it, so allowing PassRole on any role makes the data-read deny advisory
-(#302). Left out, `pass_role_prefix` denies `iam:PassRole` on every role: a stack that creates a
+([#302](https://github.com/culiops/culibox/issues/302)). Left out, `pass_role_prefix` denies `iam:PassRole` on every role: a stack that creates a
 Lambda function, an ECS task or an instance profile fails to apply in the window. With
 `"pass_role_prefix": "culibox-"` the window may pass only roles named `culibox-*` (3 to 40 IAM
 role-name characters, no wildcards, no `/`; `agentbox-`, `aws` and `service-role` stems are
@@ -355,7 +355,7 @@ Two exceptions let Terraform plan and destroy in the window; the read role has n
   over any allow. Managed copies are different. A DynamoDB export runs with your S3 write, and
   the other managed copies run as a role the session passed with `iam:PassRole` (allowed only on
   `pass_role_prefix` roles, if you set one). The session policy never sees those reads. So the
-  elevated policy always denies (#301):
+  elevated policy always denies ([#301](https://github.com/culiops/culibox/issues/301)):
   - `dynamodb:ExportTableToPointInTime` (table export to S3);
   - `rds:StartExportTask` (snapshot or cluster export to S3);
   - `s3:CreateJob` (S3 Batch Operations, including Batch Replication);
@@ -377,7 +377,7 @@ Two exceptions let Terraform plan and destroy in the window; the read role has n
   internet from there. A bucket the session may not read can be exposed too: public access
   settings, `PutBucketPolicy`, `PutBucketAcl` and `PutObjectAcl` are not limited by the data-read
   deny, so data that reaches a bucket by another route can be read unsigned. This is a known gap,
-  tracked in #307.
+  tracked in [#307](https://github.com/culiops/culibox/issues/307).
 
 **What the opt-in does not change.** Code run as a passed role (a Lambda function, an ECS task,
 an EC2 instance profile, a Glue or CodeBuild job) reads whatever that role can read and can hand

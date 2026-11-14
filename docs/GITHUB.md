@@ -13,6 +13,8 @@ A boxed profile can carry a `github` binding. The credential broker then mints s
 ]
 ```
 
+`private_key` is the same reference type as a static token's `value`, so `{"type": "env", "var": "<NAME>"}` and `{"type": "store", "id": "<id>"}` work too.
+
 The key is never copied into a box. CuliBox reads the key file once per daemon run and caches it after the first load, so after you rotate or change the key file, restart CuliBox. When a bound session spawns, CuliBox checks that the App is configured and its key loads (no network call), and refuses the spawn if not.
 
 **3. Add the binding to a profile.** Set `"runtime": "box"` explicitly, then fill in the GitHub section of the profile form, or write it in `config.json`:
@@ -33,7 +35,7 @@ The key is never copied into a box. CuliBox reads the key file once per daemon r
 | `permissions` | Optional. The default is `actions`, `checks`, `contents`, `pull_requests`, `issues` and `metadata`, all `"read"`; `statuses` can be added. `contents`, `pull_requests` and `issues` may be `"write"`; every other key is `"read"` only, and any other value is refused. |
 | `egress_allow` | Optional extra hosts for this binding's boxes, on top of the GitHub hosts below. |
 
-The box image must include `gh`: use an image built from this version (tag `2026-10-19.2` or later) and set `box_image` to it (see `box setup` in the [quick start](../README.md#from-source-manual)).
+The box image must include `gh`: use an image built by `culibox box setup` from v0.35.0 or newer, or `ghcr.io/culiops/culibox` pinned by digest, and set `box_image` to it (see `box setup` in the [quick start](../README.md#from-source-manual)).
 
 ## How the agent uses it
 
