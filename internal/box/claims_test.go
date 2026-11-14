@@ -387,7 +387,7 @@ func TestGrantBlocker(t *testing.T) {
 	}
 	f.others[0].Claims = true
 	why, _ = m.GrantBlocker(context.Background(), dir, self)
-	if why == "" || strings.Contains(why, "older") {
+	if why == "" || strings.Contains(why, "older CuliBox") {
 		t.Fatalf("any other overlapping box blocks a grant: %q", why)
 	}
 	f.others[0].Workspace = "/somewhere/else"

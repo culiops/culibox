@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -94,7 +95,10 @@ func TestWorkspaceWithMountMetacharactersIsNotBoxable(t *testing.T) {
 	home := t.TempDir()
 	mustMkdir(t, filepath.Join(home, "a,b"))
 	mustMkdir(t, filepath.Join(home, "fine"))
-	odd := []string{"nel\u0085x", "ls\u2028x", "ps\u2029x", "bad\xffutf8"}
+	odd := []string{"nel\u0085x", "ls\u2028x", "ps\u2029x"}
+	if runtime.GOOS != "darwin" { // APFS refuses a name that is not UTF-8
+		odd = append(odd, "bad\xffutf8")
+	}
 	for _, n := range odd {
 		mustMkdir(t, filepath.Join(home, n))
 	}

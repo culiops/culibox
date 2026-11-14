@@ -39,9 +39,20 @@ func wantRefusal(t *testing.T, code int, msg string, gotCode int, gotMsg string)
 	}
 }
 
+// outsideFile is a real file that sits in no home, workspace or scratch folder.
+// A fixed system file such as /etc/hostname does not exist on every OS (macOS).
+func outsideFile(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestFsErr_OutsideHome(t *testing.T) {
 	s, _, _ := scratchServer(t)
-	rec := fsGet(s.handleFsRead, "/api/fs/read", "/etc/hostname")
+	rec := fsGet(s.handleFsRead, "/api/fs/read", outsideFile(t))
 	wantRefusal(t, 403, msgOutside, rec.Code, errBody(t, rec))
 }
 
@@ -53,7 +64,7 @@ func TestFsErr_DeniedTree(t *testing.T) {
 
 func TestFsErr_LinkEscapesWorkspace(t *testing.T) {
 	s, _, ws := boxedServer(t)
-	mustSymlink(t, "/etc/hostname", filepath.Join(ws, "evil"))
+	mustSymlink(t, outsideFile(t), filepath.Join(ws, "evil"))
 	rec := fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(ws, "evil"))
 	wantRefusal(t, 403, msgEscape, rec.Code, errBody(t, rec))
 }
