@@ -468,7 +468,7 @@ func TestViewSourceTags(t *testing.T) {
 func TestViewEntryFields(t *testing.T) {
 	conn := awsConn("prod-ro", "host-a", arnRead)
 	conn.Label, conn.Description, conn.Prod = "Prod read", "the prod account", true
-	conn.Elevate = &config.AWSElevate{RoleARN: arnWrite, MaxMinutes: 30}
+	conn.Elevate = &config.AWSElevate{RoleARN: arnWrite, MaxMinutes: 30, BoxBucketPrefix: "culibox-"}
 	conn.EgressAllow, conn.S3Read = []string{"api.example.com"}, []string{"my-bucket"}
 	tk := config.StaticToken{Name: "dd", Value: config.KeyRef{Type: "store", ID: "dd"}, Env: []string{"DD_API_KEY", "DD_SITE"},
 		Egress:   []config.TokenEgress{{Host: "api.datadoghq.com"}, {Host: "api.eu.example", Port: 8443}, {Host: "10.0.0.5", Private: true}},
@@ -483,6 +483,10 @@ func TestViewEntryFields(t *testing.T) {
 	// The Edit form sends the whole connection back, so it must be told these two.
 	if strings.Join(a.EgressAllow, ",") != "api.example.com" || strings.Join(a.S3Read, ",") != "my-bucket" {
 		t.Errorf("aws egress_allow / s3_read missing from the read model: %s", raw)
+	}
+	// So must it be told elevate.box_bucket_prefix (#211), or an edit drops it.
+	if el, _ := a.Elevate.(map[string]any); el["box_bucket_prefix"] != "culibox-" {
+		t.Errorf("elevate.box_bucket_prefix missing from the read model: %s", raw)
 	}
 	tr := b.Tokens[0]
 	if tr.Provider != "datadog" || tr.Template != "datadog" || tr.Label != "Datadog" || !tr.Prod || tr.ValueKind != "store" ||

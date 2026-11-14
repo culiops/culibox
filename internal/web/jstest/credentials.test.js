@@ -220,6 +220,12 @@ test("awsConnFromRow sends only what is set", () => {
   assert.strictEqual(full.description, "d");
   assert.deepStrictEqual(full.s3_read, ["bucket-a"]);
   assert.deepStrictEqual(full.elevate, { role_arn: "arn:aws:iam::1:role/w", max_minutes: 30, allow_iam: true });
+  // #211: the form has no field for box_bucket_prefix, so it carries the saved one back unchanged.
+  const boxed = awsConnFromRow({ ...row, elevRole: "arn:aws:iam::1:role/w", elevMinutes: "60", elevBoxPrefix: "culibox-" });
+  assert.deepStrictEqual(boxed.elevate, { role_arn: "arn:aws:iam::1:role/w", max_minutes: 60, box_bucket_prefix: "culibox-" });
+  assert.strictEqual("box_bucket_prefix" in awsConnFromRow({ ...row, elevRole: "arn:aws:iam::1:role/w" }).elevate, false);
+  // with no write role there is no elevate block to carry it in
+  assert.strictEqual("elevate" in awsConnFromRow({ ...row, elevBoxPrefix: "culibox-" }), false);
 });
 
 test("awsCheckView: ok + none_found says 'No broad write access found' and nothing about read-only", () => {

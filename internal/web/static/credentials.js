@@ -422,6 +422,7 @@ function awsConnFromRow(row) {
   if (row.elevRole && !direct) {
     c.elevate = { role_arn: row.elevRole, max_minutes: parseInt(row.elevMinutes, 10) === 30 ? 30 : 60 };
     if (row.elevIAM) c.elevate.allow_iam = true;
+    if (row.elevBoxPrefix) c.elevate.box_bucket_prefix = row.elevBoxPrefix; // no form field: sent back as read
   }
   return c;
 }
@@ -1852,6 +1853,7 @@ function awsOpenEdit(entry) {
   row.elevRole = el ? el.role_arn : "";
   row.elevMinutes = el && el.max_minutes === 30 ? "30" : "60";
   row.elevIAM = !!(el && el.allow_iam);
+  row.elevBoxPrefix = (el && el.box_bucket_prefix) || "";
   row.mode = entry.mode === "sso_direct" ? "sso_direct" : "";
   row.orig = { source_profile: row.source_profile, role_arn: row.role_arn, mode: row.mode };
   awsFlow = { mode: "edit", rows: [row], profiles: [], selected: new Set(), sso: {}, timers: new Set(), saving: false, msg: "", loadErr: "" };
@@ -1860,7 +1862,7 @@ function awsOpenEdit(entry) {
 
 function awsNewRow(base, extra) {
   return {
-    ...base, ...extra, id: ++awsRowSeq, description: "", egress: "", s3: "", elevRole: "", elevMinutes: "60", elevIAM: false,
+    ...base, ...extra, id: ++awsRowSeq, description: "", egress: "", s3: "", elevRole: "", elevMinutes: "60", elevIAM: false, elevBoxPrefix: "",
     assume: null, verdict: null, actions: [], reason: "", reasonText: "", acked: false,
     mode: "", gate: null, hours: 0,
     busy: "", err: "", roles: null, rolesNote: "", rolesDoc: false, rolesFilter: "", rolesFilterIn: null, signIn: "", el: null, res: null, rolesBox: null, roleInput: null,
