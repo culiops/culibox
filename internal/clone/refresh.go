@@ -78,14 +78,22 @@ type RefreshResult struct {
 // like "-x" or "$(x)" is never an option or code. Only the report goes to
 // stdout; git's own output goes to stderr.
 //
+// upload-pack on clone_of starts without the container's command-scope
+// safe.directory (git clears GIT_CONFIG_COUNT for the other side of a local
+// fetch), so $up gives it one of its own: clone_of's .git, the one repository it
+// opens (#294). git runs the upload-pack command through sh with the path
+// appended quoted, and the value reaches it as a variable, never as script text.
+//
 // It is a var only so the dockerit timeout test can swap it.
 var refreshScript = `dir=$1 of=$2 base=$3
 shift 3
 g() { git -C "$dir" -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
+export CULIBOX_SAFE_OF="$of/.git"
+up='git -c safe.directory="$CULIBOX_SAFE_OF" upload-pack'
 lref=refs/heads/$base
 rref=refs/remotes/origin/$base
 
-g fetch --no-tags --no-write-fetch-head --upload-pack=git-upload-pack --end-of-options "$of" "+$lref:$rref" >&2 || exit 1
+g fetch --no-tags --no-write-fetch-head --upload-pack="$up" --end-of-options "$of" "+$lref:$rref" >&2 || exit 1
 
 ff=none count=
 if old=$(g rev-parse --verify --quiet "$lref^{commit}"); then
@@ -96,7 +104,7 @@ if old=$(g rev-parse --verify --quiet "$lref^{commit}"); then
 			if [ "$(g symbolic-ref --quiet HEAD)" = "$lref" ]; then
 				g merge --ff-only "$rref" >&2
 			else
-				g fetch --no-tags --no-write-fetch-head --upload-pack=git-upload-pack --end-of-options "$of" "$lref:$lref" >&2
+				g fetch --no-tags --no-write-fetch-head --upload-pack="$up" --end-of-options "$of" "$lref:$lref" >&2
 			fi
 			if [ $? -eq 0 ] && now=$(g rev-parse --verify --quiet "$lref^{commit}") && [ "$now" != "$old" ]; then
 				ff=$old..$now
@@ -151,11 +159,16 @@ func RefreshArgs(r RefreshRequest, base string, stale []string, name string) []s
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"--label", LabelCloneRefresh + "=" + r.Instance,
 		"-e", "HOME=" + boxTmp, "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_NO_REPLACE_OBJECTS=1",
-		"--mount", "type=bind,src=" + dir + ",dst=" + dir,
-		"--mount", "type=bind,src=" + gitDir + ",dst=" + gitDir + ",readonly",
+	}
+	// The clone, for every git of the script; clone_of's .git gets its entry
+	// inside the script, on the upload-pack command (see safeDirEnv).
+	args = append(args, safeDirEnv(dir)...)
+	args = append(args,
+		"--mount", "type=bind,src="+dir+",dst="+dir,
+		"--mount", "type=bind,src="+gitDir+",dst="+gitDir+",readonly",
 		"--entrypoint", "sh", r.Image,
 		"-c", refreshScript, "agent-box-refresh", dir, of, base,
-	}
+	)
 	return append(args, stale...)
 }
 

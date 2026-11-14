@@ -63,6 +63,7 @@ func TestBundleArgs(t *testing.T) {
 		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--label", "io.culiops.agent-box.clonefetch=DEV",
 		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_ALTERNATE_OBJECT_DIRECTORIES=/src/of/.git/objects",
+		"-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory", "-e", "GIT_CONFIG_VALUE_0=/work/clone",
 		"--mount", "type=bind,src=/work/clone,dst=/work/clone,readonly",
 		"--mount", "type=bind,src=/src/of/.git,dst=/src/of/.git,readonly",
 		"--entrypoint", "git", "culiops/agent-box:2026-10-18.2",
@@ -93,6 +94,7 @@ type fakeDocker struct {
 	hang    bool   // when set, block until ctx is done, like a container that never exits
 	removed []string
 	args    []string // argv of the last RunStream
+	env     []string // added to the in-container git's env (e.g. GIT_TEST_ASSUME_DIFFERENT_OWNER=1)
 }
 
 func (f *fakeDocker) Remove(_ context.Context, name string) error {
@@ -130,9 +132,13 @@ func (f *fakeDocker) RunStream(ctx context.Context, args []string, stdout io.Wri
 		}
 	}
 	var alt string
+	var cfgEnv []string // the command-scope config the argv sets (safe.directory, #294)
 	for i, a := range args {
 		if a == "-e" && strings.HasPrefix(args[i+1], "GIT_ALTERNATE_OBJECT_DIRECTORIES=") {
 			alt = strings.TrimPrefix(args[i+1], "GIT_ALTERNATE_OBJECT_DIRECTORIES=")
+		}
+		if a == "-e" && strings.HasPrefix(args[i+1], "GIT_CONFIG_") && !strings.HasPrefix(args[i+1], "GIT_CONFIG_NOSYSTEM=") {
+			cfgEnv = append(cfgEnv, args[i+1])
 		}
 	}
 	i := slices.Index(args, "--entrypoint")
@@ -141,7 +147,7 @@ func (f *fakeDocker) RunStream(ctx context.Context, args []string, stdout io.Wri
 	}
 	gitArgs := args[i+3:] // skip --entrypoint git <image>
 	cmd := exec.CommandContext(ctx, "git", gitArgs...)
-	cmd.Env = append(CleanEnv(), "GIT_ALTERNATE_OBJECT_DIRECTORIES="+alt)
+	cmd.Env = append(append(append(CleanEnv(), "GIT_ALTERNATE_OBJECT_DIRECTORIES="+alt), cfgEnv...), f.env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	runErr := cmd.Run()

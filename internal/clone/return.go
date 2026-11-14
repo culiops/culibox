@@ -61,17 +61,20 @@ type ReturnResult struct {
 // over a read-only for-each-ref.
 func ListArgs(r ReturnRequest, name string) []string {
 	dir := r.Clone.Dir
-	return []string{
+	args := []string{
 		"run", "--rm", "--init", "--name", name, "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
 		"--tmpfs", boxTmp + ":rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"--label", LabelCloneList + "=" + r.Instance,
 		"-e", "HOME=" + boxTmp, "-e", "GIT_CONFIG_NOSYSTEM=1",
-		"--mount", "type=bind,src=" + dir + ",dst=" + dir + ",readonly",
+	}
+	args = append(args, safeDirEnv(dir)...)
+	return append(args,
+		"--mount", "type=bind,src="+dir+",dst="+dir+",readonly",
 		"--entrypoint", "git", r.Image,
 		"-C", dir, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
 		"for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/",
-	}
+	)
 }
 
 // Return runs one auto-return pass over r.Clone. It is best effort: every

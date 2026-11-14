@@ -220,18 +220,23 @@ type FetchResult struct {
 func BundleArgs(r FetchRequest, baseSHA, name string) []string {
 	of, dir := r.Clone.Of, r.Clone.Dir
 	gitDir := of + "/.git"
-	return []string{
+	args := []string{
 		"run", "--rm", "--init", "--name", name, "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
 		"--tmpfs", boxTmp + ":rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"--label", LabelCloneFetch + "=" + r.Instance,
 		"-e", "HOME=" + boxTmp, "-e", "GIT_CONFIG_NOSYSTEM=1",
 		"-e", "GIT_ALTERNATE_OBJECT_DIRECTORIES=" + gitDir + "/objects",
-		"--mount", "type=bind,src=" + dir + ",dst=" + dir + ",readonly",
-		"--mount", "type=bind,src=" + gitDir + ",dst=" + gitDir + ",readonly",
-		"--entrypoint", "git", r.Image,
-		"-C", dir, "bundle", "create", "-", "refs/heads/" + r.Branch, "^" + baseSHA,
 	}
+	// Only the clone is a repository here: clone_of's objects are an alternate,
+	// which git reads without an ownership check (measured, git 2.39.5).
+	args = append(args, safeDirEnv(dir)...)
+	return append(args,
+		"--mount", "type=bind,src="+dir+",dst="+dir+",readonly",
+		"--mount", "type=bind,src="+gitDir+",dst="+gitDir+",readonly",
+		"--entrypoint", "git", r.Image,
+		"-C", dir, "bundle", "create", "-", "refs/heads/"+r.Branch, "^"+baseSHA,
+	)
 }
 
 // capWriter writes to a file and fails once more than max bytes would be
