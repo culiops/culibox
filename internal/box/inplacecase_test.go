@@ -2,6 +2,7 @@ package box
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -338,6 +339,49 @@ func TestInPlaceSubdirHooksPathDotDot(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantMounts(t, ws, got, ".claude")
+		})
+	}
+}
+
+// A directory that is the workspace on disk under another path (a host bind
+// mount, stood in for by the sameDirAsWS seam) is the workspace: a box link in
+// it is refused. A ".." taken there goes to the parent of that path, as the
+// kernel takes it, not to the workspace's own parent (#304 review M1).
+func TestInPlaceHooksPathWorkspaceAlias(t *testing.T) {
+	cases := []struct {
+		name   string
+		hp     string // <tmp> is replaced
+		refuse string
+		mounts []string
+	}{
+		{"box link out in the alias", "<tmp>/mnt/alias/x/hooks", "reached through the symlink", nil},
+		{"hooks in the alias are guarded", "<tmp>/mnt/alias/hooks", "", []string{"hooks"}},
+		{".. after the alias is the alias's parent", "<tmp>/mnt/alias/../back/hooks", "", []string{"hooks"}},
+		{".. after the alias then outside", "<tmp>/mnt/alias/../out/hooks", "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := realTemp(t)
+			ws := filepath.Join(tmp, "Repo")
+			alias := filepath.Join(tmp, "mnt", "alias")
+			mkdirs(t, filepath.Join(ws, "hooks"), alias, filepath.Join(tmp, "mnt", "out", "hooks"), filepath.Join(tmp, "out"))
+			old := sameDirAsWS
+			sameDirAsWS = func(p string, fi, wsFi fs.FileInfo) bool { return p == alias || old(p, fi, wsFi) }
+			t.Cleanup(func() { sameDirAsWS = old })
+			symlink(t, ws, filepath.Join(tmp, "mnt", "back"))
+			symlink(t, filepath.Join(tmp, "out"), filepath.Join(ws, "x"))
+			gitRepo(t, ws, "[core]\n\thooksPath = "+strings.ReplaceAll(tc.hp, "<tmp>", tmp)+"\n")
+			got, err := inPlaceMounts(ws)
+			if tc.refuse != "" {
+				if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), tc.refuse) {
+					t.Fatalf("want a refusal mentioning %q, got %v (mounts %v)", tc.refuse, err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMounts(t, ws, got, append([]string{".git", ".claude"}, tc.mounts...)...)
 		})
 	}
 }

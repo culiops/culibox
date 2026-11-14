@@ -41,6 +41,11 @@ var sameHostDir = func(a, b string) bool {
 	return err == nil && os.SameFile(fa, fb)
 }
 
+// sameDirAsWS reports whether the directory at p (fi, its Lstat) is the
+// workspace on disk (wsFi, its Stat), however p is spelled. A variable so a
+// Linux test can stand in for a host bind mount of the workspace.
+var sameDirAsWS = func(p string, fi, wsFi fs.FileInfo) bool { return os.SameFile(fi, wsFi) }
+
 // underWS reports whether the host path p is at or below the workspace ws. Every
 // caller refuses or guards on "inside", so folding case only adds refusals.
 func underWS(p, ws string) bool { return underMount(p, []string{ws}, inPlaceFold) }
@@ -814,7 +819,7 @@ func walkGitPath(base, p, ws string) (gitWalk, error) {
 			return gitWalk{}, err
 		case fi.Mode()&fs.ModeSymlink == 0:
 			cur = next
-			if fi.IsDir() && os.SameFile(fi, wsFi) {
+			if fi.IsDir() && sameDirAsWS(next, fi, wsFi) {
 				cur = ws
 			}
 			continue
