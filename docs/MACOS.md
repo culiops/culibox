@@ -89,29 +89,17 @@ Everything CuliBox writes lives in one directory, `~/.local/share/culibox`
 session records, profiles and analytics. Back it up, move it or delete it as a
 unit. Claude Code's own files stay in `~/.claude`; CuliBox only reads them. The one
 exception is the abduco socket directory, `/tmp/agent-box-<uid>-<hash>`, because macOS
-caps a socket path at 103 bytes; it holds only live sockets. Its name keeps the old
-`agent-box` prefix on purpose.
+caps a socket path at 103 bytes; it holds only live sockets. Its name keeps the `agent-box` prefix.
 
-**A Mac that has a box VM keeps its old data folder.** CuliBox used to be called
-agent-box, and a first `culibox serve` moves `~/.local/share/agent-box` to
-`~/.local/share/culibox` (see [Configuration](CONFIG.md)). On a Mac where
-`~/.local/share/agent-box/vm` exists, it does not: Lima and colima keep absolute
-paths to that folder in the VM's instance directory and in `colima.yaml`, so the
-VM cannot follow a move without `culibox box setup -recreate`. The folder stays
-usable in place; `culibox doctor` says "kept in place: the box VM lives here; it
-cannot follow a move without box setup -recreate".
-
-**Before you roll back to an older `agent-box` binary on a Mac, end your sessions.**
-The old binary names its abduco socket directory from the old folder path, so it
-does not see sessions that the new binary started. (On Linux the socket directory
-sits inside the data folder, which the link at the old path still reaches.) The
-colima profile is still named `agent-box` and the Keychain item `agent-box-store`;
-nothing needs to be redone.
+A Mac that has a box VM cannot move its data folder, because Lima and colima keep
+absolute paths into it; see [From agent-box](UPGRADING.md#from-agent-box). The colima
+profile is named `agent-box` and the Keychain item `agent-box-store` on every
+install; nothing needs to be redone.
 
 Optional config: `~/.local/share/culibox/config.json` (see `config.example.json`), or
 pass `-config <path>`. When `CULIBOX_HOME` is unset, `~/.config/culibox/config.json`
-(or `$XDG_CONFIG_HOME/culibox/config.json`) is read as a fallback, and so is the
-older `~/.config/agent-box/config.json` (see [Configuration](CONFIG.md)). A
+(or `$XDG_CONFIG_HOME/culibox/config.json`) is read as a fallback, and so is
+`~/.config/agent-box/config.json` (see [Configuration](CONFIG.md)). A
 `config.json` in the current directory is deliberately not read, so running CuliBox
 inside a cloned repo never loads that repo's config. To reach
 CuliBox through a reverse proxy, add its hostname to `allowed_hosts`; any other
@@ -147,8 +135,7 @@ context and never edits `~/.ssh/config`.
   and a quarter of the RAM, and writes it to config.json). It refuses while any box is running, even
   an idle one; `culibox box stop -force` stops the VM anyway and ends those
   sessions. `culibox box status` shows the VM, the image and the boxes.
-- **Upgrading with the size unset.** A VM created by an older CuliBox has 4
-  CPUs / 4 GiB, and an existing VM keeps the size it was created with: while
+- **VM size.** An existing VM keeps the size it was created with: while
   `box_vm_cpus` and `box_vm_memory_gib` are unset, CuliBox reads them back
   from the VM and nothing reads as changed. The host-derived default (every
   core, half the RAM) applies only when the VM is first set up, or after
@@ -186,7 +173,8 @@ context and never edits `~/.ssh/config`.
   home for review) runs here too, in the box VM. The repo must be inside a VM
   folder and its copy inside a read-write one; anything else is refused. `culibox clone fetch`
   needs the VM running and never starts it. See
-  [Clone mode](CLONE-MODE.md#on-macos). Not yet tested end to end on a Mac.
+  [Clone mode](CLONE-MODE.md#on-macos). Tested end to end on a Mac (macOS 27.2.1,
+  colima 0.10.3): work comes back as a `box/<branch>` and a refresh fast-forwards the clone.
 - Restart `culibox serve` after any `box setup -recreate`. A running
   CuliBox keeps the VM settings it read when it started, so until the
   restart it sizes new boxes from the old VM, and a failed boxed spawn can
@@ -195,8 +183,7 @@ context and never edits `~/.ssh/config`.
 ### VM folders
 
 Once the folder list is applied, the box VM does not share your home folder.
-(A VM set up by an older CuliBox shares the whole home until you apply; see
-below.) It sees only the folders on its list, each read-write or read-only,
+It sees only the folders on its list, each read-write or read-only,
 plus four parts of CuliBox's own data folder: `boxstate` (read-write) and
 `bundle`, `broker` and `ca` (read-only). Nothing else in the data folder is
 visible to the VM, so the config file, credentials and the VM's own
@@ -238,8 +225,8 @@ boxed sessions have already run in.
 - A boxed spawn checks the folders against what the running VM actually
   has, not against your saved list. A folder you added but have not applied is
   refused, with an offer to share it.
-- If you set up the VM with an older CuliBox it still shares your whole home
-  folder until you apply the list. Nothing breaks: `culibox doctor` ("box VM folders") and Settings
+- A VM whose folder list was never applied still shares your whole home
+  folder. Nothing breaks: `culibox doctor` ("box VM folders") and Settings
   warn about it, and the home share goes away when you apply the list.
 - Switching a folder between read-write and read-only takes effect on one apply: after the
   start CuliBox remounts any folder the VM still shows at its old mode, then checks the
@@ -254,8 +241,7 @@ boxed sessions have already run in.
 
 ### Every box
 
-Every box, with or without a credential binding (an `aws` binding, named AWS
-connections, a `github` binding or static tokens), gets a locked-down network,
+Every box, with or without a credential binding (AWS connections, a `github` binding or static tokens), gets a locked-down network,
 as on Linux. It sits on an
 internal Docker network inside the VM (`172.29.72.0/24`, gateway `172.29.72.1`),
 with no route to the internet, no DNS, and no route to other boxes. The only
@@ -268,14 +254,13 @@ reaches any public host on port 443 through the proxy ("open" in the steer
 rail); a profile with bindings reaches only the hosts they allow. Rules in the
 VM's firewall let the box subnet reach those two ports and nothing else, and
 keep every other box off the relay. If those rules are missing or out of order
-(a VM from before egress control for all boxes, or one set up for other ports),
+(for example a VM set up for other ports),
 CuliBox refuses to start a boxed session and tells you to run
 `culibox box setup -recreate`; it checks them again on every boxed spawn.
 
 Egress control for every macOS box was verified on a Mac (macOS 14, colima 0.8.1) on 2026-11-02: bound and unbound boxes are fenced, a box's proxy token is refused when used from another box, boxes cannot reach each other, and direct, DNS and Mac loopback connections are blocked.
 
-What this means for an unbound profile, which used to have normal outbound
-access on a Mac:
+What this means for an unbound profile:
 
 - No git over ssh and no other port than 443: the only way out is an HTTPS
   CONNECT through the proxy.
@@ -287,41 +272,24 @@ access on a Mac:
 
 These limits are the same as on Linux and are not configurable.
 
-- After upgrading, run `culibox box setup -recreate` once when doctor asks
-  for it (what an upgrade keeps and how to go back: [Upgrading](UPGRADING.md)). The rules live in the VM's provisioning, so an existing VM keeps the
-  old ones until it is recreated: a VM set up before egress control for all
-  boxes has none, and `culibox doctor` fails ("box VM config", and
-  "box VM firewall" while the VM runs) and every boxed spawn is refused until
-  you recreate it. Sessions still running in boxes after the upgrade lose the
-  egress proxy until then (the recreate ends them anyway), so end them first. A VM set up before the broker fix (see
-  [Token binding](#token-binding)) still lets containers on the VM's default
-  network reach the broker: `culibox doctor` fails "box VM config" for it too,
-  but CuliBox deletes the old rule at each boxed spawn, the VM puts it back at
-  each start, and `culibox box setup -recreate` removes it for good.
-  Like any recreate, it refuses while a box is running unless you add `-force`,
-  and CuliBox must be restarted afterwards. Upgrading to the version with the
-  relay handshake (see [Token binding](#token-binding)) creates a new secret in
-  `relay2.secret` and deletes `relay.secret`. The old secret was sent on every
-  connection, so it is never used again. The relay is replaced once, so
-  connections open through it drop once. On a VM set up before egress control
-  for all boxes, CuliBox removes the old relay instead, so sessions running
-  across that upgrade also lose the credential broker until you recreate the VM. Until the
-  new version replaces it, the old relay still sends the old secret and what the
-  boxes send, tokens included, to whatever holds CuliBox's ports, so on a Mac
-  shared with other accounts, stop the box VM (`culibox box stop`) or end the
-  boxed sessions before you stop the old CuliBox for this upgrade.
-- The egress network uses the fixed subnet `172.29.72.0/24` inside the VM. An
-  egress network left over from the previous build (an open one, or one with a
-  different subnet) is refused with a message that suggests
-  `docker network rm`. After an upgrade, run `culibox box setup -recreate`
-  instead: it deletes the VM, so its networks and rules come back fresh. Then
-  restart CuliBox.
+- Run `culibox box setup -recreate` when doctor asks for it (what an upgrade
+  keeps and how to go back: [Upgrading](UPGRADING.md)). The rules live in the
+  VM's provisioning, so an existing VM keeps the rules it was set up with until
+  it is recreated. When they differ from what this CuliBox writes, `culibox doctor`
+  fails "box VM config" (and "box VM firewall" while the VM runs) and every boxed
+  spawn is refused. Like any recreate, it refuses while a box is running unless
+  you add `-force`, and CuliBox must be restarted afterwards.
+- The egress network uses the fixed subnet `172.29.72.0/24` inside the VM. A
+  network of that name that is open, that lets boxes reach each other, or that has
+  another subnet or gateway is refused, with a message that suggests
+  `docker network rm`. `culibox box setup -recreate` deletes the VM, so its
+  networks and rules come back fresh. Then restart CuliBox.
 - The relay container has no restart policy. After a VM restart the next boxed
   session checks the firewall rules and starts it again, so that spawn can be
   a little slower than later ones.
-- A box left from an older build, on the default network, is removed and
-  recreated on the egress network when it is idle. If it still runs sessions,
-  the next spawn into it is refused ("started before egress control") until you
+- A box that fails its egress check is removed and recreated on the egress
+  network when it is idle. If it still runs sessions, the next spawn into it is
+  refused ("started before egress control (or failed its egress check)") until you
   end them.
 - A tool that ignores `HTTPS_PROXY` cannot connect, by design: there is no
   direct route to fall back on. A connection that fails with a timeout, not a
@@ -347,12 +315,12 @@ The secret is 32 random bytes in `relay2.secret` in the data directory, readable
 only by you. CuliBox creates it on first start, keeps it across restarts, and
 hands it to the relay container through its environment, never on a command
 line. Another user account on the same Mac therefore cannot write a header the
-proxy or the broker accepts, and once the upgrade to this version has replaced
-the relay (see the upgrade note under [Every box](#every-box)), a process that
+proxy or the broker accepts, and a process that
 takes one of CuliBox's ports while CuliBox is stopped or restarting gets only
-the relay's random challenge: no header, no token and nothing a box sent. The
-handshake has been exercised on Linux, between the relay script and CuliBox's
-listener code, but not yet on a real Mac.
+the relay's random challenge: no header, no token and nothing a box sent.
+Measured on a Mac (macOS 27.2.1, colima 0.10.3): a second macOS account could not
+read `relay2.secret`, its forged header lines were closed, and an impostor on the
+broker's port received only the challenge.
 
 This is still weaker than on Linux, where the box is known from the socket a
 request arrives on. A process running as you can read the secret, and with a
@@ -375,17 +343,15 @@ dialed another address, a process bound to that address could sit between the
 relay and CuliBox's listener, and the listener would answer the relay's
 challenge through it. Such a process would see the session tokens and the rest
 of the stream, and could alter it. Only protecting the stream after the
-handshake would close that, and this version does not. That the host agent dials
-`127.0.0.1` is inferred, and not yet measured on a Mac.
+handshake would close that, and CuliBox does not. On a Mac it was measured that
+the host agent's connections to the broker and egress ports come from `127.0.0.1`
+only.
 
-An earlier version's firewall rule let any container on the box VM's default
-Docker network (not the egress network) reach the broker's port directly,
-without the relay. With the handshake such a container can still reach the port,
-but it cannot pass the handshake, so it cannot write a header the broker
-accepts. A VM set up with that rule puts it back
-at every start, until it is recreated, and CuliBox deletes it again when it
-checks the firewall at each boxed spawn. If that delete fails, `culibox doctor` fails "box VM firewall", and every boxed spawn is
-refused until you run `culibox box setup -recreate`.
+CuliBox checks the VM's firewall at every boxed spawn: the relay's INPUT rules,
+the gateway DROP, and that no DOCKER-USER rule passes TCP (so no container on the
+VM's default Docker network, outside the egress network, reaches the broker's
+port without the relay). If the check fails, `culibox doctor` fails "box VM
+firewall" and boxed spawns are refused until you run `culibox box setup -recreate`.
 
 The credential broker accepts a session's token only from the box that session
 runs in. On macOS it compares the address in the relay's header with that box's
@@ -410,8 +376,8 @@ shared workspace, runs with that box's access; a process running as you on your
 Mac that holds a session's token, and an account that can read loopback traffic
 (see above); a process that receives the relay's connection on an address
 other than `127.0.0.1` could sit in the middle, because the proofs bind the port
-and not the address (see above; that the host agent dials `127.0.0.1` is
-inferred, not measured); a container on the VM's host network or another process in the VM,
+and not the address (see above; the host agent was measured to dial
+`127.0.0.1`); a container on the VM's host network or another process in the VM,
 which reaches the Mac's loopback through the VM's own OUTPUT path (the DOCKER-USER
 rules do not apply there) and so can connect to the broker's port, but cannot pass
 the handshake without the relay secret; and while CuliBox does not hold its ports, boxes cannot reach the
@@ -502,9 +468,6 @@ a git config `include`, and so on). What it covers and what it does not is in
     End the in-place sessions under the newer CuliBox before you roll back,
     and afterwards check that no guarded file is left locked (steps 0 and 5 of
     [Rolling back](UPGRADING.md#rolling-back)).
-- After upgrading, a box that was started before this guard and still runs
-  sessions is refused at the next spawn ("started without ... which this
-  session needs") until you end those sessions. An idle one is recreated.
 
 ### Context paths
 
@@ -528,10 +491,11 @@ moved into place before it reads is taken as the path you listed.
 - Tested only on Linux, with dash and GNU coreutils like the VM's: the script against a
   parent directory flipped between a directory and a symlink, and against the last
   component exchanged for a FIFO or a symlink, each in a loop.
-- Not yet tested on a Mac: that `colima ssh` passes the script to the VM
-  unchanged (if it does not, every boxed spawn is refused, not let
-  through), the script on the VM itself, and that the identity stays stable
-  across a VM restart.
+- Measured on a Mac (macOS 27.2.1, colima 0.10.3, 2026-11-10): `colima ssh` passes
+  the script to the VM unchanged (if it did not, every boxed spawn would be refused,
+  not let through), the script works on the VM itself, and the device and inode it
+  reports for a listed directory are the same before and after a VM restart. The
+  read adds 56 to 76 ms (median) to a spawn.
 
 ### Workspace identity
 
@@ -541,7 +505,7 @@ guard shows the file or directory it was derived from (see
 [Security model](SECURITY.md#known-limits)). As with context paths, the
 identity is read inside the VM, because an inode number on the Mac is not the
 one the box sees. The workspace is read by the context-path script, in the same
-single `colima ssh` per spawn, so every boxed spawn now makes one, with or
+single `colima ssh` per spawn, so every boxed spawn makes one, with or
 without context paths. The comparison inside the box is one `docker exec`, so a
 plain boxed spawn, without context paths, makes that too.
 
@@ -555,13 +519,8 @@ plain boxed spawn, without context paths, makes that too.
   there when the folder passed the checks. Only a link is caught. A change after
   that read, up to the box's own mount, is caught by the comparison inside the
   box.
-- A box created by a version before the identity check (it lacks the
-  `io.culiops.agent-box.identity` label) was never checked, so its guards are
-  compared once, by the first spawn into it after CuliBox starts: an idle box
-  that no longer matches is removed, and one with running sessions is kept and
-  the spawn refused until they end. A box that failed a check and could not be
-  removed is never reused as it is: the next spawn removes it again first, and is
-  refused while it cannot.
+- A box that failed a check and could not be removed is never reused as it is:
+  the next spawn removes it again first, and is refused while it cannot.
 - A workspace reached by another spelling of its name (another case, or the
   composed and decomposed forms of an accented letter) started on a Mac with the
   identity equal to that of the real folder, and was not refused (measured on
@@ -573,10 +532,12 @@ plain boxed spawn, without context paths, makes that too.
   The read is bounded at 10 s, so a wedged `colima ssh` stalls other spawns for
   that long at most; a read that takes longer is refused, and spawning again
   retries it.
-- Not yet measured on a Mac: that the identity the VM reports for the workspace
-  and for the guards is the one the box shows (measured for context paths
-  above, on colima 0.8.1), and that the `O_NOFOLLOW_ANY` open refuses a link
-  in each position of the path on APFS.
+- Measured on a Mac (macOS 27.2.1, colima 0.10.3, 2026-11-10): the identity the VM
+  reports for the workspace and for the guards is the one the box shows. On APFS
+  (2026-11-14), a workspace under a symlinked parent starts, and when a parent was
+  swapped for a link while spawns ran, 7 of 8 spawns gave a box whose folder
+  matched the identity checked, and 1 was refused. Not measured: that the `O_NOFOLLOW_ANY` open
+  refuses a link in each position of the path.
 - Tested only on Linux, against a stand-in for the VM read: the order of the
   read and of the box's creation, that the workspace is first in it, and the
   refusal and removal of a box whose mount changed.
@@ -664,17 +625,28 @@ and restart docker). `box setup` prints this as a hint when a pull fails.
 
 ## Release verification
 
-This section is for the maintainer. A release's darwin tarballs are built on Linux
-and are not run on a Mac by CI, so each release starts with
-`⚠️ NOT yet verified on macOS` in its Platform status block. `scripts/macos-verify.sh`
-checks the published files on a Mac and records the result on the release.
+A release's darwin tarballs are built on Linux and are not run on a Mac by CI, so
+each release starts with `⚠️ NOT yet verified on macOS` in its Platform status
+block. The maintainers then check the published files on an Apple Silicon Mac and
+record the result on the release, which rewrites the two darwin lines. The lines
+you can see on a release (also explained in the [README](../README.md)):
 
-Run it on an Apple Silicon Mac (it refuses anything else, and a Rosetta shell
-counts as Intel):
+- **verified** (`✅`): both arches passed their tests and version check, arm64
+  native and amd64 under Rosetta 2, and at least one manual check passed. No
+  manual check failed.
+- **partial** (`⚠️`): nothing failed, but the record is not enough to say
+  verified: no manual check passed (none given, or all not applicable), or a
+  darwin tarball or an arch result is missing.
+- **failed** (`❌`): an arch's tests or version check failed, or a manual check
+  failed. Do not use that build.
 
-    scripts/macos-verify.sh v0.1.0
+amd64 is checked under Rosetta 2 on Apple Silicon, not on Intel hardware, and the
+record says so.
 
-You need:
+### Running the check (maintainers)
+
+`scripts/macos-verify.sh <tag>` does the check. Run it on an Apple Silicon Mac (it
+refuses anything else, and a Rosetta shell counts as Intel). You need:
 
 - `gh`, logged in with write access to the release. Whether the download, view and edit steps work on a draft release is untested.
 - `git`, Go, and `cc` plus `make` (the script builds the pinned abduco from source).
@@ -683,30 +655,20 @@ You need:
 What it checks, in order:
 
 1. Downloads the two darwin tarballs and `SHA256SUMS` from the release and checks
-   the sums. A mismatch stops the script before any test or binary runs.
+   the sums. Before any release code or binary runs it also checks that the tagged
+   commit is reachable from `main` and, once the repository is public, that each
+   tarball has a build attestation from the release workflow for this tag and
+   commit. A mismatch or a failed check stops the script.
 2. Clones the tag, builds abduco, and runs `go test ./...` natively (arm64) and
    with `GOARCH=amd64`, which runs under Rosetta 2. A failing test run does not
    stop the script; it is recorded as failed.
 3. Runs each extracted binary's `version` (the amd64 one under `arch -x86_64`)
    and requires exactly `culibox <tag> (<commit of the clone>)`.
-4. Asks for the manual rows of the Mac test guide, one per line as
-   `ID=pass|fail|na [note]`, and a blank line to finish. Nothing defaults to pass.
+4. Asks for the results of the manual checks, one per line as
+   `ID=pass|fail|na [note]`, and a blank line to finish. The checks are the
+   maintainers' own list of things to try by hand on a Mac. Nothing defaults to pass.
 5. Builds `macos-verification.json` and uploads it to the release, then rewrites
    the two darwin lines of the Platform status block in the release notes.
-
-Verdicts:
-
-- **verified** (`✅`): both arches passed their tests and version check, arm64
-  native and amd64 under Rosetta 2, and at least one manual row is `pass`. No
-  manual row failed.
-- **partial** (`⚠️`): nothing failed, but the record is not enough to say
-  verified: no manual row passed (none given, or all `na`), or a darwin tarball
-  or an arch result is missing.
-- **failed** (`❌`): an arch's tests or version check failed, or a manual row is
-  `fail`.
-
-amd64 is checked under Rosetta 2 on Apple Silicon, not on Intel hardware, and the
-record says so.
 
 Exit codes: `0` verified; `3` the record was written but the verdict is partial or
 failed (the release now says so); `1` any other failure (nothing is uploaded unless
