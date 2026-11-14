@@ -22,6 +22,7 @@ import (
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/datacompat"
 	"github.com/culiops/culibox/internal/secretstore"
 )
 
@@ -170,6 +171,8 @@ type AgentLauncher struct {
 	awsConns []config.AWSConnection
 	// boxGate, when set, can refuse a boxed spawn (nil = never).
 	boxGate func() error
+	// profilesGate, when set, refuses every spawn (see ErrProfilesNewer).
+	profilesGate func() error
 }
 
 // SecretResolver resolves a declared secret name to its value. secrets.New's
@@ -486,6 +489,44 @@ func (l *AgentLauncher) SetStaticTokens(entries []config.StaticToken) {
 	l.mu.Unlock()
 }
 
+// ErrProfilesNewer refuses every spawn while profiles.json was written by a
+// newer CuliBox (#291). That file may hold an override of a config seed (saving a
+// seed in the UI writes one), so with it unreadable no profile, seeds included,
+// can be trusted to be what the user saved. The wrapped text names the file, the
+// version, this build's version and docs/UPGRADING.md.
+var ErrProfilesNewer = errors.New("no session can start while profiles.json is from a newer CuliBox")
+
+// ProfilesNewerGate is the gate for SetProfilesGate: non-nil only when parseErr
+// is the "written by a newer CuliBox" state. Any other parse error, or none,
+// gives nil, so a plain unparsable file behaves as it always has.
+func ProfilesNewerGate(parseErr error) func() error {
+	if !errors.Is(parseErr, datacompat.ErrNewer) {
+		return nil
+	}
+	err := fmt.Errorf("%w: %v", ErrProfilesNewer, parseErr)
+	return func() error { return err }
+}
+
+// SetProfilesGate installs the check SpawnRefusal and Build run first; a non-nil
+// error refuses the spawn. nil removes it. Call once at boot.
+func (l *AgentLauncher) SetProfilesGate(gate func() error) {
+	l.mu.Lock()
+	l.profilesGate = gate
+	l.mu.Unlock()
+}
+
+// SpawnRefusal is why no spawn can start now, or nil. The session manager asks
+// it first, before it prepares a clone or a box; Build asks again.
+func (l *AgentLauncher) SpawnRefusal() error {
+	l.mu.RLock()
+	gate := l.profilesGate
+	l.mu.RUnlock()
+	if gate == nil {
+		return nil
+	}
+	return gate()
+}
+
 // SetBoxGate installs a check that runs for every boxed spawn, before anything
 // is resolved; a non-nil error refuses the spawn. Host-tier spawns never call
 // it. Call once at boot. nil removes the gate.
@@ -706,6 +747,9 @@ func ClonesOf(agents []config.AgentConfig) []config.Clone {
 // which need not exist in the image. Boxed therefore always composes from the
 // curated base and never login-wraps.
 func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
+	if err := l.SpawnRefusal(); err != nil {
+		return nil, nil, err
+	}
 	cfg, ok := l.agent(spec.Agent)
 	if !ok {
 		return nil, nil, fmt.Errorf("launcher: unknown agent %q", spec.Agent)

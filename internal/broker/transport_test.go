@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -72,7 +73,12 @@ func TestListenLinuxRefusesAStateRootTooLongForPerBoxSockets(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(root, "broker", "sock", "broker.sock")); err == nil {
 		t.Fatal("a shared socket was left listening")
 	}
-	// One byte shorter fits.
+	// One byte shorter fits, on Linux: darwin's sun_path is 104 bytes and its
+	// broker listens on TCP (transport.go), so the Linux layout cannot bind there.
+	if runtime.GOOS != "linux" {
+		t.Log("skip the 83 byte bind: sun_path is shorter on " + runtime.GOOS + " and the per-box sockets are Linux-only")
+		return
+	}
 	ok, err := Listen("linux", rootOfLen(t, 83), 9071, proxyline.Key{})
 	if err != nil {
 		t.Fatalf("an 83 byte state root must work: %v", err)

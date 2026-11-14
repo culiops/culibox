@@ -63,13 +63,17 @@ func (f *fakeRunner) Run(ctx context.Context, env []string, bin string, args ...
 }
 
 // shortRoot is a data root short enough for the VM's socket paths (t.TempDir's
-// is not: CheckSocketPaths refuses it). Rooted at /tmp, which is a symlink on
-// macOS, so Config resolution is exercised too.
+// is not: CheckSocketPaths refuses it). Rooted at /tmp and returned resolved:
+// /tmp is a symlink to /private/tmp on macOS, and the VM resolves its root, so
+// tests that compare against the root need the real path.
 func shortRoot(t *testing.T) string {
 	t.Helper()
 	root, err := os.MkdirTemp("/tmp", "bvm")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
 	return root

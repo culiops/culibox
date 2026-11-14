@@ -14,6 +14,7 @@ import (
 
 	"github.com/culiops/culibox/internal/abduco"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 	"github.com/culiops/culibox/internal/procinfo"
 	"github.com/culiops/culibox/internal/rootmove"
 )
@@ -599,5 +600,23 @@ func TestRootRefusalFails(t *testing.T) {
 	out, code := run(in)
 	if code != 1 || !strings.Contains(out, "FAIL config: data root: both /a and /b exist") {
 		t.Fatalf("code %d:\n%s", code, out)
+	}
+}
+
+// #291: a profiles.json from a newer CuliBox is a FAIL row, since no session can
+// start; a normal or unreadable-for-another-reason file adds none.
+func TestProfilesFormatRow(t *testing.T) {
+	newer := datacompat.Newer("/d/profiles.json", "format version 2, this build knows 1")
+	rows := checkProfilesFormat(newer)
+	if len(rows) != 1 || rows[0].Status != Fail || rows[0].Check != "profiles store" ||
+		!strings.Contains(rows[0].Detail, "format version 2") || !strings.Contains(rows[0].Detail, "no session can start") ||
+		!strings.Contains(rows[0].Detail, "docs/UPGRADING.md") {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if rows := checkProfilesFormat(nil); len(rows) != 0 {
+		t.Errorf("normal file: %+v", rows)
+	}
+	if rows := checkProfilesFormat(errors.New("parse error")); len(rows) != 0 {
+		t.Errorf("plain parse error is unchanged: %+v", rows)
 	}
 }

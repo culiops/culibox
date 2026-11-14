@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -41,6 +42,36 @@ func containerName(kind, instance string) string {
 		}
 	}
 	return "agent-box-" + kind + "-" + string(inst) + "-" + hex.EncodeToString(b[:])
+}
+
+// safeDirEnv is the docker -e options that let the git of a one-shot
+// container open exactly these repositories, given by the path git sees in
+// the container (the mount target, which is the host path on both OSes).
+// git refuses a repository whose files belong to another uid ("detected
+// dubious ownership"); on macOS the clone reaches the box VM over virtiofs and
+// the container's git reads it as foreign-owned, so every one-shot over a clone
+// failed there (#294). Linux never trips it: the clone is the host uid's, as is
+// the container's --user.
+//
+// The setting is command scope (GIT_CONFIG_COUNT/KEY_n/VALUE_n, git >= 2.31),
+// which git reads as protected config, so a box-written .git/config can neither
+// add nor remove an entry. Each value is one exact path, never "*": a nested or
+// planted repository elsewhere in the mounts stays refused. Lifting the check
+// is safe here because what it guards against, running a foreign repo's config
+// and hooks, is already contained: the container has no network, no
+// capabilities, no host credentials, and only the clone (which the box owns
+// anyway) and clone_of's .git, read-only.
+//
+// git drops command-scope config when it starts the other side of a local
+// fetch (git-upload-pack on clone_of), so the refresh script gives that process
+// its own entry (refreshScript, CULIBOX_SAFE_OF).
+func safeDirEnv(repos ...string) []string {
+	args := []string{"-e", "GIT_CONFIG_COUNT=" + strconv.Itoa(len(repos))}
+	for i, p := range repos {
+		n := strconv.Itoa(i)
+		args = append(args, "-e", "GIT_CONFIG_KEY_"+n+"=safe.directory", "-e", "GIT_CONFIG_VALUE_"+n+"="+p)
+	}
+	return args
 }
 
 // runContainer runs one named container through d.RunStream. Killing the docker

@@ -1853,6 +1853,14 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 // Spawn builds the agent command and starts a session — under the persistence
 // backend (abduco) if present, else a daemon-owned PTY directly.
 func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
+	// Every start funnels through here (the API, Restart, a clone, a shell), so
+	// this is where a launcher that cannot vouch for its profiles stops them all
+	// before anything is prepared (#291).
+	if r, ok := m.launcher.(interface{ SpawnRefusal() error }); ok {
+		if err := r.SpawnRefusal(); err != nil {
+			return nil, err
+		}
+	}
 	// Decide the tier FIRST and make it authoritative on the spec, so the
 	// launcher composes for the tier the session will actually run on. Deciding
 	// it in two places let a host-tier session be built with boxed semantics

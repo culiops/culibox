@@ -26,6 +26,7 @@ func TestListArgs(t *testing.T) {
 		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--label", "io.culiops.agent-box.clonelist=DEV",
 		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1",
+		"-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory", "-e", "GIT_CONFIG_VALUE_0=/work/clone",
 		"--mount", "type=bind,src=/work/clone,dst=/work/clone,readonly",
 		"--entrypoint", "git", "culiops/agent-box:2026-10-18.2",
 		"-C", "/work/clone", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",

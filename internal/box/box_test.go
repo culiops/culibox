@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -134,6 +135,9 @@ func TestExtraMountsAreReadOnlyBinds(t *testing.T) {
 func TestWorkspaceWithMountMetacharactersIsRefused(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	for _, name := range []string{"a,b", `q"uote`, "nl\nx", "nel\u0085x", "ls\u2028x", "ps\u2029x", "c1\u009bx", "bad\xffutf8"} {
+		if name == "bad\xffutf8" && runtime.GOOS == "darwin" {
+			continue // APFS refuses a name that is not UTF-8, so no workspace can carry one
+		}
 		dir := filepath.Join(t.TempDir(), name)
 		if err := os.Mkdir(dir, 0o700); errors.Is(err, syscall.EILSEQ) {
 			// APFS refuses a name that is not UTF-8, so no workspace can carry one there.

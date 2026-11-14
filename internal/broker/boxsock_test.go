@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -306,6 +307,13 @@ func TestAcquireRefusesAPathOverTheUnixLimit(t *testing.T) {
 		t.Fatalf("a refused path must create nothing: %v", err)
 	}
 
+	// The at-limit bind needs Linux's sun_path (108 bytes). These per-box sockets
+	// exist only on Linux; darwin's sun_path is 104 bytes and its broker listens
+	// on TCP (transport.go), so on a Mac only the refusal above is checked.
+	if runtime.GOOS != "linux" {
+		t.Log("skip the 107 byte bind: sun_path is shorter on " + runtime.GOOS + " and the per-box sockets are Linux-only")
+		return
+	}
 	atLimit := rootOfLen(t, 107-24)
 	s2, _ := startedBoxSockets(t, atLimit)
 	if _, err := s2.Acquire(bx); err != nil {

@@ -17,13 +17,42 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 )
+
+// FormatVersion is the credentials.json format this build reads and writes (#291).
+//
+// RULE: any new key that restricts, scopes or contains something (a revoke or
+// deny list, a containment, egress or credential-scope field, at the top level
+// or inside an entry) MUST bump this number in the same change. A build that
+// reads a higher version loads no entry at all (it fails closed), so an older
+// build can never activate entries while ignoring a restriction it does not
+// know. A benign addition (a label, a display field) needs no bump. A missing
+// "version" key means 1, and version 1 is written without the key, so a build
+// from before this rule can still read the file after a rollback; only a later
+// version is written out (writeVersion). See docs/UPGRADING.md.
+//
+// It is a var only so a test can raise it.
+var FormatVersion = 1
+
+// writeVersion is what Save puts in the file for format version v: nothing for
+// version 1 (see FormatVersion), v itself for a later one.
+func writeVersion(v int) int {
+	if v <= 1 {
+		return 0
+	}
+	return v
+}
 
 // File is the on-disk shape of credentials.json.
 type File struct {
+	// Version is the file's format version, 0 when the file has no "version".
+	Version int `json:"version,omitempty"`
+
 	AWSConnections []config.AWSConnection `json:"aws_connections,omitempty"`
 	GitHubApps     []config.GitHubApp     `json:"github_apps,omitempty"`
 	StaticTokens   []config.StaticToken   `json:"static_tokens,omitempty"`
@@ -118,10 +147,16 @@ func decodeEntries[T any](kind string, raws []json.RawMessage, bad *[]EntryError
 // knownKinds are the top-level keys this build reads, in the order their
 // problems are reported.
 // A new kind of entry may be added as a new top-level key: an older build
-// ignores it and goes read-only. A restriction on existing entries must go
-// inside the entries, where the strict per-entry decode refuses it, never in a
-// new top-level key, because an older build activates the entries it understands.
+// ignores it and goes read-only. A key that restricts the entries must bump
+// FormatVersion (see there), because an older build activates the entries it
+// understands and would otherwise ignore it.
 var knownKinds = []string{"aws_connections", "github_apps", "static_tokens"}
+
+// newerFormat is parse's way of saying "written by a newer CuliBox"; Load turns
+// it into datacompat.Newer, which names the file.
+type newerFormat struct{ detail string }
+
+func (e newerFormat) Error() string { return e.detail }
 
 // parse is file-level strict (not JSON, not an object, trailing data: the whole
 // file is bad) and entry-level tolerant (see decodeEntries). A top-level key it
@@ -132,6 +167,19 @@ func parse(b []byte) (f File, bad bool, err error) {
 	var top map[string]json.RawMessage
 	if err := decodeStrict(b, &top); err != nil {
 		return File{NotUnderstood: []string{err.Error()}}, true, err
+	}
+	if raw, ok := top["version"]; ok {
+		v, err := strconv.Atoi(string(raw))
+		switch {
+		case err != nil || v < 1:
+			err = fmt.Errorf("version %s is not a whole number from 1", raw)
+			return File{NotUnderstood: []string{err.Error()}}, true, err
+		case v > FormatVersion:
+			// Fail closed: nothing below is read, so no entry is activated.
+			line := fmt.Sprintf("format version %d, this build knows %d", v, FormatVersion)
+			return File{NotUnderstood: []string{line}}, true, newerFormat{line}
+		}
+		f.Version = v
 	}
 	lists := map[string][]json.RawMessage{}
 	var wrong []string
@@ -150,7 +198,7 @@ func parse(b []byte) (f File, bad bool, err error) {
 	}
 	var unknown []string
 	for k := range top {
-		if !slices.Contains(knownKinds, k) {
+		if k != "version" && !slices.Contains(knownKinds, k) {
 			unknown = append(unknown, k)
 		}
 	}
@@ -181,6 +229,10 @@ func Load(dataDir string) (f File, bad bool, err error) {
 		return File{NotUnderstood: []string{err.Error()}}, true, fmt.Errorf("credentials file: %w", err)
 	}
 	f, bad, err = parse(b)
+	var nf newerFormat
+	if errors.As(err, &nf) {
+		return f, true, datacompat.Newer(Path(dataDir), nf.detail)
+	}
 	if err != nil {
 		return f, true, fmt.Errorf("credentials file %s is not valid: %w", Path(dataDir), err)
 	}
@@ -199,6 +251,7 @@ func Save(dataDir string, f File) error {
 	if cur, _, _ := Load(dataDir); cur.CanSave() != nil {
 		return cur.CanSave()
 	}
+	f.Version = writeVersion(FormatVersion) // Load refused anything newer above
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err
