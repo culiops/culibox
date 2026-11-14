@@ -327,21 +327,35 @@ Two exceptions let Terraform plan and destroy in the window; the read role has n
   and `GetObjectVersion` also work in buckets whose name starts with the prefix, the buckets the
   box creates, so Terraform can refresh the `aws_s3_object`s it uploaded. The prefix is 3 to 40
   lowercase letters, digits and `-`, ends in `-`, and has no wildcards. Off by default.
-  Turning it on also denies `dynamodb:ExportTableToPointInTime` in the window: an export writes
-  a table's items into any bucket you can write to, so without that deny it would read the
-  items through a box bucket.
 
-**What `box_bucket_prefix` opens, honestly:**
-- Every bucket whose name starts with the prefix is readable in the window. That includes one a
-  human created with that name, and one in another account, because an S3 ARN has no account.
-  Pick a prefix that only the box uses.
-- Copying a human object into a box bucket needs `s3:GetObject` on the source, which stays
-  denied, and so does a bucket policy or ACL that grants the session more: an explicit deny in
-  the session policy wins over any allow. A copy that runs as *another* role can still move
-  data in: S3 replication, S3 Batch Operations, DataSync, or an RDS snapshot export. Each needs
-  `iam:PassRole` on a role that can read the source, and `iam:PassRole` stays allowed. That is
-  the same limit as above, not a new one, but a box bucket makes the copied data readable to
-  the agent.
+**What `box_bucket_prefix` opens, honestly.** It weakens the window's read deny in two ways:
+
+- **Every bucket whose name starts with the prefix is readable in the window.** That includes
+  one a human created with that name, and one in another account, because an S3 ARN has no
+  account. Pick a prefix that only the box uses.
+- **Data copied into a box bucket becomes readable to the agent.** A direct copy
+  (`CopyObject`, `UploadPartCopy`) needs `s3:GetObject` on the source, which stays denied, and a
+  bucket policy or ACL cannot grant the session more: an explicit deny in the session policy wins
+  over any allow. Managed copies are different. A DynamoDB export runs with your S3 write, and
+  the other managed copies run as a role passed with `iam:PassRole`, which the window allows on
+  every role except `agentbox-*` (ECS and Lambda applies need it). The session policy never sees
+  those reads. So with the opt-in on, the window also denies:
+  - `dynamodb:ExportTableToPointInTime` (table export to S3);
+  - `rds:StartExportTask` (snapshot or cluster export to S3);
+  - `s3:CreateJob` (S3 Batch Operations, including Batch Replication);
+  - `datasync:StartTaskExecution`;
+  - `backup:StartRestoreJob` (an S3 restore can target any bucket). This also blocks restores
+    of other resource types from AWS Backup in the window;
+  - `s3:PutReplicationConfiguration`, except on a box bucket: replication *from* a box bucket
+    moves only box data.
+
+  A lab that needs one of these in its write window must run with the opt-in off.
+
+**What the opt-in does not change.** Code run as a passed role (a Lambda function, an ECS task,
+an EC2 instance profile, a Glue or CodeBuild job) reads whatever that role can read and can hand
+it back without any bucket. That limit comes from allowing `iam:PassRole` in the window, and it
+holds with or without the opt-in. Exports of data the window never denied (CloudWatch Logs, EC2 images, RDS
+rows read through SQL) are not denied either: denying them would protect nothing.
 
 **Why there is no tag-based exception for secrets, parameters, DynamoDB items or KMS.**
 Terraform tags what it creates, so "read what carries the box tag" looks natural. But in
