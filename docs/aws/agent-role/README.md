@@ -126,7 +126,8 @@ On the Credentials screen this is **Credentials the agent gets → SSO role dire
 `source_profile` must be a pure IAM Identity Center profile (`sso_session` or `sso_account_id`
 in `~/.aws/config`). A profile with static keys, a `credential_process`, a `credential_source`
 or an assume-role chain is refused at save, spawn and every mint, so this mode never hands out
-a long-lived key. 
+a long-lived key.
+
 The "Which accounts" caveat applies to this mode too: agent output can carry anything the
 permission set can read, and output redaction has not shipped.
 

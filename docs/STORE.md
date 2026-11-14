@@ -1,6 +1,6 @@
 # Store
 
-CuliBox can hold secret values itself: tokens, a GitHub App private key, the Claude OAuth token. Anywhere config takes a value reference (`file` or `env`) it can also say `{"type": "store", "id": "<id>"}`, and `secret_sources` accepts `{"type": "store"}`. On disk there is only ciphertext (age), so the store directory is safe to back up.
+CuliBox can hold secret values itself: tokens, a GitHub App private key, the Claude OAuth token. Anywhere config takes a value reference (`file` or `env`) it can also say `{"type": "store", "id": "<id>"}`, and the older `secret_sources` list accepts `{"type": "store"}`. On disk there is only ciphertext (age), so the store directory is safe to back up.
 
 ## What it protects against, and what it does not
 
@@ -35,7 +35,7 @@ An id is 1 to 64 characters of letters, digits, `_` and `-`, starting with a let
 **Moving a Claude token you keep in the daemon's environment.** If the token still comes from `CLAUDE_CODE_OAUTH_TOKEN` in the daemon's environment, you can move it into the store:
 
 1. `printenv CLAUDE_CODE_OAUTH_TOKEN | culibox store set CLAUDE_CODE_OAUTH_TOKEN`
-2. Add `{"type": "store"}` to `secret_sources` **before** the `env` source, and restart CuliBox.
+2. Create an agent account in **Settings → Agent accounts**, paste the token on its row, and choose that account on your profiles. (A config that still uses the older `secret_sources` list can add `{"type": "store"}` before the `env` source instead; see [Older forms that still load](CONFIG.md#older-forms-that-still-load).)
 3. Delete the value from every env file and shell profile that still holds it (the file your service manager loads as `EnvironmentFile=`, your dev and prod copies, your login shell's profile).
 4. Restart CuliBox and check for leftovers. At start the daemon logs one line for each name the store serves that is still in the daemon's own environment, and Settings shows the same list for the running daemon. `culibox doctor` only checks the environment it is run from, so it does not see what your service manager gives the daemon.
 

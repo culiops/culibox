@@ -6,7 +6,7 @@ A boxed profile can carry a `github` binding. The credential broker then mints s
 
 **2. Add the App to CuliBox.** On the same screen, give the App a name, enter its client id and paste the private key (the whole `.pem`, BEGIN and END lines included). The key goes into the [encrypted store](STORE.md) as `gh-<name>-key` and is never shown again; if there is no store yet the screen offers to create it. The App takes effect at once: no restart is needed. (Choosing **Personal access token** on the same screen is the simpler, less safe route; see the GitHub personal access tokens paragraph in [Static tokens for agents](STATIC-TOKENS.md).)
 
-An App can also be declared in `config.json` (see the `github_apps` row in [Configuration](CONFIG.md)), which is read at daemon start, so adding or editing one there needs a restart. The Credentials screen lists it as defined in `config.json` and does not edit or delete it. Use this form to keep the key in a file: a regular file (not a symlink) owned by the daemon user, with mode `0600` or tighter. The screen's **Advanced: use a file instead** takes the same path.
+An App can also be declared in `config.json` (see the `github_apps` row in [Configuration](CONFIG.md)), which is read at daemon start, so adding or editing one there needs a restart. The Credentials screen lists it as defined in `config.json` and does not edit or delete it. To keep the key in a file instead of the store, choose **Advanced: use a file instead** on the screen (or use `config.json`): a regular file (not a symlink) owned by the daemon user, with mode `0600` or tighter.
 
 ```json
 "github_apps": [

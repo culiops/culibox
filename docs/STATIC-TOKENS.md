@@ -1,6 +1,6 @@
 # Static tokens for agents
 
-Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once, on the Credentials screen. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. A bound spawn is refused on the host tier. On macOS it goes through the egress allowlist like on Linux (the allowlist is verified on a Mac; the token wrapper there is not yet; see [docs/MACOS.md](MACOS.md#every-box)).
+Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once, on the Credentials screen. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. A bound spawn is refused on the host tier. On macOS it goes through the egress allowlist like on Linux (the allowlist and the token wrapper are both verified on a Mac; see [docs/MACOS.md](MACOS.md#every-box)).
 
 ## What this does and does not protect against
 
