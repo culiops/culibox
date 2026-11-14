@@ -228,6 +228,21 @@ func UnderMount(path string, mounts []string) bool {
 	return false
 }
 
+// underMount is UnderMount for host paths: with fold set (macOS, where APFS is
+// case-insensitive by default) X and x are one folder, so it ignores letter
+// case, like Overlaps. Unicode normalisation (NFC/NFD) is not folded. Bundle
+// keeps the case-sensitive UnderMount on purpose: its host-path checks are mostly
+// "outside, so refuse", where folding would widen access, and its deny list is
+// backed by an identity check.
+func underMount(path string, mounts []string, fold bool) bool {
+	for _, mt := range mounts {
+		if pathWithin(path, mt, fold) {
+			return true
+		}
+	}
+	return false
+}
+
 // BoxLabels are the labels of a box that ensure reads when it finds one running.
 type BoxLabels struct {
 	// CA is the extraca.Label value, "" when the box has none.
