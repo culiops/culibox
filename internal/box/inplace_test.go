@@ -837,6 +837,8 @@ func TestInPlaceGitfileWalk(t *testing.T) {
 			links: [][2]string{{"<ws>/sub", "<ws>/a/b"}}},
 		{name: "gitdir through a host link into ws then .. after a box dir", gitdir: "<tmp>/Lnk/sub/../../wt/.git",
 			links: [][2]string{{"<tmp>/Lnk", "<ws>"}}, refuse: "gitdir"},
+		{name: "gitdir through a host link into ws then a box link out", gitdir: "<tmp>/Lnk/x/wt/.git",
+			links: [][2]string{{"<tmp>/Lnk", "<ws>"}, {"<ws>/x", "<tmp>"}}, refuse: "gitdir"},
 		{name: "commondir .. after a box dir", gitdir: "<tmp>/wt/.git/worktrees/w",
 			commondir: "<ws>/sub/../../wt/.git", refuse: "commondir"},
 		{name: "relative commondir .. after a box dir", gitdir: "<tmp>/wt/.git/worktrees/w",

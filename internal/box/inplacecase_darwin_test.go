@@ -38,3 +38,24 @@ func TestInPlaceHooksCaseVariantSymlinkIsRefused(t *testing.T) {
 		t.Fatalf("want a symlink refusal, got %v", err)
 	}
 }
+
+// A host link that names the workspace in another Unicode normalization: on
+// APFS that is the workspace itself, so a box link in it is refused like the
+// same spelling, not followed out (#304). Skipped where the volume tells the
+// two spellings apart.
+func TestInPlaceHooksPathNormalizationVariantIsWorkspace(t *testing.T) {
+	tmp := realTemp(t)
+	ws := filepath.Join(tmp, "Répo")     // NFC
+	alias := filepath.Join(tmp, "Répo") // NFD
+	mkdirs(t, ws, filepath.Join(tmp, "out", "hooks"))
+	if !sameHostDir(alias, ws) {
+		t.Skip("volume is normalization-sensitive: the two spellings are two folders")
+	}
+	symlink(t, alias, filepath.Join(tmp, "Lnk"))
+	symlink(t, filepath.Join(tmp, "out"), filepath.Join(ws, "x"))
+	gitRepo(t, ws, "[core]\n\thooksPath = "+filepath.Join(tmp, "Lnk", "x", "hooks")+"\n")
+	_, err := inPlaceMounts(ws)
+	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "reached through the symlink") {
+		t.Fatalf("want a symlink refusal, got %v", err)
+	}
+}
