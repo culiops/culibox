@@ -836,12 +836,11 @@ func TestPruneIsOffWhenTheCacheTTLIsNotShorterThanTheTTL(t *testing.T) {
 	mustExist(t, dir)
 }
 
-// deepChain makes dir/a/a/.../a, n levels, with a 10-byte file at the bottom.
-// MkdirAll resolves the whole path, which stays far under PATH_MAX at two bytes a
-// level.
 // deepChainDepth is how deep the bounded-walk tests dig. darwin's PATH_MAX is
 // 1024, and 1000 levels of "a/" is 2000 bytes, so there the chain is shortened
-// (still far past maxCacheDepth, which is what the tests need).
+// (still far past maxCacheDepth, which is what the tests need). On darwin (depth
+// 300) the 5 s timing bound cannot catch a quadratic walk: only the depth-cap
+// part of the tests holds there. Linux keeps the timing check.
 func deepChainDepth() int {
 	if runtime.GOOS == "darwin" {
 		return 300
@@ -849,6 +848,9 @@ func deepChainDepth() int {
 	return 1000
 }
 
+// deepChain makes dir/a/a/.../a, n levels, with a 10-byte file at the bottom.
+// MkdirAll resolves the whole path, which stays far under PATH_MAX at two bytes a
+// level (on Linux; deepChainDepth shortens it for darwin).
 func deepChain(t *testing.T, dir string, n int) string {
 	t.Helper()
 	bottom := filepath.Join(dir, strings.Repeat("a/", n))
