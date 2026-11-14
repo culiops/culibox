@@ -57,8 +57,9 @@ func needAbduco(t *testing.T) {
 }
 
 // hostTooLongForSocket is true when the machine's hostname cannot fit abduco's
-// socket path under the platform's limit even in the probe's own best case
-// (/tmp/abdr-<10 digits>/s/abduco/<user>/doctor-1@<host>). A GitHub-hosted Mac has a
+// socket path under the platform's limit even in the probe's own SHORTEST layout
+// (/tmp/abdr-<at most 10 digits>/s/abduco/<user>/doctor-1@<host>; the 10 digits are
+// MkdirTemp's longest random part, so this errs toward skipping). A GitHub-hosted Mac has a
 // 67-byte hostname, so there the real roundtrip row fails by design: doctor
 // reports it (and the "socket length" row), which is what the check is for.
 func hostTooLongForSocket() bool {
@@ -89,18 +90,34 @@ func failsExcept(out string, checks ...string) []string {
 }
 
 // tolerated is the set of rows a darwin CI runner may legitimately FAIL: the boxed
-// tier is a FAIL by design without docker and colima (docs/MACOS.md), and a long
-// hostname fails the two socket rows. Neither is what these tests pin. Never
-// tolerated off darwin.
+// tier is a FAIL by design when docker or colima is missing (docs/MACOS.md), and a
+// long hostname fails the two socket rows. Neither is what these tests pin. Never
+// tolerated off darwin, and the boxed tier is tolerated only while a tool is missing.
 func tolerated() []string {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
-	rows := []string{"boxed tier"}
+	var rows []string
+	for _, tool := range []string{"docker", "colima"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			rows = append(rows, "boxed tier")
+			break
+		}
+	}
 	if hostTooLongForSocket() {
 		rows = append(rows, "abduco roundtrip", "socket length")
 	}
 	return rows
+}
+
+// reportHealthy is true when every FAIL row is a tolerated one, and, when the report
+// has no FAIL row at all, the exit code is 0 (a nonzero code with no FAIL to explain
+// it is never tolerated).
+func reportHealthy(out string, code int) bool {
+	if len(failsExcept(out)) == 0 {
+		return code == 0
+	}
+	return len(failsExcept(out, tolerated()...)) == 0
 }
 
 func TestDoctor_NeverPrintsSecrets(t *testing.T) {
@@ -155,7 +172,7 @@ func TestDoctor_HealthyLinuxBoxPasses(t *testing.T) {
 	needAbduco(t)
 	in := input(t)
 	out, code := run(in)
-	if bad := failsExcept(out, tolerated()...); len(bad) != 0 || (code != 0 && len(tolerated()) == 0) {
+	if !reportHealthy(out, code) {
 		t.Fatalf("expected no FAIL on this box, got:\n%s", out)
 	}
 	for _, check := range []string{"platform", "config", "data dir", "auth", "bind", "abduco binary",
@@ -228,7 +245,7 @@ func TestDoctor_LeavesNoSessionBehind(t *testing.T) {
 
 	in := input(t)
 	out, code := run(in)
-	if bad := failsExcept(out, tolerated()...); len(bad) != 0 || (code != 0 && len(tolerated()) == 0) || !strings.Contains(out, "PASS abduco roundtrip") {
+	if !reportHealthy(out, code) || !strings.Contains(out, "PASS abduco roundtrip") {
 		t.Fatalf("probe did not run:\n%s", out)
 	}
 	if left, _ := os.ReadDir(root); len(left) != 0 {
