@@ -873,6 +873,7 @@ func TestConnCacheIsolatedUnderElevation(t *testing.T) {
 	// b may be elevated too (it has a write role): the window is a's, so b must
 	// still mint read-only. Without that, only b's missing role would save it.
 	sv.AWSConns[1].Elevate = &config.AWSElevate{RoleARN: "arn:aws:iam::222222222222:role/agentbox-b-write"}
+	sv.AWSConns[0].Elevate.BoxBucketPrefix = "culibox-" // #211: the opt-in reaches the elevated mint
 	b, fm, rec, now := setup(t, map[string]SessionView{"claude-3": sv})
 	b.elev["claude-3"] = &elevation{until: now.Add(time.Hour), grantedAt: *now, gen: 1, conn: "a", timer: &fakeTimer{}}
 	if w := callBody(b, tokA("claude-3"), `{"name":"a"}`); w.Code != 200 {
@@ -885,8 +886,11 @@ func TestConnCacheIsolatedUnderElevation(t *testing.T) {
 		t.Fatalf("calls %d", len(fm.calls))
 	}
 	ca, cb := connA(), connB()
-	elevPol, _ := awsscope.ElevatedPolicy("aws", ca.S3Read, false)
+	elevPol, _ := awsscope.ElevatedPolicy("aws", ca.S3Read, sv.AWSConns[0].Elevate.Scope())
 	readPol, _ := awsscope.SessionPolicy("aws", cb.S3Read)
+	if !strings.Contains(elevPol, "arn:aws:s3:::culibox-*/*") {
+		t.Fatalf("elevated policy lacks the box bucket carve-out: %s", elevPol)
+	}
 	if fm.calls[0].RoleARN != connWriteA || fm.calls[0].Policy != elevPol || fm.calls[0].SourceProfile != "prof-a" {
 		t.Fatalf("a minted %+v", fm.calls[0])
 	}

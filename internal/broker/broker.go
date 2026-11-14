@@ -418,7 +418,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		var policy string
 		var err error
 		if p.elevated {
-			policy, err = awsscope.ElevatedPolicy(partition, bnd.S3Read, bnd.Elevate.AllowIAM)
+			policy, err = awsscope.ElevatedPolicy(partition, bnd.S3Read, bnd.Elevate.Scope())
 		} else {
 			policy, err = awsscope.SessionPolicy(partition, bnd.S3Read)
 		}

@@ -293,13 +293,17 @@ value for `elevate.role_arn`):
   "elevate": {
     "role_arn": "arn:aws:iam::123456789012:role/agentbox-agent-write",
     "max_minutes": 60,
-    "allow_iam": false
+    "allow_iam": false,
+    "box_bucket_prefix": "culibox-",
+    "pass_role_prefix": "culibox-"
   }
 }
 ```
 
 `elevate.role_arn` must be in the same account and partition as `role_arn` and differ from it.
-`max_minutes` is 30 or 60 (default 60). A binding with `elevate` gets one box per session and
+`max_minutes` is 30 or 60 (default 60). `box_bucket_prefix` is optional and off when left out
+(see the box-bucket exception below). `pass_role_prefix` is optional too: left out, the window
+cannot pass any IAM role (see below). A binding with `elevate` gets one box per session and
 refuses shared workspaces: the session needs its own folder or worktree, and a spawn is
 refused while any other box overlaps that folder.
 
@@ -312,7 +316,85 @@ outlive the window), the calls that create long-lived credentials (`iam:CreateAc
 `UploadSSHPublicKey`), any `iam:*` on `agentbox-*` roles (the agent cannot edit its own
 roles), and the CloudTrail changes that would blind the trail (`StopLogging`, `DeleteTrail`,
 `UpdateTrail`, `PutEventSelectors`). IAM writes are denied too unless the binding sets
-`allow_iam`; `iam:PassRole` stays allowed because ECS and Lambda applies need it.
+`allow_iam`.
+
+**`iam:PassRole` is denied unless you name a prefix.** A service that runs as a passed role
+(Lambda, ECS, Glue, CodeBuild, Step Functions) reads whatever that role can read, and the session
+policy never limits it, so allowing PassRole on any role makes the data-read deny advisory
+(#302). Left out, `pass_role_prefix` denies `iam:PassRole` on every role: a stack that creates a
+Lambda function, an ECS task or an instance profile fails to apply in the window. With
+`"pass_role_prefix": "culibox-"` the window may pass only roles named `culibox-*` (3 to 40 IAM
+role-name characters, no wildcards, no `/`; `agentbox-`, `aws` and `service-role` stems are
+refused). The match is on the text after `role/`, and `*` also matches `/`: `role/culibox-x/Admin` matches `culibox-*`, `role/team/culibox-x` does not. Name the roles your labs use with that
+prefix. Passing is not creating: a role of that name must already exist, or `allow_iam` must be
+on. **With `allow_iam` on, the agent can create a role of that name or any trust and use it, so
+the data-read blocks are advisory in that window**; the grant panel and the editor say so.
+
+Two exceptions let Terraform plan and destroy in the window; the read role has neither:
+
+- **AWS public parameters.** `ssm:GetParameter`, `GetParameters`, `GetParametersByPath` and `GetParameterHistory`
+  work on AWS's public parameters under `/aws/service/` (AMI ids, the ECS-optimized AMI), so a
+  `data "aws_ssm_parameter"` on one plans. Every parameter in your account stays denied: a
+  public parameter's ARN has an empty account field (`arn:aws:ssm:<region>::parameter/aws/service/...`),
+  yours carry the account id, and SSM refuses names that start with `aws`.
+- **Box buckets, opt-in.** With `"box_bucket_prefix": "culibox-"` in `elevate`, `s3:GetObject`
+  and `GetObjectVersion` also work in buckets whose name starts with the prefix, the buckets the
+  box creates, so Terraform can refresh the `aws_s3_object`s it uploaded. The prefix is 3 to 40
+  lowercase letters, digits and `-`, ends in `-`, and has no wildcards. Stems that AWS tools
+  create in shared buckets (`aws`, `cdk-`, `sagemaker-`, `elasticbeanstalk-`, `amplify-`,
+  `cf-templates-`, `codepipeline-`, `config-bucket-`) and `agentbox-` are refused. Off by default.
+
+**What `box_bucket_prefix` opens, honestly.** It weakens the window's read deny in two ways:
+
+- **Every bucket whose name starts with the prefix is readable in the window.** That includes
+  one a human created with that name, and one in another account, because an S3 ARN has no
+  account. Pick a prefix that only the box uses.
+- **Data copied into a box bucket becomes readable to the agent.** A direct copy
+  (`CopyObject`, `UploadPartCopy`) needs `s3:GetObject` on the source, which stays denied, and a
+  bucket policy or ACL cannot grant the session more: an explicit deny in the session policy wins
+  over any allow. Managed copies are different. A DynamoDB export runs with your S3 write, and
+  the other managed copies run as a role the session passed with `iam:PassRole` (allowed only on
+  `pass_role_prefix` roles, if you set one). The session policy never sees those reads. So the
+  elevated policy always denies (#301):
+  - `dynamodb:ExportTableToPointInTime` (table export to S3);
+  - `rds:StartExportTask` (snapshot or cluster export to S3);
+  - `s3:CreateJob` (S3 Batch Operations, including Batch Replication);
+  - `datasync:StartTaskExecution`;
+  - `backup:StartRestoreJob` (an S3 restore can target any bucket). This also blocks restores
+    of other resource types from AWS Backup in the window;
+  - `s3:PutReplicationConfiguration`. With `box_bucket_prefix` set it is allowed on a box bucket,
+    because replication *from* a box bucket moves only box data. Without it there is no
+    exception: an `s3_read` entry may name just a prefix of a bucket, and replication copies the
+    whole bucket.
+
+  These denies are always on, whatever `s3_read` and `box_bucket_prefix` say: a DynamoDB export
+  needs no PassRole and can write to a bucket outside the account that the agent then reads
+  without signing. A lab that needs one of these actions cannot run it in a write window.
+
+  **Related route: a public bucket.** `s3:PutBucketPolicy`, `PutBucketAcl` and
+  `PutPublicAccessBlock` stay allowed in the window. The agent can make a bucket public, so
+  anything the window can read (an `s3_read` bucket, a box bucket) can be exposed to the
+  internet from there. A bucket the session may not read can be exposed too: public access
+  settings, `PutBucketPolicy`, `PutBucketAcl` and `PutObjectAcl` are not limited by the data-read
+  deny, so data that reaches a bucket by another route can be read unsigned. This is a known gap,
+  tracked in #307.
+
+**What the opt-in does not change.** Code run as a passed role (a Lambda function, an ECS task,
+an EC2 instance profile, a Glue or CodeBuild job) reads whatever that role can read and can hand
+it back without any bucket. Without `pass_role_prefix` the window cannot pass a role, so this
+needs a role of the prefix (which `allow_iam` lets the agent create), or a compute resource that
+already carries a role. Exports of data the window never denied (CloudWatch Logs, EC2 images, RDS
+rows read through SQL) are not denied either: denying them would protect nothing.
+
+**Why there is no tag-based exception for secrets, parameters, DynamoDB items or KMS.**
+Terraform tags what it creates, so "read what carries the box tag" looks natural. But in
+Secrets Manager, Parameter Store, DynamoDB and KMS, tagging a resource as you create it needs
+the same permission as tagging an existing one (`secretsmanager:TagResource`,
+`ssm:AddTagsToResource`, `dynamodb:TagResource`, `kms:TagResource`), and no condition key tells
+the two apart. A session policy could not let Terraform tag a new secret without also letting
+the agent put the box tag on a human's secret and then read it. Secret values, your own
+parameters, DynamoDB items and KMS decryption (other than through S3) therefore stay denied in
+the window. A stack whose plan reads one of them cannot run in a write window.
 
 **Honest limit of `allow_iam: true`:** an agent that can `CreateRole` can create a role that
 trusts an outside account. That is persistence past the window, and no session-policy

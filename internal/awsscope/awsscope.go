@@ -25,6 +25,10 @@ var (
 	bucketRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 	prefixRe    = regexp.MustCompile(`^[A-Za-z0-9._=-]+(/[A-Za-z0-9._=-]+)*/$`)
 	nameBadRe   = regexp.MustCompile(`[^\w+=,.@-]`)
+	// boxPrefixRe: 3 to 40 bucket-name characters ending in "-", so the
+	// prefix names a naming convention ("culibox-"), never a wildcard or a
+	// stem that would match unrelated buckets. Dots are refused.
+	boxPrefixRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,38}-$`)
 )
 
 func ValidRoleARN(s string) error {
@@ -67,6 +71,43 @@ func ValidS3Entry(s string) error {
 		return fmt.Errorf("s3_read entry %q: a prefix must end in / and may use letters, digits and . _ = - / only (no wildcards)", s)
 	}
 	return nil
+}
+
+// ValidBoxBucketPrefix accepts an elevate.box_bucket_prefix: lowercase
+// letters, digits and "-", 3 to 40 characters, ending in "-". It becomes
+// "arn:<p>:s3:::<prefix>*/*" in the S3 deny's NotResource, so anything that
+// could widen it (empty, "*", "?", "/") must never get that far.
+func ValidBoxBucketPrefix(s string) error {
+	if !boxPrefixRe.MatchString(s) {
+		return fmt.Errorf("box_bucket_prefix %q must be 3 to 40 lowercase letters, digits and -, ending in - (for example culibox-), with no wildcards", s)
+	}
+	if r, ok := reservedStem(s, reservedBucketStems); ok {
+		return fmt.Errorf("box_bucket_prefix %q overlaps %q, a name AWS tools or other CuliBox features create in shared buckets: reading every object there is not what this option is for; pick your own stem (for example culibox-)", s, r)
+	}
+	return nil
+}
+
+// reservedBucketStems are bucket-name stems that AWS services and tools create
+// in an account, or that CuliBox itself uses. A box_bucket_prefix that is one
+// of them, starts with one, or is a stem of one would open reads on buckets the
+// box did not create (CDK and CloudFormation assets, SageMaker data, ...).
+var reservedBucketStems = []string{"aws", "cdk-", "sagemaker-", "elasticbeanstalk-", "amplify-",
+	"cf-templates-", "codepipeline-", "config-bucket-", "agentbox-"}
+
+// reservedRoleStems are IAM role-name stems that AWS creates (service-linked
+// and service roles) or that CuliBox's own roles use.
+var reservedRoleStems = []string{"agentbox-", "aws", "service-role"}
+
+// reservedStem reports the reserved stem that s equals, starts with or is a
+// stem of, case-insensitively.
+func reservedStem(s string, stems []string) (string, bool) {
+	l := strings.ToLower(s)
+	for _, r := range stems {
+		if strings.HasPrefix(l, r) || strings.HasPrefix(r, l) {
+			return r, true
+		}
+	}
+	return "", false
 }
 
 // SessionName is the RoleSessionName and SourceIdentity for a session.
@@ -146,6 +187,9 @@ func marshalPolicy(st []statement, what string) (string, error) {
 		return "", err
 	}
 	if len(b) > MaxPolicyChars {
+		if what == "elevated session policy" {
+			return "", fmt.Errorf("the elevated session policy is %d characters; STS allows %d. It grows with every s3_read entry, with elevate.box_bucket_prefix and elevate.pass_role_prefix, and when allow_iam is off — use fewer or shorter s3_read entries or shorter prefixes", len(b), MaxPolicyChars)
+		}
 		return "", fmt.Errorf("the s3_read allowlist makes the %s %d characters; STS allows %d — use fewer or shorter entries", what, len(b), MaxPolicyChars)
 	}
 	return string(b), nil
@@ -172,24 +216,113 @@ var elevatedGuardDenies = []string{
 	"cloudtrail:StopLogging", "cloudtrail:DeleteTrail", "cloudtrail:UpdateTrail", "cloudtrail:PutEventSelectors",
 }
 
-// iamWriteDenies are the IAM write prefixes denied unless allow_iam. PassRole
-// is deliberately not among them.
+// iamWriteDenies are the IAM write prefixes denied unless allow_iam.
 var iamWriteDenies = []string{"iam:Create*", "iam:Delete*", "iam:Put*", "iam:Attach*", "iam:Detach*",
 	"iam:Update*", "iam:Add*", "iam:Remove*", "iam:Tag*", "iam:Untag*", "iam:Set*", "iam:Change*"}
 
+// Elevation is what a write-role mint's session policy depends on beyond the
+// binding's s3_read: allow_iam and the opt-in box bucket prefix.
+type Elevation struct {
+	AllowIAM bool
+	// BoxBucketPrefix, when set, lets the window read S3 objects in buckets
+	// whose name starts with it (the buckets the box creates). Empty = off.
+	BoxBucketPrefix string
+	// PassRolePrefix, when set, lets the window pass roles whose name starts
+	// with it (Lambda, ECS and similar applies need iam:PassRole). Empty = no
+	// role may be passed (#302).
+	PassRolePrefix string
+}
+
+// rolePrefixRe: IAM role-name characters without a wildcard or "/", 3 to 40.
+var rolePrefixRe = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{3,40}$`)
+
+// ValidPassRolePrefix accepts an elevate.pass_role_prefix. It becomes
+// "arn:<p>:iam::*:role/<prefix>*" in a NotResource, so a wildcard, "/" or
+// anything that could widen it never gets that far, and neither does a stem
+// that covers the agent's own roles or AWS's service roles.
+func ValidPassRolePrefix(s string) error {
+	if !rolePrefixRe.MatchString(s) {
+		return fmt.Errorf("pass_role_prefix %q must be 3 to 40 IAM role-name characters (letters, digits, + = , . @ _ -), with no wildcards or /", s)
+	}
+	if r, ok := reservedStem(s, reservedRoleStems); ok {
+		return fmt.Errorf("pass_role_prefix %q overlaps %q, a role name CuliBox or AWS uses: passing those roles is exactly what this limit prevents; pick your own stem (for example culibox-)", s, r)
+	}
+	return nil
+}
+
+// ssmParamReads are the SSM parameter reads, split out of dataReadDenies in
+// the elevated policy so that AWS's public parameters can be carved out.
+var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"}
+
+// boxBucketCopyDenies are, with box_bucket_prefix on, the managed copies that
+// can land data the session may not read in a box bucket without the session
+// ever calling s3:GetObject on the source: a DynamoDB export runs with the
+// caller's S3 write; the others run as a role passed with iam:PassRole, which
+// the window allows (ECS and Lambda applies need it), so the session policy
+// never reaches their reads. Replication is denied separately, except from a
+// box bucket. Data classes the window does not deny (logs, EC2 disks, RDS
+// rows through SQL) are not listed: denying their exports would protect nothing.
+var boxBucketCopyDenies = []string{"dynamodb:ExportTableToPointInTime", "rds:StartExportTask",
+	"s3:CreateJob", "datasync:StartTaskExecution", "backup:StartRestoreJob"}
+
 // ElevatedPolicy is the session policy for a write-role mint (M3b): the
-// investigate statements unchanged (elevation adds writes, never data reads),
-// the guard denies, and the IAM write denies unless allowIAM.
-func ElevatedPolicy(partition string, s3Read []string, allowIAM bool) (string, error) {
+// investigate statements (elevation adds writes, not data reads), the guard
+// denies, and the IAM write denies unless AllowIAM. Two narrow exceptions
+// (#211), both for running Terraform in the window:
+//   - AWS's public SSM parameters (/aws/service/..., e.g. AMI ids) are
+//     readable. Their ARNs have an empty account field; every parameter in
+//     an account carries its account id, so it stays denied.
+//   - With BoxBucketPrefix, objects in buckets named <prefix>... are
+//     readable, and the managed copies that could fill such a bucket with data
+//     the session may not read are denied (boxBucketCopyDenies, replication
+//     except from a box bucket).
+func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, error) {
 	st, err := investigateStatements(partition, s3Read)
 	if err != nil {
 		return "", err
 	}
+	if el.BoxBucketPrefix != "" {
+		if err := ValidBoxBucketPrefix(el.BoxBucketPrefix); err != nil {
+			return "", err
+		}
+		s3 := &st[1]
+		s3.Resource = nil // Resource "*" when s3_read is empty
+		s3.NotResource = append(slices.Clone(s3.NotResource), "arn:"+partition+":s3:::"+el.BoxBucketPrefix+"*/*")
+	}
+	rest := slices.DeleteFunc(slices.Clone(dataReadDenies), func(a string) bool { return slices.Contains(ssmParamReads, a) })
+	st[2].Action = rest
+	st = slices.Insert(st, 3, statement{Effect: "Deny", Action: ssmParamReads,
+		NotResource: []string{"arn:" + partition + ":ssm:*::parameter/aws/service/*"}})
+	guards := slices.Clone(elevatedGuardDenies)
+	if el.PassRolePrefix == "" {
+		guards = append(guards, "iam:PassRole") // no role may be passed (#302)
+	}
 	st = append(st,
-		statement{Effect: "Deny", Action: elevatedGuardDenies, Resource: "*"},
+		statement{Effect: "Deny", Action: guards, Resource: "*"},
 		statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
-	if !allowIAM {
+	if el.PassRolePrefix != "" {
+		if err := ValidPassRolePrefix(el.PassRolePrefix); err != nil {
+			return "", err
+		}
+		st = append(st, statement{Effect: "Deny", Action: "iam:PassRole",
+			NotResource: []string{"arn:" + partition + ":iam::*:role/" + el.PassRolePrefix + "*"}})
+	}
+	if !el.AllowIAM {
 		st = append(st, statement{Effect: "Deny", Action: iamWriteDenies, Resource: "*"})
+	}
+	// The managed-copy denies are unconditional (#301): a DynamoDB export needs
+	// no PassRole and can target a bucket outside the account or one the agent
+	// made public, so they matter even when no bucket is readable in the window.
+	// Replication has an exception only for box buckets: an s3_read entry may
+	// name just a prefix of a bucket, and replication copies the whole bucket.
+	if el.BoxBucketPrefix != "" {
+		st = append(st,
+			statement{Effect: "Deny", Action: boxBucketCopyDenies, Resource: "*"},
+			statement{Effect: "Deny", Action: "s3:PutReplicationConfiguration",
+				NotResource: []string{"arn:" + partition + ":s3:::" + el.BoxBucketPrefix + "*"}})
+	} else {
+		st = append(st, statement{Effect: "Deny", Resource: "*",
+			Action: append(slices.Clone(boxBucketCopyDenies), "s3:PutReplicationConfiguration")})
 	}
 	return marshalPolicy(st, "elevated session policy")
 }

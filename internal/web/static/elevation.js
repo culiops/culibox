@@ -56,6 +56,8 @@ function grantFields(e, prod, label, st) {
     hostSessions: Array.isArray(se.host_sessions) ? se.host_sessions : [],
     blocked: se.blocked || "",
     allowIAM: !!e.allow_iam,
+    boxPrefix: e.box_bucket_prefix || "",
+    passRolePrefix: e.pass_role_prefix || "",
   };
 }
 

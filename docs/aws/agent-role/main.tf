@@ -23,7 +23,7 @@ variable "write_role_name" {
 
 variable "write_policy_arns" {
   type        = list(string)
-  description = "Managed policies on the write role. The elevated session policy (M3b) trims IAM writes unless allow_iam, and always denies credential minting, edits to agentbox-* roles and CloudTrail changes."
+  description = "Managed policies on the write role. The elevated session policy (M3b) trims IAM writes unless allow_iam, and always denies credential minting, edits to agentbox-* roles, CloudTrail changes and iam:PassRole (except on roles named elevate.pass_role_prefix*)."
   default = [
     "arn:aws:iam::aws:policy/PowerUserAccess",
     "arn:aws:iam::aws:policy/IAMFullAccess",

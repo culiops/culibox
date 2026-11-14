@@ -10,7 +10,7 @@ test("grantPanel: windows up to the binding's max, role, host-tier warning, prod
   const st = { elevate: { host_sessions: [{ id: "zsh-1", name: "zsh" }], blocked: "" } };
   assert.deepStrictEqual(grantPanel(aws, st), {
     role: "agentbox-agent-write", windows: [30, 60], needLabel: false, label: "sandbox",
-    hostSessions: [{ id: "zsh-1", name: "zsh" }], blocked: "", allowIAM: false,
+    hostSessions: [{ id: "zsh-1", name: "zsh" }], blocked: "", allowIAM: false, boxPrefix: "", passRolePrefix: "",
   });
   assert.deepStrictEqual(grantPanel({ ...aws, elevate: { ...aws.elevate, max_minutes: 30 } }, st).windows, [30]);
   assert.strictEqual(grantPanel({ ...aws, prod: true }, st).needLabel, true);
@@ -134,11 +134,19 @@ test("grantPanel (connections): the leftover refusal of the status is the blocke
   assert.strictEqual(grantPanel(null, st, [wc("a"), wc("b")], "a", NOW).blockedText, "");
 });
 
+test("grantPanel carries the two opt-in prefixes, empty when unset", () => {
+  assert.strictEqual(grantPanel(aws, null).boxPrefix, "");
+  assert.strictEqual(grantPanel(aws, null).passRolePrefix, "");
+  const on = { ...aws, elevate: { ...aws.elevate, box_bucket_prefix: "culibox-", pass_role_prefix: "lab-" } };
+  assert.strictEqual(grantPanel(on, null).boxPrefix, "culibox-");
+  assert.strictEqual(grantPanel(on, null).passRolePrefix, "lab-");
+});
+
 test("grantPanel: the legacy shape is untouched by the connection arguments", () => {
   assert.deepStrictEqual(Object.keys(grantPanel(aws, null)).sort(),
-    ["allowIAM", "blocked", "hostSessions", "label", "needLabel", "role", "windows"]);
+    ["allowIAM", "blocked", "boxPrefix", "hostSessions", "label", "needLabel", "passRolePrefix", "role", "windows"]);
   assert.deepStrictEqual(Object.keys(grantPanel(aws, null, [], "")).sort(),
-    ["allowIAM", "blocked", "hostSessions", "label", "needLabel", "role", "windows"]);
+    ["allowIAM", "blocked", "boxPrefix", "hostSessions", "label", "needLabel", "passRolePrefix", "role", "windows"]);
 });
 
 test("grantBody: name only when the session has connections", () => {
