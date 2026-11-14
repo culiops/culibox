@@ -39,7 +39,7 @@ ephemeral filesystem:
 ```yaml
 services:
   culibox:
-    image: culibox
+    image: my-culibox   # your own image: see the note below
     environment:
       CULIBOX_HOME: /data   # config.json goes in /data; leave data_dir out of it
     volumes:
@@ -47,6 +47,15 @@ services:
 volumes:
   agent-data:
 ```
+
+CuliBox does not publish a daemon image, and the repo has no Dockerfile for the
+daemon. `ghcr.io/culiops/culibox` is the *box* image that boxed sessions run in,
+not an image to run the daemon from. Build your own image that holds the `culibox`
+binary (from a release tarball) and abduco, as in step 1. The boxed tier also
+needs Docker: from inside that container, `culibox` must reach a local Docker
+daemon that sees host files as they are, as [Requirements in the
+README](../README.md#requirements) describe. Without that, only host-tier
+sessions work in the container.
 
 ## Caveats
 

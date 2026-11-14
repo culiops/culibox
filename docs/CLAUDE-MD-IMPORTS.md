@@ -37,5 +37,5 @@ Set `imports_off: true` on the profile, or untick "Give the box the files my CLA
 
 - An edited import reaches a running box only when the box is recreated, like the rest of the bundle. A changed file gives the next spawn a new bundle.
 - `bundle.lock` stays readable in the box even with imports off. It shows the paths and hashes of the files that would have been imported, not their contents, and lists the import spellings that were refused, with the reason.
-- `context_paths` still refuses `~/.claude`; its error now points here.
+- `context_paths` still refuses `~/.claude`; its error points here.
 - A custom `bundle_source` gets the same protection as `~/.claude`: no workspace, `context_paths` entry or clone share may be it or contain it, because the files in it have their own imports followed.

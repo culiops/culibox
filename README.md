@@ -178,19 +178,6 @@ Open `http://127.0.0.1:8899` (use the printed login URL the first time). Session
 
 Every key is in [Configuration](docs/CONFIG.md); [config.example.json](config.example.json) is a fuller example. Only one CuliBox can serve a data root at a time.
 
-## Upgrading from agent-box
-
-CuliBox used to be called agent-box. An existing install keeps working with the new `culibox` binary:
-
-- **Changes.**
-  - The binary and every command are now `culibox`. Replace `agent-box` in your service file or scripts.
-  - The environment variable is `CULIBOX_HOME`. `AGENT_BOX_HOME` still works and prints a notice. If both are set to different paths, CuliBox refuses to start.
-  - New installs build the box image as `culiops/culibox:base` and pull from `ghcr.io/culiops/culibox`.
-- **Moves on its own.** On the first start of `culibox serve`, the data folder `~/.local/share/agent-box` is moved to `~/.local/share/culibox`, and a link is left at the old path. Your store key, profiles, accounts and history come along. It waits for a start when no session is running, and it does not move a folder you set with `CULIBOX_HOME`/`AGENT_BOX_HOME`. On a Mac with a box VM it stays where it is. `culibox doctor` shows which folder is in use, and why. A `~/.config/agent-box/config.json` moves to `~/.config/culibox/` the same way.
-- **Stays.**
-  - A `box_image` you pinned keeps working. If you never set one, your existing image is reused.
-  - Keychain and keyring entry names, the colima profile `agent-box`, container labels and browser layout settings keep their old names. Nothing needs to be redone.
-
 ## Security
 
 CuliBox starts shells and agents on your machine, so login is always required. The default bind is loopback, and binding all interfaces is refused unless `allow_public` is set.
@@ -227,6 +214,7 @@ The full model and every known limit: [docs/SECURITY.md](docs/SECURITY.md).
 | [Remote access](docs/REMOTE-ACCESS.md) | Reaching CuliBox from another machine, and why notifications need HTTPS or localhost. |
 | [macOS](docs/MACOS.md) | Install, the colima-based boxed tier, rotating credentials. |
 | [Docker](docs/DOCKER.md) | Running CuliBox itself in a container, and keeping sessions across restarts. |
+| [Upgrading](docs/UPGRADING.md) | What an upgrade keeps, the automatic backup, rolling back, and installs from the agent-box days. |
 | [Contributing](CONTRIBUTING.md) | How to file a bug or propose a change. Issues only. |
 
 ## Roadmap
@@ -243,7 +231,7 @@ To run the checks:
 scripts/test.sh
 ```
 
-This runs `gofmt`, `go test ./...`, a macOS cross-build and `go vet`, the browser-side tests (`node --test`) and a lint of the page's script references.
+This runs `gofmt`, `go test ./...`, a macOS cross-build and `go vet`, the browser-side tests (`node --test`) and a lint of the page's script references, and more (the upgrade test, the installer and deploy script tests, secret-scan rules and extra vet builds); see `scripts/test.sh`.
 
 ## License
 
