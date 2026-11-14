@@ -209,6 +209,11 @@ test("awsRoleARN expands a bare role name with the SSO account, and leaves an AR
   assert.strictEqual(awsRoleARN("210987654321", "not a role!"), "not a role!");
 });
 
+test("the editor's read-only box-prefix hint is hidden with the other elevate fields in sso_direct mode (#211)", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/credentials.js"), "utf8");
+  assert.match(src, /row\.modeHidden = \[[^\]]*\]\.concat\(boxHint \? \[boxHint\] : \[\]\)/);
+});
+
 test("awsConnFromRow sends only what is set", () => {
   const row = { name: "sandbox", label: "Lab", source_profile: "sandbox", role_arn: "arn:aws:iam::1:role/r", region: "ap-southeast-1", prod: false, egress: "a.example.com\nb.example.com", s3: "", elevRole: "", elevMinutes: "60", elevIAM: false };
   assert.deepStrictEqual(awsConnFromRow(row), {

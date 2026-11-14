@@ -2177,9 +2177,13 @@ function awsBuildRow(row) {
   const pf = awsField(row, "elevPass", "Elevate may pass roles named (prefix, optional)", { full: true, placeholder: "e.g. culibox-",
     hint: "Empty: the elevated session cannot pass any IAM role, so Lambda and ECS applies fail. A prefix lets it pass only roles named <prefix>*." });
   adv.appendChild(pf.col);
-  if (row.elevBoxPrefix) adv.appendChild(awsEl("p", "hint full", "This elevate can read objects in buckets named " + row.elevBoxPrefix + "* (elevate.box_bucket_prefix, set in the config file)."));
+  let boxHint = null;
+  if (row.elevBoxPrefix) {
+    boxHint = awsEl("p", "hint full", "This elevate can read objects in buckets named " + row.elevBoxPrefix + "* (elevate.box_bucket_prefix, set in the config file).");
+    adv.appendChild(boxHint);
+  }
   // What sso_direct hides and clears: S3 read, elevate and its window and IAM flag.
-  row.modeHidden = [s3f.col, elf.col, mcol, icol, pf.col];
+  row.modeHidden = [s3f.col, elf.col, mcol, icol, pf.col].concat(boxHint ? [boxHint] : []);
   row.modeClear = () => {
     row.s3 = ""; s3f.inp.value = "";
     row.elevRole = ""; elf.inp.value = "";
