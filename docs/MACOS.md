@@ -499,10 +499,8 @@ a git config `include`, and so on). What it covers and what it does not is in
     lock is refused until you run that CuliBox, or stop CuliBox, restore the
     pre-upgrade backup and start it again (it reads the records only when it
     starts).
-    A restore does not bring back records of the locks the newer CuliBox set
-    after the upgrade, so nothing lifts those: end the in-place sessions under
-    the newer CuliBox before you roll back, and check for files left locked
-    afterwards (steps 0 and 5 of
+    End the in-place sessions under the newer CuliBox before you roll back,
+    and afterwards check that no guarded file is left locked (steps 0 and 5 of
     [Rolling back](UPGRADING.md#rolling-back)).
 - After upgrading, a box that was started before this guard and still runs
   sessions is refused at the next spawn ("started without ... which this
