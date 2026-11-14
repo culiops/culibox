@@ -34,8 +34,8 @@ An id is 1 to 64 characters of letters, digits, `_` and `-`, starting with a let
 
 **Moving a Claude token you keep in the daemon's environment.** If the token still comes from `CLAUDE_CODE_OAUTH_TOKEN` in the daemon's environment, you can move it into the store:
 
-1. `printenv CLAUDE_CODE_OAUTH_TOKEN | culibox store set CLAUDE_CODE_OAUTH_TOKEN`
-2. Create an agent account in **Settings → Agent accounts**, paste the token on its row, and choose that account on your profiles. (A config that still uses the older `secret_sources` list can add `{"type": "store"}` before the `env` source instead; see [Older forms that still load](CONFIG.md#older-forms-that-still-load).)
+1. Create an agent account in **Settings → Agent accounts** and paste the token on its row (`printenv CLAUDE_CODE_OAUTH_TOKEN` shows it). The token goes into the store as `ACCT_<NAME>_TOKEN`.
+2. Choose that account on your profiles. (A config that still uses the older `secret_sources` list can instead run `printenv CLAUDE_CODE_OAUTH_TOKEN | culibox store set CLAUDE_CODE_OAUTH_TOKEN` and add `{"type": "store"}` before the `env` source; see [Older forms that still load](CONFIG.md#older-forms-that-still-load).)
 3. Delete the value from every env file and shell profile that still holds it (the file your service manager loads as `EnvironmentFile=`, your dev and prod copies, your login shell's profile).
 4. Restart CuliBox and check for leftovers. At start the daemon logs one line for each name the store serves that is still in the daemon's own environment, and Settings shows the same list for the running daemon. `culibox doctor` only checks the environment it is run from, so it does not see what your service manager gives the daemon.
 
