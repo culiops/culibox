@@ -526,13 +526,11 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 // actionPacks are shorter ways to write a group of denied actions in the
 // elevated policy (#329). Each pattern matches, in AWS's action catalog
 // (internal/awsprobe snapshot), exactly the actions its covers match, no more
-// and no fewer; TestActionPacksAreExact pins that. When AWS adds an action,
-// three of the patterns can only deny more than the names they replace. The
-// fourth, iam:*tach*Policy, can deny less: a future iam:Attach... or
-// iam:Detach... action that does not end in "Policy" would have been denied by
-// iam:Attach* and iam:Detach* and is not by the pattern (with allow_iam off;
-// with it on, neither is written). Writing the two names back costs 9
-// characters (#329 review).
+// and no fewer; TestActionPacksAreExact pins that. Each pattern also matches
+// every name its covers can match, so an action AWS adds later can only be
+// denied more by it, never less. (iam:*tach*Policy for iam:Attach* and
+// iam:Detach* was tried and dropped in the #329 review: it would let a future
+// iam:Attach... action not ending in "Policy" through.)
 var actionPacks = []struct {
 	pattern string
 	covers  []string
@@ -542,9 +540,6 @@ var actionPacks = []struct {
 	{"dynamodb:*GetItem", []string{"dynamodb:GetItem", "dynamodb:BatchGetItem"}},
 	{"dynamodb:Export*", []string{"dynamodb:ExportTableToPointInTime"}},
 	{"s3:Put*Replication*", []string{"s3:PutReplicationConfiguration"}},
-	// Attach and Detach of group, role and user policies; ListAttached*Policies
-	// ends in "Policies", so the reads stay allowed.
-	{"iam:*tach*Policy", []string{"iam:Attach*", "iam:Detach*"}},
 }
 
 // packActions replaces, in order, each pack whose covers are all in actions

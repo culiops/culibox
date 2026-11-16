@@ -364,12 +364,10 @@ CuliBox can deny more in the window, so a connection close to the limit may be r
 upgrade: shorten or drop `s3_read` entries, or shorten the prefixes. Three long `s3_read` entries
 with both prefixes at their 40-character maximum fit. To fit, the policy writes some groups of
 denied actions as one pattern (`ssm:GetParameter*` for the four parameter reads,
-`dynamodb:*GetItem`, `dynamodb:Export*`, `s3:Put*Replication*`, `iam:*tach*Policy` for
-`iam:Attach*` and `iam:Detach*`). Each pattern matches exactly the actions it replaces in AWS's
-action list as of the snapshot the read-only gate embeds. An action AWS adds later under one of
-the first four patterns is denied too. `iam:*tach*Policy` is the exception: a future
-`iam:Attach...` or `iam:Detach...` action whose name does not end in `Policy` is not denied by
-it (with `allow_iam` off; with it on, IAM writes are not denied at all).
+`dynamodb:*GetItem`, `dynamodb:Export*`, `s3:Put*Replication*`). Each pattern matches exactly
+the actions it replaces in AWS's action list as of the snapshot the read-only gate embeds, and
+an action AWS adds later under a pattern is denied too: a pattern never denies less than the
+names it replaces.
 
 **`iam:PassRole` is denied unless you name a prefix.** A service that runs as a passed role
 (Lambda, ECS, Glue, CodeBuild, Step Functions) reads whatever that role can read, and the session

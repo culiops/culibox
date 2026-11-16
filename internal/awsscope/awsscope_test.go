@@ -233,7 +233,7 @@ func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
 		`"sts:AssumeRo*","sts:GetFederationToken","sts:GetSessionToken",` +
 		`"iam:UploadSSHPublicKey","cloudtrail:StopLogging","cloudtrail:DeleteTrail","cloudtrail:UpdateTrail","cloudtrail:PutEventSelectors",` +
 		`"iam:PassRole",` +
-		`"iam:Create*","iam:Delete*","iam:Put*","iam:*tach*Policy","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*",` +
+		`"iam:Create*","iam:Delete*","iam:Put*","iam:Attach*","iam:Detach*","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*",` +
 		`"dynamodb:Export*","rds:StartExportTask","s3:CreateJob","datasync:StartTaskExecution","backup:StartRestoreJob",` +
 		`"s3:PutAccountPublicAccessBlock","s3:*eAccessGrant*","s3express:Put*Policy","s3express:DeleteBucketPolicy",` +
 		`"dynamodb:PutResourcePolicy","dynamodb:DeleteResourcePolicy","ssm:*ResourcePolicy","secretsmanager:PutResourcePolicy","secretsmanager:DeleteResourcePolicy",` +
@@ -314,21 +314,18 @@ func TestElevatedPolicyKeepsTheInvestigateDeniesAndAddsTheGuards(t *testing.T) {
 	if !denied(p, "iam:*", "arn:aws:iam::*:role/agentbox-*") {
 		t.Error("the agent's own roles must be off limits")
 	}
-	for _, a := range []string{"iam:Create*", "iam:Delete*", "iam:Put*", "iam:Update*",
+	// Written as the names, so an action AWS adds under one of them (say a
+	// future iam:AttachX that does not end in Policy) is denied too (#329 review).
+	for _, a := range []string{"iam:Create*", "iam:Delete*", "iam:Put*", "iam:Attach*", "iam:Detach*", "iam:Update*",
 		"iam:Add*", "iam:Remove*", "iam:Tag*", "iam:Untag*", "iam:Set*", "iam:Change*"} {
 		if !denied(p, a, "*") {
 			t.Errorf("IAM write deny missing with allow_iam off: %s", a)
 		}
 	}
-	// Attach* and Detach* are written as iam:*tach*Policy (#329)
-	for _, a := range []string{"iam:AttachRolePolicy", "iam:AttachUserPolicy", "iam:AttachGroupPolicy", "iam:DetachRolePolicy",
-		"iam:DetachUserPolicy", "iam:DetachGroupPolicy"} {
+	for _, a := range []string{"iam:AttachRolePolicy", "iam:DetachUserPolicy", "iam:AttachFutureThing", "iam:DetachX"} {
 		if evaluate(t, s, evalReq{a, "arn:aws:iam::123456789012:role/x", nil}) != "deny" {
 			t.Errorf("IAM write deny missing with allow_iam off: %s", a)
 		}
-	}
-	if evaluate(t, s, evalReq{"iam:ListAttachedRolePolicies", "arn:aws:iam::123456789012:role/x", nil}) != "allow" {
-		t.Error("iam:*tach*Policy must not catch ListAttached*Policies")
 	}
 	if !denied(p, "iam:PassRole", "*") {
 		t.Error("iam:PassRole must be denied on every role when pass_role_prefix is unset (#302)")

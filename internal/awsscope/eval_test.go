@@ -500,6 +500,19 @@ func TestActionPacksAreExact(t *testing.T) {
 	}
 }
 
+// A pack may only ever deny more as AWS adds actions: its covers are exact
+// names (no wildcard), each of which the pattern matches, so every request a
+// cover denies the pattern denies too (#329 review).
+func TestActionPacksOnlyWiden(t *testing.T) {
+	for _, p := range actionPacks {
+		for _, c := range p.covers {
+			if strings.ContainsAny(c, "*?") || !glob(p.pattern, c, true) {
+				t.Errorf("%s: cover %s is a wildcard or not matched; the pattern could deny less than it", p.pattern, c)
+			}
+		}
+	}
+}
+
 func TestPackActions(t *testing.T) {
 	in := []string{"a:X", "dynamodb:BatchGetItem", "b:Y", "dynamodb:GetItem", "iam:Attach*", "c:Z"}
 	got := packActions(in)
@@ -559,7 +572,8 @@ func TestValidBoxBucketPrefix(t *testing.T) {
 // 1,860 / 1,764 with the Access Grants denies (#322); 1,940 / 1,844 with the
 // S3 Express denies (#323); 1,880 / 1,784 with the action packs (#329);
 // 2,036 / 1,940 with the resource-policy denies (#324); 2,034 / 1,938 with the
-// guard written sts:AssumeRo* (AssumeRoot, #329 review). 14 characters are left
+// guard written sts:AssumeRo* (AssumeRoot, #329 review); 2,043 / 1,947 with
+// iam:Attach* and iam:Detach* written back (#329 review). 5 characters are left
 // at the all-maximum config: the next deny does not fit there.
 func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 	maxEl := Elevation{BoxBucketPrefix: longBoxPrefix, PassRolePrefix: longRolePrefix}
@@ -571,11 +585,11 @@ func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 		el        Elevation
 		want      int
 	}{
-		{"smallest", "aws", nil, Elevation{}, 1523},
+		{"smallest", "aws", nil, Elevation{}, 1532},
 		{"smallest, allow_iam on", "aws", nil, Elevation{AllowIAM: true}, 1487},
-		{"one", "aws-us-gov", longS3Read[:1], maxEl, 1871},
-		{"realistic", "aws-us-gov", longS3Read, realEl, 1938},
-		{"all-maximum", "aws-us-gov", longS3Read, maxEl, 2034},
+		{"one", "aws-us-gov", longS3Read[:1], maxEl, 1880},
+		{"realistic", "aws-us-gov", longS3Read, realEl, 1947},
+		{"all-maximum", "aws-us-gov", longS3Read, maxEl, 2043},
 	} {
 		s, err := ElevatedPolicy(c.partition, c.s3Read, c.el)
 		if err != nil {
