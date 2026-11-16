@@ -12,7 +12,7 @@
 //   info, warn   expire after `spec.ms`, or the stack's ms (6000) when spec.ms
 //                is not a number in (0, 2^31-1] (toastStackMs)
 //   error        stays until removed (the close button); no deadline
-//   pending      stays until its owner update()s it into the result; no deadline
+//   pending      stays until its owner update()s it into the result, or the user removes it (its ×); no deadline
 //   undo: true   a flag, not a kind. The entry keeps its kind's timer (an info
 //                undo still ends at 6 s) but is protected from eviction.
 //
