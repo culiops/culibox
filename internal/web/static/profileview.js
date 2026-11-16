@@ -199,10 +199,23 @@ function pfvWorkspaceBlock(view, doc, host, edit) {
 }
 
 // refused: a session of this profile is refused without a box layer (see pfvUnavailable).
-function pfvRunsBlock(host, copy, unavailable, reason, edit, refused) {
+// daemon: /api/meta's box_daemon_reason (#154), why a box layer that exists cannot be used right now
+// ("Docker is not running"); "" when it can, and never given while there is no layer.
+function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon) {
   const b = { id: "runs", label: "Runs in", lines: [], rows: [], edit, add: "", count: 0, note: "" };
   const u = pfvUnavailable(reason, refused);
-  if (host) {
+  const dline = daemon ? "Boxes can't start right now: " + daemon + "." : "";
+  if (daemon && host) {
+    // Quiet, like the no-layer reason below: this profile does not need a box.
+    b.lines.push("On this machine: runs as you, with your files, your network and your credentials", dline);
+  } else if (daemon) {
+    // The two named reasons refuse every session of a box profile (the layer's Prepare). Any other
+    // (the doctor pointer) is not refused there: the spawn's own docker calls may still work.
+    const refusing = /^(Docker is not running|no permission to use Docker)$/.test(daemon);
+    b.lines.push("In a box", dline, refusing ? "Sessions with this profile can't start until that is fixed." : "Sessions with this profile may fail to start.");
+    b.tone = "error";
+    b.toneAt = 1;
+  } else if (host) {
     // The spec's sentence, verbatim, on one line (spec 5.4). The muted line under it
     // carries only the boxes-unavailable reason when there is one, quietly: not an
     // error, this profile does not need a box.
@@ -227,6 +240,8 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit, refused) {
 //   o.boxRuntime           /api/meta box_runtime: "" means no box layer; anything
 //                          else, or not loaded yet, means boxes can run
 //   o.boxUnavailableReason /api/meta box_unavailable_reason, a clause
+//   o.boxDaemonReason      /api/meta box_daemon_reason, a clause: the layer exists but its
+//                          docker daemon cannot be used right now (#154); "" or absent when it can
 //   o.bundleImports        /api/meta bundle_imports
 //   o.defs                 GET /api/options, to name an Advanced option
 // Returns {header, note, blocks}:
@@ -271,7 +286,7 @@ function pfvReadView(o) {
   const refused = asksBox || copy || pfvList(pfvField(view, doc, "context_paths")).length > 0;
 
   const blocks = [
-    pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, refused),
+    pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, refused, unavailable ? "" : pfvText(x.boxDaemonReason)),
     pfvWorkspaceBlock(view, doc, host, edit),
     pfvAgentBlock(view, doc, a, edit),
   ];

@@ -308,10 +308,10 @@ func dataDirOf(in Input) string {
 // BoxTierReport is doctor's box-tier rows and the token row behind them.
 type BoxTierReport struct {
 	// Rows are the box-tier rows exactly as Checks prints them (docker, the box
-	// VM, its folders, the image, containment and, on macOS, the token).
+	// VM, its folders, the image, containment and the token).
 	Rows []Result
-	// Token is the boxed claude token row (ClaudeBoxToken). On macOS it is in
-	// Rows unless an earlier row ended the tier; Checks never prints it on Linux.
+	// Token is the boxed claude token row (ClaudeBoxToken). On both OSes it is
+	// in Rows unless an earlier row ended the tier (docker or colima missing).
 	Token Result
 	// TokenLockedOnly: Token is a WARN only because the store is locked; no
 	// agent lacks a credential for any other reason.

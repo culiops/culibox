@@ -560,8 +560,10 @@ func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p := pinned.options(config.Config{DockerBin: "/bin/sh", BoxImage: "me/img:1"}).Prepare; p != nil {
-		t.Fatal("a pinned box_image needs no hook on linux")
+	// No adoption for a pinned image; the hook is only the daemon check (#154),
+	// which passes when docker's answer is neither of the two refused classes.
+	if p := pinned.options(config.Config{DockerBin: "/bin/sh", BoxImage: "me/img:1"}).Prepare; p == nil || p(context.Background()) != nil {
+		t.Fatal("a pinned box_image's linux hook is the daemon check alone")
 	}
 	o.Prepare = nil
 	if o.Verify != nil || o.Reachable != nil || o.Shares != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 || o.LockGuards {

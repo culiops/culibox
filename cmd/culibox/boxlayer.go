@@ -67,6 +67,9 @@ type boxLayer struct {
 	pins       pinSource          // where `box setup` looks for the images instances pin (set by runBoxDarwin)
 	protected  []box.ProtectedDir // CuliBox's own host dirs (config, profiles, bundle); no VM share may overlap them
 	stateRoot  string             // where box homes and the bundle live; resolved on darwin
+	// daemon is the local docker daemon's state (nil on darwin: the box VM starts
+	// on the first boxed spawn, and prepare reports what stops it). See boxdaemon.go.
+	daemon *daemonWatch
 	// addrs is the one box-address cache the egress proxy and the credential
 	// broker share (both OSes). One instance on purpose: the proxy drops a box's
 	// entry when its session ends or a probe re-verifies a recreated box, and a
@@ -210,6 +213,9 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 		l.dockerArgs = vc.DockerArgs()
 	}
 	l.cli = box.CLIClient{Bin: bin, Args: l.dockerArgs}
+	if l.vm == nil {
+		l.daemon = newDaemonWatch(l.cli.Ping, daemonTTL)
+	}
 	l.addrs = newBoxAddrs(l.cli, cfg.BoxInstance())
 	l.img = boximage.Docker{Bin: bin, Args: l.dockerArgs}
 	o := l.options(cfg)
@@ -259,6 +265,20 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		// follows says what is missing).
 		o.Prepare = func(ctx context.Context) error {
 			l.adoptImage(ctx)
+			return nil
+		}
+	}
+	if l.daemon != nil {
+		// Linux (#154): a stopped or not-permitted daemon refuses the spawn with
+		// its reason before anything else asks docker for something.
+		adopt := o.Prepare
+		o.Prepare = func(ctx context.Context) error {
+			if err := l.refuseUnusableDaemon(ctx); err != nil {
+				return err
+			}
+			if adopt != nil {
+				return adopt(ctx)
+			}
 			return nil
 		}
 	}

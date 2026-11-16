@@ -169,6 +169,7 @@ function pfvInputs() {
     creds: typeof pfCredsView === "object" ? pfCredsView : null,
     boxRuntime: meta ? boxRuntime : undefined,
     boxUnavailableReason: typeof boxUnavailableReason === "string" ? boxUnavailableReason : "",
+    boxDaemonReason: typeof boxDaemonReason === "string" ? boxDaemonReason : "",
     bundleImports: typeof bundleImports === "boolean" ? bundleImports : false,
     defs: typeof optionDefs !== "undefined" ? optionDefs : [],
   };

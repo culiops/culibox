@@ -387,7 +387,8 @@ func initBoxReady(cfg config.Config, cfgFiles []string, dataDir, home, goos stri
 }
 
 // initBoxReadyFrom reads doctor's box-tier report: every row PASS, and the
-// boxed claude token row PASS too (doctor prints it only on macOS). The one
+// boxed claude token row PASS too (doctor's rows carry it on both OSes unless the
+// tier ended early; Linux adds it, see below). The one
 // exception is a token row that is a WARN only because the store is locked
 // while the claude-box token is in it (tokenStored, which never decrypts): a
 // Linux store's unlock expires, and a locked store is no reason to rebuild. The
@@ -396,6 +397,8 @@ func initBoxReady(cfg config.Config, cfgFiles []string, dataDir, home, goos stri
 func initBoxReadyFrom(goos string, rep doctor.BoxTierReport, tokenStored, imageCurrent func() bool) bool {
 	rows := rep.Rows
 	if goos != "darwin" {
+		// A report that ended early lacks the token row; one that has it holds it a
+		// second time, which changes nothing: the same row gets the same verdict.
 		rows = append(slices.Clone(rows), rep.Token)
 	}
 	image := false

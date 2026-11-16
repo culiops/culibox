@@ -15,9 +15,10 @@ import (
 // to the browser.
 //
 // A stopped colima VM is not an error here (the layer builds, and the first
-// boxed spawn starts the VM), and a docker that is installed but not running
-// or not permitted only shows up on the first call to it, after this boot-time
-// check; #154 tracks telling those apart.
+// boxed spawn starts the VM). A docker that is installed but whose daemon is
+// not running or not permitted does not fail the build either, because it can
+// change while CuliBox runs: it is reported live as /api/meta box_daemon_reason
+// and as the refusal of a boxed spawn (boxdaemon.go, #154).
 func boxUnavailableReason(err error) string {
 	switch {
 	case errors.Is(err, exec.ErrNotFound):
