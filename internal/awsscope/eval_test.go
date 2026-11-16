@@ -142,6 +142,49 @@ func condHolds(cond map[string]map[string]any, ctx map[string]string) bool {
 	return true
 }
 
+// parseEvalPolicy decodes a policy for the evaluator and refuses any key it
+// does not implement (NotAction, Principal, NotPrincipal, Sid, ...), so a
+// future statement of another shape fails the tests instead of being
+// evaluated wrongly. NotResource is implemented.
+func parseEvalPolicy(policy string) ([]evalStmt, error) {
+	dec := json.NewDecoder(strings.NewReader(policy))
+	dec.DisallowUnknownFields()
+	var doc struct {
+		Version   string
+		Statement []evalStmt
+	}
+	if err := dec.Decode(&doc); err != nil {
+		return nil, err
+	}
+	for _, s := range doc.Statement {
+		if s.Effect != "Allow" && s.Effect != "Deny" {
+			return nil, fmt.Errorf("evaluator: Effect %q", s.Effect)
+		}
+		if s.Resource != nil && s.NotResource != nil {
+			return nil, errors.New("evaluator: both Resource and NotResource")
+		}
+	}
+	return doc.Statement, nil
+}
+
+func TestEvaluatorRefusesStatementsItDoesNotImplement(t *testing.T) {
+	for _, p := range []string{
+		`{"Statement":[{"Effect":"Deny","NotAction":"s3:*","Resource":"*"}]}`,
+		`{"Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*","NotPrincipal":{"AWS":"x"}}]}`,
+		`{"Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*","Principal":"*"}]}`,
+		`{"Statement":[{"Sid":"x","Effect":"Deny","Action":"s3:*","Resource":"*"}]}`,
+		`{"Statement":[{"Effect":"deny","Action":"s3:*","Resource":"*"}]}`,
+		`{"Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*","NotResource":["x"]}]}`,
+	} {
+		if _, err := parseEvalPolicy(p); err == nil {
+			t.Errorf("accepted %s", p)
+		}
+	}
+	if _, err := parseEvalPolicy(`{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:*","NotResource":["x"]}]}`); err != nil {
+		t.Error(err)
+	}
+}
+
 // evaluate returns "allow", "implicit" (no Allow applies) or "deny" (an
 // explicit Deny applies; it wins over every Allow).
 func evaluate(t *testing.T, policy string, r evalReq) string {
@@ -154,11 +197,11 @@ func evaluate(t *testing.T, policy string, r evalReq) string {
 	if v, ok := parsedCache.Load(policy); ok {
 		st = v.([]parsed)
 	} else {
-		var doc struct{ Statement []evalStmt }
-		if err := json.Unmarshal([]byte(policy), &doc); err != nil {
+		doc, err := parseEvalPolicy(policy)
+		if err != nil {
 			t.Fatal(err)
 		}
-		for _, s := range doc.Statement {
+		for _, s := range doc {
 			st = append(st, parsed{s, strs(s.Action), strs(s.Resource)})
 		}
 		parsedCache.Store(policy, st)

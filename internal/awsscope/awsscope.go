@@ -505,10 +505,20 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	p, err := marshalPolicy(st, "elevated session policy")
 	var se *sizeError
 	if errors.As(err, &se) {
-		// What the config cannot shrink: no s3_read, no prefixes (#329). It
-		// always fits, so this does not recurse further.
-		base, _ := ElevatedPolicy(partition, nil, Elevation{AllowIAM: el.AllowIAM})
-		se.base, se.allowIAM = len(base), el.AllowIAM
+		// What the config cannot shrink: no s3_read, no prefixes (#329). When
+		// this policy is already that one, it is the base itself; otherwise the
+		// base is rendered once, and its own call takes this branch, so the
+		// recursion is at most one level deep.
+		se.base, se.allowIAM = se.n, el.AllowIAM
+		if len(s3Read) > 0 || el.BoxBucketPrefix != "" || el.PassRolePrefix != "" {
+			base, berr := ElevatedPolicy(partition, nil, Elevation{AllowIAM: el.AllowIAM})
+			var bse *sizeError
+			if berr == nil {
+				se.base = len(base)
+			} else if errors.As(berr, &bse) {
+				se.base = bse.n
+			}
+		}
 	}
 	return p, err
 }
@@ -516,8 +526,13 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 // actionPacks are shorter ways to write a group of denied actions in the
 // elevated policy (#329). Each pattern matches, in AWS's action catalog
 // (internal/awsprobe snapshot), exactly the actions its covers match, no more
-// and no fewer; TestActionPacksAreExact pins that. A pattern only ever widens
-// a deny when AWS adds an action under it.
+// and no fewer; TestActionPacksAreExact pins that. When AWS adds an action,
+// three of the patterns can only deny more than the names they replace. The
+// fourth, iam:*tach*Policy, can deny less: a future iam:Attach... or
+// iam:Detach... action that does not end in "Policy" would have been denied by
+// iam:Attach* and iam:Detach* and is not by the pattern (with allow_iam off;
+// with it on, neither is written). Writing the two names back costs 9
+// characters (#329 review).
 var actionPacks = []struct {
 	pattern string
 	covers  []string

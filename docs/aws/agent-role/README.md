@@ -357,7 +357,7 @@ roles), and the CloudTrail changes that would blind the trail (`StopLogging`, `D
 already cover are not written twice, to keep the policy under STS's 2,048 characters.
 
 **Policy size.** STS takes at most 2,048 characters of session policy. CuliBox's own denies use
-about 1,300 of them; every `s3_read` entry, `box_bucket_prefix` and `pass_role_prefix` add the
+about 1,500 of them; every `s3_read` entry, `box_bucket_prefix` and `pass_role_prefix` add the
 rest. A connection over the limit is refused when the config loads or the connection is saved,
 and the message gives the policy's size, the limit and how much of it is CuliBox's own. A newer
 CuliBox can deny more in the window, so a connection close to the limit may be refused after an
@@ -366,8 +366,10 @@ with both prefixes at their 40-character maximum fit. To fit, the policy writes 
 denied actions as one pattern (`ssm:GetParameter*` for the four parameter reads,
 `dynamodb:*GetItem`, `dynamodb:Export*`, `s3:Put*Replication*`, `iam:*tach*Policy` for
 `iam:Attach*` and `iam:Detach*`). Each pattern matches exactly the actions it replaces in AWS's
-action list as of the snapshot the read-only gate embeds; an action AWS adds later under a
-pattern is denied too.
+action list as of the snapshot the read-only gate embeds. An action AWS adds later under one of
+the first four patterns is denied too. `iam:*tach*Policy` is the exception: a future
+`iam:Attach...` or `iam:Detach...` action whose name does not end in `Policy` is not denied by
+it (with `allow_iam` off; with it on, IAM writes are not denied at all).
 
 **`iam:PassRole` is denied unless you name a prefix.** A service that runs as a passed role
 (Lambda, ECS, Glue, CodeBuild, Step Functions) reads whatever that role can read, and the session
