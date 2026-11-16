@@ -303,9 +303,14 @@ func pruneOldBoxImages(ctx context.Context, d boximage.Docker, keep []string, or
 
 // dockerLine is the docker command to run by hand, as a code span. It carries the
 // global flags the image code uses (on macOS: the box VM's --host), so it reaches
-// the daemon that holds the image, not the user's own docker.
+// the daemon that holds the image, not the user's own docker. Every argument is
+// shell-quoted: a data root with a space or a quote in it must still paste.
 func dockerLine(d boximage.Docker, args ...string) string {
-	return "`docker " + strings.Join(append(append([]string(nil), d.Args...), args...), " ") + "`"
+	all := append(append([]string(nil), d.Args...), args...)
+	for i, a := range all {
+		all[i] = shellQuote(a)
+	}
+	return "`docker " + strings.Join(all, " ") + "`"
 }
 
 // humanBytes is n in decimal units, as docker prints image sizes.

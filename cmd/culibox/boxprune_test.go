@@ -542,3 +542,17 @@ func TestPartialUntagPrintsTheRestoreLine(t *testing.T) {
 		t.Fatalf("output:\n%s", out)
 	}
 }
+
+// The printed command is pasted into a shell: a data root with a space or a quote
+// in its path (CULIBOX_HOME="/Volumes/My Drive/it's") must come out quoted.
+func TestDockerLineQuotesEveryArgument(t *testing.T) {
+	d := boximage.Docker{Bin: "docker", Args: []string{"--config", "/Volumes/My Drive/it's/docker", "--host", "unix:///Volumes/My Drive/it's/d.sock"}}
+	got := dockerLine(d, "image", "rm", "culiops/culibox:2026-10-01", "a;b $(x)")
+	want := "`docker --config '/Volumes/My Drive/it'\\''s/docker' --host 'unix:///Volumes/My Drive/it'\\''s/d.sock' image rm culiops/culibox:2026-10-01 'a;b $(x)'`"
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+	if got := dockerLine(boximage.Docker{}, "tag", pIDOld, "culiops/culibox:x"); got != "`docker tag "+pIDOld+" culiops/culibox:x`" {
+		t.Fatalf("plain args were quoted: %s", got)
+	}
+}
