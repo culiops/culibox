@@ -108,6 +108,60 @@ have_gh() {
   command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1
 }
 
+# no_release: GitHub answered, and there is no published release. The one failure of
+# the latest-release lookup that is not an error to retry.
+no_release() {
+  die "No published CuliBox release yet. Use --from-source --version <a pushed tag >= $MIN_VERSION> to build one."
+}
+
+# lookup_failed WHY: the lookup itself failed (rate limit, no network, DNS, a GitHub
+# error), which says nothing about whether a release exists.
+lookup_failed() {
+  die "could not look up the newest release: $1. Retry later, or pass --version vX.Y.Z (a published release) to skip the lookup."
+}
+
+# latest_tag: sets TAG to the newest published release, or dies saying what failed. A 404
+# is "no release"; anything else (a 403 rate limit, no network, DNS) is not.
+latest_tag() {
+  TAG=
+  if have_gh; then
+    lt_rc=0
+    lt_out=$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>&1) || lt_rc=$?
+    if [ "$lt_rc" -ne 0 ]; then
+      # gh words its 404 "release not found"; any other message is a failure to show.
+      case $lt_out in
+        *"release not found"*) no_release ;;
+      esac
+      lookup_failed "gh said: $(printf '%s\n' "$lt_out" | head -n 1)"
+    fi
+    TAG=$(printf '%s\n' "$lt_out" | tail -n 1)
+  else
+    # No -f: an HTTP error must reach us as a status, not as curl's bare exit 22. The
+    # status is the last line of the output.
+    lt_rc=0
+    lt_out=$(curl -sL -w '\n%{http_code}' "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null) || lt_rc=$?
+    if [ "$lt_rc" -ne 0 ]; then
+      case $lt_rc in
+        127) lookup_failed "curl is not installed" ;;
+        6) lookup_failed "could not resolve api.github.com (curl exit 6)" ;;
+        7) lookup_failed "could not connect to api.github.com (curl exit 7)" ;;
+        28) lookup_failed "api.github.com timed out (curl exit 28)" ;;
+        *) lookup_failed "curl could not reach api.github.com (curl exit $lt_rc)" ;;
+      esac
+    fi
+    lt_status=$(printf '%s\n' "$lt_out" | tail -n 1)
+    case $lt_status in
+      200) ;;
+      404) no_release ;;
+      403 | 429) lookup_failed "GitHub answered HTTP $lt_status, usually its API rate limit for your address" ;;
+      *) lookup_failed "GitHub answered HTTP $lt_status" ;;
+    esac
+    TAG=$(printf '%s\n' "$lt_out" |
+      sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  fi
+  [ -n "$TAG" ] || lookup_failed "GitHub's reply had no tag_name"
+}
+
 # ---- 1. platform --------------------------------------------------------------------
 say "checking the platform"
 case $(uname -s) in
@@ -128,16 +182,7 @@ if [ -n "$VERSION" ]; then
   WHAT="the requested version ($VERSION)"
 else
   say "finding the newest published release"
-  TAG=
-  if have_gh; then
-    TAG=$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null) || TAG=
-  else
-    TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
-      sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1) || TAG=
-  fi
-  if [ -z "$TAG" ]; then
-    die "No published CuliBox release yet. Use --from-source --version <a released tag> to build one."
-  fi
+  latest_tag
   is_version "$TAG" || die "the newest release is named '$TAG', not vX.Y.Z; pass --version vX.Y.Z"
   VERSION=$TAG
   WHAT="the newest published release ($VERSION)"

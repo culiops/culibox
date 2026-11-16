@@ -35,7 +35,7 @@ SH=$(command -v sh)
 
 # ---- the tools setup.sh may see ----------------------------------------------------
 mkdir -p "$tmp/tools"
-for t in awk cat chmod cmp cp cut dirname grep gzip head ls mkdir mktemp mv rm sed sh sha256sum tar tr wc; do
+for t in awk cat chmod cmp cp cut dirname grep gzip head ls mkdir mktemp mv rm sed sh sha256sum tail tar tr wc; do
   p=$(command -v "$t") || {
     echo "setup_test: need $t on this machine" >&2
     exit 1
@@ -66,10 +66,12 @@ esac
 EOF
 cat >"$tmp/stubdefs/curl" <<'EOF'
 #!/bin/sh
-out= url=
+out= url= fmt= failflag=
 prev=
 for a in "$@"; do
   [ "$prev" = -o ] && out=$a
+  [ "$prev" = -w ] && fmt=$a
+  case "$a" in -[a-zA-Z]*f*) failflag=1 ;; esac
   prev=$a
   url=$a
 done
@@ -77,10 +79,30 @@ echo "curl $url" >>"$STUB_CALLS"
 src=
 case "$url" in
 https://api.github.com/repos/culiops/culibox/releases/latest)
+  # Like the real curl: without -f an HTTP error is exit 0 and the status is only in -w's
+  # output; with -f it is exit 22. A network failure is its own exit code either way.
+  # STUB_API: net (DNS, exit 6), 403 (rate limit), 500, notag (200 without a tag_name).
+  status=404 body='{"message":"Not Found"}'
   if [ -f "$STUB_REL/LATEST" ]; then
-    printf '{\n  "url": "x",\n  "tag_name": "%s",\n  "name": "n"\n}\n' "$(cat "$STUB_REL/LATEST")"
-    exit 0
+    status=200
+    body=$(printf '{\n  "url": "x",\n  "tag_name": "%s",\n  "name": "n"\n}' "$(cat "$STUB_REL/LATEST")")
   fi
+  case "${STUB_API:-}" in
+  net) echo "curl: (6) Could not resolve host: api.github.com" >&2; exit 6 ;;
+  403) status=403 body='{"message":"API rate limit exceeded for 203.0.113.9."}' ;;
+  500) status=500 body='{"message":"Server Error"}' ;;
+  notag) status=200 body='{"url":"x"}' ;;
+  esac
+  if [ -n "$failflag" ] && [ "$status" -ge 400 ]; then
+    echo "curl: (22) The requested URL returned error: $status" >&2
+    exit 22
+  fi
+  printf '%s' "$body"
+  if [ -n "$fmt" ]; then
+    # shellcheck disable=SC2059
+    printf "$(printf '%s' "$fmt" | sed "s/%{http_code}/$status/")"
+  fi
+  exit 0
   ;;
 https://github.com/culiops/culibox/releases/download/*)
   rest=${url#https://github.com/culiops/culibox/releases/download/}
@@ -100,6 +122,7 @@ echo "gh $*" >>"$STUB_CALLS"
 case "$1 $2" in
 "auth status") [ -z "${STUB_GH_UNAUTHED:-}" ] ;;
 "release view")
+  [ -z "${STUB_GH_VIEW_ERR:-}" ] || { echo "$STUB_GH_VIEW_ERR" >&2; exit 1; }
   [ -f "$STUB_REL/LATEST" ] || { echo "release not found" >&2; exit 1; }
   cat "$STUB_REL/LATEST"
   ;;
@@ -233,6 +256,7 @@ run_setup() {
     STUB_GOMOD="${STUB_GOMOD:-1.26.5}" STUB_GH_UNAUTHED="${STUB_GH_UNAUTHED:-}" \
     STUB_GH_NO_ATTEST="${STUB_GH_NO_ATTEST:-}" STUB_ABDUCO_INSTALLER="${STUB_ABDUCO_INSTALLER:-}" \
     STUB_ABDUCO_INSTALL_FAIL="${STUB_ABDUCO_INSTALL_FAIL:-}" \
+    STUB_API="${STUB_API:-}" STUB_GH_VIEW_ERR="${STUB_GH_VIEW_ERR:-}" \
     "$SH" "$script" "$@" >"$C/out" 2>&1 </dev/null || rc=$?
 }
 show() { sed 's/^/        | /' "$C/out" | tail -12 >&2 || true; }
@@ -334,8 +358,76 @@ case_no_release() {
   newcase no_release
   run_setup
   bad_rc "no published release fails"
+  says "No published CuliBox release yet" "a 404 is reported as no release"
   says "Use --from-source" "the message points at --from-source"
+  says "a pushed tag >= $min" "and says which tag a --from-source build needs"
   silent "404" "no raw 404 reaches the user"
+}
+# Anything but a 404 is not "no release": say what failed and how to go on.
+case_api_rate_limit() {
+  newcase api_rate_limit
+  mkrelease "$min" latest
+  STUB_API=403
+  run_setup
+  bad_rc "a rate-limited releases/latest call fails"
+  says "HTTP 403" "the message names the status"
+  says "rate limit" "and the likely cause"
+  says "--version vX.Y.Z" "and points at --version"
+  silent "No published CuliBox release" "a 403 is not reported as no release"
+  nothing_installed "nothing is installed"
+}
+case_api_network_failure() {
+  newcase api_network
+  mkrelease "$min" latest
+  STUB_API=net
+  run_setup
+  bad_rc "an unreachable GitHub fails"
+  says "curl exit 6" "the message names the curl exit code"
+  says "--version vX.Y.Z" "and points at --version"
+  silent "No published CuliBox release" "a network failure is not reported as no release"
+  silent "Use --from-source" "and does not steer to a from-source build"
+}
+case_api_server_error() {
+  newcase api_server_error
+  STUB_API=500
+  run_setup
+  bad_rc "a GitHub 500 fails"
+  says "HTTP 500" "the message names the status"
+  silent "No published CuliBox release" "a 500 is not reported as no release"
+}
+case_api_reply_without_tag() {
+  newcase api_notag
+  STUB_API=notag
+  run_setup
+  bad_rc "a 200 reply with no tag_name fails"
+  says "no tag_name" "the message says the reply had no tag"
+  silent "No published CuliBox release" "and is not reported as no release"
+}
+case_api_pinned_version_skips_api_failure() {
+  newcase api_pinned
+  mkrelease "$min" latest
+  STUB_API=403
+  run_setup --version "$min"
+  ok_rc "--version installs even when the releases/latest call would be rate limited"
+  not_called "releases/latest" "and never makes it"
+}
+case_gh_no_release() {
+  newcase gh_no_release
+  use gh
+  run_setup
+  bad_rc "an authed gh with no release fails"
+  says "No published CuliBox release yet" "gh's release-not-found is reported as no release"
+}
+case_gh_view_failure() {
+  newcase gh_view_failure
+  mkrelease "$min" latest
+  use gh
+  STUB_GH_VIEW_ERR="error connecting to api.github.com"
+  run_setup
+  bad_rc "a failing gh fails"
+  says "error connecting to api.github.com" "gh's own message is shown"
+  says "--version vX.Y.Z" "and points at --version"
+  silent "No published CuliBox release" "a gh failure is not reported as no release"
 }
 case_below_min() {
   newcase below_min
