@@ -739,8 +739,10 @@ func TestDoctor_UsesResolvedAbduco(t *testing.T) {
 	resolveAbduco = func(string) (abduco.Resolved, error) {
 		return abduco.Resolved{Path: p, Source: abduco.SourceBundled}, nil
 	}
-	out, _ := run(input(t))
-	if !strings.Contains(out, "abduco binary: "+p) || !strings.Contains(out, "(next to culibox)") {
+	in := input(t)
+	out, _ := run(in)
+	// Doctor shows the home as ~, and t.TempDir may sit under the test's home (/tmp).
+	if !strings.Contains(out, "abduco binary: "+tilde(p, in.Home)) || !strings.Contains(out, "(next to culibox)") {
 		t.Fatalf("abduco row does not show the resolved binary:\n%s", out)
 	}
 }
