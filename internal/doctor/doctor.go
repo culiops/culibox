@@ -158,8 +158,7 @@ func tilde(s, home string) string {
 		// Not a whole path: the match ends inside a name (/home/ab for /home/a)
 		// or starts inside a longer absolute path (/var/tmp for /tmp). A doubled
 		// slash, as in file:///home/a, still starts one.
-		if (end < len(s) && isPathChar(s[end]) && s[end] != '/') ||
-			insideAbsPath(orig, pos+i) {
+		if continuesName(s, end) || insideAbsPath(orig, pos+i) {
 			b.WriteString(s[:end])
 			s, pos = s[end:], pos+end
 			continue
@@ -177,15 +176,39 @@ func tilde(s, home string) string {
 // itself preceded by '/', as "var" is in /var/tmp. A run at the start of the
 // text or after any other character (-v/home/a, x/home/a) is not a folder
 // above the match, so the home there is still hidden: when unsure, hide.
+// A run of only dots is . or .. (/./home/a, /x/../home/a), not a folder.
 func insideAbsPath(s string, at int) bool {
 	j := at - 1
 	if j < 0 || s[j] == '/' || !isPathChar(s[j]) {
 		return false
 	}
+	dotsOnly := true
 	for j >= 0 && s[j] != '/' && isPathChar(s[j]) {
+		dotsOnly = dotsOnly && s[j] == '.'
 		j--
 	}
-	return j >= 0 && s[j] == '/'
+	return j >= 0 && s[j] == '/' && !dotsOnly
+}
+
+// continuesName reports whether the text from s[end] on makes the match's last
+// part a longer name (/home/ab for /home/a, /srv/a.bak for /srv/a). Punctuation (. - _)
+// that ends the text or is followed by a non-path character ends a sentence
+// ("cd /home/a.") and is not a name: when unsure, hide.
+func continuesName(s string, end int) bool {
+	k := end
+	punctOnly := true
+	for k < len(s) && s[k] != '/' && isPathChar(s[k]) {
+		c := s[k]
+		punctOnly = punctOnly && (c == '.' || c == '-' || c == '_')
+		k++
+	}
+	if k == end {
+		return false // end of text, '/', or a non-path character
+	}
+	if !punctOnly {
+		return true
+	}
+	return k < len(s) && s[k] == '/' // "a./x": a folder named "a."
 }
 
 func isPathChar(c byte) bool {

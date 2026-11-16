@@ -336,6 +336,15 @@ func TestTilde(t *testing.T) {
 		{"-I/home/a/inc -L/home/a", "/home/a", "-I~/inc -L~"},
 		{"x/home/a/y", "/home/a", "x~/y"},
 		{"/srv/x/home/a/y", "/home/a", "/srv/x/home/a/y"},
+		// Punctuation that ends a sentence is not part of a longer name, but a
+		// name that only adds to the home's last part (a.bak, a./) still is.
+		{"cd /home/a.", "/home/a", "cd ~."},
+		{"in /home/a-, then", "/home/a", "in ~-, then"},
+		{"/srv/a.bak/x", "/srv/a", "/srv/a.bak/x"},
+		{"/home/a./x", "/home/a", "/home/a./x"},
+		// A run of only dots before the match is . or .., not a folder above it.
+		{"/./home/a/x", "/home/a", "/.~/x"},
+		{"/x/../home/a/x", "/home/a", "/x/..~/x"},
 	} {
 		if got := tilde(c.in, c.home); got != c.want {
 			t.Errorf("tilde(%q,%q) = %q want %q", c.in, c.home, got, c.want)
