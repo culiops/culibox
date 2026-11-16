@@ -322,6 +322,11 @@ func TestTilde(t *testing.T) {
 		{"/var/tmp/x", "/tmp", "/var/tmp/x"},
 		{"/var/tmp/x and /tmp/y", "/tmp", "/var/tmp/x and ~/y"},
 		{"dir=/tmp/x", "/tmp", "dir=~/x"},
+		// The boundary is read in the original text, also after a skipped match.
+		{"/x/tmp/tmp/y", "/tmp", "/x/tmp/tmp/y"},
+		{"/home/a/home/a/x", "/home/a", "~/home/a/x"},
+		// A doubled slash still starts the path (file:// URLs).
+		{"file:///home/a/x", "/home/a", "file://~/x"},
 	} {
 		if got := tilde(c.in, c.home); got != c.want {
 			t.Errorf("tilde(%q,%q) = %q want %q", c.in, c.home, got, c.want)
@@ -777,5 +782,22 @@ func TestDoctor_RefusedBundledAbducoSaysWhy(t *testing.T) {
 	out, code := run(input(t))
 	if code != 1 || !strings.Contains(out, "FAIL abduco binary") || !strings.Contains(out, "writable by group or others") {
 		t.Fatalf("code=%d, want a FAIL abduco row that says why the file was ignored:\n%s", code, out)
+	}
+}
+
+// A home reached through a symlink (/home -> /data/home) is hidden in its
+// resolved spelling too: the abduco resolver prints resolved paths.
+func TestRedactResolvedHome(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Redact(resolved+"/.local/bin/abduco and "+link+"/x", link, ""); got != "~/.local/bin/abduco and ~/x" {
+		t.Fatalf("Redact = %q, want both spellings of the home as ~", got)
 	}
 }

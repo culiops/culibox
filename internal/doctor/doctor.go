@@ -113,7 +113,15 @@ func runWithHost(w io.Writer, in Input, host string) int {
 // (doctor's own output and the bug-report bundle): home becomes "~", then the
 // hostname becomes "<host>". The order matters, see redactHost.
 func Redact(detail, home, host string) string {
-	return redactHost(tilde(detail, home), host)
+	detail = tilde(detail, home)
+	// Paths that went through EvalSymlinks (the abduco lookup) spell a home
+	// reached through a symlink in its resolved form.
+	if home != "" {
+		if resolved, err := filepath.EvalSymlinks(home); err == nil && resolved != filepath.Clean(home) {
+			detail = tilde(detail, resolved)
+		}
+	}
+	return redactHost(detail, host)
 }
 
 // redactHost is the backstop for the hostname rule: abduco's own error text can
@@ -140,6 +148,7 @@ func tilde(s, home string) string {
 		return s
 	}
 	var b strings.Builder
+	orig, pos := s, 0 // the boundary before a match is read in the original text
 	for {
 		i := strings.Index(s, home)
 		if i < 0 {
@@ -147,15 +156,18 @@ func tilde(s, home string) string {
 		}
 		end := i + len(home)
 		// Not a whole path: the match ends inside a name (/home/ab for /home/a)
-		// or starts inside a path (/var/tmp for /tmp).
-		if (end < len(s) && isPathChar(s[end]) && s[end] != '/') || (i > 0 && isPathChar(s[i-1])) {
+		// or starts inside a path (/var/tmp for /tmp; a doubled slash, as in
+		// file:///home/a, still starts one).
+		before := pos + i - 1
+		if (end < len(s) && isPathChar(s[end]) && s[end] != '/') ||
+			(before >= 0 && isPathChar(orig[before]) && orig[before] != '/') {
 			b.WriteString(s[:end])
-			s = s[end:]
+			s, pos = s[end:], pos+end
 			continue
 		}
 		b.WriteString(s[:i])
 		b.WriteByte('~')
-		s = s[end:]
+		s, pos = s[end:], pos+end
 	}
 	b.WriteString(s)
 	return b.String()
