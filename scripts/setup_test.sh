@@ -35,7 +35,7 @@ SH=$(command -v sh)
 
 # ---- the tools setup.sh may see ----------------------------------------------------
 mkdir -p "$tmp/tools"
-for t in awk cat chmod cp cut dirname grep gzip head ls mkdir mktemp mv rm sed sha256sum tar tr wc; do
+for t in awk cat chmod cmp cp cut dirname grep gzip head ls mkdir mktemp mv rm sed sh sha256sum tar tr wc; do
   p=$(command -v "$t") || {
     echo "setup_test: need $t on this machine" >&2
     exit 1
@@ -127,6 +127,18 @@ if [ "$1" = clone ]; then
   for a in "$@"; do dest=$a; done
   mkdir -p "$dest/cmd/culibox"
   printf 'module example.com/culibox\n\ngo %s\n' "${STUB_GOMOD:-1.26.5}" >"$dest/go.mod"
+  # The clone's pinned abduco installer: a stub that "builds" one into <prefix>/bin.
+  if [ -n "${STUB_ABDUCO_INSTALLER:-}" ]; then
+    mkdir -p "$dest/scripts/ci"
+    cat >"$dest/scripts/ci/install-abduco.sh" <<'INST'
+#!/bin/sh
+echo "install-abduco $*" >>"$STUB_CALLS"
+[ -z "${STUB_ABDUCO_INSTALL_FAIL:-}" ] || exit 1
+mkdir -p "$1/bin"
+printf '#!/bin/sh\necho "abduco-0.6 built"\n' >"$1/bin/abduco"
+chmod 755 "$1/bin/abduco"
+INST
+  fi
   exit 0
 fi
 if [ "$1" = -C ] && [ "$3" = rev-parse ]; then echo abc1234; exit 0; fi
@@ -184,9 +196,23 @@ mkrelease() {
   local ver=$1 n=${1#v} os arch
   mkdir -p "$C/rel/$ver" "$C/stage"
   "$tmp/mkfake" "$ver" "$C/stage/culibox"
+  local members=culibox
+  # MKREL_ABDUCO=1: the tarballs also carry an abduco; =symlink: an abduco symlink.
+  case ${MKREL_ABDUCO:-} in
+    1)
+      printf '#!/bin/sh\necho "abduco-0.6 bundled"\n' >"$C/stage/abduco"
+      chmod 755 "$C/stage/abduco"
+      members="culibox abduco"
+      ;;
+    symlink)
+      ln -s /bin/sh "$C/stage/abduco"
+      members="culibox abduco"
+      ;;
+  esac
   for os in linux darwin; do
     for arch in amd64 arm64; do
-      tar -C "$C/stage" -czf "$C/rel/$ver/culibox_${n}_${os}_${arch}.tar.gz" culibox
+      # shellcheck disable=SC2086 # members is a word list
+      tar -C "$C/stage" -czf "$C/rel/$ver/culibox_${n}_${os}_${arch}.tar.gz" $members
     done
   done
   (cd "$C/rel/$ver" && sha256sum culibox_*.tar.gz >SHA256SUMS)
@@ -205,7 +231,8 @@ run_setup() {
     STUB_OS="${STUB_OS:-Linux}" STUB_ARCH="${STUB_ARCH:-x86_64}" STUB_VIS="${STUB_VIS:-}" \
     STUB_ATTEST_RC="${STUB_ATTEST_RC:-0}" STUB_GOVERSION="${STUB_GOVERSION:-go1.26.5}" \
     STUB_GOMOD="${STUB_GOMOD:-1.26.5}" STUB_GH_UNAUTHED="${STUB_GH_UNAUTHED:-}" \
-    STUB_GH_NO_ATTEST="${STUB_GH_NO_ATTEST:-}" \
+    STUB_GH_NO_ATTEST="${STUB_GH_NO_ATTEST:-}" STUB_ABDUCO_INSTALLER="${STUB_ABDUCO_INSTALLER:-}" \
+    STUB_ABDUCO_INSTALL_FAIL="${STUB_ABDUCO_INSTALL_FAIL:-}" \
     "$SH" "$script" "$@" >"$C/out" 2>&1 </dev/null || rc=$?
 }
 show() { sed 's/^/        | /' "$C/out" | tail -12 >&2 || true; }
@@ -609,6 +636,111 @@ case_gh_resolves_latest() {
   called "release view --repo culiops/culibox --json tagName" "an authed gh resolves the newest release"
   not_called "api.github.com" "no api.github.com call when gh did it"
 }
+# ---- bundled abduco (#317) -------------------------------------------------------------
+# A file that just exists, for cc and make.
+tool_stub() { # NAME...: a no-op tool in $C/other
+  for n in "$@"; do
+    printf '#!/bin/sh\nexit 0\n' >"$C/other/$n"
+    chmod 755 "$C/other/$n"
+  done
+}
+case_abduco_bundled() {
+  newcase abduco_bundled
+  MKREL_ABDUCO=1 mkrelease "$min" latest
+  run_setup
+  ok_rc "a tarball with abduco installs"
+  if [ -x "$PFX/abduco" ] && "$PFX/abduco" | grep -q bundled; then pass "the bundled abduco is installed next to culibox"; else
+    fail "the bundled abduco is installed next to culibox"
+    show
+  fi
+  says "installing $PFX/abduco" "the abduco install is announced"
+  if [ -e "$PFX/abduco.new" ]; then fail "no abduco.new is left behind"; else pass "no abduco.new is left behind"; fi
+}
+case_abduco_absent() {
+  newcase abduco_absent
+  mkrelease "$min" latest
+  run_setup
+  ok_rc "a tarball without abduco still installs"
+  if [ -e "$PFX/abduco" ]; then fail "no abduco appears from nowhere"; else pass "no abduco appears from nowhere"; fi
+  says "culibox init checks for abduco" "the output says init will check for abduco"
+}
+case_abduco_identical() {
+  newcase abduco_identical
+  MKREL_ABDUCO=1 mkrelease "$min" latest
+  mkdir -p "$PFX"
+  cp -p "$C/stage/abduco" "$PFX/abduco"
+  run_setup
+  ok_rc "an identical abduco is fine"
+  if [ -e "$PFX/abduco.prev" ]; then fail "no abduco.prev for an identical file"; else pass "no abduco.prev for an identical file"; fi
+}
+case_abduco_keeps_prev() {
+  newcase abduco_keeps_prev
+  MKREL_ABDUCO=1 mkrelease "$min" latest
+  mkdir -p "$PFX"
+  printf '#!/bin/sh\necho mine\n' >"$PFX/abduco"
+  chmod 755 "$PFX/abduco"
+  run_setup
+  ok_rc "replacing a different abduco succeeds"
+  if "$PFX/abduco" | grep -q bundled; then pass "the bundled abduco replaces it"; else fail "the bundled abduco replaces it"; fi
+  if [ -f "$PFX/abduco.prev" ] && grep -q mine "$PFX/abduco.prev"; then pass "the old abduco is kept as abduco.prev"; else
+    fail "the old abduco is kept as abduco.prev"
+    show
+  fi
+  says "$PFX/abduco.prev" "the output names abduco.prev"
+}
+case_abduco_symlink_member() {
+  newcase abduco_symlink
+  MKREL_ABDUCO=symlink mkrelease "$min" latest
+  run_setup
+  bad_rc "a tarball whose abduco is a symlink is refused"
+  nothing_installed "nothing is installed"
+  says "does not hold a regular file named abduco" "the failure names abduco"
+  init_not_run "init does not run"
+}
+case_from_source_builds_abduco() {
+  newcase from_source_abduco
+  use git go
+  tool_stub cc make
+  export STUB_ABDUCO_INSTALLER=1
+  run_setup --from-source --version "$min"
+  ok_rc "--from-source with cc and make succeeds"
+  called "install-abduco $C/tmp/" "the clone's pinned abduco installer runs in the work dir"
+  if [ -x "$PFX/abduco" ] && "$PFX/abduco" | grep -q built; then pass "the built abduco is installed next to culibox"; else
+    fail "the built abduco is installed next to culibox"
+    show
+  fi
+}
+case_from_source_abduco_on_path() {
+  newcase from_source_abduco_on_path
+  use git go
+  tool_stub cc make abduco
+  export STUB_ABDUCO_INSTALLER=1
+  run_setup --from-source --version "$min"
+  ok_rc "--from-source with abduco on PATH succeeds"
+  not_called "install-abduco" "abduco is not built when one is on PATH"
+  if [ -e "$PFX/abduco" ]; then fail "nothing is installed for abduco"; else pass "nothing is installed for abduco"; fi
+}
+case_from_source_no_cc() {
+  newcase from_source_no_cc
+  use git go
+  export STUB_ABDUCO_INSTALLER=1
+  run_setup --from-source --version "$min"
+  ok_rc "--from-source without cc still installs culibox"
+  not_called "install-abduco" "abduco is not built without cc"
+  says "install abduco" "the output says how to get abduco"
+  says "needs cc and make" "the output names the missing tools"
+}
+case_from_source_abduco_build_fails() {
+  newcase from_source_abduco_fails
+  use git go
+  tool_stub cc make
+  export STUB_ABDUCO_INSTALLER=1 STUB_ABDUCO_INSTALL_FAIL=1
+  run_setup --from-source --version "$min"
+  ok_rc "a failed abduco build does not stop the culibox install"
+  installed_is "$min" "culibox is installed"
+  says "could not build abduco" "the failure is reported"
+}
+
 case_no_sudo() {
   newcase hygiene
   if grep -En '(^|[^[:alnum:]_.-])sudo([^[:alnum:]_-]|$)' "$script" | grep -v '^[0-9]*:[[:space:]]*#' | grep -v 'no sudo' >"$C/hits"; then
