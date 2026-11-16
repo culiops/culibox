@@ -1499,6 +1499,13 @@ func (s *Session) inheritConversations(ids []string, wasComplete bool) ([]string
 	return slices.Clone(s.claudeSessionIDs), s.costComplete
 }
 
+// Name is the mutable display label. It takes only the session's own lock.
+func (s *Session) Name() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.name
+}
+
 // SetName updates the mutable display label.
 func (s *Session) SetName(name string) {
 	s.mu.Lock()
@@ -3363,9 +3370,10 @@ func (m *Manager) adoptSurvivingBoxes(aliveIDs []string, meta map[string]session
 		if md.Exclusive {
 			// The sidecar is the only memory of which boxes are exclusive: an
 			// adopted box is otherwise shared, so it would idle for the TTL
-			// instead of being removed with its session.
-			if mx, ok := boxes.(interface{ MarkExclusive(string) }); ok {
-				mx.MarkExclusive(md.Box)
+			// instead of being removed with its session. The session id is who
+			// the box layer asks about write windows before sharing the folder.
+			if mx, ok := boxes.(interface{ AdoptExclusive(box, sessionID string) }); ok {
+				mx.AdoptExclusive(md.Box, id)
 			}
 		}
 	}

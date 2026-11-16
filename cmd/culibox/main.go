@@ -821,11 +821,15 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 		stopBroker = brokerSvc.Stop
 		if boxes != nil {
-			es := elevationService{brk: brokerSvc.Hooks.B, get: mgr.Get, list: mgr.List, blocker: boxes.GrantBlocker}
+			es := elevationService{brk: brokerSvc.Hooks.B, get: mgr.Get, list: mgr.List, blocker: boxes.GrantBlocker, claim: boxes.ClaimForGrant}
 			if brokerSvc.SSO != nil { // a nil *Runner must stay a nil interface
 				es.runner = brokerSvc.SSO
 			}
 			brokerSvc.Hooks.B.SetClaimCheck(es.claimCheck)
+			// #325: an elevatable session's folder is shared until it holds write
+			// credentials. Before the API serves: no boxed spawn can run earlier,
+			// and without the hook exclusive boxes refuse every other spawn.
+			boxes.SetWriteHold(es.writeHold)
 			api.Elevation = es
 			status.Elevation = brokerSvc.Hooks.B.Elevation
 			status.SSO = es.ssoStatus

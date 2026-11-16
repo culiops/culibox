@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/session"
@@ -34,9 +37,14 @@ type elevationService struct {
 	runner  ssoRunner // nil = no aws CLI on the daemon's PATH
 	get     func(id string) (*session.Session, bool)
 	list    func() []session.Info
-	blocker func(ctx context.Context, cwd, self string) (string, error) // box.Manager.GrantBlocker
-	exited  func(*session.Session) bool                                 // nil = (*session.Session).Exited; a seam for tests
+	blocker boxCheck                    // box.Manager.GrantBlocker: the grant panel's read-only view
+	claim   boxCheck                    // box.Manager.ClaimForGrant: the grant's own check
+	exited  func(*session.Session) bool // nil = (*session.Session).Exited; a seam for tests
 }
+
+// boxCheck is the box layer's answer to "what stands in the way of a grant in
+// this folder".
+type boxCheck func(ctx context.Context, cwd, self string) (box.GrantBlock, error)
 
 var _ web.ElevationService = elevationService{}
 
@@ -152,14 +160,16 @@ func hostLoginCommand(p string) string {
 }
 
 // claimCheck is the broker's grant-time check (spec correction 8): no other
-// running box, of any instance, may use this session's workspace. A check that
-// could not run refuses the grant.
+// running box, of any instance, may use this session's workspace. It runs
+// after the broker has started the session's write hold, so the box layer's
+// ClaimForGrant either sees a spawn racing the grant or that spawn sees the
+// hold (#325). A check that could not run refuses the grant.
 func (e elevationService) claimCheck(id string) error {
 	s, ok := e.get(id)
 	if !ok || s == nil {
 		return web.ErrElevationUnknown
 	}
-	msg, err := e.blockerFor(s)
+	msg, err := e.blockerFor(s, e.claim)
 	if err != nil {
 		log.Printf("grant claim check for %s: %v", id, err)
 		return errClaimUnchecked
@@ -170,13 +180,70 @@ func (e elevationService) claimCheck(id string) error {
 	return nil
 }
 
-func (e elevationService) blockerFor(s *session.Session) (string, error) {
-	if e.blocker == nil {
+// blockerFor runs check for session s and words what it found: a box of this
+// instance is named by the live sessions in it (#325), anything else by the
+// box layer's own sentence.
+func (e elevationService) blockerFor(s *session.Session, check boxCheck) (string, error) {
+	if check == nil {
 		return "", errors.New("no box manager")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), grantCheckTimeout)
 	defer cancel()
-	return e.blocker(ctx, s.Cwd, s.Box)
+	gb, err := check(ctx, s.Cwd, s.Box)
+	if err != nil || gb.Why == "" {
+		return "", err
+	}
+	if gb.Box == "" {
+		return gb.Why, nil
+	}
+	var labels []string
+	if e.list != nil {
+		for _, in := range e.list() {
+			if in.Exited || in.ID == s.ID {
+				continue
+			}
+			if o, ok := e.get(in.ID); ok && o != nil && o.Box == gb.Box {
+				labels = append(labels, sessionLabel(in))
+			}
+		}
+	}
+	switch len(labels) {
+	case 0:
+		return gb.Why, nil
+	case 1:
+		return labels[0] + " uses this folder in another box; end it first, then grant write access " +
+			"(no other box may share the folder while a write window is open)", nil
+	}
+	return strings.Join(labels, ", ") + " use this folder in another box; end them first, then grant write access " +
+		"(no other box may share the folder while a write window is open)", nil
+}
+
+// sessionLabel names a session in a message: its display name and id, or the
+// id alone when it has no name.
+func sessionLabel(in session.Info) string {
+	if in.Name == "" {
+		return "session " + in.ID
+	}
+	return fmt.Sprintf("session %q (%s)", in.Name, in.ID)
+}
+
+// writeHold is the box layer's write-hold hook (box.WriteHold, #325): the
+// broker's answer for the session, led by its name. It runs under the box
+// layer's opMu, so it takes as little as it can: the broker's lock and one
+// session lookup (the manager's lock, then that session's own), neither of
+// which ever waits on opMu. Never the full session list.
+func (e elevationService) writeHold(sid string, adoptedAt time.Time) string {
+	why := e.brk.WriteHold(sid, adoptedAt)
+	if why == "" {
+		return ""
+	}
+	in := session.Info{ID: sid}
+	if e.get != nil {
+		if s, ok := e.get(sid); ok && s != nil {
+			in.Name = s.Name()
+		}
+	}
+	return sessionLabel(in) + " " + why
 }
 
 // ssoStatus is the sso object of GET .../aws: whether the session waits on a
@@ -288,7 +355,7 @@ func (e elevationService) grantContext(id string) web.GrantContext {
 			}
 		}
 	}
-	msg, err := e.blockerFor(s)
+	msg, err := e.blockerFor(s, e.blocker)
 	if err != nil {
 		log.Printf("grant context for %s: %v", id, err)
 		gc.Blocked = errClaimUnchecked.Error()

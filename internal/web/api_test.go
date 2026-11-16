@@ -815,7 +815,7 @@ func TestSpawnErrShowsUnboxableWorkspace(t *testing.T) {
 // A workspace refusal names the conflicting box and path; the user needs it
 // to pick another folder, so it is shown rather than hidden.
 func TestSpawnErrShowsWorkspaceHeld(t *testing.T) {
-	wrapped := fmt.Errorf("%w: /w is in use by an AWS-write-capable session. Use a separate folder or worktree, or stop the other session.", box.ErrWorkspaceHeld)
+	wrapped := fmt.Errorf(`%w: /w is closed to other boxes while a session in it can write to AWS: session "deploy" (aws-1) has a write window open until 15:04. Wait for it to end (or drop the window in that session), or use a separate folder or worktree.`, box.ErrWorkspaceHeld)
 	a := &API{Sessions: &mockSvc{spawnErr: wrapped}}
 	rec := httptest.NewRecorder()
 	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/w"}`))
