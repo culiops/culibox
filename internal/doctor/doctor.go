@@ -156,11 +156,10 @@ func tilde(s, home string) string {
 		}
 		end := i + len(home)
 		// Not a whole path: the match ends inside a name (/home/ab for /home/a)
-		// or starts inside a path (/var/tmp for /tmp; a doubled slash, as in
-		// file:///home/a, still starts one).
-		before := pos + i - 1
+		// or starts inside a longer absolute path (/var/tmp for /tmp). A doubled
+		// slash, as in file:///home/a, still starts one.
 		if (end < len(s) && isPathChar(s[end]) && s[end] != '/') ||
-			(before >= 0 && isPathChar(orig[before]) && orig[before] != '/') {
+			insideAbsPath(orig, pos+i) {
 			b.WriteString(s[:end])
 			s, pos = s[end:], pos+end
 			continue
@@ -171,6 +170,22 @@ func tilde(s, home string) string {
 	}
 	b.WriteString(s)
 	return b.String()
+}
+
+// insideAbsPath reports whether a match starting at s[at] continues a longer
+// absolute path: the name run right before it (letters, digits, . _ -) is
+// itself preceded by '/', as "var" is in /var/tmp. A run at the start of the
+// text or after any other character (-v/home/a, x/home/a) is not a folder
+// above the match, so the home there is still hidden: when unsure, hide.
+func insideAbsPath(s string, at int) bool {
+	j := at - 1
+	if j < 0 || s[j] == '/' || !isPathChar(s[j]) {
+		return false
+	}
+	for j >= 0 && s[j] != '/' && isPathChar(s[j]) {
+		j--
+	}
+	return j >= 0 && s[j] == '/'
 }
 
 func isPathChar(c byte) bool {

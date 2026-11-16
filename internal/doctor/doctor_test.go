@@ -327,6 +327,15 @@ func TestTilde(t *testing.T) {
 		{"/home/a/home/a/x", "/home/a", "~/home/a/x"},
 		// A doubled slash still starts the path (file:// URLs).
 		{"file:///home/a/x", "/home/a", "file://~/x"},
+		// Only a match inside a longer ABSOLUTE path is skipped. Text glued to the
+		// front of a path (a flag like -v or -I, a relative prefix) is not a
+		// folder above it, so the home is still hidden: an unhidden home leaks
+		// the user name into a pasted bug report.
+		{"-v/home/a/x", "/home/a", "-v~/x"},
+		{"docker run -v/home/a:/w", "/home/a", "docker run -v~:/w"},
+		{"-I/home/a/inc -L/home/a", "/home/a", "-I~/inc -L~"},
+		{"x/home/a/y", "/home/a", "x~/y"},
+		{"/srv/x/home/a/y", "/home/a", "/srv/x/home/a/y"},
 	} {
 		if got := tilde(c.in, c.home); got != c.want {
 			t.Errorf("tilde(%q,%q) = %q want %q", c.in, c.home, got, c.want)
