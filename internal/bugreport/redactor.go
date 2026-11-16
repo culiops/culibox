@@ -202,9 +202,9 @@ func (r *redactor) apply(s string, in Input) string {
 	if r.paths != nil {
 		s = r.paths.Replace(s) // before tilde, which would shorten them
 	}
-	// Host is withheld from doctor.Redact: its plain substring replace would
+	// Host is withheld from doctor.RedactHomes: its plain substring replace would
 	// turn "macOS" into "<host>OS" for a host named "mac".
-	s = doctor.Redact(s, in.Home, "")
+	s = doctor.RedactHomes(s, in.Home, in.HomeResolved, "")
 	if r.hosts != nil {
 		s = r.hosts.ReplaceAllString(s, hostMark)
 	}

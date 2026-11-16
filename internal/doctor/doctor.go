@@ -100,8 +100,9 @@ func Run(w io.Writer, in Input) int {
 // runWithHost is Run with the machine's hostname injected, for the tests.
 func runWithHost(w io.Writer, in Input, host string) int {
 	code := 0
+	resolved := ResolveHome(in.Home)
 	for _, r := range Checks(in) {
-		fmt.Fprintf(w, "%s %s: %s\n", r.Status, r.Check, Redact(r.Detail, in.Home, host))
+		fmt.Fprintf(w, "%s %s: %s\n", r.Status, r.Check, RedactHomes(r.Detail, in.Home, resolved, host))
 		if r.Status == Fail {
 			code = 1
 		}
@@ -109,17 +110,31 @@ func runWithHost(w io.Writer, in Input, host string) int {
 	return code
 }
 
-// Redact is the one redaction every rendering of a check detail goes through
-// (doctor's own output and the bug-report bundle): home becomes "~", then the
-// hostname becomes "<host>". The order matters, see redactHost.
-func Redact(detail, home, host string) string {
+// ResolveHome is the home as filepath.EvalSymlinks spells it, or "" when that
+// is the same path or cannot be read. Paths that went through EvalSymlinks (the
+// abduco lookup) spell a home reached through a symlink this way. It touches
+// the filesystem, which can be slow (an automounted /home on macOS, a stale NFS
+// home), so call it once, before any work that has a deadline.
+func ResolveHome(home string) string {
+	if home == "" {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(home)
+	if err != nil || resolved == filepath.Clean(home) {
+		return ""
+	}
+	return resolved
+}
+
+// RedactHomes is the one redaction every rendering of a check detail goes
+// through (doctor's own output and the bug-report bundle): home, and its
+// resolved spelling from ResolveHome when not empty, become "~", then the
+// hostname becomes "<host>". The order matters, see redactHost. It is string
+// work only.
+func RedactHomes(detail, home, resolved, host string) string {
 	detail = tilde(detail, home)
-	// Paths that went through EvalSymlinks (the abduco lookup) spell a home
-	// reached through a symlink in its resolved form.
-	if home != "" {
-		if resolved, err := filepath.EvalSymlinks(home); err == nil && resolved != filepath.Clean(home) {
-			detail = tilde(detail, resolved)
-		}
+	if resolved != "" {
+		detail = tilde(detail, resolved)
 	}
 	return redactHost(detail, host)
 }
