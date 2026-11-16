@@ -157,6 +157,69 @@ func TestS3ExpressPolicyPatternIsThePolicyPuts(t *testing.T) {
 	}
 }
 
+// #324: a resource policy on a table, stream, parameter or secret can give
+// another account the data the window denies the session, without any read by
+// the session. The window denies writing or removing those policies, with no
+// exception (no config names a resource prefix for them). KMS key policies and
+// grants stay allowed: on their own they reach no item, parameter or secret
+// value, and CreateGrant is what EBS, RDS and others call on an apply.
+func TestElevatedPolicyDeniesDataResourcePolicyWrites(t *testing.T) {
+	const (
+		table  = "arn:aws:dynamodb:us-east-1:123456789012:table/orders"
+		stream = table + "/stream/2026-11-16T00:00:00.000"
+		param  = "arn:aws:ssm:us-east-1:123456789012:parameter/culishop/db/password"
+		secret = "arn:aws:secretsmanager:us-east-1:123456789012:secret:db-AbCdEf"
+		boxTab = "arn:aws:dynamodb:us-east-1:123456789012:table/culibox-lab"
+		key    = "arn:aws:kms:us-east-1:123456789012:key/k"
+	)
+	denied := []evalReq{
+		{"dynamodb:PutResourcePolicy", table, nil}, {"dynamodb:PutResourcePolicy", stream, nil}, {"dynamodb:PutResourcePolicy", boxTab, nil},
+		{"dynamodb:DeleteResourcePolicy", table, nil}, {"dynamodb:DeleteResourcePolicy", stream, nil},
+		{"ssm:PutResourcePolicy", param, nil}, {"ssm:DeleteResourcePolicy", param, nil},
+		{"secretsmanager:PutResourcePolicy", secret, nil}, {"secretsmanager:DeleteResourcePolicy", secret, nil},
+	}
+	allowed := []evalReq{
+		// reads of the policies: Terraform refreshes them
+		{"dynamodb:GetResourcePolicy", table, nil}, {"ssm:GetResourcePolicies", param, nil},
+		{"secretsmanager:GetResourcePolicy", secret, nil}, {"secretsmanager:ValidateResourcePolicy", secret, nil},
+		// creating and changing the resources themselves
+		{"dynamodb:CreateTable", table, nil}, {"ssm:PutParameter", param, nil}, {"secretsmanager:CreateSecret", secret, nil},
+		{"secretsmanager:PutSecretValue", secret, nil},
+		// KMS is not denied (see above)
+		{"kms:PutKeyPolicy", key, nil}, {"kms:CreateGrant", key, nil}, {"kms:ReplicateKey", key, nil},
+	}
+	for name, p := range windowConfigs(t) {
+		for _, r := range denied {
+			if got := evaluate(t, p, r); got != "deny" {
+				t.Errorf("%s: %s on %s is %s", name, r.action, r.resource, got)
+			}
+		}
+		for _, r := range allowed {
+			if got := evaluate(t, p, r); got != "allow" {
+				t.Errorf("%s: %s on %s is %s, want allow", name, r.action, r.resource, got)
+			}
+		}
+	}
+	inv, _ := SessionPolicy("aws", nil)
+	if strings.Contains(inv, "ResourcePolicy") {
+		t.Fatalf("the investigate policy must not carry #324's denies (the read role cannot write): %s", inv)
+	}
+}
+
+// The SSM pattern is pinned against AWS's catalog: Put and Delete only, not
+// GetResourcePolicies.
+func TestSSMResourcePolicyPatternIsPutAndDelete(t *testing.T) {
+	got := expandCatalog(t, ssmResourcePolicyWrites)
+	if want := []string{"ssm:DeleteResourcePolicy", "ssm:PutResourcePolicy"}; !slices.Equal(got, want) {
+		t.Fatalf("%s expands to %v, want %v", ssmResourcePolicyWrites, got, want)
+	}
+	for _, a := range dataResourcePolicyDenies {
+		if len(expandCatalog(t, a)) == 0 {
+			t.Errorf("%s names no action in AWS's catalog", a)
+		}
+	}
+}
+
 // The investigate scope is not changed by #322 (issue scope: the window).
 func TestSessionPolicyAccessGrantsUnchangedBy322(t *testing.T) {
 	p, _ := SessionPolicy("aws", nil)

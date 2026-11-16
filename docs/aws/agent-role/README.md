@@ -426,6 +426,24 @@ denied the window cannot use a directory bucket anyway. Creating one and the rea
 (`GetBucketPolicy`, `ListAllMyDirectoryBuckets`) stay allowed; a stack that reads or writes its
 objects cannot apply in the window.
 
+**Resource policies on the other denied data are denied
+([#324](https://github.com/culiops/culibox/issues/324)).** A resource policy can give another
+account the items, parameters or secret values the window denies the session, with no read by the
+session. The window denies, with no exception (no setting names a prefix for tables, parameters
+or secrets):
+
+- `dynamodb:PutResourcePolicy` and `dynamodb:DeleteResourcePolicy` (tables, streams, indexes);
+- `ssm:*ResourcePolicy`: `PutResourcePolicy` and `DeleteResourcePolicy` (parameters can be
+  shared with other accounts; sharing through AWS RAM attaches the same policy);
+- `secretsmanager:PutResourcePolicy` and `secretsmanager:DeleteResourcePolicy`.
+
+Removing a policy is denied too, because it can hold the deny that keeps someone out. The reads
+(`GetResourcePolicy`, `GetResourcePolicies`) stay allowed, so Terraform can refresh; a stack that
+sets one of these policies cannot apply in the window. **KMS key policies and grants are not
+denied**: a key policy or grant alone gives another account no item, parameter or secret value
+(it would also need the resource policy above), and `kms:CreateGrant` is what EBS, RDS and other
+services call during an ordinary apply. The grant panel says so.
+
 Two exceptions let Terraform plan and destroy in the window; the read role has neither:
 
 - **AWS public parameters.** `ssm:GetParameter`, `GetParameters`, `GetParametersByPath` and `GetParameterHistory`

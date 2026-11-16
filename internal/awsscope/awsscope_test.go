@@ -235,6 +235,7 @@ func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
 		`"iam:Create*","iam:Delete*","iam:Put*","iam:*tach*Policy","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*",` +
 		`"dynamodb:Export*","rds:StartExportTask","s3:CreateJob","datasync:StartTaskExecution","backup:StartRestoreJob",` +
 		`"s3:PutAccountPublicAccessBlock","s3:GetDataAccess","s3:*eAccessGrant*","s3express:Put*Policy","s3express:DeleteBucketPolicy",` +
+		`"dynamodb:PutResourcePolicy","dynamodb:DeleteResourcePolicy","ssm:*ResourcePolicy","secretsmanager:PutResourcePolicy","secretsmanager:DeleteResourcePolicy",` +
 		`"s3:Put*Replication*","s3:Put*Policy*","s3:DeleteBucketPolicy","s3:Put*Acl","s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls"],"Resource":"*"},` +
 		`{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}},` +
 		`{"Effect":"Deny","Action":"iam:*","Resource":"arn:aws:iam::*:role/agentbox-*"}]}`

@@ -321,6 +321,39 @@ var s3ExpressExposureDenies = []string{s3ExpressPolicyPuts, "s3express:DeleteBuc
 // s3express actions it matches in AWS's catalog (a test pins it).
 const s3ExpressPolicyPuts = "s3express:Put*Policy"
 
+// dataResourcePolicyDenies (#324) are the resource-policy writes that can give
+// another principal the data the window denies the session (DynamoDB items
+// and stream records, Parameter Store values, secret values), with no read by
+// the session: the #307 class outside S3. Denied in every window, with no
+// exception: no config names a resource prefix for tables, parameters or
+// secrets. Basis per action:
+//   - dynamodb:PutResourcePolicy (tables, streams, indexes), ssm:PutResourcePolicy
+//     (parameters, shareable to other accounts) and
+//     secretsmanager:PutResourcePolicy: each attaches a resource policy that
+//     can grant another account. Names sourced from AWS's action catalog
+//     (internal/awsprobe snapshot); cross-account use sourced from each
+//     service's docs, from memory (the docs site is not reachable from here).
+//   - the matching DeleteResourcePolicy: a resource policy can hold the deny
+//     that keeps a principal out, so removing it can widen access with no new
+//     grant (inferred, as #307 did for s3:DeleteBucketPolicy).
+//
+// Not denied, by evidence:
+//   - KMS key policies and grants (kms:PutKeyPolicy, CreateGrant,
+//     ReplicateKey): on their own they give no access to an item, parameter or
+//     secret value; the outside account would also need the resource policy
+//     above (inferred). CreateGrant is what EBS, RDS and other services call on
+//     the caller's behalf during an apply, so a deny would break common stacks.
+//   - GetResourcePolicy and the like: reads (Terraform refreshes them).
+//   - Sharing a parameter through AWS RAM: RAM attaches the parameter's
+//     resource policy, which needs ssm:PutResourcePolicy (inferred, not
+//     measured).
+var dataResourcePolicyDenies = []string{"dynamodb:PutResourcePolicy", "dynamodb:DeleteResourcePolicy",
+	ssmResourcePolicyWrites, "secretsmanager:PutResourcePolicy", "secretsmanager:DeleteResourcePolicy"}
+
+// ssmResourcePolicyWrites is ssm:PutResourcePolicy and ssm:DeleteResourcePolicy
+// in AWS's catalog (the read is GetResourcePolicies); a test pins it.
+const ssmResourcePolicyWrites = "ssm:*ResourcePolicy"
+
 var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"}
 
 // ssmParamReadsPattern is how the elevated policy writes ssmParamReads, to save
@@ -450,8 +483,9 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	// made public, so they matter even when no bucket is readable in the window.
 	always = append(always, boxBucketCopyDenies...)
 	always = append(always, s3AccountExposureDeny)
-	always = append(always, s3AccessGrantsDenies...)    // #322: no bucket in their ARNs, so no box exception
-	always = append(always, s3ExpressExposureDenies...) // #323: no box exception
+	always = append(always, s3AccessGrantsDenies...)     // #322: no bucket in their ARNs, so no box exception
+	always = append(always, s3ExpressExposureDenies...)  // #323: no box exception
+	always = append(always, dataResourcePolicyDenies...) // #324: no resource prefix exists for them
 	// Replication and the S3 exposure calls (#307) have an exception only for
 	// box buckets: an s3_read entry may name just a prefix of a bucket, and
 	// replication copies the whole bucket. The box-bucket ARN "<prefix>*" also
