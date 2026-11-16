@@ -522,6 +522,9 @@ func guardHooksDir(root *os.Root, ws, target string) (string, error) {
 		return "", nil
 	}
 	w, err := walkGitPath(string(filepath.Separator), target, ws)
+	if r := mountTableRefusal(err); r != nil {
+		return "", r
+	}
 	var dd *dotDotBelowError
 	switch {
 	case errors.As(err, &dd):
@@ -625,6 +628,9 @@ func gitPathOutside(ws, base, p, what string, wantDir bool) (string, error) {
 			what, spelled, inPlaceTrustedHost)
 	}
 	w, err := walkGitPath(base, p, ws)
+	if r := mountTableRefusal(err); r != nil {
+		return "", r
+	}
 	var dd *dotDotBelowError
 	if errors.As(err, &dd) || err == nil && (w.below || underWS(w.end, ws)) {
 		return "", refuseInPlace("%s points git at %s, which leads into the workspace, where a box can write its config and hooks. %s",
@@ -682,6 +688,9 @@ func readInRoot(root *os.Root, ws, rel string) ([]byte, error) {
 // passes below ws on the way (walkGitPath), which is refused.
 func readOutside(ws, p string) ([]byte, error) {
 	w, err := walkGitPath(string(filepath.Separator), p, ws)
+	if r := mountTableRefusal(err); r != nil {
+		return nil, r
+	}
 	var dd *dotDotBelowError
 	if errors.As(err, &dd) || err == nil && (w.below || underWS(w.end, ws)) {
 		return nil, refuseInPlace("%s leads into the workspace, where a box can write it. %s", p, inPlaceTrustedHost)
@@ -811,7 +820,7 @@ func walkGitPath(base, p, ws string) (gitWalk, error) {
 				mounts, err = parseMountInfo(b)
 			}
 			if err != nil {
-				return "", fmt.Errorf("the mount table cannot be read: %w", err)
+				return "", &mountTableError{err}
 			}
 		}
 		return wsAlias(mounts, next, ws)

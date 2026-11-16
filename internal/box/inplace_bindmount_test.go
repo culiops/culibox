@@ -165,6 +165,22 @@ func TestInPlaceBindMountTableFailsClosed(t *testing.T) {
 			table:  "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:1 <ws>/tools <mnt> rw - ext4 /dev/sda1 rw\n",
 			mounts: []string{"tools"}},
 		{name: "no mount table (macOS) keeps the walk as it was", same: true},
+		// A mount at <mnt> on a first <tmp>/mnt, then a second <tmp>/mnt over that
+		// one, then the bind mount at <mnt> on the second: the first <mnt> mount
+		// has the same mount point but is hidden (#308 review M1).
+		{name: "a mount hidden by an overmount of its parent is not the one there", same: true,
+			table: "1 0 8:1 / / rw - ext4 x rw\n25 1 0:25 / <tmp>/mnt rw - tmpfs t rw\n" +
+				"30 25 0:30 / <mnt> rw - tmpfs t rw\n26 25 0:26 / <tmp>/mnt rw - tmpfs t rw\n" +
+				"40 26 8:1 <ws>/tools <mnt> rw - ext4 x rw\n",
+			mounts: []string{"tools"}},
+		// The workspace's own mount point holds a mount hidden by a later mount on
+		// <tmp>: the workspace lives on that later mount.
+		{name: "a hidden mount at the workspace is not its mount", same: true,
+			table: "1 0 8:1 / / rw - ext4 x rw\n50 1 8:9 /old <ws> rw - ext4 y rw\n" +
+				"51 1 8:1 <tmp> <tmp> rw - ext4 x rw\n40 51 8:1 <ws>/tools <mnt> rw - ext4 x rw\n",
+			mounts: []string{"tools"}},
+		{name: "no root mount (a loop at /)", refuse: "mount table",
+			table: "1 2 8:1 / / rw - ext4 x rw\n2 1 8:1 / / rw - ext4 x rw\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -193,6 +209,20 @@ func TestInPlaceBindMountTableFailsClosed(t *testing.T) {
 			}
 			wantMounts(t, ws, got, append([]string{".git", ".claude"}, tc.mounts...)...)
 		})
+	}
+}
+
+// A mount table that cannot be read refuses even a plain repository with no
+// core.hooksPath, and the refusal names the table, not the hooks path (#308
+// review M2).
+func TestInPlaceMountTableRefusalNamesTheTable(t *testing.T) {
+	ws := filepath.Join(realTemp(t), "Repo")
+	gitRepo(t, ws, "[core]\n\tbare = false\n")
+	withMountInfo(t, "", errors.New("permission denied"), nil)
+	_, err := inPlaceMounts(ws)
+	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "/proc/self/mountinfo") ||
+		!strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "hooksPath") {
+		t.Fatalf("want a refusal that names the mount table and not core.hooksPath, got %v", err)
 	}
 }
 

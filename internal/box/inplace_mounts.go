@@ -108,36 +108,77 @@ func relUnder(p, dir string) (string, bool) {
 	return "", false
 }
 
-// mountOf is the mount p (a physical path) lives on: the one with the longest
-// mount point at or above p, and of those stacked there, the top one (no other
-// is mounted on it). nil when none holds p.
+// mountOf is the mount p (a physical path) lives on, found as the kernel finds
+// it: from the top of the stack at /, repeatedly into the child mount (one
+// mounted on the current one) whose mount point is the nearest at or above p,
+// to the top of that point's stack. A mount whose parent was itself covered
+// later (/a/b on a first /a, then a second /a over it) is never reached, so it
+// cannot stand in for what is visible there. The longest mount point alone is
+// not enough. nil when the table has no / or none holds p.
 func mountOf(ms []mountEntry, p string) *mountEntry {
-	var at []*mountEntry
+	ids := make(map[int]bool, len(ms))
 	for i := range ms {
-		if _, ok := relUnder(p, ms[i].point); !ok {
-			continue
-		}
-		if len(at) > 0 && len(ms[i].point) < len(at[0].point) {
-			continue
-		}
-		if len(at) > 0 && len(ms[i].point) > len(at[0].point) {
-			at = at[:0]
-		}
-		at = append(at, &ms[i])
+		ids[ms[i].id] = true
 	}
-	for _, m := range at {
-		top := true
-		for _, o := range at {
-			if o != m && o.parent == m.id {
-				top = false
-				break
+	var cur *mountEntry
+	for i := range ms {
+		// The root: mounted at /, on nothing the table shows (outside a chroot)
+		// or on something that is not at /.
+		if ms[i].point == "/" && (ms[i].parent == ms[i].id || !ids[ms[i].parent] || !onSlash(ms, ms[i].parent)) {
+			cur = &ms[i]
+			break
+		}
+	}
+	if cur == nil {
+		return nil
+	}
+	cur = stackTop(ms, cur)
+	for steps := 0; steps < len(ms); steps++ {
+		var next *mountEntry
+		for i := range ms {
+			c := &ms[i]
+			if c.parent != cur.id || c.point == cur.point {
+				continue
+			}
+			if _, ok := relUnder(p, c.point); ok && (next == nil || len(c.point) < len(next.point)) {
+				next = c
 			}
 		}
-		if top {
-			return m
+		if next == nil {
+			return cur
+		}
+		cur = stackTop(ms, next)
+	}
+	return nil // a loop in the parent ids: not a table to trust
+}
+
+// onSlash reports whether the mount id is one mounted at /.
+func onSlash(ms []mountEntry, id int) bool {
+	for i := range ms {
+		if ms[i].id == id {
+			return ms[i].point == "/"
 		}
 	}
-	return nil
+	return false
+}
+
+// stackTop is the mount on top of m's mount point: one mounted later at the
+// same point has m as its parent. Of several (not seen in practice), the last
+// listed.
+func stackTop(ms []mountEntry, m *mountEntry) *mountEntry {
+	for steps := 0; steps < len(ms); steps++ {
+		var up *mountEntry
+		for i := range ms {
+			if ms[i].parent == m.id && ms[i].point == m.point && &ms[i] != m {
+				up = &ms[i]
+			}
+		}
+		if up == nil {
+			return m
+		}
+		m = up
+	}
+	return m
 }
 
 // visibleIn reports whether m is the mount found at its own mount point.
@@ -157,6 +198,25 @@ func fsPath(m *mountEntry, p string) string {
 // mount in another namespace, a race) is in the way, so it is not guessed at.
 var errNotSameDir = errors.New("not the same folder on disk")
 
+// mountTableError is a mount table that cannot be read, parsed or followed to
+// the mount a path lives on. It is about CuliBox's view of the host, not about
+// the path the walk was given, so its refusal says so (mountTableRefusal).
+type mountTableError struct{ err error }
+
+func (e *mountTableError) Error() string { return "the mount table cannot be read: " + e.err.Error() }
+func (e *mountTableError) Unwrap() error { return e.err }
+
+// mountTableRefusal is the refusal for a walk that failed on the mount table,
+// nil for any other error.
+func mountTableRefusal(err error) error {
+	var mt *mountTableError
+	if !errors.As(err, &mt) {
+		return nil
+	}
+	return refuseInPlace("CuliBox cannot read its mount table (/proc/self/mountinfo: %v), so it cannot tell whether a "+
+		"folder git uses is a folder of the workspace mounted elsewhere. %s", mt.err, inPlaceTrustedHost)
+}
+
 // wsAlias reports where in the workspace ws the host path x (a physical path,
 // already found not to be ws itself) is: its path relative to ws, or "" when it
 // is not in the workspace. x is in it when its filesystem folder lies under
@@ -166,10 +226,10 @@ var errNotSameDir = errors.New("not the same folder on disk")
 func wsAlias(ms []mountEntry, x, ws string) (string, error) {
 	mx, mws := mountOf(ms, x), mountOf(ms, ws)
 	if mx == nil {
-		return "", fmt.Errorf("the mount table holds no mount for %s", x)
+		return "", &mountTableError{fmt.Errorf("it holds no mount for %s", x)}
 	}
 	if mws == nil {
-		return "", fmt.Errorf("the mount table holds no mount for %s", ws)
+		return "", &mountTableError{fmt.Errorf("it holds no mount for %s", ws)}
 	}
 	fx := fsPath(mx, x)
 	var cand string
