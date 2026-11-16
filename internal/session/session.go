@@ -2017,6 +2017,15 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// under an absolute clone dir, yet the process resolves it against the
 	// daemon's own cwd. Fail closed when it cannot be made absolute.
 	absCwd, absErr := filepath.Abs(spec.Cwd)
+	// Everything below (the box, the boxed record, the process, the saved session)
+	// uses the path these checks saw. filepath.Abs cleans `..` lexically against
+	// the logical cwd; the kernel would resolve a raw `..` from the PHYSICAL cwd,
+	// so through a symlinked directory (macOS /tmp and /var, a symlinked home) the
+	// raw spelling names another directory (#313). "" stays "": the daemon's own
+	// cwd is not a workspace to record.
+	if spec.Cwd != "" && absErr == nil {
+		spec.Cwd = absCwd
+	}
 	switch {
 	case cl != nil:
 		if runtime != config.RuntimeBox {

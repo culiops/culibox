@@ -23,8 +23,11 @@ real_go=$(command -v go) || {
   exit 1
 }
 
+# Physical, so the paths the checks expect match the script's (it resolves its work
+# dir with pwd -P); on macOS mktemp lands under the /var symlink.
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+tmp=$(cd "$tmp" && pwd -P)
 
 tag=v0.0.1
 tarver=0.0.1
@@ -591,6 +594,18 @@ for variant in "two spaces" "no space" "tab" "no-break space"; do
   expect_rc "$rc" 1 "(s5 $variant) a failed final edit exits 1"
   if [ -f "$out/current-notes.md" ] && ! grep -qF "✅" "$out/current-notes.md"; then pass "(s5 $variant) the older tick was cleared before the upload"; else fail "(s5 $variant) the notes still show the older tick"; fi
 done
+
+# ---- (w) a work dir reached through a symlink is used by its physical path ---------
+# macOS /tmp and /var are symlinks into /private. A tree reached through one makes a
+# relative path with `..` mean different directories to the kernel and to Go (#313),
+# so the script resolves the work dir before cloning into it.
+echo "== (w) TMPDIR is a symlink"
+new_case w
+ln -s "$case_dir/tmpdir" "$case_dir/tmplink"
+run_script $'M1=pass\n\n' TMPDIR="$case_dir/tmplink"
+expect_rc "$rc" 0 "(w) a run under a symlinked TMPDIR is verified"
+contains "$out/go.log" "PWD=$case_dir/tmpdir/macos-verify." "(w) go test runs in the clone by its physical path"
+absent "$out/go.log" "tmplink" "(w) no go test runs under the symlinked spelling"
 
 # ---- (j) a bad tag is a usage error ------------------------------------------------
 echo "== (j) bad tag"

@@ -82,9 +82,9 @@ func seedDirs(sessions []session.Info, clones []config.Clone, profileCwds []stri
 }
 
 // boxedRecorder adapts the registry to session.Manager.SetBoxedRecorder. Spawn
-// hands over spec.Cwd raw: "" (the daemon's own cwd would be meant, which is not
-// a workspace to record) is ignored, and a relative path is made absolute first,
-// because the registry resolves against the daemon's cwd only by accident.
+// hands over the absolute cwd its checks resolved, or "" (the daemon's own cwd
+// would be meant, which is not a workspace to record), which is ignored. A
+// relative path is still made absolute, as a backstop.
 func boxedRecorder(reg *boxedws.Registry) func(cwd string) error {
 	return func(cwd string) error {
 		if cwd == "" {

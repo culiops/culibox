@@ -548,6 +548,84 @@ func TestCloneSpawnAcceptsItsCloneSpelledRelatively(t *testing.T) {
 	_ = m.Kill(s.ID)
 }
 
+// The daemon's cwd reached through a symlink (macOS /tmp and /var, a symlinked
+// home): Spawn checks the absolute path filepath.Abs makes from the logical cwd,
+// so the process must run in that same directory. Handed the relative spelling,
+// the kernel resolves `..` from the PHYSICAL cwd and lands elsewhere (#313).
+func TestSpawnRunsInTheCwdItChecked(t *testing.T) {
+	cases := []struct {
+		name    string
+		agent   string
+		runtime string
+		clone   bool
+		abs     bool // cwd spelled root/link/../work instead of ../work
+	}{
+		{"clone profile", "clone", config.RuntimeBox, true, false},
+		{"host tier", "plain", config.RuntimeHost, false, false},
+		{"clone profile, absolute", "clone", config.RuntimeBox, true, true},
+		{"host tier, absolute", "plain", config.RuntimeHost, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			// root/link -> root/deep/wd: from the link, `../work` is root/work
+			// logically but root/deep/work physically, and both exist.
+			work, decoy := filepath.Join(root, "work"), filepath.Join(root, "deep", "work")
+			for _, d := range []string{work, decoy, filepath.Join(root, "deep", "wd")} {
+				if err := os.MkdirAll(d, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(filepath.Join(root, "deep", "wd"), filepath.Join(root, "link")); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(filepath.Join(root, "link")) // sets PWD too, as a shell would
+
+			l := cloneLauncher{tieredLauncher: tieredLauncher{
+				argv:    []string{"sh", "-c", "pwd -P > ran-here; exec sleep 30"},
+				runtime: tc.runtime,
+			}}
+			if tc.clone {
+				l.clone = &config.Clone{Of: "/home/u/repo", Dir: work}
+			}
+			hooks := &fakeCloneHooks{}
+			m, _ := cloneManager(t, l, hooks)
+			cwd := filepath.Join("..", "work")
+			if tc.abs {
+				// Not filepath.Join: that would clean the `..` away.
+				cwd = root + string(filepath.Separator) + "link" + string(filepath.Separator) + cwd
+			}
+			s, err := m.Spawn(launcher.SpawnSpec{Agent: tc.agent, Cwd: cwd})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = m.Kill(s.ID) })
+			if !tc.clone && (len(hooks.ownedChecks) != 1 || hooks.ownedChecks[0] != work) {
+				t.Fatalf("BoxOwned saw %q, want %q", hooks.ownedChecks, work)
+			}
+			if s.Cwd != work {
+				t.Errorf("session Cwd = %q, want the checked %q", s.Cwd, work)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				if _, err := os.Stat(filepath.Join(work, "ran-here")); err == nil {
+					break
+				}
+				if _, err := os.Stat(filepath.Join(decoy, "ran-here")); err == nil {
+					t.Fatalf("the process ran in %s, not in the checked %s", decoy, work)
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the process never wrote its cwd")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
+	}
+}
+
 // cloneGHLauncher gives the clone profile a GitHub binding too.
 type cloneGHLauncher struct {
 	cloneLauncher
