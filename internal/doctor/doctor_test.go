@@ -691,3 +691,56 @@ func TestProfilesFormatRow(t *testing.T) {
 		t.Errorf("plain parse error is unchanged: %+v", rows)
 	}
 }
+
+// fakeAbducoBin writes a script that prints what `abduco -v` prints.
+func fakeAbducoBin(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "abduco")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\necho 'abduco-0.6 x'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestCheckAbducoBinarySource(t *testing.T) {
+	p := fakeAbducoBin(t)
+	for src, want := range map[abduco.Source]string{
+		abduco.SourceBundled: "(next to culibox)",
+		abduco.SourcePath:    "(PATH)",
+		abduco.SourceConfig:  "(abduco_bin)",
+	} {
+		r := checkAbducoBinary(abduco.Resolved{Path: p, Source: src}, nil)
+		if r.Status != Pass || !strings.Contains(r.Detail, p) || !strings.Contains(r.Detail, "abduco-0.6") || !strings.Contains(r.Detail, want) {
+			t.Errorf("%s: got %+v, want Pass with %s, abduco-0.6 and %s", src, r, p, want)
+		}
+	}
+}
+
+func TestCheckAbducoBinarySkippedNote(t *testing.T) {
+	p := fakeAbducoBin(t)
+	r := checkAbducoBinary(abduco.Resolved{Path: p, Source: abduco.SourcePath, Skipped: "/x/abduco: owned by uid 1234, not by you or root"}, nil)
+	if r.Status != Pass || !strings.Contains(r.Detail, "ignored /x/abduco: owned by uid 1234") {
+		t.Fatalf("got %+v, want Pass that names the ignored file and why", r)
+	}
+}
+
+func TestCheckAbducoBinaryNotFound(t *testing.T) {
+	r := checkAbducoBinary(abduco.Resolved{}, errors.New("abduco not found next to culibox (/opt/c) or on PATH"))
+	if r.Status != Fail || !strings.Contains(r.Detail, "next to culibox (/opt/c) or on PATH") || !strings.Contains(r.Detail, "brew install abduco") {
+		t.Fatalf("got %+v", r)
+	}
+}
+
+// Run reports the abduco the resolver picks, not a bare PATH lookup.
+func TestDoctor_UsesResolvedAbduco(t *testing.T) {
+	p := fakeAbducoBin(t)
+	old := resolveAbduco
+	t.Cleanup(func() { resolveAbduco = old })
+	resolveAbduco = func(string) (abduco.Resolved, error) {
+		return abduco.Resolved{Path: p, Source: abduco.SourceBundled}, nil
+	}
+	out, _ := run(input(t))
+	if !strings.Contains(out, "abduco binary: "+p) || !strings.Contains(out, "(next to culibox)") {
+		t.Fatalf("abduco row does not show the resolved binary:\n%s", out)
+	}
+}

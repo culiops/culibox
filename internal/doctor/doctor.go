@@ -190,14 +190,11 @@ func Checks(in Input) []Result {
 	c := in.Config
 	dataDir := dataDirOf(in)
 	out = append(out, checkDataDir(in, dataDir, runtime.GOOS), checkAuth(c, dataDir), checkBind(c), checkPort(c))
-	bin := c.AbducoBin
-	if bin == "" {
-		bin = "abduco"
-	}
-	ab := checkAbducoBinary(bin)
+	res, rerr := resolveAbduco(c.AbducoBin)
+	ab := checkAbducoBinary(res, rerr)
 	out = append(out, ab)
 	if ab.Status != Fail {
-		out = append(out, checkRoundtrip(bin))
+		out = append(out, checkRoundtrip(res.Path))
 	}
 	out = append(out, checkProcinfoSelf(), checkProcTable())
 	socketDir := abduco.SocketDirFor(c.AbducoSocketDir, runtime.GOOS, dataDir, os.Getuid())
@@ -377,19 +374,28 @@ func checkPort(c config.Config) Result {
 	return Result{Pass, "port", c.BindAddr + " is free"}
 }
 
-func checkAbducoBinary(bin string) Result {
-	p, err := exec.LookPath(bin)
+// resolveAbduco is serve's lookup (a seam for tests).
+var resolveAbduco = abduco.DefaultLookup().Resolve
+
+// checkAbducoBinary reports the abduco serve would use: its path, where it came
+// from and its version, plus an abduco next to culibox that was refused.
+func checkAbducoBinary(res abduco.Resolved, err error) Result {
 	if err != nil {
 		hint := "install it (macOS: brew install abduco)"
-		return Result{Fail, "abduco binary", fmt.Sprintf("%q not found on PATH; %s", bin, hint)}
+		return Result{Fail, "abduco binary", fmt.Sprintf("%v; %s", err, hint)}
 	}
+	p := res.Path
 	// `abduco -v` prints its version and exits non-zero; only the text matters.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p, "-v")
 	cmd.WaitDelay = time.Second // a forked child holding stdout must not outlast the cap
 	v, _ := cmd.CombinedOutput()
-	return Result{Pass, "abduco binary", p + " " + strings.TrimSpace(firstLine(string(v)))}
+	detail := fmt.Sprintf("%s %s (%s)", p, strings.TrimSpace(firstLine(string(v))), res.Source)
+	if res.Skipped != "" {
+		detail += "; ignored " + res.Skipped
+	}
+	return Result{Pass, "abduco binary", detail}
 }
 
 // checkRoundtrip drives the real adapter through create → liveness → kill in a

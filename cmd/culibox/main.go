@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -457,14 +456,17 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	}
 	// Browser session cookie, signed with the persisted secret. 30-day sliding.
 	sess := auth.NewSession(cookie.Secret(), 30*24*time.Hour)
-	abducoBin := cfg.AbducoBin
-	if abducoBin == "" {
-		abducoBin = "abduco"
-	}
 	// Session persistence via abduco: agents run under abduco so they survive a
 	// daemon restart. abduco is a hard dependency — fail fast if it is missing.
-	if _, err := exec.LookPath(abducoBin); err != nil {
-		log.Fatalf("abduco not found on PATH (%q): session persistence requires it; install abduco or set abduco_bin", abducoBin)
+	// abduco_bin wins; else the abduco next to culibox (a release ships one), then PATH.
+	abducoRes, err := abduco.DefaultLookup().Resolve(cfg.AbducoBin)
+	if err != nil {
+		log.Fatalf("abduco: %v; session persistence requires it; install abduco or set abduco_bin", err)
+	}
+	abducoBin := abducoRes.Path
+	log.Printf("abduco: %s (%s)", abducoBin, abducoRes.Source)
+	if abducoRes.Skipped != "" {
+		log.Printf("abduco: ignored %s", abducoRes.Skipped)
 	}
 	// Linux keeps <dataDir>/abduco; darwin defaults to a short per-data-dir dir
 	// in /tmp, because its 103-byte socket path limit cannot afford the data dir.

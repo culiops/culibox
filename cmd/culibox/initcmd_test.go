@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/culiops/culibox/internal/abduco"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/secretstore"
 )
@@ -616,5 +617,27 @@ func TestInitStopsWhenTheTokenStepStops(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "stopped:") {
 		t.Fatalf("out=%s", out.String())
+	}
+}
+
+// An abduco next to culibox (a release tarball's) counts: init asks nothing for it.
+func TestInitHaveAbducoBundled(t *testing.T) {
+	f := &fakeInit{have: allHave("brew", "docker", "colima", "claude")}
+	d := f.deps("darwin")
+	var asked []string
+	d.resolveAbduco = func(configured string) (abduco.Resolved, error) {
+		asked = append(asked, configured)
+		return abduco.Resolved{Path: "/opt/culibox/abduco", Source: abduco.SourceBundled}, nil
+	}
+	var out bytes.Buffer
+	if ok := initDepsStep(newTestUI("", &out), config.Config{}, d); !ok || !strings.Contains(out.String(), "already done") {
+		t.Fatalf("ok=%v out=%q", ok, out.String())
+	}
+	if len(f.runs) != 0 {
+		t.Fatalf("run called: %v", f.runs)
+	}
+	// abduco_bin unset: the resolver gets "" so the next-to-culibox lookup runs.
+	if len(asked) == 0 || asked[0] != "" {
+		t.Fatalf("resolver got %q, want \"\"", asked)
 	}
 }

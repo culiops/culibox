@@ -21,6 +21,8 @@ type initDep struct {
 	brew []string // arguments after `brew install`
 	pkg  string   // distro package name; "" = no distro package, see link
 	link string   // linux: where to install it from when there is no pkg
+	// configured is abduco_bin as written ("" = unset), for the abduco lookup.
+	configured string
 }
 
 // label is the name, with the binary when config points somewhere else.
@@ -54,7 +56,7 @@ func initDepList(cfg config.Config, goos string) []initDep {
 	}
 	agent := initClaudeBin(cfg)
 	deps := []initDep{
-		{name: "abduco", bin: or(cfg.AbducoBin, "abduco"), brew: []string{"abduco"}, pkg: "abduco"},
+		{name: "abduco", bin: or(cfg.AbducoBin, "abduco"), brew: []string{"abduco"}, pkg: "abduco", configured: cfg.AbducoBin},
 		{name: "docker", bin: or(cfg.DockerBin, "docker"), brew: []string{"docker"}, link: dockerEngineDoc},
 	}
 	if goos == "darwin" {
@@ -63,9 +65,14 @@ func initDepList(cfg config.Config, goos string) []initDep {
 	return append(deps, initDep{name: "claude", bin: agent, brew: []string{"--cask", "claude-code"}, link: claudeSetupDoc})
 }
 
-// initHave says whether p is installed. Colima also gets the Homebrew prefixes,
+// initHave says whether p is installed. abduco uses serve's lookup (next to
+// culibox counts too). Colima also gets the Homebrew prefixes,
 // like boxvm.LookColima: a terminal started without them on PATH still has it.
 func initHave(d initDeps, p initDep) bool {
+	if p.name == "abduco" && d.resolveAbduco != nil {
+		_, err := d.resolveAbduco(p.configured)
+		return err == nil
+	}
 	if _, err := d.lookPath(p.bin); err == nil {
 		return true
 	}
