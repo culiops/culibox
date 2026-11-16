@@ -153,13 +153,15 @@ for pair in linux_amd64:x86_64-linux-musl linux_arm64:aarch64-linux-musl \
 done
 [ "$mismatch" -eq 0 ] || die "a built abduco does not match its pinned sum; nothing was written"
 
+# Checked before anything is written, so a failure never leaves a half-filled outdir.
+musl_notice=$work/zig/ziglang/lib/libc/musl/COPYRIGHT
+[ -s "$musl_notice" ] || die "the zig in the wheel has no musl COPYRIGHT"
+
 for name in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
   mkdir "$outdir/$name"
   cp "$work/build-$name/abduco" "$outdir/$name/abduco"
   chmod 755 "$outdir/$name/abduco"
 done
-musl_notice=$work/zig/ziglang/lib/libc/musl/COPYRIGHT
-[ -s "$musl_notice" ] || die "the zig in the wheel has no musl COPYRIGHT"
 {
   cat "$src/LICENSE"
   printf '\n----------------------------------------------------------------------\n\n'

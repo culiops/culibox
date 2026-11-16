@@ -108,6 +108,17 @@ git init -q -b main "$tmp/repo"
 )
 sha=$(git -C "$tmp/repo" rev-parse "$tag^{commit}")
 
+# A tag from before #317: no scripts/release/build-abduco.sh in it.
+git init -q -b main "$tmp/repo-old"
+(
+  cd "$tmp/repo-old"
+  echo "fixture" >README.md
+  git add README.md
+  git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m fixture
+  git -c user.name=t -c user.email=t@example.com -c tag.gpgsign=false tag -a "$tag" -m "$tag"
+)
+oldrepo_sha=$(git -C "$tmp/repo-old" rev-parse "$tag^{commit}")
+
 # A second fixture whose tag points at a commit that is NOT on main (a tag pushed
 # from a side branch): the same tag name, so the release would look ordinary.
 git init -q -b main "$tmp/repo-offmain"
@@ -565,6 +576,25 @@ new_case w "" good old
 run_script $'M1=pass\n\n'
 expect_rc "$rc" 3 "(w) a bundled abduco of another version is a recorded failure (exit 3)"
 contains "$out/uploaded.json" "bundled abduco -v printed 'abduco-0.5 (c) 2013-2016 Marc Andre Tanner', want abduco-0.6" "(w) the record says what it printed and what was wanted"
+
+# ---- (x) a tag from before #317 (no abduco pin, no bundled abduco) still verifies ---
+echo "== (x) tag without build-abduco.sh"
+sha_saved=$sha
+sha=$oldrepo_sha
+new_case x
+sha=$sha_saved
+run_script $'M1=pass\n\n' MACOS_VERIFY_GIT_URL="file://$tmp/repo-old"
+expect_rc "$rc" 0 "(x) an older tag without bundled abduco verifies"
+contains "$out/uploaded.json" "no bundled abduco: tests ran against the pinned source build" "(x) the tests used the source build"
+
+# ---- (x2) a bundled abduco with no pin in the tag fails its arch, not the run -------
+echo "== (x2) bundled abduco, tag without build-abduco.sh"
+sha=$oldrepo_sha
+new_case x2 "" good good
+sha=$sha_saved
+run_script $'M1=pass\n\n' MACOS_VERIFY_GIT_URL="file://$tmp/repo-old"
+expect_rc "$rc" 3 "(x2) a bundled abduco without a pinned version is a recorded failure (exit 3)"
+contains "$out/uploaded.json" "but the tag pins no ABDUCO_VERSION to check it against" "(x2) the record says the tag has no pin"
 
 # ---- (v) a bundled abduco that is not a regular file stops the run -----------------
 echo "== (v) bundled abduco is a symlink"

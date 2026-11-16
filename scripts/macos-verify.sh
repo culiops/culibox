@@ -335,7 +335,12 @@ check_version() {
 # one. A_NOTE says which abduco the tests used.
 A_OK=
 A_NOTE=
-abduco_want=$(sed -n 's/^ABDUCO_VERSION=//p' "$work/src/scripts/release/build-abduco.sh" 2>/dev/null | head -1)
+# A tag from before #317 has no such file: abduco_want stays empty, which fails only
+# an arch whose tarball bundles an abduco anyway.
+abduco_want=
+if [ -f "$work/src/scripts/release/build-abduco.sh" ]; then
+  abduco_want=$(sed -n 's/^ABDUCO_VERSION=//p' "$work/src/scripts/release/build-abduco.sh" | head -1)
+fi
 check_abduco() {
   local arch=$1 bin=$2 line
   shift 2
@@ -353,7 +358,11 @@ check_abduco() {
     A_NOTE="tests ran against the bundled abduco (abduco-$abduco_want)"
   else
     A_OK=false
-    A_NOTE="bundled abduco -v printed '$line', want abduco-${abduco_want:-<no ABDUCO_VERSION in the tag>}"
+    if [ -n "$abduco_want" ]; then
+      A_NOTE="bundled abduco -v printed '$line', want abduco-$abduco_want"
+    else
+      A_NOTE="bundled abduco -v printed '$line', but the tag pins no ABDUCO_VERSION to check it against"
+    fi
     echo "macos-verify: $arch $A_NOTE" >&2
   fi
 }
