@@ -134,16 +134,20 @@ type statement struct {
 // values (the four value reads: GetParameter, GetParameters,
 // GetParametersByPath and GetParameterHistory, per the SSM
 // ps-retrieval-authorization doc) and DynamoDB item images, including stream
-// records (GetRecords). Explicit names only: the AWS gate simulates each one.
+// records (GetRecords), and s3:GetDataAccess, which returns S3 Access Grants
+// credentials that the session policy does not bound, so s3_read would not
+// hold for them (#322, #329 review; ReadOnlyAccess allows it through s3:Get*).
+// Explicit names only: the AWS gate simulates each one.
 var dataReadDenies = []string{
 	"secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
 	"ssm:GetParameterHistory",
 	"dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PartiQLSelect",
-	"dynamodb:GetRecords",
+	"dynamodb:GetRecords", "s3:GetDataAccess",
 }
 
 // DataReadDenies returns a copy of the data-read actions the investigate scope
-// denies outright (secret values, SSM parameters, DynamoDB items).
+// denies outright (secret values, SSM parameters, DynamoDB items, S3 Access
+// Grants credentials).
 func DataReadDenies() []string { return slices.Clone(dataReadDenies) }
 
 // s3ExpressSession is how S3 Express One Zone directory buckets authorize
@@ -283,25 +287,19 @@ func ValidPassRolePrefix(s string) error {
 	return nil
 }
 
-// ssmParamReads are the SSM parameter reads, split out of dataReadDenies in
-// the elevated policy so that AWS's public parameters can be carved out.
-// s3AccessGrantsDenies (#322): S3 Access Grants hands out credentials of a
-// location's IAM role through s3:GetDataAccess, and those credentials are not
-// bound by the session policy, so its S3 read deny would not hold for them.
-// The window denies GetDataAccess and every Access Grants change, so it can
-// neither use a grant nor make one for another principal. Basis: AWS's action
-// catalog (internal/awsprobe snapshot) for the names; that GetDataAccess
-// credentials escape the session policy is inferred from what they are (the
-// location role's), not measured.
-//   - s3:GetDataAccess: the credential call;
-//   - s3AccessGrantsWrites: create, update, associate, delete and dissociate
-//     of grants, locations, instances and the Identity Center link. The
-//     instance resource policy put is already s3:Put*Policy* (#307).
+// S3 Access Grants (#322): Access Grants hands out credentials of a location's
+// IAM role through s3:GetDataAccess, and those credentials are not bound by the
+// session policy, so its S3 read deny would not hold for them. Both scopes deny
+// GetDataAccess as a data read (dataReadDenies), and the window also denies
+// every Access Grants change (s3AccessGrantsWrites: create, update, associate,
+// delete and dissociate of grants, locations, instances and the Identity
+// Center link; the instance resource policy put is already s3:Put*Policy*,
+// #307), so it can neither use a grant nor make one for another principal. A
+// grant, location or instance ARN carries no bucket name, so box buckets get
+// no exception. Basis: AWS's action catalog (internal/awsprobe snapshot) for the
+// names; that GetDataAccess credentials escape the session policy is inferred
+// from what they are (the location role's), not measured.
 //
-// A grant, location or instance ARN carries no bucket name, so box buckets get
-// no exception.
-var s3AccessGrantsDenies = []string{"s3:GetDataAccess", s3AccessGrantsWrites}
-
 // s3AccessGrantsWrites matches every S3 action whose name has "AccessGrant"
 // after a verb ending in "e" (Create, Update, Associate, Delete, Dissociate)
 // and no read (Get..., List... end the verb in "t"). Written as a pattern to fit
@@ -356,6 +354,8 @@ var dataResourcePolicyDenies = []string{"dynamodb:PutResourcePolicy", "dynamodb:
 // in AWS's catalog (the read is GetResourcePolicies); a test pins it.
 const ssmResourcePolicyWrites = "ssm:*ResourcePolicy"
 
+// ssmParamReads are the SSM parameter reads, split out of dataReadDenies in
+// the elevated policy so that AWS's public parameters can be carved out.
 var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"}
 
 // ssmParamReadsPattern is how the elevated policy writes ssmParamReads, to save
@@ -485,7 +485,7 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	// made public, so they matter even when no bucket is readable in the window.
 	always = append(always, boxBucketCopyDenies...)
 	always = append(always, s3AccountExposureDeny)
-	always = append(always, s3AccessGrantsDenies...)     // #322: no bucket in their ARNs, so no box exception
+	always = append(always, s3AccessGrantsWrites)        // #322: no bucket in their ARNs, so no box exception; GetDataAccess is a data read above
 	always = append(always, s3ExpressExposureDenies...)  // #323: no box exception
 	always = append(always, dataResourcePolicyDenies...) // #324: no resource prefix exists for them
 	// Replication and the S3 exposure calls (#307) have an exception only for

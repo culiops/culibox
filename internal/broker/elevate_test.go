@@ -562,7 +562,7 @@ func TestElevatedMintUsesTheWriteRoleAndPolicy(t *testing.T) {
 	mintOnce(t, b)
 	in := fm.calls[0]
 	if in.RoleARN != writeRole || in.Duration != 15*time.Minute || in.SessionName != "agentbox-aws-1" ||
-		!strings.Contains(in.Policy, "sts:AssumeRole*") || !strings.Contains(in.Policy, "iam:Create*") {
+		!strings.Contains(in.Policy, "sts:AssumeRo*") || !strings.Contains(in.Policy, "iam:Create*") {
 		t.Fatalf("mint input %+v", in)
 	}
 	r := rec.rows[len(rec.rows)-1]

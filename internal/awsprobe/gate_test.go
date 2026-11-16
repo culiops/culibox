@@ -161,8 +161,10 @@ func TestGateGuardrailExtendedToDenyMintingScreenPasses(t *testing.T) {
 	if len(r.DataReads) != len(DataReadActions) {
 		t.Fatalf("DataReads = %v", r.DataReads)
 	}
+	// Order follows the simulation: s3:GetDataAccess is also a minting action,
+	// so it is simulated (and reported) earlier than its place in the list.
 	for i, d := range r.DataReads {
-		if d.Action != DataReadActions[i] || !d.Denied {
+		if !slices.Contains(DataReadActions, d.Action) || !d.Denied {
 			t.Errorf("DataReads[%d] = %+v", i, d)
 		}
 	}
@@ -567,7 +569,7 @@ func TestGateRoleARNMustBeTheSSORole(t *testing.T) {
 func TestDataReadActions(t *testing.T) {
 	want := []string{"secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
 		"ssm:GetParameterHistory", "dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PartiQLSelect",
-		"dynamodb:GetRecords", "s3:GetObject", "kms:Decrypt"}
+		"dynamodb:GetRecords", "s3:GetDataAccess", "s3:GetObject", "kms:Decrypt"}
 	if !slices.Equal(DataReadActions, want) {
 		t.Errorf("DataReadActions = %v", DataReadActions)
 	}

@@ -220,11 +220,32 @@ func TestSSMResourcePolicyPatternIsPutAndDelete(t *testing.T) {
 	}
 }
 
-// The investigate scope is not changed by #322 (issue scope: the window).
-func TestSessionPolicyAccessGrantsUnchangedBy322(t *testing.T) {
-	p, _ := SessionPolicy("aws", nil)
-	if strings.Contains(p, "AccessGrant") || strings.Contains(p, "GetDataAccess") {
-		t.Fatalf("investigate policy changed: %s", p)
+// #329 review: the read scope denies s3:GetDataAccess too, as a data read:
+// ReadOnlyAccess allows it (s3:Get*), and a grant that names the read role
+// would otherwise hand out credentials beyond s3_read. The Access Grants
+// changes are the window's only (the read role cannot write).
+func TestSessionPolicyDeniesAccessGrantsCredentials(t *testing.T) {
+	const inst = "arn:aws:s3:us-east-1:123456789012:access-grants/default"
+	for _, r := range [][]string{nil, {"culishop-tfstate"}} {
+		p, err := SessionPolicy("aws", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := evaluate(t, p, evalReq{"s3:GetDataAccess", inst, nil}); got != "deny" {
+			t.Errorf("s3_read %v: s3:GetDataAccess is %s", r, got)
+		}
+		if strings.Contains(p, "AccessGrant") {
+			t.Errorf("the read scope carries the window's Access Grants denies: %s", p)
+		}
+	}
+	if !slices.Contains(DataReadDenies(), "s3:GetDataAccess") {
+		t.Error("DataReadDenies lacks s3:GetDataAccess")
+	}
+	// The window denies it once: through the data reads, not twice.
+	for name, p := range windowConfigs(t) {
+		if n := strings.Count(p, `"s3:GetDataAccess"`); n != 1 {
+			t.Errorf("%s: s3:GetDataAccess written %d times", name, n)
+		}
 	}
 }
 

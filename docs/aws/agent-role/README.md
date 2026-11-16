@@ -8,8 +8,9 @@ for 15 minutes at a time, and hands the credentials to the box through `credenti
 - **Permissions:** the AWS-managed `ReadOnlyAccess` policy. That is the ceiling. Each mint
   also carries a session policy generated from the connection, which denies data reads
   (S3 objects outside the connection's `s3_read` allowlist, S3 Express directory bucket
-  sessions, Secrets Manager values, SSM parameters, DynamoDB items, KMS decrypt outside S3).
-  Effective permissions are the intersection of the two.
+  sessions and S3 Access Grants credentials, Secrets Manager values, SSM parameters,
+  DynamoDB items, KMS decrypt outside S3). Effective permissions are the intersection of
+  the two.
   CuliBox simulates the role's own policy at spawn to check whether it can write, so a
   custom permissions policy must allow `iam:SimulatePrincipalPolicy` on the role itself
   (`ReadOnlyAccess` already does).
@@ -85,8 +86,8 @@ into its transcript that `ReadOnlyAccess` allows and the session policy does not
 (Lambda code URLs, ECR layers, Athena and Glue results, CloudWatch Logs, among others).
 
 **What the read scope denies, exactly.** The session policy denies these data classes and no
-others: S3 objects outside `s3_read` (and S3 Express directory bucket sessions), Secrets Manager
-secret values, Parameter Store values, DynamoDB items (stream records included), and KMS
+others: S3 objects outside `s3_read` (S3 Express directory bucket sessions and S3 Access Grants
+credentials included), Secrets Manager secret values, Parameter Store values, DynamoDB items (stream records included), and KMS
 decryption other than through S3. Every other data store stays readable **by design**, because an
 investigation needs it: Kinesis Data Streams records, SQS messages, CloudWatch Logs events and the
 like. That includes copies: a DynamoDB table that delivers its item changes to a Kinesis Data
@@ -410,17 +411,17 @@ that name; code run as a passed role (with `pass_role_prefix`) is not bound by t
 and can change any bucket that role can; and with `allow_iam` on, the agent can create a role that
 does it.
 
-**S3 Access Grants is off in the window
+**S3 Access Grants is off
 ([#322](https://github.com/culiops/culibox/issues/322)).** `s3:GetDataAccess` returns credentials
 of an Access Grants location's IAM role, and the session policy does not bound those, so its
-object-read deny would not hold for them. The window denies `s3:GetDataAccess` and every Access
-Grants change (`s3:*eAccessGrant*`: creating, updating, associating, deleting or dissociating
-grants, locations, instances and the Identity Center link; the instance resource policy is
-`s3:Put*Policy*` above). Reads (`GetAccessGrant`, `ListAccessGrants` and the like) stay allowed.
-A grant, location or instance carries no bucket name, so box buckets get no exception: a stack
-that changes Access Grants cannot apply in the window. The read role is not changed: it keeps
-`s3:GetDataAccess` from `ReadOnlyAccess`, so a grant that names `agentbox-agent` hands the
-agent credentials for whatever that grant covers, `s3_read` or not.
+object-read deny would not hold for them. Both the read role's session policy and the window deny
+`s3:GetDataAccess` (it is one of the data reads; `ReadOnlyAccess` allows it through `s3:Get*`).
+The window also denies every Access Grants change (`s3:*eAccessGrant*`: creating, updating,
+associating, deleting or dissociating grants, locations, instances and the Identity Center link;
+the instance resource policy is `s3:Put*Policy*` above). Reads (`GetAccessGrant`,
+`ListAccessGrants` and the like) stay allowed. A grant, location or instance carries no bucket
+name, so box buckets get no exception: a stack that changes Access Grants cannot apply in the
+window.
 
 **S3 Express directory buckets are closed
 ([#323](https://github.com/culiops/culibox/issues/323)).** A directory bucket's objects are not
