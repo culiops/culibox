@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"syscall"
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -115,7 +116,10 @@ func signInOf(ctx context.Context, profile string, now time.Time, direct bool) S
 	var key string
 	switch {
 	case sc.SSOSessionName != "":
-		if sc.SSOSession == nil || sc.SSOSession.SSORegion == "" || sc.SSOSession.SSOStartURL == "" ||
+		// A session profile still needs the account and role GetRoleCredentials
+		// is asked for: without them every mint fails whatever the token says.
+		if sc.SSOAccountID == "" || sc.SSORoleName == "" ||
+			sc.SSOSession == nil || sc.SSOSession.SSORegion == "" || sc.SSOSession.SSOStartURL == "" ||
 			(sc.SSORegion != "" && sc.SSORegion != sc.SSOSession.SSORegion) ||
 			(sc.SSOStartURL != "" && sc.SSOStartURL != sc.SSOSession.SSOStartURL) {
 			return SignIn{State: SignInIncomplete}
@@ -163,18 +167,12 @@ func tokenState(key string, session bool, now time.Time) SignIn {
 	if err != nil {
 		return SignIn{State: SignInUnknown}
 	}
-	// Only a regular file is opened: open(2) on a FIFO blocks until a writer
-	// shows up, which would hang the credentials page. The SDK's loader would
-	// not read such a path either (it is not a token), so it is unknown.
-	if fi, err := os.Stat(path); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return SignIn{State: SignInNever}
-		}
-		return SignIn{State: SignInUnknown}
-	} else if !fi.Mode().IsRegular() {
-		return SignIn{State: SignInUnknown}
-	}
-	f, err := os.Open(path)
+	// O_NONBLOCK, because open(2) on a FIFO blocks until a writer shows up and
+	// that would hang the credentials page (the SDK's own loader uses
+	// os.ReadFile and would block on such a path too; this read must not).
+	// The fstat after the open is the real guard: only a regular file is read.
+	// O_NONBLOCK has no effect on reads of a regular file.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return SignIn{State: SignInNever}

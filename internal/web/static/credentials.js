@@ -190,7 +190,7 @@ function credSignIn(e, now) {
       if (e.mode === "sso_direct") return { cls: "locked", text: "Not an SSO profile", sub: "SSO role directly needs one" };
       return { cls: "idle", text: "Not SSO", sub: "no sign-in needed" };
     case "incomplete":
-      return { cls: "locked", text: "SSO profile incomplete", sub: e.source_profile ? e.source_profile + " lacks an SSO setting (start URL, region, account or role)" : "an SSO setting is missing" };
+      return { cls: "locked", text: "SSO profile incomplete", sub: e.source_profile ? e.source_profile + "'s SSO settings are missing or do not match its sso-session" : "SSO settings are missing or do not match the sso-session" };
     case "no_profile":
       return { cls: "locked", text: "Profile not found", sub: e.source_profile ? e.source_profile + " is not in the AWS config" : "not in the AWS config" };
   }

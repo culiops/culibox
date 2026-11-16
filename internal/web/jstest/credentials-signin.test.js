@@ -33,7 +33,8 @@ test("credSignIn: signed in is not shown once its expiry has passed, and it is n
 test("credSignIn: an incomplete SSO profile is amber and names the profile", () => {
   const s = credSignIn({ status: "ok", source_profile: "half-p", signin: sin("incomplete") }, NOW);
   assert.deepStrictEqual([s.cls, s.text], ["locked", "SSO profile incomplete"]);
-  assert.match(s.sub, /half-p/);
+  assert.strictEqual(s.sub, "half-p's SSO settings are missing or do not match its sso-session");
+  assert.strictEqual(credSignIn({ status: "ok", signin: sin("incomplete") }, NOW).sub, "SSO settings are missing or do not match the sso-session");
 });
 
 test("credSignIn: expired is amber, never signed in, renewable and unknown are neutral, none of them green", () => {

@@ -25,6 +25,12 @@ func TestSignInOfFollowsSDKCredentialOrder(t *testing.T) {
 			"[profile l]\nsso_region = us-east-1\nsso_account_id = 1\nsso_role_name = R\n", "l", SignInIncomplete},
 		{"legacy start URL but no role name", "[profile l]\nsso_start_url = https://x.awsapps.com/start\nsso_region = us-east-1\nsso_account_id = 1\n", "l", SignInIncomplete},
 		{"sso-session section without a start URL", "[profile s]\nsso_session = corp\nsso_account_id = 1\nsso_role_name = R\n[sso-session corp]\nsso_region = us-east-1\n", "s", SignInIncomplete},
+		{"profile sso_region that disagrees with its sso-session",
+			"[profile s]\nsso_session = corp\nsso_region = eu-west-1\nsso_account_id = 1\nsso_role_name = R\n" + sess, "s", SignInIncomplete},
+		{"sso-session section without a region", "[profile s]\nsso_session = corp\nsso_account_id = 1\nsso_role_name = R\n[sso-session corp]\nsso_start_url = https://corp.awsapps.com/start\n", "s", SignInIncomplete},
+		{"session profile without sso_account_id: every mint fails at GetRoleCredentials",
+			"[profile s]\nsso_session = corp\nsso_role_name = R\n" + sess, "s", SignInIncomplete},
+		{"session profile without sso_role_name", "[profile s]\nsso_session = corp\nsso_account_id = 1\n" + sess, "s", SignInIncomplete},
 		{"profile start URL that disagrees with its sso-session",
 			"[profile s]\nsso_session = corp\nsso_start_url = https://other.awsapps.com/start\nsso_account_id = 1\nsso_role_name = R\n" + sess, "s", SignInIncomplete},
 	}
