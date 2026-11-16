@@ -144,6 +144,59 @@ function checkedText(iso, now) {
   return "checked " + day(t);
 }
 
+// credClock: an instant as the clock time when it is today, else "YYYY-MM-DD HH:MM" (the browser's local time).
+function credClock(iso, now) {
+  const t = new Date(iso);
+  if (isNaN(t.getTime())) return "";
+  const n = now || new Date();
+  const day = (d) => d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+  const hm = pad2(t.getHours()) + ":" + pad2(t.getMinutes());
+  return day(t) === day(n) ? hm : day(t) + " " + hm;
+}
+
+// credSignIn: what an AWS connection's sign-in cell says (#141). The config's status ("ok") only says the entry parses;
+// the server's `signin` says what the host's SSO token cache holds. Green ("ready") is for a signed-in session only: a
+// missing, new or garbled state reads Unknown, never ready. Expired and a profile that is not there are amber (they need
+// you), never-signed-in, renewable and unknown are neutral. An entry whose config is not ok keeps that status.
+// Where to sign in: the existing flow, Edit then Check (an expired or absent sign-in shows its Sign in button there).
+const CRED_SIGNIN_EDIT = "Edit, then Check to sign in";
+// A config.json entry has no Edit: the sign-in is the host command (the one the Check flow offers when the UI cannot start it).
+function credSignInWhere(e) {
+  if (entryActions(e).includes("edit")) return CRED_SIGNIN_EDIT;
+  return e.source_profile ? "run: aws sso login --profile " + e.source_profile : "sign in on the host";
+}
+
+function credSignIn(e, now) {
+  const st = e && e.status;
+  if (st !== "ok") return { cls: statusClass(st), text: statusText(st), sub: "" };
+  const s = (e.signin && e.signin.state) || "";
+  const n = now || new Date();
+  const until = e.signin && e.signin.until;
+  switch (s) {
+    case "signed_in": {
+      // An answer that was true when the page loaded and has run out since is not shown as green.
+      const t = until ? new Date(until) : null;
+      // The server may now say renewable or expired, and this page cannot tell which: say that, neutrally, not "expired".
+      if (t && !isNaN(t.getTime()) && t.getTime() <= n.getTime()) return { cls: "idle", text: "Sign-in may have expired", sub: "reload to re-check" };
+      return { cls: "ready", text: "Signed in", sub: until && credClock(until, n) ? "until " + credClock(until, n) : "" };
+    }
+    case "expired":
+      return { cls: "locked", text: "Sign-in expired", sub: credSignInWhere(e) };
+    case "never":
+      return { cls: "idle", text: "Not signed in", sub: credSignInWhere(e) };
+    case "renewable":
+      return { cls: "idle", text: "Renews on use", sub: "token expired, refresh not checked" };
+    case "not_sso":
+      if (e.mode === "sso_direct") return { cls: "locked", text: "Not an SSO profile", sub: "SSO role directly needs one" };
+      return { cls: "idle", text: "Not SSO", sub: "no sign-in needed" };
+    case "incomplete":
+      return { cls: "locked", text: "SSO profile incomplete", sub: e.source_profile ? e.source_profile + "'s SSO settings are missing or do not match its sso-session" : "SSO settings are missing or do not match the sso-session" };
+    case "no_profile":
+      return { cls: "locked", text: "Profile not found", sub: e.source_profile ? e.source_profile + " is not in the AWS config" : "not in the AWS config" };
+  }
+  return { cls: "idle", text: "Unknown", sub: "could not read the sign-in cache" };
+}
+
 // credRoleName: the part of a role ARN after "role/".
 function credRoleName(arn) {
   const s = String(arn || "");
@@ -202,7 +255,7 @@ function credTablesAt(width, pageMode, needW) {
 }
 
 const CRED_TABLE_HEADS = {
-  aws: ["Connection", "Account · role", "SSO", "Write probe", "Used by", ""],
+  aws: ["Connection", "Account · role", "Sign-in", "Write probe", "Used by", ""],
   github: ["App", "Client ID · key", "Status", "Used by", ""],
   token: ["Token", "Env · agent may reach", "Status", "Used by", ""],
 };
@@ -237,6 +290,9 @@ function credTableRow(key, e) {
   const st = { text: statusText(e.status), cls: statusClass(e.status), kind: "st" };
   if (key === "aws") {
     const probe = credProbeCell(e);
+    // The third cell is the sign-in state, not the config's status (#141): "Ready" there meant only "the entry parses".
+    const si = credSignIn(e, new Date());
+    const st = { text: si.text, cls: si.cls, kind: "st", sub: si.sub };
     return {
       cells: [
         { text: e.name, mono: true, tag: e.prod ? "PROD" : "", seed: isSeed(e), sub: credElevateText(e.elevate) },
@@ -820,7 +876,7 @@ if (typeof module !== "undefined" && module.exports) {
     awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC, awsFootNote, awsFootReasons, setDisabledReason,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
     GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
-    CRED_TABLE_MIN_WIDTH, credTablesAt,
+    CRED_TABLE_MIN_WIDTH, credTablesAt, credSignIn, credClock,
   };
 }
 
@@ -926,7 +982,7 @@ function credCard(entry, title, sub, body, extra) {
   if (sub) top.appendChild(credEl("span", "lab", sub));
   if (entry.prod) top.appendChild(credBadge("prod", "PROD"));
   if (isSeed(entry)) top.appendChild(credBadge("seed", "from config.json"));
-  top.appendChild(credChip(entry.status));
+  top.appendChild(extra && extra.chip ? credEl("span", "st " + extra.chip.cls, extra.chip.text) : credChip(entry.status));
   art.append(top, credActions(entry, loadCredentials));
   const bd = credEl("div", "ent-body");
   if (entry.error) bd.appendChild(credEl("p", "ent-err", entry.error));
@@ -942,6 +998,9 @@ function credAWSCard(e) {
   if (e.source_profile) meta.push(["Profile", e.source_profile]);
   if (e.elevate) meta.push(["Elevate", credRoleName(e.elevate.role_arn) + (e.elevate.max_minutes ? " (" + e.elevate.max_minutes + " min)" : "")]);
   meta.push(["Used by", usedByText(e.used_by)]);
+  // The card's chip is the sign-in state (the table's third cell), not the config's "Ready" (#141); its detail line is a row.
+  const si = credSignIn(e, new Date());
+  if (e.status === "ok" && si.sub) meta.push(["Sign-in", si.sub]);
   const body = [credMeta(meta)];
   if (e.status === "ok" && direct) {
     body.push(credEl("div", "verdict", CRED_SSO_DIRECT_GATE_NOTE));
@@ -965,7 +1024,7 @@ function credAWSCard(e) {
       body.push(v);
     }
   }
-  return credCard(e, e.name, e.label, body, { danger: e.status === "ok" && verdict.cls === "bad" });
+  return credCard(e, e.name, e.label, body, { danger: e.status === "ok" && verdict.cls === "bad", chip: si });
 }
 
 function credAppCard(e) {

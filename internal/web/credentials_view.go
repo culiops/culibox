@@ -195,6 +195,43 @@ type credAWSBody struct {
 	Error       string      `json:"error,omitempty"`
 	UsedBy      []string    `json:"used_by"`
 	Base        verdictBody `json:"base"`
+	// SignIn is what the host's SSO token cache says about the source profile
+	// (#141). Status only says the config is valid. Absent for an entry that did
+	// not merge.
+	SignIn *credSignInBody `json:"signin,omitempty"`
+}
+
+// credSignInBody is a source profile's sign-in state and, when a token was
+// read, its expiry. The token cache holds secrets; nothing of it but these two
+// fields is ever put on the wire.
+type credSignInBody struct {
+	State string     `json:"state"`
+	Until *time.Time `json:"until,omitempty"`
+}
+
+// signInFor reads the profile's sign-in state from the local token cache. It
+// makes no network call and is memoised per request in seen, so connections that
+// share a profile share one read.
+func signInFor(ctx context.Context, profile string, direct bool, now time.Time, seen map[string]*credSignInBody) *credSignInBody {
+	memo := profile
+	if direct {
+		memo = "direct\x00" + profile // sso_direct judges the same profile more strictly
+	}
+	if b, ok := seen[memo]; ok {
+		return b
+	}
+	read := broker.SignInOf
+	if direct {
+		read = broker.SignInOfDirect
+	}
+	r := read(ctx, profile, now)
+	b := &credSignInBody{State: string(r.State)}
+	if !r.Until.IsZero() {
+		u := r.Until.UTC()
+		b.Until = &u
+	}
+	seen[memo] = b
+	return b
 }
 
 type credAppBody struct {
@@ -380,6 +417,9 @@ func (s *Server) credView() credViewBody {
 		ids.listErr = true
 	}
 
+	signInCtx, cancelSignIn := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelSignIn()
+	signInNow, signIns := time.Now(), map[string]*credSignInBody{}
 	for _, e := range sn.aws {
 		b := credAWSBody{Name: e.conn.Name, Label: e.conn.Label, Description: e.conn.Description, AccountID: connAccount(e.conn),
 			Region: e.conn.Region, Prod: e.conn.Prod, Source: e.src, SourceProfile: e.conn.SourceProfile, RoleARN: e.conn.RoleARN, Mode: e.conn.Mode,
@@ -387,6 +427,8 @@ func (s *Server) credView() credViewBody {
 			Status: credOK, Error: e.err, UsedBy: orEmpty(e.usedBy), Base: verdictOf(e.base)}
 		if e.err != "" {
 			b.Status = credInvalid
+		} else {
+			b.SignIn = signInFor(signInCtx, e.conn.SourceProfile, e.conn.SSODirect(), signInNow, signIns)
 		}
 		if el := e.conn.Elevate; el != nil {
 			b.Elevate = &credElevateBody{RoleARN: el.RoleARN, MaxMinutes: el.Max(), AllowIAM: el.AllowIAM, BoxBucketPrefix: el.BoxBucketPrefix, PassRolePrefix: el.PassRolePrefix}

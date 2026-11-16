@@ -2400,6 +2400,8 @@
      token whose variable is not set. What needs the user is amber: a locked store, and "Not set up" in the strip. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.missing, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.notset { color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.locked { color: var(--amber); }
+  /* #141: a sign-in state that is neither good nor a request (never signed in, unknown, no SSO) is muted, like Missing. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.idle { color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st.notset { color: var(--amber); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.invalid { color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .hint { font-size: var(--t-sm); line-height: 1.6; }
