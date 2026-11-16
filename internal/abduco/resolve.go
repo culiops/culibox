@@ -7,6 +7,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -44,8 +45,8 @@ func DefaultLookup() Lookup {
 }
 
 // privateGid is this process's primary group when it is the user's private group
-// (same name as the user), else -1. Users the pure-Go lookup cannot see (macOS
-// directory services, LDAP) get -1, the strict rule.
+// (same name as the user), else -1: the strict rule. macOS users have the shared
+// group staff, so they get -1; so does a user os/user cannot look up.
 func privateGid() int {
 	u, err := user.Current()
 	if err != nil {
@@ -122,6 +123,9 @@ func bundledOK(path string, uid, pgid int) (why string, ok bool) {
 		if err != nil {
 			return err.Error(), false
 		}
+		if dotDotAfterName(dest) {
+			return "a symlink whose target has `..` after a folder name (" + dest + ")", false
+		}
 		if !filepath.IsAbs(dest) {
 			dest = filepath.Join(filepath.Dir(path), dest)
 		}
@@ -152,6 +156,25 @@ func bundledOK(path string, uid, pgid int) (why string, ok bool) {
 		return why, false
 	}
 	return "", true
+}
+
+// dotDotAfterName says whether p has a `..` after some other name. Cleaning such a
+// path would hide whether that name is a symlink; leading `..`s are fine, since they
+// climb from the link's own folder, which is already resolved.
+func dotDotAfterName(p string) bool {
+	named := false
+	for _, part := range strings.Split(p, string(filepath.Separator)) {
+		switch part {
+		case "", ".":
+		case "..":
+			if named {
+				return true
+			}
+		default:
+			named = true
+		}
+	}
+	return false
 }
 
 // safeDir is "" when only uid or root can add, remove or replace files in dir.

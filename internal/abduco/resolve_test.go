@@ -18,9 +18,20 @@ type resolveFixture struct {
 	onPath string // what LookPath("abduco") returns; "" = not found
 }
 
+// realTempDir is t.TempDir() by its resolved path: on macOS it sits under /var, a
+// symlink, and the resolver compares resolved paths.
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 func newResolveFixture(t *testing.T) *resolveFixture {
 	t.Helper()
-	dir := t.TempDir()
+	dir := realTempDir(t)
 	exe := filepath.Join(dir, "culibox")
 	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -62,7 +73,7 @@ func TestResolveConfiguredWins(t *testing.T) {
 	f := newResolveFixture(t)
 	f.bundle(t, 0o755)
 	f.onPath = "/usr/bin/abduco"
-	other := filepath.Join(t.TempDir(), "my-abduco")
+	other := filepath.Join(realTempDir(t), "my-abduco")
 	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +90,7 @@ func TestResolveConfiguredMissing(t *testing.T) {
 	f := newResolveFixture(t)
 	f.bundle(t, 0o755)
 	f.onPath = "/usr/bin/abduco"
-	_, err := f.lookup(os.Getuid()).Resolve(filepath.Join(t.TempDir(), "nope"))
+	_, err := f.lookup(os.Getuid()).Resolve(filepath.Join(realTempDir(t), "nope"))
 	if err == nil || !strings.Contains(err.Error(), "abduco_bin") {
 		t.Fatalf("err = %v, want an abduco_bin error and no fallback", err)
 	}
@@ -115,7 +126,7 @@ func TestResolvePathWhenNoBundled(t *testing.T) {
 func TestResolveFollowsExecutableSymlink(t *testing.T) {
 	f := newResolveFixture(t)
 	want := f.bundle(t, 0o755)
-	linkDir := t.TempDir()
+	linkDir := realTempDir(t)
 	link := filepath.Join(linkDir, "culibox")
 	if err := os.Symlink(f.exe, link); err != nil {
 		t.Fatal(err)
@@ -153,7 +164,7 @@ func TestResolveSkipsForeignOwner(t *testing.T) {
 // The file's own owner check, which a test cannot reach through Resolve without
 // root (a folder we own always fails first for a fake uid).
 func TestOwnedByForeignUid(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "f")
+	p := filepath.Join(realTempDir(t), "f")
 	if err := os.WriteFile(p, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +286,7 @@ func TestResolveSkipsDirWritableByOthers(t *testing.T) {
 // A symlink next to culibox is only as safe as the folder its target sits in.
 func TestResolveSkipsSymlinkIntoSharedDir(t *testing.T) {
 	f := newResolveFixture(t)
-	shared := t.TempDir()
+	shared := realTempDir(t)
 	target := filepath.Join(shared, "abduco")
 	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -300,11 +311,11 @@ func TestResolveSkipsSymlinkIntoSharedDir(t *testing.T) {
 // in a shared folder whose owner can retarget it) is refused.
 func TestResolveSkipsSymlinkChain(t *testing.T) {
 	f := newResolveFixture(t)
-	target := filepath.Join(t.TempDir(), "abduco")
+	target := filepath.Join(realTempDir(t), "abduco")
 	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	shared := t.TempDir()
+	shared := realTempDir(t)
 	mid := filepath.Join(shared, "abduco")
 	if err := os.Symlink(target, mid); err != nil {
 		t.Fatal(err)
@@ -327,10 +338,7 @@ func TestResolveSkipsSymlinkChain(t *testing.T) {
 
 // A Homebrew-style relative link (bin/abduco -> ../cellar/abduco) is one hop.
 func TestResolveAcceptsRelativeSymlink(t *testing.T) {
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := realTempDir(t)
 	bin, cellar := filepath.Join(root, "bin"), filepath.Join(root, "cellar")
 	for _, d := range []string{bin, cellar} {
 		if err := os.Mkdir(d, 0o755); err != nil {
@@ -387,7 +395,7 @@ func TestResolveAcceptsPrivateGroupWritable(t *testing.T) {
 // matches attach clients by the basename "abduco").
 func TestResolveAcceptsSafeSymlink(t *testing.T) {
 	f := newResolveFixture(t)
-	target := filepath.Join(t.TempDir(), "abduco-0.6")
+	target := filepath.Join(realTempDir(t), "abduco-0.6")
 	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +431,7 @@ func TestBundledAdapterAdoptsPathAbducoSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundled := filepath.Join(t.TempDir(), "abduco")
+	bundled := filepath.Join(realTempDir(t), "abduco")
 	if err := os.WriteFile(bundled, b, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -454,5 +462,36 @@ func TestBundledAdapterAdoptsPathAbducoSession(t *testing.T) {
 	}
 	if a.Alive(id) || a.InnerAlive(id) {
 		t.Fatal("session still alive after the bundled adapter killed it")
+	}
+}
+
+// A `..` after a symlink in a link's target hides that symlink from the one-hop
+// check (both spellings clean to the same path), so such a target is refused.
+func TestResolveSkipsDotDotThroughSymlink(t *testing.T) {
+	f := newResolveFixture(t)
+	x := realTempDir(t)
+	for _, d := range []string{filepath.Join(x, "t"), filepath.Join(x, "b")} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(x, "b", "abduco"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(x, "t"), filepath.Join(x, "s")); err != nil {
+		t.Fatal(err)
+	}
+	// Not filepath.Join: that would clean the `..` away.
+	sep := string(filepath.Separator)
+	if err := os.Symlink(x+sep+"s"+sep+".."+sep+"b"+sep+"abduco", filepath.Join(f.dir, "abduco")); err != nil {
+		t.Fatal(err)
+	}
+	f.onPath = "/usr/bin/abduco"
+	r, err := f.lookup(os.Getuid()).Resolve("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Source != SourcePath || !strings.Contains(r.Skipped, "..") {
+		t.Fatalf("got %+v, want PATH with a `..` skip reason", r)
 	}
 }
