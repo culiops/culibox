@@ -209,8 +209,10 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon) {
     // Quiet, like the no-layer reason below: this profile does not need a box.
     b.lines.push("On this machine: runs as you, with your files, your network and your credentials", dline);
   } else if (daemon) {
-    // Every session of a box profile is refused until it is fixed (the layer's Prepare).
-    b.lines.push("In a box", dline, "Sessions with this profile can't start until that is fixed.");
+    // The two named reasons refuse every session of a box profile (the layer's Prepare). Any other
+    // (the doctor pointer) is not refused there: the spawn's own docker calls may still work.
+    const refusing = /^(Docker is not running|no permission to use Docker)$/.test(daemon);
+    b.lines.push("In a box", dline, refusing ? "Sessions with this profile can't start until that is fixed." : "Sessions with this profile may fail to start.");
     b.tone = "error";
     b.toneAt = 1;
   } else if (host) {

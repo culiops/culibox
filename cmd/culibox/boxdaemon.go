@@ -23,54 +23,78 @@ const daemonTTL = 15 * time.Second
 //
 // Two readers. Check asks the daemon now (bounded) and stores the answer: boot
 // and every boxed spawn. Reason serves the stored answer to /api/meta and, once
-// it is older than ttl, starts one background Check behind it, so a page load
-// never waits on docker and a hung daemon holds no more than one probe.
+// it is older than ttl, starts one background Check behind it, so a hung daemon
+// holds no more than one probe. A stored ERROR that is stale is the one case a
+// reader waits (at most wait): the user has just started Docker and reloaded,
+// and the page must not say "not running" once more. A stored pass is served at
+// once, so a healthy page load never waits on docker.
 type daemonWatch struct {
 	ping func(context.Context) error
 	ttl  time.Duration
+	wait time.Duration    // the longest a read waits for a refresh behind a stored error
 	now  func() time.Time // a test replaces it
 
 	mu   sync.Mutex
 	err  error
-	at   time.Time
-	busy bool
+	at   time.Time     // when the probe that gave err started
+	busy bool          // a background refresh is running
+	done chan struct{} // closed when that refresh ends
 }
 
 func newDaemonWatch(ping func(context.Context) error, ttl time.Duration) *daemonWatch {
-	return &daemonWatch{ping: ping, ttl: ttl, now: time.Now}
+	return &daemonWatch{ping: ping, ttl: ttl, wait: time.Second, now: time.Now}
 }
 
 // Check probes now, bounded by box.ProbeTimeout, remembers the answer and
-// returns it (nil: the daemon answers; see box.Ping for the classes).
+// returns it (nil: the daemon answers; see box.Ping for the classes). Probes
+// can finish out of order, so an answer replaces the stored one only if its
+// probe started no earlier than the stored one's.
 func (w *daemonWatch) Check(ctx context.Context) error {
+	started := w.now()
 	ctx, cancel := context.WithTimeout(ctx, box.ProbeTimeout)
 	defer cancel()
 	err := w.ping(ctx)
 	w.mu.Lock()
-	w.err, w.at = err, w.now()
+	if !started.Before(w.at) {
+		w.err, w.at = err, started
+	}
 	w.mu.Unlock()
 	return err
 }
 
 // Reason is the stored answer as the plain sentence the page shows ("" when
-// the daemon answered or was never asked). It never blocks on docker.
+// the daemon answered or was never asked). It waits on docker only behind a
+// stale stored error, and then for at most w.wait.
 func (w *daemonWatch) Reason() string {
 	w.mu.Lock()
-	err := w.err
-	stale := w.at.IsZero() || w.now().Sub(w.at) >= w.ttl
-	start := stale && !w.busy
-	if start {
-		w.busy = true
+	var wait chan struct{}
+	if w.at.IsZero() || w.now().Sub(w.at) >= w.ttl {
+		if !w.busy {
+			w.busy, w.done = true, make(chan struct{})
+			go func(done chan struct{}) {
+				w.Check(context.Background())
+				w.mu.Lock()
+				w.busy = false
+				w.mu.Unlock()
+				close(done)
+			}(w.done)
+		}
+		if w.err != nil {
+			wait = w.done
+		}
 	}
 	w.mu.Unlock()
-	if start {
-		go func() {
-			w.Check(context.Background())
-			w.mu.Lock()
-			w.busy = false
-			w.mu.Unlock()
-		}()
+	if wait != nil {
+		t := time.NewTimer(w.wait)
+		select {
+		case <-wait:
+		case <-t.C:
+		}
+		t.Stop()
 	}
+	w.mu.Lock()
+	err := w.err
+	w.mu.Unlock()
 	return box.DaemonReason(err)
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func TestLinuxLayerSaysWhyTheDaemonCannotBeUsed(t *testing.T) {
 		switch {
 		case tc.refuse:
 			if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), tc.reason) {
-				t.Errorf("%s: a boxed spawn must be refused with the reason, got %v", tc.name, err)
+				t.Fatalf("%s: a boxed spawn must be refused with the reason, got %v", tc.name, err)
 			}
 			if strings.Contains(err.Error(), "/var/run") {
 				t.Errorf("%s: the refusal carries docker's own text: %v", tc.name, err)
@@ -99,19 +100,13 @@ func TestDaemonWatchRefreshes(t *testing.T) {
 	if got := w.Reason(); got != "Docker is not running" || calls.Load() != 1 {
 		t.Fatalf("fresh cache: reason %q after %d calls", got, calls.Load())
 	}
-	// Past it, the stored answer is returned at once and one probe runs behind it.
+	// Past it, with an ERROR stored, the first read waits for the probe behind it: the user started
+	// Docker and reloaded, and the page must not say "not running" until a second reload.
 	now = now.Add(2 * time.Minute)
-	if got := w.Reason(); got != "Docker is not running" {
-		t.Fatalf("a stale answer is served while it refreshes, got %q", got)
+	if got := w.Reason(); got != "" {
+		t.Fatalf("the first read after the daemon came up still says %q", got)
 	}
 	<-done
-	deadline := time.Now().Add(2 * time.Second)
-	for w.Reason() != "" && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if got := w.Reason(); got != "" {
-		t.Fatalf("the refreshed answer never replaced the stale one: %q", got)
-	}
 	// A spawn-time check is always fresh and also updates what /api/meta serves.
 	up.Store(false)
 	if got := box.DaemonReason(w.Check(context.Background())); got != "Docker is not running" {
@@ -143,4 +138,70 @@ func TestDaemonWatchRunsOneRefreshAndBoundsIt(t *testing.T) {
 		t.Fatalf("%d probes in flight for 5 requests", n)
 	}
 	close(release)
+}
+
+// A stale HEALTHY answer is served at once (the page never waits on docker in the common case), and a
+// hung daemon costs one read at most the wait, not the probe's own 5 s.
+func TestDaemonWatchStaleReadsAreBounded(t *testing.T) {
+	release := make(chan struct{})
+	var hung atomic.Bool
+	w := newDaemonWatch(func(context.Context) error {
+		if hung.Load() {
+			<-release
+		}
+		return nil
+	}, time.Minute)
+	now := time.Now()
+	w.now = func() time.Time { return now }
+	w.wait = 50 * time.Millisecond
+	w.Check(context.Background())
+	now = now.Add(2 * time.Minute)
+	hung.Store(true)
+	start := time.Now()
+	if got := w.Reason(); got != "" || time.Since(start) > 40*time.Millisecond {
+		t.Fatalf("a stale healthy answer must come back at once: %q after %v", got, time.Since(start))
+	}
+	// An error stored while the daemon hangs: the read waits no longer than the bound.
+	w.mu.Lock()
+	w.err = box.ErrDockerNotRunning
+	w.mu.Unlock()
+	start = time.Now()
+	if got := w.Reason(); got != "Docker is not running" {
+		t.Fatalf("a hung daemon leaves the stored answer, got %q", got)
+	}
+	if d := time.Since(start); d < 40*time.Millisecond || d > time.Second {
+		t.Fatalf("the read took %v, want about the wait", d)
+	}
+	close(release)
+}
+
+// Two probes can finish out of order; the one that STARTED later is the newer fact.
+func TestDaemonWatchKeepsTheNewerAnswer(t *testing.T) {
+	slowStarted, releaseSlow := make(chan struct{}), make(chan struct{})
+	var n atomic.Int32
+	w := newDaemonWatch(func(context.Context) error {
+		if n.Add(1) == 1 {
+			close(slowStarted)
+			<-releaseSlow
+			return box.ErrDockerNotRunning // asked before Docker came up, answered after
+		}
+		return nil
+	}, time.Minute)
+	now := time.Now()
+	var mu sync.Mutex
+	w.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	slowDone := make(chan struct{})
+	go func() { w.Check(context.Background()); close(slowDone) }()
+	<-slowStarted
+	mu.Lock()
+	now = now.Add(time.Second)
+	mu.Unlock()
+	if err := w.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	close(releaseSlow)
+	<-slowDone
+	if got := w.Reason(); got != "" {
+		t.Fatalf("an older probe that finished last overwrote the newer answer: %q", got)
+	}
 }

@@ -332,6 +332,15 @@ test("a box layer whose daemon cannot be used says why, on a box profile and qui
     "Boxes can't start right now: Docker is not running.",
   ]);
   assert.ok(!host.tone, "a host profile does not need a box: muted, never red");
+  // An unclassified failure is not refused at spawn (only the two named ones are): the consequence is softer.
+  const other = byId(pfvReadView(awsIn({ boxRuntime: "runc", boxDaemonReason: "run `culibox doctor` for details" })), "runs");
+  assert.deepStrictEqual(other.lines, [
+    "In a box",
+    "Boxes can't start right now: run `culibox doctor` for details.",
+    "Sessions with this profile may fail to start.",
+  ]);
+  const denied = byId(pfvReadView(awsIn({ boxRuntime: "runc", boxDaemonReason: "no permission to use Docker" })), "runs");
+  assert.strictEqual(denied.lines[2], "Sessions with this profile can't start until that is fixed.");
   // The daemon answering, an older server, and no layer at all keep today's lines.
   for (const over of [{ boxDaemonReason: "" }, {}, { boxDaemonReason: undefined }]) {
     const ok = byId(pfvReadView(awsIn({ boxRuntime: "runc", ...over })), "runs");
