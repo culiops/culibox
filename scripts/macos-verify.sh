@@ -46,7 +46,7 @@
 #                                (default: ci/install-abduco.sh next to this script)
 #   MACOS_VERIFY_GH_REPO         the release's repo for gh (default culiops/culibox)
 #   MACOS_VERIFY_TEST=1          skips ONLY the "must be Darwin arm64" refusal
-#   TMPDIR                       where the work dir goes
+#   TMPDIR                       where the work dir goes (used by its physical path)
 #
 # bash 3.2 (the macOS default) compatible: no associative arrays, no ${x,,}, no mapfile.
 set -euo pipefail
@@ -109,6 +109,12 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/macos-verify.XXXXXX")
+# By its physical path: macOS /tmp and /var are symlinks into /private, and a tree
+# reached through one gives a relative path with `..` a different meaning for the
+# kernel (physical) than for Go's filepath (logical, from $PWD), which fails tests of
+# a good build (#313).
+work_phys=$(cd "$work" && pwd -P) || die "cannot resolve the work dir $work"
+work=$work_phys
 
 # gh must be logged in before anything slow runs; the login is the verifier.
 verifier=$(gh api user -q .login) || die "gh is not logged in (gh api user failed)"
