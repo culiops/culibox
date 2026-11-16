@@ -13,6 +13,23 @@ BIN="${AB_PROD_BIN:-$HOME/bin/culibox-prod}"
 SERVICE="${AB_PROD_SERVICE:-culibox-prod}"
 RELEASE_BRANCH="${AB_PROD_BRANCH:-main}"
 STAMP="$BIN.deployed-sha"
+# What "came up" means after the restart (see wait_until_up). ADDR is where the daemon's HTTP
+# listener answers: it must be the bind_addr of the config the prod service runs with
+# (docs/CONFIG.md), since this script has no config of its own to read it from; the default is
+# the product's default bind. For a wildcard bind (0.0.0.0, ::) use a loopback address and the
+# same port. The windows are whole seconds, one poll each.
+ADDR="${AB_PROD_ADDR:-127.0.0.1:8899}"
+# `serve` takes the upgrade backup (a VACUUM INTO of audit.db, which the backup itself gives up
+# on after 2 minutes: internal/upgradebackup/audit.go) before it listens, and exits fail-closed
+# if that fails. So "not listening yet" is normal for a while, but cannot outlast the backup:
+# 150 s = that 2 minute limit plus margin. The wait ends at once when the unit dies.
+LISTEN_WAIT="${AB_PROD_LISTEN_WAIT:-150}"
+# After the first answer the unit must stay active, keep answering and keep its process for
+# this long: a build that crashes on its first request or its store unlock dies in this window.
+STABLE="${AB_PROD_STABLE_SECS:-15}"
+case "$LISTEN_WAIT" in '' | *[!0-9]* | 0) echo "refusing: AB_PROD_LISTEN_WAIT must be a whole number of seconds, 1 or more (got '$LISTEN_WAIT')." >&2; exit 1 ;; esac
+case "$STABLE" in '' | *[!0-9]*) echo "refusing: AB_PROD_STABLE_SECS must be a whole number of seconds, 0 or more (got '$STABLE')." >&2; exit 1 ;; esac
+command -v curl >/dev/null 2>&1 || { echo "refusing: curl is needed to check that the service answers after the restart." >&2; exit 1; }
 
 branch=$(git -C "$REPO" branch --show-current)
 head=$(git -C "$REPO" rev-parse --short HEAD)
@@ -114,15 +131,66 @@ fi
 : > "$UNVERIFIED"
 # A rename, not a write into $BIN: the running binary cannot be opened for writing.
 mv -f "$BIN.new" "$BIN"
+# Whether something answers HTTP on $ADDR. Any status counts, a 403 (the Host guard, when the
+# bind is not loopback) included: that is still the listener, which is all this asks.
+listener_answers() {
+  local code
+  code=$(curl -s -o /dev/null --noproxy '*' --connect-timeout 2 --max-time 3 -w '%{http_code}' "http://$ADDR/login" 2>/dev/null) || code=000
+  [ -n "$code" ] && [ "$code" != 000 ]
+}
+
+# "Came up" is not one look a second after the restart: a build can pass that and die on its
+# first request (#274), and serve may still be taking its upgrade backup, listening only after.
+# So: poll once a second until the listener has answered (at most LISTEN_WAIT seconds, and at
+# once if the unit dies, which is serve's fail-closed exit), then keep polling for STABLE
+# seconds, each poll needing the unit active, the same main process (a crash-restart between
+# polls shows as a new one) and the listener answering. Sets $why when it returns 1.
+wait_until_up() {
+  local polls=0 first="" pid0 pid
+  pid0=$(systemctl --user show -p MainPID --value "$SERVICE" 2>/dev/null || true)
+  [ "$pid0" != 0 ] || pid0=""
+  why=""
+  while :; do
+    sleep 1
+    polls=$((polls + 1))
+    if ! systemctl --user is-active --quiet "$SERVICE"; then
+      if [ -n "$first" ]; then
+        why="$SERVICE stopped being active ${polls}s after the restart, after it had been answering on $ADDR"
+      else
+        why="$SERVICE stopped being active ${polls}s after the restart, before it answered on $ADDR"
+      fi
+      return 1
+    fi
+    if [ -n "$pid0" ]; then
+      pid=$(systemctl --user show -p MainPID --value "$SERVICE" 2>/dev/null || true)
+      if [ -n "$pid" ] && [ "$pid" != "$pid0" ]; then
+        why="$SERVICE restarted on its own ${polls}s after the restart (main process $pid0, then $pid): it crashed and systemd started it again"
+        return 1
+      fi
+    fi
+    if listener_answers; then
+      [ -n "$first" ] || first=$polls
+      [ $((polls - first)) -lt "$STABLE" ] || return 0
+    elif [ -n "$first" ]; then
+      why="$ADDR stopped answering ${polls}s after the restart, after it had answered at ${first}s"
+      return 1
+    elif [ "$polls" -ge "$LISTEN_WAIT" ]; then
+      why="$SERVICE is active but $ADDR did not answer within ${LISTEN_WAIT}s (AB_PROD_ADDR must be the bind_addr the service runs with; AB_PROD_LISTEN_WAIT sets the wait)"
+      return 1
+    fi
+  done
+}
+
 echo "restarting $SERVICE"
 systemctl --user restart "$SERVICE"
-sleep 1
+echo "waiting for $SERVICE to answer on $ADDR, then to stay up for ${STABLE}s (up to ${LISTEN_WAIT}s for the first answer)"
 
 # Record only after the service is up: a stamp written past a failed restart
-# would make the next deploy hide the very commits that broke it. `is-active` is
-# that check — the status block below is for the operator's eyes only.
-if ! systemctl --user is-active --quiet "$SERVICE"; then
-  echo "deployed the binary, but $SERVICE is not active — not recording this commit." >&2
+# would make the next deploy hide the very commits that broke it, and a build that
+# dies inside the window must not become the next deploy's $PREV either (it stays
+# $UNVERIFIED). The status block below is for the operator's eyes only.
+if ! wait_until_up; then
+  echo "deployed the binary, but $SERVICE did not come up: $why. Not recording this commit." >&2
   systemctl --user --no-pager --lines=20 status "$SERVICE" >&2 || true
   print_rollback >&2
   exit 1

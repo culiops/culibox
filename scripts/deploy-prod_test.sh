@@ -4,7 +4,12 @@
 # The script runs from a copy inside a throwaway fixture repo (it deploys the checkout
 # it lives in), with every external effect stubbed:
 #   go          $GO points at a stub that "builds" a file holding the commit it was given
-#   systemctl   a PATH stub; STUB_RESTART_FAIL=1 makes the service not come up
+#   systemctl   a PATH stub; STUB_RESTART_FAIL=1 makes the service not come up;
+#               STUB_ACTIVE_UNTIL=N keeps it active for N polls, then it dies;
+#               STUB_PID_CHANGE_AFTER=N makes MainPID change after N reads (a crash-restart)
+#   curl        a PATH stub for the HTTP probe; STUB_LISTEN_AFTER=N answers only from the
+#               (N+1)th probe on, STUB_LISTEN_UNTIL=N stops answering after N probes
+#   sleep       a PATH stub that returns at once and logs, so the poll window costs no time
 # The prod binary, its stamp and the previous copy all live under the mktemp dir, which
 # is removed on exit. Nothing touches the real ~/bin or the real service.
 set -euo pipefail
@@ -59,14 +64,50 @@ EOF
 cat >"$tmp/bin/systemctl" <<'EOF'
 #!/bin/sh
 echo "$*" >>"$STUB_OUT/systemctl.log"
+# bump NAME: count the calls of one kind in this deploy; prints the new count.
+bump() {
+  n=$(cat "$STUB_OUT/count.$1" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  echo "$n" >"$STUB_OUT/count.$1"
+  echo "$n"
+}
 case "$*" in
-*is-active*) [ -z "${STUB_RESTART_FAIL:-}" ] ;;
+*is-active*)
+  n=$(bump active)
+  [ -z "${STUB_RESTART_FAIL:-}" ] || exit 1
+  [ -z "${STUB_ACTIVE_UNTIL:-}" ] || [ "$n" -le "$STUB_ACTIVE_UNTIL" ]
+  ;;
+*show*)
+  n=$(bump show)
+  if [ -n "${STUB_PID_CHANGE_AFTER:-}" ] && [ "$n" -gt "$STUB_PID_CHANGE_AFTER" ]; then echo 4243; else echo 4242; fi
+  ;;
 *) exit 0 ;;
 esac
 EOF
-chmod +x "$tmp/bin/go" "$tmp/bin/systemctl"
+cat >"$tmp/bin/curl" <<'EOF'
+#!/bin/sh
+# The HTTP probe: prints the status code the way `curl -w %{http_code}` does, 000 and exit 7
+# when nothing answers. Any other code (a 403 included) means a listener answered.
+echo "$*" >>"$STUB_OUT/curl.log"
+n=$(cat "$STUB_OUT/count.curl" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" >"$STUB_OUT/count.curl"
+if { [ -n "${STUB_LISTEN_AFTER:-}" ] && [ "$n" -le "$STUB_LISTEN_AFTER" ]; } ||
+  { [ -n "${STUB_LISTEN_UNTIL:-}" ] && [ "$n" -gt "$STUB_LISTEN_UNTIL" ]; }; then
+  printf 000
+  exit 7
+fi
+printf 200
+EOF
+cat >"$tmp/bin/sleep" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$STUB_OUT/sleep.log"
+EOF
+chmod +x "$tmp/bin/go" "$tmp/bin/systemctl" "$tmp/bin/curl" "$tmp/bin/sleep"
 export PATH=$tmp/bin:$PATH STUB_OUT=$tmp
 export GO=$tmp/bin/go AB_PROD_CONFIRM=yes AB_PROD_SERVICE=stub-prod
+# The address the probe is told to use; the script has no config to read it from.
+export AB_PROD_ADDR=127.0.0.1:18899
 # A space in the path: the printed rollback line is pasted into a shell, so it must quote.
 export AB_PROD_BIN="$HOME/prod bin/culibox-prod"
 bin=$AB_PROD_BIN
@@ -85,6 +126,7 @@ commit() { # MESSAGE: commit a change on main and print its sha
 }
 deploy() { # run the script; its exit code lands in $rc, its output in $tmp/out
   rc=0
+  rm -f "$tmp"/count.* "$tmp/curl.log" "$tmp/sleep.log"
   bash "$repo/scripts/deploy-prod.sh" >"$tmp/out" 2>&1 || rc=$?
 }
 # The rollback the script printed, as one shell line.
@@ -179,6 +221,79 @@ deploy
 expect_rc "$rc" 0 "F deployed again succeeds"
 content "$bin" "build $f" "F is installed"
 content "$bin.prev" "build $d" ".prev stays D, not the F that did not come up"
+
+# ---- 11. "came up" is a window, not one look (#274) -------------------------------------
+# State here: F is installed and stamped, D is .prev. The unit passing one is-active check
+# is not enough: a build can die a few seconds later, or serve can still be taking its
+# upgrade backup (it listens only after it) and then exit fail-closed.
+lines() { if [ -f "$1" ]; then wc -l <"$1" | tr -d ' '; else echo 0; fi; }
+unverified=$bin.unverified
+# not_recorded: the failed deploy left the stamp and .prev alone, kept $UNVERIFIED, and
+# printed the rollback and a message about what went wrong.
+not_recorded() { # STAMPED-SHA PREV-SHA MESSAGE-PATTERN LABEL
+  expect_rc "$rc" 1 "$4: the deploy fails"
+  content "$stamp" "$1" "$4: the commit is not stamped"
+  content "$bin.prev" "build $2" "$4: .prev is untouched by the rollback bookkeeping"
+  if [ -e "$unverified" ]; then pass "$4: the build stays marked unverified"; else fail "$4: the build was marked verified"; fi
+  if grep -q "$3" "$tmp/out"; then pass "$4: the operator is told why"; else fail "$4: no message matching '$3'"; sed 's/^/        | /' "$tmp/out" | tail -8 >&2; fi
+  if [ -n "$(rollback_line)" ]; then pass "$4: the rollback line is printed"; else fail "$4: no rollback line"; fi
+}
+
+# The defaults: the probe goes to AB_PROD_ADDR, and a healthy build is watched for 15 s.
+g=$(commit G)
+deploy
+expect_rc "$rc" 0 "a healthy build is recorded"
+content "$stamp" "$g" "G is stamped"
+content "$bin.prev" "build $f" "F, which came up, is kept as .prev"
+if grep -q "http://127.0.0.1:18899/" "$tmp/curl.log"; then pass "the listener probe goes to AB_PROD_ADDR"; else fail "the probe did not use AB_PROD_ADDR: $(cat "$tmp/curl.log" 2>/dev/null)"; fi
+if [ "$(lines "$tmp/sleep.log")" -ge 15 ]; then pass "by default a healthy build is watched for at least 15 polls"; else fail "default window too short: $(lines "$tmp/sleep.log") polls"; fi
+
+# The late crash: the unit is active for the first polls, then dies, inside the window.
+export AB_PROD_LISTEN_WAIT=20 AB_PROD_STABLE_SECS=5
+commit H >/dev/null
+STUB_ACTIVE_UNTIL=3 deploy
+not_recorded "$g" "$g" "stopped being active" "a build that crashes after the first polls"
+# Fixing forward must keep G, the last build that really ran, not the H that died.
+i=$(commit I)
+deploy
+expect_rc "$rc" 0 "the fix-forward deploy after the late crash succeeds"
+content "$stamp" "$i" "I is stamped"
+content "$bin.prev" "build $g" ".prev is G, the last build that ran, not the crashed H"
+content "$bin.prev.deployed-sha" "$g" ".prev records G"
+
+# A slow listen: serve is taking its upgrade backup and listens only after it. Not a failure.
+j=$(commit J)
+STUB_LISTEN_AFTER=8 deploy
+expect_rc "$rc" 0 "a build that listens after 8 polls (the backup) still comes up"
+content "$stamp" "$j" "J is stamped after the slow listen"
+if [ "$(lines "$tmp/sleep.log")" -le 40 ]; then pass "the slow listen is waited for, not forever"; else fail "too many polls: $(lines "$tmp/sleep.log")"; fi
+
+# The slow listen then a fail-closed exit (backup failed): the unit goes inactive before it ever listens.
+commit K >/dev/null
+STUB_LISTEN_AFTER=1000 STUB_ACTIVE_UNTIL=4 deploy
+not_recorded "$j" "$j" "stopped being active" "a serve that exits fail-closed before it listens"
+if [ "$(lines "$tmp/sleep.log")" -lt 10 ]; then pass "the fail-closed exit is noticed at once, not after the listen wait"; else fail "waited $(lines "$tmp/sleep.log") polls for a dead unit"; fi
+
+# Active but never listening: bounded by AB_PROD_LISTEN_WAIT.
+STUB_LISTEN_AFTER=1000 deploy
+not_recorded "$j" "$j" "did not answer" "a build that is active but never listens"
+if grep -q "AB_PROD_ADDR" "$tmp/out"; then pass "the message names AB_PROD_ADDR, the address it probed"; else fail "the message does not say which address or variable"; fi
+if [ "$(lines "$tmp/sleep.log")" -le 21 ]; then pass "the wait for the listener is bounded by AB_PROD_LISTEN_WAIT"; else fail "waited $(lines "$tmp/sleep.log") polls for a 20 s limit"; fi
+
+# Listening, then the listener goes away inside the stable window.
+STUB_LISTEN_UNTIL=3 deploy
+not_recorded "$j" "$j" "stopped answering" "a build whose listener dies inside the window"
+
+# Active and listening at every poll, but a different process each time: a crash-restart between polls.
+STUB_PID_CHANGE_AFTER=3 deploy
+not_recorded "$j" "$j" "restarted" "a build that crash-restarts between polls"
+
+# A setting that is not a number is refused before anything is built or swapped.
+before=$(cat "$bin")
+AB_PROD_STABLE_SECS=soon deploy
+expect_rc "$rc" 1 "a non-numeric AB_PROD_STABLE_SECS is refused"
+content "$bin" "$before" "a refused setting leaves the installed binary alone"
+unset AB_PROD_LISTEN_WAIT AB_PROD_STABLE_SECS
 
 if [ "$fails" -ne 0 ]; then
   echo "deploy-prod_test: $fails failure(s)" >&2
