@@ -47,7 +47,7 @@ func TestWrapRefusesAWorkspaceFlippedBeforeDockerRun(t *testing.T) {
 	// as they are: a repeat for every folder means it does not.
 	want := "workspace " + ws + ": the mounted folder is not the one that was checked (it changed while the box started); refusing. " +
 		"If this repeats for every folder, CuliBox's docker does not see host files as they are " +
-		"(for example Docker Desktop for Linux or a remote docker host); see Requirements in docs/INSTALL.md."
+		"(for example Docker Desktop for Linux or a remote docker host); see Requirements at https://github.com/culiops/culibox/blob/main/docs/INSTALL.md#requirements."
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("err = %v, want %q", err, want)
 	}

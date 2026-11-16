@@ -57,7 +57,7 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 
 ## Quick start
 
-You need Linux or macOS, [abduco](https://www.brain-dump.org/projects/abduco/), and Claude Code. Boxed sessions also need Docker on Linux, or `colima` and `docker` on macOS 13+ on Apple Silicon. `culibox init` checks each one and says how to install what is missing. The full list is in [Requirements](docs/INSTALL.md#requirements).
+You need Linux or macOS, [abduco](https://www.brain-dump.org/projects/abduco/), and Claude Code. Boxed sessions also need Docker on Linux, or `colima` and `docker` on macOS 13+ on Apple Silicon (Intel is untested). `culibox init` checks these programs and the macOS version, and says how to install what is missing. The full list is in [Requirements](docs/INSTALL.md#requirements).
 
 Download the installer, read it, and run it (use the release tag you want in place of `<tag>`):
 

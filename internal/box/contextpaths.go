@@ -134,7 +134,7 @@ func skipGuard(mt Mount, guards bool) bool {
 // docker (no VM hook, Options.VMIDs): with a hook they run in CuliBox's own VM
 // and that requirement does not apply.
 const wsHostFilesHint = "If this repeats for every folder, CuliBox's docker does not see host files as they are " +
-	"(for example Docker Desktop for Linux or a remote docker host); see Requirements in docs/INSTALL.md."
+	"(for example Docker Desktop for Linux or a remote docker host); see Requirements at https://github.com/culiops/culibox/blob/main/docs/INSTALL.md#requirements."
 
 // mountChanged is the refusal for a mount the in-box check did not confirm: the
 // workspace (and a guard of it) is a mount-changed refusal of the workspace,
