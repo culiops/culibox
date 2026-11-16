@@ -34,6 +34,8 @@ bash scripts/upgrade-test_test.sh
 bash scripts/upgrade-test.sh
 go vet -tags upgrade ./internal/upgradetest/
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet -tags upgrade ./internal/upgradetest/
+# The release abduco build's refusals (download, pin, outdir), against a stub curl.
+sh scripts/release/build-abduco_test.sh
 # The CI secret-scan script, against a stub gitleaks and a throwaway repo.
 bash scripts/ci/secret-scan_test.sh
 # The private-identifier gitleaks rules. Skips with a notice when gitleaks is not installed

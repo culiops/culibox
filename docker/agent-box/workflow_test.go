@@ -1234,8 +1234,9 @@ func lintLockViolations(pkgJSON, lockJSON string) []string {
 	return bad
 }
 
-// The CI install script and the box image build the same abduco: the version and
-// sum in scripts/ci/install-abduco.sh must equal the Dockerfile ARGs.
+// The CI install script, the release build and the box image build the same
+// abduco: the version and sum in scripts/ci/install-abduco.sh and
+// scripts/release/build-abduco.sh must equal the Dockerfile ARGs.
 func TestAbducoPinMatchesDockerfile(t *testing.T) {
 	read := func(p string) string {
 		b, err := os.ReadFile(p)
@@ -1244,16 +1245,19 @@ func TestAbducoPinMatchesDockerfile(t *testing.T) {
 		}
 		return string(b)
 	}
-	script, docker := read("../../scripts/ci/install-abduco.sh"), read("Dockerfile")
-	for _, name := range []string{"ABDUCO_VERSION", "ABDUCO_SHA256"} {
-		s := regexp.MustCompile(`(?m)^` + name + `=["']?([^\s"']+)["']?\s*$`).FindStringSubmatch(script)
-		d := regexp.MustCompile(`(?m)^ARG ` + name + `=(\S+)\s*$`).FindStringSubmatch(docker)
-		if s == nil || d == nil {
-			t.Errorf("%s: not found in both install-abduco.sh (%v) and the Dockerfile (%v)", name, s != nil, d != nil)
-			continue
-		}
-		if s[1] != d[1] {
-			t.Errorf("%s: install-abduco.sh has %q, Dockerfile has %q", name, s[1], d[1])
+	docker := read("Dockerfile")
+	for _, script := range []string{"../../scripts/ci/install-abduco.sh", "../../scripts/release/build-abduco.sh"} {
+		body, base := read(script), filepath.Base(script)
+		for _, name := range []string{"ABDUCO_VERSION", "ABDUCO_SHA256"} {
+			s := regexp.MustCompile(`(?m)^` + name + `=["']?([^\s"']+)["']?\s*$`).FindStringSubmatch(body)
+			d := regexp.MustCompile(`(?m)^ARG ` + name + `=(\S+)\s*$`).FindStringSubmatch(docker)
+			if s == nil || d == nil {
+				t.Errorf("%s: not found in both %s (%v) and the Dockerfile (%v)", name, base, s != nil, d != nil)
+				continue
+			}
+			if s[1] != d[1] {
+				t.Errorf("%s: %s has %q, Dockerfile has %q", name, base, s[1], d[1])
+			}
 		}
 	}
 }
