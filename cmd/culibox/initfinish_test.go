@@ -16,6 +16,7 @@ import (
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/doctor"
 	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 func TestLineDiff(t *testing.T) {
@@ -222,34 +223,52 @@ func TestConfigStepBrokenFileStops(t *testing.T) {
 	}
 }
 
-// boxFake records the order of box setup and share calls, and models what the
-// VM has: box setup starts (or restarts) it with the folder list as it is at
-// that moment, so a folder added after setup stays pending.
+// boxFake records the order of box setup, share and apply calls, and models
+// the VM the way the real code behaves: box setup boots a new VM with the
+// folder list as it is then, starts a stopped one, and (like boxSetupVM) cannot
+// apply a changed list to a VM that is not running; `box share apply` refuses
+// while the VM is stopped or a box runs. A folder added after the VM booted
+// stays pending until an apply succeeds.
 type boxFake struct {
-	ready    bool
-	vmUp     bool // a VM that was set up before this run
-	setupRC  int
-	covered  string // the folder that already covers the workspace
-	addErr   error
-	stateErr error
-	calls    []string
+	ready        bool
+	vmUp         bool // a VM that was set up before this run
+	stopped      bool // ...and is not running now (a reboot, `box stop`)
+	boxesRunning bool
+	setupRC      int
+	covered      string // the folder that already covers the workspace
+	addErr       error
+	stateErr     error
+	whole        bool // state reads "whole_home"
+	calls        []string
 
 	listed  bool // the workspace is in the saved list
 	applied bool // the VM's colima.yaml has it
+	running bool
 }
 
 func (f *boxFake) apply(d *initDeps) {
 	f.listed = f.covered != ""
 	f.applied = f.listed && f.vmUp // a covered folder was applied by the earlier setup
+	f.running = f.vmUp && !f.stopped
 	d.boxReady = func(config.Config, []string, string) bool { return f.ready }
 	d.vmSetUp = func(config.Config, string) bool { return f.vmUp }
 	d.boxSetup = func(_ config.Config, _ []string, w io.Writer) int {
 		f.calls = append(f.calls, "setup")
 		io.WriteString(w, "PASS image: fake\n")
-		if f.setupRC == 0 {
-			f.applied = f.listed
+		if f.setupRC != 0 {
+			return f.setupRC
 		}
-		return f.setupRC
+		switch {
+		case !f.vmUp:
+			f.applied = f.listed // the first boot has the list as it is now
+		case f.listed != f.applied && !f.running:
+			io.WriteString(w, "refusing: the box VM reads as not running. Use -force.\n")
+			return 1
+		case f.listed != f.applied:
+			f.applied = f.listed // the drift path: a stop and start
+		}
+		f.vmUp, f.running = true, true
+		return 0
 	}
 	d.shareAdd = func(_ config.Config, _ []string, _, path string) (string, error) {
 		f.calls = append(f.calls, "share "+path)
@@ -258,12 +277,24 @@ func (f *boxFake) apply(d *initDeps) {
 		}
 		return f.covered, f.addErr
 	}
-	d.shareState = func(config.Config, []string, string) (string, error) {
-		f.calls = append(f.calls, "state")
-		if f.stateErr != nil {
-			return "", f.stateErr
+	d.shareApply = func(_ config.Config, _ []string, _ string, w io.Writer) int {
+		f.calls = append(f.calls, "apply")
+		if !f.running || f.boxesRunning {
+			io.WriteString(w, "refusing: the box VM is not running or a box runs. Use -force.\n")
+			return 1
 		}
-		if f.listed && !f.applied {
+		io.WriteString(w, "stop… done (3 s)\nstart… done (20 s)\n")
+		f.applied = f.listed
+		return 0
+	}
+	d.shareState = func(config.Config, []string, string, string) (string, error) {
+		f.calls = append(f.calls, "state")
+		switch {
+		case f.stateErr != nil:
+			return "", f.stateErr
+		case !f.vmUp:
+			return "not_set_up", nil
+		case f.listed && !f.applied:
 			return "pending", nil
 		}
 		return "applied", nil
@@ -278,12 +309,15 @@ func boxStep(goos, in string, f *boxFake) (bool, string) {
 	return ok, out.String()
 }
 
-// #312: the workspace goes into the folder list BEFORE box setup starts the
-// VM, so the first boot has it and `box share list` shows nothing pending.
+func calls(f *boxFake) string { return strings.Join(f.calls, ",") }
+
+// #312: with no VM yet, the workspace goes into the folder list BEFORE box
+// setup starts the VM, so the first boot has it and `box share list` shows
+// nothing pending.
 func TestBoxStepSharesBeforeSetupAndEndsApplied(t *testing.T) {
 	f := &boxFake{}
 	ok, out := boxStep("darwin", "", f)
-	if !ok || strings.Join(f.calls, ",") != "share /w/proj,setup,state" {
+	if !ok || calls(f) != "share /w/proj,setup,state" {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
 	}
 	for _, w := range []string{"== step 1/8: box setup", "added /w/proj to the box VM's folders; box setup below starts the VM with it", "PASS image: fake", "its folder list is applied", "  done"} {
@@ -291,7 +325,7 @@ func TestBoxStepSharesBeforeSetupAndEndsApplied(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", w, out)
 		}
 	}
-	if strings.Contains(out, "takes effect after") {
+	if strings.Contains(out, "Restart the box VM") || strings.Contains(out, "takes effect after") {
 		t.Errorf("nothing is left to apply by hand:\n%s", out)
 	}
 	if strings.Index(out, "added /w/proj") > strings.Index(out, "PASS image: fake") {
@@ -299,33 +333,85 @@ func TestBoxStepSharesBeforeSetupAndEndsApplied(t *testing.T) {
 	}
 }
 
-// A VM from an earlier run that is not ready (say its image is gone) is
-// restarted by box setup's own folder-list apply: init says so up front.
-func TestBoxStepExistingVMSaysSetupAppliesIt(t *testing.T) {
-	f := &boxFake{vmUp: true}
+// The review's loop: a VM that is set up but stopped (a reboot, `box stop`) and
+// a workspace new to the list. Adding first would make box setup try to apply a
+// changed list to a VM that is not running, which it refuses. So setup runs
+// first (it starts the VM), then the folder is added, then init applies it.
+func TestBoxStepStoppedVMSetsUpThenAddsThenApplies(t *testing.T) {
+	f := &boxFake{vmUp: true, stopped: true}
+	ok, out := boxStep("darwin", "\n", f)
+	if !ok || calls(f) != "setup,share /w/proj,state,apply,state" {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+	for _, w := range []string{"Restart the box VM now to apply them? [Y/n]", "start… done", "its folder list is applied", "  done"} {
+		if !strings.Contains(out, w) {
+			t.Errorf("output lacks %q:\n%s", w, out)
+		}
+	}
+	if strings.Contains(out, "refusing") || strings.Contains(out, "stopped:") {
+		t.Errorf("no refusal expected:\n%s", out)
+	}
+}
+
+// Same VM, folder already covered: setup starts it and nothing is applied.
+func TestBoxStepStoppedVMWithCoveredFolderAsksNothing(t *testing.T) {
+	f := &boxFake{vmUp: true, stopped: true, covered: "/w"}
 	ok, out := boxStep("darwin", "", f)
-	if !ok || strings.Join(f.calls, ",") != "share /w/proj,setup,state" || !strings.Contains(out, "box setup below applies it (the box VM stops and starts)") {
+	if !ok || calls(f) != "setup,share /w/proj,state" || strings.Contains(out, "Restart the box VM") || !strings.Contains(out, "  done") {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
 	}
 }
 
-// Re-running on a machine whose list already covers the workspace adds
-// nothing and prints no "added" line.
-func TestBoxStepSetupWithShareAlreadyCovered(t *testing.T) {
-	f := &boxFake{covered: "/w"}
-	ok, out := boxStep("darwin", "", f)
-	if !ok || strings.Join(f.calls, ",") != "share /w/proj,setup,state" || !strings.Contains(out, "the box VM sees /w/proj through /w") || strings.Contains(out, "added /w/proj") || !strings.Contains(out, "  done") {
+// A ready box whose user declines "Run box setup again?" and whose workspace is
+// new: the folder is added, and init offers the restart instead of ending on
+// "done" with the first boxed spawn refused.
+func TestBoxStepReadyDeclinedNewFolderOffersApply(t *testing.T) {
+	f := &boxFake{ready: true, vmUp: true}
+	ok, out := boxStep("darwin", "\n\n", f)
+	if !ok || calls(f) != "share /w/proj,state,apply,state" || !strings.Contains(out, "its folder list is applied") || !strings.Contains(out, "  done") {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+}
+
+// Declining the restart is not "done": init stops with a command that works.
+func TestBoxStepDecliningTheRestartStops(t *testing.T) {
+	f := &boxFake{ready: true, vmUp: true}
+	ok, out := boxStep("darwin", "\nn\n", f)
+	if ok || calls(f) != "share /w/proj,state" || !strings.Contains(out, "stopped:") || !strings.Contains(out, "culibox box share apply") || strings.Contains(out, "  done") {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+}
+
+// A box that runs makes apply refuse: init stops and names -force.
+func TestBoxStepApplyRefusedWhileBoxesRun(t *testing.T) {
+	f := &boxFake{ready: true, vmUp: true, boxesRunning: true}
+	ok, out := boxStep("darwin", "\n\n", f)
+	if ok || !strings.Contains(out, "refusing:") || !strings.Contains(out, "stopped:") || !strings.Contains(out, "box share apply -force") || strings.Contains(out, "  done") {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+}
+
+// Re-running after a declined restart finds the folder listed (covered) and
+// still pending: it offers the restart again rather than saying "done".
+func TestBoxStepRerunWithListedButPendingFolderOffersApply(t *testing.T) {
+	f := &boxFake{ready: true, vmUp: true, covered: "/w/proj"}
+	d := (&fakeInit{}).deps("darwin")
+	f.apply(&d)
+	f.applied = false // listed, VM does not have it
+	var out bytes.Buffer
+	ok := initBoxStep(newTestUI("\n\n", &out), config.Config{}, nil, "/data", "/w/proj", d)
+	if !ok || calls(f) != "share /w/proj,state,apply,state" || !strings.Contains(out.String(), "  done") {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out.String())
 	}
 }
 
 // Setup finishing with the workspace still pending is not "done": init stops
 // and says how to finish.
-func TestBoxStepStopsWhenShareStaysPending(t *testing.T) {
+func TestBoxStepFreshVMStopsWhenShareStaysPending(t *testing.T) {
 	f := &boxFake{}
 	d := (&fakeInit{}).deps("darwin")
 	f.apply(&d)
-	d.shareState = func(config.Config, []string, string) (string, error) { return "pending", nil }
+	d.shareState = func(config.Config, []string, string, string) (string, error) { return "pending", nil }
 	var out bytes.Buffer
 	ok := initBoxStep(newTestUI("", &out), config.Config{}, nil, "/data", "/w/proj", d)
 	s := out.String()
@@ -342,15 +428,67 @@ func TestBoxStepStopsWhenShareStateUnreadable(t *testing.T) {
 	}
 }
 
+// A VM that shares the whole home has a workspace under home; one outside it
+// (an external volume) is pending unless a folder the VM applied covers it.
+func TestWholeHomeShareState(t *testing.T) {
+	rw := func(p string) vmshares.Share { return vmshares.Share{Path: p, Mode: vmshares.RW} }
+	ro := func(p string) vmshares.Share { return vmshares.Share{Path: p, Mode: vmshares.RO} }
+	for _, c := range []struct {
+		name, ws string
+		applied  []vmshares.Share
+		want     string
+	}{
+		{"under home", "/Users/me/work/proj", nil, "applied"},
+		{"home itself", "/Users/me", nil, "applied"},
+		{"case only (APFS)", "/users/ME/work", nil, "applied"},
+		{"outside home", "/Volumes/x/proj", nil, "pending"},
+		{"outside home, applied rw", "/Volumes/x/proj", []vmshares.Share{rw("/Volumes/x")}, "applied"},
+		{"outside home, applied ro", "/Volumes/x/proj", []vmshares.Share{ro("/Volumes/x")}, "pending"},
+	} {
+		if got := wholeHomeShareState(c.ws, "/Users/me", c.applied, true); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+// A case-only difference (APFS) or a symlinked spelling is the same folder, so
+// init does not print a "sees ... through ..." line for it.
+func TestSameFolder(t *testing.T) {
+	if !sameFolder("/Users/Me/Work", "/users/me/work") || !sameFolder("/w/proj", "/w/proj") {
+		t.Error("spellings of one folder must match")
+	}
+	if sameFolder("/w", "/w/proj") {
+		t.Error("a parent is not the same folder")
+	}
+}
+
+// Re-running on a machine whose list already covers the workspace adds
+// nothing and prints no "added" line.
+func TestBoxStepSetupWithShareAlreadyCovered(t *testing.T) {
+	f := &boxFake{covered: "/w"}
+	ok, out := boxStep("darwin", "", f)
+	if !ok || calls(f) != "share /w/proj,setup,state" || !strings.Contains(out, "the box VM sees /w/proj through /w") || strings.Contains(out, "added /w/proj") || !strings.Contains(out, "  done") {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+}
+
+func TestBoxStepCoveredSpellingDifferingByCaseIsQuiet(t *testing.T) {
+	f := &boxFake{covered: "/W/Proj"}
+	_, out := boxStep("darwin", "", f)
+	if strings.Contains(out, "sees") {
+		t.Fatalf("a case-only difference is the same folder:\n%s", out)
+	}
+}
+
 func TestBoxStepReadySkips(t *testing.T) {
-	f := &boxFake{ready: true, covered: "/w/proj"}
+	f := &boxFake{ready: true, vmUp: true, covered: "/w/proj"}
 	ok, out := boxStep("darwin", "\n", f)
 	if !ok || !strings.Contains(out, "Run box setup again? [y/N]") || !strings.Contains(out, "already done:") {
 		t.Fatalf("ok=%v out=%s", ok, out)
 	}
 	for _, c := range f.calls {
-		if c == "setup" {
-			t.Fatalf("box setup ran: %v", f.calls)
+		if c == "setup" || c == "apply" {
+			t.Fatalf("%s ran: %v", c, f.calls)
 		}
 	}
 }
@@ -358,7 +496,7 @@ func TestBoxStepReadySkips(t *testing.T) {
 func TestBoxStepReadyYesRunsSetup(t *testing.T) {
 	f := &boxFake{ready: true, vmUp: true, covered: "/w/proj"}
 	ok, out := boxStep("darwin", "y\n", f)
-	if !ok || len(f.calls) == 0 || f.calls[0] != "share /w/proj" || !strings.Contains(out, "  done") {
+	if !ok || calls(f) != "setup,share /w/proj,state" || !strings.Contains(out, "  done") {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
 	}
 }
@@ -369,7 +507,7 @@ func TestBoxStepSetupFails(t *testing.T) {
 	if ok || !strings.Contains(out, "stopped:") || !strings.Contains(out, "culibox box setup") {
 		t.Fatalf("ok=%v out=%s", ok, out)
 	}
-	if strings.Join(f.calls, ",") != "share /w/proj,setup" {
+	if calls(f) != "share /w/proj,setup" {
 		t.Fatalf("the folder state is not read after a failed setup: %v", f.calls)
 	}
 }
@@ -380,7 +518,7 @@ func TestBoxStepShareFails(t *testing.T) {
 	if ok || !strings.Contains(out, "stopped:") || !strings.Contains(out, "culibox box share add") {
 		t.Fatalf("ok=%v out=%s", ok, out)
 	}
-	if strings.Join(f.calls, ",") != "share /w/proj" {
+	if calls(f) != "share /w/proj" {
 		t.Fatalf("the VM must not start without its folder: %v", f.calls)
 	}
 }
@@ -388,7 +526,7 @@ func TestBoxStepShareFails(t *testing.T) {
 func TestBoxStepLinuxSetupOnly(t *testing.T) {
 	f := &boxFake{}
 	ok, out := boxStep("linux", "", f)
-	if !ok || strings.Join(f.calls, ",") != "setup" || !strings.Contains(out, "macOS") || !strings.Contains(out, "  done") {
+	if !ok || calls(f) != "setup" || !strings.Contains(out, "macOS") || !strings.Contains(out, "  done") {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
 	}
 }
