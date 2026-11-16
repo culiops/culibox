@@ -4102,20 +4102,34 @@ $("agent").addEventListener("change", () => {
 });
 
 // applyProfileCwd overwrites the workspace picker with the selected profile's
-// stored default_cwd. A profile without one leaves the picker untouched (there
-// is nothing to overwrite with), preserving the keep-previous behavior. Unlike
-// the old <select>-backed version, there is no tier-aware matching to do here
-// any more: the field is free text, so the profile's path is simply the value.
+// stored default_cwd. Unlike the old <select>-backed version, there is no
+// tier-aware matching to do here any more: the field is free text, so the
+// profile's path is simply the value.
 // On the desktop the line under the field then says "From the profile" (the source).
+// A profile without one keeps what the USER put in the field (typed, picked, a
+// Duplicate's). What the dialog or the previous profile filled in is that profile's
+// leftover, so the choice made at open is made again for this profile (spawnCwdChoice:
+// its own last directory, else the tier's default): a host profile otherwise kept a
+// box-owned copy's folder and the server refused the spawn.
 function applyProfileCwd() {
   const p = currentProfile();
   if (!p) return;
   if (!p.default_cwd) {
-    // The folder in the field stays, but it is no longer the new profile's own: the desktop's help line must not say so.
-    if (spawnWsSource === "profile") {
-      spawnWsSource = "";
-      if (spawnWsPicker && drawerDesktop()) spawnWsPicker.showIdleNote();
+    const again = spawnCwdReselect({
+      source: spawnWsSource, prefill: spawnWsPrefill, cwd: getCwd(), text: $("spawn-ws-input").value,
+      profile: p, last: loadLastSpawn(), workspaces: workspacesCache, tier: segValue($("runtime-seg")), skipScratch: drawerDesktop(),
+    });
+    if (!again) {
+      // The folder stays (the user's), and it is no more the previous source's: the help line must stop claiming it.
+      if (spawnWsSource === "profile" || spawnWsSource === "last") {
+        spawnWsSource = "";
+        if (spawnWsPicker && drawerDesktop()) spawnWsPicker.showIdleNote();
+      }
+      return;
     }
+    setSpawnCwd(again.cwd, again.source);
+    onSpawnCwdChanged();
+    if (spawnWsPicker && drawerDesktop()) spawnWsPicker.showIdleNote();
     return;
   }
   setSpawnCwd(p.default_cwd, "profile");
@@ -5768,6 +5782,18 @@ function applySpawnPrefill(pf) {
 // dialog does not make the operator retype it.
 let spawnPromptDraft = "";
 
+// updateSpawnBoxOwned: under the Workspace field, before submit, when a host-tier session is pointed at a box's
+// private copy (a folder a clone-mode profile's box writes in): the server refuses it (box.ErrBoxOwned) and that
+// stays; this says why and which folder to use instead. Same field and tier as the refusal, on desktop and phone.
+function updateSpawnBoxOwned() {
+  const el = $("spawn-ws-owned");
+  if (!el) return;
+  const host = (metaLoaded && !boxRuntime) || segValue($("runtime-seg")) === "host";
+  const hit = spawnBoxOwnedHit(getCwd(), host ? "host" : "box", profiles);
+  el.textContent = hit ? spawnBoxOwnedLine(hit) : "";
+  el.hidden = !hit;
+}
+
 // updateRuntimeWarning covers two DIFFERENT reasons #runtime-warn can be
 // showing, and they are mutually exclusive:
 //   host  — the generic "runs on your host" notice. Unrelated to which
@@ -5783,6 +5809,7 @@ let spawnPromptDraft = "";
 function updateRuntimeWarning() {
   syncSpawnPreview(); // tier or workspace changed: the desktop reach box follows
   syncSpawnVMFilter(); // a box lists only shared folders; a host session lists them all
+  updateSpawnBoxOwned();
   const seg = $("runtime-seg"), warn = $("runtime-warn");
   if (!seg || !warn) return;
   if (segValue(seg) === "host") {

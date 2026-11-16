@@ -393,6 +393,47 @@ function spawnCwdChoice(o) {
   return { cwd: spawnDep("defaultWorkspace", "./tier.js")(x.workspaces || [], x.tier), source: "default" };
 }
 
+// spawnCwdReselect: the profile was switched while the dialog was open and the new one has no default_cwd. What the field
+// holds is only kept when the user put it there: a folder the dialog (or the previous profile) filled in is another
+// profile's leftover, which spawnCwdChoice never prefills, so the choice made at open is made again for the new profile.
+// The field counts as "filled in" while its source is "profile" or "last" and both the resolved folder (o.cwd) and the text
+// in the box (o.text) still equal what was filled (o.prefill); anything typed, picked or carried over (a Duplicate has no
+// source) is the user's and stays: null. Takes spawnCwdChoice's fields too.
+//   -> {cwd, source} | null
+function spawnCwdReselect(o) {
+  const x = o || {};
+  if (x.source !== "profile" && x.source !== "last") return null;
+  const prefill = String(x.prefill == null ? "" : x.prefill);
+  if (String(x.cwd == null ? "" : x.cwd) !== prefill || String(x.text == null ? "" : x.text) !== prefill) return null;
+  return spawnCwdChoice(x);
+}
+
+// spawnBoxOwnedHit: the box-owned copy a host-tier folder is in, from the profiles the page already has: the default_cwd of
+// every profile with clone_of is a copy a box writes in. internal/clone BoxOwned is the server's check (it also follows
+// symlinks and reads the clone-dirs record, which no profile list carries); this is the advance notice, so only the plain
+// path is compared, by whole components ("/c/infra2" is not inside "/c/infra"). The deepest copy wins. Host tier only: a
+// boxed session in a copy is what the copy is for.
+//   -> {dir, of} | null
+function spawnBoxOwnedHit(cwd, tier, profiles) {
+  if (tier !== "host" || typeof cwd !== "string" || cwd.trim() === "") return null;
+  const clean = (p) => String(p).trim().replace(/\/+/g, "/").replace(/(.)\/$/, "$1");
+  const at = clean(cwd);
+  let best = null;
+  for (const p of Array.isArray(profiles) ? profiles : []) {
+    if (!p || typeof p.clone_of !== "string" || p.clone_of === "" || typeof p.default_cwd !== "string" || p.default_cwd.trim() === "") continue;
+    const dir = clean(p.default_cwd);
+    if (at !== dir && !(dir === "/" || at.startsWith(dir + "/"))) continue;
+    if (!best || dir.length > best.dir.length) best = { dir, of: p.clone_of };
+  }
+  return best;
+}
+
+// spawnBoxOwnedLine: the line under the Workspace field for a spawnBoxOwnedHit, before the server has to refuse it.
+function spawnBoxOwnedLine(hit) {
+  const short = spawnDep("shortPath", "./fsops.js");
+  return "Host sessions can't run in a box's private copy (" + short(hit.dir) + "). Use the original folder instead: " + short(hit.of) + ".";
+}
+
 // spawnScratchCwd: /tmp itself or anything under it, whole components ("/tmpfoo" is not scratch).
 function spawnScratchCwd(p) {
   const t = String(p).replace(/\/+$/, "");
@@ -445,5 +486,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { spawnIsShellProfile, profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue };
+  module.exports = { spawnIsShellProfile, profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue };
 }

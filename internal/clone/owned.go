@@ -45,12 +45,12 @@ func boxOwned(cwd string, clones []config.Clone, stat func(string) (fs.FileInfo,
 		// a link nobody can read, so it is owned until proven otherwise.
 		if cwdErr != nil {
 			return cwd + " cannot be resolved (" + cwdErr.Error() + "); refusing a host session there in case it is inside the box-owned clone " +
-				c.Dir + " (use culibox clone fetch)", true
+				c.Dir + " (use culibox clone fetch)" + outsideHint(c), true
 		}
 		dirSp, err := spellings(c.Dir)
 		if err != nil {
 			return "the box-owned clone " + c.Dir + " cannot be resolved (" + err.Error() + "); refusing a host session at " +
-				cwd + " in case it is inside it (use culibox clone fetch)", true
+				cwd + " in case it is inside it (use culibox clone fetch)" + outsideHint(c), true
 		}
 		inside := false
 		for _, p := range cwdSp {
@@ -65,7 +65,7 @@ func boxOwned(cwd string, clones []config.Clone, stat func(string) (fs.FileInfo,
 			}
 			if idsErr != nil {
 				return cwd + " cannot be resolved (" + idsErr.Error() + "); refusing a host session there in case it is inside the box-owned clone " +
-					c.Dir + " (use culibox clone fetch)", true
+					c.Dir + " (use culibox clone fetch)" + outsideHint(c), true
 			}
 			id, err := stat(c.Dir)
 			switch {
@@ -75,15 +75,27 @@ func boxOwned(cwd string, clones []config.Clone, stat func(string) (fs.FileInfo,
 				}
 			case !errors.Is(err, fs.ErrNotExist): // a clone not made yet has no identity
 				return "the box-owned clone " + c.Dir + " cannot be resolved (" + err.Error() + "); refusing a host session at " +
-					cwd + " in case it is inside it (use culibox clone fetch)", true
+					cwd + " in case it is inside it (use culibox clone fetch)" + outsideHint(c), true
 			}
 		}
 		if inside {
 			return cwd + " is inside the box-owned clone " + c.Dir +
-				"; host tools must never run there (use culibox clone fetch)", true
+				"; host tools must never run there (use culibox clone fetch)" + outsideHint(c), true
 		}
 	}
 	return "", false
+}
+
+// outsideHint is the way out for someone in the web UI, who has no use for a
+// command: pick a folder outside the copy, naming the repo the copy was made
+// from when the profile says so. It follows the command wording (the CLI says
+// "use culibox clone fetch") rather than replacing it, so both readers get theirs.
+func outsideHint(c config.Clone) string {
+	h := "; in the web UI, pick a folder outside the copy"
+	if c.Of != "" {
+		h += ", such as the original repo " + c.Of
+	}
+	return h
 }
 
 // ancestorIDs is the identity of p (absolute, symlinks resolved) and of each of

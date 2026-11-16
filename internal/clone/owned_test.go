@@ -133,6 +133,31 @@ func TestBoxOwnedMessageNamesTheClone(t *testing.T) {
 	}
 }
 
+// The refusal reaches a web UI user, who has no use for a command alone: it keeps the
+// command wording (CLI callers read it) and adds the way out for the UI, naming the
+// repo the copy was made from. A directory known only from the clone-dirs record has
+// no original to name, so it says only to pick a folder outside the copy.
+func TestBoxOwnedMessageTellsAUIUserWhereToGo(t *testing.T) {
+	base := t.TempDir()
+	of := filepath.Join(base, "repos", "infra")
+	dir := filepath.Join(base, "box-clones", "infra")
+	mustMkdir(t, of)
+	mustMkdir(t, dir)
+	msg, owned := BoxOwned(dir, []config.Clone{{Of: of, Dir: dir}})
+	if !owned {
+		t.Fatalf("not owned: %q", msg)
+	}
+	for _, want := range []string{"host tools must never run there (use culibox clone fetch)", "pick a folder outside the copy, such as the original repo " + of} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q lacks %q", msg, want)
+		}
+	}
+	msg, owned = BoxOwned(dir, []config.Clone{{Dir: dir}})
+	if !owned || !strings.Contains(msg, "pick a folder outside the copy") || strings.Contains(msg, "original repo") {
+		t.Errorf("a recorded dir without an original: message %q, owned %v", msg, owned)
+	}
+}
+
 // foldingStat is os.Stat on a filesystem that, like macOS APFS by default,
 // ignores case: every "/Box-Clones" in a path names the "/box-clones" on disk.
 func foldingStat(p string) (fs.FileInfo, error) {
