@@ -321,8 +321,9 @@ build_from_source() {
       -o "$WORK/culibox" ./cmd/culibox
   ) || die "go build failed"
   NEW=$WORK/culibox
-  # abduco: none is downloaded here. Build the pinned one with the clone's installer
-  # (it checks the source's sha256 before unpacking) when none is installed yet.
+  # abduco: no prebuilt binary is downloaded here. When none is installed yet, the
+  # clone's installer fetches the pinned abduco source, checks its sha256 before
+  # unpacking, and builds it.
   if [ -e "$PREFIX/abduco" ] || command -v abduco >/dev/null 2>&1; then
     return 0
   fi

@@ -92,6 +92,9 @@ func (l Lookup) Resolve(configured string) (Resolved, error) {
 	}
 	p, err := l.LookPath("abduco")
 	if err != nil {
+		if r.Skipped != "" {
+			return r, fmt.Errorf("abduco not found on PATH, and ignored %s", r.Skipped)
+		}
 		return r, fmt.Errorf("abduco not found %s or on PATH", where)
 	}
 	r.Path, r.Source = p, SourcePath

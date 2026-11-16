@@ -670,3 +670,15 @@ func TestOptionOfferedBy(t *testing.T) {
 		}
 	}
 }
+
+// Setting abduco_bin turns off the lookup next to the culibox binary, so the
+// example people copy must leave it out (#317).
+func TestExampleConfigLeavesAbducoBinUnset(t *testing.T) {
+	c, err := Load("../../config.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AbducoBin != "" {
+		t.Fatalf("config.example.json sets abduco_bin %q; leave it out", c.AbducoBin)
+	}
+}
