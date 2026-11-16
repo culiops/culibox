@@ -43,8 +43,9 @@ type initDeps struct {
 	boxReady      func(cfg config.Config, cfgFiles []string, dataDir string) bool // see initBoxReady
 	boxSetup      func(cfg config.Config, cfgFiles []string, w io.Writer) int     // `culibox box setup`
 	shareAdd      func(cfg config.Config, cfgFiles []string, dataDir, path string) (coveredBy string, err error)
-	shareState    func(cfg config.Config, cfgFiles []string, dataDir, workspace string) (string, error) // "applied" when the VM has the workspace, else `box share list`'s state
-	shareApply    func(cfg config.Config, cfgFiles []string, dataDir string, w io.Writer) int           // `culibox box share apply` (no -force)
+	shareState    func(cfg config.Config, cfgFiles []string, dataDir, workspace string) (string, error)   // "applied" when the VM has the workspace, else `box share list`'s state
+	vmStopped     func(cfg config.Config, dataDir string) bool                                            // set up and provably not running; never starts it
+	shareApply    func(cfg config.Config, cfgFiles []string, dataDir string, force bool, w io.Writer) int // `culibox box share apply [-force]`
 	doctor        func(cfg config.Config, src config.Source, cfgFiles []string, w io.Writer) int
 	newKeeper     func(dataDir string) secretstore.Keeper
 }
@@ -88,8 +89,11 @@ func realInitDeps(home string) initDeps {
 		shareState: func(cfg config.Config, cfgFiles []string, dataDir, workspace string) (string, error) {
 			return initShareState(cfg, cfgFiles, dataDir, workspace, home, runtime.GOOS)
 		},
-		shareApply: func(cfg config.Config, cfgFiles []string, _ string, w io.Writer) int {
-			return initShareApply(cfg, cfgFiles, home, w)
+		vmStopped: func(cfg config.Config, dataDir string) bool {
+			return initVMStopped(cfg, dataDir, home, runtime.GOOS)
+		},
+		shareApply: func(cfg config.Config, cfgFiles []string, _ string, force bool, w io.Writer) int {
+			return initShareApply(cfg, cfgFiles, home, force, w)
 		},
 		doctor: func(cfg config.Config, src config.Source, cfgFiles []string, w io.Writer) int {
 			return initDoctor(cfg, src, cfgFiles, home, w)

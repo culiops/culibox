@@ -238,7 +238,7 @@ type boxFake struct {
 	covered      string // the folder that already covers the workspace
 	addErr       error
 	stateErr     error
-	whole        bool // state reads "whole_home"
+	unapplied    bool // the list is pending on a set-up VM even for a covered folder
 	calls        []string
 
 	listed  bool // the workspace is in the saved list
@@ -248,7 +248,7 @@ type boxFake struct {
 
 func (f *boxFake) apply(d *initDeps) {
 	f.listed = f.covered != ""
-	f.applied = f.listed && f.vmUp // a covered folder was applied by the earlier setup
+	f.applied = f.listed && f.vmUp && !f.unapplied // a covered folder was applied by the earlier setup
 	f.running = f.vmUp && !f.stopped
 	d.boxReady = func(config.Config, []string, string) bool { return f.ready }
 	d.vmSetUp = func(config.Config, string) bool { return f.vmUp }
@@ -264,6 +264,9 @@ func (f *boxFake) apply(d *initDeps) {
 		case f.listed != f.applied && !f.running:
 			io.WriteString(w, "refusing: the box VM reads as not running. Use -force.\n")
 			return 1
+		case f.listed != f.applied && f.boxesRunning:
+			io.WriteString(w, "refusing: 1 box(es) running. Use -force.\n")
+			return 1
 		case f.listed != f.applied:
 			f.applied = f.listed // the drift path: a stop and start
 		}
@@ -277,14 +280,21 @@ func (f *boxFake) apply(d *initDeps) {
 		}
 		return f.covered, f.addErr
 	}
-	d.shareApply = func(_ config.Config, _ []string, _ string, w io.Writer) int {
-		f.calls = append(f.calls, "apply")
-		if !f.running || f.boxesRunning {
-			io.WriteString(w, "refusing: the box VM is not running or a box runs. Use -force.\n")
+	d.vmStopped = func(config.Config, string) bool { return f.vmUp && !f.running }
+	d.shareApply = func(_ config.Config, _ []string, _ string, force bool, w io.Writer) int {
+		if force {
+			f.calls = append(f.calls, "apply -force")
+		} else {
+			f.calls = append(f.calls, "apply")
+		}
+		// The real guard (noLiveBoxes): without -force a VM that reads as not
+		// running is refused, and so is any running box.
+		if !force && (!f.running || f.boxesRunning) {
+			io.WriteString(w, "refusing: the box VM reads as not running, or a box runs. Use -force.\n")
 			return 1
 		}
 		io.WriteString(w, "stop… done (3 s)\nstart… done (20 s)\n")
-		f.applied = f.listed
+		f.applied, f.running = f.listed, true // ApplyMounts starts the VM, stopped or not
 		return 0
 	}
 	d.shareState = func(config.Config, []string, string, string) (string, error) {
@@ -333,17 +343,18 @@ func TestBoxStepSharesBeforeSetupAndEndsApplied(t *testing.T) {
 	}
 }
 
-// The review's loop: a VM that is set up but stopped (a reboot, `box stop`) and
-// a workspace new to the list. Adding first would make box setup try to apply a
-// changed list to a VM that is not running, which it refuses. So setup runs
-// first (it starts the VM), then the folder is added, then init applies it.
-func TestBoxStepStoppedVMSetsUpThenAddsThenApplies(t *testing.T) {
+// The round-1 loop: a VM that is set up but stopped (a reboot, `box stop`) and
+// a workspace new to the list. `box setup` cannot apply a changed list to a VM
+// that is not running, so init adds the folder, asks, and applies it with
+// -force (the VM is provably down, so nothing ends), which starts the VM with
+// the list. Setup then runs against a running VM.
+func TestBoxStepStoppedVMAddsThenAppliesThenSetsUp(t *testing.T) {
 	f := &boxFake{vmUp: true, stopped: true}
 	ok, out := boxStep("darwin", "\n", f)
-	if !ok || calls(f) != "setup,share /w/proj,state,apply,state" {
+	if !ok || calls(f) != "share /w/proj,state,apply -force,setup,state" {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
 	}
-	for _, w := range []string{"Restart the box VM now to apply them? [Y/n]", "start… done", "its folder list is applied", "  done"} {
+	for _, w := range []string{"Apply it now? [Y/n]", "start… done", "its folder list is applied", "  done"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("output lacks %q:\n%s", w, out)
 		}
@@ -353,11 +364,42 @@ func TestBoxStepStoppedVMSetsUpThenAddsThenApplies(t *testing.T) {
 	}
 }
 
-// Same VM, folder already covered: setup starts it and nothing is applied.
-func TestBoxStepStoppedVMWithCoveredFolderAsksNothing(t *testing.T) {
+// The round-2 loop: the folder is already listed but was never applied (the
+// user said no, or boxes ran), then the VM stopped, and init is run again. Setup
+// first would hit its own "reads as not running" refusal on the pending list.
+func TestBoxStepStoppedVMWithListedButUnappliedFolderApplies(t *testing.T) {
+	f := &boxFake{vmUp: true, stopped: true, covered: "/w/proj", unapplied: true}
+	ok, out := boxStep("darwin", "\n", f)
+	if !ok || calls(f) != "share /w/proj,state,apply -force,setup,state" || !strings.Contains(out, "  done") || strings.Contains(out, "refusing") {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+}
+
+// Declining on a stopped VM stops with the -force command: the plain apply
+// would refuse the same way.
+func TestBoxStepStoppedVMDecliningNamesForce(t *testing.T) {
+	f := &boxFake{vmUp: true, stopped: true}
+	ok, out := boxStep("darwin", "n\n", f)
+	if ok || calls(f) != "share /w/proj,state" || !strings.Contains(out, "`culibox box share apply -force`") || strings.Contains(out, "  done") {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+}
+
+// Same VM, folder already applied: setup starts it and nothing is asked.
+func TestBoxStepStoppedVMWithAppliedFolderAsksNothing(t *testing.T) {
 	f := &boxFake{vmUp: true, stopped: true, covered: "/w"}
 	ok, out := boxStep("darwin", "", f)
-	if !ok || calls(f) != "setup,share /w/proj,state" || strings.Contains(out, "Restart the box VM") || !strings.Contains(out, "  done") {
+	if !ok || calls(f) != "share /w/proj,state,setup,state" || strings.Contains(out, "Apply it now?") || !strings.Contains(out, "  done") {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+}
+
+// A failed setup on an existing VM names a command that works from there: with
+// boxes running, setup's own refusal says -force, and so does init's line.
+func TestBoxStepSetupFailureOnAnExistingVMNamesForce(t *testing.T) {
+	f := &boxFake{vmUp: true, boxesRunning: true, covered: "/w/proj", unapplied: true}
+	ok, out := boxStep("darwin", "", f)
+	if ok || calls(f) != "setup" || !strings.Contains(out, "refusing: 1 box(es) running") || !strings.Contains(out, "`culibox box setup -force`") || strings.Contains(out, "  done") {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
 	}
 }
@@ -428,25 +470,30 @@ func TestBoxStepStopsWhenShareStateUnreadable(t *testing.T) {
 	}
 }
 
-// A VM that shares the whole home has a workspace under home; one outside it
-// (an external volume) is pending unless a folder the VM applied covers it.
-func TestWholeHomeShareState(t *testing.T) {
+// The workspace is applied when a read & write folder the VM mounts holds it: a
+// whole-home VM mounts home, so a workspace under home counts, one outside it
+// (an external volume) does not, and read-only never does.
+func TestWorkspaceApplied(t *testing.T) {
 	rw := func(p string) vmshares.Share { return vmshares.Share{Path: p, Mode: vmshares.RW} }
 	ro := func(p string) vmshares.Share { return vmshares.Share{Path: p, Mode: vmshares.RO} }
+	home := []vmshares.Share{rw("/Users/me")}
 	for _, c := range []struct {
 		name, ws string
 		applied  []vmshares.Share
-		want     string
+		want     bool
 	}{
-		{"under home", "/Users/me/work/proj", nil, "applied"},
-		{"home itself", "/Users/me", nil, "applied"},
-		{"case only (APFS)", "/users/ME/work", nil, "applied"},
-		{"outside home", "/Volumes/x/proj", nil, "pending"},
-		{"outside home, applied rw", "/Volumes/x/proj", []vmshares.Share{rw("/Volumes/x")}, "applied"},
-		{"outside home, applied ro", "/Volumes/x/proj", []vmshares.Share{ro("/Volumes/x")}, "pending"},
+		{"under a whole-home mount", "/Users/me/work/proj", home, true},
+		{"home itself", "/Users/me", home, true},
+		{"case only (APFS)", "/users/ME/work", home, true},
+		{"outside home", "/Volumes/x/proj", home, false},
+		{"outside home, mounted rw", "/Volumes/x/proj", append([]vmshares.Share{rw("/Volumes/x")}, home...), true},
+		{"outside home, mounted ro", "/Volumes/x/proj", []vmshares.Share{ro("/Volumes/x")}, false},
+		{"whole home mounted ro", "/Users/me/proj", []vmshares.Share{ro("/Users/me")}, false},
+		{"nothing mounted", "/Users/me/proj", nil, false},
+		{"a sibling is not inside", "/Users/me2/proj", home, false},
 	} {
-		if got := wholeHomeShareState(c.ws, "/Users/me", c.applied, true); got != c.want {
-			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		if got := workspaceApplied(c.ws, c.applied, true); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
 }
