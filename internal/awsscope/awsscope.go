@@ -5,6 +5,7 @@ package awsscope
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -190,11 +191,26 @@ func marshalPolicy(st []statement, what string) (string, error) {
 	}
 	if len(b) > MaxPolicyChars {
 		if what == "elevated session policy" {
-			return "", fmt.Errorf("the elevated session policy is %d characters; STS allows %d. It grows with every s3_read entry, with elevate.box_bucket_prefix and elevate.pass_role_prefix, and when allow_iam is off — use fewer or shorter s3_read entries or shorter prefixes", len(b), MaxPolicyChars)
+			return "", &sizeError{n: len(b)}
 		}
 		return "", fmt.Errorf("the s3_read allowlist makes the %s %d characters; STS allows %d — use fewer or shorter entries", what, len(b), MaxPolicyChars)
 	}
 	return string(b), nil
+}
+
+// sizeError is an elevated policy over STS's limit; ElevatedPolicy turns it
+// into the message the config load shows.
+type sizeError struct {
+	n, base  int
+	allowIAM bool
+}
+
+func (e *sizeError) Error() string {
+	iam := "off"
+	if e.allowIAM {
+		iam = "on"
+	}
+	return fmt.Sprintf("the elevated session policy is %d characters; STS allows %d. CuliBox's own denies take %d of them (with allow_iam %s), and a newer CuliBox can deny more, so a config that loaded before an upgrade can be refused after it. The rest is every s3_read entry, elevate.box_bucket_prefix and elevate.pass_role_prefix: use fewer or shorter s3_read entries or shorter prefixes", e.n, MaxPolicyChars, e.base, iam)
 }
 
 // SessionPolicy is the "investigate" scope: everything the role allows, minus
@@ -255,6 +271,12 @@ func ValidPassRolePrefix(s string) error {
 // ssmParamReads are the SSM parameter reads, split out of dataReadDenies in
 // the elevated policy so that AWS's public parameters can be carved out.
 var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"}
+
+// ssmParamReadsPattern is how the elevated policy writes ssmParamReads, to save
+// characters (#329). Basis: AWS's action catalog (internal/awsprobe snapshot)
+// lists exactly these four SSM actions starting with GetParameter; a test pins
+// that, so a fifth would be seen before it is denied by accident.
+const ssmParamReadsPattern = "ssm:GetParameter*"
 
 // boxBucketCopyDenies are, with box_bucket_prefix on, the managed copies that
 // can land data the session may not read in a box bucket without the session
@@ -317,35 +339,50 @@ const s3AccountExposureDeny = "s3:PutAccountPublicAccessBlock"
 // The S3 exposure calls (s3ExposureDenies, #307) are denied except on box
 // buckets, the same way: making a box bucket public exposes only what the box
 // put there. The account-level public access block is always denied.
+//
+// Size (#329): STS takes at most 2,048 characters, so denies that share an
+// exception share a statement. Merging two Deny statements into one whose
+// Action and NotResource are the unions is exact when no action of one can
+// ever be requested on a resource the other excepts. Each ARN carries its
+// service ("arn:<p>:s3:::", "arn:<p>:ssm:", "arn:<p>:iam:"), and S3 object
+// reads are only ever authorized on S3 ARNs, SSM reads on SSM ARNs and PassRole
+// on role ARNs, so the read statement holds all three exceptions. The bucket
+// denies are kept apart: an s3_read entry names objects, and must not except
+// an object ACL there. equiv_test.go checks every decision against the policies
+// main rendered before.
 func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, error) {
 	st, err := investigateStatements(partition, s3Read)
 	if err != nil {
 		return "", err
 	}
+	// st[1], the read deny: the S3 object reads outside s3_read (and the box
+	// buckets), the SSM parameter reads outside AWS's public parameters (#211),
+	// and, with pass_role_prefix, PassRole outside <prefix>* roles (#302).
+	read := &st[1]
+	read.Resource = nil // Resource "*" when s3_read is empty; the SSM exception follows
+	read.Action = append(slices.Clone(read.Action.([]string)), ssmParamReadsPattern)
+	read.NotResource = slices.Clone(read.NotResource)
 	if el.BoxBucketPrefix != "" {
 		if err := ValidBoxBucketPrefix(el.BoxBucketPrefix); err != nil {
 			return "", err
 		}
-		s3 := &st[1]
-		s3.Resource = nil // Resource "*" when s3_read is empty
-		s3.NotResource = append(slices.Clone(s3.NotResource), "arn:"+partition+":s3:::"+el.BoxBucketPrefix+"*/*")
+		read.NotResource = append(read.NotResource, "arn:"+partition+":s3:::"+el.BoxBucketPrefix+"*/*")
 	}
-	rest := slices.DeleteFunc(slices.Clone(dataReadDenies), func(a string) bool { return slices.Contains(ssmParamReads, a) })
-	st[2].Action = rest
-	st = slices.Insert(st, 3, statement{Effect: "Deny", Action: ssmParamReads,
-		NotResource: []string{"arn:" + partition + ":ssm:*::parameter/aws/service/*"}})
+	read.NotResource = append(read.NotResource, "arn:"+partition+":ssm:*::parameter/aws/service/*")
 	if el.PassRolePrefix != "" {
 		if err := ValidPassRolePrefix(el.PassRolePrefix); err != nil {
 			return "", err
 		}
+		read.Action = append(read.Action.([]string), "iam:PassRole")
+		read.NotResource = append(read.NotResource, "arn:"+partition+":iam::*:role/"+el.PassRolePrefix+"*")
 	}
 	// Every unconditional deny of the window is one Resource "*" statement, to
-	// stay under STS's 2,048 characters (#307): the guards, the IAM writes
-	// unless allow_iam, the managed copies and the account public access block.
-	// With the IAM write denies present (allow_iam off), a guard they already
-	// match (iam:CreateAccessKey under iam:Create*) is not written twice; it is
-	// denied either way.
-	var always []string
+	// stay under STS's 2,048 characters (#307, #329): the data reads other than
+	// S3 and SSM, the guards, the IAM writes unless allow_iam, the managed copies
+	// and the account public access block. With the IAM write denies present
+	// (allow_iam off), a guard they already match (iam:CreateAccessKey under
+	// iam:Create*) is not written twice; it is denied either way.
+	always := slices.DeleteFunc(slices.Clone(dataReadDenies), func(a string) bool { return slices.Contains(ssmParamReads, a) })
 	for _, g := range elevatedGuardDenies {
 		if el.AllowIAM || !matchesAny(iamWriteDenies, g) {
 			always = append(always, g)
@@ -370,18 +407,21 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	if el.BoxBucketPrefix == "" {
 		always = append(always, bucketDenies...)
 	}
-	st = append(st,
-		statement{Effect: "Deny", Action: always, Resource: "*"},
-		statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
-	if el.PassRolePrefix != "" {
-		st = append(st, statement{Effect: "Deny", Action: "iam:PassRole",
-			NotResource: []string{"arn:" + partition + ":iam::*:role/" + el.PassRolePrefix + "*"}})
-	}
+	st[2].Action = always
+	st = append(st, statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
 	if el.BoxBucketPrefix != "" {
 		st = append(st, statement{Effect: "Deny", Action: bucketDenies,
 			NotResource: []string{"arn:" + partition + ":s3:::" + el.BoxBucketPrefix + "*"}})
 	}
-	return marshalPolicy(st, "elevated session policy")
+	p, err := marshalPolicy(st, "elevated session policy")
+	var se *sizeError
+	if errors.As(err, &se) {
+		// What the config cannot shrink: no s3_read, no prefixes (#329). It
+		// always fits, so this does not recurse further.
+		base, _ := ElevatedPolicy(partition, nil, Elevation{AllowIAM: el.AllowIAM})
+		se.base, se.allowIAM = len(base), el.AllowIAM
+	}
+	return p, err
 }
 
 // matchesAny reports whether action is matched by one of the patterns, each

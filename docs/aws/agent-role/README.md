@@ -346,6 +346,14 @@ roles), and the CloudTrail changes that would blind the trail (`StopLogging`, `D
 `allow_iam`; with them denied, the credential calls above that `iam:Create*` and `iam:Update*`
 already cover are not written twice, to keep the policy under STS's 2,048 characters.
 
+**Policy size.** STS takes at most 2,048 characters of session policy. CuliBox's own denies use
+about 1,300 of them; every `s3_read` entry, `box_bucket_prefix` and `pass_role_prefix` add the
+rest. A connection over the limit is refused when the config loads or the connection is saved,
+and the message gives the policy's size, the limit and how much of it is CuliBox's own. A newer
+CuliBox can deny more in the window, so a connection close to the limit may be refused after an
+upgrade: shorten or drop `s3_read` entries, or shorten the prefixes. Three long `s3_read` entries
+with both prefixes at their 40-character maximum fit.
+
 **`iam:PassRole` is denied unless you name a prefix.** A service that runs as a passed role
 (Lambda, ECS, Glue, CodeBuild, Step Functions) reads whatever that role can read, and the session
 policy never limits it, so allowing PassRole on any role makes the data-read deny advisory
