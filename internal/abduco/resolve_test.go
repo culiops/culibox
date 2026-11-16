@@ -500,3 +500,17 @@ func TestResolveSkipsDotDotThroughSymlink(t *testing.T) {
 		t.Fatalf("got %+v, want PATH with a `..` skip reason", r)
 	}
 }
+
+// When the abduco next to culibox is refused and PATH has none, the error says why
+// it was refused: serve's fatal line and doctor's FAIL row print this error.
+func TestResolveRefusedAndNoPathSaysWhy(t *testing.T) {
+	f := newResolveFixture(t)
+	f.bundle(t, 0o757)
+	r, err := f.lookup(os.Getuid()).Resolve("")
+	if err == nil || !strings.Contains(err.Error(), "ignored "+filepath.Join(f.dir, "abduco")) || !strings.Contains(err.Error(), "writable by group or others") {
+		t.Fatalf("err = %v, want it to name the ignored file and why", err)
+	}
+	if r.Skipped == "" {
+		t.Fatalf("Skipped is empty: %+v", r)
+	}
+}

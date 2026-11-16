@@ -750,3 +750,32 @@ func TestDoctor_UsesResolvedAbduco(t *testing.T) {
 		t.Fatalf("abduco row does not show the resolved binary:\n%s", out)
 	}
 }
+
+// A refused abduco next to culibox with none on PATH: the FAIL row says why.
+func TestDoctor_RefusedBundledAbducoSaysWhy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil { // the folder passes whatever the umask
+		t.Fatal(err)
+	}
+	exe := filepath.Join(dir, "culibox")
+	ab := filepath.Join(dir, "abduco")
+	for _, p := range []string{exe, ab} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(ab, 0o757); err != nil { // writable by others
+		t.Fatal(err)
+	}
+	old := resolveAbduco
+	t.Cleanup(func() { resolveAbduco = old })
+	resolveAbduco = abduco.Lookup{
+		Executable: func() (string, error) { return exe, nil },
+		LookPath:   func(string) (string, error) { return "", exec.ErrNotFound },
+		Uid:        os.Getuid(),
+	}.Resolve
+	out, code := run(input(t))
+	if code != 1 || !strings.Contains(out, "FAIL abduco binary") || !strings.Contains(out, "writable by group or others") {
+		t.Fatalf("code=%d, want a FAIL abduco row that says why the file was ignored:\n%s", code, out)
+	}
+}
