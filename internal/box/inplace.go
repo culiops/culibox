@@ -764,6 +764,12 @@ func (e *dotDotBelowError) Error() string {
 // anything: a ".." from there on is refused (*dotDotBelowError), and the rest
 // is returned unwalked with below set. A ".." taken at ws itself is safe: ws is
 // a mount point the box can neither replace nor rename, so ws/.. is its parent.
+//
+// A directory entered that is a folder of ws under another path (a host bind
+// mount of it, found through the mount table: wsAlias) is that folder, so the
+// walk is below ws from there (#308). A ".." taken right at it is its host
+// parent, as at ws: the first such directory on a path is a mount point on the
+// host, which the box cannot replace.
 func walkGitPath(base, p, ws string) (gitWalk, error) {
 	sep := string(filepath.Separator)
 	cur := filepath.Clean(base)
@@ -783,10 +789,33 @@ func walkGitPath(base, p, ws string) (gitWalk, error) {
 	if err != nil {
 		return gitWalk{}, err
 	}
-	// atWS: cur is the workspace. Matched by spelling, cur is ws itself; matched
-	// by inode under another path (a host bind mount), cur keeps that path, since
-	// a ".." from there goes to ITS parent, as the kernel takes it.
-	atWS := cur == ws
+	// at: where in the workspace cur is ("" outside it, "." the workspace).
+	// Matched by spelling, cur is ws itself; matched by inode under another path
+	// (a host bind mount of ws or of a folder in it), cur keeps that path, since a
+	// ".." from there goes to ITS parent, as the kernel takes it.
+	at := ""
+	if cur == ws {
+		at = "."
+	}
+	var mounts []mountEntry // the mount table, read once a directory needs it
+	inWS := func(next string, fi fs.FileInfo) (string, error) {
+		if fi.IsDir() && sameDirAsWS(next, fi, wsFi) {
+			return ".", nil
+		}
+		if hostMountInfo == nil {
+			return "", nil
+		}
+		if mounts == nil {
+			b, err := hostMountInfo()
+			if err == nil {
+				mounts, err = parseMountInfo(b)
+			}
+			if err != nil {
+				return "", fmt.Errorf("the mount table cannot be read: %w", err)
+			}
+		}
+		return wsAlias(mounts, next, ws)
+	}
 	missing := 0 // trailing components of cur that do not exist
 	for follows := 0; len(queue) > 0; {
 		c := queue[0]
@@ -798,17 +827,17 @@ func walkGitPath(base, p, ws string) (gitWalk, error) {
 			if missing > 0 {
 				missing--
 			}
-			cur, atWS = filepath.Dir(cur), false
+			cur, at = filepath.Dir(cur), ""
 			continue
 		}
-		if atWS {
-			return walkBelow(ws, append([]string{c}, queue...))
+		if at != "" {
+			return walkBelow(ws, append(append(relParts(at), c), queue...))
 		}
 		next := filepath.Join(cur, c)
 		if len(splitPath(next)) == nws && isWS(next, ws) {
 			// An other-case spelling: a plain directory has ws's parent, and a
 			// symlink that is ws leads to ws, so ws stands for it.
-			cur, atWS, missing = ws, true, 0
+			cur, at, missing = ws, ".", 0
 			continue
 		}
 		if missing > 0 {
@@ -824,7 +853,9 @@ func walkGitPath(base, p, ws string) (gitWalk, error) {
 			return gitWalk{}, err
 		case fi.Mode()&fs.ModeSymlink == 0:
 			cur = next
-			atWS = fi.IsDir() && sameDirAsWS(next, fi, wsFi)
+			if at, err = inWS(next, fi); err != nil {
+				return gitWalk{}, err
+			}
 			continue
 		}
 		if follows++; follows > maxSymlinkFollows {
@@ -842,10 +873,18 @@ func walkGitPath(base, p, ws string) (gitWalk, error) {
 		}
 		queue = append(strings.Split(t, sep), queue...)
 	}
-	if atWS {
+	switch at {
+	case "":
+		return gitWalk{end: cur}, nil
+	case ".":
 		return gitWalk{end: ws}, nil
 	}
-	return gitWalk{end: cur}, nil
+	return walkBelow(ws, relParts(at))
+}
+
+// relParts splits rel, a path relative to the workspace, into its components.
+func relParts(rel string) []string {
+	return strings.Split(rel, string(filepath.Separator))
 }
 
 // walkBelow is the rest of a walk that stepped strictly below ws with rest.
