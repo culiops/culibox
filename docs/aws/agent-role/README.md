@@ -363,7 +363,8 @@ the data-read blocks are advisory in that window**; the grant panel and the edit
 credentials. A bucket made public can be read with an unsigned request, and a bucket shared
 with another account can be read from there, so the window denies:
 
-- `s3:Put*Policy`: bucket, access point, Multi-Region Access Point and Access Grants policies;
+- `s3:Put*Policy*`: bucket, access point (Object Lambda included), Multi-Region Access Point and
+  Access Grants policies;
 - `s3:DeleteBucketPolicy`: a bucket policy can hold the deny that keeps an older grant from working;
 - `s3:Put*Acl`: bucket, object and object-version ACLs, which also covers a `CreateBucket`,
   `PutObject` or `CopyObject` sent with an ACL;

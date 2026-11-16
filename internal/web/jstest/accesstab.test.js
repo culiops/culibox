@@ -883,7 +883,8 @@ test("the grant panel says what the window can read and pass, and warns when IAM
   btn(m.host, "Elevate…").click();
   t = texts(m.host.querySelector(".ac-panel"));
   assert.ok(t.includes("Can read objects in buckets named culibox-*"), t.join("|"));
-  assert.ok(t.includes("Can pass roles named lab-*"), t.join("|"));
+  // #307 review: the bucket and data-read blocks bind these credentials only, not code running as a passed role.
+  assert.ok(t.includes("Can pass roles named lab-*. Code running as one of these roles is not bound by this window's blocks"), t.join("|"));
   assert.ok(!t.some((x) => /^Cannot pass IAM roles/.test(x)));
   const BPBox = "Can change bucket policies, ACLs and public access blocks only on buckets named culibox-*, so those can be made public";
   assert.strictEqual(t.filter((x) => x === BPBox).length, 1, "with a box prefix: the exception is named (#307)");

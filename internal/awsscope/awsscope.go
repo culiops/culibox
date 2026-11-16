@@ -75,8 +75,10 @@ func ValidS3Entry(s string) error {
 
 // ValidBoxBucketPrefix accepts an elevate.box_bucket_prefix: lowercase
 // letters, digits and "-", 3 to 40 characters, ending in "-". It becomes
-// "arn:<p>:s3:::<prefix>*/*" in the S3 deny's NotResource, so anything that
-// could widen it (empty, "*", "?", "/") must never get that far.
+// "arn:<p>:s3:::<prefix>*/*" in the S3 read deny's NotResource and
+// "arn:<p>:s3:::<prefix>*" in the replication and exposure deny's NotResource
+// (#307), so anything that could widen it (empty, "*", "?", "/") must never
+// get that far.
 func ValidBoxBucketPrefix(s string) error {
 	if !boxPrefixRe.MatchString(s) {
 		return fmt.Errorf("box_bucket_prefix %q must be 3 to 40 lowercase letters, digits and -, ending in - (for example culibox-), with no wildcards", s)
@@ -271,10 +273,11 @@ var boxBucketCopyDenies = []string{"dynamodb:ExportTableToPointInTime", "rds:Sta
 // an outside account reads it with no check on the session. Denied in the
 // window except on box buckets. Basis: the S3 API reference's permission notes
 // (each API names the IAM action it needs), from memory, not re-fetched.
-//   - s3:Put*Policy: resource policies that grant access to other principals:
-//     PutBucketPolicy, PutAccessPointPolicy, PutMultiRegionAccessPointPolicy,
-//     PutAccessGrantsInstanceResourcePolicy. No S3 read or ordinary write is
-//     named Put...Policy (GetBucketPolicy, GetBucketPolicyStatus stay allowed).
+//   - s3:Put*Policy*: resource policies that grant access to other principals:
+//     PutBucketPolicy, PutAccessPointPolicy, PutAccessPointPolicyForObjectLambda,
+//     PutMultiRegionAccessPointPolicy, PutAccessGrantsInstanceResourcePolicy.
+//     No S3 read or ordinary write is named Put...Policy... (GetBucketPolicy,
+//     GetBucketPolicyStatus stay allowed).
 //   - s3:DeleteBucketPolicy: a bucket policy often holds the Deny that keeps
 //     an older ACL grant or a cross-account allow from working; removing it
 //     can expose data with no new grant.
@@ -288,9 +291,10 @@ var boxBucketCopyDenies = []string{"dynamodb:ExportTableToPointInTime", "rds:Sta
 //     both need it. Leaving BucketOwnerEnforced turns ACLs back on, so ACLs
 //     set before they were disabled would apply again (inferred).
 //
-// Access point, Multi-Region Access Point and Access Grants policies carry no
-// bucket name, so they are denied even for a box bucket's access point.
-var s3ExposureDenies = []string{"s3:Put*Policy", "s3:DeleteBucketPolicy", "s3:Put*Acl",
+// Access point (Object Lambda included), Multi-Region Access Point and Access
+// Grants policies carry no bucket name, so they are denied even for a box
+// bucket's access point.
+var s3ExposureDenies = []string{"s3:Put*Policy*", "s3:DeleteBucketPolicy", "s3:Put*Acl",
 	"s3:PutBucketPublicAccessBlock", "s3:PutBucketOwnershipControls"}
 
 // s3AccountExposureDeny is the account-level public access block: the S3
@@ -338,8 +342,9 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	// Every unconditional deny of the window is one Resource "*" statement, to
 	// stay under STS's 2,048 characters (#307): the guards, the IAM writes
 	// unless allow_iam, the managed copies and the account public access block.
-	// With the IAM writes on, a guard they already match (iam:CreateAccessKey
-	// under iam:Create*) is not written twice; it is denied either way.
+	// With the IAM write denies present (allow_iam off), a guard they already
+	// match (iam:CreateAccessKey under iam:Create*) is not written twice; it is
+	// denied either way.
 	var always []string
 	for _, g := range elevatedGuardDenies {
 		if el.AllowIAM || !matchesAny(iamWriteDenies, g) {

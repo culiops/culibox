@@ -392,7 +392,7 @@ function accPanel(r, d, ctx) {
     box.appendChild(p);
   };
   if (g.boxPrefix) reach("Can read objects in buckets named ", g.boxPrefix + "*");
-  if (g.passRolePrefix) reach("Can pass roles named ", g.passRolePrefix + "*");
+  if (g.passRolePrefix) reach("Can pass roles named ", g.passRolePrefix + "*", ". Code running as one of these roles is not bound by this window's blocks");
   else box.appendChild(accEl("p", "t-sm muted", "Cannot pass IAM roles (set pass_role_prefix to allow Lambda/ECS applies)"));
   // #307: bucket policies, ACLs and public access blocks are denied in the window except on box buckets.
   if (g.boxPrefix) reach("Can change bucket policies, ACLs and public access blocks only on buckets named ", g.boxPrefix + "*", ", so those can be made public");

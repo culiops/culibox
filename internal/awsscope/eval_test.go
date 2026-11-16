@@ -380,21 +380,21 @@ func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 	}
 	const exposure = `"s3:Put*Acl"`
 	// The smallest policy (no s3_read, no options, IAM writes denied) carries the
-	// copy and exposure denies: measured 1,468 of 2,048 (1,423 with allow_iam on).
+	// copy and exposure denies: measured 1,469 of 2,048 (1,424 with allow_iam on).
 	small, err := ElevatedPolicy("aws", nil, Elevation{})
 	if err != nil || len(small) > 1550 || !strings.Contains(small, "dynamodb:ExportTableToPointInTime") || !strings.Contains(small, exposure) {
 		t.Fatalf("smallest policy: %d chars, copy and exposure denies present: %v", len(small), err)
 	}
 	maxEl := Elevation{BoxBucketPrefix: prefix, PassRolePrefix: strings.Repeat("r", 40)}
 	// One 63-character s3_read bucket, every option at its maximum, the longest
-	// partition: measured 1,860 of 2,048 (2026-11-16; 1,906 before #307).
+	// partition: measured 1,861 of 2,048 (2026-11-16; 1,906 before #307).
 	one, err := ElevatedPolicy("aws-us-gov", s3Read[:1], maxEl)
 	if err != nil || len(one) > MaxPolicyChars {
 		t.Fatalf("the one-entry maximum must fit: %d chars, %v", len(one), err)
 	}
 	t.Logf("one s3_read bucket, both prefixes at 40 characters: %d of %d", len(one), MaxPolicyChars)
 	// Three long s3_read entries with ordinary 8-character prefixes: measured
-	// 1,927 of 2,048 (2026-11-16; 1,973 before #307, and 2,125 with the #307
+	// 1,928 of 2,048 (2026-11-16; 1,973 before #307, and 2,125 with the #307
 	// denies before the unconditional denies were folded into one statement).
 	s, err := ElevatedPolicy("aws-us-gov", s3Read, Elevation{BoxBucketPrefix: "culibox-", PassRolePrefix: "culibox-"})
 	if err != nil {
@@ -404,12 +404,14 @@ func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 	if len(s) > MaxPolicyChars || !strings.Contains(s, exposure) || !strings.Contains(s, `"s3:PutAccountPublicAccessBlock"`) {
 		t.Fatalf("%d > %d, or the #307 denies are missing: %s", len(s), MaxPolicyChars, s)
 	}
-	// Three long entries AND both prefixes at 40 characters: measured 2,023. It
+	// Three long entries AND both prefixes at 40 characters: measured 2,024. It
 	// fits since #307 folded the unconditional denies (2,069, refused, before).
 	all, err := ElevatedPolicy("aws-us-gov", s3Read, maxEl)
 	if err != nil || len(all) > MaxPolicyChars {
 		t.Fatalf("the all-maximum policy: %d chars, %v", len(all), err)
 	}
+	smallIAM, _ := ElevatedPolicy("aws", nil, Elevation{AllowIAM: true})
+	t.Logf("all-maximum: %d, smallest: %d (%d with allow_iam on) of %d", len(all), len(small), len(smallIAM), MaxPolicyChars)
 	// A fourth long entry on top is over: refused, naming the elevated policy.
 	four := append(append([]string{}, s3Read...), strings.Repeat("t", 63))
 	if _, err := ElevatedPolicy("aws-us-gov", four, maxEl); err == nil || !strings.Contains(err.Error(), "elevated session policy") {
@@ -472,6 +474,7 @@ func TestElevatedPolicyDeniesS3ExposureExceptOnBoxBuckets(t *testing.T) {
 		{"s3:PutBucketOwnershipControls", box, true},
 		// access point, Multi-Region Access Point and Access Grants policies: no bucket name, never excepted
 		{"s3:PutAccessPointPolicy", ap, false},
+		{"s3:PutAccessPointPolicyForObjectLambda", "arn:aws:s3-object-lambda:us-east-1:123456789012:accesspoint/culibox-olap", false},
 		{"s3:PutMultiRegionAccessPointPolicy", mrap, false},
 		{"s3:PutAccessGrantsInstanceResourcePolicy", "arn:aws:s3:us-east-1:123456789012:access-grants/default", false},
 		// the account-level block has no resource: denied whatever the prefix
@@ -495,14 +498,17 @@ func TestElevatedPolicyDeniesS3ExposureExceptOnBoxBuckets(t *testing.T) {
 			}
 		}
 	}
-	// The wildcards (s3:Put*Policy, s3:Put*Acl) must not catch reads or the
+	// The wildcards (s3:Put*Policy*, s3:Put*Acl) must not catch reads or the
 	// ordinary writes a Terraform apply makes on any bucket.
 	for _, a := range []string{"s3:GetBucketPolicy", "s3:GetBucketPolicyStatus", "s3:GetBucketAcl", "s3:GetObjectAcl",
 		"s3:GetObjectVersionAcl", "s3:GetBucketPublicAccessBlock", "s3:GetAccountPublicAccessBlock",
 		"s3:GetBucketOwnershipControls", "s3:GetAccessPointPolicy", "s3:ListBucket", "s3:CreateBucket", "s3:DeleteBucket",
 		"s3:PutObject", "s3:DeleteObject", "s3:PutBucketTagging", "s3:PutBucketVersioning", "s3:PutEncryptionConfiguration",
 		"s3:PutLifecycleConfiguration", "s3:PutBucketLogging", "s3:PutBucketCORS", "s3:PutBucketWebsite",
-		"s3:PutBucketNotification", "s3:PutObjectTagging", "s3:PutBucketObjectLockConfiguration"} {
+		"s3:PutBucketNotification", "s3:PutObjectTagging", "s3:PutBucketObjectLockConfiguration",
+		"s3:PutReplicationConfiguration" + "X", // not a real action: guards against a wildcard swallowing Put*
+		"s3:PutBucketRequestPayment", "s3:PutIntelligentTieringConfiguration", "s3:PutAccelerateConfiguration",
+		"s3:PutMetricsConfiguration", "s3:PutInventoryConfiguration", "s3:PutAnalyticsConfiguration"} {
 		for _, pc := range []struct{ name, pol string }{{"on", on}, {"off", off}, {"none", none}, {"neither", neither}} {
 			if got := evaluate(t, pc.pol, evalReq{a, human, nil}); got != "allow" {
 				t.Errorf("%s: %s on a human bucket: got %s want allow", pc.name, a, got)
@@ -519,7 +525,7 @@ func TestElevatedPolicyDeniesS3ExposureExceptOnBoxBuckets(t *testing.T) {
 // #307: the policy text names each exposure action (or the wildcard that
 // covers it) exactly once per mode, so a later edit cannot drop one silently.
 func TestElevatedPolicyS3ExposureActionsPinned(t *testing.T) {
-	want := []string{`"s3:Put*Policy"`, `"s3:DeleteBucketPolicy"`, `"s3:Put*Acl"`, `"s3:PutBucketPublicAccessBlock"`,
+	want := []string{`"s3:Put*Policy*"`, `"s3:DeleteBucketPolicy"`, `"s3:Put*Acl"`, `"s3:PutBucketPublicAccessBlock"`,
 		`"s3:PutBucketOwnershipControls"`, `"s3:PutAccountPublicAccessBlock"`}
 	for _, el := range []Elevation{{}, {BoxBucketPrefix: "culibox-"}, {AllowIAM: true, PassRolePrefix: "lab-"}} {
 		s, err := ElevatedPolicy("aws", nil, el)
