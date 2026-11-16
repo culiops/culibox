@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -39,7 +40,12 @@ func runBox(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io.W
 		printExtraCA(w, set, time.Now())
 		d := boximage.Docker{Bin: bin, ExtraCA: set.PEM()}
 		adoptDefaultImage(ctx, d, cfg, w)
-		return boxSetupImage(ctx, d, cfg.BoxImageOrDefault(), a.Rebuild, time.Now(), runtime.GOOS, w)
+		dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
+		if err != nil {
+			dataDir = ""
+		}
+		src := pinSource{cfg: cfg, home: home, dataDir: dataDir, xdg: xdgConfigHome(), cfgFiles: cfgFiles}
+		return boxSetupAndPrune(ctx, d, cfg.BoxImageOrDefault(), a, src, time.Now(), runtime.GOOS, w)
 	case "status":
 		d := boximage.Docker{Bin: bin}
 		adoptDefaultImage(ctx, d, cfg, w)
@@ -76,44 +82,55 @@ func adoptDefaultImage(ctx context.Context, d boximage.Docker, cfg config.Config
 // build also gets a dated tag. A dated box_image is pinned: it is never built,
 // rebuilt or moved, and -rebuild on it builds a new dated tag instead.
 func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild bool, now time.Time, goos string, w io.Writer) int {
+	rc, _ := boxSetupImageRefs(ctx, d, image, rebuild, now, goos, w)
+	return rc
+}
+
+// boxSetupImageRefs is boxSetupImage, and also returns the names of the image(s)
+// it left current: the configured image, plus the new dated tag when it built
+// one. With a pinned box_image a rebuild leaves the config on the old pin and
+// builds a NEW dated tag, so both are what setup produced and neither may be
+// pruned (#6). nil on failure.
+func boxSetupImageRefs(ctx context.Context, d boximage.Docker, image string, rebuild bool, now time.Time, goos string, w io.Writer) (int, []string) {
 	arch, err := d.ServerArch(ctx)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
-		return 1
+		return 1, nil
 	}
 	st, err := d.Inspect(ctx, image)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
-		return 1
+		return 1, nil
 	}
 	if boximage.IsRemote(image) {
-		return boxSetupRemote(ctx, d, image, arch, st, rebuild, goos, w)
+		rc := boxSetupRemote(ctx, d, image, arch, st, rebuild, goos, w)
+		return rc, refsIf(rc, image)
 	}
 	pinned := boximage.IsDated(image)
 	fatal, msg := st.CheckFor(image, arch)
 	if !rebuild && !fatal {
 		if msg == "" {
 			fmt.Fprintf(w, "PASS image: %s is current (linux/%s)\n", image, arch)
-			return 0
+			return 0, []string{image}
 		}
 		if pinned {
 			fmt.Fprintf(w, "WARN image: %s\n", imageLine(image, st.Arch, msg))
-			return 0
+			return 0, []string{image}
 		}
 	}
 	if !rebuild && fatal && pinned {
 		fmt.Fprintf(w, "FAIL image: %s\n", msg)
-		return 1
+		return 1, nil
 	}
 	repo, err := boximage.Repo(image)
 	if err != nil {
 		fmt.Fprintln(w, "FAIL image: box_image is a digest; CuliBox cannot build it")
-		return 1
+		return 1, nil
 	}
 	dated, err := d.NextDatedTag(ctx, repo, now, image)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
-		return 1
+		return 1, nil
 	}
 	tags := []string{dated}
 	if !pinned {
@@ -123,16 +140,24 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 	if err := d.Build(ctx, tags, w); err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
 		hintBuildFailure(ctx, w, d, goos, err)
-		return 1
+		return 1, nil
 	}
 	fmt.Fprintf(w, "PASS image: built %s (linux/%s, dockerfile %s)\n", dated, arch, boximage.Hash())
 	if pinned {
 		fmt.Fprintf(w, "this config stays on %s until you set \"box_image\": \"%s\"\n", image, dated)
-		return 0
+		return 0, tags
 	}
 	fmt.Fprintf(w, "PASS image: %s now points at %s\n", image, dated)
 	fmt.Fprintf(w, "pin this instance: set \"box_image\": \"%s\" in its config\n", dated)
-	return 0
+	return 0, tags
+}
+
+// refsIf is the image just set up when rc says it worked.
+func refsIf(rc int, image string) []string {
+	if rc != 0 {
+		return nil
+	}
+	return []string{image}
 }
 
 // boxSetupRemote makes a digest or registry box_image present: it pulls a

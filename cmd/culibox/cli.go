@@ -37,7 +37,7 @@ const usage = `usage:
   culibox doctor  [-config <path>]                     check this machine; prints no secrets
   culibox bug-report [-config <path>]                  redacted diagnostic bundle to paste into a bug report (macOS: | pbcopy)
   culibox init [-config <path>]                        guided first-time setup: dependencies, folders, VM size, Claude token, box, doctor (needs a terminal)
-  culibox box setup [-rebuild] [-recreate] [-force]    build the box image (macOS: also the box VM)
+  culibox box setup [-rebuild] [-recreate] [-force] [-no-prune|-prune-local]   build or pull the box image, then remove the image it replaced and old box images a registry can supply again; -no-prune keeps all (macOS: also the box VM)
   culibox box status                                   list boxes (macOS: and the box VM)
   culibox box stop [-force]                            macOS: stop the box VM
   culibox box share list|add <dir> [-ro]|rm <dir>|apply [-force]   macOS: the folders the box VM shares (apply restarts the VM)
@@ -59,6 +59,8 @@ type cliArgs struct {
 	ConfigSet  bool // -config given explicitly
 	Rebuild    bool // box setup
 	Recreate   bool // box setup
+	NoPrune    bool // box setup: keep the old box images
+	PruneLocal bool // box setup: also remove unused local box images (they cannot be pulled again)
 	Force      bool // box stop, box setup, box share apply
 	ReadOnly   bool // box share add: share the folder read-only
 	// ShareAction is box share's action: list | add | rm | apply; SharePath is
@@ -142,6 +144,8 @@ func parseArgs(argv []string) (cliArgs, error) {
 	path := fs.String("config", "", "path to config file (default: <data root>/config.json, the root being $CULIBOX_HOME or ~/.local/share/culibox (an older ~/.local/share/agent-box is used until serve moves it); then $XDG_CONFIG_HOME or ~/.config/culibox/config.json (an older agent-box one is read too) unless CULIBOX_HOME is set; else built-in defaults; never ./config.json)")
 	rebuild := fs.Bool("rebuild", false, "box setup: rebuild the image even if it is current")
 	recreate := fs.Bool("recreate", false, "box setup: delete and recreate the box VM (macOS)")
+	noPrune := fs.Bool("no-prune", false, "box setup: keep old box images instead of removing the unused ones")
+	pruneLocal := fs.Bool("prune-local", false, "box setup: also remove ALL unused box images built here; nothing can pull them again, and another CuliBox on this Docker may pin one")
 	force := fs.Bool("force", false, "box stop, box setup, box share apply: go ahead even with boxes running or the VM state unknown")
 	ro := fs.Bool("ro", false, "box share add: share the folder read-only")
 	base := fs.String("base", "", "clone fetch: the branch in clone_of the fetched range starts after (default main)")
@@ -178,6 +182,15 @@ func parseArgs(argv []string) (cliArgs, error) {
 	if (*rebuild || *recreate) && sub != "setup" {
 		return cliArgs{}, errors.New("-rebuild and -recreate only apply to box setup")
 	}
+	if *noPrune && !(cmd == "box" && sub == "setup") {
+		return cliArgs{}, errors.New("-no-prune only applies to box setup")
+	}
+	if *pruneLocal && !(cmd == "box" && sub == "setup") {
+		return cliArgs{}, errors.New("-prune-local only applies to box setup")
+	}
+	if *noPrune && *pruneLocal {
+		return cliArgs{}, errors.New("-no-prune and -prune-local contradict each other")
+	}
 	if *force && sub != "stop" && sub != "setup" && !(sub == "share" && shareAction == "apply") {
 		return cliArgs{}, errors.New("-force only applies to box stop, box setup and box share apply")
 	}
@@ -204,7 +217,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 		}
 	}
 	return cliArgs{Cmd: cmd, Sub: sub, ConfigPath: *path, ConfigSet: set,
-		Rebuild: *rebuild, Recreate: *recreate, Force: *force,
+		Rebuild: *rebuild, Recreate: *recreate, NoPrune: *noPrune, PruneLocal: *pruneLocal, Force: *force,
 		Profile: profile, Branch: branch, Base: *base, ID: id, AllowOldHistory: *allowOld,
 		ReadOnly: *ro, ShareAction: shareAction, SharePath: sharePath}, nil
 }

@@ -61,8 +61,11 @@ var pathEscapes = map[string]int{
 	// everything else; the -config help text names the lookup order.
 	"cmd/culibox/main.go os.UserHomeDir":      1,
 	"cmd/culibox/main.go env XDG_CONFIG_HOME": 1,
-	"cmd/culibox/cli.go literal .local":       2, // -config help and the usage text
-	"cmd/culibox/cli.go literal .config":      1,
+	// `box setup` reads the config files of every instance that could share the
+	// Docker store (to keep the images they pin); the ~/.config ones follow this.
+	"cmd/culibox/boxprune.go env XDG_CONFIG_HOME": 1,
+	"cmd/culibox/cli.go literal .local":           2, // -config help and the usage text
+	"cmd/culibox/cli.go literal .config":          1,
 	// context_paths denylist: refuses /tmp itself as a context path (it would
 	// shadow the box's tmpfs), and the in-box /tmp/agentbox-gh and
 	// /tmp/ac-session-* (prefix match and its message); names compared with,
