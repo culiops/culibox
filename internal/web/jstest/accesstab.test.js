@@ -881,7 +881,7 @@ test("the grant panel says what the window can read and pass, and warns when IAM
   const RP = "Cannot change the resource policies of DynamoDB tables, SSM parameters or secrets. KMS key policies and grants can still change";
   assert.strictEqual(t.filter((x) => x === RP).length, 1, "the resource-policy line is shown in every window (#324)");
 
-  const el ={ role_arn: WRITE, max_minutes: 60, allow_iam: true, box_bucket_prefix: "culibox-", pass_role_prefix: "lab-" };
+  const el = { role_arn: WRITE, max_minutes: 60, allow_iam: true, box_bucket_prefix: "culibox-", pass_role_prefix: "lab-" };
   m = await mount(claudeBox({ aws_connections: [conn({ elevate: el })] }), status());
   btn(m.host, "Elevate…").click();
   t = texts(m.host.querySelector(".ac-panel"));
@@ -893,7 +893,7 @@ test("the grant panel says what the window can read and pass, and warns when IAM
   assert.strictEqual(t.filter((x) => x === BPBox).length, 1, "with a box prefix: the exception is named (#307)");
   assert.ok(!t.includes(BP), t.join("|"));
   assert.strictEqual(t.filter((x) => x === RP).length, 1, "no option changes the resource-policy line (#324)");
-  const span =[...m.host.querySelectorAll(".ac-panel p")].find((p) => p.textContent === BPBox).querySelector(".mono");
+  const span = [...m.host.querySelectorAll(".ac-panel p")].find((p) => p.textContent === BPBox).querySelector(".mono");
   assert.strictEqual(span && span.textContent, "culibox-*", "the prefix is shown as code");
   assert.ok(t.includes("With IAM changes allowed, the agent can create and use its own roles, so data-read blocks are advisory in this window."), t.join("|"));
 });

@@ -234,6 +234,7 @@ var addedDenies = map[string]string{
 	"dynamodb:putresourcepolicy":   "#324", "dynamodb:deleteresourcepolicy": "#324", "ssm:putresourcepolicy": "#324",
 	"ssm:deleteresourcepolicy": "#324", "secretsmanager:putresourcepolicy": "#324",
 	"secretsmanager:deleteresourcepolicy": "#324",
+	"sts:assumeroot":                      "#329 review: the guard is sts:AssumeRo*",
 }
 
 var viaS3 = map[string]string{"kms:ViaService": "s3.us-east-1.amazonaws.com"}

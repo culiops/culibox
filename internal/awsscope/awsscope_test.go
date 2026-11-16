@@ -229,7 +229,7 @@ func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
 	want := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},` +
 		`{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion","s3express:CreateSession","ssm:GetParameter*"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:ssm:*::parameter/aws/service/*"]},` +
 		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","dynamodb:*GetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords",` +
-		`"sts:AssumeRole*","sts:GetFederationToken","sts:GetSessionToken",` +
+		`"sts:AssumeRo*","sts:GetFederationToken","sts:GetSessionToken",` +
 		`"iam:UploadSSHPublicKey","cloudtrail:StopLogging","cloudtrail:DeleteTrail","cloudtrail:UpdateTrail","cloudtrail:PutEventSelectors",` +
 		`"iam:PassRole",` +
 		`"iam:Create*","iam:Delete*","iam:Put*","iam:*tach*Policy","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*",` +
@@ -343,7 +343,7 @@ func TestElevatedPolicyAllowIAMDropsOnlyTheIAMWriteDenies(t *testing.T) {
 	if denied(p, "iam:Create*", "*") {
 		t.Fatal("allow_iam must drop the IAM write denies")
 	}
-	if !denied(p, "iam:CreateAccessKey", "*") || !denied(p, "iam:*", "arn:aws:iam::*:role/agentbox-*") || !denied(p, "sts:AssumeRole*", "*") {
+	if !denied(p, "iam:CreateAccessKey", "*") || !denied(p, "iam:*", "arn:aws:iam::*:role/agentbox-*") || !denied(p, "sts:AssumeRo*", "*") {
 		t.Fatal("allow_iam must keep every guard deny")
 	}
 }

@@ -227,3 +227,24 @@ func TestSessionPolicyAccessGrantsUnchangedBy322(t *testing.T) {
 		t.Fatalf("investigate policy changed: %s", p)
 	}
 }
+
+// Review of #329: sts:AssumeRoot mints root credentials of a member account,
+// and the window's guard must cover it like AssumeRole (it outlives the
+// window). The guard is written sts:AssumeRo*, which the catalog pins to the
+// three AssumeRole actions and AssumeRoot.
+func TestElevatedPolicyGuardDeniesAssumeRoot(t *testing.T) {
+	for name, p := range windowConfigs(t) {
+		for _, a := range []string{"sts:AssumeRoot", "sts:AssumeRole", "sts:AssumeRoleWithSAML", "sts:AssumeRoleWithWebIdentity"} {
+			if got := evaluate(t, p, evalReq{a, "*", nil}); got != "deny" {
+				t.Errorf("%s: %s is %s", name, a, got)
+			}
+		}
+	}
+	got := expandCatalog(t, "sts:AssumeRo*")
+	if want := []string{"sts:AssumeRole", "sts:AssumeRoleWithSAML", "sts:AssumeRoleWithWebIdentity", "sts:AssumeRoot"}; !slices.Equal(got, want) {
+		t.Fatalf("sts:AssumeRo* expands to %v, want %v", got, want)
+	}
+	if !slices.Contains(elevatedGuardDenies, "sts:AssumeRo*") {
+		t.Fatal("the guard must be written sts:AssumeRo*")
+	}
+}

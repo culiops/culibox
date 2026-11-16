@@ -238,10 +238,12 @@ func SessionPolicy(partition string, s3Read []string) (string, error) {
 }
 
 // elevatedGuardDenies keep an elevation window a real bound and keep Prove
-// intact (spec §6 item 3). AssumeRole* in particular stops a chained
-// credential from outliving the window by up to an hour.
+// intact (spec §6 item 3). sts:AssumeRo* (AssumeRole, AssumeRoleWithSAML,
+// AssumeRoleWithWebIdentity and AssumeRoot, in AWS's catalog) in particular stops
+// a chained credential, or a member account's root credential, from outliving
+// the window by up to an hour.
 var elevatedGuardDenies = []string{
-	"sts:AssumeRole*", "sts:GetFederationToken", "sts:GetSessionToken",
+	"sts:AssumeRo*", "sts:GetFederationToken", "sts:GetSessionToken",
 	"iam:CreateAccessKey", "iam:CreateLoginProfile", "iam:UpdateLoginProfile",
 	"iam:CreateServiceSpecificCredential", "iam:UploadSSHPublicKey",
 	"cloudtrail:StopLogging", "cloudtrail:DeleteTrail", "cloudtrail:UpdateTrail", "cloudtrail:PutEventSelectors",

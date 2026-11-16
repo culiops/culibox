@@ -515,7 +515,8 @@ func TestValidBoxBucketPrefix(t *testing.T) {
 // 2,024 / 1,928 after #307; 1,821 / 1,725 after #329 packed the statements;
 // 1,860 / 1,764 with the Access Grants denies (#322); 1,940 / 1,844 with the
 // S3 Express denies (#323); 1,880 / 1,784 with the action packs (#329);
-// 2,036 / 1,940 with the resource-policy denies (#324). 12 characters are left
+// 2,036 / 1,940 with the resource-policy denies (#324); 2,034 / 1,938 with the
+// guard written sts:AssumeRo* (AssumeRoot, #329 review). 14 characters are left
 // at the all-maximum config: the next deny does not fit there.
 func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 	maxEl := Elevation{BoxBucketPrefix: longBoxPrefix, PassRolePrefix: longRolePrefix}
@@ -527,11 +528,11 @@ func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 		el        Elevation
 		want      int
 	}{
-		{"smallest", "aws", nil, Elevation{}, 1525},
-		{"smallest, allow_iam on", "aws", nil, Elevation{AllowIAM: true}, 1489},
-		{"one", "aws-us-gov", longS3Read[:1], maxEl, 1873},
-		{"realistic", "aws-us-gov", longS3Read, realEl, 1940},
-		{"all-maximum", "aws-us-gov", longS3Read, maxEl, 2036},
+		{"smallest", "aws", nil, Elevation{}, 1523},
+		{"smallest, allow_iam on", "aws", nil, Elevation{AllowIAM: true}, 1487},
+		{"one", "aws-us-gov", longS3Read[:1], maxEl, 1871},
+		{"realistic", "aws-us-gov", longS3Read, realEl, 1938},
+		{"all-maximum", "aws-us-gov", longS3Read, maxEl, 2034},
 	} {
 		s, err := ElevatedPolicy(c.partition, c.s3Read, c.el)
 		if err != nil {

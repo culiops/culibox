@@ -346,7 +346,7 @@ refused while any other box overlaps that folder.
 **Elevated session policy.** Every write credential carries a session policy: `Allow * *`
 intersected with the role's policies, then the same data-read denies as the read role. On top
 of that, always-on guard denies keep the window a real bound and the audit trail intact:
-`sts:AssumeRole*`, `GetFederationToken` and `GetSessionToken` (a chained credential could
+`sts:AssumeRo*` (every `AssumeRole` call and `AssumeRoot`), `GetFederationToken` and `GetSessionToken` (a chained or root credential could
 outlive the window), the calls that create long-lived credentials (`iam:CreateAccessKey`,
 `CreateLoginProfile`, `UpdateLoginProfile`, `CreateServiceSpecificCredential`,
 `UploadSSHPublicKey`), any `iam:*` on `agentbox-*` roles (the agent cannot edit its own
