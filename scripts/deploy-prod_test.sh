@@ -9,6 +9,9 @@
 #               STUB_PID_CHANGE_AFTER=N makes MainPID change after N reads (a crash-restart)
 #   curl        a PATH stub for the HTTP probe; STUB_LISTEN_AFTER=N answers only from the
 #               (N+1)th probe on, STUB_LISTEN_UNTIL=N stops answering after N probes
+#   ss          a PATH stub naming the process that holds the probed port (a real pid: this
+#               shell, so /proc/<pid>/cgroup is real); STUB_CG is the cgroup the unit has,
+#               STUB_SS_NONE=1 means nothing listens
 #   sleep       a PATH stub that returns at once and logs, so the poll window costs no time
 # The prod binary, its stamp and the previous copy all live under the mktemp dir, which
 # is removed on exit. Nothing touches the real ~/bin or the real service.
@@ -77,8 +80,11 @@ case "$*" in
   [ -z "${STUB_RESTART_FAIL:-}" ] || exit 1
   [ -z "${STUB_ACTIVE_UNTIL:-}" ] || [ "$n" -le "$STUB_ACTIVE_UNTIL" ]
   ;;
+*ControlGroup*) echo "${STUB_CG:-/stub/prod.service}" ;;
 *show*)
   n=$(bump show)
+  # MainPID reads 0 while the unit is between a crash and its automatic restart.
+  if [ -n "${STUB_MAINPID_ZERO_UNTIL:-}" ] && [ "$n" -le "$STUB_MAINPID_ZERO_UNTIL" ]; then echo 0; exit 0; fi
   if [ -n "${STUB_PID_CHANGE_AFTER:-}" ] && [ "$n" -gt "$STUB_PID_CHANGE_AFTER" ]; then echo 4243; else echo 4242; fi
   ;;
 *) exit 0 ;;
@@ -99,15 +105,28 @@ if { [ -n "${STUB_LISTEN_AFTER:-}" ] && [ "$n" -le "$STUB_LISTEN_AFTER" ]; } ||
 fi
 printf 200
 EOF
+cat >"$tmp/bin/ss" <<'EOF'
+#!/bin/sh
+# `ss -Hltnp "sport = :PORT"`: the process holding the listening socket on the port.
+echo "$*" >>"$STUB_OUT/ss.log"
+[ -z "${STUB_SS_NONE:-}" ] || exit 0
+echo "LISTEN 0 4096 127.0.0.1:18899 0.0.0.0:* users:((\"culibox\",pid=$STUB_SS_PID,fd=7))"
+EOF
 cat >"$tmp/bin/sleep" <<'EOF'
 #!/bin/sh
 echo "$*" >>"$STUB_OUT/sleep.log"
 EOF
-chmod +x "$tmp/bin/go" "$tmp/bin/systemctl" "$tmp/bin/curl" "$tmp/bin/sleep"
+chmod +x "$tmp/bin/go" "$tmp/bin/systemctl" "$tmp/bin/curl" "$tmp/bin/ss" "$tmp/bin/sleep"
 export PATH=$tmp/bin:$PATH STUB_OUT=$tmp
 export GO=$tmp/bin/go AB_PROD_CONFIRM=yes AB_PROD_SERVICE=stub-prod
 # The address the probe is told to use; the script has no config to read it from.
 export AB_PROD_ADDR=127.0.0.1:18899
+# The socket on that port is held by this shell, so the unit "owns" it when the stub says the
+# unit's cgroup is this shell's (a cgroup v2 line in /proc/<pid>/cgroup reads `0::<path>`).
+export STUB_SS_PID=$$
+STUB_CG=$(sed -n 's/^0:://p' /proc/$$/cgroup | head -1)
+[ -n "$STUB_CG" ] || { echo "deploy-prod_test: needs cgroup v2 (no 0:: line in /proc/$$/cgroup)" >&2; exit 1; }
+export STUB_CG
 # A space in the path: the printed rollback line is pasted into a shell, so it must quote.
 export AB_PROD_BIN="$HOME/prod bin/culibox-prod"
 bin=$AB_PROD_BIN
@@ -126,7 +145,7 @@ commit() { # MESSAGE: commit a change on main and print its sha
 }
 deploy() { # run the script; its exit code lands in $rc, its output in $tmp/out
   rc=0
-  rm -f "$tmp"/count.* "$tmp/curl.log" "$tmp/sleep.log"
+  rm -f "$tmp"/count.* "$tmp/curl.log" "$tmp/sleep.log" "$tmp/ss.log"
   bash "$repo/scripts/deploy-prod.sh" >"$tmp/out" 2>&1 || rc=$?
 }
 # The rollback the script printed, as one shell line.
@@ -288,11 +307,34 @@ not_recorded "$j" "$j" "stopped answering" "a build whose listener dies inside t
 STUB_PID_CHANGE_AFTER=3 deploy
 not_recorded "$j" "$j" "restarted" "a build that crash-restarts between polls"
 
+# MainPID reads 0 right after the restart (an auto-restart in progress): the process to watch is
+# the first real one, so a later change is still caught (and a steady one still passes, below).
+STUB_MAINPID_ZERO_UNTIL=2 STUB_PID_CHANGE_AFTER=5 deploy
+not_recorded "$j" "$j" "restarted" "a crash-restart after MainPID read 0 at first"
+
+# Something else answers on the port (the DEV instance, on the default port) while this unit
+# never listens: curl succeeds, but the socket is not the unit's, so it is not "came up".
+STUB_CG=/stub/some-other.service deploy
+not_recorded "$j" "$j" "not from stub-prod" "a build that never listens while another process answers on the port"
+if [ "$(lines "$tmp/sleep.log")" -le 21 ]; then pass "a foreign listener is waited out only for AB_PROD_LISTEN_WAIT"; else fail "waited $(lines "$tmp/sleep.log") polls on a foreign listener"; fi
+# No listening socket on the port at all: an answer with no owner is not accepted either.
+STUB_SS_NONE=1 deploy
+not_recorded "$j" "$j" "not from stub-prod" "a build whose port has no listening socket"
+STUB_MAINPID_ZERO_UNTIL=2 deploy
+expect_rc "$rc" 0 "a MainPID of 0 at first is not a failure once a process is there"
+# The unit's own listener passes, and the ownership check asks about AB_PROD_ADDR's port.
+deploy
+expect_rc "$rc" 0 "a listener held by the unit's cgroup passes"
+if grep -q "sport = :18899" "$tmp/ss.log"; then pass "the ownership check asks about AB_PROD_ADDR's port"; else fail "ss was not asked about port 18899: $(cat "$tmp/ss.log" 2>/dev/null)"; fi
+
 # A setting that is not a number is refused before anything is built or swapped.
 before=$(cat "$bin")
 AB_PROD_STABLE_SECS=soon deploy
 expect_rc "$rc" 1 "a non-numeric AB_PROD_STABLE_SECS is refused"
 content "$bin" "$before" "a refused setting leaves the installed binary alone"
+AB_PROD_STABLE_SECS=0 deploy
+expect_rc "$rc" 1 "AB_PROD_STABLE_SECS=0 is refused: it would skip the stable window"
+content "$bin" "$before" "the refused 0 leaves the installed binary alone"
 unset AB_PROD_LISTEN_WAIT AB_PROD_STABLE_SECS
 
 if [ "$fails" -ne 0 ]; then
