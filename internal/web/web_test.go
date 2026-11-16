@@ -284,6 +284,35 @@ func TestHandleMetaBoxUnavailableReason(t *testing.T) {
 	}
 }
 
+// #154: box_daemon_reason is the sibling of box_unavailable_reason for a box layer
+// that exists but whose docker daemon cannot be used right now. box_runtime stays
+// as it is (a transient daemon outage must not flip the page to "no boxes", whose
+// new profiles open on the host tier). Read per request, so it follows the daemon.
+func TestHandleMetaBoxDaemonReason(t *testing.T) {
+	reason := "Docker is not running"
+	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: "runc", BoxDaemonReason: func() string { return reason }}
+	got := metaGet(t, s)
+	if v := got["box_daemon_reason"]; v != "Docker is not running" {
+		t.Errorf("box_daemon_reason = %#v", v)
+	}
+	if got["box_runtime"] != "runc" {
+		t.Errorf("box_runtime = %#v, want it untouched", got["box_runtime"])
+	}
+	reason = ""
+	if v, ok := metaGet(t, s)["box_daemon_reason"]; ok {
+		t.Errorf("the daemon answers again, yet box_daemon_reason = %#v", v)
+	}
+	// No layer: box_unavailable_reason explains that, and the daemon is not asked.
+	asked := false
+	got = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: "", BoxDaemonReason: func() string { asked = true; return "x" }})
+	if _, ok := got["box_daemon_reason"]; ok || asked {
+		t.Errorf("no layer, yet box_daemon_reason is published (%v) or asked (%v)", ok, asked)
+	}
+	if _, ok := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: "runc"})["box_daemon_reason"]; ok {
+		t.Error("no probe wired, yet box_daemon_reason is published")
+	}
+}
+
 // bundle_imports tells the page whether /api/bundle/imports exists at all, so it
 // does not request a route that answers 404 on every load.
 func TestHandleMetaBundleImports(t *testing.T) {

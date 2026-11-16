@@ -26,11 +26,11 @@ function fnSource(src, name) {
   throw new Error("unbalanced braces in " + name);
 }
 
-function page({ boxRuntime = "", reason = "", metaLoaded = true, desktop = true } = {}) {
+function page({ boxRuntime = "", reason = "", daemon = "", metaLoaded = true, desktop = true } = {}) {
   const document = { createElement: (t) => new Node(t, document) };
   const opened = [];
   const ctx = vm.createContext({
-    document, console, boxRuntime, boxUnavailableReason: reason, metaLoaded,
+    document, console, boxRuntime, boxUnavailableReason: reason, boxDaemonReason: daemon, metaLoaded,
     drawerDesktop: () => desktop,
     openSpawnDialog: () => opened.push("spawn"), openSettings: (t) => opened.push("settings:" + t), $: () => ({ click() { opened.push("new-profile"); } }),
   });
@@ -105,4 +105,34 @@ test("the phone path builds none of the new elements", () => {
 test("the repaint key changes when the reason does", () => {
   const k = (reason) => page({ reason }).ctx.emptyStateKey({ kind: "first", profiles: [] });
   assert.notStrictEqual(k("a"), k("b"));
+});
+
+// #154: the layer exists but its docker daemon cannot be used (/api/meta box_daemon_reason). Step 2 keeps
+// "found" (Docker is installed) and its enabled button (a profile can still be made), and says why a box
+// cannot start right now, as a text node. No install link: Docker is installed.
+test("a box layer whose daemon cannot be used: found, an enabled button, the reason as text", () => {
+  const { ctx, opened } = page({ boxRuntime: "runc", daemon: "Docker is not running" });
+  const s = step2(ctx.emptyFirstEl());
+  assert.ok(s.textContent.includes("Needs Docker (found)."));
+  const why = byClass(s, "empst-why")[0];
+  assert.strictEqual(byClass(why, "empst-reason")[0].textContent, "Boxes can't start right now: Docker is not running.");
+  assert.strictEqual(all(s).filter((n) => n.tag === "a").length, 0, "no install link for an installed docker");
+  const btn = all(s).find((n) => n.tag === "button");
+  assert.ok(!btn.disabled && btn.attrs["aria-disabled"] === undefined);
+  btn.onclick();
+  assert.deepStrictEqual(opened, ["settings:manage", "new-profile"]);
+  const evil = byClass(page({ boxRuntime: "runc", daemon: "<img src=x onerror=1>" }).ctx.emptyFirstEl(), "empst-reason")[0];
+  assert.strictEqual(evil.textContent, "Boxes can't start right now: <img src=x onerror=1>.");
+  for (const none of [page({ boxRuntime: "runc" }), page({ boxRuntime: "runc", daemon: "x", metaLoaded: false }), page({ boxRuntime: "runc", daemon: "x", desktop: false })]) {
+    assert.strictEqual(byClass(none.ctx.emptyFirstEl(), "empst-why").length, 0);
+  }
+  // No layer: the no-layer reason is the one shown, the daemon one is not added.
+  const noLayer = byClass(page({ boxRuntime: "", reason: "Docker is not installed", daemon: "Docker is not running" }).ctx.emptyFirstEl(), "empst-reason");
+  assert.deepStrictEqual(noLayer.map((n) => n.textContent), ["Docker is not installed"]);
+});
+
+test("the repaint key changes when the daemon reason does, with a layer only", () => {
+  const k = (boxRuntime, daemon) => page({ boxRuntime, daemon }).ctx.emptyStateKey({ kind: "first", profiles: [] });
+  assert.notStrictEqual(k("runc", "Docker is not running"), k("runc", ""));
+  assert.strictEqual(k("", "Docker is not running"), k("", ""));
 });

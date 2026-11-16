@@ -59,6 +59,12 @@ type Server struct {
 	// "box_unavailable_reason", only while BoxRuntime is empty. Never raw error
 	// text: it reaches the browser.
 	BoxUnavailableReason string
+	// BoxDaemonReason is why a box layer that exists cannot be used right now
+	// (#154): a plain sentence such as "Docker is not running", "" when it can.
+	// Called on every /api/meta, so it must return from a cache and never wait on
+	// docker. Published as "box_daemon_reason" only while BoxRuntime is set; nil
+	// on macOS and in every build without a local daemon to ask. Never raw error text.
+	BoxDaemonReason func() string
 	// CloneUnavailable is why clone mode cannot run on this instance; empty when
 	// it can. Published in /api/meta as "clone_unavailable".
 	CloneUnavailable string
@@ -273,6 +279,15 @@ func (s *Server) Handler() http.Handler {
 		// can say so; absent when boxes work or nothing said why.
 		if s.BoxRuntime == "" && s.BoxUnavailableReason != "" {
 			meta["box_unavailable_reason"] = s.BoxUnavailableReason
+		}
+		// A layer that exists whose daemon cannot be used right now. A sibling of
+		// the reason above, not the same field: box_runtime stays set, because
+		// "no box layer" flips the page's defaults to the host tier and a daemon
+		// that is only stopped must not do that.
+		if s.BoxRuntime != "" && s.BoxDaemonReason != nil {
+			if r := s.BoxDaemonReason(); r != "" {
+				meta["box_daemon_reason"] = r
+			}
 		}
 		// Whether /api/bundle/imports exists on this instance, so the page does
 		// not request a route that answers 404 on every load.

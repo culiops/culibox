@@ -456,7 +456,12 @@ func New(opts Options) (*Manager, error) {
 		}
 		m.locks = newGuardLocks(opts.StateRoot, ops)
 	}
-	if opts.Client.HasRuntime(context.Background(), runtimeSysbox) {
+	// Bounded: a daemon that accepts and never answers must not hold the boot.
+	// A daemon that is stopped or not permitted answers false here, and is not an
+	// error: the layer exists, and Ping (daemon.go) says why it cannot be used.
+	pctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+	defer cancel()
+	if opts.Client.HasRuntime(pctx, runtimeSysbox) {
 		m.runtime = runtimeSysbox
 	}
 	return m, nil

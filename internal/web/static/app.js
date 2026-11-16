@@ -5596,6 +5596,11 @@ let boxRuntime = "";
 // to build (/api/meta box_unavailable_reason, a plain sentence such as "Docker
 // is not installed"), "" otherwise. It only explains; the profile page reads it.
 let boxUnavailableReason = "";
+// boxDaemonReason: why a box layer that EXISTS cannot be used right now (/api/meta
+// box_daemon_reason, a plain sentence such as "Docker is not running"), "" when it
+// can. Unlike the reason above, boxRuntime stays set, so no default flips to the host
+// tier; the pages only explain.
+let boxDaemonReason = "";
 // bundleImports: /api/bundle/imports exists on this instance (/api/meta
 // bundle_imports). The route is only registered when the CLAUDE.md bundle is on,
 // so with this false the page does not ask (it would answer 404 on every load).
@@ -5971,6 +5976,14 @@ function emptyFirstEl() {
     why.append(a);
     step2.append(why);
   }
+  if (drawerDesktop() && metaLoaded && boxRuntime && boxDaemonReason) {
+    // The layer exists (Docker is installed) but its daemon cannot be used right now (#154): the
+    // button stays enabled, since a profile can still be made, and the server's plain reason says why
+    // a box cannot start. A text node, like the no-layer reason above; no install link.
+    const why = emptyEl("div", "empst-why");
+    why.append(emptyEl("span", "empst-reason", "Boxes can't start right now: " + boxDaemonReason + "."));
+    step2.append(why);
+  }
   steps.append(
     step(1, "Start an agent", "Claude Code on this machine, in a folder you choose. Works now.", "New session", "pbtn", () => openSpawnDialog()),
     step2,
@@ -5994,7 +6007,7 @@ function desktopEmptyState() {
 }
 
 function emptyStateKey(m) {
-  return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, boxRuntime ? "" : boxUnavailableReason, m.profiles.map((n) => {
+  return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, boxRuntime ? boxDaemonReason : boxUnavailableReason, m.profiles.map((n) => {
     const p = profiles.find((x) => x.name === n);
     return [n, p ? profileTouchLine(p, metaLoaded ? boxRuntime : undefined) : ""];
   })]);
@@ -7026,6 +7039,7 @@ async function currentShellProfile() {
     metaLoaded = true;
     cloneUnavailable = (meta && meta.clone_unavailable) || "";
     boxUnavailableReason = (meta && meta.box_unavailable_reason) || "";
+    boxDaemonReason = (meta && meta.box_daemon_reason) || "";
     bundleImports = !!(meta && meta.bundle_imports);
     refreshEmptyState();
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
@@ -7192,6 +7206,7 @@ initMobileShell();
     metaLoaded = true;
     cloneUnavailable = (meta && meta.clone_unavailable) || "";
     boxUnavailableReason = (meta && meta.box_unavailable_reason) || "";
+    boxDaemonReason = (meta && meta.box_daemon_reason) || "";
     bundleImports = !!(meta && meta.bundle_imports);
     refreshEmptyState();
     if (seq === credListsSeq) applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known

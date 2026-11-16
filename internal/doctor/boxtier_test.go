@@ -12,6 +12,7 @@ import (
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
 	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credref"
@@ -180,6 +181,67 @@ func TestBoxTierLinuxShowsTokenRow(t *testing.T) {
 	rs := boxTierResults("linux", boxFacts{DockerErr: errors.New("not found")}, warnTok)
 	if strings.Contains(detail(rs), "boxed claude token") {
 		t.Fatalf("no docker ends the tier before the token row, as on macOS: %s", detail(rs))
+	}
+}
+
+// #154: docker found, but its daemon cannot be used. Doctor says which class,
+// in the same words as the page, and no longer calls the tier a plain pass.
+func TestBoxTierLinuxDaemonClasses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want []string
+	}{
+		{"stopped", fmt.Errorf("%w: docker info: exit status 1: Cannot connect", box.ErrDockerNotRunning), []string{"Docker is not running", "systemctl start docker"}},
+		{"not permitted", fmt.Errorf("%w: docker info: exit status 1", box.ErrDockerDenied), []string{"no permission to use Docker", "docker group"}},
+		{"other", errors.New("docker info: exit status 1: error getting credentials"), []string{"did not answer", "docker info"}},
+	} {
+		rs := boxTierResults("linux", boxFacts{DaemonErr: tc.err, Stopped: []string{"ab-box-2"}}, tokenOK)
+		d := detail(rs)
+		if worst(rs) != Warn {
+			t.Errorf("%s: boxes cannot start, so the tier is a WARN:\n%s", tc.name, d)
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(d, w) {
+				t.Errorf("%s: want %q in:\n%s", tc.name, w, d)
+			}
+		}
+		if strings.Contains(d, "PASS boxed tier") || strings.Contains(d, "stopped boxes") {
+			t.Errorf("%s: an unusable daemon is not 'docker found' and lists no boxes:\n%s", tc.name, d)
+		}
+		if rs[len(rs)-1] != tokenOK {
+			t.Errorf("%s: the token row still ends the tier:\n%s", tc.name, d)
+		}
+	}
+	// The sentence of the page is the first words of the row, so the two agree.
+	for _, err := range []error{box.ErrDockerNotRunning, box.ErrDockerDenied} {
+		if d := detail(boxTierResults("linux", boxFacts{DaemonErr: err}, tokenOK)); !strings.Contains(d, box.DaemonReason(err)) {
+			t.Errorf("doctor and the page word %v differently:\n%s", err, d)
+		}
+	}
+}
+
+// The facts gatherer asks the real docker (here a script), bounded, on Linux
+// only: macOS's VM is never started by doctor, so it is not probed.
+func TestGatherBoxFactsProbesTheDaemonOnLinux(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = info ]; then echo 'Cannot connect to the Docker daemon at unix:///x. Is the docker daemon running?' >&2; exit 1; fi; done\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := gatherBoxFacts(config.Config{DockerBin: bin}, t.TempDir(), t.TempDir(), "linux", nil)
+	if !errors.Is(f.DaemonErr, box.ErrDockerNotRunning) {
+		t.Fatalf("DaemonErr = %v, want the stopped class", f.DaemonErr)
+	}
+	if len(f.Stopped) != 0 {
+		t.Fatalf("a daemon that does not answer lists no boxes: %v", f.Stopped)
+	}
+	ok := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(ok, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if f := gatherBoxFacts(config.Config{DockerBin: ok}, t.TempDir(), t.TempDir(), "linux", nil); f.DaemonErr != nil {
+		t.Fatalf("a daemon that answers has no DaemonErr: %v", f.DaemonErr)
 	}
 }
 

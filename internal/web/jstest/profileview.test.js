@@ -313,6 +313,36 @@ test("boxes unavailable on a host profile is not an error", () => {
   assert.strictEqual(byId(v, "canreach").edit, false);
 });
 
+// #154: the box layer exists (box_runtime is set) but its docker daemon is stopped or not permitted
+// (/api/meta box_daemon_reason). The page says so on the Runs in block; it does not call the layer
+// unavailable, whose defaults flip a new profile to the host tier.
+test("a box layer whose daemon cannot be used says why, on a box profile and quietly on a host one", () => {
+  const reason = "Docker is not running";
+  const box = byId(pfvReadView(awsIn({ boxRuntime: "runc", boxDaemonReason: reason })), "runs");
+  assert.deepStrictEqual(box.lines, [
+    "In a box",
+    "Boxes can't start right now: Docker is not running.",
+    "Sessions with this profile can't start until that is fixed.",
+  ]);
+  assert.strictEqual(box.tone, "error");
+  assert.strictEqual(box.toneAt, 1);
+  const host = byId(pfvReadView(hostIn({ boxRuntime: "runc", boxDaemonReason: reason })), "runs");
+  assert.deepStrictEqual(host.lines, [
+    "On this machine: runs as you, with your files, your network and your credentials",
+    "Boxes can't start right now: Docker is not running.",
+  ]);
+  assert.ok(!host.tone, "a host profile does not need a box: muted, never red");
+  // The daemon answering, an older server, and no layer at all keep today's lines.
+  for (const over of [{ boxDaemonReason: "" }, {}, { boxDaemonReason: undefined }]) {
+    const ok = byId(pfvReadView(awsIn({ boxRuntime: "runc", ...over })), "runs");
+    assert.strictEqual(ok.lines.length, 2);
+    assert.ok(!ok.tone);
+  }
+  const noLayer = byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", boxDaemonReason: reason })), "runs");
+  assert.strictEqual(noLayer.lines[1], "Boxes are unavailable on this machine: Docker is not installed.", "no layer: that reason wins and the daemon one is not added");
+  assert.strictEqual(noLayer.lines.length, 3);
+});
+
 test("private copy workspace lists not-home branches with today's reason text", () => {
   const notHome = {
     at: "2026-11-05T10:00:00Z", base: "master",

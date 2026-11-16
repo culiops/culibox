@@ -129,7 +129,9 @@ test("the meta reads set bundleImports and boxUnavailableReason beside boxRuntim
   assert.match(APP, /let boxUnavailableReason = "";/);
   assert.strictEqual((APP.match(/bundleImports = !!\(meta && meta\.bundle_imports\);/g) || []).length, 2);
   assert.strictEqual((APP.match(/boxUnavailableReason = \(meta && meta\.box_unavailable_reason\) \|\| "";/g) || []).length, 2);
-  for (const name of ["bundleImports", "boxUnavailableReason"]) {
+  assert.match(APP, /let boxDaemonReason = "";/);
+  assert.strictEqual((APP.match(/boxDaemonReason = \(meta && meta\.box_daemon_reason\) \|\| "";/g) || []).length, 2);
+  for (const name of ["bundleImports", "boxUnavailableReason", "boxDaemonReason"]) {
     const decl = new RegExp("^(?:let|const|var|function)\\s+" + name + "\\b", "m");
     const owners = fs.readdirSync(STATIC).filter((f) => f.endsWith(".js") && decl.test(read(f)));
     assert.deepStrictEqual(owners, ["app.js"], name + " is declared once, in app.js");
