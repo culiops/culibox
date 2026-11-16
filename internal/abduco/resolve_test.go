@@ -26,16 +26,41 @@ func realTempDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// t.TempDir makes its folder 0777 &^ umask: 0775 under umask 002, which the
+	// resolver refuses. The tests set every mode they rely on themselves.
+	if err := os.Chmod(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return d
+}
+
+// writeExec writes a script at p with mode 0755 whatever the umask.
+func writeExec(t *testing.T, p string) {
+	t.Helper()
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// mkdir755 makes dir with mode 0755 whatever the umask.
+func mkdir755(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func newResolveFixture(t *testing.T) *resolveFixture {
 	t.Helper()
 	dir := realTempDir(t)
 	exe := filepath.Join(dir, "culibox")
-	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExec(t, exe)
 	return &resolveFixture{dir: dir, exe: exe}
 }
 
@@ -74,9 +99,7 @@ func TestResolveConfiguredWins(t *testing.T) {
 	f.bundle(t, 0o755)
 	f.onPath = "/usr/bin/abduco"
 	other := filepath.Join(realTempDir(t), "my-abduco")
-	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExec(t, other)
 	r, err := f.lookup(os.Getuid()).Resolve(other)
 	if err != nil {
 		t.Fatal(err)
@@ -197,9 +220,7 @@ func TestResolveSkipsWritableByOthers(t *testing.T) {
 
 func TestResolveSkipsDirectory(t *testing.T) {
 	f := newResolveFixture(t)
-	if err := os.Mkdir(filepath.Join(f.dir, "abduco"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	mkdir755(t, filepath.Join(f.dir, "abduco"))
 	f.onPath = "/usr/bin/abduco"
 	r, err := f.lookup(os.Getuid()).Resolve("")
 	if err != nil {
@@ -288,9 +309,7 @@ func TestResolveSkipsSymlinkIntoSharedDir(t *testing.T) {
 	f := newResolveFixture(t)
 	shared := realTempDir(t)
 	target := filepath.Join(shared, "abduco")
-	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExec(t, target)
 	if err := os.Chmod(shared, 0o1777); err != nil {
 		t.Fatal(err)
 	}
@@ -312,9 +331,7 @@ func TestResolveSkipsSymlinkIntoSharedDir(t *testing.T) {
 func TestResolveSkipsSymlinkChain(t *testing.T) {
 	f := newResolveFixture(t)
 	target := filepath.Join(realTempDir(t), "abduco")
-	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExec(t, target)
 	shared := realTempDir(t)
 	mid := filepath.Join(shared, "abduco")
 	if err := os.Symlink(target, mid); err != nil {
@@ -341,17 +358,11 @@ func TestResolveAcceptsRelativeSymlink(t *testing.T) {
 	root := realTempDir(t)
 	bin, cellar := filepath.Join(root, "bin"), filepath.Join(root, "cellar")
 	for _, d := range []string{bin, cellar} {
-		if err := os.Mkdir(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		mkdir755(t, d)
 	}
 	f := &resolveFixture{dir: bin, exe: filepath.Join(bin, "culibox"), onPath: "/usr/bin/abduco"}
-	if err := os.WriteFile(f.exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(cellar, "abduco"), []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExec(t, f.exe)
+	writeExec(t, filepath.Join(cellar, "abduco"))
 	if err := os.Symlink(filepath.Join("..", "cellar", "abduco"), filepath.Join(bin, "abduco")); err != nil {
 		t.Fatal(err)
 	}
@@ -396,9 +407,7 @@ func TestResolveAcceptsPrivateGroupWritable(t *testing.T) {
 func TestResolveAcceptsSafeSymlink(t *testing.T) {
 	f := newResolveFixture(t)
 	target := filepath.Join(realTempDir(t), "abduco-0.6")
-	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExec(t, target)
 	link := filepath.Join(f.dir, "abduco")
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
@@ -471,13 +480,9 @@ func TestResolveSkipsDotDotThroughSymlink(t *testing.T) {
 	f := newResolveFixture(t)
 	x := realTempDir(t)
 	for _, d := range []string{filepath.Join(x, "t"), filepath.Join(x, "b")} {
-		if err := os.Mkdir(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		mkdir755(t, d)
 	}
-	if err := os.WriteFile(filepath.Join(x, "b", "abduco"), []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExec(t, filepath.Join(x, "b", "abduco"))
 	if err := os.Symlink(filepath.Join(x, "t"), filepath.Join(x, "s")); err != nil {
 		t.Fatal(err)
 	}
