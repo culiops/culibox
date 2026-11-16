@@ -179,6 +179,9 @@ func TestInPlaceBindMountTableFailsClosed(t *testing.T) {
 			table: "1 0 8:1 / / rw - ext4 x rw\n50 1 8:9 /old <ws> rw - ext4 y rw\n" +
 				"51 1 8:1 <tmp> <tmp> rw - ext4 x rw\n40 51 8:1 <ws>/tools <mnt> rw - ext4 x rw\n",
 			mounts: []string{"tools"}},
+		{name: "a loop at one mount point (a repeated mount id)", refuse: "cannot read or follow its mount table",
+			table: "1 0 8:1 / / rw - ext4 x rw\n5 1 8:1 / <tmp> rw - ext4 x rw\n" +
+				"5 5 8:1 / <tmp> rw - ext4 x rw\n5 5 8:1 / <tmp> rw - ext4 x rw\n"},
 		{name: "no root mount (a loop at /)", refuse: "mount table",
 			table: "1 2 8:1 / / rw - ext4 x rw\n2 1 8:1 / / rw - ext4 x rw\n"},
 	}

@@ -132,7 +132,9 @@ func mountOf(ms []mountEntry, p string) *mountEntry {
 	if cur == nil {
 		return nil
 	}
-	cur = stackTop(ms, cur)
+	if cur = stackTop(ms, cur); cur == nil {
+		return nil
+	}
 	for steps := 0; steps < len(ms); steps++ {
 		var next *mountEntry
 		for i := range ms {
@@ -147,7 +149,9 @@ func mountOf(ms []mountEntry, p string) *mountEntry {
 		if next == nil {
 			return cur
 		}
-		cur = stackTop(ms, next)
+		if cur = stackTop(ms, next); cur == nil {
+			return nil
+		}
 	}
 	return nil // a loop in the parent ids: not a table to trust
 }
@@ -164,7 +168,7 @@ func onSlash(ms []mountEntry, id int) bool {
 
 // stackTop is the mount on top of m's mount point: one mounted later at the
 // same point has m as its parent. Of several (not seen in practice), the last
-// listed.
+// listed. nil when the parents loop at that point.
 func stackTop(ms []mountEntry, m *mountEntry) *mountEntry {
 	for steps := 0; steps < len(ms); steps++ {
 		var up *mountEntry
@@ -178,7 +182,7 @@ func stackTop(ms []mountEntry, m *mountEntry) *mountEntry {
 		}
 		m = up
 	}
-	return m
+	return nil // a loop at one mount point: not a table to trust
 }
 
 // visibleIn reports whether m is the mount found at its own mount point.
@@ -213,7 +217,7 @@ func mountTableRefusal(err error) error {
 	if !errors.As(err, &mt) {
 		return nil
 	}
-	return refuseInPlace("CuliBox cannot read its mount table (/proc/self/mountinfo: %v), so it cannot tell whether a "+
+	return refuseInPlace("CuliBox cannot read or follow its mount table (/proc/self/mountinfo: %v), so it cannot tell whether a "+
 		"folder git uses is a folder of the workspace mounted elsewhere. %s", mt.err, inPlaceTrustedHost)
 }
 
