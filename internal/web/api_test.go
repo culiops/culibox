@@ -1047,6 +1047,41 @@ func TestSpawnErrShowsBoxUnavailableMessage(t *testing.T) {
 	}
 }
 
+// The containment refusal carries a stable code (#142), so the New session dialog keeps it on its own error
+// line instead of a toast: the status stays 400 and the message stays the server's sentence. A refusal with a
+// code of its own (a restarting VM) keeps that one, and one that is not about containment gets none.
+func TestSpawnErrBoxUnavailableHasACode(t *testing.T) {
+	msg := `this session asks for runtime box, and this instance has no box layer (see the boot log); set the profile's tier to host (or send runtime "host") or fix containment`
+	rec := httptest.NewRecorder()
+	writeSpawnErr(rec, "claude", fmt.Errorf("%w: %s", box.ErrBoxUnavailable, msg))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["code"] != "box_unavailable" || got["error"] != "containment unavailable: "+msg {
+		t.Fatalf("body = %v, want code box_unavailable and the unchanged text", got)
+	}
+	// Wrapped deeper (clone creation, SSO checks, the daemon probe): the same code.
+	rec = httptest.NewRecorder()
+	writeSpawnErr(rec, "claude", fmt.Errorf("spawn: %w", fmt.Errorf("%w: Docker is not running", box.ErrBoxUnavailable)))
+	if !strings.Contains(rec.Body.String(), `"code":"box_unavailable"`) {
+		t.Fatalf("a wrapped refusal lost its code: %s", rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	writeSpawnErr(rec, "claude", fmt.Errorf("%w: /c is inside the clone", box.ErrBoxOwned))
+	if strings.Contains(rec.Body.String(), `"code"`) {
+		t.Fatalf("a box-owned refusal must not borrow the containment code: %s", rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	writeSpawnErr(rec, "claude", box.ErrVMRestarting)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"code":"vm_restarting"`) {
+		t.Fatalf("vm restarting changed: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 // ErrBoxOwned names the directory the caller just sent and the way out, so it
 // is shown as a 400 with its message.
 func TestWriteSpawnErrShowsBoxOwned(t *testing.T) {

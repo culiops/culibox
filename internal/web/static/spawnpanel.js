@@ -33,6 +33,43 @@ function spawnCurrentTier() {
   return segValue($("runtime-seg")) === "host" ? "host" : "box";
 }
 
+// spawnGateInput: what spawnBoxGate reads, from the page's own state.
+function spawnGateInput() {
+  return { profile: currentProfile(), metaLoaded, boxRuntime, boxUnavailableReason, boxDaemonReason, tier: segValue($("runtime-seg")) };
+}
+
+// The sentence a blocked submit wrote on the dialog's error line (spawnGateErr), so syncSpawnGate clears it, and only it, once the
+// profile or tier on screen is no longer blocked.
+let spawnGateErr = "";
+
+// syncSpawnGate: what the dialog says about boxes (#142). #spawn-nobox shows "Boxes are unavailable on this machine: <reason>."
+// (red when the profile on screen needs one, quiet otherwise), and Spawn is aria-disabled with the reason as its title while it is
+// blocked: still hoverable, as every desktop control that cannot act yet (setDisabledReason); the submit handler refuses it. The
+// desktop only: on the phone the block stays hidden and Spawn stays live, as it was. Returns the gate, for the submit handler.
+function syncSpawnGate() {
+  const g = spawnBoxGate(spawnPanelOn() ? spawnGateInput() : undefined);
+  const el = $("spawn-nobox");
+  if (el) {
+    el.hidden = !g.show;
+    el.classList.toggle("err", g.tone === "error");
+    const kids = [];
+    if (g.show) {
+      kids.push(spawnPanelEl("span", "nb-line", g.line));
+      if (g.more) kids.push(spawnPanelEl("span", "nb-more", g.more));
+    }
+    el.replaceChildren(...kids);
+  }
+  // Not while a spawn is in flight: the submit handler holds the button disabled and puts its label back itself.
+  const go = $("spawn").querySelector('button[type="submit"]');
+  if (go && !spawnBusy) setDisabledReason(go, g.blocked, g.text, true);
+  if (spawnGateErr && g.text !== spawnGateErr) {
+    const err = $("spawn-err");
+    if (err && err.textContent === spawnGateErr) setDialogError("spawn-modal", "");
+    spawnGateErr = "";
+  }
+  return g;
+}
+
 // spawnPlistPick: a click on a profile. The same two steps the Profile seg takes.
 function spawnPlistPick(name) {
   const sel = $("agent");
@@ -199,6 +236,13 @@ function renderSpawnReach() {
   if (!box) return;
   const p = currentProfile();
   if (!p) { box.replaceChildren(); return; }
+  // A profile that needs a box when there is none: the host rows below would say "your whole user account" and "not contained"
+  // for a session that will not start there (#142).
+  const gate = spawnBoxGate(spawnGateInput());
+  if (gate.noLayer && gate.blocked) {
+    paintReachRows(box, spawnReachNeedsBox(boxUnavailableReason), { title: "This agent will be able to" });
+    return;
+  }
   const acct = !$("spawn-account-row").hidden ? $("spawn-account").value : "";
   const rows = reachRows({
     profile: acct ? Object.assign({}, p, { account: acct }) : p,
@@ -250,6 +294,7 @@ function paintReachRows(box, rows, opts) {
 // from the places the form already re-derives itself (profile change, tier or
 // workspace change, account change), so it never needs a poll. A no-op on mobile.
 function syncSpawnPreview() {
+  syncSpawnGate();
   syncSpawnCopyLine();
   const nm = $("sess-name");
   if (!spawnPanelOn()) {

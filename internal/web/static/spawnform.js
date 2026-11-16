@@ -138,6 +138,12 @@ function spawnRefusedRestarting(status, code) {
   return status === 503 && code === "vm_restarting";
 }
 
+// spawnRefusedBoxUnavailable: the containment layer refused a boxed spawn (HTTP 400, code "box_unavailable": no box layer, the daemon
+// is down, egress control is not running, ...). On the desktop the dialog stays open and shows the sentence on its error line (#142).
+function spawnRefusedBoxUnavailable(status, code) {
+  return status === 400 && code === "box_unavailable";
+}
+
 // The M9.9 sentence, after the folder's path (the path itself is drawn as code).
 const SPAWN_NOT_SHARED_TAIL = " is not shared with the box VM, so a box can’t use it.";
 const SPAWN_VM_SEES_HELP = "The list offers only folders the box VM can see.";
@@ -197,7 +203,7 @@ function spawnProgressText(seconds, runtime) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    spawnRefusedLocked, spawnRefusedUnavailable, spawnRefusedNotShared, spawnRefusedRestarting, spawnNotSharedLine, vmShareFilter, spawnShareMode, spawnVMFilterFor, spawnLatest,
+    spawnRefusedLocked, spawnRefusedUnavailable, spawnRefusedBoxUnavailable, spawnRefusedNotShared, spawnRefusedRestarting, spawnNotSharedLine, vmShareFilter, spawnShareMode, spawnVMFilterFor, spawnLatest,
     SPAWN_NOT_SHARED_TAIL, SPAWN_VM_SEES_HELP, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
     runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText, spawnSubmitLabel, spawnFootHint,
     PLIST_SEARCH_MIN, profileMatches,

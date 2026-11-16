@@ -135,6 +135,26 @@ function pfvUnavailable(reason, refused) {
   };
 }
 
+// pfvDaemonRefuses: the daemon reason (/api/meta box_daemon_reason) is one of the two the box layer's Prepare refuses every
+// boxed session for. Any other (the doctor pointer) is not refused there: the spawn's own docker calls may still work.
+function pfvDaemonRefuses(daemon) {
+  return /^(Docker is not running|no permission to use Docker)$/.test(pfvText(daemon));
+}
+
+// pfvRefusedWithoutBox: a session of this profile is refused when there is no box layer. It asks for box: the stored profile's
+// own tier comes first (doc, {} for a caller with no stored profile); only a profile that stores none takes what the instance's
+// default_runtime asks (the list row's runtime_asked: runtime is the resolved tier, which ends in box when nobody said anything,
+// so it cannot tell the two apart). Or it holds a readable folder or a private copy (copy, the caller's word for it): those are
+// refused on this machine, and a profile that names no tier can hold them (the server saves it, because its default resolves
+// to box), so such a session is refused rather than started uncontained. The read view and the New session dialog both ask it.
+function pfvRefusedWithoutBox(view, doc, copy) {
+  const v = view && typeof view === "object" ? view : {};
+  const d = doc && typeof doc === "object" ? doc : {};
+  const stored = d.runtime === "box" || d.runtime === "host";
+  const asksBox = stored ? d.runtime === "box" : v.runtime_asked === "box";
+  return asksBox || copy === true || pfvList(pfvField(v, d, "context_paths")).length > 0;
+}
+
 function pfvAgentParts(view, doc) {
   const o = pfvOptions(view, doc);
   const claude = view.claude === true;
@@ -211,7 +231,7 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon) {
   } else if (daemon) {
     // The two named reasons refuse every session of a box profile (the layer's Prepare). Any other
     // (the doctor pointer) is not refused there: the spawn's own docker calls may still work.
-    const refusing = /^(Docker is not running|no permission to use Docker)$/.test(daemon);
+    const refusing = pfvDaemonRefuses(daemon);
     b.lines.push("In a box", dline, refusing ? "Sessions with this profile can't start until that is fixed." : "Sessions with this profile may fail to start.");
     b.tone = "error";
     b.toneAt = 1;
@@ -276,14 +296,8 @@ function pfvReadView(o) {
   const unavailable = typeof x.boxRuntime === "string" && x.boxRuntime === "";
   const copy = !host && pfvText(pfvField(view, doc, "clone_of")) !== "";
   const a = pfvAgentParts(view, doc);
-  // Whether a session of this profile is refused without a box layer. It asks for box: the stored profile's own tier comes first;
-  // only a profile that stores none takes what the instance's default_runtime asks (the list row's runtime_asked: runtime is the
-  // resolved tier, which ends in box when nobody said anything, so it cannot tell the two apart). Or it holds a readable folder
-  // or a private copy: those are refused on this machine, and a profile that names no tier can hold them (the server saves it,
-  // because its default resolves to box), so such a session is refused rather than started uncontained.
-  const stored = doc.runtime === "box" || doc.runtime === "host";
-  const asksBox = stored ? doc.runtime === "box" : view.runtime_asked === "box";
-  const refused = asksBox || copy || pfvList(pfvField(view, doc, "context_paths")).length > 0;
+  // Whether a session of this profile is refused without a box layer (pfvRefusedWithoutBox has the rule).
+  const refused = pfvRefusedWithoutBox(view, doc, copy);
 
   const blocks = [
     pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, refused, unavailable ? "" : pfvText(x.boxDaemonReason)),
@@ -347,5 +361,5 @@ function pfvReadView(o) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { pfvReadView, pfvAdvancedCount };
+  module.exports = { pfvReadView, pfvAdvancedCount, pfvUnavailable, pfvRefusedWithoutBox, pfvDaemonRefuses };
 }
