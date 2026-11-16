@@ -4,7 +4,7 @@
 // code, and read what is left. It is imported only by tests.
 //
 // It answers just the verbs the box image code uses: version, image ls,
-// image inspect, container ls, container inspect, pull, tag and image rm. Like
+// image inspect, container ls, container inspect, pull, build, tag and image rm. Like
 // docker, rm refuses an image a container uses and an image that has several
 // names when it is given the bare ID, and this fake also refuses -f, which the
 // code under test must never pass.
@@ -47,7 +47,7 @@ func New(t *testing.T) *Fake {
 	t.Helper()
 	dir := t.TempDir()
 	f := &Fake{t: t, Bin: filepath.Join(dir, "docker"), dir: dir}
-	for _, n := range []string{"images", "labeled", "meta", "containers", "pull", "failrm", "log"} {
+	for _, n := range []string{"images", "labeled", "meta", "containers", "pull", "build", "failrm", "noop", "log"} {
 		f.write(n, "")
 	}
 	f.write("arch", "arm64\n")
@@ -122,8 +122,31 @@ func (f *Fake) PullAdds(ref string, im Image) {
 	f.appendTo("pull", strings.Join([]string{ref, im.ID, fmt.Sprint(im.Size), orNone(r.Repo), orNone(r.Tag), orNone(r.Digest), labeled}, "\t"))
 }
 
+// BuildAdds makes the next `docker build … -t name …` produce im: every -t name
+// moves to it (an old holder of a name is left unnamed when that was its last).
+// im.Refs[0].Digest, when set, is the digest every new name shows, as on the
+// containerd image store, which shows one on local builds too.
+func (f *Fake) BuildAdds(im Image) {
+	f.t.Helper()
+	labeled := "0"
+	if im.Labeled {
+		labeled = "1"
+	}
+	digest, hash := None, im.Hash
+	if len(im.Refs) > 0 && im.Refs[0].Digest != "" {
+		digest = im.Refs[0].Digest
+	}
+	if hash == "" {
+		hash = "h0"
+	}
+	f.appendTo("build", strings.Join([]string{im.ID, fmt.Sprint(im.Size), labeled, digest, hash}, "\t"))
+}
+
 // FailRm makes removing the ref (or ID) fail as a daemon error.
 func (f *Fake) FailRm(ref string) { f.appendTo("failrm", ref) }
+
+// RmNoop makes removing the ref (or ID) report success and change nothing.
+func (f *Fake) RmNoop(ref string) { f.appendTo("noop", ref) }
 
 // Has reports whether the store holds an image with this ID.
 func (f *Fake) Has(id string) bool {
@@ -209,6 +232,30 @@ pull)
   echo "$row" | awk -F'\t' -v OFS='\t' '{print $2, $4, $5, $6 >> "'"$d"'/images"; print $2, $3, "arm64", "h0" >> "'"$d"'/meta"; if ($7=="1") print $2 >> "'"$d"'/labeled"}'
   echo "pulled $ref"
   exit 0 ;;
+build)
+  cat >/dev/null
+  row=$(head -n 1 "$d/build")
+  if [ -z "$row" ]; then echo "fake docker: no image arranged for build" >&2; exit 1; fi
+  sed -i 1d "$d/build"
+  id=$(echo "$row" | cut -f1); size=$(echo "$row" | cut -f2); lab=$(echo "$row" | cut -f3); dig=$(echo "$row" | cut -f4); hash=$(echo "$row" | cut -f5)
+  prev=""
+  for a; do
+    if [ "$prev" = -t ]; then
+      repo=${a%:*}; tag=${a##*:}
+      old=$(awk -F'\t' -v r="$repo" -v g="$tag" '$2==r && $3==g {print $1}' "$d/images")
+      awk -F'\t' -v r="$repo" -v g="$tag" '!($2==r && $3==g)' "$d/images" > "$d/images.new"; mv "$d/images.new" "$d/images"
+      # A name that moved leaves its old image unnamed (dangling) when it was the last.
+      for o in $old; do
+        awk -F'\t' -v i="$o" '$1==i {f=1} END {exit !f}' "$d/images" || printf '%s\t<none>\t<none>\t<none>\n' "$o" >> "$d/images"
+      done
+      printf '%s\t%s\t%s\t%s\n' "$id" "$repo" "$tag" "$dig" >> "$d/images"
+    fi
+    prev=$a
+  done
+  printf '%s\t%s\tarm64\t%s\n' "$id" "$size" "$hash" >> "$d/meta"
+  [ "$lab" = 1 ] && echo "$id" >> "$d/labeled"
+  echo "built $id"
+  exit 0 ;;
 image)
   [ "$2" = rm ] || { echo "fake docker: unsupported: $*" >&2; exit 1; }
   shift 2
@@ -218,30 +265,26 @@ image)
   rc=0
   for a in "$@"; do
     if grep -qxF -- "$a" "$d/failrm"; then echo "Error response from daemon: simulated failure removing $a" >&2; rc=1; continue; fi
+    if grep -qxF -- "$a" "$d/noop"; then echo "Deleted: $a"; continue; fi
     id=$(id_of "$a"); byid=0
     if [ -z "$id" ]; then id=$(awk -F'\t' -v r="$a" '$1==r {print $1; exit}' "$d/images"); byid=1; fi
     if [ -z "$id" ]; then echo "Error response from daemon: No such image: $a" >&2; rc=1; continue; fi
+    # As docker does: a name that is not the image's last is only untagged, with
+    # no container check; the last name (or a bare ID) deletes the image, which a
+    # container using it refuses; a bare ID with several names is refused.
+    named=$(awk -F'\t' -v i="$id" '$1==i && $2!="<none>"' "$d/images" | wc -l)
+    if [ "$byid" = 1 ] && [ "$named" -gt 1 ]; then
+      echo "Error response from daemon: conflict: unable to delete $a (must be forced) - image is referenced in multiple repositories" >&2; rc=1; continue
+    fi
+    if [ "$byid" = 0 ] && [ "$named" -gt 1 ]; then
+      awk -F'\t' -v r="$a" '!(($2 ":" $3)==r || ($2 "@" $4)==r)' "$d/images" > "$d/images.new"; mv "$d/images.new" "$d/images"
+      echo "Untagged: $a"; continue
+    fi
     if awk -F'\t' -v i="$id" '$2==i {f=1} END {exit !f}' "$d/containers"; then
       echo "Error response from daemon: conflict: unable to delete $a (cannot be forced) - image is being used by a container" >&2; rc=1; continue
     fi
-    n=$(awk -F'\t' -v i="$id" '$1==i' "$d/images" | wc -l)
-    if [ "$byid" = 1 ] && [ "$n" -gt 1 ]; then
-      echo "Error response from daemon: conflict: unable to delete $a (must be forced) - image is referenced in multiple repositories" >&2; rc=1; continue
-    fi
-    if [ "$byid" = 1 ]; then
-      awk -F'\t' -v i="$id" '$1!=i' "$d/images" > "$d/images.new"
-    else
-      awk -F'\t' -v r="$a" '!(($2 ":" $3)==r || ($2 "@" $4)==r)' "$d/images" > "$d/images.new"
-    fi
-    mv "$d/images.new" "$d/images"
-    # No named row left: the image itself goes.
-    left=$(awk -F'\t' -v i="$id" '$1==i && $2!="<none>"' "$d/images" | wc -l)
-    if [ "$left" -eq 0 ]; then
-      awk -F'\t' -v i="$id" '$1!=i' "$d/images" > "$d/images.new"; mv "$d/images.new" "$d/images"
-      echo "Deleted: $id"
-    else
-      echo "Untagged: $a"
-    fi
+    awk -F'\t' -v i="$id" '$1!=i' "$d/images" > "$d/images.new"; mv "$d/images.new" "$d/images"
+    echo "Deleted: $id"
   done
   exit $rc ;;
 esac

@@ -51,7 +51,7 @@ Tested: on a data root filled through the previous release (host tier, no box VM
 ## What an upgrade may reset
 
 - **The box VM and its images** (macOS), when a release changes how the VM is provisioned: `culibox doctor` says so, and `culibox box setup -recreate` deletes and rebuilds the VM. See [macOS](MACOS.md).
-- **Old box images.** `culibox box setup` removes older box images that no container uses and no visible config pins, after it has pulled or built the one you configured. It keeps an older image that a saved backup's config pins when it was built locally and so cannot be pulled again, which is what the restore in [Rolling back](#rolling-back) needs. `culibox box setup -no-prune` keeps every image. See [INSTALL](INSTALL.md#from-source-manual).
+- **Old box images.** After it has pulled or built the image you configured, `culibox box setup` removes the old box images a registry can supply again and the one it orphaned, and lists (without removing) the other unused ones built here, which cannot be pulled again: `culibox box setup -prune-local` removes those, `-no-prune` keeps all. It always keeps an image a saved backup's config pins as a dated tag or `:base`, which is what the restore in [Rolling back](#rolling-back) needs. Details and the full list of what is kept: [INSTALL](INSTALL.md#from-source-manual).
 - **Idle boxes.** Boxes with no live session are stopped when `serve` starts. A box's home in `boxstate/` stays.
 - **The bundle cache** (`bundle/`): the filtered copy of your Claude config that boxes see. It is rebuilt at the next spawn, and copies unused for 14 days are removed.
 - **Usage numbers** in `analytics.db`, which are rebuilt from transcripts.
