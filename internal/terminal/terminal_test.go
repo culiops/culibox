@@ -86,7 +86,9 @@ func TestAttachHandler_SupersededCloseCode(t *testing.T) {
 	ts := httptest.NewServer(NewAttachHandler(m.Get))
 	defer ts.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Not a window the eviction must land in: every step below waits for an event, and
+	// this only keeps a real hang from stalling the run (a loaded runner is slow, not wrong).
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
 	first, _, err := websocket.Dial(ctx, wsURL(ts.URL, "/ws/"+sess.ID), nil)
@@ -94,6 +96,20 @@ func TestAttachHandler_SupersededCloseCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer first.CloseNow()
+
+	// Dial returns once the 101 is written, before the handler has called Subscribe. A
+	// second dial straight after can have its handler subscribe FIRST, which makes the
+	// first handler the one that supersedes it: then it is the second socket that gets
+	// 4001, and the first one, the survivor, is read until the deadline (#311, measured:
+	// 13 of 600 runs with -cpu 1,2 on a busy host). Output reaches a socket only through
+	// its subscription, so an echo seen on the first one proves it is the subscribed
+	// viewer, and the second attach is then certain to evict it.
+	if err := first.Write(ctx, websocket.MessageBinary, []byte("first\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readUntil(ctx, first, "first"); err != nil {
+		t.Fatalf("first viewer never saw its echo; got %q (err %v)", got, err)
+	}
 
 	second, _, err := websocket.Dial(ctx, wsURL(ts.URL, "/ws/"+sess.ID), nil)
 	if err != nil {
@@ -118,16 +134,23 @@ func TestAttachHandler_SupersededCloseCode(t *testing.T) {
 	if err := second.Write(ctx, websocket.MessageBinary, []byte("pong\n")); err != nil {
 		t.Fatal(err)
 	}
+	if got, err := readUntil(ctx, second, "pong"); err != nil {
+		t.Fatalf("survivor stopped working after the eviction; got %q (err %v)", got, err)
+	}
+}
+
+// readUntil reads binary output from c until it contains want; it returns what it read.
+func readUntil(ctx context.Context, c *websocket.Conn, want string) (string, error) {
 	var b strings.Builder
 	for {
-		typ, data, err := second.Read(ctx)
+		typ, data, err := c.Read(ctx)
 		if err != nil {
-			t.Fatalf("survivor stopped working after the eviction; got %q (err %v)", b.String(), err)
+			return b.String(), err
 		}
 		if typ == websocket.MessageBinary {
 			b.Write(data)
-			if strings.Contains(b.String(), "pong") {
-				return
+			if strings.Contains(b.String(), want) {
+				return b.String(), nil
 			}
 		}
 	}
