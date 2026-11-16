@@ -53,6 +53,10 @@ type viewBody struct {
 			State  string `json:"state"`
 			Reason string `json:"reason"`
 		} `json:"base"`
+		SignIn *struct {
+			State string     `json:"state"`
+			Until *time.Time `json:"until"`
+		} `json:"signin"`
 	} `json:"aws"`
 	GitHubApps []struct {
 		Name       string   `json:"name"`
