@@ -485,7 +485,8 @@ func TestValidBoxBucketPrefix(t *testing.T) {
 //   - all-maximum: three long entries AND both prefixes at 40 characters.
 //
 // History (all-maximum / realistic): 2,069 (refused) / 1,973 before #307;
-// 2,024 / 1,928 after #307; 1,821 / 1,725 after #329 packed the statements.
+// 2,024 / 1,928 after #307; 1,821 / 1,725 after #329 packed the statements;
+// 1,860 / 1,764 with the Access Grants denies (#322).
 func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 	maxEl := Elevation{BoxBucketPrefix: longBoxPrefix, PassRolePrefix: longRolePrefix}
 	realEl := Elevation{BoxBucketPrefix: "culibox-", PassRolePrefix: "culibox-"}
@@ -496,11 +497,11 @@ func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 		el        Elevation
 		want      int
 	}{
-		{"smallest", "aws", nil, Elevation{}, 1310},
-		{"smallest, allow_iam on", "aws", nil, Elevation{AllowIAM: true}, 1265},
-		{"one", "aws-us-gov", longS3Read[:1], maxEl, 1658},
-		{"realistic", "aws-us-gov", longS3Read, realEl, 1725},
-		{"all-maximum", "aws-us-gov", longS3Read, maxEl, 1821},
+		{"smallest", "aws", nil, Elevation{}, 1349},
+		{"smallest, allow_iam on", "aws", nil, Elevation{AllowIAM: true}, 1304},
+		{"one", "aws-us-gov", longS3Read[:1], maxEl, 1697},
+		{"realistic", "aws-us-gov", longS3Read, realEl, 1764},
+		{"all-maximum", "aws-us-gov", longS3Read, maxEl, 1860},
 	} {
 		s, err := ElevatedPolicy(c.partition, c.s3Read, c.el)
 		if err != nil {

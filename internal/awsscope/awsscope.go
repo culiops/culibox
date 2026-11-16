@@ -270,6 +270,29 @@ func ValidPassRolePrefix(s string) error {
 
 // ssmParamReads are the SSM parameter reads, split out of dataReadDenies in
 // the elevated policy so that AWS's public parameters can be carved out.
+// s3AccessGrantsDenies (#322): S3 Access Grants hands out credentials of a
+// location's IAM role through s3:GetDataAccess, and those credentials are not
+// bound by the session policy, so its S3 read deny would not hold for them.
+// The window denies GetDataAccess and every Access Grants change, so it can
+// neither use a grant nor make one for another principal. Basis: AWS's action
+// catalog (internal/awsprobe snapshot) for the names; that GetDataAccess
+// credentials escape the session policy is inferred from what they are (the
+// location role's), not measured.
+//   - s3:GetDataAccess: the credential call;
+//   - s3AccessGrantsWrites: create, update, associate, delete and dissociate
+//     of grants, locations, instances and the Identity Center link. The
+//     instance resource policy put is already s3:Put*Policy* (#307).
+//
+// A grant, location or instance ARN carries no bucket name, so box buckets get
+// no exception.
+var s3AccessGrantsDenies = []string{"s3:GetDataAccess", s3AccessGrantsWrites}
+
+// s3AccessGrantsWrites matches every S3 action whose name has "AccessGrant"
+// after a verb ending in "e" (Create, Update, Associate, Delete, Dissociate)
+// and no read (Get..., List... end the verb in "t"). Written as a pattern to fit
+// STS's limit (#329); a test pins its expansion against the catalog.
+const s3AccessGrantsWrites = "s3:*eAccessGrant*"
+
 var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"}
 
 // ssmParamReadsPattern is how the elevated policy writes ssmParamReads, to save
@@ -399,6 +422,7 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	// made public, so they matter even when no bucket is readable in the window.
 	always = append(always, boxBucketCopyDenies...)
 	always = append(always, s3AccountExposureDeny)
+	always = append(always, s3AccessGrantsDenies...) // #322: no bucket in their ARNs, so no box exception
 	// Replication and the S3 exposure calls (#307) have an exception only for
 	// box buckets: an s3_read entry may name just a prefix of a bucket, and
 	// replication copies the whole bucket. The box-bucket ARN "<prefix>*" also

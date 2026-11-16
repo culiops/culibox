@@ -396,6 +396,18 @@ that name; code run as a passed role (with `pass_role_prefix`) is not bound by t
 and can change any bucket that role can; and with `allow_iam` on, the agent can create a role that
 does it.
 
+**S3 Access Grants is off in the window
+([#322](https://github.com/culiops/culibox/issues/322)).** `s3:GetDataAccess` returns credentials
+of an Access Grants location's IAM role, and the session policy does not bound those, so its
+object-read deny would not hold for them. The window denies `s3:GetDataAccess` and every Access
+Grants change (`s3:*eAccessGrant*`: creating, updating, associating, deleting or dissociating
+grants, locations, instances and the Identity Center link; the instance resource policy is
+`s3:Put*Policy*` above). Reads (`GetAccessGrant`, `ListAccessGrants` and the like) stay allowed.
+A grant, location or instance carries no bucket name, so box buckets get no exception: a stack
+that changes Access Grants cannot apply in the window. The read role is not changed: it keeps
+`s3:GetDataAccess` from `ReadOnlyAccess`, so a grant that names `agentbox-agent` hands the
+agent credentials for whatever that grant covers, `s3_read` or not.
+
 Two exceptions let Terraform plan and destroy in the window; the read role has neither:
 
 - **AWS public parameters.** `ssm:GetParameter`, `GetParameters`, `GetParametersByPath` and `GetParameterHistory`

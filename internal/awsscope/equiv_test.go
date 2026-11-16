@@ -223,7 +223,13 @@ func resourcesFor(partition, action string) []string {
 
 // addedDenies are the concrete actions a later change denies on purpose, with
 // the issue that adds each. Every other action must decide as it did before.
-var addedDenies = map[string]string{}
+var addedDenies = map[string]string{
+	"s3:getdataaccess": "#322", "s3:associateaccessgrantsidentitycenter": "#322", "s3:createaccessgrant": "#322",
+	"s3:createaccessgrantsinstance": "#322", "s3:createaccessgrantslocation": "#322", "s3:deleteaccessgrant": "#322",
+	"s3:deleteaccessgrantsinstance": "#322", "s3:deleteaccessgrantsinstanceresourcepolicy": "#322",
+	"s3:deleteaccessgrantslocation": "#322", "s3:dissociateaccessgrantsidentitycenter": "#322",
+	"s3:updateaccessgrantslocation": "#322",
+}
 
 var viaS3 = map[string]string{"kms:ViaService": "s3.us-east-1.amazonaws.com"}
 
