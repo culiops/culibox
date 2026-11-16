@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/auth"
+	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/doctor"
 	"github.com/culiops/culibox/internal/secretstore"
@@ -239,6 +241,11 @@ type boxFake struct {
 	addErr       error
 	stateErr     error
 	unapplied    bool // the list is pending on a set-up VM even for a covered folder
+	// startAtCheck: the Nth vmStopped read finds the VM started (`culibox serve`
+	// booted it for a boxed spawn while init waited at a prompt), with a box when
+	// boxesRunning.
+	startAtCheck int
+	checks       int
 	calls        []string
 
 	listed  bool // the workspace is in the saved list
@@ -280,7 +287,13 @@ func (f *boxFake) apply(d *initDeps) {
 		}
 		return f.covered, f.addErr
 	}
-	d.vmStopped = func(config.Config, string) bool { return f.vmUp && !f.running }
+	d.vmStopped = func(config.Config, string) bool {
+		f.checks++
+		if f.startAtCheck != 0 && f.checks == f.startAtCheck {
+			f.running = true
+		}
+		return f.vmUp && !f.running
+	}
 	d.shareApply = func(_ config.Config, _ []string, _ string, force bool, w io.Writer) int {
 		if force {
 			f.calls = append(f.calls, "apply -force")
@@ -375,12 +388,37 @@ func TestBoxStepStoppedVMWithListedButUnappliedFolderApplies(t *testing.T) {
 	}
 }
 
-// Declining on a stopped VM stops with the -force command: the plain apply
-// would refuse the same way.
-func TestBoxStepStoppedVMDecliningNamesForce(t *testing.T) {
+// Declining on a stopped VM does not hand the user `apply -force` as the next
+// step (by the time they run it the VM may run boxes): it says to run init, which
+// checks the VM again, and names -force only for while the VM is still stopped.
+func TestBoxStepStoppedVMDecliningNamesInit(t *testing.T) {
 	f := &boxFake{vmUp: true, stopped: true}
 	ok, out := boxStep("darwin", "n\n", f)
-	if ok || calls(f) != "share /w/proj,state" || !strings.Contains(out, "`culibox box share apply -force`") || strings.Contains(out, "  done") {
+	if ok || calls(f) != "share /w/proj,state" || !strings.Contains(out, "run culibox init again") || !strings.Contains(out, "only safe while the VM is still stopped") || strings.Contains(out, "run `culibox box share apply -force`") || strings.Contains(out, "  done") {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+}
+
+// The prompt can wait while `culibox serve` starts the VM for a boxed spawn. A
+// forced apply would stop it (it skips the live-box guard), so init reads the VM
+// again after the answer and uses the guarded apply when it is no longer
+// stopped: the box that runs makes it refuse, and nothing is stopped.
+func TestBoxStepVMStartedWhileAskingUsesTheGuardedApply(t *testing.T) {
+	f := &boxFake{vmUp: true, stopped: true, boxesRunning: true, startAtCheck: 2}
+	ok, out := boxStep("darwin", "\n", f)
+	if ok || calls(f) != "share /w/proj,state,apply" || !strings.Contains(out, "has started since the check") || !strings.Contains(out, "refusing:") || !strings.Contains(out, "stopped:") {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+	if strings.Contains(out, "apply -force") && strings.Contains(strings.Join(f.calls, ","), "apply -force") {
+		t.Fatalf("a forced apply ran against a VM that started: %v", f.calls)
+	}
+}
+
+// Started with no box in it: the guarded apply goes through, never forced.
+func TestBoxStepVMStartedWhileAskingWithoutBoxesStillApplies(t *testing.T) {
+	f := &boxFake{vmUp: true, stopped: true, startAtCheck: 2}
+	ok, out := boxStep("darwin", "\n", f)
+	if !ok || calls(f) != "share /w/proj,state,apply,setup,state" || !strings.Contains(out, "  done") {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
 	}
 }
@@ -860,5 +898,49 @@ func TestInitTokenStoredNeedsTheTokenID(t *testing.T) {
 	}
 	if initTokenStored(f.dataDir, f.k) {
 		t.Fatal("another id is not the claude-box token")
+	}
+}
+
+// vmIsStopped is true only for a status that says "stopped". A status that is
+// neither running nor stopped (colima says "not running" but the docker socket
+// still answers) and a failed read both leave a box possibly running.
+func TestVMIsStopped(t *testing.T) {
+	status := func(st boxvm.Status, err error) func(context.Context) (boxvm.Status, error) {
+		return func(context.Context) (boxvm.Status, error) { return st, err }
+	}
+	for _, c := range []struct {
+		name string
+		st   boxvm.Status
+		err  error
+		want bool
+	}{
+		{"stopped", boxvm.Status{Stopped: true}, nil, true},
+		{"running", boxvm.Status{Running: true}, nil, false},
+		{"neither: a box may still run", boxvm.Status{}, nil, false},
+		{"read failed", boxvm.Status{Stopped: true}, errors.New("colima status: unreadable output"), false},
+	} {
+		if got := vmIsStopped(context.Background(), status(c.st, c.err)); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestWorkspaceShareState(t *testing.T) {
+	home := []vmshares.Share{{Path: "/Users/me", Mode: vmshares.RW}}
+	for _, c := range []struct {
+		name    string
+		setUp   bool
+		ws      string
+		applied []vmshares.Share
+		want    string
+	}{
+		{"not set up, even if the list would cover it", false, "/Users/me/proj", home, "not_set_up"},
+		{"not set up, nothing applied", false, "/Users/me/proj", nil, "not_set_up"},
+		{"set up and held", true, "/Users/me/proj", home, "applied"},
+		{"set up and not held", true, "/Volumes/x/proj", home, "pending"},
+	} {
+		if got := workspaceShareState(c.setUp, c.ws, c.applied, true); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
 	}
 }
