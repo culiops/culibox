@@ -130,7 +130,8 @@ function spawnBoxRefusalLine(o) {
     return u.line + " " + u.consequence;
   }
   const daemon = typeof x.boxDaemonReason === "string" ? x.boxDaemonReason.trim() : "";
-  if (x.metaLoaded === true && x.boxRuntime && daemon) return "Boxes can't start right now: " + daemon + ".";
+  // Only for the two reasons the layer refuses for: the doctor pointer is vaguer than the server's own sentence, which is kept.
+  if (x.metaLoaded === true && x.boxRuntime && daemon && spawnDep("pfvDaemonRefuses", "./profileview.js")(daemon)) return "Boxes can't start right now: " + daemon + ".";
   return String(x.message == null ? "" : x.message);
 }
 

@@ -111,6 +111,9 @@ test("refusal line (desktop dialog): plain words from what the page knows, the s
   const other = "containment unavailable: egress control is not running, so no box can start";
   assert.strictEqual(spawnBoxRefusalLine({ metaLoaded: true, boxRuntime: "runc", boxDaemonReason: "", message: other }), other);
   assert.strictEqual(spawnBoxRefusalLine({ metaLoaded: false, boxRuntime: "", boxUnavailableReason: "", message: other }), other, "unknown before /api/meta answers: the server's words");
+  // The doctor pointer is vaguer than what the server said: the server's sentence stays.
+  assert.strictEqual(spawnBoxRefusalLine({ metaLoaded: true, boxRuntime: "runc", boxDaemonReason: "run `culibox doctor` for details", message: other }), other);
+  assert.strictEqual(spawnBoxRefusalLine({ metaLoaded: true, boxRuntime: "runc", boxDaemonReason: "no permission to use Docker", message: other }), "Boxes can't start right now: no permission to use Docker.");
 });
 
 test("spawnRefusedBoxUnavailable: only a 400 carrying the box_unavailable code", () => {
@@ -225,7 +228,7 @@ const submit = APP.slice(APP.indexOf('$("spawn").addEventListener("submit"'), AP
 test("submit: a blocked Spawn never posts and says why; the containment refusal stays in the dialog on the desktop only", () => {
   assert.ok(submit.length > 500, "submit handler found");
   const gate = submit.indexOf("syncSpawnGate()");
-  const busy = submit.indexOf("spawnBusy = true");
+  const busy = submit.indexOf("spawnBusy = true", submit.indexOf("return;", submit.indexOf("setDialogError(\"spawn-modal\", gate.text)"))); // the one that starts the POST
   assert.ok(gate > 0 && gate < busy, "the gate is read before anything is sent");
   assert.match(submit.slice(gate, busy), /if \(gate\.blocked\)[\s\S]*setDialogError\("spawn-modal", gate\.text\)[\s\S]*return;/);
   const branch = submit.indexOf("spawnRefusedBoxUnavailable(e.status, e.code)");
@@ -236,6 +239,12 @@ test("submit: a blocked Spawn never posts and says why; the containment refusal 
   assert.match(arm, /spawnUnavailMsg = spawnBoxRefusalLine\(/);
   assert.match(arm, /setDialogError\("spawn-modal", spawnUnavailMsg\)/, "the stale line is cleared on the next try like the Keychain one");
   assert.ok(!arm.includes("closeSpawn()") && !arm.includes("showToast"), "the dialog and its form (name, first message, workspace) stay as they were");
+  // A daemon-down block is not final: the meta is re-read first, and only a block that survives it refuses (a stale
+  // "Docker is not running" must not trap the user once Docker is back). No layer is not re-read: boot decided that.
+  const first = submit.indexOf("let gate = syncSpawnGate();");
+  assert.ok(first > 0 && first < busy);
+  const retry = submit.slice(first, submit.indexOf("if (gate.blocked) {", first + 40));
+  assert.match(retry, /if \(gate\.blocked && !gate\.noLayer\) \{[\s\S]*spawnBusy = true;[\s\S]*await refreshBoxMeta\(\)[\s\S]*spawnBusy = false;[\s\S]*gate = syncSpawnGate\(\);/);
   // Re-synced once the button is restored, so a blocked profile is not left looking live.
   assert.match(submit.slice(submit.indexOf("} finally {")), /syncSpawnGate\(\)/);
 });
@@ -251,12 +260,23 @@ test("the dialog has the block, above the fields, and the no-layer red 'cannot b
   assert.match(fnSource(read("spawnpanel.js"), "syncSpawnPreview"), /syncSpawnGate\(\)/);
 });
 
-test("opening the dialog re-reads the box fields of /api/meta, so a page loaded while Docker was down does not keep blocking", () => {
+test("opening the dialog re-reads the box fields of /api/meta, in parallel with the profiles, so a page loaded while Docker was down does not keep blocking", () => {
   const open = fnSource(APP, "openSpawnDialog");
-  const at = open.indexOf("await refreshBoxMeta()");
-  assert.ok(at > open.indexOf("await loadProfiles(false)") && at < open.indexOf("syncRuntimeField()"), "before the tier and the gate are derived");
+  const start = open.indexOf("refreshBoxMeta()"), profiles = open.indexOf("await loadProfiles(false)"), join = open.indexOf("await metaRead");
+  assert.ok(start > 0 && start < profiles && profiles < join && join < open.indexOf("syncRuntimeField()"), "started first, joined before the tier and the gate are derived");
   const fn = fnSource(APP, "refreshBoxMeta");
   assert.match(fn, /deadlineSignal\(5000\)/, "a stalled answer must not hang the open");
   for (const k of ["box_runtime", "box_unavailable_reason", "box_daemon_reason"]) assert.ok(fn.includes("meta." + k), k);
   assert.match(fn, /catch \(_\) \{/, "a failed read keeps what the page has");
+  assert.match(fn, /if \(!metaLoaded\) return;/, "before the page's own first read there is nothing to refresh");
+  assert.ok(!/metaLoaded\s*=/.test(fn), "it never marks the meta loaded, which would claim fields it did not read");
+});
+
+test("Docker back since the dialog opened: the same profile is no longer blocked once the box fields are re-read", () => {
+  const { ctx, go } = dialog({ boxRuntime: "runc", boxUnavailableReason: "", boxDaemonReason: "Docker is not running", tier: "box" });
+  const g = ctx.syncSpawnGate();
+  assert.deepStrictEqual([g.blocked, g.noLayer], [true, false], "blocked from the stale read, and it is the daemon case the submit re-reads");
+  ctx.boxDaemonReason = ""; // what refreshBoxMeta stores once /api/meta says it is healthy
+  assert.strictEqual(ctx.syncSpawnGate().blocked, false, "so the request is sent");
+  assert.strictEqual(go.attrs["aria-disabled"], undefined);
 });

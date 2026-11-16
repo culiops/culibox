@@ -5892,15 +5892,16 @@ function updateRuntimeWarning() {
 // A second open while the first awaits the refetch would run the body twice, and
 // the second pass would re-apply profile defaults over what was typed meanwhile.
 let spawnOpening = false;
-// refreshBoxMeta re-reads the box fields of /api/meta as the dialog opens. A box profile's Spawn is blocked from them (#142), so a page
-// loaded while Docker was down must not keep blocking after the server has re-checked it (box_daemon_reason clears within seconds).
-// A failed or slow read keeps what the page has.
+// refreshBoxMeta re-reads the box fields of /api/meta, as the dialog opens and before a daemon-down block refuses a Spawn. A box profile's
+// Spawn is blocked from them (#142), so a page loaded while Docker was down must not keep blocking after the server has re-checked it
+// (box_daemon_reason clears within seconds). Only the box fields, and only once the page's own first read has landed (initEnv sets the
+// rest of the meta). A failed or slow read keeps what the page has.
 async function refreshBoxMeta() {
+  if (!metaLoaded) return;
   try {
     const meta = await api("/api/meta", { signal: deadlineSignal(5000) });
     if (!meta || typeof meta !== "object") return;
     boxRuntime = meta.box_runtime || "";
-    metaLoaded = true;
     boxUnavailableReason = meta.box_unavailable_reason || "";
     boxDaemonReason = meta.box_daemon_reason || "";
   } catch (_) { /* the values the page already holds */ }
@@ -5910,8 +5911,10 @@ async function openSpawnDialog(preselectAgent, prefill) {
   spawnOpening = true;
   let fresh;
   try {
+    // In parallel, so the phone's open is not slowed by a read it does not use.
+    const metaRead = refreshBoxMeta();
     fresh = await loadProfiles(false);
-    await refreshBoxMeta();
+    await metaRead;
   } finally {
     spawnOpening = false;
   }
@@ -6222,7 +6225,14 @@ $("spawn").addEventListener("submit", async (ev) => {
   spawnWsPicker.close(); // the field shows the directory in use; an open list is just left over
   // A box profile with no boxes (or a box whose daemon is down) is not sent: the server would refuse it. The reason is already
   // on the dialog; the error line repeats it so a press does not look dead. Desktop only: on the phone the gate is never blocked.
-  const gate = syncSpawnGate();
+  let gate = syncSpawnGate();
+  if (gate.blocked && !gate.noLayer) {
+    // The daemon was down when the dialog opened; the server re-checks it live, so Docker may be back since. Ask again before
+    // refusing, or the user is stuck until the dialog is reopened. Held busy meanwhile so a second press cannot start a second read.
+    spawnBusy = true;
+    try { await refreshBoxMeta(); } finally { spawnBusy = false; }
+    gate = syncSpawnGate();
+  }
   if (gate.blocked) {
     spawnGateErr = gate.text;
     setDialogError("spawn-modal", gate.text);
