@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +81,22 @@ func TestPingCarriesFlagsAndIsBounded(t *testing.T) {
 	}
 	if ProbeTimeout <= 0 || ProbeTimeout > 10*time.Second {
 		t.Fatalf("ProbeTimeout %v is not a short bound", ProbeTimeout)
+	}
+}
+
+// A child that outlives docker and keeps its output pipe open must not hold the probe (and whoever
+// waits on it) past the probe's own context: the pipe is cut one second after docker is gone.
+func TestPingIsNotHeldByAChildHoldingThePipe(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 4 &\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := (CLIClient{Bin: bin}).Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("the probe was held %v by a child holding its output", d)
 	}
 }
 

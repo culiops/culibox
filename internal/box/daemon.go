@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -32,7 +33,21 @@ var (
 // healthy host; a stopped daemon refuses at once). Callers bound it with
 // ProbeTimeout.
 func (c CLIClient) Ping(ctx context.Context) error {
-	_, err := c.run(ctx, "info", "--format", "{{.ServerVersion}}")
+	// Not c.run: WaitDelay is set for this probe only. A child that outlives docker
+	// and keeps its output pipe open would otherwise hold CombinedOutput (and the
+	// caller's "refresh running" flag) past ctx; the other docker calls are left as
+	// they were, since a long-running one may rely on its pipe.
+	cmd := c.command(ctx, "info", "--format", "{{.ServerVersion}}")
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// docker itself exited 0 (Go reports this error only then) and a child held
+		// the pipe: the daemon answered.
+		err = nil
+	}
+	if err != nil {
+		err = fmt.Errorf("docker info: %w: %s", err, strings.TrimSpace(string(out)))
+	}
 	if err != nil && ctx.Err() != nil {
 		// A killed child reads "signal: killed"; say what ended it.
 		return fmt.Errorf("docker info: %w", ctx.Err())

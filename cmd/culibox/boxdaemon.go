@@ -15,6 +15,10 @@ import (
 // afresh.
 const daemonTTL = 15 * time.Second
 
+// errTTL is how long a stored error (not a timeout) is trusted: a user who has just
+// started Docker reloads within seconds, and must not be told it is still stopped.
+const errTTL = 2 * time.Second
+
 // daemonWatch remembers whether the local docker daemon can be used (#154).
 // The box layer exists whenever the docker CLI does, so "the daemon is stopped
 // or not permitted" is a state the layer is in, not a reason it failed to
@@ -68,7 +72,11 @@ func (w *daemonWatch) Check(ctx context.Context) error {
 func (w *daemonWatch) Reason() string {
 	w.mu.Lock()
 	var wait chan struct{}
-	if w.at.IsZero() || w.now().Sub(w.at) >= w.ttl {
+	age := w.now().Sub(w.at)
+	// A stored error is trusted for errTTL only (the user starts Docker and reloads), unless it
+	// is a timeout: a hung daemon stays on the long ttl so it is not probed every few seconds.
+	short := w.err != nil && !errors.Is(w.err, context.DeadlineExceeded)
+	if w.at.IsZero() || age >= w.ttl || (short && age >= errTTL) {
 		if !w.busy {
 			w.busy, w.done = true, make(chan struct{})
 			go func(done chan struct{}) {

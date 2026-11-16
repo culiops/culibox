@@ -140,6 +140,53 @@ func TestDaemonWatchRunsOneRefreshAndBoundsIt(t *testing.T) {
 	close(release)
 }
 
+// A stored error is trusted for seconds, not for the whole ttl: Docker is started and the page reloaded
+// a few seconds after the last probe, and the page must not say "not running" because that probe was
+// less than ttl ago. A hung daemon's timeout stays on the long ttl, so it is not probed every few seconds.
+func TestDaemonWatchStoredErrorIsShortLived(t *testing.T) {
+	var up atomic.Bool
+	var calls atomic.Int32
+	var mu sync.Mutex
+	failWith := error(box.ErrDockerNotRunning)
+	w := newDaemonWatch(func(context.Context) error {
+		calls.Add(1)
+		if up.Load() {
+			return nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return failWith
+	}, time.Minute)
+	now := time.Now()
+	w.now = func() time.Time { return now }
+	w.Check(context.Background())
+
+	now = now.Add(time.Second)
+	if got := w.Reason(); got != "Docker is not running" || calls.Load() != 1 {
+		t.Fatalf("a 1 s old error is served as it is: %q after %d probes", got, calls.Load())
+	}
+	up.Store(true)
+	now = now.Add(2 * time.Second) // 3 s after the error, well inside the 1 min ttl
+	if got := w.Reason(); got != "" {
+		t.Fatalf("Docker was started 3 s after the last probe, and the page still says %q", got)
+	}
+
+	// A probe that timed out is the hung-daemon case: it stays on the long ttl.
+	up.Store(false)
+	mu.Lock()
+	failWith = fmt.Errorf("docker info: %w", context.DeadlineExceeded)
+	mu.Unlock()
+	now = now.Add(2 * time.Minute)
+	w.Check(context.Background())
+	before := calls.Load()
+	now = now.Add(10 * time.Second)
+	w.Reason()
+	time.Sleep(30 * time.Millisecond) // a wrongly started refresh runs in the background
+	if calls.Load() != before {
+		t.Fatal("a timed-out probe was asked again after 10 s")
+	}
+}
+
 // A stale HEALTHY answer is served at once (the page never waits on docker in the common case), and a
 // hung daemon costs one read at most the wait, not the probe's own 5 s.
 func TestDaemonWatchStaleReadsAreBounded(t *testing.T) {

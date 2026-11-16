@@ -61,8 +61,9 @@ type Server struct {
 	BoxUnavailableReason string
 	// BoxDaemonReason is why a box layer that exists cannot be used right now
 	// (#154): a plain sentence such as "Docker is not running", "" when it can.
-	// Called on every /api/meta, so it must return from a cache and never wait on
-	// docker. Published as "box_daemon_reason" only while BoxRuntime is set; nil
+	// Called on every /api/meta, so it must answer from a cache: it may wait on
+	// docker only behind a stale stored error, for about a second at most (the
+	// reload right after the user starts Docker), and never otherwise. Published as "box_daemon_reason" only while BoxRuntime is set; nil
 	// on macOS and in every build without a local daemon to ask. Never raw error text.
 	BoxDaemonReason func() string
 	// CloneUnavailable is why clone mode cannot run on this instance; empty when
