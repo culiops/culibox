@@ -558,9 +558,12 @@ func TestSpawnRunsInTheCwdItChecked(t *testing.T) {
 		agent   string
 		runtime string
 		clone   bool
+		abs     bool // cwd spelled root/link/../work instead of ../work
 	}{
-		{"clone profile", "clone", config.RuntimeBox, true},
-		{"host tier", "plain", config.RuntimeHost, false},
+		{"clone profile", "clone", config.RuntimeBox, true, false},
+		{"host tier", "plain", config.RuntimeHost, false, false},
+		{"clone profile, absolute", "clone", config.RuntimeBox, true, true},
+		{"host tier, absolute", "plain", config.RuntimeHost, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -590,7 +593,12 @@ func TestSpawnRunsInTheCwdItChecked(t *testing.T) {
 			}
 			hooks := &fakeCloneHooks{}
 			m, _ := cloneManager(t, l, hooks)
-			s, err := m.Spawn(launcher.SpawnSpec{Agent: tc.agent, Cwd: filepath.Join("..", "work")})
+			cwd := filepath.Join("..", "work")
+			if tc.abs {
+				// Not filepath.Join: that would clean the `..` away.
+				cwd = root + string(filepath.Separator) + "link" + string(filepath.Separator) + cwd
+			}
+			s, err := m.Spawn(launcher.SpawnSpec{Agent: tc.agent, Cwd: cwd})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -113,7 +113,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/macos-verify.XXXXXX")
 # reached through one gives a relative path with `..` a different meaning for the
 # kernel (physical) than for Go's filepath (logical, from $PWD), which fails tests of
 # a good build (#313).
-work_phys=$(cd "$work" && pwd -P) || die "cannot resolve the work dir $work"
+work_phys=$(cd -P -- "$work" >/dev/null && pwd -P) || die "cannot resolve the work dir $work"
 work=$work_phys
 
 # gh must be logged in before anything slow runs; the login is the verifier.
