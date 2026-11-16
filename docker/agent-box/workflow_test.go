@@ -1405,7 +1405,9 @@ func TestReleaseWorkflow(t *testing.T) {
 	}
 
 	// build: the script, the smoke test, the artifact (also on a dry run).
-	for _, want := range []string{"scripts/release/build.sh", "sha256sum -c SHA256SUMS", `/culibox" version`, "actions/upload-artifact@"} {
+	// #317: the pinned abduco is built first and packed; the smoke test runs it and
+	// checks its licence and the attached installer.
+	for _, want := range []string{"scripts/release/build-abduco.sh", "scripts/release/build.sh", "sha256sum -c SHA256SUMS", `/culibox" version`, `/abduco" -v`, "LICENSE.abduco", "setup.sh", "actions/upload-artifact@"} {
 		if !strings.Contains(build, want) {
 			t.Errorf("job build lacks %q", want)
 		}
@@ -1453,8 +1455,8 @@ func TestReleaseWorkflow(t *testing.T) {
 	if !strings.Contains(att, "if: github.event.repository.visibility == 'public'") {
 		t.Error("the attest step must be guarded by `if: github.event.repository.visibility == 'public'`")
 	}
-	if !strings.Contains(att, "subject-path:") || !strings.Contains(att, "culibox_*") {
-		t.Error("the attest step must take the culibox_* tarballs as subject-path")
+	if !strings.Contains(att, "subject-path:") || !strings.Contains(att, "culibox_*") || !strings.Contains(att, "setup.sh") {
+		t.Error("the attest step must take the culibox_* tarballs and setup.sh as subject-path")
 	}
 	skip := stepBlock(t, release, "attestations skipped: this repository is not public, build provenance needs a public repository")
 	if !strings.Contains(skip, "if: github.event.repository.visibility != 'public'") || !strings.Contains(skip, "GITHUB_STEP_SUMMARY") {

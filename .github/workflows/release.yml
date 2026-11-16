@@ -1,5 +1,6 @@
 # Release: a push of a vX.Y.Z tag that is on main runs the same CI as main, builds
-# the four platform tarballs plus SHA256SUMS, and creates a DRAFT GitHub release
+# the four platform tarballs (each with a pinned abduco next to culibox, #317) plus
+# setup.sh and SHA256SUMS, and creates a DRAFT GitHub release
 # whose notes end with the platform status block. Nothing here ever publishes: the
 # founder reads the draft and publishes it by hand.
 #
@@ -89,7 +90,7 @@ jobs:
   build:
     needs: [verify, tests]
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       # A dry run has no tag.
       TAG: ${{ github.event_name == 'push' && github.ref_name || 'v0.0.0-dryrun' }}
@@ -102,10 +103,15 @@ jobs:
           go-version-file: go.mod
           # Never restore a cache: a CI job that runs unpinned npm code can save it.
           cache: false
+      # abduco for the four targets, cross-compiled by a pinned zig from the pinned
+      # source; each binary must match the sum pinned in the script (reproducible).
+      - name: Build abduco
+        run: scripts/release/build-abduco.sh "$RUNNER_TEMP/abduco"
       - name: Build the tarballs
-        run: scripts/release/build.sh "$TAG" "$RUNNER_TEMP/dist"
-      # The linux/amd64 tarball runs on this runner: its sum is right, and the
-      # binary inside reports the tag and the commit it was built from.
+        run: scripts/release/build.sh "$TAG" "$RUNNER_TEMP/dist" "$RUNNER_TEMP/abduco"
+      # The linux/amd64 tarball runs on this runner: its sum is right, the binary
+      # inside reports the tag and the commit it was built from, and the abduco next
+      # to it runs. The darwin ones are run on a Mac by scripts/macos-verify.sh.
       - name: Smoke test the linux/amd64 tarball
         run: |
           set -eu
@@ -120,7 +126,19 @@ jobs:
             exit 1
           fi
           echo "$got"
-          for f in LICENSE README.md; do test -s "$dir/$f"; done
+          # `abduco -v` may exit non-zero, so only the text counts.
+          ab=$("$dir/abduco" -v 2>&1 || true)
+          case $ab in
+            "abduco-0.6 "*) echo "$ab" ;;
+            *)
+              echo "::error::the bundled abduco -v printed '$ab', want abduco-0.6"
+              exit 1
+              ;;
+          esac
+          for f in LICENSE LICENSE.abduco README.md; do test -s "$dir/$f"; done
+          # The installer is attached as is.
+          test -x "$DIST/setup.sh"
+          cmp scripts/setup.sh "$DIST/setup.sh"
       # On a dry run this is the thing to inspect.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -167,7 +185,8 @@ jobs:
         if: github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/culibox_*.tar.gz
+          # A comma-separated list (actions/attest parses subject-path as CSV).
+          subject-path: "dist/culibox_*.tar.gz,dist/setup.sh"
       - name: Note that attestations are skipped
         if: github.event.repository.visibility != 'public'
         run: |
