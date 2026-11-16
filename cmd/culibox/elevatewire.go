@@ -229,22 +229,21 @@ func sessionLabel(in session.Info) string {
 
 // writeHold is the box layer's write-hold hook (box.WriteHold, #325): the
 // broker's answer for the session, led by its name. It runs under the box
-// layer's opMu; the broker and the session list never wait on that lock.
+// layer's opMu, so it takes as little as it can: the broker's lock and one
+// session lookup (the manager's lock, then that session's own), neither of
+// which ever waits on opMu. Never the full session list.
 func (e elevationService) writeHold(sid string, adoptedAt time.Time) string {
 	why := e.brk.WriteHold(sid, adoptedAt)
 	if why == "" {
 		return ""
 	}
-	label := "session " + sid
-	if e.list != nil {
-		for _, in := range e.list() {
-			if in.ID == sid {
-				label = sessionLabel(in)
-				break
-			}
+	in := session.Info{ID: sid}
+	if e.get != nil {
+		if s, ok := e.get(sid); ok && s != nil {
+			in.Name = s.Name()
 		}
 	}
-	return label + " " + why
+	return sessionLabel(in) + " " + why
 }
 
 // ssoStatus is the sso object of GET .../aws: whether the session waits on a

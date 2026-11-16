@@ -23,6 +23,10 @@ const (
 	minElevatedRemaining = credTTL + time.Minute // 16 min: STS minimum + clock skew (spec §5.2)
 	maxReasonLen         = 200                   // characters
 	maxReasonBytes       = 4 * maxReasonLen      // a valid reason is at most 4 bytes per character
+	// dropHoldSkew extends WriteHold's hold on a dropped window past the STS
+	// Expiration it recorded: that time is AWS's, compared with the local
+	// clock (#325; the restart hold has the same minute in minElevatedRemaining).
+	dropHoldSkew = time.Minute
 )
 
 // ErrElevateRefused is wrapped by every refusal; its text after ": " is a plain
@@ -350,8 +354,9 @@ func (b *Broker) WriteHold(sid string, adoptedAt time.Time) string {
 	if b.elev[sid] != nil || b.granting[sid] > 0 {
 		return "is opening a write window"
 	}
-	if d, ok := b.dropped[sid]; ok && d.lastValid.After(now) {
-		return "dropped its write window, but the write credentials it was given stay valid until " + d.lastValid.Local().Format("15:04")
+	if d, ok := b.dropped[sid]; ok && d.lastValid.Add(dropHoldSkew).After(now) {
+		return "dropped its write window, but the write credentials it was given stay valid until " +
+			d.lastValid.Add(dropHoldSkew).Local().Format("15:04") + " (with a minute for clock skew)"
 	}
 	if end := adoptedAt.Add(minElevatedRemaining); !adoptedAt.IsZero() && end.After(now) {
 		return "was running when CuliBox restarted, and write credentials it may have been given before then stay valid until " + end.Local().Format("15:04") + " at the latest"
@@ -451,7 +456,9 @@ func (b *Broker) Elevation(sid string) (ElevationView, bool) {
 		if d.lastValid.After(now) {
 			return ElevationView{LastValid: d.lastValid, Name: d.conn}, true
 		}
-		delete(b.dropped, sid)
+		if !d.lastValid.Add(dropHoldSkew).After(now) { // WriteHold still holds it for the skew margin
+			delete(b.dropped, sid)
+		}
 	}
 	return ElevationView{}, false
 }

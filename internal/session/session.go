@@ -1499,6 +1499,13 @@ func (s *Session) inheritConversations(ids []string, wasComplete bool) ([]string
 	return slices.Clone(s.claudeSessionIDs), s.costComplete
 }
 
+// Name is the mutable display label. It takes only the session's own lock.
+func (s *Session) Name() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.name
+}
+
 // SetName updates the mutable display label.
 func (s *Session) SetName(name string) {
 	s.mu.Lock()

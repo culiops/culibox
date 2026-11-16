@@ -34,13 +34,31 @@ func TestWriteHoldFollowsTheWindow(t *testing.T) {
 	b.noteElevatedExp("aws-1", now.Add(10*time.Minute))
 	b.mu.Unlock()
 	b.Drop("aws-1", CredCookie)
-	last := now.Add(10 * time.Minute).Local().Format("15:04")
+	// The STS expiry is AWS's clock: the hold runs a minute past it.
+	last := now.Add(11 * time.Minute).Local().Format("15:04")
 	if why := b.WriteHold("aws-1", time.Time{}); !strings.Contains(why, "stay valid until "+last) {
 		t.Fatalf("after a drop: %q", why)
 	}
 	*now = now.Add(10 * time.Minute)
+	b.Elevation("aws-1") // the panel's poll forgets an expired leftover; not inside the margin
+	if why := b.WriteHold("aws-1", time.Time{}); why == "" {
+		t.Fatal("at the credentials' expiry the clock-skew minute still holds the folder")
+	}
+	*now = now.Add(time.Minute - time.Second)
+	b.Elevation("aws-1")
+	if why := b.WriteHold("aws-1", time.Time{}); why == "" {
+		t.Fatal("inside the clock-skew minute the folder is still held")
+	}
+	*now = now.Add(time.Second)
 	if why := b.WriteHold("aws-1", time.Time{}); why != "" {
-		t.Fatalf("the dropped window's credentials have expired: %q", why)
+		t.Fatalf("the dropped window's credentials have expired, margin included: %q", why)
+	}
+	b.Elevation("aws-1")
+	b.mu.Lock()
+	left := len(b.dropped)
+	b.mu.Unlock()
+	if left != 0 {
+		t.Fatal("the leftover is forgotten once the margin has passed")
 	}
 	// A new window, then its timer.
 	if _, err := b.Elevate("aws-1", cookie(30)); err != nil {

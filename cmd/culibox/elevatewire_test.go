@@ -218,8 +218,15 @@ func TestWriteHoldNamesTheSession(t *testing.T) {
 	t.Cleanup(func() { _ = audit.Close() })
 	sv := broker.SessionView{Agent: "aws", Boxed: true, Live: true, Exclusive: true, AWS: boundSess("aws-1").AWS}
 	brk := broker.New([]byte(strings.Repeat("s", 32)), func(string) (broker.SessionView, bool) { return sv, true }, noMinter{}, audit)
-	e := elevationService{brk: brk, get: func(id string) (*session.Session, bool) { return boundSess(id), true },
-		list:  func() []session.Info { return []session.Info{{ID: "aws-1", Name: "deploy"}} },
+	named := boundSess("aws-1")
+	named.SetName("deploy")
+	// The hook runs under the box layer's opMu: one session lookup, never the
+	// full list (which reads transcripts, cost and broker state).
+	e := elevationService{brk: brk, get: func(id string) (*session.Session, bool) { return named, id == "aws-1" },
+		list: func() []session.Info {
+			t.Error("writeHold must not list every session")
+			return nil
+		},
 		claim: func(context.Context, string, string) (box.GrantBlock, error) { return box.GrantBlock{}, nil }}
 	brk.SetClaimCheck(e.claimCheck)
 	if why := e.writeHold("aws-1", time.Time{}); why != "" {
