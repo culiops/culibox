@@ -110,7 +110,8 @@ cat >"$tmp/bin/ss" <<'EOF'
 # `ss -Hltnp "sport = :PORT"`: the process holding the listening socket on the port.
 echo "$*" >>"$STUB_OUT/ss.log"
 [ -z "${STUB_SS_NONE:-}" ] || exit 0
-echo "LISTEN 0 4096 127.0.0.1:18899 0.0.0.0:* users:((\"culibox\",pid=$STUB_SS_PID,fd=7))"
+# Two holders, the first not a live process: the check must go on to the second.
+echo "LISTEN 0 4096 ${STUB_SS_LOCAL:-127.0.0.1:18899} 0.0.0.0:* users:((\"a\",pid=4194999,fd=3),(\"culibox\",pid=$STUB_SS_PID,fd=7))"
 EOF
 cat >"$tmp/bin/sleep" <<'EOF'
 #!/bin/sh
@@ -315,13 +316,31 @@ not_recorded "$j" "$j" "restarted" "a crash-restart after MainPID read 0 at firs
 # Something else answers on the port (the DEV instance, on the default port) while this unit
 # never listens: curl succeeds, but the socket is not the unit's, so it is not "came up".
 STUB_CG=/stub/some-other.service deploy
-not_recorded "$j" "$j" "not from stub-prod" "a build that never listens while another process answers on the port"
+not_recorded "$j" "$j" "not on that address" "a build that never listens while another process answers on the port"
 if [ "$(lines "$tmp/sleep.log")" -le 21 ]; then pass "a foreign listener is waited out only for AB_PROD_LISTEN_WAIT"; else fail "waited $(lines "$tmp/sleep.log") polls on a foreign listener"; fi
+# The unit holds the port on ANOTHER address (127.0.0.2, a v6 wildcard for a v4 ADDR, ...) while
+# curl reaches the process on ADDR itself (DEV): the socket must be on ADDR's host.
+for local_addr in 127.0.0.2:18899 '[::]:18899' '[::1]:18899' 10.9.8.7:18899; do
+  STUB_SS_LOCAL=$local_addr deploy
+  not_recorded "$j" "$j" "not on that address" "a unit socket on $local_addr while AB_PROD_ADDR is 127.0.0.1"
+done
+STUB_SS_LOCAL='0.0.0.0:18899' AB_PROD_ADDR='[::1]:18899' deploy
+not_recorded "$j" "$j" "not on that address" "an IPv4 wildcard does not stand for a v6 ADDR"
 # No listening socket on the port at all: an answer with no owner is not accepted either.
 STUB_SS_NONE=1 deploy
-not_recorded "$j" "$j" "not from stub-prod" "a build whose port has no listening socket"
+not_recorded "$j" "$j" "not on that address" "a build whose port has no listening socket"
 STUB_MAINPID_ZERO_UNTIL=2 deploy
 expect_rc "$rc" 0 "a MainPID of 0 at first is not a failure once a process is there"
+# Addresses that do stand for ADDR (each deploy of K succeeds; they come after the refusals above
+# because a success stamps K). ss writes a v6 host in brackets and may add %iface.
+for local_addr in '*:18899' 0.0.0.0:18899 '127.0.0.1%lo:18899'; do
+  STUB_SS_LOCAL=$local_addr deploy
+  expect_rc "$rc" 0 "a unit socket on $local_addr passes for AB_PROD_ADDR 127.0.0.1"
+done
+for local_addr in '[::1]:18899' '[::]:18899' '*:18899' '[::1%lo]:18899'; do
+  STUB_SS_LOCAL=$local_addr AB_PROD_ADDR='[::1]:18899' deploy
+  expect_rc "$rc" 0 "a unit socket on $local_addr passes for AB_PROD_ADDR [::1]"
+done
 # The unit's own listener passes, and the ownership check asks about AB_PROD_ADDR's port.
 deploy
 expect_rc "$rc" 0 "a listener held by the unit's cgroup passes"

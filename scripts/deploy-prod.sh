@@ -17,7 +17,8 @@ STAMP="$BIN.deployed-sha"
 # listener answers: it must be the bind_addr of the config the prod service runs with
 # (docs/CONFIG.md), since this script has no config of its own to read it from; the default is
 # the product's default bind. For a wildcard bind (0.0.0.0, ::) use a loopback address and the
-# same port. The windows are whole seconds, one poll each. Something answering there is not
+# same port. It must be a numeric address ([::1] for IPv6): a hostname is never equal to what
+# `ss -n` prints, so it fails closed. The windows are whole seconds, one poll each. Something answering there is not
 # enough (the dev instance uses the default port on the same host): the listening socket must
 # also belong to the service's own cgroup, or the probe does not count (port_owned_by_unit).
 ADDR="${AB_PROD_ADDR:-127.0.0.1:8899}"
@@ -36,6 +37,9 @@ case "$STABLE" in '' | *[!0-9]* | 0) echo "refusing: AB_PROD_STABLE_SECS must be
 for tool in curl ss; do
   command -v "$tool" >/dev/null 2>&1 || { echo "refusing: $tool is needed to check that the service itself answers after the restart." >&2; exit 1; }
 done
+# The ownership check reads /proc/<pid>/cgroup as cgroup v2 (`0::<path>`). On a v1 or hybrid host
+# it could never match, and the deploy would wait out the whole window and blame another process.
+grep -q '^0::' /proc/self/cgroup 2>/dev/null || { echo "refusing: this host is not on cgroup v2 (no '0::' line in /proc/self/cgroup), so the check that the service itself answers cannot work." >&2; exit 1; }
 
 branch=$(git -C "$REPO" branch --show-current)
 head=$(git -C "$REPO" rev-parse --short HEAD)
@@ -137,25 +141,46 @@ fi
 : > "$UNVERIFIED"
 # A rename, not a write into $BIN: the running binary cannot be opened for writing.
 mv -f "$BIN.new" "$BIN"
-# Whether a listening socket on $ADDR's port is held by a process in $SERVICE's cgroup. The
-# cgroup, not MainPID: an ExecStart wrapper makes the daemon a child of the main process. The
-# port, not the process's sockets: serve also listens for the egress proxy and the broker.
+# Whether a process in $SERVICE's cgroup holds a listening socket on $ADDR itself: its port AND
+# its host, because a second socket on the same port at another address (127.0.0.2, [::1], a LAN
+# IP) is not what curl reaches on $ADDR (the dev instance may be). The cgroup, not MainPID: an
+# ExecStart wrapper makes the daemon a child of the main process. The port from $ADDR, not the
+# process's sockets: serve also listens for the egress proxy and the broker.
 # /proc/<pid>/cgroup reads `0::<path>` on cgroup v2; a child cgroup of the unit's counts too.
+# A socket's local address in `ss -n` output is `host:port`, a v6 host in brackets, possibly
+# `host%iface`; it covers $ADDR when it is that host, `*` (dual-stack any), 0.0.0.0 for a v4
+# $ADDR or [::] for a v6 one.
 port_owned_by_unit() {
-  local cg pid line
+  local cg want laddr h procs pid line
   cg=$(systemctl --user show -p ControlGroup --value "$SERVICE" 2>/dev/null || true)
   [ -n "$cg" ] || return 1
-  for pid in $(ss -Hltnp "sport = :${ADDR##*:}" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u || true); do
-    while read -r line; do
-      case "$line" in "0::$cg" | "0::$cg"/*) return 0 ;; esac
-    done 2>/dev/null <"/proc/$pid/cgroup"
-  done
+  want=${ADDR%:*}
+  while read -r _ _ _ laddr _ procs; do
+    h=${laddr%:*}
+    case "$h" in
+      *%*)
+        h=${h%%%*}
+        case "$laddr" in \[*) h="$h]" ;; esac
+        ;;
+    esac
+    case "$h" in
+      "$want" | '*') ;;
+      0.0.0.0) case "$want" in *:*) continue ;; esac ;;
+      '[::]') case "$want" in *:*) ;; *) continue ;; esac ;;
+      *) continue ;;
+    esac
+    for pid in $(printf '%s\n' "$procs" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u || true); do
+      while read -r line; do
+        case "$line" in "0::$cg" | "0::$cg"/*) return 0 ;; esac
+      done 2>/dev/null <"/proc/$pid/cgroup"
+    done
+  done < <(ss -Hltnp "sport = :${ADDR##*:}" 2>/dev/null)
   return 1
 }
 
 # One look at $ADDR. 0: something answers HTTP and the socket is the service's; 1: nothing
-# answers; 2: something answers but the socket is another process's (the dev instance on the
-# default port, say), which says nothing about this build. Any HTTP status counts as an
+# answers; 2: something answers but the service holds no socket on $ADDR (the dev instance on
+# the default port, say), which says nothing about this build. Any HTTP status counts as an
 # answer, a 403 from the Host guard (a non-loopback bind) included.
 listener_state() {
   local code
@@ -205,7 +230,7 @@ wait_until_up() {
       return 1
     elif [ "$polls" -ge "$LISTEN_WAIT" ]; then
       if [ "$st" -eq 2 ]; then
-        why="$ADDR answers, but not from $SERVICE: another process holds that port (the dev instance, if AB_PROD_ADDR is left at the default), and $SERVICE never listened on it within ${LISTEN_WAIT} polls. AB_PROD_ADDR must be the bind_addr the service runs with"
+        why="$ADDR answers, but $SERVICE is not on that address: it holds no listening socket there within ${LISTEN_WAIT} polls, so what answers is another process (the dev instance, if AB_PROD_ADDR is left at the default). AB_PROD_ADDR must be a numeric address, the bind_addr the service runs with"
       else
         why="$SERVICE is active but $ADDR did not answer within ${LISTEN_WAIT} polls (AB_PROD_ADDR must be the bind_addr the service runs with; AB_PROD_LISTEN_WAIT sets the wait)"
       fi
