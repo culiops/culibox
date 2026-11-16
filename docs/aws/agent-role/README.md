@@ -7,9 +7,9 @@ for 15 minutes at a time, and hands the credentials to the box through `credenti
 - **Name:** `agentbox-agent` (variable `role_name`).
 - **Permissions:** the AWS-managed `ReadOnlyAccess` policy. That is the ceiling. Each mint
   also carries a session policy generated from the connection, which denies data reads
-  (S3 objects outside the connection's `s3_read` allowlist, Secrets Manager values, SSM
-  parameters, DynamoDB items, KMS decrypt outside S3). Effective permissions are the
-  intersection of the two.
+  (S3 objects outside the connection's `s3_read` allowlist, S3 Express directory bucket
+  sessions, Secrets Manager values, SSM parameters, DynamoDB items, KMS decrypt outside S3).
+  Effective permissions are the intersection of the two.
   CuliBox simulates the role's own policy at spawn to check whether it can write, so a
   custom permissions policy must allow `iam:SimulatePrincipalPolicy` on the role itself
   (`ReadOnlyAccess` already does).
@@ -407,6 +407,19 @@ A grant, location or instance carries no bucket name, so box buckets get no exce
 that changes Access Grants cannot apply in the window. The read role is not changed: it keeps
 `s3:GetDataAccess` from `ReadOnlyAccess`, so a grant that names `agentbox-agent` hands the
 agent credentials for whatever that grant covers, `s3_read` or not.
+
+**S3 Express directory buckets are closed
+([#323](https://github.com/culiops/culibox/issues/323)).** A directory bucket's objects are not
+read with `s3:GetObject`: `s3express:CreateSession` returns session credentials for the whole
+bucket. `ReadOnlyAccess` allows it in `ReadOnly` mode, so both the read role's session policy and
+the window deny `s3express:CreateSession` on every directory bucket. `s3_read` does not reach
+them: a session covers the whole bucket, so a `bucket/prefix/` entry could not be honoured. The
+window also denies `s3express:Put*Policy` (bucket and access point policies) and
+`s3express:DeleteBucketPolicy`, with no box-bucket exception: an exception would cost a
+directory-bucket ARN in a policy that is near STS's limit (see Policy size), and with sessions
+denied the window cannot use a directory bucket anyway. Creating one and the reads
+(`GetBucketPolicy`, `ListAllMyDirectoryBuckets`) stay allowed; a stack that reads or writes its
+objects cannot apply in the window.
 
 Two exceptions let Terraform plan and destroy in the window; the read role has neither:
 

@@ -146,14 +146,27 @@ var dataReadDenies = []string{
 // denies outright (secret values, SSM parameters, DynamoDB items).
 func DataReadDenies() []string { return slices.Clone(dataReadDenies) }
 
+// s3ExpressSession is how S3 Express One Zone directory buckets authorize
+// object reads and writes: a CreateSession on the bucket returns session
+// credentials for every object in it (ReadOnly or ReadWrite), and s3:GetObject
+// is never evaluated (#323). It sits in the S3 read deny, whose exceptions are
+// all S3 general purpose ARNs ("arn:<p>:s3:::"), so it is denied on every
+// directory bucket ("arn:<p>:s3express:"). s3_read does not reach directory
+// buckets: a session covers the whole bucket, so a prefix entry could not be
+// honoured, and each mapped bucket would cost the window's tight size budget.
+// Basis: ReadOnlyAccess allows it (awsprobe testdata, Sid
+// S3ExpressReadOnlySessionObjectAccess); action name from AWS's catalog.
+const s3ExpressSession = "s3express:CreateSession"
+
 // investigateStatements are the "investigate" scope's statements, in order:
-// Allow *, then S3 object reads outside the allowlist, secret/parameter values,
-// DynamoDB items, and KMS decryption other than through S3 denied.
+// Allow *, then S3 object reads outside the allowlist (directory bucket
+// sessions everywhere), secret/parameter values, DynamoDB items, and KMS
+// decryption other than through S3 denied.
 func investigateStatements(partition string, s3Read []string) ([]statement, error) {
 	if !partitionRe.MatchString(partition) {
 		return nil, fmt.Errorf("session policy: partition %q is not aws, aws-cn or aws-us-gov", partition)
 	}
-	s3 := statement{Effect: "Deny", Action: []string{"s3:GetObject", "s3:GetObjectVersion"}}
+	s3 := statement{Effect: "Deny", Action: []string{"s3:GetObject", "s3:GetObjectVersion", s3ExpressSession}}
 	if len(s3Read) == 0 {
 		s3.Resource = "*"
 	}
@@ -293,6 +306,21 @@ var s3AccessGrantsDenies = []string{"s3:GetDataAccess", s3AccessGrantsWrites}
 // STS's limit (#329); a test pins its expansion against the catalog.
 const s3AccessGrantsWrites = "s3:*eAccessGrant*"
 
+// s3ExpressExposureDenies (#323) are #307's exposure denies for directory
+// buckets: their bucket policies and their access points' policies can grant
+// another account, and removing a bucket policy can drop the deny that kept
+// one out. Directory buckets have no ACLs and their public access block
+// cannot be turned off (S3 Express docs, from memory), so nothing else is
+// needed. Unlike #307 there is no box-bucket exception: it would cost a
+// directory bucket ARN of the prefix's length, which the size budget does not
+// hold at the maximum config (#329), and with CreateSession denied the window
+// cannot use a directory bucket anyway.
+var s3ExpressExposureDenies = []string{s3ExpressPolicyPuts, "s3express:DeleteBucketPolicy"}
+
+// s3ExpressPolicyPuts is PutBucketPolicy and PutAccessPointPolicy, the only
+// s3express actions it matches in AWS's catalog (a test pins it).
+const s3ExpressPolicyPuts = "s3express:Put*Policy"
+
 var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"}
 
 // ssmParamReadsPattern is how the elevated policy writes ssmParamReads, to save
@@ -422,7 +450,8 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	// made public, so they matter even when no bucket is readable in the window.
 	always = append(always, boxBucketCopyDenies...)
 	always = append(always, s3AccountExposureDeny)
-	always = append(always, s3AccessGrantsDenies...) // #322: no bucket in their ARNs, so no box exception
+	always = append(always, s3AccessGrantsDenies...)    // #322: no bucket in their ARNs, so no box exception
+	always = append(always, s3ExpressExposureDenies...) // #323: no box exception
 	// Replication and the S3 exposure calls (#307) have an exception only for
 	// box buckets: an s3_read entry may name just a prefix of a bucket, and
 	// replication copies the whole bucket. The box-bucket ARN "<prefix>*" also

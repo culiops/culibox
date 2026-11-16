@@ -32,6 +32,7 @@ Each entry takes `source_profile`, `role_arn`, `region`, `s3_read`, `egress_allo
 | `description` | Optional, at most 200 characters, one line. Shown in the UI and in `agentbox-env --list`. |
 | `region` | Required for every connection. |
 | `mode` | Optional. Absent means the agent role. `"sso_direct"` uses the SSO permission set directly (see [SSO role directly](#sso-role-directly-opt-in)); then `role_arn`, `elevate` and `s3_read` must be left out. |
+| `s3_read` | Optional. Buckets (`bucket`) or prefixes (`bucket/prefix/`) whose objects the agent may read; every other object read is denied. General purpose buckets only: S3 Express One Zone directory buckets are never readable through a connection, in the read scope or a write window, whatever this list says. |
 
 **2. Pick them in a profile.** Set the profile's runtime to the box, then tick the connections in the profile's **AWS connections** block. In `config.json` or the profile's JSON, set `"runtime": "box"` explicitly and list the names:
 
@@ -73,7 +74,7 @@ The elevate block takes these optional limits, which the grant panel and the con
 |---|---|
 | `allow_iam` | Lets the window change IAM. The agent can then create and use its own roles, so the data-read blocks are advisory in that window. |
 | `pass_role_prefix` | Roles the window may pass with `iam:PassRole`: only those named `<prefix>*`. Code running as such a role is not bound by the window's blocks (data reads, bucket policies and ACLs). Left out, no role can be passed, so Lambda, ECS and instance-profile applies fail. 3 to 40 role-name characters; `agentbox-`, `aws` and `service-role` stems are refused. |
-| `box_bucket_prefix` | Objects in buckets named `<prefix>*` are readable in the window, and those buckets' policies, ACLs and public access blocks can change (config file only). Left out, the window's credentials cannot change any bucket's policy, ACL or public access block; code running as a role passed with `pass_role_prefix` is not bound by that. Shared stems such as `aws`, `cdk-` and `sagemaker-` are refused. |
+| `box_bucket_prefix` | Objects in buckets named `<prefix>*` are readable in the window, and those buckets' policies, ACLs and public access blocks can change (config file only). Left out, the window's credentials cannot change any bucket's policy, ACL or public access block; code running as a role passed with `pass_role_prefix` is not bound by that. Directory buckets get no exception. Shared stems such as `aws`, `cdk-` and `sagemaker-` are refused. |
 
 Details and what each one weakens: [docs/aws/agent-role](aws/agent-role/README.md).
 

@@ -229,6 +229,8 @@ var addedDenies = map[string]string{
 	"s3:deleteaccessgrantsinstance": "#322", "s3:deleteaccessgrantsinstanceresourcepolicy": "#322",
 	"s3:deleteaccessgrantslocation": "#322", "s3:dissociateaccessgrantsidentitycenter": "#322",
 	"s3:updateaccessgrantslocation": "#322",
+	"s3express:createsession":       "#323", "s3express:putbucketpolicy": "#323", "s3express:putaccesspointpolicy": "#323",
+	"s3express:deletebucketpolicy": "#323",
 }
 
 var viaS3 = map[string]string{"kms:ViaService": "s3.us-east-1.amazonaws.com"}

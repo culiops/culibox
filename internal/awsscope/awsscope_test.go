@@ -109,7 +109,7 @@ func TestSessionPolicyEmptyAllowlistDeniesAllObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(p, "NotResource") || !strings.Contains(p, `"Action":["s3:GetObject","s3:GetObjectVersion"],"Resource":"*"`) {
+	if strings.Contains(p, "NotResource") || !strings.Contains(p, `"Action":["s3:GetObject","s3:GetObjectVersion","s3express:CreateSession"],"Resource":"*"`) {
 		t.Fatalf("empty allowlist must deny every object: %s", p)
 	}
 }
@@ -142,13 +142,14 @@ func TestSessionPolicyRefusesBadPartition(t *testing.T) {
 
 // The investigate policy must not change by a byte: the broker has minted with
 // it since M3a, and the refactor shares its statements with ElevatedPolicy.
-// The literal was produced by the pre-M3b code (cb76a77).
+// The literal was produced by the pre-M3b code (cb76a77); the one change since
+// is #323, which denies directory bucket sessions (s3express:CreateSession).
 func TestSessionPolicyBytesUnchanged(t *testing.T) {
 	got, err := SessionPolicy("aws", []string{"culishop-tfstate", "logs-bucket/AWSLogs/"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:s3:::logs-bucket/AWSLogs/*"]},{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:GetParameterHistory","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords"],"Resource":"*"},{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}}]}`
+	const want = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion","s3express:CreateSession"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:s3:::logs-bucket/AWSLogs/*"]},{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:GetParameterHistory","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords"],"Resource":"*"},{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}}]}`
 	if got != want {
 		t.Fatalf("SessionPolicy changed:\n got  %s\n want %s", got, want)
 	}
@@ -226,14 +227,14 @@ func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
 	// public access block and, with no box prefix, replication and the S3
 	// exposure calls (#307); KMS; then the agent's own roles.
 	want := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},` +
-		`{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion","ssm:GetParameter*"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:ssm:*::parameter/aws/service/*"]},` +
+		`{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion","s3express:CreateSession","ssm:GetParameter*"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:ssm:*::parameter/aws/service/*"]},` +
 		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords",` +
 		`"sts:AssumeRole*","sts:GetFederationToken","sts:GetSessionToken",` +
 		`"iam:UploadSSHPublicKey","cloudtrail:StopLogging","cloudtrail:DeleteTrail","cloudtrail:UpdateTrail","cloudtrail:PutEventSelectors",` +
 		`"iam:PassRole",` +
 		`"iam:Create*","iam:Delete*","iam:Put*","iam:Attach*","iam:Detach*","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*",` +
 		`"dynamodb:ExportTableToPointInTime","rds:StartExportTask","s3:CreateJob","datasync:StartTaskExecution","backup:StartRestoreJob",` +
-		`"s3:PutAccountPublicAccessBlock","s3:GetDataAccess","s3:*eAccessGrant*",` +
+		`"s3:PutAccountPublicAccessBlock","s3:GetDataAccess","s3:*eAccessGrant*","s3express:Put*Policy","s3express:DeleteBucketPolicy",` +
 		`"s3:PutReplicationConfiguration","s3:Put*Policy*","s3:DeleteBucketPolicy","s3:Put*Acl","s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls"],"Resource":"*"},` +
 		`{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}},` +
 		`{"Effect":"Deny","Action":"iam:*","Resource":"arn:aws:iam::*:role/agentbox-*"}]}`

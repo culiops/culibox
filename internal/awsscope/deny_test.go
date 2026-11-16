@@ -1,6 +1,7 @@
 package awsscope
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -95,6 +96,64 @@ func TestS3AccessGrantsPatternIsEveryWriteAndNoRead(t *testing.T) {
 		if !slices.Contains(want, a) && !strings.HasPrefix(name, "Get") && !strings.HasPrefix(name, "List") && a != "s3:PutAccessGrantsInstanceResourcePolicy" {
 			t.Errorf("%s is neither denied nor a read", a)
 		}
+	}
+}
+
+// #323: S3 Express One Zone directory buckets are authorized through
+// s3express:CreateSession, not s3:GetObject, so the S3 read deny and s3_read
+// never covered them. ReadOnlyAccess allows CreateSession in ReadOnly mode
+// (awsprobe testdata), so both scopes deny it on every directory bucket:
+// s3_read does not map to directory buckets, and a box bucket gets no
+// exception. The window also denies the directory bucket and access point
+// policy writes.
+func TestPoliciesDenyS3ExpressSessionsAndPolicyWrites(t *testing.T) {
+	const (
+		dir     = "arn:aws:s3express:us-east-1:123456789012:bucket/human-data--use1-az4--x-s3"
+		dirRead = "arn:aws:s3express:us-east-1:123456789012:bucket/culishop-tfstate--use1-az4--x-s3"
+		dirBox  = "arn:aws:s3express:us-east-1:123456789012:bucket/culibox-lab--use1-az4--x-s3"
+		dirAP   = "arn:aws:s3express:us-east-1:123456789012:accesspoint/culibox-ap--use1-az4--xa-s3"
+	)
+	all := windowConfigs(t)
+	win := maps.Clone(all)
+	for name, r := range map[string][]string{"empty": nil, "s3_read": {"culishop-tfstate", "culishop-tfstate--use1-az4--x-s3"}} {
+		p, err := SessionPolicy("aws", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all["investigate "+name] = p
+	}
+	for name, p := range all {
+		for _, res := range []string{dir, dirRead, dirBox} {
+			for _, mode := range []map[string]string{nil, {"s3express:SessionMode": "ReadOnly"}, {"s3express:SessionMode": "ReadWrite"}} {
+				if got := evaluate(t, p, evalReq{"s3express:CreateSession", res, mode}); got != "deny" {
+					t.Errorf("%s: CreateSession on %s (%v) is %s", name, res, mode, got)
+				}
+			}
+		}
+		// reads and bucket creation stay allowed
+		for _, r := range []evalReq{{"s3express:GetBucketPolicy", dir, nil}, {"s3express:ListAllMyDirectoryBuckets", "*", nil},
+			{"s3express:GetAccessPointPolicy", dirAP, nil}, {"s3express:CreateBucket", dirBox, nil}} {
+			if got := evaluate(t, p, r); got != "allow" {
+				t.Errorf("%s: %s is %s, want allow", name, r.action, got)
+			}
+		}
+	}
+	for name, p := range win {
+		for _, r := range []evalReq{{"s3express:PutBucketPolicy", dir, nil}, {"s3express:PutBucketPolicy", dirBox, nil},
+			{"s3express:DeleteBucketPolicy", dir, nil}, {"s3express:DeleteBucketPolicy", dirBox, nil},
+			{"s3express:PutAccessPointPolicy", dirAP, nil}} {
+			if got := evaluate(t, p, r); got != "deny" {
+				t.Errorf("%s: %s on %s is %s", name, r.action, r.resource, got)
+			}
+		}
+	}
+}
+
+// The s3express policy-write pattern is pinned against AWS's catalog.
+func TestS3ExpressPolicyPatternIsThePolicyPuts(t *testing.T) {
+	got := expandCatalog(t, s3ExpressPolicyPuts)
+	if want := []string{"s3express:PutAccessPointPolicy", "s3express:PutBucketPolicy"}; !slices.Equal(got, want) {
+		t.Fatalf("%s expands to %v, want %v", s3ExpressPolicyPuts, got, want)
 	}
 }
 
