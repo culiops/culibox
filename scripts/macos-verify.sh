@@ -16,11 +16,14 @@
 #      in the tagged commit and can be edited away), and, once the repository is
 #      public, that each tarball has a build attestation from release.yml for this
 #      tag and commit
-#   2. clones <tag>, installs the pinned abduco, and runs the Go tests natively
-#      (arm64) and under Rosetta 2 (amd64), built the way the tarballs are:
-#      CGO_ENABLED=0 GOOS=darwin GOARCH=<arch>, ignoring the caller's GOFLAGS and go env file
+#   2. clones <tag> and runs the Go tests natively (arm64) and under Rosetta 2
+#      (amd64), built the way the tarballs are: CGO_ENABLED=0 GOOS=darwin
+#      GOARCH=<arch>, ignoring the caller's GOFLAGS and go env file. Each arch's tests
+#      use the abduco its tarball bundles (#317); for a tarball without one (releases
+#      before #317) the pinned abduco is built from source instead
 #   3. runs each extracted binary's `version` and requires exactly
-#      `culibox <tag> (<commit of the clone>)`; amd64 runs under `arch -x86_64`
+#      `culibox <tag> (<commit of the clone>)`, and each bundled abduco's `-v`, which
+#      must print abduco-<version>; amd64 runs under `arch -x86_64`
 #   4. asks for the manual Mac-test-guide rows (never defaults one to pass)
 #   5. builds macos-verification.json with tools/release-status (it holds the sha256
 #      of each binary that was run, which the manual rows are told to use) and
@@ -230,28 +233,47 @@ fi
 arch -x86_64 true >/dev/null 2>&1 ||
   die "Rosetta 2 is not usable (arch -x86_64 true failed); run: softwareupdate --install-rosetta --agree-to-license"
 
+# <arch>_abduco: the abduco a tarball bundles (#317), empty when it has none.
+arm64_abduco=
+amd64_abduco=
 for pair in "arm64:$arm_name" "amd64:$amd_name"; do
-  mkdir -p "$work/${pair%%:*}"
-  # Only the binary is extracted: a tarball is untrusted data until it is run.
-  tar -xzf "$dl/${pair#*:}" -C "$work/${pair%%:*}" culibox ||
-    die "cannot extract culibox from ${pair#*:}"
+  a=${pair%%:*}
+  t=${pair#*:}
+  mkdir -p "$work/$a"
+  # Only the binaries are extracted: a tarball is untrusted data until it is run.
+  tar -xzf "$dl/$t" -C "$work/$a" culibox ||
+    die "cannot extract culibox from $t"
+  names=$(tar -tzf "$dl/$t") || die "cannot list $t"
+  if printf '%s\n' "$names" | grep -qx abduco; then
+    kind=$(tar -tvzf "$dl/$t" abduco | cut -c1) || die "cannot list abduco in $t"
+    [ "$kind" = - ] || die "abduco in $t is not a regular file; nothing was run"
+    tar -xzf "$dl/$t" -C "$work/$a" abduco || die "cannot extract abduco from $t"
+    case $a in
+      arm64) arm64_abduco=$work/arm64/abduco ;;
+      amd64) amd64_abduco=$work/amd64/abduco ;;
+    esac
+  fi
 done
 
 # ---- 3. abduco and the tests -----------------------------------------------------
-# A failed abduco install is a finding about this Mac or the pinned source, not a
-# reason to leave no record: the tests cannot run without it (they would skip the
-# abduco-backed ones), so both arches are recorded as failed and the script goes on.
-echo "installing the pinned abduco"
-abduco_failed=
-if "$installer" "$work/abduco" >"$work/abduco-install.log" 2>&1; then
-  export PATH="$work/abduco/bin:$PATH"
-else
-  cat "$work/abduco-install.log" >&2
-  abduco_failed=1
-  echo "macos-verify: the abduco install failed; the test runs are recorded as failed" >&2
+# Only a tarball without a bundled abduco needs one built from the pinned source. A
+# failed build is a finding about this Mac or the pinned source, not a reason to leave
+# no record: the tests cannot run without abduco (they would skip the abduco-backed
+# ones), so that arch is recorded as failed and the script goes on.
+src_abduco_dir=
+if [ -z "$arm64_abduco" ] || [ -z "$amd64_abduco" ]; then
+  echo "installing the pinned abduco (a tarball bundles none)"
+  if "$installer" "$work/abduco" >"$work/abduco-install.log" 2>&1; then
+    src_abduco_dir=$work/abduco/bin
+  else
+    cat "$work/abduco-install.log" >&2
+    echo "macos-verify: the abduco install failed; the test runs without a bundled abduco are recorded as failed" >&2
+  fi
 fi
 
-# run_tests ARCH GOARCH: go test ./... in the clone, logged to test-<arch>.log. The
+# run_tests ARCH GOARCH ABDUCO_DIR: go test ./... in the clone, with ABDUCO_DIR (the
+# bundled abduco's folder, or the source build's; empty when that build failed) first
+# on PATH, logged to test-<arch>.log. The
 # environment is pinned, not inherited: the shipped tarballs are built with
 # CGO_ENABLED=0 (scripts/release/build.sh), so the tests are built that way too, for
 # darwin and this arch. GOENV=off with an explicit GOFLAGS: an EMPTY GOFLAGS falls back to
@@ -261,16 +283,16 @@ T_PASS=
 T_SUMMARY=
 T_ENV=
 run_tests() {
-  local arch=$1 goarch=$2 log="$work/test-$1.log" passed skipped failed pkgs badpkgs
+  local arch=$1 goarch=$2 abdir=$3 log="$work/test-$1.log" passed skipped failed pkgs badpkgs
   T_ENV="CGO_ENABLED=0 GOOS=darwin GOARCH=$goarch"
-  if [ -n "$abduco_failed" ]; then
+  if [ -z "$abdir" ]; then
     T_PASS=false
     T_SUMMARY="go test not run: the abduco install failed (see abduco-install.log)"
     echo "go test ./... ($arch): not run, the abduco install failed" >&2
     return 0
   fi
   echo "go test ./... ($arch, $T_ENV)"
-  if (cd "$work/src" && env GOENV=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" AGENT_BOX_REQUIRE_ABDUCO=1 \
+  if (cd "$work/src" && env PATH="$abdir:$PATH" GOENV=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" AGENT_BOX_REQUIRE_ABDUCO=1 \
     go test -count=1 -v ./...) >"$log" 2>&1; then
     T_PASS=true
     passed=$(grep -c '^--- PASS' "$log" || true)
@@ -307,25 +329,69 @@ check_version() {
   fi
 }
 
-# arch_json ARCH MODE: this arch's result, from T_PASS/T_SUMMARY and V_LINE/V_OK. A
-# wrong version stamp fails the arch even when its tests pass.
+# check_abduco ARCH BINARY [RUNNER...]: a bundled abduco's `-v` must print
+# abduco-<version>, the version the tag's own scripts/release/build-abduco.sh pins (it
+# may exit non-zero, so only the text counts). An empty BINARY is a tarball without
+# one. A_NOTE says which abduco the tests used.
+A_OK=
+A_NOTE=
+# A tag from before #317 has no such file: abduco_want stays empty, which fails only
+# an arch whose tarball bundles an abduco anyway.
+abduco_want=
+if [ -f "$work/src/scripts/release/build-abduco.sh" ]; then
+  abduco_want=$(sed -n 's/^ABDUCO_VERSION=//p' "$work/src/scripts/release/build-abduco.sh" | head -1)
+fi
+check_abduco() {
+  local arch=$1 bin=$2 line
+  shift 2
+  A_OK=true
+  if [ -z "$bin" ]; then
+    if [ -n "$src_abduco_dir" ]; then
+      A_NOTE="no bundled abduco: tests ran against the pinned source build"
+    else
+      A_NOTE="no bundled abduco, and the source build failed"
+    fi
+    return 0
+  fi
+  line=$("$@" "$bin" -v 2>&1 | head -1 || true)
+  if [ -n "$abduco_want" ] && [ "${line%% *}" = "abduco-$abduco_want" ]; then
+    A_NOTE="tests ran against the bundled abduco (abduco-$abduco_want)"
+  else
+    A_OK=false
+    if [ -n "$abduco_want" ]; then
+      A_NOTE="bundled abduco -v printed '$line', want abduco-$abduco_want"
+    else
+      A_NOTE="bundled abduco -v printed '$line', but the tag pins no ABDUCO_VERSION to check it against"
+    fi
+    echo "macos-verify: $arch $A_NOTE" >&2
+  fi
+}
+
+# arch_json ARCH MODE: this arch's result, from T_PASS/T_SUMMARY, V_LINE/V_OK and
+# A_OK/A_NOTE. A wrong version stamp or a bundled abduco that does not run fails the
+# arch even when its tests pass.
 arch_json() {
-  local passed=$T_PASS summary=$T_SUMMARY
+  local passed=$T_PASS summary="$T_SUMMARY; $A_NOTE"
   if [ "$V_OK" != true ]; then
     passed=false
     summary="$summary; version stamp mismatch (want culibox $tag ($commit))"
+  fi
+  if [ "$A_OK" != true ]; then
+    passed=false
   fi
   printf '{"arch": %s, "mode": %s, "tests_passed": %s, "test_summary": %s, "version_line": %s, "binary_sha256": %s, "test_env": %s}' \
     "$(json_str "$1")" "$(json_str "$2")" "$passed" "$(json_str "$summary")" "$(json_str "$V_LINE")" "$(json_str "$V_BIN_SHA")" "$(json_str "$T_ENV")"
   echo "$1 ($2): $([ "$passed" = true ] && echo PASS || echo FAIL): $summary" >&2
 }
 
-run_tests arm64 arm64
+run_tests arm64 arm64 "$([ -n "$arm64_abduco" ] && echo "$work/arm64" || echo "$src_abduco_dir")"
 check_version arm64 "$work/arm64/culibox" env
+check_abduco arm64 "$arm64_abduco" env
 arm_json=$(arch_json arm64 native)
 
-run_tests amd64 amd64
+run_tests amd64 amd64 "$([ -n "$amd64_abduco" ] && echo "$work/amd64" || echo "$src_abduco_dir")"
 check_version amd64 "$work/amd64/culibox" arch -x86_64
+check_abduco amd64 "$amd64_abduco" arch -x86_64
 amd_json=$(arch_json amd64 rosetta2)
 
 # ---- 4. the manual rows -------------------------------------------------------------

@@ -1234,8 +1234,9 @@ func lintLockViolations(pkgJSON, lockJSON string) []string {
 	return bad
 }
 
-// The CI install script and the box image build the same abduco: the version and
-// sum in scripts/ci/install-abduco.sh must equal the Dockerfile ARGs.
+// The CI install script, the release build and the box image build the same
+// abduco: the version and sum in scripts/ci/install-abduco.sh and
+// scripts/release/build-abduco.sh must equal the Dockerfile ARGs.
 func TestAbducoPinMatchesDockerfile(t *testing.T) {
 	read := func(p string) string {
 		b, err := os.ReadFile(p)
@@ -1244,16 +1245,19 @@ func TestAbducoPinMatchesDockerfile(t *testing.T) {
 		}
 		return string(b)
 	}
-	script, docker := read("../../scripts/ci/install-abduco.sh"), read("Dockerfile")
-	for _, name := range []string{"ABDUCO_VERSION", "ABDUCO_SHA256"} {
-		s := regexp.MustCompile(`(?m)^` + name + `=["']?([^\s"']+)["']?\s*$`).FindStringSubmatch(script)
-		d := regexp.MustCompile(`(?m)^ARG ` + name + `=(\S+)\s*$`).FindStringSubmatch(docker)
-		if s == nil || d == nil {
-			t.Errorf("%s: not found in both install-abduco.sh (%v) and the Dockerfile (%v)", name, s != nil, d != nil)
-			continue
-		}
-		if s[1] != d[1] {
-			t.Errorf("%s: install-abduco.sh has %q, Dockerfile has %q", name, s[1], d[1])
+	docker := read("Dockerfile")
+	for _, script := range []string{"../../scripts/ci/install-abduco.sh", "../../scripts/release/build-abduco.sh"} {
+		body, base := read(script), filepath.Base(script)
+		for _, name := range []string{"ABDUCO_VERSION", "ABDUCO_SHA256"} {
+			s := regexp.MustCompile(`(?m)^` + name + `=["']?([^\s"']+)["']?\s*$`).FindStringSubmatch(body)
+			d := regexp.MustCompile(`(?m)^ARG ` + name + `=(\S+)\s*$`).FindStringSubmatch(docker)
+			if s == nil || d == nil {
+				t.Errorf("%s: not found in both %s (%v) and the Dockerfile (%v)", name, base, s != nil, d != nil)
+				continue
+			}
+			if s[1] != d[1] {
+				t.Errorf("%s: %s has %q, Dockerfile has %q", name, base, s[1], d[1])
+			}
 		}
 	}
 }
@@ -1401,7 +1405,9 @@ func TestReleaseWorkflow(t *testing.T) {
 	}
 
 	// build: the script, the smoke test, the artifact (also on a dry run).
-	for _, want := range []string{"scripts/release/build.sh", "sha256sum -c SHA256SUMS", `/culibox" version`, "actions/upload-artifact@"} {
+	// #317: the pinned abduco is built first and packed; the smoke test runs it and
+	// checks its licence and the attached installer.
+	for _, want := range []string{"scripts/release/build-abduco.sh", "scripts/release/build.sh", "sha256sum -c SHA256SUMS", `/culibox" version`, `/abduco" -v`, "LICENSE.abduco", `cmp scripts/setup.sh "$DIST/setup.sh"`, "actions/upload-artifact@"} {
 		if !strings.Contains(build, want) {
 			t.Errorf("job build lacks %q", want)
 		}
@@ -1449,8 +1455,8 @@ func TestReleaseWorkflow(t *testing.T) {
 	if !strings.Contains(att, "if: github.event.repository.visibility == 'public'") {
 		t.Error("the attest step must be guarded by `if: github.event.repository.visibility == 'public'`")
 	}
-	if !strings.Contains(att, "subject-path:") || !strings.Contains(att, "culibox_*") {
-		t.Error("the attest step must take the culibox_* tarballs as subject-path")
+	if !strings.Contains(att, "subject-path:") || !strings.Contains(att, "culibox_*") || !strings.Contains(att, "setup.sh") {
+		t.Error("the attest step must take the culibox_* tarballs and setup.sh as subject-path")
 	}
 	skip := stepBlock(t, release, "attestations skipped: this repository is not public, build provenance needs a public repository")
 	if !strings.Contains(skip, "if: github.event.repository.visibility != 'public'") || !strings.Contains(skip, "GITHUB_STEP_SUMMARY") {

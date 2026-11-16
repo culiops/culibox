@@ -46,12 +46,16 @@ type Input struct {
 	Commit     string
 	Now        time.Time
 	Home, Host string
-	Doctor     []doctor.Result
-	DoctorNote string // e.g. "doctor timed out after 30s; run `agent-box bug-report` in a terminal"
-	Config     config.Config
-	Profiles   []config.AgentConfig
-	Live       *Live  // nil for the CLI
-	LogHint    string // CLI only: where to find logs
+	// HomeResolved is doctor.ResolveHome(Home), filled by the caller: building
+	// the bundle never touches the filesystem, so a slow home cannot stall the
+	// daemon's report after doctor's timeout.
+	HomeResolved string
+	Doctor       []doctor.Result
+	DoctorNote   string // e.g. "doctor timed out after 30s; run `agent-box bug-report` in a terminal"
+	Config       config.Config
+	Profiles     []config.AgentConfig
+	Live         *Live  // nil for the CLI
+	LogHint      string // CLI only: where to find logs
 
 	r *redactor // built once per Markdown/IssueURL call
 }

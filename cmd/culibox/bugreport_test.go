@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/culiops/culibox/internal/bugreport"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/doctor"
 )
@@ -70,4 +72,25 @@ func TestBugReportLogHint(t *testing.T) {
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(s, "\n")
 	return line
+}
+
+// A home reached through a symlink is hidden in its resolved spelling too, so
+// both producers hand the bundle the home as EvalSymlinks spells it.
+func TestBugReportInputsCarryResolvedHome(t *testing.T) {
+	target := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(target, home); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := bugReportInput(doctor.Input{Home: home, Commit: "abc123"}, "somehost", "linux")
+	daemon := daemonBugInput(home, "somehost", config.Config{})
+	for name, in := range map[string]bugreport.Input{"cli": cli, "daemon": daemon} {
+		if in.Home != home || in.HomeResolved != resolved || in.Host != "somehost" {
+			t.Errorf("%s: Home %q, HomeResolved %q, Host %q; want %q, %q, somehost", name, in.Home, in.HomeResolved, in.Host, home, resolved)
+		}
+	}
 }

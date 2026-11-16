@@ -2,6 +2,8 @@ package bugreport
 
 import (
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -405,5 +407,33 @@ func TestHeaderNamesVersionBeforeCommit(t *testing.T) {
 	in.Version = ""
 	if !strings.Contains(Markdown(in), "- version: unknown\n") {
 		t.Fatal("an unstamped build should say version: unknown")
+	}
+}
+
+// The bundle hides the home in the spelling the caller resolved, and never
+// resolves it itself: the daemon builds it after doctor's timeout, and a home on
+// a slow automount (/home on macOS) or a stale NFS mount must not stall that.
+func TestMarkdownHomeSpellingComesFromInput(t *testing.T) {
+	in := baseInput()
+	in.HomeResolved = "/System/Volumes/Data/Users/alice"
+	in.Doctor = []doctor.Result{{Status: doctor.Pass, Check: "abduco binary", Detail: "/System/Volumes/Data/Users/alice/bin/abduco"}}
+	if md := Markdown(in); strings.Contains(md, "Volumes/Data") || !strings.Contains(md, "~/bin/abduco") {
+		t.Fatalf("the resolved home is not hidden:\n%s", md)
+	}
+
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in = baseInput()
+	in.Home = link
+	in.Doctor = []doctor.Result{{Status: doctor.Pass, Check: "abduco binary", Detail: resolved + "/bin/abduco"}}
+	if md := Markdown(in); !strings.Contains(md, resolved+"/bin/abduco") {
+		t.Fatalf("Markdown resolved the home itself:\n%s", md)
 	}
 }
