@@ -26,14 +26,16 @@ contains() { # FILE TEXT MESSAGE
 expect_fail() { # RC MESSAGE
   if [ "$1" -ne 0 ]; then pass "$2"; else fail "$2 (exit 0)"; fi
 }
-# nothing_unpacked OUTDIR MESSAGE: no source tree, zig or built target was left.
+# nothing_unpacked MESSAGE: the stub tar and unzip were never called, and no
+# output was written. (The script's work dir is removed on exit, so its contents
+# prove nothing; the stubs do.)
 nothing_unpacked() {
-  if [ ! -d "$1" ]; then
-    pass "$2"
-    return
+  if [ -e "$tmp/unpacked.marker" ]; then
+    fail "$1 (called: $(cat "$tmp/unpacked.marker"))"
+    rm -f "$tmp/unpacked.marker"
+  else
+    pass "$1"
   fi
-  left=$(find "$1" -name 'abduco-*' -o -name ziglang -o -name 'linux_*' -o -name 'darwin_*' -o -name LICENSE.abduco)
-  if [ -z "$left" ]; then pass "$2"; else fail "$2 (left: $left)"; fi
 }
 
 # The stub curl: `curl -fsSL <url> -o <file>` copies $FIXTURES/<last part of url>,
@@ -55,11 +57,17 @@ src=$FIXTURES/${url##*/}
 cp "$src" "$out"
 EOF
 chmod 755 "$tmp/bin/curl"
+# Stub tar and unzip, on PATH only while the script runs: any unpack is recorded.
+mkdir -p "$tmp/unpack"
+for tool in tar unzip; do
+  printf '#!/bin/sh\necho "%s $*" >>"%s/unpacked.marker"\nexit 1\n' "$tool" "$tmp" >"$tmp/unpack/$tool"
+  chmod 755 "$tmp/unpack/$tool"
+done
 export BUILD_ABDUCO_CURL="$tmp/bin/curl" FIXTURES="$tmp/fixtures"
 
 run() { # OUTDIR: run the script, output to $tmp/out, sets rc
   rc=0
-  sh "$script" "$1" >"$tmp/out" 2>&1 || rc=$?
+  PATH="$tmp/unpack:$PATH" sh "$script" "$1" >"$tmp/out" 2>&1 || rc=$?
 }
 
 # 1. Usage.
@@ -78,10 +86,10 @@ contains "$tmp/out" "use an empty directory" "the refusal says why"
 run "$tmp/o3"
 expect_fail "$rc" "a failed download stops the build"
 contains "$tmp/out" "download failed" "a failed download is named"
-nothing_unpacked "$tmp/o3" "a failed download leaves nothing unpacked"
+nothing_unpacked "a failed download leaves nothing unpacked"
 
 # 4. Both downloads arrive with the wrong bytes: both are named, and neither is
-# unpacked. The abduco fixture is a real tarball, so an unpack would show.
+# unpacked.
 mkdir -p "$tmp/src/abduco-0.6"
 echo 'int main(void){return 0;}' >"$tmp/src/abduco-0.6/abduco.c"
 tar -C "$tmp/src" -czf "$tmp/fixtures/abduco-0.6.tar.gz" abduco-0.6
@@ -95,13 +103,21 @@ run "$tmp/o4"
 expect_fail "$rc" "wrong download bytes stop the build"
 contains "$tmp/out" "abduco-0.6.tar.gz: sha256 mismatch" "the abduco mismatch is named"
 contains "$tmp/out" "$wheel: sha256 mismatch" "the zig mismatch is named"
-nothing_unpacked "$tmp/o4" "a mismatch leaves nothing unpacked"
+contains "$tmp/out" "nothing was unpacked" "the mismatch says nothing was unpacked"
+nothing_unpacked "a mismatch leaves nothing unpacked"
 
 # 5. An empty download is a mismatch too, never an empty build.
 : >"$tmp/fixtures/abduco-0.6.tar.gz"
 run "$tmp/o5"
 expect_fail "$rc" "an empty download stops the build"
 contains "$tmp/out" "abduco-0.6.tar.gz: sha256 mismatch" "the empty download is named"
+
+nothing_unpacked "an empty download leaves nothing unpacked"
+
+# 6. make splits CC on spaces, so an outdir with one is refused up front.
+run "$tmp/with space"
+expect_fail "$rc" "an outdir with a space is refused"
+contains "$tmp/out" "has a space" "the refusal says why"
 
 if [ "$fails" -ne 0 ]; then
   echo "build-abduco_test: $fails check(s) failed" >&2

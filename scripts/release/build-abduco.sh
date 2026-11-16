@@ -9,7 +9,9 @@
 #
 # One pinned zig cross-compiles all four on a linux/amd64 host: static musl binaries
 # for Linux, so they run on any glibc or musl distro, and macOS 13+ binaries for
-# darwin (the arm64 one carries the ad-hoc signature macOS requires). zig ships
+# darwin (the arm64 one carries the ad-hoc signature macOS requires). The Linux
+# binaries contain musl, so LICENSE.abduco also carries musl's MIT notice (from the
+# pinned zig). zig ships
 # forkpty in its libSystem stub but no <util.h>, so the darwin build gets the one
 # declaration from abduco-darwin/util.h. _DARWIN_C_SOURCE: see install-abduco.sh.
 #
@@ -47,6 +49,12 @@ fi
 here=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$1"
 outdir=$(cd "$1" && pwd)
+# make splits CC and CFLAGS on whitespace, and both carry these paths.
+for p in "$outdir" "$here"; do
+  case $p in
+    *[[:space:]]*) die "$p has a space; make splits the compiler command on it, so use a path without one" ;;
+  esac
+done
 for name in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 LICENSE.abduco; do
   if [ -e "$outdir/$name" ]; then
     die "$outdir already holds $name; use an empty directory"
@@ -150,6 +158,14 @@ for name in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
   cp "$work/build-$name/abduco" "$outdir/$name/abduco"
   chmod 755 "$outdir/$name/abduco"
 done
-cp "$src/LICENSE" "$outdir/LICENSE.abduco"
+musl_notice=$work/zig/ziglang/lib/libc/musl/COPYRIGHT
+[ -s "$musl_notice" ] || die "the zig in the wheel has no musl COPYRIGHT"
+{
+  cat "$src/LICENSE"
+  printf '\n----------------------------------------------------------------------\n\n'
+  printf 'The Linux builds of abduco are statically linked with musl libc %s\n' "(as shipped with zig $ZIG_VERSION)."
+  printf 'Its copyright notice follows.\n\n'
+  cat "$musl_notice"
+} >"$outdir/LICENSE.abduco"
 chmod 644 "$outdir/LICENSE.abduco"
 echo "wrote abduco $ABDUCO_VERSION for 4 targets and LICENSE.abduco to $outdir"

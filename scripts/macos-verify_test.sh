@@ -96,7 +96,10 @@ git init -q -b main "$tmp/repo"
 (
   cd "$tmp/repo"
   echo "fixture" >README.md
-  git add README.md
+  # The tag's own abduco pin names the version a bundled abduco must report.
+  mkdir -p scripts/release
+  echo "ABDUCO_VERSION=0.6" >scripts/release/build-abduco.sh
+  git add README.md scripts/release/build-abduco.sh
   git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m fixture
   git -c user.name=t -c user.email=t@example.com -c tag.gpgsign=false tag -a "$tag" -m "$tag"
   # main moves on after the release: the tag stays an ancestor of main.
@@ -278,6 +281,7 @@ make_tarball() { # ARCH SHA ABDUCO
   case $3 in
     good) printf '%s\n' '#!/bin/sh' '[ "$1" = -v ] && echo "abduco-0.6 (c) 2013-2016 Marc Andre Tanner"' 'exit 1' >"$stage/abduco" ;;
     bad) printf '%s\n' '#!/bin/sh' 'echo "Bad CPU type in executable"' 'exit 86' >"$stage/abduco" ;;
+    old) printf '%s\n' '#!/bin/sh' '[ "$1" = -v ] && echo "abduco-0.5 (c) 2013-2016 Marc Andre Tanner"' 'exit 1' >"$stage/abduco" ;;
     link) ln -sf culibox "$stage/abduco" ;;
   esac
   if [ "$3" != none ]; then
@@ -553,7 +557,14 @@ new_case u "" good bad
 run_script $'M1=pass\n\n'
 expect_rc "$rc" 3 "(u) a broken bundled abduco is a recorded failure (exit 3)"
 expect_verdict "$out/uploaded.json" failed "(u) the verdict is failed"
-contains "$out/uploaded.json" "bundled abduco -v printed 'Bad CPU type in executable'" "(u) the record says what the abduco printed"
+contains "$out/uploaded.json" "bundled abduco -v printed 'Bad CPU type in executable', want abduco-0.6" "(u) the record says what the abduco printed"
+
+# ---- (w) a bundled abduco of another version fails its arch ------------------------
+echo "== (w) bundled abduco of another version"
+new_case w "" good old
+run_script $'M1=pass\n\n'
+expect_rc "$rc" 3 "(w) a bundled abduco of another version is a recorded failure (exit 3)"
+contains "$out/uploaded.json" "bundled abduco -v printed 'abduco-0.5 (c) 2013-2016 Marc Andre Tanner', want abduco-0.6" "(w) the record says what it printed and what was wanted"
 
 # ---- (v) a bundled abduco that is not a regular file stops the run -----------------
 echo "== (v) bundled abduco is a symlink"

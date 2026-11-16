@@ -666,7 +666,7 @@ What it checks, in order:
    does not stop the script; it is recorded as failed.
 3. Runs each extracted binary's `version` (the amd64 one under `arch -x86_64`)
    and requires exactly `culibox <tag> (<commit of the clone>)`, and each bundled
-   abduco's `-v`, which must print `abduco-<version>`.
+   abduco's `-v`, which must print `abduco-<version>` for the version the tag pins.
 4. Asks for the results of the manual checks, one per line as
    `ID=pass|fail|na [note]`, and a blank line to finish. The checks are the
    maintainers' own list of things to try by hand on a Mac. Nothing defaults to pass.

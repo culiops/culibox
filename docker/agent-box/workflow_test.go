@@ -1407,7 +1407,7 @@ func TestReleaseWorkflow(t *testing.T) {
 	// build: the script, the smoke test, the artifact (also on a dry run).
 	// #317: the pinned abduco is built first and packed; the smoke test runs it and
 	// checks its licence and the attached installer.
-	for _, want := range []string{"scripts/release/build-abduco.sh", "scripts/release/build.sh", "sha256sum -c SHA256SUMS", `/culibox" version`, `/abduco" -v`, "LICENSE.abduco", "setup.sh", "actions/upload-artifact@"} {
+	for _, want := range []string{"scripts/release/build-abduco.sh", "scripts/release/build.sh", "sha256sum -c SHA256SUMS", `/culibox" version`, `/abduco" -v`, "LICENSE.abduco", `cmp scripts/setup.sh "$DIST/setup.sh"`, "actions/upload-artifact@"} {
 		if !strings.Contains(build, want) {
 			t.Errorf("job build lacks %q", want)
 		}

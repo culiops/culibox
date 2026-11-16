@@ -330,10 +330,12 @@ check_version() {
 }
 
 # check_abduco ARCH BINARY [RUNNER...]: a bundled abduco's `-v` must print
-# abduco-<version> (it may exit non-zero, so only the text counts). An empty BINARY is
-# a tarball without one. A_NOTE says which abduco the tests used.
+# abduco-<version>, the version the tag's own scripts/release/build-abduco.sh pins (it
+# may exit non-zero, so only the text counts). An empty BINARY is a tarball without
+# one. A_NOTE says which abduco the tests used.
 A_OK=
 A_NOTE=
+abduco_want=$(sed -n 's/^ABDUCO_VERSION=//p' "$work/src/scripts/release/build-abduco.sh" 2>/dev/null | head -1)
 check_abduco() {
   local arch=$1 bin=$2 line
   shift 2
@@ -347,14 +349,13 @@ check_abduco() {
     return 0
   fi
   line=$("$@" "$bin" -v 2>&1 | head -1 || true)
-  case $line in
-    abduco-*) A_NOTE="tests ran against the bundled abduco (${line%% *})" ;;
-    *)
-      A_OK=false
-      A_NOTE="bundled abduco -v printed '$line'"
-      echo "macos-verify: $arch $A_NOTE" >&2
-      ;;
-  esac
+  if [ -n "$abduco_want" ] && [ "${line%% *}" = "abduco-$abduco_want" ]; then
+    A_NOTE="tests ran against the bundled abduco (abduco-$abduco_want)"
+  else
+    A_OK=false
+    A_NOTE="bundled abduco -v printed '$line', want abduco-${abduco_want:-<no ABDUCO_VERSION in the tag>}"
+    echo "macos-verify: $arch $A_NOTE" >&2
+  fi
 }
 
 # arch_json ARCH MODE: this arch's result, from T_PASS/T_SUMMARY, V_LINE/V_OK and
