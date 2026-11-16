@@ -72,7 +72,7 @@ func TestWrapRefusesAGuardFlippedBeforeDockerRun(t *testing.T) {
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("err = %v, want %q", err, want)
 	}
-	if strings.Contains(err.Error(), "workspace "+claude) || strings.Contains(err.Error(), "README") {
+	if strings.Contains(err.Error(), "workspace "+claude) || strings.Contains(err.Error(), "INSTALL.md") {
 		t.Fatalf("err = %v, a guard must not be called the workspace or cite the docker requirement", err)
 	}
 	if f.runs() != 1 || f.stops() != 1 {

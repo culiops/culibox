@@ -130,11 +130,11 @@ func skipGuard(mt Mount, guards bool) bool {
 // wsHostFilesHint ends the refusal of a workspace that a box created by this
 // spawn does not show as the checked folder: one such refusal is a race, but one
 // for every folder means docker does not see the host's files as they are, which
-// the README lists as a requirement. Only where the boxes run in the host's own
+// docs/INSTALL.md lists as a requirement. Only where the boxes run in the host's own
 // docker (no VM hook, Options.VMIDs): with a hook they run in CuliBox's own VM
 // and that requirement does not apply.
 const wsHostFilesHint = "If this repeats for every folder, CuliBox's docker does not see host files as they are " +
-	"(for example Docker Desktop for Linux or a remote docker host); see README, Requirements."
+	"(for example Docker Desktop for Linux or a remote docker host); see Requirements at https://github.com/culiops/culibox/blob/main/docs/INSTALL.md#requirements."
 
 // mountChanged is the refusal for a mount the in-box check did not confirm: the
 // workspace (and a guard of it) is a mount-changed refusal of the workspace,
