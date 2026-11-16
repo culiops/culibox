@@ -132,7 +132,12 @@ for pair in linux_amd64:x86_64-linux-musl linux_arm64:aarch64-linux-musl \
     die "the $name build failed"
   }
   got=$(sum "$dir/abduco")
-  want=$(eval "echo \$OUT_SHA256_$name")
+  case $name in
+    linux_amd64) want=$OUT_SHA256_linux_amd64 ;;
+    linux_arm64) want=$OUT_SHA256_linux_arm64 ;;
+    darwin_amd64) want=$OUT_SHA256_darwin_amd64 ;;
+    darwin_arm64) want=$OUT_SHA256_darwin_arm64 ;;
+  esac
   if [ "$got" != "$want" ]; then
     echo "build-abduco: abduco for $name: sha256 $got, want $want (pinned in this script)" >&2
     mismatch=1
