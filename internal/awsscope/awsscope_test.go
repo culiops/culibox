@@ -109,7 +109,7 @@ func TestSessionPolicyEmptyAllowlistDeniesAllObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(p, "NotResource") || !strings.Contains(p, `"Action":["s3:GetObject","s3:GetObjectVersion"],"Resource":"*"`) {
+	if strings.Contains(p, "NotResource") || !strings.Contains(p, `"Action":["s3:GetObject","s3:GetObjectVersion","s3express:CreateSession"],"Resource":"*"`) {
 		t.Fatalf("empty allowlist must deny every object: %s", p)
 	}
 }
@@ -142,13 +142,15 @@ func TestSessionPolicyRefusesBadPartition(t *testing.T) {
 
 // The investigate policy must not change by a byte: the broker has minted with
 // it since M3a, and the refactor shares its statements with ElevatedPolicy.
-// The literal was produced by the pre-M3b code (cb76a77).
+// The literal was produced by the pre-M3b code (cb76a77); the changes since
+// are #323, which denies directory bucket sessions (s3express:CreateSession),
+// and the #329 review, which denies S3 Access Grants credentials (s3:GetDataAccess).
 func TestSessionPolicyBytesUnchanged(t *testing.T) {
 	got, err := SessionPolicy("aws", []string{"culishop-tfstate", "logs-bucket/AWSLogs/"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:s3:::logs-bucket/AWSLogs/*"]},{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:GetParameterHistory","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords"],"Resource":"*"},{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}}]}`
+	const want = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion","s3express:CreateSession"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:s3:::logs-bucket/AWSLogs/*"]},{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:GetParameterHistory","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords","s3:GetDataAccess"],"Resource":"*"},{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}}]}`
 	if got != want {
 		t.Fatalf("SessionPolicy changed:\n got  %s\n want %s", got, want)
 	}
@@ -207,40 +209,55 @@ func denied(p pol, action string, resource string) bool {
 const elevatedBefore211 = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion"],"NotResource":["arn:aws:s3:::culishop-tfstate/*"]},{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect"],"Resource":"*"},{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}},{"Effect":"Deny","Action":["sts:AssumeRole*","sts:GetFederationToken","sts:GetSessionToken","iam:CreateAccessKey","iam:CreateLoginProfile","iam:UpdateLoginProfile","iam:CreateServiceSpecificCredential","iam:UploadSSHPublicKey","cloudtrail:StopLogging","cloudtrail:DeleteTrail","cloudtrail:UpdateTrail","cloudtrail:PutEventSelectors"],"Resource":"*"},{"Effect":"Deny","Action":"iam:*","Resource":"arn:aws:iam::*:role/agentbox-*"},{"Effect":"Deny","Action":["iam:Create*","iam:Delete*","iam:Put*","iam:Attach*","iam:Detach*","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*"],"Resource":"*"}]}`
 
 // #211 acceptance: with box_bucket_prefix unset, the elevated policy is the
-// pre-#211 one plus only the public-parameter carve-out (and #302's PassRole deny, #301's copy denies): the four SSM
-// parameter reads move out of the Resource "*" deny into their own deny whose
-// NotResource is AWS's public parameters (empty account field).
+// pre-#211 one plus only the public-parameter carve-out (and #302's PassRole
+// deny, #301's copy denies, #307's exposure denies). Since #329 the policy is
+// written in fewer statements, so the literal is written out; that it still
+// decides as before is checked by equiv_test.go, and against the pre-#211
+// literal here through the evaluator.
 func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
 	got, err := ElevatedPolicy("aws", []string{"culishop-tfstate"}, Elevation{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := strings.Replace(elevatedBefore211,
-		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect"],"Resource":"*"},`,
-		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords"],"Resource":"*"},`+
-			`{"Effect":"Deny","Action":["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:GetParameterHistory"],"NotResource":["arn:aws:ssm:*::parameter/aws/service/*"]},`, 1)
-	// #307 folds every unconditional deny into the guard statement to fit STS's
-	// limit, so from the guards on the tail is written out. It holds, in order:
-	// the guards minus the four that iam:Create*/iam:Update* already deny
-	// (CreateAccessKey, CreateLoginProfile, UpdateLoginProfile,
-	// CreateServiceSpecificCredential), iam:PassRole (#302, prefix unset), the
-	// IAM writes, the managed copies (#301), the account public access block and,
-	// with no box prefix, replication and the S3 exposure calls (#307); then the
-	// agent's own roles, unchanged.
-	head, _, ok := strings.Cut(want, `{"Effect":"Deny","Action":["sts:AssumeRole*"`)
-	if !ok || head == want {
-		t.Fatal("test literal out of date: the replacement did not apply")
-	}
-	want = head + `{"Effect":"Deny","Action":["sts:AssumeRole*","sts:GetFederationToken","sts:GetSessionToken",` +
+	// In order: Allow *; the read deny (S3 objects outside s3_read, the four
+	// SSM parameter reads outside AWS's public parameters, #211); one Resource
+	// "*" deny with the other data reads, the guards minus the four that
+	// iam:Create*/iam:Update* already deny (CreateAccessKey, CreateLoginProfile,
+	// UpdateLoginProfile, CreateServiceSpecificCredential), iam:PassRole (#302,
+	// prefix unset), the IAM writes, the managed copies (#301), the account
+	// public access block and, with no box prefix, replication and the S3
+	// exposure calls (#307); KMS; then the agent's own roles.
+	want := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},` +
+		`{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion","s3express:CreateSession","ssm:GetParameter*"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:ssm:*::parameter/aws/service/*"]},` +
+		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","dynamodb:*GetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords","s3:GetDataAccess",` +
+		`"sts:AssumeRo*","sts:GetFederationToken","sts:GetSessionToken",` +
 		`"iam:UploadSSHPublicKey","cloudtrail:StopLogging","cloudtrail:DeleteTrail","cloudtrail:UpdateTrail","cloudtrail:PutEventSelectors",` +
 		`"iam:PassRole",` +
 		`"iam:Create*","iam:Delete*","iam:Put*","iam:Attach*","iam:Detach*","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*",` +
-		`"dynamodb:ExportTableToPointInTime","rds:StartExportTask","s3:CreateJob","datasync:StartTaskExecution","backup:StartRestoreJob",` +
-		`"s3:PutAccountPublicAccessBlock",` +
-		`"s3:PutReplicationConfiguration","s3:Put*Policy*","s3:DeleteBucketPolicy","s3:Put*Acl","s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls"],"Resource":"*"},` +
+		`"dynamodb:Export*","rds:StartExportTask","s3:CreateJob","datasync:StartTaskExecution","backup:StartRestoreJob",` +
+		`"s3:PutAccountPublicAccessBlock","s3:*eAccessGrant*","s3express:Put*Policy","s3express:DeleteBucketPolicy",` +
+		`"dynamodb:PutResourcePolicy","dynamodb:DeleteResourcePolicy","ssm:*ResourcePolicy","secretsmanager:PutResourcePolicy","secretsmanager:DeleteResourcePolicy",` +
+		`"s3:Put*Replication*","s3:Put*Policy*","s3:DeleteBucketPolicy","s3:Put*Acl","s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls"],"Resource":"*"},` +
+		`{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}},` +
 		`{"Effect":"Deny","Action":"iam:*","Resource":"arn:aws:iam::*:role/agentbox-*"}]}`
 	if got != want {
-		t.Fatalf("ElevatedPolicy (opt-in off) changed beyond the carve-out:\n got  %s\n want %s", got, want)
+		t.Fatalf("ElevatedPolicy (opt-in off) changed:\n got  %s\n want %s", got, want)
+	}
+	// Everything the pre-#211 policy denied is still denied, apart from the
+	// public parameters #211 opened.
+	for _, r := range []evalReq{
+		{"s3:GetObject", "arn:aws:s3:::human-data/x", nil}, {"ssm:GetParameter", acctParam, nil},
+		{"ssm:GetParametersByPath", acctParam, nil}, {"secretsmanager:GetSecretValue", "arn:aws:secretsmanager:us-east-1:123456789012:secret:x", nil},
+		{"dynamodb:Query", "arn:aws:dynamodb:us-east-1:123456789012:table/t", nil}, {"kms:Decrypt", "arn:aws:kms:us-east-1:123456789012:key/k", nil},
+		{"iam:CreateAccessKey", "arn:aws:iam::123456789012:user/x", nil}, {"iam:PutRolePolicy", "arn:aws:iam::123456789012:role/x", nil},
+		{"iam:GetRole", "arn:aws:iam::123456789012:role/agentbox-agent", nil}, {"sts:AssumeRole", "arn:aws:iam::123456789012:role/x", nil},
+	} {
+		if evaluate(t, elevatedBefore211, r) != "deny" || evaluate(t, got, r) != "deny" {
+			t.Errorf("%s on %s: before %s, now %s", r.action, r.resource, evaluate(t, elevatedBefore211, r), evaluate(t, got, r))
+		}
+	}
+	if evaluate(t, got, evalReq{"ssm:GetParameter", pubParam, nil}) != "allow" || evaluate(t, got, evalReq{"s3:GetObject", "arn:aws:s3:::culishop-tfstate/k", nil}) != "allow" {
+		t.Error("the public parameters and the s3_read bucket must stay readable")
 	}
 }
 
@@ -255,13 +272,26 @@ func TestElevatedPolicyKeepsTheInvestigateDeniesAndAddsTheGuards(t *testing.T) {
 	}
 	inv, _ := SessionPolicy("aws", []string{"culishop-tfstate"})
 	invP := parsePol(t, inv)
-	// Statements 0, 1 and 3 of the investigate policy are carried unchanged
-	// (the S3 and KMS denies); statement 2 is split by #211 (tested above).
-	for i, j := range map[int]int{0: 0, 1: 1, 3: 4} {
+	// Statements 0 and 3 of the investigate policy (Allow, KMS) are carried
+	// unchanged. Statements 1 and 2 are carried and extended (#329 packs denies
+	// that share an exception, or that have none, into them): the S3 read deny
+	// keeps its actions and exceptions first, and the Resource "*" deny keeps
+	// every action but the SSM reads, which move to the read deny (#211).
+	for _, i := range []int{0, 3} {
 		a, _ := json.Marshal(invP.Statement[i])
-		b, _ := json.Marshal(p.Statement[j])
+		b, _ := json.Marshal(p.Statement[i])
 		if string(a) != string(b) {
 			t.Fatalf("investigate statement %d differs in the elevated policy:\n %s\n %s", i, a, b)
+		}
+	}
+	ia, ea := actions(invP.Statement[1].Action), actions(p.Statement[1].Action)
+	if !slices.Equal(ea[:len(ia)], ia) || !slices.Equal(p.Statement[1].NotResource[:len(invP.Statement[1].NotResource)], invP.Statement[1].NotResource) {
+		t.Fatalf("the S3 read deny must start with the investigate one:\n %+v\n %+v", invP.Statement[1], p.Statement[1])
+	}
+	// (#329 writes some of them as patterns, so this asks the evaluator)
+	for _, a := range actions(invP.Statement[2].Action) {
+		if !slices.Contains(ssmParamReads, a) && evaluate(t, s, evalReq{a, "arn:aws:dynamodb:us-east-1:123456789012:table/t", nil}) != "deny" {
+			t.Errorf("the Resource \"*\" deny lost %s", a)
 		}
 	}
 	// Each guard is denied with allow_iam on and off. With it off, four of them
@@ -284,9 +314,16 @@ func TestElevatedPolicyKeepsTheInvestigateDeniesAndAddsTheGuards(t *testing.T) {
 	if !denied(p, "iam:*", "arn:aws:iam::*:role/agentbox-*") {
 		t.Error("the agent's own roles must be off limits")
 	}
+	// Written as the names, so an action AWS adds under one of them (say a
+	// future iam:AttachX that does not end in Policy) is denied too (#329 review).
 	for _, a := range []string{"iam:Create*", "iam:Delete*", "iam:Put*", "iam:Attach*", "iam:Detach*", "iam:Update*",
 		"iam:Add*", "iam:Remove*", "iam:Tag*", "iam:Untag*", "iam:Set*", "iam:Change*"} {
 		if !denied(p, a, "*") {
+			t.Errorf("IAM write deny missing with allow_iam off: %s", a)
+		}
+	}
+	for _, a := range []string{"iam:AttachRolePolicy", "iam:DetachUserPolicy", "iam:AttachFutureThing", "iam:DetachX"} {
+		if evaluate(t, s, evalReq{a, "arn:aws:iam::123456789012:role/x", nil}) != "deny" {
 			t.Errorf("IAM write deny missing with allow_iam off: %s", a)
 		}
 	}
@@ -304,7 +341,7 @@ func TestElevatedPolicyAllowIAMDropsOnlyTheIAMWriteDenies(t *testing.T) {
 	if denied(p, "iam:Create*", "*") {
 		t.Fatal("allow_iam must drop the IAM write denies")
 	}
-	if !denied(p, "iam:CreateAccessKey", "*") || !denied(p, "iam:*", "arn:aws:iam::*:role/agentbox-*") || !denied(p, "sts:AssumeRole*", "*") {
+	if !denied(p, "iam:CreateAccessKey", "*") || !denied(p, "iam:*", "arn:aws:iam::*:role/agentbox-*") || !denied(p, "sts:AssumeRo*", "*") {
 		t.Fatal("allow_iam must keep every guard deny")
 	}
 }
@@ -437,10 +474,13 @@ func TestDataReadDeniesCoverEveryValueRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The elevated policy writes the SSM reads as ssm:GetParameter* (#329), so
+	// this asks the evaluator.
 	for name, p := range map[string]string{"session": sess, "elevated": elev} {
-		for _, a := range []string{"ssm:GetParameterHistory", "dynamodb:GetRecords"} {
-			if !strings.Contains(p, `"`+a+`"`) {
-				t.Errorf("%s policy lacks deny of %s: %s", name, a, p)
+		for _, r := range []evalReq{{"ssm:GetParameterHistory", "arn:aws:ssm:us-east-1:123456789012:parameter/p", nil},
+			{"dynamodb:GetRecords", "arn:aws:dynamodb:us-east-1:123456789012:table/t/stream/s", nil}} {
+			if evaluate(t, p, r) != "deny" {
+				t.Errorf("%s policy does not deny %s: %s", name, r.action, p)
 			}
 		}
 	}

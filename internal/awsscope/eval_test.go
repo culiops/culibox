@@ -2,8 +2,12 @@ package awsscope
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -45,12 +49,61 @@ func strs(v any) []string {
 	panic("unexpected JSON shape")
 }
 
+// The equivalence test asks millions of times, so parsed policies are cached.
+var parsedCache sync.Map
+
+// glob matches s against an IAM pattern: "*" is any run of characters
+// (crossing ":" and "/"), "?" is one character, everything else literal; fold
+// ignores ASCII case. Iterative, with one backtrack point per "*".
 func glob(pattern, s string, fold bool) bool {
-	re := "^" + strings.NewReplacer(`\*`, ".*", `\?`, ".").Replace(regexp.QuoteMeta(pattern)) + "$"
-	if fold {
-		re = "(?i)" + re
+	lower := func(b byte) byte {
+		if fold && 'A' <= b && b <= 'Z' {
+			return b + 'a' - 'A'
+		}
+		return b
 	}
-	return regexp.MustCompile(re).MatchString(s)
+	p, i, star, mark := 0, 0, -1, 0
+	for i < len(s) {
+		switch {
+		case p < len(pattern) && pattern[p] != '*' && (pattern[p] == '?' || lower(pattern[p]) == lower(s[i])):
+			p++
+			i++
+		case p < len(pattern) && pattern[p] == '*':
+			star, mark = p, i
+			p++
+		case star >= 0:
+			p = star + 1
+			mark++
+			i = mark
+		default:
+			return false
+		}
+	}
+	for p < len(pattern) && pattern[p] == '*' {
+		p++
+	}
+	return p == len(pattern)
+}
+
+func TestGlobMatchesTheRegexpForm(t *testing.T) {
+	for _, c := range []struct{ p, s string }{
+		{"s3:Put*Policy*", "s3:PutBucketPolicy"}, {"s3:Put*Policy*", "s3:PutAccessPointPolicyForObjectLambda"},
+		{"s3:Put*Policy*", "s3:GetBucketPolicy"}, {"arn:aws:s3:::b/*", "arn:aws:s3:::b/x/y"}, {"arn:aws:s3:::b/*", "arn:aws:s3:::b"},
+		{"*", ""}, {"a*b*c", "abc"}, {"a*b*c", "aXbYbZc"}, {"a*b*c", "acb"}, {"a?c", "abc"}, {"a?c", "ac"},
+		{"arn:aws:ssm:*::parameter/aws/service/*", "arn:aws:ssm:us-east-1::parameter/aws/service/x"},
+		{"arn:aws:ssm:*::parameter/aws/service/*", "arn:aws:ssm:us-east-1:1:parameter/aws/service/x"},
+		{"x.y", "xzy"}, {"S3:GETOBJECT", "s3:GetObject"},
+	} {
+		for _, fold := range []bool{false, true} {
+			re := "^" + strings.NewReplacer(`\*`, ".*", `\?`, ".").Replace(regexp.QuoteMeta(c.p)) + "$"
+			if fold {
+				re = "(?i)" + re
+			}
+			if want := regexp.MustCompile(re).MatchString(c.s); glob(c.p, c.s, fold) != want {
+				t.Errorf("glob(%q, %q, %v) != %v", c.p, c.s, fold, want)
+			}
+		}
+	}
 }
 
 func anyGlob(pats []string, s string, fold bool) bool {
@@ -89,24 +142,80 @@ func condHolds(cond map[string]map[string]any, ctx map[string]string) bool {
 	return true
 }
 
+// parseEvalPolicy decodes a policy for the evaluator and refuses any key it
+// does not implement (NotAction, Principal, NotPrincipal, Sid, ...), so a
+// future statement of another shape fails the tests instead of being
+// evaluated wrongly. NotResource is implemented.
+func parseEvalPolicy(policy string) ([]evalStmt, error) {
+	dec := json.NewDecoder(strings.NewReader(policy))
+	dec.DisallowUnknownFields()
+	var doc struct {
+		Version   string
+		Statement []evalStmt
+	}
+	if err := dec.Decode(&doc); err != nil {
+		return nil, err
+	}
+	for _, s := range doc.Statement {
+		if s.Effect != "Allow" && s.Effect != "Deny" {
+			return nil, fmt.Errorf("evaluator: Effect %q", s.Effect)
+		}
+		if s.Resource != nil && s.NotResource != nil {
+			return nil, errors.New("evaluator: both Resource and NotResource")
+		}
+	}
+	return doc.Statement, nil
+}
+
+func TestEvaluatorRefusesStatementsItDoesNotImplement(t *testing.T) {
+	for _, p := range []string{
+		`{"Statement":[{"Effect":"Deny","NotAction":"s3:*","Resource":"*"}]}`,
+		`{"Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*","NotPrincipal":{"AWS":"x"}}]}`,
+		`{"Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*","Principal":"*"}]}`,
+		`{"Statement":[{"Sid":"x","Effect":"Deny","Action":"s3:*","Resource":"*"}]}`,
+		`{"Statement":[{"Effect":"deny","Action":"s3:*","Resource":"*"}]}`,
+		`{"Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*","NotResource":["x"]}]}`,
+	} {
+		if _, err := parseEvalPolicy(p); err == nil {
+			t.Errorf("accepted %s", p)
+		}
+	}
+	if _, err := parseEvalPolicy(`{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:*","NotResource":["x"]}]}`); err != nil {
+		t.Error(err)
+	}
+}
+
 // evaluate returns "allow", "implicit" (no Allow applies) or "deny" (an
 // explicit Deny applies; it wins over every Allow).
 func evaluate(t *testing.T, policy string, r evalReq) string {
 	t.Helper()
-	var doc struct{ Statement []evalStmt }
-	if err := json.Unmarshal([]byte(policy), &doc); err != nil {
-		t.Fatal(err)
+	type parsed struct {
+		evalStmt
+		actions, resources []string
+	}
+	var st []parsed
+	if v, ok := parsedCache.Load(policy); ok {
+		st = v.([]parsed)
+	} else {
+		doc, err := parseEvalPolicy(policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range doc {
+			st = append(st, parsed{s, strs(s.Action), strs(s.Resource)})
+		}
+		parsedCache.Store(policy, st)
 	}
 	allowed := false
-	for _, s := range doc.Statement {
-		if !anyGlob(strs(s.Action), r.action, true) {
+	for _, s := range st {
+		if !anyGlob(s.actions, r.action, true) {
 			continue
 		}
 		if s.NotResource != nil {
 			if anyGlob(s.NotResource, r.resource, false) {
 				continue
 			}
-		} else if !anyGlob(strs(s.Resource), r.resource, false) {
+		} else if !anyGlob(s.resources, r.resource, false) {
 			continue
 		}
 		if !condHolds(s.Condition, r.ctx) {
@@ -348,6 +457,87 @@ func TestElevatedPolicySizeErrorNamesTheElevatedPolicyAndWhatGrowsIt(t *testing.
 			t.Errorf("size error lacks %q: %v", w, err)
 		}
 	}
+	// #329: it names the size, the limit, and the part the config does not
+	// control, and says an upgrade can be the cause (a newer CuliBox may deny more).
+	base, _ := ElevatedPolicy("aws", nil, Elevation{})
+	big := fmt.Sprintf("the elevated session policy is %d characters; STS allows 2048", sizeOf(t, "aws", many, Elevation{}))
+	for _, w := range []string{big, fmt.Sprintf("CuliBox's own denies take %d of them (with allow_iam off)", len(base)), "upgrade"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("size error lacks %q: %v", w, err)
+		}
+	}
+	baseIAM, _ := ElevatedPolicy("aws-us-gov", nil, Elevation{AllowIAM: true})
+	_, err = ElevatedPolicy("aws-us-gov", many, Elevation{AllowIAM: true, BoxBucketPrefix: "culibox-"})
+	if w := fmt.Sprintf("CuliBox's own denies take %d of them (with allow_iam on)", len(baseIAM)); err == nil || !strings.Contains(err.Error(), w) {
+		t.Errorf("size error lacks %q: %v", w, err)
+	}
+}
+
+// sizeOf renders the policy without the size limit, to name its size.
+func sizeOf(t *testing.T, partition string, s3Read []string, el Elevation) int {
+	t.Helper()
+	_, err := ElevatedPolicy(partition, s3Read, el)
+	var se *sizeError
+	if !errors.As(err, &se) {
+		t.Fatalf("not a size error: %v", err)
+	}
+	return se.n
+}
+
+// #329: each action pack's pattern matches exactly the catalog actions its
+// covers match, so writing the pattern changes no decision.
+func TestActionPacksAreExact(t *testing.T) {
+	for _, p := range actionPacks {
+		var want []string
+		for _, c := range p.covers {
+			want = append(want, expandCatalog(t, c)...)
+		}
+		slices.Sort(want)
+		got := expandCatalog(t, p.pattern)
+		if len(got) == 0 || !slices.Equal(got, want) {
+			t.Errorf("%s expands to %v; its covers %v to %v", p.pattern, got, p.covers, want)
+		}
+	}
+}
+
+// A pack may only ever deny more as AWS adds actions: its covers are exact
+// names (no wildcard), each of which the pattern matches, so every request a
+// cover denies the pattern denies too (#329 review).
+func TestActionPacksOnlyWiden(t *testing.T) {
+	for _, p := range actionPacks {
+		for _, c := range p.covers {
+			if strings.ContainsAny(c, "*?") || !glob(p.pattern, c, true) {
+				t.Errorf("%s: cover %s is a wildcard or not matched; the pattern could deny less than it", p.pattern, c)
+			}
+		}
+	}
+}
+
+func TestPackActions(t *testing.T) {
+	in := []string{"a:X", "dynamodb:BatchGetItem", "b:Y", "dynamodb:GetItem", "iam:Attach*", "c:Z"}
+	got := packActions(in)
+	if want := []string{"a:X", "dynamodb:*GetItem", "b:Y", "iam:Attach*", "c:Z"}; !slices.Equal(got, want) {
+		t.Fatalf("got %v want %v (a pack applies only when all its covers are there)", got, want)
+	}
+	if !slices.Equal(in, []string{"a:X", "dynamodb:BatchGetItem", "b:Y", "dynamodb:GetItem", "iam:Attach*", "c:Z"}) {
+		t.Fatal("packActions changed its input")
+	}
+}
+
+// #329: the elevated policy writes the four SSM parameter reads as one
+// pattern. AWS's catalog has exactly these four actions under it, so the
+// pattern denies nothing more.
+func TestSSMParameterReadPatternIsExactlyTheFourReads(t *testing.T) {
+	got := expandCatalog(t, ssmParamReadsPattern)
+	want := []string{"ssm:GetParameter", "ssm:GetParameterHistory", "ssm:GetParameters", "ssm:GetParametersByPath"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s expands to %v in the catalog, want %v", ssmParamReadsPattern, got, want)
+	}
+	for _, a := range ssmParamReads {
+		if !slices.Contains(got, a) {
+			t.Errorf("ssmParamReads has %s, which the pattern misses", a)
+		}
+	}
 }
 
 func TestValidBoxBucketPrefix(t *testing.T) {
@@ -367,59 +557,74 @@ func TestValidBoxBucketPrefix(t *testing.T) {
 	}
 }
 
-// The largest realistic elevated policy must fit STS's 2,048-character limit:
-// the longest partition, IAM writes denied (more statements), both prefixes at
-// their 40-character maximum, the managed-copy denies on (#301), and an s3_read
-// list of three long entries.
+// The largest realistic elevated policy must fit STS's 2,048-character limit.
+// Each size is pinned, so a change that grows the policy says by how much, and
+// the headroom left for the next deny is visible here (#329).
+//   - smallest: no s3_read, no options, IAM writes denied;
+//   - one: one 63-character s3_read bucket, both prefixes at their 40-character
+//     maximum, the longest partition;
+//   - realistic: three long s3_read entries, 8-character prefixes, the longest
+//     partition;
+//   - all-maximum: three long entries AND both prefixes at 40 characters.
+//
+// History (all-maximum / realistic): 2,069 (refused) / 1,973 before #307;
+// 2,024 / 1,928 after #307; 1,821 / 1,725 after #329 packed the statements;
+// 1,860 / 1,764 with the Access Grants denies (#322); 1,940 / 1,844 with the
+// S3 Express denies (#323); 1,880 / 1,784 with the action packs (#329);
+// 2,036 / 1,940 with the resource-policy denies (#324); 2,034 / 1,938 with the
+// guard written sts:AssumeRo* (AssumeRoot, #329 review); 2,043 / 1,947 with
+// iam:Attach* and iam:Detach* written back (#329 review). 5 characters are left
+// at the all-maximum config: the next deny does not fit there.
 func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
-	prefix := strings.Repeat("p", 39) + "-" // 40, the maximum
-	s3Read := []string{
-		strings.Repeat("s", 63),                            // a max-length state bucket
-		strings.Repeat("l", 50) + "/AWSLogs/123456789012/", // a log bucket, account prefix
-		"culishop-artifacts-ap-southeast-1/releases/",
+	maxEl := Elevation{BoxBucketPrefix: longBoxPrefix, PassRolePrefix: longRolePrefix}
+	realEl := Elevation{BoxBucketPrefix: "culibox-", PassRolePrefix: "culibox-"}
+	for _, c := range []struct {
+		name      string
+		partition string
+		s3Read    []string
+		el        Elevation
+		want      int
+	}{
+		{"smallest", "aws", nil, Elevation{}, 1532},
+		{"smallest, allow_iam on", "aws", nil, Elevation{AllowIAM: true}, 1487},
+		{"one", "aws-us-gov", longS3Read[:1], maxEl, 1880},
+		{"realistic", "aws-us-gov", longS3Read, realEl, 1947},
+		{"all-maximum", "aws-us-gov", longS3Read, maxEl, 2043},
+	} {
+		s, err := ElevatedPolicy(c.partition, c.s3Read, c.el)
+		if err != nil {
+			t.Errorf("%s: refused: %v", c.name, err)
+			continue
+		}
+		t.Logf("%s: %d of %d characters (%d left)", c.name, len(s), MaxPolicyChars, MaxPolicyChars-len(s))
+		if len(s) != c.want {
+			t.Errorf("%s: %d characters, pinned %d: update the pin and the history above", c.name, len(s), c.want)
+		}
+		for _, d := range []string{`"s3:Put*Acl"`, `"s3:PutAccountPublicAccessBlock"`, `"dynamodb:Export*"`} {
+			if !strings.Contains(s, d) {
+				t.Errorf("%s: %s missing", c.name, d)
+			}
+		}
 	}
-	const exposure = `"s3:Put*Acl"`
-	// The smallest policy (no s3_read, no options, IAM writes denied) carries the
-	// copy and exposure denies: measured 1,469 of 2,048 (1,424 with allow_iam on).
-	small, err := ElevatedPolicy("aws", nil, Elevation{})
-	if err != nil || len(small) > 1550 || !strings.Contains(small, "dynamodb:ExportTableToPointInTime") || !strings.Contains(small, exposure) {
-		t.Fatalf("smallest policy: %d chars, copy and exposure denies present: %v", len(small), err)
-	}
-	maxEl := Elevation{BoxBucketPrefix: prefix, PassRolePrefix: strings.Repeat("r", 40)}
-	// One 63-character s3_read bucket, every option at its maximum, the longest
-	// partition: measured 1,861 of 2,048 (2026-11-16; 1,906 before #307).
-	one, err := ElevatedPolicy("aws-us-gov", s3Read[:1], maxEl)
-	if err != nil || len(one) > MaxPolicyChars {
-		t.Fatalf("the one-entry maximum must fit: %d chars, %v", len(one), err)
-	}
-	t.Logf("one s3_read bucket, both prefixes at 40 characters: %d of %d", len(one), MaxPolicyChars)
-	// Three long s3_read entries with ordinary 8-character prefixes: measured
-	// 1,928 of 2,048 (2026-11-16; 1,973 before #307, and 2,125 with the #307
-	// denies before the unconditional denies were folded into one statement).
-	s, err := ElevatedPolicy("aws-us-gov", s3Read, Elevation{BoxBucketPrefix: "culibox-", PassRolePrefix: "culibox-"})
-	if err != nil {
-		t.Fatalf("largest realistic policy refused: %v", err)
-	}
-	t.Logf("largest realistic elevated policy: %d of %d characters", len(s), MaxPolicyChars)
-	if len(s) > MaxPolicyChars || !strings.Contains(s, exposure) || !strings.Contains(s, `"s3:PutAccountPublicAccessBlock"`) {
-		t.Fatalf("%d > %d, or the #307 denies are missing: %s", len(s), MaxPolicyChars, s)
-	}
-	// Three long entries AND both prefixes at 40 characters: measured 2,024. It
-	// fits since #307 folded the unconditional denies (2,069, refused, before).
-	all, err := ElevatedPolicy("aws-us-gov", s3Read, maxEl)
-	if err != nil || len(all) > MaxPolicyChars {
-		t.Fatalf("the all-maximum policy: %d chars, %v", len(all), err)
-	}
-	smallIAM, _ := ElevatedPolicy("aws", nil, Elevation{AllowIAM: true})
-	t.Logf("all-maximum: %d, smallest: %d (%d with allow_iam on) of %d", len(all), len(small), len(smallIAM), MaxPolicyChars)
-	// A fourth long entry on top is over: refused, naming the elevated policy.
-	four := append(append([]string{}, s3Read...), strings.Repeat("t", 63))
-	if _, err := ElevatedPolicy("aws-us-gov", four, maxEl); err == nil || !strings.Contains(err.Error(), "elevated session policy") {
-		t.Fatalf("an over-limit policy must be refused with the elevated-policy size error, got %v", err)
+	// Long entries on top of the all-maximum: refused once over, naming the
+	// elevated policy.
+	more := slices.Clone(longS3Read)
+	for i := 0; ; i++ {
+		more = append(more, strings.Repeat(string(rune('a'+i)), 63))
+		_, err := ElevatedPolicy("aws-us-gov", more, maxEl)
+		if err != nil {
+			if !strings.Contains(err.Error(), "elevated session policy") || !strings.Contains(err.Error(), "2048") {
+				t.Fatalf("an over-limit policy must be refused with the elevated-policy size error, got %v", err)
+			}
+			break
+		}
+		if i == 10 {
+			t.Fatal("ten more long entries still fit: the size check is not reached")
+		}
 	}
 	// and the limit is still enforced with the prefix on
 	var many []string
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 20; i++ {
 		many = append(many, strings.Repeat("b", 60)+"/x/")
 	}
 	if _, err := ElevatedPolicy("aws", many, Elevation{BoxBucketPrefix: "culibox-"}); err == nil || !strings.Contains(err.Error(), "2048") {
@@ -506,7 +711,7 @@ func TestElevatedPolicyDeniesS3ExposureExceptOnBoxBuckets(t *testing.T) {
 		"s3:PutObject", "s3:DeleteObject", "s3:PutBucketTagging", "s3:PutBucketVersioning", "s3:PutEncryptionConfiguration",
 		"s3:PutLifecycleConfiguration", "s3:PutBucketLogging", "s3:PutBucketCORS", "s3:PutBucketWebsite",
 		"s3:PutBucketNotification", "s3:PutObjectTagging", "s3:PutBucketObjectLockConfiguration",
-		"s3:PutReplicationConfiguration" + "X", // not a real action: guards against a wildcard swallowing Put*
+		"s3:PutX", // not a real action: guards against a wildcard swallowing Put* (s3:Put*Replication* would catch a PutReplication...X, #329)
 		"s3:PutBucketRequestPayment", "s3:PutIntelligentTieringConfiguration", "s3:PutAccelerateConfiguration",
 		"s3:PutMetricsConfiguration", "s3:PutInventoryConfiguration", "s3:PutAnalyticsConfiguration"} {
 		for _, pc := range []struct{ name, pol string }{{"on", on}, {"off", off}, {"none", none}, {"neither", neither}} {

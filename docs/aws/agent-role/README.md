@@ -7,9 +7,10 @@ for 15 minutes at a time, and hands the credentials to the box through `credenti
 - **Name:** `agentbox-agent` (variable `role_name`).
 - **Permissions:** the AWS-managed `ReadOnlyAccess` policy. That is the ceiling. Each mint
   also carries a session policy generated from the connection, which denies data reads
-  (S3 objects outside the connection's `s3_read` allowlist, Secrets Manager values, SSM
-  parameters, DynamoDB items, KMS decrypt outside S3). Effective permissions are the
-  intersection of the two.
+  (S3 objects outside the connection's `s3_read` allowlist, S3 Express directory bucket
+  sessions and S3 Access Grants credentials, Secrets Manager values, SSM parameters,
+  DynamoDB items, KMS decrypt outside S3). Effective permissions are the intersection of
+  the two.
   CuliBox simulates the role's own policy at spawn to check whether it can write, so a
   custom permissions policy must allow `iam:SimulatePrincipalPolicy` on the role itself
   (`ReadOnlyAccess` already does).
@@ -83,6 +84,15 @@ Only a sandbox or lab account for now. **Do not apply this to a company or produ
 account until CuliBox can redact command output, which it cannot yet:** with read access an agent can still pull data
 into its transcript that `ReadOnlyAccess` allows and the session policy does not deny
 (Lambda code URLs, ECR layers, Athena and Glue results, CloudWatch Logs, among others).
+
+**What the read scope denies, exactly.** The session policy denies these data classes and no
+others: S3 objects outside `s3_read` (S3 Express directory bucket sessions and S3 Access Grants
+credentials included), Secrets Manager secret values, Parameter Store values, DynamoDB items (stream records included), and KMS
+decryption other than through S3. Every other data store stays readable **by design**, because an
+investigation needs it: Kinesis Data Streams records, SQS messages, CloudWatch Logs events and the
+like. That includes copies: a DynamoDB table that delivers its item changes to a Kinesis Data
+Streams destination exposes those items through the stream
+([#306](https://github.com/culiops/culibox/issues/306)).
 
 ## SSO-direct mode (read-only permission sets)
 
@@ -337,7 +347,7 @@ refused while any other box overlaps that folder.
 **Elevated session policy.** Every write credential carries a session policy: `Allow * *`
 intersected with the role's policies, then the same data-read denies as the read role. On top
 of that, always-on guard denies keep the window a real bound and the audit trail intact:
-`sts:AssumeRole*`, `GetFederationToken` and `GetSessionToken` (a chained credential could
+`sts:AssumeRo*` (every `AssumeRole` call and `AssumeRoot`), `GetFederationToken` and `GetSessionToken` (a chained or root credential could
 outlive the window), the calls that create long-lived credentials (`iam:CreateAccessKey`,
 `CreateLoginProfile`, `UpdateLoginProfile`, `CreateServiceSpecificCredential`,
 `UploadSSHPublicKey`), any `iam:*` on `agentbox-*` roles (the agent cannot edit its own
@@ -345,6 +355,19 @@ roles), and the CloudTrail changes that would blind the trail (`StopLogging`, `D
 `UpdateTrail`, `PutEventSelectors`). IAM writes are denied too unless the connection sets
 `allow_iam`; with them denied, the credential calls above that `iam:Create*` and `iam:Update*`
 already cover are not written twice, to keep the policy under STS's 2,048 characters.
+
+**Policy size.** STS takes at most 2,048 characters of session policy. CuliBox's own denies use
+about 1,500 of them; every `s3_read` entry, `box_bucket_prefix` and `pass_role_prefix` add the
+rest. A connection over the limit is refused when the config loads or the connection is saved,
+and the message gives the policy's size, the limit and how much of it is CuliBox's own. A newer
+CuliBox can deny more in the window, so a connection close to the limit may be refused after an
+upgrade: shorten or drop `s3_read` entries, or shorten the prefixes. Three long `s3_read` entries
+with both prefixes at their 40-character maximum fit. To fit, the policy writes some groups of
+denied actions as one pattern (`ssm:GetParameter*` for the four parameter reads,
+`dynamodb:*GetItem`, `dynamodb:Export*`, `s3:Put*Replication*`). Each pattern matches exactly
+the actions it replaces in AWS's action list as of the snapshot the read-only gate embeds, and
+an action AWS adds later under a pattern is denied too: a pattern never denies less than the
+names it replaces.
 
 **`iam:PassRole` is denied unless you name a prefix.** A service that runs as a passed role
 (Lambda, ECS, Glue, CodeBuild, Step Functions) reads whatever that role can read, and the session
@@ -387,6 +410,49 @@ What this does not stop: a box bucket can be made public, including a bucket a h
 that name; code run as a passed role (with `pass_role_prefix`) is not bound by the session policy
 and can change any bucket that role can; and with `allow_iam` on, the agent can create a role that
 does it.
+
+**S3 Access Grants is off
+([#322](https://github.com/culiops/culibox/issues/322)).** `s3:GetDataAccess` returns credentials
+of an Access Grants location's IAM role, and the session policy does not bound those, so its
+object-read deny would not hold for them. Both the read role's session policy and the window deny
+`s3:GetDataAccess` (it is one of the data reads; `ReadOnlyAccess` allows it through `s3:Get*`).
+The window also denies every Access Grants change (`s3:*eAccessGrant*`: creating, updating,
+associating, deleting or dissociating grants, locations, instances and the Identity Center link;
+the instance resource policy is `s3:Put*Policy*` above). Reads (`GetAccessGrant`,
+`ListAccessGrants` and the like) stay allowed. A grant, location or instance carries no bucket
+name, so box buckets get no exception: a stack that changes Access Grants cannot apply in the
+window.
+
+**S3 Express directory buckets are closed
+([#323](https://github.com/culiops/culibox/issues/323)).** A directory bucket's objects are not
+read with `s3:GetObject`: `s3express:CreateSession` returns session credentials for the whole
+bucket. `ReadOnlyAccess` allows it in `ReadOnly` mode, so both the read role's session policy and
+the window deny `s3express:CreateSession` on every directory bucket. `s3_read` does not reach
+them: a session covers the whole bucket, so a `bucket/prefix/` entry could not be honoured. The
+window also denies `s3express:Put*Policy` (bucket and access point policies) and
+`s3express:DeleteBucketPolicy`, with no box-bucket exception: an exception would cost a
+directory-bucket ARN in a policy that is near STS's limit (see Policy size), and with sessions
+denied the window cannot use a directory bucket anyway. Creating one and the reads
+(`GetBucketPolicy`, `ListAllMyDirectoryBuckets`) stay allowed; a stack that reads or writes its
+objects cannot apply in the window.
+
+**Resource policies on the other denied data are denied
+([#324](https://github.com/culiops/culibox/issues/324)).** A resource policy can give another
+account the items, parameters or secret values the window denies the session, with no read by the
+session. The window denies, with no exception (no setting names a prefix for tables, parameters
+or secrets):
+
+- `dynamodb:PutResourcePolicy` and `dynamodb:DeleteResourcePolicy` (tables, streams, indexes);
+- `ssm:*ResourcePolicy`: `PutResourcePolicy` and `DeleteResourcePolicy` (parameters can be
+  shared with other accounts; sharing through AWS RAM attaches the same policy);
+- `secretsmanager:PutResourcePolicy` and `secretsmanager:DeleteResourcePolicy`.
+
+Removing a policy is denied too, because it can hold the deny that keeps someone out. The reads
+(`GetResourcePolicy`, `GetResourcePolicies`) stay allowed, so Terraform can refresh; a stack that
+sets one of these policies cannot apply in the window. **KMS key policies and grants are not
+denied**: a key policy or grant alone gives another account no item, parameter or secret value
+(it would also need the resource policy above), and `kms:CreateGrant` is what EBS, RDS and other
+services call during an ordinary apply. The grant panel says so.
 
 Two exceptions let Terraform plan and destroy in the window; the read role has neither:
 

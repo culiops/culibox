@@ -1,0 +1,271 @@
+package awsscope
+
+import (
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// windowConfigs are elevated configs that differ in every input that changes
+// the policy's shape: s3_read, both prefixes, allow_iam, the partition.
+func windowConfigs(t *testing.T) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for name, c := range map[string]struct {
+		partition string
+		s3Read    []string
+		el        Elevation
+	}{
+		"plain":       {"aws", nil, Elevation{}},
+		"s3_read":     {"aws", []string{"culishop-tfstate", "culishop-logs/AWSLogs/"}, Elevation{}},
+		"box":         {"aws", []string{"culishop-tfstate"}, Elevation{BoxBucketPrefix: "culibox-"}},
+		"everything":  {"aws", []string{"culishop-tfstate"}, Elevation{AllowIAM: true, BoxBucketPrefix: "culibox-", PassRolePrefix: "culibox-"}},
+		"all-maximum": {"aws", longS3Read, Elevation{BoxBucketPrefix: longBoxPrefix, PassRolePrefix: longRolePrefix}},
+	} {
+		s, err := ElevatedPolicy(c.partition, c.s3Read, c.el)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		out[name] = s
+	}
+	return out
+}
+
+// #322: S3 Access Grants hands out credentials of a location's IAM role
+// (s3:GetDataAccess) that the session policy does not bound, so the window
+// denies GetDataAccess and every Access Grants change that could create or
+// widen a grant. A grant, location or instance ARN carries no bucket name, so
+// box_bucket_prefix excepts none of them.
+func TestElevatedPolicyDeniesS3AccessGrants(t *testing.T) {
+	const (
+		inst = "arn:aws:s3:us-east-1:123456789012:access-grants/default"
+		loc  = inst + "/location/l-1"
+		gr   = inst + "/grant/g-1"
+	)
+	denied := []evalReq{
+		{"s3:GetDataAccess", inst, nil},
+		{"s3:CreateAccessGrant", inst, nil}, {"s3:CreateAccessGrant", loc, nil},
+		{"s3:CreateAccessGrantsInstance", inst, nil},
+		{"s3:CreateAccessGrantsLocation", inst, nil},
+		{"s3:UpdateAccessGrantsLocation", loc, nil},
+		{"s3:AssociateAccessGrantsIdentityCenter", inst, nil},
+		{"s3:PutAccessGrantsInstanceResourcePolicy", inst, nil}, // #307
+		// the pattern also denies the Access Grants deletes: no grant changes in a window
+		{"s3:DeleteAccessGrant", gr, nil}, {"s3:DeleteAccessGrantsLocation", loc, nil},
+		{"s3:DeleteAccessGrantsInstance", inst, nil}, {"s3:DeleteAccessGrantsInstanceResourcePolicy", inst, nil},
+		{"s3:DissociateAccessGrantsIdentityCenter", inst, nil},
+	}
+	// Reads stay allowed: Terraform's refresh of Access Grants resources, and
+	// seeing which grants exist.
+	allowed := []evalReq{
+		{"s3:GetAccessGrant", gr, nil}, {"s3:GetAccessGrantsInstance", inst, nil}, {"s3:GetAccessGrantsLocation", loc, nil},
+		{"s3:GetAccessGrantsInstanceForPrefix", inst, nil}, {"s3:GetAccessGrantsInstanceResourcePolicy", inst, nil},
+		{"s3:ListAccessGrants", inst, nil}, {"s3:ListAccessGrantsInstances", "*", nil},
+		{"s3:ListAccessGrantsLocations", inst, nil}, {"s3:ListCallerAccessGrants", inst, nil},
+	}
+	for name, p := range windowConfigs(t) {
+		for _, r := range denied {
+			if got := evaluate(t, p, r); got != "deny" {
+				t.Errorf("%s: %s on %s is %s", name, r.action, r.resource, got)
+			}
+		}
+		for _, r := range allowed {
+			if got := evaluate(t, p, r); got != "allow" {
+				t.Errorf("%s: %s on %s is %s, want allow", name, r.action, r.resource, got)
+			}
+		}
+	}
+}
+
+// The Access Grants pattern is pinned against AWS's catalog: it covers every
+// Access Grants write and no read.
+func TestS3AccessGrantsPatternIsEveryWriteAndNoRead(t *testing.T) {
+	got := expandCatalog(t, s3AccessGrantsWrites)
+	want := []string{"s3:AssociateAccessGrantsIdentityCenter", "s3:CreateAccessGrant", "s3:CreateAccessGrantsInstance",
+		"s3:CreateAccessGrantsLocation", "s3:DeleteAccessGrant", "s3:DeleteAccessGrantsInstance",
+		"s3:DeleteAccessGrantsInstanceResourcePolicy", "s3:DeleteAccessGrantsLocation",
+		"s3:DissociateAccessGrantsIdentityCenter", "s3:UpdateAccessGrantsLocation"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s expands to %v, want %v", s3AccessGrantsWrites, got, want)
+	}
+	// Every catalog action naming Access Grants is either matched, a read, or
+	// already denied by s3:Put*Policy* (#307).
+	for _, a := range expandCatalog(t, "s3:*AccessGrant*") {
+		_, name, _ := strings.Cut(a, ":")
+		if !slices.Contains(want, a) && !strings.HasPrefix(name, "Get") && !strings.HasPrefix(name, "List") && a != "s3:PutAccessGrantsInstanceResourcePolicy" {
+			t.Errorf("%s is neither denied nor a read", a)
+		}
+	}
+}
+
+// #323: S3 Express One Zone directory buckets are authorized through
+// s3express:CreateSession, not s3:GetObject, so the S3 read deny and s3_read
+// never covered them. ReadOnlyAccess allows CreateSession in ReadOnly mode
+// (awsprobe testdata), so both scopes deny it on every directory bucket:
+// s3_read does not map to directory buckets, and a box bucket gets no
+// exception. The window also denies the directory bucket and access point
+// policy writes.
+func TestPoliciesDenyS3ExpressSessionsAndPolicyWrites(t *testing.T) {
+	const (
+		dir     = "arn:aws:s3express:us-east-1:123456789012:bucket/human-data--use1-az4--x-s3"
+		dirRead = "arn:aws:s3express:us-east-1:123456789012:bucket/culishop-tfstate--use1-az4--x-s3"
+		dirBox  = "arn:aws:s3express:us-east-1:123456789012:bucket/culibox-lab--use1-az4--x-s3"
+		dirAP   = "arn:aws:s3express:us-east-1:123456789012:accesspoint/culibox-ap--use1-az4--xa-s3"
+	)
+	all := windowConfigs(t)
+	win := maps.Clone(all)
+	for name, r := range map[string][]string{"empty": nil, "s3_read": {"culishop-tfstate", "culishop-tfstate--use1-az4--x-s3"}} {
+		p, err := SessionPolicy("aws", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all["investigate "+name] = p
+	}
+	for name, p := range all {
+		for _, res := range []string{dir, dirRead, dirBox} {
+			for _, mode := range []map[string]string{nil, {"s3express:SessionMode": "ReadOnly"}, {"s3express:SessionMode": "ReadWrite"}} {
+				if got := evaluate(t, p, evalReq{"s3express:CreateSession", res, mode}); got != "deny" {
+					t.Errorf("%s: CreateSession on %s (%v) is %s", name, res, mode, got)
+				}
+			}
+		}
+		// reads and bucket creation stay allowed
+		for _, r := range []evalReq{{"s3express:GetBucketPolicy", dir, nil}, {"s3express:ListAllMyDirectoryBuckets", "*", nil},
+			{"s3express:GetAccessPointPolicy", dirAP, nil}, {"s3express:CreateBucket", dirBox, nil}} {
+			if got := evaluate(t, p, r); got != "allow" {
+				t.Errorf("%s: %s is %s, want allow", name, r.action, got)
+			}
+		}
+	}
+	for name, p := range win {
+		for _, r := range []evalReq{{"s3express:PutBucketPolicy", dir, nil}, {"s3express:PutBucketPolicy", dirBox, nil},
+			{"s3express:DeleteBucketPolicy", dir, nil}, {"s3express:DeleteBucketPolicy", dirBox, nil},
+			{"s3express:PutAccessPointPolicy", dirAP, nil}} {
+			if got := evaluate(t, p, r); got != "deny" {
+				t.Errorf("%s: %s on %s is %s", name, r.action, r.resource, got)
+			}
+		}
+	}
+}
+
+// The s3express policy-write pattern is pinned against AWS's catalog.
+func TestS3ExpressPolicyPatternIsThePolicyPuts(t *testing.T) {
+	got := expandCatalog(t, s3ExpressPolicyPuts)
+	if want := []string{"s3express:PutAccessPointPolicy", "s3express:PutBucketPolicy"}; !slices.Equal(got, want) {
+		t.Fatalf("%s expands to %v, want %v", s3ExpressPolicyPuts, got, want)
+	}
+}
+
+// #324: a resource policy on a table, stream, parameter or secret can give
+// another account the data the window denies the session, without any read by
+// the session. The window denies writing or removing those policies, with no
+// exception (no config names a resource prefix for them). KMS key policies and
+// grants stay allowed: on their own they reach no item, parameter or secret
+// value, and CreateGrant is what EBS, RDS and others call on an apply.
+func TestElevatedPolicyDeniesDataResourcePolicyWrites(t *testing.T) {
+	const (
+		table  = "arn:aws:dynamodb:us-east-1:123456789012:table/orders"
+		stream = table + "/stream/2026-11-16T00:00:00.000"
+		param  = "arn:aws:ssm:us-east-1:123456789012:parameter/culishop/db/password"
+		secret = "arn:aws:secretsmanager:us-east-1:123456789012:secret:db-AbCdEf"
+		boxTab = "arn:aws:dynamodb:us-east-1:123456789012:table/culibox-lab"
+		key    = "arn:aws:kms:us-east-1:123456789012:key/k"
+	)
+	denied := []evalReq{
+		{"dynamodb:PutResourcePolicy", table, nil}, {"dynamodb:PutResourcePolicy", stream, nil}, {"dynamodb:PutResourcePolicy", boxTab, nil},
+		{"dynamodb:DeleteResourcePolicy", table, nil}, {"dynamodb:DeleteResourcePolicy", stream, nil},
+		{"ssm:PutResourcePolicy", param, nil}, {"ssm:DeleteResourcePolicy", param, nil},
+		{"secretsmanager:PutResourcePolicy", secret, nil}, {"secretsmanager:DeleteResourcePolicy", secret, nil},
+	}
+	allowed := []evalReq{
+		// reads of the policies: Terraform refreshes them
+		{"dynamodb:GetResourcePolicy", table, nil}, {"ssm:GetResourcePolicies", param, nil},
+		{"secretsmanager:GetResourcePolicy", secret, nil}, {"secretsmanager:ValidateResourcePolicy", secret, nil},
+		// creating and changing the resources themselves
+		{"dynamodb:CreateTable", table, nil}, {"ssm:PutParameter", param, nil}, {"secretsmanager:CreateSecret", secret, nil},
+		{"secretsmanager:PutSecretValue", secret, nil},
+		// KMS is not denied (see above)
+		{"kms:PutKeyPolicy", key, nil}, {"kms:CreateGrant", key, nil}, {"kms:ReplicateKey", key, nil},
+	}
+	for name, p := range windowConfigs(t) {
+		for _, r := range denied {
+			if got := evaluate(t, p, r); got != "deny" {
+				t.Errorf("%s: %s on %s is %s", name, r.action, r.resource, got)
+			}
+		}
+		for _, r := range allowed {
+			if got := evaluate(t, p, r); got != "allow" {
+				t.Errorf("%s: %s on %s is %s, want allow", name, r.action, r.resource, got)
+			}
+		}
+	}
+	inv, _ := SessionPolicy("aws", nil)
+	if strings.Contains(inv, "ResourcePolicy") {
+		t.Fatalf("the investigate policy must not carry #324's denies (the read role cannot write): %s", inv)
+	}
+}
+
+// The SSM pattern is pinned against AWS's catalog: Put and Delete only, not
+// GetResourcePolicies.
+func TestSSMResourcePolicyPatternIsPutAndDelete(t *testing.T) {
+	got := expandCatalog(t, ssmResourcePolicyWrites)
+	if want := []string{"ssm:DeleteResourcePolicy", "ssm:PutResourcePolicy"}; !slices.Equal(got, want) {
+		t.Fatalf("%s expands to %v, want %v", ssmResourcePolicyWrites, got, want)
+	}
+	for _, a := range dataResourcePolicyDenies {
+		if len(expandCatalog(t, a)) == 0 {
+			t.Errorf("%s names no action in AWS's catalog", a)
+		}
+	}
+}
+
+// #329 review: the read scope denies s3:GetDataAccess too, as a data read:
+// ReadOnlyAccess allows it (s3:Get*), and a grant that names the read role
+// would otherwise hand out credentials beyond s3_read. The Access Grants
+// changes are the window's only (the read role cannot write).
+func TestSessionPolicyDeniesAccessGrantsCredentials(t *testing.T) {
+	const inst = "arn:aws:s3:us-east-1:123456789012:access-grants/default"
+	for _, r := range [][]string{nil, {"culishop-tfstate"}} {
+		p, err := SessionPolicy("aws", r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := evaluate(t, p, evalReq{"s3:GetDataAccess", inst, nil}); got != "deny" {
+			t.Errorf("s3_read %v: s3:GetDataAccess is %s", r, got)
+		}
+		if strings.Contains(p, "AccessGrant") {
+			t.Errorf("the read scope carries the window's Access Grants denies: %s", p)
+		}
+	}
+	if !slices.Contains(DataReadDenies(), "s3:GetDataAccess") {
+		t.Error("DataReadDenies lacks s3:GetDataAccess")
+	}
+	// The window denies it once: through the data reads, not twice.
+	for name, p := range windowConfigs(t) {
+		if n := strings.Count(p, `"s3:GetDataAccess"`); n != 1 {
+			t.Errorf("%s: s3:GetDataAccess written %d times", name, n)
+		}
+	}
+}
+
+// Review of #329: sts:AssumeRoot mints root credentials of a member account,
+// and the window's guard must cover it like AssumeRole (it outlives the
+// window). The guard is written sts:AssumeRo*, which the catalog pins to the
+// three AssumeRole actions and AssumeRoot.
+func TestElevatedPolicyGuardDeniesAssumeRoot(t *testing.T) {
+	for name, p := range windowConfigs(t) {
+		for _, a := range []string{"sts:AssumeRoot", "sts:AssumeRole", "sts:AssumeRoleWithSAML", "sts:AssumeRoleWithWebIdentity"} {
+			if got := evaluate(t, p, evalReq{a, "*", nil}); got != "deny" {
+				t.Errorf("%s: %s is %s", name, a, got)
+			}
+		}
+	}
+	got := expandCatalog(t, "sts:AssumeRo*")
+	if want := []string{"sts:AssumeRole", "sts:AssumeRoleWithSAML", "sts:AssumeRoleWithWebIdentity", "sts:AssumeRoot"}; !slices.Equal(got, want) {
+		t.Fatalf("sts:AssumeRo* expands to %v, want %v", got, want)
+	}
+	if !slices.Contains(elevatedGuardDenies, "sts:AssumeRo*") {
+		t.Fatal("the guard must be written sts:AssumeRo*")
+	}
+}
