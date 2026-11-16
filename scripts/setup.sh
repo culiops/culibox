@@ -247,7 +247,7 @@ get_binary() {
       die "$gb_name does not hold a regular file named abduco"
     fi
     NEW_ABDUCO=$WORK/extract/abduco
-  else
+  elif ! command -v abduco >/dev/null 2>&1; then
     ABDUCO_NOTE="this release does not include abduco; culibox init checks for abduco"
   fi
 }

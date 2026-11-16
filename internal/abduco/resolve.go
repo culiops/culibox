@@ -74,13 +74,31 @@ func (l Lookup) Resolve(configured string) (Resolved, error) {
 
 // bundledOK says whether the abduco next to culibox may run. A culibox run from a
 // sticky shared directory such as /tmp would otherwise run whatever abduco another
-// local user created there, so the file must be ours (or root's) and writable by
-// no one else. why is "" when there is no such file at all.
+// local user put there: a file, a hard link to a root binary, or a symlink they can
+// retarget later. So the folder must be writable by us or root alone, and so must
+// the folder a symlink points into; the file itself must be ours (or root's) and
+// writable by no one else. why is "" when there is no such file at all.
 func bundledOK(path string, uid int) (why string, ok bool) {
-	fi, err := os.Stat(path) // follows a symlinked abduco
+	li, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return "", false
 	}
+	if err != nil {
+		return err.Error(), false
+	}
+	if why := safeDir(filepath.Dir(path), uid); why != "" {
+		return why, false
+	}
+	target := path
+	if li.Mode()&os.ModeSymlink != 0 {
+		if target, err = filepath.EvalSymlinks(path); err != nil {
+			return err.Error(), false
+		}
+		if why := safeDir(filepath.Dir(target), uid); why != "" {
+			return "its link target's " + why, false
+		}
+	}
+	fi, err := os.Stat(target)
 	if err != nil {
 		return err.Error(), false
 	}
@@ -93,12 +111,35 @@ func bundledOK(path string, uid int) (why string, ok bool) {
 	if fi.Mode().Perm()&0o022 != 0 {
 		return fmt.Sprintf("writable by group or others (mode %o)", fi.Mode().Perm()), false
 	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return "cannot read its owner", false
-	}
-	if int(st.Uid) != uid && st.Uid != 0 {
-		return fmt.Sprintf("owned by uid %d, not by you or root", st.Uid), false
+	if why := ownedBy(fi, uid); why != "" {
+		return why, false
 	}
 	return "", true
+}
+
+// safeDir is "" when only uid or root can add, remove or replace files in dir.
+func safeDir(dir string, uid int) string {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return "folder: " + err.Error()
+	}
+	if fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Sprintf("folder %s is writable by group or others (mode %o)", dir, fi.Mode().Perm())
+	}
+	if why := ownedBy(fi, uid); why != "" {
+		return "folder " + dir + " is " + why
+	}
+	return ""
+}
+
+// ownedBy is "" when fi belongs to uid or root.
+func ownedBy(fi os.FileInfo, uid int) string {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "of unknown owner"
+	}
+	if int(st.Uid) != uid && st.Uid != 0 {
+		return fmt.Sprintf("owned by uid %d, not by you or root", st.Uid)
+	}
+	return ""
 }

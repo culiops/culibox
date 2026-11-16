@@ -664,6 +664,14 @@ case_abduco_absent() {
   if [ -e "$PFX/abduco" ]; then fail "no abduco appears from nowhere"; else pass "no abduco appears from nowhere"; fi
   says "culibox init checks for abduco" "the output says init will check for abduco"
 }
+case_abduco_absent_on_path() {
+  newcase abduco_absent_on_path
+  mkrelease "$min" latest
+  tool_stub abduco
+  run_setup
+  ok_rc "a tarball without abduco installs when abduco is on PATH"
+  silent "does not include abduco" "no abduco note when one is on PATH"
+}
 case_abduco_identical() {
   newcase abduco_identical
   MKREL_ABDUCO=1 mkrelease "$min" latest

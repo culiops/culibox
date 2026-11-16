@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // resolveFixture is a culibox "install dir" with an optional abduco next to it,
@@ -210,5 +211,141 @@ func TestResolveNothingFound(t *testing.T) {
 	_, err := f.lookup(os.Getuid()).Resolve("")
 	if err == nil || !strings.Contains(err.Error(), "next to culibox") || !strings.Contains(err.Error(), "PATH") {
 		t.Fatalf("err = %v, want one naming both places", err)
+	}
+}
+
+// A sticky world-writable folder (/tmp): another user can plant a symlink to a
+// root-owned binary there and retarget it later, so nothing in it is trusted.
+func TestResolveSkipsSymlinkPlantInSharedDir(t *testing.T) {
+	f := newResolveFixture(t)
+	if err := os.Chmod(f.dir, 0o1777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/bin/sh", filepath.Join(f.dir, "abduco")); err != nil {
+		t.Fatal(err)
+	}
+	f.onPath = "/usr/bin/abduco"
+	r, err := f.lookup(os.Getuid()).Resolve("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Source != SourcePath || !strings.Contains(r.Skipped, "folder") {
+		t.Fatalf("got %+v, want PATH with a skip reason about the folder", r)
+	}
+}
+
+func TestResolveSkipsDirWritableByOthers(t *testing.T) {
+	for _, mode := range []os.FileMode{0o775, 0o757, 0o1777} {
+		f := newResolveFixture(t)
+		f.bundle(t, 0o755)
+		if err := os.Chmod(f.dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		f.onPath = "/usr/bin/abduco"
+		r, err := f.lookup(os.Getuid()).Resolve("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Source != SourcePath || !strings.Contains(r.Skipped, "folder") {
+			t.Errorf("folder mode %o: got %+v, want PATH with a folder skip reason", mode, r)
+		}
+	}
+}
+
+// A symlink next to culibox is only as safe as the folder its target sits in.
+func TestResolveSkipsSymlinkIntoSharedDir(t *testing.T) {
+	f := newResolveFixture(t)
+	shared := t.TempDir()
+	target := filepath.Join(shared, "abduco")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o1777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(f.dir, "abduco")); err != nil {
+		t.Fatal(err)
+	}
+	f.onPath = "/usr/bin/abduco"
+	r, err := f.lookup(os.Getuid()).Resolve("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Source != SourcePath || !strings.Contains(r.Skipped, "folder") {
+		t.Fatalf("got %+v, want PATH with a folder skip reason", r)
+	}
+}
+
+// A symlink to a safe file in a safe folder is used, by its own name (the adapter
+// matches attach clients by the basename "abduco").
+func TestResolveAcceptsSafeSymlink(t *testing.T) {
+	f := newResolveFixture(t)
+	target := filepath.Join(t.TempDir(), "abduco-0.6")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(f.dir, "abduco")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	f.onPath = "/usr/bin/abduco"
+	r, err := f.lookup(os.Getuid()).Resolve("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Source != SourceBundled || filepath.Base(r.Path) != "abduco" {
+		t.Fatalf("got %+v, want the link next to culibox", r)
+	}
+}
+
+// Upgrade: a session started by the PATH abduco (bare "abduco") is listed, attached
+// and ended by an adapter that runs a bundled copy by its absolute path.
+func TestBundledAdapterAdoptsPathAbducoSession(t *testing.T) {
+	old := testAdapter(t)
+	id := "upgrade-1"
+	if err := old.Create(id, "", []string{"sh", "-c", "sleep 300"}, os.Environ()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = old.Kill(id) })
+
+	src, err := exec.LookPath("abduco")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundled := filepath.Join(t.TempDir(), "abduco")
+	if err := os.WriteFile(bundled, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(bundled, old.SocketDir, old.PidDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ls, _ := a.List(); len(ls) != 1 || ls[0] != id {
+		t.Fatalf("List = %v, want [%s]", ls, id)
+	}
+	if !a.Alive(id) || !a.InnerAlive(id) {
+		t.Fatal("the PATH abduco's session is not alive through the bundled adapter")
+	}
+	cmd, f, err := a.Attach(id, 24, 80)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if cmd.Path != bundled {
+		t.Errorf("attach ran %s, want %s", cmd.Path, bundled)
+	}
+	_ = f.Close()
+	if err := a.Kill(id); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && a.Alive(id) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if a.Alive(id) || a.InnerAlive(id) {
+		t.Fatal("session still alive after the bundled adapter killed it")
 	}
 }
