@@ -343,7 +343,8 @@ outlive the window), the calls that create long-lived credentials (`iam:CreateAc
 `UploadSSHPublicKey`), any `iam:*` on `agentbox-*` roles (the agent cannot edit its own
 roles), and the CloudTrail changes that would blind the trail (`StopLogging`, `DeleteTrail`,
 `UpdateTrail`, `PutEventSelectors`). IAM writes are denied too unless the connection sets
-`allow_iam`.
+`allow_iam`; with them denied, the credential calls above that `iam:Create*` and `iam:Update*`
+already cover are not written twice, to keep the policy under STS's 2,048 characters.
 
 **`iam:PassRole` is denied unless you name a prefix.** A service that runs as a passed role
 (Lambda, ECS, Glue, CodeBuild, Step Functions) reads whatever that role can read, and the session
@@ -356,6 +357,36 @@ refused). The match is on the text after `role/`, and `*` also matches `/`: `rol
 prefix. Passing is not creating: a role of that name must already exist, or `allow_iam` must be
 on. **With `allow_iam` on, the agent can create a role of that name or any trust and use it, so
 the data-read blocks are advisory in that window**; the grant panel and the editor say so.
+
+**Making S3 data public is denied, except on box buckets
+([#307](https://github.com/culiops/culibox/issues/307)).** The data-read deny binds only these
+credentials. A bucket made public can be read with an unsigned request, and a bucket shared
+with another account can be read from there, so the window denies:
+
+- `s3:Put*Policy*`: bucket, access point (Object Lambda included), Multi-Region Access Point and
+  Access Grants policies;
+- `s3:DeleteBucketPolicy`: a bucket policy can hold the deny that keeps an older grant from working;
+- `s3:Put*Acl`: bucket, object and object-version ACLs, which also covers a `CreateBucket`,
+  `PutObject` or `CopyObject` sent with an ACL;
+- `s3:PutBucketPublicAccessBlock`: putting or deleting a bucket's public access block;
+- `s3:PutBucketOwnershipControls`: putting or deleting a bucket's object ownership setting,
+  which can turn ACLs back on;
+- `s3:PutAccountPublicAccessBlock`: the account's public access block. It has no bucket, so it
+  is denied with or without a prefix.
+
+With `box_bucket_prefix` set, all but the last are allowed on buckets named `<prefix>*` and on
+their objects, so a stack can still set a policy, an ACL or a public access block on the buckets
+it creates. Access point policies stay denied even for a box bucket: an access point ARN carries
+no bucket name. Without the prefix they are denied on every bucket, so a stack that sets a bucket
+policy, an ACL, a public access block or ownership controls fails to apply in the window, even
+when the change would tighten the bucket. Name the buckets your labs create with the prefix.
+Reads are unchanged: `GetBucketPolicy`, `GetBucketAcl` and the other reads Terraform's refresh
+makes stay allowed.
+
+What this does not stop: a box bucket can be made public, including a bucket a human created with
+that name; code run as a passed role (with `pass_role_prefix`) is not bound by the session policy
+and can change any bucket that role can; and with `allow_iam` on, the agent can create a role that
+does it.
 
 Two exceptions let Terraform plan and destroy in the window; the read role has neither:
 
@@ -371,7 +402,7 @@ Two exceptions let Terraform plan and destroy in the window; the read role has n
   create in shared buckets (`aws`, `cdk-`, `sagemaker-`, `elasticbeanstalk-`, `amplify-`,
   `cf-templates-`, `codepipeline-`, `config-bucket-`) and `agentbox-` are refused. Off by default.
 
-**What `box_bucket_prefix` opens, honestly.** It weakens the window's read deny in two ways:
+**What `box_bucket_prefix` opens, honestly.** It weakens the window's limits in three ways:
 
 - **Every bucket whose name starts with the prefix is readable in the window.** That includes
   one a human created with that name, and one in another account, because an S3 ARN has no
@@ -398,13 +429,11 @@ Two exceptions let Terraform plan and destroy in the window; the read role has n
   needs no PassRole and can write to a bucket outside the account that the agent then reads
   without signing. A lab that needs one of these actions cannot run it in a write window.
 
-  **Related route: a public bucket.** `s3:PutBucketPolicy`, `PutBucketAcl` and
-  `PutPublicAccessBlock` stay allowed in the window. The agent can make a bucket public, so
-  anything the window can read (an `s3_read` bucket, a box bucket) can be exposed to the
-  internet from there. A bucket the session may not read can be exposed too: public access
-  settings, `PutBucketPolicy`, `PutBucketAcl` and `PutObjectAcl` are not limited by the data-read
-  deny, so data that reaches a bucket by another route can be read unsigned. This is a known gap,
-  tracked in [#307](https://github.com/culiops/culibox/issues/307).
+- **Every box bucket can be made public.** Bucket policies, ACLs and public access blocks are
+  denied in the window except on box buckets (see above,
+  [#307](https://github.com/culiops/culibox/issues/307)), so these credentials cannot expose a
+  bucket outside the prefix, an `s3_read` bucket included. They can expose a box bucket, with
+  whatever is in it.
 
 **What the opt-in does not change.** Code run as a passed role (a Lambda function, an ECS task,
 an EC2 instance profile, a Glue or CodeBuild job) reads whatever that role can read and can hand
@@ -427,7 +456,7 @@ the window. A stack whose plan reads one of them cannot run in a write window.
 trusts an outside account. That is persistence past the window, and no session-policy
 condition can check trust-policy content. With `allow_iam` on, the window is a bound on
 *these credentials*, not on what the agent can set up. The same holds, more weakly, with
-`allow_iam` off: resource policies and grants (an S3 bucket policy, a KMS grant, an EC2 key
+`allow_iam` off: resource policies and grants (a box bucket's policy, a KMS grant, an EC2 key
 pair, a Lambda function URL) outlive the window.
 
 ### Emergency revoke

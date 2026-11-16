@@ -219,13 +219,26 @@ func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
 		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect"],"Resource":"*"},`,
 		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords"],"Resource":"*"},`+
 			`{"Effect":"Deny","Action":["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath","ssm:GetParameterHistory"],"NotResource":["arn:aws:ssm:*::parameter/aws/service/*"]},`, 1)
-	// #302: with pass_role_prefix unset, iam:PassRole joins the guard denies.
-	want = strings.Replace(want, `"cloudtrail:PutEventSelectors"],"Resource":"*"}`, `"cloudtrail:PutEventSelectors","iam:PassRole"],"Resource":"*"}`, 1)
-	// #301: an s3_read bucket is readable, so the managed-copy denies are on (no replication exception without a prefix).
-	want = strings.Replace(want, `"Resource":"*"}]}`, `"Resource":"*"},{"Effect":"Deny","Action":["dynamodb:ExportTableToPointInTime","rds:StartExportTask","s3:CreateJob","datasync:StartTaskExecution","backup:StartRestoreJob","s3:PutReplicationConfiguration"],"Resource":"*"}]}`, 1)
-	if want == elevatedBefore211 {
+	// #307 folds every unconditional deny into the guard statement to fit STS's
+	// limit, so from the guards on the tail is written out. It holds, in order:
+	// the guards minus the four that iam:Create*/iam:Update* already deny
+	// (CreateAccessKey, CreateLoginProfile, UpdateLoginProfile,
+	// CreateServiceSpecificCredential), iam:PassRole (#302, prefix unset), the
+	// IAM writes, the managed copies (#301), the account public access block and,
+	// with no box prefix, replication and the S3 exposure calls (#307); then the
+	// agent's own roles, unchanged.
+	head, _, ok := strings.Cut(want, `{"Effect":"Deny","Action":["sts:AssumeRole*"`)
+	if !ok || head == want {
 		t.Fatal("test literal out of date: the replacement did not apply")
 	}
+	want = head + `{"Effect":"Deny","Action":["sts:AssumeRole*","sts:GetFederationToken","sts:GetSessionToken",` +
+		`"iam:UploadSSHPublicKey","cloudtrail:StopLogging","cloudtrail:DeleteTrail","cloudtrail:UpdateTrail","cloudtrail:PutEventSelectors",` +
+		`"iam:PassRole",` +
+		`"iam:Create*","iam:Delete*","iam:Put*","iam:Attach*","iam:Detach*","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*",` +
+		`"dynamodb:ExportTableToPointInTime","rds:StartExportTask","s3:CreateJob","datasync:StartTaskExecution","backup:StartRestoreJob",` +
+		`"s3:PutAccountPublicAccessBlock",` +
+		`"s3:PutReplicationConfiguration","s3:Put*Policy*","s3:DeleteBucketPolicy","s3:Put*Acl","s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls"],"Resource":"*"},` +
+		`{"Effect":"Deny","Action":"iam:*","Resource":"arn:aws:iam::*:role/agentbox-*"}]}`
 	if got != want {
 		t.Fatalf("ElevatedPolicy (opt-in off) changed beyond the carve-out:\n got  %s\n want %s", got, want)
 	}
@@ -251,13 +264,22 @@ func TestElevatedPolicyKeepsTheInvestigateDeniesAndAddsTheGuards(t *testing.T) {
 			t.Fatalf("investigate statement %d differs in the elevated policy:\n %s\n %s", i, a, b)
 		}
 	}
-	for _, a := range []string{"sts:AssumeRole*", "sts:GetFederationToken", "sts:GetSessionToken",
+	// Each guard is denied with allow_iam on and off. With it off, four of them
+	// are written only as the iam:Create*/iam:Update* write denies (#307 size),
+	// so this asks the evaluator, not the text.
+	withIAM, _ := ElevatedPolicy("aws", []string{"culishop-tfstate"}, Elevation{AllowIAM: true, PassRolePrefix: "lab-"})
+	for _, a := range []string{"sts:AssumeRole", "sts:AssumeRoleWithWebIdentity", "sts:GetFederationToken", "sts:GetSessionToken",
 		"iam:CreateAccessKey", "iam:CreateLoginProfile", "iam:UpdateLoginProfile",
 		"iam:CreateServiceSpecificCredential", "iam:UploadSSHPublicKey",
 		"cloudtrail:StopLogging", "cloudtrail:DeleteTrail", "cloudtrail:UpdateTrail", "cloudtrail:PutEventSelectors"} {
-		if !denied(p, a, "*") {
-			t.Errorf("guard deny missing: %s", a)
+		for name, pol := range map[string]string{"allow_iam off": s, "allow_iam on": withIAM} {
+			if got := evaluate(t, pol, evalReq{a, "arn:aws:iam::123456789012:user/x", nil}); got != "deny" {
+				t.Errorf("%s: guard %s is %s", name, a, got)
+			}
 		}
+	}
+	if !denied(parsePol(t, withIAM), "iam:CreateAccessKey", "*") {
+		t.Error("with allow_iam on, the credential guards must be written out")
 	}
 	if !denied(p, "iam:*", "arn:aws:iam::*:role/agentbox-*") {
 		t.Error("the agent's own roles must be off limits")
@@ -383,6 +405,26 @@ func TestElevatedPolicySizeBudget(t *testing.T) {
 	s, err := ElevatedPolicy("aws", []string{"culishop-tfstate"}, Elevation{})
 	if err != nil || len(s) > MaxPolicyChars {
 		t.Fatalf("the sandbox binding's policy must fit: %d chars, %v", len(s), err)
+	}
+}
+
+// matchesAny decides which guards the IAM write denies already cover (#307);
+// a false "covered" would drop a guard, so it must match only what IAM would.
+func TestMatchesAny(t *testing.T) {
+	for _, c := range []struct {
+		action string
+		want   bool
+	}{
+		{"iam:CreateAccessKey", true}, {"IAM:createaccesskey", true}, {"iam:UpdateLoginProfile", true},
+		{"iam:UploadSSHPublicKey", false}, {"iam:PassRole", false}, {"sts:AssumeRole*", false},
+		{"cloudtrail:UpdateTrail", false}, {"iamx:CreateRole", false},
+	} {
+		if got := matchesAny(iamWriteDenies, c.action); got != c.want {
+			t.Errorf("%s: got %v want %v", c.action, got, c.want)
+		}
+	}
+	if !matchesAny([]string{"s3:GetObject"}, "s3:getobject") || matchesAny([]string{"s3:Get*Acl"}, "s3:GetBucketAcl") {
+		t.Error("literal patterns match exactly; a pattern with an inner * is never treated as covering")
 	}
 }
 

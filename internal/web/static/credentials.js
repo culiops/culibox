@@ -2179,7 +2179,7 @@ function awsBuildRow(row) {
   adv.appendChild(pf.col);
   let boxHint = null;
   if (row.elevBoxPrefix) {
-    boxHint = awsEl("p", "hint full", "This elevate can read objects in buckets named " + row.elevBoxPrefix + "* (elevate.box_bucket_prefix, set in the config file).");
+    boxHint = awsEl("p", "hint full", "This elevate can read objects in, and change the policies, ACLs and public access blocks of, buckets named " + row.elevBoxPrefix + "* (elevate.box_bucket_prefix, set in the config file).");
     adv.appendChild(boxHint);
   }
   // What sso_direct hides and clears: S3 read, elevate and its window and IAM flag.

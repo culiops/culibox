@@ -75,8 +75,10 @@ func ValidS3Entry(s string) error {
 
 // ValidBoxBucketPrefix accepts an elevate.box_bucket_prefix: lowercase
 // letters, digits and "-", 3 to 40 characters, ending in "-". It becomes
-// "arn:<p>:s3:::<prefix>*/*" in the S3 deny's NotResource, so anything that
-// could widen it (empty, "*", "?", "/") must never get that far.
+// "arn:<p>:s3:::<prefix>*/*" in the S3 read deny's NotResource and
+// "arn:<p>:s3:::<prefix>*" in the replication and exposure deny's NotResource
+// (#307), so anything that could widen it (empty, "*", "?", "/") must never
+// get that far.
 func ValidBoxBucketPrefix(s string) error {
 	if !boxPrefixRe.MatchString(s) {
 		return fmt.Errorf("box_bucket_prefix %q must be 3 to 40 lowercase letters, digits and -, ending in - (for example culibox-), with no wildcards", s)
@@ -265,6 +267,41 @@ var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetPa
 var boxBucketCopyDenies = []string{"dynamodb:ExportTableToPointInTime", "rds:StartExportTask",
 	"s3:CreateJob", "datasync:StartTaskExecution", "backup:StartRestoreJob"}
 
+// s3ExposureDenies are the S3 calls that open data to the internet or to
+// another account (#307). The data-read deny binds only this session; once a
+// bucket is public, an unsigned GET (the box egress allows *.amazonaws.com) or
+// an outside account reads it with no check on the session. Denied in the
+// window except on box buckets. Basis: the S3 API reference's permission notes
+// (each API names the IAM action it needs), from memory, not re-fetched.
+//   - s3:Put*Policy*: resource policies that grant access to other principals:
+//     PutBucketPolicy, PutAccessPointPolicy, PutAccessPointPolicyForObjectLambda,
+//     PutMultiRegionAccessPointPolicy, PutAccessGrantsInstanceResourcePolicy.
+//     No S3 read or ordinary write is named Put...Policy... (GetBucketPolicy,
+//     GetBucketPolicyStatus stay allowed).
+//   - s3:DeleteBucketPolicy: a bucket policy often holds the Deny that keeps
+//     an older ACL grant or a cross-account allow from working; removing it
+//     can expose data with no new grant.
+//   - s3:Put*Acl: PutBucketAcl, PutObjectAcl, PutObjectVersionAcl. This also
+//     covers CreateBucket, PutObject and CopyObject sent with an ACL header,
+//     which need the same actions. No other S3 action ends in Acl.
+//   - s3:PutBucketPublicAccessBlock: both PutPublicAccessBlock and
+//     DeletePublicAccessBlock on a bucket need it (there is no IAM action
+//     named s3:DeletePublicAccessBlock).
+//   - s3:PutBucketOwnershipControls: Put and Delete of ownership controls
+//     both need it. Leaving BucketOwnerEnforced turns ACLs back on, so ACLs
+//     set before they were disabled would apply again (inferred).
+//
+// Access point (Object Lambda included), Multi-Region Access Point and Access
+// Grants policies carry no bucket name, so they are denied even for a box
+// bucket's access point.
+var s3ExposureDenies = []string{"s3:Put*Policy*", "s3:DeleteBucketPolicy", "s3:Put*Acl",
+	"s3:PutBucketPublicAccessBlock", "s3:PutBucketOwnershipControls"}
+
+// s3AccountExposureDeny is the account-level public access block: the S3
+// Control PutPublicAccessBlock and DeletePublicAccessBlock both need it. It
+// has no bucket resource, so box_bucket_prefix cannot except it: always denied.
+const s3AccountExposureDeny = "s3:PutAccountPublicAccessBlock"
+
 // ElevatedPolicy is the session policy for a write-role mint (M3b): the
 // investigate statements (elevation adds writes, not data reads), the guard
 // denies, and the IAM write denies unless AllowIAM. Two narrow exceptions
@@ -276,6 +313,10 @@ var boxBucketCopyDenies = []string{"dynamodb:ExportTableToPointInTime", "rds:Sta
 //     readable, and the managed copies that could fill such a bucket with data
 //     the session may not read are denied (boxBucketCopyDenies, replication
 //     except from a box bucket).
+//
+// The S3 exposure calls (s3ExposureDenies, #307) are denied except on box
+// buckets, the same way: making a box bucket public exposes only what the box
+// put there. The account-level public access block is always denied.
 func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, error) {
 	st, err := investigateStatements(partition, s3Read)
 	if err != nil {
@@ -293,36 +334,70 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	st[2].Action = rest
 	st = slices.Insert(st, 3, statement{Effect: "Deny", Action: ssmParamReads,
 		NotResource: []string{"arn:" + partition + ":ssm:*::parameter/aws/service/*"}})
-	guards := slices.Clone(elevatedGuardDenies)
-	if el.PassRolePrefix == "" {
-		guards = append(guards, "iam:PassRole") // no role may be passed (#302)
-	}
-	st = append(st,
-		statement{Effect: "Deny", Action: guards, Resource: "*"},
-		statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
 	if el.PassRolePrefix != "" {
 		if err := ValidPassRolePrefix(el.PassRolePrefix); err != nil {
 			return "", err
 		}
-		st = append(st, statement{Effect: "Deny", Action: "iam:PassRole",
-			NotResource: []string{"arn:" + partition + ":iam::*:role/" + el.PassRolePrefix + "*"}})
+	}
+	// Every unconditional deny of the window is one Resource "*" statement, to
+	// stay under STS's 2,048 characters (#307): the guards, the IAM writes
+	// unless allow_iam, the managed copies and the account public access block.
+	// With the IAM write denies present (allow_iam off), a guard they already
+	// match (iam:CreateAccessKey under iam:Create*) is not written twice; it is
+	// denied either way.
+	var always []string
+	for _, g := range elevatedGuardDenies {
+		if el.AllowIAM || !matchesAny(iamWriteDenies, g) {
+			always = append(always, g)
+		}
+	}
+	if el.PassRolePrefix == "" {
+		always = append(always, "iam:PassRole") // no role may be passed (#302)
 	}
 	if !el.AllowIAM {
-		st = append(st, statement{Effect: "Deny", Action: iamWriteDenies, Resource: "*"})
+		always = append(always, iamWriteDenies...)
 	}
 	// The managed-copy denies are unconditional (#301): a DynamoDB export needs
 	// no PassRole and can target a bucket outside the account or one the agent
 	// made public, so they matter even when no bucket is readable in the window.
-	// Replication has an exception only for box buckets: an s3_read entry may
-	// name just a prefix of a bucket, and replication copies the whole bucket.
+	always = append(always, boxBucketCopyDenies...)
+	always = append(always, s3AccountExposureDeny)
+	// Replication and the S3 exposure calls (#307) have an exception only for
+	// box buckets: an s3_read entry may name just a prefix of a bucket, and
+	// replication copies the whole bucket. The box-bucket ARN "<prefix>*" also
+	// covers its objects ("*" crosses "/"), so object ACLs there are excepted too.
+	bucketDenies := append([]string{"s3:PutReplicationConfiguration"}, s3ExposureDenies...)
+	if el.BoxBucketPrefix == "" {
+		always = append(always, bucketDenies...)
+	}
+	st = append(st,
+		statement{Effect: "Deny", Action: always, Resource: "*"},
+		statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
+	if el.PassRolePrefix != "" {
+		st = append(st, statement{Effect: "Deny", Action: "iam:PassRole",
+			NotResource: []string{"arn:" + partition + ":iam::*:role/" + el.PassRolePrefix + "*"}})
+	}
 	if el.BoxBucketPrefix != "" {
-		st = append(st,
-			statement{Effect: "Deny", Action: boxBucketCopyDenies, Resource: "*"},
-			statement{Effect: "Deny", Action: "s3:PutReplicationConfiguration",
-				NotResource: []string{"arn:" + partition + ":s3:::" + el.BoxBucketPrefix + "*"}})
-	} else {
-		st = append(st, statement{Effect: "Deny", Resource: "*",
-			Action: append(slices.Clone(boxBucketCopyDenies), "s3:PutReplicationConfiguration")})
+		st = append(st, statement{Effect: "Deny", Action: bucketDenies,
+			NotResource: []string{"arn:" + partition + ":s3:::" + el.BoxBucketPrefix + "*"}})
 	}
 	return marshalPolicy(st, "elevated session policy")
+}
+
+// matchesAny reports whether action is matched by one of the patterns, each
+// a literal or a literal followed by one trailing "*" (the only forms
+// iamWriteDenies uses). IAM compares action names case-insensitively.
+func matchesAny(patterns []string, action string) bool {
+	a := strings.ToLower(action)
+	for _, p := range patterns {
+		p = strings.ToLower(p)
+		if stem, ok := strings.CutSuffix(p, "*"); ok && !strings.Contains(stem, "*") {
+			if strings.HasPrefix(a, stem) {
+				return true
+			}
+		} else if a == p {
+			return true
+		}
+	}
+	return false
 }
