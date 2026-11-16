@@ -394,7 +394,9 @@ function accPanel(r, d, ctx) {
   if (g.boxPrefix) reach("Can read objects in buckets named ", g.boxPrefix + "*");
   if (g.passRolePrefix) reach("Can pass roles named ", g.passRolePrefix + "*");
   else box.appendChild(accEl("p", "t-sm muted", "Cannot pass IAM roles (set pass_role_prefix to allow Lambda/ECS applies)"));
-  box.appendChild(accEl("p", "t-sm muted", "The agent can change bucket policies in this window, so a bucket it may not read can still be exposed."));
+  // #307: bucket policies, ACLs and public access blocks are denied in the window except on box buckets.
+  if (g.boxPrefix) reach("Can change bucket policies, ACLs and public access blocks only on buckets named ", g.boxPrefix + "*", ", so those can be made public");
+  else box.appendChild(accEl("p", "t-sm muted", "Cannot change bucket policies, ACLs or public access blocks"));
   if (g.allowIAM) box.appendChild(accEl("div", "ac-warn", "With IAM changes allowed, the agent can create and use its own roles, so data-read blocks are advisory in this window."));
 
   const hint = accEl("p", "ac-hint t-sm muted");

@@ -212,6 +212,8 @@ test("awsRoleARN expands a bare role name with the SSO account, and leaves an AR
 test("the editor's read-only box-prefix hint is hidden with the other elevate fields in sso_direct mode (#211)", () => {
   const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/credentials.js"), "utf8");
   assert.match(src, /row\.modeHidden = \[[^\]]*\]\.concat\(boxHint \? \[boxHint\] : \[\]\)/);
+  // #307: the prefix also lets the window change policies, ACLs and public access blocks there.
+  assert.match(src, /"This elevate can read objects in, and change the policies, ACLs and public access blocks of, buckets named " \+ row\.elevBoxPrefix \+ "\* \(elevate\.box_bucket_prefix, set in the config file\)\."/);
 });
 
 test("awsConnFromRow sends only what is set", () => {

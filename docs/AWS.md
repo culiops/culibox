@@ -73,7 +73,7 @@ The elevate block takes these optional limits, which the grant panel and the con
 |---|---|
 | `allow_iam` | Lets the window change IAM. The agent can then create and use its own roles, so the data-read blocks are advisory in that window. |
 | `pass_role_prefix` | Roles the window may pass with `iam:PassRole`: only those named `<prefix>*`. Left out, no role can be passed, so Lambda, ECS and instance-profile applies fail. 3 to 40 role-name characters; `agentbox-`, `aws` and `service-role` stems are refused. |
-| `box_bucket_prefix` | Objects in buckets named `<prefix>*` are readable in the window (config file only). Shared stems such as `aws`, `cdk-` and `sagemaker-` are refused. |
+| `box_bucket_prefix` | Objects in buckets named `<prefix>*` are readable in the window, and those buckets' policies, ACLs and public access blocks can change (config file only). Left out, the window cannot change any bucket's policy, ACL or public access block. Shared stems such as `aws`, `cdk-` and `sagemaker-` are refused. |
 
 Details and what each one weakens: [docs/aws/agent-role](aws/agent-role/README.md).
 
