@@ -29,7 +29,19 @@ func runBugReport(in doctor.Input, host, goos string, out, errw io.Writer) int {
 			profiles = append(profiles, st.List()...)
 		}
 	}
-	bi := bugreport.Input{
+	bi := bugReportInput(in, host, goos)
+	bi.DoctorNote = note
+	bi.Profiles = profiles
+	fmt.Fprint(out, bugreport.Markdown(bi))
+	fmt.Fprintf(errw, "Issue link: %s\n", bugreport.IssueURL(bi))
+	fmt.Fprintln(errw, "macOS: culibox bug-report | pbcopy")
+	return 0
+}
+
+// bugReportInput is the CLI's bundle input before the profile list. The home is
+// resolved here, once, for the redaction (see bugreport.Input.HomeResolved).
+func bugReportInput(in doctor.Input, host, goos string) bugreport.Input {
+	return bugreport.Input{
 		Producer:     "cli",
 		Version:      version,
 		Commit:       in.Commit,
@@ -38,15 +50,17 @@ func runBugReport(in doctor.Input, host, goos string, out, errw io.Writer) int {
 		HomeResolved: doctor.ResolveHome(in.Home),
 		Host:         host,
 		Doctor:       doctor.Checks(in),
-		DoctorNote:   note,
 		Config:       in.Config,
-		Profiles:     profiles,
 		LogHint:      bugReportLogHint(goos),
 	}
-	fmt.Fprint(out, bugreport.Markdown(bi))
-	fmt.Fprintf(errw, "Issue link: %s\n", bugreport.IssueURL(bi))
-	fmt.Fprintln(errw, "macOS: culibox bug-report | pbcopy")
-	return 0
+}
+
+// daemonBugInput is the daemon's base bundle input. Home and Host feed the
+// redaction, so they are always set. The home is resolved here, once, at start:
+// a report must not wait on the filesystem.
+func daemonBugInput(home, host string, cfg config.Config) bugreport.Input {
+	return bugreport.Input{Producer: "daemon", Version: version, Commit: buildCommit(), Home: home,
+		HomeResolved: doctor.ResolveHome(home), Host: host, Config: cfg}
 }
 
 // bugReportLogHint says where this platform's daemon logs are.

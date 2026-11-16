@@ -815,7 +815,7 @@ func TestRedactResolvedHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := Redact(resolved+"/.local/bin/abduco and "+link+"/x", link, ""); got != "~/.local/bin/abduco and ~/x" {
+	if got := RedactHomes(resolved+"/.local/bin/abduco and "+link+"/x", link, ResolveHome(link), ""); got != "~/.local/bin/abduco and ~/x" {
 		t.Fatalf("Redact = %q, want both spellings of the home as ~", got)
 	}
 }

@@ -97,7 +97,7 @@ func TestGuardLockUnlockCommandPastes(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("rows = %+v", rows)
 	}
-	shown := Redact(rows[0].Detail, home, "")
+	shown := RedactHomes(rows[0].Detail, home, ResolveHome(home), "")
 	i := strings.Index(shown, "chflags nouchg ")
 	if i < 0 {
 		t.Fatalf("no command in %q", shown)

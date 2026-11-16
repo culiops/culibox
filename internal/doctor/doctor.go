@@ -110,12 +110,6 @@ func runWithHost(w io.Writer, in Input, host string) int {
 	return code
 }
 
-// Redact is RedactHomes with the home resolved here. It reads the filesystem on
-// every call, so a caller that redacts many strings resolves once instead.
-func Redact(detail, home, host string) string {
-	return RedactHomes(detail, home, ResolveHome(home), host)
-}
-
 // ResolveHome is the home as filepath.EvalSymlinks spells it, or "" when that
 // is the same path or cannot be read. Paths that went through EvalSymlinks (the
 // abduco lookup) spell a home reached through a symlink this way. It touches

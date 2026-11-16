@@ -30,7 +30,6 @@ import (
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxedws"
 	"github.com/culiops/culibox/internal/boxvm"
-	"github.com/culiops/culibox/internal/bugreport"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credfile"
@@ -913,10 +912,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		checks:  func() []doctor.Result { return doctor.Checks(doctorIn) },
 		timeout: bugReportTimeout,
 		start:   started,
-		// Home and Host feed the redaction, so they are always set. The home is
-		// resolved here, once: a report must not wait on the filesystem.
-		base: bugreport.Input{Producer: "daemon", Version: version, Commit: buildCommit(), Home: home,
-			HomeResolved: doctor.ResolveHome(home), Host: host, Config: cfg},
+		base:    daemonBugInput(home, host, cfg),
 		// The merged set the daemon actually runs: config seeds plus stored profiles.
 		profiles: pm.All,
 		sessions: mgr.List,
