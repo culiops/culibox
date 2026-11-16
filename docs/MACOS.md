@@ -402,6 +402,13 @@ as on Linux, and the same repositories are refused (submodules, `core.worktree`,
 a git config `include`, and so on). What it covers and what it does not is in
 [Security model](SECURITY.md#known-limits).
 
+- A hooks or git path through a folder that is a workspace folder under another
+  path: on Linux CuliBox reads the mount table to recognise a bind mount of one
+  and guards it like the workspace path. macOS has no bind mounts by default (no
+  nullfs), and a FUSE mirror such as bindfs is its own filesystem, so CuliBox
+  reads no mount table there and does not recognise such a mirror: hooks under
+  it are not made read-only.
+
 - Measured on a Mac (colima 0.8.1, virtiofs, workspace under the home) for
   `.git`: writes, config edits, renaming `.git` or `hooks`, a new hook and a
   write through a symlink are refused in the box, and the Mac copy does not
