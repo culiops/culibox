@@ -147,15 +147,15 @@ RUN set -eu; \
     rm -rf /root/.terraform.d
 
 # --- Go ---
-# Go 1.26.5, pinned by version AND per-arch SHA256 (from go.dev's release list):
-#   https://go.dev/dl/go1.26.5.linux-amd64.tar.gz
-#   https://go.dev/dl/go1.26.5.linux-arm64.tar.gz
+# Go 1.26.11, pinned by version AND per-arch SHA256 (from go.dev's release list):
+#   https://go.dev/dl/go1.26.11.linux-amd64.tar.gz
+#   https://go.dev/dl/go1.26.11.linux-arm64.tar.gz
 # To bump: take the new version and sums from
 #   https://go.dev/dl/?mode=json&include=all
 # and keep GO_VERSION equal to the `go` directive in go.mod (a test enforces it).
-ARG GO_VERSION=1.26.5
-ARG GO_SHA256_AMD64=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
-ARG GO_SHA256_ARM64=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
+ARG GO_VERSION=1.26.11
+ARG GO_SHA256_AMD64=9849f4e04ee35303714e34fbc3ac8ab44ea3e448a95aa182f91e3b9b79c710ec
+ARG GO_SHA256_ARM64=6c2f29b458b5add0835f18b776f69c8881a6d88428f1484a6da55755e620757e
 RUN set -eu; \
     case "$(dpkg --print-architecture)" in \
       amd64) a=amd64; sum="$GO_SHA256_AMD64" ;; \
