@@ -248,15 +248,18 @@ EOF
 chmod 755 "$tmp"/bin/*
 
 # ---- one case = fixtures + out + tmpdir --------------------------------------------
-# new_case NAME [AMD64_SHA]: tarballs whose binaries print `culibox v0.0.1 (<sha>)`;
-# AMD64_SHA lets one case ship an amd64 binary stamped with another commit.
+# new_case NAME [AMD64_SHA [ARM64_ABDUCO [AMD64_ABDUCO]]]: tarballs whose binaries
+# print `culibox v0.0.1 (<sha>)`; AMD64_SHA lets one case ship an amd64 binary stamped
+# with another commit. An ABDUCO of good, bad or link bundles an abduco (#317) that
+# prints abduco-0.6, prints garbage, or is a symlink; none (the default) bundles none,
+# as releases before #317.
 new_case() {
   case_dir=$tmp/$1
   fix=$case_dir/fix
   out=$case_dir/out
   mkdir -p "$fix" "$out" "$case_dir/tmpdir"
-  make_tarball arm64 "$sha"
-  make_tarball amd64 "${2:-$sha}"
+  make_tarball arm64 "$sha" "${3:-none}"
+  make_tarball amd64 "${2:-$sha}" "${4:-none}"
   (cd "$fix" && sha256sum culibox_*.tar.gz >SHA256SUMS)
   echo '[]' >"$case_dir/releases.json"
   {
@@ -264,14 +267,26 @@ new_case() {
     "$tmp/release-status" notes --tag "$tag" --ci-run https://ci.example/run/1 --releases "$case_dir/releases.json"
   } >"$fix/notes.md"
 }
-make_tarball() { # ARCH SHA
-  local stage=$case_dir/stage-$1
+make_tarball() { # ARCH SHA ABDUCO
+  local stage=$case_dir/stage-$1 members="culibox LICENSE README.md"
   mkdir -p "$stage"
   printf '%s\n' '#!/bin/sh' "[ \"\$1\" = version ] && echo \"culibox $tag ($2)\"" >"$stage/culibox"
   chmod 755 "$stage/culibox"
   echo license >"$stage/LICENSE"
   echo readme >"$stage/README.md"
-  tar -C "$stage" -czf "$fix/culibox_${tarver}_darwin_$1.tar.gz" culibox LICENSE README.md
+  # shellcheck disable=SC2016 # the stub scripts read their own $1
+  case $3 in
+    good) printf '%s\n' '#!/bin/sh' '[ "$1" = -v ] && echo "abduco-0.6 (c) 2013-2016 Marc Andre Tanner"' 'exit 1' >"$stage/abduco" ;;
+    bad) printf '%s\n' '#!/bin/sh' 'echo "Bad CPU type in executable"' 'exit 86' >"$stage/abduco" ;;
+    link) ln -sf culibox "$stage/abduco" ;;
+  esac
+  if [ "$3" != none ]; then
+    [ -L "$stage/abduco" ] || chmod 755 "$stage/abduco"
+    echo isc >"$stage/LICENSE.abduco"
+    members="$members abduco LICENSE.abduco"
+  fi
+  # shellcheck disable=SC2086 # the member list is split on purpose
+  tar -C "$stage" -czf "$fix/culibox_${tarver}_darwin_$1.tar.gz" $members
 }
 
 # run_script INPUT [ENV=VALUE...]: runs the script in the current case. Sets rc; the
@@ -329,7 +344,7 @@ contains "$out/uploaded.json" '"note": "said \"hi\" \\ done"' "(a) a note with a
 contains "$out/go.log" "GOENV=off GOOS=darwin GOARCH=arm64 CGO=0 GOFLAGS=-mod=readonly EFFECTIVE_GOFLAGS=-mod=readonly REQUIRE=1" "(a) the native run ignores the go env file, pins GOOS, GOARCH, CGO_ENABLED=0 (the shipped build) and GOFLAGS, and sets AGENT_BOX_REQUIRE_ABDUCO=1"
 contains "$out/go.log" "GOENV=off GOOS=darwin GOARCH=amd64 CGO=0 GOFLAGS=-mod=readonly EFFECTIVE_GOFLAGS=-mod=readonly REQUIRE=1" "(a) the Rosetta run pins GOARCH=amd64 and the rest"
 contains "$out/go.log" "ARGS=test -count=1 -v ./..." "(a) go test runs with -count=1 -v ./..."
-contains "$out/uploaded.json" '"test_summary": "go test ./... ok: 3 test(s) passed, 1 skipped, in 2 package(s)"' "(a) the summary counts tests, not packages"
+contains "$out/uploaded.json" '"test_summary": "go test ./... ok: 3 test(s) passed, 1 skipped, in 2 package(s); no bundled abduco: tests ran against the pinned source build"' "(a) the summary counts tests, not packages"
 contains "$out/uploaded.json" '"test_env": "CGO_ENABLED=0 GOOS=darwin GOARCH=arm64"' "(a) the record says the tests ran with cgo off"
 for a in arm64 amd64; do
   contains "$out/uploaded.json" "\"binary_sha256\": \"$(sha256sum "$case_dir/stage-$a/culibox" | cut -d ' ' -f 1)\"" "(a) the record holds the sha256 of the $a binary that was run"
@@ -338,6 +353,7 @@ contains "$case_dir/stdout" "Run the manual rows with these exact binaries" "(a)
 contains "$case_dir/stdout" "arm64: $case_dir/tmpdir/" "(a) the arm64 binary path is printed"
 contains "$out/go.log" "PWD=$case_dir/tmpdir/" "(a) go test runs inside the work dir's clone"
 absent "$out/go.log" "ABDUCO=none" "(a) the installed abduco is on PATH for go test"
+contains "$out/uploaded.json" "no bundled abduco: tests ran against the pinned source build" "(a) a release without abduco says the tests used the source build"
 contains "$out/arch.log" "-x86_64 $case_dir/tmpdir/" "(a) the amd64 binary runs under arch -x86_64"
 contains "$case_dir/stdout" "Mac test guide rows for $tag (ID=pass|fail|na [note]), empty line to finish:" "(a) the manual prompt is exact"
 contains "$out/gh.log" "GH_REPO=culiops/culibox " "(a) gh is pointed at culiops/culibox"
@@ -517,6 +533,36 @@ contains "$out/notes.out" "❌ failed: arm64, amd64 tests failed" "(p) the notes
 missing "$out/go-called.marker" "(p) go test was not run without abduco"
 contains "$out/uploaded.json" "culibox $tag ($sha)" "(p) the version stamps are still checked"
 exists "$case_dir/tmpdir"/macos-verify.*/abduco-install.log "(p) the install log is kept"
+
+# ---- (t) a release that bundles abduco (#317) runs the tests against it -----------
+echo "== (t) bundled abduco"
+new_case t "" good good
+run_script $'M1=pass\n\n'
+expect_rc "$rc" 0 "(t) a verified run with bundled abducos exits 0"
+expect_verdict "$out/uploaded.json" verified "(t) the verdict is verified"
+missing "$out/abduco-install.log" "(t) no abduco is built when both tarballs bundle one"
+contains "$out/go.log" "GOARCH=arm64 CGO=0" "(t) the arm64 tests ran"
+if grep "GOARCH=arm64 " "$out/go.log" | grep -q "ABDUCO=$case_dir/tmpdir/macos-verify.*/arm64/abduco "; then pass "(t) the arm64 tests use the arm64 tarball's abduco"; else fail "(t) the arm64 tests do not use the arm64 abduco: $(grep 'GOARCH=arm64 ' "$out/go.log")"; fi
+if grep "GOARCH=amd64 " "$out/go.log" | grep -q "ABDUCO=$case_dir/tmpdir/macos-verify.*/amd64/abduco "; then pass "(t) the amd64 tests use the amd64 tarball's abduco"; else fail "(t) the amd64 tests do not use the amd64 abduco: $(grep 'GOARCH=amd64 ' "$out/go.log")"; fi
+contains "$out/arch.log" "/amd64/abduco -v" "(t) the amd64 abduco runs under arch -x86_64"
+contains "$out/uploaded.json" "tests ran against the bundled abduco" "(t) the record says which abduco the tests used"
+
+# ---- (u) a bundled abduco that does not run fails its arch -------------------------
+echo "== (u) bundled abduco does not run"
+new_case u "" good bad
+run_script $'M1=pass\n\n'
+expect_rc "$rc" 3 "(u) a broken bundled abduco is a recorded failure (exit 3)"
+expect_verdict "$out/uploaded.json" failed "(u) the verdict is failed"
+contains "$out/uploaded.json" "bundled abduco -v printed 'Bad CPU type in executable'" "(u) the record says what the abduco printed"
+
+# ---- (v) a bundled abduco that is not a regular file stops the run -----------------
+echo "== (v) bundled abduco is a symlink"
+new_case v "" link good
+run_script $'M1=pass\n\n'
+expect_rc "$rc" 1 "(v) a symlinked abduco in a tarball aborts"
+contains "$case_dir/stderr" "abduco in $arm_tgz is not a regular file" "(v) the abort names the tarball"
+missing "$out/go-called.marker" "(v) go test did not run"
+missing "$out/uploaded.json" "(v) nothing was uploaded"
 
 # ---- (q) a record without a verdict line is reported -------------------------------
 echo "== (q) missing verdict"
