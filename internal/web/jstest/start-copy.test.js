@@ -106,7 +106,7 @@ function endEnv({ width = 1280, failIds = [] } = {}) {
       if (failIds.includes(id)) throw Object.assign(new Error("docker stop failed"), { status: 500 });
     },
     pendingToast: (text) => { log.push(["pending", text]); return (r) => log.push(["done", r]); },
-    toastFailText,
+    toastFailText, ACTION_TIMEOUT_MS: 60000,
     showToast: (msg, opts) => toasts.push([msg, opts]),
     closeTerminal: (id) => closed.push(id),
     encodeURIComponent, decodeURIComponent, Date, Set, Map, Promise, Array,

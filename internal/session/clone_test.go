@@ -418,6 +418,10 @@ func TestHostSpawnInBoxOwnedDirRefused(t *testing.T) {
 	if !errors.Is(err, box.ErrBoxOwned) || !strings.Contains(err.Error(), "inside the clone") {
 		t.Fatalf("err = %v, want ErrBoxOwned with the reason", err)
 	}
+	// The refusal a web UI user reads says what to do, after the reason (new-session cwd).
+	if !strings.HasSuffix(err.Error(), "inside the clone of a clone-mode profile; in the web UI, pick a folder outside the copy, such as the original repo") {
+		t.Fatalf("err = %q, want the reason followed by the web UI hint", err)
+	}
 	if hooks.nOwnedChecks() != 1 {
 		t.Fatalf("BoxOwned asked %d times", hooks.nOwnedChecks())
 	}

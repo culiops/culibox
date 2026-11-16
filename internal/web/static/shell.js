@@ -153,8 +153,11 @@ let toastBusy = false; // toastChanged is running
 let toastAgain = false; // ...and something changed meanwhile
 
 // toastView(entry): what one stack entry looks like. Pure. An error is the only
-// role=alert; a pending entry has the spinner (and no ×, as drawn in M8.5); the
-// one action is Undo, else "Copy details" on an error that has raw text.
+// role=alert; a pending entry has the spinner; the one action is Undo, else "Copy
+// details" on an error that has raw text. Every entry has its ×, a pending one too
+// (#183, founder 2026-11-13, option A): its request can hang, and with no way to
+// remove it the entry stayed until a reload. Removing it does not lose the result: the
+// owner's update then fails and the result is pushed as a new toast.
 function toastView(entry) {
   const kind = entry.kind;
   const cls = ["toast"];
@@ -340,14 +343,12 @@ function toastBuild(e, v) {
     b.onclick = v.action === "undo" ? () => toastUndoClick(e.id) : () => toastCopyClick(e.id, b);
     node.appendChild(b);
   }
-  if (e.kind !== "pending") {
-    const x = toastEl("button", "btn btn-ghost btn-icon btn-sm toast-x", "×");
-    x.type = "button";
-    x.title = "Dismiss";
-    x.setAttribute("aria-label", "Dismiss");
-    x.onclick = () => dismissToast(e.id);
-    node.appendChild(x);
-  }
+  const x = toastEl("button", "btn btn-ghost btn-icon btn-sm toast-x", "×");
+  x.type = "button";
+  x.title = "Dismiss";
+  x.setAttribute("aria-label", "Dismiss");
+  x.onclick = () => dismissToast(e.id);
+  node.appendChild(x);
   // The meter takes its own full-width row under the text (desktop.css).
   if (e.progress !== null) parts.bar = node.appendChild(toastEl("div", "meter")).appendChild(document.createElement("i"));
   node._toast = parts;
