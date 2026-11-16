@@ -125,13 +125,32 @@ func indentLines(s, prefix string) string {
 	return sb.String()
 }
 
-// initBoxStep is step 7: `box setup` (VM, image, containment probe, token row)
-// with the config step 6 wrote, then, on macOS, the workspace in the VM's
-// folder list. A box that is already ready is "already done" unless the user
-// asks for setup again.
+// initBoxStep is step 7. On macOS the order depends on the VM.
+//
+// No VM yet: the workspace goes into the VM's folder list first, then `box
+// setup` (VM, image, containment probe, token row) starts the VM with that list
+// (setup reads it before it provisions), so the first boot already has the
+// workspace and nothing is pending.
+//
+// A VM that is set up but STOPPED (a reboot, `box stop`): `box setup` cannot
+// apply a changed folder list to a VM that is not running (its guard refuses
+// without -force, because "not running" may hide a running box), so init does
+// it: it adds the folder, asks, and applies with -force, which is safe because
+// the VM is provably down (colima says so and nothing answers on its docker
+// socket) and which starts it with the list. Then setup runs against a running
+// VM.
+//
+// A running VM: box setup runs first (it also restarts the VM itself when only
+// the folder list differs, unless a box runs), then the folder is added and,
+// when the VM does not have it yet, init asks and applies it.
+//
+// Either way init reads back whether the VM has the workspace and stops unless
+// it does. A box that is already ready is "already done" unless the user asks
+// for setup again.
 func initBoxStep(u *initUI, cfg config.Config, cfgFiles []string, dataDir, workspace string, d initDeps) bool {
 	u.begin("box setup")
 	darwin := d.goos == "darwin"
+	runSetup := true
 	if d.boxReady(cfg, cfgFiles, dataDir) {
 		if darwin {
 			u.say("the box is ready: the VM runs, the image is current and doctor's box rows pass")
@@ -144,31 +163,121 @@ func initBoxStep(u *initUI, cfg config.Config, cfgFiles []string, dataDir, works
 				u.already("the box is ready")
 				return true
 			}
-			covered, ok := initVMFolder(u, cfg, cfgFiles, dataDir, workspace, d)
-			switch {
-			case !ok:
-				return false
-			case covered != "":
-				u.already("the box is ready and the VM sees " + workspace)
-			default:
-				u.done()
-			}
-			return true
+			runSetup = false
 		}
 	}
-	if rc := d.boxSetup(cfg, cfgFiles, u.out); rc != 0 {
-		u.stopped("box setup failed (see the lines above); fix that, run `culibox box setup`, then culibox init again")
-		return false
+	existing := darwin && d.vmSetUp(cfg, dataDir)
+	fresh := darwin && runSetup && !existing
+	stoppedVM := existing && runSetup && d.vmStopped(cfg, dataDir)
+	covered, applied := "", false
+	readState := func() (string, bool) {
+		state, err := d.shareState(cfg, cfgFiles, dataDir, workspace)
+		if err != nil {
+			u.stopped(fmt.Sprintf("the box VM's folder state could not be read (%v); run `culibox box share list`, then culibox init again", err))
+			return "", false
+		}
+		return state, true
+	}
+	if fresh || stoppedVM {
+		var ok bool
+		if covered, ok = initVMFolder(u, cfg, cfgFiles, dataDir, workspace, d, fresh); !ok {
+			return false
+		}
+	}
+	if stoppedVM {
+		state, ok := readState()
+		if !ok {
+			return false
+		}
+		if state != "applied" {
+			if !initApplyShares(u, cfg, cfgFiles, dataDir, workspace, d, true) {
+				return false
+			}
+			applied = true
+		}
+	}
+	if runSetup {
+		if rc := d.boxSetup(cfg, cfgFiles, u.out); rc != 0 {
+			if existing {
+				u.stopped("box setup failed (see the lines above); fix that. When it says boxes run or the VM state is unknown, stop the boxes or run `culibox box setup -force` (ends the running boxes and their sessions). Then culibox init again")
+			} else {
+				u.stopped("box setup failed (see the lines above); fix that, run `culibox box setup`, then culibox init again")
+			}
+			return false
+		}
 	}
 	if !darwin {
 		u.say(initNoVMLine)
 		u.done()
 		return true
 	}
-	if _, ok := initVMFolder(u, cfg, cfgFiles, dataDir, workspace, d); !ok {
+	if !fresh && !stoppedVM {
+		var ok bool
+		if covered, ok = initVMFolder(u, cfg, cfgFiles, dataDir, workspace, d, false); !ok {
+			return false
+		}
+	}
+	state, ok := readState()
+	if !ok {
 		return false
 	}
+	if state == "pending" && !fresh && !stoppedVM {
+		if !initApplyShares(u, cfg, cfgFiles, dataDir, workspace, d, false) {
+			return false
+		}
+		applied = true
+		if state, ok = readState(); !ok {
+			return false
+		}
+	}
+	if state != "applied" {
+		u.stopped(fmt.Sprintf("the box VM does not have %s yet (state: %s); run `culibox box share apply` (restarts the box VM), then culibox init again", workspace, state))
+		return false
+	}
+	if !runSetup && !applied && covered != "" {
+		u.already("the box is ready and the VM sees " + workspace)
+		return true
+	}
+	u.say("the box VM has %s: its folder list is applied", workspace)
 	u.done()
+	return true
+}
+
+// initApplyShares has the VM take its saved folder list, after saying so and
+// asking. force is only for a VM that is provably stopped (nothing can run in
+// it, so nothing ends): `box share apply` then starts it with the list. It
+// reports false, with a stopped line naming a command that works from that
+// state, when the user declines or the apply fails.
+func initApplyShares(u *initUI, cfg config.Config, cfgFiles []string, dataDir, workspace string, d initDeps, force bool) bool {
+	if force {
+		u.say("the box VM is stopped and does not have %s yet; applying the saved folder list starts it with the list", workspace)
+	} else {
+		u.say("the box VM does not have %s yet; taking it needs a restart of the box VM, which ends the sessions in it, and applies the whole saved folder list", workspace)
+	}
+	if !u.ask("Apply it now?", true) {
+		if force {
+			// Not "run apply -force": by the time the user does, the VM may run boxes.
+			u.stopped(fmt.Sprintf("the box VM does not have %s yet; run culibox init again, which checks the VM first (`culibox box share apply -force` is only safe while the VM is still stopped)", workspace))
+		} else {
+			u.stopped(fmt.Sprintf("the box VM does not have %s yet; run `culibox box share apply`, then culibox init again", workspace))
+		}
+		return false
+	}
+	// The prompt can wait for minutes, and `culibox serve` may start the VM for a
+	// boxed spawn meanwhile. -force skips the live-box guard and would stop that
+	// VM, so check again right before it and fall back to the guarded apply.
+	if force && !d.vmStopped(cfg, dataDir) {
+		force = false
+		u.say("the box VM has started since the check; applying with the guard that refuses while a box runs")
+	}
+	if rc := d.shareApply(cfg, cfgFiles, dataDir, force, u.out); rc != 0 {
+		if force {
+			u.stopped("`culibox box share apply -force` did not finish (see the lines above); fix that, then run culibox init again, which checks the VM first")
+		} else {
+			u.stopped("`culibox box share apply` did not finish (see the lines above); with boxes running, stop them or use `culibox box share apply -force` (ends the running boxes and their sessions), then culibox init again")
+		}
+		return false
+	}
 	return true
 }
 
@@ -176,20 +285,33 @@ const initNoVMLine = "no VM folders to set: the box VM is macOS only; on Linux b
 
 // initVMFolder makes sure the box VM's folder list covers the workspace. It
 // returns the folder that already covered it ("" when it was added).
-func initVMFolder(u *initUI, cfg config.Config, cfgFiles []string, dataDir, workspace string, d initDeps) (string, bool) {
+// beforeSetup is true when there is no VM yet: `box setup` then starts it with
+// the list, so nothing is left to apply.
+func initVMFolder(u *initUI, cfg config.Config, cfgFiles []string, dataDir, workspace string, d initDeps, beforeSetup bool) (string, bool) {
 	covered, err := d.shareAdd(cfg, cfgFiles, dataDir, workspace)
 	if err != nil {
 		u.stopped(fmt.Sprintf("%s could not be added to the box VM's folders (%v); fix that, run `culibox box share add %s`, then culibox init again", workspace, err, shellQuote(workspace)))
 		return "", false
 	}
 	if covered != "" {
-		if covered != workspace {
+		if !sameFolder(covered, workspace) {
 			u.say("the box VM sees %s through %s", workspace, covered)
 		}
 		return covered, true
 	}
-	u.say("added %s to the box VM's folders; it takes effect after `culibox box share apply` (restarts the box VM), or in Settings, VM folders", workspace)
+	if beforeSetup {
+		u.say("added %s to the box VM's folders; box setup below starts the VM with it", workspace)
+	} else {
+		u.say("added %s to the box VM's folders", workspace)
+	}
 	return "", true
+}
+
+// sameFolder is true for two spellings of one folder: the same path, a case
+// difference (APFS), or a symlink. shareAdd answers with the listed spelling.
+func sameFolder(a, b string) bool {
+	return strings.EqualFold(a, b) || vmshares.Resolve(a) == vmshares.Resolve(b) ||
+		strings.EqualFold(vmshares.Resolve(a), vmshares.Resolve(b))
 }
 
 // initFinishStep is step 8: doctor, then how to start CuliBox and the URL to
@@ -337,8 +459,93 @@ func initShareAdd(cfg config.Config, cfgFiles []string, dataDir, path, home, goo
 	if err != nil {
 		return "", err
 	}
-	_, res, err := svc.Add(path, string(vmshares.RW), false)
-	return res.CoveredBy, err
+	return svc.AddWorkspace(path)
+}
+
+// initShareState is whether the box VM has the workspace: "applied" when a
+// folder the VM's written colima.yaml mounts read & write covers it, else
+// "pending" (the VM is set up but lacks it) or "not_set_up". Only the
+// workspace's own row counts: another unapplied change does not make it
+// pending. It never starts the VM.
+func initShareState(cfg config.Config, cfgFiles []string, dataDir, workspace, home, goos string) (string, error) {
+	if goos != "darwin" {
+		return "", errors.New("the box VM exists only on macOS")
+	}
+	l, err := newBoxLayer(cfg, dataDir, home, goos, boxvm.ExecRunner{}, protectedDirsOf(cfg, dataDir, cfgFiles))
+	if err != nil {
+		return "", err
+	}
+	svc, err := newCLIShareSvc(context.Background(), cfg, l)
+	if err != nil {
+		return "", err
+	}
+	if svc.corrupt != nil {
+		return "", svc.corrupt
+	}
+	applied, _, setUp, err := svc.ctl.Applied()
+	if err != nil {
+		return "", err
+	}
+	return workspaceShareState(setUp, workspace, applied, svc.env.Fold), nil
+}
+
+// workspaceShareState is initShareState's answer from what it read: not set up,
+// applied (a read & write mount holds the workspace) or pending.
+func workspaceShareState(setUp bool, workspace string, applied []vmshares.Share, fold bool) string {
+	switch {
+	case !setUp:
+		return "not_set_up"
+	case workspaceApplied(workspace, applied, fold):
+		return "applied"
+	}
+	return "pending"
+}
+
+// workspaceApplied is true when a folder the VM applied read & write holds the
+// workspace (a whole-home VM applies the home folder, so it holds one under
+// home). A read-only folder does not: a workspace needs to be written.
+func workspaceApplied(workspace string, applied []vmshares.Share, fold bool) bool {
+	ws := vmshares.Resolve(workspace)
+	for _, a := range applied {
+		if a.Mode == vmshares.RW && vmshares.Within(ws, vmshares.Resolve(a.Path), fold) {
+			return true
+		}
+	}
+	return false
+}
+
+// initVMStopped is true when the box VM is set up and provably not running
+// (Status.Stopped needs colima's answer and a dead docker socket). A status
+// that failed any other way is false: a box may still run.
+func initVMStopped(cfg config.Config, dataDir, home, goos string) bool {
+	if goos != "darwin" {
+		return false
+	}
+	if _, err := boxvm.LookColima(cfg.ColimaBin); err != nil {
+		return false
+	}
+	l, err := newBoxLayer(cfg, dataDir, home, goos, boxvm.ExecRunner{}, nil)
+	if err != nil || !l.vm.SetUp() {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), initBoxTimeout)
+	defer cancel()
+	return vmIsStopped(ctx, l.vm.Status)
+}
+
+// vmIsStopped is true only when status says the VM is stopped: a failed read, a
+// running VM, and a status that is neither (colima said "not running" but the
+// docker socket still answers) are all "a box may still run".
+func vmIsStopped(ctx context.Context, status func(context.Context) (boxvm.Status, error)) bool {
+	st, err := status(ctx)
+	return err == nil && st.Stopped
+}
+
+// initShareApply is `culibox box share apply [-force]`, in-process. Without
+// -force it refuses while a box runs. The output is the apply's own step lines.
+func initShareApply(cfg config.Config, cfgFiles []string, home string, force bool, w io.Writer) int {
+	merged, _ := mergeCredentials(cfg, home)
+	return runBox(cliArgs{Cmd: "box", Sub: "share", ShareAction: "apply", Force: force}, merged, home, cfgFiles, w)
 }
 
 // initBoxSetup is `culibox box setup`, in-process, with the config main would
