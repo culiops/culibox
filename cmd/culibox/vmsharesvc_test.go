@@ -621,3 +621,101 @@ func TestApplyHandsTheVMTheKeysTheRecheckResolved(t *testing.T) {
 		t.Fatalf("the VM was handed %+v, want %s resolved", f.ctl.resolved, code)
 	}
 }
+
+// #312: init adds the workspace before `box setup` starts the VM. Box setup
+// builds its own service over the same data dir, so it must boot the VM with a
+// list that has the workspace, end "applied", and a second init run must find
+// the folder covered and write nothing.
+func TestShareAddedBeforeFirstSetupIsInTheFirstBootList(t *testing.T) {
+	f := newSvcFixture(t)
+	ws := f.sub(t, "proj")
+	f.ctl.notSetUp = true // a fresh Mac: no VM yet
+
+	initSvc := f.svc(t) // init's service: derives and saves the first list
+	covered, err := initSvc.AddWorkspace(ws)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if covered != "" {
+		t.Fatalf("setup: the derived first list must not hold the workspace, covered by %q", covered)
+	}
+
+	setupCtl := &fakeVMControl{notSetUp: true}
+	f.ctl = setupCtl
+	setupSvc := f.svc(t) // box setup's service, built before Provision
+	if !listHas(setupCtl.listed, ws) {
+		t.Fatalf("the VM would boot without the workspace: %+v", setupCtl.listed)
+	}
+	if v, err := setupSvc.View(); err != nil || v.State != "not_set_up" {
+		t.Fatalf("before the boot: %+v %v", v, err)
+	}
+
+	// The VM boots with the list: its colima.yaml now has what was listed.
+	setupCtl.notSetUp = false
+	setupCtl.applied = append([]vmshares.Share{}, setupCtl.listed...)
+	if v, err := setupSvc.View(); err != nil || v.State != "applied" || v.Added+v.Removed+v.Switched != 0 {
+		t.Fatalf("after the first boot nothing may be pending: %+v %v", v, err)
+	}
+
+	// A re-run of init: covered, no second entry, still applied.
+	before := len(setupSvc.Listed())
+	rerun := f.svc(t)
+	stamp := statShares(f.dir)
+	covered, err = rerun.AddWorkspace(ws)
+	if err != nil || covered == "" {
+		t.Fatalf("re-run add must find the folder covered: %q %v", covered, err)
+	}
+	if statShares(f.dir) != stamp {
+		t.Fatal("a re-run must not rewrite vm-shares.json")
+	}
+	if got := len(rerun.Listed()); got != before {
+		t.Fatalf("the folder was listed twice: %d -> %d", before, got)
+	}
+	if v, err := rerun.View(); err != nil || v.State != "applied" {
+		t.Fatalf("re-run: %+v %v", v, err)
+	}
+}
+
+func listHas(l []vmshares.Share, path string) bool {
+	for _, s := range l {
+		if vmshares.Within(path, s.Path, true) && s.Mode == vmshares.RW {
+			return true
+		}
+	}
+	return false
+}
+
+// AddWorkspace lists a workspace the first list does not hold, once; a second
+// call finds it covered and a read-only entry for it is switched, not skipped.
+func TestAddWorkspaceListsOnceAndSkipsACoveredFolder(t *testing.T) {
+	f := newSvcFixture(t)
+	f.ctl.notSetUp = true
+	ws := f.sub(t, "proj")
+	s := f.svc(t) // no profiles: the derived list does not hold ws
+	if listHas(s.Listed(), ws) {
+		t.Fatal("setup: the derived list must not hold the workspace")
+	}
+	covered, err := s.AddWorkspace(ws)
+	if err != nil || covered != "" || !listHas(s.Listed(), ws) {
+		t.Fatalf("first add: covered=%q err=%v list=%+v", covered, err, s.Listed())
+	}
+	n := len(s.Listed())
+	stamp := statShares(f.dir)
+	covered, err = s.AddWorkspace(ws)
+	if err != nil || covered == "" || len(s.Listed()) != n || statShares(f.dir) != stamp {
+		t.Fatalf("second add: covered=%q err=%v list=%+v", covered, err, s.Listed())
+	}
+	sub := filepath.Join(ws, "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if covered, err = s.AddWorkspace(sub); err != nil || covered == "" {
+		t.Fatalf("a folder inside a listed one is covered: covered=%q err=%v", covered, err)
+	}
+	if _, err := s.SetMode(ws, string(vmshares.RO)); err != nil {
+		t.Fatal(err)
+	}
+	if covered, err = s.AddWorkspace(ws); err != nil || covered != "" || !listHas(s.Listed(), ws) {
+		t.Fatalf("a read-only entry must become read & write: covered=%q err=%v list=%+v", covered, err, s.Listed())
+	}
+}

@@ -55,11 +55,12 @@ func (f *fakeInit) deps(goos string) initDeps {
 		newKeeper:  func(string) secretstore.Keeper { return secretstore.NewFakeKeeper(false) },
 		// Steps 7-8: no VM, a box that is not ready yet, a setup and a doctor
 		// that pass, and a workspace the VM already sees.
-		vmSetUp:  func(config.Config, string) bool { return false },
-		boxReady: func(config.Config, []string, string) bool { return false },
-		boxSetup: func(config.Config, []string, io.Writer) int { return 0 },
-		shareAdd: func(_ config.Config, _ []string, _, path string) (string, error) { return path, nil },
-		doctor:   func(config.Config, config.Source, []string, io.Writer) int { return 0 },
+		vmSetUp:    func(config.Config, string) bool { return false },
+		boxReady:   func(config.Config, []string, string) bool { return false },
+		boxSetup:   func(config.Config, []string, io.Writer) int { return 0 },
+		shareAdd:   func(_ config.Config, _ []string, _, path string) (string, error) { return path, nil },
+		shareState: func(config.Config, []string, string) (string, error) { return "applied", nil },
+		doctor:     func(config.Config, config.Source, []string, io.Writer) int { return 0 },
 	}
 }
 
@@ -543,7 +544,7 @@ func TestInitStopsAtDepsWithExit1(t *testing.T) {
 
 func TestRealInitDepsAreWired(t *testing.T) {
 	d := realInitDeps(t.TempDir())
-	if d.vmSetUp == nil || d.boxReady == nil || d.boxSetup == nil || d.shareAdd == nil || d.doctor == nil || d.newKeeper == nil {
+	if d.vmSetUp == nil || d.boxReady == nil || d.boxSetup == nil || d.shareAdd == nil || d.shareState == nil || d.doctor == nil || d.newKeeper == nil {
 		t.Fatal("every seam must be wired")
 	}
 	if d.goos == "" || d.getenv == nil || d.lookPath == nil || d.run == nil || d.readSecret == nil || d.hostSize == nil || d.macOSMajor == nil || d.osRelease == nil {

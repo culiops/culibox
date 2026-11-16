@@ -222,25 +222,51 @@ func TestConfigStepBrokenFileStops(t *testing.T) {
 	}
 }
 
-// boxFake records the order of box setup and share calls.
+// boxFake records the order of box setup and share calls, and models what the
+// VM has: box setup starts (or restarts) it with the folder list as it is at
+// that moment, so a folder added after setup stays pending.
 type boxFake struct {
-	ready   bool
-	setupRC int
-	covered string
-	addErr  error
-	calls   []string
+	ready    bool
+	vmUp     bool // a VM that was set up before this run
+	setupRC  int
+	covered  string // the folder that already covers the workspace
+	addErr   error
+	stateErr error
+	calls    []string
+
+	listed  bool // the workspace is in the saved list
+	applied bool // the VM's colima.yaml has it
 }
 
 func (f *boxFake) apply(d *initDeps) {
+	f.listed = f.covered != ""
+	f.applied = f.listed && f.vmUp // a covered folder was applied by the earlier setup
 	d.boxReady = func(config.Config, []string, string) bool { return f.ready }
+	d.vmSetUp = func(config.Config, string) bool { return f.vmUp }
 	d.boxSetup = func(_ config.Config, _ []string, w io.Writer) int {
 		f.calls = append(f.calls, "setup")
 		io.WriteString(w, "PASS image: fake\n")
+		if f.setupRC == 0 {
+			f.applied = f.listed
+		}
 		return f.setupRC
 	}
 	d.shareAdd = func(_ config.Config, _ []string, _, path string) (string, error) {
 		f.calls = append(f.calls, "share "+path)
+		if f.addErr == nil && f.covered == "" {
+			f.listed = true
+		}
 		return f.covered, f.addErr
+	}
+	d.shareState = func(config.Config, []string, string) (string, error) {
+		f.calls = append(f.calls, "state")
+		if f.stateErr != nil {
+			return "", f.stateErr
+		}
+		if f.listed && !f.applied {
+			return "pending", nil
+		}
+		return "applied", nil
 	}
 }
 
@@ -252,24 +278,67 @@ func boxStep(goos, in string, f *boxFake) (bool, string) {
 	return ok, out.String()
 }
 
-func TestBoxStepRunsSetupThenShare(t *testing.T) {
+// #312: the workspace goes into the folder list BEFORE box setup starts the
+// VM, so the first boot has it and `box share list` shows nothing pending.
+func TestBoxStepSharesBeforeSetupAndEndsApplied(t *testing.T) {
 	f := &boxFake{}
 	ok, out := boxStep("darwin", "", f)
-	if !ok || strings.Join(f.calls, ",") != "setup,share /w/proj" {
+	if !ok || strings.Join(f.calls, ",") != "share /w/proj,setup,state" {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
 	}
-	for _, w := range []string{"== step 1/8: box setup", "PASS image: fake", "box share apply", "  done"} {
+	for _, w := range []string{"== step 1/8: box setup", "added /w/proj to the box VM's folders; box setup below starts the VM with it", "PASS image: fake", "its folder list is applied", "  done"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("output lacks %q:\n%s", w, out)
 		}
 	}
+	if strings.Contains(out, "takes effect after") {
+		t.Errorf("nothing is left to apply by hand:\n%s", out)
+	}
+	if strings.Index(out, "added /w/proj") > strings.Index(out, "PASS image: fake") {
+		t.Errorf("the folder line must come before setup's output:\n%s", out)
+	}
 }
 
-func TestBoxStepSetupThenShareAlreadyCovered(t *testing.T) {
+// A VM from an earlier run that is not ready (say its image is gone) is
+// restarted by box setup's own folder-list apply: init says so up front.
+func TestBoxStepExistingVMSaysSetupAppliesIt(t *testing.T) {
+	f := &boxFake{vmUp: true}
+	ok, out := boxStep("darwin", "", f)
+	if !ok || strings.Join(f.calls, ",") != "share /w/proj,setup,state" || !strings.Contains(out, "box setup below applies it (the box VM stops and starts)") {
+		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+}
+
+// Re-running on a machine whose list already covers the workspace adds
+// nothing and prints no "added" line.
+func TestBoxStepSetupWithShareAlreadyCovered(t *testing.T) {
 	f := &boxFake{covered: "/w"}
 	ok, out := boxStep("darwin", "", f)
-	if !ok || len(f.calls) != 2 || !strings.Contains(out, "  done") || strings.Contains(out, "box share apply") {
+	if !ok || strings.Join(f.calls, ",") != "share /w/proj,setup,state" || !strings.Contains(out, "the box VM sees /w/proj through /w") || strings.Contains(out, "added /w/proj") || !strings.Contains(out, "  done") {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
+	}
+}
+
+// Setup finishing with the workspace still pending is not "done": init stops
+// and says how to finish.
+func TestBoxStepStopsWhenShareStaysPending(t *testing.T) {
+	f := &boxFake{}
+	d := (&fakeInit{}).deps("darwin")
+	f.apply(&d)
+	d.shareState = func(config.Config, []string, string) (string, error) { return "pending", nil }
+	var out bytes.Buffer
+	ok := initBoxStep(newTestUI("", &out), config.Config{}, nil, "/data", "/w/proj", d)
+	s := out.String()
+	if ok || !strings.Contains(s, "stopped:") || !strings.Contains(s, "culibox box share apply") || strings.Contains(s, "  done") {
+		t.Fatalf("ok=%v out=%s", ok, s)
+	}
+}
+
+func TestBoxStepStopsWhenShareStateUnreadable(t *testing.T) {
+	f := &boxFake{stateErr: errors.New("colima.yaml unreadable")}
+	ok, out := boxStep("darwin", "", f)
+	if ok || !strings.Contains(out, "stopped:") || !strings.Contains(out, "colima.yaml unreadable") {
+		t.Fatalf("ok=%v out=%s", ok, out)
 	}
 }
 
@@ -287,9 +356,9 @@ func TestBoxStepReadySkips(t *testing.T) {
 }
 
 func TestBoxStepReadyYesRunsSetup(t *testing.T) {
-	f := &boxFake{ready: true, covered: "/w/proj"}
+	f := &boxFake{ready: true, vmUp: true, covered: "/w/proj"}
 	ok, out := boxStep("darwin", "y\n", f)
-	if !ok || len(f.calls) == 0 || f.calls[0] != "setup" || !strings.Contains(out, "  done") {
+	if !ok || len(f.calls) == 0 || f.calls[0] != "share /w/proj" || !strings.Contains(out, "  done") {
 		t.Fatalf("ok=%v calls=%v out=%s", ok, f.calls, out)
 	}
 }
@@ -300,8 +369,8 @@ func TestBoxStepSetupFails(t *testing.T) {
 	if ok || !strings.Contains(out, "stopped:") || !strings.Contains(out, "culibox box setup") {
 		t.Fatalf("ok=%v out=%s", ok, out)
 	}
-	if len(f.calls) != 1 {
-		t.Fatalf("the share must not be added after a failed setup: %v", f.calls)
+	if strings.Join(f.calls, ",") != "share /w/proj,setup" {
+		t.Fatalf("the folder state is not read after a failed setup: %v", f.calls)
 	}
 }
 
@@ -310,6 +379,9 @@ func TestBoxStepShareFails(t *testing.T) {
 	ok, out := boxStep("darwin", "", f)
 	if ok || !strings.Contains(out, "stopped:") || !strings.Contains(out, "culibox box share add") {
 		t.Fatalf("ok=%v out=%s", ok, out)
+	}
+	if strings.Join(f.calls, ",") != "share /w/proj" {
+		t.Fatalf("the VM must not start without its folder: %v", f.calls)
 	}
 }
 
@@ -468,7 +540,7 @@ func TestInitRerunConfiguredMachine(t *testing.T) {
 	d.newKeeper = func(string) secretstore.Keeper { return k }
 	d.readSecret = func() ([]byte, error) { t.Fatal("a configured machine must read no secret"); return nil, nil }
 	d.vmSetUp = func(config.Config, string) bool { return true }
-	bf := &boxFake{ready: true, covered: ws}
+	bf := &boxFake{ready: true, vmUp: true, covered: ws}
 	bf.apply(&d)
 	doctorRan := false
 	d.doctor = func(_ config.Config, _ config.Source, _ []string, w io.Writer) int {

@@ -20,7 +20,6 @@ import (
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/doctor"
 	"github.com/culiops/culibox/internal/secretstore"
-	"github.com/culiops/culibox/internal/vmshares"
 )
 
 // initConfigTarget is the file step 6 writes: -config when given, else the
@@ -125,10 +124,12 @@ func indentLines(s, prefix string) string {
 	return sb.String()
 }
 
-// initBoxStep is step 7: `box setup` (VM, image, containment probe, token row)
-// with the config step 6 wrote, then, on macOS, the workspace in the VM's
-// folder list. A box that is already ready is "already done" unless the user
-// asks for setup again.
+// initBoxStep is step 7. On macOS it first puts the workspace in the VM's
+// folder list, then runs `box setup` (VM, image, containment probe, token row)
+// with the config step 6 wrote: setup reads that list before it starts the VM,
+// so the first boot already has the workspace and nothing is pending. It then
+// reads the folder state back and stops unless the list is applied. A box
+// that is already ready is "already done" unless the user asks for setup again.
 func initBoxStep(u *initUI, cfg config.Config, cfgFiles []string, dataDir, workspace string, d initDeps) bool {
 	u.begin("box setup")
 	darwin := d.goos == "darwin"
@@ -144,7 +145,7 @@ func initBoxStep(u *initUI, cfg config.Config, cfgFiles []string, dataDir, works
 				u.already("the box is ready")
 				return true
 			}
-			covered, ok := initVMFolder(u, cfg, cfgFiles, dataDir, workspace, d)
+			covered, ok := initVMFolder(u, cfg, cfgFiles, dataDir, workspace, d, false)
 			switch {
 			case !ok:
 				return false
@@ -156,6 +157,11 @@ func initBoxStep(u *initUI, cfg config.Config, cfgFiles []string, dataDir, works
 			return true
 		}
 	}
+	if darwin {
+		if _, ok := initVMFolder(u, cfg, cfgFiles, dataDir, workspace, d, true); !ok {
+			return false
+		}
+	}
 	if rc := d.boxSetup(cfg, cfgFiles, u.out); rc != 0 {
 		u.stopped("box setup failed (see the lines above); fix that, run `culibox box setup`, then culibox init again")
 		return false
@@ -165,9 +171,16 @@ func initBoxStep(u *initUI, cfg config.Config, cfgFiles []string, dataDir, works
 		u.done()
 		return true
 	}
-	if _, ok := initVMFolder(u, cfg, cfgFiles, dataDir, workspace, d); !ok {
+	state, err := d.shareState(cfg, cfgFiles, dataDir)
+	switch {
+	case err != nil:
+		u.stopped(fmt.Sprintf("box setup ran, but the box VM's folder state could not be read (%v); run `culibox box share list`, then culibox init again", err))
+		return false
+	case state != "applied" && state != "whole_home":
+		u.stopped(fmt.Sprintf("box setup ran, but the box VM does not have %s yet (folder state: %s); run `culibox box share apply` (restarts the box VM), then culibox init again", workspace, state))
 		return false
 	}
+	u.say("the box VM has %s: its folder list is applied", workspace)
 	u.done()
 	return true
 }
@@ -175,8 +188,11 @@ func initBoxStep(u *initUI, cfg config.Config, cfgFiles []string, dataDir, works
 const initNoVMLine = "no VM folders to set: the box VM is macOS only; on Linux boxes run on this machine's docker and mount the workspace directly"
 
 // initVMFolder makes sure the box VM's folder list covers the workspace. It
-// returns the folder that already covered it ("" when it was added).
-func initVMFolder(u *initUI, cfg config.Config, cfgFiles []string, dataDir, workspace string, d initDeps) (string, bool) {
+// returns the folder that already covered it ("" when it was added). beforeSetup
+// is true when `box setup` runs right after: the VM then starts with the list
+// (or, for a VM that exists, setup applies the change), so nothing is left to
+// apply by hand.
+func initVMFolder(u *initUI, cfg config.Config, cfgFiles []string, dataDir, workspace string, d initDeps, beforeSetup bool) (string, bool) {
 	covered, err := d.shareAdd(cfg, cfgFiles, dataDir, workspace)
 	if err != nil {
 		u.stopped(fmt.Sprintf("%s could not be added to the box VM's folders (%v); fix that, run `culibox box share add %s`, then culibox init again", workspace, err, shellQuote(workspace)))
@@ -188,7 +204,14 @@ func initVMFolder(u *initUI, cfg config.Config, cfgFiles []string, dataDir, work
 		}
 		return covered, true
 	}
-	u.say("added %s to the box VM's folders; it takes effect after `culibox box share apply` (restarts the box VM), or in Settings, VM folders", workspace)
+	switch {
+	case !beforeSetup:
+		u.say("added %s to the box VM's folders; it takes effect after `culibox box share apply` (restarts the box VM), or in Settings, VM folders", workspace)
+	case d.vmSetUp(cfg, dataDir):
+		u.say("added %s to the box VM's folders; box setup below applies it (the box VM stops and starts)", workspace)
+	default:
+		u.say("added %s to the box VM's folders; box setup below starts the VM with it", workspace)
+	}
 	return "", true
 }
 
@@ -337,8 +360,32 @@ func initShareAdd(cfg config.Config, cfgFiles []string, dataDir, path, home, goo
 	if err != nil {
 		return "", err
 	}
-	_, res, err := svc.Add(path, string(vmshares.RW), false)
-	return res.CoveredBy, err
+	return svc.AddWorkspace(path)
+}
+
+// initShareState is the folder state `culibox box share list` would end on
+// ("applied", "pending", "whole_home", "not_set_up"): the saved list read
+// against the folders the VM's written colima.yaml has. It never starts the VM.
+func initShareState(cfg config.Config, cfgFiles []string, dataDir, home, goos string) (string, error) {
+	if goos != "darwin" {
+		return "", errors.New("the box VM exists only on macOS")
+	}
+	l, err := newBoxLayer(cfg, dataDir, home, goos, boxvm.ExecRunner{}, protectedDirsOf(cfg, dataDir, cfgFiles))
+	if err != nil {
+		return "", err
+	}
+	svc, err := newCLIShareSvc(context.Background(), cfg, l)
+	if err != nil {
+		return "", err
+	}
+	v, err := svc.View()
+	if err != nil {
+		return "", err
+	}
+	if v.ListError != "" {
+		return "", errors.New(v.ListError)
+	}
+	return v.State, nil
 }
 
 // initBoxSetup is `culibox box setup`, in-process, with the config main would
