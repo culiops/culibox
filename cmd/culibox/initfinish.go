@@ -387,7 +387,8 @@ func initBoxReady(cfg config.Config, cfgFiles []string, dataDir, home, goos stri
 }
 
 // initBoxReadyFrom reads doctor's box-tier report: every row PASS, and the
-// boxed claude token row PASS too (doctor prints it only on macOS). The one
+// boxed claude token row PASS too (a report whose tier ended early has no token
+// row, so on Linux it is added when the rows lack it). The one
 // exception is a token row that is a WARN only because the store is locked
 // while the claude-box token is in it (tokenStored, which never decrypts): a
 // Linux store's unlock expires, and a locked store is no reason to rebuild. The
@@ -395,7 +396,7 @@ func initBoxReady(cfg config.Config, cfgFiles []string, dataDir, home, goos stri
 // while the VM runs), Linux asks the host's docker (imageCurrent).
 func initBoxReadyFrom(goos string, rep doctor.BoxTierReport, tokenStored, imageCurrent func() bool) bool {
 	rows := rep.Rows
-	if goos != "darwin" {
+	if goos != "darwin" && !slices.ContainsFunc(rows, func(r doctor.Result) bool { return r.Check == rep.Token.Check }) {
 		rows = append(slices.Clone(rows), rep.Token)
 	}
 	image := false

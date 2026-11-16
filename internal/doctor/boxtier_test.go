@@ -164,6 +164,25 @@ func TestBoxTierLinux(t *testing.T) {
 	}
 }
 
+// #282: the boxed claude token row is on Linux too, after the docker rows (the
+// same rule as macOS: a tier that ended on docker not found has no token row).
+func TestBoxTierLinuxShowsTokenRow(t *testing.T) {
+	warnTok := Result{Warn, "boxed claude token", "agent(s) claude have no Claude token that resolves"}
+	for name, f := range map[string]boxFacts{
+		"docker found":  {},
+		"stopped boxes": {Stopped: []string{"ab-box-2"}},
+	} {
+		rs := boxTierResults("linux", f, warnTok)
+		if last := rs[len(rs)-1]; last != warnTok {
+			t.Fatalf("%s: the token row must end the linux tier: %s", name, detail(rs))
+		}
+	}
+	rs := boxTierResults("linux", boxFacts{DockerErr: errors.New("not found")}, warnTok)
+	if strings.Contains(detail(rs), "boxed claude token") {
+		t.Fatalf("no docker ends the tier before the token row, as on macOS: %s", detail(rs))
+	}
+}
+
 func TestClaudeBoxToken(t *testing.T) {
 	boxedClaude := config.AgentConfig{Name: "claude", Bin: "claude"}
 	c := config.Config{Agents: []config.AgentConfig{boxedClaude}}

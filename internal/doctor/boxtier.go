@@ -199,7 +199,9 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		}
 		out = append(out, Result{Pass, ck, "docker found"})
 		stopped()
-		return out
+		// The token does not depend on the tier's state, but a tier that ended on
+		// docker not found has no token row, as on macOS.
+		return append(out, token)
 	}
 	if f.DockerErr != nil {
 		return []Result{{Fail, ck, "docker CLI not found; install it with `brew install colima docker` (" + f.DockerErr.Error() + ")"}}

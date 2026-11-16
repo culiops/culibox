@@ -841,6 +841,7 @@ func TestInitBoxReadyFrom(t *testing.T) {
 		{"linux image missing", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass}, Token: tokenPass}, no, no, false},
 		{"linux locked, token stored", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass}, Token: tokenLock, TokenLockedOnly: true}, yes, yes, true},
 		{"linux locked, token not stored", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass}, Token: tokenLock, TokenLockedOnly: true}, no, yes, false},
+		{"linux token row already in the rows", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass, tokenLock}, Token: tokenLock, TokenLockedOnly: true}, yes, yes, true},
 		{"linux token WARN not only locked", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass}, Token: tokenLock}, yes, yes, false},
 		{"linux another WARN", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass, stoppedBox}, Token: tokenPass}, yes, yes, false},
 		{"darwin all pass", "darwin", doctor.BoxTierReport{Rows: []doctor.Result{tierPass, imagePass, tokenPass}, Token: tokenPass}, no, no, true},
