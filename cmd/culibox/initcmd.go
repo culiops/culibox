@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/culiops/culibox/internal/abduco"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/secretstore"
@@ -27,29 +28,33 @@ const initSteps = 8
 // looks at the machine, runs a program, reads a secret or reaches into another
 // command. realInitDeps wires the real ones.
 type initDeps struct {
-	goos       string
-	getenv     func(string) string // CULIBOX_HOME, AGENT_BOX_HOME, XDG_CONFIG_HOME
-	lookPath   func(string) (string, error)
-	run        func(name string, args ...string) error                         // terminal attached (brew, claude setup-token)
-	readSecret func() ([]byte, error)                                          // no-echo line read
-	hostSize   func() (cpus int, memBytes uint64)                              // boxvm.HostSize
-	macOSMajor func() int                                                      // 0 = unknown/not darwin
-	osRelease  func() string                                                   // /etc/os-release ID ("" if none)
-	vmSetUp    func(cfg config.Config, dataDir string) bool                    // never starts the VM
-	boxReady   func(cfg config.Config, cfgFiles []string, dataDir string) bool // see initBoxReady
-	boxSetup   func(cfg config.Config, cfgFiles []string, w io.Writer) int     // `culibox box setup`
-	shareAdd   func(cfg config.Config, cfgFiles []string, dataDir, path string) (coveredBy string, err error)
-	doctor     func(cfg config.Config, src config.Source, cfgFiles []string, w io.Writer) int
-	newKeeper  func(dataDir string) secretstore.Keeper
+	goos     string
+	getenv   func(string) string // CULIBOX_HOME, AGENT_BOX_HOME, XDG_CONFIG_HOME
+	lookPath func(string) (string, error)
+	// resolveAbduco is serve's abduco lookup (next to culibox, then PATH); nil
+	// means a plain lookPath, as for every other dependency.
+	resolveAbduco func(configured string) (abduco.Resolved, error)
+	run           func(name string, args ...string) error                         // terminal attached (brew, claude setup-token)
+	readSecret    func() ([]byte, error)                                          // no-echo line read
+	hostSize      func() (cpus int, memBytes uint64)                              // boxvm.HostSize
+	macOSMajor    func() int                                                      // 0 = unknown/not darwin
+	osRelease     func() string                                                   // /etc/os-release ID ("" if none)
+	vmSetUp       func(cfg config.Config, dataDir string) bool                    // never starts the VM
+	boxReady      func(cfg config.Config, cfgFiles []string, dataDir string) bool // see initBoxReady
+	boxSetup      func(cfg config.Config, cfgFiles []string, w io.Writer) int     // `culibox box setup`
+	shareAdd      func(cfg config.Config, cfgFiles []string, dataDir, path string) (coveredBy string, err error)
+	doctor        func(cfg config.Config, src config.Source, cfgFiles []string, w io.Writer) int
+	newKeeper     func(dataDir string) secretstore.Keeper
 }
 
 // realInitDeps wires init to this machine; home is the user's home, as main
 // resolved it.
 func realInitDeps(home string) initDeps {
 	return initDeps{
-		goos:     runtime.GOOS,
-		getenv:   os.Getenv,
-		lookPath: exec.LookPath,
+		goos:          runtime.GOOS,
+		getenv:        os.Getenv,
+		lookPath:      exec.LookPath,
+		resolveAbduco: abduco.DefaultLookup().Resolve,
 		run: func(name string, args ...string) error {
 			c := exec.Command(name, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr

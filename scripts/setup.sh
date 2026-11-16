@@ -1,6 +1,9 @@
 #!/bin/sh
 # Install a checksum-verified culibox into ${PREFIX:-$HOME/.local/bin}, then run
 # `culibox init`. Everything else (config, VM, token, doctor) is init's job, in Go.
+# A release tarball that carries abduco gets it installed next to culibox, where
+# culibox looks first; with --from-source, abduco is built from its pinned source
+# when none is installed and cc and make are there.
 #
 #   setup.sh [--version vX.Y.Z] [--from-source] [--prefix DIR]
 #
@@ -235,6 +238,18 @@ get_binary() {
     die "$gb_name does not hold a regular file named culibox"
   fi
   NEW=$WORK/extract/culibox
+  # Releases from #317 on carry a pinned abduco next to culibox; older ones do not.
+  gb_list=$(tar -tzf "$WORK/$gb_name") || die "could not list $gb_name"
+  if printf '%s\n' "$gb_list" | grep -qx abduco; then
+    tar -xzf "$WORK/$gb_name" -C "$WORK/extract" abduco ||
+      die "$gb_name lists abduco but it could not be extracted"
+    if [ ! -f "$WORK/extract/abduco" ] || [ -L "$WORK/extract/abduco" ]; then
+      die "$gb_name does not hold a regular file named abduco"
+    fi
+    NEW_ABDUCO=$WORK/extract/abduco
+  elif ! command -v abduco >/dev/null 2>&1; then
+    ABDUCO_NOTE="this release does not include abduco; culibox init checks for abduco"
+  fi
 }
 
 # ---- 4b. from source ----------------------------------------------------------------
@@ -306,6 +321,32 @@ build_from_source() {
       -o "$WORK/culibox" ./cmd/culibox
   ) || die "go build failed"
   NEW=$WORK/culibox
+  # abduco: no prebuilt binary is downloaded here. When none is installed yet, the
+  # clone's installer fetches the pinned abduco source, checks its sha256 before
+  # unpacking, and builds it.
+  if [ -e "$PREFIX/abduco" ] || command -v abduco >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ ! -f "$WORK/src/scripts/ci/install-abduco.sh" ]; then
+    ABDUCO_NOTE="this release cannot build abduco; $(abduco_hint)"
+  elif ! command -v cc >/dev/null 2>&1 || ! command -v make >/dev/null 2>&1; then
+    ABDUCO_NOTE="building abduco needs cc and make; $(abduco_hint)"
+  else
+    say "building abduco (pinned version, checksum-verified source)"
+    if sh "$WORK/src/scripts/ci/install-abduco.sh" "$WORK/abduco"; then
+      NEW_ABDUCO=$WORK/abduco/bin/abduco
+    else
+      ABDUCO_NOTE="could not build abduco; $(abduco_hint)"
+    fi
+  fi
+}
+
+abduco_hint() {
+  if [ "$OS" = darwin ]; then
+    echo "install abduco with: brew install abduco (culibox init checks for it)"
+  else
+    echo "install abduco with your package manager, or build it from https://github.com/martanne/abduco where there is no package (culibox init checks for it)"
+  fi
 }
 
 # ---- 5. install ---------------------------------------------------------------------
@@ -331,7 +372,36 @@ install_binary() {
   fi
 }
 
+# install_abduco: put NEW_ABDUCO next to culibox, where culibox looks first.
+install_abduco() {
+  if [ -z "$NEW_ABDUCO" ]; then
+    if [ -n "$ABDUCO_NOTE" ]; then note "$ABDUCO_NOTE"; fi
+    return 0
+  fi
+  ia_dest=$PREFIX/abduco
+  if [ -d "$ia_dest" ]; then
+    note "$ia_dest is a directory, so the bundled abduco was not installed; $(abduco_hint)"
+    return 0
+  fi
+  if [ -f "$ia_dest" ] && cmp -s "$NEW_ABDUCO" "$ia_dest"; then
+    note "$ia_dest is already this abduco"
+    return 0
+  fi
+  say "installing $ia_dest"
+  if [ -e "$ia_dest" ]; then
+    rm -f "$ia_dest.prev"
+    cp -p "$ia_dest" "$ia_dest.prev"
+    note "kept the previous abduco as $ia_dest.prev"
+  fi
+  rm -f "$ia_dest.new"
+  cp "$NEW_ABDUCO" "$ia_dest.new"
+  chmod 755 "$ia_dest.new"
+  mv -f "$ia_dest.new" "$ia_dest"
+}
+
 KEPT=0
+NEW_ABDUCO=
+ABDUCO_NOTE=
 if [ "$INSTALLED" = "$VERSION" ]; then
   say "culibox $VERSION is already installed at $BIN"
 else
@@ -341,6 +411,7 @@ else
   trap 'exit 143' TERM
   if [ "$FROM_SOURCE" = 1 ]; then build_from_source; else get_binary; fi
   install_binary
+  install_abduco
   cleanup
   WORK=
 fi

@@ -318,6 +318,15 @@ func TestTilde(t *testing.T) {
 		{"/home/a: err", "/home/a", "~: err"},
 		{"/Users/a/.local/share/x", "/Users/a/", "~/.local/share/x"},
 		{"/Users/a", "/Users/a/", "~"},
+		// A match must also start a path: home /tmp is not inside /var/tmp.
+		{"/var/tmp/x", "/tmp", "/var/tmp/x"},
+		{"/var/tmp/x and /tmp/y", "/tmp", "/var/tmp/x and ~/y"},
+		{"dir=/tmp/x", "/tmp", "dir=~/x"},
+		// The boundary is read in the original text, also after a skipped match.
+		{"/x/tmp/tmp/y", "/tmp", "/x/tmp/tmp/y"},
+		{"/home/a/home/a/x", "/home/a", "~/home/a/x"},
+		// A doubled slash still starts the path (file:// URLs).
+		{"file:///home/a/x", "/home/a", "file://~/x"},
 	} {
 		if got := tilde(c.in, c.home); got != c.want {
 			t.Errorf("tilde(%q,%q) = %q want %q", c.in, c.home, got, c.want)
@@ -689,5 +698,106 @@ func TestProfilesFormatRow(t *testing.T) {
 	}
 	if rows := checkProfilesFormat(errors.New("parse error")); len(rows) != 0 {
 		t.Errorf("plain parse error is unchanged: %+v", rows)
+	}
+}
+
+// fakeAbducoBin writes a script that prints what `abduco -v` prints.
+func fakeAbducoBin(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "abduco")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\necho 'abduco-0.6 x'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestCheckAbducoBinarySource(t *testing.T) {
+	p := fakeAbducoBin(t)
+	for src, want := range map[abduco.Source]string{
+		abduco.SourceBundled: "(next to culibox)",
+		abduco.SourcePath:    "(PATH)",
+		abduco.SourceConfig:  "(abduco_bin)",
+	} {
+		r := checkAbducoBinary(abduco.Resolved{Path: p, Source: src}, nil)
+		if r.Status != Pass || !strings.Contains(r.Detail, p) || !strings.Contains(r.Detail, "abduco-0.6") || !strings.Contains(r.Detail, want) {
+			t.Errorf("%s: got %+v, want Pass with %s, abduco-0.6 and %s", src, r, p, want)
+		}
+	}
+}
+
+func TestCheckAbducoBinarySkippedNote(t *testing.T) {
+	p := fakeAbducoBin(t)
+	r := checkAbducoBinary(abduco.Resolved{Path: p, Source: abduco.SourcePath, Skipped: "/x/abduco: owned by uid 1234, not by you or root"}, nil)
+	if r.Status != Pass || !strings.Contains(r.Detail, "ignored /x/abduco: owned by uid 1234") {
+		t.Fatalf("got %+v, want Pass that names the ignored file and why", r)
+	}
+}
+
+func TestCheckAbducoBinaryNotFound(t *testing.T) {
+	r := checkAbducoBinary(abduco.Resolved{}, errors.New("abduco not found next to culibox (/opt/c) or on PATH"))
+	if r.Status != Fail || !strings.Contains(r.Detail, "next to culibox (/opt/c) or on PATH") || !strings.Contains(r.Detail, "brew install abduco") {
+		t.Fatalf("got %+v", r)
+	}
+}
+
+// Run reports the abduco the resolver picks, not a bare PATH lookup.
+func TestDoctor_UsesResolvedAbduco(t *testing.T) {
+	p := fakeAbducoBin(t)
+	old := resolveAbduco
+	t.Cleanup(func() { resolveAbduco = old })
+	resolveAbduco = func(string) (abduco.Resolved, error) {
+		return abduco.Resolved{Path: p, Source: abduco.SourceBundled}, nil
+	}
+	in := input(t)
+	out, _ := run(in)
+	// Doctor shows the home as ~, and t.TempDir may sit under the test's home (/tmp).
+	if !strings.Contains(out, "abduco binary: "+tilde(p, in.Home)) || !strings.Contains(out, "(next to culibox)") {
+		t.Fatalf("abduco row does not show the resolved binary:\n%s", out)
+	}
+}
+
+// A refused abduco next to culibox with none on PATH: the FAIL row says why.
+func TestDoctor_RefusedBundledAbducoSaysWhy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil { // the folder passes whatever the umask
+		t.Fatal(err)
+	}
+	exe := filepath.Join(dir, "culibox")
+	ab := filepath.Join(dir, "abduco")
+	for _, p := range []string{exe, ab} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(ab, 0o757); err != nil { // writable by others
+		t.Fatal(err)
+	}
+	old := resolveAbduco
+	t.Cleanup(func() { resolveAbduco = old })
+	resolveAbduco = abduco.Lookup{
+		Executable: func() (string, error) { return exe, nil },
+		LookPath:   func(string) (string, error) { return "", exec.ErrNotFound },
+		Uid:        os.Getuid(),
+	}.Resolve
+	out, code := run(input(t))
+	if code != 1 || !strings.Contains(out, "FAIL abduco binary") || !strings.Contains(out, "writable by group or others") {
+		t.Fatalf("code=%d, want a FAIL abduco row that says why the file was ignored:\n%s", code, out)
+	}
+}
+
+// A home reached through a symlink (/home -> /data/home) is hidden in its
+// resolved spelling too: the abduco resolver prints resolved paths.
+func TestRedactResolvedHome(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Redact(resolved+"/.local/bin/abduco and "+link+"/x", link, ""); got != "~/.local/bin/abduco and ~/x" {
+		t.Fatalf("Redact = %q, want both spellings of the home as ~", got)
 	}
 }

@@ -113,7 +113,15 @@ func runWithHost(w io.Writer, in Input, host string) int {
 // (doctor's own output and the bug-report bundle): home becomes "~", then the
 // hostname becomes "<host>". The order matters, see redactHost.
 func Redact(detail, home, host string) string {
-	return redactHost(tilde(detail, home), host)
+	detail = tilde(detail, home)
+	// Paths that went through EvalSymlinks (the abduco lookup) spell a home
+	// reached through a symlink in its resolved form.
+	if home != "" {
+		if resolved, err := filepath.EvalSymlinks(home); err == nil && resolved != filepath.Clean(home) {
+			detail = tilde(detail, resolved)
+		}
+	}
+	return redactHost(detail, host)
 }
 
 // redactHost is the backstop for the hostname rule: abduco's own error text can
@@ -129,8 +137,8 @@ func redactHost(detail, host string) string {
 	return strings.ReplaceAll(detail, host, "<host>")
 }
 
-// tilde shows the home dir as "~". It only matches a whole path component, so
-// /home/ab is not rewritten when home is /home/a.
+// tilde shows the home dir as "~". It only matches a whole path, so /home/ab is
+// not rewritten when home is /home/a, nor /var/tmp when home is /tmp.
 func tilde(s, home string) string {
 	if home == "" || home == "/" {
 		return s
@@ -140,20 +148,26 @@ func tilde(s, home string) string {
 		return s
 	}
 	var b strings.Builder
+	orig, pos := s, 0 // the boundary before a match is read in the original text
 	for {
 		i := strings.Index(s, home)
 		if i < 0 {
 			break
 		}
 		end := i + len(home)
-		if end < len(s) && isPathChar(s[end]) && s[end] != '/' {
+		// Not a whole path: the match ends inside a name (/home/ab for /home/a)
+		// or starts inside a path (/var/tmp for /tmp; a doubled slash, as in
+		// file:///home/a, still starts one).
+		before := pos + i - 1
+		if (end < len(s) && isPathChar(s[end]) && s[end] != '/') ||
+			(before >= 0 && isPathChar(orig[before]) && orig[before] != '/') {
 			b.WriteString(s[:end])
-			s = s[end:]
+			s, pos = s[end:], pos+end
 			continue
 		}
 		b.WriteString(s[:i])
 		b.WriteByte('~')
-		s = s[end:]
+		s, pos = s[end:], pos+end
 	}
 	b.WriteString(s)
 	return b.String()
@@ -190,14 +204,11 @@ func Checks(in Input) []Result {
 	c := in.Config
 	dataDir := dataDirOf(in)
 	out = append(out, checkDataDir(in, dataDir, runtime.GOOS), checkAuth(c, dataDir), checkBind(c), checkPort(c))
-	bin := c.AbducoBin
-	if bin == "" {
-		bin = "abduco"
-	}
-	ab := checkAbducoBinary(bin)
+	res, rerr := resolveAbduco(c.AbducoBin)
+	ab := checkAbducoBinary(res, rerr)
 	out = append(out, ab)
 	if ab.Status != Fail {
-		out = append(out, checkRoundtrip(bin))
+		out = append(out, checkRoundtrip(res.Path))
 	}
 	out = append(out, checkProcinfoSelf(), checkProcTable())
 	socketDir := abduco.SocketDirFor(c.AbducoSocketDir, runtime.GOOS, dataDir, os.Getuid())
@@ -377,19 +388,28 @@ func checkPort(c config.Config) Result {
 	return Result{Pass, "port", c.BindAddr + " is free"}
 }
 
-func checkAbducoBinary(bin string) Result {
-	p, err := exec.LookPath(bin)
+// resolveAbduco is serve's lookup (a seam for tests).
+var resolveAbduco = abduco.DefaultLookup().Resolve
+
+// checkAbducoBinary reports the abduco serve would use: its path, where it came
+// from and its version, plus an abduco next to culibox that was refused.
+func checkAbducoBinary(res abduco.Resolved, err error) Result {
 	if err != nil {
 		hint := "install it (macOS: brew install abduco)"
-		return Result{Fail, "abduco binary", fmt.Sprintf("%q not found on PATH; %s", bin, hint)}
+		return Result{Fail, "abduco binary", fmt.Sprintf("%v; %s", err, hint)}
 	}
+	p := res.Path
 	// `abduco -v` prints its version and exits non-zero; only the text matters.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p, "-v")
 	cmd.WaitDelay = time.Second // a forked child holding stdout must not outlast the cap
 	v, _ := cmd.CombinedOutput()
-	return Result{Pass, "abduco binary", p + " " + strings.TrimSpace(firstLine(string(v)))}
+	detail := fmt.Sprintf("%s %s (%s)", p, strings.TrimSpace(firstLine(string(v))), res.Source)
+	if res.Skipped != "" {
+		detail += "; ignored " + res.Skipped
+	}
+	return Result{Pass, "abduco binary", detail}
 }
 
 // checkRoundtrip drives the real adapter through create → liveness → kill in a
