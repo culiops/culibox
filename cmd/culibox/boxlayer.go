@@ -64,6 +64,7 @@ type boxLayer struct {
 	adoptable  bool               // box_image is unset: a legacy default image may be adopted (adoptImage)
 	goos       string             // runtime.GOOS as the layer was built
 	dataDir    string             // the absolute data dir, for the store doctor and box setup read
+	pins       pinSource          // where `box setup` looks for the images instances pin (set by runBoxDarwin)
 	protected  []box.ProtectedDir // CuliBox's own host dirs (config, profiles, bundle); no VM share may overlap them
 	stateRoot  string             // where box homes and the bundle live; resolved on darwin
 	// addrs is the one box-address cache the egress proxy and the credential

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -39,7 +40,12 @@ func runBox(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io.W
 		printExtraCA(w, set, time.Now())
 		d := boximage.Docker{Bin: bin, ExtraCA: set.PEM()}
 		adoptDefaultImage(ctx, d, cfg, w)
-		return boxSetupImage(ctx, d, cfg.BoxImageOrDefault(), a.Rebuild, time.Now(), runtime.GOOS, w)
+		dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
+		if err != nil {
+			dataDir = ""
+		}
+		src := pinSource{cfg: cfg, home: home, dataDir: dataDir, xdg: xdgConfigHome(), cfgFiles: cfgFiles}
+		return boxSetupAndPrune(ctx, d, cfg.BoxImageOrDefault(), a, src, time.Now(), runtime.GOOS, w)
 	case "status":
 		d := boximage.Docker{Bin: bin}
 		adoptDefaultImage(ctx, d, cfg, w)

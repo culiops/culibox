@@ -35,6 +35,7 @@ func runBoxDarwin(a cliArgs, cfg config.Config, home string, cfgFiles []string, 
 		fmt.Fprintf(w, "FAIL box VM: %v\n", err)
 		return 1
 	}
+	l.pins = pinSource{cfg: cfg, home: home, dataDir: dataDir, xdg: xdgConfigHome(), cfgFiles: cfgFiles}
 	return runBoxVM(context.Background(), a, cfg, l, w)
 }
 
@@ -197,7 +198,10 @@ func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, 
 	}
 	fmt.Fprintf(w, "PASS box VM: running (%s, %s)\n", st.Driver, st.MountType)
 	l.adoptImage(ctx)
-	if rc := boxSetupImage(ctx, l.img, l.image, a.Rebuild, time.Now(), l.goos, w); rc != 0 {
+	// The VM's one Docker store serves every CuliBox on this Mac, so the prune
+	// asks l.img (the VM's docker) and reads the same config places as on Linux.
+	l.pins.cfg = cfg
+	if rc := boxSetupAndPrune(ctx, l.img, l.image, a, l.pins, time.Now(), l.goos, w); rc != 0 {
 		return rc
 	}
 	pctx, cancel := context.WithTimeout(ctx, setupProbeTimeout)

@@ -128,6 +128,7 @@ context and never edits `~/.ssh/config`.
     culibox box setup        # once: creates the VM, builds the image natively (or pulls it when `box_image` is a ghcr digest), checks containment
     culibox doctor           # the "boxed tier", "box image" and "containment" lines
 
+- `box setup` also removes older box images in the VM's Docker that no container uses and no visible config pins, and says which and how many bytes (`-no-prune` keeps them). The VM has one Docker for every CuliBox on the Mac, so a second instance's pin counts only if its config is in a place `box setup` reads; see [INSTALL](INSTALL.md#from-source-manual).
 - The VM starts on the first boxed spawn (expect 20–30 s) and keeps running.
   `culibox box stop` frees its memory (default all your Mac's cores and half
   its RAM in whole GiB, at least 4 GiB; `box_vm_cpus`, `box_vm_memory_gib` in
