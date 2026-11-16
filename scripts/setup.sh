@@ -125,26 +125,34 @@ lookup_failed() {
 latest_tag() {
   TAG=
   if have_gh; then
+    # stdout alone is the tag: gh may print a notice on stderr even when it succeeds, so
+    # stderr goes to a file that is read only when gh failed.
+    lt_err=$(mktemp "${TMPDIR:-/tmp}/culibox-setup-err.XXXXXX") || die "could not create a temp file"
     lt_rc=0
-    lt_out=$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>&1) || lt_rc=$?
+    lt_out=$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>"$lt_err") || lt_rc=$?
+    lt_msg=
+    if [ "$lt_rc" -ne 0 ]; then lt_msg=$(head -n 1 "$lt_err"); fi
+    rm -f "$lt_err"
     if [ "$lt_rc" -ne 0 ]; then
       # gh words its 404 "release not found"; any other message is a failure to show.
-      case $lt_out in
+      case $lt_msg in
         *"release not found"*) no_release ;;
       esac
-      lookup_failed "gh said: $(printf '%s\n' "$lt_out" | head -n 1)"
+      lookup_failed "gh said: $lt_msg"
     fi
     TAG=$(printf '%s\n' "$lt_out" | tail -n 1)
   else
     # No -f: an HTTP error must reach us as a status, not as curl's bare exit 22. The
     # status is the last line of the output.
     lt_rc=0
-    lt_out=$(curl -sL -w '\n%{http_code}' "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null) || lt_rc=$?
+    # -q first, or a ~/.curlrc (a "fail" line, say) could turn a 404 into exit 22.
+    lt_out=$(curl -q -sL -w '\n%{http_code}' "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null) || lt_rc=$?
     if [ "$lt_rc" -ne 0 ]; then
       case $lt_rc in
         127) lookup_failed "curl is not installed" ;;
         6) lookup_failed "could not resolve api.github.com (curl exit 6)" ;;
         7) lookup_failed "could not connect to api.github.com (curl exit 7)" ;;
+        22) lookup_failed "GitHub answered with an HTTP error (curl exit 22)" ;;
         28) lookup_failed "api.github.com timed out (curl exit 28)" ;;
         *) lookup_failed "curl could not reach api.github.com (curl exit $lt_rc)" ;;
       esac

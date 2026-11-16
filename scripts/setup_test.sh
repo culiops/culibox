@@ -79,6 +79,7 @@ echo "curl $url" >>"$STUB_CALLS"
 src=
 case "$url" in
 https://api.github.com/repos/culiops/culibox/releases/latest)
+  echo "curl-api first-arg $1" >>"$STUB_CALLS"
   # Like the real curl: without -f an HTTP error is exit 0 and the status is only in -w's
   # output; with -f it is exit 22. A network failure is its own exit code either way.
   # STUB_API: net (DNS, exit 6), 403 (rate limit), 500, notag (200 without a tag_name).
@@ -92,6 +93,7 @@ https://api.github.com/repos/culiops/culibox/releases/latest)
   403) status=403 body='{"message":"API rate limit exceeded for 203.0.113.9."}' ;;
   500) status=500 body='{"message":"Server Error"}' ;;
   notag) status=200 body='{"url":"x"}' ;;
+  exit22) echo "curl: (22) The requested URL returned error: 404" >&2; exit 22 ;;
   esac
   if [ -n "$failflag" ] && [ "$status" -ge 400 ]; then
     echo "curl: (22) The requested URL returned error: $status" >&2
@@ -125,6 +127,8 @@ case "$1 $2" in
   [ -z "${STUB_GH_VIEW_ERR:-}" ] || { echo "$STUB_GH_VIEW_ERR" >&2; exit 1; }
   [ -f "$STUB_REL/LATEST" ] || { echo "release not found" >&2; exit 1; }
   cat "$STUB_REL/LATEST"
+  # A success can still print a notice on stderr, after the tag.
+  [ -z "${STUB_GH_VIEW_NOTICE:-}" ] || echo "$STUB_GH_VIEW_NOTICE" >&2
   ;;
 "release download")
   tag=$3 pat= dir=
@@ -257,6 +261,7 @@ run_setup() {
     STUB_GH_NO_ATTEST="${STUB_GH_NO_ATTEST:-}" STUB_ABDUCO_INSTALLER="${STUB_ABDUCO_INSTALLER:-}" \
     STUB_ABDUCO_INSTALL_FAIL="${STUB_ABDUCO_INSTALL_FAIL:-}" \
     STUB_API="${STUB_API:-}" STUB_GH_VIEW_ERR="${STUB_GH_VIEW_ERR:-}" \
+    STUB_GH_VIEW_NOTICE="${STUB_GH_VIEW_NOTICE:-}" \
     "$SH" "$script" "$@" >"$C/out" 2>&1 </dev/null || rc=$?
 }
 show() { sed 's/^/        | /' "$C/out" | tail -12 >&2 || true; }
@@ -417,6 +422,31 @@ case_gh_no_release() {
   run_setup
   bad_rc "an authed gh with no release fails"
   says "No published CuliBox release yet" "gh's release-not-found is reported as no release"
+}
+case_gh_success_with_stderr_notice() {
+  newcase gh_notice
+  mkrelease "$min" latest
+  use gh
+  STUB_VIS=PRIVATE STUB_GH_VIEW_NOTICE="A new release of gh is available: 2.99.0"
+  run_setup
+  ok_rc "a gh that succeeds but prints a notice on stderr still installs"
+  installed_is "$min" "the tag is gh's stdout, not its stderr"
+  silent "A new release of gh" "and the notice is not taken for the tag"
+}
+case_api_curl_ignores_curlrc() {
+  newcase api_curlrc
+  mkrelease "$min" latest
+  run_setup
+  ok_rc "the lookup succeeds"
+  called "curl-api first-arg -q" "and curl gets -q first, so a ~/.curlrc cannot change the lookup"
+}
+case_api_http_error_exit() {
+  newcase api_exit22
+  STUB_API=exit22
+  run_setup
+  bad_rc "a curl that fails with exit 22 fails"
+  says "curl exit 22" "the message names the exit code"
+  silent "No published CuliBox release" "and a curlrc-made 22 is not reported as no release"
 }
 case_gh_view_failure() {
   newcase gh_view_failure
