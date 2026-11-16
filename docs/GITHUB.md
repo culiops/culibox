@@ -37,7 +37,7 @@ The key is never copied into a box. For a key file, CuliBox reads it once per da
 | `permissions` | Optional. The default is `actions`, `checks`, `contents`, `pull_requests`, `issues` and `metadata`, all `"read"`; `statuses` can be added. `contents`, `pull_requests` and `issues` may be `"write"`; every other key is `"read"` only, and any other value is refused. |
 | `egress_allow` | Optional extra hosts for this binding's boxes, on top of the GitHub hosts below. |
 
-The box image must include `gh`: use the image `culibox box setup` builds, or `ghcr.io/culiops/culibox` pinned by digest, and set `box_image` to it (see `box setup` in the [quick start](../README.md#from-source-manual)).
+The box image must include `gh`: use the image `culibox box setup` builds, or `ghcr.io/culiops/culibox` pinned by digest, and set `box_image` to it (see `box setup` in [From source (manual)](INSTALL.md#from-source-manual)).
 
 ## How the agent uses it
 

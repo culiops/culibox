@@ -55,128 +55,26 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 - **Secrets by reference, and an encrypted store.** A credential entry names where its value lives instead of holding it. An optional encrypted store keeps values unreadable in disk snapshots and backups. See [Store](docs/STORE.md).
 - **`culibox doctor`.** A read-only machine check that prints PASS, WARN or FAIL lines, safe to paste into an issue.
 
-## Requirements
-
-- Go 1.26.5 or newer (see `go.mod`) to build.
-- Linux or macOS. macOS needs 13+ on Apple Silicon (Intel is untested) for the boxed tier.
-- [abduco](https://www.brain-dump.org/projects/abduco/), in the same folder as the `culibox` binary or on `PATH` (CuliBox looks in that order; see `abduco_bin` in [docs/CONFIG.md](docs/CONFIG.md)). It is required; the daemon will not start without it.
-- For the boxed tier: Docker on Linux, or `colima` and `docker` on macOS. On Linux the docker daemon must run on the same machine and see host files as they are (a local Docker Engine). A VM-backed or remote daemon (for example Docker Desktop for Linux or a remote docker context) is not supported for boxed sessions: CuliBox refuses to start a box there, because it cannot confirm the box got the folder that was checked.
-- The agent CLI you want to run. Claude Code (`claude`) is the supported agent. Other terminal programs can be configured as agents (a shell, for example), but status, usage and reply features are Claude Code only.
-- Node.js, only to run the browser-side tests in development.
-
-## Install
-
-Each release on the [Releases page](https://github.com/culiops/culibox/releases) has a tarball for Linux and for macOS, each for amd64 and arm64, and a `SHA256SUMS` file. A tarball holds `culibox`, `LICENSE` and `README.md`. It does not include abduco or Docker; see [Requirements](#requirements). To build from source instead, use [From source (manual)](#from-source-manual). The [Quick start](#quick-start) installer does the download and the check below for you.
-
-On Linux (use `arm64` on an ARM machine, and the release you want in place of `0.35.0`):
-
-```sh
-VERSION=0.35.0
-OS=linux
-ARCH=amd64
-base=https://github.com/culiops/culibox/releases/download/v$VERSION
-curl -fsSLO "$base/culibox_${VERSION}_${OS}_${ARCH}.tar.gz"
-curl -fsSLO "$base/SHA256SUMS"
-grep "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" SHA256SUMS | sha256sum -c -
-mkdir culibox && tar -xzf "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" -C culibox
-cd culibox
-./culibox version
-```
-
-On macOS, set `OS=darwin` (`ARCH=arm64` on Apple Silicon) and check with `shasum` instead:
-
-```sh
-grep "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" SHA256SUMS | shasum -a 256 -c -
-```
-
-The check must print `OK` for your tarball. `version` prints `culibox v<version> (<commit>)`.
-
-**macOS binaries are unsigned.** A file downloaded with `curl` is not quarantined and runs as it is. A file downloaded in a browser is quarantined, so remove the flag before the first run:
-
-```sh
-xattr -d com.apple.quarantine culibox
-```
-
-**Is the macOS build verified?** Every release's notes end with a Platform status block. The Linux lines say the build was tested in CI, with a link to the run. The macOS lines say one of these:
-
-- `⚠️ NOT yet verified on macOS`: nobody has checked these files on a Mac yet.
-- `✅ verified on macOS ...`: the exact published files were checked on a Mac. The line gives the macOS version, the chip and the date.
-- `⚠️ automated checks passed, manual checks not run`, or `⚠️ automated checks incomplete`: only part of the check ran.
-- `❌ failed: ...`: a check failed. Do not use that build.
-
-Releases are checked on a Mac in batches, so a new release usually starts as not verified. The block's last line, "Last macOS-verified release", names the newest verified release at the time this release was cut. It is not updated afterwards, so check the Releases page to see whether a newer release has been verified since. If you want a verified macOS build, pick the newest release marked ✅. The amd64 build is checked on an Apple Silicon Mac under Rosetta 2, not on Intel hardware. How the check works is in [docs/MACOS.md](docs/MACOS.md#release-verification).
-
-Upgrading an existing install, and going back: [docs/UPGRADING.md](docs/UPGRADING.md).
-
 ## Quick start
 
-**1. Install and set up.** Download the installer, read it, run it (use the release tag you want in place of `<tag>`):
+You need Linux or macOS, [abduco](https://www.brain-dump.org/projects/abduco/), and Claude Code. Boxed sessions also need Docker on Linux, or `colima` and `docker` on macOS 13+ on Apple Silicon. `culibox init` checks each one and says how to install what is missing. The full list is in [Requirements](docs/INSTALL.md#requirements).
+
+Download the installer, read it, and run it (use the release tag you want in place of `<tag>`):
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/culiops/culibox/<tag>/scripts/setup.sh
 sh setup.sh
 ```
 
-`setup.sh` is a short POSIX `sh` script. It installs a checksum-verified `culibox` into `~/.local/bin` (it never uses `sudo` and installs only under that folder; it downloads and builds in a temporary folder that it removes, and with `--from-source` on macOS it may run `brew install go` after an explicit `y`), then runs `culibox init`. When the release tarball holds `abduco`, it installs that next to `culibox`; with `--from-source` it builds the pinned abduco when none is installed and `cc` and `make` are present, and otherwise says how to install it. `init` is a guided setup that checks the programs CuliBox needs (offering `brew install` on macOS, one package at a time, and only printing commands on Linux), your workspace folder, the macOS box VM size, a Claude token, the config file, `box setup` and `culibox doctor`. Each of its 8 steps prints one result line, and you can run it again at any time to continue. Every step of both, so you can do it by hand, is in [docs/MACOS.md](docs/MACOS.md#install). Options: `--version vX.Y.Z`, `--from-source` (build that release instead of downloading a binary) and `--prefix DIR`.
-
-`setup.sh` refuses a release older than `v0.35.0`, the first one that includes `culibox init`. To build from source instead, follow [From source (manual)](#from-source-manual).
-
-**2. Start CuliBox.**
+It installs a checksum-verified `culibox` into `~/.local/bin` without `sudo`, then runs `culibox init`, a guided setup you can run again at any time. Then start CuliBox:
 
 ```sh
 culibox serve
 ```
 
-CuliBox listens on `127.0.0.1:8899` and prints a login URL with a login token. Open it in a browser on the same machine. The token is generated on the first start and kept in `login.token` in the data root; it stays valid across restarts until you delete that file (which makes a new one).
+It listens on `127.0.0.1:8899` and prints a login URL. Open it in a browser on the same machine.
 
-### From source (manual)
-
-This is what `setup.sh --from-source` and `culibox init` do for you.
-
-**1. Build.** Build into `~/.local/bin`, not into the source folder: a folder that holds a program CuliBox runs can only be shared with the box VM read-only.
-
-```sh
-git clone https://github.com/culiops/culibox.git
-cd culibox
-mkdir -p ~/.local/bin
-go build -ldflags "-X main.version=$(scripts/version.sh)" -o ~/.local/bin/culibox ./cmd/culibox
-culibox doctor
-```
-
-Add `~/.local/bin` to your `PATH` if it is not there. Releases are `vX.Y.Z` git tags. `scripts/version.sh` prints the checkout's version (`v0.1.0`, or `v0.1.0-3-g<sha>` for 3 commits past the tag). The header shows it, and the About tab and `culibox bug-report` name it. A build without the flag works but shows no version.
-
-**2. Try it uncontained.** With no config file, CuliBox runs one `claude` agent on the **host** tier (not contained):
-
-```sh
-culibox serve
-```
-
-It prints a login URL with a login token. Open it in a browser on the same machine. The token is kept in `login.token` in the data root and stays valid until you delete the file.
-
-**3. Turn on boxes.** Build the box image (on macOS this also creates the VM; see [docs/MACOS.md](docs/MACOS.md)):
-
-```sh
-culibox box setup
-```
-
-`box setup` tags every build with its date (for example `culiops/culibox:2026-10-18`) and prints how to pin it. To pull instead of build, set `"box_image": "ghcr.io/culiops/culibox@sha256:<digest>"` (the digest is in the CI job summary, or from `docker buildx imagetools inspect ghcr.io/culiops/culibox:base`) and run `box setup`: it pulls the image for your daemon's architecture instead of building it. Pin by digest, never by `:base`.
-
-Then put this in `~/.local/share/culibox/config.json` and run `culibox serve` again:
-
-```json
-{
-  "bind_addr": "127.0.0.1:8899",
-  "default_cwd": "/path/to/projects",
-  "default_runtime": "box",
-  "agents": [
-    { "name": "claude", "bin": "claude" }
-  ]
-}
-```
-
-Open `http://127.0.0.1:8899` (use the printed login URL the first time). Sessions are boxed unless a profile says `"runtime": "host"`. The workspace folder must not be your home directory, because a box mounts the whole workspace. Claude Code needs a login inside the box: create a long-lived token with `claude setup-token` and paste it on an agent account's row in Settings → Agent accounts, then choose that account on the claude profile (Settings → Profiles), or add `"account": "<name>"` to the claude agent in `config.json` (see [Features](docs/FEATURES.md); `culibox init` does all of this for an account named `claude-box`).
-
-Every key is in [Configuration](docs/CONFIG.md); [config.example.json](config.example.json) is a fuller example. Only one CuliBox can serve a data root at a time.
+Release tarballs, building from source, what `setup.sh` and `init` do step by step, and how to tell whether a macOS build is verified: [docs/INSTALL.md](docs/INSTALL.md). Upgrading: [docs/UPGRADING.md](docs/UPGRADING.md).
 
 ## Security
 
@@ -200,6 +98,7 @@ The full model and every known limit: [docs/SECURITY.md](docs/SECURITY.md).
 
 | Doc | What it covers |
 |---|---|
+| [Install](docs/INSTALL.md) | Requirements, the installer, release tarballs, building from source, macOS release verification. |
 | [Features](docs/FEATURES.md) | Every feature in detail: boxes, config bundle, box shell, credentials. |
 | [Configuration](docs/CONFIG.md) | The data root, every `config.json` key, profile fields. |
 | [Clone mode](docs/CLONE-MODE.md) | Agents working on a private copy of a repo; bringing branches home. |

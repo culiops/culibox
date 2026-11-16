@@ -629,7 +629,7 @@ A release's darwin tarballs are built on Linux and are not run on a Mac by CI, s
 each release starts with `⚠️ NOT yet verified on macOS` in its Platform status
 block. The maintainers then check the published files on an Apple Silicon Mac and
 record the result on the release, which rewrites the two darwin lines. The lines
-you can see on a release (also explained in the [README](../README.md)):
+you can see on a release (also explained in [docs/INSTALL.md](INSTALL.md#install-from-a-release-tarball)):
 
 - **verified** (`✅`): both arches passed their tests and version check, arm64
   native and amd64 under Rosetta 2, and at least one manual check passed. No

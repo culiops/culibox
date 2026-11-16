@@ -358,8 +358,8 @@ func TestVMIDsErrorOnReuseKeepsTheBox(t *testing.T) {
 	}
 }
 
-// With a VM hook (macOS) the boxes run in CuliBox's own colima VM, so the README's
-// Linux requirement (a local docker that sees host files as they are) does not
+// With a VM hook (macOS) the boxes run in CuliBox's own colima VM, so the Linux requirement in docs/INSTALL.md
+// (a local docker that sees host files as they are) does not
 // apply and the refusal must not point to it. A workspace that the box shows as
 // another folder is still refused as changed while the box started.
 func TestVMIDsWorkspaceMismatchOnACreatedBoxDoesNotCiteTheLinuxRequirement(t *testing.T) {
@@ -379,7 +379,7 @@ func TestVMIDsWorkspaceMismatchOnACreatedBoxDoesNotCiteTheLinuxRequirement(t *te
 	if want := "workspace " + dir + ": the mounted folder is not the one that was checked (it changed while the box started); refusing"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("err = %v, want %q", err, want)
 	}
-	if strings.Contains(err.Error(), "README") || strings.Contains(err.Error(), "Docker Desktop") {
+	if strings.Contains(err.Error(), "INSTALL.md") || strings.Contains(err.Error(), "Docker Desktop") {
 		t.Fatalf("err = %v, a box in the VM must not cite the Linux docker requirement", err)
 	}
 	if f.runs() != 1 || f.stops() != 1 {

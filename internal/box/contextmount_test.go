@@ -286,7 +286,7 @@ func TestCheckContextPathIDOffLinux(t *testing.T) {
 // hook, points to the requirement that docker sees host files as they are.
 func TestMountChangedTextMatchesTheCase(t *testing.T) {
 	const hint = "If this repeats for every folder, CuliBox's docker does not see host files as they are " +
-		"(for example Docker Desktop for Linux or a remote docker host); see README, Requirements."
+		"(for example Docker Desktop for Linux or a remote docker host); see Requirements in docs/INSTALL.md."
 	ws := Mount{Host: "/w/p", kind: mountWorkspace}
 	guard := Mount{Host: "/w/p/CLAUDE.md", kind: mountGuard}
 	ctx := Mount{Host: "/srv/c"}
@@ -368,7 +368,7 @@ func TestIdentityFailedOfContextMountsAloneIsTheContextRefusal(t *testing.T) {
 	}
 }
 
-// The hint to the README's Requirements is for a docker that is the host's own:
+// The hint to the Requirements in docs/INSTALL.md is for a docker that is the host's own:
 // with a VM hook (macOS) the boxes run in CuliBox's own VM and it does not apply.
 // Only a workspace identity mismatch on a box this spawn created, with no hook,
 // carries it.
@@ -398,7 +398,7 @@ func TestMountChangedHintIsOnlyWithoutAVMHook(t *testing.T) {
 			}
 			m, _ := vmManager(t, v, nil)
 			err := m.mountChanged(c.mt, c.created, c.err)
-			if got := strings.Contains(err.Error(), "see README, Requirements."); got != c.hint {
+			if got := strings.Contains(err.Error(), "see Requirements in docs/INSTALL.md."); got != c.hint {
 				t.Fatalf("err = %v, hint = %v, want %v", err, got, c.hint)
 			}
 		})
