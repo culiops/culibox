@@ -649,7 +649,7 @@ record says so.
 refuses anything else, and a Rosetta shell counts as Intel). You need:
 
 - `gh`, logged in with write access to the release. Whether the download, view and edit steps work on a draft release is untested.
-- `git`, Go, and `cc` plus `make` (the script builds the pinned abduco from source).
+- `git` and Go. `cc` and `make` only for a release whose tarballs do not bundle abduco (before #317): the script then builds the pinned abduco from source.
 - Rosetta 2: `softwareupdate --install-rosetta --agree-to-license`.
 
 What it checks, in order:
@@ -659,11 +659,14 @@ What it checks, in order:
    commit is reachable from `main` and, once the repository is public, that each
    tarball has a build attestation from the release workflow for this tag and
    commit. A mismatch or a failed check stops the script.
-2. Clones the tag, builds abduco, and runs `go test ./...` natively (arm64) and
-   with `GOARCH=amd64`, which runs under Rosetta 2. A failing test run does not
-   stop the script; it is recorded as failed.
+2. Clones the tag and runs `go test ./...` natively (arm64) and with
+   `GOARCH=amd64`, which runs under Rosetta 2. Each run uses the abduco its tarball
+   bundles; for a tarball without one it builds the pinned abduco from source. A
+   bundled abduco that is not a regular file stops the script. A failing test run
+   does not stop the script; it is recorded as failed.
 3. Runs each extracted binary's `version` (the amd64 one under `arch -x86_64`)
-   and requires exactly `culibox <tag> (<commit of the clone>)`.
+   and requires exactly `culibox <tag> (<commit of the clone>)`, and each bundled
+   abduco's `-v`, which must print `abduco-<version>` for the version the tag pins.
 4. Asks for the results of the manual checks, one per line as
    `ID=pass|fail|na [note]`, and a blank line to finish. The checks are the
    maintainers' own list of things to try by hand on a Mac. Nothing defaults to pass.
