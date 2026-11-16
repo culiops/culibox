@@ -998,11 +998,24 @@ func (c *CredentialManager) Delete(kind, name string) error {
 }
 
 // SetValue sets or replaces a store value by id. The caller owns and zeroes v.
+// While credentials.json is not fully understood (ErrCredReadOnly) an existing
+// value is not replaced.
 func (c *CredentialManager) SetValue(id string, v []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(v) == 0 {
 		return errors.New("the value is empty")
+	}
+	// Replacing overwrites a secret that an entry this build cannot read may
+	// still use. A new id destroys nothing, so it stays allowed.
+	if err := c.writableLocked(); err != nil {
+		have, lerr := c.vals.List()
+		if lerr != nil {
+			return storeErr(fmt.Sprintf("store value %q", id), lerr)
+		}
+		if slices.ContainsFunc(have, func(e secretstore.Entry) bool { return e.ID == id }) {
+			return err
+		}
 	}
 	if err := c.vals.Set(id, v, storeActor); err != nil {
 		return storeErr(fmt.Sprintf("store value %q", id), err)
@@ -1011,10 +1024,18 @@ func (c *CredentialManager) SetValue(id string, v []byte) error {
 }
 
 // RemoveValue deletes a store value, refused with ErrCredInUse while any
-// entry, profile secret or account token_secret reads it.
+// entry, profile secret or account token_secret reads it, and with
+// ErrCredReadOnly while credentials.json is not fully understood.
 func (c *CredentialManager) RemoveValue(id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// The in-use scan below sees only the entries this build decoded, so while
+	// credentials.json holds content it cannot read (a newer build's entry) an id
+	// named only there reads as unused. The value cannot be recovered once
+	// deleted, so nothing is deleted until the file is understood again.
+	if err := c.writableLocked(); err != nil {
+		return err
+	}
 	if refs := c.storeRefsLocked()[id]; len(refs) > 0 {
 		return fmt.Errorf("store value %q: %w", id, ErrCredInUse{By: refs})
 	}

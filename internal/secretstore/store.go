@@ -40,6 +40,11 @@ const (
 	recipientFn  = "recipient"
 	identityFn   = "identity.age"
 	valueExt     = ".age"
+
+	// Details of the rows that say an audited step did not take effect. They are
+	// fixed classes: the keeper's own error can name a path or a Keychain item.
+	unlockNotKept  = "not kept: the key store refused the unlock"
+	initNotCreated = "the store was not created"
 )
 
 // Status is what the CLI, doctor and web show. Locked is only meaningful once
@@ -101,7 +106,7 @@ func (s *Store) record(action, actor, detail string) error {
 // Init creates the store. On Linux it needs a passphrase of at least 12
 // characters and leaves the store locked; on macOS the passphrase is ignored
 // and the identity goes to the keeper.
-func (s *Store) Init(passphrase []byte, actor string) error {
+func (s *Store) Init(passphrase []byte, actor string) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := os.Lstat(filepath.Join(s.dir, recipientFn)); err == nil {
@@ -126,6 +131,15 @@ func (s *Store) Init(passphrase []byte, actor string) error {
 	if err := s.record("init", actor, ""); err != nil {
 		return err
 	}
+	// The row above is written before anything is created (an audit failure
+	// refuses the init), so a failure past this point says so in the trail. On
+	// macOS the Keychain save is among those steps. Best effort: the caller
+	// must see the original error, not an audit one.
+	defer func() {
+		if err != nil {
+			_ = s.record("init_failed", actor, initNotCreated)
+		}
+	}()
 
 	_, statErr := os.Lstat(s.dir)
 	created := os.IsNotExist(statErr)
@@ -382,6 +396,10 @@ func (s *Store) Unlock(passphrase []byte, ttl time.Duration, actor string) error
 		return err
 	}
 	if err := s.k.Save(ident, ttl); err != nil {
+		// The row above is written first so an audit failure refuses the unlock;
+		// this one says it did not take effect. Best effort, and a fixed class
+		// rather than the keeper's text, which can name a path.
+		_ = s.record("unlock_failed", actor, unlockNotKept)
 		return fmt.Errorf("passphrase accepted, but the unlock could not be kept (%w); the store stays locked, so try again or check that the kernel keyring is usable here", err)
 	}
 	return nil
