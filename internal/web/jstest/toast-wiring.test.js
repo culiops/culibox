@@ -412,7 +412,7 @@ test("keyboard focus inside the stack pauses it; a mouse click's focus does not 
   assert.strictEqual(pg.entries()[0].paused, null, "hover is what pauses for the pointer");
 });
 
-test("a pending entry has a spinner and no ×, and resolveToast turns it into its result in place", (t) => {
+test("a pending entry has a spinner and the same × as every toast, and resolveToast turns it into its result in place", (t) => {
   const pg = page(t);
   pg.shell.showToast("Saved");
   const h = pg.shell.showToast("Ending docs…", { sticky: true });
@@ -420,7 +420,7 @@ test("a pending entry has a spinner and no ×, and resolveToast turns it into it
   const pending = pg.entries()[1];
   assert.strictEqual(pending.text, "Ending docs…");
   assert.strictEqual(pending.spin, true);
-  assert.strictEqual(pending.x, null, "M8.5 draws no × on a pending entry");
+  assert.deepStrictEqual(pending.x, { text: "×", label: "Dismiss", title: "Dismiss", cls: "btn btn-ghost btn-icon btn-sm toast-x" }, "#183: a request that hangs must not leave a toast nobody can remove");
   assert.strictEqual(pending.role, "status");
   t.mock.timers.tick(60000);
   assert.deepStrictEqual(texts(pg), ["Ending docs…"], "the infos expired; pending has no timer");
@@ -428,6 +428,22 @@ test("a pending entry has a spinner and no ×, and resolveToast turns it into it
   assert.deepStrictEqual(pg.entries().map((e) => [e.id, e.text, e.spin, !!e.x]), [[h, "Ended docs", false, true]]);
   t.mock.timers.tick(6000);
   assert.deepStrictEqual(pg.entries(), [], "the result is timed like any info");
+});
+
+test("the user removes a pending entry: the owner's later result still shows, as a new toast (#183)", (t) => {
+  const pg = page(t);
+  const h = pg.shell.showToast("Ending docs…", { sticky: true });
+  pg.node(0).find("toast-x").onclick();
+  assert.deepStrictEqual(pg.entries(), [], "the pending entry is gone");
+  const id = pg.shell.resolveToast(h, "End failed: no answer", { error: true, human: "Could not end docs.", detail: "no answer" });
+  assert.notStrictEqual(id, h, "its own entry is gone, so the result is a new one");
+  assert.deepStrictEqual(pg.entries().map((e) => [e.text, e.cls, e.act]), [["Could not end docs.", "toast is-error", "Copy details"]]);
+  // A success after a dismissal is a plain toast too.
+  pg.node(0).find("toast-x").onclick();
+  const h2 = pg.shell.showToast("Ending b…", { sticky: true });
+  pg.node(0).find("toast-x").onclick();
+  pg.shell.resolveToast(h2, "Ended b", { desktopOnly: true });
+  assert.deepStrictEqual(texts(pg), ["Ended b"]);
 });
 
 test("resolveToast keeps the position: the result sits where the pending entry was", (t) => {
@@ -665,6 +681,7 @@ async function runKill({ fail } = {}) {
     api: async () => { if (fail) throw fail; },
     pendingToast: (text) => { results.push(["pending", text]); return (r) => results.push(["done", r]); },
     toastFailText,
+    ACTION_TIMEOUT_MS: 60000,
     showToast: (msg, opts) => toasts.push([msg, opts]),
     closeTerminal: (id) => closed.push(id),
     encodeURIComponent,

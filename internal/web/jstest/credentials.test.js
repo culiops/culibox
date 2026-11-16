@@ -212,6 +212,8 @@ test("awsRoleARN expands a bare role name with the SSO account, and leaves an AR
 test("the editor's read-only box-prefix hint is hidden with the other elevate fields in sso_direct mode (#211)", () => {
   const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/credentials.js"), "utf8");
   assert.match(src, /row\.modeHidden = \[[^\]]*\]\.concat\(boxHint \? \[boxHint\] : \[\]\)/);
+  // #307: the prefix also lets the window change policies, ACLs and public access blocks there.
+  assert.match(src, /"This elevate can read objects in, and change the policies, ACLs and public access blocks of, buckets named " \+ row\.elevBoxPrefix \+ "\* \(elevate\.box_bucket_prefix, set in the config file\)\."/);
 });
 
 test("awsConnFromRow sends only what is set", () => {
@@ -487,11 +489,12 @@ test("a timed-out sign-in goes back to the Sign in state with a note", () => {
 
 const awsE = (name, extra) => ({
   name, kind: "aws", account_id: "210987654321", role_arn: "arn:aws:iam::210987654321:role/CuliShopLabAccess",
-  region: "ap-southeast-1", status: "ok", source: "web", prod: false, used_by: [], base: null, ...extra,
+  region: "ap-southeast-1", status: "ok", source: "web", prod: false, used_by: [], base: null,
+  signin: { state: "signed_in", until: "2030-01-02T15:04:00Z" }, ...extra,
 });
 
 test("credTableHead: the columns of each provider table, then the actions column", () => {
-  assert.deepStrictEqual(credTableHead("aws"), ["Connection", "Account · role", "SSO", "Write probe", "Used by", ""]);
+  assert.deepStrictEqual(credTableHead("aws"), ["Connection", "Account · role", "Sign-in", "Write probe", "Used by", ""]);
   assert.deepStrictEqual(credTableHead("github"), ["App", "Client ID · key", "Status", "Used by", ""]);
   assert.deepStrictEqual(credTableHead("token:datadog"), ["Token", "Env · agent may reach", "Status", "Used by", ""]);
 });
@@ -515,7 +518,7 @@ test("credTableRows aws: PROD with elevate, no elevation, and a can-write row ma
   assert.strictEqual(a.cells[0].tag, "PROD");
   assert.strictEqual(a.cells[0].sub, "elevate: agent-ops · max 60m");
   assert.deepStrictEqual([a.cells[1].text, a.cells[1].sub, a.cells[1].mono], ["111122223333", "agent-investigate", true]);
-  assert.deepStrictEqual([a.cells[2].text, a.cells[2].cls], ["Ready", "ready"]);
+  assert.deepStrictEqual([a.cells[2].text, a.cells[2].cls], ["Signed in", "ready"]);
   assert.deepStrictEqual([a.cells[3].text, a.cells[3].cls], ["No broad write access found", "ok"]);
   assert.ok(/^checked 2020-01-0[123]$/.test(a.cells[3].sub), a.cells[3].sub);
   assert.strictEqual(a.cells[4].text, "a, b");

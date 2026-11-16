@@ -13,6 +13,36 @@ BIN="${AB_PROD_BIN:-$HOME/bin/culibox-prod}"
 SERVICE="${AB_PROD_SERVICE:-culibox-prod}"
 RELEASE_BRANCH="${AB_PROD_BRANCH:-main}"
 STAMP="$BIN.deployed-sha"
+# What "came up" means after the restart (see wait_until_up). ADDR is where the daemon's HTTP
+# listener answers: it must be the bind_addr of the config the prod service runs with
+# (docs/CONFIG.md), since this script has no config of its own to read it from; the default is
+# the product's default bind. For a wildcard bind (0.0.0.0, ::) use a loopback address and the
+# same port. It must be a numeric address ([::1] for IPv6): a hostname is never equal to what
+# `ss -n` prints, so it fails closed. The windows are whole seconds, one poll each.
+# Something answering there is not enough (the dev instance uses the default port on the same
+# host): the listening socket must also belong to the service's own cgroup, or the probe does
+# not count (port_owned_by_unit).
+ADDR="${AB_PROD_ADDR:-127.0.0.1:8899}"
+# `serve` takes the upgrade backup (a VACUUM INTO of audit.db, which the backup itself gives up
+# on after 2 minutes: internal/upgradebackup/audit.go) before it listens, and exits fail-closed
+# if that fails. So "not listening yet" is normal for a while, but cannot outlast the backup:
+# 150 s = that 2 minute limit plus margin. The wait ends at once when the unit dies.
+LISTEN_WAIT="${AB_PROD_LISTEN_WAIT:-150}"
+# After the first answer the unit must stay active, keep answering and keep its process for
+# this long. It catches a build that dies a few seconds after it started listening (startup work
+# that fails late, a crash loop); the probe only fetches /login, so a crash that needs a later
+# request or a login is not in its reach.
+STABLE="${AB_PROD_STABLE_SECS:-15}"
+case "$LISTEN_WAIT" in '' | *[!0-9]* | 0) echo "refusing: AB_PROD_LISTEN_WAIT must be a whole number of seconds, 1 or more (got '$LISTEN_WAIT')." >&2; exit 1 ;; esac
+case "$STABLE" in '' | *[!0-9]* | 0) echo "refusing: AB_PROD_STABLE_SECS must be a whole number of seconds, 1 or more (got '$STABLE'): 0 would accept the first answer with no watch at all." >&2; exit 1 ;; esac
+for tool in curl ss; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "refusing: $tool is needed to check that the service itself answers after the restart." >&2; exit 1; }
+done
+# The ownership check reads /proc/<pid>/cgroup as cgroup v2 (`0::<path>`). On a pure cgroup v1
+# host there is no such line and it could never match, so the deploy would wait out the whole
+# window and blame another process: refuse here instead. A hybrid host does have a `0::` line and
+# passes this test; there the check still fails closed, with the "not on that address" message.
+grep -q '^0::' /proc/self/cgroup 2>/dev/null || { echo "refusing: this host is not on cgroup v2 (no '0::' line in /proc/self/cgroup), so the check that the service itself answers cannot work." >&2; exit 1; }
 
 branch=$(git -C "$REPO" branch --show-current)
 head=$(git -C "$REPO" rev-parse --short HEAD)
@@ -114,15 +144,110 @@ fi
 : > "$UNVERIFIED"
 # A rename, not a write into $BIN: the running binary cannot be opened for writing.
 mv -f "$BIN.new" "$BIN"
+# Whether a process in $SERVICE's cgroup holds a listening socket on $ADDR itself: its port AND
+# its host, because a second socket on the same port at another address (127.0.0.2, [::1], a LAN
+# IP) is not what curl reaches on $ADDR (the dev instance may be). The cgroup, not MainPID: an
+# ExecStart wrapper makes the daemon a child of the main process. The port from $ADDR, not the
+# process's sockets: serve also listens for the egress proxy and the broker.
+# /proc/<pid>/cgroup reads `0::<path>` on cgroup v2; a child cgroup of the unit's counts too.
+# A socket's local address in `ss -n` output is `host:port`, a v6 host in brackets, possibly
+# `host%iface`; it covers $ADDR when it is that host, `*` (dual-stack any), 0.0.0.0 for a v4
+# $ADDR or [::] for a v6 one.
+port_owned_by_unit() {
+  local cg want laddr h procs pid line
+  cg=$(systemctl --user show -p ControlGroup --value "$SERVICE" 2>/dev/null || true)
+  [ -n "$cg" ] || return 1
+  want=${ADDR%:*}
+  while read -r _ _ _ laddr _ procs; do
+    h=${laddr%:*}
+    # ss puts the interface after the bracket of a v6 host: `[::1]%lo:8899`, `127.0.0.1%lo:8899`.
+    h=${h%%%*}
+    case "$h" in
+      "$want" | '*') ;;
+      0.0.0.0) case "$want" in *:*) continue ;; esac ;;
+      '[::]') case "$want" in *:*) ;; *) continue ;; esac ;;
+      *) continue ;;
+    esac
+    for pid in $(printf '%s\n' "$procs" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u || true); do
+      while read -r line; do
+        case "$line" in "0::$cg" | "0::$cg"/*) return 0 ;; esac
+      done 2>/dev/null <"/proc/$pid/cgroup"
+    done
+  done < <(ss -Hltnp "sport = :${ADDR##*:}" 2>/dev/null)
+  return 1
+}
+
+# One look at $ADDR. 0: something answers HTTP and the socket is the service's; 1: nothing
+# answers; 2: something answers but the service holds no socket on $ADDR (the dev instance on
+# the default port, say), which says nothing about this build. Any HTTP status counts as an
+# answer, a 403 from the Host guard (a non-loopback bind) included.
+listener_state() {
+  local code
+  code=$(curl -q -s -o /dev/null --noproxy '*' --connect-timeout 2 --max-time 3 -w '%{http_code}' "http://$ADDR/login" 2>/dev/null) || code=000
+  { [ -n "$code" ] && [ "$code" != 000 ]; } || return 1
+  port_owned_by_unit || return 2
+}
+
+# "Came up" is not one look a second after the restart: a build can pass that and die on its
+# first request (#274), and serve may still be taking its upgrade backup, listening only after.
+# So: poll once a second until the listener has answered (at most LISTEN_WAIT polls, and at
+# once if the unit dies, which is serve's fail-closed exit), then keep polling for STABLE more
+# polls, each needing the unit active, the same main process (a crash-restart between polls
+# shows as a new one) and the listener answering. Sets $why when it returns 1.
+wait_until_up() {
+  local polls=0 first="" pid0="" pid st
+  why=""
+  while :; do
+    sleep 1
+    polls=$((polls + 1))
+    if ! systemctl --user is-active --quiet "$SERVICE"; then
+      if [ -n "$first" ]; then
+        why="$SERVICE stopped being active at poll $polls, after it had been answering on $ADDR"
+      else
+        why="$SERVICE stopped being active at poll $polls, before it answered on $ADDR"
+      fi
+      return 1
+    fi
+    # The process to watch is the first real one: MainPID reads 0 while systemd is between a
+    # crash and its automatic restart, so the first read may not be one.
+    pid=$(systemctl --user show -p MainPID --value "$SERVICE" 2>/dev/null || true)
+    if [ -n "$pid" ] && [ "$pid" != 0 ]; then
+      if [ -z "$pid0" ]; then
+        pid0=$pid
+      elif [ "$pid" != "$pid0" ]; then
+        why="$SERVICE restarted on its own by poll $polls (main process $pid0, then $pid): it crashed and systemd started it again"
+        return 1
+      fi
+    fi
+    st=0
+    listener_state || st=$?
+    if [ "$st" -eq 0 ]; then
+      [ -n "$first" ] || first=$polls
+      [ $((polls - first)) -lt "$STABLE" ] || return 0
+    elif [ -n "$first" ]; then
+      why="$ADDR stopped answering from $SERVICE at poll $polls, after it had answered at poll $first"
+      return 1
+    elif [ "$polls" -ge "$LISTEN_WAIT" ]; then
+      if [ "$st" -eq 2 ]; then
+        why="$ADDR answers, but $SERVICE is not on that address: it holds no listening socket there within ${LISTEN_WAIT} polls, so what answers is another process (the dev instance, if AB_PROD_ADDR is left at the default). AB_PROD_ADDR must be a numeric address, the bind_addr the service runs with"
+      else
+        why="$SERVICE is active but $ADDR did not answer within ${LISTEN_WAIT} polls (AB_PROD_ADDR must be the bind_addr the service runs with; AB_PROD_LISTEN_WAIT sets the wait)"
+      fi
+      return 1
+    fi
+  done
+}
+
 echo "restarting $SERVICE"
 systemctl --user restart "$SERVICE"
-sleep 1
+echo "waiting for $SERVICE itself to answer on $ADDR (up to ${LISTEN_WAIT} polls, one a second), then to stay up for ${STABLE} more polls"
 
 # Record only after the service is up: a stamp written past a failed restart
-# would make the next deploy hide the very commits that broke it. `is-active` is
-# that check — the status block below is for the operator's eyes only.
-if ! systemctl --user is-active --quiet "$SERVICE"; then
-  echo "deployed the binary, but $SERVICE is not active — not recording this commit." >&2
+# would make the next deploy hide the very commits that broke it, and a build that
+# dies inside the window must not become the next deploy's $PREV either (it stays
+# $UNVERIFIED). The status block below is for the operator's eyes only.
+if ! wait_until_up; then
+  echo "deployed the binary, but $SERVICE did not come up: $why. Not recording this commit." >&2
   systemctl --user --no-pager --lines=20 status "$SERVICE" >&2 || true
   print_rollback >&2
   exit 1

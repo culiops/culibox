@@ -2,7 +2,7 @@
 // spawnpreview.js: the New session dialog's pure decisions (spec 5.6).
 const test = require("node:test");
 const assert = require("node:assert");
-const { profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
+const { profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
 const { spawnWsIdleNote } = require("../static/dirpicker.js");
 
 const sre = {
@@ -937,12 +937,16 @@ function appFn(name) {
 // The three functions that carry the source, run with a stand-in picker and the real caption words.
 function captionPage(over) {
   const vm = require("node:vm");
-  const picker = { v: "", sets: [], idleNotes: 0, value() { return this.v; }, set(x) { this.v = x; this.sets.push(x); }, showIdleNote() { this.idleNotes++; } };
+  // typed: the text in the box when it is not the resolved folder (the user is mid-edit); null = the box shows the folder.
+  const picker = { v: "", typed: null, sets: [], idleNotes: 0, value() { return this.v; }, set(x) { this.v = x; this.typed = null; this.sets.push(x); }, showIdleNote() { this.idleNotes++; } };
   const ctx = vm.createContext(Object.assign({
     console, spawnWsPicker: picker, desktop: true, drawerDesktop: () => ctx.desktop, currentProfile: () => ctx.profile, profile: null,
     onSpawnCwdChanged: () => { ctx.changed = (ctx.changed || 0) + 1; }, spawnWsNoteFor, spawnWsIdleNote,
+    // applyProfileCwd's inputs: the box's text, the remembered last spawn, the roots, the tier, and the pure choice.
+    $: (id) => (id === "spawn-ws-input" ? { value: picker.typed === null ? picker.v : picker.typed } : null),
+    loadLastSpawn: () => ctx.last, last: null, workspacesCache: WS, segValue: () => ctx.tier, tier: "host", spawnCwdReselect,
   }, over));
-  vm.runInContext("let spawnWsSource = '', spawnWsPrefill = '';\n" + ["setSpawnCwd", "spawnWsCaption", "applyProfileCwd"].map(appFn).join("\n"), ctx);
+  vm.runInContext("let spawnWsSource = '', spawnWsPrefill = '';\n" + ["setSpawnCwd", "spawnWsCaption", "getCwd", "applyProfileCwd"].map(appFn).join("\n"), ctx);
   return { ctx, picker, state: () => Array.from(vm.runInContext("[spawnWsSource, spawnWsPrefill]", ctx)) };
 }
 
@@ -976,21 +980,68 @@ test("picking a profile with a default folder says 'From the profile'; one witho
   assert.deepStrictEqual(pg.state(), ["profile", "/home/u/ab"]);
   assert.strictEqual(pg.picker.idleNotes, 1, "the line is redrawn at once");
   assert.strictEqual(pg.ctx.changed, 1);
-  // A profile with no default: the folder stays, but it is not 'from the profile' any more.
+  // A profile with no default, while the field still holds the previous profile's folder: that folder is a leftover, so the
+  // choice made at open is made again (new-session cwd): no last spawn of this profile, so the tier's default workspace.
   pg.ctx.profile = { name: "bash" };
   pg.ctx.applyProfileCwd();
-  assert.deepStrictEqual(pg.state(), ["", "/home/u/ab"]);
+  assert.deepStrictEqual(pg.state(), ["default", "/home/u/proj"]);
+  assert.deepStrictEqual(pg.picker.sets, ["/home/u/ab", "/home/u/proj"], "the field is refilled, not kept");
   assert.strictEqual(pg.picker.idleNotes, 2);
-  assert.deepStrictEqual(pg.picker.sets, ["/home/u/ab"], "the field is not touched");
-  // A 'last used' folder is still the last used one after the profile changed.
-  pg.ctx.setSpawnCwd("/home/u/l", "last");
+  assert.strictEqual(pg.ctx.changed, 2, "the tier line and the warnings follow the new folder");
+  // That profile's own last spawn wins over the default...
+  pg.ctx.setSpawnCwd("/home/u/ab", "profile");
+  pg.ctx.last = { agent: "bash", cwd: "/home/u/l" };
   pg.ctx.applyProfileCwd();
   assert.deepStrictEqual(pg.state(), ["last", "/home/u/l"]);
-  assert.strictEqual(pg.picker.idleNotes, 2, "nothing to redraw");
+  // ...and the last spawn of ANOTHER profile is never prefilled.
+  pg.ctx.setSpawnCwd("/home/u/ab", "profile");
+  pg.ctx.last = { agent: "claude", cwd: "/home/u/l" };
+  pg.ctx.applyProfileCwd();
+  assert.deepStrictEqual(pg.state(), ["default", "/home/u/proj"]);
+  // A 'last used' folder of the previous profile is a leftover too.
+  pg.ctx.last = { agent: "claude", cwd: "/home/u/l" };
+  pg.ctx.setSpawnCwd("/home/u/l", "last");
+  pg.ctx.applyProfileCwd();
+  assert.deepStrictEqual(pg.state(), ["default", "/home/u/proj"]);
+  // The user's own text is never touched: a path typed or picked after the prefill (the resolved folder differs) ...
+  pg.ctx.setSpawnCwd("/home/u/ab", "profile");
+  pg.picker.v = "/home/u/mine"; // a pick or a resolved typed path
+  const sets = pg.picker.sets.length, idle = pg.picker.idleNotes;
+  pg.ctx.applyProfileCwd();
+  assert.strictEqual(pg.picker.v, "/home/u/mine");
+  assert.strictEqual(pg.picker.sets.length, sets, "nothing is written over it");
+  assert.deepStrictEqual(pg.state(), ["", "/home/u/ab"], "it is no more 'from the profile'");
+  assert.strictEqual(pg.picker.idleNotes, idle + 1);
+  // ... and text still being typed over the prefilled folder (the field and the folder differ).
+  pg.ctx.setSpawnCwd("/home/u/ab", "last");
+  pg.picker.typed = "/home/u/mi";
+  pg.ctx.applyProfileCwd();
+  assert.strictEqual(pg.picker.v, "/home/u/ab");
+  assert.strictEqual(pg.picker.typed, "/home/u/mi", "the half-typed text survives the switch");
+  // A folder no source claims (a Duplicate's) stays as it is.
+  pg.picker.typed = null;
+  pg.ctx.setSpawnCwd("/home/u/dup");
+  pg.ctx.applyProfileCwd();
+  assert.deepStrictEqual(pg.state(), ["", "/home/u/dup"]);
+  assert.strictEqual(pg.picker.v, "/home/u/dup");
+  // The same re-choice on the box tier.
+  pg.ctx.setSpawnCwd("/home/u/ab", "profile");
+  pg.ctx.tier = "box";
+  pg.ctx.applyProfileCwd();
+  assert.deepStrictEqual(pg.state(), ["default", "/home/u/proj"]);
   // No profile at all: nothing happens.
+  pg.ctx.setSpawnCwd("/home/u/l", "last");
   pg.ctx.profile = null;
   pg.ctx.applyProfileCwd();
   assert.deepStrictEqual(pg.state(), ["last", "/home/u/l"]);
+});
+
+test("the dialog's profile switch takes the profile's default; the box-owned line under the field is rebuilt with the folder", () => {
+  // The line is repainted by updateRuntimeWarning, which onSpawnCwdChanged calls: the re-choice goes through it.
+  assert.match(appFn("onSpawnCwdChanged"), /updateRuntimeWarning\(\)/);
+  assert.match(appFn("updateRuntimeWarning"), /updateSpawnBoxOwned\(\)/);
+  assert.match(appFn("updateSpawnBoxOwned"), /spawnBoxOwnedHit\(getCwd\(\), host \? "host" : "box", profiles\)/);
+  assert.match(read("index.html"), /id="spawn-ws-owned"[^>]*hidden/);
 });
 
 test("the phone's profile switch does not redraw the caption (its logic is as it was)", () => {
@@ -1022,4 +1073,56 @@ test("scripts: the picker's helpers load before the picker, the pure choice afte
   const at = (f) => html.indexOf('<script src="/' + f + '"></script>');
   assert.ok(at("dirpicker.js") > 0 && at("dirpicker.js") < at("wspicker.js"));
   assert.ok(at("spawnpreview.js") > 0 && at("spawnpreview.js") < at("app.js"));
+});
+
+// --- new-session cwd: a host profile never keeps a box-owned copy's folder --------------------------------------
+
+test("spawnCwdReselect: a folder the dialog filled in is chosen again for the new profile; the user's is kept", () => {
+  const base = { profile: { name: "zsh" }, last: { agent: "zsh", cwd: "/home/u/z" }, workspaces: WS, tier: "host" };
+  const filled = (source, cwd) => Object.assign({ source, prefill: cwd, cwd, text: cwd }, base);
+  assert.deepStrictEqual(spawnCwdReselect(filled("profile", "/home/u/copy")), { cwd: "/home/u/z", source: "last" });
+  assert.deepStrictEqual(spawnCwdReselect(filled("last", "/home/u/copy")), { cwd: "/home/u/z", source: "last" });
+  // Another profile's last directory is never prefilled; the tier's default is.
+  assert.deepStrictEqual(spawnCwdReselect(Object.assign(filled("profile", "/home/u/copy"), { last: { agent: "claude", cwd: "/home/u/c" } })), { cwd: "/home/u/proj", source: "default" });
+  assert.deepStrictEqual(spawnCwdReselect(Object.assign(filled("profile", "/home/u/copy"), { last: null })), { cwd: "/home/u/proj", source: "default" });
+  // The user's: a Duplicate's (no source), a default, anything that no longer equals the prefill, in the box or in the field.
+  assert.strictEqual(spawnCwdReselect(filled("", "/home/u/copy")), null);
+  assert.strictEqual(spawnCwdReselect(filled("default", "/home/u/proj")), null);
+  assert.strictEqual(spawnCwdReselect(Object.assign(filled("profile", "/home/u/copy"), { cwd: "/home/u/picked" })), null);
+  assert.strictEqual(spawnCwdReselect(Object.assign(filled("profile", "/home/u/copy"), { text: "/home/u/co" })), null);
+  assert.strictEqual(spawnCwdReselect(null), null);
+});
+
+test("spawnBoxOwnedHit: a host folder at or inside a private copy's folder, whole components, deepest copy, host tier only", () => {
+  const profiles = [
+    { name: "claude" },
+    { name: "box-a", clone_of: "/home/u/infra", default_cwd: "/home/u/box-clones/infra" },
+    { name: "box-b", clone_of: "/home/u/infra/deep", default_cwd: "/home/u/box-clones/infra/deep" },
+    { name: "plain", default_cwd: "/home/u/plain" }, // no clone_of: an ordinary default folder
+    { name: "half", clone_of: "/home/u/half" }, // no folder yet: nothing to match
+  ];
+  const hit = (cwd, tier) => spawnBoxOwnedHit(cwd, tier === undefined ? "host" : tier, profiles);
+  assert.deepStrictEqual(hit("/home/u/box-clones/infra"), { dir: "/home/u/box-clones/infra", of: "/home/u/infra" });
+  assert.deepStrictEqual(hit("/home/u/box-clones/infra/"), { dir: "/home/u/box-clones/infra", of: "/home/u/infra" }, "a trailing slash");
+  assert.deepStrictEqual(hit("/home/u/box-clones//infra/src/x"), { dir: "/home/u/box-clones/infra", of: "/home/u/infra" }, "inside, and a doubled slash");
+  assert.deepStrictEqual(hit("/home/u/box-clones/infra/deep/y"), { dir: "/home/u/box-clones/infra/deep", of: "/home/u/infra/deep" }, "the deepest copy names its own original");
+  assert.strictEqual(hit("/home/u/box-clones/infra2"), null, "a shared prefix is not inside");
+  assert.strictEqual(hit("/home/u/box-clones"), null, "the parent of a copy is not a copy");
+  assert.strictEqual(hit("/home/u/infra"), null, "the original is exactly where to go");
+  assert.strictEqual(hit("/home/u/plain"), null);
+  assert.strictEqual(hit("/home/u/box-clones/infra", "box"), null, "a boxed session in a copy is what a copy is for");
+  assert.strictEqual(hit(""), null);
+  assert.strictEqual(spawnBoxOwnedHit("/home/u/box-clones/infra", "host", null), null);
+  assert.strictEqual(spawnBoxOwnedHit("/home/u/box-clones/infra", "host", [{ clone_of: "/o", default_cwd: "/" }]).dir, "/", "a copy at / holds everything");
+});
+
+test("spawnBoxOwnedLine: says why, and names the original folder to use", () => {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, "window"), prev = globalThis.window;
+  globalThis.window = { HOME_DIR: "/home/u" };
+  try {
+    assert.strictEqual(spawnBoxOwnedLine({ dir: "/home/u/box-clones/infra", of: "/home/u/infra" }),
+      "Host sessions can't run in a box's private copy (~/box-clones/infra). Use the original folder instead: ~/infra.");
+  } finally {
+    if (had) globalThis.window = prev; else delete globalThis.window;
+  }
 });

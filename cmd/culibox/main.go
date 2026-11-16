@@ -527,6 +527,12 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		boxUnavailable = boxUnavailableReason(err)
 	} else {
 		layer, boxes = l, l.boxes
+		// Docker is installed, but is its daemon usable? The layer stands either way
+		// (the daemon may start later); the page and every boxed spawn ask again
+		// (boxdaemon.go). Bounded, so a hung daemon cannot hold the boot.
+		if why := l.daemonReason(context.Background()); why != "" {
+			log.Printf("containment: docker is installed but boxes cannot start: %s (checked again on every boxed spawn)", why)
+		}
 		if l.vm == nil {
 			// An upgraded install's culiops/agent-box:base becomes the new default
 			// name before anything uses it. The Mac's VM is not started here (D3):
@@ -821,11 +827,15 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 		stopBroker = brokerSvc.Stop
 		if boxes != nil {
-			es := elevationService{brk: brokerSvc.Hooks.B, get: mgr.Get, list: mgr.List, blocker: boxes.GrantBlocker}
+			es := elevationService{brk: brokerSvc.Hooks.B, get: mgr.Get, list: mgr.List, blocker: boxes.GrantBlocker, claim: boxes.ClaimForGrant}
 			if brokerSvc.SSO != nil { // a nil *Runner must stay a nil interface
 				es.runner = brokerSvc.SSO
 			}
 			brokerSvc.Hooks.B.SetClaimCheck(es.claimCheck)
+			// #325: an elevatable session's folder is shared until it holds write
+			// credentials. Before the API serves: no boxed spawn can run earlier,
+			// and without the hook exclusive boxes refuse every other spawn.
+			boxes.SetWriteHold(es.writeHold)
 			api.Elevation = es
 			status.Elevation = brokerSvc.Hooks.B.Elevation
 			status.SSO = es.ssoStatus
@@ -862,6 +872,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 
 		// Why BoxRuntime is empty when the containment layer failed to build.
 		BoxUnavailableReason: boxUnavailable,
+		// Why a layer that exists cannot be used right now (a stopped or
+		// not-permitted docker daemon, #154); nil without a layer.
+		BoxDaemonReason: layerDaemonReason(layer),
 
 		ShellProfile: shellProfile,
 		ShellBin:     config.DetectShell(),

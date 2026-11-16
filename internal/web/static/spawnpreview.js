@@ -50,6 +50,9 @@ function spawnTierOf(profile, boxRuntime) {
 // "no box layer" and would call every box profile "host · not contained"; undefined falls back to the profile's own runtime.
 function profileTouchLine(p, boxRuntime) {
   const prof = p || {};
+  // No box layer and the profile needs one (it asks for box, or holds a private copy or a readable folder): it will not run
+  // on this machine, so it must not read like a host profile (#142).
+  if (boxRuntime === "" && spawnNeedsBox(prof)) return "needs a box · unavailable";
   if (spawnTierOf(prof, boxRuntime) === "host") {
     return "host · " + (SPAWN_SHELL_BINS.has(spawnBase(prof.bin)) ? spawnBase(prof.bin) : "not contained");
   }
@@ -61,6 +64,75 @@ function profileTouchLine(p, boxRuntime) {
   if (prof.clone_of) parts.push("private copy of " + spawnDep("shortPath", "./fsops.js")(prof.clone_of));
   if (parts.length === 1) parts.push("no credentials");
   return parts.join(" · ");
+}
+
+// spawnNeedsBox: a session of this profile is refused without a box layer: the one rule of the profile page's Runs in block
+// (profileview.js pfvRefusedWithoutBox). The list row has no stored profile behind it, so the private copy is its clone_of.
+function spawnNeedsBox(p) {
+  const prof = p && typeof p === "object" ? p : {};
+  return spawnDep("pfvRefusedWithoutBox", "./profileview.js")(prof, {}, typeof prof.clone_of === "string" && prof.clone_of !== "");
+}
+
+// spawnBoxGate: what the New session dialog says about boxes for the profile on screen, and whether Spawn is blocked.
+//   o.profile    the /api/profiles row
+//   o.metaLoaded /api/meta has answered (until then nothing is claimed)
+//   o.boxRuntime /api/meta box_runtime; "" = no box layer
+//   o.boxUnavailableReason /api/meta box_unavailable_reason, o.boxDaemonReason box_daemon_reason (#154): a layer exists but its daemon
+//                cannot be used right now
+//   o.tier       the Containment seg's value ("box", "host", "" while the seg is hidden)
+// -> {show, tone: "error" | "quiet" | "", line, more, blocked, noLayer, text}; text is line and more as one sentence when blocked,
+// the words a blocked Spawn shows. The sentences are the profile page's (profileview.js), so the two pages cannot disagree.
+//   no layer, the profile needs a box: blocked, red.   no layer, it does not: the reason only, quiet (it runs on this machine).
+//   layer, daemon down, the box tier on screen: blocked for the two named reasons, a warning for any other.
+function spawnBoxGate(o) {
+  const x = o || {};
+  const none = { show: false, tone: "", line: "", more: "", blocked: false, noLayer: false, text: "" };
+  const p = x.profile;
+  if (x.metaLoaded !== true || !p || typeof p !== "object") return none;
+  const withText = (g) => Object.assign(g, { text: g.blocked ? g.line + " " + g.more : "" });
+  if (x.boxRuntime === "") {
+    const refused = spawnNeedsBox(p);
+    const u = spawnDep("pfvUnavailable", "./profileview.js")(x.boxUnavailableReason, refused);
+    // A profile that names host says nothing more, as on its page: the reason alone.
+    const more = refused || p.runtime_asked !== "host" ? u.consequence : "";
+    return withText({ show: true, tone: refused ? "error" : "quiet", line: u.line, more, blocked: refused, noLayer: true });
+  }
+  const daemon = typeof x.boxDaemonReason === "string" ? x.boxDaemonReason.trim() : "";
+  if (daemon && x.tier !== "host") {
+    const refuses = spawnDep("pfvDaemonRefuses", "./profileview.js")(daemon);
+    return withText({
+      show: true, tone: "error", line: "Boxes can't start right now: " + daemon + ".",
+      more: refuses ? "Sessions with this profile can't start until that is fixed." : "Sessions with this profile may fail to start.",
+      blocked: refuses, noLayer: false,
+    });
+  }
+  return none;
+}
+
+// spawnReachNeedsBox: the reach box's rows for a profile that needs a box when there is none. reachRows would describe the host
+// ("Files: your whole user account", "Network: not contained") for a session that will not start there.
+function spawnReachNeedsBox(reason) {
+  const r = typeof reason === "string" ? reason.trim() : "";
+  return [
+    { k: "Needs", v: "A box (unavailable" + (r ? ": " + r : "") + ")", tone: "warn" },
+    { k: "Reach", v: "Nothing: it can't start without a box" },
+  ];
+}
+
+// spawnBoxRefusalLine: the dialog's error line for the server's containment refusal (code box_unavailable). The sentence most such
+// refusals carry names the remedy and is shown as it is; the one for a missing box layer talks about "runtime", "tier" and the boot log,
+// so while the page knows why boxes are unavailable it says that in the profile page's words instead.
+//   o.message the server's sentence; the rest as spawnBoxGate's
+function spawnBoxRefusalLine(o) {
+  const x = o || {};
+  if (x.metaLoaded === true && x.boxRuntime === "") {
+    const u = spawnDep("pfvUnavailable", "./profileview.js")(x.boxUnavailableReason, true);
+    return u.line + " " + u.consequence;
+  }
+  const daemon = typeof x.boxDaemonReason === "string" ? x.boxDaemonReason.trim() : "";
+  // Only for the two reasons the layer refuses for: the doctor pointer is vaguer than the server's own sentence, which is kept.
+  if (x.metaLoaded === true && x.boxRuntime && daemon && spawnDep("pfvDaemonRefuses", "./profileview.js")(daemon)) return "Boxes can't start right now: " + daemon + ".";
+  return String(x.message == null ? "" : x.message);
 }
 
 // spawnStoreLocked: the store is set up, locked, and not the macOS keychain (the
@@ -393,6 +465,47 @@ function spawnCwdChoice(o) {
   return { cwd: spawnDep("defaultWorkspace", "./tier.js")(x.workspaces || [], x.tier), source: "default" };
 }
 
+// spawnCwdReselect: the profile was switched while the dialog was open and the new one has no default_cwd. What the field
+// holds is only kept when the user put it there: a folder the dialog (or the previous profile) filled in is another
+// profile's leftover, which spawnCwdChoice never prefills, so the choice made at open is made again for the new profile.
+// The field counts as "filled in" while its source is "profile" or "last" and both the resolved folder (o.cwd) and the text
+// in the box (o.text) still equal what was filled (o.prefill); anything typed, picked or carried over (a Duplicate has no
+// source) is the user's and stays: null. Takes spawnCwdChoice's fields too.
+//   -> {cwd, source} | null
+function spawnCwdReselect(o) {
+  const x = o || {};
+  if (x.source !== "profile" && x.source !== "last") return null;
+  const prefill = String(x.prefill == null ? "" : x.prefill);
+  if (String(x.cwd == null ? "" : x.cwd) !== prefill || String(x.text == null ? "" : x.text) !== prefill) return null;
+  return spawnCwdChoice(x);
+}
+
+// spawnBoxOwnedHit: the box-owned copy a host-tier folder is in, from the profiles the page already has: the default_cwd of
+// every profile with clone_of is a copy a box writes in. internal/clone BoxOwned is the server's check (it also follows
+// symlinks and reads the clone-dirs record, which no profile list carries); this is the advance notice, so only the plain
+// path is compared, by whole components ("/c/infra2" is not inside "/c/infra"). The deepest copy wins. Host tier only: a
+// boxed session in a copy is what the copy is for.
+//   -> {dir, of} | null
+function spawnBoxOwnedHit(cwd, tier, profiles) {
+  if (tier !== "host" || typeof cwd !== "string" || cwd.trim() === "") return null;
+  const clean = (p) => String(p).trim().replace(/\/+/g, "/").replace(/(.)\/$/, "$1");
+  const at = clean(cwd);
+  let best = null;
+  for (const p of Array.isArray(profiles) ? profiles : []) {
+    if (!p || typeof p.clone_of !== "string" || p.clone_of === "" || typeof p.default_cwd !== "string" || p.default_cwd.trim() === "") continue;
+    const dir = clean(p.default_cwd);
+    if (at !== dir && !(dir === "/" || at.startsWith(dir + "/"))) continue;
+    if (!best || dir.length > best.dir.length) best = { dir, of: p.clone_of };
+  }
+  return best;
+}
+
+// spawnBoxOwnedLine: the line under the Workspace field for a spawnBoxOwnedHit, before the server has to refuse it.
+function spawnBoxOwnedLine(hit) {
+  const short = spawnDep("shortPath", "./fsops.js");
+  return "Host sessions can't run in a box's private copy (" + short(hit.dir) + "). Use the original folder instead: " + short(hit.of) + ".";
+}
+
 // spawnScratchCwd: /tmp itself or anything under it, whole components ("/tmpfoo" is not scratch).
 function spawnScratchCwd(p) {
   const t = String(p).replace(/\/+$/, "");
@@ -445,5 +558,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { spawnIsShellProfile, profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue };
+  module.exports = { spawnIsShellProfile, profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
 }

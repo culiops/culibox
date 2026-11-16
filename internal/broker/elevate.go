@@ -23,6 +23,10 @@ const (
 	minElevatedRemaining = credTTL + time.Minute // 16 min: STS minimum + clock skew (spec §5.2)
 	maxReasonLen         = 200                   // characters
 	maxReasonBytes       = 4 * maxReasonLen      // a valid reason is at most 4 bytes per character
+	// dropHoldSkew extends WriteHold's hold on a dropped window past the STS
+	// Expiration it recorded: that time is AWS's, compared with the local
+	// clock (#325; the restart hold has the same minute in minElevatedRemaining).
+	dropHoldSkew = time.Minute
 )
 
 // ErrElevateRefused is wrapped by every refusal; its text after ": " is a plain
@@ -234,6 +238,14 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 	}
 	b.mu.Lock() // checked again below, under the lock that grants; this spares the claim check
 	conflict := b.grantConflictLocked(sid, conn, now)
+	if conflict == "" {
+		// The write hold (#325) starts before the claim check: a spawn into
+		// the folder that has not passed its own check by now is refused, and
+		// one that has is already running its box when the check lists them.
+		// It ends when this returns, by which time a granted window holds it.
+		b.granting[sid]++
+		defer b.endGranting(sid)
+	}
 	b.mu.Unlock()
 	if conflict != "" {
 		return refuse(conflict)
@@ -314,6 +326,42 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 	ne.timer = b.after(until.Sub(b.now()), func() { b.expire(sid, ng) }) // the write took time: measure what is left now
 	b.elev[sid] = ne
 	return viewOf(ne), nil
+}
+
+func (b *Broker) endGranting(sid string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.granting[sid]--; b.granting[sid] <= 0 {
+		delete(b.granting, sid)
+	}
+}
+
+// WriteHold is why session sid may hold AWS write credentials now, as the end
+// of a sentence that starts with the session's name; "" = it holds none. The
+// box layer refuses other boxes in the session's folder while it is not ""
+// (#325): a grant in progress, a window (also one whose approval row is still
+// being written), or write credentials from a dropped window that are still
+// valid. adoptedAt, when set, is when the session's box was adopted after a
+// restart: the broker has no record of windows from before it, and a write
+// credential issued then may be valid for up to minElevatedRemaining after.
+func (b *Broker) WriteHold(sid string, adoptedAt time.Time) string {
+	now := b.now()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if e := b.elev[sid]; e != nil && !e.pending {
+		return "has a write window open until " + e.until.Local().Format("15:04")
+	}
+	if b.elev[sid] != nil || b.granting[sid] > 0 {
+		return "is opening a write window"
+	}
+	if d, ok := b.dropped[sid]; ok && d.lastValid.Add(dropHoldSkew).After(now) {
+		return "dropped its write window, but the write credentials it was given stay valid until " +
+			d.lastValid.Add(dropHoldSkew).Local().Format("15:04") + " (with a minute for clock skew)"
+	}
+	if end := adoptedAt.Add(minElevatedRemaining); !adoptedAt.IsZero() && end.After(now) {
+		return "was running when CuliBox restarted, and write credentials it may have been given before then stay valid until " + end.Local().Format("15:04") + " at the latest"
+	}
+	return ""
 }
 
 // elevatedLocked is the one predicate the mint path uses to decide whether a
@@ -408,7 +456,9 @@ func (b *Broker) Elevation(sid string) (ElevationView, bool) {
 		if d.lastValid.After(now) {
 			return ElevationView{LastValid: d.lastValid, Name: d.conn}, true
 		}
-		delete(b.dropped, sid)
+		if !d.lastValid.Add(dropHoldSkew).After(now) { // WriteHold still holds it for the skew margin
+			delete(b.dropped, sid)
+		}
 	}
 	return ElevationView{}, false
 }

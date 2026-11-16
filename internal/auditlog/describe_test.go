@@ -397,3 +397,15 @@ func TestDescribePartsDroppedWhenBackstopMasks(t *testing.T) {
 		t.Errorf("Parts = %+v, want nil", e.Parts)
 	}
 }
+
+// A store unlock the keeper refused (#288) reads as a failure beside the
+// unlocked row, in words, with the fixed reason class and no ttl rewrite.
+func TestDescribeStoreUnlockNotKept(t *testing.T) {
+	ev := describe(rawRow{src: srcStore, a: "unlock_failed", b: "web", c: "not kept: the key store refused the unlock"})
+	if want := "encrypted store unlock failed · not kept: the key store refused the unlock"; ev.What != want {
+		t.Fatalf("What = %q, want %q", ev.What, want)
+	}
+	if ev.Kind != KindStore || ev.Outcome != "unlock_failed" {
+		t.Fatalf("%+v", ev)
+	}
+}

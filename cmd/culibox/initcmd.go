@@ -43,6 +43,9 @@ type initDeps struct {
 	boxReady      func(cfg config.Config, cfgFiles []string, dataDir string) bool // see initBoxReady
 	boxSetup      func(cfg config.Config, cfgFiles []string, w io.Writer) int     // `culibox box setup`
 	shareAdd      func(cfg config.Config, cfgFiles []string, dataDir, path string) (coveredBy string, err error)
+	shareState    func(cfg config.Config, cfgFiles []string, dataDir, workspace string) (string, error)   // "applied" when the VM has the workspace, else `box share list`'s state
+	vmStopped     func(cfg config.Config, dataDir string) bool                                            // set up and provably not running; never starts it
+	shareApply    func(cfg config.Config, cfgFiles []string, dataDir string, force bool, w io.Writer) int // `culibox box share apply [-force]`
 	doctor        func(cfg config.Config, src config.Source, cfgFiles []string, w io.Writer) int
 	newKeeper     func(dataDir string) secretstore.Keeper
 }
@@ -82,6 +85,15 @@ func realInitDeps(home string) initDeps {
 		},
 		shareAdd: func(cfg config.Config, cfgFiles []string, dataDir, path string) (string, error) {
 			return initShareAdd(cfg, cfgFiles, dataDir, path, home, runtime.GOOS)
+		},
+		shareState: func(cfg config.Config, cfgFiles []string, dataDir, workspace string) (string, error) {
+			return initShareState(cfg, cfgFiles, dataDir, workspace, home, runtime.GOOS)
+		},
+		vmStopped: func(cfg config.Config, dataDir string) bool {
+			return initVMStopped(cfg, dataDir, home, runtime.GOOS)
+		},
+		shareApply: func(cfg config.Config, cfgFiles []string, _ string, force bool, w io.Writer) int {
+			return initShareApply(cfg, cfgFiles, home, force, w)
 		},
 		doctor: func(cfg config.Config, src config.Source, cfgFiles []string, w io.Writer) int {
 			return initDoctor(cfg, src, cfgFiles, home, w)

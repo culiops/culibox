@@ -227,6 +227,7 @@
           <label for="sess-name">Name (optional)</label>
           <input id="sess-name" type="text" placeholder="auto: working dir name" autocomplete="off" spellcheck="false">
         </div>
+        <div class="span2" id="spawn-nobox" role="status" hidden></div>
         <div class="span2" id="spawn-ws-row">
           <label for="spawn-ws-input">Workspace</label>
           <input id="spawn-ws-input" type="text" role="combobox" autocomplete="off"
@@ -234,6 +235,7 @@
                  aria-autocomplete="list" placeholder="~/project">
           <div id="spawn-ws-list" role="listbox" aria-label="Directories" hidden></div>
           <div class="form-hint" id="spawn-ws-note"></div>
+          <div class="field-error spawn-owned" id="spawn-ws-owned" role="status" hidden></div>
           <div class="spawn-notshared" id="spawn-notshared" role="alert" hidden></div>
           <div class="form-hint" id="spawn-ws-vmhelp" hidden></div>
           <div class="form-hint" id="spawn-copy-line" hidden></div>

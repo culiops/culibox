@@ -4,7 +4,15 @@
 # The script runs from a copy inside a throwaway fixture repo (it deploys the checkout
 # it lives in), with every external effect stubbed:
 #   go          $GO points at a stub that "builds" a file holding the commit it was given
-#   systemctl   a PATH stub; STUB_RESTART_FAIL=1 makes the service not come up
+#   systemctl   a PATH stub; STUB_RESTART_FAIL=1 makes the service not come up;
+#               STUB_ACTIVE_UNTIL=N keeps it active for N polls, then it dies;
+#               STUB_PID_CHANGE_AFTER=N makes MainPID change after N reads (a crash-restart)
+#   curl        a PATH stub for the HTTP probe; STUB_LISTEN_AFTER=N answers only from the
+#               (N+1)th probe on, STUB_LISTEN_UNTIL=N stops answering after N probes
+#   ss          a PATH stub naming the process that holds the probed port (a real pid: this
+#               shell, so /proc/<pid>/cgroup is real); STUB_CG is the cgroup the unit has,
+#               STUB_SS_NONE=1 means nothing listens
+#   sleep       a PATH stub that returns at once and logs, so the poll window costs no time
 # The prod binary, its stamp and the previous copy all live under the mktemp dir, which
 # is removed on exit. Nothing touches the real ~/bin or the real service.
 set -euo pipefail
@@ -59,14 +67,67 @@ EOF
 cat >"$tmp/bin/systemctl" <<'EOF'
 #!/bin/sh
 echo "$*" >>"$STUB_OUT/systemctl.log"
+# bump NAME: count the calls of one kind in this deploy; prints the new count.
+bump() {
+  n=$(cat "$STUB_OUT/count.$1" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  echo "$n" >"$STUB_OUT/count.$1"
+  echo "$n"
+}
 case "$*" in
-*is-active*) [ -z "${STUB_RESTART_FAIL:-}" ] ;;
+*is-active*)
+  n=$(bump active)
+  [ -z "${STUB_RESTART_FAIL:-}" ] || exit 1
+  [ -z "${STUB_ACTIVE_UNTIL:-}" ] || [ "$n" -le "$STUB_ACTIVE_UNTIL" ]
+  ;;
+*ControlGroup*) echo "${STUB_CG:-/stub/prod.service}" ;;
+*show*)
+  n=$(bump show)
+  # MainPID reads 0 while the unit is between a crash and its automatic restart.
+  if [ -n "${STUB_MAINPID_ZERO_UNTIL:-}" ] && [ "$n" -le "$STUB_MAINPID_ZERO_UNTIL" ]; then echo 0; exit 0; fi
+  if [ -n "${STUB_PID_CHANGE_AFTER:-}" ] && [ "$n" -gt "$STUB_PID_CHANGE_AFTER" ]; then echo 4243; else echo 4242; fi
+  ;;
 *) exit 0 ;;
 esac
 EOF
-chmod +x "$tmp/bin/go" "$tmp/bin/systemctl"
+cat >"$tmp/bin/curl" <<'EOF'
+#!/bin/sh
+# The HTTP probe: prints the status code the way `curl -w %{http_code}` does, 000 and exit 7
+# when nothing answers. Any other code (a 403 included) means a listener answered.
+echo "$*" >>"$STUB_OUT/curl.log"
+n=$(cat "$STUB_OUT/count.curl" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" >"$STUB_OUT/count.curl"
+if { [ -n "${STUB_LISTEN_AFTER:-}" ] && [ "$n" -le "$STUB_LISTEN_AFTER" ]; } ||
+  { [ -n "${STUB_LISTEN_UNTIL:-}" ] && [ "$n" -gt "$STUB_LISTEN_UNTIL" ]; }; then
+  printf 000
+  exit 7
+fi
+printf 200
+EOF
+cat >"$tmp/bin/ss" <<'EOF'
+#!/bin/sh
+# `ss -Hltnp "sport = :PORT"`: the process holding the listening socket on the port.
+echo "$*" >>"$STUB_OUT/ss.log"
+[ -z "${STUB_SS_NONE:-}" ] || exit 0
+# Two holders, the first not a live process: the check must go on to the second.
+echo "LISTEN 0 4096 ${STUB_SS_LOCAL:-127.0.0.1:18899} 0.0.0.0:* users:((\"a\",pid=4194999,fd=3),(\"culibox\",pid=$STUB_SS_PID,fd=7))"
+EOF
+cat >"$tmp/bin/sleep" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$STUB_OUT/sleep.log"
+EOF
+chmod +x "$tmp/bin/go" "$tmp/bin/systemctl" "$tmp/bin/curl" "$tmp/bin/ss" "$tmp/bin/sleep"
 export PATH=$tmp/bin:$PATH STUB_OUT=$tmp
 export GO=$tmp/bin/go AB_PROD_CONFIRM=yes AB_PROD_SERVICE=stub-prod
+# The address the probe is told to use; the script has no config to read it from.
+export AB_PROD_ADDR=127.0.0.1:18899
+# The socket on that port is held by this shell, so the unit "owns" it when the stub says the
+# unit's cgroup is this shell's (a cgroup v2 line in /proc/<pid>/cgroup reads `0::<path>`).
+export STUB_SS_PID=$$
+STUB_CG=$(sed -n 's/^0:://p' /proc/$$/cgroup | head -1)
+[ -n "$STUB_CG" ] || { echo "deploy-prod_test: needs cgroup v2 (no 0:: line in /proc/$$/cgroup)" >&2; exit 1; }
+export STUB_CG
 # A space in the path: the printed rollback line is pasted into a shell, so it must quote.
 export AB_PROD_BIN="$HOME/prod bin/culibox-prod"
 bin=$AB_PROD_BIN
@@ -85,6 +146,7 @@ commit() { # MESSAGE: commit a change on main and print its sha
 }
 deploy() { # run the script; its exit code lands in $rc, its output in $tmp/out
   rc=0
+  rm -f "$tmp"/count.* "$tmp/curl.log" "$tmp/sleep.log" "$tmp/ss.log"
   bash "$repo/scripts/deploy-prod.sh" >"$tmp/out" 2>&1 || rc=$?
 }
 # The rollback the script printed, as one shell line.
@@ -179,6 +241,122 @@ deploy
 expect_rc "$rc" 0 "F deployed again succeeds"
 content "$bin" "build $f" "F is installed"
 content "$bin.prev" "build $d" ".prev stays D, not the F that did not come up"
+
+# ---- 11. "came up" is a window, not one look (#274) -------------------------------------
+# State here: F is installed and stamped, D is .prev. The unit passing one is-active check
+# is not enough: a build can die a few seconds later, or serve can still be taking its
+# upgrade backup (it listens only after it) and then exit fail-closed.
+lines() { if [ -f "$1" ]; then wc -l <"$1" | tr -d ' '; else echo 0; fi; }
+unverified=$bin.unverified
+# not_recorded: the failed deploy left the stamp and .prev alone, kept $UNVERIFIED, and
+# printed the rollback and a message about what went wrong.
+not_recorded() { # STAMPED-SHA PREV-SHA MESSAGE-PATTERN LABEL
+  expect_rc "$rc" 1 "$4: the deploy fails"
+  content "$stamp" "$1" "$4: the commit is not stamped"
+  content "$bin.prev" "build $2" "$4: .prev is untouched by the rollback bookkeeping"
+  if [ -e "$unverified" ]; then pass "$4: the build stays marked unverified"; else fail "$4: the build was marked verified"; fi
+  if grep -q "$3" "$tmp/out"; then pass "$4: the operator is told why"; else fail "$4: no message matching '$3'"; sed 's/^/        | /' "$tmp/out" | tail -8 >&2; fi
+  if [ -n "$(rollback_line)" ]; then pass "$4: the rollback line is printed"; else fail "$4: no rollback line"; fi
+}
+
+# The defaults: the probe goes to AB_PROD_ADDR, and a healthy build is watched for 15 s.
+g=$(commit G)
+deploy
+expect_rc "$rc" 0 "a healthy build is recorded"
+content "$stamp" "$g" "G is stamped"
+content "$bin.prev" "build $f" "F, which came up, is kept as .prev"
+if grep -q "http://127.0.0.1:18899/" "$tmp/curl.log"; then pass "the listener probe goes to AB_PROD_ADDR"; else fail "the probe did not use AB_PROD_ADDR: $(cat "$tmp/curl.log" 2>/dev/null)"; fi
+if [ "$(lines "$tmp/sleep.log")" -ge 15 ]; then pass "by default a healthy build is watched for at least 15 polls"; else fail "default window too short: $(lines "$tmp/sleep.log") polls"; fi
+
+# The late crash: the unit is active for the first polls, then dies, inside the window.
+export AB_PROD_LISTEN_WAIT=20 AB_PROD_STABLE_SECS=5
+commit H >/dev/null
+STUB_ACTIVE_UNTIL=3 deploy
+not_recorded "$g" "$g" "stopped being active" "a build that crashes after the first polls"
+# Fixing forward must keep G, the last build that really ran, not the H that died.
+i=$(commit I)
+deploy
+expect_rc "$rc" 0 "the fix-forward deploy after the late crash succeeds"
+content "$stamp" "$i" "I is stamped"
+content "$bin.prev" "build $g" ".prev is G, the last build that ran, not the crashed H"
+content "$bin.prev.deployed-sha" "$g" ".prev records G"
+
+# A slow listen: serve is taking its upgrade backup and listens only after it. Not a failure.
+j=$(commit J)
+STUB_LISTEN_AFTER=8 deploy
+expect_rc "$rc" 0 "a build that listens after 8 polls (the backup) still comes up"
+content "$stamp" "$j" "J is stamped after the slow listen"
+if [ "$(lines "$tmp/sleep.log")" -le 40 ]; then pass "the slow listen is waited for, not forever"; else fail "too many polls: $(lines "$tmp/sleep.log")"; fi
+
+# The slow listen then a fail-closed exit (backup failed): the unit goes inactive before it ever listens.
+commit K >/dev/null
+STUB_LISTEN_AFTER=1000 STUB_ACTIVE_UNTIL=4 deploy
+not_recorded "$j" "$j" "stopped being active" "a serve that exits fail-closed before it listens"
+if [ "$(lines "$tmp/sleep.log")" -lt 10 ]; then pass "the fail-closed exit is noticed at once, not after the listen wait"; else fail "waited $(lines "$tmp/sleep.log") polls for a dead unit"; fi
+
+# Active but never listening: bounded by AB_PROD_LISTEN_WAIT.
+STUB_LISTEN_AFTER=1000 deploy
+not_recorded "$j" "$j" "did not answer" "a build that is active but never listens"
+if grep -q "AB_PROD_ADDR" "$tmp/out"; then pass "the message names AB_PROD_ADDR, the address it probed"; else fail "the message does not say which address or variable"; fi
+if [ "$(lines "$tmp/sleep.log")" -le 21 ]; then pass "the wait for the listener is bounded by AB_PROD_LISTEN_WAIT"; else fail "waited $(lines "$tmp/sleep.log") polls for a 20 s limit"; fi
+
+# Listening, then the listener goes away inside the stable window.
+STUB_LISTEN_UNTIL=3 deploy
+not_recorded "$j" "$j" "stopped answering" "a build whose listener dies inside the window"
+
+# Active and listening at every poll, but a different process each time: a crash-restart between polls.
+STUB_PID_CHANGE_AFTER=3 deploy
+not_recorded "$j" "$j" "restarted" "a build that crash-restarts between polls"
+
+# MainPID reads 0 right after the restart (an auto-restart in progress): the process to watch is
+# the first real one, so a later change is still caught (and a steady one still passes, below).
+STUB_MAINPID_ZERO_UNTIL=2 STUB_PID_CHANGE_AFTER=5 deploy
+not_recorded "$j" "$j" "restarted" "a crash-restart after MainPID read 0 at first"
+
+# Something else answers on the port (the DEV instance, on the default port) while this unit
+# never listens: curl succeeds, but the socket is not the unit's, so it is not "came up".
+STUB_CG=/stub/some-other.service deploy
+not_recorded "$j" "$j" "not on that address" "a build that never listens while another process answers on the port"
+if [ "$(lines "$tmp/sleep.log")" -le 21 ]; then pass "a foreign listener is waited out only for AB_PROD_LISTEN_WAIT"; else fail "waited $(lines "$tmp/sleep.log") polls on a foreign listener"; fi
+# The unit holds the port on ANOTHER address (127.0.0.2, a v6 wildcard for a v4 ADDR, ...) while
+# curl reaches the process on ADDR itself (DEV): the socket must be on ADDR's host.
+for local_addr in 127.0.0.2:18899 '[::]:18899' '[::1]:18899' 10.9.8.7:18899; do
+  STUB_SS_LOCAL=$local_addr deploy
+  not_recorded "$j" "$j" "not on that address" "a unit socket on $local_addr while AB_PROD_ADDR is 127.0.0.1"
+done
+STUB_SS_LOCAL='0.0.0.0:18899' AB_PROD_ADDR='[::1]:18899' deploy
+not_recorded "$j" "$j" "not on that address" "an IPv4 wildcard does not stand for a v6 ADDR"
+STUB_SS_LOCAL='[fe80::1]%eth0:18899' AB_PROD_ADDR='[::1]:18899' deploy
+not_recorded "$j" "$j" "not on that address" "a link-local v6 socket (interface after the bracket) is not [::1]"
+# No listening socket on the port at all: an answer with no owner is not accepted either.
+STUB_SS_NONE=1 deploy
+not_recorded "$j" "$j" "not on that address" "a build whose port has no listening socket"
+STUB_MAINPID_ZERO_UNTIL=2 deploy
+expect_rc "$rc" 0 "a MainPID of 0 at first is not a failure once a process is there"
+# Addresses that do stand for ADDR (each deploy of K succeeds; they come after the refusals above
+# because a success stamps K). ss writes a v6 host in brackets and may add %iface.
+for local_addr in '*:18899' 0.0.0.0:18899 '127.0.0.1%lo:18899'; do
+  STUB_SS_LOCAL=$local_addr deploy
+  expect_rc "$rc" 0 "a unit socket on $local_addr passes for AB_PROD_ADDR 127.0.0.1"
+done
+for local_addr in '[::1]:18899' '[::]:18899' '*:18899' '[::1]%lo:18899'; do
+  STUB_SS_LOCAL=$local_addr AB_PROD_ADDR='[::1]:18899' deploy
+  expect_rc "$rc" 0 "a unit socket on $local_addr passes for AB_PROD_ADDR [::1]"
+done
+# The unit's own listener passes, and the ownership check asks about AB_PROD_ADDR's port.
+deploy
+expect_rc "$rc" 0 "a listener held by the unit's cgroup passes"
+if grep -q "sport = :18899" "$tmp/ss.log"; then pass "the ownership check asks about AB_PROD_ADDR's port"; else fail "ss was not asked about port 18899: $(cat "$tmp/ss.log" 2>/dev/null)"; fi
+
+# A setting that is not a number is refused before anything is built or swapped.
+before=$(cat "$bin")
+AB_PROD_STABLE_SECS=soon deploy
+expect_rc "$rc" 1 "a non-numeric AB_PROD_STABLE_SECS is refused"
+content "$bin" "$before" "a refused setting leaves the installed binary alone"
+AB_PROD_STABLE_SECS=0 deploy
+expect_rc "$rc" 1 "AB_PROD_STABLE_SECS=0 is refused: it would skip the stable window"
+content "$bin" "$before" "the refused 0 leaves the installed binary alone"
+unset AB_PROD_LISTEN_WAIT AB_PROD_STABLE_SECS
 
 if [ "$fails" -ne 0 ]; then
   echo "deploy-prod_test: $fails failure(s)" >&2

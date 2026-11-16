@@ -358,6 +358,11 @@ func validImageRef(img string) error {
 	return nil
 }
 
+// ValidImageRef is validImageRef for callers that read a box_image from a config
+// that is not this instance's (box setup's image prune): an invalid one names no
+// image and is skipped by them.
+func ValidImageRef(img string) error { return validImageRef(img) }
+
 // BoxIdleTTL is how long a box outlives its last session, so returning to a
 // project does not pay container start-up again. As with the upload caps, unset
 // means the default and never "forever".

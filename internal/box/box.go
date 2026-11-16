@@ -405,6 +405,14 @@ type Manager struct {
 	// they are removed as soon as their last session is released, with no
 	// idle-TTL reuse. Set by ensure and, after a restart, by MarkExclusive.
 	exclusive map[string]bool
+	// owner is the session an exclusive box belongs to (BoxKey.Session), and
+	// adoptedAt when this process adopted it after a restart (#325): what the
+	// write-hold hook is asked about. Set by Wrap and AdoptExclusive, cleared
+	// with exclusive. Guarded by mu.
+	owner     map[string]string
+	adoptedAt map[string]time.Time
+	// writeHold is the hook SetWriteHold installs (guarded by mu); nil = none.
+	writeHold WriteHold
 	// memTotal is docker's MemTotal once read (0 = not yet); memFallbackLogged
 	// stops the unreadable-MemTotal fallback from logging on every spawn. Both
 	// guarded by mu.
@@ -448,6 +456,8 @@ func New(opts Options) (*Manager, error) {
 		guardsChecked: map[string]bool{},
 		drift:         map[string]bool{},
 		exclusive:     map[string]bool{},
+		owner:         map[string]string{},
+		adoptedAt:     map[string]time.Time{},
 	}
 	if opts.LockGuards {
 		ops := platformFlagOps()
@@ -456,7 +466,12 @@ func New(opts Options) (*Manager, error) {
 		}
 		m.locks = newGuardLocks(opts.StateRoot, ops)
 	}
-	if opts.Client.HasRuntime(context.Background(), runtimeSysbox) {
+	// Bounded: a daemon that accepts and never answers must not hold the boot.
+	// A daemon that is stopped or not permitted answers false here, and is not an
+	// error: the layer exists, and Ping (daemon.go) says why it cannot be used.
+	pctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+	defer cancel()
+	if opts.Client.HasRuntime(pctx, runtimeSysbox) {
 		m.runtime = runtimeSysbox
 	}
 	return m, nil
@@ -476,6 +491,25 @@ func (m *Manager) egressConfig() Egress {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.egress
+}
+
+// WriteHold says why the session that owns an exclusive box may hold AWS write
+// credentials right now: a write window open or being granted, write
+// credentials from a dropped window still valid, or (adoptedAt set: the box
+// was adopted after a restart at that time) credentials issued before the
+// restart that may still be valid. "" = it holds none, and other boxes may use
+// its folder (#325). The sentence names the session; it is shown as is.
+//
+// It is called with opMu held, so it must not call back into the Manager.
+type WriteHold func(sessionID string, adoptedAt time.Time) string
+
+// SetWriteHold installs the write-hold hook. Call it once at boot, before any
+// boxed spawn. Without it, an exclusive box of this instance refuses every
+// other spawn into its folder, as no window can be ruled out.
+func (m *Manager) SetWriteHold(f WriteHold) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.writeHold = f
 }
 
 // Runtime reports the detected isolation runtime, for the UI badge.
@@ -992,7 +1026,22 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	}
 	// Last, so the clone and guard mounts above count as covering too.
 	extraRO = yieldCovered(ws.Path, extraRO)
+	if key.Session != "" {
+		// Before ensure: from the moment the box runs, another spawn's
+		// claimCheck must be able to ask whether its session holds a window.
+		// The name hashes key.Session, so the owner never changes.
+		m.mu.Lock()
+		m.owner[name] = key.Session
+		m.mu.Unlock()
+	}
 	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
+		if key.Session != "" {
+			m.mu.Lock()
+			if !m.exclusive[name] { // no box of this session counted: nothing to own
+				delete(m.owner, name)
+			}
+			m.mu.Unlock()
+		}
 		return nil, nil, "", err
 	}
 	// The CA variables are fixed container paths set here and nowhere else: any
@@ -1501,11 +1550,18 @@ func (m *Manager) reuseCA(ctx context.Context, name, label string) (State, error
 }
 
 // claimCheck enforces exclusive workspaces across every agent-box instance on
-// this docker daemon (DEV and PROD share it). An exclusive spawn conflicts with
-// any running box over an overlapping folder; any other spawn conflicts only
-// with an exclusive one. An idle box of this instance is removed instead of
-// blocking, whichever side is exclusive (spec correction 6); if that removal
-// fails, the spawn is refused. A failed listing refuses (correction 9).
+// this docker daemon (DEV and PROD share it). A pair of boxes over overlapping
+// folders where either side is exclusive is checked; two plain ones never are.
+// An idle box of this instance is removed instead of blocking, whichever side
+// is exclusive (spec correction 6); if that removal fails, an exclusive one
+// still blocks. A failed listing refuses (correction 9).
+//
+// Within this instance the risk is a write window, not the box (#325): an
+// exclusive box blocks only while writeHeld says its session may hold write
+// credentials, and a plain box never blocks an exclusive spawn (the grant,
+// ClaimForGrant, refuses while it runs). Another instance's windows cannot be
+// seen from here, so its boxes are checked as before #325: an exclusive pair
+// conflicts.
 //
 // Rows can come from containers agent-box did not create, so the check fails
 // closed on what it cannot read: an unreadable row conflicts with every spawn,
@@ -1530,13 +1586,41 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 		if !exclusive && !b.Exclusive {
 			continue
 		}
-		if b.Instance == m.opts.Instance && m.idle(b.Name) && m.removeIdle(ctx, b.Name) == nil {
-			continue
+		if b.Instance != m.opts.Instance {
+			return fmt.Errorf("%w: %s is in use by a box of another CuliBox instance (%s), and one of the two sessions can be granted AWS write access; "+
+				"this CuliBox cannot see that instance's write windows. Use a separate folder or worktree, or end the session there.",
+				ErrWorkspaceHeld, cwd, b.Instance)
 		}
-		return fmt.Errorf("%w: %s is in use by an AWS-write-capable session (or another session sits in this folder). "+
-			"Use a separate folder or worktree, or stop the other session.", ErrWorkspaceHeld, cwd)
+		if m.idle(b.Name) {
+			if m.removeIdle(ctx, b.Name) == nil || !b.Exclusive {
+				continue // gone, or plain: a plain box never held write credentials
+			}
+			return fmt.Errorf("%w: %s is in use by box %s, whose session has ended but which could not be removed, and that session could be granted AWS write access. "+
+				"Try again, or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, b.Name)
+		}
+		if !b.Exclusive {
+			continue // the exclusive spawn's own grant is refused while this box runs
+		}
+		if why := m.writeHeld(b.Name); why != "" {
+			return fmt.Errorf("%w: %s is closed to other boxes while a session in it can write to AWS: %s. "+
+				"Wait for it to end (or drop the window in that session), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, why)
+		}
 	}
 	return nil
+}
+
+// writeHeld is why the session owning exclusive box name may hold AWS write
+// credentials ("" = it holds none). It fails closed: with no hook, or a box
+// whose session this process does not know, nothing can be ruled out. Caller
+// holds opMu (the hook runs under it), never mu.
+func (m *Manager) writeHeld(name string) string {
+	m.mu.Lock()
+	hook, sid, at := m.writeHold, m.owner[name], m.adoptedAt[name]
+	m.mu.Unlock()
+	if hook == nil || sid == "" {
+		return fmt.Sprintf("box %s belongs to a session that can be granted AWS write access, and this CuliBox cannot tell whether a write window is open", name)
+	}
+	return hook(sid, at)
 }
 
 // idle reports whether no session of this process uses the box.
@@ -1561,13 +1645,12 @@ func (m *Manager) removeIdle(ctx context.Context, name string) error {
 		t.Stop()
 		delete(m.timers, name)
 	}
-	delete(m.exclusive, name)
+	m.forgetExclusiveLocked(name)
 	return nil
 }
 
 // MarkExclusive records that a box belongs to one session, so it is removed at
-// release rather than kept for its idle TTL. ensure marks the boxes it starts;
-// the session layer calls this for a box adopted after a restart.
+// release rather than kept for its idle TTL. ensure marks the boxes it starts.
 func (m *Manager) MarkExclusive(name string) {
 	if name == "" {
 		return
@@ -1575,6 +1658,31 @@ func (m *Manager) MarkExclusive(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.exclusive[name] = true
+}
+
+// AdoptExclusive is MarkExclusive for a box adopted after a restart, with the
+// session it belongs to: the write-hold hook is asked about that session, and
+// told when the box was adopted, since credentials issued before the restart
+// may still be valid while the broker no longer knows of a window (#325).
+func (m *Manager) AdoptExclusive(name, sessionID string) {
+	if name == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.exclusive[name] = true
+	if sessionID != "" {
+		m.owner[name] = sessionID
+		m.adoptedAt[name] = time.Now()
+	}
+}
+
+// forgetExclusiveLocked drops what is recorded about a box's exclusivity once
+// the box is gone. Caller holds mu.
+func (m *Manager) forgetExclusiveLocked(name string) {
+	delete(m.exclusive, name)
+	delete(m.owner, name)
+	delete(m.adoptedAt, name)
 }
 
 // idleTTL is how long an idle box is kept: zero for an exclusive one, which
@@ -1590,19 +1698,73 @@ func (m *Manager) idleTTL(name string) time.Duration {
 	return m.opts.IdleTTL
 }
 
-// GrantBlocker names why a grant must wait, or "" (M3b §7.3): any other running
-// box, of any instance, over a folder that overlaps cwd. One from a build that
-// does not enforce claims (no claims label) is named as such. self is the
-// session's own box. Like claimCheck it fails closed: an unreadable row, or a
-// live (running, paused or restarting) box with no usable workspace label, blocks.
-func (m *Manager) GrantBlocker(ctx context.Context, cwd, self string) (string, error) {
+// GrantBlock is why a write window cannot be granted now. Box is set when the
+// blocker is a live box of this instance, so the caller can name the sessions
+// in it; Why is the box layer's own sentence. The zero value = nothing blocks.
+type GrantBlock struct {
+	Box, Why string
+}
+
+// GrantBlocker is what the grant panel shows (M3b §7.3): any other running box,
+// of any instance, over a folder that overlaps cwd. One from a build that does
+// not enforce claims (no claims label) is named as such. self is the session's
+// own box. Like claimCheck it fails closed: an unreadable row, or a live
+// (running, paused or restarting) box with no usable workspace label, blocks.
+// It only reads: an idle box of this instance is not reported, because the
+// grant (ClaimForGrant) removes it.
+func (m *Manager) GrantBlocker(ctx context.Context, cwd, self string) (GrantBlock, error) {
+	return m.grantBlock(ctx, cwd, self, false)
+}
+
+// ClaimForGrant is the grant's own check (spec correction 8, #325): as
+// GrantBlocker, but under opMu, and an idle box of this instance in the way is
+// removed (one that cannot be removed blocks). Holding opMu orders it against
+// every spawn of this instance: one that passed its claimCheck has its box
+// running before this lists, and one after it sees the caller's write hold,
+// which the caller sets before calling this. Another instance's spawn is
+// refused by this box's exclusive label. It gives up when ctx ends before
+// opMu is free.
+func (m *Manager) ClaimForGrant(ctx context.Context, cwd, self string) (GrantBlock, error) {
+	if err := m.lockOp(ctx); err != nil {
+		return GrantBlock{}, fmt.Errorf("box: waiting for a box operation to finish: %w", err)
+	}
+	defer m.opMu.Unlock()
+	return m.grantBlock(ctx, cwd, self, true)
+}
+
+// lockOp takes opMu, or returns ctx's error if ctx ends first. An abandoned
+// wait still takes the lock when it frees up, and gives it straight back.
+func (m *Manager) lockOp(ctx context.Context) error {
+	if m.opMu.TryLock() {
+		return nil
+	}
+	got := make(chan struct{})
+	go func() {
+		m.opMu.Lock()
+		close(got)
+	}()
+	select {
+	case <-got:
+		return nil
+	case <-ctx.Done():
+		go func() {
+			<-got
+			m.opMu.Unlock()
+		}()
+		return ctx.Err()
+	}
+}
+
+// grantBlock is GrantBlocker (remove false: read only) and ClaimForGrant
+// (remove true; caller holds opMu).
+func (m *Manager) grantBlock(ctx context.Context, cwd, self string, remove bool) (GrantBlock, error) {
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
-		return "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
+		return GrantBlock{}, fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
 	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance)
 	if err != nil {
-		return "", fmt.Errorf("box: listing boxes: %w", err)
+		return GrantBlock{}, fmt.Errorf("box: listing boxes: %w", err)
 	}
 	for _, b := range boxes {
 		if b.Name == self || !holdsWorkspace(b.State) {
@@ -1610,17 +1772,30 @@ func (m *Manager) GrantBlocker(ctx context.Context, cwd, self string) (string, e
 		}
 		switch {
 		case b.Unreadable:
-			return fmt.Sprintf("container %q carries CuliBox labels that cannot be read, so it may use %s; remove it first", b.Name, real), nil
+			return GrantBlock{Why: fmt.Sprintf("container %q carries CuliBox labels that cannot be read, so it may use %s; remove it first", b.Name, real)}, nil
 		case !knownWorkspace(b.Workspace):
-			return fmt.Sprintf("a box (instance %s) has no usable workspace label, so it may use %s; stop it first", b.Instance, real), nil
+			return GrantBlock{Why: fmt.Sprintf("a box (instance %s) has no usable workspace label, so it may use %s; stop it first", b.Instance, real)}, nil
 		case !Overlaps(b.Workspace, real):
 			continue
 		case !b.Claims:
-			return fmt.Sprintf("a box started by an older CuliBox (instance %s) uses %s; stop it or upgrade that instance first", b.Instance, b.Workspace), nil
+			return GrantBlock{Why: fmt.Sprintf("a box started by an older CuliBox (instance %s) uses %s; stop it or upgrade that instance first", b.Instance, b.Workspace)}, nil
 		}
-		return fmt.Sprintf("another box (instance %s) uses %s; stop the session in it first", b.Instance, b.Workspace), nil
+		why := fmt.Sprintf("another box (instance %s) uses %s; stop the session in it first", b.Instance, b.Workspace)
+		if b.Instance != m.opts.Instance {
+			return GrantBlock{Why: why}, nil
+		}
+		if m.idle(b.Name) {
+			if !remove {
+				continue // the grant removes it
+			}
+			if m.removeIdle(ctx, b.Name) == nil {
+				continue
+			}
+			return GrantBlock{Why: fmt.Sprintf("box %s uses %s; its sessions have ended but it could not be removed, try again", b.Name, b.Workspace)}, nil
+		}
+		return GrantBlock{Box: b.Name, Why: why}, nil
 	}
-	return "", nil
+	return GrantBlock{}, nil
 }
 
 // refuseUnverified handles a box that failed its containment check: it is
@@ -1807,7 +1982,7 @@ func (m *Manager) stopIfIdle(name string) {
 		m.boxGone(name)
 	}
 	m.mu.Lock()
-	delete(m.exclusive, name)
+	m.forgetExclusiveLocked(name)
 	m.mu.Unlock()
 }
 
@@ -1991,7 +2166,7 @@ func (m *Manager) remove(ctx context.Context, name string) error {
 	m.boxGone(name)
 	m.mu.Lock()
 	if m.active[name] == 0 { // no release will come to clear it
-		delete(m.exclusive, name)
+		m.forgetExclusiveLocked(name)
 	}
 	m.mu.Unlock()
 	return nil

@@ -392,9 +392,13 @@ function accPanel(r, d, ctx) {
     box.appendChild(p);
   };
   if (g.boxPrefix) reach("Can read objects in buckets named ", g.boxPrefix + "*");
-  if (g.passRolePrefix) reach("Can pass roles named ", g.passRolePrefix + "*");
+  if (g.passRolePrefix) reach("Can pass roles named ", g.passRolePrefix + "*", ". Code running as one of these roles is not bound by this window's blocks");
   else box.appendChild(accEl("p", "t-sm muted", "Cannot pass IAM roles (set pass_role_prefix to allow Lambda/ECS applies)"));
-  box.appendChild(accEl("p", "t-sm muted", "The agent can change bucket policies in this window, so a bucket it may not read can still be exposed."));
+  // #307: bucket policies, ACLs and public access blocks are denied in the window except on box buckets.
+  if (g.boxPrefix) reach("Can change bucket policies, ACLs and public access blocks only on buckets named ", g.boxPrefix + "*", ", so those can be made public");
+  else box.appendChild(accEl("p", "t-sm muted", "Cannot change bucket policies, ACLs or public access blocks"));
+  // #324: the other denied data's resource policies are denied in every window, with no exception; KMS is not.
+  box.appendChild(accEl("p", "t-sm muted", "Cannot change the resource policies of DynamoDB tables, SSM parameters or secrets. KMS key policies and grants can still change"));
   if (g.allowIAM) box.appendChild(accEl("div", "ac-warn", "With IAM changes allowed, the agent can create and use its own roles, so data-read blocks are advisory in this window."));
 
   const hint = accEl("p", "ac-hint t-sm muted");

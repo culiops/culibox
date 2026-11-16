@@ -271,6 +271,10 @@ func TestCloneSaveCheckRefusesBoxOwnedCloneOf(t *testing.T) {
 	if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "is box-owned") {
 		t.Fatalf("save of a profile cloning another clone: want the box-owned refusal, got %v", err)
 	}
+	// "pick a folder outside the copy" is the New session dialog's way out; a profile save has no such dialog.
+	if strings.Contains(err.Error(), "web UI") || strings.Contains(err.Error(), "outside the copy") {
+		t.Fatalf("a clone_of refusal carries the New session hint: %v", err)
+	}
 }
 
 // darwinCloneHooks are newCloneHooks over a darwin layer whose VM shares only
@@ -432,6 +436,9 @@ func TestContextSaveCheck(t *testing.T) {
 	_, err = check(filepath.Join(otherClone, "sub"))
 	if err == nil || !strings.Contains(err.Error(), "is inside a box-owned directory") || !strings.Contains(err.Error(), "another box writes there") {
 		t.Fatalf("a path inside another box's clone: want the box-owned refusal, got %v", err)
+	}
+	if strings.Contains(err.Error(), "web UI") {
+		t.Fatalf("a context_paths refusal carries the New session hint: %v", err)
 	}
 	if _, err := check(filepath.Join(home, "missing")); err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("a missing path must be refused by CheckContextPath, got %v", err)

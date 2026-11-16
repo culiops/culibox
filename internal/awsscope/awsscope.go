@@ -5,6 +5,7 @@ package awsscope
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -75,8 +76,10 @@ func ValidS3Entry(s string) error {
 
 // ValidBoxBucketPrefix accepts an elevate.box_bucket_prefix: lowercase
 // letters, digits and "-", 3 to 40 characters, ending in "-". It becomes
-// "arn:<p>:s3:::<prefix>*/*" in the S3 deny's NotResource, so anything that
-// could widen it (empty, "*", "?", "/") must never get that far.
+// "arn:<p>:s3:::<prefix>*/*" in the S3 read deny's NotResource and
+// "arn:<p>:s3:::<prefix>*" in the replication and exposure deny's NotResource
+// (#307), so anything that could widen it (empty, "*", "?", "/") must never
+// get that far.
 func ValidBoxBucketPrefix(s string) error {
 	if !boxPrefixRe.MatchString(s) {
 		return fmt.Errorf("box_bucket_prefix %q must be 3 to 40 lowercase letters, digits and -, ending in - (for example culibox-), with no wildcards", s)
@@ -131,26 +134,43 @@ type statement struct {
 // values (the four value reads: GetParameter, GetParameters,
 // GetParametersByPath and GetParameterHistory, per the SSM
 // ps-retrieval-authorization doc) and DynamoDB item images, including stream
-// records (GetRecords). Explicit names only: the AWS gate simulates each one.
+// records (GetRecords), and s3:GetDataAccess, which returns S3 Access Grants
+// credentials that the session policy does not bound, so s3_read would not
+// hold for them (#322, #329 review; ReadOnlyAccess allows it through s3:Get*).
+// Explicit names only: the AWS gate simulates each one.
 var dataReadDenies = []string{
 	"secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
 	"ssm:GetParameterHistory",
 	"dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PartiQLSelect",
-	"dynamodb:GetRecords",
+	"dynamodb:GetRecords", "s3:GetDataAccess",
 }
 
 // DataReadDenies returns a copy of the data-read actions the investigate scope
-// denies outright (secret values, SSM parameters, DynamoDB items).
+// denies outright (secret values, SSM parameters, DynamoDB items, S3 Access
+// Grants credentials).
 func DataReadDenies() []string { return slices.Clone(dataReadDenies) }
 
+// s3ExpressSession is how S3 Express One Zone directory buckets authorize
+// object reads and writes: a CreateSession on the bucket returns session
+// credentials for every object in it (ReadOnly or ReadWrite), and s3:GetObject
+// is never evaluated (#323). It sits in the S3 read deny, whose exceptions are
+// all S3 general purpose ARNs ("arn:<p>:s3:::"), so it is denied on every
+// directory bucket ("arn:<p>:s3express:"). s3_read does not reach directory
+// buckets: a session covers the whole bucket, so a prefix entry could not be
+// honoured, and each mapped bucket would cost the window's tight size budget.
+// Basis: ReadOnlyAccess allows it (awsprobe testdata, Sid
+// S3ExpressReadOnlySessionObjectAccess); action name from AWS's catalog.
+const s3ExpressSession = "s3express:CreateSession"
+
 // investigateStatements are the "investigate" scope's statements, in order:
-// Allow *, then S3 object reads outside the allowlist, secret/parameter values,
-// DynamoDB items, and KMS decryption other than through S3 denied.
+// Allow *, then S3 object reads outside the allowlist (directory bucket
+// sessions everywhere), secret/parameter values, DynamoDB items, and KMS
+// decryption other than through S3 denied.
 func investigateStatements(partition string, s3Read []string) ([]statement, error) {
 	if !partitionRe.MatchString(partition) {
 		return nil, fmt.Errorf("session policy: partition %q is not aws, aws-cn or aws-us-gov", partition)
 	}
-	s3 := statement{Effect: "Deny", Action: []string{"s3:GetObject", "s3:GetObjectVersion"}}
+	s3 := statement{Effect: "Deny", Action: []string{"s3:GetObject", "s3:GetObjectVersion", s3ExpressSession}}
 	if len(s3Read) == 0 {
 		s3.Resource = "*"
 	}
@@ -188,11 +208,26 @@ func marshalPolicy(st []statement, what string) (string, error) {
 	}
 	if len(b) > MaxPolicyChars {
 		if what == "elevated session policy" {
-			return "", fmt.Errorf("the elevated session policy is %d characters; STS allows %d. It grows with every s3_read entry, with elevate.box_bucket_prefix and elevate.pass_role_prefix, and when allow_iam is off — use fewer or shorter s3_read entries or shorter prefixes", len(b), MaxPolicyChars)
+			return "", &sizeError{n: len(b)}
 		}
 		return "", fmt.Errorf("the s3_read allowlist makes the %s %d characters; STS allows %d — use fewer or shorter entries", what, len(b), MaxPolicyChars)
 	}
 	return string(b), nil
+}
+
+// sizeError is an elevated policy over STS's limit; ElevatedPolicy turns it
+// into the message the config load shows.
+type sizeError struct {
+	n, base  int
+	allowIAM bool
+}
+
+func (e *sizeError) Error() string {
+	iam := "off"
+	if e.allowIAM {
+		iam = "on"
+	}
+	return fmt.Sprintf("the elevated session policy is %d characters; STS allows %d. CuliBox's own denies take %d of them (with allow_iam %s), and a newer CuliBox can deny more, so a config that loaded before an upgrade can be refused after it. The rest is every s3_read entry, elevate.box_bucket_prefix and elevate.pass_role_prefix: use fewer or shorter s3_read entries or shorter prefixes", e.n, MaxPolicyChars, e.base, iam)
 }
 
 // SessionPolicy is the "investigate" scope: everything the role allows, minus
@@ -207,10 +242,12 @@ func SessionPolicy(partition string, s3Read []string) (string, error) {
 }
 
 // elevatedGuardDenies keep an elevation window a real bound and keep Prove
-// intact (spec §6 item 3). AssumeRole* in particular stops a chained
-// credential from outliving the window by up to an hour.
+// intact (spec §6 item 3). sts:AssumeRo* (AssumeRole, AssumeRoleWithSAML,
+// AssumeRoleWithWebIdentity and AssumeRoot, in AWS's catalog) in particular stops
+// a chained credential, or a member account's root credential, from outliving
+// the window by up to an hour.
 var elevatedGuardDenies = []string{
-	"sts:AssumeRole*", "sts:GetFederationToken", "sts:GetSessionToken",
+	"sts:AssumeRo*", "sts:GetFederationToken", "sts:GetSessionToken",
 	"iam:CreateAccessKey", "iam:CreateLoginProfile", "iam:UpdateLoginProfile",
 	"iam:CreateServiceSpecificCredential", "iam:UploadSSHPublicKey",
 	"cloudtrail:StopLogging", "cloudtrail:DeleteTrail", "cloudtrail:UpdateTrail", "cloudtrail:PutEventSelectors",
@@ -250,9 +287,82 @@ func ValidPassRolePrefix(s string) error {
 	return nil
 }
 
+// S3 Access Grants (#322): Access Grants hands out credentials of a location's
+// IAM role through s3:GetDataAccess, and those credentials are not bound by the
+// session policy, so its S3 read deny would not hold for them. Both scopes deny
+// GetDataAccess as a data read (dataReadDenies), and the window also denies
+// every Access Grants change (s3AccessGrantsWrites: create, update, associate,
+// delete and dissociate of grants, locations, instances and the Identity
+// Center link; the instance resource policy put is already s3:Put*Policy*,
+// #307), so it can neither use a grant nor make one for another principal. A
+// grant, location or instance ARN carries no bucket name, so box buckets get
+// no exception. Basis: AWS's action catalog (internal/awsprobe snapshot) for the
+// names; that GetDataAccess credentials escape the session policy is inferred
+// from what they are (the location role's), not measured.
+//
+// s3AccessGrantsWrites matches every S3 action whose name has "AccessGrant"
+// after a verb ending in "e" (Create, Update, Associate, Delete, Dissociate)
+// and no read (Get..., List... end the verb in "t"). Written as a pattern to fit
+// STS's limit (#329); a test pins its expansion against the catalog.
+const s3AccessGrantsWrites = "s3:*eAccessGrant*"
+
+// s3ExpressExposureDenies (#323) are #307's exposure denies for directory
+// buckets: their bucket policies and their access points' policies can grant
+// another account, and removing a bucket policy can drop the deny that kept
+// one out. Directory buckets have no ACLs and their public access block
+// cannot be turned off (S3 Express docs, from memory), so nothing else is
+// needed. Unlike #307 there is no box-bucket exception: it would cost a
+// directory bucket ARN of the prefix's length, which the size budget does not
+// hold at the maximum config (#329), and with CreateSession denied the window
+// cannot use a directory bucket anyway.
+var s3ExpressExposureDenies = []string{s3ExpressPolicyPuts, "s3express:DeleteBucketPolicy"}
+
+// s3ExpressPolicyPuts is PutBucketPolicy and PutAccessPointPolicy, the only
+// s3express actions it matches in AWS's catalog (a test pins it).
+const s3ExpressPolicyPuts = "s3express:Put*Policy"
+
+// dataResourcePolicyDenies (#324) are the resource-policy writes that can give
+// another principal the data the window denies the session (DynamoDB items
+// and stream records, Parameter Store values, secret values), with no read by
+// the session: the #307 class outside S3. Denied in every window, with no
+// exception: no config names a resource prefix for tables, parameters or
+// secrets. Basis per action:
+//   - dynamodb:PutResourcePolicy (tables, streams, indexes), ssm:PutResourcePolicy
+//     (parameters, shareable to other accounts) and
+//     secretsmanager:PutResourcePolicy: each attaches a resource policy that
+//     can grant another account. Names sourced from AWS's action catalog
+//     (internal/awsprobe snapshot); cross-account use sourced from each
+//     service's docs, from memory (the docs site is not reachable from here).
+//   - the matching DeleteResourcePolicy: a resource policy can hold the deny
+//     that keeps a principal out, so removing it can widen access with no new
+//     grant (inferred, as #307 did for s3:DeleteBucketPolicy).
+//
+// Not denied, by evidence:
+//   - KMS key policies and grants (kms:PutKeyPolicy, CreateGrant,
+//     ReplicateKey): on their own they give no access to an item, parameter or
+//     secret value; the outside account would also need the resource policy
+//     above (inferred). CreateGrant is what EBS, RDS and other services call on
+//     the caller's behalf during an apply, so a deny would break common stacks.
+//   - GetResourcePolicy and the like: reads (Terraform refreshes them).
+//   - Sharing a parameter through AWS RAM: RAM attaches the parameter's
+//     resource policy, which needs ssm:PutResourcePolicy (inferred, not
+//     measured).
+var dataResourcePolicyDenies = []string{"dynamodb:PutResourcePolicy", "dynamodb:DeleteResourcePolicy",
+	ssmResourcePolicyWrites, "secretsmanager:PutResourcePolicy", "secretsmanager:DeleteResourcePolicy"}
+
+// ssmResourcePolicyWrites is ssm:PutResourcePolicy and ssm:DeleteResourcePolicy
+// in AWS's catalog (the read is GetResourcePolicies); a test pins it.
+const ssmResourcePolicyWrites = "ssm:*ResourcePolicy"
+
 // ssmParamReads are the SSM parameter reads, split out of dataReadDenies in
 // the elevated policy so that AWS's public parameters can be carved out.
 var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"}
+
+// ssmParamReadsPattern is how the elevated policy writes ssmParamReads, to save
+// characters (#329). Basis: AWS's action catalog (internal/awsprobe snapshot)
+// lists exactly these four SSM actions starting with GetParameter; a test pins
+// that, so a fifth would be seen before it is denied by accident.
+const ssmParamReadsPattern = "ssm:GetParameter*"
 
 // boxBucketCopyDenies are, with box_bucket_prefix on, the managed copies that
 // can land data the session may not read in a box bucket without the session
@@ -265,6 +375,41 @@ var ssmParamReads = []string{"ssm:GetParameter", "ssm:GetParameters", "ssm:GetPa
 var boxBucketCopyDenies = []string{"dynamodb:ExportTableToPointInTime", "rds:StartExportTask",
 	"s3:CreateJob", "datasync:StartTaskExecution", "backup:StartRestoreJob"}
 
+// s3ExposureDenies are the S3 calls that open data to the internet or to
+// another account (#307). The data-read deny binds only this session; once a
+// bucket is public, an unsigned GET (the box egress allows *.amazonaws.com) or
+// an outside account reads it with no check on the session. Denied in the
+// window except on box buckets. Basis: the S3 API reference's permission notes
+// (each API names the IAM action it needs), from memory, not re-fetched.
+//   - s3:Put*Policy*: resource policies that grant access to other principals:
+//     PutBucketPolicy, PutAccessPointPolicy, PutAccessPointPolicyForObjectLambda,
+//     PutMultiRegionAccessPointPolicy, PutAccessGrantsInstanceResourcePolicy.
+//     No S3 read or ordinary write is named Put...Policy... (GetBucketPolicy,
+//     GetBucketPolicyStatus stay allowed).
+//   - s3:DeleteBucketPolicy: a bucket policy often holds the Deny that keeps
+//     an older ACL grant or a cross-account allow from working; removing it
+//     can expose data with no new grant.
+//   - s3:Put*Acl: PutBucketAcl, PutObjectAcl, PutObjectVersionAcl. This also
+//     covers CreateBucket, PutObject and CopyObject sent with an ACL header,
+//     which need the same actions. No other S3 action ends in Acl.
+//   - s3:PutBucketPublicAccessBlock: both PutPublicAccessBlock and
+//     DeletePublicAccessBlock on a bucket need it (there is no IAM action
+//     named s3:DeletePublicAccessBlock).
+//   - s3:PutBucketOwnershipControls: Put and Delete of ownership controls
+//     both need it. Leaving BucketOwnerEnforced turns ACLs back on, so ACLs
+//     set before they were disabled would apply again (inferred).
+//
+// Access point (Object Lambda included), Multi-Region Access Point and Access
+// Grants policies carry no bucket name, so they are denied even for a box
+// bucket's access point.
+var s3ExposureDenies = []string{"s3:Put*Policy*", "s3:DeleteBucketPolicy", "s3:Put*Acl",
+	"s3:PutBucketPublicAccessBlock", "s3:PutBucketOwnershipControls"}
+
+// s3AccountExposureDeny is the account-level public access block: the S3
+// Control PutPublicAccessBlock and DeletePublicAccessBlock both need it. It
+// has no bucket resource, so box_bucket_prefix cannot except it: always denied.
+const s3AccountExposureDeny = "s3:PutAccountPublicAccessBlock"
+
 // ElevatedPolicy is the session policy for a write-role mint (M3b): the
 // investigate statements (elevation adds writes, not data reads), the guard
 // denies, and the IAM write denies unless AllowIAM. Two narrow exceptions
@@ -276,53 +421,167 @@ var boxBucketCopyDenies = []string{"dynamodb:ExportTableToPointInTime", "rds:Sta
 //     readable, and the managed copies that could fill such a bucket with data
 //     the session may not read are denied (boxBucketCopyDenies, replication
 //     except from a box bucket).
+//
+// The S3 exposure calls (s3ExposureDenies, #307) are denied except on box
+// buckets, the same way: making a box bucket public exposes only what the box
+// put there. The account-level public access block is always denied.
+//
+// Size (#329): STS takes at most 2,048 characters, so denies that share an
+// exception share a statement. Merging two Deny statements into one whose
+// Action and NotResource are the unions is exact when no action of one can
+// ever be requested on a resource the other excepts. Each ARN carries its
+// service ("arn:<p>:s3:::", "arn:<p>:ssm:", "arn:<p>:iam:"), and S3 object
+// reads are only ever authorized on S3 ARNs, SSM reads on SSM ARNs and PassRole
+// on role ARNs, so the read statement holds all three exceptions. The bucket
+// denies are kept apart: an s3_read entry names objects, and must not except
+// an object ACL there. equiv_test.go checks every decision against the policies
+// main rendered before.
 func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, error) {
 	st, err := investigateStatements(partition, s3Read)
 	if err != nil {
 		return "", err
 	}
+	// st[1], the read deny: the S3 object reads outside s3_read (and the box
+	// buckets), the SSM parameter reads outside AWS's public parameters (#211),
+	// and, with pass_role_prefix, PassRole outside <prefix>* roles (#302).
+	read := &st[1]
+	read.Resource = nil // Resource "*" when s3_read is empty; the SSM exception follows
+	read.Action = append(slices.Clone(read.Action.([]string)), ssmParamReadsPattern)
+	read.NotResource = slices.Clone(read.NotResource)
 	if el.BoxBucketPrefix != "" {
 		if err := ValidBoxBucketPrefix(el.BoxBucketPrefix); err != nil {
 			return "", err
 		}
-		s3 := &st[1]
-		s3.Resource = nil // Resource "*" when s3_read is empty
-		s3.NotResource = append(slices.Clone(s3.NotResource), "arn:"+partition+":s3:::"+el.BoxBucketPrefix+"*/*")
+		read.NotResource = append(read.NotResource, "arn:"+partition+":s3:::"+el.BoxBucketPrefix+"*/*")
 	}
-	rest := slices.DeleteFunc(slices.Clone(dataReadDenies), func(a string) bool { return slices.Contains(ssmParamReads, a) })
-	st[2].Action = rest
-	st = slices.Insert(st, 3, statement{Effect: "Deny", Action: ssmParamReads,
-		NotResource: []string{"arn:" + partition + ":ssm:*::parameter/aws/service/*"}})
-	guards := slices.Clone(elevatedGuardDenies)
-	if el.PassRolePrefix == "" {
-		guards = append(guards, "iam:PassRole") // no role may be passed (#302)
-	}
-	st = append(st,
-		statement{Effect: "Deny", Action: guards, Resource: "*"},
-		statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
+	read.NotResource = append(read.NotResource, "arn:"+partition+":ssm:*::parameter/aws/service/*")
 	if el.PassRolePrefix != "" {
 		if err := ValidPassRolePrefix(el.PassRolePrefix); err != nil {
 			return "", err
 		}
-		st = append(st, statement{Effect: "Deny", Action: "iam:PassRole",
-			NotResource: []string{"arn:" + partition + ":iam::*:role/" + el.PassRolePrefix + "*"}})
+		read.Action = append(read.Action.([]string), "iam:PassRole")
+		read.NotResource = append(read.NotResource, "arn:"+partition+":iam::*:role/"+el.PassRolePrefix+"*")
+	}
+	// Every unconditional deny of the window is one Resource "*" statement, to
+	// stay under STS's 2,048 characters (#307, #329): the data reads other than
+	// S3 and SSM, the guards, the IAM writes unless allow_iam, the managed copies
+	// and the account public access block. With the IAM write denies present
+	// (allow_iam off), a guard they already match (iam:CreateAccessKey under
+	// iam:Create*) is not written twice; it is denied either way.
+	always := slices.DeleteFunc(slices.Clone(dataReadDenies), func(a string) bool { return slices.Contains(ssmParamReads, a) })
+	for _, g := range elevatedGuardDenies {
+		if el.AllowIAM || !matchesAny(iamWriteDenies, g) {
+			always = append(always, g)
+		}
+	}
+	if el.PassRolePrefix == "" {
+		always = append(always, "iam:PassRole") // no role may be passed (#302)
 	}
 	if !el.AllowIAM {
-		st = append(st, statement{Effect: "Deny", Action: iamWriteDenies, Resource: "*"})
+		always = append(always, iamWriteDenies...)
 	}
 	// The managed-copy denies are unconditional (#301): a DynamoDB export needs
 	// no PassRole and can target a bucket outside the account or one the agent
 	// made public, so they matter even when no bucket is readable in the window.
-	// Replication has an exception only for box buckets: an s3_read entry may
-	// name just a prefix of a bucket, and replication copies the whole bucket.
-	if el.BoxBucketPrefix != "" {
-		st = append(st,
-			statement{Effect: "Deny", Action: boxBucketCopyDenies, Resource: "*"},
-			statement{Effect: "Deny", Action: "s3:PutReplicationConfiguration",
-				NotResource: []string{"arn:" + partition + ":s3:::" + el.BoxBucketPrefix + "*"}})
-	} else {
-		st = append(st, statement{Effect: "Deny", Resource: "*",
-			Action: append(slices.Clone(boxBucketCopyDenies), "s3:PutReplicationConfiguration")})
+	always = append(always, boxBucketCopyDenies...)
+	always = append(always, s3AccountExposureDeny)
+	always = append(always, s3AccessGrantsWrites)        // #322: no bucket in their ARNs, so no box exception; GetDataAccess is a data read above
+	always = append(always, s3ExpressExposureDenies...)  // #323: no box exception
+	always = append(always, dataResourcePolicyDenies...) // #324: no resource prefix exists for them
+	// Replication and the S3 exposure calls (#307) have an exception only for
+	// box buckets: an s3_read entry may name just a prefix of a bucket, and
+	// replication copies the whole bucket. The box-bucket ARN "<prefix>*" also
+	// covers its objects ("*" crosses "/"), so object ACLs there are excepted too.
+	bucketDenies := append([]string{"s3:PutReplicationConfiguration"}, s3ExposureDenies...)
+	if el.BoxBucketPrefix == "" {
+		always = append(always, bucketDenies...)
 	}
-	return marshalPolicy(st, "elevated session policy")
+	st[2].Action = packActions(always)
+	st = append(st, statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
+	if el.BoxBucketPrefix != "" {
+		st = append(st, statement{Effect: "Deny", Action: packActions(bucketDenies),
+			NotResource: []string{"arn:" + partition + ":s3:::" + el.BoxBucketPrefix + "*"}})
+	}
+	p, err := marshalPolicy(st, "elevated session policy")
+	var se *sizeError
+	if errors.As(err, &se) {
+		// What the config cannot shrink: no s3_read, no prefixes (#329). When
+		// this policy is already that one, it is the base itself; otherwise the
+		// base is rendered once, and its own call takes this branch, so the
+		// recursion is at most one level deep.
+		se.base, se.allowIAM = se.n, el.AllowIAM
+		if len(s3Read) > 0 || el.BoxBucketPrefix != "" || el.PassRolePrefix != "" {
+			base, berr := ElevatedPolicy(partition, nil, Elevation{AllowIAM: el.AllowIAM})
+			var bse *sizeError
+			if berr == nil {
+				se.base = len(base)
+			} else if errors.As(berr, &bse) {
+				se.base = bse.n
+			}
+		}
+	}
+	return p, err
+}
+
+// actionPacks are shorter ways to write a group of denied actions in the
+// elevated policy (#329). Each pattern matches, in AWS's action catalog
+// (internal/awsprobe snapshot), exactly the actions its covers match, no more
+// and no fewer; TestActionPacksAreExact pins that. Each pattern also matches
+// every name its covers can match, so an action AWS adds later can only be
+// denied more by it, never less. (iam:*tach*Policy for iam:Attach* and
+// iam:Detach* was tried and dropped in the #329 review: it would let a future
+// iam:Attach... action not ending in "Policy" through.)
+var actionPacks = []struct {
+	pattern string
+	covers  []string
+}{
+	// GetItem and BatchGetItem; TransactGetItems ends in "s" and is authorized
+	// as GetItem anyway.
+	{"dynamodb:*GetItem", []string{"dynamodb:GetItem", "dynamodb:BatchGetItem"}},
+	{"dynamodb:Export*", []string{"dynamodb:ExportTableToPointInTime"}},
+	{"s3:Put*Replication*", []string{"s3:PutReplicationConfiguration"}},
+}
+
+// packActions replaces, in order, each pack whose covers are all in actions
+// by its pattern, written where the first of them was.
+func packActions(actions []string) []string {
+	out := slices.Clone(actions)
+	for _, p := range actionPacks {
+		at := -1
+		for _, c := range p.covers {
+			i := slices.Index(out, c)
+			if i < 0 {
+				at = -1
+				break
+			}
+			if at < 0 || i < at {
+				at = i
+			}
+		}
+		if at < 0 {
+			continue
+		}
+		// at is the first cover, so nothing before it is deleted
+		out = slices.DeleteFunc(out, func(a string) bool { return slices.Contains(p.covers, a) })
+		out = slices.Insert(out, at, p.pattern)
+	}
+	return out
+}
+
+// matchesAny reports whether action is matched by one of the patterns, each
+// a literal or a literal followed by one trailing "*" (the only forms
+// iamWriteDenies uses). IAM compares action names case-insensitively.
+func matchesAny(patterns []string, action string) bool {
+	a := strings.ToLower(action)
+	for _, p := range patterns {
+		p = strings.ToLower(p)
+		if stem, ok := strings.CutSuffix(p, "*"); ok && !strings.Contains(stem, "*") {
+			if strings.HasPrefix(a, stem) {
+				return true
+			}
+		} else if a == p {
+			return true
+		}
+	}
+	return false
 }

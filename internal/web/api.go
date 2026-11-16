@@ -147,7 +147,12 @@ func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 		writeErr(w, http.StatusBadRequest, profilesNewerSpawnMsg)
 	case errors.Is(err, box.ErrVMRestarting):
 		writeErrCode(w, http.StatusServiceUnavailable, err.Error(), "vm_restarting")
-	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable), errors.Is(err, box.ErrWorkspaceHeld),
+	case errors.Is(err, box.ErrBoxUnavailable):
+		// The containment refusal: its sentence names the remedy and is shown as it is. The code is what lets
+		// the New session dialog keep it on its own error line (#142); the text and the 400 are unchanged.
+		// After vm_restarting and not_shared, which wrap this error and have a code of their own.
+		writeErrCode(w, http.StatusBadRequest, err.Error(), "box_unavailable")
+	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrWorkspaceHeld),
 		errors.Is(err, box.ErrBoxOwned),
 		errors.Is(err, launcher.ErrBadPrompt),
 		errors.Is(err, launcher.ErrPromptUnsupported),

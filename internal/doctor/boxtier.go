@@ -123,7 +123,10 @@ func claudeBoxToken(c config.Config, st credref.StoreGetter, acctStore credref.S
 // boxFacts is everything doctor learned about the box tier. Gathering never
 // starts the VM; interpreting is the pure boxTierResults.
 type boxFacts struct {
-	DockerErr  error
+	DockerErr error
+	// DaemonErr: docker was found but its daemon cannot be used (Linux only;
+	// box.ErrDockerNotRunning, box.ErrDockerDenied, or unclassified).
+	DaemonErr  error
 	ColimaErr  error  // darwin only
 	MacOSMajor int    // darwin only; 0 = unknown
 	ColimaVer  string // darwin only; "" = unknown
@@ -197,9 +200,17 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		if f.DockerErr != nil {
 			return []Result{{Warn, ck, "docker not found: host tier only (" + f.DockerErr.Error() + ")"}}
 		}
+		if f.DaemonErr != nil {
+			// #154: the layer exists, but a boxed spawn is refused. The words match
+			// the page's (box.DaemonReason); the remedy is doctor's to add.
+			out = append(out, Result{Warn, ck, daemonRow(f.DaemonErr)})
+			return append(out, token)
+		}
 		out = append(out, Result{Pass, ck, "docker found"})
 		stopped()
-		return out
+		// The token does not depend on the tier's state, but a tier that ended on
+		// docker not found has no token row, as on macOS.
+		return append(out, token)
 	}
 	if f.DockerErr != nil {
 		return []Result{{Fail, ck, "docker CLI not found; install it with `brew install colima docker` (" + f.DockerErr.Error() + ")"}}
@@ -292,6 +303,22 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	return append(out, token)
 }
 
+// daemonRow words a Linux docker whose daemon cannot be used: the page's
+// sentence first, then what the user can do about it. Doctor prints on the
+// user's own terminal, so the unclassified case may say what docker answered.
+func daemonRow(err error) string {
+	const lead = "docker found, but "
+	const effect = ": boxed sessions cannot start"
+	switch {
+	case errors.Is(err, box.ErrDockerNotRunning):
+		return lead + box.DaemonReason(err) + effect + " until it is (start the Docker service, for example `sudo systemctl start docker`)"
+	case errors.Is(err, box.ErrDockerDenied):
+		return lead + box.DaemonReason(err) + effect + " (add your user to the docker group and sign in again, or use rootless Docker)"
+	}
+	msg, _, _ := strings.Cut(err.Error(), "\n")
+	return lead + "the Docker daemon did not answer" + effect + "; run `docker info` to see why (" + msg + ")"
+}
+
 // folderRows reports the box VM's folder list (darwin only; the caller gates it).
 // One "box VM folders" row: a whole-home share wins, then a changed list, then
 // a pass. A vm-shares.json that cannot be read is its own row, so it is never
@@ -338,7 +365,16 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 	}
 	instance := box.LabelInstance + "=" + c.BoxInstance()
 	if goos != "darwin" {
-		f.Stopped = stoppedBoxes(ctx, box.CLIClient{Bin: bin}, instance)
+		// Linux (#154): ask the daemon before listing its boxes. Bounded: a daemon
+		// that never answers must not use up the 60 s budget. macOS is not asked:
+		// doctor never starts the box VM, and a stopped VM is a normal state.
+		cli := box.CLIClient{Bin: bin}
+		pctx, pcancel := context.WithTimeout(ctx, box.ProbeTimeout)
+		f.DaemonErr = cli.Ping(pctx)
+		pcancel()
+		if f.DaemonErr == nil {
+			f.Stopped = stoppedBoxes(ctx, cli, instance)
+		}
 		return f
 	}
 	// Needs only the user's docker CLI, so it is checked even when colima is

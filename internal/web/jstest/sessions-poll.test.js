@@ -15,7 +15,7 @@ function cut(from, to) {
   assert.ok(a >= 0 && b > a, from + " .. " + to);
   return app.slice(a, b);
 }
-const apiSrc = cut("async function api(", "const $ = ");
+const apiSrc = cut("function api(", "const $ = ");
 const sysSrc = cut("const sys = {", "// A 401 on any call.").replace(/function sysPollOk[\s\S]*?\n}\n/, "function sysPollOk() { sys.lastOkAt = Date.now(); sys.failSince = null; sys.signedOut = false; }\n");
 const nm = fs.readFileSync(path.join(STATIC, "notifymodel.js"), "utf8");
 const nmSrc = nm.slice(nm.indexOf("const SYS_OFFLINE_MS"), nm.indexOf("\n}\n", nm.indexOf("function nmOffline")) + 3);

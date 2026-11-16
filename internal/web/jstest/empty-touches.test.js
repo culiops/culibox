@@ -62,11 +62,11 @@ function page(boxRuntime, metaLoaded = true) {
   const ctx = vm.createContext({
     // The server sends a clone's source as an absolute path; window.HOME_DIR is what every other path on the page is
     // shortened with (fsops.js shortPath), so the touches line reads "~/…" in both places (frame M4.1).
-    document: doc, console, profiles: FIXTURES, boxRuntime, boxUnavailableReason: "", window: { HOME_DIR: "/home/u" }, PLIST_SEARCH_MIN: 99,
+    document: doc, console, profiles: FIXTURES, boxRuntime, boxUnavailableReason: "", boxDaemonReason: "", window: { HOME_DIR: "/home/u" }, PLIST_SEARCH_MIN: 99,
     $: (id) => els[id], notHomeLabel: () => "", notHomeTitle: () => "", openSpawnDialog: () => {},
     metaLoaded,
   });
-  for (const f of ["fsops.js", "spawnpreview.js", "spawnpanel.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
+  for (const f of ["fsops.js", "profileview.js", "spawnpreview.js", "spawnpanel.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   // The panel's own helpers that need more DOM than this fake has; the rows themselves are the real ones.
   vm.runInContext("spawnPanelOn = () => true; spawnPlistFilter = () => {};", ctx);
   const names = ["emptyEl", "emptyNoneEl", "emptyStateKey"];

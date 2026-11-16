@@ -874,17 +874,27 @@ test("the grant panel says what the window can read and pass, and warns when IAM
   let t = texts(m.host.querySelector(".ac-panel"));
   assert.ok(t.includes("Cannot pass IAM roles (set pass_role_prefix to allow Lambda/ECS applies)"), t.join("|"));
   assert.ok(!t.some((x) => /Can read objects|Can pass roles|advisory/.test(x)), "nothing extra when no option is set");
-  const BP = "The agent can change bucket policies in this window, so a bucket it may not read can still be exposed.";
-  assert.strictEqual(t.filter((x) => x === BP).length, 1, "bucket-policy line shown in every window (#307)");
+  const BP = "Cannot change bucket policies, ACLs or public access blocks";
+  assert.strictEqual(t.filter((x) => x === BP).length, 1, "no box prefix: the exposure calls are denied on every bucket (#307)");
+  assert.ok(!t.some((x) => /can still be exposed|^Can change bucket/.test(x)), t.join("|"));
+  // #324: the resource policies of the other denied data are blocked in every window; KMS is what remains.
+  const RP = "Cannot change the resource policies of DynamoDB tables, SSM parameters or secrets. KMS key policies and grants can still change";
+  assert.strictEqual(t.filter((x) => x === RP).length, 1, "the resource-policy line is shown in every window (#324)");
 
   const el = { role_arn: WRITE, max_minutes: 60, allow_iam: true, box_bucket_prefix: "culibox-", pass_role_prefix: "lab-" };
   m = await mount(claudeBox({ aws_connections: [conn({ elevate: el })] }), status());
   btn(m.host, "Elevate…").click();
   t = texts(m.host.querySelector(".ac-panel"));
   assert.ok(t.includes("Can read objects in buckets named culibox-*"), t.join("|"));
-  assert.ok(t.includes("Can pass roles named lab-*"), t.join("|"));
+  // #307 review: the bucket and data-read blocks bind these credentials only, not code running as a passed role.
+  assert.ok(t.includes("Can pass roles named lab-*. Code running as one of these roles is not bound by this window's blocks"), t.join("|"));
   assert.ok(!t.some((x) => /^Cannot pass IAM roles/.test(x)));
-  assert.ok(t.includes(BP), "also with every option on");
+  const BPBox = "Can change bucket policies, ACLs and public access blocks only on buckets named culibox-*, so those can be made public";
+  assert.strictEqual(t.filter((x) => x === BPBox).length, 1, "with a box prefix: the exception is named (#307)");
+  assert.ok(!t.includes(BP), t.join("|"));
+  assert.strictEqual(t.filter((x) => x === RP).length, 1, "no option changes the resource-policy line (#324)");
+  const span = [...m.host.querySelectorAll(".ac-panel p")].find((p) => p.textContent === BPBox).querySelector(".mono");
+  assert.strictEqual(span && span.textContent, "culibox-*", "the prefix is shown as code");
   assert.ok(t.includes("With IAM changes allowed, the agent can create and use its own roles, so data-read blocks are advisory in this window."), t.join("|"));
 });
 

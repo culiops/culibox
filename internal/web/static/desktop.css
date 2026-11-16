@@ -1776,6 +1776,8 @@
   #spawn-ws-input:focus, #spawn textarea:focus { box-shadow: 0 0 0 1px var(--accent); }
   /* The submit is app.css's filled primary; its hover is the kit's (F11). */
   #spawn button[type="submit"]:where(:not(:disabled)):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  /* Blocked (boxes unavailable, #142): aria-disabled, so the reason stays in its title; no hover lift. */
+  #spawn button[type="submit"][aria-disabled="true"]:hover { background: var(--accent); border-color: transparent; }
   /* Containment and Effort are the kit's .seg (M4.1): 2px in a --bg bar with a --line ring, 24px items, --t-sm 500.
      The host item is red only once pressed (M4.2), never before. The buttons are app.css's plain ones (.on, .dgr), so
      the kit's .seg-item values are stated here, scoped to the form: Settings' segs keep theirs. */
@@ -1812,6 +1814,14 @@
   /* Fields in the order of the design, two columns: Workspace beside Name, the first message across, Effort beside
      Containment. Workspace wears .span2 (the phone's one column), which would take the whole row. */
   #spawn > #spawn-ws-row { grid-column: auto; }
+  /* Boxes unavailable (#142, syncSpawnGate): across the top, above the fields, so it is read before the profile is started. A --bg card
+     like the reach box below; the reason line is muted, or red with a red ring while the profile on screen needs a box and Spawn is
+     blocked (.err), its consequence line under it. Desktop only: the phone never shows it. */
+  #spawn > #spawn-nobox { order: 0; display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2) var(--sp-3); background: var(--bg); border-radius: var(--r-ctl); font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+  #spawn > #spawn-nobox[hidden] { display: none; }
+  #spawn > #spawn-nobox.err { background: var(--red-tint); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .45); }
+  #spawn > #spawn-nobox.err .nb-line { color: var(--red); font-weight: var(--w-medium); }
+  #spawn > #spawn-nobox.err .nb-more { color: var(--fg); }
   #spawn > #spawn-ws-row { order: 1; }
   #spawn > #spawn-name-row { order: 2; }
   #spawn > #spawn-prompt-row { order: 3; }
@@ -2400,6 +2410,8 @@
      token whose variable is not set. What needs the user is amber: a locked store, and "Not set up" in the strip. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.missing, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.notset { color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.locked { color: var(--amber); }
+  /* #141: a sign-in state that is neither good nor a request (never signed in, unknown, no SSO) is muted, like Missing. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.idle { color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st.notset { color: var(--amber); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.invalid { color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .hint { font-size: var(--t-sm); line-height: 1.6; }

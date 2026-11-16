@@ -49,7 +49,7 @@ type fakeBoxes struct {
 	adopts   int
 	kills    int
 	adopted  []string
-	marked   []string // MarkExclusive calls
+	marked   []string // AdoptExclusive calls, as box@session
 
 	wrapErr error // returned by Wrap when set
 	// name is BoxName's answer and, unless wrapName is set, Wrap's ("" is
@@ -143,10 +143,10 @@ func (f *fakeBoxes) AdoptBox(name string) {
 	f.adopted = append(f.adopted, name)
 }
 
-func (f *fakeBoxes) MarkExclusive(name string) {
+func (f *fakeBoxes) AdoptExclusive(name, sessionID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.marked = append(f.marked, name)
+	f.marked = append(f.marked, name+"@"+sessionID)
 }
 
 func (f *fakeBoxes) ReleaseBox(string) {

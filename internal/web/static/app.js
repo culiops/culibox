@@ -1,7 +1,17 @@
 "use strict";
 
 // --- fetch helpers -----------------------------------------------------------
-async function api(path, opts) {
+// api(path, opts) is fetch + the error shape below. opts.timeoutMs (session actions: deadline.js ACTION_*_MS) bounds the
+// whole call, body included: past it the request is aborted and the call rejects with actionTimeoutError (`timedOut`, no
+// status), which toastFailText words as the standard "Could not <what>." with the raw text behind Copy details.
+function api(path, opts) {
+  if (!opts || !opts.timeoutMs) return apiRun(path, opts);
+  const ms = opts.timeoutMs;
+  const rest = Object.assign({}, opts);
+  delete rest.timeoutMs;
+  return withDeadline(ms, (signal) => apiRun(path, Object.assign(rest, { signal })));
+}
+async function apiRun(path, opts) {
   const res = await fetch(path, opts);
   if (res.status === 401) sysNoteSignedOut(); // any call: the login is gone (Plan 7, R5)
   if (!res.ok) {
@@ -1744,18 +1754,37 @@ async function sendAnswer(s, choice) {
 
 // postSessionAction: POST /api/sessions/{id}/{action} with no body. Resolves to
 // the Response; never throws — a failed request resolves to {ok:false,status:0}.
-async function postSessionAction(id, action) {
+// It gives up after `ms` (deadline.js; #257): the result is then also {timedOut:true,
+// error}, which showActionTimeout words. The server still finishes what it was asked,
+// so a late success is what the next poll shows.
+async function postSessionAction(id, action, ms = ACTION_TIMEOUT_MS) {
   try {
-    return await fetch("/api/sessions/" + encodeURIComponent(id) + "/" + action, { method: "POST" });
-  } catch (_) {
-    return { ok: false, status: 0, json: async () => null };
+    return await withDeadline(ms, (signal) => fetch("/api/sessions/" + encodeURIComponent(id) + "/" + action, { method: "POST", signal }));
+  } catch (e) {
+    const out = { ok: false, status: 0, json: async () => null };
+    if (e && e.timedOut) { out.timedOut = true; out.error = e; }
+    return out;
   }
+}
+
+// showActionTimeout: the error toast of a session action that got no answer in time,
+// the standard "Could not <what>." with the raw text behind Copy details (toastFailText),
+// the same as an End that fails any other way.
+function showActionTimeout(what, res) {
+  const f = toastFailText(what, res.error);
+  showToast(f.text, { error: true, detail: f.detail });
+}
+// actionSubject: how a toast names the session an action was for.
+function actionSubject(id) {
+  const s = (lastSessions || []).find((x) => x.id === id);
+  return (s && (s.name || s.id)) || id;
 }
 
 // bringHomeNow: "Bring work home now". The request only starts the return (202);
 // its result lands on the session's return state and noteReturns toasts it.
 async function bringHomeNow(s) {
   const res = await postSessionAction(s.id, "bring-home");
+  if (res.timedOut) { showActionTimeout("bring work home from " + actionSubject(s.id), res); return; }
   if (!res.ok) {
     let msg = "";
     try { msg = ((await res.json()) || {}).error || ""; } catch (_) {}
@@ -1842,6 +1871,7 @@ function notHomeToasts() {
 // interruptSession: no confirmation (spec §2.4) — it only stops work.
 async function interruptSession(id) {
   const res = await postSessionAction(id, "interrupt");
+  if (res.timedOut) { showActionTimeout("interrupt " + actionSubject(id), res); return; }
   if (!res.ok) showToast(actionFailText("interrupt", res.status), { error: true });
 }
 
@@ -1865,8 +1895,15 @@ async function restartSession(s, trigger) {
 async function restartSessionRun(s) {
   endedMark(endedByMe, s.id, Date.now()); // the old session leaves on purpose
   let res;
-  try { res = await postSessionAction(s.id, "restart"); }
+  try { res = await postSessionAction(s.id, "restart", ACTION_SLOW_TIMEOUT_MS); }
   catch (e) { endedByMe.delete(s.id); throw e; }
+  if (res.timedOut) {
+    // No answer: the restart may still happen, and the next poll shows it. Nothing here claims it did not, so the
+    // ended-by-me mark stays (it expires by itself): the old session's exit must not notify "Ended" when the server finishes.
+    showActionTimeout("restart " + (s.name || s.id), res);
+    await refreshSessions();
+    return;
+  }
   if (!res.ok) {
     endedByMe.delete(s.id);
     let msg = "", code = "";
@@ -4102,20 +4139,34 @@ $("agent").addEventListener("change", () => {
 });
 
 // applyProfileCwd overwrites the workspace picker with the selected profile's
-// stored default_cwd. A profile without one leaves the picker untouched (there
-// is nothing to overwrite with), preserving the keep-previous behavior. Unlike
-// the old <select>-backed version, there is no tier-aware matching to do here
-// any more: the field is free text, so the profile's path is simply the value.
+// stored default_cwd. Unlike the old <select>-backed version, there is no
+// tier-aware matching to do here any more: the field is free text, so the
+// profile's path is simply the value.
 // On the desktop the line under the field then says "From the profile" (the source).
+// A profile without one keeps what the USER put in the field (typed, picked, a
+// Duplicate's). What the dialog or the previous profile filled in is that profile's
+// leftover, so the choice made at open is made again for this profile (spawnCwdChoice:
+// its own last directory, else the tier's default): a host profile otherwise kept a
+// box-owned copy's folder and the server refused the spawn.
 function applyProfileCwd() {
   const p = currentProfile();
   if (!p) return;
   if (!p.default_cwd) {
-    // The folder in the field stays, but it is no longer the new profile's own: the desktop's help line must not say so.
-    if (spawnWsSource === "profile") {
-      spawnWsSource = "";
-      if (spawnWsPicker && drawerDesktop()) spawnWsPicker.showIdleNote();
+    const again = spawnCwdReselect({
+      source: spawnWsSource, prefill: spawnWsPrefill, cwd: getCwd(), text: $("spawn-ws-input").value,
+      profile: p, last: loadLastSpawn(), workspaces: workspacesCache, tier: segValue($("runtime-seg")), skipScratch: drawerDesktop(),
+    });
+    if (!again) {
+      // The folder stays (the user's), and it is no more the previous source's: the help line must stop claiming it.
+      if (spawnWsSource === "profile" || spawnWsSource === "last") {
+        spawnWsSource = "";
+        if (spawnWsPicker && drawerDesktop()) spawnWsPicker.showIdleNote();
+      }
+      return;
     }
+    setSpawnCwd(again.cwd, again.source);
+    onSpawnCwdChanged();
+    if (spawnWsPicker && drawerDesktop()) spawnWsPicker.showIdleNote();
     return;
   }
   setSpawnCwd(p.default_cwd, "profile");
@@ -5596,6 +5647,11 @@ let boxRuntime = "";
 // to build (/api/meta box_unavailable_reason, a plain sentence such as "Docker
 // is not installed"), "" otherwise. It only explains; the profile page reads it.
 let boxUnavailableReason = "";
+// boxDaemonReason: why a box layer that EXISTS cannot be used right now (/api/meta
+// box_daemon_reason, a plain sentence such as "Docker is not running"), "" when it
+// can. Unlike the reason above, boxRuntime stays set, so no default flips to the host
+// tier; the pages only explain.
+let boxDaemonReason = "";
 // bundleImports: /api/bundle/imports exists on this instance (/api/meta
 // bundle_imports). The route is only registered when the CLAUDE.md bundle is on,
 // so with this false the page does not ask (it would answer 404 on every load).
@@ -5768,6 +5824,18 @@ function applySpawnPrefill(pf) {
 // dialog does not make the operator retype it.
 let spawnPromptDraft = "";
 
+// updateSpawnBoxOwned: under the Workspace field, before submit, when a host-tier session is pointed at a box's
+// private copy (a folder a clone-mode profile's box writes in): the server refuses it (box.ErrBoxOwned) and that
+// stays; this says why and which folder to use instead. Same field and tier as the refusal, on desktop and phone.
+function updateSpawnBoxOwned() {
+  const el = $("spawn-ws-owned");
+  if (!el) return;
+  const host = (metaLoaded && !boxRuntime) || segValue($("runtime-seg")) === "host";
+  const hit = spawnBoxOwnedHit(getCwd(), host ? "host" : "box", profiles);
+  el.textContent = hit ? spawnBoxOwnedLine(hit) : "";
+  el.hidden = !hit;
+}
+
 // updateRuntimeWarning covers two DIFFERENT reasons #runtime-warn can be
 // showing, and they are mutually exclusive:
 //   host  — the generic "runs on your host" notice. Unrelated to which
@@ -5783,8 +5851,15 @@ let spawnPromptDraft = "";
 function updateRuntimeWarning() {
   syncSpawnPreview(); // tier or workspace changed: the desktop reach box follows
   syncSpawnVMFilter(); // a box lists only shared folders; a host session lists them all
+  updateSpawnBoxOwned();
   const seg = $("runtime-seg"), warn = $("runtime-warn");
   if (!seg || !warn) return;
+  if (drawerDesktop() && metaLoaded && !boxRuntime) {
+    // No box layer: the hidden seg holds nothing, so "cannot be boxed" below would blame a folder for a tier no session
+    // is on. The dialog's own boxes-unavailable line (syncSpawnGate) says what is true (#142). The phone is as it was.
+    warn.hidden = true;
+    return;
+  }
   if (segValue(seg) === "host") {
     warn.hidden = false;
     warn.textContent = "Runs on your host with your user's full access: files, keys, network.";
@@ -5817,12 +5892,29 @@ function updateRuntimeWarning() {
 // A second open while the first awaits the refetch would run the body twice, and
 // the second pass would re-apply profile defaults over what was typed meanwhile.
 let spawnOpening = false;
+// refreshBoxMeta re-reads the box fields of /api/meta, as the dialog opens and before a daemon-down block refuses a Spawn. A box profile's
+// Spawn is blocked from them (#142), so a page loaded while Docker was down must not keep blocking after the server has re-checked it
+// (box_daemon_reason clears within seconds). Only the box fields, and only once the page's own first read has landed (initEnv sets the
+// rest of the meta). A failed or slow read keeps what the page has.
+async function refreshBoxMeta() {
+  if (!metaLoaded) return;
+  try {
+    const meta = await api("/api/meta", { signal: deadlineSignal(5000) });
+    if (!meta || typeof meta !== "object") return;
+    boxRuntime = meta.box_runtime || "";
+    boxUnavailableReason = meta.box_unavailable_reason || "";
+    boxDaemonReason = meta.box_daemon_reason || "";
+  } catch (_) { /* the values the page already holds */ }
+}
 async function openSpawnDialog(preselectAgent, prefill) {
   if (spawnOpening) return;
   spawnOpening = true;
   let fresh;
   try {
+    // In parallel, so the phone's open is not slowed by a read it does not use.
+    const metaRead = refreshBoxMeta();
     fresh = await loadProfiles(false);
+    await metaRead;
   } finally {
     spawnOpening = false;
   }
@@ -5971,6 +6063,14 @@ function emptyFirstEl() {
     why.append(a);
     step2.append(why);
   }
+  if (drawerDesktop() && metaLoaded && boxRuntime && boxDaemonReason) {
+    // The layer exists (Docker is installed) but its daemon cannot be used right now (#154): the
+    // button stays enabled, since a profile can still be made, and the server's plain reason says why
+    // a box cannot start. A text node, like the no-layer reason above; no install link.
+    const why = emptyEl("div", "empst-why");
+    why.append(emptyEl("span", "empst-reason", "Boxes can't start right now: " + boxDaemonReason + "."));
+    step2.append(why);
+  }
   steps.append(
     step(1, "Start an agent", "Claude Code on this machine, in a folder you choose. Works now.", "New session", "pbtn", () => openSpawnDialog()),
     step2,
@@ -5994,7 +6094,7 @@ function desktopEmptyState() {
 }
 
 function emptyStateKey(m) {
-  return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, boxRuntime ? "" : boxUnavailableReason, m.profiles.map((n) => {
+  return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, boxRuntime ? boxDaemonReason : boxUnavailableReason, m.profiles.map((n) => {
     const p = profiles.find((x) => x.name === n);
     return [n, p ? profileTouchLine(p, metaLoaded ? boxRuntime : undefined) : ""];
   })]);
@@ -6123,6 +6223,21 @@ $("spawn").addEventListener("submit", async (ev) => {
     return;
   }
   spawnWsPicker.close(); // the field shows the directory in use; an open list is just left over
+  // A box profile with no boxes (or a box whose daemon is down) is not sent: the server would refuse it. The reason is already
+  // on the dialog; the error line repeats it so a press does not look dead. Desktop only: on the phone the gate is never blocked.
+  let gate = syncSpawnGate();
+  if (gate.blocked && !gate.noLayer) {
+    // The daemon was down when the dialog opened; the server re-checks it live, so Docker may be back since. Ask again before
+    // refusing, or the user is stuck until the dialog is reopened. Held busy meanwhile so a second press cannot start a second read.
+    spawnBusy = true;
+    try { await refreshBoxMeta(); } finally { spawnBusy = false; }
+    gate = syncSpawnGate();
+  }
+  if (gate.blocked) {
+    spawnGateErr = gate.text;
+    setDialogError("spawn-modal", gate.text);
+    return;
+  }
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
@@ -6171,6 +6286,13 @@ $("spawn").addEventListener("submit", async (ev) => {
       // and form values stay as they were.
       spawnUnavailMsg = e.message;
       setDialogError("spawn-modal", e.message);
+    } else if (spawnRefusedBoxUnavailable(e.status, e.code) && drawerDesktop()) {
+      // The containment refusal (no box layer, the daemon went away since the page loaded, egress control down, ...): the
+      // dialog stays open with the form as it was (name, first message, workspace, options) and the line says why in plain
+      // words; the server's sentence is shown as it is when the page has nothing plainer. The phone keeps its toast (#142).
+      spawnUnavailMsg = spawnBoxRefusalLine({ message: e.message, metaLoaded, boxRuntime, boxUnavailableReason, boxDaemonReason });
+      setDialogError("spawn-modal", spawnUnavailMsg);
+      refreshBoxMeta().then(syncSpawnPreview); // the reason may have changed since the page loaded; the block follows it
     } else {
       closeSpawn();
       spawnPromptDraft = draft; // reopening New session restores it
@@ -6185,6 +6307,7 @@ $("spawn").addEventListener("submit", async (ev) => {
     prog.hidden = true;
     spawnBusy = false;
     if (goBtn) { goBtn.disabled = false; goBtn.classList.remove("busy"); goBtn.removeAttribute("aria-busy"); goBtn.textContent = spawnSubmitLabel(drawerDesktop()); }
+    syncSpawnGate(); // the button is live again: a blocked profile reads blocked
   }
 });
 // The row's actions menu. One persistent node outside the list, rebuilt on
@@ -6874,7 +6997,7 @@ async function killSession(id, batch) {
   let result = { msg: "Ended " + name, opts: { desktopOnly: true } };
   try {
     await refreshSessions(); // re-render → row shows "ending…"
-    await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
+    await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE", timeoutMs: ACTION_TIMEOUT_MS });
   } catch (e) {
     failure = e;
     const f = toastFailText("end " + name, e);
@@ -6884,7 +7007,10 @@ async function killSession(id, batch) {
   }
   if (failure) {
     killing.delete(id);
-    endedByMe.delete(id); // it is still running: a later end is not ours
+    // A refusal or a failure leaves it running: a later end is not ours. A request that got no answer in time (#257) may
+    // still finish, and the poll that then sees the session gone must not announce "Ended" for what this tab ended: the
+    // mark stays and expires by itself (ENDED_BY_ME_MS).
+    if (!failure.timedOut) endedByMe.delete(id);
     await refreshSessions();
     return;
   }
@@ -6939,7 +7065,7 @@ async function spawnShellRun(cell, placement, toastWait) {
     const done = toastWait ? pendingToast("Starting shell…") : () => {};
     let s;
     try {
-      s = await api("/api/sessions/" + encodeURIComponent(neighbour.id) + "/shell", { method: "POST" });
+      s = await api("/api/sessions/" + encodeURIComponent(neighbour.id) + "/shell", { method: "POST", timeoutMs: ACTION_SLOW_TIMEOUT_MS });
     } finally {
       done();
     }
@@ -7026,6 +7152,7 @@ async function currentShellProfile() {
     metaLoaded = true;
     cloneUnavailable = (meta && meta.clone_unavailable) || "";
     boxUnavailableReason = (meta && meta.box_unavailable_reason) || "";
+    boxDaemonReason = (meta && meta.box_daemon_reason) || "";
     bundleImports = !!(meta && meta.bundle_imports);
     refreshEmptyState();
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
@@ -7192,6 +7319,7 @@ initMobileShell();
     metaLoaded = true;
     cloneUnavailable = (meta && meta.clone_unavailable) || "";
     boxUnavailableReason = (meta && meta.box_unavailable_reason) || "";
+    boxDaemonReason = (meta && meta.box_daemon_reason) || "";
     bundleImports = !!(meta && meta.bundle_imports);
     refreshEmptyState();
     if (seq === credListsSeq) applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known

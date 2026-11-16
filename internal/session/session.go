@@ -316,6 +316,11 @@ type ImportsResolver interface {
 	ImportsOffFor(agent string) bool
 }
 
+// spawnBoxOwnedHint ends the refusal of a host-tier spawn in a box-owned directory. The reason BoxOwned gives names the
+// CLI's way out (culibox clone fetch); someone in the web UI needs to be told to pick another folder. Only the spawn
+// carries it: the same BoxOwned reason also ends the profile-save refusals (clone_of, context_paths), where it reads off.
+const spawnBoxOwnedHint = "; in the web UI, pick a folder outside the copy, such as the original repo"
+
 // CloneHooks is what spawning a clone-mode session needs from the clone layer,
 // kept as an interface so this package does not import it. A nil CloneHooks
 // means clone mode is unavailable, and clone profiles are refused.
@@ -1499,6 +1504,13 @@ func (s *Session) inheritConversations(ids []string, wasComplete bool) ([]string
 	return slices.Clone(s.claudeSessionIDs), s.costComplete
 }
 
+// Name is the mutable display label. It takes only the session's own lock.
+func (s *Session) Name() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.name
+}
+
 // SetName updates the mutable display label.
 func (s *Session) SetName(name string) {
 	s.mu.Lock()
@@ -2041,10 +2053,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 	case runtime != config.RuntimeBox && ch != nil:
 		if absErr != nil {
-			return nil, fmt.Errorf("%w: cannot resolve working directory %q: %v", box.ErrBoxOwned, spec.Cwd, absErr)
+			return nil, fmt.Errorf("%w: cannot resolve working directory %q: %v%s", box.ErrBoxOwned, spec.Cwd, absErr, spawnBoxOwnedHint)
 		}
 		if reason, owned := ch.BoxOwned(absCwd); owned {
-			return nil, fmt.Errorf("%w: %s", box.ErrBoxOwned, reason)
+			return nil, fmt.Errorf("%w: %s%s", box.ErrBoxOwned, reason, spawnBoxOwnedHint)
 		}
 	}
 
@@ -3363,9 +3375,10 @@ func (m *Manager) adoptSurvivingBoxes(aliveIDs []string, meta map[string]session
 		if md.Exclusive {
 			// The sidecar is the only memory of which boxes are exclusive: an
 			// adopted box is otherwise shared, so it would idle for the TTL
-			// instead of being removed with its session.
-			if mx, ok := boxes.(interface{ MarkExclusive(string) }); ok {
-				mx.MarkExclusive(md.Box)
+			// instead of being removed with its session. The session id is who
+			// the box layer asks about write windows before sharing the folder.
+			if mx, ok := boxes.(interface{ AdoptExclusive(box, sessionID string) }); ok {
+				mx.AdoptExclusive(md.Box, id)
 			}
 		}
 	}

@@ -238,6 +238,26 @@ func (s *vmShareSvc) Add(typed, mode string, dryRun bool) (web.VMFoldersView, we
 	return v, res, err
 }
 
+// AddWorkspace makes sure the list gives a boxed workspace read & write. It
+// returns the listed folder that already does ("" when it was added), and then
+// writes nothing: a re-run of `culibox init` must not rewrite the list, and
+// vmshares.Add treats a folder that is already listed as a mode change, not as
+// "covered".
+func (s *vmShareSvc) AddWorkspace(typed string) (string, error) {
+	p, err := vmshares.Expand(typed, s.env.Home)
+	if err != nil {
+		return "", err
+	}
+	want := s.key(p)
+	for _, e := range s.Listed() {
+		if e.Mode == vmshares.RW && s.key(e.Path) == want {
+			return e.Path, nil
+		}
+	}
+	_, res, err := s.Add(p, string(vmshares.RW), false)
+	return res.CoveredBy, err
+}
+
 func (s *vmShareSvc) SetMode(path, mode string) (web.VMFoldersView, error) {
 	m, err := parseMode(mode)
 	if err != nil {
