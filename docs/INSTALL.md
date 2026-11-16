@@ -4,7 +4,7 @@ The short version is the [Quick start in the README](../README.md#quick-start). 
 
 ## Requirements
 
-- Go 1.26.5 or newer (see `go.mod`) to build.
+- Go 1.26.11 or newer (see `go.mod`) to build.
 - Linux or macOS. macOS needs 13+ on Apple Silicon (Intel is untested) for the boxed tier.
 - [abduco](https://www.brain-dump.org/projects/abduco/), in the same folder as the `culibox` binary or on `PATH` (CuliBox looks in that order; see `abduco_bin` in [docs/CONFIG.md](CONFIG.md)). It is required; the daemon will not start without it.
 - For the boxed tier: Docker on Linux, or `colima` and `docker` on macOS. On Linux the docker daemon must run on the same machine and see host files as they are (a local Docker Engine). A VM-backed or remote daemon (for example Docker Desktop for Linux or a remote docker context) is not supported for boxed sessions: CuliBox refuses to start a box there, because it cannot confirm the box got the folder that was checked.
