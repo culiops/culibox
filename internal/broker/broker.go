@@ -144,8 +144,12 @@ type Broker struct {
 
 	// Elevation overlay (elevate.go); all guarded by mu except after/claimCheck/appr,
 	// which are set before the broker serves.
-	elev       map[string]*elevation
-	dropped    map[string]droppedWin // sid -> the connection and latest Expiration still valid after a drop
+	elev    map[string]*elevation
+	dropped map[string]droppedWin // sid -> the connection and latest Expiration still valid after a drop
+	// granting counts, per session, the Elevate calls past their first conflict
+	// check and not yet returned: WriteHold holds the folder for them from before
+	// the claim check (#325).
+	granting   map[string]int
 	gen        uint64
 	refused    map[refusedKey]time.Time
 	lastRefuse time.Time
@@ -218,7 +222,7 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		cache: map[connKey]cached{}, mintTimes: map[bucketKey][]time.Time{}, stats: map[string]*Stats{},
 		connStats: map[connKey]*Stats{},
 		denied:    map[deniedKey]*deniedState{},
-		elev:      map[string]*elevation{}, dropped: map[string]droppedWin{}, refused: map[refusedKey]time.Time{},
+		elev:      map[string]*elevation{}, dropped: map[string]droppedWin{}, granting: map[string]int{}, refused: map[refusedKey]time.Time{},
 		storeLocked: map[string]struct{}{},
 		srcKeys:     map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[connKey]string{},
 		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},

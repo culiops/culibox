@@ -7,7 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/session"
@@ -125,20 +127,28 @@ func TestDropWithNoWindowIsTheInactiveView(t *testing.T) {
 	}
 }
 
+// The grant's check is the box layer's ClaimForGrant (claim), not the panel's
+// read-only GrantBlocker.
 func TestClaimCheckUsesTheSessionsCwdAndBox(t *testing.T) {
 	var got []string
 	e := elevationService{get: func(id string) (*session.Session, bool) { return boundSess(id), true },
-		blocker: func(_ context.Context, cwd, self string) (string, error) {
+		blocker: func(context.Context, string, string) (box.GrantBlock, error) {
+			t.Error("the grant must not use the panel's read-only check")
+			return box.GrantBlock{}, nil
+		},
+		claim: func(_ context.Context, cwd, self string) (box.GrantBlock, error) {
 			got = []string{cwd, self}
-			return "another box (instance PROD) uses /w/proj", nil
+			return box.GrantBlock{Why: "another box (instance PROD) uses /w/proj"}, nil
 		}}
 	if err := e.claimCheck("aws-1"); err == nil || !strings.Contains(err.Error(), "instance PROD") {
 		t.Fatalf("got %v", err)
 	}
 	if !slices.Equal(got, []string{"/w/proj", "ab-box-1"}) {
-		t.Fatalf("blocker args %v", got)
+		t.Fatalf("claim args %v", got)
 	}
-	e.blocker = func(context.Context, string, string) (string, error) { return "", errors.New("docker down") }
+	e.claim = func(context.Context, string, string) (box.GrantBlock, error) {
+		return box.GrantBlock{}, errors.New("docker down")
+	}
 	err := e.claimCheck("aws-1")
 	if err == nil {
 		t.Fatal("a listing failure must refuse the grant")
@@ -146,13 +156,87 @@ func TestClaimCheckUsesTheSessionsCwdAndBox(t *testing.T) {
 	if strings.Contains(err.Error(), "docker down") {
 		t.Errorf("the refusal shown to the user carries the internal error: %v", err)
 	}
-	e.blocker = func(context.Context, string, string) (string, error) { return "", nil }
+	e.claim = func(context.Context, string, string) (box.GrantBlock, error) { return box.GrantBlock{}, nil }
 	if err := e.claimCheck("aws-1"); err != nil {
 		t.Fatalf("nothing blocking: %v", err)
 	}
-	e.blocker = nil
+	e.claim = nil
 	if err := e.claimCheck("aws-1"); err == nil {
 		t.Fatal("no box manager must refuse, not allow")
+	}
+}
+
+// #325: a grant refused because another box of this instance uses the folder
+// names the sessions in that box and says to end them first; the panel says
+// the same before anyone clicks.
+func TestGrantRefusalNamesTheSessionsInTheBlockingBox(t *testing.T) {
+	sh, other, gone := boundSess("sh-1"), boundSess("sh-2"), boundSess("sh-3")
+	sh.Box, other.Box, gone.Box = "ab-box-sh", "ab-box-sh", "ab-box-sh"
+	sessions := map[string]*session.Session{"aws-1": boundSess("aws-1"), "sh-1": sh, "sh-2": other, "sh-3": gone}
+	gb := box.GrantBlock{Box: "ab-box-sh", Why: "another box (instance TEST) uses /w/proj; stop the session in it first"}
+	e := elevationService{get: func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		list: func() []session.Info {
+			return []session.Info{{ID: "aws-1", Name: "deploy"}, {ID: "sh-1", Name: "sh:proj"}, {ID: "sh-2"}, {ID: "sh-3", Name: "old", Exited: true}}
+		},
+		blocker: func(context.Context, string, string) (box.GrantBlock, error) { return gb, nil },
+		claim:   func(context.Context, string, string) (box.GrantBlock, error) { return gb, nil }}
+	err := e.claimCheck("aws-1")
+	if err == nil {
+		t.Fatal("a box in the folder must refuse the grant")
+	}
+	msg := err.Error()
+	for _, want := range []string{`session "sh:proj" (sh-1)`, "session sh-2", "end them first"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("refusal %q lacks %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "sh-3") || strings.Contains(msg, "aws-1") {
+		t.Fatalf("an exited session or the session itself named: %q", msg)
+	}
+	if gc := e.grantContext("aws-1"); gc.Blocked != msg {
+		t.Fatalf("the panel must say what the grant says: %q", gc.Blocked)
+	}
+	// One session: "it".
+	delete(sessions, "sh-2")
+	if err := e.claimCheck("aws-1"); err == nil || !strings.Contains(err.Error(), `session "sh:proj" (sh-1) uses this folder in another box; end it first`) {
+		t.Fatalf("one session: %v", err)
+	}
+	// A box whose sessions are not known here keeps the box layer's sentence.
+	gb.Box = "ab-box-unknown"
+	if err := e.claimCheck("aws-1"); err == nil || err.Error() != gb.Why {
+		t.Fatalf("unknown box: %v", err)
+	}
+}
+
+// The box layer's write-hold hook: the broker's answer, led by the session's
+// name, and "" while the session holds nothing.
+func TestWriteHoldNamesTheSession(t *testing.T) {
+	audit, err := broker.OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = audit.Close() })
+	sv := broker.SessionView{Agent: "aws", Boxed: true, Live: true, Exclusive: true, AWS: boundSess("aws-1").AWS}
+	brk := broker.New([]byte(strings.Repeat("s", 32)), func(string) (broker.SessionView, bool) { return sv, true }, noMinter{}, audit)
+	e := elevationService{brk: brk, get: func(id string) (*session.Session, bool) { return boundSess(id), true },
+		list:  func() []session.Info { return []session.Info{{ID: "aws-1", Name: "deploy"}} },
+		claim: func(context.Context, string, string) (box.GrantBlock, error) { return box.GrantBlock{}, nil }}
+	brk.SetClaimCheck(e.claimCheck)
+	if why := e.writeHold("aws-1", time.Time{}); why != "" {
+		t.Fatalf("no window: %q", why)
+	}
+	if _, err := brk.Elevate("aws-1", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie}); err != nil {
+		t.Fatal(err)
+	}
+	if why := e.writeHold("aws-1", time.Time{}); !strings.HasPrefix(why, `session "deploy" (aws-1) has a write window open until `) {
+		t.Fatalf("open window: %q", why)
+	}
+	brk.Drop("aws-1", broker.CredCookie)
+	if why := e.writeHold("aws-1", time.Time{}); why != "" {
+		t.Fatalf("dropped, nothing issued: %q", why)
+	}
+	if why := e.writeHold("gone-1", time.Now()); !strings.HasPrefix(why, "session gone-1 was running when CuliBox restarted") {
+		t.Fatalf("an adopted box of a session not listed: %q", why)
 	}
 }
 
@@ -162,7 +246,7 @@ func TestGrantContextListsLiveHostSessions(t *testing.T) {
 			return []session.Info{{ID: "zsh-1", Name: "zsh", Runtime: "host"}, {ID: "old-1", Runtime: "host", Exited: true},
 				{ID: "aws-1", Runtime: "box"}}
 		},
-		blocker: func(context.Context, string, string) (string, error) { return "", nil }}
+		blocker: func(context.Context, string, string) (box.GrantBlock, error) { return box.GrantBlock{}, nil }}
 	gc := e.grantContext("aws-1")
 	if len(gc.HostSessions) != 1 || gc.HostSessions[0].ID != "zsh-1" || gc.Blocked != "" {
 		t.Fatalf("%+v", gc)
@@ -171,11 +255,15 @@ func TestGrantContextListsLiveHostSessions(t *testing.T) {
 
 func TestGrantContextReportsABlockerAndALookupFailure(t *testing.T) {
 	e := elevationService{get: func(id string) (*session.Session, bool) { return boundSess(id), true },
-		blocker: func(context.Context, string, string) (string, error) { return "another box uses /w/proj", nil }}
+		blocker: func(context.Context, string, string) (box.GrantBlock, error) {
+			return box.GrantBlock{Why: "another box uses /w/proj"}, nil
+		}}
 	if gc := e.grantContext("aws-1"); gc.Blocked != "another box uses /w/proj" || gc.HostSessions == nil {
 		t.Fatalf("%+v", gc)
 	}
-	e.blocker = func(context.Context, string, string) (string, error) { return "", errors.New("docker down") }
+	e.blocker = func(context.Context, string, string) (box.GrantBlock, error) {
+		return box.GrantBlock{}, errors.New("docker down")
+	}
 	if gc := e.grantContext("aws-1"); gc.Blocked != "could not check this folder's boxes; try again" {
 		t.Fatalf("%+v", gc)
 	}
@@ -255,7 +343,7 @@ func TestSignInCommandOnlyForAValidProfile(t *testing.T) {
 // boxes for a session nothing can be granted on.
 func TestGrantContextSkipsTheBoxListingWhereNothingCanBeGranted(t *testing.T) {
 	calls := 0
-	blocker := func(context.Context, string, string) (string, error) { calls++; return "", nil }
+	blocker := func(context.Context, string, string) (box.GrantBlock, error) { calls++; return box.GrantBlock{}, nil }
 	exitedSess, noElev, host := boundSess("e-1"), boundSess("n-1"), boundSess("h-1")
 	noElev.AWS.Elevate = nil
 	host.Runtime = config.RuntimeHost
@@ -316,7 +404,7 @@ func TestConnectionBoundSessionElevatesPerConnection(t *testing.T) {
 	r := &fakeRunner{}
 	calls := 0
 	e := elevationService{brk: testBroker(t), runner: r, get: func(id string) (*session.Session, bool) { return c, id == "c-1" },
-		blocker: func(context.Context, string, string) (string, error) { calls++; return "", nil }}
+		blocker: func(context.Context, string, string) (box.GrantBlock, error) { calls++; return box.GrantBlock{}, nil }}
 	if _, ok := e.bound("c-1"); !ok {
 		t.Fatal("a connection-bound live boxed session must count as bound")
 	}

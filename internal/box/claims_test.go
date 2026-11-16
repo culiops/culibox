@@ -3,7 +3,6 @@ package box
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -104,52 +103,20 @@ func TestWrapWithSessionKeyLabelsTheBoxExclusive(t *testing.T) {
 	}
 }
 
-func TestExclusiveSpawnRefusedNextToALiveBox(t *testing.T) {
+// An exclusive box refuses spawns into its folder while its session holds a
+// write window (writehold_test.go has the cases), naming the path and the
+// remedy.
+func TestRefusalNamesThePathAndTheRemedy(t *testing.T) {
 	m, _ := boundMgr(t)
+	newHoldSet(m).set("elev-1", "a window")
 	dir := t.TempDir()
-	if _, err := wrapIn(m, dir, "plain-1", false); err != nil {
+	if _, err := wrapIn(m, dir, "elev-1", true); err != nil {
 		t.Fatal(err)
 	}
-	_, err := wrapIn(m, filepath.Join(dir), "elev-1", true)
-	if !errors.Is(err, ErrWorkspaceHeld) || !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "separate folder or worktree") {
+	real, _ := filepath.EvalSymlinks(dir)
+	_, err := wrapIn(m, dir, "plain-1", false)
+	if !errors.Is(err, ErrWorkspaceHeld) || !strings.Contains(err.Error(), real) || !strings.Contains(err.Error(), "separate folder or worktree") {
 		t.Fatalf("want ErrWorkspaceHeld naming the path and the remedy, got %v", err)
-	}
-}
-
-func TestAnySpawnRefusedNextToAnExclusiveBox(t *testing.T) {
-	m, _ := boundMgr(t)
-	dir := t.TempDir()
-	sub := filepath.Join(dir, "sub")
-	if err := os.Mkdir(sub, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := wrapIn(m, dir, "elev-1", true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := wrapIn(m, sub, "plain-1", false); !errors.Is(err, ErrWorkspaceHeld) { // descendant
-		t.Fatalf("descendant: %v", err)
-	}
-	if _, _, _, err := m.Wrap(context.Background(), dir, "u-1", BoxKey{}, []string{"sh"}, nil, nil); !errors.Is(err, ErrWorkspaceHeld) { // unbound too
-		t.Fatalf("unbound: %v", err)
-	}
-	other := t.TempDir()
-	if _, err := wrapIn(m, other, "plain-2", false); err != nil { // an unrelated folder is fine
-		t.Fatalf("unrelated folder: %v", err)
-	}
-}
-
-func TestSymlinkedSpellingIsTheSameWorkspace(t *testing.T) {
-	m, _ := boundMgr(t)
-	dir := t.TempDir()
-	link := filepath.Join(t.TempDir(), "ln")
-	if err := os.Symlink(dir, link); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := wrapIn(m, dir, "elev-1", true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := wrapIn(m, link, "plain-1", false); !errors.Is(err, ErrWorkspaceHeld) {
-		t.Fatalf("a symlink to an exclusive folder must be refused: %v", err)
 	}
 }
 
@@ -192,20 +159,37 @@ func TestIdleSameInstanceBoxIsRemovedFirstBothWays(t *testing.T) {
 	}
 }
 
-// Spec correction 6: a removal failure refuses rather than sharing the folder.
+// Spec correction 6: an idle exclusive box that cannot be removed refuses
+// rather than sharing the folder: what its session started may outlive it. An
+// idle plain one never held write credentials, so it does not block (#325).
 func TestIdleBoxRemovalFailureRefuses(t *testing.T) {
 	m, f := boundMgr(t)
+	newHoldSet(m)
 	dir := t.TempDir()
-	name, err := wrapIn(m, dir, "plain-1", false)
-	if err != nil {
+	if _, err := wrapIn(m, dir, "elev-1", true); err != nil {
 		t.Fatal(err)
 	}
-	m.ReleaseBox(name)
+	ex := m.mustLastExclusive(t)
+	m.mu.Lock()
+	m.active[ex] = 0 // its session ended; the removal is still to come
+	m.mu.Unlock()
 	f.mu.Lock()
 	f.stopFails = 1
 	f.mu.Unlock()
-	if _, err := wrapIn(m, dir, "elev-1", true); !errors.Is(err, ErrWorkspaceHeld) {
-		t.Fatalf("a box that could not be removed must still block: %v", err)
+	if _, err := wrapIn(m, dir, "plain-1", false); !errors.Is(err, ErrWorkspaceHeld) || !strings.Contains(err.Error(), "could not be removed") {
+		t.Fatalf("an exclusive box that could not be removed must still block: %v", err)
+	}
+	other := t.TempDir()
+	plain, err := wrapIn(m, other, "plain-2", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ReleaseBox(plain)
+	f.mu.Lock()
+	f.stopFails = 1
+	f.mu.Unlock()
+	if _, err := wrapIn(m, other, "elev-2", true); err != nil {
+		t.Fatalf("an idle plain box that could not be removed: %v", err)
 	}
 }
 
@@ -293,32 +277,46 @@ func TestPausedBoxAndRelativeLabelHoldTheWorkspace(t *testing.T) {
 	}
 }
 
-// The check and the docker run sit under one opMu hold, so two exclusive
-// spawns into one folder at once cannot both pass.
-func TestConcurrentExclusiveSpawnsOneWins(t *testing.T) {
+// Exclusive spawns into one folder at once, none holding a window, all start,
+// each in a box of its own (#325: the grant is what checks the folder). With
+// one holding a window, every other one is refused.
+func TestConcurrentExclusiveSpawns(t *testing.T) {
 	m, _ := boundMgr(t)
+	h := newHoldSet(m)
 	dir := t.TempDir()
-	var wg sync.WaitGroup
-	errs := make([]error, 8)
-	for i := range errs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, errs[i] = wrapIn(m, dir, "elev-"+string(rune('a'+i)), true)
-		}(i)
-	}
-	wg.Wait()
-	ok := 0
-	for _, err := range errs {
-		switch {
-		case err == nil:
-			ok++
-		case !errors.Is(err, ErrWorkspaceHeld):
-			t.Fatalf("unexpected error: %v", err)
+	run := func() ([]string, []error) {
+		var wg sync.WaitGroup
+		names, errs := make([]string, 8), make([]error, 8)
+		for i := range errs {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				names[i], errs[i] = wrapIn(m, dir, "elev-"+string(rune('a'+i)), true)
+			}(i)
 		}
+		wg.Wait()
+		return names, errs
 	}
-	if ok != 1 {
-		t.Fatalf("%d exclusive spawns into one folder succeeded, want 1", ok)
+	names, errs := run()
+	seen := map[string]bool{}
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("spawn %d: %v", i, err)
+		}
+		seen[names[i]] = true
+	}
+	if len(seen) != len(names) {
+		t.Fatalf("exclusive spawns shared a box: %v", names)
+	}
+	if _, err := wrapIn(m, dir, "elev-held", true); err != nil {
+		t.Fatal(err)
+	}
+	h.set("elev-held", "a window")
+	_, errs = run()
+	for i, err := range errs {
+		if !errors.Is(err, ErrWorkspaceHeld) {
+			t.Fatalf("spawn %d next to a held window: %v", i, err)
+		}
 	}
 }
 
@@ -364,7 +362,7 @@ func TestPlainBoxStillWaitsForItsIdleTTL(t *testing.T) {
 func TestMarkExclusiveAppliesToAnAdoptedBox(t *testing.T) {
 	m, f := boundMgr(t)
 	m.AdoptBox("ab-box-adopted")
-	m.MarkExclusive("ab-box-adopted")
+	m.AdoptExclusive("ab-box-adopted", "s-1")
 	m.ReleaseBox("ab-box-adopted")
 	waitFor(t, 2*time.Second, func() bool { return f.wasStopped("ab-box-adopted") })
 }
@@ -377,45 +375,49 @@ func TestGrantBlocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if why, err := m.GrantBlocker(context.Background(), dir, self); err != nil || why != "" {
+	blockWhy := func() (string, error) {
+		gb, err := m.GrantBlocker(context.Background(), dir, self)
+		return gb.Why, err
+	}
+	if why, err := blockWhy(); err != nil || why != "" {
 		t.Fatalf("own box only: %q %v", why, err)
 	}
 	f.others = []BoxInfo{{Name: "ab-box-old", Workspace: real + "/sub", State: "running", Instance: "PROD"}}
-	why, _ := m.GrantBlocker(context.Background(), dir, self)
+	why, _ := blockWhy()
 	if !strings.Contains(why, "older CuliBox") || !strings.Contains(why, "PROD") {
 		t.Fatalf("a claims-less box: %q", why)
 	}
 	f.others[0].Claims = true
-	why, _ = m.GrantBlocker(context.Background(), dir, self)
+	why, _ = blockWhy()
 	if why == "" || strings.Contains(why, "older CuliBox") {
 		t.Fatalf("any other overlapping box blocks a grant: %q", why)
 	}
 	f.others[0].Workspace = "/somewhere/else"
-	if why, err := m.GrantBlocker(context.Background(), dir, self); err != nil || why != "" {
+	if why, err := blockWhy(); err != nil || why != "" {
 		t.Fatalf("a box over an unrelated folder: %q %v", why, err)
 	}
 	f.others[0] = BoxInfo{Name: "ab-box-odd", State: "running", Workspace: "/somewhere/else", Unreadable: true}
-	if why, _ := m.GrantBlocker(context.Background(), dir, self); why == "" {
+	if why, _ := blockWhy(); why == "" {
 		t.Fatal("an unreadable running row must block a grant")
 	}
 	f.others[0] = BoxInfo{Name: "ab-box-nolabel", State: "running", Instance: "PROD", Claims: true}
-	if why, _ := m.GrantBlocker(context.Background(), dir, self); why == "" {
+	if why, _ := blockWhy(); why == "" {
 		t.Fatal("a running box with no workspace label must block a grant")
 	}
 	f.others[0] = BoxInfo{Name: "ab-box-rel", State: "running", Workspace: "w/proj", Instance: "PROD", Claims: true}
-	if why, _ := m.GrantBlocker(context.Background(), dir, self); why == "" {
+	if why, _ := blockWhy(); why == "" {
 		t.Fatal("a box with a relative workspace label must block a grant")
 	}
 	f.others[0] = BoxInfo{Name: "ab-box-paused", State: "paused", Workspace: real, Instance: "PROD", Claims: true}
-	if why, _ := m.GrantBlocker(context.Background(), dir, self); why == "" {
+	if why, _ := blockWhy(); why == "" {
 		t.Fatal("a paused box over the folder must block a grant")
 	}
 	f.others[0].State = "exited"
-	if why, _ := m.GrantBlocker(context.Background(), dir, self); why != "" {
+	if why, _ := blockWhy(); why != "" {
 		t.Fatalf("an exited box holds nothing: %q", why)
 	}
 	f.listErr = errors.New("down")
-	if _, err := m.GrantBlocker(context.Background(), dir, self); err == nil {
+	if _, err := blockWhy(); err == nil {
 		t.Fatal("a listing error must be an error (the caller refuses)")
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/session"
@@ -253,7 +254,9 @@ func TestGrantMapsReasonLabelAndCredIntoTheBrokerRequest(t *testing.T) {
 	defer svc.Stop(context.Background())
 	blockMsg := ""
 	e := elevationService{brk: svc.Hooks.B, get: func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
-		blocker: func(context.Context, string, string) (string, error) { return blockMsg, nil }}
+		claim: func(context.Context, string, string) (box.GrantBlock, error) {
+			return box.GrantBlock{Why: blockMsg}, nil
+		}}
 	svc.Hooks.B.SetClaimCheck(e.claimCheck)
 
 	refused := func(what, want string, err error) {

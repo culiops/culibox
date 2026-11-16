@@ -1130,7 +1130,7 @@ func TestPlainBoundSpawnIsNotExclusive(t *testing.T) {
 
 func TestWorkspaceHeldReachesTheUserVerbatim(t *testing.T) {
 	m, boxes, _, _ := boundManager(t, []string{"sh"}, config.RuntimeBox, time.Minute)
-	msg := "/w/x is in use by an AWS-write-capable session (or another session sits in this folder). Use a separate folder or worktree, or stop the other session."
+	msg := `/w/x is closed to other boxes while a session in it can write to AWS: session "deploy" (aws-1) has a write window open until 15:04. Wait for it to end (or drop the window in that session), or use a separate folder or worktree.`
 	boxes.wrapErr = fmt.Errorf("%w: %s", box.ErrWorkspaceHeld, msg)
 	_, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
 	if !errors.Is(err, box.ErrWorkspaceHeld) || strings.Contains(err.Error(), "run on the host") || strings.Count(err.Error(), msg) != 1 {
@@ -1181,8 +1181,8 @@ func TestSidecarRestoresExclusiveAndMarksTheBox(t *testing.T) {
 	if !r.Exclusive {
 		t.Fatal("restored session lost Exclusive")
 	}
-	if !reflect.DeepEqual(boxes2.marked, []string{"ab-box-test"}) {
-		t.Fatalf("marked = %v, want the session's box", boxes2.marked)
+	if !reflect.DeepEqual(boxes2.marked, []string{"ab-box-test@" + s.ID}) {
+		t.Fatalf("marked = %v, want the session's box and id", boxes2.marked)
 	}
 }
 
