@@ -681,6 +681,7 @@ async function runKill({ fail } = {}) {
     api: async () => { if (fail) throw fail; },
     pendingToast: (text) => { results.push(["pending", text]); return (r) => results.push(["done", r]); },
     toastFailText,
+    ACTION_TIMEOUT_MS: 60000,
     showToast: (msg, opts) => toasts.push([msg, opts]),
     closeTerminal: (id) => closed.push(id),
     encodeURIComponent,

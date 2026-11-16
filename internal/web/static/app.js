@@ -1,7 +1,17 @@
 "use strict";
 
 // --- fetch helpers -----------------------------------------------------------
-async function api(path, opts) {
+// api(path, opts) is fetch + the error shape below. opts.timeoutMs (session actions: deadline.js ACTION_*_MS) bounds the
+// whole call, body included: past it the request is aborted and the call rejects with actionTimeoutError (`timedOut`, no
+// status), which toastFailText words as the standard "Could not <what>." with the raw text behind Copy details.
+function api(path, opts) {
+  if (!opts || !opts.timeoutMs) return apiRun(path, opts);
+  const ms = opts.timeoutMs;
+  const rest = Object.assign({}, opts);
+  delete rest.timeoutMs;
+  return withDeadline(ms, (signal) => apiRun(path, Object.assign(rest, { signal })));
+}
+async function apiRun(path, opts) {
   const res = await fetch(path, opts);
   if (res.status === 401) sysNoteSignedOut(); // any call: the login is gone (Plan 7, R5)
   if (!res.ok) {
@@ -1744,18 +1754,37 @@ async function sendAnswer(s, choice) {
 
 // postSessionAction: POST /api/sessions/{id}/{action} with no body. Resolves to
 // the Response; never throws — a failed request resolves to {ok:false,status:0}.
-async function postSessionAction(id, action) {
+// It gives up after `ms` (deadline.js; #257): the result is then also {timedOut:true,
+// error}, which showActionTimeout words. The server still finishes what it was asked,
+// so a late success is what the next poll shows.
+async function postSessionAction(id, action, ms = ACTION_TIMEOUT_MS) {
   try {
-    return await fetch("/api/sessions/" + encodeURIComponent(id) + "/" + action, { method: "POST" });
-  } catch (_) {
-    return { ok: false, status: 0, json: async () => null };
+    return await withDeadline(ms, (signal) => fetch("/api/sessions/" + encodeURIComponent(id) + "/" + action, { method: "POST", signal }));
+  } catch (e) {
+    const out = { ok: false, status: 0, json: async () => null };
+    if (e && e.timedOut) { out.timedOut = true; out.error = e; }
+    return out;
   }
+}
+
+// showActionTimeout: the error toast of a session action that got no answer in time,
+// the standard "Could not <what>." with the raw text behind Copy details (toastFailText),
+// the same as an End that fails any other way.
+function showActionTimeout(what, res) {
+  const f = toastFailText(what, res.error);
+  showToast(f.text, { error: true, detail: f.detail });
+}
+// actionSubject: how a toast names the session an action was for.
+function actionSubject(id) {
+  const s = (lastSessions || []).find((x) => x.id === id);
+  return (s && (s.name || s.id)) || id;
 }
 
 // bringHomeNow: "Bring work home now". The request only starts the return (202);
 // its result lands on the session's return state and noteReturns toasts it.
 async function bringHomeNow(s) {
   const res = await postSessionAction(s.id, "bring-home");
+  if (res.timedOut) { showActionTimeout("bring work home from " + actionSubject(s.id), res); return; }
   if (!res.ok) {
     let msg = "";
     try { msg = ((await res.json()) || {}).error || ""; } catch (_) {}
@@ -1842,6 +1871,7 @@ function notHomeToasts() {
 // interruptSession: no confirmation (spec §2.4) — it only stops work.
 async function interruptSession(id) {
   const res = await postSessionAction(id, "interrupt");
+  if (res.timedOut) { showActionTimeout("interrupt " + actionSubject(id), res); return; }
   if (!res.ok) showToast(actionFailText("interrupt", res.status), { error: true });
 }
 
@@ -1865,8 +1895,15 @@ async function restartSession(s, trigger) {
 async function restartSessionRun(s) {
   endedMark(endedByMe, s.id, Date.now()); // the old session leaves on purpose
   let res;
-  try { res = await postSessionAction(s.id, "restart"); }
+  try { res = await postSessionAction(s.id, "restart", ACTION_SLOW_TIMEOUT_MS); }
   catch (e) { endedByMe.delete(s.id); throw e; }
+  if (res.timedOut) {
+    // No answer: the restart may still happen, and the next poll shows it. Nothing here claims it did not.
+    endedByMe.delete(s.id);
+    showActionTimeout("restart " + (s.name || s.id), res);
+    await refreshSessions();
+    return;
+  }
   if (!res.ok) {
     endedByMe.delete(s.id);
     let msg = "", code = "";
@@ -6901,7 +6938,7 @@ async function killSession(id, batch) {
   let result = { msg: "Ended " + name, opts: { desktopOnly: true } };
   try {
     await refreshSessions(); // re-render → row shows "ending…"
-    await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
+    await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE", timeoutMs: ACTION_TIMEOUT_MS });
   } catch (e) {
     failure = e;
     const f = toastFailText("end " + name, e);
@@ -6966,7 +7003,7 @@ async function spawnShellRun(cell, placement, toastWait) {
     const done = toastWait ? pendingToast("Starting shell…") : () => {};
     let s;
     try {
-      s = await api("/api/sessions/" + encodeURIComponent(neighbour.id) + "/shell", { method: "POST" });
+      s = await api("/api/sessions/" + encodeURIComponent(neighbour.id) + "/shell", { method: "POST", timeoutMs: ACTION_SLOW_TIMEOUT_MS });
     } finally {
       done();
     }
