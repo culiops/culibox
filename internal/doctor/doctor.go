@@ -129,8 +129,8 @@ func redactHost(detail, host string) string {
 	return strings.ReplaceAll(detail, host, "<host>")
 }
 
-// tilde shows the home dir as "~". It only matches a whole path component, so
-// /home/ab is not rewritten when home is /home/a.
+// tilde shows the home dir as "~". It only matches a whole path, so /home/ab is
+// not rewritten when home is /home/a, nor /var/tmp when home is /tmp.
 func tilde(s, home string) string {
 	if home == "" || home == "/" {
 		return s
@@ -146,7 +146,9 @@ func tilde(s, home string) string {
 			break
 		}
 		end := i + len(home)
-		if end < len(s) && isPathChar(s[end]) && s[end] != '/' {
+		// Not a whole path: the match ends inside a name (/home/ab for /home/a)
+		// or starts inside a path (/var/tmp for /tmp).
+		if (end < len(s) && isPathChar(s[end]) && s[end] != '/') || (i > 0 && isPathChar(s[i-1])) {
 			b.WriteString(s[:end])
 			s = s[end:]
 			continue

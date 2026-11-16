@@ -318,6 +318,10 @@ func TestTilde(t *testing.T) {
 		{"/home/a: err", "/home/a", "~: err"},
 		{"/Users/a/.local/share/x", "/Users/a/", "~/.local/share/x"},
 		{"/Users/a", "/Users/a/", "~"},
+		// A match must also start a path: home /tmp is not inside /var/tmp.
+		{"/var/tmp/x", "/tmp", "/var/tmp/x"},
+		{"/var/tmp/x and /tmp/y", "/tmp", "/var/tmp/x and ~/y"},
+		{"dir=/tmp/x", "/tmp", "dir=~/x"},
 	} {
 		if got := tilde(c.in, c.home); got != c.want {
 			t.Errorf("tilde(%q,%q) = %q want %q", c.in, c.home, got, c.want)
