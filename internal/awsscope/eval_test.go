@@ -441,6 +441,33 @@ func sizeOf(t *testing.T, partition string, s3Read []string, el Elevation) int {
 	return se.n
 }
 
+// #329: each action pack's pattern matches exactly the catalog actions its
+// covers match, so writing the pattern changes no decision.
+func TestActionPacksAreExact(t *testing.T) {
+	for _, p := range actionPacks {
+		var want []string
+		for _, c := range p.covers {
+			want = append(want, expandCatalog(t, c)...)
+		}
+		slices.Sort(want)
+		got := expandCatalog(t, p.pattern)
+		if len(got) == 0 || !slices.Equal(got, want) {
+			t.Errorf("%s expands to %v; its covers %v to %v", p.pattern, got, p.covers, want)
+		}
+	}
+}
+
+func TestPackActions(t *testing.T) {
+	in := []string{"a:X", "dynamodb:BatchGetItem", "b:Y", "dynamodb:GetItem", "iam:Attach*", "c:Z"}
+	got := packActions(in)
+	if want := []string{"a:X", "dynamodb:*GetItem", "b:Y", "iam:Attach*", "c:Z"}; !slices.Equal(got, want) {
+		t.Fatalf("got %v want %v (a pack applies only when all its covers are there)", got, want)
+	}
+	if !slices.Equal(in, []string{"a:X", "dynamodb:BatchGetItem", "b:Y", "dynamodb:GetItem", "iam:Attach*", "c:Z"}) {
+		t.Fatal("packActions changed its input")
+	}
+}
+
 // #329: the elevated policy writes the four SSM parameter reads as one
 // pattern. AWS's catalog has exactly these four actions under it, so the
 // pattern denies nothing more.
@@ -487,7 +514,7 @@ func TestValidBoxBucketPrefix(t *testing.T) {
 // History (all-maximum / realistic): 2,069 (refused) / 1,973 before #307;
 // 2,024 / 1,928 after #307; 1,821 / 1,725 after #329 packed the statements;
 // 1,860 / 1,764 with the Access Grants denies (#322); 1,940 / 1,844 with the
-// S3 Express denies (#323).
+// S3 Express denies (#323); 1,880 / 1,784 with the action packs (#329).
 func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 	maxEl := Elevation{BoxBucketPrefix: longBoxPrefix, PassRolePrefix: longRolePrefix}
 	realEl := Elevation{BoxBucketPrefix: "culibox-", PassRolePrefix: "culibox-"}
@@ -498,11 +525,11 @@ func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 		el        Elevation
 		want      int
 	}{
-		{"smallest", "aws", nil, Elevation{}, 1429},
-		{"smallest, allow_iam on", "aws", nil, Elevation{AllowIAM: true}, 1384},
-		{"one", "aws-us-gov", longS3Read[:1], maxEl, 1777},
-		{"realistic", "aws-us-gov", longS3Read, realEl, 1844},
-		{"all-maximum", "aws-us-gov", longS3Read, maxEl, 1940},
+		{"smallest", "aws", nil, Elevation{}, 1369},
+		{"smallest, allow_iam on", "aws", nil, Elevation{AllowIAM: true}, 1333},
+		{"one", "aws-us-gov", longS3Read[:1], maxEl, 1717},
+		{"realistic", "aws-us-gov", longS3Read, realEl, 1784},
+		{"all-maximum", "aws-us-gov", longS3Read, maxEl, 1880},
 	} {
 		s, err := ElevatedPolicy(c.partition, c.s3Read, c.el)
 		if err != nil {
@@ -513,7 +540,7 @@ func TestElevatedPolicyLargestRealisticFits(t *testing.T) {
 		if len(s) != c.want {
 			t.Errorf("%s: %d characters, pinned %d: update the pin and the history above", c.name, len(s), c.want)
 		}
-		for _, d := range []string{`"s3:Put*Acl"`, `"s3:PutAccountPublicAccessBlock"`, `"dynamodb:ExportTableToPointInTime"`} {
+		for _, d := range []string{`"s3:Put*Acl"`, `"s3:PutAccountPublicAccessBlock"`, `"dynamodb:Export*"`} {
 			if !strings.Contains(s, d) {
 				t.Errorf("%s: %s missing", c.name, d)
 			}
@@ -624,7 +651,7 @@ func TestElevatedPolicyDeniesS3ExposureExceptOnBoxBuckets(t *testing.T) {
 		"s3:PutObject", "s3:DeleteObject", "s3:PutBucketTagging", "s3:PutBucketVersioning", "s3:PutEncryptionConfiguration",
 		"s3:PutLifecycleConfiguration", "s3:PutBucketLogging", "s3:PutBucketCORS", "s3:PutBucketWebsite",
 		"s3:PutBucketNotification", "s3:PutObjectTagging", "s3:PutBucketObjectLockConfiguration",
-		"s3:PutReplicationConfiguration" + "X", // not a real action: guards against a wildcard swallowing Put*
+		"s3:PutX", // not a real action: guards against a wildcard swallowing Put* (s3:Put*Replication* would catch a PutReplication...X, #329)
 		"s3:PutBucketRequestPayment", "s3:PutIntelligentTieringConfiguration", "s3:PutAccelerateConfiguration",
 		"s3:PutMetricsConfiguration", "s3:PutInventoryConfiguration", "s3:PutAnalyticsConfiguration"} {
 		for _, pc := range []struct{ name, pol string }{{"on", on}, {"off", off}, {"none", none}, {"neither", neither}} {

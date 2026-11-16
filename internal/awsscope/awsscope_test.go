@@ -228,14 +228,14 @@ func TestElevatedPolicyOptInOffIsTodayPlusPublicParameters(t *testing.T) {
 	// exposure calls (#307); KMS; then the agent's own roles.
 	want := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"},` +
 		`{"Effect":"Deny","Action":["s3:GetObject","s3:GetObjectVersion","s3express:CreateSession","ssm:GetParameter*"],"NotResource":["arn:aws:s3:::culishop-tfstate/*","arn:aws:ssm:*::parameter/aws/service/*"]},` +
-		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","dynamodb:GetItem","dynamodb:BatchGetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords",` +
+		`{"Effect":"Deny","Action":["secretsmanager:GetSecretValue","dynamodb:*GetItem","dynamodb:Query","dynamodb:Scan","dynamodb:PartiQLSelect","dynamodb:GetRecords",` +
 		`"sts:AssumeRole*","sts:GetFederationToken","sts:GetSessionToken",` +
 		`"iam:UploadSSHPublicKey","cloudtrail:StopLogging","cloudtrail:DeleteTrail","cloudtrail:UpdateTrail","cloudtrail:PutEventSelectors",` +
 		`"iam:PassRole",` +
-		`"iam:Create*","iam:Delete*","iam:Put*","iam:Attach*","iam:Detach*","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*",` +
-		`"dynamodb:ExportTableToPointInTime","rds:StartExportTask","s3:CreateJob","datasync:StartTaskExecution","backup:StartRestoreJob",` +
+		`"iam:Create*","iam:Delete*","iam:Put*","iam:*tach*Policy","iam:Update*","iam:Add*","iam:Remove*","iam:Tag*","iam:Untag*","iam:Set*","iam:Change*",` +
+		`"dynamodb:Export*","rds:StartExportTask","s3:CreateJob","datasync:StartTaskExecution","backup:StartRestoreJob",` +
 		`"s3:PutAccountPublicAccessBlock","s3:GetDataAccess","s3:*eAccessGrant*","s3express:Put*Policy","s3express:DeleteBucketPolicy",` +
-		`"s3:PutReplicationConfiguration","s3:Put*Policy*","s3:DeleteBucketPolicy","s3:Put*Acl","s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls"],"Resource":"*"},` +
+		`"s3:Put*Replication*","s3:Put*Policy*","s3:DeleteBucketPolicy","s3:Put*Acl","s3:PutBucketPublicAccessBlock","s3:PutBucketOwnershipControls"],"Resource":"*"},` +
 		`{"Effect":"Deny","Action":"kms:Decrypt","Resource":"*","Condition":{"StringNotLike":{"kms:ViaService":"s3.*.amazonaws.com"}}},` +
 		`{"Effect":"Deny","Action":"iam:*","Resource":"arn:aws:iam::*:role/agentbox-*"}]}`
 	if got != want {
@@ -286,8 +286,9 @@ func TestElevatedPolicyKeepsTheInvestigateDeniesAndAddsTheGuards(t *testing.T) {
 	if !slices.Equal(ea[:len(ia)], ia) || !slices.Equal(p.Statement[1].NotResource[:len(invP.Statement[1].NotResource)], invP.Statement[1].NotResource) {
 		t.Fatalf("the S3 read deny must start with the investigate one:\n %+v\n %+v", invP.Statement[1], p.Statement[1])
 	}
+	// (#329 writes some of them as patterns, so this asks the evaluator)
 	for _, a := range actions(invP.Statement[2].Action) {
-		if !slices.Contains(actions(p.Statement[2].Action), a) && !slices.Contains(ssmParamReads, a) {
+		if !slices.Contains(ssmParamReads, a) && evaluate(t, s, evalReq{a, "arn:aws:dynamodb:us-east-1:123456789012:table/t", nil}) != "deny" {
 			t.Errorf("the Resource \"*\" deny lost %s", a)
 		}
 	}
@@ -311,11 +312,21 @@ func TestElevatedPolicyKeepsTheInvestigateDeniesAndAddsTheGuards(t *testing.T) {
 	if !denied(p, "iam:*", "arn:aws:iam::*:role/agentbox-*") {
 		t.Error("the agent's own roles must be off limits")
 	}
-	for _, a := range []string{"iam:Create*", "iam:Delete*", "iam:Put*", "iam:Attach*", "iam:Detach*", "iam:Update*",
+	for _, a := range []string{"iam:Create*", "iam:Delete*", "iam:Put*", "iam:Update*",
 		"iam:Add*", "iam:Remove*", "iam:Tag*", "iam:Untag*", "iam:Set*", "iam:Change*"} {
 		if !denied(p, a, "*") {
 			t.Errorf("IAM write deny missing with allow_iam off: %s", a)
 		}
+	}
+	// Attach* and Detach* are written as iam:*tach*Policy (#329)
+	for _, a := range []string{"iam:AttachRolePolicy", "iam:AttachUserPolicy", "iam:AttachGroupPolicy", "iam:DetachRolePolicy",
+		"iam:DetachUserPolicy", "iam:DetachGroupPolicy"} {
+		if evaluate(t, s, evalReq{a, "arn:aws:iam::123456789012:role/x", nil}) != "deny" {
+			t.Errorf("IAM write deny missing with allow_iam off: %s", a)
+		}
+	}
+	if evaluate(t, s, evalReq{"iam:ListAttachedRolePolicies", "arn:aws:iam::123456789012:role/x", nil}) != "allow" {
+		t.Error("iam:*tach*Policy must not catch ListAttached*Policies")
 	}
 	if !denied(p, "iam:PassRole", "*") {
 		t.Error("iam:PassRole must be denied on every role when pass_role_prefix is unset (#302)")

@@ -460,10 +460,10 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 	if el.BoxBucketPrefix == "" {
 		always = append(always, bucketDenies...)
 	}
-	st[2].Action = always
+	st[2].Action = packActions(always)
 	st = append(st, statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
 	if el.BoxBucketPrefix != "" {
-		st = append(st, statement{Effect: "Deny", Action: bucketDenies,
+		st = append(st, statement{Effect: "Deny", Action: packActions(bucketDenies),
 			NotResource: []string{"arn:" + partition + ":s3:::" + el.BoxBucketPrefix + "*"}})
 	}
 	p, err := marshalPolicy(st, "elevated session policy")
@@ -475,6 +475,51 @@ func ElevatedPolicy(partition string, s3Read []string, el Elevation) (string, er
 		se.base, se.allowIAM = len(base), el.AllowIAM
 	}
 	return p, err
+}
+
+// actionPacks are shorter ways to write a group of denied actions in the
+// elevated policy (#329). Each pattern matches, in AWS's action catalog
+// (internal/awsprobe snapshot), exactly the actions its covers match, no more
+// and no fewer; TestActionPacksAreExact pins that. A pattern only ever widens
+// a deny when AWS adds an action under it.
+var actionPacks = []struct {
+	pattern string
+	covers  []string
+}{
+	// GetItem and BatchGetItem; TransactGetItems ends in "s" and is authorized
+	// as GetItem anyway.
+	{"dynamodb:*GetItem", []string{"dynamodb:GetItem", "dynamodb:BatchGetItem"}},
+	{"dynamodb:Export*", []string{"dynamodb:ExportTableToPointInTime"}},
+	{"s3:Put*Replication*", []string{"s3:PutReplicationConfiguration"}},
+	// Attach and Detach of group, role and user policies; ListAttached*Policies
+	// ends in "Policies", so the reads stay allowed.
+	{"iam:*tach*Policy", []string{"iam:Attach*", "iam:Detach*"}},
+}
+
+// packActions replaces, in order, each pack whose covers are all in actions
+// by its pattern, written where the first of them was.
+func packActions(actions []string) []string {
+	out := slices.Clone(actions)
+	for _, p := range actionPacks {
+		at := -1
+		for _, c := range p.covers {
+			i := slices.Index(out, c)
+			if i < 0 {
+				at = -1
+				break
+			}
+			if at < 0 || i < at {
+				at = i
+			}
+		}
+		if at < 0 {
+			continue
+		}
+		// at is the first cover, so nothing before it is deleted
+		out = slices.DeleteFunc(out, func(a string) bool { return slices.Contains(p.covers, a) })
+		out = slices.Insert(out, at, p.pattern)
+	}
+	return out
 }
 
 // matchesAny reports whether action is matched by one of the patterns, each
