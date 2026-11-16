@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"syscall"
 )
 
@@ -30,11 +32,34 @@ type Lookup struct {
 	Executable func() (string, error)       // os.Executable
 	LookPath   func(string) (string, error) // exec.LookPath
 	Uid        int                          // os.Getuid()
+	// PrivateGid is the user's private group (a group named like the user, as
+	// umask 002 systems set up): a folder or file writable by that group alone is
+	// still writable by the user alone. 0 or -1: none.
+	PrivateGid int
 }
 
 // DefaultLookup looks for this process's abduco.
 func DefaultLookup() Lookup {
-	return Lookup{Executable: os.Executable, LookPath: exec.LookPath, Uid: os.Getuid()}
+	return Lookup{Executable: os.Executable, LookPath: exec.LookPath, Uid: os.Getuid(), PrivateGid: privateGid()}
+}
+
+// privateGid is this process's primary group when it is the user's private group
+// (same name as the user), else -1. Users the pure-Go lookup cannot see (macOS
+// directory services, LDAP) get -1, the strict rule.
+func privateGid() int {
+	u, err := user.Current()
+	if err != nil {
+		return -1
+	}
+	g, err := user.LookupGroupId(u.Gid)
+	if err != nil || g.Name != u.Username {
+		return -1
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return -1
+	}
+	return gid
 }
 
 // Resolve picks the abduco binary: an explicit abduco_bin always wins; otherwise
@@ -55,7 +80,7 @@ func (l Lookup) Resolve(configured string) (Resolved, error) {
 			dir := filepath.Dir(target)
 			where = fmt.Sprintf("next to culibox (%s)", dir)
 			cand := filepath.Join(dir, "abduco")
-			why, ok := bundledOK(cand, l.Uid)
+			why, ok := bundledOK(cand, l.Uid, l.PrivateGid)
 			if ok {
 				return Resolved{Path: cand, Source: SourceBundled}, nil
 			}
@@ -76,9 +101,11 @@ func (l Lookup) Resolve(configured string) (Resolved, error) {
 // sticky shared directory such as /tmp would otherwise run whatever abduco another
 // local user put there: a file, a hard link to a root binary, or a symlink they can
 // retarget later. So the folder must be writable by us or root alone, and so must
-// the folder a symlink points into; the file itself must be ours (or root's) and
-// writable by no one else. why is "" when there is no such file at all.
-func bundledOK(path string, uid int) (why string, ok bool) {
+// the folder a symlink points into; a symlink is followed one hop only (a link to a
+// link could sit in anyone's folder); the file itself must be ours (or root's) and
+// writable by no one else. pgid is the user's private group (see Lookup). why is
+// "" when there is no such file at all.
+func bundledOK(path string, uid, pgid int) (why string, ok bool) {
 	li, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return "", false
@@ -86,15 +113,25 @@ func bundledOK(path string, uid int) (why string, ok bool) {
 	if err != nil {
 		return err.Error(), false
 	}
-	if why := safeDir(filepath.Dir(path), uid); why != "" {
+	if why := safeDir(filepath.Dir(path), uid, pgid); why != "" {
 		return why, false
 	}
 	target := path
 	if li.Mode()&os.ModeSymlink != 0 {
+		dest, err := os.Readlink(path)
+		if err != nil {
+			return err.Error(), false
+		}
+		if !filepath.IsAbs(dest) {
+			dest = filepath.Join(filepath.Dir(path), dest)
+		}
 		if target, err = filepath.EvalSymlinks(path); err != nil {
 			return err.Error(), false
 		}
-		if why := safeDir(filepath.Dir(target), uid); why != "" {
+		if filepath.Clean(dest) != target {
+			return "a symlink chain (" + dest + " is itself a link or under one)", false
+		}
+		if why := safeDir(filepath.Dir(target), uid, pgid); why != "" {
 			return "its link target's " + why, false
 		}
 	}
@@ -108,8 +145,8 @@ func bundledOK(path string, uid int) (why string, ok bool) {
 	if fi.Mode().Perm()&0o111 == 0 {
 		return "not executable", false
 	}
-	if fi.Mode().Perm()&0o022 != 0 {
-		return fmt.Sprintf("writable by group or others (mode %o)", fi.Mode().Perm()), false
+	if why := writableByOthers(fi, pgid); why != "" {
+		return why, false
 	}
 	if why := ownedBy(fi, uid); why != "" {
 		return why, false
@@ -118,18 +155,33 @@ func bundledOK(path string, uid int) (why string, ok bool) {
 }
 
 // safeDir is "" when only uid or root can add, remove or replace files in dir.
-func safeDir(dir string, uid int) string {
+func safeDir(dir string, uid, pgid int) string {
 	fi, err := os.Stat(dir)
 	if err != nil {
 		return "folder: " + err.Error()
 	}
-	if fi.Mode().Perm()&0o022 != 0 {
-		return fmt.Sprintf("folder %s is writable by group or others (mode %o)", dir, fi.Mode().Perm())
+	if why := writableByOthers(fi, pgid); why != "" {
+		return "folder " + dir + " is " + why
 	}
 	if why := ownedBy(fi, uid); why != "" {
 		return "folder " + dir + " is " + why
 	}
 	return ""
+}
+
+// writableByOthers is "" when no one but the owner can write fi: no other-write
+// bit, and no group-write bit unless the group is the user's private group pgid.
+func writableByOthers(fi os.FileInfo, pgid int) string {
+	perm := fi.Mode().Perm()
+	if perm&0o002 == 0 && perm&0o020 == 0 {
+		return ""
+	}
+	if perm&0o002 == 0 && pgid > 0 {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Gid) == pgid {
+			return ""
+		}
+	}
+	return fmt.Sprintf("writable by group or others (mode %o)", perm)
 }
 
 // ownedBy is "" when fi belongs to uid or root.

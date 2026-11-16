@@ -144,8 +144,28 @@ func TestResolveSkipsForeignOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Source != SourcePath || !strings.Contains(r.Skipped, "owned by uid") {
-		t.Fatalf("got %+v, want PATH with an 'owned by uid' skip reason", r)
+	// The folder is checked first, and it is "someone else's" too.
+	if r.Source != SourcePath || !strings.Contains(r.Skipped, "folder") || !strings.Contains(r.Skipped, "owned by uid") {
+		t.Fatalf("got %+v, want PATH with a folder 'owned by uid' skip reason", r)
+	}
+}
+
+// The file's own owner check, which a test cannot reach through Resolve without
+// root (a folder we own always fails first for a fake uid).
+func TestOwnedByForeignUid(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if why := ownedBy(fi, os.Getuid()); why != "" {
+		t.Fatalf("own file: %q, want \"\"", why)
+	}
+	if why := ownedBy(fi, os.Getuid()+1); !strings.Contains(why, "owned by uid") {
+		t.Fatalf("foreign uid: %q, want 'owned by uid'", why)
 	}
 }
 
@@ -271,8 +291,95 @@ func TestResolveSkipsSymlinkIntoSharedDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Source != SourcePath || !strings.Contains(r.Skipped, "folder") {
-		t.Fatalf("got %+v, want PATH with a folder skip reason", r)
+	if r.Source != SourcePath || !strings.Contains(r.Skipped, "link target's folder") {
+		t.Fatalf("got %+v, want PATH with a link-target folder skip reason", r)
+	}
+}
+
+// A symlink is followed one hop only: a link that points at another link (here
+// in a shared folder whose owner can retarget it) is refused.
+func TestResolveSkipsSymlinkChain(t *testing.T) {
+	f := newResolveFixture(t)
+	target := filepath.Join(t.TempDir(), "abduco")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shared := t.TempDir()
+	mid := filepath.Join(shared, "abduco")
+	if err := os.Symlink(target, mid); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o1777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(mid, filepath.Join(f.dir, "abduco")); err != nil {
+		t.Fatal(err)
+	}
+	f.onPath = "/usr/bin/abduco"
+	r, err := f.lookup(os.Getuid()).Resolve("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Source != SourcePath || !strings.Contains(r.Skipped, "chain") {
+		t.Fatalf("got %+v, want PATH with a symlink chain skip reason", r)
+	}
+}
+
+// A Homebrew-style relative link (bin/abduco -> ../cellar/abduco) is one hop.
+func TestResolveAcceptsRelativeSymlink(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, cellar := filepath.Join(root, "bin"), filepath.Join(root, "cellar")
+	for _, d := range []string{bin, cellar} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := &resolveFixture{dir: bin, exe: filepath.Join(bin, "culibox"), onPath: "/usr/bin/abduco"}
+	if err := os.WriteFile(f.exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cellar, "abduco"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "cellar", "abduco"), filepath.Join(bin, "abduco")); err != nil {
+		t.Fatal(err)
+	}
+	r, err := f.lookup(os.Getuid()).Resolve("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Source != SourceBundled {
+		t.Fatalf("got %+v, want the relative link next to culibox", r)
+	}
+}
+
+// umask 002 systems (RHEL, Fedora) make ~/.local/bin group-writable, but its group
+// is the user's private group: nobody else is in it, so that write bit is safe.
+func TestResolveAcceptsPrivateGroupWritable(t *testing.T) {
+	f := newResolveFixture(t)
+	f.bundle(t, 0o775)
+	if err := os.Chmod(f.dir, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	f.onPath = "/usr/bin/abduco"
+	l := f.lookup(os.Getuid())
+	l.PrivateGid = os.Getgid() // the temp files carry the process's group
+	r, err := l.Resolve("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Source != SourceBundled {
+		t.Fatalf("got %+v, want the abduco next to culibox", r)
+	}
+	// Writable by others stays refused, private group or not.
+	if err := os.Chmod(f.dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ = l.Resolve(""); r.Source != SourcePath {
+		t.Fatalf("world-writable folder: got %+v, want PATH", r)
 	}
 }
 
