@@ -326,6 +326,8 @@ for local_addr in 127.0.0.2:18899 '[::]:18899' '[::1]:18899' 10.9.8.7:18899; do
 done
 STUB_SS_LOCAL='0.0.0.0:18899' AB_PROD_ADDR='[::1]:18899' deploy
 not_recorded "$j" "$j" "not on that address" "an IPv4 wildcard does not stand for a v6 ADDR"
+STUB_SS_LOCAL='[fe80::1]%eth0:18899' AB_PROD_ADDR='[::1]:18899' deploy
+not_recorded "$j" "$j" "not on that address" "a link-local v6 socket (interface after the bracket) is not [::1]"
 # No listening socket on the port at all: an answer with no owner is not accepted either.
 STUB_SS_NONE=1 deploy
 not_recorded "$j" "$j" "not on that address" "a build whose port has no listening socket"
@@ -337,7 +339,7 @@ for local_addr in '*:18899' 0.0.0.0:18899 '127.0.0.1%lo:18899'; do
   STUB_SS_LOCAL=$local_addr deploy
   expect_rc "$rc" 0 "a unit socket on $local_addr passes for AB_PROD_ADDR 127.0.0.1"
 done
-for local_addr in '[::1]:18899' '[::]:18899' '*:18899' '[::1%lo]:18899'; do
+for local_addr in '[::1]:18899' '[::]:18899' '*:18899' '[::1]%lo:18899'; do
   STUB_SS_LOCAL=$local_addr AB_PROD_ADDR='[::1]:18899' deploy
   expect_rc "$rc" 0 "a unit socket on $local_addr passes for AB_PROD_ADDR [::1]"
 done

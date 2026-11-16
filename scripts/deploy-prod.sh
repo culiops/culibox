@@ -18,9 +18,10 @@ STAMP="$BIN.deployed-sha"
 # (docs/CONFIG.md), since this script has no config of its own to read it from; the default is
 # the product's default bind. For a wildcard bind (0.0.0.0, ::) use a loopback address and the
 # same port. It must be a numeric address ([::1] for IPv6): a hostname is never equal to what
-# `ss -n` prints, so it fails closed. The windows are whole seconds, one poll each. Something answering there is not
-# enough (the dev instance uses the default port on the same host): the listening socket must
-# also belong to the service's own cgroup, or the probe does not count (port_owned_by_unit).
+# `ss -n` prints, so it fails closed. The windows are whole seconds, one poll each.
+# Something answering there is not enough (the dev instance uses the default port on the same
+# host): the listening socket must also belong to the service's own cgroup, or the probe does
+# not count (port_owned_by_unit).
 ADDR="${AB_PROD_ADDR:-127.0.0.1:8899}"
 # `serve` takes the upgrade backup (a VACUUM INTO of audit.db, which the backup itself gives up
 # on after 2 minutes: internal/upgradebackup/audit.go) before it listens, and exits fail-closed
@@ -37,8 +38,10 @@ case "$STABLE" in '' | *[!0-9]* | 0) echo "refusing: AB_PROD_STABLE_SECS must be
 for tool in curl ss; do
   command -v "$tool" >/dev/null 2>&1 || { echo "refusing: $tool is needed to check that the service itself answers after the restart." >&2; exit 1; }
 done
-# The ownership check reads /proc/<pid>/cgroup as cgroup v2 (`0::<path>`). On a v1 or hybrid host
-# it could never match, and the deploy would wait out the whole window and blame another process.
+# The ownership check reads /proc/<pid>/cgroup as cgroup v2 (`0::<path>`). On a pure cgroup v1
+# host there is no such line and it could never match, so the deploy would wait out the whole
+# window and blame another process: refuse here instead. A hybrid host does have a `0::` line and
+# passes this test; there the check still fails closed, with the "not on that address" message.
 grep -q '^0::' /proc/self/cgroup 2>/dev/null || { echo "refusing: this host is not on cgroup v2 (no '0::' line in /proc/self/cgroup), so the check that the service itself answers cannot work." >&2; exit 1; }
 
 branch=$(git -C "$REPO" branch --show-current)
@@ -157,12 +160,8 @@ port_owned_by_unit() {
   want=${ADDR%:*}
   while read -r _ _ _ laddr _ procs; do
     h=${laddr%:*}
-    case "$h" in
-      *%*)
-        h=${h%%%*}
-        case "$laddr" in \[*) h="$h]" ;; esac
-        ;;
-    esac
+    # ss puts the interface after the bracket of a v6 host: `[::1]%lo:8899`, `127.0.0.1%lo:8899`.
+    h=${h%%%*}
     case "$h" in
       "$want" | '*') ;;
       0.0.0.0) case "$want" in *:*) continue ;; esac ;;
