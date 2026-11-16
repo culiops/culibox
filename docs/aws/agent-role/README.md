@@ -84,6 +84,15 @@ account until CuliBox can redact command output, which it cannot yet:** with rea
 into its transcript that `ReadOnlyAccess` allows and the session policy does not deny
 (Lambda code URLs, ECR layers, Athena and Glue results, CloudWatch Logs, among others).
 
+**What the read scope denies, exactly.** The session policy denies these data classes and no
+others: S3 objects outside `s3_read` (and S3 Express directory bucket sessions), Secrets Manager
+secret values, Parameter Store values, DynamoDB items (stream records included), and KMS
+decryption other than through S3. Every other data store stays readable **by design**, because an
+investigation needs it: Kinesis Data Streams records, SQS messages, CloudWatch Logs events and the
+like. That includes copies: a DynamoDB table that delivers its item changes to a Kinesis Data
+Streams destination exposes those items through the stream
+([#306](https://github.com/culiops/culibox/issues/306)).
+
 ## SSO-direct mode (read-only permission sets)
 
 Everything above is the **agent role** mode: the broker assumes `agentbox-agent` and adds a
