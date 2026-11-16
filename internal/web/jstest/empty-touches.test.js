@@ -66,7 +66,7 @@ function page(boxRuntime, metaLoaded = true) {
     $: (id) => els[id], notHomeLabel: () => "", notHomeTitle: () => "", openSpawnDialog: () => {},
     metaLoaded,
   });
-  for (const f of ["fsops.js", "spawnpreview.js", "spawnpanel.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
+  for (const f of ["fsops.js", "profileview.js", "spawnpreview.js", "spawnpanel.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   // The panel's own helpers that need more DOM than this fake has; the rows themselves are the real ones.
   vm.runInContext("spawnPanelOn = () => true; spawnPlistFilter = () => {};", ctx);
   const names = ["emptyEl", "emptyNoneEl", "emptyStateKey"];

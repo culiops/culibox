@@ -5854,6 +5854,12 @@ function updateRuntimeWarning() {
   updateSpawnBoxOwned();
   const seg = $("runtime-seg"), warn = $("runtime-warn");
   if (!seg || !warn) return;
+  if (drawerDesktop() && metaLoaded && !boxRuntime) {
+    // No box layer: the hidden seg holds nothing, so "cannot be boxed" below would blame a folder for a tier no session
+    // is on. The dialog's own boxes-unavailable line (syncSpawnGate) says what is true (#142). The phone is as it was.
+    warn.hidden = true;
+    return;
+  }
   if (segValue(seg) === "host") {
     warn.hidden = false;
     warn.textContent = "Runs on your host with your user's full access: files, keys, network.";
@@ -5886,12 +5892,26 @@ function updateRuntimeWarning() {
 // A second open while the first awaits the refetch would run the body twice, and
 // the second pass would re-apply profile defaults over what was typed meanwhile.
 let spawnOpening = false;
+// refreshBoxMeta re-reads the box fields of /api/meta as the dialog opens. A box profile's Spawn is blocked from them (#142), so a page
+// loaded while Docker was down must not keep blocking after the server has re-checked it (box_daemon_reason clears within seconds).
+// A failed or slow read keeps what the page has.
+async function refreshBoxMeta() {
+  try {
+    const meta = await api("/api/meta", { signal: deadlineSignal(5000) });
+    if (!meta || typeof meta !== "object") return;
+    boxRuntime = meta.box_runtime || "";
+    metaLoaded = true;
+    boxUnavailableReason = meta.box_unavailable_reason || "";
+    boxDaemonReason = meta.box_daemon_reason || "";
+  } catch (_) { /* the values the page already holds */ }
+}
 async function openSpawnDialog(preselectAgent, prefill) {
   if (spawnOpening) return;
   spawnOpening = true;
   let fresh;
   try {
     fresh = await loadProfiles(false);
+    await refreshBoxMeta();
   } finally {
     spawnOpening = false;
   }
@@ -6200,6 +6220,14 @@ $("spawn").addEventListener("submit", async (ev) => {
     return;
   }
   spawnWsPicker.close(); // the field shows the directory in use; an open list is just left over
+  // A box profile with no boxes (or a box whose daemon is down) is not sent: the server would refuse it. The reason is already
+  // on the dialog; the error line repeats it so a press does not look dead. Desktop only: on the phone the gate is never blocked.
+  const gate = syncSpawnGate();
+  if (gate.blocked) {
+    spawnGateErr = gate.text;
+    setDialogError("spawn-modal", gate.text);
+    return;
+  }
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
@@ -6248,6 +6276,13 @@ $("spawn").addEventListener("submit", async (ev) => {
       // and form values stay as they were.
       spawnUnavailMsg = e.message;
       setDialogError("spawn-modal", e.message);
+    } else if (spawnRefusedBoxUnavailable(e.status, e.code) && drawerDesktop()) {
+      // The containment refusal (no box layer, the daemon went away since the page loaded, egress control down, ...): the
+      // dialog stays open with the form as it was (name, first message, workspace, options) and the line says why in plain
+      // words; the server's sentence is shown as it is when the page has nothing plainer. The phone keeps its toast (#142).
+      spawnUnavailMsg = spawnBoxRefusalLine({ message: e.message, metaLoaded, boxRuntime, boxUnavailableReason, boxDaemonReason });
+      setDialogError("spawn-modal", spawnUnavailMsg);
+      refreshBoxMeta().then(syncSpawnPreview); // the reason may have changed since the page loaded; the block follows it
     } else {
       closeSpawn();
       spawnPromptDraft = draft; // reopening New session restores it
@@ -6262,6 +6297,7 @@ $("spawn").addEventListener("submit", async (ev) => {
     prog.hidden = true;
     spawnBusy = false;
     if (goBtn) { goBtn.disabled = false; goBtn.classList.remove("busy"); goBtn.removeAttribute("aria-busy"); goBtn.textContent = spawnSubmitLabel(drawerDesktop()); }
+    syncSpawnGate(); // the button is live again: a blocked profile reads blocked
   }
 });
 // The row's actions menu. One persistent node outside the list, rebuilt on
