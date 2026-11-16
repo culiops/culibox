@@ -30,17 +30,18 @@ func runBugReport(in doctor.Input, host, goos string, out, errw io.Writer) int {
 		}
 	}
 	bi := bugreport.Input{
-		Producer:   "cli",
-		Version:    version,
-		Commit:     in.Commit,
-		Now:        time.Now().UTC(),
-		Home:       in.Home,
-		Host:       host,
-		Doctor:     doctor.Checks(in),
-		DoctorNote: note,
-		Config:     in.Config,
-		Profiles:   profiles,
-		LogHint:    bugReportLogHint(goos),
+		Producer:     "cli",
+		Version:      version,
+		Commit:       in.Commit,
+		Now:          time.Now().UTC(),
+		Home:         in.Home,
+		HomeResolved: doctor.ResolveHome(in.Home),
+		Host:         host,
+		Doctor:       doctor.Checks(in),
+		DoctorNote:   note,
+		Config:       in.Config,
+		Profiles:     profiles,
+		LogHint:      bugReportLogHint(goos),
 	}
 	fmt.Fprint(out, bugreport.Markdown(bi))
 	fmt.Fprintf(errw, "Issue link: %s\n", bugreport.IssueURL(bi))

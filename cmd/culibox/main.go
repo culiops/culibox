@@ -913,8 +913,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		checks:  func() []doctor.Result { return doctor.Checks(doctorIn) },
 		timeout: bugReportTimeout,
 		start:   started,
-		// Home and Host feed the redaction, so they are always set.
-		base: bugreport.Input{Producer: "daemon", Version: version, Commit: buildCommit(), Home: home, Host: host, Config: cfg},
+		// Home and Host feed the redaction, so they are always set. The home is
+		// resolved here, once: a report must not wait on the filesystem.
+		base: bugreport.Input{Producer: "daemon", Version: version, Commit: buildCommit(), Home: home,
+			HomeResolved: doctor.ResolveHome(home), Host: host, Config: cfg},
 		// The merged set the daemon actually runs: config seeds plus stored profiles.
 		profiles: pm.All,
 		sessions: mgr.List,

@@ -819,3 +819,30 @@ func TestRedactResolvedHome(t *testing.T) {
 		t.Fatalf("Redact = %q, want both spellings of the home as ~", got)
 	}
 }
+
+// RedactHomes does no filesystem work: the resolved spelling comes from the
+// caller (ResolveHome, once), so a slow automount or NFS home cannot stall it.
+func TestRedactHomesUsesTheGivenSpelling(t *testing.T) {
+	got := RedactHomes("/data/home/a/x and /home/a/y", "/home/a", "/data/home/a", "")
+	if got != "~/x and ~/y" {
+		t.Fatalf("RedactHomes = %q, want both spellings as ~", got)
+	}
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := RedactHomes(resolved+"/x", link, "", ""); got != resolved+"/x" {
+		t.Fatalf("RedactHomes = %q: it resolved the home itself", got)
+	}
+	if got := ResolveHome(link); got != resolved {
+		t.Fatalf("ResolveHome(link) = %q, want %q", got, resolved)
+	}
+	if got := ResolveHome(resolved); got != "" {
+		t.Fatalf("ResolveHome(resolved) = %q, want empty when nothing differs", got)
+	}
+}
