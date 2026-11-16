@@ -310,11 +310,13 @@ func TestRebuildOnAPinnedInstanceKeepsTheImageItJustBuilt(t *testing.T) {
 }
 
 // The default :base upgrade leak: a rebuild moves :base to the new image and the
-// old one is left with no name. That is the image this setup orphaned: removed.
-func TestRebuildOfBaseRemovesTheImageItOrphaned(t *testing.T) {
+// old one is left with the dated tag its own build gave it (a real build carries
+// :base AND :<date>). It is the image this setup orphaned: removed, and the
+// removal line says what that costs an instance pinned to that tag elsewhere.
+func TestRebuildOfBaseRemovesTheImageItOrphanedAndSaysWhatThatCosts(t *testing.T) {
 	h := newInstHome(t)
 	f := dockerfake.New(t)
-	f.Add(local(pIDOld, 4_000_000_000, dockerfake.Ref{Repo: "culiops/culibox", Tag: "base"}))
+	f.Add(local(pIDOld, 4_000_000_000, dockerfake.Ref{Repo: "culiops/culibox", Tag: "base"}, dockerfake.Ref{Repo: "culiops/culibox", Tag: "2026-10-01"}))
 	// An older leftover that this setup did not orphan: listed, not removed.
 	f.Add(local(pIDLocal, 3_000_000_000, dockerfake.Ref{Repo: "culiops/culibox", Tag: "2026-09-01"}))
 	f.BuildAdds(local(pIDNew, 4_200_000_000))
@@ -326,10 +328,29 @@ func TestRebuildOfBaseRemovesTheImageItOrphaned(t *testing.T) {
 	if rc != 0 || f.Has(pIDOld) || !f.Has(pIDNew) || !f.Has(pIDLocal) {
 		t.Fatalf("rc %d, old present %v, new %v, unrelated local %v:\n%s", rc, f.Has(pIDOld), f.Has(pIDNew), f.Has(pIDLocal), out)
 	}
-	for _, want := range []string{"removed old box image " + strings.TrimPrefix(pIDOld, "sha256:")[:12], "4000000000 bytes", "culiops/culibox:2026-09-01"} {
+	for _, want := range []string{"removed old box image culiops/culibox:2026-10-01 (4000000000 bytes",
+		"this is the image this setup replaced", "pinned to culiops/culibox:2026-10-01", "CULIBOX_HOME or -config",
+		"`culibox box setup -rebuild`", "box_image updated", "-no-prune keeps it", "culiops/culibox:2026-09-01"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+// An orphan with no name left cannot be pinned by anyone: no warning to give.
+func TestRebuildOfBaseRemovesAnUnnamedOrphanWithoutTheWarning(t *testing.T) {
+	h := newInstHome(t)
+	f := dockerfake.New(t)
+	f.Add(local(pIDOld, 4_000_000_000, dockerfake.Ref{Repo: "culiops/culibox", Tag: "base"}))
+	f.BuildAdds(local(pIDNew, 4_200_000_000))
+	var w bytes.Buffer
+	cfg := config.Config{}
+	boxSetupAndPrune(context.Background(), boximage.Docker{Bin: f.Bin}, cfg.BoxImageOrDefault(),
+		cliArgs{Cmd: "box", Sub: "setup", Rebuild: true}, h.src(cfg), setupNow, "linux", &w)
+	out := w.String()
+	if f.Has(pIDOld) || !strings.Contains(out, "removed old box image "+strings.TrimPrefix(pIDOld, "sha256:")[:12]) ||
+		strings.Contains(out, "this is the image this setup replaced") {
+		t.Fatalf("old present %v:\n%s", f.Has(pIDOld), out)
 	}
 }
 
@@ -371,7 +392,7 @@ func TestContainerdStoreLocalBuildsAreNeitherRemovedNorMistakenForPullable(t *te
 		if rc != 0 || !f.Has(idBackup) {
 			t.Fatalf("%+v: rc %d, the backup's image present %v:\n%s", a, rc, f.Has(idBackup), out)
 		}
-		if !a.PruneLocal && (!f.Has(pIDLocal) || !strings.Contains(out, "kept culiops/culibox:2026-08-01: a saved upgrade backup's config pins it")) {
+		if !a.PruneLocal && (!f.Has(pIDLocal) || !strings.Contains(out, "kept culiops/culibox:2026-08-01 (4.0 GB): a saved upgrade backup's config pins it")) {
 			t.Fatalf("default: local present %v:\n%s", f.Has(pIDLocal), out)
 		}
 		if a.PruneLocal && f.Has(pIDLocal) {
@@ -460,15 +481,64 @@ func TestDarwinBoxSetupPrunesThroughTheVMDaemonAndNeverFailsSetup(t *testing.T) 
 	}
 }
 
-// On macOS the plain docker CLI is not the box VM's, so the listing points at
-// -prune-local instead of a docker line.
-func TestKeptLocalListOnMacPointsAtPruneLocal(t *testing.T) {
+// On macOS the docker commands printed carry the box VM's --host, so they reach
+// the daemon that holds the images; -prune-local is said to remove ALL listed.
+func TestPrintedDockerCommandsCarryTheVMDaemonFlags(t *testing.T) {
 	u := newUpgradeStore(t)
+	// A rollback image and an image held by the pre-rename default name.
+	writeFile(t, filepath.Join(u.h.root, "backups", "0.1-to-0.2-20261101T000000Z", "config.json"), cfgJSON("culiops/culibox:2026-08-01"))
+	const idBackup = "sha256:1212000000000000000000000000000000000000000000000000000000001212"
+	const idLegacy = "sha256:3434000000000000000000000000000000000000000000000000000000003434"
+	u.f.Add(local(idBackup, 2_000_000_000, dockerfake.Ref{Repo: "culiops/culibox", Tag: "2026-08-01"}))
+	u.f.Add(local(idLegacy, 1_000_000_000, dockerfake.Ref{Repo: "culiops/agent-box", Tag: "base"}))
 	var w bytes.Buffer
 	cfg := config.Config{BoxImage: ghcr + "@" + pDigNew}
-	boxSetupAndPrune(context.Background(), boximage.Docker{Bin: u.f.Bin}, cfg.BoxImageOrDefault(),
-		cliArgs{Cmd: "box", Sub: "setup"}, u.h.src(cfg), setupNow, "darwin", &w)
-	if strings.Contains(w.String(), "docker image rm") || !strings.Contains(w.String(), "culiops/culibox:2026-09-01 (3.0 GB): `culibox box setup -prune-local`") {
-		t.Fatalf("output:\n%s", w.String())
+	d := boximage.Docker{Bin: u.f.Bin, Args: []string{"--host", "unix:///vm/docker.sock"}}
+	boxSetupAndPrune(context.Background(), d, cfg.BoxImageOrDefault(), cliArgs{Cmd: "box", Sub: "setup"}, u.h.src(cfg), setupNow, "darwin", &w)
+	out := w.String()
+	for _, want := range []string{
+		"culiops/culibox:2026-09-01 (3.0 GB): `docker --host unix:///vm/docker.sock image rm " + pIDLocal + "`",
+		"removes ALL of the images listed above",
+		"kept culiops/culibox:2026-08-01 (2.0 GB): a saved upgrade backup's config pins it",
+		"`docker --host unix:///vm/docker.sock image rm " + idBackup + "`",
+		// M6: held by a default name, said instead of silent.
+		"kept culiops/agent-box:base (1.0 GB): it holds a name", "`docker --host unix:///vm/docker.sock image rm " + idLegacy + "`",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// A box_image another config names that is not a valid image reference names no
+// image: it is skipped, with a WARN, and the prune goes on.
+func TestPruneSkipsAnInvalidPinWithAWarning(t *testing.T) {
+	u := newUpgradeStore(t)
+	writeFile(t, filepath.Join(u.h.xdg, "agent-box", "config.json"), cfgJSON("-bad image"))
+	writeFile(t, filepath.Join(u.h.root, "backups", "0.1-to-0.2-20261101T000000Z", "config.json"), cfgJSON("also bad"))
+	rc, out := u.setup(t, cliArgs{})
+	if rc != 0 || u.f.Has(pIDOld) {
+		t.Fatalf("rc %d, old present %v:\n%s", rc, u.f.Has(pIDOld), out)
+	}
+	if strings.Count(out, "WARN image: ignoring a box_image that is not a valid image reference") != 2 ||
+		!strings.Contains(out, filepath.Join(u.h.xdg, "agent-box", "config.json")) {
+		t.Fatalf("output:\n%s", out)
+	}
+}
+
+// A removal by several names that fails part-way has already untagged some of
+// them: the WARN says which and prints the line that puts each back.
+func TestPartialUntagPrintsTheRestoreLine(t *testing.T) {
+	u := newUpgradeStore(t)
+	const idMulti = "sha256:5656000000000000000000000000000000000000000000000000000000005656"
+	u.f.Add(local(idMulti, 1_000_000_000, dockerfake.Ref{Repo: "culiops/culibox", Tag: "2026-07-01"}, dockerfake.Ref{Repo: "culiops/culibox", Tag: "2026-07-02"}))
+	u.f.FailRm("culiops/culibox:2026-07-02")
+	rc, out := u.setup(t, cliArgs{PruneLocal: true})
+	if rc != 0 {
+		t.Fatalf("rc %d:\n%s", rc, out)
+	}
+	if !strings.Contains(out, "WARN image: could not remove old box image culiops/culibox:2026-07-01, culiops/culibox:2026-07-02") ||
+		!strings.Contains(out, "culiops/culibox:2026-07-01 was already taken off it; put it back with: `docker tag "+idMulti+" culiops/culibox:2026-07-01`") {
+		t.Fatalf("output:\n%s", out)
 	}
 }

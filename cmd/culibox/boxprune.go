@@ -38,6 +38,7 @@ type pinSource struct {
 type imagePins struct {
 	live     []string // box_image of every visible config, and of this one: never pruned
 	rollback []string // box_image of configs inside retained upgrade backups that no registry can supply again
+	warnings []string // configs whose box_image is not a valid image reference: skipped
 }
 
 // pins reads every config an instance sharing this Docker store could be running
@@ -107,12 +108,20 @@ func (s pinSource) readPins() (imagePins, error) {
 		if err != nil {
 			return imagePins{}, err
 		}
+		if err := config.ValidImageRef(ref); err != nil {
+			p.warnings = append(p.warnings, fmt.Sprintf("%s: %v", f, err))
+			continue
+		}
 		add(&p.live, ref)
 	}
 	for _, f := range dedupe(backups) {
 		ref, err := boxImageOf(f)
 		if err != nil {
 			return imagePins{}, err
+		}
+		if err := config.ValidImageRef(ref); err != nil {
+			p.warnings = append(p.warnings, fmt.Sprintf("%s: %v", f, err))
+			continue
 		}
 		// A registry ref can be pulled again by `box setup`; a dated tag or :base
 		// is only ever built here (box setup never pulls one), so what a restored
@@ -190,7 +199,7 @@ func boxSetupAndPrune(ctx context.Context, d boximage.Docker, image string, a cl
 		return rc
 	}
 	keep := append([]string{image}, made...)
-	pruneOldBoxImages(ctx, d, keep, orphan, a.PruneLocal, src, goos, w)
+	pruneOldBoxImages(ctx, d, keep, orphan, a.PruneLocal, src, w)
 	return rc
 }
 
@@ -206,7 +215,13 @@ func boxSetupAndPrune(ctx context.Context, d boximage.Docker, image string, a cl
 //   - images a registry can supply again (named only under ghcr.io/culiops/…, with
 //     a registry digest): the worst a wrong guess costs is a `box setup` pull;
 //   - the one image this setup orphaned (the configured name held it before the
-//     pull or build moved the name): the default :base upgrade leak.
+//     pull or build moved the name): the default :base upgrade leak. Founder
+//     decision a, 2026-11-16: this is auto-removed even though it is a local build
+//     and still carries its old dated tag, the one the previous setup advised
+//     pinning. An instance pinned to that tag from a config this process cannot
+//     see (its own CULIBOX_HOME or -config) and idle loses it, and needs `box
+//     setup -rebuild` and an updated box_image. The removal line says so, and
+//     -no-prune is the opt-out.
 //
 // Every other unused local box image is listed, with its size and the line that
 // removes it, and removed only with -prune-local. All of it is subject to the keep
@@ -229,13 +244,16 @@ func boxSetupAndPrune(ctx context.Context, d boximage.Docker, image string, a cl
 //
 // Every problem is a warning. The image was set up; failing setup over leftovers
 // would turn a disk-space nicety into a broken install step.
-func pruneOldBoxImages(ctx context.Context, d boximage.Docker, keep []string, orphan string, local bool, src pinSource, goos string, w io.Writer) {
+func pruneOldBoxImages(ctx context.Context, d boximage.Docker, keep []string, orphan string, local bool, src pinSource, w io.Writer) {
 	ctx, cancel := context.WithTimeout(ctx, pruneTimeout)
 	defer cancel()
 	pins, err := src.pins(ctx)
 	if err != nil {
 		fmt.Fprintf(w, "WARN image: old box images not removed: cannot read a config that could pin one (%v)\n", err)
 		return
+	}
+	for _, msg := range pins.warnings {
+		fmt.Fprintf(w, "WARN image: ignoring a box_image that is not a valid image reference (%s)\n", msg)
 	}
 	res, err := d.PruneOld(ctx, boximage.PruneInput{Keep: keep, Orphan: orphan, Pins: pins.live, RollbackPins: pins.rollback, Local: local})
 	if err != nil {
@@ -244,12 +262,24 @@ func pruneOldBoxImages(ctx context.Context, d boximage.Docker, keep []string, or
 	}
 	for _, im := range res.Removed {
 		fmt.Fprintf(w, "removed old box image %s (%d bytes, %s)\n", im.Name(), im.Size, humanBytes(im.Size))
+		if im.Orphaned && len(im.Refs) > 0 {
+			// The names it still had include the dated tag the previous setup advised pinning.
+			fmt.Fprintf(w, "  this is the image this setup replaced. An instance pinned to %s from a config box setup cannot see (its own CULIBOX_HOME or -config) needs `culibox box setup -rebuild` and its box_image updated; -no-prune keeps it\n", strings.Join(im.Refs, " or "))
+		}
 	}
 	for _, f := range res.Failed {
 		fmt.Fprintf(w, "WARN image: could not remove old box image %s: %v\n", f.Image.Name(), f.Err)
+		for _, name := range f.Lost {
+			fmt.Fprintf(w, "  %s was already taken off it; put it back with: %s\n", name, dockerLine(d, "tag", f.Image.ID, name))
+		}
 	}
 	for _, im := range res.KeptForRollback {
-		fmt.Fprintf(w, "kept %s: a saved upgrade backup's config pins it and it cannot be pulled again (a rollback that restores the backup needs it); %s\n", im.Name(), rollbackRemoval(im, goos))
+		fmt.Fprintf(w, "kept %s (%s): a saved upgrade backup's config pins it and it cannot be pulled again (a rollback that restores the backup needs it); when you no longer need that rollback: %s\n",
+			im.Name(), humanBytes(im.Size), dockerLine(d, append([]string{"image", "rm"}, im.RmArgs()...)...))
+	}
+	for _, im := range res.KeptDefault {
+		fmt.Fprintf(w, "kept %s (%s): it holds a name an instance with no box_image runs (culiops/culibox:base), or a CuliBox from before the rename runs (culiops/agent-box:base); when no instance needs it: %s\n",
+			im.Name(), humanBytes(im.Size), dockerLine(d, append([]string{"image", "rm"}, im.RmArgs()...)...))
 	}
 	if len(res.Removed) > 0 {
 		fmt.Fprintf(w, "removed %d old box image(s), freeing up to %d bytes (%s; layers shared with a kept image stay)\n",
@@ -262,32 +292,20 @@ func pruneOldBoxImages(ctx context.Context, d boximage.Docker, keep []string, or
 		}
 		fmt.Fprintf(w, "kept %d unused local box image(s), %s in all. They cannot be pulled again, and another CuliBox on this Docker may pin one, so none is removed unless you ask:\n", n, humanBytes(total))
 		for _, im := range res.KeptLocal {
-			fmt.Fprintf(w, "  %s (%s): %s\n", im.Name(), humanBytes(im.Size), rmLine(im, goos))
+			fmt.Fprintf(w, "  %s (%s): %s\n", im.Name(), humanBytes(im.Size), dockerLine(d, append([]string{"image", "rm"}, im.RmArgs()...)...))
 		}
-		fmt.Fprintln(w, "or run `culibox box setup -prune-local` to remove all of them")
+		fmt.Fprintln(w, "or run `culibox box setup -prune-local`, which removes ALL of the images listed above")
 	}
-	if len(res.Removed) == 0 && len(res.Failed) == 0 && len(res.KeptLocal) == 0 && len(res.KeptForRollback) == 0 {
+	if len(res.Removed) == 0 && len(res.Failed) == 0 && len(res.KeptLocal) == 0 && len(res.KeptForRollback) == 0 && len(res.KeptDefault) == 0 {
 		fmt.Fprintln(w, "no old box images to remove")
 	}
 }
 
-// rollbackRemoval ends the "kept for rollback" line: how to free the image later.
-// -prune-local does not (a rollback image is always kept), and on macOS the plain
-// docker CLI is not the box VM's.
-func rollbackRemoval(im boximage.StoreImage, goos string) string {
-	if goos == "darwin" {
-		return "remove it from the box VM's Docker when you no longer need that rollback"
-	}
-	return "remove it with `docker image rm " + strings.Join(im.RmArgs(), " ") + "` when you no longer need that rollback"
-}
-
-// rmLine is the command that removes the image. On macOS the plain docker CLI is
-// not the box VM's, so the line is the -prune-local one.
-func rmLine(im boximage.StoreImage, goos string) string {
-	if goos == "darwin" {
-		return "`culibox box setup -prune-local`"
-	}
-	return "`docker image rm " + strings.Join(im.RmArgs(), " ") + "`"
+// dockerLine is the docker command to run by hand, as a code span. It carries the
+// global flags the image code uses (on macOS: the box VM's --host), so it reaches
+// the daemon that holds the image, not the user's own docker.
+func dockerLine(d boximage.Docker, args ...string) string {
+	return "`docker " + strings.Join(append(append([]string(nil), d.Args...), args...), " ") + "`"
 }
 
 // humanBytes is n in decimal units, as docker prints image sizes.

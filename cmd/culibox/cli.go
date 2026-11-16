@@ -37,7 +37,7 @@ const usage = `usage:
   culibox doctor  [-config <path>]                     check this machine; prints no secrets
   culibox bug-report [-config <path>]                  redacted diagnostic bundle to paste into a bug report (macOS: | pbcopy)
   culibox init [-config <path>]                        guided first-time setup: dependencies, folders, VM size, Claude token, box, doctor (needs a terminal)
-  culibox box setup [-rebuild] [-recreate] [-force] [-no-prune|-prune-local]   build or pull the box image, then remove old box images that a registry can supply again (macOS: also the box VM)
+  culibox box setup [-rebuild] [-recreate] [-force] [-no-prune|-prune-local]   build or pull the box image, then remove the image it replaced and old box images a registry can supply again; -no-prune keeps all (macOS: also the box VM)
   culibox box status                                   list boxes (macOS: and the box VM)
   culibox box stop [-force]                            macOS: stop the box VM
   culibox box share list|add <dir> [-ro]|rm <dir>|apply [-force]   macOS: the folders the box VM shares (apply restarts the VM)
@@ -145,7 +145,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	rebuild := fs.Bool("rebuild", false, "box setup: rebuild the image even if it is current")
 	recreate := fs.Bool("recreate", false, "box setup: delete and recreate the box VM (macOS)")
 	noPrune := fs.Bool("no-prune", false, "box setup: keep old box images instead of removing the unused ones")
-	pruneLocal := fs.Bool("prune-local", false, "box setup: also remove unused box images built here, which nothing can pull again")
+	pruneLocal := fs.Bool("prune-local", false, "box setup: also remove ALL unused box images built here; nothing can pull them again, and another CuliBox on this Docker may pin one")
 	force := fs.Bool("force", false, "box stop, box setup, box share apply: go ahead even with boxes running or the VM state unknown")
 	ro := fs.Bool("ro", false, "box share add: share the folder read-only")
 	base := fs.String("base", "", "clone fetch: the branch in clone_of the fetched range starts after (default main)")

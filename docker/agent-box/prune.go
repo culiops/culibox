@@ -42,6 +42,9 @@ type StoreImage struct {
 	Names   []Ref    // the rows behind Refs (repository known)
 	Labeled bool     // carries LabelHash: built from CuliBox's Dockerfile
 	Size    int64    // bytes, from image inspect (filled for removal candidates)
+	// Orphaned: this is the image the setup replaced (PruneInput.Orphan). It still
+	// carries the names it had, such as the dated tag a previous setup advised pinning.
+	Orphaned bool
 }
 
 // Name is how output names the image: its names, or a short ID when it has none.
@@ -126,6 +129,10 @@ type PruneInput struct {
 type PruneFailure struct {
 	Image StoreImage
 	Err   error
+	// Lost are names the failed removal had already taken off the image (an image
+	// with several names is untagged name by name): `docker tag <id> <name>` puts
+	// each back.
+	Lost []string
 }
 
 // PruneResult is what PruneOld did.
@@ -135,6 +142,10 @@ type PruneResult struct {
 	// KeptForRollback are images kept only because a retained backup's config pins
 	// them and no registry can supply them again.
 	KeptForRollback []StoreImage
+	// KeptDefault are unused box images kept only because they hold a default name:
+	// culiops/culibox:base, or the pre-rename culiops/agent-box:base that a CuliBox
+	// from before the rename runs. Sizes are filled.
+	KeptDefault []StoreImage
 	// KeptLocal are unused box images that cannot be pulled again, left alone
 	// because Local was not set. Sizes are filled.
 	KeptLocal []StoreImage
@@ -210,7 +221,11 @@ func (d Docker) PruneOld(ctx context.Context, in PruneInput) (PruneResult, error
 		}
 		keep[id] = true
 	}
-	pinned, err := d.resolveAll(ctx, append(append([]string(nil), defaultPins...), in.Pins...))
+	defaults, err := d.resolveAll(ctx, defaultPins)
+	if err != nil {
+		return res, err
+	}
+	pinned, err := d.resolveAll(ctx, in.Pins)
 	if err != nil {
 		return res, err
 	}
@@ -222,9 +237,12 @@ func (d Docker) PruneOld(ctx context.Context, in PruneInput) (PruneResult, error
 	for _, im := range imgs {
 		switch {
 		case !im.isBox(in.Orphan), keep[im.ID], used[im.ID], pinned[im.ID]:
+		case defaults[im.ID]:
+			res.KeptDefault = append(res.KeptDefault, im)
 		case rollback[im.ID]:
 			res.KeptForRollback = append(res.KeptForRollback, im)
 		case im.ID == in.Orphan, im.rePullable(), in.Local:
+			im.Orphaned = im.ID == in.Orphan
 			due = append(due, im)
 		default:
 			local = append(local, im)
@@ -234,6 +252,12 @@ func (d Docker) PruneOld(ctx context.Context, in PruneInput) (PruneResult, error
 		return res, err
 	}
 	if err := d.fillSizes(ctx, local); err != nil {
+		return res, err
+	}
+	if err := d.fillSizes(ctx, res.KeptDefault); err != nil {
+		return res, err
+	}
+	if err := d.fillSizes(ctx, res.KeptForRollback); err != nil {
 		return res, err
 	}
 	res.KeptLocal = local
@@ -249,8 +273,8 @@ func (d Docker) PruneOld(ctx context.Context, in PruneInput) (PruneResult, error
 			res.Failed = append(res.Failed, PruneFailure{Image: im, Err: errors.New("a container started using it since the listing; kept")})
 			continue
 		}
-		if err := d.removeImage(ctx, im); err != nil {
-			res.Failed = append(res.Failed, PruneFailure{Image: im, Err: err})
+		if lost, err := d.removeImage(ctx, im); err != nil {
+			res.Failed = append(res.Failed, PruneFailure{Image: im, Err: err, Lost: lost})
 			continue
 		}
 		res.Removed = append(res.Removed, im)
@@ -427,22 +451,30 @@ func (d Docker) fillSizes(ctx context.Context, imgs []StoreImage) error {
 // of which takes the image with it (docker refuses a bare ID with several names,
 // and -f would also remove an image a stopped container uses). It then checks the
 // image is gone: an image still there, or one whose state cannot be read, is a
-// failure and its bytes are not counted as freed.
-func (d Docker) removeImage(ctx context.Context, im StoreImage) error {
+// failure and its bytes are not counted as freed. When a removal by several names
+// fails part-way, lost names the ones already taken off the image.
+func (d Docker) removeImage(ctx context.Context, im StoreImage) (lost []string, err error) {
 	out, err := d.command(ctx, append([]string{"image", "rm"}, im.RmArgs()...)...).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			msg = err.Error()
 		}
-		return errors.New(msg)
+		if len(im.Refs) > 1 {
+			for _, r := range im.Refs {
+				if id, ok, cerr := d.ImageID(ctx, r); cerr == nil && (!ok || id != im.ID) {
+					lost = append(lost, r)
+				}
+			}
+		}
+		return lost, errors.New(msg)
 	}
 	_, still, err := d.ImageID(ctx, im.ID)
 	switch {
 	case err != nil:
-		return fmt.Errorf("removed, but could not confirm it is gone: %w", err)
+		return nil, fmt.Errorf("removed, but could not confirm it is gone: %w", err)
 	case still:
-		return errors.New("untagged, but the image is still in the store (another reference holds it)")
+		return nil, errors.New("untagged, but the image is still in the store (another reference holds it)")
 	}
-	return nil
+	return nil, nil
 }

@@ -522,3 +522,76 @@ func TestStoreImageNameAndRmArgs(t *testing.T) {
 		t.Fatalf("one name: %v", got)
 	}
 }
+
+// An image held only by a default name (here the pre-rename :base) is not
+// removed, and is reported with its size instead of passing in silence.
+func TestPruneReportsAnImageKeptOnlyByADefaultName(t *testing.T) {
+	f := dockerfake.New(t)
+	f.Add(boxImg(idNew, 1, ref("culiops/culibox", "base", "")))
+	f.Add(boxImg(idOld, 7, ref("culiops/agent-box", "base", "")))
+	f.Add(boxImg(idOlder, 9, ref("culiops/culibox", "2026-01-01", ""))) // a plain local build: listed apart
+	res, err := prune(t, f, PruneInput{Keep: []string{"culiops/culibox:base"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.KeptDefault) != 1 || res.KeptDefault[0].Name() != "culiops/agent-box:base" || res.KeptDefault[0].Size != 7 {
+		t.Fatalf("kept by default name: %+v", res.KeptDefault)
+	}
+	if len(res.KeptLocal) != 1 || len(res.Removed) != 0 || !f.Has(idOld) {
+		t.Fatalf("listed %v removed %v", names(res.KeptLocal), names(res.Removed))
+	}
+}
+
+// A kept rollback image comes back with its size, for the output.
+func TestPruneFillsTheSizeOfAKeptRollbackImage(t *testing.T) {
+	f, in := newStore(t)
+	f.Add(boxImg(idOld, 5, ref("culiops/culibox", "2026-10-01", "")))
+	in.RollbackPins = []string{"culiops/culibox:2026-10-01"}
+	res, err := prune(t, f, in)
+	if err != nil || len(res.KeptForRollback) != 1 || res.KeptForRollback[0].Size != 5 {
+		t.Fatalf("%+v %v", res.KeptForRollback, err)
+	}
+}
+
+// The orphan is marked, so the caller can say what its old names cost.
+func TestPruneMarksTheOrphan(t *testing.T) {
+	f := dockerfake.New(t)
+	f.Add(boxImg(idNew, 1, ref("culiops/culibox", "base", "")))
+	f.Add(boxImg(idOld, 5, ref("culiops/culibox", "2026-10-01", "")))
+	f.Add(pulledImg(idOlder, 6, digestOld)) // removed too, but not the orphan
+	res, err := prune(t, f, PruneInput{Keep: []string{"culiops/culibox:base"}, Orphan: idOld})
+	if err != nil || len(res.Removed) != 2 {
+		t.Fatalf("%v %v", names(res.Removed), err)
+	}
+	for _, im := range res.Removed {
+		if im.Orphaned != (im.ID == idOld) {
+			t.Errorf("%s: Orphaned = %v", im.Name(), im.Orphaned)
+		}
+	}
+}
+
+// An image with several names is untagged name by name. When that fails part-way
+// the failure names the ones already gone, so they can be put back.
+func TestPruneNamesTheLostNamesOfAPartialUntag(t *testing.T) {
+	f := dockerfake.New(t)
+	f.Add(boxImg(idNew, 1, ref("culiops/culibox", "base", "")))
+	f.Add(boxImg(idOld, 5, ref("culiops/culibox", "2026-10-01", ""), ref("culiops/culibox", "2026-10-02", "")))
+	f.FailRm("culiops/culibox:2026-10-02")
+	res, err := prune(t, f, PruneInput{Keep: []string{"culiops/culibox:base"}, Local: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Failed) != 1 || len(res.Failed[0].Lost) != 1 || res.Failed[0].Lost[0] != "culiops/culibox:2026-10-01" || len(res.Removed) != 0 {
+		t.Fatalf("failed %+v removed %v", res.Failed, names(res.Removed))
+	}
+	// Nothing was lost when nothing was untagged.
+	f2 := dockerfake.New(t)
+	f2.Add(boxImg(idNew, 1, ref("culiops/culibox", "base", "")))
+	f2.Add(boxImg(idOld, 5, ref("culiops/culibox", "2026-10-01", ""), ref("culiops/culibox", "2026-10-02", "")))
+	f2.FailRm("culiops/culibox:2026-10-01")
+	f2.FailRm("culiops/culibox:2026-10-02")
+	res, err = prune(t, f2, PruneInput{Keep: []string{"culiops/culibox:base"}, Local: true})
+	if err != nil || len(res.Failed) != 1 || len(res.Failed[0].Lost) != 0 {
+		t.Fatalf("failed %+v err %v", res.Failed, err)
+	}
+}
