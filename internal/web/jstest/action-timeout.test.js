@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { toastFailText } = require("../static/toaststack.js");
+const nm = require("../static/notifymodel.js");
 const { withDeadline, actionTimeoutError, ACTION_TIMEOUT_MS, ACTION_SLOW_TIMEOUT_MS } = require("../static/deadline.js");
 
 const STATIC = path.join(__dirname, "..", "static");
@@ -168,7 +169,7 @@ test("End: a DELETE that never answers ends in the standard error; the row is no
   await done;
   assert.strictEqual(hang.calls[0].aborted, true);
   assert.strictEqual(ctx.killing.has("s1"), false, "killing is cleared: no reload needed");
-  assert.strictEqual(ctx.endedByMe.has("s1"), false, "the session is not ours to announce as ended");
+  assert.strictEqual(ctx.endedByMe.has("s1"), true, "the mark stays: if the DELETE finishes late, the poll must not announce 'Ended' for it");
   assert.deepStrictEqual(out.pending[1], ["done", {
     msg: "End failed: The server did not answer within 60 s.",
     opts: { error: true, human: "Could not end docs.", detail: "The server did not answer within 60 s." },
@@ -188,6 +189,50 @@ test("End: a late success after the timeout is silent; nothing in the page is ch
   hang.calls[0].answer({ ok: true, status: 204, json: async () => null });
   await tick();
   assert.strictEqual(JSON.stringify([out.toasts, out.pending, out.closed, out.refreshes, [...ctx.killing]]), before);
+});
+
+// What the 3 s poll hands notifyStep: endedLive(endedByMe, now) as the ids this client ended.
+const ON = { master: true, block: true, done: true, ended: true, message: false };
+function pollNotes(ctx, before, after, now) {
+  const c = (n) => ({ now: n, focused: false, prefs: ON, endedByMe: nm.endedLive(ctx.endedByMe, n) });
+  const seed = nm.notifyStep(null, before, c(now));
+  return nm.notifyStep(seed.next, after, c(now + 3000)).notes;
+}
+
+test("End: a late success after the timeout gives no 'Ended' notification; a refusal does not keep the mark", async () => {
+  const live = [{ id: "s1", name: "docs", activity: "working" }];
+  const { ctx, clk, hang } = page();
+  const done = ctx.killSession("s1");
+  await tick();
+  await clk.advance(ACTION_TIMEOUT_MS);
+  await done;
+  hang.calls[0].answer({ ok: true, status: 204, json: async () => null }); // the server finished after the page gave up
+  await tick();
+  const t = Date.now();
+  assert.deepStrictEqual(pollNotes(ctx, live, [], t), [], "the session is gone from the next poll, and the user ended it: nothing to announce");
+  assert.deepStrictEqual(pollNotes(ctx, live, [{ id: "s1", name: "docs", activity: "exited", exited: true, status: "exited" }], t), []);
+  // The mark is not forever: ten minutes on, an end nobody here asked for notifies again.
+  assert.strictEqual(pollNotes(ctx, live, [], t + 10 * 60 * 1000).length, 1);
+  // Control: a refusal (the session is still running) drops the mark, so a later end by someone else notifies.
+  const r = page();
+  const k = r.ctx.killSession("s1");
+  await tick();
+  r.hang.calls[0].answer({ ok: false, status: 500, statusText: "x", headers: { get: () => "" }, json: async () => ({ error: "kill failed" }) });
+  await k;
+  assert.strictEqual(r.ctx.endedByMe.has("s1"), false);
+  assert.strictEqual(pollNotes(r.ctx, live, [], Date.now()).length, 1);
+});
+
+test("Restart: a late success after the timeout gives no 'Ended' notification for the old session", async () => {
+  const live = [{ id: "s1", name: "docs", activity: "working" }];
+  const { ctx, clk, hang } = page();
+  const done = ctx.restartSessionRun({ id: "s1", name: "docs" });
+  await tick();
+  await clk.advance(ACTION_SLOW_TIMEOUT_MS);
+  await done;
+  hang.calls[0].answer({ ok: true, status: 200, json: async () => ({ id: "s2" }) });
+  await tick();
+  assert.deepStrictEqual(pollNotes(ctx, live, [{ id: "s1", name: "docs", activity: "exited", exited: true, status: "exited" }, { id: "s2", name: "docs", activity: "working" }], Date.now()), []);
 });
 
 test("End: a server that answers in time is unchanged: no timer left, the same result", async () => {
@@ -221,7 +266,7 @@ test("Restart: a POST that never answers is 'Could not restart <name>.' with Cop
   await done;
   assert.strictEqual(hang.calls[0].aborted, true);
   assert.deepStrictEqual(out.toasts, [["Could not restart docs.", { error: true, detail: "The server did not answer within 120 s." }]]);
-  assert.strictEqual(ctx.endedByMe.has("s1"), false);
+  assert.strictEqual(ctx.endedByMe.has("s1"), true, "the old session's exit stays ours: no 'Ended' notification if the restart lands late");
   assert.strictEqual(ctx.restartedByMe.has("s1"), false, "the page does not claim a restart it never saw");
   assert.strictEqual(out.refreshes, 1, "the poll shows the new session if the server did restart it");
   assert.deepStrictEqual(out.closed, []);

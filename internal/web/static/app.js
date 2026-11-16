@@ -1898,8 +1898,8 @@ async function restartSessionRun(s) {
   try { res = await postSessionAction(s.id, "restart", ACTION_SLOW_TIMEOUT_MS); }
   catch (e) { endedByMe.delete(s.id); throw e; }
   if (res.timedOut) {
-    // No answer: the restart may still happen, and the next poll shows it. Nothing here claims it did not.
-    endedByMe.delete(s.id);
+    // No answer: the restart may still happen, and the next poll shows it. Nothing here claims it did not, so the
+    // ended-by-me mark stays (it expires by itself): the old session's exit must not notify "Ended" when the server finishes.
     showActionTimeout("restart " + (s.name || s.id), res);
     await refreshSessions();
     return;
@@ -6948,7 +6948,10 @@ async function killSession(id, batch) {
   }
   if (failure) {
     killing.delete(id);
-    endedByMe.delete(id); // it is still running: a later end is not ours
+    // A refusal or a failure leaves it running: a later end is not ours. A request that got no answer in time (#257) may
+    // still finish, and the poll that then sees the session gone must not announce "Ended" for what this tab ended: the
+    // mark stays and expires by itself (ENDED_BY_ME_MS).
+    if (!failure.timedOut) endedByMe.delete(id);
     await refreshSessions();
     return;
   }
