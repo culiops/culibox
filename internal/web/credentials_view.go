@@ -212,17 +212,25 @@ type credSignInBody struct {
 // signInFor reads the profile's sign-in state from the local token cache. It
 // makes no network call and is memoised per request in seen, so connections that
 // share a profile share one read.
-func signInFor(ctx context.Context, profile string, now time.Time, seen map[string]*credSignInBody) *credSignInBody {
-	if b, ok := seen[profile]; ok {
+func signInFor(ctx context.Context, profile string, direct bool, now time.Time, seen map[string]*credSignInBody) *credSignInBody {
+	memo := profile
+	if direct {
+		memo = "direct\x00" + profile // sso_direct judges the same profile more strictly
+	}
+	if b, ok := seen[memo]; ok {
 		return b
 	}
-	r := broker.SignInOf(ctx, profile, now)
+	read := broker.SignInOf
+	if direct {
+		read = broker.SignInOfDirect
+	}
+	r := read(ctx, profile, now)
 	b := &credSignInBody{State: string(r.State)}
 	if !r.Until.IsZero() {
 		u := r.Until.UTC()
 		b.Until = &u
 	}
-	seen[profile] = b
+	seen[memo] = b
 	return b
 }
 
@@ -420,7 +428,7 @@ func (s *Server) credView() credViewBody {
 		if e.err != "" {
 			b.Status = credInvalid
 		} else {
-			b.SignIn = signInFor(signInCtx, e.conn.SourceProfile, signInNow, signIns)
+			b.SignIn = signInFor(signInCtx, e.conn.SourceProfile, e.conn.SSODirect(), signInNow, signIns)
 		}
 		if el := e.conn.Elevate; el != nil {
 			b.Elevate = &credElevateBody{RoleARN: el.RoleARN, MaxMinutes: el.Max(), AllowIAM: el.AllowIAM, BoxBucketPrefix: el.BoxBucketPrefix, PassRolePrefix: el.PassRolePrefix}

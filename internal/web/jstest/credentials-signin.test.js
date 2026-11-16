@@ -24,11 +24,16 @@ test("credSignIn: green only for a signed-in session, with its expiry in words",
   assert.deepStrictEqual(credSignIn({ status: "ok", signin: sin("signed_in") }, NOW), { cls: "ready", text: "Signed in", sub: "" });
 });
 
-test("credSignIn: signed in is not shown once its expiry has passed, even if the server's answer is older", () => {
+test("credSignIn: signed in is not shown once its expiry has passed, and it is not called expired either (the server may say renewable)", () => {
   const past = new Date(2026, 10, 16, 11, 0, 0);
   const s = credSignIn({ status: "ok", signin: sin("signed_in", { until: iso(past) }) }, NOW);
-  assert.notStrictEqual(s.cls, "ready");
-  assert.strictEqual(s.text, "Sign-in expired");
+  assert.deepStrictEqual(s, { cls: "idle", text: "Sign-in may have expired", sub: "reload to re-check" });
+});
+
+test("credSignIn: an incomplete SSO profile is amber and names the profile", () => {
+  const s = credSignIn({ status: "ok", source_profile: "half-p", signin: sin("incomplete") }, NOW);
+  assert.deepStrictEqual([s.cls, s.text], ["locked", "SSO profile incomplete"]);
+  assert.match(s.sub, /half-p/);
 });
 
 test("credSignIn: expired is amber, never signed in, renewable and unknown are neutral, none of them green", () => {

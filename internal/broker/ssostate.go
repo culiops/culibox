@@ -37,6 +37,10 @@ const (
 	// SignInNotSSO: the profile is not an SSO one (static keys, credential_process
 	// and the like): there is no sign-in to be in or out of.
 	SignInNotSSO SignInState = "not_sso"
+	// SignInIncomplete: the profile has SSO settings but not all of them (no
+	// sso_start_url, say): the SDK tries SSO and fails, so this is neither "no
+	// sign-in needed" nor a sign-in state.
+	SignInIncomplete SignInState = "incomplete"
 	// SignInNoProfile: the profile is not in the AWS config.
 	SignInNoProfile SignInState = "no_profile"
 )
@@ -68,6 +72,18 @@ const maxSourceDepth = 5
 // state against now. A profile that assumes a role through another is judged by
 // the profile it signs in with. It never touches the network.
 func SignInOf(ctx context.Context, profile string, now time.Time) SignIn {
+	return signInOf(ctx, profile, now, false)
+}
+
+// SignInOfDirect is SignInOf for an sso_direct connection's source profile: the
+// profile must itself be a pure IAM Identity Center one (the check every
+// sso_direct mint makes, notSSOProfile), so an assume-role or static-key
+// profile is SignInNotSSO however it would otherwise resolve.
+func SignInOfDirect(ctx context.Context, profile string, now time.Time) SignIn {
+	return signInOf(ctx, profile, now, true)
+}
+
+func signInOf(ctx context.Context, profile string, now time.Time, direct bool) SignIn {
 	sc, err := loadProfile(ctx, profile)
 	if err != nil {
 		var missing awsconfig.SharedConfigProfileNotExistError
@@ -76,20 +92,40 @@ func SignInOf(ctx context.Context, profile string, now time.Time) SignIn {
 		}
 		return SignIn{State: SignInUnknown}
 	}
+	if direct && notSSOProfile(sc) != "" {
+		return SignIn{State: SignInNotSSO}
+	}
+	// The SDK's own order (config resolve_credentials.go, resolveCredsFromProfile):
+	// a source profile, then static keys, credential_source and web identity,
+	// and only then SSO. A profile with static keys and an sso_session signs in
+	// with the keys, so it has no SSO sign-in to be in or out of.
 	for depth := 0; sc.Source != nil && depth < maxSourceDepth; depth++ {
 		sc = *sc.Source
 	}
+	switch {
+	case sc.Source != nil:
+		return SignIn{State: SignInUnknown} // a chain longer than any real one
+	case sc.Credentials.HasKeys(), sc.CredentialSource != "", sc.WebIdentityTokenFile != "":
+		return SignIn{State: SignInNotSSO}
+	case sc.SSOSessionName == "" && sc.SSORegion == "" && sc.SSOAccountID == "" && sc.SSOStartURL == "" && sc.SSORoleName == "":
+		return SignIn{State: SignInNotSSO}
+	}
+	// SSO settings are present: the SDK tries SSO and fails on an incomplete
+	// profile, so that is not "no sign-in needed".
 	var key string
 	switch {
 	case sc.SSOSessionName != "":
-		if sc.SSOSession == nil {
-			return SignIn{State: SignInUnknown}
+		if sc.SSOSession == nil || sc.SSOSession.SSORegion == "" || sc.SSOSession.SSOStartURL == "" ||
+			(sc.SSORegion != "" && sc.SSORegion != sc.SSOSession.SSORegion) ||
+			(sc.SSOStartURL != "" && sc.SSOStartURL != sc.SSOSession.SSOStartURL) {
+			return SignIn{State: SignInIncomplete}
 		}
 		key = sc.SSOSession.Name
-	case sc.SSOStartURL != "":
-		key = sc.SSOStartURL
 	default:
-		return SignIn{State: SignInNotSSO}
+		if sc.SSORegion == "" || sc.SSOStartURL == "" || sc.SSOAccountID == "" || sc.SSORoleName == "" {
+			return SignIn{State: SignInIncomplete}
+		}
+		key = sc.SSOStartURL
 	}
 	return tokenState(key, sc.SSOSessionName != "", now)
 }
@@ -102,6 +138,20 @@ type ssoToken struct {
 	RefreshToken string `json:"refreshToken"`
 	ClientID     string `json:"clientId"`
 	ClientSecret string `json:"clientSecret"`
+	// RegistrationExpiresAt is when the OIDC client registration the refresh
+	// needs lapses (the AWS CLI writes it; the SDK does not look at it).
+	RegistrationExpiresAt string `json:"registrationExpiresAt"`
+}
+
+// registrationLive: no registrationExpiresAt means nothing says the client is
+// gone; one that is present must parse and be in the future, else the refresh
+// cannot work and the token is simply expired.
+func registrationLive(at string, now time.Time) bool {
+	if at == "" {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339, at)
+	return err == nil && now.Before(t)
 }
 
 // tokenState reads the cache file for key (the sso_session name, or a legacy
@@ -113,6 +163,17 @@ func tokenState(key string, session bool, now time.Time) SignIn {
 	if err != nil {
 		return SignIn{State: SignInUnknown}
 	}
+	// Only a regular file is opened: open(2) on a FIFO blocks until a writer
+	// shows up, which would hang the credentials page. The SDK's loader would
+	// not read such a path either (it is not a token), so it is unknown.
+	if fi, err := os.Stat(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return SignIn{State: SignInNever}
+		}
+		return SignIn{State: SignInUnknown}
+	} else if !fi.Mode().IsRegular() {
+		return SignIn{State: SignInUnknown}
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -121,6 +182,9 @@ func tokenState(key string, session bool, now time.Time) SignIn {
 		return SignIn{State: SignInUnknown}
 	}
 	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return SignIn{State: SignInUnknown}
+	}
 	raw, err := io.ReadAll(io.LimitReader(f, ssoCacheMax+1))
 	if err != nil || len(raw) > ssoCacheMax {
 		return SignIn{State: SignInUnknown}
@@ -137,7 +201,7 @@ func tokenState(key string, session bool, now time.Time) SignIn {
 	switch {
 	case now.Before(exp):
 		return SignIn{State: SignedIn, Until: exp}
-	case session && t.RefreshToken != "" && t.ClientID != "" && t.ClientSecret != "":
+	case session && t.RefreshToken != "" && t.ClientID != "" && t.ClientSecret != "" && registrationLive(t.RegistrationExpiresAt, now):
 		return SignIn{State: SignInRenewable, Until: exp}
 	}
 	return SignIn{State: SignInExpired, Until: exp}

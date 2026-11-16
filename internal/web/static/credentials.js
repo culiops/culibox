@@ -176,7 +176,8 @@ function credSignIn(e, now) {
     case "signed_in": {
       // An answer that was true when the page loaded and has run out since is not shown as green.
       const t = until ? new Date(until) : null;
-      if (t && !isNaN(t.getTime()) && t.getTime() <= n.getTime()) return { cls: "locked", text: "Sign-in expired", sub: credSignInWhere(e) };
+      // The server may now say renewable or expired, and this page cannot tell which: say that, neutrally, not "expired".
+      if (t && !isNaN(t.getTime()) && t.getTime() <= n.getTime()) return { cls: "idle", text: "Sign-in may have expired", sub: "reload to re-check" };
       return { cls: "ready", text: "Signed in", sub: until && credClock(until, n) ? "until " + credClock(until, n) : "" };
     }
     case "expired":
@@ -188,6 +189,8 @@ function credSignIn(e, now) {
     case "not_sso":
       if (e.mode === "sso_direct") return { cls: "locked", text: "Not an SSO profile", sub: "SSO role directly needs one" };
       return { cls: "idle", text: "Not SSO", sub: "no sign-in needed" };
+    case "incomplete":
+      return { cls: "locked", text: "SSO profile incomplete", sub: e.source_profile ? e.source_profile + " lacks an SSO setting (start URL, region, account or role)" : "an SSO setting is missing" };
     case "no_profile":
       return { cls: "locked", text: "Profile not found", sub: e.source_profile ? e.source_profile + " is not in the AWS config" : "not in the AWS config" };
   }

@@ -25,6 +25,8 @@ func TestViewAWSSignInState(t *testing.T) {
 		"[profile old-p]\nsso_session = stale\nsso_account_id = 111111111111\nsso_role_name = R\n" +
 		"[profile bad-p]\nsso_session = broken\nsso_account_id = 111111111111\nsso_role_name = R\n" +
 		"[profile keys-p]\naws_access_key_id = AKIAFAKE\naws_secret_access_key = fakefake\n" +
+		"[profile ar-p]\nrole_arn = arn:aws:iam::333333333333:role/X\nsource_profile = in-p\n" +
+		"[profile half-p]\nsso_region = us-east-1\nsso_account_id = 111111111111\nsso_role_name = R\n" +
 		"[sso-session corp]\nsso_start_url = https://corp.awsapps.com/start\nsso_region = us-east-1\n" +
 		"[sso-session fresh]\nsso_start_url = https://fresh.awsapps.com/start\nsso_region = us-east-1\n" +
 		"[sso-session stale]\nsso_start_url = https://stale.awsapps.com/start\nsso_region = us-east-1\n" +
@@ -59,7 +61,8 @@ func TestViewAWSSignInState(t *testing.T) {
 	v := newViewFix(t, config.Config{AWSConnections: []config.AWSConnection{
 		mk("signed-in", "in-p", ""), mk("never", "out-p", ""), mk("expired", "old-p", ""), mk("unreadable", "bad-p", ""),
 		mk("static", "keys-p", ""), mk("ghost", "no-such-p", ""), mk("direct-in", "in-p", config.AWSModeSSODirect),
-		mk("direct-never", "out-p", config.AWSModeSSODirect),
+		mk("direct-never", "out-p", config.AWSModeSSODirect), mk("direct-assume", "ar-p", config.AWSModeSSODirect),
+		mk("direct-keys", "keys-p", config.AWSModeSSODirect), mk("assume-via-sso", "ar-p", ""), mk("half", "half-p", ""),
 	}}, nil)
 	b, raw := v.get(t)
 	got := map[string]string{}
@@ -79,7 +82,8 @@ func TestViewAWSSignInState(t *testing.T) {
 		}
 	}
 	want := map[string]string{"signed-in": "signed_in", "never": "never", "expired": "expired", "unreadable": "unknown",
-		"static": "not_sso", "ghost": "no_profile", "direct-in": "signed_in", "direct-never": "never"}
+		"static": "not_sso", "ghost": "no_profile", "direct-in": "signed_in", "direct-never": "never",
+		"direct-assume": "not_sso", "direct-keys": "not_sso", "assume-via-sso": "signed_in", "half": "incomplete"}
 	for name, st := range want {
 		if got[name] != st {
 			t.Errorf("%s: signin = %q, want %q", name, got[name], st)
