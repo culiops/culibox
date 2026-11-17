@@ -416,7 +416,7 @@ func TestDescribeStoreUnlockNotKept(t *testing.T) {
 func TestDescribeStoreFailedOutcomes(t *testing.T) {
 	cases := []struct {
 		action, detail, what string
-		parts               []Part
+		parts                []Part
 	}{
 		{"lock_failed", "not cleared: the key store refused to lock",
 			"encrypted store lock failed · not cleared: the key store refused to lock",
