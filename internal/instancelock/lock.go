@@ -35,3 +35,26 @@ func Acquire(dataDir string) (func(), error) {
 	}
 	return func() { f.Close() }, nil
 }
+
+// Held reports whether a live process holds the data dir's lock, without
+// creating serve.lock and without keeping any lock: it takes a shared lock
+// non-blocking and drops it at once. A serve starting in that instant fails
+// with ErrLocked and its own message; nothing else is affected.
+func Held(dataDir string) (bool, error) {
+	f, err := os.Open(filepath.Join(dataDir, "serve.lock"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return true, nil
+		}
+		return false, fmt.Errorf("instancelock: %w", err)
+	}
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false, nil
+}

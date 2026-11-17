@@ -11,8 +11,8 @@ Everything CuliBox writes lives in one data root: `$CULIBOX_HOME` (an absolute p
 
 | Key | Default | Meaning |
 |---|---|---|
-| `bind_addr` | `127.0.0.1:8899` | Listen address. Required when you write a config file. |
-| `password_env` | unset | Name of an env var holding the login password. Unset means a generated login token. |
+| `bind_addr` | `127.0.0.1:8899` | Listen address. Required when you write a config file. `culibox service install` refuses one that is not loopback. |
+| `password_env` | unset | Name of an env var holding the login password. Unset means a generated login token. `culibox service install` refuses password mode: the service carries no secret. |
 | `allow_public` | `false` | Must be `true` to bind all interfaces. Read the [security model](SECURITY.md) first. |
 | `allowed_hosts` | `[]` | Extra `Host` values to answer to, such as a reverse proxy's hostname. |
 | `default_cwd` | your home | Default workspace. Must not be your home when anything runs boxed. |
