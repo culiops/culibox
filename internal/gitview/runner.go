@@ -21,12 +21,18 @@ const (
 	defaultReuse       = 2 * time.Second
 	defaultIdle        = 5 * time.Minute
 	defaultMaxParallel = 2
+	// baseReuse is how long a base answer is trusted for one HEAD. HEAD moving
+	// is what usually changes it, but a fetch or a branch update can move the
+	// base ref (and so the merge base) with HEAD where it is.
+	baseReuse = 30 * time.Second
 
 	maxStatusEntries = 5000
 	// maxStatusBytes bounds the porcelain buffer. Hitting it means far more than
 	// maxStatusEntries paths, so it reads as "toomany".
 	maxStatusBytes = 8 << 20
 	maxDiffBytes   = 2 << 20
+	// maxBaseBytes bounds what the two base runs print: five ref records and one id.
+	maxBaseBytes   = 64 << 10
 	maxReasonRunes = 200
 	removeTimeout  = 10 * time.Second
 )
@@ -43,6 +49,10 @@ type Status struct {
 	State  string `json:"state"`
 	Reason string `json:"reason,omitempty"`
 	Top    string `json:"top,omitempty"`
+	// Branch is the checked-out branch, "" for a detached HEAD; Head is the
+	// commit HEAD is at, "" for a repository with no commits.
+	Branch string `json:"branch,omitempty"`
+	Head   string `json:"head,omitempty"`
 	// RootRel is where the requested tree root sits inside Top (slash form,
 	// "." for Top itself). The web handler sets it per request; the runner
 	// and its cache, shared by every root of one checkout, leave it empty.
@@ -50,6 +60,30 @@ type Status struct {
 	NoHead  bool    `json:"noHead,omitempty"`
 	Entries []Entry `json:"entries"`
 }
+
+// BaseInfo is what branch-scoped review compares against. State is one of ok,
+// nobase (no base branch found, no commits, or no history in common with it),
+// notrepo, unavailable. For ok, BaseRef is the full ref the server picked,
+// BaseName its short form for display ("main" or "origin/main"), MergeBase the
+// merge base of HEAD and BaseRef, and Ahead whether HEAD is past it. Reason
+// carries git's stderr only for unavailable, so a web handler must not forward
+// it as it is. Branch is the checked-out branch, "" when detached.
+type BaseInfo struct {
+	State     string `json:"state"`
+	Reason    string `json:"reason,omitempty"`
+	Branch    string `json:"branch"`
+	BaseRef   string `json:"baseRef,omitempty"`
+	BaseName  string `json:"baseName,omitempty"`
+	MergeBase string `json:"mergeBase,omitempty"`
+	Ahead     bool   `json:"ahead"`
+}
+
+// The reasons of a nobase result.
+const (
+	reasonNoCommits = "no commits yet"
+	reasonNoBase    = "no base branch found"
+	reasonNoCommon  = "no history in common with the base branch"
+)
 
 // Diff is one file's diff. State is ok or unavailable; Kind is text, binary or unchanged.
 type Diff struct {
@@ -60,7 +94,7 @@ type Diff struct {
 	Truncated bool   `json:"truncated"`
 }
 
-// Runner runs git status and diff in throwaway containers. Zero durations and
+// Runner runs git status, diff and base lookups in throwaway containers. Zero durations and
 // limits take the defaults (10s timeout, 2s reuse, 5m idle, 2 parallel). It is
 // safe for concurrent use; its mutex is never held while docker runs.
 type Runner struct {
@@ -76,6 +110,8 @@ type Runner struct {
 	mu           sync.Mutex
 	cache        map[string]*cached
 	flights      map[string]*flight
+	baseCache    map[string]*baseCached
+	baseFlights  map[string]*baseFlight
 	semOnce      sync.Once
 	sem          chan struct{}
 	sweepPending bool
@@ -87,6 +123,21 @@ type cached struct {
 	at       time.Time // when the run finished
 	started  time.Time // when the run launched its container (see flight)
 	lastUsed time.Time
+}
+
+// baseCached is a base answer for one repository at one HEAD. Its Branch is
+// empty: the branch can change with HEAD where it is, so every caller reads it
+// from its own status.
+type baseCached struct {
+	bi       BaseInfo
+	at       time.Time // when the run finished
+	lastUsed time.Time
+}
+
+// baseFlight is one base run that every concurrent caller for a key waits on.
+type baseFlight struct {
+	done chan struct{}
+	bi   BaseInfo
 }
 
 // flight is one status run that every concurrent caller for a Top waits on.
@@ -198,6 +249,12 @@ func (r *Runner) sweepLocked(now time.Time) {
 			delete(r.cache, k)
 		}
 	}
+	// A base answer past baseReuse is never served again: only idle ones go.
+	for k, c := range r.baseCache {
+		if now.Sub(c.lastUsed) >= idle || now.Sub(c.at) >= baseReuse {
+			delete(r.baseCache, k)
+		}
+	}
 }
 
 func (r *Runner) runStatus(t Target, key string, f *flight) {
@@ -243,21 +300,24 @@ func (r *Runner) doStatus(t Target, f *flight) Status {
 	}
 	switch {
 	case out.hit || errors.Is(err, errCapped):
-		return Status{State: "toomany", Top: t.Top, Entries: []Entry{}}
+		// Max 0 stops at the first entry, after the header records, which
+		// still say which branch and commit this is.
+		_, _, _, branch, head := ParseStatus(out.b, 0)
+		return Status{State: "toomany", Top: t.Top, Branch: branch, Head: head, Entries: []Entry{}}
 	case err != nil:
 		if strings.Contains(err.Error(), "not a git repository") {
 			return Status{State: "notrepo", Top: t.Top, Entries: []Entry{}}
 		}
 		return unavailableStatus(t, failReason(ctx, err))
 	}
-	entries, noHead, tooMany := ParseStatus(out.b, maxStatusEntries)
+	entries, noHead, tooMany, branch, head := ParseStatus(out.b, maxStatusEntries)
 	if tooMany {
-		return Status{State: "toomany", Top: t.Top, Entries: []Entry{}}
+		return Status{State: "toomany", Top: t.Top, Branch: branch, Head: head, Entries: []Entry{}}
 	}
 	if entries == nil {
 		entries = []Entry{}
 	}
-	return Status{State: "ok", Top: t.Top, NoHead: noHead, Entries: entries}
+	return Status{State: "ok", Top: t.Top, NoHead: noHead, Branch: branch, Head: head, Entries: entries}
 }
 
 // Diff returns the diff of one file, rel being its path relative to t.Top. It
@@ -297,6 +357,138 @@ func (r *Runner) Diff(ctx context.Context, t Target, rel string, untracked bool)
 		b = trimPartialRune(b)
 	}
 	return Diff{State: "ok", Kind: DiffKind(b), Diff: string(b), Truncated: out.hit}
+}
+
+// Base returns the base branch of t, the merge base of HEAD with it, and the
+// checked-out branch. The base is picked by the server from the repository's
+// own refs (origin/HEAD's target, else main or master, remote before local):
+// no caller names a ref. HEAD and the branch come from Status, which Base
+// calls, so they are as fresh as it is. The answer is kept per (t, HEAD), so a
+// new commit recomputes it, and for baseReuse at most, since the base ref can
+// move on its own. Concurrent calls share one run. Only a settled answer (ok
+// or nobase) is kept: a failure is asked again.
+func (r *Runner) Base(ctx context.Context, t Target) BaseInfo {
+	if why := t.Unsafe(); why != "" {
+		return BaseInfo{State: "unavailable", Reason: why}
+	}
+	st := r.Status(ctx, t)
+	switch st.State {
+	case "ok", "toomany": // both carry the branch and head
+	case "notrepo":
+		return BaseInfo{State: "notrepo"}
+	default:
+		return BaseInfo{State: "unavailable", Reason: st.Reason}
+	}
+	if st.Head == "" { // nothing to take a merge base of
+		return BaseInfo{State: "nobase", Reason: reasonNoCommits, Branch: st.Branch}
+	}
+	key := t.key() + "\x00" + st.Head
+	now := r.now()
+	r.mu.Lock()
+	r.sweepLocked(now)
+	if c := r.baseCache[key]; c != nil && now.Sub(c.at) < baseReuse {
+		c.lastUsed = now
+		bi := c.bi
+		r.mu.Unlock()
+		bi.Branch = st.Branch
+		return bi
+	}
+	f := r.baseFlights[key]
+	if f == nil {
+		f = &baseFlight{done: make(chan struct{})}
+		if r.baseFlights == nil {
+			r.baseFlights = map[string]*baseFlight{}
+		}
+		r.baseFlights[key] = f
+		// As for status, the run is the flight's, not the first caller's.
+		go r.runBase(t, key, st.Head, f)
+	}
+	r.mu.Unlock()
+	select {
+	case <-f.done:
+		bi := f.bi
+		bi.Branch = st.Branch
+		return bi
+	case <-ctx.Done():
+		return BaseInfo{State: "unavailable", Reason: "request cancelled", Branch: st.Branch}
+	}
+}
+
+func (r *Runner) runBase(t Target, key, head string, f *baseFlight) {
+	bi := r.doBase(t, head)
+	now := r.now()
+	r.mu.Lock()
+	if bi.State == "ok" || bi.State == "nobase" {
+		if r.baseCache == nil {
+			r.baseCache = map[string]*baseCached{}
+		}
+		r.baseCache[key] = &baseCached{bi: bi, at: now, lastUsed: now}
+	}
+	if r.baseFlights[key] == f {
+		delete(r.baseFlights, key)
+	}
+	r.mu.Unlock()
+	f.bi = bi
+	close(f.done)
+}
+
+// doBase lists the candidate refs, then, for the one it picks, asks for the
+// merge base: two containers, the second only when there is a base. Its
+// Branch is empty (see baseCached).
+func (r *Runner) doBase(t Target, head string) BaseInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), orDur(r.Timeout, defaultTimeout))
+	defer cancel()
+	out, err := r.runGit(ctx, func(name string) []string { return BaseArgs(t, r.Image, name, r.UID, r.GID) })
+	if err != nil {
+		return BaseInfo{State: "unavailable", Reason: failReason(ctx, err)}
+	}
+	ref := pickBase(out)
+	if ref == "" {
+		return BaseInfo{State: "nobase", Reason: reasonNoBase}
+	}
+	out, err = r.runGit(ctx, func(name string) []string { return MergeBaseArgs(t, r.Image, name, r.UID, r.GID, ref) })
+	if err != nil {
+		// Exit 1 with nothing printed is merge-base's "no common ancestor".
+		if exitCode(err) == 1 && len(out) == 0 {
+			return BaseInfo{State: "nobase", Reason: reasonNoCommon}
+		}
+		return BaseInfo{State: "unavailable", Reason: failReason(ctx, err)}
+	}
+	mb := strings.TrimSpace(string(out))
+	if !oidRE.MatchString(mb) {
+		return BaseInfo{State: "unavailable", Reason: "git printed no merge base"}
+	}
+	return BaseInfo{State: "ok", BaseRef: ref, BaseName: baseName(ref), MergeBase: mb, Ahead: mb != head}
+}
+
+var (
+	// errNoSlot is what runGit returns when ctx ends before a slot is free.
+	errNoSlot = errors.New("timed out waiting for a free git container")
+	// errRefused is what it returns when the argv builder refused.
+	errRefused = errors.New("git argv refused")
+)
+
+// runGit runs one git container under a MaxParallel slot and returns what it
+// printed, at most maxBaseBytes. argv builds the docker argv for the
+// container's name; a nil one (a builder refusing its input) runs nothing. The
+// container of a failed run is removed, as for status.
+func (r *Runner) runGit(ctx context.Context, argv func(name string) []string) ([]byte, error) {
+	name := newName()
+	args := argv(name)
+	if args == nil {
+		return nil, errRefused
+	}
+	release, err := r.acquire(ctx)
+	if err != nil {
+		return nil, errNoSlot
+	}
+	defer release()
+	out := &capBuffer{max: maxBaseBytes}
+	if err := r.Docker.RunStream(ctx, args, out); err != nil {
+		r.removeFailed(name)
+		return out.b, err
+	}
+	return out.b, nil
 }
 
 // acquire takes one of the MaxParallel slots, or fails when ctx ends first.

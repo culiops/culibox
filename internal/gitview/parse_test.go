@@ -43,12 +43,12 @@ func TestParseStatusCodes(t *testing.T) {
 		{"? dir/", "U"},
 	}
 	for _, c := range tests {
-		got, noHead, many := ParseStatus(rec(c.rec), 100)
+		got, noHead, many, _, _ := ParseStatus(rec(c.rec), 100)
 		if noHead || many || len(got) != 1 || got[0].X != c.want {
 			t.Errorf("%q: got %+v noHead=%v many=%v, want X=%s", c.rec, got, noHead, many, c.want)
 		}
 	}
-	got, _, _ := ParseStatus(rec("? dir/"), 10)
+	got, _, _, _, _ := ParseStatus(rec("? dir/"), 10)
 	if got[0].P != "dir/" {
 		t.Errorf("dir trailing slash lost: %+v", got)
 	}
@@ -56,7 +56,7 @@ func TestParseStatusCodes(t *testing.T) {
 
 func TestParseStatusIgnoredAndHeaders(t *testing.T) {
 	b := rec("# branch.oid "+oid, "# branch.head main", one(".M", "a"), "! ignored.log", "? new")
-	got, noHead, _ := ParseStatus(b, 100)
+	got, noHead, _, _, _ := ParseStatus(b, 100)
 	want := []Entry{{"a", "M"}, {"new", "U"}}
 	if noHead || !slices.Equal(got, want) {
 		t.Errorf("got %+v noHead=%v", got, noHead)
@@ -65,7 +65,7 @@ func TestParseStatusIgnoredAndHeaders(t *testing.T) {
 
 func TestParseStatusRenameConsumesOrig(t *testing.T) {
 	r2 := "2 R. N... 100644 100644 100644 " + oid + " " + oid + " R100 new name"
-	got, _, _ := ParseStatus(rec(r2, "old name", one(".M", "z")), 100)
+	got, _, _, _, _ := ParseStatus(rec(r2, "old name", one(".M", "z")), 100)
 	want := []Entry{{"new name", "M"}, {"z", "M"}}
 	if !slices.Equal(got, want) {
 		t.Errorf("got %+v", got)
@@ -73,7 +73,7 @@ func TestParseStatusRenameConsumesOrig(t *testing.T) {
 }
 
 func TestParseStatusMalformedRenameDoesNotEatNext(t *testing.T) {
-	got, _, _ := ParseStatus(rec("2 R. short", one(".M", "valid")), 100)
+	got, _, _, _, _ := ParseStatus(rec("2 R. short", one(".M", "valid")), 100)
 	if len(got) != 1 || got[0].P != "valid" {
 		t.Errorf("got %+v", got)
 	}
@@ -83,14 +83,14 @@ func TestParseStatusOddNames(t *testing.T) {
 	names := []string{"with space.txt", "dir/ünï côde ✓.go", "new\nline.txt", "tab\there.txt", "trail space ", "a  b"}
 	for _, n := range names {
 		for _, r := range []string{one(".M", n), "? " + n} {
-			got, _, _ := ParseStatus(rec(r), 100)
+			got, _, _, _, _ := ParseStatus(rec(r), 100)
 			if len(got) != 1 || got[0].P != n {
 				t.Errorf("name %q via %q: got %+v", n, r[:1], got)
 			}
 		}
 	}
 	// Several records around a newline name stay separate.
-	got, _, _ := ParseStatus(rec(one(".M", "a"), "? b\nc", one("A.", "d")), 100)
+	got, _, _, _, _ := ParseStatus(rec(one(".M", "a"), "? b\nc", one("A.", "d")), 100)
 	if len(got) != 3 || got[1].P != "b\nc" {
 		t.Errorf("got %+v", got)
 	}
@@ -100,7 +100,7 @@ func TestParseStatusHostile(t *testing.T) {
 	bad := []string{"/etc/passwd", "a/../../x", "..", "../x", "bad\xffutf8", "a/..", "", strings.Repeat("a", 5000)}
 	for _, n := range bad {
 		for _, r := range []string{one(".M", n), "? " + n} {
-			got, _, many := ParseStatus(rec(r), 100)
+			got, _, many, _, _ := ParseStatus(rec(r), 100)
 			if len(got) != 0 || many {
 				t.Errorf("hostile %.20q accepted via %q: %+v", n, r[:1], got)
 			}
@@ -109,13 +109,13 @@ func TestParseStatusHostile(t *testing.T) {
 	// Exactly the limit is fine, and a name with ".." inside a segment is fine.
 	ok := []string{strings.Repeat("a", 4096), "a..b/c", "..foo"}
 	for _, n := range ok {
-		got, _, _ := ParseStatus(rec("? "+n), 100)
+		got, _, _, _, _ := ParseStatus(rec("? "+n), 100)
 		if len(got) != 1 {
 			t.Errorf("legit %.20q dropped", n)
 		}
 	}
 	// Garbage records are skipped, not fatal.
-	got, _, _ := ParseStatus(rec("1 .M short", "", "x", "u UU", one(".M", "good")), 100)
+	got, _, _, _, _ := ParseStatus(rec("1 .M short", "", "x", "u UU", one(".M", "good")), 100)
 	if len(got) != 1 || got[0].P != "good" {
 		t.Errorf("garbage handling: %+v", got)
 	}
@@ -129,24 +129,72 @@ func TestParseStatusCap(t *testing.T) {
 		}
 		return b
 	}
-	got, _, many := ParseStatus(build(5001), 5000)
+	got, _, many, _, _ := ParseStatus(build(5001), 5000)
 	if !many || len(got) > 5000 {
 		t.Errorf("5001: many=%v len=%d", many, len(got))
 	}
-	got, _, many = ParseStatus(build(5000), 5000)
+	got, _, many, _, _ = ParseStatus(build(5000), 5000)
 	if many || len(got) != 5000 {
 		t.Errorf("5000: many=%v len=%d", many, len(got))
 	}
 }
 
 func TestParseStatusNoHead(t *testing.T) {
-	got, noHead, _ := ParseStatus(rec("# branch.oid (initial)", "# branch.head main", "? a"), 10)
+	got, noHead, _, _, _ := ParseStatus(rec("# branch.oid (initial)", "# branch.head main", "? a"), 10)
 	if !noHead || len(got) != 1 {
 		t.Errorf("noHead=%v got=%+v", noHead, got)
 	}
-	_, noHead, _ = ParseStatus(rec("# branch.oid "+oid), 10)
+	_, noHead, _, _, _ = ParseStatus(rec("# branch.oid "+oid), 10)
 	if noHead {
 		t.Error("noHead set on a repo with a commit")
+	}
+}
+
+func TestParseStatusBranchAndHead(t *testing.T) {
+	b := rec("# branch.oid "+oid, "# branch.head feat/files-dock", "# branch.upstream origin/feat/files-dock", "# branch.ab +2 -0", one(".M", "a"))
+	got, noHead, many, branch, head := ParseStatus(b, 100)
+	if branch != "feat/files-dock" || head != oid || noHead || many || len(got) != 1 {
+		t.Errorf("branch=%q head=%q noHead=%v many=%v got=%+v", branch, head, noHead, many, got)
+	}
+	// A repository with no commits has a branch but no head.
+	_, noHead, _, branch, head = ParseStatus(rec("# branch.oid (initial)", "# branch.head main"), 10)
+	if !noHead || branch != "main" || head != "" {
+		t.Errorf("initial: noHead=%v branch=%q head=%q", noHead, branch, head)
+	}
+	// The headers come before the entries, so a cut-off list still has them.
+	_, _, many, branch, head = ParseStatus(rec("# branch.oid "+oid, "# branch.head main", "? a", "? b"), 1)
+	if !many || branch != "main" || head != oid {
+		t.Errorf("toomany: many=%v branch=%q head=%q", many, branch, head)
+	}
+}
+
+func TestParseStatusDetached(t *testing.T) {
+	_, _, _, branch, head := ParseStatus(rec("# branch.oid "+oid, "# branch.head (detached)"), 10)
+	if branch != "" || head != oid {
+		t.Errorf("detached: branch=%q head=%q, want an empty branch and the head", branch, head)
+	}
+}
+
+func TestParseStatusBranchAndHeadHostile(t *testing.T) {
+	// The oid goes into a cache key and is compared with merge-base's output, so
+	// only a full lowercase hex id is taken; a branch is text, never a control.
+	for _, bad := range []string{"abc", strings.Repeat("A", 40), oid + "0", oid[:39], "(initial)", oid[:39] + "g", "../x"} {
+		if _, _, _, _, head := ParseStatus(rec("# branch.oid "+bad), 10); head != "" {
+			t.Errorf("head %q accepted as %q", bad, head)
+		}
+	}
+	for _, bad := range []string{"bad\xffutf8", "tab\there", "esc\x1b[31m", strings.Repeat("a", 256)} {
+		if _, _, _, branch, _ := ParseStatus(rec("# branch.head "+bad), 10); branch != "" {
+			t.Errorf("branch %.20q accepted", bad)
+		}
+	}
+	// 64 hex digits: a sha256 repository.
+	h64 := strings.Repeat("ab", 32)
+	if _, _, _, _, head := ParseStatus(rec("# branch.oid "+h64), 10); head != h64 {
+		t.Errorf("sha256 head = %q", head)
+	}
+	if _, _, _, branch, _ := ParseStatus(rec("# branch.head "+strings.Repeat("a", 255)), 10); len(branch) != 255 {
+		t.Error("a 255-byte branch name was dropped")
 	}
 }
 

@@ -656,3 +656,445 @@ func TestMissingImageIsAFixedReason(t *testing.T) {
 		}
 	}
 }
+
+const (
+	headOID  = "1111111111111111111111111111111111111111"
+	head2OID = "3333333333333333333333333333333333333333"
+	baseOID  = "2222222222222222222222222222222222222222"
+)
+
+// gitSub is the git subcommand of a docker argv: the word after the guard flags.
+func gitSub(a []string) string {
+	i := slices.Index(a, "safe.directory=*")
+	if i < 0 || i+1 >= len(a) {
+		return ""
+	}
+	return a[i+1]
+}
+
+// runsOf counts the docker runs of one git subcommand.
+func runsOf(f *fakeDocker, sub string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, a := range f.args {
+		if gitSub(a) == sub {
+			n++
+		}
+	}
+	return n
+}
+
+// lastRun is the argv of the latest run of one git subcommand, or nil.
+func lastRun(f *fakeDocker, sub string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.args) - 1; i >= 0; i-- {
+		if gitSub(f.args[i]) == sub {
+			return f.args[i]
+		}
+	}
+	return nil
+}
+
+// refLine is one for-each-ref record of BaseArgs' format.
+func refLine(ref, symref string) string { return ref + "\x00" + symref + "\x00\n" }
+
+// baseState is a repository that status, for-each-ref and merge-base answer
+// about. An empty head is a repository with no commits.
+type baseState struct {
+	mu        sync.Mutex
+	head      string
+	branch    string
+	refs      string
+	mergeBase string
+	mergeErr  error
+}
+
+func (b *baseState) run(_ context.Context, a []string, w io.Writer) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out string
+	switch gitSub(a) {
+	case "status":
+		oid := b.head
+		if oid == "" {
+			oid = "(initial)"
+		}
+		out = "# branch.oid " + oid + "\x00# branch.head " + b.branch + "\x00"
+	case "for-each-ref":
+		out = b.refs
+	case "merge-base":
+		if b.mergeErr != nil {
+			return b.mergeErr
+		}
+		out = b.mergeBase + "\n"
+	default:
+		return errors.New("unexpected git subcommand " + gitSub(a))
+	}
+	_, err := io.WriteString(w, out)
+	return err
+}
+
+func (b *baseState) set(f func(*baseState)) { b.mu.Lock(); f(b); b.mu.Unlock() }
+
+// newBase is a runner over a repository on branch "feat" at headOID, whose
+// merge base with whatever base it picks is baseOID.
+func newBase(refs ...string) (*Runner, *fakeDocker, *baseState, *fakeClock) {
+	bs := &baseState{head: headOID, branch: "feat", refs: strings.Join(refs, ""), mergeBase: baseOID}
+	f := &fakeDocker{run: bs.run}
+	c := newClock()
+	return newRunner(f, c), f, bs, c
+}
+
+func TestStatusCarriesBranchAndHead(t *testing.T) {
+	r, _, bs, _ := newBase()
+	st := r.Status(context.Background(), tgt)
+	if st.State != "ok" || st.Branch != "feat" || st.Head != headOID {
+		t.Fatalf("status = %+v", st)
+	}
+	// Detached: a head and no branch. No commits: a branch and no head.
+	bs.set(func(b *baseState) { b.branch = "(detached)" })
+	if st := r.StatusFresh(context.Background(), tgt); st.Branch != "" || st.Head != headOID {
+		t.Fatalf("detached status = %+v", st)
+	}
+	bs.set(func(b *baseState) { b.head, b.branch = "", "main" })
+	if st := r.StatusFresh(context.Background(), tgt); st.Branch != "main" || st.Head != "" || !st.NoHead {
+		t.Fatalf("unborn status = %+v", st)
+	}
+}
+
+func TestStatusTooManyKeepsBranchAndHead(t *testing.T) {
+	hdr := "# branch.oid " + headOID + "\x00# branch.head feat\x00"
+	for name, run := range map[string]func(context.Context, []string, io.Writer) error{
+		"entry cap": func(_ context.Context, _ []string, w io.Writer) error {
+			var b bytes.Buffer
+			b.WriteString(hdr)
+			for i := 0; i < maxStatusEntries+1; i++ {
+				fmt.Fprintf(&b, "? f%d\x00", i)
+			}
+			_, err := w.Write(b.Bytes())
+			return err
+		},
+		"byte cap": func(_ context.Context, _ []string, w io.Writer) error {
+			io.WriteString(w, hdr)
+			_, err := w.Write(bytes.Repeat([]byte("x"), maxStatusBytes+1))
+			if err != nil {
+				return fmt.Errorf("docker run: writing its output: %w", err)
+			}
+			return nil
+		},
+	} {
+		st := newRunner(&fakeDocker{run: run}, newClock()).Status(context.Background(), tgt)
+		if st.State != "toomany" || st.Branch != "feat" || st.Head != headOID {
+			t.Errorf("%s: status = %+v", name, st)
+		}
+	}
+}
+
+func TestBasePicksOriginHEADTarget(t *testing.T) {
+	// origin/HEAD names a branch BaseArgs does not list: the symref is the answer.
+	r, f, _, _ := newBase(
+		refLine("refs/remotes/origin/HEAD", "refs/remotes/origin/develop"),
+		refLine("refs/remotes/origin/main", ""),
+		refLine("refs/heads/main", ""))
+	bi := r.Base(context.Background(), tgt)
+	want := BaseInfo{State: "ok", Branch: "feat", BaseRef: "refs/remotes/origin/develop", BaseName: "origin/develop", MergeBase: baseOID, Ahead: true}
+	if bi != want {
+		t.Fatalf("base = %+v, want %+v", bi, want)
+	}
+	if n := runsOf(f, "for-each-ref"); n != 1 {
+		t.Fatalf("for-each-ref ran %d times, want 1", n)
+	}
+	a := lastRun(f, "merge-base")
+	i := slices.Index(a, "--name")
+	if !slices.Equal(a, MergeBaseArgs(tgt, "img:1", a[i+1], 1000, 1000, "refs/remotes/origin/develop")) {
+		t.Fatalf("merge-base argv = %q", a)
+	}
+	if a := lastRun(f, "for-each-ref"); !slices.Equal(a, BaseArgs(tgt, "img:1", a[slices.Index(a, "--name")+1], 1000, 1000)) {
+		t.Fatalf("for-each-ref argv = %q", a)
+	}
+
+	// The tip of a branch HEAD has not left is its own merge base: not ahead.
+	r, _, bs, _ := newBase(refLine("refs/remotes/origin/HEAD", "refs/remotes/origin/main"), refLine("refs/remotes/origin/main", ""))
+	bs.set(func(b *baseState) { b.mergeBase = headOID })
+	if bi := r.Base(context.Background(), tgt); bi.State != "ok" || bi.Ahead || bi.BaseName != "origin/main" || bi.MergeBase != headOID {
+		t.Fatalf("not ahead: %+v", bi)
+	}
+}
+
+func TestBaseFallsBackToMain(t *testing.T) {
+	om, oma := refLine("refs/remotes/origin/main", ""), refLine("refs/remotes/origin/master", "")
+	hm, hma := refLine("refs/heads/main", ""), refLine("refs/heads/master", "")
+	dangling := refLine("refs/remotes/origin/HEAD", "") // not a symref
+	for _, c := range []struct {
+		name string
+		refs []string
+		ref  string
+		disp string
+	}{
+		{"all four", []string{om, oma, hm, hma}, "refs/remotes/origin/main", "origin/main"},
+		{"listing order does not matter", []string{hma, hm, oma, om}, "refs/remotes/origin/main", "origin/main"},
+		{"origin master before local main", []string{hma, hm, oma}, "refs/remotes/origin/master", "origin/master"},
+		{"local main before local master", []string{hma, hm}, "refs/heads/main", "main"},
+		{"local master", []string{hma}, "refs/heads/master", "master"},
+		{"origin/HEAD that is not a symref", []string{dangling, hm}, "refs/heads/main", "main"},
+		// Hostile or unusable symref targets are skipped, never run.
+		{"symref to a tag", []string{refLine("refs/remotes/origin/HEAD", "refs/tags/v1"), hm}, "refs/heads/main", "main"},
+		{"symref that looks like an option", []string{refLine("refs/remotes/origin/HEAD", "--upload-pack=touch /tmp/x"), hm}, "refs/heads/main", "main"},
+		{"symref with dots", []string{refLine("refs/remotes/origin/HEAD", "refs/heads/../x"), hm}, "refs/heads/main", "main"},
+		{"symref with a space", []string{refLine("refs/remotes/origin/HEAD", "refs/heads/a b"), hm}, "refs/heads/main", "main"},
+		{"over-long symref", []string{refLine("refs/remotes/origin/HEAD", "refs/heads/"+strings.Repeat("a", 300)), hm}, "refs/heads/main", "main"},
+		// Only the five names count: a ref below main (listed when main is not a ref) is not main.
+		{"nested under main", []string{refLine("refs/heads/main/x", ""), hma}, "refs/heads/master", "master"},
+		// Records without git's two NUL terminators are not git's, whatever they name.
+		{"junk lines", []string{"garbage\n", "\n", "refs/heads/main\n", "refs/heads/main\x00\n", "\x00\x00\n", hma}, "refs/heads/master", "master"},
+	} {
+		r, f, _, _ := newBase(c.refs...)
+		bi := r.Base(context.Background(), tgt)
+		if bi.State != "ok" || bi.BaseRef != c.ref || bi.BaseName != c.disp {
+			t.Errorf("%s: base = %+v, want %s", c.name, bi, c.ref)
+		}
+		// Whatever the output said, only a valid ref ever reached a merge-base argv.
+		a := lastRun(f, "merge-base")
+		if a == nil || a[len(a)-1] != c.ref || !ValidBaseRef(a[len(a)-1]) || a[len(a)-2] != "HEAD" {
+			t.Errorf("%s: merge-base argv = %q", c.name, a)
+		}
+	}
+}
+
+func TestBaseNoneIsNobase(t *testing.T) {
+	r, f, _, _ := newBase()
+	bi := r.Base(context.Background(), tgt)
+	if bi.State != "nobase" || bi.Branch != "feat" || bi.Reason == "" || bi.BaseRef != "" || bi.MergeBase != "" || bi.Ahead {
+		t.Fatalf("base = %+v", bi)
+	}
+	if n := runsOf(f, "merge-base"); n != 0 {
+		t.Fatalf("merge-base ran %d times without a base", n)
+	}
+	// Refs that are not one of the five candidates are no base either.
+	r, f, _, _ = newBase(refLine("refs/heads/develop", ""), refLine("refs/tags/main", ""))
+	if bi := r.Base(context.Background(), tgt); bi.State != "nobase" || runsOf(f, "merge-base") != 0 {
+		t.Fatalf("other refs: %+v", bi)
+	}
+	// No commits: nothing to compare, and no point asking git for refs.
+	r, f, bs, _ := newBase(refLine("refs/heads/main", ""))
+	bs.set(func(b *baseState) { b.head = "" })
+	if bi := r.Base(context.Background(), tgt); bi.State != "nobase" || bi.Branch != "feat" || bi.Reason == "" {
+		t.Fatalf("no commits: %+v", bi)
+	}
+	if runsOf(f, "for-each-ref") != 0 || runsOf(f, "merge-base") != 0 {
+		t.Fatalf("no commits still ran git for refs: %v", f.args)
+	}
+}
+
+func TestBaseNoCommonHistoryIsNobase(t *testing.T) {
+	// merge-base exits 1 with no output when the histories are unrelated.
+	r, _, bs, _ := newBase(refLine("refs/heads/main", ""))
+	bs.set(func(b *baseState) { b.mergeErr = exitErr(t, 1) })
+	bi := r.Base(context.Background(), tgt)
+	if bi.State != "nobase" || bi.Reason == "" || bi.BaseRef != "" || bi.Branch != "feat" {
+		t.Fatalf("base = %+v", bi)
+	}
+}
+
+func TestBaseFailuresAreUnavailableAndNotCached(t *testing.T) {
+	r, f, bs, c := newBase(refLine("refs/heads/main", ""))
+	bs.set(func(b *baseState) { b.mergeErr = exitErr(t, 128) })
+	bi := r.Base(context.Background(), tgt)
+	if bi.State != "unavailable" || bi.Reason == "" || bi.Branch != "feat" {
+		t.Fatalf("base = %+v", bi)
+	}
+	if len(f.removed) != 1 {
+		t.Fatalf("failed run: Remove calls %q, want 1", f.removed)
+	}
+	// A transient failure must not stick: the next call asks again.
+	bs.set(func(b *baseState) { b.mergeErr = nil })
+	c.add(3 * time.Second)
+	if bi := r.Base(context.Background(), tgt); bi.State != "ok" || bi.MergeBase != baseOID {
+		t.Fatalf("after recovery: %+v", bi)
+	}
+	// So does a for-each-ref that fails, or a merge-base that prints nonsense.
+	r, _, bs, _ = newBase(refLine("refs/heads/main", ""))
+	bs.set(func(b *baseState) { b.mergeBase = "not-an-oid" })
+	if bi := r.Base(context.Background(), tgt); bi.State != "unavailable" || bi.MergeBase != "" {
+		t.Fatalf("nonsense merge-base: %+v", bi)
+	}
+	f = &fakeDocker{run: func(_ context.Context, a []string, w io.Writer) error {
+		if gitSub(a) == "status" {
+			return (&baseState{head: headOID, branch: "feat"}).run(context.Background(), a, w)
+		}
+		return errors.New("docker run: boom")
+	}}
+	if bi := newRunner(f, newClock()).Base(context.Background(), tgt); bi.State != "unavailable" || bi.Reason == "" {
+		t.Fatalf("for-each-ref failure: %+v", bi)
+	}
+}
+
+func TestBaseCachedPerHead(t *testing.T) {
+	r, f, bs, c := newBase(refLine("refs/remotes/origin/main", ""))
+	ctx := context.Background()
+	bi := r.Base(ctx, tgt)
+	if bi.State != "ok" || bi.Branch != "feat" || !bi.Ahead {
+		t.Fatalf("first = %+v", bi)
+	}
+	if runsOf(f, "for-each-ref") != 1 || runsOf(f, "merge-base") != 1 {
+		t.Fatalf("first call ran %v", f.args)
+	}
+	// Past status's reuse window the status runs again, the base does not.
+	c.add(3 * time.Second)
+	if again := r.Base(ctx, tgt); again != bi {
+		t.Fatalf("second = %+v, want %+v", again, bi)
+	}
+	if runsOf(f, "status") != 2 || runsOf(f, "for-each-ref") != 1 || runsOf(f, "merge-base") != 1 {
+		t.Fatalf("same head recomputed: status=%d for-each-ref=%d merge-base=%d", runsOf(f, "status"), runsOf(f, "for-each-ref"), runsOf(f, "merge-base"))
+	}
+	// A renamed branch at the same commit keeps the cached base, not the old name.
+	bs.set(func(b *baseState) { b.branch = "renamed" })
+	c.add(3 * time.Second)
+	if bi := r.Base(ctx, tgt); bi.Branch != "renamed" || bi.BaseRef != "refs/remotes/origin/main" {
+		t.Fatalf("renamed = %+v", bi)
+	}
+	if runsOf(f, "for-each-ref") != 1 {
+		t.Fatal("a branch rename recomputed the base")
+	}
+	// A new commit is a new key: recomputed, and now ahead of a moved merge base.
+	bs.set(func(b *baseState) { b.head = head2OID })
+	c.add(3 * time.Second)
+	if bi := r.Base(ctx, tgt); bi.State != "ok" || !bi.Ahead {
+		t.Fatalf("new head = %+v", bi)
+	}
+	if runsOf(f, "for-each-ref") != 2 || runsOf(f, "merge-base") != 2 {
+		t.Fatalf("a changed HEAD did not recompute: %v", f.args)
+	}
+	// The base ref itself can move without HEAD moving (a fetch), so an entry
+	// is only trusted for a short while.
+	bs.set(func(b *baseState) { b.mergeBase = head2OID })
+	c.add(10 * time.Second)
+	if bi := r.Base(ctx, tgt); !bi.Ahead {
+		t.Fatalf("inside the window: %+v", bi)
+	}
+	c.add(25 * time.Second)
+	if bi := r.Base(ctx, tgt); bi.Ahead || bi.MergeBase != head2OID {
+		t.Fatalf("after the window: %+v", bi)
+	}
+	if runsOf(f, "for-each-ref") != 3 {
+		t.Fatalf("an old entry was served: %d for-each-ref runs", runsOf(f, "for-each-ref"))
+	}
+}
+
+func TestBaseSingleFlight(t *testing.T) {
+	release := make(chan struct{})
+	r, f, bs, _ := newBase(refLine("refs/heads/main", ""))
+	f.run = func(ctx context.Context, a []string, w io.Writer) error {
+		if gitSub(a) == "for-each-ref" {
+			<-release
+		}
+		return bs.run(ctx, a, w)
+	}
+	var wg sync.WaitGroup
+	res := make([]BaseInfo, 8)
+	for i := range res {
+		wg.Add(1)
+		go func() { defer wg.Done(); res[i] = r.Base(context.Background(), tgt) }()
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if runsOf(f, "for-each-ref") != 1 || runsOf(f, "merge-base") != 1 {
+		t.Fatalf("concurrent callers ran %d for-each-ref, %d merge-base, want 1 each", runsOf(f, "for-each-ref"), runsOf(f, "merge-base"))
+	}
+	for i, bi := range res {
+		if bi.State != "ok" || bi.BaseRef != "refs/heads/main" {
+			t.Fatalf("caller %d got %+v", i, bi)
+		}
+	}
+}
+
+func TestBaseCallerCancelDoesNotPoisonFlight(t *testing.T) {
+	release := make(chan struct{})
+	r, f, bs, _ := newBase(refLine("refs/heads/main", ""))
+	f.run = func(ctx context.Context, a []string, w io.Writer) error {
+		if gitSub(a) == "for-each-ref" {
+			<-release
+		}
+		return bs.run(ctx, a, w)
+	}
+	cctx, cancel := context.WithCancel(context.Background())
+	done := make(chan BaseInfo)
+	go func() { done <- r.Base(cctx, tgt) }()
+	waitCalls(t, f, 2) // status, then for-each-ref blocking
+	second := make(chan BaseInfo)
+	go func() { second <- r.Base(context.Background(), tgt) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if bi := <-done; bi.State != "unavailable" {
+		t.Fatalf("cancelled caller got %+v", bi)
+	}
+	close(release)
+	if bi := <-second; bi.State != "ok" {
+		t.Fatalf("other caller got %+v", bi)
+	}
+}
+
+func TestBaseRefusesUnsafeTargetAndSkipsNonRepos(t *testing.T) {
+	f := &fakeDocker{run: okStatus()}
+	r := newRunner(f, newClock())
+	bad := Target{Top: "/repo,readonly=false", Common: "/repo/.git"}
+	if bi := r.Base(context.Background(), bad); bi.State != "unavailable" || bi.Reason == "" {
+		t.Fatalf("unsafe target: %+v", bi)
+	}
+	if f.callCount() != 0 {
+		t.Fatalf("docker called %d times for an unsafe target", f.callCount())
+	}
+	f = &fakeDocker{run: func(context.Context, []string, io.Writer) error {
+		return errors.New("docker run: exit status 128: fatal: not a git repository (or any of the parent directories): .git")
+	}}
+	if bi := newRunner(f, newClock()).Base(context.Background(), tgt); bi.State != "notrepo" {
+		t.Fatalf("not a repository: %+v", bi)
+	}
+	if f.callCount() != 1 {
+		t.Fatalf("a non-repository ran %d containers, want only the status run", f.callCount())
+	}
+}
+
+func TestBaseWorksWhenStatusIsTooMany(t *testing.T) {
+	hdr := "# branch.oid " + headOID + "\x00# branch.head feat\x00"
+	bs := &baseState{head: headOID, branch: "feat", refs: refLine("refs/heads/main", ""), mergeBase: baseOID}
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		if gitSub(a) != "status" {
+			return bs.run(ctx, a, w)
+		}
+		var b bytes.Buffer
+		b.WriteString(hdr)
+		for i := 0; i < maxStatusEntries+1; i++ {
+			fmt.Fprintf(&b, "? f%d\x00", i)
+		}
+		_, err := w.Write(b.Bytes())
+		return err
+	}}
+	bi := newRunner(f, newClock()).Base(context.Background(), tgt)
+	if bi.State != "ok" || bi.Branch != "feat" || bi.BaseRef != "refs/heads/main" {
+		t.Fatalf("base = %+v", bi)
+	}
+}
+
+func TestBaseCacheIsSweptWhenStale(t *testing.T) {
+	r, _, _, c := newBase(refLine("refs/heads/main", ""))
+	other := Target{Top: "/other", Common: "/other/.git"}
+	r.Base(context.Background(), tgt)
+	r.mu.Lock()
+	n := len(r.baseCache)
+	r.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("baseCache holds %d entries, want 1", n)
+	}
+	c.add(6 * time.Minute)
+	r.Base(context.Background(), other)
+	r.mu.Lock()
+	_, keptTgt := r.baseCache[tgt.key()+"\x00"+headOID]
+	r.mu.Unlock()
+	if keptTgt {
+		t.Fatal("a base entry nobody asked for within Idle was kept")
+	}
+}

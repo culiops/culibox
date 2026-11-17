@@ -189,6 +189,18 @@ func runHostile(t *testing.T, r *Runner, tg Target) {
 	if un.State != "ok" || un.Kind != "text" || !strings.Contains(un.Diff, "+brand new") {
 		t.Errorf("untracked diff = state %q kind %q reason %q", un.State, un.Kind, un.Reason)
 	}
+
+	// The repo has one commit on main and no remote, so main is the base and
+	// HEAD is its own merge base. for-each-ref and merge-base read the hostile
+	// config like status does, and must neither run it nor fail on it.
+	bi := r.Base(ctx, tg)
+	t.Logf("base: %+v", bi)
+	if st.Head == "" || st.Branch != "main" {
+		t.Errorf("status branch %q head %q, want main and a commit", st.Branch, st.Head)
+	}
+	if bi.State != "ok" || bi.Branch != "main" || bi.BaseRef != "refs/heads/main" || bi.BaseName != "main" || bi.MergeBase != st.Head || bi.Ahead {
+		t.Errorf("base = %+v, want ok on main against refs/heads/main with merge base %q", bi, st.Head)
+	}
 }
 
 // TestHostileConfigNeverRunsOnHost: an agent-shaped .git/config that tries

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,8 +20,10 @@ type fakeGit struct {
 	statuses []gitview.Target
 	fresh    []bool // per Status/StatusFresh call: was it fresh
 	diffs    []fakeDiffCall
+	bases    []gitview.Target
 	st       gitview.Status
 	diff     gitview.Diff
+	base     gitview.BaseInfo
 }
 
 type fakeDiffCall struct {
@@ -60,10 +63,20 @@ func (f *fakeGit) Diff(_ context.Context, t gitview.Target, rel string, untracke
 	return f.diff
 }
 
+func (f *fakeGit) Base(_ context.Context, t gitview.Target) gitview.BaseInfo {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bases = append(f.bases, t)
+	if f.base.State == "" {
+		return gitview.BaseInfo{State: "ok", Branch: "feat", BaseRef: "refs/remotes/origin/main", BaseName: "origin/main", MergeBase: strings.Repeat("a", 40), Ahead: true}
+	}
+	return f.base
+}
+
 func (f *fakeGit) calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.statuses) + len(f.diffs)
+	return len(f.statuses) + len(f.diffs) + len(f.bases)
 }
 
 // hostGitServer is a server with a resolved temp $HOME and no boxed trees.
@@ -649,5 +662,160 @@ func TestGitDiffTooManyEmptyIsUnknownNotUnchanged(t *testing.T) {
 	d = decodeDiff(t, gitPost(s.handleGitDiff, "/api/git/diff", pathBody(filepath.Join(repo, "new.txt"))))
 	if d.State != "ok" || d.Kind != "unchanged" {
 		t.Fatalf("ok-status empty diff = %+v", d)
+	}
+}
+
+func decodeBase(t *testing.T, rr *httptest.ResponseRecorder) gitview.BaseInfo {
+	t.Helper()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (%s)", rr.Code, rr.Body)
+	}
+	var bi gitview.BaseInfo
+	if err := json.Unmarshal(rr.Body.Bytes(), &bi); err != nil {
+		t.Fatalf("decode %s: %v", rr.Body, err)
+	}
+	return bi
+}
+
+func TestGitBaseHandlerOK(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	mustMkdirAll(t, filepath.Join(repo, "sub"))
+	g.base = gitview.BaseInfo{State: "ok", Branch: "feat/x", BaseRef: "refs/remotes/origin/main", BaseName: "origin/main", MergeBase: strings.Repeat("b", 40), Ahead: true}
+	// A baseRef (or anything else) in the body is not read: the server derives it.
+	body := `{"path":` + strconv.Quote(filepath.Join(repo, "sub")) + `,"baseRef":"-x","scope":"branch"}`
+	rr := gitPost(s.handleGitBase, "/api/git/base", body)
+	bi := decodeBase(t, rr)
+	if bi != g.base {
+		t.Fatalf("base = %+v, want %+v", bi, g.base)
+	}
+	want := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+	if len(g.bases) != 1 || g.bases[0] != want || len(g.statuses) != 0 || len(g.diffs) != 0 {
+		t.Fatalf("calls: bases=%+v statuses=%+v diffs=%+v, want one Base of %+v", g.bases, g.statuses, g.diffs, want)
+	}
+	for _, key := range []string{`"state":"ok"`, `"branch":"feat/x"`, `"baseRef":"refs/remotes/origin/main"`, `"baseName":"origin/main"`, `"mergeBase":"` + strings.Repeat("b", 40) + `"`, `"ahead":true`} {
+		if !strings.Contains(rr.Body.String(), key) {
+			t.Errorf("reply %s lacks %s", rr.Body, key)
+		}
+	}
+	// Boxed: the contained root is the only mount, as for status.
+	bs, _, ws := boxedServer(t)
+	bg := &fakeGit{}
+	bs.Git = bg
+	mainRepo(t, ws)
+	decodeBase(t, gitPost(bs.handleGitBase, "/api/git/base", pathBody(ws)))
+	if w := (gitview.Target{Root: ws, Top: ws, Common: filepath.Join(ws, ".git")}); len(bg.bases) != 1 || bg.bases[0] != w {
+		t.Fatalf("boxed targets = %+v, want %+v", bg.bases, w)
+	}
+}
+
+func TestGitBaseRefusedOutside(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	other := t.TempDir() // a sibling of $HOME, not inside it
+	mustMkdirAll(t, filepath.Join(other, ".git", "worktrees", "w"))
+	wt := filepath.Join(h, "wt")
+	mustWrite(t, filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(other, ".git", "worktrees", "w")+"\n")
+	bi := decodeBase(t, gitPost(s.handleGitBase, "/api/git/base", pathBody(wt)))
+	if bi.State != "unavailable" || bi.Reason != msgGitOutside {
+		t.Fatalf("base = %+v, want unavailable %q", bi, msgGitOutside)
+	}
+	if n := g.calls(); n != 0 {
+		t.Fatalf("runner called %d times for a refused target", n)
+	}
+	// A repository above the viewable tree, and a mount path docker cannot take.
+	outside := t.TempDir()
+	mainRepo(t, outside)
+	if rr := gitPost(s.handleGitBase, "/api/git/base", pathBody(outside)); rr.Code != http.StatusForbidden {
+		t.Fatalf("outside home: code = %d, want 403", rr.Code)
+	}
+	unsafe := filepath.Join(h, "a,readonly=false")
+	mainRepo(t, unsafe)
+	if bi := decodeBase(t, gitPost(s.handleGitBase, "/api/git/base", pathBody(unsafe))); bi.State != "unavailable" || bi.Reason != msgGitNotAvailable {
+		t.Fatalf("unsafe path: %+v", bi)
+	}
+	if n := g.calls(); n != 0 {
+		t.Fatalf("runner called %d times for a refused target", n)
+	}
+}
+
+func TestGitBaseStatesAndReasons(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	post := func() gitview.BaseInfo {
+		return decodeBase(t, gitPost(s.handleGitBase, "/api/git/base", pathBody(repo)))
+	}
+	// The runner's reason can carry git's stderr: only fixed messages reach the client.
+	for raw, want := range map[string]string{
+		"fatal: /secret/path: bad object deadbeef": msgGitNotAvailable,
+		"git timed out": msgGitTimeout,
+		"timed out waiting for a free git container": msgGitTimeout,
+		gitview.ReasonNoImage:                        msgGitNoImage,
+	} {
+		g.base = gitview.BaseInfo{State: "unavailable", Reason: raw, Branch: "feat"}
+		if bi := post(); bi.State != "unavailable" || bi.Reason != want || bi.Branch != "feat" {
+			t.Fatalf("raw %q: base = %+v, want reason %q", raw, bi, want)
+		}
+	}
+	g.base = gitview.BaseInfo{State: "nobase", Reason: "git said /secret/path", Branch: "feat"}
+	if bi := post(); bi.State != "nobase" || bi.Reason != msgGitNoBase || bi.BaseRef != "" || bi.Branch != "feat" {
+		t.Fatalf("nobase: %+v", bi)
+	}
+	g.base = gitview.BaseInfo{State: "notrepo"}
+	if bi := post(); bi.State != "notrepo" || bi.Reason != "" {
+		t.Fatalf("notrepo: %+v", bi)
+	}
+	// ok carries no reason.
+	g.base = gitview.BaseInfo{State: "ok", Reason: "stray", Branch: "feat", BaseRef: "refs/heads/main", BaseName: "main", MergeBase: strings.Repeat("c", 40)}
+	if bi := post(); bi.State != "ok" || bi.Reason != "" {
+		t.Fatalf("ok: %+v", bi)
+	}
+}
+
+func TestGitBaseNotRepoNeverRunsGit(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	dir := filepath.Join(h, "plain")
+	mustMkdirAll(t, dir)
+	if bi := decodeBase(t, gitPost(s.handleGitBase, "/api/git/base", pathBody(dir))); bi.State != "notrepo" {
+		t.Fatalf("base = %+v", bi)
+	}
+	if g.calls() != 0 {
+		t.Fatal("runner called for a non-repo")
+	}
+}
+
+func TestGitBaseNilRunner(t *testing.T) {
+	s, h, _ := hostGitServer(t)
+	s.Git = nil
+	mainRepo(t, filepath.Join(h, "repo"))
+	bi := decodeBase(t, gitPost(s.handleGitBase, "/api/git/base", pathBody(filepath.Join(h, "repo"))))
+	if bi.State != "unavailable" || bi.Reason != msgGitNoRuntime {
+		t.Fatalf("base = %+v", bi)
+	}
+}
+
+func TestGitBaseGuards(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	mainRepo(t, filepath.Join(h, "repo"))
+	get := httptest.NewRecorder()
+	s.handleGitBase(get, httptest.NewRequest(http.MethodGet, "/api/git/base?path="+h, nil))
+	if get.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET code = %d, want 405", get.Code)
+	}
+	for _, body := range []string{"", "{", `{"path":"rel/dir"}`, `{"path":""}`} {
+		if rr := gitPost(s.handleGitBase, "/api/git/base", body); rr.Code != http.StatusBadRequest {
+			t.Fatalf("body %.40q: code = %d, want 400 (%s)", body, rr.Code, rr.Body)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/git/base", strings.NewReader(pathBody(filepath.Join(h, "repo"))))
+	req.Header.Set("Origin", "https://evil.example")
+	rr := httptest.NewRecorder()
+	s.handleGitBase(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin code = %d, want 403", rr.Code)
+	}
+	if g.calls() != 0 {
+		t.Fatal("runner called on a refused request")
 	}
 }

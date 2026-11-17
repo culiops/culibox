@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -170,5 +171,91 @@ func TestTargetKeyIncludesRoot(t *testing.T) {
 	b := Target{Root: "/w", Top: "/w/repo", Common: "/w/repo/.git"}
 	if a.key() == b.key() {
 		t.Fatal("a boxed and a host target share a cache key")
+	}
+}
+
+var baseSub = []string{"for-each-ref", "--format=%(refname)%00%(symref)%00",
+	"refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master", "refs/heads/main", "refs/heads/master"}
+
+func TestBaseArgsGolden(t *testing.T) {
+	uid, gid := os.Getuid(), os.Getgid()
+	in := Target{Top: "/w/repo", Common: "/w/repo/.git"}
+	out := Target{Top: "/w/wt", Common: "/w/main/.git"}
+	boxed := Target{Root: "/w", Top: "/w/wt", Common: "/w/main/.git"}
+
+	// One run lists every candidate; the names are fixed, nothing from the caller.
+	for _, c := range []struct {
+		name   string
+		t      Target
+		mounts []string
+	}{
+		{"in", in, []string{"/w/repo"}},
+		{"common outside top", out, []string{"/w/wt", "/w/main/.git"}},
+		{"boxed", boxed, []string{"/w"}},
+	} {
+		got := BaseArgs(c.t, "img", "n", uid, gid)
+		if w := want(c.mounts, c.t.Top, baseSub...); !slices.Equal(got, w) {
+			t.Errorf("BaseArgs %s:\n got %q\nwant %q", c.name, got, w)
+		}
+		got = MergeBaseArgs(c.t, "img", "n", uid, gid, "refs/remotes/origin/main")
+		if w := want(c.mounts, c.t.Top, "merge-base", "HEAD", "refs/remotes/origin/main"); !slices.Equal(got, w) {
+			t.Errorf("MergeBaseArgs %s:\n got %q\nwant %q", c.name, got, w)
+		}
+	}
+}
+
+func TestBaseArgsKeepTheGuards(t *testing.T) {
+	// Same isolation as status: no network, read-only mounts, hostile-config flags.
+	for name, a := range map[string][]string{
+		"base":      BaseArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2),
+		"mergebase": MergeBaseArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2, "refs/heads/main"),
+	} {
+		i := slices.Index(a, "--network")
+		if i < 0 || a[i+1] != "none" || !slices.Contains(a, "--read-only") || !slices.Contains(a, "core.fsmonitor=false") || !slices.Contains(a, "core.hooksPath=/dev/null") {
+			t.Errorf("%s lost a guard: %q", name, a)
+		}
+		n := 0
+		for j, s := range a {
+			if s == "--mount" {
+				n++
+				if !strings.HasSuffix(a[j+1], ",readonly") {
+					t.Errorf("%s: mount %q not read-only", name, a[j+1])
+				}
+			}
+		}
+		if n != 2 {
+			t.Errorf("%s: %d mounts, want 2", name, n)
+		}
+	}
+}
+
+func TestMergeBaseArgsRefusesInvalidRef(t *testing.T) {
+	for _, ref := range []string{"", "-x", "--upload-pack=x", "HEAD", "main", "refs/tags/v1", "refs/heads/../x", "refs/heads/a b"} {
+		if a := MergeBaseArgs(Target{Top: "/w/repo"}, "img", "n", 1, 2, ref); a != nil {
+			t.Errorf("ref %q built an argv: %q", ref, a)
+		}
+	}
+}
+
+func TestValidBaseRef(t *testing.T) {
+	long := "refs/heads/" + strings.Repeat("a", 255-len("refs/heads/"))
+	for _, ok := range []string{
+		"refs/heads/main", "refs/remotes/origin/main", "refs/remotes/origin/HEAD",
+		"refs/heads/feat/x-1.2_y", "refs/heads/v1.0", long,
+	} {
+		if !ValidBaseRef(ok) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{
+		"", "-x", "--upload-pack=x", "-refs/heads/main", " refs/heads/main", "refs/heads/main\n", "refs/heads/main ",
+		"refs/heads/../x", "refs/heads/a..b", "refs/remotes/..", "refs/tags/v1", "refs/heads/", "refs/remotes/", "refs/heads",
+		"heads/main", "/refs/heads/main", "refs/heads/a b", "refs/heads/a;b", "refs/heads/a$b", "refs/heads/a`b`",
+		"refs/heads/a\x00b", "refs/heads/é", "refs/heads/a:b", "refs/heads/a~1", "refs/heads/a^", "refs/heads/a@{1}",
+		long + "a", "refs/heads/" + strings.Repeat("a", 300),
+	} {
+		if ValidBaseRef(bad) {
+			t.Errorf("%q accepted", bad)
+		}
 	}
 }

@@ -13,12 +13,15 @@ import (
 	"github.com/culiops/culibox/internal/gitview"
 )
 
-// GitView runs git status and diff for the file tree (gitview.Runner). Nil on
-// the Server means no box runtime: both endpoints answer "unavailable".
+// GitView runs git status, diff and base lookup for the file tree
+// (gitview.Runner). Nil on the Server means no box runtime: every endpoint
+// answers "unavailable". Base takes no ref: the runner picks the base branch
+// from the repository's own refs, so a request can never name one.
 type GitView interface {
 	Status(context.Context, gitview.Target) gitview.Status
 	StatusFresh(context.Context, gitview.Target) gitview.Status
 	Diff(context.Context, gitview.Target, string, bool) gitview.Diff
+	Base(context.Context, gitview.Target) gitview.BaseInfo
 }
 
 // Every reason a client sees is one of these fixed messages. The runner's own
@@ -31,6 +34,7 @@ const (
 	msgGitTimeout      = "Git took too long"
 	msgGitNoImage      = "Git status needs the box image (start a boxed session once)"
 	msgGitTooMany      = "Too many changes to tell what changed in this file"
+	msgGitNoBase       = "no base branch"
 )
 
 var (
@@ -39,7 +43,7 @@ var (
 	errGitUnsafe  = errors.New("git: path cannot be mounted")
 )
 
-// gitBody is the body of both endpoints.
+// gitBody is the body of every git endpoint.
 type gitBody struct {
 	Path string `json:"path"`
 	// Fresh (status only) asks for a result read after this request arrived,
@@ -189,6 +193,10 @@ func unavailableGitDiff(reason string) gitview.Diff {
 	return gitview.Diff{State: "unavailable", Reason: reason}
 }
 
+func unavailableGitBase(reason string) gitview.BaseInfo {
+	return gitview.BaseInfo{State: "unavailable", Reason: reason}
+}
+
 // handleGitStatus is POST /api/git/status {"path": abs}: the change set of the
 // checkout holding path. ok/notrepo/toomany/unavailable are all 200.
 func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
@@ -299,6 +307,44 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 		d.Reason = ""
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// handleGitBase is POST /api/git/base {"path": abs}: the branch checked out in
+// the checkout holding path, the base branch picked for it and their merge
+// base. Nothing in the body names a ref: the base is derived by the runner from
+// the repository's refs. ok/nobase/notrepo/unavailable are all 200.
+func (s *Server) handleGitBase(w http.ResponseWriter, r *http.Request) {
+	body, ok := decodeGitBody(w, r)
+	if !ok {
+		return
+	}
+	if s.Git == nil {
+		writeJSON(w, http.StatusOK, unavailableGitBase(msgGitNoRuntime))
+		return
+	}
+	t, _, err := s.gitTarget(body.Path)
+	switch {
+	case errors.Is(err, errGitNotRepo):
+		writeJSON(w, http.StatusOK, gitview.BaseInfo{State: "notrepo"})
+		return
+	case isGitRefusal(err):
+		writeJSON(w, http.StatusOK, unavailableGitBase(targetReason(err)))
+		return
+	case err != nil:
+		writeFsErr(w, err)
+		return
+	}
+	bi := s.Git.Base(r.Context(), t)
+	switch bi.State {
+	case "unavailable":
+		log.Printf("git base %q: %q", t.Top, bi.Reason)
+		bi.Reason = gitReason(bi.Reason)
+	case "nobase":
+		bi.Reason = msgGitNoBase
+	default:
+		bi.Reason = ""
+	}
+	writeJSON(w, http.StatusOK, bi)
 }
 
 // rootRel is where the request's resolved dir (abs, or its parent for a file)
