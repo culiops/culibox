@@ -405,6 +405,7 @@ func parseConfig(b []byte) (Config, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
+	c.Options = withBuiltinOptions(c.Options)
 	return c, nil
 }
 
