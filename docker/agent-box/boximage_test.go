@@ -164,7 +164,7 @@ func TestImageCheck(t *testing.T) {
 	}{
 		{ImageState{}, true, "box setup"},
 		{ImageState{Present: true, Arch: "amd64", Hash: Hash()}, true, "amd64"},
-		{ImageState{Present: true, Arch: "arm64", Hash: "old"}, false, "-rebuild"},
+		{ImageState{Present: true, Arch: "arm64", Hash: "old"}, false, "run `culibox box setup`"},
 		{ImageState{Present: true, Arch: "arm64", Hash: Hash()}, false, ""},
 	}
 	for _, c := range cases {
@@ -311,7 +311,7 @@ func TestCheckForPinned(t *testing.T) {
 	if fatal || !strings.Contains(msg, "pinned to "+pin) {
 		t.Fatalf("stale pin: (%v, %q)", fatal, msg)
 	}
-	if fatal, msg = stale.CheckFor(base, "arm64"); fatal || !strings.Contains(msg, "-rebuild") || strings.Contains(msg, "pinned") {
+	if fatal, msg = stale.CheckFor(base, "arm64"); fatal || !strings.Contains(msg, "run `culibox box setup`") || strings.Contains(msg, "pinned") {
 		t.Fatalf("stale unpinned: (%v, %q)", fatal, msg)
 	}
 	if fatal, _ = (ImageState{Present: true, Arch: "amd64", Hash: Hash()}).CheckFor(pin, "arm64"); !fatal {

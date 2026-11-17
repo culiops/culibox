@@ -495,7 +495,7 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 	f.ImageName = image
 	f.Image, f.ImageErr = img.Inspect(ctx, image)
 	if f.ImageErr == nil && !f.Image.Present && c.BoxImage == "" {
-		// Read-only: look, never tag. A failed look leaves the plain "not built".
+		// Read-only: look, never tag. A failed look leaves the plain "not set up".
 		if old, err := img.Inspect(ctx, config.LegacyDefaultBoxImage); err == nil {
 			f.LegacyName, f.Legacy = config.LegacyDefaultBoxImage, old
 		}

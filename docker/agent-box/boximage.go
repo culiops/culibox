@@ -372,8 +372,11 @@ func (s ImageState) CheckFor(image, serverArch string) (fatal bool, msg string) 
 	switch {
 	case !s.Present:
 		return true, fmt.Sprintf("pinned box image %s is missing; CuliBox never rebuilds or pulls a pinned tag: set box_image to a present dated tag (docker images %s), or run culibox box setup -rebuild and pin the tag it prints", image, mustRepo(image))
-	case s.Arch != serverArch || s.Hash == Hash():
-		return s.Check(serverArch)
+	case s.Arch != serverArch:
+		// box setup never rebuilds a pin; -rebuild builds a new dated tag to pin.
+		return true, fmt.Sprintf("pinned box image %s is %s but the daemon is %s (it would run emulated); run `culibox box setup -rebuild` and pin the dated tag it prints", image, s.Arch, serverArch)
+	case s.Hash == Hash():
+		return false, ""
 	}
 	return false, fmt.Sprintf("pinned to %s, built from an older Dockerfile than this CuliBox (fine to keep); culibox box setup -rebuild builds a new dated tag you can pin", image)
 }
