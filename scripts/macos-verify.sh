@@ -317,7 +317,7 @@ timed_out_pkgs() {
 run_tests() {
   local arch=$1 goarch=$2 abdir=$3 log="$work/test-$1.log" rlog="$work/test-$1-retry.log"
   local passed skipped failed pkgs badpkgs timedout pkg ntimed=0 retried="" retry_ok=true note=""
-  local par=()
+  local par=""
   T_ENV="CGO_ENABLED=0 GOOS=darwin GOARCH=$goarch"
   if [ -z "$abdir" ]; then
     T_PASS=false
@@ -326,12 +326,13 @@ run_tests() {
     return 0
   fi
   if [ "$arch" = amd64 ]; then
-    par=(-p 1)
+    par="-p 1"
     note="; one package at a time under Rosetta (-p 1)"
   fi
-  echo "go test ./... ($arch, $T_ENV${par[*]:+, ${par[*]}})"
+  echo "go test ./... ($arch, $T_ENV${par:+, $par})"
   : >"$log"
-  if go_test "$log" ${par[@]+"${par[@]}"} -count=1 -v ./...; then
+  # $par unquoted on purpose: empty, or the two words -p 1.
+  if go_test "$log" $par -count=1 -v ./...; then
     T_PASS=true
   else
     T_PASS=false
