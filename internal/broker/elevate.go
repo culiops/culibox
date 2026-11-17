@@ -283,11 +283,13 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 		e := &elevation{until: until, grantedAt: now, reason: row.Reason, conn: conn, row: row, gen: gen, pending: true}
 		e.timer = b.after(until.Sub(now), func() { b.expire(sid, gen) })
 		b.elev[sid] = e
-		// A drop's leftover is cleared only when it is this connection's (its
-		// time moves onto the new window, so a later drop still reports it) or
-		// has passed: another connection's live leftover refused the grant above.
+		// A drop's leftover is cleared only when it is this connection's or its
+		// credentials have expired: another connection's live leftover refused
+		// the grant above. While WriteHold still holds it (the skew minute
+		// included), its time moves onto the new window, so the folder hold and a
+		// later drop keep it (#333).
 		if d, ok := b.dropped[sid]; ok && (d.conn == conn || !d.lastValid.After(now)) {
-			if d.conn == conn && d.lastValid.After(now) {
+			if d.lastValid.Add(dropHoldSkew).After(now) && d.lastValid.After(e.lastExp) {
 				e.lastExp = d.lastValid
 			}
 			delete(b.dropped, sid)
@@ -363,7 +365,7 @@ func (b *Broker) WriteHold(sid string, adoptedAt time.Time) string {
 		delete(b.dropped, sid) // expired, margin included: a removed session's is asked about only here
 	}
 	if end := adoptedAt.Add(minElevatedRemaining); !adoptedAt.IsZero() && end.After(now) {
-		return "was running when CuliBox restarted, and write credentials it may have been given before then stay valid until " + end.Local().Format("15:04") + " at the latest"
+		return "was running when CuliBox or its box VM restarted, and write credentials it may have been given before then stay valid until " + end.Local().Format("15:04") + " at the latest"
 	}
 	return ""
 }

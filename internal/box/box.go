@@ -432,6 +432,10 @@ type Manager struct {
 	// while the hook still holds the session, and drops an entry once it does
 	// not. Guarded by mu.
 	ended map[string]endedHold
+	// started is when this Manager was made: write credentials minted before a
+	// restart cannot outlive it by more than bootHoldFor, so an orphan's hold
+	// (keepEndedHold with no owner) counts from here.
+	started time.Time
 	// writeHold is the hook SetWriteHold installs (guarded by mu); nil = none.
 	writeHold WriteHold
 	// memTotal is docker's MemTotal once read (0 = not yet); memFallbackLogged
@@ -481,6 +485,7 @@ func New(opts Options) (*Manager, error) {
 		adoptedAt:     map[string]time.Time{},
 		ownerWS:       map[string]string{},
 		ended:         map[string]endedHold{},
+		started:       time.Now(),
 	}
 	if opts.LockGuards {
 		ops := platformFlagOps()
@@ -1812,20 +1817,36 @@ type endedHold struct {
 	boot      bool // reaped at boot (keepBootHold): held for bootHoldFor while no hook is installed
 }
 
-// keepEndedHold is called before an exclusive box is removed: if the hook
-// still holds the session that owns it, the hold outlives the box in ended
-// (#333). It also prunes the ended holds the hook no longer holds, so they
-// cannot pile up. Caller holds opMu (the hook runs under it), never mu.
+// keepEndedHold is called before a box is removed: if the hook still holds the
+// session that owns it, the hold outlives the box in ended (#333). A box no
+// session of this process owns is a plain box, or an exclusive orphan whose boot
+// Reconcile did not run (Docker down or slow at boot, then back): its label
+// says which, and an exclusive or unreadable one gets a boot hold counted from
+// this process's start, fail closed, as Reconcile would have left. It also
+// prunes the ended holds the hook no longer holds, so they cannot pile up.
+// Caller holds opMu (the hook runs under it), never mu.
 func (m *Manager) keepEndedHold(ctx context.Context, name string) {
 	m.endedHolds()
 	m.mu.Lock()
 	hook, sid, at, ws := m.writeHold, m.owner[name], m.adoptedAt[name], m.ownerWS[name]
 	m.mu.Unlock()
-	if hook == nil || sid == "" || hook(sid, at) == "" {
+	if sid == "" {
+		row, found, err := m.labelRow(ctx, name)
+		switch {
+		case err != nil:
+			m.keepBootHold(name, nil, m.started) // unreadable: every folder
+		case found:
+			m.keepBootHold(name, map[string]BoxInfo{name: row}, m.started)
+		} // not listed: no container, so nothing of it to hold
+		return
+	}
+	if hook == nil || hook(sid, at) == "" {
 		return
 	}
 	if ws == "" { // adopted after a restart: the folder is on the box's label
-		ws = m.labelWorkspace(ctx, name)
+		if row, found, err := m.labelRow(ctx, name); err == nil && found && !row.Unreadable && knownWorkspace(row.Workspace) {
+			ws = row.Workspace
+		}
 	}
 	m.mu.Lock()
 	m.ended[name] = endedHold{sid: sid, ws: ws, adoptedAt: at}
@@ -1858,19 +1879,26 @@ func (m *Manager) keepBootHold(name string, rows map[string]BoxInfo, at time.Tim
 	m.mu.Unlock()
 }
 
-// labelWorkspace is the workspace label of this instance's box name, or ""
-// when it cannot be read (the ended hold then covers every folder).
-func (m *Manager) labelWorkspace(ctx context.Context, name string) string {
-	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance)
+// labelReadTimeout bounds labelRow: it runs under opMu, some callers with
+// context.Background (the idle timer), and a hung docker must not hold every
+// spawn behind it.
+const labelReadTimeout = 10 * time.Second
+
+// labelRow is this instance's row for box name as docker lists it. found is
+// false when docker lists no such box; err is set when the list failed.
+func (m *Manager) labelRow(ctx context.Context, name string) (row BoxInfo, found bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, labelReadTimeout)
+	defer cancel()
+	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance+"="+m.opts.Instance)
 	if err != nil {
-		return ""
+		return BoxInfo{}, false, err
 	}
 	for _, b := range boxes {
-		if b.Name == name && !b.Unreadable && b.Instance == m.opts.Instance && knownWorkspace(b.Workspace) {
-			return b.Workspace
+		if b.Name == name {
+			return b, true, nil
 		}
 	}
-	return ""
+	return BoxInfo{}, false, nil
 }
 
 // heldEnded is an ended hold the hook still holds, with the hook's reason.
@@ -1892,7 +1920,7 @@ func (m *Manager) endedHolds() []heldEnded {
 		case hook != nil:
 			why = hook(e.sid, e.adoptedAt)
 		case e.boot && time.Now().Before(end):
-			why = "a session was running when CuliBox restarted, and write credentials it may have been given before then stay valid until " +
+			why = "a session was running when CuliBox or its box VM restarted, and write credentials it may have been given before then stay valid until " +
 				end.Local().Format("15:04") + " at the latest"
 		}
 		if why != "" {
