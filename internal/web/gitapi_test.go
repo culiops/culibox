@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/culiops/culibox/internal/gitview"
 )
@@ -29,15 +30,18 @@ type fakeGit struct {
 	diffs    []fakeDiffCall
 	bases    []gitview.Target
 	numstats []fakeNumstatCall
-	st       gitview.Status
-	diff     gitview.Diff
-	base     gitview.BaseInfo
-	ns       gitview.Numstat
+	// numGate, when set, holds every Numstat until it is closed: a slow diff.
+	numGate chan struct{}
+	st      gitview.Status
+	diff    gitview.Diff
+	base    gitview.BaseInfo
+	ns      gitview.Numstat
 }
 
 type fakeNumstatCall struct {
-	T  gitview.Target
-	Sc gitview.Scope
+	T     gitview.Target
+	Sc    gitview.Scope
+	Fresh bool
 }
 
 type fakeDiffCall struct {
@@ -88,16 +92,34 @@ func (f *fakeGit) Base(_ context.Context, t gitview.Target) gitview.BaseInfo {
 }
 
 func (f *fakeGit) Numstat(_ context.Context, t gitview.Target, sc gitview.Scope) gitview.Numstat {
+	return f.numstat(t, sc, false)
+}
+
+func (f *fakeGit) NumstatFresh(_ context.Context, t gitview.Target, sc gitview.Scope) gitview.Numstat {
+	return f.numstat(t, sc, true)
+}
+
+func (f *fakeGit) numstat(t gitview.Target, sc gitview.Scope, fresh bool) gitview.Numstat {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.numstats = append(f.numstats, fakeNumstatCall{t, sc})
-	if f.ns.State == "" {
+	f.numstats = append(f.numstats, fakeNumstatCall{t, sc, fresh})
+	ns, gate := f.ns, f.numGate
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	if ns.State == "" {
 		return gitview.Numstat{State: "ok", Entries: []gitview.NumEntry{}}
 	}
 	// A copy: the handler appends to and sets fields of what it gets.
-	ns := f.ns
 	ns.Entries = append([]gitview.NumEntry{}, ns.Entries...)
 	return ns
+}
+
+// statusCalls is how many Status calls have been made so far.
+func (f *fakeGit) statusCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.statuses)
 }
 
 func (f *fakeGit) calls() int {
@@ -890,7 +912,7 @@ func TestGitNumstatHandlerOK(t *testing.T) {
 		}
 	}
 	tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
-	if len(g.numstats) != 1 || g.numstats[0] != (fakeNumstatCall{tg, gitview.Scope{}}) || len(g.bases) != 0 || len(g.diffs) != 0 {
+	if len(g.numstats) != 1 || g.numstats[0] != (fakeNumstatCall{tg, gitview.Scope{}, false}) || len(g.bases) != 0 || len(g.diffs) != 0 {
 		t.Fatalf("calls: numstats=%+v bases=%+v diffs=%+v, want one head-scope Numstat of %+v", g.numstats, g.bases, g.diffs, tg)
 	}
 }
@@ -904,7 +926,7 @@ func TestGitNumstatBranchScopeUsesTheServersBase(t *testing.T) {
 	body := `{"path":` + strconv.Quote(repo) + `,"scope":"branch","baseRef":"-x","base":"refs/heads/evil"}`
 	decodeNumstat(t, gitPost(s.handleGitNumstat, "/api/git/numstat", body))
 	tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
-	want := fakeNumstatCall{tg, gitview.Scope{Branch: true, BaseRef: "refs/remotes/origin/develop"}}
+	want := fakeNumstatCall{tg, gitview.Scope{Branch: true, BaseRef: "refs/remotes/origin/develop"}, false}
 	if len(g.numstats) != 1 || g.numstats[0] != want || len(g.bases) != 1 || g.bases[0] != tg {
 		t.Fatalf("calls: numstats=%+v bases=%+v, want one Base and %+v", g.numstats, g.bases, want)
 	}
@@ -1065,11 +1087,10 @@ func TestGitNumstatStatesAndReasons(t *testing.T) {
 			t.Fatalf("raw %q: numstat = %+v, want reason %q", raw, ns, want)
 		}
 	}
-	// Without a count from git there is no point counting lines: no untracked entries, no Status run.
-	n := len(g.statuses)
+	// Without a count from git there is no point counting lines: no untracked entries.
 	g.ns = gitview.Numstat{State: "toomany", Entries: []gitview.NumEntry{}}
-	if ns := post(); ns.State != "toomany" || ns.Reason != "" || len(ns.Entries) != 0 || len(g.statuses) != n {
-		t.Fatalf("toomany: %+v (status calls %d -> %d)", ns, n, len(g.statuses))
+	if ns := post(); ns.State != "toomany" || ns.Reason != "" || len(ns.Entries) != 0 {
+		t.Fatalf("toomany: %+v", ns)
 	}
 	g.ns = gitview.Numstat{State: "notrepo", Entries: []gitview.NumEntry{}}
 	if ns := post(); ns.State != "notrepo" || len(ns.Entries) != 0 {
@@ -1302,4 +1323,76 @@ func (zeros) Read(p []byte) (int, error) {
 		p[i] = "x\n"[i%2]
 	}
 	return len(p), nil
+}
+
+func TestGitNumstatFreshReachesTheRunner(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+	post := func(scope string, fresh any) gitview.Numstat {
+		b, _ := json.Marshal(map[string]any{"path": repo, "scope": scope, "fresh": fresh})
+		return decodeNumstat(t, gitPost(s.handleGitNumstat, "/api/git/numstat", string(b)))
+	}
+	post("head", true)
+	post("head", false)
+	post("branch", true)
+	post("branch", false)
+	base := gitview.Scope{Branch: true, BaseRef: "refs/remotes/origin/main"}
+	want := []fakeNumstatCall{{tg, gitview.Scope{}, true}, {tg, gitview.Scope{}, false}, {tg, base, true}, {tg, base, false}}
+	if !slices.Equal(g.numstats, want) {
+		t.Fatalf("numstat calls = %+v\nwant %+v", g.numstats, want)
+	}
+	// The body field is read as status reads it: absent is not fresh.
+	g.numstats = nil
+	decodeNumstat(t, gitPost(s.handleGitNumstat, "/api/git/numstat", numstatBody(repo, "head")))
+	if len(g.numstats) != 1 || g.numstats[0].Fresh {
+		t.Fatalf("numstat without fresh = %+v", g.numstats)
+	}
+	// Only numstat is fresh: the status the untracked counts come from, and the
+	// base, are the reused ones (the client refreshes status on its own).
+	for i, f := range g.fresh {
+		if f {
+			t.Fatalf("Status call %d of a fresh numstat request was StatusFresh", i)
+		}
+	}
+	if len(g.bases) != 2 {
+		t.Fatalf("Base ran %d times for two branch requests, want 2", len(g.bases))
+	}
+}
+
+func TestGitNumstatReadsStatusAlongsideNotAfterANumstat(t *testing.T) {
+	// A slow diff outlasts Status's 2 s reuse window, so a Status read after it
+	// would be a second cold container run in the same request. Status is read
+	// at the start, in parallel: it is already made while numstat is still going.
+	s, repo, g := untrackedRepo(t, "new.txt")
+	mustWrite(t, filepath.Join(repo, "new.txt"), "a\nb\n")
+	gate := make(chan struct{})
+	g.mu.Lock()
+	g.numGate = gate
+	g.mu.Unlock()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- postNumstat(s, repo, "head") }()
+	deadline := time.Now().Add(5 * time.Second)
+	for g.statusCalls() == 0 {
+		if time.Now().After(deadline) {
+			close(gate)
+			t.Fatal("Status was not requested while numstat was still running")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-done:
+		t.Fatal("the request finished before the diff did")
+	default:
+	}
+	close(gate)
+	ns := decodeNumstat(t, <-done)
+	want := []gitview.NumEntry{{P: "tracked.go", X: "M", A: 1, D: 1}, {P: "new.txt", X: "U", A: 2}}
+	if ns.State != "ok" || !slices.Equal(ns.Entries, want) {
+		t.Fatalf("numstat = %+v, want %+v", ns, want)
+	}
+	if n := g.statusCalls(); n != 1 {
+		t.Fatalf("Status ran %d times for one request, want 1", n)
+	}
 }

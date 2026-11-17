@@ -19,13 +19,16 @@ import (
 // (gitview.Runner). Nil on the Server means no box runtime: every endpoint
 // answers "unavailable". Base takes no ref: the runner picks the base branch
 // from the repository's own refs, so a request can never name one. The
-// Scope.BaseRef a handler gives Numstat is the one Base returned.
+// Scope.BaseRef a handler gives Numstat is the one Base returned. The Fresh
+// variants (StatusFresh, NumstatFresh) are for a request that has just changed
+// something on disk.
 type GitView interface {
 	Status(context.Context, gitview.Target) gitview.Status
 	StatusFresh(context.Context, gitview.Target) gitview.Status
 	Diff(context.Context, gitview.Target, string, bool) gitview.Diff
 	Base(context.Context, gitview.Target) gitview.BaseInfo
 	Numstat(context.Context, gitview.Target, gitview.Scope) gitview.Numstat
+	NumstatFresh(context.Context, gitview.Target, gitview.Scope) gitview.Numstat
 }
 
 // Every reason a client sees is one of these fixed messages. The runner's own
@@ -50,9 +53,9 @@ var (
 // gitBody is the body of every git endpoint.
 type gitBody struct {
 	Path string `json:"path"`
-	// Fresh (status only) asks for a result read after this request arrived,
-	// not a reused or already-running one: a client sets it when it has just
-	// changed something on disk.
+	// Fresh (status and numstat) asks for a result read after this request
+	// arrived, not a reused or already-running one: a client sets it when it has
+	// just changed something on disk.
 	Fresh bool `json:"fresh,omitempty"`
 	// Scope (numstat only) is "head" or "branch", nothing else: the base branch
 	// of "branch" is derived by the server, no client field can name a ref.
@@ -359,12 +362,14 @@ func (s *Server) handleGitBase(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGitNumstat is POST /api/git/numstat {"path": abs, "scope": "head" or
-// "branch"}: per-file line counts of the changes in the checkout holding path,
-// against HEAD or, for "branch", against the merge base with the base branch the
-// server picks (Base). Tracked files are counted by git; untracked ones are
-// counted here (see withUntracked). Any other scope is a 400. ok/notrepo/toomany/
-// unavailable are all 200, and "branch" with no base branch is "unavailable"
-// with "no base branch".
+// "branch", "fresh": bool}: per-file line counts of the changes in the checkout
+// holding path, against HEAD or, for "branch", against the merge base with the
+// base branch the server picks (Base). Tracked files are counted by git;
+// untracked ones are counted here (see withUntracked). Any other scope is a 400.
+// ok/notrepo/toomany/unavailable are all 200, and "branch" with no base branch
+// is "unavailable" with "no base branch". Fresh makes only the numstat run fresh
+// (see Runner.NumstatFresh): the status the untracked files come from is the
+// reused one, as the client refreshes status on its own.
 func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 	body, ok := decodeGitBody(w, r)
 	if !ok {
@@ -414,9 +419,20 @@ func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The reused status is read alongside the diff, not after it: a diff that
+	// takes longer than Status's reuse window would otherwise make the read after
+	// it a second cold container run, and one request would wait for two. The
+	// buffer lets the goroutine finish unobserved when the numstat is not ok.
+	stc := make(chan gitview.Status, 1)
+	go func() { stc <- s.Git.Status(r.Context(), t) }()
 	// ns is this request's own copy (Numstat returns a value with cloned
 	// entries), so RootRel and the appended entries never reach the runner's cache.
-	ns := s.Git.Numstat(r.Context(), t, sc)
+	var ns gitview.Numstat
+	if body.Fresh {
+		ns = s.Git.NumstatFresh(r.Context(), t, sc)
+	} else {
+		ns = s.Git.Numstat(r.Context(), t, sc)
+	}
 	ns.RootRel = rootRel(t.Top, abs)
 	if ns.State == "unavailable" {
 		log.Printf("git numstat %q: %q", t.Top, ns.Reason)
@@ -428,7 +444,7 @@ func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 		ns.Entries = []gitview.NumEntry{}
 	}
 	if ns.State == "ok" {
-		ns.Entries = s.withUntracked(r.Context(), t, ns.Entries)
+		ns.Entries = s.withUntracked(r.Context(), t, ns.Entries, <-stc)
 	}
 	writeJSON(w, http.StatusOK, ns)
 }
@@ -444,13 +460,12 @@ const (
 
 // withUntracked appends a line count for each untracked file the checkout has.
 // Git's diff has none (an untracked file is not in it), so they are counted
-// here, from Status's untracked entries (the reused result, so usually no new
-// run), as "U" entries with every line added. A collapsed untracked folder
+// here, from the untracked entries of st (the reused status), as "U" entries
+// with every line added. A collapsed untracked folder
 // ("dir/") has no count, nor has a file over 2 MiB, one that is not a plain
 // file or has gone, and only the first 200 files are looked at. A path numstat
 // already lists is not added again, as the two runs can be seconds apart.
-func (s *Server) withUntracked(ctx context.Context, t gitview.Target, entries []gitview.NumEntry) []gitview.NumEntry {
-	st := s.Git.Status(ctx, t)
+func (s *Server) withUntracked(ctx context.Context, t gitview.Target, entries []gitview.NumEntry, st gitview.Status) []gitview.NumEntry {
 	if st.State != "ok" {
 		return entries
 	}

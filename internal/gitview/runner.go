@@ -175,13 +175,24 @@ type baseFlight struct {
 type numCached struct {
 	ns       Numstat
 	at       time.Time // when the run finished
+	started  time.Time // when the run launched its container (see numFlight)
 	lastUsed time.Time
 }
 
 // numFlight is one numstat run that every concurrent caller for a key waits on.
+// started and hasStarted are flight's: when its container launched (guarded by
+// Runner.mu), before which the run has read nothing.
 type numFlight struct {
-	done chan struct{}
-	ns   Numstat
+	done       chan struct{}
+	ns         Numstat
+	started    time.Time
+	hasStarted bool
+}
+
+// readsAfter reports whether the flight's result reflects the disk at or after
+// t: it has not launched yet, or it launched at or after t.
+func (f *numFlight) readsAfter(t time.Time) bool {
+	return !f.hasStarted || !f.started.Before(t)
 }
 
 // flight is one status run that every concurrent caller for a Top waits on.
@@ -518,6 +529,20 @@ func (r *Runner) doBase(t Target, head string) BaseInfo {
 // own, from Base): any other is "unavailable" with no run. A refused target, a
 // docker failure, a timeout or a repository with no commits is "unavailable".
 func (r *Runner) Numstat(ctx context.Context, t Target, sc Scope) Numstat {
+	return r.numstat(ctx, t, sc, false)
+}
+
+// NumstatFresh is Numstat for a caller that has just changed something on
+// disk, with the semantics of StatusFresh: it never takes the reuse cache, and
+// joins a run already in flight only if that run's container launched at or
+// after this call (or has not launched yet), since an earlier run may have read
+// the tree before the change. Fresh callers still share one new run among
+// themselves, and the run still takes one of the MaxParallel slots.
+func (r *Runner) NumstatFresh(ctx context.Context, t Target, sc Scope) Numstat {
+	return r.numstat(ctx, t, sc, true)
+}
+
+func (r *Runner) numstat(ctx context.Context, t Target, sc Scope, fresh bool) Numstat {
 	if why := t.Unsafe(); why != "" {
 		return unavailableNumstat(why)
 	}
@@ -533,20 +558,21 @@ func (r *Runner) Numstat(ctx context.Context, t Target, sc Scope) Numstat {
 	now := r.now()
 	r.mu.Lock()
 	r.sweepLocked(now)
-	if c := r.numCache[key]; c != nil && now.Sub(c.at) < orDur(r.Reuse, defaultReuse) {
+	if c := r.numCache[key]; !fresh && c != nil && now.Sub(c.at) < orDur(r.Reuse, defaultReuse) {
 		c.lastUsed = now
 		ns := cloneNumstat(c.ns)
 		r.mu.Unlock()
 		return ns
 	}
 	f := r.numFlights[key]
-	if f == nil {
+	if f == nil || (fresh && !f.readsAfter(now)) {
 		f = &numFlight{done: make(chan struct{})}
 		if r.numFlights == nil {
 			r.numFlights = map[string]*numFlight{}
 		}
+		// As for status, a newer flight replaces an older one still running,
+		// and the run is the flight's, not the first caller's.
 		r.numFlights[key] = f
-		// As for status, the run is the flight's, not the first caller's.
 		go r.runNumstat(t, sc, key, f)
 	}
 	r.mu.Unlock()
@@ -559,13 +585,19 @@ func (r *Runner) Numstat(ctx context.Context, t Target, sc Scope) Numstat {
 }
 
 func (r *Runner) runNumstat(t Target, sc Scope, key string, f *numFlight) {
-	ns := r.doNumstat(t, sc)
+	ns := r.doNumstat(t, sc, f)
 	now := r.now()
 	r.mu.Lock()
+	if !f.hasStarted { // never got a slot
+		f.started, f.hasStarted = now, true
+	}
 	if r.numCache == nil {
 		r.numCache = map[string]*numCached{}
 	}
-	r.numCache[key] = &numCached{ns: ns, at: now, lastUsed: now}
+	// A slower, older run must not replace the result of a newer one.
+	if c := r.numCache[key]; c == nil || !c.started.After(f.started) {
+		r.numCache[key] = &numCached{ns: ns, at: now, started: f.started, lastUsed: now}
+	}
 	if r.numFlights[key] == f {
 		delete(r.numFlights, key)
 	}
@@ -574,7 +606,7 @@ func (r *Runner) runNumstat(t Target, sc Scope, key string, f *numFlight) {
 	close(f.done)
 }
 
-func (r *Runner) doNumstat(t Target, sc Scope) Numstat {
+func (r *Runner) doNumstat(t Target, sc Scope, f *numFlight) Numstat {
 	name := newName()
 	args := NumstatArgs(t, r.Image, name, r.UID, r.GID, sc)
 	if args == nil { // NumstatArgs refused the ref: run nothing
@@ -587,6 +619,9 @@ func (r *Runner) doNumstat(t Target, sc Scope) Numstat {
 		return unavailableNumstat(errNoSlot.Error())
 	}
 	defer release()
+	r.mu.Lock()
+	f.started, f.hasStarted = r.now(), true
+	r.mu.Unlock()
 	out := &capBuffer{max: maxNumstatBytes}
 	err = r.Docker.RunStream(ctx, args, out)
 	if err != nil {

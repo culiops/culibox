@@ -1415,3 +1415,159 @@ func TestRunnerNumstatCacheIsSwept(t *testing.T) {
 		t.Fatalf("numstat cache after idle: tgt=%v other=%v (%d entries), want true/false", keptTgt, keptOther, len(r.numCache))
 	}
 }
+
+// numLine is the output of a run whose only change is the file named p.
+func numLine(p string) string { return "1\t0\t" + p + "\x00" }
+
+func TestRunnerNumstatFreshIgnoresReuseWindow(t *testing.T) {
+	f := &fakeDocker{run: okNumstat()}
+	c := newClock()
+	r := newRunner(f, c)
+	r.Numstat(context.Background(), tgt, Scope{})
+	c.add(100 * time.Millisecond) // well inside the 2 s reuse window
+	r.Numstat(context.Background(), tgt, Scope{})
+	if n := f.callCount(); n != 1 {
+		t.Fatalf("plain call in the window: %d runs, want 1", n)
+	}
+	if ns := r.NumstatFresh(context.Background(), tgt, Scope{}); ns.State != "ok" || len(ns.Entries) != 2 {
+		t.Fatalf("fresh numstat = %+v", ns)
+	}
+	if n := f.callCount(); n != 2 {
+		t.Fatalf("fresh call in the window: %d runs, want 2", n)
+	}
+	// Its result is cached for later plain callers.
+	r.Numstat(context.Background(), tgt, Scope{})
+	if n := f.callCount(); n != 2 {
+		t.Fatalf("plain call after a fresh run: %d runs, want 2", n)
+	}
+	// Fresh is per scope too: a Branch call is a run of its own, and so is its fresh twin.
+	br := Scope{Branch: true, BaseRef: "refs/heads/main"}
+	r.NumstatFresh(context.Background(), tgt, br)
+	r.NumstatFresh(context.Background(), tgt, br)
+	if n := f.callCount(); n != 4 {
+		t.Fatalf("two fresh branch calls: %d runs, want 4", n)
+	}
+	// An invalid ref is refused for a fresh call as for a plain one: no run.
+	if ns := r.NumstatFresh(context.Background(), tgt, Scope{Branch: true, BaseRef: "-x"}); ns.State != "unavailable" || f.callCount() != 4 {
+		t.Fatalf("fresh with a bad ref: %+v runs=%d", ns, f.callCount())
+	}
+}
+
+func TestRunnerNumstatFreshDoesNotJoinEarlierRun(t *testing.T) {
+	release := make(chan struct{})
+	var phase atomic.Int32
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		if phase.Add(1) == 1 {
+			<-release // the early run reads the tree "before the mutation"
+			_, err := io.WriteString(w, numLine("old.txt"))
+			return err
+		}
+		_, err := io.WriteString(w, numLine("new.txt"))
+		return err
+	}}
+	c := newClock()
+	r := newRunner(f, c)
+	plain := make(chan Numstat)
+	go func() { plain <- r.Numstat(context.Background(), tgt, Scope{}) }()
+	waitCalls(t, f, 1)
+	c.add(10 * time.Millisecond) // the mutation, then the fresh request
+	fresh := r.NumstatFresh(context.Background(), tgt, Scope{})
+	if n := f.callCount(); n != 2 {
+		t.Fatalf("fresh joined the earlier run: %d runs, want 2", n)
+	}
+	if len(fresh.Entries) != 1 || fresh.Entries[0].P != "new.txt" {
+		t.Fatalf("fresh got %+v, want the second run's result", fresh.Entries)
+	}
+	// A plain caller now is served the fresh run's result from the cache.
+	if ns := r.Numstat(context.Background(), tgt, Scope{}); len(ns.Entries) != 1 || ns.Entries[0].P != "new.txt" {
+		t.Fatalf("plain after the fresh run got %+v", ns.Entries)
+	}
+	close(release)
+	if ns := <-plain; len(ns.Entries) != 1 || ns.Entries[0].P != "old.txt" {
+		t.Fatalf("early caller got %+v", ns.Entries)
+	}
+	// The older run finishing last must not replace the newer result in the cache.
+	if ns := r.Numstat(context.Background(), tgt, Scope{}); ns.Entries[0].P != "new.txt" {
+		t.Fatalf("cache holds %+v, want the newer run", ns.Entries)
+	}
+	if n := f.callCount(); n != 2 {
+		t.Fatalf("%d runs in all, want 2", n)
+	}
+}
+
+func TestRunnerNumstatFreshSharesOneNewRun(t *testing.T) {
+	release := make(chan struct{})
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		<-release
+		return okNumstat()(ctx, a, w)
+	}}
+	r := newRunner(f, newClock())
+	var wg sync.WaitGroup
+	res := make([]Numstat, 6)
+	for i := range res {
+		wg.Add(1)
+		go func() { defer wg.Done(); res[i] = r.NumstatFresh(context.Background(), tgt, Scope{}) }()
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if n := f.callCount(); n != 1 {
+		t.Fatalf("concurrent fresh calls: %d runs, want 1", n)
+	}
+	for i, ns := range res {
+		if ns.State != "ok" || len(ns.Entries) != 2 {
+			t.Fatalf("caller %d got %+v", i, ns)
+		}
+	}
+}
+
+func TestRunnerNumstatFreshJoinsRunStartedAtOrAfterRequest(t *testing.T) {
+	release := make(chan struct{})
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		<-release
+		return okNumstat()(ctx, a, w)
+	}}
+	r := newRunner(f, newClock())
+	plain := make(chan Numstat)
+	go func() { plain <- r.Numstat(context.Background(), tgt, Scope{}) }()
+	waitCalls(t, f, 1)
+	fresh := make(chan Numstat)
+	go func() { fresh <- r.NumstatFresh(context.Background(), tgt, Scope{}) }() // same instant on the fake clock
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	<-plain
+	<-fresh
+	if n := f.callCount(); n != 1 {
+		t.Fatalf("fresh request at the run's start instant: %d runs, want 1", n)
+	}
+}
+
+func TestRunnerNumstatFreshRespectsParallelCap(t *testing.T) {
+	var cur, peak atomic.Int32
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		n := cur.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(60 * time.Millisecond)
+		cur.Add(-1)
+		return okNumstat()(ctx, a, w)
+	}}
+	c := newClock()
+	r := newRunner(f, c)
+	r.MaxParallel = 1
+	done := make(chan Numstat)
+	go func() { done <- r.Numstat(context.Background(), tgt, Scope{}) }()
+	waitCalls(t, f, 1)
+	c.add(time.Millisecond)
+	if ns := r.NumstatFresh(context.Background(), tgt, Scope{}); ns.State != "ok" {
+		t.Fatalf("fresh = %+v", ns)
+	}
+	<-done
+	if p := peak.Load(); p != 1 || f.callCount() != 2 {
+		t.Fatalf("peak = %d runs = %d, want 1 and 2", p, f.callCount())
+	}
+}
