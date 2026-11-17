@@ -230,3 +230,41 @@ func TestRetainedLeftoverIsPruned(t *testing.T) {
 		t.Fatalf("an expired leftover of a removed session was kept: %d", n)
 	}
 }
+
+// A window that ends (drop, removal, its own timer) when its last credential's
+// STS expiry has just passed on the local clock still holds the folder for the
+// clock-skew minute: AWS's clock may be behind ours (#333).
+func TestWindowEndKeepsTheSkewMinute(t *testing.T) {
+	for _, end := range []string{"drop", "forget", "expire"} {
+		t.Run(end, func(t *testing.T) {
+			b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+			ts := withTimers(b)
+			if _, err := b.Elevate("aws-1", cookie(30)); err != nil {
+				t.Fatal(err)
+			}
+			until := now.Add(30 * time.Minute)
+			last := until.Add(-30 * time.Second) // expired on our clock when the window ends
+			b.mu.Lock()
+			b.noteElevatedExp("aws-1", last)
+			b.mu.Unlock()
+			*now = until
+			switch end {
+			case "drop":
+				if v, _ := b.Drop("aws-1", CredCookie); !v.LastValid.IsZero() {
+					t.Fatalf("a credential already past its expiry is not shown as still valid: %+v", v)
+				}
+			case "forget":
+				b.Forget("aws-1")
+			case "expire":
+				(*ts)[len(*ts)-1].f()
+			}
+			if why := b.WriteHold("aws-1", time.Time{}); why == "" {
+				t.Fatal("inside the clock-skew minute the folder is still held")
+			}
+			*now = last.Add(dropHoldSkew)
+			if why := b.WriteHold("aws-1", time.Time{}); why != "" {
+				t.Fatalf("past the margin: %q", why)
+			}
+		})
+	}
+}

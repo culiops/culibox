@@ -1626,6 +1626,10 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 		if h.name == name || (knownWorkspace(h.ws) && !Overlaps(h.ws, cwd)) {
 			continue
 		}
+		if !knownWorkspace(h.ws) {
+			return fmt.Errorf("%w: a box of a session that has ended was removed, and CuliBox could not read its folder, so no other box can start in any folder "+
+				"until write credentials of that session expire: %s. Wait until then.", ErrWorkspaceHeld, h.why)
+		}
 		return fmt.Errorf("%w: %s is closed to other boxes until write credentials of a session that has ended expire: %s. "+
 			"Wait until then (drop the window first if that session is still listed), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, h.why)
 	}
@@ -1652,6 +1656,7 @@ func (m *Manager) writeHeld(name string) string {
 type endedHold struct {
 	sid, ws   string
 	adoptedAt time.Time
+	boot      bool // reaped at boot (keepBootHold): held for bootHoldFor while no hook is installed
 }
 
 // keepEndedHold is called before an exclusive box is removed: if the hook
@@ -1671,6 +1676,32 @@ func (m *Manager) keepEndedHold(ctx context.Context, name string) {
 	}
 	m.mu.Lock()
 	m.ended[name] = endedHold{sid: sid, ws: ws, adoptedAt: at}
+	m.mu.Unlock()
+}
+
+// bootHoldFor bounds the hold of an exclusive box reaped at boot while no
+// write-hold hook is installed yet (Reconcile runs before the broker's hook):
+// a write credential's longest life, 15 minutes (the STS minimum the broker
+// mints), plus a minute for clock skew, as the broker's minElevatedRemaining.
+const bootHoldFor = 16 * time.Minute
+
+// keepBootHold records an ended hold for an orphan Reconcile is about to reap,
+// unless rows show it was a plain box: an exclusive one's session may have been
+// given write credentials before the restart that are still valid (#333). Its
+// session is not known (sid ""); adoptedAt is the boot, as for an adopted box.
+// rows nil (unreadable), or no usable row, holds it fail closed. Caller holds
+// opMu.
+func (m *Manager) keepBootHold(name string, rows map[string]BoxInfo, at time.Time) {
+	b, ok := rows[name]
+	if ok && !b.Unreadable && !b.Exclusive {
+		return
+	}
+	ws := ""
+	if ok && !b.Unreadable && knownWorkspace(b.Workspace) {
+		ws = b.Workspace
+	}
+	m.mu.Lock()
+	m.ended[name] = endedHold{ws: ws, adoptedAt: at, boot: true}
 	m.mu.Unlock()
 }
 
@@ -1704,8 +1735,12 @@ func (m *Manager) endedHolds() []heldEnded {
 	var out []heldEnded
 	for name, e := range snap {
 		why := ""
-		if hook != nil {
+		switch end := e.adoptedAt.Add(bootHoldFor); {
+		case hook != nil:
 			why = hook(e.sid, e.adoptedAt)
+		case e.boot && time.Now().Before(end):
+			why = "a session was running when CuliBox restarted, and write credentials it may have been given before then stay valid until " +
+				end.Local().Format("15:04") + " at the latest"
 		}
 		if why != "" {
 			out = append(out, heldEnded{name, e.ws, why})
@@ -2117,6 +2152,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	var errs []error
 	left := map[string]bool{} // containers still there after the pass
+	// rows are this instance's boxes, read once before the first orphan is
+	// reaped (nil = unreadable): which are exclusive, and their folders.
+	var rows map[string]BoxInfo
+	read, bootAt := false, time.Now()
 	for _, name := range names {
 		m.mu.Lock()
 		live := m.active[name]
@@ -2125,6 +2164,16 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			left[name] = true
 			continue
 		}
+		if !read {
+			read = true
+			if bs, err := m.opts.Client.ListBoxes(ctx, LabelInstance+"="+m.opts.Instance); err == nil {
+				rows = map[string]BoxInfo{}
+				for _, b := range bs {
+					rows[b.Name] = b
+				}
+			}
+		}
+		m.keepBootHold(name, rows, bootAt)
 		m.unverify(name)
 		if err := m.opts.Client.Stop(ctx, name); err != nil {
 			left[name] = true

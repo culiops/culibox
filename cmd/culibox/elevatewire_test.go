@@ -245,6 +245,10 @@ func TestWriteHoldNamesTheSession(t *testing.T) {
 	if why := e.writeHold("gone-1", time.Now()); !strings.HasPrefix(why, "session gone-1 was running when CuliBox restarted") {
 		t.Fatalf("an adopted box of a session not listed: %q", why)
 	}
+	// An exclusive box reaped at boot has no known session (#333).
+	if why := e.writeHold("", time.Now()); !strings.HasPrefix(why, "a session was running when CuliBox restarted") {
+		t.Fatalf("a reaped box of an unknown session: %q", why)
+	}
 }
 
 func TestGrantContextListsLiveHostSessions(t *testing.T) {

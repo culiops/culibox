@@ -393,7 +393,8 @@ func viewOf(e *elevation) ElevationView {
 func (b *Broker) endLocked(sid string, e *elevation, now time.Time) {
 	e.timer.Stop()
 	delete(b.elev, sid)
-	if e.lastExp.After(now) {
+	// Kept through the clock-skew margin too: WriteHold holds the folder for it.
+	if e.lastExp.Add(dropHoldSkew).After(now) {
 		b.dropped[sid] = droppedWin{conn: e.conn, lastValid: e.lastExp}
 	}
 }
@@ -426,7 +427,7 @@ func (b *Broker) expire(sid string, gen uint64) {
 		b.mu.Unlock()
 		return
 	}
-	delete(b.elev, sid)
+	b.endLocked(sid, e, b.now()) // a credential near the end stays held for the skew minute
 	row := e.row
 	b.mu.Unlock()
 	row.Time, row.Action, row.Until, row.Cred, row.Reason = b.now(), ActionExpired, e.until, "", e.reason
@@ -445,7 +446,10 @@ func (b *Broker) Drop(sid, cred string) (ElevationView, bool) {
 		return ElevationView{}, false
 	}
 	b.endLocked(sid, e, now)
-	view := ElevationView{LastValid: b.dropped[sid].lastValid, Name: e.conn}
+	view := ElevationView{Name: e.conn}
+	if d := b.dropped[sid]; d.lastValid.After(now) { // one kept only for the skew margin is not shown as valid
+		view.LastValid = d.lastValid
+	}
 	b.mu.Unlock()
 	row := e.row
 	row.Time, row.Action, row.Until, row.Cred, row.Reason, row.Entry = now, ActionDropped, e.until, credLabel(cred), e.reason, e.conn
