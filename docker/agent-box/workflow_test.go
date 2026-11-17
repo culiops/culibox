@@ -1626,18 +1626,35 @@ func TestVulnWorkflow(t *testing.T) {
 	if regexp.MustCompile(`(?m)^  push:`).MatchString(wf) {
 		t.Error("vuln.yml must not have its own push trigger (ci.yml calls it)")
 	}
-	// An exact version: go run checks the module against the checksum database, so
-	// the pin is the integrity check. @latest would run whatever is newest.
-	if !regexp.MustCompile(`(?m)^\s+run: go run golang\.org/x/vuln/cmd/govulncheck@v\d+\.\d+\.\d+ \./\.\.\.\s*$`).MatchString(wf) {
-		t.Error("vuln.yml must run `go run golang.org/x/vuln/cmd/govulncheck@vX.Y.Z ./...` with an exact version")
+	// An exact version on every line that runs it: go run checks the module against
+	// the checksum database, so the pin is the integrity check. @latest would run
+	// whatever is newest.
+	pinned := regexp.MustCompile(`^\s+run: go run golang\.org/x/vuln/cmd/govulncheck@v\d+\.\d+\.\d+ \./\.\.\.\s*$`)
+	runs := 0
+	for _, l := range strings.Split(wf, "\n") {
+		if !strings.Contains(l, "govulncheck@") {
+			continue
+		}
+		runs++
+		if !pinned.MatchString(l) {
+			t.Errorf("vuln.yml must run `go run golang.org/x/vuln/cmd/govulncheck@vX.Y.Z ./...` with an exact version: %q", strings.TrimSpace(l))
+		}
 	}
-	if strings.Contains(wf, "macos") {
-		t.Error("vuln.yml runs on Linux only (its findings do not depend on GOOS here; the macOS runner budget is darwin-test)")
+	// Once per target: the darwin build calls code the Linux one does not.
+	if runs != 2 || !regexp.MustCompile(`(?m)^\s+GOOS: darwin\s*$`).MatchString(wf) {
+		t.Errorf("vuln.yml must run govulncheck twice, once with GOOS: darwin (found %d runs)", runs)
+	}
+	// Linux runners only (GOOS=darwin needs no Mac; the macOS budget is darwin-test).
+	for _, m := range regexp.MustCompile(`(?m)^\s+runs-on:\s*(.+?)\s*$`).FindAllStringSubmatch(wf, -1) {
+		if !strings.HasPrefix(m[1], "ubuntu-") {
+			t.Errorf("vuln.yml runs on %q; it must use a Linux runner", m[1])
+		}
+	}
+	// The toolchain go.mod names, or a stale go.mod hides behind a newer Go.
+	if !strings.Contains(wf, "actions/setup-go@") || !regexp.MustCompile(`(?m)^\s+go-version-file: go\.mod\s*$`).MatchString(wf) {
+		t.Error("vuln.yml must set up Go with actions/setup-go and go-version-file: go.mod")
 	}
 	// It runs a downloaded tool: no Go cache restored into it or saved from it.
-	if !strings.Contains(wf, "actions/setup-go@") {
-		t.Error("vuln.yml must set up Go from go.mod with actions/setup-go")
-	}
 	for _, msg := range setupGoCacheViolations("vuln.yml", wf) {
 		t.Error(msg)
 	}
