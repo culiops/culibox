@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   CHANGES_MAX, changesRows, CHANGES_SCOPE_KEY, changesScopeParse, changesScopePut, changesScopeSave, changesScopeFor,
-  changesBaseStale, changesTotals, changesView,
+  changesBranchOf, changesBaseStale, changesBaseRecord, changesTotals, changesView,
 } = require("../static/changesmodel.js");
 
 // freeze: a deep Object.freeze, so a function that writes to its input throws in strict mode.
@@ -339,20 +339,53 @@ test("changesScopeSave round-trips through changesScopeParse", () => {
   assert.deepStrictEqual(JSON.parse(text), { a: "branch", b: "head" });
 });
 
-test("changesBaseStale: ask again for a new root or HEAD, or for a failure once it has been a while; never for a settled answer", () => {
+test("changesBranchOf: the branch a status names, empty for a detached HEAD or a reply that does not say", () => {
+  assert.equal(changesBranchOf({ branch: "feat/x" }), "feat/x");
+  for (const st of [{}, { branch: "" }, { branch: 5 }, null, undefined]) assert.equal(changesBranchOf(st), "", String(st && st.branch));
+});
+
+test("changesBaseStale: ask again for a new root, HEAD or branch, or for a failure once it has been a while; never for a settled answer", () => {
   const T = 1e12;
-  const at = (reply, extra) => Object.assign({ root: "/r", head: "h1", reply, at: T }, extra || {});
-  assert.equal(changesBaseStale(null, "/r", "h1", T), true, "nothing asked yet");
+  const at = (reply, extra) => Object.assign({ root: "/r", head: "h1", branch: "b1", reply, at: T, failed: false }, extra || {});
+  assert.equal(changesBaseStale(null, "/r", "h1", "b1", T), true, "nothing asked yet");
   for (const reply of [okBase(), { state: "nobase", branch: "x", ahead: false }, { state: "notrepo" }]) {
-    assert.equal(changesBaseStale(at(reply), "/r", "h1", T + 3600e3), false, reply.state + " is settled until the root or HEAD moves");
-    assert.equal(changesBaseStale(at(reply), "/r2", "h1", T), true, "another root");
-    assert.equal(changesBaseStale(at(reply), "/r", "h2", T), true, "another HEAD");
-    assert.equal(changesBaseStale(at(reply), "/r", "", T), true, "a repository that has just got no commits");
+    assert.equal(changesBaseStale(at(reply), "/r", "h1", "b1", T + 3600e3), false, reply.state + " is settled until the root, HEAD or branch moves");
+    assert.equal(changesBaseStale(at(reply), "/r2", "h1", "b1", T), true, "another root");
+    assert.equal(changesBaseStale(at(reply), "/r", "h2", "b1", T), true, "another HEAD");
+    assert.equal(changesBaseStale(at(reply), "/r", "", "b1", T), true, "a repository that has just got no commits");
+    assert.equal(changesBaseStale(at(reply), "/r", "h1", "b2", T), true, "a branch made or switched to at the same commit: the branch row names it");
+    assert.equal(changesBaseStale(at(reply), "/r", "h1", "", T), true, "a detached HEAD at the same commit");
   }
-  for (const reply of [null, { state: "unavailable", reason: "Git took too long" }]) {
-    assert.equal(changesBaseStale(at(reply), "/r", "h1", T + 29999), false, "a failure is not asked again at once");
-    assert.equal(changesBaseStale(at(reply), "/r", "h1", T + 30000), true, "but after 30 s it is");
+  for (const rec of [at(null), at({ state: "unavailable", reason: "Git took too long" }), at(okBase(), { failed: true })]) {
+    assert.equal(changesBaseStale(rec, "/r", "h1", "b1", T + 29999), false, "a failure is not asked again at once");
+    assert.equal(changesBaseStale(rec, "/r", "h1", "b1", T + 30000), true, "but after 30 s it is");
+    assert.equal(changesBaseStale(rec, "/r", "h2", "b1", T + 1), true, "and a move of HEAD asks at once");
   }
+});
+
+test("changesBaseRecord: an answer replaces the record; a failure keeps the last good answer for the root, marked failed", () => {
+  const good = { root: "/r", head: "h1", branch: "b1", reply: okBase({ ahead: true }), at: 1, failed: false };
+  const unavailable = { state: "unavailable", reason: "Git took too long" };
+  // An answer of any settled kind is the new record.
+  assert.deepStrictEqual(changesBaseRecord(good, "/r", "h2", "b2", okBase({ branch: "b2" }), 9), { root: "/r", head: "h2", branch: "b2", reply: okBase({ branch: "b2" }), at: 9, failed: false });
+  const nobase = { state: "nobase", reason: "no base branch", branch: "b1", ahead: false };
+  assert.deepStrictEqual(changesBaseRecord(good, "/r", "h2", "b1", nobase, 9).reply, nobase, "nobase is an answer, not a failure: it replaces the old one");
+  // A failure (no reply, or the server's "unavailable") keeps the good answer so the toggle and a Branch pick stay.
+  for (const bad of [null, unavailable]) {
+    const kept = changesBaseRecord(good, "/r", "h2", "b2", bad, 9);
+    assert.deepStrictEqual(kept, { root: "/r", head: "h2", branch: "b2", reply: good.reply, at: 9, failed: true }, String(bad && bad.state));
+    assert.equal(changesBaseStale(kept, "/r", "h2", "b2", 9 + 29999), false, "and it is asked for again only after the pause");
+    assert.equal(changesBaseStale(kept, "/r", "h2", "b2", 9 + 30000), true);
+  }
+  // Nothing good to keep: the failure itself is the record. Another root's good answer is never kept.
+  assert.deepStrictEqual(changesBaseRecord(null, "/r", "h1", "b1", null, 9), { root: "/r", head: "h1", branch: "b1", reply: null, at: 9, failed: true });
+  assert.equal(changesBaseRecord(good, "/other", "h1", "b1", null, 9).reply, null);
+  assert.deepStrictEqual(changesBaseRecord({ ...good, reply: nobase }, "/r", "h1", "b1", unavailable, 9).reply, unavailable, "only an ok answer is worth keeping");
+  assert.equal(changesBaseRecord(changesBaseRecord(good, "/r", "h2", "b1", null, 5), "/r", "h2", "b1", null, 9).reply, good.reply, "kept through a second failure");
+  // The record the view reads still shows the toggle and the pick.
+  const st = { root: "/r", status: status([{ p: "a.go", x: "M" }]) };
+  const v = changesView({ root: "/r", prefs: new Map([["s", "branch"]]), sid: "s", status: st, base: changesBaseRecord(good, "/r", "h2", "b1", null, 9), numstat: { root: "/r", scope: "branch", reply: numstat([]) } });
+  assert.deepStrictEqual([v.showScope, v.scope], [true, "branch"], "a flake does not flip the view");
 });
 
 test("changesTotals sums the counts numstat knows, over the files under the root; unknown without an ok reply", () => {

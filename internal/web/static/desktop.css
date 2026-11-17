@@ -1297,7 +1297,7 @@
   .dk-dir { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--t-sm); color: var(--muted); }
   .dk-ct { flex: none; display: inline-flex; gap: 4px; font: var(--w-medium) var(--t-xs)/1 var(--font-mono); color: var(--muted); }
   .dk-add { color: var(--ok); }
-  .dk-del { color: var(--red); }
+  .dk-del { color: var(--danger); }
   .dk-row .dk-st { min-width: 12px; text-align: center; }
   .dk-more { padding: 3px 10px; font-size: var(--t-sm); color: var(--muted); }
   .dk-legend { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 10px 8px 12px; font-size: var(--t-xs); line-height: var(--lh-xs); color: var(--muted); }

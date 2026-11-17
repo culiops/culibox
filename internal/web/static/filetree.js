@@ -800,7 +800,8 @@ async function promptMkdir(dir) {
     confirmLabel: "Create",
   });
   if (name === null || !name) return;
-  const res = await fsMkdir(dir, name);
+  let res;
+  try { res = await fsMkdir(dir, name); } catch (_) { showToast("Could not create: network error", { error: true }); return; } // fsPost rejects when the request never completes
   if (!res.ok) { showToast("Could not create: " + fsErrText(res), { error: true }); return; }
   showToast("Created " + name);
   ftLoadRoot({ fresh: true });
@@ -818,7 +819,8 @@ async function promptNewFile(dir) {
     confirmLabel: "Create",
   });
   if (name === null || !name) return;
-  const res = await fsNewFile(dir, name);
+  let res;
+  try { res = await fsNewFile(dir, name); } catch (_) { showToast("Could not create: network error", { error: true }); return; } // fsPost rejects when the request never completes
   if (res.status === 409) { showToast("Could not create: name already exists", { error: true }); return; }
   if (!res.ok) { showToast("Could not create: " + fsErrText(res), { error: true }); return; }
   showToast("Created " + name);
@@ -1240,6 +1242,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     iconFor, treeBranch, treeFollowTarget, rootableCwd, actionsLabel,
     listingReadOnly, rowMenuIds, rowMenuLabel, openRowMenu, ftApplyReadOnly, ftRenderDir,
-    ftKeyAction, ftMenuGroups, promptNewFile,
+    ftKeyAction, ftMenuGroups, promptNewFile, promptMkdir,
   };
 }

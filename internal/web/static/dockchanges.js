@@ -12,7 +12,8 @@
 //     (gitStatusLoad calls dockChangesOnStatus, so it rides the same 1 s debounce), at most one at a time: a status that
 //     lands while one is out waits for it, and only the newest is asked for next;
 //   - /api/git/base {path}: the branch, the base the SERVER picked (no ref is ever sent from here) and whether HEAD is
-//     ahead. Asked when the root or HEAD changes, and again for a failure once it has been a while (changesBaseStale).
+//     ahead. Asked when the root, HEAD or branch changes, and again for a failure once it has been a while
+//     (changesBaseStale); a failure keeps the last good answer for that root on screen (changesBaseRecord).
 // Nothing is asked while the dock is closed, folded away from view or the page is hidden (dkcVisible), and coming back
 // asks (dockChangesRefresh). No answer is waited for with a spinner: Uncommitted shows the status rows at once, a status
 // that is unavailable is one calm line ("Status unavailable", the reason on hover), and a request that never answers is
@@ -30,7 +31,11 @@ let dkcBase = null;           // {root, head, reply, at}: the last base answer; 
 let dkcNumFlight = false;
 let dkcBaseFlight = false;
 let dkcFresh = false;         // a status that was asked for fresh has landed since the last numstat went out
-let dkcDrawn = null;          // what the last paint was made from (identity), so a repaint with nothing new costs nothing
+let dkcDrawn = null;          // what the last repaint check was made from (identity), so a repaint with nothing new costs nothing
+let dkcPainted = null;        // what is on screen, as text (the view and what else the paint reads): equal means no write at all
+const dkcRows = new Map();    // path -> the row element in the list on screen (rows are updated in place, see dkcPaintList)
+const dkcParts = new WeakMap(); // row element -> its parts and the row it shows
+let dkcMoreRow = null;        // the "and N more" element, made once
 let dkcView = null;           // the view on screen: Review and a row's click read it
 let dkcRootShown = null;      // the root the header names: a root change ends a root edit
 
@@ -104,7 +109,7 @@ function dockChangesRefresh() {
   dockChangesSync();
 }
 
-// dockChangesSync asks for what the section lacks: the base when the root or HEAD moved, and the numstat of the scope
+// dockChangesSync asks for what the section lacks: the base when the root, HEAD or branch moved, and the numstat of the scope
 // shown for the status held now. Each at most once at a time; an answer ends in another call, which asks for what that
 // answer left stale (the base landing can turn the default scope to Branch, a newer status can have come in meanwhile).
 function dockChangesSync() {
@@ -113,18 +118,19 @@ function dockChangesSync() {
   const cur = typeof gitStatusCurrent === "function" ? gitStatusCurrent(root) : null;
   if (!cur || cur.status.state !== "ok") return; // not a repository, too many, unavailable: nothing more to ask
   const head = typeof cur.status.head === "string" ? cur.status.head : "";
-  if (!dkcBaseFlight && changesBaseStale(dkcBase, root, head, Date.now())) dkcAskBase(root, head);
+  const branch = changesBranchOf(cur.status);
+  if (!dkcBaseFlight && changesBaseStale(dkcBase, root, head, branch, Date.now())) dkcAskBase(root, head, branch);
   const scope = dockScope(dkcSid());
   if (dkcNum && dkcNum.root === root && dkcNum.scope === scope && dkcNum.status === cur.status) return;
   if (dkcNumFlight) return;
   dkcAskNumstat(root, scope, cur.status);
 }
 
-async function dkcAskBase(root, head) {
+async function dkcAskBase(root, head, branch) {
   dkcBaseFlight = true;
   const reply = await dkcPost("/api/git/base", { path: root });
   dkcBaseFlight = false;
-  dkcBase = { root, head, reply, at: Date.now() };
+  dkcBase = changesBaseRecord(dkcBase, root, head, branch, reply, Date.now());
   dockChangesRefresh();
 }
 
@@ -161,36 +167,51 @@ function dkcCounts(add, del) {
   return ct;
 }
 
-// dkcRow: one changed file. The whole row is a button: its click shows the file (a preview tab), as a tree row's does.
-function dkcRow(r, label) {
+// dkcNewRow: the element of one changed file, empty. The whole row is a button: its click shows the file (a preview tab),
+// as a tree row's does. It is built once for a path and updated in place by dkcFillRow, so the keyboard focus on it, a click
+// between press and release and the pointer over it all survive a repaint.
+function dkcNewRow() {
   const b = document.createElement("button");
   b.type = "button";
-  b.className = r.mine ? "dk-row dk-mine" : "dk-row";
-  const ic = document.createElement("span");
-  ic.className = "dk-ic";
-  ic.setAttribute("aria-hidden", "true");
-  ic.textContent = typeof iconFor === "function" ? iconFor(r.name, r.folder, false) : "";
-  const nm = document.createElement("span");
-  nm.className = "dk-nm";
-  nm.textContent = r.name;
-  const dir = document.createElement("span");
-  dir.className = "dk-dir";
-  dir.textContent = r.dir;
-  const st = document.createElement("span");
-  st.className = "dk-st dk-st-" + r.code.toLowerCase();
-  st.textContent = r.code;
-  const ct = dkcCounts(r.add, r.del);
-  b.append(ic, nm, dir);
-  if (ct) b.append(ct);
-  b.append(st);
+  const part = (cls) => { const e = document.createElement("span"); e.className = cls; return e; };
+  const p = { ic: part("dk-ic"), nm: part("dk-nm"), dir: part("dk-dir"), ct: part("dk-ct"), add: part("dk-add"), del: part("dk-del"), st: part("dk-st"), r: null };
+  p.ic.setAttribute("aria-hidden", "true");
+  p.ct.append(p.add, p.del);
+  b.append(p.ic, p.nm, p.dir, p.st);
+  b.onclick = () => dkcOpenRow(p.r); // the row it shows now, not the one it was made for
+  dkcParts.set(b, p);
+  return b;
+}
+
+// dkcFillRow brings a row element to `r`, writing only what differs.
+function dkcFillRow(b, r, label) {
+  const p = dkcParts.get(b);
+  p.r = r;
+  const cls = r.mine ? "dk-row dk-mine" : "dk-row";
+  if (b.className !== cls) b.className = cls;
+  dkcSetText(p.ic, typeof iconFor === "function" ? iconFor(r.name, r.folder, false) : "");
+  dkcSetText(p.nm, r.name);
+  dkcSetText(p.dir, r.dir);
+  // The counts are there only where git gave both (never a guess); a zero side is still said: "+0 −12" is a deleted file's own count.
+  const known = r.add !== null && r.add !== undefined && r.del !== null && r.del !== undefined;
+  if (known) {
+    dkcSetText(p.add, "+" + r.add);
+    dkcSetText(p.del, "−" + r.del);
+    if (p.ct.parentNode !== b) b.insertBefore(p.ct, p.st);
+  } else if (p.ct.parentNode === b) {
+    p.ct.remove();
+  }
+  const stCls = "dk-st dk-st-" + r.code.toLowerCase();
+  if (p.st.className !== stCls) p.st.className = stCls;
+  dkcSetText(p.st, r.code);
   // The session bar and the letter are colour and a glyph; the words are for assistive technology and the hover.
   const words = [DKC_CODE_TITLES[r.code] || r.code];
-  if (r.add !== null && r.del !== null) words.push("+" + r.add + " −" + r.del);
+  if (known) words.push("+" + r.add + " −" + r.del);
   if (r.mine) words.push(label);
-  b.setAttribute("aria-label", r.name + (r.dir ? " in " + r.dir : "") + ", " + words.join(", "));
-  b.title = (typeof shortPath === "function" ? shortPath(r.path) : r.path) + "\n" + words.join(", ");
-  b.onclick = () => dkcOpenRow(r);
-  return b;
+  const aria = r.name + (r.dir ? " in " + r.dir : "") + ", " + words.join(", ");
+  if (b.getAttribute("aria-label") !== aria) b.setAttribute("aria-label", aria);
+  const title = (typeof shortPath === "function" ? shortPath(r.path) : r.path) + "\n" + words.join(", ");
+  if (b.title !== title) b.title = title;
 }
 
 // dkcOpenRow: a row's click. A file opens as a preview tab; a deleted one has nothing to read, so its diff opens; an
@@ -236,16 +257,35 @@ function dkcPaintBranch(el, b) {
   el.title = b.from + " → " + b.to;
 }
 
+// dkcPaintList brings the list to the view's rows IN PLACE, keyed by path: a row whose path is still there keeps its element
+// (only its text and classes change), a new path gets a new element, a path that is gone loses its element, and an element
+// is moved only when the order needs it. Status lands about once a second while an agent works, and a list that was
+// replaced each time would drop the focus of a keyboard user on a row and swallow a click made between press and release.
 function dkcPaintList(el, view, label) {
-  if (view.kind !== "rows") { el.replaceChildren(); return; }
-  const nodes = view.rows.map((r) => dkcRow(r, label));
-  if (view.more > 0) {
-    const more = document.createElement("div");
-    more.className = "dk-more";
-    more.textContent = "and " + view.more + " more";
-    nodes.push(more);
+  const rows = view.kind === "rows" ? view.rows : [];
+  const nodes = [];
+  const keep = new Set();
+  for (const r of rows) {
+    let b = dkcRows.get(r.path);
+    if (!b) { b = dkcNewRow(); dkcRows.set(r.path, b); }
+    dkcFillRow(b, r, label);
+    keep.add(r.path);
+    nodes.push(b);
   }
-  el.replaceChildren(...nodes);
+  for (const [path, b] of dkcRows) {
+    if (keep.has(path)) continue;
+    b.remove();
+    dkcRows.delete(path);
+  }
+  const more = view.kind === "rows" ? view.more : 0;
+  if (more > 0) {
+    if (!dkcMoreRow) { dkcMoreRow = document.createElement("div"); dkcMoreRow.className = "dk-more"; }
+    dkcSetText(dkcMoreRow, "and " + more + " more");
+    nodes.push(dkcMoreRow);
+  } else if (dkcMoreRow && dkcMoreRow.parentNode) {
+    dkcMoreRow.remove();
+  }
+  nodes.forEach((n, i) => { if (el.children[i] !== n) el.insertBefore(n, el.children[i] || null); });
 }
 
 // dkcPaintStrip: the folded explorer's Changes button carries the count (the same N as the section's header).
@@ -291,8 +331,9 @@ function dkcPaintRoot(root) {
 }
 
 // dockChangesRender brings the section, the strip's count and the root header in step with what is known. It runs on every
-// status, base and numstat answer, root change, Activity answer and session poll, so it does nothing unless an input is
-// a different object than the last time.
+// status, base and numstat answer, root change, Activity answer and session poll. Two checks keep that cheap: nothing is
+// done unless an input is a different object than the last time (a poll), and nothing is written unless what would be
+// drawn differs from what is (a status that says what the last one said: every status is a new object).
 function dockChangesRender() {
   const sec = dkcEl("dock-changes");
   if (!sec) return;
@@ -302,14 +343,19 @@ function dockChangesRender() {
   const files = typeof drawerChangedFiles !== "undefined" && sid ? drawerChangedFiles.get(sid) || null : null;
   const name = typeof drawerSessionName === "function" ? drawerSessionName(sid) : "";
   const dr = dkcEl("drawer");
-  const inputs = [root, cur && cur.status, dkcNum, dkcBase, dkcPrefsMap(), sid, files, name, dr ? dr.dataset.box || "" : "", dkcOwns()];
+  const box = dr ? dr.dataset.box || "" : "";
+  const owns = dkcOwns();
+  const inputs = [root, cur && cur.status, dkcNum, dkcBase, dkcPrefsMap(), sid, files, name, box, owns];
   if (dkcDrawn && inputs.every((x, i) => x === dkcDrawn[i])) return;
   dkcDrawn = inputs;
 
-  dkcPaintRoot(root);
-  const view = dkcOwns()
+  const view = owns
     ? changesView({ root, status: cur, numstat: dkcNum, base: dkcBase, prefs: dkcPrefsMap(), sid, files })
     : { kind: "none", count: 0 };
+  const painted = JSON.stringify([view, root, name, box, owns]);
+  if (painted === dkcPainted) return;
+  dkcPainted = painted;
+  dkcPaintRoot(root);
   dkcView = view;
   const rows = view.kind === "rows";
   sec.hidden = view.kind === "none";
@@ -342,11 +388,11 @@ function dkcOwns() {
 
 // --- actions ----------------------------------------------------------------------------------------------
 
-// dkcPickScope: a press on Uncommitted or Branch. Remembered for the session, and Branch's list is asked for now.
+// dkcPickScope: a press on Uncommitted or Branch. Remembered for the session, and Branch's list is asked for now. Either
+// segment pins the choice, the one already on as well: a pick made on the default is still a pick, and it must hold when
+// the default moves (a commit, a branch switch).
 function dkcPickScope(scope) {
-  const sid = dkcSid();
-  if (dockScope(sid) === scope) return;
-  dkcPrefs = changesScopePut(dkcPrefsMap(), sid, scope);
+  dkcPrefs = changesScopePut(dkcPrefsMap(), dkcSid(), scope);
   try { localStorage.setItem(CHANGES_SCOPE_KEY, changesScopeSave(dkcPrefs)); } catch (_) { /* storage off: this page only */ }
   dockChangesRefresh();
 }
@@ -379,11 +425,14 @@ function dkcCollapseAll() {
   ftLoadRoot();
 }
 
-// dkcOpenMore: the ⋯ menu, the kit's, as the row menu is. A read-only folder offers what reads only.
+// dkcOpenMore: the ⋯ menu, the kit's, as the row menu is; a second press on the ⋯ closes it. A read-only folder offers what
+// reads only.
 function dkcOpenMore() {
   const more = dkcEl("dock-more");
+  const menu = dkcEl("ft-menu");
   const root = dkcRoot();
-  if (!more || !root || typeof ftShowMenu !== "function") return;
+  if (!more || !menu || !root || typeof ftShowMenu !== "function") return;
+  if (more.getAttribute("aria-expanded") === "true") { closeRowMenu(true); return; } // ftShowMenu keeps it true while the menu is open
   const ro = typeof ftRootIsReadOnly === "function" && ftRootIsReadOnly();
   // Close first and give focus back to the ⋯, then act: a dialog hands focus back to what had it when it opened.
   const item = (label, icon, run) => kitMenuButton(label, icon, false, () => { closeRowMenu(true); run(); });
@@ -396,7 +445,7 @@ function dkcOpenMore() {
   nodes.push(item("Refresh", "refresh", () => ftLoadRoot({ fresh: true })));
   nodes.push(item("Collapse all", "collapse", dkcCollapseAll));
   ftShowMenu(more, nodes, false, "Explorer actions");
-  const first = document.getElementById("ft-menu").querySelector(".menu-item");
+  const first = menu.querySelector(".menu-item");
   if (first) first.focus();
 }
 

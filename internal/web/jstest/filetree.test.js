@@ -249,13 +249,14 @@ async function newFile(o) {
   const was = {};
   const set = (k, v) => { was[k] = Object.prototype.hasOwnProperty.call(globalThis, k) ? globalThis[k] : undefined; globalThis[k] = v; };
   set("askPrompt", async (opts) => { log.prompts.push(opts); return o.name; });
-  set("fsNewFile", async (dir, name) => { log.creates.push([dir, name]); return o.reply; });
+  set("fsNewFile", async (dir, name) => { log.creates.push([dir, name]); if (o.throws) throw new TypeError("Failed to fetch"); return o.reply; });
+  set("fsMkdir", async (dir, name) => { log.creates.push([dir, name]); if (o.throws) throw new TypeError("Failed to fetch"); return o.reply; });
   set("fsErrText", (res) => (res && res.data && res.data.error) || "HTTP " + res.status);
   set("showToast", (m, opts) => { log.toasts.push([m, !!(opts && opts.error)]); });
   set("drawerOwnsFileClicks", () => o.docked !== false);
   set("drawerShowFile", (p, opts) => { log.shown.push([p, opts]); return true; });
   set("openFile", (p) => { log.opened.push(p); });
-  try { await FT.promptNewFile(o.dir === undefined ? "/w" : o.dir); } finally {
+  try { await FT[o.fn || "promptNewFile"](o.dir === undefined ? "/w" : o.dir); } finally {
     for (const k of Object.keys(was)) { if (was[k] === undefined) delete globalThis[k]; else globalThis[k] = was[k]; }
   }
   return log;
@@ -288,6 +289,23 @@ test("promptNewFile: any other refusal says why, and a dismissed or empty prompt
   }
   const none = await newFile({ name: "n", dir: "", reply: { ok: true, status: 200, data: { path: "/w/n" } } });
   assert.deepStrictEqual([none.prompts.length, none.creates], [0, []], "no folder, no prompt");
+});
+
+test("promptNewFile and promptMkdir: a request that never completes is the error toast, not an unhandled rejection", async () => {
+  for (const fn of ["promptNewFile", "promptMkdir"]) {
+    const log = await newFile({ fn, name: "x", throws: true });
+    assert.deepStrictEqual(log.creates, [["/w", "x"]], fn);
+    assert.deepStrictEqual(log.toasts, [["Could not create: network error", true]], fn);
+    assert.deepStrictEqual(log.shown, [], fn + " opens nothing");
+  }
+});
+
+test("promptMkdir: a name creates the folder and says so; a refusal says why", async () => {
+  const ok = await newFile({ fn: "promptMkdir", name: "sub", reply: { ok: true, status: 200, data: {} } });
+  assert.deepStrictEqual(ok.creates, [["/w", "sub"]]);
+  assert.deepStrictEqual(ok.toasts, [["Created sub", false]]);
+  const bad = await newFile({ fn: "promptMkdir", name: "sub", reply: { ok: false, status: 409, data: { error: "name already exists" } } });
+  assert.deepStrictEqual(bad.toasts, [["Could not create: name already exists", true]]);
 });
 
 test("promptNewFile: without the dock the file opens where a tree row's click would", async () => {

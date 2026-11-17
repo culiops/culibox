@@ -193,16 +193,32 @@ function changesScopeFor(map, sid, base) {
   return base.ahead === true ? "branch" : "head";
 }
 
-// changesBaseStale: must the base be asked for again? `prev` is the last record, {root, head, reply, at}
-// (reply null: the request failed). Yes for a new root or a new HEAD (a commit can move "ahead"), and
-// for a failure (reply null or state "unavailable") once CHANGES_BASE_RETRY_MS has passed, so a flaky
-// container does not hide Branch for good and does not cost a request per status either. A settled
-// answer (ok, nobase, notrepo) is kept until the root or HEAD moves.
-function changesBaseStale(prev, root, head, now) {
-  if (!prev || prev.root !== root || prev.head !== head) return true;
+// changesBranchOf: the checked-out branch a status names, "" for a detached HEAD or a reply that does not say.
+function changesBranchOf(status) {
+  return status && typeof status.branch === "string" ? status.branch : "";
+}
+
+// changesBaseStale: must the base be asked for again? `prev` is the last record, {root, head, branch, reply, at,
+// failed}. Yes for a new root, a new HEAD (a commit can move "ahead") or a new branch (`git switch -c` leaves HEAD where it
+// was, and the branch row names the branch), and for a failure (the record says failed, or the reply is null or
+// "unavailable") once CHANGES_BASE_RETRY_MS has passed, so a flaky container does not hide Branch for good and does
+// not cost a request per status either. A settled answer (ok, nobase, notrepo) is kept until the root, HEAD or branch moves.
+function changesBaseStale(prev, root, head, branch, now) {
+  if (!prev || prev.root !== root || prev.head !== head || prev.branch !== branch) return true;
   const r = prev.reply;
-  if (r && r.state !== "unavailable") return false;
+  if (!prev.failed && r && r.state !== "unavailable") return false;
   return !(now - prev.at < CHANGES_BASE_RETRY_MS);
+}
+
+// changesBaseRecord: the record to keep after asking for the base of (root, head, branch) at `now`; `reply` is the
+// answer, null when the request failed. A failure (null, or the server's "unavailable") does not take away what
+// the page already knew about this root: the last ok reply stays (marked failed, so it is asked for again after
+// CHANGES_BASE_RETRY_MS), or the toggle would vanish and a Branch pick would read as Uncommitted for a moment's flake.
+// Any other answer replaces it, and so does a failure with nothing good to keep.
+function changesBaseRecord(prev, root, head, branch, reply, now) {
+  const failed = reply === null || (!!reply && reply.state === "unavailable");
+  const keep = failed && !!prev && prev.root === root && !!prev.reply && prev.reply.state === "ok";
+  return { root, head, branch, reply: keep ? prev.reply : reply, at: now, failed };
 }
 
 // changesTotals: {add, del}, the sum of the counts numstat knows over the files under the tree root
@@ -272,6 +288,6 @@ function changesView(o) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     CHANGES_MAX, CHANGES_SCOPE_KEY, changesRows, changesScopeParse, changesScopePut, changesScopeSave, changesScopeFor,
-    changesBaseStale, changesTotals, changesView,
+    changesBranchOf, changesBaseStale, changesBaseRecord, changesTotals, changesView,
   };
 }

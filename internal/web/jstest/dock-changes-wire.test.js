@@ -85,3 +85,10 @@ test("New file: the name prompt, then POST /api/fs/newfile, then the tree refres
   assert.match(body, /res\.status === 409/);
   assert.match(body, /name already exists/);
 });
+
+test("a removed count is the same red as the deleted and conflict letters (--danger), an added one the green of A and U (--ok)", () => {
+  const css = stripComments(read("desktop.css"));
+  assert.match(css, /\.dk-del\s*\{\s*color:\s*var\(--danger\);\s*\}/);
+  assert.match(css, /\.dk-st-c,\s*\.dk-st-d\s*\{\s*color:\s*var\(--danger\);\s*\}/);
+  assert.match(css, /\.dk-add\s*\{\s*color:\s*var\(--ok\);\s*\}/);
+});

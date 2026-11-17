@@ -61,9 +61,9 @@ function page(over) {
     ftRoot: () => st.root,
     ftReveal: async (p) => { st.reveals.push(p); return true; },
     ftLoadRoot: (o) => { st.loads++; st.lastLoad = o; },
-    ftShowMenu: (anchor, items, left, label) => { st.menu = { anchor, items, label }; },
+    ftShowMenu: (anchor, items, left, label) => { st.menu = { anchor, items, label }; st.shows = (st.shows || 0) + 1; anchor.setAttribute("aria-expanded", "true"); },
     ftRootIsReadOnly: () => !!st.ro,
-    closeRowMenu: () => { st.closed++; },
+    closeRowMenu: () => { st.closed++; nodes["dock-more"].setAttribute("aria-expanded", "false"); },
     kitMenuButton: (label, icon, danger, run) => ({ label, icon, run, tag: "item", classList: {}, focus() {} }),
     kitMenuSep: () => ({ tag: "sep" }),
     promptMkdir: (d) => { st.mkdir.push(d); },
@@ -503,4 +503,202 @@ test("a read-only folder's ⋯ menu offers only what reads", async () => {
   p.st.ro = true;
   p.el("dock-more").onclick({ stopPropagation() {} });
   assert.deepStrictEqual(Array.from(p.st.menu.items, (i) => i.label), ["Refresh", "Collapse all"]);
+});
+
+// --- the list is updated in place (fix round 1) ------------------------------------------------------------------------
+
+// deepFreeze: every node of the page below `n`, and the arrays and objects that hold its state. The page scripts are strict,
+// so the first write to a frozen node (a property, an attribute, a child) throws: "no DOM writes" is then a test that
+// does not throw. The vm's unhandled rejections are collected by the caller.
+function deepFreeze(n, seen = new Set()) {
+  if (!n || typeof n !== "object" || seen.has(n)) return;
+  seen.add(n);
+  if (Array.isArray(n.children)) n.children.forEach((c) => deepFreeze(c, seen));
+  for (const k of ["children", "attrs", "style", "dataset"]) if (n[k]) Object.freeze(n[k]);
+  Object.freeze(n);
+}
+
+test("a row keeps its element, and the keyboard focus on it, across status and numstat landings", async () => {
+  const p = page();
+  const ent = (n) => Array.from({ length: n }, (_, i) => ({ p: "f" + i + ".go", x: "M" }));
+  const cnt = (n, k) => num(Array.from({ length: n }, (_, i) => ({ p: "f" + i + ".go", x: "M", a: i + k, d: 0 })));
+  await p.status(okStatus(ent(3)));
+  await p.answer("/api/git/base", baseOk());
+  await p.answer("/api/git/numstat", cnt(3, 1));
+  const [r0, r1, r2] = p.rows();
+  r1.focus();
+  assert.strictEqual(p.doc.activeElement, r1);
+  // Two landings, as live status gives: a status (a file more, a new object) and then its numstat (new counts).
+  await p.status(okStatus(ent(4)));
+  assert.deepStrictEqual(p.rows().slice(0, 3), [r0, r1, r2], "the same elements, the new row after them");
+  assert.strictEqual(p.rows().length, 4);
+  assert.strictEqual(p.doc.activeElement, r1, "focus is still on the row after the status");
+  await p.answer("/api/git/numstat", cnt(4, 10));
+  assert.deepStrictEqual(p.rows().slice(0, 3), [r0, r1, r2]);
+  assert.strictEqual(p.doc.activeElement, r1, "and after the numstat");
+  assert.strictEqual(text(r1.querySelector(".dk-ct")), "+11−0", "the counts of the same element changed in place");
+  assert.strictEqual(text(r1.querySelector(".dk-nm")), "f1.go");
+  // A click on the row reaches what the row shows now.
+  r1.click();
+  assert.strictEqual(p.st.shown[p.st.shown.length - 1][0], "/w/f1.go");
+});
+
+test("rows are matched by path: a row that goes loses its element, one that moves is the same element in a new place", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "b.go", x: "M" }, { p: "c.go", x: "M" }]));
+  const [a, b, c] = p.rows();
+  // c becomes the session's: it moves to the top. b is gone.
+  p.run('drawerChangedFiles.set("s1", [{ path: "/w/c.go", add: 1, del: 0 }])');
+  await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "c.go", x: "M" }]));
+  assert.deepStrictEqual(Array.from(p.rows(), (r) => text(r.querySelector(".dk-nm"))), ["c.go", "a.go"]);
+  assert.strictEqual(p.rows()[0], c, "the moved row is the same element");
+  assert.strictEqual(p.rows()[1], a);
+  assert.ok(cls(c).includes("dk-mine"), "its class changed in place");
+  assert.ok(!p.rows().includes(b));
+  // b comes back as a new element, in order.
+  p.run('drawerChangedFiles.delete("s1")');
+  await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "b.go", x: "M" }, { p: "c.go", x: "M" }]));
+  assert.deepStrictEqual(Array.from(p.rows(), (r) => text(r.querySelector(".dk-nm"))), ["a.go", "b.go", "c.go"]);
+  assert.strictEqual(p.rows()[0], a);
+  assert.strictEqual(p.rows()[2], c);
+  assert.ok(!cls(c).includes("dk-mine"));
+});
+
+test("a count that goes away takes its element out, and comes back into the same row", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/base", baseOk());
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 2, d: 1 }]));
+  const row = p.rows()[0];
+  assert.strictEqual(text(row.querySelector(".dk-ct")), "+2−1");
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 0, d: 0, bin: true }])); // now binary: no count
+  assert.strictEqual(p.rows()[0], row);
+  assert.strictEqual(row.querySelector(".dk-ct"), null, "no count, no span");
+  assert.deepStrictEqual(Array.from(row.children, (c) => cls(c)[0]), ["dk-ic", "dk-nm", "dk-dir", "dk-st"]);
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 4, d: 4 }]));
+  assert.strictEqual(text(row.querySelector(".dk-ct")), "+4−4");
+  assert.deepStrictEqual(Array.from(row.children, (c) => cls(c)[0]), ["dk-ic", "dk-nm", "dk-dir", "dk-ct", "dk-st"], "the counts sit before the letter");
+});
+
+test("a status and a numstat that say what the screen already says write nothing to the page", async () => {
+  const rejected = [];
+  const onRej = (e) => rejected.push(e);
+  process.on("unhandledRejection", onRej);
+  try {
+    const p = page();
+    const ent = [{ p: "a.go", x: "M" }, { p: "n.txt", x: "U" }, { p: "dir/", x: "U" }];
+    const ns = [{ p: "a.go", x: "M", a: 3, d: 1 }, { p: "n.txt", x: "U", a: 5, d: 0 }];
+    p.run('drawerChangedFiles.set("s1", [{ path: "/w/a.go", add: 1, del: 1 }])');
+    await p.status(okStatus(ent));
+    await p.answer("/api/git/base", baseOk({ ahead: true }));
+    await p.answer("/api/git/numstat", num(ns));
+    await p.answer("/api/git/numstat", num(ns, {}), true); // the Branch list (the default, ahead)
+    assert.strictEqual(p.rows().length, 3, "painted");
+    for (const n of Object.values(p.nodes)) deepFreeze(n);
+    // Each of these is a new object with the same content. Any write throws on the frozen page.
+    await p.status(okStatus(ent));
+    assert.strictEqual(p.pending("/api/git/numstat").length, 1, "the status asked for its numstat");
+    await p.answer("/api/git/numstat", num(ns));
+    await p.status(okStatus(ent));
+    await p.answer("/api/git/numstat", num(ns));
+    p.ctx.dockChangesRender();
+    p.ctx.dockChangesRefresh();
+    await settle();
+    assert.deepStrictEqual(rejected.map(String), [], "nothing tried to write");
+    // And the frozen page does throw on a write, so the test above could have failed.
+    assert.throws(() => { p.rows()[0].className = "x"; }, TypeError);
+  } finally { process.off("unhandledRejection", onRej); }
+});
+
+test("a change in one row writes only that row", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "b.go", x: "M" }]));
+  await p.answer("/api/git/base", baseOk());
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 1 }, { p: "b.go", x: "M", a: 2, d: 2 }]));
+  const [a, b] = p.rows();
+  deepFreeze(a);
+  // b's count changes; a is frozen, so touching it throws.
+  await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "b.go", x: "M" }]));
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 1 }, { p: "b.go", x: "M", a: 9, d: 2 }]));
+  assert.strictEqual(text(b.querySelector(".dk-ct")), "+9−2");
+  assert.strictEqual(text(a.querySelector(".dk-ct")), "+1−1");
+});
+
+// --- fix round 1: the base, the pick, the menu --------------------------------------------------------------------------
+
+test("a branch switched to at the same commit asks for the base again, so the branch row names the new branch", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }], { branch: "main" }));
+  await p.answer("/api/git/base", baseOk({ ahead: true, branch: "main" }));
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }]));
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }]));
+  assert.strictEqual(text(p.el("dock-branch").querySelector(".dk-br-name")), "main");
+  await p.status(okStatus([{ p: "a.go", x: "M" }], { branch: "feat/x" })); // same head h1
+  assert.strictEqual(p.calls("/api/git/base").length, 2, "git checkout -b leaves HEAD where it was");
+  await p.answer("/api/git/base", baseOk({ ahead: true, branch: "feat/x" }));
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }]));
+  assert.strictEqual(text(p.el("dock-branch").querySelector(".dk-br-name")), "feat/x");
+  await p.status(okStatus([{ p: "a.go", x: "M" }], { branch: "feat/x" }));
+  assert.strictEqual(p.calls("/api/git/base").length, 2, "and not again for the same branch");
+});
+
+test("a base that fails once the page has a good one keeps the toggle and the Branch pick on screen", async () => {
+  const p = page();
+  p.st.store.set(KEY, JSON.stringify({ s1: "branch" }));
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/base", baseOk({ ahead: false }));
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }])); // head, asked before the base was known
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "A", a: 7, d: 0 }])); // branch, the pick
+  assert.strictEqual(p.el("dock-scope").hidden, false);
+  assert.strictEqual(text(p.rows()[0].querySelector(".dk-ct")), "+7−0");
+  // A commit moves HEAD: the base is asked for again and the request fails.
+  await p.status(okStatus([{ p: "a.go", x: "M" }], { head: "h2" }));
+  await p.answer("/api/git/base", null, false);
+  assert.strictEqual(p.el("dock-scope").hidden, false, "the toggle does not vanish for a flake");
+  assert.deepStrictEqual(Array.from(p.el("dock-scope").children, (b) => b.getAttribute("aria-pressed")), ["false", "true"], "Branch is still the scope");
+  assert.strictEqual(p.ctx.dockScope("s1"), "branch");
+  assert.strictEqual(p.ctx.gitBaseFor("/w").state, "ok", "the last good answer is the one held");
+  assert.strictEqual(p.pending("/api/git/base").length, 0, "no retry loop");
+  await p.status(okStatus([{ p: "a.go", x: "M" }], { head: "h2" }));
+  assert.strictEqual(p.calls("/api/git/base").length, 2, "not asked again within the pause");
+});
+
+test("pressing either segment pins the choice, the one already on as well", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/base", baseOk({ ahead: true }));
+  await p.answer("/api/git/numstat", num([]));
+  await p.answer("/api/git/numstat", num([]));
+  assert.strictEqual(p.prefs(), undefined, "nothing pinned yet: Branch is the default");
+  p.el("dock-scope").children[1].click(); // Branch, already on
+  assert.deepStrictEqual(JSON.parse(p.prefs()), { s1: "branch" });
+  // The default moves (HEAD is no longer ahead): the pick holds.
+  await p.status(okStatus([{ p: "a.go", x: "M" }], { head: "h2" }));
+  await p.answer("/api/git/base", baseOk({ ahead: false }));
+  assert.strictEqual(p.ctx.dockScope("s1"), "branch");
+  const q = page();
+  await q.status(okStatus([{ p: "a.go", x: "M" }]));
+  await q.answer("/api/git/base", baseOk({ ahead: false }));
+  await q.answer("/api/git/numstat", num([]));
+  q.el("dock-scope").children[0].click(); // Uncommitted, already on by default
+  assert.deepStrictEqual(JSON.parse(q.prefs()), { s1: "head" });
+});
+
+test("a second press on the ⋯ closes its menu; a page without the menu element does nothing", async () => {
+  const p = page();
+  p.el("dock-more").onclick({ stopPropagation() {} });
+  assert.strictEqual(p.st.shows, 1);
+  assert.strictEqual(p.el("dock-more").getAttribute("aria-expanded"), "true");
+  p.el("dock-more").onclick({ stopPropagation() {} });
+  assert.strictEqual(p.st.shows, 1, "no second menu");
+  assert.strictEqual(p.st.closed, 1, "it was closed (focus goes back to the ⋯)");
+  assert.strictEqual(p.el("dock-more").getAttribute("aria-expanded"), "false");
+  p.el("dock-more").onclick({ stopPropagation() {} });
+  assert.strictEqual(p.st.shows, 2, "and a third press opens it again");
+  const q = page();
+  delete q.nodes["ft-menu"];
+  assert.doesNotThrow(() => q.el("dock-more").onclick({ stopPropagation() {} }));
+  assert.strictEqual(q.st.shows, undefined);
 });
