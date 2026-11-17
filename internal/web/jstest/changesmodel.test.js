@@ -223,6 +223,30 @@ test("changesRows maps a subfolder root through rootRel, as the tree marks do", 
   assert.deepStrictEqual(r.rows.map((x) => [x.path, x.dir, x.name, x.add]), [["/home/u/r/internal/a/b.go", "a", "b.go", 2]]);
 });
 
+test("changesRows drops a letter that is a property of Object, not a code", () => {
+  const bad = ["__proto__", "constructor", "toString", "hasOwnProperty", "valueOf", "", "m"];
+  for (const scope of ["head", "branch"]) {
+    const r = rows({
+      scope,
+      status: status(bad.map((x, i) => ({ p: "s" + i + ".go", x })).concat([{ p: "dir" + "/", x: "constructor" }])),
+      numstat: numstat(bad.map((x, i) => ({ p: "n" + i + ".go", x, a: 1, d: 1 }))),
+    });
+    assert.deepStrictEqual(r, { rows: [], more: 0 });
+  }
+});
+
+test("changesRows reads every directory entry as an untracked folder, as gitMarks does", () => {
+  const entries = [{ p: "a/", x: "M" }, { p: "b/", x: "D" }, { p: "c/", x: "U" }];
+  for (const scope of ["head", "branch"]) {
+    const r = rows({ scope, status: status(entries), numstat: numstat([]) });
+    assert.deepStrictEqual(r.rows.map((x) => [x.path, x.code, x.folder, x.add, x.del]), [
+      ["/r/a", "U", true, null, null],
+      ["/r/b", "U", true, null, null],
+      ["/r/c", "U", true, null, null],
+    ]);
+  }
+});
+
 test("changesRows drops entries that cannot be placed under the root", () => {
   const r = rows({
     status: status([{ p: "a//b.go", x: "M" }, { p: "ok.go", x: "M" }, { p: "weird.go", x: "Z" }, { p: "", x: "M" }, { p: 7, x: "M" }, null]),

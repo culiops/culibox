@@ -1,58 +1,25 @@
 "use strict";
 
 // The rows of the explorer's Changes section, as one pure function: which files
-// the workspace has changed, in what order, with what +a −d. No DOM, no globals
-// from other scripts, so `node --test` reaches it; dockchanges.js paints the
-// rows. Classic script: browser globals, required under node.
+// the workspace has changed, in what order, with what +a −d. No DOM, and the two
+// functions it takes from other scripts are pure too, so `node --test` reaches
+// it; dockchanges.js paints the rows. Classic script: browser globals, required
+// under node.
 //
-// A row's path is mapped from the reply's repo-relative `p` the way gitMarks
-// (gitstatus.js) maps a status entry, through the reply's rootRel and not its
-// symlink-resolved `top`, so a row's path is the one the tree's row for that
-// file carries. The arithmetic is repeated here, not called, so this file loads
-// on its own.
+// A row's path is mapped from the reply's repo-relative `p` by gitstatus.js's
+// gitPlace, the rule the tree's marks use, and "mine" is decided by drawerfiles.js's
+// changedSegs, the rule behind the tree's session bars. Both are reached at call
+// time (a global in the page, a require under node), so a Changes row and its
+// tree row cannot disagree about a path.
 
 const CHANGES_MAX = 200; // rows shown; the rest are counted in `more`
 
 // Letters a reply may carry. Numstat has no C (git diff calls an unmerged file
 // a modification) and its U is the web layer's untracked file; status has all
 // five. Anything else is dropped, so a stray letter never becomes a class name.
-const CHANGES_NUM_CODES = { M: 1, A: 1, U: 1, D: 1 };
-const CHANGES_STATUS_CODES = { M: 1, A: 1, U: 1, D: 1, C: 1 };
-
-// changesSegs: the segments of an absolute path, normalized (no `.`, `..`,
-// doubled or trailing slashes); null for anything else (not a string, relative,
-// empty) and for a path that climbs above "/". The same rule as
-// drawerfiles.js changedSegs, which decides which tree rows get a session bar,
-// so a Changes row and its tree row agree on "mine".
-function changesSegs(p) {
-  if (typeof p !== "string" || p.charAt(0) !== "/") return null;
-  const out = [];
-  for (const part of p.split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") { if (!out.length) return null; out.pop(); continue; }
-    out.push(part);
-  }
-  return out;
-}
-
-// changesPlace puts one reply entry's `p` under the tree root: its absolute
-// path, name, folder (dir, relative to the root, "" at the root) and whether it
-// is a collapsed untracked folder (a trailing "/"). Null for an entry outside
-// the shown tree, the root itself, a path with an empty segment, or a reply with
-// no usable rootRel.
-function changesPlace(p, rootRel, base) {
-  if (typeof p !== "string" || typeof rootRel !== "string" || rootRel === "") return null;
-  const folder = p.endsWith("/");
-  let rel = folder ? p.slice(0, -1) : p;
-  if (rootRel !== ".") {
-    if (!rel.startsWith(rootRel + "/")) return null;
-    rel = rel.slice(rootRel.length + 1);
-  }
-  if (rel === "") return null;
-  const segs = rel.split("/");
-  if (segs.some((s) => s === "")) return null;
-  return { path: base + "/" + rel, name: segs[segs.length - 1], dir: segs.slice(0, -1).join("/"), folder };
-}
+// Sets, not objects: "constructor" or "__proto__" must not pass for a letter.
+const CHANGES_NUM_CODES = new Set(["M", "A", "U", "D"]);
+const CHANGES_STATUS_CODES = new Set(["M", "A", "U", "D", "C"]);
 
 // changesCount: a line count the reply gave, or null. Unknown is null and never
 // 0: a count is shown only when git (or the web layer's own count) said it.
@@ -89,61 +56,77 @@ function changesRows(opts) {
   const none = { rows: [], more: 0 };
   const { scope, status, numstat, files, root } = opts || {}; // statusAt: not read yet
   if (!status || status.state !== "ok" || typeof root !== "string" || root === "") return none;
+  const placeOf = typeof gitPlace === "function" ? gitPlace : require("./gitstatus.js").gitPlace;
+  const segsOf = typeof changedSegs === "function" ? changedSegs : require("./drawerfiles.js").changedSegs;
   const head = scope !== "branch";
   const base = root.replace(/\/+$/, "");
   const byPath = new Map();
-  const place = (at, code, add, del) => {
-    byPath.set(at.path, { path: at.path, name: at.name, dir: at.dir, code, add, del, mine: false, folder: at.folder });
+  const add = (at, code, a, d) => {
+    byPath.set(at.abs, {
+      path: at.abs,
+      name: at.segs[at.segs.length - 1],
+      dir: at.segs.slice(0, -1).join("/"),
+      code,
+      add: a,
+      del: d,
+      mine: false,
+      folder: at.isDir,
+    });
   };
 
   if (numstat && numstat.state === "ok" && Array.isArray(numstat.entries)) {
     for (const e of numstat.entries) {
-      if (!e || !CHANGES_NUM_CODES[e.x]) continue;
-      const at = changesPlace(e.p, numstat.rootRel, base);
-      if (!at || at.folder || byPath.has(at.path)) continue; // numstat never lists a folder
+      if (!e || !CHANGES_NUM_CODES.has(e.x)) continue;
+      const at = placeOf(e.p, numstat.rootRel, base);
+      if (!at || at.isDir || byPath.has(at.abs)) continue; // numstat never lists a folder
       // A binary file has no lines to count, and a pair with one bad half is not
       // shown as a half-known "+? −3": unknown, not 0.
-      const add = changesCount(e.a);
-      const del = changesCount(e.d);
-      const known = e.bin !== true && add !== null && del !== null;
-      place(at, e.x, known ? add : null, known ? del : null);
+      const a = changesCount(e.a);
+      const d = changesCount(e.d);
+      const known = e.bin !== true && a !== null && d !== null;
+      add(at, e.x, known ? a : null, known ? d : null);
     }
   }
   if (Array.isArray(status.entries)) {
     for (const e of status.entries) {
-      if (!e || !CHANGES_STATUS_CODES[e.x]) continue;
-      if (!head && e.x !== "U") continue;
-      const at = changesPlace(e.p, status.rootRel, base);
+      if (!e || !CHANGES_STATUS_CODES.has(e.x)) continue;
+      const at = placeOf(e.p, status.rootRel, base);
       if (!at) continue;
-      const have = byPath.get(at.path);
+      // Every directory entry is an untracked folder, whatever its letter, as in gitMarks.
+      const code = at.isDir ? "U" : e.x;
+      if (!head && code !== "U") continue;
+      const have = byPath.get(at.abs);
       if (have) {
-        if (head && e.x === "C") have.code = "C";
+        if (head && code === "C") have.code = "C";
         continue;
       }
-      place(at, e.x, null, null);
+      add(at, code, null, null);
     }
   }
 
   // Position in `files`, keyed by the normalized path; the first of a repeat wins.
+  const keyOf = (p) => {
+    const segs = segsOf(p);
+    return segs ? "/" + segs.join("/") : null;
+  };
   const order = new Map();
   if (Array.isArray(files)) {
     files.forEach((f, i) => {
-      const segs = f ? changesSegs(f.path) : null;
-      const key = segs ? "/" + segs.join("/") : null;
+      const key = f ? keyOf(f.path) : null;
       if (key !== null && !order.has(key)) order.set(key, i);
     });
   }
   const ranked = [];
   for (const row of byPath.values()) {
-    const segs = changesSegs(row.path);
-    const at = segs ? order.get("/" + segs.join("/")) : undefined;
+    const key = keyOf(row.path);
+    const at = key === null ? undefined : order.get(key);
     if (at !== undefined) row.mine = true;
     ranked.push({ row, at: at === undefined ? -1 : at });
   }
-  ranked.sort((a, b) => {
-    if ((a.at >= 0) !== (b.at >= 0)) return a.at >= 0 ? -1 : 1;
-    if (a.at >= 0) return a.at - b.at;
-    return a.row.path < b.row.path ? -1 : a.row.path > b.row.path ? 1 : 0;
+  ranked.sort((x, y) => {
+    if ((x.at >= 0) !== (y.at >= 0)) return x.at >= 0 ? -1 : 1;
+    if (x.at >= 0) return x.at - y.at;
+    return x.row.path < y.row.path ? -1 : x.row.path > y.row.path ? 1 : 0;
   });
   return { rows: ranked.slice(0, CHANGES_MAX).map((x) => x.row), more: Math.max(0, ranked.length - CHANGES_MAX) };
 }

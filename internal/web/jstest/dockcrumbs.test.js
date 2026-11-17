@@ -116,3 +116,11 @@ test("editedLabel absent", () => {
   assert.equal(editedLabel(files, null, "builder", 2), "");
   assert.equal(editedLabel([null, {}, { path: 3 }], "/r/a.go", "builder", 2), "");
 });
+
+test("editedLabel gives no label without a session name", () => {
+  const files = [{ path: "/r/a.go", ts: 1 }, { path: "/r/b.go" }];
+  for (const name of [undefined, null, "", "   ", 5, {}]) {
+    assert.equal(editedLabel(files, "/r/a.go", name, 2), "");
+    assert.equal(editedLabel(files, "/r/b.go", name, 2), "");
+  }
+});

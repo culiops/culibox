@@ -105,5 +105,5 @@ function changedSegs(p) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { rememberDrawerFile, drawerFileFor, drawerLeavesFile, discardAsk, drawerTreeBlocked, goToFileURL, hitsUnderRoot, changedSet };
+  module.exports = { rememberDrawerFile, drawerFileFor, drawerLeavesFile, discardAsk, drawerTreeBlocked, goToFileURL, hitsUnderRoot, changedSet, changedSegs };
 }

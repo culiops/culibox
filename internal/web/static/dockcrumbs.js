@@ -2,25 +2,10 @@
 
 // Labels for the Files dock's breadcrumb row: the path from the tree's root, the
 // "N min ago" of a time, and the "Edited by <session> · N min ago" on the right.
-// Pure: no DOM, no globals from other scripts, so `node --test` reaches it;
-// filesdrawer.js draws what these return. Classic script: browser globals,
-// required under node.
-
-// crumbSegs: the segments of an absolute path, normalized (no `.`, `..`, doubled
-// or trailing slashes); null for anything else (not a string, relative, empty)
-// and for a path that climbs above "/". The same rule as drawerfiles.js
-// changedSegs, repeated so this file loads on its own, and so a file named by
-// Activity and by a tab compare the same way.
-function crumbSegs(p) {
-  if (typeof p !== "string" || p.charAt(0) !== "/") return null;
-  const out = [];
-  for (const part of p.split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") { if (!out.length) return null; out.pop(); continue; }
-    out.push(part);
-  }
-  return out;
-}
+// Pure: no DOM, and the one function it takes from another script (drawerfiles.js
+// changedSegs, the path normalizer behind the tree's session bars) is pure too,
+// so `node --test` reaches it; filesdrawer.js draws what these return. Classic
+// script: browser globals, required under node.
 
 // crumbsFor: the breadcrumbs of `path` as [{name, path}], each with the absolute
 // path a click reveals. Under `root` the first crumb is the root itself (its
@@ -34,9 +19,10 @@ function crumbSegs(p) {
 // function does not have, and guessing one would make a click reveal the wrong
 // directory.
 function crumbsFor(path, root) {
-  const segs = crumbSegs(path);
+  const segsOf = typeof changedSegs === "function" ? changedSegs : require("./drawerfiles.js").changedSegs;
+  const segs = segsOf(path);
   if (!segs) return [];
-  const rsegs = typeof root === "string" && root !== "" ? crumbSegs(root) : null;
+  const rsegs = typeof root === "string" && root !== "" ? segsOf(root) : null;
   const inside = rsegs !== null && rsegs.length <= segs.length && rsegs.every((s, i) => segs[i] === s);
   const from = inside ? rsegs.length : 0;
   const at = (n) => "/" + segs.slice(0, n).join("/");
@@ -65,13 +51,16 @@ function relTime(ms, now) {
 // Activity files ([{path, add, del, ts?}]); a file Activity names gives "Edited
 // by <sessionName> · <relTime of its ts>", or "Edited by <sessionName>" when it
 // has no usable ts (an older session, or one Activity could not time), and a
-// file it does not name gives "" so the row shows nothing.
+// file it does not name gives "" so the row shows nothing. So does a missing or
+// blank sessionName: no label beats "Edited by undefined".
 function editedLabel(files, path, sessionName, now) {
-  const want = crumbSegs(path);
-  if (!want || !Array.isArray(files)) return "";
+  if (typeof sessionName !== "string" || sessionName.trim() === "" || !Array.isArray(files)) return "";
+  const segsOf = typeof changedSegs === "function" ? changedSegs : require("./drawerfiles.js").changedSegs;
+  const want = segsOf(path);
+  if (!want) return "";
   const key = want.join("/");
   for (const f of files) {
-    const segs = f ? crumbSegs(f.path) : null;
+    const segs = f ? segsOf(f.path) : null;
     if (!segs || segs.join("/") !== key) continue;
     const label = "Edited by " + sessionName;
     const ago = Number.isFinite(f.ts) && f.ts > 0 ? relTime(f.ts, now) : "";

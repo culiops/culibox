@@ -116,6 +116,13 @@ test("hitsUnderRoot: root / holds every absolute path", () => {
 
 const sorted = (s) => [...s].sort();
 
+test("changedSegs: the segments of an absolute path, normalized; null for anything else", () => {
+  assert.deepEqual(d.changedSegs("/w//a/./b/../c.go/"), ["w", "a", "c.go"]);
+  assert.deepEqual(d.changedSegs("/"), []);
+  assert.deepEqual(d.changedSegs("/My Project/Tài liệu"), ["My Project", "Tài liệu"]);
+  for (const p of ["", "a/b", "/..", "/a/../..", null, undefined, 7]) assert.equal(d.changedSegs(p), null, String(p));
+});
+
 test("changedSet: a changed file and each folder above it under the root, never the root", () => {
   assert.deepEqual(sorted(d.changedSet([{ path: "/w/a/b.go" }], "/w")), ["/w/a", "/w/a/b.go"]);
   assert.deepEqual(sorted(d.changedSet([{ path: "/w/a/b/c.go" }], "/w/")), ["/w/a", "/w/a/b", "/w/a/b/c.go"]);

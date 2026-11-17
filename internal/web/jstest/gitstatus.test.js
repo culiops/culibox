@@ -6,6 +6,25 @@ const g = require("../static/gitstatus.js");
 
 const ok = (entries, extra) => Object.assign({ state: "ok", reason: "", top: "/r", rootRel: ".", noHead: false, entries }, extra || {});
 
+test("gitPlace: a path under the top, its segments, and a trailing slash for a folder", () => {
+  assert.deepEqual(g.gitPlace("a/b/c.go", ".", "/r"), { abs: "/r/a/b/c.go", segs: ["a", "b", "c.go"], isDir: false });
+  assert.deepEqual(g.gitPlace("tmp/out/", ".", "/r"), { abs: "/r/tmp/out", segs: ["tmp", "out"], isDir: true });
+  assert.deepEqual(g.gitPlace("x.go", ".", ""), { abs: "/x.go", segs: ["x.go"], isDir: false }); // a root of "/" has an empty base
+});
+
+test("gitPlace: a subfolder root maps through rootRel and drops what is outside it or is the root", () => {
+  assert.deepEqual(g.gitPlace("internal/a/b.go", "internal", "/home/u/r/internal"), { abs: "/home/u/r/internal/a/b.go", segs: ["a", "b.go"], isDir: false });
+  assert.deepEqual(g.gitPlace("internal/new/", "internal", "/h/internal"), { abs: "/h/internal/new", segs: ["new"], isDir: true });
+  for (const p of ["README.md", "internalx/z.go", "internal", "internal/", "other/internal/a.go"]) {
+    assert.equal(g.gitPlace(p, "internal", "/h/internal"), null, p);
+  }
+});
+
+test("gitPlace: junk gives null (empty or doubled segments, a path that is not text, no usable rootRel)", () => {
+  for (const p of ["", "/", "a//b.go", "/abs.go", "a/b//", 7, null, undefined]) assert.equal(g.gitPlace(p, ".", "/r"), null, String(p));
+  for (const rr of ["", undefined, null, 3]) assert.equal(g.gitPlace("a.go", rr, "/r"), null, String(rr));
+});
+
 test("gitMarks: a modified file is marked, its folders get a dot, the root does not", () => {
   const m = g.gitMarks(ok([{ p: "a/b/c.go", x: "M" }]), "/r");
   assert.deepEqual([...m.keys()].sort(), ["/r/a", "/r/a/b", "/r/a/b/c.go"]);

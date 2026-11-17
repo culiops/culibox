@@ -12,6 +12,27 @@
 const GIT_RANK = { C: 3, D: 3, M: 2, A: 1, U: 1 };
 const GIT_TITLES = { M: "Modified", A: "Added (staged)", U: "Untracked", C: "Conflict" };
 
+// gitPlace puts one reply entry's repo-relative `p` under the tree root: its
+// absolute path (`base` is the root without trailing slashes), its segments below
+// the root, and whether it is a collapsed untracked folder (a trailing "/"). Null
+// for an entry outside the shown tree, the root itself, a path with an empty
+// segment, or a reply with no usable rootRel ("." is the checkout's top itself).
+// One rule for every reader of a status or numstat reply, so the tree's marks and
+// the Changes rows land on the same row paths (changesmodel.js reuses it).
+function gitPlace(p, rootRel, base) {
+  if (typeof p !== "string" || typeof rootRel !== "string" || rootRel === "") return null;
+  const isDir = p.endsWith("/");
+  let rel = isDir ? p.slice(0, -1) : p;
+  if (rootRel !== ".") {
+    if (!rel.startsWith(rootRel + "/")) return null; // outside the shown tree (or the root itself)
+    rel = rel.slice(rootRel.length + 1);
+  }
+  if (rel === "") return null;
+  const segs = rel.split("/");
+  if (segs.some((s) => s === "")) return null;
+  return { abs: base + "/" + rel, segs, isDir };
+}
+
 // gitMarks: Map<absolute row path, {code, dir, title, untracked?}> for the tree
 // rooted at `root`, from one status reply. Files and untracked folders get their
 // own code; every folder strictly between the root and a changed entry gets
@@ -29,16 +50,9 @@ function gitMarks(status, root) {
   const folders = new Map(); // abs folder path -> {n, del, code}
   for (const e of status.entries) {
     if (!e || typeof e.p !== "string" || !GIT_RANK[e.x]) continue;
-    const isDir = e.p.endsWith("/");
-    let p = isDir ? e.p.slice(0, -1) : e.p;
-    if (rr !== ".") {
-      if (!p.startsWith(rr + "/")) continue; // outside the shown tree (or the root itself)
-      p = p.slice(rr.length + 1);
-    }
-    if (p === "") continue;
-    const segs = p.split("/");
-    if (segs.some((s) => s === "")) continue;
-    const abs = base + "/" + p;
+    const at = gitPlace(e.p, rr, base);
+    if (!at) continue;
+    const { abs, segs, isDir } = at;
     if (isDir) out.set(abs, { code: e.x, dir: true, untracked: true, title: "Untracked folder" });
     else if (e.x !== "D") out.set(abs, { code: e.x, dir: false, title: GIT_TITLES[e.x] });
     for (let i = 1; i < segs.length; i++) {
@@ -245,5 +259,5 @@ function gitPaintNote() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { gitMarks, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusReason, gitStatusNote, gitStatusReset };
+  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusReason, gitStatusNote, gitStatusReset };
 }
