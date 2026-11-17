@@ -139,7 +139,7 @@ func main() {
 		// failure to name them leaves that list without them.
 		cfgFiles, _ := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, envHome)
 		in := doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
-			Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
+			Home: home, XDGConfig: xdg, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
 			EnvNotice: envNotice, EnvErr: envErr}
 		if args.Cmd == "doctor" {
 			os.Exit(doctor.Run(os.Stdout, in))
@@ -192,7 +192,7 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 	serve(cfg, baseCfg, cred.File, cred.Bad, home, cfgFiles, doctor.Input{Config: cfg, Source: src,
-		Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
+		Home: home, XDGConfig: xdg, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
 		EnvNotice: envNotice, RootNote: rootNote, Start: facts}, ring)
 }
 
