@@ -66,7 +66,7 @@ curl -fsSLO https://github.com/culiops/culibox/releases/latest/download/setup.sh
 sh setup.sh
 ```
 
-It installs the newest release's checksum-verified `culibox`, and the `abduco` that comes with it, into `~/.local/bin` without `sudo`, then runs `culibox init`, a guided setup you can run again at any time. `sh setup.sh --version vX.Y.Z` installs another release. Then start CuliBox:
+It installs the newest release's checksum-verified `culibox`, with the `abduco` that comes with it, into `~/.local/bin` without `sudo` (it skips both when that release is already installed), then runs `culibox init`, a guided setup you can run again at any time. `sh setup.sh --version vX.Y.Z` installs another release. Then start CuliBox:
 
 ```sh
 culibox serve
