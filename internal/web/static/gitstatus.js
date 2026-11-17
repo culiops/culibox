@@ -88,9 +88,10 @@ const GIT_DEBOUNCE_MS = 1000;
 // The least gap between two status requests the dock watch asks for (dockwatch.js passes {watch: true}). The server starts a
 // docker run for every fresh status after the first has launched (internal/gitview/runner.go StatusFresh) and the numstat that
 // follows each landing is another, so without a floor a turn that edits a file every second or two costs a status run and a
-// numstat run per edit, bounded only by the round trip. 3 s is about the age at which the Changes list reads as live while an
-// agent works, and it caps this at about 20 status runs a minute; the last edit's ask is still sent when the floor ends (it is
-// trailing, never dropped). Explicit asks (a save, a file op, the end of a turn, ↻, a tree paint) are not subject to it.
+// numstat run per edit, bounded only by the round trip. 3 s is the floor the final review of the dock settled on (it caps this
+// at about 20 status runs a minute; the real per-run cost on a host is not measured here); the last edit's ask is still sent
+// when the floor ends (it is trailing, never dropped). Explicit asks (a save, a file op, the end of a turn, ↻, a tree paint) are
+// not subject to it.
 const GIT_WATCH_MIN_MS = 3000;
 // A status request that never answers is abandoned after this, so it cannot hold the debounced asks back for good. The
 // server gives a git run 10 s (internal/gitview/runner.go defaultTimeout) and a run may first wait for one of its slots.
