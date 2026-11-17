@@ -201,11 +201,61 @@ cat >"$tmp/bin/go" <<'EOF'
 #!/bin/sh
 case "$1" in
 version) echo "go version go1.99.0 darwin/arm64" ;;
+list)
+  # The packages ./... holds, per STUB_GO_HANG_AMD64 mode (see test below).
+  echo "LIST GOARCH=${GOARCH:-} ARGS=$*" >>"$STUB_OUT/go.log"
+  if [ -n "${STUB_GO_LIST_FAIL:-}" ]; then
+    echo "stub go list: cannot load packages" >&2
+    exit 1
+  fi
+  printf 'fixture/a\nfixture/b\nfixture/c\n'
+  case ${STUB_GO_HANG_AMD64:-} in
+  build) echo fixture/d ;;
+  many) printf 'fixture/e\nfixture/f\nfixture/g\nfixture/h\nfixture/i\n' ;;
+  esac
+  ;;
 test)
   # EFFECTIVE_GOFLAGS is what the real go would use in this very environment: a GOFLAGS
   # that is merely empty falls back to the GOENV file, so the variable alone proves nothing.
   echo "GOENV=${GOENV:-} GOOS=${GOOS:-} GOARCH=${GOARCH:-} CGO=${CGO_ENABLED:-} GOFLAGS=${GOFLAGS:-} EFFECTIVE_GOFLAGS=$("$STUB_REAL_GO" env GOFLAGS 2>/dev/null) REQUIRE=${AGENT_BOX_REQUIRE_ABDUCO:-} PWD=$PWD ABDUCO=$(command -v abduco || echo none) ARGS=$*" >>"$STUB_OUT/go.log"
   : >"$STUB_OUT/go-called.marker"
+  # STUB_GO_HANG_AMD64: under GOARCH=amd64 the ./... run has fixture/c killed for running
+  # too long, the way go test reports a test binary that hung at launch under Rosetta
+  # (#313). A run of fixture/c alone then passes, or with STUB_GO_RETRY=fail times out
+  # again. Modes: 1 (only that), both (fixture/a also fails a test), build (fixture/d
+  # also fails to build), short (go exits before fixture/b ran), panic (the test
+  # binary's own timeout instead of the kill), many (six packages killed).
+  if [ "${GOARCH:-}" = amd64 ] && [ -n "${STUB_GO_HANG_AMD64:-}" ]; then
+    case " $* " in
+    *" ./... "*)
+      if [ "$STUB_GO_HANG_AMD64" = both ]; then
+        printf '=== RUN   TestA1\n--- FAIL: TestA1 (0.00s)\nFAIL\nFAIL\tfixture/a\t0.01s\n'
+      else
+        printf '=== RUN   TestA1\n--- PASS: TestA1 (0.00s)\nPASS\nok  \tfixture/a\t0.01s\n'
+      fi
+      case $STUB_GO_HANG_AMD64 in
+      panic) printf 'panic: test timed out after 10m0s\nFAIL\tfixture/c\t600.004s\n' ;;
+      many)
+        for p in c e f g h i; do printf '*** Test killed with quit: ran too long (11m0s).\nFAIL\tfixture/%s\t660.012s\n' "$p"; done
+        ;;
+      *) printf '*** Test killed with quit: ran too long (11m0s).\nFAIL\tfixture/c\t660.012s\n' ;;
+      esac
+      [ "$STUB_GO_HANG_AMD64" = short ] && exit 1
+      [ "$STUB_GO_HANG_AMD64" = build ] && printf 'FAIL\tfixture/d [build failed]\n'
+      printf '=== RUN   TestB1\n--- PASS: TestB1 (0.00s)\nPASS\nok  \tfixture/b\t0.01s\nFAIL\n'
+      exit 1
+      ;;
+    *" fixture/"?" ")
+      echo "RETRY $*" >>"$STUB_OUT/retry.log"
+      if [ "${STUB_GO_RETRY:-}" = fail ]; then
+        printf 'panic: test timed out after 10m0s\nFAIL\tfixture/c\t600.004s\nFAIL\n'
+        exit 1
+      fi
+      printf '=== RUN   TestC1\n--- PASS: TestC1 (0.00s)\nPASS\nok  \tfixture/c\t2.01s\n'
+      exit 0
+      ;;
+    esac
+  fi
   if [ "${GOARCH:-}" = amd64 ] && [ -n "${STUB_GO_FAIL_AMD64:-}" ]; then
     printf '=== RUN   TestX\n--- FAIL: TestX (0.00s)\nFAIL\nFAIL\tfixture/a\t0.1s\nFAIL\n'
     exit 1
@@ -359,6 +409,10 @@ contains "$out/uploaded.json" '"note": "said \"hi\" \\ done"' "(a) a note with a
 contains "$out/go.log" "GOENV=off GOOS=darwin GOARCH=arm64 CGO=0 GOFLAGS=-mod=readonly EFFECTIVE_GOFLAGS=-mod=readonly REQUIRE=1" "(a) the native run ignores the go env file, pins GOOS, GOARCH, CGO_ENABLED=0 (the shipped build) and GOFLAGS, and sets AGENT_BOX_REQUIRE_ABDUCO=1"
 contains "$out/go.log" "GOENV=off GOOS=darwin GOARCH=amd64 CGO=0 GOFLAGS=-mod=readonly EFFECTIVE_GOFLAGS=-mod=readonly REQUIRE=1" "(a) the Rosetta run pins GOARCH=amd64 and the rest"
 contains "$out/go.log" "ARGS=test -count=1 -v ./..." "(a) go test runs with -count=1 -v ./..."
+# Rosetta hangs test binaries launched in parallel (#313): amd64 runs one package at a time.
+if grep 'GOARCH=amd64' "$out/go.log" | grep -qF -- "ARGS=test -p 1 -count=1 -v ./..."; then pass "(a) the Rosetta run tests one package at a time (-p 1)"; else fail "(a) the Rosetta run lacks -p 1"; fi
+if grep 'GOARCH=arm64' "$out/go.log" | grep -qF -- "-p 1"; then fail "(a) the native run is limited to -p 1"; else pass "(a) the native run keeps go's default parallelism"; fi
+contains "$out/uploaded.json" "one package at a time under Rosetta" "(a) the amd64 summary says how its tests ran"
 contains "$out/uploaded.json" '"test_summary": "go test ./... ok: 3 test(s) passed, 1 skipped, in 2 package(s); no bundled abduco: tests ran against the pinned source build"' "(a) the summary counts tests, not packages"
 contains "$out/uploaded.json" '"test_env": "CGO_ENABLED=0 GOOS=darwin GOARCH=arm64"' "(a) the record says the tests ran with cgo off"
 for a in arm64 amd64; do
@@ -693,6 +747,68 @@ run_script $'M1=pass\n\n' TMPDIR="$case_dir/tmplink"
 expect_rc "$rc" 0 "(w) a run under a symlinked TMPDIR is verified"
 contains "$out/go.log" "PWD=$case_dir/tmpdir/macos-verify." "(w) go test runs in the clone by its physical path"
 absent "$out/go.log" "tmplink" "(w) no go test runs under the symlinked spelling"
+
+# ---- (y) an amd64 package killed for running too long is retried alone once --------
+# Under Rosetta a test binary can hang at launch before Go starts (#313, rented Mac
+# round 3). The package is run again alone; the record names it either way.
+echo "== (y1) an amd64 package times out, then passes alone"
+new_case y1
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=1
+expect_rc "$rc" 0 "(y1) a timeout that passes on its retry is verified"
+expect_verdict "$out/uploaded.json" verified "(y1) the verdict is verified"
+if grep 'GOARCH=amd64' "$out/go.log" | grep -qF -- "ARGS=test -p 1 -count=1 -v fixture/c"; then pass "(y1) the timed-out package is run again alone"; else fail "(y1) no retry of fixture/c alone"; fi
+contains "$out/uploaded.json" "fixture/c timed out and passed when run again alone" "(y1) the record names the retried package and its result"
+if [ "$(grep -c 'ARGS=test' "$out/go.log")" -eq 3 ]; then pass "(y1) go test ran 3 times (arm64, amd64, one retry)"; else fail "(y1) go test ran $(grep -c 'ARGS=test' "$out/go.log") times, want 3"; fi
+
+echo "== (y2) an amd64 package times out again on its retry"
+new_case y2
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=1 STUB_GO_RETRY=fail
+expect_rc "$rc" 3 "(y2) a second timeout exits 3"
+expect_verdict "$out/uploaded.json" failed "(y2) the verdict is failed"
+contains "$out/uploaded.json" "fixture/c timed out and failed when run again alone" "(y2) the record says the retry failed"
+contains "$case_dir/tmpdir"/macos-verify.*/test-amd64-retry.log "panic: test timed out" "(y2) the retry has its own log, kept with the others"
+
+echo "== (y3) a timeout next to a real test failure"
+new_case y3
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=both
+expect_rc "$rc" 3 "(y3) a real failure is not hidden by a passing retry"
+expect_verdict "$out/uploaded.json" failed "(y3) the verdict is failed"
+contains "$out/uploaded.json" '"test_summary": "go test failed: 1 test(s) failed' "(y3) the summary counts the real failure"
+contains "$out/uploaded.json" "fixture/c timed out and passed when run again alone" "(y3) the retried package is still named"
+
+echo "== (y4) a timeout next to a package that does not build"
+new_case y4
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=build
+expect_rc "$rc" 3 "(y4) a build failure is not hidden by a passing retry"
+expect_verdict "$out/uploaded.json" failed "(y4) the verdict is failed"
+contains "$out/uploaded.json" "2 package(s) FAIL" "(y4) the summary counts both failed packages"
+
+echo "== (y5) go stops before every package ran"
+new_case y5
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=short
+expect_rc "$rc" 3 "(y5) a run cut short is not verified by a passing retry"
+expect_verdict "$out/uploaded.json" failed "(y5) the verdict is failed"
+contains "$out/uploaded.json" "fixture/b has no result" "(y5) the record names the package that never ran"
+
+echo "== (y6) a test's own timeout is not retried"
+new_case y6
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=panic
+expect_rc "$rc" 3 "(y6) a test that hangs after Go started fails the arch"
+missing "$out/retry.log" "(y6) no retry: only go test's kill of a binary is the Rosetta symptom"
+
+echo "== (y8) go list fails after a retry"
+new_case y8
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=1 STUB_GO_LIST_FAIL=1
+expect_rc "$rc" 3 "(y8) an unchecked run is not verified"
+contains "$out/uploaded.json" "go list ./... failed (see test-amd64.log)" "(y8) the record says go list failed"
+contains "$case_dir/tmpdir"/macos-verify.*/test-amd64.log "stub go list: cannot load packages" "(y8) go list's error is kept in the log"
+
+echo "== (y7) too many timeouts are not retried"
+new_case y7
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=many
+expect_rc "$rc" 3 "(y7) six timed-out packages fail the arch"
+missing "$out/retry.log" "(y7) no package is retried past the cap"
+contains "$out/uploaded.json" "6 package(s) timed out, more than 5: not retried" "(y7) the record says why nothing was retried"
 
 # ---- (j) a bad tag is a usage error ------------------------------------------------
 echo "== (j) bad tag"
