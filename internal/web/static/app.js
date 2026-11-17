@@ -201,8 +201,8 @@ function openDrawer(kind, sessionId, opts) {
   applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId }, opts);
 }
 
-// revealInTree shows a viewer's file in the tree: the Files drawer on desktop
-// (the viewer's own session: the drawer's for a drawer viewer, the pane's
+// revealInTree shows a viewer's file in the tree: the Files dock on desktop
+// (the viewer's own session: the dock's for a dock viewer, the pane's
 // terminal for a pane viewer, none otherwise), the Files screen on mobile. Then
 // ftReveal expands down to the row. false (with a toast) when it cannot.
 async function revealInTree(viewer) {
@@ -212,7 +212,7 @@ async function revealInTree(viewer) {
     setMobileScreen("files");
   } else {
     let sid = null;
-    if (drawerViewerTab() === viewer) sid = drawerState.sessionId;
+    if (dockHasViewer(viewer)) sid = drawerState.sessionId;
     else {
       const cell = cells.find((c) => c.tabs.includes(viewer));
       const t = cell ? cellTerminal(cell) : null;
@@ -7501,6 +7501,9 @@ loadOptionDefs().then(newProfile);
     refreshEmptyState();
     return;
   }
+  // The dock's stored tabs are read here, now that the list says which sessions
+  // exist (and never on the give-up path above, which therefore never writes them).
+  dockRestore(sessions);
   // finally: a throwing restore must not keep the empty state silent for the
   // life of the page (it waits on bootRestoreDone).
   try { restoreLayout(sessions); }

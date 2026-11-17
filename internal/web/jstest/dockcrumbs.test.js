@@ -124,3 +124,17 @@ test("editedLabel gives no label without a session name", () => {
     assert.equal(editedLabel(files, "/r/b.go", name, 2), "");
   }
 });
+
+test("crumbReveal: the crumb is the tree's root, below it, or somewhere the tree does not show", () => {
+  const { crumbReveal } = require("../static/dockcrumbs.js");
+  assert.equal(crumbReveal("/home/u/proj", "/home/u/proj"), "root");
+  assert.equal(crumbReveal("/home/u/proj/", "/home/u/proj//"), "root", "normalized like crumbsFor");
+  assert.equal(crumbReveal("/home/u/proj/src", "/home/u/proj"), "inside");
+  assert.equal(crumbReveal("/home/u/proj/src/a.go", "/home/u/proj"), "inside");
+  // The first crumb crumbsFor emits for a file outside the root is "/": it is never inside, and never a throw.
+  for (const p of ["/", "/home", "/home/u", "/home/u/proj2", "/etc/nginx"]) assert.equal(crumbReveal(p, "/home/u/proj"), "outside", p);
+  assert.equal(crumbReveal("/anything", "/"), "inside", "everything is under the filesystem root");
+  assert.equal(crumbReveal("/", "/"), "root");
+  for (const root of [null, undefined, "", 5]) assert.equal(crumbReveal("/a", root), "outside", "no root: nothing is in the tree");
+  for (const p of ["", "a/b", null, undefined, 7]) assert.equal(crumbReveal(p, "/r"), "outside", "not a path: nothing to reveal");
+});

@@ -148,6 +148,14 @@
       </div>
       <div id="drawer-body" class="dr-body">
         <div id="drawer-viewer" class="dr-viewer">
+          <div id="dock-bar" class="dk-bar" hidden>
+            <div id="dock-tabs" class="dk-tabs" role="tablist" aria-label="Open files"></div>
+            <div id="dock-acts" class="dk-acts"></div>
+          </div>
+          <div id="dock-crumbs" class="dk-crumbs" hidden>
+            <nav id="dock-trail" class="dk-trail" aria-label="File path"></nav>
+            <span id="dock-edited" class="dk-edited" hidden></span>
+          </div>
           <div id="drawer-vhost" class="dr-vhost" hidden></div>
           <div id="drawer-vempty" class="dr-vempty">Open a file from the tree, or click a path in the terminal</div>
         </div>
@@ -917,6 +925,7 @@
   <script src="/docktabs.js"></script>
   <script src="/changesmodel.js"></script>
   <script src="/dockcrumbs.js"></script>
+  <script src="/dockstrip.js"></script>
   <script src="/filesdrawer.js"></script>
   <script src="/spawnpreview.js"></script>
   <script src="/workhome.js"></script>

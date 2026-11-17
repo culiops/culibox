@@ -225,6 +225,8 @@ function gitOpenChanges(path) {
 
 function gitPaintTree() {
   if (typeof document === "undefined") return;
+  // The dock's tabs wear the same letters.
+  if (typeof dockRender === "function") dockRender();
   // An open viewer's Changes button follows the same marks: repaint the toolbars.
   if (typeof ViewerTab !== "undefined" && ViewerTab.allViewers) {
     for (const v of ViewerTab.allViewers()) if (v.toolbarApi) v.toolbarApi.paint();

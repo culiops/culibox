@@ -2087,6 +2087,8 @@ function openFile(path, opts) {
 // returns false then, and the caller must not touch `tab` again.
 function repointViewer(tab, path, line) {
   if (typeof normalizePath === "function") path = normalizePath(path);
+  // A dock viewer is a tab of the dock's state: its key and its stored path move with it (filesdrawer.js).
+  if (typeof dockHasViewer === "function" && dockHasViewer(tab)) return dockRepointViewer(tab, path, line);
   const dup = cells.some((c) => c.tabs.some((t) => t !== tab && t.kind === "viewer" && !t.box && t.path === path));
   if (dup) {
     closeTabEverywhere(tab);
@@ -2130,8 +2132,8 @@ function openBoxFile(sessionId, path, opts) {
 }
 
 function closeTabEverywhere(tab) {
-  // The desktop Files drawer's viewer is in no cell (filesdrawer.js).
-  if (tab && typeof drawerViewerTab === "function" && drawerViewerTab() === tab) { drawerClearViewer(); return; }
+  // The desktop Files dock's viewers are in no cell (filesdrawer.js).
+  if (tab && typeof dockHasViewer === "function" && dockHasViewer(tab)) { dockCloseViewer(tab); return; }
   for (const c of cells) {
     if (c.tabs.includes(tab)) { c.closeTab(tab); return; }
     if (tab && c.dockTabFor(tab.id) === tab) { c.removeShell(tab.id); return; }
@@ -2178,9 +2180,8 @@ function closeViewersFor(path) {
     // !t.box: a host delete/rename says nothing about a file inside a box.
     for (const t of c.tabs.slice()) if (t.kind === "viewer" && !t.box && hit(t.path)) c.closeTab(t);
   }
-  // The Files drawer's viewer too, on the same rule.
-  const dv = typeof drawerViewerTab === "function" ? drawerViewerTab() : null;
-  if (dv && !dv.box && hit(dv.path)) drawerClearViewer();
+  // The Files dock's tabs too, on the same rule, in every session.
+  if (typeof dockForget === "function") dockForget(path);
 }
 
 // --- restore (see layout.js) -------------------------------------------------

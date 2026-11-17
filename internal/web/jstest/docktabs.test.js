@@ -508,3 +508,112 @@ test("a migrated layout still reconciles: the plan has the terminals and no view
   assert.strictEqual(plan.focused, 1, "the focused cell is still the one holding s2");
   assert.strictEqual(moved.map.get("s1").tabs[0].scroll, 40);
 });
+
+// --- Task 8a: what the dock's strip and its glue ask of the model -------------------------------------------------
+
+test("a stored state with several preview tabs keeps the first and pins the rest (one italic tab at most)", () => {
+  const raw = JSON.stringify({
+    v: 1, open: true,
+    sessions: { s1: { tabs: [{ path: "/a", preview: true }, { path: "/b", preview: true }, { path: "/c" }, { path: "/d", preview: true }], active: "v:/c" } },
+  });
+  const st = D.parseDock(raw, ["s1"]).map.get("s1");
+  assert.deepEqual(st.tabs.map((t) => [t.path, t.preview]), [["/a", true], ["/b", false], ["/c", false], ["/d", false]]);
+  // The same rule on the way out: a map held in memory with two previews is written with one.
+  const two = new Map([["s1", { tabs: [D.dockOpen(EMPTY, { path: "/a", preview: true }).tabs[0], { key: "v:/b", path: "/b", box: null, scroll: 0, preview: true }], active: "v:/a" }]]);
+  const back = D.parseDock(D.serializeDock(two, true), ["s1"]).map.get("s1");
+  assert.equal(back.tabs.filter((t) => t.preview).length, 1);
+});
+
+test("dockTabLabel: the file name, and the box prefix ViewerTab uses", () => {
+  assert.deepEqual(D.dockTabLabel("/home/u/proj/a.go"), { name: "a.go", title: "/home/u/proj/a.go" });
+  assert.deepEqual(D.dockTabLabel("/ws/out/shot.png", "s1"), { name: "box · shot.png", title: "box · /ws/out/shot.png" });
+  assert.equal(D.dockTabLabel("/").name, "/", "no name to cut: the path itself, as ViewerTab does");
+  assert.equal(D.dockTabLabel("/p/é ñ #1?.md").name, "é ñ #1?.md", "taken whole and verbatim");
+  assert.deepEqual(D.dockTabLabel(undefined), { name: "", title: "" }, "no path, no crash");
+});
+
+test("dockTabItems: one item per tab, with the active one, the preview, the dirty dot and the git letter", () => {
+  let st = open(EMPTY, "/p/a.go", false);
+  st = open(st, "/p/b.go", false);
+  st = open(st, "/p/c.go", true);
+  const items = D.dockTabItems(st, {
+    dirty: (k) => k === "v:/p/b.go",
+    code: (p) => ({ "/p/a.go": "M", "/p/c.go": "U" }[p]),
+  });
+  assert.deepEqual(items.map((i) => [i.name, i.letter, i.dirty, i.preview, i.active]), [
+    ["a.go", "M", false, false, false],
+    ["b.go", "", true, false, false],
+    ["c.go", "U", false, true, true],
+  ]);
+  assert.deepEqual(items.map((i) => i.key), keys(st));
+});
+
+test("dockTabItems: only M, A, U and C are letters; a box file has none; no hooks, no dot and no letter", () => {
+  let st = open(EMPTY, "/p/a", false);
+  st = open(st, "/p/b", false);
+  st = open(st, "/p/c", false, "s1");
+  const items = D.dockTabItems(st, { code: (p) => ({ "/p/a": "MM", "/p/b": "D", "/p/c": "M" }[p]) });
+  assert.deepEqual(items.map((i) => i.letter), ["", "", ""], "two letters, D and a box file are no letters");
+  for (const code of ["M", "A", "U", "C"]) {
+    assert.equal(D.dockTabItems(open(EMPTY, "/p/a", false), { code: () => code })[0].letter, code);
+  }
+  const bare = D.dockTabItems(st);
+  assert.ok(bare.every((i) => i.dirty === false && i.letter === ""));
+  assert.deepEqual(D.dockTabItems(null), []);
+  assert.equal(D.dockTabItems(st, { dirty: () => "yes" })[0].dirty, true, "any truthy answer is a dirty tab, as dockLeaveNeedsAsk reads it");
+});
+
+test("dockRemoved: the keys a change took out, in the old order, and never one that is still there", () => {
+  const a = open(open(open(EMPTY, "/a", false), "/b", false), "/c", true);
+  assert.deepEqual(D.dockRemoved(a, open(a, "/d", true)), ["v:/c"], "a new preview replaces the preview");
+  assert.deepEqual(D.dockRemoved(a, D.dockClose(a, "v:/b")), ["v:/b"]);
+  assert.deepEqual(D.dockRemoved(a, open(a, "/b", false)), [], "an existing tab is activated, not replaced");
+  assert.deepEqual(D.dockRemoved(a, EMPTY), ["v:/a", "v:/b", "v:/c"]);
+  assert.deepEqual(D.dockRemoved(EMPTY, a), []);
+  assert.deepEqual(D.dockRemoved(null, null), []);
+});
+
+test("dockSyncScrolls: reads the viewers' offsets into the tabs and says whether any changed; none known, none changed", () => {
+  const st = freeze(D.dockSetScroll(open(open(EMPTY, "/a", false), "/b", false), "v:/a", 40));
+  const same = D.dockSyncScrolls(st, (k) => ({ "v:/a": 40 }[k]));
+  assert.equal(same.changed, false);
+  assert.equal(same.st, st, "nothing changed: the state itself comes back");
+  const moved = D.dockSyncScrolls(st, (k) => ({ "v:/a": 41.4, "v:/b": 7 }[k]));
+  assert.equal(moved.changed, true);
+  assert.deepEqual(moved.st.tabs.map((t) => t.scroll), [41, 7]);
+  assert.deepEqual(st.tabs.map((t) => t.scroll), [40, 0], "the input is as it was");
+  const junk = D.dockSyncScrolls(st, () => NaN);
+  assert.deepEqual(junk.st.tabs.map((t) => t.scroll), [0, 0], "a bad offset is 0, as dockSetScroll has it");
+  assert.equal(D.dockSyncScrolls(st, null).changed, false);
+  assert.equal(D.dockSyncScrolls(st, () => undefined).changed, false, "a tab with no viewer keeps the scroll it has");
+});
+
+test("dockStepKey: the tab an arrow key lands on, stopping at the ends", () => {
+  const st = pinned("/a", "/b", "/c");
+  const k = (p) => D.dockTabKey(p);
+  assert.equal(D.dockStepKey(st, k("/a"), 1), k("/b"));
+  assert.equal(D.dockStepKey(st, k("/c"), 1), k("/c"), "no wrap past the last");
+  assert.equal(D.dockStepKey(st, k("/a"), -1), k("/a"), "no wrap before the first");
+  assert.equal(D.dockStepKey(st, k("/b"), -1), k("/a"));
+  assert.equal(D.dockStepKey(st, k("/b"), "home"), k("/a"));
+  assert.equal(D.dockStepKey(st, k("/b"), "end"), k("/c"));
+  assert.equal(D.dockStepKey(st, "v:/gone", 1), k("/a"), "an unknown key starts from the first");
+  assert.equal(D.dockStepKey(EMPTY, "v:/a", 1), null);
+});
+
+test("dockRepointTab: the tab keeps its place, scroll, preview and the active mark; a taken path is left to the caller", () => {
+  let st = open(open(EMPTY, "/old/a.go", false), "/b", true);
+  st = D.dockSetScroll(st, "v:/old/a.go", 90);
+  st = D.dockActivate(st, "v:/old/a.go");
+  const out = D.dockRepointTab(freeze(st), "v:/old/a.go", "/new/a.go");
+  assert.deepEqual(out.tabs.map((t) => [t.key, t.path, t.scroll, t.preview]), [["v:/new/a.go", "/new/a.go", 90, false], ["v:/b", "/b", 0, true]]);
+  assert.equal(out.active, "v:/new/a.go");
+  const other = D.dockRepointTab(D.dockActivate(st, "v:/b"), "v:/old/a.go", "/new/a.go");
+  assert.equal(other.active, "v:/b", "another tab's active mark is not moved");
+  const dup = D.dockRepointTab(open(st, "/new/a.go", false), "v:/old/a.go", "/new/a.go");
+  assert.deepEqual(dup.tabs.map((t) => t.key), ["v:/old/a.go", "v:/new/a.go", "v:/b"], "the path is already a tab: nothing changes");
+  assert.deepEqual(D.dockRepointTab(st, "v:/nope", "/x").tabs.map((t) => t.key), keys(st));
+  assert.deepEqual(D.dockRepointTab(st, "v:/old/a.go", "").tabs.map((t) => t.key), keys(st), "no path is no tab");
+  const boxed = D.dockRepointTab(open(EMPTY, "/ws/a", false, "s1"), "b:s1:/ws/a", "/ws/b");
+  assert.deepEqual(boxed.tabs.map((t) => [t.key, t.box]), [["b:s1:/ws/b", "s1"]], "a box tab stays in its box");
+});

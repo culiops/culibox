@@ -1251,6 +1251,69 @@
   .dr-vhost { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .dr-vhost[hidden], .dr-vempty[hidden] { display: none; }
   .dr-vempty { flex: 1; padding: 18px 14px; color: var(--muted); font-size: var(--t-sm); }
+  /* --- the dock's editor tabs and breadcrumbs (spec 5.4, mockup B1) -------- */
+  /* One strip per session, over the crumbs and the viewer. The tabs scroll sideways when there are more than fit
+     (dockstrip.js turns a plain wheel into that); the actions area beside them (#dock-acts, empty until the Full toggle
+     arrives) never shrinks, so nothing the bar offers is ever pushed out. The active tab takes the viewer's own --bg
+     and an accent underline, so it reads as the file below it. */
+  .dk-bar { flex: none; display: flex; align-items: stretch; min-width: 0; height: var(--h-lg); background: var(--panel); border-bottom: 1px solid var(--line); }
+  .dk-bar[hidden], .dk-crumbs[hidden], .dk-edited[hidden] { display: none; }
+  .dk-tabs { position: relative; flex: 1 1 auto; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+  .dk-acts { flex: none; display: flex; align-items: center; gap: var(--sp-1); padding: 0 6px; }
+  .dk-acts:empty { display: none; }
+  .dk-tab {
+    position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; max-width: 220px; padding: 0 6px 0 10px;
+    border-right: 1px solid var(--line); color: var(--muted); font: var(--w-medium) var(--t-sm)/var(--lh-sm) var(--font-ui);
+    white-space: nowrap; cursor: pointer; user-select: none;
+  }
+  .dk-tab:hover { background: var(--hover); color: var(--fg); }
+  .dk-tab-on, .dk-tab-on:hover { background: var(--bg); color: var(--fg); }
+  .dk-tab-on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); }
+  .dk-tab:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  /* The preview tab, the one the next single click replaces, is italic (a double-click, an edit or a save keeps it). */
+  .dk-prev .dk-name { font-style: italic; }
+  .dk-ic { flex: none; width: 2ch; text-align: center; font-family: "Symbols Nerd Font"; color: var(--muted); }
+  /* The right padding keeps an italic name's last slanted letter inside the clip. */
+  .dk-name { min-width: 0; padding-right: 2px; overflow: hidden; text-overflow: ellipsis; }
+  /* The git letter, in the tree's colours (app.css .ft-git-*). */
+  .dk-st { flex: none; font: var(--w-semibold) var(--t-xs)/1 var(--font-mono); }
+  .dk-st:empty { display: none; }
+  .dk-st-m { color: var(--accent); }
+  .dk-st-a, .dk-st-u { color: var(--ok); }
+  .dk-st-c { color: var(--danger); }
+  /* A dirty tab shows a dot where its close button is; under the pointer (or with the keyboard on its button) the close
+     button comes back, because a tab with an edit must still be closable by hand (it asks first). */
+  .dk-x {
+    flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+    border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font: var(--t-xs)/1 var(--font-ui); cursor: pointer;
+    visibility: hidden;
+  }
+  .dk-tab:hover .dk-x, .dk-tab-on .dk-x, .dk-x:focus-visible { visibility: visible; }
+  .dk-x:hover { background: var(--raise); color: var(--fg); }
+  .dk-x:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-dirty { display: none; flex: none; width: 8px; height: 8px; margin: 0 5px; border-radius: 50%; background: var(--fg); }
+  .dk-tab[data-dirty="1"] .dk-dirty { display: block; }
+  .dk-tab[data-dirty="1"] .dk-x { display: none; }
+  .dk-tab[data-dirty="1"]:hover .dk-x, .dk-tab[data-dirty="1"] .dk-x:focus-visible { display: inline-flex; }
+  .dk-tab[data-dirty="1"]:hover .dk-dirty { display: none; }
+  /* The crumbs: the path from the workspace root, each a button that shows that folder in the tree; the last is the file
+     and is never cut before the folders are. On the right, who edited it and when (text only; empty draws nothing). */
+  .dk-crumbs {
+    flex: none; display: flex; align-items: center; gap: var(--sp-3); min-width: 0; height: 24px; padding: 0 10px;
+    background: var(--bg); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); white-space: nowrap;
+  }
+  .dk-trail { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; overflow: hidden; }
+  .dk-crumb {
+    flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 2px; border: 0; border-radius: var(--r-chip);
+    background: transparent; color: inherit; font: inherit;
+  }
+  .dk-crumb:last-child { flex: 0 0 auto; max-width: 100%; color: var(--fg); } /* the file keeps its width (a share of the squeeze, however small, would put an ellipsis on it); only a name wider than the row is cut */
+  button.dk-crumb { cursor: pointer; }
+  button.dk-crumb:hover { background: var(--raise); color: var(--fg); }
+  button.dk-crumb:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-sep { flex: none; padding: 0 3px; }
+  .dk-edited { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+  .dk-edited::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
   /* Long lines scroll, never wrap. */
   /* ... unless Wrap lines is on (id + class here beats app.css's .viewer-wrap rule, so say it again). */
   #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; }

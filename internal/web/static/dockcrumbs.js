@@ -69,6 +69,21 @@ function editedLabel(files, path, sessionName, now) {
   return "";
 }
 
+// crumbReveal: what a crumb click does to the tree. "root" is the tree's own root (the
+// column opens and shows its top), "inside" is a folder below it (ftReveal opens down
+// to it), "outside" is somewhere the tree does not show: the "/" crumb of a file
+// outside the root, a parent of the root, a sibling that only shares its prefix. The
+// dock never re-roots the tree from a crumb (it would move the user's tree under
+// them), so "outside" is a plain refusal, never an error. A path that is not
+// absolute, or no root, is "outside" too.
+function crumbReveal(path, root) {
+  const segsOf = typeof changedSegs === "function" ? changedSegs : require("./drawerfiles.js").changedSegs;
+  const segs = segsOf(path);
+  const rsegs = typeof root === "string" && root !== "" ? segsOf(root) : null;
+  if (!segs || !rsegs || rsegs.length > segs.length || !rsegs.every((s, i) => segs[i] === s)) return "outside";
+  return rsegs.length === segs.length ? "root" : "inside";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { crumbsFor, relTime, editedLabel };
+  module.exports = { crumbsFor, relTime, editedLabel, crumbReveal };
 }

@@ -464,12 +464,16 @@ async function ftRenderDir(path, container, prefix, st) {
         await openChildren();
       }
     } else {
-      // The desktop Files drawer shows the file beside the tree instead of in a
-      // pane (filesdrawer.js; typeof-guarded, it loads later). Mobile: openFile.
+      // The desktop Files dock shows the file beside the tree instead of in a
+      // pane (filesdrawer.js; typeof-guarded, it loads later): a single click opens
+      // a preview tab, which the next single click replaces, and a double-click
+      // keeps the tab. Mobile: openFile, and a double-click does nothing more.
+      const docked = () => typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks();
       row.onclick = () => {
-        if (typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks()) drawerShowFile(full);
+        if (docked()) drawerShowFile(full);
         else openFile(full);
       };
+      row.ondblclick = () => { if (docked()) drawerShowFile(full, { preview: false }); };
     }
   }
   if (rootCall) {

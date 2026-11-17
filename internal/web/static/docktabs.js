@@ -167,7 +167,8 @@ function dockFollow(cur, focusedSid, liveSids) {
 // path and box, a repeated file keeps its first tab, and at most DOCK_MAX_TABS are
 // kept with the active one among them (when it has to be pulled in from past the
 // cap it takes the last slot, the order of the rest undisturbed). An active key
-// that names no surviving tab falls back to the first tab.
+// that names no surviving tab falls back to the first tab. Only the first preview
+// tab stays a preview (a hand-edited or old entry could hold several).
 function dockCleanState(raw) {
   const rawTabs = raw && typeof raw === "object" && Array.isArray(raw.tabs) ? raw.tabs : [];
   const seen = new Set();
@@ -187,6 +188,13 @@ function dockCleanState(raw) {
       ? head
       : head.slice(0, DOCK_MAX_TABS - 1).concat(tabs.filter((t) => t.key === active));
   }
+  // At most one preview tab, the invariant dockOpen keeps: the first stays italic, any other is pinned.
+  let seenPreview = false;
+  tabs = tabs.map((t) => {
+    if (!t.preview) return t;
+    if (!seenPreview) { seenPreview = true; return t; }
+    return { ...t, preview: false };
+  });
   return { tabs, active };
 }
 
@@ -285,9 +293,100 @@ function dockFromLayout(layout, cellSid) {
   return { map, layout: out };
 }
 
+// --- what the strip and its glue ask of the model (Task 8a) ----------------------------------------------------
+
+// dockTabLabel: what a tab is called and what its tooltip says: the file's name and
+// its whole path, with the "box · " prefix ViewerTab puts on a file that exists only
+// in a session's box. The name is the last segment taken verbatim (or the path itself
+// when there is none to cut, as ViewerTab does); it goes to the page as text.
+function dockTabLabel(path, box) {
+  const p = typeof path === "string" ? path : "";
+  const pre = typeof box === "string" && box ? "box · " : "";
+  return { name: pre + (p.split("/").pop() || p), title: pre + p };
+}
+
+// dockTabItems: the strip's view model, one item per tab. `hooks.dirty(key)` says
+// whether the tab's buffer has unsaved edits (any truthy answer is a dirty tab) and
+// `hooks.code(path)` is its git code. Only M, A, U and C are letters (the tree's own
+// marks, gitstatus.js), and a box file has none: git has nothing to say about a path
+// inside a box.
+function dockTabItems(st, hooks) {
+  const h = hooks || {};
+  const active = dockActiveOf(st);
+  return dockTabsOf(st).map((t) => {
+    const label = dockTabLabel(t.path, t.box);
+    const code = !t.box && typeof h.code === "function" ? h.code(t.path) : "";
+    return {
+      key: t.key, path: t.path, box: t.box, name: label.name, title: label.title,
+      letter: typeof code === "string" && code.length === 1 && "MAUC".includes(code) ? code : "",
+      preview: !!t.preview,
+      dirty: typeof h.dirty === "function" && !!h.dirty(t.key),
+      active: t.key === active,
+    };
+  });
+}
+
+// dockRemoved: the keys `before` has that `after` has not, in `before`'s order: the
+// tabs a change took out, whose viewers must go with them.
+function dockRemoved(before, after) {
+  const kept = new Set(dockTabsOf(after).map((t) => t.key));
+  return dockTabsOf(before).filter((t) => !kept.has(t.key)).map((t) => t.key);
+}
+
+// dockSyncScrolls reads each tab's offset from its viewer: `scrollOf(key)` is the
+// number to record, or undefined for a tab with no viewer (it keeps the offset it
+// has). Returns {st, changed}; when nothing moved, `st` is the state passed in.
+function dockSyncScrolls(st, scrollOf) {
+  if (typeof scrollOf !== "function") return { st, changed: false };
+  let changed = false;
+  const tabs = dockTabsOf(st).map((t) => {
+    const v = scrollOf(t.key);
+    if (v === undefined) return t;
+    const n = dockScroll(v);
+    if (n === t.scroll) return t;
+    changed = true;
+    return { ...t, scroll: n };
+  });
+  return changed ? { st: { tabs, active: dockActiveOf(st) }, changed } : { st, changed };
+}
+
+// dockStepKey: the tab an arrow key goes to from `key`: one left or right (`step`
+// -1 or 1), "home" or "end". It stops at the ends rather than wrapping. A key that
+// names no tab starts from the first one; no tabs, no key.
+function dockStepKey(st, key, step) {
+  const tabs = dockTabsOf(st);
+  if (!tabs.length) return null;
+  const at = tabs.findIndex((t) => t.key === key);
+  let to = at < 0 ? 0 : at;
+  if (step === "home") to = 0;
+  else if (step === "end") to = tabs.length - 1;
+  else if (at >= 0 && (step === 1 || step === -1)) to = Math.min(tabs.length - 1, Math.max(0, at + step));
+  return tabs[to].key;
+}
+
+// dockRepointTab: a tab's file turned out to live at another path (#53: a relative
+// terminal link found in another checkout). The tab keeps its slot, scroll and
+// preview, and its active mark moves with it; a box tab stays in its box. When the
+// new path already has a tab, or there is no usable path, the state is returned
+// as it was and the caller decides (it closes this tab and shows the other).
+function dockRepointTab(st, oldKey, path) {
+  const tabs = dockTabsOf(st);
+  const active = dockActiveOf(st);
+  const at = tabs.findIndex((t) => t.key === oldKey);
+  const same = { tabs: dockCopyTabs(tabs), active };
+  if (at < 0) return same;
+  const old = tabs[at];
+  const tab = dockMakeTab(path, old.box, old.scroll, old.preview);
+  if (!tab || tabs.some((t, i) => i !== at && t.key === tab.key)) return same;
+  const next = dockCopyTabs(tabs);
+  next[at] = tab;
+  return { tabs: next, active: active === oldKey ? tab.key : active };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     DOCK_TABS_KEY, DOCK_MAX_TABS, dockTabKey, dockOpen, dockClose, dockPin, dockActivate, dockSetScroll,
     dockLeaveNeedsAsk, dockFollow, serializeDock, parseDock, dockFromLayout,
+    dockTabLabel, dockTabItems, dockRemoved, dockSyncScrolls, dockStepKey, dockRepointTab,
   };
 }
