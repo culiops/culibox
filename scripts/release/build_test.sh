@@ -38,6 +38,7 @@ cat >"$tmp/bin/go" <<'EOF'
 #!/bin/sh
 case $1 in
   build)
+    printf '%s\n' "$*" >>"$GO_ARGV"
     while [ "$#" -gt 0 ]; do
       [ "$1" = -o ] && out=$2
       shift
@@ -50,7 +51,8 @@ esac
 EOF
 chmod 755 "$tmp/bin/go"
 PATH=$tmp/bin:$PATH
-export PATH
+GO_ARGV=$tmp/go-argv
+export PATH GO_ARGV
 
 # fake_abduco DIR: the layout build-abduco.sh writes, each abduco naming its target.
 fake_abduco() {
@@ -67,9 +69,11 @@ run() { # ARGS...: sets rc, output in $tmp/out
   sh "$script" "$@" >"$tmp/out" 2>&1 || rc=$?
 }
 
-# 1. The abduco dir is required.
+# 1. The abduco dir is required; at most four arguments.
 run v1.2.3 "$tmp/o1"
 if [ "$rc" -eq 2 ]; then pass "two arguments exit 2"; else fail "two arguments exit $rc, want 2"; fi
+run v1.2.3 "$tmp/o1" "$tmp/a1" ref extra
+if [ "$rc" -eq 2 ]; then pass "five arguments exit 2"; else fail "five arguments exit $rc, want 2"; fi
 contains "$tmp/out" "<abduco-dir>" "the usage names the abduco dir"
 
 # 2. A missing target or licence is refused before any asset is written.
@@ -123,6 +127,26 @@ if (cd "$tmp/o5" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then pass "SHA256S
 # 5. Reproducible: a second run gives the same SHA256SUMS.
 run v1.2.3 "$tmp/o6" "$tmp/a5"
 if cmp -s "$tmp/o5/SHA256SUMS" "$tmp/o6/SHA256SUMS"; then pass "two runs give the same SHA256SUMS"; else fail "two runs differ"; fi
+
+# 6. The box image ref (#335): baked when given, validated before anything is written.
+ref=ghcr.io/culiops/culibox@sha256:$(printf 'a%.0s' $(seq 64))
+flag="-X github.com/culiops/culibox/docker/agent-box.published=$ref"
+: >"$GO_ARGV"
+run v1.2.3 "$tmp/o7" "$tmp/a5" "$ref"
+if [ "$rc" -eq 0 ]; then pass "a run with a box image ref exits 0"; else fail "a run with a box image ref exits $rc"; fi
+n=$(grep -cF -- "$flag" "$GO_ARGV" || true)
+if [ "$n" = 4 ]; then pass "all four builds bake the box image ref"; else fail "$n of 4 builds bake the ref"; fi
+: >"$GO_ARGV"
+run v1.2.3 "$tmp/o8" "$tmp/a5"
+if grep -qF "published=" "$GO_ARGV"; then fail "a run without a ref bakes one"; else pass "a run without a ref bakes none"; fi
+nl="$ref
+-X main.version=evil"
+for bad in ghcr.io/culiops/culibox:base "ghcr.io/culiops/culibox@sha256:abc" "$ref -X main.version=evil" "-X" "$nl" \
+  "ghcr.io/culiops/culibox@sha256:$(printf 'A%.0s' $(seq 64))" ""; do
+  run v1.2.3 "$tmp/o9" "$tmp/a5" "$bad"
+  if [ "$rc" -eq 2 ]; then pass "box image ref '$bad' exits 2"; else fail "box image ref '$bad' exits $rc, want 2"; fi
+  no_assets "$tmp/o9" "nothing is written for box image ref '$bad'"
+done
 
 if [ "$fails" -ne 0 ]; then
   echo "build_test: $fails check(s) failed" >&2

@@ -76,6 +76,14 @@ func TestWorkflowSupplyChain(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^          driver-opts: image=moby/buildkit:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$`).MatchString(build) {
 		t.Error("the build job's setup-buildx must set driver-opts: image=moby/buildkit:vX.Y.Z@sha256:<64 hex>")
 	}
+	// #335: the merge job also tags the index dockerfile-<hash>, which the release
+	// resolves to the digest it bakes. It checks the tree out for the hash, so it
+	// needs contents: read next to packages: write.
+	for _, want := range []string{"      contents: read\n", "persist-credentials: false", "sha256sum docker/agent-box/Dockerfile | cut -c1-12", `:dockerfile-${DOCKERFILE}"`} {
+		if !strings.Contains(merge, want) {
+			t.Errorf("the merge job lacks %q", want)
+		}
+	}
 	// The merge job only runs `docker buildx imagetools`, which needs no builder.
 	if strings.Contains(merge, "setup-buildx-action") {
 		t.Error("the merge job must not start a BuildKit builder (imagetools needs none)")
@@ -1417,6 +1425,33 @@ func TestReleaseWorkflow(t *testing.T) {
 	}
 	if !strings.Contains(build, "v0.0.0-dryrun") {
 		t.Error("job build must fall back to v0.0.0-dryrun when there is no tag")
+	}
+
+	// #335: the build bakes the published box image whose Dockerfile matches the
+	// tag. The lookup is fatal for a tag push only; a dry run from a branch whose
+	// Dockerfile is not published yet builds without it, and says so.
+	res := stepBlock(t, build, "go run ./tools/boximage-ref")
+	for _, want := range []string{"id: boximage", "GITHUB_OUTPUT", "GITHUB_EVENT_NAME", "::error::", "::warning::", "box image not baked", "GITHUB_STEP_SUMMARY"} {
+		if !strings.Contains(res, want) {
+			t.Errorf("the box image lookup step lacks %q", want)
+		}
+	}
+	if strings.Contains(res, "continue-on-error") {
+		t.Error("the box image lookup must decide itself when a failure is fatal, not continue-on-error")
+	}
+	tarballs := stepBlock(t, build, "scripts/release/build.sh")
+	if !strings.Contains(tarballs, "BOX_IMAGE: ${{ steps.boximage.outputs.ref }}") || !strings.Contains(tarballs, `${BOX_IMAGE:+"$BOX_IMAGE"}`) {
+		t.Error("the build step must get the ref through env: BOX_IMAGE and pass it to build.sh as ${BOX_IMAGE:+\"$BOX_IMAGE\"}")
+	}
+	if strings.Index(build, "go run ./tools/boximage-ref") > strings.Index(build, "scripts/release/build.sh") {
+		t.Error("the box image lookup must run before the build")
+	}
+	smoke := stepBlock(t, build, `/culibox" version`)
+	if !strings.Contains(smoke, "BOX_IMAGE: ${{ steps.boximage.outputs.ref }}") || !strings.Contains(smoke, `grep -aqF "$BOX_IMAGE" "$dir/culibox"`) {
+		t.Error("the smoke test must check the linux/amd64 binary carries the baked ref (grep -aqF; -trimpath drops -ldflags from go version -m)")
+	}
+	if strings.Contains(wf, "packages:") {
+		t.Error("release.yml must not hold a packages scope: it finds the published image, it never pushes one")
 	}
 
 	// release: push only, draft only, notes with the status block.
