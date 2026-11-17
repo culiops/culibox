@@ -344,6 +344,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/fs/upload", s.handleFsUpload)
 	protected.HandleFunc("/api/fs/archive", s.handleFsArchive)
 	protected.HandleFunc("/api/fs/mkdir", s.handleFsMkdir)
+	protected.HandleFunc("/api/fs/newfile", s.handleFsNewFile)
 	protected.HandleFunc("/api/fs/rename", s.handleFsRename)
 	protected.HandleFunc("/api/fs/delete", s.handleFsDelete)
 	protected.HandleFunc("/api/fs/write", s.handleFsWrite)

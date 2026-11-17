@@ -417,6 +417,25 @@ func TestReadOnly_Mkdir(t *testing.T) {
 	wantReadOnly(t, rec, before, roState(t, scratch))
 }
 
+// The Files dock's New file button: the scratch folder refuses it exactly as it
+// refuses mkdir, and nothing is created.
+func TestFsNewFileReadOnlyScratch(t *testing.T) {
+	s, _, scratch := roFixture(t)
+	before := roState(t, scratch)
+	rec := httptest.NewRecorder()
+	s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", opJSON(map[string]string{"dir": scratch, "name": "n.txt"})))
+	wantReadOnly(t, rec, before, roState(t, scratch))
+}
+
+func TestFsNewFileReadOnlyThroughHomeLinkIntoScratch(t *testing.T) {
+	s, home, scratch := roFixture(t)
+	mustSymlink(t, scratch, filepath.Join(home, "s"))
+	before := roState(t, scratch)
+	rec := httptest.NewRecorder()
+	s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", opJSON(map[string]string{"dir": filepath.Join(home, "s"), "name": "n.txt"})))
+	wantReadOnly(t, rec, before, roState(t, scratch))
+}
+
 func TestReadOnly_Rename(t *testing.T) {
 	s, _, scratch := roFixture(t)
 	before := roState(t, scratch)
@@ -453,6 +472,11 @@ func TestReadOnly_HomeMutationsStillWork(t *testing.T) {
 	s.handleFsMkdir(rec, opReq(t, "/api/fs/mkdir", opJSON(map[string]string{"dir": home, "name": "n"})))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("mkdir in home: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", opJSON(map[string]string{"dir": home, "name": "n.txt"})))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("newfile in home: %d %s", rec.Code, rec.Body)
 	}
 }
 
