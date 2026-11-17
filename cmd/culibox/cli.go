@@ -142,7 +142,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "path to config file (default: <data root>/config.json, the root being $CULIBOX_HOME or ~/.local/share/culibox (an older ~/.local/share/agent-box is used until serve moves it); then $XDG_CONFIG_HOME or ~/.config/culibox/config.json (an older agent-box one is read too) unless CULIBOX_HOME is set; else built-in defaults; never ./config.json)")
-	rebuild := fs.Bool("rebuild", false, "box setup: rebuild the image even if it is current")
+	rebuild := fs.Bool("rebuild", false, "box setup: build the image here even if it is current (never pulls the published image)")
 	recreate := fs.Bool("recreate", false, "box setup: delete and recreate the box VM (macOS)")
 	noPrune := fs.Bool("no-prune", false, "box setup: keep old box images instead of removing the unused ones")
 	pruneLocal := fs.Bool("prune-local", false, "box setup: also remove ALL unused box images built here; nothing can pull them again, and another CuliBox on this Docker may pin one")
