@@ -83,6 +83,27 @@ function dockLayout(o) {
   return { dockW, treeW: F.strip, editorW: dockW - F.strip, treeFolded: true, full: false };
 }
 
+// dockFullLayout: the same split for Full mode, where the dock is the whole pane area and shares it with
+// nothing, so there is no dock width to decide, only how that width divides.
+//   width      the pane area's width; a fraction is floored
+//   treeShare  stored share of it for the explorer, or null for the default
+//   treeOpen   true when the user opened the explorer from its strip
+// -> {treeW, editorW, treeFolded}. The explorer keeps its share between its minimum and what leaves the editor its
+// floor. A width that holds neither folds it to the strip; treeOpen then opens it at its minimum however short the
+// editor is left, because in Full mode there is nothing left to give.
+function dockFullLayout(o) {
+  const a = o || {};
+  const F = DOCK_FLOORS;
+  const width = typeof a.width === "number" && Number.isFinite(a.width) ? Math.max(0, Math.floor(a.width)) : 0;
+  if (width >= F.tree + F.split + F.editor) {
+    const share = Math.round(width * dockNum(a.treeShare, DOCK_TREE_DEFAULT));
+    const treeW = Math.min(Math.max(share, F.tree), width - F.split - F.editor);
+    return { treeW, editorW: width - treeW - F.split, treeFolded: false };
+  }
+  if (a.treeOpen === true) return { treeW: F.tree, editorW: Math.max(0, width - F.tree - F.split), treeFolded: false };
+  return { treeW: F.strip, editorW: Math.max(0, width - F.strip), treeFolded: true };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DOCK_FLOORS, dockLayout };
+  module.exports = { DOCK_FLOORS, dockLayout, dockFullLayout };
 }

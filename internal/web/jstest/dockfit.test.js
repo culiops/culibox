@@ -2,7 +2,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { DOCK_FLOORS, dockLayout } = require("../static/dockfit.js");
+const { DOCK_FLOORS, dockLayout, dockFullLayout } = require("../static/dockfit.js");
 
 const F = DOCK_FLOORS;
 const MIN_DOCK = F.editor + F.strip; // the smallest usable dock: editor floor + the folded explorer strip
@@ -217,4 +217,59 @@ test("invariants hold across widths, column counts and stored shares", () => {
     }
   }
   assert.ok(seen > 1000, "the sweep must reach the non-full cases");
+});
+
+// --- Full mode: the dock is the whole pane area ---------------------------------------------------------------
+
+test("full mode at 1100 wide: the explorer takes its default share and the editor the rest", () => {
+  assert.deepEqual(dockFullLayout({ width: 1100 }), { treeW: 385, editorW: 710, treeFolded: false });
+});
+
+test("full mode: omitted, null and junk shares are the default share", () => {
+  const dflt = dockFullLayout({ width: 1100, treeShare: null });
+  assert.deepEqual(dockFullLayout({ width: 1100 }), dflt);
+  assert.deepEqual(dockFullLayout({ width: 1100, treeShare: "wide" }), dflt);
+  assert.deepEqual(dockFullLayout({ width: 1100, treeShare: NaN }), dflt);
+});
+
+test("full mode: a stored share is held between the explorer minimum and what leaves the editor its floor", () => {
+  assert.equal(dockFullLayout({ width: 1100, treeShare: 0.05 }).treeW, F.tree);
+  const r = dockFullLayout({ width: 1100, treeShare: 0.75 });
+  assert.equal(r.treeW, 1100 - F.split - F.editor);
+  assert.equal(r.editorW, F.editor);
+});
+
+test("full mode folds the explorer exactly when tree + splitter + editor floor do not fit", () => {
+  const at = F.tree + F.split + F.editor;
+  assert.equal(dockFullLayout({ width: at }).treeFolded, false);
+  assert.equal(dockFullLayout({ width: at - 1 }).treeFolded, true);
+  assert.deepEqual(dockFullLayout({ width: at - 1 }), { treeW: F.strip, editorW: at - 1 - F.strip, treeFolded: true });
+});
+
+test("full mode: a click on the strip opens the explorer at its minimum, however short the editor is left", () => {
+  assert.deepEqual(dockFullLayout({ width: 500, treeOpen: true }), { treeW: F.tree, editorW: 500 - F.tree - F.split, treeFolded: false });
+  assert.equal(dockFullLayout({ width: 100, treeOpen: true }).editorW, 0, "never negative");
+  assert.equal(dockFullLayout({ width: 1100, treeOpen: true }).treeW, 385, "it changes nothing when the explorer is not folded");
+});
+
+test("full mode: the parts add up to the width, in whole pixels", () => {
+  for (let width = 380; width <= 3200; width += 11) {
+    for (const treeShare of [null, 0.15, 0.5, 0.75]) {
+      for (const treeOpen of [false, true]) {
+        const r = dockFullLayout({ width, treeShare, treeOpen });
+        const ctx = JSON.stringify({ width, treeShare, treeOpen, r });
+        assert.ok(Number.isInteger(r.treeW) && Number.isInteger(r.editorW), ctx);
+        assert.equal(r.treeW + (r.treeFolded ? 0 : F.split) + r.editorW, width, ctx);
+      }
+    }
+  }
+});
+
+test("full mode with no width or a junk one is a folded, empty dock", () => {
+  for (const width of [undefined, null, NaN, -5, "800"]) {
+    const r = dockFullLayout({ width });
+    assert.equal(r.treeFolded, true, String(width));
+    assert.equal(r.editorW, 0, String(width));
+  }
+  assert.equal(dockFullLayout().treeFolded, true);
 });

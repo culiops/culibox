@@ -96,12 +96,16 @@ function drawerFocusSame() {
 }
 
 // drawerKeepsTree: the Files drawer is holding its session against the focused
-// pane (drawerHoldOnFollow), so the tree must not follow focus either: header,
-// viewer and tree name one session. syncFocusedTree asks before re-rooting.
+// pane (a dirty buffer, drawerHoldOnFollow; or a pin on a session that is still
+// live, dockFollow), so the tree must not follow focus either: header, viewer
+// and tree name one session. syncFocusedTree asks before re-rooting.
 function drawerKeepsTree() {
-  if (!drawerOwnsFileClicks() || !drawerHasUnsaved()) return false;
+  if (!drawerOwnsFileClicks()) return false;
   const t = typeof cellTerminal === "function" ? cellTerminal(focusedCell) : null;
-  return (t ? t.id : null) !== drawerState.sessionId;
+  const sid = t ? t.id : null;
+  if (sid === drawerState.sessionId) return false;
+  if (drawerState.pinned && dockFollow({ sid: drawerState.sessionId, pinned: true }, sid, drawerLiveSids()).pinned) return true;
+  return drawerHasUnsaved();
 }
 
 // drawerSessionCwd: the drawer's session's workspace as far as the page knows
@@ -125,11 +129,13 @@ async function drawerShowFile(path, opts) {
   const v = drawerViewer;
   if (v && v.path === path && drawerViewerSid === drawerState.sessionId) {
     if (changes) v.showChanges(); // refuses (with a toast) while the file is being edited
+    dockTreeFold(); // a file chosen from the column opened off the strip: the column folds again
     return true;
   }
   if (!(await drawerConfirmLeave())) return false;
   drawerParkViewer(); // remembers the file being left, for this session
   drawerMountViewer(drawerState.sessionId, path, changes ? { scroll: 0, view: "changes" } : { scroll: 0 });
+  dockTreeFold();
   return true;
 }
 
@@ -301,8 +307,11 @@ function drawerGoPosition() {
   const list = drawerEl("drawer-goto-list");
   if (!input || !list) return;
   const r = input.getBoundingClientRect();
-  const w = Math.min(Math.max(r.width, 340), window.innerWidth - r.left - 8);
-  list.style.left = Math.round(r.left) + "px";
+  // The explorer is the dock's right-hand column, so the field sits at the window's right edge: the list is 340px at
+  // least, and slides left to stay on screen rather than shrinking to the few pixels that remain beside the field.
+  const w = Math.min(Math.max(r.width, 340), window.innerWidth - 16);
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
+  list.style.left = Math.round(left) + "px";
   list.style.top = Math.round(r.bottom + 2) + "px";
   list.style.width = Math.round(w) + "px";
 }
@@ -439,6 +448,7 @@ function drawerGoFocus() {
   if (!input || !drawerOwnsFileClicks()) return false;
   const dr = drawerEl("drawer");
   if (!dr || dr.hidden || dr.dataset.noroot === "1") return false;
+  dockTreeReveal(); // a folded explorer opens as its column first: a field that is not on screen cannot take focus
   input.focus();
   input.select();
   return true;
@@ -448,6 +458,8 @@ function initDrawerGoto() {
   const input = drawerEl("drawer-goto-in");
   if (!input) return;
   input.title = "Go to file (" + shortcutHint("files.goto", IS_MAC) + ")";
+  const strip = drawerEl("drawer-strip-goto"); // the folded explorer's own Go to file
+  if (strip) strip.title = input.title;
   input.addEventListener("input", drawerGoInput);
   input.addEventListener("keydown", drawerGoKey);
   // Stop first: a debounce or fetch still pending would re-open the list over
