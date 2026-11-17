@@ -7,10 +7,10 @@
 // uploadFiles POSTs to /api/fs/upload with XHR rather than fetch: fetch cannot
 // report upload progress, and progress is the point of the feedback here.
 // dropHint: the toast for a drop that has nowhere to go. On desktop the folder
-// to drop on is in the Files drawer, which is not always on screen, so the
+// to drop on is in the Files dock, which is not always on screen, so the
 // message names it; mobile keeps its Files-screen wording.
 function dropHint(kind, desktop) {
-  const where = desktop ? "the Files drawer" : "Files";
+  const where = desktop ? "the Files dock" : "Files";
   if (kind === "nodest") return "No destination folder yet. Drop onto a folder in " + where + " instead";
   // A scratch listing refuses every write (the server's word); the same wording
   // either side of the 700 px line, since neither names a place to go instead.

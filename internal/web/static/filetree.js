@@ -723,10 +723,28 @@ function ftShowMenu(anchor, nodes, alignLeft, kitLabel, at) {
 // whereas a relative path is silently wrong the moment the tree root and the
 // session's cwd diverge — which they do, because a manual root pick survives
 // until a DIFFERENT tab is focused.
+// The desktop tree is the dock's, and a pinned dock shows session A's files while B may have the keyboard: the path goes to
+// the DOCK session's terminal then, never to the focused one (it would type A's file at B's prompt). A dock session with no
+// terminal refuses. The phone's Files screen is unchanged: the focused terminal.
 function insertPathAtPrompt(path) {
-  const term = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  const dock = typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerState !== "undefined" && drawerState
+    ? drawerState.sessionId : null;
+  let term = null;
+  if (dock) {
+    term = typeof terminalTabFor === "function" ? terminalTabFor(dock) : null;
+    if (!term) {
+      showToast("That session has no open terminal, so the path was not inserted", { error: true });
+      return;
+    }
+  } else if (typeof focusedTerminal === "function") {
+    term = focusedTerminal();
+  }
   const res = insertTextAtPrompt(term, shellQuote(path) + " ");
-  if (res.ok) { focusTerminal(); return; } // closeRowMenu hid the button that had focus
+  if (res.ok) { // closeRowMenu hid the button that had focus: the caret goes where the path went
+    if (dock && typeof term.grabFocus === "function") term.grabFocus();
+    else focusTerminal();
+    return;
+  }
   showToast(
     res.reason === "noterm" ? "Focus a terminal first, then insert the path" :
     res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :

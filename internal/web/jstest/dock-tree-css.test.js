@@ -166,3 +166,12 @@ test("the explorer column has a fold control for the strip's transient open, sho
   assert.match(paint, /dr\.dataset\.treeOpen = "1"/);
   assert.match(paint, /delete dr\.dataset\.treeOpen/);
 });
+
+test("every name the dock draws from the workspace or git is isolated for bidirectional text, as the branch name is", () => {
+  // A file or folder name (or a branch) may hold Unicode bidi format characters; unisolated, one could reorder the counts, the
+  // letter or the separators drawn next to it.
+  for (const sel of [".dk-name", ".dk-crumb", ".dk-nm", ".dk-dir", "#drawer .ft-name", ".dk-root-name", ".dk-root-path", ".dk-br-name"]) {
+    assert.match(rulesFor(css, sel), /unicode-bidi:\s*isolate/, sel + " is isolated");
+  }
+  assert.doesNotMatch(app, /unicode-bidi/, "the phone's tree (app.css) is left as it was: the rule is the desktop block's");
+});

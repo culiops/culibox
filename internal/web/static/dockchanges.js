@@ -127,6 +127,15 @@ function dockChangesSync() {
   const scope = dockScope(dkcSid());
   if (dkcNum && dkcNum.root === root && dkcNum.scope === scope && dkcNum.status === cur.status) return;
   if (dkcNumFlight) return;
+  // Uncommitted scope and a status with no entries: the numstat of nothing is nothing, so it is not asked for (a clean tree is
+  // the common case, and each numstat is a container run). The record stands for the answer, so a numstat from before the
+  // tree went clean cannot leave its rows on screen, and the next status with entries asks as usual. Branch scope still asks:
+  // a clean working tree can sit on a branch that differs from its base.
+  if (scope !== "branch" && Array.isArray(cur.status.entries) && cur.status.entries.length === 0) {
+    dkcNum = { root, scope, status: cur.status, reply: { state: "ok", rootRel: ".", entries: [] } };
+    dockChangesRender();
+    return;
+  }
   dkcAskNumstat(root, scope, cur.status);
 }
 

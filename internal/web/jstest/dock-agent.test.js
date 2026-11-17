@@ -193,6 +193,38 @@ test("Full mode off, or the dock closed, or no session: nothing is polled", () =
   assert.equal(none.st.fetches.length, 0, "a dock with no session has nobody to ask about");
 });
 
+test("a page view over the dock (Settings, Audit) stops the poll, and closing it starts it again; pagehost.js tells the strip as it tells the watch", async () => {
+  // Those pages hide the dock by CSS (body.page-open), not by its `hidden`, so the strip would go on asking every 4 s for a
+  // line nobody can see.
+  let current = "";
+  const p = page({ currentPage: () => current });
+  p.run("dockAgentSync()");
+  assert.equal(p.st.fetches.length, 1);
+  await p.reply({ events: [ev("Update", "a.go")] });
+  p.tick();
+  const out = p.st.fetches[1];
+  current = "settings";
+  p.run("dockAgentSync()");
+  assert.equal(p.live(), 0, "the interval is cleared");
+  assert.equal(out.aborted, true, "and the request in flight is aborted");
+  p.st.fetches.length = 0;
+  p.run("dockAgentSync()");
+  assert.equal(p.st.fetches.length, 0, "no ask while the page is up");
+  current = "";
+  p.run("dockAgentSync()");
+  assert.equal(p.st.fetches.length, 1, "asks again at once when it closes");
+  assert.equal(p.live(), 1);
+  const text = (f) => src(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  for (const name of ["openPage", "pageClosed"]) {
+    const s = text("pagehost.js");
+    const at = s.indexOf("function " + name + "(");
+    assert.ok(at >= 0, name);
+    const body = s.slice(at, s.indexOf("\n}\n", at) + 3);
+    assert.match(body, /dockWatchSync\(\)/, name + " syncs the watch");
+    assert.match(body, /typeof dockAgentSync === "function"\) dockAgentSync\(\)/, name + " syncs the agent strip");
+  }
+});
+
 test("leaving Full mode stops the poll, aborts the request that is out, and drops its late answer", async () => {
   const p = page();
   p.run("dockAgentSync()");

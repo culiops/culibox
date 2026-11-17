@@ -80,9 +80,9 @@ test("dropHint: mobile keeps today's exact strings", () => {
   assert.strictEqual(dropHint("miss", false), "Drop onto a terminal pane, or onto a folder in Files");
 });
 
-test("dropHint: desktop names the Files drawer", () => {
-  assert.strictEqual(dropHint("nodest", true), "No destination folder yet. Drop onto a folder in the Files drawer instead");
-  assert.strictEqual(dropHint("miss", true), "Drop onto a terminal pane, or onto a folder in the Files drawer");
+test("dropHint: desktop names the Files dock", () => {
+  assert.strictEqual(dropHint("nodest", true), "No destination folder yet. Drop onto a folder in the Files dock instead");
+  assert.strictEqual(dropHint("miss", true), "Drop onto a terminal pane, or onto a folder in the Files dock");
 });
 
 test("dropHint: a read-only folder says so, on desktop and mobile alike", () => {

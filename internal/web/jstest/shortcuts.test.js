@@ -893,3 +893,7 @@ test("dock.showTerminal's binding hands the key back (false) unless the dock is 
   assert.match(app, /bindShortcut\("dock\.showTerminal", \(\) => dockShowTerminal\(\)\);/);
   assert.match(fnSrc(app, "dockShowTerminal"), /if \(!dr \|\| dr\.hidden \|\| dr\.dataset\.max !== "1"\) return false;/);
 });
+
+test("the Files toggle is named for what the approved spec calls the feature: the Files dock (box ruling R18)", () => {
+  assert.strictEqual(entry("files.toggle").label, "Files dock");
+});

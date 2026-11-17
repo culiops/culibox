@@ -1116,6 +1116,10 @@
     box-shadow: -12px 0 30px #0009;
   }
   #drawer[hidden] { display: none; }
+  /* Full mode that is not forced still holds the dock's pushed width beside the grid: the dock is out of the flow, and without
+     this the grid would widen under it and every terminal be resized to the wider size and back (two PTY resizes per toggle).
+     --dock-w is the pushed width, which paintDrawerLayout keeps whenever the layout is not forced. */
+  #layout:has(> #drawer[data-max="1"]:not([data-forced="1"]):not([hidden])) > #grid { margin-right: var(--dock-w); }
   /* The left-edge handle: 7px straddling the border, nothing drawn until
      hover, drag or keyboard focus. Gone while maximized (nothing to drag). */
   .dr-edge {
@@ -1344,8 +1348,12 @@
   .dk-tabs { position: relative; flex: 1 1 auto; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
   .dk-acts { flex: none; display: flex; align-items: center; gap: var(--sp-1); padding: 0 6px; }
   .dk-acts:empty { display: none; }
-  /* Full / Exit full / Show terminal (forced Full mode): the kit's small button, its icon and word on one line. */
+  /* Full / Exit full: the kit's small button, its icon and word on one line. Exit full wears the accent border (mockup B5). Forced
+     Full mode has no tab-row toggle: its Show terminal is the agent strip's, shown whenever the dock is in Full mode, and two
+     buttons for one action are one too many. The actions area goes with the button, so its padding is no empty gap. */
   #drawer-max { flex: none; }
+  #drawer[data-max="1"] #drawer-max { border-color: var(--accent); }
+  #drawer[data-forced="1"] #dock-acts { display: none; }
   .dk-tab {
     position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; max-width: 220px; padding: 0 6px 0 10px;
     border-right: 1px solid var(--line); color: var(--muted); font: var(--w-medium) var(--t-sm)/var(--lh-sm) var(--font-ui);
@@ -1401,6 +1409,10 @@
   .dk-sep { flex: none; padding: 0 3px; }
   .dk-edited { flex: none; display: inline-flex; align-items: center; gap: 6px; }
   .dk-edited::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  /* Every name the dock draws from the workspace or from git (tab names, crumbs, Changes rows, tree rows, the root header, and the
+     branch name above) is isolated for bidirectional text: a file or folder name can hold Unicode bidi format characters, which
+     would otherwise reorder the counts, the git letter or the separators drawn next to it. */
+  .dk-name, .dk-crumb, .dk-nm, .dk-dir, .dk-root-name, .dk-root-path, #drawer .ft-name { unicode-bidi: isolate; }
   /* The agent strip (Full mode only, mockup B5): the session stays in view while the terminal is covered. One 36px line at the
      bottom of the dock: the dot, the name, the status words, the last thing the agent did (the one part that gives way: it is
      cut with an ellipsis, so the line never wraps and the strip never changes height) and Show terminal with its chord. */

@@ -60,7 +60,7 @@ const SHORTCUTS = [
   { id: "sidebar.toggle", label: "Toggle sidebar", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ mod: true, shift: true, code: "KeyB" }],
     allow: scAllow(1, 0, 0, 0, 1) },
-  { id: "files.toggle", label: "Files drawer", group: "Sessions & panes", scope: "global", status: "bound",
+  { id: "files.toggle", label: "Files dock", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ mod: true, shift: true, code: "KeyE" }],
     allow: scAllow(1, 0, 0, 0, 1) },
   { id: "session.jump", label: "Jump to session 1–9", group: "Sessions & panes", scope: "global", status: "bound",

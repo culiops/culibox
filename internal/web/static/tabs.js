@@ -1094,7 +1094,7 @@ class Cell {
       const fdef = paneFilesToggle();
       const files = el("button");
       files.className = "btn btn-ghost btn-sm ph-files";
-      files.title = "Files drawer (" + shortcutHint("files.toggle", IS_MAC) + ")";
+      files.title = "Files dock (" + shortcutHint("files.toggle", IS_MAC) + ")";
       files.setAttribute("aria-label", fdef.label);
       files.setAttribute("aria-pressed", "false");
       withIcon(files, fdef);

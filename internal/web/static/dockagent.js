@@ -75,6 +75,7 @@ function dockAgentPaint() {
 // dockAgentWant: the session the strip should be polling right now, "" for none.
 function dockAgentWant() {
   if (typeof document === "undefined" || document.hidden) return "";
+  if (typeof currentPage === "function" && currentPage()) return ""; // a page view (Settings, Audit) hides the dock by CSS
   const dr = dagEl("drawer");
   if (!dr || dr.hidden || dr.dataset.max !== "1") return "";
   if (typeof drawerState === "undefined" || drawerState.open !== "files" || !drawerState.sessionId) return "";
@@ -83,7 +84,7 @@ function dockAgentWant() {
 
 // dockAgentSync starts, keeps or stops the poll to match what is on screen, and repaints the static parts. Called from every
 // place that changes what is on screen: Full mode on or off (paintDrawerMax), the dock moving or its list changing
-// (drawerPaint), and the page being hidden or shown (below). A no-op when nothing changed.
+// (drawerPaint), a page view opening or closing (pagehost.js) and the page being hidden or shown (below). A no-op when nothing changed.
 function dockAgentSync() {
   const sid = dockAgentWant();
   if (!sid) { dockAgentStop(); return; }

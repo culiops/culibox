@@ -35,6 +35,10 @@ const DOCK_FLOORS = {
   split: 5, // the splitter between explorer and editor
 };
 
+// In Full mode the explorer's DEFAULT share (35% of the pane area, 400 to 486 px on the usual screens) is capped here: mockup B5
+// draws about 260 px, and the editor is what the room is for. A share the user dragged is theirs and is not capped.
+const DOCK_FULL_TREE_MAX = 300;
+
 const DOCK_SHARE_DEFAULT = 0.62; // the dock's share of the space the panes and the dock divide
 const DOCK_TREE_DEFAULT = 0.35; // the explorer's share of the dock
 const DOCK_EDITOR_OPENED = 260; // the editor's least width beside an explorer opened from the strip
@@ -92,14 +96,16 @@ function dockLayout(o) {
 //   treeShare  stored share of it for the explorer, or null for the default
 //   treeOpen   true when the user opened the explorer from its strip
 // -> {treeW, editorW, treeFolded}. The explorer keeps its share between its minimum and what leaves the editor its
-// floor. A width that holds neither folds it to the strip; treeOpen then opens it at its minimum however short the
-// editor is left, because in Full mode there is nothing left to give.
+// floor, and a share that was never dragged (null) is at most DOCK_FULL_TREE_MAX. A width that holds neither folds it to
+// the strip; treeOpen then opens it at its minimum however short the editor is left, because in Full mode there is
+// nothing left to give.
 function dockFullLayout(o) {
   const a = o || {};
   const F = DOCK_FLOORS;
   const width = typeof a.width === "number" && Number.isFinite(a.width) ? Math.max(0, Math.floor(a.width)) : 0;
   if (width >= F.tree + F.split + F.editor) {
-    const share = Math.round(width * dockNum(a.treeShare, DOCK_TREE_DEFAULT));
+    const dragged = typeof a.treeShare === "number" && Number.isFinite(a.treeShare);
+    const share = dragged ? Math.round(width * a.treeShare) : Math.min(Math.round(width * DOCK_TREE_DEFAULT), DOCK_FULL_TREE_MAX);
     const treeW = Math.min(Math.max(share, F.tree), width - F.split - F.editor);
     return { treeW, editorW: width - treeW - F.split, treeFolded: false };
   }
@@ -108,5 +114,5 @@ function dockFullLayout(o) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DOCK_FLOORS, dockLayout, dockFullLayout };
+  module.exports = { DOCK_FLOORS, DOCK_FULL_TREE_MAX, dockLayout, dockFullLayout };
 }

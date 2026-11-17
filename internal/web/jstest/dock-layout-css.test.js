@@ -45,6 +45,20 @@ test("#drawer is a flex column of --dock-w, in the flow, and is absolute only un
   assert.ok(max.some((r) => /position:\s*absolute/.test(r)), "Full mode is the overlay: absolute under data-max");
 });
 
+test("pressing Full does not resize the terminals: the grid keeps the dock's width reserved while Full is on and not forced", () => {
+  // Full takes the dock out of the flow, so the grid used to widen under it (every terminal resized to the wider size) and shrink
+  // back on Exit full: two PTY resizes per toggle. The margin holds the dock's pushed width, which --dock-w still carries.
+  const css = stripComments(read("desktop.css"));
+  const sel = '#layout:has(> #drawer[data-max="1"]:not([data-forced="1"]):not([hidden])) > #grid';
+  assert.match(rulesFor(css, sel).join(" "), /^\s*margin-right:\s*var\(--dock-w\);\s*$/);
+  // Not while forced (the pushed dock does not fit, so none is reserved), and not once the dock is hidden.
+  assert.ok(sel.includes(':not([data-forced="1"])') && sel.includes(":not([hidden])"));
+  // --dock-w is the pushed width in non-forced Full mode too: paintDrawerLayout writes it whenever the layout is not full.
+  const app = stripComments(read("app.js"));
+  const fn = app.slice(app.indexOf("function paintDrawerLayout("), app.indexOf("function dockForcesFull("));
+  assert.match(fn, /if \(!lay\.full\) dr\.style\.setProperty\("--dock-w", lay\.dockW \+ "px"\)/);
+});
+
 test("Full mode covers the pane area; the dock never sets a top (the header is the top of the column)", () => {
   const css = stripComments(read("desktop.css"));
   const max = rulesFor(css, '#drawer[data-max="1"]').join(" ");
@@ -133,8 +147,17 @@ test("the strip is shown only in Full mode, is one 36px line whose last-activity
   assert.match(rulesFor(css, ".dk-ag-st").join(" "), /flex:\s*none/);
 });
 
-test("forced Full mode keeps the toggle (as Show terminal): no rule hides #drawer-max any more", () => {
+test("forced Full mode has one Show terminal, the agent strip's: the tab row's toggle is hidden while forced", () => {
   const css = stripComments(read("desktop.css"));
-  assert.ok(!/#drawer\[data-forced="1"\] #drawer-max/.test(css));
+  // Both buttons did the same thing (close the dock to show the terminal). The strip is shown whenever the dock is in Full mode,
+  // forced or not, so hiding the tab row's costs nothing; its actions area goes too, or its padding would be an empty gap.
+  assert.match(rulesFor(css, '#drawer[data-forced="1"] #dock-acts').join(" "), /display:\s*none/);
+  assert.match(rulesFor(css, '#drawer[data-max="1"] .dk-agent').join(" "), /display:\s*flex/, "the strip that stays");
   assert.ok(!/#drawer-max\[aria-pressed/.test(css));
+  assert.ok(!/#drawer\[data-forced="1"\] \.dk-agent/.test(css), "and nothing hides the strip's button");
+});
+
+test("Exit full wears the accent border (mockup B5): one token rule, on the toggle while Full mode is on", () => {
+  const css = stripComments(read("desktop.css"));
+  assert.match(rulesFor(css, '#drawer[data-max="1"] #drawer-max').join(" "), /^\s*border-color:\s*var\(--accent\);\s*$/);
 });

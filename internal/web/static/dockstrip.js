@@ -53,7 +53,8 @@ function dkClipped(host, el) {
 
 // dkKey: the keys a focused tab answers to. Plain keys only: a chord belongs to the
 // app (shortcuts.js). Arrows, Home and End move focus along the strip; Enter and
-// Space show the tab; Delete closes it, which asks first when it holds an edit.
+// Space show the tab; Delete closes it, which asks first when it holds an edit. On a Mac the key that is labelled delete is
+// Backspace (there is no forward-delete key on a laptop), so it closes the tab there too.
 function dkKey(e, el) {
   if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
   const key = el.dataset.key;
@@ -63,7 +64,7 @@ function dkKey(e, el) {
   } else if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
     dkCall(dkTabOn.activate, key);
-  } else if (e.key === "Delete") {
+  } else if (e.key === "Delete" || (e.key === "Backspace" && typeof IS_MAC !== "undefined" && IS_MAC)) {
     e.preventDefault();
     dkCall(dkTabOn.close, key);
   }

@@ -702,3 +702,39 @@ test("a second press on the ⋯ closes its menu; a page without the menu element
   assert.doesNotThrow(() => q.el("dock-more").onclick({ stopPropagation() {} }));
   assert.strictEqual(q.st.shows, undefined);
 });
+
+test("Uncommitted scope with a status of no entries asks for no numstat: nothing is left to count", async () => {
+  const p = page();
+  await p.status(okStatus([]));
+  assert.strictEqual(p.calls("/api/git/numstat").length, 0, "a clean tree's numstat would be empty by definition");
+  assert.strictEqual(text(p.el("dock-chg-note")), "No changes");
+  // The same on every later empty status, and the explicit Refresh path (a fresh one) does not ask either.
+  await p.status(okStatus([]), { fresh: true });
+  assert.strictEqual(p.calls("/api/git/numstat").length, 0);
+});
+
+test("a status that turns empty after changes leaves no row behind, and the next one with entries asks again", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/base", baseOk({ ahead: false }));
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 3, d: 1 }]));
+  assert.strictEqual(p.rows().length, 1);
+  // Committed: the status is clean. The numstat of before must not keep a row (the numstat's own files make rows).
+  await p.status(okStatus([], { head: "h2" }));
+  assert.strictEqual(p.rows().length, 0, "no phantom row from the stale numstat");
+  assert.strictEqual(p.el("dock-chg-note").hidden, false);
+  assert.strictEqual(p.calls("/api/git/numstat").length, 1, "and none was asked for the empty status");
+  await p.status(okStatus([{ p: "b.go", x: "M" }], { head: "h2" }));
+  assert.strictEqual(p.calls("/api/git/numstat").length, 2, "a status with entries asks");
+});
+
+test("Branch scope still asks with a clean working tree: the branch can differ from its base", async () => {
+  const p = page();
+  p.st.store.set(KEY, JSON.stringify({ s1: "branch" }));
+  await p.status(okStatus([]));
+  await p.answer("/api/git/base", baseOk({ ahead: true }));
+  assert.strictEqual(p.ctx.dockScope("s1"), "branch");
+  const ns = p.calls("/api/git/numstat");
+  assert.strictEqual(ns.length, 1);
+  assert.deepStrictEqual(ns[0].body, { path: "/w", scope: "branch" });
+});

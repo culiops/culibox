@@ -149,7 +149,21 @@ test("a Full pressed by the user is not forced: it stays through a layout pass a
   p.run("paintDrawerLayout(1190)");
   assert.equal(p.els.drawer.dataset.max, "1");
   assert.equal(p.els.drawer.dataset.forced, undefined);
-  assert.deepEqual(p.run("dockDrawn"), { fold: "open", avail: 1190, dockW: 1190, treeW: 417 });
+  assert.deepEqual(p.run("dockDrawn"), { fold: "open", avail: 1190, dockW: 1190, treeW: 300 }, "the explorer's default in Full mode is capped at 300 (35% would be 417)");
+  assert.equal(p.els["drawer-body"].props["--dr-tree"], "300px");
+});
+
+test("in Full mode an explorer share the user dragged is honoured, not capped (the splitter still widens it)", () => {
+  const p = page();
+  p.run("paintDrawerMax(true, false)");
+  p.run("drawerSize = { width: null, tree: 0.5 }");
+  p.run("paintDrawerLayout(1190)");
+  assert.equal(p.els["drawer-body"].props["--dr-tree"], "595px");
+  p.run("paintDrawerLayout(1190, { treeShare: 0.6 })"); // a drag in progress
+  assert.equal(p.els["drawer-body"].props["--dr-tree"], "714px");
+  p.run("drawerSize = { width: null, tree: TREE_DEFAULT }"); // a double-click on the splitter: back to the default
+  p.run("paintDrawerLayout(1190)");
+  assert.equal(p.els["drawer-body"].props["--dr-tree"], "300px");
 });
 
 test("a dragged share is used for the pass but never stored, and an unset explorer share is the dock's default", () => {

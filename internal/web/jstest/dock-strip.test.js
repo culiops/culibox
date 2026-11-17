@@ -12,7 +12,7 @@ const { Node } = require("./fakedom.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 
-function page() {
+function page(mac) {
   const doc = { activeElement: null };
   doc.createElement = (t) => new Node(t, doc);
   const nodes = {};
@@ -21,7 +21,7 @@ function page() {
   // Focus is document.activeElement in the fake; a real focus() also fires the element's focus handler.
   const focus = Node.prototype.focus;
   Node.prototype.focus = function () { focus.call(this); if (this.onfocus) this.onfocus(); };
-  const ctx = vm.createContext({ console, Array, Object, Set, Map, Math, document: doc, iconFor: (n) => "<" + n + ">" });
+  const ctx = vm.createContext({ console, Array, Object, Set, Map, Math, document: doc, iconFor: (n) => "<" + n + ">", IS_MAC: !!mac });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load(fs.readFileSync(path.join(STATIC, "docktabs.js"), "utf8"), "docktabs.js");
   load(fs.readFileSync(path.join(STATIC, "dockstrip.js"), "utf8"), "dockstrip.js");
@@ -205,6 +205,25 @@ test("the keyboard: arrows, Home and End move focus along the tabs, Enter shows,
     assert.deepEqual(p.calls, [], "a chord belongs to the app (shortcuts.js)");
     assert.equal(press(p.tab(1), "a").prevented, false);
   } finally { p.restore(); }
+});
+
+test("on a Mac the Delete key is Backspace: a focused tab closes on either there, and only on Delete elsewhere", () => {
+  const press = (p, i, k, o) => { const e = ev(Object.assign({ key: k }, o)); p.tab(i).onkeydown(e); return e; };
+  const mac = page(true);
+  const other = page(false);
+  try {
+    for (const p of [mac, other]) p.paint([p.item("/p/a", { active: true }), p.item("/p/b")]);
+    assert.equal(press(mac, 1, "Backspace").prevented, true, "the page does not navigate back");
+    assert.equal(press(mac, 0, "Delete").prevented, true);
+    assert.deepEqual(mac.calls, [["close", "v:/p/b"], ["close", "v:/p/a"]]);
+    assert.equal(press(other, 1, "Backspace").prevented, false, "elsewhere Backspace is left alone");
+    assert.deepEqual(other.calls, []);
+    press(other, 1, "Delete");
+    assert.deepEqual(other.calls, [["close", "v:/p/b"]]);
+    mac.calls.length = 0;
+    assert.equal(press(mac, 1, "Backspace", { metaKey: true }).prevented, false, "a chord is still the app's");
+    assert.deepEqual(mac.calls, []);
+  } finally { mac.restore(); other.restore(); }
 });
 
 test("the strip has one Tab stop: the active tab, or the tab the user moved to", () => {

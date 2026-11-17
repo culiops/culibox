@@ -2,7 +2,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { DOCK_FLOORS, dockLayout, dockFullLayout } = require("../static/dockfit.js");
+const { DOCK_FLOORS, DOCK_FULL_TREE_MAX, dockLayout, dockFullLayout } = require("../static/dockfit.js");
 
 const F = DOCK_FLOORS;
 const MIN_DOCK = F.editor + F.strip; // the smallest usable dock: editor floor + the folded explorer strip
@@ -230,8 +230,28 @@ test("invariants hold across widths, column counts and stored shares", () => {
 
 // --- Full mode: the dock is the whole pane area ---------------------------------------------------------------
 
-test("full mode at 1100 wide: the explorer takes its default share and the editor the rest", () => {
-  assert.deepEqual(dockFullLayout({ width: 1100 }), { treeW: 385, editorW: 710, treeFolded: false });
+test("full mode at 1100 wide: the explorer takes its default share up to the 300 px cap and the editor the rest", () => {
+  // 35% of 1100 is 385; mockup B5 shows an explorer of about 260 in Full mode, so the default is capped at 300.
+  assert.equal(DOCK_FULL_TREE_MAX, 300);
+  assert.deepEqual(dockFullLayout({ width: 1100 }), { treeW: 300, editorW: 795, treeFolded: false });
+  assert.deepEqual(dockFullLayout({ width: 1100 }), dockFullLayout({ width: 1100, treeShare: null }));
+  assert.equal(dockFullLayout({ width: 1440 }).treeW, 300, "1440 wide, a forced-Full pane area: still 300 (it was 486)");
+  assert.equal(dockFullLayout({ width: 2400 }).treeW, 300);
+});
+
+test("full mode: below the cap the default share is what it was, and the cap is not a floor", () => {
+  assert.equal(dockFullLayout({ width: 857 }).treeW, 300, "35% of 857 rounds to 300");
+  assert.equal(dockFullLayout({ width: 800 }).treeW, 280);
+  assert.equal(dockFullLayout({ width: 700 }).treeW, 245);
+  assert.equal(dockFullLayout({ width: 605 }).treeW, F.tree, "the explorer minimum still holds (212 wanted)");
+  assert.equal(dockFullLayout({ width: 560 }).treeFolded, true);
+});
+
+test("full mode: a share the user dragged is theirs, the cap is only the default's (the splitter can widen it)", () => {
+  assert.equal(dockFullLayout({ width: 1100, treeShare: 0.5 }).treeW, 550);
+  assert.equal(dockFullLayout({ width: 1100, treeShare: 0.4 }).treeW, 440);
+  assert.equal(dockFullLayout({ width: 1100, treeShare: 0.15 }).treeW, 200, "the minimum, as ever");
+  assert.equal(dockFullLayout({ width: 1100, treeShare: 0.25 }).treeW, 275, "and a share under the cap is honoured as it is");
 });
 
 test("full mode: omitted, null and junk shares are the default share", () => {
@@ -258,7 +278,7 @@ test("full mode folds the explorer exactly when tree + splitter + editor floor d
 test("full mode: a click on the strip opens the explorer at its minimum, however short the editor is left", () => {
   assert.deepEqual(dockFullLayout({ width: 500, treeOpen: true }), { treeW: F.tree, editorW: 500 - F.tree - F.split, treeFolded: false });
   assert.equal(dockFullLayout({ width: 100, treeOpen: true }).editorW, 0, "never negative");
-  assert.equal(dockFullLayout({ width: 1100, treeOpen: true }).treeW, 385, "it changes nothing when the explorer is not folded");
+  assert.equal(dockFullLayout({ width: 1100, treeOpen: true }).treeW, 300, "it changes nothing when the explorer is not folded");
 });
 
 test("full mode: the parts add up to the width, in whole pixels", () => {

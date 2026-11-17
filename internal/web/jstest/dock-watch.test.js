@@ -717,8 +717,8 @@ const text = (n) => n.textContent;
 
 test("an edit shows at once as a provisional row, git is asked fresh, and git's answer takes the row over in place", async () => {
   const p = fullPage();
-  await p.status(okStatus([]), { fresh: true }); // sent at 1000000
-  await p.answer("/api/git/numstat", num([]));
+  await p.status(okStatus([]), { fresh: true }); // sent at 1000000 (an empty status asks for no numstat)
+  assert.strictEqual(p.calls("/api/git/numstat").length, 0);
   assert.strictEqual(p.ctx.gitStatusAt(), 1000000);
   p.run("dockWatchSync()");
   p.st.now += 2500;
