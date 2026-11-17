@@ -24,6 +24,7 @@ const tok = process.env.AGENTBOX_BROKER_TOKEN || '';
 // Test-only overrides: the listing paths, and the fetch timeout (default 10 s).
 const listFile = process.env.AGENTBOX_ENV_LIST_FILE || '/opt/agentbox/tokens.json';
 const awsFile = process.env.AGENTBOX_ENV_AWS_FILE || '/opt/agentbox/aws.json';
+const ghFile = process.env.AGENTBOX_ENV_GITHUB_FILE || '/opt/agentbox/github.json';
 // The override can only shorten the default: a non-finite or junk value is ignored,
 // a huge one is capped (Node turns an overflowing delay into a 1 ms timer).
 const timeoutOverride = Number(process.env.AGENTBOX_ENV_TIMEOUT_MS);
@@ -189,6 +190,28 @@ function awsSection(conns) {
   return 'AWS connections\n' + blocks.join('\n\n');
 }
 
+// githubSection lists each owner of the GitHub binding: its repos, the
+// permissions (write ones first) and how to use it. Never a token or App name.
+function githubSection(rows) {
+  const strs = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []);
+  const blocks = rows.map((r) => {
+    const perms = r.permissions && typeof r.permissions === 'object' ? r.permissions : {};
+    const keys = Object.keys(perms).sort();
+    const write = keys.filter((k) => perms[k] === 'write');
+    const read = keys.filter((k) => perms[k] !== 'write');
+    const groups = [];
+    if (write.length) groups.push('write ' + write.join(', '));
+    if (read.length) groups.push('read ' + read.join(', '));
+    return [
+      r.owner + (r.via ? ' [' + r.via + ']' : ''),
+      '  repos: ' + strs(r.repos).join(', '),
+      '  permissions: ' + groups.join(' · '),
+      '  use: git and gh as usual',
+    ].join('\n');
+  });
+  return 'GitHub\n' + blocks.join('\n\n');
+}
+
 function tokenSection(entries) {
   return entries.map((e) => {
     const head = [e.name];
@@ -207,19 +230,23 @@ function tokenSection(entries) {
   }).join('\n\n');
 }
 
-// list prints the AWS connections (when aws.json exists), then the tokens. A box
-// with connections and no tokens has no tokens.json, which is not an error.
+// list prints the AWS connections (when aws.json exists), the GitHub binding
+// (when github.json exists), then the tokens. A box with connections or GitHub
+// and no tokens has no tokens.json, which is not an error; neither is a box
+// written before github.json existed.
 function list() {
   const conns = readList(awsFile, 'AWS connection list');
+  const gh = readList(ghFile, 'GitHub list');
   let entries = readList(listFile, 'token list');
   if (entries === null) {
-    if (conns === null) return fail('cannot read the token list (ENOENT: no such file or directory, open ' + JSON.stringify(listFile) + ')');
+    if (conns === null && gh === null) return fail('cannot read the token list (ENOENT: no such file or directory, open ' + JSON.stringify(listFile) + ')');
     entries = [];
   }
   const sections = [];
   if (conns && conns.length) sections.push(awsSection(conns));
+  if (gh && gh.length) sections.push(githubSection(gh));
   if (entries.length) sections.push(tokenSection(entries));
-  if (sections.length === 0) return process.stdout.write('no tokens are bound to this session\n');
+  if (sections.length === 0) return process.stdout.write('no credentials are bound to this session\n');
   process.stdout.write(sections.join('\n\n') + '\n');
 }
 

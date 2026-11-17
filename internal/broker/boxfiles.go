@@ -44,6 +44,10 @@ const TokensFile = "tokens.json"
 // reads it.
 const AWSListFile = "aws.json"
 
+// GitHubListFile is the non-secret listing of a session's GitHub binding, in the
+// binding dir, for `agentbox-env --list`.
+const GitHubListFile = "github.json"
+
 // GHConfigDir is gh's config dir in a bound box: a path that dies with the box,
 // so nothing gh writes there (hosts.yml, caches) outlives the session.
 const GHConfigDir = "/tmp/agentbox-gh"
@@ -95,9 +99,10 @@ func StripGitHubEnv() []string {
 
 // EnsureBindingDir writes <stateRoot>/broker/binding-<hash>/: aws-config when
 // there is an AWS binding (or named AWS connections, which also get aws.json and
-// agentbox-env.js), agentbox-cred.js always, agentbox-gh.js when there is
-// a GitHub binding, agentbox-env.js and tokens.json when there are static tokens
-// (PAT entries go through the gh/git helpers and do not count). The bindings
+// agentbox-env.js), agentbox-cred.js always, agentbox-gh.js, github.json and
+// agentbox-env.js when there is a GitHub binding, agentbox-env.js and tokens.json
+// when there are static tokens (PAT entries go through the gh/git helpers and do
+// not count). The bindings
 // and each token entry are validated first (a hand-edited profiles.json
 // is not re-validated at load, and Region is formatted into an INI file). With
 // only an AWS binding the directory and its contents are what they always were.
@@ -129,11 +134,11 @@ func EnsureBindingDirWith(stateRoot string, bs config.Bindings, base map[string]
 		files = append(files, file{"aws-config", AWSConfigFor(bs.AWSConns)}, file{AWSListFile, AWSListing(bs.AWSConns, base)})
 	}
 	if bs.GitHub != nil {
-		files = append(files, file{"agentbox-gh.js", ghScript})
+		files = append(files, file{"agentbox-gh.js", ghScript}, file{GitHubListFile, GitHubListing(*bs.GitHub)})
 	}
-	// The image's agentbox-env shim requires the script, so connections get it
-	// too (for --list); tokens.json only exists with tokens.
-	if len(bs.Tokens) > 0 || len(bs.AWSConns) > 0 {
+	// The image's agentbox-env shim requires the script, so connections and a
+	// GitHub binding get it too (for --list); tokens.json only exists with tokens.
+	if len(bs.Tokens) > 0 || len(bs.AWSConns) > 0 || bs.GitHub != nil {
 		files = append(files, file{"agentbox-env.js", envScript})
 	}
 	if len(bs.Tokens) > 0 {
@@ -316,6 +321,36 @@ type tokenListHost struct {
 	Host    string `json:"host"`
 	Port    int    `json:"port,omitempty"` // only when not 443
 	Private bool   `json:"private,omitempty"`
+}
+
+// gitHubListRow is one owner of a GitHub binding as `agentbox-env --list`
+// shows it. Via says how the broker mints for it ("app" or "token"), never the
+// App's name or the PAT entry's name. The permissions are the binding's, the
+// same on every row.
+type gitHubListRow struct {
+	Owner       string            `json:"owner"`
+	Repos       []string          `json:"repos"`
+	Via         string            `json:"via"`
+	Permissions map[string]string `json:"permissions"`
+}
+
+// GitHubListing is the JSON the box shows for the GitHub part of `agentbox-env
+// --list`: per owner its repos, how it is minted and the effective permissions.
+func GitHubListing(g config.GitHubBinding) []byte {
+	perms := g.EffectivePermissions()
+	out := make([]gitHubListRow, len(g.Owners))
+	for i, o := range g.Owners {
+		via := "app"
+		if o.Token != "" {
+			via = "token"
+		}
+		out[i] = gitHubListRow{Owner: o.Owner, Repos: slices.Clone(o.Repos), Via: via, Permissions: perms}
+	}
+	b, err := json.Marshal(out)
+	if err != nil { // plain strings: cannot happen
+		return []byte("[]\n")
+	}
+	return append(b, '\n')
 }
 
 // TokensListing is the JSON the box shows for `agentbox-env --list`: per entry
