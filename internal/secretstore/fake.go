@@ -14,6 +14,7 @@ type FakeKeeper struct {
 	now      func() time.Time
 	loadErr  error
 	saveErr  error
+	clearErr error
 }
 
 // NewFakeKeeper returns an empty keeper. needsPassphrase true behaves like
@@ -43,6 +44,14 @@ func (f *FakeKeeper) FailSave(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.saveErr = err
+}
+
+// FailClear makes every following Clear return err until FailClear(nil). It
+// stands in for a key store that refuses to drop the kept unlock.
+func (f *FakeKeeper) FailClear(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clearErr = err
 }
 
 func (f *FakeKeeper) NeedsPassphrase() bool { return f.needs }
@@ -82,6 +91,9 @@ func (f *FakeKeeper) Save(identity string, ttl time.Duration) error {
 func (f *FakeKeeper) Clear() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.clearErr != nil {
+		return f.clearErr
+	}
 	f.identity = ""
 	f.expires = time.Time{}
 	return nil

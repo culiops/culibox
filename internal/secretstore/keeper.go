@@ -93,7 +93,8 @@ type Keeper interface {
 
 // Event is one audit record. Detail holds an id or a TTL, never a value or a
 // passphrase. Action is one of: init init_failed unlocked unlock_failed
-// unlock_rate_limited locked passwd_changed value_set value_removed.
+// unlock_rate_limited locked lock_failed passwd_changed passwd_failed value_set
+// value_set_failed value_removed value_removed_failed.
 type Event struct{ Action, Actor, Detail string }
 
 // Recorder persists an Event. Store writes and unlocks are fail-closed: when
