@@ -1156,8 +1156,9 @@
      reduced to the toolbar (the drawer header names it). */
   #drawer #files-pane { flex: 1 1 auto; min-height: 0; }
   #drawer #files-pane > .files-body { display: flex; padding-top: 6px; }
-  #drawer #files-phd .cv, #drawer #files-phd .path, #drawer #files-phd > span:not(.grow):not(.path) { display: none; }
-  #drawer #files-phd #ft-newdir, #drawer #files-phd #ft-refresh, #drawer #files-phd #ft-upload { display: revert; }
+  /* The old toolbar (+ ↻ ↑ and the palette) is the explorer's top row now: New folder, Upload and Refresh are the ⋯ menu's. The
+     header and its buttons stay in the DOM, because the menu presses them (upload.js wires #ft-upload, filetree.js the rest). */
+  #drawer #files-phd { display: none; }
 
   /* --- Files dock body: viewer | splitter | explorer (spec 5.4, #34) ------- */
   /* The editor is the left column and the explorer the right one, as in the mockups. */
@@ -1193,7 +1194,6 @@
     background: color-mix(in srgb, var(--accent) 40%, transparent);
   }
   #drawer .dr-tree #files-pane { min-width: 0; }
-  #drawer .dr-tree #files-phd { padding-left: 8px; padding-right: 6px; }
   /* No side padding on the body: the tree's rows run edge to edge, so a hover or the selected row spans the column (mockup B1);
      the root field above them (a host session's) keeps the 6px. */
   #drawer .dr-tree .files-body { padding: 6px 0 8px; }
@@ -1205,6 +1205,17 @@
      list is fixed-position (set from the input's rect in drawerGoPosition) so
      the tree column does not clip it; .ft-opt/.ft-note rows are shared. */
   .dr-goto { flex: none; display: flex; align-items: center; gap: var(--sp-1); padding: 6px 8px 0; }
+  /* The field and its chord (Ctrl P) as a chip inside it, gone once the field is used (focused or holding text). New file and
+     the ⋯ are the kit's ghost icon buttons beside it. */
+  .dr-gofield { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
+  .dr-gokbd {
+    position: absolute; right: 5px; top: 50%; transform: translateY(-50%); height: 16px; min-width: 0; padding: 0 4px;
+    pointer-events: none;
+  }
+  .dr-gokbd:empty, #drawer-goto-in:focus ~ .dr-gokbd, #drawer-goto-in:not(:placeholder-shown) ~ .dr-gokbd { display: none; }
+  #drawer-goto-in:placeholder-shown { padding-right: 56px; }
+  .dr-goto .btn { flex: none; }
+  #dock-newfile[hidden] { display: none; }
   /* The explorer column the folded strip opened is transient (Esc folds it): its top row carries a visible fold control,
      drawn only then (app.js paintDrawerLayout sets data-tree-open). The chevron and bar point at the strip's edge. */
   #drawer-tree-fold { display: none; flex: none; }
@@ -1248,6 +1259,67 @@
   #drawer[data-noroot="1"] .dr-goto > :not(#drawer-tree-fold) { display: none; }
   #drawer[data-noroot="1"]:not([data-tree-open="1"]) .dr-goto { display: none; }
   #drawer[data-noroot="1"] #drawer-tree-fold { margin-left: auto; }
+  /* --- the explorer's Changes section and root header (spec 5.4, mockup B1) -------------------------------------------- */
+  /* The section sits between the top row and the tree and is as tall as its rows, up to 45% of the column, then its list
+     scrolls (the header, toggle and branch row stay). Rows are the tree's size: they follow Settings' "File tree text size". */
+  #dock-changes {
+    flex: 0 1 auto; min-height: 0; max-height: 45%; display: flex; flex-direction: column;
+    border-bottom: 1px solid var(--line);
+  }
+  #dock-changes[hidden], .dk-branch[hidden], .dk-chg-note[hidden], .dk-legend[hidden], .dk-review[hidden] { display: none; }
+  .dk-chg-head { flex: none; display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; min-width: 0; }
+  .dk-chg-title {
+    flex: none; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
+    letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg);
+  }
+  .dk-chg-sub { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .dk-review { flex: none; font-size: var(--t-sm); line-height: var(--lh-sm); }
+  .dk-scope { flex: none; align-self: flex-start; margin: 0 10px 6px; }
+  .dk-branch {
+    flex: none; display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 10px 4px; min-width: 0; white-space: nowrap;
+    font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted);
+  }
+  /* A branch name is isolated for bidirectional text, so a format character in it cannot reorder the arrow or the counts. */
+  .dk-br-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; color: var(--fg); }
+  .dk-br-sep { flex: none; }
+  .dk-chg-note { flex: none; margin: 0; padding: 2px 10px 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .dk-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
+  /* One changed file: the type icon, the name, its folder (the part that gives way), the counts and the letter. The name keeps
+     its width and the folder takes what is left. The 2px bar on the left edge is the session bar, the one the tree rows wear. */
+  .dk-row {
+    position: relative; box-sizing: border-box; width: 100%; min-height: 22px; display: flex; align-items: center; gap: 6px;
+    padding: 0 10px; border: 0; background: transparent; color: var(--fg); font: inherit; text-align: left; white-space: nowrap; cursor: pointer;
+  }
+  .dk-row:hover { background: var(--hover); }
+  .dk-row:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-mine::before { content: ""; position: absolute; left: 0; top: 3px; bottom: 3px; width: 2px; border-radius: 1px; background: var(--accent); }
+  .dk-nm { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .dk-dir { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--t-sm); color: var(--muted); }
+  .dk-ct { flex: none; display: inline-flex; gap: 4px; font: var(--w-medium) var(--t-xs)/1 var(--font-mono); color: var(--muted); }
+  .dk-add { color: var(--ok); }
+  .dk-del { color: var(--red); }
+  .dk-row .dk-st { min-width: 12px; text-align: center; }
+  .dk-more { padding: 3px 10px; font-size: var(--t-sm); color: var(--muted); }
+  .dk-legend { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 10px 8px 12px; font-size: var(--t-xs); line-height: var(--lh-xs); color: var(--muted); }
+  .dk-legend i { flex: none; width: 2px; height: 10px; border-radius: 1px; background: var(--accent); }
+  .dk-legend span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The root header: the folder's name, then its path. A click shows the root field (today's picker) under it; a box session's
+     tree is its workspace only, so there is nothing to edit. */
+  .dk-root {
+    flex: none; box-sizing: border-box; width: 100%; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 2px;
+    border: 0; background: transparent; color: var(--fg); text-align: left; cursor: pointer;
+  }
+  .dk-root:hover { background: var(--hover); }
+  #drawer[data-box="1"] .dk-root { cursor: default; }
+  #drawer[data-box="1"] .dk-root:hover { background: transparent; }
+  .dk-root-name {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-xs); line-height: var(--lh-xs);
+    font-weight: var(--w-semibold); letter-spacing: var(--track-caps); text-transform: uppercase;
+  }
+  .dk-root-path { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* Today's root field stays in the DOM (the picker is wired to it) and is shown only while the header is being edited. */
+  #drawer .dr-tree:not([data-rootedit="1"]) .ft-row { display: none; }
+  #drawer[data-noroot="1"] #dock-changes, #drawer[data-noroot="1"] .dk-root { display: none; }
   /* A session workspace the fs API refuses is never a root (S1): the column
      says so instead of showing whatever tree was there before. */
   .dr-tnote { display: none; margin: 0; padding: 14px 12px; color: var(--muted); font-size: var(--t-sm); line-height: 1.5; }
@@ -1290,7 +1362,7 @@
   .dk-st:empty { display: none; }
   .dk-st-m { color: var(--accent); }
   .dk-st-a, .dk-st-u { color: var(--ok); }
-  .dk-st-c { color: var(--danger); }
+  .dk-st-c, .dk-st-d { color: var(--danger); }
   /* A dirty tab shows a dot where its close button is; under the pointer (or with the keyboard on its button) the close
      button comes back, because a tab with an edit must still be closable by hand (it asks first). */
   .dk-x {

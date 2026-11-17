@@ -95,6 +95,7 @@ const THIN_ALLOW = [
   [".dk-tab:focus-visible", INSET + "the dock's tab strip scrolls sideways (overflow-x: auto clips both axes)"],
   [".dk-x:focus-visible", INSET + "a tab's close button sits inside the dock's scrolling tab strip"],
   ["button.dk-crumb:focus-visible", INSET + "the crumb trail is overflow: hidden, and its buttons sit at the row's edge"],
+  [".dk-row:focus-visible", INSET + "a Changes row spans the full width of the section's scrolling list, which clips an outside ring"],
   [".ft-node:focus-visible", INSET + "a tree row spans the full width of the #filetree scroll container, which clips an outside ring"],
   [".ft-node.ft-sel:focus-visible", INSET + "a tree row spans the full width of the #filetree scroll container, which clips an outside ring"],
   ["#page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible", INSET + "a nav row of the settings page's left list"],

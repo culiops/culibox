@@ -657,6 +657,7 @@ async function drawerLoadChanged(sid) {
   drawerChangedFiles.set(sid, files);
   drawerPaintChanged();
   dockRender(); // "Edited by" in the crumbs is read from the same answer
+  if (typeof dockChangesRender === "function") dockChangesRender(); // and so is the session bar on the Changes rows
 }
 
 // --- Go to file… (Ctrl+P) ----------------------------------------------------
@@ -904,6 +905,8 @@ function drawerPaint(fromViewer) {
   if (host) host.hidden = !v;
   if (empty) empty.hidden = !!v;
   dockRender();
+  // The Changes section follows the session and the box flag set above, and asks for what a dock that has just opened lacks.
+  if (typeof dockChangesRefresh === "function") dockChangesRefresh();
   // Full mode's agent strip reads the same session and list, and polls only for the session on screen.
   if (typeof dockAgentSync === "function") dockAgentSync();
 }

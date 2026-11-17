@@ -110,7 +110,16 @@ async function gitStatusLoad(root, sid, opts) {
   if (!status || typeof status !== "object") return gitState ? gitState.marks : null;
   gitState = { root, sid: sid || null, status, marks: gitMarks(status, root) };
   gitPaintTree();
+  // The Changes section's counts and base follow each status that lands (dockchanges.js), fresh when this one was.
+  if (typeof dockChangesOnStatus === "function") dockChangesOnStatus({ fresh: !!(opts && opts.fresh) });
   return gitState.marks;
+}
+
+// gitStatusCurrent: the last status that landed and the root it was for, {root, status}, or null when there is none or it
+// was for another root than `root` (a late or older one is nobody's). The Changes section reads it; it never reads
+// gitState itself.
+function gitStatusCurrent(root) {
+  return gitState && root && gitState.root === root ? { root: gitState.root, status: gitState.status } : null;
 }
 
 // gitStatusTreeSid: the session whose files the tree shows right now.
@@ -234,6 +243,8 @@ function gitPaintTree() {
   if (typeof document === "undefined") return;
   // The dock's tabs wear the same letters.
   if (typeof dockRender === "function") dockRender();
+  // And the Changes section lists the same status (a root change took it away: it repaints, with nothing).
+  if (typeof dockChangesRender === "function") dockChangesRender();
   // An open viewer's Changes button follows the same marks: repaint the toolbars.
   if (typeof ViewerTab !== "undefined" && ViewerTab.allViewers) {
     for (const v of ViewerTab.allViewers()) if (v.toolbarApi) v.toolbarApi.paint();
@@ -268,5 +279,5 @@ function gitPaintNote() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusReason, gitStatusNote, gitStatusReset };
+  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusReason, gitStatusNote, gitStatusReset };
 }

@@ -245,3 +245,38 @@ test("gitStatusRefreshSoon: the debounced request is fresh, unless every caller 
     assert.equal(JSON.parse(calls[3].init.body).fresh, undefined);
   } finally { delete global.ftRoot; }
 });
+
+// --- the Changes section's reads (dockchanges.js) -----------------------------------------------------------------
+
+test("gitStatusCurrent: the last status that landed and its root, nothing for another root or before any", async () => {
+  g.gitStatusReset();
+  assert.equal(g.gitStatusCurrent("/r"), null, "nothing yet");
+  const calls = deferredFetch();
+  const a = g.gitStatusLoad("/r", "s1");
+  calls[0].resolve(ok([{ p: "a.go", x: "M" }]));
+  await a;
+  const cur = g.gitStatusCurrent("/r");
+  assert.equal(cur.root, "/r");
+  assert.equal(cur.status.entries[0].p, "a.go");
+  assert.equal(g.gitStatusCurrent("/other"), null, "the held status is for /r only");
+  assert.equal(g.gitStatusCurrent(""), null);
+});
+
+test("gitStatusLoad tells the Changes section when a status lands, fresh when it was asked for fresh, and not for one that failed", async () => {
+  g.gitStatusReset();
+  const heard = [];
+  global.dockChangesOnStatus = (o) => heard.push(o);
+  try {
+    const calls = deferredFetch();
+    const a = g.gitStatusLoad("/r", "s1", { fresh: true });
+    calls[0].resolve(ok([]));
+    await a;
+    const b = g.gitStatusLoad("/r", "s1");
+    calls[1].resolve(ok([]));
+    await b;
+    assert.deepEqual(heard, [{ fresh: true }, { fresh: false }]);
+    global.fetch = () => Promise.reject(new Error("offline"));
+    await g.gitStatusLoad("/r", "s1");
+    assert.equal(heard.length, 2, "a failed request keeps what was shown and says nothing");
+  } finally { delete global.dockChangesOnStatus; }
+});

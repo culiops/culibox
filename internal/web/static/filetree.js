@@ -210,6 +210,8 @@ function setFtRoot(path) {
   // Keep a collapsed Files bar's root readout live even though the tree
   // itself may be hidden — this is the one place the root actually changes.
   if (typeof renderCollapsedSummaries === "function") renderCollapsedSummaries();
+  // The dock's root header names the root, and its Changes section is for one root: both follow at once.
+  if (typeof dockChangesRender === "function") dockChangesRender();
 }
 let lastSyncedKey = null;       // which tab the tree is currently following (see treeFollowTarget)
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
@@ -219,11 +221,12 @@ let ftExpanded = new Set();     // absolute dir paths the user has opened; see t
 let ftRootReadOnly = false;
 function ftRootIsReadOnly() { return ftRootReadOnly; }
 // ftApplyReadOnly hides the toolbar buttons that write into the root (new folder,
-// upload) while its listing is read-only. The `hidden` attribute needs the
-// !important rule in app.css to win against the desktop drawer's and the phone's
-// own display rules; refresh and the palette stay.
+// upload, and the dock's New file) while its listing is read-only. The `hidden`
+// attribute needs the !important rule in app.css to win against the phone's own
+// display rules (desktop.css gives the dock's button its own); refresh and the
+// palette stay.
 function ftApplyReadOnly(ro) {
-  for (const id of ["ft-newdir", "ft-upload"]) {
+  for (const id of ["ft-newdir", "ft-upload", "dock-newfile"]) {
     const el = document.getElementById(id);
     if (el) el.hidden = !!ro;
   }
@@ -675,7 +678,10 @@ function ftShowMenu(anchor, nodes, alignLeft, kitLabel, at) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
   ftMoreExpanded(ftMenuMore, false);
-  ftMenuMore = anchor.classList && anchor.classList.contains("ft-more") ? anchor : null;
+  // A button that is no row's ⋯ may own the menu too (the dock's top-row ⋯, data-menu-from): it says it is open and gets
+  // focus back like a row does.
+  const owner = !!anchor.dataset && anchor.dataset.menuFrom === "1";
+  ftMenuMore = anchor.classList && (anchor.classList.contains("ft-more") || owner) ? anchor : null;
   ftMoreExpanded(ftMenuMore, true);
   menu.replaceChildren(...nodes);
   const kit = typeof kitLabel === "string";
@@ -688,7 +694,7 @@ function ftShowMenu(anchor, nodes, alignLeft, kitLabel, at) {
     menu.removeAttribute("aria-label");
   }
   const row = anchor.closest ? anchor.closest(".ft-node") : null;
-  ftMenuFrom = row ? { row, path: ftRowPaths.get(row) || "" } : null;
+  ftMenuFrom = row ? { row, path: ftRowPaths.get(row) || "" } : owner ? { row: anchor, path: "" } : null;
 
   menu.classList.add("open"); // must be visible before it can be measured
   const w = menu.offsetWidth;
@@ -798,6 +804,30 @@ async function promptMkdir(dir) {
   if (!res.ok) { showToast("Could not create: " + fsErrText(res), { error: true }); return; }
   showToast("Created " + name);
   ftLoadRoot({ fresh: true });
+}
+
+// promptNewFile makes an empty file in `dir` and opens it as a pinned tab of the dock, ready to be typed into (the dock's
+// New file; a quick fix, not IDE work). The server refuses a name that exists in any form, so a duplicate is told apart
+// from a bad name by its 409. The tree is read again first, so the new row is there when the tab opens.
+async function promptNewFile(dir) {
+  if (!dir) return;
+  const name = await askPrompt({
+    title: "New file",
+    label: "File name",
+    placeholder: "notes.md",
+    confirmLabel: "Create",
+  });
+  if (name === null || !name) return;
+  const res = await fsNewFile(dir, name);
+  if (res.status === 409) { showToast("Could not create: name already exists", { error: true }); return; }
+  if (!res.ok) { showToast("Could not create: " + fsErrText(res), { error: true }); return; }
+  showToast("Created " + name);
+  await ftLoadRoot({ fresh: true });
+  const path = res.data && typeof res.data.path === "string" ? res.data.path : "";
+  if (!path) return;
+  // On the phone there is no dock: the file opens where a tree row's click would.
+  if (typeof drawerShowFile === "function" && ftDocked()) drawerShowFile(path, { preview: false });
+  else if (typeof openFile === "function") openFile(path);
 }
 
 async function promptRename(path, name) {
@@ -1210,6 +1240,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     iconFor, treeBranch, treeFollowTarget, rootableCwd, actionsLabel,
     listingReadOnly, rowMenuIds, rowMenuLabel, openRowMenu, ftApplyReadOnly, ftRenderDir,
-    ftKeyAction, ftMenuGroups,
+    ftKeyAction, ftMenuGroups, promptNewFile,
   };
 }

@@ -231,6 +231,71 @@ test("ftApplyReadOnly hides #ft-newdir and #ft-upload, and only those", () => {
   FT.ftApplyReadOnly(true);
 });
 
+test("ftApplyReadOnly hides the dock's New file with the other write buttons", () => {
+  const els = { "dock-newfile": { hidden: false }, "dock-more": { hidden: false } };
+  globalThis.document = { getElementById: (id) => els[id] || null };
+  FT.ftApplyReadOnly(true);
+  assert.deepStrictEqual([els["dock-newfile"].hidden, els["dock-more"].hidden], [true, false], "the ⋯ stays: Refresh and Collapse all still read");
+  FT.ftApplyReadOnly(false);
+  assert.strictEqual(els["dock-newfile"].hidden, false);
+});
+
+// --- promptNewFile (the dock's New file) ------------------------------------------------------------------------
+// The globals it reaches in the page (askPrompt, fsNewFile, showToast, drawerShowFile, ...) are the test's; its own
+// ftLoadRoot returns at once here (no tree is built under node). The order prompt, create, refresh, open is
+// dock-changes-wire.test.js's source pin.
+async function newFile(o) {
+  const log = { prompts: [], creates: [], toasts: [], shown: [], opened: [] };
+  const was = {};
+  const set = (k, v) => { was[k] = Object.prototype.hasOwnProperty.call(globalThis, k) ? globalThis[k] : undefined; globalThis[k] = v; };
+  set("askPrompt", async (opts) => { log.prompts.push(opts); return o.name; });
+  set("fsNewFile", async (dir, name) => { log.creates.push([dir, name]); return o.reply; });
+  set("fsErrText", (res) => (res && res.data && res.data.error) || "HTTP " + res.status);
+  set("showToast", (m, opts) => { log.toasts.push([m, !!(opts && opts.error)]); });
+  set("drawerOwnsFileClicks", () => o.docked !== false);
+  set("drawerShowFile", (p, opts) => { log.shown.push([p, opts]); return true; });
+  set("openFile", (p) => { log.opened.push(p); });
+  try { await FT.promptNewFile(o.dir === undefined ? "/w" : o.dir); } finally {
+    for (const k of Object.keys(was)) { if (was[k] === undefined) delete globalThis[k]; else globalThis[k] = was[k]; }
+  }
+  return log;
+}
+
+test("promptNewFile: a name creates the file in the folder and opens it as a pinned tab of the dock", async () => {
+  const log = await newFile({ name: "notes.md", reply: { ok: true, status: 200, data: { path: "/w/notes.md" } } });
+  assert.deepStrictEqual(log.creates, [["/w", "notes.md"]]);
+  assert.strictEqual(log.prompts[0].title, "New file");
+  assert.deepStrictEqual(log.shown, [["/w/notes.md", { preview: false }]]);
+  assert.deepStrictEqual(log.opened, []);
+  assert.deepStrictEqual(log.toasts, [["Created notes.md", false]]);
+});
+
+test("promptNewFile: a name that exists is the 'name already exists' toast and nothing opens", async () => {
+  const log = await newFile({ name: "a.go", reply: { ok: false, status: 409, data: { error: "name already exists" } } });
+  assert.deepStrictEqual(log.toasts, [["Could not create: name already exists", true]]);
+  assert.deepStrictEqual(log.shown, []);
+  const bare = await newFile({ name: "a.go", reply: { ok: false, status: 409, data: null } });
+  assert.deepStrictEqual(bare.toasts, [["Could not create: name already exists", true]], "also when the body is not JSON");
+});
+
+test("promptNewFile: any other refusal says why, and a dismissed or empty prompt asks nothing", async () => {
+  const bad = await newFile({ name: "x/y", reply: { ok: false, status: 400, data: { error: "bad name" } } });
+  assert.deepStrictEqual(bad.toasts, [["Could not create: bad name", true]]);
+  assert.deepStrictEqual(bad.shown, []);
+  for (const name of [null, ""]) {
+    const log = await newFile({ name, reply: { ok: true, status: 200, data: { path: "/w/z" } } });
+    assert.deepStrictEqual([log.creates, log.toasts, log.shown], [[], [], []], JSON.stringify(name));
+  }
+  const none = await newFile({ name: "n", dir: "", reply: { ok: true, status: 200, data: { path: "/w/n" } } });
+  assert.deepStrictEqual([none.prompts.length, none.creates], [0, []], "no folder, no prompt");
+});
+
+test("promptNewFile: without the dock the file opens where a tree row's click would", async () => {
+  const log = await newFile({ name: "n.txt", docked: false, reply: { ok: true, status: 200, data: { path: "/w/n.txt" } } });
+  assert.deepStrictEqual(log.shown, []);
+  assert.deepStrictEqual(log.opened, ["/w/n.txt"]);
+});
+
 function fakeRow() {
   const el = {
     tag: "div", className: "", textContent: "", title: "", children: [], attrs: {}, style: { setProperty() {} },

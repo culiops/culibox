@@ -1,10 +1,12 @@
 "use strict";
 
-// The rows of the explorer's Changes section, as one pure function: which files
-// the workspace has changed, in what order, with what +a −d. No DOM, and the two
+// The explorer's Changes section, as pure functions: the rows (which files the
+// workspace has changed, in what order, with what +a −d, changesRows) and the
+// decisions around them (which scope shows, when the base is asked for again, the
+// branch row's totals, and the whole section's view, changesView). No DOM, and the
 // functions it takes from other scripts are pure too, so `node --test` reaches
-// it; dockchanges.js paints the rows. Classic script: browser globals, required
-// under node.
+// it; dockchanges.js asks for the replies and paints the view. Classic script:
+// browser globals, required under node.
 //
 // A row's path is mapped from the reply's repo-relative `p` by gitstatus.js's
 // gitPlace, the rule the tree's marks use, and "mine" is decided by drawerfiles.js's
@@ -13,6 +15,10 @@
 // tree row cannot disagree about a path.
 
 const CHANGES_MAX = 200; // rows shown; the rest are counted in `more`
+const CHANGES_SCOPE_KEY = "agent-box:changesScope"; // localStorage: {sid: "head"|"branch"}
+const CHANGES_SCOPE_CAP = 100; // remembered sessions; the oldest choice is the first one out
+const CHANGES_BASE_RETRY_MS = 30000; // a base that could not be read is asked for again after this
+const CHANGES_TOOMANY = "Too many changes to list (>5000)";
 
 // Letters a reply may carry. Numstat has no C (git diff calls an unmerged file
 // a modification) and its U is the web layer's untracked file; status has all
@@ -25,6 +31,29 @@ const CHANGES_STATUS_CODES = new Set(["M", "A", "U", "D", "C"]);
 // 0: a count is shown only when git (or the web layer's own count) said it.
 function changesCount(n) {
   return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+// changesNumstatFiles: the files of an ok numstat reply that sit under the tree root, as
+// [{at, code, add, del}] in reply order: `at` is gitPlace's answer for the path, `add`/`del` the
+// counts or null. Entries with a letter that is not a code, a path outside the tree, a folder
+// (numstat never lists one) or a path already listed are left out. A binary file has no lines to
+// count, and a pair with one bad half is not shown as a half-known "+? −3": unknown, not 0.
+// One walk for the rows and for the totals, so the two cannot disagree about what a file is.
+function changesNumstatFiles(numstat, base, placeOf) {
+  const out = [];
+  if (!numstat || numstat.state !== "ok" || !Array.isArray(numstat.entries)) return out;
+  const seen = new Set();
+  for (const e of numstat.entries) {
+    if (!e || !CHANGES_NUM_CODES.has(e.x)) continue;
+    const at = placeOf(e.p, numstat.rootRel, base);
+    if (!at || at.isDir || seen.has(at.abs)) continue;
+    seen.add(at.abs);
+    const a = changesCount(e.a);
+    const d = changesCount(e.d);
+    const known = e.bin !== true && a !== null && d !== null;
+    out.push({ at, code: e.x, add: known ? a : null, del: known ? d : null });
+  }
+  return out;
 }
 
 // changesRows: {rows, more} for the Changes section.
@@ -74,19 +103,7 @@ function changesRows(opts) {
     });
   };
 
-  if (numstat && numstat.state === "ok" && Array.isArray(numstat.entries)) {
-    for (const e of numstat.entries) {
-      if (!e || !CHANGES_NUM_CODES.has(e.x)) continue;
-      const at = placeOf(e.p, numstat.rootRel, base);
-      if (!at || at.isDir || byPath.has(at.abs)) continue; // numstat never lists a folder
-      // A binary file has no lines to count, and a pair with one bad half is not
-      // shown as a half-known "+? −3": unknown, not 0.
-      const a = changesCount(e.a);
-      const d = changesCount(e.d);
-      const known = e.bin !== true && a !== null && d !== null;
-      add(at, e.x, known ? a : null, known ? d : null);
-    }
-  }
+  for (const f of changesNumstatFiles(numstat, base, placeOf)) add(f.at, f.code, f.add, f.del);
   if (Array.isArray(status.entries)) {
     for (const e of status.entries) {
       if (!e || !CHANGES_STATUS_CODES.has(e.x)) continue;
@@ -131,6 +148,130 @@ function changesRows(opts) {
   return { rows: ranked.slice(0, CHANGES_MAX).map((x) => x.row), more: Math.max(0, ranked.length - CHANGES_MAX) };
 }
 
+// --- the section around the rows: scope, base, totals, and the view --------------------------------
+
+// changesScopeParse: the remembered scopes from their stored text, as a Map(session id -> "head" |
+// "branch"). The store is user-editable text, so a value that is not a scope, a body that is not
+// an object and a text that is not JSON are all dropped, and only the newest CHANGES_SCOPE_CAP
+// sessions stay. A Map, not an object: a session id such as "__proto__" is just a key.
+function changesScopeParse(raw) {
+  const out = new Map();
+  let obj = null;
+  try { obj = JSON.parse(raw); } catch (_) { return out; }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return out;
+  for (const k of Object.keys(obj)) if (obj[k] === "head" || obj[k] === "branch") out.set(k, obj[k]);
+  while (out.size > CHANGES_SCOPE_CAP) out.delete(out.keys().next().value);
+  return out;
+}
+
+// changesScopePut: a NEW map with `sid`'s choice set and moved last (so the oldest is the first one
+// out at the cap). Nothing is written to `map`, so a caller can tell a change by identity. A value
+// that is not a scope changes nothing (the same map back). No session (a pane of files) is "".
+function changesScopePut(map, sid, scope) {
+  if (scope !== "head" && scope !== "branch") return map;
+  const out = new Map(map || []);
+  const key = typeof sid === "string" ? sid : "";
+  out.delete(key);
+  out.set(key, scope);
+  while (out.size > CHANGES_SCOPE_CAP) out.delete(out.keys().next().value);
+  return out;
+}
+
+// changesScopeSave: the text changesScopeParse reads back.
+function changesScopeSave(map) {
+  return JSON.stringify(Object.fromEntries(map || []));
+}
+
+// changesScopeFor: the scope the section shows for a session. `base` is the /api/git/base reply for
+// its root. Without an ok base there is nothing to compare Branch with, so it is Uncommitted whatever
+// was remembered (the toggle is hidden too). With one, the user's remembered pick wins; with none the
+// default is Branch when HEAD is ahead of the merge base, else Uncommitted.
+function changesScopeFor(map, sid, base) {
+  if (!base || base.state !== "ok") return "head";
+  const have = map && typeof map.get === "function" ? map.get(typeof sid === "string" ? sid : "") : undefined;
+  if (have === "head" || have === "branch") return have;
+  return base.ahead === true ? "branch" : "head";
+}
+
+// changesBaseStale: must the base be asked for again? `prev` is the last record, {root, head, reply, at}
+// (reply null: the request failed). Yes for a new root or a new HEAD (a commit can move "ahead"), and
+// for a failure (reply null or state "unavailable") once CHANGES_BASE_RETRY_MS has passed, so a flaky
+// container does not hide Branch for good and does not cost a request per status either. A settled
+// answer (ok, nobase, notrepo) is kept until the root or HEAD moves.
+function changesBaseStale(prev, root, head, now) {
+  if (!prev || prev.root !== root || prev.head !== head) return true;
+  const r = prev.reply;
+  if (r && r.state !== "unavailable") return false;
+  return !(now - prev.at < CHANGES_BASE_RETRY_MS);
+}
+
+// changesTotals: {add, del}, the sum of the counts numstat knows over the files under the tree root
+// (what the branch row says: "+ΣA −ΣD"); null when the reply is not an ok one, so the row says no
+// counts rather than +0 −0. A file with unknown counts adds nothing: the sum is of what git said.
+function changesTotals(numstat, root) {
+  if (!numstat || numstat.state !== "ok" || !Array.isArray(numstat.entries) || typeof root !== "string" || root === "") return null;
+  const placeOf = typeof gitPlace === "function" ? gitPlace : require("./gitstatus.js").gitPlace;
+  let add = 0;
+  let del = 0;
+  for (const f of changesNumstatFiles(numstat, root.replace(/\/+$/, ""), placeOf)) {
+    if (f.add === null) continue;
+    add += f.add;
+    del += f.del;
+  }
+  return { add, del };
+}
+
+// changesView: what the section shows, from the records dockchanges.js keeps. It is the one place that
+// decides, so the page only paints it. `root` is the tree root; `status` {root, status} the last
+// status reply and the root it was for; `numstat` {root, scope, reply} the last numstat answer (reply
+// null: the request failed); `base` {root, head, reply, at} the last base answer; `prefs` the remembered
+// scopes (a Map); `sid` the session; `files` its Activity files.
+//   {kind: "none", count: 0}                      nothing to draw (no root, no reply for this root, not a repository)
+//   {kind: "note", text, title, count: 0}         one calm line: status unavailable, too many, Branch waiting or failed
+//                                                 (a Branch note also carries scope and showScope: the toggle stays)
+//   {kind: "rows", scope, showScope, rows, more, count, branch}
+// A reply is used only for the root (and scope) it was asked for: a late one for the root before is
+// not this section's. Uncommitted lists status at once and fills the counts in when numstat lands;
+// Branch lists numstat's files (status cannot say what the branch changed), so until that answer is
+// here it is a note, and a failed one is a note too, never an empty list that looks like "no changes".
+function changesView(o) {
+  const none = { kind: "none", count: 0 };
+  const note = (text, title) => ({ kind: "note", text, title: typeof title === "string" ? title : "", count: 0 });
+  const root = o && typeof o.root === "string" ? o.root : "";
+  const cur = o && o.status;
+  if (root === "" || !cur || cur.root !== root || !cur.status) return none;
+  const st = cur.status;
+  if (st.state === "toomany") return note(CHANGES_TOOMANY, "");
+  if (st.state === "unavailable") return note("Status unavailable", st.reason);
+  if (st.state !== "ok") return none;
+  const base = o.base && o.base.root === root ? o.base.reply : null;
+  const scope = changesScopeFor(o.prefs, o.sid, base);
+  const rec = o.numstat && o.numstat.root === root && o.numstat.scope === scope ? o.numstat : null;
+  const reply = rec ? rec.reply : null;
+  if (scope === "branch") {
+    // A note in Branch scope keeps the toggle (scope, showScope): the way back to Uncommitted must stay on screen.
+    const waits = (text, title) => Object.assign(note(text, title), { scope, showScope: true });
+    if (!rec) return waits("Reading branch changes…", "");
+    if (reply && reply.state === "toomany") return waits(CHANGES_TOOMANY, "");
+    if (!reply || reply.state !== "ok") return waits("Branch changes unavailable", reply ? reply.reason : "");
+  }
+  const { rows, more } = changesRows({ scope, status: st, numstat: reply, files: o.files, root });
+  let branch = null;
+  if (scope === "branch") {
+    const t = changesTotals(reply, root);
+    branch = {
+      from: typeof base.branch === "string" && base.branch !== "" ? base.branch : "(detached)",
+      to: typeof base.baseName === "string" ? base.baseName : "",
+      add: t ? t.add : null,
+      del: t ? t.del : null,
+    };
+  }
+  return { kind: "rows", scope, showScope: !!base && base.state === "ok", rows, more, count: rows.length + more, branch };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { CHANGES_MAX, changesRows };
+  module.exports = {
+    CHANGES_MAX, CHANGES_SCOPE_KEY, changesRows, changesScopeParse, changesScopePut, changesScopeSave, changesScopeFor,
+    changesBaseStale, changesTotals, changesView,
+  };
 }

@@ -2,7 +2,10 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { CHANGES_MAX, changesRows } = require("../static/changesmodel.js");
+const {
+  CHANGES_MAX, changesRows, CHANGES_SCOPE_KEY, changesScopeParse, changesScopePut, changesScopeSave, changesScopeFor,
+  changesBaseStale, changesTotals, changesView,
+} = require("../static/changesmodel.js");
 
 // freeze: a deep Object.freeze, so a function that writes to its input throws in strict mode.
 function freeze(o) {
@@ -273,4 +276,216 @@ test("changesRows leaves its arguments as they were and accepts statusAt", () =>
   });
   const r = changesRows(args);
   assert.deepStrictEqual(r.rows.map((x) => x.path), ["/r/a.go", "/r/n"]);
+});
+
+// --- Task 9b: the section's own rules (scope memory, base refetch, totals, the view) ---------------------------------------
+
+const okBase = (extra) => Object.assign({ state: "ok", branch: "feat/x", baseRef: "refs/heads/main", baseName: "main", mergeBase: "abc", ahead: false }, extra || {});
+
+test("the scope is remembered under the plan's key", () => {
+  assert.equal(CHANGES_SCOPE_KEY, "agent-box:changesScope");
+});
+
+test("changesScopeFor: no base, no Branch; the default follows ahead; a remembered choice wins while there is a base", () => {
+  const none = new Map();
+  for (const base of [null, undefined, { state: "nobase", branch: "x", ahead: false }, { state: "notrepo" }, { state: "unavailable", reason: "r" }]) {
+    assert.equal(changesScopeFor(none, "s", base), "head", "no usable base: Uncommitted");
+    // A remembered Branch cannot hold without a base to compare with.
+    assert.equal(changesScopeFor(new Map([["s", "branch"]]), "s", base), "head");
+  }
+  assert.equal(changesScopeFor(none, "s", okBase({ ahead: true })), "branch", "ahead: Branch");
+  assert.equal(changesScopeFor(none, "s", okBase({ ahead: false })), "head", "not ahead: Uncommitted");
+  assert.equal(changesScopeFor(new Map([["s", "head"]]), "s", okBase({ ahead: true })), "head", "the user's pick beats the default");
+  assert.equal(changesScopeFor(new Map([["s", "branch"]]), "s", okBase({ ahead: false })), "branch");
+  assert.equal(changesScopeFor(new Map([["other", "branch"]]), "s", okBase({ ahead: false })), "head", "per session");
+  assert.equal(changesScopeFor(undefined, "s", okBase({ ahead: true })), "branch", "no stored map at all");
+  assert.equal(changesScopeFor(new Map([["", "branch"]]), null, okBase()), "branch", "a pane of files has no session: the empty key");
+  assert.equal(changesScopeFor(none, "s", okBase({ ahead: "yes" })), "head", "ahead is true only when it is true");
+});
+
+test("changesScopeParse keeps only head/branch under string keys, tolerates junk, and caps the count", () => {
+  assert.deepStrictEqual([...changesScopeParse('{"a":"head","b":"branch","c":"main","d":3,"e":null}')], [["a", "head"], ["b", "branch"]]);
+  for (const raw of [null, undefined, "", "{", "[]", "3", '"x"', "null", '["head"]']) assert.equal(changesScopeParse(raw).size, 0, String(raw));
+  // A key that is a property of Object is just a session id here, never a prototype write.
+  const m = changesScopeParse('{"__proto__":"branch","constructor":"head"}');
+  assert.equal(m.get("__proto__"), "branch");
+  assert.equal(m.get("constructor"), "head");
+  assert.equal({}.polluted, undefined);
+  const big = {};
+  for (let i = 0; i < 150; i++) big["s" + i] = "head";
+  const kept = changesScopeParse(JSON.stringify(big));
+  assert.equal(kept.size, 100);
+  assert.ok(kept.has("s149") && !kept.has("s49") && kept.has("s50"), "the newest hundred survive");
+});
+
+test("changesScopePut returns a new map with the session last, writes nothing to its input, and caps", () => {
+  const a = Object.freeze(new Map([["x", "head"], ["y", "branch"]]));
+  const b = changesScopePut(a, "x", "branch");
+  assert.notStrictEqual(a, b);
+  assert.deepStrictEqual([...b], [["y", "branch"], ["x", "branch"]], "the touched session moves to the end");
+  assert.deepStrictEqual([...a], [["x", "head"], ["y", "branch"]]);
+  assert.equal(changesScopePut(a, null, "head").get(""), "head", "null is the pane of files");
+  assert.equal(changesScopePut(a, "x", "bogus"), a, "a value that is not a scope changes nothing");
+  let m = new Map();
+  for (let i = 0; i < 130; i++) m = changesScopePut(m, "s" + i, "head");
+  assert.equal(m.size, 100);
+  assert.ok(m.has("s129") && !m.has("s29") && m.has("s30"));
+});
+
+test("changesScopeSave round-trips through changesScopeParse", () => {
+  const m = changesScopePut(changesScopePut(new Map(), "a", "branch"), "b", "head");
+  const text = changesScopeSave(m);
+  assert.deepStrictEqual([...changesScopeParse(text)], [...m]);
+  assert.deepStrictEqual(JSON.parse(text), { a: "branch", b: "head" });
+});
+
+test("changesBaseStale: ask again for a new root or HEAD, or for a failure once it has been a while; never for a settled answer", () => {
+  const T = 1e12;
+  const at = (reply, extra) => Object.assign({ root: "/r", head: "h1", reply, at: T }, extra || {});
+  assert.equal(changesBaseStale(null, "/r", "h1", T), true, "nothing asked yet");
+  for (const reply of [okBase(), { state: "nobase", branch: "x", ahead: false }, { state: "notrepo" }]) {
+    assert.equal(changesBaseStale(at(reply), "/r", "h1", T + 3600e3), false, reply.state + " is settled until the root or HEAD moves");
+    assert.equal(changesBaseStale(at(reply), "/r2", "h1", T), true, "another root");
+    assert.equal(changesBaseStale(at(reply), "/r", "h2", T), true, "another HEAD");
+    assert.equal(changesBaseStale(at(reply), "/r", "", T), true, "a repository that has just got no commits");
+  }
+  for (const reply of [null, { state: "unavailable", reason: "Git took too long" }]) {
+    assert.equal(changesBaseStale(at(reply), "/r", "h1", T + 29999), false, "a failure is not asked again at once");
+    assert.equal(changesBaseStale(at(reply), "/r", "h1", T + 30000), true, "but after 30 s it is");
+  }
+});
+
+test("changesTotals sums the counts numstat knows, over the files under the root; unknown without an ok reply", () => {
+  const ns = numstat([
+    { p: "a.go", x: "M", a: 4, d: 2 },
+    { p: "b/c.go", x: "A", a: 10, d: 0 },
+    { p: "img.png", x: "M", a: 0, d: 0, bin: true },
+    { p: "bad.go", x: "M", a: -1, d: 3 },
+    { p: "a.go", x: "M", a: 100, d: 100 }, // a repeat of a path: the first one counts
+    { p: "dir/", x: "M", a: 9, d: 9 },
+    { p: "weird.go", x: "Z", a: 9, d: 9 },
+  ]);
+  assert.deepStrictEqual(changesTotals(ns, "/r"), { add: 14, del: 2 });
+  assert.deepStrictEqual(changesTotals(numstat([]), "/r"), { add: 0, del: 0 }, "an empty diff is a known +0 −0");
+  for (const bad of [null, undefined, { state: "unavailable", rootRel: ".", entries: [] }, { state: "toomany", rootRel: ".", entries: [] }, { state: "ok", rootRel: ".", entries: "x" }]) {
+    assert.equal(changesTotals(bad, "/r"), null);
+  }
+  assert.equal(changesTotals(ns, ""), null);
+  // Under a subfolder root only that folder's files count, as in the rows.
+  const sub = numstat([{ p: "internal/a.go", x: "M", a: 2, d: 1 }, { p: "other/b.go", x: "M", a: 5, d: 5 }], { rootRel: "internal" });
+  assert.deepStrictEqual(changesTotals(sub, "/home/u/r/internal"), { add: 2, del: 1 });
+});
+
+// view: the section's model for one root, with the records dockchanges.js keeps (status as {root, status}, numstat and base as {root, ..., reply}).
+const view = (o) => changesView(Object.assign({ root: "/r", prefs: new Map(), sid: "s", files: [] }, o));
+const stat = (st, root) => ({ root: root || "/r", status: st });
+const numrec = (scope, reply, root) => ({ root: root || "/r", scope, reply });
+const basrec = (reply, root) => ({ root: root || "/r", head: "h", reply, at: 1 });
+
+test("changesView: nothing to show without a root, without a status for this root, or for a folder that is not a repository", () => {
+  const ok = status([{ p: "a.go", x: "M" }]);
+  assert.deepStrictEqual(view({ root: "", status: stat(ok) }), { kind: "none", count: 0 });
+  assert.deepStrictEqual(view({ status: null }), { kind: "none", count: 0 });
+  assert.deepStrictEqual(view({ status: stat(ok, "/other") }), { kind: "none", count: 0 }, "the last reply was for another root");
+  assert.deepStrictEqual(view({ status: stat({ state: "notrepo", entries: [] }) }), { kind: "none", count: 0 });
+  assert.deepStrictEqual(view({ status: stat({ state: "mystery", entries: [] }) }), { kind: "none", count: 0 });
+  assert.deepStrictEqual(changesView(), { kind: "none", count: 0 });
+});
+
+test("changesView: an unavailable status is one calm note with its reason as the hover text, never rows and never a wait", () => {
+  const v = view({ status: stat({ state: "unavailable", reason: "Git status needs the box runtime (docker)", rootRel: "", entries: [] }) });
+  assert.deepStrictEqual(v, { kind: "note", text: "Status unavailable", title: "Git status needs the box runtime (docker)", count: 0 });
+  assert.equal(view({ status: stat({ state: "unavailable", rootRel: "", entries: [] }) }).title, "", "no reason, no title");
+  assert.equal(view({ status: stat({ state: "unavailable", reason: 7, entries: [] }) }).title, "", "a reason that is not text is dropped");
+  assert.deepStrictEqual(view({ status: stat({ state: "toomany", rootRel: ".", entries: [] }) }), { kind: "note", text: "Too many changes to list (>5000)", title: "", count: 0 });
+});
+
+test("changesView: Uncommitted lists status entries at once, counts follow when numstat lands, and the count is rows plus more", () => {
+  const st = stat(status([{ p: "a.go", x: "M" }, { p: "n.txt", x: "U" }]));
+  const before = view({ status: st });
+  assert.equal(before.kind, "rows");
+  assert.equal(before.scope, "head");
+  assert.equal(before.showScope, false, "no base yet: no toggle");
+  assert.equal(before.branch, null);
+  assert.deepStrictEqual(before.rows.map((r) => [r.path, r.add, r.del]), [["/r/a.go", null, null], ["/r/n.txt", null, null]]);
+  assert.equal(before.count, 2);
+  const after = view({ status: st, numstat: numrec("head", numstat([{ p: "a.go", x: "M", a: 3, d: 1 }, { p: "n.txt", x: "U", a: 5, d: 0 }])) });
+  assert.deepStrictEqual(after.rows.map((r) => [r.add, r.del]), [[3, 1], [5, 0]]);
+  // A numstat record for the other scope or another root is not this section's.
+  const other = view({ status: st, numstat: numrec("branch", numstat([{ p: "zz.go", x: "M", a: 1, d: 1 }])) });
+  assert.deepStrictEqual(other.rows.map((r) => r.path), ["/r/a.go", "/r/n.txt"]);
+  const stale = view({ status: st, numstat: numrec("head", numstat([{ p: "zz.go", x: "M", a: 1, d: 1 }]), "/other") });
+  assert.deepStrictEqual(stale.rows.map((r) => r.path), ["/r/a.go", "/r/n.txt"]);
+  const big = [];
+  for (let i = 0; i < 250; i++) big.push({ p: "f" + String(i).padStart(3, "0") + ".go", x: "M" });
+  const many = view({ status: stat(status(big)) });
+  assert.equal(many.rows.length, 200);
+  assert.equal(many.more, 50);
+  assert.equal(many.count, 250);
+});
+
+test("changesView: the toggle shows only with an ok base; the default is Branch when ahead; a remembered pick wins", () => {
+  const st = stat(status([{ p: "a.go", x: "M" }]));
+  for (const reply of [{ state: "nobase", branch: "x", ahead: false }, { state: "notrepo" }, { state: "unavailable", reason: "r" }, null]) {
+    const v = view({ status: st, base: basrec(reply) });
+    assert.equal(v.showScope, false, String(reply && reply.state));
+    assert.equal(v.scope, "head");
+  }
+  assert.equal(view({ status: st, base: basrec(okBase({ ahead: false })) }).showScope, true);
+  assert.equal(view({ status: st, base: basrec(okBase({ ahead: false })) }).scope, "head");
+  // Ahead, nothing remembered: Branch, whose rows wait for their own numstat.
+  const wait = view({ status: st, base: basrec(okBase({ ahead: true })) });
+  assert.deepStrictEqual(wait, { kind: "note", text: "Reading branch changes…", title: "", count: 0, scope: "branch", showScope: true },
+    "Branch, whose rows wait for their own numstat; the toggle stays so the way back is on screen");
+  const pick = view({ status: st, base: basrec(okBase({ ahead: true })), prefs: new Map([["s", "head"]]) });
+  assert.equal(pick.scope, "head");
+  assert.equal(pick.kind, "rows");
+  // The base record is for one root: another root's base is no base.
+  assert.equal(view({ status: st, base: basrec(okBase({ ahead: true }), "/other") }).showScope, false);
+});
+
+test("changesView: Branch lists numstat's files against the merge base, with the branch row and its totals", () => {
+  const st = stat(status([{ p: "a.go", x: "M" }, { p: "new.txt", x: "U" }]));
+  const base = basrec(okBase({ ahead: true, branch: "feat/x", baseName: "origin/main" }));
+  const ns = numrec("branch", numstat([{ p: "a.go", x: "A", a: 10, d: 0 }, { p: "b.go", x: "M", a: 3, d: 1 }]));
+  const v = view({ status: st, base, numstat: ns });
+  assert.equal(v.kind, "rows");
+  assert.equal(v.scope, "branch");
+  assert.equal(v.showScope, true);
+  assert.deepStrictEqual(v.rows.map((r) => [r.path, r.code, r.add, r.del]), [["/r/a.go", "A", 10, 0], ["/r/b.go", "M", 3, 1], ["/r/new.txt", "U", null, null]]);
+  assert.deepStrictEqual(v.branch, { from: "feat/x", to: "origin/main", add: 13, del: 1 });
+  assert.equal(v.count, 3);
+});
+
+test("changesView: a detached HEAD is named so, and a branch row has no counts when it has no numstat total", () => {
+  const st = stat(status([]));
+  const base = basrec(okBase({ ahead: true, branch: "" }));
+  const v = view({ status: st, base, numstat: numrec("branch", numstat([])) });
+  assert.deepStrictEqual(v.branch, { from: "(detached)", to: "main", add: 0, del: 0 });
+  assert.deepStrictEqual(view({ status: st, base: basrec(okBase({ ahead: true, branch: 5, baseName: undefined })), numstat: numrec("branch", numstat([])) }).branch, { from: "(detached)", to: "", add: 0, del: 0 });
+});
+
+test("changesView: Branch with a numstat that failed is a calm note; too many is said as such", () => {
+  const st = stat(status([{ p: "a.go", x: "M" }]));
+  const base = basrec(okBase({ ahead: true }));
+  const failed = view({ status: st, base, numstat: numrec("branch", null) });
+  assert.deepStrictEqual(failed, { kind: "note", text: "Branch changes unavailable", title: "", count: 0, scope: "branch", showScope: true });
+  const un = view({ status: st, base, numstat: numrec("branch", { state: "unavailable", reason: "no base branch", rootRel: "", entries: [] }) });
+  assert.deepStrictEqual({ text: un.text, title: un.title }, { text: "Branch changes unavailable", title: "no base branch" });
+  const many = view({ status: st, base, numstat: numrec("branch", { state: "toomany", rootRel: ".", entries: [] }) });
+  assert.deepStrictEqual([many.text, many.scope, many.showScope], ["Too many changes to list (>5000)", "branch", true]);
+});
+
+test("changesView: mine rows come first and the view leaves its inputs alone", () => {
+  const args = freeze({
+    root: "/r",
+    sid: "s",
+    prefs: new Map(),
+    files: [{ path: "/r/z.go", add: 1, del: 0 }],
+    status: stat(status([{ p: "a.go", x: "M" }, { p: "z.go", x: "M" }])),
+    base: basrec(okBase()),
+    numstat: numrec("head", numstat([{ p: "a.go", x: "M", a: 1, d: 1 }, { p: "z.go", x: "M", a: 2, d: 2 }])),
+  });
+  const v = changesView(args);
+  assert.deepStrictEqual(v.rows.map((r) => [r.name, r.mine]), [["z.go", true], ["a.go", false]]);
 });
