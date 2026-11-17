@@ -79,13 +79,24 @@ let gitRoot = "";        // the root of the newest ask
 let gitState = null;     // {root, sid, status, marks, at, seq} of the status applied (`at`: gitStatusAt, `seq`: the ask it answers)
 let gitTimer = null;
 let gitTimerFresh = false; // any refreshSoon in the pending window asked for fresh
+const gitOut = new Set(); // the status requests out, as {ac, timer}: what the debounced asks wait for (a reset empties it)
+let gitHeld = null;       // {fresh}: the one trailing ask the debounced asks collapsed into while a request was out
 const GIT_DEBOUNCE_MS = 1000;
+// A status request that never answers is abandoned after this, so it cannot hold the debounced asks back for good. The
+// server gives a git run 10 s (internal/gitview/runner.go defaultTimeout) and a run may first wait for one of its slots.
+const GIT_FETCH_MS = 15000;
+// How old an answer to a PLAIN (non-fresh) ask may be: the server answers it from a finished run up to this old, and joins a
+// run already in flight (internal/gitview/runner.go defaultReuse, 2 s, used by Status; StatusFresh never takes that cache).
+const GIT_REUSE_MS = 2000;
 
 function gitStatusReset() {
   gitFloor = ++gitSeq;
   gitState = null;
   if (gitTimer) { clearTimeout(gitTimer); gitTimer = null; }
   gitTimerFresh = false;
+  gitHeld = null;
+  for (const o of gitOut) { clearTimeout(o.timer); if (o.ac) o.ac.abort(); }
+  gitOut.clear();
 }
 
 // gitStatusLoad asks for the tree root's status and paints the answer. A root
@@ -97,6 +108,33 @@ function gitStatusReset() {
 // refresh button), and not for the plain load that follows a tree paint.
 async function gitStatusLoad(root, sid, opts) {
   if (!root) return null;
+  const out = { ac: typeof AbortController === "function" ? new AbortController() : null, timer: null };
+  out.timer = setTimeout(() => { if (out.ac) out.ac.abort(); }, GIT_FETCH_MS);
+  gitOut.add(out);
+  try {
+    return await gitStatusRead(root, sid, opts, out.ac ? out.ac.signal : undefined);
+  } finally {
+    // Whatever became of it (landed, dropped, failed, timed out), a debounced ask that was held behind it goes out once no
+    // request is left. A reset emptied the set already, cleared the timer and forgot the held ask: nothing is left to do.
+    if (gitOut.delete(out)) {
+      clearTimeout(out.timer);
+      gitRelease();
+    }
+  }
+}
+
+// gitRelease sends the trailing ask the debounced ones collapsed into, when no status request is out any more. It asks for the
+// root and session of the moment (the tree may have moved while it waited), fresh if any collapsed ask was.
+function gitRelease() {
+  if (gitOut.size > 0 || !gitHeld) return;
+  const held = gitHeld;
+  gitHeld = null;
+  const root = typeof ftRoot === "function" ? ftRoot() : "";
+  if (root) gitStatusLoad(root, gitStatusTreeSid(), { fresh: held.fresh });
+}
+
+// gitStatusRead is one status request and what comes of its answer (see gitStatusLoad).
+async function gitStatusRead(root, sid, opts, signal) {
   const seq = ++gitSeq;
   gitRoot = root;
   const sentAt = Date.now();
@@ -107,9 +145,10 @@ async function gitStatusLoad(root, sid, opts) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(opts && opts.fresh ? { path: root, fresh: true } : { path: root }),
+      signal,
     });
     if (res.ok) status = await res.json();
-  } catch (_) { /* offline: keep the marks */ }
+  } catch (_) { /* offline, or abandoned after GIT_FETCH_MS: keep the marks */ }
   // Statuses land in the order they were sent. A reply is dropped when a reset came after its ask, when the newest ask is for
   // another root, or when it is OLDER than the status already applied for this root (a slow one arriving after a newer one).
   // Any other reply is applied, even with newer asks still out: while edits keep coming and git is slower than the gap between
@@ -117,10 +156,12 @@ async function gitStatusLoad(root, sid, opts) {
   if (seq <= gitFloor || root !== gitRoot) return null;
   if (gitState && gitState.root === root && seq < gitState.seq) return null;
   if (!status || typeof status !== "object") return gitState ? gitState.marks : null;
-  // When the answer is as new as: the ask, if it was fresh (the server read the disk after it) or is the first for this root.
-  // A plain reload may come from the server's reuse of a run a couple of seconds old, so it keeps the earlier time: it
-  // proves nothing about an edit made since the fresh read.
-  const at = (opts && opts.fresh) || !gitState || gitState.root !== root ? sentAt : gitState.at;
+  // When the answer is as new as. A fresh ask: its send time (the server read the disk after it). A plain one: the server may
+  // answer it from a run up to GIT_REUSE_MS old, so only back to that before its send time; and never earlier than the status
+  // held for this root, which the server's cache is at least as new as (so the time does not go backwards and a "…" row
+  // that was hidden as clean does not come back).
+  const prevAt = gitState && gitState.root === root ? gitState.at : 0;
+  const at = opts && opts.fresh ? sentAt : Math.max(sentAt - GIT_REUSE_MS, prevAt);
   gitState = { root, sid: sid || null, status, marks: gitMarks(status, root), at, seq };
   gitPaintTree();
   // The Changes section's counts and base follow each status that lands (dockchanges.js), fresh when this one was.
@@ -128,17 +169,17 @@ async function gitStatusLoad(root, sid, opts) {
   return gitState.marks;
 }
 
-// gitStatusCurrent: the last status that landed and the root it was for, {root, status, at}, or null when there is none or
-// it was for another root than `root` (a late or older one is nobody's). The Changes section reads it; it never reads
-// gitState itself.
+// gitStatusCurrent: the last status that landed and the root it was for, {root, status}, or null when there is none or it
+// was for another root than `root` (a late or older one is nobody's). The Changes section reads it; it never reads
+// gitState itself. When it was asked for is gitStatusAt's.
 function gitStatusCurrent(root) {
-  return gitState && root && gitState.root === root ? { root: gitState.root, status: gitState.status, at: gitState.at } : null;
+  return gitState && root && gitState.root === root ? { root: gitState.root, status: gitState.status } : null;
 }
 
-// gitStatusAt: the status held is as new as this (ms), 0 when there is none. It is when gitStatusLoad SENT the request the
-// status answers, not when the answer landed and not the newest ask still out: git has seen every change made before it, and
-// none made after (the Changes section's provisional rows compare an agent edit's `ts` with it). A plain reload keeps the
-// earlier time (see gitStatusLoad).
+// gitStatusAt: the status held is as new as this (ms), 0 when there is none. For a fresh ask it is when gitStatusLoad SENT the
+// request the status answers (not when the answer landed, and not the newest ask still out): git has seen every change made
+// before it, and none made after. For a plain ask it is GIT_REUSE_MS earlier (see gitStatusRead). The Changes section's
+// provisional rows compare an agent edit's `ts` with it.
 function gitStatusAt() {
   return gitState ? gitState.at : 0;
 }
@@ -154,6 +195,13 @@ function gitStatusTreeSid() {
 // Debounced, and never a timer poll. Every caller is a reaction to a change, so
 // it asks for a fresh result; the debounced request is fresh if any caller in
 // its window was (opts.fresh === false opts out).
+//
+// One status request at a time comes of these asks. While a request is out the debounced ask is HELD: the asks that
+// come meanwhile collapse into one trailing ask, sent when the request is done (it landed, was dropped, failed or timed
+// out), fresh if any collapsed ask was. So a git slower than the gap between asks costs about one run per round trip, not
+// one per ask. The server does not do this for us: a fresh call never takes its reuse cache and joins a run only until that
+// run has launched, so each fresh ask after a launch starts a docker run of its own (gitview StatusFresh), and the runs
+// share MaxParallel slots with every other session's git. Explicit loads (gitStatusLoad: a tree paint, ↻) are not held.
 function gitStatusRefreshSoon(opts) {
   if (gitTimer) clearTimeout(gitTimer);
   if (!opts || opts.fresh !== false) gitTimerFresh = true;
@@ -162,7 +210,9 @@ function gitStatusRefreshSoon(opts) {
     const fresh = gitTimerFresh;
     gitTimerFresh = false;
     const root = typeof ftRoot === "function" ? ftRoot() : "";
-    if (root) gitStatusLoad(root, gitStatusTreeSid(), { fresh });
+    if (!root) return;
+    if (gitOut.size > 0) { gitHeld = { fresh: fresh || (gitHeld ? gitHeld.fresh : false) }; return; }
+    gitStatusLoad(root, gitStatusTreeSid(), { fresh });
   }, GIT_DEBOUNCE_MS);
 }
 
@@ -300,5 +350,5 @@ function gitPaintNote() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset };
+  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset, GIT_REUSE_MS };
 }

@@ -380,7 +380,7 @@ function dockChangesRender() {
   dkcPaintBranch(dkcEl("dock-branch"), rows ? view.branch : null);
   // One calm line where there is no list: the section's own words, or "No changes" for a clean workspace.
   const note = dkcEl("dock-chg-note");
-  const say = view.kind === "note" ? view.text : rows && view.count === 0 ? "No changes" : "";
+  const say = view.kind === "note" ? view.text : rows && view.rows.length === 0 ? "No changes" : "";
   note.hidden = say === "";
   dkcSetText(note, say);
   note.title = view.kind === "note" ? view.title : "";

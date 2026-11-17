@@ -22,8 +22,12 @@
 //   - the page's list for the session (drawerChangedFiles) is set at once when it differs, and every reader repainted: the
 //     tree's session bars, the Changes section and the crumbs (drawerSetChanged);
 //   - an entry that is new or changed against what this watch last saw, and sits under the tree root, asks for a fresh git
-//     status (gitStatusRefreshSoon({fresh: true})). Its 1 s debounce and the server's single flight bound the container
-//     runs, and the numstat that follows the status is fresh too (dockchanges.js): no second timer-driven git poll;
+//     status (gitStatusRefreshSoon({fresh: true})). What bounds the container runs is the client: gitstatus.js debounces
+//     the ask by 1 s, keeps ONE status request out at a time and collapses the asks that come meanwhile into one trailing
+//     fresh ask. The server does not bound them: a fresh call never takes its reuse cache and, once an earlier run has
+//     launched, starts a run of its own (internal/gitview/runner.go StatusFresh), all sharing MaxParallel slots with every
+//     other session's git. The numstat that follows each status is fresh too and also one at a time (dockchanges.js): there
+//     is no second timer-driven git poll;
 //   - subscribers hear (files, newEvents) when the files changed or there are new events.
 //
 // dockWatchSubscribe(sid, fn) -> unsubscribe is for P2's Follow agent, so it need not poll Activity on its own (see the

@@ -401,13 +401,22 @@ test("changesView passes statusAt through: provisional rows are listed and count
   const v = view({ status: st, files, statusAt: T0 });
   assert.equal(v.kind, "rows");
   assert.deepStrictEqual(v.rows.map((r) => [r.path, r.provisional]), [["/r/a.go", true], ["/r/b.go", false]]);
-  assert.equal(v.count, 2, "the header counts what the list shows");
+  assert.equal(v.rows.length, 2, "the list shows the provisional row");
+  assert.equal(v.count, 1, "but the count is git's: a file git has not answered for is not a change yet");
   assert.deepStrictEqual(view({ status: st, files, statusAt: T0 + 5 }).rows.map((r) => r.path), ["/r/b.go"], "git has answered since the edit: the file is clean");
   assert.deepStrictEqual(view({ status: st, files }).rows.map((r) => r.path), ["/r/b.go"], "no statusAt, no provisional rows");
   const base = basrec(okBase({ ahead: true }));
   const bv = view({ status: st, files, statusAt: T0, base, numstat: numrec("branch", numstat([{ p: "c.go", x: "M", a: 1, d: 1 }])) });
   assert.deepStrictEqual(bv.rows.map((r) => [r.path, r.provisional]), [["/r/a.go", true], ["/r/c.go", false]]);
-  assert.equal(bv.count, 2);
+  assert.equal(bv.count, 1);
+  // Only provisional rows: listed, and zero changes until git says so.
+  const only = view({ status: stat(status([])), files, statusAt: T0 });
+  assert.deepStrictEqual([only.kind, only.rows.length, only.count], ["rows", 1, 0]);
+  // The cap's `more` is git's rows (provisional ones are this session's, so they come first and are never cut).
+  const big = [];
+  for (let i = 0; i < 250; i++) big.push({ p: "f" + String(i).padStart(3, "0") + ".go", x: "M" });
+  const many = view({ status: stat(status(big)), files, statusAt: T0 });
+  assert.deepStrictEqual([many.rows.length, many.more, many.count], [200, 51, 250]);
 });
 
 // --- Task 9b: the section's own rules (scope memory, base refetch, totals, the view) ---------------------------------------

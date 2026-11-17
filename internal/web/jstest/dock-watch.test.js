@@ -406,7 +406,7 @@ test("a new file: the page's list is set at once and git is asked once, fresh", 
   p.sync();
   await p.reply(body([file("/w/a.go", 100)]));
   assert.deepStrictEqual(p.st.sets.map((s) => [s[0], plain(s[1])]), [["s1", [file("/w/a.go", 100)]]]);
-  assert.deepStrictEqual(plain(p.st.refreshes), [{ fresh: true }], "gitStatusRefreshSoon({fresh:true}): the debounce and the server's single flight bound the runs");
+  assert.deepStrictEqual(plain(p.st.refreshes), [{ fresh: true }], "gitStatusRefreshSoon({fresh:true}), once: gitstatus.js keeps one status request out and collapses the asks that come meanwhile");
   // The same answer again is no news.
   p.tick();
   await p.reply(body([file("/w/a.go", 100)]));
@@ -720,7 +720,9 @@ test("an edit shows at once as a provisional row, git is asked fresh, and git's 
   assert.strictEqual(text(row.querySelector(".dk-dir")), "src");
   assert.strictEqual(text(row.querySelector(".dk-st")), "…");
   assert.deepStrictEqual(cls(row.querySelector(".dk-st")), ["dk-st", "dk-prov"]);
-  assert.strictEqual(text(p.nodes["dock-chg-count"]), "1 changed");
+  assert.strictEqual(text(p.nodes["dock-chg-count"]), "", "listed, but not counted as a change until git says so");
+  assert.strictEqual(p.nodes["drawer-strip-count"].hidden, true, "the folded strip's count is git's too");
+  assert.strictEqual(p.nodes["dock-chg-note"].hidden, true, "and the list is not headed by 'No changes'");
   assert.match(row.getAttribute("aria-label"), /waiting for git/i, "the muted mark is not the only way to tell");
   assert.strictEqual(p.nodes["dock-review"].hidden, true, "Review opens a diff: there is none to read until git knows the file");
 
@@ -755,7 +757,7 @@ test("an edit git says is clean is a provisional row until a status asked after 
   p.st.now += 2000;
   await p.watchReply({ claude: true, events: [], files: [{ path: "/w/ignored.log", add: 1, del: 0, ts: p.st.now - 100 }] });
   assert.strictEqual(p.rows().length, 1);
-  assert.strictEqual(text(p.nodes["dock-chg-count"]), "1 changed");
+  assert.strictEqual(text(p.nodes["dock-chg-count"]), "", "never '1 changed' for a file that turns out to be clean");
   p.debounce();
   p.st.now += 300;
   await p.answer("/api/git/status", okStatus([])); // gitignored: git lists nothing
@@ -840,7 +842,39 @@ test("an edit in the last poll gap gets its row and bar from the last read, and 
   assert.strictEqual(p.st.intervals.filter((x) => x.live).length, 0);
 });
 
-test("R16: while edits keep coming and git takes longer than the gap between them, the letters land in turn, not at the end", async () => {
+test("provisional rows are listed but only git's rows are counted, in the header and on the strip", async () => {
+  const p = fullPage();
+  await p.status(okStatus([{ p: "real.go", x: "M" }]), { fresh: true });
+  p.run("dockWatchSync()");
+  p.st.now += 2000;
+  await p.watchReply({ claude: true, events: [], files: [{ path: "/w/new.go", add: 1, del: 0, ts: p.st.now - 50 }] });
+  assert.deepStrictEqual(Array.from(p.rows(), (r) => text(r.querySelector(".dk-nm")) + ":" + text(r.querySelector(".dk-st"))), ["new.go:…", "real.go:M"]);
+  assert.strictEqual(text(p.nodes["dock-chg-count"]), "1 changed");
+  assert.strictEqual(text(p.nodes["drawer-strip-count"]), "1");
+  assert.strictEqual(p.nodes["dock-chg-note"].hidden, true);
+  p.debounce();
+  p.st.now += 300;
+  await p.answer("/api/git/status", okStatus([{ p: "real.go", x: "M" }, { p: "new.go", x: "U" }]));
+  assert.strictEqual(text(p.nodes["dock-chg-count"]), "2 changed", "git said so: now it counts");
+  assert.strictEqual(text(p.nodes["drawer-strip-count"]), "2");
+});
+
+test("a plain first status may be 2 s old on the server: an edit just before it is still waiting for git, not clean", async () => {
+  const p = fullPage();
+  p.run("dockWatchSync()");
+  await p.watchReply({ claude: true, events: [], files: [{ path: "/w/new.go", add: 1, del: 0, ts: p.st.now - 1000 }] }); // 1 s before the ask
+  await p.status(okStatus([])); // a tree paint's plain status: the server may answer from a run 2 s old, which cannot have it
+  assert.strictEqual(p.ctx.gitStatusAt(), p.st.now - 2000);
+  assert.deepStrictEqual(Array.from(p.rows(), (r) => text(r.querySelector(".dk-nm")) + ":" + text(r.querySelector(".dk-st"))), ["new.go:…"], "not hidden as clean");
+  // An edit older than the window is clean as far as this answer goes.
+  const q = fullPage();
+  q.run("dockWatchSync()");
+  await q.watchReply({ claude: true, events: [], files: [{ path: "/w/old.go", add: 1, del: 0, ts: q.st.now - 5000 }] });
+  await q.status(okStatus([]));
+  assert.strictEqual(q.rows().length, 0);
+});
+
+test("R16 and one ask at a time: with git slower than the gap between edits only one status is out, the asks that come meanwhile are one trailing fresh ask, and the letters land in turn", async () => {
   const p = fullPage();
   await p.status(okStatus([]), { fresh: true });
   p.run("dockWatchSync()");
@@ -852,24 +886,36 @@ test("R16: while edits keep coming and git takes longer than the gap between the
     entries.push({ p: name, x: "A" });
     p.run("dockWatchTick()");
     await p.watchReply({ claude: true, events: [], files: files.slice() });
-    p.debounce(); // the status for it goes out 1 s later (the fake clock does not run, only the order matters)
+    p.debounce(); // the debounce window passes (the fake clock does not run: only the order matters)
   };
   const letters = () => Array.from(p.rows(), (r) => text(r.querySelector(".dk-nm")) + ":" + text(r.querySelector(".dk-st")));
-  const pendingStatus = () => p.pending("/api/git/status").length;
-  await edit("one.go"); // status 1 goes out at t1
-  await edit("two.go"); // status 2 goes out while status 1 is still out (git needs more than the 2 s between the edits)
-  assert.strictEqual(pendingStatus(), 2, "two statuses are out at once");
-  // Status 1 answers (it knows one.go only): it lands although status 2 is out, and does not wait for the edits to stop.
+  const statusCalls = () => p.calls("/api/git/status");
+  const out = () => p.pending("/api/git/status").length;
+  assert.strictEqual(statusCalls().length, 1, "the status the test started from");
+  await edit("one.go"); // status 1 goes out
+  assert.strictEqual(out(), 1);
+  await edit("two.go"); // held: git needs more than the 2 s between the edits
+  await edit("three.go"); // held, collapsed into the same trailing ask
+  assert.strictEqual(out(), 1, "one status out, not three");
+  assert.strictEqual(statusCalls().length, 2);
+  // Status 1 answers (it knows one.go only): its letter lands at once, and the trailing ask goes out, once, fresh.
   p.st.now += 500;
-  const snapshot = entries.slice(0, 1);
-  await p.answer("/api/git/status", okStatus(snapshot));
-  assert.deepStrictEqual(letters(), ["two.go:…", "one.go:A"], "one.go has its letter while two.go waits");
-  await edit("three.go"); // status 3 goes out
+  await p.answer("/api/git/status", okStatus(entries.slice(0, 1)));
+  assert.deepStrictEqual(letters(), ["three.go:…", "two.go:…", "one.go:A"], "one.go has its letter while the others wait");
+  assert.strictEqual(statusCalls().length, 3, "one trailing ask");
+  assert.strictEqual(out(), 1);
+  assert.deepStrictEqual(statusCalls().at(-1).body, { path: "/w", fresh: true });
+  await edit("four.go"); // held behind the trailing one
+  assert.strictEqual(out(), 1);
+  assert.strictEqual(statusCalls().length, 3);
   p.st.now += 500;
-  await p.answer("/api/git/status", okStatus(entries.slice(0, 2))); // status 2 answers, with status 3 out
-  assert.deepStrictEqual(letters(), ["three.go:…", "two.go:A", "one.go:A"], "and status 2 lands in turn");
+  await p.answer("/api/git/status", okStatus(entries.slice(0, 3))); // the trailing ask answers: three more letters
+  assert.deepStrictEqual(letters(), ["four.go:…", "three.go:A", "two.go:A", "one.go:A"]);
+  assert.strictEqual(statusCalls().length, 4, "and the ask held for four.go goes out");
+  assert.strictEqual(out(), 1);
   p.st.now += 500;
-  await p.answer("/api/git/status", okStatus(entries.slice(0, 3)));
-  assert.deepStrictEqual(letters(), ["three.go:A", "two.go:A", "one.go:A"]);
+  await p.answer("/api/git/status", okStatus(entries.slice(0, 4)));
+  assert.deepStrictEqual(letters(), ["four.go:A", "three.go:A", "two.go:A", "one.go:A"]);
   assert.strictEqual(p.nodes["dock-chg-list"].querySelectorAll(".dk-prov").length, 0);
+  assert.strictEqual(statusCalls().length, 4, "nothing more is asked");
 });

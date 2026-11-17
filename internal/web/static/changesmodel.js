@@ -278,7 +278,7 @@ function changesTotals(numstat, root) {
 //   {kind: "none", count: 0}                      nothing to draw (no root, no reply for this root, not a repository)
 //   {kind: "note", text, title, count: 0}         one calm line: status unavailable, too many, Branch waiting or failed
 //                                                 (a Branch note also carries scope and showScope: the toggle stays)
-//   {kind: "rows", scope, showScope, rows, more, count, branch}
+//   {kind: "rows", scope, showScope, rows, more, count, branch}   (count: the rows git has answered for, plus more)
 // `statusAt` (gitStatusAt: when the status held was asked for) reaches changesRows, which makes the provisional rows.
 // A reply is used only for the root (and scope) it was asked for: a late one for the root before is
 // not this section's. Uncommitted lists status at once and fills the counts in when numstat lands;
@@ -316,7 +316,10 @@ function changesView(o) {
       del: t ? t.del : null,
     };
   }
-  return { kind: "rows", scope, showScope: !!base && base.state === "ok", rows, more, count: rows.length + more, branch };
+  // The count is git's: a provisional row is listed (Waiting for git) but is not a change until git says so, so the header and the
+  // strip never say "1 changed" for a file that turns out to be clean.
+  const count = rows.reduce((n, r) => n + (r.provisional ? 0 : 1), 0) + more;
+  return { kind: "rows", scope, showScope: !!base && base.state === "ok", rows, more, count, branch };
 }
 
 if (typeof module !== "undefined" && module.exports) {
