@@ -1,6 +1,12 @@
 package session
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/culiops/culibox/internal/config"
+)
 
 func TestCloneGuidance(t *testing.T) {
 	const head = "CuliBox: you are working in a private copy of /home/u/repo. "
@@ -26,4 +32,110 @@ func TestCloneGuidance(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCredGuidance(t *testing.T) {
+	const head = "CuliBox credentials for this session (fixed when it started; every use goes through CuliBox's credential broker, so never ask the user for keys):"
+	const list = " agentbox-env --list shows accounts, regions, repos and live sign-in state."
+	const tail = " If a credential error says a human must sign in, stop and tell the user."
+	conn := func(name string, prod bool) config.AWSConnection {
+		return config.AWSConnection{Name: name, Description: "desc of " + name, AWSBinding: config.AWSBinding{
+			SourceProfile: "sso-src", RoleARN: "arn:aws:iam::111122223333:role/agent-read", Region: "eu-west-1",
+			Label: "Label " + name, Prod: prod}}
+	}
+
+	t.Run("no binding, no text", func(t *testing.T) {
+		if got := credGuidance(config.Bindings{}); got != "" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("one connection", func(t *testing.T) {
+		got := credGuidance(config.Bindings{AWSConns: []config.AWSConnection{conn("sandbox", false)}})
+		want := head + " AWS profiles: sandbox (use aws --profile <name>, never aws configure)." + list + tail
+		if got != want {
+			t.Fatalf("got  %q\nwant %q", got, want)
+		}
+	})
+	t.Run("prod connection is marked", func(t *testing.T) {
+		got := credGuidance(config.Bindings{AWSConns: []config.AWSConnection{conn("a", false), conn("b", true)}})
+		if !strings.Contains(got, "AWS profiles: a, b (PROD) (") {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("legacy binding is profile agentbox and has no --list", func(t *testing.T) {
+		got := credGuidance(config.Bindings{AWS: &config.AWSBinding{SourceProfile: "p",
+			RoleARN: "arn:aws:iam::111122223333:role/r", Region: "eu-west-1", Prod: true, Label: "x"}})
+		if !strings.Contains(got, "AWS profiles: agentbox (PROD) (") || strings.Contains(got, "agentbox-env --list") {
+			t.Fatalf("got %q", got)
+		}
+		if !strings.HasPrefix(got, head) || !strings.HasSuffix(got, tail) {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("github owners, app and PAT, with write keys", func(t *testing.T) {
+		got := credGuidance(config.Bindings{GitHub: &config.GitHubBinding{
+			Owners: []config.GitHubOwner{
+				{Owner: "culiops", App: "main", Repos: []string{"culibox"}},
+				{Owner: "acme", Token: "acme-pat", Repos: []string{"infra"}},
+			},
+			Permissions: map[string]string{"issues": "write", "contents": "read", "metadata": "read"},
+		}})
+		if !strings.Contains(got, " GitHub owners: culiops, acme (git and gh; write: issues).") {
+			t.Fatalf("got %q", got)
+		}
+		for _, bad := range []string{"acme-pat", "main", "culibox", "infra"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("note shows %q: %q", bad, got)
+			}
+		}
+		if !strings.Contains(got, list) {
+			t.Fatalf("a GitHub binding has a --list: %q", got)
+		}
+	})
+	t.Run("github default permissions are read only", func(t *testing.T) {
+		got := credGuidance(config.Bindings{GitHub: &config.GitHubBinding{
+			Owners: []config.GitHubOwner{{Owner: "culiops", App: "main", Repos: []string{"culibox"}}}}})
+		if !strings.Contains(got, " GitHub owners: culiops (git and gh; read only).") {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("tokens show names and prod, never label, description or env", func(t *testing.T) {
+		got := credGuidance(config.Bindings{Tokens: []config.StaticToken{{Name: "sentry-prod", Prod: true,
+			Label: "Sentry", Description: "secret-ish desc", Env: []string{"SENTRY_TOKEN"}}}})
+		if !strings.Contains(got, " Tokens: sentry-prod (PROD) (run agentbox-env <name> -- <command>).") {
+			t.Fatalf("got %q", got)
+		}
+		for _, bad := range []string{"Sentry", "secret-ish", "SENTRY_TOKEN"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("note shows %q: %q", bad, got)
+			}
+		}
+	})
+	t.Run("PATs are never listed as tokens", func(t *testing.T) {
+		got := credGuidance(config.Bindings{
+			GitHub: &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "acme", Token: "acme-pat", Repos: []string{"infra"}}}},
+			PATs:   []config.StaticToken{{Name: "acme-pat", Env: []string{"GH_TOKEN"}}},
+		})
+		if strings.Contains(got, "Tokens:") || strings.Contains(got, "acme-pat") {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("at most 8 names per kind", func(t *testing.T) {
+		var cs []config.AWSConnection
+		for i := range 10 {
+			cs = append(cs, conn(fmt.Sprintf("c%d", i), false))
+		}
+		got := credGuidance(config.Bindings{AWSConns: cs})
+		if !strings.Contains(got, "AWS profiles: c0, c1, c2, c3, c4, c5, c6, c7, and 2 more (use") || strings.Contains(got, "c8") {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("never an account, role, label or description", func(t *testing.T) {
+		got := credGuidance(config.Bindings{AWSConns: []config.AWSConnection{conn("sandbox", true)}})
+		for _, bad := range []string{"111122223333", "arn:", "agent-read", "Label", "desc of", "sso-src", "eu-west-1"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("note shows %q: %q", bad, got)
+			}
+		}
+	})
 }
