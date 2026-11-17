@@ -135,7 +135,9 @@ test("the stored tabs are read once the session list is known, never on the path
 
 test("the strip and the crumbs are repainted from git status, the Activity answer and the viewers", () => {
   assert.match(fn("gitstatus.js", "gitPaintTree"), /dockRender\(\)/);
-  assert.match(fn("filesdrawer.js", "drawerLoadChanged"), /dockRender\(\)/);
+  // The Activity answer (the tree's own load, and the dock watch's poll while the agent works) is written by drawerSetChanged.
+  assert.match(fn("filesdrawer.js", "drawerSetChanged"), /dockRender\(\)/);
+  assert.match(fn("filesdrawer.js", "drawerLoadChanged"), /drawerSetChanged\(sid, files\)/);
   assert.match(fn("filesdrawer.js", "drawerPaint"), /dockRender\(\)/);
 });
 

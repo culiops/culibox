@@ -57,10 +57,10 @@ test("the top row has Go to file with its chord, New file and a ⋯ menu; the se
 test("the dock's explorer hides the old toolbar, and every new rule is inside the desktop block", () => {
   const css = stripComments(read("desktop.css"));
   assert.match(css, /#drawer #files-phd\s*\{[^}]*display:\s*none/);
-  for (const sel of [".dk-scope", ".dk-branch", ".dk-mine", ".dk-row", "#dock-changes"]) {
+  for (const sel of [".dk-scope", ".dk-branch", ".dk-mine", ".dk-row", "#dock-changes", ".dk-prov"]) {
     assert.ok(css.includes(sel), sel + " is styled in desktop.css (the one desktop block)");
   }
-  assert.doesNotMatch(stripComments(read("app.css")), /\.dk-(row|scope|branch|mine)|#dock-changes/, "app.css (the phone) knows none of it");
+  assert.doesNotMatch(stripComments(read("app.css")), /\.dk-(row|scope|branch|mine|prov)|#dock-changes/, "app.css (the phone) knows none of it");
 });
 
 test("dockchanges.js loads after filesdrawer.js and before app.js; the tree and the status call into it behind typeof guards", () => {

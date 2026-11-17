@@ -1363,6 +1363,8 @@
   .dk-st-m { color: var(--accent); }
   .dk-st-a, .dk-st-u { color: var(--ok); }
   .dk-st-c, .dk-st-d { color: var(--danger); }
+  /* A Changes row for a file the agent just edited, before git has answered: a muted "…" where the letter will be. */
+  .dk-prov { color: var(--muted); }
   /* A dirty tab shows a dot where its close button is; under the pointer (or with the keyboard on its button) the close
      button comes back, because a tab with an edit must still be closable by hand (it asks first). */
   .dk-x {

@@ -64,9 +64,10 @@ function changesNumstatFiles(numstat, base, placeOf) {
 //   numstat  the /api/git/numstat reply for the same scope, or null.
 //   files    the Activity files of the session, most recently edited first.
 //   root     the tree root, absolute.
-//   statusAt when the status was asked for; Task 9c's provisional rows use it.
+//   statusAt when the status was asked for, in ms (gitStatusAt): an agent edit newer than it is one git has not been
+//            asked about yet (see provisional rows below). Absent or not a positive number: there are none.
 //
-// A row is {path, name, dir, code, add, del, mine, folder}. Numstat gives the
+// A row is {path, name, dir, code, add, del, mine, folder, provisional}. Numstat gives the
 // letter and the counts of each changed file, a deleted one included (the tree
 // has no row for it). Status adds what numstat lacks: an untracked file or
 // folder it could not count (no counts), and in "head" scope any other entry,
@@ -81,9 +82,16 @@ function changesNumstatFiles(numstat, base, placeOf) {
 // then the rest by path (a plain code-unit compare: the same order whatever the
 // browser's locale). Only CHANGES_MAX rows are returned, cut after the ordering
 // so a row of this session is never the one dropped; `more` counts the rest.
+//
+// Provisional rows (both scopes): while the agent works its edits are known from Activity a poll after they are
+// made, and git is asked about them a moment later. An Activity file under the root whose `ts` is newer than
+// `statusAt`, and that no row above already covers (git's own row wins), is the agent's edit that git has not been
+// asked about since: {code: "", provisional: true, mine: true}, no counts, drawn as a muted "…" until a status
+// asked for after the edit lands. When one did and git does not list the file, git says it is clean (committed,
+// reverted, ignored), so nothing is shown. A file with no `ts` cannot be told from an old edit: no row.
 function changesRows(opts) {
   const none = { rows: [], more: 0 };
-  const { scope, status, numstat, files, root } = opts || {}; // statusAt: not read yet
+  const { scope, status, numstat, files, root, statusAt } = opts || {};
   if (!status || status.state !== "ok" || typeof root !== "string" || root === "") return none;
   const placeOf = typeof gitPlace === "function" ? gitPlace : require("./gitstatus.js").gitPlace;
   const segsOf = typeof changedSegs === "function" ? changedSegs : require("./drawerfiles.js").changedSegs;
@@ -100,6 +108,7 @@ function changesRows(opts) {
       del: d,
       mine: false,
       folder: at.isDir,
+      provisional: false,
     });
   };
 
@@ -118,6 +127,30 @@ function changesRows(opts) {
         continue;
       }
       add(at, code, null, null);
+    }
+  }
+
+  // The agent's edits git has not been asked about yet: a row of their own, in the spot git's row will take.
+  const rootSegs = Number.isFinite(statusAt) && statusAt > 0 ? segsOf(root) : null;
+  if (rootSegs && Array.isArray(files)) {
+    for (const f of files) {
+      if (!f || !Number.isFinite(f.ts) || f.ts <= statusAt) continue;
+      const segs = segsOf(f.path);
+      if (!segs || segs.length <= rootSegs.length || !rootSegs.every((s, i) => segs[i] === s)) continue;
+      const rel = segs.slice(rootSegs.length);
+      const abs = base + "/" + rel.join("/");
+      if (byPath.has(abs)) continue; // git has a row for it (or an earlier entry of this list made one)
+      byPath.set(abs, {
+        path: abs,
+        name: rel[rel.length - 1],
+        dir: rel.slice(0, -1).join("/"),
+        code: "",
+        add: null,
+        del: null,
+        mine: true,
+        folder: false,
+        provisional: true,
+      });
     }
   }
 
@@ -246,6 +279,7 @@ function changesTotals(numstat, root) {
 //   {kind: "note", text, title, count: 0}         one calm line: status unavailable, too many, Branch waiting or failed
 //                                                 (a Branch note also carries scope and showScope: the toggle stays)
 //   {kind: "rows", scope, showScope, rows, more, count, branch}
+// `statusAt` (gitStatusAt: when the status held was asked for) reaches changesRows, which makes the provisional rows.
 // A reply is used only for the root (and scope) it was asked for: a late one for the root before is
 // not this section's. Uncommitted lists status at once and fills the counts in when numstat lands;
 // Branch lists numstat's files (status cannot say what the branch changed), so until that answer is
@@ -271,7 +305,7 @@ function changesView(o) {
     if (reply && reply.state === "toomany") return waits(CHANGES_TOOMANY, "");
     if (!reply || reply.state !== "ok") return waits("Branch changes unavailable", reply ? reply.reason : "");
   }
-  const { rows, more } = changesRows({ scope, status: st, numstat: reply, files: o.files, root });
+  const { rows, more } = changesRows({ scope, status: st, numstat: reply, files: o.files, root, statusAt: o.statusAt });
   let branch = null;
   if (scope === "branch") {
     const t = changesTotals(reply, root);

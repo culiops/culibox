@@ -280,3 +280,82 @@ test("gitStatusLoad tells the Changes section when a status lands, fresh when it
     assert.equal(heard.length, 2, "a failed request keeps what was shown and says nothing");
   } finally { delete global.dockChangesOnStatus; }
 });
+
+// --- Task 9c: when the status held was asked for (gitStatusAt) ------------------------------------------------------------
+
+test("gitStatusAt: 0 before any status, then the time the request that landed was SENT, not when it landed", async (t) => {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["Date"], now: 1000 });
+  assert.equal(g.gitStatusAt(), 0, "nothing yet");
+  const calls = deferredFetch();
+  const a = g.gitStatusLoad("/r", "s1", { fresh: true });
+  t.mock.timers.tick(700); // the container takes a while to answer
+  calls[0].resolve(ok([]));
+  await a;
+  assert.equal(g.gitStatusAt(), 1000, "the ask, not the answer");
+  assert.equal(g.gitStatusCurrent("/r").at, 1000, "and the held status carries it");
+  g.gitStatusReset();
+  assert.equal(g.gitStatusAt(), 0, "a reset forgets it with the status");
+});
+
+test("gitStatusAt follows the status shown: an ask still out, a superseded one and a failed one do not move it", async (t) => {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["Date"], now: 5000 });
+  let calls = deferredFetch();
+  const a = g.gitStatusLoad("/r", "s1", { fresh: true });
+  calls[0].resolve(ok([]));
+  await a;
+  assert.equal(g.gitStatusAt(), 5000);
+  t.mock.timers.tick(3000);
+  // A newer ask is out, and the one on screen is still the older: an edit between them is not git's to have seen.
+  calls = deferredFetch();
+  const b = g.gitStatusLoad("/r", "s1", { fresh: true });
+  assert.equal(g.gitStatusAt(), 5000, "the answer on screen is for the first ask");
+  calls[0].resolve(ok([]));
+  await b;
+  assert.equal(g.gitStatusAt(), 8000);
+  // A failed request keeps the status, and so its time.
+  t.mock.timers.tick(1000);
+  global.fetch = () => Promise.reject(new Error("offline"));
+  await g.gitStatusLoad("/r", "s1", { fresh: true });
+  assert.equal(g.gitStatusAt(), 8000);
+});
+
+test("gitStatusAt: a plain reload may be the server's reused answer, so it proves nothing newer than a fresh one did", async (t) => {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["Date"], now: 10000 });
+  let calls = deferredFetch();
+  const a = g.gitStatusLoad("/r", "s1", { fresh: true });
+  calls[0].resolve(ok([]));
+  await a;
+  t.mock.timers.tick(1500);
+  calls = deferredFetch();
+  const b = g.gitStatusLoad("/r", "s1"); // a tree paint: the server may answer from what it read 2 s ago
+  calls[0].resolve(ok([{ p: "a.go", x: "M" }]));
+  await b;
+  assert.equal(g.gitStatusCodeFor("/r/a.go"), "M", "its marks are shown all the same");
+  assert.equal(g.gitStatusAt(), 10000, "but an edit after the fresh ask still has no answer from git");
+  t.mock.timers.tick(1000);
+  calls = deferredFetch();
+  const c = g.gitStatusLoad("/r", "s1", { fresh: true });
+  calls[0].resolve(ok([]));
+  await c;
+  assert.equal(g.gitStatusAt(), 12500);
+});
+
+test("gitStatusAt: the first load of a root, plain or not, is as new as its ask; another root starts over", async (t) => {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["Date"], now: 20000 });
+  let calls = deferredFetch();
+  const a = g.gitStatusLoad("/r", "s1");
+  t.mock.timers.tick(10);
+  calls[0].resolve(ok([]));
+  await a;
+  assert.equal(g.gitStatusAt(), 20000, "nothing older to keep: a plain first load says when it was asked");
+  t.mock.timers.tick(5000);
+  calls = deferredFetch();
+  const b = g.gitStatusLoad("/other", "s1");
+  calls[0].resolve(ok([]));
+  await b;
+  assert.equal(g.gitStatusAt(), 25010, "the old root's time is nobody's for the new one");
+});

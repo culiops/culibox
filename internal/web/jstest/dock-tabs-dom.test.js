@@ -652,6 +652,19 @@ test("dockRender: the Edited-by label comes from this session's Activity files; 
   assert.equal(p.st.crumbs.at(-1).edited, "", "another session's Activity does not name this file");
 });
 
+test("drawerSetChanged (the tree's load and the dock watch both write the list through it) remembers it and repaints the crumbs, the bars and the Changes section", () => {
+  const painted = [];
+  const p = page({ ftPaintChanged: (set) => { painted.push(set && [...set]); }, dockChangesRender: () => { painted.push("changes"); } });
+  const [a] = files(1);
+  p.show(a, { preview: false });
+  painted.length = 0;
+  p.ctx.drawerSetChanged("a", [{ path: a, add: 2, del: 1, ts: Date.now() - 5000 }]);
+  assert.equal(p.get("drawerChangedFiles").get("a")[0].path, a, "the page's list for the session is set at once");
+  assert.equal(p.st.crumbs.at(-1).edited, "Edited by alpha · just now", "the crumbs' Edited by reads it");
+  assert.ok(painted.some((x) => Array.isArray(x) && x.includes(a)), "the tree's session bar is repainted for the file");
+  assert.equal(painted.at(-1), "changes", "and the Changes section last");
+});
+
 test("dockRender: a box file's crumbs run from / and are text; with no tab, or the dock closed, nothing is drawn", () => {
   const p = page();
   p.show("/work/out/shot.png", { box: "s1", preview: false });

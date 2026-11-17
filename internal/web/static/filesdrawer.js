@@ -642,6 +642,16 @@ function drawerPaintChanged() {
   ftPaintChanged(drawerOwnsFileClicks() && typeof ftRoot === "function" ? drawerChangedFor(ftRoot()) : null);
 }
 
+// drawerSetChanged: `files` is the session's changed-file list from an Activity answer (the tree's own load above, or the dock
+// watch's poll while the agent works). Remember it and repaint everything that reads it: the tree's session bars, the strip
+// and the crumbs ("Edited by"), and the Changes section's session bars and provisional rows.
+function drawerSetChanged(sid, files) {
+  drawerChangedFiles.set(sid, files);
+  drawerPaintChanged();
+  dockRender();
+  if (typeof dockChangesRender === "function") dockChangesRender();
+}
+
 async function drawerLoadChanged(sid) {
   if (!sid) return;
   const seq = ++drawerChangedSeq;
@@ -654,10 +664,7 @@ async function drawerLoadChanged(sid) {
   // Newer ask, or the drawer moved on (another session, closed): not for now.
   if (seq !== drawerChangedSeq || !drawerOwnsFileClicks() || drawerState.sessionId !== sid) return;
   if (!files) return; // could not read it: keep what was shown
-  drawerChangedFiles.set(sid, files);
-  drawerPaintChanged();
-  dockRender(); // "Edited by" in the crumbs is read from the same answer
-  if (typeof dockChangesRender === "function") dockChangesRender(); // and so is the session bar on the Changes rows
+  drawerSetChanged(sid, files);
 }
 
 // --- Go to file… (Ctrl+P) ----------------------------------------------------
@@ -909,6 +916,8 @@ function drawerPaint(fromViewer) {
   if (typeof dockChangesRefresh === "function") dockChangesRefresh();
   // Full mode's agent strip reads the same session and list, and polls only for the session on screen.
   if (typeof dockAgentSync === "function") dockAgentSync();
+  // So does the live change watch: it polls only while the dock is open on a session that reads "working" (a close lands here too).
+  if (typeof dockWatchSync === "function") dockWatchSync();
 }
 
 initDrawerGoto();

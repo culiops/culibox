@@ -34,10 +34,10 @@ test("changesRows branch scope uses numstat letters", () => {
   });
   assert.deepStrictEqual(r, {
     rows: [
-      { path: "/r/a.go", name: "a.go", dir: "", code: "A", add: 10, del: 0, mine: false, folder: false },
-      { path: "/r/b/c.go", name: "c.go", dir: "b", code: "M", add: 3, del: 1, mine: false, folder: false },
+      { path: "/r/a.go", name: "a.go", dir: "", code: "A", add: 10, del: 0, mine: false, folder: false, provisional: false },
+      { path: "/r/b/c.go", name: "c.go", dir: "b", code: "M", add: 3, del: 1, mine: false, folder: false, provisional: false },
       // The untracked file numstat could not count is still listed, with no counts.
-      { path: "/r/new.txt", name: "new.txt", dir: "", code: "U", add: null, del: null, mine: false, folder: false },
+      { path: "/r/new.txt", name: "new.txt", dir: "", code: "U", add: null, del: null, mine: false, folder: false, provisional: false },
     ],
     more: 0,
   });
@@ -149,9 +149,9 @@ test("deleted and untracked folder rows", () => {
     numstat: numstat([{ p: "old.go", x: "D", a: 0, d: 12 }]),
   });
   assert.deepStrictEqual(r.rows, [
-    { path: "/r/build", name: "build", dir: "", code: "U", add: null, del: null, mine: false, folder: true },
-    { path: "/r/old.go", name: "old.go", dir: "", code: "D", add: 0, del: 12, mine: false, folder: false },
-    { path: "/r/tmp/out", name: "out", dir: "tmp", code: "U", add: null, del: null, mine: false, folder: true },
+    { path: "/r/build", name: "build", dir: "", code: "U", add: null, del: null, mine: false, folder: true, provisional: false },
+    { path: "/r/old.go", name: "old.go", dir: "", code: "D", add: 0, del: 12, mine: false, folder: false, provisional: false },
+    { path: "/r/tmp/out", name: "out", dir: "tmp", code: "U", add: null, del: null, mine: false, folder: true, provisional: false },
   ]);
 });
 
@@ -276,6 +276,138 @@ test("changesRows leaves its arguments as they were and accepts statusAt", () =>
   });
   const r = changesRows(args);
   assert.deepStrictEqual(r.rows.map((x) => x.path), ["/r/a.go", "/r/n"]);
+});
+
+// --- Task 9c: provisional rows (an agent file git has not been asked about since the edit) ---------------------------------
+
+const T0 = 1700000000000; // when the status the section holds was asked for
+const agent = (p, ts) => ({ path: p, add: 1, del: 0, ts });
+const prov = (r) => r.rows.map((x) => [x.path, x.code, x.provisional, x.mine, x.add, x.del]);
+
+test("changesRows adds provisional rows for agent files git has not reported yet", () => {
+  for (const scope of ["head", "branch"]) {
+    const r = rows({
+      scope,
+      statusAt: T0,
+      status: status([]),
+      numstat: numstat([]),
+      // Most recently applied edit first, as Activity gives it: not sorted by ts.
+      files: [agent("/r/new/a.go", T0 + 1), agent("/r/b.go", T0 + 500)],
+    });
+    assert.deepStrictEqual(r, {
+      rows: [
+        { path: "/r/new/a.go", name: "a.go", dir: "new", code: "", add: null, del: null, mine: true, folder: false, provisional: true },
+        { path: "/r/b.go", name: "b.go", dir: "", code: "", add: null, del: null, mine: true, folder: false, provisional: true },
+      ],
+      more: 0,
+    }, scope);
+  }
+});
+
+test("changesRows hides agent files git reports clean", () => {
+  // The status was asked for at or after the edit and does not list the file: git says it is clean (committed, reverted, ignored).
+  for (const scope of ["head", "branch"]) {
+    for (const ts of [T0, T0 - 1, T0 - 600000, 1]) {
+      const r = rows({ scope, statusAt: T0, status: status([]), numstat: numstat([]), files: [agent("/r/a.go", ts)] });
+      assert.deepStrictEqual(r, { rows: [], more: 0 }, scope + " ts " + ts);
+    }
+  }
+});
+
+test("a provisional row is replaced by the git row", () => {
+  const files = [agent("/r/a.go", T0 + 1)];
+  const before = rows({ statusAt: T0, status: status([]), files });
+  assert.deepStrictEqual(prov(before), [["/r/a.go", "", true, true, null, null]]);
+  // Git answers (a later status, with numstat): the same path, now with its letter and counts, and no longer provisional.
+  const after = rows({ statusAt: T0 + 900, status: status([{ p: "a.go", x: "M" }]), numstat: numstat([{ p: "a.go", x: "M", a: 3, d: 1 }]), files });
+  assert.deepStrictEqual(prov(after), [["/r/a.go", "M", false, true, 3, 1]]);
+  // A status entry wins even while the edit is newer than the ask: one row, the git one, never a second provisional one.
+  const both = rows({ statusAt: T0, status: status([{ p: "a.go", x: "M" }]), files });
+  assert.deepStrictEqual(prov(both), [["/r/a.go", "M", false, true, null, null]]);
+  const untracked = rows({ statusAt: T0, status: status([{ p: "a.go", x: "U" }]), files });
+  assert.deepStrictEqual(prov(untracked), [["/r/a.go", "U", false, true, null, null]]);
+  // Every row git gives says provisional:false.
+  assert.ok(rows({ status: status([{ p: "x.go", x: "M" }]), numstat: numstat([{ p: "y.go", x: "M", a: 1, d: 1 }]) }).rows.every((x) => x.provisional === false));
+});
+
+test("changesRows lists a numstat row once, whatever the edit's time (Branch)", () => {
+  const r = rows({ scope: "branch", statusAt: T0, status: status([]), numstat: numstat([{ p: "a.go", x: "M", a: 4, d: 2 }]), files: [agent("/r/a.go", T0 + 5)] });
+  assert.deepStrictEqual(prov(r), [["/r/a.go", "M", false, true, 4, 2]]);
+});
+
+test("changesRows Branch: a tracked status entry is against HEAD, so it does not stand in for the branch row numstat has not listed yet", () => {
+  const r = rows({ scope: "branch", statusAt: T0, status: status([{ p: "a.go", x: "M" }]), numstat: numstat([]), files: [agent("/r/a.go", T0 + 5)] });
+  assert.deepStrictEqual(prov(r), [["/r/a.go", "", true, true, null, null]]);
+  // Once the ask is newer than the edit and numstat still does not list it, it is not a branch change.
+  assert.deepStrictEqual(rows({ scope: "branch", statusAt: T0 + 9, status: status([{ p: "a.go", x: "M" }]), numstat: numstat([]), files: [agent("/r/a.go", T0 + 5)] }).rows, []);
+});
+
+test("changesRows provisional rows are only for files under the root, normalized the way the tree normalizes", () => {
+  const r = rows({
+    statusAt: T0,
+    status: status([]),
+    files: [
+      agent("/elsewhere/q.go", T0 + 1), agent("/r2/x.go", T0 + 1), agent("/r", T0 + 1), agent("/", T0 + 1),
+      agent("relative/b.go", T0 + 1), { path: 5, ts: T0 + 1 }, null, {}, agent("/r/../etc/x", T0 + 1),
+      agent("/r//./c.go", T0 + 2),
+    ],
+  });
+  assert.deepStrictEqual(prov(r), [["/r/c.go", "", true, true, null, null]]);
+  // A subfolder root: its files only, with the folder part relative to it.
+  const sub = changesRows({ scope: "head", root: "/home/u/r/internal/", statusAt: T0, status: status([], { rootRel: "internal" }), files: [agent("/home/u/r/internal/a/b.go", T0 + 1), agent("/home/u/r/other.go", T0 + 1)] });
+  assert.deepStrictEqual(sub.rows.map((x) => [x.path, x.dir, x.name]), [["/home/u/r/internal/a/b.go", "a", "b.go"]]);
+});
+
+test("changesRows makes no provisional row without a usable statusAt or a usable edit time", () => {
+  const f = [agent("/r/a.go", T0 + 1)];
+  for (const statusAt of [undefined, null, 0, -1, NaN, "5", Infinity, {}]) {
+    assert.deepStrictEqual(rows({ statusAt, status: status([]), files: f }), { rows: [], more: 0 }, String(statusAt));
+  }
+  for (const ts of [undefined, null, "x", NaN, Infinity, 0, -5, {}]) {
+    assert.deepStrictEqual(rows({ statusAt: T0, status: status([]), files: [{ path: "/r/a.go", add: 1, del: 0, ts }] }), { rows: [], more: 0 }, String(ts));
+  }
+  // The files list is the same list the tree's bars read: a file with no time is a bar, not a "…".
+  assert.deepStrictEqual(rows({ statusAt: T0, status: status([]), files: [{ path: "/r/a.go" }] }), { rows: [], more: 0 });
+});
+
+test("changesRows provisional rows keep files order among this session's rows, and the cap never cuts one", () => {
+  const entries = [];
+  for (let i = 0; i < 300; i++) entries.push({ p: "f" + String(i).padStart(3, "0") + ".go", x: "M", a: 1, d: 1 });
+  const r = rows({
+    statusAt: T0,
+    status: status([]),
+    numstat: numstat(entries),
+    files: [agent("/r/f010.go", T0 - 5), agent("/r/fresh.go", T0 + 7), agent("/r/older.go", T0 + 3)],
+  });
+  // f010 is a real row (git listed it), fresh and older are provisional; all three are this session's, in files order.
+  assert.deepStrictEqual(r.rows.slice(0, 3).map((x) => [x.path, x.provisional, x.mine]), [
+    ["/r/f010.go", false, true], ["/r/fresh.go", true, true], ["/r/older.go", true, true],
+  ]);
+  assert.equal(r.rows.length, 200);
+  assert.equal(r.more, 300 + 2 - 200);
+  // A repeat of a path in files is one row (the first wins).
+  const dup = rows({ statusAt: T0, status: status([]), files: [agent("/r/a.go", T0 + 2), agent("/r//a.go", T0 + 1)] });
+  assert.equal(dup.rows.length, 1);
+});
+
+test("changesRows leaves its inputs alone when it adds provisional rows", () => {
+  const args = freeze({ scope: "head", root: "/r", statusAt: T0, files: [agent("/r/a.go", T0 + 1)], status: status([]), numstat: numstat([]) });
+  assert.deepStrictEqual(prov(changesRows(args)), [["/r/a.go", "", true, true, null, null]]);
+});
+
+test("changesView passes statusAt through: provisional rows are listed and counted, in both scopes", () => {
+  const files = [agent("/r/a.go", T0 + 1)];
+  const st = stat(status([{ p: "b.go", x: "M" }]));
+  const v = view({ status: st, files, statusAt: T0 });
+  assert.equal(v.kind, "rows");
+  assert.deepStrictEqual(v.rows.map((r) => [r.path, r.provisional]), [["/r/a.go", true], ["/r/b.go", false]]);
+  assert.equal(v.count, 2, "the header counts what the list shows");
+  assert.deepStrictEqual(view({ status: st, files, statusAt: T0 + 5 }).rows.map((r) => r.path), ["/r/b.go"], "git has answered since the edit: the file is clean");
+  assert.deepStrictEqual(view({ status: st, files }).rows.map((r) => r.path), ["/r/b.go"], "no statusAt, no provisional rows");
+  const base = basrec(okBase({ ahead: true }));
+  const bv = view({ status: st, files, statusAt: T0, base, numstat: numrec("branch", numstat([{ p: "c.go", x: "M", a: 1, d: 1 }])) });
+  assert.deepStrictEqual(bv.rows.map((r) => [r.path, r.provisional]), [["/r/a.go", true], ["/r/c.go", false]]);
+  assert.equal(bv.count, 2);
 });
 
 // --- Task 9b: the section's own rules (scope memory, base refetch, totals, the view) ---------------------------------------

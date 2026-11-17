@@ -74,7 +74,7 @@ function gitMarks(status, root) {
 // --- state -------------------------------------------------------------------
 
 let gitSeq = 0;          // a reply is dropped unless it is the newest ask
-let gitState = null;     // {root, sid, status, marks} of the last reply that landed
+let gitState = null;     // {root, sid, status, marks, at} of the last reply that landed (`at`: gitStatusAt)
 let gitTimer = null;
 let gitTimerFresh = false; // any refreshSoon in the pending window asked for fresh
 const GIT_DEBOUNCE_MS = 1000;
@@ -96,6 +96,7 @@ function gitStatusReset() {
 async function gitStatusLoad(root, sid, opts) {
   if (!root) return null;
   const seq = ++gitSeq;
+  const sentAt = Date.now();
   if (gitState && gitState.root !== root) { gitState = null; gitPaintTree(); }
   let status = null;
   try {
@@ -108,18 +109,30 @@ async function gitStatusLoad(root, sid, opts) {
   } catch (_) { /* offline: keep the marks */ }
   if (seq !== gitSeq) return null;
   if (!status || typeof status !== "object") return gitState ? gitState.marks : null;
-  gitState = { root, sid: sid || null, status, marks: gitMarks(status, root) };
+  // When the answer is as new as: the ask, if it was fresh (the server read the disk after it) or is the first for this root.
+  // A plain reload may come from the server's reuse of a run a couple of seconds old, so it keeps the earlier time: it
+  // proves nothing about an edit made since the fresh read.
+  const at = (opts && opts.fresh) || !gitState || gitState.root !== root ? sentAt : gitState.at;
+  gitState = { root, sid: sid || null, status, marks: gitMarks(status, root), at };
   gitPaintTree();
   // The Changes section's counts and base follow each status that lands (dockchanges.js), fresh when this one was.
   if (typeof dockChangesOnStatus === "function") dockChangesOnStatus({ fresh: !!(opts && opts.fresh) });
   return gitState.marks;
 }
 
-// gitStatusCurrent: the last status that landed and the root it was for, {root, status}, or null when there is none or it
-// was for another root than `root` (a late or older one is nobody's). The Changes section reads it; it never reads
+// gitStatusCurrent: the last status that landed and the root it was for, {root, status, at}, or null when there is none or
+// it was for another root than `root` (a late or older one is nobody's). The Changes section reads it; it never reads
 // gitState itself.
 function gitStatusCurrent(root) {
-  return gitState && root && gitState.root === root ? { root: gitState.root, status: gitState.status } : null;
+  return gitState && root && gitState.root === root ? { root: gitState.root, status: gitState.status, at: gitState.at } : null;
+}
+
+// gitStatusAt: the status held is as new as this (ms), 0 when there is none. It is when gitStatusLoad SENT the request the
+// status answers, not when the answer landed and not the newest ask still out: git has seen every change made before it, and
+// none made after (the Changes section's provisional rows compare an agent edit's `ts` with it). A plain reload keeps the
+// earlier time (see gitStatusLoad).
+function gitStatusAt() {
+  return gitState ? gitState.at : 0;
 }
 
 // gitStatusTreeSid: the session whose files the tree shows right now.
@@ -279,5 +292,5 @@ function gitPaintNote() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusReason, gitStatusNote, gitStatusReset };
+  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset };
 }

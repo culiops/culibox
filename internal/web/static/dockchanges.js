@@ -19,6 +19,10 @@
 // that is unavailable is one calm line ("Status unavailable", the reason on hover), and a request that never answers is
 // abandoned after DKC_FETCH_MS.
 //
+// While the agent works its edits arrive from Activity before git has been asked about them (dockwatch.js): such a file is a
+// provisional row (changesmodel.js), drawn with a muted "…" (class dk-prov) where the letter will be, and the letter takes
+// its place in the same element when a status asked for after the edit lands. A file git then calls clean goes away.
+//
 // Every path, name, branch and base name goes to the page with textContent: a branch name may hold Unicode format
 // characters, and a file name anything at all.
 
@@ -201,11 +205,13 @@ function dkcFillRow(b, r, label) {
   } else if (p.ct.parentNode === b) {
     p.ct.remove();
   }
-  const stCls = "dk-st dk-st-" + r.code.toLowerCase();
+  // A provisional row has no letter yet: a muted "…", and the words say what it waits for.
+  const prov = r.provisional === true;
+  const stCls = prov ? "dk-st dk-prov" : "dk-st dk-st-" + r.code.toLowerCase();
   if (p.st.className !== stCls) p.st.className = stCls;
-  dkcSetText(p.st, r.code);
+  dkcSetText(p.st, prov ? "…" : r.code);
   // The session bar and the letter are colour and a glyph; the words are for assistive technology and the hover.
-  const words = [DKC_CODE_TITLES[r.code] || r.code];
+  const words = [prov ? "Waiting for git" : DKC_CODE_TITLES[r.code] || r.code];
   if (known) words.push("+" + r.add + " −" + r.del);
   if (r.mine) words.push(label);
   const aria = r.name + (r.dir ? " in " + r.dir : "") + ", " + words.join(", ");
@@ -226,9 +232,14 @@ function dkcOpenRow(r) {
   else drawerShowFile(r.path);
 }
 
+// dkcFirstFile: the row Review opens: the first changed file git has answered for (a provisional row has no diff to read yet).
+function dkcFirstFile(view) {
+  return view && view.kind === "rows" ? view.rows.find((r) => !r.folder && !r.provisional) || null : null;
+}
+
 // dkcReview: Review opens the Changes view of the first changed file, pinned (P1; the combined view is P3's).
 function dkcReview() {
-  const first = dkcView && dkcView.kind === "rows" ? dkcView.rows.find((r) => !r.folder) : null;
+  const first = dkcFirstFile(dkcView);
   if (first && typeof drawerShowFile === "function") drawerShowFile(first.path, { view: "changes", preview: false });
 }
 
@@ -349,8 +360,10 @@ function dockChangesRender() {
   if (dkcDrawn && inputs.every((x, i) => x === dkcDrawn[i])) return;
   dkcDrawn = inputs;
 
+  // statusAt: when the status held was asked for, so an agent edit made since is a provisional row until git answers.
+  const statusAt = cur && typeof gitStatusAt === "function" ? gitStatusAt() : 0;
   const view = owns
-    ? changesView({ root, status: cur, numstat: dkcNum, base: dkcBase, prefs: dkcPrefsMap(), sid, files })
+    ? changesView({ root, status: cur, numstat: dkcNum, base: dkcBase, prefs: dkcPrefsMap(), sid, files, statusAt })
     : { kind: "none", count: 0 };
   const painted = JSON.stringify([view, root, name, box, owns]);
   if (painted === dkcPainted) return;
@@ -360,8 +373,7 @@ function dockChangesRender() {
   const rows = view.kind === "rows";
   sec.hidden = view.kind === "none";
   dkcSetText(dkcEl("dock-chg-count"), rows && view.count > 0 ? view.count + " changed" : "");
-  const first = rows ? view.rows.find((r) => !r.folder) : null;
-  dkcEl("dock-review").hidden = !first;
+  dkcEl("dock-review").hidden = !dkcFirstFile(view);
   const scope = dkcEl("dock-scope");
   scope.hidden = !view.showScope;
   for (const b of scope.querySelectorAll("[data-scope]")) b.setAttribute("aria-pressed", b.dataset.scope === view.scope ? "true" : "false");
