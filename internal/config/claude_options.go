@@ -9,3 +9,7 @@ var claudeBuiltinOptions = []OptionDef{
 	{Key: "model", Label: "Model", Type: OptEnum, Choices: []string{"fable", "opus", "sonnet", "haiku"}, Flag: "--model", Bins: []string{claudeBin}},
 	{Key: "effort", Label: "Effort", Type: OptEnum, Choices: []string{"low", "medium", "high", "xhigh", "max"}, Flag: "--effort", Bins: []string{claudeBin}},
 }
+
+// claudeSameSlot: effortLevel (the settings.json name) and effort fill the same
+// Effort slot in the UI.
+var claudeSameSlot = map[string]string{"effortLevel": "effort", "effort": "effortLevel"}

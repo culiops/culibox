@@ -71,7 +71,7 @@ Your own `options` are added to these. An entry whose `key` is `model` or `effor
 ]
 ```
 
-A bool option shows on a profile only once the profile sets a default for it (`"options": { "skip_permissions": true }` on the agent).
+A bool option is offered in New session only once the profile sets a default for it (`"options": { "skip_permissions": true }` on the agent).
 
 ## VM folders
 

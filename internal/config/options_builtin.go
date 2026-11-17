@@ -4,9 +4,10 @@ package config
 // provider; a later provider adds its own list here.
 var builtinOptions = [][]OptionDef{claudeBuiltinOptions}
 
-// sameSlot are keys the UI shows in one slot: declaring either one takes the
-// slot, so a built-in for the other is not added next to it.
-var sameSlot = map[string]string{"effortLevel": "effort", "effort": "effortLevel"}
+// sameSlot are keys the UI shows in one slot, from every provider's list:
+// declaring either one takes the slot, so a built-in for the other is not
+// added next to it.
+var sameSlot = claudeSameSlot
 
 // withBuiltinOptions is the declared options (config.json, in order) followed
 // by every built-in whose key is not declared. A declared key replaces the
