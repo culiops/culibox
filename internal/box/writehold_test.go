@@ -704,3 +704,210 @@ func TestClaimForGrantHonoursItsContext(t *testing.T) {
 		t.Fatal("opMu was not given back after an abandoned grant check")
 	}
 }
+
+// orphanBox puts a running box of this instance in dir that no session of this
+// process owns: what is left when boot Reconcile did not run (Docker down or
+// slow at boot) after a restart killed its session (#333, host review).
+func orphanBox(t *testing.T, f *fakeClient, name, dir string, exclusive bool) {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]string{LabelWorkspace: real, LabelInstance: "TEST", LabelClaims: "1"}
+	if exclusive {
+		labels[LabelExclusive] = "1"
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.existing = append(f.existing, name)
+	f.running[name] = true
+	f.labels[name] = labels
+}
+
+// An orphan with no owner, removed after boot by a spawn's check or by the
+// sweep, holds its folder like a box reaped at boot when its label says it was
+// exclusive, counted from this process's start; a plain orphan holds nothing.
+func TestOrphanWithNoOwnerKeepsAHold(t *testing.T) {
+	ways := []struct {
+		name   string
+		remove func(t *testing.T, m *Manager)
+	}{
+		{"spawn removes it as idle", func(t *testing.T, m *Manager) {}}, // the spawn below does it
+		{"sweep", func(t *testing.T, m *Manager) {
+			if _, err := m.Sweep(context.Background(), map[string]int{}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, way := range ways {
+		t.Run("exclusive/"+way.name, func(t *testing.T) {
+			m, f := boundMgr(t)
+			h := newHoldSet(m)
+			dir := t.TempDir()
+			orphanBox(t, f, "ab-box-orphan", dir, true)
+			h.set("", "a session was running when CuliBox restarted")
+			way.remove(t, m)
+			_, _, err := wrapPlain(m, dir, "sh-1")
+			if !f.wasStopped("ab-box-orphan") {
+				t.Fatal("the orphan was not removed")
+			}
+			if !errors.Is(err, ErrWorkspaceHeld) || !strings.Contains(err.Error(), "restarted") {
+				t.Fatalf("the orphan's folder: %v", err)
+			}
+			h.mu.Lock()
+			at := h.adopted[""]
+			h.mu.Unlock()
+			if !at.Equal(m.started) {
+				t.Fatalf("the hold counts from %v, want this process's start %v", at, m.started)
+			}
+			if _, _, err := wrapPlain(m, t.TempDir(), "sh-2"); err != nil {
+				t.Fatalf("another folder: %v", err)
+			}
+			h.set("", "")
+			if _, _, err := wrapPlain(m, dir, "sh-3"); err != nil {
+				t.Fatalf("the hold ends with the hook's: %v", err)
+			}
+		})
+		t.Run("plain/"+way.name, func(t *testing.T) {
+			m, f := boundMgr(t)
+			h := newHoldSet(m)
+			dir := t.TempDir()
+			orphanBox(t, f, "ab-box-orphan", dir, false)
+			h.set("", "a session was running when CuliBox restarted")
+			way.remove(t, m)
+			if way.name == "sweep" && !f.wasStopped("ab-box-orphan") {
+				t.Fatal("the sweep did not remove the plain orphan")
+			}
+			if _, _, err := wrapPlain(m, dir, "sh-1"); err != nil {
+				t.Fatalf("a plain orphan holds nothing: %v", err)
+			}
+			m.mu.Lock()
+			n := len(m.ended)
+			m.mu.Unlock()
+			if n != 0 {
+				t.Fatalf("a plain orphan left %d ended hold(s)", n)
+			}
+		})
+	}
+}
+
+// With no hook yet, the orphan's hold is the box layer's own boot hold, bounded
+// by this process's start: once a credential's life has passed since then,
+// nothing minted before the restart can still be valid, so nothing is held.
+func TestOrphanWithNoOwnerHoldIsBoundedByStart(t *testing.T) {
+	m, f := boundMgr(t)
+	dir := t.TempDir()
+	orphanBox(t, f, "ab-box-orphan", dir, true)
+	if _, _, err := wrapPlain(m, dir, "sh-1"); !errors.Is(err, ErrWorkspaceHeld) {
+		t.Fatalf("just after start: %v", err)
+	}
+	m2, f2 := boundMgr(t)
+	m2.started = time.Now().Add(-bootHoldFor - time.Minute)
+	dir2 := t.TempDir()
+	orphanBox(t, f2, "ab-box-orphan", dir2, true)
+	if _, _, err := wrapPlain(m2, dir2, "sh-1"); err != nil {
+		t.Fatalf("a credential's life after start: %v", err)
+	}
+}
+
+// keepEndedHold for a box with no owner: a label that cannot be read holds every
+// folder (fail closed); a box docker no longer lists holds nothing.
+func TestKeepEndedHoldWithNoOwner(t *testing.T) {
+	m, f := boundMgr(t)
+	f.mu.Lock()
+	f.listErr = errors.New("daemon is restarting")
+	f.mu.Unlock()
+	m.opMu.Lock()
+	m.keepEndedHold(context.Background(), "ab-box-orphan")
+	m.opMu.Unlock()
+	m.mu.Lock()
+	e, ok := m.ended["ab-box-orphan"]
+	m.mu.Unlock()
+	if !ok || e.ws != "" || !e.boot || !e.adoptedAt.Equal(m.started) {
+		t.Fatalf("unreadable label: ended = %+v, %v; want a boot hold over every folder from start", e, ok)
+	}
+
+	m2, _ := boundMgr(t)
+	m2.opMu.Lock()
+	m2.keepEndedHold(context.Background(), "ab-box-gone")
+	m2.opMu.Unlock()
+	m2.mu.Lock()
+	n := len(m2.ended)
+	m2.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a box docker does not list left %d hold(s)", n)
+	}
+}
+
+// An idle stop whose removal fails keeps the box's owner, and a later removal
+// keeps the owner's hold: it is never overwritten by an orphan's boot hold,
+// which ends a credential's life after start while the session's window may
+// still be open (#333, review of the no-owner fix).
+func TestFailedIdleStopKeepsTheOwnersHold(t *testing.T) {
+	m, f := boundMgr(t)
+	h := newHoldSet(m)
+	dir := t.TempDir()
+	name, err := wrapIn(m, dir, "elev-1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.set("elev-1", "held by elev-1")
+	releasedUntimed(m, name)
+	m.started = time.Now().Add(-bootHoldFor - time.Minute) // a boot hold would be over
+	f.mu.Lock()
+	f.stopFails = 1
+	f.mu.Unlock()
+	m.stopIfIdle(name)
+	f.mu.Lock()
+	still := f.running[name]
+	f.mu.Unlock()
+	if !still {
+		t.Fatal("the failed stop removed the box")
+	}
+	m.mu.Lock()
+	owner := m.owner[name]
+	m.mu.Unlock()
+	if owner != "elev-1" {
+		t.Fatalf("after a failed stop the owner is %q, want elev-1 kept for the next removal", owner)
+	}
+	if _, err := m.Sweep(context.Background(), map[string]int{}); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	still = f.running[name]
+	f.mu.Unlock()
+	if still {
+		t.Fatal("the sweep did not remove the box")
+	}
+	m.mu.Lock()
+	e := m.ended[name]
+	m.mu.Unlock()
+	if e.sid != "elev-1" || e.boot {
+		t.Fatalf("ended hold = %+v, want the owner's", e)
+	}
+	if _, _, err := wrapPlain(m, dir, "sh-1"); !errors.Is(err, ErrWorkspaceHeld) || !strings.Contains(err.Error(), "held by elev-1") {
+		t.Fatalf("want the owner's hold, got %v", err)
+	}
+}
+
+// keepEndedHold never replaces a hold already recorded for the box.
+func TestKeepEndedHoldDoesNotOverwrite(t *testing.T) {
+	m, f := boundMgr(t)
+	h := newHoldSet(m)
+	h.set("elev-1", "held by elev-1")
+	dir := t.TempDir()
+	orphanBox(t, f, "ab-box-orphan", dir, true)
+	m.mu.Lock()
+	m.ended["ab-box-orphan"] = endedHold{sid: "elev-1", ws: "/w"}
+	m.mu.Unlock()
+	m.opMu.Lock()
+	m.keepEndedHold(context.Background(), "ab-box-orphan")
+	m.opMu.Unlock()
+	m.mu.Lock()
+	e := m.ended["ab-box-orphan"]
+	m.mu.Unlock()
+	if e.sid != "elev-1" || e.boot {
+		t.Fatalf("ended hold = %+v, want the one already recorded", e)
+	}
+}

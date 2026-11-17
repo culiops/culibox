@@ -268,3 +268,36 @@ func TestWindowEndKeepsTheSkewMinute(t *testing.T) {
 		})
 	}
 }
+
+// A re-grant inside the skew minute of a dropped window (#333, host review):
+// the dropped record is cleared, so its credentials' expiry moves onto the new
+// window, and dropping that one at once still holds the folder until the old
+// credentials' expiry plus the margin.
+func TestRegrantInsideTheSkewMinuteKeepsTheOldExpiry(t *testing.T) {
+	b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	if _, err := b.Elevate("aws-1", cookie(30)); err != nil {
+		t.Fatal(err)
+	}
+	last := now.Add(10 * time.Minute)
+	b.mu.Lock()
+	b.noteElevatedExp("aws-1", last)
+	b.mu.Unlock()
+	if _, ok := b.Drop("aws-1", CredCookie); !ok {
+		t.Fatal("drop")
+	}
+	*now = last.Add(30 * time.Second) // expired on our clock, inside the margin
+	if _, err := b.Elevate("aws-1", cookie(30)); err != nil {
+		t.Fatalf("re-grant: %v", err)
+	}
+	if _, ok := b.Drop("aws-1", CredCookie); !ok { // nothing minted in the new window
+		t.Fatal("drop of the new window")
+	}
+	if why := b.WriteHold("aws-1", time.Time{}); why == "" {
+		t.Fatal("the old credentials' skew minute was lost by the re-grant")
+	}
+	*now = last.Add(dropHoldSkew)
+	if why := b.WriteHold("aws-1", time.Time{}); why != "" {
+		t.Fatalf("past the margin: %q", why)
+	}
+}
