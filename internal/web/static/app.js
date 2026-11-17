@@ -492,6 +492,9 @@ function paintDrawerLayout(avail, over) {
   const fold = base.full ? "full" : base.treeFolded ? "folded" : "open";
   if (dockTreeAsk !== null && dockTreeAsk !== fold) dockTreeAsk = null;
   const open = dockTreeAsk !== null;
+  // The explorer column's fold control is drawn only while the column is the strip's transient open (desktop.css).
+  if (open) dr.dataset.treeOpen = "1";
+  else delete dr.dataset.treeOpen;
   const lay = open ? plan(true) : base;
   if (lay.full) {
     if (dr.dataset.forced !== "1") paintDrawerMax(true, true);
@@ -554,6 +557,15 @@ function dockTreeFold() {
   dockTreeAsk = null;
   positionDrawer();
   dockRefit();
+}
+
+// dockTreeFoldPress: the explorer column's own fold control (index.html #drawer-tree-fold, drawn only while the column is
+// the strip's transient open). The same fold as Esc, and focus goes to the strip's Explorer button, which takes the
+// column's place, instead of dropping to the page with the control that has just gone.
+function dockTreeFoldPress() {
+  dockTreeFold();
+  const to = $("drawer-strip-tree");
+  if (to && to.getClientRects().length > 0) to.focus();
 }
 
 // dockStripOpen: a press on the strip's Explorer or Changes. The strip is not drawn while the column is open, so focus
@@ -624,6 +636,7 @@ $("drawer-pin").onclick = () => toggleDrawerPin();
 $("drawer-strip-tree").onclick = () => dockStripOpen();
 $("drawer-strip-changes").onclick = () => dockStripOpen();
 $("drawer-strip-goto").onclick = () => drawerGoFocus();
+$("drawer-tree-fold").onclick = () => dockTreeFoldPress();
 
 // --- Files dock size (#34): drawersize.js stores, dockfit.js decides, this applies ------
 // Two separators: the dock's left edge (its share of the pane area, the grid plus the

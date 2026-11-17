@@ -651,7 +651,7 @@ test("a contextmenu on a focused tree row (the keyboard's, or an assistive techn
   assert.strictEqual(fw.menu.attrs["aria-label"], "File actions");
 });
 
-test("a mouse right-click keeps the browser's menu: only the row itself, with a non-mouse contextmenu, opens ours (and not on the phone)", async () => {
+test("outside the dock a mouse right-click keeps the browser's menu: only the row itself, with a non-mouse contextmenu, opens ours (and not on the phone)", async () => {
   const w = world(1280);
   const { row } = await focused(w, "dir1");
   assert.strictEqual(w.ctxMenu(row, { button: 2 }).prevented, 0, "the right button is the pointer's");
@@ -663,6 +663,115 @@ test("a mouse right-click keeps the browser's menu: only the row itself, with a 
   const f = await focused(p, "dir1");
   assert.strictEqual(p.ctxMenu(f.row, { button: 0 }).prevented, 0, "desktop behaviour only: the phone keeps what it had");
   assert.strictEqual(p.menu.className.split(" ").includes("open"), false);
+});
+
+// ---- the docked tree (Task 9a): a click selects, a right-click opens the row's menu at the pointer ---------------------------
+// The dock is showing the tree: filetree.js asks drawerOwnsFileClicks (filesdrawer.js) and shows a file through drawerShowFile.
+// Each opened file is recorded, "(kept)" for the double-click's pinned tab.
+function docked(w) {
+  w.run("var dockShown = []; function drawerOwnsFileClicks() { return true; } function drawerShowFile(p, o) { dockShown.push(p + (o && o.preview === false ? ' (kept)' : '')); }");
+  return () => Array.from(w.run("dockShown"));
+}
+const selected = (c) => rowsOf(c).filter(hasCls("ft-sel")).map(nameOf);
+const rowNamed = (c, name) => rowsOf(c).find((r) => nameOf(r) === name);
+const menuAt = (w) => [w.menu.style.left, w.menu.style.top];
+
+test("ftSelect: a click on a docked row (file or folder) selects it and only it", async () => {
+  const w = world(1280);
+  const shown = docked(w);
+  const c = await w.render();
+  assert.deepStrictEqual(selected(c), []);
+  rowNamed(c, "a.txt").click();
+  assert.deepStrictEqual(selected(c), ["a.txt"]);
+  assert.deepStrictEqual(shown(), ["/h/w/a.txt"], "the click still shows the file in the dock");
+  rowNamed(c, "dir1").click();
+  assert.deepStrictEqual(selected(c), ["dir1"], "the selection moved: one row at a time");
+  rowNamed(c, "b.png").click();
+  assert.deepStrictEqual(selected(c), ["b.png"]);
+});
+
+test("ftSelect: a double-click leaves its row selected (select is not a toggle) and still keeps the tab", async () => {
+  const w = world(1280);
+  const shown = docked(w);
+  const c = await w.render();
+  const row = rowNamed(c, "a.txt");
+  row.click(); row.click(); row.ondblclick({ target: row });
+  assert.deepStrictEqual(selected(c), ["a.txt"]);
+  assert.deepStrictEqual(shown(), ["/h/w/a.txt", "/h/w/a.txt", "/h/w/a.txt (kept)"]);
+});
+
+test("ftSelect: with no dock (the phone) a click selects nothing and opens the file in a pane, as today", async () => {
+  const w = world(390);
+  const c = await w.render();
+  rowNamed(c, "a.txt").click();
+  rowNamed(c, "dir1").click();
+  assert.deepStrictEqual(selected(c), []);
+  assert.deepStrictEqual(w.calls, ["openFile:/h/w/a.txt"]);
+});
+
+test("a right-click on a docked row opens its menu where the pointer is, and selects the row it acts on", async () => {
+  const w = world(1280);
+  docked(w);
+  const c = await w.render();
+  const row = rowNamed(c, "a.txt");
+  const ev = w.ctxMenu(byCls(row, "ft-name")[0], { button: 2, clientX: 500, clientY: 300 });
+  assert.strictEqual(ev.prevented, 1, "the browser's own menu is not also shown");
+  assert.ok(w.menu.className.split(" ").includes("open"));
+  assert.strictEqual(w.menu.attrs["aria-label"], "File actions");
+  assert.deepStrictEqual(menuAt(w), ["500px", "300px"], "the menu's top-left corner is the pointer");
+  assert.deepStrictEqual(selected(c), ["a.txt"]);
+  assert.strictEqual(Node.focused, items(w.menu)[0], "focus lands on the first row, as the key does");
+  assert.strictEqual(moreOf(row).attrs["aria-expanded"], "true", "the row's ⋯ still says its menu is open");
+  // The same rows as the ⋯ and the key give: it is the one menu.
+  const viaKey = world(1280);
+  const f2 = await focused(viaKey, "a.txt");
+  viaKey.key(f2.row, "F10", { shiftKey: true });
+  assert.deepStrictEqual(shape(w.menu), shape(viaKey.menu));
+});
+
+test("a right-click on a folder row's icon opens that folder's menu; Escape hands focus back to the row", async () => {
+  const w = world(1280);
+  docked(w);
+  const c = await w.render();
+  const row = rowNamed(c, "dir1");
+  assert.strictEqual(w.ctxMenu(byCls(row, "ft-icon")[0], { button: 2, clientX: 40, clientY: 60 }).prevented, 1);
+  assert.strictEqual(w.menu.attrs["aria-label"], "Folder actions");
+  assert.strictEqual(shape(w.menu)[0], "label:~/w/dir1", "the path header names the row");
+  w.docKey("Escape");
+  assert.ok(!w.menu.className.split(" ").includes("open"));
+  assert.strictEqual(Node.focused, row);
+});
+
+test("a right-click near the viewport's edges is clamped inside it (8px), by the menu's own size", async () => {
+  const w = world(1280); // the window is 1280x900, the stand-in menu 200x220
+  docked(w);
+  const c = await w.render();
+  const name = byCls(rowNamed(c, "b.png"), "ft-name")[0];
+  w.ctxMenu(name, { button: 2, clientX: 1275, clientY: 895 });
+  assert.deepStrictEqual(menuAt(w), ["1072px", "672px"], "right and bottom: the whole menu stays on screen");
+  w.ctxMenu(name, { button: 2, clientX: 1, clientY: 2 });
+  assert.deepStrictEqual(menuAt(w), ["8px", "8px"], "left and top");
+  w.ctxMenu(name, { button: 2, clientX: 640, clientY: 450 });
+  assert.deepStrictEqual(menuAt(w), ["640px", "450px"], "away from the edges: exactly the pointer");
+});
+
+test("a right-click off the rows (the empty tree) or on the phone keeps the browser's menu; a read-only listing's right-click menu has no Delete", async () => {
+  const w = world(1280);
+  docked(w);
+  const c = await w.render();
+  assert.strictEqual(w.ctxMenu(w.tree, { button: 2, clientX: 5, clientY: 5 }).prevented, 0, "empty space keeps the browser's menu");
+  assert.ok(!w.menu.className.split(" ").includes("open"));
+  const p = world(390);
+  docked(p);
+  const pc = await p.render();
+  assert.strictEqual(p.ctxMenu(byCls(rowNamed(pc, "a.txt"), "ft-name")[0], { button: 2, clientX: 5, clientY: 5 }).prevented, 0, "desktop only");
+  assert.ok(!p.menu.className.split(" ").includes("open"));
+  // A read-only listing's menu (no Rename, Delete) is the one the right-click opens, too.
+  const ro = world(1280, { "/h/w": { entries: [{ name: "a.txt", is_dir: false }], readonly: true } });
+  docked(ro);
+  const rc = await ro.render();
+  ro.ctxMenu(byCls(rowNamed(rc, "a.txt"), "ft-name")[0], { button: 2, clientX: 10, clientY: 10 });
+  assert.ok(!shape(ro.menu).includes("Delete\u2026"), "a read-only listing offers no Delete");
 });
 
 test("initFileTree registers the contextmenu guard on the document, beside the click closer and the key handler", () => {

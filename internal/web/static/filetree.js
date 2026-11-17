@@ -237,6 +237,8 @@ function ftApplyReadOnly(ro) {
 const ftRowPaths = new WeakMap();
 // A directory row's expand control and state, for ftReveal (see setOpen).
 const ftRowOpeners = new WeakMap();
+// A row's menu opener, (at?) => void: the right-click in the dock opens it at the pointer (ftTreeContextMenu).
+const ftRowMenus = new WeakMap();
 function ftMarkRow(row, path, set) {
   const have = row.querySelector(":scope > .ft-chg");
   if (!set || !set.has(path)) { if (have) have.remove(); return; }
@@ -295,6 +297,20 @@ function ftRowModel(row) {
   return { dir: ex !== null, open: ex === "true", level: Number(row.getAttribute("aria-level")) || 1 };
 }
 
+// ftDocked: the tree is the desktop Files dock's (filesdrawer.js loads later, so it is asked through typeof). The dock's
+// clicks, selection and right-click menu exist only then; the phone's tree is what it always was.
+function ftDocked() {
+  return typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks();
+}
+
+// ftSelect highlights `row` (.ft-sel) and no other row of its tree: the click's mark in the dock, and the row Reveal in
+// tree landed on. One row at a time, and selecting the selected row again leaves it selected (a double-click selects twice).
+function ftSelect(row) {
+  const tree = row.closest ? row.closest('[role="tree"]') : null;
+  if (tree) for (const old of tree.querySelectorAll(".ft-sel")) old.classList.remove("ft-sel");
+  row.classList.add("ft-sel");
+}
+
 // `st` is the root render's own bookkeeping, handed down to the folders it auto-opens: every row drawn under
 // it, in visible order, so the one Tab stop is chosen once the whole subtree is there.
 async function ftRenderDir(path, container, prefix, st) {
@@ -306,6 +322,9 @@ async function ftRenderDir(path, container, prefix, st) {
   // subtree loads level by level, each into its own box. It is gone before the
   // entries or the error row are appended.
   container.style.setProperty("--ft-indent", prefix.length + "ch");
+  // The same depth as a number, for the dock's tree (desktop.css): its rows' indent and guides, and this pending line,
+  // are all calc() on --lvl.
+  container.style.setProperty("--lvl", String(prefix.length / 2));
   const done = pendingRegion(container, "Loading…");
   let data, failure = null;
   try { data = await api("/api/fs/list?path=" + encodeURIComponent(path)); }
@@ -328,6 +347,7 @@ async function ftRenderDir(path, container, prefix, st) {
     const full = path.replace(/\/$/, "") + "/" + ent.name;
     const row = document.createElement("div");
     row.className = "ft-node";
+    row.style.setProperty("--lvl", String(prefix.length / 2));
     // Depth is drawn now, not padded. The branch is its own element for the same
     // reason the icon is: the label's textContent is rewritten on every toggle.
     const branch = document.createElement("span");
@@ -381,7 +401,11 @@ async function ftRenderDir(path, container, prefix, st) {
     // A menu button: ftShowMenu sets aria-expanded while its menu is open, closeRowMenu puts it back.
     more.setAttribute("aria-haspopup", "menu");
     more.setAttribute("aria-expanded", "false");
-    more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir, ro); };
+    // The one way this row's menu opens: the ⋯, the menu key (which presses the ⋯) and the dock's right-click, which
+    // adds where the pointer is (`at`).
+    const openMenu = (at) => openRowMenu(more, full, ent.name, ent.is_dir, ro, at);
+    more.onclick = (e) => { e.stopPropagation(); openMenu(); };
+    ftRowMenus.set(row, openMenu);
     row.append(more);
     ftRowPaths.set(row, full);
     if (st && st.rows) st.rows.push(row);
@@ -428,7 +452,7 @@ async function ftRenderDir(path, container, prefix, st) {
           ftRoveEnsure(row.closest ? row.closest('[role="tree"]') : null);
         }
       };
-      row.onclick = () => setOpen(!open);
+      row.onclick = () => { if (ftDocked()) ftSelect(row); setOpen(!open); };
       ftRowOpeners.set(row, { setOpen, isOpen: () => open });
       // Each directory row is its own drop target and stops propagation, so it
       // wins over the whole-tree zone underneath it.
@@ -468,12 +492,12 @@ async function ftRenderDir(path, container, prefix, st) {
       // pane (filesdrawer.js; typeof-guarded, it loads later): a single click opens
       // a preview tab, which the next single click replaces, and a double-click
       // keeps the tab. Mobile: openFile, and a double-click does nothing more.
-      const docked = () => typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks();
       row.onclick = () => {
-        if (docked()) drawerShowFile(full);
+        if (ftDocked()) { ftSelect(row); drawerShowFile(full); }
         else openFile(full);
       };
-      row.ondblclick = () => { if (docked()) drawerShowFile(full, { preview: false }); };
+      // The two clicks of a double-click already selected the row: selecting again changes nothing.
+      row.ondblclick = () => { if (ftDocked()) drawerShowFile(full, { preview: false }); };
     }
   }
   if (rootCall) {
@@ -538,7 +562,9 @@ async function ftLoadRoot(opts) {
 // `.menu-label`, icon rows in groups with a rule between two groups (ftMenuGroups), Delete… red and alone
 // last; it takes focus on its first row, and the arrow keys, Escape and a chosen row hand focus back to the
 // tree row it hung from. The phone keeps the plain buttons and rules it has always had.
-function openRowMenu(anchor, path, name, isDir, readOnly) {
+// `at` ({x, y}, viewport px) is a right-click's pointer: the menu's top-left corner goes there instead of under the ⋯
+// (`anchor`, still the row's ⋯, which says it is open and gets focus back).
+function openRowMenu(anchor, path, name, isDir, readOnly, at) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
   const desktop = !mobileActive(window.innerWidth);
@@ -583,7 +609,7 @@ function openRowMenu(anchor, path, name, isDir, readOnly) {
       if (i > 0) nodes.push(kitMenuSep());
       for (const id of group) nodes.push(kitMenuButton(rowMenuLabel(id, isDir), ROW_MENU_ICONS[id], id === "delete", () => { closeRowMenu(true); act[id](); }));
     });
-    ftShowMenu(anchor, nodes, false, actionsLabel(isDir));
+    ftShowMenu(anchor, nodes, false, actionsLabel(isDir), at);
     const first = menu.querySelector(".menu-item");
     if (first) first.focus();
     return;
@@ -607,6 +633,9 @@ function openRowMenu(anchor, path, name, isDir, readOnly) {
 // `kitLabel` (a string) makes it the kit's menu: the `.menu` container (desktop.css places it) with
 // role="menu" named by `kitLabel`. Without it the element is the plain popover it was, so the viewer's
 // line-number menu, which shares this element, never inherits a tree menu's class and role.
+// `at` ({x, y}, viewport px) puts the menu's top-left corner at the pointer instead (a right-click), kept 8px inside
+// the viewport: a menu that would run off the right or bottom edge slides back so all of it shows. `anchor` still names
+// the row for aria-expanded and for the focus the menu gives back.
 // ftMenuFrom is where the open menu hangs from, the tree row holding `anchor` (null for a menu that hangs
 // from none, the viewer's), for closeRowMenu(true) to give focus back to.
 let ftMenuFrom = null;
@@ -616,7 +645,7 @@ let ftMenuMore = null;
 function ftMoreExpanded(more, on) {
   if (more) more.setAttribute("aria-expanded", on ? "true" : "false");
 }
-function ftShowMenu(anchor, nodes, alignLeft, kitLabel) {
+function ftShowMenu(anchor, nodes, alignLeft, kitLabel, at) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
   ftMoreExpanded(ftMenuMore, false);
@@ -636,8 +665,13 @@ function ftShowMenu(anchor, nodes, alignLeft, kitLabel) {
   ftMenuFrom = row ? { row, path: ftRowPaths.get(row) || "" } : null;
 
   menu.classList.add("open"); // must be visible before it can be measured
-  const r = anchor.getBoundingClientRect();
   const w = menu.offsetWidth;
+  if (at && Number.isFinite(at.x) && Number.isFinite(at.y)) {
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, at.x)) + "px";
+    menu.style.top = Math.max(8, Math.min(window.innerHeight - menu.offsetHeight - 8, at.y)) + "px";
+    return;
+  }
+  const r = anchor.getBoundingClientRect();
   menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, alignLeft ? r.left : r.right - w)) + "px";
   // Rows sit anywhere in the viewport, unlike the spawn menu's header anchor, so
   // a menu opened near the bottom must flip above its row instead of clipping.
@@ -971,8 +1005,7 @@ async function ftReveal(path) {
   }
   const file = ftRowFor(path);
   if (!file) return false;
-  for (const old of ftTreeEl.querySelectorAll(".ft-sel")) old.classList.remove("ft-sel");
-  file.classList.add("ft-sel");
+  ftSelect(file);
   ftRoveTo(file); // the revealed row is the tree's Tab stop (it was tabindex -1 and out of reach)
   file.scrollIntoView({ block: "nearest" });
   file.focus({ preventScroll: true });
@@ -1022,14 +1055,27 @@ function ftRowMenuOpen(row) {
   return true;
 }
 
-// ftTreeContextMenu: a contextmenu event whose target is a tree row itself is the keyboard's (the Menu key on a
-// platform that sends it to the focused element) or an assistive technology's (VoiceOver's VO+Shift+M): it opens the
-// row's menu as Shift+F10 does, and the browser's own is not also shown. A mouse right-click keeps the browser's menu
-// (button 2, and it lands on a part of the row more often than on the row), and the phone keeps what it had: desktop only.
+// ftTreeContextMenu: two kinds of contextmenu event reach the tree, desktop only.
+// A mouse right-click (button 2) on a row of the docked tree opens that row's menu at the pointer, as the explorer of an editor
+// does, and the browser's own is not also shown. It lands on a part of the row (the icon, the name, the git letter) more often
+// than on the row itself, so the row is found from the target. Selecting the row first shows which one the menu acts on.
+// Anywhere else (the tree's empty space, a tree that is not the dock's) the browser keeps its menu.
+// An event whose target is a tree row itself, from no mouse button, is the keyboard's (the Menu key on a platform that sends it
+// to the focused element) or an assistive technology's (VoiceOver's VO+Shift+M): it opens the row's menu as Shift+F10 does, and
+// the browser's own is not also shown. The phone keeps what it had.
 function ftTreeContextMenu(e) {
   if (mobileActive(window.innerWidth)) return;
+  if (e.button === 2) {
+    const hit = e.target && e.target.closest ? e.target.closest(".ft-node") : null;
+    const open = hit && ftDocked() ? ftRowMenus.get(hit) : null;
+    if (!open) return;
+    e.preventDefault();
+    ftSelect(hit);
+    open({ x: e.clientX, y: e.clientY });
+    return;
+  }
   const row = e.target;
-  if (!row || !row.classList || !row.classList.contains("ft-node") || e.button === 2) return;
+  if (!row || !row.classList || !row.classList.contains("ft-node")) return;
   if (ftRowMenuOpen(row)) e.preventDefault();
 }
 

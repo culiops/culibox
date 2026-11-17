@@ -84,12 +84,13 @@ test("every strip rule is in the desktop stylesheet and none in app.css, which t
 
 test("a single click on a file row opens a preview tab and a double-click keeps it; the phone's click is openFile and its double-click nothing", () => {
   const tree = read("filetree.js");
-  const i = tree.indexOf("const docked = () =>");
-  assert.ok(i > 0, "the dock test is one function");
+  // The dock test is one function (Task 9a moved it out of the row loop, where the click's selection and the right-click share it).
+  assert.match(fn("filetree.js", "ftDocked"), /typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks\(\)/, "desktop and the Files dock only");
+  const i = tree.indexOf("row.onclick = () => {\n        if (ftDocked())");
+  assert.ok(i > 0, "the file row's click asks ftDocked");
   const block = tree.slice(i, tree.indexOf("}\n  }\n  if (rootCall)", i));
-  assert.match(block, /row\.onclick = \(\) => \{\s*if \(docked\(\)\) drawerShowFile\(full\);\s*else openFile\(full\);\s*\};/);
-  assert.match(block, /row\.ondblclick = \(\) => \{ if \(docked\(\)\) drawerShowFile\(full, \{ preview: false \}\); \};/);
-  assert.match(block, /typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks\(\)/, "desktop and the Files dock only");
+  assert.match(block, /row\.onclick = \(\) => \{\s*if \(ftDocked\(\)\) \{ ftSelect\(row\); drawerShowFile\(full\); \}\s*else openFile\(full\);\s*\};/);
+  assert.match(block, /row\.ondblclick = \(\) => \{ if \(ftDocked\(\)\) drawerShowFile\(full, \{ preview: false \}\); \};/);
 });
 
 test("the dock's toolbar host has no Open in pane and tells the dock of an edit and of a dirty change", () => {

@@ -115,15 +115,18 @@ test("the env chip takes the kit .chip-env look: weight 600, tracking .02em", ()
   assert.strictEqual(d.get("font-size"), "var(--t-xs)");
 });
 
-test("the changed-file dot is drawn by CSS, so it needs no px font size", () => {
+test("the dock tree's session mark is a 2px accent bar on the row, and the old dot is not drawn", () => {
+  // Task 9a: the dot after the name (a 6px circle, which is why this pin once checked that it set no px font size) became the
+  // spec's session bar, so a row this session changed carries `inset 2px 0 0` and the .ft-chg span only stays for filetree.js
+  // to find and repaint.
   const rules = parseRules(css);
   const dot = rules.find((r) => r.selector === "#drawer .ft-chg");
-  const pseudo = rules.find((r) => r.selector === "#drawer .ft-chg::before");
-  assert.ok(dot && pseudo, "#drawer .ft-chg and its ::before are styled");
-  const d = new Map(pseudo.decls);
-  assert.strictEqual(d.get("background"), "currentColor");
-  assert.strictEqual(d.get("border-radius"), "50%");
-  assert.ok(!new Map(dot.decls).has("font-size"), "the dot rule sets no font size");
+  assert.ok(dot, "#drawer .ft-chg is styled");
+  assert.strictEqual(new Map(dot.decls).get("display"), "none", "the dot is hidden");
+  assert.ok(!rules.some((r) => r.selector === "#drawer .ft-chg::before"), "no dot is drawn any more");
+  const bar = rules.find((r) => r.selector === "#drawer .ft-node:has(> .ft-chg)");
+  assert.ok(bar, "the row that holds the mark is styled");
+  assert.match(new Map(bar.decls).get("box-shadow"), /inset 2px 0 0 var\(--accent\)/);
 });
 
 test("the checks find what they should (a fixture of one offender each)", () => {

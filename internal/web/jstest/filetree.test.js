@@ -242,15 +242,21 @@ function fakeRow() {
   return el;
 }
 
-async function renderListing(data) {
-  const zones = [];
-  const container = fakeRow();
+// The globals ftRenderDir reads, with `data` as every listing; the zones array collects each folder row's drop zone.
+function renderSetup(data, zones) {
   const menu = installMenuDom();
   globalThis.document.createElement = () => fakeRow();
   Object.assign(globalThis, require("../static/treestate.js")); // shouldAutoOpen: nothing is remembered open
   globalThis.pendingRegion = () => () => {};
   globalThis.api = async () => data;
-  globalThis.makeDropZone = (el, destFn, opts) => zones.push({ el, dest: destFn(), opts });
+  globalThis.makeDropZone = (el, destFn, opts) => { if (zones) zones.push({ el, dest: destFn(), opts }); };
+  return menu;
+}
+
+async function renderListing(data) {
+  const zones = [];
+  const container = fakeRow();
+  const menu = renderSetup(data, zones);
   const ro = await FT.ftRenderDir("/tmp/claude-1/x", container, "");
   // Press each row's \u22ef and keep what its menu printed.
   const menus = {};
@@ -288,6 +294,28 @@ test("ftRenderDir: every row's menu follows its own listing's flag", async () =>
   const rw = await renderListing({ path: "/h/w", entries });
   assert.ok(rw.menus["dir1"].includes("New folder here\u2026") && rw.menus["dir1"].includes("Rename\u2026") && rw.menus["dir1"].includes("Delete\u2026"));
   assert.ok(rw.menus["readme.txt"].includes("Rename\u2026") && rw.menus["readme.txt"].includes("Delete\u2026"));
+});
+
+// The desktop dock draws depth with one custom property per row (desktop.css: indent and guides read --lvl), and a
+// level is two characters of prefix, the same arithmetic aria-level already uses. The pending line of a folder in
+// flight sits where the children will, so its box carries the same number.
+test("ftRenderDir sets --lvl per depth", async () => {
+  const entries = [{ name: "dir1", is_dir: true, size: 0 }, { name: "a.txt", is_dir: false, size: 3 }];
+  const vars = (el) => el.vars;
+  const recording = () => {
+    const el = fakeRow();
+    el.vars = {};
+    el.style = { setProperty(k, v) { el.vars[k] = String(v); } };
+    return el;
+  };
+  renderSetup({ path: "/h/w", entries });
+  globalThis.document.createElement = () => recording();
+  for (const [prefix, lvl] of [["", "0"], ["  ", "1"], ["    ", "2"]]) {
+    const box = recording();
+    await FT.ftRenderDir("/h/w", box, prefix);
+    assert.strictEqual(vars(box)["--lvl"], lvl, "the box the rows go in, prefix " + JSON.stringify(prefix));
+    assert.deepStrictEqual(box.children.map((r) => vars(r)["--lvl"]), [lvl, lvl], "every row of the listing, prefix " + JSON.stringify(prefix));
+  }
 });
 
 test("ftRenderDir: a failed listing is not read-only (the buttons stay; the server still refuses)", async () => {
