@@ -169,6 +169,9 @@ func main() {
 		}
 		os.Exit(runBox(args, cfg, home, cfgFiles, os.Stdout))
 	}
+	if args.Cmd == "service" {
+		os.Exit(runService(args, cfg, home, envHome, realServiceDeps(home, xdg), os.Stdout))
+	}
 	if args.Cmd == "init" {
 		os.Exit(runInit(args, home, os.Stdin, term.IsTerminal(int(os.Stdin.Fd())), os.Stdout, realInitDeps(home)))
 	}

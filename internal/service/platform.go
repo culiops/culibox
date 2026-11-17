@@ -28,15 +28,15 @@ type Platform struct {
 	Sleep     func(time.Duration)
 }
 
-// Real is this machine's platform.
-func Real() Platform {
+// Real is this machine's platform, with the home dir and $XDG_CONFIG_HOME
+// main resolved once.
+func Real(home, xdgConfig string) Platform {
 	name := os.Getenv("USER")
 	if u, err := user.Current(); err == nil && u.Username != "" {
 		name = u.Username
 	}
-	home, _ := os.UserHomeDir()
 	return Platform{GOOS: runtime.GOOS, UID: os.Getuid(), User: name, Home: home,
-		XDGConfig: os.Getenv("XDG_CONFIG_HOME"), LingerDir: "/var/lib/systemd/linger",
+		XDGConfig: xdgConfig, LingerDir: "/var/lib/systemd/linger",
 		Run: boxvm.ExecRunner{}, Sleep: time.Sleep}
 }
 

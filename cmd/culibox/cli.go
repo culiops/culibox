@@ -44,6 +44,7 @@ const usage = `usage:
   culibox clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>; safe while culibox serves (a daemon restart aborts it; rerun)
   culibox store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
   culibox store set|rm [-config <path>] <id>           put a value (read from stdin, never argv) or delete one
+  culibox service install|uninstall|status [-config <path>]   run serve as a systemd --user service (Linux) or a LaunchAgent (macOS); loopback only, opt-in
   culibox version                                      print the version and commit
 
 Everything culibox writes, its config.json included, lives in one data root:
@@ -52,8 +53,8 @@ A ~/.local/share/agent-box from before the rename is moved there by serve, when 
 `
 
 type cliArgs struct {
-	Cmd        string // "serve" | "doctor" | "bug-report" | "init" | "box" | "clone" | "store" | "version"
-	Sub        string // box: "setup" | "stop" | "status" | "share"; clone: "fetch"; store: "init" | "status" | ... | "list"
+	Cmd        string // "serve" | "doctor" | "bug-report" | "init" | "box" | "clone" | "store" | "service" | "version"
+	Sub        string // box: "setup" | "stop" | "status" | "share"; clone: "fetch"; store: "init" | "status" | ... | "list"; service: "install" | "uninstall" | "status"
 	ID         string // store set|rm: the value id
 	ConfigPath string
 	ConfigSet  bool // -config given explicitly
@@ -77,6 +78,11 @@ type cliArgs struct {
 // storeSubs are the `agent-box store` subcommands. There is no get: a value
 // never comes back out through the CLI.
 var storeSubs = []string{"init", "status", "unlock", "lock", "passwd", "set", "rm", "list"}
+
+// serviceSubs are the `culibox service` subcommands.
+var serviceSubs = []string{"install", "uninstall", "status"}
+
+const serviceNeedsSub = "service needs a subcommand: install, uninstall or status"
 
 const storeNeedsSub = "store needs a subcommand: init, status, unlock, lock, passwd, set, rm or list"
 
@@ -115,6 +121,14 @@ func parseArgs(argv []string) (cliArgs, error) {
 		sub, argv = argv[0], argv[1:]
 		if sub != "fetch" {
 			return cliArgs{}, fmt.Errorf("unknown clone subcommand %q", sub)
+		}
+	case "service":
+		if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+			return cliArgs{}, errors.New(serviceNeedsSub)
+		}
+		sub, argv = argv[0], argv[1:]
+		if !slices.Contains(serviceSubs, sub) {
+			return cliArgs{}, fmt.Errorf("unknown service subcommand %q", sub)
 		}
 	case "store":
 		if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
