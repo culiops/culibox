@@ -907,6 +907,26 @@ test("a folder's git dot keeps its words in the name's hover text, with the sess
   assert.strictEqual(name.title, "~/w/dir1\nEdited by this session's agent", "the git line is gone, the session's stays");
 });
 
+// A folder's git dot is not the session's mark, so a repaint of the session marks that finds nothing to add or remove on its
+// row used to leave the row's hover text as it was. The title can have been reset to the path alone while the tree was not
+// the dock's (a git repaint then), with the dot still on the row, so re-docking must give the note back on every row.
+test("ftPaintChanged rebuilds every row's hover text, so a folder's git note comes back after the dock is shown again", async () => {
+  const w = world(1280);
+  docked(w);
+  w.run(read("gitstatus.js"), "gitstatus.js");
+  const c = await w.render();
+  const row = rowNamed(c, "dir1");
+  const name = byCls(row, "ft-name")[0];
+  w.run("gitState = { root: '/h/w', sid: null, status: { state: 'ok' }, marks: new Map([['/h/w/dir1', { code: 'M', dir: true, title: '2 changes inside' }]]) }; gitMarkRow(ftRowFor('/h/w/dir1'), '/h/w/dir1');");
+  assert.strictEqual(name.title, "~/w/dir1\n2 changes inside");
+  w.run("dockOn = false; ftNameTitle(ftRowFor('/h/w/dir1'));"); // a git repaint while the tree is not the dock's
+  assert.strictEqual(name.title, "~/w/dir1", "not docked: the path alone, the dot stays on the row");
+  assert.strictEqual(byCls(row, "ft-git-dot").length, 1);
+  w.run("dockOn = true; ftPaintChanged(new Set(['/h/w/a.txt']));"); // the dock shows Files again; the folder is not in the set
+  assert.strictEqual(name.title, "~/w/dir1\n2 changes inside", "the folder's note is back in the name's hover text");
+  assert.strictEqual(row.title, "2 changes inside");
+});
+
 test("initFileTree registers the contextmenu guard on the document, beside the click closer and the key handler", () => {
   const src = read("filetree.js");
   const init = src.slice(src.indexOf("async function initFileTree"));

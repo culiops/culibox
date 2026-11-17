@@ -169,7 +169,7 @@ func TestTimelineEditCounts(t *testing.T) {
 // (not when the tool_use was sent), and a failed edit does not move it.
 func TestTimelineFilesCarryLastEditTime(t *testing.T) {
 	m, home := newLocatorManager(t)
-	// at is the offset from the fixture clock of 2026-11-17 10:mm:00Z.
+	// at is the offset in ms from tlBase that lands on 2026-11-17 10:mm:00Z.
 	at := func(min int) int64 {
 		return time.Date(2026, 11, 17, 10, min, 0, 0, time.UTC).UnixMilli() - tlBase.UnixMilli()
 	}

@@ -284,7 +284,11 @@ function ftPaintChanged(set) {
   if (!ftTreeEl) return;
   for (const row of ftTreeEl.querySelectorAll(".ft-node")) {
     const p = ftRowPaths.get(row);
-    if (p) ftMarkRow(row, p, set);
+    if (!p) continue;
+    ftMarkRow(row, p, set);
+    // Every row, not only one whose span came or went: a folder's git dot says its words through this title, and the title
+    // may have been reset to the path alone while the tree was not the dock's.
+    ftNameTitle(row);
   }
 }
 
@@ -832,6 +836,12 @@ async function promptNewFile(dir) {
   else if (typeof openFile === "function") openFile(path);
 }
 
+// ftFsTry runs one fs request of a mutation. fsPost rejects when the request never completes, which reads as a refused request
+// (the toast, the same words as New file and New folder), not as an unhandled rejection. null is "no answer".
+async function ftFsTry(verb, request) {
+  try { return await request(); } catch (_) { showToast("Could not " + verb + ": network error", { error: true }); return null; }
+}
+
 async function promptRename(path, name) {
   const next = await askPrompt({
     title: "Rename",
@@ -840,7 +850,8 @@ async function promptRename(path, name) {
     confirmLabel: "Rename",
   });
   if (next === null || !next || next === name) return;
-  let res = await fsRename(path, next);
+  let res = await ftFsTry("rename", () => fsRename(path, next));
+  if (!res) return;
   // A protected folder must not be renamable around its delete gate. mustMatch
   // keeps the confirm button disabled until the typed name is exactly right, so
   // a confirmed dialog has already matched.
@@ -853,7 +864,8 @@ async function promptRename(path, name) {
       mustMatch: res.data.confirm_name,
     });
     if (typed === null) return;
-    res = await fsRename(path, next, typed);
+    res = await ftFsTry("rename", () => fsRename(path, next, typed));
+    if (!res) return;
   }
   if (!res.ok) { showToast("Could not rename: " + fsErrText(res), { error: true }); return; }
   // The old path is gone either way, so any viewer tab on it is stale, and its
@@ -868,7 +880,8 @@ async function promptRename(path, name) {
 // confirmDelete drives the server's two-step gate: the first request reports
 // what is inside, the second carries back the count the user actually saw.
 async function confirmDelete(path, name, isDir) {
-  let res = await fsDelete(path);
+  let res = await ftFsTry("delete", () => fsDelete(path));
+  if (!res) return;
   if (res.status === 409 && res.data && res.data.confirm_name) {
     // Protected: name what is inside as well as demanding the typed name. The
     // folders that earn this gate must not be the ones told the least.
@@ -884,7 +897,8 @@ async function confirmDelete(path, name, isDir) {
       mustMatch: d.confirm_name,
     });
     if (typed === null) return;
-    res = await fsDelete(path, { recursive: true, confirmName: typed, entries: d.entries || 0 });
+    res = await ftFsTry("delete", () => fsDelete(path, { recursive: true, confirmName: typed, entries: d.entries || 0 }));
+    if (!res) return;
   } else if (res.status === 409 && res.data) {
     const d = res.data;
     const okDelete = await askConfirm({
@@ -894,7 +908,8 @@ async function confirmDelete(path, name, isDir) {
       danger: true,
     });
     if (!okDelete) return;
-    res = await fsDelete(path, { recursive: true, entries: d.entries || 0 });
+    res = await ftFsTry("delete", () => fsDelete(path, { recursive: true, entries: d.entries || 0 }));
+    if (!res) return;
   }
   if (!res.ok) { showToast("Could not delete: " + fsErrText(res), { error: true }); return; }
   if (typeof closeViewersFor === "function") closeViewersFor(path);
@@ -1242,6 +1257,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     iconFor, treeBranch, treeFollowTarget, rootableCwd, actionsLabel,
     listingReadOnly, rowMenuIds, rowMenuLabel, openRowMenu, ftApplyReadOnly, ftRenderDir,
-    ftKeyAction, ftMenuGroups, promptNewFile, promptMkdir,
+    ftKeyAction, ftMenuGroups, promptNewFile, promptMkdir, promptRename, confirmDelete,
   };
 }

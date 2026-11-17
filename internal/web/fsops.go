@@ -14,9 +14,10 @@ import (
 // File mutations: create a directory or an empty file, rename, delete.
 // Read-only browsing lives in fsapi.go, transfer in fsupload.go / fsarchive.go.
 
-// maxOpBody bounds the three JSON mutation bodies. None is more than a few
-// hundred bytes; the upload path already established that an unbounded request
-// body is not acceptable on this surface.
+// maxOpBody bounds the small JSON bodies: the four mutations (mkdir, newfile,
+// rename, delete) and the git calls that share decodeOpBody. None is more than
+// a few hundred bytes; the upload path already established that an unbounded
+// request body is not acceptable on this surface.
 const maxOpBody = 8 << 10
 
 // Bounds for the delete measurement. Generous — they only decide when the
@@ -52,8 +53,9 @@ func checkMutationGuard(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // decodeOpBody applies checkMutationGuard, then bounds and decodes the body for
-// the small JSON mutations (mkdir/rename/delete). Write's own decode lives in
-// fswrite.go's decodeWriteBody, which needs a much larger body cap.
+// the small JSON mutations (mkdir/newfile/rename/delete) and the git calls.
+// Write's own decode lives in fswrite.go's decodeWriteBody, which needs a much
+// larger body cap.
 func decodeOpBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if !checkMutationGuard(w, r) {
 		return false

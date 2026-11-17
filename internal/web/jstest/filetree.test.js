@@ -245,18 +245,32 @@ test("ftApplyReadOnly hides the dock's New file with the other write buttons", (
 // ftLoadRoot returns at once here (no tree is built under node). The order prompt, create, refresh, open is
 // dock-changes-wire.test.js's source pin.
 async function newFile(o) {
-  const log = { prompts: [], creates: [], toasts: [], shown: [], opened: [] };
+  const log = { prompts: [], creates: [], toasts: [], shown: [], opened: [], renames: [], deletes: [], confirms: [], closed: [] };
   const was = {};
   const set = (k, v) => { was[k] = Object.prototype.hasOwnProperty.call(globalThis, k) ? globalThis[k] : undefined; globalThis[k] = v; };
-  set("askPrompt", async (opts) => { log.prompts.push(opts); return o.name; });
+  set("askPrompt", async (opts) => { log.prompts.push(opts); return Array.isArray(o.name) ? o.name[Math.min(log.prompts.length, o.name.length) - 1] : o.name; });
   set("fsNewFile", async (dir, name) => { log.creates.push([dir, name]); if (o.throws) throw new TypeError("Failed to fetch"); return o.reply; });
   set("fsMkdir", async (dir, name) => { log.creates.push([dir, name]); if (o.throws) throw new TypeError("Failed to fetch"); return o.reply; });
+  // Rename and delete: each call is logged and answered from o.replies in turn (the last one repeats); o.throwAt is the
+  // 1-based call that never completes.
+  const answer = (log0, args) => {
+    log0.push(args);
+    if (o.throwAt === log0.length) throw new TypeError("Failed to fetch");
+    const rs = o.replies || [];
+    return rs[Math.min(log0.length, rs.length) - 1];
+  };
+  set("fsRename", async (...args) => answer(log.renames, args));
+  set("fsDelete", async (...args) => answer(log.deletes, args));
+  set("askConfirm", async (opts) => { log.confirms.push(opts); return o.confirm !== false; });
+  set("closeViewersFor", (p) => { log.closed.push(p); });
+  set("forgetSubtree", () => {}); // treestate.js: the expand state the real page keeps
+  set("saveExpanded", () => {});
   set("fsErrText", (res) => (res && res.data && res.data.error) || "HTTP " + res.status);
   set("showToast", (m, opts) => { log.toasts.push([m, !!(opts && opts.error)]); });
   set("drawerOwnsFileClicks", () => o.docked !== false);
   set("drawerShowFile", (p, opts) => { log.shown.push([p, opts]); return true; });
   set("openFile", (p) => { log.opened.push(p); });
-  try { await FT[o.fn || "promptNewFile"](o.dir === undefined ? "/w" : o.dir); } finally {
+  try { await FT[o.fn || "promptNewFile"](...(o.args || [o.dir === undefined ? "/w" : o.dir])); } finally {
     for (const k of Object.keys(was)) { if (was[k] === undefined) delete globalThis[k]; else globalThis[k] = was[k]; }
   }
   return log;
@@ -298,6 +312,51 @@ test("promptNewFile and promptMkdir: a request that never completes is the error
     assert.deepStrictEqual(log.toasts, [["Could not create: network error", true]], fn);
     assert.deepStrictEqual(log.shown, [], fn + " opens nothing");
   }
+});
+
+// promptRename and confirmDelete reach the server twice when the folder is protected, so each request is guarded, not only the first.
+const NET = (verb) => [["Could not " + verb + ": network error", true]];
+const PROTECTED = { ok: false, status: 409, data: { confirm_name: "keep" } };
+test("promptRename: a request that never completes is the error toast, on the first request and on the protected-folder retry", async () => {
+  const first = await newFile({ fn: "promptRename", args: ["/w/a.txt", "a.txt"], name: "b.txt", throwAt: 1 });
+  assert.deepStrictEqual(first.renames, [["/w/a.txt", "b.txt"]]);
+  assert.deepStrictEqual(first.toasts, NET("rename"));
+  assert.deepStrictEqual(first.closed, [], "nothing is torn down for a rename that did not happen");
+  const retry = await newFile({ fn: "promptRename", args: ["/w/keep", "keep"], name: ["keep2", "keep"], replies: [PROTECTED], throwAt: 2 });
+  assert.deepStrictEqual(retry.renames, [["/w/keep", "keep2"], ["/w/keep", "keep2", "keep"]]);
+  assert.deepStrictEqual(retry.toasts, NET("rename"));
+  assert.deepStrictEqual(retry.closed, []);
+});
+
+test("promptRename: a rename that works still says so, and a refusal says why", async () => {
+  const ok = await newFile({ fn: "promptRename", args: ["/w/a.txt", "a.txt"], name: "b.txt", replies: [{ ok: true, status: 200, data: {} }] });
+  assert.deepStrictEqual(ok.toasts, [["Renamed to b.txt", false]]);
+  assert.deepStrictEqual(ok.closed, ["/w/a.txt"]);
+  const bad = await newFile({ fn: "promptRename", args: ["/w/a.txt", "a.txt"], name: "b.txt", replies: [{ ok: false, status: 400, data: { error: "bad name" } }] });
+  assert.deepStrictEqual(bad.toasts, [["Could not rename: bad name", true]]);
+});
+
+test("confirmDelete: a request that never completes is the error toast, on the first request and on each confirmed retry", async () => {
+  const first = await newFile({ fn: "confirmDelete", args: ["/w/a.txt", "a.txt", false], throwAt: 1 });
+  assert.deepStrictEqual(first.deletes, [["/w/a.txt"]]);
+  assert.deepStrictEqual(first.toasts, NET("delete"));
+  assert.deepStrictEqual(first.closed, [], "nothing is torn down for a delete that did not happen");
+  const ask = await newFile({ fn: "confirmDelete", args: ["/w/d", "d", true], replies: [{ ok: false, status: 409, data: { entries: 3 } }], throwAt: 2 });
+  assert.deepStrictEqual(ask.deletes.length, 2);
+  assert.strictEqual(ask.confirms.length, 1);
+  assert.deepStrictEqual(ask.toasts, NET("delete"));
+  const prot = await newFile({ fn: "confirmDelete", args: ["/w/keep", "keep", true], name: "keep", replies: [PROTECTED], throwAt: 2 });
+  assert.deepStrictEqual(prot.deletes.length, 2);
+  assert.deepStrictEqual(prot.toasts, NET("delete"));
+  assert.deepStrictEqual(prot.closed, []);
+});
+
+test("confirmDelete: a delete that works still says so, and a refusal says why", async () => {
+  const ok = await newFile({ fn: "confirmDelete", args: ["/w/a.txt", "a.txt", false], replies: [{ ok: true, status: 200, data: {} }] });
+  assert.deepStrictEqual(ok.toasts, [["Deleted a.txt", false]]);
+  assert.deepStrictEqual(ok.closed, ["/w/a.txt"]);
+  const bad = await newFile({ fn: "confirmDelete", args: ["/w/a.txt", "a.txt", false], replies: [{ ok: false, status: 403, data: { error: "protected" } }] });
+  assert.deepStrictEqual(bad.toasts, [["Could not delete: protected", true]]);
 });
 
 test("promptMkdir: a name creates the folder and says so; a refusal says why", async () => {
