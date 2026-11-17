@@ -41,7 +41,7 @@ const IDS = ["drawer", "drawer-body", "drawer-max", "drawer-title", "drawer-sess
 function page(over) {
   const els = Object.fromEntries(IDS.map((id) => [id, fake(id)]));
   els.drawer.hidden = false;
-  const st = { cells: 1, maximized: false, focusSid: "a", calls: [] };
+  const st = { cells: 1, maximized: false, focusSid: "a", calls: [], roots: [] };
   const ctx = vm.createContext(Object.assign({
     console, Array, Object, Set, Math, Number, JSON,
     $: (id) => els[id] || null,
@@ -67,11 +67,18 @@ function page(over) {
     ["app.js", "dockCols"], ["app.js", "dockTreeShare"], ["app.js", "drawerLiveSids"], ["app.js", "paintDrawerMax"], ["app.js", "paintDrawerLayout"],
     ["app.js", "dockTreeReveal"], ["app.js", "dockTreeFold"], ["app.js", "drawerFollowFocus"], ["app.js", "toggleDrawerPin"],
     ["app.js", "paintDrawerHead"], ["app.js", "drawerSessionName"], ["app.js", "paintDrawerTabs"], ["app.js", "positionDrawer"],
-    ["app.js", "dockMeasure"], ["app.js", "applyDrawer"], ["filesdrawer.js", "drawerKeepsTree"],
+    ["app.js", "dockMeasure"], ["app.js", "applyDrawer"], ["app.js", "drawerPinCheck"], ["filesdrawer.js", "drawerKeepsTree"],
+    ["tabs.js", "syncFocusedTree"],
   ]) load(fnSource(file, name), file + ":" + name);
   // Stand-ins for what these call into and the tests do not look at. The real positionDrawer is replaced by a spy: the
   // tests that care about it load it again (see the phone test).
   load("const cells = []; function dockRefit() {} function moveIntoDrawer() {} function drawerRootTree() {}", "stubs");
+  // The tree: treeFollowTarget names a root for the focused session's tab, syncTreeToRoot records where the tree was sent.
+  ctx.focusedTab = () => (st.focusSid ? { id: st.focusSid } : null);
+  ctx.treeFollowTarget = (t) => (t ? { root: "/work/" + t.id, key: "k:" + t.id } : null);
+  ctx.syncTreeToRoot = (root, key) => { st.roots.push([root, key]); };
+  ctx.drawerOwnsFileClicks = () => true;
+  ctx.drawerHasUnsaved = () => false;
   ctx.positionDrawer = () => st.calls.push(["position"]);
   return { els, st, ctx, run: (code) => load(code, "test"), sessions: (list) => { ctx.lastSessions = list; } };
 }
@@ -276,6 +283,63 @@ test("the pin toggles, shows in the header, and unpinning follows focus at once"
   assert.equal(p.run("drawerState.pinned"), false);
   assert.equal(p.run("drawerState.sessionId"), "b", "unpinned: the dock follows the focused pane");
   assert.equal(p.els["drawer-hint"].textContent, "follows the focused pane");
+});
+
+// The tree is held while pinned (drawerKeepsTree), so when the pin ends it has to be sent to the focused session: the header and
+// the viewer move through drawerFilesApply, which does not re-root it.
+test("unpinning re-roots the tree at the focused session, which the pin was holding back", () => {
+  const p = page();
+  p.run('drawerState = { open: "files", sessionId: "a", pinned: true }');
+  p.st.focusSid = "b";
+  p.run("syncFocusedTree()"); // focus moved to b while pinned to a: the tree stays
+  assert.deepEqual(p.st.roots, [], "held by the pin");
+  assert.equal(p.run("drawerState.sessionId"), "a");
+  p.run("toggleDrawerPin()");
+  assert.equal(p.run("drawerState.pinned"), false);
+  assert.equal(p.run("drawerState.sessionId"), "b", "header and viewer follow");
+  assert.deepEqual(p.st.roots, [["/work/b", "k:b"]], "and so does the tree");
+});
+
+test("a pinned session that ends: the poll re-roots the tree at the focused session; a live pin leaves everything alone", () => {
+  const p = page();
+  p.run('drawerState = { open: "files", sessionId: "a", pinned: true }');
+  p.st.focusSid = "b";
+  p.run("drawerPinCheck()"); // a is live
+  assert.deepEqual(p.st.roots, []);
+  assert.equal(p.run("drawerState.pinned"), true);
+  p.sessions([{ id: "a", name: "alpha", exited: true }, { id: "b", name: "beta" }]);
+  p.run("drawerPinCheck()");
+  assert.deepEqual(p.run("({ s: drawerState.sessionId, p: drawerState.pinned })"), { s: "b", p: false });
+  assert.deepEqual(p.st.roots, [["/work/b", "k:b"]]);
+  // Gone from the list altogether is gone too.
+  const g = page();
+  g.run('drawerState = { open: "files", sessionId: "a", pinned: true }');
+  g.st.focusSid = "b";
+  g.sessions([{ id: "b", name: "beta" }]);
+  g.run("drawerPinCheck()");
+  assert.deepEqual(g.st.roots, [["/work/b", "k:b"]]);
+  // Nothing pinned: nothing to check, whatever the list says.
+  const q = page();
+  q.st.focusSid = "b";
+  q.sessions([{ id: "a", exited: true }]);
+  q.run("drawerPinCheck()");
+  assert.deepEqual(q.st.roots, []);
+});
+
+test("the Explorer button on the strip puts focus inside the column: a tree row, else the Go to file field, else Close", () => {
+  const strip = (hasRow, gotoShown) => {
+    const focused = [];
+    const mk = (id, shown) => ({ id, getClientRects: () => (shown ? [1] : []), focus() { focused.push(id); } });
+    const row = hasRow ? mk("row", true) : null;
+    const els = { "drawer-tree": { querySelector: () => row }, "drawer-goto-in": mk("goto", gotoShown), "drawer-x": mk("x", true) };
+    const ctx = vm.createContext({ $: (id) => els[id], dockTreeReveal() {} });
+    new vm.Script(fnSource("app.js", "dockStripOpen")).runInContext(ctx);
+    ctx.dockStripOpen();
+    return focused;
+  };
+  assert.deepEqual(strip(true, true), ["row"], "a loaded tree: its row");
+  assert.deepEqual(strip(false, true), ["goto"], "the tree has not loaded: the field keeps keyboard users in the dock");
+  assert.deepEqual(strip(false, false), ["x"], "a workspace the fs API refuses hides the field too: Close");
 });
 
 test("there is nothing to pin without a session or a dock", () => {

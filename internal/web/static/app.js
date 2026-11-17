@@ -361,13 +361,15 @@ function paintDrawerHead() {
   }
 }
 
-// toggleDrawerPin: the header's pin. Pinned, the dock stays on its session while focus moves (dockFollow). Unpinning
-// lets it follow focus again at once, through the same dirty-buffer gate as any focus move.
+// toggleDrawerPin: the header's pin. Pinned, the dock stays on its session while focus moves (dockFollow), and so does
+// its tree. Unpinning lets both follow focus again at once, through the same dirty-buffer gate as any focus move:
+// syncFocusedTree re-roots the tree (drawerFilesApply, which moves the header and the viewer, does not) and then runs
+// drawerFollowFocus.
 function toggleDrawerPin() {
   if (!drawerState.open || !drawerDesktop() || !drawerState.sessionId) return;
   drawerState = { open: drawerState.open, sessionId: drawerState.sessionId, pinned: !drawerState.pinned };
   paintDrawerHead();
-  if (!drawerState.pinned) drawerFollowFocus();
+  if (!drawerState.pinned) syncFocusedTree();
 }
 
 // paintDrawerTabs: the pressed state of a pane's Files control follows the drawer:
@@ -391,6 +393,15 @@ function paintDrawerTabs(cell) {
 // drawerLiveSids: the sessions that can still be shown (the list, minus the ended ones), for dockFollow's pin check.
 function drawerLiveSids() {
   return (lastSessions || []).filter((s) => !s.exited).map((s) => s.id);
+}
+
+// drawerPinCheck: the session list changed. A pinned session that has ended no longer holds the dock, so the dock and
+// its tree follow focus again. syncFocusedTree, not drawerFollowFocus alone: the tree stayed on the pinned session
+// (drawerKeepsTree) and only syncFocusedTree re-roots it; it ends in drawerFollowFocus. A pin on a live session, or no
+// pin, is left alone (no work per poll).
+function drawerPinCheck() {
+  if (!drawerState.pinned || drawerLiveSids().includes(drawerState.sessionId)) return;
+  syncFocusedTree();
 }
 
 // drawerFollowFocus: the dock's tree already follows the focused tab
@@ -533,11 +544,12 @@ function dockTreeFold() {
 }
 
 // dockStripOpen: a press on the strip's Explorer or Changes. The strip is not drawn while the column is open, so focus
-// goes in with it, to the tree's row rather than to a button that has just gone.
+// goes in with it rather than to a button that has just gone: a tree row, or when the tree has not loaded one yet its
+// Go to file field, or (a workspace the fs API refuses hides both) the dock's Close button.
 function dockStripOpen() {
   dockTreeReveal();
-  const row = $("drawer-tree").querySelector('.ft-node[tabindex="0"]');
-  if (row) row.focus();
+  const to = [$("drawer-tree").querySelector('.ft-node[tabindex="0"]'), $("drawer-goto-in"), $("drawer-x")].find((n) => n && n.getClientRects().length > 0);
+  if (to) to.focus();
 }
 
 // dockRefit: the grid's width changed (the dock opened, closed or was resized), so the visible terminals refit. Each
@@ -4031,8 +4043,8 @@ async function refreshSessionsRun() {
   if (drawerState.open === "files" && typeof drawerPaint === "function") drawerPaint();
   // The header's chip draws the session's dot and name from the same list.
   if (drawerState.open) paintDrawerHead();
-  // A pinned session that has ended is unpinned, and the dock follows focus again (dockFollow).
-  if (drawerState.pinned) drawerFollowFocus();
+  // A pinned session that has ended is unpinned, and the dock and its tree follow focus again (dockFollow).
+  drawerPinCheck();
   // The focused session's account can only be known once the list is here.
   syncRateLimitsAccount();
   // A card's expanded state (and its cached full text) belongs to it needing
@@ -7403,6 +7415,10 @@ function initSettings() {
 }
 
 // --- boot --------------------------------------------------------------------
+// The open dock is sized from the window (dockLayout), so it is laid out BEFORE the terminals fit: registered first, it
+// runs first. Without it fitAll measures at the old dock width and the grid's ResizeObserver refits a frame later at
+// the new one, which sends the PTY two sizes for one drag step. The phone has no dock and does not run it.
+window.addEventListener("resize", () => { if (drawerState.open && drawerDesktop()) positionDrawer(); });
 window.addEventListener("resize", fitAll);
 // The desktop's empty grid says "Start"; index.html keeps the phone's "Spawn" (founder call 1, Plan 7).
 {

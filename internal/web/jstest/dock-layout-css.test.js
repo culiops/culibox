@@ -92,3 +92,11 @@ test("every dock rule is inside the desktop block: the phone never sees a dock",
   assert.ok(!/#drawer-(pin|strip|hint)|--dock-w/.test(read("app.css")), "app.css (shared with the phone) knows nothing of the dock");
   assert.match(read("desktop.css"), /\.dr-strip \{/);
 });
+
+test("the window's resize lays the open dock out before the terminals fit, and the phone does not run it", () => {
+  const app = read("app.js");
+  const dock = app.indexOf('window.addEventListener("resize", () => { if (drawerState.open && drawerDesktop()) positionDrawer(); });');
+  const fit = app.indexOf('window.addEventListener("resize", fitAll);');
+  assert.ok(dock > 0, "a resize listener that positions the dock, only for an open desktop dock");
+  assert.ok(fit > dock, "registered before fitAll, so it runs first and fitAll measures the new dock width");
+});
