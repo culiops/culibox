@@ -17,7 +17,8 @@
 #      public, that each tarball has a build attestation from release.yml for this
 #      tag and commit
 #   2. clones <tag> and runs the Go tests natively (arm64) and under Rosetta 2
-#      (amd64), built the way the tarballs are: CGO_ENABLED=0 GOOS=darwin
+#      (amd64, one package at a time, and a package that times out is run once more
+#      alone; the record names it), built the way the tarballs are: CGO_ENABLED=0 GOOS=darwin
 #      GOARCH=<arch>, ignoring the caller's GOFLAGS and go env file. Each arch's tests
 #      use the abduco its tarball bundles (#317); for a tarball without one (releases
 #      before #317) the pinned abduco is built from source instead
@@ -279,11 +280,44 @@ fi
 # darwin and this arch. GOENV=off with an explicit GOFLAGS: an EMPTY GOFLAGS falls back to
 # the go env file (`go env -w`), so only a non-empty value pins it. -v so tests can be counted.
 # A failing run sets T_PASS=false and does not stop the script.
+#
+# Under Rosetta (amd64), test binaries launched in parallel can hang before Go starts,
+# at 0% CPU, until go test kills them; the same package passes alone in seconds
+# (measured on a rented M1, #313). So amd64 tests one package at a time (-p 1), and a
+# package that go test reports as timed out is run once more, alone, logged to
+# test-<arch>-retry.log. The arch passes only when every such retry passes and nothing
+# else failed; the summary names each retried package and its result either way.
 T_PASS=
 T_SUMMARY=
 T_ENV=
+go_test() { # LOG GO-TEST-ARGS...: go test in the clone, pinned as above, appended to LOG
+  local log=$1
+  shift
+  (cd "$work/src" && env PATH="$abdir:$PATH" GOENV=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" AGENT_BOX_REQUIRE_ABDUCO=1 \
+    go test "$@") >>"$log" 2>&1
+}
+# timed_out_pkgs LOG: the packages whose FAIL line follows go test's timeout panic or
+# its "ran too long" kill (a binary that never started gets only the kill).
+timed_out_pkgs() {
+  local line t=false
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in
+    "panic: test timed out after "* | "*** Test killed"*"ran too long"*) t=true ;;
+    ok[[:space:]]*) t=false ;;
+    FAIL$'\t'*$'\t'*)
+      if [ "$t" = true ]; then
+        line=${line#FAIL$'\t'}
+        echo "${line%%$'\t'*}"
+      fi
+      t=false
+      ;;
+    esac
+  done <"$1"
+}
 run_tests() {
-  local arch=$1 goarch=$2 abdir=$3 log="$work/test-$1.log" passed skipped failed pkgs badpkgs
+  local arch=$1 goarch=$2 abdir=$3 log="$work/test-$1.log" rlog="$work/test-$1-retry.log"
+  local passed skipped failed pkgs badpkgs timedout pkg ntimed=0 retried="" retry_ok=true note=""
+  local par=()
   T_ENV="CGO_ENABLED=0 GOOS=darwin GOARCH=$goarch"
   if [ -z "$abdir" ]; then
     T_PASS=false
@@ -291,21 +325,47 @@ run_tests() {
     echo "go test ./... ($arch): not run, the abduco install failed" >&2
     return 0
   fi
-  echo "go test ./... ($arch, $T_ENV)"
-  if (cd "$work/src" && env PATH="$abdir:$PATH" GOENV=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" AGENT_BOX_REQUIRE_ABDUCO=1 \
-    go test -count=1 -v ./...) >"$log" 2>&1; then
+  if [ "$arch" = amd64 ]; then
+    par=(-p 1)
+    note="; one package at a time under Rosetta (-p 1)"
+  fi
+  echo "go test ./... ($arch, $T_ENV${par[*]:+, ${par[*]}})"
+  : >"$log"
+  if go_test "$log" ${par[@]+"${par[@]}"} -count=1 -v ./...; then
     T_PASS=true
-    passed=$(grep -c '^--- PASS' "$log" || true)
-    skipped=$(grep -c '^--- SKIP' "$log" || true)
-    pkgs=$(grep -c '^ok' "$log" || true)
-    T_SUMMARY="go test ./... ok: $passed test(s) passed, $skipped skipped, in $pkgs package(s)"
   else
     T_PASS=false
-    failed=$(grep -c '^--- FAIL' "$log" || true)
-    badpkgs=$(grep -cE '^FAIL[[:space:]]+[^[:space:]]+' "$log" || true)
-    T_SUMMARY="go test failed: $failed test(s) failed, $badpkgs package(s) FAIL, see test-$arch.log"
+    timedout=
+    if [ "$arch" = amd64 ]; then timedout=$(timed_out_pkgs "$log"); fi
+    if [ -n "$timedout" ]; then
+      : >"$rlog"
+      for pkg in $timedout; do
+        ntimed=$((ntimed + 1))
+        echo "go test $pkg ($arch): timed out in the full run, running it again alone"
+        if go_test "$rlog" -p 1 -count=1 -v "$pkg"; then
+          retried="$retried; $pkg timed out and passed when run again alone"
+        else
+          retried="$retried; $pkg timed out and failed when run again alone"
+          retry_ok=false
+        fi
+      done
+      retried="$retried (see test-$arch-retry.log)"
+    fi
   fi
-  grep -E '^(ok|FAIL|--- FAIL|panic)' "$log" || true
+  failed=$(grep -c '^--- FAIL' "$log" || true)
+  badpkgs=$(grep -cE '^FAIL[[:space:]]+[^[:space:]]+' "$log" || true)
+  if [ "$T_PASS" = false ] && [ "$ntimed" -gt 0 ] && [ "$retry_ok" = true ] && [ "$failed" -eq 0 ] && [ "$badpkgs" -eq "$ntimed" ]; then
+    T_PASS=true
+  fi
+  if [ "$T_PASS" = true ]; then
+    passed=$(cat "$log" ${retried:+"$rlog"} | grep -c '^--- PASS' || true)
+    skipped=$(cat "$log" ${retried:+"$rlog"} | grep -c '^--- SKIP' || true)
+    pkgs=$(cat "$log" ${retried:+"$rlog"} | grep -c '^ok' || true)
+    T_SUMMARY="go test ./... ok: $passed test(s) passed, $skipped skipped, in $pkgs package(s)$retried$note"
+  else
+    T_SUMMARY="go test failed: $failed test(s) failed, $badpkgs package(s) FAIL, see test-$arch.log$retried$note"
+  fi
+  grep -E '^(ok|FAIL|--- FAIL|panic)' "$log" ${retried:+"$rlog"} || true
 }
 
 # check_version ARCH BINARY [RUNNER...]: the binary's `version` must equal exactly
