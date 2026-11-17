@@ -91,8 +91,8 @@ type Keeper interface {
 	Clear() error
 }
 
-// Event is one audit record. Detail holds an id or a TTL, never a value or a
-// passphrase. Action is one of: init init_failed unlocked unlock_failed
+// Event is one audit record. Detail holds an id, a TTL or a fixed reason text,
+// never a value, a passphrase, a path or a keeper's own error text. Action is one of: init init_failed unlocked unlock_failed
 // unlock_rate_limited locked lock_failed passwd_changed passwd_failed value_set
 // value_set_failed value_removed value_removed_failed.
 type Event struct{ Action, Actor, Detail string }

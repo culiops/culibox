@@ -164,7 +164,7 @@ func TestSetWriteFailureIsAudited(t *testing.T) {
 		t.Fatalf("audit trail %v, want %v", actionsOf(rec), want)
 	}
 	e, _ := rec.find("value_set_failed")
-	if e.Actor != "web" || e.Detail != valueNotStored {
+	if e.Actor != "web" || e.Detail != "API_KEY" {
 		t.Fatalf("value_set_failed row %+v", e)
 	}
 	if strings.Contains(e.Detail, dir) || strings.Contains(e.Detail, "s3cret") {
@@ -207,7 +207,7 @@ func TestRemoveFailureIsAudited(t *testing.T) {
 		t.Fatalf("audit trail %v, want %v", actionsOf(rec), want)
 	}
 	e, _ := rec.find("value_removed_failed")
-	if e.Actor != "web" || e.Detail != valueNotRemoved {
+	if e.Actor != "web" || e.Detail != "API_KEY" {
 		t.Fatalf("value_removed_failed row %+v", e)
 	}
 	if strings.Contains(e.Detail, dir) {

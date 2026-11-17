@@ -46,12 +46,11 @@ const (
 	unlockNotKept  = "not kept: the key store refused the unlock"
 	initNotCreated = "the store was not created"
 
-	// The same for the steps after the locked, passwd_changed, value_set and
-	// value_removed rows (#332).
+	// The same for the steps after the locked and passwd_changed rows (#332). A
+	// failed value_set or value_removed carries the value id instead, like its
+	// before-row: the CLI and the daemon write rows that can interleave.
 	lockNotCleared   = "not cleared: the key store refused to lock"
 	passwdNotChanged = "the passphrase was not changed"
-	valueNotStored   = "the value was not stored"
-	valueNotRemoved  = "the value was not removed"
 )
 
 // Status is what the CLI, doctor and web show. Locked is only meaningful once
@@ -276,11 +275,11 @@ func (s *Store) Set(id string, value []byte, actor string) (err error) {
 		return err
 	}
 	// The row above is written first so an audit failure refuses the set; a
-	// failed write past it says so. Best effort, a fixed class: the write error
-	// can name a path.
+	// failed write past it says so. Best effort, with the id only: the write
+	// error can name a path.
 	defer func() {
 		if err != nil {
-			_ = s.record("value_set_failed", actor, valueNotStored)
+			_ = s.record("value_set_failed", actor, id)
 		}
 	}()
 	return writeAtomic(root, valuePath(id), buf.Bytes())
@@ -310,7 +309,7 @@ func (s *Store) Remove(id, actor string) (err error) {
 	// As in Set: a failed remove past the row says so, best effort.
 	defer func() {
 		if err != nil {
-			_ = s.record("value_removed_failed", actor, valueNotRemoved)
+			_ = s.record("value_removed_failed", actor, id)
 		}
 	}()
 	if err := root.Remove(valuePath(id)); err != nil {

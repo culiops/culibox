@@ -188,14 +188,14 @@ func settingsParts(r rawRow) []Part {
 }
 
 // storeParts: "encrypted store <action>" and, when the row has one, " · <detail>".
-// Only a value set or removed carries an identifier (the value id); any other
-// detail is free text (an unlock's "ttl=...") and stays plain.
+// Only a value set or removed, and their _failed outcomes, carry an identifier
+// (the value id); any other detail is free text (an unlock's "ttl=...") and stays plain.
 func storeParts(r rawRow) []Part {
 	head := "encrypted store " + words(r.a)
 	switch {
 	case r.c == "":
 		return []Part{txt(head)}
-	case r.a == "value_set" || r.a == "value_removed":
+	case r.a == "value_set" || r.a == "value_removed" || r.a == "value_set_failed" || r.a == "value_removed_failed":
 		return []Part{txt(head + " · "), ident(r.c)}
 	}
 	return []Part{txt(head), txt(" · " + r.c)}
