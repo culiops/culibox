@@ -204,6 +204,10 @@ version) echo "go version go1.99.0 darwin/arm64" ;;
 list)
   # The packages ./... holds, per STUB_GO_HANG_AMD64 mode (see test below).
   echo "LIST GOARCH=${GOARCH:-} ARGS=$*" >>"$STUB_OUT/go.log"
+  if [ -n "${STUB_GO_LIST_FAIL:-}" ]; then
+    echo "stub go list: cannot load packages" >&2
+    exit 1
+  fi
   printf 'fixture/a\nfixture/b\nfixture/c\n'
   case ${STUB_GO_HANG_AMD64:-} in
   build) echo fixture/d ;;
@@ -791,6 +795,13 @@ new_case y6
 run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=panic
 expect_rc "$rc" 3 "(y6) a test that hangs after Go started fails the arch"
 missing "$out/retry.log" "(y6) no retry: only go test's kill of a binary is the Rosetta symptom"
+
+echo "== (y8) go list fails after a retry"
+new_case y8
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=1 STUB_GO_LIST_FAIL=1
+expect_rc "$rc" 3 "(y8) an unchecked run is not verified"
+contains "$out/uploaded.json" "go list ./... failed (see test-amd64.log)" "(y8) the record says go list failed"
+contains "$case_dir/tmpdir"/macos-verify.*/test-amd64.log "stub go list: cannot load packages" "(y8) go list's error is kept in the log"
 
 echo "== (y7) too many timeouts are not retried"
 new_case y7

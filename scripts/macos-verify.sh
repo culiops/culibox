@@ -318,11 +318,12 @@ killed_pkgs() {
   done <"$1"
 }
 # no_result_pkgs LOG: the packages `go list ./...` names that have no ok, FAIL or ?
-# line in LOG (go stopped before it reached them); "go list failed" if it did.
+# line in LOG (go stopped before it reached them). When go list itself fails, its
+# errors are appended to LOG and the one line "!go-list-failed" is printed.
 no_result_pkgs() {
   local list pkg tab=$'\t'
-  list=$(go_cmd list ./... 2>/dev/null </dev/null) || {
-    echo "go list failed"
+  list=$(go_cmd list ./... 2>>"$1" </dev/null) || {
+    echo "!go-list-failed"
     return 0
   }
   while IFS= read -r pkg; do
@@ -382,7 +383,9 @@ KILLED
   fi
   failed=$(grep -c '^--- FAIL' "$log" || true)
   badpkgs=$(grep -cE '^FAIL[[:space:]]+[^[:space:]]+' "$log" || true)
-  if [ -n "$missing" ]; then
+  if [ "$missing" = "!go-list-failed" ]; then
+    retried="$retried; go list ./... failed (see test-$arch.log), so the full run could not be checked for packages without a result"
+  elif [ -n "$missing" ]; then
     retried="$retried; $missing has no result in the full run"
   elif [ "$T_PASS" = false ] && [ "$ntimed" -gt 0 ] && [ "$retry_ok" = true ] && [ "$rc" -eq 1 ] &&
     [ "$failed" -eq 0 ] && [ "$badpkgs" -eq "$ntimed" ]; then
