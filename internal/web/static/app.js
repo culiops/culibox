@@ -282,7 +282,7 @@ function applyDrawer(next, opts) {
   dr.dataset.kind = next.open || "";
   dr.hidden = !next.open;
   if (!next.open) {
-    paintDrawerMax(false, false); // ⛶ lasts one opening: it hides the panes
+    paintDrawerMax(false, false); // Full mode lasts one opening: it hides the panes
     dockTreeAsk = null; // and so does the explorer opened from the strip
   }
   paintDrawerHead();
@@ -476,9 +476,9 @@ function dockMeasure() {
 
 // paintDrawerLayout: the dock's geometry for `avail`. dockLayout decides the widths: the dock, the explorer column or its
 // folded strip, and whether the panes can keep their floors at all. When they cannot, the dock opens in Full mode over
-// them (data-forced: the same overlay as ⛶, so no terminal is resized to nothing) and dockFullLayout divides the pane
-// area. Forced Full mode lasts only while it is needed: the pushed dock comes back when there is room, and a ⛶ pressed
-// before that does not survive it. `over` = {dockShare?, treeShare?} is a drag in progress, not yet stored.
+// them (data-forced: the same overlay as Full, so no terminal is resized to nothing) and dockFullLayout divides the pane
+// area. Forced Full mode lasts only while it is needed: the pushed dock comes back when there is room, and a Full
+// pressed before that does not survive it. `over` = {dockShare?, treeShare?} is a drag in progress, not yet stored.
 function paintDrawerLayout(avail, over) {
   const dr = $("drawer");
   const body = $("drawer-body");
@@ -716,7 +716,7 @@ function wireDrawerSplit(el, kind) {
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", up);
     el.addEventListener("pointercancel", up);
-    // A capture lost without pointerup (window blur, element hidden by ⛶)
+    // A capture lost without pointerup (window blur, element hidden by Full mode)
     // still ends the drag, or "dragging" would stick and refuse every press.
     el.addEventListener("lostpointercapture", up);
   });
@@ -764,18 +764,26 @@ function setDrawerMax(on) {
 }
 
 // dockShowTerminal: leave Full mode for the terminal (the strip's button, the toggle in forced Full mode, Ctrl+`). Exit full
-// puts the pushed dock back; forced Full has none, so it closes the dock. The session's pane takes the keyboard back. false
-// when the dock is not in Full mode, so the shortcut leaves the key alone.
+// puts the pushed dock back; forced Full has none, so it closes the dock, which a tab holding an edit holds behind its
+// discard ask. The session's pane takes the keyboard back once Full mode is really over: at once for Exit full, and for the
+// close when applyDrawer has applied it (`after`: after Discard, never after Cancel, so a dock that stays up keeps its
+// focus). false when the dock is not in Full mode, so the shortcut leaves the key alone.
 function dockShowTerminal() {
   const dr = $("drawer");
   if (!dr || dr.hidden || dr.dataset.max !== "1") return false;
   const sid = drawerState.sessionId;
-  if (dr.dataset.forced === "1") closeDrawerFor(); else setDrawerMax(false);
-  const term = sid ? terminalTabFor(sid) : null;
-  const cell = term ? cells.find((c) => c.tabs.includes(term)) : null;
-  if (cell) {
+  const focus = () => {
+    const term = sid ? terminalTabFor(sid) : null;
+    const cell = term ? cells.find((c) => c.tabs.includes(term)) : null;
+    if (!cell) return;
     setFocusedCell(cell);
     if (cellTerminal(cell) === term) term.grabFocus();
+  };
+  if (dr.dataset.forced === "1") {
+    applyDrawer({ open: null, sessionId: sid }, { after: focus });
+  } else {
+    setDrawerMax(false);
+    focus();
   }
   return true;
 }
@@ -812,7 +820,7 @@ document.addEventListener("keydown", (e) => {
     setDrawerMax(false);
     return;
   }
-  // The explorer opened from the folded strip is as short-lived as ⛶, and Esc closes it in the same places and no others.
+  // The explorer opened from the folded strip is as short-lived as Full mode, and Esc closes it in the same places and no others.
   if (dockTreeAsk !== null && maxEscapeRestores({ max: true, ...at })) {
     e.preventDefault();
     dockTreeFold();

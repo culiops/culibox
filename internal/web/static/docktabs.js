@@ -295,10 +295,13 @@ function dockFromLayout(layout, cellSid) {
 
 // dockCellSid: the session a saved pane shows once the layout is restored, for dockFromLayout's cellSid: its active tab when
 // that is a live terminal, else its first live terminal (reconcileLayout drops a dead tab and falls back to the first one
-// left, and dockFromLayout resets a pane whose active tab was a viewer to its first). null when the pane has no live
-// terminal, which is every pane of files and every pane of a session that is gone: spec, saved tabs whose session no longer
-// exists are dropped, so dockFromLayout then has nowhere to put the pane's viewers. `liveSids` is an array or a Set, as for
-// parseDock: the session list, so a session that has ended but is still listed still has its dock.
+// left, and dockFromLayout resets a pane whose active tab was a viewer to its first). `liveSids` (an array or a Set, as for
+// parseDock) must be the RUNNING sessions, the set reconcileLayout restores a terminal from (layout.js runningIds: listed and
+// not exited), not the whole session list: a pane is restored with the terminals that run, so only those can be the session
+// it shows, and an exited session is skipped exactly as reconcileLayout skips it. There is no fallback to an exited session.
+// null when the pane has no running terminal, which is every pane of files and every pane whose sessions are gone or have
+// exited: reconcileLayout does not restore such a pane, so its viewer tabs are dropped with it (spec: saved tabs whose
+// session no longer exists are dropped), and dockFromLayout then has nowhere to put them.
 function dockCellSid(cell, liveSids) {
   if (!cell || typeof cell !== "object" || !Array.isArray(cell.tabs)) return null;
   const live = dockLiveSet(liveSids);

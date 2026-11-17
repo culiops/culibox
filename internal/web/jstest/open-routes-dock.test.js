@@ -246,3 +246,38 @@ test("restoreLayout still ends the restore when the migration throws", () => {
   assert.throws(() => ctx.restoreLayout(LIVE), /boom/);
   assert.equal(st.ended, 1, "the finally re-arms layout saving");
 });
+
+// The pane's session is chosen the way reconcileLayout chooses it: from the RUNNING sessions (layout.js runningIds), not from
+// every listed one. An exited session is still listed, but a restore does not bring its terminal back, so the pane shows the
+// next terminal that runs; the files must go to that session's dock, not to the exited one's.
+test("restoreLayout: a pane whose first terminal has exited but is still listed shows the running one, and its files go there", () => {
+  const saved = {
+    v: 1, cap: 4, focused: 0, maximized: null,
+    cells: [{ tabs: [{ id: "x" }, { id: "y" }, { path: "/a.go", scroll: 3 }], active: 0 }],
+  };
+  const { ctx, st } = restorer(1440, saved);
+  ctx.restoreLayout([{ id: "x", exited: true }, { id: "y" }]);
+  const shown = st.plans[0].cells[0].tabs[st.plans[0].cells[0].active].id;
+  assert.equal(shown, "y", "reconcileLayout leaves the pane on the running terminal");
+  assert.deepEqual(adoptedSessions(st), [shown], "the files go to the session the restored pane shows");
+  assert.deepEqual(st.adopted[0].get("y").tabs.map((t) => t.key), ["v:/a.go"]);
+  // Same with the exit marked the other way a session list says it (status).
+  const b = restorer(1440, JSON.parse(JSON.stringify(saved)));
+  b.ctx.restoreLayout([{ id: "x", status: "exited" }, { id: "y" }]);
+  assert.deepEqual(adoptedSessions(b.st), ["y"]);
+});
+
+test("restoreLayout: a pane whose terminals have all exited is not restored, so its files are dropped with it", () => {
+  const saved = {
+    v: 1, cap: 4, focused: 0, maximized: null,
+    cells: [
+      { tabs: [{ id: "x" }, { id: "w" }, { path: "/a.go" }], active: 2 },
+      { tabs: [{ id: "y" }, { path: "/b.go" }], active: 1 },
+    ],
+  };
+  const { ctx, st } = restorer(1440, saved);
+  ctx.restoreLayout([{ id: "x", exited: true }, { id: "w", exited: true }, { id: "y" }]);
+  assert.deepEqual(adoptedSessions(st), ["y"], "only the pane with a running terminal gives its file to a dock");
+  assert.deepEqual(st.plans[0].cells.map((c) => c.tabs), [[{ id: "y" }]], "and that is the only pane restored");
+  assert.ok(!st.adopted.some((m) => m.has("x") || m.has("w")), "an exited session's dock gets nothing: no fallback to it");
+});

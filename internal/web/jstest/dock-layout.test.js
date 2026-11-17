@@ -119,7 +119,7 @@ test("a maximized pane is one column on screen, so two cells do not make the doc
   assert.equal(p.run("dockCols()"), 1);
 });
 
-test("1100 wide with 2 panes cannot keep the terminal floors: Full mode is forced, and ⛶ and Esc leave it alone", () => {
+test("1100 wide with 2 panes cannot keep the terminal floors: Full mode is forced, and Esc leaves it alone", () => {
   const p = page();
   p.st.cells = 2;
   p.run("paintDrawerLayout(800)");
@@ -131,7 +131,7 @@ test("1100 wide with 2 panes cannot keep the terminal floors: Full mode is force
   assert.equal(p.els.drawer.props["--dock-w"], undefined, "a zero dock width is never written");
 });
 
-test("forced Full mode ends when there is room again, and takes a ⛶ pressed meanwhile with it", () => {
+test("forced Full mode ends when there is room again, and takes a Full pressed meanwhile with it", () => {
   const p = page();
   p.st.cells = 2;
   p.run("paintDrawerLayout(800)");
@@ -142,7 +142,7 @@ test("forced Full mode ends when there is room again, and takes a ⛶ pressed me
   assert.equal(p.els.drawer.props["--dock-w"], "680px", "min(.62 of 1400, 1400 - 2 * 360)");
 });
 
-test("a ⛶ pressed by the user is not forced: it stays through a layout pass and is laid out over the pane area", () => {
+test("a Full pressed by the user is not forced: it stays through a layout pass and is laid out over the pane area", () => {
   const p = page();
   p.run("paintDrawerMax(true, false)");
   p.run("paintDrawerLayout(1190)");
@@ -598,4 +598,29 @@ test("openDrawer hands its opts through a page that has to close first, so `afte
   again();
   assert.deepEqual(calls, ["after"]);
   assert.equal(p.run("drawerState.sessionId"), "b");
+});
+
+test("Show terminal in forced Full mode with an edit open: the keyboard moves only once the dock really closed (Discard), never after Cancel", async () => {
+  const run = async (answer) => {
+    const term = { id: "a", grabFocus() { this.grabbed = (this.grabbed || 0) + 1; } };
+    const focused = [];
+    const p = page({ terminalTabFor: () => term, setFocusedCell: (c) => focused.push(c), cellTerminal: () => term });
+    p.ctx.__cell = { tabs: [term] };
+    p.run("cells.push(__cell)");
+    p.run("dockRefit = () => {}");
+    p.run("paintDrawerMax(true, true)");
+    // A dirty tab holds the close behind its discard ask (applyDrawer's gate, as in the test above).
+    p.run("drawerWouldDiscard = (prev, next) => !next.open; drawerConfirmLeave = async () => " + answer + "; drawerDiscard = () => {}");
+    assert.equal(p.run("dockShowTerminal()"), true, "the press was ours either way");
+    assert.deepEqual(focused, [], "held by the ask: nothing has moved yet");
+    assert.equal(term.grabbed, undefined);
+    await new Promise((r) => setImmediate(r));
+    return { open: p.run("drawerState.open"), focused: focused.length, grabbed: term.grabbed || 0, forced: p.els.drawer.dataset.forced };
+  };
+  assert.deepEqual(await run("true"), { open: null, focused: 1, grabbed: 1, forced: undefined }, "Discard: the dock closed, then the terminal took the keyboard");
+  const kept = await run("false");
+  assert.equal(kept.open, "files", "Cancel: the forced dock stays up");
+  assert.equal(kept.forced, "1");
+  assert.equal(kept.focused, 0, "and its focus is not pulled out from behind it");
+  assert.equal(kept.grabbed, 0);
 });

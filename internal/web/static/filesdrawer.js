@@ -550,7 +550,7 @@ function dockRestore(sessions) {
 
 // dockAdopt takes tabs the layout migration moved out of the panes (tabs.js restoreLayout: a Map of session id -> state)
 // into the dock's own states, after what the session already had (dockMerge), and stores them. Every session in the map is
-// live (dockCellSid), so nothing here needs the list. A dock already open on one of those sessions is shown again.
+// running (dockCellSid), so nothing here needs the list. A dock already open on one of those sessions is shown again.
 function dockAdopt(map) {
   if (!(map instanceof Map) || !map.size) return;
   for (const [sid, st] of map) dockStates.set(sid, dockMerge(dockStates.get(sid), st));

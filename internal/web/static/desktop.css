@@ -1108,7 +1108,7 @@
     display: flex; flex-direction: column;
     background: var(--panel); border-left: 1px solid var(--line);
   }
-  /* Full mode (⛶, or forced when the panes cannot keep their floors, data-forced): the one place the dock still floats
+  /* Full mode (the Full toggle, or forced when the panes cannot keep their floors, data-forced): the one place the dock still floats
      over the panes, as the drawer did. Out of the flow, so the grid keeps its width under it and no terminal is resized to
      nothing. --grid-w is the pane area's width (app.js). */
   #drawer[data-max="1"] {

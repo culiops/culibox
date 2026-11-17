@@ -674,3 +674,22 @@ test("dockMerge adds a migrated state to the one the session already has: its ow
   for (let i = 0; i < 19; i++) many = open(many, "/m" + i, false);
   assert.ok(D.dockMerge(many, add).tabs.length <= D.DOCK_MAX_TABS);
 });
+
+test("dockCellSid: given the running sessions, a pane picks its session as reconcileLayout does, skipping an exited terminal; with none running there is none", () => {
+  const running = ["y"]; // x is listed but has exited: runningIds leaves it out
+  // [x (exited), y (running), file] with active 0: the restored pane shows y, so the files belong to y's dock.
+  const cell0 = { tabs: [{ id: "x" }, { id: "y" }, { path: "/a.go" }], active: 0 };
+  assert.strictEqual(D.dockCellSid(cell0, running), "y");
+  // The active tab is the running one: it is the pane's session.
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "x" }, { id: "y" }, { path: "/a.go" }], active: 1 }, running), "y");
+  // The viewer is active: the first running terminal, not the first terminal.
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "x" }, { id: "y" }, { path: "/a.go" }], active: 2 }, running), "y");
+  // Only exited terminals: the pane is not restored, there is no session and no fallback to an exited one.
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "x" }, { path: "/a.go" }], active: 1 }, running), null);
+  assert.strictEqual(D.dockCellSid(cell0, []), null);
+  // Through dockFromLayout: the viewers of such a pane are dropped, not moved to the exited session.
+  const layout = { cells: [cell0, { tabs: [{ id: "x" }, { path: "/b.go" }], active: 1 }] };
+  const out = D.dockFromLayout(layout, (i) => D.dockCellSid(layout.cells[i], running));
+  assert.deepEqual([...out.map.keys()], ["y"]);
+  assert.deepEqual(out.map.get("y").tabs.map((t) => t.key), ["v:/a.go"]);
+});

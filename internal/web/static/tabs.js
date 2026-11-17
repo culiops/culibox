@@ -2255,12 +2255,12 @@ function restoreLayout(sessions) {
     let saved = bootLayout;
     // Desktop: files that were open in panes are tabs of the dock of the session each pane shows. They are taken out of the
     // layout before it is reconciled (reconcileLayout then never sees a viewer), and put in the dock's own map, which
-    // dockRestore has already filled from storage (restoreBoot runs it first). A pane whose session is gone has no dock to
-    // give its files to, so they are dropped with it (dockCellSid: null). The layout this boot stores next has no viewers,
-    // so a migration runs once. The phone keeps its pane viewers.
+    // dockRestore has already filled from storage (restoreBoot runs it first). A pane with no running terminal (its session
+    // is gone or has exited) is not restored, so its files are dropped with it (dockCellSid: null). The layout this boot
+    // stores next has no viewers, so a migration runs once. The phone keeps its pane viewers.
     if (saved && saved.v === LAYOUT_V && opensInDock() && typeof dockFromLayout === "function") { // a layout reconcileLayout would refuse is left alone
-      const live = (sessions || []).map((s) => s && s.id);
-      const moved = dockFromLayout(saved, (i) => dockCellSid(saved.cells[i], live));
+      const running = runningIds(sessions); // the set reconcileLayout restores terminals from, so a pane's session is chosen the same way
+      const moved = dockFromLayout(saved, (i) => dockCellSid(saved.cells[i], running));
       dockAdopt(moved.map);
       saved = moved.layout;
     }
