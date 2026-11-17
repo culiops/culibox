@@ -131,6 +131,10 @@ func serviceInstall(ctx context.Context, a cliArgs, cfg config.Config, home, env
 			fmt.Fprintf(w, "warning: token %s reads $%s, which the service will not have; store the value with culibox store set and reference it instead\n", t.Name, t.Value.Var)
 		}
 	}
+	// Before anything is created: a refused install leaves nothing behind.
+	if err := d.Plat.Reachable(ctx); err != nil {
+		return fail("%v", err)
+	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fail("data dir: %v", err)
 	}

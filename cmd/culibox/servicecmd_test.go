@@ -165,6 +165,9 @@ func TestServiceInstallRefusals(t *testing.T) {
 		{"port answers", func(f *unitFixture) { f.answers = true }, "already serving"},
 		{"unsupported", func(f *unitFixture) { f.deps.Plat.GOOS = "freebsd" }, "not supported"},
 		{"legacy root", func(f *unitFixture) { f.cfg.DataDir = filepath.Join(f.home, ".local", "share", "agent-box") }, "culibox serve once"},
+		{"no user bus", func(f *unitFixture) {
+			f.runner.fail = map[string]string{"systemctl --user show-environment": "Failed to connect to bus: No medium found\n"}
+		}, "not reachable"},
 	}
 	for _, c := range cases {
 		f := newUnitFixture(t)
@@ -175,6 +178,9 @@ func TestServiceInstallRefusals(t *testing.T) {
 		}
 		if _, err := os.Lstat(f.deps.Plat.UnitPath()); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s: unit written", c.name)
+		}
+		if _, err := os.Lstat(f.cfg.DataDir); c.name != "legacy root" && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s: data dir created", c.name)
 		}
 		for _, call := range f.runner.calls {
 			if !strings.Contains(call, "is-active") && !strings.Contains(call, "show-environment") {
