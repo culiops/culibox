@@ -65,12 +65,16 @@ test("the dock body is ordered viewer, splitter, explorer, then the folded strip
   assert.ok(at("drawer-tree") < at("drawer-strip"), "tree before the strip");
 });
 
-test("the header has the pin and the session chip, and keeps max and close", () => {
+test("the header has the pin and the session chip and keeps close; the Full toggle moved into the tab bar", () => {
   const html = read("index.html");
   const head = html.slice(html.indexOf('class="dr-head"'), html.indexOf('id="drawer-body"'));
-  for (const id of ["drawer-title", "drawer-sess", "drawer-hint", "drawer-pin", "drawer-max", "drawer-x"]) {
+  for (const id of ["drawer-title", "drawer-sess", "drawer-hint", "drawer-pin", "drawer-x"]) {
     assert.ok(head.includes('id="' + id + '"'), "#" + id + " is in the dock header");
   }
+  assert.ok(!head.includes('id="drawer-max"'), "the toggle is not in the header any more (spec: Toggled from the editor bar)");
+  const acts = html.slice(html.indexOf('id="dock-acts"'), html.indexOf('id="dock-crumbs"'));
+  assert.match(acts, /<button id="drawer-max" type="button" class="btn btn-sm"[^>]*>[\s\S]*<span id="drawer-max-label">Full<\/span><\/button>/, "Full / Exit full / Show terminal, in the bar's actions area");
+  assert.ok(!/aria-pressed|aria-label/.test(acts.slice(acts.indexOf('id="drawer-max"'), acts.indexOf("</button>"))), "its label is its name, so it carries no pressed state or second name");
   assert.match(head, /<button id="drawer-pin"[^>]*aria-pressed="false"/, "the pin is a toggle button");
   assert.ok(head.indexOf('id="drawer-sess"') < head.indexOf('id="drawer-pin"'), "chip before the pin, as in the mockup");
 });
@@ -99,4 +103,38 @@ test("the window's resize lays the open dock out before the terminals fit, and t
   const fit = app.indexOf('window.addEventListener("resize", fitAll);');
   assert.ok(dock > 0, "a resize listener that positions the dock, only for an open desktop dock");
   assert.ok(fit > dock, "registered before fitAll, so it runs first and fitAll measures the new dock width");
+});
+
+test("the agent strip is the last child of #drawer, after the body: dot, name, status, last line, Show terminal with its chord", () => {
+  const html = read("index.html");
+  const dr = html.slice(html.indexOf('<aside id="drawer"'), html.indexOf("</aside>", html.indexOf('<aside id="drawer"')));
+  const strip = dr.slice(dr.indexOf('id="dock-agent"'));
+  assert.ok(dr.indexOf('id="dock-agent"') > dr.indexOf('id="drawer-strip"'), "after the dock body, at the bottom of the column");
+  const at = (id) => strip.indexOf('id="' + id + '"');
+  const order = ["dock-agent-dot", "dock-agent-name", "dock-agent-st", "dock-agent-last", "dock-agent-term", "dock-agent-kbd"];
+  order.forEach((id, i) => { assert.ok(at(id) > 0, "#" + id); if (i) assert.ok(at(id) > at(order[i - 1]), id + " after " + order[i - 1]); });
+  assert.match(strip, /<button id="dock-agent-term" type="button" class="btn btn-sm">/);
+  assert.ok(!/Insert at prompt|insert/i.test(strip), "no Insert at prompt: P2 builds the gate that says when typing into a terminal is safe");
+  assert.ok(!/aria-live/.test(strip), "a 4 s poll must not be announced");
+});
+
+test("the strip is shown only in Full mode, is one 36px line whose last-activity part is the one that gives way", () => {
+  const css = stripComments(read("desktop.css"));
+  assert.match(rulesFor(css, ".dk-agent").join(" "), /display:\s*none/);
+  assert.match(rulesFor(css, ".dk-agent").join(" "), /height:\s*36px/);
+  assert.match(rulesFor(css, ".dk-agent").join(" "), /flex:\s*none/);
+  assert.match(rulesFor(css, ".dk-agent").join(" "), /white-space:\s*nowrap/);
+  assert.match(rulesFor(css, '#drawer[data-max="1"] .dk-agent').join(" "), /display:\s*flex/);
+  const last = rulesFor(css, ".dk-ag-last").join(" ");
+  assert.match(last, /flex:\s*1 1 auto/);
+  assert.match(last, /min-width:\s*0/);
+  assert.match(last, /text-overflow:\s*ellipsis/);
+  assert.match(last, /overflow:\s*hidden/);
+  assert.match(rulesFor(css, ".dk-ag-st").join(" "), /flex:\s*none/);
+});
+
+test("forced Full mode keeps the toggle (as Show terminal): no rule hides #drawer-max any more", () => {
+  const css = stripComments(read("desktop.css"));
+  assert.ok(!/#drawer\[data-forced="1"\] #drawer-max/.test(css));
+  assert.ok(!/#drawer-max\[aria-pressed/.test(css));
 });

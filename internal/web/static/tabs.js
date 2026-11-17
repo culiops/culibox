@@ -2028,6 +2028,12 @@ function moveToOwnPane(from, tab) {
   refreshSessions();
 }
 
+// opensInDock: on desktop every file opener (openFile, openBoxFile) lands in the Files dock; the phone has no dock.
+// typeof-guarded like the other cross-script calls here: filesdrawer.js loads after this file.
+function opensInDock() {
+  return typeof dockOpenFile === "function" && !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+}
+
 // U1: opening a file switches the mobile shell to the Terminal screen, the
 // same way openTerminal already does above (typeof-guarded — tabs.js loads
 // before the mobile globals in mobileshell.js/app.js) — covering both
@@ -2040,14 +2046,23 @@ function moveToOwnPane(from, tab) {
 // file's diff vs HEAD. A terminal link such as `x.go:12:5` carries its line.
 // A new tab stores it (ViewerTab.pendingLine); an already-open one is told to
 // reveal it. The viewer takes keyboard focus either way: every caller here (tree,
-// palette, terminal link, drawer "Open in pane") is a user action. Layout restore
-// builds its ViewerTabs directly and never comes through here.
+// palette, terminal link) is a user action. Layout restore builds its ViewerTabs
+// directly and never comes through here.
+//
+// On desktop the file is not opened in a pane at all: it is a tab of the Files dock of
+// the focused pane's session (filesdrawer.js dockOpenFile), where the dock's own
+// strip and viewer take it. Everything below the desktop branch is the phone's, which
+// has no dock and keeps its file in a pane, exactly as before.
 function openFile(path, opts) {
   // Normalise BEFORE matching, on the same rule ViewerTab's constructor uses.
   // Comparing the raw argument meant "/home/u/./a.md" missed the tab already
   // showing "/home/u/a.md" and opened a second one carrying an identical path —
   // which the snapshot then stored twice and the next boot silently collapsed.
   if (typeof normalizePath === "function") path = normalizePath(path);
+  if (opensInDock()) {
+    dockOpenFile(dockOpenSid(), path, opts);
+    return;
+  }
   for (const c of cells) {
     // !t.box: a box file at the same path is a different file (see openBoxFile).
     const t = c.tabs.find((t) => t.kind === "viewer" && !t.box && t.path === path);
@@ -2111,6 +2126,11 @@ function repointViewer(tab, path, line) {
 // it cannot be mistaken for a host file at the same path or another box's.
 function openBoxFile(sessionId, path, opts) {
   if (typeof normalizePath === "function") path = normalizePath(path);
+  // Desktop: a tab of the dock of the session whose box holds the file (the terminal that printed the path).
+  if (opensInDock()) {
+    dockOpenFile(sessionId, path, { ...opts, box: sessionId });
+    return;
+  }
   for (const c of cells) {
     const t = c.tabs.find((t) => t.kind === "viewer" && t.box === sessionId && t.path === path);
     if (t) {
@@ -2232,7 +2252,19 @@ function applyPlan(plan, sessions) {
 // or every later layout change is silently never persisted.
 function restoreLayout(sessions) {
   try {
-    const plan = typeof reconcileLayout === "function" ? reconcileLayout(bootLayout, sessions) : null;
+    let saved = bootLayout;
+    // Desktop: files that were open in panes are tabs of the dock of the session each pane shows. They are taken out of the
+    // layout before it is reconciled (reconcileLayout then never sees a viewer), and put in the dock's own map, which
+    // dockRestore has already filled from storage (restoreBoot runs it first). A pane whose session is gone has no dock to
+    // give its files to, so they are dropped with it (dockCellSid: null). The layout this boot stores next has no viewers,
+    // so a migration runs once. The phone keeps its pane viewers.
+    if (saved && saved.v === LAYOUT_V && opensInDock() && typeof dockFromLayout === "function") { // a layout reconcileLayout would refuse is left alone
+      const live = (sessions || []).map((s) => s && s.id);
+      const moved = dockFromLayout(saved, (i) => dockCellSid(saved.cells[i], live));
+      dockAdopt(moved.map);
+      saved = moved.layout;
+    }
+    const plan = typeof reconcileLayout === "function" ? reconcileLayout(saved, sessions) : null;
     if (plan) applyPlan(plan, sessions);
   } finally {
     endRestore();

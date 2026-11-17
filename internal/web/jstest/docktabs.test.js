@@ -617,3 +617,60 @@ test("dockRepointTab: the tab keeps its place, scroll, preview and the active ma
   const boxed = D.dockRepointTab(open(EMPTY, "/ws/a", false, "s1"), "b:s1:/ws/a", "/ws/b");
   assert.deepEqual(boxed.tabs.map((t) => [t.key, t.box]), [["b:s1:/ws/b", "s1"]], "a box tab stays in its box");
 });
+
+// --- Task 8b: the migration's two helpers ----------------------------------------------------------------------
+
+test("dockCellSid: the session a saved pane will show after a restore, null when that session is gone", () => {
+  const live = ["s1", "s2"];
+  // The active tab is a live terminal: it is the pane's session.
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "s1" }, { id: "s2" }, { path: "/a" }], active: 1 }, live), "s2");
+  // The active tab is a viewer: the restored pane falls back to its first terminal (dockFromLayout resets the index to 0).
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "s1" }, { id: "s2" }, { path: "/a" }], active: 2 }, live), "s1");
+  // A dead active terminal, a dead first one: the first LIVE terminal is what reconcileLayout leaves showing.
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "gone" }, { id: "s2" }, { path: "/a" }], active: 0 }, live), "s2");
+  // No live terminal at all, or no terminal, or a pane of files: nowhere to put a file.
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "gone" }, { path: "/a" }], active: 1 }, live), null);
+  assert.strictEqual(D.dockCellSid({ tabs: [{ path: "/a" }], active: 0 }, live), null);
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "s1" }], active: 0 }, []), null, "no live session");
+  // A Set of ids works as parseDock's does; a cell that is not a cell is no session; a tab with both keys is a viewer.
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "s1" }], active: 0 }, new Set(["s1"])), "s1");
+  assert.strictEqual(D.dockCellSid(null, live), null);
+  assert.strictEqual(D.dockCellSid({ tabs: "x" }, live), null);
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "s1", path: "/a" }], active: 0 }, live), null, "layout.js's tabKey tries path first");
+  assert.strictEqual(D.dockCellSid({ tabs: [{ id: "s1", path: 42 }], active: 0 }, live), "s1", "{id, path: 42} is the terminal");
+});
+
+test("the migration drops the pane viewers of a session that no longer exists, and keeps the live ones (spec: saved tabs of a gone session are dropped)", () => {
+  const layout = {
+    v: 1, cap: 4, focused: 0, maximized: null,
+    cells: [
+      { tabs: [{ id: "s1" }, { path: "/a.go", scroll: 7 }], active: 1 },
+      { tabs: [{ id: "gone" }, { path: "/b.go" }], active: 1 },
+    ],
+  };
+  const live = ["s1"];
+  const out = D.dockFromLayout(layout, (i) => D.dockCellSid(layout.cells[i], live));
+  assert.deepEqual([...out.map.keys()], ["s1"], "the dead session's file has no dock to go to");
+  // What reconcileLayout then does with the rest is its own rule: the dead terminal's cell goes.
+  const plan = reconcileLayout(out.layout, [{ id: "s1" }]);
+  assert.deepEqual(plan.cells, [{ tabs: [{ id: "s1" }], active: 0 }]);
+});
+
+test("dockMerge adds a migrated state to the one the session already has: its own tabs first, nothing twice", () => {
+  const have = pinned("/a", "/b"); // /a active
+  const add = { tabs: [D.dockOpen(EMPTY, { path: "/b", preview: false }).tabs[0], D.dockOpen(EMPTY, { path: "/c", preview: false }).tabs[0]], active: "v:/c" };
+  const out = D.dockMerge(freeze(have), freeze(add));
+  assert.deepEqual(keys(out), ["v:/a", "v:/b", "v:/c"]);
+  assert.strictEqual(out.active, "v:/a", "the dock keeps what it was showing");
+  // A session with no dock tabs takes the migrated state as it is, active included.
+  assert.deepEqual(D.dockMerge(EMPTY, add), { tabs: add.tabs, active: "v:/c" });
+  assert.deepEqual(D.dockMerge(null, add), { tabs: add.tabs, active: "v:/c" });
+  // The one-preview rule holds across the merge, and a merge with nothing adds nothing.
+  const prev = D.dockOpen(EMPTY, { path: "/p", preview: true });
+  assert.deepEqual(previews(D.dockMerge(prev, add)), ["/p"]);
+  assert.deepEqual(D.dockMerge(have, EMPTY), { tabs: have.tabs, active: have.active });
+  // The cap of what is stored applies to what is kept in memory after a merge too (dockCleanState).
+  let many = EMPTY;
+  for (let i = 0; i < 19; i++) many = open(many, "/m" + i, false);
+  assert.ok(D.dockMerge(many, add).tabs.length <= D.DOCK_MAX_TABS);
+});

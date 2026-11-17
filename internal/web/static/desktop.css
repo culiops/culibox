@@ -1115,8 +1115,6 @@
     position: absolute; top: 0; right: 0; bottom: 0; z-index: 10; flex: none; width: var(--grid-w, 100%);
     box-shadow: -12px 0 30px #0009;
   }
-  /* Forced, there is no way back to the pushed dock, so no ⛶ to offer. */
-  #drawer[data-forced="1"] #drawer-max { display: none; }
   #drawer[hidden] { display: none; }
   /* The left-edge handle: 7px straddling the border, nothing drawn until
      hover, drag or keyboard focus. Gone while maximized (nothing to drag). */
@@ -1144,12 +1142,11 @@
   .dr-sess-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .dr-hint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--t-sm); color: var(--muted); }
   .dr-fill { flex: 1; }
-  #drawer-x, #drawer-max {
+  #drawer-x {
     flex: none; width: 26px; height: 24px; font: var(--t-md) var(--font-ui); color: var(--muted); cursor: pointer;
     background: transparent; border: 0; border-radius: var(--r-ctl);
   }
-  #drawer-x:hover, #drawer-max:hover { color: var(--fg); background: var(--raise); }
-  #drawer-max[aria-pressed="true"] { color: var(--accent); }
+  #drawer-x:hover { color: var(--fg); background: var(--raise); }
   /* The pin is the kit's ghost icon button (24px); pressed it takes the kit's pressed look. */
   #drawer-pin { flex: none; }
   .dr-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -1253,14 +1250,17 @@
   .dr-vempty { flex: 1; padding: 18px 14px; color: var(--muted); font-size: var(--t-sm); }
   /* --- the dock's editor tabs and breadcrumbs (spec 5.4, mockup B1) -------- */
   /* One strip per session, over the crumbs and the viewer. The tabs scroll sideways when there are more than fit
-     (dockstrip.js turns a plain wheel into that); the actions area beside them (#dock-acts, empty until the Full toggle
-     arrives) never shrinks, so nothing the bar offers is ever pushed out. The active tab takes the viewer's own --bg
-     and an accent underline, so it reads as the file below it. */
+     (dockstrip.js turns a plain wheel into that); the actions area beside them (#dock-acts, the Full toggle) never
+     shrinks, so nothing the bar offers is ever pushed out. With no tab the bar is not drawn, so Full mode is offered
+     only with a file open; once on, the agent strip's Show terminal and Esc are the way out whatever is open. The
+     active tab takes the viewer's own --bg and an accent underline, so it reads as the file below it. */
   .dk-bar { flex: none; display: flex; align-items: stretch; min-width: 0; height: var(--h-lg); background: var(--panel); border-bottom: 1px solid var(--line); }
   .dk-bar[hidden], .dk-crumbs[hidden], .dk-edited[hidden] { display: none; }
   .dk-tabs { position: relative; flex: 1 1 auto; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
   .dk-acts { flex: none; display: flex; align-items: center; gap: var(--sp-1); padding: 0 6px; }
   .dk-acts:empty { display: none; }
+  /* Full / Exit full / Show terminal (forced Full mode): the kit's small button, its icon and word on one line. */
+  #drawer-max { flex: none; }
   .dk-tab {
     position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; max-width: 220px; padding: 0 6px 0 10px;
     border-right: 1px solid var(--line); color: var(--muted); font: var(--w-medium) var(--t-sm)/var(--lh-sm) var(--font-ui);
@@ -1314,6 +1314,20 @@
   .dk-sep { flex: none; padding: 0 3px; }
   .dk-edited { flex: none; display: inline-flex; align-items: center; gap: 6px; }
   .dk-edited::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  /* The agent strip (Full mode only, mockup B5): the session stays in view while the terminal is covered. One 36px line at the
+     bottom of the dock: the dot, the name, the status words, the last thing the agent did (the one part that gives way: it is
+     cut with an ellipsis, so the line never wraps and the strip never changes height) and Show terminal with its chord. */
+  .dk-agent {
+    flex: none; display: none; align-items: center; gap: 10px; height: 36px; padding: 0 10px 0 14px; min-width: 0;
+    background: var(--panel); border-top: 1px solid var(--line); white-space: nowrap;
+    font-size: var(--t-sm); line-height: var(--lh-sm);
+  }
+  #drawer[data-max="1"] .dk-agent { display: flex; }
+  .dk-ag-name { flex: 0 1 auto; min-width: 0; max-width: 30%; overflow: hidden; text-overflow: ellipsis; font-weight: var(--w-semibold); }
+  .dk-ag-st { flex: none; color: var(--muted); }
+  .dk-ag-st:empty { display: none; }
+  .dk-ag-last { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: var(--t-xs); color: var(--fg); }
+  .dk-agent .btn { flex: none; }
   /* Long lines scroll, never wrap. */
   /* ... unless Wrap lines is on (id + class here beats app.css's .viewer-wrap rule, so say it again). */
   #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; }

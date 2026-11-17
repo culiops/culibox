@@ -35,7 +35,7 @@ test("the viewer column is the strip, then the crumbs, then the viewer, then the
   assert.ok(at("dock-bar") < at("dock-crumbs") && at("dock-crumbs") < at("drawer-vhost") && at("drawer-vhost") < at("drawer-vempty"));
   assert.ok(at("dock-tabs") < at("dock-acts") && at("dock-acts") < at("dock-crumbs"), "the actions area is beside the tabs, in the bar");
   assert.match(col, /id="dock-tabs"[^>]*role="tablist"/);
-  assert.match(col, /<div id="dock-acts" class="dk-acts"><\/div>/, "empty: the Full toggle goes in it, and :empty hides it until then");
+  assert.match(col, /<div id="dock-acts" class="dk-acts"><button id="drawer-max"[^>]*>[\s\S]*<\/button><\/div>/, "the Full toggle is in it (Task 8b), the bar's only action");
   assert.match(col, /id="dock-bar"[^>]*hidden/, "no tab, no strip");
   assert.match(col, /id="dock-crumbs"[^>]*hidden/);
 });

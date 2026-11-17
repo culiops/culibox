@@ -34,7 +34,7 @@ function fake(id) {
   };
 }
 
-const IDS = ["drawer", "drawer-body", "drawer-max", "drawer-title", "drawer-sess", "drawer-sess-dot", "drawer-sess-name", "drawer-hint", "drawer-pin"];
+const IDS = ["drawer", "drawer-body", "drawer-max", "drawer-max-label", "drawer-title", "drawer-sess", "drawer-sess-dot", "drawer-sess-name", "drawer-hint", "drawer-pin"];
 
 // page: a context with the real dock code. `st` is what the test changes: panes (cell count), the focused pane's session,
 // the session list, and the stored sizes.
@@ -68,6 +68,7 @@ function page(over) {
     ["app.js", "dockTreeReveal"], ["app.js", "dockTreeFold"], ["app.js", "drawerFollowFocus"], ["app.js", "toggleDrawerPin"],
     ["app.js", "paintDrawerHead"], ["app.js", "drawerSessionName"], ["app.js", "paintDrawerTabs"], ["app.js", "positionDrawer"],
     ["app.js", "dockMeasure"], ["app.js", "dockForcesFull"], ["app.js", "applyDrawer"], ["app.js", "drawerPinCheck"], ["filesdrawer.js", "drawerKeepsTree"],
+    ["app.js", "setDrawerMax"], ["app.js", "closeDrawerFor"], ["app.js", "dockShowTerminal"], ["app.js", "openDrawer"],
     ["tabs.js", "syncFocusedTree"],
   ]) load(fnSource(file, name), file + ":" + name);
   // Stand-ins for what these call into and the tests do not look at. The real positionDrawer is replaced by a spy: the
@@ -124,7 +125,7 @@ test("1100 wide with 2 panes cannot keep the terminal floors: Full mode is force
   p.run("paintDrawerLayout(800)");
   assert.equal(p.els.drawer.dataset.max, "1");
   assert.equal(p.els.drawer.dataset.forced, "1");
-  assert.equal(p.els["drawer-max"].attrs["aria-pressed"], "true");
+  assert.equal(p.els["drawer-max-label"].textContent, "Show terminal", "forced Full mode has no pushed dock to go back to: the toggle closes the dock");
   assert.equal(p.els.drawer.props["--grid-w"], "800px");
   assert.equal(p.els["drawer-body"].props["--dr-tree"], "280px", "Full mode divides the pane area: .35 of 800, dockFullLayout's explorer, not the dock's");
   assert.equal(p.els.drawer.props["--dock-w"], undefined, "a zero dock width is never written");
@@ -137,7 +138,7 @@ test("forced Full mode ends when there is room again, and takes a ⛶ pressed me
   p.run("paintDrawerLayout(1400)");
   assert.equal(p.els.drawer.dataset.max, undefined);
   assert.equal(p.els.drawer.dataset.forced, undefined);
-  assert.equal(p.els["drawer-max"].attrs["aria-pressed"], "false");
+  assert.equal(p.els["drawer-max-label"].textContent, "Full");
   assert.equal(p.els.drawer.props["--dock-w"], "680px", "min(.62 of 1400, 1400 - 2 * 360)");
 });
 
@@ -488,4 +489,113 @@ test("dockForcesFull: a grid that cannot be measured is a yes, and a stored dock
   p.run("dockMeasure = () => ({ avail: 1030, left: 0 })");
   p.run("drawerSize = { width: 0.9, tree: 0.4 }");
   assert.equal(p.run("dockForcesFull()"), false, "a wide stored share is held to the terminal floors, not forced Full");
+});
+
+// --- Task 8b: Full mode's toggle, the strip's sync, applyDrawer's `after`, and Show terminal -----------------------------------
+
+test("the Full toggle says what it does: Full, Exit full, and in forced Full mode Show terminal; each change syncs the agent strip", () => {
+  const p = page();
+  let syncs = 0;
+  p.ctx.dockAgentSync = () => { syncs++; };
+  const label = () => p.els["drawer-max-label"].textContent;
+  p.run("paintDrawerMax(false, false)");
+  assert.equal(label(), "Full");
+  assert.equal(p.els["drawer-max"].title, "Expand the dock over the panes");
+  p.run("paintDrawerMax(true, false)");
+  assert.equal(label(), "Exit full");
+  assert.equal(p.els.drawer.dataset.max, "1");
+  assert.equal(p.els.drawer.dataset.forced, undefined);
+  p.run("paintDrawerMax(true, true)");
+  assert.equal(label(), "Show terminal", "forced Full mode has no pushed dock to go back to");
+  assert.equal(p.els.drawer.dataset.forced, "1");
+  assert.equal(p.els["drawer-max"].title, "Close the dock to see the terminal");
+  assert.equal(syncs, 3, "the strip is told on every change");
+  assert.equal(p.els["drawer-max"].attrs["aria-pressed"], undefined, "the label is the name: no pressed state next to it");
+});
+
+test("Show terminal: out of Full mode it puts the pushed dock back; in forced Full mode it closes the dock; the pane's terminal takes the keyboard", () => {
+  const term = { id: "a", grabFocus() { this.grabbed = (this.grabbed || 0) + 1; } };
+  const cell = { tabs: [term] };
+  const focused = [];
+  const mk = () => {
+    const p = page({ terminalTabFor: (sid) => (sid === "a" ? term : null), setFocusedCell: (c) => focused.push(c), cellTerminal: () => term });
+    p.ctx.__cell = cell;
+    p.run("cells.push(__cell)"); // the page's `cells` is a const array: the test's pane goes into it
+    p.run("dockRefit = () => {}");
+    return p;
+  };
+  // Not in Full mode: not ours, so the key is left alone.
+  const none = mk();
+  assert.equal(none.run("dockShowTerminal()"), false);
+  assert.equal(focused.length, 0);
+  // Full mode (the toggle), not forced: back to the pushed dock, which stays open.
+  const full = mk();
+  full.run("paintDrawerMax(true, false)");
+  assert.equal(full.run("dockShowTerminal()"), true);
+  assert.equal(full.els.drawer.dataset.max, undefined, "Full mode is over");
+  assert.equal(full.run("drawerState.open"), "files", "the dock stays, beside the panes");
+  assert.deepEqual(focused, [cell], "the pane that shows the session is focused");
+  assert.equal(term.grabbed, 1, "and its terminal takes the keyboard");
+  // Forced Full mode: there is no pushed dock to go back to, so the dock closes.
+  const forced = mk();
+  forced.run("paintDrawerMax(true, true)");
+  assert.equal(forced.run("dockShowTerminal()"), true);
+  assert.equal(forced.run("drawerState.open"), null);
+  assert.equal(forced.els.drawer.hidden, true);
+  assert.equal(forced.els.drawer.dataset.max, undefined);
+  assert.equal(term.grabbed, 2);
+  // A hidden dock is not in Full mode, whatever the flag says.
+  const hidden = mk();
+  hidden.run("paintDrawerMax(true, false)");
+  hidden.els.drawer.hidden = true;
+  assert.equal(hidden.run("dockShowTerminal()"), false);
+});
+
+test("Show terminal with the session's terminal not on a pane (an ended or parked one) still leaves Full mode and throws nothing", () => {
+  const p = page({ terminalTabFor: () => null, setFocusedCell: () => assert.fail("no pane to focus") });
+  p.run("dockRefit = () => {}");
+  p.run("paintDrawerMax(true, false)");
+  assert.equal(p.run("dockShowTerminal()"), true);
+  assert.equal(p.els.drawer.dataset.max, undefined);
+});
+
+test("applyDrawer runs `after` once, after the drawer is applied, and with the new state already in place", () => {
+  const p = page();
+  const seen = [];
+  p.ctx.after = () => seen.push(p.run("drawerState.sessionId") + ":" + p.els.drawer.hidden);
+  p.run('applyDrawer({ open: "files", sessionId: "b" }, { after })');
+  assert.deepEqual(seen, ["b:false"]);
+  p.run('applyDrawer({ open: "files", sessionId: "b" }, { explicitRoot: true })'); // no `after`: nothing to run, nothing breaks
+  assert.equal(seen.length, 1);
+});
+
+test("a dirty buffer holds applyDrawer: `after` waits for Discard and never runs after Cancel", async () => {
+  const run = async (answer) => {
+    const p = page();
+    const seen = [];
+    p.ctx.after = () => seen.push(p.run("drawerState.sessionId"));
+    p.ctx.asked = 0;
+    p.run("drawerWouldDiscard = (prev, next) => next.sessionId === 'b' && !asked++ ; drawerConfirmLeave = async () => " + answer + "; drawerDiscard = () => {}");
+    p.run('applyDrawer({ open: "files", sessionId: "b" }, { after })');
+    assert.deepEqual(seen, [], "held: nothing yet, the dock still on a");
+    assert.equal(p.run("drawerState.sessionId"), "a");
+    await new Promise((r) => setImmediate(r));
+    return seen;
+  };
+  assert.deepEqual(await run("true"), ["b"], "Discard: the dock moved, then the file");
+  assert.deepEqual(await run("false"), [], "Cancel: the file is not opened in the session the dock was kept on");
+});
+
+test("openDrawer hands its opts through a page that has to close first, so `after` survives it", () => {
+  const p = page();
+  const calls = [];
+  let again = null;
+  p.ctx.closePageHolds = (fn) => { again = fn; return true; }; // a page asked: the caller stops until it is answered
+  p.ctx.after = () => calls.push("after");
+  p.run('openDrawer("files", "b", { after })');
+  assert.deepEqual(calls, [], "held by the page");
+  p.ctx.closePageHolds = () => false; // the user discarded the page: the retry goes on
+  again();
+  assert.deepEqual(calls, ["after"]);
+  assert.equal(p.run("drawerState.sessionId"), "b");
 });

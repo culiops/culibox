@@ -123,7 +123,12 @@ function page(over) {
     tabs: (sid) => ctx.dockStateOf(sid === undefined ? "a" : sid).tabs.map((t) => [t.path, t.preview]),
   };
   // openDrawer as app.js does it for the dock: the state changes, then drawerFilesApply runs.
-  ctx.openDrawer = (kind, sid) => { st.opened.push([kind, sid]); p.drawer({ open: kind, sessionId: sid, pinned: false }); };
+  // `after` is applyDrawer's (dock-layout.test.js runs the real one): run once the drawer is applied.
+  ctx.openDrawer = (kind, sid, opts) => {
+    st.opened.push([kind, sid]);
+    p.drawer({ open: kind, sessionId: sid, pinned: false });
+    if (opts && typeof opts.after === "function") opts.after();
+  };
   p.restore = (sessions, raw) => { if (raw !== undefined) st.store.set(KEY, raw); ctx.dockRestore(sessions || [{ id: "a" }, { id: "b" }]); };
   return p;
 }
@@ -785,4 +790,110 @@ test("closing a null-session pane's files and opening another session parks the 
   p.ctx.dockShow();
   assert.deepEqual(p.live(), [], "the pane of files' viewer did not stay on screen under session a");
   assert.equal(p.state(null).tabs.length, 1, "its tab is kept for when that pane's Files is open again");
+});
+
+// --- Task 8b: the desktop route of every opener, and the layout migration's landing ---------------------------------------
+
+test("dockOpenFile opens the dock for the session, shows the file there as a preview tab, and hands the viewer the keyboard", () => {
+  const p = page();
+  p.set("drawerState", { open: null, sessionId: null, pinned: false });
+  const [a] = files(1);
+  assert.equal(p.ctx.dockOpenFile("b", a, { line: 7, col: 2 }), true);
+  assert.deepEqual(p.st.opened, [["files", "b"]]);
+  assert.deepEqual(p.get("drawerState"), { open: "files", sessionId: "b", pinned: false });
+  assert.deepEqual(p.tabs("b"), [[a, true]]);
+  const v = p.viewer(a);
+  assert.equal(v.opts.line, 7, "the link's line reaches the viewer");
+  assert.equal(v.opts.col, 2);
+  assert.ok(!v.calls.includes("focus"), "not in this tick: a palette's dialog close event would hand the caret back to the terminal");
+  p.flush();
+  assert.ok(v.calls.includes("focus"), "an open the user asked for takes the keyboard, as the pane viewer did, a macrotask later");
+  assert.equal(p.nodes["drawer-vhost"].children[0], v.el, "and it is on screen");
+  assert.equal(p.ctx.dockOpenFile("b", "", {}), false, "no path, nothing opened");
+  assert.equal(p.st.opened.length, 1);
+});
+
+test("dockOpenFile from another session's dock: the file lands in the session asked for, the other keeps its tabs", () => {
+  const p = page();
+  const [a, b] = files(2);
+  p.show(a, { preview: false }); // dock open on session a with a pinned tab
+  p.ctx.dockOpenFile("b", b);
+  assert.deepEqual(p.tabs("a"), [[a, false]]);
+  assert.deepEqual(p.tabs("b"), [[b, true]]);
+  assert.deepEqual(names(p.live()), [b], "a's viewer is parked, b's is on screen");
+  assert.equal(p.get("drawerState").sessionId, "b");
+});
+
+test("a box file opens as a box tab of its own session, and is not the host file at the same path", () => {
+  const p = page();
+  p.ctx.dockOpenFile("a", "/tmp/playwright-mcp/shot.png", { box: "a", preview: false });
+  p.ctx.dockOpenFile("a", "/tmp/playwright-mcp/shot.png");
+  assert.deepEqual(p.state("a").tabs.map((t) => t.key), ["b:a:/tmp/playwright-mcp/shot.png", "v:/tmp/playwright-mcp/shot.png"]);
+  assert.equal(p.live().find((v) => v.box === "a").path, "/tmp/playwright-mcp/shot.png", "the box viewer was built with its session");
+});
+
+test("dockOpenSid: the focused pane's session; an empty pane leaves an open dock on its own; no dock, no session", () => {
+  const withTerm = page({ cellTerminal: () => ({ id: "b" }) });
+  assert.equal(withTerm.ctx.dockOpenSid(), "b");
+  const openDock = page({ cellTerminal: () => null });
+  openDock.drawer({ open: "files", sessionId: "a", pinned: false });
+  assert.equal(openDock.ctx.dockOpenSid(), "a", "the spec's empty-pane rule: the dock keeps the session it showed");
+  const shut = page({ cellTerminal: () => null });
+  shut.set("drawerState", { open: null, sessionId: null, pinned: false });
+  assert.equal(shut.ctx.dockOpenSid(), null);
+  const noId = page({ cellTerminal: () => ({ id: "" }) });
+  noId.drawer({ open: "files", sessionId: "b", pinned: false });
+  assert.equal(noId.ctx.dockOpenSid(), "b", "a terminal with no id is no session");
+});
+
+const migrated = (sid, ...paths) => {
+  const st = { tabs: paths.map((path) => ({ key: "v:" + path, path, box: null, scroll: 9, preview: false })), active: "v:" + paths[0] };
+  return new Map([[sid, st]]);
+};
+
+test("dockAdopt puts the migrated tabs after what the session already had, stores them, and shows them in an open dock", () => {
+  const p = page();
+  p.restore(null, JSON.stringify({ v: 1, open: false, sessions: { a: { tabs: [{ path: "/work/proj/own.go" }], active: "v:/work/proj/own.go" } } }));
+  p.set("drawerState", { open: "files", sessionId: "a", pinned: false });
+  p.ctx.dockAdopt(migrated("a", "/work/proj/new.go", "/work/proj/own.go", "/work/proj/other.go"));
+  assert.deepEqual(p.tabs("a"), [["/work/proj/own.go", false], ["/work/proj/new.go", false], ["/work/proj/other.go", false]], "its own first, the migrated ones after, nothing twice");
+  assert.equal(p.state("a").active, "v:/work/proj/own.go", "it keeps showing what it showed (the pane's active file was new.go)");
+  assert.equal(p.ctx.dockStateOf("a").tabs[1].scroll, 9, "the pane's scroll rode along");
+  p.flush();
+  const stored = JSON.parse(p.st.store.get(KEY));
+  assert.deepEqual(stored.sessions.a.tabs.map((t) => t.path), ["/work/proj/own.go", "/work/proj/new.go", "/work/proj/other.go"]);
+  assert.equal(p.st.strip.at(-1).length, 3, "the strip of an open dock was repainted");
+});
+
+test("dockAdopt for a session with no tabs takes the migrated ones whole, and a dock that is not open is left alone", () => {
+  const p = page();
+  p.restore(null, null);
+  p.set("drawerState", { open: null, sessionId: null, pinned: false });
+  const before = p.st.strip.length;
+  p.ctx.dockAdopt(migrated("b", "/work/proj/x.go"));
+  assert.deepEqual(p.tabs("b"), [["/work/proj/x.go", false]]);
+  assert.equal(p.st.strip.length, before, "no dock on screen, nothing drawn");
+  assert.deepEqual(p.live(), []);
+  p.ctx.dockAdopt(new Map());
+  p.ctx.dockAdopt(null);
+  p.ctx.dockAdopt({});
+  assert.deepEqual(p.tabs("b"), [["/work/proj/x.go", false]], "nothing, null and a non-Map change nothing");
+});
+
+test("dockAdopt writes nothing before the stored tabs were read: the gate that protects them is the same", () => {
+  const p = page();
+  p.ctx.dockAdopt(migrated("a", "/work/proj/x.go")); // no dockRestore yet
+  p.flush();
+  assert.equal(p.st.store.has(KEY), false);
+  assert.deepEqual(p.tabs("a"), [["/work/proj/x.go", false]], "kept in memory, written once the page has read what was stored");
+});
+
+test("a page view open during the boot keeps the dock closed: openDrawer would close the page, and the flag stays for the next load", () => {
+  const p = boot({ currentPage: () => "settings-modal" }, true);
+  assert.deepEqual(p.st.opened, [], "the user's page is not closed behind their back");
+  assert.equal(p.get("drawerState").open, null);
+  p.ctx.dockSaveNow();
+  assert.equal(storedOpen(p), true, "the flag stays true");
+  const free = boot({ currentPage: () => "" }, true);
+  assert.deepEqual(free.st.opened, [["files", "a"]], "no page: it reopens as before");
 });

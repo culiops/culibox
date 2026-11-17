@@ -291,6 +291,10 @@ function applyDrawer(next, opts) {
   if (typeof drawerFilesApply === "function") drawerFilesApply(prev, next);
   for (const c of cells) paintDrawerTabs(c);
   dockRefit(); // the grid gained or lost the dock's width
+  // What the caller wanted done once the dock is there (filesdrawer.js dockOpenFile: show a file). It rides in opts through
+  // every held path above (a discard ask, a page that had to close), so it runs when the open really happened, and never
+  // when the user said Cancel.
+  if (opts && typeof opts.after === "function") opts.after();
 }
 
 // drawerRootTree roots the tree at the drawer's session. A header tab press
@@ -731,8 +735,10 @@ function wireDrawerSplit(el, kind) {
   });
 }
 
-// paintDrawerMax: Full mode's attributes and its ⛶ button. `forced` is Full mode the layout needs (positionDrawer), which
-// Esc and ⛶ must not undo.
+// paintDrawerMax: Full mode's attributes and the toggle in the tab bar (#drawer-max, in #dock-acts). It says what pressing it
+// does: Full, then Exit full; in forced Full mode, which has no pushed dock to go back to, Show terminal (it closes the dock).
+// The label is the button's name, so it carries no pressed state. `forced` is Full mode the layout needs (positionDrawer),
+// which Esc and Exit full must not undo. The agent strip follows (dockAgentSync).
 function paintDrawerMax(on, forced) {
   const dr = $("drawer");
   const b = $("drawer-max");
@@ -742,24 +748,46 @@ function paintDrawerMax(on, forced) {
   if (on && forced) dr.dataset.forced = "1";
   else delete dr.dataset.forced;
   if (b) {
-    b.setAttribute("aria-pressed", on ? "true" : "false");
-    b.textContent = on ? "❐" : "⛶";
-    b.title = on ? "Restore the dock's width" : "Expand the dock over the panes";
-    b.setAttribute("aria-label", on ? "Restore the dock" : "Expand the dock");
+    const label = $("drawer-max-label");
+    if (label) label.textContent = on ? (forced ? "Show terminal" : "Exit full") : "Full";
+    b.title = forced ? "Close the dock to see the terminal" : on ? "Restore the dock's width (Esc)" : "Expand the dock over the panes";
   }
   if (typeof drawerGoPosition === "function") drawerGoPosition();
+  if (typeof dockAgentSync === "function") dockAgentSync();
 }
 
-// setDrawerMax: ⛶ and Esc. The dock changes geometry (over the panes, or beside them), so it is laid out again at once.
+// setDrawerMax: Full / Exit full and Esc. The dock changes geometry (over the panes, or beside them), so it is laid out again at once.
 function setDrawerMax(on) {
   paintDrawerMax(on, false);
   positionDrawer();
   dockRefit();
 }
 
+// dockShowTerminal: leave Full mode for the terminal (the strip's button, the toggle in forced Full mode, Ctrl+`). Exit full
+// puts the pushed dock back; forced Full has none, so it closes the dock. The session's pane takes the keyboard back. false
+// when the dock is not in Full mode, so the shortcut leaves the key alone.
+function dockShowTerminal() {
+  const dr = $("drawer");
+  if (!dr || dr.hidden || dr.dataset.max !== "1") return false;
+  const sid = drawerState.sessionId;
+  if (dr.dataset.forced === "1") closeDrawerFor(); else setDrawerMax(false);
+  const term = sid ? terminalTabFor(sid) : null;
+  const cell = term ? cells.find((c) => c.tabs.includes(term)) : null;
+  if (cell) {
+    setFocusedCell(cell);
+    if (cellTerminal(cell) === term) term.grabFocus();
+  }
+  return true;
+}
+
 wireDrawerSplit($("drawer-edge"), "width");
 wireDrawerSplit($("drawer-split"), "tree");
-$("drawer-max").onclick = () => { if ($("drawer").dataset.forced !== "1") setDrawerMax($("drawer").dataset.max !== "1"); };
+$("drawer-max").onclick = () => {
+  const dr = $("drawer");
+  if (dr.dataset.forced === "1") dockShowTerminal(); // the same press, worded Show terminal
+  else setDrawerMax(dr.dataset.max !== "1");
+};
+$("dock-agent-term").onclick = () => dockShowTerminal();
 // Escape restores a maximized drawer (maxEscapeRestores decides). On the
 // document, not the drawer: a tree row click leaves focus on body. The viewer
 // toolbar's menus (viewertoolbar.js, which loads earlier) take focus when they
@@ -1606,7 +1634,8 @@ function showShortcuts() {
   }
   // Next that needs you works where the sidebar groups are, so the phone's dialog does not list it.
   // The F6 region cycle has no regions to walk on a phone either.
-  const desktopOnly = ["session.nextNeeds", "ui.regionNext", "ui.regionPrev"].map((id) => scEntry(id).label);
+  // The dock's Full mode is the desktop's too.
+  const desktopOnly = ["session.nextNeeds", "ui.regionNext", "ui.regionPrev", "dock.showTerminal"].map((id) => scEntry(id).label);
   const rows = helpRows(IS_MAC).filter((r) => !desktopOnly.includes(r.label));
   return askDialog({
     title: "Keyboard shortcuts",
@@ -7847,6 +7876,10 @@ bindShortcut("shell.below", (e) => {
   spawnShellIn(focusedCell, "below");
   return true;
 });
+
+// Ctrl+` -> Show terminal: out of the Files dock's Full mode, back to the session's terminal. Only in Full mode: anywhere else
+// it is not ours (false hands the key on, to the terminal as it always went).
+bindShortcut("dock.showTerminal", () => dockShowTerminal());
 
 // Live zoom the focused pane: Mod + '='/'+' bigger, '-' smaller, '0' reset (Mod
 // is Cmd on mac, Ctrl elsewhere). A hidden pane is not zoomed: false hands the

@@ -85,6 +85,13 @@ const SHORTCUTS = [
   { id: "files.goto", label: "Go to file", group: "Editor & files", scope: "global", status: "bound",
     chords: [{ mod: true, code: "KeyP" }],
     allow: scAllow(0, 1, 1, 0, 0) },
+  // Out of the Files dock's Full mode, back to the session's terminal (the agent strip's button says the chord). Plain
+  // Ctrl+`: Ctrl+Shift+` is + Shell below. Only fires in Full mode (the binding returns false anywhere else, which leaves
+  // the key to the terminal as ever), so it is allowed wherever focus can be in Full mode: the covered terminal, the dock's
+  // editor and its fields; not over a dialog, and not on a page, which hides the dock.
+  { id: "dock.showTerminal", label: "Leave Full mode: show the terminal", group: "Editor & files", scope: "global", status: "bound",
+    chords: [{ ctrl: true, code: "Backquote" }],
+    allow: scAllow(1, 1, 1, 0, 0) },
   { id: "term.copy", label: "Copy selection", group: "Terminal", scope: "terminal", status: "bound",
     chords: [{ mod: true, code: "KeyC", on: "mac" }, { mod: true, shift: true, code: "KeyC" }] },
   { id: "term.paste", label: "Paste", group: "Terminal", scope: "terminal", status: "bound",

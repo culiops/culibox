@@ -293,6 +293,40 @@ function dockFromLayout(layout, cellSid) {
   return { map, layout: out };
 }
 
+// dockCellSid: the session a saved pane shows once the layout is restored, for dockFromLayout's cellSid: its active tab when
+// that is a live terminal, else its first live terminal (reconcileLayout drops a dead tab and falls back to the first one
+// left, and dockFromLayout resets a pane whose active tab was a viewer to its first). null when the pane has no live
+// terminal, which is every pane of files and every pane of a session that is gone: spec, saved tabs whose session no longer
+// exists are dropped, so dockFromLayout then has nowhere to put the pane's viewers. `liveSids` is an array or a Set, as for
+// parseDock: the session list, so a session that has ended but is still listed still has its dock.
+function dockCellSid(cell, liveSids) {
+  if (!cell || typeof cell !== "object" || !Array.isArray(cell.tabs)) return null;
+  const live = dockLiveSet(liveSids);
+  const alive = (t) => !!t && typeof t === "object" && !dockIsViewer(t) && typeof t.id === "string" && t.id !== "" && live.has(t.id);
+  const act = cell.tabs[cell.active];
+  if (alive(act)) return act.id;
+  const first = cell.tabs.find(alive);
+  return first ? first.id : null;
+}
+
+// dockMerge adds the tabs a layout migration produced (`add`) to the state the session already has (`st`): its own tabs
+// first, then the migrated ones it does not have, so nothing is shown twice. It keeps showing what it showed; a session with
+// no tabs takes the migrated state whole, active tab included. The result is cleaned like anything stored (the cap, one
+// preview), because a migrated layout can be as long as the user's panes were.
+function dockMerge(st, add) {
+  const own = dockCopyTabs(dockTabsOf(st));
+  const seen = new Set(own.map((t) => t.key));
+  const tabs = own.slice();
+  for (const t of dockTabsOf(add)) {
+    if (seen.has(t.key)) continue;
+    seen.add(t.key);
+    tabs.push({ ...t });
+  }
+  const keep = dockActiveOf(st);
+  const active = own.length && keep !== null && own.some((t) => t.key === keep) ? keep : dockActiveOf(add);
+  return dockCleanState({ tabs, active }) || { tabs: [], active: null };
+}
+
 // --- what the strip and its glue ask of the model (Task 8a) ----------------------------------------------------
 
 // dockTabLabel: what a tab is called and what its tooltip says: the file's name and
@@ -386,7 +420,7 @@ function dockRepointTab(st, oldKey, path) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     DOCK_TABS_KEY, DOCK_MAX_TABS, dockTabKey, dockOpen, dockClose, dockPin, dockActivate, dockSetScroll,
-    dockLeaveNeedsAsk, dockFollow, serializeDock, parseDock, dockFromLayout,
+    dockLeaveNeedsAsk, dockFollow, serializeDock, parseDock, dockFromLayout, dockCellSid, dockMerge,
     dockTabLabel, dockTabItems, dockRemoved, dockSyncScrolls, dockStepKey, dockRepointTab,
   };
 }

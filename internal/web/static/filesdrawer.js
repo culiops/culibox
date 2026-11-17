@@ -234,6 +234,37 @@ function drawerShowFile(path, opts) {
   return true;
 }
 
+// dockOpenSid: the session whose dock a file lands in when it is opened from outside the tree (openFile, openBoxFile: the
+// palette, a terminal link, the directory picker): the focused pane's session. A focused pane with no session (an empty one)
+// leaves a dock that is open on the session it has (the spec's empty-pane rule), and otherwise there is none (null: a dock
+// of its own, whose tabs are never stored).
+function dockOpenSid() {
+  const t = typeof cellTerminal === "function" ? cellTerminal(focusedCell) : null;
+  if (t && t.id) return t.id;
+  return drawerState.open === "files" ? drawerState.sessionId : null;
+}
+
+// dockOpenFile is the desktop route of every opener that is not a tree row: the dock opens for `sid` (the usual open path:
+// the dirty gate for another session's edits, a page view closing, the tree's root), then drawerShowFile shows the file.
+// `after` is run by applyDrawer when the drawer has been applied, so a discard ask or a page that held the open first does
+// not leave the file opening in the session the dock was on. The viewer takes the keyboard, as the pane viewer did for an
+// open the user asked for (a tree row's click does not: the tree keeps its arrow keys). That is a macrotask later: a
+// palette pick closes its dialog first, and the dialog's close event (shell.js focusTerminal) hands the caret back to the
+// focused pane's terminal after any focus given in this tick. false for no path.
+function dockOpenFile(sid, path, opts) {
+  if (!path) return false;
+  openDrawer("files", sid, {
+    after: () => {
+      if (!drawerShowFile(path, opts)) return;
+      setTimeout(() => {
+        const v = dockAttached();
+        if (v) v.focusReader();
+      }, 0);
+    },
+  });
+  return true;
+}
+
 // dockCommit: the session's tab state is now `next`. Viewers of the tabs that are
 // gone go with them (a caller has asked about a dirty one), and the state is kept
 // and stored. Showing what is now active is dockShow's.
@@ -517,14 +548,27 @@ function dockRestore(sessions) {
   if (drawerState.open === "files") dockShow(); // the dock was opened before the list arrived
 }
 
+// dockAdopt takes tabs the layout migration moved out of the panes (tabs.js restoreLayout: a Map of session id -> state)
+// into the dock's own states, after what the session already had (dockMerge), and stores them. Every session in the map is
+// live (dockCellSid), so nothing here needs the list. A dock already open on one of those sessions is shown again.
+function dockAdopt(map) {
+  if (!(map instanceof Map) || !map.size) return;
+  for (const [sid, st] of map) dockStates.set(sid, dockMerge(dockStates.get(sid), st));
+  dockSaveSoon();
+  if (drawerState.open === "files") dockShow();
+}
+
 // dockReopen: the dock was open when the page went away (the flag dockRestore kept), so it comes back open, on the
 // focused pane's session, through the normal open path (openDrawer: the dirty gate, the tree root, positionDrawer).
 // restoreBoot calls it after the layout is restored, because the focused pane is not known before. It holds back,
 // leaving the stored flag as it is (dockOpenKept), when there is nothing to show it for (no focused session), on the
-// phone (it has no dock), and when the dock would not fit beside the panes (dockForcesFull): a reload must not bring
-// the terminals back covered by a Full-mode dock.
+// phone (it has no dock), when a page view is open, and when the dock would not fit beside the panes (dockForcesFull): a
+// reload must not bring the terminals back covered by a Full-mode dock.
 function dockReopen() {
   if (!dockOpenKept || !drawerDesktop()) return;
+  // A page the user opened while the boot was still running (Settings, Audit) is theirs: openDrawer would close it, so the
+  // dock stays closed on this load and the stored flag stays true (dockOpenKept), for the next one.
+  if (typeof currentPage === "function" && currentPage()) return;
   const term = typeof cellTerminal === "function" ? cellTerminal(focusedCell) : null;
   if (!term || !term.id || dockForcesFull()) return;
   openDrawer("files", term.id);
@@ -860,6 +904,8 @@ function drawerPaint(fromViewer) {
   if (host) host.hidden = !v;
   if (empty) empty.hidden = !!v;
   dockRender();
+  // Full mode's agent strip reads the same session and list, and polls only for the session on screen.
+  if (typeof dockAgentSync === "function") dockAgentSync();
 }
 
 initDrawerGoto();
