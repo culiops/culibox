@@ -17,7 +17,8 @@
 #      public, that each tarball has a build attestation from release.yml for this
 #      tag and commit
 #   2. clones <tag> and runs the Go tests natively (arm64) and under Rosetta 2
-#      (amd64), built the way the tarballs are: CGO_ENABLED=0 GOOS=darwin
+#      (amd64, one package at a time, and a package that times out is run once more
+#      alone; the record names it), built the way the tarballs are: CGO_ENABLED=0 GOOS=darwin
 #      GOARCH=<arch>, ignoring the caller's GOFLAGS and go env file. Each arch's tests
 #      use the abduco its tarball bundles (#317); for a tarball without one (releases
 #      before #317) the pinned abduco is built from source instead
@@ -279,11 +280,63 @@ fi
 # darwin and this arch. GOENV=off with an explicit GOFLAGS: an EMPTY GOFLAGS falls back to
 # the go env file (`go env -w`), so only a non-empty value pins it. -v so tests can be counted.
 # A failing run sets T_PASS=false and does not stop the script.
+#
+# Under Rosetta (amd64), test binaries launched in parallel can hang before Go starts,
+# at 0% CPU, until go test kills them; the same package passes alone in seconds
+# (measured on a rented M1, #313). So amd64 tests one package at a time (-p 1), and a
+# package go test killed for running too long is run once more, alone, logged to
+# test-<arch>-retry.log. Only the kill counts: a test binary's own "test timed out"
+# panic means Go had started, so it is a real hang and is not retried. More than
+# MAX_RETRIES kills are not retried at all (each costs up to 11 minutes). The arch
+# passes after retries only when go test exited 1 (test failures, not a crash), every
+# package `go list ./...` names has a result line, nothing but the killed packages
+# failed, and every retry passed. The summary names each retried package and its
+# result either way.
+MAX_RETRIES=5
 T_PASS=
 T_SUMMARY=
 T_ENV=
+go_cmd() { # GO-ARGS...: go in the clone, pinned as above
+  (cd "$work/src" && env PATH="$abdir:$PATH" GOENV=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" AGENT_BOX_REQUIRE_ABDUCO=1 \
+    go "$@")
+}
+# killed_pkgs LOG: the packages whose FAIL line follows go test's "ran too long" kill.
+killed_pkgs() {
+  local line t=false
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in
+    "*** Test killed"*"ran too long"*) t=true ;;
+    ok[[:space:]]*) t=false ;;
+    FAIL$'\t'*$'\t'*)
+      if [ "$t" = true ]; then
+        line=${line#FAIL$'\t'}
+        echo "${line%%$'\t'*}"
+      fi
+      t=false
+      ;;
+    esac
+  done <"$1"
+}
+# no_result_pkgs LOG: the packages `go list ./...` names that have no ok, FAIL or ?
+# line in LOG (go stopped before it reached them). When go list itself fails, its
+# errors are appended to LOG and the one line "!go-list-failed" is printed.
+no_result_pkgs() {
+  local list pkg tab=$'\t'
+  list=$(go_cmd list ./... 2>>"$1" </dev/null) || {
+    echo "!go-list-failed"
+    return 0
+  }
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    grep -qF -e "ok  $tab$pkg$tab" -e "FAIL$tab$pkg$tab" -e "FAIL$tab$pkg [" -e "?   $tab$pkg$tab" "$1" || echo "$pkg"
+  done <<LIST
+$list
+LIST
+}
 run_tests() {
-  local arch=$1 goarch=$2 abdir=$3 log="$work/test-$1.log" passed skipped failed pkgs badpkgs
+  local arch=$1 goarch=$2 abdir=$3 log="$work/test-$1.log" rlog=""
+  local passed skipped failed pkgs badpkgs killed="" pkg ntimed=0 rc=0 missing="" retried="" retry_ok=true note=""
+  local par=""
   T_ENV="CGO_ENABLED=0 GOOS=darwin GOARCH=$goarch"
   if [ -z "$abdir" ]; then
     T_PASS=false
@@ -291,21 +344,62 @@ run_tests() {
     echo "go test ./... ($arch): not run, the abduco install failed" >&2
     return 0
   fi
-  echo "go test ./... ($arch, $T_ENV)"
-  if (cd "$work/src" && env PATH="$abdir:$PATH" GOENV=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" AGENT_BOX_REQUIRE_ABDUCO=1 \
-    go test -count=1 -v ./...) >"$log" 2>&1; then
-    T_PASS=true
-    passed=$(grep -c '^--- PASS' "$log" || true)
-    skipped=$(grep -c '^--- SKIP' "$log" || true)
-    pkgs=$(grep -c '^ok' "$log" || true)
-    T_SUMMARY="go test ./... ok: $passed test(s) passed, $skipped skipped, in $pkgs package(s)"
-  else
-    T_PASS=false
-    failed=$(grep -c '^--- FAIL' "$log" || true)
-    badpkgs=$(grep -cE '^FAIL[[:space:]]+[^[:space:]]+' "$log" || true)
-    T_SUMMARY="go test failed: $failed test(s) failed, $badpkgs package(s) FAIL, see test-$arch.log"
+  if [ "$arch" = amd64 ]; then
+    par="-p 1"
+    note="; one package at a time under Rosetta (-p 1)"
   fi
-  grep -E '^(ok|FAIL|--- FAIL|panic)' "$log" || true
+  echo "go test ./... ($arch, $T_ENV${par:+, $par})"
+  # $par unquoted on purpose: empty, or the two words -p 1.
+  if go_cmd test $par -count=1 -v ./... >"$log" 2>&1; then
+    T_PASS=true
+  else
+    rc=$?
+    T_PASS=false
+    if [ "$arch" = amd64 ]; then killed=$(killed_pkgs "$log"); fi
+    if [ -n "$killed" ]; then
+      ntimed=$(printf '%s\n' "$killed" | grep -c .)
+      if [ "$ntimed" -gt "$MAX_RETRIES" ]; then
+        retried="; $ntimed package(s) timed out, more than $MAX_RETRIES: not retried"
+        retry_ok=false
+      else
+        rlog="$work/test-$arch-retry.log"
+        : >"$rlog"
+        while IFS= read -r pkg; do
+          echo "go test $pkg ($arch): killed for running too long in the full run, running it again alone"
+          if go_cmd test -p 1 -count=1 -v "$pkg" >>"$rlog" 2>&1 </dev/null; then
+            retried="$retried; $pkg timed out and passed when run again alone"
+          else
+            retried="$retried; $pkg timed out and failed when run again alone"
+            retry_ok=false
+          fi
+        done <<KILLED
+$killed
+KILLED
+        retried="$retried (see test-$arch-retry.log)"
+        missing=$(no_result_pkgs "$log" | tr '\n' ' ')
+        missing=${missing% }
+      fi
+    fi
+  fi
+  failed=$(grep -c '^--- FAIL' "$log" || true)
+  badpkgs=$(grep -cE '^FAIL[[:space:]]+[^[:space:]]+' "$log" || true)
+  if [ "$missing" = "!go-list-failed" ]; then
+    retried="$retried; go list ./... failed (see test-$arch.log), so the full run could not be checked for packages without a result"
+  elif [ -n "$missing" ]; then
+    retried="$retried; $missing has no result in the full run"
+  elif [ "$T_PASS" = false ] && [ "$ntimed" -gt 0 ] && [ "$retry_ok" = true ] && [ "$rc" -eq 1 ] &&
+    [ "$failed" -eq 0 ] && [ "$badpkgs" -eq "$ntimed" ]; then
+    T_PASS=true
+  fi
+  if [ "$T_PASS" = true ]; then
+    passed=$(cat "$log" ${rlog:+"$rlog"} | grep -c '^--- PASS' || true)
+    skipped=$(cat "$log" ${rlog:+"$rlog"} | grep -c '^--- SKIP' || true)
+    pkgs=$(cat "$log" ${rlog:+"$rlog"} | grep -c '^ok' || true)
+    T_SUMMARY="go test ./... ok: $passed test(s) passed, $skipped skipped, in $pkgs package(s)$retried$note"
+  else
+    T_SUMMARY="go test failed: $failed test(s) failed, $badpkgs package(s) FAIL, see test-$arch.log$retried$note"
+  fi
+  grep -E '^(ok|FAIL|--- FAIL|panic)' "$log" ${rlog:+"$rlog"} || true
 }
 
 # check_version ARCH BINARY [RUNNER...]: the binary's `version` must equal exactly

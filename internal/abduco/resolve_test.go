@@ -378,14 +378,26 @@ func TestResolveAcceptsRelativeSymlink(t *testing.T) {
 // umask 002 systems (RHEL, Fedora) make ~/.local/bin group-writable, but its group
 // is the user's private group: nobody else is in it, so that write bit is safe.
 func TestResolveAcceptsPrivateGroupWritable(t *testing.T) {
+	gid := os.Getgid()
+	if gid == 0 {
+		t.Skip("group 0 is never a private group (PrivateGid 0 means none)")
+	}
 	f := newResolveFixture(t)
-	f.bundle(t, 0o775)
+	p := f.bundle(t, 0o775)
+	// Set the group rather than assume it: a new file takes the process's group on
+	// Linux but its folder's on macOS, and /tmp there is wheel, gid 0 (#313). The
+	// owner may always change a file's group to its own primary group.
+	for _, q := range []string{f.dir, p} {
+		if err := os.Chown(q, -1, gid); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.Chmod(f.dir, 0o775); err != nil {
 		t.Fatal(err)
 	}
 	f.onPath = "/usr/bin/abduco"
 	l := f.lookup(os.Getuid())
-	l.PrivateGid = os.Getgid() // the temp files carry the process's group
+	l.PrivateGid = gid
 	r, err := l.Resolve("")
 	if err != nil {
 		t.Fatal(err)
