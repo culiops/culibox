@@ -35,8 +35,8 @@ func TestCloneGuidance(t *testing.T) {
 }
 
 func TestCredGuidance(t *testing.T) {
-	const head = "CuliBox credentials for this session (fixed when it started; every use goes through CuliBox's credential broker, so never ask the user for keys):"
-	const list = " agentbox-env --list shows accounts, regions, repos and live sign-in state."
+	const head = "CuliBox credentials for this session, as set up when it started (every use goes through CuliBox's credential broker: never ask the user to paste a key, and if one you need is missing, tell the user to bind it in CuliBox):"
+	const list = " Run agentbox-env --list for the details, including live AWS sign-in state."
 	const tail = " If a credential error says a human must sign in, stop and tell the user."
 	conn := func(name string, prod bool) config.AWSConnection {
 		return config.AWSConnection{Name: name, Description: "desc of " + name, AWSBinding: config.AWSBinding{
@@ -80,16 +80,35 @@ func TestCredGuidance(t *testing.T) {
 			},
 			Permissions: map[string]string{"issues": "write", "contents": "read", "metadata": "read"},
 		}})
-		if !strings.Contains(got, " GitHub owners: culiops, acme (git and gh; write: issues).") {
-			t.Fatalf("got %q", got)
+		// A PAT is not narrowed by CuliBox: its owner never gets the App's
+		// permissions, so "read only" can never be said of it.
+		want := " GitHub owners: culiops (git and gh; write: issues). GitHub owners with a personal access token: acme (git and gh; the token's own scopes, not narrowed by CuliBox)."
+		if !strings.Contains(got, want) {
+			t.Fatalf("got  %q\nwant %q", got, want)
 		}
 		for _, bad := range []string{"acme-pat", "main", "culibox", "infra"} {
 			if strings.Contains(got, bad) {
 				t.Errorf("note shows %q: %q", bad, got)
 			}
 		}
-		if !strings.Contains(got, list) {
-			t.Fatalf("a GitHub binding has a --list: %q", got)
+		if !strings.Contains(got, " Run agentbox-env --list for the details.") {
+			t.Fatalf("a GitHub binding has a --list (no AWS sign-in state to show): %q", got)
+		}
+	})
+	t.Run("a PAT-only owner is never called read only", func(t *testing.T) {
+		got := credGuidance(config.Bindings{GitHub: &config.GitHubBinding{
+			Owners: []config.GitHubOwner{{Owner: "acme", Token: "acme-pat", Repos: []string{"infra"}}}}})
+		if strings.Contains(got, "read only") || strings.Contains(got, "GitHub owners: acme") ||
+			!strings.Contains(got, "GitHub owners with a personal access token: acme (") {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("legacy binding with a token: --list does not cover profile agentbox", func(t *testing.T) {
+		got := credGuidance(config.Bindings{AWS: &config.AWSBinding{SourceProfile: "p",
+			RoleARN: "arn:aws:iam::111122223333:role/r", Region: "eu-west-1"},
+			Tokens: []config.StaticToken{{Name: "grafana", Env: []string{"G"}}}})
+		if !strings.Contains(got, " Run agentbox-env --list for the details; profile agentbox is not in it.") {
+			t.Fatalf("got %q", got)
 		}
 	})
 	t.Run("github default permissions are read only", func(t *testing.T) {

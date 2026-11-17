@@ -326,12 +326,13 @@ type tokenListHost struct {
 // gitHubListRow is one owner of a GitHub binding as `agentbox-env --list`
 // shows it. Via says how the broker mints for it ("app" or "token"), never the
 // App's name or the PAT entry's name. The permissions are the binding's, the
-// same on every row.
+// same on every App row; a token row has none, because CuliBox does not narrow
+// a personal access token (the token's own scopes apply).
 type gitHubListRow struct {
 	Owner       string            `json:"owner"`
 	Repos       []string          `json:"repos"`
 	Via         string            `json:"via"`
-	Permissions map[string]string `json:"permissions"`
+	Permissions map[string]string `json:"permissions,omitempty"`
 }
 
 // GitHubListing is the JSON the box shows for the GitHub part of `agentbox-env
@@ -340,11 +341,10 @@ func GitHubListing(g config.GitHubBinding) []byte {
 	perms := g.EffectivePermissions()
 	out := make([]gitHubListRow, len(g.Owners))
 	for i, o := range g.Owners {
-		via := "app"
+		out[i] = gitHubListRow{Owner: o.Owner, Repos: slices.Clone(o.Repos), Via: "app", Permissions: perms}
 		if o.Token != "" {
-			via = "token"
+			out[i].Via, out[i].Permissions = "token", nil
 		}
-		out[i] = gitHubListRow{Owner: o.Owner, Repos: slices.Clone(o.Repos), Via: via, Permissions: perms}
 	}
 	b, err := json.Marshal(out)
 	if err != nil { // plain strings: cannot happen

@@ -202,10 +202,12 @@ function githubSection(rows) {
     const groups = [];
     if (write.length) groups.push('write ' + write.join(', '));
     if (read.length) groups.push('read ' + read.join(', '));
+    // CuliBox does not narrow a personal access token: never show it the App's permissions.
+    const permLine = r.via === 'token' ? "the token's own (not narrowed by CuliBox)" : groups.join(' · ');
     return [
       r.owner + (r.via ? ' [' + r.via + ']' : ''),
       '  repos: ' + strs(r.repos).join(', '),
-      '  permissions: ' + groups.join(' · '),
+      '  permissions: ' + permLine,
       '  use: git and gh as usual',
     ].join('\n');
   });

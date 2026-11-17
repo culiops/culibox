@@ -36,15 +36,17 @@ const maxGuidanceNames = 8
 // its session holds: the names, which are PROD and how each kind is used. It
 // is built only from validated names, GitHub owners and permission keys, never
 // a value, an account, a role, a label or a description (free text must not
-// become a system instruction). The set is fixed at spawn, so the text cannot
-// go stale; live state (sign-in, base role, elevation) stays in agentbox-env
-// --list and the broker's errors. It does not claim the env holds no keys:
-// legacy secrets are still plain env. "" when nothing is bound.
+// become a system instruction). The set is the one at spawn (a token entry
+// deleted on the host later is refused by the broker, not added back); live
+// state (sign-in, base role, elevation) stays in agentbox-env --list and the
+// broker's errors. It does not claim the env holds no keys: legacy secrets are
+// still plain env. A PAT owner never gets the App permissions: CuliBox does
+// not narrow a personal access token. "" when nothing is bound.
 func credGuidance(bs config.Bindings) string {
 	if !bs.Any() {
 		return ""
 	}
-	parts := []string{"CuliBox credentials for this session (fixed when it started; every use goes through CuliBox's credential broker, so never ask the user for keys):"}
+	parts := []string{"CuliBox credentials for this session, as set up when it started (every use goes through CuliBox's credential broker: never ask the user to paste a key, and if one you need is missing, tell the user to bind it in CuliBox):"}
 	var aws []string
 	if bs.AWS != nil {
 		aws = append(aws, prodName("agentbox", bs.AWS.Prod))
@@ -56,9 +58,13 @@ func credGuidance(bs config.Bindings) string {
 		parts = append(parts, "AWS profiles: "+guidanceNames(aws)+" (use aws --profile <name>, never aws configure).")
 	}
 	if g := bs.GitHub; g != nil {
-		owners := make([]string, len(g.Owners))
-		for i, o := range g.Owners {
-			owners[i] = o.Owner
+		var apps, pats []string
+		for _, o := range g.Owners {
+			if o.Token != "" {
+				pats = append(pats, o.Owner)
+			} else {
+				apps = append(apps, o.Owner)
+			}
 		}
 		var write []string
 		for k, v := range g.EffectivePermissions() {
@@ -71,7 +77,12 @@ func credGuidance(bs config.Bindings) string {
 			slices.Sort(write)
 			perm = "write: " + strings.Join(write, ", ")
 		}
-		parts = append(parts, "GitHub owners: "+guidanceNames(owners)+" (git and gh; "+perm+").")
+		if len(apps) > 0 {
+			parts = append(parts, "GitHub owners: "+guidanceNames(apps)+" (git and gh; "+perm+").")
+		}
+		if len(pats) > 0 {
+			parts = append(parts, "GitHub owners with a personal access token: "+guidanceNames(pats)+" (git and gh; the token's own scopes, not narrowed by CuliBox).")
+		}
 	}
 	if len(bs.Tokens) > 0 {
 		toks := make([]string, len(bs.Tokens))
@@ -83,7 +94,14 @@ func credGuidance(bs config.Bindings) string {
 	// The legacy binding alone gets no agentbox-env script, so --list would
 	// only say there is nothing to list.
 	if len(bs.AWSConns) > 0 || bs.GitHub != nil || len(bs.Tokens) > 0 {
-		parts = append(parts, "agentbox-env --list shows accounts, regions, repos and live sign-in state.")
+		s := "Run agentbox-env --list for the details"
+		switch {
+		case len(bs.AWSConns) > 0:
+			s += ", including live AWS sign-in state"
+		case bs.AWS != nil: // exclusive with AWSConns; it has no aws.json
+			s += "; profile agentbox is not in it"
+		}
+		parts = append(parts, s+".")
 	}
 	parts = append(parts, "If a credential error says a human must sign in, stop and tell the user.")
 	return strings.Join(parts, " ")

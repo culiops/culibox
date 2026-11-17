@@ -1037,7 +1037,8 @@ func TestEnsureBindingDirWritesGitHubListing(t *testing.T) {
 	}
 	if len(rows) != 2 || rows[0].Owner != "culiops" || rows[0].Via != "app" ||
 		!slices.Equal(rows[0].Repos, []string{"agent-box", "tech-advisor"}) ||
-		rows[1].Owner != "acme" || rows[1].Via != "token" || rows[1].Permissions["issues"] != "write" {
+		rows[1].Owner != "acme" || rows[1].Via != "token" || rows[1].Permissions != nil ||
+		rows[0].Permissions["issues"] != "write" {
 		t.Fatalf("github.json = %s", raw)
 	}
 	for _, bad := range []string{"gh-pat-acme", `"bot"`} {

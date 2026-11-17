@@ -128,7 +128,12 @@ func runNode(t *testing.T, cwd, stdin string, args []string, env ...string) (str
 	}
 	cmd := exec.Command("node", args...)
 	cmd.Dir = cwd
-	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}, env...)
+	// Every agentbox-env listing defaults to a missing file: inside a CuliBox box
+	// the /opt/agentbox ones may exist. A test's own value comes later and wins
+	// (exec keeps the last of duplicate keys).
+	none := filepath.Join(t.TempDir(), "absent.json")
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
+		"AGENTBOX_ENV_LIST_FILE=" + none, "AGENTBOX_ENV_AWS_FILE=" + none, "AGENTBOX_ENV_GITHUB_FILE=" + none}, env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -1009,6 +1014,29 @@ func listGitHub(t *testing.T, b *config.GitHubBinding) string {
 	return out
 }
 
+// runNode points every agentbox-env listing at a missing file unless a test
+// names one: inside a CuliBox box the /opt/agentbox defaults may exist.
+func TestRunNodeListingsDefaultToMissing(t *testing.T) {
+	out, _, code := runNode(t, "", "", []string{"-e",
+		"for (const k of ['AGENTBOX_ENV_LIST_FILE','AGENTBOX_ENV_AWS_FILE','AGENTBOX_ENV_GITHUB_FILE']) console.log(process.env[k] || '')"})
+	if code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+	for _, p := range strings.Split(strings.TrimSpace(out), "\n") {
+		if p == "" || strings.HasPrefix(p, "/opt/agentbox") {
+			t.Fatalf("listing env not defaulted: %q", out)
+		}
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s exists: %v", p, err)
+		}
+	}
+	// A test's own value wins over the default.
+	out, _, _ = runNode(t, "", "", []string{"-e", "console.log(process.env.AGENTBOX_ENV_GITHUB_FILE)"}, "AGENTBOX_ENV_GITHUB_FILE=/x/gh.json")
+	if strings.TrimSpace(out) != "/x/gh.json" {
+		t.Fatalf("override lost: %q", out)
+	}
+}
+
 func TestEnvListGitHubSection(t *testing.T) {
 	want := "GitHub\n" +
 		"culiops [app]\n" +
@@ -1018,7 +1046,7 @@ func TestEnvListGitHubSection(t *testing.T) {
 		"\n" +
 		"acme [token]\n" +
 		"  repos: widgets, gadgets\n" +
-		"  permissions: write issues · read contents, metadata\n" +
+		"  permissions: the token's own (not narrowed by CuliBox)\n" +
 		"  use: git and gh as usual\n"
 	if out := listGitHub(t, ghListBinding()); out != want {
 		t.Fatalf("listing:\n%s\nwant:\n%s", out, want)
