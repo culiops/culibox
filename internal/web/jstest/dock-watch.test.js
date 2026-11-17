@@ -176,7 +176,7 @@ test("the session leaves working: ONE last read, whose answer is applied, and th
   assert.strictEqual(p.liveIntervals(), 0, "the interval is gone: this is not a poll");
   await p.reply(body([file("/w/b.go", 200), file("/w/a.go", 100)]));
   assert.deepStrictEqual(p.st.sets.map((x) => plain(x[1]).map((f) => f.path)), [["/w/a.go"], ["/w/b.go", "/w/a.go"]], "the edit of the last gap gets its place in the list (its session bar)");
-  assert.deepStrictEqual(plain(p.st.refreshes), [{ fresh: true }, { fresh: true }], "and git is asked about it");
+  assert.deepStrictEqual(plain(p.st.refreshes), [{ fresh: true, watch: true }, { fresh: true, watch: true }], "and git is asked about it");
   // Nothing more: not on later syncs (every session poll), not on a tick that is not there.
   p.sync(); p.sync(); p.sync();
   assert.strictEqual(p.st.fetches.length, 2, "one last read, never repeated");
@@ -406,7 +406,7 @@ test("a new file: the page's list is set at once and git is asked once, fresh", 
   p.sync();
   await p.reply(body([file("/w/a.go", 100)]));
   assert.deepStrictEqual(p.st.sets.map((s) => [s[0], plain(s[1])]), [["s1", [file("/w/a.go", 100)]]]);
-  assert.deepStrictEqual(plain(p.st.refreshes), [{ fresh: true }], "gitStatusRefreshSoon({fresh:true}), once: gitstatus.js keeps one status request out and collapses the asks that come meanwhile");
+  assert.deepStrictEqual(plain(p.st.refreshes), [{ fresh: true, watch: true }], "gitStatusRefreshSoon({fresh:true, watch:true}), once: gitstatus.js keeps one status request out, collapses the asks that come meanwhile and spaces watch-driven ones by GIT_WATCH_MIN_MS");
   // The same answer again is no news.
   p.tick();
   await p.reply(body([file("/w/a.go", 100)]));
@@ -637,7 +637,7 @@ function fullPage() {
     document: doc,
     fetch,
     localStorage: { getItem: () => null, setItem: () => {} },
-    setTimeout: (fn, ms) => { st.timeouts.push({ fn, ms, live: true }); return st.timeouts.length; },
+    setTimeout: (fn, ms) => { st.timeouts.push({ fn, ms, at: st.now + ms, live: true }); return st.timeouts.length; },
     clearTimeout: (id) => { if (st.timeouts[id - 1]) st.timeouts[id - 1].live = false; },
     setInterval: (fn, ms) => { st.intervals.push({ fn, ms, live: true }); return st.intervals.length; },
     clearInterval: (id) => { if (st.intervals[id - 1]) st.intervals[id - 1].live = false; },
@@ -685,6 +685,19 @@ function fullPage() {
       f.done = true;
       f.resolve({ ok: true, status: 200, json: async () => data });
       await settle();
+    },
+    // Time passes: the clock moves on by `ms`, and every timer that falls due on the way fires, in order (a floor timer that a
+    // debounce starts on the way, too). For the watch's floor between statuses (gitstatus.js GIT_WATCH_MIN_MS).
+    passTime: (ms) => {
+      const target = st.now + ms;
+      for (;;) {
+        const due = st.timeouts.filter((x) => x.live && x.at <= target).sort((a, b) => a.at - b.at)[0];
+        if (!due) break;
+        due.live = false;
+        st.now = Math.max(st.now, due.at);
+        due.fn();
+      }
+      st.now = target;
     },
     // The debounce window of gitStatusRefreshSoon: the live 1000 ms timer fires.
     debounce: () => {
@@ -834,8 +847,11 @@ test("an edit in the last poll gap gets its row and bar from the last read, and 
   await p.watchReply({ claude: true, events: [], files });
   assert.deepStrictEqual(Array.from(p.rows(), (r) => text(r.querySelector(".dk-nm") ) + ":" + text(r.querySelector(".dk-st"))), ["two.go:…", "one.go:M"], "the last edit shows, with its session bar, at once");
   assert.ok(Array.from(p.rows()).every((r) => r.className.split(/\s+/).includes("dk-mine")));
-  // The end-of-turn refresh (fresh) lands and git lists it: nothing is provisional.
-  p.debounce();
+  // The last edit's ask is the trailing one: it is not dropped, it waits for the 3 s floor since the last watch-driven status
+  // (0.9 s ago) and goes out when that ends. It lands and git lists the file: nothing is provisional.
+  assert.strictEqual(p.calls("/api/git/status").length, 2, "git has not been asked about two.go yet");
+  p.passTime(3000);
+  assert.strictEqual(p.pending("/api/git/status").length, 1, "the ask went out");
   p.st.now += 300;
   await p.answer("/api/git/status", okStatus([{ p: "one.go", x: "M" }, { p: "two.go", x: "M" }]));
   assert.deepStrictEqual(Array.from(p.rows(), (r) => text(r.querySelector(".dk-st"))), ["M", "M"]);
@@ -911,11 +927,48 @@ test("R16 and one ask at a time: with git slower than the gap between edits only
   p.st.now += 500;
   await p.answer("/api/git/status", okStatus(entries.slice(0, 3))); // the trailing ask answers: three more letters
   assert.deepStrictEqual(letters(), ["four.go:…", "three.go:A", "two.go:A", "one.go:A"]);
-  assert.strictEqual(statusCalls().length, 4, "and the ask held for four.go goes out");
+  assert.strictEqual(statusCalls().length, 3, "four.go's ask is inside the 3 s floor since the trailing one went out: it waits");
+  p.passTime(3000);
+  assert.strictEqual(statusCalls().length, 4, "and goes out when the floor ends");
   assert.strictEqual(out(), 1);
   p.st.now += 500;
   await p.answer("/api/git/status", okStatus(entries.slice(0, 4)));
   assert.deepStrictEqual(letters(), ["four.go:A", "three.go:A", "two.go:A", "one.go:A"]);
   assert.strictEqual(p.nodes["dock-chg-list"].querySelectorAll(".dk-prov").length, 0);
   assert.strictEqual(statusCalls().length, 4, "nothing more is asked");
+});
+
+test("a burst of edits, one every 1.5 s for 10 s, sends at most 4 watch-driven statuses, 3 s apart, and the last edit's letter still lands", async () => {
+  const p = fullPage();
+  await p.status(okStatus([]), { fresh: true });
+  p.run("dockWatchSync()");
+  const start = p.st.now;
+  const files = [];
+  const entries = [];
+  const sent = []; // ms from the start at which a watch-driven status went out
+  let seen = p.calls("/api/git/status").length;
+  // Let `ms` pass in 100 ms steps; a status that goes out is noted and answered at once, so it is the floor and not the
+  // one-at-a-time rule that spaces them.
+  const run = async (ms) => {
+    for (let i = 0; i < ms; i += 100) {
+      p.passTime(100);
+      while (p.calls("/api/git/status").length > seen) { seen++; sent.push(p.st.now - start); }
+      while (p.pending("/api/git/status").length) await p.answer("/api/git/status", okStatus(entries.slice()));
+    }
+  };
+  for (let i = 0; i < 7; i++) { // edits at 0, 1.5, ... 9 s
+    const name = "f" + i + ".go";
+    files.unshift({ path: "/w/" + name, add: 1, del: 0, ts: p.st.now - 50 });
+    entries.push({ p: name, x: "A" });
+    p.run("dockWatchTick()");
+    await p.watchReply({ claude: true, events: [], files: files.slice() });
+    await run(1500);
+  }
+  await run(6000); // the burst is over: the trailing ask is sent
+  assert.ok(sent.filter((ms) => ms < 10500).length <= 4, "at most 4 in the burst: " + sent);
+  for (let i = 1; i < sent.length; i++) assert.ok(sent[i] - sent[i - 1] >= 3000, "3 s apart: " + sent);
+  assert.ok(sent.length >= 3, "but it keeps up: " + sent);
+  assert.ok(sent.at(-1) > 9000, "an ask is sent after the last edit: " + sent);
+  assert.ok(p.calls("/api/git/status").slice(1).every((f) => f.body.fresh === true), "every one fresh");
+  assert.deepStrictEqual(Array.from(p.rows(), (r) => text(r.querySelector(".dk-st"))), Array(7).fill("A"), "the last edit's letter landed, nothing is left provisional");
 });

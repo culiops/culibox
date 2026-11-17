@@ -22,9 +22,10 @@
 //   - the page's list for the session (drawerChangedFiles) is set at once when it differs, and every reader repainted: the
 //     tree's session bars, the Changes section and the crumbs (drawerSetChanged);
 //   - an entry that is new or changed against what this watch last saw, and sits under the tree root, asks for a fresh git
-//     status (gitStatusRefreshSoon({fresh: true})). What bounds the container runs is the client: gitstatus.js debounces
-//     the ask by 1 s, keeps ONE status request out at a time and collapses the asks that come meanwhile into one trailing
-//     fresh ask. The server does not bound them: a fresh call never takes its reuse cache and, once an earlier run has
+//     status (gitStatusRefreshSoon({fresh: true, watch: true})). What bounds the container runs is the client: gitstatus.js
+//     debounces the ask by 1 s, keeps ONE status request out at a time, collapses the asks that come meanwhile into one
+//     trailing fresh ask, and sends a watch-driven status at most once per GIT_WATCH_MIN_MS (3 s; an ask inside the floor
+//     waits for it, and the last edit's ask is never dropped). The server does not bound them: a fresh call never takes its reuse cache and, once an earlier run has
 //     launched, starts a run of its own (internal/gitview/runner.go StatusFresh), all sharing MaxParallel slots with every
 //     other session's git. The numstat that follows each status is fresh too and also one at a time (dockchanges.js): there
 //     is no second timer-driven git poll;
@@ -198,7 +199,7 @@ function dwApply(sid, data) {
   const held = typeof drawerChangedFiles !== "undefined" ? drawerChangedFiles.get(sid) : null;
   if (!dwSame(dwSigs(held), next)) drawerSetChanged(sid, files);
   // Git is asked when the agent changed something the shown tree can say something about.
-  if (news.some(dwUnderRoot) && typeof gitStatusRefreshSoon === "function") gitStatusRefreshSoon({ fresh: true });
+  if (news.some(dwUnderRoot) && typeof gitStatusRefreshSoon === "function") gitStatusRefreshSoon({ fresh: true, watch: true });
 
   if (moved || fresh.length) dwNotify(sid, files, fresh);
 }

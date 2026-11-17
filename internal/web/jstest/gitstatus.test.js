@@ -488,6 +488,182 @@ test("an explicit load is not held (a tree paint, the refresh button go out at o
   } finally { delete global.ftRoot; }
 });
 
+// --- A3: the dock watch's asks have a floor between them ------------------------------------------------------------------------
+
+// watchRun: edits at `edits` (ms from the start), each one a watch-driven fresh ask as dockwatch.js makes it, for `until` ms in
+// 100 ms steps. Every request that goes out is answered 200 ms later, so it is the floor and not the one-at-a-time rule that
+// spaces them. -> {calls (each with .sent as ms from the start), t0}.
+async function watchRun(t, edits, until) {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 100000 });
+  const calls = pendingFetch();
+  global.ftRoot = () => "/r";
+  const t0 = Date.now();
+  for (let ms = 0; ms < until; ms += 100) {
+    if (edits.includes(ms)) g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    t.mock.timers.tick(100);
+    for (const c of calls) if (!c.done && Date.now() - c.sent >= 200) c.resolve(answerFor(1));
+    await settle();
+  }
+  for (const c of calls) c.sent -= t0;
+  return { calls, t0 };
+}
+
+test("GIT_WATCH_MIN_MS is 3 s", () => {
+  assert.equal(g.GIT_WATCH_MIN_MS, 3000);
+});
+
+test("watch-driven asks: an edit every 1.5 s for 10 s sends at most 4 status requests, 3 s apart, and the last edit still gets its ask", async (t) => {
+  try {
+    const edits = [0, 1500, 3000, 4500, 6000, 7500, 9000];
+    const { calls } = await watchRun(t, edits, 16000);
+    const sent = calls.map((c) => c.sent);
+    assert.ok(sent.filter((ms) => ms < 10000).length <= 4, "within the 10 s of the burst: " + sent);
+    for (let i = 1; i < sent.length; i++) assert.ok(sent[i] - sent[i - 1] >= 3000, "3 s floor between sends: " + sent);
+    assert.ok(calls.every((c) => c.fresh), "every one fresh");
+    assert.ok(sent.at(-1) > 9000, "the trailing ask: a status is asked after the last edit, so its letter lands: " + sent);
+    assert.equal(calls.out(), 0);
+    assert.equal(g.gitStatusCodeFor("/r/f0.go"), "M", "and it landed");
+  } finally { delete global.ftRoot; }
+});
+
+test("watch-driven asks: without the floor an edit every 1.5 s was a status every 1.5 s; the floor halves that, never starves the last edit", async (t) => {
+  try {
+    const edits = [];
+    for (let ms = 0; ms < 30000; ms += 1500) edits.push(ms);
+    const { calls } = await watchRun(t, edits, 40000);
+    const sent = calls.map((c) => c.sent);
+    // 20 edits over 30 s: the debounce alone (1 s) would have sent one per edit; the floor allows one per 3 s, and one trailing.
+    assert.ok(calls.length <= 12, "requests: " + sent);
+    assert.ok(calls.length >= 8, "but it keeps up: " + sent);
+    for (let i = 1; i < sent.length; i++) assert.ok(sent[i] - sent[i - 1] >= 3000, sent.join());
+    assert.ok(sent.at(-1) > 28500, "the last edit's ask is sent: " + sent);
+  } finally { delete global.ftRoot; }
+});
+
+test("watch-driven asks: a single edit is sent after the debounce alone, not held for the floor", async (t) => {
+  try {
+    const { calls } = await watchRun(t, [0], 3000);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].sent, 1000, "the 1 s debounce, nothing more");
+  } finally { delete global.ftRoot; }
+});
+
+test("watch-driven asks: edits inside the floor collapse into ONE trailing ask when the floor ends", async (t) => {
+  try {
+    // 0: sent at 1000. Then three edits at 1500, 2000 and 2600: their debounce ends at 3600, the floor at 4000: one ask at 4000.
+    const { calls } = await watchRun(t, [0, 1500, 2000, 2600], 8000);
+    assert.deepEqual(calls.map((c) => c.sent), [1000, 4000]);
+  } finally { delete global.ftRoot; }
+});
+
+test("explicit asks are never delayed by the watch floor, and a fresh one answers the watch ask that was waiting", async (t) => {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 100000 });
+  const calls = pendingFetch();
+  global.ftRoot = () => "/r";
+  const land = async () => { for (const c of calls) if (!c.done) c.resolve(answerFor(1)); await settle(); };
+  try {
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    t.mock.timers.tick(1000);
+    await land();
+    assert.equal(calls.length, 1);
+    // A watch ask inside the floor waits (its window ends 1 s after, the floor 2 s later).
+    t.mock.timers.tick(200);
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    t.mock.timers.tick(1000);
+    assert.equal(calls.length, 1, "waiting for the floor");
+    // An explicit ask in the same stretch (a save, a file op, the end of a turn) goes out after its own debounce only.
+    g.gitStatusRefreshSoon();
+    t.mock.timers.tick(1000);
+    assert.equal(calls.length, 2, "not delayed by the floor");
+    await land();
+    // That fresh status was read after the edit, so the watch ask that waited has nothing left to ask.
+    t.mock.timers.tick(10000);
+    await settle();
+    assert.equal(calls.length, 2, "no second status for the same edit");
+    // A plain (non-fresh) explicit ask does not answer it.
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    t.mock.timers.tick(1000);
+    await land();
+    assert.equal(calls.length, 3, "the first of a new stretch is sent");
+    t.mock.timers.tick(200);
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    t.mock.timers.tick(1000);
+    g.gitStatusRefreshSoon({ fresh: false });
+    t.mock.timers.tick(1000);
+    assert.equal(calls.length, 4, "the plain ask goes out");
+    await land();
+    t.mock.timers.tick(5000);
+    await settle();
+    assert.equal(calls.length, 5, "and the watch ask still goes when its floor ends");
+    assert.equal(calls[4].fresh, true);
+    // An explicit load (a tree paint, the refresh button) is never held or delayed.
+    await land();
+    g.gitStatusLoad("/r", "s1", { fresh: true });
+    assert.equal(calls.length, 6);
+  } finally { delete global.ftRoot; }
+});
+
+test("watch-driven asks: one held behind a slow request goes out at the landing when the floor has passed, and still one status out at a time", async (t) => {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 100000 });
+  const calls = pendingFetch();
+  global.ftRoot = () => "/r";
+  let most = 0;
+  try {
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    t.mock.timers.tick(1000);
+    assert.equal(calls.length, 1);
+    // git takes 5 s: the asks that come meanwhile are held, not sent beside it.
+    g.gitStatusRefreshSoon({ fresh: true, watch: true }); t.mock.timers.tick(1500);
+    g.gitStatusRefreshSoon({ fresh: true, watch: true }); t.mock.timers.tick(1500);
+    g.gitStatusRefreshSoon({ fresh: true, watch: true }); t.mock.timers.tick(1000);
+    most = Math.max(most, calls.out());
+    assert.equal(calls.length, 1);
+    t.mock.timers.tick(1000); // 5 s since the send
+    calls[0].resolve(answerFor(1));
+    await settle();
+    assert.equal(calls.length, 2, "the trailing ask goes at the landing: the round trip already spaced it by more than the floor");
+    assert.equal(calls[1].fresh, true);
+    most = Math.max(most, calls.out());
+    assert.equal(most, 1);
+    // A slow reply that lands INSIDE the floor: the held ask waits out the rest of it.
+    calls[1].resolve(answerFor(1));
+    await settle();
+    t.mock.timers.tick(3000); // the floor since the last send is over
+    g.gitStatusRefreshSoon({ fresh: true, watch: true }); t.mock.timers.tick(1000);
+    assert.equal(calls.length, 3);
+    g.gitStatusRefreshSoon({ fresh: true, watch: true }); t.mock.timers.tick(1000); // held behind it
+    calls[2].resolve(answerFor(1)); // lands 1 s after it was sent
+    await settle();
+    assert.equal(calls.length, 3, "inside the floor: not sent at the landing");
+    t.mock.timers.tick(2000);
+    await settle();
+    assert.equal(calls.length, 4, "sent when the floor ends");
+  } finally { delete global.ftRoot; }
+});
+
+test("a reset forgets the ask that was waiting for the floor", async (t) => {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 100000 });
+  const calls = pendingFetch();
+  global.ftRoot = () => "/r";
+  try {
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    t.mock.timers.tick(1000);
+    calls[0].resolve(answerFor(1));
+    await settle();
+    t.mock.timers.tick(200);
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    t.mock.timers.tick(1000); // waiting for the floor
+    g.gitStatusReset();
+    t.mock.timers.tick(10000);
+    await settle();
+    assert.equal(calls.length, 1, "nothing is sent for a forgotten ask");
+  } finally { delete global.ftRoot; }
+});
+
 // A test that leaves a request out must not keep the process alive for the request's abort timer.
 test.after(() => g.gitStatusReset());
 

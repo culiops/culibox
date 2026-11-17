@@ -80,8 +80,18 @@ let gitState = null;     // {root, sid, status, marks, at, seq} of the status ap
 let gitTimer = null;
 let gitTimerFresh = false; // any refreshSoon in the pending window asked for fresh
 const gitOut = new Set(); // the status requests out, as {ac, timer}: what the debounced asks wait for (a reset empties it)
-let gitHeld = null;       // {fresh}: the one trailing ask the debounced asks collapsed into while a request was out
+let gitHeld = null;       // {fresh, watch}: the one trailing ask the debounced asks collapsed into while a request was out
+let gitTimerWatch = true; // every ask in the pending window was the dock watch's (one explicit ask makes the window explicit)
+let gitWatchAt = -Infinity; // when the last watch-driven status was sent
+let gitWatchTimer = null;   // the wait for GIT_WATCH_MIN_MS to pass, with a watch-driven ask due; later ones join it
 const GIT_DEBOUNCE_MS = 1000;
+// The least gap between two status requests the dock watch asks for (dockwatch.js passes {watch: true}). The server starts a
+// docker run for every fresh status after the first has launched (internal/gitview/runner.go StatusFresh) and the numstat that
+// follows each landing is another, so without a floor a turn that edits a file every second or two costs a status run and a
+// numstat run per edit, bounded only by the round trip. 3 s is about the age at which the Changes list reads as live while an
+// agent works, and it caps this at about 20 status runs a minute; the last edit's ask is still sent when the floor ends (it is
+// trailing, never dropped). Explicit asks (a save, a file op, the end of a turn, ↻, a tree paint) are not subject to it.
+const GIT_WATCH_MIN_MS = 3000;
 // A status request that never answers is abandoned after this, so it cannot hold the debounced asks back for good. The
 // server gives a git run 10 s (internal/gitview/runner.go defaultTimeout) and a run may first wait for one of its slots.
 const GIT_FETCH_MS = 15000;
@@ -94,7 +104,10 @@ function gitStatusReset() {
   gitState = null;
   if (gitTimer) { clearTimeout(gitTimer); gitTimer = null; }
   gitTimerFresh = false;
+  gitTimerWatch = true;
   gitHeld = null;
+  if (gitWatchTimer) { clearTimeout(gitWatchTimer); gitWatchTimer = null; }
+  gitWatchAt = -Infinity;
   for (const o of gitOut) { clearTimeout(o.timer); if (o.ac) o.ac.abort(); }
   gitOut.clear();
 }
@@ -124,13 +137,13 @@ async function gitStatusLoad(root, sid, opts) {
 }
 
 // gitRelease sends the trailing ask the debounced ones collapsed into, when no status request is out any more. It asks for the
-// root and session of the moment (the tree may have moved while it waited), fresh if any collapsed ask was.
+// root and session of the moment (the tree may have moved while it waited), fresh if any collapsed ask was. A trailing ask that
+// was only the dock watch's still keeps the floor between watch-driven requests (gitAskNow).
 function gitRelease() {
   if (gitOut.size > 0 || !gitHeld) return;
   const held = gitHeld;
   gitHeld = null;
-  const root = typeof ftRoot === "function" ? ftRoot() : "";
-  if (root) gitStatusLoad(root, gitStatusTreeSid(), { fresh: held.fresh });
+  gitAskNow(held.fresh, held.watch);
 }
 
 // gitStatusRead is one status request and what comes of its answer (see gitStatusLoad).
@@ -202,18 +215,49 @@ function gitStatusTreeSid() {
 // one per ask. The server does not do this for us: a fresh call never takes its reuse cache and joins a run only until that
 // run has launched, so each fresh ask after a launch starts a docker run of its own (gitview StatusFresh), and the runs
 // share MaxParallel slots with every other session's git. Explicit loads (gitStatusLoad: a tree paint, ↻) are not held.
+//
+// opts.watch marks the dock watch's asks (dockwatch.js: the agent edited a file). Those also keep GIT_WATCH_MIN_MS between one
+// status request and the next: an ask that falls inside the floor waits for it, and every ask that comes meanwhile joins that
+// one wait. A window with any other caller in it (a save, a file op, the end of a turn) is explicit and is never delayed.
 function gitStatusRefreshSoon(opts) {
   if (gitTimer) clearTimeout(gitTimer);
   if (!opts || opts.fresh !== false) gitTimerFresh = true;
+  if (!opts || !opts.watch) gitTimerWatch = false;
   gitTimer = setTimeout(() => {
     gitTimer = null;
     const fresh = gitTimerFresh;
+    const watch = gitTimerWatch;
     gitTimerFresh = false;
-    const root = typeof ftRoot === "function" ? ftRoot() : "";
-    if (!root) return;
-    if (gitOut.size > 0) { gitHeld = { fresh: fresh || (gitHeld ? gitHeld.fresh : false) }; return; }
-    gitStatusLoad(root, gitStatusTreeSid(), { fresh });
+    gitTimerWatch = true;
+    gitAskNow(fresh, watch);
   }, GIT_DEBOUNCE_MS);
+}
+
+// gitAskNow is where a debounced ask becomes a request, is held behind the one that is out, or (a watch ask) waits for the
+// floor. The floor is measured from the last watch-driven send, whenever it was made: a held ask released after a slow answer
+// goes at once, one released inside the floor waits for the rest of it.
+function gitAskNow(fresh, watch) {
+  const root = typeof ftRoot === "function" ? ftRoot() : "";
+  if (!root) return;
+  if (watch) {
+    const wait = gitWatchAt + GIT_WATCH_MIN_MS - Date.now();
+    if (wait > 0) {
+      if (!gitWatchTimer) gitWatchTimer = setTimeout(() => { gitWatchTimer = null; gitAskNow(true, true); }, wait);
+      return;
+    }
+  }
+  if (fresh && gitWatchTimer) {
+    // A fresh status that goes out now (or is held for the one out) is read after the edit the waiting watch ask is about: it
+    // has nothing left to ask. This is also what keeps a floor that ends at the same moment as a debounce from asking twice.
+    clearTimeout(gitWatchTimer);
+    gitWatchTimer = null;
+  }
+  if (gitOut.size > 0) {
+    gitHeld = { fresh: fresh || (gitHeld ? gitHeld.fresh : false), watch: watch && (!gitHeld || gitHeld.watch) };
+    return;
+  }
+  if (watch) gitWatchAt = Date.now();
+  gitStatusLoad(root, gitStatusTreeSid(), { fresh });
 }
 
 // gitStatusOnActivity: a session finished a turn (working -> anything else) and
@@ -350,5 +394,5 @@ function gitPaintNote() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset, GIT_REUSE_MS };
+  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset, GIT_REUSE_MS, GIT_WATCH_MIN_MS };
 }
