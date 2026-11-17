@@ -21,10 +21,10 @@ test("omitted shares are the same as null shares", () => {
   assert.deepEqual(dockLayout({ avail: 1190, cols: 1 }), dockLayout({ avail: 1190, cols: 1, dockShare: null, treeShare: null }));
 });
 
-test("two panes at 1030: the explorer folds and the terminals drop to 280", () => {
+test("two panes at 1030: the editor floor comes before the terminals, so the dock is 456 and the terminals 287", () => {
   const r = dockLayout({ avail: 1030, cols: 2, dockShare: null, treeShare: null });
-  assert.deepEqual(r, { dockW: 470, treeW: F.strip, editorW: 434, treeFolded: true, full: false });
-  assert.equal((1030 - r.dockW) / 2, F.termFloor, "two terminals of 280: the grid keeps 560");
+  assert.deepEqual(r, { dockW: 456, treeW: F.strip, editorW: 420, treeFolded: true, full: false });
+  assert.equal((1030 - r.dockW) / 2, 287, "two terminals of 287, above the 280 floor");
 });
 
 test("two panes at 850: the floors cannot be met, so full mode", () => {
@@ -47,15 +47,13 @@ test("resize 1190 -> 850 -> 1190 (two panes) has no memory: the first answer com
   assert.deepEqual(at(1190), first);
 });
 
-test("boundary, one pane: the terminal keeps 360 down to a 456 dock, then falls toward 280", () => {
+test("boundary, one pane: the dock stops shrinking at 456 and the terminal gives in only after that", () => {
   // 816 - 360 = 456: the dock is exactly editor floor + strip, the terminal exactly comfortable.
   assert.deepEqual(dockLayout({ avail: 816, cols: 1 }), { dockW: 456, treeW: F.strip, editorW: 420, treeFolded: true, full: false });
-  // One px less and the comfortable dock is 455, below the editor floor, so the terminal gives in.
+  // One px less: the dock holds at 456 and the terminal takes the px (359), instead of the dock growing back.
   const r = dockLayout({ avail: 815, cols: 1 });
-  assert.equal(r.dockW, 505, "the wanted share (.62) still fits once the terminal may be 310");
-  assert.equal(815 - r.dockW, 310);
-  assert.equal(r.treeFolded, true);
-  assert.equal(r.editorW, 505 - F.strip);
+  assert.deepEqual(r, { dockW: 456, treeW: F.strip, editorW: 420, treeFolded: true, full: false });
+  assert.equal(815 - r.dockW, 359);
 });
 
 test("boundary, two panes: full exactly when the dock cannot reach 456 with 280 terminals", () => {
@@ -69,18 +67,23 @@ test("a stored share that would make the dock too small is raised to editor floo
   assert.deepEqual(r, { dockW: MIN_DOCK, treeW: F.strip, editorW: F.editor, treeFolded: true, full: false });
 });
 
-test("a tree share that leaves the editor under its floor folds the explorer", () => {
+test("a tree share too big for the editor floor is clamped, and the explorer stays open", () => {
   const r = dockLayout({ avail: 1190, cols: 1, dockShare: null, treeShare: 0.6 });
-  assert.equal(r.dockW, 738);
-  assert.equal(r.treeFolded, true);
-  assert.equal(r.treeW, F.strip);
-  assert.equal(r.editorW, 738 - F.strip);
+  assert.deepEqual(r, { dockW: 738, treeW: 313, editorW: F.editor, treeFolded: false, full: false });
 });
 
-test("a tree share under the explorer minimum folds it rather than showing a sliver", () => {
-  const r = dockLayout({ avail: 1190, cols: 1, dockShare: null, treeShare: 0.2 }); // 148 px tree
-  assert.equal(r.treeFolded, true);
-  assert.equal(r.treeW, F.strip);
+test("a tree share under the explorer minimum is raised to it on a wide screen, not folded", () => {
+  const r = dockLayout({ avail: 1190, cols: 1, dockShare: null, treeShare: 0.2 }); // 148 px wanted
+  assert.deepEqual(r, { dockW: 738, treeW: F.tree, editorW: 533, treeFolded: false, full: false });
+});
+
+test("the explorer folds only when the dock is under 625 (tree min + split + editor floor)", () => {
+  const unfoldAt = F.tree + F.split + F.editor;
+  assert.equal(unfoldAt, 625);
+  // cols 1: dockShare picks the dock width directly (the terminal stays comfortable at avail 1500).
+  const at = (dockW) => dockLayout({ avail: 1500, cols: 1, dockShare: dockW / 1500, treeShare: 0.05 });
+  assert.deepEqual(at(624), { dockW: 624, treeW: F.strip, editorW: 588, treeFolded: true, full: false });
+  assert.deepEqual(at(625), { dockW: 625, treeW: F.tree, editorW: F.editor, treeFolded: false, full: false });
 });
 
 test("a wide window keeps the explorer open and gives the editor the rest", () => {
@@ -107,9 +110,85 @@ test("dockLayout does not change its argument", () => {
   assert.doesNotThrow(() => dockLayout(args));
 });
 
+test("treeOpen: the explorer column opened from the strip pushes the terminals down to their floor first", () => {
+  // 1190/2 would fold at a 470 dock; opening it asks for 625, which leaves the terminals about 282 each.
+  assert.deepEqual(dockLayout({ avail: 1190, cols: 2, treeOpen: true }), {
+    dockW: 625, treeW: F.tree, editorW: 420, treeFolded: false, full: false,
+  });
+  // 1030/2: the terminals are already near their floor, so the column takes what is left of them.
+  assert.deepEqual(dockLayout({ avail: 1030, cols: 2, treeOpen: true }), {
+    dockW: 470, treeW: F.tree, editorW: 265, treeFolded: false, full: false,
+  });
+  // One pane, narrow: 816 - 280 = 536.
+  assert.deepEqual(dockLayout({ avail: 816, cols: 1, treeOpen: true }), {
+    dockW: 536, treeW: F.tree, editorW: 331, treeFolded: false, full: false,
+  });
+});
+
+test("treeOpen: an editor under 260 beside the open column is full mode", () => {
+  // 1016/2 has a 456 dock and 560 for the terminals: the column would leave the editor 251.
+  assert.equal(dockLayout({ avail: 1016, cols: 2 }).full, false);
+  assert.equal(dockLayout({ avail: 1016, cols: 2, treeOpen: true }).full, true);
+  assert.equal(dockLayout({ avail: 1024, cols: 2, treeOpen: true }).full, true, "editor 259");
+  assert.deepEqual(dockLayout({ avail: 1025, cols: 2, treeOpen: true }), {
+    dockW: 465, treeW: F.tree, editorW: 260, treeFolded: false, full: false,
+  });
+});
+
+test("treeOpen changes nothing when the explorer is not folded, or when nothing fits", () => {
+  for (const args of [{ avail: 1190, cols: 1 }, { avail: 2000, cols: 1 }, { avail: 1500, cols: 1, dockShare: 0.9 }, { avail: 1400, cols: 2 }]) {
+    const plain = dockLayout(args);
+    assert.equal(plain.treeFolded, false, JSON.stringify(args));
+    assert.deepEqual(dockLayout({ ...args, treeOpen: true }), plain, JSON.stringify(args));
+  }
+  assert.deepEqual(dockLayout({ avail: 850, cols: 2, treeOpen: true }), dockLayout({ avail: 850, cols: 2 }));
+});
+
+test("treeOpen is on only for the boolean true", () => {
+  for (const treeOpen of [undefined, null, false, 0, 1, "true", {}]) {
+    assert.deepEqual(dockLayout({ avail: 1190, cols: 2, treeOpen }), dockLayout({ avail: 1190, cols: 2 }), String(treeOpen));
+  }
+});
+
+test("a fractional width is floored first, so every size stays whole pixels", () => {
+  assert.deepEqual(dockLayout({ avail: 1190.5, cols: 2 }), dockLayout({ avail: 1190, cols: 2 }));
+  assert.deepEqual(dockLayout({ avail: 1190.9, cols: 1 }), dockLayout({ avail: 1190, cols: 1 }));
+  const r = dockLayout({ avail: 1190.5, cols: 2 });
+  assert.ok(Number.isInteger(r.dockW) && Number.isInteger(r.treeW) && Number.isInteger(r.editorW));
+  assert.equal(dockLayout({ avail: 1015.9, cols: 2 }).full, true, "1015.9 is 1015, which is full");
+});
+
+test("narrowing the window never grows the dock, and the dock moves by at most 1px per px", () => {
+  for (const cols of [1, 2]) {
+    for (const dockShare of [null, 0.1, 0.3, 0.5, 0.62, 0.8, 0.9, 1]) {
+      let prev = null; // dockW at avail + 1
+      for (let avail = 3200; avail >= 300; avail--) {
+        const r = dockLayout({ avail, cols, dockShare, treeShare: null });
+        const ctx = JSON.stringify({ avail, cols, dockShare, r });
+        if (r.full) { prev = null; continue; }
+        if (prev !== null) {
+          assert.ok(r.dockW <= prev, "dock grew while the window narrowed: " + ctx);
+          assert.ok(prev - r.dockW <= 1, "dock jumped: " + ctx);
+        }
+        prev = r.dockW;
+      }
+    }
+  }
+});
+
+test("full mode is one threshold, and stays full below it", () => {
+  for (const cols of [1, 2]) {
+    const lowest = cols * F.termFloor + MIN_DOCK;
+    for (let avail = 0; avail < 3200; avail++) {
+      assert.equal(dockLayout({ avail, cols }).full, avail < lowest, JSON.stringify({ avail, cols }));
+    }
+  }
+});
+
 test("invariants hold across widths, column counts and stored shares", () => {
   const shares = [null, 0.1, 0.3, 0.62, 0.9, 1.5];
-  const trees = [null, 0.15, 0.35, 0.75];
+  const trees = [null, 0.05, 0.15, 0.35, 0.75, 1.2];
+  const unfoldAt = F.tree + F.split + F.editor;
   let seen = 0;
   for (let avail = 300; avail <= 3200; avail += 7) {
     for (const cols of [1, 2]) {
@@ -127,10 +206,12 @@ test("invariants hold across widths, column counts and stored shares", () => {
           assert.ok(r.dockW >= MIN_DOCK, ctx);
           assert.ok(Number.isInteger(r.dockW) && Number.isInteger(r.treeW) && Number.isInteger(r.editorW), ctx);
           assert.equal(r.dockW, r.treeW + (r.treeFolded ? 0 : F.split) + r.editorW, "the parts add up to the dock: " + ctx);
+          // The explorer folds exactly when the dock is too narrow for tree min + split + editor floor.
+          assert.equal(r.treeFolded, r.dockW < unfoldAt, ctx);
           if (r.treeFolded) assert.equal(r.treeW, F.strip, ctx);
           else assert.ok(r.treeW >= F.tree, "an open explorer keeps its minimum: " + ctx);
-          // Terminals go below comfort only when the dock could not shrink to give them comfort.
-          if (term < F.termComfy) assert.ok(avail - cols * F.termComfy < MIN_DOCK, "squeezed while the dock could still shrink: " + ctx);
+          // The terminals go below comfort only once the dock is at its smallest.
+          if (term < F.termComfy) assert.equal(r.dockW, MIN_DOCK, "squeezed while the dock could still shrink: " + ctx);
         }
       }
     }
