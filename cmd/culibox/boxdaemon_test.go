@@ -252,3 +252,57 @@ func TestDaemonWatchKeepsTheNewerAnswer(t *testing.T) {
 		t.Fatalf("an older probe that finished last overwrote the newer answer: %q", got)
 	}
 }
+
+// switchDocker writes a docker whose `info` fails as a stopped daemon until the
+// returned flag file exists, then answers with runtimes (sysbox among them when
+// sysbox is set). Every other subcommand answers nothing, successfully.
+func switchDocker(t *testing.T, sysbox bool) (bin, upFlag string) {
+	t.Helper()
+	dir := t.TempDir()
+	upFlag = filepath.Join(dir, "up")
+	runtimes := `{"runc":{"path":"runc"}}`
+	if sysbox {
+		runtimes = `{"runc":{"path":"runc"},"sysbox-runc":{"path":"/usr/bin/sysbox-runc"}}`
+	}
+	bin = filepath.Join(dir, "docker")
+	script := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = info ]; then\n"+
+		"  if [ -e '%s' ]; then printf '%%s\\n' '%s'; exit 0; fi\n"+
+		"  printf '%%s\\n' '%s' >&2; exit 1\nfi; done\nexit 0\n", upFlag, runtimes, stoppedText)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, upFlag
+}
+
+// #334: CuliBox started while Docker was stopped, then the user started a
+// sysbox-capable Docker. The badge (/api/meta's box_runtime, layerRuntime) shows
+// the runtime detected now, not the runc placeholder of the failed boot probe.
+func TestLayerRuntimeFollowsDockerComingUp(t *testing.T) {
+	bin, up := switchDocker(t, true)
+	l, err := newBoxLayer(config.Config{DockerBin: bin, BoxImage: "me/img:1"}, t.TempDir(), t.TempDir(), "linux", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt, known := l.boxes.RuntimeKnown(); known || rt != "runc" {
+		t.Fatalf("boot with Docker stopped: %q, known=%v; want the runc placeholder, unknown", rt, known)
+	}
+	badge := layerRuntime(l)
+	if got := badge(); got != "runc" {
+		t.Fatalf("badge while Docker is stopped = %q, want runc", got)
+	}
+	if err := os.WriteFile(up, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A read within the retry window may serve the old answer; a later one
+	// shows the detected runtime.
+	deadline := time.Now().Add(10 * time.Second)
+	for badge() != "sysbox-runc" {
+		if time.Now().After(deadline) {
+			t.Fatalf("badge = %q after Docker came up with sysbox, want sysbox-runc", badge())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if layerRuntime(nil) != nil {
+		t.Fatal("no layer: the badge func must be nil (box_runtime \"\")")
+	}
+}

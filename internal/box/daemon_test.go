@@ -129,7 +129,7 @@ type deadlineClient struct {
 	left    time.Duration
 }
 
-func (d *deadlineClient) HasRuntime(ctx context.Context, name string) bool {
+func (d *deadlineClient) HasRuntime(ctx context.Context, name string) (bool, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		d.bounded, d.left = true, time.Until(dl)
 	}
