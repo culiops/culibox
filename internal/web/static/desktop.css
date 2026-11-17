@@ -1193,7 +1193,10 @@
   .dr-split:hover, .dr-split.dragging, .dr-split:focus-visible {
     background: color-mix(in srgb, var(--accent) 40%, transparent);
   }
-  #drawer .dr-tree #files-pane { min-width: 0; }
+  /* The tree takes what the column has left (basis 0, so its content height never competes), and scrolls inside it. With basis
+     auto a tree taller than the column took height from the Changes section below (rows cut, then none, the toggle painted over
+     the root header). The section does not shrink either (#dock-changes). */
+  #drawer .dr-tree #files-pane { flex: 1 1 0; min-width: 0; min-height: 0; }
   /* No side padding on the body: the tree's rows run edge to edge, so a hover or the selected row spans the column (mockup B1);
      the root field above them (a host session's) keeps the 6px. */
   #drawer .dr-tree .files-body { padding: 6px 0 8px; }
@@ -1261,9 +1264,9 @@
   #drawer[data-noroot="1"] #drawer-tree-fold { margin-left: auto; }
   /* --- the explorer's Changes section and root header (spec 5.4, mockup B1) -------------------------------------------- */
   /* The section sits between the top row and the tree and is as tall as its rows, up to 45% of the column, then its list
-     scrolls (the header, toggle and branch row stay). Rows are the tree's size: they follow Settings' "File tree text size". */
+     scrolls (the header, toggle and branch row stay). It never shrinks for the tree: the tree is the one that gives way. Rows are the tree's size: they follow Settings' "File tree text size". */
   #dock-changes {
-    flex: 0 1 auto; min-height: 0; max-height: 45%; display: flex; flex-direction: column;
+    flex: 0 0 auto; min-height: 0; max-height: 45%; display: flex; flex-direction: column;
     border-bottom: 1px solid var(--line);
   }
   #dock-changes[hidden], .dk-branch[hidden], .dk-chg-note[hidden], .dk-legend[hidden], .dk-review[hidden] { display: none; }

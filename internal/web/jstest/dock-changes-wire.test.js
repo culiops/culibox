@@ -92,3 +92,27 @@ test("a removed count is the same red as the deleted and conflict letters (--dan
   assert.match(css, /\.dk-st-c,\s*\.dk-st-d\s*\{\s*color:\s*var\(--danger\);\s*\}/);
   assert.match(css, /\.dk-add\s*\{\s*color:\s*var\(--ok\);\s*\}/);
 });
+
+// rulesFor: the declaration text of every rule whose selector list holds exactly `sel`, in source order.
+function rulesFor(src, sel) {
+  const out = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(src))) {
+    if (m[1].split(/,(?![^(]*\))/).map((x) => x.trim()).includes(sel)) out.push(m[2].replace(/\s+/g, " ").trim());
+  }
+  return out.join(" ");
+}
+
+test("a tall tree never takes the Changes section's height: the tree's basis is 0 and the section does not shrink (45% cap, its list scrolls)", () => {
+  const css = stripComments(read("desktop.css"));
+  // Both used to shrink by their content basis, so a tree taller than the column took the section's rows (3 of 4 shown, then
+  // none, with the Uncommitted/Branch toggle painted over the root header). Basis 0 gives the tree only what is left.
+  assert.match(rulesFor(css, "#drawer .dr-tree #files-pane"), /flex:\s*1 1 0(px)?[;\s]/, "the tree takes the leftover, whatever its content");
+  assert.match(rulesFor(css, "#drawer .dr-tree #files-pane"), /min-height:\s*0/, "and can scroll inside it");
+  const sec = rulesFor(css, "#dock-changes");
+  assert.match(sec, /flex:\s*0 0 auto/, "the section keeps its content height");
+  assert.match(sec, /max-height:\s*45%/, "up to 45% of the column");
+  assert.match(rulesFor(css, ".dk-list"), /overflow-y:\s*auto/, "past which its list scrolls");
+  assert.match(rulesFor(css, ".dk-list"), /min-height:\s*0/);
+});
