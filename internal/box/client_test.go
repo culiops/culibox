@@ -107,7 +107,7 @@ func TestEveryClientCallCarriesTheGlobalArgs(t *testing.T) {
 	_, _ = c.ListByLabel(ctx, "l")
 	_, _ = c.ListBoxes(ctx, "l")
 	_ = c.Stop(ctx, "x")
-	_ = c.HasRuntime(ctx, "sysbox-runc")
+	_, _ = c.HasRuntime(ctx, "sysbox-runc")
 	b, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
@@ -234,6 +234,35 @@ func TestSeccompActive(t *testing.T) {
 	for _, c := range cases {
 		bin, _ := fakeDocker(t, map[string]string{"info": c.out}, map[string]int{"info": c.code})
 		got, err := CLIClient{Bin: bin}.SeccompActive(context.Background())
+		if got != c.want || (err != nil) != c.wantErr {
+			t.Errorf("%s: got (%v, %v), want (%v, err=%v)", c.name, got, err, c.want, c.wantErr)
+		}
+	}
+}
+
+// #334: only a runtime list docker actually printed is a definitive answer. A
+// failed call, or an answer that lists no runtime at all (a working daemon
+// always lists runc), is an error, so the runtime stays unknown and is asked
+// again instead of settling on runc. A CLI warning on stderr does not spoil it.
+func TestHasRuntimeIsDefinitiveOnlyOnARuntimeList(t *testing.T) {
+	cases := []struct {
+		name, out, stderr string
+		code              int
+		want, wantErr     bool
+	}{
+		{"sysbox", `{"io.containerd.runc.v2":{"path":"runc"},"runc":{"path":"runc"},"sysbox-runc":{"path":"/usr/bin/sysbox-runc"}}`, "", 0, true, false},
+		{"runc only", `{"io.containerd.runc.v2":{"path":"runc"},"runc":{"path":"runc"}}`, "", 0, false, false},
+		{"a path naming sysbox is not the runtime", `{"runc":{"path":"/opt/sysbox-runc"}}`, "", 0, false, false},
+		{"warning on stderr", `{"runc":{},"sysbox-runc":{}}`, "WARNING: bridge-nf-call-iptables is disabled", 0, true, false},
+		{"daemon down", ``, "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?", 1, false, true},
+		{"null", `null`, "", 0, false, true},
+		{"empty list", `{}`, "", 0, false, true},
+		{"nothing", ``, "", 0, false, true},
+		{"not json", `oops`, "", 0, false, true},
+	}
+	for _, c := range cases {
+		bin, _ := fakeDockerStderr(t, map[string]string{"info": c.out}, map[string]string{"info": c.stderr}, map[string]int{"info": c.code})
+		got, err := CLIClient{Bin: bin}.HasRuntime(context.Background(), "sysbox-runc")
 		if got != c.want || (err != nil) != c.wantErr {
 			t.Errorf("%s: got (%v, %v), want (%v, err=%v)", c.name, got, err, c.want, c.wantErr)
 		}

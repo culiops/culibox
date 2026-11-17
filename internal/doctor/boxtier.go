@@ -126,7 +126,14 @@ type boxFacts struct {
 	DockerErr error
 	// DaemonErr: docker was found but its daemon cannot be used (Linux only;
 	// box.ErrDockerNotRunning, box.ErrDockerDenied, or unclassified).
-	DaemonErr  error
+	DaemonErr error
+	// RuntimeRan: the daemon answered and its runtimes were asked (Linux, or
+	// the darwin VM while it runs). Runtime is the isolation runtime new boxes
+	// get ("sysbox-runc" or "runc"); RuntimeErr: docker could not list them, so
+	// a running CuliBox refuses boxed spawns until it can (#334).
+	RuntimeRan bool
+	Runtime    string
+	RuntimeErr error
 	ColimaErr  error  // darwin only
 	MacOSMajor int    // darwin only; 0 = unknown
 	ColimaVer  string // darwin only; "" = unknown
@@ -207,6 +214,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 			return append(out, token)
 		}
 		out = append(out, Result{Pass, ck, "docker found"})
+		out = append(out, runtimeRows(f)...)
 		stopped()
 		// The token does not depend on the tier's state, but a tier that ended on
 		// docker not found has no token row, as on macOS.
@@ -257,6 +265,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		return out
 	}
 	out = append(out, Result{Pass, ck, fmt.Sprintf("box VM running (%s, %s)", f.Status.Driver, f.Status.MountType)})
+	out = append(out, runtimeRows(f)...)
 	if f.Status.MountType != "virtiofs" {
 		out = append(out, Result{Warn, "box VM mounts", f.Status.MountType + " is about 3.5x slower than virtiofs; run `culibox box setup -recreate`"})
 	}
@@ -301,6 +310,38 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	}
 	stopped()
 	return append(out, token)
+}
+
+// runtimeRows is the isolation runtime Docker offers new boxes, as asked now
+// (#334): doctor never reads a value a running CuliBox cached. None when the
+// runtimes were not asked (daemon down, VM stopped): the rows above say why.
+func runtimeRows(f boxFacts) []Result {
+	const ck = "isolation runtime"
+	switch {
+	case !f.RuntimeRan:
+		return nil
+	case f.RuntimeErr != nil:
+		msg, _, _ := strings.Cut(f.RuntimeErr.Error(), "\n")
+		return []Result{{Warn, ck, "could not read Docker's runtimes (" + msg + "): boxed sessions are refused until it can; run `docker info`"}}
+	case f.Runtime == box.RuntimeSysbox:
+		return []Result{{Pass, ck, box.RuntimeSysbox + ": new boxes run under sysbox (a CuliBox started before sysbox was installed keeps runc until it restarts)"}}
+	}
+	return []Result{{Pass, ck, box.RuntimeRunc + " (Docker's default; sysbox is not installed)"}}
+}
+
+// readRuntime asks the daemon which isolation runtime new boxes get, bounded
+// like the daemon probe.
+func readRuntime(ctx context.Context, cli box.CLIClient) (string, error) {
+	pctx, cancel := context.WithTimeout(ctx, box.ProbeTimeout)
+	defer cancel()
+	ok, err := cli.HasRuntime(pctx, box.RuntimeSysbox)
+	if err != nil {
+		return "", err
+	}
+	if ok {
+		return box.RuntimeSysbox, nil
+	}
+	return box.RuntimeRunc, nil
 }
 
 // daemonRow words a Linux docker whose daemon cannot be used: the page's
@@ -373,6 +414,8 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 		f.DaemonErr = cli.Ping(pctx)
 		pcancel()
 		if f.DaemonErr == nil {
+			f.RuntimeRan = true
+			f.Runtime, f.RuntimeErr = readRuntime(ctx, cli)
 			f.Stopped = stoppedBoxes(ctx, cli, instance)
 		}
 		return f
@@ -440,6 +483,9 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 	f.MountsErr = vm.VerifyMounts(ctx)
 	cli := box.CLIClient{Bin: bin, Args: vc.DockerArgs()}
 	f.Running, f.RunningKnown = runningBoxes(ctx, cli, instance)
+	// The VM's own daemon, as the boxes see it (#334: the same check as Linux).
+	f.RuntimeRan = true
+	f.Runtime, f.RuntimeErr = readRuntime(ctx, cli)
 	img := boximage.Docker{Bin: bin, Args: vc.DockerArgs()}
 	if f.ServerArch, err = img.ServerArch(ctx); err != nil {
 		f.ImageErr = err

@@ -109,7 +109,7 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 			args = append(args, "--add-host", h)
 		}
 	}
-	if m.runtime == runtimeSysbox {
+	if m.Runtime() == runtimeSysbox {
 		args = append(args, "--runtime="+runtimeSysbox)
 	}
 	return append(args, m.opts.Image, "sleep", "infinity")

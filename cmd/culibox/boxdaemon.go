@@ -126,6 +126,24 @@ func layerDaemonReason(l *boxLayer) func() string {
 	return l.daemon.Reason
 }
 
+// runtimeBadgeWait is the longest an /api/meta read waits for the runtime
+// probe it started, while the runtime is still unknown (#334). The same bound
+// as daemonWatch.wait: a healthy page load never waits on docker.
+const runtimeBadgeWait = time.Second
+
+// layerRuntime is what /api/meta publishes as box_runtime: the runtime new
+// boxes get, read per request so a runtime the boot could not read (Docker
+// stopped or slow when CuliBox started, #334) shows once detected. nil when
+// there is no layer, so box_runtime is "" and the page says boxes are
+// unavailable. Both OSes: on macOS the boot probe meets a stopped VM (D3), and
+// the runtime is read once the VM answers.
+func layerRuntime(l *boxLayer) func() string {
+	if l == nil || l.boxes == nil {
+		return nil
+	}
+	return func() string { return l.boxes.RuntimeFresh(runtimeBadgeWait) }
+}
+
 // refuseUnusableDaemon is the boxed spawn's first check on Linux: a daemon
 // that is stopped, or that this user may not use, is refused with the reason
 // as ErrBoxUnavailable (shown to the user as is) instead of failing later as

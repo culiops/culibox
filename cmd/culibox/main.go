@@ -515,8 +515,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// Containment layer. Installed BEFORE session reconcile so reattached boxed
 	// sessions can adopt their boxes; box reconcile runs AFTER, so the orphan
 	// reaper never stops a container a live session is running inside.
-	boxRuntime := ""
-	boxUnavailable := "" // why boxRuntime is empty, when the layer failed to build; published in /api/meta
+	boxUnavailable := "" // why there is no box layer, when it failed to build; published in /api/meta
 	var layer *boxLayer
 	var boxes *box.Manager
 	protected := protectedDirsOf(cfg, dataDir, cfgFiles)
@@ -547,14 +546,20 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			log.Printf("relay key unavailable: %v; every boxed spawn on this Mac is refused until that is fixed", err)
 		}
 		mgr.SetBoxes(boxes)
-		boxRuntime = boxes.Runtime()
+		// The runtime the boot probe read, or "not known yet" when docker could
+		// not answer (#334): it is then read before the first box is created, and
+		// /api/meta's box_runtime follows it (layerRuntime).
+		rtLine := "isolation runtime not known yet (docker did not answer; read again before the first box)"
+		if rt, known := boxes.RuntimeKnown(); known {
+			rtLine = "isolation runtime " + rt
+		}
 		if l.vm != nil {
 			// The VM is not started here (D3): the first boxed spawn starts it.
-			log.Printf("containment ready (macOS box VM in %s, starts on the first boxed spawn): image %s, idle TTL %s",
-				l.vm.Config().ColimaHome(), cfg.BoxImageOrDefault(), cfg.BoxIdleTTL())
+			log.Printf("containment ready (macOS box VM in %s, starts on the first boxed spawn): image %s, %s, idle TTL %s",
+				l.vm.Config().ColimaHome(), cfg.BoxImageOrDefault(), rtLine, cfg.BoxIdleTTL())
 		} else {
-			log.Printf("containment ready: image %s, isolation runtime %s, idle TTL %s",
-				cfg.BoxImageOrDefault(), boxRuntime, cfg.BoxIdleTTL())
+			log.Printf("containment ready: image %s, %s, idle TTL %s",
+				cfg.BoxImageOrDefault(), rtLine, cfg.BoxIdleTTL())
 		}
 	}
 
@@ -865,7 +870,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Shares:           vmShares,
 		VMFolders:        vmFolders,
 		Terminal:         terminal.NewAttachHandler(mgr.Get),
-		BoxRuntime:       boxRuntime,
+		BoxRuntime:       layerRuntime(layer),
 		CloneUnavailable: cloneUnavailableReason(h),
 		BoxTrees:         boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
 		ScratchDirs:      web.ScratchCandidates(os.Getenv, os.Getuid(), os.TempDir()),

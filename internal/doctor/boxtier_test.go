@@ -221,6 +221,65 @@ func TestBoxTierLinuxDaemonClasses(t *testing.T) {
 	}
 }
 
+// #334: doctor shows the isolation runtime Docker offers new boxes, read now
+// (never a value cached by a running CuliBox), on both OSes once the daemon
+// answers. A runtime list docker cannot give is a WARN: boxed spawns are
+// refused until it can.
+func TestBoxTierIsolationRuntimeRow(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		goos   string
+		f      boxFacts
+		status string
+		want   string
+	}{
+		{"linux sysbox", "linux", boxFacts{RuntimeRan: true, Runtime: "sysbox-runc"}, Pass, "sysbox-runc"},
+		{"linux runc", "linux", boxFacts{RuntimeRan: true, Runtime: "runc"}, Pass, "runc (Docker's default; sysbox is not installed)"},
+		{"linux unreadable", "linux", boxFacts{RuntimeRan: true, RuntimeErr: errors.New("docker info: listed no runtime")}, Warn, "refused"},
+		{"darwin runc", "darwin", func() boxFacts { f := ok(); f.RuntimeRan, f.Runtime = true, "runc"; return f }(), Pass, "runc"},
+	} {
+		rs := boxTierResults(tc.goos, tc.f, tokenOK)
+		var row *Result
+		for i := range rs {
+			if rs[i].Check == "isolation runtime" {
+				row = &rs[i]
+			}
+		}
+		if row == nil || row.Status != tc.status || !strings.Contains(row.Detail, tc.want) {
+			t.Errorf("%s: want a %s isolation runtime row with %q in:\n%s", tc.name, tc.status, tc.want, detail(rs))
+		}
+	}
+	// Not asked (daemon down, VM stopped): no row, and the daemon row says why.
+	for _, f := range []boxFacts{{DaemonErr: box.ErrDockerNotRunning}, {}} {
+		if d := detail(boxTierResults("linux", f, tokenOK)); strings.Contains(d, "isolation runtime") {
+			t.Errorf("a runtime that was not asked has a row:\n%s", d)
+		}
+	}
+	stoppedVM := ok()
+	stoppedVM.Status.Running = false
+	if d := detail(boxTierResults("darwin", stoppedVM, tokenOK)); strings.Contains(d, "isolation runtime") {
+		t.Errorf("a stopped VM is not asked, yet:\n%s", d)
+	}
+}
+
+// The gatherer asks the daemon's runtimes once it answers (Linux).
+func TestGatherBoxFactsReadsTheRuntimeOnLinux(t *testing.T) {
+	for _, tc := range []struct{ out, want string }{
+		{`{"runc":{},"sysbox-runc":{}}`, "sysbox-runc"},
+		{`{"runc":{}}`, "runc"},
+	} {
+		bin := filepath.Join(t.TempDir(), "docker")
+		script := "#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = info ]; then printf '%s\\n' '" + tc.out + "'; exit 0; fi; done\nexit 0\n"
+		if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		f := gatherBoxFacts(config.Config{DockerBin: bin}, t.TempDir(), t.TempDir(), "linux", nil)
+		if !f.RuntimeRan || f.RuntimeErr != nil || f.Runtime != tc.want {
+			t.Errorf("%s: facts ran=%v runtime=%q err=%v, want %q", tc.out, f.RuntimeRan, f.Runtime, f.RuntimeErr, tc.want)
+		}
+	}
+}
+
 // The facts gatherer asks the real docker (here a script), bounded, on Linux
 // only: macOS's VM is never started by doctor, so it is not probed.
 func TestGatherBoxFactsProbesTheDaemonOnLinux(t *testing.T) {

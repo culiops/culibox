@@ -50,9 +50,13 @@ type Server struct {
 	// RepliesEnabled mirrors config replies_enabled and is published in
 	// /api/meta so the client fails closed (reply UI off until it says true).
 	RepliesEnabled bool
-	// BoxRuntime is the detected isolation runtime ("runc"/"sysbox-runc"), or ""
-	// when containment is unavailable and every session runs on the host tier.
-	BoxRuntime string
+	// BoxRuntime is the isolation runtime new boxes get ("runc"/"sysbox-runc");
+	// nil when containment is unavailable and every session runs on the host
+	// tier (published as ""). Called on every /api/meta, never cached: a runtime
+	// a boot with Docker down could not read is detected later (#334). It may
+	// wait on docker for about a second at most, and only while that runtime is
+	// still unknown.
+	BoxRuntime func() string
 	// BoxUnavailableReason is a plain sentence for why BoxRuntime is empty
 	// because the containment layer failed to build ("Docker is not installed");
 	// empty when it did build. Published in /api/meta as
@@ -259,11 +263,15 @@ func (s *Server) Handler() http.Handler {
 	}
 	protected.HandleFunc("/logout", s.handleLogout)
 	protected.HandleFunc("/api/meta", func(w http.ResponseWriter, r *http.Request) {
+		boxRuntime := ""
+		if s.BoxRuntime != nil {
+			boxRuntime = s.BoxRuntime()
+		}
 		meta := map[string]any{
 			"env_label":         s.EnvLabel,
 			"env_color":         s.EnvColor,
 			"shell_profile":     s.quickShell(),
-			"box_runtime":       s.BoxRuntime,
+			"box_runtime":       boxRuntime,
 			"clone_unavailable": s.CloneUnavailable,
 			"analytics":         s.Analytics != nil,
 			"audit":             s.Audit != nil,
@@ -278,14 +286,14 @@ func (s *Server) Handler() http.Handler {
 		}
 		// Why there are no boxes (the layer failed to build), so the profile page
 		// can say so; absent when boxes work or nothing said why.
-		if s.BoxRuntime == "" && s.BoxUnavailableReason != "" {
+		if boxRuntime == "" && s.BoxUnavailableReason != "" {
 			meta["box_unavailable_reason"] = s.BoxUnavailableReason
 		}
 		// A layer that exists whose daemon cannot be used right now. A sibling of
 		// the reason above, not the same field: box_runtime stays set, because
 		// "no box layer" flips the page's defaults to the host tier and a daemon
 		// that is only stopped must not do that.
-		if s.BoxRuntime != "" && s.BoxDaemonReason != nil {
+		if boxRuntime != "" && s.BoxDaemonReason != nil {
 			if r := s.BoxDaemonReason(); r != "" {
 				meta["box_daemon_reason"] = r
 			}

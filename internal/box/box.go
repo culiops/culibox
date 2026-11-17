@@ -264,7 +264,7 @@ type Client interface {
 	ListBoxes(ctx context.Context, label string) ([]BoxInfo, error)
 	ListByLabel(ctx context.Context, label string) ([]string, error)
 	Stop(ctx context.Context, name string) error
-	HasRuntime(ctx context.Context, name string) bool
+	HasRuntime(ctx context.Context, name string) (bool, error)
 	// InspectMounts is Inspect plus the in-box destinations of the box's bind
 	// mounts, as docker reports them: the truth for every box, adopted ones and
 	// ones created by an older build included. Mounts are nil unless running.
@@ -373,8 +373,18 @@ type Egress struct {
 
 // Manager tracks one box per workspace and keeps their lifecycle honest.
 type Manager struct {
-	opts    Options
+	opts Options
+
+	// rtMu guards the runtime fields. runtime is what new boxes get; rtKnown
+	// is whether a definitive answer from docker decided it (until then runtime
+	// is the runc placeholder and no box is created, #334). rtProbe is open
+	// while a badge read's background probe runs; rtTried is when one last
+	// started. Never held across a docker call.
+	rtMu    sync.Mutex
 	runtime string
+	rtKnown bool
+	rtProbe chan struct{}
+	rtTried time.Time
 
 	// opMu serializes start/stop of boxes against each other. mu guards only the
 	// maps below and is never held across a docker call.
@@ -480,12 +490,19 @@ func New(opts Options) (*Manager, error) {
 		m.locks = newGuardLocks(opts.StateRoot, ops)
 	}
 	// Bounded: a daemon that accepts and never answers must not hold the boot.
-	// A daemon that is stopped or not permitted answers false here, and is not an
-	// error: the layer exists, and Ping (daemon.go) says why it cannot be used.
-	pctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+	// A daemon that is stopped, not permitted or slow is not an error: the layer
+	// exists, Ping (daemon.go) says why it cannot be used, and the runtime stays
+	// unknown until docker answers (settledRuntime, #334). Only a definitive
+	// answer decides it, and then for the life of the process.
+	pctx, cancel := context.WithTimeout(context.Background(), runtimeProbeTimeout)
 	defer cancel()
-	if opts.Client.HasRuntime(pctx, runtimeSysbox) {
-		m.runtime = runtimeSysbox
+	if ok, err := opts.Client.HasRuntime(pctx, runtimeSysbox); err == nil {
+		m.rtKnown = true
+		if ok {
+			m.runtime = runtimeSysbox
+		}
+	} else {
+		log.Printf("box: could not read docker's runtimes (%v); they are read again before the first box is created", err)
 	}
 	return m, nil
 }
@@ -525,8 +542,134 @@ func (m *Manager) SetWriteHold(f WriteHold) {
 	m.writeHold = f
 }
 
-// Runtime reports the detected isolation runtime, for the UI badge.
-func (m *Manager) Runtime() string { return m.runtime }
+// RuntimeSysbox and RuntimeRunc are the isolation runtimes a box can get, for
+// a reader outside this package (doctor).
+const (
+	RuntimeSysbox = runtimeSysbox
+	RuntimeRunc   = runtimeRunc
+)
+
+// runtimeProbeTimeout bounds one ask for docker's runtimes (boot, a spawn, a
+// badge read); runtimeRetry is the least time between two asks a badge read
+// starts, so a page polling a stopped daemon does not run docker every time.
+// Vars so a test can shorten them.
+var (
+	runtimeProbeTimeout = ProbeTimeout
+	runtimeRetry        = 2 * time.Second
+)
+
+// Runtime reports the isolation runtime boxes get: the detected one, or runc
+// while it is not known yet (no box is created then; see settledRuntime). It
+// never asks docker.
+func (m *Manager) Runtime() string {
+	rt, _ := m.RuntimeKnown()
+	return rt
+}
+
+// RuntimeKnown is Runtime and whether a definitive answer from docker decided
+// it. false: the boot probe could not read docker's runtimes (Docker stopped,
+// starting or slow when CuliBox started), and they are read again before the
+// next box is created (#334).
+func (m *Manager) RuntimeKnown() (string, bool) {
+	m.rtMu.Lock()
+	defer m.rtMu.Unlock()
+	return m.runtime, m.rtKnown
+}
+
+// RuntimeFresh is Runtime for the UI badge (/api/meta). While the runtime is
+// not known it starts one bounded probe in the background (one at a time, and
+// not again within runtimeRetry) and waits for it up to wait, so a page
+// reloaded after the user starts Docker shows what the next box will get. Once
+// known it never asks docker again.
+func (m *Manager) RuntimeFresh(wait time.Duration) string {
+	m.rtMu.Lock()
+	if m.rtKnown {
+		rt := m.runtime
+		m.rtMu.Unlock()
+		return rt
+	}
+	ch := m.rtProbe
+	if ch == nil && time.Since(m.rtTried) >= runtimeRetry {
+		ch = make(chan struct{})
+		m.rtProbe, m.rtTried = ch, time.Now()
+		go func() {
+			defer close(ch)
+			ctx, cancel := context.WithTimeout(context.Background(), runtimeProbeTimeout)
+			defer cancel()
+			if ok, err := m.opts.Client.HasRuntime(ctx, runtimeSysbox); err == nil {
+				m.settleRuntime(ok)
+			}
+			m.rtMu.Lock()
+			m.rtProbe = nil
+			m.rtMu.Unlock()
+		}()
+	}
+	m.rtMu.Unlock()
+	if ch != nil && wait > 0 {
+		t := time.NewTimer(wait)
+		select {
+		case <-ch:
+		case <-t.C:
+		}
+		t.Stop()
+	}
+	return m.Runtime()
+}
+
+// settledRuntime is the runtime a new box gets, asking docker first when no
+// definitive answer has decided it yet (#334: a boot with Docker down must not
+// leave every later box on runc). It waits for a probe a badge read already
+// started, then asks itself if that one did not settle it: at most two bounded
+// asks. An error means docker's runtimes still cannot be read, and the caller
+// creates no box: one created now would be on runc only because the probe
+// failed. Once settled it never asks again, so a spawn pays nothing.
+func (m *Manager) settledRuntime(ctx context.Context) (string, error) {
+	m.rtMu.Lock()
+	rt, known, ch := m.runtime, m.rtKnown, m.rtProbe
+	m.rtMu.Unlock()
+	if known {
+		return rt, nil
+	}
+	if ch != nil {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		if rt, known = m.RuntimeKnown(); known {
+			return rt, nil
+		}
+	}
+	pctx, cancel := context.WithTimeout(ctx, runtimeProbeTimeout)
+	defer cancel()
+	ok, err := m.opts.Client.HasRuntime(pctx, runtimeSysbox)
+	if err != nil {
+		return "", err
+	}
+	return m.settleRuntime(ok), nil
+}
+
+// settleRuntime records a definitive answer once and returns the runtime. A
+// later answer never changes a settled one.
+func (m *Manager) settleRuntime(sysbox bool) string {
+	m.rtMu.Lock()
+	defer m.rtMu.Unlock()
+	if !m.rtKnown {
+		m.runtime, m.rtKnown = runtimeRunc, true
+		if sysbox {
+			m.runtime = runtimeSysbox
+		}
+		log.Printf("box: isolation runtime %s (detected once docker answered)", m.runtime)
+	}
+	return m.runtime
+}
+
+// runtimeProbing reports whether a badge read's background probe still runs.
+func (m *Manager) runtimeProbing() bool {
+	m.rtMu.Lock()
+	defer m.rtMu.Unlock()
+	return m.rtProbe != nil
+}
 
 // BrokerMountDest is where a bound box's own broker socket directory is mounted
 // inside the box, and BrokerDirRel is where those directories live under the
@@ -1272,6 +1415,16 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 	// this process (see skipGuard).
 	guards := st == StateRunning && !labels.Identity && !m.isGuardsChecked(name)
 	if st == StateMissing {
+		// First, before anything is made for the box: which runtime it gets. A
+		// boot with Docker down left it unknown; it is read now (#334), and while
+		// docker cannot say, no box is created on the runc guess. The browser
+		// gets a fixed sentence; docker's own text (it can name a socket path)
+		// goes to the log.
+		if _, err := m.settledRuntime(ctx); err != nil {
+			m.rearmIfIdle(name)
+			log.Printf("box: %s: could not read docker's runtimes: %v", name, err)
+			return fmt.Errorf("%w: could not read which isolation runtime Docker offers, so no box is created on a guess; try again once Docker answers, or run `culibox doctor`", ErrBoxUnavailable)
+		}
 		var bundle string
 		if !m.opts.ExtraCA.Empty() {
 			// Before the mount-source check below, which then covers the bundle
