@@ -1118,7 +1118,7 @@
   #drawer[hidden] { display: none; }
   /* Full mode that is not forced still holds the dock's pushed width beside the grid: the dock is out of the flow, and without
      this the grid would widen under it and every terminal be resized to the wider size and back (two PTY resizes per toggle).
-     --dock-w is the pushed width, which paintDrawerLayout keeps whenever the layout is not forced. */
+     --dock-w is the pushed width, which paintDrawerLayout keeps on #layout (the grid's parent) whenever the layout is not forced. */
   #layout:has(> #drawer[data-max="1"]:not([data-forced="1"]):not([hidden])) > #grid { margin-right: var(--dock-w); }
   /* The left-edge handle: 7px straddling the border, nothing drawn until
      hover, drag or keyboard focus. Gone while maximized (nothing to drag). */

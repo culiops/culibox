@@ -99,6 +99,25 @@ test("a wide window: the dock gets dockLayout's width and the explorer its colum
   assert.deepEqual(p.run("dockDrawn"), { fold: "open", avail: 1190, dockW: 738, treeW: 258 });
 });
 
+test("the pushed width is also set on #layout, so the grid beside the dock can reserve it in Full mode (a custom property only reaches descendants)", () => {
+  const p = page();
+  p.els.layout = fake("layout");
+  p.run("paintDrawerLayout(1190)");
+  assert.equal(p.els.drawer.props["--dock-w"], "738px");
+  assert.equal(p.els.layout.props["--dock-w"], "738px", "#grid is the dock's sibling: it reads --dock-w from their parent");
+  p.run("paintDrawerMax(true, false)");
+  p.run("paintDrawerLayout(1190)");
+  assert.equal(p.els.layout.props["--dock-w"], "738px", "still the pushed width in Full mode that is not forced: that is what the grid keeps");
+  // Forced Full has no pushed dock: the value is left as it was and the margin rule does not apply (data-forced).
+  p.st.cells = 2;
+  p.run("paintDrawerLayout(975)");
+  assert.equal(p.els.drawer.dataset.forced, "1");
+  assert.equal(p.els.layout.props["--dock-w"], "738px");
+  // No #layout (a test page, a page that is not the app): nothing to write, nothing thrown.
+  const q = page();
+  assert.doesNotThrow(() => q.run("paintDrawerLayout(1190)"));
+});
+
 test("two panes at 1280 with the sidebar open: the explorer folds to its strip", () => {
   const p = page();
   p.st.cells = 2;

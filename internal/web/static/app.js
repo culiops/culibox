@@ -504,7 +504,13 @@ function paintDrawerLayout(avail, over) {
   const full = dr.dataset.max === "1";
   const parts = full ? dockFullLayout({ width: avail, treeShare, treeOpen: open }) : lay;
   dr.style.setProperty("--grid-w", avail + "px");
-  if (!lay.full) dr.style.setProperty("--dock-w", lay.dockW + "px");
+  if (!lay.full) {
+    dr.style.setProperty("--dock-w", lay.dockW + "px");
+    // The grid beside the dock reserves this width while Full is on and not forced (desktop.css), and a custom property only
+    // reaches descendants: their shared parent carries it too.
+    const host = $("layout");
+    if (host) host.style.setProperty("--dock-w", lay.dockW + "px");
+  }
   body.style.setProperty("--dr-tree", parts.treeW + "px");
   if (parts.treeFolded) dr.dataset.folded = "1";
   else delete dr.dataset.folded;

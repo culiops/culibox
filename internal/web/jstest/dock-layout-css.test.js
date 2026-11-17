@@ -48,15 +48,18 @@ test("#drawer is a flex column of --dock-w, in the flow, and is absolute only un
 test("pressing Full does not resize the terminals: the grid keeps the dock's width reserved while Full is on and not forced", () => {
   // Full takes the dock out of the flow, so the grid used to widen under it (every terminal resized to the wider size) and shrink
   // back on Exit full: two PTY resizes per toggle. The margin holds the dock's pushed width, which --dock-w still carries.
+  // (The first version of this read --dock-w off #drawer only, which the grid cannot see: the in-box check caught it.)
   const css = stripComments(read("desktop.css"));
   const sel = '#layout:has(> #drawer[data-max="1"]:not([data-forced="1"]):not([hidden])) > #grid';
   assert.match(rulesFor(css, sel).join(" "), /^\s*margin-right:\s*var\(--dock-w\);\s*$/);
   // Not while forced (the pushed dock does not fit, so none is reserved), and not once the dock is hidden.
   assert.ok(sel.includes(':not([data-forced="1"])') && sel.includes(":not([hidden])"));
-  // --dock-w is the pushed width in non-forced Full mode too: paintDrawerLayout writes it whenever the layout is not full.
+  // --dock-w is the pushed width in non-forced Full mode too, and the grid is the dock's sibling, so it must be on their parent:
+  // paintDrawerLayout writes it on #layout as well as on #drawer whenever the layout is not forced (dock-layout.test.js runs it).
   const app = stripComments(read("app.js"));
   const fn = app.slice(app.indexOf("function paintDrawerLayout("), app.indexOf("function dockForcesFull("));
-  assert.match(fn, /if \(!lay\.full\) dr\.style\.setProperty\("--dock-w", lay\.dockW \+ "px"\)/);
+  assert.match(fn, /if \(!lay\.full\) \{\s*dr\.style\.setProperty\("--dock-w", lay\.dockW \+ "px"\);/);
+  assert.match(fn, /\$\("layout"\)[\s\S]*?\.style\.setProperty\("--dock-w", lay\.dockW \+ "px"\)/);
 });
 
 test("Full mode covers the pane area; the dock never sets a top (the header is the top of the column)", () => {
