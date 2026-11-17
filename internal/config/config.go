@@ -795,6 +795,13 @@ func (c Config) HostAllowlist() []string {
 	return out
 }
 
+// LoopbackBind reports whether addr (a bind_addr, host:port) is on a loopback
+// host: 127.0.0.0/8, ::1 or localhost. An unparsable addr is not.
+func LoopbackBind(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	return err == nil && isLoopbackHost(host)
+}
+
 func isLoopbackHost(h string) bool {
 	if strings.EqualFold(h, "localhost") {
 		return true

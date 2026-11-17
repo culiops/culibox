@@ -682,3 +682,15 @@ func TestExampleConfigLeavesAbducoBinUnset(t *testing.T) {
 		t.Fatalf("config.example.json sets abduco_bin %q; leave it out", c.AbducoBin)
 	}
 }
+
+func TestLoopbackBind(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1:8899": true, "127.0.0.2:1": true, "[::1]:8899": true,
+		"localhost:8899": true, "LOCALHOST:1": true,
+		"100.64.0.2:9000": false, "0.0.0.0:8899": false, ":8899": false, "garbage": false,
+	} {
+		if got := LoopbackBind(addr); got != want {
+			t.Errorf("LoopbackBind(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}
