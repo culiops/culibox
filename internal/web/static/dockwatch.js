@@ -8,8 +8,12 @@
 //
 // It polls only while all of these hold: the dock shows Files for a session on the desktop, the page is visible, no page view
 // (Settings, Audit) is over the dock, and the session's `activity` in the session list is "working". It stops the moment any
-// of them ends (the end-of-turn refresh of gitstatus.js still runs) and starts again when they hold again. One request at a
-// time: a tick that finds the last one still out is skipped, a request that never answers is abandoned after
+// of them ends (the end-of-turn refresh of gitstatus.js still runs) and starts again when they hold again. When it is the
+// session that left "working" with the dock still showing it, there is ONE last read before it stops (R17): an edit made in
+// the last poll gap would otherwise get its git letter from the end-of-turn refresh and no session bar. If a request is out at
+// that moment it is left to land and the last read follows it; the last read is not made when the dock closed, the page was
+// hidden, a page view opened or the dock moved to another session, and it is never repeated. One request at a time (the
+// last read included): a tick that finds the last one still out is skipped, a request that never answers is abandoned after
 // DOCK_WATCH_FETCH_MS, and stopping aborts what is out, so a reply is for the poll that asked or it is dropped. A failed or
 // odd reply changes nothing (the answer is a hint, like the tree's dots). Nothing here knows which agent the session runs: a
 // session with no transcript answers `files: []`, so nothing lights up, and it is polled only while it reads "working".
@@ -22,11 +26,8 @@
 //     runs, and the numstat that follows the status is fresh too (dockchanges.js): no second timer-driven git poll;
 //   - subscribers hear (files, newEvents) when the files changed or there are new events.
 //
-// dockWatchSubscribe(sid, fn) -> unsubscribe is for P2's Follow agent, so it need not poll Activity on its own. `newEvents` are
-// the Activity timeline events newer than the newest this watch has seen for the session, newest first as the endpoint gives
-// them, at most DOCK_WATCH_EVENTS of them (older ones the poll missed are not recovered). The first answer for a session on
-// this page is the baseline: its events were there before the watch and are not new, and the watch keeps them across a stop
-// and a start (a later turn gets what came since).
+// dockWatchSubscribe(sid, fn) -> unsubscribe is for P2's Follow agent, so it need not poll Activity on its own (see the
+// function: what `newEvents` are and the baseline rule).
 
 const DOCK_WATCH_MS = 2000;
 const DOCK_WATCH_FETCH_MS = 8000; // a request that never answers must not hold the one poll slot for good
@@ -35,18 +36,26 @@ const DOCK_WATCH_EVENTS = 20;
 let dwSid = null;     // the session being polled, null when stopped
 let dwTimer = null;
 let dwFlight = null;  // {ac, timer} of the request that is out (its AbortController and its timeout), null when none
+let dwFinal = null;   // the session owed its one last read (it left "working" with the dock on it), null when none
 let dwSeq = 0;        // bumped on every start and stop: a reply is for the poll that asked, or it is dropped
 // What the watch has acted on, for one session: {sid, sig: Map(path -> "ts|add|del"), ev}. `ev` is the newest event ts seen, -1
 // before the first answer (that one is the baseline). Kept across a stop; another session replaces it.
 let dwKnown = { sid: null, sig: new Map(), ev: -1 };
 const dwSubs = new Map(); // session id -> Set of {fn}
 
-// dockWatchWant: the session the watch should be polling right now, "" for none.
-function dockWatchWant() {
+// dockWatchShown: the session the dock shows on screen right now, "" for none: the dock shows Files for a session on the
+// desktop, the page is visible and no page view is over it. Whatever the session is doing.
+function dockWatchShown() {
   if (typeof document === "undefined" || document.hidden) return "";
   if (typeof currentPage === "function" && currentPage()) return ""; // the page hides the dock
   if (typeof drawerOwnsFileClicks !== "function" || !drawerOwnsFileClicks()) return "";
   const sid = typeof drawerState !== "undefined" && drawerState ? drawerState.sessionId : null;
+  return sid || "";
+}
+
+// dockWatchWant: the session the watch should be polling right now, "" for none: the one the dock shows, while it is working.
+function dockWatchWant() {
+  const sid = dockWatchShown();
   if (!sid) return "";
   const rec = typeof lastSessions !== "undefined" && Array.isArray(lastSessions) ? lastSessions.find((x) => x && x.id === sid) : null;
   return rec && rec.activity === "working" ? sid : "";
@@ -54,11 +63,21 @@ function dockWatchWant() {
 
 // dockWatchSync starts, keeps or stops the poll to match what is on screen. Called from everywhere that changes it: every
 // session poll while the dock is open and a close (drawerPaint), a page view opening or closing (pagehost.js) and the
-// page being hidden or shown (below). A no-op when nothing changed.
+// page being hidden or shown (below). A no-op when nothing changed. The session that stops being "working" while the dock
+// still shows it gets one last read before the watch is done (see the top).
 function dockWatchSync() {
-  const sid = dockWatchWant();
-  if (!sid) { dockWatchStop(); return; }
-  dockWatchStart(sid);
+  const want = dockWatchWant();
+  if (want) { dwFinal = null; dockWatchStart(want); return; }
+  const shown = dockWatchShown();
+  if (dwSid && dwSid === shown) {
+    if (dwTimer) { clearInterval(dwTimer); dwTimer = null; }
+    dwFinal = dwSid;
+    dwSid = null;
+    dockWatchFinal();
+    return;
+  }
+  if (dwFinal && dwFinal === shown) return; // that last read is still to be asked, or is out: leave it be
+  dockWatchStop();
 }
 
 // dockWatchStart polls `sid` now and every DOCK_WATCH_MS. Already polling it: nothing. Polling another: that one stops first.
@@ -74,22 +93,39 @@ function dockWatchStart(sid) {
   dockWatchTick();
 }
 
-// dockWatchStop ends the poll and drops a request that is out. No timer is left, this very moment: the interval and the
-// request's timeout are cleared here, not when the aborted request gets round to failing.
+// dockWatchStop ends the poll, forgets a last read that was owed and drops a request that is out. No timer is left, this very
+// moment: the interval and the request's timeout are cleared here, not when the aborted request gets round to failing.
 function dockWatchStop() {
   if (dwTimer) { clearInterval(dwTimer); dwTimer = null; }
   dwSid = null;
+  dwFinal = null;
   dwSeq++;
   if (dwFlight) { clearTimeout(dwFlight.timer); dwFlight.ac.abort(); dwFlight = null; }
 }
 
 // dockWatchTick asks once, unless the last ask is still out. It re-checks the conditions first: whatever changed them and
-// did not say so (a page view opened by a route that does not call dockWatchSync) ends the poll here, before a request.
+// did not say so (a page view opened by a route that does not call dockWatchSync, a list that said idle) ends the poll here,
+// before a request.
 async function dockWatchTick() {
   if (!dwSid) return;
   if (dockWatchWant() !== dwSid) { dockWatchSync(); return; }
   if (dwFlight) return;
-  const sid = dwSid;
+  await dwRead(dwSid);
+}
+
+// dockWatchFinal asks the one last read that is owed, if it can: not while a request is out (that one's landing comes back
+// here, so there is still only one in flight) and not once the dock stopped showing the session. The debt (dwFinal) is
+// cleared when that read is done, so a session poll that comes while it is out leaves it be (dockWatchSync).
+function dockWatchFinal() {
+  const sid = dwFinal;
+  if (!sid || dwFlight) return;
+  if (dockWatchShown() !== sid) { dwFinal = null; return; }
+  dwRead(sid, true);
+}
+
+// dwRead is the one request: the session's Activity, with an abort timeout, and what comes of the answer. `last` is the one
+// last read after a turn.
+async function dwRead(sid, last) {
   const seq = dwSeq;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), DOCK_WATCH_FETCH_MS);
@@ -101,7 +137,10 @@ async function dockWatchTick() {
   } catch (_) { /* offline, timed out or aborted by a stop: nothing changes */ } finally { clearTimeout(timer); }
   if (seq !== dwSeq) return; // stopped, or started again for another session, while this was out: nothing of it is for now
   dwFlight = null;
-  if (data && typeof data === "object" && Array.isArray(data.files)) dwApply(sid, data);
+  // The dock still shows it (a change nobody synced would make this answer a stranger's).
+  if (data && typeof data === "object" && Array.isArray(data.files) && dockWatchShown() === sid) dwApply(sid, data);
+  if (last) dwFinal = null; // that was it
+  else dockWatchFinal(); // the last read that waited for this one, if one is owed
 }
 
 // dwSigs: path -> "ts|add|del" for a files list, the first of a repeated path winning. A list that is not an array is empty.
@@ -168,8 +207,16 @@ function dwNotify(sid, files, events) {
   }
 }
 
-// dockWatchSubscribe: fn(files, newEvents) after each answer for `sid` that brought news (see the top). It does not start a
-// poll: the watch runs on its own conditions. Returns the unsubscribe function; a fn that is not a function gets a no-op one.
+// dockWatchSubscribe: fn(files, newEvents) after each answer for `sid` that brought news: the files changed against what the
+// watch last saw, or there are new events. `files` is the answer's whole list (Activity's order: the edit applied last first).
+// `newEvents` are the timeline events newer than the newest the watch has seen for the session, newest first as the endpoint
+// gives them, at most DOCK_WATCH_EVENTS of them (older ones a poll missed are not recovered).
+// BASELINE: the first answer for a session on this page only sets the mark. Its events were there before the watch looked and
+// are NOT new (`newEvents` is empty for it), so a turn already running when the dock first shows the session loses the events
+// before that first poll, up to about 3 s (the session list says "working" a poll late); its files are not lost. The mark
+// survives a stop and a start for the same session, so a later turn gets everything since the last answer.
+// It does not start a poll: the watch runs on its own conditions. Returns the unsubscribe function; a fn that is not a
+// function gets a no-op one.
 function dockWatchSubscribe(sid, fn) {
   if (typeof fn !== "function") return () => {};
   const sub = { fn };

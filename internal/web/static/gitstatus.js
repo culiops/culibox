@@ -73,14 +73,16 @@ function gitMarks(status, root) {
 
 // --- state -------------------------------------------------------------------
 
-let gitSeq = 0;          // a reply is dropped unless it is the newest ask
-let gitState = null;     // {root, sid, status, marks, at} of the last reply that landed (`at`: gitStatusAt)
+let gitSeq = 0;          // the number of the newest ask: asks are numbered in the order they were sent
+let gitFloor = 0;        // replies to asks up to this number are dropped (a reset)
+let gitRoot = "";        // the root of the newest ask
+let gitState = null;     // {root, sid, status, marks, at, seq} of the status applied (`at`: gitStatusAt, `seq`: the ask it answers)
 let gitTimer = null;
 let gitTimerFresh = false; // any refreshSoon in the pending window asked for fresh
 const GIT_DEBOUNCE_MS = 1000;
 
 function gitStatusReset() {
-  gitSeq++;
+  gitFloor = ++gitSeq;
   gitState = null;
   if (gitTimer) { clearTimeout(gitTimer); gitTimer = null; }
   gitTimerFresh = false;
@@ -96,6 +98,7 @@ function gitStatusReset() {
 async function gitStatusLoad(root, sid, opts) {
   if (!root) return null;
   const seq = ++gitSeq;
+  gitRoot = root;
   const sentAt = Date.now();
   if (gitState && gitState.root !== root) { gitState = null; gitPaintTree(); }
   let status = null;
@@ -107,13 +110,18 @@ async function gitStatusLoad(root, sid, opts) {
     });
     if (res.ok) status = await res.json();
   } catch (_) { /* offline: keep the marks */ }
-  if (seq !== gitSeq) return null;
+  // Statuses land in the order they were sent. A reply is dropped when a reset came after its ask, when the newest ask is for
+  // another root, or when it is OLDER than the status already applied for this root (a slow one arriving after a newer one).
+  // Any other reply is applied, even with newer asks still out: while edits keep coming and git is slower than the gap between
+  // asks, each answer lands in turn, and the tree and the Changes section never wait for a pause that does not come.
+  if (seq <= gitFloor || root !== gitRoot) return null;
+  if (gitState && gitState.root === root && seq < gitState.seq) return null;
   if (!status || typeof status !== "object") return gitState ? gitState.marks : null;
   // When the answer is as new as: the ask, if it was fresh (the server read the disk after it) or is the first for this root.
   // A plain reload may come from the server's reuse of a run a couple of seconds old, so it keeps the earlier time: it
   // proves nothing about an edit made since the fresh read.
   const at = (opts && opts.fresh) || !gitState || gitState.root !== root ? sentAt : gitState.at;
-  gitState = { root, sid: sid || null, status, marks: gitMarks(status, root), at };
+  gitState = { root, sid: sid || null, status, marks: gitMarks(status, root), at, seq };
   gitPaintTree();
   // The Changes section's counts and base follow each status that lands (dockchanges.js), fresh when this one was.
   if (typeof dockChangesOnStatus === "function") dockChangesOnStatus({ fresh: !!(opts && opts.fresh) });

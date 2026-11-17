@@ -139,17 +139,20 @@ test("gitStatusLoad: a slow older reply does not overwrite a newer one", async (
   assert.equal(g.gitStatusCodeFor("/r/old.go"), "");
 });
 
-test("gitStatusLoad: the newest reply wins even when it arrives first and the old one is last", async () => {
+test("gitStatusLoad: replies land in the order they were sent: an older one that arrives first is applied, and the newer one replaces it", async () => {
   g.gitStatusReset();
   const calls = deferredFetch();
   const a = g.gitStatusLoad("/r", "s1");
   const b = g.gitStatusLoad("/r", "s1");
   calls[0].resolve(ok([{ p: "old.go", x: "M" }]));
   await a;
-  assert.equal(g.gitStatusCodeFor("/r/old.go"), "", "a superseded reply is dropped");
+  // R16: only a reply OLDER than the status already applied is dropped. This one is the first to land, so it is applied (it is
+  // the freshest thing known), and it is not starved by the newer ask that is still out.
+  assert.equal(g.gitStatusCodeFor("/r/old.go"), "M", "an older reply with nothing newer applied is shown");
   calls[1].resolve(ok([{ p: "new.go", x: "A" }]));
   await b;
   assert.equal(g.gitStatusCodeFor("/r/new.go"), "A");
+  assert.equal(g.gitStatusCodeFor("/r/old.go"), "", "and the newer one replaces it");
 });
 
 test("gitStatusLoad: a network failure keeps what was shown", async () => {
@@ -244,6 +247,91 @@ test("gitStatusRefreshSoon: the debounced request is fresh, unless every caller 
     t.mock.timers.tick(1000);
     assert.equal(JSON.parse(calls[3].init.body).fresh, undefined);
   } finally { delete global.ftRoot; }
+});
+
+// --- R16: statuses land in order, and never starve -----------------------------------------------------------------------------
+
+test("gitStatusLoad: with a status slower than the gap between asks, every reply still lands while newer asks are out", async (t) => {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["Date"], now: 1000 });
+  const calls = deferredFetch();
+  const heard = [];
+  global.dockChangesOnStatus = (o) => heard.push(o);
+  try {
+    // An ask every 2 s (an edit-bearing poll and the debounce), each answer taking 2.5 s.
+    const p = [g.gitStatusLoad("/r", "s1", { fresh: true })]; // sent at 1000
+    t.mock.timers.tick(2000);
+    p.push(g.gitStatusLoad("/r", "s1", { fresh: true })); // sent at 3000, while the first is still out
+    t.mock.timers.tick(500); // 3500: the first answers
+    calls[0].resolve(ok([{ p: "one.go", x: "M" }]));
+    await p[0];
+    assert.equal(g.gitStatusCodeFor("/r/one.go"), "M", "the first reply lands although a newer ask is out");
+    assert.equal(g.gitStatusAt(), 1000);
+    t.mock.timers.tick(1500); // 5000
+    p.push(g.gitStatusLoad("/r", "s1", { fresh: true })); // sent at 5000
+    t.mock.timers.tick(500); // 5500: the second answers, with the third out
+    calls[1].resolve(ok([{ p: "one.go", x: "M" }, { p: "two.go", x: "M" }]));
+    await p[1];
+    assert.equal(g.gitStatusCodeFor("/r/two.go"), "M", "and the second");
+    assert.equal(g.gitStatusAt(), 3000, "gitStatusAt follows the reply applied");
+    t.mock.timers.tick(2000); // 7500
+    calls[2].resolve(ok([{ p: "one.go", x: "M" }, { p: "two.go", x: "M" }, { p: "three.go", x: "A" }]));
+    await p[2];
+    assert.equal(g.gitStatusCodeFor("/r/three.go"), "A");
+    assert.equal(g.gitStatusAt(), 5000);
+    assert.deepEqual(heard, [{ fresh: true }, { fresh: true }, { fresh: true }], "the Changes section heard of each landing");
+  } finally { delete global.dockChangesOnStatus; }
+});
+
+test("gitStatusLoad: an older reply that arrives after a newer one was applied is dropped", async (t) => {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["Date"], now: 100 });
+  const calls = deferredFetch();
+  const heard = [];
+  global.dockChangesOnStatus = (o) => heard.push(o);
+  try {
+    const a = g.gitStatusLoad("/r", "s1", { fresh: true }); // sent at 100
+    t.mock.timers.tick(50);
+    const b = g.gitStatusLoad("/r", "s1", { fresh: true }); // sent at 150
+    t.mock.timers.tick(50);
+    const c = g.gitStatusLoad("/r", "s1", { fresh: true }); // sent at 200
+    calls[1].resolve(ok([{ p: "b.go", x: "M" }]));
+    await b;
+    assert.equal(g.gitStatusCodeFor("/r/b.go"), "M");
+    assert.equal(g.gitStatusAt(), 150);
+    calls[0].resolve(ok([{ p: "a.go", x: "M" }]));
+    assert.equal(await a, null, "the older reply is dropped");
+    assert.equal(g.gitStatusCodeFor("/r/a.go"), "", "its marks never show");
+    assert.equal(g.gitStatusCodeFor("/r/b.go"), "M", "the status applied stays");
+    assert.equal(g.gitStatusAt(), 150, "and so does its time");
+    assert.equal(heard.length, 1, "nobody heard of the dropped one");
+    calls[2].resolve(ok([{ p: "c.go", x: "A" }]));
+    await c;
+    assert.equal(g.gitStatusCodeFor("/r/c.go"), "A");
+    assert.equal(g.gitStatusAt(), 200);
+  } finally { delete global.dockChangesOnStatus; }
+});
+
+test("gitStatusLoad: a reply for another root than the newest ask's is dropped, and a reset drops what was out", async () => {
+  g.gitStatusReset();
+  let calls = deferredFetch();
+  const a = g.gitStatusLoad("/r", "s1");
+  const b = g.gitStatusLoad("/other", "s1");
+  calls[0].resolve(ok([{ p: "a.go", x: "M" }]));
+  assert.equal(await a, null);
+  assert.equal(g.gitStatusCurrent("/r"), null, "the older ask was for the root left behind");
+  assert.equal(g.gitStatusCodeFor("/r/a.go"), "");
+  calls[1].resolve(ok([{ p: "z.go", x: "M" }]));
+  await b;
+  assert.equal(g.gitStatusCurrent("/other").status.entries[0].p, "z.go");
+  // A reset forgets the status and every reply still out.
+  g.gitStatusReset();
+  calls = deferredFetch();
+  const c = g.gitStatusLoad("/r", "s1");
+  g.gitStatusReset();
+  calls[0].resolve(ok([{ p: "c.go", x: "M" }]));
+  assert.equal(await c, null);
+  assert.equal(g.gitStatusCurrent("/r"), null);
 });
 
 // --- the Changes section's reads (dockchanges.js) -----------------------------------------------------------------

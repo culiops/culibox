@@ -136,12 +136,12 @@ test("it polls only while the dock shows the session's files, the page is visibl
   }
 });
 
-test("it stops when any of those ends, aborts what is out and leaves no timer behind", async () => {
+test("it stops when the dock stops showing the session, aborts what is out and leaves no timer behind (and makes no last read)", async () => {
   const cases = [
-    ["the session leaves working", (p) => p.activity("s1", "idle")],
     ["the document is hidden", (p) => { p.st.hidden = true; }],
     ["a page view opens", (p) => { p.st.page = "audit-modal"; }],
     ["the dock closes", (p) => { p.st.owns = false; p.close(); }],
+    ["the dock moves to another session", (p) => p.open("s2")],
   ];
   for (const [why, end] of cases) {
     const p = watchPage();
@@ -158,6 +158,160 @@ test("it stops when any of those ends, aborts what is out and leaves no timer be
     assert.strictEqual(p.st.sets.length + p.st.refreshes.length, 0, why);
     assert.strictEqual(p.st.fetches.length, 1, "and nothing more is asked: " + why);
   }
+});
+
+// --- R17: the session leaves "working": one last read, then stop -------------------------------------------------------------
+
+test("the session leaves working: ONE last read, whose answer is applied, and then it stops for good", async () => {
+  const p = watchPage();
+  p.sync();
+  await p.reply(body([file("/w/a.go", 100)])); // the last poll: a.go
+  assert.strictEqual(p.st.fetches.length, 1);
+  assert.strictEqual(p.st.sets.length, 1);
+  // An edit lands in the gap after that poll; then the list says the turn is over.
+  p.activity("s1", "idle");
+  p.sync();
+  assert.strictEqual(p.st.fetches.length, 2, "one more read, at once");
+  assert.strictEqual(p.st.fetches[1].url, "/api/sessions/s1/activity?limit=20");
+  assert.strictEqual(p.liveIntervals(), 0, "the interval is gone: this is not a poll");
+  await p.reply(body([file("/w/b.go", 200), file("/w/a.go", 100)]));
+  assert.deepStrictEqual(p.st.sets.map((x) => plain(x[1]).map((f) => f.path)), [["/w/a.go"], ["/w/b.go", "/w/a.go"]], "the edit of the last gap gets its place in the list (its session bar)");
+  assert.deepStrictEqual(plain(p.st.refreshes), [{ fresh: true }, { fresh: true }], "and git is asked about it");
+  // Nothing more: not on later syncs (every session poll), not on a tick that is not there.
+  p.sync(); p.sync(); p.sync();
+  assert.strictEqual(p.st.fetches.length, 2, "one last read, never repeated");
+  assert.strictEqual(p.liveIntervals() + p.liveTimeouts(), 0, "no timer left, interval or request timeout");
+  assert.strictEqual(p.run("dwSid"), null);
+  assert.strictEqual(p.run("dwFinal"), null);
+  // The next turn polls again.
+  p.activity("s1", "working");
+  p.sync();
+  assert.strictEqual(p.liveIntervals(), 1);
+  assert.strictEqual(p.st.fetches.length, 3);
+});
+
+test("leaving working with a request out: it is left to land, no second one is started beside it, and the last read follows it", async () => {
+  const p = watchPage();
+  p.sync(); // request 0 is out
+  p.activity("s1", "idle");
+  p.sync();
+  assert.strictEqual(p.liveIntervals(), 0);
+  assert.strictEqual(p.st.fetches.length, 1, "the single in-flight guard: no second request while one is out");
+  assert.strictEqual(p.st.fetches[0].aborted, false, "and the one that is out is not thrown away");
+  p.sync(); p.sync();
+  assert.strictEqual(p.st.fetches.length, 1, "the session polls that follow ask nothing either");
+  assert.strictEqual(p.st.fetches[0].aborted, false);
+  await p.reply(body([file("/w/a.go", 100)])); // lands: applied, then the last read goes out
+  assert.deepStrictEqual(p.st.sets.map((x) => x[0]), ["s1"], "its answer is applied");
+  assert.strictEqual(p.st.fetches.length, 2, "the last read follows");
+  assert.strictEqual(p.pending(), 1);
+  await p.reply(body([file("/w/c.go", 300), file("/w/a.go", 100)]));
+  assert.strictEqual(p.st.sets.length, 2);
+  assert.strictEqual(p.st.fetches.length, 2, "and that is all");
+  assert.strictEqual(p.liveIntervals() + p.liveTimeouts(), 0);
+});
+
+test("the last read is not aborted or doubled by the session polls that come while it is out", async () => {
+  const p = watchPage();
+  p.sync();
+  await p.reply(body([]));
+  p.activity("s1", "idle");
+  p.sync(); // the last read is out
+  for (let i = 0; i < 4; i++) p.sync();
+  assert.strictEqual(p.st.fetches.length, 2);
+  assert.strictEqual(p.st.fetches[1].aborted, false);
+  assert.strictEqual(p.pending(), 1);
+  await p.reply(body([file("/w/a.go", 5)]));
+  assert.strictEqual(p.st.sets.length, 1, "the answer still lands");
+});
+
+test("a tick that finds the list said idle (nobody synced) does the same: one last read, then no timer", async () => {
+  const p = watchPage();
+  p.sync();
+  await p.reply(body([]));
+  p.activity("s1", "idle"); // the list changed; the tick is the first to know
+  p.tick();
+  assert.strictEqual(p.st.fetches.length, 2, "the last read");
+  assert.strictEqual(p.liveIntervals(), 0);
+  await p.reply(body([file("/w/a.go", 9)]));
+  assert.strictEqual(p.st.sets.length, 1);
+  assert.strictEqual(p.liveIntervals() + p.liveTimeouts(), 0);
+});
+
+test("no last read when the dock stops showing the session at the same time (closed, hidden, a page view, another session)", async () => {
+  const cases = [
+    ["closed", (p) => { p.st.owns = false; p.close(); }],
+    ["hidden", (p) => { p.st.hidden = true; }],
+    ["page view", (p) => { p.st.page = "settings-modal"; }],
+    ["another session", (p) => p.open("s2")],
+  ];
+  for (const [why, end] of cases) {
+    const p = watchPage();
+    p.sync();
+    await p.reply(body([]));
+    p.activity("s1", "idle");
+    end(p);
+    p.sync();
+    assert.strictEqual(p.st.fetches.length, 1, "no last read: " + why);
+    assert.strictEqual(p.liveIntervals() + p.liveTimeouts(), 0, why);
+  }
+});
+
+test("the dock stops showing the session while the last read is out: it is dropped, and so is its answer", async () => {
+  const p = watchPage();
+  p.sync();
+  await p.reply(body([]));
+  p.activity("s1", "idle");
+  p.sync(); // the last read is out
+  p.st.owns = false;
+  p.close();
+  p.sync();
+  assert.strictEqual(p.st.fetches[1].aborted, true);
+  assert.strictEqual(p.liveTimeouts(), 0);
+  await settle();
+  assert.strictEqual(p.st.sets.length, 0);
+});
+
+test("the session is working again before the last read is out: the poll restarts, with one timer and no overlap", async () => {
+  const p = watchPage();
+  p.sync();
+  await p.reply(body([]));
+  p.activity("s1", "idle");
+  p.sync(); // the last read is out (request 1)
+  p.activity("s1", "working");
+  p.sync();
+  assert.strictEqual(p.liveIntervals(), 1, "polling again");
+  assert.strictEqual(p.st.fetches[1].aborted, true, "the last read gave way to the poll's own");
+  assert.strictEqual(p.st.fetches.length, 3);
+  assert.strictEqual(p.pending(), 1);
+  assert.strictEqual(p.run("dwFinal"), null);
+});
+
+test("a last read that fails, or never answers, is the end of it: no retry, no timer", async () => {
+  const bad = [
+    ["an error status", async (p) => { await p.reply({}, 500); }],
+    ["a network failure", async (p) => { p.st.fetches[1].reject(new Error("offline")); await settle(); }],
+    ["no answer for 8 s", async (p) => { p.st.timeouts.find((x) => x.live && x.ms === 8000).fn(); await settle(); }],
+  ];
+  for (const [why, fail] of bad) {
+    const p = watchPage();
+    p.sync();
+    await p.reply(body([]));
+    p.activity("s1", "idle");
+    p.sync();
+    await fail(p);
+    p.sync(); p.sync();
+    assert.strictEqual(p.st.fetches.length, 2, "not asked again: " + why);
+    assert.strictEqual(p.liveIntervals() + p.liveTimeouts(), 0, why);
+    assert.strictEqual(p.st.sets.length, 0, why);
+  }
+});
+
+test("a session that was never polled gets no last read when it is idle", () => {
+  const p = watchPage();
+  p.activity("s1", "idle");
+  p.sync(); p.sync();
+  assert.strictEqual(p.st.fetches.length, 0);
 });
 
 test("it starts again when what ended comes back, and the visibilitychange and page events are its triggers", () => {
@@ -648,12 +802,74 @@ test("each file the agent edits in turn shows within one poll, newest first, and
   assert.strictEqual(p.rows().length, 3);
 });
 
-test("the poll leaves no timer behind when the session finishes its turn", async () => {
+test("the poll leaves no timer behind when the session finishes its turn, once its last read is done", async () => {
   const p = fullPage();
   await p.status(okStatus([]), { fresh: true });
   p.run("dockWatchSync()");
   assert.strictEqual(p.st.intervals.filter((x) => x.live).length, 1);
+  await p.watchReply({ claude: true, events: [], files: [] });
   p.run('lastSessions = [{ id: "s1", activity: "done" }]; dockWatchSync()');
   assert.strictEqual(p.st.intervals.filter((x) => x.live).length, 0);
+  await p.watchReply({ claude: true, events: [], files: [] }); // the one last read
   assert.deepStrictEqual(p.st.timeouts.filter((x) => x.live && x.ms === 8000), [], "and no request timer");
+  assert.strictEqual(p.st.fetches.filter((f) => /\/activity\?/.test(f.url)).length, 2);
+});
+
+test("an edit in the last poll gap gets its row and bar from the last read, and nothing stays provisional at the end of the turn", async () => {
+  const p = fullPage();
+  await p.status(okStatus([]), { fresh: true });
+  p.run("dockWatchSync()");
+  p.st.now += 2000;
+  await p.watchReply({ claude: true, events: [], files: [{ path: "/w/one.go", add: 1, del: 0, ts: p.st.now - 50 }] });
+  p.debounce();
+  p.st.now += 300;
+  await p.answer("/api/git/status", okStatus([{ p: "one.go", x: "M" }]));
+  assert.deepStrictEqual(Array.from(p.rows(), (r) => text(r.querySelector(".dk-st"))), ["M"]);
+  // The agent edits two.go right after that poll, and the turn ends before the next one: the list says so.
+  p.st.now += 600;
+  const files = [{ path: "/w/two.go", add: 1, del: 0, ts: p.st.now - 100 }, { path: "/w/one.go", add: 1, del: 0, ts: p.st.now - 2500 }];
+  p.run('lastSessions = [{ id: "s1", activity: "done" }]; dockWatchSync()'); // the last read goes out
+  await p.watchReply({ claude: true, events: [], files });
+  assert.deepStrictEqual(Array.from(p.rows(), (r) => text(r.querySelector(".dk-nm") ) + ":" + text(r.querySelector(".dk-st"))), ["two.go:…", "one.go:M"], "the last edit shows, with its session bar, at once");
+  assert.ok(Array.from(p.rows()).every((r) => r.className.split(/\s+/).includes("dk-mine")));
+  // The end-of-turn refresh (fresh) lands and git lists it: nothing is provisional.
+  p.debounce();
+  p.st.now += 300;
+  await p.answer("/api/git/status", okStatus([{ p: "one.go", x: "M" }, { p: "two.go", x: "M" }]));
+  assert.deepStrictEqual(Array.from(p.rows(), (r) => text(r.querySelector(".dk-st"))), ["M", "M"]);
+  assert.strictEqual(p.st.intervals.filter((x) => x.live).length, 0);
+});
+
+test("R16: while edits keep coming and git takes longer than the gap between them, the letters land in turn, not at the end", async () => {
+  const p = fullPage();
+  await p.status(okStatus([]), { fresh: true });
+  p.run("dockWatchSync()");
+  const files = [];
+  const entries = [];
+  const edit = async (name) => {
+    p.st.now += 2000; // a poll's worth of time
+    files.unshift({ path: "/w/" + name, add: 1, del: 0, ts: p.st.now - 50 });
+    entries.push({ p: name, x: "A" });
+    p.run("dockWatchTick()");
+    await p.watchReply({ claude: true, events: [], files: files.slice() });
+    p.debounce(); // the status for it goes out 1 s later (the fake clock does not run, only the order matters)
+  };
+  const letters = () => Array.from(p.rows(), (r) => text(r.querySelector(".dk-nm")) + ":" + text(r.querySelector(".dk-st")));
+  const pendingStatus = () => p.pending("/api/git/status").length;
+  await edit("one.go"); // status 1 goes out at t1
+  await edit("two.go"); // status 2 goes out while status 1 is still out (git needs more than the 2 s between the edits)
+  assert.strictEqual(pendingStatus(), 2, "two statuses are out at once");
+  // Status 1 answers (it knows one.go only): it lands although status 2 is out, and does not wait for the edits to stop.
+  p.st.now += 500;
+  const snapshot = entries.slice(0, 1);
+  await p.answer("/api/git/status", okStatus(snapshot));
+  assert.deepStrictEqual(letters(), ["two.go:…", "one.go:A"], "one.go has its letter while two.go waits");
+  await edit("three.go"); // status 3 goes out
+  p.st.now += 500;
+  await p.answer("/api/git/status", okStatus(entries.slice(0, 2))); // status 2 answers, with status 3 out
+  assert.deepStrictEqual(letters(), ["three.go:…", "two.go:A", "one.go:A"], "and status 2 lands in turn");
+  p.st.now += 500;
+  await p.answer("/api/git/status", okStatus(entries.slice(0, 3)));
+  assert.deepStrictEqual(letters(), ["three.go:A", "two.go:A", "one.go:A"]);
+  assert.strictEqual(p.nodes["dock-chg-list"].querySelectorAll(".dk-prov").length, 0);
 });
