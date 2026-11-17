@@ -80,6 +80,26 @@ func serviceServeRefusal(cfg config.Config) string {
 	return ""
 }
 
+// serviceRefusedExit is serve's exit code when it refuses to run as the
+// service. systemd is told not to restart on ExitRefused; launchd has no such
+// key and restarts any failure under KeepAlive/SuccessfulExit=false, so on
+// darwin the refusal is a clean exit instead of a respawn every 10 s.
+func serviceRefusedExit(goos string) int {
+	if goos == "darwin" {
+		return 0
+	}
+	return service.ExitRefused
+}
+
+// privateStderr keeps the service log 0600 when serve writes it directly (a
+// log the user deleted is recreated 0644 by the supervisor; it holds the
+// login URL with its token).
+func privateStderr(f *os.File) {
+	if fi, err := f.Stat(); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o077 != 0 {
+		f.Chmod(0o600)
+	}
+}
+
 // runService is `culibox service install|uninstall|status`.
 func runService(a cliArgs, cfg config.Config, home, envHome string, d serviceDeps, w io.Writer) int {
 	fail := func(format string, args ...any) int {
@@ -151,6 +171,9 @@ func serviceInstall(ctx context.Context, a cliArgs, cfg config.Config, home, env
 	// Before anything is created: a refused install leaves nothing behind.
 	if err := d.Plat.Reachable(ctx); err != nil {
 		return fail("%v", err)
+	}
+	if st, err := service.Inspect(d.Plat.UnitPath()); err != nil || st == service.Foreign {
+		return fail("%s: %s; CuliBox leaves it alone (remove it yourself if it is a leftover)", d.Plat.UnitPath(), service.ErrForeign)
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fail("data dir: %v", err)

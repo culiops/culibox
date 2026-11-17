@@ -41,7 +41,6 @@ import (
 	"github.com/culiops/culibox/internal/logring"
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
-	"github.com/culiops/culibox/internal/service"
 	"github.com/culiops/culibox/internal/session"
 	"github.com/culiops/culibox/internal/store"
 	"github.com/culiops/culibox/internal/storerefs"
@@ -191,8 +190,9 @@ func main() {
 		// edit of bind_addr, or a config the service resolves differently.
 		if why := serviceServeRefusal(cfg); why != "" {
 			log.Printf("culibox serve -service: %s", why)
-			os.Exit(service.ExitRefused)
+			os.Exit(serviceRefusedExit(runtime.GOOS))
 		}
+		privateStderr(os.Stderr)
 	}
 	log.Printf("config: %s (culibox %s)", src, buildCommit())
 	log.Print(cred.summary())

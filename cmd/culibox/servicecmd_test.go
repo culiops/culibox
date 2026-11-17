@@ -354,3 +354,36 @@ func TestServiceInstallServeExitsAtOnce(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, out)
 	}
 }
+
+func TestServiceRefusedExit(t *testing.T) {
+	if serviceRefusedExit("linux") != service.ExitRefused || serviceRefusedExit("darwin") != 0 {
+		t.Fatal("exit codes")
+	}
+}
+
+func TestPrivateStderr(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "service.log")
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	os.Chmod(p, 0o644)
+	privateStderr(f)
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", fi.Mode())
+	}
+}
+
+func TestServiceInstallForeignCreatesNothing(t *testing.T) {
+	f := newUnitFixture(t)
+	unit := f.deps.Plat.UnitPath()
+	os.MkdirAll(filepath.Dir(unit), 0o755)
+	os.WriteFile(unit, []byte("[Unit]\n"), 0o644)
+	if code, out := f.run(t, "install"); code != 1 || !strings.Contains(out, "not written by culibox") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	if _, err := os.Lstat(f.cfg.DataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("data dir created")
+	}
+}
