@@ -201,6 +201,15 @@ cat >"$tmp/bin/go" <<'EOF'
 #!/bin/sh
 case "$1" in
 version) echo "go version go1.99.0 darwin/arm64" ;;
+list)
+  # The packages ./... holds, per STUB_GO_HANG_AMD64 mode (see test below).
+  echo "LIST GOARCH=${GOARCH:-} ARGS=$*" >>"$STUB_OUT/go.log"
+  printf 'fixture/a\nfixture/b\nfixture/c\n'
+  case ${STUB_GO_HANG_AMD64:-} in
+  build) echo fixture/d ;;
+  many) printf 'fixture/e\nfixture/f\nfixture/g\nfixture/h\nfixture/i\n' ;;
+  esac
+  ;;
 test)
   # EFFECTIVE_GOFLAGS is what the real go would use in this very environment: a GOFLAGS
   # that is merely empty falls back to the GOENV file, so the variable alone proves nothing.
@@ -209,7 +218,9 @@ test)
   # STUB_GO_HANG_AMD64: under GOARCH=amd64 the ./... run has fixture/c killed for running
   # too long, the way go test reports a test binary that hung at launch under Rosetta
   # (#313). A run of fixture/c alone then passes, or with STUB_GO_RETRY=fail times out
-  # again. STUB_GO_HANG_AMD64=both also fails a test in fixture/a.
+  # again. Modes: 1 (only that), both (fixture/a also fails a test), build (fixture/d
+  # also fails to build), short (go exits before fixture/b ran), panic (the test
+  # binary's own timeout instead of the kill), many (six packages killed).
   if [ "${GOARCH:-}" = amd64 ] && [ -n "${STUB_GO_HANG_AMD64:-}" ]; then
     case " $* " in
     *" ./... "*)
@@ -218,11 +229,20 @@ test)
       else
         printf '=== RUN   TestA1\n--- PASS: TestA1 (0.00s)\nPASS\nok  \tfixture/a\t0.01s\n'
       fi
-      printf '*** Test killed with quit: ran too long (11m0s).\nFAIL\tfixture/c\t660.012s\n'
+      case $STUB_GO_HANG_AMD64 in
+      panic) printf 'panic: test timed out after 10m0s\nFAIL\tfixture/c\t600.004s\n' ;;
+      many)
+        for p in c e f g h i; do printf '*** Test killed with quit: ran too long (11m0s).\nFAIL\tfixture/%s\t660.012s\n' "$p"; done
+        ;;
+      *) printf '*** Test killed with quit: ran too long (11m0s).\nFAIL\tfixture/c\t660.012s\n' ;;
+      esac
+      [ "$STUB_GO_HANG_AMD64" = short ] && exit 1
+      [ "$STUB_GO_HANG_AMD64" = build ] && printf 'FAIL\tfixture/d [build failed]\n'
       printf '=== RUN   TestB1\n--- PASS: TestB1 (0.00s)\nPASS\nok  \tfixture/b\t0.01s\nFAIL\n'
       exit 1
       ;;
-    *" fixture/c ")
+    *" fixture/"?" ")
+      echo "RETRY $*" >>"$STUB_OUT/retry.log"
       if [ "${STUB_GO_RETRY:-}" = fail ]; then
         printf 'panic: test timed out after 10m0s\nFAIL\tfixture/c\t600.004s\nFAIL\n'
         exit 1
@@ -751,6 +771,33 @@ expect_rc "$rc" 3 "(y3) a real failure is not hidden by a passing retry"
 expect_verdict "$out/uploaded.json" failed "(y3) the verdict is failed"
 contains "$out/uploaded.json" '"test_summary": "go test failed: 1 test(s) failed' "(y3) the summary counts the real failure"
 contains "$out/uploaded.json" "fixture/c timed out and passed when run again alone" "(y3) the retried package is still named"
+
+echo "== (y4) a timeout next to a package that does not build"
+new_case y4
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=build
+expect_rc "$rc" 3 "(y4) a build failure is not hidden by a passing retry"
+expect_verdict "$out/uploaded.json" failed "(y4) the verdict is failed"
+contains "$out/uploaded.json" "2 package(s) FAIL" "(y4) the summary counts both failed packages"
+
+echo "== (y5) go stops before every package ran"
+new_case y5
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=short
+expect_rc "$rc" 3 "(y5) a run cut short is not verified by a passing retry"
+expect_verdict "$out/uploaded.json" failed "(y5) the verdict is failed"
+contains "$out/uploaded.json" "fixture/b has no result" "(y5) the record names the package that never ran"
+
+echo "== (y6) a test's own timeout is not retried"
+new_case y6
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=panic
+expect_rc "$rc" 3 "(y6) a test that hangs after Go started fails the arch"
+missing "$out/retry.log" "(y6) no retry: only go test's kill of a binary is the Rosetta symptom"
+
+echo "== (y7) too many timeouts are not retried"
+new_case y7
+run_script $'M1=pass\n\n' STUB_GO_HANG_AMD64=many
+expect_rc "$rc" 3 "(y7) six timed-out packages fail the arch"
+missing "$out/retry.log" "(y7) no package is retried past the cap"
+contains "$out/uploaded.json" "6 package(s) timed out, more than 5: not retried" "(y7) the record says why nothing was retried"
 
 # ---- (j) a bad tag is a usage error ------------------------------------------------
 echo "== (j) bad tag"

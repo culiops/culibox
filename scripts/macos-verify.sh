@@ -284,25 +284,28 @@ fi
 # Under Rosetta (amd64), test binaries launched in parallel can hang before Go starts,
 # at 0% CPU, until go test kills them; the same package passes alone in seconds
 # (measured on a rented M1, #313). So amd64 tests one package at a time (-p 1), and a
-# package that go test reports as timed out is run once more, alone, logged to
-# test-<arch>-retry.log. The arch passes only when every such retry passes and nothing
-# else failed; the summary names each retried package and its result either way.
+# package go test killed for running too long is run once more, alone, logged to
+# test-<arch>-retry.log. Only the kill counts: a test binary's own "test timed out"
+# panic means Go had started, so it is a real hang and is not retried. More than
+# MAX_RETRIES kills are not retried at all (each costs up to 11 minutes). The arch
+# passes after retries only when go test exited 1 (test failures, not a crash), every
+# package `go list ./...` names has a result line, nothing but the killed packages
+# failed, and every retry passed. The summary names each retried package and its
+# result either way.
+MAX_RETRIES=5
 T_PASS=
 T_SUMMARY=
 T_ENV=
-go_test() { # LOG GO-TEST-ARGS...: go test in the clone, pinned as above, appended to LOG
-  local log=$1
-  shift
+go_cmd() { # GO-ARGS...: go in the clone, pinned as above
   (cd "$work/src" && env PATH="$abdir:$PATH" GOENV=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" AGENT_BOX_REQUIRE_ABDUCO=1 \
-    go test "$@") >>"$log" 2>&1
+    go "$@")
 }
-# timed_out_pkgs LOG: the packages whose FAIL line follows go test's timeout panic or
-# its "ran too long" kill (a binary that never started gets only the kill).
-timed_out_pkgs() {
+# killed_pkgs LOG: the packages whose FAIL line follows go test's "ran too long" kill.
+killed_pkgs() {
   local line t=false
   while IFS= read -r line || [ -n "$line" ]; do
     case $line in
-    "panic: test timed out after "* | "*** Test killed"*"ran too long"*) t=true ;;
+    "*** Test killed"*"ran too long"*) t=true ;;
     ok[[:space:]]*) t=false ;;
     FAIL$'\t'*$'\t'*)
       if [ "$t" = true ]; then
@@ -314,9 +317,24 @@ timed_out_pkgs() {
     esac
   done <"$1"
 }
+# no_result_pkgs LOG: the packages `go list ./...` names that have no ok, FAIL or ?
+# line in LOG (go stopped before it reached them); "go list failed" if it did.
+no_result_pkgs() {
+  local list pkg tab=$'\t'
+  list=$(go_cmd list ./... 2>/dev/null </dev/null) || {
+    echo "go list failed"
+    return 0
+  }
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    grep -qF -e "ok  $tab$pkg$tab" -e "FAIL$tab$pkg$tab" -e "FAIL$tab$pkg [" -e "?   $tab$pkg$tab" "$1" || echo "$pkg"
+  done <<LIST
+$list
+LIST
+}
 run_tests() {
-  local arch=$1 goarch=$2 abdir=$3 log="$work/test-$1.log" rlog="$work/test-$1-retry.log"
-  local passed skipped failed pkgs badpkgs timedout pkg ntimed=0 retried="" retry_ok=true note=""
+  local arch=$1 goarch=$2 abdir=$3 log="$work/test-$1.log" rlog=""
+  local passed skipped failed pkgs badpkgs killed="" pkg ntimed=0 rc=0 missing="" retried="" retry_ok=true note=""
   local par=""
   T_ENV="CGO_ENABLED=0 GOOS=darwin GOARCH=$goarch"
   if [ -z "$abdir" ]; then
@@ -330,43 +348,55 @@ run_tests() {
     note="; one package at a time under Rosetta (-p 1)"
   fi
   echo "go test ./... ($arch, $T_ENV${par:+, $par})"
-  : >"$log"
   # $par unquoted on purpose: empty, or the two words -p 1.
-  if go_test "$log" $par -count=1 -v ./...; then
+  if go_cmd test $par -count=1 -v ./... >"$log" 2>&1; then
     T_PASS=true
   else
+    rc=$?
     T_PASS=false
-    timedout=
-    if [ "$arch" = amd64 ]; then timedout=$(timed_out_pkgs "$log"); fi
-    if [ -n "$timedout" ]; then
-      : >"$rlog"
-      for pkg in $timedout; do
-        ntimed=$((ntimed + 1))
-        echo "go test $pkg ($arch): timed out in the full run, running it again alone"
-        if go_test "$rlog" -p 1 -count=1 -v "$pkg"; then
-          retried="$retried; $pkg timed out and passed when run again alone"
-        else
-          retried="$retried; $pkg timed out and failed when run again alone"
-          retry_ok=false
-        fi
-      done
-      retried="$retried (see test-$arch-retry.log)"
+    if [ "$arch" = amd64 ]; then killed=$(killed_pkgs "$log"); fi
+    if [ -n "$killed" ]; then
+      ntimed=$(printf '%s\n' "$killed" | grep -c .)
+      if [ "$ntimed" -gt "$MAX_RETRIES" ]; then
+        retried="; $ntimed package(s) timed out, more than $MAX_RETRIES: not retried"
+        retry_ok=false
+      else
+        rlog="$work/test-$arch-retry.log"
+        : >"$rlog"
+        while IFS= read -r pkg; do
+          echo "go test $pkg ($arch): killed for running too long in the full run, running it again alone"
+          if go_cmd test -p 1 -count=1 -v "$pkg" >>"$rlog" 2>&1 </dev/null; then
+            retried="$retried; $pkg timed out and passed when run again alone"
+          else
+            retried="$retried; $pkg timed out and failed when run again alone"
+            retry_ok=false
+          fi
+        done <<KILLED
+$killed
+KILLED
+        retried="$retried (see test-$arch-retry.log)"
+        missing=$(no_result_pkgs "$log" | tr '\n' ' ')
+        missing=${missing% }
+      fi
     fi
   fi
   failed=$(grep -c '^--- FAIL' "$log" || true)
   badpkgs=$(grep -cE '^FAIL[[:space:]]+[^[:space:]]+' "$log" || true)
-  if [ "$T_PASS" = false ] && [ "$ntimed" -gt 0 ] && [ "$retry_ok" = true ] && [ "$failed" -eq 0 ] && [ "$badpkgs" -eq "$ntimed" ]; then
+  if [ -n "$missing" ]; then
+    retried="$retried; $missing has no result in the full run"
+  elif [ "$T_PASS" = false ] && [ "$ntimed" -gt 0 ] && [ "$retry_ok" = true ] && [ "$rc" -eq 1 ] &&
+    [ "$failed" -eq 0 ] && [ "$badpkgs" -eq "$ntimed" ]; then
     T_PASS=true
   fi
   if [ "$T_PASS" = true ]; then
-    passed=$(cat "$log" ${retried:+"$rlog"} | grep -c '^--- PASS' || true)
-    skipped=$(cat "$log" ${retried:+"$rlog"} | grep -c '^--- SKIP' || true)
-    pkgs=$(cat "$log" ${retried:+"$rlog"} | grep -c '^ok' || true)
+    passed=$(cat "$log" ${rlog:+"$rlog"} | grep -c '^--- PASS' || true)
+    skipped=$(cat "$log" ${rlog:+"$rlog"} | grep -c '^--- SKIP' || true)
+    pkgs=$(cat "$log" ${rlog:+"$rlog"} | grep -c '^ok' || true)
     T_SUMMARY="go test ./... ok: $passed test(s) passed, $skipped skipped, in $pkgs package(s)$retried$note"
   else
     T_SUMMARY="go test failed: $failed test(s) failed, $badpkgs package(s) FAIL, see test-$arch.log$retried$note"
   fi
-  grep -E '^(ok|FAIL|--- FAIL|panic)' "$log" ${retried:+"$rlog"} || true
+  grep -E '^(ok|FAIL|--- FAIL|panic)' "$log" ${rlog:+"$rlog"} || true
 }
 
 # check_version ARCH BINARY [RUNNER...]: the binary's `version` must equal exactly
