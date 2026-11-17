@@ -237,6 +237,9 @@ func (e elevationService) writeHold(sid string, adoptedAt time.Time) string {
 	if why == "" {
 		return ""
 	}
+	if sid == "" { // a box reaped at boot: its session is not known (#333)
+		return "a session " + why
+	}
 	in := session.Info{ID: sid}
 	if e.get != nil {
 		if s, ok := e.get(sid); ok && s != nil {

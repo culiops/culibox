@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -411,6 +412,16 @@ type Manager struct {
 	// with exclusive. Guarded by mu.
 	owner     map[string]string
 	adoptedAt map[string]time.Time
+	// ownerWS is the workspace (symlinks resolved) of an exclusive box this
+	// process started for its owner, set by Wrap with owner. An adopted box's
+	// comes from its label when it is needed.
+	ownerWS map[string]string
+	// ended is, by box name, the write hold of a session whose exclusive box
+	// is gone (#333): the box goes as soon as its session ends, but write
+	// credentials it was given may outlive it. claimCheck refuses the folder
+	// while the hook still holds the session, and drops an entry once it does
+	// not. Guarded by mu.
+	ended map[string]endedHold
 	// writeHold is the hook SetWriteHold installs (guarded by mu); nil = none.
 	writeHold WriteHold
 	// memTotal is docker's MemTotal once read (0 = not yet); memFallbackLogged
@@ -458,6 +469,8 @@ func New(opts Options) (*Manager, error) {
 		exclusive:     map[string]bool{},
 		owner:         map[string]string{},
 		adoptedAt:     map[string]time.Time{},
+		ownerWS:       map[string]string{},
+		ended:         map[string]endedHold{},
 	}
 	if opts.LockGuards {
 		ops := platformFlagOps()
@@ -1032,6 +1045,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		// The name hashes key.Session, so the owner never changes.
 		m.mu.Lock()
 		m.owner[name] = key.Session
+		m.ownerWS[name] = ws.Path // what the session's hold covers once the box is gone (#333)
 		m.mu.Unlock()
 	}
 	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
@@ -1039,6 +1053,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 			m.mu.Lock()
 			if !m.exclusive[name] { // no box of this session counted: nothing to own
 				delete(m.owner, name)
+				delete(m.ownerWS, name)
 			}
 			m.mu.Unlock()
 		}
@@ -1606,6 +1621,18 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 				"Wait for it to end (or drop the window in that session), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, why)
 		}
 	}
+	// After the loop: removing an idle box above can leave an ended hold.
+	for _, h := range m.endedHolds() {
+		if h.name == name || (knownWorkspace(h.ws) && !Overlaps(h.ws, cwd)) {
+			continue
+		}
+		if !knownWorkspace(h.ws) {
+			return fmt.Errorf("%w: a box of a session that has ended was removed, and CuliBox could not read its folder, so no other box can start in any folder "+
+				"until write credentials of that session expire: %s. Wait until then.", ErrWorkspaceHeld, h.why)
+		}
+		return fmt.Errorf("%w: %s is closed to other boxes until write credentials of a session that has ended expire: %s. "+
+			"Wait until then (drop the window first if that session is still listed), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, h.why)
+	}
 	return nil
 }
 
@@ -1623,6 +1650,111 @@ func (m *Manager) writeHeld(name string) string {
 	return hook(sid, at)
 }
 
+// endedHold is what an exclusive box leaves behind when it goes while its
+// session may hold write credentials: who to ask, and the folder (ws "" = not
+// known, which overlaps every folder).
+type endedHold struct {
+	sid, ws   string
+	adoptedAt time.Time
+	boot      bool // reaped at boot (keepBootHold): held for bootHoldFor while no hook is installed
+}
+
+// keepEndedHold is called before an exclusive box is removed: if the hook
+// still holds the session that owns it, the hold outlives the box in ended
+// (#333). It also prunes the ended holds the hook no longer holds, so they
+// cannot pile up. Caller holds opMu (the hook runs under it), never mu.
+func (m *Manager) keepEndedHold(ctx context.Context, name string) {
+	m.endedHolds()
+	m.mu.Lock()
+	hook, sid, at, ws := m.writeHold, m.owner[name], m.adoptedAt[name], m.ownerWS[name]
+	m.mu.Unlock()
+	if hook == nil || sid == "" || hook(sid, at) == "" {
+		return
+	}
+	if ws == "" { // adopted after a restart: the folder is on the box's label
+		ws = m.labelWorkspace(ctx, name)
+	}
+	m.mu.Lock()
+	m.ended[name] = endedHold{sid: sid, ws: ws, adoptedAt: at}
+	m.mu.Unlock()
+}
+
+// bootHoldFor bounds the hold of an exclusive box reaped at boot while no
+// write-hold hook is installed yet (Reconcile runs before the broker's hook):
+// a write credential's longest life, 15 minutes (the STS minimum the broker
+// mints), plus a minute for clock skew, as the broker's minElevatedRemaining.
+const bootHoldFor = 16 * time.Minute
+
+// keepBootHold records an ended hold for an orphan Reconcile is about to reap,
+// unless rows show it was a plain box: an exclusive one's session may have been
+// given write credentials before the restart that are still valid (#333). Its
+// session is not known (sid ""); adoptedAt is the boot, as for an adopted box.
+// rows nil (unreadable), or no usable row, holds it fail closed. Caller holds
+// opMu.
+func (m *Manager) keepBootHold(name string, rows map[string]BoxInfo, at time.Time) {
+	b, ok := rows[name]
+	if ok && !b.Unreadable && !b.Exclusive {
+		return
+	}
+	ws := ""
+	if ok && !b.Unreadable && knownWorkspace(b.Workspace) {
+		ws = b.Workspace
+	}
+	m.mu.Lock()
+	m.ended[name] = endedHold{ws: ws, adoptedAt: at, boot: true}
+	m.mu.Unlock()
+}
+
+// labelWorkspace is the workspace label of this instance's box name, or ""
+// when it cannot be read (the ended hold then covers every folder).
+func (m *Manager) labelWorkspace(ctx context.Context, name string) string {
+	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance)
+	if err != nil {
+		return ""
+	}
+	for _, b := range boxes {
+		if b.Name == name && !b.Unreadable && b.Instance == m.opts.Instance && knownWorkspace(b.Workspace) {
+			return b.Workspace
+		}
+	}
+	return ""
+}
+
+// heldEnded is an ended hold the hook still holds, with the hook's reason.
+type heldEnded struct {
+	name, ws, why string
+}
+
+// endedHolds asks the hook about every ended hold, drops those it no longer
+// holds and returns the rest. Caller holds opMu, never mu.
+func (m *Manager) endedHolds() []heldEnded {
+	m.mu.Lock()
+	hook := m.writeHold
+	snap := maps.Clone(m.ended)
+	m.mu.Unlock()
+	var out []heldEnded
+	for name, e := range snap {
+		why := ""
+		switch end := e.adoptedAt.Add(bootHoldFor); {
+		case hook != nil:
+			why = hook(e.sid, e.adoptedAt)
+		case e.boot && time.Now().Before(end):
+			why = "a session was running when CuliBox restarted, and write credentials it may have been given before then stay valid until " +
+				end.Local().Format("15:04") + " at the latest"
+		}
+		if why != "" {
+			out = append(out, heldEnded{name, e.ws, why})
+			continue
+		}
+		m.mu.Lock()
+		if cur, ok := m.ended[name]; ok && cur == e {
+			delete(m.ended, name)
+		}
+		m.mu.Unlock()
+	}
+	return out
+}
+
 // idle reports whether no session of this process uses the box.
 func (m *Manager) idle(name string) bool {
 	m.mu.Lock()
@@ -1634,6 +1766,7 @@ func (m *Manager) idle(name string) bool {
 // timer and exclusive mark. Caller holds opMu, which also orders it against the
 // timer's own stopIfIdle.
 func (m *Manager) removeIdle(ctx context.Context, name string) error {
+	m.keepEndedHold(ctx, name)
 	m.unverify(name)
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		return err
@@ -1683,6 +1816,7 @@ func (m *Manager) forgetExclusiveLocked(name string) {
 	delete(m.exclusive, name)
 	delete(m.owner, name)
 	delete(m.adoptedAt, name)
+	delete(m.ownerWS, name)
 }
 
 // idleTTL is how long an idle box is kept: zero for an exclusive one, which
@@ -1977,6 +2111,7 @@ func (m *Manager) stopIfIdle(name string) {
 	}
 	delete(m.timers, name)
 	m.mu.Unlock()
+	m.keepEndedHold(context.Background(), name)
 	m.unverify(name)
 	if m.opts.Client.Stop(context.Background(), name) == nil {
 		m.boxGone(name)
@@ -2017,6 +2152,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	var errs []error
 	left := map[string]bool{} // containers still there after the pass
+	// rows are this instance's boxes, read once before the first orphan is
+	// reaped (nil = unreadable): which are exclusive, and their folders.
+	var rows map[string]BoxInfo
+	read, bootAt := false, time.Now()
 	for _, name := range names {
 		m.mu.Lock()
 		live := m.active[name]
@@ -2025,6 +2164,16 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			left[name] = true
 			continue
 		}
+		if !read {
+			read = true
+			if bs, err := m.opts.Client.ListBoxes(ctx, LabelInstance+"="+m.opts.Instance); err == nil {
+				rows = map[string]BoxInfo{}
+				for _, b := range bs {
+					rows[b.Name] = b
+				}
+			}
+		}
+		m.keepBootHold(name, rows, bootAt)
 		m.unverify(name)
 		if err := m.opts.Client.Stop(ctx, name); err != nil {
 			left[name] = true
@@ -2159,6 +2308,7 @@ func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, 
 // their count later, and a count dropped here would underflow against the
 // container a new spawn re-creates under the same name. Callers hold opMu.
 func (m *Manager) remove(ctx context.Context, name string) error {
+	m.keepEndedHold(ctx, name)
 	m.unverify(name)
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		return fmt.Errorf("box: sweep removing %s: %w", name, err)
