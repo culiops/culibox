@@ -45,6 +45,12 @@ const (
 	// fixed classes: the keeper's own error can name a path or a Keychain item.
 	unlockNotKept  = "not kept: the key store refused the unlock"
 	initNotCreated = "the store was not created"
+
+	// The same for the steps after the locked and passwd_changed rows (#332). A
+	// failed value_set or value_removed carries the value id instead, like its
+	// before-row: the CLI and the daemon write rows that can interleave.
+	lockNotCleared   = "not cleared: the key store refused to lock"
+	passwdNotChanged = "the passphrase was not changed"
 )
 
 // Status is what the CLI, doctor and web show. Locked is only meaningful once
@@ -213,7 +219,7 @@ func isValueFile(name string) bool {
 // Set encrypts value to the store's public recipient and writes it atomically.
 // It works while the store is locked. An id that differs from an existing one
 // only in case is refused (CaseCollisionError); the exact id updates in place.
-func (s *Store) Set(id string, value []byte, actor string) error {
+func (s *Store) Set(id string, value []byte, actor string) (err error) {
 	if !ValidID(id) {
 		return ErrBadID
 	}
@@ -268,11 +274,19 @@ func (s *Store) Set(id string, value []byte, actor string) error {
 	if err := s.record("value_set", actor, id); err != nil {
 		return err
 	}
+	// The row above is written first so an audit failure refuses the set; a
+	// failed write past it says so. Best effort, with the id only: the write
+	// error can name a path.
+	defer func() {
+		if err != nil {
+			_ = s.record("value_set_failed", actor, id)
+		}
+	}()
 	return writeAtomic(root, valuePath(id), buf.Bytes())
 }
 
 // Remove deletes a stored value.
-func (s *Store) Remove(id, actor string) error {
+func (s *Store) Remove(id, actor string) (err error) {
 	if !ValidID(id) {
 		return ErrBadID
 	}
@@ -292,6 +306,12 @@ func (s *Store) Remove(id, actor string) error {
 	if err := s.record("value_removed", actor, id); err != nil {
 		return err
 	}
+	// As in Set: a failed remove past the row says so, best effort.
+	defer func() {
+		if err != nil {
+			_ = s.record("value_removed_failed", actor, id)
+		}
+	}()
 	if err := root.Remove(valuePath(id)); err != nil {
 		return fmt.Errorf("remove value %q: %w", id, unwrapPath(err))
 	}
@@ -406,17 +426,23 @@ func (s *Store) Unlock(passphrase []byte, ttl time.Duration, actor string) error
 }
 
 // Lock clears the keeper. Auditing is best-effort so a lock is never blocked.
+// When the keeper refuses to clear, the store is still unlocked, so a second
+// row says the lock did not take effect (a fixed class, not the keeper's text).
 func (s *Store) Lock(actor string) error {
 	if !s.k.NeedsPassphrase() {
 		return ErrNotApplicable
 	}
 	_ = s.record("locked", actor, "")
-	return s.k.Clear()
+	if err := s.k.Clear(); err != nil {
+		_ = s.record("lock_failed", actor, lockNotCleared)
+		return err
+	}
+	return nil
 }
 
 // Passwd re-encrypts identity.age under a new passphrase. Values and the
 // keeper are untouched. Linux only.
-func (s *Store) Passwd(oldPass, newPass []byte, actor string) error {
+func (s *Store) Passwd(oldPass, newPass []byte, actor string) (err error) {
 	if !s.k.NeedsPassphrase() {
 		return ErrNotApplicable
 	}
@@ -436,6 +462,12 @@ func (s *Store) Passwd(oldPass, newPass []byte, actor string) error {
 	if err := s.record("passwd_changed", actor, ""); err != nil {
 		return err
 	}
+	// As in Set: a failure past the row says the passphrase was not changed.
+	defer func() {
+		if err != nil {
+			_ = s.record("passwd_failed", actor, passwdNotChanged)
+		}
+	}()
 	root, err := s.openRoot(false)
 	if err != nil {
 		return err

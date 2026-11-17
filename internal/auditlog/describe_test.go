@@ -409,3 +409,36 @@ func TestDescribeStoreUnlockNotKept(t *testing.T) {
 		t.Fatalf("%+v", ev)
 	}
 }
+
+// The #332 outcome rows: a refused lock or passphrase change keeps its fixed reason
+// as plain text; a failed value write or remove names the value id, like its
+// before-row, so the pair still reads apart from an interleaved row.
+func TestDescribeStoreFailedOutcomes(t *testing.T) {
+	cases := []struct {
+		action, detail, what string
+		parts               []Part
+	}{
+		{"lock_failed", "not cleared: the key store refused to lock",
+			"encrypted store lock failed · not cleared: the key store refused to lock",
+			[]Part{txt("encrypted store lock failed"), txt(" · not cleared: the key store refused to lock")}},
+		{"passwd_failed", "the passphrase was not changed",
+			"encrypted store passwd failed · the passphrase was not changed",
+			[]Part{txt("encrypted store passwd failed"), txt(" · the passphrase was not changed")}},
+		{"value_set_failed", "API_KEY", "encrypted store value set failed · API_KEY",
+			[]Part{txt("encrypted store value set failed · "), ident("API_KEY")}},
+		{"value_removed_failed", "API_KEY", "encrypted store value removed failed · API_KEY",
+			[]Part{txt("encrypted store value removed failed · "), ident("API_KEY")}},
+	}
+	for _, c := range cases {
+		ev := describe(rawRow{src: srcStore, a: c.action, b: "web", c: c.detail})
+		if ev.What != c.what {
+			t.Errorf("%s: What = %q, want %q", c.action, ev.What, c.what)
+		}
+		if ev.Kind != KindStore || ev.Outcome != c.action {
+			t.Errorf("%s: %+v", c.action, ev)
+		}
+		if !slices.Equal(ev.Parts, c.parts) {
+			t.Errorf("%s: Parts = %+v, want %+v", c.action, ev.Parts, c.parts)
+		}
+	}
+}
