@@ -839,3 +839,75 @@ func TestKeepEndedHoldWithNoOwner(t *testing.T) {
 		t.Fatalf("a box docker does not list left %d hold(s)", n)
 	}
 }
+
+// An idle stop whose removal fails keeps the box's owner, and a later removal
+// keeps the owner's hold: it is never overwritten by an orphan's boot hold,
+// which ends a credential's life after start while the session's window may
+// still be open (#333, review of the no-owner fix).
+func TestFailedIdleStopKeepsTheOwnersHold(t *testing.T) {
+	m, f := boundMgr(t)
+	h := newHoldSet(m)
+	dir := t.TempDir()
+	name, err := wrapIn(m, dir, "elev-1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.set("elev-1", "held by elev-1")
+	releasedUntimed(m, name)
+	m.started = time.Now().Add(-bootHoldFor - time.Minute) // a boot hold would be over
+	f.mu.Lock()
+	f.stopFails = 1
+	f.mu.Unlock()
+	m.stopIfIdle(name)
+	f.mu.Lock()
+	still := f.running[name]
+	f.mu.Unlock()
+	if !still {
+		t.Fatal("the failed stop removed the box")
+	}
+	m.mu.Lock()
+	owner := m.owner[name]
+	m.mu.Unlock()
+	if owner != "elev-1" {
+		t.Fatalf("after a failed stop the owner is %q, want elev-1 kept for the next removal", owner)
+	}
+	if _, err := m.Sweep(context.Background(), map[string]int{}); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	still = f.running[name]
+	f.mu.Unlock()
+	if still {
+		t.Fatal("the sweep did not remove the box")
+	}
+	m.mu.Lock()
+	e := m.ended[name]
+	m.mu.Unlock()
+	if e.sid != "elev-1" || e.boot {
+		t.Fatalf("ended hold = %+v, want the owner's", e)
+	}
+	if _, _, err := wrapPlain(m, dir, "sh-1"); !errors.Is(err, ErrWorkspaceHeld) || !strings.Contains(err.Error(), "held by elev-1") {
+		t.Fatalf("want the owner's hold, got %v", err)
+	}
+}
+
+// keepEndedHold never replaces a hold already recorded for the box.
+func TestKeepEndedHoldDoesNotOverwrite(t *testing.T) {
+	m, f := boundMgr(t)
+	h := newHoldSet(m)
+	h.set("elev-1", "held by elev-1")
+	dir := t.TempDir()
+	orphanBox(t, f, "ab-box-orphan", dir, true)
+	m.mu.Lock()
+	m.ended["ab-box-orphan"] = endedHold{sid: "elev-1", ws: "/w"}
+	m.mu.Unlock()
+	m.opMu.Lock()
+	m.keepEndedHold(context.Background(), "ab-box-orphan")
+	m.opMu.Unlock()
+	m.mu.Lock()
+	e := m.ended["ab-box-orphan"]
+	m.mu.Unlock()
+	if e.sid != "elev-1" || e.boot {
+		t.Fatalf("ended hold = %+v, want the one already recorded", e)
+	}
+}

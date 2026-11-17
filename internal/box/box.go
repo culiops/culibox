@@ -1831,6 +1831,15 @@ func (m *Manager) keepEndedHold(ctx context.Context, name string) {
 	hook, sid, at, ws := m.writeHold, m.owner[name], m.adoptedAt[name], m.ownerWS[name]
 	m.mu.Unlock()
 	if sid == "" {
+		// Never over a hold already kept for this box (its owner's, kept
+		// before a failed stop), and nothing once a credential's life has
+		// passed since start: a boot hold would already be over.
+		m.mu.Lock()
+		_, kept := m.ended[name]
+		m.mu.Unlock()
+		if kept || time.Since(m.started) >= bootHoldFor {
+			return
+		}
 		row, found, err := m.labelRow(ctx, name)
 		switch {
 		case err != nil:
@@ -2294,9 +2303,12 @@ func (m *Manager) stopIfIdle(name string) {
 	m.mu.Unlock()
 	m.keepEndedHold(context.Background(), name)
 	m.unverify(name)
-	if m.opts.Client.Stop(context.Background(), name) == nil {
-		m.boxGone(name)
+	if m.opts.Client.Stop(context.Background(), name) != nil {
+		// Still there: keep its owner, so the removal that follows (the sweep,
+		// a spawn's check) still knows whose hold it is (#333).
+		return
 	}
+	m.boxGone(name)
 	m.mu.Lock()
 	m.forgetExclusiveLocked(name)
 	m.mu.Unlock()
