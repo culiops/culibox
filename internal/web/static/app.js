@@ -4238,9 +4238,10 @@ function buildSeg(el, choices, value, onChange) {
   return el;
 }
 // Option definitions come from the daemon's config (GET /api/options), so the
-// choice count is runtime data, not something knowable at build time. A <=4
-// choice enum renders as a .seg — seeing the alternatives beats saving the
-// space a select would — and anything wider stays a plain <select> so it
+// choice count is runtime data, not something knowable at build time. An enum
+// that fits four segments with its leading "not set" renders as a .seg —
+// seeing the alternatives beats saving the space a select would — and
+// anything wider (the built-in Model) stays a plain <select> so it
 // cannot overflow a narrow column. A bool option is always a checkbox.
 function renderPfOptions(current) {
   current = current || {};
@@ -4262,10 +4263,11 @@ function renderPfOptions(current) {
       lbl.className = "flab";
       lbl.textContent = o.label || o.key;
       const choices = o.choices || [];
-      if (choices.length > 0 && choices.length <= 4) {
+      if (choices.length > 0 && choices.length <= 3) {
         ctrl = document.createElement("div");
         ctrl.className = "seg";
-        buildSeg(ctrl, choices.map((c) => ({ value: c, label: c })), current[o.key] || "");
+        // A seg has no empty state: "not set" is how a picked value is cleared.
+        buildSeg(ctrl, [{ value: "", label: "not set" }, ...choices.map((c) => ({ value: c, label: c }))], current[o.key] || "");
       } else {
         ctrl = document.createElement("select");
         ctrl.className = "fld";
