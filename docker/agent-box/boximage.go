@@ -39,6 +39,33 @@ func Hash() string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// PublishedRepo is the registry repository CI publishes the box image to.
+const PublishedRepo = "ghcr.io/culiops/culibox"
+
+// published is the multi-arch index digest of the published image built from
+// this binary's Dockerfile. Only a release build sets it (scripts/release/build.sh,
+// -ldflags -X); a build from source leaves it empty and builds the image locally.
+var published string
+
+// publishedRef is the only form a baked ref may take: the published repository,
+// pinned by digest.
+var publishedRef = regexp.MustCompile(`^ghcr\.io/culiops/culibox@sha256:[0-9a-f]{64}$`)
+
+// ValidPublished reports whether ref is a digest of the published repository.
+func ValidPublished(ref string) bool {
+	return publishedRef.MatchString(ref)
+}
+
+// Published is the ref `box setup` pulls for the default image, or "" when this
+// binary carries none (a source build) or a malformed one, which never reaches
+// docker.
+func Published() string {
+	if !ValidPublished(published) {
+		return ""
+	}
+	return published
+}
+
 // Docker is the docker CLI with agent-box's global flags (see box.CLIClient).
 type Docker struct {
 	Bin  string
@@ -314,11 +341,11 @@ func (d Docker) Inspect(ctx context.Context, image string) (ImageState, error) {
 func (s ImageState) Check(serverArch string) (fatal bool, msg string) {
 	switch {
 	case !s.Present:
-		return true, "box image not built; run `culibox box setup`"
+		return true, "box image not set up; run `culibox box setup`"
 	case s.Arch != serverArch:
-		return true, fmt.Sprintf("box image is %s but the daemon is %s (it would run emulated); run `culibox box setup -rebuild`", s.Arch, serverArch)
+		return true, fmt.Sprintf("box image is %s but the daemon is %s (it would run emulated); run `culibox box setup`", s.Arch, serverArch)
 	case s.Hash != Hash():
-		return false, "box image is older than this CuliBox; run `culibox box setup -rebuild`"
+		return false, "box image is older than this CuliBox; run `culibox box setup`"
 	}
 	return false, ""
 }
