@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build the release assets: one tarball per platform, setup.sh, and SHA256SUMS.
 #
-#   scripts/release/build.sh <tag> <outdir> <abduco-dir>
+#   scripts/release/build.sh <tag> <outdir> <abduco-dir> [<box-image-ref>]
 #
 # <tag> is vX.Y.Z or vX.Y.Z-<prerelease>. <outdir> is created if missing and must
 # hold no culibox_*, setup.sh or SHA256SUMS file yet, so assets from an earlier run
@@ -14,18 +14,39 @@
 # setup.sh is the installer, attached as is so the install command can fetch it from
 # the release; SHA256SUMS covers it and the tarballs.
 #
-# The tarballs are reproducible: the same commit and tag give byte-identical files
+# <box-image-ref> (#335), ghcr.io/culiops/culibox@sha256:<64 hex> from
+# tools/boximage-ref, is baked into every binary (boximage.Published): `box setup`
+# then pulls that image instead of building it. Without it the binary builds the
+# box image locally, like a build from source.
+#
+# The tarballs are reproducible: the same commit, tag and box image ref give byte-identical files
 # (fixed mtime from the commit, sorted names, owner 0, no gzip timestamp), and so an
 # identical SHA256SUMS. Needs GNU tar (--sort, --mtime): on Linux, not stock macOS.
 set -eu
 
-if [ "$#" -ne 3 ]; then
-  echo "usage: $0 <tag> <outdir> <abduco-dir>" >&2
+if [ "$#" -ne 3 ] && [ "$#" -ne 4 ]; then
+  echo "usage: $0 <tag> <outdir> <abduco-dir> [<box-image-ref>]" >&2
   exit 2
 fi
 tag=$1
 outdir=$2
 abduco_dir=$3
+box_image=${4-}
+
+# Exactly the published repository pinned by digest: it goes into -ldflags, so
+# nothing else (a space, a newline, another -X) may ride along.
+if [ "$#" -eq 4 ]; then
+  hex=${box_image#ghcr.io/culiops/culibox@sha256:}
+  # A case pattern, not $(… | tr): command substitution drops trailing newlines.
+  case $hex in
+  *[!0123456789abcdef]*) bad_hex=1 ;;
+  *) bad_hex=0 ;;
+  esac
+  if [ "$hex" = "$box_image" ] || [ "${#hex}" -ne 64 ] || [ "$bad_hex" = 1 ]; then
+    echo "build.sh: box image ref '$box_image' is not ghcr.io/culiops/culibox@sha256:<64 hex>" >&2
+    exit 2
+  fi
+fi
 
 if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
   echo "build.sh: tag '$tag' is not vX.Y.Z or vX.Y.Z-<prerelease>" >&2
@@ -73,8 +94,12 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
   dir=$stage/$name
   mkdir -p "$dir"
   echo "build $name"
+  ldflags="-s -w -X main.version=$tag -X main.commit=$sha"
+  if [ -n "$box_image" ]; then
+    ldflags="$ldflags -X github.com/culiops/culibox/docker/agent-box.published=$box_image"
+  fi
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
-    -ldflags "-s -w -X main.version=$tag -X main.commit=$sha" \
+    -ldflags "$ldflags" \
     -o "$dir/culibox" ./cmd/culibox
   cp "$repo/LICENSE" "$repo/README.md" "$abduco_dir/LICENSE.abduco" "$dir/"
   cp "$abduco_dir/${os}_${arch}/abduco" "$dir/abduco"

@@ -2,9 +2,17 @@
 # and publishes it to the public package ghcr.io/culiops/culibox.
 #
 # Shape: each arch builds and pushes BY DIGEST (no tag), then one job merges
-# the two digests into a multi-arch index tagged <YYYY-MM-DD>-<7-char sha> and
-# `base`. The job summary prints the index digest; culibox configs pin that
-# digest, never a tag (a tag is mutable).
+# the two digests into a multi-arch index tagged <YYYY-MM-DD>-<7-char sha>,
+# `base` and dockerfile-<hash> (the Dockerfile label below). The job summary
+# prints the index digest; culibox configs pin that digest, never a tag (a tag is
+# mutable).
+#
+# dockerfile-<hash> is how a release finds its image (#335): release.yml resolves
+# it to the index digest, checks both arches carry the label, and bakes the digest
+# into the binaries, which pull it on `box setup`. The tag is last-wins (a re-run
+# for the same Dockerfile moves it); the index it pointed at stays as an untagged
+# version that released binaries still pull. Never delete untagged versions of
+# this package: an old binary would fall back to a local build of several minutes.
 #
 # Supply chain (docker/agent-box/workflow_test.go guards this):
 #   - every action is pinned by full commit SHA, the release in a comment
@@ -150,8 +158,20 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
+      contents: read
       packages: write
     steps:
+      # Only for the Dockerfile hash of the dockerfile-<hash> tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Label = first 12 hex of the Dockerfile sha256
+        id: label
+        run: |
+          set -euo pipefail
+          echo "dockerfile=$(sha256sum docker/agent-box/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: digest-*
@@ -170,6 +190,8 @@ jobs:
 
       - name: Create the multi-arch index and tag it
         working-directory: ${{ runner.temp }}/digests
+        env:
+          DOCKERFILE: ${{ steps.label.outputs.dockerfile }}
         run: |
           set -euo pipefail
           # Exactly one digest per arch, or the index would be incomplete.
@@ -181,6 +203,7 @@ jobs:
             --annotation "index:org.opencontainers.image.source=https://github.com/culiops/culibox" \
             -t "${IMAGE}:$(date -u +%F)-${GITHUB_SHA::7}" \
             -t "${IMAGE}:base" \
+            -t "${IMAGE}:dockerfile-${DOCKERFILE}" \
             "${refs[@]}"
 
       - name: Print the index digest in the job summary

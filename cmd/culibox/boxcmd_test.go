@@ -381,3 +381,207 @@ func TestAdoptDefaultImageForTheCLI(t *testing.T) {
 		t.Fatalf("a pinned box_image must not touch docker: %q %q", argvLog(t, log), w.String())
 	}
 }
+
+// publishedRef is a baked release ref (boximage.Published) for the tests below.
+var publishedRef = boximage.PublishedRepo + "@sha256:" + strings.Repeat("a", 64)
+
+const defaultDated = "culiops/culibox:2026-10-18"
+
+func TestPullFromOnlyForTheUnsetDefault(t *testing.T) {
+	def := config.DefaultBoxImage
+	cases := []struct {
+		cfgImage, image, published string
+		rebuild                    bool
+		want                       string
+	}{
+		{"", def, publishedRef, false, publishedRef},
+		{def, def, publishedRef, false, ""}, // set explicitly: never pulled
+		{"", def, "", false, ""},            // a source build
+		{"", def, publishedRef, true, ""},   // -rebuild builds here
+		{"", "culiops/culibox:other", publishedRef, false, ""},
+	}
+	for _, c := range cases {
+		if got := pullFrom(c.cfgImage, c.image, c.published, c.rebuild); got != c.want {
+			t.Errorf("pullFrom(%q, %q, %q, %v) = %q, want %q", c.cfgImage, c.image, c.published, c.rebuild, got, c.want)
+		}
+	}
+}
+
+// setupDefault runs box setup's image step for the unset default with the
+// published ref as its source.
+func setupDefault(t *testing.T, d boximage.Docker, rebuild bool) (int, []string, string) {
+	t.Helper()
+	var w bytes.Buffer
+	rc, refs := boxSetupImageRefs(context.Background(), d, config.DefaultBoxImage, pullFrom("", config.DefaultBoxImage, publishedRef, rebuild), rebuild, setupNow, "linux", &w)
+	return rc, refs, w.String()
+}
+
+func tagLines(log string) []string {
+	var out []string
+	for _, l := range strings.Split(log, "\n") {
+		if strings.HasPrefix(l, "tag ") {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func TestBoxSetupDefaultPullsPublished(t *testing.T) {
+	d, log := setupDocker(t, nil, map[string]string{publishedRef: current()})
+	rc, refs, out := setupDefault(t, d, false)
+	if rc != 0 {
+		t.Fatalf("rc %d: %s", rc, out)
+	}
+	if p := pullLines(argvLog(t, log)); len(p) != 1 || p[0] != "pull --platform linux/arm64 "+publishedRef {
+		t.Fatalf("pull lines: %v", p)
+	}
+	if tg := tagLines(argvLog(t, log)); len(tg) != 1 || tg[0] != "tag "+publishedRef+" "+config.DefaultBoxImage {
+		t.Fatalf("tag lines: %v", tg)
+	}
+	if b := buildLines(argvLog(t, log)); len(b) != 0 {
+		t.Fatalf("built after a good pull: %v", b)
+	}
+	for _, want := range []string{"PASS image: pulled " + publishedRef + " (linux/arm64)",
+		"PASS image: " + config.DefaultBoxImage + " now points at " + publishedRef,
+		`pin this instance: set "box_image": "` + publishedRef + `" in its config`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if len(refs) != 2 || refs[0] != config.DefaultBoxImage || refs[1] != publishedRef {
+		t.Fatalf("refs = %v, want the default name and the pulled ref", refs)
+	}
+}
+
+func TestBoxSetupDefaultCurrentDoesNotPull(t *testing.T) {
+	d, log := setupDocker(t, map[string]string{config.DefaultBoxImage: current()}, map[string]string{publishedRef: current()})
+	rc, _, out := setupDefault(t, d, false)
+	if rc != 0 || !strings.Contains(out, "is current") {
+		t.Fatalf("rc %d: %s", rc, out)
+	}
+	if len(pullLines(argvLog(t, log)))+len(buildLines(argvLog(t, log)))+len(tagLines(argvLog(t, log))) != 0 {
+		t.Fatalf("a current default was replaced: %s", argvLog(t, log))
+	}
+}
+
+func TestBoxSetupDefaultStalePulls(t *testing.T) {
+	d, log := setupDocker(t, map[string]string{config.DefaultBoxImage: "arm64|000000000000"}, map[string]string{publishedRef: current()})
+	rc, _, out := setupDefault(t, d, false)
+	if rc != 0 || len(pullLines(argvLog(t, log))) != 1 || len(tagLines(argvLog(t, log))) != 1 || len(buildLines(argvLog(t, log))) != 0 {
+		t.Fatalf("rc %d, argv:\n%s\nout:\n%s", rc, argvLog(t, log), out)
+	}
+}
+
+func TestBoxSetupDefaultWrongArchPulls(t *testing.T) {
+	d, log := setupDocker(t, map[string]string{config.DefaultBoxImage: "amd64|" + boximage.Hash()}, map[string]string{publishedRef: current()})
+	rc, _, out := setupDefault(t, d, false)
+	if rc != 0 || len(pullLines(argvLog(t, log))) != 1 || len(buildLines(argvLog(t, log))) != 0 {
+		t.Fatalf("rc %d, argv:\n%s\nout:\n%s", rc, argvLog(t, log), out)
+	}
+}
+
+// The default name was removed but the pulled image is still in the store: the
+// pull is cheap, and the name is given back.
+func TestBoxSetupDefaultDigestPresentTags(t *testing.T) {
+	d, log := setupDocker(t, map[string]string{publishedRef: current()})
+	rc, _, out := setupDefault(t, d, false)
+	if rc != 0 || len(tagLines(argvLog(t, log))) != 1 || len(buildLines(argvLog(t, log))) != 0 ||
+		len(pullLines(argvLog(t, log))) != 0 || !strings.Contains(out, "is already here") {
+		t.Fatalf("rc %d, argv:\n%s\nout:\n%s", rc, argvLog(t, log), out)
+	}
+}
+
+func TestBoxSetupDefaultPullFailsBuilds(t *testing.T) {
+	d, log := setupDocker(t, nil)
+	rc, refs, out := setupDefault(t, d, false)
+	if rc != 0 {
+		t.Fatalf("rc %d: %s", rc, out)
+	}
+	for _, want := range []string{"WARN image: could not use the published image " + publishedRef, "denied", "building it here instead"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	b := buildLines(argvLog(t, log))
+	if len(b) != 1 || !strings.Contains(b[0], "-t "+defaultDated+" -t "+config.DefaultBoxImage+" -") {
+		t.Fatalf("build argv: %v", b)
+	}
+	if len(tagLines(argvLog(t, log))) != 0 {
+		t.Fatalf("tagged after a failed pull: %s", argvLog(t, log))
+	}
+	if len(refs) != 2 || refs[0] != defaultDated {
+		t.Fatalf("refs = %v, want the build's tags", refs)
+	}
+}
+
+func TestBoxSetupDefaultForeignLabelBuilds(t *testing.T) {
+	d, log := setupDocker(t, nil, map[string]string{publishedRef: "arm64|ffffffffffff"})
+	rc, _, out := setupDefault(t, d, false)
+	if rc != 0 || !strings.Contains(out, "could not use the published image") || !strings.Contains(out, "Dockerfile") {
+		t.Fatalf("rc %d: %s", rc, out)
+	}
+	if len(tagLines(argvLog(t, log))) != 0 || len(buildLines(argvLog(t, log))) != 1 {
+		t.Fatalf("argv:\n%s", argvLog(t, log))
+	}
+}
+
+func TestBoxSetupDefaultPulledWrongArchBuilds(t *testing.T) {
+	d, log := setupDocker(t, nil, map[string]string{publishedRef: "amd64|" + boximage.Hash()})
+	rc, _, out := setupDefault(t, d, false)
+	if rc != 0 || !strings.Contains(out, "could not use the published image") {
+		t.Fatalf("rc %d: %s", rc, out)
+	}
+	if len(tagLines(argvLog(t, log))) != 0 || len(buildLines(argvLog(t, log))) != 1 {
+		t.Fatalf("argv:\n%s", argvLog(t, log))
+	}
+}
+
+func TestBoxSetupDefaultRebuildNeverPulls(t *testing.T) {
+	d, log := setupDocker(t, map[string]string{config.DefaultBoxImage: current()}, map[string]string{publishedRef: current()})
+	rc, _, out := setupDefault(t, d, true)
+	if rc != 0 || len(pullLines(argvLog(t, log))) != 0 || len(buildLines(argvLog(t, log))) != 1 {
+		t.Fatalf("rc %d, argv:\n%s\nout:\n%s", rc, argvLog(t, log), out)
+	}
+}
+
+func TestBoxSetupDefaultTagFailureFails(t *testing.T) {
+	d, log := setupDocker(t, nil, map[string]string{publishedRef: current()})
+	wrap := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\nif [ \"$1\" = tag ]; then printf '%s\\n' \"$*\" >> " + log + "; echo 'Error: no space left' >&2; exit 1; fi\nexec " + d.Bin + " \"$@\"\n"
+	if err := os.WriteFile(wrap, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d.Bin = wrap
+	rc, refs, out := setupDefault(t, d, false)
+	if rc != 1 || refs != nil || !strings.Contains(out, "FAIL image") || !strings.Contains(out, "no space left") {
+		t.Fatalf("rc %d refs %v: %s", rc, refs, out)
+	}
+	if len(buildLines(argvLog(t, log))) != 0 {
+		t.Fatalf("built after a failed tag: %s", argvLog(t, log))
+	}
+}
+
+// boxSetupAndPrune takes the source from the binary: only an unset box_image
+// pulls; the same name set explicitly builds.
+func TestBoxSetupAndPruneDefaultUsesPublished(t *testing.T) {
+	old := publishedBoxImage
+	t.Cleanup(func() { publishedBoxImage = old })
+	publishedBoxImage = func() string { return publishedRef }
+	for _, c := range []struct {
+		cfgImage string
+		pulls    int
+	}{{"", 1}, {config.DefaultBoxImage, 0}} {
+		d, log := setupDocker(t, nil, map[string]string{publishedRef: current()})
+		var w bytes.Buffer
+		src := pinSource{cfg: config.Config{BoxImage: c.cfgImage}}
+		if rc := boxSetupAndPrune(context.Background(), d, config.DefaultBoxImage, cliArgs{NoPrune: true}, src, setupNow, "linux", &w); rc != 0 {
+			t.Fatalf("box_image %q: rc %d: %s", c.cfgImage, rc, w.String())
+		}
+		if got := len(pullLines(argvLog(t, log))); got != c.pulls {
+			t.Errorf("box_image %q: %d pulls, want %d:\n%s", c.cfgImage, got, c.pulls, argvLog(t, log))
+		}
+		if c.pulls == 0 && len(buildLines(argvLog(t, log))) != 1 {
+			t.Errorf("box_image %q: want a build:\n%s", c.cfgImage, argvLog(t, log))
+		}
+	}
+}

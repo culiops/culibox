@@ -194,7 +194,8 @@ func boxSetupAndPrune(ctx context.Context, d boximage.Docker, image string, a cl
 	if !a.NoPrune {
 		orphan = d.OrphanOf(ctx, image)
 	}
-	rc, made := boxSetupImageRefs(ctx, d, image, a.Rebuild, now, goos, w)
+	from := pullFrom(src.cfg.BoxImage, image, publishedBoxImage(), a.Rebuild)
+	rc, made := boxSetupImageRefs(ctx, d, image, from, a.Rebuild, now, goos, w)
 	if rc != 0 || a.NoPrune {
 		return rc
 	}

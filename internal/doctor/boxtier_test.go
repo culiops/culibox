@@ -76,7 +76,7 @@ func TestBoxTierRows(t *testing.T) {
 		{"no image", func(f *boxFacts) { f.Image = boximage.ImageState{} }, Fail, "box setup"},
 		{"image inspect failed", func(f *boxFacts) { f.ImageErr = errors.New("docker image inspect: boom") }, Fail, "boom"},
 		{"wrong arch", func(f *boxFacts) { f.Image.Arch = "amd64" }, Fail, "amd64"},
-		{"stale image", func(f *boxFacts) { f.Image.Hash = "old" }, Warn, "-rebuild"},
+		{"stale image", func(f *boxFacts) { f.Image.Hash = "old" }, Warn, "run `culibox box setup`"},
 		{"legacy default present", func(f *boxFacts) {
 			f.ImageName = config.DefaultBoxImage
 			f.Image = boximage.ImageState{}
@@ -88,7 +88,7 @@ func TestBoxTierRows(t *testing.T) {
 			f.Image = boximage.ImageState{}
 			f.LegacyName = config.LegacyDefaultBoxImage
 			f.Legacy = boximage.ImageState{Present: true, Arch: "arm64", Hash: "old"}
-		}, Warn, "-rebuild"},
+		}, Warn, "run `culibox box setup`"},
 		{"legacy default wrong arch", func(f *boxFacts) {
 			f.ImageName = config.DefaultBoxImage
 			f.Image = boximage.ImageState{}
