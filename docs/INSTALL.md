@@ -26,7 +26,8 @@ Every release from `v0.36.0` attaches `setup.sh`, and its `SHA256SUMS` lists it.
 curl -fsSLO https://github.com/culiops/culibox/releases/latest/download/SHA256SUMS
 grep ' setup.sh$' SHA256SUMS | sha256sum -c -
 ```
- Without `--version`, the installer installs the newest published release, whichever release its own copy came from.
+
+Without `--version`, the installer installs the newest published release, whichever release its own copy came from.
 
 `setup.sh` is a short POSIX `sh` script. It installs a checksum-verified `culibox` into `~/.local/bin` (it never uses `sudo` and installs only under that folder; it downloads and builds in a temporary folder that it removes, and with `--from-source` on macOS it may run `brew install go` after an explicit `y`), then runs `culibox init`. When the release tarball holds `abduco` (from `v0.36.0`), it installs that next to `culibox`, where CuliBox looks first; for an older release it leaves abduco to you. With `--from-source` it builds the pinned abduco when none is installed and `cc` and `make` are present, and otherwise says how to install it. `init` is a guided setup that checks the programs CuliBox needs (offering `brew install` on macOS, one package at a time, and only printing commands on Linux), your workspace folder, the macOS box VM size, a Claude token, the config file, `box setup` and `culibox doctor`. Each of its 8 steps prints one result line, and you can run it again at any time to continue. Every step of both, so you can do it by hand, is in [docs/MACOS.md](MACOS.md#install). Options: `--version vX.Y.Z`, `--from-source` (build that release instead of downloading a binary) and `--prefix DIR`.
 
@@ -67,7 +68,7 @@ grep "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" SHA256SUMS | shasum -a 256 -c -
 
 The check must print `OK` for your tarball. `version` prints `culibox v<version> (<commit>)`.
 
-**macOS binaries are unsigned.** A file downloaded with `curl` is not quarantined and runs as it is. A file downloaded in a browser is quarantined, and the flag can carry over to the files you extract from it. Remove it from both programs before the first run, since culibox runs `abduco` too (`xattr` names any file that does not carry the flag):
+**macOS binaries are unsigned.** A file downloaded with `curl` is not quarantined and runs as it is. A file downloaded in a browser is quarantined, and the flag can carry over to the files you extract from it. Remove it from both programs before the first run, since culibox runs `abduco` too (for a file without the flag, `xattr` prints a `No such xattr` error and still clears the other):
 
 ```sh
 xattr -d com.apple.quarantine culibox abduco
