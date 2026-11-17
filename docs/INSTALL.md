@@ -6,21 +6,23 @@ The short version is the [Quick start in the README](../README.md#quick-start). 
 
 - Go 1.26.11 or newer (see `go.mod`) to build.
 - Linux or macOS. macOS needs 13+ on Apple Silicon (Intel is untested) for the boxed tier.
-- [abduco](https://www.brain-dump.org/projects/abduco/), in the same folder as the `culibox` binary or on `PATH` (CuliBox looks in that order; see `abduco_bin` in [docs/CONFIG.md](CONFIG.md)). It is required; the daemon will not start without it.
+- [abduco](https://www.brain-dump.org/projects/abduco/). It is required; the daemon will not start without it. Release tarballs from `v0.36.0` include it, and `setup.sh` installs it next to `culibox`. CuliBox uses the `abduco` in the same folder as the `culibox` binary first, then one on `PATH` (see `abduco_bin` in [docs/CONFIG.md](CONFIG.md)). Building from source, you install it yourself: see [From source (manual)](#from-source-manual).
 - For the boxed tier: Docker on Linux, or `colima` and `docker` on macOS. On Linux the docker daemon must run on the same machine and see host files as they are (a local Docker Engine). A VM-backed or remote daemon (for example Docker Desktop for Linux or a remote docker context) is not supported for boxed sessions: CuliBox refuses to start a box there, because it cannot confirm the box got the folder that was checked.
 - The agent CLI you want to run. Claude Code (`claude`) is the supported agent. Other terminal programs can be configured as agents (a shell, for example), but status, usage and reply features are Claude Code only.
 - Node.js, only to run the browser-side tests in development.
 
 ## Install with setup.sh
 
-Download the installer, read it, run it (use the release tag you want in place of `<tag>`):
+Download the installer from the newest release, read it, run it:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/culiops/culibox/<tag>/scripts/setup.sh
+curl -fsSLO https://github.com/culiops/culibox/releases/latest/download/setup.sh
 sh setup.sh
 ```
 
-`setup.sh` is a short POSIX `sh` script. It installs a checksum-verified `culibox` into `~/.local/bin` (it never uses `sudo` and installs only under that folder; it downloads and builds in a temporary folder that it removes, and with `--from-source` on macOS it may run `brew install go` after an explicit `y`), then runs `culibox init`. When the release tarball holds `abduco`, it installs that next to `culibox`; with `--from-source` it builds the pinned abduco when none is installed and `cc` and `make` are present, and otherwise says how to install it. `init` is a guided setup that checks the programs CuliBox needs (offering `brew install` on macOS, one package at a time, and only printing commands on Linux), your workspace folder, the macOS box VM size, a Claude token, the config file, `box setup` and `culibox doctor`. Each of its 8 steps prints one result line, and you can run it again at any time to continue. Every step of both, so you can do it by hand, is in [docs/MACOS.md](MACOS.md#install). Options: `--version vX.Y.Z`, `--from-source` (build that release instead of downloading a binary) and `--prefix DIR`.
+Every release from `v0.36.0` attaches `setup.sh`, and its `SHA256SUMS` lists it. To check the file you downloaded against it, fetch `SHA256SUMS` from the same release and run `grep ' setup.sh$' SHA256SUMS | sha256sum -c -` (on macOS, `shasum -a 256 -c -`). Without `--version`, the installer installs the newest published release, whichever release its own copy came from.
+
+`setup.sh` is a short POSIX `sh` script. It installs a checksum-verified `culibox` into `~/.local/bin` (it never uses `sudo` and installs only under that folder; it downloads and builds in a temporary folder that it removes, and with `--from-source` on macOS it may run `brew install go` after an explicit `y`), then runs `culibox init`. When the release tarball holds `abduco` (from `v0.36.0`), it installs that next to `culibox`, where CuliBox looks first; for an older release it leaves abduco to you. With `--from-source` it builds the pinned abduco when none is installed and `cc` and `make` are present, and otherwise says how to install it. `init` is a guided setup that checks the programs CuliBox needs (offering `brew install` on macOS, one package at a time, and only printing commands on Linux), your workspace folder, the macOS box VM size, a Claude token, the config file, `box setup` and `culibox doctor`. Each of its 8 steps prints one result line, and you can run it again at any time to continue. Every step of both, so you can do it by hand, is in [docs/MACOS.md](MACOS.md#install). Options: `--version vX.Y.Z`, `--from-source` (build that release instead of downloading a binary) and `--prefix DIR`.
 
 `setup.sh` refuses a release older than `v0.35.0`, the first one that includes `culibox init`. To build from source instead, follow [From source (manual)](#from-source-manual).
 
@@ -34,12 +36,12 @@ CuliBox listens on `127.0.0.1:8899` and prints a login URL with a login token. O
 
 ## Install from a release tarball
 
-Each release on the [Releases page](https://github.com/culiops/culibox/releases) has a tarball for Linux and for macOS, each for amd64 and arm64, and a `SHA256SUMS` file. A tarball holds `culibox`, `LICENSE` and `README.md`. It does not include abduco or Docker; see [Requirements](#requirements). To build from source instead, use [From source (manual)](#from-source-manual). The [setup.sh installer](#install-with-setupsh) does the download and the check below for you.
+Each release on the [Releases page](https://github.com/culiops/culibox/releases) has a tarball for Linux and for macOS, each for amd64 and arm64, and a `SHA256SUMS` file. A tarball holds `culibox`, `abduco`, `LICENSE`, `LICENSE.abduco` (abduco's licence) and `README.md`; tarballs before `v0.36.0` hold no `abduco`. It does not include Docker; see [Requirements](#requirements). Keep `abduco` in the same folder as `culibox`: CuliBox uses it from there when neither the file nor its folder can be changed by another account (see `abduco_bin` in [docs/CONFIG.md](CONFIG.md)). To build from source instead, use [From source (manual)](#from-source-manual). The [setup.sh installer](#install-with-setupsh) does the download and the check below for you.
 
-On Linux (use `arm64` on an ARM machine, and the release you want in place of `0.35.0`):
+On Linux (use `arm64` on an ARM machine, and the release you want in place of `0.36.0`):
 
 ```sh
-VERSION=0.35.0
+VERSION=0.36.0
 OS=linux
 ARCH=amd64
 base=https://github.com/culiops/culibox/releases/download/v$VERSION
@@ -87,6 +89,14 @@ mkdir -p ~/.local/bin
 go build -ldflags "-X main.version=$(scripts/version.sh)" -o ~/.local/bin/culibox ./cmd/culibox
 culibox doctor
 ```
+
+Then install abduco, which the daemon needs to start. Your package manager's `abduco` works where there is one (`brew install abduco` on macOS). Or build the version CuliBox pins, from its checksum-verified source, next to `culibox` (it needs `cc` and `make`):
+
+```sh
+scripts/ci/install-abduco.sh ~/.local
+```
+
+That leaves `~/.local/bin/abduco`, in the folder CuliBox looks in first.
 
 Add `~/.local/bin` to your `PATH` if it is not there. Releases are `vX.Y.Z` git tags. `scripts/version.sh` prints the checkout's version (`v0.1.0`, or `v0.1.0-3-g<sha>` for 3 commits past the tag). The header shows it, and the About tab and `culibox bug-report` name it. A build without the flag works but shows no version.
 

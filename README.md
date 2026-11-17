@@ -57,16 +57,16 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 
 ## Quick start
 
-You need Linux or macOS, [abduco](https://www.brain-dump.org/projects/abduco/), and Claude Code. Boxed sessions also need Docker on Linux, or `colima` and `docker` on macOS 13+ on Apple Silicon (Intel is untested). `culibox init` checks these programs and the macOS version, and says how to install what is missing. The full list is in [Requirements](docs/INSTALL.md#requirements).
+You need Linux or macOS and Claude Code. Boxed sessions also need Docker on Linux, or `colima` and `docker` on macOS 13+ on Apple Silicon (Intel is untested). `culibox init` checks these programs and the macOS version, and says how to install what is missing. Sessions run under [abduco](https://www.brain-dump.org/projects/abduco/), which each release ships next to `culibox`. The full list is in [Requirements](docs/INSTALL.md#requirements).
 
-Download the installer, read it, and run it (use the release tag you want in place of `<tag>`):
+Download the installer from the newest release, read it, and run it:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/culiops/culibox/<tag>/scripts/setup.sh
+curl -fsSLO https://github.com/culiops/culibox/releases/latest/download/setup.sh
 sh setup.sh
 ```
 
-It installs a checksum-verified `culibox` into `~/.local/bin` without `sudo`, then runs `culibox init`, a guided setup you can run again at any time. Then start CuliBox:
+It installs the newest release's checksum-verified `culibox`, and the `abduco` that comes with it, into `~/.local/bin` without `sudo`, then runs `culibox init`, a guided setup you can run again at any time. `sh setup.sh --version vX.Y.Z` installs another release. Then start CuliBox:
 
 ```sh
 culibox serve

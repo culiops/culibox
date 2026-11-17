@@ -6,13 +6,15 @@ boxed tier, which runs them in a container inside CuliBox's own colima VM; see
 
 ## Install
 
-Download the installer, read it, run it (use the release tag you want in place of `<tag>`):
+Download the installer from the newest release, read it, run it:
 
-    curl -fsSLO https://raw.githubusercontent.com/culiops/culibox/<tag>/scripts/setup.sh
+    curl -fsSLO https://github.com/culiops/culibox/releases/latest/download/setup.sh
     sh setup.sh
 
-It installs a checksum-verified `culibox` into `~/.local/bin` and then runs
-`culibox init`, which sets up everything else. It is a short POSIX `sh` script
+It installs a checksum-verified `culibox` into `~/.local/bin`, with the `abduco`
+the release ships next to it (from `v0.36.0`; CuliBox uses that one first, so no
+`brew install abduco` is needed), and then runs `culibox init`, which sets up
+everything else. It is a short POSIX `sh` script
 that never uses `sudo` and installs only under the install folder; it downloads
 and builds in a temporary folder that it removes, and with `--from-source` it may
 run `brew install go` after an explicit `y`. Read it before you run it. Options: `--version vX.Y.Z` (default: the newest published
