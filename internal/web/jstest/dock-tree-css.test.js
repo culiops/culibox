@@ -100,6 +100,22 @@ test("changed names are tinted (M accent, U and A ok, conflicts red, a folder wi
   assert.match(rulesFor(css, "#drawer .ft-node.dir"), /color:\s*var\(--fg\)/, "folders are not accent-coloured, or a tint would say nothing");
 });
 
+test("a row is the containing block of its hidden spans, so they can never widen the page's scrollable overflow", () => {
+  // The visually-hidden dot and session span are position:absolute. With no positioned ancestor inside the tree their
+  // containing block is #drawer (position:relative), which sits OUTSIDE the #filetree scroller: a span on a row below the
+  // visible part of the tree then counts toward the document's scroll height, and wheeling past the end of the tree scrolls the
+  // whole app away (measured: html.scrollHeight 720 -> 2136 with the last of 91 rows marked). Positioning the row keeps the
+  // span inside the scroller's own overflow. It must stay a bare `position: relative`: no offsets, no z-index (no stacking context).
+  const row = rulesFor(css, "#drawer .ft-node");
+  assert.match(row, /(^|[\s;])position:\s*relative/);
+  assert.ok(!/(^|[\s;])(top|left|right|bottom|z-index|transform):/.test(row), "no offset or stacking context on the row");
+  for (const sel of ["#drawer .ft-git-dot", "#drawer .ft-chg"]) assert.match(rulesFor(css, sel), /position:\s*absolute/, sel + " is the absolute one this protects");
+  // ... and nothing between the span and the scroller is positioned instead (the scroller itself is a plain overflow box).
+  assert.ok(!/position:/.test(rulesFor(css, "#drawer #filetree")));
+  assert.match(rulesFor(app, "#filetree"), /overflow:\s*auto/);
+  assert.ok(!/position:/.test(rulesFor(app, "#filetree")));
+});
+
 test("the folder dot and the session span are visually hidden, not display:none, so their role and label stay in the accessibility tree", () => {
   for (const sel of ["#drawer .ft-git-dot", "#drawer .ft-chg"]) {
     const b = rulesFor(css, sel);

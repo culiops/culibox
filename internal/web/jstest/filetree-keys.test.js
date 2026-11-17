@@ -673,7 +673,8 @@ test("outside the dock a mouse right-click keeps the browser's menu: only the ro
 // The dock is showing the tree: filetree.js asks drawerOwnsFileClicks (filesdrawer.js) and shows a file through drawerShowFile.
 // Each opened file is recorded, "(kept)" for the double-click's pinned tab.
 function docked(w) {
-  w.run("var dockShown = []; function drawerOwnsFileClicks() { return true; } function drawerShowFile(p, o) { dockShown.push(p + (o && o.preview === false ? ' (kept)' : '')); }");
+  // dockOn: the dock can stop showing Files (closed, another kind, the viewport crossing to the phone) while the page lives.
+  w.run("var dockOn = true; var dockShown = []; function drawerOwnsFileClicks() { return dockOn; } function drawerShowFile(p, o) { dockShown.push(p + (o && o.preview === false ? ' (kept)' : '')); }");
   return () => Array.from(w.run("dockShown"));
 }
 const selected = (c) => rowsOf(c).filter(hasCls("ft-sel")).map(nameOf);
@@ -852,6 +853,37 @@ test("the session mark carries its words: role img, aria-label, title on the spa
   p.run("ftPaintChanged(new Set(['/h/w/a.txt']))");
   assert.strictEqual(byCls(prow, "ft-name")[0].title, "~/w/a.txt");
   assert.strictEqual(prow.title, "");
+});
+
+// The dock leaving Files (closed, another kind, or the viewport crossing to the phone) clears the marks while the tree is no
+// longer docked: the hover texts that listed them must go with them, or a row keeps "Edited by this session's agent" with
+// nothing behind it.
+test("when the dock leaves Files the marks are cleared and so are their words: the name's title is the path again and the row has none", async () => {
+  const w = world(1280);
+  docked(w);
+  w.run(read("gitstatus.js"), "gitstatus.js");
+  const c = await w.render();
+  const file = rowNamed(c, "a.txt");
+  const dir = rowNamed(c, "dir1");
+  const fname = byCls(file, "ft-name")[0];
+  const dname = byCls(dir, "ft-name")[0];
+  w.run("ftPaintChanged(new Set(['/h/w/a.txt', '/h/w/dir1']))");
+  w.run("gitState = { root: '/h/w', sid: null, status: { state: 'ok' }, marks: new Map([['/h/w/dir1', { code: 'M', dir: true, title: '2 changes inside' }]]) }; gitMarkRow(ftRowFor('/h/w/dir1'), '/h/w/dir1');");
+  assert.strictEqual(fname.title, "~/w/a.txt\nEdited by this session's agent");
+  assert.strictEqual(dname.title, "~/w/dir1\n2 changes inside\nEdited by this session's agent");
+  // filesdrawer.js drawerPaintChanged: the drawer is no longer Files, so the changed set is null; the same goes for a git
+  // repaint that finds no marks after the tree stopped being the dock's.
+  w.run("dockOn = false");
+  w.run("ftPaintChanged(null)");
+  assert.strictEqual(byCls(file, "ft-chg").length, 0);
+  assert.strictEqual(fname.title, "~/w/a.txt", "the path alone: no mark is left to explain");
+  assert.strictEqual(file.title, "");
+  assert.strictEqual(dname.title, "~/w/dir1", "not docked: the path alone (a visible dot, the phone's, carries its own title)");
+  assert.strictEqual(dir.title, "");
+  w.run("gitState = { root: '/h/w', sid: null, status: { state: 'ok' }, marks: new Map() }; gitMarkRow(ftRowFor('/h/w/dir1'), '/h/w/dir1');");
+  assert.strictEqual(byCls(dir, "ft-git-dot").length, 0);
+  assert.strictEqual(dname.title, "~/w/dir1");
+  assert.strictEqual(dir.title, "");
 });
 
 test("a folder's git dot keeps its words in the name's hover text, with the session's after them (gitstatus.js on the same tree)", async () => {

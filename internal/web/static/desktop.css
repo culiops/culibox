@@ -1360,8 +1360,10 @@
      line 22/12 of it, so the default is exactly 13px text in 22px rows (the spec's look) and a larger setting makes the rows
      grow with the text (min-height is the 22px floor for a smaller one). */
   #drawer #filetree { font-family: var(--font-ui); font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
+  /* position: relative makes the row the containing block of its visually-hidden spans (below): without it that is #drawer,
+     outside the #filetree scroller, and a span on a row past the tree's visible part widens the whole page's scroll height. */
   #drawer .ft-node {
-    box-sizing: border-box; min-height: 22px; gap: 4px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px);
+    position: relative; box-sizing: border-box; min-height: 22px; gap: 4px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px);
     background-image: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 14px);
     background-repeat: no-repeat; background-position: 15px 0; background-size: calc(var(--lvl, 0) * 14px) 100%;
   }

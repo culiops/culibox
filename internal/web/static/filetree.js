@@ -261,12 +261,18 @@ function ftMarkRow(row, path, set) {
 // ftNameTitle sets the hover text of a row: on its name, the path and then what marks the row (a folder's "N changes inside"
 // from git, the session's edit), and on the row itself the marks alone, for the parts of the row that are not the name. The
 // dock draws those marks as a tint and a bar, not as the dot the title used to hang from, so the words live here. gitstatus.js
-// calls it when it paints or clears a folder's dot. The phone keeps the titles it has: its dot is drawn and carries its own.
+// calls it when it paints or clears a folder's dot. Once the tree is not the dock's (the dock closed or changed kind, or the
+// viewport crossed to the phone, which clears the marks) the notes are gone with the marks: the name is the path alone and the
+// row has no title, which is also what the phone has (its dot is drawn and carries its own title).
 function ftNameTitle(row) {
-  if (!ftDocked()) return;
   const path = ftRowPaths.get(row);
   const name = row.querySelector(":scope > .ft-name");
   if (!path || !name) return;
+  if (!ftDocked()) {
+    name.title = shortPath(path);
+    if (row.title) row.title = "";
+    return;
+  }
   const notes = [".ft-git-dot", ".ft-chg"].map((sel) => row.querySelector(":scope > " + sel)).filter(Boolean).map((el) => el.title).filter(Boolean);
   name.title = [shortPath(path), ...notes].join("\n");
   row.title = notes.join("\n");
