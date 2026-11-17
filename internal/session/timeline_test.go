@@ -165,6 +165,50 @@ func TestTimelineEditCounts(t *testing.T) {
 	}
 }
 
+// FileChange.TS is when the tool_result of the latest applied edit arrived
+// (not when the tool_use was sent), and a failed edit does not move it.
+func TestTimelineFilesCarryLastEditTime(t *testing.T) {
+	m, home := newLocatorManager(t)
+	// at is the offset from the fixture clock of 2026-11-17 10:mm:00Z.
+	at := func(min int) int64 {
+		return time.Date(2026, 11, 17, 10, min, 0, 0, time.UTC).UnixMilli() - tlBase.UnixMilli()
+	}
+	want := func(min int) int64 { return time.Date(2026, 11, 17, 10, min, 0, 0, time.UTC).UnixMilli() }
+	// Each use is stamped a second before its result, so a TS taken from the
+	// use would be off by that second.
+	p := tlWrite(t, home, "aaaa-1",
+		tlUse(t, at(0)-1000, "e1", "Edit", map[string]any{"file_path": "/w/a.go", "old_string": "a", "new_string": "b"})+
+			tlResult(t, at(0), "e1", false, "ok")+
+			tlUse(t, at(2)-1000, "w1", "Write", map[string]any{"file_path": "/w/b.go", "content": "x\n"})+
+			tlResult(t, at(2), "w1", false, "ok")+
+			tlUse(t, at(5)-1000, "e2", "Edit", map[string]any{"file_path": "/w/a.go", "old_string": "b", "new_string": "c"})+
+			tlResult(t, at(5), "e2", false, "ok"))
+	tl := tlGet(t, m, "s1")
+	if len(tl.Files) != 2 || tl.Files[0].Path != "/w/a.go" || tl.Files[1].Path != "/w/b.go" {
+		t.Fatalf("Files = %+v", tl.Files)
+	}
+	if got := tl.Files[0].TS; got != want(5) {
+		t.Errorf("a.go TS = %d, want the 10:05 result %d", got, want(5))
+	}
+	if got := tl.Files[1].TS; got != want(2) {
+		t.Errorf("b.go TS = %d, want the 10:02 result %d", got, want(2))
+	}
+	// A failed edit of a file leaves its TS alone, and so does a result that
+	// is stamped earlier than one already seen.
+	tlAppend(t, p,
+		tlUse(t, at(9)-1000, "e3", "Edit", map[string]any{"file_path": "/w/a.go", "old_string": "z", "new_string": "y"})+
+			tlResult(t, at(9), "e3", true, "String to replace not found")+
+			tlUse(t, at(3)-1000, "e4", "Edit", map[string]any{"file_path": "/w/a.go", "old_string": "c", "new_string": "d"})+
+			tlResult(t, at(3), "e4", false, "ok"))
+	tl = tlGet(t, m, "s1")
+	if len(tl.Files) != 2 || tl.Files[0].Path != "/w/a.go" {
+		t.Fatalf("Files = %+v", tl.Files)
+	}
+	if got := tl.Files[0].TS; got != want(5) {
+		t.Errorf("a.go TS = %d after a failed and an out-of-order edit, want %d", got, want(5))
+	}
+}
+
 // A file counts as changed only once its edit has an ok result: an edit still
 // waiting on a permission prompt, a denied one and a failed one changed
 // nothing, so none of them is listed (and none moves summary.files_changed).
