@@ -130,3 +130,103 @@ func TestWriteHoldCoversCredentialsFromBeforeARestart(t *testing.T) {
 		t.Fatalf("every credential from before the restart has expired: %q", why)
 	}
 }
+
+// #333: removing a session (Kill, Restart: both Forget it) does not end the
+// folder hold while write credentials it was given are still valid. A dropped
+// window keeps its leftover, and a window still open at removal is ended like a
+// drop: the credentials it issued outlive the session.
+func TestForgetKeepsTheHoldOfIssuedWriteCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		drop, restart bool // dropped before the removal; removed by Restart (a replacement runs)
+	}{
+		{"kill after a drop", true, false},
+		{"kill with the window open", false, false},
+		{"restart after a drop", true, true},
+		{"restart with the window open", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sessions := map[string]SessionView{"aws-1": liveElev()}
+			b, _, _, now := setup(t, sessions)
+			ts := withTimers(b)
+			if _, err := b.Elevate("aws-1", cookie(60)); err != nil {
+				t.Fatal(err)
+			}
+			b.mu.Lock()
+			b.noteElevatedExp("aws-1", now.Add(10*time.Minute))
+			b.mu.Unlock()
+			if tc.drop {
+				b.Drop("aws-1", CredCookie)
+			}
+			if tc.restart {
+				// Restart spawns the replacement first, then removes the old one.
+				sessions["aws-2"] = liveElev()
+			}
+			delete(sessions, "aws-1")
+			b.Forget("aws-1")
+			if !(*ts)[0].stopped {
+				t.Fatal("Forget leaked the window's timer")
+			}
+			last := now.Add(11 * time.Minute).Local().Format("15:04")
+			if why := b.WriteHold("aws-1", time.Time{}); !strings.Contains(why, "stay valid until "+last) {
+				t.Fatalf("after the session was removed: %q", why)
+			}
+			*now = now.Add(11*time.Minute - time.Second)
+			if why := b.WriteHold("aws-1", time.Time{}); why == "" {
+				t.Fatal("inside the clock-skew minute the folder is still held")
+			}
+			*now = now.Add(time.Second)
+			if why := b.WriteHold("aws-1", time.Time{}); why != "" {
+				t.Fatalf("the credentials have expired, margin included: %q", why)
+			}
+		})
+	}
+}
+
+// A window with no write credentials issued leaves nothing to hold when its
+// session is removed.
+func TestForgetOfAWindowThatIssuedNothingHoldsNothing(t *testing.T) {
+	b, _, _, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	if _, err := b.Elevate("aws-1", cookie(60)); err != nil {
+		t.Fatal(err)
+	}
+	b.Forget("aws-1")
+	if why := b.WriteHold("aws-1", time.Time{}); why != "" {
+		t.Fatalf("nothing was issued: %q", why)
+	}
+	b.mu.Lock()
+	n := len(b.dropped)
+	b.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("Forget kept %d leftovers for a window that issued nothing", n)
+	}
+}
+
+// The leftover a removed session keeps is pruned once it has expired, margin
+// included, even though nobody asks about that session again.
+func TestRetainedLeftoverIsPruned(t *testing.T) {
+	b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev(), "aws-2": liveElev()})
+	withTimers(b)
+	if _, err := b.Elevate("aws-1", cookie(60)); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	b.noteElevatedExp("aws-1", now.Add(10*time.Minute))
+	b.mu.Unlock()
+	b.Forget("aws-1")
+	b.mu.Lock()
+	n := len(b.dropped)
+	b.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("want the leftover kept, got %d", n)
+	}
+	*now = now.Add(11 * time.Minute)
+	b.Forget("aws-2") // any later removal sweeps what has expired
+	b.mu.Lock()
+	n = len(b.dropped)
+	b.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("an expired leftover of a removed session was kept: %d", n)
+	}
+}

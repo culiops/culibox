@@ -341,7 +341,8 @@ func (b *Broker) endGranting(sid string) {
 // box layer refuses other boxes in the session's folder while it is not ""
 // (#325): a grant in progress, a window (also one whose approval row is still
 // being written), or write credentials from a dropped window that are still
-// valid. adoptedAt, when set, is when the session's box was adopted after a
+// valid, also after the session was removed (#333: Forget keeps them, and a
+// window open at removal counts as dropped then). adoptedAt, when set, is when the session's box was adopted after a
 // restart: the broker has no record of windows from before it, and a write
 // credential issued then may be valid for up to minElevatedRemaining after.
 func (b *Broker) WriteHold(sid string, adoptedAt time.Time) string {
@@ -354,9 +355,12 @@ func (b *Broker) WriteHold(sid string, adoptedAt time.Time) string {
 	if b.elev[sid] != nil || b.granting[sid] > 0 {
 		return "is opening a write window"
 	}
-	if d, ok := b.dropped[sid]; ok && d.lastValid.Add(dropHoldSkew).After(now) {
-		return "dropped its write window, but the write credentials it was given stay valid until " +
-			d.lastValid.Add(dropHoldSkew).Local().Format("15:04") + " (with a minute for clock skew)"
+	if d, ok := b.dropped[sid]; ok {
+		if d.lastValid.Add(dropHoldSkew).After(now) {
+			return "dropped its write window, but the write credentials it was given stay valid until " +
+				d.lastValid.Add(dropHoldSkew).Local().Format("15:04") + " (with a minute for clock skew)"
+		}
+		delete(b.dropped, sid) // expired, margin included: a removed session's is asked about only here
 	}
 	if end := adoptedAt.Add(minElevatedRemaining); !adoptedAt.IsZero() && end.After(now) {
 		return "was running when CuliBox restarted, and write credentials it may have been given before then stay valid until " + end.Local().Format("15:04") + " at the latest"
@@ -391,6 +395,17 @@ func (b *Broker) endLocked(sid string, e *elevation, now time.Time) {
 	delete(b.elev, sid)
 	if e.lastExp.After(now) {
 		b.dropped[sid] = droppedWin{conn: e.conn, lastValid: e.lastExp}
+	}
+}
+
+// pruneDroppedLocked forgets every drop leftover whose credentials have
+// expired, clock-skew margin included: a removed session's is never asked
+// about again (caller holds b.mu).
+func (b *Broker) pruneDroppedLocked(now time.Time) {
+	for sid, d := range b.dropped {
+		if !d.lastValid.Add(dropHoldSkew).After(now) {
+			delete(b.dropped, sid)
+		}
 	}
 }
 

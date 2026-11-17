@@ -41,6 +41,7 @@ CuliBox starts shells and agents on your machine, so authentication is never opt
   - DynamoDB items can reach the agent through a Kinesis destination the window sets up on a table, although the window denies item reads.
   - S3 access points: deleting an access point policy (directory bucket access points included), and setting an access point's public access block.
   - If one of these matters for an account, deny it in an inline policy on the write role, and keep that role's name starting with `agentbox-` (as the setup in [docs/aws/agent-role](aws/agent-role/README.md) names it): an explicit deny there applies in every window, and the window's own credentials cannot edit a role with that name.
+- While a session may hold AWS write credentials, no other box can start in its folder, also after the session ended. That hold compares workspaces only: another profile's `context_paths` that include the folder still mount it read-only into that profile's boxes, before or during a window. The hold is kept in memory, so a session that ended before CuliBox restarted no longer holds its folder after the restart. Keep a write-capable session's folder out of other profiles' `context_paths` ([#333](https://github.com/culiops/culibox/issues/333)).
 - The credential broker holds access to your SSO session. Treat the machine running CuliBox accordingly.
 - Persistence covers the daemon restarting, not the whole container or machine being destroyed. After a restart the terminal repaints, but earlier scrollback is not replayed.
 - Claude Code is the supported agent.
