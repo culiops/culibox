@@ -27,6 +27,8 @@ var ErrForeign = errors.New("not written by culibox service install")
 // markerWindow is how far into the file the marker may sit.
 const markerWindow = 512
 
+const noFollow = syscall.O_NOFOLLOW
+
 // Inspect says whether path is absent, ours or foreign. A symlink is foreign
 // whatever it points at: Lstat, and the read itself refuses to follow one.
 func Inspect(path string) (FileState, error) {
@@ -40,7 +42,7 @@ func Inspect(path string) (FileState, error) {
 	if !fi.Mode().IsRegular() {
 		return Foreign, nil
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|noFollow, 0)
 	if err != nil {
 		return Foreign, err
 	}
