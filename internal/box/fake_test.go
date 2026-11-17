@@ -31,6 +31,12 @@ type fakeClient struct {
 	stopFails  int               // the next N Stop calls fail and leave the container running
 	stopHook   func(name string) // runs after Stop removed the box, with no lock held
 	sysbox     bool
+	// runtimeErr fails HasRuntime (a daemon that cannot be asked); runtimeCalls
+	// counts the asks; runtimeHook runs first, with no lock held, so a test can
+	// hold a probe open (it answers its own error to end the probe early).
+	runtimeErr   error
+	runtimeCalls int
+	runtimeHook  func(ctx context.Context) error
 
 	// inspectHook runs inside Inspect, before it answers and with no lock held,
 	// so a test can land an event exactly in the window between the sweep's
@@ -307,8 +313,35 @@ func (f *fakeClient) BindSource(_ context.Context, name, dst string) (string, er
 	return f.sources[name][dst], nil
 }
 
-func (f *fakeClient) HasRuntime(_ context.Context, name string) bool {
-	return f.sysbox && name == runtimeSysbox
+func (f *fakeClient) HasRuntime(ctx context.Context, name string) (bool, error) {
+	f.mu.Lock()
+	f.runtimeCalls++
+	hook, err, sysbox := f.runtimeHook, f.runtimeErr, f.sysbox
+	f.mu.Unlock()
+	if hook != nil {
+		if herr := hook(ctx); herr != nil {
+			return false, herr
+		}
+	}
+	if err != nil {
+		return false, err
+	}
+	return sysbox && name == runtimeSysbox, nil
+}
+
+// runtimeProbes is how many times HasRuntime was asked.
+func (f *fakeClient) runtimeProbes() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.runtimeCalls
+}
+
+// setDaemon sets what the next HasRuntime answers: err != nil stands for a
+// daemon that cannot be asked (stopped, slow), sysbox for its runtime list.
+func (f *fakeClient) setDaemon(sysbox bool, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sysbox, f.runtimeErr = sysbox, err
 }
 
 // runningBoxes lists the boxes the fake still runs.

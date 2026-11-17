@@ -270,11 +270,11 @@ func TestHandleMetaReplies(t *testing.T) {
 // box_unavailable_reason says why boxes are off: present only when there is no
 // box runtime AND the layer failed to build; absent when boxes work.
 func TestHandleMetaBoxUnavailableReason(t *testing.T) {
-	got := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: "", BoxUnavailableReason: "Docker is not installed"})
+	got := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxUnavailableReason: "Docker is not installed"})
 	if v, ok := got["box_unavailable_reason"]; !ok || v != "Docker is not installed" {
 		t.Errorf("no runtime: box_unavailable_reason = %#v (present %v)", v, ok)
 	}
-	got = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: "runc", BoxUnavailableReason: "Docker is not installed"})
+	got = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: fixedRuntime("runc"), BoxUnavailableReason: "Docker is not installed"})
 	if v, ok := got["box_unavailable_reason"]; ok {
 		t.Errorf("a runtime is present, yet box_unavailable_reason = %#v", v)
 	}
@@ -290,7 +290,7 @@ func TestHandleMetaBoxUnavailableReason(t *testing.T) {
 // new profiles open on the host tier). Read per request, so it follows the daemon.
 func TestHandleMetaBoxDaemonReason(t *testing.T) {
 	reason := "Docker is not running"
-	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: "runc", BoxDaemonReason: func() string { return reason }}
+	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: fixedRuntime("runc"), BoxDaemonReason: func() string { return reason }}
 	got := metaGet(t, s)
 	if v := got["box_daemon_reason"]; v != "Docker is not running" {
 		t.Errorf("box_daemon_reason = %#v", v)
@@ -304,12 +304,32 @@ func TestHandleMetaBoxDaemonReason(t *testing.T) {
 	}
 	// No layer: box_unavailable_reason explains that, and the daemon is not asked.
 	asked := false
-	got = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: "", BoxDaemonReason: func() string { asked = true; return "x" }})
+	got = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxDaemonReason: func() string { asked = true; return "x" }})
 	if _, ok := got["box_daemon_reason"]; ok || asked {
 		t.Errorf("no layer, yet box_daemon_reason is published (%v) or asked (%v)", ok, asked)
 	}
-	if _, ok := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: "runc"})["box_daemon_reason"]; ok {
+	if _, ok := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: fixedRuntime("runc")})["box_daemon_reason"]; ok {
 		t.Error("no probe wired, yet box_daemon_reason is published")
+	}
+}
+
+func fixedRuntime(rt string) func() string { return func() string { return rt } }
+
+// #334: box_runtime is read on every request, not cached at boot: the runtime a
+// boot with Docker down could not read is detected later, and the badge must
+// show the detected value, not the boot placeholder.
+func TestHandleMetaBoxRuntimeIsReadPerRequest(t *testing.T) {
+	rt := "runc"
+	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: func() string { return rt }}
+	if got := metaGet(t, s)["box_runtime"]; got != "runc" {
+		t.Fatalf("box_runtime = %#v, want runc", got)
+	}
+	rt = "sysbox-runc"
+	if got := metaGet(t, s)["box_runtime"]; got != "sysbox-runc" {
+		t.Fatalf("after re-detection box_runtime = %#v, want sysbox-runc", got)
+	}
+	if got := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}})["box_runtime"]; got != "" {
+		t.Fatalf("no layer: box_runtime = %#v, want \"\"", got)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -263,7 +264,7 @@ type Client interface {
 	ListBoxes(ctx context.Context, label string) ([]BoxInfo, error)
 	ListByLabel(ctx context.Context, label string) ([]string, error)
 	Stop(ctx context.Context, name string) error
-	HasRuntime(ctx context.Context, name string) bool
+	HasRuntime(ctx context.Context, name string) (bool, error)
 	// InspectMounts is Inspect plus the in-box destinations of the box's bind
 	// mounts, as docker reports them: the truth for every box, adopted ones and
 	// ones created by an older build included. Mounts are nil unless running.
@@ -372,8 +373,18 @@ type Egress struct {
 
 // Manager tracks one box per workspace and keeps their lifecycle honest.
 type Manager struct {
-	opts    Options
+	opts Options
+
+	// rtMu guards the runtime fields. runtime is what new boxes get; rtKnown
+	// is whether a definitive answer from docker decided it (until then runtime
+	// is the runc placeholder and no box is created, #334). rtProbe is open
+	// while a badge read's background probe runs; rtTried is when one last
+	// started. Never held across a docker call.
+	rtMu    sync.Mutex
 	runtime string
+	rtKnown bool
+	rtProbe chan struct{}
+	rtTried time.Time
 
 	// opMu serializes start/stop of boxes against each other. mu guards only the
 	// maps below and is never held across a docker call.
@@ -411,6 +422,20 @@ type Manager struct {
 	// with exclusive. Guarded by mu.
 	owner     map[string]string
 	adoptedAt map[string]time.Time
+	// ownerWS is the workspace (symlinks resolved) of an exclusive box this
+	// process started for its owner, set by Wrap with owner. An adopted box's
+	// comes from its label when it is needed.
+	ownerWS map[string]string
+	// ended is, by box name, the write hold of a session whose exclusive box
+	// is gone (#333): the box goes as soon as its session ends, but write
+	// credentials it was given may outlive it. claimCheck refuses the folder
+	// while the hook still holds the session, and drops an entry once it does
+	// not. Guarded by mu.
+	ended map[string]endedHold
+	// started is when this Manager was made: write credentials minted before a
+	// restart cannot outlive it by more than bootHoldFor, so an orphan's hold
+	// (keepEndedHold with no owner) counts from here.
+	started time.Time
 	// writeHold is the hook SetWriteHold installs (guarded by mu); nil = none.
 	writeHold WriteHold
 	// memTotal is docker's MemTotal once read (0 = not yet); memFallbackLogged
@@ -458,6 +483,9 @@ func New(opts Options) (*Manager, error) {
 		exclusive:     map[string]bool{},
 		owner:         map[string]string{},
 		adoptedAt:     map[string]time.Time{},
+		ownerWS:       map[string]string{},
+		ended:         map[string]endedHold{},
+		started:       time.Now(),
 	}
 	if opts.LockGuards {
 		ops := platformFlagOps()
@@ -467,12 +495,19 @@ func New(opts Options) (*Manager, error) {
 		m.locks = newGuardLocks(opts.StateRoot, ops)
 	}
 	// Bounded: a daemon that accepts and never answers must not hold the boot.
-	// A daemon that is stopped or not permitted answers false here, and is not an
-	// error: the layer exists, and Ping (daemon.go) says why it cannot be used.
-	pctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+	// A daemon that is stopped, not permitted or slow is not an error: the layer
+	// exists, Ping (daemon.go) says why it cannot be used, and the runtime stays
+	// unknown until docker answers (settledRuntime, #334). Only a definitive
+	// answer decides it, and then for the life of the process.
+	pctx, cancel := context.WithTimeout(context.Background(), runtimeProbeTimeout)
 	defer cancel()
-	if opts.Client.HasRuntime(pctx, runtimeSysbox) {
-		m.runtime = runtimeSysbox
+	if ok, err := opts.Client.HasRuntime(pctx, runtimeSysbox); err == nil {
+		m.rtKnown = true
+		if ok {
+			m.runtime = runtimeSysbox
+		}
+	} else {
+		log.Printf("box: could not read docker's runtimes (%v); they are read again before the first box is created", err)
 	}
 	return m, nil
 }
@@ -512,8 +547,134 @@ func (m *Manager) SetWriteHold(f WriteHold) {
 	m.writeHold = f
 }
 
-// Runtime reports the detected isolation runtime, for the UI badge.
-func (m *Manager) Runtime() string { return m.runtime }
+// RuntimeSysbox and RuntimeRunc are the isolation runtimes a box can get, for
+// a reader outside this package (doctor).
+const (
+	RuntimeSysbox = runtimeSysbox
+	RuntimeRunc   = runtimeRunc
+)
+
+// runtimeProbeTimeout bounds one ask for docker's runtimes (boot, a spawn, a
+// badge read); runtimeRetry is the least time between two asks a badge read
+// starts, so a page polling a stopped daemon does not run docker every time.
+// Vars so a test can shorten them.
+var (
+	runtimeProbeTimeout = ProbeTimeout
+	runtimeRetry        = 2 * time.Second
+)
+
+// Runtime reports the isolation runtime boxes get: the detected one, or runc
+// while it is not known yet (no box is created then; see settledRuntime). It
+// never asks docker.
+func (m *Manager) Runtime() string {
+	rt, _ := m.RuntimeKnown()
+	return rt
+}
+
+// RuntimeKnown is Runtime and whether a definitive answer from docker decided
+// it. false: the boot probe could not read docker's runtimes (Docker stopped,
+// starting or slow when CuliBox started), and they are read again before the
+// next box is created (#334).
+func (m *Manager) RuntimeKnown() (string, bool) {
+	m.rtMu.Lock()
+	defer m.rtMu.Unlock()
+	return m.runtime, m.rtKnown
+}
+
+// RuntimeFresh is Runtime for the UI badge (/api/meta). While the runtime is
+// not known it starts one bounded probe in the background (one at a time, and
+// not again within runtimeRetry) and waits for it up to wait, so a page
+// reloaded after the user starts Docker shows what the next box will get. Once
+// known it never asks docker again.
+func (m *Manager) RuntimeFresh(wait time.Duration) string {
+	m.rtMu.Lock()
+	if m.rtKnown {
+		rt := m.runtime
+		m.rtMu.Unlock()
+		return rt
+	}
+	ch := m.rtProbe
+	if ch == nil && time.Since(m.rtTried) >= runtimeRetry {
+		ch = make(chan struct{})
+		m.rtProbe, m.rtTried = ch, time.Now()
+		go func() {
+			defer close(ch)
+			ctx, cancel := context.WithTimeout(context.Background(), runtimeProbeTimeout)
+			defer cancel()
+			if ok, err := m.opts.Client.HasRuntime(ctx, runtimeSysbox); err == nil {
+				m.settleRuntime(ok)
+			}
+			m.rtMu.Lock()
+			m.rtProbe = nil
+			m.rtMu.Unlock()
+		}()
+	}
+	m.rtMu.Unlock()
+	if ch != nil && wait > 0 {
+		t := time.NewTimer(wait)
+		select {
+		case <-ch:
+		case <-t.C:
+		}
+		t.Stop()
+	}
+	return m.Runtime()
+}
+
+// settledRuntime is the runtime a new box gets, asking docker first when no
+// definitive answer has decided it yet (#334: a boot with Docker down must not
+// leave every later box on runc). It waits for a probe a badge read already
+// started, then asks itself if that one did not settle it: at most two bounded
+// asks. An error means docker's runtimes still cannot be read, and the caller
+// creates no box: one created now would be on runc only because the probe
+// failed. Once settled it never asks again, so a spawn pays nothing.
+func (m *Manager) settledRuntime(ctx context.Context) (string, error) {
+	m.rtMu.Lock()
+	rt, known, ch := m.runtime, m.rtKnown, m.rtProbe
+	m.rtMu.Unlock()
+	if known {
+		return rt, nil
+	}
+	if ch != nil {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		if rt, known = m.RuntimeKnown(); known {
+			return rt, nil
+		}
+	}
+	pctx, cancel := context.WithTimeout(ctx, runtimeProbeTimeout)
+	defer cancel()
+	ok, err := m.opts.Client.HasRuntime(pctx, runtimeSysbox)
+	if err != nil {
+		return "", err
+	}
+	return m.settleRuntime(ok), nil
+}
+
+// settleRuntime records a definitive answer once and returns the runtime. A
+// later answer never changes a settled one.
+func (m *Manager) settleRuntime(sysbox bool) string {
+	m.rtMu.Lock()
+	defer m.rtMu.Unlock()
+	if !m.rtKnown {
+		m.runtime, m.rtKnown = runtimeRunc, true
+		if sysbox {
+			m.runtime = runtimeSysbox
+		}
+		log.Printf("box: isolation runtime %s (detected once docker answered)", m.runtime)
+	}
+	return m.runtime
+}
+
+// runtimeProbing reports whether a badge read's background probe still runs.
+func (m *Manager) runtimeProbing() bool {
+	m.rtMu.Lock()
+	defer m.rtMu.Unlock()
+	return m.rtProbe != nil
+}
 
 // BrokerMountDest is where a bound box's own broker socket directory is mounted
 // inside the box, and BrokerDirRel is where those directories live under the
@@ -1032,6 +1193,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		// The name hashes key.Session, so the owner never changes.
 		m.mu.Lock()
 		m.owner[name] = key.Session
+		m.ownerWS[name] = ws.Path // what the session's hold covers once the box is gone (#333)
 		m.mu.Unlock()
 	}
 	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
@@ -1039,6 +1201,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 			m.mu.Lock()
 			if !m.exclusive[name] { // no box of this session counted: nothing to own
 				delete(m.owner, name)
+				delete(m.ownerWS, name)
 			}
 			m.mu.Unlock()
 		}
@@ -1257,6 +1420,16 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 	// this process (see skipGuard).
 	guards := st == StateRunning && !labels.Identity && !m.isGuardsChecked(name)
 	if st == StateMissing {
+		// First, before anything is made for the box: which runtime it gets. A
+		// boot with Docker down left it unknown; it is read now (#334), and while
+		// docker cannot say, no box is created on the runc guess. The browser
+		// gets a fixed sentence; docker's own text (it can name a socket path)
+		// goes to the log.
+		if _, err := m.settledRuntime(ctx); err != nil {
+			m.rearmIfIdle(name)
+			log.Printf("box: %s: could not read docker's runtimes: %v", name, err)
+			return fmt.Errorf("%w: could not read which isolation runtime Docker offers, so no box is created on a guess; try again once Docker answers, or run `culibox doctor`", ErrBoxUnavailable)
+		}
 		var bundle string
 		if !m.opts.ExtraCA.Empty() {
 			// Before the mount-source check below, which then covers the bundle
@@ -1606,6 +1779,18 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 				"Wait for it to end (or drop the window in that session), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, why)
 		}
 	}
+	// After the loop: removing an idle box above can leave an ended hold.
+	for _, h := range m.endedHolds() {
+		if h.name == name || (knownWorkspace(h.ws) && !Overlaps(h.ws, cwd)) {
+			continue
+		}
+		if !knownWorkspace(h.ws) {
+			return fmt.Errorf("%w: a box of a session that has ended was removed, and CuliBox could not read its folder, so no other box can start in any folder "+
+				"until write credentials of that session expire: %s. Wait until then.", ErrWorkspaceHeld, h.why)
+		}
+		return fmt.Errorf("%w: %s is closed to other boxes until write credentials of a session that has ended expire: %s. "+
+			"Wait until then (drop the window first if that session is still listed), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, h.why)
+	}
 	return nil
 }
 
@@ -1623,6 +1808,143 @@ func (m *Manager) writeHeld(name string) string {
 	return hook(sid, at)
 }
 
+// endedHold is what an exclusive box leaves behind when it goes while its
+// session may hold write credentials: who to ask, and the folder (ws "" = not
+// known, which overlaps every folder).
+type endedHold struct {
+	sid, ws   string
+	adoptedAt time.Time
+	boot      bool // reaped at boot (keepBootHold): held for bootHoldFor while no hook is installed
+}
+
+// keepEndedHold is called before a box is removed: if the hook still holds the
+// session that owns it, the hold outlives the box in ended (#333). A box no
+// session of this process owns is a plain box, or an exclusive orphan whose boot
+// Reconcile did not run (Docker down or slow at boot, then back): its label
+// says which, and an exclusive or unreadable one gets a boot hold counted from
+// this process's start, fail closed, as Reconcile would have left. It also
+// prunes the ended holds the hook no longer holds, so they cannot pile up.
+// Caller holds opMu (the hook runs under it), never mu.
+func (m *Manager) keepEndedHold(ctx context.Context, name string) {
+	m.endedHolds()
+	m.mu.Lock()
+	hook, sid, at, ws := m.writeHold, m.owner[name], m.adoptedAt[name], m.ownerWS[name]
+	m.mu.Unlock()
+	if sid == "" {
+		// Never over a hold already kept for this box (its owner's, kept
+		// before a failed stop), and nothing once a credential's life has
+		// passed since start: a boot hold would already be over.
+		m.mu.Lock()
+		_, kept := m.ended[name]
+		m.mu.Unlock()
+		if kept || time.Since(m.started) >= bootHoldFor {
+			return
+		}
+		row, found, err := m.labelRow(ctx, name)
+		switch {
+		case err != nil:
+			m.keepBootHold(name, nil, m.started) // unreadable: every folder
+		case found:
+			m.keepBootHold(name, map[string]BoxInfo{name: row}, m.started)
+		} // not listed: no container, so nothing of it to hold
+		return
+	}
+	if hook == nil || hook(sid, at) == "" {
+		return
+	}
+	if ws == "" { // adopted after a restart: the folder is on the box's label
+		if row, found, err := m.labelRow(ctx, name); err == nil && found && !row.Unreadable && knownWorkspace(row.Workspace) {
+			ws = row.Workspace
+		}
+	}
+	m.mu.Lock()
+	m.ended[name] = endedHold{sid: sid, ws: ws, adoptedAt: at}
+	m.mu.Unlock()
+}
+
+// bootHoldFor bounds the hold of an exclusive box reaped at boot while no
+// write-hold hook is installed yet (Reconcile runs before the broker's hook):
+// a write credential's longest life, 15 minutes (the STS minimum the broker
+// mints), plus a minute for clock skew, as the broker's minElevatedRemaining.
+const bootHoldFor = 16 * time.Minute
+
+// keepBootHold records an ended hold for an orphan Reconcile is about to reap,
+// unless rows show it was a plain box: an exclusive one's session may have been
+// given write credentials before the restart that are still valid (#333). Its
+// session is not known (sid ""); adoptedAt is the boot, as for an adopted box.
+// rows nil (unreadable), or no usable row, holds it fail closed. Caller holds
+// opMu.
+func (m *Manager) keepBootHold(name string, rows map[string]BoxInfo, at time.Time) {
+	b, ok := rows[name]
+	if ok && !b.Unreadable && !b.Exclusive {
+		return
+	}
+	ws := ""
+	if ok && !b.Unreadable && knownWorkspace(b.Workspace) {
+		ws = b.Workspace
+	}
+	m.mu.Lock()
+	m.ended[name] = endedHold{ws: ws, adoptedAt: at, boot: true}
+	m.mu.Unlock()
+}
+
+// labelReadTimeout bounds labelRow: it runs under opMu, some callers with
+// context.Background (the idle timer), and a hung docker must not hold every
+// spawn behind it.
+const labelReadTimeout = 10 * time.Second
+
+// labelRow is this instance's row for box name as docker lists it. found is
+// false when docker lists no such box; err is set when the list failed.
+func (m *Manager) labelRow(ctx context.Context, name string) (row BoxInfo, found bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, labelReadTimeout)
+	defer cancel()
+	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance+"="+m.opts.Instance)
+	if err != nil {
+		return BoxInfo{}, false, err
+	}
+	for _, b := range boxes {
+		if b.Name == name {
+			return b, true, nil
+		}
+	}
+	return BoxInfo{}, false, nil
+}
+
+// heldEnded is an ended hold the hook still holds, with the hook's reason.
+type heldEnded struct {
+	name, ws, why string
+}
+
+// endedHolds asks the hook about every ended hold, drops those it no longer
+// holds and returns the rest. Caller holds opMu, never mu.
+func (m *Manager) endedHolds() []heldEnded {
+	m.mu.Lock()
+	hook := m.writeHold
+	snap := maps.Clone(m.ended)
+	m.mu.Unlock()
+	var out []heldEnded
+	for name, e := range snap {
+		why := ""
+		switch end := e.adoptedAt.Add(bootHoldFor); {
+		case hook != nil:
+			why = hook(e.sid, e.adoptedAt)
+		case e.boot && time.Now().Before(end):
+			why = "a session was running when CuliBox or its box VM restarted, and write credentials it may have been given before then stay valid until " +
+				end.Local().Format("15:04") + " at the latest"
+		}
+		if why != "" {
+			out = append(out, heldEnded{name, e.ws, why})
+			continue
+		}
+		m.mu.Lock()
+		if cur, ok := m.ended[name]; ok && cur == e {
+			delete(m.ended, name)
+		}
+		m.mu.Unlock()
+	}
+	return out
+}
+
 // idle reports whether no session of this process uses the box.
 func (m *Manager) idle(name string) bool {
 	m.mu.Lock()
@@ -1634,6 +1956,7 @@ func (m *Manager) idle(name string) bool {
 // timer and exclusive mark. Caller holds opMu, which also orders it against the
 // timer's own stopIfIdle.
 func (m *Manager) removeIdle(ctx context.Context, name string) error {
+	m.keepEndedHold(ctx, name)
 	m.unverify(name)
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		return err
@@ -1683,6 +2006,7 @@ func (m *Manager) forgetExclusiveLocked(name string) {
 	delete(m.exclusive, name)
 	delete(m.owner, name)
 	delete(m.adoptedAt, name)
+	delete(m.ownerWS, name)
 }
 
 // idleTTL is how long an idle box is kept: zero for an exclusive one, which
@@ -1977,10 +2301,14 @@ func (m *Manager) stopIfIdle(name string) {
 	}
 	delete(m.timers, name)
 	m.mu.Unlock()
+	m.keepEndedHold(context.Background(), name)
 	m.unverify(name)
-	if m.opts.Client.Stop(context.Background(), name) == nil {
-		m.boxGone(name)
+	if m.opts.Client.Stop(context.Background(), name) != nil {
+		// Still there: keep its owner, so the removal that follows (the sweep,
+		// a spawn's check) still knows whose hold it is (#333).
+		return
 	}
+	m.boxGone(name)
 	m.mu.Lock()
 	m.forgetExclusiveLocked(name)
 	m.mu.Unlock()
@@ -2017,6 +2345,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	var errs []error
 	left := map[string]bool{} // containers still there after the pass
+	// rows are this instance's boxes, read once before the first orphan is
+	// reaped (nil = unreadable): which are exclusive, and their folders.
+	var rows map[string]BoxInfo
+	read, bootAt := false, time.Now()
 	for _, name := range names {
 		m.mu.Lock()
 		live := m.active[name]
@@ -2025,6 +2357,16 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			left[name] = true
 			continue
 		}
+		if !read {
+			read = true
+			if bs, err := m.opts.Client.ListBoxes(ctx, LabelInstance+"="+m.opts.Instance); err == nil {
+				rows = map[string]BoxInfo{}
+				for _, b := range bs {
+					rows[b.Name] = b
+				}
+			}
+		}
+		m.keepBootHold(name, rows, bootAt)
 		m.unverify(name)
 		if err := m.opts.Client.Stop(ctx, name); err != nil {
 			left[name] = true
@@ -2159,6 +2501,7 @@ func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, 
 // their count later, and a count dropped here would underflow against the
 // container a new spawn re-creates under the same name. Callers hold opMu.
 func (m *Manager) remove(ctx context.Context, name string) error {
+	m.keepEndedHold(ctx, name)
 	m.unverify(name)
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		return fmt.Errorf("box: sweep removing %s: %w", name, err)

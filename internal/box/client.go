@@ -357,12 +357,37 @@ func (c CLIClient) Stop(ctx context.Context, name string) error {
 // detection: sysbox is never installed by this program, because its installer
 // rewrites /etc/docker/daemon.json and restarts the daemon, which would bounce
 // every container on the host.
-func (c CLIClient) HasRuntime(ctx context.Context, name string) bool {
-	out, err := c.run(ctx, "info", "--format", "{{json .Runtimes}}")
-	if err != nil {
-		return false
+//
+// Only a runtime list docker printed is an answer (#334): an error says docker
+// could not tell (not running, slow, or an answer listing no runtime, which a
+// working daemon never gives since it always has runc), and the caller asks
+// again rather than settle on runc. Stdout only, so a CLI warning on stderr
+// does not spoil the list; WaitDelay as in Ping, so a child holding the pipe
+// cannot hold the probe past ctx.
+func (c CLIClient) HasRuntime(ctx context.Context, name string) (bool, error) {
+	cmd := c.command(ctx, "info", "--format", "{{json .Runtimes}}")
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil // docker exited 0; a child kept the pipe
 	}
-	return strings.Contains(out, `"`+name+`"`)
+	if err != nil {
+		var stderr string
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			stderr = strings.TrimSpace(string(ee.Stderr))
+		}
+		return false, fmt.Errorf("docker info: %w: %s", err, stderr)
+	}
+	var runtimes map[string]json.RawMessage
+	if err := json.Unmarshal(out, &runtimes); err != nil {
+		return false, fmt.Errorf("docker info: unreadable Runtimes: %w", err)
+	}
+	if len(runtimes) == 0 {
+		return false, errors.New("docker info: listed no runtime")
+	}
+	_, ok := runtimes[name]
+	return ok, nil
 }
 
 // SeccompActive reports whether the docker daemon applies a seccomp profile to

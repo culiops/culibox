@@ -1,0 +1,54 @@
+# govulncheck over the module and the Go toolchain it builds with (#319): fails when
+# code here calls a function with a known vulnerability, in a dependency or the
+# standard library. ci.yml calls this file on every push to main and every release;
+# the weekly schedule catches an advisory published while nothing is pushed.
+#
+# One Linux runner scans both targets: govulncheck reports only vulnerable code the
+# build calls, and the darwin build pulls in packages the Linux one never does
+# (mattn/go-isatty, crypto/x509/internal/macos, internal/routebsd and others), so it
+# runs once per GOOS. GOOS=darwin needs no macOS runner; the one macOS runner stays
+# darwin-test's (#293).
+#
+# Supply chain (docker/agent-box/workflow_test.go guards this):
+#   - every action is pinned by full commit SHA, the release in a comment
+#   - no pull-request trigger of any kind
+#   - GITHUB_TOKEN is read-only
+#   - govulncheck is installed at an exact version, so go checks it against the
+#     checksum database; no Go cache is restored into or saved from this job
+#   - no bot: it reports by failing, it never opens a PR or bumps a version
+name: vuln
+
+on:
+  schedule:
+    # Wednesdays 03:41 UTC (off the hour, when scheduled runs queue less).
+    - cron: "41 3 * * 3"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # Built once for the runner. GOOS goes on the darwin scan only: on the install
+      # (or a go run) it would build a darwin binary the runner cannot start.
+      - name: Install govulncheck
+        run: GOBIN="$RUNNER_TEMP/govulncheck" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: govulncheck (linux)
+        run: |
+          "$RUNNER_TEMP/govulncheck/govulncheck" ./...
+      - name: govulncheck (darwin)
+        env:
+          GOOS: darwin
+        run: |
+          "$RUNNER_TEMP/govulncheck/govulncheck" ./...

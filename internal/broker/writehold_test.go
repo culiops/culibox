@@ -130,3 +130,174 @@ func TestWriteHoldCoversCredentialsFromBeforeARestart(t *testing.T) {
 		t.Fatalf("every credential from before the restart has expired: %q", why)
 	}
 }
+
+// #333: removing a session (Kill, Restart: both Forget it) does not end the
+// folder hold while write credentials it was given are still valid. A dropped
+// window keeps its leftover, and a window still open at removal is ended like a
+// drop: the credentials it issued outlive the session.
+func TestForgetKeepsTheHoldOfIssuedWriteCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		drop, restart bool // dropped before the removal; removed by Restart (a replacement runs)
+	}{
+		{"kill after a drop", true, false},
+		{"kill with the window open", false, false},
+		{"restart after a drop", true, true},
+		{"restart with the window open", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sessions := map[string]SessionView{"aws-1": liveElev()}
+			b, _, _, now := setup(t, sessions)
+			ts := withTimers(b)
+			if _, err := b.Elevate("aws-1", cookie(60)); err != nil {
+				t.Fatal(err)
+			}
+			b.mu.Lock()
+			b.noteElevatedExp("aws-1", now.Add(10*time.Minute))
+			b.mu.Unlock()
+			if tc.drop {
+				b.Drop("aws-1", CredCookie)
+			}
+			if tc.restart {
+				// Restart spawns the replacement first, then removes the old one.
+				sessions["aws-2"] = liveElev()
+			}
+			delete(sessions, "aws-1")
+			b.Forget("aws-1")
+			if !(*ts)[0].stopped {
+				t.Fatal("Forget leaked the window's timer")
+			}
+			last := now.Add(11 * time.Minute).Local().Format("15:04")
+			if why := b.WriteHold("aws-1", time.Time{}); !strings.Contains(why, "stay valid until "+last) {
+				t.Fatalf("after the session was removed: %q", why)
+			}
+			*now = now.Add(11*time.Minute - time.Second)
+			if why := b.WriteHold("aws-1", time.Time{}); why == "" {
+				t.Fatal("inside the clock-skew minute the folder is still held")
+			}
+			*now = now.Add(time.Second)
+			if why := b.WriteHold("aws-1", time.Time{}); why != "" {
+				t.Fatalf("the credentials have expired, margin included: %q", why)
+			}
+		})
+	}
+}
+
+// A window with no write credentials issued leaves nothing to hold when its
+// session is removed.
+func TestForgetOfAWindowThatIssuedNothingHoldsNothing(t *testing.T) {
+	b, _, _, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	if _, err := b.Elevate("aws-1", cookie(60)); err != nil {
+		t.Fatal(err)
+	}
+	b.Forget("aws-1")
+	if why := b.WriteHold("aws-1", time.Time{}); why != "" {
+		t.Fatalf("nothing was issued: %q", why)
+	}
+	b.mu.Lock()
+	n := len(b.dropped)
+	b.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("Forget kept %d leftovers for a window that issued nothing", n)
+	}
+}
+
+// The leftover a removed session keeps is pruned once it has expired, margin
+// included, even though nobody asks about that session again.
+func TestRetainedLeftoverIsPruned(t *testing.T) {
+	b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev(), "aws-2": liveElev()})
+	withTimers(b)
+	if _, err := b.Elevate("aws-1", cookie(60)); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	b.noteElevatedExp("aws-1", now.Add(10*time.Minute))
+	b.mu.Unlock()
+	b.Forget("aws-1")
+	b.mu.Lock()
+	n := len(b.dropped)
+	b.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("want the leftover kept, got %d", n)
+	}
+	*now = now.Add(11 * time.Minute)
+	b.Forget("aws-2") // any later removal sweeps what has expired
+	b.mu.Lock()
+	n = len(b.dropped)
+	b.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("an expired leftover of a removed session was kept: %d", n)
+	}
+}
+
+// A window that ends (drop, removal, its own timer) when its last credential's
+// STS expiry has just passed on the local clock still holds the folder for the
+// clock-skew minute: AWS's clock may be behind ours (#333).
+func TestWindowEndKeepsTheSkewMinute(t *testing.T) {
+	for _, end := range []string{"drop", "forget", "expire"} {
+		t.Run(end, func(t *testing.T) {
+			b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+			ts := withTimers(b)
+			if _, err := b.Elevate("aws-1", cookie(30)); err != nil {
+				t.Fatal(err)
+			}
+			until := now.Add(30 * time.Minute)
+			last := until.Add(-30 * time.Second) // expired on our clock when the window ends
+			b.mu.Lock()
+			b.noteElevatedExp("aws-1", last)
+			b.mu.Unlock()
+			*now = until
+			switch end {
+			case "drop":
+				if v, _ := b.Drop("aws-1", CredCookie); !v.LastValid.IsZero() {
+					t.Fatalf("a credential already past its expiry is not shown as still valid: %+v", v)
+				}
+			case "forget":
+				b.Forget("aws-1")
+			case "expire":
+				(*ts)[len(*ts)-1].f()
+			}
+			if why := b.WriteHold("aws-1", time.Time{}); why == "" {
+				t.Fatal("inside the clock-skew minute the folder is still held")
+			}
+			*now = last.Add(dropHoldSkew)
+			if why := b.WriteHold("aws-1", time.Time{}); why != "" {
+				t.Fatalf("past the margin: %q", why)
+			}
+		})
+	}
+}
+
+// A re-grant inside the skew minute of a dropped window (#333, host review):
+// the dropped record is cleared, so its credentials' expiry moves onto the new
+// window, and dropping that one at once still holds the folder until the old
+// credentials' expiry plus the margin.
+func TestRegrantInsideTheSkewMinuteKeepsTheOldExpiry(t *testing.T) {
+	b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	if _, err := b.Elevate("aws-1", cookie(30)); err != nil {
+		t.Fatal(err)
+	}
+	last := now.Add(10 * time.Minute)
+	b.mu.Lock()
+	b.noteElevatedExp("aws-1", last)
+	b.mu.Unlock()
+	if _, ok := b.Drop("aws-1", CredCookie); !ok {
+		t.Fatal("drop")
+	}
+	*now = last.Add(30 * time.Second) // expired on our clock, inside the margin
+	if _, err := b.Elevate("aws-1", cookie(30)); err != nil {
+		t.Fatalf("re-grant: %v", err)
+	}
+	if _, ok := b.Drop("aws-1", CredCookie); !ok { // nothing minted in the new window
+		t.Fatal("drop of the new window")
+	}
+	if why := b.WriteHold("aws-1", time.Time{}); why == "" {
+		t.Fatal("the old credentials' skew minute was lost by the re-grant")
+	}
+	*now = last.Add(dropHoldSkew)
+	if why := b.WriteHold("aws-1", time.Time{}); why != "" {
+		t.Fatalf("past the margin: %q", why)
+	}
+}

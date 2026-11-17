@@ -262,7 +262,9 @@ func (b *Broker) ConnStats(sessionID string) map[string]Stats {
 }
 
 // Forget drops everything held for a session. The session layer calls it when a
-// session is removed, so per-session state does not outlive the session.
+// session is removed, so per-session state does not outlive the session. One
+// thing does: the expiry of write credentials the session was given, which
+// WriteHold keeps answering for until they have expired (#333).
 func (b *Broker) Forget(sessionID string) {
 	b.mu.Lock()
 	for k := range b.cache {
@@ -302,11 +304,14 @@ func (b *Broker) Forget(sessionID string) {
 		}
 	}
 	delete(b.stats, sessionID)
+	// The write window goes with the session, but write credentials it issued
+	// stay valid until they expire: they are kept like a drop's, so WriteHold
+	// still holds the folder for them (#333), and pruned once expired.
+	now := b.now()
 	if e := b.elev[sessionID]; e != nil {
-		e.timer.Stop()
-		delete(b.elev, sessionID)
+		b.endLocked(sessionID, e, now)
 	}
-	delete(b.dropped, sessionID)
+	b.pruneDroppedLocked(now)
 	toks := b.forgetGitHubLocked(sessionID)
 	delete(b.refused, refusedKey{sessionID, CredCookie})
 	delete(b.refused, refusedKey{sessionID, CredBearer})
