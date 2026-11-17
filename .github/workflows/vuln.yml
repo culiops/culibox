@@ -1,0 +1,42 @@
+# govulncheck over the module and the Go toolchain it builds with (#319): fails when
+# code here calls a function with a known vulnerability, in a dependency or the
+# standard library. ci.yml calls this file on every push to main and every release;
+# the weekly schedule catches an advisory published while nothing is pushed.
+#
+# Linux only: for this module the findings come from the standard library and the
+# dependencies, which are the same on darwin, and the one macOS runner is
+# darwin-test's (#293).
+#
+# Supply chain (docker/agent-box/workflow_test.go guards this):
+#   - every action is pinned by full commit SHA, the release in a comment
+#   - no pull-request trigger of any kind
+#   - GITHUB_TOKEN is read-only
+#   - govulncheck is run at an exact version, so go checks it against the checksum
+#     database; no Go cache is restored into or saved from this job
+#   - no bot: it reports by failing, it never opens a PR or bumps a version
+name: vuln
+
+on:
+  schedule:
+    # Wednesdays 03:41 UTC (off the hour, when scheduled runs queue less).
+    - cron: "41 3 * * 3"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

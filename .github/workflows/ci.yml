@@ -19,6 +19,7 @@
 #   - no pull-request trigger of any kind
 #   - GITHUB_TOKEN is read-only for every job: nothing here needs a write grant
 #   - the one downloaded tool (gitleaks) is checked against a pinned sha256 first
+#   - govulncheck (job vuln, vuln.yml) runs at an exact version, checked by go's checksum database
 name: ci
 
 on:
@@ -186,6 +187,11 @@ jobs:
           echo "$RUNNER_TEMP/abduco/bin" >> "$GITHUB_PATH"
       - name: go test
         run: go test ./...
+
+  # govulncheck (#319), in its own file so its weekly schedule runs one Linux job,
+  # not this whole workflow.
+  vuln:
+    uses: ./.github/workflows/vuln.yml
 
   secrets:
     runs-on: ubuntu-24.04

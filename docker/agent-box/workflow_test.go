@@ -1593,3 +1593,63 @@ func TestInlineExprCatchesInterpolation(t *testing.T) {
 		t.Errorf("inlineExpr flagged an env: use: %v", got)
 	}
 }
+
+const vulnWorkflowPath = "../../.github/workflows/vuln.yml"
+
+// TestVulnWorkflow pins the govulncheck scan (#319): ci.yml calls vuln.yml, so every
+// push to main and every release runs it, and vuln.yml's own weekly schedule catches
+// an advisory published while nothing is pushed. The schedule lives in vuln.yml, not
+// ci.yml, so the weekly run is one Linux job, not the whole CI with its macOS runner.
+func TestVulnWorkflow(t *testing.T) {
+	b, err := os.ReadFile(vulnWorkflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keep []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if !wfFullComment.MatchString(l) {
+			keep = append(keep, l)
+		}
+	}
+	wf := strings.Join(keep, "\n")
+
+	for _, trig := range []string{"schedule:", "workflow_dispatch:", "workflow_call:"} {
+		if !regexp.MustCompile(`(?m)^  ` + trig + `\s*$`).MatchString(wf) {
+			t.Errorf("vuln.yml lacks the %s trigger", trig)
+		}
+	}
+	// Weekly: a fixed weekday, any minute and hour.
+	if !regexp.MustCompile(`(?m)^\s+- cron: "\d{1,2} \d{1,2} \* \* [0-6]"\s*$`).MatchString(wf) {
+		t.Error(`vuln.yml needs one weekly cron ("M H * * D")`)
+	}
+	// ci.yml runs it on push; a push trigger here would run it twice.
+	if regexp.MustCompile(`(?m)^  push:`).MatchString(wf) {
+		t.Error("vuln.yml must not have its own push trigger (ci.yml calls it)")
+	}
+	// An exact version: go run checks the module against the checksum database, so
+	// the pin is the integrity check. @latest would run whatever is newest.
+	if !regexp.MustCompile(`(?m)^\s+run: go run golang\.org/x/vuln/cmd/govulncheck@v\d+\.\d+\.\d+ \./\.\.\.\s*$`).MatchString(wf) {
+		t.Error("vuln.yml must run `go run golang.org/x/vuln/cmd/govulncheck@vX.Y.Z ./...` with an exact version")
+	}
+	if strings.Contains(wf, "macos") {
+		t.Error("vuln.yml runs on Linux only (its findings do not depend on GOOS here; the macOS runner budget is darwin-test)")
+	}
+	// It runs a downloaded tool: no Go cache restored into it or saved from it.
+	if !strings.Contains(wf, "actions/setup-go@") {
+		t.Error("vuln.yml must set up Go from go.mod with actions/setup-go")
+	}
+	for _, msg := range setupGoCacheViolations("vuln.yml", wf) {
+		t.Error(msg)
+	}
+	if wfWriteAny.MatchString(wf) {
+		t.Error("vuln.yml must not hold any write permission")
+	}
+	// Never github.workflow: under workflow_call it is the caller's name.
+	if strings.Contains(wf, "github.workflow") {
+		t.Error("vuln.yml must not use github.workflow (it is the caller's name under workflow_call)")
+	}
+
+	if !strings.Contains(jobBlock(t, ciCode(t), "vuln"), "uses: ./.github/workflows/vuln.yml") {
+		t.Error("ci.yml job vuln must call ./.github/workflows/vuln.yml")
+	}
+}
