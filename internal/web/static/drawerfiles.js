@@ -1,27 +1,10 @@
 "use strict";
 
-// The Files drawer's pure decisions (spec 5.4): the per-session {path, scroll}
-// memory, and when a change of drawer state leaves the file it shows. No DOM;
-// filesdrawer.js wires them. Classic script: browser globals, required under node.
+// The Files dock's pure decisions (spec 5.4): when a change of dock state leaves
+// the files it shows, the discard ask, the Go to file query and the agent-changed
+// marks. (The per-session tab memory is docktabs.js's.) No DOM; filesdrawer.js
+// wires them. Classic script: browser globals, required under node.
 // (The viewer's buttons are the shared toolbar's: viewertoolbar.js.)
-
-// Per-session memory, in memory only: a session id (null for a pane of files)
-// -> the file the drawer last showed for it and how far down it was read.
-// Returns a new Map; the one passed in is left as it was.
-function rememberDrawerFile(map, sid, file) {
-  const out = new Map(map || []);
-  const path = file && file.path;
-  if (!path) { out.delete(sid); return out; }
-  const n = Number(file.scroll);
-  out.set(sid, { path, scroll: Number.isFinite(n) && n > 0 ? Math.round(n) : 0 });
-  return out;
-}
-
-function drawerFileFor(map, sid) {
-  if (!map || !map.has(sid)) return null;
-  const f = map.get(sid);
-  return { path: f.path, scroll: f.scroll };
-}
 
 // drawerTreeBlocked: should the tree column say "can't be browsed" instead of
 // showing a tree? Yes when the drawer names a session whose workspace is known
@@ -105,5 +88,5 @@ function changedSegs(p) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { rememberDrawerFile, drawerFileFor, drawerLeavesFile, discardAsk, drawerTreeBlocked, goToFileURL, hitsUnderRoot, changedSet, changedSegs };
+  module.exports = { drawerLeavesFile, discardAsk, drawerTreeBlocked, goToFileURL, hitsUnderRoot, changedSet, changedSegs };
 }

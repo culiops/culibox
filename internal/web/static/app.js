@@ -504,6 +504,15 @@ function paintDrawerLayout(avail, over) {
   dockDrawn = { fold, avail, dockW: full ? avail : lay.dockW, treeW: parts.treeW };
 }
 
+// dockForcesFull: would the dock, opened now, land in forced Full mode (dockLayout full)? What the first paint of an open
+// dock would decide, asked before opening: the pane area is measured with the dock closed, which is the same width the open
+// dock divides. A grid that cannot be measured (a page hides it) is a yes: not knowing is not a reason to cover the terminals.
+function dockForcesFull() {
+  const m = dockMeasure();
+  if (!m) return true;
+  return dockLayout({ avail: m.avail, cols: dockCols(), dockShare: drawerSize.width, treeShare: dockTreeShare(), treeOpen: false }).full;
+}
+
 // positionDrawer: sizes the dock. It is a column beside the pane grid (desktop.css), so nothing is hung under a pane's
 // header any more and nothing covers a strip or banner; the grid's px are what the widths come from.
 function positionDrawer() {
@@ -7501,12 +7510,16 @@ loadOptionDefs().then(newProfile);
     refreshEmptyState();
     return;
   }
-  // The dock's stored tabs are read here, now that the list says which sessions
-  // exist (and never on the give-up path above, which therefore never writes them).
-  dockRestore(sessions);
   // finally: a throwing restore must not keep the empty state silent for the
   // life of the page (it waits on bootRestoreDone).
-  try { restoreLayout(sessions); }
+  try {
+    // The dock's stored tabs are read here, now that the list says which sessions
+    // exist (and never on the give-up path above, which therefore never writes them).
+    dockRestore(sessions);
+    restoreLayout(sessions);
+    // A dock that was open comes back open, on the focused pane: known only now.
+    dockReopen();
+  }
   finally { bootRestoreDone = true; refreshEmptyState(); }
 })();
 initFileTree();

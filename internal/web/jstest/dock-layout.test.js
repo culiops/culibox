@@ -67,7 +67,7 @@ function page(over) {
     ["app.js", "dockCols"], ["app.js", "dockTreeShare"], ["app.js", "drawerLiveSids"], ["app.js", "paintDrawerMax"], ["app.js", "paintDrawerLayout"],
     ["app.js", "dockTreeReveal"], ["app.js", "dockTreeFold"], ["app.js", "drawerFollowFocus"], ["app.js", "toggleDrawerPin"],
     ["app.js", "paintDrawerHead"], ["app.js", "drawerSessionName"], ["app.js", "paintDrawerTabs"], ["app.js", "positionDrawer"],
-    ["app.js", "dockMeasure"], ["app.js", "applyDrawer"], ["app.js", "drawerPinCheck"], ["filesdrawer.js", "drawerKeepsTree"],
+    ["app.js", "dockMeasure"], ["app.js", "dockForcesFull"], ["app.js", "applyDrawer"], ["app.js", "drawerPinCheck"], ["filesdrawer.js", "drawerKeepsTree"],
     ["tabs.js", "syncFocusedTree"],
   ]) load(fnSource(file, name), file + ":" + name);
   // Stand-ins for what these call into and the tests do not look at. The real positionDrawer is replaced by a spy: the
@@ -462,4 +462,30 @@ test("positionDrawer measures nothing and paints nothing on a phone or with the 
   assert.equal(run(true, true), 0, "closed");
   assert.equal(run(false, false), 0, "phone");
   assert.equal(run(false, true), 1, "open on desktop: it measures");
+});
+
+// --- would the dock force Full mode? (the boot reopen asks before it opens) --------------------------------------------
+
+test("dockForcesFull answers what the first paint of an open dock would: fits beside the panes, or Full mode", () => {
+  const p = page();
+  const asks = (avail, cells) => { p.st.cells = cells; p.run("dockMeasure = () => ({ avail: " + avail + ", left: 0 })"); return p.run("dockForcesFull()"); };
+  assert.equal(asks(1190, 1), false, "one pane, plenty of room");
+  assert.equal(asks(1030, 2), false, "two panes at the founder's 1030: the explorer folds, nothing is covered");
+  assert.equal(asks(1016, 2), false, "the floors just fit");
+  assert.equal(asks(1015, 2), true, "one pixel short: the same cliff the layout has (Task 7: forced Full below 1313 px with the sidebar open)");
+  assert.equal(asks(800, 2), true);
+  // The answer is the layout's own: what it says here is what paintDrawerLayout then draws.
+  p.st.cells = 2;
+  p.run("paintDrawerLayout(1015)");
+  assert.equal(p.els.drawer.dataset.forced, "1");
+});
+
+test("dockForcesFull: a grid that cannot be measured is a yes, and a stored dock width is honoured", () => {
+  const p = page();
+  p.run("dockMeasure = () => null");
+  assert.equal(p.run("dockForcesFull()"), true, "not knowing is not a reason to cover the terminals");
+  p.st.cells = 2;
+  p.run("dockMeasure = () => ({ avail: 1030, left: 0 })");
+  p.run("drawerSize = { width: 0.9, tree: 0.4 }");
+  assert.equal(p.run("dockForcesFull()"), false, "a wide stored share is held to the terminal floors, not forced Full");
 });

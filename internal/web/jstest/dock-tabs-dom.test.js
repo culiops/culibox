@@ -23,7 +23,7 @@ function page(over) {
   const node = (id) => (nodes[id] = nodes[id] || Object.assign(new Node("div", doc), { id }));
   for (const id of ["drawer", "drawer-vhost", "drawer-vempty", "dock-bar"]) node(id);
   doc.getElementById = (id) => nodes[id] || null;
-  const st = { strip: [], crumbs: [], asks: [], toasts: [], timers: [], store: new Map(), revealed: [], follow: 0, made: [], answer: true };
+  const st = { strip: [], crumbs: [], asks: [], toasts: [], timers: [], store: new Map(), revealed: [], follow: 0, made: [], answer: true, opened: [], full: false };
   const store = { getItem: (k) => (st.store.has(k) ? st.store.get(k) : null), setItem: (k, v) => { st.store.set(k, v); } };
   const handlers = {};
   class ViewerTab {
@@ -83,6 +83,7 @@ function page(over) {
     lastSessions: [{ id: "a", name: "alpha" }, { id: "b", name: "beta" }],
     cellTerminal: () => null,
     focusedCell: {},
+    dockForcesFull: () => st.full,
     syncFocusedTree: () => { st.follow++; },
     dockTreeFold: () => {},
     dockTreeReveal: () => { st.revealed.push("column"); },
@@ -121,6 +122,8 @@ function page(over) {
     live_: (...sids) => { ctx.drawerLiveSids = () => sids; },
     tabs: (sid) => ctx.dockStateOf(sid === undefined ? "a" : sid).tabs.map((t) => [t.path, t.preview]),
   };
+  // openDrawer as app.js does it for the dock: the state changes, then drawerFilesApply runs.
+  ctx.openDrawer = (kind, sid) => { st.opened.push([kind, sid]); p.drawer({ open: kind, sessionId: sid, pinned: false }); };
   p.restore = (sessions, raw) => { if (raw !== undefined) st.store.set(KEY, raw); ctx.dockRestore(sessions || [{ id: "a" }, { id: "b" }]); };
   return p;
 }
@@ -692,4 +695,94 @@ test("drawerShowFile folds the explorer column the strip opened, as before", () 
   const p = page({ dockTreeFold: () => { folded++; } });
   p.show(files(1)[0]);
   assert.equal(folded, 1);
+});
+
+// --- the dock reopens after a reload when it was open -------------------------------------------------------------------
+
+const STORED = (open) => JSON.stringify({ v: 1, open, sessions: { a: { tabs: [{ path: "/work/proj/f1.go" }], active: "v:/work/proj/f1.go" } } });
+// boot: what restoreBoot does, in its order: dockRestore, (the layout), dockReopen. The page starts with the dock closed.
+function boot(over, open) {
+  const p = page(Object.assign({ cellTerminal: () => ({ id: "a" }) }, over));
+  p.set("drawerState", { open: null, sessionId: null, pinned: false });
+  p.restore(null, STORED(open));
+  p.ctx.dockReopen();
+  return p;
+}
+const storedOpen = (p) => JSON.parse(p.st.store.get(KEY)).open;
+
+test("a dock that was open comes back open on the focused pane's session, through the normal open path, with its tabs", () => {
+  const p = boot({}, true);
+  assert.deepEqual(p.st.opened, [["files", "a"]]);
+  assert.deepEqual(p.get("drawerState"), { open: "files", sessionId: "a", pinned: false });
+  assert.deepEqual(names(p.live()), ["/work/proj/f1.go"], "the restored tabs are on screen");
+  p.flush();
+  assert.equal(storedOpen(p), true, "the write says it is open");
+  p.ctx.dockReopen();
+  assert.equal(p.st.opened.length, 1, "once: the flag is spent by the open");
+});
+
+test("a dock that was closed stays closed", () => {
+  const p = boot({}, false);
+  assert.deepEqual(p.st.opened, []);
+  assert.equal(p.get("drawerState").open, null);
+  const none = page({ cellTerminal: () => ({ id: "a" }) });
+  none.ctx.dockRestore([{ id: "a" }]); // nothing stored at all
+  none.ctx.dockReopen();
+  assert.deepEqual(none.st.opened, []);
+});
+
+test("a dock that would land in forced Full mode is not reopened on boot, and the stored flag stays true", () => {
+  const p = boot({}, true);
+  const q = page({ cellTerminal: () => ({ id: "a" }) });
+  q.st.full = true;
+  q.set("drawerState", { open: null, sessionId: null, pinned: false });
+  q.restore(null, STORED(true));
+  q.ctx.dockReopen();
+  assert.deepEqual(q.st.opened, [], "the terminals do not come back covered");
+  assert.equal(q.get("drawerState").open, null);
+  q.ctx.dockSaveNow();
+  assert.equal(storedOpen(q), true, "a write while it is held back keeps the flag");
+  assert.ok(p);
+  // The user opens it and closes it: that is a decision, and the flag follows it.
+  q.drawer({ open: "files", sessionId: "a", pinned: false });
+  q.drawer({ open: null, sessionId: "a", pinned: false });
+  q.ctx.dockSaveNow();
+  assert.equal(storedOpen(q), false);
+});
+
+test("the phone does not reopen anything, and a write from it does not store \"closed\" over the desktop's flag", () => {
+  const p = boot({ drawerDesktop: () => false }, true);
+  assert.deepEqual(p.st.opened, []);
+  assert.equal(p.get("drawerState").open, null);
+  p.ctx.dockSaveNow();
+  assert.equal(storedOpen(p), true);
+});
+
+test("no focused session (an empty grid, a pane of files) is nothing to reopen the dock on", () => {
+  for (const cellTerminal of [() => null, () => ({ id: "" }), () => ({})]) {
+    const p = boot({ cellTerminal }, true);
+    assert.deepEqual(p.st.opened, []);
+    p.ctx.dockSaveNow();
+    assert.equal(storedOpen(p), true, "and the flag is kept");
+  }
+});
+
+test("a dock the page opened itself before the list arrived is not opened a second time", () => {
+  const p = page({ cellTerminal: () => ({ id: "a" }) });
+  p.drawer({ open: "files", sessionId: "a", pinned: false });
+  p.restore(null, STORED(true));
+  p.ctx.dockReopen();
+  assert.deepEqual(p.st.opened, []);
+});
+
+test("closing a null-session pane's files and opening another session parks the viewer: no viewers is not 'the null session'", () => {
+  const p = page();
+  p.drawer({ open: "files", sessionId: null, pinned: false });
+  p.show(files(1)[0], { preview: false });
+  assert.equal(p.live().length, 1);
+  assert.equal(p.get("dockViewersSid"), null, "the null session has viewers");
+  p.set("drawerState", { open: "files", sessionId: "a", pinned: false }); // moved without drawerFilesApply's own park
+  p.ctx.dockShow();
+  assert.deepEqual(p.live(), [], "the pane of files' viewer did not stay on screen under session a");
+  assert.equal(p.state(null).tabs.length, 1, "its tab is kept for when that pane's Files is open again");
 });

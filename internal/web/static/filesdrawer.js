@@ -37,6 +37,11 @@ let dockViewersSid = null;
 // tabs with nothing.
 let dockLoaded = false;
 let dockUnsaved = false; // a change is not written yet; pagehide writes it
+// The stored form said the dock was open and nothing on this page has opened or closed it since: dockRestore sets
+// it from the stored flag, dockReopen clears it by opening, and any open or close (drawerFilesApply) clears it.
+// While it holds, a write keeps the flag true: a phone, or a boot that could not reopen the dock (it would
+// have covered the terminals), must not store "closed" over what the desktop last wrote.
+let dockOpenKept = false;
 let dockSaveTimer = null;
 const DOCK_SAVE_MS = 300;
 let drawerAsking = false;     // a discard prompt is on screen: never stack a second
@@ -285,7 +290,7 @@ function dockShow(o) {
   const host = drawerEl("drawer-vhost");
   if (!host || drawerState.open !== "files") { drawerPaint(); return; }
   const sid = drawerState.sessionId;
-  if (dockViewersSid !== null && dockViewersSid !== sid) dockParkAll(); // callers have passed the dirty gate
+  if (dockViewers.size && dockViewersSid !== sid) dockParkAll(); // callers have passed the dirty gate (null is a session too: a pane of files)
   const st = dockStateOf(sid);
   const tab = dockTabsOf(st).find((t) => t.key === st.active) || null;
   let v = tab ? dockViewers.get(tab.key) || null : null;
@@ -490,7 +495,7 @@ function dockSaveNow() {
   dockSyncScroll(dockViewersSid);
   const store = dockStorage();
   if (!store) return;
-  try { store.setItem(DOCK_TABS_KEY, serializeDock(dockStates, drawerState.open === "files")); } catch (_) { /* quota or private mode: the tabs just do not survive a reload */ }
+  try { store.setItem(DOCK_TABS_KEY, serializeDock(dockStates, drawerState.open === "files" || dockOpenKept)); } catch (_) { /* quota or private mode: the tabs just do not survive a reload */ }
   dockUnsaved = false;
 }
 
@@ -498,16 +503,31 @@ function dockSaveNow() {
 // a session that is not in it has nowhere to show its tabs and is dropped (parseDock),
 // so reading before the list is in would drop them all and the next write would
 // store that. A page that gave up on the list never calls this and never writes. A
-// session the page already has tabs for keeps them. The dock itself is not reopened:
-// a reload gives the user their panes, and the tabs are back when Files is.
+// session the page already has tabs for keeps them. It also keeps the stored "the dock
+// was open" for dockReopen, which restoreBoot calls once the layout is back.
 function dockRestore(sessions) {
   const store = dockStorage();
   let raw = null;
   try { raw = store ? store.getItem(DOCK_TABS_KEY) : null; } catch (_) { /* no storage: nothing to restore */ }
   const live = (sessions || []).map((s) => s && s.id).filter((id) => typeof id === "string" && id);
-  for (const [sid, st] of parseDock(raw, live).map) if (!dockStates.has(sid)) dockStates.set(sid, st);
+  const parsed = parseDock(raw, live);
+  for (const [sid, st] of parsed.map) if (!dockStates.has(sid)) dockStates.set(sid, st);
+  dockOpenKept = parsed.open && drawerState.open !== "files";
   dockLoaded = true;
   if (drawerState.open === "files") dockShow(); // the dock was opened before the list arrived
+}
+
+// dockReopen: the dock was open when the page went away (the flag dockRestore kept), so it comes back open, on the
+// focused pane's session, through the normal open path (openDrawer: the dirty gate, the tree root, positionDrawer).
+// restoreBoot calls it after the layout is restored, because the focused pane is not known before. It holds back,
+// leaving the stored flag as it is (dockOpenKept), when there is nothing to show it for (no focused session), on the
+// phone (it has no dock), and when the dock would not fit beside the panes (dockForcesFull): a reload must not bring
+// the terminals back covered by a Full-mode dock.
+function dockReopen() {
+  if (!dockOpenKept || !drawerDesktop()) return;
+  const term = typeof cellTerminal === "function" ? cellTerminal(focusedCell) : null;
+  if (!term || !term.id || dockForcesFull()) return;
+  openDrawer("files", term.id);
 }
 
 // The last change before a reload is the one most likely still inside the debounce,
@@ -537,7 +557,10 @@ function drawerFilesApply(prev, next) {
   }
   if (now && (!was || moved)) { drawerPaintChanged(); drawerLoadChanged(next.sessionId); }
   else if (!now) drawerPaintChanged();
-  if (was !== now) dockSaveSoon(); // the stored form says whether the dock is open
+  if (was !== now) { // the stored form says whether the dock is open
+    dockOpenKept = false;
+    dockSaveSoon();
+  }
   if (now) dockShow();
   else drawerPaint();
 }

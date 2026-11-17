@@ -118,8 +118,14 @@ test("the stored tabs are read once the session list is known, never on the path
   const boot = app.slice(app.indexOf("(async function restoreBoot("), app.indexOf("initFileTree();"));
   const giveUp = boot.indexOf("endRestore(false)");
   const restore = boot.indexOf("dockRestore(sessions);");
+  const layout = boot.indexOf("restoreLayout(sessions);");
+  const reopen = boot.indexOf("dockReopen();");
+  const tryAt = boot.indexOf("try {");
+  const finallyAt = boot.indexOf("finally {");
   assert.ok(giveUp > 0 && restore > giveUp, "after the give-up return: a page with no list never reads, so never writes");
-  assert.ok(restore < boot.indexOf("restoreLayout(sessions)"), "before the layout restore, so a migration (Task 8b) merges into what is stored");
+  assert.ok(restore < layout, "before the layout restore, so a migration (Task 8b) merges into what is stored");
+  assert.ok(tryAt > giveUp && tryAt < restore && layout < finallyAt && reopen < finallyAt, "inside the try whose finally ends the boot restore, so a throw cannot stall it");
+  assert.ok(reopen > layout, "the dock reopens after the layout: the focused pane is not known before");
   // The write is gated on that read.
   const save = fn("filesdrawer.js", "dockSaveNow");
   assert.match(save, /if \(!dockLoaded\) return;/);

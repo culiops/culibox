@@ -4,46 +4,6 @@ const test = require("node:test");
 const assert = require("node:assert");
 const d = require("../static/drawerfiles.js");
 
-test("rememberDrawerFile / drawerFileFor: per-session memory survives a session switch", () => {
-  let m = new Map();
-  m = d.rememberDrawerFile(m, "A", { path: "/h/u/a.go", scroll: 120 });
-  m = d.rememberDrawerFile(m, "B", { path: "/h/u/b.md", scroll: 40 });
-  assert.deepEqual(d.drawerFileFor(m, "A"), { path: "/h/u/a.go", scroll: 120 });
-  assert.deepEqual(d.drawerFileFor(m, "B"), { path: "/h/u/b.md", scroll: 40 });
-  // Switching file inside A replaces A's entry only.
-  m = d.rememberDrawerFile(m, "A", { path: "/h/u/c.txt", scroll: 0 });
-  assert.deepEqual(d.drawerFileFor(m, "A"), { path: "/h/u/c.txt", scroll: 0 });
-  assert.deepEqual(d.drawerFileFor(m, "B"), { path: "/h/u/b.md", scroll: 40 });
-  assert.equal(d.drawerFileFor(m, "C"), null);
-});
-
-test("rememberDrawerFile is pure: the map passed in is not changed", () => {
-  const m0 = new Map();
-  const m1 = d.rememberDrawerFile(m0, "A", { path: "/x", scroll: 3 });
-  assert.equal(m0.size, 0);
-  assert.equal(m1.size, 1);
-});
-
-test("rememberDrawerFile: no path forgets the session; a bad scroll reads as 0", () => {
-  let m = d.rememberDrawerFile(new Map(), "A", { path: "/x", scroll: 9 });
-  m = d.rememberDrawerFile(m, "A", { path: null, scroll: 0 });
-  assert.equal(d.drawerFileFor(m, "A"), null);
-  m = d.rememberDrawerFile(m, "A", { path: "/y", scroll: -5 });
-  assert.deepEqual(d.drawerFileFor(m, "A"), { path: "/y", scroll: 0 });
-  m = d.rememberDrawerFile(m, "A", { path: "/y", scroll: NaN });
-  assert.deepEqual(d.drawerFileFor(m, "A"), { path: "/y", scroll: 0 });
-  m = d.rememberDrawerFile(m, "A", { path: "/y", scroll: 33.6 });
-  assert.deepEqual(d.drawerFileFor(m, "A"), { path: "/y", scroll: 34 });
-});
-
-test("rememberDrawerFile: a pane of files (no session) has its own slot", () => {
-  let m = d.rememberDrawerFile(new Map(), null, { path: "/n", scroll: 5 });
-  m = d.rememberDrawerFile(m, "A", { path: "/a", scroll: 1 });
-  assert.deepEqual(d.drawerFileFor(m, null), { path: "/n", scroll: 5 });
-  assert.deepEqual(d.drawerFileFor(m, "A"), { path: "/a", scroll: 1 });
-  assert.equal(d.drawerFileFor(null, "A"), null);
-});
-
 test("drawerLeavesFile: closing, switching kind or switching session leaves the drawer's file", () => {
   const files = (sid) => ({ open: "files", sessionId: sid });
   assert.equal(d.drawerLeavesFile(files("A"), { open: null, sessionId: "A" }), true, "close");
