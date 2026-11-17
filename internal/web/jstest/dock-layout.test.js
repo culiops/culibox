@@ -102,10 +102,11 @@ test("a wide window: the dock gets dockLayout's width and the explorer its colum
 test("two panes at 1280 with the sidebar open: the explorer folds to its strip", () => {
   const p = page();
   p.st.cells = 2;
-  p.run("paintDrawerLayout(1030)"); // the founder's case: 1280 minus the 250 sidebar
+  p.run("paintDrawerLayout(983)"); // the founder's case: 1280 minus the 297 sidebar (box ruling R12: it folds, it is not Full)
   assert.equal(p.els.drawer.dataset.folded, "1");
-  assert.deepEqual(dockProps(p), { dock: "456px", tree: "36px" });
+  assert.deepEqual(dockProps(p), { dock: "436px", tree: "36px" });
   assert.equal(p.els.drawer.dataset.max, undefined, "pushed, not Full mode");
+  assert.equal(p.els.drawer.dataset.forced, undefined);
 });
 
 test("a maximized pane is one column on screen, so two cells do not make the dock narrower", () => {
@@ -173,7 +174,7 @@ test("the strip opens the explorer as a column that pushes the terminals, and a 
   assert.equal(p.run("dockTreeAsk"), "folded");
   assert.equal(p.els.drawer.dataset.folded, undefined, "the column is open");
   assert.equal(p.els["drawer-body"].props["--dr-tree"], "200px");
-  assert.equal(p.els.drawer.props["--dock-w"], "470px", "the terminals gave, down to their 280 floor each: 1030 - 470 = 560");
+  assert.equal(p.els.drawer.props["--dock-w"], "490px", "the terminals gave, down to their 270 floor each: 1030 - 490 = 540");
   // The window gets wider until the explorer unfolds by itself: the transient ask is spent.
   p.run("paintDrawerLayout(1500)");
   assert.equal(p.run("dockTreeAsk"), null);
@@ -206,8 +207,8 @@ test("dockTreeFold folds it again; with nothing opened, or no dock, it and dockT
 test("when the column cannot push (the editor beside it would be under 260) the ask lands in forced Full mode", () => {
   const p = page();
   p.st.cells = 2;
-  p.run("positionDrawer = () => paintDrawerLayout(1020)");
-  p.run("paintDrawerLayout(1020)");
+  p.run("positionDrawer = () => paintDrawerLayout(1000)");
+  p.run("paintDrawerLayout(1000)");
   assert.equal(p.els.drawer.dataset.folded, "1");
   p.run("dockTreeReveal()");
   assert.equal(p.els.drawer.dataset.forced, "1");
@@ -472,12 +473,13 @@ test("dockForcesFull answers what the first paint of an open dock would: fits be
   const asks = (avail, cells) => { p.st.cells = cells; p.run("dockMeasure = () => ({ avail: " + avail + ", left: 0 })"); return p.run("dockForcesFull()"); };
   assert.equal(asks(1190, 1), false, "one pane, plenty of room");
   assert.equal(asks(1030, 2), false, "two panes at the founder's 1030: the explorer folds, nothing is covered");
-  assert.equal(asks(1016, 2), false, "the floors just fit");
-  assert.equal(asks(1015, 2), true, "one pixel short: the same cliff the layout has (Task 7: forced Full below 1313 px with the sidebar open)");
+  assert.equal(asks(983, 2), false, "the founder's own window, 1280 with the sidebar open: the explorer folds (box ruling R12)");
+  assert.equal(asks(976, 2), false, "the floors just fit");
+  assert.equal(asks(975, 2), true, "one pixel short: the same cliff the layout has (forced Full below 1273 px with the sidebar open, 297 px)");
   assert.equal(asks(800, 2), true);
   // The answer is the layout's own: what it says here is what paintDrawerLayout then draws.
   p.st.cells = 2;
-  p.run("paintDrawerLayout(1015)");
+  p.run("paintDrawerLayout(975)");
   assert.equal(p.els.drawer.dataset.forced, "1");
 });
 

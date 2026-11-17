@@ -23,10 +23,13 @@
 // first, down to their hard floor, because the spec says it pushes and never
 // covers. It changes nothing when the explorer is not folded.
 
+// The spec says "about 420" for the editor and "about 280" for a terminal and leaves the numbers to the build. Box ruling R12
+// sets 400 and 270: the founder's own window (1280 px, two panes, sidebar open) leaves 983 px for the panes and the dock, and
+// the spec's case is that it folds the explorer and never forces Full. 2 x 270 + 400 + 36 = 976 <= 983.
 const DOCK_FLOORS = {
   termComfy: 360, // a terminal's comfortable width
-  termFloor: 280, // its hard floor: Claude Code still works there, it wraps
-  editor: 420, // the editor column's floor
+  termFloor: 270, // its hard floor: Claude Code still works there, it wraps
+  editor: 400, // the editor column's floor
   tree: 200, // an open explorer column's minimum
   strip: 36, // the folded explorer (an icon strip)
   split: 5, // the splitter between explorer and editor
