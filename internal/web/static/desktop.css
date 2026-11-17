@@ -1355,14 +1355,17 @@
      draws ├ └, the git letter at the right edge and a tinted name for what changed. Every rule hangs from #drawer, so the
      phone's tree (app.css: mono rows, the box-drawing branch) is untouched. ftRenderDir sets --lvl, the depth, on each row
      and on the box that holds a level (its "Loading…" line). One indent step is 14px: the chevron's width, so a guide
-     runs down the middle of its parent's chevron (8px of row padding + 14 * level + 7px). */
-  #drawer #filetree { font-family: var(--font-ui); font-size: var(--t-md); }
+     runs down the middle of its parent's chevron (8px of row padding + 14 * level + 7px), whatever the text size.
+     Settings' "File tree text size" (--fs-tree, 12 by default on desktop) stays live: the text is 13/12 of it and the row's
+     line 22/12 of it, so the default is exactly 13px text in 22px rows (the spec's look) and a larger setting makes the rows
+     grow with the text (min-height is the 22px floor for a smaller one). */
+  #drawer #filetree { font-family: var(--font-ui); font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
   #drawer .ft-node {
-    box-sizing: border-box; height: 22px; gap: 4px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px); line-height: 22px;
+    box-sizing: border-box; min-height: 22px; gap: 4px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px);
     background-image: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 14px);
     background-repeat: no-repeat; background-position: 15px 0; background-size: calc(var(--lvl, 0) * 14px) 100%;
   }
-  #drawer #filetree .pending-line { box-sizing: border-box; height: 22px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px + 18px); line-height: 22px; }
+  #drawer #filetree .pending-line { box-sizing: border-box; min-height: 22px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px + 18px); line-height: inherit; }
   /* The hover and selected washes are background-color only: app.css's `background:` shorthand on the same rows would reset
      the image, and the guides would vanish under the pointer. Hover is the kit's, a half step under the selected row's. The
      selected row is mockup B1's: the accent tint and a 1px ring a few steps brighter (the ring is also what stays visible when
@@ -1375,23 +1378,30 @@
   #drawer .ft-branch { display: none; }
   /* The chevron, drawn by the row's ::before; a file's is empty, the same width, so every icon starts at the same column. */
   #drawer .ft-node::before { content: ""; flex: none; width: 14px; text-align: center; color: var(--muted); }
-  #drawer .ft-node.dir::before { content: "\203A"; font-size: var(--t-lg); }
+  #drawer .ft-node.dir::before { content: "\203A"; font-size: calc(var(--fs-tree) * 15 / 12); }
   #drawer .ft-node.dir[aria-expanded="true"]::before { transform: rotate(90deg); }
   /* A folder's name is the text colour, not app.css's accent, so that the tint below can mean "something changed in here". */
   #drawer .ft-node.dir { color: var(--fg); }
   /* The git letter keeps app.css's colours (M accent, A and U ok, D and C red) and takes the kit's mono step. */
   #drawer .ft-git { min-width: 12px; padding: 0; font: var(--w-semibold) var(--t-xs)/1 var(--font-mono); }
-  /* Changed names: the colour of the letter, a half step toward the text colour (mockup B1's #a9c9ff and #8fe0b4). A folder with
-     changes below it is accent whatever the letter under it is (it comes last: the selectors are the same strength), and the
-     dot that told the same thing is gone. */
+  /* Changed names: the colour of the letter, a half step toward the text colour (mockup B1's #a9c9ff and #8fe0b4; conflicts and
+     deletions are red, as their letters are). A folder with changes below it is accent whatever the letter under it is (it
+     comes after the file rules and is the same strength), except one whose strongest change is a conflict or a
+     deletion, which is red (its selector is stronger, so the order does not matter). */
   #drawer .ft-node:has(> .ft-git-m) .ft-name { color: color-mix(in srgb, var(--accent) 50%, var(--fg)); }
   #drawer .ft-node:has(> .ft-git-u, > .ft-git-a) .ft-name { color: color-mix(in srgb, var(--ok) 50%, var(--fg)); }
+  #drawer .ft-node:has(> .ft-git-c) .ft-name { color: color-mix(in srgb, var(--red) 50%, var(--fg)); }
   #drawer .ft-node:has(> .ft-git-dot) .ft-name { color: color-mix(in srgb, var(--accent) 50%, var(--fg)); }
-  #drawer .ft-git-dot { display: none; }
+  #drawer .ft-node:has(> .ft-git-dot:is(.ft-git-c, .ft-git-d)) .ft-name { color: color-mix(in srgb, var(--red) 50%, var(--fg)); }
+  /* The folder's dot and the session's span are not drawn (the tint and the bar say it), but they stay for assistive technology:
+     visually hidden, not display:none, so the role="img" and the label ("N changes inside", "Edited by this session's agent")
+     are still read. The same words are in the name's hover text (filetree.js ftNameTitle). */
+  #drawer .ft-git-dot, #drawer .ft-chg {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
   /* A file (or a folder above one) this session's agent changed (Activity's files, filesdrawer.js): the session bar, the same
      2px accent edge the Changes list wears. Git stays the primary signal, so the bar is only an edge and the name keeps the
-     git tint. filetree.js still builds the .ft-chg span (it is how it finds and repaints the mark); it is not drawn. */
-  #drawer .ft-chg { display: none; }
+     git tint. filetree.js still builds the .ft-chg span (it is how it finds and repaints the mark), visually hidden above. */
   #drawer .ft-node:has(> .ft-chg) { box-shadow: inset 2px 0 0 var(--accent); }
   #drawer .ft-node.ft-sel:has(> .ft-chg) {
     box-shadow: inset 2px 0 0 var(--accent), inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, var(--accent-tint));

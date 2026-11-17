@@ -117,12 +117,15 @@ test("the env chip takes the kit .chip-env look: weight 600, tracking .02em", ()
 
 test("the dock tree's session mark is a 2px accent bar on the row, and the old dot is not drawn", () => {
   // Task 9a: the dot after the name (a 6px circle, which is why this pin once checked that it set no px font size) became the
-  // spec's session bar, so a row this session changed carries `inset 2px 0 0` and the .ft-chg span only stays for filetree.js
-  // to find and repaint.
+  // spec's session bar, so a row this session changed carries `inset 2px 0 0`. The .ft-chg span stays for filetree.js to find and
+  // repaint, and for assistive technology (role img, aria-label), so it is visually hidden and not display:none.
   const rules = parseRules(css);
-  const dot = rules.find((r) => r.selector === "#drawer .ft-chg");
+  const dot = rules.find((r) => r.selector.split(",").map((x) => x.trim()).includes("#drawer .ft-chg"));
   assert.ok(dot, "#drawer .ft-chg is styled");
-  assert.strictEqual(new Map(dot.decls).get("display"), "none", "the dot is hidden");
+  const d = new Map(dot.decls);
+  assert.notStrictEqual(d.get("display"), "none", "the span keeps its accessibility node");
+  assert.strictEqual(d.get("position"), "absolute");
+  assert.strictEqual(d.get("clip"), "rect(0 0 0 0)");
   assert.ok(!rules.some((r) => r.selector === "#drawer .ft-chg::before"), "no dot is drawn any more");
   const bar = rules.find((r) => r.selector === "#drawer .ft-node:has(> .ft-chg)");
   assert.ok(bar, "the row that holds the mark is styled");

@@ -239,18 +239,37 @@ const ftRowPaths = new WeakMap();
 const ftRowOpeners = new WeakMap();
 // A row's menu opener, (at?) => void: the right-click in the dock opens it at the pointer (ftTreeContextMenu).
 const ftRowMenus = new WeakMap();
+// What the dock's session bar says in words: the mark is colour only, so the span carries the label (role img, aria-label)
+// and the hover text, wherever it is drawn.
+const FT_CHG_LABEL = "Edited by this session's agent";
 function ftMarkRow(row, path, set) {
   const have = row.querySelector(":scope > .ft-chg");
-  if (!set || !set.has(path)) { if (have) have.remove(); return; }
+  if (!set || !set.has(path)) { if (have) { have.remove(); ftNameTitle(row); } return; }
   if (have) return;
   const dot = document.createElement("span");
   dot.className = "ft-chg";
   dot.textContent = "\u25CF";
-  dot.title = "edited by this session's agent";
+  dot.title = FT_CHG_LABEL;
+  dot.setAttribute("role", "img");
+  dot.setAttribute("aria-label", FT_CHG_LABEL);
   // After the git badge (gitstatus.js) when there is one: the badge is the
   // fact, this dot is the lesser hint, and it stays alone where git has no mark.
   const anchor = row.querySelector(":scope > .ft-git, :scope > .ft-git-dot") || row.querySelector(":scope > .ft-name");
   if (anchor) anchor.after(dot); else row.append(dot);
+  ftNameTitle(row);
+}
+// ftNameTitle sets the hover text of a row: on its name, the path and then what marks the row (a folder's "N changes inside"
+// from git, the session's edit), and on the row itself the marks alone, for the parts of the row that are not the name. The
+// dock draws those marks as a tint and a bar, not as the dot the title used to hang from, so the words live here. gitstatus.js
+// calls it when it paints or clears a folder's dot. The phone keeps the titles it has: its dot is drawn and carries its own.
+function ftNameTitle(row) {
+  if (!ftDocked()) return;
+  const path = ftRowPaths.get(row);
+  const name = row.querySelector(":scope > .ft-name");
+  if (!path || !name) return;
+  const notes = [".ft-git-dot", ".ft-chg"].map((sel) => row.querySelector(":scope > " + sel)).filter(Boolean).map((el) => el.title).filter(Boolean);
+  name.title = [shortPath(path), ...notes].join("\n");
+  row.title = notes.join("\n");
 }
 function ftPaintChanged(set) {
   if (!ftTreeEl) return;
@@ -303,12 +322,13 @@ function ftDocked() {
   return typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks();
 }
 
-// ftSelect highlights `row` (.ft-sel) and no other row of its tree: the click's mark in the dock, and the row Reveal in
-// tree landed on. One row at a time, and selecting the selected row again leaves it selected (a double-click selects twice).
+// ftSelect highlights `row` (.ft-sel, and aria-selected for assistive technology) and no other row of its tree: the click's
+// mark in the dock, and the row Reveal in tree landed on. One row at a time, and selecting the selected row again leaves it selected (a double-click selects twice).
 function ftSelect(row) {
   const tree = row.closest ? row.closest('[role="tree"]') : null;
-  if (tree) for (const old of tree.querySelectorAll(".ft-sel")) old.classList.remove("ft-sel");
+  if (tree) for (const old of tree.querySelectorAll(".ft-sel")) { old.classList.remove("ft-sel"); old.removeAttribute("aria-selected"); }
   row.classList.add("ft-sel");
+  row.setAttribute("aria-selected", "true"); // the screen reader's "selected", beside the sighted tint
 }
 
 // `st` is the root render's own bookkeeping, handed down to the folders it auto-opens: every row drawn under
@@ -1057,15 +1077,17 @@ function ftRowMenuOpen(row) {
 
 // ftTreeContextMenu: two kinds of contextmenu event reach the tree, desktop only.
 // A mouse right-click (button 2) on a row of the docked tree opens that row's menu at the pointer, as the explorer of an editor
-// does, and the browser's own is not also shown. It lands on a part of the row (the icon, the name, the git letter) more often
-// than on the row itself, so the row is found from the target. Selecting the row first shows which one the menu acts on.
+// does, and the browser's own is not also shown. So does a Ctrl+click on macOS, where the browser sends that as a contextmenu
+// with button 0 and ctrlKey (a keyboard's has neither). The pointer lands on a part of the row (the icon, the name, the git
+// letter) more often than on the row itself, so the row is found from the target with closest(). Selecting the row first shows
+// which one the menu acts on.
 // Anywhere else (the tree's empty space, a tree that is not the dock's) the browser keeps its menu.
 // An event whose target is a tree row itself, from no mouse button, is the keyboard's (the Menu key on a platform that sends it
 // to the focused element) or an assistive technology's (VoiceOver's VO+Shift+M): it opens the row's menu as Shift+F10 does, and
 // the browser's own is not also shown. The phone keeps what it had.
 function ftTreeContextMenu(e) {
   if (mobileActive(window.innerWidth)) return;
-  if (e.button === 2) {
+  if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
     const hit = e.target && e.target.closest ? e.target.closest(".ft-node") : null;
     const open = hit && ftDocked() ? ftRowMenus.get(hit) : null;
     if (!open) return;

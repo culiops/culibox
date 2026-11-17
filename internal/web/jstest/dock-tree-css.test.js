@@ -32,12 +32,31 @@ test("the tree restyle is the dock's: nothing in app.css reads --lvl, and the ph
   assert.strictEqual(rulesFor(app, ".ft-branch").includes("display"), false);
 });
 
-test("Inter 13px rows, 22px tall, the indent from --lvl", () => {
-  assert.match(rulesFor(css, "#drawer #filetree"), /font-family:\s*var\(--font-ui\)/);
-  assert.match(rulesFor(css, "#drawer #filetree"), /font-size:\s*var\(--t-md\)/, "13px, the kit step (the type test allows no raw px size)");
+test("Inter rows, 22px tall at the default text size, the indent from --lvl", () => {
+  const tree = rulesFor(css, "#drawer #filetree");
+  assert.match(tree, /font-family:\s*var\(--font-ui\)/);
   const row = rulesFor(css, "#drawer .ft-node");
-  assert.match(row, /height:\s*22px/);
+  assert.match(row, /min-height:\s*22px/, "the floor; the row's own height is its line (below), which grows with the setting");
+  assert.ok(!/(^|[\s;])height:/.test(row), "no fixed height: a larger text size must be able to grow the row");
   assert.match(row, /padding:\s*0 8px 0 calc\(var\(--lvl, 0\) \* 14px \+ 8px\)/);
+});
+
+test("the dock tree keeps Settings' File tree text size: text and line are ratios of --fs-tree, exactly 13px in 22px rows at its default 12", () => {
+  const tree = rulesFor(css, "#drawer #filetree");
+  const size = /font-size:\s*calc\(var\(--fs-tree\) \* (\d+) \/ (\d+)\)/.exec(tree);
+  const line = /line-height:\s*calc\(var\(--fs-tree\) \* (\d+) \/ (\d+)\)/.exec(tree);
+  assert.ok(size, "font-size reads --fs-tree (the type test allows a calc with no px)");
+  assert.ok(line, "line-height reads --fs-tree, so the row grows with the text");
+  const DEFAULT = 12; // index.html's pre-paint script and fontprefs.js DEFAULTS.filetree on desktop
+  assert.strictEqual(DEFAULT * size[1] / size[2], 13, "the spec's 13px text");
+  assert.strictEqual(DEFAULT * line[1] / line[2], 22, "the spec's 22px rows");
+  assert.ok(read("index.html").includes("filetree:['--fs-tree',12]"), "12 is the desktop default the ratios are built on");
+  assert.match(read("fontprefs.js"), /DEFAULTS = \{[^}]*filetree: 12/);
+  // The chevron grows with the text as well, and the guides do not depend on it: they are geometry (14px a level).
+  assert.match(rulesFor(css, "#drawer .ft-node.dir::before"), /font-size:\s*calc\(var\(--fs-tree\) \* 15 \/ 12\)/);
+  assert.match(rulesFor(css, "#drawer .ft-node::before"), /width:\s*14px/);
+  // app.css still has its consumer (the phone's tree), so one setting drives both.
+  assert.match(rulesFor(app, "#filetree"), /font-size:\s*var\(--fs-tree\)/);
 });
 
 test("indent guides: a 1px --line stripe every 14px, as wide as the indent, one per ancestor level", () => {
@@ -64,7 +83,7 @@ test("the box-drawing branch is hidden, and a folder gets a chevron that turns w
   assert.match(rulesFor(css, '#drawer .ft-node.dir[aria-expanded="true"]::before'), /transform:\s*rotate\(90deg\)/);
 });
 
-test("changed names are tinted (M accent, U and A ok, a folder with changes below accent) and the folder dot is hidden", () => {
+test("changed names are tinted (M accent, U and A ok, conflicts red, a folder with changes below accent or red) and the folder dot is not drawn", () => {
   const m = rulesFor(css, "#drawer .ft-node:has(> .ft-git-m) .ft-name");
   assert.match(m, /color:\s*color-mix\(in srgb, var\(--accent\) 50%, var\(--fg\)\)/);
   const u = rulesFor(css, "#drawer .ft-node:has(> .ft-git-u, > .ft-git-a) .ft-name");
@@ -73,8 +92,24 @@ test("changed names are tinted (M accent, U and A ok, a folder with changes belo
   assert.match(dir, /color:\s*color-mix\(in srgb, var\(--accent\) 50%, var\(--fg\)\)/);
   assert.ok(css.indexOf("#drawer .ft-node:has(> .ft-git-dot) .ft-name") > css.indexOf("#drawer .ft-node:has(> .ft-git-u, > .ft-git-a) .ft-name"),
     "the folder rule comes last, so a folder holding only new files is accent, not ok (equal specificity: order decides)");
-  assert.match(rulesFor(css, "#drawer .ft-git-dot"), /display:\s*none/);
+  // A conflict (file letter C) and a folder whose strongest change is a conflict or a deletion (dot code c or d) are red, as the
+  // letters are; the folder one is stronger than the plain folder rule, so the order of the two does not matter.
+  const red = /color:\s*color-mix\(in srgb, var\(--red\) 50%, var\(--fg\)\)/;
+  assert.match(rulesFor(css, "#drawer .ft-node:has(> .ft-git-c) .ft-name"), red);
+  assert.match(rulesFor(css, "#drawer .ft-node:has(> .ft-git-dot:is(.ft-git-c, .ft-git-d)) .ft-name"), red);
   assert.match(rulesFor(css, "#drawer .ft-node.dir"), /color:\s*var\(--fg\)/, "folders are not accent-coloured, or a tint would say nothing");
+});
+
+test("the folder dot and the session span are visually hidden, not display:none, so their role and label stay in the accessibility tree", () => {
+  for (const sel of ["#drawer .ft-git-dot", "#drawer .ft-chg"]) {
+    const b = rulesFor(css, sel);
+    assert.ok(!/display:\s*none/.test(b), sel + " keeps its accessibility node");
+    assert.match(b, /position:\s*absolute/, sel);
+    assert.match(b, /width:\s*1px/, sel);
+    assert.match(b, /height:\s*1px/, sel);
+    assert.match(b, /clip:\s*rect\(0 0 0 0\)/, sel);
+    assert.match(b, /overflow:\s*hidden/, sel);
+  }
 });
 
 test("the selected row is the accent tint with a 1px ring, and keeps the session bar beside it", () => {
@@ -85,7 +120,8 @@ test("the selected row is the accent tint with a 1px ring, and keeps the session
   assert.match(both, /box-shadow:\s*inset 2px 0 0 var\(--accent\), inset 0 0 0 1px /, "a selected row this session changed has both");
 });
 
-test("every tree rule of the dock hangs from #drawer (and the type icons keep the ones that ship)", () => {
+test("the rules that read --lvl, draw a ::before or select with :has() on a tree row hang from #drawer", () => {
+  // Only these: the focus ring and the ⋯'s hover rules are older desktop rules on the same rows and are not the restyle.
   const re = /([^{}]+)\{([^{}]*)\}/g;
   let m;
   const loose = [];
@@ -95,7 +131,11 @@ test("every tree rule of the dock hangs from #drawer (and the type icons keep th
     }
   }
   assert.deepStrictEqual(loose, []);
-  assert.strictEqual(rulesFor(css, "#drawer .ft-icon"), "", "the icon is app.css's Nerd Font glyph, as shipped");
+});
+
+test("the type icons are the ones that ship: the dock does not restyle .ft-icon", () => {
+  assert.strictEqual(rulesFor(css, "#drawer .ft-icon"), "");
+  assert.match(rulesFor(app, ".ft-icon"), /font-family:\s*"Symbols Nerd Font"/);
 });
 
 test("the explorer column has a fold control for the strip's transient open, shown only then", () => {

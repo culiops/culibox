@@ -175,7 +175,7 @@ function gitMarkRow(row, path) {
   const marks = gitCurrentMarks();
   const m = marks && marks.get(path);
   const have = row.querySelector(":scope > .ft-git, :scope > .ft-git-dot");
-  if (!m) { if (have) have.remove(); return; }
+  if (!m) { if (have) { have.remove(); gitNameTitle(row); } return; }
   const dot = m.dir && !m.untracked;
   const key = (dot ? "d" : "b") + m.code + "|" + m.title;
   if (have && have.dataset.gitKey === key) return;
@@ -213,6 +213,13 @@ function gitMarkRow(row, path) {
   el.dataset.gitKey = key;
   const name = row.querySelector(":scope > .ft-name");
   if (name) name.after(el); else row.append(el);
+  gitNameTitle(row);
+}
+
+// gitNameTitle: the row's hover text lists what marks it, and a folder's dot is one of the marks (filetree.js composes the
+// text). The dock hides the dot visually, so its "N changes inside" is read from the name too.
+function gitNameTitle(row) {
+  if (typeof ftNameTitle === "function") ftNameTitle(row);
 }
 
 // gitOpenChanges opens the file where a row click would, asking for its Changes

@@ -176,8 +176,12 @@ class Node {
   }
   all(pred, out = []) { for (const c of this.children) { if (!(c instanceof Node)) continue; if (pred(c)) out.push(c); c.all(pred, out); } return out; }
   querySelectorAll(sel) {
-    const scoped = /^:scope > (.+)$/.exec(sel);
-    if (scoped) return this.children.filter((c) => c instanceof Node && c.matches(scoped[1]));
+    // `:scope > a, :scope > b` (gitstatus.js's) is a list of the children that match any of them.
+    const parts = sel.split(",").map((x) => x.trim());
+    if (parts.every((x) => x.startsWith(":scope > "))) {
+      const own = parts.map((x) => x.slice(":scope > ".length)).join(",");
+      return this.children.filter((c) => c instanceof Node && c.matches(own));
+    }
     return this.all((n) => n.matches(sel));
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
@@ -772,6 +776,103 @@ test("a right-click off the rows (the empty tree) or on the phone keeps the brow
   const rc = await ro.render();
   ro.ctxMenu(byCls(rowNamed(rc, "a.txt"), "ft-name")[0], { button: 2, clientX: 10, clientY: 10 });
   assert.ok(!shape(ro.menu).includes("Delete\u2026"), "a read-only listing offers no Delete");
+});
+
+test("a Ctrl+click on macOS (a contextmenu with button 0 and ctrlKey) on the name, the icon or the row opens the menu at the pointer", async () => {
+  const w = world(1280);
+  docked(w);
+  const c = await w.render();
+  const row = rowNamed(c, "a.txt");
+  const ev = w.ctxMenu(byCls(row, "ft-name")[0], { button: 0, ctrlKey: true, clientX: 600, clientY: 200 });
+  assert.strictEqual(ev.prevented, 1, "the browser's own menu is not also shown");
+  assert.deepStrictEqual(menuAt(w), ["600px", "200px"]);
+  assert.strictEqual(w.menu.attrs["aria-label"], "File actions");
+  assert.deepStrictEqual(selected(c), ["a.txt"]);
+  w.docKey("Escape");
+  const icon = byCls(rowNamed(c, "dir1"), "ft-icon")[0];
+  assert.strictEqual(w.ctxMenu(icon, { button: 0, ctrlKey: true, clientX: 40, clientY: 70 }).prevented, 1);
+  assert.deepStrictEqual(menuAt(w), ["40px", "70px"]);
+  assert.strictEqual(w.menu.attrs["aria-label"], "Folder actions");
+  w.docKey("Escape");
+  assert.strictEqual(w.ctxMenu(rowNamed(c, "b.png"), { button: 0, ctrlKey: true, clientX: 9, clientY: 9 }).prevented, 1, "the row's own padding too");
+  assert.deepStrictEqual(menuAt(w), ["9px", "9px"]);
+  // Outside the dock, and on the phone, a Ctrl+click keeps the browser's menu.
+  const n = world(1280);
+  const nc = await n.render();
+  assert.strictEqual(n.ctxMenu(byCls(rowNamed(nc, "a.txt"), "ft-name")[0], { button: 0, ctrlKey: true }).prevented, 0);
+  const p = world(390);
+  docked(p);
+  const pc = await p.render();
+  assert.strictEqual(p.ctxMenu(byCls(rowNamed(pc, "a.txt"), "ft-name")[0], { button: 0, ctrlKey: true }).prevented, 0);
+  assert.ok(!p.menu.className.split(" ").includes("open"));
+});
+
+test("ftSelect also says aria-selected: true on the selected row, gone from the one it left", async () => {
+  const w = world(1280);
+  docked(w);
+  const c = await w.render();
+  const sel = (r) => r.attrs["aria-selected"] === undefined ? "-" : r.attrs["aria-selected"];
+  assert.deepStrictEqual(rowsOf(c).map(sel), ["-", "-", "-", "-"]);
+  rowNamed(c, "a.txt").click();
+  assert.deepStrictEqual(rowsOf(c).map((r) => nameOf(r) + ":" + sel(r)), ["dir1:-", "dir2:-", "a.txt:true", "b.png:-"]);
+  rowNamed(c, "b.png").click();
+  assert.deepStrictEqual(rowsOf(c).map((r) => nameOf(r) + ":" + sel(r)), ["dir1:-", "dir2:-", "a.txt:-", "b.png:true"]);
+  w.ctxMenu(byCls(rowNamed(c, "dir2"), "ft-name")[0], { button: 2, clientX: 1, clientY: 1 });
+  assert.deepStrictEqual(rowsOf(c).map((r) => nameOf(r) + ":" + sel(r)), ["dir1:-", "dir2:true", "a.txt:-", "b.png:-"], "a right-click moves it too");
+  assert.deepStrictEqual(selected(c), ["dir2"], "the tint and the attribute agree");
+});
+
+// The dock draws the session's edit and a folder's changes as a bar and a tint, so the words live in the DOM instead: the
+// .ft-chg span carries a label (role img, aria-label, title) and the hover text of the name and the row lists the marks.
+test("the session mark carries its words: role img, aria-label, title on the span, and the same on the name's and the row's hover text", async () => {
+  const w = world(1280);
+  docked(w);
+  const c = await w.render();
+  const row = rowNamed(c, "a.txt");
+  const name = byCls(row, "ft-name")[0];
+  assert.strictEqual(name.title, "~/w/a.txt", "unmarked: the path, as always");
+  assert.strictEqual(row.title, "");
+  w.run("ftPaintChanged(new Set(['/h/w/a.txt']))");
+  const span = byCls(row, "ft-chg")[0];
+  assert.ok(span, "the span is still built (the bar is drawn from it)");
+  assert.strictEqual(span.attrs.role, "img");
+  assert.strictEqual(span.attrs["aria-label"], "Edited by this session's agent");
+  assert.strictEqual(span.title, "Edited by this session's agent");
+  assert.strictEqual(name.title, "~/w/a.txt\nEdited by this session's agent", "hovering the name reads the path, then the mark");
+  assert.strictEqual(row.title, "Edited by this session's agent", "hovering the rest of the row reads the mark");
+  assert.strictEqual(rowNamed(c, "b.png").title, "", "another row is untouched");
+  w.run("ftPaintChanged(new Set())");
+  assert.strictEqual(byCls(row, "ft-chg").length, 0);
+  assert.strictEqual(name.title, "~/w/a.txt", "cleared: the path alone again");
+  assert.strictEqual(row.title, "");
+  // The phone keeps the titles it has (no dock: the dot is drawn there and carries its own).
+  const p = world(390);
+  const pc = await p.render();
+  const prow = rowNamed(pc, "a.txt");
+  p.run("ftPaintChanged(new Set(['/h/w/a.txt']))");
+  assert.strictEqual(byCls(prow, "ft-name")[0].title, "~/w/a.txt");
+  assert.strictEqual(prow.title, "");
+});
+
+test("a folder's git dot keeps its words in the name's hover text, with the session's after them (gitstatus.js on the same tree)", async () => {
+  const w = world(1280);
+  docked(w);
+  w.run(read("gitstatus.js"), "gitstatus.js");
+  const c = await w.render();
+  const row = rowNamed(c, "dir1");
+  const name = byCls(row, "ft-name")[0];
+  w.run("gitState = { root: '/h/w', sid: null, status: { state: 'ok' }, marks: new Map([['/h/w/dir1', { code: 'M', dir: true, title: '2 changes inside' }]]) }; gitMarkRow(ftRowFor('/h/w/dir1'), '/h/w/dir1');");
+  const dot = byCls(row, "ft-git-dot")[0];
+  assert.ok(dot, "the dot is built, for assistive technology and for the tint");
+  assert.strictEqual(dot.attrs.role, "img");
+  assert.strictEqual(dot.attrs["aria-label"], "2 changes inside");
+  assert.strictEqual(name.title, "~/w/dir1\n2 changes inside");
+  assert.strictEqual(row.title, "2 changes inside");
+  w.run("ftPaintChanged(new Set(['/h/w/dir1']))");
+  assert.strictEqual(name.title, "~/w/dir1\n2 changes inside\nEdited by this session's agent");
+  w.run("gitState = { root: '/h/w', sid: null, status: { state: 'ok' }, marks: new Map() }; gitMarkRow(ftRowFor('/h/w/dir1'), '/h/w/dir1');");
+  assert.strictEqual(byCls(row, "ft-git-dot").length, 0, "no mark any more");
+  assert.strictEqual(name.title, "~/w/dir1\nEdited by this session's agent", "the git line is gone, the session's stays");
 });
 
 test("initFileTree registers the contextmenu guard on the document, beside the click closer and the key handler", () => {
