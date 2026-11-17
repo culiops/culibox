@@ -215,3 +215,135 @@ func TestDiffKind(t *testing.T) {
 		}
 	}
 }
+
+// raw is one `--raw` header of ParseNumstat's input; its path is the next record.
+func raw(letter string) string {
+	return ":100644 100644 " + oid[:7] + " " + oid[:7] + " " + letter
+}
+
+func TestParseNumstat(t *testing.T) {
+	// git prints every raw record, then every numstat record (measured, git 2.39).
+	b := rec(raw("M"), "a.go", raw("A"), "new.txt", raw("D"), "gone.txt", raw("T"), "link", raw("M"), "img.png",
+		"3\t1\ta.go", "2\t0\tnew.txt", "0\t4\tgone.txt", "1\t1\tlink", "-\t-\timg.png")
+	got, many := ParseNumstat(b, 100)
+	want := []NumEntry{
+		{P: "a.go", X: "M", A: 3, D: 1},
+		{P: "new.txt", X: "A", A: 2},
+		{P: "gone.txt", X: "D", D: 4},
+		{P: "link", X: "M", A: 1, D: 1}, // a type change reads as a modification
+		{P: "img.png", X: "M", Bin: true},
+	}
+	if many || !slices.Equal(got, want) {
+		t.Fatalf("got %+v many=%v\nwant %+v", got, many, want)
+	}
+}
+
+func TestParseNumstatShapes(t *testing.T) {
+	// The task's own example: one raw record and its numstat record.
+	got, _ := ParseNumstat([]byte(":100644 100644 "+oid+" "+oid+" M\x00a.go\x00"+"3\t1\ta.go\x00"), 10)
+	if !slices.Equal(got, []NumEntry{{P: "a.go", X: "M", A: 3, D: 1}}) {
+		t.Errorf("raw plus numstat: %+v", got)
+	}
+	// A binary file: both counts are "-".
+	got, _ = ParseNumstat([]byte("-\t-\timg.png\x00"), 10)
+	if !slices.Equal(got, []NumEntry{{P: "img.png", X: "M", Bin: true}}) {
+		t.Errorf("binary: %+v", got)
+	}
+	// A path holds tabs and spaces: only the first two tabs separate fields.
+	got, _ = ParseNumstat(rec(raw("A"), "t\tab c.txt", "2\t0\tt\tab c.txt"), 10)
+	if !slices.Equal(got, []NumEntry{{P: "t\tab c.txt", X: "A", A: 2}}) {
+		t.Errorf("tab in a path: %+v", got)
+	}
+	// A path that looks like a raw header is a path: the record after a header is always one.
+	got, _ = ParseNumstat(rec(raw("A"), ":100644 100644 x y M", "1\t0\t:100644 100644 x y M"), 10)
+	if !slices.Equal(got, []NumEntry{{P: ":100644 100644 x y M", X: "A", A: 1}}) {
+		t.Errorf("header-shaped path: %+v", got)
+	}
+	// Numstat alone (no letters): the entry is a modification, the safe default.
+	got, _ = ParseNumstat(rec("5\t2\tb.go"), 10)
+	if !slices.Equal(got, []NumEntry{{P: "b.go", X: "M", A: 5, D: 2}}) {
+		t.Errorf("numstat only: %+v", got)
+	}
+	// A raw record with no numstat has no counts, and a count is never guessed.
+	got, _ = ParseNumstat(rec(raw("M"), "a.go", raw("M"), "b.go", "1\t1\tb.go"), 10)
+	if !slices.Equal(got, []NumEntry{{P: "b.go", X: "M", A: 1, D: 1}}) {
+		t.Errorf("raw without numstat: %+v", got)
+	}
+	// "U" is the web layer's untracked letter: no other letter can be it. An
+	// unmerged or unknown letter is a modification.
+	for _, l := range []string{"U", "X", "B", "C", "R", "m", ""} {
+		got, _ = ParseNumstat(rec(raw(l), "f", "1\t0\tf"), 10)
+		if len(got) != 1 || got[0].X != "M" {
+			t.Errorf("letter %q: %+v, want X=M", l, got)
+		}
+	}
+	// Nothing at all is no entries, not an error.
+	if got, many := ParseNumstat(nil, 10); len(got) != 0 || many {
+		t.Errorf("empty: %+v many=%v", got, many)
+	}
+}
+
+func TestParseNumstatHostile(t *testing.T) {
+	bad := []string{"/etc/passwd", "a/../../x", "..", "../x", "bad\xffutf8", "a/..", "", strings.Repeat("a", 5000)}
+	for _, p := range bad {
+		for _, b := range [][]byte{rec(raw("M"), p, "1\t0\t"+p), rec("1\t0\t" + p)} {
+			if got, many := ParseNumstat(b, 100); len(got) != 0 || many {
+				t.Errorf("hostile %.20q accepted: %+v", p, got)
+			}
+		}
+	}
+	// The counts are digits, both or neither "-", and never more than nine of them.
+	for _, c := range []string{
+		"x\t1\tf", "1\tx\tf", "-\t1\tf", "1\t-\tf", "-1\t0\tf", "+1\t0\tf", "1 \t0\tf", "\t\tf", "1\t0", "1", "10000000000\t0\tf",
+		"1\t0\t", "1\t\tf", "0x10\t0\tf", "1e3\t0\tf",
+	} {
+		if got, many := ParseNumstat(rec(c), 100); len(got) != 0 || many {
+			t.Errorf("malformed numstat %q accepted: %+v", c, got)
+		}
+	}
+	// A header at the very end has no path record: it is skipped, not a panic.
+	if got, _ := ParseNumstat(rec("1\t0\tf", raw("M")), 10); len(got) != 1 || got[0].P != "f" {
+		t.Errorf("trailing header: %+v", got)
+	}
+	// One path twice: the first counts stand.
+	got, _ := ParseNumstat(rec("1\t0\tf", "9\t9\tf"), 10)
+	if !slices.Equal(got, []NumEntry{{P: "f", X: "M", A: 1}}) {
+		t.Errorf("duplicate path: %+v", got)
+	}
+	// Legit names that merely contain "..".
+	for _, n := range []string{strings.Repeat("a", 4096), "a..b/c", "..foo"} {
+		if got, _ := ParseNumstat(rec("1\t0\t"+n), 10); len(got) != 1 {
+			t.Errorf("legit %.20q dropped", n)
+		}
+	}
+}
+
+func TestParseNumstatCap(t *testing.T) {
+	build := func(n int) []byte {
+		var b []byte
+		for i := 0; i < n; i++ {
+			b = append(b, rec(raw("M"), fmt.Sprintf("f%d", i))...)
+		}
+		for i := 0; i < n; i++ {
+			b = append(b, rec(fmt.Sprintf("1\t1\tf%d", i))...)
+		}
+		return b
+	}
+	got, many := ParseNumstat(build(5001), 5000)
+	if !many || len(got) > 5000 {
+		t.Errorf("5001: many=%v len=%d", many, len(got))
+	}
+	got, many = ParseNumstat(build(5000), 5000)
+	if many || len(got) != 5000 || got[4999] != (NumEntry{P: "f4999", X: "M", A: 1, D: 1}) {
+		t.Errorf("5000: many=%v len=%d", many, len(got))
+	}
+	// A dropped (unsafe) record does not count toward the cap.
+	got, many = ParseNumstat(rec("1\t0\t../x", "1\t0\ta", "1\t0\tb"), 2)
+	if many || len(got) != 2 {
+		t.Errorf("dropped record counted: many=%v got=%+v", many, got)
+	}
+	got, many = ParseNumstat(rec("1\t0\ta", "1\t0\tb", "1\t0\tc"), 2)
+	if !many || len(got) != 2 {
+		t.Errorf("3 over a cap of 2: many=%v got=%+v", many, got)
+	}
+}

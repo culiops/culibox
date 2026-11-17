@@ -201,6 +201,19 @@ func runHostile(t *testing.T, r *Runner, tg Target) {
 	if bi.State != "ok" || bi.Branch != "main" || bi.BaseRef != "refs/heads/main" || bi.BaseName != "main" || bi.MergeBase != st.Head || bi.Ahead {
 		t.Errorf("base = %+v, want ok on main against refs/heads/main with merge base %q", bi, st.Head)
 	}
+
+	// The per-file counts of the tracked change (one line replaced, one added),
+	// against HEAD and against the merge base (HEAD itself here, so the same).
+	// The untracked files have no count here: the web layer counts those. The
+	// attributes and the hostile config must neither run nor fail the diff.
+	wantNum := []NumEntry{{P: "a.txt", X: "M", A: 2, D: 1}}
+	for name, sc := range map[string]Scope{"head": {}, "branch": {Branch: true, BaseRef: bi.BaseRef}} {
+		ns := r.Numstat(ctx, tg, sc)
+		t.Logf("numstat %s: %+v", name, ns)
+		if ns.State != "ok" || !slices.Equal(ns.Entries, wantNum) {
+			t.Errorf("numstat %s = %+v, want ok with %+v", name, ns, wantNum)
+		}
+	}
 }
 
 // TestHostileConfigNeverRunsOnHost: an agent-shaped .git/config that tries

@@ -136,6 +136,95 @@ func safePath(p string) bool {
 	return true
 }
 
+// ParseNumstat parses `git diff --raw --numstat -z --no-renames` output: the
+// raw records (":<modes> <ids> <letter>", then the path as its own record)
+// give each file's status letter, the numstat records ("<add>\t<del>\t<path>",
+// "-" twice for a binary file) its counts, and they are joined by path. Only a
+// numstat record makes an entry, since a count is never guessed; a path with
+// no raw record is a modification. The input is untrusted: a malformed record,
+// or a path that ParseStatus would drop (empty, absolute, over 4096 bytes, not
+// UTF-8, a ".." segment), is skipped, and so is a repeat of a path. At most
+// max entries are returned; one more sets tooMany.
+func ParseNumstat(b []byte, max int) (entries []NumEntry, tooMany bool) {
+	recs := bytes.Split(b, []byte{0})
+	letters := map[string]string{}
+	var nums []NumEntry
+	seen := map[string]bool{}
+	for i := 0; i < len(recs); i++ {
+		r := string(recs[i])
+		if strings.HasPrefix(r, ":") {
+			// A raw header, always followed by its path, whatever that path looks like.
+			if i++; i < len(recs) {
+				if _, dup := letters[string(recs[i])]; !dup {
+					letters[string(recs[i])] = rawLetter(r)
+				}
+			}
+			continue
+		}
+		f := strings.SplitN(r, "\t", 3)
+		if len(f) != 3 || !safePath(f[2]) || seen[f[2]] {
+			continue
+		}
+		e := NumEntry{P: f[2], X: "M"}
+		if f[0] == "-" && f[1] == "-" {
+			e.Bin = true
+		} else {
+			a, okA := count(f[0])
+			d, okD := count(f[1])
+			if !okA || !okD {
+				continue
+			}
+			e.A, e.D = a, d
+		}
+		seen[f[2]] = true
+		nums = append(nums, e)
+	}
+	if len(nums) > max {
+		nums, tooMany = nums[:max], true
+	}
+	for _, e := range nums {
+		if l, ok := letters[e.P]; ok {
+			e.X = l
+		}
+		entries = append(entries, e)
+	}
+	return entries, tooMany
+}
+
+// rawLetter is the badge code of a raw header's status letter: A, D and M as
+// they are, a type change as M. Anything else (an unmerged or unknown letter,
+// a header that is not git's five fields) is M: "U" in a NumEntry is the web
+// layer's untracked file, and it must not come from git's text.
+func rawLetter(h string) string {
+	f := strings.Split(h, " ")
+	if len(f) == 5 {
+		switch f[4] {
+		case "A", "D":
+			return f[4]
+		}
+	}
+	return "M"
+}
+
+// maxCountDigits is the most digits a line count may have: a count of a
+// billion lines is not a file, it is hostile text.
+const maxCountDigits = 9
+
+// count parses a numstat line count: decimal digits only, no sign.
+func count(s string) (int, bool) {
+	if s == "" || len(s) > maxCountDigits {
+		return 0, false
+	}
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, true
+}
+
 // DiffKind classifies diff output: "unchanged" (empty), "binary" (git's
 // "Binary files ... differ" line and no hunk), else "text".
 func DiffKind(b []byte) string {

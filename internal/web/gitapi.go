@@ -1,8 +1,10 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,15 +15,17 @@ import (
 	"github.com/culiops/culibox/internal/gitview"
 )
 
-// GitView runs git status, diff and base lookup for the file tree
+// GitView runs git status, diff, base lookup and line counts for the file tree
 // (gitview.Runner). Nil on the Server means no box runtime: every endpoint
 // answers "unavailable". Base takes no ref: the runner picks the base branch
-// from the repository's own refs, so a request can never name one.
+// from the repository's own refs, so a request can never name one. The
+// Scope.BaseRef a handler gives Numstat is the one Base returned.
 type GitView interface {
 	Status(context.Context, gitview.Target) gitview.Status
 	StatusFresh(context.Context, gitview.Target) gitview.Status
 	Diff(context.Context, gitview.Target, string, bool) gitview.Diff
 	Base(context.Context, gitview.Target) gitview.BaseInfo
+	Numstat(context.Context, gitview.Target, gitview.Scope) gitview.Numstat
 }
 
 // Every reason a client sees is one of these fixed messages. The runner's own
@@ -50,6 +54,9 @@ type gitBody struct {
 	// not a reused or already-running one: a client sets it when it has just
 	// changed something on disk.
 	Fresh bool `json:"fresh,omitempty"`
+	// Scope (numstat only) is "head" or "branch", nothing else: the base branch
+	// of "branch" is derived by the server, no client field can name a ref.
+	Scope string `json:"scope,omitempty"`
 }
 
 // gitTarget decides which host directories a git container may mount for the
@@ -195,6 +202,10 @@ func unavailableGitDiff(reason string) gitview.Diff {
 
 func unavailableGitBase(reason string) gitview.BaseInfo {
 	return gitview.BaseInfo{State: "unavailable", Reason: reason}
+}
+
+func unavailableGitNumstat(reason string) gitview.Numstat {
+	return gitview.Numstat{State: "unavailable", Reason: reason, Entries: []gitview.NumEntry{}}
 }
 
 // handleGitStatus is POST /api/git/status {"path": abs}: the change set of the
@@ -345,6 +356,204 @@ func (s *Server) handleGitBase(w http.ResponseWriter, r *http.Request) {
 		bi.Reason = ""
 	}
 	writeJSON(w, http.StatusOK, bi)
+}
+
+// handleGitNumstat is POST /api/git/numstat {"path": abs, "scope": "head" or
+// "branch"}: per-file line counts of the changes in the checkout holding path,
+// against HEAD or, for "branch", against the merge base with the base branch the
+// server picks (Base). Tracked files are counted by git; untracked ones are
+// counted here (see withUntracked). Any other scope is a 400. ok/notrepo/toomany/
+// unavailable are all 200, and "branch" with no base branch is "unavailable"
+// with "no base branch".
+func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
+	body, ok := decodeGitBody(w, r)
+	if !ok {
+		return
+	}
+	var branch bool
+	switch body.Scope {
+	case "head":
+	case "branch":
+		branch = true
+	default:
+		writeErr(w, http.StatusBadRequest, "bad scope")
+		return
+	}
+	if s.Git == nil {
+		writeJSON(w, http.StatusOK, unavailableGitNumstat(msgGitNoRuntime))
+		return
+	}
+	t, abs, err := s.gitTarget(body.Path)
+	switch {
+	case errors.Is(err, errGitNotRepo):
+		writeJSON(w, http.StatusOK, gitview.Numstat{State: "notrepo", Entries: []gitview.NumEntry{}})
+		return
+	case isGitRefusal(err):
+		writeJSON(w, http.StatusOK, unavailableGitNumstat(targetReason(err)))
+		return
+	case err != nil:
+		writeFsErr(w, err)
+		return
+	}
+	var sc gitview.Scope
+	if branch {
+		// The ref is the server's: Base derived it from the repository's refs.
+		bi := s.Git.Base(r.Context(), t)
+		switch bi.State {
+		case "ok":
+			sc = gitview.Scope{Branch: true, BaseRef: bi.BaseRef}
+		case "nobase":
+			writeJSON(w, http.StatusOK, unavailableGitNumstat(msgGitNoBase))
+			return
+		case "notrepo":
+			writeJSON(w, http.StatusOK, gitview.Numstat{State: "notrepo", Entries: []gitview.NumEntry{}})
+			return
+		default:
+			log.Printf("git numstat %q: base: %q", t.Top, bi.Reason)
+			writeJSON(w, http.StatusOK, unavailableGitNumstat(gitReason(bi.Reason)))
+			return
+		}
+	}
+	// ns is this request's own copy (Numstat returns a value with cloned
+	// entries), so RootRel and the appended entries never reach the runner's cache.
+	ns := s.Git.Numstat(r.Context(), t, sc)
+	ns.RootRel = rootRel(t.Top, abs)
+	if ns.State == "unavailable" {
+		log.Printf("git numstat %q: %q", t.Top, ns.Reason)
+		ns.Reason = gitReason(ns.Reason)
+	} else {
+		ns.Reason = ""
+	}
+	if ns.Entries == nil {
+		ns.Entries = []gitview.NumEntry{}
+	}
+	if ns.State == "ok" {
+		ns.Entries = s.withUntracked(r.Context(), t, ns.Entries)
+	}
+	writeJSON(w, http.StatusOK, ns)
+}
+
+const (
+	// maxCountFiles is how many untracked files one reply looks at.
+	maxCountFiles = 200
+	// maxCountBytes is the largest untracked file whose lines are counted.
+	maxCountBytes = 2 << 20
+	// countSniffBytes is the head of a file searched for a NUL byte.
+	countSniffBytes = 8 << 10
+)
+
+// withUntracked appends a line count for each untracked file the checkout has.
+// Git's diff has none (an untracked file is not in it), so they are counted
+// here, from Status's untracked entries (the reused result, so usually no new
+// run), as "U" entries with every line added. A collapsed untracked folder
+// ("dir/") has no count, nor has a file over 2 MiB, one that is not a plain
+// file or has gone, and only the first 200 files are looked at. A path numstat
+// already lists is not added again, as the two runs can be seconds apart.
+func (s *Server) withUntracked(ctx context.Context, t gitview.Target, entries []gitview.NumEntry) []gitview.NumEntry {
+	st := s.Git.Status(ctx, t)
+	if st.State != "ok" {
+		return entries
+	}
+	p, err := s.fsPolicy()
+	if err != nil {
+		log.Printf("git numstat %q: fs policy: %v", t.Top, err)
+		return entries
+	}
+	have := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		have[e.P] = true
+	}
+	looked := 0
+	for _, e := range st.Entries {
+		if e.X != "U" || strings.HasSuffix(e.P, "/") || have[e.P] {
+			continue
+		}
+		if looked++; looked > maxCountFiles || ctx.Err() != nil {
+			break
+		}
+		// Status already refuses these; the interface does not promise it.
+		rel := filepath.FromSlash(e.P)
+		if !filepath.IsLocal(rel) {
+			continue
+		}
+		if lines, bin, ok := p.countFile(filepath.Join(t.Top, rel)); ok {
+			entries = append(entries, gitview.NumEntry{P: e.P, X: "U", A: lines, Bin: bin})
+		}
+	}
+	return entries
+}
+
+// countFile counts the lines of the plain file at abs, an absolute path built
+// from git's output, which an agent controls: it is resolved and opened by the
+// same fs policy as /api/fs/read (p.resolve, openFsTarget: a boxed path only
+// through its os.Root), never by a path-based open, and never executed. ok is
+// false when there is no count: no such file, or one outside the policy, not a
+// regular file (a FIFO is never opened for a read that could wait), over 2 MiB,
+// or a link. A link is refused because git counts the link's own text, not
+// the file it names, so that file's lines would be a wrong number. bin is true
+// for a NUL byte in the first 8 KiB, as git sniffs.
+func (p fsPolicy) countFile(abs string) (lines int, bin, ok bool) {
+	t, err := p.resolve(abs)
+	// A host path comes back resolved through every link on its way, so a
+	// different one means a link was followed.
+	if err != nil || t.Abs != abs || !isPlainFile(t) {
+		return 0, false, false
+	}
+	f, err := openFsTarget(t, 0)
+	if err != nil {
+		return 0, false, false
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() || fi.Size() > maxCountBytes {
+		return 0, false, false
+	}
+	return countLines(io.LimitReader(f, maxCountBytes+1))
+}
+
+// isPlainFile reports whether t names a regular file itself, not a link. A boxed
+// path is unresolved and os.Root follows a link that stays inside the
+// workspace, so the last component is looked at without following it.
+func isPlainFile(t fsTarget) bool {
+	root, err := os.OpenRoot(t.Root)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	fi, err := root.Lstat(t.Rel)
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// countLines counts the lines of r as git does: each newline, and one more for
+// a last line with none. ok is false when r holds more than maxCountBytes (the
+// caller limits it to one byte over), or cannot be read.
+func countLines(r io.Reader) (lines int, bin, ok bool) {
+	buf := make([]byte, 32<<10)
+	total := 0
+	var last byte
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if total < countSniffBytes && bytes.IndexByte(buf[:min(n, countSniffBytes-total)], 0) >= 0 {
+				return 0, true, true
+			}
+			total += n
+			if total > maxCountBytes {
+				return 0, false, false
+			}
+			lines += bytes.Count(buf[:n], []byte{'\n'})
+			last = buf[n-1]
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, false, false
+		}
+	}
+	if total > 0 && last != '\n' {
+		lines++
+	}
+	return lines, false, true
 }
 
 // rootRel is where the request's resolved dir (abs, or its parent for a file)

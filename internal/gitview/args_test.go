@@ -259,3 +259,69 @@ func TestValidBaseRef(t *testing.T) {
 		}
 	}
 }
+
+// numstatFlags follow the revision. The trailing "--" ends the revisions: without it git
+// refuses a repository that holds a file named like the revision ("ambiguous argument"),
+// and an agent can create one.
+var numstatFlags = []string{"--raw", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=all", "--"}
+
+func TestNumstatArgsGolden(t *testing.T) {
+	uid, gid := os.Getuid(), os.Getgid()
+	for _, c := range []struct {
+		name   string
+		t      Target
+		mounts []string
+	}{
+		{"in", Target{Top: "/w/repo", Common: "/w/repo/.git"}, []string{"/w/repo"}},
+		{"common outside top", Target{Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w/wt", "/w/main/.git"}},
+		{"boxed", Target{Root: "/w", Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w"}},
+	} {
+		got := NumstatArgs(c.t, "img", "n", uid, gid, Scope{})
+		w := want(c.mounts, c.t.Top, append([]string{"diff", "HEAD"}, numstatFlags...)...)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, w)
+		}
+	}
+	got := NumstatArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2, Scope{})
+	for _, must := range []string{"core.fsmonitor=false", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "--read-only", "core.hooksPath=/dev/null"} {
+		if !slices.Contains(got, must) {
+			t.Errorf("argv lacks %q: %q", must, got)
+		}
+	}
+	if i := slices.Index(got, "--network"); i < 0 || got[i+1] != "none" {
+		t.Errorf("no --network none: %q", got)
+	}
+	mounts := 0
+	for i, a := range got {
+		if a == "--mount" {
+			mounts++
+			if !strings.HasSuffix(got[i+1], ",readonly") {
+				t.Errorf("mount %q not read-only", got[i+1])
+			}
+		}
+	}
+	if mounts != 2 {
+		t.Errorf("%d mounts, want 2", mounts)
+	}
+}
+
+func TestNumstatArgsBranchScope(t *testing.T) {
+	uid, gid := os.Getuid(), os.Getgid()
+	tt := Target{Top: "/w/repo", Common: "/w/repo/.git"}
+	got := NumstatArgs(tt, "img", "n", uid, gid, Scope{Branch: true, BaseRef: "refs/remotes/origin/main"})
+	w := want([]string{"/w/repo"}, "/w/repo", append([]string{"diff", "--merge-base", "refs/remotes/origin/main"}, numstatFlags...)...)
+	if !slices.Equal(got, w) {
+		t.Errorf("branch:\n got %q\nwant %q", got, w)
+	}
+	// The ref is re-validated here, whoever the caller is: a bad one builds no argv.
+	for _, ref := range []string{"", "-x", "--output=/x", "HEAD", "main", "refs/tags/v1", "refs/heads/../x", "refs/heads/a b", "refs/heads/a\n"} {
+		if a := NumstatArgs(tt, "img", "n", uid, gid, Scope{Branch: true, BaseRef: ref}); a != nil {
+			t.Errorf("ref %q built an argv: %q", ref, a)
+		}
+	}
+	// Outside Branch scope the ref is never read, so a stray one cannot reach git.
+	got = NumstatArgs(tt, "img", "n", uid, gid, Scope{BaseRef: "-x"})
+	if w := want([]string{"/w/repo"}, "/w/repo", append([]string{"diff", "HEAD"}, numstatFlags...)...); !slices.Equal(got, w) {
+		t.Errorf("head scope with a stray ref:\n got %q\nwant %q", got, w)
+	}
+}

@@ -31,8 +31,8 @@ type Target struct{ Root, Top, Common string }
 // from an agent-shaped checkout, and docker parses --mount as CSV, so a path
 // holding a comma or quote could add mount options of its own. Both must be
 // absolute and clean, and pass box.MountUnsafe. Callers MUST check it before
-// StatusArgs, DiffArgs, BaseArgs or MergeBaseArgs and treat a refusal as state
-// "unavailable"; the builders do not check, they only build.
+// StatusArgs, DiffArgs, BaseArgs, MergeBaseArgs or NumstatArgs and treat a
+// refusal as state "unavailable"; the builders do not check, they only build.
 func (t Target) Unsafe() string {
 	for _, p := range []struct{ name, v string }{{"workspace", t.Root}, {"checkout", t.Top}, {"git dir", t.Common}} {
 		if p.v == "" && p.name != "checkout" {
@@ -163,4 +163,33 @@ func MergeBaseArgs(t Target, image, name string, uid, gid int, baseRef string) [
 		return nil
 	}
 	return argv(t, image, name, uid, gid, "merge-base", "HEAD", baseRef)
+}
+
+// Scope is what a numstat compares the working tree with: HEAD, or for Branch
+// the merge base of HEAD and BaseRef. BaseRef is read only for Branch, and it
+// is always one the server derived (Runner.Base), never a client's.
+type Scope struct {
+	Branch  bool
+	BaseRef string
+}
+
+// NumstatArgs is the argv of the container that prints, for every tracked file
+// that differs from the scope's side, its status letter (--raw) and its line
+// counts (--numstat). Untracked files are not in it. A BaseRef that is not a
+// ValidBaseRef builds no argv (nil) for Branch, so a caller that skips its own
+// check runs nothing rather than a hostile ref. The trailing "--" ends the
+// revisions: without it git refuses ("ambiguous argument") a repository that
+// holds a file named like the revision, which an agent can create. The caller
+// MUST have checked t.Unsafe() == "" first.
+func NumstatArgs(t Target, image, name string, uid, gid int, sc Scope) []string {
+	rev := []string{"HEAD"}
+	if sc.Branch {
+		if !ValidBaseRef(sc.BaseRef) {
+			return nil
+		}
+		rev = []string{"--merge-base", sc.BaseRef}
+	}
+	sub := append([]string{"diff"}, rev...)
+	sub = append(sub, "--raw", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=all", "--")
+	return argv(t, image, name, uid, gid, sub...)
 }

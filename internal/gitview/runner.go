@@ -30,7 +30,10 @@ const (
 	// maxStatusBytes bounds the porcelain buffer. Hitting it means far more than
 	// maxStatusEntries paths, so it reads as "toomany".
 	maxStatusBytes = 8 << 20
-	maxDiffBytes   = 2 << 20
+	// maxNumstatBytes bounds the diff --raw --numstat buffer, which holds each
+	// path twice and some 100 bytes per file; hitting it reads as "toomany".
+	maxNumstatBytes = 8 << 20
+	maxDiffBytes    = 2 << 20
 	// maxBaseBytes bounds what the two base runs print: five ref records and one id.
 	maxBaseBytes   = 64 << 10
 	maxReasonRunes = 200
@@ -85,6 +88,32 @@ const (
 	reasonNoCommon  = "no history in common with the base branch"
 )
 
+// NumEntry is one file's line counts against the scope's side: P relative to
+// the checkout top, X the status letter (A, M or D; a type change is M), or "U"
+// for an untracked file, which the web layer counts since git's diff has none.
+// Bin marks a binary file, whose counts are 0.
+type NumEntry struct {
+	P   string `json:"p"`
+	X   string `json:"x"`
+	A   int    `json:"a"`
+	D   int    `json:"d"`
+	Bin bool   `json:"bin,omitempty"`
+}
+
+// Numstat is the per-file line counts of one repository's tracked changes.
+// State is one of ok, notrepo, toomany, unavailable (a repository with no
+// commits has no HEAD to diff, so it is unavailable); Entries is never nil.
+// Reason carries git's stderr only for unavailable, so a web handler must not
+// forward it as it is.
+type Numstat struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	// RootRel is where the requested tree root sits inside the checkout top, as
+	// for Status: the web handler sets it, the runner leaves it empty.
+	RootRel string     `json:"rootRel"`
+	Entries []NumEntry `json:"entries"`
+}
+
 // Diff is one file's diff. State is ok or unavailable; Kind is text, binary or unchanged.
 type Diff struct {
 	State     string `json:"state"`
@@ -94,7 +123,7 @@ type Diff struct {
 	Truncated bool   `json:"truncated"`
 }
 
-// Runner runs git status, diff and base lookups in throwaway containers. Zero durations and
+// Runner runs git status, diff, base and numstat lookups in throwaway containers. Zero durations and
 // limits take the defaults (10s timeout, 2s reuse, 5m idle, 2 parallel). It is
 // safe for concurrent use; its mutex is never held while docker runs.
 type Runner struct {
@@ -112,6 +141,8 @@ type Runner struct {
 	flights      map[string]*flight
 	baseCache    map[string]*baseCached
 	baseFlights  map[string]*baseFlight
+	numCache     map[string]*numCached
+	numFlights   map[string]*numFlight
 	semOnce      sync.Once
 	sem          chan struct{}
 	sweepPending bool
@@ -138,6 +169,19 @@ type baseCached struct {
 type baseFlight struct {
 	done chan struct{}
 	bi   BaseInfo
+}
+
+// numCached is a numstat answer for one repository and scope.
+type numCached struct {
+	ns       Numstat
+	at       time.Time // when the run finished
+	lastUsed time.Time
+}
+
+// numFlight is one numstat run that every concurrent caller for a key waits on.
+type numFlight struct {
+	done chan struct{}
+	ns   Numstat
 }
 
 // flight is one status run that every concurrent caller for a Top waits on.
@@ -247,6 +291,11 @@ func (r *Runner) sweepLocked(now time.Time) {
 	for k, c := range r.cache {
 		if now.Sub(c.lastUsed) >= idle {
 			delete(r.cache, k)
+		}
+	}
+	for k, c := range r.numCache {
+		if now.Sub(c.lastUsed) >= idle {
+			delete(r.numCache, k)
 		}
 	}
 	// A base answer past baseReuse is never served again: only idle ones go.
@@ -461,6 +510,109 @@ func (r *Runner) doBase(t Target, head string) BaseInfo {
 	return BaseInfo{State: "ok", BaseRef: ref, BaseName: baseName(ref), MergeBase: mb, Ahead: mb != head}
 }
 
+// Numstat returns the per-file line counts of t's tracked changes against sc:
+// HEAD, or for Branch the merge base with sc.BaseRef. Untracked files are not
+// in it. Concurrent calls for the same repository and scope share one container
+// run, and a finished result is reused for Reuse, in a cache of its own beside
+// Status's. A Branch scope needs a BaseRef that is a ValidBaseRef (the server's
+// own, from Base): any other is "unavailable" with no run. A refused target, a
+// docker failure, a timeout or a repository with no commits is "unavailable".
+func (r *Runner) Numstat(ctx context.Context, t Target, sc Scope) Numstat {
+	if why := t.Unsafe(); why != "" {
+		return unavailableNumstat(why)
+	}
+	key := t.key() + "\x00head"
+	if sc.Branch {
+		if !ValidBaseRef(sc.BaseRef) {
+			return unavailableNumstat("invalid base ref")
+		}
+		key = t.key() + "\x00branch\x00" + sc.BaseRef
+	} else {
+		sc.BaseRef = "" // never read outside Branch
+	}
+	now := r.now()
+	r.mu.Lock()
+	r.sweepLocked(now)
+	if c := r.numCache[key]; c != nil && now.Sub(c.at) < orDur(r.Reuse, defaultReuse) {
+		c.lastUsed = now
+		ns := cloneNumstat(c.ns)
+		r.mu.Unlock()
+		return ns
+	}
+	f := r.numFlights[key]
+	if f == nil {
+		f = &numFlight{done: make(chan struct{})}
+		if r.numFlights == nil {
+			r.numFlights = map[string]*numFlight{}
+		}
+		r.numFlights[key] = f
+		// As for status, the run is the flight's, not the first caller's.
+		go r.runNumstat(t, sc, key, f)
+	}
+	r.mu.Unlock()
+	select {
+	case <-f.done:
+		return cloneNumstat(f.ns)
+	case <-ctx.Done():
+		return unavailableNumstat("request cancelled")
+	}
+}
+
+func (r *Runner) runNumstat(t Target, sc Scope, key string, f *numFlight) {
+	ns := r.doNumstat(t, sc)
+	now := r.now()
+	r.mu.Lock()
+	if r.numCache == nil {
+		r.numCache = map[string]*numCached{}
+	}
+	r.numCache[key] = &numCached{ns: ns, at: now, lastUsed: now}
+	if r.numFlights[key] == f {
+		delete(r.numFlights, key)
+	}
+	r.mu.Unlock()
+	f.ns = ns
+	close(f.done)
+}
+
+func (r *Runner) doNumstat(t Target, sc Scope) Numstat {
+	name := newName()
+	args := NumstatArgs(t, r.Image, name, r.UID, r.GID, sc)
+	if args == nil { // NumstatArgs refused the ref: run nothing
+		return unavailableNumstat("invalid base ref")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), orDur(r.Timeout, defaultTimeout))
+	defer cancel()
+	release, err := r.acquire(ctx)
+	if err != nil {
+		return unavailableNumstat(errNoSlot.Error())
+	}
+	defer release()
+	out := &capBuffer{max: maxNumstatBytes}
+	err = r.Docker.RunStream(ctx, args, out)
+	if err != nil {
+		// As for status: remove the container on every error, even one that
+		// still yields a result (the output cap).
+		r.removeFailed(name)
+	}
+	switch {
+	case out.hit || errors.Is(err, errCapped):
+		return Numstat{State: "toomany", Entries: []NumEntry{}}
+	case err != nil:
+		if strings.Contains(err.Error(), "not a git repository") {
+			return Numstat{State: "notrepo", Entries: []NumEntry{}}
+		}
+		return unavailableNumstat(failReason(ctx, err))
+	}
+	entries, tooMany := ParseNumstat(out.b, maxStatusEntries)
+	if tooMany {
+		return Numstat{State: "toomany", Entries: []NumEntry{}}
+	}
+	if entries == nil {
+		entries = []NumEntry{}
+	}
+	return Numstat{State: "ok", Entries: entries}
+}
+
 var (
 	// errNoSlot is what runGit returns when ctx ends before a slot is free.
 	errNoSlot = errors.New("timed out waiting for a free git container")
@@ -557,6 +709,18 @@ func failReasonText(s string) string {
 
 func unavailableStatus(t Target, why string) Status {
 	return Status{State: "unavailable", Reason: why, Top: t.Top, Entries: []Entry{}}
+}
+
+func unavailableNumstat(why string) Numstat {
+	return Numstat{State: "unavailable", Reason: why, Entries: []NumEntry{}}
+}
+
+func cloneNumstat(n Numstat) Numstat {
+	n.Entries = slices.Clone(n.Entries)
+	if n.Entries == nil {
+		n.Entries = []NumEntry{}
+	}
+	return n
 }
 
 func cloneStatus(s Status) Status {

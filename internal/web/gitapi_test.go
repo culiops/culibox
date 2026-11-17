@@ -1,15 +1,22 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"testing/iotest"
 
 	"github.com/culiops/culibox/internal/gitview"
 )
@@ -21,9 +28,16 @@ type fakeGit struct {
 	fresh    []bool // per Status/StatusFresh call: was it fresh
 	diffs    []fakeDiffCall
 	bases    []gitview.Target
+	numstats []fakeNumstatCall
 	st       gitview.Status
 	diff     gitview.Diff
 	base     gitview.BaseInfo
+	ns       gitview.Numstat
+}
+
+type fakeNumstatCall struct {
+	T  gitview.Target
+	Sc gitview.Scope
 }
 
 type fakeDiffCall struct {
@@ -73,10 +87,23 @@ func (f *fakeGit) Base(_ context.Context, t gitview.Target) gitview.BaseInfo {
 	return f.base
 }
 
+func (f *fakeGit) Numstat(_ context.Context, t gitview.Target, sc gitview.Scope) gitview.Numstat {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.numstats = append(f.numstats, fakeNumstatCall{t, sc})
+	if f.ns.State == "" {
+		return gitview.Numstat{State: "ok", Entries: []gitview.NumEntry{}}
+	}
+	// A copy: the handler appends to and sets fields of what it gets.
+	ns := f.ns
+	ns.Entries = append([]gitview.NumEntry{}, ns.Entries...)
+	return ns
+}
+
 func (f *fakeGit) calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.statuses) + len(f.diffs) + len(f.bases)
+	return len(f.statuses) + len(f.diffs) + len(f.bases) + len(f.numstats)
 }
 
 // hostGitServer is a server with a resolved temp $HOME and no boxed trees.
@@ -818,4 +845,461 @@ func TestGitBaseGuards(t *testing.T) {
 	if g.calls() != 0 {
 		t.Fatal("runner called on a refused request")
 	}
+}
+
+func decodeNumstat(t *testing.T, rr *httptest.ResponseRecorder) gitview.Numstat {
+	t.Helper()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (%s)", rr.Code, rr.Body)
+	}
+	var ns gitview.Numstat
+	if err := json.Unmarshal(rr.Body.Bytes(), &ns); err != nil {
+		t.Fatalf("decode %s: %v", rr.Body, err)
+	}
+	if ns.Entries == nil {
+		t.Fatalf("entries must be [] not null: %s", rr.Body)
+	}
+	return ns
+}
+
+func numstatBody(p, scope string) string {
+	b, _ := json.Marshal(map[string]string{"path": p, "scope": scope})
+	return string(b)
+}
+
+func postNumstat(s *Server, p, scope string) *httptest.ResponseRecorder {
+	return gitPost(s.handleGitNumstat, "/api/git/numstat", numstatBody(p, scope))
+}
+
+func TestGitNumstatHandlerOK(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	mustMkdirAll(t, filepath.Join(repo, "sub"))
+	g.ns = gitview.Numstat{State: "ok", Reason: "stray", Entries: []gitview.NumEntry{{P: "a.go", X: "M", A: 3, D: 1}, {P: "img.png", X: "M", Bin: true}}}
+	rr := postNumstat(s, filepath.Join(repo, "sub"), "head")
+	ns := decodeNumstat(t, rr)
+	want := []gitview.NumEntry{{P: "a.go", X: "M", A: 3, D: 1}, {P: "img.png", X: "M", Bin: true}}
+	if ns.State != "ok" || ns.Reason != "" || ns.RootRel != "sub" || !slices.Equal(ns.Entries, want) {
+		t.Fatalf("numstat = %+v, want ok under sub with %+v", ns, want)
+	}
+	// The wire shape the client reads.
+	for _, key := range []string{`"state":"ok"`, `"rootRel":"sub"`, `{"p":"a.go","x":"M","a":3,"d":1}`, `{"p":"img.png","x":"M","a":0,"d":0,"bin":true}`} {
+		if !strings.Contains(rr.Body.String(), key) {
+			t.Errorf("reply %s lacks %s", rr.Body, key)
+		}
+	}
+	tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+	if len(g.numstats) != 1 || g.numstats[0] != (fakeNumstatCall{tg, gitview.Scope{}}) || len(g.bases) != 0 || len(g.diffs) != 0 {
+		t.Fatalf("calls: numstats=%+v bases=%+v diffs=%+v, want one head-scope Numstat of %+v", g.numstats, g.bases, g.diffs, tg)
+	}
+}
+
+func TestGitNumstatBranchScopeUsesTheServersBase(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	g.base = gitview.BaseInfo{State: "ok", Branch: "feat", BaseRef: "refs/remotes/origin/develop", BaseName: "origin/develop", MergeBase: strings.Repeat("b", 40), Ahead: true}
+	// A ref in the body is not read: the base is the one Base derived.
+	body := `{"path":` + strconv.Quote(repo) + `,"scope":"branch","baseRef":"-x","base":"refs/heads/evil"}`
+	decodeNumstat(t, gitPost(s.handleGitNumstat, "/api/git/numstat", body))
+	tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+	want := fakeNumstatCall{tg, gitview.Scope{Branch: true, BaseRef: "refs/remotes/origin/develop"}}
+	if len(g.numstats) != 1 || g.numstats[0] != want || len(g.bases) != 1 || g.bases[0] != tg {
+		t.Fatalf("calls: numstats=%+v bases=%+v, want one Base and %+v", g.numstats, g.bases, want)
+	}
+}
+
+func TestGitNumstatBranchScopeWithoutABase(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	for name, c := range map[string]struct {
+		base   gitview.BaseInfo
+		state  string
+		reason string
+	}{
+		"no base":     {gitview.BaseInfo{State: "nobase", Reason: "git said /secret/path"}, "unavailable", msgGitNoBase},
+		"unavailable": {gitview.BaseInfo{State: "unavailable", Reason: "fatal: /secret/path: bad object"}, "unavailable", msgGitNotAvailable},
+		"timeout":     {gitview.BaseInfo{State: "unavailable", Reason: "git timed out"}, "unavailable", msgGitTimeout},
+		"not a repo":  {gitview.BaseInfo{State: "notrepo"}, "notrepo", ""},
+	} {
+		g.base = c.base
+		n := len(g.numstats)
+		ns := decodeNumstat(t, postNumstat(s, repo, "branch"))
+		if ns.State != c.state || ns.Reason != c.reason || len(ns.Entries) != 0 {
+			t.Errorf("%s: numstat = %+v, want %s %q", name, ns, c.state, c.reason)
+		}
+		if len(g.numstats) != n {
+			t.Errorf("%s: Numstat ran with no base", name)
+		}
+	}
+}
+
+func TestGitNumstatScopeIsHeadOrBranch(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	// Anything else is refused, the absent scope included: no client field names a ref.
+	for _, scope := range []string{"", "HEAD", "Head", "BRANCH", " branch", "branch\n", "refs/heads/main", "-x", "main", "origin/main", "merge-base"} {
+		if rr := postNumstat(s, repo, scope); rr.Code != http.StatusBadRequest {
+			t.Errorf("scope %q: code = %d, want 400 (%s)", scope, rr.Code, rr.Body)
+		}
+	}
+	for _, body := range []string{`{"path":` + strconv.Quote(repo) + `}`, `{"path":` + strconv.Quote(repo) + `,"scope":1}`, `{"path":` + strconv.Quote(repo) + `,"scope":null}`, `{"path":` + strconv.Quote(repo) + `,"scope":["branch"]}`} {
+		if rr := gitPost(s.handleGitNumstat, "/api/git/numstat", body); rr.Code != http.StatusBadRequest {
+			t.Errorf("body %s: code = %d, want 400 (%s)", body, rr.Code, rr.Body)
+		}
+	}
+	if g.calls() != 0 {
+		t.Fatalf("runner called %d times for a bad scope", g.calls())
+	}
+	for _, scope := range []string{"head", "branch"} {
+		if ns := decodeNumstat(t, postNumstat(s, repo, scope)); ns.State != "ok" {
+			t.Errorf("scope %q: %+v", scope, ns)
+		}
+	}
+}
+
+func TestGitNumstatRefusedOutside(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	other := t.TempDir() // a sibling of $HOME, not inside it
+	mustMkdirAll(t, filepath.Join(other, ".git", "worktrees", "w"))
+	wt := filepath.Join(h, "wt")
+	mustWrite(t, filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(other, ".git", "worktrees", "w")+"\n")
+	for _, scope := range []string{"head", "branch"} {
+		ns := decodeNumstat(t, postNumstat(s, wt, scope))
+		if ns.State != "unavailable" || ns.Reason != msgGitOutside {
+			t.Fatalf("%s: numstat = %+v, want unavailable %q", scope, ns, msgGitOutside)
+		}
+	}
+	// A repository above the viewable tree, and a mount path docker cannot take.
+	outside := t.TempDir()
+	mainRepo(t, outside)
+	if rr := postNumstat(s, outside, "head"); rr.Code != http.StatusForbidden {
+		t.Fatalf("outside home: code = %d, want 403", rr.Code)
+	}
+	unsafe := filepath.Join(h, "a,readonly=false")
+	mainRepo(t, unsafe)
+	if ns := decodeNumstat(t, postNumstat(s, unsafe, "head")); ns.State != "unavailable" || ns.Reason != msgGitNotAvailable {
+		t.Fatalf("unsafe path: %+v", ns)
+	}
+	if n := g.calls(); n != 0 {
+		t.Fatalf("runner called %d times for a refused target", n)
+	}
+}
+
+func TestGitNumstatBoxedOK(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	g := &fakeGit{}
+	s.Git = g
+	mainRepo(t, ws)
+	mustMkdirAll(t, filepath.Join(ws, "sub"))
+	ns := decodeNumstat(t, postNumstat(s, filepath.Join(ws, "sub"), "head"))
+	// Boxed: the contained root is the only mount (Target.Root).
+	want := gitview.Target{Root: ws, Top: ws, Common: filepath.Join(ws, ".git")}
+	if ns.State != "ok" || ns.RootRel != "sub" || len(g.numstats) != 1 || g.numstats[0].T != want {
+		t.Fatalf("numstat = %+v targets = %+v", ns, g.numstats)
+	}
+}
+
+func TestGitNumstatGuards(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	mainRepo(t, filepath.Join(h, "repo"))
+	get := httptest.NewRecorder()
+	s.handleGitNumstat(get, httptest.NewRequest(http.MethodGet, "/api/git/numstat?path="+h, nil))
+	if get.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET code = %d, want 405", get.Code)
+	}
+	for _, body := range []string{"", "{", `{"path":"rel/dir","scope":"head"}`, `{"path":"","scope":"head"}`, `{"path":"/` + strings.Repeat("a", 9000) + `","scope":"head"}`} {
+		if rr := gitPost(s.handleGitNumstat, "/api/git/numstat", body); rr.Code != http.StatusBadRequest {
+			t.Fatalf("body %.40q: code = %d, want 400 (%s)", body, rr.Code, rr.Body)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/git/numstat", strings.NewReader(numstatBody(filepath.Join(h, "repo"), "head")))
+	req.Header.Set("Origin", "https://evil.example")
+	rr := httptest.NewRecorder()
+	s.handleGitNumstat(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin code = %d, want 403", rr.Code)
+	}
+	if g.calls() != 0 {
+		t.Fatal("runner called on a refused request")
+	}
+}
+
+func TestGitNumstatNilRunnerAndNotRepo(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	plain := filepath.Join(h, "plain")
+	mustMkdirAll(t, plain)
+	if ns := decodeNumstat(t, postNumstat(s, plain, "head")); ns.State != "notrepo" {
+		t.Fatalf("not a repo: %+v", ns)
+	}
+	if g.calls() != 0 {
+		t.Fatal("runner called for a non-repo")
+	}
+	s.Git = nil
+	mainRepo(t, filepath.Join(h, "repo"))
+	ns := decodeNumstat(t, postNumstat(s, filepath.Join(h, "repo"), "head"))
+	if ns.State != "unavailable" || ns.Reason != msgGitNoRuntime {
+		t.Fatalf("nil runner: %+v", ns)
+	}
+}
+
+func TestGitNumstatStatesAndReasons(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	mustWrite(t, filepath.Join(repo, "new.txt"), "a\n")
+	g.st = gitview.Status{State: "ok", Entries: []gitview.Entry{{P: "new.txt", X: "U"}}}
+	post := func() gitview.Numstat { return decodeNumstat(t, postNumstat(s, repo, "head")) }
+	// The runner's reason can carry git's stderr: only fixed messages reach the client.
+	for raw, want := range map[string]string{
+		"fatal: /secret/path: bad object deadbeef": msgGitNotAvailable,
+		"git timed out": msgGitTimeout,
+		"timed out waiting for a free git container": msgGitTimeout,
+		gitview.ReasonNoImage:                        msgGitNoImage,
+	} {
+		g.ns = gitview.Numstat{State: "unavailable", Reason: raw, Entries: []gitview.NumEntry{}}
+		if ns := post(); ns.State != "unavailable" || ns.Reason != want || len(ns.Entries) != 0 {
+			t.Fatalf("raw %q: numstat = %+v, want reason %q", raw, ns, want)
+		}
+	}
+	// Without a count from git there is no point counting lines: no untracked entries, no Status run.
+	n := len(g.statuses)
+	g.ns = gitview.Numstat{State: "toomany", Entries: []gitview.NumEntry{}}
+	if ns := post(); ns.State != "toomany" || ns.Reason != "" || len(ns.Entries) != 0 || len(g.statuses) != n {
+		t.Fatalf("toomany: %+v (status calls %d -> %d)", ns, n, len(g.statuses))
+	}
+	g.ns = gitview.Numstat{State: "notrepo", Entries: []gitview.NumEntry{}}
+	if ns := post(); ns.State != "notrepo" || len(ns.Entries) != 0 {
+		t.Fatalf("notrepo: %+v", ns)
+	}
+}
+
+// untrackedRepo is a repo in a host server's $HOME whose status lists the given
+// paths as untracked and whose numstat has one tracked change.
+func untrackedRepo(t *testing.T, paths ...string) (s *Server, repo string, g *fakeGit) {
+	t.Helper()
+	s, h, g := hostGitServer(t)
+	repo = filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	es := []gitview.Entry{}
+	for _, p := range paths {
+		es = append(es, gitview.Entry{P: p, X: "U"})
+	}
+	g.st = gitview.Status{State: "ok", Entries: es}
+	g.ns = gitview.Numstat{State: "ok", Entries: []gitview.NumEntry{{P: "tracked.go", X: "M", A: 1, D: 1}}}
+	return s, repo, g
+}
+
+func TestGitNumstatCountsUntracked(t *testing.T) {
+	s, repo, g := untrackedRepo(t, "three.txt", "nonl.txt", "empty.txt", "bin.dat", "late-nul.txt", "big.txt", "toobig.txt", "dir/", "sub/deep.txt", "gone.txt", "crlf.txt", "blank.txt")
+	w := func(name string, b []byte) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, name), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w("three.txt", []byte("a\nb\nc\n"))
+	w("nonl.txt", []byte("a\nb\nlast")) // the last line has no newline: still a line
+	w("empty.txt", nil)
+	w("bin.dat", append([]byte("PNG\x00"), []byte("a\nb\n")...))
+	// A NUL after the first 8 KiB does not make a file binary.
+	late := append(bytes.Repeat([]byte("x\n"), 4096), 0, '\n') // NUL at byte 8192
+	w("late-nul.txt", late)
+	w("big.txt", bytes.Repeat([]byte("l\n"), 1<<20)) // exactly 2 MiB
+	w("toobig.txt", append(bytes.Repeat([]byte("l\n"), 1<<20), '\n'))
+	w("sub/deep.txt", []byte("one\n"))
+	w("crlf.txt", []byte("a\r\nb\r\n"))
+	w("blank.txt", []byte("\n\n\n"))
+	mustMkdirAll(t, filepath.Join(repo, "dir"))
+	w("dir/inside.txt", []byte("x\n")) // under a collapsed untracked folder: no entry for it
+
+	ns := decodeNumstat(t, postNumstat(s, repo, "head"))
+	want := []gitview.NumEntry{
+		{P: "tracked.go", X: "M", A: 1, D: 1}, // git's, first and untouched
+		{P: "three.txt", X: "U", A: 3},
+		{P: "nonl.txt", X: "U", A: 3},
+		{P: "empty.txt", X: "U"},
+		{P: "bin.dat", X: "U", Bin: true},
+		{P: "late-nul.txt", X: "U", A: 4097},
+		{P: "big.txt", X: "U", A: 1 << 20},
+		// toobig.txt (over 2 MiB), dir/ (a folder) and gone.txt (not on disk) have no entry.
+		{P: "sub/deep.txt", X: "U", A: 1},
+		{P: "crlf.txt", X: "U", A: 2},
+		{P: "blank.txt", X: "U", A: 3},
+	}
+	if ns.State != "ok" || !slices.Equal(ns.Entries, want) {
+		t.Fatalf("numstat = %+v\nwant %+v", ns, want)
+	}
+	if len(g.statuses) != 1 || len(g.numstats) != 1 {
+		t.Fatalf("calls: statuses=%d numstats=%d, want one each", len(g.statuses), len(g.numstats))
+	}
+	// Branch scope counts the same untracked files: they are new against the base too.
+	ns = decodeNumstat(t, postNumstat(s, repo, "branch"))
+	if ns.State != "ok" || !slices.Equal(ns.Entries, want) {
+		t.Fatalf("branch numstat = %+v", ns)
+	}
+	if !strings.Contains(fmt.Sprint(ns.Entries), "{bin.dat U 0 0 true}") {
+		t.Fatalf("binary entry: %+v", ns.Entries)
+	}
+}
+
+func TestGitNumstatUntrackedOnlyTakesWhatStatusSaysIsUntracked(t *testing.T) {
+	s, repo, g := untrackedRepo(t)
+	mustWrite(t, filepath.Join(repo, "modified.go"), "a\nb\n")
+	mustWrite(t, filepath.Join(repo, "dup.go"), "a\nb\n")
+	mustWrite(t, filepath.Join(repo, "new.go"), "a\n")
+	// Only U entries are counted; M, A, D and C come from git. A path numstat
+	// already has (the two runs are seconds apart) is not listed twice.
+	g.st.Entries = []gitview.Entry{{P: "modified.go", X: "M"}, {P: "added.go", X: "A"}, {P: "gone.go", X: "D"}, {P: "conflict.go", X: "C"}, {P: "dup.go", X: "U"}, {P: "new.go", X: "U"}}
+	g.ns.Entries = []gitview.NumEntry{{P: "dup.go", X: "A", A: 2}}
+	ns := decodeNumstat(t, postNumstat(s, repo, "head"))
+	want := []gitview.NumEntry{{P: "dup.go", X: "A", A: 2}, {P: "new.go", X: "U", A: 1}}
+	if !slices.Equal(ns.Entries, want) {
+		t.Fatalf("entries = %+v, want %+v", ns.Entries, want)
+	}
+	// A status that is not ok has no untracked list: git's entries stand alone.
+	g.st = gitview.Status{State: "toomany", Entries: []gitview.Entry{}}
+	if ns := decodeNumstat(t, postNumstat(s, repo, "head")); ns.State != "ok" || !slices.Equal(ns.Entries, []gitview.NumEntry{{P: "dup.go", X: "A", A: 2}}) {
+		t.Fatalf("toomany status: %+v", ns)
+	}
+	g.st = gitview.Status{State: "unavailable", Reason: "boom /secret", Entries: []gitview.Entry{}}
+	if ns := decodeNumstat(t, postNumstat(s, repo, "head")); ns.State != "ok" || len(ns.Entries) != 1 || ns.Reason != "" {
+		t.Fatalf("unavailable status: %+v", ns)
+	}
+}
+
+func TestGitNumstatCountsAtMost200Untracked(t *testing.T) {
+	var paths []string
+	for i := 0; i < 250; i++ {
+		paths = append(paths, fmt.Sprintf("f%03d.txt", i))
+	}
+	s, repo, _ := untrackedRepo(t, paths...)
+	for _, p := range paths {
+		mustWrite(t, filepath.Join(repo, p), "a\n")
+	}
+	ns := decodeNumstat(t, postNumstat(s, repo, "head"))
+	// The tracked entry and the first 200 untracked ones, in status order.
+	if len(ns.Entries) != 201 || ns.Entries[1].P != "f000.txt" || ns.Entries[200].P != "f199.txt" {
+		t.Fatalf("%d entries, first %+v last %+v", len(ns.Entries), ns.Entries[1], ns.Entries[len(ns.Entries)-1])
+	}
+	// The cap is on files looked at, not on counts that came out: a missing file
+	// uses a slot and so makes no room for a later one. A folder is not a file.
+	paths = append([]string{"dir/", "missing.txt"}, paths...)
+	s, repo, _ = untrackedRepo(t, paths...)
+	for _, p := range paths[2:] {
+		mustWrite(t, filepath.Join(repo, p), "a\n")
+	}
+	ns = decodeNumstat(t, postNumstat(s, repo, "head"))
+	if len(ns.Entries) != 1+199 || ns.Entries[len(ns.Entries)-1].P != "f198.txt" {
+		t.Fatalf("with a folder and a missing file: %d entries, last %+v", len(ns.Entries), ns.Entries[len(ns.Entries)-1])
+	}
+}
+
+func TestGitNumstatUntrackedNeverLeavesTheTree(t *testing.T) {
+	s, repo, _ := untrackedRepo(t, "../outside.txt", "/etc/hostname", "a/../../outside.txt", "link-out.txt", "link-in.txt", "linkdir/file.txt", "fifo", "ok.txt")
+	h := filepath.Dir(repo)
+	mustWrite(t, filepath.Join(h, "outside.txt"), "secret\n")
+	mustWrite(t, filepath.Join(repo, "real.txt"), "a\nb\n")
+	mustWrite(t, filepath.Join(repo, "ok.txt"), "a\n")
+	outer := t.TempDir() // beside $HOME, outside every served tree
+	mustWrite(t, filepath.Join(outer, "host.txt"), "x\ny\nz\n")
+	mustSymlink(t, filepath.Join(outer, "host.txt"), filepath.Join(repo, "link-out.txt"))
+	// A link to a file in the tree is the link's own text for git (one line), not its target's lines.
+	mustSymlink(t, "real.txt", filepath.Join(repo, "link-in.txt"))
+	mustMkdirAll(t, filepath.Join(repo, "realdir"))
+	mustWrite(t, filepath.Join(repo, "realdir", "file.txt"), "a\nb\n")
+	mustSymlink(t, filepath.Join(repo, "realdir"), filepath.Join(repo, "linkdir"))
+	if err := syscall.Mkfifo(filepath.Join(repo, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ns := decodeNumstat(t, postNumstat(s, repo, "head"))
+	want := []gitview.NumEntry{{P: "tracked.go", X: "M", A: 1, D: 1}, {P: "ok.txt", X: "U", A: 1}}
+	if !slices.Equal(ns.Entries, want) {
+		t.Fatalf("entries = %+v, want only %+v", ns.Entries, want)
+	}
+}
+
+func TestGitNumstatUntrackedBoxed(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	g := &fakeGit{}
+	s.Git = g
+	mainRepo(t, ws)
+	for p, c := range map[string]string{"new.txt": "a\nb\n", "real.txt": "a\nb\nc\n"} {
+		mustWrite(t, filepath.Join(ws, p), c)
+	}
+	mustWrite(t, filepath.Join(home, "host-secret.txt"), "1\n2\n3\n4\n")
+	mustSymlink(t, filepath.Join(home, "host-secret.txt"), filepath.Join(ws, "escape.txt"))
+	mustSymlink(t, "real.txt", filepath.Join(ws, "inner-link.txt"))
+	mustSymlink(t, "../host-secret.txt", filepath.Join(ws, "up-link.txt"))
+	g.st = gitview.Status{State: "ok", Entries: []gitview.Entry{{P: "new.txt", X: "U"}, {P: "escape.txt", X: "U"}, {P: "inner-link.txt", X: "U"}, {P: "up-link.txt", X: "U"}, {P: "real.txt", X: "U"}}}
+	ns := decodeNumstat(t, postNumstat(s, ws, "head"))
+	// Through os.Root: a box-planted link, out of the workspace or within it, counts nothing.
+	want := []gitview.NumEntry{{P: "new.txt", X: "U", A: 2}, {P: "real.txt", X: "U", A: 3}}
+	if ns.State != "ok" || !slices.Equal(ns.Entries, want) {
+		t.Fatalf("numstat = %+v, want %+v", ns, want)
+	}
+}
+
+func TestCountLines(t *testing.T) {
+	type res struct {
+		lines   int
+		bin, ok bool
+	}
+	nulAt := func(n int) []byte { b := bytes.Repeat([]byte("a"), n+1); b[n] = 0; return b }
+	cases := []struct {
+		name string
+		in   []byte
+		want res
+	}{
+		{"empty", nil, res{0, false, true}},
+		{"one line", []byte("a\n"), res{1, false, true}},
+		{"no final newline", []byte("a\nb"), res{2, false, true}},
+		{"only a newline", []byte("\n"), res{1, false, true}},
+		{"no newline at all", []byte("abc"), res{1, false, true}},
+		{"NUL in the first byte", []byte{0}, res{0, true, true}},
+		{"NUL at the last sniffed byte", nulAt(countSniffBytes - 1), res{0, true, true}},
+		{"NUL one past the sniff window", nulAt(countSniffBytes), res{1, false, true}},
+		{"exactly the cap", bytes.Repeat([]byte("l\n"), maxCountBytes/2), res{maxCountBytes / 2, false, true}},
+		{"one byte over the cap", bytes.Repeat([]byte("l"), maxCountBytes+1), res{0, false, false}},
+	}
+	for _, c := range cases {
+		// Whole, and one byte per Read: the sniff window spans many reads.
+		for name, r := range map[string]io.Reader{
+			"whole":  io.LimitReader(bytes.NewReader(c.in), maxCountBytes+1),
+			"1-byte": io.LimitReader(iotest.OneByteReader(bytes.NewReader(c.in)), maxCountBytes+1),
+			"half":   io.LimitReader(iotest.HalfReader(bytes.NewReader(c.in)), maxCountBytes+1),
+		} {
+			if c.name == "exactly the cap" && name == "1-byte" {
+				continue // 2 million one-byte reads: nothing more to learn
+			}
+			lines, bin, ok := countLines(r)
+			if got := (res{lines, bin, ok}); got != c.want {
+				t.Errorf("%s (%s): got %+v, want %+v", c.name, name, got, c.want)
+			}
+		}
+	}
+	// A file that grew past the cap after its size was read is caught by the limit.
+	if _, _, ok := countLines(io.LimitReader(zeros{}, maxCountBytes+1)); ok {
+		t.Error("an endless reader was counted")
+	}
+	// A read error is no count.
+	if _, _, ok := countLines(io.MultiReader(strings.NewReader("a\n"), iotest.ErrReader(io.ErrClosedPipe))); ok {
+		t.Error("a read error was counted")
+	}
+}
+
+// zeros is an endless reader of "x\n".
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = "x\n"[i%2]
+	}
+	return len(p), nil
 }
