@@ -38,6 +38,9 @@ type descriptor struct {
 	} `json:"platform"`
 }
 
+// Strings the registry supplies are printed with %q: this runs in a GitHub
+// Actions step, which reads "::" commands from a line's start.
+//
 // resolve finds the published box image built from the Dockerfile whose Hash is
 // hash: the index tagged dockerfile-<hash> in repoPath on registry. It returns
 // boximage.PublishedRepo@<index digest> only when the index holds exactly
@@ -60,7 +63,7 @@ func resolve(ctx context.Context, c *http.Client, registry, repoPath, hash strin
 	}
 	index := digest(body)
 	if h := hdr.Get("Docker-Content-Digest"); h != "" && h != index {
-		return "", fmt.Errorf("%s:%s: the registry names it %s, its body hashes to %s: does not match", repoPath, tag, h, index)
+		return "", fmt.Errorf("%s:%s: the registry names it %q, its body hashes to %s: does not match", repoPath, tag, h, index)
 	}
 	var idx struct {
 		MediaType string       `json:"mediaType"`
@@ -79,11 +82,11 @@ func resolve(ctx context.Context, c *http.Client, registry, repoPath, hash strin
 			p = m.Platform.OS + "/" + m.Platform.Architecture
 		}
 		if !slices.Contains(wantPlatforms, p) || slices.Contains(got, p) {
-			return "", fmt.Errorf("%s:%s holds %s, want exactly %s", repoPath, tag, p, strings.Join(wantPlatforms, " and "))
+			return "", fmt.Errorf("%s:%s holds %q, want exactly %s", repoPath, tag, p, strings.Join(wantPlatforms, " and "))
 		}
 		got = append(got, p)
 		if err := checkPlatform(get, m, p, hash); err != nil {
-			return "", fmt.Errorf("%s:%s %s: %w", repoPath, tag, p, err)
+			return "", fmt.Errorf("%s:%s %q: %w", repoPath, tag, p, err)
 		}
 	}
 	for _, p := range wantPlatforms {
@@ -106,7 +109,7 @@ func checkPlatform(get func(kind, ref, accept string) ([]byte, http.Header, erro
 		return err
 	}
 	if d := digest(body); d != m.Digest {
-		return fmt.Errorf("manifest %s hashes to %s: does not match", m.Digest, d)
+		return fmt.Errorf("manifest %q hashes to %s: does not match", m.Digest, d)
 	}
 	var man struct {
 		Config descriptor `json:"config"`
@@ -115,14 +118,14 @@ func checkPlatform(get func(kind, ref, accept string) ([]byte, http.Header, erro
 		return err
 	}
 	if !strings.HasPrefix(man.Config.Digest, "sha256:") {
-		return fmt.Errorf("manifest %s names no config", m.Digest)
+		return fmt.Errorf("manifest %q names no config", m.Digest)
 	}
 	body, _, err = get("blobs", man.Config.Digest, "*/*")
 	if err != nil {
 		return err
 	}
 	if d := digest(body); d != man.Config.Digest {
-		return fmt.Errorf("config %s hashes to %s: does not match", man.Config.Digest, d)
+		return fmt.Errorf("config %q hashes to %s: does not match", man.Config.Digest, d)
 	}
 	var cfg struct {
 		OS           string `json:"os"`
@@ -135,7 +138,7 @@ func checkPlatform(get func(kind, ref, accept string) ([]byte, http.Header, erro
 		return err
 	}
 	if p := cfg.OS + "/" + cfg.Architecture; p != platform {
-		return fmt.Errorf("its image config is %s", p)
+		return fmt.Errorf("its image config is %q", p)
 	}
 	if l := cfg.Config.Labels[boximage.LabelHash]; l != hash {
 		return fmt.Errorf("label %s is %q, want %s", boximage.LabelHash, l, hash)

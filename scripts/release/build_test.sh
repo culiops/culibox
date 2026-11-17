@@ -141,7 +141,10 @@ run v1.2.3 "$tmp/o8" "$tmp/a5"
 if grep -qF "published=" "$GO_ARGV"; then fail "a run without a ref bakes one"; else pass "a run without a ref bakes none"; fi
 nl="$ref
 -X main.version=evil"
-for bad in ghcr.io/culiops/culibox:base "ghcr.io/culiops/culibox@sha256:abc" "$ref -X main.version=evil" "-X" "$nl" \
+# 63 hex plus a trailing newline is 64 characters.
+nl63="${ref%a}
+"
+for bad in ghcr.io/culiops/culibox:base "ghcr.io/culiops/culibox@sha256:abc" "$ref -X main.version=evil" "-X" "$nl" "$nl63" \
   "ghcr.io/culiops/culibox@sha256:$(printf 'A%.0s' $(seq 64))" ""; do
   run v1.2.3 "$tmp/o9" "$tmp/a5" "$bad"
   if [ "$rc" -eq 2 ]; then pass "box image ref '$bad' exits 2"; else fail "box image ref '$bad' exits $rc, want 2"; fi

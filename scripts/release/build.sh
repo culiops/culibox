@@ -37,7 +37,12 @@ box_image=${4-}
 # nothing else (a space, a newline, another -X) may ride along.
 if [ "$#" -eq 4 ]; then
   hex=${box_image#ghcr.io/culiops/culibox@sha256:}
-  if [ "$hex" = "$box_image" ] || [ "${#hex}" -ne 64 ] || [ -n "$(printf '%s' "$hex" | tr -d '0123456789abcdef')" ]; then
+  # A case pattern, not $(… | tr): command substitution drops trailing newlines.
+  case $hex in
+  *[!0123456789abcdef]*) bad_hex=1 ;;
+  *) bad_hex=0 ;;
+  esac
+  if [ "$hex" = "$box_image" ] || [ "${#hex}" -ne 64 ] || [ "$bad_hex" = 1 ]; then
     echo "build.sh: box image ref '$box_image' is not ghcr.io/culiops/culibox@sha256:<64 hex>" >&2
     exit 2
   fi

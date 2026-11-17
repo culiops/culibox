@@ -119,7 +119,13 @@ func (f *Fake) PullAdds(ref string, im Image) {
 	if im.Labeled {
 		labeled = "1"
 	}
-	f.appendTo("pull", strings.Join([]string{ref, im.ID, fmt.Sprint(im.Size), orNone(r.Repo), orNone(r.Tag), orNone(r.Digest), labeled}, "\t"))
+	if im.Arch == "" {
+		im.Arch = "arm64"
+	}
+	if im.Hash == "" {
+		im.Hash = "h0"
+	}
+	f.appendTo("pull", strings.Join([]string{ref, im.ID, fmt.Sprint(im.Size), orNone(r.Repo), orNone(r.Tag), orNone(r.Digest), labeled, im.Arch, im.Hash}, "\t"))
 }
 
 // BuildAdds makes the next `docker build … -t name …` produce im: every -t name
@@ -224,12 +230,24 @@ case "$1 $2" in
 esac
 case "$1" in
 version) cat "$d/arch"; exit 0 ;;
-tag) exit 0 ;;
+tag)
+  # docker tag SRC DST: DST moves to SRC's image; an old holder of DST is left
+  # unnamed (dangling) when that was its last name.
+  id=$(resolve "$2")
+  if [ -z "$id" ]; then echo "Error response from daemon: No such image: $2" >&2; exit 1; fi
+  repo=${3%:*}; tag=${3##*:}
+  old=$(awk -F'\t' -v r="$repo" -v g="$tag" '$2==r && $3==g {print $1}' "$d/images")
+  awk -F'\t' -v r="$repo" -v g="$tag" '!($2==r && $3==g)' "$d/images" > "$d/images.new"; mv "$d/images.new" "$d/images"
+  for o in $old; do
+    awk -F'\t' -v i="$o" '$1==i {f=1} END {exit !f}' "$d/images" || printf '%s\t<none>\t<none>\t<none>\n' "$o" >> "$d/images"
+  done
+  printf '%s\t%s\t%s\t<none>\n' "$id" "$repo" "$tag" >> "$d/images"
+  exit 0 ;;
 pull)
   ref=""; for a; do ref=$a; done
   row=$(awk -F'\t' -v r="$ref" '$1==r {print; exit}' "$d/pull")
   if [ -z "$row" ]; then echo "Error response from daemon: denied" >&2; exit 1; fi
-  echo "$row" | awk -F'\t' -v OFS='\t' '{print $2, $4, $5, $6 >> "'"$d"'/images"; print $2, $3, "arm64", "h0" >> "'"$d"'/meta"; if ($7=="1") print $2 >> "'"$d"'/labeled"}'
+  echo "$row" | awk -F'\t' -v OFS='\t' '{print $2, $4, $5, $6 >> "'"$d"'/images"; print $2, $3, $8, $9 >> "'"$d"'/meta"; if ($7=="1") print $2 >> "'"$d"'/labeled"}'
   echo "pulled $ref"
   exit 0 ;;
 build)
