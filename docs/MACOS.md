@@ -84,6 +84,22 @@ Closing the terminal tab stops CuliBox but not your sessions; run
 `culibox serve` again and they reattach. Only one CuliBox can serve a data
 directory at a time.
 
+To run it without a terminal tab, and have it start when you log in:
+
+    culibox service install
+
+This writes a LaunchAgent, `~/Library/LaunchAgents/dev.culiops.culibox.plist`,
+and loads it (`launchctl bootstrap gui/<uid>`). Run it from a terminal in your
+Mac login, not over ssh: a LaunchAgent belongs to your GUI login session, and it
+runs while you are logged in. The box VM still starts only with the first boxed
+session. The service gets the `PATH` of the shell you ran `install` from, so
+Homebrew's `/opt/homebrew/bin` (docker, colima, git, claude) is found; run
+`install` again after you change `PATH` or replace the `culibox` binary.
+`culibox service status` shows whether it runs, `culibox service uninstall`
+unloads it and removes the plist (only one CuliBox wrote), and sessions survive
+both. Logs go to `service.log` in the data root. The rules and refusals are in
+[INSTALL.md](INSTALL.md#run-as-a-service).
+
 ## Configure
 
 Everything CuliBox writes lives in one directory, `~/.local/share/culibox`

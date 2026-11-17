@@ -146,6 +146,25 @@ Open `http://127.0.0.1:8899` (use the printed login URL the first time). Session
 
 Every key is in [Configuration](CONFIG.md); [config.example.json](../config.example.json) is a fuller example. Only one CuliBox can serve a data root at a time.
 
+## Run as a service
+
+`culibox serve` runs in the foreground. To keep CuliBox running without a terminal, and start it again after a reboot, install it as a service of your own user (opt-in; nothing needs `sudo`):
+
+    culibox service install     # write the unit and start it
+    culibox service status      # installed? running? which binary? (exit 0 = running, 3 = not, 1 = could not tell)
+    culibox service uninstall   # stop it and remove the unit
+
+On Linux this is a `systemd --user` unit, `~/.config/systemd/user/culibox-serve.service`; on macOS a LaunchAgent, `~/Library/LaunchAgents/dev.culiops.culibox.plist` (see [MACOS.md](MACOS.md#run)). Pass the same `-config <path>` you give `culibox serve`, if any.
+
+- **What it runs.** The `culibox` you ran `install` with, as `culibox serve` (plus `-config <absolute path>` when you gave one), with the `PATH`, locale (`LANG`, `LC_ALL`, `LC_CTYPE`), `CULIBOX_HOME` and an absolute `XDG_CONFIG_HOME` of the shell you ran it from, so the service finds docker, git and claude where your shell does. Nothing else from your environment, and never a secret.
+- **When install refuses.** `bind_addr` is not loopback (`127.0.0.1`, `::1`, `localhost`); `password_env` is set (the service has no way to get the password, so use the login token); a CuliBox is already serving that data root or port (stop it; its sessions survive); the data root is still the old `~/.local/share/agent-box` (run `culibox serve` once so it moves the root); the binary is a temporary `go run` build; or a file it did not write is already at the unit's path. It warns about each `static_tokens` entry that reads an env var, because the service will not have it; keep those values in the [store](STORE.md) instead.
+- **Logs** go to `service.log` in the data root, which also holds the login URL printed at start. Open `http://127.0.0.1:8899/login` (your `bind_addr`) and paste the token from `login.token` in the data root.
+- **Sessions survive** a stop, a restart and `uninstall`; the next start reattaches them.
+- **After you replace the binary or change `PATH`**, run `culibox service install` again: it rewrites the unit and restarts the service. `status` and `doctor` say when the unit runs a different binary.
+- **Linux: logging out.** A `systemd --user` service stops when your last login session ends, and starts at your next login. To keep it running after logout and start it at boot, enable lingering once: `loginctl enable-linger $USER` (it may ask for an admin password). `install` and `status` say whether it is on. CuliBox never runs it for you.
+- **Uninstall** removes only the unit file, and only if CuliBox wrote it (it looks for a marker line and never follows a symlink). It keeps `service.log` and everything else in the data root.
+- `culibox doctor` has a `service` row: not installed, installed and running, or what is wrong.
+
 ## Upgrading
 
 Upgrading an existing install, and going back: [UPGRADING.md](UPGRADING.md).
