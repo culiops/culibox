@@ -19,7 +19,7 @@
 #   - no pull-request trigger of any kind
 #   - GITHUB_TOKEN is read-only for every job: nothing here needs a write grant
 #   - the one downloaded tool (gitleaks) is checked against a pinned sha256 first
-#   - govulncheck (job vuln, vuln.yml) runs at an exact version, checked by go's checksum database
+#   - govulncheck (job vuln, vuln.yml) is installed at an exact version, checked by go's checksum database
 name: ci
 
 on:

@@ -13,8 +13,8 @@
 #   - every action is pinned by full commit SHA, the release in a comment
 #   - no pull-request trigger of any kind
 #   - GITHUB_TOKEN is read-only
-#   - govulncheck is run at an exact version, so go checks it against the checksum
-#     database; no Go cache is restored into or saved from this job
+#   - govulncheck is installed at an exact version, so go checks it against the
+#     checksum database; no Go cache is restored into or saved from this job
 #   - no bot: it reports by failing, it never opens a PR or bumps a version
 name: vuln
 
@@ -40,9 +40,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # Built once for the runner. GOOS goes on the darwin scan only: on the install
+      # (or a go run) it would build a darwin binary the runner cannot start.
+      - name: Install govulncheck
+        run: GOBIN="$RUNNER_TEMP/govulncheck" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - name: govulncheck (linux)
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        run: |
+          "$RUNNER_TEMP/govulncheck/govulncheck" ./...
       - name: govulncheck (darwin)
         env:
           GOOS: darwin
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        run: |
+          "$RUNNER_TEMP/govulncheck/govulncheck" ./...

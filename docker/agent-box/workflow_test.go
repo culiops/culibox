@@ -1626,23 +1626,46 @@ func TestVulnWorkflow(t *testing.T) {
 	if regexp.MustCompile(`(?m)^  push:`).MatchString(wf) {
 		t.Error("vuln.yml must not have its own push trigger (ci.yml calls it)")
 	}
-	// An exact version on every line that runs it: go run checks the module against
-	// the checksum database, so the pin is the integrity check. @latest would run
-	// whatever is newest.
-	pinned := regexp.MustCompile(`^\s+run: go run golang\.org/x/vuln/cmd/govulncheck@v\d+\.\d+\.\d+ \./\.\.\.\s*$`)
-	runs := 0
+	// Installed once, at an exact version: go checks the module against the checksum
+	// database, so the pin is the integrity check (@latest would run whatever is
+	// newest). Never `go run`, and never with GOOS on the install: a darwin GOOS there
+	// builds a tool the Linux runner cannot start.
+	install := regexp.MustCompile(`^\s+run: GOBIN="\$RUNNER_TEMP/govulncheck" go install golang\.org/x/vuln/cmd/govulncheck@v\d+\.\d+\.\d+\s*$`)
+	installs := 0
 	for _, l := range strings.Split(wf, "\n") {
-		if !strings.Contains(l, "govulncheck@") {
+		if !strings.Contains(l, "x/vuln/cmd/govulncheck") {
 			continue
 		}
-		runs++
-		if !pinned.MatchString(l) {
-			t.Errorf("vuln.yml must run `go run golang.org/x/vuln/cmd/govulncheck@vX.Y.Z ./...` with an exact version: %q", strings.TrimSpace(l))
+		installs++
+		if !install.MatchString(l) {
+			t.Errorf("vuln.yml must install govulncheck with an exact version into $RUNNER_TEMP/govulncheck: %q", strings.TrimSpace(l))
 		}
 	}
-	// Once per target: the darwin build calls code the Linux one does not.
-	if runs != 2 || !regexp.MustCompile(`(?m)^\s+GOOS: darwin\s*$`).MatchString(wf) {
-		t.Errorf("vuln.yml must run govulncheck twice, once with GOOS: darwin (found %d runs)", runs)
+	if installs != 1 {
+		t.Errorf("vuln.yml installs govulncheck %d times, want once", installs)
+	}
+	// Two scans with that binary, the second with GOOS: darwin: the darwin build calls
+	// code the Linux one does not. GOOS must be set on that scan step only.
+	scan := regexp.MustCompile(`(?m)^\s+"\$RUNNER_TEMP/govulncheck/govulncheck" \./\.\.\.\s*$`)
+	if n := len(scan.FindAllString(wf, -1)); n != 2 {
+		t.Errorf("vuln.yml runs %d govulncheck scans, want 2 (linux and darwin)", n)
+	}
+	steps := strings.Split(wf, "\n      - ")
+	darwin := 0
+	for _, st := range steps {
+		if !regexp.MustCompile(`(?m)^\s+GOOS: darwin\s*$`).MatchString(st) {
+			continue
+		}
+		darwin++
+		if !scan.MatchString(st) || strings.Contains(st, "go install") {
+			t.Errorf("GOOS: darwin must be set on a scan step only, not on: %q", strings.TrimSpace(st))
+		}
+	}
+	if darwin != 1 {
+		t.Errorf("vuln.yml has %d steps with GOOS: darwin, want exactly the darwin scan", darwin)
+	}
+	if regexp.MustCompile(`(?m)^\s+GOOS:`).MatchString(strings.Split(wf, "\n    steps:\n")[0]) {
+		t.Error("vuln.yml must not set GOOS at the workflow or job level (the install would build for it)")
 	}
 	// Linux runners only (GOOS=darwin needs no Mac; the macOS budget is darwin-test).
 	for _, m := range regexp.MustCompile(`(?m)^\s+runs-on:\s*(.+?)\s*$`).FindAllStringSubmatch(wf, -1) {
