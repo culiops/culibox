@@ -79,6 +79,8 @@ The elevate block takes these optional limits, which the grant panel and the con
 
 Details and what each one weakens: [docs/aws/agent-role](aws/agent-role/README.md).
 
+Some classes are not denied in any write window yet: some IAM writes (credential resets and uploads among them), some STS tokens, DynamoDB items sent to a Kinesis destination, and S3 access point policy deletes and public access blocks. See [Known limits](SECURITY.md#known-limits).
+
 Read-only comes from the role, not from CuliBox: point each connection's `role_arn` at a read-only role and put write access only in `elevate.role_arn`. The session policy CuliBox adds narrows data reads; it does not remove writes, so a connection whose `role_arn` can write can write at any time.
 
 **Base-role check.** At spawn, CuliBox asks each base role whether it can write. It runs IAM policy simulation of 11 broad write actions (`s3:PutObject`, `s3:DeleteObject`, `s3:CreateBucket`, `ec2:RunInstances`, `ec2:TerminateInstances`, `iam:CreateUser`, `iam:AttachRolePolicy`, `lambda:UpdateFunctionCode`, `rds:DeleteDBInstance`, `dynamodb:PutItem`, `cloudformation:CreateStack`) with the role's own credentials. The UI, `agentbox-env --list` and `culibox doctor` then show one of:
