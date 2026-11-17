@@ -238,3 +238,15 @@ func TestResolveRejectsNonIndex(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A digest the index names reaches a request path and error text only in the
+// sha256:<64 hex> form (no newline can reach the Actions log).
+func TestResolveRejectsMalformedDigest(t *testing.T) {
+	r := newRegistry(t, both(testHash)...)
+	r.index = []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[` +
+		`{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:ab\n::warning::x","platform":{"os":"linux","architecture":"amd64"}}]}`)
+	_, err := resolveFrom(t, r)
+	if err == nil || !strings.Contains(err.Error(), "not sha256:<64 hex>") || strings.Contains(err.Error(), "\n") {
+		t.Fatalf("err = %v", err)
+	}
+}

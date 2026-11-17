@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -25,6 +26,10 @@ const (
 	ociManifest   = "application/vnd.oci.image.manifest.v1+json"
 	dockerSchema2 = "application/vnd.docker.distribution.manifest.v2+json"
 )
+
+// digestForm is the only digest form fetched: it becomes part of a request path
+// and of error messages, so nothing else the registry names may get that far.
+var digestForm = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // wantPlatforms are the arches box-image.yml publishes, and all an index may hold.
 var wantPlatforms = []string{"linux/amd64", "linux/arm64"}
@@ -104,6 +109,9 @@ func resolve(ctx context.Context, c *http.Client, registry, repoPath, hash strin
 // checkPlatform fetches one platform's manifest and image config and checks the
 // config is that platform's and carries the Dockerfile label hash.
 func checkPlatform(get func(kind, ref, accept string) ([]byte, http.Header, error), m descriptor, platform, hash string) error {
+	if !digestForm.MatchString(m.Digest) {
+		return fmt.Errorf("manifest digest %q is not sha256:<64 hex>", m.Digest)
+	}
 	body, _, err := get("manifests", m.Digest, ociManifest+", "+dockerSchema2)
 	if err != nil {
 		return err
@@ -117,8 +125,8 @@ func checkPlatform(get func(kind, ref, accept string) ([]byte, http.Header, erro
 	if err := json.Unmarshal(body, &man); err != nil {
 		return err
 	}
-	if !strings.HasPrefix(man.Config.Digest, "sha256:") {
-		return fmt.Errorf("manifest %q names no config", m.Digest)
+	if !digestForm.MatchString(man.Config.Digest) {
+		return fmt.Errorf("manifest %q names no sha256 config (%q)", m.Digest, man.Config.Digest)
 	}
 	body, _, err = get("blobs", man.Config.Digest, "*/*")
 	if err != nil {
