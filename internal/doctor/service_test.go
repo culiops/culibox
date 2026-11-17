@@ -22,7 +22,7 @@ func TestCheckService(t *testing.T) {
 		{"foreign", service.State{Path: "/u/unit", File: service.Foreign}, nil, Warn, []string{"/u/unit", "not CuliBox's"}},
 		{"running darwin", ours, nil, Pass, []string{"installed, running (pid 42)"}},
 		{"running linger on", with(ours, func(s *service.State) { s.LingerKnown, s.Linger = true, true }), nil, Pass, []string{"running (pid 42)", "linger on"}},
-		{"linger off", with(ours, func(s *service.State) { s.LingerKnown = true }), nil, Warn, []string{"stops at logout", "loginctl enable-linger u"}},
+		{"linger off", with(ours, func(s *service.State) { s.LingerKnown = true }), nil, Warn, []string{"sessions are killed", "loginctl enable-linger u"}},
 		{"stopped", with(ours, func(s *service.State) { s.Running, s.Detail = false, "failed" }), nil, Warn, []string{"not running (failed)", "/data/service.log"}},
 		{"other binary", with(ours, func(s *service.State) { s.Exe = "/old/culibox" }), nil, Warn, []string{"/old/culibox", "culibox service install again"}},
 		{"unreachable", service.State{Path: "/u/unit", File: service.Ours}, errors.New("systemctl --user is not reachable"), Warn, []string{"could not tell", "not reachable"}},

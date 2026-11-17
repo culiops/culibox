@@ -29,15 +29,45 @@ type Platform struct {
 }
 
 // Real is this machine's platform, with the home dir and $XDG_CONFIG_HOME
-// main resolved once.
+// main resolved once. On Linux the unit dir follows the user manager's
+// XDG_CONFIG_HOME when it can be asked, not this shell's: a value exported
+// only in a shell rc file would put the unit where systemd never looks.
 func Real(home, xdgConfig string) Platform {
 	name := os.Getenv("USER")
 	if u, err := user.Current(); err == nil && u.Username != "" {
 		name = u.Username
 	}
-	return Platform{GOOS: runtime.GOOS, UID: os.Getuid(), User: name, Home: home,
+	p := Platform{GOOS: runtime.GOOS, UID: os.Getuid(), User: name, Home: home,
 		XDGConfig: xdgConfig, LingerDir: "/var/lib/systemd/linger",
 		Run: boxvm.ExecRunner{}, Sleep: time.Sleep}
+	p.XDGConfig = p.managerXDG(xdgConfig)
+	return p
+}
+
+// managerXDG is the systemd user manager's XDG_CONFIG_HOME ("" when it has
+// none), or fallback when the manager cannot be asked or this is not Linux.
+func (p Platform) managerXDG(fallback string) string {
+	if p.GOOS != "linux" {
+		return fallback
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := p.Run.Run(ctx, nil, "systemctl", "--user", "show-environment")
+	if err != nil {
+		return fallback
+	}
+	return envFromShow(out, "XDG_CONFIG_HOME")
+}
+
+// envFromShow reads one variable from `systemctl show-environment` output. A
+// value systemd had to quote ($'...') is not a plain path: "".
+func envFromShow(out, key string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(line, key+"="); ok && !strings.HasPrefix(v, "$'") {
+			return v
+		}
+	}
+	return ""
 }
 
 func (p Platform) Supported() bool { return p.GOOS == "linux" || p.GOOS == "darwin" }

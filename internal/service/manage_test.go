@@ -21,6 +21,7 @@ func TestInstallSystemdSequence(t *testing.T) {
 	}
 	want := []string{
 		"systemctl --user show-environment",
+		"systemctl --version",
 		"systemctl --user daemon-reload",
 		"systemctl --user enable culibox-serve.service",
 		"systemctl --user restart culibox-serve.service",
@@ -74,7 +75,7 @@ func TestInstallForeignRefused(t *testing.T) {
 	if err := p.Install(context.Background(), baseSpec()); !errors.Is(err, ErrForeign) {
 		t.Fatalf("err %v", err)
 	}
-	if !slices.Equal(r.calls, []string{"systemctl --user show-environment"}) {
+	if !slices.Equal(r.calls, []string{"systemctl --user show-environment", "systemctl --version"}) {
 		t.Fatalf("calls %v", r.calls)
 	}
 	if b, _ := os.ReadFile(p.UnitPath()); string(b) != "[Unit]\nmine\n" {
@@ -91,7 +92,6 @@ func TestInstallLaunchdFresh(t *testing.T) {
 	want := []string{
 		"launchctl print gui/501",
 		"launchctl print gui/501/dev.culiops.culibox",
-		"launchctl enable gui/501/dev.culiops.culibox",
 		"launchctl bootstrap gui/501 " + p.UnitPath(),
 	}
 	if !slices.Equal(r.calls, want) {
@@ -199,5 +199,36 @@ func TestUninstallLaunchd(t *testing.T) {
 	writeOurs(t, p)
 	if removed, err := p.Uninstall(context.Background()); !removed || err != nil || len(r.calls) != 1 {
 		t.Fatalf("not loaded: %v %v %q", removed, err, r.calls)
+	}
+}
+
+func TestInstallRefusesOldSystemd(t *testing.T) {
+	r := (&fakeRunner{}).on("systemctl --version", reply{"systemd 239 (239-58.el8)\n+PAM +AUDIT\n", nil})
+	p := testPlat(t, "linux", r)
+	if err := p.Install(context.Background(), baseSpec()); err == nil || !strings.Contains(err.Error(), "240") {
+		t.Fatalf("err %v", err)
+	}
+	if _, err := os.Lstat(p.UnitPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unit written")
+	}
+}
+
+func TestUninstallUnitSystemdNeverLoaded(t *testing.T) {
+	r := (&fakeRunner{}).on("systemctl --user disable", reply{"Failed to disable unit: Unit file culibox-serve.service does not exist.\n", errExit})
+	p := testPlat(t, "linux", r)
+	writeOurs(t, p)
+	if removed, err := p.Uninstall(context.Background()); !removed || err != nil {
+		t.Fatalf("%v %v", removed, err)
+	}
+}
+
+func TestBootoutInProgressStillPolls(t *testing.T) {
+	r := (&fakeRunner{}).
+		on("launchctl print gui/501/dev.culiops.culibox", reply{"state = running\n", nil}, reply{notFound, errExit}).
+		on("launchctl bootout", reply{"Boot-out failed: 36: Operation now in progress\n", errExit})
+	p := testPlat(t, "darwin", r)
+	writeOurs(t, p)
+	if removed, err := p.Uninstall(context.Background()); !removed || err != nil {
+		t.Fatalf("%v %v", removed, err)
 	}
 }

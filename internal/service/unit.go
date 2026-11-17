@@ -25,6 +25,9 @@ const (
 	// under that name (the DEV instance does).
 	SystemdUnit  = "culibox-serve.service"
 	LaunchdLabel = "dev.culiops.culibox"
+	// ExitRefused is serve's exit code when, run as the service, it refuses its
+	// config (a non-loopback bind, password mode): systemd does not restart it.
+	ExitRefused = 78
 )
 
 type EnvVar struct{ Key, Value string }
@@ -80,7 +83,7 @@ func RenderSystemd(s Spec) ([]byte, error) {
 	for _, e := range s.Env {
 		fmt.Fprintf(&b, "Environment=\"%s=%s\"\n", e.Key, pct(e.Value))
 	}
-	b.WriteString("KillMode=process\nRestart=on-failure\nRestartSec=5\n")
+	fmt.Fprintf(&b, "KillMode=process\nRestart=on-failure\nRestartSec=5\nRestartPreventExitStatus=%d\n", ExitRefused)
 	fmt.Fprintf(&b, "StandardOutput=append:%s\nStandardError=append:%s\n", pct(s.LogPath), pct(s.LogPath))
 	b.WriteString("\n[Install]\nWantedBy=default.target\n")
 	return []byte(b.String()), nil

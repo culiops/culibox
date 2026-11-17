@@ -73,6 +73,10 @@ type cliArgs struct {
 	Base        string // clone fetch: the branch in clone_of the range starts after (default main)
 
 	AllowOldHistory bool // clone fetch: let a known stale or unverified history through, loudly
+
+	// Service: serve was started by `culibox service` (the unit passes
+	// -service): it refuses a non-loopback bind and password mode at every start.
+	Service bool
 }
 
 // storeSubs are the `agent-box store` subcommands. There is no get: a value
@@ -163,6 +167,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	force := fs.Bool("force", false, "box stop, box setup, box share apply: go ahead even with boxes running or the VM state unknown")
 	ro := fs.Bool("ro", false, "box share add: share the folder read-only")
 	base := fs.String("base", "", "clone fetch: the branch in clone_of the fetched range starts after (default main)")
+	asService := fs.Bool("service", false, "serve: started by culibox service; refuse a non-loopback bind_addr and password_env")
 	allowOld := fs.Bool("allow-old-history", false, "clone fetch: fetch a branch whose history CuliBox cannot verify, or that carries history host main rewrote away (printed as a warning)")
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
@@ -219,6 +224,9 @@ func parseArgs(argv []string) (cliArgs, error) {
 	if baseSet && cmd != "clone" {
 		return cliArgs{}, errors.New("-base only applies to clone fetch")
 	}
+	if *asService && cmd != "serve" {
+		return cliArgs{}, errors.New("-service only applies to serve")
+	}
 	if *allowOld && cmd != "clone" {
 		return cliArgs{}, errors.New("-allow-old-history only applies to clone fetch")
 	}
@@ -233,7 +241,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	return cliArgs{Cmd: cmd, Sub: sub, ConfigPath: *path, ConfigSet: set,
 		Rebuild: *rebuild, Recreate: *recreate, NoPrune: *noPrune, PruneLocal: *pruneLocal, Force: *force,
 		Profile: profile, Branch: branch, Base: *base, ID: id, AllowOldHistory: *allowOld,
-		ReadOnly: *ro, ShareAction: shareAction, SharePath: sharePath}, nil
+		ReadOnly: *ro, ShareAction: shareAction, SharePath: sharePath, Service: *asService}, nil
 }
 
 // shareActions are the `agent-box box share` actions, with how many <dir>s each takes.

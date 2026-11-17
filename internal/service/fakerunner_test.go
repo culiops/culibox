@@ -32,6 +32,9 @@ func (f *fakeRunner) Run(_ context.Context, _ []string, bin string, args ...stri
 	}
 	q := f.script[best]
 	if len(q) == 0 {
+		if call == "systemctl --version" {
+			return "systemd 255 (255.4-1ubuntu8)\n+PAM\n", nil
+		}
 		return "", nil
 	}
 	r := q[0]

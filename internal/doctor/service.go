@@ -9,9 +9,9 @@ import (
 	"github.com/culiops/culibox/internal/service"
 )
 
-// serviceStatus reads the `culibox service` state; a variable so the Checks
-// tests never ask a real supervisor. It only reads: a file, systemctl
-// is-active / show, launchctl print.
+// serviceStatus reads the `culibox service` state, a seam for tests. It only
+// reads: a file, systemctl is-active / show, launchctl print; the supervisor
+// is asked only when the unit file is ours, so a temp Home asks nothing.
 var serviceStatus = func(p service.Platform) (service.State, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -34,7 +34,7 @@ func checkService(st service.State, err error, exe, dataDir, user string) Result
 	case exe != "" && st.Exe != "" && filepath.Clean(exe) != st.Exe:
 		return Result{Warn, check, "installed, running " + st.Exe + ", not this culibox; run culibox service install again"}
 	case st.LingerKnown && !st.Linger:
-		return Result{Warn, check, "installed, running (pid " + st.PID + "); stops at logout until `loginctl enable-linger " + user + "`"}
+		return Result{Warn, check, "installed, running (pid " + st.PID + "); at logout it stops and its running agent sessions are killed, until `loginctl enable-linger " + user + "`"}
 	case st.LingerKnown:
 		return Result{Pass, check, "installed, running (pid " + st.PID + "), linger on"}
 	}

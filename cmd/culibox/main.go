@@ -41,6 +41,7 @@ import (
 	"github.com/culiops/culibox/internal/logring"
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/service"
 	"github.com/culiops/culibox/internal/session"
 	"github.com/culiops/culibox/internal/store"
 	"github.com/culiops/culibox/internal/storerefs"
@@ -184,6 +185,14 @@ func main() {
 			log.Fatalf("config: %v", err)
 		}
 		os.Exit(runClone(args, cfg, home, runtime.GOOS, cfgFiles, os.Stdout))
+	}
+	if args.Service {
+		// The unit's promise holds at every start, not only at install: a later
+		// edit of bind_addr, or a config the service resolves differently.
+		if why := serviceServeRefusal(cfg); why != "" {
+			log.Printf("culibox serve -service: %s", why)
+			os.Exit(service.ExitRefused)
+		}
 	}
 	log.Printf("config: %s (culibox %s)", src, buildCommit())
 	log.Print(cred.summary())

@@ -31,6 +31,7 @@ Environment="LANG=en_US.UTF-8"
 KillMode=process
 Restart=on-failure
 RestartSec=5
+RestartPreventExitStatus=78
 StandardOutput=append:/home/u/.local/share/culibox/service.log
 StandardError=append:/home/u/.local/share/culibox/service.log
 

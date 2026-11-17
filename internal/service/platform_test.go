@@ -134,3 +134,27 @@ func TestStatusForeignSkipsSupervisor(t *testing.T) {
 		t.Fatalf("%+v %v %v", st, err, r.calls)
 	}
 }
+
+func TestManagerXDG(t *testing.T) {
+	r := (&fakeRunner{}).on("systemctl --user show-environment", reply{"HOME=/home/u\nXDG_CONFIG_HOME=/mgr/cfg\nPATH=/usr/bin\n", nil})
+	p := testPlat(t, "linux", r)
+	if got := p.managerXDG("/shell/cfg"); got != "/mgr/cfg" {
+		t.Errorf("manager value: %q", got)
+	}
+	r.on("systemctl --user show-environment", reply{"HOME=/home/u\n", nil})
+	if got := p.managerXDG("/shell/cfg"); got != "" {
+		t.Errorf("manager has none (the shell's must not win): %q", got)
+	}
+	r.on("systemctl --user show-environment", reply{"Failed to connect to bus\n", errExit})
+	if got := p.managerXDG("/shell/cfg"); got != "/shell/cfg" {
+		t.Errorf("unreachable: %q", got)
+	}
+	r.on("systemctl --user show-environment", reply{"XDG_CONFIG_HOME=$'/a\\nb'\n", nil})
+	if got := p.managerXDG("/shell/cfg"); got != "" {
+		t.Errorf("quoted: %q", got)
+	}
+	p.GOOS = "darwin"
+	if got := p.managerXDG("/shell/cfg"); got != "/shell/cfg" {
+		t.Errorf("darwin: %q", got)
+	}
+}

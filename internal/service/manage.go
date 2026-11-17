@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -38,7 +39,25 @@ func (p Platform) Reachable(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("systemctl --user is not reachable (%s); log in on a console or over ssh as this user, so that a user manager runs and XDG_RUNTIME_DIR is set", strings.TrimSpace(firstLine(out)))
 	}
+	// StandardOutput=append: needs systemd 240; an older one ignores the line
+	// and logs to the journal, login URL and token included.
+	out, err = p.Run.Run(ctx, nil, "systemctl", "--version")
+	if v, ok := systemdVersion(out); err != nil || !ok || v < minSystemd {
+		return fmt.Errorf("systemd %d or newer is needed (found %q); run culibox serve yourself", minSystemd, strings.TrimSpace(firstLine(out)))
+	}
 	return nil
+}
+
+const minSystemd = 240
+
+// systemdVersion reads "systemd 255 (255.4-1ubuntu8)".
+func systemdVersion(out string) (int, bool) {
+	f := strings.Fields(firstLine(out))
+	if len(f) < 2 || f[0] != "systemd" {
+		return 0, false
+	}
+	v, err := strconv.Atoi(f[1])
+	return v, err == nil
 }
 
 // Install writes the unit (or replaces ours) and (re)starts the service, so a
@@ -66,10 +85,10 @@ func (p Platform) Install(ctx context.Context, s Spec) error {
 		if err := p.bootout(ctx); err != nil {
 			return err
 		}
-		for _, args := range [][]string{{"enable", p.target()}, {"bootstrap", p.domain(), path}} {
-			if _, err := p.Run.Run(ctx, nil, "launchctl", args...); err != nil {
-				return err
-			}
+		// No `launchctl enable`: it would leave an override in launchd's
+		// database that uninstall cannot take back.
+		if _, err := p.Run.Run(ctx, nil, "launchctl", "bootstrap", p.domain(), path); err != nil {
+			return fmt.Errorf("%w (if launchd says the service is disabled: launchctl enable %s, then install again)", err, p.target())
 		}
 		return nil
 	}
@@ -107,7 +126,10 @@ func (p Platform) Uninstall(ctx context.Context) (removed bool, err error) {
 		}
 		return RemoveUnit(path)
 	}
-	if _, err := p.Run.Run(ctx, nil, "systemctl", "--user", "disable", "--now", SystemdUnit); err != nil {
+	// A unit systemd never loaded (written under an XDG dir it does not read)
+	// cannot be running: disable says so, and the file can go.
+	if out, err := p.Run.Run(ctx, nil, "systemctl", "--user", "disable", "--now", SystemdUnit); err != nil &&
+		!strings.Contains(out, "does not exist") && !strings.Contains(out, "not loaded") {
 		return false, fmt.Errorf("could not stop the service, so %s is kept: %w", path, err)
 	}
 	if removed, err = RemoveUnit(path); err != nil {
@@ -125,14 +147,17 @@ func (p Platform) bootout(ctx context.Context) error {
 	if err != nil || !loaded {
 		return err
 	}
-	if _, err := p.Run.Run(ctx, nil, "launchctl", "bootout", p.target()); err != nil {
-		return err
-	}
+	// bootout may answer "Operation now in progress" while it tears down: the
+	// poll below decides, and its error is reported only if the job stays.
+	_, bootErr := p.Run.Run(ctx, nil, "launchctl", "bootout", p.target())
 	for range bootoutPolls {
 		if loaded, err = p.loaded(ctx); err != nil || !loaded {
 			return err
 		}
 		p.Sleep(bootoutEvery)
+	}
+	if bootErr != nil {
+		return fmt.Errorf("launchctl bootout %s: %w", p.target(), bootErr)
 	}
 	return fmt.Errorf("launchd still has %s after bootout; try again in a few seconds", p.target())
 }
