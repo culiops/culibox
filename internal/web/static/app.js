@@ -787,16 +787,20 @@ function setDrawerMax(on) {
 // discard ask. The session's pane takes the keyboard back once Full mode is really over: at once for Exit full, and for the
 // close when applyDrawer has applied it (`after`: after Discard, never after Cancel, so a dock that stays up keeps its
 // focus). false when the dock is not in Full mode, so the shortcut leaves the key alone.
-function dockShowTerminal() {
+// `then` (optional) runs at that same moment, once Full mode is over and the terminal is on screen, and never when it stays: the
+// strip's Insert at prompt (dockAgentInsert) asks the insert decision from it, on the prompt that is now visible.
+function dockShowTerminal(then) {
   const dr = $("drawer");
   if (!dr || dr.hidden || dr.dataset.max !== "1") return false;
   const sid = drawerState.sessionId;
   const focus = () => {
     const term = sid ? terminalTabFor(sid) : null;
     const cell = term ? cells.find((c) => c.tabs.includes(term)) : null;
-    if (!cell) return;
-    setFocusedCell(cell);
-    if (cellTerminal(cell) === term) term.grabFocus();
+    if (cell) {
+      setFocusedCell(cell);
+      if (cellTerminal(cell) === term) term.grabFocus();
+    }
+    if (typeof then === "function") then();
   };
   if (dr.dataset.forced === "1") {
     applyDrawer({ open: null, sessionId: sid }, { after: focus });
@@ -815,6 +819,7 @@ $("drawer-max").onclick = () => {
   else setDrawerMax(dr.dataset.max !== "1");
 };
 $("dock-agent-term").onclick = () => dockShowTerminal();
+$("dock-agent-ins").onclick = () => dockAgentInsert();
 // Escape restores a maximized drawer (maxEscapeRestores decides). On the
 // document, not the drawer: a tree row click leaves focus on body. The viewer
 // toolbar's menus (viewertoolbar.js, which loads earlier) take focus when they

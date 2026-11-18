@@ -122,16 +122,18 @@ test("the window's resize lays the open dock out before the terminals fit, and t
   assert.ok(fit > dock, "registered before fitAll, so it runs first and fitAll measures the new dock width");
 });
 
-test("the agent strip is the last child of #drawer, after the body: dot, name, status, last line, Show terminal with its chord", () => {
+test("the agent strip is the last child of #drawer, after the body: dot, name, status, last line, Insert at prompt, Show terminal with its chord", () => {
   const html = read("index.html");
   const dr = html.slice(html.indexOf('<aside id="drawer"'), html.indexOf("</aside>", html.indexOf('<aside id="drawer"')));
   const strip = dr.slice(dr.indexOf('id="dock-agent"'));
   assert.ok(dr.indexOf('id="dock-agent"') > dr.indexOf('id="drawer-strip"'), "after the dock body, at the bottom of the column");
   const at = (id) => strip.indexOf('id="' + id + '"');
-  const order = ["dock-agent-dot", "dock-agent-name", "dock-agent-st", "dock-agent-last", "dock-agent-term", "dock-agent-kbd"];
+  const order = ["dock-agent-dot", "dock-agent-name", "dock-agent-st", "dock-agent-last", "dock-agent-ins", "dock-agent-term", "dock-agent-kbd"];
   order.forEach((id, i) => { assert.ok(at(id) > 0, "#" + id); if (i) assert.ok(at(id) > at(order[i - 1]), id + " after " + order[i - 1]); });
   assert.match(strip, /<button id="dock-agent-term" type="button" class="btn btn-sm">/);
-  assert.ok(!/Insert at prompt|insert/i.test(strip), "no Insert at prompt: P2 builds the gate that says when typing into a terminal is safe");
+  // Insert at prompt (Task 8b): a ghost button before Show terminal. It leaves Full mode first and then asks the insert decision
+  // (dock-agent-insert.test.js), which is why a covered terminal is never typed into.
+  assert.match(strip, /<button id="dock-agent-ins" type="button" class="btn btn-ghost btn-sm" title="[^"]*"><span>Insert at prompt<\/span><\/button>/);
   assert.ok(!/aria-live/.test(strip), "a 4 s poll must not be announced");
 });
 

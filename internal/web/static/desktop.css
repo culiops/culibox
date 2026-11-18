@@ -1447,8 +1447,14 @@
   .dk-sb-branch[hidden], .dk-sb-saved[hidden] { display: none; }
   .dk-sb-saved { flex: none; color: var(--ok); }
   .dk-sb-r { flex: none; display: flex; gap: 14px; margin-left: auto; }
-  /* The tab's own actions in the bar (the Code | Changes toggle and the ⋯; Task 8b adds Follow): left of Full. */
+  /* The tab's own actions in the bar (the Code | Changes toggle, Follow and the ⋯): left of Full. */
   .dk-vact { flex: none; display: flex; align-items: center; gap: var(--sp-1); }
+  /* Follow (editorfollow.js): an eye and the word, a size down like the toggle beside it. On it wears the accent (mockup B1): a faint
+     accent fill and an accent ring over the kit's pressed look. */
+  .dk-follow { flex: none; }
+  .dk-follow svg { flex: none; }
+  .dk-follow[aria-pressed="true"] { background: var(--accent-tint); color: var(--fg); box-shadow: inset 0 0 0 1px var(--accent); }
+  .dk-follow[aria-pressed="true"]:hover { background: var(--accent-tint); }
   /* The Code | Changes toggle (editordiff.js): the kit's .seg, a size down so it sits level with the Full button beside it. Changes
      can be aria-disabled, its reason in the title: it stays reachable by hover and keyboard, dimmed by the one disabled look
      (#169), and gets no hover fill. */
@@ -1464,6 +1470,14 @@
   .dk-g-add { background: var(--ok); }
   .dk-g-mod { background: var(--accent); }
   .dk-g-del { margin-left: 3px; width: 7px !important; background: linear-gradient(135deg, var(--red) 50%, transparent 50%) top left / 7px 7px no-repeat; }
+  /* The selection bar (editorselbar.js, mockup B1): a Monaco content widget over the start of the selection, on --panel with the
+     kit's popover shadow. Its buttons are the kit's: Insert at prompt is the primary (.btn-primary), Copy and P3's are ghosts. The
+     script stops the mousedown on it, so a press never takes the keyboard from the editor. */
+  .dk-selbar {
+    display: flex; align-items: center; gap: 2px; padding: 3px; white-space: nowrap;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: var(--e-pop);
+  }
+  .dk-selbar-b svg { flex: none; width: 14px; height: 14px; }
   /* The line a path:line link opened (the read view's .vl-target): a faint band over the line and a bar in its margin. */
   .dk-target { background: color-mix(in srgb, var(--accent) 5%, transparent); }
   .dk-target-m { box-shadow: inset 3px 0 0 var(--accent); }

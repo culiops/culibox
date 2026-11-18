@@ -69,7 +69,9 @@ function editorBind(ed, id, run) {
 //  - no minimap, no sticky scroll: mockup B1 shows neither;
 //  - no automatic suggestion popups: with them on, Enter accepts a suggestion instead of ending the line, which is
 //    the wrong thing in a box where the agent writes the code and a human fixes a line;
-//  - fixedOverflowWidgets: the find widget and hovers are not cut by the dock's edge.
+//  - fixedOverflowWidgets: the find widget and hovers are not cut by the dock's edge;
+//  - selectOnLineNumbers (Monaco's default, stated because the selection bar depends on it): a click on a line number selects that
+//    line, and the bar then offers its path:line (the read view's line-number menu is gone from the dock).
 function editorEnsure() {
   if (dockEditor) return dockEditor;
   dockEditorEl = document.createElement("div");
@@ -82,6 +84,7 @@ function editorEnsure() {
     stickyScroll: { enabled: false },
     scrollBeyondLastLine: false,
     fixedOverflowWidgets: true,
+    selectOnLineNumbers: true,
     quickSuggestions: false,
     suggestOnTriggerCharacters: false,
     wordBasedSuggestions: "off",
@@ -91,6 +94,7 @@ function editorEnsure() {
   editorBind(dockEditor, "editor.save", () => { if (dockEditorOwner) dockEditorOwner.save(); });
   editorBind(dockEditor, "editor.wrap", () => toggleViewerWrap());
   dockEditor.onDidChangeCursorPosition(() => { if (dockEditorOwner) dockEditorOwner.paintStatus(); });
+  editorSelBarInstall(dockEditor, dockMonaco); // editorselbar.js: the bar over a selection
   return dockEditor;
 }
 
@@ -157,6 +161,7 @@ class EditorTab {
     this.savedTimer = null;
     this.changes = null;        // editordiff.js: the file at git's base and the lines that differ ({head, lineChanges, ...}), once asked for
     this.diff = null;           // the Changes view while it is up: {diff, original, wrap, label}
+    this.followBtn = null;      // editorfollow.js: the Follow toggle in the bar
     this.dg = null;             // editordiff.js: the request slot, the gutter's debounce and decorations
     this.seg = null;            // the Code | Changes toggle in the bar: {el, code, changes}
 
@@ -192,8 +197,8 @@ class EditorTab {
 
   // --- the bar: ⋯ in the dock's action area, the status bar under the editor ---------------------------------
 
-  // buildActs makes the actions this tab adds to the dock's bar (#dock-acts, left of Full): the Code | Changes toggle and the ⋯ menu.
-  // Task 8b puts Follow in actsEl, before moreBtn.
+  // buildActs makes the actions this tab adds to the dock's bar (#dock-acts, left of Full): the Code | Changes toggle, Follow (the
+  // session's setting, so every tab's says the same: editorfollow.js) and the ⋯ menu.
   buildActs() {
     this.actsEl = document.createElement("div");
     this.actsEl.className = "dk-vact";
@@ -211,7 +216,7 @@ class EditorTab {
     // stopPropagation: the document's closer for the kit menu would shut the menu this press opens.
     more.onclick = (e) => { e.stopPropagation(); this.openMenu(); };
     this.moreBtn = more;
-    this.actsEl.append(editorDiffToggle(this), more);
+    this.actsEl.append(editorDiffToggle(this), editorFollowButton(this), more);
   }
 
   // buildStatus makes the status bar (mockup B1): the branch and the "Saved" word on the left, then Ln/Col,
@@ -264,6 +269,8 @@ class EditorTab {
     this.roEl.hidden = !why || !ready;
     this.paintStatus();
     editorDiffPaintToggle(this);
+    editorFollowPaintTab(this);
+    editorSelBarUpdate(); // the Changes view took the editor's place, or gave it back: the bar is for Code only
   }
 
   // changed: something the dock shows moved (the lock, the dirty dot, the label). Like ViewerTab.changed.
@@ -419,6 +426,7 @@ class EditorTab {
     if (this.inner) { this.inner.onHide(); return; }
     editorDiffDetach(this);
     this.stashView();
+    editorSelBarUpdate(); // this tab is off screen: its selection bar goes with it
   }
 
   // show: this tab is on screen with a model, so it takes the shared editor, or, if it was left in Changes, opens that view again

@@ -405,7 +405,8 @@ test("every call of insertTextAtPrompt sits in a function that asks first (inser
       assert.ok(ask < body.indexOf("insertTextAtPrompt("), f + " asks after typing");
     }
   }
-  assert.deepStrictEqual(seen.sort(), ["filetree.js: insertPathAtPrompt", "upload.js: insertPathsIntoTerminal", "viewer-tab.js: insertPath"]);
+  // editorselbar.js editorInsertRef is Task 8b's: the editor's selection bar and the Full-mode agent strip's Insert both type through it.
+  assert.deepStrictEqual(seen.sort(), ["editorselbar.js: editorInsertRef", "filetree.js: insertPathAtPrompt", "upload.js: insertPathsIntoTerminal", "viewer-tab.js: insertPath"]);
 });
 
 test("no PTY write path was added: sendText and sendKey are called only where they were", () => {

@@ -940,6 +940,8 @@ function drawerPaint(fromViewer) {
   if (typeof dockWatchSync === "function") dockWatchSync();
   // And the poll of the file on screen (editorsync.js): while the dock is on screen, whatever the session is doing.
   if (typeof editorSyncSync === "function") editorSyncSync();
+  // And Follow agent listens to the session the dock shows, when it is on for it (editorfollow.js).
+  if (typeof editorFollowSync === "function") editorFollowSync();
 }
 
 initDrawerGoto();
