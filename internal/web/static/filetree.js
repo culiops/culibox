@@ -624,7 +624,7 @@ function openRowMenu(anchor, path, name, isDir, readOnly, at) {
   // toast already carries it on every folder download, and a toast is readable on
   // a phone where the old ⤓ tooltip never was.
   const act = {
-    insert: () => insertPathAtPrompt(path),
+    insert: () => insertPathAtPrompt(path, typeof focusedTerminal === "function" ? focusedTerminal() : null),
     copy: () => copyPath(path),
     copyrel: () => copyPath(relativeTo(ftRoot(), path)),
     copycontents: () => copyContents(path, name),
@@ -718,15 +718,21 @@ function ftShowMenu(anchor, nodes, alignLeft, kitLabel, at) {
   menu.style.top = (below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 4)) + "px";
 }
 
-// insertPathAtPrompt types an entry's ABSOLUTE path at the focused prompt.
-// Absolute, not relative: it is correct no matter where the agent has cd'd,
-// whereas a relative path is silently wrong the moment the tree root and the
-// session's cwd diverge — which they do, because a manual root pick survives
-// until a DIFFERENT tab is focused.
-function insertPathAtPrompt(path) {
-  const term = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+// insertPathAtPrompt types an entry's ABSOLUTE path at `term`'s prompt, the target its caller names: the tree's row menu
+// and the palette's Ctrl/Cmd+Enter each pass the terminal their own rule picks. Absolute, not relative: it is correct no
+// matter where the agent has cd'd, whereas a relative path is silently wrong the moment the tree root and the
+// session's cwd diverge — which they do, because a manual root pick survives until a DIFFERENT tab is focused.
+// insertDecision (insertdecision.js) is asked first, for the target's own session: a terminal the user cannot see, or a
+// session waiting on them, refuses with a toast that names why, and nothing is typed and no focus moves (#337).
+function insertPathAtPrompt(path, term) {
+  const seen = term ? insertDecision(term) : null;
+  if (seen && !seen.ok) { showToast(seen.why, { error: true }); return; }
   const res = insertTextAtPrompt(term, shellQuote(path) + " ");
-  if (res.ok) { focusTerminal(); return; } // closeRowMenu hid the button that had focus
+  if (res.ok) { // closeRowMenu hid the button that had focus
+    if (term === (typeof focusedTerminal === "function" ? focusedTerminal() : null)) focusTerminal();
+    else term.grabFocus();
+    return;
+  }
   showToast(
     res.reason === "noterm" ? "Focus a terminal first, then insert the path" :
     res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :

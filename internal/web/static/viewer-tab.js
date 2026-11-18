@@ -259,10 +259,14 @@ class ViewerTab {
   }
 
   // insertPath(line?): types the shell-quoted path (or path:line) and a space at
-  // the target's prompt, never a newline.
+  // the target's prompt, never a newline. The target must also pass insertDecision
+  // (insertdecision.js): a terminal the user cannot see, or a session waiting on them,
+  // refuses with a toast naming why, types nothing and moves no focus (#337).
   insertPath(line) {
     const target = insertTargetFor(this, this.insertCandidate());
     if (!target.ok) { showToast(target.title, { error: true }); return; }
+    const seen = insertDecision(target.term);
+    if (!seen.ok) { showToast(seen.why, { error: true }); return; }
     const pl = pathLineText(this.path, line);
     const res = pl.ok ? insertTextAtPrompt(target.term, shellQuote(pl.text) + " ") : { ok: false, reason: pl.reason };
     if (res.ok) { if (target.term.term) target.term.term.focus(); return; }
