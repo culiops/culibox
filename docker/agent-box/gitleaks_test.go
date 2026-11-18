@@ -20,6 +20,8 @@ import (
 var vendoredPins = map[string]string{
 	"internal/web/static/xterm/xterm.js":       "14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972",
 	"internal/web/static/xterm/addon-webgl.js": "b85f8d4b3e9756bebb757e3fe47134d70f03ea3d6b187624426d2e2b65dec06c",
+	// The same sha256 as vendor/monaco/MANIFEST.sha256 (scripts/vendor-monaco.sh, pinned monaco-editor@0.57.0).
+	"internal/web/static/vendor/monaco/vs/editor-BdtEMBbM.js": "e1e745003eb416b7ca6a1956a333e6f8434ff48381824858cb63c99e9c8f8acf",
 }
 
 var (
