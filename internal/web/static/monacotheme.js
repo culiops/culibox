@@ -47,6 +47,17 @@ function culiboxTheme() {
       "editorOverviewRuler.addedForeground": "#4ccf8a",
       "editorOverviewRuler.modifiedForeground": "#6ea8fe",
       "editorOverviewRuler.deletedForeground": "#f06a6a",
+      // The diff editors (Changes, Compare): the tinted green and red lines of mockup B2 (#10261a and #2a1517) in place of Monaco's
+      // olive and pure red, and, for the characters that changed inside a line, the same two blended with the gutter's colours
+      // (#4ccf8a and #f06a6a at 25 %, over the line tint) so a changed word stands out from its line.
+      "diffEditor.insertedLineBackground": "#10261a",
+      "diffEditor.removedLineBackground": "#2a1517",
+      "diffEditor.insertedTextBackground": "#1f5036",
+      "diffEditor.removedTextBackground": "#5c2a2c",
+      "diffEditorGutter.insertedLineBackground": "#10261a",
+      "diffEditorGutter.removedLineBackground": "#2a1517",
+      "diffEditorOverview.insertedForeground": "#4ccf8a",
+      "diffEditorOverview.removedForeground": "#f06a6a",
     },
   };
 }

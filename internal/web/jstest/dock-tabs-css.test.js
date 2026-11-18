@@ -34,6 +34,7 @@ test("the viewer column is the strip, then the crumbs, then the viewer, then the
   for (const id of ["dock-bar", "dock-tabs", "dock-acts", "dock-crumbs", "dock-trail", "dock-edited", "drawer-vhost", "drawer-vempty"]) assert.ok(at(id) > 0, "#" + id + " is in the viewer column");
   assert.ok(at("dock-bar") < at("dock-crumbs") && at("dock-crumbs") < at("drawer-vhost") && at("drawer-vhost") < at("drawer-vempty"));
   assert.ok(at("dock-tabs") < at("dock-acts") && at("dock-acts") < at("dock-crumbs"), "the actions area is beside the tabs, in the bar");
+  assert.ok(at("dock-bar") < at("dock-conflict") && at("dock-conflict") < at("dock-crumbs"), "the conflict bar's slot is between the strip and the crumbs (mockup B4)");
   assert.match(col, /id="dock-tabs"[^>]*role="tablist"/);
   assert.match(col, /<div id="dock-acts" class="dk-acts"><button id="drawer-max"[^>]*>[\s\S]*<\/button><\/div>/, "the Full toggle is in it (Task 8b), the bar's only action");
   assert.match(col, /id="dock-bar"[^>]*hidden/, "no tab, no strip");
@@ -54,7 +55,7 @@ test("the tabs scroll sideways and shrink away; the actions area never shrinks, 
   const css = stripComments(read("desktop.css"));
   const tabs = rulesFor(css, ".dk-tabs");
   assert.match(tabs, /overflow-x:\s*auto/);
-  assert.match(tabs, /min-width:\s*0/);
+  assert.match(tabs, /min-width:\s*140px/, "the strip has a floor of its own (a tab name is about 130 px): the bar's actions compress first (below)");
   assert.match(tabs, /flex:\s*1 1 auto/);
   assert.match(tabs, /position:\s*relative/, "offsetLeft is read from the strip (dockstrip.js dkReveal)");
   assert.match(rulesFor(css, ".dk-acts"), /flex:\s*none/);
@@ -64,6 +65,20 @@ test("the tabs scroll sideways and shrink away; the actions area never shrinks, 
   assert.match(rulesFor(css, ".dk-trail"), /min-width:\s*0/);
   assert.match(rulesFor(css, ".dk-crumb"), /flex:\s*0 100 auto/, "the folders give way first");
   assert.match(rulesFor(css, ".dk-crumb:last-child"), /flex:\s*0 0 auto;\s*max-width:\s*100%/, "and the file does not shrink at all, unless it alone is wider than the row");
+});
+
+test("a narrow dock's bar shows the toggle, Follow and Full as icons: the bar is a size container and the words are clipped, not removed", () => {
+  const css = stripComments(read("desktop.css"));
+  assert.match(rulesFor(css, ".dk-bar"), /container:\s*dkbar \/ inline-size/, "the bar is what the query measures (the dock's own width is the viewport's minus the sidebar and the panes)");
+  assert.match(rulesFor(css, ".dk-seg-ic"), /display:\s*none/, "wide: the words");
+  const q = /@container dkbar \(max-width:\s*(\d+)px\)\s*\{([\s\S]*?\n  \})/.exec(css);
+  assert.ok(q, "one container query for the bar");
+  assert.ok(Number(q[1]) >= 600 && Number(q[1]) <= 700, "below about 640 px of bar (a markdown file's toggle, Follow and Full with words are 380 px, and a tab is 130)");
+  assert.match(q[2], /\.dk-seg-ic\s*\{\s*display:\s*block/, "narrow: the icons");
+  assert.match(q[2], /\.dk-seg-t, \.dk-follow-t, #drawer-max-label\s*\{[^}]*clip:\s*rect\(0 0 0 0\)/, "and the words clipped away, still read by a screen reader");
+  assert.ok(!/\.dk-seg-t[^{]*\{[^}]*display:\s*none/.test(q[2]), "never display: none, which would take the name away");
+  const full = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+  assert.match(full, /<span id="drawer-max-label">Full<\/span>/, "Full's word is in a span of its own for the query to clip");
 });
 
 test("the preview tab is italic, the active one is the viewer's own colour, and a dirty tab swaps its cross for a dot", () => {

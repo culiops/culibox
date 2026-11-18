@@ -49,6 +49,10 @@ const DG_RULER = {
   mod: "editorOverviewRuler.modifiedForeground",
   del: "editorOverviewRuler.deletedForeground",
 };
+// The toggle's icons, as svgIcon shapes (14 px grid): a page, angle brackets, a plus over a minus.
+const DG_ICON_PREVIEW = [["path", { d: "M3.5 1.5h5l2.5 2.5v8.5h-7.5z" }], ["path", { d: "M5.3 7h3.4M5.3 9.5h3.4" }]];
+const DG_ICON_CODE = [["path", { d: "M5 4L2 7l3 3M9 4l3 3-3 3" }]];
+const DG_ICON_CHANGES = [["path", { d: "M7 2.5v5M4.5 5h5M4.5 11h5" }]];
 const DG_BOX_WHY = "a file in a session's box has no git history";
 const DG_RO_MSG = "Changes is a review view. Switch to Code to edit.";
 
@@ -159,23 +163,31 @@ function editorDiffToggle(tab) {
   el.className = "seg dk-seg";
   el.setAttribute("role", "group");
   el.setAttribute("aria-label", "View");
-  const item = (label, run) => {
+  // Each item has an icon and its word. The bar shows one of them: the word while the dock is wide, the icon when it is not (a size
+  // query in desktop.css), so the tab names keep their room. The word stays in the page for screen readers either way.
+  const item = (label, icon, run) => {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "seg-item";
-    b.textContent = label;
+    const ic = svgIcon(icon, { icon: "view", size: "14" });
+    ic.setAttribute("class", "dk-seg-ic");
+    const t = document.createElement("span");
+    t.className = "dk-seg-t";
+    t.textContent = label;
+    b.append(ic, t);
+    b.title = label;
     b.onclick = () => { if (b.getAttribute("aria-disabled") !== "true") run(); };
     return b;
   };
-  const preview = item("Preview", () => { editorMdPick(tab, "preview"); tab.focusReader(); });
-  const code = item("Code", () => {
+  const preview = item("Preview", DG_ICON_PREVIEW, () => { editorMdPick(tab, "preview"); tab.focusReader(); });
+  const code = item("Code", DG_ICON_CODE, () => {
     if (editorMdIs(tab)) editorMdPick(tab, "source"); else tab.showChanges(false);
     tab.focusReader();
   });
-  const changes = item("Changes", () => { tab.showChanges(true); });
+  const changes = item("Changes", DG_ICON_CHANGES, () => { tab.showChanges(true); });
   preview.hidden = true; // until paint knows the file is markdown
   el.append(preview, code, changes);
-  tab.seg = { el, preview, code, changes };
+  tab.seg = { el, preview, code, changes, codeText: code.querySelector(".dk-seg-t") };
   return el;
 }
 
@@ -190,7 +202,8 @@ function editorDiffPaintToggle(tab) {
   const prev = md && !on && editorMdView(tab) === "preview";
   t.preview.hidden = !md;
   const label = md ? "Source" : "Code";
-  if (t.code.textContent !== label) t.code.textContent = label;
+  if (t.codeText.textContent !== label) t.codeText.textContent = label;
+  if (t.code.title !== label) t.code.title = label;
   t.preview.setAttribute("aria-pressed", prev ? "true" : "false");
   t.code.setAttribute("aria-pressed", on || prev ? "false" : "true");
   t.changes.setAttribute("aria-pressed", on ? "true" : "false");
@@ -428,6 +441,7 @@ function editorDiffEnter(tab) {
     ignoreTrimWhitespace: false,
     automaticLayout: true,
     minimap: { enabled: false },
+    stickyScroll: { enabled: false }, // as Code has it: the enclosing scope's rows would be drawn over the first changed line
     scrollBeyondLastLine: false,
     fixedOverflowWidgets: true,
   }, editorOptions()));

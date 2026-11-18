@@ -13,6 +13,11 @@ const { Node } = require("./fakedom.js");
 const STATIC = path.join(__dirname, "..", "static");
 
 function page(mac) {
+  const resizes = []; // the callbacks of the ResizeObservers the script made, and what each watches
+  class FakeResizeObserver {
+    constructor(fn) { this.fn = fn; }
+    observe(el) { resizes.push({ fn: this.fn, el }); }
+  }
   const doc = { activeElement: null };
   doc.createElement = (t) => new Node(t, doc);
   const nodes = {};
@@ -21,7 +26,7 @@ function page(mac) {
   // Focus is document.activeElement in the fake; a real focus() also fires the element's focus handler.
   const focus = Node.prototype.focus;
   Node.prototype.focus = function () { focus.call(this); if (this.onfocus) this.onfocus(); };
-  const ctx = vm.createContext({ console, Array, Object, Set, Map, Math, document: doc, iconFor: (n) => "<" + n + ">", IS_MAC: !!mac });
+  const ctx = vm.createContext({ console, Array, Object, Set, Map, Math, document: doc, iconFor: (n) => "<" + n + ">", IS_MAC: !!mac, ResizeObserver: FakeResizeObserver });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load(fs.readFileSync(path.join(STATIC, "docktabs.js"), "utf8"), "docktabs.js");
   load(fs.readFileSync(path.join(STATIC, "dockstrip.js"), "utf8"), "dockstrip.js");
@@ -33,7 +38,7 @@ function page(mac) {
   };
   const item = (p, o) => Object.assign({ key: "v:" + p, path: p, box: null, name: p.split("/").pop(), title: p, letter: "", preview: false, dirty: false, active: false }, o);
   return {
-    doc, nodes, calls, on, item, ctx, restore: () => { Node.prototype.focus = focus; },
+    doc, nodes, calls, on, item, ctx, resizes, restore: () => { Node.prototype.focus = focus; },
     paint: (items) => ctx.dockStripPaint(items, on),
     tabs: () => nodes["dock-tabs"].children,
     tab: (i) => nodes["dock-tabs"].children[i],
@@ -329,5 +334,32 @@ test("the strip scrolls to a tab that became active, nudges one left half-cut by
     host.scrollLeft = 60;
     p.paint(items("v:/p/a"));
     assert.equal(host.scrollLeft, 0, "a (0..100) was half off the left edge");
+  } finally { p.restore(); }
+});
+
+test("the strip is watched for its size, and a resize brings the active tab back into view (the toggle and Follow arrive after the first paint)", () => {
+  const p = page();
+  try {
+    assert.equal(p.resizes.length, 1, "one observer, on the tab strip");
+    assert.equal(p.resizes[0].el, p.nodes["dock-tabs"]);
+    const items = (active) => ["a", "b", "c"].map((n) => p.item("/p/" + n, { active: "v:/p/" + n === active }));
+    p.paint(items("v:/p/c"));
+    const host = p.nodes["dock-tabs"];
+    [...p.tabs()].forEach((t, i) => { t.offsetLeft = i * 100; t.offsetWidth = 100; });
+    host.clientWidth = 300; // all three fit: c (200..300) is in view
+    host.scrollLeft = 0;
+    p.resizes[0].fn();
+    assert.equal(host.scrollLeft, 0, "in view: nothing moves");
+    host.clientWidth = 150; // the bar's actions grew: c is off the edge
+    p.resizes[0].fn();
+    assert.equal(host.scrollLeft, 150, "c (200..300) is brought in at the right edge");
+    host.clientWidth = 0; // the bar is hidden (no tab, or the dock is closed): no size to scroll by
+    host.scrollLeft = 7;
+    p.resizes[0].fn();
+    assert.equal(host.scrollLeft, 7, "a strip with no width is left alone");
+    p.paint([]);
+    host.clientWidth = 150;
+    p.resizes[0].fn();
+    assert.equal(host.scrollLeft, 7, "no active tab: nothing to reveal");
   } finally { p.restore(); }
 });

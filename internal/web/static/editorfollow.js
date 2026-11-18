@@ -170,6 +170,7 @@ function efButton(sidOf) {
   b.className = "btn btn-sm dk-follow";
   b.append(svgIcon([["path", { d: "M1 7s2.2-4 6-4 6 4 6 4-2.2 4-6 4-6-4-6-4z" }], ["circle", { cx: "7", cy: "7", r: "1.7" }]], { icon: "eye", size: "14" }));
   const t = document.createElement("span");
+  t.className = "dk-follow-t"; // the bar shows only the eye while the dock is narrow (desktop.css); the word stays for screen readers
   t.textContent = "Follow";
   b.append(t);
   b.onclick = () => {

@@ -697,7 +697,10 @@ test("Compare opens a read-only diff, disk on the left and the live buffer on th
   const d = p.st.diffs[0];
   assert.equal(d.opts.readOnly, true);
   assert.equal(d.opts.originalEditable, false);
-  assert.equal(d.opts.renderSideBySide, true);
+  assert.equal(d.opts.renderSideBySide, true, "two sides when the dock has room for them");
+  assert.equal(d.opts.useInlineViewWhenSpaceIsLimited, true, "and one inline view when it has not (about 400 px at 1280: R15)");
+  assert.equal(d.opts.renderSideBySideInlineBreakpoint, 900, "Monaco's own width for 'limited'");
+  assert.deepEqual(d.opts.stickyScroll, { enabled: false }, "no sticky rows over the first changed line");
   assert.equal(d.model.original.value, "agent\n", "the disk on the left");
   assert.equal(d.model.modified, tab.model, "the live buffer on the right, not a copy");
   assert.equal(d.revealed, 0);
@@ -1499,6 +1502,7 @@ test("Changes: the toggle swaps the body for a read-only inline diff of the base
   assert.equal(p.st.diffs.length, 1);
   const d = p.st.diffs[0];
   assert.equal(d.opts.renderSideBySide, false, "inline");
+  assert.deepEqual(d.opts.stickyScroll, { enabled: false }, "no sticky rows over the first changed line (Code has none either)");
   assert.equal(d.opts.readOnly, true, "a review view: typing in it does nothing");
   assert.match(d.opts.readOnlyMessage.value, /Switch to Code to edit/);
   assert.equal(d.opts.originalEditable, false);

@@ -216,12 +216,24 @@ function dockCrumbsPaint(crumbs, edited, on) {
   ed.hidden = !edited;
 }
 
+// dkRevealActive brings the active tab back into view after the strip changed size. The strip shrinks when the bar beside it
+// grows (the Follow toggle and the view toggle arrive after the first paint, a markdown file's toggle has three items, Full
+// mode ends) and widens again, and the tab that was shown fully a moment ago can be left cut or off the edge: the paint reveals
+// only when the active tab changes. A strip with no size (the bar is hidden) is left alone, and so is a tab already in view.
+function dkRevealActive(host) {
+  const el = dkActiveSeen !== null ? dkTabEls.get(dkActiveSeen) : null;
+  if (el && host.clientWidth > 0) dkReveal(host, el);
+}
+
 // dockStripInit: a mouse wheel over a strip that overflows scrolls it sideways (a
 // plain wheel only turns vertically), so a tab off the edge can be reached without a
-// trackpad. A sideways wheel or Shift+wheel is the browser's own.
+// trackpad. A sideways wheel or Shift+wheel is the browser's own. A strip that is
+// resized keeps its active tab in view (dkRevealActive).
 function dockStripInit() {
   const host = typeof document !== "undefined" ? document.getElementById("dock-tabs") : null;
-  if (!host || !host.addEventListener) return;
+  if (!host) return;
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => dkRevealActive(host)).observe(host);
+  if (!host.addEventListener) return;
   host.addEventListener("wheel", (e) => {
     if (host.scrollWidth <= host.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
     host.scrollLeft += e.deltaY;

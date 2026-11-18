@@ -1343,9 +1343,9 @@
      shrinks, so nothing the bar offers is ever pushed out. With no tab the bar is not drawn, so Full mode is offered
      only with a file open; once on, the agent strip's Show terminal and Esc are the way out whatever is open. The
      active tab takes the viewer's own --bg and an accent underline, so it reads as the file below it. */
-  .dk-bar { flex: none; display: flex; align-items: stretch; min-width: 0; height: var(--h-lg); background: var(--panel); border-bottom: 1px solid var(--line); }
+  .dk-bar { flex: none; display: flex; align-items: stretch; min-width: 0; height: var(--h-lg); background: var(--panel); border-bottom: 1px solid var(--line); container: dkbar / inline-size; }
   .dk-bar[hidden], .dk-crumbs[hidden], .dk-edited[hidden] { display: none; }
-  .dk-tabs { position: relative; flex: 1 1 auto; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+  .dk-tabs { position: relative; flex: 1 1 auto; min-width: 140px; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
   .dk-acts { flex: none; display: flex; align-items: center; gap: var(--sp-1); padding: 0 6px; }
   .dk-acts:empty { display: none; }
   /* Full / Exit full: the kit's small button, its icon and word on one line. Exit full wears the accent border (mockup B5). Forced
@@ -1429,6 +1429,8 @@
     background: var(--amber-tint); border-bottom: 1px solid color-mix(in srgb, var(--amber) 30%, transparent); font: var(--t-md)/var(--lh-md) var(--font-ui);
   }
   .dk-conflict[hidden], .dk-ed-cmp[hidden], .dk-ed-body[hidden] { display: none; }
+  /* Where the shown tab's bar stands (EditorTab.placeBar): between the tab strip and the crumbs, as in mockup B4. Empty, it has no height. */
+  #dock-conflict { flex: none; }
   .dk-conflict-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
   .dk-conflict-msg { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; color: var(--fg); unicode-bidi: isolate; }
   .dk-conflict-msg b { font-weight: var(--w-semibold); }
@@ -1465,6 +1467,18 @@
   .dk-seg > .seg-item { height: 22px; padding: 0 9px; }
   .dk-seg > .seg-item[aria-disabled="true"]:hover { background: transparent; }
   .dk-seg > .seg-item[hidden] { display: none; } /* Preview, for a file that is not markdown (the kit's .seg-item is a flex box a hidden attribute does not beat) */
+  /* A narrow dock (400 to 500 px at 1280 and 1440 with the sidebar open) cannot hold the words of the bar's actions and a tab name: below
+     640 px of bar the toggle, Follow and Full show only their icons (the words stay in the page, clipped, for screen readers and
+     tooltips), so what is left is the tab strip, which keeps a floor of its own (.dk-tabs). The bar is the size container. */
+  .dk-seg-ic { display: none; flex: none; }
+  @container dkbar (max-width: 639px) {
+    .dk-seg-ic { display: block; }
+    .dk-seg-t, .dk-follow-t, #drawer-max-label {
+      position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
+    .dk-seg > .seg-item { position: relative; padding: 0 7px; }
+    .dk-follow, #drawer-max { position: relative; padding-left: 7px; padding-right: 7px; }
+  }
   /* The Changes view (editordiff.js) fills the tab's body, in place of the editor; its header is the compare view's. */
   .dk-ed-body > .dk-ed-cmp { position: absolute; inset: 0; }
   /* The markdown Preview (editormd.js) fills the body the same way, and is the scroller. The document is the phone's .md-body (app.css),

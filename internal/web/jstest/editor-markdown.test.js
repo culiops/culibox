@@ -379,3 +379,15 @@ test("closing a tab in Preview lets go of its pane, its redraw and its subscript
   assert.equal(model.listeners.length, 0, "no one is left listening to the model (it is disposed)");
   assert.equal(model.disposed, true);
 });
+
+// The look of a table in the document is the stylesheet's (a node test cannot lay it out; the shots in the fix wave's report do): a
+// table wider than the column scrolls inside itself, in the dock's Preview and on the phone's viewer, which share `.md-body`.
+test("a table wider than the column scrolls inside itself instead of widening the page", () => {
+  const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = /\.md-body table\s*\{([^}]*)\}/.exec(css);
+  assert.ok(rule, "a rule for the document's tables");
+  assert.match(rule[1], /display:\s*block/, "the table is its own box, which can scroll");
+  assert.match(rule[1], /max-width:\s*100%/, "no wider than the column");
+  assert.match(rule[1], /overflow-x:\s*auto/, "and scrolls sideways when its cells need more");
+  assert.match(rule[1], /width:\s*max-content/, "a narrow table is as wide as its cells, not the column");
+});

@@ -428,9 +428,19 @@ class EditorTab {
     this.attached = true;
     const acts = document.getElementById("dock-acts");
     if (acts) acts.insertBefore(this.actsEl, document.getElementById("drawer-max"));
+    this.placeBar(true);
     if (this.inner) { this.inner.onAttach(); return; }
     if (this.model) this.show();
     editorSyncStart(this); // the file on disk is asked about while this tab is the one on screen
+  }
+
+  // placeBar puts the conflict bar where mockup B4 draws it while this tab is on screen: in the dock's slot between the tab strip and
+  // the crumbs (#dock-conflict). The bar is about the file of the tab that is shown, so it follows a tab switch as the bar's actions
+  // do (attach, hide). Off screen, and in a page with no slot, it is back in the tab's own element.
+  placeBar(on) {
+    const slot = on ? document.getElementById("dock-conflict") : null;
+    if (slot) slot.replaceChildren(this.barEl);
+    else if (this.barEl.parentNode !== this.el) this.el.insertBefore(this.barEl, this.cmpEl);
   }
 
   // onHide: another tab is about to be shown. The view is kept for the way back.
@@ -439,6 +449,7 @@ class EditorTab {
     editorSyncStop(this);
     this.closeMenu();
     this.actsEl.remove();
+    this.placeBar(false);
     if (this.inner) { this.inner.onHide(); return; }
     editorMdDetach(this);
     editorDiffDetach(this);
@@ -513,6 +524,7 @@ class EditorTab {
     if (this.savedTimer) clearTimeout(this.savedTimer);
     this.closeMenu();
     this.actsEl.remove();
+    this.placeBar(false);
     if (this.inner) this.inner.dispose();
     if (this.contentSub) this.contentSub.dispose();
     if (this.optionsSub) this.optionsSub.dispose();

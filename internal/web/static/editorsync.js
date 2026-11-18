@@ -278,7 +278,7 @@ function editorSyncReadFailed(tab, got) {
 // --- compare --------------------------------------------------------------------------------------------------------
 
 // Compare: a read-only Monaco diff in the tab, in place of the editor, until it is dismissed or the tab is hidden: the disk on the
-// left, the buffer (live, not a copy) on the right. It is the dock's one diff editor while it is open: a Changes view the tab had is
+// left (removed lines), the buffer (live, not a copy) on the right (added lines); one inline view when the dock is too narrow for two sides. It is the dock's one diff editor while it is open: a Changes view the tab had is
 // left first (Code is what "Back to editing" returns to), and opening Changes closes it (editordiff.js).
 async function editorSyncCompare(tab) {
   const s = editorSyncOf(tab);
@@ -300,9 +300,13 @@ async function editorSyncCompare(tab) {
     readOnly: true,
     originalEditable: false,
     renderSideBySide: true,
-    useInlineViewWhenSpaceIsLimited: false, // left and right is what the bar promises, however narrow the dock
+    // Left and right when there is room for two columns, one inline view when there is not: Monaco's own rule (its default, stated
+    // here because the dock is narrow: about 400 px at 1280, where each side of a split would be 170 px, 19 characters; ruling R15).
+    useInlineViewWhenSpaceIsLimited: true,
+    renderSideBySideInlineBreakpoint: 900,
     automaticLayout: true,
     minimap: { enabled: false },
+    stickyScroll: { enabled: false }, // as Code and Changes have it
     scrollBeyondLastLine: false,
     fixedOverflowWidgets: true,
   }, editorOptions()));
@@ -311,7 +315,7 @@ async function editorSyncCompare(tab) {
   const head = document.createElement("div");
   head.className = "dk-cmp-head";
   const label = document.createElement("span");
-  label.textContent = "On disk (left) and your buffer (right)";
+  label.textContent = "On disk and your buffer";
   head.append(label, editorSyncButton("Back to editing", "btn-ghost", () => { editorSyncCloseCompare(tab); tab.focusReader(); }));
   tab.cmpEl.replaceChildren(head, body);
   tab.cmpEl.hidden = false;

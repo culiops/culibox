@@ -21,7 +21,27 @@ test("culiboxTheme uses the tokens", () => {
     "editorOverviewRuler.addedForeground": "#4ccf8a",
     "editorOverviewRuler.modifiedForeground": "#6ea8fe",
     "editorOverviewRuler.deletedForeground": "#f06a6a",
+    "diffEditor.insertedLineBackground": "#10261a",
+    "diffEditor.removedLineBackground": "#2a1517",
+    "diffEditor.insertedTextBackground": "#1f5036",
+    "diffEditor.removedTextBackground": "#5c2a2c",
+    "diffEditorGutter.insertedLineBackground": "#10261a",
+    "diffEditorGutter.removedLineBackground": "#2a1517",
+    "diffEditorOverview.insertedForeground": "#4ccf8a",
+    "diffEditorOverview.removedForeground": "#f06a6a",
   });
+});
+
+test("culiboxTheme: the diff editors wear mockup B2's tinted lines and the gutter's green and red, not Monaco's olive and pure red", () => {
+  const c = culiboxTheme().colors;
+  // Monaco's defaults, which these replace: rgba(156,204,44,.2) olive and rgba(255,0,0,.2) red. Every name below must be set.
+  for (const k of ["diffEditor.insertedLineBackground", "diffEditor.removedLineBackground", "diffEditor.insertedTextBackground", "diffEditor.removedTextBackground"]) {
+    assert.ok(c[k], k + " is set");
+  }
+  assert.strictEqual(c["diffEditor.insertedLineBackground"], "#10261a", "mockup B2 .dl.add");
+  assert.strictEqual(c["diffEditor.removedLineBackground"], "#2a1517", "mockup B2 .dl.del");
+  assert.strictEqual(c["diffEditorOverview.insertedForeground"], c["editorGutter.addedBackground"], "the ruler agrees with the gutter");
+  assert.strictEqual(c["diffEditorOverview.removedForeground"], c["editorGutter.deletedBackground"]);
 });
 
 test("culiboxTheme token rules are the GitHub Dark colours of the read view", () => {
