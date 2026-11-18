@@ -146,19 +146,64 @@ function notesPendingByPath(list) {
 
 // May the paste bar type into this session's terminal right now? `term` is the session's TerminalTab (its `.term` is the xterm
 // instance). {ok, label, why}: the label is always "Paste to <name>" and `why` says why not ("" when ok). One refusal is reported
-// when several apply, in this order: no terminal, working, waiting or any need, bracketed paste off. A session that is neither idle,
-// working nor waiting (done, crashed, exited) has no terminal to paste into and reads "Not connected". Only a strict `true` from
-// xterm passes, so a program that never asked for bracketed paste gets no block typed at it.
+// when several apply, in this order: no terminal, working, waiting on anything but a finished turn, bracketed paste off. Ruling R13:
+// need "turn" passes, as in insertGate (editorref.js): a Claude session that finished its turn is {activity: "waiting", need: "turn"}
+// (internal/session/peek.go), and that open prompt is where the review message belongs; need "ask", "sso", "store_locked", any other
+// need, and a waiting session with no need are refused. A session that is neither idle, working nor waiting (done, crashed, exited)
+// has no terminal to paste into and reads "Not connected". Only a strict `true` from xterm passes, so a program that never asked
+// for bracketed paste gets no block typed at it. This is the agent-state half; the visibility half (insertDecision) is the bar's.
 function pasteGate(session, term) {
   if (!session) return { ok: false, label: "Paste to session", why: "Not connected" };
   const name = session.name;
   const no = (why) => ({ ok: false, label: "Paste to " + name, why });
   if (!term || !term.term) return no("Not connected");
   if (session.activity === "working") return no(name + " is working; notes wait here");
-  if (session.activity === "waiting" || session.need) return no(name + " is waiting on you; answer it first");
-  if (session.activity !== "idle") return no("Not connected");
+  const turn = session.need === "turn";
+  if (turn && session.activity !== "waiting" && session.activity !== "idle") return no("Not connected"); // a finished turn of a session that is over
+  if (!turn && (session.activity === "waiting" || session.need)) return no(name + " is waiting on you; answer it first");
+  if (!turn && session.activity !== "idle") return no("Not connected");
   if (!term.term.modes || term.term.modes.bracketedPasteMode !== true) return no("This program does not accept pasted blocks");
   return { ok: true, label: "Paste to " + name, why: "" };
+}
+
+// The names of the open files that have pending notes and an unsaved edit (ruling R12). A note's line number is the open buffer's, but
+// the agent reads the file on disk, so a note on a file with unsaved edits would point at the wrong line there. `tabs` is
+// [{path, name, dirty}], `list` the session's notes. Each name once, in the tabs' order.
+function dirtyNotedNames(tabs, list) {
+  const pend = notesPendingByPath(list);
+  const out = [];
+  for (const t of Array.isArray(tabs) ? tabs : []) {
+    if (!t || !t.dirty || !Object.prototype.hasOwnProperty.call(pend, t.path) || pend[t.path] <= 0) continue;
+    if (!out.includes(t.name)) out.push(t.name);
+  }
+  return out;
+}
+
+// What the review bar shows and whether Paste may act, from what the page knows now: {session (the sessions row or null), term (the
+// session's TerminalTab or null), connected (its socket is open: a paste into a closed one goes nowhere, and must not mark the notes
+// sent), list (the session's notes), tabs (see dirtyNotedNames)}. -> {shape, pending, sent, label, ok, why}.
+//   shape  "full" while any note is pending (the bar with Preview and Paste), "sent" when only sent ones are left (the slim bar that
+//          keeps the Sent toggle reachable), "none".
+//   ok     pasteGate says ok, the socket is open, and no file with pending notes has unsaved edits; `why` is the one sentence for
+//          the button's title and the toast. The gate's own refusal wins over the unsaved-file one.
+// It decides only the agent-state half and the notes half; whether the terminal is on screen is insertDecision's, asked at the click.
+function pasteBarState(o) {
+  const list = Array.isArray(o && o.list) ? o.list : [];
+  let pending = 0;
+  let sent = 0;
+  for (const n of list) {
+    if (n && n.status === "pending") pending += 1;
+    else if (n && n.status === "sent") sent += 1;
+  }
+  const shape = pending > 0 ? "full" : sent > 0 ? "sent" : "none";
+  const gate = pasteGate(o && o.session, o && o.term);
+  const out = { shape, pending, sent, label: gate.label, ok: gate.ok, why: gate.why };
+  if (out.ok && o.connected !== true) { out.ok = false; out.why = "Not connected"; }
+  if (out.ok) {
+    const names = dirtyNotedNames(o.tabs, list);
+    if (names.length) { out.ok = false; out.why = "Save " + names.join(", ") + " first: the agent reads the file on disk"; }
+  }
+  return out;
 }
 
 function markValid(path, m) {
@@ -239,7 +284,7 @@ function onionOpacity(v) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    REVIEWED_KEY, reviewFp, reviewMarkFor, reviewedState, reviewedCount, nextChange, pasteGate, saveReviewed, loadReviewed,
+    REVIEWED_KEY, reviewFp, reviewMarkFor, reviewedState, reviewedCount, nextChange, pasteGate, dirtyNotedNames, pasteBarState, saveReviewed, loadReviewed,
     reviewRows, reviewNeighbour, reviewFirstOpen, reviewLineOf, reviewChangePos, notesPendingByPath, swipeClip, onionOpacity,
   };
 }

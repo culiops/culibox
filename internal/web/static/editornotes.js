@@ -148,6 +148,7 @@ function ntChanged(sid) {
   if (typeof dockChangesRender === "function") { try { dockChangesRender(); } catch (_) { /* the list's fault is not the note's */ } }
   for (const tab of [...ntTabs]) ntDecorate(tab);
   for (const hs of [...ntHosts.values()]) if (sid === null || hs.h.sid() === sid) ntPaint(hs);
+  if (typeof reviewBarRender === "function") reviewBarRender(sid); // the review bar's count, and its Sent toggle (reviewbar.js)
 }
 
 // --- following the file for as long as its tab is open --------------------------------------------------------------

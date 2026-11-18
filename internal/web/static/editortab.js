@@ -223,6 +223,7 @@ class EditorTab {
     this.bodyEl.className = "dk-ed-body";
     this.buildStatus();
     this.el.append(this.altEl, this.roEl, this.barEl, this.cmpEl, this.bodyEl, this.sbEl);
+    if (typeof reviewBarMount === "function") reviewBarMount(this); // the review bar (reviewbar.js): first in the tab, while notes wait
     // Mod+S saves from anywhere in the tab, not only from the editor: a key Monaco handled is stopped before here.
     this.el.addEventListener("keydown", (e) => {
       if (e.defaultPrevented) return;
@@ -319,6 +320,13 @@ class EditorTab {
     editorImagePaint(this);
     editorFollowPaintTab(this);
     editorSelBarUpdate(); // the Changes view or Preview took the editor's place, or gave it back: the bar is for Code only
+    this.paintReviewBar();
+  }
+
+  // paintReviewBar: whether Paste may act depends on this tab's unsaved edit, for the bar of every tab of the session, not only this one's.
+  paintReviewBar() {
+    const sid = this.host && typeof this.host.sessionId === "function" ? this.host.sessionId() : null;
+    if (sid && typeof reviewBarRender === "function") reviewBarRender(sid);
   }
 
   // changed: something the dock shows moved (the lock, the dirty dot, the label). Like ViewerTab.changed.
@@ -575,6 +583,7 @@ class EditorTab {
     editorSyncDispose(this); // before the model goes: a compare view holds it
     editorDiffDispose(this); // and so does the Changes view
     if (typeof editorNotesUntrack === "function") editorNotesUntrack(this); // its note decorations and its listener
+    if (typeof reviewBarUnmount === "function") reviewBarUnmount(this); // its review bar
     editorMdDispose(this);   // and the Preview's subscription
     if (this.savedTimer) clearTimeout(this.savedTimer);
     this.closeMenu();
@@ -617,6 +626,7 @@ class EditorTab {
     const d = this.dirty();
     if (d === this.dirtyShown) return;
     this.dirtyShown = d;
+    this.paintReviewBar();
     if (d && edit && this.host && this.host.onEditStart) this.host.onEditStart(this);
     if (this.host && this.host.onDirtyChange) this.host.onDirtyChange(this);
   }

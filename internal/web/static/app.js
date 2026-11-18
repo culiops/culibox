@@ -4112,6 +4112,8 @@ async function refreshSessionsRun() {
   if (typeof reviewMarksLoad === "function") reviewMarksLoad(sessions.map((s) => s && s.id).filter(Boolean));
   // The stored notes likewise (editornotes.js): notesLoad drops the notes of every session the list does not name.
   if (typeof notesLoad === "function") notesLoad(sessions.map((s) => s && s.id).filter(Boolean));
+  // The review bars say "Paste to <session>" and may or may not act on the session's state, which this list just changed.
+  if (typeof reviewBarRender === "function") reviewBarRender();
   refreshEmptyState();
   // The Files drawer reads the list (box tier, workspace): at a boot restore
   // it opened before the list was here.
