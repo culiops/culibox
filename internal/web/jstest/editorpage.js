@@ -161,7 +161,7 @@ function page(over) {
   const diskRead = (url) => {
     if (disk.fail) return { ok: false, status: disk.fail, data: { error: "boom" } };
     if (!disk.exists) return { ok: false, status: 404, data: { error: "not found" } };
-    const d = { kind: "text", size: disk.text.length, version: hash(disk.text), readonly: false };
+    const d = { kind: "text", size: disk.text.length, version: hash(disk.text), readonly: false, utf8: disk.utf8 !== false };
     if (!metaUrl(url)) d.content = disk.text;
     return { ok: true, status: 200, data: d };
   };

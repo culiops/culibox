@@ -99,6 +99,12 @@ function editorEnsure() {
   return dockEditor;
 }
 
+// editorAccessOptions: what the shared editor is told about whether the tab it shows may be typed into, and what it says when
+// someone tries.
+function editorAccessOptions(tab) {
+  return { readOnly: tab.mode !== "edit", readOnlyMessage: { value: tab.readOnlyWhy() || "This file is read-only." } };
+}
+
 // editorClaim puts `tab`'s model into the shared editor and restores its view. The tab that had it stashes its
 // view first, wherever it was hidden from (a detach that never called onHide still loses nothing).
 function editorClaim(tab) {
@@ -107,11 +113,7 @@ function editorClaim(tab) {
   tab.bodyEl.replaceChildren(dockEditorEl);
   ed.setModel(tab.model);
   dockEditorOwner = tab;
-  ed.updateOptions({
-    readOnly: tab.mode !== "edit",
-    readOnlyMessage: { value: tab.readOnlyWhy() || "This file is read-only." },
-    ariaLabel: tab.name,
-  });
+  ed.updateOptions(Object.assign({ ariaLabel: tab.name }, editorAccessOptions(tab)));
   ed.layout();
   tab.restoreView();
 }
@@ -139,6 +141,7 @@ class EditorTab {
     this.mode = null;
     this.readOnly = !!this.box; // true for a tab shown locked: a box file is known so before any read, the rest after it
     this.serverReadOnly = false; // the server's own flag (a scratch folder), as read
+    this.notUtf8 = false;       // the server's `utf8: false`: the bytes are not UTF-8, the buffer shows U+FFFD for them, so no save
     this.model = null;          // the monaco text model, once the file is read and Monaco is loaded
     this.langName = "";         // its language as the status bar says it
     this.version = "";          // sha256 of the text on disk as last read or saved: the save's base_version
@@ -251,7 +254,7 @@ class EditorTab {
     const p = statusBarParts({
       line: pos ? pos.lineNumber : 1, col: pos ? pos.column : 1,
       insertSpaces: mo.insertSpaces, tabSize: mo.tabSize, eol: this.model.getEOL(),
-      lang: this.langName,
+      lang: this.langName, utf8: !this.notUtf8,
     });
     for (const k of Object.keys(this.sbParts)) set(this.sbParts[k], p[k]);
     // Preview has no cursor and no indentation to speak of (mockup B4's bar says only Markdown, UTF-8 and LF).
@@ -289,7 +292,7 @@ class EditorTab {
 
   readOnlyWhy() {
     if (this.mode === "image" || this.mode === "binary") return "";
-    return readOnlyReason({ box: this.box, readonly: this.serverReadOnly, unknown: this.mode === "read" });
+    return readOnlyReason({ box: this.box, readonly: this.serverReadOnly, notUtf8: this.notUtf8, unknown: this.mode === "read" });
   }
 
   // previewing: a markdown file's Preview is in the body (editormd.js), so the editor is not on screen even while this tab owns it.
@@ -332,7 +335,7 @@ class EditorTab {
       this.showReadError(res);
       return;
     }
-    const mode = editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box });
+    const mode = editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 });
     if (mode === "image" || mode === "binary") { this.mountInner(mode); return; }
     if (mon.err) {
       this.setBodyMessage("The editor could not be loaded. Reload the page to try again.", "err");
@@ -343,6 +346,7 @@ class EditorTab {
     this.mode = mode;
     this.readOnly = mode !== "edit";
     this.serverReadOnly = res.data.readonly === true;
+    this.notUtf8 = res.data.utf8 === false;
     this.langName = langLabel(monacoLang(this.path), dockMonaco.languages.getLanguages());
     this.version = res.data.version || "";
     this.diskText = res.data.content || "";
@@ -575,14 +579,29 @@ class EditorTab {
   // save would overwrite the agent's text with no 409 and no bar.) The history is the price. The cursor and the scroll stay
   // where they were: a new value sends them to the top, so the view is saved first and put back. Not an edit of the user's:
   // the host is not told to pin the tab.
-  replaceFromDisk(text, version) {
+  // `utf8` is the encoding the disk's file has now (false: not UTF-8). The file that was written under an open tab may have
+  // become one that the buffer cannot hold byte for byte, or stopped being one, so the tab's lock follows it (setEncoding).
+  replaceFromDisk(text, version, utf8) {
     if (!this.model) return;
     const owner = dockEditorOwner === this && dockEditor;
     const view = owner ? dockEditor.saveViewState() : null;
     this.applyText(text);
     this.keptFrom = null;
     this.version = version;
+    this.setEncoding(utf8 !== false);
     if (view) dockEditor.restoreViewState(view);
+  }
+
+  // setEncoding: the file on disk is valid UTF-8 (true) or is not. A file that is not opens (or turns) read-only, and one that
+  // is valid again is editable again unless something else locks it (a box, the server's flag). The shared editor, the note
+  // under the crumbs, the status bar and the dock's lock are told when anything changed.
+  setEncoding(valid) {
+    if (this.notUtf8 === !valid) return;
+    this.notUtf8 = !valid;
+    this.mode = editorMode({ kind: "text", readonly: this.serverReadOnly, box: !!this.box, utf8: valid });
+    this.readOnly = this.mode !== "edit";
+    if (dockEditorOwner === this && dockEditor) dockEditor.updateOptions(editorAccessOptions(this));
+    this.changed();
   }
 
   // keepOverDisk is "Keep mine": `version`, the disk's, becomes the base of the next save, so it overwrites the file. The

@@ -39,13 +39,15 @@ function insertGate(session) {
 // editorMode is how the dock opens a file: "edit" (Monaco, writable), "read"
 // (Monaco, read-only), "image" or "binary" (the viewer's own bodies). A file in a
 // session's box is read-only (viewer-tab.js enterEdit), as is a file the server
-// marked readonly. Only a kind of "text" is ever editable: a kind this build does not
-// know is opened read-only rather than risk a save of something that is not text.
+// marked readonly, and a text file the server says is not UTF-8 (`utf8: false`): its
+// bytes cannot travel through the buffer, so a save would change them. Only a kind of
+// "text" is ever editable: a kind this build does not know is opened read-only rather
+// than risk a save of something that is not text.
 function editorMode(file) {
-  const { kind, readonly, box } = file || {};
+  const { kind, readonly, box, utf8 } = file || {};
   if (kind === "image") return "image";
   if (kind === "binary") return "binary";
-  if (kind === "text" && !readonly && !box) return "edit";
+  if (kind === "text" && !readonly && !box && utf8 !== false) return "edit";
   return "read";
 }
 

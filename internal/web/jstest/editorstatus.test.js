@@ -20,6 +20,12 @@ test("statusBarParts: spaces say Spaces, tabs say Tab Size, and CRLF is CRLF", (
   assert.strictEqual(statusBarParts({ eol: "\r" }).eol, "LF", "anything but the model's CRLF string is LF");
 });
 
+test("statusBarParts: the encoding is UTF-8 unless the file is known not to be", () => {
+  assert.strictEqual(statusBarParts({ utf8: false }).enc, "Not UTF-8");
+  assert.strictEqual(statusBarParts({ utf8: true }).enc, "UTF-8");
+  assert.strictEqual(statusBarParts({}).enc, "UTF-8");
+});
+
 test("statusBarParts: a missing or unusable value falls back, never NaN or undefined on screen", () => {
   assert.deepStrictEqual(statusBarParts(), { pos: "Ln 1, Col 1", indent: "Spaces: 4", enc: "UTF-8", eol: "LF", lang: "Plain Text" });
   const bad = statusBarParts({ line: NaN, col: -3, tabSize: 0, lang: 7 });
@@ -55,6 +61,10 @@ test("readOnlyReason: one line per reason, empty for an editable file", () => {
   assert.match(readOnlyReason({ readonly: true }), /read-only/);
   assert.match(readOnlyReason({ unknown: true }), /not plain text/);
   assert.match(readOnlyReason({ box: "s1", readonly: true }), /box/, "the box wins: it is the more specific reason");
+  assert.strictEqual(readOnlyReason({ notUtf8: true }), "This file is not UTF-8; saving it here would change its bytes.");
+  assert.match(readOnlyReason({ notUtf8: true, unknown: true }), /not UTF-8/, "the encoding is more specific than 'not plain text'");
+  assert.match(readOnlyReason({ notUtf8: true, readonly: true }), /server never saves/, "the server's flag and the box name the stronger reason");
+  assert.match(readOnlyReason({ notUtf8: true, box: "s1" }), /box/);
   assert.strictEqual(readOnlyReason({}), "");
   assert.strictEqual(readOnlyReason(), "");
 });

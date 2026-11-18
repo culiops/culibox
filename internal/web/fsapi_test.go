@@ -255,9 +255,9 @@ func TestFsReadMetaHasVersionNoContent(t *testing.T) {
 			t.Errorf("%s: meta carries content: %.80s", name, rr.Body)
 		}
 	}
-	// The wire shape the client reads: kind, size, version, and readonly only when true.
+	// The wire shape the client reads: kind, size, version, utf8, and readonly only when true.
 	rr := metaRead(s, filepath.Join(home, "a.txt"))
-	want := `{"kind":"text","size":6,"version":"` + hashText([]byte("hello\n")) + `"}`
+	want := `{"kind":"text","size":6,"version":"` + hashText([]byte("hello\n")) + `","utf8":true}`
 	if strings.TrimSpace(rr.Body.String()) != want {
 		t.Errorf("wire = %s, want %s", rr.Body, want)
 	}
@@ -267,6 +267,59 @@ func TestFsReadMetaHasVersionNoContent(t *testing.T) {
 	json.Unmarshal(metaRead(s, filepath.Join(home, "a.txt")).Body.Bytes(), &after)
 	if after.Version == hashText([]byte("hello\n")) || after.Version != hashText([]byte("hello!\n")) {
 		t.Errorf("version after an edit = %q", after.Version)
+	}
+}
+
+// A text file that is not valid UTF-8 (Latin-1, CP1252) is still text (no NUL byte), but the JSON body
+// cannot carry its bytes: every invalid one reaches the client as U+FFFD, and saving that text back would
+// replace them. Both reads say so with utf8:false, so the editor can lock the file. A valid file, a BOM
+// and an empty file are UTF-8.
+func TestFsReadSaysWhetherTextIsUTF8(t *testing.T) {
+	home := t.TempDir()
+	files := map[string]struct {
+		bytes string
+		valid bool
+	}{
+		"latin1.txt": {"caf\xe9 = 1\n", false},
+		"cut.txt":    {"ok \xe2\x82", false}, // a multi-byte sequence cut short
+		"utf8.txt":   {"caf\u00e9 \u20ac = 1\n", true},
+		"bom.txt":    {"\xef\xbb\xbfhello\n", true},
+		"empty.txt":  {"", true},
+		"ascii.txt":  {"hello\n", true},
+	}
+	s := &Server{Home: home}
+	for name, c := range files {
+		p := filepath.Join(home, name)
+		if err := os.WriteFile(p, []byte(c.bytes), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for what, rr := range map[string]*httptest.ResponseRecorder{
+			"full": fsGet(s.handleFsRead, "/api/fs/read", p),
+			"meta": metaRead(s, p),
+		} {
+			var got struct {
+				Kind string `json:"kind"`
+				UTF8 *bool  `json:"utf8"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+				t.Fatalf("%s %s: %v", name, what, err)
+			}
+			if got.Kind != "text" || got.UTF8 == nil || *got.UTF8 != c.valid {
+				t.Errorf("%s %s: kind %q utf8 %v, want text and utf8=%v (%s)", name, what, got.Kind, got.UTF8, c.valid, rr.Body)
+			}
+		}
+		// The version is of the raw bytes in both, and does not depend on how they decode.
+		var full fsRead
+		json.Unmarshal(fsGet(s.handleFsRead, "/api/fs/read", p).Body.Bytes(), &full)
+		if full.Version != hashText([]byte(c.bytes)) {
+			t.Errorf("%s: version = %q, want the sha256 of the raw bytes", name, full.Version)
+		}
+	}
+	// Only text says it: an image or a binary file has no encoding to speak of.
+	bin := filepath.Join(home, "b.bin")
+	os.WriteFile(bin, []byte("a\x00b\xe9"), 0o644)
+	if rr := fsGet(s.handleFsRead, "/api/fs/read", bin); strings.Contains(rr.Body.String(), "utf8") {
+		t.Errorf("binary read carries utf8: %s", rr.Body)
 	}
 }
 

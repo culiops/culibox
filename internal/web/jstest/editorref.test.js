@@ -85,6 +85,15 @@ test("editorMode readonly and box", () => {
   assert.strictEqual(editorMode({ kind: "binary", box: "sess-1", readonly: true }), "binary");
 });
 
+test("editorMode: a text file that is not UTF-8 is read-only, only an explicit false counts", () => {
+  assert.strictEqual(editorMode({ kind: "text", utf8: false }), "read");
+  assert.strictEqual(editorMode({ kind: "text", utf8: false, readonly: false, box: false }), "read");
+  assert.strictEqual(editorMode({ kind: "text", utf8: true }), "edit");
+  assert.strictEqual(editorMode({ kind: "text" }), "edit", "a server that does not say is the server before the flag: UTF-8");
+  assert.strictEqual(editorMode({ kind: "image", utf8: false }), "image");
+  assert.strictEqual(editorMode({ kind: "binary", utf8: false }), "binary");
+});
+
 test("editorMode: a kind it does not know is never editable", () => {
   assert.strictEqual(editorMode({ kind: "" }), "read");
   assert.strictEqual(editorMode({}), "read");

@@ -114,11 +114,12 @@ async function editorSyncCheck(tab) {
   } finally { s.flight = false; }
 }
 
-// editorSyncRead: the whole file, as {ok: true, text, version} or {ok: false, status, error}.
+// editorSyncRead: the whole file, as {ok: true, text, version, utf8} or {ok: false, status, error}. `utf8` is false when the file's
+// bytes are not valid UTF-8 (the text then holds U+FFFD for them).
 async function editorSyncRead(tab) {
   const res = await fsRead(tab.path, tab.box ? boxFileURL(tab.box, tab.path) : undefined);
   const d = res.ok ? res.data : null;
-  if (d && d.kind === "text" && typeof d.version === "string") return { ok: true, text: d.content || "", version: d.version };
+  if (d && d.kind === "text" && typeof d.version === "string") return { ok: true, text: d.content || "", version: d.version, utf8: d.utf8 !== false };
   const why = (res.data && res.data.error) || (!res.ok ? (res.status ? "HTTP " + res.status : "could not reach the server") : "it is not text any more");
   return { ok: false, status: res.status, error: why };
 }
@@ -126,19 +127,19 @@ async function editorSyncRead(tab) {
 // --- deciding -------------------------------------------------------------------------------------------------------
 
 // editorSyncAct does what conflictChoice says about `tab`, given what was just learned of its file: `status` (404 gone, 409 a save
-// was refused, else 0), `diskVersion` ("" when unknown) and, once the whole file has been read, `text`.
-async function editorSyncAct(tab, status, diskVersion, text) {
+// was refused, else 0), `diskVersion` ("" when unknown) and, once the whole file has been read, its `text` and whether that is `utf8`.
+async function editorSyncAct(tab, status, diskVersion, text, utf8) {
   const choice = conflictChoice({ dirty: tab.dirty(), diskVersion, baseVersion: tab.version, saveStatus: status });
   if (choice === "deleted") editorSyncShowBar(tab, { kind: "deleted", diskVersion: "" });
   else if (choice === "bar") editorSyncShowBar(tab, { kind: "conflict", diskVersion });
-  else if (choice === "reload") await editorSyncReload(tab, diskVersion, text);
+  else if (choice === "reload") await editorSyncReload(tab, diskVersion, text, utf8);
   else if (diskVersion && diskVersion === tab.version) editorSyncClearBar(tab); // the file is as the buffer began: a bar for the change is moot
 }
 
 // editorSyncReload: a clean buffer whose file changed. With no text yet, the whole file is read first and the decision made
 // again on what that read says and on the buffer as it is by then (typed in meanwhile: a bar; the file moved back: nothing).
-async function editorSyncReload(tab, diskVersion, text) {
-  if (text !== undefined) { editorSyncReplace(tab, text, diskVersion); return; }
+async function editorSyncReload(tab, diskVersion, text, utf8) {
+  if (text !== undefined) { editorSyncReplace(tab, text, diskVersion, utf8); return; }
   const ctx = editorSyncCtx(tab);
   const got = await editorSyncRead(tab);
   if (!editorSyncCurrent(tab, ctx)) return;
@@ -146,12 +147,12 @@ async function editorSyncReload(tab, diskVersion, text) {
     if (got.status === 404) await editorSyncAct(tab, 404, "");
     return;
   }
-  await editorSyncAct(tab, 0, got.version, got.text);
+  await editorSyncAct(tab, 0, got.version, got.text, got.utf8);
 }
 
 // editorSyncReplace puts the disk's text in the buffer (the one place that does) and tells whoever asked to hear of it.
-function editorSyncReplace(tab, text, version) {
-  tab.replaceFromDisk(text, version);
+function editorSyncReplace(tab, text, version, utf8) {
+  tab.replaceFromDisk(text, version, utf8);
   editorSyncClearBar(tab);
   for (const fn of [...editorSyncOf(tab).subs]) {
     try { fn(text); } catch (_) { /* one subscriber's fault is neither the tab's nor the others' */ }
@@ -264,7 +265,7 @@ async function editorSyncLoad(tab) {
   // saved, replaced or re-pointed, it is dropped: it would put an older text over what is there now.
   if (!editorSyncStill(tab, ctx) || s.bar !== bar) return;
   if (!got.ok) { editorSyncReadFailed(tab, got); return; }
-  editorSyncReplace(tab, got.text, got.version);
+  editorSyncReplace(tab, got.text, got.version, got.utf8);
   tab.focusReader();
 }
 

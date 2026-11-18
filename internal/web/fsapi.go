@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 )
 
 var (
@@ -176,6 +177,12 @@ type fsRead struct {
 	Version string `json:"version,omitempty"` // sha256 of Content; text only, for edit locking
 	// ReadOnly: the file is served but can never be saved (scratch folder, box).
 	ReadOnly bool `json:"readonly,omitempty"`
+	// UTF8 says whether a text file's bytes are valid UTF-8 (text only, so a client reads
+	// `utf8 === false`). The JSON body can only carry Unicode: the content of a file that is
+	// not UTF-8 reaches the client with every invalid byte replaced by U+FFFD, and saving that
+	// text back would write the replacement over the original bytes. A client that sees false
+	// must not offer to save the file.
+	UTF8 *bool `json:"utf8,omitempty"`
 }
 
 // handleFsRead serves GET /api/fs/read?path=<abs-file>. Images are streamed raw
@@ -219,7 +226,7 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 // filename); the caller has already authorised and opened f and closes it.
 // readOnly marks the JSON preview so the viewer offers no Edit.
 //
-// meta=1 is the same read without the payload: {kind, size, version, readonly}
+// meta=1 is the same read without the payload: {kind, size, version, readonly, utf8}
 // for text (the version is the sha256 the full read returns, of the same bytes,
 // under the same size cap), {kind, size} for an image or a binary file, which
 // it never streams. The editor polls it to see that a file changed on disk. It
@@ -276,7 +283,8 @@ func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.Fil
 		writeErr(w, http.StatusInternalServerError, "read error")
 		return
 	}
-	resp := fsRead{Kind: "text", Size: info.Size(), Version: hashText(content), ReadOnly: readOnly}
+	valid := utf8.Valid(content)
+	resp := fsRead{Kind: "text", Size: info.Size(), Version: hashText(content), ReadOnly: readOnly, UTF8: &valid}
 	if !meta {
 		resp.Lang, resp.Content = strings.TrimPrefix(ext, "."), string(content)
 	}

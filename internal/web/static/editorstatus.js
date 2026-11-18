@@ -8,10 +8,11 @@
 // statusBarParts: the right-hand side of the status bar as texts, in the order they
 // are drawn: "Ln 169, Col 1", the indentation ("Spaces: 4" when Tab inserts spaces,
 // "Tab Size: 4" when it inserts a tab, as VS Code says it), the encoding, the line
-// ending and the language. s = {line, col, insertSpaces, tabSize, eol, lang}.
+// ending and the language. s = {line, col, insertSpaces, tabSize, eol, lang, utf8}.
 //  - eol is the model's own string ("\r\n" is CRLF, anything else LF);
-//  - the encoding is always UTF-8: the server only serves a file as text when it is
-//    one, and the buffer is saved back as UTF-8;
+//  - the encoding is UTF-8, which is also what the buffer is saved as, unless the server
+//    said the file is not (`utf8: false`: it is shown with U+FFFD for its invalid bytes
+//    and opened read-only), which reads "Not UTF-8";
 //  - a language the page has no name for reads "Plain Text".
 function statusBarParts(s) {
   const o = s || {};
@@ -19,7 +20,7 @@ function statusBarParts(s) {
   return {
     pos: "Ln " + n(o.line, 1) + ", Col " + n(o.col, 1),
     indent: (o.insertSpaces === false ? "Tab Size: " : "Spaces: ") + n(o.tabSize, 4),
-    enc: "UTF-8",
+    enc: o.utf8 === false ? "Not UTF-8" : "UTF-8",
     eol: o.eol === "\r\n" ? "CRLF" : "LF",
     lang: typeof o.lang === "string" && o.lang ? o.lang : "Plain Text",
   };
@@ -48,12 +49,15 @@ function unsavedNote(keyText) {
 // readOnlyReason: the one line under the crumbs of a file the editor will not change,
 // or "" when it is editable. A file in a session's box exists only inside that box
 // and is never saved back; `readonly` is the server's flag (a scratch folder it
-// refuses to write); `unknown` is a kind of file this build does not know, opened
-// read-only rather than risk saving something that is not text.
+// refuses to write); `notUtf8` is a text file whose bytes are not valid UTF-8 (the
+// buffer shows U+FFFD for them, and a save would write those instead); `unknown` is a
+// kind of file this build does not know, opened read-only rather than risk saving
+// something that is not text.
 function readOnlyReason(f) {
-  const { box, readonly, unknown } = f || {};
+  const { box, readonly, notUtf8, unknown } = f || {};
   if (box) return "This file is inside a session's box, so it is read-only here.";
   if (readonly) return "This file is read-only: the server never saves to its folder.";
+  if (notUtf8) return "This file is not UTF-8; saving it here would change its bytes.";
   if (unknown) return "This file is opened read-only: it is not plain text.";
   return "";
 }
