@@ -166,7 +166,7 @@ function paletteSessions(mac) {
 }
 
 // paletteShellCommands: the view commands whose set differs between desktop and
-// mobile. Desktop has the Files drawer, the Activity/Access pane views and the
+// mobile. Desktop has the Files dock, the Activity/Access pane views and the
 // shortcuts dialog; the tree no longer lives in a collapsible pane there, so
 // "Collapse/expand files" would be a dead entry (R17) and is mobile-only. `act` carries the callbacks, so this
 // stays a pure function of its inputs.
@@ -181,7 +181,7 @@ function paletteShellCommands(mac, desktop, act) {
     { id: "next-needs", kind: "view", label: "Next that needs you", hint: palReg().shortcutHint("session.nextNeeds", mac), run: act.nextNeeds },
     { id: "activity-view", kind: "view", label: "Activity", hint: "", run: act.activityView },
     { id: "access-view", kind: "view", label: "Access", hint: "", run: act.accessView },
-    { id: "files-drawer", kind: "view", label: "Toggle files drawer", hint: palReg().shortcutHint("files.toggle", mac), run: act.filesDrawer },
+    { id: "files-drawer", kind: "view", label: "Toggle files dock", hint: palReg().shortcutHint("files.toggle", mac), run: act.filesDrawer },
     { id: "shortcuts", kind: "view", label: "Keyboard shortcuts", hint: palReg().shortcutHint("help.open", mac), run: act.shortcuts },
   ];
 }

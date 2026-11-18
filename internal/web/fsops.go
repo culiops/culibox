@@ -11,12 +11,13 @@ import (
 	"syscall"
 )
 
-// File mutations: create a directory, rename, delete. Read-only browsing lives
-// in fsapi.go, transfer in fsupload.go / fsarchive.go.
+// File mutations: create a directory or an empty file, rename, delete.
+// Read-only browsing lives in fsapi.go, transfer in fsupload.go / fsarchive.go.
 
-// maxOpBody bounds the three JSON mutation bodies. None is more than a few
-// hundred bytes; the upload path already established that an unbounded request
-// body is not acceptable on this surface.
+// maxOpBody bounds the small JSON bodies: the four mutations (mkdir, newfile,
+// rename, delete) and the git calls that share decodeOpBody. None is more than
+// a few hundred bytes; the upload path already established that an unbounded
+// request body is not acceptable on this surface.
 const maxOpBody = 8 << 10
 
 // Bounds for the delete measurement. Generous — they only decide when the
@@ -52,8 +53,9 @@ func checkMutationGuard(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // decodeOpBody applies checkMutationGuard, then bounds and decodes the body for
-// the small JSON mutations (mkdir/rename/delete). Write's own decode lives in
-// fswrite.go's decodeWriteBody, which needs a much larger body cap.
+// the small JSON mutations (mkdir/newfile/rename/delete) and the git calls.
+// Write's own decode lives in fswrite.go's decodeWriteBody, which needs a much
+// larger body cap.
 func decodeOpBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if !checkMutationGuard(w, r) {
 		return false
@@ -213,6 +215,49 @@ func (s *Server) handleFsMkdir(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "cannot create directory")
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]string{"path": filepath.Join(dir, name)})
+}
+
+type newFileReq struct {
+	Dir  string `json:"dir"`
+	Name string `json:"name"`
+}
+
+// handleFsNewFile serves POST /api/fs/newfile — an empty file inside an existing
+// directory, for the Files dock's New file button. O_EXCL fails when the name
+// exists in any form, a dangling or live symlink included, so the create can
+// neither overwrite nor be steered through a link planted at the name; the root
+// supplies the same guarantee for every ancestor. Like mkdir there is no
+// check-then-create window.
+func (s *Server) handleFsNewFile(w http.ResponseWriter, r *http.Request) {
+	var req newFileReq
+	if !decodeOpBody(w, r, &req) {
+		return
+	}
+	name, err := typedName(req.Name)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad name")
+		return
+	}
+	dir, root, relParent, err := s.openParent(req.Dir)
+	if err != nil {
+		writeFsErr(w, err)
+		return
+	}
+	defer root.Close()
+	f, err := root.OpenFile(relOf(relParent, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			writeErr(w, http.StatusConflict, "name already exists")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "cannot create file")
+		return
+	}
+	// Nothing is written: the file exists to be opened in the editor, so close at
+	// once. The create already succeeded and a close failure cannot undo it, so
+	// reporting one would only invite a retry that ends in a 409.
+	f.Close()
 	writeJSON(w, http.StatusOK, map[string]string{"path": filepath.Join(dir, name)})
 }
 

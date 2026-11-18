@@ -150,6 +150,9 @@ func TestFsErr_PermissionOnMutationSaysChange(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.handleFsMkdir(rec, opReq(t, "/api/fs/mkdir", opJSON(map[string]string{"dir": filepath.Join(locked, "sub"), "name": "n"})))
 	wantRefusal(t, 403, msgPermWrite, rec.Code, errBody(t, rec))
+	rec = httptest.NewRecorder()
+	s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", opJSON(map[string]string{"dir": filepath.Join(locked, "sub"), "name": "n"})))
+	wantRefusal(t, 403, msgPermWrite, rec.Code, errBody(t, rec))
 }
 
 func TestFsRead_ScratchTextCarriesReadonly(t *testing.T) {

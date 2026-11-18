@@ -178,6 +178,9 @@ const R1 = {
   // from the editor and a field, which would otherwise trap it; a modal dialog keeps its own focus.
   "ui.regionNext": [1, 1, 1, 0, 1],
   "shell.below": [1, 0, 0, 0, 0], "files.goto": [0, 1, 1, 0, 0],
+  // dock.showTerminal (Task 8b): Full mode's way back. Focus can be in the covered terminal, the dock's editor or one of its
+  // fields; a dialog keeps its own focus and a page hides the dock.
+  "dock.showTerminal": [1, 1, 1, 0, 0],
   "zoom.in": [1, 0, 0, 0, 0], "zoom.out": [1, 0, 0, 0, 0], "zoom.reset": [1, 0, 0, 0, 0],
 };
 const R1_FLAGS = ["inTerminal", "inEditor", "inInput", "dialogOpen", "pageOpen"];
@@ -209,6 +212,7 @@ const TERMINAL_OK = new Set([
   "ui.regionNext", // F6 would be ESC[17~ in xterm: it is dispatched in the capture phase, so the terminal never sees it
   "help.open", // Ctrl+/ sends nothing in the vendored xterm (upstream maps 0x1F: upgrade hazard)
   "term.paste", // Ctrl+V is the browser paste: documented trade-off
+  "dock.showTerminal", // Ctrl+` sends no byte in the vendored xterm (measured in Chromium: onData stayed empty), and the binding hands the key back outside the dock's Full mode
 ]);
 
 test("terminal invariant", () => {
@@ -549,7 +553,7 @@ test("session.nextNeeds: the chord dispatches on a terminal and on the page, not
 });
 
 // Rows the phone's text leaves out: they work where the desktop's sidebar, panes and drawer are.
-const DESKTOP_ONLY_LABELS = ["Next that needs you", "Next region: sidebar, pane, terminal, files", "Previous region"];
+const DESKTOP_ONLY_LABELS = ["Next that needs you", "Next region: sidebar, pane, terminal, files", "Previous region", "Leave Full mode: show the terminal"];
 
 // ---- F6 / Shift+F6 (#177, plan call 12, frame M8.8) ------------------------------------------------------------------------------------
 
@@ -852,4 +856,44 @@ test("desktop.css: Keyboard shortcuts is an 880 px card of two columns, as frame
   assert.match(rule(".sc-word"), /color:\s*var\(--muted\)/);
   // It must beat the read-only dialog's 560 px (#ask-modal.info) by coming after it.
   assert.ok(css.indexOf("#ask-modal.keys {") > css.indexOf("#ask-modal.info {"));
+});
+
+// Task 8b: dock.showTerminal, Full mode's way back to the terminal.
+test("dock.showTerminal: plain Ctrl+`, which is not + Shell below (Ctrl+Shift+`), on every platform", () => {
+  const e = entry("dock.showTerminal");
+  assert.strictEqual(e.status, "bound");
+  assert.strictEqual(e.scope, "global");
+  assert.strictEqual(SC.shortcutHint("dock.showTerminal", false), "Ctrl+`");
+  assert.strictEqual(SC.shortcutHint("dock.showTerminal", true), "⌃`");
+  for (const mac of [false, true]) {
+    assert.strictEqual(SC.shortcutFor(ev("Backquote", "`", { ctrl: true }), mac, NONE), "dock.showTerminal", "mac=" + mac);
+    assert.strictEqual(SC.shortcutFor(ev("Backquote", "~", { ctrl: true, shift: true }), mac, NONE), "shell.below", "the shifted chord is still + Shell below, mac=" + mac);
+    assert.strictEqual(SC.shortcutFor(ev("Backquote", "`", {}), mac, NONE), null, "a bare backquote is a character");
+    assert.strictEqual(SC.shortcutFor(ev("Backquote", "`", { alt: true }), mac, NONE), null);
+  }
+});
+
+test("dock.showTerminal fires from the covered terminal, the dock's editor and its fields, not over a dialog or a page", () => {
+  const e = () => ev("Backquote", "`", { ctrl: true });
+  for (const k of ["inTerminal", "inEditor", "inInput"]) assert.strictEqual(SC.shortcutFor(e(), false, ctxWith(k)), "dock.showTerminal", k);
+  for (const k of ["dialogOpen", "pageOpen"]) assert.strictEqual(SC.shortcutFor(e(), false, ctxWith(k)), null, k);
+});
+
+test("dock.showTerminal is listed in the help dialog (Editor & files) and left out of the phone's", () => {
+  const row = SC.helpRows(false).find((r) => r.label === "Leave Full mode: show the terminal");
+  assert.ok(row);
+  assert.strictEqual(row.group, "Editor & files");
+  assert.strictEqual(row.keys, "Ctrl+`");
+  const app = readStatic("app.js");
+  assert.match(fnSrc(app, "showShortcuts"), /"dock\.showTerminal"\]\.map\(\(id\) => scEntry\(id\)\.label\)/, "the phone's text drops it, as it drops the other desktop-only rows");
+});
+
+test("dock.showTerminal's binding hands the key back (false) unless the dock is in Full mode, so the terminal keeps it as ever", () => {
+  const app = readStatic("app.js");
+  assert.match(app, /bindShortcut\("dock\.showTerminal", \(\) => dockShowTerminal\(\)\);/);
+  assert.match(fnSrc(app, "dockShowTerminal"), /if \(!dr \|\| dr\.hidden \|\| dr\.dataset\.max !== "1"\) return false;/);
+});
+
+test("the Files toggle is named for what the approved spec calls the feature: the Files dock (box ruling R18)", () => {
+  assert.strictEqual(entry("files.toggle").label, "Files dock");
 });

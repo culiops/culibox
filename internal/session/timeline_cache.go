@@ -164,8 +164,9 @@ func (st *timelineState) abandonPending() {
 	st.pending, st.order = map[string]*list.Element{}, list.New()
 }
 
-// touch adds an edit's line counts to path's running total.
-func (st *timelineState) touch(path string, add, del int) {
+// touch adds an edit's line counts to path's running total and keeps the
+// latest ts (the result's time) it has seen for it.
+func (st *timelineState) touch(path string, add, del int, ts int64) {
 	st.tick++
 	r := st.files[path]
 	if r == nil {
@@ -184,6 +185,7 @@ func (st *timelineState) touch(path string, add, del int) {
 	}
 	r.Add += add
 	r.Del += del
+	r.TS = max(r.TS, ts)
 	r.tick = st.tick
 }
 

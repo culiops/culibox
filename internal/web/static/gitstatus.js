@@ -12,6 +12,27 @@
 const GIT_RANK = { C: 3, D: 3, M: 2, A: 1, U: 1 };
 const GIT_TITLES = { M: "Modified", A: "Added (staged)", U: "Untracked", C: "Conflict" };
 
+// gitPlace puts one reply entry's repo-relative `p` under the tree root: its
+// absolute path (`base` is the root without trailing slashes), its segments below
+// the root, and whether it is a collapsed untracked folder (a trailing "/"). Null
+// for an entry outside the shown tree, the root itself, a path with an empty
+// segment, or a reply with no usable rootRel ("." is the checkout's top itself).
+// One rule for every reader of a status or numstat reply, so the tree's marks and
+// the Changes rows land on the same row paths (changesmodel.js reuses it).
+function gitPlace(p, rootRel, base) {
+  if (typeof p !== "string" || typeof rootRel !== "string" || rootRel === "") return null;
+  const isDir = p.endsWith("/");
+  let rel = isDir ? p.slice(0, -1) : p;
+  if (rootRel !== ".") {
+    if (!rel.startsWith(rootRel + "/")) return null; // outside the shown tree (or the root itself)
+    rel = rel.slice(rootRel.length + 1);
+  }
+  if (rel === "") return null;
+  const segs = rel.split("/");
+  if (segs.some((s) => s === "")) return null;
+  return { abs: base + "/" + rel, segs, isDir };
+}
+
 // gitMarks: Map<absolute row path, {code, dir, title, untracked?}> for the tree
 // rooted at `root`, from one status reply. Files and untracked folders get their
 // own code; every folder strictly between the root and a changed entry gets
@@ -29,16 +50,9 @@ function gitMarks(status, root) {
   const folders = new Map(); // abs folder path -> {n, del, code}
   for (const e of status.entries) {
     if (!e || typeof e.p !== "string" || !GIT_RANK[e.x]) continue;
-    const isDir = e.p.endsWith("/");
-    let p = isDir ? e.p.slice(0, -1) : e.p;
-    if (rr !== ".") {
-      if (!p.startsWith(rr + "/")) continue; // outside the shown tree (or the root itself)
-      p = p.slice(rr.length + 1);
-    }
-    if (p === "") continue;
-    const segs = p.split("/");
-    if (segs.some((s) => s === "")) continue;
-    const abs = base + "/" + p;
+    const at = gitPlace(e.p, rr, base);
+    if (!at) continue;
+    const { abs, segs, isDir } = at;
     if (isDir) out.set(abs, { code: e.x, dir: true, untracked: true, title: "Untracked folder" });
     else if (e.x !== "D") out.set(abs, { code: e.x, dir: false, title: GIT_TITLES[e.x] });
     for (let i = 1; i < segs.length; i++) {
@@ -59,17 +73,44 @@ function gitMarks(status, root) {
 
 // --- state -------------------------------------------------------------------
 
-let gitSeq = 0;          // a reply is dropped unless it is the newest ask
-let gitState = null;     // {root, sid, status, marks} of the last reply that landed
+let gitSeq = 0;          // the number of the newest ask: asks are numbered in the order they were sent
+let gitFloor = 0;        // replies to asks up to this number are dropped (a reset)
+let gitRoot = "";        // the root of the newest ask
+let gitState = null;     // {root, sid, status, marks, at, seq} of the status applied (`at`: gitStatusAt, `seq`: the ask it answers)
 let gitTimer = null;
 let gitTimerFresh = false; // any refreshSoon in the pending window asked for fresh
+const gitOut = new Set(); // the status requests out, as {ac, timer}: what the debounced asks wait for (a reset empties it)
+let gitHeld = null;       // {fresh, watch}: the one trailing ask the debounced asks collapsed into while a request was out
+let gitTimerWatch = true; // every ask in the pending window was the dock watch's (one explicit ask makes the window explicit)
+let gitWatchAt = -Infinity; // when the last watch-driven status was sent
+let gitWatchTimer = null;   // the wait for GIT_WATCH_MIN_MS to pass, with a watch-driven ask due; later ones join it
 const GIT_DEBOUNCE_MS = 1000;
+// The least gap between two status requests the dock watch asks for (dockwatch.js passes {watch: true}). The server starts a
+// docker run for every fresh status after the first has launched (internal/gitview/runner.go StatusFresh) and the numstat that
+// follows each landing is another, so without a floor a turn that edits a file every second or two costs a status run and a
+// numstat run per edit, bounded only by the round trip. 3 s is the floor the final review of the dock settled on (it caps this
+// at about 20 status runs a minute; the real per-run cost on a host is not measured here); the last edit's ask is still sent
+// when the floor ends (it is trailing, never dropped). Explicit asks (a save, a file op, the end of a turn, ↻, a tree paint) are
+// not subject to it.
+const GIT_WATCH_MIN_MS = 3000;
+// A status request that never answers is abandoned after this, so it cannot hold the debounced asks back for good. The
+// server gives a git run 10 s (internal/gitview/runner.go defaultTimeout) and a run may first wait for one of its slots.
+const GIT_FETCH_MS = 15000;
+// How old an answer to a PLAIN (non-fresh) ask may be: the server answers it from a finished run up to this old, and joins a
+// run already in flight (internal/gitview/runner.go defaultReuse, 2 s, used by Status; StatusFresh never takes that cache).
+const GIT_REUSE_MS = 2000;
 
 function gitStatusReset() {
-  gitSeq++;
+  gitFloor = ++gitSeq;
   gitState = null;
   if (gitTimer) { clearTimeout(gitTimer); gitTimer = null; }
   gitTimerFresh = false;
+  gitTimerWatch = true;
+  gitHeld = null;
+  if (gitWatchTimer) { clearTimeout(gitWatchTimer); gitWatchTimer = null; }
+  gitWatchAt = -Infinity;
+  for (const o of gitOut) { clearTimeout(o.timer); if (o.ac) o.ac.abort(); }
+  gitOut.clear();
 }
 
 // gitStatusLoad asks for the tree root's status and paints the answer. A root
@@ -81,7 +122,36 @@ function gitStatusReset() {
 // refresh button), and not for the plain load that follows a tree paint.
 async function gitStatusLoad(root, sid, opts) {
   if (!root) return null;
+  const out = { ac: typeof AbortController === "function" ? new AbortController() : null, timer: null };
+  out.timer = setTimeout(() => { if (out.ac) out.ac.abort(); }, GIT_FETCH_MS);
+  gitOut.add(out);
+  try {
+    return await gitStatusRead(root, sid, opts, out.ac ? out.ac.signal : undefined);
+  } finally {
+    // Whatever became of it (landed, dropped, failed, timed out), a debounced ask that was held behind it goes out once no
+    // request is left. A reset emptied the set already, cleared the timer and forgot the held ask: nothing is left to do.
+    if (gitOut.delete(out)) {
+      clearTimeout(out.timer);
+      gitRelease();
+    }
+  }
+}
+
+// gitRelease sends the trailing ask the debounced ones collapsed into, when no status request is out any more. It asks for the
+// root and session of the moment (the tree may have moved while it waited), fresh if any collapsed ask was. A trailing ask that
+// was only the dock watch's still keeps the floor between watch-driven requests (gitAskNow).
+function gitRelease() {
+  if (gitOut.size > 0 || !gitHeld) return;
+  const held = gitHeld;
+  gitHeld = null;
+  gitAskNow(held.fresh, held.watch);
+}
+
+// gitStatusRead is one status request and what comes of its answer (see gitStatusLoad).
+async function gitStatusRead(root, sid, opts, signal) {
   const seq = ++gitSeq;
+  gitRoot = root;
+  const sentAt = Date.now();
   if (gitState && gitState.root !== root) { gitState = null; gitPaintTree(); }
   let status = null;
   try {
@@ -89,14 +159,43 @@ async function gitStatusLoad(root, sid, opts) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(opts && opts.fresh ? { path: root, fresh: true } : { path: root }),
+      signal,
     });
     if (res.ok) status = await res.json();
-  } catch (_) { /* offline: keep the marks */ }
-  if (seq !== gitSeq) return null;
+  } catch (_) { /* offline, or abandoned after GIT_FETCH_MS: keep the marks */ }
+  // Statuses land in the order they were sent. A reply is dropped when a reset came after its ask, when the newest ask is for
+  // another root, or when it is OLDER than the status already applied for this root (a slow one arriving after a newer one).
+  // Any other reply is applied, even with newer asks still out: while edits keep coming and git is slower than the gap between
+  // asks, each answer lands in turn, and the tree and the Changes section never wait for a pause that does not come.
+  if (seq <= gitFloor || root !== gitRoot) return null;
+  if (gitState && gitState.root === root && seq < gitState.seq) return null;
   if (!status || typeof status !== "object") return gitState ? gitState.marks : null;
-  gitState = { root, sid: sid || null, status, marks: gitMarks(status, root) };
+  // When the answer is as new as. A fresh ask: its send time (the server read the disk after it). A plain one: the server may
+  // answer it from a run up to GIT_REUSE_MS old, so only back to that before its send time; and never earlier than the status
+  // held for this root, which the server's cache is at least as new as (so the time does not go backwards and a "…" row
+  // that was hidden as clean does not come back).
+  const prevAt = gitState && gitState.root === root ? gitState.at : 0;
+  const at = opts && opts.fresh ? sentAt : Math.max(sentAt - GIT_REUSE_MS, prevAt);
+  gitState = { root, sid: sid || null, status, marks: gitMarks(status, root), at, seq };
   gitPaintTree();
+  // The Changes section's counts and base follow each status that lands (dockchanges.js), fresh when this one was.
+  if (typeof dockChangesOnStatus === "function") dockChangesOnStatus({ fresh: !!(opts && opts.fresh) });
   return gitState.marks;
+}
+
+// gitStatusCurrent: the last status that landed and the root it was for, {root, status}, or null when there is none or it
+// was for another root than `root` (a late or older one is nobody's). The Changes section reads it; it never reads
+// gitState itself. When it was asked for is gitStatusAt's.
+function gitStatusCurrent(root) {
+  return gitState && root && gitState.root === root ? { root: gitState.root, status: gitState.status } : null;
+}
+
+// gitStatusAt: the status held is as new as this (ms), 0 when there is none. For a fresh ask it is when gitStatusLoad SENT the
+// request the status answers (not when the answer landed, and not the newest ask still out): git has seen every change made
+// before it, and none made after. For a plain ask it is GIT_REUSE_MS earlier (see gitStatusRead). The Changes section's
+// provisional rows compare an agent edit's `ts` with it.
+function gitStatusAt() {
+  return gitState ? gitState.at : 0;
 }
 
 // gitStatusTreeSid: the session whose files the tree shows right now.
@@ -110,16 +209,60 @@ function gitStatusTreeSid() {
 // Debounced, and never a timer poll. Every caller is a reaction to a change, so
 // it asks for a fresh result; the debounced request is fresh if any caller in
 // its window was (opts.fresh === false opts out).
+//
+// One status request at a time comes of these asks. While a request is out the debounced ask is HELD: the asks that
+// come meanwhile collapse into one trailing ask, sent when the request is done (it landed, was dropped, failed or timed
+// out), fresh if any collapsed ask was. So a git slower than the gap between asks costs about one run per round trip, not
+// one per ask. The server does not do this for us: a fresh call never takes its reuse cache and joins a run only until that
+// run has launched, so each fresh ask after a launch starts a docker run of its own (gitview StatusFresh), and the runs
+// share MaxParallel slots with every other session's git. Explicit loads (gitStatusLoad: a tree paint, ↻) are not held.
+//
+// opts.watch marks the dock watch's asks (dockwatch.js: the agent edited a file). Those also keep GIT_WATCH_MIN_MS between one
+// status request and the next: an ask that falls inside the floor waits for it, and every ask that comes meanwhile joins that
+// one wait. A window with any other caller in it (a save, a file op, the end of a turn) is explicit and is never delayed.
 function gitStatusRefreshSoon(opts) {
   if (gitTimer) clearTimeout(gitTimer);
   if (!opts || opts.fresh !== false) gitTimerFresh = true;
+  if (!opts || !opts.watch) gitTimerWatch = false;
   gitTimer = setTimeout(() => {
     gitTimer = null;
     const fresh = gitTimerFresh;
+    const watch = gitTimerWatch;
     gitTimerFresh = false;
-    const root = typeof ftRoot === "function" ? ftRoot() : "";
-    if (root) gitStatusLoad(root, gitStatusTreeSid(), { fresh });
+    gitTimerWatch = true;
+    gitAskNow(fresh, watch);
   }, GIT_DEBOUNCE_MS);
+}
+
+// gitAskNow is where a debounced ask becomes a request, is held behind the one that is out, or (a watch ask) waits for the
+// floor. The floor is measured from the last watch-driven send, whenever it was made: a held ask released after a slow answer
+// goes at once, one released inside the floor waits for the rest of it.
+function gitAskNow(fresh, watch) {
+  const root = typeof ftRoot === "function" ? ftRoot() : "";
+  if (!root) return;
+  if (watch) {
+    // Date.now() is the wall clock: a step back (NTP, a laptop waking) would leave the last send in the future and stall the asks
+    // for as long as it stepped. The last send is taken as no later than now, so the wait is never more than the floor.
+    const now = Date.now();
+    if (gitWatchAt > now) gitWatchAt = now;
+    const wait = gitWatchAt + GIT_WATCH_MIN_MS - now;
+    if (wait > 0) {
+      if (!gitWatchTimer) gitWatchTimer = setTimeout(() => { gitWatchTimer = null; gitAskNow(true, true); }, wait);
+      return;
+    }
+  }
+  if (fresh && gitWatchTimer) {
+    // A fresh status that goes out now (or is held for the one out) is read after the edit the waiting watch ask is about: it
+    // has nothing left to ask. This is also what keeps a floor that ends at the same moment as a debounce from asking twice.
+    clearTimeout(gitWatchTimer);
+    gitWatchTimer = null;
+  }
+  if (gitOut.size > 0) {
+    gitHeld = { fresh: fresh || (gitHeld ? gitHeld.fresh : false), watch: watch && (!gitHeld || gitHeld.watch) };
+    return;
+  }
+  if (watch) gitWatchAt = Date.now();
+  gitStatusLoad(root, gitStatusTreeSid(), { fresh });
 }
 
 // gitStatusOnActivity: a session finished a turn (working -> anything else) and
@@ -161,7 +304,7 @@ function gitMarkRow(row, path) {
   const marks = gitCurrentMarks();
   const m = marks && marks.get(path);
   const have = row.querySelector(":scope > .ft-git, :scope > .ft-git-dot");
-  if (!m) { if (have) have.remove(); return; }
+  if (!m) { if (have) { have.remove(); gitNameTitle(row); } return; }
   const dot = m.dir && !m.untracked;
   const key = (dot ? "d" : "b") + m.code + "|" + m.title;
   if (have && have.dataset.gitKey === key) return;
@@ -199,6 +342,13 @@ function gitMarkRow(row, path) {
   el.dataset.gitKey = key;
   const name = row.querySelector(":scope > .ft-name");
   if (name) name.after(el); else row.append(el);
+  gitNameTitle(row);
+}
+
+// gitNameTitle: the row's hover text lists what marks it, and a folder's dot is one of the marks (filetree.js composes the
+// text). The dock hides the dot visually, so its "N changes inside" is read from the name too.
+function gitNameTitle(row) {
+  if (typeof ftNameTitle === "function") ftNameTitle(row);
 }
 
 // gitOpenChanges opens the file where a row click would, asking for its Changes
@@ -211,6 +361,10 @@ function gitOpenChanges(path) {
 
 function gitPaintTree() {
   if (typeof document === "undefined") return;
+  // The dock's tabs wear the same letters.
+  if (typeof dockRender === "function") dockRender();
+  // And the Changes section lists the same status (a root change took it away: it repaints, with nothing).
+  if (typeof dockChangesRender === "function") dockChangesRender();
   // An open viewer's Changes button follows the same marks: repaint the toolbars.
   if (typeof ViewerTab !== "undefined" && ViewerTab.allViewers) {
     for (const v of ViewerTab.allViewers()) if (v.toolbarApi) v.toolbarApi.paint();
@@ -245,5 +399,5 @@ function gitPaintNote() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { gitMarks, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusReason, gitStatusNote, gitStatusReset };
+  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset, GIT_REUSE_MS, GIT_WATCH_MIN_MS };
 }

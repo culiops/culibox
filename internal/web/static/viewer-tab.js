@@ -130,9 +130,14 @@ class ViewerTab {
     this.fileScroll = 0;    // where the file was read, kept while the diff is up
     this.find = new ViewerFind(this);
     this.findBar = this.find.el;
-    // The one shared toolbar (viewertoolbar.js). opts.host carries what differs
-    // for the Files drawer: its extra button and its shorter path label.
-    this.toolbarApi = buildViewerToolbar(this, opts && opts.host);
+    // The one shared toolbar (viewertoolbar.js). opts.host carries what differs for the Files dock: its shorter
+    // path label, and what its tabs hear from this viewer: the dock pins a tab when its first edit starts
+    // (onEditStart) and draws its dirty dot when the buffer turns dirty or clean (onDirtyChange, noteDirty).
+    // A pane viewer has no host.
+    this.host = (opts && opts.host) || null;
+    this.dirtyTimer = null;
+    this.dirtyShown = false;
+    this.toolbarApi = buildViewerToolbar(this, this.host);
     this.toolbar = this.toolbarApi.el;
     // The one-line note over a file opened from another checkout (altOpened). Like
     // the find bar it sits outside the scroller, so no render ever removes it.
@@ -226,12 +231,12 @@ class ViewerTab {
   // --- path actions ----------------------------------------------------------
   // The line-number menu below and Task 7's Path ▾ menu both go through these.
 
-  // insertCandidate: the terminal an insert would go to. The Files drawer's
-  // viewer uses the drawer's session (not whichever
+  // insertCandidate: the terminal an insert would go to. A Files dock viewer
+  // uses the dock's session (not whichever
   // terminal holds focus); a pane viewer uses the terminal its cell is about.
   // insertTargetFor then applies the box rule.
   insertCandidate() {
-    if (typeof drawerViewerTab === "function" && drawerViewerTab() === this) {
+    if (typeof dockHasViewer === "function" && dockHasViewer(this)) {
       return drawerState.sessionId ? terminalTabFor(drawerState.sessionId) : null;
     }
     const cell = cells.find((c) => c.tabs.includes(this));
@@ -926,9 +931,27 @@ class ViewerTab {
     this.cm.setOption("extraKeys", saveKeys);
     this.renderEditBar();
     this.findRefresh(); // an open find now searches the buffer
+    this.cm.on("change", () => this.noteDirty());
     // A fresh edit: a "saved" left from the last one says nothing about this
     // buffer. (setStatus repaints the toolbar: Save · Cancel replace Edit.)
     this.setStatus("");
+    // Last, once the editor is up: the dock keeps this tab from here on (see the host's onEditStart).
+    if (this.host && this.host.onEditStart) this.host.onEditStart(this);
+  }
+
+  // noteDirty tells the host when the buffer turned dirty or clean, for the dock tab's dot. It runs on every change,
+  // so it only starts a short timer: dirty() reads the whole buffer, which on a large file is not a thing to do per
+  // keystroke. The dot may lag a moment; every gate asks dirty() itself when it decides. A pane viewer has no host.
+  noteDirty() {
+    if (this.dirtyTimer || !this.host || !this.host.onDirtyChange) return;
+    this.dirtyTimer = setTimeout(() => {
+      this.dirtyTimer = null;
+      if (this.disposed) return;
+      const d = !!this.dirty();
+      if (d === this.dirtyShown) return;
+      this.dirtyShown = d;
+      this.host.onDirtyChange(this);
+    }, 150);
   }
 
   // renderEditBar builds the message row above the editor: Save and Cancel live
@@ -998,6 +1021,7 @@ class ViewerTab {
   // a conflict, since the disk copy is exactly what a fresh load() shows.
   exitEdit(savedText) {
     this.find.leaveEdit(); // the editor's marks go with the editor
+    this.dirtyShown = false; // the dot goes with the edit (changed() below repaints the host)
     this.editing = false;
     this.cm = null;
     this.editBar = null;
@@ -1156,12 +1180,11 @@ class ViewerTab {
     this.cm.refresh();
   }
 
-  // allViewers: every live viewer, in every pane plus the Files drawer's.
+  // allViewers: every live viewer, in every pane plus the Files dock's.
   static allViewers() {
     const all = [];
     eachViewer((vt) => all.push(vt));
-    const dv = typeof drawerViewerTab === "function" ? drawerViewerTab() : null;
-    if (dv && !all.includes(dv)) all.push(dv);
+    if (typeof dockViewerList === "function") for (const dv of dockViewerList()) if (!all.includes(dv)) all.push(dv);
     return all;
   }
 
@@ -1205,7 +1228,7 @@ function escapeHtml(s) {
 // every page script has finished — so the forward reference is safe (the same
 // pattern load() already relies on for closeTabEverywhere).
 //
-// The desktop Files drawer's viewer is in no cell, so it is asked separately
+// The desktop Files dock's viewers are in no cell, so they are asked separately
 // (drawerHasUnsaved, filesdrawer.js, loaded later on the same terms).
 window.addEventListener("beforeunload", (e) => {
   const anyDirty = cells.some((c) => c.tabs.some((t) => t.kind === "viewer" && t.dirty && t.dirty()))

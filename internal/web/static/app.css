@@ -562,13 +562,14 @@
     #files-phd.closed #ft-refresh,
     #files-phd.closed #ft-upload { display: none; }
     /* A read-only listing (the scratch folder) has nothing to create or upload
-       into: filetree.js sets `hidden` on these two. The attribute alone loses at
-       both widths, because an id rule's own display beats the UA [hidden] rule:
-       desktop.css's `#drawer #files-phd #ft-newdir ... { display: revert }` and
+       into: filetree.js sets `hidden` on these two. The attribute alone loses on
+       the phone, because an id rule's own display beats the UA [hidden] rule:
        the phone's `html.mobile-screen-files #files-phd #ft-newdir { display:
-       inline-flex }` below. This is the [hidden] partner rule pattern used above
-       (.rail, .dbd, #agent-seg), with !important because those two out-rank a
-       plain one. It holds at every width, so it sits here, in no media query.
+       inline-flex }` below (the desktop dock hides this whole header, and its
+       own New file button has its own [hidden] rule in desktop.css). This is the
+       [hidden] partner rule pattern used above (.rail, .dbd, #agent-seg), with
+       !important because that one out-ranks a plain one. It holds at every
+       width, so it sits here, in no media query.
        #ft-refresh and #ft-palette are not listed: they still work. */
     #files-phd #ft-newdir[hidden], #files-phd #ft-upload[hidden] { display: none !important; }
     #ft-menu {

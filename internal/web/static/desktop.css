@@ -1098,22 +1098,28 @@
   #session-menu .menu-check { flex: none; width: 16px; display: inline-flex; justify-content: center; color: var(--muted); }
   #session-menu > .menu-row > .menu-x { flex: none; font-size: var(--t-lg); line-height: 1; }
 
-  /* --- the pane drawer: Files (spec 5.4) ---------------------------------- */
-  /* Over the right of the grid, below the focused pane's header (JS sets top
-     and --grid-w). The docked rail is gone on desktop: Access is a pane view. */
+  /* --- the Files dock (spec 5.4, the dock design's Layout) ----------------- */
+  /* A column right of the pane grid, full height: the panes shrink for it and nothing is covered. app.js sizes it
+     (dockfit.js dockLayout sets --dock-w, and --dr-tree for the explorer column). The docked rail is gone on
+     desktop: Access is a pane view. */
   #layout > #steer-rail { display: none; }
-  /* Width (issue #34): min(960px, 62% of the grid) until the left edge is
-     dragged; then --dr-w, the stored share of the grid (drawersize.js), never
-     under 360px. ⛶ (data-max) covers the whole grid until pressed again. */
   #drawer {
-    position: absolute; top: 0; right: 0; bottom: 0; z-index: 10;
-    width: min(960px, calc(var(--grid-w, 100%) * .62));
-    display: flex; flex-direction: column; min-height: 0;
-    background: var(--panel); border-left: 1px solid var(--line); box-shadow: -12px 0 30px #0009;
+    position: relative; flex: 0 0 var(--dock-w, 62%); min-width: 0; min-height: 0;
+    display: flex; flex-direction: column;
+    background: var(--panel); border-left: 1px solid var(--line);
   }
-  #drawer[data-sized="1"] { width: min(var(--grid-w, 100%), max(360px, calc(var(--grid-w, 100%) * var(--dr-w)))); }
-  #drawer[data-max="1"] { width: var(--grid-w, 100%); }
+  /* Full mode (the Full toggle, or forced when the panes cannot keep their floors, data-forced): the one place the dock still floats
+     over the panes, as the drawer did. Out of the flow, so the grid keeps its width under it and no terminal is resized to
+     nothing. --grid-w is the pane area's width (app.js). */
+  #drawer[data-max="1"] {
+    position: absolute; top: 0; right: 0; bottom: 0; z-index: 10; flex: none; width: var(--grid-w, 100%);
+    box-shadow: -12px 0 30px #0009;
+  }
   #drawer[hidden] { display: none; }
+  /* Full mode that is not forced still holds the dock's pushed width beside the grid: the dock is out of the flow, and without
+     this the grid would widen under it and every terminal be resized to the wider size and back (two PTY resizes per toggle).
+     --dock-w is the pushed width, which paintDrawerLayout keeps on #layout (the grid's parent) whenever the layout is not forced. */
+  #layout:has(> #drawer[data-max="1"]:not([data-forced="1"]):not([hidden])) > #grid { margin-right: var(--dock-w); }
   /* The left-edge handle: 7px straddling the border, nothing drawn until
      hover, drag or keyboard focus. Gone while maximized (nothing to drag). */
   .dr-edge {
@@ -1121,19 +1127,32 @@
     cursor: col-resize; touch-action: none;
   }
   #drawer[data-max="1"] .dr-edge { display: none; }
+  /* The header is the pane header's height (--h-ph, the one the panes' .cell-bar takes), so the two rows line up across
+     the grid and the dock. FILES, the session chip, the hint and the pin are the multi-pane header; with one pane the chip,
+     hint and pin are hidden (app.js paintDrawerHead). */
   .dr-head {
-    flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 14px;
-    font-weight: 600; border-bottom: 1px solid var(--line);
+    flex: none; display: flex; align-items: center; gap: var(--sp-2); height: var(--h-ph); padding: 0 6px 0 12px;
+    white-space: nowrap; background: var(--panel); border-bottom: 1px solid var(--line);
   }
-  .dr-title { flex: none; }
-  .dr-sess { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--muted); }
+  .dr-title {
+    flex: none; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
+    letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted);
+  }
+  .dr-sess {
+    flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px;
+    border-radius: var(--r-chip); background: var(--raise); font-size: var(--t-sm); line-height: var(--lh-sm);
+  }
+  .dr-sess[hidden], .dr-hint[hidden], #drawer-pin[hidden] { display: none; }
+  .dr-sess-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .dr-hint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--t-sm); color: var(--muted); }
   .dr-fill { flex: 1; }
-  #drawer-x, #drawer-max {
+  #drawer-x {
     flex: none; width: 26px; height: 24px; font: var(--t-md) var(--font-ui); color: var(--muted); cursor: pointer;
     background: transparent; border: 0; border-radius: var(--r-ctl);
   }
-  #drawer-x:hover, #drawer-max:hover { color: var(--fg); background: var(--raise); }
-  #drawer-max[aria-pressed="true"] { color: var(--accent); }
+  #drawer-x:hover { color: var(--fg); background: var(--raise); }
+  /* The pin is the kit's ghost icon button (24px); pressed it takes the kit's pressed look. */
+  #drawer-pin { flex: none; }
   .dr-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   /* The moved tree stays in the body once moved; the kind shows it. */
   #drawer:not([data-kind="files"]) #files-pane { display: none; }
@@ -1141,41 +1160,75 @@
      reduced to the toolbar (the drawer header names it). */
   #drawer #files-pane { flex: 1 1 auto; min-height: 0; }
   #drawer #files-pane > .files-body { display: flex; padding-top: 6px; }
-  #drawer #files-phd .cv, #drawer #files-phd .path, #drawer #files-phd > span:not(.grow):not(.path) { display: none; }
-  #drawer #files-phd #ft-newdir, #drawer #files-phd #ft-refresh, #drawer #files-phd #ft-upload { display: revert; }
+  /* The old toolbar (+ ↻ ↑ and the palette) is the explorer's top row now: New folder, Upload and Refresh are the ⋯ menu's. The
+     header and its buttons stay in the DOM, because the menu presses them (upload.js wires #ft-upload, filetree.js the rest). */
+  #drawer #files-phd { display: none; }
 
-  /* --- Files drawer body: tree | splitter | viewer (spec 5.4, #34) -------- */
+  /* --- Files dock body: viewer | splitter | explorer (spec 5.4, #34) ------- */
+  /* The editor is the left column and the explorer the right one, as in the mockups. */
   #drawer[data-kind="files"] .dr-body { flex-direction: row; }
   #drawer:not([data-kind="files"]) .dr-tree, #drawer:not([data-kind="files"]) .dr-viewer,
-  #drawer:not([data-kind="files"]) .dr-split { display: none; }
-  /* --dr-tree is the tree's stored share of the body (default 40%). The px
-     clamp keeps a readable tree and a usable viewer whatever the share; in a
-     body too narrow for both, the tree's 160px wins. */
+  #drawer:not([data-kind="files"]) .dr-split, #drawer:not([data-kind="files"]) .dr-strip { display: none; }
+  /* --dr-tree is the explorer's width in px (app.js: dockLayout's treeW, which holds its minimum and the editor's floor). */
   .dr-tree {
-    flex: 0 0 clamp(160px, calc(var(--dr-tree, .4) * 100%), calc(100% - 240px)); min-width: 0; min-height: 0;
-    display: flex; flex-direction: column; border-right: 1px solid var(--line);
+    flex: 0 0 var(--dr-tree, 35%); min-width: 0; min-height: 0;
+    display: flex; flex-direction: column; border-left: 1px solid var(--line);
   }
-  /* Zero net width (the negative margins): it straddles the tree's border. */
+  /* Zero net width (the negative margins): it straddles the explorer's border. */
   .dr-split {
-    flex: none; width: 7px; margin: 0 -4px 0 -3px; position: relative; z-index: 2;
+    flex: none; width: 7px; margin: 0 -3px 0 -4px; position: relative; z-index: 2;
     cursor: col-resize; touch-action: none;
   }
+  /* Narrow dock: the explorer is folded to a 36px icon strip (Explorer, Changes with a count, Go to file); the column
+     and its splitter wait until a strip button opens the column (data-folded is off then, and it pushes). */
+  #drawer[data-folded="1"] .dr-tree, #drawer[data-folded="1"] .dr-split { display: none; }
+  #drawer:not([data-folded="1"]) .dr-strip { display: none; }
+  .dr-strip {
+    flex: 0 0 36px; display: flex; flex-direction: column; align-items: center; gap: var(--sp-1); padding-top: 6px;
+    background: var(--panel); border-left: 1px solid var(--line); color: var(--muted);
+  }
+  .dr-strip .btn { position: relative; flex: none; }
+  .dr-count {
+    position: absolute; right: 0; bottom: 1px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px;
+    background: var(--accent); color: var(--on-fill); font: var(--w-semibold) var(--t-xs)/14px var(--font-ui); text-align: center;
+  }
+  .dr-count[hidden] { display: none; }
   .dr-edge:hover, .dr-edge.dragging, .dr-edge:focus-visible,
   .dr-split:hover, .dr-split.dragging, .dr-split:focus-visible {
     background: color-mix(in srgb, var(--accent) 40%, transparent);
   }
-  #drawer .dr-tree #files-pane { min-width: 0; }
-  #drawer .dr-tree #files-phd { padding-left: 8px; padding-right: 6px; }
-  #drawer .dr-tree .files-body { padding: 6px 6px 8px; }
+  /* The tree takes what the column has left (basis 0, so its content height never competes), and scrolls inside it. With basis
+     auto a tree taller than the column took height from the Changes section below (rows cut, then none, the toggle painted over
+     the root header). The section does not shrink either (#dock-changes). */
+  #drawer .dr-tree #files-pane { flex: 1 1 0; min-width: 0; min-height: 0; }
+  /* No side padding on the body: the tree's rows run edge to edge, so a hover or the selected row spans the column (mockup B1);
+     the root field above them (a host session's) keeps the 6px. */
+  #drawer .dr-tree .files-body { padding: 6px 0 8px; }
+  #drawer .dr-tree .ft-row { padding: 0 6px; }
   /* A box session's tree is its workspace only: no root picker (the root
      stays the session cwd, drawerRootTree). */
   #drawer[data-kind="files"][data-box="1"] .ft-row { display: none; }
   /* "Go to file…" (Ctrl+P): a filename jump at the top of the tree column. The
      list is fixed-position (set from the input's rect in drawerGoPosition) so
      the tree column does not clip it; .ft-opt/.ft-note rows are shared. */
-  .dr-goto { flex: none; padding: 6px 8px 0; }
+  .dr-goto { flex: none; display: flex; align-items: center; gap: var(--sp-1); padding: 6px 8px 0; }
+  /* The field and its chord (Ctrl P) as a chip inside it, gone once the field is used (focused or holding text). New file and
+     the ⋯ are the kit's ghost icon buttons beside it. */
+  .dr-gofield { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
+  .dr-gokbd {
+    position: absolute; right: 5px; top: 50%; transform: translateY(-50%); height: 16px; min-width: 0; padding: 0 4px;
+    pointer-events: none;
+  }
+  .dr-gokbd:empty, #drawer-goto-in:focus ~ .dr-gokbd, #drawer-goto-in:not(:placeholder-shown) ~ .dr-gokbd { display: none; }
+  #drawer-goto-in:placeholder-shown { padding-right: 56px; }
+  .dr-goto .btn { flex: none; }
+  #dock-newfile[hidden] { display: none; }
+  /* The explorer column the folded strip opened is transient (Esc folds it): its top row carries a visible fold control,
+     drawn only then (app.js paintDrawerLayout sets data-tree-open). The chevron and bar point at the strip's edge. */
+  #drawer-tree-fold { display: none; flex: none; }
+  #drawer[data-tree-open="1"] #drawer-tree-fold { display: inline-flex; }
   #drawer-goto-in {
-    width: 100%; box-sizing: border-box; padding: 4px 7px; font: var(--t-sm) var(--font-ui);
+    flex: 1 1 auto; min-width: 0; width: 100%; box-sizing: border-box; padding: 4px 7px; font: var(--t-sm) var(--font-ui);
     color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl);
   }
   #drawer-goto-in::placeholder { color: var(--muted); }
@@ -1209,7 +1262,71 @@
     background: var(--panel); border: 1px solid var(--line); box-shadow: 0 8px 20px #0009;
   }
   #drawer-goto-list[hidden] { display: none; }
-  #drawer[data-noroot="1"] .dr-goto { display: none; }
+  /* No root, no field: only the fold control stays, and only while the column is the strip's transient open. */
+  #drawer[data-noroot="1"] .dr-goto > :not(#drawer-tree-fold) { display: none; }
+  #drawer[data-noroot="1"]:not([data-tree-open="1"]) .dr-goto { display: none; }
+  #drawer[data-noroot="1"] #drawer-tree-fold { margin-left: auto; }
+  /* --- the explorer's Changes section and root header (spec 5.4, mockup B1) -------------------------------------------- */
+  /* The section sits between the top row and the tree and is as tall as its rows, up to 45% of the column, then its list
+     scrolls (the header, toggle and branch row stay). It never shrinks for the tree: the tree is the one that gives way. Rows are the tree's size: they follow Settings' "File tree text size". */
+  #dock-changes {
+    flex: 0 0 auto; min-height: 0; max-height: 45%; display: flex; flex-direction: column;
+    border-bottom: 1px solid var(--line);
+  }
+  #dock-changes[hidden], .dk-branch[hidden], .dk-chg-note[hidden], .dk-legend[hidden], .dk-review[hidden] { display: none; }
+  .dk-chg-head { flex: none; display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; min-width: 0; }
+  .dk-chg-title {
+    flex: none; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
+    letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg);
+  }
+  .dk-chg-sub { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .dk-review { flex: none; font-size: var(--t-sm); line-height: var(--lh-sm); }
+  .dk-scope { flex: none; align-self: flex-start; margin: 0 10px 6px; }
+  .dk-branch {
+    flex: none; display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 10px 4px; min-width: 0; white-space: nowrap;
+    font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted);
+  }
+  /* A branch name is isolated for bidirectional text, so a format character in it cannot reorder the arrow or the counts. */
+  .dk-br-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; color: var(--fg); }
+  .dk-br-sep { flex: none; }
+  .dk-chg-note { flex: none; margin: 0; padding: 2px 10px 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .dk-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
+  /* One changed file: the type icon, the name, its folder (the part that gives way), the counts and the letter. The name keeps
+     its width and the folder takes what is left. The 2px bar on the left edge is the session bar, the one the tree rows wear. */
+  .dk-row {
+    position: relative; box-sizing: border-box; width: 100%; min-height: 22px; display: flex; align-items: center; gap: 6px;
+    padding: 0 10px; border: 0; background: transparent; color: var(--fg); font: inherit; text-align: left; white-space: nowrap; cursor: pointer;
+  }
+  .dk-row:hover { background: var(--hover); }
+  .dk-row:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-mine::before { content: ""; position: absolute; left: 0; top: 3px; bottom: 3px; width: 2px; border-radius: 1px; background: var(--accent); }
+  .dk-nm { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .dk-dir { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--t-sm); color: var(--muted); }
+  .dk-ct { flex: none; display: inline-flex; gap: 4px; font: var(--w-medium) var(--t-xs)/1 var(--font-mono); color: var(--muted); }
+  .dk-add { color: var(--ok); }
+  .dk-del { color: var(--danger); }
+  .dk-row .dk-st { min-width: 12px; text-align: center; }
+  .dk-more { padding: 3px 10px; font-size: var(--t-sm); color: var(--muted); }
+  .dk-legend { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 10px 8px 12px; font-size: var(--t-xs); line-height: var(--lh-xs); color: var(--muted); }
+  .dk-legend i { flex: none; width: 2px; height: 10px; border-radius: 1px; background: var(--accent); }
+  .dk-legend span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The root header: the folder's name, then its path. A click shows the root field (today's picker) under it; a box session's
+     tree is its workspace only, so there is nothing to edit. */
+  .dk-root {
+    flex: none; box-sizing: border-box; width: 100%; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 2px;
+    border: 0; background: transparent; color: var(--fg); text-align: left; cursor: pointer;
+  }
+  .dk-root:hover { background: var(--hover); }
+  #drawer[data-box="1"] .dk-root { cursor: default; }
+  #drawer[data-box="1"] .dk-root:hover { background: transparent; }
+  .dk-root-name {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-xs); line-height: var(--lh-xs);
+    font-weight: var(--w-semibold); letter-spacing: var(--track-caps); text-transform: uppercase;
+  }
+  .dk-root-path { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* Today's root field stays in the DOM (the picker is wired to it) and is shown only while the header is being edited. */
+  #drawer .dr-tree:not([data-rootedit="1"]) .ft-row { display: none; }
+  #drawer[data-noroot="1"] #dock-changes, #drawer[data-noroot="1"] .dk-root { display: none; }
   /* A session workspace the fs API refuses is never a root (S1): the column
      says so instead of showing whatever tree was there before. */
   .dr-tnote { display: none; margin: 0; padding: 14px 12px; color: var(--muted); font-size: var(--t-sm); line-height: 1.5; }
@@ -1220,6 +1337,96 @@
   .dr-vhost { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .dr-vhost[hidden], .dr-vempty[hidden] { display: none; }
   .dr-vempty { flex: 1; padding: 18px 14px; color: var(--muted); font-size: var(--t-sm); }
+  /* --- the dock's editor tabs and breadcrumbs (spec 5.4, mockup B1) -------- */
+  /* One strip per session, over the crumbs and the viewer. The tabs scroll sideways when there are more than fit
+     (dockstrip.js turns a plain wheel into that); the actions area beside them (#dock-acts, the Full toggle) never
+     shrinks, so nothing the bar offers is ever pushed out. With no tab the bar is not drawn, so Full mode is offered
+     only with a file open; once on, the agent strip's Show terminal and Esc are the way out whatever is open. The
+     active tab takes the viewer's own --bg and an accent underline, so it reads as the file below it. */
+  .dk-bar { flex: none; display: flex; align-items: stretch; min-width: 0; height: var(--h-lg); background: var(--panel); border-bottom: 1px solid var(--line); }
+  .dk-bar[hidden], .dk-crumbs[hidden], .dk-edited[hidden] { display: none; }
+  .dk-tabs { position: relative; flex: 1 1 auto; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+  .dk-acts { flex: none; display: flex; align-items: center; gap: var(--sp-1); padding: 0 6px; }
+  .dk-acts:empty { display: none; }
+  /* Full / Exit full: the kit's small button, its icon and word on one line. Exit full wears the accent border (mockup B5). Forced
+     Full mode has no tab-row toggle: its Show terminal is the agent strip's, shown whenever the dock is in Full mode, and two
+     buttons for one action are one too many. The actions area goes with the button, so its padding is no empty gap. */
+  #drawer-max { flex: none; }
+  #drawer[data-max="1"] #drawer-max { border-color: var(--accent); }
+  #drawer[data-forced="1"] #dock-acts { display: none; }
+  .dk-tab {
+    position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; max-width: 220px; padding: 0 6px 0 10px;
+    border-right: 1px solid var(--line); color: var(--muted); font: var(--w-medium) var(--t-sm)/var(--lh-sm) var(--font-ui);
+    white-space: nowrap; cursor: pointer; user-select: none;
+  }
+  .dk-tab:hover { background: var(--hover); color: var(--fg); }
+  .dk-tab-on, .dk-tab-on:hover { background: var(--bg); color: var(--fg); }
+  .dk-tab-on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); }
+  .dk-tab:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  /* The preview tab, the one the next single click replaces, is italic (a double-click, an edit or a save keeps it). */
+  .dk-prev .dk-name { font-style: italic; }
+  .dk-ic { flex: none; width: 2ch; text-align: center; font-family: "Symbols Nerd Font"; color: var(--muted); }
+  /* The right padding keeps an italic name's last slanted letter inside the clip. */
+  .dk-name { min-width: 0; padding-right: 2px; overflow: hidden; text-overflow: ellipsis; }
+  /* The git letter, in the tree's colours (app.css .ft-git-*). */
+  .dk-st { flex: none; font: var(--w-semibold) var(--t-xs)/1 var(--font-mono); }
+  .dk-st:empty { display: none; }
+  .dk-st-m { color: var(--accent); }
+  .dk-st-a, .dk-st-u { color: var(--ok); }
+  .dk-st-c, .dk-st-d { color: var(--danger); }
+  /* A Changes row for a file the agent just edited, before git has answered: a muted "…" where the letter will be. */
+  .dk-prov { color: var(--muted); }
+  /* A dirty tab shows a dot where its close button is; under the pointer (or with the keyboard on its button) the close
+     button comes back, because a tab with an edit must still be closable by hand (it asks first). */
+  .dk-x {
+    flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+    border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font: var(--t-xs)/1 var(--font-ui); cursor: pointer;
+    visibility: hidden;
+  }
+  .dk-tab:hover .dk-x, .dk-tab-on .dk-x, .dk-x:focus-visible { visibility: visible; }
+  .dk-x:hover { background: var(--raise); color: var(--fg); }
+  .dk-x:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-dirty { display: none; flex: none; width: 8px; height: 8px; margin: 0 5px; border-radius: 50%; background: var(--fg); }
+  .dk-tab[data-dirty="1"] .dk-dirty { display: block; }
+  .dk-tab[data-dirty="1"] .dk-x { display: none; }
+  .dk-tab[data-dirty="1"]:hover .dk-x, .dk-tab[data-dirty="1"] .dk-x:focus-visible { display: inline-flex; }
+  .dk-tab[data-dirty="1"]:hover .dk-dirty { display: none; }
+  /* The crumbs: the path from the workspace root, each a button that shows that folder in the tree; the last is the file
+     and is never cut before the folders are. On the right, who edited it and when (text only; empty draws nothing). */
+  .dk-crumbs {
+    flex: none; display: flex; align-items: center; gap: var(--sp-3); min-width: 0; height: 24px; padding: 0 10px;
+    background: var(--bg); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); white-space: nowrap;
+  }
+  .dk-trail { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; overflow: hidden; }
+  .dk-crumb {
+    flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 2px; border: 0; border-radius: var(--r-chip);
+    background: transparent; color: inherit; font: inherit;
+  }
+  .dk-crumb:last-child { flex: 0 0 auto; max-width: 100%; color: var(--fg); } /* the file keeps its width (a share of the squeeze, however small, would put an ellipsis on it); only a name wider than the row is cut */
+  button.dk-crumb { cursor: pointer; }
+  button.dk-crumb:hover { background: var(--raise); color: var(--fg); }
+  button.dk-crumb:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-sep { flex: none; padding: 0 3px; }
+  .dk-edited { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+  .dk-edited::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  /* Every name the dock draws from the workspace or from git (tab names, crumbs, Changes rows, tree rows, the root header, and the
+     branch name above) is isolated for bidirectional text: a file or folder name can hold Unicode bidi format characters, which
+     would otherwise reorder the counts, the git letter or the separators drawn next to it. */
+  .dk-name, .dk-crumb, .dk-nm, .dk-dir, .dk-root-name, .dk-root-path, #drawer .ft-name { unicode-bidi: isolate; }
+  /* The agent strip (Full mode only, mockup B5): the session stays in view while the terminal is covered. One 36px line at the
+     bottom of the dock: the dot, the name, the status words, the last thing the agent did (the one part that gives way: it is
+     cut with an ellipsis, so the line never wraps and the strip never changes height) and Show terminal with its chord. */
+  .dk-agent {
+    flex: none; display: none; align-items: center; gap: 10px; height: 36px; padding: 0 10px 0 14px; min-width: 0;
+    background: var(--panel); border-top: 1px solid var(--line); white-space: nowrap;
+    font-size: var(--t-sm); line-height: var(--lh-sm);
+  }
+  #drawer[data-max="1"] .dk-agent { display: flex; }
+  .dk-ag-name { flex: 0 1 auto; min-width: 0; max-width: 30%; overflow: hidden; text-overflow: ellipsis; font-weight: var(--w-semibold); }
+  .dk-ag-st { flex: none; color: var(--muted); }
+  .dk-ag-st:empty { display: none; }
+  .dk-ag-last { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: var(--t-xs); color: var(--fg); }
+  .dk-agent .btn { flex: none; }
   /* Long lines scroll, never wrap. */
   /* ... unless Wrap lines is on (id + class here beats app.css's .viewer-wrap rule, so say it again). */
   #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; }
@@ -1232,18 +1439,64 @@
   /* No match: app.css turns the field's border red (0,3,0), which the kit's field focus (0,3,2) would repaint accent while the
      user is still typing in it. Keep the red, with 2px of accent outside it (0,4,0 beats the kit rule). */
   .vf-bar.vf-none .vf-input:focus-visible { border-color: var(--danger); box-shadow: 0 0 0 2px var(--accent); }
-  /* 1.5ch per depth level instead of 2ch: every prefix is two characters a
-     level, so a uniform squeeze keeps the │ columns aligned across rows. */
-  #drawer .ft-branch { letter-spacing: -.25ch; }
-  /* A file (or a folder above one) the agent changed: a dot after the name. */
-  /* Demoted behind the git badge (gitstatus.js): smaller, after it, and alone on
-     a file git has no mark for (edited then reverted, or outside a repo). It is a
-     6px circle drawn by ::before, not the ● glyph at a 6px font size: the type
-     scale has no 6px step, and a shape does not move with the font. filetree.js
-     still builds it with the glyph as text and a title, so the text is pushed out
-     of the 6px box and clipped, and the title stays for hover and assistive tech. */
-  #drawer .ft-chg { position: relative; flex: none; width: 6px; height: 6px; margin: 0 3px; overflow: hidden; text-indent: 100%; white-space: nowrap; color: var(--accent); }
-  #drawer .ft-chg::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: currentColor; }
+  /* --- the dock's explorer tree (spec 5.4, mockup B1) ---------------------------------------------------------------------
+     VS Code's explorer rows: Inter 13px in 22px rows, a chevron on a folder, one 1px guide per ancestor level where the phone
+     draws ├ └, the git letter at the right edge and a tinted name for what changed. Every rule hangs from #drawer, so the
+     phone's tree (app.css: mono rows, the box-drawing branch) is untouched. ftRenderDir sets --lvl, the depth, on each row
+     and on the box that holds a level (its "Loading…" line). One indent step is 14px: the chevron's width, so a guide
+     runs down the middle of its parent's chevron (8px of row padding + 14 * level + 7px), whatever the text size.
+     Settings' "File tree text size" (--fs-tree, 12 by default on desktop) stays live: the text is 13/12 of it and the row's
+     line 22/12 of it, so the default is exactly 13px text in 22px rows (the spec's look) and a larger setting makes the rows
+     grow with the text (min-height is the 22px floor for a smaller one). */
+  #drawer #filetree { font-family: var(--font-ui); font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
+  /* position: relative makes the row the containing block of its visually-hidden spans (below): without it that is #drawer,
+     outside the #filetree scroller, and a span on a row past the tree's visible part widens the whole page's scroll height. */
+  #drawer .ft-node {
+    position: relative; box-sizing: border-box; min-height: 22px; gap: 4px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px);
+    background-image: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 14px);
+    background-repeat: no-repeat; background-position: 15px 0; background-size: calc(var(--lvl, 0) * 14px) 100%;
+  }
+  #drawer #filetree .pending-line { box-sizing: border-box; min-height: 22px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px + 18px); line-height: inherit; }
+  /* The hover and selected washes are background-color only: app.css's `background:` shorthand on the same rows would reset
+     the image, and the guides would vanish under the pointer. Hover is the kit's, a half step under the selected row's. The
+     selected row is mockup B1's: the accent tint and a 1px ring a few steps brighter (the ring is also what stays visible when
+     the session bar sits beside it, below). */
+  #drawer .ft-node:hover { background-color: var(--hover); }
+  #drawer .ft-node.ft-sel {
+    background-color: var(--accent-tint);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, var(--accent-tint));
+  }
+  #drawer .ft-branch { display: none; }
+  /* The chevron, drawn by the row's ::before; a file's is empty, the same width, so every icon starts at the same column. */
+  #drawer .ft-node::before { content: ""; flex: none; width: 14px; text-align: center; color: var(--muted); }
+  #drawer .ft-node.dir::before { content: "\203A"; font-size: calc(var(--fs-tree) * 15 / 12); }
+  #drawer .ft-node.dir[aria-expanded="true"]::before { transform: rotate(90deg); }
+  /* A folder's name is the text colour, not app.css's accent, so that the tint below can mean "something changed in here". */
+  #drawer .ft-node.dir { color: var(--fg); }
+  /* The git letter keeps app.css's colours (M accent, A and U ok, D and C red) and takes the kit's mono step. */
+  #drawer .ft-git { min-width: 12px; padding: 0; font: var(--w-semibold) var(--t-xs)/1 var(--font-mono); }
+  /* Changed names: the colour of the letter, a half step toward the text colour (mockup B1's #a9c9ff and #8fe0b4; conflicts and
+     deletions are red, as their letters are). A folder with changes below it is accent whatever the letter under it is (it
+     comes after the file rules and is the same strength), except one whose strongest change is a conflict or a
+     deletion, which is red (its selector is stronger, so the order does not matter). */
+  #drawer .ft-node:has(> .ft-git-m) .ft-name { color: color-mix(in srgb, var(--accent) 50%, var(--fg)); }
+  #drawer .ft-node:has(> .ft-git-u, > .ft-git-a) .ft-name { color: color-mix(in srgb, var(--ok) 50%, var(--fg)); }
+  #drawer .ft-node:has(> .ft-git-c) .ft-name { color: color-mix(in srgb, var(--red) 50%, var(--fg)); }
+  #drawer .ft-node:has(> .ft-git-dot) .ft-name { color: color-mix(in srgb, var(--accent) 50%, var(--fg)); }
+  #drawer .ft-node:has(> .ft-git-dot:is(.ft-git-c, .ft-git-d)) .ft-name { color: color-mix(in srgb, var(--red) 50%, var(--fg)); }
+  /* The folder's dot and the session's span are not drawn (the tint and the bar say it), but they stay for assistive technology:
+     visually hidden, not display:none, so the role="img" and the label ("N changes inside", "Edited by this session's agent")
+     are still read. The same words are in the name's hover text (filetree.js ftNameTitle). */
+  #drawer .ft-git-dot, #drawer .ft-chg {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  /* A file (or a folder above one) this session's agent changed (Activity's files, filesdrawer.js): the session bar, the same
+     2px accent edge the Changes list wears. Git stays the primary signal, so the bar is only an edge and the name keeps the
+     git tint. filetree.js still builds the .ft-chg span (it is how it finds and repaints the mark), visually hidden above. */
+  #drawer .ft-node:has(> .ft-chg) { box-shadow: inset 2px 0 0 var(--accent); }
+  #drawer .ft-node.ft-sel:has(> .ft-chg) {
+    box-shadow: inset 2px 0 0 var(--accent), inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, var(--accent-tint));
+  }
   /* "The agent may change this file again": neutral with an accent edge, never
      amber or red (D23). Shown wherever a desktop viewer edits. */
   .edit-warn {

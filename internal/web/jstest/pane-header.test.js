@@ -217,7 +217,7 @@ test("a terminal pane's tabs are Terminal, Activity, Access; Files is a button a
   const [files] = h.byClass("ph-files");
   assert.strictEqual(files.tag, "button");
   assert.strictEqual(files.className, "btn btn-ghost btn-sm ph-files");
-  assert.strictEqual(files.title, "Files drawer (Ctrl+Shift+E)");
+  assert.strictEqual(files.title, "Files dock (Ctrl+Shift+E)");
   assert.strictEqual(files.attrs["aria-label"], "Files");
   assert.strictEqual(files.attrs["aria-pressed"], "false");
   assert.strictEqual(files.dataset.k, "files");

@@ -210,6 +210,8 @@ function setFtRoot(path) {
   // Keep a collapsed Files bar's root readout live even though the tree
   // itself may be hidden — this is the one place the root actually changes.
   if (typeof renderCollapsedSummaries === "function") renderCollapsedSummaries();
+  // The dock's root header names the root, and its Changes section is for one root: both follow at once.
+  if (typeof dockChangesRender === "function") dockChangesRender();
 }
 let lastSyncedKey = null;       // which tab the tree is currently following (see treeFollowTarget)
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
@@ -219,11 +221,12 @@ let ftExpanded = new Set();     // absolute dir paths the user has opened; see t
 let ftRootReadOnly = false;
 function ftRootIsReadOnly() { return ftRootReadOnly; }
 // ftApplyReadOnly hides the toolbar buttons that write into the root (new folder,
-// upload) while its listing is read-only. The `hidden` attribute needs the
-// !important rule in app.css to win against the desktop drawer's and the phone's
-// own display rules; refresh and the palette stay.
+// upload, and the dock's New file) while its listing is read-only. The `hidden`
+// attribute needs the !important rule in app.css to win against the phone's own
+// display rules (desktop.css gives the dock's button its own); refresh and the
+// palette stay.
 function ftApplyReadOnly(ro) {
-  for (const id of ["ft-newdir", "ft-upload"]) {
+  for (const id of ["ft-newdir", "ft-upload", "dock-newfile"]) {
     const el = document.getElementById(id);
     if (el) el.hidden = !!ro;
   }
@@ -237,24 +240,55 @@ function ftApplyReadOnly(ro) {
 const ftRowPaths = new WeakMap();
 // A directory row's expand control and state, for ftReveal (see setOpen).
 const ftRowOpeners = new WeakMap();
+// A row's menu opener, (at?) => void: the right-click in the dock opens it at the pointer (ftTreeContextMenu).
+const ftRowMenus = new WeakMap();
+// What the dock's session bar says in words: the mark is colour only, so the span carries the label (role img, aria-label)
+// and the hover text, wherever it is drawn.
+const FT_CHG_LABEL = "Edited by this session's agent";
 function ftMarkRow(row, path, set) {
   const have = row.querySelector(":scope > .ft-chg");
-  if (!set || !set.has(path)) { if (have) have.remove(); return; }
+  if (!set || !set.has(path)) { if (have) { have.remove(); ftNameTitle(row); } return; }
   if (have) return;
   const dot = document.createElement("span");
   dot.className = "ft-chg";
   dot.textContent = "\u25CF";
-  dot.title = "edited by this session's agent";
+  dot.title = FT_CHG_LABEL;
+  dot.setAttribute("role", "img");
+  dot.setAttribute("aria-label", FT_CHG_LABEL);
   // After the git badge (gitstatus.js) when there is one: the badge is the
   // fact, this dot is the lesser hint, and it stays alone where git has no mark.
   const anchor = row.querySelector(":scope > .ft-git, :scope > .ft-git-dot") || row.querySelector(":scope > .ft-name");
   if (anchor) anchor.after(dot); else row.append(dot);
+  ftNameTitle(row);
+}
+// ftNameTitle sets the hover text of a row: on its name, the path and then what marks the row (a folder's "N changes inside"
+// from git, the session's edit), and on the row itself the marks alone, for the parts of the row that are not the name. The
+// dock draws those marks as a tint and a bar, not as the dot the title used to hang from, so the words live here. gitstatus.js
+// calls it when it paints or clears a folder's dot. Once the tree is not the dock's (the dock closed or changed kind, or the
+// viewport crossed to the phone, which clears the marks) the notes are gone with the marks: the name is the path alone and the
+// row has no title, which is also what the phone has (its dot is drawn and carries its own title).
+function ftNameTitle(row) {
+  const path = ftRowPaths.get(row);
+  const name = row.querySelector(":scope > .ft-name");
+  if (!path || !name) return;
+  if (!ftDocked()) {
+    name.title = shortPath(path);
+    if (row.title) row.title = "";
+    return;
+  }
+  const notes = [".ft-git-dot", ".ft-chg"].map((sel) => row.querySelector(":scope > " + sel)).filter(Boolean).map((el) => el.title).filter(Boolean);
+  name.title = [shortPath(path), ...notes].join("\n");
+  row.title = notes.join("\n");
 }
 function ftPaintChanged(set) {
   if (!ftTreeEl) return;
   for (const row of ftTreeEl.querySelectorAll(".ft-node")) {
     const p = ftRowPaths.get(row);
-    if (p) ftMarkRow(row, p, set);
+    if (!p) continue;
+    ftMarkRow(row, p, set);
+    // Every row, not only one whose span came or went: a folder's git dot says its words through this title, and the title
+    // may have been reset to the path alone while the tree was not the dock's.
+    ftNameTitle(row);
   }
 }
 
@@ -295,6 +329,21 @@ function ftRowModel(row) {
   return { dir: ex !== null, open: ex === "true", level: Number(row.getAttribute("aria-level")) || 1 };
 }
 
+// ftDocked: the tree is the desktop Files dock's (filesdrawer.js loads later, so it is asked through typeof). The dock's
+// clicks, selection and right-click menu exist only then; the phone's tree is what it always was.
+function ftDocked() {
+  return typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks();
+}
+
+// ftSelect highlights `row` (.ft-sel, and aria-selected for assistive technology) and no other row of its tree: the click's
+// mark in the dock, and the row Reveal in tree landed on. One row at a time, and selecting the selected row again leaves it selected (a double-click selects twice).
+function ftSelect(row) {
+  const tree = row.closest ? row.closest('[role="tree"]') : null;
+  if (tree) for (const old of tree.querySelectorAll(".ft-sel")) { old.classList.remove("ft-sel"); old.removeAttribute("aria-selected"); }
+  row.classList.add("ft-sel");
+  row.setAttribute("aria-selected", "true"); // the screen reader's "selected", beside the sighted tint
+}
+
 // `st` is the root render's own bookkeeping, handed down to the folders it auto-opens: every row drawn under
 // it, in visible order, so the one Tab stop is chosen once the whole subtree is there.
 async function ftRenderDir(path, container, prefix, st) {
@@ -306,6 +355,9 @@ async function ftRenderDir(path, container, prefix, st) {
   // subtree loads level by level, each into its own box. It is gone before the
   // entries or the error row are appended.
   container.style.setProperty("--ft-indent", prefix.length + "ch");
+  // The same depth as a number, for the dock's tree (desktop.css): its rows' indent and guides, and this pending line,
+  // are all calc() on --lvl.
+  container.style.setProperty("--lvl", String(prefix.length / 2));
   const done = pendingRegion(container, "Loading…");
   let data, failure = null;
   try { data = await api("/api/fs/list?path=" + encodeURIComponent(path)); }
@@ -328,6 +380,7 @@ async function ftRenderDir(path, container, prefix, st) {
     const full = path.replace(/\/$/, "") + "/" + ent.name;
     const row = document.createElement("div");
     row.className = "ft-node";
+    row.style.setProperty("--lvl", String(prefix.length / 2));
     // Depth is drawn now, not padded. The branch is its own element for the same
     // reason the icon is: the label's textContent is rewritten on every toggle.
     const branch = document.createElement("span");
@@ -381,7 +434,11 @@ async function ftRenderDir(path, container, prefix, st) {
     // A menu button: ftShowMenu sets aria-expanded while its menu is open, closeRowMenu puts it back.
     more.setAttribute("aria-haspopup", "menu");
     more.setAttribute("aria-expanded", "false");
-    more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir, ro); };
+    // The one way this row's menu opens: the ⋯, the menu key (which presses the ⋯) and the dock's right-click, which
+    // adds where the pointer is (`at`).
+    const openMenu = (at) => openRowMenu(more, full, ent.name, ent.is_dir, ro, at);
+    more.onclick = (e) => { e.stopPropagation(); openMenu(); };
+    ftRowMenus.set(row, openMenu);
     row.append(more);
     ftRowPaths.set(row, full);
     if (st && st.rows) st.rows.push(row);
@@ -428,7 +485,7 @@ async function ftRenderDir(path, container, prefix, st) {
           ftRoveEnsure(row.closest ? row.closest('[role="tree"]') : null);
         }
       };
-      row.onclick = () => setOpen(!open);
+      row.onclick = () => { if (ftDocked()) ftSelect(row); setOpen(!open); };
       ftRowOpeners.set(row, { setOpen, isOpen: () => open });
       // Each directory row is its own drop target and stops propagation, so it
       // wins over the whole-tree zone underneath it.
@@ -464,12 +521,16 @@ async function ftRenderDir(path, container, prefix, st) {
         await openChildren();
       }
     } else {
-      // The desktop Files drawer shows the file beside the tree instead of in a
-      // pane (filesdrawer.js; typeof-guarded, it loads later). Mobile: openFile.
+      // The desktop Files dock shows the file beside the tree instead of in a
+      // pane (filesdrawer.js; typeof-guarded, it loads later): a single click opens
+      // a preview tab, which the next single click replaces, and a double-click
+      // keeps the tab. Mobile: openFile, and a double-click does nothing more.
       row.onclick = () => {
-        if (typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks()) drawerShowFile(full);
+        if (ftDocked()) { ftSelect(row); drawerShowFile(full); }
         else openFile(full);
       };
+      // The two clicks of a double-click already selected the row: selecting again changes nothing.
+      row.ondblclick = () => { if (ftDocked()) drawerShowFile(full, { preview: false }); };
     }
   }
   if (rootCall) {
@@ -534,7 +595,9 @@ async function ftLoadRoot(opts) {
 // `.menu-label`, icon rows in groups with a rule between two groups (ftMenuGroups), Delete… red and alone
 // last; it takes focus on its first row, and the arrow keys, Escape and a chosen row hand focus back to the
 // tree row it hung from. The phone keeps the plain buttons and rules it has always had.
-function openRowMenu(anchor, path, name, isDir, readOnly) {
+// `at` ({x, y}, viewport px) is a right-click's pointer: the menu's top-left corner goes there instead of under the ⋯
+// (`anchor`, still the row's ⋯, which says it is open and gets focus back).
+function openRowMenu(anchor, path, name, isDir, readOnly, at) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
   const desktop = !mobileActive(window.innerWidth);
@@ -579,7 +642,7 @@ function openRowMenu(anchor, path, name, isDir, readOnly) {
       if (i > 0) nodes.push(kitMenuSep());
       for (const id of group) nodes.push(kitMenuButton(rowMenuLabel(id, isDir), ROW_MENU_ICONS[id], id === "delete", () => { closeRowMenu(true); act[id](); }));
     });
-    ftShowMenu(anchor, nodes, false, actionsLabel(isDir));
+    ftShowMenu(anchor, nodes, false, actionsLabel(isDir), at);
     const first = menu.querySelector(".menu-item");
     if (first) first.focus();
     return;
@@ -603,6 +666,9 @@ function openRowMenu(anchor, path, name, isDir, readOnly) {
 // `kitLabel` (a string) makes it the kit's menu: the `.menu` container (desktop.css places it) with
 // role="menu" named by `kitLabel`. Without it the element is the plain popover it was, so the viewer's
 // line-number menu, which shares this element, never inherits a tree menu's class and role.
+// `at` ({x, y}, viewport px) puts the menu's top-left corner at the pointer instead (a right-click), kept 8px inside
+// the viewport: a menu that would run off the right or bottom edge slides back so all of it shows. `anchor` still names
+// the row for aria-expanded and for the focus the menu gives back.
 // ftMenuFrom is where the open menu hangs from, the tree row holding `anchor` (null for a menu that hangs
 // from none, the viewer's), for closeRowMenu(true) to give focus back to.
 let ftMenuFrom = null;
@@ -612,11 +678,14 @@ let ftMenuMore = null;
 function ftMoreExpanded(more, on) {
   if (more) more.setAttribute("aria-expanded", on ? "true" : "false");
 }
-function ftShowMenu(anchor, nodes, alignLeft, kitLabel) {
+function ftShowMenu(anchor, nodes, alignLeft, kitLabel, at) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
   ftMoreExpanded(ftMenuMore, false);
-  ftMenuMore = anchor.classList && anchor.classList.contains("ft-more") ? anchor : null;
+  // A button that is no row's ⋯ may own the menu too (the dock's top-row ⋯, data-menu-from): it says it is open and gets
+  // focus back like a row does.
+  const owner = !!anchor.dataset && anchor.dataset.menuFrom === "1";
+  ftMenuMore = anchor.classList && (anchor.classList.contains("ft-more") || owner) ? anchor : null;
   ftMoreExpanded(ftMenuMore, true);
   menu.replaceChildren(...nodes);
   const kit = typeof kitLabel === "string";
@@ -629,11 +698,16 @@ function ftShowMenu(anchor, nodes, alignLeft, kitLabel) {
     menu.removeAttribute("aria-label");
   }
   const row = anchor.closest ? anchor.closest(".ft-node") : null;
-  ftMenuFrom = row ? { row, path: ftRowPaths.get(row) || "" } : null;
+  ftMenuFrom = row ? { row, path: ftRowPaths.get(row) || "" } : owner ? { row: anchor, path: "" } : null;
 
   menu.classList.add("open"); // must be visible before it can be measured
-  const r = anchor.getBoundingClientRect();
   const w = menu.offsetWidth;
+  if (at && Number.isFinite(at.x) && Number.isFinite(at.y)) {
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, at.x)) + "px";
+    menu.style.top = Math.max(8, Math.min(window.innerHeight - menu.offsetHeight - 8, at.y)) + "px";
+    return;
+  }
+  const r = anchor.getBoundingClientRect();
   menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, alignLeft ? r.left : r.right - w)) + "px";
   // Rows sit anywhere in the viewport, unlike the spawn menu's header anchor, so
   // a menu opened near the bottom must flip above its row instead of clipping.
@@ -730,10 +804,42 @@ async function promptMkdir(dir) {
     confirmLabel: "Create",
   });
   if (name === null || !name) return;
-  const res = await fsMkdir(dir, name);
+  let res;
+  try { res = await fsMkdir(dir, name); } catch (_) { showToast("Could not create: network error", { error: true }); return; } // fsPost rejects when the request never completes
   if (!res.ok) { showToast("Could not create: " + fsErrText(res), { error: true }); return; }
   showToast("Created " + name);
   ftLoadRoot({ fresh: true });
+}
+
+// promptNewFile makes an empty file in `dir` and opens it as a pinned tab of the dock, ready to be typed into (the dock's
+// New file; a quick fix, not IDE work). The server refuses a name that exists in any form, so a duplicate is told apart
+// from a bad name by its 409. The tree is read again first, so the new row is there when the tab opens.
+async function promptNewFile(dir) {
+  if (!dir) return;
+  const name = await askPrompt({
+    title: "New file",
+    label: "File name",
+    placeholder: "notes.md",
+    confirmLabel: "Create",
+  });
+  if (name === null || !name) return;
+  let res;
+  try { res = await fsNewFile(dir, name); } catch (_) { showToast("Could not create: network error", { error: true }); return; } // fsPost rejects when the request never completes
+  if (res.status === 409) { showToast("Could not create: name already exists", { error: true }); return; }
+  if (!res.ok) { showToast("Could not create: " + fsErrText(res), { error: true }); return; }
+  showToast("Created " + name);
+  await ftLoadRoot({ fresh: true });
+  const path = res.data && typeof res.data.path === "string" ? res.data.path : "";
+  if (!path) return;
+  // On the phone there is no dock: the file opens where a tree row's click would.
+  if (typeof drawerShowFile === "function" && ftDocked()) drawerShowFile(path, { preview: false });
+  else if (typeof openFile === "function") openFile(path);
+}
+
+// ftFsTry runs one fs request of a mutation. fsPost rejects when the request never completes, which reads as a refused request
+// (the toast, the same words as New file and New folder), not as an unhandled rejection. null is "no answer".
+async function ftFsTry(verb, request) {
+  try { return await request(); } catch (_) { showToast("Could not " + verb + ": network error", { error: true }); return null; }
 }
 
 async function promptRename(path, name) {
@@ -744,7 +850,8 @@ async function promptRename(path, name) {
     confirmLabel: "Rename",
   });
   if (next === null || !next || next === name) return;
-  let res = await fsRename(path, next);
+  let res = await ftFsTry("rename", () => fsRename(path, next));
+  if (!res) return;
   // A protected folder must not be renamable around its delete gate. mustMatch
   // keeps the confirm button disabled until the typed name is exactly right, so
   // a confirmed dialog has already matched.
@@ -757,7 +864,8 @@ async function promptRename(path, name) {
       mustMatch: res.data.confirm_name,
     });
     if (typed === null) return;
-    res = await fsRename(path, next, typed);
+    res = await ftFsTry("rename", () => fsRename(path, next, typed));
+    if (!res) return;
   }
   if (!res.ok) { showToast("Could not rename: " + fsErrText(res), { error: true }); return; }
   // The old path is gone either way, so any viewer tab on it is stale, and its
@@ -772,7 +880,8 @@ async function promptRename(path, name) {
 // confirmDelete drives the server's two-step gate: the first request reports
 // what is inside, the second carries back the count the user actually saw.
 async function confirmDelete(path, name, isDir) {
-  let res = await fsDelete(path);
+  let res = await ftFsTry("delete", () => fsDelete(path));
+  if (!res) return;
   if (res.status === 409 && res.data && res.data.confirm_name) {
     // Protected: name what is inside as well as demanding the typed name. The
     // folders that earn this gate must not be the ones told the least.
@@ -788,7 +897,8 @@ async function confirmDelete(path, name, isDir) {
       mustMatch: d.confirm_name,
     });
     if (typed === null) return;
-    res = await fsDelete(path, { recursive: true, confirmName: typed, entries: d.entries || 0 });
+    res = await ftFsTry("delete", () => fsDelete(path, { recursive: true, confirmName: typed, entries: d.entries || 0 }));
+    if (!res) return;
   } else if (res.status === 409 && res.data) {
     const d = res.data;
     const okDelete = await askConfirm({
@@ -798,7 +908,8 @@ async function confirmDelete(path, name, isDir) {
       danger: true,
     });
     if (!okDelete) return;
-    res = await fsDelete(path, { recursive: true, entries: d.entries || 0 });
+    res = await ftFsTry("delete", () => fsDelete(path, { recursive: true, entries: d.entries || 0 }));
+    if (!res) return;
   }
   if (!res.ok) { showToast("Could not delete: " + fsErrText(res), { error: true }); return; }
   if (typeof closeViewersFor === "function") closeViewersFor(path);
@@ -967,8 +1078,7 @@ async function ftReveal(path) {
   }
   const file = ftRowFor(path);
   if (!file) return false;
-  for (const old of ftTreeEl.querySelectorAll(".ft-sel")) old.classList.remove("ft-sel");
-  file.classList.add("ft-sel");
+  ftSelect(file);
   ftRoveTo(file); // the revealed row is the tree's Tab stop (it was tabindex -1 and out of reach)
   file.scrollIntoView({ block: "nearest" });
   file.focus({ preventScroll: true });
@@ -1018,14 +1128,29 @@ function ftRowMenuOpen(row) {
   return true;
 }
 
-// ftTreeContextMenu: a contextmenu event whose target is a tree row itself is the keyboard's (the Menu key on a
-// platform that sends it to the focused element) or an assistive technology's (VoiceOver's VO+Shift+M): it opens the
-// row's menu as Shift+F10 does, and the browser's own is not also shown. A mouse right-click keeps the browser's menu
-// (button 2, and it lands on a part of the row more often than on the row), and the phone keeps what it had: desktop only.
+// ftTreeContextMenu: two kinds of contextmenu event reach the tree, desktop only.
+// A mouse right-click (button 2) on a row of the docked tree opens that row's menu at the pointer, as the explorer of an editor
+// does, and the browser's own is not also shown. So does a Ctrl+click on macOS, where the browser sends that as a contextmenu
+// with button 0 and ctrlKey (a keyboard's has neither). The pointer lands on a part of the row (the icon, the name, the git
+// letter) more often than on the row itself, so the row is found from the target with closest(). Selecting the row first shows
+// which one the menu acts on.
+// Anywhere else (the tree's empty space, a tree that is not the dock's) the browser keeps its menu.
+// An event whose target is a tree row itself, from no mouse button, is the keyboard's (the Menu key on a platform that sends it
+// to the focused element) or an assistive technology's (VoiceOver's VO+Shift+M): it opens the row's menu as Shift+F10 does, and
+// the browser's own is not also shown. The phone keeps what it had.
 function ftTreeContextMenu(e) {
   if (mobileActive(window.innerWidth)) return;
+  if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
+    const hit = e.target && e.target.closest ? e.target.closest(".ft-node") : null;
+    const open = hit && ftDocked() ? ftRowMenus.get(hit) : null;
+    if (!open) return;
+    e.preventDefault();
+    ftSelect(hit);
+    open({ x: e.clientX, y: e.clientY });
+    return;
+  }
   const row = e.target;
-  if (!row || !row.classList || !row.classList.contains("ft-node") || e.button === 2) return;
+  if (!row || !row.classList || !row.classList.contains("ft-node")) return;
   if (ftRowMenuOpen(row)) e.preventDefault();
 }
 
@@ -1132,6 +1257,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     iconFor, treeBranch, treeFollowTarget, rootableCwd, actionsLabel,
     listingReadOnly, rowMenuIds, rowMenuLabel, openRowMenu, ftApplyReadOnly, ftRenderDir,
-    ftKeyAction, ftMenuGroups,
+    ftKeyAction, ftMenuGroups, promptNewFile, promptMkdir, promptRename, confirmDelete,
   };
 }

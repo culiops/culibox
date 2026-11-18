@@ -135,27 +135,72 @@
     <main id="grid" class="empty">
       <div class="placeholder">Spawn or open a session. Panes appear here.</div>
     </main>
-    <aside id="drawer" aria-label="Session drawer" hidden>
-      <div id="drawer-edge" class="dr-edge" role="separator" aria-orientation="vertical" aria-label="Resize the drawer" tabindex="0" title="Drag to resize the drawer, double-click to reset"></div>
+    <aside id="drawer" aria-label="Files dock" hidden>
+      <div id="drawer-edge" class="dr-edge" role="separator" aria-orientation="vertical" aria-label="Resize the dock" tabindex="0" title="Drag to resize the dock, double-click to reset"></div>
       <div class="dr-head">
         <span id="drawer-title" class="dr-title">Files</span>
-        <span id="drawer-sess" class="dr-sess"></span>
+        <span id="drawer-sess" class="dr-sess"><span id="drawer-sess-dot" class="dot"></span><span id="drawer-sess-name" class="dr-sess-name"></span></span>
+        <span id="drawer-hint" class="dr-hint">follows the focused pane</span>
         <span class="dr-fill"></span>
-        <button id="drawer-max" type="button" title="Expand the drawer over the panes" aria-label="Expand the drawer" aria-pressed="false">&#9974;</button>
-        <button id="drawer-x" type="button" title="Close the drawer" aria-label="Close the drawer">&#10005;</button>
+        <button id="drawer-pin" type="button" class="btn btn-ghost btn-icon btn-sm" title="Keep the dock on this session" aria-label="Pin the dock to this session" aria-pressed="false"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/></svg></button>
+        <button id="drawer-x" type="button" title="Close the dock" aria-label="Close the dock">&#10005;</button>
       </div>
       <div id="drawer-body" class="dr-body">
+        <div id="drawer-viewer" class="dr-viewer">
+          <div id="dock-bar" class="dk-bar" hidden>
+            <div id="dock-tabs" class="dk-tabs" role="tablist" aria-label="Open files"></div>
+            <div id="dock-acts" class="dk-acts"><button id="drawer-max" type="button" class="btn btn-sm" title="Expand the dock over the panes"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span id="drawer-max-label">Full</span></button></div>
+          </div>
+          <div id="dock-crumbs" class="dk-crumbs" hidden>
+            <nav id="dock-trail" class="dk-trail" aria-label="File path"></nav>
+            <span id="dock-edited" class="dk-edited" hidden></span>
+          </div>
+          <div id="drawer-vhost" class="dr-vhost" hidden></div>
+          <div id="drawer-vempty" class="dr-vempty">Open a file from the tree, or click a path in the terminal</div>
+        </div>
+        <div id="drawer-split" class="dr-split" role="separator" aria-orientation="vertical" aria-label="Resize the file tree" aria-controls="drawer-tree" tabindex="0" title="Drag to resize the tree, double-click to reset"></div>
         <div id="drawer-tree" class="dr-tree">
           <div class="dr-goto">
-            <input id="drawer-goto-in" type="text" placeholder="Go to file…" title="Go to file" aria-label="Go to file" role="combobox" aria-expanded="false" aria-controls="drawer-goto-list" aria-autocomplete="list" autocomplete="off" spellcheck="false">
+            <div class="dr-gofield">
+              <input id="drawer-goto-in" type="text" placeholder="Go to file…" title="Go to file" aria-label="Go to file" role="combobox" aria-expanded="false" aria-controls="drawer-goto-list" aria-autocomplete="list" autocomplete="off" spellcheck="false">
+              <span id="drawer-goto-kbd" class="kbd dr-gokbd" aria-hidden="true"></span>
+            </div>
+            <button id="dock-newfile" type="button" class="btn btn-ghost btn-icon btn-sm" title="New file" aria-label="New file"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 12v6M9 15h6"/></svg></button>
+            <button id="dock-more" type="button" class="btn btn-ghost btn-icon btn-sm" title="Explorer actions" aria-label="Explorer actions" aria-haspopup="menu" aria-expanded="false" data-menu-from="1"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+            <button id="drawer-tree-fold" type="button" class="btn btn-ghost btn-icon btn-sm" title="Fold the explorer (Esc)" aria-label="Fold the explorer"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l6 6-6 6"/><path d="M19 5v14"/></svg></button>
             <div id="drawer-goto-list" role="listbox" aria-label="Matching files" hidden></div>
           </div>
+          <!-- Changes: the workspace's git changes, above the tree. dockchanges.js fills it from changesRows and hides it
+               when there is nothing to say. The tree (#files-pane) is moved into this column by app.js and lands after the root header. -->
+          <section id="dock-changes" aria-label="Changes" hidden>
+            <div class="dk-chg-head">
+              <span class="dk-chg-title">Changes</span>
+              <span id="dock-chg-count" class="dk-chg-sub"></span>
+              <button id="dock-review" type="button" class="link dk-review" title="Review the changes, starting with the first file" hidden>Review</button>
+            </div>
+            <div id="dock-scope" class="seg dk-scope" role="group" aria-label="Which changes" hidden>
+              <button type="button" class="seg-item" data-scope="head" aria-pressed="true" title="Changes since the last commit">Uncommitted</button>
+              <button type="button" class="seg-item" data-scope="branch" aria-pressed="false" title="Changes since this branch left its base branch">Branch</button>
+            </div>
+            <div id="dock-branch" class="dk-branch" hidden></div>
+            <p id="dock-chg-note" class="dk-chg-note" hidden></p>
+            <div id="dock-chg-list" class="dk-list" role="group" aria-label="Changed files"></div>
+            <div id="dock-chg-legend" class="dk-legend" hidden><i aria-hidden="true"></i><span></span></div>
+          </section>
+          <button id="dock-root" type="button" class="dk-root" aria-controls="ft-root-input" title="Change the root folder"><span id="dock-root-name" class="dk-root-name"></span><span id="dock-root-path" class="dk-root-path"></span></button>
           <p class="dr-tnote">This session's workspace can't be browsed here.</p></div>
-        <div id="drawer-split" class="dr-split" role="separator" aria-orientation="vertical" aria-label="Resize the file tree" aria-controls="drawer-tree" tabindex="0" title="Drag to resize the tree, double-click to reset"></div>
-        <div id="drawer-viewer" class="dr-viewer">
-          <div id="drawer-vhost" class="dr-vhost" hidden></div>
-          <div id="drawer-vempty" class="dr-vempty">Pick a file in the tree to read it here.</div>
+        <div id="drawer-strip" class="dr-strip" role="group" aria-label="Explorer">
+          <button id="drawer-strip-tree" type="button" class="btn btn-ghost btn-icon" title="Explorer" aria-label="Open the explorer" aria-expanded="false" aria-controls="drawer-tree"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></button>
+          <button id="drawer-strip-changes" type="button" class="btn btn-ghost btn-icon" title="Changes" aria-label="Open the explorer at Changes" aria-expanded="false" aria-controls="drawer-tree"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M6 8.2v4.3a3 3 0 0 0 3 3h6.8M18 15.8v-4.3a3 3 0 0 0-3-3H8.2"/></svg><span id="drawer-strip-count" class="dr-count" hidden></span></button>
+          <button id="drawer-strip-goto" type="button" class="btn btn-ghost btn-icon" title="Go to file" aria-label="Go to file"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg></button>
         </div>
+      </div>
+      <div id="dock-agent" class="dk-agent" role="group" aria-label="Session in view">
+        <span id="dock-agent-dot" class="dot"></span>
+        <span id="dock-agent-name" class="dk-ag-name"></span>
+        <span id="dock-agent-st" class="dk-ag-st"></span>
+        <span id="dock-agent-last" class="dk-ag-last"></span>
+        <button id="dock-agent-term" type="button" class="btn btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6M12 19h8"/></svg><span>Show terminal</span><span id="dock-agent-kbd" class="kbd"></span></button>
       </div>
     </aside>
     <div id="page-host" hidden></div>
@@ -906,7 +951,15 @@
   <script src="/sheet.js"></script>
   <script src="/drawersize.js"></script>
   <script src="/drawerfiles.js"></script>
+  <script src="/dockfit.js"></script>
+  <script src="/docktabs.js"></script>
+  <script src="/changesmodel.js"></script>
+  <script src="/dockcrumbs.js"></script>
+  <script src="/dockstrip.js"></script>
   <script src="/filesdrawer.js"></script>
+  <script src="/dockagent.js"></script>
+  <script src="/dockchanges.js"></script>
+  <script src="/dockwatch.js"></script>
   <script src="/spawnpreview.js"></script>
   <script src="/workhome.js"></script>
   <script src="/profileview.js"></script>

@@ -1,6 +1,6 @@
 "use strict";
 
-// File mutations: create a folder, rename, delete. The pure text builders live
+// File mutations: create a folder or an empty file, rename, delete. The pure text builders live
 // here too, so they are testable under `node --test`.
 //
 // These call fetch directly rather than the shared api() helper: api() throws
@@ -75,6 +75,7 @@ async function fsWrite(path, body) {
 }
 
 function fsMkdir(dir, name) { return fsPost("/api/fs/mkdir", { dir, name }); }
+function fsNewFile(dir, name) { return fsPost("/api/fs/newfile", { dir, name }); }
 function fsRename(path, name, confirmName) {
   return fsPost("/api/fs/rename", { path, name, confirm_name: confirmName || "" });
 }
