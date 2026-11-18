@@ -64,6 +64,12 @@ func spawnTok(t *testing.T, m *Manager) *Session {
 }
 
 // argAfter is the value following flag in argv, "" when absent.
+// tokNote is the credential note a boxed claude bound to these token entries
+// (and nothing else) gets as the last flag: once, after the MCP flags.
+func tokNote(entries ...config.StaticToken) []string {
+	return []string{"--append-system-prompt", credGuidance(config.Bindings{Tokens: entries})}
+}
+
 func argAfter(argv []string, flag string) string {
 	if i := slices.Index(argv, flag); i >= 0 && i+1 < len(argv) {
 		return argv[i+1]
@@ -77,8 +83,8 @@ func TestSpawnTokenMCPFlags(t *testing.T) {
 		b := &fakeBundles{flags: bundleFlags}
 		m.SetBundles(b)
 		spawnTok(t, m)
-		want := []string{"--mcp-config", "/opt/agent-session-mcp/mcp-deadbeef-u.json", "--settings", "/opt/agent-bundle/settings.json",
-			"--setting-sources", "user", "--strict-mcp-config"}
+		want := append([]string{"--mcp-config", "/opt/agent-session-mcp/mcp-deadbeef-u.json", "--settings", "/opt/agent-bundle/settings.json",
+			"--setting-sources", "user", "--strict-mcp-config"}, tokNote(grafanaEntry())...)
 		if got := boxes.lastArgv[len(boxes.lastArgv)-len(want):]; !slices.Equal(got, want) {
 			t.Fatalf("argv tail = %q, want %q", got, want)
 		}
@@ -135,8 +141,8 @@ func TestSpawnTokenMCPFlags(t *testing.T) {
 		if b.calls != 0 {
 			t.Fatal("the personal bundle was consulted for a non-inheriting account")
 		}
-		want := []string{"--mcp-config", "/opt/agentbox/mcp-deadbeef-i.json", "--strict-mcp-config"}
-		if got := boxes.lastArgv[len(boxes.lastArgv)-3:]; !slices.Equal(got, want) {
+		want := append([]string{"--mcp-config", "/opt/agentbox/mcp-deadbeef-i.json", "--strict-mcp-config"}, tokNote(grafanaEntry())...)
+		if got := boxes.lastArgv[len(boxes.lastArgv)-len(want):]; !slices.Equal(got, want) {
 			t.Fatalf("argv tail = %q, want %q", got, want)
 		}
 		if b.smcpIncludeUser {
@@ -187,7 +193,8 @@ func TestSpawnTokenMCPFlags(t *testing.T) {
 		b := &fakeBundles{flags: bundleFlags}
 		m.SetBundles(b)
 		spawnTok(t, m)
-		if got := boxes.lastArgv[len(boxes.lastArgv)-len(bundleFlags):]; !slices.Equal(got, bundleFlags) {
+		want := append(slices.Clone(bundleFlags), tokNote(plain)...)
+		if got := boxes.lastArgv[len(boxes.lastArgv)-len(want):]; !slices.Equal(got, want) {
 			t.Fatalf("argv tail = %q", got)
 		}
 		if b.smcpCalls != 0 || len(hooks.mcpKeys) != 0 {
@@ -225,8 +232,8 @@ func TestSpawnTokenMCPWithoutABundle(t *testing.T) {
 		if !strings.Contains(doc, `"agentbox-env"`) || !strings.Contains(doc, `"grafana-prod"`) {
 			t.Fatalf("document = %s", doc)
 		}
-		want := []string{"--mcp-config", "/opt/agentbox/mcp-nobundle.json", "--strict-mcp-config"}
-		if got := boxes.lastArgv[len(boxes.lastArgv)-3:]; !slices.Equal(got, want) {
+		want := append([]string{"--mcp-config", "/opt/agentbox/mcp-nobundle.json", "--strict-mcp-config"}, tokNote(grafanaEntry())...)
+		if got := boxes.lastArgv[len(boxes.lastArgv)-len(want):]; !slices.Equal(got, want) {
 			t.Fatalf("argv tail = %q, want %q", got, want)
 		}
 	}

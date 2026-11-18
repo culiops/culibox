@@ -128,7 +128,12 @@ func runNode(t *testing.T, cwd, stdin string, args []string, env ...string) (str
 	}
 	cmd := exec.Command("node", args...)
 	cmd.Dir = cwd
-	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}, env...)
+	// Every agentbox-env listing defaults to a missing file: inside a CuliBox box
+	// the /opt/agentbox ones may exist. A test's own value comes later and wins
+	// (exec keeps the last of duplicate keys).
+	none := filepath.Join(t.TempDir(), "absent.json")
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
+		"AGENTBOX_ENV_LIST_FILE=" + none, "AGENTBOX_ENV_AWS_FILE=" + none, "AGENTBOX_ENV_GITHUB_FILE=" + none}, env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -639,7 +644,11 @@ func TestAgentboxEnvList(t *testing.T) {
 
 func TestAgentboxEnvListMissingFile(t *testing.T) {
 	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
-	_, stderr, code := runNode(t, "", "", []string{js, "--list"}, "AGENTBOX_ENV_LIST_FILE="+filepath.Join(t.TempDir(), "none.json"))
+	// Every listing points at a missing file: run inside a CuliBox box, the
+	// defaults under /opt/agentbox may exist.
+	none := filepath.Join(t.TempDir(), "none.json")
+	_, stderr, code := runNode(t, "", "", []string{js, "--list"}, "AGENTBOX_ENV_LIST_FILE="+none,
+		"AGENTBOX_ENV_AWS_FILE="+none, "AGENTBOX_ENV_GITHUB_FILE="+none)
 	if code != 1 || !strings.HasPrefix(stderr, "agentbox-env: cannot read the token list") {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
@@ -871,8 +880,9 @@ func TestEnvListNoTokensLineOnlyWhenNothing(t *testing.T) {
 	}
 	none := filepath.Join(t.TempDir(), "none.json")
 	// Nothing bound at all: the line is printed.
-	out, _, code := runNode(t, "", "", []string{js, "--list"}, "AGENTBOX_ENV_LIST_FILE="+empty, "AGENTBOX_ENV_AWS_FILE="+none)
-	if code != 0 || out != "no tokens are bound to this session\n" {
+	out, _, code := runNode(t, "", "", []string{js, "--list"}, "AGENTBOX_ENV_LIST_FILE="+empty, "AGENTBOX_ENV_AWS_FILE="+none,
+		"AGENTBOX_ENV_GITHUB_FILE="+none)
+	if code != 0 || out != "no credentials are bound to this session\n" {
 		t.Fatalf("nothing bound: code=%d out=%q", code, out)
 	}
 	// Connections but no tokens (no tokens.json at all, as EnsureBindingDir writes it): no such line, no error.
@@ -984,5 +994,77 @@ func TestEnvListSSODirectConnection(t *testing.T) {
 	}
 	if strings.Contains(out, "· role ") {
 		t.Errorf("listing names a role: %s", out)
+	}
+}
+
+// listGitHub runs `agentbox-env --list` with only a github.json for b.
+func listGitHub(t *testing.T, b *config.GitHubBinding) string {
+	t.Helper()
+	dir := envScriptDir(t)
+	gh := filepath.Join(t.TempDir(), GitHubListFile)
+	if err := os.WriteFile(gh, GitHubListing(*b), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	none := filepath.Join(t.TempDir(), "none.json")
+	out, stderr, code := runNode(t, "", "", []string{filepath.Join(dir, "agentbox-env.js"), "--list"},
+		"AGENTBOX_ENV_LIST_FILE="+none, "AGENTBOX_ENV_AWS_FILE="+none, "AGENTBOX_ENV_GITHUB_FILE="+gh)
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	return out
+}
+
+// runNode points every agentbox-env listing at a missing file unless a test
+// names one: inside a CuliBox box the /opt/agentbox defaults may exist.
+func TestRunNodeListingsDefaultToMissing(t *testing.T) {
+	out, _, code := runNode(t, "", "", []string{"-e",
+		"for (const k of ['AGENTBOX_ENV_LIST_FILE','AGENTBOX_ENV_AWS_FILE','AGENTBOX_ENV_GITHUB_FILE']) console.log(process.env[k] || '')"})
+	if code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+	for _, p := range strings.Split(strings.TrimSpace(out), "\n") {
+		if p == "" || strings.HasPrefix(p, "/opt/agentbox") {
+			t.Fatalf("listing env not defaulted: %q", out)
+		}
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s exists: %v", p, err)
+		}
+	}
+	// A test's own value wins over the default.
+	out, _, _ = runNode(t, "", "", []string{"-e", "console.log(process.env.AGENTBOX_ENV_GITHUB_FILE)"}, "AGENTBOX_ENV_GITHUB_FILE=/x/gh.json")
+	if strings.TrimSpace(out) != "/x/gh.json" {
+		t.Fatalf("override lost: %q", out)
+	}
+}
+
+func TestEnvListGitHubSection(t *testing.T) {
+	want := "GitHub\n" +
+		"culiops [app]\n" +
+		"  repos: agent-box, tech-advisor\n" +
+		"  permissions: write issues · read contents, metadata\n" +
+		"  use: git and gh as usual\n" +
+		"\n" +
+		"acme [token]\n" +
+		"  repos: widgets, gadgets\n" +
+		"  permissions: the token's own (not narrowed by CuliBox)\n" +
+		"  use: git and gh as usual\n"
+	if out := listGitHub(t, ghListBinding()); out != want {
+		t.Fatalf("listing:\n%s\nwant:\n%s", out, want)
+	}
+	// Default permissions: nothing writable.
+	out := listGitHub(t, ghBinding())
+	if !strings.Contains(out, "\n  permissions: read actions, checks, contents, issues, metadata, pull_requests\n") {
+		t.Fatalf("listing:\n%s", out)
+	}
+}
+
+func TestEnvListGitHubFileMissingIsFine(t *testing.T) {
+	// A binding dir written before github.json existed: --list still works.
+	dir := awsListDir(t, false)
+	out, stderr, code := runNode(t, "", "", []string{filepath.Join(dir, "agentbox-env.js"), "--list"},
+		"AGENTBOX_ENV_LIST_FILE="+filepath.Join(dir, "none.json"), "AGENTBOX_ENV_AWS_FILE="+filepath.Join(dir, AWSListFile),
+		"AGENTBOX_ENV_GITHUB_FILE="+filepath.Join(dir, "none-gh.json"))
+	if code != 0 || stderr != "" || !strings.HasPrefix(out, "AWS connections\n") || strings.Contains(out, "GitHub") {
+		t.Fatalf("code=%d out=%q stderr=%q", code, out, stderr)
 	}
 }

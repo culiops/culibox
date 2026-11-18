@@ -55,6 +55,8 @@ agentbox-env --list                            # what is bound; never a value
 
 `agentbox-env` asks the broker for each named token, then runs `CMD` (no shell, so a `$VAR` you type is expanded by your own shell before the token exists; wrap such a command in `sh -c '...'`) with the token and the entry's `config_env` in that one process's environment. Nothing is fetched until it runs; if any fetch fails, or two named entries would set the same variable, nothing runs. `--list` reads `/opt/agentbox/tokens.json`, which holds names, labels, hosts and `config_env` but no token.
 
+At start, CuliBox tells a boxed Claude session which credentials it has: the names, which are PROD and how to use each kind. It never tells it a value, an account or a role. `agentbox-env --list` shows the details. Name entries so the agent can tell them apart (`sentry-prod`, `sentry-staging`): the note carries names and the PROD mark, never labels or descriptions.
+
 One box can hold several environments of the same service. Give each its own entry, with distinct `mcp.server` names, and bind both:
 
 ```json

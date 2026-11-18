@@ -2216,9 +2216,19 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 		// Claude only: a shell is never handed agent flags. Flag and value are
 		// separate argv elements, ahead of the "--" Build adds for a first message.
-		if cl != nil && isClaudeBin(bin) {
-			spec.ExtraArgs = append(slices.Clip(spec.ExtraArgs), "--append-system-prompt",
-				cloneGuidance(cl.Of, cloneInfo.PushRepo != "", !cl.NoAutoReturn))
+		// The clone line and the credential note are provider-neutral text that
+		// reaches claude as ONE --append-system-prompt value.
+		if isClaudeBin(bin) {
+			var guide []string
+			if cl != nil {
+				guide = append(guide, cloneGuidance(cl.Of, cloneInfo.PushRepo != "", !cl.NoAutoReturn))
+			}
+			if s := credGuidance(bs); s != "" {
+				guide = append(guide, s)
+			}
+			if len(guide) > 0 {
+				spec.ExtraArgs = append(slices.Clip(spec.ExtraArgs), "--append-system-prompt", strings.Join(guide, " "))
+			}
 		}
 	}
 
