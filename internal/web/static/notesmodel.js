@@ -79,8 +79,16 @@ function composeMessage(notes) {
   pend.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0) || a.line - b.line || a.at - b.at);
   let text = "Review notes on your changes:\n";
   for (const n of pend) {
-    const where = n.side === "old" ? n.rel + " (removed line " + n.line + ")" : n.rel + ":" + n.line;
-    text += "- " + where + (n.outdated ? " (line moved or removed since)" : "") + " — " + n.text + "\n  > " + n.quote + "\n";
+    // One note is one "- " line, one "  > " line and indented continuation lines, so a reader (the agent) can always tell where a note
+    // ends. A newline is the only way to fake a structural line, and it survives stripControls, so it is dealt with here, after the
+    // CR normalisation (a lone CR is already a LF by then): rel and quote are single-line by definition, so a newline in them (a file
+    // name the agent made, a pasted quote) becomes a space; the note's text may have several lines, and every continuation line is
+    // indented by 4 spaces, so none can start with "- " at column 0 or "  > " at column 2.
+    const rel = stripControls(n.rel).replace(/\n/g, " ");
+    const quote = stripControls(n.quote).replace(/\n/g, " ");
+    const body = stripControls(n.text).replace(/\n/g, "\n    ");
+    const where = n.side === "old" ? rel + " (removed line " + n.line + ")" : rel + ":" + n.line;
+    text += "- " + where + (n.outdated ? " (line moved or removed since)" : "") + " — " + body + "\n  > " + quote + "\n";
   }
   text = stripControls(text);
   if (text.length > MSG_MAX) return { ok: false, why: "too long; paste fewer notes" };
@@ -118,17 +126,23 @@ function saveNotes(storage, sid, list) {
   } catch (_) { /* blocked or full: the notes live for this page only */ }
 }
 
-// Map of sid -> notes for the sessions in `liveSids` (an array or a Set). Never throws.
+// Map of sid -> notes for the sessions in `liveSids` (an array or a Set). Never throws. What it drops (a dead session, a malformed
+// note) is also removed from the stored record, so a session that is gone does not sit in localStorage until the quota is full and
+// saveNotes can no longer write.
 function loadNotes(storage, liveSids) {
   const out = new Map();
   try {
     const live = new Set(liveSids);
     const rec = notesRead(storage);
+    let dropped = false;
     for (const sid of Object.keys(rec.sessions)) {
       const s = rec.sessions[sid];
-      if (!live.has(sid) || !s || !Array.isArray(s.notes)) continue;
-      const notes = s.notes.filter(noteValid);
-      if (notes.length) out.set(sid, notes);
+      const notes = live.has(sid) && s && Array.isArray(s.notes) ? s.notes.filter(noteValid) : [];
+      if (!live.has(sid) || !s || !Array.isArray(s.notes) || notes.length !== s.notes.length) dropped = true;
+      if (notes.length) { out.set(sid, notes); rec.sessions[sid] = { notes }; } else delete rec.sessions[sid];
+    }
+    if (dropped) {
+      try { storage.setItem(NOTES_KEY, JSON.stringify(rec)); } catch (_) { /* blocked or full: the next load tries again */ }
     }
   } catch (_) { /* no notes */ }
   return out;
