@@ -67,6 +67,15 @@ function conflictChoice(state) {
   return "none";
 }
 
+// openDeleted: the first read of a tab came back 404. For a tab asked to open in Changes (a D row of the Changes section: the file is
+// deleted from the working tree, git's base still has it) that is not an error: the tab is made over an empty buffer and shows the
+// base text as all removed. Only a 404 says the file is gone (status 0 is "the fetch never completed"). Not for a restored tab (it
+// closes), a terminal link's lookup in other checkouts (`alt`) or a box file (no host git).
+function openDeleted(s) {
+  const { status, changes, restored, alt, box } = s || {};
+  return status === 404 && changes === true && !restored && !alt && !box;
+}
+
 // DELETED_TEXT is the conflict bar's sentence for a file that is gone from disk.
 const DELETED_TEXT = "This file was deleted on disk.";
 
@@ -168,7 +177,7 @@ function followWith(map, sid, on, live) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    rangeRef, insertGate, editorMode, conflictChoice, DELETED_TEXT, conflictText,
+    rangeRef, insertGate, editorMode, conflictChoice, openDeleted, DELETED_TEXT, conflictText,
     selectionLines, FOLLOW_TOOLS, followFile, followPlan, followParse, followWith,
   };
 }

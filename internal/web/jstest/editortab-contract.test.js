@@ -2036,3 +2036,78 @@ test("Compare and Changes never coexist on a tab: entering one closes the other,
   assert.equal(liveDiffs(p).length, 1, "the compare view that landed last left the Changes view");
   assert.equal(tab.diff, null);
 });
+
+// A D row of the Changes section opens the file in Changes (dkcOpenRow), but the file is not there: the first read is a 404. The tab
+// then shows the base text as all removed, read-only, with no read error, and does not poll the file that is known gone.
+async function deletedRow(o) {
+  const p = page();
+  p.setRead({ ok: false, status: 404, data: { error: "not found" } });
+  p.st.git.on = true;
+  p.st.git.answer = o && o.answer ? o.answer : okBlob(HEAD_TEXT);
+  p.setShown(true);
+  const tab = await p.open("/p/gone.go", o && o.opts ? o.opts : { view: "changes" });
+  await p.settle();
+  return { p, tab };
+}
+
+test("a deleted file's Changes row: the base text on the old side, an empty new side, read-only, and no read error in the body", async () => {
+  const { p, tab } = await deletedRow();
+  assert.equal(tab.gone, true);
+  assert.equal(tab.model.value, "", "the new side is empty");
+  assert.ok(tab.diff, "Changes is up");
+  assert.equal(p.st.diffs.length, 1);
+  assert.equal(p.st.diffs[0].model.original.value, HEAD_TEXT, "the old side is the base text");
+  assert.deepEqual(p.st.git.shows.map((s) => s.body), [{ path: "/p/gone.go", scope: "head" }]);
+  assert.deepEqual(tab.bodyEl.children.map((c) => c.className), ["dk-ed-cmp"], "the diff, not a read error");
+  assert.equal(tab.mode, "read");
+  assert.equal(tab.readOnly, true);
+  assert.equal(tab.dirty(), false);
+  assert.match(tab.readOnlyWhy(), /deleted/);
+  assert.equal(p.st.writes.length, 0);
+  // Code (the empty buffer) is read-only, and a save says why instead of writing.
+  tab.seg.code.click();
+  await tab.save();
+  assert.equal(p.st.writes.length, 0, "nothing is ever written for a file that is gone");
+});
+
+test("a deleted file's tab does not ask the server about its file: no 404 poll while the file is known deleted", async () => {
+  const { p, tab } = await deletedRow();
+  assert.equal(p.metas().length, 0, "no metadata read when it was shown");
+  const reads = p.st.reads.length;
+  assert.equal(p.live(), 0, "the dock's interval is not even running for it");
+  await p.get("editorSyncCheck")(tab); // and a check asked for anyway reads nothing
+  await p.settle();
+  assert.equal(p.metas().length, 0, "no metadata read");
+  assert.equal(p.st.reads.length, reads, "no read at all");
+  assert.equal(tab.barEl.hidden, true, "and no deleted bar over a file that opened as deleted");
+  assert.equal(tab.sync && tab.sync.bar, null);
+});
+
+test("a base the git side does not have either is an empty diff, not an error; git that cannot answer says why and the tab stays", async () => {
+  const m = await deletedRow({ answer: { state: "ok", missing: true } });
+  assert.ok(m.tab.diff);
+  assert.equal(m.p.st.diffs[0].model.original.value, "");
+  const u = await deletedRow({ answer: { state: "unavailable", reason: "Git status needs the box runtime (docker)" } });
+  assert.equal(u.p.st.diffs.length, 0);
+  assert.deepEqual(u.p.st.toasts.at(-1), ["Changes unavailable: Git status needs the box runtime (docker)", undefined]);
+});
+
+test("a 404 on a tab that was not asked to open in Changes is still the read error, and a restored one still closes", async () => {
+  const plain = await deletedRow({ opts: {} });
+  assert.equal(plain.tab.gone, false);
+  assert.equal(plain.tab.model, null);
+  assert.equal(plain.tab.bodyEl.children[0].textContent, "not found");
+  assert.equal(plain.p.st.git.shows.length, 0);
+  const closed = [];
+  const p = page({ closeTabEverywhere: (t) => closed.push(t) });
+  p.setRead({ ok: false, status: 404, data: { error: "not found" } });
+  const r = await p.open("/p/gone.go", { restored: true, view: "changes" });
+  assert.deepEqual(closed, [r]);
+  assert.equal(r.gone, false);
+  // A 403 on a Changes open is an error as ever, not a deleted file.
+  const f = page();
+  f.setRead({ ok: false, status: 403, data: { error: "refused" } });
+  const t = await f.open("/p/x.go", { view: "changes" });
+  assert.equal(t.gone, false);
+  assert.equal(t.bodyEl.children[0].textContent, "refused");
+});

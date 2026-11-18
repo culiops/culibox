@@ -83,33 +83,69 @@ type gitBody struct {
 // root, the only mount: agent-box chose it and the box cannot swap it, while
 // Top and Common inside it could be swapped for links after these checks. Any
 // refusal is errGitOutside; no .git is errGitNotRepo; a path docker cannot
-// take as a --mount value is errGitUnsafe.
+// take as a --mount value is errGitUnsafe. A path that is gone is
+// os.ErrNotExist.
 func (s *Server) gitTarget(path string) (t gitview.Target, abs string, err error) {
+	return s.gitTargetFor(path, false)
+}
+
+// gitTargetShow is gitTarget for POST /api/git/show only: it also accepts a
+// vanished leaf, a file deleted from the working tree, whose base text the
+// Changes view shows as all removed. The leaf is accepted only when its own
+// Lstat says it does not exist (a dangling link is not that) and its PARENT
+// directory passes every check an existing path does: the fs policy, a
+// link-free EvalSymlinks result, inGitTree. The returned abs is that resolved
+// parent plus the leaf's single local name. Nothing reads or stats the leaf
+// itself afterwards (see gitShowRel); git only reads an object of the
+// repository by that name. Every other outcome is gitTarget's.
+func (s *Server) gitTargetShow(path string) (t gitview.Target, abs string, err error) {
+	return s.gitTargetFor(path, true)
+}
+
+// gitTargetFor is the one body of gitTarget and gitTargetShow; vanishedOK is the latter's.
+func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, abs string, err error) {
 	p, err := s.fsPolicy()
 	if err != nil {
 		return gitview.Target{}, "", err
 	}
 	req, err := p.resolve(path)
-	if err != nil {
+	if err == nil {
+		abs, err = filepath.EvalSymlinks(req.Abs)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return gitview.Target{}, "", errGitOutside
+		}
+	}
+	// gone: the request names nothing that exists. The host walk says so in
+	// resolve, a boxed one (whose resolve stops at the contained root) in
+	// EvalSymlinks.
+	gone := errors.Is(err, os.ErrNotExist)
+	if err != nil && !(gone && vanishedOK) {
+		if gone {
+			err = os.ErrNotExist
+		}
 		return gitview.Target{}, "", err
 	}
-	abs, err = filepath.EvalSymlinks(req.Abs)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return gitview.Target{}, "", os.ErrNotExist
+	// checked is the path inGitTree vouches for and Repo discovery starts from:
+	// abs, or for a vanished leaf its parent (EvalSymlinks of a leaf that is not
+	// there is impossible, and the leaf is a local name below that parent).
+	checked := abs
+	if gone {
+		if req, checked, abs, err = vanishedLeaf(p, path); err != nil {
+			return gitview.Target{}, "", err
 		}
+	}
+	if !p.inGitTree(req, checked) {
 		return gitview.Target{}, "", errGitOutside
 	}
-	if !p.inGitTree(req, abs) {
-		return gitview.Target{}, "", errGitOutside
-	}
-	fi, err := os.Lstat(abs)
-	if err != nil {
-		return gitview.Target{}, "", errGitOutside
-	}
-	dir := abs
-	if !fi.IsDir() {
-		dir = filepath.Dir(abs)
+	dir := checked
+	if !gone {
+		fi, err := os.Lstat(abs)
+		if err != nil {
+			return gitview.Target{}, "", errGitOutside
+		}
+		if !fi.IsDir() {
+			dir = filepath.Dir(abs)
+		}
 	}
 	repo, ok := gitrepo.Locate(dir)
 	if !ok {
@@ -135,6 +171,45 @@ func (s *Server) gitTarget(path string) (t gitview.Target, abs string, err error
 		return gitview.Target{}, "", errGitUnsafe
 	}
 	return t, abs, nil
+}
+
+// vanishedLeaf resolves path, whose resolution failed with "does not exist",
+// as a leaf under an existing directory: it returns the fs target of the PARENT
+// (what inGitTree must compare against), the resolved parent, and abs, that
+// parent plus the leaf's name. Refusals: os.ErrNotExist for everything gitTarget
+// already refuses as not there (a missing or non-directory parent, a leaf that
+// does exist, as a dangling link does, a name that is not one local name),
+// errGitOutside for a parent EvalSymlinks sends elsewhere, and the fs policy's
+// own error for a parent it refuses (a denied tree, outside $HOME).
+func vanishedLeaf(p fsPolicy, path string) (preq fsTarget, parent, abs string, err error) {
+	clean := filepath.Clean(path)
+	base := filepath.Base(clean)
+	if base == "." || base == ".." || !filepath.IsLocal(base) {
+		return fsTarget{}, "", "", os.ErrNotExist
+	}
+	if preq, err = p.resolve(filepath.Dir(clean)); err != nil {
+		return fsTarget{}, "", "", err
+	}
+	if parent, err = filepath.EvalSymlinks(preq.Abs); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fsTarget{}, "", "", os.ErrNotExist
+		}
+		return fsTarget{}, "", "", errGitOutside
+	}
+	if fi, err := os.Lstat(parent); err != nil {
+		return fsTarget{}, "", "", errGitOutside
+	} else if !fi.IsDir() {
+		return fsTarget{}, "", "", os.ErrNotExist
+	}
+	abs = filepath.Join(parent, base)
+	switch _, err := os.Lstat(abs); {
+	case err == nil:
+		// Something is there (a dangling link): not a vanished file.
+		return fsTarget{}, "", "", os.ErrNotExist
+	case !errors.Is(err, os.ErrNotExist):
+		return fsTarget{}, "", "", errGitOutside
+	}
+	return preq, parent, abs, nil
 }
 
 // inGitTree reports whether x is a link-free path that the fs policy serves in
@@ -218,6 +293,21 @@ func gitFileRel(t gitview.Target, abs string) (string, error) {
 	}
 	if !fi.Mode().IsRegular() {
 		return "", errGitNotFile
+	}
+	rel, err := filepath.Rel(t.Top, abs)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return "", errGitOutside
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// gitShowRel is gitFileRel for show, which also takes a file deleted from the
+// working tree (gitTargetShow): when abs is not there, its path below t.Top is
+// the answer without a stat of the leaf. A leaf that has appeared since is
+// checked as any file is.
+func gitShowRel(t gitview.Target, abs string) (string, error) {
+	if _, err := os.Lstat(abs); !errors.Is(err, os.ErrNotExist) {
+		return gitFileRel(t, abs)
 	}
 	rel, err := filepath.Rel(t.Top, abs)
 	if err != nil || rel == "." || !filepath.IsLocal(rel) {
@@ -388,7 +478,7 @@ func (s *Server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, unavailableGitBlob(msgGitNoRuntime))
 		return
 	}
-	t, abs, err := s.gitTarget(body.Path)
+	t, abs, err := s.gitTargetShow(body.Path)
 	switch {
 	case errors.Is(err, errGitNotRepo):
 		writeJSON(w, http.StatusOK, gitview.Blob{State: "notrepo"})
@@ -400,7 +490,7 @@ func (s *Server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 		writeFsErr(w, err)
 		return
 	}
-	rel, err := gitFileRel(t, abs)
+	rel, err := gitShowRel(t, abs)
 	switch {
 	case errors.Is(err, errGitNotFile):
 		writeErr(w, http.StatusBadRequest, msgGitNotFile)

@@ -21,6 +21,9 @@
 //  - a bar that is up takes the newest disk version a later answer brings: "Keep mine" will overwrite what the user was told
 //    about, never an older one, and an open compare view is read again for the same reason.
 //
+// A tab opened from a deleted file's Changes row (EditorTab.gone: an empty buffer for the Changes view) is never asked about: its file
+// is known gone, so there is no 404 to poll for and no bar to raise.
+//
 // editorSyncStart(tab) / editorSyncStop(tab): `tab` is on screen / is not (EditorTab.onAttach, onHide).
 // editorSyncOnReplace(tab, fn): fn(newText) after a reload or "Load the agent's version" replaced the model's text (P3 hooks here).
 
@@ -63,7 +66,7 @@ function editorSyncStop(tab) {
 // Called from every place that changes it: the tab's show and hide, the dock's paint (drawerPaint), a page view opening or
 // closing (pagehost.js) and the page being hidden or shown (below).
 function editorSyncSync(now) {
-  if (!esTab || !editorSyncShown()) {
+  if (!esTab || esTab.gone || !editorSyncShown()) { // a tab opened from a deleted file's Changes row has nothing to poll (EditorTab.load)
     if (esTimer) { clearInterval(esTimer); esTimer = null; }
     return;
   }
@@ -101,7 +104,7 @@ function editorSyncCurrent(tab, c) {
 // editorSyncCheck: one metadata read for `tab`, and what comes of it. One at a time, and not while the tab saves.
 async function editorSyncCheck(tab) {
   const s = editorSyncOf(tab);
-  if (s.flight || tab.disposed || !tab.attached || !tab.model || tab.inner || tab.saving) return;
+  if (s.flight || tab.disposed || !tab.attached || !tab.model || tab.inner || tab.saving || tab.gone) return;
   const ctx = editorSyncCtx(tab);
   s.flight = true;
   try {

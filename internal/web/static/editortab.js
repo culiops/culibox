@@ -140,6 +140,7 @@ class EditorTab {
     // "edit" | "read" | "image" | "binary" once read (editorMode); null until then.
     this.mode = null;
     this.readOnly = !!this.box; // true for a tab shown locked: a box file is known so before any read, the rest after it
+    this.gone = false;          // opened from a Changes row of a file deleted from disk: an empty read-only buffer for the Changes view (load)
     this.serverReadOnly = false; // the server's own flag (a scratch folder), as read
     this.notUtf8 = false;       // the server's `utf8: false`: the bytes are not UTF-8, the buffer shows U+FFFD for them, so no save
     this.model = null;          // the monaco text model, once the file is read and Monaco is loaded
@@ -291,7 +292,7 @@ class EditorTab {
 
   readOnlyWhy() {
     if (this.mode === "image" || this.mode === "binary") return "";
-    return readOnlyReason({ box: this.box, readonly: this.serverReadOnly, notUtf8: this.notUtf8, unknown: this.mode === "read" });
+    return readOnlyReason({ box: this.box, readonly: this.serverReadOnly, notUtf8: this.notUtf8, unknown: this.mode === "read", gone: this.gone });
   }
 
   // previewing: a markdown file's Preview is in the body (editormd.js), so the editor is not on screen even while this tab owns it.
@@ -321,11 +322,18 @@ class EditorTab {
     this.firstLoad = false;
     if (IMAGE_EXTS.has(extOf(this.path))) { this.mountInner("image"); return; }
     const url = this.box ? boxFileURL(this.box, this.path) : undefined;
-    const [res, mon] = await Promise.all([fsRead(this.path, url), loadMonaco().then((m) => ({ m }), (err) => ({ err }))]);
+    let [res, mon] = await Promise.all([fsRead(this.path, url), loadMonaco().then((m) => ({ m }), (err) => ({ err }))]);
     if (this.disposed || seq !== this.loadSeq) return;
     const alt = first ? this.alt : null; // the lookup is for the first read only: a file deleted later is a deletion
     this.alt = null;
     const altLine = alt ? this.pendingLine : null;
+    // A D row of the Changes section opens the file in Changes though it is gone: the 404 is the file's state, not an error (openDeleted).
+    // The tab gets an empty read-only buffer to compare the base text with; nothing reads or polls the file after this (editorsync.js).
+    if (!res.ok && openDeleted({ status: res.status, changes: this.pendingChanges, restored: first && this.restored, alt: !!alt, box: !!this.box })) {
+      this.gone = true;
+      res = { ok: true, status: 200, data: { kind: "text", readonly: false, utf8: true, content: "", version: "" } };
+      editorSyncSync(); // a tab on screen is not asked about its file any more
+    }
     if (!res.ok || res.data == null) {
       // A restored tab nobody asked for closes on a gone file instead of parking an error on it. Exactly 404: status 0
       // is "the fetch never completed", which says nothing about the file.
@@ -334,7 +342,7 @@ class EditorTab {
       this.showReadError(res);
       return;
     }
-    const mode = editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 });
+    const mode = this.gone ? "read" : editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 });
     if (mode === "image" || mode === "binary") { this.mountInner(mode); return; }
     if (mon.err) {
       // The next open tries again (loadMonaco forgets a failure), so say what failed rather than only "reload".
