@@ -160,23 +160,83 @@ test("a video or audio with no src of its own is kept: its sources are what carr
   assert.equal(find(f, "span").length, 0);
 });
 
-test("any other element loses a src, href or xlink:href that is not local, whatever its name (SVG image and feImage, MathML, area)", () => {
+test("any other element loses a src, href or xlink:href that is not a reference into the document or a small inline image (SVG image and feImage, MathML, area); an SVG image keeps only the inline image", () => {
   const f = walk(
     h("svg", {}, h("image", { href: "https://example.com/i.png", width: "10" }), h("feImage", { "xlink:href": "https://example.com/f.png" }),
-      h("image", { href: "img/a.png" })),
+      h("image", { href: "#shape" }), h("image", { href: "data:image/png;base64,iVBORw0KGgo=" }), h("feImage", { href: "#shape" })),
     h("math", { href: "https://example.com/m" }),
-    h("map", {}, h("area", { href: "https://example.com/area", shape: "rect" })),
+    h("map", {}, h("area", { href: "https://example.com/area", shape: "rect" }), h("area", { href: "#top" })),
     h("iframe", { src: "https://example.com/" }), // not one DOMPurify leaves; the walk does not rely on that
   );
   const images = find(f, "image");
   assert.equal(images[0].getAttribute("href"), null);
   assert.equal(images[0].getAttribute("width"), "10", "the element and its other attributes stay");
   assert.equal(find(f, "feImage")[0].getAttribute("xlink:href"), null);
-  assert.equal(images[1].getAttribute("href"), "img/a.png", "a relative one is local (the walk rewrites src on media only)");
+  assert.equal(images[1].getAttribute("href"), null, "an <image> fetches its href, a fragment too: it would ask for the page itself");
+  assert.equal(images[2].getAttribute("href"), "data:image/png;base64,iVBORw0KGgo=", "a small inline image is kept");
+  assert.equal(find(f, "feImage")[1].getAttribute("href"), "#shape", "a reference into the document is kept where it is only a reference");
   assert.equal(find(f, "math")[0].getAttribute("href"), null);
   assert.equal(find(f, "area")[0].getAttribute("href"), null);
   assert.equal(find(f, "area")[0].getAttribute("shape"), "rect");
+  assert.equal(find(f, "area")[1].getAttribute("href"), "#top");
   assert.equal(find(f, "iframe")[0].getAttribute("src"), null);
+});
+
+// What a request is for. The first three are the reviewer's measured cases: in a browser each one made the page GET that route of the app
+// (an absolute /api/... path is refused by isLocalSrc so that only the two read routes are reachable; dropping the slash got round it).
+const RELATIVE_REFS = ["api/health?probe=1", "api/sessions/probe2", "../probe3.png", "./a.png", "a.png", "x.svg#f", "?x=1", "", "  ", "/api/health?probe=6", "/api/fs/read?path=a.png"];
+
+test("a relative (or absolute-path) href or xlink:href on an SVG image, feImage or use is dropped, so the page cannot be made to GET a route of the app", () => {
+  const f = walk(h("svg", {},
+    h("image", { href: "api/health?probe=1" }),
+    h("filter", {}, h("feImage", { href: "api/sessions/probe2" })),
+    h("image", { href: "../probe3.png" }),
+    h("use", { href: "api/x" }), // DOMPurify drops <use>; the walk does not rely on that
+    h("image", { "xlink:href": "api/health?probe=4" }),
+    h("use", { "xlink:href": "api/x#a" }),
+  ));
+  for (const el of f.querySelectorAll("*")) {
+    for (const a of el.attributes) assert.ok(!/^(?:xlink:)?href$/.test(a.name), el.localName + " kept " + a.name + "=" + a.value);
+  }
+  assert.equal(find(f, "image").length, 3, "the elements stay (an SVG image is not a placeholder), without the reference");
+});
+
+test("every way of writing a relative reference is dropped from every kind of element that can hold one", () => {
+  for (const tag of ["image", "feImage", "use", "textPath", "linearGradient", "mpath", "altGlyph", "math", "mglyph", "area", "img2"]) {
+    for (const attr of ["href", "xlink:href", "XLINK:HREF", "Href", "src"]) {
+      for (const v of RELATIVE_REFS) {
+        const f = walk(h("svg", {}, h(tag, { [attr]: v, id: "keep" })));
+        const el = find(f, tag)[0];
+        assert.equal(el.getAttribute(attr), null, tag + " " + attr + "=" + JSON.stringify(v));
+        assert.equal(el.getAttribute("id"), "keep");
+      }
+    }
+  }
+});
+
+test("a src on an element that is not media goes whatever it holds: mglyph, input, embed, track, frame", () => {
+  const f = walk(h("math", {}, h("mglyph", { src: "api/health?probe=5" })), h("input", { src: "x.png", type: "image" }), h("embed", { src: "api/x" }),
+    h("track", { src: "a.vtt" }), h("frame", { src: "https://example.com/" }), h("bgsound", { src: "a.mid" }), h("mglyph", { src: "#ok" }),
+    h("frame", { src: "data:image/png;base64,iVBORw0KGgo=" }));
+  for (const tag of ["mglyph", "input", "embed", "track", "frame", "bgsound"]) {
+    for (const el of find(f, tag)) assert.equal(el.getAttribute("src"), null, tag);
+  }
+  assert.equal(find(f, "input")[0].getAttribute("type"), "image", "its other attributes stay");
+});
+
+test("a relative path on an <a> is a link: it stays (the walk gives it target and rel)", () => {
+  const f = walk(h("a", { href: "api/health" }, "x"), h("svg", {}, h("a", { "xlink:href": "../a.svg" })));
+  assert.equal(find(f, "a")[0].getAttribute("href"), "api/health");
+  assert.equal(find(f, "a")[1].getAttribute("xlink:href"), "../a.svg");
+  assert.equal(find(f, "a")[0].getAttribute("target"), "_blank");
+});
+
+test("an element whose name is a property of Object is not mistaken for media: it just loses its src, and nothing throws", () => {
+  const f = walk(h("constructor", { src: "https://example.com/x.png" }), h("toString", { src: "/api/fs/read?path=a.png" }),
+    h("__proto__", { src: "a.png" }), h("hasOwnProperty", { src: "#ok", href: "#kept" }));
+  assert.equal(find(f, "span").length, 0, "no placeholder");
+  assert.deepEqual(f.children.map((c) => c.localName + ":" + c.getAttribute("src") + ":" + c.getAttribute("href")),
+    ["constructor:null:null", "toString:null:null", "__proto__:null:null", "hasOwnProperty:null:#kept"]);
 });
 
 test("an attribute that carries a CSS url() to something not local is removed; a reference into the same document is kept", () => {
@@ -198,6 +258,37 @@ test("an attribute that carries a CSS url() to something not local is removed; a
   assert.equal(path.getAttribute("marker-start"), null);
   assert.equal(path.getAttribute("marker-end"), "url(#b)");
   assert.equal(path.getAttribute("d"), "M0 0L1 1", "a value with no function is not looked at");
+});
+
+test("a url() on a CSS attribute may only reach into the document or hold a small inline image: a relative path is a request too", () => {
+  const f = walk(h("svg", {},
+    h("rect", { filter: "url(api/health?probe=1)" }), h("rect", { mask: "url('../probe3.png')" }), h("rect", { fill: "url(a.png)" }),
+    h("rect", { "clip-path": "url(/api/fs/read?path=a.png)" }), h("rect", { stroke: "url(#g)" }), h("rect", { fill: "url(data:image/png;base64,iVBORw0KGgo=)" }),
+  ));
+  const rects = find(f, "rect");
+  assert.deepEqual(rects.map((r) => r.attributes.length), [0, 0, 0, 0, 1, 1]);
+});
+
+test("free text is not CSS: an alt, a title, an aria label and a link's address that hold a function name keep what they say", () => {
+  const f = walk(
+    h("img", { src: "a.png", alt: "Architecture image (v2)", title: "see src(1) and element(x)" }),
+    h("span", { title: "Page element (x)", "aria-label": "image-set(x) in a sentence", class: "note (image)" }, "t"),
+    h("a", { href: "https://example.com/image(1).png", title: "image(1)" }, "[x]"),
+    h("a", { href: "https://example.com/src(2).png" }, "[y]"),
+    h("p", { "aria-description": "A (src) B" }, "p"),
+  );
+  const img = find(f, "img")[0];
+  assert.equal(img.getAttribute("alt"), "Architecture image (v2)");
+  assert.equal(img.getAttribute("title"), "see src(1) and element(x)");
+  const span = find(f, "span")[0];
+  assert.equal(span.getAttribute("title"), "Page element (x)");
+  assert.equal(span.getAttribute("aria-label"), "image-set(x) in a sentence");
+  assert.equal(span.getAttribute("class"), "note (image)");
+  const [a1, a2] = find(f, "a");
+  assert.equal(a1.getAttribute("href"), "https://example.com/image(1).png");
+  assert.equal(a1.getAttribute("title"), "image(1)");
+  assert.equal(a2.getAttribute("href"), "https://example.com/src(2).png");
+  assert.equal(find(f, "p")[0].getAttribute("aria-description"), "A (src) B");
 });
 
 test("CSS escapes cannot hide the function: u\\72l( is url(", () => {

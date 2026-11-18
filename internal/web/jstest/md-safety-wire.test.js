@@ -9,6 +9,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
+const { MD_PURIFY, mdUnsafeAttr } = require("../static/mdsafe.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const read = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
@@ -46,8 +47,7 @@ test("mdRenderFragment passes MD_PURIFY, merged with RETURN_DOM_FRAGMENT, to DOM
 test("the walk checks every element's src, href and xlink:href with mdUnsafeAttr and every attribute for a CSS fetch, and mdIsRelative decides what is rewritten", () => {
   const b = body("mdsafe.js", "function mdWalkFragment(root, rewrite) {");
   assert.match(b, /root\.querySelectorAll\("\*"\)/, "every element, not a list of them");
-  assert.match(b, /for \(const name of MS_URL_ATTRS\) \{\s*if \(mdUnsafeAttr\(tag, name, el\.getAttribute\(name\)\)\) el\.removeAttribute\(name\);/);
-  assert.match(b, /for \(const attr of Array\.from\(el\.attributes\)\) \{\s*if \(mdUnsafeCss\(attr\.value\)\) el\.removeAttribute\(attr\.name\);/);
+  assert.match(b, /for \(const attr of Array\.from\(el\.attributes\)\) \{\s*if \(mdUnsafeAttr\(tag, attr\.name, attr\.value\) \|\| mdUnsafeCss\(attr\.name, attr\.value\)\) el\.removeAttribute\(attr\.name\);/, "every attribute of every element, by name, not a list of three");
   assert.match(b, /if \(tag === "template"\) \{ el\.remove\(\); continue; \}/);
   const m = body("mdsafe.js", "function mdWalkMedia(doc, el, tag, rewrite) {");
   assert.match(m, /if \(mdIsRelative\(src\)\) \{ src = rewrite\(src\); el\.setAttribute\("src", src\); \}\s*if \(!mdUnsafeAttr\(tag, "src", src\)\) return false;/, "rewritten first, then checked");
@@ -57,6 +57,55 @@ test("the walk checks every element's src, href and xlink:href with mdUnsafeAttr
     const f = text.slice(text.indexOf(fn), text.indexOf("\n}\n", text.indexOf(fn)));
     assert.match(f, /isLocalSrc\(/, fn + " asks isLocalSrc");
   }
+});
+
+// What the vendored DOMPurify keeps. Its lists are frozen arrays of strings in the minified source; the four attribute lists (HTML, SVG,
+// MathML, XML) and the tag lists are found by what they hold. A different layout fails the test on purpose: the audit below is redone.
+function purifyLists() {
+  const src = read("vendor/purify.min.js");
+  const version = /DOMPurify (\d+\.\d+\.\d+)/.exec(src);
+  const lists = [...src.matchAll(/\[("[^"\]]*"(?:,"[^"\]]*")+)\]/g)].map((m) => [...m[1].matchAll(/"([^"]*)"/g)].map((x) => x[1]));
+  const having = (...names) => lists.filter((l) => l.length > 3 && names.every((n) => l.includes(n)));
+  const attrs = [...having("class", "src"), ...having("class", "href", "filter"), ...having("href", "mathvariant"), ...having("xlink:href", "xml:id")];
+  const tags = [...having("div", "img", "video"), ...having("svg", "image", "circle"), ...having("feImage", "feBlend"), ...having("math", "mglyph", "mi")];
+  assert.equal(attrs.length, 4, "found the HTML, SVG, MathML and XML attribute lists");
+  assert.equal(tags.length, 4, "found the HTML, SVG, SVG filter and MathML tag lists");
+  return { version: version && version[1], attrs: new Set(attrs.flat()), tags: new Set(tags.flat()) };
+}
+
+test("audit of the vendored DOMPurify: every attribute it keeps that can carry a URL is forbidden, walked, or named here as inert", () => {
+  const { version, attrs } = purifyLists();
+  assert.equal(version, "3.1.6", "a different DOMPurify: redo this audit (the lists below are for 3.1.6)");
+  // The attributes the HTML standard (and SVG, MathML) read as a URL, or as a URL list.
+  const URL_ATTRS = ["action", "background", "cite", "classid", "codebase", "data", "formaction", "href", "icon", "longdesc", "manifest", "ping",
+    "poster", "profile", "src", "srcset", "usemap", "xlink:href", "archive", "dynsrc", "lowsrc"];
+  // Kept by DOMPurify and not fetched, and why.
+  const INERT = {
+    action: "only a form takes one, and form is forbidden: on any other element it is ignored",
+    cite: "a blockquote, q, ins or del's source, never fetched",
+    usemap: "names an image map in the document, never fetched",
+  };
+  const kept = URL_ATTRS.filter((a) => attrs.has(a)).sort();
+  assert.deepEqual(kept, ["action", "background", "cite", "href", "poster", "src", "srcset", "usemap", "xlink:href"], "the URL attributes DOMPurify 3.1.6 keeps");
+  for (const a of kept) {
+    const forbidden = MD_PURIFY.FORBID_ATTR.includes(a);
+    // walked: the walk drops a value on an element that is not media (an SVG image, say) that is not inert
+    const walked = mdUnsafeAttr("image", a, "api/health?probe=1") && mdUnsafeAttr("image", a, "https://evil.example/x");
+    assert.ok(forbidden || walked || INERT[a], a + " is kept by DOMPurify, can carry a URL, and nothing deals with it");
+    if (INERT[a]) assert.ok(!forbidden && !walked, a + " is in the inert list, but something deals with it: say which");
+  }
+});
+
+test("audit of the vendored DOMPurify: every element it keeps that can fetch is forbidden or has its src and href walked", () => {
+  const { tags } = purifyLists();
+  const FETCHES = ["img", "video", "audio", "source", "picture", "track", "input", "iframe", "frame", "frameset", "object", "embed", "applet", "link",
+    "script", "style", "image", "feimage", "use", "bgsound", "mglyph", "base", "meta", "form", "button", "area", "textpath", "mpath", "altglyph", "tref"];
+  const kept = [...tags].map((t) => t.toLowerCase()).filter((t) => FETCHES.includes(t)).sort();
+  // forbidden by MD_PURIFY; or walked: media (src must be local, a placeholder otherwise) or any other (src and href must be inert).
+  const walked = (t) => mdUnsafeAttr(t, "src", "https://evil.example/x") && mdUnsafeAttr(t, "href", "https://evil.example/x") || mdUnsafeAttr(t, "src", "api/x");
+  for (const t of kept) assert.ok(MD_PURIFY.FORBID_TAGS.includes(t) || walked(t), t + " is kept by DOMPurify, can fetch, and nothing deals with it");
+  for (const t of ["image", "feimage", "mglyph", "img", "video", "audio", "source"]) assert.ok(kept.includes(t), t + " is among what DOMPurify keeps (the audit looked)");
+  assert.ok(!kept.includes("use") && !kept.includes("script"), "use and script are not kept (DOMPurify's own svg and html lists)");
 });
 
 test("no other script of the page sanitizes, or makes HTML out of markdown", () => {

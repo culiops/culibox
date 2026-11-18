@@ -20,15 +20,22 @@
 //     an <img> loads nothing, and the first image that is adopted into the page does.
 //     It visits EVERY element and applies mdUnsafeAttr to its src, href and xlink:href. DOMPurify keeps those
 //     attributes on img, video, audio, source and the SVG image and feImage elements
-//     (it drops SVG use and animate on its own), and a remote value in one of them is
-//     a request. The walk takes every element rather than this list, so a DOMPurify
-//     upgrade that allows another one is covered. A failing img, video, audio or source
-//     becomes a placeholder; any other element just loses the attribute. It also removes
-//     any attribute that carries a CSS url() (or another CSS function that fetches)
-//     with a target that is not local: SVG presentation attributes such as filter, mask,
-//     clip-path, fill and stroke survive DOMPurify and take one. <a href> is a link the
-//     user must click, so it stays (the walk gives it target=_blank
-//     rel="noopener noreferrer", and drops a javascript:, vbscript: or data: one).
+//     (it drops SVG use and animate on its own), and a value in one of them that is not
+//     local is a request. The walk takes every element rather than this list, so a DOMPurify
+//     upgrade that allows another one is covered. Two kinds of element:
+//       - img, video, audio and source: their src is a file of the preview's own. A relative one
+//         is rewritten to the read route first; one that is then not local, or none on an <img>,
+//         becomes a placeholder;
+//       - every other element (SVG image and feImage, MathML, area, ...): no src; an href or
+//         xlink:href may only point into the document (#id) or hold a small inline image (an SVG
+//         <image>: the inline image only, it fetches even a fragment). A relative path would be a
+//         GET of any route of the app, and an address a request to the host the file names, so
+//         any other value loses the attribute.
+//     It also removes any attribute that carries a CSS url() whose target is not one of those two
+//     (and, on an attribute that is CSS, one of the other CSS functions that fetch): SVG
+//     presentation attributes such as filter, mask, clip-path, fill and stroke survive DOMPurify
+//     and take one. <a href> is a link the user must click, so it stays (the walk gives it
+//     target=_blank rel="noopener noreferrer", and drops a javascript:, vbscript: or data: one).
 
 // Passed as the config of DOMPurify.sanitize. Frozen, so a caller that tries to
 // loosen it throws instead of quietly weakening every later render.
@@ -73,21 +80,43 @@ function isLocalSrc(url) {
   return true;
 }
 
-// The attributes whose value is a URL the browser fetches or follows, which the
-// walk checks on every element but <a>.
-const MS_URL_ATTRS = ["src", "href", "xlink:href"];
+// The attributes whose value is a URL the browser fetches or follows, which the walk checks on every element but <a>: src,
+// href and xlink:href, whatever the case and with any prefix.
+const MS_URL_ATTR = /^(?:[a-z0-9_-]+:)?(?:src|href)$/i;
+const MS_SRC_ATTR = /^(?:[a-z0-9_-]+:)?src$/i;
+
+// The elements whose src is a file of the preview's own, with what a placeholder calls them. A Map: a tag name is a file's
+// text, so "constructor" must not find an inherited property.
+const MS_MEDIA = new Map([["img", "image"], ["video", "video"], ["audio", "audio"], ["source", "media"]]);
+
+// mdInertRef says whether a URL is one that cannot make a request: a reference into the document (#id) or a small inline image. A
+// path, however relative, is a GET of a route of the app; an address is a GET of the host it names.
+function mdInertRef(url) {
+  if (typeof url !== "string") return false;
+  const s = msNormalize(url);
+  return s.startsWith("#") || MS_DATA_IMAGE.test(s);
+}
 
 // mdUnsafeAttr says whether one attribute of one element must go: it is a src, href
 // or xlink:href, the element is not an <a> (a link waits for a click, a resource
-// does not), and its value is not local. An attribute that is not there (null or
-// undefined) is nothing to remove. What the caller does with a true is its own
-// business: placeholder for img, video, audio and source, remove the attribute for
-// anything else.
+// does not), and its value is not safe for the element:
+//  - a media element's src is safe when it is local (isLocalSrc) and no longer relative: the walk rewrites a relative one to a
+//    read route first;
+//  - any other src (a frame, an embed, a track, MathML's mglyph) is not: markdown has no such element, so it goes;
+//  - an SVG <image> fetches its href, a fragment too (it asks for the page itself), so only a small inline image is safe;
+//  - any other href or xlink:href (feImage, area, MathML, a gradient's, textPath's ...) is safe when it is inert (mdInertRef): a
+//    reference into the document, or a small inline image.
+// An attribute that is not there (null or undefined) is nothing to remove. What the caller does with a true is its own business:
+// placeholder for the media elements' src, remove the attribute for anything else.
 function mdUnsafeAttr(tagName, attrName, value) {
   if (value == null) return false;
-  if (String(tagName).toLowerCase() === "a") return false;
-  if (!MS_URL_ATTRS.includes(String(attrName).toLowerCase())) return false;
-  return !isLocalSrc(value);
+  const tag = String(tagName).toLowerCase();
+  if (tag === "a") return false;
+  const attr = String(attrName);
+  if (!MS_URL_ATTR.test(attr)) return false;
+  if (MS_SRC_ATTR.test(attr)) return !MS_MEDIA.has(tag) || !isLocalSrc(value) || mdIsRelative(value);
+  if (tag === "image") return !MS_DATA_IMAGE.test(msNormalize(String(value)));
+  return !mdInertRef(value);
 }
 
 // mdIsRelative says whether a src is a path relative to the file: local, with no scheme and no leading slash. The preview
@@ -112,17 +141,37 @@ function msCssUnescape(s) {
 }
 
 // The CSS functions that take an image by address other than url(): image-set() (and its -webkit- spelling), image(),
-// src(), cross-fade() and element(). No honest markdown puts one in an attribute, so one is refused whatever it names.
+// src(), cross-fade() and element(). No honest SVG puts one in a presentation attribute, so one is refused whatever it names.
 const MS_CSS_FETCH_FN = /(?:image-set|image|src|cross-fade|element)\s*\(/i;
 
-// mdUnsafeCss says whether an attribute value could make the browser fetch something that is not local: a url() whose target
-// is not (the same test as a src), or one of the other CSS functions above. An SVG presentation attribute (filter, mask,
-// clip-path, fill, stroke, marker-start, cursor, ...) is parsed as CSS and takes a url() that DOMPurify keeps.
-// A reference to a fragment of the same document, url(#blur), is local.
-function mdUnsafeCss(value) {
+// The attributes whose value is parsed as CSS: style (DOMPurify drops it, MD_PURIFY says so too) and the SVG presentation
+// attributes, which DOMPurify keeps. Free text is not: an alt of "Architecture image (v2)" or a title of "Page element (x)" is a
+// sentence, and a function name in it fetches nothing.
+const MS_CSS_ATTRS = new Set([
+  "style", "alignment-baseline", "baseline-shift", "clip", "clip-path", "clip-rule", "color", "color-interpolation",
+  "color-interpolation-filters", "color-profile", "color-rendering", "cursor", "direction", "display", "dominant-baseline", "fill",
+  "fill-opacity", "fill-rule", "filter", "flood-color", "flood-opacity", "font", "font-family", "font-size", "font-size-adjust",
+  "font-stretch", "font-style", "font-variant", "font-weight", "glyph-orientation-horizontal", "glyph-orientation-vertical",
+  "image-rendering", "isolation", "kerning", "letter-spacing", "lighting-color", "marker", "marker-end", "marker-mid", "marker-start",
+  "mask", "mask-type", "mix-blend-mode", "opacity", "overflow", "paint-order", "pointer-events", "shape-rendering", "stop-color",
+  "stop-opacity", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit",
+  "stroke-opacity", "stroke-width", "text-anchor", "text-decoration", "text-overflow", "text-rendering", "transform",
+  "transform-origin", "unicode-bidi", "vector-effect", "visibility", "white-space", "word-spacing", "writing-mode",
+  "mathbackground", "mathcolor",
+]);
+
+// mdUnsafeCss says whether an attribute could make the browser fetch something that its value names as CSS. A url() on an
+// attribute that is CSS (MS_CSS_ATTRS: an SVG presentation attribute, which DOMPurify keeps: filter, mask, clip-path, fill, stroke,
+// marker-start, ...) must be inert (mdInertRef: a reference into the document, url(#blur), or a small inline image), the same test
+// as an SVG image's href, so a relative path does not pass: it would be a GET of a route of the app. On an attribute that is CSS,
+// one of the other CSS functions above is refused too. On any other attribute (free text, or one this list does not know that is
+// parsed as CSS all the same) a url() is still looked at, and refused when its target is not local (isLocalSrc), but no function
+// name is: a sentence that says "image (v2)" fetches nothing.
+function mdUnsafeCss(attrName, value) {
   if (typeof value !== "string" || !value.includes("(")) return false; // a function needs a parenthesis (an escaped one is not a call)
   const s = msCssUnescape(value);
-  if (MS_CSS_FETCH_FN.test(s)) return true;
+  const css = MS_CSS_ATTRS.has(String(attrName).toLowerCase());
+  if (css && MS_CSS_FETCH_FN.test(s)) return true;
   const url = /url\s*\(/gi;
   for (let m; (m = url.exec(s)); ) {
     const rest = s.slice(m.index + m[0].length).replace(/^\s+/, "");
@@ -135,7 +184,7 @@ function mdUnsafeCss(value) {
       const end = rest.indexOf(")");
       target = (end < 0 ? rest : rest.slice(0, end)).trim();
     }
-    if (!isLocalSrc(target)) return true;
+    if (!(css ? mdInertRef(target) : isLocalSrc(target))) return true;
   }
   return false;
 }
@@ -150,8 +199,6 @@ function mdUnsafeLink(url) {
 
 // --- the walk and the render -------------------------------------------------------------------------------------
 
-// The elements a placeholder stands in for, with what the placeholder calls them.
-const MS_MEDIA = { img: "image", video: "video", audio: "audio", source: "media" };
 const MS_REMOTE_URL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i; // a scheme or a protocol-relative address: the author meant another host
 const MS_LINKABLE_URL = /^https?:\/\//i;
 
@@ -174,7 +221,7 @@ function mdPlaceholder(doc, el, tag, url) {
   const n = url === null ? "" : msNormalize(url);
   const span = doc.createElement("span");
   span.className = "md-blocked";
-  span.append((MS_REMOTE_URL.test(n) ? "remote " : "") + MS_MEDIA[tag] + " blocked");
+  span.append((MS_REMOTE_URL.test(n) ? "remote " : "") + MS_MEDIA.get(tag) + " blocked");
   if (n) span.title = n;
   if (MS_LINKABLE_URL.test(n)) span.append(" ", mdLink(doc, n, n.length > 60 ? n.slice(0, 59) + "\u2026" : n));
   const parent = el.parentNode;
@@ -218,12 +265,9 @@ function mdWalkFragment(root, rewrite) {
     if (!root.contains(el)) continue; // inside something that was replaced or removed above
     const tag = String(el.localName || el.tagName).toLowerCase();
     if (tag === "template") { el.remove(); continue; }
-    if (MS_MEDIA[tag] && mdWalkMedia(doc, el, tag, rewrite)) continue;
-    for (const name of MS_URL_ATTRS) {
-      if (mdUnsafeAttr(tag, name, el.getAttribute(name))) el.removeAttribute(name);
-    }
+    if (MS_MEDIA.has(tag) && mdWalkMedia(doc, el, tag, rewrite)) continue;
     for (const attr of Array.from(el.attributes)) {
-      if (mdUnsafeCss(attr.value)) el.removeAttribute(attr.name);
+      if (mdUnsafeAttr(tag, attr.name, attr.value) || mdUnsafeCss(attr.name, attr.value)) el.removeAttribute(attr.name);
     }
     if (tag === "a") mdWalkLink(el);
   }
@@ -245,6 +289,6 @@ function mdRenderFragment(text, deps) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    isLocalSrc, mdUnsafeAttr, MD_PURIFY, mdIsRelative, mdUnsafeCss, mdUnsafeLink, mdWalkFragment, mdRenderFragment,
+    isLocalSrc, mdUnsafeAttr, MD_PURIFY, mdIsRelative, mdInertRef, mdUnsafeCss, mdUnsafeLink, mdWalkFragment, mdRenderFragment,
   };
 }

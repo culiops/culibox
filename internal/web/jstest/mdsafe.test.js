@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isLocalSrc, mdUnsafeAttr, MD_PURIFY, mdIsRelative, mdUnsafeCss, mdUnsafeLink } = require("../static/mdsafe.js");
+const { isLocalSrc, mdUnsafeAttr, MD_PURIFY, mdIsRelative, mdInertRef, mdUnsafeCss, mdUnsafeLink } = require("../static/mdsafe.js");
 const { boxFileURL } = require("../static/fsops.js");
 
 test("isLocalSrc: relative paths and same-origin file reads are local", () => {
@@ -87,23 +87,46 @@ test("MD_PURIFY closes the remote-load channels the src walk does not see", () =
   for (const [what, [list, name]] of Object.entries(channel)) assert.ok(MD_PURIFY[list].includes(name), what);
 });
 
-test("mdUnsafeAttr: a src, href or xlink:href that is not local must go, on anything but an a", () => {
-  for (const [tag, attr] of [
-    ["img", "src"], ["video", "src"], ["audio", "src"], ["source", "src"],
-    ["image", "href"], ["image", "xlink:href"], ["use", "href"], ["use", "xlink:href"], ["feImage", "href"], ["math", "href"],
-  ]) {
-    for (const url of ["https://evil.example/p.png", "//evil.example/p.png", "http://x/y", "javascript:alert(1)", "data:image/svg+xml,x", "/etc/x.png", ""]) {
-      assert.strictEqual(mdUnsafeAttr(tag, attr, url), true, tag + " " + attr + " " + JSON.stringify(url));
+test("mdUnsafeAttr: a media element's src must be local and no longer relative; the walk rewrites a relative one to a read route first", () => {
+  for (const tag of ["img", "video", "audio", "source"]) {
+    for (const url of ["https://evil.example/p.png", "//evil.example/p.png", "http://x/y", "javascript:alert(1)", "data:image/svg+xml,x", "/etc/x.png", "",
+      "a.png", "../x.png", "./a/b.webm", "api/health?probe=1", "#frag"]) {
+      assert.strictEqual(mdUnsafeAttr(tag, "src", url), true, tag + " src " + JSON.stringify(url));
+    }
+    for (const url of ["/api/fs/read?path=a.png", "/api/sessions/s1/boxfile?path=%2Fa.png", "data:image/png;base64,iVBORw0KGgo="]) {
+      assert.strictEqual(mdUnsafeAttr(tag, "src", url), false, tag + " src " + url);
     }
   }
 });
 
-test("mdUnsafeAttr: a local value is kept", () => {
-  for (const [tag, attr, url] of [
-    ["img", "src", "a.png"], ["img", "src", "../x.png"], ["video", "src", "clip.mp4"], ["source", "src", "./a/b.webm"],
-    ["img", "src", "/api/fs/read?path=a.png"], ["use", "href", "#shape"], ["image", "xlink:href", "i.png"],
-    ["img", "src", "data:image/png;base64,iVBORw0KGgo="],
-  ]) assert.strictEqual(mdUnsafeAttr(tag, attr, url), false, tag + " " + attr + " " + url);
+const NOT_INERT = [
+  "api/health?probe=1", "api/sessions/probe2", "../probe3.png", "./a.png", "a.png", "x.svg#f", "?x=1", "", "   ",
+  "/api/health", "/api/fs/read?path=a.png", "//evil.example/p.png", "https://evil.example/p.png", "javascript:alert(1)",
+  "data:image/svg+xml,x", "data:text/html,x", "data:image/png,raw", "\\\\evil.example\\a",
+];
+
+test("mdUnsafeAttr: on any element but an SVG image an href or xlink:href may only point into the document or hold a small inline image: a relative path is a GET of a route of the app", () => {
+  for (const tag of ["feImage", "use", "math", "mglyph", "area", "textPath", "linearGradient", "mpath", "altGlyph", "span"]) {
+    for (const attr of ["href", "xlink:href", "XLINK:HREF", "Href", "xml:href"]) {
+      for (const url of NOT_INERT) assert.strictEqual(mdUnsafeAttr(tag, attr, url), true, tag + " " + attr + " " + JSON.stringify(url));
+      for (const url of ["#shape", "#", " #a", "\t#a", "data:image/png;base64,iVBORw0KGgo="]) {
+        assert.strictEqual(mdUnsafeAttr(tag, attr, url), false, tag + " " + attr + " " + JSON.stringify(url));
+      }
+    }
+  }
+});
+
+test("mdUnsafeAttr: an SVG image fetches its href, even a fragment (the page itself), so only a small inline image is safe on it", () => {
+  for (const attr of ["href", "xlink:href", "XLINK:HREF"]) {
+    for (const url of [...NOT_INERT, "#x", "#", " #x"]) assert.strictEqual(mdUnsafeAttr("image", attr, url), true, attr + " " + JSON.stringify(url));
+    for (const url of ["data:image/png;base64,iVBORw0KGgo=", "DATA:IMAGE/GIF;BASE64,AAAA"]) assert.strictEqual(mdUnsafeAttr("image", attr, url), false, attr + " " + url);
+  }
+});
+
+test("mdUnsafeAttr: a src on an element that is not media goes whatever it holds: a frame, an embed, a track, mglyph", () => {
+  for (const tag of ["mglyph", "input", "embed", "track", "frame", "iframe", "bgsound", "image", "feImage", "span"]) {
+    for (const url of [...NOT_INERT, "#ok", "data:image/png;base64,iVBORw0KGgo=", "/api/fs/read?path=a.png"]) assert.strictEqual(mdUnsafeAttr(tag, "src", url), true, tag + " " + JSON.stringify(url));
+  }
 });
 
 test("mdUnsafeAttr: an a keeps its remote href, and other attributes are not its business", () => {
@@ -113,11 +136,30 @@ test("mdUnsafeAttr: an a keeps its remote href, and other attributes are not its
   assert.strictEqual(mdUnsafeAttr("img", "alt", "https://example.com/x"), false);
   assert.strictEqual(mdUnsafeAttr("img", "title", "https://example.com/x"), false);
   assert.strictEqual(mdUnsafeAttr("div", "class", "//host"), false);
+  assert.strictEqual(mdUnsafeAttr("a", "href", "api/health"), false, "a relative link is a click");
+  assert.strictEqual(mdUnsafeAttr("image", "width", "api/health"), false, "only src and href are URLs");
+  assert.strictEqual(mdUnsafeAttr("image", "data-src", "api/health"), false, "a name that merely ends in src is not one (no colon)");
+});
+
+test("mdUnsafeAttr: a tag name that is a property of Object is no media element", () => {
+  for (const tag of ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"]) {
+    assert.strictEqual(mdUnsafeAttr(tag, "src", "/api/fs/read?path=a.png"), true, tag + ": not media, so its src goes");
+    assert.strictEqual(mdUnsafeAttr(tag, "href", "#a"), false, tag + ": and its href may reach into the document");
+  }
+});
+
+test("mdInertRef: a reference into the document or a small inline image, nothing else", () => {
+  for (const u of ["#a", "#", "  #a", "\t#a", "#a b", "data:image/png;base64,AAAA", "DATA:IMAGE/GIF;BASE64,AAAA"]) assert.strictEqual(mdInertRef(u), true, JSON.stringify(u));
+  for (const u of [
+    "a.png", "./a.png", "x.svg#f", "?x=1", "/api/fs/read?path=a", "//evil.example/x", "https://evil.example/x", "data:image/svg+xml;base64,AAAA",
+    "data:text/html,x", "javascript:alert(1)", "", "  ", null, undefined, 5,
+  ]) assert.strictEqual(mdInertRef(u), false, JSON.stringify(u));
 });
 
 test("mdUnsafeAttr: tag and attribute names are read case-insensitively; a missing attribute is nothing to remove", () => {
   assert.strictEqual(mdUnsafeAttr("IMG", "SRC", "https://evil.example/p.png"), true);
   assert.strictEqual(mdUnsafeAttr("Use", "XLINK:HREF", "https://evil.example/s.svg#a"), true);
+  assert.strictEqual(mdUnsafeAttr("IMAGE", "Xlink:Href", "api/health"), true);
   assert.strictEqual(mdUnsafeAttr("img", "src", null), false);
   assert.strictEqual(mdUnsafeAttr("img", "src", undefined), false);
 });
@@ -137,34 +179,57 @@ test("mdIsRelative: a path with no scheme and no leading slash, and nothing the 
   ]) assert.strictEqual(mdIsRelative(u), false, JSON.stringify(u));
 });
 
-test("mdUnsafeCss: a url() whose target is not local is unsafe, whatever the quoting, case or spacing", () => {
+test("mdUnsafeCss: on a CSS attribute a url() is safe only when inert, whatever the quoting, case or spacing", () => {
   for (const v of [
     "url(https://evil.example/f.svg#f)", "url('https://evil.example/f.svg#f')", 'url("https://evil.example/f.svg#f")', "URL(https://evil.example/x)",
     "url( https://evil.example/x )", "url ( //evil.example/x )", "none url(//evil.example/x) repeat", "url(javascript:alert(1))",
     "url(data:image/svg+xml,x)", "url(/etc/x)", "url()", "url('", 'url("https://evil.example/x', "url(#a) url(https://evil.example/x)",
-  ]) assert.strictEqual(mdUnsafeCss(v), true, v);
+    "url(api/health?probe=1)", "url('../probe3.png')", "url(a.png)", "url(x.svg#f)", "url(/api/fs/read?path=a.png)", "url(/api/health)",
+  ]) for (const name of ["filter", "mask", "clip-path", "fill", "stroke", "marker-start", "cursor", "style", "FILL"]) assert.strictEqual(mdUnsafeCss(name, v), true, name + " " + v);
 });
 
-test("mdUnsafeCss: a reference into the same document, a local path or a small inline image is not", () => {
-  for (const v of ["url(#grad)", "url('#grad')", 'url( "#a" )', "url(a.png)", "url(/api/fs/read?path=a.png)", "url(data:image/png;base64,iVBORw0KGgo=)", "url(#a) url(#b)"]) {
-    assert.strictEqual(mdUnsafeCss(v), false, v);
+test("mdUnsafeCss: a reference into the same document or a small inline image is safe on a CSS attribute", () => {
+  for (const v of ["url(#grad)", "url('#grad')", 'url( "#a" )', "url(data:image/png;base64,iVBORw0KGgo=)", "url(#a) url(#b)", "url(#a) none"]) {
+    assert.strictEqual(mdUnsafeCss("filter", v), false, v);
+  }
+});
+
+test("mdUnsafeCss: on any other attribute a url() is still looked at, and refused when its target is not local", () => {
+  for (const name of ["alt", "title", "aria-label", "data-x", "class", "href"]) {
+    assert.strictEqual(mdUnsafeCss(name, "see url(https://evil.example/x)"), true, name);
+    assert.strictEqual(mdUnsafeCss(name, "see url(foo.png)"), false, name + ": a sentence that names a relative file");
   }
 });
 
 test("mdUnsafeCss: escapes are undone before the name is read", () => {
   for (const v of ["u\\72l(https://evil.example/x)", "\\75 rl(https://evil.example/x)", "\\000075rl(https://evil.example/x)", "url(https\\3a //evil.example/x)", "\\75\\72\\6c(https://evil.example/x)"]) {
-    assert.strictEqual(mdUnsafeCss(v), true, v);
+    assert.strictEqual(mdUnsafeCss("mask", v), true, v);
   }
-  assert.strictEqual(mdUnsafeCss("url(\\23 a)"), false, "an escape that spells a same-document reference is one");
-  assert.strictEqual(mdUnsafeCss("url\\28 https://evil.example/x)"), false, "an escaped parenthesis is no call (and has no paren to find)");
+  assert.strictEqual(mdUnsafeCss("mask", "url(\\23 a)"), false, "an escape that spells a same-document reference is one");
+  assert.strictEqual(mdUnsafeCss("mask", "url\\28 https://evil.example/x)"), false, "an escaped parenthesis is no call (and has no paren to find)");
 });
 
-test("mdUnsafeCss: the other CSS functions that take an image by address are unsafe; a function that fetches nothing and plain values are not", () => {
+test("mdUnsafeCss: the other CSS functions that take an image by address are unsafe on a CSS attribute; a function that fetches nothing and plain values are not", () => {
   for (const v of ["image-set('https://evil.example/x.png' 1x)", "-webkit-image-set(url(#a) 1x)", "image('x.png')", "src('x.png')", "cross-fade(url(#a), url(#b), 50%)", "element(#a)"]) {
-    assert.strictEqual(mdUnsafeCss(v), true, v);
+    for (const name of ["mask", "fill", "filter", "style", "cursor"]) assert.strictEqual(mdUnsafeCss(name, v), true, name + " " + v);
   }
   for (const v of ["rotate(45)", "translate(10px, 5px)", "rgb(1, 2, 3)", "calc(1px + 2px)", "0.5", "M0 0L1 1", "none", "", null, undefined, 5]) {
-    assert.strictEqual(mdUnsafeCss(v), false, String(v));
+    assert.strictEqual(mdUnsafeCss("transform", v), false, String(v));
+  }
+});
+
+test("mdUnsafeCss: free text that happens to hold a function name is a sentence, not CSS: alt, title, aria-*, class, a link's address", () => {
+  for (const name of ["alt", "title", "aria-label", "aria-description", "class", "id", "name", "lang", "placeholder", "summary", "label", "href", "xlink:href", "src"]) {
+    for (const v of ["Architecture image (v2)", "Page element (x)", "see src(1) and element(x)", "https://example.com/image(1).png", "image-set(x)", "A (src) B"]) {
+      assert.strictEqual(mdUnsafeCss(name, v), false, name + ": " + v);
+    }
+  }
+});
+
+test("mdUnsafeCss: every attribute DOMPurify keeps that is parsed as CSS is known as one (the SVG presentation attributes of the vendored list)", () => {
+  for (const name of ["clip-path", "filter", "mask", "fill", "stroke", "marker-start", "marker-mid", "marker-end", "stop-color", "flood-color", "lighting-color",
+    "color", "opacity", "transform", "font-family", "text-decoration", "visibility", "display", "overflow", "clip", "paint-order", "image-rendering"]) {
+    assert.strictEqual(mdUnsafeCss(name, "image('https://evil.example/x')"), true, name);
   }
 });
 
