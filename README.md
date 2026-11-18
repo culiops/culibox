@@ -1,100 +1,170 @@
+<div align="center">
+
 # CuliBox
 
-A self-hosted web control plane for running, watching, containing and steering AI coding-agent sessions.
+### Put your AI agent in a box. Hand it the cloud keys for 15 minutes.
 
-CuliBox is the safe way to let an AI agent touch your cloud. You start Claude Code sessions from a browser, each one in its own container by default, and you keep an eye on what they are doing and what they cost. AWS access, when you grant it, is short-lived and scoped, and every grant is logged.
+A self-hosted control panel to run, watch, contain and steer Claude Code sessions.
 
-**Status:** pre-1.0 and in active development. CuliBox is used every day to build CuliBox itself. Until 1.0, a minor release can change config keys or behaviour, so read the release notes before you upgrade.
+[![Release](https://img.shields.io/github/v/release/culiops/culibox?sort=semver)](https://github.com/culiops/culibox/releases/latest) [![License](https://img.shields.io/github/license/culiops/culibox)](LICENSE) ![Runs on Linux and macOS](https://img.shields.io/badge/runs%20on-Linux%20%7C%20macOS-blue) ![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-orange)
 
-## Why it exists
+[Quick start](#quick-start) · [Features](#what-you-get) · [Security](#security-read-this) · [Ideas and bugs](https://github.com/culiops/culibox/issues)
 
-Letting an agent run commands against real infrastructure is useful and risky. The usual setup is a terminal on a machine that holds your SSH keys, your cloud credentials and your whole home directory, with the agent running as you.
+</div>
 
-CuliBox puts a boundary around that. Sessions run in a per-project container where only the project folder is mounted writable. Cloud credentials are minted per session, last 15 minutes and are narrower than your own. You see every session in one place, including which ones are waiting for you.
+<!-- TODO: Add docs/images/hero.gif. -->
 
-It is built first for ops, cloud, DevOps and SRE work, where you want a control panel rather than an editor.
+## Why I built this
 
-![Fig. 1: the boundary of one box. Kept outside, on your machine: SSH keys, home directory, Docker socket, AWS SSO session, shell history. Inside the box: the agent, the project folder read-write, a filtered copy of the agent config. Crossing the wall only through gates: AWS for 15 minutes, GitHub for 1 hour, static tokens for one command, and the internet through the proxy. Every grant goes to a local audit log.](docs/images/box-boundary.svg)
+I built CuliBox because every day I have to let AI agents work inside systems containing SSH keys, cloud access and third-party services such as GitHub, Grafana, Sentry and Jira. Giving an agent a terminal is useful right up until you remember that the terminal is running as you.
 
-**What it is not:** an IDE or a code editor. There is a small file browser and editor for quick fixes, and it is kept deliberately thin. If you want to edit code all day, use an editor.
+I wanted one page for starting sessions, seeing what they are doing, noticing when they are stuck, checking what they cost and deciding exactly which credentials they may touch. CuliBox puts each project in its own container by default, gives the agent only the project folder as writable space and puts cloud access behind explicit gates.
 
-## Features
+It is built first for ops, cloud, DevOps and SRE work. If your agent needs to inspect infrastructure without inheriting your entire digital life, this is for you. I use CuliBox to build CuliBox: agents make changes inside CuliBox boxes, then I review them before they land. Yes, the tool works on itself. No, that does not make it magic.
 
-One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
+## This is not my startup pitch
 
-**Watch**
+I did not plan to publicise CuliBox widely. I built it because I needed it, then released it because other people may have the same annoying problem.
 
-- **Multi-session web terminal.** Several agent sessions side by side in the browser, on desktop or phone.
-- **Attention awareness.** Each session shows whether it is working, idle or waiting for you, and why. The tab title and favicon change while something needs you.
-- **Usage and cost.** Per-session context size and model, account-level 5-hour and 7-day rate-limit windows (when a statusLine hook provides them), and a local analytics view of tokens and estimated cost per model, project and session.
-- **Environment badge.** Mark an instance as DEV, PROD and so on.
+There are no user-count fireworks, company-logo walls or claims that it will fix your organisation by Friday. If it fits your setup, use it. If it does not, do not force it.
 
-**Run and steer**
+## The problem
 
-- **Session persistence.** Sessions run under [abduco](https://www.brain-dump.org/projects/abduco/) and survive a daemon restart or a closed browser.
-- **Steer from the UI.** Interrupt a session, restart an exited one (host-tier Claude Code sessions resume the same conversation), and, with `replies_enabled` on, answer permission prompts from the browser.
-- **Profiles.** Define agents in the UI or in config, with launch flags and env vars as toggles.
-- **Files.** A thin file browser: view, quick edit, upload, download.
+A normal coding agent launched from your terminal receives whatever your terminal can reach. That is often much more than the task requires.
 
-**Contain**
+| | Agent in your terminal | Agent in a CuliBox box |
+|---|---|---|
+| `~/.ssh` | Readable | Not mounted |
+| Home directory | Readable | Not mounted; only the project folder is writable |
+| Docker socket | Readable | Not mounted |
+| AWS | Your SSO session, valid for hours | Minted per session, valid for 15 minutes, read-only role narrowed further (unless you grant a write window) |
+| GitHub | Your token, every repo it can access | One-hour GitHub App token, limited to listed repos and read-only by default |
+| Grafana, Sentry and Jira tokens | Sitting in your environment | Fetched per command; egress opened only to that service's hosts, for the whole session |
+| Internet | All of it | Through CuliBox's proxy: port 443, hostnames only, no private addresses, and an allowlist for boxes holding credentials (a profile can widen it). On Linux, host services listening on all addresses are reachable directly. |
+| CloudTrail | You | The agent session (not in SSO-direct mode) |
+| Several sessions | Terminal tabs | One page showing which sessions are working, idle or waiting for you, and why |
+| Cost | Unknown | Tokens and estimated cost per model, project and session |
 
-- **Boxed runtime (the default).** Each project gets its own Docker container where only the project folder is mounted writable: no host home, no `~/.ssh`, no Docker socket, all capabilities dropped, a read-only root, and PID and memory caps. With a config file, boxes are the default and the `host` tier (no containment) is something you choose; with no config file at all, CuliBox runs on the host tier.
-- **Your agent config, filtered.** A box gets an allowlisted slice of your Claude Code config (`CLAUDE.md` and the files it imports, skills, plugins, MCP servers that run in the image). Credentials, history and transcripts are never copied. See [CLAUDE.md imports](docs/CLAUDE-MD-IMPORTS.md).
-- **Clone mode.** An agent works on a private copy of a repo, and its branches come home as `box/<branch>` for you to review. Linux, and macOS with the boxed tier. See [Clone mode](docs/CLONE-MODE.md).
-- **Read other repos.** `context_paths` mounts partner repos or docs into a box read-only. See [Reading other repos](docs/CONTEXT-PATHS.md).
-- **A ready box shell.** zsh with completion for aws, terraform, kubectl, helm and gh, and a prompt that shows production contexts in red.
-- **macOS.** Boxes run in CuliBox's own colima VM. See [docs/MACOS.md](docs/MACOS.md).
-- **Multiple accounts.** Named agent accounts, each with its own config and token, kept apart from your personal login.
+One sharp edge: with no config file at all, sessions run on the uncontained host tier. Once a config file exists, boxes are the default. `culibox init` includes a step for this, so do not skip through setup like you are accepting cookie banners.
 
-**Cloud access, audit and secrets**
-
-- **AWS credential broker.** Per-session credentials that last 15 minutes, minted from your SSO session through a role you create to be read-only, and narrowed further. The box never sees your SSO session. One session can reach several accounts, and a write role can be granted for a fixed window. The opt-in SSO-direct mode is the exception: its credentials keep your SSO role's expiry (hours, not minutes), are not revoked when the session ends, and CloudTrail shows you. See [AWS access](docs/AWS.md), which also has a diagram of how a credential reaches the agent.
-- **GitHub access.** One-hour GitHub App tokens scoped to the repos you list, read-only by default. See [GitHub access](docs/GITHUB.md).
-- **Static tokens.** Grafana, Sentry, Atlassian or a GitHub personal access token, handed to one command at a time, with egress opened only to that service's hosts. The agent can read a bound token, and it is long-lived and not revoked when the session ends. See [Static tokens](docs/STATIC-TOKENS.md).
-- **Audit.** CloudTrail records the agent session rather than you (not in SSO-direct mode), and every mint, refusal and token fetch is written to a local audit log, never the value.
-- **Secrets by reference, and an encrypted store.** A credential entry names where its value lives instead of holding it. An optional encrypted store keeps values unreadable in disk snapshots and backups. See [Store](docs/STORE.md).
-- **`culibox doctor`.** A read-only machine check that prints PASS, WARN or FAIL lines, safe to paste into an issue.
+![The boundary around a CuliBox box: host keys, credentials and services stay outside; access crosses explicit gates.](docs/images/box-boundary.svg)
 
 ## Quick start
 
-You need Linux or macOS and Claude Code. Boxed sessions also need Docker on Linux, or `colima` and `docker` on macOS 13+ on Apple Silicon (Intel is untested). `culibox init` checks these programs and the macOS version, and says how to install what is missing. Sessions run under [abduco](https://www.brain-dump.org/projects/abduco/), which each release ships next to `culibox`. The full list is in [Requirements](docs/INSTALL.md#requirements).
-
-Download the installer from the newest release, read it, and run it:
+You need Linux or macOS and Claude Code. Boxed sessions also need Docker on Linux, or `colima` and `docker` on macOS 13+ on Apple Silicon. Intel macOS is untested.
 
 ```sh
 curl -fsSLO https://github.com/culiops/culibox/releases/latest/download/setup.sh
 sh setup.sh
-```
-
-It installs the newest release's checksum-verified `culibox`, with the `abduco` that comes with it, into `~/.local/bin` without `sudo` (it skips both when that release is already installed), then runs `culibox init`, a guided setup you can run again at any time. `sh setup.sh --version vX.Y.Z` installs another release. Then start CuliBox:
-
-```sh
 culibox serve
 ```
 
-It listens on `127.0.0.1:8899` and prints a login URL. Open it in a browser on the same machine.
+The installer verifies checksums, installs into `~/.local/bin` without `sudo`, and runs the guided `culibox init`. Read `setup.sh` before you run it. CuliBox listens on `127.0.0.1:8899` and prints a login URL; open it in a browser on the same machine.
 
-Release tarballs, building from source, what `setup.sh` and `init` do step by step, and how to tell whether a macOS build is verified: [docs/INSTALL.md](docs/INSTALL.md). Upgrading: [docs/UPGRADING.md](docs/UPGRADING.md).
+## What you get
 
-## Security
+### Watch
+
+Run several Claude Code sessions from one browser page, on desktop or phone. Each session reports whether it is working, idle or waiting for you, including why it needs attention.
+
+Local analytics show context, tokens and estimated cost per model, project and session. Rate-limit windows appear when a status-line hook provides them.
+
+### Steer
+
+Interrupt a session, restart an exited session and, when `replies_enabled` is on, answer permission prompts from the browser. Sessions run under [abduco](https://www.brain-dump.org/projects/abduco/), so closing the browser or restarting the daemon does not immediately kill the work.
+
+The Monaco editor is good enough to work in, lets you inspect and edit files, and marks the agent's changes against git. I improve it release by release, but CuliBox is still not an IDE.
+
+### Contain
+
+Each boxed project gets a container with a read-only root, dropped capabilities, PID and memory caps, no host home directory, no SSH directory and no Docker socket. Only the project folder is writable, while agent configuration is filtered and credentials, history and transcripts are not copied into the box.
+
+Clone mode lets an agent work on a private repository copy and bring branches home as `box/<branch>` for review.
+
+### Touch the cloud
+
+The AWS credential broker mints short-lived credentials from an SSO session through an agent role you create. It supports AWS only. GitHub access uses one-hour App tokens for listed repositories.
+
+Grafana, Sentry, Atlassian and GitHub personal access tokens can be handed to one command at a time. These static tokens remain long-lived, so please do not mentally rename them “safe tokens.” Every mint, refusal and token fetch goes to a local audit log without recording the secret value.
+
+### Check your setup
+
+Run `culibox doctor` after setup and after every upgrade. It performs read-only checks and prints `PASS`, `WARN` or `FAIL` lines that are safe to paste into an issue.
+
+### CuliBox is not an IDE
+
+It is not VS Code, Orca or an Agent IDE, and comparing them will mostly waste your time. CuliBox has Monaco, a file browser and enough editing support to work around an agent session, but if you want to edit code all day, use your editor.
+
+## Status
+
+CuliBox is pre-1.0, under active development and used every day to build itself. A minor release may still change configuration keys or behaviour, so read the release notes before upgrading.
+
+Only Claude Code is supported as an agent today. macOS support exists through CuliBox's own colima VM, but some broker and Keychain paths still need verification on a Mac.
+
+## Security, read this
 
 CuliBox starts shells and agents on your machine, so login is always required. The default bind is loopback, and binding all interfaces is refused unless `allow_public` is set.
 
-**Never bind CuliBox to a public interface without a front door.** A reachable CuliBox is a remote shell. If you need access from elsewhere, keep the bind on loopback or a private network and put an authenticating proxy or tunnel in front (add its hostname to `allowed_hosts`). Do not rely on the login page alone on the open internet, and use a long password.
+A reachable CuliBox is a remote shell, not a cute dashboard. Never expose it publicly without an authenticating proxy or tunnel, add the front door's hostname to `allowed_hosts`, use a long password, and do not pretend the login page alone makes the open internet friendly.
 
-Know the limits before you rely on it:
+Anyone promising a 100 percent safe agent setup is lying. Know the limits:
 
 - The `host` tier is not contained. A host session is you, with an agent.
-- The adversary in scope is an agent running arbitrary userspace commands in a box. A kernel-level escape is out of scope.
-- An agent can read any credential it is given while it runs. Short-lived credentials (the AWS agent role, GitHub App tokens) are limited by lifetime, scope, the egress lock and the audit log. Static tokens, GitHub personal access tokens and SSO-direct credentials are long-lived and are not revoked when the session ends.
-- After a boxed session, review changes and untracked files (`git status`, `git diff`) before you run host git or a host-tier session in that workspace.
+- The threat in scope is an agent running arbitrary userspace commands inside a box. Kernel-level escapes are out of scope.
+- An agent can read any credential while that credential is given to it.
+- Short-lived AWS agent-role credentials and GitHub App tokens are limited by lifetime, scope, egress controls and audit records.
+- Static tokens, GitHub personal access tokens and SSO-direct credentials are long-lived and are not revoked when a session ends.
+- After a boxed session, inspect untracked files and changes with `git status` and `git diff` before running host git or a host-tier session in that workspace.
 - Use the AWS broker with a sandbox or lab account for now, not production.
 
-The full model and every known limit: [docs/SECURITY.md](docs/SECURITY.md).
+Read the complete model and known limits in [docs/SECURITY.md](docs/SECURITY.md).
 
-**Report a vulnerability privately**, as described in [`.github/SECURITY.md`](.github/SECURITY.md) (GitHub private vulnerability reporting), never in a public issue.
+### A safer setup
 
-## Documentation
+- Keep the bind on loopback and reach it remotely through HTTPS on a tailnet name or an SSH port forward. See [Remote access](docs/REMOTE-ACCESS.md).
+- Keep a config file so boxes remain the default.
+- Use the AWS agent role, not SSO-direct. SSO-direct hands the agent your SSO role's own credentials for hours, and CloudTrail shows you.
+- Turn on the encrypted store. See [Store](docs/STORE.md).
+- Bind host services that boxes must not reach to `127.0.0.1`. On Linux a box can reach a host service listening on all addresses directly, without the proxy and without an audit line.
+- Run CuliBox on a host where you trust the other accounts.
+- Run `culibox doctor` after setup and after every upgrade.
+
+### No guarantees
+
+CuliBox is Apache-2.0 software, provided as is and without warranty. It is still developing, and nothing here is guaranteed to be 100 percent safe. If somebody tells you an agent can receive shell access and credentials with zero risk, they are selling nonsense.
+
+Damage caused by an agent acting through credentials or access you granted on your setup is your risk. A security hole in CuliBox itself is mine to fix. Report it privately through [`.github/SECURITY.md`](.github/SECURITY.md), never in a public issue.
+
+## FAQ
+
+### Can I use another agent?
+
+Not today. Only Claude Code is supported.
+
+### Does the credential broker support GCP or Azure?
+
+No. AWS only.
+
+### Do I need AWS?
+
+No. AWS access is optional. You can run sessions without granting AWS credentials.
+
+### Will you build feature X?
+
+Maybe. Open an [issue](https://github.com/culiops/culibox/issues) and explain the problem, not just the button you want.
+
+### Does data leave my machine?
+
+CuliBox is self-hosted, and its audit log and analytics are local. Agents still communicate with their model API, which for Claude Code means Anthropic's API, and configured integrations talk to the services you allow. Setup downloads releases from GitHub and the box image from `ghcr.io`.
+
+## Contributing
+
+Send bug reports and ideas through [issues](https://github.com/culiops/culibox/issues). Please do not open a pull request. Outside pull requests are closed by hand, with thanks.
+
+Changes to CuliBox are made by agents inside CuliBox boxes and reviewed before landing. That is the workflow I use, so useful problem reports and clear proposals help more than unsolicited code. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+<details>
+<summary><strong>Documentation</strong></summary>
 
 | Doc | What it covers |
 |---|---|
@@ -116,21 +186,7 @@ The full model and every known limit: [docs/SECURITY.md](docs/SECURITY.md).
 | [Upgrading](docs/UPGRADING.md) | What an upgrade keeps, the automatic backup, rolling back, and installs from the agent-box days. |
 | [Contributing](CONTRIBUTING.md) | How to file a bug or propose a change. Issues only. |
 
-## Roadmap
-
-- Verify on a Mac what is built but not yet run there: credentials minted through the broker (AWS and GitHub) and the Keychain failure states.
-
-## Development
-
-CuliBox takes bug reports and proposals as issues; outside pull requests are closed with thanks. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-To run the checks:
-
-```sh
-scripts/test.sh
-```
-
-This runs `gofmt`, `go test ./...`, a macOS cross-build and `go vet`, the browser-side tests (`node --test`) and a lint of the page's script references, and more (the upgrade test, the installer and deploy script tests, secret-scan rules and extra vet builds); see `scripts/test.sh`.
+</details>
 
 ## License
 
