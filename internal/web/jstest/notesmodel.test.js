@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  NOTES_KEY, MSG_MAX, noteAdd, noteEdit, noteDelete, reanchor, stripControls,
+  NOTES_KEY, MSG_MAX, noteAdd, noteEdit, noteDelete, reanchor, reanchorOld, stripControls,
   composeMessage, markSent, saveNotes, loadNotes,
 } = require("../static/notesmodel.js");
 
@@ -255,4 +255,21 @@ test("loadNotes writes the pruned record back", () => {
   assert.strictEqual(loadNotes(ro, []).size, 0);
   st2.m.set(NOTES_KEY, JSON.stringify({ v: 1, sessions: { s1: { notes: [good] }, dead: { notes: [good] } } }));
   assert.deepStrictEqual(loadNotes(ro, ["s1"]).get("s1"), [good]);
+});
+
+test("reanchorOld checks the old-side notes of one path against a new base, and never moves one", () => {
+  const mk = (path, side, line, quote, outdated) => Object.assign(noteAdd([], { path, rel: "r", side, line, quote, text: "t" }, 1)[0], { outdated: !!outdated });
+  const l = [
+    mk("/w/a.go", "old", 2, "keep"), mk("/w/a.go", "old", 3, "shifted"), mk("/w/a.go", "old", 1, "back", true),
+    mk("/w/a.go", "new", 2, "newside"), mk("/w/b.go", "old", 2, "other"),
+  ];
+  const r = reanchorOld(l, "/w/a.go", "back\nkeep\nx\nshifted\n");
+  assert.strictEqual(r[0], l[0], "the quote still stands: the very same note");
+  assert.strictEqual(r[1].outdated, true, "its text is on another line now: it keeps line 3 and is outdated");
+  assert.strictEqual(r[1].line, 3);
+  assert.strictEqual(r[2].outdated, false, "found again at its line: current again");
+  assert.strictEqual(r[3], l[3], "a new-side note is reanchor's");
+  assert.strictEqual(r[4], l[4], "another path");
+  assert.strictEqual(l[1].outdated, false, "pure");
+  assert.strictEqual(reanchorOld(l, "/w/a.go", "a\r\nkeep\r\n")[0], l[0], "CRLF base text reads as lines");
 });

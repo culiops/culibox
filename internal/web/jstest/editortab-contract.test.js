@@ -1531,7 +1531,7 @@ test("Changes: the toggle swaps the body for a read-only side by side diff of th
   assert.equal(d.revealed, 0, "Monaco's own first difference is not asked: the first change of the gutter's list is");
   assert.deepEqual(d.modified.positions.at(-1), { lineNumber: tab.changes.lineChanges[0].from, column: 1 }, "it opens at the first change, the cursor on it (F7 goes on from there)");
   assert.deepEqual(d.modified.revealed, [tab.changes.lineChanges[0].from]);
-  assert.equal(d.updated.length, 0);
+  assert.equal(d.updated.length, 1, "the open-at-first-change listener let go itself; what stays is the notes' (editornotes.js), which follows every new diff");
   // The tab's own state does not change under it.
   assert.equal(tab.dirty(), true);
   assert.equal(tab.model.value, BUF_TEXT + "unsaved\n");

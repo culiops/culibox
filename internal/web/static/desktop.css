@@ -1555,6 +1555,32 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: var(--e-pop);
   }
   .dk-selbar-b svg { flex: none; width: 14px; height: 14px; }
+  /* Line notes in the Changes view (editornotes.js, mockup B2). A note is a Monaco view zone: .dk-nz is the zone's box (Monaco sizes and
+     places it), .dk-nz-in what is measured for its height, and the card is .dk-note (--panel, 1px --line, 8px). The "+" is a glyph-margin
+     decoration (.dk-note-add) that shows under the pointer. Note text is pre-wrapped and breaks anywhere, so a long token cannot widen
+     the card past the dock. */
+  .dk-nz-in { box-sizing: border-box; padding: 6px 16px 8px 12px; }
+  .dk-note { border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); color: var(--fg); font: var(--w-regular) var(--t-md)/var(--lh-md) var(--font-ui); text-align: left; }
+  .dk-note-h { display: flex; align-items: center; gap: 8px; padding: 7px 10px 0; color: var(--muted); font-size: var(--t-sm); }
+  .dk-note-av { flex: none; width: 18px; height: 18px; border-radius: 50%; background: var(--raise); color: var(--fg); font: var(--w-semibold) var(--t-xs)/18px var(--font-ui); text-align: center; }
+  .dk-note-who { flex: none; color: var(--fg); font-weight: var(--w-semibold); }
+  .dk-note-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dk-note-badge { flex: none; padding: 0 6px; border: 1px solid var(--amber); border-radius: var(--r-chip); color: var(--amber); font-size: var(--t-xs); line-height: var(--lh-xs); }
+  .dk-note-badge-sent { border-color: var(--line); color: var(--muted); }
+  .dk-note-act { flex: none; display: flex; gap: 10px; margin-left: auto; }
+  .dk-note-b-act { padding: 0; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+  .dk-note-b-act:hover { color: var(--fg); }
+  .dk-note-b-act:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  .dk-note-q { margin: 4px 10px 0 36px; padding: 0 6px; border-left: 2px solid var(--line); color: var(--muted); font: var(--w-regular) var(--t-sm)/var(--lh-sm) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .dk-note-body { padding: 4px 10px 8px 36px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+  .dk-note-sent .dk-note-body { color: var(--muted); }
+  .dk-note-edit { padding: 8px 10px; }
+  .dk-note-in { display: block; box-sizing: border-box; width: 100%; resize: none; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); color: var(--fg); font: var(--w-regular) var(--t-md)/var(--lh-md) var(--font-ui); }
+  .dk-note-in:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .dk-note-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+  .dk-note-hint { margin-right: auto; color: var(--muted); font-size: var(--t-xs); }
+  .dk-note-add { cursor: pointer; }
+  .dk-note-add::before { content: "+"; display: block; width: 16px; height: 16px; margin: 1px 0 0 1px; border: 1px solid var(--accent); border-radius: var(--r-chip); box-sizing: border-box; color: var(--accent); font: var(--w-semibold) var(--t-md)/14px var(--font-ui); text-align: center; }
   /* The line a path:line link opened (the read view's .vl-target): a faint band over the line and a bar in its margin. */
   .dk-target { background: color-mix(in srgb, var(--accent) 5%, transparent); }
   .dk-target-m { box-shadow: inset 3px 0 0 var(--accent); }

@@ -77,6 +77,23 @@ function editorBindChangeKeys(ed) {
   editorBind(ed, "editor.prevChange", () => editorReviewStep(edTab, -1));
 }
 
+// editorBindNoteKeys binds Add note (the registry's editor.addNote: `c` and Mod+Shift+A, editornotes.js), once, for the same reason as
+// editorBindChangeKeys: addCommand makes a page keybinding. The plain `c` is typing everywhere but in a read-only diff editor that has
+// its text focus (the Changes view; not its find widget, not a note's text box, which are not the editor's text), so its context says so
+// and Monaco never runs the command (nor swallows the key) anywhere else. A chord with a modifier types nothing, and the command asks
+// where the keyboard is (a Changes view, or the Code editor).
+let editorNoteKeys = false;
+function editorBindNoteKeys(ed) {
+  if (editorNoteKeys) return;
+  editorNoteKeys = true;
+  const entry = scEntry("editor.addNote");
+  for (const chord of entry ? activeChords(entry, IS_MAC) : []) {
+    const keys = monacoKeyFor(chord, dockMonaco, IS_MAC);
+    const plain = !chord.mod && !chord.ctrl && !chord.alt && !chord.shift;
+    if (keys) ed.addCommand(keys, () => editorNotesKey(), plain ? "isInDiffEditor && editorReadonly && editorTextFocus" : undefined);
+  }
+}
+
 // editorEnsure creates the shared editor once. Options that are decisions, not defaults:
 //  - automaticLayout: the dock resizes (drag, Full mode, the explorer folding) and the editor follows by itself;
 //  - no minimap, no sticky scroll: mockup B1 shows neither;
@@ -107,6 +124,7 @@ function editorEnsure() {
   editorBind(dockEditor, "editor.save", () => { if (dockEditorOwner) dockEditorOwner.save(); });
   editorBind(dockEditor, "editor.wrap", () => editorWrapKey()); // Wrap lines, or Wrap diff while the Changes view has the keyboard
   editorBindChangeKeys(dockEditor);
+  editorBindNoteKeys(dockEditor);
   dockEditor.onDidChangeCursorPosition(() => { if (dockEditorOwner) dockEditorOwner.paintStatus(); });
   editorSelBarInstall(dockEditor, dockMonaco); // editorselbar.js: the bar over a selection
   return dockEditor;

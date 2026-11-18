@@ -4110,6 +4110,8 @@ async function refreshSessionsRun() {
   noteReturns(lastSessions);
   // The stored review marks are read once, from the first real list: a mark of a session the list does not name is dropped.
   if (typeof reviewMarksLoad === "function") reviewMarksLoad(sessions.map((s) => s && s.id).filter(Boolean));
+  // The stored notes likewise (editornotes.js): notesLoad drops the notes of every session the list does not name.
+  if (typeof notesLoad === "function") notesLoad(sessions.map((s) => s && s.id).filter(Boolean));
   refreshEmptyState();
   // The Files drawer reads the list (box tier, workspace): at a boot restore
   // it opened before the list was here.

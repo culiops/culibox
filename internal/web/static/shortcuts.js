@@ -113,6 +113,14 @@ const SHORTCUTS = [
     chords: [{ code: "F7" }] },
   { id: "editor.prevChange", label: "Previous change", group: "Editor & files", scope: "editor", status: "bound",
     chords: [{ shift: true, code: "F7" }] },
+  // Add a note on a line of the Changes view (editornotes.js): `c` while a Changes view has the keyboard (it is a read-only view, so the key
+  // is free; never in Code, where it is typing), and Mod+Shift+A from a Changes view or from Code, where it asks for Changes at the
+  // line. Bound as Monaco commands (editortab.js editorBindNoteKeys), so scope "changes" keeps the global dispatcher out of it.
+  { id: "editor.addNote", label: "Add a note on the line (Changes)", group: "Editor & files", scope: "changes", status: "bound",
+    chords: [{ code: "KeyC" }, { mod: true, shift: true, code: "KeyA" }] },
+  // The note's own text box (editornotes.js): Mod+Enter saves. Esc cancels, as everywhere (ui.escape).
+  { id: "editor.noteSave", label: "Note: save", group: "Editor & files", scope: "note", status: "bound",
+    chords: [{ mod: true, keys: ["Enter"] }] },
   { id: "palette.insert", label: "Palette: open in new pane / insert path", group: "Editor & files", scope: "palette",
     status: "bound", chords: [{ mod: true, keys: ["Enter"] }] },
   // deskLabel: what the desktop's Keyboard shortcuts grid says (the dialog's button reads "Start session" there);

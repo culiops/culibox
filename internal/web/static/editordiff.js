@@ -118,6 +118,7 @@ function editorDiffOptions() {
   return Object.assign(o, {
     renderSideBySide: viewerPrefs.getDiffMode() === "side",
     useInlineViewWhenSpaceIsLimited: true,
+    glyphMargin: true, // the "+" that adds a note (editornotes.js), on both sides
     diffWordWrap: viewerPrefs.getDiffWrap() ? "on" : "off",
     lineNumbers: dgLineNumbers ? "on" : "off",
   });
@@ -551,6 +552,7 @@ function editorDiffEnter(tab) {
   }, editorDiffOptions()));
   const modified = diff.getModifiedEditor();
   editorBindChangeKeys(modified); // F7 / Shift+F7 are the page's keys: a tab opened straight in Changes has no Code editor to carry them
+  editorBindNoteKeys(modified); // likewise Add note
   modified.onDidChangeCursorPosition(() => { tab.paintStatus(); editorReviewPaint(tab); });
   // Open where F7 asked to land (the first or the last change), else where the view was left (a tab that comes back), else where a
   // link asked to be, else at the first change: that is what the view is for.
@@ -573,6 +575,7 @@ function editorDiffEnter(tab) {
   });
   diff.setModel({ original, modified: tab.model });
   tab.diff = { diff, original, wrap, label: head.label, head };
+  editorNotesAttach(tab); // the notes of the file (editornotes.js): zones under their lines, the "+" in the margin, the keys
   tab.bodyEl.replaceChildren(wrap);
   editorDiffPaintLabel(head.label, ch.scope, ch.baseName);
   diff.layout();
@@ -586,7 +589,10 @@ function editorDiffRefill(tab) {
   const ch = tab.changes;
   const d = tab.diff;
   if (!d || !ch || ch.head === null) return;
-  if (d.original.getValue() !== ch.head) d.original.setValue(ch.head);
+  if (d.original.getValue() !== ch.head) {
+    d.original.setValue(ch.head);
+    editorNotesBaseMoved(tab); // the old-side notes are checked against the new base
+  }
   editorDiffPaintLabel(d.label, ch.scope, ch.baseName);
 }
 
@@ -595,6 +601,7 @@ function editorDiffDrop(tab) {
   const d = tab.diff;
   if (!d) return false;
   tab.diff = null;
+  editorNotesDetach(tab); // before the editors go: its zones, hover marks and listeners are theirs to remove
   d.diff.setModel(null);
   d.diff.dispose();
   d.original.dispose();

@@ -98,7 +98,7 @@ test("the buttons are Insert at prompt and Copy <name>:a-b, as the mockup has th
   const { ed } = await setup();
   ed.focus();
   ed.select(3, 1, 5, 12);
-  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:3-5"]);
+  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:3-5", "Add note"], "P3's Add note (editornotes.js) is the third button");
   assert.equal(buttons(ed)[0].className, "btn btn-sm dk-selbar-b btn-primary", "Insert is the one primary");
   assert.match(buttons(ed)[1].className, /btn-ghost/);
   assert.equal(buttons(ed)[1].title, "Copy /p/a.go:3-5");
@@ -106,7 +106,7 @@ test("the buttons are Insert at prompt and Copy <name>:a-b, as the mockup has th
   assert.equal(widgetEl(ed).getAttribute("role"), "toolbar");
   ed.select(7, 2, 7, 9);
   assert.equal(ed.widgets.length, 1, "one widget, moved");
-  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:7"], "one line is a:7, not a:7-7");
+  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:7", "Add note"], "one line is a:7, not a:7-7");
   assert.ok(ed.layouts >= 1, "the widget is laid out again for the new place");
 });
 
@@ -310,13 +310,13 @@ test("a line-number click selects the line: the editor is made with selectOnLine
   assert.equal(ed.createOpts.selectOnLineNumbers, true, "Monaco's own click-the-number-to-select, stated");
   ed.focus();
   ed.select(21, 1, 22, 1); // what Monaco leaves after a click on 21's number
-  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:21"]);
+  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:21", "Add note"]);
   buttons(ed)[0].click();
   buttons(ed)[1].click();
   assert.deepEqual(typed, [["s1", "/p/a.go:21 "]]);
   assert.deepEqual(copied, ["/p/a.go:21"]);
   ed.select(21, 1, 24, 1); // shift-click down to 23's number
-  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:21-23"]);
+  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:21-23", "Add note"]);
 });
 
 test("selBarAddAction (P3's seam) appends a button that runs with the tab and the lines; the same key replaces it; bad input is refused", async () => {
@@ -325,16 +325,16 @@ test("selBarAddAction (P3's seam) appends a button that runs with the tab and th
   const ran = [];
   ed.focus();
   ed.select(3, 1, 5, 12);
-  assert.equal(get("selBarAddAction")({ key: "note", label: "Add note", icon: "pencil", run: (t, r) => ran.push([t, r]) }), true);
-  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:3-5", "Add note"], "drawn at once while the bar is up, after the built-in two");
-  buttons(ed)[2].click();
+  assert.equal(get("selBarAddAction")({ key: "extra", label: "Extra", icon: "pencil", run: (t, r) => ran.push([t, r]) }), true);
+  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:3-5", "Add note", "Extra"], "drawn at once while the bar is up, after the built-in two and Add note");
+  buttons(ed)[3].click();
   assert.equal(ran.length, 1);
   assert.equal(ran[0][0], tab);
   assert.deepEqual(JSON.parse(JSON.stringify(ran[0][1])), { a: 3, b: 5 });
-  assert.equal(get("selBarAddAction")({ key: "note", label: "Note", run: () => ran.push("second") }), true);
-  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:3-5", "Note"], "the same key is one button");
+  assert.equal(get("selBarAddAction")({ key: "extra", label: "Other", run: () => ran.push("second") }), true);
+  assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:3-5", "Add note", "Other"], "the same key is one button");
   for (const bad of [null, {}, { key: "", run() {} }, { key: "x" }, { key: "x", run: 3 }]) assert.equal(get("selBarAddAction")(bad), false, JSON.stringify(bad));
-  assert.equal(buttons(ed).length, 3);
+  assert.equal(buttons(ed).length, 4);
 });
 
 test("the dock's other callers get the same data: editorRefFor is the selection's reference, or the path when nothing is selected, and it is plain data", async () => {

@@ -5,7 +5,8 @@
 //   {id, path, rel, side, line, quote, text, status, outdated, at}
 //   path      the file's absolute path (what reanchor matches on); rel is the name the agent sees and the message prints;
 //   side      "new": a line of the file as it is now, so the note moves with its text (reanchor); "old": a removed line, read from
-//             the base text in Side by side. The base never changes under a note, so an old note is never re-anchored;
+//             the base text in Side by side. The base never changes under a note, so an old note is never moved: when HEAD or the
+//             scope does move the base, reanchorOld only checks its quote against it (outdated or not);
 //   line      1-based, in the file (new) or in the base text (old);
 //   quote     the line's text when the note was made: it is both what the agent is shown and what reanchor looks for;
 //   status    "pending" (not sent yet) or "sent" (kept so the user can check the fix against it);
@@ -63,6 +64,18 @@ function reanchor(list, path, newText, window) {
       }
     }
     return n.outdated ? n : Object.assign({}, n, { outdated: true });
+  });
+}
+
+// The base text moved (a commit, the other scope): the old-side notes of `path` are checked against it. An old note is about a line of
+// the base text, which never moves under it, so it does not move with a new one: it keeps its line, and is outdated when the base's
+// line there is no longer its quote (and current again when it is). A new-side note is none of this function's business.
+function reanchorOld(list, path, baseText) {
+  const lines = String(baseText).split(/\r\n|\n|\r/);
+  return list.map((n) => {
+    if (n.path !== path || n.side !== "old") return n;
+    const stands = lines[n.line - 1] === n.quote;
+    return stands === !n.outdated ? n : Object.assign({}, n, { outdated: !stands });
   });
 }
 
@@ -150,7 +163,7 @@ function loadNotes(storage, liveSids) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    NOTES_KEY, MSG_MAX, noteAdd, noteEdit, noteDelete, reanchor, stripControls,
+    NOTES_KEY, MSG_MAX, noteAdd, noteEdit, noteDelete, reanchor, reanchorOld, stripControls,
     composeMessage, markSent, saveNotes, loadNotes,
   };
 }
