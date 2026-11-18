@@ -95,6 +95,14 @@ test("the insert item takes its disabled title from the target rule", () => {
   assert.equal(viewerToolbarModel(base()).pathInsert.enabled, true);
 });
 
+test("noInsert (the phone) leaves Insert path at prompt out of the Path menu, and only it; without it the item is shown", () => {
+  const on = viewerToolbarModel(base({ noInsert: true }));
+  assert.equal(on.pathInsert.shown, false);
+  assert.deepEqual([on.pathAbs.shown, on.pathRel.shown, on.reveal.shown], [true, true, true]);
+  assert.equal(viewerToolbarModel(base({ noInsert: false })).pathInsert.shown, true);
+  assert.equal(viewerToolbarModel(base()).pathInsert.shown, true);
+});
+
 test("a boolean rel / reveal / insert is accepted too", () => {
   const m = viewerToolbarModel(base({ rel: false, reveal: false, insert: false }));
   assert.equal(m.pathRel.enabled, false);

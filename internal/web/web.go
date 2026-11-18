@@ -105,8 +105,8 @@ type Server struct {
 	// ScratchCandidates. The fs API reads an accepted one read-only.
 	ScratchDirs []string
 
-	// Git runs the file tree's git status and diff in throwaway containers.
-	// Nil (no box runtime) → both git endpoints answer "unavailable".
+	// Git runs the file tree's git status, diff, base and numstat in throwaway
+	// containers. Nil (no box runtime) → every git endpoint answers "unavailable".
 	Git GitView
 
 	// Commit is the build's commit, published in /api/meta so the UI and a bug
@@ -344,12 +344,16 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/fs/upload", s.handleFsUpload)
 	protected.HandleFunc("/api/fs/archive", s.handleFsArchive)
 	protected.HandleFunc("/api/fs/mkdir", s.handleFsMkdir)
+	protected.HandleFunc("/api/fs/newfile", s.handleFsNewFile)
 	protected.HandleFunc("/api/fs/rename", s.handleFsRename)
 	protected.HandleFunc("/api/fs/delete", s.handleFsDelete)
 	protected.HandleFunc("/api/fs/write", s.handleFsWrite)
-	// Git status badges and diffs: POST because each one starts a container.
+	// Git status badges, diffs, the base branch and a file at HEAD: POST because each one starts a container.
 	protected.HandleFunc("/api/git/status", s.handleGitStatus)
 	protected.HandleFunc("/api/git/diff", s.handleGitDiff)
+	protected.HandleFunc("/api/git/base", s.handleGitBase)
+	protected.HandleFunc("/api/git/numstat", s.handleGitNumstat)
+	protected.HandleFunc("/api/git/show", s.handleGitShow)
 
 	// Analytics routes only exist when the feature is enabled; the POST /ingest
 	// inherits csrfGuard's same-origin check like every other state-changing call.

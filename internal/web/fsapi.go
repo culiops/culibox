@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 )
 
 var (
@@ -176,11 +177,18 @@ type fsRead struct {
 	Version string `json:"version,omitempty"` // sha256 of Content; text only, for edit locking
 	// ReadOnly: the file is served but can never be saved (scratch folder, box).
 	ReadOnly bool `json:"readonly,omitempty"`
+	// UTF8 says whether a text file's bytes are valid UTF-8 (text only, so a client reads
+	// `utf8 === false`). The JSON body can only carry Unicode: the content of a file that is
+	// not UTF-8 reaches the client with every invalid byte replaced by U+FFFD, and saving that
+	// text back would write the replacement over the original bytes. A client that sees false
+	// must not offer to save the file.
+	UTF8 *bool `json:"utf8,omitempty"`
 }
 
 // handleFsRead serves GET /api/fs/read?path=<abs-file>. Images are streamed raw
 // (so <img src> works); text is returned as JSON with a language hint; binary
 // returns metadata only (never raw bytes); text over maxTextBytes → 413.
+// meta=1 asks for the metadata alone (see serveFsFile).
 func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 	t, err := s.resolveFs(r.URL.Query().Get("path"))
 	if err != nil {
@@ -217,8 +225,15 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 // drift. name is the file's base name (it picks the extension and the download
 // filename); the caller has already authorised and opened f and closes it.
 // readOnly marks the JSON preview so the viewer offers no Edit.
+//
+// meta=1 is the same read without the payload: {kind, size, version, readonly, utf8}
+// for text (the version is the sha256 the full read returns, of the same bytes,
+// under the same size cap), {kind, size} for an image or a binary file, which
+// it never streams. The editor polls it to see that a file changed on disk. It
+// wins over download=1: a metadata read never hands over the file.
 func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.FileInfo, name string, readOnly bool) {
 	ext := strings.ToLower(filepath.Ext(name))
+	meta := r.URL.Query().Get("meta") == "1"
 
 	// download=1 is a byte pipe, not a preview: it deliberately bypasses both
 	// preview guards below (the binary-metadata branch and the maxTextBytes
@@ -226,7 +241,7 @@ func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.Fil
 	// need to fetch, and refusing to hand over something the tree already lists
 	// makes the viewer a dead end. Always octet-stream + nosniff so the browser
 	// saves it instead of trying to render it.
-	if r.URL.Query().Get("download") == "1" {
+	if !meta && r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", contentDisposition(name))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -235,6 +250,10 @@ func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.Fil
 	}
 
 	if ctype, ok := imageExt[ext]; ok {
+		if meta {
+			writeJSON(w, http.StatusOK, fsRead{Kind: "image", Size: info.Size(), ReadOnly: readOnly})
+			return
+		}
 		w.Header().Set("Content-Type", ctype)
 		w.Header().Set("Cache-Control", "no-cache")
 		// Defense-in-depth: don't let the browser MIME-sniff, and sandbox the
@@ -264,10 +283,12 @@ func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.Fil
 		writeErr(w, http.StatusInternalServerError, "read error")
 		return
 	}
-	writeJSON(w, http.StatusOK, fsRead{
-		Kind: "text", Lang: strings.TrimPrefix(ext, "."), Size: info.Size(),
-		Content: string(content), Version: hashText(content), ReadOnly: readOnly,
-	})
+	valid := utf8.Valid(content)
+	resp := fsRead{Kind: "text", Size: info.Size(), Version: hashText(content), ReadOnly: readOnly, UTF8: &valid}
+	if !meta {
+		resp.Lang, resp.Content = strings.TrimPrefix(ext, "."), string(content)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // contentDisposition builds an attachment header for name. The quoted form is

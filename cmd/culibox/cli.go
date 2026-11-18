@@ -44,6 +44,7 @@ const usage = `usage:
   culibox clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>; safe while culibox serves (a daemon restart aborts it; rerun)
   culibox store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
   culibox store set|rm [-config <path>] <id>           put a value (read from stdin, never argv) or delete one
+  culibox service install|uninstall|status [-config <path>]   run serve as a systemd --user service (Linux) or a LaunchAgent (macOS); loopback only, opt-in
   culibox version                                      print the version and commit
 
 Everything culibox writes, its config.json included, lives in one data root:
@@ -52,8 +53,8 @@ A ~/.local/share/agent-box from before the rename is moved there by serve, when 
 `
 
 type cliArgs struct {
-	Cmd        string // "serve" | "doctor" | "bug-report" | "init" | "box" | "clone" | "store" | "version"
-	Sub        string // box: "setup" | "stop" | "status" | "share"; clone: "fetch"; store: "init" | "status" | ... | "list"
+	Cmd        string // "serve" | "doctor" | "bug-report" | "init" | "box" | "clone" | "store" | "service" | "version"
+	Sub        string // box: "setup" | "stop" | "status" | "share"; clone: "fetch"; store: "init" | "status" | ... | "list"; service: "install" | "uninstall" | "status"
 	ID         string // store set|rm: the value id
 	ConfigPath string
 	ConfigSet  bool // -config given explicitly
@@ -72,11 +73,20 @@ type cliArgs struct {
 	Base        string // clone fetch: the branch in clone_of the range starts after (default main)
 
 	AllowOldHistory bool // clone fetch: let a known stale or unverified history through, loudly
+
+	// Service: serve was started by `culibox service` (the unit passes
+	// -service): it refuses a non-loopback bind and password mode at every start.
+	Service bool
 }
 
 // storeSubs are the `agent-box store` subcommands. There is no get: a value
 // never comes back out through the CLI.
 var storeSubs = []string{"init", "status", "unlock", "lock", "passwd", "set", "rm", "list"}
+
+// serviceSubs are the `culibox service` subcommands.
+var serviceSubs = []string{"install", "uninstall", "status"}
+
+const serviceNeedsSub = "service needs a subcommand: install, uninstall or status"
 
 const storeNeedsSub = "store needs a subcommand: init, status, unlock, lock, passwd, set, rm or list"
 
@@ -116,6 +126,14 @@ func parseArgs(argv []string) (cliArgs, error) {
 		if sub != "fetch" {
 			return cliArgs{}, fmt.Errorf("unknown clone subcommand %q", sub)
 		}
+	case "service":
+		if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+			return cliArgs{}, errors.New(serviceNeedsSub)
+		}
+		sub, argv = argv[0], argv[1:]
+		if !slices.Contains(serviceSubs, sub) {
+			return cliArgs{}, fmt.Errorf("unknown service subcommand %q", sub)
+		}
 	case "store":
 		if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
 			return cliArgs{}, errors.New(storeNeedsSub)
@@ -142,13 +160,14 @@ func parseArgs(argv []string) (cliArgs, error) {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "path to config file (default: <data root>/config.json, the root being $CULIBOX_HOME or ~/.local/share/culibox (an older ~/.local/share/agent-box is used until serve moves it); then $XDG_CONFIG_HOME or ~/.config/culibox/config.json (an older agent-box one is read too) unless CULIBOX_HOME is set; else built-in defaults; never ./config.json)")
-	rebuild := fs.Bool("rebuild", false, "box setup: rebuild the image even if it is current")
+	rebuild := fs.Bool("rebuild", false, "box setup: build the image here even if it is current (never pulls the published image)")
 	recreate := fs.Bool("recreate", false, "box setup: delete and recreate the box VM (macOS)")
 	noPrune := fs.Bool("no-prune", false, "box setup: keep old box images instead of removing the unused ones")
 	pruneLocal := fs.Bool("prune-local", false, "box setup: also remove ALL unused box images built here; nothing can pull them again, and another CuliBox on this Docker may pin one")
 	force := fs.Bool("force", false, "box stop, box setup, box share apply: go ahead even with boxes running or the VM state unknown")
 	ro := fs.Bool("ro", false, "box share add: share the folder read-only")
 	base := fs.String("base", "", "clone fetch: the branch in clone_of the fetched range starts after (default main)")
+	asService := fs.Bool("service", false, "serve: started by culibox service; refuse a non-loopback bind_addr and password_env")
 	allowOld := fs.Bool("allow-old-history", false, "clone fetch: fetch a branch whose history CuliBox cannot verify, or that carries history host main rewrote away (printed as a warning)")
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
@@ -205,6 +224,9 @@ func parseArgs(argv []string) (cliArgs, error) {
 	if baseSet && cmd != "clone" {
 		return cliArgs{}, errors.New("-base only applies to clone fetch")
 	}
+	if *asService && cmd != "serve" {
+		return cliArgs{}, errors.New("-service only applies to serve")
+	}
 	if *allowOld && cmd != "clone" {
 		return cliArgs{}, errors.New("-allow-old-history only applies to clone fetch")
 	}
@@ -219,7 +241,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	return cliArgs{Cmd: cmd, Sub: sub, ConfigPath: *path, ConfigSet: set,
 		Rebuild: *rebuild, Recreate: *recreate, NoPrune: *noPrune, PruneLocal: *pruneLocal, Force: *force,
 		Profile: profile, Branch: branch, Base: *base, ID: id, AllowOldHistory: *allowOld,
-		ReadOnly: *ro, ShareAction: shareAction, SharePath: sharePath}, nil
+		ReadOnly: *ro, ShareAction: shareAction, SharePath: sharePath, Service: *asService}, nil
 }
 
 // shareActions are the `agent-box box share` actions, with how many <dir>s each takes.

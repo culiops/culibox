@@ -1078,6 +1078,16 @@ func (l argvLauncher) Build(spec launcher.SpawnSpec) ([]string, []string, error)
 	return append(argv, "--", "first message"), env, err
 }
 
+func countArg(argv []string, arg string) int {
+	n := 0
+	for _, a := range argv {
+		if a == arg {
+			n++
+		}
+	}
+	return n
+}
+
 func spawnGuidance(t *testing.T, bin, agent string, noAutoReturn bool, gh *config.GitHubBinding) []string {
 	t.Helper()
 	cl, dir := testCloneLauncher(t, config.RuntimeBox)
@@ -1113,14 +1123,21 @@ func TestCloneSpawnClaudeGetsGuidance(t *testing.T) {
 		if i < 0 || i+1 >= len(argv) || sep < 0 || i+1 > sep-1 {
 			t.Fatalf("argv = %q: want --append-system-prompt and its value before --", argv)
 		}
-		if want := cloneGuidance("/home/u/repo", true, true); argv[i+1] != want {
+		// The clone binds GitHub, so the credential note follows the clone line
+		// in the same, single value.
+		want := cloneGuidance("/home/u/repo", true, true) + " " + credGuidance(config.Bindings{GitHub: write})
+		if argv[i+1] != want {
 			t.Fatalf("value = %q, want %q", argv[i+1], want)
 		}
 	})
 	t.Run("no push route and auto return off", func(t *testing.T) {
 		argv := spawnGuidance(t, "claude", "clone", true, read)
-		if got, want := argAfter(argv, "--append-system-prompt"), cloneGuidance("/home/u/repo", false, false); got != want {
+		want := cloneGuidance("/home/u/repo", false, false) + " " + credGuidance(config.Bindings{GitHub: read})
+		if got := argAfter(argv, "--append-system-prompt"); got != want {
 			t.Fatalf("value = %q, want %q", got, want)
+		}
+		if n := countArg(argv, "--append-system-prompt"); n != 1 {
+			t.Fatalf("--append-system-prompt %d times in %q", n, argv)
 		}
 	})
 	t.Run("a shell in the clone gets no guidance", func(t *testing.T) {

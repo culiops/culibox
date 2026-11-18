@@ -8,6 +8,13 @@
 # packages as v0.0.0-dryrun and uploads the result as an artifact to inspect. It
 # has no release job, so it can never create a release.
 #
+# Box image (#335): each binary carries the multi-arch index digest of the published
+# box image built from the tag's own Dockerfile (tools/boximage-ref, an anonymous
+# read of ghcr; box-image.yml tags it dockerfile-<hash>), and `box setup` pulls it
+# instead of building. A tag whose image is not published fails here; a dry run
+# builds without the digest and says so. This workflow never builds or pushes an
+# image and holds no packages scope.
+#
 # Supply chain (docker/agent-box/workflow_test.go guards this):
 #   - every action is pinned by full commit SHA, the release in a comment
 #   - no pull-request trigger of any kind
@@ -107,12 +114,33 @@ jobs:
       # source; each binary must match the sum pinned in the script (reproducible).
       - name: Build abduco
         run: scripts/release/build-abduco.sh "$RUNNER_TEMP/abduco"
+      # The published box image whose Dockerfile is this tree's: fatal for a tag,
+      # a warning for a dry run (a branch's Dockerfile may not be published yet).
+      - name: Resolve the box image
+        id: boximage
+        run: |
+          set -eu
+          if ref=$(go run ./tools/boximage-ref); then
+            echo "box image: $ref"
+            echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = push ]; then
+            echo "::error::no published box image matches this tag's Dockerfile (see above); a release binary must carry one"
+            exit 1
+          else
+            echo "::warning::no published box image matches this Dockerfile; the dry-run binaries build the image locally"
+            echo "box image not baked (dry run): no published image matches this Dockerfile" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Build the tarballs
-        run: scripts/release/build.sh "$TAG" "$RUNNER_TEMP/dist" "$RUNNER_TEMP/abduco"
+        env:
+          BOX_IMAGE: ${{ steps.boximage.outputs.ref }}
+        run: scripts/release/build.sh "$TAG" "$RUNNER_TEMP/dist" "$RUNNER_TEMP/abduco" ${BOX_IMAGE:+"$BOX_IMAGE"}
       # The linux/amd64 tarball runs on this runner: its sum is right, the binary
-      # inside reports the tag and the commit it was built from, and the abduco next
-      # to it runs. The darwin ones are run on a Mac by scripts/macos-verify.sh.
+      # inside reports the tag and the commit it was built from and carries the box
+      # image ref, and the abduco next to it runs. The darwin ones are run on a Mac
+      # by scripts/macos-verify.sh.
       - name: Smoke test the linux/amd64 tarball
+        env:
+          BOX_IMAGE: ${{ steps.boximage.outputs.ref }}
         run: |
           set -eu
           DIST=$RUNNER_TEMP/dist
@@ -126,6 +154,11 @@ jobs:
             exit 1
           fi
           echo "$got"
+          # -trimpath drops -ldflags from `go version -m`, so look for the ref itself.
+          if [ -n "$BOX_IMAGE" ] && ! grep -aqF "$BOX_IMAGE" "$dir/culibox"; then
+            echo "::error::the binary does not carry the box image ref $BOX_IMAGE"
+            exit 1
+          fi
           # `abduco -v` may exit non-zero, so only the text counts.
           ab=$("$dir/abduco" -v 2>&1 || true)
           case $ab in

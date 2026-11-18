@@ -222,6 +222,24 @@ test("menuIconSvg: check, download and insert are drawn in the product's icon st
     ctx.menuIconSvg("tray").children.map((c) => c.getAttribute("d")).join(), "Download is not the Bring-home tray");
 });
 
+test("menuIconSvg: upload, refresh and collapse (the explorer's ⋯ menu) are drawn in the same style, each its own shape", () => {
+  const { ctx } = world();
+  const ds = [];
+  for (const k of ["upload", "refresh", "collapse"]) {
+    const svg = ctx.menuIconSvg(k);
+    assert.ok(svg, k);
+    assert.strictEqual(svg.getAttribute("data-icon"), k);
+    assert.deepStrictEqual(
+      ["viewBox", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"].map((a) => svg.getAttribute(a)),
+      ["0 0 14 14", "none", "currentColor", "1.2", "round", "round"], k);
+    assert.ok(svg.children.length >= 1);
+    for (const c of svg.children) assert.ok(c.getAttribute("d"), k + ": a path has its d");
+    ds.push(svg.children.map((c) => c.getAttribute("d")).join());
+  }
+  ds.push(ctx.menuIconSvg("download").children.map((c) => c.getAttribute("d")).join());
+  assert.strictEqual(new Set(ds).size, 4, "Upload is not Download, and none is another's twin");
+});
+
 test("menuIconSvg: folder-plus is the pane header's folder with a plus added, as Duplicate adds one to Copy", () => {
   const { ctx } = world();
   const fp = ctx.menuIconSvg("folder-plus");

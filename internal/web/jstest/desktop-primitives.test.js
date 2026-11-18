@@ -177,6 +177,7 @@ const FILLED_PRIMARIES = [
 ];
 const FILLED_NOT_CONTROLS = [
   "app.css .CodeMirror.cm-s-default span.cm-find-cur", "app.css .CodeMirror.cm-s-default span.cm-find-cur span", // the editor's current find match
+  "desktop.css .dr-count", // the Files dock's Changes count on the folded explorer strip: a badge, not a button
 ];
 const unwrap = (sel) => sel.replace(/:where\((?:[^()]|\([^()]*\))*\)/g, "").replace(/:not\([^()]*\)/g, "");
 // primaryHoverGaps: the classified primaries of `sheets` ({ name: css }) that are not 600 or have no

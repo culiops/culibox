@@ -303,13 +303,14 @@ func ConfigFiles(explicit string, set bool, home, xdg, envHome string) ([]string
 }
 
 // Defaults is the zero-config laptop setup: loopback only, token login (no
-// password_env), host tier, one claude agent. The quick shell is added at
-// startup by WithDetectedShell.
+// password_env), host tier, one claude agent with the built-in launch options.
+// The quick shell is added at startup by WithDetectedShell.
 func Defaults() Config {
 	return Config{
 		BindAddr:       "127.0.0.1:8899",
 		DefaultRuntime: RuntimeHost,
 		Agents:         []AgentConfig{{Name: "claude", Bin: "claude"}},
+		Options:        withBuiltinOptions(nil),
 	}
 }
 

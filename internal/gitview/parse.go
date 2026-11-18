@@ -2,12 +2,21 @@ package gitview
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
 // maxPath is the longest path ParseStatus accepts, in bytes.
 const maxPath = 4096
+
+// maxBranch is the longest branch name ParseStatus keeps, in bytes: the most a
+// filesystem allows one path component, which is what a loose ref is.
+const maxBranch = 255
+
+// oidRE is a full object id, SHA-1 or SHA-256, as git prints it.
+var oidRE = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
 // Entry is one changed path: P relative to the checkout top (a trailing "/"
 // marks a collapsed untracked directory), X one of M A U D C.
@@ -20,7 +29,11 @@ type Entry struct {
 // is untrusted: records that are malformed, or whose path is empty, absolute,
 // over 4096 bytes, not valid UTF-8 or has a ".." segment, are dropped. At most max entries are
 // returned; one more sets tooMany. noHead is true when the repo has no commits.
-func ParseStatus(b []byte, max int) (entries []Entry, noHead bool, tooMany bool) {
+// branch is the checked-out branch ("" when HEAD is detached) and head the
+// commit it is at ("" with no commits); each is "" too when git's text is not
+// a well-formed name or id. Git prints both before any entry, so tooMany still
+// leaves them set.
+func ParseStatus(b []byte, max int) (entries []Entry, noHead bool, tooMany bool, branch, head string) {
 	recs := bytes.Split(b, []byte{0})
 	add := func(p, x string) bool {
 		if !safePath(p) {
@@ -37,8 +50,15 @@ func ParseStatus(b []byte, max int) (entries []Entry, noHead bool, tooMany bool)
 		r := string(recs[i])
 		switch {
 		case strings.HasPrefix(r, "# "):
-			if r == "# branch.oid (initial)" {
+			switch {
+			case r == "# branch.oid (initial)":
 				noHead = true
+			case strings.HasPrefix(r, "# branch.oid "):
+				if o := r[len("# branch.oid "):]; oidRE.MatchString(o) {
+					head = o
+				}
+			case strings.HasPrefix(r, "# branch.head "):
+				branch = safeBranch(r[len("# branch.head "):])
 			}
 		case strings.HasPrefix(r, "1 "):
 			// 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>: the path is the rest.
@@ -89,6 +109,21 @@ func code(xy string) string {
 	return "M"
 }
 
+// safeBranch is the branch name git printed, or "" for a detached HEAD or a
+// name that is too long, not UTF-8 or holds a control character: the name is
+// agent-shaped text that a client shows.
+func safeBranch(b string) string {
+	if b == "(detached)" || len(b) > maxBranch || !utf8.ValidString(b) {
+		return ""
+	}
+	for _, c := range b {
+		if unicode.IsControl(c) {
+			return ""
+		}
+	}
+	return b
+}
+
 func safePath(p string) bool {
 	if p == "" || len(p) > maxPath || strings.HasPrefix(p, "/") || strings.ContainsRune(p, 0) || !utf8.ValidString(p) {
 		return false
@@ -99,6 +134,95 @@ func safePath(p string) bool {
 		}
 	}
 	return true
+}
+
+// ParseNumstat parses `git diff --raw --numstat -z --no-renames` output: the
+// raw records (":<modes> <ids> <letter>", then the path as its own record)
+// give each file's status letter, the numstat records ("<add>\t<del>\t<path>",
+// "-" twice for a binary file) its counts, and they are joined by path. Only a
+// numstat record makes an entry, since a count is never guessed; a path with
+// no raw record is a modification. The input is untrusted: a malformed record,
+// or a path that ParseStatus would drop (empty, absolute, over 4096 bytes, not
+// UTF-8, a ".." segment), is skipped, and so is a repeat of a path. At most
+// max entries are returned; one more sets tooMany.
+func ParseNumstat(b []byte, max int) (entries []NumEntry, tooMany bool) {
+	recs := bytes.Split(b, []byte{0})
+	letters := map[string]string{}
+	var nums []NumEntry
+	seen := map[string]bool{}
+	for i := 0; i < len(recs); i++ {
+		r := string(recs[i])
+		if strings.HasPrefix(r, ":") {
+			// A raw header, always followed by its path, whatever that path looks like.
+			if i++; i < len(recs) {
+				if _, dup := letters[string(recs[i])]; !dup {
+					letters[string(recs[i])] = rawLetter(r)
+				}
+			}
+			continue
+		}
+		f := strings.SplitN(r, "\t", 3)
+		if len(f) != 3 || !safePath(f[2]) || seen[f[2]] {
+			continue
+		}
+		e := NumEntry{P: f[2], X: "M"}
+		if f[0] == "-" && f[1] == "-" {
+			e.Bin = true
+		} else {
+			a, okA := count(f[0])
+			d, okD := count(f[1])
+			if !okA || !okD {
+				continue
+			}
+			e.A, e.D = a, d
+		}
+		seen[f[2]] = true
+		nums = append(nums, e)
+	}
+	if len(nums) > max {
+		nums, tooMany = nums[:max], true
+	}
+	for _, e := range nums {
+		if l, ok := letters[e.P]; ok {
+			e.X = l
+		}
+		entries = append(entries, e)
+	}
+	return entries, tooMany
+}
+
+// rawLetter is the badge code of a raw header's status letter: A, D and M as
+// they are, a type change as M. Anything else (an unmerged or unknown letter,
+// a header that is not git's five fields) is M: "U" in a NumEntry is the web
+// layer's untracked file, and it must not come from git's text.
+func rawLetter(h string) string {
+	f := strings.Split(h, " ")
+	if len(f) == 5 {
+		switch f[4] {
+		case "A", "D":
+			return f[4]
+		}
+	}
+	return "M"
+}
+
+// maxCountDigits is the most digits a line count may have: a count of a
+// billion lines is not a file, it is hostile text.
+const maxCountDigits = 9
+
+// count parses a numstat line count: decimal digits only, no sign.
+func count(s string) (int, bool) {
+	if s == "" || len(s) > maxCountDigits {
+		return 0, false
+	}
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, true
 }
 
 // DiffKind classifies diff output: "unchanged" (empty), "binary" (git's
@@ -120,4 +244,37 @@ func DiffKind(b []byte) string {
 		return "binary"
 	}
 	return "text"
+}
+
+// pickBase reads the output of BaseArgs' for-each-ref and returns the base
+// branch: origin/HEAD's symref target when git listed origin/HEAD (it lists
+// only a ref that resolves), else the first of baseCandidates git listed.
+// The output is untrusted: a record not made of exactly git's two NUL
+// terminators is skipped, and a symref target that is not a ValidBaseRef is
+// never returned, so what comes back is "" or safe to put in an argv.
+func pickBase(b []byte) string {
+	refs := map[string]string{} // listed ref -> its symref target, "" when it is not a symref
+	for _, line := range strings.Split(string(b), "\n") {
+		if f := strings.Split(line, "\x00"); len(f) == 3 && f[2] == "" {
+			refs[f[0]] = f[1]
+		}
+	}
+	if sym := refs[originHead]; ValidBaseRef(sym) {
+		return sym
+	}
+	for _, c := range baseCandidates {
+		if _, ok := refs[c]; ok {
+			return c
+		}
+	}
+	return ""
+}
+
+// baseName is the short form of a base ref shown to the user: "main" for a
+// local branch, "origin/main" for a remote-tracking one.
+func baseName(ref string) string {
+	if s, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+		return s
+	}
+	return strings.TrimPrefix(ref, "refs/remotes/")
 }

@@ -189,6 +189,50 @@ func runHostile(t *testing.T, r *Runner, tg Target) {
 	if un.State != "ok" || un.Kind != "text" || !strings.Contains(un.Diff, "+brand new") {
 		t.Errorf("untracked diff = state %q kind %q reason %q", un.State, un.Kind, un.Reason)
 	}
+
+	// The repo has one commit on main and no remote, so main is the base and
+	// HEAD is its own merge base. for-each-ref and merge-base read the hostile
+	// config like status does, and must neither run it nor fail on it.
+	bi := r.Base(ctx, tg)
+	t.Logf("base: %+v", bi)
+	if st.Head == "" || st.Branch != "main" {
+		t.Errorf("status branch %q head %q, want main and a commit", st.Branch, st.Head)
+	}
+	if bi.State != "ok" || bi.Branch != "main" || bi.BaseRef != "refs/heads/main" || bi.BaseName != "main" || bi.MergeBase != st.Head || bi.Ahead {
+		t.Errorf("base = %+v, want ok on main against refs/heads/main with merge base %q", bi, st.Head)
+	}
+
+	// The file as committed, at HEAD and at the merge base (HEAD itself here):
+	// cat-file reads the stored bytes, so the hostile filters, textconv and
+	// attributes neither run nor change them, and the working copy's edit is not
+	// in them. A file that is not committed is Missing, not a failure.
+	for rev, name := range map[string]string{"HEAD": "HEAD", bi.MergeBase: "merge base"} {
+		for rel, content := range map[string]string{"a.txt": "one\ntwo\nthree\n", "sub/b.txt": "x\ny\n"} {
+			b := r.Show(ctx, tg, rev, rel)
+			t.Logf("show %s %s: %+v", name, rel, b)
+			if b.State != "ok" || b.Missing || b.Truncated || b.Content != content {
+				t.Errorf("show %s %s = %+v, want ok with %q", name, rel, b, content)
+			}
+		}
+		nb := r.Show(ctx, tg, rev, "new.txt")
+		t.Logf("show %s new.txt (untracked): %+v", name, nb)
+		if nb.State != "ok" || !nb.Missing || nb.Content != "" {
+			t.Errorf("show %s of an untracked file = %+v, want ok and Missing", name, nb)
+		}
+	}
+
+	// The per-file counts of the tracked change (one line replaced, one added),
+	// against HEAD and against the merge base (HEAD itself here, so the same).
+	// The untracked files have no count here: the web layer counts those. The
+	// attributes and the hostile config must neither run nor fail the diff.
+	wantNum := []NumEntry{{P: "a.txt", X: "M", A: 2, D: 1}}
+	for name, sc := range map[string]Scope{"head": {}, "branch": {Branch: true, BaseRef: bi.BaseRef}} {
+		ns := r.Numstat(ctx, tg, sc)
+		t.Logf("numstat %s: %+v", name, ns)
+		if ns.State != "ok" || !slices.Equal(ns.Entries, wantNum) {
+			t.Errorf("numstat %s = %+v, want ok with %+v", name, ns, wantNum)
+		}
+	}
 }
 
 // TestHostileConfigNeverRunsOnHost: an agent-shaped .git/config that tries

@@ -53,6 +53,7 @@ type FileChange struct {
 	Path string `json:"path"`
 	Add  int    `json:"add"`
 	Del  int    `json:"del"`
+	TS   int64  `json:"ts,omitempty"` // unix ms of the result that completed the latest applied edit
 }
 
 // Timeline is a session's parsed activity.
@@ -314,7 +315,7 @@ func (st *timelineState) toolResult(ts int64, b *tlBlock) {
 		return
 	}
 	if !b.IsError && p.path != "" {
-		st.touch(p.path, p.add, p.del) // counted even if its row left the ring
+		st.touch(p.path, p.add, p.del, ts) // counted even if its row left the ring
 	}
 	ev := st.at(p.seq)
 	if ev == nil {

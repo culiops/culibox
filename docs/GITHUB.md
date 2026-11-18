@@ -41,6 +41,19 @@ The box image must include `gh`: use the image `culibox box setup` builds, or `g
 
 ## How the agent uses it
 
+At start, CuliBox tells a boxed Claude session which credentials it has: the names, which are PROD and how to use each kind. It never tells it a value, an account or a role. A personal access token is described as having its own scopes, because CuliBox does not narrow it. `agentbox-env --list` shows the details:
+
+```sh
+$ agentbox-env --list
+GitHub
+culiops [app]
+  repos: agent-box, tech-advisor
+  permissions: write issues · read contents, metadata
+  use: git and gh as usual
+```
+
+An owner bound with a personal access token shows `permissions: the token's own (not narrowed by CuliBox)`.
+
 - `git` over HTTPS to `github.com` asks the broker for a token through a credential helper. Nothing is stored and no token is in the environment.
 - `gh` is a thin wrapper that fetches a token for the repo's owner and sets `GH_TOKEN` only on the real `gh` process it starts. In a clone-mode box, `GH_REPO` is set from the host repo's `origin` when that repo is in the binding, because the box's own `origin` is a host path.
 - Each token lasts one hour (GitHub's fixed lifetime for installation tokens), covers only the repos you listed and the permissions you chose, and is reused until 10 minutes before it expires.

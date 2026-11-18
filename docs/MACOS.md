@@ -49,7 +49,7 @@ Each step prints `==> <what>` before it runs. To do it by hand, follow the same 
 4. **VM size (macOS only).** Proposes the box VM's size and asks you to press Enter or type `<CPUs> <GiB>`: CPUs = half the Mac's cores (at least 2), RAM = a quarter of the Mac's RAM in whole GiB, between 4 and 8. This is inferred from the Mac's size, not measured. When `box_vm_cpus` and `box_vm_memory_gib` are both set in your config, it proposes those instead. When the VM already exists it prints `already done` and asks nothing (a size change on an existing VM needs `culibox box setup -recreate`, which init never runs). On Linux the step is skipped.
 5. **Claude token.** Creates the [encrypted store](STORE.md) if there is none (on macOS the key goes in your login Keychain), offers to run `claude setup-token` (it opens a browser), and asks you to paste the token with the input hidden. The token goes into the store as `ACCT_CLAUDE_BOX_TOKEN` and an agent account named `claude-box` is created that uses it. The token is never printed and never written to `config.json`. By hand: `culibox store init`, `claude setup-token`, then in Settings → Agent accounts choose `+ new account`, name it `claude-box`, and paste the token on its row. An existing `claude-box` account is kept unless you answer yes to `Replace the token?`.
 6. **Config.** Sets `default_runtime` to `box`, `default_cwd` to the workspace, `box_vm_cpus` and `box_vm_memory_gib` to the VM size, and `account` to `claude-box` on every `claude` agent that has none (adding a `claude` agent when there is none). A `claude` agent that already uses another account is left alone. It shows the file it would write (or a diff against yours; it rewrites your file with sorted keys and two-space indent) and asks before it writes, atomically and mode 0600, never through a symlink. It writes the config file in use: `-config <path>` if given (the file must already exist), else the one CuliBox finds, else `<data root>/config.json`, which init creates. By hand: put the same keys in that file (see [Configuration](CONFIG.md)).
-7. **Box setup.** On macOS the order depends on the VM. **No VM yet:** init first adds the workspace to the box VM's folders (`culibox box share add <workspace>`; nothing is added when a listed folder already covers it), then runs `culibox box setup` (creates the VM, builds the image, checks containment). Setup starts the VM with that list, so the first start already has the workspace. **A VM that is set up but stopped** (after a reboot or `culibox box stop`): `box setup` refuses to apply a changed folder list to a VM that is not running, so init adds the folder and, when the VM does not have it, asks `Apply it now? [Y/n]` and runs `culibox box share apply -force`. That is safe because init only does it when the VM is provably down (colima says so and nothing answers on its docker socket), and it checks that again after you answer, since the prompt can wait while `culibox serve` starts the VM for a boxed spawn; if the VM has started by then, init runs the plain `culibox box share apply` instead, which refuses while a box runs. The apply starts the VM with the list, and then `box setup` runs. If you answer no, init stops and tells you to run `culibox init` again, which checks the VM first (`-force` is only safe while the VM is still stopped). **A running VM:** init runs `box setup` first (unless the box is already ready and you answer no to `Run box setup again?`). When only the folder list differs, setup itself restarts the VM (a stop and start, printed), and it refuses while a box runs. Then init adds the workspace and, when the VM does not have it yet, asks `Apply it now? [Y/n]` and runs `culibox box share apply` with its step lines shown; the restart ends the sessions in the VM, and the apply refuses while a box runs (stop them, or run `culibox box share apply -force` yourself). Either way init ends the step with `done` only when a read & write folder the VM mounts holds the workspace (a whole-home VM mounts your home folder, so it holds a workspace under home, not one on another volume); another unapplied change in the list does not hold it up. If `box setup` fails on an existing VM, init stops and says to stop the boxes or run `culibox box setup -force` (ends the running boxes and their sessions).
+7. **Box setup.** On macOS the order depends on the VM. **No VM yet:** init first adds the workspace to the box VM's folders (`culibox box share add <workspace>`; nothing is added when a listed folder already covers it), then runs `culibox box setup` (creates the VM, gets the image, checks containment). Setup starts the VM with that list, so the first start already has the workspace. **A VM that is set up but stopped** (after a reboot or `culibox box stop`): `box setup` refuses to apply a changed folder list to a VM that is not running, so init adds the folder and, when the VM does not have it, asks `Apply it now? [Y/n]` and runs `culibox box share apply -force`. That is safe because init only does it when the VM is provably down (colima says so and nothing answers on its docker socket), and it checks that again after you answer, since the prompt can wait while `culibox serve` starts the VM for a boxed spawn; if the VM has started by then, init runs the plain `culibox box share apply` instead, which refuses while a box runs. The apply starts the VM with the list, and then `box setup` runs. If you answer no, init stops and tells you to run `culibox init` again, which checks the VM first (`-force` is only safe while the VM is still stopped). **A running VM:** init runs `box setup` first (unless the box is already ready and you answer no to `Run box setup again?`). When only the folder list differs, setup itself restarts the VM (a stop and start, printed), and it refuses while a box runs. Then init adds the workspace and, when the VM does not have it yet, asks `Apply it now? [Y/n]` and runs `culibox box share apply` with its step lines shown; the restart ends the sessions in the VM, and the apply refuses while a box runs (stop them, or run `culibox box share apply -force` yourself). Either way init ends the step with `done` only when a read & write folder the VM mounts holds the workspace (a whole-home VM mounts your home folder, so it holds a workspace under home, not one on another volume); another unapplied change in the list does not hold it up. If `box setup` fails on an existing VM, init stops and says to stop the boxes or run `culibox box setup -force` (ends the running boxes and their sessions).
 8. **Doctor and login URL.** Runs `culibox doctor`, then prints how to start CuliBox (`culibox serve`) and the login URL with the login token. A FAIL in doctor makes the run stop with exit 1.
 
 ### From source (manual)
@@ -83,6 +83,22 @@ URL containing a login token (`#token=…`), generated on first start and kept i
 Closing the terminal tab stops CuliBox but not your sessions; run
 `culibox serve` again and they reattach. Only one CuliBox can serve a data
 directory at a time.
+
+To run it without a terminal tab, and have it start when you log in:
+
+    culibox service install
+
+This writes a LaunchAgent, `~/Library/LaunchAgents/dev.culiops.culibox.plist`,
+and loads it (`launchctl bootstrap gui/<uid>`). Run it from a terminal in your
+Mac login, not over ssh: a LaunchAgent belongs to your GUI login session, and it
+runs while you are logged in. The box VM still starts only with the first boxed
+session. The service gets the `PATH` of the shell you ran `install` from, so
+Homebrew's `/opt/homebrew/bin` (docker, colima, git, claude) is found; run
+`install` again after you change `PATH` or replace the `culibox` binary.
+`culibox service status` shows whether it runs, `culibox service uninstall`
+unloads it and removes the plist (only one CuliBox wrote), and sessions survive
+both. Logs go to `service.log` in the data root. The rules and refusals are in
+[INSTALL.md](INSTALL.md#run-as-a-service).
 
 ## Configure
 
@@ -127,7 +143,7 @@ context and never edits `~/.ssh/config`.
 `culibox init` runs these for you (steps 1 and 7); by hand:
 
     brew install colima docker
-    culibox box setup        # once: creates the VM, builds the image natively (or pulls it when `box_image` is a ghcr digest), checks containment
+    culibox box setup        # once: creates the VM, pulls the release's published image into it (or builds natively when the pull fails, with a source build, or when `box_image` is `culiops/culibox:base`), checks containment
     culibox doctor           # the "boxed tier", "box image" and "containment" lines
 
 - `box setup` also cleans up the VM's Docker: it removes old box images a registry can supply again and the image it replaced (an instance pinned to that image's dated tag from a config `box setup` cannot see needs `box setup -rebuild` and its `box_image` updated to the new dated tag), and lists the other unused local builds with their sizes. `box setup -prune-local` removes ALL the listed ones, `-no-prune` keeps everything. The `docker image rm` lines it prints carry the VM's `--host` and `--config`, quoted for the shell, because the plain `docker` CLI on the Mac is not the VM's. The VM has one Docker for every CuliBox on the Mac, and `box setup` reads only the configs in the places [INSTALL](INSTALL.md#from-source-manual) names, which is why it never removes a local build on its own.
@@ -144,7 +160,7 @@ context and never edits `~/.ssh/config`.
   core, half the RAM) applies only when the VM is first set up, or after
   `culibox box setup -recreate`, which deletes the VM, so its images and
   cache go too (box homes live on the host and stay) and the next setup
-  rebuilds the image. Setting either key explicitly to a different size also
+  pulls or rebuilds the image. Setting either key explicitly to a different size also
   changes the VM, and `culibox doctor` then reports the change until you run
   `box setup -recreate`. Boxes size their memory from the VM (by default half
   of it, but at least `4g` or all of the VM if it has less), so the VM size is
@@ -586,7 +602,7 @@ sees for the failing host and the export command below with the name filled in
    The `HINT:` prints this file, and its path, when no config exists.
 
 3. Apply it. The VM's provisioning changes, so the VM must be recreated.
-   `-recreate` drops the VM's images, so the image is rebuilt (or pulled again):
+   `-recreate` drops the VM's images, so the image is pulled again (or rebuilt, as `box setup` does):
 
        culibox box setup -recreate
 
@@ -626,7 +642,7 @@ the list while a box with live sessions is running, new sessions in that box
 are refused until the old ones end (on macOS, `culibox box stop` also ends them).
 
 On Linux there is no VM. After a change, restart CuliBox; a box created after
-that uses the new list, and the image build needs `culibox box setup -rebuild`. A registry pull (a
+that uses the new list, and the image build needs `culibox box setup -rebuild`. A registry pull (the release's published image, or a
 `box_image` that is a `ghcr.io` digest) goes through the host's Docker daemon,
 which uses the host's own trust store. CuliBox does not manage that: install
 the proxy's root there (on Debian or Ubuntu, copy it into

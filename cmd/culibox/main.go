@@ -139,7 +139,7 @@ func main() {
 		// failure to name them leaves that list without them.
 		cfgFiles, _ := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, envHome)
 		in := doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
-			Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
+			Home: home, XDGConfig: xdg, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
 			EnvNotice: envNotice, EnvErr: envErr}
 		if args.Cmd == "doctor" {
 			os.Exit(doctor.Run(os.Stdout, in))
@@ -169,6 +169,9 @@ func main() {
 		}
 		os.Exit(runBox(args, cfg, home, cfgFiles, os.Stdout))
 	}
+	if args.Cmd == "service" {
+		os.Exit(runService(args, cfg, home, envHome, realServiceDeps(home, xdg), os.Stdout))
+	}
 	if args.Cmd == "init" {
 		os.Exit(runInit(args, home, os.Stdin, term.IsTerminal(int(os.Stdin.Fd())), os.Stdout, realInitDeps(home)))
 	}
@@ -182,6 +185,15 @@ func main() {
 		}
 		os.Exit(runClone(args, cfg, home, runtime.GOOS, cfgFiles, os.Stdout))
 	}
+	if args.Service {
+		// The unit's promise holds at every start, not only at install: a later
+		// edit of bind_addr, or a config the service resolves differently.
+		if why := serviceServeRefusal(cfg); why != "" {
+			log.Printf("culibox serve -service: %s", why)
+			os.Exit(serviceRefusedExit(runtime.GOOS))
+		}
+		privateStderr(os.Stderr)
+	}
 	log.Printf("config: %s (culibox %s)", src, buildCommit())
 	log.Print(cred.summary())
 	cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, envHome)
@@ -189,7 +201,7 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 	serve(cfg, baseCfg, cred.File, cred.Bad, home, cfgFiles, doctor.Input{Config: cfg, Source: src,
-		Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
+		Home: home, XDGConfig: xdg, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
 		EnvNotice: envNotice, RootNote: rootNote, Start: facts}, ring)
 }
 

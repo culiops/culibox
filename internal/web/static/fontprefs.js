@@ -68,6 +68,8 @@ const fontPrefs = (function () {
       applyCssVars();
       const v = CSS_VAR[surface];
       if (typeof eachViewer === "function") eachViewer((vt) => { if (vt.zoomVar === v) vt.resetZoom(); });
+      // The dock's Monaco editor has no CSS var to read: its size is an option, set when the code size changes.
+      if (surface === "code" && typeof editorApplyPrefs === "function") editorApplyPrefs();
     }
   }
 
@@ -77,6 +79,7 @@ const fontPrefs = (function () {
     applyCssVars();
     applyTerminals();
     if (typeof eachViewer === "function") eachViewer((vt) => vt.resetZoom());
+    if (typeof editorApplyPrefs === "function") editorApplyPrefs();
   }
 
   return { DEFAULTS, MOBILE_DEFAULTS, BOUNDS, STEP, CSS_VAR, clamp, load, get, set, reset, applyCssVars, applyTerminals };

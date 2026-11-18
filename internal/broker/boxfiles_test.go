@@ -498,16 +498,20 @@ func TestEnsureBindingDirTokensRefusesInvalidEntry(t *testing.T) {
 	}
 }
 
-// A PAT-only GitHub binding goes through the gh/git helpers; it gets no env wrapper.
+// A PAT-only GitHub binding goes through the gh/git helpers; it gets no token
+// list. It does get the env script, for the GitHub part of --list: the broker
+// never serves a PAT as a static token, so the script fetches nothing more.
 func TestEnsureBindingDirPATsOnlyNoEnvFiles(t *testing.T) {
 	dir, err := EnsureBindingDir(t.TempDir(), config.Bindings{GitHub: ghTwoOwners(), PATs: tokenEntries()[1:]})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for n := range fileModes(t, dir) {
-		if n == "agentbox-env.js" || n == TokensFile {
-			t.Errorf("PAT-only binding got %s", n)
-		}
+	files := fileModes(t, dir)
+	if _, ok := files[TokensFile]; ok {
+		t.Errorf("PAT-only binding got %s", TokensFile)
+	}
+	if _, ok := files["agentbox-env.js"]; !ok {
+		t.Errorf("GitHub binding lacks agentbox-env.js (for --list)")
 	}
 }
 
@@ -525,7 +529,7 @@ func TestEnsureBindingDirNoTokensUnchanged(t *testing.T) {
 			want = append(want, "aws-config")
 		}
 		if bs.GitHub != nil {
-			want = append(want, "agentbox-gh.js")
+			want = append(want, "agentbox-gh.js", "agentbox-env.js", GitHubListFile)
 		}
 		var got []string
 		for n := range fileModes(t, dir) {
@@ -999,5 +1003,59 @@ func TestWriteSessionMCPKeepsAWSListing(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(dir, AWSListFile))
 	if !bytes.Equal(got, want) || !strings.Contains(string(got), `"base_access":"writes"`) {
 		t.Fatalf("WriteSessionMCP rewrote aws.json:\n%s\nwant\n%s", got, want)
+	}
+}
+
+// ghListBinding is one App owner and one PAT owner, with issues writable.
+func ghListBinding() *config.GitHubBinding {
+	return &config.GitHubBinding{
+		Owners: []config.GitHubOwner{
+			{Owner: "culiops", App: "bot", Repos: []string{"agent-box", "tech-advisor"}},
+			{Owner: "acme", Token: "gh-pat-acme", Repos: []string{"widgets", "gadgets"}},
+		},
+		Permissions: map[string]string{"issues": "write", "contents": "read", "metadata": "read"},
+	}
+}
+
+func TestEnsureBindingDirWritesGitHubListing(t *testing.T) {
+	dir, err := EnsureBindingDir(t.TempDir(), config.Bindings{GitHub: ghListBinding()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, GitHubListFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []struct {
+		Owner       string            `json:"owner"`
+		Repos       []string          `json:"repos"`
+		Via         string            `json:"via"`
+		Permissions map[string]string `json:"permissions"`
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatalf("github.json %s: %v", raw, err)
+	}
+	if len(rows) != 2 || rows[0].Owner != "culiops" || rows[0].Via != "app" ||
+		!slices.Equal(rows[0].Repos, []string{"agent-box", "tech-advisor"}) ||
+		rows[1].Owner != "acme" || rows[1].Via != "token" || rows[1].Permissions != nil ||
+		rows[0].Permissions["issues"] != "write" {
+		t.Fatalf("github.json = %s", raw)
+	}
+	for _, bad := range []string{"gh-pat-acme", `"bot"`} {
+		if strings.Contains(string(raw), bad) {
+			t.Errorf("github.json shows %s: %s", bad, raw)
+		}
+	}
+	// A GitHub-only box gets the env script, so --list works there.
+	if _, err := os.Stat(filepath.Join(dir, "agentbox-env.js")); err != nil {
+		t.Fatalf("agentbox-env.js: %v", err)
+	}
+	// No GitHub binding, no github.json.
+	dir, err = EnsureBindingDir(t.TempDir(), config.Bindings{AWSConns: twoConns()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, GitHubListFile)); !os.IsNotExist(err) {
+		t.Fatalf("github.json without a GitHub binding: %v", err)
 	}
 }

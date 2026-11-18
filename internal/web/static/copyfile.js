@@ -93,11 +93,13 @@ function copyResultMessage(plan, name, ok) {
   return { text: say, error: true };
 }
 
-// readOnlyFrom reports whether a /api/fs/read answer marks the file read-only
-// (the Claude scratch folder, #50): it is shown, but a save is always refused,
-// so the viewer offers no Edit. Only a successful read can say so.
+// readOnlyFrom reports whether a /api/fs/read answer marks the file read-only:
+// the Claude scratch folder (#50), whose save is always refused, or a text file
+// that is not valid UTF-8 (`utf8: false`), whose bytes the editor cannot hold (it
+// shows U+FFFD for each invalid one, and a save would write those). It is shown
+// either way, but the viewer offers no Edit. Only a successful read can say so.
 function readOnlyFrom(res) {
-  return !!(res && res.ok && res.data && res.data.readonly === true);
+  return !!(res && res.ok && res.data && (res.data.readonly === true || res.data.utf8 === false));
 }
 
 if (typeof module !== "undefined" && module.exports) {

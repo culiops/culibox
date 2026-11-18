@@ -44,7 +44,7 @@ A profile binds at most 16 connections, with no duplicates, and each must be def
 
 **Older profiles with an inline `aws` binding.** Before saved connections, a profile carried its AWS settings inline, as an `"aws": { ... }` object. Such a profile still works unchanged. The UI shows it as **Old-style AWS** and offers **Convert to a connection** (**Move to a saved connection** on the profile page): CuliBox creates a connection from the binding (named after the profile) and points the profile at it, and the profile's next session gets a new box. A profile uses either the inline binding or `aws_connections`, never both, so convert or remove the inline binding before adding connections. Use connections for anything new.
 
-**How the agent uses it.** Each connection is an AWS profile of the same name inside the box:
+**How the agent uses it.** At start, CuliBox tells a boxed Claude session which credentials it has: the names, which are PROD and how to use each kind. It never tells it a value, an account or a role. `agentbox-env --list` shows the details and the live sign-in state. Each connection is an AWS profile of the same name inside the box:
 
 ```sh
 aws s3 ls --profile staging-read

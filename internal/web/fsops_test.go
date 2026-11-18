@@ -129,6 +129,125 @@ func TestMkdir_RefusesSymlinkedParentSwappedAfterOpen(t *testing.T) {
 	}
 }
 
+func TestFsNewFileCreatesEmpty(t *testing.T) {
+	s, home := opSrv(t)
+	rec := httptest.NewRecorder()
+	s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", mustJSON(t, map[string]string{"dir": home, "name": "notes.md"})))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body)
+	}
+	fi, err := os.Lstat(filepath.Join(home, "notes.md"))
+	if err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("file not created: %v", err)
+	}
+	if fi.Size() != 0 {
+		t.Errorf("size = %d, want an empty file", fi.Size())
+	}
+	// The create mode is 0644 minus the umask, so it can only ever have fewer bits.
+	if perm := fi.Mode().Perm(); perm&^0o644 != 0 || perm&0o600 != 0o600 {
+		t.Errorf("mode = %o, want owner rw and nothing beyond 0644", perm)
+	}
+	var got struct {
+		Path string `json:"path"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got.Path != filepath.Join(home, "notes.md") {
+		t.Errorf("path = %q, want %q", got.Path, filepath.Join(home, "notes.md"))
+	}
+}
+
+func TestFsNewFileExistsIs409(t *testing.T) {
+	s, home := opSrv(t)
+	existing := filepath.Join(home, "notes.md")
+	os.WriteFile(existing, []byte("keep"), 0o644)
+	os.Mkdir(filepath.Join(home, "adir"), 0o755)
+	for _, name := range []string{"notes.md", "adir"} {
+		rec := httptest.NewRecorder()
+		s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", mustJSON(t, map[string]string{"dir": home, "name": name})))
+		if rec.Code != http.StatusConflict {
+			t.Errorf("name %q: want 409, got %d (%s)", name, rec.Code, rec.Body)
+		}
+	}
+	// A refused create must not truncate what is there.
+	mustContent(t, existing, "keep")
+}
+
+// O_EXCL refuses an existing symlink at the last component, dangling or not, so
+// a link planted to point outside $HOME is never written through.
+func TestFsNewFileNeverFollowsALinkAtTheName(t *testing.T) {
+	s, home := opSrv(t)
+	outside := t.TempDir()
+	for name, target := range map[string]string{
+		"dangling": filepath.Join(outside, "created-through-link"),
+		"live":     filepath.Join(outside, "victim"),
+	} {
+		os.WriteFile(filepath.Join(outside, "victim"), []byte("keep"), 0o644)
+		if err := os.Symlink(target, filepath.Join(home, name)); err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", mustJSON(t, map[string]string{"dir": home, "name": name})))
+		if rec.Code != http.StatusConflict {
+			t.Errorf("%s link: want 409, got %d (%s)", name, rec.Code, rec.Body)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "created-through-link")); err == nil {
+		t.Fatal("a file was created through the dangling link")
+	}
+	mustContent(t, filepath.Join(outside, "victim"), "keep")
+}
+
+func TestFsNewFileBadName(t *testing.T) {
+	s, home := opSrv(t)
+	for _, name := range []string{"a/b", "..", "", ".", "../evil", `a\b`, "   "} {
+		rec := httptest.NewRecorder()
+		s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", mustJSON(t, map[string]string{"dir": home, "name": name})))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("name %q: want 400, got %d (%s)", name, rec.Code, rec.Body)
+		}
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Errorf("a bad name left %d entries behind", len(entries))
+	}
+}
+
+func TestFsNewFileOutsideHomeForbidden(t *testing.T) {
+	s, _ := opSrv(t)
+	rec := httptest.NewRecorder()
+	s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", `{"dir":"/tmp","name":"x"}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d (%s)", rec.Code, rec.Body)
+	}
+}
+
+func TestFsNewFileMissingDirIs404(t *testing.T) {
+	s, home := opSrv(t)
+	rec := httptest.NewRecorder()
+	s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", mustJSON(t, map[string]string{"dir": filepath.Join(home, "nope"), "name": "x"})))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d (%s)", rec.Code, rec.Body)
+	}
+}
+
+func TestFsNewFileCrossOriginRefused(t *testing.T) {
+	s, home := opSrv(t)
+	rec := httptest.NewRecorder()
+	s.handleFsNewFile(rec, httptest.NewRequest(http.MethodGet, "/api/fs/newfile", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET: want 405, got %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	cross := httptest.NewRequest(http.MethodPost, "/api/fs/newfile", strings.NewReader(mustJSON(t, map[string]string{"dir": home, "name": "x"})))
+	cross.Header.Set("Sec-Fetch-Site", "cross-site")
+	s.handleFsNewFile(rec, cross)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("cross-site: want 403, got %d", rec.Code)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "x")); err == nil {
+		t.Error("a cross-site request created the file")
+	}
+}
+
 func TestRename_FileAndDirectory(t *testing.T) {
 	s, home := opSrv(t)
 	os.WriteFile(filepath.Join(home, "a.txt"), []byte("x"), 0o644)
@@ -535,6 +654,8 @@ func TestOps_RefuseAParentSymlinkedOutOfHomeAfterResolution(t *testing.T) {
 	}{
 		{"mkdir", func(s *Server, rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsMkdir(rec, r) },
 			func(target string) string { return `{"dir":"` + target + `","name":"escaped"}` }, "/api/fs/mkdir"},
+		{"newfile", func(s *Server, rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsNewFile(rec, r) },
+			func(target string) string { return `{"dir":"` + target + `","name":"escaped"}` }, "/api/fs/newfile"},
 		{"rename", func(s *Server, rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsRename(rec, r) },
 			func(target string) string { return `{"path":"` + target + `/victim","name":"escaped"}` }, "/api/fs/rename"},
 		{"delete", func(s *Server, rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsDelete(rec, r) },
@@ -572,6 +693,7 @@ func TestOps_GuardsApplyToEveryHandler(t *testing.T) {
 		call func(rec *httptest.ResponseRecorder, r *http.Request)
 	}{
 		{"mkdir", func(rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsMkdir(rec, r) }},
+		{"newfile", func(rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsNewFile(rec, r) }},
 		{"rename", func(rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsRename(rec, r) }},
 		{"delete", func(rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsDelete(rec, r) }},
 	} {
@@ -604,6 +726,8 @@ func TestOps_ParentThatIsAFileIsABadRequestNotAServerError(t *testing.T) {
 		body string
 	}{
 		{"mkdir", func(rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsMkdir(rec, r) },
+			`{"dir":"` + home + `/afile","name":"x"}`},
+		{"newfile", func(rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsNewFile(rec, r) },
 			`{"dir":"` + home + `/afile","name":"x"}`},
 		{"rename", func(rec *httptest.ResponseRecorder, r *http.Request) { s.handleFsRename(rec, r) },
 			`{"path":"` + home + `/afile/x","name":"y"}`},
@@ -658,6 +782,42 @@ func TestMkdirBoxedDirLinkRefused(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(home, "planted")); err == nil {
 		t.Fatal("directory created in the host tree through the box link")
 	}
+}
+
+func TestFsNewFileBoxedDirLinkRefused(t *testing.T) {
+	s, home, ws := boxedLinked(t)
+	rec := httptest.NewRecorder()
+	s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", mustJSON(t, map[string]string{"dir": filepath.Join(ws, "cfg"), "name": "planted"})))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("code = %d, want 403 (%s)", rec.Code, rec.Body)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "planted")); err == nil {
+		t.Fatal("file created in the host tree through the box link")
+	}
+}
+
+// A box-planted link AT the new name, pointing into the host tree, is refused as
+// an existing name rather than written through.
+func TestFsNewFileBoxedLinkAtTheNameRefused(t *testing.T) {
+	s, home, ws := boxedLinked(t)
+	mustSymlink(t, filepath.Join(home, "victim"), filepath.Join(ws, "trap"))
+	rec := httptest.NewRecorder()
+	s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", mustJSON(t, map[string]string{"dir": ws, "name": "trap"})))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d, want 409 (%s)", rec.Code, rec.Body)
+	}
+	mustContent(t, filepath.Join(home, "victim"), "host")
+}
+
+func TestFsNewFileInsideBoxedWorkspaceWorks(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	mustMkdirAll(t, filepath.Join(ws, "sub"))
+	rec := httptest.NewRecorder()
+	s.handleFsNewFile(rec, opReq(t, "/api/fs/newfile", mustJSON(t, map[string]string{"dir": filepath.Join(ws, "sub"), "name": "f.txt"})))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), filepath.Join(ws, "sub", "f.txt")) {
+		t.Fatalf("newfile: %d %s", rec.Code, rec.Body)
+	}
+	mustContent(t, filepath.Join(ws, "sub", "f.txt"), "")
 }
 
 func TestRenameDeleteBoxedDirLinkRefused(t *testing.T) {

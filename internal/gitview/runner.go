@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -21,12 +22,25 @@ const (
 	defaultReuse       = 2 * time.Second
 	defaultIdle        = 5 * time.Minute
 	defaultMaxParallel = 2
+	// baseReuse is how long a base answer is trusted for one HEAD. HEAD moving
+	// is what usually changes it, but a fetch or a branch update can move the
+	// base ref (and so the merge base) with HEAD where it is.
+	baseReuse = 30 * time.Second
 
 	maxStatusEntries = 5000
 	// maxStatusBytes bounds the porcelain buffer. Hitting it means far more than
 	// maxStatusEntries paths, so it reads as "toomany".
 	maxStatusBytes = 8 << 20
-	maxDiffBytes   = 2 << 20
+	// maxNumstatBytes bounds the diff --raw --numstat buffer, which holds each
+	// path twice and some 100 bytes per file; hitting it reads as "toomany".
+	maxNumstatBytes = 8 << 20
+	maxDiffBytes    = 2 << 20
+	// maxBlobBytes bounds the text of a file at a revision (the editor's own
+	// text read cap); maxRawBlobBytes bounds the raw bytes of an image.
+	maxBlobBytes    = 2 << 20
+	maxRawBlobBytes = 10 << 20
+	// maxBaseBytes bounds what the two base runs print: five ref records and one id.
+	maxBaseBytes   = 64 << 10
 	maxReasonRunes = 200
 	removeTimeout  = 10 * time.Second
 )
@@ -43,12 +57,66 @@ type Status struct {
 	State  string `json:"state"`
 	Reason string `json:"reason,omitempty"`
 	Top    string `json:"top,omitempty"`
+	// Branch is the checked-out branch, "" for a detached HEAD; Head is the
+	// commit HEAD is at, "" for a repository with no commits.
+	Branch string `json:"branch,omitempty"`
+	Head   string `json:"head,omitempty"`
 	// RootRel is where the requested tree root sits inside Top (slash form,
 	// "." for Top itself). The web handler sets it per request; the runner
 	// and its cache, shared by every root of one checkout, leave it empty.
 	RootRel string  `json:"rootRel"`
 	NoHead  bool    `json:"noHead,omitempty"`
 	Entries []Entry `json:"entries"`
+}
+
+// BaseInfo is what branch-scoped review compares against. State is one of ok,
+// nobase (no base branch found, no commits, or no history in common with it),
+// notrepo, unavailable. For ok, BaseRef is the full ref the server picked,
+// BaseName its short form for display ("main" or "origin/main"), MergeBase the
+// merge base of HEAD and BaseRef, and Ahead whether HEAD is past it. Reason
+// carries git's stderr only for unavailable, so a web handler must not forward
+// it as it is. Branch is the checked-out branch, "" when detached.
+type BaseInfo struct {
+	State     string `json:"state"`
+	Reason    string `json:"reason,omitempty"`
+	Branch    string `json:"branch"`
+	BaseRef   string `json:"baseRef,omitempty"`
+	BaseName  string `json:"baseName,omitempty"`
+	MergeBase string `json:"mergeBase,omitempty"`
+	Ahead     bool   `json:"ahead"`
+}
+
+// The reasons of a nobase result.
+const (
+	reasonNoCommits = "no commits yet"
+	reasonNoBase    = "no base branch found"
+	reasonNoCommon  = "no history in common with the base branch"
+)
+
+// NumEntry is one file's line counts against the scope's side: P relative to
+// the checkout top, X the status letter (A, M or D; a type change is M), or "U"
+// for an untracked file, which the web layer counts since git's diff has none.
+// Bin marks a binary file, whose counts are 0.
+type NumEntry struct {
+	P   string `json:"p"`
+	X   string `json:"x"`
+	A   int    `json:"a"`
+	D   int    `json:"d"`
+	Bin bool   `json:"bin,omitempty"`
+}
+
+// Numstat is the per-file line counts of one repository's tracked changes.
+// State is one of ok, notrepo, toomany, unavailable (a repository with no
+// commits has no HEAD to diff, so it is unavailable); Entries is never nil.
+// Reason carries git's stderr only for unavailable, so a web handler must not
+// forward it as it is.
+type Numstat struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	// RootRel is where the requested tree root sits inside the checkout top, as
+	// for Status: the web handler sets it, the runner leaves it empty.
+	RootRel string     `json:"rootRel"`
+	Entries []NumEntry `json:"entries"`
 }
 
 // Diff is one file's diff. State is ok or unavailable; Kind is text, binary or unchanged.
@@ -60,7 +128,21 @@ type Diff struct {
 	Truncated bool   `json:"truncated"`
 }
 
-// Runner runs git status and diff in throwaway containers. Zero durations and
+// Blob is one file's content at a revision. State is one of ok, notrepo,
+// unavailable. Missing marks an ok answer for a path the revision does not have
+// (an untracked or new file, or any file in a repository with no commit yet),
+// whose Content is empty. Content is cut at 2 MiB and marked Truncated. Reason
+// carries git's stderr only for unavailable, so a web handler must not forward
+// it as it is.
+type Blob struct {
+	State     string `json:"state"`
+	Reason    string `json:"reason,omitempty"`
+	Missing   bool   `json:"missing,omitempty"`
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated"`
+}
+
+// Runner runs git status, diff, base, numstat and file-at-revision lookups in throwaway containers. Zero durations and
 // limits take the defaults (10s timeout, 2s reuse, 5m idle, 2 parallel). It is
 // safe for concurrent use; its mutex is never held while docker runs.
 type Runner struct {
@@ -76,6 +158,10 @@ type Runner struct {
 	mu           sync.Mutex
 	cache        map[string]*cached
 	flights      map[string]*flight
+	baseCache    map[string]*baseCached
+	baseFlights  map[string]*baseFlight
+	numCache     map[string]*numCached
+	numFlights   map[string]*numFlight
 	semOnce      sync.Once
 	sem          chan struct{}
 	sweepPending bool
@@ -87,6 +173,45 @@ type cached struct {
 	at       time.Time // when the run finished
 	started  time.Time // when the run launched its container (see flight)
 	lastUsed time.Time
+}
+
+// baseCached is a base answer for one repository at one HEAD. Its Branch is
+// empty: the branch can change with HEAD where it is, so every caller reads it
+// from its own status.
+type baseCached struct {
+	bi       BaseInfo
+	at       time.Time // when the run finished
+	lastUsed time.Time
+}
+
+// baseFlight is one base run that every concurrent caller for a key waits on.
+type baseFlight struct {
+	done chan struct{}
+	bi   BaseInfo
+}
+
+// numCached is a numstat answer for one repository and scope.
+type numCached struct {
+	ns       Numstat
+	at       time.Time // when the run finished
+	started  time.Time // when the run launched its container (see numFlight)
+	lastUsed time.Time
+}
+
+// numFlight is one numstat run that every concurrent caller for a key waits on.
+// started and hasStarted are flight's: when its container launched (guarded by
+// Runner.mu), before which the run has read nothing.
+type numFlight struct {
+	done       chan struct{}
+	ns         Numstat
+	started    time.Time
+	hasStarted bool
+}
+
+// readsAfter reports whether the flight's result reflects the disk at or after
+// t: it has not launched yet, or it launched at or after t.
+func (f *numFlight) readsAfter(t time.Time) bool {
+	return !f.hasStarted || !f.started.Before(t)
 }
 
 // flight is one status run that every concurrent caller for a Top waits on.
@@ -198,6 +323,17 @@ func (r *Runner) sweepLocked(now time.Time) {
 			delete(r.cache, k)
 		}
 	}
+	for k, c := range r.numCache {
+		if now.Sub(c.lastUsed) >= idle {
+			delete(r.numCache, k)
+		}
+	}
+	// A base answer past baseReuse is never served again: only idle ones go.
+	for k, c := range r.baseCache {
+		if now.Sub(c.lastUsed) >= idle || now.Sub(c.at) >= baseReuse {
+			delete(r.baseCache, k)
+		}
+	}
 }
 
 func (r *Runner) runStatus(t Target, key string, f *flight) {
@@ -243,21 +379,24 @@ func (r *Runner) doStatus(t Target, f *flight) Status {
 	}
 	switch {
 	case out.hit || errors.Is(err, errCapped):
-		return Status{State: "toomany", Top: t.Top, Entries: []Entry{}}
+		// Max 0 stops at the first entry, after the header records, which
+		// still say which branch and commit this is.
+		_, _, _, branch, head := ParseStatus(out.b, 0)
+		return Status{State: "toomany", Top: t.Top, Branch: branch, Head: head, Entries: []Entry{}}
 	case err != nil:
 		if strings.Contains(err.Error(), "not a git repository") {
 			return Status{State: "notrepo", Top: t.Top, Entries: []Entry{}}
 		}
 		return unavailableStatus(t, failReason(ctx, err))
 	}
-	entries, noHead, tooMany := ParseStatus(out.b, maxStatusEntries)
+	entries, noHead, tooMany, branch, head := ParseStatus(out.b, maxStatusEntries)
 	if tooMany {
-		return Status{State: "toomany", Top: t.Top, Entries: []Entry{}}
+		return Status{State: "toomany", Top: t.Top, Branch: branch, Head: head, Entries: []Entry{}}
 	}
 	if entries == nil {
 		entries = []Entry{}
 	}
-	return Status{State: "ok", Top: t.Top, NoHead: noHead, Entries: entries}
+	return Status{State: "ok", Top: t.Top, NoHead: noHead, Branch: branch, Head: head, Entries: entries}
 }
 
 // Diff returns the diff of one file, rel being its path relative to t.Top. It
@@ -297,6 +436,354 @@ func (r *Runner) Diff(ctx context.Context, t Target, rel string, untracked bool)
 		b = trimPartialRune(b)
 	}
 	return Diff{State: "ok", Kind: DiffKind(b), Diff: string(b), Truncated: out.hit}
+}
+
+// missingRE is the end of what git cat-file says for a path the revision does
+// not have: "does not exist in" for a path nobody has, "exists on disk, but not
+// in" for the untracked file the mount does hold. It is anchored at the end so a
+// path that merely contains those words (a directory, which ends the message in
+// ": bad file") is not taken for one.
+var missingRE = regexp.MustCompile(`(does not exist in|exists on disk, but not in) '(HEAD|[0-9a-f]{40}|[0-9a-f]{64})'\s*$`)
+
+// noHeadRE is what git says for HEAD in a repository with no commit yet.
+var noHeadRE = regexp.MustCompile(`invalid object name 'HEAD'\.?\s*$`)
+
+// isMissing reports whether err is git (exit 128) saying that rev has no such
+// path, or, for HEAD, that there is no HEAD to have one.
+func isMissing(rev string, err error) bool {
+	if exitCode(err) != 128 {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return missingRE.MatchString(msg) || (rev == "HEAD" && noHeadRE.MatchString(msg))
+}
+
+// Show returns the text of the file rel (relative to t.Top) as it is in rev,
+// which must be "HEAD" or a full object id, such as the MergeBase of Base: the
+// caller derives it, a client never names one. The blob is read as stored, with
+// no filter or textconv. It is not cached, since the editor asks for it when it
+// opens a file and again after the file or HEAD moved. Content past 2 MiB is
+// cut at a whole character and marked Truncated. A path the revision does not
+// have is ok and Missing. A refused target, rev or path, a docker failure or a
+// timeout is "unavailable".
+func (r *Runner) Show(ctx context.Context, t Target, rev, rel string) Blob {
+	data, b := r.cat(ctx, t, rev, rel, maxBlobBytes)
+	if b.Truncated {
+		data = trimPartialRune(data)
+	}
+	b.Content = string(data)
+	return b
+}
+
+// ShowRaw is Show for a file that is not text (an image): it returns the bytes
+// as they are, up to 10 MiB, and a Blob that has everything but Content. Past
+// the cap the bytes are cut and the Blob is Truncated, which no caller should
+// serve as the file.
+func (r *Runner) ShowRaw(ctx context.Context, t Target, rev, rel string) ([]byte, Blob) {
+	return r.cat(ctx, t, rev, rel, maxRawBlobBytes)
+}
+
+// cat runs one cat-file container and returns the (at most limit) bytes it
+// printed with a Blob that has everything but Content.
+func (r *Runner) cat(ctx context.Context, t Target, rev, rel string, limit int) ([]byte, Blob) {
+	if why := t.Unsafe(); why != "" {
+		return nil, Blob{State: "unavailable", Reason: why}
+	}
+	if !validRev(rev) {
+		return nil, Blob{State: "unavailable", Reason: "invalid revision"}
+	}
+	if !safePath(rel) {
+		return nil, Blob{State: "unavailable", Reason: "invalid path"}
+	}
+	ctx, cancel := context.WithTimeout(ctx, orDur(r.Timeout, defaultTimeout))
+	defer cancel()
+	release, err := r.acquire(ctx)
+	if err != nil {
+		return nil, Blob{State: "unavailable", Reason: errNoSlot.Error()}
+	}
+	defer release()
+	name := newName()
+	out := &capBuffer{max: limit}
+	err = r.Docker.RunStream(ctx, ShowArgs(t, r.Image, name, r.UID, r.GID, rev, rel), out)
+	// A path the revision lacks is git exiting on its own: the container is gone
+	// (--rm), so removing it would be pure overhead on what is the common case
+	// of opening a new file. Every other error (a cap hit, a timeout, a real
+	// failure) may leave the container running, so it is removed.
+	missing := err != nil && isMissing(rev, err)
+	if err != nil && !missing {
+		r.removeFailed(name)
+	}
+	switch {
+	case out.hit || errors.Is(err, errCapped):
+		return out.b, Blob{State: "ok", Truncated: true}
+	case missing:
+		return nil, Blob{State: "ok", Missing: true}
+	case err != nil:
+		if strings.Contains(err.Error(), "not a git repository") {
+			return nil, Blob{State: "notrepo"}
+		}
+		return nil, Blob{State: "unavailable", Reason: failReason(ctx, err)}
+	}
+	return out.b, Blob{State: "ok"}
+}
+
+// Base returns the base branch of t, the merge base of HEAD with it, and the
+// checked-out branch. The base is picked by the server from the repository's
+// own refs (origin/HEAD's target, else main or master, remote before local):
+// no caller names a ref. HEAD and the branch come from Status, which Base
+// calls, so they are as fresh as it is. The answer is kept per (t, HEAD), so a
+// new commit recomputes it, and for baseReuse at most, since the base ref can
+// move on its own. Concurrent calls share one run. Only a settled answer (ok
+// or nobase) is kept: a failure is asked again.
+func (r *Runner) Base(ctx context.Context, t Target) BaseInfo {
+	if why := t.Unsafe(); why != "" {
+		return BaseInfo{State: "unavailable", Reason: why}
+	}
+	st := r.Status(ctx, t)
+	switch st.State {
+	case "ok", "toomany": // both carry the branch and head
+	case "notrepo":
+		return BaseInfo{State: "notrepo"}
+	default:
+		return BaseInfo{State: "unavailable", Reason: st.Reason}
+	}
+	if st.Head == "" { // nothing to take a merge base of
+		return BaseInfo{State: "nobase", Reason: reasonNoCommits, Branch: st.Branch}
+	}
+	key := t.key() + "\x00" + st.Head
+	now := r.now()
+	r.mu.Lock()
+	r.sweepLocked(now)
+	if c := r.baseCache[key]; c != nil && now.Sub(c.at) < baseReuse {
+		c.lastUsed = now
+		bi := c.bi
+		r.mu.Unlock()
+		bi.Branch = st.Branch
+		return bi
+	}
+	f := r.baseFlights[key]
+	if f == nil {
+		f = &baseFlight{done: make(chan struct{})}
+		if r.baseFlights == nil {
+			r.baseFlights = map[string]*baseFlight{}
+		}
+		r.baseFlights[key] = f
+		// As for status, the run is the flight's, not the first caller's.
+		go r.runBase(t, key, st.Head, f)
+	}
+	r.mu.Unlock()
+	select {
+	case <-f.done:
+		bi := f.bi
+		bi.Branch = st.Branch
+		return bi
+	case <-ctx.Done():
+		return BaseInfo{State: "unavailable", Reason: "request cancelled", Branch: st.Branch}
+	}
+}
+
+func (r *Runner) runBase(t Target, key, head string, f *baseFlight) {
+	bi := r.doBase(t, head)
+	now := r.now()
+	r.mu.Lock()
+	if bi.State == "ok" || bi.State == "nobase" {
+		if r.baseCache == nil {
+			r.baseCache = map[string]*baseCached{}
+		}
+		r.baseCache[key] = &baseCached{bi: bi, at: now, lastUsed: now}
+	}
+	if r.baseFlights[key] == f {
+		delete(r.baseFlights, key)
+	}
+	r.mu.Unlock()
+	f.bi = bi
+	close(f.done)
+}
+
+// doBase lists the candidate refs, then, for the one it picks, asks for the
+// merge base: two containers, the second only when there is a base. Its
+// Branch is empty (see baseCached).
+func (r *Runner) doBase(t Target, head string) BaseInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), orDur(r.Timeout, defaultTimeout))
+	defer cancel()
+	out, err := r.runGit(ctx, func(name string) []string { return BaseArgs(t, r.Image, name, r.UID, r.GID) })
+	if err != nil {
+		return BaseInfo{State: "unavailable", Reason: failReason(ctx, err)}
+	}
+	ref := pickBase(out)
+	if ref == "" {
+		return BaseInfo{State: "nobase", Reason: reasonNoBase}
+	}
+	out, err = r.runGit(ctx, func(name string) []string { return MergeBaseArgs(t, r.Image, name, r.UID, r.GID, ref) })
+	if err != nil {
+		// Exit 1 with nothing printed is merge-base's "no common ancestor".
+		if exitCode(err) == 1 && len(out) == 0 {
+			return BaseInfo{State: "nobase", Reason: reasonNoCommon}
+		}
+		return BaseInfo{State: "unavailable", Reason: failReason(ctx, err)}
+	}
+	mb := strings.TrimSpace(string(out))
+	if !oidRE.MatchString(mb) {
+		return BaseInfo{State: "unavailable", Reason: "git printed no merge base"}
+	}
+	return BaseInfo{State: "ok", BaseRef: ref, BaseName: baseName(ref), MergeBase: mb, Ahead: mb != head}
+}
+
+// Numstat returns the per-file line counts of t's tracked changes against sc:
+// HEAD, or for Branch the merge base with sc.BaseRef. Untracked files are not
+// in it. Concurrent calls for the same repository and scope share one container
+// run, and a finished result is reused for Reuse, in a cache of its own beside
+// Status's. A Branch scope needs a BaseRef that is a ValidBaseRef (the server's
+// own, from Base): any other is "unavailable" with no run. A refused target, a
+// docker failure, a timeout or a repository with no commits is "unavailable".
+func (r *Runner) Numstat(ctx context.Context, t Target, sc Scope) Numstat {
+	return r.numstat(ctx, t, sc, false)
+}
+
+// NumstatFresh is Numstat for a caller that has just changed something on
+// disk, with the semantics of StatusFresh: it never takes the reuse cache, and
+// joins a run already in flight only if that run's container launched at or
+// after this call (or has not launched yet), since an earlier run may have read
+// the tree before the change. Fresh callers still share one new run among
+// themselves, and the run still takes one of the MaxParallel slots.
+func (r *Runner) NumstatFresh(ctx context.Context, t Target, sc Scope) Numstat {
+	return r.numstat(ctx, t, sc, true)
+}
+
+func (r *Runner) numstat(ctx context.Context, t Target, sc Scope, fresh bool) Numstat {
+	if why := t.Unsafe(); why != "" {
+		return unavailableNumstat(why)
+	}
+	key := t.key() + "\x00head"
+	if sc.Branch {
+		if !ValidBaseRef(sc.BaseRef) {
+			return unavailableNumstat("invalid base ref")
+		}
+		key = t.key() + "\x00branch\x00" + sc.BaseRef
+	} else {
+		sc.BaseRef = "" // never read outside Branch
+	}
+	now := r.now()
+	r.mu.Lock()
+	r.sweepLocked(now)
+	if c := r.numCache[key]; !fresh && c != nil && now.Sub(c.at) < orDur(r.Reuse, defaultReuse) {
+		c.lastUsed = now
+		ns := cloneNumstat(c.ns)
+		r.mu.Unlock()
+		return ns
+	}
+	f := r.numFlights[key]
+	if f == nil || (fresh && !f.readsAfter(now)) {
+		f = &numFlight{done: make(chan struct{})}
+		if r.numFlights == nil {
+			r.numFlights = map[string]*numFlight{}
+		}
+		// As for status, a newer flight replaces an older one still running,
+		// and the run is the flight's, not the first caller's.
+		r.numFlights[key] = f
+		go r.runNumstat(t, sc, key, f)
+	}
+	r.mu.Unlock()
+	select {
+	case <-f.done:
+		return cloneNumstat(f.ns)
+	case <-ctx.Done():
+		return unavailableNumstat("request cancelled")
+	}
+}
+
+func (r *Runner) runNumstat(t Target, sc Scope, key string, f *numFlight) {
+	ns := r.doNumstat(t, sc, f)
+	now := r.now()
+	r.mu.Lock()
+	if !f.hasStarted { // never got a slot
+		f.started, f.hasStarted = now, true
+	}
+	if r.numCache == nil {
+		r.numCache = map[string]*numCached{}
+	}
+	// A slower, older run must not replace the result of a newer one.
+	if c := r.numCache[key]; c == nil || !c.started.After(f.started) {
+		r.numCache[key] = &numCached{ns: ns, at: now, started: f.started, lastUsed: now}
+	}
+	if r.numFlights[key] == f {
+		delete(r.numFlights, key)
+	}
+	r.mu.Unlock()
+	f.ns = ns
+	close(f.done)
+}
+
+func (r *Runner) doNumstat(t Target, sc Scope, f *numFlight) Numstat {
+	name := newName()
+	args := NumstatArgs(t, r.Image, name, r.UID, r.GID, sc)
+	if args == nil { // NumstatArgs refused the ref: run nothing
+		return unavailableNumstat("invalid base ref")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), orDur(r.Timeout, defaultTimeout))
+	defer cancel()
+	release, err := r.acquire(ctx)
+	if err != nil {
+		return unavailableNumstat(errNoSlot.Error())
+	}
+	defer release()
+	r.mu.Lock()
+	f.started, f.hasStarted = r.now(), true
+	r.mu.Unlock()
+	out := &capBuffer{max: maxNumstatBytes}
+	err = r.Docker.RunStream(ctx, args, out)
+	if err != nil {
+		// As for status: remove the container on every error, even one that
+		// still yields a result (the output cap).
+		r.removeFailed(name)
+	}
+	switch {
+	case out.hit || errors.Is(err, errCapped):
+		return Numstat{State: "toomany", Entries: []NumEntry{}}
+	case err != nil:
+		if strings.Contains(err.Error(), "not a git repository") {
+			return Numstat{State: "notrepo", Entries: []NumEntry{}}
+		}
+		return unavailableNumstat(failReason(ctx, err))
+	}
+	entries, tooMany := ParseNumstat(out.b, maxStatusEntries)
+	if tooMany {
+		return Numstat{State: "toomany", Entries: []NumEntry{}}
+	}
+	if entries == nil {
+		entries = []NumEntry{}
+	}
+	return Numstat{State: "ok", Entries: entries}
+}
+
+var (
+	// errNoSlot is what runGit returns when ctx ends before a slot is free.
+	errNoSlot = errors.New("timed out waiting for a free git container")
+	// errRefused is what it returns when the argv builder refused.
+	errRefused = errors.New("git argv refused")
+)
+
+// runGit runs one git container under a MaxParallel slot and returns what it
+// printed, at most maxBaseBytes. argv builds the docker argv for the
+// container's name; a nil one (a builder refusing its input) runs nothing. The
+// container of a failed run is removed, as for status.
+func (r *Runner) runGit(ctx context.Context, argv func(name string) []string) ([]byte, error) {
+	name := newName()
+	args := argv(name)
+	if args == nil {
+		return nil, errRefused
+	}
+	release, err := r.acquire(ctx)
+	if err != nil {
+		return nil, errNoSlot
+	}
+	defer release()
+	out := &capBuffer{max: maxBaseBytes}
+	if err := r.Docker.RunStream(ctx, args, out); err != nil {
+		r.removeFailed(name)
+		return out.b, err
+	}
+	return out.b, nil
 }
 
 // acquire takes one of the MaxParallel slots, or fails when ctx ends first.
@@ -365,6 +852,18 @@ func failReasonText(s string) string {
 
 func unavailableStatus(t Target, why string) Status {
 	return Status{State: "unavailable", Reason: why, Top: t.Top, Entries: []Entry{}}
+}
+
+func unavailableNumstat(why string) Numstat {
+	return Numstat{State: "unavailable", Reason: why, Entries: []NumEntry{}}
+}
+
+func cloneNumstat(n Numstat) Numstat {
+	n.Entries = slices.Clone(n.Entries)
+	if n.Entries == nil {
+		n.Entries = []NumEntry{}
+	}
+	return n
 }
 
 func cloneStatus(s Status) Status {

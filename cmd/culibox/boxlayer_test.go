@@ -866,7 +866,7 @@ func TestPrepareRefusesAMissingOrForeignImage(t *testing.T) {
 	l, fc, d := darwinLayer(t, false)
 	fc.running = true
 	err := l.prepare(context.Background())
-	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "not built") {
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "not set up") {
 		t.Fatalf("a missing image must fail the spawn: %v", err)
 	}
 	d.set(t, "image", "amd64|"+boximage.Hash()+"\n")

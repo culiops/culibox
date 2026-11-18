@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { shouldRefreshTree, insertTextAtPrompt } = require("../static/upload.js");
+const { shouldRefreshTree, insertTextAtPrompt, insertFailText } = require("../static/upload.js");
 
 test("an upload into the directory the tree is showing refreshes it", () => {
   assert.strictEqual(shouldRefreshTree("/home/u/proj", "/home/u/proj"), true);
@@ -80,9 +80,9 @@ test("dropHint: mobile keeps today's exact strings", () => {
   assert.strictEqual(dropHint("miss", false), "Drop onto a terminal pane, or onto a folder in Files");
 });
 
-test("dropHint: desktop names the Files drawer", () => {
-  assert.strictEqual(dropHint("nodest", true), "No destination folder yet. Drop onto a folder in the Files drawer instead");
-  assert.strictEqual(dropHint("miss", true), "Drop onto a terminal pane, or onto a folder in the Files drawer");
+test("dropHint: desktop names the Files dock", () => {
+  assert.strictEqual(dropHint("nodest", true), "No destination folder yet. Drop onto a folder in the Files dock instead");
+  assert.strictEqual(dropHint("miss", true), "Drop onto a terminal pane, or onto a folder in the Files dock");
 });
 
 test("dropHint: a read-only folder says so, on desktop and mobile alike", () => {
@@ -170,4 +170,23 @@ test("a read-only zone ignores a drag that carries no files (text selection)", (
   const ev = { dataTransfer: { types: ["text/plain"] }, preventDefault() { throw new Error("must not claim"); }, stopPropagation() { throw new Error("must not claim"); } };
   z.handlers.dragenter(ev); z.handlers.dragover(ev); z.handlers.drop(ev);
   assert.deepStrictEqual(z.toasts, []);
+});
+
+test("insertFailText: the one sentence for each reason insertTextAtPrompt gives, shared by the viewer's insert and the editor's bar", () => {
+  assert.strictEqual(insertFailText("unsafe"), "That path contains control characters, so it was not inserted");
+  assert.strictEqual(insertFailText("noterm"), "This session has no terminal open here, so the path was not inserted");
+  assert.strictEqual(insertFailText("disconnected"), "That session is not connected, so the path was not inserted");
+  assert.strictEqual(insertFailText(undefined), "That session is not connected, so the path was not inserted", "anything else is a socket that is down");
+  // A caller whose "no terminal" has its own wording (the tree's: focus one first) passes it; the other two sentences stay shared.
+  assert.strictEqual(insertFailText("noterm", "Focus a terminal first, then insert the path"), "Focus a terminal first, then insert the path");
+  assert.strictEqual(insertFailText("unsafe", "Focus a terminal first"), "That path contains control characters, so it was not inserted", "the override is for noterm only");
+  assert.strictEqual(insertFailText("disconnected", "Focus a terminal first"), "That session is not connected, so the path was not inserted");
+  // The two callers use it and keep no copy of the words.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  for (const f of ["viewer-tab.js", "editorselbar.js", "filetree.js"]) {
+    const text = fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
+    assert.match(text, /insertFailText\(res\.reason[,)]/, f);
+    assert.doesNotMatch(text, /so it was not inserted|is not connected, so the path/, f + " repeats the sentences");
+  }
 });

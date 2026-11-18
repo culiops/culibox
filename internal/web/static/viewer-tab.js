@@ -130,9 +130,14 @@ class ViewerTab {
     this.fileScroll = 0;    // where the file was read, kept while the diff is up
     this.find = new ViewerFind(this);
     this.findBar = this.find.el;
-    // The one shared toolbar (viewertoolbar.js). opts.host carries what differs
-    // for the Files drawer: its extra button and its shorter path label.
-    this.toolbarApi = buildViewerToolbar(this, opts && opts.host);
+    // The one shared toolbar (viewertoolbar.js). opts.host carries what differs for the Files dock: its shorter
+    // path label, and what its tabs hear from this viewer: the dock pins a tab when its first edit starts
+    // (onEditStart) and draws its dirty dot when the buffer turns dirty or clean (onDirtyChange, noteDirty).
+    // A pane viewer has no host.
+    this.host = (opts && opts.host) || null;
+    this.dirtyTimer = null;
+    this.dirtyShown = false;
+    this.toolbarApi = buildViewerToolbar(this, this.host);
     this.toolbar = this.toolbarApi.el;
     // The one-line note over a file opened from another checkout (altOpened). Like
     // the find bar it sits outside the scroller, so no render ever removes it.
@@ -226,12 +231,12 @@ class ViewerTab {
   // --- path actions ----------------------------------------------------------
   // The line-number menu below and Task 7's Path ▾ menu both go through these.
 
-  // insertCandidate: the terminal an insert would go to. The Files drawer's
-  // viewer uses the drawer's session (not whichever
+  // insertCandidate: the terminal an insert would go to. A Files dock viewer
+  // uses the dock's session (not whichever
   // terminal holds focus); a pane viewer uses the terminal its cell is about.
   // insertTargetFor then applies the box rule.
   insertCandidate() {
-    if (typeof drawerViewerTab === "function" && drawerViewerTab() === this) {
+    if (typeof dockHasViewer === "function" && dockHasViewer(this)) {
       return drawerState.sessionId ? terminalTabFor(drawerState.sessionId) : null;
     }
     const cell = cells.find((c) => c.tabs.includes(this));
@@ -254,18 +259,17 @@ class ViewerTab {
   }
 
   // insertPath(line?): types the shell-quoted path (or path:line) and a space at
-  // the target's prompt, never a newline.
+  // the target's prompt, never a newline. The target must also pass insertDecision
+  // (insertdecision.js): a terminal the user cannot see, or a session waiting on them,
+  // refuses with a toast naming why, types nothing and moves no focus (#337).
   insertPath(line) {
     const target = insertTargetFor(this, this.insertCandidate());
     if (!target.ok) { showToast(target.title, { error: true }); return; }
+    if (insertRefused(target.term)) return;
     const pl = pathLineText(this.path, line);
     const res = pl.ok ? insertTextAtPrompt(target.term, shellQuote(pl.text) + " ") : { ok: false, reason: pl.reason };
     if (res.ok) { if (target.term.term) target.term.term.focus(); return; }
-    showToast(
-      res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
-      res.reason === "noterm" ? "This session has no terminal open here, so the path was not inserted" :
-      "That session is not connected, so the path was not inserted",
-      { error: true });
+    showToast(insertFailText(res.reason), { error: true });
     this.focusReader();
   }
 
@@ -292,14 +296,20 @@ class ViewerTab {
     copy.type = "button";
     copy.textContent = "Copy " + label;
     copy.onclick = () => { this.lineMenuOpen = false; closeRowMenu(); this.copyPath("abs", line); };
-    const ins = document.createElement("button");
-    ins.type = "button";
-    ins.textContent = "Insert " + label + " at prompt";
-    const target = insertTargetFor(this, this.insertCandidate());
-    if (target.ok) ins.onclick = () => { this.lineMenuOpen = false; closeRowMenu(); this.insertPath(line); };
-    else { ins.disabled = true; ins.title = target.title; }
+    const nodes = [head, copy];
+    // Not on the phone (insertOffered): this menu is only reached from a pane viewer there, which covers its own terminal, so
+    // insertDecision would refuse every press.
+    if (insertOffered()) {
+      const ins = document.createElement("button");
+      ins.type = "button";
+      ins.textContent = "Insert " + label + " at prompt";
+      const target = insertTargetFor(this, this.insertCandidate());
+      if (target.ok) ins.onclick = () => { this.lineMenuOpen = false; closeRowMenu(); this.insertPath(line); };
+      else { ins.disabled = true; ins.title = target.title; }
+      nodes.push(ins);
+    }
     this.lineMenuOpen = true;
-    ftShowMenu(anchor, [head, copy, ins], true);
+    ftShowMenu(anchor, nodes, true);
   }
 
   title() { return this.name; }
@@ -738,53 +748,17 @@ class ViewerTab {
     this.load();
   }
 
-  // setAltNote shows where the file was opened from; null clears it. Text only:
-  // the worktree name comes from a directory name on disk.
+  // setAltNote shows where the file was opened from; null clears it (altNoteNodes draws it).
   setAltNote(worktree) {
     if (worktree === null) { this.noteEl.hidden = true; this.noteEl.replaceChildren(); return; }
-    const n = altNote(worktree);
-    this.noteEl.replaceChildren(n.pre);
-    if (n.name) {
-      const code = document.createElement("code");
-      code.textContent = n.name;
-      this.noteEl.append(code, n.post);
-    }
+    this.noteEl.replaceChildren(...altNoteNodes(worktree));
     this.noteEl.hidden = false;
   }
 
   // renderAltPick: several other checkouts hold the file. A list in the pane, not
   // a modal: it works on a phone and cannot collide with #ask-modal's single slot.
   renderAltPick(items, alt, line) {
-    const box = document.createElement("div");
-    box.className = "viewer-msg viewer-alts";
-    const h = document.createElement("div");
-    h.className = "viewer-alts-title";
-    h.textContent = "This file exists in " + items.length + " places";
-    const sub = document.createElement("div");
-    sub.className = "viewer-alts-sub";
-    sub.textContent = alt.rel + " was not found here. Pick the copy to open:";
-    box.append(h, sub);
-    const now = Date.now() / 1000;
-    for (const it of items) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "viewer-alt";
-      b.title = it.path;
-      const name = document.createElement("span");
-      name.className = "viewer-alt-name";
-      name.textContent = it.worktree || "main checkout";
-      b.append(name);
-      const ago = agoText(it.mtime, now);
-      if (ago) {
-        const t = document.createElement("span");
-        t.className = "viewer-alt-ago";
-        t.textContent = ago;
-        b.append(t);
-      }
-      b.onclick = () => this.openAlternate(it.path, it.worktree, line);
-      box.append(b);
-    }
-    this.content.replaceChildren(box);
+    this.content.replaceChildren(altPickNode(items, alt, (it) => this.openAlternate(it.path, it.worktree, line)));
     this.showingMsg = true;
     this.hasLines = false;
     this.lastContent = null;
@@ -926,9 +900,27 @@ class ViewerTab {
     this.cm.setOption("extraKeys", saveKeys);
     this.renderEditBar();
     this.findRefresh(); // an open find now searches the buffer
+    this.cm.on("change", () => this.noteDirty());
     // A fresh edit: a "saved" left from the last one says nothing about this
     // buffer. (setStatus repaints the toolbar: Save · Cancel replace Edit.)
     this.setStatus("");
+    // Last, once the editor is up: the dock keeps this tab from here on (see the host's onEditStart).
+    if (this.host && this.host.onEditStart) this.host.onEditStart(this);
+  }
+
+  // noteDirty tells the host when the buffer turned dirty or clean, for the dock tab's dot. It runs on every change,
+  // so it only starts a short timer: dirty() reads the whole buffer, which on a large file is not a thing to do per
+  // keystroke. The dot may lag a moment; every gate asks dirty() itself when it decides. A pane viewer has no host.
+  noteDirty() {
+    if (this.dirtyTimer || !this.host || !this.host.onDirtyChange) return;
+    this.dirtyTimer = setTimeout(() => {
+      this.dirtyTimer = null;
+      if (this.disposed) return;
+      const d = !!this.dirty();
+      if (d === this.dirtyShown) return;
+      this.dirtyShown = d;
+      this.host.onDirtyChange(this);
+    }, 150);
   }
 
   // renderEditBar builds the message row above the editor: Save and Cancel live
@@ -998,6 +990,7 @@ class ViewerTab {
   // a conflict, since the disk copy is exactly what a fresh load() shows.
   exitEdit(savedText) {
     this.find.leaveEdit(); // the editor's marks go with the editor
+    this.dirtyShown = false; // the dot goes with the edit (changed() below repaints the host)
     this.editing = false;
     this.cm = null;
     this.editBar = null;
@@ -1071,29 +1064,25 @@ class ViewerTab {
     if (!(window.marked && marked.parse) || !window.DOMPurify) { this.renderCode(text, "markdown"); return; }
     let frag;
     try {
-      marked.setOptions({ breaks: false, gfm: true }); // NOTE: marked v12 removed the `highlight` option
-      // DOMPurify handles every XSS vector robustly (javascript:/data: schemes incl.
-      // control-char obfuscation, mXSS, on* handlers, svg/math): a hand-rolled
-      // strip-and-reserialize sanitizer is not safe against these.
-      frag = DOMPurify.sanitize(marked.parse(text), { RETURN_DOM_FRAGMENT: true });
+      // mdRenderFragment (mdsafe.js) is the one place markdown becomes DOM, here and in the dock: DOMPurify handles
+      // every XSS vector robustly (javascript:/data: schemes incl. control-char obfuscation, mXSS, on* handlers,
+      // svg/math), and the walk after it means the preview loads nothing remote and runs nothing. A relative <img src>
+      // is rewritten against the file's dir inside it, BEFORE the fragment is attached (no wasted 404 fetch).
+      frag = mdRenderFragment(text, {
+        marked,
+        purify: DOMPurify,
+        hljs: window.hljs,
+        rewrite: (rel) => (this.box
+          ? boxFileURL(this.box, dir + rel)
+          : "/api/fs/read?path=" + encodeURIComponent(dir + rel)),
+      });
     } catch (_) { this.renderCode(text, "markdown"); return; }
-    // rewrite relative <img src> against the file's dir BEFORE attaching (no wasted 404 fetch)
-    frag.querySelectorAll("img").forEach((img) => {
-      const src = img.getAttribute("src") || "";
-      if (!/^(https?:|data:|\/)/.test(src)) {
-        img.setAttribute("src", this.box
-          ? boxFileURL(this.box, dir + src)
-          : "/api/fs/read?path=" + encodeURIComponent(dir + src));
-      }
-      // An <img> here reserves no height until it loads, so the document is
-      // shorter than its final self when load() applies the offset and the
-      // browser clamps it. Re-apply as each image settles. Safe to repeat: if
-      // the reader has scrolled since, this.scroll is already where they are and
-      // applyScroll does nothing.
-      img.addEventListener("load", () => this.applyScroll());
-    });
-    // marked v12 dropped the highlight option: highlight fenced blocks here (hljs v11 API).
-    if (window.hljs) frag.querySelectorAll("pre code").forEach((el) => { try { hljs.highlightElement(el); } catch (_) {} });
+    // An <img> here reserves no height until it loads, so the document is
+    // shorter than its final self when load() applies the offset and the
+    // browser clamps it. Re-apply as each image settles. Safe to repeat: if
+    // the reader has scrolled since, this.scroll is already where they are and
+    // applyScroll does nothing.
+    frag.querySelectorAll("img").forEach((img) => img.addEventListener("load", () => this.applyScroll()));
     const wrap = document.createElement("div");
     wrap.className = "md-body";
     wrap.appendChild(frag);
@@ -1156,12 +1145,11 @@ class ViewerTab {
     this.cm.refresh();
   }
 
-  // allViewers: every live viewer, in every pane plus the Files drawer's.
+  // allViewers: every live viewer, in every pane plus the Files dock's.
   static allViewers() {
     const all = [];
     eachViewer((vt) => all.push(vt));
-    const dv = typeof drawerViewerTab === "function" ? drawerViewerTab() : null;
-    if (dv && !all.includes(dv)) all.push(dv);
+    if (typeof dockViewerList === "function") for (const dv of dockViewerList()) if (!all.includes(dv)) all.push(dv);
     return all;
   }
 
@@ -1195,6 +1183,53 @@ function toggleViewerWrap() {
   return on;
 }
 
+// altNoteNodes: what goes in the one-line note over a file opened from another checkout (#53), for replaceChildren: the
+// sentence, with the worktree's name in <code> when there is one. Text only: the name comes from a directory name on disk.
+// The phone's ViewerTab and the dock's EditorTab both draw it, so there is one copy of the markup.
+function altNoteNodes(worktree) {
+  const n = altNote(worktree);
+  if (!n.name) return [n.pre];
+  const code = document.createElement("code");
+  code.textContent = n.name;
+  return [n.pre, code, n.post];
+}
+
+// altPickNode: the list shown when several other checkouts hold the file a terminal link named (#53): a title, a line saying
+// what was not found, and a button per copy (its worktree, or "main checkout", and how long ago it changed). `onPick(item)`
+// is called with the item whose button was pressed. Text only. Shared by ViewerTab and EditorTab, like altNoteNodes.
+function altPickNode(items, alt, onPick) {
+  const box = document.createElement("div");
+  box.className = "viewer-msg viewer-alts";
+  const h = document.createElement("div");
+  h.className = "viewer-alts-title";
+  h.textContent = "This file exists in " + items.length + " places";
+  const sub = document.createElement("div");
+  sub.className = "viewer-alts-sub";
+  sub.textContent = alt.rel + " was not found here. Pick the copy to open:";
+  box.append(h, sub);
+  const now = Date.now() / 1000;
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "viewer-alt";
+    b.title = it.path;
+    const name = document.createElement("span");
+    name.className = "viewer-alt-name";
+    name.textContent = it.worktree || "main checkout";
+    b.append(name);
+    const ago = agoText(it.mtime, now);
+    if (ago) {
+      const t = document.createElement("span");
+      t.className = "viewer-alt-ago";
+      t.textContent = ago;
+      b.append(t);
+    }
+    b.onclick = () => onPick(it);
+    box.append(b);
+  }
+  return box;
+}
+
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -1205,7 +1240,7 @@ function escapeHtml(s) {
 // every page script has finished — so the forward reference is safe (the same
 // pattern load() already relies on for closeTabEverywhere).
 //
-// The desktop Files drawer's viewer is in no cell, so it is asked separately
+// The desktop Files dock's viewers are in no cell, so they are asked separately
 // (drawerHasUnsaved, filesdrawer.js, loaded later on the same terms).
 window.addEventListener("beforeunload", (e) => {
   const anyDirty = cells.some((c) => c.tabs.some((t) => t.kind === "viewer" && t.dirty && t.dirty()))

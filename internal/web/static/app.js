@@ -144,9 +144,10 @@ $("sidebar-toggle").onclick = toggleSidebar;
 $("side-collapse").onclick = toggleSidebar;
 $("steer-toggle").onclick = toggleSteerRail;
 
-// --- desktop pane drawer (spec 5.3/5.4) ---------------------------------------
-// One drawer over the right of the pane grid, below the focused pane's header,
-// showing the file tree (Files). The tree is the EXISTING #files-pane node,
+// --- desktop Files dock (spec 5.3/5.4) -----------------------------------------
+// One dock, a column right of the pane grid (desktop.css: the panes shrink for
+// it, nothing is covered), showing the file tree (Files). Its width is
+// positionDrawer's (dockfit.js). The tree is the EXISTING #files-pane node,
 // moved in on first use (a DOM move, not a copy: every listener and the tree's
 // state travel with it) and put back exactly where it was when the viewport
 // crosses into mobile, whose Files screen expects #files-pane inside #sidebar.
@@ -156,7 +157,16 @@ $("steer-toggle").onclick = toggleSteerRail;
 //
 // Declared up here, before boot builds the first cells: tabs.js reads it while
 // painting a header, and a `let` read before its line throws.
-let drawerState = { open: null, sessionId: null };
+// pinned: the dock stays on sessionId while focus moves (dockFollow, docktabs.js).
+let drawerState = { open: null, sessionId: null, pinned: false };
+// The explorer opened from the folded strip (dockfit.js treeOpen): the fold it was
+// asked at ("folded" or "full"), else null. It is spent when the fold changes, when
+// the strip is pressed again, on Esc, and when a file is opened from the column.
+let dockTreeAsk = null;
+// What the last positionDrawer drew: the fold the strip is at without an ask (the
+// key dockTreeAsk is compared with), the pane area's width and the dock's and
+// explorer's, so a key press steps from what is on screen.
+let dockDrawn = { fold: "", avail: 0, dockW: 0, treeW: 0 };
 // The key of the empty state the grid shows now ("" when it shows panes), so a
 // poll repaints it only when what it says changed. Declared up here for the
 // same reason as drawerState: renderGrid reads it while boot builds the cells.
@@ -191,8 +201,8 @@ function openDrawer(kind, sessionId, opts) {
   applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId }, opts);
 }
 
-// revealInTree shows a viewer's file in the tree: the Files drawer on desktop
-// (the viewer's own session: the drawer's for a drawer viewer, the pane's
+// revealInTree shows a viewer's file in the tree: the Files dock on desktop
+// (the viewer's own session: the dock's for a dock viewer, the pane's
 // terminal for a pane viewer, none otherwise), the Files screen on mobile. Then
 // ftReveal expands down to the row. false (with a toast) when it cannot.
 async function revealInTree(viewer) {
@@ -202,13 +212,14 @@ async function revealInTree(viewer) {
     setMobileScreen("files");
   } else {
     let sid = null;
-    if (drawerViewerTab() === viewer) sid = drawerState.sessionId;
+    if (dockHasViewer(viewer)) sid = drawerState.sessionId;
     else {
       const cell = cells.find((c) => c.tabs.includes(viewer));
       const t = cell ? cellTerminal(cell) : null;
       sid = t ? t.id : null;
     }
     openDrawer("files", sid);
+    dockTreeReveal(); // a folded explorer cannot show the row: open its column
   }
   const ok = await ftReveal(viewer.path);
   if (!ok) showToast("Could not show that file in the tree", { error: true });
@@ -260,18 +271,30 @@ function applyDrawer(next, opts) {
     return;
   }
   const prev = drawerState;
+  // The pin belongs to the dock showing one session: it carries over while that session stays open, and an explicit
+  // press for another session or a close ends it. A caller that says (the pin's own toggle) is believed.
+  const keepPin = !!(next.open && prev.open && prev.pinned && next.sessionId === prev.sessionId);
+  next = { open: next.open, sessionId: next.sessionId, pinned: next.pinned === undefined ? keepPin : !!next.pinned && !!next.open };
   drawerState = next;
-  // The tree is the left column of the Files body; the viewer column beside it
+  // The explorer is the right column of the Files body; the viewer column beside it
   // is filesdrawer.js's.
   if (next.open === "files") moveIntoDrawer($("files-pane"), $("drawer-tree") || body);
   dr.dataset.kind = next.open || "";
   dr.hidden = !next.open;
-  if (!next.open) setDrawerMax(false); // ⛶ lasts one opening: it hides the panes
+  if (!next.open) {
+    paintDrawerMax(false, false); // Full mode lasts one opening: it hides the panes
+    dockTreeAsk = null; // and so does the explorer opened from the strip
+  }
   paintDrawerHead();
   positionDrawer();
   if (next.open === "files") drawerRootTree(next.sessionId, !!(opts && opts.explicitRoot));
   if (typeof drawerFilesApply === "function") drawerFilesApply(prev, next);
   for (const c of cells) paintDrawerTabs(c);
+  dockRefit(); // the grid gained or lost the dock's width
+  // What the caller wanted done once the dock is there (filesdrawer.js dockOpenFile: show a file). It rides in opts through
+  // every held path above (a discard ask, a page that had to close), so it runs when the open really happened, and never
+  // when the user said Cancel.
+  if (opts && typeof opts.after === "function") opts.after();
 }
 
 // drawerRootTree roots the tree at the drawer's session. A header tab press
@@ -309,14 +332,48 @@ function drawerSessionName(id) {
   return t ? t.title() : id;
 }
 
+// paintDrawerHead: FILES, then (with 2+ panes, where more than one session is on screen) the session the dock shows, what
+// it does with focus, and the pin. With one pane there is nothing to follow or pin, so those three are not drawn.
 function paintDrawerHead() {
   const title = $("drawer-title");
   const sess = $("drawer-sess");
   if (!title || !sess) return;
   title.textContent = "Files";
-  const n = drawerSessionName(drawerState.sessionId);
-  sess.textContent = n ? "\u00B7 " + n : "";
+  const sid = drawerState.sessionId;
+  const n = drawerSessionName(sid);
+  const multi = gridCols() > 1;
+  const rec = sid ? (lastSessions || []).find((x) => x.id === sid) : null;
+  const dot = $("drawer-sess-dot");
+  if (dot) dot.className = rec && typeof deskDot === "function" ? deskDot(rec).cls : "dot";
+  const nameEl = $("drawer-sess-name");
+  if (nameEl) nameEl.textContent = n;
   sess.title = n;
+  sess.hidden = !multi || !n;
+  const pinned = !!drawerState.pinned;
+  const hint = $("drawer-hint");
+  if (hint) {
+    hint.textContent = pinned ? "pinned" : "follows the focused pane";
+    hint.hidden = !multi;
+  }
+  const pin = $("drawer-pin");
+  if (pin) {
+    pin.hidden = !multi;
+    pin.disabled = !sid;
+    pin.setAttribute("aria-pressed", pinned ? "true" : "false");
+    pin.title = pinned ? "Unpin: let the dock follow the focused pane" : "Keep the dock on " + (n || "this session");
+    pin.setAttribute("aria-label", pinned ? "Unpin the dock" : "Pin the dock to " + (n || "this session"));
+  }
+}
+
+// toggleDrawerPin: the header's pin. Pinned, the dock stays on its session while focus moves (dockFollow), and so does
+// its tree. Unpinning lets both follow focus again at once, through the same dirty-buffer gate as any focus move:
+// syncFocusedTree re-roots the tree (drawerFilesApply, which moves the header and the viewer, does not) and then runs
+// drawerFollowFocus.
+function toggleDrawerPin() {
+  if (!drawerState.open || !drawerDesktop() || !drawerState.sessionId) return;
+  drawerState = { open: drawerState.open, sessionId: drawerState.sessionId, pinned: !drawerState.pinned };
+  paintDrawerHead();
+  if (!drawerState.pinned) syncFocusedTree();
 }
 
 // paintDrawerTabs: the pressed state of a pane's Files control follows the drawer:
@@ -337,14 +394,31 @@ function paintDrawerTabs(cell) {
   }
 }
 
-// drawerFollowFocus: the drawer's tree already follows the focused tab
-// (syncFocusedTree), so its session and its header do too.
+// drawerLiveSids: the sessions that can still be shown (the list, minus the ended ones), for dockFollow's pin check.
+function drawerLiveSids() {
+  return (lastSessions || []).filter((s) => !s.exited).map((s) => s.id);
+}
+
+// drawerPinCheck: the session list changed. A pinned session that has ended no longer holds the dock, so the dock and
+// its tree follow focus again. syncFocusedTree, not drawerFollowFocus alone: the tree stayed on the pinned session
+// (drawerKeepsTree) and only syncFocusedTree re-roots it; it ends in drawerFollowFocus. A pin on a live session, or no
+// pin, is left alone (no work per poll).
+function drawerPinCheck() {
+  if (!drawerState.pinned || drawerLiveSids().includes(drawerState.sessionId)) return;
+  syncFocusedTree();
+}
+
+// drawerFollowFocus: the dock's tree already follows the focused tab
+// (syncFocusedTree), so its session and its header do too, unless the dock is
+// pinned to a live session. dockFollow (docktabs.js) decides: a pin on a session
+// that has ended is dropped here, and a focused pane with no session leaves the
+// dock on the last session it showed.
 function drawerFollowFocus() {
   if (!drawerState.open || !drawerDesktop()) return;
   const term = cellTerminal(focusedCell);
-  const sid = term ? term.id : null;
-  if (sid !== drawerState.sessionId) {
-    const next = { open: drawerState.open, sessionId: sid };
+  const f = dockFollow({ sid: drawerState.sessionId, pinned: !!drawerState.pinned }, term ? term.id : null, drawerLiveSids());
+  if (f.sid !== drawerState.sessionId) {
+    const next = { open: drawerState.open, sessionId: f.sid, pinned: f.pinned };
     // A dirty buffer in the Files viewer asks first (once: a Cancel is kept
     // until focus comes back or the buffer changes). Cancel keeps the drawer,
     // and its tree (drawerKeepsTree), on its session; Discard follows focus.
@@ -357,8 +431,12 @@ function drawerFollowFocus() {
     paintDrawerHead();
     for (const c of cells) paintDrawerTabs(c);
     if (typeof drawerFilesApply === "function") drawerFilesApply(prev, next);
-  } else if (typeof drawerFocusSame === "function") {
-    drawerFocusSame();
+  } else {
+    if (f.pinned !== !!drawerState.pinned) { // the pinned session ended while it was the focused one
+      drawerState = { open: drawerState.open, sessionId: drawerState.sessionId, pinned: f.pinned };
+      paintDrawerHead();
+    }
+    if (typeof drawerFocusSame === "function") drawerFocusSame();
   }
   positionDrawer();
 }
@@ -370,31 +448,152 @@ function drawerTabClosed(id) {
   drawerFollowFocus();
 }
 
-// positionDrawer: below the focused pane's header, its write-access banner and its ask strip, over the
-// right of the grid. The width is CSS (default min(960px, 62% of the grid), or the dragged share); it
-// needs the grid's px.
+// dockCols: the pane columns dockLayout counts (dockfit.js): two for cols-2|3|4, one for a single pane. A maximized pane
+// leaves one column on screen whatever the cell count is.
+function dockCols() {
+  return currentMaximized() || gridCols() < 2 ? 1 : 2;
+}
+
+// dockTreeShare: the explorer's stored share, or null for the dock's default. drawersize.js normalises "never dragged"
+// to its own TREE_DEFAULT (.4, the old drawer's), which is not the dock's (.35): that value means "the default" here, and
+// a double-click on the splitter (it stores TREE_DEFAULT) puts the default back.
+function dockTreeShare() {
+  return drawerSize.tree === TREE_DEFAULT ? null : drawerSize.tree;
+}
+
+// dockMeasure: the width the panes and the dock divide (the grid's left edge to the layout's right edge, whether the
+// dock sits in the flow beside the panes or, in Full mode, over them) and where that starts. null while a page hides
+// the grid: pageClosed measures again.
+function dockMeasure() {
+  const lay = $("layout");
+  const grid = $("grid");
+  if (!lay || !grid) return null;
+  const lr = lay.getBoundingClientRect();
+  const gr = grid.getBoundingClientRect();
+  if (!(gr.width > 0)) return null;
+  return { avail: Math.floor(lr.right - gr.left), left: gr.left };
+}
+
+// paintDrawerLayout: the dock's geometry for `avail`. dockLayout decides the widths: the dock, the explorer column or its
+// folded strip, and whether the panes can keep their floors at all. When they cannot, the dock opens in Full mode over
+// them (data-forced: the same overlay as Full, so no terminal is resized to nothing) and dockFullLayout divides the pane
+// area. Forced Full mode lasts only while it is needed: the pushed dock comes back when there is room, and a Full
+// pressed before that does not survive it. `over` = {dockShare?, treeShare?} is a drag in progress, not yet stored.
+function paintDrawerLayout(avail, over) {
+  const dr = $("drawer");
+  const body = $("drawer-body");
+  if (!dr || !body) return;
+  const o = over || {};
+  const dockShare = o.dockShare !== undefined ? o.dockShare : drawerSize.width;
+  const treeShare = o.treeShare !== undefined ? o.treeShare : dockTreeShare();
+  const plan = (treeOpen) => dockLayout({ avail, cols: dockCols(), dockShare, treeShare, treeOpen });
+  const base = plan(false);
+  // What the strip is at, apart from any ask: a resize that changes it spends an explorer opened from the strip.
+  const fold = base.full ? "full" : base.treeFolded ? "folded" : "open";
+  if (dockTreeAsk !== null && dockTreeAsk !== fold) dockTreeAsk = null;
+  const open = dockTreeAsk !== null;
+  // The explorer column's fold control is drawn only while the column is the strip's transient open (desktop.css).
+  if (open) dr.dataset.treeOpen = "1";
+  else delete dr.dataset.treeOpen;
+  const lay = open ? plan(true) : base;
+  if (lay.full) {
+    if (dr.dataset.forced !== "1") paintDrawerMax(true, true);
+  } else if (dr.dataset.forced === "1") {
+    paintDrawerMax(false, false);
+  }
+  const full = dr.dataset.max === "1";
+  const parts = full ? dockFullLayout({ width: avail, treeShare, treeOpen: open }) : lay;
+  dr.style.setProperty("--grid-w", avail + "px");
+  if (!lay.full) {
+    dr.style.setProperty("--dock-w", lay.dockW + "px");
+    // The grid beside the dock reserves this width while Full is on and not forced (desktop.css), and a custom property only
+    // reaches descendants: their shared parent carries it too.
+    const host = $("layout");
+    if (host) host.style.setProperty("--dock-w", lay.dockW + "px");
+  }
+  body.style.setProperty("--dr-tree", parts.treeW + "px");
+  if (parts.treeFolded) dr.dataset.folded = "1";
+  else delete dr.dataset.folded;
+  dockDrawn = { fold, avail, dockW: full ? avail : lay.dockW, treeW: parts.treeW };
+}
+
+// dockForcesFull: would the dock, opened now, land in forced Full mode (dockLayout full)? What the first paint of an open
+// dock would decide, asked before opening: the pane area is measured with the dock closed, which is the same width the open
+// dock divides. A grid that cannot be measured (a page hides it) is a yes: not knowing is not a reason to cover the terminals.
+function dockForcesFull() {
+  const m = dockMeasure();
+  if (!m) return true;
+  return dockLayout({ avail: m.avail, cols: dockCols(), dockShare: drawerSize.width, treeShare: dockTreeShare(), treeOpen: false }).full;
+}
+
+// positionDrawer: sizes the dock. It is a column beside the pane grid (desktop.css), so nothing is hung under a pane's
+// header any more and nothing covers a strip or banner; the grid's px are what the widths come from.
 function positionDrawer() {
   if (typeof toastPlace === "function") toastPlace(); // the toast stack clears the same strips (Plan 7 call 10)
   const dr = $("drawer");
-  if (!dr || dr.hidden) return;
-  const lay = $("layout");
-  const grid = $("grid");
-  if (!lay || !grid) return;
-  const lr = lay.getBoundingClientRect();
-  const gr = grid.getBoundingClientRect();
-  const cell = currentMaximized() || focusedCell;
-  let top = gr.top;
-  if (cell && cell.el.isConnected) {
-    if (!cell.bar.hidden) top = cell.bar.getBoundingClientRect().bottom;
-    // The pane's write banner and ask strip sit under its header and stay readable (and their
-    // buttons pressable) while a drawer is open, so the drawer starts below the lowest of the three.
-    // paneElevSync and syncStrip call this again when either one appears or leaves.
-    const under = [cell._elev, cell._strip && cell._strip.classList.contains("needstrip") ? cell._strip : null];
-    for (const n of under) if (n && n.isConnected) top = Math.max(top, n.getBoundingClientRect().bottom);
+  if (!dr || dr.hidden || !drawerDesktop()) return;
+  const m = dockMeasure();
+  if (!m) return;
+  // The chip, hint and pin are for 2+ panes: a pane added or closed changes whether they are drawn. A pin that can no
+  // longer be seen (the panes are down to one) cannot be undone, so it ends; the dock follows focus from the next focus move.
+  const multi = gridCols() > 1 ? "1" : "";
+  if (dr.dataset.multi !== multi) {
+    dr.dataset.multi = multi;
+    if (!multi && drawerState.pinned) drawerState = { open: drawerState.open, sessionId: drawerState.sessionId, pinned: false };
+    paintDrawerHead();
   }
-  dr.style.top = Math.max(0, Math.round(top - lr.top)) + "px";
-  dr.style.setProperty("--grid-w", Math.round(gr.width) + "px");
+  paintDrawerLayout(m.avail);
   paintDrawerSize();
+}
+
+// dockTreeReveal: something needs the explorer on screen (its strip, Go to file, Reveal in tree). A folded explorer opens as
+// its column, which pushes the terminals (dockfit.js treeOpen); one already open, or no dock, changes nothing.
+function dockTreeReveal() {
+  const dr = $("drawer");
+  if (!dr || dr.hidden || dr.dataset.folded !== "1" || dockTreeAsk !== null) return;
+  dockTreeAsk = dockDrawn.fold;
+  positionDrawer();
+  dockRefit();
+}
+
+// dockTreeFold: the explorer opened from the strip folds again (Esc, a file opened from the column). Nothing to do
+// for one that was not opened that way.
+function dockTreeFold() {
+  if (dockTreeAsk === null) return;
+  dockTreeAsk = null;
+  positionDrawer();
+  dockRefit();
+}
+
+// dockTreeFoldPress: the explorer column's own fold control (index.html #drawer-tree-fold, drawn only while the column is
+// the strip's transient open). The same fold as Esc, and focus goes to the strip's Explorer button, which takes the
+// column's place, instead of dropping to the page with the control that has just gone.
+function dockTreeFoldPress() {
+  dockTreeFold();
+  const to = $("drawer-strip-tree");
+  if (to && to.getClientRects().length > 0) to.focus();
+}
+
+// dockStripOpen: a press on the strip's Explorer or Changes. The strip is not drawn while the column is open, so focus
+// goes in with it rather than to a button that has just gone: a tree row, or when the tree has not loaded one yet its
+// Go to file field, or (a workspace the fs API refuses hides both) the dock's Close button.
+function dockStripOpen() {
+  dockTreeReveal();
+  const to = [$("drawer-tree").querySelector('.ft-node[tabindex="0"]'), $("drawer-goto-in"), $("drawer-x")].find((n) => n && n.getClientRects().length > 0);
+  if (to) to.focus();
+}
+
+// dockRefit: the grid's width changed (the dock opened, closed or was resized), so the visible terminals refit. Each
+// one's own ResizeObserver does it too; this is what the sidebar splitter does on release, asked once on the next frame,
+// once the new widths are laid out.
+let dockRefitQueued = false;
+function dockRefit() {
+  if (dockRefitQueued || typeof fitAll !== "function") return;
+  dockRefitQueued = true;
+  requestAnimationFrame(() => {
+    dockRefitQueued = false;
+    fitAll();
+  });
 }
 
 // restoreDrawerNodes puts every moved node back exactly where it came from and
@@ -409,10 +608,11 @@ function restoreDrawerNodes() {
     else o.parent.appendChild(node);
   }
   drawerOrigins.clear();
-  drawerState = { open: null, sessionId: null };
+  drawerState = { open: null, sessionId: null, pinned: false };
+  dockTreeAsk = null;
   const dr = $("drawer");
   if (dr) { dr.hidden = true; dr.dataset.kind = ""; }
-  setDrawerMax(false);
+  paintDrawerMax(false, false);
   for (const c of cells) c.setView("terminal");
 }
 
@@ -438,24 +638,28 @@ function paintSteerToggle() {
 }
 
 $("drawer-x").onclick = () => closeDrawerFor();
+$("drawer-pin").onclick = () => toggleDrawerPin();
+$("drawer-strip-tree").onclick = () => dockStripOpen();
+$("drawer-strip-changes").onclick = () => dockStripOpen();
+$("drawer-strip-goto").onclick = () => drawerGoFocus();
+$("drawer-tree-fold").onclick = () => dockTreeFoldPress();
 
-// --- Files drawer size (#34): drawersize.js decides, this applies ----------
-// Two separators: the drawer's left edge (its share of the grid) and the
-// tree/viewer splitter (the tree's share of the body). desktop.css turns the
-// shares into widths, with px floors. ⛶ covers the grid for one opening.
+// --- Files dock size (#34): drawersize.js stores, dockfit.js decides, this applies ------
+// Two separators: the dock's left edge (its share of the pane area, the grid plus the
+// dock) and the splitter between the editor and the explorer (the explorer's share of
+// the dock). dockLayout turns the shares into px and holds the floors; a stored share
+// that cannot be drawn is not an error, it is drawn as near as it can be.
 function drawerStorage() {
   try { return window.localStorage; } catch (_) { return null; }
 }
 let drawerSize = loadDrawerSize(drawerStorage());
 
-// drawnDrawerShare: the share the drawer is drawn at, for an edge never
-// dragged (its width is the CSS default). null while it is not on screen.
-function drawnDrawerShare() {
-  const dr = $("drawer");
-  const grid = $("grid");
-  if (!dr || !grid || dr.hidden) return null;
-  const g = grid.getBoundingClientRect().width;
-  return g > 0 ? dr.getBoundingClientRect().width / g : null;
+// drawnShare: the share a separator is drawn at, for a key press to step from (what is on screen, not what is stored,
+// which dockLayout may have held back). null while the dock is not on screen.
+function drawnShare(kind) {
+  const d = dockDrawn;
+  if (kind === "width") return d.avail > 0 && d.dockW > 0 ? d.dockW / d.avail : null;
+  return d.dockW > 0 ? d.treeW / d.dockW : null;
 }
 
 function setSplitAria(el, r, kind) {
@@ -466,58 +670,56 @@ function setSplitAria(el, r, kind) {
   el.setAttribute("aria-valuemax", String(a.max));
 }
 
+// paintDrawerSize: the separators' aria values, from what positionDrawer drew.
 function paintDrawerSize() {
-  const dr = $("drawer");
-  const body = $("drawer-body");
-  if (!dr || !body) return;
-  if (drawerSize.width == null) {
-    delete dr.dataset.sized;
-    dr.style.removeProperty("--dr-w");
-  } else {
-    dr.dataset.sized = "1";
-    dr.style.setProperty("--dr-w", String(drawerSize.width));
-  }
-  body.style.setProperty("--dr-tree", String(drawerSize.tree));
-  setSplitAria($("drawer-split"), drawerSize.tree, "tree");
-  setSplitAria($("drawer-edge"), drawerSize.width == null ? drawnDrawerShare() : drawerSize.width, "width");
+  setSplitAria($("drawer-split"), drawnShare("tree"), "tree");
+  setSplitAria($("drawer-edge"), drawnShare("width"), "width");
 }
 
 function setDrawerSize(next) {
   drawerSize = normalizeDrawerSize(next);
   saveDrawerSize(drawerStorage(), drawerSize);
-  paintDrawerSize();
+  positionDrawer();
+  dockRefit();
   if (typeof drawerGoPosition === "function") drawerGoPosition();
+}
+
+// dockTreeFromPointer: the explorer is the dock's right column, so its share is the distance from the pointer to the
+// dock's right edge. (drawersize.js's treeRatioFromPointer measures from the left, for the old left-hand tree.)
+function dockTreeFromPointer(body, x) {
+  if (!body || !(body.width > 0)) return null;
+  return clampShare((body.left + body.width - x) / body.width, "tree");
 }
 
 // wireDrawerSplit: drag, arrow keys and double-click (reset) for one
 // separator. Like the dock splitter (tabs.js), a drag writes only the CSS
-// variable per move, against a box measured once at the press; the share is
-// saved once, on release.
+// variables per move, against a box measured once at the press; the share is
+// saved once, on release. Each move still goes through dockLayout, so the
+// floors hold while the pointer is beyond them.
 function wireDrawerSplit(el, kind) {
   if (!el) return;
   const width = kind === "width";
-  const paintLive = (r) => {
-    if (width) {
-      $("drawer").dataset.sized = "1";
-      $("drawer").style.setProperty("--dr-w", String(r));
-    } else {
-      $("drawer-body").style.setProperty("--dr-tree", String(r));
-    }
+  const paintLive = (avail, r) => {
+    paintDrawerLayout(avail, width ? { dockShare: r } : { treeShare: r });
+    paintDrawerSize();
   };
   el.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || el.classList.contains("dragging")) return; // one drag at a time
+    const m = dockMeasure();
+    if (!m) return;
     e.preventDefault();
     const pid = e.pointerId;
     el.setPointerCapture(pid);
     el.classList.add("dragging");
-    const rect = (width ? $("grid") : $("drawer-body")).getBoundingClientRect();
+    // The dock's width is a share of the pane area, which the pointer is measured against from the area's right edge.
+    const rect = width ? { left: m.left, width: m.avail } : $("drawer-body").getBoundingClientRect();
     let r = null;
     const move = (ev) => {
       if (ev.pointerId !== pid) return;
-      const v = width ? drawerWidthFromPointer(rect, ev.clientX) : treeRatioFromPointer(rect, ev.clientX);
+      const v = width ? drawerWidthFromPointer(rect, ev.clientX) : dockTreeFromPointer(rect, ev.clientX);
       if (v === null) return;
       r = v;
-      paintLive(r);
+      paintLive(m.avail, r);
     };
     const up = (ev) => {
       if (ev.pointerId !== pid) return;
@@ -528,11 +730,12 @@ function wireDrawerSplit(el, kind) {
       el.removeEventListener("pointercancel", up);
       el.removeEventListener("lostpointercapture", up);
       if (r !== null) setDrawerSize(Object.assign({}, drawerSize, { [kind]: r }));
+      else dockRefit();
     };
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", up);
     el.addEventListener("pointercancel", up);
-    // A capture lost without pointerup (window blur, element hidden by ⛶)
+    // A capture lost without pointerup (window blur, element hidden by Full mode)
     // still ends the drag, or "dragging" would stick and refuse every press.
     el.addEventListener("lostpointercapture", up);
   });
@@ -540,31 +743,84 @@ function wireDrawerSplit(el, kind) {
     setDrawerSize(Object.assign({}, drawerSize, width ? { width: null } : { tree: TREE_DEFAULT }));
   });
   el.addEventListener("keydown", (e) => {
-    const v = stepSplit(drawerSize[kind], e.key, kind, width ? drawnDrawerShare() : null);
+    // The explorer is on the splitter's right, so its arrows are the mirror of drawersize.js's (written for a left-hand
+    // tree): ArrowLeft grows it. The dock's edge already means what stepSplit says (ArrowLeft grows).
+    const key = width ? e.key : e.key === "ArrowLeft" ? "ArrowRight" : e.key === "ArrowRight" ? "ArrowLeft" : e.key;
+    // From what is drawn: a stored share the floors held back would otherwise take presses that move nothing.
+    const v = stepSplit(null, key, kind, drawnShare(kind));
     if (v === null) return;
     e.preventDefault();
     setDrawerSize(Object.assign({}, drawerSize, { [kind]: v }));
   });
 }
 
-function setDrawerMax(on) {
+// paintDrawerMax: Full mode's attributes and the toggle in the tab bar (#drawer-max, in #dock-acts). It says what pressing it
+// does: Full, then Exit full; in forced Full mode, which has no pushed dock to go back to, Show terminal (it closes the dock).
+// The label is the button's name, so it carries no pressed state. `forced` is Full mode the layout needs (positionDrawer),
+// which Esc and Exit full must not undo. The agent strip follows (dockAgentSync).
+function paintDrawerMax(on, forced) {
   const dr = $("drawer");
   const b = $("drawer-max");
   if (!dr) return;
   if (on) dr.dataset.max = "1";
   else delete dr.dataset.max;
+  if (on && forced) dr.dataset.forced = "1";
+  else delete dr.dataset.forced;
   if (b) {
-    b.setAttribute("aria-pressed", on ? "true" : "false");
-    b.textContent = on ? "❐" : "⛶";
-    b.title = on ? "Restore the drawer's width" : "Expand the drawer over the panes";
-    b.setAttribute("aria-label", on ? "Restore the drawer" : "Expand the drawer");
+    const label = $("drawer-max-label");
+    if (label) label.textContent = on ? (forced ? "Show terminal" : "Exit full") : "Full";
+    b.title = forced ? "Close the dock to see the terminal" : on ? "Restore the dock's width (Esc)" : "Expand the dock over the panes";
   }
   if (typeof drawerGoPosition === "function") drawerGoPosition();
+  if (typeof dockAgentSync === "function") dockAgentSync();
+}
+
+// setDrawerMax: Full / Exit full and Esc. The dock changes geometry (over the panes, or beside them), so it is laid out again at once.
+function setDrawerMax(on) {
+  paintDrawerMax(on, false);
+  positionDrawer();
+  dockRefit();
+}
+
+// dockShowTerminal: leave Full mode for the terminal (the strip's button, the toggle in forced Full mode, Ctrl+`). Exit full
+// puts the pushed dock back; forced Full has none, so it closes the dock, which a tab holding an edit holds behind its
+// discard ask. The session's pane takes the keyboard back once Full mode is really over: at once for Exit full, and for the
+// close when applyDrawer has applied it (`after`: after Discard, never after Cancel, so a dock that stays up keeps its
+// focus). false when the dock is not in Full mode, so the shortcut leaves the key alone.
+// `then` (optional) runs at that same moment, once Full mode is over and the terminal is on screen, and never when it stays: Insert at
+// prompt, from the strip (dockAgentInsert) and from the selection bar (both through editorInsertLeavingFull), asks the insert decision
+// from it, on the prompt that is now visible.
+function dockShowTerminal(then) {
+  const dr = $("drawer");
+  if (!dr || dr.hidden || dr.dataset.max !== "1") return false;
+  const sid = drawerState.sessionId;
+  const focus = () => {
+    const term = sid ? terminalTabFor(sid) : null;
+    const cell = term ? cells.find((c) => c.tabs.includes(term)) : null;
+    if (cell) {
+      setFocusedCell(cell);
+      if (cellTerminal(cell) === term) term.grabFocus();
+    }
+    if (typeof then === "function") then();
+  };
+  if (dr.dataset.forced === "1") {
+    applyDrawer({ open: null, sessionId: sid }, { after: focus });
+  } else {
+    setDrawerMax(false);
+    focus();
+  }
+  return true;
 }
 
 wireDrawerSplit($("drawer-edge"), "width");
 wireDrawerSplit($("drawer-split"), "tree");
-$("drawer-max").onclick = () => setDrawerMax($("drawer").dataset.max !== "1");
+$("drawer-max").onclick = () => {
+  const dr = $("drawer");
+  if (dr.dataset.forced === "1") dockShowTerminal(); // the same press, worded Show terminal
+  else setDrawerMax(dr.dataset.max !== "1");
+};
+$("dock-agent-term").onclick = () => dockShowTerminal();
+$("dock-agent-ins").onclick = () => dockAgentInsert();
 // Escape restores a maximized drawer (maxEscapeRestores decides). On the
 // document, not the drawer: a tree row click leaves focus on body. The viewer
 // toolbar's menus (viewertoolbar.js, which loads earlier) take focus when they
@@ -577,19 +833,36 @@ document.addEventListener("keydown", (e) => {
   const dr = $("drawer");
   const t = e.target;
   const rm = $("ft-menu");
-  const restore = maxEscapeRestores({
-    max: !!dr && dr.dataset.max === "1",
+  const at = {
     where: t === document.body || t === document.documentElement ? "body" : dr && dr.contains(t) ? "drawer" : "other",
-    owned: !!(t && t.closest && t.closest("input, textarea, [contenteditable], .CodeMirror, [role=menu]")),
+    owned: escOwnedBy(t),
     menuOpen: !!(vtMenuOpen() || (rm && rm.classList.contains("open"))),
     prevented: e.defaultPrevented,
-  });
-  if (!restore) return;
-  e.preventDefault();
-  setDrawerMax(false);
+  };
+  // A forced Full mode has no pushed dock to go back to, so Esc leaves it be.
+  if (maxEscapeRestores({ max: !!dr && dr.dataset.max === "1" && dr.dataset.forced !== "1", ...at })) {
+    e.preventDefault();
+    setDrawerMax(false);
+    return;
+  }
+  // The explorer opened from the folded strip is as short-lived as Full mode, and Esc closes it in the same places and no others.
+  if (dockTreeAsk !== null && maxEscapeRestores({ max: true, ...at })) {
+    e.preventDefault();
+    dockTreeFold();
+  }
 });
 paintDrawerSize();
-if (typeof ResizeObserver === "function") new ResizeObserver(() => positionDrawer()).observe($("grid"));
+// Not in the observer's own callback: positionDrawer changes the grid's width (the dock is beside it), which this observer
+// is also watching, and that raises "ResizeObserver loop completed with undelivered notifications" on the window. One run
+// a frame at most, as credentials.js does for the same reason.
+if (typeof ResizeObserver === "function") {
+  let queued = false;
+  new ResizeObserver(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; positionDrawer(); });
+  }).observe($("grid"));
+}
 
 // renderRail48 paints the icon rail. It rebuilds, so it is guarded by a
 // signature: the session list is replaced every three seconds, and a rebuild
@@ -1394,7 +1667,8 @@ function showShortcuts() {
   }
   // Next that needs you works where the sidebar groups are, so the phone's dialog does not list it.
   // The F6 region cycle has no regions to walk on a phone either.
-  const desktopOnly = ["session.nextNeeds", "ui.regionNext", "ui.regionPrev"].map((id) => scEntry(id).label);
+  // The dock's Full mode is the desktop's too.
+  const desktopOnly = ["session.nextNeeds", "ui.regionNext", "ui.regionPrev", "dock.showTerminal"].map((id) => scEntry(id).label);
   const rows = helpRows(IS_MAC).filter((r) => !desktopOnly.includes(r.label));
   return askDialog({
     title: "Keyboard shortcuts",
@@ -3838,6 +4112,10 @@ async function refreshSessionsRun() {
   // The Files drawer reads the list (box tier, workspace): at a boot restore
   // it opened before the list was here.
   if (drawerState.open === "files" && typeof drawerPaint === "function") drawerPaint();
+  // The header's chip draws the session's dot and name from the same list.
+  if (drawerState.open) paintDrawerHead();
+  // A pinned session that has ended is unpinned, and the dock and its tree follow focus again (dockFollow).
+  drawerPinCheck();
   // The focused session's account can only be known once the list is here.
   syncRateLimitsAccount();
   // A card's expanded state (and its cached full text) belongs to it needing
@@ -4238,9 +4516,10 @@ function buildSeg(el, choices, value, onChange) {
   return el;
 }
 // Option definitions come from the daemon's config (GET /api/options), so the
-// choice count is runtime data, not something knowable at build time. A <=4
-// choice enum renders as a .seg — seeing the alternatives beats saving the
-// space a select would — and anything wider stays a plain <select> so it
+// choice count is runtime data, not something knowable at build time. An enum
+// that fits four segments with its leading "not set" renders as a .seg —
+// seeing the alternatives beats saving the space a select would — and
+// anything wider (the built-in Model) stays a plain <select> so it
 // cannot overflow a narrow column. A bool option is always a checkbox.
 function renderPfOptions(current) {
   current = current || {};
@@ -4262,10 +4541,11 @@ function renderPfOptions(current) {
       lbl.className = "flab";
       lbl.textContent = o.label || o.key;
       const choices = o.choices || [];
-      if (choices.length > 0 && choices.length <= 4) {
+      if (choices.length > 0 && choices.length <= 3) {
         ctrl = document.createElement("div");
         ctrl.className = "seg";
-        buildSeg(ctrl, choices.map((c) => ({ value: c, label: c })), current[o.key] || "");
+        // A seg has no empty state: "not set" is how a picked value is cleared.
+        buildSeg(ctrl, [{ value: "", label: "not set" }, ...choices.map((c) => ({ value: c, label: c }))], current[o.key] || "");
       } else {
         ctrl = document.createElement("select");
         ctrl.className = "fld";
@@ -7206,6 +7486,10 @@ function initSettings() {
 }
 
 // --- boot --------------------------------------------------------------------
+// The open dock is sized from the window (dockLayout), so it is laid out BEFORE the terminals fit: registered first, it
+// runs first. Without it fitAll measures at the old dock width and the grid's ResizeObserver refits a frame later at
+// the new one, which sends the PTY two sizes for one drag step. The phone has no dock and does not run it.
+window.addEventListener("resize", () => { if (drawerState.open && drawerDesktop()) positionDrawer(); });
 window.addEventListener("resize", fitAll);
 // The desktop's empty grid says "Start"; index.html keeps the phone's "Spawn" (founder call 1, Plan 7).
 {
@@ -7290,7 +7574,14 @@ loadOptionDefs().then(newProfile);
   }
   // finally: a throwing restore must not keep the empty state silent for the
   // life of the page (it waits on bootRestoreDone).
-  try { restoreLayout(sessions); }
+  try {
+    // The dock's stored tabs are read here, now that the list says which sessions
+    // exist (and never on the give-up path above, which therefore never writes them).
+    dockRestore(sessions);
+    restoreLayout(sessions);
+    // A dock that was open comes back open, on the focused pane: known only now.
+    dockReopen();
+  }
   finally { bootRestoreDone = true; refreshEmptyState(); }
 })();
 initFileTree();
@@ -7442,8 +7733,14 @@ setInterval(async () => {
 // dispatcher) because xterm listens on its textarea and forwards every
 // combination it does not recognise into the running agent, so a bubbling
 // handler would type the key into the process instead of acting on the app.
+//
+// Inside the dock's Monaco editor the registry still wins: a chord it admits there (Ctrl+Shift+K, F6, ...) is handled here and
+// stopped before Monaco's own binding for it (delete line, ...) can also run. The two chords that really are editing commands,
+// find and go to line, are Monaco's while it has focus (registrySkipsInEditor, monacokeys.js).
 document.addEventListener("keydown", (e) => {
-  dispatchShortcut(e, shortcutContext(document.activeElement, dialogsOpen(), !!currentPage(), mobileActive(window.innerWidth)), IS_MAC);
+  const inMonaco = !!(e.target && e.target.closest && e.target.closest(".monaco-editor"));
+  dispatchShortcut(e, shortcutContext(document.activeElement, dialogsOpen(), !!currentPage(), mobileActive(window.innerWidth)), IS_MAC,
+    (id) => registrySkipsInEditor(id, inMonaco));
 }, true);
 
 // cellVisible: the cell's own element is attached and laid out. On a mobile
@@ -7569,7 +7866,9 @@ function regionFocus(name, els) {
     if (tab && tab.term) { tab.term.focus(); target = document.activeElement; }
     else if (cell._viewHost) { cell._viewHost.focus({ preventScroll: true }); target = document.activeElement; }
   } else if (name === "drawer") {
-    target = $("drawer-tree").querySelector('.ft-node[tabindex="0"]') || $("drawer-x");
+    // Folded, the explorer is its strip: its first button is the way in (the tree's rows are not on screen).
+    const folded = $("drawer").dataset.folded === "1";
+    target = (folded ? $("drawer-strip-tree") : $("drawer-tree").querySelector('.ft-node[tabindex="0"]')) || $("drawer-x");
   } else if (name === "page") {
     target = els.page.querySelector(REGION_FOCUSABLE);
     if (!target) { els.page.tabIndex = -1; target = els.page; }
@@ -7616,6 +7915,10 @@ bindShortcut("shell.below", (e) => {
   spawnShellIn(focusedCell, "below");
   return true;
 });
+
+// Ctrl+` -> Show terminal: out of the Files dock's Full mode, back to the session's terminal. Only in Full mode: anywhere else
+// it is not ours (false hands the key on, to the terminal as it always went).
+bindShortcut("dock.showTerminal", () => dockShowTerminal());
 
 // Live zoom the focused pane: Mod + '='/'+' bigger, '-' smaller, '0' reset (Mod
 // is Cmd on mac, Ctrl elsewhere). A hidden pane is not zoomed: false hands the

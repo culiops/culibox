@@ -556,3 +556,56 @@ func TestDockerLineQuotesEveryArgument(t *testing.T) {
 		t.Fatalf("plain args were quoted: %s", got)
 	}
 }
+
+// #335: an upgraded release binary with no box_image pulls its published image,
+// names it culiops/culibox:base, and the prune then removes the stale local build
+// :base held before (the orphan) and an older published image left only under its
+// ghcr name (re-pullable). The pulled default is kept, and a second setup changes
+// nothing.
+func TestBoxSetupPullsThePublishedDefaultAndPrunesWhatItReplaced(t *testing.T) {
+	old := publishedBoxImage
+	t.Cleanup(func() { publishedBoxImage = old })
+	ref := ghcr + "@" + pDigNew
+	publishedBoxImage = func() string { return ref }
+
+	h := newInstHome(t)
+	f := dockerfake.New(t)
+	stale := local(pIDOld, 4_000_000_000, dockerfake.Ref{Repo: "culiops/culibox", Tag: "base"}, dockerfake.Ref{Repo: "culiops/culibox", Tag: "2026-10-01"})
+	stale.Hash = "000000000000"
+	f.Add(stale)
+	f.Add(pulled(pIDOther, 3_900_000_000, pDigOthr)) // an older published image, ghcr name only
+	f.PullAdds(ref, pulled(pIDNew, 4_200_000_000, pDigNew))
+	f.Add(dockerfake.Image{ID: pIDForgn, Size: 900_000_000, Refs: []dockerfake.Ref{{Repo: "postgres", Tag: "16"}}})
+
+	setup := func() (int, string) {
+		var w bytes.Buffer
+		cfg := config.Config{}
+		rc := boxSetupAndPrune(context.Background(), boximage.Docker{Bin: f.Bin}, cfg.BoxImageOrDefault(),
+			cliArgs{Cmd: "box", Sub: "setup"}, h.src(cfg), setupNow, "linux", &w)
+		return rc, w.String()
+	}
+	rc, out := setup()
+	if rc != 0 {
+		t.Fatalf("rc %d:\n%s", rc, out)
+	}
+	if f.Count("build") != 0 || f.Count("pull") != 1 {
+		t.Fatalf("want one pull and no build:\n%s", f.Log())
+	}
+	if !f.Has(pIDNew) || f.Has(pIDOld) || f.Has(pIDOther) || !f.Has(pIDForgn) {
+		t.Fatalf("new %v, old :base %v, old published %v, foreign %v:\n%s",
+			f.Has(pIDNew), f.Has(pIDOld), f.Has(pIDOther), f.Has(pIDForgn), out)
+	}
+	for _, want := range []string{"PASS image: pulled " + ref, "PASS image: culiops/culibox:base now points at " + ref,
+		"removed old box image culiops/culibox:2026-10-01", "this is the image this setup replaced",
+		"removed old box image " + ghcr + "@" + pDigOthr} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+
+	// The default now resolves to the pulled image: current, nothing to do.
+	rc, out = setup()
+	if rc != 0 || !strings.Contains(out, "culiops/culibox:base is current") || f.Count("pull") != 1 || !f.Has(pIDNew) {
+		t.Fatalf("second setup: rc %d, pulls %d, new present %v:\n%s", rc, f.Count("pull"), f.Has(pIDNew), out)
+	}
+}

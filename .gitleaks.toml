@@ -12,8 +12,8 @@
 #   - There are no `paths` on those entries on purpose: when an entry lists both `paths` and
 #     `regexes`, gitleaks treats them as OR by default, and in `dir` mode a matching path
 #     exempts the whole file even with condition = "AND".
-#   - The [[allowlists]] entry under "Vendored third-party code" is PATH-ONLY, and it is the only one that exempts whole files: the
-#     vendored, minified third-party xterm.js files, which are not ours to edit.
+#   - The [[allowlists]] entries under "Vendored third-party code" are PATH-ONLY, and they are the only ones that exempt whole files: the
+#     vendored, minified third-party xterm.js and Monaco files, which are not ours to edit.
 #   - The fake values are public test fixtures that already sit in the tree. A real value
 #     never belongs in this file.
 #   - The [[rules]] at the end (private identifiers) match a SHAPE and carry their own
@@ -86,6 +86,12 @@ description = "Vendored minified xterm.js and its WebGL addon (third-party code,
 paths = [
   '''^internal/web/static/xterm/xterm\.js$''',
   '''^internal/web/static/xterm/addon-webgl\.js$''',
+]
+
+[[allowlists]]
+description = "Vendored minified Monaco 0.57.0 (third-party code, byte-for-byte the pinned npm tarball, scripts/vendor-monaco.sh checks it against MANIFEST.sha256): an obfuscated identifier in the editor bundle trips the generic key rule. Path-only and anchored with ^...$ to the one vendored file, so a look-alike path is still scanned; a Monaco upgrade renames the file and must re-check it here"
+paths = [
+  '''^internal/web/static/vendor/monaco/vs/editor-BdtEMBbM\.js$''',
 ]
 
 # Private identifiers (generic backstop rules).

@@ -405,6 +405,7 @@ func parseConfig(b []byte) (Config, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
+	c.Options = withBuiltinOptions(c.Options)
 	return c, nil
 }
 
@@ -793,6 +794,13 @@ func (c Config) HostAllowlist() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// LoopbackBind reports whether addr (a bind_addr, host:port) is on a loopback
+// host: 127.0.0.0/8, ::1 or localhost. An unparsable addr is not.
+func LoopbackBind(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	return err == nil && isLoopbackHost(host)
 }
 
 func isLoopbackHost(h string) bool {

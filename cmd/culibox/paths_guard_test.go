@@ -65,7 +65,13 @@ var pathEscapes = map[string]int{
 	// Docker store (to keep the images they pin); the ~/.config ones follow this.
 	"cmd/culibox/boxprune.go env XDG_CONFIG_HOME": 1,
 	"cmd/culibox/cli.go literal .local":           2, // -config help and the usage text
-	"cmd/culibox/cli.go literal .config":          1,
+	// `culibox service` writes its one unit file where the user's supervisor
+	// reads it (~/.config/systemd/user or ~/Library/LaunchAgents), marked as ours.
+	"internal/service/platform.go literal .config": 1,
+	"internal/service/platform.go literal Library": 1,
+	// `culibox service install` refuses a binary in the temp dir (go run): a check, never a write.
+	"cmd/culibox/servicecmd.go os.TempDir": 1,
+	"cmd/culibox/cli.go literal .config":   1,
 	// context_paths denylist: refuses /tmp itself as a context path (it would
 	// shadow the box's tmpfs), and the in-box /tmp/agentbox-gh and
 	// /tmp/ac-session-* (prefix match and its message); names compared with,

@@ -164,7 +164,7 @@ func TestImageCheck(t *testing.T) {
 	}{
 		{ImageState{}, true, "box setup"},
 		{ImageState{Present: true, Arch: "amd64", Hash: Hash()}, true, "amd64"},
-		{ImageState{Present: true, Arch: "arm64", Hash: "old"}, false, "-rebuild"},
+		{ImageState{Present: true, Arch: "arm64", Hash: "old"}, false, "run `culibox box setup`"},
 		{ImageState{Present: true, Arch: "arm64", Hash: Hash()}, false, ""},
 	}
 	for _, c := range cases {
@@ -311,7 +311,7 @@ func TestCheckForPinned(t *testing.T) {
 	if fatal || !strings.Contains(msg, "pinned to "+pin) {
 		t.Fatalf("stale pin: (%v, %q)", fatal, msg)
 	}
-	if fatal, msg = stale.CheckFor(base, "arm64"); fatal || !strings.Contains(msg, "-rebuild") || strings.Contains(msg, "pinned") {
+	if fatal, msg = stale.CheckFor(base, "arm64"); fatal || !strings.Contains(msg, "run `culibox box setup`") || strings.Contains(msg, "pinned") {
 		t.Fatalf("stale unpinned: (%v, %q)", fatal, msg)
 	}
 	if fatal, _ = (ImageState{Present: true, Arch: "amd64", Hash: Hash()}).CheckFor(pin, "arm64"); !fatal {
@@ -1947,5 +1947,67 @@ func TestDockerTagArgv(t *testing.T) {
 	bad, _ := fakeDocker(t, "echo 'no such image' >&2; exit 1\n")
 	if err := (Docker{Bin: bad}).Tag(context.Background(), "a", "b"); err == nil || !strings.Contains(err.Error(), "no such image") {
 		t.Fatalf("a failed tag must carry docker's message: %v", err)
+	}
+}
+
+func TestValidPublished(t *testing.T) {
+	hex64 := strings.Repeat("a", 64)
+	for _, ref := range []string{"ghcr.io/culiops/culibox@sha256:" + hex64, "ghcr.io/culiops/culibox@sha256:" + strings.Repeat("0123456789abcdef", 4)} {
+		if !ValidPublished(ref) {
+			t.Errorf("ValidPublished(%q) = false, want true", ref)
+		}
+	}
+	for _, ref := range []string{
+		"",
+		"ghcr.io/culiops/culibox@sha256:" + strings.Repeat("A", 64),
+		"ghcr.io/culiops/culibox@sha256:" + hex64[:63],
+		"ghcr.io/culiops/culibox@sha256:" + hex64 + "a",
+		"ghcr.io/culiops/culibox:base",
+		"ghcr.io/culiops/agent-box@sha256:" + hex64,
+		"ghcr.io/evil/culibox@sha256:" + hex64,
+		"-ghcr.io/culiops/culibox@sha256:" + hex64,
+		"ghcr.io/culiops/culibox@sha256:" + hex64 + "\n",
+		" ghcr.io/culiops/culibox@sha256:" + hex64,
+	} {
+		if ValidPublished(ref) {
+			t.Errorf("ValidPublished(%q) = true, want false", ref)
+		}
+	}
+}
+
+func TestPublishedIgnoresMalformed(t *testing.T) {
+	old := published
+	t.Cleanup(func() { published = old })
+	published = ""
+	if got := Published(); got != "" {
+		t.Errorf("unset: Published() = %q, want empty", got)
+	}
+	published = "-x"
+	if got := Published(); got != "" {
+		t.Errorf("malformed: Published() = %q, want empty", got)
+	}
+	ref := PublishedRepo + "@sha256:" + strings.Repeat("b", 64)
+	published = ref
+	if got := Published(); got != ref {
+		t.Errorf("Published() = %q, want %q", got, ref)
+	}
+}
+
+// A release binary pulls on a plain `box setup`, so the advice for :base must not
+// send it to -rebuild (a local build of several minutes).
+func TestCheckAdvisesPlainSetup(t *testing.T) {
+	cases := map[string]ImageState{
+		"missing":   {},
+		"wrongArch": {Present: true, Arch: "amd64", Hash: Hash()},
+		"stale":     {Present: true, Arch: "arm64", Hash: "000000000000"},
+	}
+	for name, st := range cases {
+		_, msg := st.Check("arm64")
+		if !strings.Contains(msg, "run `culibox box setup`") || strings.Contains(msg, "-rebuild") {
+			t.Errorf("%s: msg = %q, want plain `culibox box setup` advice", name, msg)
+		}
+	}
+	if _, msg := (ImageState{}).Check("arm64"); !strings.Contains(msg, "not set up") {
+		t.Errorf("missing: msg = %q, want it to say the image is not set up", msg)
 	}
 }

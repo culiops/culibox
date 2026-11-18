@@ -8,6 +8,7 @@ package gitview
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/culiops/culibox/internal/box"
@@ -30,8 +31,8 @@ type Target struct{ Root, Top, Common string }
 // from an agent-shaped checkout, and docker parses --mount as CSV, so a path
 // holding a comma or quote could add mount options of its own. Both must be
 // absolute and clean, and pass box.MountUnsafe. Callers MUST check it before
-// StatusArgs or DiffArgs and treat a refusal as state "unavailable"; the
-// builders do not check, they only build.
+// StatusArgs, DiffArgs, BaseArgs, MergeBaseArgs, NumstatArgs or ShowArgs and treat a
+// refusal as state "unavailable"; the builders do not check, they only build.
 func (t Target) Unsafe() string {
 	for _, p := range []struct{ name, v string }{{"workspace", t.Root}, {"checkout", t.Top}, {"git dir", t.Common}} {
 		if p.v == "" && p.name != "checkout" {
@@ -120,4 +121,99 @@ func DiffArgs(t Target, image, name string, uid, gid int, rel string, untracked 
 	}
 	return argv(t, image, name, uid, gid,
 		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "HEAD", "--", rel)
+}
+
+// originHead is the ref a clone points at the remote's default branch.
+const originHead = "refs/remotes/origin/HEAD"
+
+// baseCandidates are the refs a base branch is looked for in when origin/HEAD
+// names none, best first: the remote's main and master, then local ones.
+var baseCandidates = []string{"refs/remotes/origin/main", "refs/remotes/origin/master", "refs/heads/main", "refs/heads/master"}
+
+// maxRefLen is the longest ref ValidBaseRef accepts, in bytes.
+const maxRefLen = 255
+
+var baseRefRE = regexp.MustCompile(`^refs/(heads|remotes)/[A-Za-z0-9._/-]+$`)
+
+// ValidBaseRef reports whether ref may name a base branch in a git argv: a
+// full branch ref (local or remote-tracking) of at most 255 bytes, of plain
+// characters and with no "..". The "refs/" it must start with means it can
+// never be read as an option, whatever follows. Every ref that reaches an argv
+// has passed it; the one a client could send never does, since the server
+// derives the base itself.
+func ValidBaseRef(ref string) bool {
+	return len(ref) <= maxRefLen && baseRefRE.MatchString(ref) && !strings.Contains(ref, "..")
+}
+
+// BaseArgs is the argv of the container that lists the candidate base
+// branches in one run: origin/HEAD with the ref it points at, and each of
+// baseCandidates that exists. The names are fixed, nothing comes from a
+// caller. The caller MUST have checked t.Unsafe() == "" first.
+func BaseArgs(t Target, image, name string, uid, gid int) []string {
+	sub := []string{"for-each-ref", "--format=%(refname)%00%(symref)%00", originHead}
+	return argv(t, image, name, uid, gid, append(sub, baseCandidates...)...)
+}
+
+// MergeBaseArgs is the argv of the container that prints the merge base of
+// HEAD and baseRef. It is nil for a baseRef that is not a ValidBaseRef, so a
+// caller that skips its own check runs nothing rather than a hostile ref. The
+// caller MUST have checked t.Unsafe() == "" first.
+func MergeBaseArgs(t Target, image, name string, uid, gid int, baseRef string) []string {
+	if !ValidBaseRef(baseRef) {
+		return nil
+	}
+	return argv(t, image, name, uid, gid, "merge-base", "HEAD", baseRef)
+}
+
+// Scope is what a numstat compares the working tree with: HEAD, or for Branch
+// the merge base of HEAD and BaseRef. BaseRef is read only for Branch, and it
+// is always one the server derived (Runner.Base), never a client's.
+type Scope struct {
+	Branch  bool
+	BaseRef string
+}
+
+// NumstatArgs is the argv of the container that prints, for every tracked file
+// that differs from the scope's side, its status letter (--raw) and its line
+// counts (--numstat). Untracked files are not in it. A BaseRef that is not a
+// ValidBaseRef builds no argv (nil) for Branch, so a caller that skips its own
+// check runs nothing rather than a hostile ref. The trailing "--" ends the
+// revisions: without it git refuses ("ambiguous argument") a repository that
+// holds a file named like the revision, which an agent can create. The caller
+// MUST have checked t.Unsafe() == "" first.
+func NumstatArgs(t Target, image, name string, uid, gid int, sc Scope) []string {
+	rev := []string{"HEAD"}
+	if sc.Branch {
+		if !ValidBaseRef(sc.BaseRef) {
+			return nil
+		}
+		rev = []string{"--merge-base", sc.BaseRef}
+	}
+	sub := append([]string{"diff"}, rev...)
+	sub = append(sub, "--raw", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=all", "--")
+	return argv(t, image, name, uid, gid, sub...)
+}
+
+// validRev reports whether rev may name a commit in a git argv: HEAD, or a
+// full object id (SHA-1 or SHA-256, lowercase hex) such as the merge base
+// Runner.Base prints. Nothing else is a revision here (no "main", no "HEAD~1",
+// no "-x"), so a rev can never be read as an option or as a lookup the
+// repository could answer differently.
+func validRev(rev string) bool {
+	return rev == "HEAD" || oidRE.MatchString(rev)
+}
+
+// ShowArgs is the argv of the container that prints the content of the file rel
+// (relative to t.Top) as it is in rev, which must be "HEAD" or a full object id
+// (see validRev): anything else builds no argv (nil), so a caller that skips
+// its own check runs nothing rather than a hostile rev. cat-file blob prints the
+// stored bytes: it runs no clean or smudge filter and no textconv, which a
+// repository's own attributes could otherwise point at a command. The path is
+// everything after the first colon of one argument, so it can never be read as
+// an option or a pathspec. The caller MUST have checked t.Unsafe() == "" first.
+func ShowArgs(t Target, image, name string, uid, gid int, rev, rel string) []string {
+	if !validRev(rev) {
+		return nil
+	}
+	return argv(t, image, name, uid, gid, "cat-file", "blob", rev+":"+rel)
 }

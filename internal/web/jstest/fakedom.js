@@ -36,6 +36,14 @@ class Node {
   removeAttribute(k) { delete this.attrs[k]; }
   appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }
+  // Inserts `c` before `ref` (at the end for null), moving it if it is already placed.
+  insertBefore(c, ref) {
+    if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1);
+    c.parent = this;
+    const at = ref ? this.children.indexOf(ref) : -1;
+    if (at < 0) this.children.push(c); else this.children.splice(at, 0, c);
+    return c;
+  }
   replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = ""; cs.forEach((c) => this.appendChild(c)); }
   remove() { if (this.parent) { this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; } }
   // Inserts `c` as this node's next sibling (moving it if it is already placed).

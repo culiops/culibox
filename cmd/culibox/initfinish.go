@@ -562,6 +562,6 @@ func initBoxSetup(cfg config.Config, cfgFiles []string, home string, w io.Writer
 func initDoctor(cfg config.Config, src config.Source, cfgFiles []string, home string, w io.Writer) int {
 	_, notice, envErr := config.HomeEnv(os.Getenv)
 	merged, cred := mergeCredentials(cfg, home)
-	return doctor.Run(w, doctor.Input{Config: merged, Source: src, Home: home, Commit: buildCommit(),
+	return doctor.Run(w, doctor.Input{Config: merged, Source: src, Home: home, XDGConfig: xdgConfigHome(), Commit: buildCommit(),
 		CredErrors: cred.Problems(), ConfigFiles: cfgFiles, EnvNotice: notice, EnvErr: envErr})
 }

@@ -60,7 +60,7 @@ const SHORTCUTS = [
   { id: "sidebar.toggle", label: "Toggle sidebar", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ mod: true, shift: true, code: "KeyB" }],
     allow: scAllow(1, 0, 0, 0, 1) },
-  { id: "files.toggle", label: "Files drawer", group: "Sessions & panes", scope: "global", status: "bound",
+  { id: "files.toggle", label: "Files dock", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ mod: true, shift: true, code: "KeyE" }],
     allow: scAllow(1, 0, 0, 0, 1) },
   { id: "session.jump", label: "Jump to session 1–9", group: "Sessions & panes", scope: "global", status: "bound",
@@ -85,6 +85,13 @@ const SHORTCUTS = [
   { id: "files.goto", label: "Go to file", group: "Editor & files", scope: "global", status: "bound",
     chords: [{ mod: true, code: "KeyP" }],
     allow: scAllow(0, 1, 1, 0, 0) },
+  // Out of the Files dock's Full mode, back to the session's terminal (the agent strip's button says the chord). Plain
+  // Ctrl+`: Ctrl+Shift+` is + Shell below. Only fires in Full mode (the binding returns false anywhere else, which leaves
+  // the key to the terminal as ever), so it is allowed wherever focus can be in Full mode: the covered terminal, the dock's
+  // editor and its fields; not over a dialog, and not on a page, which hides the dock.
+  { id: "dock.showTerminal", label: "Leave Full mode: show the terminal", group: "Editor & files", scope: "global", status: "bound",
+    chords: [{ ctrl: true, code: "Backquote" }],
+    allow: scAllow(1, 1, 1, 0, 0) },
   { id: "term.copy", label: "Copy selection", group: "Terminal", scope: "terminal", status: "bound",
     chords: [{ mod: true, code: "KeyC", on: "mac" }, { mod: true, shift: true, code: "KeyC" }] },
   { id: "term.paste", label: "Paste", group: "Terminal", scope: "terminal", status: "bound",
@@ -97,6 +104,9 @@ const SHORTCUTS = [
     status: "help-only", chords: [], text: { mac: "⌥+drag", other: "Shift+drag" } },
   { id: "editor.save", label: "Save", group: "Editor & files", scope: "editor", status: "bound",
     chords: [{ mod: true, code: "KeyS" }] },
+  // Bound inside the Files dock's editor (Monaco's addCommand, editortab.js), where the toggle also lives in the ⋯ menu.
+  { id: "editor.wrap", label: "Wrap lines", group: "Editor & files", scope: "editor", status: "bound",
+    chords: [{ alt: true, code: "KeyZ" }] },
   { id: "palette.insert", label: "Palette: open in new pane / insert path", group: "Editor & files", scope: "palette",
     status: "bound", chords: [{ mod: true, keys: ["Enter"] }] },
   // deskLabel: what the desktop's Keyboard shortcuts grid says (the dialog's button reads "Start session" there);
@@ -222,8 +232,11 @@ function _resetShortcutBindings() {
   scBindings = {};
 }
 
-function dispatchShortcut(e, ctx, mac) {
+// skip(id), optional: true leaves the key to whoever owns it where focus is (Monaco's own find and go to line,
+// monacokeys.js registrySkipsInEditor), without stopping it or marking it used.
+function dispatchShortcut(e, ctx, mac, skip) {
   const id = shortcutFor(e, mac, ctx);
+  if (id && typeof skip === "function" && skip(id)) return false;
   const fn = id && scBindings[id];
   if (!fn) return false;
   if (fn(e, ctx) === false) return false;

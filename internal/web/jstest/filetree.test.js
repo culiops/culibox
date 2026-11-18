@@ -169,6 +169,16 @@ test("rowMenuIds: no menu ends on a rule or has two in a row", () => {
   }
 });
 
+test("rowMenuIds: noInsert leaves out Insert path at prompt and nothing else; omitted it is today's menu", () => {
+  for (const isDir of [true, false]) for (const readOnly of [true, false]) {
+    const o = { isDir, isImage: false, readOnly };
+    const today = FT.rowMenuIds(o);
+    assert.strictEqual(today[0], "insert");
+    assert.deepStrictEqual(FT.rowMenuIds(Object.assign({ noInsert: true }, o)), today.slice(1));
+    assert.deepStrictEqual(FT.rowMenuIds(Object.assign({ noInsert: false }, o)), today);
+  }
+});
+
 // --- the menu itself, on a fake DOM ---------------------------------------------
 
 function fakeNode(tag) {
@@ -189,7 +199,7 @@ function installMenuDom() {
   };
   globalThis.window = { innerWidth: 390, innerHeight: 900, HOME_DIR: "/home/u" };
   globalThis.mobileActive = (w) => Number(w) <= 700;
-  Object.assign(globalThis, require("../static/copyfile.js"), require("../static/fsops.js"));
+  Object.assign(globalThis, require("../static/copyfile.js"), require("../static/fsops.js"), { insertOffered: require("../static/insertdecision.js").insertOffered });
   return menu;
 }
 const anchor = { getBoundingClientRect: () => ({ left: 0, right: 100, top: 10, bottom: 30 }) };
@@ -198,21 +208,21 @@ const menuText = (menu) => menu.nodes.map((n) => (n.tag === "hr" ? "---" : n.tex
 test("openRowMenu: a read-only file menu is the path header and the safe actions", () => {
   const menu = installMenuDom();
   FT.openRowMenu(anchor, "/tmp/claude-1/x/readme.txt", "readme.txt", false, true);
-  assert.deepStrictEqual(menuText(menu), ["/tmp/claude-1/x/readme.txt", "Insert path at prompt", "Copy path", "Copy relative path", "Copy contents", "---", "Download"]);
+  assert.deepStrictEqual(menuText(menu), ["/tmp/claude-1/x/readme.txt", "Copy path", "Copy relative path", "Copy contents", "---", "Download"]);
 });
 
 test("openRowMenu: a read-only folder menu has no New folder here", () => {
   const menu = installMenuDom();
   FT.openRowMenu(anchor, "/tmp/claude-1/x/dir1", "dir1", true, true);
-  assert.deepStrictEqual(menuText(menu), ["/tmp/claude-1/x/dir1", "Insert path at prompt", "Copy path", "Copy relative path", "---", "Download .tar.gz"]);
+  assert.deepStrictEqual(menuText(menu), ["/tmp/claude-1/x/dir1", "Copy path", "Copy relative path", "---", "Download .tar.gz"]);
 });
 
-test("openRowMenu: no flag (or false) is today's full menu, image rule included", () => {
+test("openRowMenu: no flag (or false) is the full phone menu, image rule included, with no Insert path at prompt (the Files screen hides every terminal)", () => {
   const menu = installMenuDom();
   FT.openRowMenu(anchor, "/home/u/w/a.txt", "a.txt", false);
-  assert.deepStrictEqual(menuText(menu), ["~/w/a.txt", "Insert path at prompt", "Copy path", "Copy relative path", "Copy contents", "---", "Download", "---", "Rename\u2026", "Delete\u2026"]);
+  assert.deepStrictEqual(menuText(menu), ["~/w/a.txt", "Copy path", "Copy relative path", "Copy contents", "---", "Download", "---", "Rename\u2026", "Delete\u2026"]);
   FT.openRowMenu(anchor, "/home/u/w", "w", true, false);
-  assert.deepStrictEqual(menuText(menu), ["~/w", "Insert path at prompt", "Copy path", "Copy relative path", "---", "Download .tar.gz", "New folder here\u2026", "---", "Rename\u2026", "Delete\u2026"]);
+  assert.deepStrictEqual(menuText(menu), ["~/w", "Copy path", "Copy relative path", "---", "Download .tar.gz", "New folder here\u2026", "---", "Rename\u2026", "Delete\u2026"]);
   FT.openRowMenu(anchor, "/home/u/w/p.PNG", "p.PNG", false, false);
   assert.ok(!menuText(menu).includes("Copy contents"), "an image has no text to copy");
   assert.ok(menuText(menu).includes("Rename\u2026"));
@@ -231,6 +241,148 @@ test("ftApplyReadOnly hides #ft-newdir and #ft-upload, and only those", () => {
   FT.ftApplyReadOnly(true);
 });
 
+test("ftApplyReadOnly hides the dock's New file with the other write buttons", () => {
+  const els = { "dock-newfile": { hidden: false }, "dock-more": { hidden: false } };
+  globalThis.document = { getElementById: (id) => els[id] || null };
+  FT.ftApplyReadOnly(true);
+  assert.deepStrictEqual([els["dock-newfile"].hidden, els["dock-more"].hidden], [true, false], "the ⋯ stays: Refresh and Collapse all still read");
+  FT.ftApplyReadOnly(false);
+  assert.strictEqual(els["dock-newfile"].hidden, false);
+});
+
+// --- promptNewFile (the dock's New file) ------------------------------------------------------------------------
+// The globals it reaches in the page (askPrompt, fsNewFile, showToast, drawerShowFile, ...) are the test's; its own
+// ftLoadRoot returns at once here (no tree is built under node). The order prompt, create, refresh, open is
+// dock-changes-wire.test.js's source pin.
+async function newFile(o) {
+  const log = { prompts: [], creates: [], toasts: [], shown: [], opened: [], renames: [], deletes: [], confirms: [], closed: [] };
+  const was = {};
+  const set = (k, v) => { was[k] = Object.prototype.hasOwnProperty.call(globalThis, k) ? globalThis[k] : undefined; globalThis[k] = v; };
+  set("askPrompt", async (opts) => { log.prompts.push(opts); return Array.isArray(o.name) ? o.name[Math.min(log.prompts.length, o.name.length) - 1] : o.name; });
+  set("fsNewFile", async (dir, name) => { log.creates.push([dir, name]); if (o.throws) throw new TypeError("Failed to fetch"); return o.reply; });
+  set("fsMkdir", async (dir, name) => { log.creates.push([dir, name]); if (o.throws) throw new TypeError("Failed to fetch"); return o.reply; });
+  // Rename and delete: each call is logged and answered from o.replies in turn (the last one repeats); o.throwAt is the
+  // 1-based call that never completes.
+  const answer = (log0, args) => {
+    log0.push(args);
+    if (o.throwAt === log0.length) throw new TypeError("Failed to fetch");
+    const rs = o.replies || [];
+    return rs[Math.min(log0.length, rs.length) - 1];
+  };
+  set("fsRename", async (...args) => answer(log.renames, args));
+  set("fsDelete", async (...args) => answer(log.deletes, args));
+  set("askConfirm", async (opts) => { log.confirms.push(opts); return o.confirm !== false; });
+  set("closeViewersFor", (p) => { log.closed.push(p); });
+  set("forgetSubtree", () => {}); // treestate.js: the expand state the real page keeps
+  set("saveExpanded", () => {});
+  set("fsErrText", (res) => (res && res.data && res.data.error) || "HTTP " + res.status);
+  set("showToast", (m, opts) => { log.toasts.push([m, !!(opts && opts.error)]); });
+  set("drawerOwnsFileClicks", () => o.docked !== false);
+  set("drawerShowFile", (p, opts) => { log.shown.push([p, opts]); return true; });
+  set("openFile", (p) => { log.opened.push(p); });
+  try { await FT[o.fn || "promptNewFile"](...(o.args || [o.dir === undefined ? "/w" : o.dir])); } finally {
+    for (const k of Object.keys(was)) { if (was[k] === undefined) delete globalThis[k]; else globalThis[k] = was[k]; }
+  }
+  return log;
+}
+
+test("promptNewFile: a name creates the file in the folder and opens it as a pinned tab of the dock", async () => {
+  const log = await newFile({ name: "notes.md", reply: { ok: true, status: 200, data: { path: "/w/notes.md" } } });
+  assert.deepStrictEqual(log.creates, [["/w", "notes.md"]]);
+  assert.strictEqual(log.prompts[0].title, "New file");
+  assert.deepStrictEqual(log.shown, [["/w/notes.md", { preview: false }]]);
+  assert.deepStrictEqual(log.opened, []);
+  assert.deepStrictEqual(log.toasts, [["Created notes.md", false]]);
+});
+
+test("promptNewFile: a name that exists is the 'name already exists' toast and nothing opens", async () => {
+  const log = await newFile({ name: "a.go", reply: { ok: false, status: 409, data: { error: "name already exists" } } });
+  assert.deepStrictEqual(log.toasts, [["Could not create: name already exists", true]]);
+  assert.deepStrictEqual(log.shown, []);
+  const bare = await newFile({ name: "a.go", reply: { ok: false, status: 409, data: null } });
+  assert.deepStrictEqual(bare.toasts, [["Could not create: name already exists", true]], "also when the body is not JSON");
+});
+
+test("promptNewFile: any other refusal says why, and a dismissed or empty prompt asks nothing", async () => {
+  const bad = await newFile({ name: "x/y", reply: { ok: false, status: 400, data: { error: "bad name" } } });
+  assert.deepStrictEqual(bad.toasts, [["Could not create: bad name", true]]);
+  assert.deepStrictEqual(bad.shown, []);
+  for (const name of [null, ""]) {
+    const log = await newFile({ name, reply: { ok: true, status: 200, data: { path: "/w/z" } } });
+    assert.deepStrictEqual([log.creates, log.toasts, log.shown], [[], [], []], JSON.stringify(name));
+  }
+  const none = await newFile({ name: "n", dir: "", reply: { ok: true, status: 200, data: { path: "/w/n" } } });
+  assert.deepStrictEqual([none.prompts.length, none.creates], [0, []], "no folder, no prompt");
+});
+
+test("promptNewFile and promptMkdir: a request that never completes is the error toast, not an unhandled rejection", async () => {
+  for (const fn of ["promptNewFile", "promptMkdir"]) {
+    const log = await newFile({ fn, name: "x", throws: true });
+    assert.deepStrictEqual(log.creates, [["/w", "x"]], fn);
+    assert.deepStrictEqual(log.toasts, [["Could not create: network error", true]], fn);
+    assert.deepStrictEqual(log.shown, [], fn + " opens nothing");
+  }
+});
+
+// promptRename and confirmDelete reach the server twice when the folder is protected, so each request is guarded, not only the first.
+const NET = (verb) => [["Could not " + verb + ": network error", true]];
+const PROTECTED = { ok: false, status: 409, data: { confirm_name: "keep" } };
+test("promptRename: a request that never completes is the error toast, on the first request and on the protected-folder retry", async () => {
+  const first = await newFile({ fn: "promptRename", args: ["/w/a.txt", "a.txt"], name: "b.txt", throwAt: 1 });
+  assert.deepStrictEqual(first.renames, [["/w/a.txt", "b.txt"]]);
+  assert.deepStrictEqual(first.toasts, NET("rename"));
+  assert.deepStrictEqual(first.closed, [], "nothing is torn down for a rename that did not happen");
+  const retry = await newFile({ fn: "promptRename", args: ["/w/keep", "keep"], name: ["keep2", "keep"], replies: [PROTECTED], throwAt: 2 });
+  assert.deepStrictEqual(retry.renames, [["/w/keep", "keep2"], ["/w/keep", "keep2", "keep"]]);
+  assert.deepStrictEqual(retry.toasts, NET("rename"));
+  assert.deepStrictEqual(retry.closed, []);
+});
+
+test("promptRename: a rename that works still says so, and a refusal says why", async () => {
+  const ok = await newFile({ fn: "promptRename", args: ["/w/a.txt", "a.txt"], name: "b.txt", replies: [{ ok: true, status: 200, data: {} }] });
+  assert.deepStrictEqual(ok.toasts, [["Renamed to b.txt", false]]);
+  assert.deepStrictEqual(ok.closed, ["/w/a.txt"]);
+  const bad = await newFile({ fn: "promptRename", args: ["/w/a.txt", "a.txt"], name: "b.txt", replies: [{ ok: false, status: 400, data: { error: "bad name" } }] });
+  assert.deepStrictEqual(bad.toasts, [["Could not rename: bad name", true]]);
+});
+
+test("confirmDelete: a request that never completes is the error toast, on the first request and on each confirmed retry", async () => {
+  const first = await newFile({ fn: "confirmDelete", args: ["/w/a.txt", "a.txt", false], throwAt: 1 });
+  assert.deepStrictEqual(first.deletes, [["/w/a.txt"]]);
+  assert.deepStrictEqual(first.toasts, NET("delete"));
+  assert.deepStrictEqual(first.closed, [], "nothing is torn down for a delete that did not happen");
+  const ask = await newFile({ fn: "confirmDelete", args: ["/w/d", "d", true], replies: [{ ok: false, status: 409, data: { entries: 3 } }], throwAt: 2 });
+  assert.deepStrictEqual(ask.deletes.length, 2);
+  assert.strictEqual(ask.confirms.length, 1);
+  assert.deepStrictEqual(ask.toasts, NET("delete"));
+  const prot = await newFile({ fn: "confirmDelete", args: ["/w/keep", "keep", true], name: "keep", replies: [PROTECTED], throwAt: 2 });
+  assert.deepStrictEqual(prot.deletes.length, 2);
+  assert.deepStrictEqual(prot.toasts, NET("delete"));
+  assert.deepStrictEqual(prot.closed, []);
+});
+
+test("confirmDelete: a delete that works still says so, and a refusal says why", async () => {
+  const ok = await newFile({ fn: "confirmDelete", args: ["/w/a.txt", "a.txt", false], replies: [{ ok: true, status: 200, data: {} }] });
+  assert.deepStrictEqual(ok.toasts, [["Deleted a.txt", false]]);
+  assert.deepStrictEqual(ok.closed, ["/w/a.txt"]);
+  const bad = await newFile({ fn: "confirmDelete", args: ["/w/a.txt", "a.txt", false], replies: [{ ok: false, status: 403, data: { error: "protected" } }] });
+  assert.deepStrictEqual(bad.toasts, [["Could not delete: protected", true]]);
+});
+
+test("promptMkdir: a name creates the folder and says so; a refusal says why", async () => {
+  const ok = await newFile({ fn: "promptMkdir", name: "sub", reply: { ok: true, status: 200, data: {} } });
+  assert.deepStrictEqual(ok.creates, [["/w", "sub"]]);
+  assert.deepStrictEqual(ok.toasts, [["Created sub", false]]);
+  const bad = await newFile({ fn: "promptMkdir", name: "sub", reply: { ok: false, status: 409, data: { error: "name already exists" } } });
+  assert.deepStrictEqual(bad.toasts, [["Could not create: name already exists", true]]);
+});
+
+test("promptNewFile: without the dock the file opens where a tree row's click would", async () => {
+  const log = await newFile({ name: "n.txt", docked: false, reply: { ok: true, status: 200, data: { path: "/w/n.txt" } } });
+  assert.deepStrictEqual(log.shown, []);
+  assert.deepStrictEqual(log.opened, ["/w/n.txt"]);
+});
+
 function fakeRow() {
   const el = {
     tag: "div", className: "", textContent: "", title: "", children: [], attrs: {}, style: { setProperty() {} },
@@ -242,15 +394,21 @@ function fakeRow() {
   return el;
 }
 
-async function renderListing(data) {
-  const zones = [];
-  const container = fakeRow();
+// The globals ftRenderDir reads, with `data` as every listing; the zones array collects each folder row's drop zone.
+function renderSetup(data, zones) {
   const menu = installMenuDom();
   globalThis.document.createElement = () => fakeRow();
   Object.assign(globalThis, require("../static/treestate.js")); // shouldAutoOpen: nothing is remembered open
   globalThis.pendingRegion = () => () => {};
   globalThis.api = async () => data;
-  globalThis.makeDropZone = (el, destFn, opts) => zones.push({ el, dest: destFn(), opts });
+  globalThis.makeDropZone = (el, destFn, opts) => { if (zones) zones.push({ el, dest: destFn(), opts }); };
+  return menu;
+}
+
+async function renderListing(data) {
+  const zones = [];
+  const container = fakeRow();
+  const menu = renderSetup(data, zones);
   const ro = await FT.ftRenderDir("/tmp/claude-1/x", container, "");
   // Press each row's \u22ef and keep what its menu printed.
   const menus = {};
@@ -288,6 +446,28 @@ test("ftRenderDir: every row's menu follows its own listing's flag", async () =>
   const rw = await renderListing({ path: "/h/w", entries });
   assert.ok(rw.menus["dir1"].includes("New folder here\u2026") && rw.menus["dir1"].includes("Rename\u2026") && rw.menus["dir1"].includes("Delete\u2026"));
   assert.ok(rw.menus["readme.txt"].includes("Rename\u2026") && rw.menus["readme.txt"].includes("Delete\u2026"));
+});
+
+// The desktop dock draws depth with one custom property per row (desktop.css: indent and guides read --lvl), and a
+// level is two characters of prefix, the same arithmetic aria-level already uses. The pending line of a folder in
+// flight sits where the children will, so its box carries the same number.
+test("ftRenderDir sets --lvl per depth", async () => {
+  const entries = [{ name: "dir1", is_dir: true, size: 0 }, { name: "a.txt", is_dir: false, size: 3 }];
+  const vars = (el) => el.vars;
+  const recording = () => {
+    const el = fakeRow();
+    el.vars = {};
+    el.style = { setProperty(k, v) { el.vars[k] = String(v); } };
+    return el;
+  };
+  renderSetup({ path: "/h/w", entries });
+  globalThis.document.createElement = () => recording();
+  for (const [prefix, lvl] of [["", "0"], ["  ", "1"], ["    ", "2"]]) {
+    const box = recording();
+    await FT.ftRenderDir("/h/w", box, prefix);
+    assert.strictEqual(vars(box)["--lvl"], lvl, "the box the rows go in, prefix " + JSON.stringify(prefix));
+    assert.deepStrictEqual(box.children.map((r) => vars(r)["--lvl"]), [lvl, lvl], "every row of the listing, prefix " + JSON.stringify(prefix));
+  }
 });
 
 test("ftRenderDir: a failed listing is not read-only (the buttons stay; the server still refuses)", async () => {

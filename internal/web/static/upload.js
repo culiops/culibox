@@ -7,10 +7,10 @@
 // uploadFiles POSTs to /api/fs/upload with XHR rather than fetch: fetch cannot
 // report upload progress, and progress is the point of the feedback here.
 // dropHint: the toast for a drop that has nowhere to go. On desktop the folder
-// to drop on is in the Files drawer, which is not always on screen, so the
+// to drop on is in the Files dock, which is not always on screen, so the
 // message names it; mobile keeps its Files-screen wording.
 function dropHint(kind, desktop) {
-  const where = desktop ? "the Files drawer" : "Files";
+  const where = desktop ? "the Files dock" : "Files";
   if (kind === "nodest") return "No destination folder yet. Drop onto a folder in " + where + " instead";
   // A scratch listing refuses every write (the server's word); the same wording
   // either side of the 700 px line, since neither names a place to go instead.
@@ -272,11 +272,24 @@ function insertTextAtPrompt(term, text) {
   return { ok: true, reason: "" };
 }
 
+// insertFailText: the toast for an insertTextAtPrompt that did not type (its `reason`), in the words the viewer's insert, the tree's
+// and the editor's selection bar share: the path can never be typed (a control character would submit the line), there is no
+// terminal in a pane for the session, or its socket is down. `noterm` (optional) is a caller's own wording for the middle case (the
+// tree says to focus a terminal first). An upload's own sentences differ and keep theirs.
+function insertFailText(reason, noterm) {
+  return reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
+    reason === "noterm" ? noterm || "This session has no terminal open here, so the path was not inserted" :
+    "That session is not connected, so the path was not inserted";
+}
+
 // insertPathsIntoTerminal types the uploaded paths at the prompt, followed by a
 // space and never a newline, so the user sees them before anything runs.
 function insertPathsIntoTerminal(term, data) {
   const ok = (data && data.uploaded) || [];
   if (!ok.length) return;
+  // The drop or paste began on this terminal, but the upload is asynchronous: by now it may have gone out of sight, or its
+  // session may be asking something. insertDecision (insertdecision.js) judges it as it is now (#337).
+  if (term && insertRefused(term, "Uploaded, but the path was not inserted: ")) return;
   const res = insertTextAtPrompt(term, ok.map((u) => shellQuote(u.path)).join(" ") + " ");
   if (res.ok || res.reason === "noterm") return;
   showToast(res.reason === "unsafe"
@@ -294,7 +307,7 @@ function clipboardFiles(e) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt, dropHint, makeDropZone, uploadFiles };
+  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt, insertFailText, dropHint, makeDropZone, uploadFiles };
 }
 
 // pasteFileName keeps the name the browser supplied and only invents one when

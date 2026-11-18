@@ -47,6 +47,21 @@ const MENU_SHAPES = {
     ["path", { d: "M7 1.5v7.5M3.8 6.2L7 9.4l3.2-3.2" }],
     ["path", { d: "M2.5 12.5h9" }],
   ],
+  // An arrow up off a line: a file goes up to the workspace (Download's mirror).
+  upload: [
+    ["path", { d: "M7 9V1.5M3.8 4.7L7 1.5l3.2 3.2" }],
+    ["path", { d: "M2.5 12.5h9" }],
+  ],
+  // A circle with its arrow: read the folder again.
+  refresh: [
+    ["path", { d: "M11.6 7a4.6 4.6 0 1 1-1.4-3.3" }],
+    ["path", { d: "M11.8 1.8v2.6H9.2" }],
+  ],
+  // Two chevrons folding up: every open folder closes.
+  collapse: [
+    ["path", { d: "M3.5 6L7 2.5 10.5 6" }],
+    ["path", { d: "M3.5 11.5L7 8l3.5 3.5" }],
+  ],
   // An arrow into a bar: the path goes into the terminal's line.
   insert: [
     ["path", { d: "M1.5 7h7.2M5.9 4.2L8.7 7l-2.8 2.8" }],

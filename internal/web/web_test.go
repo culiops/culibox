@@ -93,6 +93,8 @@ func TestProtectedRoutesGatedAndRegistered(t *testing.T) {
 		{"POST", "/api/fs/upload?dir=/tmp", http.StatusForbidden},  // outside home
 		{"GET", "/api/fs/upload?dir=/tmp", http.StatusMethodNotAllowed},
 		{"POST", "/api/fs/mkdir", http.StatusBadRequest},
+		{"POST", "/api/fs/newfile", http.StatusBadRequest},
+		{"GET", "/api/fs/newfile", http.StatusMethodNotAllowed},
 		{"POST", "/api/fs/rename", http.StatusBadRequest},
 		{"POST", "/api/fs/delete", http.StatusBadRequest},
 		{"GET", "/api/fs/delete", http.StatusMethodNotAllowed},

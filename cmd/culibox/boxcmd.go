@@ -82,8 +82,23 @@ func adoptDefaultImage(ctx context.Context, d boximage.Docker, cfg config.Config
 // build also gets a dated tag. A dated box_image is pinned: it is never built,
 // rebuilt or moved, and -rebuild on it builds a new dated tag instead.
 func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild bool, now time.Time, goos string, w io.Writer) int {
-	rc, _ := boxSetupImageRefs(ctx, d, image, rebuild, now, goos, w)
+	rc, _ := boxSetupImageRefs(ctx, d, image, "", rebuild, now, goos, w)
 	return rc
+}
+
+// publishedBoxImage is the ref a release binary pulls for the default image
+// (boximage.Published); a variable so tests can stand in for a release build.
+var publishedBoxImage = boximage.Published
+
+// pullFrom is where `box setup` gets the default image: the published ref this
+// binary carries, when the config names no box_image and -rebuild was not given.
+// "" means the local build, as before #335: a source build, an explicit box_image
+// (even one that names the default), and -rebuild never pull it.
+func pullFrom(cfgBoxImage, image, published string, rebuild bool) string {
+	if cfgBoxImage != "" || image != config.DefaultBoxImage || published == "" || rebuild {
+		return ""
+	}
+	return published
 }
 
 // boxSetupImageRefs is boxSetupImage, and also returns the names of the image(s)
@@ -91,7 +106,12 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 // one. With a pinned box_image a rebuild leaves the config on the old pin and
 // builds a NEW dated tag, so both are what setup produced and neither may be
 // pruned (#6). nil on failure.
-func boxSetupImageRefs(ctx context.Context, d boximage.Docker, image string, rebuild bool, now time.Time, goos string, w io.Writer) (int, []string) {
+//
+// from (pullFrom) is the published ref the default image comes from: a default
+// that is missing, stale or of another arch is pulled from it and named image; a
+// pull that fails or brings an unusable image falls back to the build, and says
+// why.
+func boxSetupImageRefs(ctx context.Context, d boximage.Docker, image, from string, rebuild bool, now time.Time, goos string, w io.Writer) (int, []string) {
 	arch, err := d.ServerArch(ctx)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
@@ -121,6 +141,11 @@ func boxSetupImageRefs(ctx context.Context, d boximage.Docker, image string, reb
 	if !rebuild && fatal && pinned {
 		fmt.Fprintf(w, "FAIL image: %s\n", msg)
 		return 1, nil
+	}
+	if from != "" && !rebuild && !pinned {
+		if done, rc := setupPublished(ctx, d, image, from, arch, goos, w); done {
+			return rc, refsIf(rc, image, from)
+		}
 	}
 	repo, err := boximage.Repo(image)
 	if err != nil {
@@ -152,12 +177,62 @@ func boxSetupImageRefs(ctx context.Context, d boximage.Docker, image string, reb
 	return 0, tags
 }
 
-// refsIf is the image just set up when rc says it worked.
-func refsIf(rc int, image string) []string {
+// refsIf is the image(s) just set up when rc says it worked.
+func refsIf(rc int, images ...string) []string {
 	if rc != 0 {
 		return nil
 	}
-	return []string{image}
+	return images
+}
+
+// setupPublished pulls from (the published default) for the daemon's arch and
+// names it image. done is false when the pull failed or brought an image this
+// binary cannot run (another arch, another Dockerfile): the reason is printed and
+// the caller builds instead. A failed tag is done with rc 1: the daemon refused a
+// metadata change, and a build would end in the same tag.
+func setupPublished(ctx context.Context, d boximage.Docker, image, from, arch, goos string, w io.Writer) (done bool, rc int) {
+	fallback := func(reason string) (bool, int) {
+		fmt.Fprintf(w, "WARN image: could not use the published image %s: %s; building it here instead (this takes several minutes)\n", from, reason)
+		return false, 0
+	}
+	// Already in the store and usable (the default name was removed, or another
+	// instance pulled it): only the name is missing, so no pull, also offline.
+	st, err := d.Inspect(ctx, from)
+	if err != nil {
+		return fallback(err.Error())
+	}
+	pulled := false
+	if !st.Present || st.Arch != arch || st.Hash != boximage.Hash() {
+		pulled = true
+		fmt.Fprintf(w, "pulling %s for linux/%s ...\n", from, arch)
+		if err := d.Pull(ctx, from, arch, w); err != nil {
+			hintPullFailure(ctx, w, d, goos, err)
+			return fallback(err.Error())
+		}
+		if st, err = d.Inspect(ctx, from); err != nil {
+			return fallback(err.Error())
+		}
+	}
+	switch {
+	case !st.Present:
+		return fallback("the daemon does not show it after the pull")
+	case st.Arch != arch:
+		return fallback(fmt.Sprintf("it is linux/%s but the daemon is %s", st.Arch, arch))
+	case st.Hash != boximage.Hash():
+		return fallback(fmt.Sprintf("it was built from Dockerfile %q, this CuliBox carries %s", st.Hash, boximage.Hash()))
+	}
+	if pulled {
+		fmt.Fprintf(w, "PASS image: pulled %s (linux/%s)\n", from, arch)
+	} else {
+		fmt.Fprintf(w, "PASS image: %s is already here (linux/%s)\n", from, arch)
+	}
+	if err := d.Tag(ctx, from, image); err != nil {
+		fmt.Fprintf(w, "FAIL image: %v\n", err)
+		return true, 1
+	}
+	fmt.Fprintf(w, "PASS image: %s now points at %s\n", image, from)
+	fmt.Fprintf(w, "pin this instance: set \"box_image\": \"%s\" in its config\n", from)
+	return true, 0
 }
 
 // boxSetupRemote makes a digest or registry box_image present: it pulls a

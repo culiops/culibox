@@ -62,6 +62,9 @@ type Input struct {
 	Source    config.Source
 	ConfigErr error
 	Home      string // "" when $HOME was empty, relative or unreadable
+	// XDGConfig is $XDG_CONFIG_HOME as main read it: where a systemd --user
+	// unit lives when it is absolute.
+	XDGConfig string
 	Commit    string
 	// CredErrors describes what was wrong with the web-defined credentials file
 	// ("<kind> <name>: <err>" per skipped entry, or the file-level problem).
@@ -256,7 +259,7 @@ func Checks(in Input) []Result {
 	out = append(out, checkCredFile(in))
 	c := in.Config
 	dataDir := dataDirOf(in)
-	out = append(out, checkDataDir(in, dataDir, runtime.GOOS), checkAuth(c, dataDir), checkBind(c), checkPort(c))
+	out = append(out, checkDataDir(in, dataDir, runtime.GOOS), checkAuth(c, dataDir), checkBind(c), checkPort(c), serviceRow(in, dataDir))
 	res, rerr := resolveAbduco(c.AbducoBin)
 	ab := checkAbducoBinary(res, rerr)
 	out = append(out, ab)
