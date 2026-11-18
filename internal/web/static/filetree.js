@@ -759,13 +759,14 @@ function ftPaneOf(t) {
   return cells.find((c) => c.tabs.includes(t) || c.dockTabFor(t.id) === t) || null;
 }
 
-// dockInsertTarget: where the tree's "Insert path at prompt" types for the dock's session `sid`. The focused terminal when it is
-// in that session's pane (the agent, or a shell docked in the pane: the one the user is typing in), else the session's own
-// terminal. null when the session has none.
+// dockInsertTarget: where the tree's "Insert path at prompt" types for the dock's session `sid`. The session's own terminal, or
+// the shell docked in its pane that the user is typing in (Cell.dockTabFor: a companion shell, not a session tab). Never another
+// session's tab stacked in that pane (a full pane cap stacks sessions as tabs): that is another session's prompt. null when the
+// session has no terminal.
 function dockInsertTarget(sid, focused) {
   const want = typeof terminalTabFor === "function" ? terminalTabFor(sid) : null;
   const home = ftPaneOf(want);
-  if (focused && home && ftPaneOf(focused) === home) return focused;
+  if (focused && home && (focused === want || home.dockTabFor(focused.id) === focused)) return focused;
   return want;
 }
 
@@ -776,6 +777,7 @@ function dockInsertFocus(term) {
   if (pane && typeof setFocusedCell === "function") setFocusedCell(pane);
   const shown = !pane || (typeof cellTerminal === "function" ? cellTerminal(pane) === term : true) || pane.dockTabFor(term.id) === term;
   if (shown && typeof term.grabFocus === "function") term.grabFocus();
+  else focusTerminal(); // the target is a tab stacked out of sight: the keyboard stays with the terminal on screen, not nowhere
 }
 
 // copyPath copies and says so: a clipboard write is otherwise invisible, and on
