@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1784,5 +1785,38 @@ func TestGitShowStatesAndReasons(t *testing.T) {
 	g.blob = gitview.Blob{State: "notrepo"}
 	if b := decodeBlob(t, postShow(s, p, "head")); b.State != "notrepo" {
 		t.Fatalf("notrepo: %+v", b)
+	}
+}
+
+// gitFileRel is the one path check of diff and show: what it refuses, both refuse.
+func TestGitFileRel(t *testing.T) {
+	_, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	mustWrite(t, filepath.Join(repo, "sub", "a b.go"), "x\n")
+	mustMkdirAll(t, filepath.Join(repo, "d"))
+	if err := os.Symlink(filepath.Join(repo, "sub", "a b.go"), filepath.Join(repo, "link.go")); err != nil {
+		t.Fatal(err)
+	}
+	tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+	if rel, err := gitFileRel(tg, filepath.Join(repo, "sub", "a b.go")); err != nil || rel != "sub/a b.go" {
+		t.Fatalf("file: rel = %q, err = %v", rel, err)
+	}
+	for name, c := range map[string]struct {
+		abs  string
+		want func(error) bool
+	}{
+		"directory":       {filepath.Join(repo, "d"), func(e error) bool { return errors.Is(e, errGitNotFile) }},
+		"the checkout":    {repo, func(e error) bool { return errors.Is(e, errGitNotFile) }},
+		"link":            {filepath.Join(repo, "link.go"), func(e error) bool { return errors.Is(e, errGitNotFile) }},
+		"gone":            {filepath.Join(repo, "gone.go"), func(e error) bool { return errors.Is(e, os.ErrNotExist) }},
+		"outside the top": {filepath.Join(h, "other.go"), func(e error) bool { return errors.Is(e, errGitOutside) }},
+	} {
+		if name == "outside the top" {
+			mustWrite(t, c.abs, "x\n")
+		}
+		if rel, err := gitFileRel(tg, c.abs); rel != "" || !c.want(err) {
+			t.Errorf("%s: rel = %q, err = %v", name, rel, err)
+		}
 	}
 }

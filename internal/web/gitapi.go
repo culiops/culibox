@@ -46,12 +46,14 @@ const (
 	msgGitNoImage      = "Git status needs the box image (start a boxed session once)"
 	msgGitTooMany      = "Too many changes to tell what changed in this file"
 	msgGitNoBase       = "no base branch"
+	msgGitNotFile      = "not a file"
 )
 
 var (
 	errGitOutside = errors.New("git: repository outside the viewable tree")
 	errGitNotRepo = errors.New("git: not a repository")
 	errGitUnsafe  = errors.New("git: path cannot be mounted")
+	errGitNotFile = errors.New("git: not a regular file")
 )
 
 // gitBody is the body of every git endpoint.
@@ -201,6 +203,29 @@ func isGitRefusal(err error) bool {
 	return errors.Is(err, errGitOutside) || errors.Is(err, errGitNotRepo) || errors.Is(err, errGitUnsafe)
 }
 
+// gitFileRel is the slash-form path of abs, the file a request named, relative
+// to t.Top: the path git is asked about. It is the one check of what lies inside
+// the repository for every endpoint that takes a single file (diff, show), so a
+// fix to it reaches them all. abs must be gitTarget's resolved path for t. A
+// path that is gone gives the Lstat error (the caller maps it with writeFsErr);
+// one that is not a regular file (a directory, a link, a device) gives
+// errGitNotFile; one that is not strictly below t.Top, the checkout itself
+// included, gives errGitOutside.
+func gitFileRel(t gitview.Target, abs string) (string, error) {
+	fi, err := os.Lstat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !fi.Mode().IsRegular() {
+		return "", errGitNotFile
+	}
+	rel, err := filepath.Rel(t.Top, abs)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return "", errGitOutside
+	}
+	return filepath.ToSlash(rel), nil
+}
+
 func unavailableGitStatus(reason string) gitview.Status {
 	return gitview.Status{State: "unavailable", Reason: reason, Entries: []gitview.Entry{}}
 }
@@ -287,21 +312,18 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 		writeFsErr(w, err)
 		return
 	}
-	fi, err := os.Lstat(abs)
-	if err != nil {
+	rel, err := gitFileRel(t, abs)
+	switch {
+	case errors.Is(err, errGitNotFile):
+		writeErr(w, http.StatusBadRequest, msgGitNotFile)
+		return
+	case errors.Is(err, errGitOutside):
+		writeJSON(w, http.StatusOK, unavailableGitDiff(msgGitOutside))
+		return
+	case err != nil:
 		writeFsErr(w, err)
 		return
 	}
-	if !fi.Mode().IsRegular() {
-		writeErr(w, http.StatusBadRequest, "not a file")
-		return
-	}
-	rel, err := filepath.Rel(t.Top, abs)
-	if err != nil || rel == "." || !filepath.IsLocal(rel) {
-		writeJSON(w, http.StatusOK, unavailableGitDiff(msgGitOutside))
-		return
-	}
-	rel = filepath.ToSlash(rel)
 
 	// A plain Status: right after the tree painted it is the reused result (2 s),
 	// and past that it is one single-flighted run, not one per click.
@@ -378,21 +400,18 @@ func (s *Server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 		writeFsErr(w, err)
 		return
 	}
-	fi, err := os.Lstat(abs)
-	if err != nil {
+	rel, err := gitFileRel(t, abs)
+	switch {
+	case errors.Is(err, errGitNotFile):
+		writeErr(w, http.StatusBadRequest, msgGitNotFile)
+		return
+	case errors.Is(err, errGitOutside):
+		writeJSON(w, http.StatusOK, unavailableGitBlob(msgGitOutside))
+		return
+	case err != nil:
 		writeFsErr(w, err)
 		return
 	}
-	if !fi.Mode().IsRegular() {
-		writeErr(w, http.StatusBadRequest, "not a file")
-		return
-	}
-	rel, err := filepath.Rel(t.Top, abs)
-	if err != nil || rel == "." || !filepath.IsLocal(rel) {
-		writeJSON(w, http.StatusOK, unavailableGitBlob(msgGitOutside))
-		return
-	}
-	rel = filepath.ToSlash(rel)
 	var ctype string
 	if body.Raw {
 		if ctype, ok = imageExt[strings.ToLower(filepath.Ext(abs))]; !ok {
