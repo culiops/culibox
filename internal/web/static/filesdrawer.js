@@ -1,28 +1,28 @@
 "use strict";
 
 // The desktop Files dock's editor column (spec 5.4): the tab strip, the crumbs and
-// the viewer under them. Its actions are the shared viewer toolbar's
-// (viewertoolbar.js), inside the column; the dock's header keeps the title, the
-// session, maximize and close. The tree column is the existing #files-pane, moved in
-// by app.js's applyDrawer; this file adds the ViewerTabs beside it that belong to no
-// cell, so a file can be read (and thinly edited) without leaving the session's
-// terminal. Mobile never sees any of it: #drawer is display:none at <= 700px
-// (app.css), and filetree.js only routes a row click here while
-// drawerOwnsFileClicks() says so.
+// the editor under them. The tab's own actions (the ⋯ menu) are the EditorTab's
+// (editortab.js), added to the bar's action area; the dock's header keeps the title,
+// the session, maximize and close. The tree column is the existing #files-pane, moved
+// in by app.js's applyDrawer; this file adds the EditorTabs beside it that belong to
+// no cell, so a file can be read and edited without leaving the session's terminal.
+// Mobile never sees any of it: #drawer is display:none at <= 700px (app.css), and
+// filetree.js only routes a row click here while drawerOwnsFileClicks() says so.
 //
 // What it owns:
 //  - the tab state of every session this page has shown (dockStates, the shape and
 //    rules of docktabs.js), and what is stored of it (DOCK_TABS_KEY);
-//  - the ViewerTabs of the SHOWN session only (dockViewers). A tab gets its viewer
+//  - the EditorTabs of the SHOWN session only (dockViewers). A tab gets its viewer
 //    the first time it is shown, and keeps it while its session stays on screen:
 //    switching tabs hides the viewer (onHide) and attaches the other, so an edit
-//    survives. Another session's tabs are parked: their viewers are disposed and
-//    their scroll is remembered in the state;
+//    survives (each tab keeps its Monaco model; the editor itself is shared).
+//    Another session's tabs are parked: their viewers are disposed and their scroll
+//    is remembered in the state;
 //  - the dirty-buffer gate every way out of the files goes through
 //    (drawerConfirmLeave): switching session, closing the dock and a follow-focus
 //    move ask when ANY tab of the shown session holds an edit, and so does closing
 //    a dirty tab.
-// Thin by design (north star): the viewer's own editor, a few tabs.
+// Thin by design (north star): the tab's own editor, a few tabs.
 
 // session id -> {tabs, active} (docktabs.js). null is a pane of files, which has no
 // session: its tabs live here too but are never stored.
@@ -46,7 +46,7 @@ let dockSaveTimer = null;
 const DOCK_SAVE_MS = 300;
 let drawerAsking = false;     // a discard prompt is on screen: never stack a second
 // The user answered Cancel to "discard?" on a focus switch: {sid, gens}, the shown
-// session and, for each dirty tab, its buffer's CodeMirror change generation then.
+// session and, for each dirty tab, its buffer's generation (EditorTab.generation) then.
 // Until focus is back on that session or a buffer changes (or another becomes
 // dirty), a later focus event (a click, a terminal's cwd arriving) holds quietly
 // instead of asking again.
@@ -74,11 +74,18 @@ function dockSetState(sid, st) {
 }
 
 function dockViewerList() { return [...dockViewers.values()]; }
-function dockHasViewer(v) { return !!v && dockViewerList().includes(v); }
+
+// dockHolder: the dock's viewer that is `v` or holds it (an EditorTab mounts a ViewerTab for an image or a binary file, and
+// that one asks the dock things as a dock viewer: its insert target, its reveal in the tree), null for neither.
+function dockHolder(v) {
+  return v ? dockViewerList().find((x) => x === v || x.inner === v) || null : null;
+}
+function dockHasViewer(v) { return !!dockHolder(v); }
 
 // dockKeyOf: the key of a live viewer's tab, null for one the dock does not hold.
 function dockKeyOf(v) {
-  for (const [key, x] of dockViewers) if (x === v) return key;
+  const held = dockHolder(v);
+  for (const [key, x] of dockViewers) if (x === held) return key;
   return null;
 }
 
@@ -125,20 +132,21 @@ async function drawerConfirmLeave() {
   }
 }
 
-// drawerDiscard drops the dirty edits (the user confirmed): back to the read view.
+// drawerDiscard drops the dirty edits (the user confirmed): each buffer goes back to what is on disk.
 function drawerDiscard() {
   drawerKept = null;
-  for (const v of dockViewers.values()) if (v.editing) v.exitEdit();
+  for (const v of dockViewers.values()) if (v.discardEdits) v.discardEdits();
 }
 
 // drawerKeptStill: the Cancel still stands: for the same session, every dirty tab
-// was dirty then and has not changed since (CodeMirror's change generation).
+// was dirty then and has not changed since (the editor's generation token, which an
+// undo back to the same text restores).
 function drawerKeptStill() {
   const k = drawerKept;
   if (!k || k.sid !== dockViewersSid) return false;
   for (const [key, v] of dockViewers) {
     if (!dockDirtyKey(key)) continue;
-    if (!k.gens.has(key) || !v.cm || !v.cm.isClean(k.gens.get(key))) return false;
+    if (!k.gens.has(key) || v.generation() !== k.gens.get(key)) return false;
   }
   return true;
 }
@@ -153,7 +161,7 @@ function drawerHoldOnFollow(next) {
   drawerConfirmLeave().then((ok) => {
     if (ok) { drawerDiscard(); syncFocusedTree(); return; }
     const gens = new Map();
-    for (const [key, v] of dockViewers) if (v.cm && dockDirtyKey(key)) gens.set(key, v.cm.changeGeneration());
+    for (const [key, v] of dockViewers) if (dockDirtyKey(key)) gens.set(key, v.generation());
     drawerKept = { sid: dockViewersSid, gens };
   });
   return true;
@@ -201,8 +209,8 @@ function drawerSessionCwd(sid) {
 //  - alt: {base, rel} of a relative terminal link (the viewer looks in other
 //    checkouts on a 404);
 //  - view: "changes" opens the file's diff vs HEAD (a tree badge's click), in a
-//    viewer that is open already too (it refuses, with a toast, while the file is
-//    being edited);
+//    viewer that is open already too (Changes compares the buffer, so an unsaved
+//    edit shows; it says why in a toast when git cannot give the HEAD text);
 //  - box: the session id of a file that exists only in that session's box.
 // Returns false only for no path.
 function drawerShowFile(path, opts) {
@@ -228,7 +236,7 @@ function drawerShowFile(path, opts) {
   dockShow({ user: key, line: o.line, col: o.col, alt: o.alt, view: o.view });
   if (had) { // an open viewer is told what the link or the badge asked of it
     if (o.line && typeof had.revealLine === "function") had.revealLine(o.line, o.col);
-    if (o.view === "changes") had.showChanges(); // refuses (with a toast) while the file is being edited
+    if (o.view === "changes") had.showChanges(); // says why in a toast when it cannot
   }
   dockTreeFold(); // a file chosen from the column opened off the strip: the column folds again
   return true;
@@ -284,13 +292,13 @@ function dockDropViewer(key) {
   if (!dockViewers.size) dockViewersSid = null;
 }
 
-// dockMount builds the viewer of a tab of the shown session. A tab nobody asked for
+// dockMount builds the viewer of a tab of the shown session: an EditorTab (editortab.js). A tab nobody asked for
 // just now (one restored from storage, or one coming back after a park) is
 // `restored`: its first read of a file that is gone closes it instead of parking an
 // error on a path that no longer exists. `o` says what this very open asked for.
 function dockMount(sid, tab, o) {
   const asked = o.user === tab.key;
-  const v = new ViewerTab(tab.path, {
+  const v = new EditorTab(tab.path, {
     box: tab.box || undefined,
     scroll: asked && o.view === "changes" ? 0 : tab.scroll, // a diff has its own place
     restored: !asked,
@@ -336,7 +344,6 @@ function dockShow(o) {
     host.replaceChildren(v.el);
     v.onShow();
     v.onAttach();
-    if (v.cm) v.cm.refresh(); // CodeMirror measured nothing while detached
   }
   drawerPaint();
 }
@@ -348,7 +355,7 @@ function dockParkAll(keepDirty) {
   dockSyncScroll(dockViewersSid);
   for (const [key, v] of [...dockViewers]) {
     if (keepDirty && dockDirtyKey(key)) {
-      if (v.auto) v.toggleAuto(); // a poll must not re-read under an edit nobody can see
+      v.onHide(); // its view is saved and its ⋯ leaves the bar: the buffer stays, detached
       v.el.remove();
       continue;
     }
@@ -496,6 +503,7 @@ function dockRender() {
   const mine = sid === dockViewersSid;
   dockStripPaint(dockTabItems(st, {
     dirty: (key) => mine && dockDirtyKey(key),
+    locked: (key) => mine && !!(dockViewers.get(key) && dockViewers.get(key).readOnly),
     code: (path) => (typeof gitStatusCodeFor === "function" ? gitStatusCodeFor(path) : ""),
   }), dockStripOn);
   const tab = dockTabsOf(st).find((t) => t.key === st.active) || null;
@@ -503,7 +511,10 @@ function dockRender() {
   // A box file is in no tree: its crumbs are text, and its path is read from "/".
   const crumbs = crumbsFor(tab.path, tab.box ? null : typeof ftRoot === "function" ? ftRoot() : null);
   const name = typeof drawerSessionName === "function" ? drawerSessionName(sid) : "";
-  dockCrumbsPaint(crumbs, editedLabel(drawerChangedFiles.get(sid), tab.path, name, Date.now()), tab.box ? null : { reveal: dockCrumbsReveal });
+  // A buffer with an unsaved edit says so on the right ("Unsaved · Ctrl+S to save"), in place of "Edited by".
+  const live = mine ? dockViewers.get(tab.key) : null;
+  const note = live && typeof live.crumbNote === "function" ? live.crumbNote() : "";
+  dockCrumbsPaint(crumbs, note || editedLabel(drawerChangedFiles.get(sid), tab.path, name, Date.now()), tab.box ? null : { reveal: dockCrumbsReveal });
 }
 
 // --- what is stored -------------------------------------------------------------
@@ -884,6 +895,15 @@ const drawerToolbarHost = {
   onEditStart: (v) => dockPinViewer(v),
   // The buffer turned dirty or clean: the tab's dot.
   onDirtyChange: () => dockRender(),
+  // The conflict bar's "<session> changed <file>": the session the dock shows.
+  sessionName: () => (typeof drawerSessionName === "function" ? drawerSessionName(drawerState.sessionId) : ""),
+  // The session whose scope (Uncommitted or Branch) the editor's diff against git follows.
+  sessionId: () => drawerState.sessionId || null,
+  // The deleted bar's Close: the tab's own close, which asks first when the buffer holds an edit.
+  closeTab: (v) => {
+    const key = dockKeyOf(v);
+    if (key !== null) dockCloseTab(key);
+  },
 };
 
 // drawerPaint brings the column and the dataset flags in step with the viewer.
@@ -918,6 +938,10 @@ function drawerPaint(fromViewer) {
   if (typeof dockAgentSync === "function") dockAgentSync();
   // So does the live change watch: it polls only while the dock is open on a session that reads "working" (a close lands here too).
   if (typeof dockWatchSync === "function") dockWatchSync();
+  // And the poll of the file on screen (editorsync.js): while the dock is on screen, whatever the session is doing.
+  if (typeof editorSyncSync === "function") editorSyncSync();
+  // And Follow agent listens to the session the dock shows, when it is on for it (editorfollow.js).
+  if (typeof editorFollowSync === "function") editorFollowSync();
 }
 
 initDrawerGoto();

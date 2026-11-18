@@ -344,6 +344,7 @@ function dockTabLabel(path, box) {
 
 // dockTabItems: the strip's view model, one item per tab. `hooks.dirty(key)` says
 // whether the tab's buffer has unsaved edits (any truthy answer is a dirty tab) and
+// `hooks.locked(key)` whether it is read-only (a lock in the tab) and
 // `hooks.code(path)` is its git code. Only M, A, U and C are letters (the tree's own
 // marks, gitstatus.js), and a box file has none: git has nothing to say about a path
 // inside a box.
@@ -358,6 +359,7 @@ function dockTabItems(st, hooks) {
       letter: typeof code === "string" && code.length === 1 && "MAUC".includes(code) ? code : "",
       preview: !!t.preview,
       dirty: typeof h.dirty === "function" && !!h.dirty(t.key),
+      locked: typeof h.locked === "function" && !!h.locked(t.key),
       active: t.key === active,
     };
   });

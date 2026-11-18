@@ -291,11 +291,12 @@ test("palettePageCommands: with vm_folders on, VM folders follows Credentials (d
   assert.ok(!palettePageCommands(false, { vm_folders: true }, h).some((c) => /VM folders/.test(c.label)), "no phone entry");
 });
 
-// --- Insert path at prompt: every caller types at the FOCUSED terminal ------------------------------------------------------
-// The palette's Ctrl/Cmd+Enter on a file row, the tree's row menu and the phone's Files screen all go through filetree.js
-// insertPathAtPrompt, whose target is focusedTerminal() whatever the Files dock shows (a retargeting to the dock's session was
-// tried and backed out of P1: it typed into terminals the user could not see). Run for real in a vm: the real palette key
-// handler, the real insertPathAtPrompt, insertTextAtPrompt and shellQuote.
+// --- Insert path at prompt: the palette keeps the FOCUSED terminal, and asks insertDecision about it -------------------------
+// The palette's Ctrl/Cmd+Enter on a file row goes through filetree.js insertPathAtPrompt with the terminal that has the
+// keyboard, whatever the Files dock shows (the P1 attempt to retarget the palette to the dock's session typed into terminals
+// the user could not see; #337). Run for real in a vm: the real palette key handler, the real insertPathAtPrompt,
+// insertTextAtPrompt and shellQuote. insertDecision is a stub that records what it was asked: its own states are
+// insert-decision.test.js's, and insert-callers.test.js runs the callers against the real thing.
 function insertPage(over) {
   const fs = require("node:fs");
   const path = require("node:path");
@@ -308,8 +309,8 @@ function insertPage(over) {
     assert.ok(m, name + " is a top-level function of " + file);
     return text.slice(m.index, text.indexOf("\n}\n", m.index) + 2);
   };
-  const st = { toasts: [], refocus: 0, sent: { a: [], b: [] }, handlers: {} };
-  const mk = (id) => ({ id, kind: "terminal", sendText(s) { st.sent[id].push(s); return true; } });
+  const st = { toasts: [], refocus: 0, grabbed: [], asked: [], sent: { a: [], b: [] }, handlers: {}, verdict: { ok: true, why: "" } };
+  const mk = (id) => ({ id, kind: "terminal", sendText(s) { st.sent[id].push(s); return true; }, grabFocus() { st.grabbed.push(id); } });
   const tabs = { a: mk("a"), b: mk("b") };
   const fakeEl = (id) => ({ id, open: true, value: "", close() { this.open = false; }, showModal() {}, focus() {}, querySelector: () => null,
     addEventListener(ev, fn) { (st.handlers[id + ":" + ev] = st.handlers[id + ":" + ev] || []).push(fn); } });
@@ -322,29 +323,31 @@ function insertPage(over) {
     showToast: (m, opt) => st.toasts.push([m, opt && opt.error === true]),
     focusTerminal: () => { st.refocus++; },
     focusedTerminal: () => tabs.b, // B has the keyboard
-    // The Files dock is open and pinned to session A: none of it changes where an insert goes.
+    // The Files dock is open and pinned to session A: none of it changes where the palette inserts.
     drawerOwnsFileClicks: () => true,
     drawerState: { open: "files", sessionId: "a", pinned: true },
     terminalTabFor: (id) => tabs[id] || null,
+    insertDecision: (t) => { st.asked.push(t.id); return st.verdict; },
     palRefresh: () => {}, palSelect: () => {}, runItem: () => {},
   }, over));
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load(src("shortcuts.js"), "shortcuts.js");
   load(fnSource("upload.js", "shellQuote"), "shellQuote");
   load(fnSource("upload.js", "insertTextAtPrompt"), "insertTextAtPrompt");
+  load(fnSource("upload.js", "insertFailText"), "insertFailText"); // the toast words insertPathAtPrompt takes from it
+  load(fnSource("insertdecision.js", "insertRefused"), "insertRefused"); // the real helper over the stubbed decision
   load(fnSource("filetree.js", "insertPathAtPrompt"), "insertPathAtPrompt");
   load(src("palette.js"), "palette.js");
   load("initPalette()", "init");
   const keydown = st.handlers["pal-input:keydown"][0];
   return {
-    st, tabs,
+    st, tabs, els,
     palette: (p) => {
       load("palItems = [{ kind: 'file', path: " + JSON.stringify(p) + " }]; palSel = 0;", "palItems");
       let prevented = false;
       keydown({ key: "Enter", ctrlKey: true, preventDefault() { prevented = true; } });
       return prevented;
     },
-    tree: (p) => load("insertPathAtPrompt(" + JSON.stringify(p) + ")", "tree"),
   };
 }
 
@@ -353,36 +356,35 @@ test("the palette's Ctrl+Enter types at the focused terminal while the Files doc
   assert.equal(p.palette("/w/a b.go"), true, "the key was taken");
   assert.deepEqual(p.st.sent.b, ["'/w/a b.go' "], "B has the keyboard");
   assert.deepEqual(p.st.sent.a, [], "the dock's session gets nothing");
+  assert.deepEqual(p.st.asked, ["b"], "insertDecision was asked about the focused terminal, not the dock's");
   assert.equal(p.st.refocus, 1, "the caret returns to the focused terminal");
+  assert.deepEqual(p.st.grabbed, []);
   assert.deepEqual(p.st.toasts, []);
+  assert.equal(p.els.palette.open, false, "the palette closed first");
 });
 
-test("the tree's row menu and the phone's tree type at the focused terminal too, whatever the dock shows", () => {
+test("the palette refuses when insertDecision does: a toast with its sentence, nothing typed, no focus moved", () => {
   const p = insertPage();
-  p.tree("/w/x.go");
-  assert.deepEqual(p.st.sent.b, ["/w/x.go "]);
-  assert.deepEqual(p.st.sent.a, []);
-  const phone = insertPage({ drawerOwnsFileClicks: () => false, drawerState: { open: null, sessionId: null, pinned: false } });
-  phone.tree("/w/x.go");
-  assert.deepEqual(phone.st.sent.b, ["/w/x.go "]);
-  assert.equal(phone.st.refocus, 1);
-  const pin = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "filetree.js"), "utf8");
-  assert.match(pin.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""), /insert: \(\) => insertPathAtPrompt\(path\),/, "the row menu passes the path alone");
+  p.st.verdict = { ok: false, why: "beta is waiting on you; answer it first" };
+  p.palette("/w/x.go");
+  assert.deepEqual(p.st.toasts, [["beta is waiting on you; answer it first", true]]);
+  assert.deepEqual(p.st.sent, { a: [], b: [] });
+  assert.equal(p.st.refocus, 0);
+  assert.deepEqual(p.st.grabbed, []);
 });
 
 test("insert path keeps its refusals: no terminal focused, control characters in the path, a session that is not connected", () => {
   const none = insertPage({ focusedTerminal: () => null });
   none.palette("/w/x.go");
   assert.match(none.st.toasts[0][0], /Focus a terminal first/);
-  none.tree("/w/x.go");
-  assert.match(none.st.toasts[1][0], /Focus a terminal first/);
+  assert.deepEqual(none.st.asked, [], "no terminal: nothing to ask about");
   const ctl = insertPage();
-  ctl.tree("/w/x\ny.go");
+  ctl.palette("/w/x\ny.go");
   assert.match(ctl.st.toasts[0][0], /control characters/);
   assert.deepEqual(ctl.st.sent.b, []);
   const down = insertPage();
   down.tabs.b.sendText = () => false;
-  down.tree("/w/x.go");
+  down.palette("/w/x.go");
   assert.match(down.st.toasts[0][0], /not connected/);
   assert.equal(down.st.refocus, 0);
 });

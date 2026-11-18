@@ -111,6 +111,8 @@ function dockChangesOnStatus(opts) {
 function dockChangesRefresh() {
   dockChangesRender();
   dockChangesSync();
+  // The editor's diff follows the scope shown here, and the merge base the Branch scope names (editordiff.js).
+  if (typeof editorDiffSync === "function") editorDiffSync();
 }
 
 // dockChangesSync asks for what the section lacks: the base when the root, HEAD or branch moved, and the numstat of the scope

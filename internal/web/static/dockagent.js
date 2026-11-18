@@ -12,7 +12,7 @@
 // the poll that asked is dropped, and a failed one leaves the line as it was (like the tree's dots: the answer is a hint).
 // Text goes to the page with textContent: the line is the agent's own words.
 //
-// Not here: Insert at prompt (P2 builds the gate that decides when typing into a terminal is safe).
+// Insert at prompt (dockAgentInsert below) leaves Full mode first and then asks the insert decision; see there.
 
 const DOCK_AGENT_MS = 4000;
 const DOCK_AGENT_FETCH_MS = 8000; // a request that never answers must not hold the one poll slot for good
@@ -70,6 +70,29 @@ function dockAgentPaint() {
   if (dotEl && dotEl.className !== cls) dotEl.className = cls;
   dagSetText("dock-agent-name", typeof drawerSessionName === "function" ? drawerSessionName(sid) : "");
   dagSetText("dock-agent-st", dot && dot.title ? dot.title : "");
+  // Insert at prompt needs a file to point at.
+  const ins = dagEl("dock-agent-ins");
+  if (ins) {
+    const tab = typeof dockAttached === "function" ? dockAttached() : null;
+    const has = !!(tab && tab.path);
+    if (ins.disabled === has) ins.disabled = !has;
+    const title = has ? "Leave Full mode and insert the selected lines, or the file's path, at the prompt" : "Open a file in the dock first";
+    if (ins.title !== title) ins.title = title;
+  }
+}
+
+// dockAgentInsert: the strip's Insert at prompt. It types the dock's active file as editorRefFor says (the selected lines as
+// path:a-b, or the file's path when nothing is selected) at the session's prompt. The strip is there because Full mode covers the
+// terminal, and a covered terminal is a state the insert decision refuses (insertdecision.js, #337); no exception is made for it
+// (founder, 2026-11-18). So the button first leaves Full mode, as Show terminal does, and then asks the decision on the prompt
+// that is on screen now: it types, or toasts why it will not (the session waits on the user) and types nothing. That is
+// editorInsertLeavingFull (editorselbar.js), which the selection bar's Insert uses too. Never Enter.
+function dockAgentInsert() {
+  const tab = typeof dockAttached === "function" ? dockAttached() : null;
+  const want = editorRefFor(tab);
+  if (!want) { showToast("Open a file in the dock first: that is what Insert at prompt types", { error: true }); return; }
+  if (!want.sid) { showToast("This dock has no session, so there is no prompt to insert at", { error: true }); return; }
+  editorInsertLeavingFull(want);
 }
 
 // dockAgentWant: the session the strip should be polling right now, "" for none.

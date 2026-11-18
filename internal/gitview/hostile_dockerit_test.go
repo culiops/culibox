@@ -202,6 +202,25 @@ func runHostile(t *testing.T, r *Runner, tg Target) {
 		t.Errorf("base = %+v, want ok on main against refs/heads/main with merge base %q", bi, st.Head)
 	}
 
+	// The file as committed, at HEAD and at the merge base (HEAD itself here):
+	// cat-file reads the stored bytes, so the hostile filters, textconv and
+	// attributes neither run nor change them, and the working copy's edit is not
+	// in them. A file that is not committed is Missing, not a failure.
+	for rev, name := range map[string]string{"HEAD": "HEAD", bi.MergeBase: "merge base"} {
+		for rel, content := range map[string]string{"a.txt": "one\ntwo\nthree\n", "sub/b.txt": "x\ny\n"} {
+			b := r.Show(ctx, tg, rev, rel)
+			t.Logf("show %s %s: %+v", name, rel, b)
+			if b.State != "ok" || b.Missing || b.Truncated || b.Content != content {
+				t.Errorf("show %s %s = %+v, want ok with %q", name, rel, b, content)
+			}
+		}
+		nb := r.Show(ctx, tg, rev, "new.txt")
+		t.Logf("show %s new.txt (untracked): %+v", name, nb)
+		if nb.State != "ok" || !nb.Missing || nb.Content != "" {
+			t.Errorf("show %s of an untracked file = %+v, want ok and Missing", name, nb)
+		}
+	}
+
 	// The per-file counts of the tracked change (one line replaced, one added),
 	// against HEAD and against the merge base (HEAD itself here, so the same).
 	// The untracked files have no count here: the web layer counts those. The

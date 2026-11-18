@@ -1,6 +1,6 @@
 "use strict";
 // The Files dock's tabs as filesdrawer.js runs them, in a vm: the real filesdrawer.js, docktabs.js, dockcrumbs.js and
-// drawerfiles.js, with a stand-in ViewerTab and a fake page. The pure rules (preview replacement, pinning, closing, what is
+// drawerfiles.js, with a stand-in EditorTab and a fake page. The pure rules (preview replacement, pinning, closing, what is
 // stored) are docktabs.test.js's; this file proves the glue obeys them: which viewers exist, what asks, what is written and
 // when. dock-strip.test.js draws the strip; dock-tabs-css.test.js pins the markup and wiring; the visual check proves it
 // on screen.
@@ -26,7 +26,7 @@ function page(over) {
   const st = { strip: [], crumbs: [], asks: [], toasts: [], timers: [], store: new Map(), revealed: [], follow: 0, made: [], answer: true, opened: [], full: false };
   const store = { getItem: (k) => (st.store.has(k) ? st.store.get(k) : null), setItem: (k, v) => { st.store.set(k, v); } };
   const handlers = {};
-  class ViewerTab {
+  class EditorTab {
     constructor(p, opts) {
       this.opts = opts || {};
       this.path = p;
@@ -36,15 +36,18 @@ function page(over) {
       this.scroll = this.opts.scroll || 0;
       this.changes = this.opts.view === "changes";
       this.fileScroll = 0;
-      this.editing = false;
-      this.cm = null;
-      this.auto = false;
+      this.readOnly = !!this.box;
+      this.gen = 1;
+      this.typed = false;
       this.disposed = false;
       this.calls = [];
       this.toolbarApi = { paint: () => { this.calls.push("toolbar"); } };
       st.made.push(this);
     }
-    dirty() { return this.editing && this.typed; }
+    dirty() { return this.typed; }
+    generation() { return this.gen; }
+    discardEdits() { this.typed = false; this.gen++; }
+    crumbNote() { return this.typed ? "Unsaved · Ctrl+S to save" : ""; }
     dispose() { this.disposed = true; }
     onHide() { this.calls.push("hide"); }
     onShow() { this.calls.push("show"); }
@@ -52,23 +55,19 @@ function page(over) {
     focusReader() { this.calls.push("focus"); }
     revealLine(l, c) { this.calls.push(["line", l, c]); }
     showChanges() { this.calls.push("changes"); }
-    toggleAuto() { this.auto = !this.auto; }
     changed() { this.calls.push("changed"); if (this.onUpdate) this.onUpdate(); }
-    exitEdit() { this.editing = false; this.typed = false; this.cm = null; }
-    // What the real enterEdit does: the editor comes up, then the host hears of it.
+    // What the real editor does on the first typed edit: the host hears of it (the tab is pinned), then the buffer is dirty.
     edit(pin = true) {
-      this.editing = true;
       this.typed = false;
-      this.cm = { gen: 1, changeGeneration() { return this.gen; }, isClean(g) { return g === this.gen; }, refresh() {} };
       if (pin && this.opts.host && this.opts.host.onEditStart) this.opts.host.onEditStart(this);
     }
-    type() { this.typed = true; this.cm.gen++; }
+    type() { this.typed = true; this.gen++; }
   }
   const ctx = vm.createContext(Object.assign({
     console, Array, Object, Set, Map, Math, Number, JSON, Date,
     document: doc,
     window: { addEventListener: (ev, fn) => { handlers[ev] = fn; } },
-    ViewerTab,
+    EditorTab,
     TIER_BOX: "box",
     setTimeout: (fn, ms) => { st.timers.push({ fn, ms }); return st.timers.length; },
     clearTimeout: (id) => { if (st.timers[id - 1]) st.timers[id - 1].dead = true; },
@@ -382,8 +381,8 @@ test("Discard on a follow lets the dock go on to the other session; Cancel keeps
   await new Promise((r) => setImmediate(r));
   assert.equal(p.st.asks.length, 4);
   assert.equal(p.st.follow, 1, "Discard follows focus (syncFocusedTree)");
-  assert.equal(va.editing, false);
-  assert.equal(vb.editing, false);
+  assert.equal(va.dirty(), false, "Discard drops the edits of every tab");
+  assert.equal(vb.dirty(), false);
 });
 
 test("the page's beforeunload guard sees a dirty background tab, with the dock closed or detached", () => {
@@ -622,6 +621,37 @@ test("a viewer re-pointed at another checkout keeps its tab under the new path; 
 });
 
 // --- what the strip and the crumbs are told ----------------------------------------------------------------------------------
+
+test("dockRender: a dirty buffer puts its Unsaved note on the crumbs in place of Edited by, and a read-only tab is told it is locked", () => {
+  const p = page();
+  const [a, b] = files(2);
+  p.run("drawerChangedFiles.set('a', [{path: '" + b + "', add: 1, del: 0, ts: Date.now()}])");
+  p.show(a, { preview: false });
+  p.show(b, { preview: false });
+  p.ctx.dockRender();
+  assert.match(p.st.crumbs.at(-1).edited, /^Edited by alpha/, "clean: who edited it");
+  p.viewer(b).edit();
+  p.viewer(b).type();
+  p.ctx.dockRender();
+  assert.equal(p.st.crumbs.at(-1).edited, "Unsaved · Ctrl+S to save", "dirty: the note, from the viewer");
+  p.viewer(a).readOnly = true;
+  p.ctx.dockRender();
+  assert.deepEqual(p.st.strip.at(-1).map((i) => [i.name, i.locked]), [["f1.go", true], ["f2.go", false]]);
+});
+
+test("a dock viewer's own image or binary ViewerTab is found by its holder, so it asks the dock as a dock viewer", () => {
+  const p = page();
+  const [a] = files(1);
+  p.show(a, { preview: false });
+  const v = p.viewer(a);
+  const inner = { path: a };
+  v.inner = inner;
+  assert.equal(p.ctx.dockHasViewer(v), true);
+  assert.equal(p.ctx.dockHasViewer(inner), true, "the ViewerTab inside is the dock's too");
+  assert.equal(p.ctx.dockKeyOf(inner), p.ctx.dockKeyOf(v), "and has its tab's key");
+  assert.equal(p.ctx.dockHasViewer({ path: a }), false);
+  assert.equal(p.ctx.dockHasViewer(null), false);
+});
 
 test("dockRender: the strip gets the tabs with the dot only for a viewer of the shown session, and the crumbs get the active file", () => {
   const p = page({ gitStatusCodeFor: (f) => (f.endsWith("f1.go") ? "M" : "") });

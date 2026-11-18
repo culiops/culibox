@@ -77,7 +77,7 @@ function dkSpan(cls) {
   return s;
 }
 
-// dkTabBuild makes one tab's element: icon, name, git letter, the dirty dot and the
+// dkTabBuild makes one tab's element: icon, name, the lock, git letter, the dirty dot and the
 // close button. dkTabFill, not this, says what they show.
 function dkTabBuild() {
   const el = document.createElement("div");
@@ -93,7 +93,11 @@ function dkTabBuild() {
   x.className = "dk-x";
   x.tabIndex = -1; // the tab itself is the Tab stop, and Delete closes it
   x.textContent = "✕";
-  el.append(ic, dkSpan("dk-name"), dkSpan("dk-st"), dot, x);
+  const lock = dkSpan("dk-lock"); // drawn by CSS, like the dot; shown for a read-only file
+  lock.setAttribute("role", "img");
+  lock.setAttribute("aria-label", "Read-only");
+  lock.title = "Read-only";
+  el.append(ic, dkSpan("dk-name"), lock, dkSpan("dk-st"), dot, x);
   el.onclick = () => { dkStop = el.dataset.key; dkCall(dkTabOn.activate, el.dataset.key); };
   el.ondblclick = () => dkCall(dkTabOn.pin, el.dataset.key);
   // Middle-click closes. Its mousedown is the browser's autoscroll on some systems.
@@ -124,6 +128,7 @@ function dkTabFill(el, it) {
   el.setAttribute("aria-selected", it.active ? "true" : "false");
   el.title = it.title;
   el.dataset.dirty = it.dirty ? "1" : "";
+  el.dataset.locked = it.locked ? "1" : "";
   el.dataset.box = it.box ? "1" : "";
   set("dk-ic", typeof iconFor === "function" ? iconFor(it.path.split("/").pop() || it.path, false, false) : "");
   set("dk-name", it.name);
@@ -211,12 +216,24 @@ function dockCrumbsPaint(crumbs, edited, on) {
   ed.hidden = !edited;
 }
 
+// dkRevealActive brings the active tab back into view after the strip changed size. The strip shrinks when the bar beside it
+// grows (the Follow toggle and the view toggle arrive after the first paint, a markdown file's toggle has three items, Full
+// mode ends) and widens again, and the tab that was shown fully a moment ago can be left cut or off the edge: the paint reveals
+// only when the active tab changes. A strip with no size (the bar is hidden) is left alone, and so is a tab already in view.
+function dkRevealActive(host) {
+  const el = dkActiveSeen !== null ? dkTabEls.get(dkActiveSeen) : null;
+  if (el && host.clientWidth > 0) dkReveal(host, el);
+}
+
 // dockStripInit: a mouse wheel over a strip that overflows scrolls it sideways (a
 // plain wheel only turns vertically), so a tab off the edge can be reached without a
-// trackpad. A sideways wheel or Shift+wheel is the browser's own.
+// trackpad. A sideways wheel or Shift+wheel is the browser's own. A strip that is
+// resized keeps its active tab in view (dkRevealActive).
 function dockStripInit() {
   const host = typeof document !== "undefined" ? document.getElementById("dock-tabs") : null;
-  if (!host || !host.addEventListener) return;
+  if (!host) return;
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => dkRevealActive(host)).observe(host);
+  if (!host.addEventListener) return;
   host.addEventListener("wheel", (e) => {
     if (host.scrollWidth <= host.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
     host.scrollLeft += e.deltaY;

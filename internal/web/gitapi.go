@@ -9,17 +9,19 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/culiops/culibox/internal/gitrepo"
 	"github.com/culiops/culibox/internal/gitview"
 )
 
-// GitView runs git status, diff, base lookup and line counts for the file tree
-// (gitview.Runner). Nil on the Server means no box runtime: every endpoint
-// answers "unavailable". Base takes no ref: the runner picks the base branch
-// from the repository's own refs, so a request can never name one. The
-// Scope.BaseRef a handler gives Numstat is the one Base returned. The Fresh
+// GitView runs git status, diff, base lookup, line counts and file-at-revision
+// reads for the file tree and the editor (gitview.Runner). Nil on the Server
+// means no box runtime: every endpoint answers "unavailable". Base takes no
+// ref: the runner picks the base branch from the repository's own refs, so a
+// request can never name one. The Scope.BaseRef a handler gives Numstat and the
+// rev it gives Show are the ones Base returned (or HEAD). The Fresh
 // variants (StatusFresh, NumstatFresh) are for a request that has just changed
 // something on disk.
 type GitView interface {
@@ -29,6 +31,8 @@ type GitView interface {
 	Base(context.Context, gitview.Target) gitview.BaseInfo
 	Numstat(context.Context, gitview.Target, gitview.Scope) gitview.Numstat
 	NumstatFresh(context.Context, gitview.Target, gitview.Scope) gitview.Numstat
+	Show(ctx context.Context, t gitview.Target, rev, rel string) gitview.Blob
+	ShowRaw(ctx context.Context, t gitview.Target, rev, rel string) ([]byte, gitview.Blob)
 }
 
 // Every reason a client sees is one of these fixed messages. The runner's own
@@ -42,12 +46,14 @@ const (
 	msgGitNoImage      = "Git status needs the box image (start a boxed session once)"
 	msgGitTooMany      = "Too many changes to tell what changed in this file"
 	msgGitNoBase       = "no base branch"
+	msgGitNotFile      = "not a file"
 )
 
 var (
 	errGitOutside = errors.New("git: repository outside the viewable tree")
 	errGitNotRepo = errors.New("git: not a repository")
 	errGitUnsafe  = errors.New("git: path cannot be mounted")
+	errGitNotFile = errors.New("git: not a regular file")
 )
 
 // gitBody is the body of every git endpoint.
@@ -57,9 +63,11 @@ type gitBody struct {
 	// arrived, not a reused or already-running one: a client sets it when it has
 	// just changed something on disk.
 	Fresh bool `json:"fresh,omitempty"`
-	// Scope (numstat only) is "head" or "branch", nothing else: the base branch
-	// of "branch" is derived by the server, no client field can name a ref.
+	// Scope (numstat and show) is "head" or "branch", nothing else: the base
+	// branch of "branch" is derived by the server, no client field can name a ref.
 	Scope string `json:"scope,omitempty"`
+	// Raw (show only) asks for the bytes of an image, not the JSON text.
+	Raw bool `json:"raw,omitempty"`
 }
 
 // gitTarget decides which host directories a git container may mount for the
@@ -195,6 +203,29 @@ func isGitRefusal(err error) bool {
 	return errors.Is(err, errGitOutside) || errors.Is(err, errGitNotRepo) || errors.Is(err, errGitUnsafe)
 }
 
+// gitFileRel is the slash-form path of abs, the file a request named, relative
+// to t.Top: the path git is asked about. It is the one check of what lies inside
+// the repository for every endpoint that takes a single file (diff, show), so a
+// fix to it reaches them all. abs must be gitTarget's resolved path for t. A
+// path that is gone gives the Lstat error (the caller maps it with writeFsErr);
+// one that is not a regular file (a directory, a link, a device) gives
+// errGitNotFile (so the checkout directory itself is that, not an "outside");
+// a regular file that is not strictly below t.Top gives errGitOutside.
+func gitFileRel(t gitview.Target, abs string) (string, error) {
+	fi, err := os.Lstat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !fi.Mode().IsRegular() {
+		return "", errGitNotFile
+	}
+	rel, err := filepath.Rel(t.Top, abs)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return "", errGitOutside
+	}
+	return filepath.ToSlash(rel), nil
+}
+
 func unavailableGitStatus(reason string) gitview.Status {
 	return gitview.Status{State: "unavailable", Reason: reason, Entries: []gitview.Entry{}}
 }
@@ -209,6 +240,10 @@ func unavailableGitBase(reason string) gitview.BaseInfo {
 
 func unavailableGitNumstat(reason string) gitview.Numstat {
 	return gitview.Numstat{State: "unavailable", Reason: reason, Entries: []gitview.NumEntry{}}
+}
+
+func unavailableGitBlob(reason string) gitview.Blob {
+	return gitview.Blob{State: "unavailable", Reason: reason}
 }
 
 // handleGitStatus is POST /api/git/status {"path": abs}: the change set of the
@@ -277,21 +312,18 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 		writeFsErr(w, err)
 		return
 	}
-	fi, err := os.Lstat(abs)
-	if err != nil {
+	rel, err := gitFileRel(t, abs)
+	switch {
+	case errors.Is(err, errGitNotFile):
+		writeErr(w, http.StatusBadRequest, msgGitNotFile)
+		return
+	case errors.Is(err, errGitOutside):
+		writeJSON(w, http.StatusOK, unavailableGitDiff(msgGitOutside))
+		return
+	case err != nil:
 		writeFsErr(w, err)
 		return
 	}
-	if !fi.Mode().IsRegular() {
-		writeErr(w, http.StatusBadRequest, "not a file")
-		return
-	}
-	rel, err := filepath.Rel(t.Top, abs)
-	if err != nil || rel == "." || !filepath.IsLocal(rel) {
-		writeJSON(w, http.StatusOK, unavailableGitDiff(msgGitOutside))
-		return
-	}
-	rel = filepath.ToSlash(rel)
 
 	// A plain Status: right after the tree painted it is the reused result (2 s),
 	// and past that it is one single-flighted run, not one per click.
@@ -321,6 +353,121 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 		d.Reason = ""
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// handleGitShow is POST /api/git/show {"path": abs file, "scope": "head" or
+// "branch", "raw": bool}: the file as it is in HEAD or, for "branch", at the
+// merge base with the base branch the server picks (Base), for the editor's
+// change gutter and inline diff. The rev is the server's: no body field names
+// one, and any other scope is a 400. ok/notrepo/unavailable are all 200, and
+// "branch" with no base branch is "unavailable" with "no base branch". A path
+// the revision does not have (a new file) is ok and "missing".
+//
+// raw serves the blob's bytes instead, for an image diff: only an image
+// extension (the one of the file git reads) is allowed, anything else is a 400
+// before git runs. The success reply is the image with the headers the file
+// preview has (nosniff, CSP sandbox, the type of the extension); a blob over
+// 10 MiB is a 413, since a cut image is no image. Every other outcome of a raw
+// request (missing, unavailable, not a repo) is the JSON reply of the text
+// form, so a client tells them apart by Content-Type.
+func (s *Server) handleGitShow(w http.ResponseWriter, r *http.Request) {
+	body, ok := decodeGitBody(w, r)
+	if !ok {
+		return
+	}
+	var branch bool
+	switch body.Scope {
+	case "head":
+	case "branch":
+		branch = true
+	default:
+		writeErr(w, http.StatusBadRequest, "bad scope")
+		return
+	}
+	if s.Git == nil {
+		writeJSON(w, http.StatusOK, unavailableGitBlob(msgGitNoRuntime))
+		return
+	}
+	t, abs, err := s.gitTarget(body.Path)
+	switch {
+	case errors.Is(err, errGitNotRepo):
+		writeJSON(w, http.StatusOK, gitview.Blob{State: "notrepo"})
+		return
+	case isGitRefusal(err):
+		writeJSON(w, http.StatusOK, unavailableGitBlob(targetReason(err)))
+		return
+	case err != nil:
+		writeFsErr(w, err)
+		return
+	}
+	rel, err := gitFileRel(t, abs)
+	switch {
+	case errors.Is(err, errGitNotFile):
+		writeErr(w, http.StatusBadRequest, msgGitNotFile)
+		return
+	case errors.Is(err, errGitOutside):
+		writeJSON(w, http.StatusOK, unavailableGitBlob(msgGitOutside))
+		return
+	case err != nil:
+		writeFsErr(w, err)
+		return
+	}
+	var ctype string
+	if body.Raw {
+		if ctype, ok = imageExt[strings.ToLower(filepath.Ext(abs))]; !ok {
+			writeErr(w, http.StatusBadRequest, "not an image")
+			return
+		}
+	}
+
+	rev := "HEAD"
+	if branch {
+		// The rev is the server's: Base derived it from the repository's refs.
+		bi := s.Git.Base(r.Context(), t)
+		switch bi.State {
+		case "ok":
+			rev = bi.MergeBase
+		case "nobase":
+			writeJSON(w, http.StatusOK, unavailableGitBlob(msgGitNoBase))
+			return
+		case "notrepo":
+			writeJSON(w, http.StatusOK, gitview.Blob{State: "notrepo"})
+			return
+		default:
+			log.Printf("git show %q: base: %q", t.Top, bi.Reason)
+			writeJSON(w, http.StatusOK, unavailableGitBlob(gitReason(bi.Reason)))
+			return
+		}
+	}
+	var data []byte
+	var b gitview.Blob
+	if body.Raw {
+		data, b = s.Git.ShowRaw(r.Context(), t, rev, rel)
+	} else {
+		b = s.Git.Show(r.Context(), t, rev, rel)
+	}
+	if b.State == "unavailable" {
+		log.Printf("git show %q: %q", t.Top, b.Reason)
+		b = unavailableGitBlob(gitReason(b.Reason))
+	} else {
+		b.Reason = ""
+	}
+	if body.Raw && b.State == "ok" && !b.Missing {
+		if b.Truncated {
+			writeErr(w, http.StatusRequestEntityTooLarge, "file too large to preview")
+			return
+		}
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.Header().Set("Cache-Control", "no-cache")
+		// As for the file preview (serveFsFile): no MIME sniffing, and the
+		// response is sandboxed so an SVG opened on its own cannot run script.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "sandbox")
+		w.Write(data)
+		return
+	}
+	writeJSON(w, http.StatusOK, b)
 }
 
 // handleGitBase is POST /api/git/base {"path": abs}: the branch checked out in

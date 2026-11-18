@@ -22,6 +22,7 @@
 //      diffNoText,       // in Changes mode: why there is no diff text to copy ("" = there is)
 //      lines,            // are there numbered lines to jump to (read view or editor)
 //      insert, reveal, rel, // {ok, title} from viewerpath.js; a boolean is accepted
+//      noInsert,         // the phone (insertOffered): Insert path at prompt is left out, not offered dead (insertDecision always refuses there)
 //      extras: [{key, label, title}],   // host buttons, between Find and ⋯
 //      keys: {find, gotoLine, save, zoomIn, zoomOut}}  // shortcutHint() strings, or absent
 function viewerToolbarModel(s) {
@@ -63,7 +64,7 @@ function viewerToolbarModel(s) {
 
   m.pathAbs = ent(true, true, "Copy absolute path", "Copy this file's full path");
   m.pathRel = ent(true, rel.ok, "Copy relative path", rel.ok ? "Copy the path relative to the tree's root" : rel.title);
-  m.pathInsert = ent(true, insert.ok, "Insert path at prompt", insert.ok ? "Type this file's path at the prompt, followed by a space" : insert.title);
+  m.pathInsert = ent(!s.noInsert, insert.ok, "Insert path at prompt", insert.ok ? "Type this file's path at the prompt, followed by a space" : insert.title);
   m.reveal = ent(true, reveal.ok, "Reveal in tree", reveal.ok ? "Show this file in the file tree" : reveal.title);
 
   const SAVE_FIRST = "Save or cancel your edits first";
@@ -259,7 +260,7 @@ function buildViewerToolbar(viewer, host) {
     menus[name].addEventListener("keydown", (e) => {
       // Disabled items stay reachable (WAI-ARIA menu practice) so a keyboard user can
       // land on one and hear its title, the reason; activating it does nothing.
-      const live = [...menus[name].querySelectorAll('[role^="menuitem"]')];
+      const live = [...menus[name].querySelectorAll('[role^="menuitem"]')].filter((b) => !b.hidden); // a left-out item (insert, on the phone) is not a stop
       if (!live.length) return;
       const i = live.indexOf(document.activeElement);
       let to = null;
@@ -319,6 +320,7 @@ function buildViewerToolbar(viewer, host) {
       diffNoText: viewer.changes && typeof diffCopyBlock === "function" ? diffCopyBlock(viewer.copyRefusal) : "",
       lines: !!viewer.hasLines || !!(viewer.editing && viewer.cm),
       insert: insertTargetFor(viewer, viewer.insertCandidate()),
+      noInsert: !insertOffered(),
       reveal: revealable(viewer, home),
       rel: relativeAvail(viewer, root),
       extras: extras.map((x) => ({ key: x.key, label: x.label, title: x.title })),

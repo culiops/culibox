@@ -212,6 +212,216 @@ func TestFsReadReturnsVersionForText(t *testing.T) {
 	}
 }
 
+// metaRead is GET /api/fs/read?meta=1 for p.
+func metaRead(s *Server, p string) *httptest.ResponseRecorder {
+	return fsGet(s.handleFsRead, "/api/fs/read", p, "meta=1")
+}
+
+func TestFsReadMetaHasVersionNoContent(t *testing.T) {
+	home := t.TempDir()
+	// Multi-byte text, and a file at exactly the cap: the version is the one of
+	// the same bytes the full read hashes, whatever the file.
+	files := map[string]string{
+		"a.txt":  "hello\n",
+		"u.txt":  "h\u00e9llo \u20ac\n",
+		"cap.go": strings.Repeat("x", maxTextBytes),
+		"e.txt":  "",
+	}
+	s := &Server{Home: home}
+	for name, content := range files {
+		p := filepath.Join(home, name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rr := metaRead(s, p)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: meta status = %d (%s)", name, rr.Code, rr.Body)
+		}
+		var meta, full fsRead
+		if err := json.Unmarshal(rr.Body.Bytes(), &meta); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(fsGet(s.handleFsRead, "/api/fs/read", p).Body.Bytes(), &full); err != nil {
+			t.Fatal(err)
+		}
+		if meta.Kind != "text" || meta.Size != int64(len(content)) || meta.Version != hashText([]byte(content)) {
+			t.Errorf("%s: meta = %+v, want text of %d bytes with the sha256 of the content", name, meta, len(content))
+		}
+		if meta.Version != full.Version || meta.Size != full.Size || meta.Kind != full.Kind {
+			t.Errorf("%s: meta %+v and full read %+v disagree on kind, size or version", name, meta, full)
+		}
+		// No content, whatever the file holds: the poll costs a hash, not a payload.
+		if meta.Content != "" || strings.Contains(rr.Body.String(), `"content"`) {
+			t.Errorf("%s: meta carries content: %.80s", name, rr.Body)
+		}
+	}
+	// The wire shape the client reads: kind, size, version, utf8, and readonly only when true.
+	rr := metaRead(s, filepath.Join(home, "a.txt"))
+	want := `{"kind":"text","size":6,"version":"` + hashText([]byte("hello\n")) + `","utf8":true}`
+	if strings.TrimSpace(rr.Body.String()) != want {
+		t.Errorf("wire = %s, want %s", rr.Body, want)
+	}
+	// A change of one byte moves the version.
+	os.WriteFile(filepath.Join(home, "a.txt"), []byte("hello!\n"), 0o644)
+	var after fsRead
+	json.Unmarshal(metaRead(s, filepath.Join(home, "a.txt")).Body.Bytes(), &after)
+	if after.Version == hashText([]byte("hello\n")) || after.Version != hashText([]byte("hello!\n")) {
+		t.Errorf("version after an edit = %q", after.Version)
+	}
+}
+
+// A text file that is not valid UTF-8 (Latin-1, CP1252) is still text (no NUL byte), but the JSON body
+// cannot carry its bytes: every invalid one reaches the client as U+FFFD, and saving that text back would
+// replace them. Both reads say so with utf8:false, so the editor can lock the file. A valid file, a BOM
+// and an empty file are UTF-8.
+func TestFsReadSaysWhetherTextIsUTF8(t *testing.T) {
+	home := t.TempDir()
+	files := map[string]struct {
+		bytes string
+		valid bool
+	}{
+		"latin1.txt": {"caf\xe9 = 1\n", false},
+		"cut.txt":    {"ok \xe2\x82", false}, // a multi-byte sequence cut short
+		"utf8.txt":   {"caf\u00e9 \u20ac = 1\n", true},
+		"bom.txt":    {"\xef\xbb\xbfhello\n", true},
+		"empty.txt":  {"", true},
+		"ascii.txt":  {"hello\n", true},
+	}
+	s := &Server{Home: home}
+	for name, c := range files {
+		p := filepath.Join(home, name)
+		if err := os.WriteFile(p, []byte(c.bytes), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for what, rr := range map[string]*httptest.ResponseRecorder{
+			"full": fsGet(s.handleFsRead, "/api/fs/read", p),
+			"meta": metaRead(s, p),
+		} {
+			var got struct {
+				Kind string `json:"kind"`
+				UTF8 *bool  `json:"utf8"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+				t.Fatalf("%s %s: %v", name, what, err)
+			}
+			if got.Kind != "text" || got.UTF8 == nil || *got.UTF8 != c.valid {
+				t.Errorf("%s %s: kind %q utf8 %v, want text and utf8=%v (%s)", name, what, got.Kind, got.UTF8, c.valid, rr.Body)
+			}
+		}
+		// The version is of the raw bytes in both, and does not depend on how they decode.
+		var full fsRead
+		json.Unmarshal(fsGet(s.handleFsRead, "/api/fs/read", p).Body.Bytes(), &full)
+		if full.Version != hashText([]byte(c.bytes)) {
+			t.Errorf("%s: version = %q, want the sha256 of the raw bytes", name, full.Version)
+		}
+	}
+	// Only text says it: an image or a binary file has no encoding to speak of.
+	bin := filepath.Join(home, "b.bin")
+	os.WriteFile(bin, []byte("a\x00b\xe9"), 0o644)
+	if rr := fsGet(s.handleFsRead, "/api/fs/read", bin); strings.Contains(rr.Body.String(), "utf8") {
+		t.Errorf("binary read carries utf8: %s", rr.Body)
+	}
+}
+
+func TestFsReadMetaKeepsTheReadCaps(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+	big := filepath.Join(home, "big.txt")
+	os.WriteFile(big, bytes.Repeat([]byte("a"), maxTextBytes+1), 0o644)
+	// The same refusal as the full read: a file the editor cannot open has no version to poll.
+	if rr := metaRead(s, big); rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over the cap: code = %d, want 413", rr.Code)
+	}
+	if rr := metaRead(s, home); rr.Code != http.StatusBadRequest {
+		t.Fatalf("directory: code = %d, want 400", rr.Code)
+	}
+	if rr := metaRead(s, filepath.Join(home, "gone.txt")); rr.Code != http.StatusNotFound {
+		t.Fatalf("missing: code = %d, want 404", rr.Code)
+	}
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	os.WriteFile(outside, []byte("x"), 0o644)
+	if rr := metaRead(s, outside); rr.Code != http.StatusForbidden {
+		t.Fatalf("outside home: code = %d, want 403", rr.Code)
+	}
+	// meta is a metadata read, never a download: it does not fetch the bytes either.
+	txt := filepath.Join(home, "a.txt")
+	os.WriteFile(txt, []byte("secret body"), 0o644)
+	rr := fsGet(s.handleFsRead, "/api/fs/read", txt, "meta=1", "download=1")
+	if rr.Header().Get("Content-Disposition") != "" || strings.Contains(rr.Body.String(), "secret body") {
+		t.Fatalf("meta with download streamed the file: %v %s", rr.Header(), rr.Body)
+	}
+	// Only meta=1 is meta.
+	for _, v := range []string{"0", "", "true", "yes"} {
+		var fr fsRead
+		json.Unmarshal(fsGet(s.handleFsRead, "/api/fs/read", txt, "meta="+v).Body.Bytes(), &fr)
+		if fr.Content != "secret body" {
+			t.Errorf("meta=%q: content = %q, want the full read", v, fr.Content)
+		}
+	}
+}
+
+func TestFsReadMetaImageNoStream(t *testing.T) {
+	home := t.TempDir()
+	png := []byte("\x89PNG\r\n\x1a\nrest")
+	os.WriteFile(filepath.Join(home, "img.png"), png, 0o644)
+	os.WriteFile(filepath.Join(home, "logo.svg"), []byte("<svg><script>alert(1)</script></svg>"), 0o644)
+	os.WriteFile(filepath.Join(home, "b.bin"), []byte{0x00, 0x01, 0x02, 0x03}, 0o644)
+	s := &Server{Home: home}
+	for _, c := range []struct {
+		name, kind string
+		size       int64
+	}{{"img.png", "image", int64(len(png))}, {"logo.svg", "image", 36}, {"b.bin", "binary", 4}} {
+		rr := metaRead(s, filepath.Join(home, c.name))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: code = %d (%s)", c.name, rr.Code, rr.Body)
+		}
+		var fr fsRead
+		if err := json.Unmarshal(rr.Body.Bytes(), &fr); err != nil {
+			t.Fatalf("%s: not JSON: %v (%q)", c.name, err, rr.Body.Bytes())
+		}
+		if fr.Kind != c.kind || fr.Size != c.size || fr.Content != "" || fr.Version != "" {
+			t.Errorf("%s: meta = %+v, want %s of %d bytes and no content", c.name, fr, c.kind, c.size)
+		}
+		// Not the image: no image type, none of its bytes, none of its headers.
+		if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("%s: Content-Type = %q, want JSON", c.name, ct)
+		}
+		if bytes.Contains(rr.Body.Bytes(), []byte("PNG")) || strings.Contains(rr.Body.String(), "script") {
+			t.Errorf("%s: meta streamed the file: %q", c.name, rr.Body.Bytes())
+		}
+	}
+	// The binary reply is the full read's, size included.
+	var full, meta fsRead
+	json.Unmarshal(fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(home, "b.bin")).Body.Bytes(), &full)
+	json.Unmarshal(metaRead(s, filepath.Join(home, "b.bin")).Body.Bytes(), &meta)
+	if full != meta {
+		t.Errorf("binary: meta %+v, full %+v", meta, full)
+	}
+}
+
+// A read-only file (the scratch folder, a box file) says so in its metadata too:
+// the editor opens it without Save.
+func TestFsReadMetaCarriesReadOnly(t *testing.T) {
+	home := t.TempDir()
+	p := filepath.Join(home, "a.txt")
+	os.WriteFile(p, []byte("x\n"), 0o644)
+	for _, ro := range []bool{true, false} {
+		f, err := os.Open(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, _ := f.Stat()
+		rr := httptest.NewRecorder()
+		serveFsFile(rr, httptest.NewRequest(http.MethodGet, "/x?meta=1", nil), f, info, "a.txt", ro)
+		f.Close()
+		var fr fsRead
+		json.Unmarshal(rr.Body.Bytes(), &fr)
+		if fr.ReadOnly != ro || fr.Kind != "text" || fr.Content != "" || fr.Version != hashText([]byte("x\n")) {
+			t.Errorf("readOnly %v: meta = %+v", ro, fr)
+		}
+	}
+}
+
 // boxedServer is a Server whose BoxTrees name ws as a boxed workspace and
 // home/data as a denied tree. home is symlink-resolved so expected paths match
 // what the resolver reports.

@@ -91,8 +91,12 @@ function rowMenuLabel(id, isDir) {
 // folder here, then past a second rule the destructive pair. A read-only listing
 // keeps only what reads: no New folder here, Rename or Delete, and not the rule
 // that fenced them off.
+//
+// `noInsert` (the phone: insertOffered) leaves out Insert path at prompt: the tree is on the Files screen there, which hides
+// every terminal, so insertDecision refuses it every time. Left out, it is one action fewer to try; omitted, the menu is
+// today's.
 function rowMenuIds(o) {
-  const ids = ["insert", "copy", "copyrel"];
+  const ids = o.noInsert ? ["copy", "copyrel"] : ["insert", "copy", "copyrel"];
   // Contents last in the clipboard group, and only where there is text to take.
   // A directory has none, and an image is served as raw bytes rather than JSON,
   // so asking for one would fail inside JSON.parse with nothing useful to say.
@@ -624,7 +628,7 @@ function openRowMenu(anchor, path, name, isDir, readOnly, at) {
   // toast already carries it on every folder download, and a toast is readable on
   // a phone where the old ⤓ tooltip never was.
   const act = {
-    insert: () => insertPathAtPrompt(path),
+    insert: () => { const to = treeInsertTarget(); insertPathAtPrompt(path, to.term, to.absent); },
     copy: () => copyPath(path),
     copyrel: () => copyPath(relativeTo(ftRoot(), path)),
     copycontents: () => copyContents(path, name),
@@ -633,7 +637,7 @@ function openRowMenu(anchor, path, name, isDir, readOnly, at) {
     rename: () => promptRename(path, name),
     delete: () => confirmDelete(path, name, isDir),
   };
-  const ids = rowMenuIds({ isDir: !!isDir, isImage: IMAGE_EXTS.has(extOf(name)), readOnly: readOnly === true });
+  const ids = rowMenuIds({ isDir: !!isDir, isImage: IMAGE_EXTS.has(extOf(name)), readOnly: readOnly === true, noInsert: !insertOffered() });
   if (desktop) {
     // Close first and give focus to the row, then act: a dialog (New folder, Rename, Delete) hands focus back
     // to what had it when it opened, which is now the row, and an action that moves focus on (Insert path
@@ -718,20 +722,39 @@ function ftShowMenu(anchor, nodes, alignLeft, kitLabel, at) {
   menu.style.top = (below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 4)) + "px";
 }
 
-// insertPathAtPrompt types an entry's ABSOLUTE path at the focused prompt.
-// Absolute, not relative: it is correct no matter where the agent has cd'd,
-// whereas a relative path is silently wrong the moment the tree root and the
-// session's cwd diverge — which they do, because a manual root pick survives
-// until a DIFFERENT tab is focused.
-function insertPathAtPrompt(path) {
-  const term = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+// treeInsertTarget: the terminal the tree's "Insert path at prompt" types at, as {term, absent}. Normally the one with the
+// keyboard (focusedTerminal), because the tree follows focus. When the Files dock holds its session against the focused
+// pane (drawerKeepsTree: a pin on a live session, or a buffer with unsaved edits), the tree, the dock's header and its
+// viewer all name that session, so its terminal is the one meant, whichever pane has the keyboard. This only picks the
+// target: whether it is on screen, and whether its session may be typed into, is insertDecision's to say, and a hidden
+// one refuses rather than falling back to the focused terminal (the fallback is how P1's attempt typed where nobody could
+// see, #337). A shell docked in that session's pane and focused is the keyboard's target already: the focused pane is the
+// dock's own, so the dock holds nothing against it and focusedTerminal() returns the shell. `absent` is the sentence for a
+// held session that has no terminal on this page ("" otherwise).
+function treeInsertTarget() {
+  const focused = typeof focusedTerminal === "function" ? focusedTerminal() : null;
+  const sid = drawerState.sessionId;
+  if (!sid || typeof drawerKeepsTree !== "function" || !drawerKeepsTree()) return { term: focused, absent: "" };
+  const held = terminalTabFor(sid);
+  return { term: held, absent: held ? "" : drawerSessionName(sid) + " is not open in a pane; open it first" };
+}
+
+// insertPathAtPrompt types an entry's ABSOLUTE path at `term`'s prompt, the target its caller names: the tree's row menu
+// passes treeInsertTarget() and the palette's Ctrl/Cmd+Enter the focused terminal. Absolute, not relative: it is correct
+// no matter where the agent has cd'd, whereas a relative path is silently wrong the moment the tree root and the
+// session's cwd diverge — which they do, because a manual root pick survives until a DIFFERENT tab is focused.
+// insertDecision (insertdecision.js) is asked first, for the target's own session: a terminal the user cannot see, or a
+// session waiting on them, refuses with a toast that names why, and nothing is typed and no focus moves (#337).
+// `absent` (optional) is what to say when there is no `term` instead of "focus a terminal first".
+function insertPathAtPrompt(path, term, absent) {
+  if (term && insertRefused(term)) return;
   const res = insertTextAtPrompt(term, shellQuote(path) + " ");
-  if (res.ok) { focusTerminal(); return; } // closeRowMenu hid the button that had focus
-  showToast(
-    res.reason === "noterm" ? "Focus a terminal first, then insert the path" :
-    res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
-    "That session is not connected, so the path was not inserted",
-    { error: true });
+  if (res.ok) { // closeRowMenu hid the button that had focus
+    if (term === (typeof focusedTerminal === "function" ? focusedTerminal() : null)) focusTerminal();
+    else term.grabFocus(); // the dock's session, while another pane has the keyboard
+    return;
+  }
+  showToast(insertFailText(res.reason, absent || "Focus a terminal first, then insert the path"), { error: true });
 }
 
 // copyPath copies and says so: a clipboard write is otherwise invisible, and on

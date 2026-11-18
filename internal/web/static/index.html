@@ -151,6 +151,7 @@
             <div id="dock-tabs" class="dk-tabs" role="tablist" aria-label="Open files"></div>
             <div id="dock-acts" class="dk-acts"><button id="drawer-max" type="button" class="btn btn-sm" title="Expand the dock over the panes"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span id="drawer-max-label">Full</span></button></div>
           </div>
+          <div id="dock-conflict"></div>
           <div id="dock-crumbs" class="dk-crumbs" hidden>
             <nav id="dock-trail" class="dk-trail" aria-label="File path"></nav>
             <span id="dock-edited" class="dk-edited" hidden></span>
@@ -200,6 +201,7 @@
         <span id="dock-agent-name" class="dk-ag-name"></span>
         <span id="dock-agent-st" class="dk-ag-st"></span>
         <span id="dock-agent-last" class="dk-ag-last"></span>
+        <button id="dock-agent-ins" type="button" class="btn btn-ghost btn-sm" title="Leave Full mode and type the selection's path:lines, or the file's path, at the prompt"><span>Insert at prompt</span></button>
         <button id="dock-agent-term" type="button" class="btn btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6M12 19h8"/></svg><span>Show terminal</span><span id="dock-agent-kbd" class="kbd"></span></button>
       </div>
     </aside>
@@ -956,6 +958,22 @@
   <script src="/changesmodel.js"></script>
   <script src="/dockcrumbs.js"></script>
   <script src="/dockstrip.js"></script>
+  <script src="/monacolang.js"></script>
+  <script src="/monacotheme.js"></script>
+  <script src="/monacokeys.js"></script>
+  <script src="/linediff.js"></script>
+  <script src="/editorref.js"></script>
+  <script src="/insertvisible.js"></script>
+  <script src="/insertdecision.js"></script>
+  <script src="/mdsafe.js"></script>
+  <script src="/editorstatus.js"></script>
+  <script src="/monacoload.js"></script>
+  <script src="/editortab.js"></script>
+  <script src="/editorsync.js"></script>
+  <script src="/editordiff.js"></script>
+  <script src="/editormd.js"></script>
+  <script src="/editorselbar.js"></script>
+  <script src="/editorfollow.js"></script>
   <script src="/filesdrawer.js"></script>
   <script src="/dockagent.js"></script>
   <script src="/dockchanges.js"></script>

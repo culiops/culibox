@@ -213,7 +213,7 @@
   .btn-ghost:hover, .btn.gh:hover { background: var(--hover); color: var(--fg); }
   .btn-danger, .btn.dgr { background: transparent; color: var(--red); border-color: rgba(240,106,106,.45); }
   .btn-danger:hover, .btn.dgr:hover { background: var(--red-tint); border-color: var(--red); }
-  /* Amber fill: the ask strip's Yes only (amber = an agent needs you). */
+  /* Amber fill: the ask strip's Yes and the conflict bar's Load the agent's version (amber = it needs you). */
   .btn-yes { background: var(--amber); color: var(--on-fill); font-weight: var(--w-semibold); }
   .btn-yes:hover { background: var(--amber-hover); }
   .btn-sm { min-height: var(--h-sm); padding: 0 8px; font-size: var(--t-sm); border-radius: var(--r-chip); }
@@ -1336,16 +1336,16 @@
   .dr-viewer { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
   .dr-vhost { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .dr-vhost[hidden], .dr-vempty[hidden] { display: none; }
-  .dr-vempty { flex: 1; padding: 18px 14px; color: var(--muted); font-size: var(--t-sm); }
+  .dr-vempty { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3); padding: 18px 14px; color: var(--muted); font-size: var(--t-sm); }
   /* --- the dock's editor tabs and breadcrumbs (spec 5.4, mockup B1) -------- */
   /* One strip per session, over the crumbs and the viewer. The tabs scroll sideways when there are more than fit
      (dockstrip.js turns a plain wheel into that); the actions area beside them (#dock-acts, the Full toggle) never
      shrinks, so nothing the bar offers is ever pushed out. With no tab the bar is not drawn, so Full mode is offered
      only with a file open; once on, the agent strip's Show terminal and Esc are the way out whatever is open. The
      active tab takes the viewer's own --bg and an accent underline, so it reads as the file below it. */
-  .dk-bar { flex: none; display: flex; align-items: stretch; min-width: 0; height: var(--h-lg); background: var(--panel); border-bottom: 1px solid var(--line); }
+  .dk-bar { flex: none; display: flex; align-items: stretch; min-width: 0; height: var(--h-lg); background: var(--panel); border-bottom: 1px solid var(--line); container: dkbar / inline-size; }
   .dk-bar[hidden], .dk-crumbs[hidden], .dk-edited[hidden] { display: none; }
-  .dk-tabs { position: relative; flex: 1 1 auto; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+  .dk-tabs { position: relative; flex: 1 1 auto; min-width: 140px; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
   .dk-acts { flex: none; display: flex; align-items: center; gap: var(--sp-1); padding: 0 6px; }
   .dk-acts:empty { display: none; }
   /* Full / Exit full: the kit's small button, its icon and word on one line. Exit full wears the accent border (mockup B5). Forced
@@ -1409,10 +1409,114 @@
   .dk-sep { flex: none; padding: 0 3px; }
   .dk-edited { flex: none; display: inline-flex; align-items: center; gap: 6px; }
   .dk-edited::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  /* A read-only file's tab wears a small padlock after its name (drawn here, like the dirty dot, so no glyph has to exist in a
+     font): a body and a shackle in the muted colour. */
+  .dk-lock { display: none; flex: none; position: relative; width: 8px; height: 6px; margin: 5px 3px 0; border-radius: 1.5px; background: var(--muted); }
+  .dk-lock::before { content: ""; position: absolute; left: 1.5px; bottom: 100%; width: 3px; height: 3px; border: 1.2px solid var(--muted); border-bottom: 0; border-radius: 3px 3px 0 0; }
+  .dk-tab[data-locked="1"] .dk-lock { display: block; }
+  /* --- the editor (editortab.js, mockup B1) -------------------------------------------------------------------------- */
+  /* A tab's body: a line saying why the file is read-only (only then), the editor, and the status bar. The Monaco element is the
+     dock's one shared editor: it is moved into the shown tab's .dk-ed-body and fills it (Monaco lays itself out on resize). */
+  .dk-ed { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .dk-ed-note { flex: none; padding: 3px 10px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); overflow-wrap: anywhere; }
+  .dk-ed-note[hidden], .dk-sb[hidden], .dk-vact[hidden] { display: none; }
+  .dk-ed-body { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+  .dk-ed-mon { position: absolute; inset: 0; }
+  /* The conflict bar (editorsync.js, mockup B4): amber because the buffer needs the user. The sentence takes the room and wraps;
+     the actions wrap under it when the dock is narrow, so none of them is ever pushed out. */
+  .dk-conflict {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 12px;
+    background: var(--amber-tint); border-bottom: 1px solid color-mix(in srgb, var(--amber) 30%, transparent); font: var(--t-md)/var(--lh-md) var(--font-ui);
+  }
+  .dk-conflict[hidden], .dk-ed-cmp[hidden], .dk-ed-body[hidden] { display: none; }
+  /* Where the shown tab's bar stands (EditorTab.placeBar): between the tab strip and the crumbs, as in mockup B4. Empty, it has no height. */
+  #dock-conflict { flex: none; }
+  .dk-conflict-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+  .dk-conflict-msg { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; color: var(--fg); unicode-bidi: isolate; }
+  .dk-conflict-msg b { font-weight: var(--w-semibold); }
+  .dk-conflict-acts { flex: none; display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  /* Compare (the disk beside the buffer): a line saying what is shown and how to leave, then the diff, in place of the editor. */
+  .dk-ed-cmp { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+  .dk-cmp-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 10px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
+  .dk-cmp-body { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+  /* The status bar (mockup B1 .esb): the branch and "Saved" on the left; Ln/Col, indentation, encoding, line ending and language on the
+     right. One 24px line that never wraps; what does not fit is cut at the left group, so the right group keeps its words. */
+  .dk-sb {
+    flex: none; display: flex; align-items: center; gap: 14px; height: 24px; padding: 0 12px; min-width: 0; overflow: hidden;
+    background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); white-space: nowrap;
+  }
+  .dk-sb-branch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+  .dk-sb-branch[hidden], .dk-sb-saved[hidden] { display: none; }
+  .dk-sb-saved { flex: none; color: var(--ok); }
+  .dk-sb-r { flex: none; display: flex; gap: 14px; margin-left: auto; }
+  /* The tab's own actions in the bar (the Code | Changes toggle, Follow and the ⋯): left of Full. */
+  .dk-vact { flex: none; display: flex; align-items: center; gap: var(--sp-1); }
+  /* Follow (editorfollow.js): an eye and the word, a size down like the toggle beside it. On it wears the accent (mockup B1): a faint
+     accent fill and an accent ring over the kit's pressed look. */
+  .dk-follow { flex: none; }
+  .dk-follow svg { flex: none; }
+  /* The kit's .btn and .seg are display:flex rules that a hidden attribute does not beat: what the tab's actions hide (the toggle and the
+     ⋯ of a file that is not text) and the empty dock's Follow while there is no session. */
+  .dk-vact > [hidden], .dk-follow[hidden] { display: none; }
+  .dk-follow[aria-pressed="true"] { background: var(--accent-tint); color: var(--fg); box-shadow: inset 0 0 0 1px var(--accent); }
+  .dk-follow[aria-pressed="true"]:hover { background: var(--accent-tint); }
+  /* The Code | Changes toggle (editordiff.js): the kit's .seg, a size down so it sits level with the Full button beside it. Changes
+     can be aria-disabled, its reason in the title: it stays reachable by hover and keyboard, dimmed by the one disabled look
+     (#169), and gets no hover fill. */
+  .dk-seg.seg { flex: none; padding: 1px; }
+  .dk-seg > .seg-item { height: 22px; padding: 0 9px; }
+  .dk-seg > .seg-item[aria-disabled="true"]:hover { background: transparent; }
+  .dk-seg > .seg-item[hidden] { display: none; } /* Preview, for a file that is not markdown (the kit's .seg-item is a flex box a hidden attribute does not beat) */
+  /* A narrow dock (400 to 500 px at 1280 and 1440 with the sidebar open) cannot hold the words of the bar's actions and a tab name: below
+     640 px of bar the toggle, Follow and Full show only their icons (the words stay in the page, clipped, for screen readers and
+     tooltips), so what is left is the tab strip, which keeps a floor of its own (.dk-tabs). The bar is the size container. */
+  .dk-seg-ic { display: none; flex: none; }
+  @container dkbar (max-width: 639px) {
+    .dk-seg-ic { display: block; }
+    .dk-seg-t, .dk-follow-t, #drawer-max-label {
+      position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
+    .dk-seg > .seg-item { position: relative; padding: 0 7px; }
+    .dk-follow, #drawer-max { position: relative; padding-left: 7px; padding-right: 7px; }
+  }
+  /* The Changes view (editordiff.js) fills the tab's body, in place of the editor; its header is the compare view's. */
+  .dk-ed-body > .dk-ed-cmp { position: absolute; inset: 0; }
+  /* The markdown Preview (editormd.js) fills the body the same way, and is the scroller. The document is the phone's .md-body (app.css),
+     given mockup B4's margins: 36px on the left and 28px on the right, 18px above. The pane takes the keyboard (Mod+S, the arrows),
+     so its ring sits inside it. */
+  .dk-ed-body > .dk-md { position: absolute; inset: 0; overflow: auto; background: var(--bg); }
+  .dk-md:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-md .md-body { padding: 18px 28px 24px 36px; }
+  /* The gutter marks of the lines that differ from git (editordiff.js), drawn by Monaco in the column beside the line numbers: a 3px
+     strip, green for added lines and blue for modified ones (the theme's own colours), and a small red wedge on the line a removal
+     sits in front of. Monaco sets the width of the column's box itself, so the strip's is stated over it. */
+  .dk-g-add, .dk-g-mod { margin-left: 3px; width: 3px !important; }
+  .dk-g-add { background: var(--ok); }
+  .dk-g-mod { background: var(--accent); }
+  .dk-g-del { margin-left: 3px; width: 7px !important; background: linear-gradient(135deg, var(--red) 50%, transparent 50%) top left / 7px 7px no-repeat; }
+  /* The selection bar (editorselbar.js, mockup B1): a Monaco content widget over the start of the selection, on --panel with the
+     kit's popover shadow. Its buttons are the kit's: Insert at prompt is the primary (.btn-primary), Copy and P3's are ghosts. The
+     script stops the mousedown on it, so a press never takes the keyboard from the editor. */
+  .dk-selbar {
+    display: flex; align-items: center; gap: 2px; padding: 3px; white-space: nowrap;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: var(--e-pop);
+  }
+  .dk-selbar-b svg { flex: none; width: 14px; height: 14px; }
+  /* The line a path:line link opened (the read view's .vl-target): a faint band over the line and a bar in its margin. */
+  .dk-target { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .dk-target-m { box-shadow: inset 3px 0 0 var(--accent); }
+  /* The ⋯ menu's font row: the label, A-, the size and A+. The two steps are menu rows (so the arrow keys reach them) that keep
+     their own width, and a press leaves the menu open. They hang from #ft-menu because app.css's `#ft-menu button` (full width,
+     no border) is an id rule that a class rule alone cannot out-rank. */
+  #ft-menu .dk-fs { display: flex; align-items: center; gap: 6px; height: var(--h-menu); padding: 0 4px 0 36px; font-size: var(--t-md); }
+  #ft-menu .dk-fs .menu-text { white-space: nowrap; }
+  #ft-menu .dk-fs .menu-item.dk-fs-btn { flex: none; width: auto; min-width: 32px; height: 24px; justify-content: center; padding: 0 8px; border: 1px solid var(--line); }
+  #ft-menu .dk-fs .menu-item.dk-fs-btn:hover { border-color: var(--accent); }
+  .dk-fs-val { flex: none; min-width: 3ch; text-align: center; font-family: var(--font-mono); font-size: var(--t-xs); color: var(--muted); }
   /* Every name the dock draws from the workspace or from git (tab names, crumbs, Changes rows, tree rows, the root header, and the
      branch name above) is isolated for bidirectional text: a file or folder name can hold Unicode bidi format characters, which
      would otherwise reorder the counts, the git letter or the separators drawn next to it. */
-  .dk-name, .dk-crumb, .dk-nm, .dk-dir, .dk-root-name, .dk-root-path, #drawer .ft-name { unicode-bidi: isolate; }
+  .dk-name, .dk-crumb, .dk-nm, .dk-dir, .dk-root-name, .dk-root-path, .dk-cmp-base, #drawer .ft-name { unicode-bidi: isolate; }
   /* The agent strip (Full mode only, mockup B5): the session stays in view while the terminal is covered. One 36px line at the
      bottom of the dock: the dot, the name, the status words, the last thing the agent did (the one part that gives way: it is
      cut with an ellipsis, so the line never wraps and the strip never changes height) and Show terminal with its chord. */

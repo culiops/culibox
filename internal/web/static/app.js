@@ -787,16 +787,21 @@ function setDrawerMax(on) {
 // discard ask. The session's pane takes the keyboard back once Full mode is really over: at once for Exit full, and for the
 // close when applyDrawer has applied it (`after`: after Discard, never after Cancel, so a dock that stays up keeps its
 // focus). false when the dock is not in Full mode, so the shortcut leaves the key alone.
-function dockShowTerminal() {
+// `then` (optional) runs at that same moment, once Full mode is over and the terminal is on screen, and never when it stays: Insert at
+// prompt, from the strip (dockAgentInsert) and from the selection bar (both through editorInsertLeavingFull), asks the insert decision
+// from it, on the prompt that is now visible.
+function dockShowTerminal(then) {
   const dr = $("drawer");
   if (!dr || dr.hidden || dr.dataset.max !== "1") return false;
   const sid = drawerState.sessionId;
   const focus = () => {
     const term = sid ? terminalTabFor(sid) : null;
     const cell = term ? cells.find((c) => c.tabs.includes(term)) : null;
-    if (!cell) return;
-    setFocusedCell(cell);
-    if (cellTerminal(cell) === term) term.grabFocus();
+    if (cell) {
+      setFocusedCell(cell);
+      if (cellTerminal(cell) === term) term.grabFocus();
+    }
+    if (typeof then === "function") then();
   };
   if (dr.dataset.forced === "1") {
     applyDrawer({ open: null, sessionId: sid }, { after: focus });
@@ -815,6 +820,7 @@ $("drawer-max").onclick = () => {
   else setDrawerMax(dr.dataset.max !== "1");
 };
 $("dock-agent-term").onclick = () => dockShowTerminal();
+$("dock-agent-ins").onclick = () => dockAgentInsert();
 // Escape restores a maximized drawer (maxEscapeRestores decides). On the
 // document, not the drawer: a tree row click leaves focus on body. The viewer
 // toolbar's menus (viewertoolbar.js, which loads earlier) take focus when they
@@ -829,7 +835,7 @@ document.addEventListener("keydown", (e) => {
   const rm = $("ft-menu");
   const at = {
     where: t === document.body || t === document.documentElement ? "body" : dr && dr.contains(t) ? "drawer" : "other",
-    owned: !!(t && t.closest && t.closest("input, textarea, [contenteditable], .CodeMirror, [role=menu]")),
+    owned: escOwnedBy(t),
     menuOpen: !!(vtMenuOpen() || (rm && rm.classList.contains("open"))),
     prevented: e.defaultPrevented,
   };
@@ -7727,8 +7733,14 @@ setInterval(async () => {
 // dispatcher) because xterm listens on its textarea and forwards every
 // combination it does not recognise into the running agent, so a bubbling
 // handler would type the key into the process instead of acting on the app.
+//
+// Inside the dock's Monaco editor the registry still wins: a chord it admits there (Ctrl+Shift+K, F6, ...) is handled here and
+// stopped before Monaco's own binding for it (delete line, ...) can also run. The two chords that really are editing commands,
+// find and go to line, are Monaco's while it has focus (registrySkipsInEditor, monacokeys.js).
 document.addEventListener("keydown", (e) => {
-  dispatchShortcut(e, shortcutContext(document.activeElement, dialogsOpen(), !!currentPage(), mobileActive(window.innerWidth)), IS_MAC);
+  const inMonaco = !!(e.target && e.target.closest && e.target.closest(".monaco-editor"));
+  dispatchShortcut(e, shortcutContext(document.activeElement, dialogsOpen(), !!currentPage(), mobileActive(window.innerWidth)), IS_MAC,
+    (id) => registrySkipsInEditor(id, inMonaco));
 }, true);
 
 // cellVisible: the cell's own element is attached and laid out. On a mobile

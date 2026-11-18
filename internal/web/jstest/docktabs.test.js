@@ -548,6 +548,14 @@ test("dockTabItems: one item per tab, with the active one, the preview, the dirt
   assert.deepEqual(items.map((i) => i.key), keys(st));
 });
 
+test("dockTabItems: locked follows the hook; no hook, not locked", () => {
+  const st = open(open(EMPTY, "/p/a", false), "/p/b", false);
+  const items = D.dockTabItems(st, { locked: (key) => key === D.dockTabKey("/p/b", null) });
+  assert.deepEqual(items.map((i) => [i.path, i.locked]), [["/p/a", false], ["/p/b", true]]);
+  assert.equal(D.dockTabItems(st, { locked: () => "yes" })[0].locked, true);
+  assert.equal(D.dockTabItems(st)[0].locked, false);
+});
+
 test("dockTabItems: only M, A, U and C are letters; a box file has none; no hooks, no dot and no letter", () => {
   let st = open(EMPTY, "/p/a", false);
   st = open(st, "/p/b", false);

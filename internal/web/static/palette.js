@@ -578,7 +578,7 @@ function initPalette() {
       e.preventDefault();
       const p = palItems[palSel].path;
       closePalette(); // see the copy button: a modal dialog makes the rest of the page inert
-      insertPathAtPrompt(p);
+      insertPathAtPrompt(p, typeof focusedTerminal === "function" ? focusedTerminal() : null); // the palette keeps the terminal that has the keyboard
     }
     else if (e.key === "Enter") { e.preventDefault(); runItem(palItems[palSel]); }
   });

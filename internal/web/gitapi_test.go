@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,12 +31,21 @@ type fakeGit struct {
 	diffs    []fakeDiffCall
 	bases    []gitview.Target
 	numstats []fakeNumstatCall
+	shows    []fakeShowCall
 	// numGate, when set, holds every Numstat until it is closed: a slow diff.
 	numGate chan struct{}
 	st      gitview.Status
 	diff    gitview.Diff
 	base    gitview.BaseInfo
 	ns      gitview.Numstat
+	blob    gitview.Blob
+	raw     []byte // what ShowRaw returns beside blob
+}
+
+type fakeShowCall struct {
+	T        gitview.Target
+	Rev, Rel string
+	Raw      bool
 }
 
 type fakeNumstatCall struct {
@@ -115,6 +125,26 @@ func (f *fakeGit) numstat(t gitview.Target, sc gitview.Scope, fresh bool) gitvie
 	return ns
 }
 
+func (f *fakeGit) Show(_ context.Context, t gitview.Target, rev, rel string) gitview.Blob {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shows = append(f.shows, fakeShowCall{t, rev, rel, false})
+	if f.blob.State == "" {
+		return gitview.Blob{State: "ok", Content: "package main\n"}
+	}
+	return f.blob
+}
+
+func (f *fakeGit) ShowRaw(_ context.Context, t gitview.Target, rev, rel string) ([]byte, gitview.Blob) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shows = append(f.shows, fakeShowCall{t, rev, rel, true})
+	if f.blob.State == "" {
+		return f.raw, gitview.Blob{State: "ok"}
+	}
+	return f.raw, f.blob
+}
+
 // statusCalls is how many Status calls have been made so far.
 func (f *fakeGit) statusCalls() int {
 	f.mu.Lock()
@@ -125,7 +155,7 @@ func (f *fakeGit) statusCalls() int {
 func (f *fakeGit) calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.statuses) + len(f.diffs) + len(f.bases) + len(f.numstats)
+	return len(f.statuses) + len(f.diffs) + len(f.bases) + len(f.numstats) + len(f.shows)
 }
 
 // hostGitServer is a server with a resolved temp $HOME and no boxed trees.
@@ -1394,5 +1424,399 @@ func TestGitNumstatReadsStatusAlongsideNotAfterANumstat(t *testing.T) {
 	}
 	if n := g.statusCalls(); n != 1 {
 		t.Fatalf("Status ran %d times for one request, want 1", n)
+	}
+}
+
+func decodeBlob(t *testing.T, rr *httptest.ResponseRecorder) gitview.Blob {
+	t.Helper()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (%s)", rr.Code, rr.Body)
+	}
+	var b gitview.Blob
+	if err := json.Unmarshal(rr.Body.Bytes(), &b); err != nil {
+		t.Fatalf("decode %s: %v", rr.Body, err)
+	}
+	return b
+}
+
+func showBody(p, scope string, raw bool) string {
+	b, _ := json.Marshal(map[string]any{"path": p, "scope": scope, "raw": raw})
+	return string(b)
+}
+
+func postShow(s *Server, p, scope string) *httptest.ResponseRecorder {
+	return gitPost(s.handleGitShow, "/api/git/show", showBody(p, scope, false))
+}
+
+func postShowRaw(s *Server, p, scope string) *httptest.ResponseRecorder {
+	return gitPost(s.handleGitShow, "/api/git/show", showBody(p, scope, true))
+}
+
+// showRepo is a repo in a host server's $HOME with the given files on disk.
+func showRepo(t *testing.T, files ...string) (s *Server, repo string, g *fakeGit) {
+	t.Helper()
+	s, h, g := hostGitServer(t)
+	repo = filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	for _, f := range files {
+		mustWrite(t, filepath.Join(repo, f), "on disk\n")
+	}
+	return s, repo, g
+}
+
+func TestGitShowHandlerOK(t *testing.T) {
+	s, repo, g := showRepo(t, "sub/a.go")
+	g.blob = gitview.Blob{State: "ok", Reason: "stray", Content: "package a\n"}
+	rr := postShow(s, filepath.Join(repo, "sub", "a.go"), "head")
+	b := decodeBlob(t, rr)
+	if b.State != "ok" || b.Reason != "" || b.Content != "package a\n" || b.Missing || b.Truncated {
+		t.Fatalf("show = %+v", b)
+	}
+	// The wire shape the client reads.
+	for _, key := range []string{`"state":"ok"`, `"content":"package a\n"`, `"truncated":false`} {
+		if !strings.Contains(rr.Body.String(), key) {
+			t.Errorf("reply %s lacks %s", rr.Body, key)
+		}
+	}
+	tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+	if len(g.shows) != 1 || g.shows[0] != (fakeShowCall{tg, "HEAD", "sub/a.go", false}) || len(g.bases) != 0 || len(g.statuses) != 0 || len(g.diffs) != 0 {
+		t.Fatalf("calls: shows=%+v bases=%+v, want one HEAD Show of sub/a.go in %+v", g.shows, g.bases, tg)
+	}
+
+	// A path HEAD does not have, and a cut blob, are what the runner said.
+	g.blob = gitview.Blob{State: "ok", Missing: true}
+	if b := decodeBlob(t, postShow(s, filepath.Join(repo, "sub", "a.go"), "head")); b.State != "ok" || !b.Missing || b.Content != "" {
+		t.Fatalf("missing: %+v", b)
+	}
+	if rr := postShow(s, filepath.Join(repo, "sub", "a.go"), "head"); !strings.Contains(rr.Body.String(), `"missing":true`) {
+		t.Fatalf("missing is not on the wire: %s", rr.Body)
+	}
+	g.blob = gitview.Blob{State: "ok", Content: "xx", Truncated: true}
+	if b := decodeBlob(t, postShow(s, filepath.Join(repo, "sub", "a.go"), "head")); !b.Truncated || b.Content != "xx" {
+		t.Fatalf("truncated: %+v", b)
+	}
+}
+
+func TestGitShowBranchScopeUsesMergeBase(t *testing.T) {
+	s, repo, g := showRepo(t, "a.go")
+	mb := strings.Repeat("b", 40)
+	g.base = gitview.BaseInfo{State: "ok", Branch: "feat", BaseRef: "refs/remotes/origin/develop", BaseName: "origin/develop", MergeBase: mb, Ahead: true}
+	// A rev in the body is not read: the rev is the one Base derived.
+	body := `{"path":` + strconv.Quote(filepath.Join(repo, "a.go")) + `,"scope":"branch","rev":"-x","baseRef":"refs/heads/evil","base":"HEAD~1"}`
+	decodeBlob(t, gitPost(s.handleGitShow, "/api/git/show", body))
+	tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+	if len(g.shows) != 1 || g.shows[0] != (fakeShowCall{tg, mb, "a.go", false}) || len(g.bases) != 1 || g.bases[0] != tg {
+		t.Fatalf("calls: shows=%+v bases=%+v, want one Base and a Show at %s", g.shows, g.bases, mb)
+	}
+	// "head" never asks for a base.
+	g.bases, g.shows = nil, nil
+	decodeBlob(t, postShow(s, filepath.Join(repo, "a.go"), "head"))
+	if len(g.bases) != 0 || len(g.shows) != 1 || g.shows[0].Rev != "HEAD" {
+		t.Fatalf("head: shows=%+v bases=%+v", g.shows, g.bases)
+	}
+}
+
+func TestGitShowNoBaseUnavailable(t *testing.T) {
+	s, repo, g := showRepo(t, "a.go", "img.png")
+	for name, c := range map[string]struct {
+		base   gitview.BaseInfo
+		state  string
+		reason string
+	}{
+		"no base":     {gitview.BaseInfo{State: "nobase", Reason: "git said /secret/path"}, "unavailable", msgGitNoBase},
+		"unavailable": {gitview.BaseInfo{State: "unavailable", Reason: "fatal: /secret/path: bad object"}, "unavailable", msgGitNotAvailable},
+		"timeout":     {gitview.BaseInfo{State: "unavailable", Reason: "git timed out"}, "unavailable", msgGitTimeout},
+		"not a repo":  {gitview.BaseInfo{State: "notrepo"}, "notrepo", ""},
+	} {
+		g.base = c.base
+		for _, rr := range []*httptest.ResponseRecorder{postShow(s, filepath.Join(repo, "a.go"), "branch"), postShowRaw(s, filepath.Join(repo, "img.png"), "branch")} {
+			b := decodeBlob(t, rr)
+			if b.State != c.state || b.Reason != c.reason || b.Content != "" || b.Missing {
+				t.Errorf("%s: show = %+v, want %s %q", name, b, c.state, c.reason)
+			}
+		}
+	}
+	if len(g.shows) != 0 {
+		t.Fatalf("Show ran with no base: %+v", g.shows)
+	}
+}
+
+func TestGitShowScopeIsHeadOrBranch(t *testing.T) {
+	s, repo, g := showRepo(t, "a.go")
+	p := filepath.Join(repo, "a.go")
+	for _, scope := range []string{"", "HEAD", "Head", "BRANCH", " branch", "branch\n", "refs/heads/main", "-x", "main", "origin/main", "merge-base"} {
+		if rr := postShow(s, p, scope); rr.Code != http.StatusBadRequest {
+			t.Errorf("scope %q: code = %d, want 400 (%s)", scope, rr.Code, rr.Body)
+		}
+	}
+	for _, body := range []string{`{"path":` + strconv.Quote(p) + `}`, `{"path":` + strconv.Quote(p) + `,"scope":1}`, `{"path":` + strconv.Quote(p) + `,"scope":null}`, `{"path":` + strconv.Quote(p) + `,"scope":["branch"]}`, `{"path":` + strconv.Quote(p) + `,"scope":"head","raw":"yes"}`} {
+		if rr := gitPost(s.handleGitShow, "/api/git/show", body); rr.Code != http.StatusBadRequest {
+			t.Errorf("body %s: code = %d, want 400 (%s)", body, rr.Code, rr.Body)
+		}
+	}
+	if g.calls() != 0 {
+		t.Fatalf("runner called %d times for a bad scope", g.calls())
+	}
+	for _, scope := range []string{"head", "branch"} {
+		if b := decodeBlob(t, postShow(s, p, scope)); b.State != "ok" {
+			t.Errorf("scope %q: %+v", scope, b)
+		}
+	}
+}
+
+func TestGitShowRawImageHeaders(t *testing.T) {
+	s, repo, g := showRepo(t, "img.png", "logo.SVG", "pic.jpeg")
+	png := []byte("\x89PNG\r\n\x1a\n\x00\xff\xfe not utf-8")
+	g.raw = png
+	for file, ctype := range map[string]string{"img.png": "image/png", "logo.SVG": "image/svg+xml", "pic.jpeg": "image/jpeg"} {
+		g.shows = nil
+		rr := postShowRaw(s, filepath.Join(repo, file), "head")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: code = %d (%s)", file, rr.Code, rr.Body)
+		}
+		h := rr.Header()
+		if h.Get("Content-Type") != ctype {
+			t.Errorf("%s: Content-Type = %q, want %q", file, h.Get("Content-Type"), ctype)
+		}
+		// The two headers the file preview sets: an SVG cannot run script, and nothing is sniffed.
+		if h.Get("Content-Security-Policy") != "sandbox" {
+			t.Errorf("%s: Content-Security-Policy = %q, want sandbox", file, h.Get("Content-Security-Policy"))
+		}
+		if h.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s: X-Content-Type-Options = %q, want nosniff", file, h.Get("X-Content-Type-Options"))
+		}
+		if h.Get("Content-Length") != strconv.Itoa(len(png)) || !bytes.Equal(rr.Body.Bytes(), png) {
+			t.Errorf("%s: body %q (length %q), want the blob as it is", file, rr.Body.Bytes(), h.Get("Content-Length"))
+		}
+		tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+		if len(g.shows) != 1 || g.shows[0] != (fakeShowCall{tg, "HEAD", file, true}) {
+			t.Errorf("%s: calls = %+v", file, g.shows)
+		}
+	}
+	// At the merge base, the rev is the server's, as for text.
+	mb := strings.Repeat("c", 40)
+	g.base = gitview.BaseInfo{State: "ok", BaseRef: "refs/heads/main", BaseName: "main", MergeBase: mb}
+	g.shows = nil
+	if rr := postShowRaw(s, filepath.Join(repo, "img.png"), "branch"); rr.Code != http.StatusOK || !bytes.Equal(rr.Body.Bytes(), png) {
+		t.Fatalf("branch raw: %d %q", rr.Code, rr.Body)
+	}
+	if len(g.shows) != 1 || g.shows[0].Rev != mb || !g.shows[0].Raw {
+		t.Fatalf("branch raw calls = %+v", g.shows)
+	}
+}
+
+func TestGitShowRawOtherOutcomesAreJSON(t *testing.T) {
+	s, repo, g := showRepo(t, "img.png")
+	p := filepath.Join(repo, "img.png")
+	// A new image has no HEAD side, and git failing is a fixed message: both
+	// are JSON, so a client tells them from the image by Content-Type.
+	g.blob = gitview.Blob{State: "ok", Missing: true}
+	rr := postShowRaw(s, p, "head")
+	if b := decodeBlob(t, rr); b.State != "ok" || !b.Missing || rr.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("missing: %+v %q", b, rr.Header().Get("Content-Type"))
+	}
+	g.blob = gitview.Blob{State: "unavailable", Reason: "fatal: /secret/path: bad object"}
+	rr = postShowRaw(s, p, "head")
+	if b := decodeBlob(t, rr); b.State != "unavailable" || b.Reason != msgGitNotAvailable || rr.Header().Get("Content-Security-Policy") != "" {
+		t.Fatalf("unavailable: %+v %v", b, rr.Header())
+	}
+	// A blob past the cap is cut, and a cut image is not served as the file.
+	g.blob = gitview.Blob{State: "ok", Truncated: true}
+	g.raw = []byte("\x89PNG")
+	if rr := postShowRaw(s, p, "head"); rr.Code != http.StatusRequestEntityTooLarge || bytes.Contains(rr.Body.Bytes(), []byte("PNG")) {
+		t.Fatalf("truncated raw: code = %d (%s), want 413", rr.Code, rr.Body)
+	}
+}
+
+func TestGitShowRawRefusesNonImage(t *testing.T) {
+	s, repo, g := showRepo(t, "a.go", "noext", "page.html", "x.png.txt", "real.go")
+	// A link named like an image that points at source is read by its real name.
+	if err := os.Symlink(filepath.Join(repo, "real.go"), filepath.Join(repo, "link.png")); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"a.go", "noext", "page.html", "x.png.txt", "link.png"} {
+		if rr := postShowRaw(s, filepath.Join(repo, f), "head"); rr.Code != http.StatusBadRequest {
+			t.Errorf("%s: code = %d, want 400 (%s)", f, rr.Code, rr.Body)
+		}
+	}
+	if g.calls() != 0 {
+		t.Fatalf("git ran for a non-image raw request: %+v", g.shows)
+	}
+	// The same files are fine as text.
+	if b := decodeBlob(t, postShow(s, filepath.Join(repo, "page.html"), "head")); b.State != "ok" {
+		t.Fatalf("text of a non-image: %+v", b)
+	}
+}
+
+func TestGitShowRefusedOutside(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	other := t.TempDir() // a sibling of $HOME, not inside it
+	mustMkdirAll(t, filepath.Join(other, ".git", "worktrees", "w"))
+	wt := filepath.Join(h, "wt")
+	mustWrite(t, filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(other, ".git", "worktrees", "w")+"\n")
+	mustWrite(t, filepath.Join(wt, "a.go"), "x\n")
+	for _, scope := range []string{"head", "branch"} {
+		for _, rr := range []*httptest.ResponseRecorder{postShow(s, filepath.Join(wt, "a.go"), scope), postShowRaw(s, filepath.Join(wt, "a.go"), scope)} {
+			if b := decodeBlob(t, rr); b.State != "unavailable" || b.Reason != msgGitOutside {
+				t.Fatalf("%s: show = %+v, want unavailable %q", scope, b, msgGitOutside)
+			}
+		}
+	}
+	// A repository above the viewable tree, and a mount path docker cannot take.
+	outside := t.TempDir()
+	mainRepo(t, outside)
+	mustWrite(t, filepath.Join(outside, "a.go"), "x\n")
+	if rr := postShow(s, filepath.Join(outside, "a.go"), "head"); rr.Code != http.StatusForbidden {
+		t.Fatalf("outside home: code = %d, want 403", rr.Code)
+	}
+	unsafe := filepath.Join(h, "a,readonly=false")
+	mainRepo(t, unsafe)
+	mustWrite(t, filepath.Join(unsafe, "a.go"), "x\n")
+	if b := decodeBlob(t, postShow(s, filepath.Join(unsafe, "a.go"), "head")); b.State != "unavailable" || b.Reason != msgGitNotAvailable {
+		t.Fatalf("unsafe path: %+v", b)
+	}
+	// A file link inside the checkout that leaves the viewable tree is refused by the fs policy.
+	secret := filepath.Join(t.TempDir(), "secret.go")
+	mustWrite(t, secret, "x\n")
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	if err := os.Symlink(secret, filepath.Join(repo, "leak.go")); err != nil {
+		t.Fatal(err)
+	}
+	if rr := postShow(s, filepath.Join(repo, "leak.go"), "head"); rr.Code != http.StatusForbidden {
+		t.Fatalf("link out of the tree: code = %d (%s), want 403", rr.Code, rr.Body)
+	}
+	if n := g.calls(); n != 0 {
+		t.Fatalf("runner called %d times for a refused target", n)
+	}
+}
+
+func TestGitShowNotAFile(t *testing.T) {
+	s, repo, g := showRepo(t, "d/a.go")
+	for _, p := range []string{filepath.Join(repo, "d"), repo} {
+		if rr := postShow(s, p, "head"); rr.Code != http.StatusBadRequest {
+			t.Fatalf("%s: code = %d, want 400", p, rr.Code)
+		}
+	}
+	// A file that is not there has no disk side to compare: a 404, as for a diff.
+	if rr := postShow(s, filepath.Join(repo, "gone.go"), "head"); rr.Code != http.StatusNotFound {
+		t.Fatalf("missing: code = %d, want 404", rr.Code)
+	}
+	if g.calls() != 0 {
+		t.Fatal("runner called")
+	}
+}
+
+func TestGitShowBoxedOK(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	g := &fakeGit{}
+	s.Git = g
+	mainRepo(t, ws)
+	mustWrite(t, filepath.Join(ws, "sub", "a.go"), "x\n")
+	if b := decodeBlob(t, postShow(s, filepath.Join(ws, "sub", "a.go"), "head")); b.State != "ok" {
+		t.Fatalf("show = %+v", b)
+	}
+	// Boxed: the contained root is the only mount (Target.Root).
+	want := fakeShowCall{gitview.Target{Root: ws, Top: ws, Common: filepath.Join(ws, ".git")}, "HEAD", "sub/a.go", false}
+	if len(g.shows) != 1 || g.shows[0] != want {
+		t.Fatalf("calls = %+v, want %+v", g.shows, want)
+	}
+}
+
+func TestGitShowGuards(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	mainRepo(t, filepath.Join(h, "repo"))
+	get := httptest.NewRecorder()
+	s.handleGitShow(get, httptest.NewRequest(http.MethodGet, "/api/git/show?path="+h, nil))
+	if get.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET code = %d, want 405", get.Code)
+	}
+	for _, body := range []string{"", "{", `{"path":"rel/a.go","scope":"head"}`, `{"path":"","scope":"head"}`, `{"path":"/` + strings.Repeat("a", 9000) + `","scope":"head"}`} {
+		if rr := gitPost(s.handleGitShow, "/api/git/show", body); rr.Code != http.StatusBadRequest {
+			t.Fatalf("body %.40q: code = %d, want 400 (%s)", body, rr.Code, rr.Body)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/git/show", strings.NewReader(showBody(filepath.Join(h, "repo", "a.go"), "head", false)))
+	req.Header.Set("Origin", "https://evil.example")
+	rr := httptest.NewRecorder()
+	s.handleGitShow(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin code = %d, want 403", rr.Code)
+	}
+	if g.calls() != 0 {
+		t.Fatal("runner called on a refused request")
+	}
+}
+
+func TestGitShowNilRunnerAndNotRepo(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	plain := filepath.Join(h, "plain")
+	mustWrite(t, filepath.Join(plain, "a.go"), "x\n")
+	if b := decodeBlob(t, postShow(s, filepath.Join(plain, "a.go"), "head")); b.State != "notrepo" {
+		t.Fatalf("not a repo: %+v", b)
+	}
+	if g.calls() != 0 {
+		t.Fatal("runner called for a non-repo")
+	}
+	s.Git = nil
+	mainRepo(t, filepath.Join(h, "repo"))
+	for _, rr := range []*httptest.ResponseRecorder{postShow(s, filepath.Join(h, "repo", "a.go"), "head"), postShowRaw(s, filepath.Join(h, "repo", "a.png"), "head")} {
+		if b := decodeBlob(t, rr); b.State != "unavailable" || b.Reason != msgGitNoRuntime {
+			t.Fatalf("nil runner: %+v", b)
+		}
+	}
+}
+
+func TestGitShowStatesAndReasons(t *testing.T) {
+	s, repo, g := showRepo(t, "a.go")
+	p := filepath.Join(repo, "a.go")
+	// The runner's reason can carry git's stderr: only fixed messages reach the client.
+	for raw, want := range map[string]string{
+		"fatal: /secret/path: bad object deadbeef": msgGitNotAvailable,
+		"git timed out": msgGitTimeout,
+		"timed out waiting for a free git container": msgGitTimeout,
+		gitview.ReasonNoImage:                        msgGitNoImage,
+	} {
+		g.blob = gitview.Blob{State: "unavailable", Reason: raw}
+		if b := decodeBlob(t, postShow(s, p, "head")); b.State != "unavailable" || b.Reason != want || b.Content != "" {
+			t.Fatalf("raw %q: show = %+v, want reason %q", raw, b, want)
+		}
+	}
+	g.blob = gitview.Blob{State: "notrepo"}
+	if b := decodeBlob(t, postShow(s, p, "head")); b.State != "notrepo" {
+		t.Fatalf("notrepo: %+v", b)
+	}
+}
+
+// gitFileRel is the one path check of diff and show: what it refuses, both refuse.
+func TestGitFileRel(t *testing.T) {
+	_, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	mustWrite(t, filepath.Join(repo, "sub", "a b.go"), "x\n")
+	mustMkdirAll(t, filepath.Join(repo, "d"))
+	if err := os.Symlink(filepath.Join(repo, "sub", "a b.go"), filepath.Join(repo, "link.go")); err != nil {
+		t.Fatal(err)
+	}
+	tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+	if rel, err := gitFileRel(tg, filepath.Join(repo, "sub", "a b.go")); err != nil || rel != "sub/a b.go" {
+		t.Fatalf("file: rel = %q, err = %v", rel, err)
+	}
+	for name, c := range map[string]struct {
+		abs  string
+		want func(error) bool
+	}{
+		"directory":       {filepath.Join(repo, "d"), func(e error) bool { return errors.Is(e, errGitNotFile) }},
+		"the checkout":    {repo, func(e error) bool { return errors.Is(e, errGitNotFile) }},
+		"link":            {filepath.Join(repo, "link.go"), func(e error) bool { return errors.Is(e, errGitNotFile) }},
+		"gone":            {filepath.Join(repo, "gone.go"), func(e error) bool { return errors.Is(e, os.ErrNotExist) }},
+		"outside the top": {filepath.Join(h, "other.go"), func(e error) bool { return errors.Is(e, errGitOutside) }},
+	} {
+		if name == "outside the top" {
+			mustWrite(t, c.abs, "x\n")
+		}
+		if rel, err := gitFileRel(tg, c.abs); rel != "" || !c.want(err) {
+			t.Errorf("%s: rel = %q, err = %v", name, rel, err)
+		}
 	}
 }

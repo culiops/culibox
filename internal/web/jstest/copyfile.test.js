@@ -141,6 +141,9 @@ test("readOnlyFrom: only a successful read flagged readonly is read-only", () =>
   assert.equal(readOnlyFrom(okRes({ kind: "text", content: "x", readonly: true })), true);
   assert.equal(readOnlyFrom(okRes({ kind: "binary", size: 3, readonly: true })), true);
   assert.equal(readOnlyFrom(okRes({ kind: "text", content: "x" })), false);
+  // A text file that is not UTF-8 would be saved back with its bytes changed: no Edit for it either.
+  assert.equal(readOnlyFrom(okRes({ kind: "text", content: "x", utf8: false })), true);
+  assert.equal(readOnlyFrom(okRes({ kind: "text", content: "x", utf8: true })), false);
   assert.equal(readOnlyFrom(errRes(403, "the Claude scratch folder is read-only")), false);
   assert.equal(readOnlyFrom(okRes(null)), false);
   assert.equal(readOnlyFrom(undefined), false);

@@ -982,13 +982,13 @@ async function askPrompt(opts) {
 // shortcutContext builds the one ctx object shortcutFor (shortcuts.js) reads, so
 // no handler re-derives "where is focus" on its own. The three focus flags are
 // mutually exclusive: xterm's helper textarea is the terminal, a textarea inside
-// CodeMirror is the editor, and only then does a real text control count as an
-// input. SELECT is an input too: arrow keys in a select belong to the user.
+// CodeMirror or Monaco (the dock's editor, ruling R2) is the editor, and only then
+// does a real text control count as an input. SELECT is an input too: arrow keys in a select belong to the user.
 // Every field is a strict boolean; a missing dialog count is 0.
 function shortcutContext(activeElement, openDialogCount, pageOpen, mobile) {
   const ae = activeElement;
   const inTerminal = !!(ae && ae.classList && ae.classList.contains("xterm-helper-textarea"));
-  const inEditor = !inTerminal && !!(ae && ae.closest && ae.closest(".CodeMirror"));
+  const inEditor = !inTerminal && !!(ae && ae.closest && (ae.closest(".CodeMirror") || ae.closest(".monaco-editor")));
   const inInput =
     !inTerminal &&
     !inEditor &&

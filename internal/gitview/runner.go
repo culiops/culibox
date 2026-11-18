@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -34,6 +35,10 @@ const (
 	// path twice and some 100 bytes per file; hitting it reads as "toomany".
 	maxNumstatBytes = 8 << 20
 	maxDiffBytes    = 2 << 20
+	// maxBlobBytes bounds the text of a file at a revision (the editor's own
+	// text read cap); maxRawBlobBytes bounds the raw bytes of an image.
+	maxBlobBytes    = 2 << 20
+	maxRawBlobBytes = 10 << 20
 	// maxBaseBytes bounds what the two base runs print: five ref records and one id.
 	maxBaseBytes   = 64 << 10
 	maxReasonRunes = 200
@@ -123,7 +128,21 @@ type Diff struct {
 	Truncated bool   `json:"truncated"`
 }
 
-// Runner runs git status, diff, base and numstat lookups in throwaway containers. Zero durations and
+// Blob is one file's content at a revision. State is one of ok, notrepo,
+// unavailable. Missing marks an ok answer for a path the revision does not have
+// (an untracked or new file, or any file in a repository with no commit yet),
+// whose Content is empty. Content is cut at 2 MiB and marked Truncated. Reason
+// carries git's stderr only for unavailable, so a web handler must not forward
+// it as it is.
+type Blob struct {
+	State     string `json:"state"`
+	Reason    string `json:"reason,omitempty"`
+	Missing   bool   `json:"missing,omitempty"`
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated"`
+}
+
+// Runner runs git status, diff, base, numstat and file-at-revision lookups in throwaway containers. Zero durations and
 // limits take the defaults (10s timeout, 2s reuse, 5m idle, 2 parallel). It is
 // safe for concurrent use; its mutex is never held while docker runs.
 type Runner struct {
@@ -417,6 +436,95 @@ func (r *Runner) Diff(ctx context.Context, t Target, rel string, untracked bool)
 		b = trimPartialRune(b)
 	}
 	return Diff{State: "ok", Kind: DiffKind(b), Diff: string(b), Truncated: out.hit}
+}
+
+// missingRE is the end of what git cat-file says for a path the revision does
+// not have: "does not exist in" for a path nobody has, "exists on disk, but not
+// in" for the untracked file the mount does hold. It is anchored at the end so a
+// path that merely contains those words (a directory, which ends the message in
+// ": bad file") is not taken for one.
+var missingRE = regexp.MustCompile(`(does not exist in|exists on disk, but not in) '(HEAD|[0-9a-f]{40}|[0-9a-f]{64})'\s*$`)
+
+// noHeadRE is what git says for HEAD in a repository with no commit yet.
+var noHeadRE = regexp.MustCompile(`invalid object name 'HEAD'\.?\s*$`)
+
+// isMissing reports whether err is git (exit 128) saying that rev has no such
+// path, or, for HEAD, that there is no HEAD to have one.
+func isMissing(rev string, err error) bool {
+	if exitCode(err) != 128 {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	return missingRE.MatchString(msg) || (rev == "HEAD" && noHeadRE.MatchString(msg))
+}
+
+// Show returns the text of the file rel (relative to t.Top) as it is in rev,
+// which must be "HEAD" or a full object id, such as the MergeBase of Base: the
+// caller derives it, a client never names one. The blob is read as stored, with
+// no filter or textconv. It is not cached, since the editor asks for it when it
+// opens a file and again after the file or HEAD moved. Content past 2 MiB is
+// cut at a whole character and marked Truncated. A path the revision does not
+// have is ok and Missing. A refused target, rev or path, a docker failure or a
+// timeout is "unavailable".
+func (r *Runner) Show(ctx context.Context, t Target, rev, rel string) Blob {
+	data, b := r.cat(ctx, t, rev, rel, maxBlobBytes)
+	if b.Truncated {
+		data = trimPartialRune(data)
+	}
+	b.Content = string(data)
+	return b
+}
+
+// ShowRaw is Show for a file that is not text (an image): it returns the bytes
+// as they are, up to 10 MiB, and a Blob that has everything but Content. Past
+// the cap the bytes are cut and the Blob is Truncated, which no caller should
+// serve as the file.
+func (r *Runner) ShowRaw(ctx context.Context, t Target, rev, rel string) ([]byte, Blob) {
+	return r.cat(ctx, t, rev, rel, maxRawBlobBytes)
+}
+
+// cat runs one cat-file container and returns the (at most limit) bytes it
+// printed with a Blob that has everything but Content.
+func (r *Runner) cat(ctx context.Context, t Target, rev, rel string, limit int) ([]byte, Blob) {
+	if why := t.Unsafe(); why != "" {
+		return nil, Blob{State: "unavailable", Reason: why}
+	}
+	if !validRev(rev) {
+		return nil, Blob{State: "unavailable", Reason: "invalid revision"}
+	}
+	if !safePath(rel) {
+		return nil, Blob{State: "unavailable", Reason: "invalid path"}
+	}
+	ctx, cancel := context.WithTimeout(ctx, orDur(r.Timeout, defaultTimeout))
+	defer cancel()
+	release, err := r.acquire(ctx)
+	if err != nil {
+		return nil, Blob{State: "unavailable", Reason: errNoSlot.Error()}
+	}
+	defer release()
+	name := newName()
+	out := &capBuffer{max: limit}
+	err = r.Docker.RunStream(ctx, ShowArgs(t, r.Image, name, r.UID, r.GID, rev, rel), out)
+	// A path the revision lacks is git exiting on its own: the container is gone
+	// (--rm), so removing it would be pure overhead on what is the common case
+	// of opening a new file. Every other error (a cap hit, a timeout, a real
+	// failure) may leave the container running, so it is removed.
+	missing := err != nil && isMissing(rev, err)
+	if err != nil && !missing {
+		r.removeFailed(name)
+	}
+	switch {
+	case out.hit || errors.Is(err, errCapped):
+		return out.b, Blob{State: "ok", Truncated: true}
+	case missing:
+		return nil, Blob{State: "ok", Missing: true}
+	case err != nil:
+		if strings.Contains(err.Error(), "not a git repository") {
+			return nil, Blob{State: "notrepo"}
+		}
+		return nil, Blob{State: "unavailable", Reason: failReason(ctx, err)}
+	}
+	return out.b, Blob{State: "ok"}
 }
 
 // Base returns the base branch of t, the merge base of HEAD with it, and the

@@ -228,7 +228,7 @@ function world(width, listings) {
     makeDropZone: (el, dest, opts) => zones.push({ el, dest, opts }),
   });
   const run = (src, f) => new vm.Script(src, { filename: f || "t.js" }).runInContext(ctx);
-  for (const f of ["svgicon.js", "kitmenu.js", "copyfile.js", "fsops.js", "treestate.js", "filetree.js"]) run(read(f), f);
+  for (const f of ["svgicon.js", "kitmenu.js", "copyfile.js", "fsops.js", "treestate.js", "filetree.js", "insertdecision.js"]) run(read(f), f);
   // What initFileTree does before it wires the tree: the root and the tree element.
   run("ftRootPath = '/h/w'; ftTreeEl = document.getElementById('filetree');");
   ctx.ftTreeSetup(tree);
@@ -1005,7 +1005,7 @@ test("the viewer's line menu (anchored to a gutter, not a ⋯) closes the ⋯ th
 });
 
 // ---- the phone keeps today's menu ---------------------------------------------------------------------------------------
-test("phone: the row menu is today's path header, plain buttons and rules, with no kit class, role or focus move", async () => {
+test("phone: the row menu is today's path header, plain buttons and rules (no Insert path at prompt: every terminal is hidden on the Files screen), with no kit class, role or focus move", async () => {
   const w = world(390);
   const c = await w.render();
   const row = rowsOf(c)[2]; // a.txt
@@ -1016,7 +1016,7 @@ test("phone: the row menu is today's path header, plain buttons and rules, with 
   assert.strictEqual("aria-label" in w.menu.attrs, false);
   assert.deepStrictEqual(w.menu.children.map((n) => (n.tag === "hr" ? "---" : n.className === "ft-menu-path" ? "path:" + n.textContent : n.tag + ":" + n.textContent)), [
     "path:~/w/a.txt",
-    "button:Insert path at prompt", "button:Copy path", "button:Copy relative path", "button:Copy contents", "---",
+    "button:Copy path", "button:Copy relative path", "button:Copy contents", "---",
     "button:Download", "---", "button:Rename…", "button:Delete…",
   ]);
   assert.strictEqual(w.menu.all((n) => n.className.includes("menu-item") || n.className.includes("menu-sep")).length, 0);
