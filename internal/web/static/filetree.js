@@ -739,6 +739,11 @@ function insertPathAtPrompt(path, opts) {
       showToast("That session has no open terminal, so the path was not inserted", { error: true });
       return;
     }
+    if (!dockInsertVisible(term)) {
+      const name = typeof drawerSessionName === "function" ? drawerSessionName(dock) : "";
+      showToast((name ? name + "'s" : "That session's") + " terminal is a hidden tab: show it, then insert", { error: true });
+      return;
+    }
   }
   const res = insertTextAtPrompt(term, shellQuote(path) + " ");
   if (res.ok) { // closeRowMenu hid the button that had focus: the caret goes where the path went
@@ -770,14 +775,21 @@ function dockInsertTarget(sid, focused) {
   return want;
 }
 
-// dockInsertFocus: the path went to a terminal other than the focused one, so its pane takes the focus first, as Show terminal
-// does (app.js dockShowTerminal): the pane's focus ring and focusedTerminal() are where the keys are. Then the keyboard.
+// dockInsertVisible: is the terminal on screen? It is its pane's active tab (Cell.activeTab: a stacked session tab or a viewer
+// over the terminals is not), or the docked shell its pane shows (Cell._shownShell: null while the dock is hidden). An inactive
+// tab is not in the page but its socket stays open, so a path typed at it would land unseen (perhaps in a permission card; P1 has
+// no state gate on insert), and the keyboard would go to whatever else the pane shows.
+function dockInsertVisible(term) {
+  const pane = ftPaneOf(term);
+  return !!pane && (pane.activeTab === term || pane._shownShell() === term);
+}
+
+// dockInsertFocus: the path went to a visible terminal other than the focused one, so its pane takes the focus first, as Show
+// terminal does (app.js dockShowTerminal): the pane's focus ring and focusedTerminal() are where the keys are. Then the keyboard.
 function dockInsertFocus(term) {
   const pane = ftPaneOf(term);
   if (pane && typeof setFocusedCell === "function") setFocusedCell(pane);
-  const shown = !pane || (typeof cellTerminal === "function" ? cellTerminal(pane) === term : true) || pane.dockTabFor(term.id) === term;
-  if (shown && typeof term.grabFocus === "function") term.grabFocus();
-  else focusTerminal(); // the target is a tab stacked out of sight: the keyboard stays with the terminal on screen, not nowhere
+  if (typeof term.grabFocus === "function") term.grabFocus();
 }
 
 // copyPath copies and says so: a clipboard write is otherwise invisible, and on

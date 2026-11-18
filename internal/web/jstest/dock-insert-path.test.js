@@ -32,11 +32,16 @@ function term(id, log, over) {
   return Object.assign(t, over);
 }
 
-// A fake pane: its session tabs (cell.tabs: more than one once the pane cap is reached, they stack in one pane, one shown) and
-// its docked shells (Cell.dockTabs / dockTabFor: companion shells, a different thing from a stacked session tab).
-function cell(name, tabs, shells) {
-  const docked = new Map((shells || []).map((s) => [s.id, s]));
-  return { name, tabs, dockTabs: docked, dockTabFor: (id) => docked.get(id) || null };
+// A fake pane: its session tabs (cell.tabs: more than one once the pane cap is reached, they stack in one pane, one shown),
+// the tab on screen (activeTab: a session tab, or a viewer over the terminals), and its docked shells (Cell.dockTabs / dockTabFor:
+// companion shells, a different thing from a stacked session tab; _shownShell is the one on screen, null while the dock is hidden).
+function cell(name, tabs, shells, st) {
+  const docked = new Map((shells || []).map((sh) => [sh.id, sh]));
+  return {
+    name, tabs, dockTabs: docked, dockTabFor: (id) => docked.get(id) || null,
+    get activeTab() { return st.shown[name] || null; },
+    _shownShell() { return st.dockHidden[name] ? null : docked.values().next().value || null; },
+  };
 }
 
 // page: two panes, A (agent "a", with a shell "sh-a" docked in it) and B (agent "b"). B has the keyboard; the dock is pinned to A.
@@ -46,13 +51,15 @@ function page(o) {
   const a = term("a", log);
   const b = term("b", log);
   const shA = term("sh-a", log);
-  const cellA = cell("A", [a], [shA]);
-  const cellB = cell("B", [b]);
+  const cellA = cell("A", [a], [shA], st);
+  const cellB = cell("B", [b], [], st);
   const c = term("c", log); // another session; not in any pane until a test stacks it (stack)
   const tabs = { a, b, "sh-a": shA };
   const cellOf = { a: cellA, b: cellB };
   st.focus = { term: b }; // what focusedTerminal() returns
-  st.shown = { A: a, B: b }; // the tab each pane shows (cellTerminal)
+  st.shown = { A: a, B: b }; // the tab each pane shows (activeTab)
+  st.lastTerm = { A: a, B: b }; // what cellTerminal returns: the terminal last shown there, even behind a viewer
+  st.dockHidden = {}; // panes whose docked shell is hidden
   const doc = { handlers: {}, el: {} };
   const fakeEl = (id) => (doc.el[id] = { id, open: true, value: "", close() { this.open = false; }, showModal() { this.open = true; }, focus() {}, addEventListener(ev, fn) { (doc.handlers[id + ":" + ev] = doc.handlers[id + ":" + ev] || []).push(fn); }, querySelector: () => null });
   fakeEl("palette"); fakeEl("pal-input");
@@ -66,8 +73,9 @@ function page(o) {
     focusedTerminal: () => st.focus.term,
     terminalTabFor: (id) => tabs[id] || null,
     cells: [cellA, cellB],
-    cellTerminal: (cl) => st.shown[cl.name] || null,
-    setFocusedCell: (cl) => { st.focusedCells.push(cl.name); log.push("setFocusedCell:" + cl.name); st.focus.term = st.shown[cl.name]; },
+    cellTerminal: (cl) => st.lastTerm[cl.name] || null,
+    setFocusedCell: (cl) => { st.focusedCells.push(cl.name); log.push("setFocusedCell:" + cl.name); const t = st.shown[cl.name]; st.focus.term = t && t.kind === "terminal" ? t : null; },
+    drawerSessionName: (id) => ({ a: "alpha", b: "beta", c: "gamma", "sh-a": "shell" }[id] || id),
     drawerOwnsFileClicks: () => true,
     drawerState: { open: "files", sessionId: "a", pinned: true }, // the dock is pinned to A
     palRefresh: () => {}, palSelect: () => {}, runItem: () => {},
@@ -76,14 +84,14 @@ function page(o) {
   load(src("shortcuts.js"), "shortcuts.js");
   load(fnSource("upload.js", "shellQuote"), "shellQuote");
   load(fnSource("upload.js", "insertTextAtPrompt"), "insertTextAtPrompt");
-  for (const name of ["ftPaneOf", "dockInsertTarget", "dockInsertFocus", "insertPathAtPrompt"]) load(fnSource("filetree.js", name), name);
+  for (const name of ["ftPaneOf", "dockInsertTarget", "dockInsertVisible", "dockInsertFocus", "insertPathAtPrompt"]) load(fnSource("filetree.js", name), name);
   load(src("palette.js"), "palette.js");
   load("initPalette()", "init");
   const keydown = doc.handlers["pal-input:keydown"][0];
   return {
     ctx, st, log, tabs, a, b, c, shA, cellA, cellB,
     // Session C stacked in A's pane after A (a full pane cap puts a second session in the same pane as a tab), C shown.
-    stack: () => { cellA.tabs.push(c); tabs.c = c; st.shown.A = c; },
+    stack: () => { cellA.tabs.push(c); tabs.c = c; st.shown.A = c; st.lastTerm.A = c; },
     run: (code) => load(code, "test"),
     // Ctrl+Enter in the palette on a file row.
     paletteInsert: (p) => {
@@ -143,27 +151,69 @@ test("the focused terminal is in the dock session's pane (the agent, or a shell 
   assert.deepEqual(shB.sent, []);
 });
 
-test("another session stacked in the dock session's pane is NOT the dock session: its prompt never gets A's path", () => {
-  // The pane cap stacks sessions as tabs of one pane. Dock pinned to A (the pin survives this), pane 1 holds A and C, C shown and
-  // focused. A's file must not be typed at C's prompt: that is the defect B6 closed.
+// The path is typed at a prompt the user can SEE or not at all. P1 has no state gate on insert (the spec defers it to P2), so the
+// only protection against a path landing in a permission card is that the target prompt is on screen. An inactive tab is not in
+// the page (Cell.renderBody keeps the active tab's element) but its socket stays open, so a hidden target would take the text
+// silently.
+const noEffect = (p, why) => {
+  assert.deepEqual(p.a.sent.concat(p.b.sent, p.c.sent, p.shA.sent), [], "nothing typed anywhere" + why);
+  assert.deepEqual(p.log, [], "no focus moved, no setFocusedCell, no focusTerminal, no grab" + why);
+  assert.equal(p.st.toasts.length, 1, "one toast" + why);
+  assert.equal(p.st.toasts[0][1], true, "an error toast" + why);
+};
+
+test("(a) A stacked out of sight behind C, focus in C: the tree refuses; nothing is typed at C or A, no focus moves", () => {
+  // The pane cap stacks sessions as tabs of one pane. Dock pinned to A, pane 1 holds A and C, C shown and focused.
   const p = page();
   p.stack();
   p.st.focus.term = p.c;
   p.treeInsert("/w/a-file.go");
-  assert.deepEqual(p.a.sent, ["/w/a-file.go "], "A's terminal, where the file's session is");
-  assert.deepEqual(p.c.sent, [], "never C's");
-  assert.deepEqual(p.b.sent, []);
+  noEffect(p, " (A's tab is hidden, C's prompt is not A's)");
+  assert.match(p.st.toasts[0][0], /alpha's terminal is a hidden tab: show it, then insert/);
+  assert.equal(p.st.focus.term, p.c, "focusedTerminal() unchanged");
+});
+
+test("(b) the same with the focus in another pane, on B: refused, B untouched, the pane focus does not jump to A's pane", () => {
+  const p = page();
+  p.stack();
+  p.st.focus.term = p.b;
+  p.treeInsert("/w/p1-file.go");
+  noEffect(p, " (focus in B)");
+  assert.match(p.st.toasts[0][0], /alpha's terminal is a hidden tab/);
+  assert.deepEqual(p.st.focusedCells, []);
+  assert.equal(p.st.focus.term, p.b);
+});
+
+test("(c) a terminal behind a file viewer in its pane is hidden: refused (cellTerminal still names it, the active tab is the viewer)", () => {
+  const viewer = { kind: "viewer", id: "v" };
+  const p = page();
+  p.st.shown.A = viewer; // a file opened over A in its pane: A's terminal is not on screen; cellTerminal(A) still returns A
+  assert.equal(p.ctx.cellTerminal(p.cellA), p.a);
+  p.treeInsert("/w/x.go");
+  noEffect(p, " (behind a viewer)");
+  assert.match(p.st.toasts[0][0], /alpha's terminal is a hidden tab/);
+  // The same with the focus in the viewer's own pane (no terminal is focused there).
+  const q = page();
+  q.st.shown.A = viewer;
+  q.st.focus.term = null;
+  q.treeInsert("/w/x.go");
+  noEffect(q, " (focus in the viewer pane)");
+});
+
+test("(d) A as the active tab with the focus elsewhere: typed into A, then A's pane is focused and A has the keyboard", () => {
+  const p = page();
+  p.stack();
+  p.st.shown.A = p.a; // A is the tab on screen in its stacked pane; C is the hidden one
+  p.st.lastTerm.A = p.a;
+  p.st.focus.term = p.b;
+  p.treeInsert("/w/y.go");
+  assert.deepEqual(p.a.sent, ["/w/y.go "]);
+  assert.deepEqual(p.c.sent, []);
+  assert.deepEqual(p.log, ["send:a", "setFocusedCell:A", "grab:a"]);
   assert.deepEqual(p.st.toasts, []);
-  assert.ok(!p.log.includes("send:c") && !p.log.some((l) => l === "grab:a" || l === "grab:c"), "no hidden tab is given the keyboard");
-  assert.deepEqual(p.log, ["send:a", "setFocusedCell:A", "focusTerminal"], "A's tab is out of sight: the keyboard stays with the terminal on screen");
-  // Unpinned and following: the dock is on C's session then, and C is the focused one: its own terminal.
-  const q = page({ drawerState: { open: "files", sessionId: "c", pinned: false } });
-  q.stack();
-  q.st.focus.term = q.c;
-  q.treeInsert("/w/c-file.go");
-  assert.deepEqual(q.c.sent, ["/w/c-file.go "]);
-  assert.deepEqual(q.a.sent, []);
-  // And with A shown and focused in the stacked pane, A is both the focused terminal and the dock's: itself.
+});
+
+test("(d) a stacked pane showing A with A focused: A itself; and the dock unpinned on C with C shown and focused: C itself", () => {
   const r = page();
   r.stack();
   r.st.shown.A = r.a;
@@ -171,6 +221,25 @@ test("another session stacked in the dock session's pane is NOT the dock session
   r.treeInsert("/w/y.go");
   assert.deepEqual(r.a.sent, ["/w/y.go "]);
   assert.deepEqual(r.c.sent, []);
+  assert.equal(r.st.refocus, 1, "the target is the focused terminal: the caret returns to it, as before");
+  const q = page({ drawerState: { open: "files", sessionId: "c", pinned: false } });
+  q.stack();
+  q.st.focus.term = q.c;
+  q.treeInsert("/w/c-file.go");
+  assert.deepEqual(q.c.sent, ["/w/c-file.go "]);
+  assert.deepEqual(q.a.sent, []);
+});
+
+test("(e) a docked shell that is the dock session's terminal: typed when its dock is shown, refused while the dock is hidden", () => {
+  const shown = page({ drawerState: { open: "files", sessionId: "sh-a", pinned: true } });
+  shown.treeInsert("/w/x.go");
+  assert.deepEqual(shown.shA.sent, ["/w/x.go "], "the shell docked in A's pane, on screen");
+  assert.deepEqual(shown.log, ["send:sh-a", "setFocusedCell:A", "grab:sh-a"]);
+  const hidden = page({ drawerState: { open: "files", sessionId: "sh-a", pinned: true } });
+  hidden.st.dockHidden.A = true; // Cell.hideDock: tabs and sockets kept, out of view
+  hidden.treeInsert("/w/x.go");
+  noEffect(hidden, " (the dock is hidden)");
+  assert.match(hidden.st.toasts[0][0], /shell's terminal is a hidden tab/);
 });
 
 test("a shell docked in the dock session's pane still gets the path while another session is stacked there", () => {
