@@ -49,7 +49,7 @@ function page() {
   doc.getElementById = (id) => nodes[id] || null;
   doc.addEventListener = () => {};
   const st = {
-    fetches: [], io: [], diffs: [], models: [], attached: [], detached: [], mounts: [], toasts: [], marks: [], unmarks: [],
+    fetches: [], io: [], diffs: [], models: [], vms: [], order: [], attached: [], detached: [], mounts: [], toasts: [], marks: [], unmarks: [],
     shown: true, scope: "head", head: "h1", notes: [], view: { kind: "rows", rows: [] }, marksOf: {}, files: [], why: "", opened: [],
     kinds: {}, // path -> what /api/fs/read says for it: "text" (default), "binary", {status}
     texts: {}, // path -> working-tree text
@@ -71,7 +71,7 @@ function page() {
     editor: {
       ScrollType: { Immediate: 1 },
       createModel(text, lang) {
-        const m = { text, lang, disposed: false, getValue() { return this.text; }, getLineCount() { return this.text.split("\n").length; }, dispose() { this.disposed = true; } };
+        const m = { text, lang, disposed: false, getValue() { return this.text; }, getLineCount() { return this.text.split("\n").length; }, dispose() { this.disposed = true; st.order.push("model"); } };
         st.models.push(m);
         return m;
       },
@@ -80,6 +80,8 @@ function page() {
           host, opts, model: null, disposed: false, layouts: 0, mEd: fakeEditor(st, "m"), oEd: fakeEditor(st, "o"), updates: [],
           getModifiedEditor() { return this.mEd; }, getOriginalEditor() { return this.oEd; },
           setModel(m) { this.model = m; },
+          // A view model as Monaco's: ours to dispose; its diff in the worker is cancelled by that (and only by that).
+          createViewModel(pair) { const vm = { original: pair.original, modified: pair.modified, disposed: false, dispose() { this.disposed = true; st.order.push("vm"); } }; st.vms.push(vm); return vm; },
           layout() { this.layouts++; },
           updateOptions(o) { Object.assign(this.opts, o); },
           onDidUpdateDiff(fn) { this.updates.push(fn); return { dispose: () => { this.updates = this.updates.filter((x) => x !== fn); } }; },
@@ -161,8 +163,6 @@ function page() {
     farIO.cb(entries(farIO, far));
     nearIO.cb(entries(nearIO, near));
   };
-  // The timers that dispose a let-go section's models (RA_GRACE_MS) run: the grace is over.
-  p.grace = () => { for (const t of st.timers || []) if (t.live && t.ms === 2000) { t.live = false; t.fn(); } };
   p.tab = (rows) => {
     st.view = { kind: "rows", rows };
     ctx.__host = { sessionId: () => "s1" };
@@ -245,9 +245,8 @@ test("scrolling far away disposes the editors (models, notes host, requests) and
   p.view(tab, P(9, 10, 11), P(7, 8, 9, 10, 11));
   assert.strictEqual(liveDiffs(p).length, 0, "the old editors are gone at once");
   assert.strictEqual(p.st.diffs.filter((d) => d.disposed).length, 4);
-  assert.strictEqual(p.st.models.filter((m) => m.disposed).length, 0, "their models wait out the grace: a diff of them may be in flight in Monaco's worker");
-  p.grace();
-  assert.strictEqual(p.st.models.filter((m) => m.disposed).length, modelsBefore, "then go, every one");
+  assert.strictEqual(p.st.models.filter((m) => m.disposed).length, modelsBefore, "with every model they held");
+  assert.strictEqual(p.st.vms.filter((v) => v.disposed).length, 4, "and every view model");
   assert.strictEqual(p.st.detached.length, 4, "and their notes hosts");
   await p.answer();
   assert.strictEqual(liveDiffs(p).length, 3);
@@ -264,7 +263,6 @@ test("scrolling far away disposes the editors (models, notes host, requests) and
     p.view(tab, P(0, 1, 2), P(0, 1, 2, 3, 4));
     await p.answer();
   }
-  p.grace();
   assert.strictEqual(liveDiffs(p).length, 3);
   assert.strictEqual(p.st.models.filter((m) => !m.disposed).length, 6, "two models per live editor, none leaked");
   assert.strictEqual(p.st.attached.length - p.st.detached.length, 3, "a notes host per live editor");
@@ -308,7 +306,6 @@ test("a hidden tab holds nothing: every editor goes, the observers go, nothing i
   tab.onHide(); // another dock tab is shown
   assert.strictEqual(liveDiffs(p).length, 0, "no section editor survives a hidden tab");
   assert.ok(p.st.io.every((i) => i.disconnected), "the observers are gone");
-  p.grace();
   assert.strictEqual(p.st.models.filter((m) => !m.disposed).length, 0);
   assert.ok(postsOf(p).every((f) => f.done || f.aborted), "the request in flight was aborted");
   const before = p.st.fetches.length;
@@ -337,7 +334,6 @@ test("a hidden tab holds nothing: every editor goes, the observers go, nothing i
   // Closed: dispose lets go of everything and leaves no section in the document.
   tab.dispose();
   assert.strictEqual(liveDiffs(p).length, 0);
-  p.grace();
   assert.strictEqual(p.st.models.filter((m) => !m.disposed).length, 0);
   assert.strictEqual(p.st.attached.length, p.st.detached.length, "every notes host was detached");
 });
@@ -642,4 +638,40 @@ test("the tab answers what the dock asks of a viewer", () => {
   tab.dispose();
   assert.ok(!acts.children.includes(tab.actsEl));
   tab.dispose(); // twice is fine
+});
+
+test("the view model is disposed before the models it reads (cancels Monaco's diff in flight), on every way a section goes", async () => {
+  const p = page();
+  const rows = names(3).map((n) => row(n));
+  const tab = p.tab(rows);
+  const P = (...i) => i.map((n) => "/w/f" + n + ".go");
+  p.view(tab, P(0, 1, 2), P(0, 1, 2));
+  await p.answer();
+  assert.strictEqual(p.st.vms.length, 3);
+  assert.ok(p.st.diffs.every((d) => d.model === p.st.vms[p.st.diffs.indexOf(d)]), "the editor shows the view model, not a bare pair");
+  tab.collapse(tab.secs.get("/w/f0.go"), true); // way 1: collapse
+  assert.deepStrictEqual(p.st.order, ["vm", "model", "model"]);
+  p.st.order.length = 0;
+  p.view(tab, [], []); // way 2: scrolled away
+  assert.deepStrictEqual(p.st.order, ["vm", "model", "model", "vm", "model", "model"]);
+  p.view(tab, P(1), P(1));
+  await p.answer();
+  p.st.order.length = 0;
+  tab.dispose(); // way 3: closed
+  assert.deepStrictEqual(p.st.order, ["vm", "model", "model"]);
+  assert.ok(p.st.vms.every((v) => v.disposed), "no view model is left");
+});
+
+test("an answer that arrives when the tab has just left the screen makes nothing and leaves the section clean", async () => {
+  const p = page();
+  const tab = p.tab([row("a.go")]);
+  p.view(tab, ["/w/a.go"], ["/w/a.go"]);
+  const sec = tab.secs.get("/w/a.go");
+  assert.strictEqual(sec.state, "loading");
+  p.st.shown = false; // the dock went away; nothing has synced yet
+  await p.answer();
+  assert.strictEqual(p.st.diffs.length, 0);
+  assert.strictEqual(sec.state, "idle", "not left loading");
+  assert.strictEqual(sec.ac, null);
+  assert.ok(!p.st.timers || p.st.timers.every((x) => !x.live || x.ms !== 20000), "the abort timer is cleared");
 });

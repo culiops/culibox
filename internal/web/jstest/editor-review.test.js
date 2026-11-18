@@ -391,3 +391,16 @@ test("View all in the header opens the All changes tab at this file's section; F
   assert.deepEqual(steps, [1, 1]);
   assert.equal(d.modified.getPosition().lineNumber, at);
 });
+
+test("leaving Changes disposes the diff's view model before the base text's model (Monaco 0.57 never releases the one setModel makes)", async () => {
+  const { p, tab, d } = await review();
+  assert.ok(d.model && d.model.disposed === false, "the editor shows a view model we made");
+  const vm = d.model;
+  p.st.log.length = 0;
+  tab.showChanges(false); // back to Code: the Changes view is dropped
+  assert.equal(vm.disposed, true);
+  const log = p.st.log;
+  const at = (x) => log.findIndex((l) => l === x || l.startsWith(x));
+  assert.ok(at("diff.dispose") >= 0 && at("vm.dispose") > at("diff.dispose"), "after the diff editor");
+  assert.ok(at("dispose#") > at("vm.dispose"), "and before the model of the base text: " + log.join(","));
+});

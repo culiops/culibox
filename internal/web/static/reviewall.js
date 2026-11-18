@@ -35,7 +35,6 @@ const RA_FETCH_MS = 20000;     // a section's two requests together; one that ne
 const RA_EST_BASE = 72;        // px: a section with no editor and no measure yet is this tall, plus a line's worth per changed line
 const RA_EST_LINE = 18;
 const RA_EST_MAX = 480;
-const RA_GRACE_MS = 2000;      // a section's models outlive its diff editor this long: Monaco's diff of them may be in flight in its worker
 const RA_LAND_MS = 10000;      // a landing that was not taken (the section scrolled away before its diff came) is forgotten after this
 const RA_ICON_CARET = [["path", { d: "M4 5.5l3 3 3-3" }]];
 
@@ -476,10 +475,12 @@ class ReviewAllTab {
       for (const s of ed.subs) { try { s.dispose(); } catch (_) { /* gone with its editor */ } }
       ed.diff.setModel(null);
       ed.diff.dispose();
-      // The models go a moment later: Monaco asks its worker for the diff of two models, and a model that is gone when that request is
-      // served makes it fail with "no diff result available", an uncaught error in the console (measured in Chromium, 0.57.0: one per
-      // editor let go while its diff was being computed; none with the models disposed 2 s later).
-      setTimeout(() => { ed.orig.dispose(); ed.mod.dispose(); }, RA_GRACE_MS);
+      // The view model first, then the models: Monaco 0.57 never releases the view model setModel({original, modified}) makes, so its diff
+      // in the worker was never cancelled, and a model gone when the worker answered made it throw "no diff result available" (an uncaught
+      // error in the console). Owning the view model (createViewModel) and disposing it cancels that diff.
+      ed.vm.dispose();
+      ed.orig.dispose();
+      ed.mod.dispose();
     }
     if (sec.state === "idle") return;
     const hh = sec.body.offsetHeight; // what it was, for the placeholder (0 while the tab is out of the document: the last measure stands)
@@ -513,7 +514,8 @@ class ReviewAllTab {
     // A deleted file has no new side to read: it is empty by definition.
     const read = row.code === "D" ? Promise.resolve({ ok: false, status: 404, data: null }) : raCall("/api/fs/read?path=" + encodeURIComponent(row.path), {}, ac);
     const [blob, rd, mon] = await Promise.all([post, read, loadMonaco().then((m) => ({ m }), (err) => ({ err }))]);
-    if (sec.seq !== seq || this.disposed || !this.live()) return; // the section was let go meanwhile: the answer is for nobody
+    if (sec.seq !== seq || this.disposed) return; // the section was let go meanwhile: the answer is for nobody
+    if (!this.live()) { this.drop(sec); return; } // the tab left the screen while the answer was on its way: nothing is kept for it
     if (sec.timer) { clearTimeout(sec.timer); sec.timer = null; }
     sec.ac = null;
     this.show(sec, row, scope, blob, rd, mon);
@@ -564,7 +566,8 @@ class ReviewAllTab {
     }, editorDiffOptions()));
     const mEd = diff.getModifiedEditor();
     const oEd = diff.getOriginalEditor();
-    const ed = { diff, orig, mod, mEd, oEd, subs: [] };
+    const vm = diff.createViewModel({ original: orig, modified: mod });
+    const ed = { diff, orig, mod, mEd, oEd, vm, subs: [] };
     sec.ed = ed;
     sec.state = "live";
     const ld = lineDiff(b.head, mod.getValue());
@@ -593,7 +596,7 @@ class ReviewAllTab {
       this.applyLand(sec);
     });
     ed.subs.push(computed);
-    diff.setModel({ original: orig, modified: mod });
+    diff.setModel(vm);
     editorNotesAttachHost({
       key: sec,
       sid: () => this.sid,

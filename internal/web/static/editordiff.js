@@ -577,8 +577,11 @@ function editorDiffEnter(tab) {
     else if (tab.changes.lineChanges.length) editorReviewGo(tab, 0);
     else diff.revealFirstDiff();
   });
-  diff.setModel({ original, modified: tab.model });
-  tab.diff = { diff, original, wrap, label: head.label, head };
+  // The view model is ours to dispose (editorDiffDrop): setModel({original, modified}) makes one that nothing ever releases (Monaco 0.57), and its
+  // pending diff then runs on against models that are gone ("no diff result available").
+  const vm = diff.createViewModel({ original, modified: tab.model });
+  diff.setModel(vm);
+  tab.diff = { diff, original, wrap, label: head.label, head, vm };
   editorNotesAttach(tab); // the notes of the file (editornotes.js): zones under their lines, the "+" in the margin, the keys
   tab.bodyEl.replaceChildren(wrap);
   editorDiffPaintLabel(head.label, ch.scope, ch.baseName);
@@ -608,6 +611,7 @@ function editorDiffDrop(tab) {
   editorNotesDetach(tab); // before the editors go: its zones, hover marks and listeners are theirs to remove
   d.diff.setModel(null);
   d.diff.dispose();
+  d.vm.dispose(); // cancels the diff in flight, before the models it reads go
   d.original.dispose();
   editorReviewChanged(); // (a tab that left to come back in Changes still counts: its `resume` is set before this)
   return true;

@@ -198,6 +198,8 @@ function page(over) {
           getLineChanges() { return this.lineChanges; },
           layout() { this.laid++; },
           updateOptions(o) { this.options.push(o); },
+          // A view model as Monaco's: the caller disposes it (the log shows when, relative to the models).
+          createViewModel(pair) { const vm = { original: pair.original, modified: pair.modified, disposed: false, dispose() { this.disposed = true; st.log.push("vm.dispose"); } }; (st.vms = st.vms || []).push(vm); return vm; },
           setModel(m) { this.model = m; this.original.model = m ? m.original : null; this.modified.model = m ? m.modified : null; st.log.push(m ? "diff.setModel" : "diff.setModel(null)"); },
           onDidUpdateDiff(fn) { this.updated.push(fn); return { dispose: () => { this.updated = this.updated.filter((x) => x !== fn); } }; },
           revealFirstDiff() { this.revealed++; },
