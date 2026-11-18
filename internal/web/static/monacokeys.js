@@ -24,20 +24,26 @@ function registrySkipsInEditor(id, targetInMonaco) {
 // number monaco.editor.addCommand and addAction take, or 0 when Monaco has no
 // name for it (a chord that matches on e.key only, or an unknown code).
 //
-// mod is Cmd on a Mac and Ctrl elsewhere, which is exactly Monaco's KeyMod.CtrlCmd.
-// ctrl is a literal Ctrl on every platform, which is Monaco's KeyMod.WinCtrl (the
-// name is historical: on a Mac it is the Control key, not the Windows key).
+// Monaco's KeyMod names are platform-relative, not physical. Its decoder reads the
+// number with the OS in hand (vendor/monaco/vs/editor-*.js, `Jf(keybinding, OS)`):
+// ctrlKey is WinCtrl on a Mac and CtrlCmd everywhere else; metaKey is CtrlCmd on a
+// Mac and WinCtrl everywhere else. So:
+//   mod   is Cmd on a Mac and Ctrl elsewhere, which is KeyMod.CtrlCmd on both.
+//   ctrl  is a literal Ctrl key on every platform: KeyMod.WinCtrl on a Mac (there it
+//         is the Control key), but KeyMod.CtrlCmd elsewhere, because off a Mac
+//         WinCtrl is the Windows/Meta key and would never match a Ctrl press.
+// isMac is the page's IS_MAC (shortcuts.js); the caller passes it so this stays pure.
 // Monaco's KeyCode enum uses the same names as KeyboardEvent.code for the keys the
 // registry binds (KeyS, Digit1, F1, Space, Slash). Looked up with a typeof check
 // because a TypeScript enum also maps its numbers back to names: KeyCode["49"] is
 // the string "KeyS", which must not pass for a key.
-function monacoKeyFor(chord, M) {
+function monacoKeyFor(chord, M, isMac) {
   if (!chord || !chord.code || !M || !M.KeyCode || !M.KeyMod) return 0;
   const code = Object.prototype.hasOwnProperty.call(M.KeyCode, chord.code) ? M.KeyCode[chord.code] : undefined;
   if (typeof code !== "number") return 0;
   let keys = code;
   if (chord.mod) keys |= M.KeyMod.CtrlCmd;
-  if (chord.ctrl) keys |= M.KeyMod.WinCtrl;
+  if (chord.ctrl) keys |= isMac ? M.KeyMod.WinCtrl : M.KeyMod.CtrlCmd;
   if (chord.shift) keys |= M.KeyMod.Shift;
   if (chord.alt) keys |= M.KeyMod.Alt;
   return keys;

@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isLocalSrc, MD_PURIFY } = require("../static/mdsafe.js");
+const { isLocalSrc, mdUnsafeAttr, MD_PURIFY } = require("../static/mdsafe.js");
 const { boxFileURL } = require("../static/fsops.js");
 
 test("isLocalSrc: relative paths and same-origin file reads are local", () => {
@@ -65,14 +65,66 @@ test("isLocalSrc: control characters inside the URL are refused", () => {
 });
 
 test("MD_PURIFY forbids", () => {
-  assert.deepStrictEqual(MD_PURIFY.FORBID_TAGS, ["script", "style", "iframe", "object", "embed", "form", "link", "meta", "base"]);
-  assert.deepStrictEqual(MD_PURIFY.FORBID_ATTR, ["srcset", "formaction"]);
+  assert.deepStrictEqual(MD_PURIFY.FORBID_TAGS,
+    ["script", "style", "iframe", "object", "embed", "form", "link", "meta", "base", "input", "track"]);
+  assert.deepStrictEqual(MD_PURIFY.FORBID_ATTR, ["srcset", "formaction", "style", "poster", "background", "ping"]);
   assert.deepStrictEqual(Object.keys(MD_PURIFY).sort(), ["FORBID_ATTR", "FORBID_TAGS"]);
+});
+
+test("MD_PURIFY closes the remote-load channels the src walk does not see", () => {
+  // each of these is a request the page would make for the author of the file
+  const channel = {
+    "style attribute (url(...))": ["FORBID_ATTR", "style"],
+    "<video poster>": ["FORBID_ATTR", "poster"],
+    "background attribute": ["FORBID_ATTR", "background"],
+    "<img srcset>": ["FORBID_ATTR", "srcset"],
+    "<a ping>": ["FORBID_ATTR", "ping"],
+    "formaction": ["FORBID_ATTR", "formaction"],
+    "<input type=image src>": ["FORBID_TAGS", "input"],
+    "<track src>": ["FORBID_TAGS", "track"],
+    "<style> element": ["FORBID_TAGS", "style"],
+  };
+  for (const [what, [list, name]] of Object.entries(channel)) assert.ok(MD_PURIFY[list].includes(name), what);
+});
+
+test("mdUnsafeAttr: a src, href or xlink:href that is not local must go, on anything but an a", () => {
+  for (const [tag, attr] of [
+    ["img", "src"], ["video", "src"], ["audio", "src"], ["source", "src"],
+    ["image", "href"], ["image", "xlink:href"], ["use", "href"], ["use", "xlink:href"], ["feImage", "href"], ["math", "href"],
+  ]) {
+    for (const url of ["https://evil.example/p.png", "//evil.example/p.png", "http://x/y", "javascript:alert(1)", "data:image/svg+xml,x", "/etc/x.png", ""]) {
+      assert.strictEqual(mdUnsafeAttr(tag, attr, url), true, tag + " " + attr + " " + JSON.stringify(url));
+    }
+  }
+});
+
+test("mdUnsafeAttr: a local value is kept", () => {
+  for (const [tag, attr, url] of [
+    ["img", "src", "a.png"], ["img", "src", "../x.png"], ["video", "src", "clip.mp4"], ["source", "src", "./a/b.webm"],
+    ["img", "src", "/api/fs/read?path=a.png"], ["use", "href", "#shape"], ["image", "xlink:href", "i.png"],
+    ["img", "src", "data:image/png;base64,iVBORw0KGgo="],
+  ]) assert.strictEqual(mdUnsafeAttr(tag, attr, url), false, tag + " " + attr + " " + url);
+});
+
+test("mdUnsafeAttr: an a keeps its remote href, and other attributes are not its business", () => {
+  assert.strictEqual(mdUnsafeAttr("a", "href", "https://example.com/doc"), false);
+  assert.strictEqual(mdUnsafeAttr("A", "href", "https://example.com/doc"), false);
+  assert.strictEqual(mdUnsafeAttr("a", "xlink:href", "https://example.com/doc"), false);
+  assert.strictEqual(mdUnsafeAttr("img", "alt", "https://example.com/x"), false);
+  assert.strictEqual(mdUnsafeAttr("img", "title", "https://example.com/x"), false);
+  assert.strictEqual(mdUnsafeAttr("div", "class", "//host"), false);
+});
+
+test("mdUnsafeAttr: tag and attribute names are read case-insensitively; a missing attribute is nothing to remove", () => {
+  assert.strictEqual(mdUnsafeAttr("IMG", "SRC", "https://evil.example/p.png"), true);
+  assert.strictEqual(mdUnsafeAttr("Use", "XLINK:HREF", "https://evil.example/s.svg#a"), true);
+  assert.strictEqual(mdUnsafeAttr("img", "src", null), false);
+  assert.strictEqual(mdUnsafeAttr("img", "src", undefined), false);
 });
 
 test("MD_PURIFY cannot be loosened by a caller", () => {
   assert.throws(() => { MD_PURIFY.FORBID_TAGS.pop(); }, TypeError);
   assert.throws(() => { MD_PURIFY.FORBID_ATTR.length = 0; }, TypeError);
   assert.throws(() => { MD_PURIFY.RETURN_DOM_FRAGMENT = true; }, TypeError);
-  assert.strictEqual(MD_PURIFY.FORBID_TAGS.length, 9);
+  assert.strictEqual(MD_PURIFY.FORBID_TAGS.length, 11);
 });

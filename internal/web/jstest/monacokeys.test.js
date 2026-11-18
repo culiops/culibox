@@ -12,26 +12,47 @@ const M = {
 const chordOf = (id) => SHORTCUTS.find((s) => s.id === id).chords[0];
 
 test("monacoKeys maps Mod+S", () => {
-  assert.strictEqual(monacoKeyFor({ mod: true, code: "KeyS" }, M), M.KeyMod.CtrlCmd | M.KeyCode.KeyS);
-  // the registry's own save chord, so a change there is seen here
-  assert.strictEqual(monacoKeyFor(chordOf("editor.save"), M), 2048 | 49);
+  // mod is Cmd on a Mac and Ctrl elsewhere: CtrlCmd on both
+  for (const mac of [true, false]) {
+    assert.strictEqual(monacoKeyFor({ mod: true, code: "KeyS" }, M, mac), M.KeyMod.CtrlCmd | M.KeyCode.KeyS, "mac=" + mac);
+    // the registry's own save chord, so a change there is seen here
+    assert.strictEqual(monacoKeyFor(chordOf("editor.save"), M, mac), 2048 | 49, "mac=" + mac);
+  }
 });
 
-test("monacoKeys: ctrl is a literal Ctrl, mod is Cmd on a Mac and Ctrl elsewhere", () => {
-  assert.strictEqual(monacoKeyFor({ ctrl: true, code: "KeyG" }, M), M.KeyMod.WinCtrl | M.KeyCode.KeyG);
-  assert.strictEqual(monacoKeyFor(chordOf("viewer.gotoLine"), M), 256 | 34);
-  assert.strictEqual(monacoKeyFor({ mod: true, ctrl: true, code: "KeyS" }, M), 2048 | 256 | 49);
+test("monacoKeys: ctrl is the Control key on a Mac and CtrlCmd elsewhere (Monaco's WinCtrl is Meta off a Mac)", () => {
+  // Ctrl+G is the registry's viewer.gotoLine chord
+  assert.strictEqual(monacoKeyFor({ ctrl: true, code: "KeyG" }, M, true), M.KeyMod.WinCtrl | M.KeyCode.KeyG);
+  assert.strictEqual(monacoKeyFor(chordOf("viewer.gotoLine"), M, true), 256 | 34);
+  assert.strictEqual(monacoKeyFor({ ctrl: true, code: "KeyG" }, M, false), M.KeyMod.CtrlCmd | M.KeyCode.KeyG);
+  assert.strictEqual(monacoKeyFor(chordOf("viewer.gotoLine"), M, false), 2048 | 34);
+  // a chord that wants both: two keys on a Mac, one off it (CtrlCmd is Ctrl there and there is no Cmd)
+  assert.strictEqual(monacoKeyFor({ mod: true, ctrl: true, code: "KeyS" }, M, true), 2048 | 256 | 49);
+  assert.strictEqual(monacoKeyFor({ mod: true, ctrl: true, code: "KeyS" }, M, false), 2048 | 49);
+  // never the Meta key off a Mac
+  assert.strictEqual(monacoKeyFor({ ctrl: true, shift: true, code: "KeyG" }, M, false) & M.KeyMod.WinCtrl, 0);
 });
 
-test("monacoKeys: shift and alt add their modifier, a bare code is the code alone", () => {
-  assert.strictEqual(monacoKeyFor({ mod: true, shift: true, code: "KeyK" }, M), 2048 | 1024 | 41);
-  assert.strictEqual(monacoKeyFor({ alt: true, code: "KeyS" }, M), 512 | 49);
-  assert.strictEqual(monacoKeyFor({ code: "F1" }, M), 59);
-  assert.strictEqual(monacoKeyFor({ mod: true, code: "Digit1" }, M), 2048 | 22);
-  assert.strictEqual(monacoKeyFor({ ctrl: true, shift: true, code: "Space" }, M), 256 | 1024 | 10);
+test("monacoKeys: a missing isMac is not a Mac", () => {
+  assert.strictEqual(monacoKeyFor({ ctrl: true, code: "KeyG" }, M), 2048 | 34);
 });
 
-test("monacoKeys: a chord Monaco cannot name maps to 0", () => {
+test("monacoKeys: shift and alt add their modifier on both platforms, a bare code is the code alone", () => {
+  for (const mac of [true, false]) {
+    assert.strictEqual(monacoKeyFor({ mod: true, shift: true, code: "KeyK" }, M, mac), 2048 | 1024 | 41, "mac=" + mac);
+    assert.strictEqual(monacoKeyFor({ alt: true, code: "KeyS" }, M, mac), 512 | 49, "mac=" + mac);
+    assert.strictEqual(monacoKeyFor({ code: "F1" }, M, mac), 59, "mac=" + mac);
+    assert.strictEqual(monacoKeyFor({ mod: true, code: "Digit1" }, M, mac), 2048 | 22, "mac=" + mac);
+  }
+  assert.strictEqual(monacoKeyFor({ ctrl: true, shift: true, code: "Space" }, M, true), 256 | 1024 | 10);
+  assert.strictEqual(monacoKeyFor({ ctrl: true, shift: true, code: "Space" }, M, false), 2048 | 1024 | 10);
+});
+
+test("monacoKeys: a chord Monaco cannot name maps to 0, on both platforms", () => {
+  for (const mac of [true, false]) {
+    assert.strictEqual(monacoKeyFor({ ctrl: true, code: "KeyZZ" }, M, mac), 0, "mac=" + mac);
+    assert.strictEqual(monacoKeyFor({ mod: true, keys: ["Enter"] }, M, mac), 0, "mac=" + mac);
+  }
   assert.strictEqual(monacoKeyFor({ mod: true, code: "KeyZZ" }, M), 0);
   assert.strictEqual(monacoKeyFor({ mod: true, code: "constructor" }, M), 0);
   assert.strictEqual(monacoKeyFor({ mod: true, code: "49" }, M), 0, "a reverse-enum name is not a code");

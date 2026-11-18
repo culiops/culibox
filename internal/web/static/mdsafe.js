@@ -1,17 +1,32 @@
 "use strict";
 
 // What the markdown preview lets through. Markdown can be semi-untrusted (an agent
-// writes it, a cloned repo ships it), so it is rendered with DOMPurify and its
-// images may only come from this origin: a remote <img src> is a request the page
-// makes for whoever wrote the file (a tracking beacon, an exfiltration channel).
-// Pure and DOM-free so `node --test` reaches it; the preview walks img, video,
-// audio and source elements and swaps every src that fails isLocalSrc.
+// writes it, a cloned repo ships it), so it is rendered with DOMPurify and the
+// preview loads no remote resource: a remote request is one the page makes for
+// whoever wrote the file (a tracking beacon, an exfiltration channel). Pure and
+// DOM-free so `node --test` reaches it.
+//
+// The policy has two halves, and neither is enough alone.
+//  1. DOMPurify, configured with MD_PURIFY, removes what can load or send something
+//     whatever its value: tags that fetch or submit (script, style, iframe, object,
+//     embed, form, link, meta, base, input, track) and attributes that carry a URL
+//     the walk below does not look at (srcset, formaction, ping, poster, background)
+//     or a CSS url() (style).
+//  2. The caller's walk (editormd.js and viewer-tab.js, run after sanitizing) visits
+//     EVERY element except <a> and applies mdUnsafeAttr to its src, href and
+//     xlink:href. DOMPurify keeps those attributes on img, video, audio, source and
+//     the SVG image and feImage elements (it drops SVG use and animate on its own),
+//     and a remote value in one of them is a request. The walk takes every element
+//     rather than this list, so a DOMPurify upgrade that allows another one is
+//     covered. A failing img, video, audio or source becomes a placeholder; any
+//     other element just loses the attribute. <a href> is a link the user must
+//     click, so it stays (the walk gives it target=_blank rel="noopener noreferrer").
 
 // Passed as the config of DOMPurify.sanitize. Frozen, so a caller that tries to
 // loosen it throws instead of quietly weakening every later render.
 const MD_PURIFY = Object.freeze({
-  FORBID_TAGS: Object.freeze(["script", "style", "iframe", "object", "embed", "form", "link", "meta", "base"]),
-  FORBID_ATTR: Object.freeze(["srcset", "formaction"]),
+  FORBID_TAGS: Object.freeze(["script", "style", "iframe", "object", "embed", "form", "link", "meta", "base", "input", "track"]),
+  FORBID_ATTR: Object.freeze(["srcset", "formaction", "style", "poster", "background", "ping"]),
 });
 
 // The two same-origin routes a file's bytes come from: /api/fs/read, and the
@@ -44,6 +59,23 @@ function isLocalSrc(url) {
   return true;
 }
 
+// The attributes whose value is a URL the browser fetches or follows, which the
+// walk checks on every element but <a>.
+const MS_URL_ATTRS = ["src", "href", "xlink:href"];
+
+// mdUnsafeAttr says whether one attribute of one element must go: it is a src, href
+// or xlink:href, the element is not an <a> (a link waits for a click, a resource
+// does not), and its value is not local. An attribute that is not there (null or
+// undefined) is nothing to remove. What the caller does with a true is its own
+// business: placeholder for img, video, audio and source, remove the attribute for
+// anything else.
+function mdUnsafeAttr(tagName, attrName, value) {
+  if (value == null) return false;
+  if (String(tagName).toLowerCase() === "a") return false;
+  if (!MS_URL_ATTRS.includes(String(attrName).toLowerCase())) return false;
+  return !isLocalSrc(value);
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isLocalSrc, MD_PURIFY };
+  module.exports = { isLocalSrc, mdUnsafeAttr, MD_PURIFY };
 }
