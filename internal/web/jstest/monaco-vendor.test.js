@@ -113,7 +113,8 @@ test("the TypeScript, CSS and HTML language services are trimmed; JSON and the M
     ...["go", "yaml", "hcl", "markdown", "javascript", "typescript", "css", "html", "less", "scss"].map((l) => new RegExp("^vs/" + l + "-[\\w-]+\\.js$")),
   ];
   for (const re of kept) assert.ok(rels.some((r) => re.test(r)), "still vendored: " + re);
-  assert.ok(!rels.some((r) => /^vs\/nls\/lang\/.*\.d\.ts$/.test(r)), "the unread .d.ts declarations are dropped");
+  assert.ok(!rels.some((r) => r.startsWith("vs/nls/")), "the locale bundles are dropped: monacoload.js sets no vs/nls language");
+  assert.ok(rels.includes("vs/nls.messages-loader.js"), "the loader plugin that would ask for one stays, as editor.main.js depends on it");
 });
 
 // editor.main.js names the three chunks that hook a service up (an onLanguage listener that loads a mode and starts a worker),

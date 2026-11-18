@@ -93,8 +93,9 @@ trim() {
 trim language/typescript language/css language/html
 trim assets/ts.worker-g3pjEjl4.js assets/css.worker-BpD9FCKP.js assets/html.worker-CLuInTTy.js
 trim tsMode-DB1GiNun.js cssMode-eIUIN_ru.js htmlMode-aw5QYZo7.js
-# vs/nls/lang/*.d.ts are TypeScript declarations of 10 bytes each that no loader reads.
-find "$work/stage/vs/nls/lang" -name '*.d.ts' -type f -exec rm -f {} +
+# vs/nls holds only the 13 locale bundles (and their .d.ts), which nls.messages-loader fetches only when a page
+# sets require.config({"vs/nls": {availableLanguages}}); monacoload.js never does, so English is built in.
+trim nls
 
 # Stubs. editor.main.js and index-*.js list the three monaco.contribution-* chunks below as
 # dependencies and read `.register` from each (to expose monaco.languages.css, .html and .typescript),
