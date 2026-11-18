@@ -84,6 +84,66 @@ function nextChange(lineChanges, cursorLine, dir) {
   return null;
 }
 
+// --- the diff header and the Changes list ----------------------------------------------------------------------
+
+// The Changes rows a review walks and counts: the files git has answered for. A folder (an untracked directory is a place in the
+// tree, not a file) and a provisional row (the agent's edit git has not been asked about: no diff to read yet) are not in it.
+function reviewRows(rows) {
+  return Array.isArray(rows) ? rows.filter((r) => r && typeof r === "object" && !r.folder && !r.provisional) : [];
+}
+
+// The row F7 moves on to from the file at `fromPath`: the next (dir 1) or the previous (dir -1) of `rows` in the order the Changes
+// section shows them, null past either end. A file that has no row (the open file is unchanged) has no neighbour.
+function reviewNeighbour(rows, fromPath, dir) {
+  const list = reviewRows(rows);
+  const at = list.findIndex((r) => r.path === fromPath);
+  if (at < 0 || (dir !== 1 && dir !== -1)) return null;
+  return list[at + dir] || null;
+}
+
+// The row Review opens: the first one whose mark does not stand (reviewedState), else the first row (every file reviewed: Review
+// still takes the reader somewhere). null when there is no row.
+function reviewFirstOpen(rows, marks, files) {
+  const list = reviewRows(rows);
+  const m = marks && typeof marks === "object" ? marks : {};
+  return list.find((r) => !(Object.prototype.hasOwnProperty.call(m, r.path) && reviewedState(m[r.path], r, files))) || list[0] || null;
+}
+
+// The line a change is shown at: its start, clamped into the buffer ("del" at the very end of the text carries lastLine + 1, and a
+// removal in an emptied file sits at line 1).
+function reviewLineOf(change, lineCount) {
+  const last = Number.isFinite(lineCount) && lineCount >= 1 ? Math.floor(lineCount) : 1;
+  return Math.max(1, Math.min(change.from, last));
+}
+
+// "Change N of M": {n, m, text}. M is the number of changes. N is the one the reader is at: the one F7 last landed on (`navIndex`)
+// while the cursor is still on its line (a click elsewhere is no longer "at" it), else the number of changes that start at or
+// before the cursor line (0 before the first). The text says "No changes", "M changes" when the cursor is before the first, or
+// "Change N of M".
+function reviewChangePos(lineChanges, cursorLine, navIndex, lineCount) {
+  const list = Array.isArray(lineChanges) ? lineChanges.filter((c) => c && typeof c === "object") : [];
+  const m = list.length;
+  let n = 0;
+  if (Number.isInteger(navIndex) && navIndex >= 0 && navIndex < m && reviewLineOf(list[navIndex], lineCount) === cursorLine) {
+    n = navIndex + 1;
+  } else {
+    for (const c of list) if (reviewLineOf(c, lineCount) <= cursorLine) n++;
+  }
+  const text = m === 0 ? "No changes" : n === 0 ? m + (m === 1 ? " change" : " changes") : "Change " + n + " of " + m;
+  return { n, m, text };
+}
+
+// Pending notes per file: {<abs path>: count} from a notes list (notesmodel.js entries); sent notes are not waiting, so they are not
+// counted. Anything that is not a list, or an entry that is not a note, counts for nothing.
+function notesPendingByPath(list) {
+  const out = {};
+  if (!Array.isArray(list)) return out;
+  for (const n of list) {
+    if (n && typeof n === "object" && n.status === "pending" && typeof n.path === "string") out[n.path] = (out[n.path] || 0) + 1;
+  }
+  return out;
+}
+
 // May the paste bar type into this session's terminal right now? `term` is the session's TerminalTab (its `.term` is the xterm
 // instance). {ok, label, why}: the label is always "Paste to <name>" and `why` says why not ("" when ok). One refusal is reported
 // when several apply, in this order: no terminal, working, waiting or any need, bracketed paste off. A session that is neither idle,
@@ -151,5 +211,6 @@ function loadReviewed(storage, liveSids) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     REVIEWED_KEY, reviewFp, reviewMarkFor, reviewedState, reviewedCount, nextChange, pasteGate, saveReviewed, loadReviewed,
+    reviewRows, reviewNeighbour, reviewFirstOpen, reviewLineOf, reviewChangePos, notesPendingByPath,
   };
 }

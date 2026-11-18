@@ -94,8 +94,8 @@ function fakeEditor() {
     onDidChangeModel: on("model"), onKeyDown: on("key"),
     updateOptions(o) { this.options.push(o); },
     layout() {}, saveViewState() { return { saved: true, top: this.top }; }, restoreViewState(v) { this.restored.push(v); this.top = v.top; },
-    getScrollTop() { return this.top; }, setScrollTop(v) { this.top = v; }, getPosition() { return { lineNumber: 1, column: 1 }; },
-    setPosition(p) { this.positions.push(p); }, revealLineInCenter(l) { this.centered.push(l); },
+    getScrollTop() { return this.top; }, setScrollTop(v) { this.top = v; }, getPosition() { return this.pos || { lineNumber: 1, column: 1 }; },
+    setPosition(p) { this.positions.push(p); this.pos = p; }, revealLineInCenter(l) { this.centered.push(l); },
     focus() { this.focused++; this.textFocus = true; this.fire("focus"); },
     blur() { this.textFocus = false; this.fire("blur"); },
     hasTextFocus() { return this.textFocus; },
@@ -124,7 +124,7 @@ function page(over) {
     metaGate: null, fullGate: null,                  // a promise a metadata / a full read waits on, after its answer is decided
   };
   const monaco = {
-    KeyCode: { KeyS: 49, KeyZ: 56, Escape: 9 },
+    KeyCode: { KeyS: 49, KeyZ: 56, F7: 65, Escape: 9 },
     KeyMod: { CtrlCmd: 2048, WinCtrl: 256, Shift: 1024, Alt: 512 },
     languages: { getLanguages: () => [{ id: "go", aliases: ["Go"] }, { id: "plaintext", aliases: ["Plain Text"] }] },
     editor: {
@@ -236,7 +236,11 @@ function page(over) {
     showToast: (m, o) => { st.toasts.push([m, o]); },
     gitStatusRefreshSoon: () => { st.gitRefresh++; },
     fontPrefs: { get: () => 12.5, STEP: 1, BOUNDS: { min: 8, max: 32 }, set() {} },
-    viewerPrefs: { getWrap: () => false },
+    // The diff's prefs live here for the test: the mode ("side" the default) and the diff's wrap.
+    viewerPrefs: (() => {
+      const v = { diffMode: "side", diffWrap: false };
+      return { getWrap: () => false, getDiffMode: () => v.diffMode, setDiffMode: (m) => { v.diffMode = m; }, getDiffWrap: () => v.diffWrap, setDiffWrap: (b) => { v.diffWrap = b; } };
+    })(),
     toggleViewerWrap: () => {},
     ViewerTab: class {
       constructor(p, o) { this.path = p; this.opts = o; this.calls = []; this.el = new El("div", doc); this.scroll = 7; st.inner = this; }
@@ -245,7 +249,7 @@ function page(over) {
     },
   }, over));
   const load = (f) => new vm.Script(src(f), { filename: f }).runInContext(ctx);
-  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "editortab.js", "editorsync.js", "editordiff.js", "editormd.js", "editorselbar.js", "editorfollow.js"]) load(f);
+  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "editortab.js", "reviewmodel.js", "editorsync.js", "editordiff.js", "editorreview.js", "editormd.js", "editorselbar.js", "editorfollow.js"]) load(f);
   const host = {
     onEditStart: () => st.host.push("start"),
     onDirtyChange: () => st.host.push("dirty"),

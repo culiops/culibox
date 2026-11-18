@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   REVIEWED_KEY, reviewFp, reviewMarkFor, reviewedState, reviewedCount, nextChange, pasteGate, saveReviewed, loadReviewed,
+  reviewRows, reviewNeighbour, reviewFirstOpen, reviewLineOf, reviewChangePos, notesPendingByPath,
 } = require("../static/reviewmodel.js");
 
 function store(init) {
@@ -184,4 +185,67 @@ test("saveReviewed and loadReviewed round-trip, drop dead sessions, ignore a bad
   const boom = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("full"); } };
   saveReviewed(boom, "s1", m1);
   assert.strictEqual(loadReviewed(boom, ["s1"]).size, 0);
+});
+
+const rows3 = [row({ path: "/r/a.go" }), row({ path: "/r/dir", folder: true }), row({ path: "/r/p.go", provisional: true, code: "" }), row({ path: "/r/b.go" }), row({ path: "/r/c.go", code: "D" })];
+
+test("reviewRows keeps the files git answered for, in the section's order", () => {
+  assert.deepStrictEqual(reviewRows(rows3).map((r) => r.path), ["/r/a.go", "/r/b.go", "/r/c.go"]);
+  assert.deepStrictEqual(reviewRows(null), []);
+  assert.deepStrictEqual(reviewRows([null, 3, row()]).length, 1);
+});
+
+test("reviewNeighbour steps over folders and provisional rows and stops at the ends", () => {
+  assert.strictEqual(reviewNeighbour(rows3, "/r/a.go", 1).path, "/r/b.go");
+  assert.strictEqual(reviewNeighbour(rows3, "/r/b.go", 1).path, "/r/c.go");
+  assert.strictEqual(reviewNeighbour(rows3, "/r/c.go", 1), null);
+  assert.strictEqual(reviewNeighbour(rows3, "/r/c.go", -1).path, "/r/b.go");
+  assert.strictEqual(reviewNeighbour(rows3, "/r/a.go", -1), null);
+  assert.strictEqual(reviewNeighbour(rows3, "/r/none.go", 1), null, "an unchanged file has no neighbour");
+  assert.strictEqual(reviewNeighbour(rows3, "/r/a.go", 0), null);
+  assert.strictEqual(reviewNeighbour(undefined, "/r/a.go", 1), null);
+});
+
+test("reviewFirstOpen is the first row whose mark does not stand, else the first row", () => {
+  const files = [{ path: "/r/a.go", ts: 10 }, { path: "/r/b.go", ts: 10 }];
+  const marks = { "/r/a.go": markOf(rows3[0], files) };
+  assert.strictEqual(reviewFirstOpen(rows3, marks, files).path, "/r/b.go");
+  // The agent edited a.go since: its mark no longer stands, so it is the first again.
+  assert.strictEqual(reviewFirstOpen(rows3, marks, [{ path: "/r/a.go", ts: 11 }]).path, "/r/a.go");
+  const all = { "/r/a.go": markOf(rows3[0], files), "/r/b.go": markOf(rows3[3], files), "/r/c.go": markOf(rows3[4], files) };
+  assert.strictEqual(reviewFirstOpen(rows3, all, files).path, "/r/a.go", "all reviewed: Review still opens the first");
+  assert.strictEqual(reviewFirstOpen(rows3, null, null).path, "/r/a.go");
+  assert.strictEqual(reviewFirstOpen([row({ folder: true })], {}, []), null);
+});
+
+test("reviewLineOf clamps a change into the buffer: a removal at the end carries lastLine + 1, an emptied file has one line", () => {
+  assert.strictEqual(reviewLineOf({ kind: "mod", from: 5, to: 6 }, 10), 5);
+  assert.strictEqual(reviewLineOf({ kind: "del", from: 11, to: 11 }, 10), 10);
+  assert.strictEqual(reviewLineOf({ kind: "del", from: 1, to: 1 }, 1), 1);
+  assert.strictEqual(reviewLineOf({ kind: "del", from: 0, to: 0 }, 5), 1);
+  assert.strictEqual(reviewLineOf({ kind: "del", from: 3, to: 3 }, undefined), 1);
+});
+
+test("reviewChangePos: N of M from the last F7 landing while the cursor is on it, else from the cursor", () => {
+  const lc = [{ kind: "mod", from: 4, to: 5 }, { kind: "add", from: 9, to: 9 }, { kind: "del", from: 21, to: 21 }];
+  assert.deepStrictEqual(reviewChangePos(lc, 4, 0, 20), { n: 1, m: 3, text: "Change 1 of 3" });
+  assert.strictEqual(reviewChangePos(lc, 9, 1, 20).text, "Change 2 of 3");
+  assert.strictEqual(reviewChangePos(lc, 20, 2, 20).text, "Change 3 of 3", "the trailing removal is shown at the last line");
+  // The cursor moved off the landing: counted from the cursor (changes that start at or before it).
+  assert.strictEqual(reviewChangePos(lc, 7, 1, 20).text, "Change 1 of 3");
+  assert.strictEqual(reviewChangePos(lc, 12, null, 20).text, "Change 2 of 3");
+  assert.strictEqual(reviewChangePos(lc, 1, null, 20).text, "3 changes", "before the first change");
+  assert.strictEqual(reviewChangePos([lc[0]], 1, null, 20).text, "1 change");
+  assert.deepStrictEqual(reviewChangePos([], 1, null, 20), { n: 0, m: 0, text: "No changes" });
+  assert.strictEqual(reviewChangePos(undefined, 1, 0, 20).text, "No changes");
+  assert.strictEqual(reviewChangePos(lc, 4, 7, 20).text, "Change 1 of 3", "a stale index is ignored");
+  // A deleted file: one removal in an empty buffer.
+  assert.strictEqual(reviewChangePos([{ kind: "del", from: 1, to: 1 }], 1, 0, 1).text, "Change 1 of 1");
+});
+
+test("notesPendingByPath counts pending notes per file and nothing else", () => {
+  const n = (path, status) => ({ id: "x", path, status });
+  assert.deepStrictEqual(notesPendingByPath([n("/r/a.go", "pending"), n("/r/a.go", "pending"), n("/r/b.go", "pending"), n("/r/a.go", "sent"), null, 4, { status: "pending" }]), { "/r/a.go": 2, "/r/b.go": 1 });
+  assert.deepStrictEqual(notesPendingByPath(undefined), {});
+  assert.deepStrictEqual(notesPendingByPath({ a: 1 }), {});
 });

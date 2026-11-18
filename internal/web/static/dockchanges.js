@@ -23,9 +23,15 @@
 // provisional row (changesmodel.js), drawn with a muted "…" (class dk-prov) where the letter will be, and the letter takes
 // its place in the same element when a status asked for after the edit lands. A file git then calls clean goes away.
 //
+// The review loop (P3, editorreview.js). Each row has a check circle (dk-ck) that is filled while the file's reviewed mark still
+// stands (reviewedState: the row's git fingerprint is unchanged and the agent has not edited the file since), and a chip (dk-nt)
+// with the file's pending notes. While any tab of the session is in Changes the header reads "reviewed n of m" (reviewedCount, over
+// the file rows) instead of "N changed", and Review opens the first file whose mark does not stand, in Changes.
+//
 // Every path, name, branch and base name goes to the page with textContent: a branch name may hold Unicode format
 // characters, and a file name anything at all.
 
+/* global notesFor -- the notes store (a later task's notes.js) has not landed: it is asked behind typeof, and until then there are no notes */
 const DKC_FETCH_MS = 20000; // a request that never answers must not hold the one numstat slot for good
 const DKC_CODE_TITLES = { M: "Modified", A: "Added (staged)", U: "Untracked", D: "Deleted", C: "Conflict" };
 
@@ -55,6 +61,12 @@ function dkcPrefsMap() {
     dkcPrefs = changesScopeParse(raw);
   }
   return dkcPrefs;
+}
+
+// dockChangesRows: the rows the section shows now, in its order (folders and provisional rows included: reviewRows picks the files). F7
+// across files (editorreview.js) walks them.
+function dockChangesRows() {
+  return dkcView && dkcView.kind === "rows" ? dkcView.rows : [];
 }
 
 // gitBaseFor: the last /api/git/base reply for `root` (a BaseInfo), or null when none has landed for it or the request failed.
@@ -189,19 +201,30 @@ function dkcNewRow() {
   const b = document.createElement("button");
   b.type = "button";
   const part = (cls) => { const e = document.createElement("span"); e.className = cls; return e; };
-  const p = { ic: part("dk-ic"), nm: part("dk-nm"), dir: part("dk-dir"), ct: part("dk-ct"), add: part("dk-add"), del: part("dk-del"), st: part("dk-st"), r: null };
+  const p = { ck: part("dk-ck"), ic: part("dk-ic"), nm: part("dk-nm"), dir: part("dk-dir"), nt: part("dk-nt"), ct: part("dk-ct"), add: part("dk-add"), del: part("dk-del"), st: part("dk-st"), r: null };
+  p.ck.setAttribute("aria-hidden", "true");
   p.ic.setAttribute("aria-hidden", "true");
   p.ct.append(p.add, p.del);
-  b.append(p.ic, p.nm, p.dir, p.st);
+  b.append(p.ck, p.ic, p.nm, p.dir, p.st);
   b.onclick = () => dkcOpenRow(p.r); // the row it shows now, not the one it was made for
   dkcParts.set(b, p);
   return b;
 }
 
-// dkcFillRow brings a row element to `r`, writing only what differs.
-function dkcFillRow(b, r, label) {
+// dkcFillRow brings a row element to `r`, writing only what differs. `rv` is the review state: {done: {<path>: true}, notes: {<path>: n}}.
+function dkcFillRow(b, r, label, rv) {
   const p = dkcParts.get(b);
   p.r = r;
+  const done = !!rv.done[r.path];
+  const ckCls = done ? "dk-ck dk-ck-done" : "dk-ck";
+  if (p.ck.className !== ckCls) p.ck.className = ckCls;
+  const notes = rv.notes[r.path] || 0;
+  if (notes > 0) {
+    dkcSetText(p.nt, notes + (notes === 1 ? " note" : " notes"));
+    if (p.nt.parentNode !== b) b.insertBefore(p.nt, p.dir.nextSibling);
+  } else if (p.nt.parentNode === b) {
+    p.nt.remove();
+  }
   const cls = r.mine ? "dk-row dk-mine" : "dk-row";
   if (b.className !== cls) b.className = cls;
   dkcSetText(p.ic, typeof iconFor === "function" ? iconFor(r.name, r.folder, false) : "");
@@ -225,6 +248,8 @@ function dkcFillRow(b, r, label) {
   const words = [prov ? "Waiting for git" : DKC_CODE_TITLES[r.code] || r.code];
   if (known) words.push("+" + r.add + " −" + r.del);
   if (r.mine) words.push(label);
+  if (done) words.push("reviewed");
+  if (notes > 0) words.push(notes + (notes === 1 ? " note" : " notes"));
   const aria = r.name + (r.dir ? " in " + r.dir : "") + ", " + words.join(", ");
   if (b.getAttribute("aria-label") !== aria) b.setAttribute("aria-label", aria);
   const title = (typeof shortPath === "function" ? shortPath(r.path) : r.path) + "\n" + words.join(", ");
@@ -243,15 +268,37 @@ function dkcOpenRow(r) {
   else drawerShowFile(r.path);
 }
 
-// dkcFirstFile: the row Review opens: the first changed file git has answered for (a provisional row has no diff to read yet).
+// dkcFirstFile: whether there is a row Review can open: the first changed file git has answered for (a provisional row has no diff
+// to read yet).
 function dkcFirstFile(view) {
-  return view && view.kind === "rows" ? view.rows.find((r) => !r.folder && !r.provisional) || null : null;
+  return view && view.kind === "rows" ? reviewRows(view.rows)[0] || null : null;
 }
 
-// dkcReview: Review opens the Changes view of the first changed file, pinned (P1; the combined view is P3's).
+// dkcReview: Review opens the Changes view of the first file whose reviewed mark does not stand, pinned (every one of them reviewed:
+// the first). The combined view is a later one's.
 function dkcReview() {
-  const first = dkcFirstFile(dkcView);
+  const sid = dkcSid();
+  const files = typeof drawerChangedFiles !== "undefined" && sid ? drawerChangedFiles.get(sid) || null : null;
+  const first = dkcView && dkcView.kind === "rows" ? reviewFirstOpen(dkcView.rows, typeof reviewMarksOf === "function" ? reviewMarksOf(sid) : {}, files) : null;
   if (first && typeof drawerShowFile === "function") drawerShowFile(first.path, { view: "changes", preview: false });
+}
+
+// dkcReviewState: what the section draws of the review loop, for the file rows of `view`:
+//   {reviewing, done: {<path>: true}, notes: {<path>: pending notes}, doneN, total}
+// `reviewing`: some tab of the session is in Changes (the header says "reviewed n of m"). Notes come from notesFor(sid) (a later
+// task's store: until it exists there are none).
+function dkcReviewState(view, sid, files) {
+  const rows = view.kind === "rows" ? reviewRows(view.rows) : [];
+  const marks = typeof reviewMarksOf === "function" ? reviewMarksOf(sid) : {};
+  const count = reviewedCount(rows, marks, files);
+  const done = {};
+  for (const r of rows) if (Object.prototype.hasOwnProperty.call(marks, r.path) && reviewedState(marks[r.path], r, files)) done[r.path] = true;
+  let list = null;
+  try { list = typeof notesFor === "function" && sid ? notesFor(sid) : null; } catch (_) { /* no notes */ }
+  return {
+    reviewing: typeof editorDiffAnyChanges === "function" && editorDiffAnyChanges(),
+    done, notes: notesPendingByPath(list), doneN: count.done, total: count.total,
+  };
 }
 
 // dkcPaintBranch: `<branch> → <base> · +a −d`. The two names are isolated for bidirectional text: a branch name may carry
@@ -283,14 +330,14 @@ function dkcPaintBranch(el, b) {
 // (only its text and classes change), a new path gets a new element, a path that is gone loses its element, and an element
 // is moved only when the order needs it. Status lands about once a second while an agent works, and a list that was
 // replaced each time would drop the focus of a keyboard user on a row and swallow a click made between press and release.
-function dkcPaintList(el, view, label) {
+function dkcPaintList(el, view, label, rv) {
   const rows = view.kind === "rows" ? view.rows : [];
   const nodes = [];
   const keep = new Set();
   for (const r of rows) {
     let b = dkcRows.get(r.path);
     if (!b) { b = dkcNewRow(); dkcRows.set(r.path, b); }
-    dkcFillRow(b, r, label);
+    dkcFillRow(b, r, label, rv);
     keep.add(r.path);
     nodes.push(b);
   }
@@ -367,7 +414,13 @@ function dockChangesRender() {
   const dr = dkcEl("drawer");
   const box = dr ? dr.dataset.box || "" : "";
   const owns = dkcOwns();
-  const inputs = [root, cur && cur.status, dkcNum, dkcBase, dkcPrefsMap(), sid, files, name, box, owns];
+  // The review marks (replaced, never edited, on every change), whether a tab is in Changes, and the pending notes as text: a value
+  // that is the same one is "nothing new" even when the store makes a fresh list each time it is asked.
+  const marks = typeof reviewMarksOf === "function" ? reviewMarksOf(sid) : null;
+  const reviewing = typeof editorDiffAnyChanges === "function" && editorDiffAnyChanges();
+  let notes = "";
+  try { notes = typeof notesFor === "function" && sid ? JSON.stringify(notesPendingByPath(notesFor(sid))) : ""; } catch (_) { /* no notes */ }
+  const inputs = [root, cur && cur.status, dkcNum, dkcBase, dkcPrefsMap(), sid, files, name, box, owns, marks, reviewing, notes];
   if (dkcDrawn && inputs.every((x, i) => x === dkcDrawn[i])) return;
   dkcDrawn = inputs;
 
@@ -376,14 +429,18 @@ function dockChangesRender() {
   const view = owns
     ? changesView({ root, status: cur, numstat: dkcNum, base: dkcBase, prefs: dkcPrefsMap(), sid, files, statusAt })
     : { kind: "none", count: 0 };
-  const painted = JSON.stringify([view, root, name, box, owns]);
-  if (painted === dkcPainted) return;
+  const rv = dkcReviewState(view, sid, files);
+  const painted = JSON.stringify([view, root, name, box, owns, rv]);
+  if (painted === dkcPainted) { // nothing new to draw here; the Changes view's header reads some of the same inputs (Activity's list)
+    if (typeof editorReviewRefresh === "function") editorReviewRefresh();
+    return;
+  }
   dkcPainted = painted;
   dkcPaintRoot(root);
   dkcView = view;
   const rows = view.kind === "rows";
   sec.hidden = view.kind === "none";
-  dkcSetText(dkcEl("dock-chg-count"), rows && view.count > 0 ? view.count + " changed" : "");
+  dkcSetText(dkcEl("dock-chg-count"), rows && rv.reviewing && rv.total > 0 ? "reviewed " + rv.doneN + " of " + rv.total : rows && view.count > 0 ? view.count + " changed" : "");
   dkcEl("dock-review").hidden = !dkcFirstFile(view);
   const scope = dkcEl("dock-scope");
   scope.hidden = !view.showScope;
@@ -396,12 +453,13 @@ function dockChangesRender() {
   dkcSetText(note, say);
   note.title = view.kind === "note" ? view.title : "";
   const who = name ? "changed by " + name : "changed by this session";
-  dkcPaintList(dkcEl("dock-chg-list"), view, who);
+  dkcPaintList(dkcEl("dock-chg-list"), view, who, rv);
   const legend = dkcEl("dock-chg-legend");
   const anyMine = rows && view.rows.some((r) => r.mine);
   legend.hidden = !anyMine;
   dkcSetText(legend.querySelector("span"), who);
   dkcPaintStrip(rows ? view.count : 0);
+  if (typeof editorReviewRefresh === "function") editorReviewRefresh();
 }
 
 // dkcOwns: the dock is what shows this tree (the phone's tree has no Changes section).

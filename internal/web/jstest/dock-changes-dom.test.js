@@ -79,7 +79,7 @@ function page(over) {
   }, over));
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load('let drawerState = { open: "files", sessionId: "s1", pinned: false }; let drawerChangedFiles = new Map(); let ftExpanded = new Set(["/w/a", "/w/a/b", "/other/x"]); let ftRootSel = null;', "state");
-  for (const f of ["drawerfiles.js", "changesmodel.js", "gitstatus.js", "dockchanges.js"]) load(src(f), f);
+  for (const f of ["drawerfiles.js", "changesmodel.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
   const p = {
     ctx, st, doc, nodes,
     el: (id) => nodes[id],
@@ -124,7 +124,7 @@ test("a status that lands asks for the base (the path alone) and the numstat, on
   assert.deepStrictEqual(p.calls("/api/git/numstat").map((f) => f.body), [{ path: "/w", scope: "head" }]);
   // Before the answers: the section is there with the status rows and no counts.
   assert.strictEqual(p.el("dock-changes").hidden, false);
-  assert.deepStrictEqual(p.rows().map((r) => text(r.children[1])), ["a.go", "b.go"]);
+  assert.deepStrictEqual(p.rows().map((r) => text(r.querySelector(".dk-nm"))), ["a.go", "b.go"]);
   assert.strictEqual(p.rows()[0].querySelector(".dk-ct"), null, "no count is a guess");
   assert.strictEqual(text(p.el("dock-chg-count")), "2 changed");
   await p.answer("/api/git/base", baseOk());
@@ -575,11 +575,11 @@ test("a count that goes away takes its element out, and comes back into the same
   await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 0, d: 0, bin: true }])); // now binary: no count
   assert.strictEqual(p.rows()[0], row);
   assert.strictEqual(row.querySelector(".dk-ct"), null, "no count, no span");
-  assert.deepStrictEqual(Array.from(row.children, (c) => cls(c)[0]), ["dk-ic", "dk-nm", "dk-dir", "dk-st"]);
+  assert.deepStrictEqual(Array.from(row.children, (c) => cls(c)[0]), ["dk-ck", "dk-ic", "dk-nm", "dk-dir", "dk-st"]);
   await p.status(okStatus([{ p: "a.go", x: "M" }]));
   await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 4, d: 4 }]));
   assert.strictEqual(text(row.querySelector(".dk-ct")), "+4−4");
-  assert.deepStrictEqual(Array.from(row.children, (c) => cls(c)[0]), ["dk-ic", "dk-nm", "dk-dir", "dk-ct", "dk-st"], "the counts sit before the letter");
+  assert.deepStrictEqual(Array.from(row.children, (c) => cls(c)[0]), ["dk-ck", "dk-ic", "dk-nm", "dk-dir", "dk-ct", "dk-st"], "the counts sit before the letter");
 });
 
 test("a status and a numstat that say what the screen already says write nothing to the page", async () => {

@@ -32,7 +32,28 @@ const viewerPrefs = (function () {
     write(Object.assign(read(), { wrap }));
   }
 
-  return { KEY, getWrap, setWrap };
+  // The Changes view's own two choices (editordiff.js), kept beside wrap and apart from it: "side" (Side by side, the default) or
+  // "inline", and whether the diff wraps long lines (separate from the editor's wrap). Anything else stored reads as the default.
+  let diffMode = null;
+  function getDiffMode() {
+    if (diffMode === null) diffMode = read().diffMode === "inline" ? "inline" : "side";
+    return diffMode;
+  }
+  function setDiffMode(m) {
+    diffMode = m === "inline" ? "inline" : "side";
+    write(Object.assign(read(), { diffMode }));
+  }
+  let diffWrap = null;
+  function getDiffWrap() {
+    if (diffWrap === null) diffWrap = read().diffWrap === true;
+    return diffWrap;
+  }
+  function setDiffWrap(b) {
+    diffWrap = !!b;
+    write(Object.assign(read(), { diffWrap }));
+  }
+
+  return { KEY, getWrap, setWrap, getDiffMode, setDiffMode, getDiffWrap, setDiffWrap };
 })();
 
 if (typeof module !== "undefined" && module.exports) {

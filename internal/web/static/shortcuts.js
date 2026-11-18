@@ -107,6 +107,12 @@ const SHORTCUTS = [
   // Bound inside the Files dock's editor (Monaco's addCommand, editortab.js), where the toggle also lives in the ⋯ menu.
   { id: "editor.wrap", label: "Wrap lines", group: "Editor & files", scope: "editor", status: "bound",
     chords: [{ alt: true, code: "KeyZ" }] },
+  // Bound inside the Files dock's Changes view (editortab.js editorBind, editorreview.js): the next change of the file, and past the
+  // last one the next changed file of the session, opened in Changes. Shift goes back, onto the last change of the previous file.
+  { id: "editor.nextChange", label: "Next change (then the next changed file)", group: "Editor & files", scope: "editor", status: "bound",
+    chords: [{ code: "F7" }] },
+  { id: "editor.prevChange", label: "Previous change", group: "Editor & files", scope: "editor", status: "bound",
+    chords: [{ shift: true, code: "F7" }] },
   { id: "palette.insert", label: "Palette: open in new pane / insert path", group: "Editor & files", scope: "palette",
     status: "bound", chords: [{ mod: true, keys: ["Enter"] }] },
   // deskLabel: what the desktop's Keyboard shortcuts grid says (the dialog's button reads "Start session" there);

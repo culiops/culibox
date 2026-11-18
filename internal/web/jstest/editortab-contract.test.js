@@ -1444,12 +1444,12 @@ test("the base name in the Changes header is a span of its own, isolated for bid
   p.get("editorDiffSync")();
   await p.settle();
   changesBtn(tab).click();
-  const label = tab.bodyEl.children[0].children[0].children[0];
-  assert.equal(label.textContent, "vs ma\u202Ein (merge base)");
+  const label = tab.diff.label;
+  assert.equal(label.textContent, "ma\u202Ein (merge base) ↔ working tree");
   const span = label.children.find((c) => c.className === "dk-cmp-base");
   assert.ok(span, "the name is in its own span");
   assert.equal(span.textContent, "ma\u202Ein");
-  assert.deepEqual(label.children.map((c) => c.textContent), ["vs ", "ma\u202Ein", " (merge base)"]);
+  assert.deepEqual(label.children.map((c) => c.textContent), ["ma\u202Ein", " (merge base) ↔ working tree"]);
   const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8");
   assert.match(css, /\.dk-cmp-base[^{]*\{ unicode-bidi: isolate; \}/, "desktop.css isolates it with the other git names");
 });
@@ -1495,14 +1495,17 @@ test("a show answer for a scope the tab has left, or for a tab that was disposed
   assert.equal(q.st.toasts.length, 0);
 });
 
-test("Changes: the toggle swaps the body for a read-only inline diff of the base text against the live model, headed 'vs HEAD'", async () => {
+test("Changes: the toggle swaps the body for a read-only side by side diff of the base text against the live model, headed 'HEAD ↔ working tree'", async () => {
   const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
   tab.model.type(BUF_TEXT + "unsaved\n"); // an edit not saved: Changes shows it
   assert.equal(tab.dirty(), true);
   changesBtn(tab).click();
   assert.equal(p.st.diffs.length, 1);
   const d = p.st.diffs[0];
-  assert.equal(d.opts.renderSideBySide, false, "inline");
+  assert.equal(d.opts.renderSideBySide, true, "side by side is the default");
+  assert.equal(d.opts.useInlineViewWhenSpaceIsLimited, true, "Monaco's own fallback: a narrow dock shows it inline by itself");
+  assert.equal(d.opts.diffWordWrap, "off");
+  assert.equal(d.opts.lineNumbers, "on");
   assert.deepEqual(d.opts.stickyScroll, { enabled: false }, "no sticky rows over the first changed line (Code has none either)");
   assert.equal(d.opts.readOnly, true, "a review view: typing in it does nothing");
   assert.match(d.opts.readOnlyMessage.value, /Switch to Code to edit/);
@@ -1517,14 +1520,17 @@ test("Changes: the toggle swaps the body for a read-only inline diff of the base
   assert.equal(tab.diff.diff, d);
   assert.deepEqual(tab.bodyEl.children.map((c) => c.className), ["dk-ed-cmp"], "the body is the view, not the editor");
   const [head, body] = tab.bodyEl.children[0].children;
-  assert.equal(head.textContent, "vs HEAD");
+  assert.equal(head.className, "dk-dhead");
+  assert.equal(tab.diff.label.textContent, "HEAD ↔ working tree");
   assert.equal(d.el, body);
   assert.equal(tab.seg.code.getAttribute("aria-pressed"), "false");
   assert.equal(changesBtn(tab).getAttribute("aria-pressed"), "true");
   assert.equal(p.st.git.shows.length, 1, "the toggle reuses the text the gutter asked for");
   assert.ok(d.laid > 0);
   [...d.updated].forEach((f) => f()); // Monaco computed the diff
-  assert.equal(d.revealed, 1, "it opens at the first change");
+  assert.equal(d.revealed, 0, "Monaco's own first difference is not asked: the first change of the gutter's list is");
+  assert.deepEqual(d.modified.positions.at(-1), { lineNumber: tab.changes.lineChanges[0].from, column: 1 }, "it opens at the first change, the cursor on it (F7 goes on from there)");
+  assert.deepEqual(d.modified.revealed, [tab.changes.lineChanges[0].from]);
   assert.equal(d.updated.length, 0);
   // The tab's own state does not change under it.
   assert.equal(tab.dirty(), true);
@@ -1652,8 +1658,8 @@ test("Changes: the label follows the scope; a switch of scope or a new HEAD whil
   p.st.git.answer = (b) => okBlob(b.scope === "branch" ? "l1\nl2\n" : HEAD_TEXT);
   changesBtn(tab).click();
   const d = p.st.diffs[0];
-  const label = () => tab.bodyEl.children[0].children[0].children[0].textContent;
-  assert.equal(label(), "vs HEAD");
+  const label = () => tab.diff.label.textContent;
+  assert.equal(label(), "HEAD ↔ working tree");
   p.st.git.scope = "branch";
   p.st.git.base = { mergeBase: "mb1", baseName: "main" };
   p.get("editorDiffSync")(); // dockChangesRefresh: the scope was picked
@@ -1661,13 +1667,13 @@ test("Changes: the label follows the scope; a switch of scope or a new HEAD whil
   assert.equal(p.st.diffs.length, 1, "the same view, not a new one");
   assert.equal(d.model.original.value, "l1\nl2\n", "the removed side is the merge base's text");
   assert.deepEqual(d.model.original.sets, ["l1\nl2\n"]);
-  assert.equal(label(), "vs main (merge base)");
+  assert.equal(label(), "main (merge base) ↔ working tree");
   assert.equal(changesBtn(tab).title, "Changes vs main (merge base)");
   p.st.git.scope = "head";
   p.get("editorDiffSync")();
   await p.settle();
   assert.equal(d.model.original.value, HEAD_TEXT);
-  assert.equal(label(), "vs HEAD");
+  assert.equal(label(), "HEAD ↔ working tree");
   // Git can no longer give it: the view goes, and says why.
   p.st.git.head = "h9";
   p.st.git.answer = { state: "unavailable", reason: "Git took too long" };
@@ -1740,7 +1746,7 @@ test("Code asked for while the tab is hidden forgets where its Changes view was 
   d2.modified.setScrollTop = (v) => placed.push(v);
   [...d2.updated].forEach((f) => f());
   assert.deepEqual(placed, [], "no scroll to the old place: that view is gone");
-  assert.equal(d2.revealed, 1, "it opens at the first change, as a Changes view does");
+  assert.deepEqual(d2.modified.revealed, [tab.changes.lineChanges[0].from], "it opens at the first change, as a Changes view does");
 });
 
 test("one diff editor for the dock: two tabs left in Changes, switched back and forth, never have two", async () => {

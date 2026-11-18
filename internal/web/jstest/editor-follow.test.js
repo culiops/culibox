@@ -399,8 +399,8 @@ test("the toggle is a button in the tab's actions, an eye and the word, pressed 
     assert.equal(t.followBtn.getAttribute("aria-pressed"), "false");
     assert.ok(t.actsEl.children.includes(t.followBtn), "in the actions, with the Code | Changes toggle and the ⋯");
   }
-  assert.deepEqual(a.actsEl.children.map((c) => c.className.split(" ")[0]), ["seg", "btn", "btn"], "Code | Changes, Follow, then ⋯ (Follow before the ⋯)");
-  assert.equal(a.actsEl.children[1], a.followBtn);
+  assert.deepEqual(a.actsEl.children.map((c) => c.className.split(" ")[0]), ["seg", "seg", "btn", "btn"], "Code | Changes, the diff layout (Changes only), Follow, then ⋯ (Follow before the ⋯)");
+  assert.equal(a.actsEl.children[2], a.followBtn);
   a.followBtn.click();
   assert.equal(f.p.get("editorFollowOn")("s1"), true, "a press turns it on for the dock's session");
   assert.equal(a.followBtn.getAttribute("aria-pressed"), "true");

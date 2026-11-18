@@ -1305,6 +1305,12 @@
   .dk-ct { flex: none; display: inline-flex; gap: 4px; font: var(--w-medium) var(--t-xs)/1 var(--font-mono); color: var(--muted); }
   .dk-add { color: var(--ok); }
   .dk-del { color: var(--danger); }
+  /* The review loop's marks on a row (dockchanges.js): the circle at the left is filled green with a tick once the file is reviewed
+     (and while the mark still stands), and the chip counts the notes waiting to be sent. */
+  .dk-ck { flex: none; box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--faint); display: grid; place-items: center; }
+  .dk-ck-done { background: var(--ok); border-color: var(--ok); }
+  .dk-ck-done::after { content: ""; width: 6px; height: 3px; border: solid var(--bg); border-width: 0 0 1.5px 1.5px; transform: rotate(-45deg) translate(0, -1px); }
+  .dk-nt { flex: none; padding: 0 5px; border-radius: 7px; background: var(--accent-tint); color: var(--accent); font: var(--w-semibold) var(--t-xs)/14px var(--font-ui); }
   .dk-row .dk-st { min-width: 12px; text-align: center; }
   .dk-more { padding: 3px 10px; font-size: var(--t-sm); color: var(--muted); }
   .dk-legend { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 10px 8px 12px; font-size: var(--t-xs); line-height: var(--lh-xs); color: var(--muted); }
@@ -1439,6 +1445,19 @@
   .dk-ed-cmp { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
   .dk-cmp-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 10px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
   .dk-cmp-body { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+  /* The Changes view's header row (editorreview.js, mockup B2): what is compared on the left (the name gives way first), and on the
+     right "Change N of M" with prev / next and the Mark reviewed toggle. In a narrow dock the right group drops under the left one. */
+  .dk-dhead { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; min-height: 30px; padding: 2px 12px; box-sizing: border-box; background: var(--bg); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui); }
+  .dk-dh-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: var(--w-medium); unicode-bidi: isolate; }
+  .dk-dh-cmp { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dk-dh-ct[hidden] { display: none; }
+  .dk-dh-r { flex: none; display: flex; align-items: center; gap: 4px; margin-left: auto; white-space: nowrap; }
+  .dk-dh-pos { margin-right: 4px; }
+  .dk-dh-kbd { margin: 0 6px 0 2px; font-family: var(--font-mono); font-size: var(--t-xs); color: var(--muted); }
+  .dk-dh-step { width: 22px; height: 22px; padding: 0; }
+  .dk-dh-mark { height: 22px; padding: 0 10px; }
+  .dk-dh-mark[aria-pressed="true"] { color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); }
+  .dk-dh-mark[aria-pressed="true"]::before { content: ""; width: 8px; height: 4px; margin-right: 6px; border: solid currentColor; border-width: 0 0 1.5px 1.5px; transform: rotate(-45deg) translate(1px, -1px); }
   /* The status bar (mockup B1 .esb): the branch and "Saved" on the left; Ln/Col, indentation, encoding, line ending and language on the
      right. One 24px line that never wraps; what does not fit is cut at the left group, so the right group keeps its words. */
   .dk-sb {
