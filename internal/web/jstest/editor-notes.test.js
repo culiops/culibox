@@ -24,6 +24,7 @@ async function setup(o) {
   p.st.git.on = true;
   p.st.git.answer = { state: "ok", content: HEAD_TEXT };
   p.setShown(true);
+  cur = p;
   const tab = await p.open("/p/b.go");
   await p.settle();
   if (opt.load) p.get("notesLoad")(["s1"]);
@@ -41,7 +42,15 @@ function enter(p, tab) {
 // What a test does with the timers the page asked for (setTimeout(fn, 0) stands for the next frame; 300 ms is the save).
 const runTimers = (p, ms) => { for (const t of p.st.timers) if (!t.dead && (ms === undefined || t.ms === ms)) { t.dead = true; t.fn(); } };
 const zonesOf = (ed) => [...ed.zones.values()];
-const find = (z, sel) => z.domNode.querySelector(sel);
+// A note is a card (an overlay widget) over a zone that is only its room: the card of a zone has the zone's data-nz.
+let cur = null;
+const editorsOf = (p) => [...p.st.editors, ...p.st.diffs.flatMap((d) => [d.modified, d.original])];
+const cardOf = (z) => {
+  const key = z.domNode.getAttribute("data-nz");
+  for (const e of editorsOf(cur)) for (const w of e.overlays.values()) if (w.getDomNode().getAttribute("data-nz") === key) return w.getDomNode();
+  return null;
+};
+const find = (z, sel) => { const c = cardOf(z); return c ? c.querySelector(sel) : null; };
 const stored = (store) => JSON.parse(store.get("agent-box:notes") || "null");
 const ev = (o) => Object.assign({ key: "", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, code: "", defaultPrevented: false, stopped: false,
   preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; } }, o);
@@ -99,7 +108,6 @@ test("a press on the + opens the box under the line; empty text cannot be saved;
   assert.equal(z.afterLineNumber, 4, "under the line");
   const ta = find(z, "textarea.dk-note-in");
   assert.ok(ta, "a textarea.dk-note-in");
-  assert.equal(z.suppressMouseDown, true, "a press in the box is the box's, not the editor's");
   const saveBtn = find(z, "button.btn-primary");
   assert.equal(saveBtn.getAttribute("aria-disabled"), "true", "empty: Save says so");
   saveBtn.click();
@@ -489,4 +497,204 @@ test("a zone is as tall as its content: a measured height lays it out again, onc
   hoverLine(mod, 4); pressGutter(mod, 4);
   const z = zonesOf(mod)[0];
   assert.equal(z.heightInPx > 0, true);
+});
+
+// --- the card is an overlay widget, the zone is its room -------------------------------------------------------------
+
+test("a note is a card in an overlay widget (not in Monaco's aria-hidden view-zone container); the zone is an empty room of the card's height", async () => {
+  const { p, mod } = await setup();
+  hoverLine(mod, 4); pressGutter(mod, 4);
+  save(write(zonesOf(mod)[0], "hello"));
+  const z = zonesOf(mod)[0];
+  assert.equal(z.domNode.children.length, 0, "the room holds nothing: no focusable control can sit under aria-hidden");
+  assert.equal(z.domNode.className, "dk-nz-room");
+  const card = cardOf(z);
+  assert.ok(card, "the card is an overlay widget of the same editor");
+  assert.equal(card.getAttribute("role"), "group");
+  assert.equal(card.getAttribute("aria-label"), "Note on line 4");
+  const w = [...mod.overlays.values()][0];
+  assert.equal(w.getPosition(), null, "placed by its own style, from the room's top");
+  assert.match(w.getId(), /^dk\.note\./);
+  for (const b of card.querySelectorAll("button")) assert.ok(b.getAttribute("aria-label") || b.textContent, "named buttons");
+  // The box and the edit box are named too.
+  hoverLine(mod, 2); pressGutter(mod, 2);
+  assert.equal(cardOf(zonesOf(mod).find((x) => x !== z)).getAttribute("aria-label"), "New note on line 2");
+  find(z, ".dk-note-act").children[0].click();
+  assert.equal(cardOf(z).getAttribute("aria-label"), "Editing the note on line 4");
+  void p;
+});
+
+test("the card follows the room: Monaco says where the room is on every frame, and a room scrolled out of view puts the card far above", async () => {
+  const { mod } = await setup();
+  hoverLine(mod, 4); pressGutter(mod, 4);
+  const z = zonesOf(mod)[0];
+  const card = cardOf(z);
+  assert.equal(card.style.top, "-100000px", "not shown until the room's place is known");
+  assert.equal(card.style.left, "60px", "the text area's left");
+  assert.equal(card.style.width, "600px", "and its width");
+  z.onDomNodeTop(228);
+  assert.equal(card.style.top, "228px");
+  z.onDomNodeTop(180);
+  assert.equal(card.style.top, "180px", "scrolling moves it with the line");
+  z.onDomNodeTop(-1000000 + 180);
+  assert.ok(parseInt(card.style.top, 10) < -100000 + 180, "out of view: out of the editor");
+});
+
+test("a wheel over a card scrolls the editor (it is not in the scrolled element); over a text box with its own scroll it does not", async () => {
+  const { mod } = await setup();
+  hoverLine(mod, 4); pressGutter(mod, 4);
+  const card = cardOf(zonesOf(mod)[0]);
+  let prevented = 0;
+  card.listeners.wheel({ target: card, deltaY: 40, deltaX: 5, deltaMode: 0, preventDefault() { prevented++; } });
+  assert.equal(prevented, 1);
+  assert.equal(mod.top, 40);
+  assert.equal(mod.left, 5);
+  const ta = card.querySelector("textarea");
+  ta.tagName = "TEXTAREA";
+  ta.scrollHeight = 200; ta.clientHeight = 60;
+  card.listeners.wheel({ target: ta, deltaY: 40, deltaX: 0, deltaMode: 0, preventDefault() { prevented++; } });
+  assert.equal(prevented, 1, "the text box scrolls itself");
+  assert.equal(mod.scrolled, 1);
+});
+
+test("leaving Changes removes the cards as well as the rooms", async () => {
+  const { p, tab, mod } = await setup();
+  hoverLine(mod, 4); pressGutter(mod, 4);
+  save(write(zonesOf(mod)[0], "n"));
+  assert.equal(mod.overlays.size, 1);
+  tab.showChanges(false);
+  assert.equal(mod.overlays.size, 0);
+  assert.equal(p.st.diffs[0].original.overlays.size, 0);
+});
+
+// --- the notes follow the file for as long as its tab is open ----------------------------------------------------------
+
+const addNote = (p, line, quote, text) => p.get("notesUpdate")("s1", (l) => p.get("noteAdd")(l, { path: "/p/b.go", rel: "b.go", side: "new", line, quote, text: text || "n" }));
+const decorsOf = (tab) => tab.model.decor.list().filter((d) => d.options.stickiness !== undefined);
+const sync = (p, tab, text) => p.get("editorSyncReplace")(tab, text, "v" + text.length, true);
+
+test("a replace from disk while the tab is in Code moves the note and saves it, with no Changes view open", async () => {
+  const { p, tab, store } = await setup({ enter: false });
+  assert.equal(tab.diff, null);
+  addNote(p, 4, "l4 new");
+  sync(p, tab, "a\nb\nc\n" + BUF_TEXT);
+  assert.equal(notes(p)[0].line, 7);
+  assert.equal(notes(p)[0].outdated, false);
+  runTimers(p, 300);
+  assert.equal(stored(store).sessions.s1.notes[0].line, 7, "and the stored line");
+  assert.equal(decorsOf(tab).length, 1, "the decoration is put again after the new text");
+  assert.equal(tab.model.decor.list().find((d) => d.options.stickiness !== undefined).range.startLineNumber, 7);
+  sync(p, tab, "x\ny\n");
+  assert.equal(notes(p)[0].outdated, true, "the text is gone");
+  assert.equal(decorsOf(tab).length, 0, "an outdated note has no decoration");
+});
+
+test("the user's own edits in Code are followed: lines typed above move the stored line, even more than the 50 lines reanchor looks at", async () => {
+  const { p, tab, store } = await setup({ enter: false });
+  addNote(p, 4, "l4 new");
+  const d0 = decorsOf(tab);
+  assert.equal(d0.length, 1);
+  assert.equal(d0[0].options.stickiness, 1, "NeverGrowsWhenTypingAtEdges");
+  assert.equal(d0[0].range.startLineNumber, 4);
+  tab.model.insertLines(2, Array.from({ length: 60 }, (_, i) => "typed " + i));
+  assert.equal(notes(p)[0].line, 64, "notesFor reads the decoration back before it answers");
+  assert.equal(notes(p)[0].outdated, false);
+  assert.equal(p.get("notesPending")("s1"), 1);
+  runTimers(p, 300);
+  assert.equal(stored(store).sessions.s1.notes[0].line, 64);
+  assert.equal(p.get("notesFor")("s1")[0].quote, "l4 new");
+});
+
+test("per keystroke nothing is read: a typed edit only sets a flag and re-arms the debounce, and the store is read back when it fires", async () => {
+  const { p, tab } = await setup({ enter: false });
+  addNote(p, 4, "l4 new");
+  runTimers(p, 300);
+  tab.model.insertLines(1, ["x"]);
+  const first = p.get("ntTimer");
+  assert.ok(first, "the save is armed");
+  tab.model.insertLines(1, ["y"]);
+  const second = p.get("ntTimer");
+  assert.notEqual(first, second);
+  assert.equal(p.st.timers[first - 1].dead, true, "the earlier one was reset, not stacked");
+  assert.equal(p.get("ntStore").get("s1")[0].line, 4, "not read yet");
+  const t = p.st.timers[second - 1];
+  t.dead = true;
+  t.fn();
+  assert.equal(p.get("ntStore").get("s1")[0].line, 6);
+});
+
+test("editing the noted line keeps the note on it and refreshes its quote (it is the line as it is now); the note is not outdated", async () => {
+  const { p, tab } = await setup({ enter: false });
+  addNote(p, 4, "l4 new");
+  tab.model.editLine(4, "l4 reworded");
+  const n = notes(p)[0];
+  assert.deepEqual([n.line, n.quote, n.outdated], [4, "l4 reworded", false]);
+});
+
+test("deleting the noted line in Code: the decoration collapses, the quote search finds nothing, the note is outdated", async () => {
+  const { p, tab } = await setup({ enter: false });
+  addNote(p, 4, "l4 new");
+  addNote(p, 2, "l2 changed");
+  tab.model.deleteLine(4);
+  const [a, b] = notes(p);
+  assert.equal(a.outdated, true);
+  assert.equal(a.line, 4, "an outdated note keeps its line");
+  assert.equal(b.line, 2);
+  assert.equal(b.outdated, false, "a line above is unaffected");
+  assert.equal(decorsOf(tab).length, 1, "only the live note keeps a decoration");
+});
+
+test("a line cut and pasted elsewhere: the collapsed decoration falls back to the quote search and the note moves with the text", async () => {
+  const { p, tab } = await setup({ enter: false });
+  addNote(p, 4, "l4 new");
+  tab.model.deleteLine(4);
+  tab.model.insertLines(1, ["l4 new"]);
+  const n = notes(p)[0];
+  assert.deepEqual([n.line, n.outdated], [1, false]);
+});
+
+test("a new value of the whole text that is not a replace from disk (discarding the user's edits) re-anchors by quote and puts the decorations again", async () => {
+  const { p, tab } = await setup({ enter: false });
+  addNote(p, 4, "l4 new");
+  tab.model.setValue("z1\nz2\n" + BUF_TEXT); // Monaco clears the decorations with it; no onReplace
+  assert.equal(notes(p)[0].line, 6);
+  assert.equal(decorsOf(tab).length, 1);
+});
+
+test("a tab opened before the notes were read follows its text from then on, and a note of another file is left alone", async () => {
+  const store = new Map();
+  store.set("agent-box:notes", JSON.stringify({ v: 1, sessions: { s1: { notes: [
+    { id: "a", path: "/p/b.go", rel: "b.go", side: "new", line: 1, quote: "l4 new", text: "t", status: "pending", outdated: false, at: 1 },
+    { id: "b", path: "/p/other.go", rel: "other.go", side: "new", line: 3, quote: "x", text: "t", status: "pending", outdated: false, at: 1 },
+  ] } } }));
+  const { p, tab } = await setup({ enter: false, load: false, store });
+  assert.equal(decorsOf(tab).length, 0);
+  p.get("notesLoad")(["s1"]);
+  assert.equal(notes(p).find((n) => n.id === "a").line, 4, "re-anchored to where its text is");
+  assert.equal(notes(p).find((n) => n.id === "b").line, 3);
+  assert.equal(decorsOf(tab).length, 1);
+});
+
+test("closing the tab lets the tracking go: the decorations, the content listener and the replace subscription", async () => {
+  const { p, tab } = await setup({ enter: false });
+  addNote(p, 4, "l4 new");
+  const model = tab.model;
+  const before = model.listeners.length;
+  const subs = p.get("ntTabs").size;
+  assert.equal(subs, 1);
+  tab.dispose();
+  assert.equal(p.get("ntTabs").size, 0);
+  assert.equal(model.decor.list().filter((d) => d.options.stickiness !== undefined).length, 0);
+  assert.equal(model.listeners.length, 0, "(" + before + " listeners before; the model's own are gone with it)");
+  assert.doesNotThrow(() => p.get("notesFor")("s1"));
+  assert.doesNotThrow(() => runTimers(p));
+});
+
+test("the same file in a tab of another session's dock is not touched: notes are read per session", async () => {
+  const { p, tab } = await setup({ enter: false });
+  addNote(p, 4, "l4 new");
+  p.host.sessionId = () => "s2";
+  tab.model.insertLines(1, ["x"]);
+  runTimers(p, 300);
+  assert.equal(p.get("ntStore").get("s1")[0].line, 4, "s2's tab does not move s1's notes");
 });

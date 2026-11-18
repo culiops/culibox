@@ -398,6 +398,7 @@ class EditorTab {
     this.diskText = res.data.content || "";
     this.model = dockMonaco.editor.createModel(this.diskText, monacoLang(this.path));
     this.savedAlt = this.model.getAlternativeVersionId();
+    if (typeof editorNotesTrack === "function") editorNotesTrack(this); // the file's notes follow its text for as long as the tab is open (editornotes.js)
     this.contentSub = this.model.onDidChangeContent(() => this.onContent());
     this.optionsSub = this.model.onDidChangeOptions(() => this.paintStatus());
     if (this.attached) this.show();
@@ -573,6 +574,7 @@ class EditorTab {
     this.disposed = true;
     editorSyncDispose(this); // before the model goes: a compare view holds it
     editorDiffDispose(this); // and so does the Changes view
+    if (typeof editorNotesUntrack === "function") editorNotesUntrack(this); // its note decorations and its listener
     editorMdDispose(this);   // and the Preview's subscription
     if (this.savedTimer) clearTimeout(this.savedTimer);
     this.closeMenu();

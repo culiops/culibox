@@ -2,8 +2,8 @@
 
 // Line notes in the Files dock's Changes view (spec "Review loop (P3)", mockup B2): the reviewer's comments on lines of the file, kept on
 // the page and pasted to the agent as one message (the paste bar is a later task's). notesmodel.js is the pure half: what a note is,
-// how it moves with the file (reanchor, reanchorOld), what is stored. This file is the DOM: the store the page holds, and the Monaco
-// view zones that show and edit the notes in a diff editor.
+// how it moves with the file (reanchor, reanchorOld), what is stored. This file is the DOM: the store the page holds, and the cards (Monaco overlay
+// widgets, each over a view zone that only holds its room) that show and edit the notes in a diff editor.
 //
 // The store. One Map, session id -> the session's notes (a list that is replaced, never edited in place), read once by notesLoad from
 // the first successful session list (app.js, next to reviewMarksLoad: loadNotes drops every session it is not told is alive, so it
@@ -68,14 +68,22 @@ function notesLoad(sids) {
   if (ntStore !== null || !Array.isArray(sids) || !sids.length) return;
   const st = ntStorage();
   ntStore = st ? loadNotes(st, sids) : new Map();
+  for (const tab of [...ntTabs]) ntRefreshTab(tab); // tabs that were open before the notes were: their lines follow the text first
   ntChanged(null);
 }
 
 const NT_NONE = Object.freeze([]);
 
-// notesFor: the session's notes, pending and sent (a list: never changed in place); empty while the store is not read.
-function notesFor(sid) {
+// ntRaw: the session's notes as the store holds them, with no sync of the open tabs' lines first (the sync itself reads it).
+function ntRaw(sid) {
   return (ntStore && sid && ntStore.get(sid)) || NT_NONE;
+}
+
+// notesFor: the session's notes, pending and sent (a list: never changed in place); empty while the store is not read. The lines are
+// the file's as it is now, edits of the user's own in Code included: the tracked tabs are synced first (ntSyncAll).
+function notesFor(sid) {
+  ntSyncAll();
+  return ntRaw(sid);
 }
 
 function notesPending(sid) {
@@ -105,17 +113,30 @@ function notesShowSentOf(sid) {
 }
 
 function ntSet(sid, list) {
-  if (list.length) ntStore.set(sid, list); else ntStore.delete(sid);
-  ntDirty.add(sid);
-  if (ntTimer !== null) clearTimeout(ntTimer);
-  ntTimer = setTimeout(ntFlush, NT_SAVE_MS);
+  ntSetQuiet(sid, list);
   ntChanged(sid);
 }
 
+// ntSetQuiet: the store takes the list and it is saved on the next debounce, with no repaint (the sync inside notesFor must not repaint a
+// list that is being drawn; it asks for one after).
+function ntSetQuiet(sid, list) {
+  if (list.length) ntStore.set(sid, list); else ntStore.delete(sid);
+  ntDirty.add(sid);
+  ntSchedule();
+}
+
+function ntSchedule() {
+  if (ntTimer !== null) clearTimeout(ntTimer);
+  ntTimer = setTimeout(ntFlush, NT_SAVE_MS);
+}
+
+// ntFlush: the lines of the open tabs are read back from their decorations, then what changed is saved.
 function ntFlush() {
   if (ntTimer !== null) { clearTimeout(ntTimer); ntTimer = null; }
+  ntSyncAll();
+  if (ntTimer !== null) { clearTimeout(ntTimer); ntTimer = null; }
   const st = ntStorage();
-  if (st && ntStore) for (const sid of ntDirty) saveNotes(st, sid, notesFor(sid));
+  if (st && ntStore) for (const sid of ntDirty) saveNotes(st, sid, ntRaw(sid));
   ntDirty.clear();
 }
 
@@ -125,7 +146,136 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 // ntChanged: the notes of `sid` (every session's, for null) changed: the Changes section's chip, and the diff editors that show them.
 function ntChanged(sid) {
   if (typeof dockChangesRender === "function") { try { dockChangesRender(); } catch (_) { /* the list's fault is not the note's */ } }
+  for (const tab of [...ntTabs]) ntDecorate(tab);
   for (const hs of [...ntHosts.values()]) if (sid === null || hs.h.sid() === sid) ntPaint(hs);
+}
+
+// --- following the file for as long as its tab is open --------------------------------------------------------------
+
+// A note's line has to follow the file whether or not a Changes view is open: notesFor feeds the paste bar. So every EditorTab is tracked
+// from the moment its model exists until it is disposed (editortab.js: editorNotesTrack / editorNotesUntrack):
+//   - a replace from disk (editorSyncOnReplace: a reload, "Load the agent's version") re-anchors the file's notes by their quote (reanchor);
+//   - the user's own edits in Code are followed by a model decoration per new-side note (the spec: "a Monaco decoration tracks the line
+//     through edits"), a whole-line range that never grows when typing at its edges. They are read back, debounced with the save and
+//     before notesFor answers (ntSyncAll), into the store: the note takes the decoration's line, and the line's text as its quote (the
+//     note is about the line as it is). A decoration that collapsed (its line was deleted or replaced whole) falls back to the quote
+//     search, which moves the note to the same text nearby or says "outdated" (an outdated note has no decoration).
+// A new value of the whole text (setValue: a replace from disk, discarding the user's edits) clears the model's decorations: they are
+// put again from the re-anchored lines.
+const ntTabs = new Set();
+let ntSyncing = false;
+
+function ntTabSid(tab) {
+  return tab.host && typeof tab.host.sessionId === "function" ? tab.host.sessionId() : null;
+}
+
+function editorNotesTrack(tab) {
+  if (!tab || !tab.model || tab.ntTr || tab.disposed) return;
+  const tr = { ids: new Map(), sig: "", dirty: false, flushed: false, sub: null, unsub: null };
+  tab.ntTr = tr;
+  ntTabs.add(tab);
+  tr.sub = tab.model.onDidChangeContent((e) => ntModelChanged(tab, e));
+  tr.unsub = editorSyncOnReplace(tab, () => ntRefreshTab(tab));
+  ntRefreshTab(tab);
+}
+
+// editorNotesUntrack: the tab is closed; its decorations and listeners go, before its model does.
+function editorNotesUntrack(tab) {
+  const tr = tab && tab.ntTr;
+  if (!tr) return;
+  tab.ntTr = null;
+  ntTabs.delete(tab);
+  if (tr.sub) tr.sub.dispose();
+  if (tr.unsub) tr.unsub();
+  try { if (tab.model && tr.ids.size) tab.model.deltaDecorations([...tr.ids.values()], []); } catch (_) { /* the model is gone */ }
+}
+
+// ntModelChanged: the text changed. Nothing is done per keystroke but a flag and the debounce of the save, and only for a file that has
+// notes on it.
+function ntModelChanged(tab, e) {
+  const tr = tab.ntTr;
+  if (!tr || !tr.ids.size) return;
+  if (e && (e.isFlush || e.replaced)) { tr.ids = new Map(); tr.sig = ""; tr.flushed = true; }
+  tr.dirty = true;
+  ntSchedule();
+}
+
+function ntSyncAll() {
+  if (ntSyncing) return;
+  ntSyncing = true;
+  try { for (const tab of [...ntTabs]) ntSyncTab(tab); } finally { ntSyncing = false; }
+}
+
+// ntSyncTab reads the tab's decorations back into the store.
+function ntSyncTab(tab) {
+  const tr = tab.ntTr;
+  if (!tr || !tr.dirty) return;
+  tr.dirty = false;
+  if (tr.flushed) { ntRefreshTab(tab); return; }
+  const sid = ntTabSid(tab);
+  const m = tab.model;
+  if (!sid || !m || ntStore === null) return;
+  const cur = ntRaw(sid);
+  const gone = new Set();
+  let next = cur.map((n) => {
+    const id = tr.ids.get(n.id);
+    if (!id) return n;
+    const r = m.getDecorationRange(id);
+    if (!r || (n.quote !== "" && r.startLineNumber === r.endLineNumber && r.startColumn === r.endColumn)) { gone.add(n.id); return n; }
+    const text = m.getLineContent(r.startLineNumber);
+    return r.startLineNumber === n.line && text === n.quote ? n : Object.assign({}, n, { line: r.startLineNumber, quote: text });
+  });
+  if (gone.size) {
+    const re = reanchor(next, tab.path, m.getValue());
+    next = next.map((n, i) => (gone.has(n.id) ? re[i] : n));
+  }
+  if (next.some((n, i) => n !== cur[i])) {
+    ntSetQuiet(sid, next);
+    ntLater(() => ntChanged(sid));
+  }
+  ntDecorate(tab);
+}
+
+// ntRefreshTab: the text was replaced (or the notes were just read): the file's new-side notes are re-anchored by their quote and the
+// decorations are made again.
+function ntRefreshTab(tab) {
+  const tr = tab.ntTr;
+  const m = tab.model;
+  if (!tr || !m) return;
+  try { if (tr.ids.size) m.deltaDecorations([...tr.ids.values()], []); } catch (_) { /* cleared with the text */ }
+  tr.ids = new Map();
+  tr.sig = "";
+  tr.dirty = false;
+  tr.flushed = false;
+  const sid = ntTabSid(tab);
+  if (sid && ntStore !== null) {
+    const cur = ntRaw(sid);
+    if (cur.some((n) => n.path === tab.path)) {
+      const next = reanchor(cur, tab.path, m.getValue());
+      if (next.some((n, i) => n !== cur[i])) ntSet(sid, next);
+    }
+  }
+  ntDecorate(tab);
+}
+
+// ntDecorate: one decoration per current new-side note of the tab's file, at its line; written only when the set or a line differs.
+function ntDecorate(tab) {
+  const tr = tab.ntTr;
+  const m = tab.model;
+  if (!tr || !m) return;
+  const sid = ntTabSid(tab);
+  const count = m.getLineCount();
+  const want = sid ? ntRaw(sid).filter((n) => n.path === tab.path && n.side === "new" && !n.outdated && n.line >= 1 && n.line <= count) : [];
+  const sig = want.map((n) => n.id + ":" + n.line).join("|");
+  if (sig === tr.sig) return;
+  const M = ntMonaco();
+  const stick = M && M.editor && M.editor.TrackedRangeStickiness ? M.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges : 1;
+  const ids = m.deltaDecorations([...tr.ids.values()], want.map((n) => ({
+    range: { startLineNumber: n.line, startColumn: 1, endLineNumber: n.line, endColumn: m.getLineMaxColumn(n.line) },
+    options: { stickiness: stick },
+  })));
+  tr.ids = new Map(want.map((n, i) => [n.id, ids[i]]));
+  tr.sig = sig;
 }
 
 // --- hosts ----------------------------------------------------------------------------------------------------------
@@ -196,7 +346,6 @@ function editorNotesAttachHost(h) {
     hs.subs.push(ed.onMouseDown((e) => ntMouseDown(hs, name, e, T)));
     // The original editor is on screen or not (Inline, a narrow dock) without anything of ours having changed: its notes move.
     hs.subs.push(ed.onDidLayoutChange(() => { ntFitAll(hs); const s = ntOrigShown(hs); if (s !== hs.sbs) { hs.sbs = s; ntPaint(hs); } }));
-    if (typeof ed.onDidScrollChange === "function") hs.subs.push(ed.onDidScrollChange((e) => { if (e.scrollLeftChanged) ntFitAll(hs); }));
   }
   hs.sbs = ntOrigShown(hs);
   // A new diff of the two texts (the base moved, the file changed) moves where an Inline old-side note is drawn.
@@ -369,7 +518,7 @@ function ntNoteView(hs, n) {
     el.append(q);
   }
   el.append(ntEl("div", "dk-note-body", n.text));
-  return { el, tick: () => { const t = ntMeta(n); if (meta.textContent !== t) meta.textContent = t; } };
+  return { el, label: "Note on " + ntNoteWhere(n), tick: () => { const t = ntMeta(n); if (meta.textContent !== t) meta.textContent = t; } };
 }
 
 // ntTickAll: the notes' times are refreshed (a label that said "just now" an hour ago is a wrong one). Not on a timer of its own (the
@@ -403,7 +552,7 @@ function ntWanted(hs) {
   if (hs.compose) {
     const c = hs.compose;
     const at = ntPlace(hs, c.side, c.line);
-    out.push({ key: c.key, ed: at.ed, line: at.line, h0: NT_COMPOSE_H, sig: c.key, build: () => ({ el: c.box.el }) });
+    out.push({ key: c.key, ed: at.ed, line: at.line, h0: NT_COMPOSE_H, sig: c.key, build: () => ({ el: c.box.el, label: "New note on " + (c.side === "old" ? "removed line " : "line ") + c.line }) });
   }
   return out;
 }
@@ -426,16 +575,28 @@ function ntPaint(hs, force) {
   for (const w of want) if (!hs.zones.has(w.key)) grp(w.ed).add.push(w);
   for (const [ed, g] of groups) {
     ed.changeViewZones((acc) => {
-      for (const z of g.del) { z.dead = true; acc.removeZone(z.id); ntUnwatch(z); }
+      for (const z of g.del) { z.dead = true; acc.removeZone(z.id); ed.removeOverlayWidget(z.widget); ntUnwatch(z); }
       for (const [z, w] of g.mv) { z.zone.afterLineNumber = w.line; z.line = w.line; acc.layoutZone(z.id); }
       for (const [z, w] of g.re) { acc.removeZone(z.id); z.zone.afterLineNumber = w.line; z.line = w.line; z.id = acc.addZone(z.zone); }
       for (const w of g.add) {
+        // Two parts (VS Code's ZoneWidget): the view zone is only the room, an empty spacer of the card's height that Monaco keeps under
+        // the line; the card is an overlay widget, put at the spacer's top (onDomNodeTop). Monaco marks the view zones' own container
+        // aria-hidden, so a card inside it would be invisible to assistive technology and its buttons would be focusable under
+        // aria-hidden (measured in 0.57.0); the overlay layer is not hidden.
+        const spacer = ntEl("div", "dk-nz-room");
         const node = ntEl("div", "dk-nz");
         const box = ntEl("div", "dk-nz-in");
+        node.setAttribute("role", "group");
+        node.setAttribute("data-nz", w.key);
+        spacer.setAttribute("data-nz", w.key);
+        node.style.top = "-100000px"; // until Monaco has said where the room is
         node.append(box);
-        // suppressMouseDown: a press in the zone is the textarea's and the buttons', not the editor's (which would take the keyboard).
-        const zone = { afterLineNumber: w.line, heightInPx: w.h0, domNode: node, suppressMouseDown: true };
-        const z = { key: w.key, ed, node, box, zone, line: w.line, sig: "", h: w.h0, id: acc.addZone(zone), tick: null, ro: null, dead: false, pending: false };
+        const z = { key: w.key, ed, node, box, zone: null, widget: null, line: w.line, sig: "", h: w.h0, top: null, id: 0, tick: null, ro: null, dead: false, pending: false };
+        z.zone = { afterLineNumber: w.line, heightInPx: w.h0, domNode: spacer, onDomNodeTop: (top) => ntTop(z, top) };
+        z.widget = { getId: () => "dk.note." + w.key, getDomNode: () => node, getPosition: () => null };
+        z.id = acc.addZone(z.zone);
+        ed.addOverlayWidget(z.widget);
+        node.addEventListener("wheel", (e) => ntWheel(z, e), { passive: false });
         hs.zones.set(w.key, z);
         ntFill(z, w);
         ntFit(z);
@@ -446,18 +607,34 @@ function ntPaint(hs, force) {
   if (hs.focusSoon) { const f = hs.focusSoon; hs.focusSoon = null; ntLater(f); }
 }
 
-// ntFit: a zone is as wide as the editor's text area and stays in it when the lines are scrolled sideways. Monaco gives a zone the width
-// of the longest line, so a text box would reach past the pane and the browser would scroll the lines to follow the caret.
+// ntFit: the card is as wide as the editor's text area and starts where it does. An overlay widget does not scroll with the lines, so a
+// text box stays in view when a long line is scrolled sideways.
 function ntFit(z) {
-  const ed = z.ed;
-  if (typeof ed.getScrollLeft !== "function") return;
-  const w = Math.max(160, ed.getLayoutInfo().contentWidth);
-  const sl = ed.getScrollLeft();
-  if (z.fitW === w && z.fitL === sl) return;
+  const info = z.ed.getLayoutInfo();
+  const w = Math.max(160, info.contentWidth);
+  if (z.fitW === w && z.fitL === info.contentLeft) return;
   z.fitW = w;
-  z.fitL = sl;
-  z.box.style.width = w + "px";
-  z.box.style.marginLeft = sl + "px";
+  z.fitL = info.contentLeft;
+  z.node.style.width = w + "px";
+  z.node.style.left = info.contentLeft + "px";
+}
+
+// ntTop: Monaco says, on every frame it draws, where the room under the line is (in the editor's own pixels: a room scrolled out of
+// view is told a far negative one, and the card goes there too).
+function ntTop(z, top) {
+  if (z.top === top) return;
+  z.top = top;
+  z.node.style.top = top + "px";
+}
+
+// ntWheel: the card is not in the scrolled element, so the wheel over it would stop; it goes to the editor, except over a text box that
+// has text of its own to scroll.
+function ntWheel(z, e) {
+  const t = e.target;
+  if (t && t.tagName === "TEXTAREA" && t.scrollHeight > t.clientHeight) return;
+  e.preventDefault();
+  const px = e.deltaMode === 1 ? 19 : e.deltaMode === 2 ? z.ed.getLayoutInfo().height : 1;
+  z.ed.setScrollPosition({ scrollTop: z.ed.getScrollTop() + e.deltaY * px, scrollLeft: z.ed.getScrollLeft() + e.deltaX * px });
 }
 
 function ntFitAll(hs) {
@@ -467,6 +644,7 @@ function ntFitAll(hs) {
 function ntFill(z, w) {
   const v = w.build();
   z.box.replaceChildren(v.el);
+  z.node.setAttribute("aria-label", v.label);
   z.tick = v.tick || null;
   z.sig = w.sig;
 }
@@ -503,7 +681,7 @@ function ntSize(z) {
 function ntDrop(z, remove) {
   z.dead = true;
   ntUnwatch(z);
-  if (!remove) { try { z.ed.changeViewZones((acc) => acc.removeZone(z.id)); } catch (_) { /* the editor is gone */ } }
+  if (!remove) { try { z.ed.changeViewZones((acc) => acc.removeZone(z.id)); z.ed.removeOverlayWidget(z.widget); } catch (_) { /* the editor is gone */ } }
 }
 
 // --- the glyph margin's "+" -----------------------------------------------------------------------------------------
@@ -580,7 +758,11 @@ function ntShowCompose(hs, c) {
 // on screen and is tried on the next frames until it has stuck.
 function ntTakeKeyboard(hs, c, tries) {
   if (hs.dead || hs.compose !== c) return;
-  const shown = typeof c.ta.offsetHeight !== "number" || c.ta.offsetHeight > 0;
+  // On screen: Monaco has put its room in view (a card of a room that is scrolled out is far above the editor) and it has a size.
+  const z = hs.zones.get(c.key);
+  const real = typeof c.ta.offsetHeight === "number";
+  const placed = !!z && (typeof z.top === "number" ? z.top > -50000 : !real);
+  const shown = placed && (!real || c.ta.offsetHeight > 0);
   if (shown) c.ta.focus();
   if (tries > 0 && (!shown || document.activeElement !== c.ta)) ntLater(() => ntTakeKeyboard(hs, c, tries - 1));
 }
@@ -608,7 +790,7 @@ function ntEditView(hs, n) {
     ntLater(() => { try { hs.mod.focus(); } catch (_) { /* editor gone */ } });
   }, () => { hs.editId = null; ntPaint(hs); ntLater(() => { try { hs.mod.focus(); } catch (_) { /* editor gone */ } }); });
   hs.focusSoon = () => box.ta.focus();
-  return { el: box.el };
+  return { el: box.el, label: "Editing the note on " + ntNoteWhere(n) };
 }
 
 function ntEdit(hs, id) {

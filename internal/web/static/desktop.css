@@ -1555,10 +1555,13 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: var(--e-pop);
   }
   .dk-selbar-b svg { flex: none; width: 14px; height: 14px; }
-  /* Line notes in the Changes view (editornotes.js, mockup B2). A note is a Monaco view zone: .dk-nz is the zone's box (Monaco sizes and
-     places it), .dk-nz-in what is measured for its height, and the card is .dk-note (--panel, 1px --line, 8px). The "+" is a glyph-margin
+  /* Line notes in the Changes view (editornotes.js, mockup B2). A note is a card (.dk-nz, an overlay widget) over a Monaco view zone that holds
+     its room; .dk-nz-in is what is measured for the room's height, and the card is .dk-note (--panel, 1px --line, 8px). The "+" is a glyph-margin
      decoration (.dk-note-add) that shows under the pointer. Note text is pre-wrapped and breaks anywhere, so a long token cannot widen
      the card past the dock. */
+  /* The card is an overlay widget (Monaco's view zone is an empty room under the line, .dk-nz-room), placed by editornotes.js. */
+  .dk-nz-room { pointer-events: none; }
+  .dk-nz { position: absolute; box-sizing: border-box; z-index: 5; }
   .dk-nz-in { box-sizing: border-box; padding: 6px 16px 8px 12px; }
   .dk-note { border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); color: var(--fg); font: var(--w-regular) var(--t-md)/var(--lh-md) var(--font-ui); text-align: left; }
   .dk-note-h { display: flex; align-items: center; gap: 8px; padding: 7px 10px 0; color: var(--muted); font-size: var(--t-sm); }

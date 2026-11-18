@@ -49,7 +49,7 @@ function fakeModel(text, lang, log, id) {
     undoTo(alt, v) { this.value = v; this.alt = alt; this.fire(); }, // an undo walks back to an earlier id
     undo() { const step = this.undos.pop(); if (!step) return false; this.value = step.value; this.alt = step.alt; this.fire(); return true; },
     // A new value: the undo history goes (Monaco's _commandManager.clear()), the alternative version id is a new one.
-    setValue(v) { this.undos = []; this.value = v; this.alt = ++this.ver; this.eol = eolOf(v); this.sets.push(v); this.fire({ replaced: true }); },
+    setValue(v) { this.decor.live.clear(); this.undos = []; this.value = v; this.alt = ++this.ver; this.eol = eolOf(v); this.sets.push(v); this.fire({ replaced: true }); },
     onDidChangeContent(fn) { this.listeners.push(fn); return { dispose: () => { this.listeners = this.listeners.filter((x) => x !== fn); } }; },
     onDidChangeOptions() { return { dispose() {} }; },
     getOptions() { return { insertSpaces: true, tabSize: 4 }; },
@@ -59,6 +59,38 @@ function fakeModel(text, lang, log, id) {
     getLanguageId() { return lang; },
     getLineCount() { return this.value.split("\n").length; },
     getLineContent(n) { return this.value.split("\n")[n - 1]; },
+    getLineMaxColumn(n) { return (this.value.split("\n")[n - 1] || "").length + 1; },
+    getDecorationRange(id) { const d = this.decor.live.get(id); return d ? Object.assign({}, d.range) : null; },
+    // The user's edits, with what Monaco does to a tracked range under them (stickiness NeverGrowsWhenTypingAtEdges): lines put in front
+    // of a line push its range down; a line deleted collapses the range on it to an empty one at its start and pulls the later ones up.
+    // The text change is the buffer's, so the listeners are told as for any edit.
+    insertLines(at, texts) {
+      const ls = this.value.split("\n");
+      ls.splice(at - 1, 0, ...texts);
+      this.value = ls.join("\n");
+      for (const d of this.decor.live.values()) if (d.range.startLineNumber >= at) { d.range.startLineNumber += texts.length; d.range.endLineNumber += texts.length; }
+      this.alt = ++this.ver;
+      this.fire();
+    },
+    deleteLine(n) {
+      const ls = this.value.split("\n");
+      ls.splice(n - 1, 1);
+      this.value = ls.join("\n");
+      for (const d of this.decor.live.values()) {
+        const r = d.range;
+        if (r.startLineNumber === n) { r.endLineNumber = n; r.startColumn = 1; r.endColumn = 1; } else if (r.startLineNumber > n) { r.startLineNumber--; r.endLineNumber--; }
+      }
+      this.alt = ++this.ver;
+      this.fire();
+    },
+    editLine(n, text) {
+      const ls = this.value.split("\n");
+      ls[n - 1] = text;
+      this.value = ls.join("\n");
+      for (const d of this.decor.live.values()) if (d.range.startLineNumber === n) d.range.endColumn = text.length + 1;
+      this.alt = ++this.ver;
+      this.fire();
+    },
     getLineLength(n) { return (this.value.split("\n")[n - 1] || "").length; },
     dispose() { this.disposed = true; this.listeners = []; if (log) log.push("dispose#" + id); },
   };
@@ -105,7 +137,13 @@ function fakeEditor() {
         layoutZone: (id) => { if (!this.zones.has(id)) throw new Error("layoutZone: no zone " + id); this.laid = (this.laid || 0) + 1; },
       });
     },
-    getLayoutInfo() { return { width: this.width, contentWidth: this.width }; },
+    getLayoutInfo() { return { width: this.width, contentWidth: this.width, contentLeft: 60, height: 500 }; },
+    // Overlay widgets (the notes' cards): by id, as Monaco keeps them; the scroll position the wheel over a card sets.
+    overlays: new Map(),
+    addOverlayWidget(w) { this.overlays.set(w.getId(), w); },
+    removeOverlayWidget(w) { this.overlays.delete(w.getId()); },
+    getScrollLeft() { return this.left || 0; },
+    setScrollPosition(p) { this.top = p.scrollTop; this.left = p.scrollLeft; this.scrolled = (this.scrolled || 0) + 1; },
     revealLineInCenterIfOutsideViewport(l) { this.outside = (this.outside || []).concat(l); },
     updateOptions(o) { this.options.push(o); },
     layout() {}, saveViewState() { return { saved: true, top: this.top }; }, restoreViewState(v) { this.restored.push(v); this.top = v.top; },

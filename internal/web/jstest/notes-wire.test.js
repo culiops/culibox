@@ -61,3 +61,24 @@ test("the script is on the page after editorreview.js and notesmodel.js, and the
   const i = app.indexOf("reviewMarksLoad(sessions");
   assert.ok(i > 0 && app.indexOf("notesLoad(", i) > i && app.indexOf("notesLoad(", i) - i < 400, "next to reviewMarksLoad, after the first real list");
 });
+
+test("the notes follow the file for as long as the tab is open: tracked from the model's creation to dispose, and notesFor reads the decorations back", () => {
+  const tab = stripComments(read("editortab.js"));
+  assert.match(tab, /editorNotesTrack\(this\)/);
+  assert.match(tab, /editorNotesUntrack\(this\)/);
+  assert.ok(tab.indexOf("editorNotesUntrack(this)") < tab.indexOf("this.model.dispose()"), "before the model goes");
+  const js = stripComments(read("editornotes.js"));
+  assert.match(js, /function editorNotesTrack\([^)]*\)[\s\S]*editorSyncOnReplace\(tab,/, "one subscription per tab, not per Changes view");
+  assert.match(js, /NeverGrowsWhenTypingAtEdges/);
+  assert.match(js, /function notesFor\(sid\) \{\s*ntSyncAll\(\);/, "the lines are read back before notesFor answers");
+  assert.match(js, /function ntFlush\(\) \{[\s\S]*ntSyncAll\(\)/, "and before a save");
+});
+
+test("a note's card is an overlay widget over an empty room, never inside the view zone (Monaco's .view-zones is aria-hidden)", () => {
+  const js = stripComments(read("editornotes.js"));
+  assert.match(js, /addOverlayWidget\(/);
+  assert.match(js, /removeOverlayWidget\(/);
+  assert.match(js, /onDomNodeTop/);
+  assert.match(js, /role", "group"/);
+  assert.doesNotMatch(js, /domNode: node/, "the zone's domNode is the empty room");
+});
