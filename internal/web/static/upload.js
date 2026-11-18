@@ -279,8 +279,7 @@ function insertPathsIntoTerminal(term, data) {
   if (!ok.length) return;
   // The drop or paste began on this terminal, but the upload is asynchronous: by now it may have gone out of sight, or its
   // session may be asking something. insertDecision (insertdecision.js) judges it as it is now (#337).
-  const seen = term ? insertDecision(term) : null;
-  if (seen && !seen.ok) { showToast("Uploaded, but the path was not inserted: " + seen.why, { error: true }); return; }
+  if (term && insertRefused(term, "Uploaded, but the path was not inserted: ")) return;
   const res = insertTextAtPrompt(term, ok.map((u) => shellQuote(u.path)).join(" ") + " ");
   if (res.ok || res.reason === "noterm") return;
   showToast(res.reason === "unsafe"

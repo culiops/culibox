@@ -139,16 +139,102 @@ test("the unsafe-path and not-connected refusals are kept, after the decision", 
   assert.match(p.st.toasts[2][0], /Focus a terminal first/);
 });
 
-test("the phone's tree inserts at the focused terminal as before: its screens are the user's to move between", () => {
+// --- the phone: strict #337, and the menus that can never pass are not offered -------------------------------------------------
+
+test("the phone's Terminal screen: the palette's insert goes to the focused cell's terminal, typed with no Enter", () => {
   const p = callersPage();
-  p.width(390);
-  p.run("insertPathAtPrompt('/w/x.go', focusedTerminal())");
+  p.phone("terminal");
+  paletteInsert(p);
   assert.deepStrictEqual(p.st.sent, { b: ["/w/x.go "] });
   assert.deepStrictEqual(p.st.toasts, []);
-  p.sessions(p.sess("a", { name: "alpha" }), p.sess("b", { name: "beta", activity: "waiting", need: "ask" }));
-  p.run("insertPathAtPrompt('/w/y.go', focusedTerminal())");
-  assert.deepStrictEqual(p.st.sent, { b: ["/w/x.go "] }, "the gate still applies on the phone");
-  assert.deepStrictEqual(p.st.toasts, [["beta is waiting on you; answer it first", true]]);
+  assert.deepStrictEqual(p.st.focused, ["b"]);
+});
+
+test("the phone's Files screen: the tree's and the palette's insert are refused with the toast, nothing typed, no focus", () => {
+  for (const insert of [treeInsert, paletteInsert]) {
+    const p = callersPage();
+    p.phone("files");
+    insert(p);
+    assert.deepStrictEqual(p.st.toasts, [["beta's terminal is not on screen; show it first", true]]);
+    assert.deepStrictEqual(p.st.sent, {});
+    assert.deepStrictEqual(p.st.focused, []);
+  }
+});
+
+// Every state the phone can be in, through every caller: nothing is typed anywhere. The review's probe (a docked shell, a stacked
+// inactive tab, a non-focused pane, an upload landing in another session's terminal) is each of these rows.
+const PHONE_STATES = [
+  ["Files screen", (p) => { p.phone("files"); return p.tb; }],
+  ["Sessions screen", (p) => { p.phone("sessions"); return p.tb; }],
+  ["a docked shell, shown", (p) => { p.names({ a: "alpha", b: "beta", sh: "shell 1" }); const sh = p.cb.dockShell("sh", "shell 1"); p.phone("terminal"); return sh; }],
+  ["a docked shell, hidden", (p) => { p.names({ a: "alpha", b: "beta", sh: "shell 1" }); const sh = p.cb.dockShell("sh", "shell 1"); p.cb.hideDock(); p.phone("terminal"); return sh; }],
+  ["an inactive stacked tab", (p) => { p.names({ a: "alpha", b: "beta", c: "gamma" }); p.cb.addTab(p.term("c", "gamma")); p.phone("terminal"); return p.tb; }],
+  ["a pane that is not the focused cell", (p) => { p.phone("terminal"); return p.ta; }],
+  ["a viewer tab in front", (p) => { p.cb.addTab(p.viewer("/w/f.go")); p.phone("terminal"); return p.tb; }],
+];
+for (const [what, make] of PHONE_STATES) {
+  for (const [callerName, call, , expectToast] of CALLERS) {
+    test("phone, " + what + ": " + callerName + " is refused, types nothing and moves no focus", () => {
+      const p = callersPage();
+      const target = make(p);
+      const reason = p.decide(target);
+      assert.strictEqual(reason.ok, false);
+      call(p, target);
+      assert.deepStrictEqual(p.st.sent, {});
+      assert.deepStrictEqual(p.st.focused, []);
+      assert.deepStrictEqual(p.st.toasts, [[expectToast(reason.why), true]]);
+    });
+  }
+}
+
+test("insertOffered is the phone's one question: offered on a desktop width, not at 700 and below", () => {
+  const p = callersPage();
+  p.width(1280);
+  assert.strictEqual(p.ctx.insertOffered(), true);
+  p.width(701);
+  assert.strictEqual(p.ctx.insertOffered(), true);
+  p.width(700);
+  assert.strictEqual(p.ctx.insertOffered(), false);
+  p.width(390);
+  assert.strictEqual(p.ctx.insertOffered(), false);
+});
+
+// The real viewer toolbar and the real line-number menu, built on the page's fake DOM.
+function toolbarPage(width) {
+  const p = callersPage();
+  p.run(src("copyfile.js"));
+  p.run(src("viewertoolbar.js"));
+  p.run("const MD_EXTS = new Set(['md']); function isViewerWrap() { return false; } function toggleViewerWrap() {}");
+  p.run("function shortcutHint() { return ''; } const IS_MAC = false; function ftRoot() { return '/w'; } function gitStatusCodeFor() { return ''; } function closeRowMenu() {} function shortPath(x) { return x; }");
+  p.run("let __menuNodes = null; function ftShowMenu(anchor, nodes) { __menuNodes = nodes; }");
+  p.run("class MenuMethods {\n" + methodText("viewer-tab.js", "insertCandidate") + "\n" + methodText("viewer-tab.js", "openLineMenu") + "\n}");
+  p.width(width);
+  p.run("drawerState = { open: 'files', sessionId: 'b', pinned: false };");
+  p.ctx.__v = Object.assign(Object.create(p.run("MenuMethods.prototype")), { path: "/w/x.go", box: "", inDock: true, copyPath() {}, insertPath() {}, dirty: () => false });
+  return p;
+}
+
+test("the line-number menu offers Insert at prompt on a desktop width and leaves it out on the phone", () => {
+  for (const [width, want] of [[1280, true], [390, false]]) {
+    const p = toolbarPage(width);
+    p.run("__v.openLineMenu(document.createElement('span'), 12)");
+    const labels = p.run("__menuNodes.map((n) => n.textContent)");
+    assert.strictEqual(labels.some((l) => /^Insert .* at prompt$/.test(l)), want, "width " + width + ": " + labels.join(" | "));
+    assert.ok(labels.some((l) => /^Copy /.test(l)), "Copy stays");
+  }
+});
+
+test("the viewer's Path menu offers Insert path at prompt on a desktop width and leaves it out on the phone", () => {
+  for (const [width, hidden] of [[1280, false], [390, true]]) {
+    const p = toolbarPage(width);
+    const tb = p.run("buildViewerToolbar(__v, {})");
+    tb.paint();
+    tb.el.querySelector('[data-k="path"]').onclick(); // opens the menu, which paints it again
+    const item = p.doc.body.querySelector('[data-k="pathInsert"]');
+    assert.ok(item, "the item exists");
+    assert.strictEqual(item.hidden, hidden, "width " + width);
+    for (const k of ["pathAbs", "pathRel", "reveal"]) assert.strictEqual(p.doc.body.querySelector('[data-k="' + k + '"]').hidden, false, k + " stays");
+  }
 });
 
 // --- the tree and the Files dock (#337, step 4) ------------------------------------------------------------------------------
@@ -305,7 +391,7 @@ function enclosing(text, idx) {
 }
 const code = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(/\s\/\/ .*$/gm, "");
 
-test("every call of insertTextAtPrompt sits in a function that asks insertDecision first", () => {
+test("every call of insertTextAtPrompt sits in a function that asks first (insertRefused, one line, or insertDecision)", () => {
   const seen = [];
   for (const f of fs.readdirSync(STATIC).filter((n) => /\.js$/.test(n) && !/^monaco|vendor/.test(n))) {
     const text = src(f);
@@ -314,22 +400,29 @@ test("every call of insertTextAtPrompt sits in a function that asks insertDecisi
       if (/^\s*(\/\/|\*)/.test(line) || /^function insertTextAtPrompt\(/.test(line)) continue; // a comment, or the definition itself
       const body = code(enclosing(text, m.index));
       seen.push(f + ": " + (/^\s*(?:async )?function (\w+)|^\s*(?:async |static )?(\w+)\(/.exec(body) || []).slice(1).find(Boolean));
-      assert.match(body, /insertDecision\(/, f + " calls insertTextAtPrompt without insertDecision in the same function");
-      assert.ok(body.indexOf("insertDecision(") < body.indexOf("insertTextAtPrompt("), f + " asks after typing");
+      const ask = body.search(/insertRefused\(|insertDecision\(/);
+      assert.ok(ask >= 0, f + " calls insertTextAtPrompt without insertRefused or insertDecision in the same function");
+      assert.ok(ask < body.indexOf("insertTextAtPrompt("), f + " asks after typing");
     }
   }
   assert.deepStrictEqual(seen.sort(), ["filetree.js: insertPathAtPrompt", "upload.js: insertPathsIntoTerminal", "viewer-tab.js: insertPath"]);
 });
 
-test("no PTY write path was added: sendText is called only by insertTextAtPrompt and the phone's snippet and key rows", () => {
-  const callers = [];
-  for (const f of fs.readdirSync(STATIC).filter((n) => /\.js$/.test(n) && !/^monaco/.test(n))) {
-    const n = (code(src(f)).match(/\.sendText\(/g) || []).length;
-    if (n) callers.push(f + ":" + n);
-  }
-  // app.js: the phone's snippet row (continue, yes, no, /) and its key bar's symbols, typed on the Terminal screen at the
-  // terminal in front, and meant to answer a session that is asking; upload.js: insertTextAtPrompt's one call.
-  assert.deepStrictEqual(callers.sort(), ["app.js:2", "upload.js:1"]);
+test("no PTY write path was added: sendText and sendKey are called only where they were", () => {
+  const callers = (re) => {
+    const out = [];
+    for (const f of fs.readdirSync(STATIC).filter((n) => /\.js$/.test(n) && !/^monaco/.test(n))) {
+      const n = (code(src(f)).match(re) || []).length;
+      if (n) out.push(f + ":" + n);
+    }
+    return out.sort();
+  };
+  // sendText: app.js: the phone's snippet row (continue, yes, no, /) and its key bar's symbols, typed on the Terminal screen at
+  // the terminal in front, and meant to answer a session that is asking; upload.js: insertTextAtPrompt's one call.
+  assert.deepStrictEqual(callers(/\.sendText\(/g), ["app.js:2", "upload.js:1"]);
+  // sendKey sends raw bytes, Enter included: only the phone's key bar and its ^C snippet (app.js onSnip, onKeybarKey,
+  // onKeybarMoreKey), where tapping the key IS the user pressing it. A new caller needs this list changed on purpose.
+  assert.deepStrictEqual(callers(/\.sendKey\(/g), ["app.js:3"]);
 });
 
 test("the row menu, the palette, the Path menu and the line-number menu all reach the decision through these callers", () => {

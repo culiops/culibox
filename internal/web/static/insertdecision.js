@@ -6,10 +6,10 @@
 //      turn? Text typed into a permission prompt or a sign-in lands where an answer is expected.
 //   2. the visibility predicate (insertvisible.js insertVisible): is the terminal on screen, where the user sees the text
 //      land? This file only reads the live objects into the predicate's input; it decides nothing about visibility.
-// The tree's row menu, the palette, the viewers' Path menu and line-number insert and an upload's inserted paths all call
-// insertDecision(term) first, and so must every insert added later (the editor's selection bar, the agent strip); on a
-// refusal they show the sentence as a toast, type nothing and move no focus. insert-callers.test.js fails any
-// insertTextAtPrompt call that does not ask first.
+// The tree's row menu, the palette, the viewers' Path menu and line-number insert and an upload's inserted paths all ask
+// first, through insertRefused(term) below, and so must every insert added later (the editor's selection bar, the agent
+// strip); on a refusal they show the sentence as a toast, type nothing and move no focus. insert-callers.test.js fails any
+// insertTextAtPrompt call that does not ask first. The phone has no exemption: the same fields, read from the same objects.
 
 // insertPlace: where `term` lives on this page, by identity. {cell, placed}: "tab" (a tab of a pane) or "dock" (a shell
 // docked in a pane), or null for a terminal that is in no pane (closed, or evicted from this page).
@@ -37,7 +37,6 @@ function insertViewState(term, name) {
   const dr = document.getElementById("drawer");
   const state = {
     name,
-    phone: typeof mobileActive === "function" && mobileActive(window.innerWidth),
     hidden: !!document.hidden,
     page: typeof currentPage === "function" ? currentPage() : "",
     placed: at ? at.placed : "",
@@ -50,7 +49,7 @@ function insertViewState(term, name) {
   };
   if (!at) return state;
   const cell = at.cell;
-  const max = currentMaximized(); // the phone has none (effectiveMaximized), and the phone rule ignores the field
+  const max = currentMaximized(); // the phone has none (effectiveMaximized): there the cells it hides are display:none, which laidOut reads
   state.paneShown = !max || max === cell;
   state.view = cell.view;
   if (at.placed === "tab") {
@@ -74,4 +73,27 @@ function insertDecision(term) {
   if (!gate.ok) return { ok: false, why: gate.why };
   const seen = insertVisible(insertViewState(term, row.name || label));
   return seen.ok ? { ok: true, why: "" } : { ok: false, why: seen.reason };
+}
+
+// insertRefused(term, lead): the one line every insert path starts with, `if (insertRefused(term)) return;`. It asks
+// insertDecision and, when that refuses, shows the sentence as a toast (after `lead`, for a caller whose own wording leads:
+// the upload's "Uploaded, but the path was not inserted: ") and answers true. The caller then returns at once, having typed
+// nothing and moved no focus.
+function insertRefused(term, lead) {
+  const seen = insertDecision(term);
+  if (seen.ok) return false;
+  showToast((lead || "") + seen.why, { error: true });
+  return true;
+}
+
+// insertOffered: should a menu offer "Insert path at prompt" at all? Not on the phone: the tree is on the Files screen, which
+// hides the terminals, and a pane viewer covers its own terminal, so insertDecision refuses every insert a phone menu could
+// make. Offering a dead action is worse than not offering it. The palette's Ctrl/Cmd+Enter is not a menu: it goes through
+// the decision on any screen (it passes on the Terminal screen, refuses with its toast elsewhere).
+function insertOffered() {
+  return !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { insertDecision, insertRefused, insertOffered };
 }

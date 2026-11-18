@@ -7,7 +7,7 @@ const assert = require("node:assert");
 const { insertVisible } = require("../static/insertvisible.js");
 
 // The state of a terminal that is a tab of a pane and is plainly on screen. Each row below changes what it says.
-const TAB = { name: "alpha", phone: false, hidden: false, page: "", placed: "tab", full: false, paneShown: true, view: "terminal", front: "self", laidOut: true };
+const TAB = { name: "alpha", hidden: false, page: "", placed: "tab", full: false, paneShown: true, view: "terminal", front: "self", laidOut: true };
 // A shell docked in a pane, showing.
 const DOCK = Object.assign({}, TAB, { placed: "dock", view: "terminal" });
 const with_ = (base, over) => Object.assign({}, base, over);
@@ -93,12 +93,20 @@ test("a refusal names the session; without a name it says 'The session'", () => 
   assert.match(insertVisible(with_(TAB, { full: true, name: "" })).reason, /^The session's terminal/);
 });
 
-test("the phone: one screen at a time, so the Files screen inserts at the focused terminal as it always did", () => {
-  // The phone's layout fields (Full mode, views, maximize) do not exist there; the cross-screen insert is the feature.
-  assert.deepStrictEqual(insertVisible(with_(TAB, { phone: true })), { ok: true, reason: "" });
-  assert.deepStrictEqual(insertVisible(with_(TAB, { phone: true, laidOut: false, front: "viewer", hidden: false })), { ok: true, reason: "" });
-  // A terminal that is not in any pane has no prompt on the phone either.
-  assert.strictEqual(insertVisible(with_(TAB, { phone: true, placed: "" })).ok, false);
-  // phone must be exactly true: a stray truthy value does not switch the checks off.
-  assert.strictEqual(insertVisible(with_(TAB, { phone: "yes", full: true })).ok, false);
+test("the phone has no exemption: its states are the same fields, and a hidden terminal there is refused like any other", () => {
+  // Strict #337 everywhere (founder, 2026-11-18). On the phone the Files and Sessions screens hide the whole grid, every
+  // cell but the focused one is display:none, and the dock is never drawn: all of that is `laidOut: false` here, and a viewer
+  // in front or an inactive stacked tab is the same `front` it is on a desktop.
+  assert.deepStrictEqual(insertVisible(with_(TAB, { laidOut: false })), { ok: false, reason: "alpha's terminal is not on screen; show it first" }, "the Files screen: a grid with no box");
+  assert.deepStrictEqual(insertVisible(with_(DOCK, { laidOut: false })), { ok: false, reason: "alpha's terminal is not on screen; show it first" }, "a docked shell the phone never draws");
+  assert.strictEqual(insertVisible(with_(TAB, { front: "tab" })).ok, false, "an inactive stacked tab");
+  assert.strictEqual(insertVisible(with_(TAB, { front: "viewer" })).ok, false, "a viewer tab in front");
+  assert.deepStrictEqual(insertVisible(TAB), { ok: true, reason: "" }, "the Terminal screen's focused cell, its active terminal: on screen");
+  // The field the first version read to switch every check off is gone: a stray one changes nothing.
+  for (const phone of [true, "yes", 1]) {
+    assert.strictEqual(insertVisible(with_(TAB, { phone, laidOut: false })).ok, false, "phone " + phone + " with no box");
+    assert.strictEqual(insertVisible(with_(TAB, { phone, full: true })).ok, false, "phone " + phone + " in Full mode");
+    assert.strictEqual(insertVisible(with_(TAB, { phone, placed: "" })).ok, false, "phone " + phone + " in no pane");
+    assert.strictEqual(insertVisible(with_(TAB, { phone })).ok, true, "phone " + phone + " on a visible terminal");
+  }
 });

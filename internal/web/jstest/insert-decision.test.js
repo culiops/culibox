@@ -236,21 +236,69 @@ test("a terminal moved between a tab and a dock is judged where it is now", () =
   assert.deepStrictEqual(p.decide(tx), OK, "now the shell showing in A's dock");
 });
 
-// --- the phone ------------------------------------------------------------------------------------------------------------
+// --- the phone: strict #337, no exemption -------------------------------------------------------------------------------------
+// The phone shows one screen at a time and draws no dock. insertpage.js applies app.css's rules for what that does to a
+// terminal's box (the Files and Sessions screens hide #grid, the Terminal screen shows only the focused cell, the dock is
+// display:none) and the real Cell, tabs and chips do the rest. The decision is the same code as on a desktop.
 
-test("the phone keeps today's cross-screen insert: the Files screen types at the focused terminal on the Terminal screen", () => {
+test("the phone's Terminal screen: the focused cell's active terminal is on screen", () => {
   const p = twoPanes();
-  p.width(390);
-  p.cb.addTab(p.viewer("/work/main.go")); // a viewer in front of the terminal is the phone's normal reading state
-  assert.deepStrictEqual(p.decide(p.tb), OK, "as before: visibility is not asked on the phone");
-  p.full(true);
-  p.openPage("settings-modal");
+  p.phone("terminal");
   assert.deepStrictEqual(p.decide(p.tb), OK);
 });
 
-test("the phone is still gated by the session's state, and a terminal in no pane has no prompt there either", () => {
+test("the phone's Files screen hides every terminal: the grid has no box", () => {
   const p = twoPanes();
-  p.width(390);
+  p.phone("files");
+  assert.strictEqual(p.ctx.focusedTerminal(), p.tb, "the focused terminal is the one a tree insert would use");
+  assert.deepStrictEqual(p.decide(p.tb), refused("beta's terminal is not on screen; show it first"));
+  assert.deepStrictEqual(p.decide(p.ta), refused("alpha's terminal is not on screen; show it first"));
+  p.phone("sessions");
+  assert.strictEqual(p.decide(p.tb).ok, false, "and the Sessions screen");
+  p.phone("terminal");
+  assert.deepStrictEqual(p.decide(p.tb), OK);
+});
+
+test("on the phone's Terminal screen a pane that is not the focused cell is display:none", () => {
+  const p = twoPanes();
+  p.phone("terminal");
+  assert.deepStrictEqual(p.decide(p.ta), refused("alpha's terminal is not on screen; show it first"));
+  p.focus(p.ca);
+  assert.deepStrictEqual(p.decide(p.ta), OK, "focus moves, the visible cell moves with it");
+  assert.strictEqual(p.decide(p.tb).ok, false);
+});
+
+test("a shell docked in a pane is never drawn on the phone: refused, shown or not", () => {
+  const p = twoPanes();
+  p.names({ a: "alpha", b: "beta", sh: "shell 1" });
+  const sh = p.cb.dockShell("sh", "shell 1");
+  p.phone("terminal");
+  assert.strictEqual(p.cb._shownShell(), sh, "the real dock model says it is showing");
+  assert.deepStrictEqual(p.decide(sh), refused("shell 1's terminal is not on screen; show it first"));
+  p.cb.hideDock();
+  assert.deepStrictEqual(p.decide(sh), refused("shell 1's shell is hidden with its dock; show it first"));
+});
+
+test("an inactive stacked tab on the phone is refused: one chip is showing", () => {
+  const p = twoPanes();
+  p.names({ a: "alpha", b: "beta", c: "gamma" });
+  const tc = p.term("c", "gamma");
+  p.cb.addTab(tc);
+  p.phone("terminal");
+  assert.deepStrictEqual(p.decide(p.tb), refused("beta is a background tab in its pane; show it first"));
+  assert.deepStrictEqual(p.decide(tc), OK);
+});
+
+test("a file viewer tab in front of the terminal on the phone is refused (the terminal is behind it)", () => {
+  const p = twoPanes();
+  p.cb.addTab(p.viewer("/work/main.go"));
+  p.phone("terminal");
+  assert.deepStrictEqual(p.decide(p.tb), refused("beta's terminal is behind a file tab in its pane; show it first"));
+});
+
+test("the phone is gated by the session's state too, and a terminal in no pane has no prompt there", () => {
+  const p = twoPanes();
+  p.phone("terminal");
   p.sessions("a", p.sess("b", { name: "beta", activity: "waiting", need: "ask" }));
   assert.deepStrictEqual(p.decide(p.tb), refused("beta is waiting on you; answer it first"));
   assert.strictEqual(p.decide(p.term("a", "alpha")).ok, false);

@@ -28,12 +28,21 @@ function makeNodeClass(doc) {
       Object.defineProperty(this, "isConnected", { get: () => { for (let n = this; n; n = n.parent) if (n === doc.body) return true; return false; } });
       this.rect = { width: 800, height: 600 };
       this.style = { setProperty() {}, removeProperty() {} };
+      this.offsetWidth = 200;
+      this.offsetHeight = 100;
+      const cl = this.classList;
+      cl.add = (c) => cl.toggle(c, true);
+      cl.remove = (c) => cl.toggle(c, false);
     }
     addEventListener() {}
-    // A box only while connected, and none inside an ancestor that has collapsed to nothing (a pane squeezed to zero).
+    // A box only while connected, and none inside an ancestor that has collapsed to nothing (a pane squeezed to zero) or that
+    // the stylesheet hides (doc.hides, the phone's rules).
     getBoundingClientRect() {
       if (!this.isConnected) return { width: 0, height: 0 };
-      for (let n = this; n; n = n.parent) if (n.rect && (n.rect.width === 0 || n.rect.height === 0)) return { width: 0, height: 0 };
+      for (let n = this; n; n = n.parent) {
+        if (n.rect && (n.rect.width === 0 || n.rect.height === 0)) return { width: 0, height: 0 };
+        if (doc.hides && doc.hides(n)) return { width: 0, height: 0 };
+      }
       return this.rect;
     }
   };
@@ -52,6 +61,17 @@ function page(over) {
   doc.getElementById = (id) => els[id] || null;
   doc.addEventListener = () => {};
 
+  // The phone's stylesheet, as far as it decides whether a terminal has a box (app.css, max-width 700px): the Files and Sessions
+  // screens hide #grid; on the Terminal screen every cell but the focused one is display:none; the dock is never drawn.
+  // Nothing hides on a desktop width. `screen` is the phone's current screen.
+  const phoneCss = { screen: "terminal" };
+  doc.hides = (n) => {
+    if (!(ctx.window.innerWidth <= 700)) return false;
+    if (n.id === "grid") return phoneCss.screen !== "terminal";
+    if (n.className.split(" ").includes("cell")) { const f = ctx.run_("focusedCell"); return !f || f.el !== n; }
+    return n.className === "dock";
+  };
+
   const st = { toasts: [], sent: {}, focused: [], refreshes: 0 };
   const ctx = vm.createContext(Object.assign({
     console, Array, Object, Set, Map, Math, Number, JSON, String, Error, Date, RegExp, Promise,
@@ -64,6 +84,7 @@ function page(over) {
     lastSessions: [],
   }, over));
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
+  ctx.run_ = (code) => load(code, "css");
 
   // The stand-in tabs: the surface Cell and the insert glue read.
   load(`
@@ -132,6 +153,8 @@ function page(over) {
     openPage: (id) => { ctx.__d = { id }; run("pageNow = { dlg: __d, mark: null }"); },
     closePage: () => { run("pageNow = null"); },
     width: (w) => { ctx.window.innerWidth = w; },
+    // The phone: 390 wide, on one of its screens ("terminal", "files", "sessions").
+    phone: (screen) => { ctx.window.innerWidth = 390; phoneCss.screen = screen || "terminal"; },
     // Through JSON: an object made inside the vm has the vm's Object.prototype, which deepStrictEqual does not take for ours.
     decide: (term) => JSON.parse(JSON.stringify(ctx.insertDecision(term))),
   };

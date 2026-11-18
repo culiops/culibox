@@ -91,8 +91,12 @@ function rowMenuLabel(id, isDir) {
 // folder here, then past a second rule the destructive pair. A read-only listing
 // keeps only what reads: no New folder here, Rename or Delete, and not the rule
 // that fenced them off.
+//
+// `noInsert` (the phone: insertOffered) leaves out Insert path at prompt: the tree is on the Files screen there, which hides
+// every terminal, so insertDecision refuses it every time. Left out, it is one action fewer to try; omitted, the menu is
+// today's.
 function rowMenuIds(o) {
-  const ids = ["insert", "copy", "copyrel"];
+  const ids = o.noInsert ? ["copy", "copyrel"] : ["insert", "copy", "copyrel"];
   // Contents last in the clipboard group, and only where there is text to take.
   // A directory has none, and an image is served as raw bytes rather than JSON,
   // so asking for one would fail inside JSON.parse with nothing useful to say.
@@ -633,7 +637,7 @@ function openRowMenu(anchor, path, name, isDir, readOnly, at) {
     rename: () => promptRename(path, name),
     delete: () => confirmDelete(path, name, isDir),
   };
-  const ids = rowMenuIds({ isDir: !!isDir, isImage: IMAGE_EXTS.has(extOf(name)), readOnly: readOnly === true });
+  const ids = rowMenuIds({ isDir: !!isDir, isImage: IMAGE_EXTS.has(extOf(name)), readOnly: readOnly === true, noInsert: !insertOffered() });
   if (desktop) {
     // Close first and give focus to the row, then act: a dialog (New folder, Rename, Delete) hands focus back
     // to what had it when it opened, which is now the row, and an action that moves focus on (Insert path
@@ -743,8 +747,7 @@ function treeInsertTarget() {
 // session waiting on them, refuses with a toast that names why, and nothing is typed and no focus moves (#337).
 // `absent` (optional) is what to say when there is no `term` instead of "focus a terminal first".
 function insertPathAtPrompt(path, term, absent) {
-  const seen = term ? insertDecision(term) : null;
-  if (seen && !seen.ok) { showToast(seen.why, { error: true }); return; }
+  if (term && insertRefused(term)) return;
   const res = insertTextAtPrompt(term, shellQuote(path) + " ");
   if (res.ok) { // closeRowMenu hid the button that had focus
     if (term === (typeof focusedTerminal === "function" ? focusedTerminal() : null)) focusTerminal();

@@ -169,6 +169,16 @@ test("rowMenuIds: no menu ends on a rule or has two in a row", () => {
   }
 });
 
+test("rowMenuIds: noInsert leaves out Insert path at prompt and nothing else; omitted it is today's menu", () => {
+  for (const isDir of [true, false]) for (const readOnly of [true, false]) {
+    const o = { isDir, isImage: false, readOnly };
+    const today = FT.rowMenuIds(o);
+    assert.strictEqual(today[0], "insert");
+    assert.deepStrictEqual(FT.rowMenuIds(Object.assign({ noInsert: true }, o)), today.slice(1));
+    assert.deepStrictEqual(FT.rowMenuIds(Object.assign({ noInsert: false }, o)), today);
+  }
+});
+
 // --- the menu itself, on a fake DOM ---------------------------------------------
 
 function fakeNode(tag) {
@@ -189,7 +199,7 @@ function installMenuDom() {
   };
   globalThis.window = { innerWidth: 390, innerHeight: 900, HOME_DIR: "/home/u" };
   globalThis.mobileActive = (w) => Number(w) <= 700;
-  Object.assign(globalThis, require("../static/copyfile.js"), require("../static/fsops.js"));
+  Object.assign(globalThis, require("../static/copyfile.js"), require("../static/fsops.js"), { insertOffered: require("../static/insertdecision.js").insertOffered });
   return menu;
 }
 const anchor = { getBoundingClientRect: () => ({ left: 0, right: 100, top: 10, bottom: 30 }) };
@@ -198,21 +208,21 @@ const menuText = (menu) => menu.nodes.map((n) => (n.tag === "hr" ? "---" : n.tex
 test("openRowMenu: a read-only file menu is the path header and the safe actions", () => {
   const menu = installMenuDom();
   FT.openRowMenu(anchor, "/tmp/claude-1/x/readme.txt", "readme.txt", false, true);
-  assert.deepStrictEqual(menuText(menu), ["/tmp/claude-1/x/readme.txt", "Insert path at prompt", "Copy path", "Copy relative path", "Copy contents", "---", "Download"]);
+  assert.deepStrictEqual(menuText(menu), ["/tmp/claude-1/x/readme.txt", "Copy path", "Copy relative path", "Copy contents", "---", "Download"]);
 });
 
 test("openRowMenu: a read-only folder menu has no New folder here", () => {
   const menu = installMenuDom();
   FT.openRowMenu(anchor, "/tmp/claude-1/x/dir1", "dir1", true, true);
-  assert.deepStrictEqual(menuText(menu), ["/tmp/claude-1/x/dir1", "Insert path at prompt", "Copy path", "Copy relative path", "---", "Download .tar.gz"]);
+  assert.deepStrictEqual(menuText(menu), ["/tmp/claude-1/x/dir1", "Copy path", "Copy relative path", "---", "Download .tar.gz"]);
 });
 
-test("openRowMenu: no flag (or false) is today's full menu, image rule included", () => {
+test("openRowMenu: no flag (or false) is the full phone menu, image rule included, with no Insert path at prompt (the Files screen hides every terminal)", () => {
   const menu = installMenuDom();
   FT.openRowMenu(anchor, "/home/u/w/a.txt", "a.txt", false);
-  assert.deepStrictEqual(menuText(menu), ["~/w/a.txt", "Insert path at prompt", "Copy path", "Copy relative path", "Copy contents", "---", "Download", "---", "Rename\u2026", "Delete\u2026"]);
+  assert.deepStrictEqual(menuText(menu), ["~/w/a.txt", "Copy path", "Copy relative path", "Copy contents", "---", "Download", "---", "Rename\u2026", "Delete\u2026"]);
   FT.openRowMenu(anchor, "/home/u/w", "w", true, false);
-  assert.deepStrictEqual(menuText(menu), ["~/w", "Insert path at prompt", "Copy path", "Copy relative path", "---", "Download .tar.gz", "New folder here\u2026", "---", "Rename\u2026", "Delete\u2026"]);
+  assert.deepStrictEqual(menuText(menu), ["~/w", "Copy path", "Copy relative path", "---", "Download .tar.gz", "New folder here\u2026", "---", "Rename\u2026", "Delete\u2026"]);
   FT.openRowMenu(anchor, "/home/u/w/p.PNG", "p.PNG", false, false);
   assert.ok(!menuText(menu).includes("Copy contents"), "an image has no text to copy");
   assert.ok(menuText(menu).includes("Rename\u2026"));

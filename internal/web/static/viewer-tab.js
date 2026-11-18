@@ -265,8 +265,7 @@ class ViewerTab {
   insertPath(line) {
     const target = insertTargetFor(this, this.insertCandidate());
     if (!target.ok) { showToast(target.title, { error: true }); return; }
-    const seen = insertDecision(target.term);
-    if (!seen.ok) { showToast(seen.why, { error: true }); return; }
+    if (insertRefused(target.term)) return;
     const pl = pathLineText(this.path, line);
     const res = pl.ok ? insertTextAtPrompt(target.term, shellQuote(pl.text) + " ") : { ok: false, reason: pl.reason };
     if (res.ok) { if (target.term.term) target.term.term.focus(); return; }
@@ -301,14 +300,20 @@ class ViewerTab {
     copy.type = "button";
     copy.textContent = "Copy " + label;
     copy.onclick = () => { this.lineMenuOpen = false; closeRowMenu(); this.copyPath("abs", line); };
-    const ins = document.createElement("button");
-    ins.type = "button";
-    ins.textContent = "Insert " + label + " at prompt";
-    const target = insertTargetFor(this, this.insertCandidate());
-    if (target.ok) ins.onclick = () => { this.lineMenuOpen = false; closeRowMenu(); this.insertPath(line); };
-    else { ins.disabled = true; ins.title = target.title; }
+    const nodes = [head, copy];
+    // Not on the phone (insertOffered): this menu is only reached from a pane viewer there, which covers its own terminal, so
+    // insertDecision would refuse every press.
+    if (insertOffered()) {
+      const ins = document.createElement("button");
+      ins.type = "button";
+      ins.textContent = "Insert " + label + " at prompt";
+      const target = insertTargetFor(this, this.insertCandidate());
+      if (target.ok) ins.onclick = () => { this.lineMenuOpen = false; closeRowMenu(); this.insertPath(line); };
+      else { ins.disabled = true; ins.title = target.title; }
+      nodes.push(ins);
+    }
     this.lineMenuOpen = true;
-    ftShowMenu(anchor, [head, copy, ins], true);
+    ftShowMenu(anchor, nodes, true);
   }
 
   title() { return this.name; }

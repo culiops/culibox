@@ -12,7 +12,6 @@
 //
 // The input, a plain object (all of it is required; see the fail-closed note on insertVisible):
 //   name     the session's label, for the sentence a refusal gives.
-//   phone    the phone shell is showing (one screen at a time); see the phone rule below.
 //   hidden   document.hidden: this browser tab is in the background.
 //   page     the open page view ("settings-modal", "analytics-modal", "audit-page") or "".
 //   placed   where the terminal lives: "tab" (a tab of a pane), "dock" (a shell docked in a pane) or "" (nowhere).
@@ -28,10 +27,11 @@
 //   laidOut  the terminal's element is in the document and has a box. Not a state of its own so much as the backstop for
 //            every state this list does not name (a collapsed pane, a display:none the CSS adds later).
 //
-// The phone is the one exception to the rule that "visible" means "on screen now", and it is deliberate: the phone
-// shows one screen at a time (Sessions, Terminal, Files) and the Files screen inserts at the focused terminal that
-// sits on the Terminal screen. That cross-screen insert is what the phone's tree is for, so it keeps working exactly as
-// it did; the agent-state gate still applies to it (insertDecision). To refuse it too, delete the phone line below.
+// The phone has no rule of its own (founder, 2026-11-18: strict #337 everywhere). It shows one screen at a time and
+// draws no dock, but all of that is already here: the Files and Sessions screens hide the whole grid, every cell but the
+// focused one is display:none and the dock is never drawn, so each reads as `laidOut: false`; a viewer tab in front and an
+// inactive stacked tab are the same `front` as on a desktop. Only the Terminal screen's focused cell and its active
+// terminal pass.
 
 const INSERT_PAGE_NAMES = { "settings-modal": "Settings", "analytics-modal": "Analytics", "audit-page": "Audit" };
 
@@ -43,7 +43,6 @@ function insertVisible(state) {
   const name = s.name || "The session";
   const no = (reason) => ({ ok: false, reason });
   if (s.placed !== "tab" && s.placed !== "dock") return no(name + " is not open in a pane; open it first");
-  if (s.phone === true) return { ok: true, reason: "" };
   if (s.hidden !== false) return no("This browser tab is in the background; come back to it first");
   if (s.page !== "") return no((INSERT_PAGE_NAMES[s.page] || "A page") + " is open over the panes; close it first");
   if (s.full !== false) return no(name + "'s terminal is covered by the dock in Full mode; show the terminal first");

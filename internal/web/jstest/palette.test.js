@@ -334,6 +334,7 @@ function insertPage(over) {
   load(src("shortcuts.js"), "shortcuts.js");
   load(fnSource("upload.js", "shellQuote"), "shellQuote");
   load(fnSource("upload.js", "insertTextAtPrompt"), "insertTextAtPrompt");
+  load(fnSource("insertdecision.js", "insertRefused"), "insertRefused"); // the real helper over the stubbed decision
   load(fnSource("filetree.js", "insertPathAtPrompt"), "insertPathAtPrompt");
   load(src("palette.js"), "palette.js");
   load("initPalette()", "init");
