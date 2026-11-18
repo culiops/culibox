@@ -1571,3 +1571,206 @@ func TestRunnerNumstatFreshRespectsParallelCap(t *testing.T) {
 		t.Fatalf("peak = %d runs = %d, want 1 and 2", p, f.callCount())
 	}
 }
+
+// gitFatal is what ExecDocker surfaces for a git that died with exit 128 and
+// said msg on stderr.
+func gitFatal(t *testing.T, msg string) error {
+	t.Helper()
+	err := exec.Command("sh", "-c", "exit 128").Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("no ExitError: %v", err)
+	}
+	return fmt.Errorf("docker run: %w: %s", err, msg)
+}
+
+func catBlob(content string) func(context.Context, []string, io.Writer) error {
+	return func(_ context.Context, _ []string, w io.Writer) error {
+		_, err := io.WriteString(w, content)
+		return err
+	}
+}
+
+func TestRunnerShowOK(t *testing.T) {
+	f := &fakeDocker{run: catBlob("package main\n")}
+	r := newRunner(f, newClock())
+	b := r.Show(context.Background(), tgt, "HEAD", "src/a.go")
+	if b.State != "ok" || b.Content != "package main\n" || b.Missing || b.Truncated || b.Reason != "" {
+		t.Fatalf("show = %+v", b)
+	}
+	a := f.args[0]
+	i := slices.Index(a, "--name")
+	if !slices.Equal(a, ShowArgs(tgt, "img:1", a[i+1], 1000, 1000, "HEAD", "src/a.go")) {
+		t.Fatalf("argv is not ShowArgs: %q", a)
+	}
+	// The merge base reaches git as the revision.
+	mb := strings.Repeat("c", 40)
+	r.Show(context.Background(), tgt, mb, "src/a.go")
+	if !slices.Contains(f.args[1], mb+":src/a.go") {
+		t.Fatalf("argv lacks the merge base: %q", f.args[1])
+	}
+}
+
+func TestRunnerShowMissingPath(t *testing.T) {
+	const mb = "0123456789abcdef0123456789abcdef01234567"
+	for _, c := range []struct {
+		name, rev, stderr string
+	}{
+		{"a path HEAD does not have", "HEAD", "fatal: path 'src/a.go' does not exist in 'HEAD'"},
+		// An untracked file is on disk, and git says so in other words.
+		{"an untracked file", "HEAD", "fatal: path 'new.txt' exists on disk, but not in 'HEAD'"},
+		{"a path the merge base does not have", mb, "fatal: path 'src/a.go' does not exist in '" + mb + "'"},
+		{"a path the merge base does not have, though on disk", mb, "fatal: path 'src/a.go' exists on disk, but not in '" + mb + "'"},
+		// No commit yet: nothing is in HEAD, so every file is new.
+		{"a repository with no commits", "HEAD", "fatal: invalid object name 'HEAD'."},
+	} {
+		f := &fakeDocker{run: func(context.Context, []string, io.Writer) error { return gitFatal(t, c.stderr) }}
+		b := newRunner(f, newClock()).Show(context.Background(), tgt, c.rev, "src/a.go")
+		if b.State != "ok" || !b.Missing || b.Content != "" || b.Truncated || b.Reason != "" {
+			t.Errorf("%s: show = %+v, want ok and Missing", c.name, b)
+		}
+	}
+}
+
+func TestRunnerShowOtherFailuresAreUnavailable(t *testing.T) {
+	const mb = "0123456789abcdef0123456789abcdef01234567"
+	for _, c := range []struct {
+		name, rev string
+		err       func() error
+	}{
+		// A directory or a submodule is not a blob.
+		{"not a blob", "HEAD", func() error { return gitFatal(t, "fatal: git cat-file HEAD:d: bad file") }},
+		// A directory named like git's message does not make a blob Missing.
+		{"a message inside a path", "HEAD", func() error {
+			return gitFatal(t, "fatal: git cat-file HEAD:does not exist in 'HEAD': bad file")
+		}},
+		// A merge base that is no object is a failure, not a new file.
+		{"unknown merge base", mb, func() error { return gitFatal(t, "fatal: invalid object name '"+mb+"'.") }},
+		{"does not exist, wrong exit code", "HEAD", func() error {
+			err := exitErr(t, 1)
+			return fmt.Errorf("%w fatal: path 'a' does not exist in 'HEAD'", err)
+		}},
+		{"docker", "HEAD", func() error { return errors.New("docker run: boom") }},
+	} {
+		f := &fakeDocker{run: func(context.Context, []string, io.Writer) error { return c.err() }}
+		b := newRunner(f, newClock()).Show(context.Background(), tgt, c.rev, "d")
+		if b.State != "unavailable" || b.Reason == "" || b.Missing || b.Content != "" {
+			t.Errorf("%s: show = %+v, want unavailable", c.name, b)
+		}
+		if len(f.removed) != 1 {
+			t.Errorf("%s: Remove calls %q, want the run's container", c.name, f.removed)
+		}
+	}
+}
+
+func TestRunnerShowNotARepo(t *testing.T) {
+	f := &fakeDocker{run: func(context.Context, []string, io.Writer) error {
+		return gitFatal(t, "fatal: not a git repository (or any of the parent directories): .git")
+	}}
+	if b := newRunner(f, newClock()).Show(context.Background(), tgt, "HEAD", "a.go"); b.State != "notrepo" || b.Missing {
+		t.Fatalf("show = %+v, want notrepo", b)
+	}
+}
+
+func TestRunnerShowTruncates(t *testing.T) {
+	f := &fakeDocker{run: func(_ context.Context, _ []string, w io.Writer) error {
+		_, err := w.Write(bytes.Repeat([]byte("a"), 3<<20))
+		if err != nil {
+			return fmt.Errorf("docker run: writing its output: %w", err)
+		}
+		return nil
+	}}
+	b := newRunner(f, newClock()).Show(context.Background(), tgt, "HEAD", "big.txt")
+	if b.State != "ok" || !b.Truncated || len(b.Content) != 2<<20 || b.Missing {
+		t.Fatalf("show state=%q truncated=%v len=%d reason=%q", b.State, b.Truncated, len(b.Content), b.Reason)
+	}
+	// Not a failure, but the cut-off docker CLI leaves its container running.
+	if len(f.removed) != 1 {
+		t.Fatalf("cap hit: Remove calls %q, want the run's container", f.removed)
+	}
+	// A blob of exactly the cap is whole.
+	f = &fakeDocker{run: catBlob(strings.Repeat("b", maxBlobBytes))}
+	if b := newRunner(f, newClock()).Show(context.Background(), tgt, "HEAD", "x"); b.Truncated || len(b.Content) != maxBlobBytes || len(f.removed) != 0 {
+		t.Fatalf("blob at the cap: truncated=%v len=%d removed=%q", b.Truncated, len(b.Content), f.removed)
+	}
+}
+
+func TestRunnerShowTruncationKeepsWholeRunes(t *testing.T) {
+	// 2 MiB - 1 ASCII bytes, then a 3-byte rune that straddles the cap.
+	f := &fakeDocker{run: catBlob(strings.Repeat("a", maxBlobBytes-1) + "€€")}
+	b := newRunner(f, newClock()).Show(context.Background(), tgt, "HEAD", "x")
+	if !b.Truncated || !utf8.ValidString(b.Content) || len(b.Content) != maxBlobBytes-1 {
+		t.Fatalf("truncated=%v valid=%v len=%d", b.Truncated, utf8.ValidString(b.Content), len(b.Content))
+	}
+}
+
+func TestRunnerShowRefusesWhatItShouldNotRun(t *testing.T) {
+	f := &fakeDocker{}
+	r := newRunner(f, newClock())
+	for _, c := range []struct{ rev, rel string }{
+		{"-x", "a.go"}, {"HEAD~1", "a.go"}, {"main", "a.go"}, {"", "a.go"},
+		{"HEAD", ""}, {"HEAD", "/etc/passwd"}, {"HEAD", "../x"}, {"HEAD", "a/../../x"}, {"HEAD", "a\x00b"},
+	} {
+		if b := r.Show(context.Background(), tgt, c.rev, c.rel); b.State != "unavailable" || b.Reason == "" {
+			t.Errorf("rev %q rel %q: %+v", c.rev, c.rel, b)
+		}
+		if _, b := r.ShowRaw(context.Background(), tgt, c.rev, c.rel); b.State != "unavailable" {
+			t.Errorf("raw rev %q rel %q: %+v", c.rev, c.rel, b)
+		}
+	}
+	if b := r.Show(context.Background(), Target{Top: "/a,readonly=false"}, "HEAD", "a.go"); b.State != "unavailable" {
+		t.Errorf("unsafe target: %+v", b)
+	}
+	if n := f.callCount(); n != 0 {
+		t.Fatalf("%d refused requests reached docker", n)
+	}
+}
+
+func TestRunnerShowIsNotCached(t *testing.T) {
+	f := &fakeDocker{run: catBlob("x")}
+	r := newRunner(f, newClock())
+	r.Show(context.Background(), tgt, "HEAD", "a.go")
+	r.Show(context.Background(), tgt, "HEAD", "a.go")
+	if n := f.callCount(); n != 2 {
+		t.Fatalf("runs = %d, want 2: a file read is never reused", n)
+	}
+}
+
+func TestRunnerShowRawKeepsBytesUpToTenMiB(t *testing.T) {
+	// Not text: NUL and bytes that are not UTF-8 must come back as they are.
+	png := []byte("\x89PNG\r\n\x1a\n\x00\xff\xfe")
+	f := &fakeDocker{run: catBlob(string(png))}
+	data, b := newRunner(f, newClock()).ShowRaw(context.Background(), tgt, "HEAD", "img.png")
+	if b.State != "ok" || b.Missing || b.Truncated || b.Content != "" || !bytes.Equal(data, png) {
+		t.Fatalf("raw = %q %+v", data, b)
+	}
+	if i := slices.Index(f.args[0], "cat-file"); i < 0 || f.args[0][i+1] != "blob" {
+		t.Fatalf("argv is not a cat-file blob: %q", f.args[0])
+	}
+
+	// Above the text cap, still whole.
+	f = &fakeDocker{run: catBlob(strings.Repeat("p", 5<<20))}
+	if data, b := newRunner(f, newClock()).ShowRaw(context.Background(), tgt, "HEAD", "big.png"); b.State != "ok" || b.Truncated || len(data) != 5<<20 {
+		t.Fatalf("5 MiB raw: len=%d %+v", len(data), b)
+	}
+
+	// Past 10 MiB it is cut and marked, and the container is removed.
+	f = &fakeDocker{run: func(_ context.Context, _ []string, w io.Writer) error {
+		if _, err := w.Write(bytes.Repeat([]byte("p"), 11<<20)); err != nil {
+			return fmt.Errorf("docker run: writing its output: %w", err)
+		}
+		return nil
+	}}
+	data, b = newRunner(f, newClock()).ShowRaw(context.Background(), tgt, "HEAD", "huge.png")
+	if b.State != "ok" || !b.Truncated || len(data) != 10<<20 || len(f.removed) != 1 {
+		t.Fatalf("11 MiB raw: len=%d %+v removed=%q", len(data), b, f.removed)
+	}
+
+	// A missing path reads the same as for Show.
+	f = &fakeDocker{run: func(context.Context, []string, io.Writer) error {
+		return gitFatal(t, "fatal: path 'a.png' exists on disk, but not in 'HEAD'")
+	}}
+	if data, b := newRunner(f, newClock()).ShowRaw(context.Background(), tgt, "HEAD", "a.png"); b.State != "ok" || !b.Missing || len(data) != 0 {
+		t.Fatalf("raw missing: %q %+v", data, b)
+	}
+}

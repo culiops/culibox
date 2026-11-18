@@ -31,7 +31,7 @@ type Target struct{ Root, Top, Common string }
 // from an agent-shaped checkout, and docker parses --mount as CSV, so a path
 // holding a comma or quote could add mount options of its own. Both must be
 // absolute and clean, and pass box.MountUnsafe. Callers MUST check it before
-// StatusArgs, DiffArgs, BaseArgs, MergeBaseArgs or NumstatArgs and treat a
+// StatusArgs, DiffArgs, BaseArgs, MergeBaseArgs, NumstatArgs or ShowArgs and treat a
 // refusal as state "unavailable"; the builders do not check, they only build.
 func (t Target) Unsafe() string {
 	for _, p := range []struct{ name, v string }{{"workspace", t.Root}, {"checkout", t.Top}, {"git dir", t.Common}} {
@@ -192,4 +192,28 @@ func NumstatArgs(t Target, image, name string, uid, gid int, sc Scope) []string 
 	sub := append([]string{"diff"}, rev...)
 	sub = append(sub, "--raw", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=all", "--")
 	return argv(t, image, name, uid, gid, sub...)
+}
+
+// validRev reports whether rev may name a commit in a git argv: HEAD, or a
+// full object id (SHA-1 or SHA-256, lowercase hex) such as the merge base
+// Runner.Base prints. Nothing else is a revision here (no "main", no "HEAD~1",
+// no "-x"), so a rev can never be read as an option or as a lookup the
+// repository could answer differently.
+func validRev(rev string) bool {
+	return rev == "HEAD" || oidRE.MatchString(rev)
+}
+
+// ShowArgs is the argv of the container that prints the content of the file rel
+// (relative to t.Top) as it is in rev, which must be "HEAD" or a full object id
+// (see validRev): anything else builds no argv (nil), so a caller that skips
+// its own check runs nothing rather than a hostile rev. cat-file blob prints the
+// stored bytes: it runs no clean or smudge filter and no textconv, which a
+// repository's own attributes could otherwise point at a command. The path is
+// everything after the first colon of one argument, so it can never be read as
+// an option or a pathspec. The caller MUST have checked t.Unsafe() == "" first.
+func ShowArgs(t Target, image, name string, uid, gid int, rev, rel string) []string {
+	if !validRev(rev) {
+		return nil
+	}
+	return argv(t, image, name, uid, gid, "cat-file", "blob", rev+":"+rel)
 }

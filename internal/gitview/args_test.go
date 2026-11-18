@@ -325,3 +325,63 @@ func TestNumstatArgsBranchScope(t *testing.T) {
 		t.Errorf("head scope with a stray ref:\n got %q\nwant %q", got, w)
 	}
 }
+
+func TestShowArgsGolden(t *testing.T) {
+	uid, gid := os.Getuid(), os.Getgid()
+	mb40 := strings.Repeat("ab", 20)
+	mb64 := strings.Repeat("0f", 32)
+	for _, c := range []struct {
+		name   string
+		t      Target
+		mounts []string
+		rev    string
+		rel    string
+	}{
+		{"head", Target{Top: "/w/repo", Common: "/w/repo/.git"}, []string{"/w/repo"}, "HEAD", "src/a b.go"},
+		{"common outside top", Target{Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w/wt", "/w/main/.git"}, "HEAD", "x.txt"},
+		{"boxed", Target{Root: "/w", Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w"}, "HEAD", "*.go"},
+		{"merge base, sha-1", Target{Top: "/w/repo", Common: "/w/repo/.git"}, []string{"/w/repo"}, mb40, "a.go"},
+		{"merge base, sha-256", Target{Top: "/w/repo", Common: "/w/repo/.git"}, []string{"/w/repo"}, mb64, "a.go"},
+		// Everything after the first colon is the path, so one that looks like an option is not one.
+		{"option-like path", Target{Top: "/w/repo", Common: "/w/repo/.git"}, []string{"/w/repo"}, "HEAD", "--output=/x"},
+	} {
+		got := ShowArgs(c.t, "img", "n", uid, gid, c.rev, c.rel)
+		w := want(c.mounts, c.t.Top, "cat-file", "blob", c.rev+":"+c.rel)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, w)
+		}
+	}
+	got := ShowArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2, "HEAD", "f")
+	for _, must := range []string{"core.fsmonitor=false", "--read-only", "core.hooksPath=/dev/null", "core.attributesFile=/dev/null"} {
+		if !slices.Contains(got, must) {
+			t.Errorf("argv lacks %q: %q", must, got)
+		}
+	}
+	// The raw blob, as stored: no filter, no textconv, no pretty-printing.
+	for _, never := range []string{"--textconv", "--filters", "-p", "--batch", "show"} {
+		if slices.Contains(got, never) {
+			t.Errorf("argv has %q: %q", never, got)
+		}
+	}
+	if i := slices.Index(got, "--network"); i < 0 || got[i+1] != "none" {
+		t.Errorf("no --network none: %q", got)
+	}
+	for i, a := range got {
+		if a == "--mount" && !strings.HasSuffix(got[i+1], ",readonly") {
+			t.Errorf("mount %q not read-only", got[i+1])
+		}
+	}
+}
+
+func TestShowArgsRefusesBadRev(t *testing.T) {
+	tt := Target{Top: "/w/repo", Common: "/w/repo/.git"}
+	for _, rev := range []string{
+		"", "-x", "--output=/x", "HEAD~1", "HEAD^", "HEAD:", "main", "head", "refs/heads/main", "origin/main",
+		"abc123", strings.Repeat("a", 39), strings.Repeat("a", 41), strings.Repeat("a", 63), strings.Repeat("a", 65),
+		strings.Repeat("A", 40), strings.Repeat("g", 40), "HEAD\n", strings.Repeat("a", 40) + "\n", " HEAD",
+	} {
+		if a := ShowArgs(tt, "img", "n", 1, 2, rev, "a.go"); a != nil {
+			t.Errorf("rev %q built an argv: %q", rev, a)
+		}
+	}
+}
