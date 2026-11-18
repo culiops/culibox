@@ -437,6 +437,27 @@ test("dispatchShortcut", () => {
   SC._resetShortcutBindings();
 });
 
+test("dispatchShortcut: a skip(id) that says yes leaves the key alone, untouched and unmarked", () => {
+  SC._resetShortcutBindings();
+  const ran = [];
+  SC.bindShortcut("shell.below", () => { ran.push(1); });
+  const seen = [];
+  const e = ev("Backquote", "~", { ctrl: true, shift: true });
+  assert.strictEqual(SC.dispatchShortcut(e, NONE, false, (id) => { seen.push(id); return true; }), false);
+  assert.deepStrictEqual(seen, ["shell.below"], "skip is asked with the registry id the key matched");
+  assert.deepStrictEqual(e.calls, [], "neither prevented nor stopped: whoever owns the key still gets it");
+  assert.strictEqual(ran.length, 0);
+  const e2 = ev("Backquote", "~", { ctrl: true, shift: true });
+  assert.strictEqual(SC.dispatchShortcut(e2, NONE, false, () => false), true, "a skip that says no changes nothing");
+  assert.deepStrictEqual(e2.calls, ["pd", "sp"]);
+  const e3 = ev("Backquote", "~", { ctrl: true, shift: true });
+  assert.strictEqual(SC.dispatchShortcut(e3, NONE, false, "not a function"), true, "a skip that is not a function is ignored");
+  let asked = false;
+  SC.dispatchShortcut(ev("KeyQ", "q", { ctrl: true }), NONE, false, () => { asked = true; return true; });
+  assert.strictEqual(asked, false, "a key that matches nothing never asks");
+  SC._resetShortcutBindings();
+});
+
 test("cmKeys", () => {
   assert.deepStrictEqual(SC.cmKeys("editor.save", true), ["Cmd-S"]);
   assert.deepStrictEqual(SC.cmKeys("editor.save", false), ["Ctrl-S"]);
@@ -446,7 +467,7 @@ test("cmKeys", () => {
 const focusEl = (tagName, o = {}) => ({
   tagName,
   classList: { contains: (c) => c === o.cls },
-  closest: (sel) => (sel === ".CodeMirror" && o.inCM ? {} : null),
+  closest: (sel) => ((sel === ".CodeMirror" && o.inCM) || (sel === ".monaco-editor" && o.inMonaco) ? {} : null),
   isContentEditable: !!o.editable,
 });
 const FOCUS_KEYS = ["inTerminal", "inEditor", "inInput"];
@@ -460,6 +481,13 @@ test("ctx: xterm textarea is inTerminal only", () => {
 test("ctx: CodeMirror's textarea is inEditor only, not inInput", () => {
   const ctx = shortcutContext(focusEl("TEXTAREA", { inCM: true }), 0, false, false);
   assert.ok(onlyFocus(ctx, "inEditor"));
+});
+
+test("ctx (R2): Monaco's input area, and its find widget's field, are inEditor only, not inInput", () => {
+  assert.ok(onlyFocus(shortcutContext(focusEl("TEXTAREA", { inMonaco: true }), 0, false, false), "inEditor"));
+  assert.ok(onlyFocus(shortcutContext(focusEl("INPUT", { inMonaco: true }), 0, false, false), "inEditor"));
+  // Monaco's textarea is not xterm's: the terminal flag still wins for the terminal's own helper.
+  assert.ok(onlyFocus(shortcutContext(focusEl("TEXTAREA", { cls: "xterm-helper-textarea", inMonaco: true }), 0, false, false), "inTerminal"));
 });
 
 test("ctx: INPUT, SELECT, plain TEXTAREA, contenteditable DIV are inInput", () => {

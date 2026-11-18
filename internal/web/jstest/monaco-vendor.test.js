@@ -59,3 +59,38 @@ test("monaco-vendor manifest is sorted bytewise and carries only vs/ and LICENSE
   }
   assert.ok(rels.includes("vs/loader.js"), "the AMD loader is vendored");
 });
+
+// monacoload.js (the dock's lazy loader) names the files it asks the browser for. Each must be a file of the pinned tree.
+test("monacoload.js asks only for files the manifest lists", () => {
+  const ML = require("../static/monacoload.js");
+  const listed = new Set(readManifest().map((e) => e.rel));
+  const prefix = "/vendor/monaco/";
+  for (const url of [ML.MONACO_BASE + "/loader.js", ML.MONACO_BASE + "/editor/editor.main.js", ML.MONACO_BASE + "/editor/editor.main.css"]) {
+    assert.ok(url.startsWith(prefix), url + " is under " + prefix);
+    assert.ok(listed.has(url.slice(prefix.length)), url + " is in the manifest");
+  }
+  assert.ok(!/^https?:|^\/\//.test(ML.MONACO_BASE), "never a CDN");
+});
+
+// The workers. Measured in 0.57.0: editor.main.js replaces MonacoEnvironment with its own {getWorker} when it runs, so a
+// getWorkerUrl the page set before it is lost, and the workers are the ones this file's getWorker starts. They are same-origin
+// only while every file it names is in the vendored tree. A re-vendor that changes how workers are found fails here, and
+// monacoload.js (which sets no MonacoEnvironment, and says why) is looked at again.
+test("the vendored editor.main.js starts its workers itself, from files the manifest lists", () => {
+  const listed = new Set(readManifest().map((e) => e.rel));
+  const main = fs.readFileSync(path.join(ROOT, "vs", "editor", "editor.main.js"), "utf8");
+  assert.ok(/self\.MonacoEnvironment=\{getWorker:function/.test(main), "editor.main.js sets MonacoEnvironment.getWorker itself");
+  const worker = /toUrl\("\.\.\/(assets\/editor\.worker-[\w-]+\.js)"\)/.exec(main);
+  assert.ok(worker, "it names the editor worker as an asset next to it");
+  assert.ok(listed.has("vs/" + worker[1]), "the editor worker is in the manifest: vs/" + worker[1]);
+  for (const dep of main.match(/"\.\.\/[a-z]+\.worker-[\w-]+"/g) || []) {
+    assert.ok(listed.has("vs/" + dep.slice(4, -1) + ".js"), "a language worker it depends on is in the manifest: " + dep);
+  }
+  assert.ok(/document\.createElement\("link"\)[^;]*;?[^;]*editor\.main\.css|toUrl\("vs\/editor\/editor\.main\.css"\)/.test(main), "it adds its own stylesheet link, so monacoload.js only waits for it");
+});
+
+test("every command monacokeys.js says to unbind has its key in the loader's table", () => {
+  const ML = require("../static/monacoload.js");
+  const { MONACO_UNBIND } = require("../static/monacokeys.js");
+  assert.deepStrictEqual(ML.MONACO_UNBOUND_KEYS.map((k) => k.command).sort(), [...MONACO_UNBIND].sort());
+});

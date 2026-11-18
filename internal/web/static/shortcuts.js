@@ -104,6 +104,9 @@ const SHORTCUTS = [
     status: "help-only", chords: [], text: { mac: "⌥+drag", other: "Shift+drag" } },
   { id: "editor.save", label: "Save", group: "Editor & files", scope: "editor", status: "bound",
     chords: [{ mod: true, code: "KeyS" }] },
+  // Bound inside the Files dock's editor (Monaco's addCommand, editortab.js), where the toggle also lives in the ⋯ menu.
+  { id: "editor.wrap", label: "Wrap lines", group: "Editor & files", scope: "editor", status: "bound",
+    chords: [{ alt: true, code: "KeyZ" }] },
   { id: "palette.insert", label: "Palette: open in new pane / insert path", group: "Editor & files", scope: "palette",
     status: "bound", chords: [{ mod: true, keys: ["Enter"] }] },
   // deskLabel: what the desktop's Keyboard shortcuts grid says (the dialog's button reads "Start session" there);
@@ -229,8 +232,11 @@ function _resetShortcutBindings() {
   scBindings = {};
 }
 
-function dispatchShortcut(e, ctx, mac) {
+// skip(id), optional: true leaves the key to whoever owns it where focus is (Monaco's own find and go to line,
+// monacokeys.js registrySkipsInEditor), without stopping it or marking it used.
+function dispatchShortcut(e, ctx, mac, skip) {
   const id = shortcutFor(e, mac, ctx);
+  if (id && typeof skip === "function" && skip(id)) return false;
   const fn = id && scBindings[id];
   if (!fn) return false;
   if (fn(e, ctx) === false) return false;

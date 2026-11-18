@@ -35,6 +35,9 @@ test("app.js has exactly one keydown listener that dispatches, and it is capture
   assert.strictEqual((slice.match(/addEventListener\(/g) || []).length, 1, "slice spans more than one listener");
   assert.match(slice, /shortcutContext\(/);
   assert.match(slice, /IS_MAC/);
+  // Inside Monaco the registry wins except for the ids it hands back (find, go to line): the skip is part of the one call.
+  assert.match(slice, /closest\("\.monaco-editor"\)/);
+  assert.match(slice, /registrySkipsInEditor\(id, inMonaco\)/);
 });
 
 test("the old per-feature key plumbing is gone", () => {

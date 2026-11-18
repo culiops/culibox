@@ -73,6 +73,21 @@ test("a tab shows its name as text, with the preview, active and dirty marks and
   } finally { p.restore(); }
 });
 
+test("a read-only tab carries the lock mark, a writable one does not", () => {
+  const p = page();
+  try {
+    p.paint([p.item("/p/a.go", { locked: true }), p.item("/p/b.go")]);
+    assert.equal(p.tab(0).dataset.locked, "1", "the lock is CSS's, off this");
+    assert.equal(p.tab(1).dataset.locked, "");
+    const lock = p.part(p.tab(0), "dk-lock");
+    assert.ok(lock, "the lock is there");
+    assert.equal(lock.getAttribute("aria-label"), "Read-only");
+    assert.equal(lock.title, "Read-only");
+    p.paint([p.item("/p/a.go"), p.item("/p/b.go")]);
+    assert.equal(p.tab(0).dataset.locked, "", "and a repaint takes it off");
+  } finally { p.restore(); }
+});
+
 test("names, titles and paths are written as text: a hostile file name makes no element", () => {
   const p = page();
   try {

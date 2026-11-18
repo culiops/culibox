@@ -7727,8 +7727,14 @@ setInterval(async () => {
 // dispatcher) because xterm listens on its textarea and forwards every
 // combination it does not recognise into the running agent, so a bubbling
 // handler would type the key into the process instead of acting on the app.
+//
+// Inside the dock's Monaco editor the registry still wins: a chord it admits there (Ctrl+Shift+K, F6, ...) is handled here and
+// stopped before Monaco's own binding for it (delete line, ...) can also run. The two chords that really are editing commands,
+// find and go to line, are Monaco's while it has focus (registrySkipsInEditor, monacokeys.js).
 document.addEventListener("keydown", (e) => {
-  dispatchShortcut(e, shortcutContext(document.activeElement, dialogsOpen(), !!currentPage(), mobileActive(window.innerWidth)), IS_MAC);
+  const inMonaco = !!(e.target && e.target.closest && e.target.closest(".monaco-editor"));
+  dispatchShortcut(e, shortcutContext(document.activeElement, dialogsOpen(), !!currentPage(), mobileActive(window.innerWidth)), IS_MAC,
+    (id) => registrySkipsInEditor(id, inMonaco));
 }, true);
 
 // cellVisible: the cell's own element is attached and laid out. On a mobile

@@ -1409,6 +1409,39 @@
   .dk-sep { flex: none; padding: 0 3px; }
   .dk-edited { flex: none; display: inline-flex; align-items: center; gap: 6px; }
   .dk-edited::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  /* A read-only file's tab wears a small padlock after its name (drawn here, like the dirty dot, so no glyph has to exist in a
+     font): a body and a shackle in the muted colour. */
+  .dk-lock { display: none; flex: none; position: relative; width: 8px; height: 6px; margin: 5px 3px 0; border-radius: 1.5px; background: var(--muted); }
+  .dk-lock::before { content: ""; position: absolute; left: 1.5px; bottom: 100%; width: 3px; height: 3px; border: 1.2px solid var(--muted); border-bottom: 0; border-radius: 3px 3px 0 0; }
+  .dk-tab[data-locked="1"] .dk-lock { display: block; }
+  /* --- the editor (editortab.js, mockup B1) -------------------------------------------------------------------------- */
+  /* A tab's body: a line saying why the file is read-only (only then), the editor, and the status bar. The Monaco element is the
+     dock's one shared editor: it is moved into the shown tab's .dk-ed-body and fills it (Monaco lays itself out on resize). */
+  .dk-ed { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .dk-ed-note { flex: none; padding: 3px 10px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); overflow-wrap: anywhere; }
+  .dk-ed-note[hidden], .dk-sb[hidden], .dk-vact[hidden] { display: none; }
+  .dk-ed-body { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+  .dk-ed-mon { position: absolute; inset: 0; }
+  /* The status bar (mockup B1 .esb): the branch and "Saved" on the left; Ln/Col, indentation, encoding, line ending and language on the
+     right. One 24px line that never wraps; what does not fit is cut at the left group, so the right group keeps its words. */
+  .dk-sb {
+    flex: none; display: flex; align-items: center; gap: 14px; height: 24px; padding: 0 12px; min-width: 0; overflow: hidden;
+    background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); white-space: nowrap;
+  }
+  .dk-sb-branch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+  .dk-sb-branch[hidden], .dk-sb-saved[hidden] { display: none; }
+  .dk-sb-saved { flex: none; color: var(--ok); }
+  .dk-sb-r { flex: none; display: flex; gap: 14px; margin-left: auto; }
+  /* The tab's own actions in the bar (the ⋯; Tasks 7 and 8b add the Code | Changes toggle and Follow): left of Full. */
+  .dk-vact { flex: none; display: flex; align-items: center; gap: var(--sp-1); }
+  /* The ⋯ menu's font row: the label, A-, the size and A+. The two steps are menu rows (so the arrow keys reach them) that keep
+     their own width, and a press leaves the menu open. They hang from #ft-menu because app.css's `#ft-menu button` (full width,
+     no border) is an id rule that a class rule alone cannot out-rank. */
+  #ft-menu .dk-fs { display: flex; align-items: center; gap: 6px; height: var(--h-menu); padding: 0 4px 0 36px; font-size: var(--t-md); }
+  #ft-menu .dk-fs .menu-text { white-space: nowrap; }
+  #ft-menu .dk-fs .menu-item.dk-fs-btn { flex: none; width: auto; min-width: 32px; height: 24px; justify-content: center; padding: 0 8px; border: 1px solid var(--line); }
+  #ft-menu .dk-fs .menu-item.dk-fs-btn:hover { border-color: var(--accent); }
+  .dk-fs-val { flex: none; min-width: 3ch; text-align: center; font-family: var(--font-mono); font-size: var(--t-xs); color: var(--muted); }
   /* Every name the dock draws from the workspace or from git (tab names, crumbs, Changes rows, tree rows, the root header, and the
      branch name above) is isolated for bidirectional text: a file or folder name can hold Unicode bidi format characters, which
      would otherwise reorder the counts, the git letter or the separators drawn next to it. */

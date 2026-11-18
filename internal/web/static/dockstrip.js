@@ -77,7 +77,7 @@ function dkSpan(cls) {
   return s;
 }
 
-// dkTabBuild makes one tab's element: icon, name, git letter, the dirty dot and the
+// dkTabBuild makes one tab's element: icon, name, the lock, git letter, the dirty dot and the
 // close button. dkTabFill, not this, says what they show.
 function dkTabBuild() {
   const el = document.createElement("div");
@@ -93,7 +93,11 @@ function dkTabBuild() {
   x.className = "dk-x";
   x.tabIndex = -1; // the tab itself is the Tab stop, and Delete closes it
   x.textContent = "✕";
-  el.append(ic, dkSpan("dk-name"), dkSpan("dk-st"), dot, x);
+  const lock = dkSpan("dk-lock"); // drawn by CSS, like the dot; shown for a read-only file
+  lock.setAttribute("role", "img");
+  lock.setAttribute("aria-label", "Read-only");
+  lock.title = "Read-only";
+  el.append(ic, dkSpan("dk-name"), lock, dkSpan("dk-st"), dot, x);
   el.onclick = () => { dkStop = el.dataset.key; dkCall(dkTabOn.activate, el.dataset.key); };
   el.ondblclick = () => dkCall(dkTabOn.pin, el.dataset.key);
   // Middle-click closes. Its mousedown is the browser's autoscroll on some systems.
@@ -124,6 +128,7 @@ function dkTabFill(el, it) {
   el.setAttribute("aria-selected", it.active ? "true" : "false");
   el.title = it.title;
   el.dataset.dirty = it.dirty ? "1" : "";
+  el.dataset.locked = it.locked ? "1" : "";
   el.dataset.box = it.box ? "1" : "";
   set("dk-ic", typeof iconFor === "function" ? iconFor(it.path.split("/").pop() || it.path, false, false) : "");
   set("dk-name", it.name);
