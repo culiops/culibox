@@ -421,18 +421,18 @@ class EditorTab {
     this.stashView();
   }
 
-  // show: this tab is on screen with a model, so it takes the shared editor, or, if it was left in Changes, puts that view back.
+  // show: this tab is on screen with a model, so it takes the shared editor, or, if it was left in Changes, opens that view again
+  // (its diff editor was let go when it was hidden: the dock has one at a time).
   show() {
-    if (this.diff) editorDiffShow(this);
-    else editorClaim(this);
+    if (!editorDiffResume(this)) editorClaim(this);
     this.paint();
     editorDiffAttach(this);
   }
 
-  // stashView saves where the editor is over this model. Only the tab that has the editor has a live view; one in Changes saved
-  // its view when it left Code.
+  // stashView saves where the editor is over this model. Only the tab that has the editor in its body has a live view: one that
+  // went to Changes saved its view when it left Code, and the editor has not moved since (a detached editor has no size to keep it by).
   stashView() {
-    if (dockEditorOwner !== this || !dockEditor || !this.model || this.diff) return;
+    if (dockEditorOwner !== this || !dockEditor || !this.model || dockEditorEl.parentNode !== this.bodyEl) return;
     this.viewState = dockEditor.saveViewState();
     this.lastScroll = dockEditor.getScrollTop();
   }

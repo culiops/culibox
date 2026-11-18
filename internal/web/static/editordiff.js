@@ -11,23 +11,27 @@
 //
 // The base text. POST /api/git/show {path, scope} answers {state: "ok" | "notrepo" | "unavailable", reason, missing, content, truncated}.
 // It is asked only for a tab on screen, with git's status known and the dock visible, and kept on the tab as `tab.changes`:
-//   {key, scope, baseName, head, missing, why, lineChanges, capped, at}
+//   {key, scope, baseName, head, missing, why, retry, lineChanges, capped, at}
 //   key          what the answer is for: the path, the scope, the HEAD commit the tree's status names and (Branch) the merge base. A
 //                status that lands with the same key asks nothing, so an edit of the file, which moves no commit, costs no request;
 //                nor does a keystroke, ever (the gutter diffs the text already held);
 //   head         the base text; "" for a file the base does not have (a new file: every line is added); null when it could not be read;
 //   why          when head is null, the sentence the toggle's title gives after "Changes unavailable:";
+//   retry        when head is null: the failure may pass (git unavailable, a request that failed), so it is asked again after
+//                DG_RETRY_MS. A definitive answer (not a repository, a base text over the cap) is not asked again until the key moves;
 //   lineChanges  lineDiff's changes of head against the buffer (P3 reads them); [] when capped or head is null;
 //   capped       lineDiff declined (too big, or too different): no marks, and no cost per keystroke;
-//   at           when the answer landed. One that could not be read is asked again after DG_RETRY_MS, not on every status.
+//   at           when the answer landed.
 // A box tab has no host git: no request, the toggle says so. An image or a binary file has no toggle at all (the EditorTab's inner
 // viewer owns the bar).
 //
 // Everything an answer touches is decided when it arrives: an answer for a tab that was disposed, or for a key the tab has moved
 // on from (the scope was switched, HEAD moved, the file was re-pointed), is dropped and the newer key is asked for.
 //
-// What the editor lets go of. The diff editor and the model of the base text exist only while Changes is up: leaving it and
-// EditorTab.dispose() dispose both. The gutter's timer and model subscription exist only while the tab is on screen.
+// What the editor lets go of. The dock has ONE editor instance, and at most one diff editor at any time: the one of the tab on screen
+// while it is in Changes. The diff editor and the model of the base text are disposed on leaving Changes, when the tab is hidden
+// (it is put back from the base text it holds, with no request, when the tab is shown again: `resume`) and on EditorTab.dispose().
+// The gutter's timer and model subscription exist only while the tab is on screen.
 //
 // editorDiffAttach(tab) / editorDiffDetach(tab): `tab` is on screen with its model / is not (EditorTab.show, onHide).
 // editorDiffSync(): the tree's git status landed, or the base or the scope moved (gitPaintTree, dockChangesRefresh).
@@ -50,9 +54,10 @@ const DG_RO_MSG = "Changes is a review view. Switch to Code to edit.";
 let edTab = null; // the tab on screen with its model: the one a status or a scope change is for
 
 // editorDiffOf: what this file keeps on a tab: the request slot, the debounce, the gutter's decorations (ids, and the text of
-// the changes they draw), the line a link asked for, and whether the user asked for Changes before the base text was in.
+// the changes they draw), the line a link asked for, whether the user asked for Changes before the base text was in (`want`), whether
+// the tab is to open in Changes when it is next on screen (`resume`) and where its Changes view was scrolled to (`diffTop`).
 function editorDiffOf(tab) {
-  if (!tab.dg) tab.dg = { flight: false, want: false, timer: null, sub: null, ids: [], last: "", targetIds: [], targetLine: null };
+  if (!tab.dg) tab.dg = { flight: false, want: false, resume: false, diffTop: null, timer: null, sub: null, ids: [], last: "", targetIds: [], targetLine: null };
   return tab.dg;
 }
 
@@ -64,16 +69,35 @@ function editorDiffLabel(scope, baseName) {
   return baseName ? "vs " + baseName + " (merge base)" : "vs the merge base";
 }
 
-// editorDiffBase turns the server's answer (null: the request failed) into {head, missing, why}: the text to compare with, or
-// head null and the reason it cannot be had. A file the base does not have is an empty text, so every line of it reads as added.
+// editorDiffPaintLabel writes the Changes view's header: "vs HEAD", or "vs <base> (merge base)" with the base's name in a span of its
+// own, isolated for bidirectional text like every git string the dock draws (a branch name may carry format characters).
+function editorDiffPaintLabel(el, scope, baseName) {
+  const text = editorDiffLabel(scope, baseName);
+  if (el.dataset.text === text) return;
+  el.dataset.text = text;
+  if (scope === "branch" && baseName) {
+    const base = document.createElement("span");
+    base.className = "dk-cmp-base";
+    base.textContent = baseName;
+    el.replaceChildren("vs ", base, " (merge base)");
+  } else {
+    el.replaceChildren(text);
+  }
+}
+
+// editorDiffBase turns the server's answer (null: the request failed) into {head, missing, why, retry}: the text to compare with, or
+// head null, the reason it cannot be had and whether the failure may pass (retry). A file the base does not have is an empty text, so
+// every line of it reads as added. A byte order mark at the start of the text is dropped: Monaco keeps none in the buffer, so a
+// file that has one would otherwise read as changed on line 1.
 function editorDiffBase(blob) {
-  const none = (why) => ({ head: null, missing: false, why });
-  if (!blob || typeof blob !== "object") return none("the server did not answer");
-  if (blob.state === "notrepo") return none("this file is not in a git repository");
-  if (blob.state !== "ok") return none(typeof blob.reason === "string" && blob.reason ? blob.reason : "git is not available here");
-  if (blob.truncated === true) return none("the version in git is over 2 MiB");
-  if (blob.missing === true) return { head: "", missing: true, why: "" };
-  return { head: typeof blob.content === "string" ? blob.content : "", missing: false, why: "" };
+  const none = (why, retry) => ({ head: null, missing: false, why, retry });
+  if (!blob || typeof blob !== "object") return none("the server did not answer", true);
+  if (blob.state === "notrepo") return none("this file is not in a git repository", false);
+  if (blob.state !== "ok") return none(typeof blob.reason === "string" && blob.reason ? blob.reason : "git is not available here", true);
+  if (blob.truncated === true) return none("the version in git is over 2 MiB", false);
+  if (blob.missing === true) return { head: "", missing: true, why: "", retry: false };
+  const text = typeof blob.content === "string" ? blob.content : "";
+  return { head: text.charCodeAt(0) === 0xfeff ? text.slice(1) : text, missing: false, why: "", retry: false };
 }
 
 // editorDiffDecorations: the gutter, as deltaDecorations takes it, for lineDiff's `changes` over a buffer of `lines` lines. A
@@ -110,9 +134,10 @@ function editorDiffKey(tab) {
   };
 }
 
-// editorDiffFresh: does the record answer `k`? The same key, and not a failure old enough to be asked about again.
+// editorDiffFresh: does the record answer `k`? The same key, and not a failure that may pass and is old enough to be asked about
+// again (a definitive answer stands until the key moves).
 function editorDiffFresh(ch, k, now) {
-  return !!ch && ch.key === k.key && (ch.head !== null || now - ch.at < DG_RETRY_MS);
+  return !!ch && ch.key === k.key && (ch.head !== null || !ch.retry || now - ch.at < DG_RETRY_MS);
 }
 
 // editorDiffWhy: why Changes cannot be shown for this tab, "" when it can (or when nothing has said it cannot yet).
@@ -220,12 +245,13 @@ async function editorDiffAsk(tab, k) {
 function editorDiffLand(tab, k, blob) {
   const s = editorDiffOf(tab);
   const b = editorDiffBase(blob);
-  tab.changes = { key: k.key, scope: k.scope, baseName: k.baseName, head: b.head, missing: b.missing, why: b.why, lineChanges: [], capped: false, at: Date.now() };
+  tab.changes = { key: k.key, scope: k.scope, baseName: k.baseName, head: b.head, missing: b.missing, why: b.why, retry: b.retry, lineChanges: [], capped: false, at: Date.now() };
   editorDiffRecompute(tab);
   const want = s.want;
   s.want = false;
   if (b.head === null) {
-    if (want || tab.diff) showToast("Changes unavailable: " + b.why);
+    if (want || tab.diff || s.resume) showToast("Changes unavailable: " + b.why);
+    s.resume = false;
     editorDiffLeave(tab);
   } else if (want) {
     editorDiffEnter(tab);
@@ -286,13 +312,33 @@ function editorDiffAttach(tab) {
   editorDiffSync();
 }
 
-// editorDiffDetach: the tab is not on screen any more. Nothing runs for it until it is shown again.
+// editorDiffDetach: the tab is not on screen any more. Nothing runs for it until it is shown again, and it keeps no diff editor
+// (the dock has one at a time): one that was in Changes is let go, with the place it was read at, and comes back in Changes
+// (editorDiffResume) from the base text the tab holds.
 function editorDiffDetach(tab) {
   if (edTab === tab) edTab = null;
   const s = tab.dg;
   if (!s) return;
   if (s.timer) { clearTimeout(s.timer); s.timer = null; }
   if (s.sub) { s.sub.dispose(); s.sub = null; }
+  if (tab.diff) {
+    s.diffTop = tab.diff.diff.getModifiedEditor().getScrollTop();
+    s.resume = true;
+    editorDiffDrop(tab);
+    tab.bodyEl.replaceChildren();
+  }
+}
+
+// editorDiffResume: the tab is on screen. A tab that was in Changes when it left, or was asked for Changes while it was not on
+// screen, opens it again, from the base text it holds: no request (a key that moved meanwhile is asked for by the attach after, and
+// the open view is refilled). False when the tab was not in Changes, or the base text is gone: the tab shows Code.
+function editorDiffResume(tab) {
+  const s = editorDiffOf(tab);
+  if (!s.resume) return false;
+  s.resume = false;
+  if (!tab.changes || tab.changes.head === null) return false;
+  editorDiffEnter(tab);
+  return !!tab.diff;
 }
 
 // --- the line a link asked for ----------------------------------------------------------------------------------------
@@ -322,7 +368,7 @@ function editorDiffClearTarget(tab) {
 function editorDiffSet(tab, on) {
   if (tab.disposed || tab.inner) return false;
   const s = editorDiffOf(tab);
-  if (!on) { s.want = false; editorDiffLeave(tab); return false; }
+  if (!on) { s.want = false; s.resume = false; editorDiffLeave(tab); return false; }
   if (tab.diff) return true;
   if (!tab.model) { tab.pendingChanges = true; return true; } // still reading: load() opens it when the model is there
   const why = editorDiffWhy(tab);
@@ -337,15 +383,17 @@ function editorDiffSet(tab, on) {
 }
 
 // editorDiffEnter swaps the tab's body for the inline diff of the base text and the live buffer. The Code editor keeps its model
-// and its place (stashView), for the way back.
+// and its place (stashView), for the way back. Only the tab on screen has a diff editor: for any other tab this only notes that it
+// is to open in Changes when it is shown (the dock has one diff editor at a time).
 function editorDiffEnter(tab) {
   const ch = tab.changes;
   if (tab.diff || tab.disposed || !tab.model || !ch || ch.head === null) return;
   const s = editorDiffOf(tab);
+  if (!tab.attached) { s.resume = true; return; }
   tab.stashView();
   const original = dockMonaco.editor.createModel(ch.head, monacoLang(tab.path));
   const label = document.createElement("span");
-  label.textContent = editorDiffLabel(ch.scope, ch.baseName);
+  editorDiffPaintLabel(label, ch.scope, ch.baseName);
   const head = document.createElement("div");
   head.className = "dk-cmp-head";
   head.append(label);
@@ -369,11 +417,15 @@ function editorDiffEnter(tab) {
   }, editorOptions()));
   const modified = diff.getModifiedEditor();
   modified.onDidChangeCursorPosition(() => tab.paintStatus());
-  // Open where a link asked to be, else at the first change: that is what the view is for.
+  // Open where the view was left (a tab that comes back), else where a link asked to be, else at the first change: that is what
+  // the view is for.
   const target = s.targetLine;
+  const top = s.diffTop;
+  s.diffTop = null;
   const computed = diff.onDidUpdateDiff(() => {
     computed.dispose();
-    if (target !== null) modified.revealLineInCenter(target, dockMonaco.editor.ScrollType.Immediate);
+    if (top !== null) modified.setScrollTop(top, dockMonaco.editor.ScrollType.Immediate);
+    else if (target !== null) modified.revealLineInCenter(target, dockMonaco.editor.ScrollType.Immediate);
     else diff.revealFirstDiff();
   });
   diff.setModel({ original, modified: tab.model });
@@ -390,8 +442,7 @@ function editorDiffRefill(tab) {
   const d = tab.diff;
   if (!d || !ch || ch.head === null) return;
   if (d.original.getValue() !== ch.head) d.original.setValue(ch.head);
-  const text = editorDiffLabel(ch.scope, ch.baseName);
-  if (d.label.textContent !== text) d.label.textContent = text;
+  editorDiffPaintLabel(d.label, ch.scope, ch.baseName);
 }
 
 // editorDiffDrop disposes the Changes view: the diff editor and the model of the base text. The tab's own model is not its to dispose.
@@ -413,15 +464,6 @@ function editorDiffLeave(tab) {
   else tab.paint();
 }
 
-// editorDiffShow: a tab that was left in Changes is on screen again. Its body already holds the view; it only needs to be put
-// back in the document, in the preferences of now, and measured (it was laid out at no size while the tab was hidden).
-function editorDiffShow(tab) {
-  const d = tab.diff;
-  tab.bodyEl.replaceChildren(d.wrap);
-  d.diff.updateOptions(editorOptions());
-  d.diff.layout();
-}
-
 // editorDiffApplyPrefs: the font size or the wrap changed (editorApplyPrefs): the Changes view on screen follows.
 function editorDiffApplyPrefs() {
   if (edTab && edTab.diff) edTab.diff.diff.updateOptions(editorOptions());
@@ -432,7 +474,7 @@ function editorDiffApplyPrefs() {
 function editorDiffDispose(tab) {
   editorDiffDetach(tab);
   const s = tab.dg;
-  if (s) s.want = false;
+  if (s) { s.want = false; s.resume = false; }
   editorDiffDrop(tab);
   tab.changes = null;
 }

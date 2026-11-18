@@ -1646,6 +1646,56 @@ test("a base text that could not be read is asked for again only after a while, 
   assert.equal(fresh(tab.changes, k, tab.changes.at + 30000), false, "then it is asked again");
   assert.equal(fresh({ key: k.key, head: "", at: 0 }, k, 1e12), true, "a text that was read stands until the key moves");
   assert.equal(fresh(tab.changes, { key: "other" }, tab.changes.at), false);
+  assert.equal(fresh({ key: k.key, head: null, retry: false, at: 0 }, k, 1e12), true, "not a repository, or over the cap: the answer stands until the key moves");
+  assert.equal(fresh({ key: k.key, head: null, retry: true, at: 0 }, k, 30000), false);
+});
+
+test("not a repository and over the cap are not asked again by later statuses; a real failure is, once it has been a while", async () => {
+  for (const answer of [{ state: "notrepo" }, { state: "ok", content: "cut", truncated: true }]) {
+    const { p, tab } = await withGit(answer, BUF_TEXT);
+    assert.equal(tab.changes.retry, false);
+    tab.changes.at -= 10 * 60 * 1000; // ten minutes later
+    p.get("editorDiffSync")();
+    await p.settle();
+    assert.equal(p.st.git.shows.length, 1, "definitive: asked again only when the key moves");
+    p.st.git.head = "h2";
+    p.get("editorDiffSync")();
+    await p.settle();
+    assert.equal(p.st.git.shows.length, 2, "a new HEAD asks again");
+  }
+  const { p, tab } = await withGit({ state: "unavailable", reason: "Git took too long" }, BUF_TEXT);
+  assert.equal(tab.changes.retry, true);
+  tab.changes.at -= 60 * 1000;
+  p.get("editorDiffSync")();
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 2, "a failure that may pass is asked again after the wait");
+});
+
+test("a base text that starts with a byte order mark shows no change on line 1", async () => {
+  const { p, tab } = await withGit(okBlob("\uFEFFl1\nl2\n"), "l1\nl2\n");
+  assert.equal(tab.changes.head, "l1\nl2\n");
+  assert.deepEqual(tab.changes.lineChanges, []);
+  assert.deepEqual(gutter(p), []);
+  changesBtn(tab).click();
+  assert.equal(p.st.diffs[0].model.original.value, "l1\nl2\n", "nor does the Changes view's removed side");
+});
+
+test("the base name in the Changes header is a span of its own, isolated for bidirectional text", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  p.st.git.scope = "branch";
+  p.st.git.base = { mergeBase: "mb1", baseName: "ma\u202Ein" };
+  p.st.git.answer = okBlob(HEAD_TEXT);
+  p.get("editorDiffSync")();
+  await p.settle();
+  changesBtn(tab).click();
+  const label = tab.bodyEl.children[0].children[0].children[0];
+  assert.equal(label.textContent, "vs ma\u202Ein (merge base)");
+  const span = label.children.find((c) => c.className === "dk-cmp-base");
+  assert.ok(span, "the name is in its own span");
+  assert.equal(span.textContent, "ma\u202Ein");
+  assert.deepEqual(label.children.map((c) => c.textContent), ["vs ", "ma\u202Ein", " (merge base)"]);
+  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8");
+  assert.match(css, /\.dk-cmp-base[^{]*\{ unicode-bidi: isolate; \}/, "desktop.css isolates it with the other git names");
 });
 
 test("a show answer for a scope the tab has left, or for a tab that was disposed, is dropped", async () => {
@@ -1873,24 +1923,104 @@ test("Changes: the label follows the scope; a switch of scope or a new HEAD whil
   assert.deepEqual(tab.bodyEl.children, [p.get("dockEditorEl")], "back in Code");
 });
 
-test("a tab left in Changes comes back in Changes: no new diff editor, and the gutter and the timer sleep while it is hidden", async () => {
+// live: the diff editors and the models of base texts that exist now (not disposed).
+const liveDiffs = (p) => p.st.diffs.filter((d) => !d.disposed);
+
+test("a tab left in Changes lets its diff editor go when it is hidden and comes back in Changes with no request; the gutter and the timer sleep while it is hidden", async () => {
   const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  p.st.editors[0].top = 150;
   changesBtn(tab).click();
+  p.st.editors[0].top = 0; // the editor left the page: a detached editor has no size to keep a scroll by, so what it reports now is not the Code view
   const d = p.st.diffs[0];
+  const original = d.model.original;
+  d.modified.top = 420; // where the Changes view was read
   tab.model.type("more\n");
   assert.equal(debounce(p).length, 1);
   tab.onHide();
+  assert.equal(d.disposed, true, "the dock has one diff editor, the shown tab's: a hidden tab keeps none");
+  assert.equal(original.disposed, true, "nor the model of the base text");
+  assert.equal(liveDiffs(p).length, 0);
+  assert.equal(tab.diff, null);
+  assert.deepEqual(tab.bodyEl.children, [], "its body holds nothing to measure while hidden");
+  assert.equal(tab.changes.head, HEAD_TEXT, "but the base text is kept");
   assert.equal(debounce(p).length, 0, "the recompute pending for a hidden tab is cancelled");
   tab.model.type("hidden\n");
   assert.equal(debounce(p).length, 0, "and a hidden tab's edits schedule none");
-  assert.equal(d.disposed, false, "the view is kept");
-  const laid = d.laid;
   tab.onAttach();
-  assert.equal(p.st.diffs.length, 1);
-  assert.equal(tab.diff.diff, d);
-  assert.deepEqual(tab.bodyEl.children.map((c) => c.className), ["dk-ed-cmp"]);
-  assert.ok(d.laid > laid, "laid out again");
-  assert.equal(d.options.length, 1, "with the preferences of now");
+  assert.equal(p.st.diffs.length, 2, "one new diff editor");
+  assert.equal(liveDiffs(p).length, 1);
+  const d2 = p.st.diffs[1];
+  assert.notEqual(d2, d);
+  assert.equal(tab.diff.diff, d2);
+  assert.equal(d2.model.original.value, HEAD_TEXT, "from the base text the tab holds");
+  assert.equal(d2.model.modified, tab.model);
+  assert.equal(p.st.git.shows.length, 1, "no show request: the key has not moved");
+  assert.deepEqual(tab.bodyEl.children.map((c) => c.className), ["dk-ed-cmp"], "back in Changes");
+  assert.equal(tab.seg.code.getAttribute("aria-pressed"), "false");
+  assert.equal(changesBtn(tab).getAttribute("aria-pressed"), "true");
+  [...d2.updated].forEach((f) => f());
+  assert.equal(d2.modified.top, 420, "at the place it was read, not at the first change");
+  assert.equal(d2.revealed, 0);
+  // The way back to Code is at the place Code was left: hiding a tab in Changes, and showing it, did not overwrite it.
+  tab.seg.code.click();
+  assert.equal(p.st.editors[0].restored.at(-1).top, 150);
+  assert.equal(liveDiffs(p).length, 0);
+});
+
+test("one diff editor for the dock: two tabs left in Changes, switched back and forth, never have two", async () => {
+  const { p, tab: a } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  changesBtn(a).click();
+  assert.equal(liveDiffs(p).length, 1);
+  a.onHide();
+  assert.equal(liveDiffs(p).length, 0);
+  const b = await p.open("/p/b.go");
+  await p.settle();
+  changesBtn(b).click();
+  assert.equal(liveDiffs(p).length, 1);
+  assert.equal(p.st.git.shows.length, 2, "one request for each file");
+  b.onHide();
+  assert.equal(liveDiffs(p).length, 0);
+  let most = 0;
+  for (const t of [a, b, a, b, a]) {
+    const other = t === a ? b : a;
+    if (other.attached) other.onHide();
+    t.onAttach();
+    most = Math.max(most, liveDiffs(p).length);
+    assert.equal(liveDiffs(p).length, 1, "exactly one, the shown tab's");
+    assert.equal(t.diff.diff.disposed, false);
+    assert.equal(other.diff, null);
+  }
+  assert.equal(most, 1);
+  assert.equal(p.st.git.shows.length, 2, "switching asks for nothing");
+  const live = p.st.models.filter((m) => !m.disposed).length;
+  a.dispose();
+  b.dispose();
+  assert.equal(liveDiffs(p).length, 0);
+  assert.equal(p.st.models.filter((m) => !m.disposed).length, 0, "no model of a tab or of a base text is left (" + live + " were live)");
+});
+
+test("a hidden tab asked for Changes opens in it when shown, and never makes a diff editor while hidden", async () => {
+  const p = page();
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: BUF_TEXT, version: "v1" } });
+  p.st.git.on = true;
+  p.st.git.answer = okBlob(HEAD_TEXT);
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  tab.onHide();
+  assert.equal(tab.showChanges(), true, "asked from outside (a badge's click)");
+  await p.settle();
+  assert.equal(p.st.diffs.length, 0, "no diff editor for a tab that is not on screen");
+  tab.onAttach();
+  assert.equal(liveDiffs(p).length, 1);
+  assert.ok(tab.diff);
+  assert.equal(p.st.git.shows.length, 1);
+  // And a call to go back to Code while it is hidden is remembered.
+  tab.onHide();
+  tab.showChanges(false);
+  tab.onAttach();
+  assert.equal(tab.diff, null);
+  assert.equal(liveDiffs(p).length, 0);
 });
 
 test("the gutter is drawn again when a tab that another tab's claim of the editor stripped is shown again", async () => {
@@ -1980,8 +2110,12 @@ test("editordiff's pure pieces: the label, the answer's reading, the decorations
   assert.equal(label("branch", "origin/main"), "vs origin/main (merge base)");
   assert.equal(label("branch", ""), "vs the merge base");
   const base = p.get("editorDiffBase");
-  assert.deepEqual(base({ state: "ok", content: "x" }), { head: "x", missing: false, why: "" });
-  assert.deepEqual(base({ state: "ok", missing: true, content: "" }), { head: "", missing: true, why: "" });
+  assert.deepEqual(base({ state: "ok", content: "x" }), { head: "x", missing: false, why: "", retry: false });
+  assert.deepEqual(base({ state: "ok", missing: true, content: "" }), { head: "", missing: true, why: "", retry: false });
+  assert.equal(base({ state: "ok", content: "\uFEFFa\nb\n" }).head, "a\nb\n", "a byte order mark is not part of the text: Monaco keeps none in the buffer");
+  assert.equal(base({ state: "ok", content: "a\uFEFFb" }).head, "a\uFEFFb", "only at the start");
+  assert.equal(base({ state: "ok", content: "\uFEFF" }).head, "");
+  assert.deepEqual(["notrepo", "truncated", "unavailable", "failed"].map((k) => base({ notrepo: { state: "notrepo" }, truncated: { state: "ok", truncated: true }, unavailable: { state: "unavailable" }, failed: null }[k]).retry), [false, false, true, true], "only a failure that may pass is retried");
   assert.equal(base({ state: "ok", content: "partial", truncated: true }).head, null, "a text cut at the cap is not a base to diff against");
   assert.equal(base({ state: "ok" }).head, "", "an ok answer with no content is an empty file");
   assert.equal(base(undefined).head, null);

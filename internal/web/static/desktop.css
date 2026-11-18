@@ -1478,7 +1478,7 @@
   /* Every name the dock draws from the workspace or from git (tab names, crumbs, Changes rows, tree rows, the root header, and the
      branch name above) is isolated for bidirectional text: a file or folder name can hold Unicode bidi format characters, which
      would otherwise reorder the counts, the git letter or the separators drawn next to it. */
-  .dk-name, .dk-crumb, .dk-nm, .dk-dir, .dk-root-name, .dk-root-path, #drawer .ft-name { unicode-bidi: isolate; }
+  .dk-name, .dk-crumb, .dk-nm, .dk-dir, .dk-root-name, .dk-root-path, .dk-cmp-base, #drawer .ft-name { unicode-bidi: isolate; }
   /* The agent strip (Full mode only, mockup B5): the session stays in view while the terminal is covered. One 36px line at the
      bottom of the dock: the dot, the name, the status words, the last thing the agent did (the one part that gives way: it is
      cut with an ellipsis, so the line never wraps and the strip never changes height) and Show terminal with its chord. */
