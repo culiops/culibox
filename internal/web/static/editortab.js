@@ -134,7 +134,8 @@ class EditorTab {
     this.langName = "";         // its language as the status bar says it
     this.version = "";          // sha256 of the text on disk as last read or saved: the save's base_version
     this.diskText = "";         // that text, for a discard
-    this.savedAlt = 0;          // the model's alternative version id at the last save (dirty() compares)
+    this.savedAlt = 0;          // the model's alternative version id at the last save (dirty() compares); -1 after Keep mine: dirty for good
+    this.keptFrom = null;       // after Keep mine: the version the buffer began at (diskText goes with it), for a discard
     this.dirtyShown = false;    // what the host was last told
     this.applying = false;      // a programmatic replace of the buffer is under way: not an edit
     this.saving = false;
@@ -513,35 +514,36 @@ class EditorTab {
 
   // discardEdits drops what was typed (the user said Discard to the dock's ask).
   discardEdits() {
-    if (this.dirty()) this.applyText(this.diskText);
+    if (!this.dirty()) return;
+    if (this.keptFrom !== null) { this.version = this.keptFrom; this.keptFrom = null; } // diskText is the text of that version
+    this.applyText(this.diskText);
   }
 
   // replaceFromDisk puts `text`, the file as it is on disk at `version`, in the buffer as its clean state: a clean buffer
-  // reloading, or "Load the agent's version" over a dirty one (editorsync.js). It is ONE edit over the whole text, so a press
-  // of Load by mistake can be undone, and the cursor and the scroll stay where they were: Monaco would move a cursor that sat
-  // in replaced text to the edge of it, so the view is saved first and put back. Not an edit of the user's: the host is not
-  // told to pin the tab. A text whose line ending, or whose byte order mark, differs from the model's cannot be an edit (the
-  // model keeps both from the text it was made with, and saves them): that one goes in as a new value, and loses the undo stack.
+  // reloading, or "Load the agent's version" over a dirty one (editorsync.js). It is a new value (setValue), and that is the
+  // point: Monaco clears the model's undo history with it, so no undo can walk back past the replace to text the disk's
+  // version no longer stands for. (An undo that did would leave a dirty buffer whose base is the agent's version, and its
+  // save would overwrite the agent's text with no 409 and no bar.) The history is the price. The cursor and the scroll stay
+  // where they were: a new value sends them to the top, so the view is saved first and put back. Not an edit of the user's:
+  // the host is not told to pin the tab.
   replaceFromDisk(text, version) {
     if (!this.model) return;
     const owner = dockEditorOwner === this && dockEditor;
     const view = owner ? dockEditor.saveViewState() : null;
-    const eol = textEOL(text);
-    const bom = (s) => s.charCodeAt(0) === 0xFEFF;
-    const edit = bom(text) === bom(this.diskText) && (eol === null || eol === this.model.getEOL());
-    this.applying = true;
-    try {
-      if (edit) {
-        // Its own undo step: without the stops Monaco folds it into the typing before it (an undo would drop both) and the typing after it.
-        this.model.pushStackElement();
-        this.model.pushEditOperations(null, [{ range: this.model.getFullModelRange(), text: bom(text) ? text.slice(1) : text }], () => null);
-        this.model.pushStackElement();
-      } else this.model.setValue(text);
-    } finally { this.applying = false; }
+    this.applyText(text);
+    this.keptFrom = null;
     this.version = version;
-    this.diskText = text;
-    this.savedAlt = this.model.getAlternativeVersionId();
     if (view) dockEditor.restoreViewState(view);
+  }
+
+  // keepOverDisk is "Keep mine": `version`, the disk's, becomes the base of the next save, so it overwrites the file. The
+  // buffer is dirty from here until a save succeeds, whatever an undo does to its text: an undo that walked back to the
+  // text the buffer began with would otherwise read as clean, with the agent's file under it, nothing to ask about and a
+  // base that matches the disk. What the buffer began at is kept for a discard (diskText is the text that goes with it).
+  keepOverDisk(version) {
+    if (this.keptFrom === null) this.keptFrom = this.version;
+    this.version = version;
+    this.savedAlt = -1;
     this.syncDirty(false);
     this.paintStatus();
   }
@@ -563,6 +565,7 @@ class EditorTab {
     const d = classifySave(res);
     if (d.outcome === "saved") {
       this.version = d.version || "";
+      this.keptFrom = null;
       this.diskText = text;
       this.savedAlt = alt; // an edit made while the write was in flight stays dirty
       this.syncDirty(false);

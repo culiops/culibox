@@ -80,15 +80,19 @@ function editorSyncMetaURL(tab) {
   return (tab.box ? boxFileURL(tab.box, tab.path) : "/api/fs/read?path=" + encodeURIComponent(tab.path)) + "&meta=1";
 }
 
-// editorSyncCtx / editorSyncCurrent: what an answer must still find true to be about now. `tab.saving` and `saveMark` are the save's
-// race (see the top); the rest is the tab being the one on screen, and the same file, when the answer comes.
+// editorSyncCtx / editorSyncStill / editorSyncCurrent: what an answer must still find true to be about now. Still: the tab is alive,
+// the same file, no save under way and none ended since the question (`tab.saving` and `saveMark` are the save's race, see the top):
+// every answer, a user's read included. Current: and the tab is the one on screen: a poll's.
 function editorSyncCtx(tab) {
   return { path: tab.path, load: tab.loadSeq, mark: tab.saveMark };
 }
 
+function editorSyncStill(tab, c) {
+  return !tab.disposed && !!tab.model && !tab.saving && tab.path === c.path && tab.loadSeq === c.load && tab.saveMark === c.mark;
+}
+
 function editorSyncCurrent(tab, c) {
-  return !tab.disposed && tab.attached && esTab === tab && !!tab.model && !tab.saving &&
-    tab.path === c.path && tab.loadSeq === c.load && tab.saveMark === c.mark && editorSyncShown();
+  return editorSyncStill(tab, c) && tab.attached && esTab === tab && editorSyncShown();
 }
 
 // editorSyncCheck: one metadata read for `tab`, and what comes of it. One at a time, and not while the tab saves.
@@ -228,9 +232,10 @@ function editorSyncPaintBar(tab) {
   el.hidden = false;
 }
 
-// Keep mine: the next save is guarded by the disk's version instead of the one the buffer began at, so it overwrites the file.
-// It does not save by itself, and the guard stays: if the agent writes again before Mod+S, that save is refused and the bar
-// comes back. The version is the one the bar (and a compare view, which is kept current) shows.
+// Keep mine: the next save is guarded by the disk's version instead of the one the buffer began at, so it overwrites the file
+// (EditorTab.keepOverDisk, which also keeps the buffer dirty until then). It does not save by itself, and the guard stays: if
+// the agent writes again before Mod+S, that save is refused and the bar comes back. The version is the one the bar (and a
+// compare view, which is kept current) shows.
 function editorSyncKeepMine(tab) {
   const s = editorSyncOf(tab);
   if (!s.bar || s.bar.kind !== "conflict" || tab.saving) return;
@@ -238,7 +243,7 @@ function editorSyncKeepMine(tab) {
     showToast("The file on disk is too large to read here, so its version is unknown: copy your edits and reload it", { error: true });
     return;
   }
-  tab.version = s.bar.diskVersion;
+  tab.keepOverDisk(s.bar.diskVersion);
   editorSyncClearBar(tab);
   tab.focusReader();
 }
@@ -246,11 +251,15 @@ function editorSyncKeepMine(tab) {
 // Load the agent's version: the buffer becomes what is on disk now, and is clean. One undoable edit (replaceFromDisk).
 async function editorSyncLoad(tab) {
   const s = editorSyncOf(tab);
-  if (!s.bar || s.bar.kind !== "conflict" || s.acting || tab.saving) return;
+  const bar = s.bar;
+  if (!bar || bar.kind !== "conflict" || s.acting || tab.saving) return;
+  const ctx = editorSyncCtx(tab);
   s.acting = true;
   const got = await editorSyncRead(tab);
   s.acting = false;
-  if (tab.disposed || !tab.model || tab.saving) return;
+  // The answer is for the bar that asked. If the user chose something else meanwhile (Keep mine, and a save) or the file was
+  // saved, replaced or re-pointed, it is dropped: it would put an older text over what is there now.
+  if (!editorSyncStill(tab, ctx) || s.bar !== bar) return;
   if (!got.ok) { editorSyncReadFailed(tab, got); return; }
   editorSyncReplace(tab, got.text, got.version);
   tab.focusReader();
@@ -268,13 +277,15 @@ function editorSyncReadFailed(tab, got) {
 // (live, not a copy) on the right.
 async function editorSyncCompare(tab) {
   const s = editorSyncOf(tab);
-  if (!s.bar || s.bar.kind !== "conflict" || s.cmp || s.acting) return;
+  const bar = s.bar;
+  if (!bar || bar.kind !== "conflict" || s.cmp || s.acting) return;
+  const ctx = editorSyncCtx(tab);
   s.acting = true;
   const got = await editorSyncRead(tab);
   s.acting = false;
-  if (tab.disposed || !tab.model || !s.bar || s.cmp) return;
+  if (!editorSyncStill(tab, ctx) || s.bar !== bar || s.cmp) return; // as Load: an answer for a bar that is gone is dropped
   if (!got.ok) { editorSyncReadFailed(tab, got); return; }
-  s.bar.diskVersion = got.version; // what the diff shows is what Keep mine will overwrite
+  bar.diskVersion = got.version; // what the diff shows is what Keep mine will overwrite
   const original = dockMonaco.editor.createModel(got.text, monacoLang(tab.path));
   const body = document.createElement("div");
   body.className = "dk-cmp-body";

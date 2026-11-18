@@ -6,8 +6,9 @@
 // the buffer: the poll, the reload of a clean buffer, the conflict bar over a dirty one, and the races between them. How
 // Monaco itself behaves is the browser check's (the task report); the fake only has to be as exact as the calls the code makes:
 // the alternative version id moves on every change, getValue takes (eol, preserveBOM), onDidChangeContent returns something
-// with dispose(), and a replace of the whole text (setValue, pushEditOperations) sends a cursor and a scroll back to the top,
-// which is what the code has to undo.
+// with dispose(), a replace of the whole text (setValue) sends a cursor and a scroll back to the top, which is what the code
+// has to undo, and it also clears the undo history, as Monaco's does (TextModel._setValueFromTextBuffer): the fake model keeps
+// an undo stack of its own, so a test can press undo and see what comes back.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
@@ -26,21 +27,20 @@ class El extends Node {
   append(...cs) { super.append(...nodes(cs)); }
 }
 
-// A model as the class uses it. `type(text)` is a user's edit: new text, a new alternative version id, the listeners told.
+// A model as the class uses it. `type(text)` is a user's edit: new text, a new alternative version id, a step on the undo
+// stack, the listeners told. `undo()` is Ctrl+Z: the text and the alternative version id of the step before.
 const eolOf = (t) => (/\r\n/.test(t) ? "\r\n" : "\n");
 function fakeModel(text, lang, log, id) {
   return {
-    value: text, alt: 1, disposed: false, listeners: [], getValueCalls: [], pushes: [], sets: [], steps: [], eol: eolOf(text),
+    value: text, alt: 1, ver: 1, disposed: false, listeners: [], getValueCalls: [], sets: [], undos: [], eol: eolOf(text),
     getAlternativeVersionId() { return this.alt; },
     getValue(eol, bom) { this.getValueCalls.push([eol, bom]); return this.value; },
     fire(e) { for (const l of [...this.listeners]) l(e || {}); },
-    type(v) { this.value = v; this.alt++; this.fire(); },
+    type(v) { this.undos.push({ value: this.value, alt: this.alt }); this.value = v; this.alt = ++this.ver; this.fire(); },
     undoTo(alt, v) { this.value = v; this.alt = alt; this.fire(); }, // an undo walks back to an earlier id
-    setValue(v) { this.value = v; this.alt++; this.eol = eolOf(v); this.sets.push(v); this.fire({ replaced: true }); },
-    // The whole text replaced by one edit (the code under test only ever passes the full range): an undoable step, the line ending kept.
-    pushEditOperations(before, ops, computer) { this.pushes.push({ before, ops, computer }); this.steps.push("edit"); this.value = ops[0].text; this.alt++; this.fire({ replaced: true }); return null; },
-    pushStackElement() { this.steps.push("stop"); }, // closes the undo step that typing keeps open
-    getFullModelRange() { return { full: true }; },
+    undo() { const step = this.undos.pop(); if (!step) return false; this.value = step.value; this.alt = step.alt; this.fire(); return true; },
+    // A new value: the undo history goes (Monaco's _commandManager.clear()), the alternative version id is a new one.
+    setValue(v) { this.undos = []; this.value = v; this.alt = ++this.ver; this.eol = eolOf(v); this.sets.push(v); this.fire({ replaced: true }); },
     onDidChangeContent(fn) { this.listeners.push(fn); return { dispose: () => { this.listeners = this.listeners.filter((x) => x !== fn); } }; },
     onDidChangeOptions() { return { dispose() {} }; },
     getOptions() { return { insertSpaces: true, tabSize: 4 }; },
@@ -650,7 +650,7 @@ test("the poll: nothing is asked while the dock is off screen (closed, under a p
   assert.equal(p.live(), 0, "a tab that is disposed is not asked about");
 });
 
-test("a clean buffer is reloaded in place when the agent changes the file: one full-range edit, the scroll kept, clean on the new version, no pin", async () => {
+test("a clean buffer is reloaded in place when the agent changes the file: the scroll kept, clean on the new version, no pin", async () => {
   const p = page();
   const disk = p.serve("one\ntwo\n");
   p.setShown(true);
@@ -664,10 +664,7 @@ test("a clean buffer is reloaded in place when the agent changes the file: one f
   disk.text = "one\ntwo\nthree\n";
   await p.tick();
   assert.equal(tab.model.value, "one\ntwo\nthree\n");
-  assert.equal(tab.model.pushes.length, 1, "one edit");
-  assert.deepEqual(tab.model.pushes[0].ops, [{ range: { full: true }, text: "one\ntwo\nthree\n" }], "over the whole text");
-  assert.equal(tab.model.sets.length, 0, "not a new value: the undo stack and the model's own settings stay");
-  assert.deepEqual(tab.model.steps, ["stop", "edit", "stop"], "an undo step of its own: it is not folded into the typing around it");
+  assert.deepEqual(tab.model.sets, ["one\ntwo\nthree\n"], "one new value, which also clears the undo history");
   assert.equal(ed.top, 120, "the scroll is where it was (the replace sent it to the top)");
   assert.deepEqual(ed.restored, [{ saved: true, top: 120 }], "the view was saved first and put back");
   assert.equal(tab.dirty(), false);
@@ -679,30 +676,7 @@ test("a clean buffer is reloaded in place when the agent changes the file: one f
   assert.equal(p.fulls().length, 2, "the open's read and the reload's");
   await p.tick();
   assert.equal(p.fulls().length, 2, "nothing changed since: the next poll reads no text");
-  assert.equal(tab.model.pushes.length, 1);
-});
-
-test("a reload whose line ending or byte order mark differs from the buffer's goes in as a new value (the model keeps both from its first text); otherwise a BOM is not a character of line 1", async () => {
-  const p = page();
-  const disk = p.serve("a\nb\n");
-  p.setShown(true);
-  const tab = await p.open();
-  await p.settle();
-  disk.text = "a\r\nb\r\n"; // the agent changed the line endings
-  await p.tick();
-  assert.deepEqual(tab.model.sets, ["a\r\nb\r\n"]);
-  assert.equal(tab.model.pushes.length, 0);
-  assert.equal(tab.model.getEOL(), "\r\n");
-  disk.text = "\uFEFFa\r\nb\r\n"; // and added a BOM
-  await p.tick();
-  assert.deepEqual(tab.model.sets, ["a\r\nb\r\n", "\uFEFFa\r\nb\r\n"]);
-  disk.text = "\uFEFFa\r\nb\r\nc\r\n"; // BOM and line ending as the model has them: an ordinary edit, with the BOM left to the model
-  await p.tick();
-  assert.equal(tab.model.sets.length, 2);
-  assert.equal(tab.model.pushes.length, 1);
-  assert.equal(tab.model.pushes[0].ops[0].text, "a\r\nb\r\nc\r\n");
-  assert.equal(tab.diskText, "\uFEFFa\r\nb\r\nc\r\n", "what is on disk, BOM included, is what the next replace compares with");
-  assert.equal(tab.dirty(), false);
+  assert.equal(tab.model.sets.length, 1);
 });
 
 test("race: the user types between the metadata answer and the full read: it is decided again, so a bar and never a reload over the typing", async () => {
@@ -720,7 +694,7 @@ test("race: the user types between the metadata answer and the full read: it is 
   release();
   await p.settle();
   assert.equal(tab.model.value, "one typed\n", "the typing is not replaced");
-  assert.equal(tab.model.pushes.length, 0);
+  assert.equal(tab.model.sets.length, 0);
   assert.equal(tab.barEl.hidden, false);
   assert.equal(tab.sync.bar.diskVersion, p.hash("agent\n"), "the bar is for what the full read found");
 });
@@ -737,7 +711,7 @@ test("a dirty buffer whose file changed gets the bar and is left alone; the bar 
   assert.equal(tab.barEl.hidden, false);
   assert.equal(bar(tab).msg, "fix-fs-cap changed a.go after you started editing. Your edits are not saved yet.");
   assert.equal(tab.model.value, "mine\n");
-  assert.equal(tab.model.pushes.length + tab.model.sets.length, 0, "nothing replaced");
+  assert.equal(tab.model.sets.length, 0, "nothing replaced");
   assert.equal(p.st.writes.length, 0, "nothing written");
   assert.equal(tab.version, p.hash("original\n"), "the buffer still began at the old version");
   assert.equal(tab.sync.bar.diskVersion, p.hash("agent\n"));
@@ -834,7 +808,7 @@ test("Load the agent's version: the buffer becomes the disk's text in one undoab
   bar(tab).buttons[2].click();
   await p.settle();
   assert.equal(tab.model.value, "agent\n");
-  assert.equal(tab.model.pushes.length, 1, "undoable: a press by mistake can be taken back");
+  assert.deepEqual(tab.model.sets, ["agent\n"], "one new value");
   assert.equal(ed.top, 40);
   assert.equal(tab.dirty(), false);
   assert.equal(tab.version, p.hash("agent\n"));
@@ -1015,7 +989,7 @@ test("a deleted file shows the deleted bar with Copy contents and Close; the buf
   disk.exists = true; // back, as it was
   await p.tick();
   assert.equal(tab.barEl.hidden, true);
-  assert.equal(tab.model.pushes.length, 0, "the same text: nothing to reload");
+  assert.equal(tab.model.sets.length, 0, "the same text: nothing to reload");
   disk.exists = false;
   await p.tick();
   assert.equal(tab.barEl.hidden, false);
@@ -1095,7 +1069,7 @@ test("race: a poll that began before our own save is dropped when it answers aft
     await p.settle();
     const what = typedDuring ? "typed during the save" : "clean after the save";
     assert.equal(tab.barEl.hidden, true, what + ": no bar");
-    assert.equal(tab.model.pushes.length, 0, what + ": no reload of our own write");
+    assert.equal(tab.model.sets.length, 0, what + ": no reload of our own write");
     assert.equal(p.fulls().length, 1, what + ": no text was read");
     assert.equal(tab.dirty(), typedDuring, what);
   }
@@ -1128,7 +1102,7 @@ test("race: an answer that arrives after the tab was disposed, hidden, switched 
     assert.equal(p.fulls().length, fulls, name + ": the late answer started no read");
     if (tab.model) {
       assert.equal(tab.model.value, "one\n", name + ": nothing replaced");
-      assert.equal(tab.model.pushes.length + tab.model.sets.length, 0, name);
+      assert.equal(tab.model.sets.length, 0, name);
     }
     assert.equal(tab.barEl.hidden, true, name + ": no bar");
   }
@@ -1206,5 +1180,217 @@ test("a read-only tab (a file in a session's box) reloads when the file changes 
   await p.tick();
   assert.equal(tab.model.value, "two\n");
   assert.equal(tab.barEl.hidden, true);
+  assert.equal(tab.dirty(), false);
+});
+
+// --- no undo path to a silent overwrite (review round 1) ---------------------------------------------------------------------
+// The invariant: `tab.version` is one value, so a buffer must never hold text that is not the text of the disk version it is
+// guarded by unless the user chose that (Keep mine, and then a save). An undo across a replace from disk would break it: the
+// old text comes back, dirty, with the agent's version as its base, and a save is accepted by the server with no 409 and no bar.
+
+test("an undo cannot go back past a reload from disk: the history is gone, and what an undo does leaves the buffer clean and unwritten", async () => {
+  const p = page();
+  const disk = p.serve("one\n");
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  tab.model.type("typed\n");
+  tab.el.listeners.keydown(MOD_S());
+  await p.settle();
+  assert.equal(disk.text, "typed\n");
+  assert.equal(tab.model.undos.length, 1, "the user's typing is on the undo stack");
+  disk.text = "agent\n"; // the agent writes: a clean buffer reloads, silently
+  await p.tick();
+  assert.equal(tab.model.value, "agent\n");
+  assert.deepEqual(tab.model.undos, [], "and the typing before it can no longer be undone into the buffer");
+  assert.equal(tab.model.undo(), false);
+  assert.equal(tab.model.value, "agent\n");
+  assert.equal(tab.dirty(), false);
+  tab.el.listeners.keydown(MOD_S());
+  await p.settle();
+  assert.equal(p.st.writes.length, 1, "Mod+S writes nothing: only the user's own save is there");
+  assert.equal(disk.text, "agent\n", "the agent's text is untouched");
+  // the typing after the reload undoes as ever, back to the reloaded text, clean
+  tab.model.type("agent plus\n");
+  assert.equal(tab.dirty(), true);
+  tab.model.undo();
+  assert.equal(tab.model.value, "agent\n");
+  assert.equal(tab.dirty(), false, "an undo back to the loaded text is clean: it is what is on disk");
+});
+
+test("an undo cannot go back past Load the agent's version either: the user's text is not coming back as a dirty buffer on the agent's version", async () => {
+  const p = page();
+  const disk = p.serve("original\n");
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  tab.model.type("mine\n");
+  disk.text = "agent\n";
+  await p.tick();
+  bar(tab).buttons[2].click();
+  await p.settle();
+  assert.equal(tab.model.value, "agent\n");
+  assert.equal(tab.model.undo(), false, "nothing to undo into");
+  assert.equal(tab.model.value, "agent\n");
+  assert.equal(tab.dirty(), false);
+  tab.el.listeners.keydown(MOD_S());
+  await p.settle();
+  assert.equal(p.st.writes.length, 0);
+  assert.equal(disk.text, "agent\n");
+});
+
+test("Keep mine keeps the buffer dirty for good: no undo makes it look clean, and Mod+S then saves, which is what Keep mine said", async () => {
+  const p = page();
+  const disk = p.serve("original\n");
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  const clean = tab.model.getAlternativeVersionId();
+  tab.model.type("mine\n");
+  disk.text = "agent\n";
+  await p.tick();
+  p.st.host.length = 0;
+  bar(tab).buttons[1].click();
+  assert.equal(tab.version, p.hash("agent\n"));
+  assert.equal(tab.dirty(), true);
+  tab.model.undo(); // back to the text the buffer began with: the id it began at
+  assert.equal(tab.model.getAlternativeVersionId(), clean);
+  assert.equal(tab.model.value, "original\n");
+  assert.equal(tab.dirty(), true, "still dirty: the agent's file is under a buffer that must not read as clean");
+  assert.equal(tab.crumbNote().length > 0, true, "and it says Unsaved");
+  await p.tick();
+  assert.equal(tab.dirty(), true, "a poll finds the disk where Keep mine put the base, and asks nothing");
+  assert.equal(tab.barEl.hidden, true);
+  tab.el.listeners.keydown(MOD_S()); // the user's choice
+  await p.settle();
+  assert.equal(p.st.writes.length, 1);
+  assert.equal(p.st.writes[0].base_version, p.hash("agent\n"));
+  assert.equal(p.st.writes[0].overwrite, false);
+  assert.equal(disk.text, "original\n", "the buffer is what was saved");
+  assert.equal(tab.dirty(), false, "a save is what ends it");
+  tab.model.type("more\n");
+  assert.equal(tab.dirty(), true);
+  tab.model.undo();
+  assert.equal(tab.dirty(), false, "and from then on an undo back to the saved text is clean again");
+});
+
+test("Keep mine on a buffer that an undo had made clean makes it dirty, and tells the host without pinning", async () => {
+  const p = page();
+  const disk = p.serve("original\n");
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  tab.model.type("mine\n");
+  disk.text = "agent\n";
+  await p.tick();
+  tab.model.undo(); // clean, with the bar still up (no poll has run since)
+  assert.equal(tab.dirty(), false);
+  p.st.host.length = 0;
+  bar(tab).buttons[1].click();
+  assert.equal(tab.dirty(), true);
+  assert.deepEqual(p.st.host, ["dirty"], "the dot comes; an edit that was not typed pins nothing");
+});
+
+test("discarding after Keep mine puts back the text and the version the buffer began at, so the next poll reloads the agent's file", async () => {
+  const p = page();
+  const disk = p.serve("original\n");
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  tab.model.type("mine\n");
+  disk.text = "agent\n";
+  await p.tick();
+  bar(tab).buttons[1].click();
+  tab.discardEdits();
+  assert.equal(tab.model.value, "original\n");
+  assert.equal(tab.version, p.hash("original\n"), "the version that goes with that text, not the disk's");
+  assert.equal(tab.dirty(), false);
+  await p.tick();
+  assert.equal(tab.model.value, "agent\n", "clean on an older version: the poll reloads it");
+  assert.equal(tab.version, p.hash("agent\n"));
+});
+
+test("race: Load, then Keep mine and a save inside the read: the late read is dropped and does not put the agent's text over what was saved", async () => {
+  const p = page();
+  const disk = p.serve("original\n");
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  tab.model.type("mine\n");
+  disk.text = "agent\n";
+  await p.tick();
+  let release;
+  p.st.fullGate = new Promise((r) => { release = r; });
+  const heard = [];
+  p.get("editorSyncOnReplace")(tab, (t) => heard.push(t));
+  bar(tab).buttons[2].click(); // Load: a read, answered "agent" already, waits at the gate
+  await p.settle();
+  assert.equal(p.fulls().length, 2);
+  p.st.fullGate = null;
+  bar(tab).buttons[1].click(); // Keep mine
+  tab.el.listeners.keydown(MOD_S()); // and a save
+  await p.settle();
+  assert.equal(disk.text, "mine\n");
+  assert.equal(tab.dirty(), false);
+  release();
+  await p.settle();
+  assert.equal(tab.model.value, "mine\n", "the late answer is not applied");
+  assert.equal(tab.model.sets.length, 0);
+  assert.equal(tab.version, p.hash("mine\n"));
+  assert.equal(tab.dirty(), false);
+  assert.deepEqual(heard, []);
+  assert.equal(disk.text, "mine\n");
+});
+
+test("race: a Load or Compare whose answer lands after the bar was replaced, cleared or the tab re-pointed or disposed is dropped", async () => {
+  const cases = {
+    "the bar was cleared by the agent putting the file back": async (p, disk) => { disk.text = "original\n"; await p.tick(); },
+    "the bar became the deleted bar": async (p, disk) => { disk.exists = false; await p.tick(); },
+    "the tab was re-pointed": async (p, disk, tab) => { tab.path = "/p/other.go"; },
+    "the tab was disposed": async (p, disk, tab) => { tab.dispose(); },
+  };
+  for (const button of [2, 0]) {
+    for (const [name, change] of Object.entries(cases)) {
+      const p = page();
+      const disk = p.serve("original\n");
+      p.setShown(true);
+      const tab = await p.open("/p/a.go");
+      await p.settle();
+      tab.model.type("mine\n");
+      disk.text = "agent\n";
+      await p.tick();
+      let release;
+      p.st.fullGate = new Promise((r) => { release = r; });
+      bar(tab).buttons[button].click();
+      await p.settle();
+      p.st.fullGate = null;
+      await change(p, disk, tab);
+      release();
+      await p.settle();
+      const what = (button === 2 ? "Load" : "Compare") + " / " + name;
+      assert.equal(p.st.diffs.length, 0, what + ": no compare view");
+      if (tab.model) assert.equal(tab.model.sets.length, 0, what + ": nothing replaced");
+      if (tab.model) assert.equal(tab.model.value, "mine\n", what);
+    }
+  }
+});
+
+test("a save after Keep mine ends it: a later discard goes back to what that save wrote, not to the version before Keep mine", async () => {
+  const p = page();
+  const disk = p.serve("original\n");
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  tab.model.type("mine\n");
+  disk.text = "agent\n";
+  await p.tick();
+  bar(tab).buttons[1].click();
+  tab.el.listeners.keydown(MOD_S());
+  await p.settle();
+  assert.equal(disk.text, "mine\n");
+  tab.model.type("mine more\n");
+  tab.discardEdits();
+  assert.equal(tab.model.value, "mine\n");
+  assert.equal(tab.version, p.hash("mine\n"));
   assert.equal(tab.dirty(), false);
 });

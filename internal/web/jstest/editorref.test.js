@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { rangeRef, insertGate, editorMode, conflictChoice, DELETED_TEXT, conflictText, textEOL } = require("../static/editorref.js");
+const { rangeRef, insertGate, editorMode, conflictChoice, DELETED_TEXT, conflictText } = require("../static/editorref.js");
 
 test("rangeRef single and range", () => {
   assert.strictEqual(rangeRef("src/a.go", 7, 7), "src/a.go:7");
@@ -128,14 +128,4 @@ test("conflictText: the bar's sentence names the session and the file, and witho
   }
   assert.strictEqual(conflictText("  notes ", "a.go")[0], "notes changed a.go", "a name with spaces round it is trimmed");
   assert.strictEqual(DELETED_TEXT, "This file was deleted on disk.");
-});
-
-test("textEOL: Monaco's rule for the line ending a text gives a model; null when there is no line break", () => {
-  assert.strictEqual(textEOL(""), null);
-  assert.strictEqual(textEOL("one line"), null);
-  assert.strictEqual(textEOL("a\nb\n"), "\n");
-  assert.strictEqual(textEOL("a\r\nb\r\n"), "\r\n");
-  assert.strictEqual(textEOL("a\r\nb\r\nc\n"), "\r\n", "most breaks are CRLF");
-  assert.strictEqual(textEOL("a\r\nb\nc\n"), "\n", "most breaks are LF");
-  assert.strictEqual(textEOL("a\r\nb\nc"), "\n", "half is not more than half");
 });
