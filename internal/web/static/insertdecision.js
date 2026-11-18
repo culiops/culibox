@@ -6,9 +6,10 @@
 //      turn? Text typed into a permission prompt or a sign-in lands where an answer is expected.
 //   2. the visibility predicate (insertvisible.js insertVisible): is the terminal on screen, where the user sees the text
 //      land? This file only reads the live objects into the predicate's input; it decides nothing about visibility.
-// The tree's row menu, the palette, the viewers' Path menu and line-number insert, an upload's inserted paths and the
-// editor's selection bar all call insertDecision(term) first; on a refusal they show the sentence as a toast, type
-// nothing and move no focus. insert-decision.test.js pins that every caller of insertTextAtPrompt does.
+// The tree's row menu, the palette, the viewers' Path menu and line-number insert and an upload's inserted paths all call
+// insertDecision(term) first, and so must every insert added later (the editor's selection bar, the agent strip); on a
+// refusal they show the sentence as a toast, type nothing and move no focus. insert-callers.test.js fails any
+// insertTextAtPrompt call that does not ask first.
 
 // insertPlace: where `term` lives on this page, by identity. {cell, placed}: "tab" (a tab of a pane) or "dock" (a shell
 // docked in a pane), or null for a terminal that is in no pane (closed, or evicted from this page).
