@@ -28,13 +28,12 @@ test("the registry has Next change (F7) and Previous change (Shift+F7), scope ed
   assert.equal(SC.shortcutHint("editor.prevChange", false), "Shift+F7");
 });
 
-test("dockchanges.js reads reviewedCount and reviewedState, and Review opens the first unreviewed file in Changes", () => {
+test("dockchanges.js reads reviewedCount and reviewedState (what they do is run in dock-changes-dom.test.js)", () => {
   const js = stripComments(read("dockchanges.js"));
   assert.match(js, /\breviewedCount\(/);
   assert.match(js, /\breviewedState\(/);
   assert.match(js, /dk-ck/);
   assert.match(js, /dk-nt/);
-  assert.match(js, /view: "changes"/);
 });
 
 test("editordiff.js asks Monaco for side by side by default and for its own inline fallback, and keeps the prefs in viewerprefs.js", () => {

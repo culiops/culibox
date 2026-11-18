@@ -421,6 +421,99 @@ test("a row's click shows the file as a preview; a deleted file opens its diff; 
   assert.strictEqual(onlyDirs.el("dock-review").hidden, true, "nothing to review but a folder");
 });
 
+// The review loop's marks on the section (P3 Task 3). The review store and the editor are other scripts, so each test stands in for the
+// three things dockchanges.js asks of them: reviewMarksOf(sid) (a NEW object on every change), editorDiffAnyChanges() and notesFor(sid).
+const reviewStubs = (p) => p.run(`globalThis.__marks = {}; globalThis.__rev = false; globalThis.__notes = null;
+  globalThis.reviewMarksOf = () => globalThis.__marks;
+  globalThis.editorDiffAnyChanges = () => globalThis.__rev;
+  globalThis.notesFor = () => globalThis.__notes;`);
+const markFor = (p, path, row) => plain(p.ctx.reviewMarkFor(Object.assign({ path, code: "M", add: null, del: null }, row), [], 1000));
+const done = (p) => p.rows().filter((r) => cls(r.querySelector(".dk-ck")).includes("dk-ck-done")).map((r) => text(r.querySelector(".dk-nm")));
+
+test("the header reads 'reviewed n of m' while a tab is in Changes and 'N changed' otherwise; a row whose mark stands wears the tick", async () => {
+  const p = page();
+  reviewStubs(p);
+  await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "b.go", x: "M" }, { p: "newdir/", x: "U" }, { p: "n.txt", x: "U" }]));
+  assert.strictEqual(text(p.el("dock-chg-count")), "4 changed", "no tab in Changes: the usual count");
+  assert.deepStrictEqual(done(p), []);
+  p.ctx.__rev = true; // a tab went to Changes: the dedupe sees `reviewing` move
+  p.ctx.dockChangesRender();
+  assert.strictEqual(text(p.el("dock-chg-count")), "reviewed 0 of 3", "the folder is not a file to review");
+  // A mark is made: the store hands out a new object, and the section repaints from it.
+  p.ctx.__marks = { "/w/a.go": markFor(p, "/w/a.go") };
+  p.ctx.dockChangesRender();
+  assert.strictEqual(text(p.el("dock-chg-count")), "reviewed 1 of 3");
+  assert.deepStrictEqual(done(p), ["a.go"]);
+  assert.match(p.rows()[0].getAttribute("aria-label"), /reviewed/, "the tick is in the row's words too");
+  assert.strictEqual(cls(p.rows()[1].querySelector(".dk-ck")).includes("dk-ck-done"), false);
+  // The agent edits a.go again (a new Activity list with a newer ts): the mark no longer stands, and the circle empties.
+  p.run('drawerChangedFiles.set("s1", [{ path: "/w/a.go", ts: 50 }])');
+  p.ctx.dockChangesRender();
+  assert.deepStrictEqual(done(p), []);
+  assert.strictEqual(text(p.el("dock-chg-count")), "reviewed 0 of 3");
+  // Git's count for the file moves (a fingerprint change): a mark made against the old one does not stand either.
+  p.ctx.__marks = { "/w/b.go": markFor(p, "/w/b.go", { add: 9, del: 9 }) };
+  p.ctx.dockChangesRender();
+  assert.deepStrictEqual(done(p), [], "b.go's mark was made for other numbers");
+  p.ctx.__marks = { "/w/b.go": markFor(p, "/w/b.go") };
+  p.ctx.dockChangesRender();
+  assert.deepStrictEqual(done(p), ["b.go"]);
+  // Back to Code on every tab: the usual count again, the tick stays on the row.
+  p.ctx.__rev = false;
+  p.ctx.dockChangesRender();
+  assert.strictEqual(text(p.el("dock-chg-count")), "4 changed");
+  assert.deepStrictEqual(done(p), ["b.go"]);
+});
+
+test("a file's pending notes are a chip on its row, 'N notes', that goes when the notes do", async () => {
+  const p = page();
+  reviewStubs(p);
+  await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "b.go", x: "M" }]));
+  const chip = (i) => p.rows()[i].querySelector(".dk-nt");
+  assert.strictEqual(chip(0), null, "no store, no notes, no chip");
+  const note = (path, status) => ({ id: path + status, path, status });
+  const a = p.rows()[0];
+  p.ctx.__notes = [note("/w/a.go", "pending"), note("/w/a.go", "pending"), note("/w/b.go", "pending"), note("/w/b.go", "sent"), note("/other/x.go", "pending")];
+  p.ctx.dockChangesRender();
+  assert.strictEqual(text(chip(0)), "2 notes");
+  assert.strictEqual(text(chip(1)), "1 note", "a sent note does not wait, and one is not 'notes'");
+  assert.match(p.rows()[0].getAttribute("aria-label"), /2 notes/);
+  assert.deepStrictEqual(Array.from(a.children, (c) => cls(c)[0]), ["dk-ck", "dk-ic", "dk-nm", "dk-dir", "dk-nt", "dk-st"], "the chip sits after the folder");
+  // One is sent: the same list shape with a new content is a repaint (the dedupe reads the pending counts, not the list's identity).
+  p.ctx.__notes = [note("/w/a.go", "pending"), note("/w/b.go", "sent")];
+  p.ctx.dockChangesRender();
+  assert.strictEqual(text(chip(0)), "1 note");
+  assert.strictEqual(chip(1), null, "its chip is taken out");
+  p.ctx.__notes = [];
+  p.ctx.dockChangesRender();
+  assert.strictEqual(chip(0), null);
+  assert.strictEqual(p.rows()[0], a, "the row keeps its element throughout");
+  // A store that throws is no notes, not a broken section.
+  p.run("globalThis.notesFor = () => { throw new Error('boom'); }");
+  p.ctx.__marks = {};
+  p.ctx.dockChangesRender();
+  assert.strictEqual(p.rows().length, 2);
+});
+
+test("Review opens the first file whose mark does not stand, and the first file when every one stands", async () => {
+  const p = page();
+  reviewStubs(p);
+  await p.status(okStatus([{ p: "newdir/", x: "U" }, { p: "a.go", x: "M" }, { p: "b.go", x: "M" }]));
+  const review = () => { p.st.shown.length = 0; p.el("dock-review").click(); return plain(p.st.shown); };
+  assert.deepStrictEqual(review(), [["/w/a.go", { view: "changes", preview: false }]], "nothing reviewed: the first file");
+  p.ctx.__marks = { "/w/a.go": markFor(p, "/w/a.go") };
+  p.ctx.dockChangesRender();
+  assert.deepStrictEqual(review(), [["/w/b.go", { view: "changes", preview: false }]], "a.go is reviewed: the second row opens");
+  // The agent edits a.go: its mark stops standing, so it is the first unreviewed again.
+  p.run('drawerChangedFiles.set("s1", [{ path: "/w/a.go", ts: 50 }])');
+  p.ctx.dockChangesRender();
+  assert.deepStrictEqual(review(), [["/w/a.go", { view: "changes", preview: false }]]);
+  p.ctx.__marks = { "/w/a.go": markFor(p, "/w/a.go"), "/w/b.go": markFor(p, "/w/b.go") };
+  p.run('drawerChangedFiles.set("s1", [])');
+  p.ctx.dockChangesRender();
+  assert.deepStrictEqual(review(), [["/w/a.go", { view: "changes", preview: false }]], "all reviewed: Review still takes the reader to the first");
+});
+
 test("the root header is the root's name and its path, and a click shows the root field until the root changes or Escape", async () => {
   const p = page();
   p.st.root = "/home/u/src/culibox";
