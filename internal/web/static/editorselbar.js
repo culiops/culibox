@@ -93,9 +93,22 @@ function editorInsertRef(want) {
 // really over (for the close, after applyDrawer applied it: never after a Cancel of its discard ask). `want` is editorRefFor's, read
 // before leaving, because a forced Full closes the dock and its editor goes with it. Outside Full mode nothing is left, and the
 // insert is asked at once.
+// One case is refused before leaving (ruling R17): a forced Full mode while the dock holds an unsaved edit. Closing the dock asks
+// whether to discard the edit, and an Insert must not put that question to the user: Discard would lose the edit, and the reference
+// typed after it would point at lines of a buffer that is gone. Save first, then insert.
 function editorInsertLeavingFull(want) {
+  if (editorLeavingWouldDiscard()) { showToast(EDITOR_SAVE_FIRST, { error: true }); return; }
   const run = () => { editorInsertRef(want); };
   if (!dockShowTerminal(run)) run();
+}
+
+const EDITOR_SAVE_FIRST = "Save first: leaving Full mode would close the dock";
+
+// editorLeavingWouldDiscard: the dock is in a forced Full mode (no pushed dock to go back to: leaving it closes the dock) and holds an
+// unsaved edit (drawerHasUnsaved, filesdrawer.js), so leaving would ask whether to discard.
+function editorLeavingWouldDiscard() {
+  const dr = document.getElementById("drawer");
+  return !!dr && !dr.hidden && dr.dataset.max === "1" && dr.dataset.forced === "1" && typeof drawerHasUnsaved === "function" && drawerHasUnsaved();
 }
 
 // --- the widget -------------------------------------------------------------------------------------------------------------

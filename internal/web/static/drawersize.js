@@ -111,6 +111,18 @@ function splitAria(r, kind) {
   return { now: Math.round(Math.min(hi, Math.max(lo, r)) * 100), min: Math.round(lo * 100), max: Math.round(hi * 100) };
 }
 
+// ESC_OWNERS: the elements that own an Escape pressed with focus in or on them, as a closest() list: a field, an editable element, an
+// editor, a menu. Monaco is listed as a whole because what has focus inside it is not always a textarea: with the EditContext API
+// (Chrome and Edge, Monaco's default there) it is a div (.native-edit-context), and an Escape Monaco has no use for (no selection to
+// collapse, no widget to close) bubbles to the page, where it would leave Full mode from inside the editor.
+const ESC_OWNERS = "input, textarea, [contenteditable], .CodeMirror, .monaco-editor, [role=menu]";
+
+// escOwnedBy: does the element that has focus (an Escape's target) own the press (ESC_OWNERS)? Anything that is not an element
+// (the document) owns nothing.
+function escOwnedBy(t) {
+  return !!(t && typeof t.closest === "function" && t.closest(ESC_OWNERS));
+}
+
 // maxEscapeRestores: does this Escape restore a maximized drawer? `where` is
 // where focus is: "body" (nothing focused, e.g. after a tree row click, which
 // re-renders the row), "drawer", or "other" (a terminal, the sidebar, a
@@ -127,6 +139,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     DRAWER_SIZE_KEY, DRAWER_W_MIN, DRAWER_W_MAX, TREE_DEFAULT, TREE_MIN, TREE_MAX,
     normalizeDrawerSize, loadDrawerSize, saveDrawerSize,
-    drawerWidthFromPointer, treeRatioFromPointer, stepSplit, stepWidth, widthKeyDir, splitAria, maxEscapeRestores,
+    drawerWidthFromPointer, treeRatioFromPointer, stepSplit, stepWidth, widthKeyDir, splitAria, maxEscapeRestores, ESC_OWNERS, escOwnedBy,
   };
 }

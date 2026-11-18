@@ -272,12 +272,13 @@ function insertTextAtPrompt(term, text) {
   return { ok: true, reason: "" };
 }
 
-// insertFailText: the toast for an insertTextAtPrompt that did not type (its `reason`), in the words the viewer's insert and the editor's
-// selection bar share: the path can never be typed (a control character would submit the line), there is no terminal in a pane for
-// the session, or its socket is down. The tree's insert and an upload's own sentences differ and keep theirs.
-function insertFailText(reason) {
+// insertFailText: the toast for an insertTextAtPrompt that did not type (its `reason`), in the words the viewer's insert, the tree's
+// and the editor's selection bar share: the path can never be typed (a control character would submit the line), there is no
+// terminal in a pane for the session, or its socket is down. `noterm` (optional) is a caller's own wording for the middle case (the
+// tree says to focus a terminal first). An upload's own sentences differ and keep theirs.
+function insertFailText(reason, noterm) {
   return reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
-    reason === "noterm" ? "This session has no terminal open here, so the path was not inserted" :
+    reason === "noterm" ? noterm || "This session has no terminal open here, so the path was not inserted" :
     "That session is not connected, so the path was not inserted";
 }
 

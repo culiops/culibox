@@ -233,8 +233,7 @@ class EditorTab {
     const span = (cls) => { const s = document.createElement("span"); s.className = cls; return s; };
     this.sbEl = document.createElement("div");
     this.sbEl.className = "dk-sb";
-    this.sbEl.hidden = true;
-    this.sbEl.setAttribute("role", "status");
+    this.sbEl.hidden = true; // not a live region: its Ln/Col changes with every key and click, and a screen reader would read out each
     this.sbBranch = span("dk-sb-branch");
     this.sbSaved = span("dk-sb-saved");
     const right = span("dk-sb-r");
@@ -338,7 +337,9 @@ class EditorTab {
     const mode = editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 });
     if (mode === "image" || mode === "binary") { this.mountInner(mode); return; }
     if (mon.err) {
-      this.setBodyMessage("The editor could not be loaded. Reload the page to try again.", "err");
+      // The next open tries again (loadMonaco forgets a failure), so say what failed rather than only "reload".
+      showToast("The editor could not be loaded: " + (mon.err.message || "unknown error"), { error: true });
+      this.setBodyMessage("The editor could not be loaded. Close this tab and open the file again, or reload the page.", "err");
       this.statusText = "";
       return;
     }

@@ -787,8 +787,9 @@ function setDrawerMax(on) {
 // discard ask. The session's pane takes the keyboard back once Full mode is really over: at once for Exit full, and for the
 // close when applyDrawer has applied it (`after`: after Discard, never after Cancel, so a dock that stays up keeps its
 // focus). false when the dock is not in Full mode, so the shortcut leaves the key alone.
-// `then` (optional) runs at that same moment, once Full mode is over and the terminal is on screen, and never when it stays: the
-// strip's Insert at prompt (dockAgentInsert) asks the insert decision from it, on the prompt that is now visible.
+// `then` (optional) runs at that same moment, once Full mode is over and the terminal is on screen, and never when it stays: Insert at
+// prompt, from the strip (dockAgentInsert) and from the selection bar (both through editorInsertLeavingFull), asks the insert decision
+// from it, on the prompt that is now visible.
 function dockShowTerminal(then) {
   const dr = $("drawer");
   if (!dr || dr.hidden || dr.dataset.max !== "1") return false;
@@ -834,7 +835,7 @@ document.addEventListener("keydown", (e) => {
   const rm = $("ft-menu");
   const at = {
     where: t === document.body || t === document.documentElement ? "body" : dr && dr.contains(t) ? "drawer" : "other",
-    owned: !!(t && t.closest && t.closest("input, textarea, [contenteditable], .CodeMirror, [role=menu]")),
+    owned: escOwnedBy(t),
     menuOpen: !!(vtMenuOpen() || (rm && rm.classList.contains("open"))),
     prevented: e.defaultPrevented,
   };

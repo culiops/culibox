@@ -110,6 +110,49 @@ test("maxEscapeRestores: a press another handler already used (closed a menu or 
   assert.equal(d.maxEscapeRestores({ max: true, where: "body", owned: false, menuOpen: false, prevented: true }), false);
 });
 
+// escOwnedBy: does the element that has focus (the Escape's target) own the press? A field, an editor, a menu item. A tiny DOM with
+// element.closest over the selectors the list uses (a tag, .class, [attr], [attr=value]) stands in for the page's.
+function node(tag, o, parent) {
+  const n = { tag, classes: (o && o.classes) || [], attrs: (o && o.attrs) || {}, parent: parent || null };
+  n.matches = (sel) => {
+    const m = /^([a-z]*)((?:\.[\w-]+)*)(?:\[([\w-]+)(?:=([\w-]+))?\])?$/.exec(sel);
+    if (!m) throw new Error("test matcher does not know " + sel);
+    if (m[1] && m[1] !== n.tag) return false;
+    if (m[2] && !m[2].slice(1).split(".").every((c) => n.classes.includes(c))) return false;
+    if (m[3] && !(m[3] in n.attrs && (m[4] === undefined || n.attrs[m[3]] === m[4]))) return false;
+    return true;
+  };
+  n.closest = (list) => {
+    const sels = list.split(",").map((x) => x.trim());
+    for (let e = n; e; e = e.parent) if (sels.some((x) => e.matches(x))) return e;
+    return null;
+  };
+  return n;
+}
+
+test("escOwnedBy: Monaco's input node (a div with EditContext on Chromium, a textarea elsewhere), CodeMirror, fields and menus own Escape; a button or the page do not", () => {
+  const drawer = node("div");
+  const monaco = node("div", { classes: ["monaco-editor", "focused"] }, drawer);
+  assert.equal(d.escOwnedBy(node("div", { classes: ["native-edit-context"] }, monaco)), true, "Chrome/Edge: Monaco's EditContext is no textarea (Task 4 measured it)");
+  assert.equal(d.escOwnedBy(node("textarea", { classes: ["inputarea"] }, monaco)), true, "Safari and Firefox");
+  assert.equal(d.escOwnedBy(node("div", { classes: ["view-lines"] }, monaco)), true, "anything inside the editor");
+  assert.equal(d.escOwnedBy(node("textarea", {}, node("div", { classes: ["CodeMirror"] }, drawer))), true, "CodeMirror, as before");
+  assert.equal(d.escOwnedBy(node("input", {}, drawer)), true);
+  assert.equal(d.escOwnedBy(node("div", { attrs: { contenteditable: "true" } }, drawer)), true);
+  assert.equal(d.escOwnedBy(node("button", { attrs: { role: "menuitem" } }, node("div", { attrs: { role: "menu" } }, drawer))), true);
+  assert.equal(d.escOwnedBy(node("button", {}, drawer)), false, "a button in the drawer lets the drawer's Escape through");
+  assert.equal(d.escOwnedBy(node("div", { classes: ["dk-md"] }, drawer)), false, "the markdown Preview is not an editor");
+  assert.equal(d.escOwnedBy(null), false);
+  assert.equal(d.escOwnedBy({}), false, "a target with no closest (the document) owns nothing");
+  assert.ok(/\.monaco-editor/.test(d.ESC_OWNERS), "the list names Monaco");
+});
+
+test("app.js asks escOwnedBy for the press's target, not its own list", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "app.js"), "utf8");
+  assert.match(src, /owned: escOwnedBy\(t\)/);
+  assert.ok(!/closest\("input, textarea, \[contenteditable\]/.test(src), "no second copy of the list in app.js");
+});
+
 // The sidebar width splitter (#split-v): a step in pixels, clamped to the sidebar's own bounds.
 test("stepWidth: one step of 16px either way, clamped to min and max", () => {
   assert.equal(d.stepWidth(290, +1, 200, 560, 16), 306);

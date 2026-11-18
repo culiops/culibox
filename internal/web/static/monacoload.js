@@ -28,6 +28,10 @@ const MONACO_THEME = "culibox";
 // removes that default binding; the key then does nothing in the editor.
 const MONACO_UNBOUND_KEYS = [{ command: "editor.action.quickCommand", code: "F1" }];
 
+// How long the stylesheet may take to apply once the editor module is in (the same origin, a few tens of KB): after this the load
+// fails, instead of leaving every open at "loading…" until the page is reloaded.
+const MONACO_CSS_TIMEOUT_MS = 10000;
+
 let monacoLoading = null;
 
 // monacoInject appends `el` to <head> and settles when the browser has loaded or refused it.
@@ -40,15 +44,24 @@ function monacoInject(el) {
 }
 
 // monacoStyled settles when the editor's stylesheet is applied: an editor measured before it would be laid out
-// unstyled. The module injects the link itself; one is added here only if a build stops doing that.
+// unstyled. The module injects the link itself; one is added here only if a build stops doing that. A link that failed is
+// not applied and never will be: the wait ends in an error (the browser's own, or MONACO_CSS_TIMEOUT_MS: an error that fired
+// before this listens, or a request that never answers, says nothing at all), and the dead link is taken out so that the retry,
+// the next open, finds none and makes a fresh one.
 async function monacoStyled() {
   let css = document.head.querySelector('link[href$="/vs/editor/editor.main.css"]');
   if (!css) { css = document.createElement("link"); css.rel = "stylesheet"; css.href = MONACO_BASE + "/editor/editor.main.css"; document.head.append(css); }
   if (css.sheet) return;
-  await new Promise((resolve, reject) => {
-    css.addEventListener("load", () => resolve(), { once: true });
-    css.addEventListener("error", () => reject(new Error("could not load " + css.href)), { once: true });
-  });
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("could not load " + css.href + " (no answer in " + MONACO_CSS_TIMEOUT_MS / 1000 + " s)")), MONACO_CSS_TIMEOUT_MS);
+      css.addEventListener("load", () => { clearTimeout(timer); resolve(); }, { once: true });
+      css.addEventListener("error", () => { clearTimeout(timer); reject(new Error("could not load " + css.href)); }, { once: true });
+    });
+  } catch (err) {
+    css.remove();
+    throw err;
+  }
 }
 
 // monacoBoot: loader.js, then require() of the editor, its stylesheet, then the theme and the unbound keys.
@@ -73,5 +86,5 @@ function loadMonaco() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { MONACO_BASE, MONACO_THEME, MONACO_UNBOUND_KEYS, loadMonaco };
+  module.exports = { MONACO_BASE, MONACO_THEME, MONACO_UNBOUND_KEYS, MONACO_CSS_TIMEOUT_MS, loadMonaco };
 }

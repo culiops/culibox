@@ -96,3 +96,11 @@ test("Follow has the eye and its word in a span of its own, which the narrow bar
   assert.ok(word, "the word has its own span");
   assert.equal(word.textContent, "Follow");
 });
+
+test("the status bar is not a live region: a caret move on every keystroke must not be announced", async () => {
+  const p = page();
+  const tab = await p.open("/p/a.go");
+  assert.equal(tab.sbEl.getAttribute("role"), null, "no role=status (a polite live region reads out every change of Ln/Col)");
+  assert.equal(tab.sbEl.getAttribute("aria-live"), null);
+  assert.equal(tab.barEl.getAttribute("role"), "alert", "the conflict bar, which does need the user, still is");
+});

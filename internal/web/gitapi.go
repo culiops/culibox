@@ -209,8 +209,8 @@ func isGitRefusal(err error) bool {
 // fix to it reaches them all. abs must be gitTarget's resolved path for t. A
 // path that is gone gives the Lstat error (the caller maps it with writeFsErr);
 // one that is not a regular file (a directory, a link, a device) gives
-// errGitNotFile; one that is not strictly below t.Top, the checkout itself
-// included, gives errGitOutside.
+// errGitNotFile (so the checkout directory itself is that, not an "outside");
+// a regular file that is not strictly below t.Top gives errGitOutside.
 func gitFileRel(t gitview.Target, abs string) (string, error) {
 	fi, err := os.Lstat(abs)
 	if err != nil {

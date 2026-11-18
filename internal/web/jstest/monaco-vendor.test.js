@@ -117,6 +117,20 @@ test("the TypeScript, CSS and HTML language services are trimmed; JSON and the M
   assert.ok(rels.includes("vs/nls.messages-loader.js"), "the loader plugin that would ask for one stays, as editor.main.js depends on it");
 });
 
+// The locale bundles are dropped (vs/nls/*, above), so Monaco has English only. A page that asked for a language would not get it and
+// the loader would request a file that is not there: no page script configures one, through require.config's `vs/nls`
+// `availableLanguages` or by any other means. (The two names are the only way the AMD build takes a locale.)
+test("no page script or page configures a Monaco locale", () => {
+  const dir = path.join(__dirname, "..", "static");
+  const pages = fs.readdirSync(dir).filter((f) => /\.(js|html)$/.test(f));
+  assert.ok(pages.includes("monacoload.js") && pages.includes("index.html"), "the pages that load Monaco are among those read");
+  for (const f of pages) {
+    const text = fs.readFileSync(path.join(dir, f), "utf8");
+    assert.ok(!/availableLanguages/.test(text), f + " sets availableLanguages");
+    assert.ok(!/vs\/nls/.test(text), f + " names vs/nls");
+  }
+});
+
 // editor.main.js names the three chunks that hook a service up (an onLanguage listener that loads a mode and starts a worker),
 // so the script keeps them as stubs of the same id that export an empty register. The fourth chunk is JSON's, the real one.
 test("the chunks of the trimmed services are stubs that register nothing", () => {

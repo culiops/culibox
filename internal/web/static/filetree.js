@@ -754,11 +754,7 @@ function insertPathAtPrompt(path, term, absent) {
     else term.grabFocus(); // the dock's session, while another pane has the keyboard
     return;
   }
-  showToast(
-    res.reason === "noterm" ? absent || "Focus a terminal first, then insert the path" :
-    res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
-    "That session is not connected, so the path was not inserted",
-    { error: true });
+  showToast(insertFailText(res.reason, absent || "Focus a terminal first, then insert the path"), { error: true });
 }
 
 // copyPath copies and says so: a clipboard write is otherwise invisible, and on

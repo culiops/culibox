@@ -252,7 +252,8 @@ function editorSyncKeepMine(tab) {
   tab.focusReader();
 }
 
-// Load the agent's version: the buffer becomes what is on disk now, and is clean. One undoable edit (replaceFromDisk).
+// Load the agent's version: the buffer becomes what is on disk now, and is clean. A new value, not an edit: the undo history is cleared, so
+// no undo can walk back to text the disk's version no longer stands for (replaceFromDisk).
 async function editorSyncLoad(tab) {
   const s = editorSyncOf(tab);
   const bar = s.bar;

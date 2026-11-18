@@ -7,7 +7,8 @@
 // Run on insertpage.js's page: the REAL tabs.js layout (panes, tabs, maximize), the real insertdecision.js and insertvisible.js,
 // the real editorref.js, editorselbar.js, viewerpath.js, upload.js and dockagent.js, and the real dockShowTerminal, paintDrawerMax
 // and setDrawerMax cut out of app.js. The bar is the real widget on editorpage.js's fake Monaco editor. Stood in: applyDrawer (forced Full mode closes the dock through it; dock-layout.test.js runs the
-// real one and pins that it applies the new state and then runs `after`), the dock's editor (a selection the test sets) and the
+// real one and pins that it applies the new state and then runs `after`), drawerHasUnsaved (filesdrawer.js: does the dock hold an edit; the
+// test says), the dock's editor (a selection the test sets) and the
 // layout calls that need a browser. "Moves no focus" is read as: nothing but what leaving Full mode does (Show terminal gives the
 // session's terminal the keyboard); a refusal adds none and types nothing.
 const test = require("node:test");
@@ -29,7 +30,7 @@ function fnSource(file, name) {
 
 // A page with session a (alpha, idle) in one pane, the dock open on it in Full mode (forced or chosen) and a file in the dock.
 function strip(opts) {
-  const o = Object.assign({ forced: false, full: true, bar: false, sid: "a", selection: null, filePath: "/work/a.go", box: "", activity: "idle", need: "", holdClose: false, file: true }, opts);
+  const o = Object.assign({ forced: false, full: true, bar: false, sid: "a", selection: null, filePath: "/work/a.go", box: "", activity: "idle", need: "", dirty: false, file: true }, opts);
   const p = page();
   p.sessions({ id: "a", name: "alpha", activity: o.activity, need: o.need });
   const cell = p.pane(p.term("a", "alpha"));
@@ -49,10 +50,11 @@ function strip(opts) {
   p.run("setFocusedCell = function (c) { setFocusedCellRaw(c); };"); // tabs.js's also saves the layout (a timer)
   p.run("dockAgentSync = function () {};"); // the strip's poll is dockagent.test.js's
   // applyDrawer, as far as Show terminal depends on it: the state is applied, Full mode ends with the dock, then `after` runs.
-  // holdClose: a dirty tab's discard ask the user answers Cancel to, so nothing is applied and `after` never runs.
+  // `dirty`: the dock holds an unsaved edit. Leaving a forced Full mode closes the dock, which would ask whether to discard it: an Insert
+  // never gets that far (ruling R17), so applyDrawer here never has to play the ask.
+  p.ctx.drawerHasUnsaved = () => o.dirty;
   p.ctx.applyDrawer = (next, op) => {
     log.applied.push(next);
-    if (o.holdClose) return;
     p.run("drawerState = { open: null, sessionId: " + JSON.stringify(next.sessionId) + ", pinned: false }");
     p.drawer.hidden = true;
     p.run('paintDrawerMax(false, false)');
@@ -172,14 +174,23 @@ test("forced Full mode with the session waiting: the dock closes, a toast says w
   assert.deepEqual(s.p.st.focused, ["a"]);
 });
 
-test("forced Full mode with an edit that holds the close behind its discard ask: until Discard nothing happens, and on Cancel nothing ever does", () => {
-  const s = strip({ forced: true, selection: SEL, holdClose: true });
+test("forced Full mode with an unsaved edit: Insert refuses with 'Save first' instead of closing the dock into its discard ask", () => {
+  const s = strip({ forced: true, selection: SEL, dirty: true });
   s.press();
+  assert.deepEqual(s.toasts(), [["Save first: leaving Full mode would close the dock", true]]);
+  assert.deepEqual(s.log.applied, [], "the dock was not asked to close: no discard question reaches the user");
   assert.equal(s.dockOpen(), true, "the dock is still up");
   assert.equal(s.full(), true, "still Full mode");
   assert.deepEqual(s.sent(), []);
-  assert.deepEqual(s.toasts(), [], "no toast either: the user has not been refused anything");
   assert.deepEqual(s.p.st.focused, [], "and no focus moved");
+});
+
+test("a chosen Full mode with an unsaved edit is not refused: leaving it keeps the dock and the edit, so the insert goes ahead", () => {
+  const s = strip({ selection: SEL, dirty: true });
+  s.press();
+  assert.deepEqual(s.toasts(), []);
+  assert.equal(s.full(), false);
+  assert.deepEqual(s.sent(), ["/work/a.go:3-5 "]);
 });
 
 test("with no file in the dock there is nothing to insert: a toast, and Full mode is not left", () => {
@@ -263,19 +274,27 @@ test("the bar's Insert in a FORCED Full mode: the dock closes first and the refe
   assert.deepEqual(s.toasts(), []);
 });
 
-test("forced Full mode, session waiting: the bar's Insert closes the dock, toasts why and types nothing; and a discard ask answered Cancel types and says nothing", () => {
+test("forced Full mode, session waiting: the bar's Insert closes the dock, toasts why and types nothing", () => {
   const waiting = strip({ bar: true, forced: true, selection: SEL, activity: "waiting", need: "sso" });
   waiting.barInsert();
   assert.equal(waiting.dockOpen(), false);
   assert.deepEqual(waiting.sent(), []);
   assert.deepEqual(waiting.toasts(), [["alpha is waiting on you; answer it first", true]]);
-  const held = strip({ bar: true, forced: true, selection: SEL, holdClose: true });
+});
+
+test("forced Full mode with an unsaved edit: the bar's Insert refuses with 'Save first' too, and neither closes the dock nor types", () => {
+  const held = strip({ bar: true, forced: true, selection: SEL, dirty: true });
   held.barInsert();
+  assert.deepEqual(held.toasts(), [["Save first: leaving Full mode would close the dock", true]]);
+  assert.deepEqual(held.log.applied, [], "no close, so no discard ask");
   assert.equal(held.dockOpen(), true);
   assert.equal(held.full(), true);
   assert.deepEqual(held.sent(), []);
-  assert.deepEqual(held.toasts(), [], "no refusal: the user has been asked, not refused");
   assert.deepEqual(held.p.st.focused, []);
+  // Saved (or discarded by the user's own doing), the same press goes through: the dock closes and the reference is typed.
+  held.p.ctx.drawerHasUnsaved = () => false;
+  held.barInsert();
+  assert.deepEqual(held.sent(), ["/work/a.go:3-5 "]);
 });
 
 test("outside Full mode nothing is left: the bar's Insert asks the decision at once and types at the visible prompt", () => {

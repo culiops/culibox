@@ -589,7 +589,7 @@ test("a save that gets a 409 before any poll noticed draws the bar too, and a la
   assert.equal(tab.barEl.hidden, true, "a saved buffer has nothing to ask");
 });
 
-test("Load the agent's version: the buffer becomes the disk's text in one undoable edit, clean, on the disk's version; the bar goes and the replace is announced", async () => {
+test("Load the agent's version: the buffer becomes the disk's text as a new value (no undo history), clean, on the disk's version; the bar goes and the replace is announced", async () => {
   const p = page();
   const disk = p.serve("original\n");
   p.setShown(true);
@@ -1721,6 +1721,25 @@ test("a tab left in Changes lets its diff editor go when it is hidden and comes 
   tab.seg.code.click();
   assert.equal(p.st.editors[0].restored.at(-1).top, 150);
   assert.equal(liveDiffs(p).length, 0);
+});
+
+test("Code asked for while the tab is hidden forgets where its Changes view was left: the next Changes opens at the first change, not at a stale scroll", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  changesBtn(tab).click();
+  const d = p.st.diffs[0];
+  d.modified.top = 420; // where the Changes view was read
+  tab.onHide();         // left in Changes: the place is kept for the way back
+  assert.equal(tab.showChanges(false), false, "Code is asked for while it is hidden");
+  tab.onAttach();
+  assert.equal(tab.diff, null, "it comes back in Code, as asked");
+  assert.equal(liveDiffs(p).length, 0);
+  changesBtn(tab).click(); // Changes again, much later
+  const d2 = p.st.diffs[1];
+  const placed = [];
+  d2.modified.setScrollTop = (v) => placed.push(v);
+  [...d2.updated].forEach((f) => f());
+  assert.deepEqual(placed, [], "no scroll to the old place: that view is gone");
+  assert.equal(d2.revealed, 1, "it opens at the first change, as a Changes view does");
 });
 
 test("one diff editor for the dock: two tabs left in Changes, switched back and forth, never have two", async () => {
