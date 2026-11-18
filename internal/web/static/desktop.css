@@ -213,7 +213,7 @@
   .btn-ghost:hover, .btn.gh:hover { background: var(--hover); color: var(--fg); }
   .btn-danger, .btn.dgr { background: transparent; color: var(--red); border-color: rgba(240,106,106,.45); }
   .btn-danger:hover, .btn.dgr:hover { background: var(--red-tint); border-color: var(--red); }
-  /* Amber fill: the ask strip's Yes only (amber = an agent needs you). */
+  /* Amber fill: the ask strip's Yes and the conflict bar's Load the agent's version (amber = it needs you). */
   .btn-yes { background: var(--amber); color: var(--on-fill); font-weight: var(--w-semibold); }
   .btn-yes:hover { background: var(--amber-hover); }
   .btn-sm { min-height: var(--h-sm); padding: 0 8px; font-size: var(--t-sm); border-radius: var(--r-chip); }
@@ -1422,6 +1422,21 @@
   .dk-ed-note[hidden], .dk-sb[hidden], .dk-vact[hidden] { display: none; }
   .dk-ed-body { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
   .dk-ed-mon { position: absolute; inset: 0; }
+  /* The conflict bar (editorsync.js, mockup B4): amber because the buffer needs the user. The sentence takes the room and wraps;
+     the actions wrap under it when the dock is narrow, so none of them is ever pushed out. */
+  .dk-conflict {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 12px;
+    background: var(--amber-tint); border-bottom: 1px solid color-mix(in srgb, var(--amber) 30%, transparent); font: var(--t-md)/var(--lh-md) var(--font-ui);
+  }
+  .dk-conflict[hidden], .dk-ed-cmp[hidden], .dk-ed-body[hidden] { display: none; }
+  .dk-conflict-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+  .dk-conflict-msg { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; color: var(--fg); unicode-bidi: isolate; }
+  .dk-conflict-msg b { font-weight: var(--w-semibold); }
+  .dk-conflict-acts { flex: none; display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  /* Compare (the disk beside the buffer): a line saying what is shown and how to leave, then the diff, in place of the editor. */
+  .dk-ed-cmp { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+  .dk-cmp-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 10px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
+  .dk-cmp-body { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
   /* The status bar (mockup B1 .esb): the branch and "Saved" on the left; Ln/Col, indentation, encoding, line ending and language on the
      right. One 24px line that never wraps; what does not fit is cut at the left group, so the right group keeps its words. */
   .dk-sb {

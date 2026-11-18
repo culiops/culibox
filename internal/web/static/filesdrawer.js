@@ -895,6 +895,13 @@ const drawerToolbarHost = {
   onEditStart: (v) => dockPinViewer(v),
   // The buffer turned dirty or clean: the tab's dot.
   onDirtyChange: () => dockRender(),
+  // The conflict bar's "<session> changed <file>": the session the dock shows.
+  sessionName: () => (typeof drawerSessionName === "function" ? drawerSessionName(drawerState.sessionId) : ""),
+  // The deleted bar's Close: the tab's own close, which asks first when the buffer holds an edit.
+  closeTab: (v) => {
+    const key = dockKeyOf(v);
+    if (key !== null) dockCloseTab(key);
+  },
 };
 
 // drawerPaint brings the column and the dataset flags in step with the viewer.
@@ -929,6 +936,8 @@ function drawerPaint(fromViewer) {
   if (typeof dockAgentSync === "function") dockAgentSync();
   // So does the live change watch: it polls only while the dock is open on a session that reads "working" (a close lands here too).
   if (typeof dockWatchSync === "function") dockWatchSync();
+  // And the poll of the file on screen (editorsync.js): while the dock is on screen, whatever the session is doing.
+  if (typeof editorSyncSync === "function") editorSyncSync();
 }
 
 initDrawerGoto();

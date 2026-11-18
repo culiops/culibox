@@ -52,3 +52,22 @@ test("the page loads the editor scripts before the dock, and Monaco itself only 
   assert.ok(!/vendor\/monaco/.test(html), "index.html never names a Monaco file: monacoload.js injects them on the first open");
   assert.ok(at("monacokeys.js") < at("editortab.js") && at("monacotheme.js") < at("monacoload.js"), "the pure policy modules come first");
 });
+
+// Task 6 (P2): disk changes under the editor. The behaviour is run for real in editortab-contract.test.js; these pin the wiring that
+// has no unit: the script's place in the page, and the three places that keep the one poll in step with what is on screen.
+test("the page loads editorsync.js after editortab.js and before the dock and app.js: a DOM module the dock's paint and the page host call", () => {
+  const html = read("index.html");
+  const at = (f) => html.indexOf('<script src="/' + f + '"></script>');
+  assert.ok(at("editorsync.js") > at("editortab.js"), "after the class whose lifecycle it follows");
+  assert.ok(at("editorsync.js") < at("filesdrawer.js") && at("editorsync.js") < at("app.js"));
+  assert.match(stripComments(fn("filesdrawer.js", "drawerPaint")), /editorSyncSync\(\)/, "every dock paint keeps the poll in step");
+  const host = stripComments(read("pagehost.js"));
+  assert.strictEqual((host.match(/editorSyncSync\(\)/g) || []).length, 2, "a page view opening and closing");
+  assert.match(read("editorsync.js"), /addEventListener\("visibilitychange"/, "and the page being hidden or shown");
+});
+
+test("the dock's toolbar host gives the bar the session's name and a close that asks first when the buffer holds an edit", () => {
+  const host = stripComments(read("filesdrawer.js").slice(read("filesdrawer.js").indexOf("const drawerToolbarHost = {")));
+  assert.match(host, /sessionName: \(\) => .*drawerSessionName\(drawerState\.sessionId\)/);
+  assert.match(host, /closeTab: \(v\) => \{[^}]*dockCloseTab\(key\)/, "dockCloseTab asks Discard / Cancel for a dirty tab; the deleted bar's Close is that close");
+});

@@ -65,6 +65,25 @@ function conflictChoice(state) {
   return "none";
 }
 
+// DELETED_TEXT is the conflict bar's sentence for a file that is gone from disk.
+const DELETED_TEXT = "This file was deleted on disk.";
+
+// conflictText is the conflict bar's sentence as [lead, rest]: the lead ("<session> changed <name>") is drawn bold. A dock
+// with no session name says the file changed on disk, rather than "undefined changed ...".
+function conflictText(session, name) {
+  const who = typeof session === "string" && session.trim() !== "" ? session.trim() : "";
+  return [who ? who + " changed " + name : name + " changed on disk", " after you started editing. Your edits are not saved yet."];
+}
+
+// textEOL is the line ending a Monaco model takes from `text` (its own rule: CRLF when more than half of the line breaks
+// are, else LF), or null when `text` has no line break and the model keeps the one it has. Lone CRs are not counted.
+function textEOL(text) {
+  const lf = (text.match(/\n/g) || []).length;
+  if (lf === 0) return null;
+  const crlf = (text.match(/\r\n/g) || []).length;
+  return crlf * 2 > lf ? "\r\n" : "\n";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { rangeRef, insertGate, editorMode, conflictChoice };
+  module.exports = { rangeRef, insertGate, editorMode, conflictChoice, DELETED_TEXT, conflictText, textEOL };
 }

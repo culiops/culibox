@@ -70,6 +70,7 @@ function openPage(id) {
   paintPageLinks(id);
   if (typeof attnChipSync === "function") attnChipSync(true); // the page hides the grid: no pane is visible
   if (typeof dockWatchSync === "function") dockWatchSync(); // and the dock: nothing is watched for a screen nobody sees
+  if (typeof editorSyncSync === "function") editorSyncSync(); // nor is the file on screen asked about
   if (typeof dockAgentSync === "function") dockAgentSync(); // nor does the Full-mode strip ask for its line
   // The first match that is on screen: a page may hold the same kind of element in a head it hides (Analytics' .dlg-tabs
   // buttons and legend h2 sit in the phone's .dlg-head), and focus() on a node with no boxes does nothing.
@@ -156,6 +157,7 @@ function pageClosed(dlg) {
   paintPageLinks("");
   if (typeof attnChipSync === "function") attnChipSync(true);
   if (typeof dockWatchSync === "function") dockWatchSync(); // the dock is on screen again
+  if (typeof editorSyncSync === "function") editorSyncSync(); // and its file is asked about again
   if (typeof dockAgentSync === "function") dockAgentSync();
   // The grid was display:none: terminals skipped their fits, so refit now it
   // has a size again, and re-hang an open drawer under the focused pane.

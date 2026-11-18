@@ -15,8 +15,11 @@
 // place an edit is lost, and the dock has asked before it lets one go (dockLeaveNeedsAsk). A dirty tab the dock
 // only detaches (the crossing into mobile) keeps its model.
 //
+// The file can change on disk under the buffer (the agent writes it, or a save is refused with a 409): editorsync.js
+// polls the shown tab, reloads a clean buffer in place (replaceFromDisk) and draws the amber conflict bar over a dirty one.
+//
 // Monaco itself is loaded lazily by loadMonaco (monacoload.js) when the first tab needs it, never at page boot.
-// Tasks 6-9 build on three things this file produces: the class, `dockEditor`, and `tab.model`.
+// Tasks 7-9 build on three things this file produces: the class, `dockEditor`, and `tab.model`.
 
 let dockMonaco = null;      // window.monaco, once the first tab has loaded it
 let dockEditor = null;      // the one shared editor, created when the first tab with a model is shown
@@ -135,6 +138,8 @@ class EditorTab {
     this.dirtyShown = false;    // what the host was last told
     this.applying = false;      // a programmatic replace of the buffer is under way: not an edit
     this.saving = false;
+    this.saveMark = 0;          // moves when a save ends: a disk poll that began before it is not about now (none begins during one)
+    this.sync = null;           // editorsync.js: the bar, the compare view and the replace subscribers of this tab
     this.attached = false;      // el is in the document
     this.viewState = null;      // the editor's view of this model, saved when it is hidden
     this.lastScroll = clampScroll(o.scroll);
@@ -156,10 +161,17 @@ class EditorTab {
     this.roEl = document.createElement("div");  // why the file is read-only, under the crumbs
     this.roEl.className = "dk-ed-note";
     this.roEl.hidden = true;
+    this.barEl = document.createElement("div"); // the amber conflict bar (editorsync.js fills it)
+    this.barEl.className = "dk-conflict";
+    this.barEl.setAttribute("role", "alert");
+    this.barEl.hidden = true;
+    this.cmpEl = document.createElement("div"); // the read-only compare of the disk with the buffer, in place of the editor
+    this.cmpEl.className = "dk-ed-cmp";
+    this.cmpEl.hidden = true;
     this.bodyEl = document.createElement("div"); // the editor, or a message, fills this
     this.bodyEl.className = "dk-ed-body";
     this.buildStatus();
-    this.el.append(this.altEl, this.roEl, this.bodyEl, this.sbEl);
+    this.el.append(this.altEl, this.roEl, this.barEl, this.cmpEl, this.bodyEl, this.sbEl);
     // Mod+S saves from anywhere in the tab, not only from the editor: a key Monaco handled is stopped before here.
     this.el.addEventListener("keydown", (e) => {
       if (!e.defaultPrevented && shortcutMatches("editor.save", e, IS_MAC)) { e.preventDefault(); e.stopPropagation(); this.save(); }
@@ -386,11 +398,13 @@ class EditorTab {
     const acts = document.getElementById("dock-acts");
     if (acts) acts.insertBefore(this.actsEl, document.getElementById("drawer-max"));
     if (this.model) this.show();
+    editorSyncStart(this); // the file on disk is asked about while this tab is the one on screen
   }
 
   // onHide: another tab is about to be shown. The view is kept for the way back.
   onHide() {
     this.attached = false;
+    editorSyncStop(this);
     this.closeMenu();
     this.actsEl.remove();
     if (this.inner) { this.inner.onHide(); return; }
@@ -441,6 +455,7 @@ class EditorTab {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    editorSyncDispose(this); // before the model goes: a compare view holds it
     if (this.savedTimer) clearTimeout(this.savedTimer);
     this.closeMenu();
     this.actsEl.remove();
@@ -484,8 +499,8 @@ class EditorTab {
     if (this.host && this.host.onDirtyChange) this.host.onDirtyChange(this);
   }
 
-  // applyText replaces the whole buffer with `text` as the clean state: a discard, or (Tasks 6) a load of what is
-  // on disk. Not an edit: the host is not told to pin the tab.
+  // applyText replaces the whole buffer with `text` as the clean state: a discard. Not an edit: the host is not told to pin
+  // the tab. (A load of what is on disk is replaceFromDisk.)
   applyText(text) {
     if (!this.model) return;
     this.applying = true;
@@ -501,8 +516,38 @@ class EditorTab {
     if (this.dirty()) this.applyText(this.diskText);
   }
 
+  // replaceFromDisk puts `text`, the file as it is on disk at `version`, in the buffer as its clean state: a clean buffer
+  // reloading, or "Load the agent's version" over a dirty one (editorsync.js). It is ONE edit over the whole text, so a press
+  // of Load by mistake can be undone, and the cursor and the scroll stay where they were: Monaco would move a cursor that sat
+  // in replaced text to the edge of it, so the view is saved first and put back. Not an edit of the user's: the host is not
+  // told to pin the tab. A text whose line ending, or whose byte order mark, differs from the model's cannot be an edit (the
+  // model keeps both from the text it was made with, and saves them): that one goes in as a new value, and loses the undo stack.
+  replaceFromDisk(text, version) {
+    if (!this.model) return;
+    const owner = dockEditorOwner === this && dockEditor;
+    const view = owner ? dockEditor.saveViewState() : null;
+    const eol = textEOL(text);
+    const bom = (s) => s.charCodeAt(0) === 0xFEFF;
+    const edit = bom(text) === bom(this.diskText) && (eol === null || eol === this.model.getEOL());
+    this.applying = true;
+    try {
+      if (edit) {
+        // Its own undo step: without the stops Monaco folds it into the typing before it (an undo would drop both) and the typing after it.
+        this.model.pushStackElement();
+        this.model.pushEditOperations(null, [{ range: this.model.getFullModelRange(), text: bom(text) ? text.slice(1) : text }], () => null);
+        this.model.pushStackElement();
+      } else this.model.setValue(text);
+    } finally { this.applying = false; }
+    this.version = version;
+    this.diskText = text;
+    this.savedAlt = this.model.getAlternativeVersionId();
+    if (view) dockEditor.restoreViewState(view);
+    this.syncDirty(false);
+    this.paintStatus();
+  }
+
   // save writes the buffer with the version it was read at (base_version), once per press. A 409 never overwrites:
-  // it goes to conflictBar, which is Task 6's.
+  // it goes to conflictBar, and the bar stays until the user picks (editorsync.js).
   async save() {
     if (this.disposed || !this.model || this.inner) return;
     if (this.mode !== "edit") { showToast(this.readOnlyWhy() || "This file is read-only"); return; }
@@ -513,6 +558,7 @@ class EditorTab {
     this.saving = true;
     const res = await fsWrite(this.path, saveBody(this.path, text, this.version, false));
     this.saving = false;
+    this.saveMark++;
     if (this.disposed) return;
     const d = classifySave(res);
     if (d.outcome === "saved") {
@@ -521,9 +567,12 @@ class EditorTab {
       this.savedAlt = alt; // an edit made while the write was in flight stays dirty
       this.syncDirty(false);
       this.flashSaved();
+      editorSyncClearBar(this); // a bar over a buffer that is now what is on disk (the agent had put the file back) has nothing to ask
       if (typeof gitStatusRefreshSoon === "function") gitStatusRefreshSoon(); // the file's git mark may have changed
     } else if (d.outcome === "conflict") {
       this.conflictBar(d.currentVersion);
+    } else if (res && res.status === 404) {
+      editorSyncAct(this, 404, ""); // the file is gone: the deleted bar says so, with what can still be done
     } else {
       showToast(d.message, { error: true });
     }
@@ -541,11 +590,11 @@ class EditorTab {
     }, EDITOR_SAVED_MS);
   }
 
-  // conflictBar: the save got a 409, the file changed on disk after this buffer was read. Task 6 replaces this with the
-  // amber bar (Compare, Keep mine, Load the agent's version). Until then it only says so: nothing was written, and the
-  // buffer is untouched.
+  // conflictBar: the save got a 409, the file changed on disk after this buffer was read. Nothing was written and the buffer
+  // is untouched: the amber bar (Compare, Keep mine, Load the agent's version) goes up, or stays up, and `currentVersion`
+  // (the server's, "" for a file past the read cap) is what Keep mine will take as the next base version.
   conflictBar(currentVersion) {
-    showToast("Not saved: " + this.name + " changed on disk after you started editing", { error: true });
+    editorSyncAct(this, 409, currentVersion || "");
   }
 
   // --- lines ---------------------------------------------------------------------------------------------------

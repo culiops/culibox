@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { rangeRef, insertGate, editorMode, conflictChoice } = require("../static/editorref.js");
+const { rangeRef, insertGate, editorMode, conflictChoice, DELETED_TEXT, conflictText, textEOL } = require("../static/editorref.js");
 
 test("rangeRef single and range", () => {
   assert.strictEqual(rangeRef("src/a.go", 7, 7), "src/a.go:7");
@@ -118,4 +118,24 @@ test("conflictChoice", () => {
   assert.strictEqual(c({ saveStatus: 0, dirty: true }), "none");
   assert.strictEqual(conflictChoice({}), "none");
   assert.strictEqual(conflictChoice(undefined), "none");
+});
+
+test("conflictText: the bar's sentence names the session and the file, and without a session says the file changed on disk", () => {
+  assert.deepStrictEqual(conflictText("fix-fs-cap", "CONFIG.md"), ["fix-fs-cap changed CONFIG.md", " after you started editing. Your edits are not saved yet."]);
+  assert.strictEqual(conflictText("fix-fs-cap", "CONFIG.md").join(""), "fix-fs-cap changed CONFIG.md after you started editing. Your edits are not saved yet.");
+  for (const none of ["", "  ", undefined, null, 7]) {
+    assert.strictEqual(conflictText(none, "a.go")[0], "a.go changed on disk", JSON.stringify(none));
+  }
+  assert.strictEqual(conflictText("  notes ", "a.go")[0], "notes changed a.go", "a name with spaces round it is trimmed");
+  assert.strictEqual(DELETED_TEXT, "This file was deleted on disk.");
+});
+
+test("textEOL: Monaco's rule for the line ending a text gives a model; null when there is no line break", () => {
+  assert.strictEqual(textEOL(""), null);
+  assert.strictEqual(textEOL("one line"), null);
+  assert.strictEqual(textEOL("a\nb\n"), "\n");
+  assert.strictEqual(textEOL("a\r\nb\r\n"), "\r\n");
+  assert.strictEqual(textEOL("a\r\nb\r\nc\n"), "\r\n", "most breaks are CRLF");
+  assert.strictEqual(textEOL("a\r\nb\nc\n"), "\n", "most breaks are LF");
+  assert.strictEqual(textEOL("a\r\nb\nc"), "\n", "half is not more than half");
 });
