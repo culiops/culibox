@@ -42,6 +42,11 @@ function culiboxTheme() {
       "editorGutter.addedBackground": "#4ccf8a",
       "editorGutter.modifiedBackground": "#6ea8fe",
       "editorGutter.deletedBackground": "#f06a6a",
+      // The overview ruler's marks for the lines that differ from git (editordiff.js): the same three colours. Monaco has no
+      // default for these names, so the theme is where they come from.
+      "editorOverviewRuler.addedForeground": "#4ccf8a",
+      "editorOverviewRuler.modifiedForeground": "#6ea8fe",
+      "editorOverviewRuler.deletedForeground": "#f06a6a",
     },
   };
 }

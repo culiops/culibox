@@ -18,8 +18,11 @@
 // The file can change on disk under the buffer (the agent writes it, or a save is refused with a 409): editorsync.js
 // polls the shown tab, reloads a clean buffer in place (replaceFromDisk) and draws the amber conflict bar over a dirty one.
 //
+// The tab's body is the editor (Code) or Monaco's inline diff against git (Changes, editordiff.js, a read-only review view); the
+// gutter marks of the lines that differ from git are drawn on the editor.
+//
 // Monaco itself is loaded lazily by loadMonaco (monacoload.js) when the first tab needs it, never at page boot.
-// Tasks 7-9 build on three things this file produces: the class, `dockEditor`, and `tab.model`.
+// Later tasks build on three things this file produces: the class, `dockEditor`, and `tab.model`.
 
 let dockMonaco = null;      // window.monaco, once the first tab has loaded it
 let dockEditor = null;      // the one shared editor, created when the first tab with a model is shown
@@ -47,6 +50,7 @@ function editorOptions() {
 // reset call it, as does the wrap toggle through EditorTab.applyWrap).
 function editorApplyPrefs() {
   if (dockEditor) dockEditor.updateOptions(editorOptions());
+  editorDiffApplyPrefs(); // the Changes view on screen, if any
 }
 
 // editorBind runs `run` on the registry's chords for `id` while the editor has focus. The registry owns the chords
@@ -145,14 +149,16 @@ class EditorTab {
     this.viewState = null;      // the editor's view of this model, saved when it is hidden
     this.lastScroll = clampScroll(o.scroll);
     this.pendingLine = Number.isInteger(o.line) && o.line > 0 ? { line: o.line, col: Number.isInteger(o.col) && o.col > 0 ? o.col : undefined } : null;
-    this.pendingChanges = o.view === "changes"; // Task 7 opens the diff; until then the file opens in Code
+    this.pendingChanges = o.view === "changes"; // open in Changes as soon as the model is there (load)
     this.wantFocus = false;
     this.inner = null;          // a ViewerTab, for an image or a binary file
     this.contentSub = null;
     this.optionsSub = null;
     this.savedTimer = null;
-    this.changes = null;        // Task 7: {head, lineChanges}; savedScroll reads it (layout.js)
-    this.fileScroll = 0;
+    this.changes = null;        // editordiff.js: the file at git's base and the lines that differ ({head, lineChanges, ...}), once asked for
+    this.diff = null;           // the Changes view while it is up: {diff, original, wrap, label}
+    this.dg = null;             // editordiff.js: the request slot, the gutter's debounce and decorations
+    this.seg = null;            // the Code | Changes toggle in the bar: {el, code, changes}
 
     this.el = document.createElement("div");
     this.el.className = "tab-body dk-ed";
@@ -186,8 +192,8 @@ class EditorTab {
 
   // --- the bar: ⋯ in the dock's action area, the status bar under the editor ---------------------------------
 
-  // buildActs makes the actions this tab adds to the dock's bar (#dock-acts, left of Full): for now the ⋯ menu.
-  // Tasks 7 and 8b put the Code | Changes toggle and Follow in actsEl, before moreBtn.
+  // buildActs makes the actions this tab adds to the dock's bar (#dock-acts, left of Full): the Code | Changes toggle and the ⋯ menu.
+  // Task 8b puts Follow in actsEl, before moreBtn.
   buildActs() {
     this.actsEl = document.createElement("div");
     this.actsEl.className = "dk-vact";
@@ -205,7 +211,7 @@ class EditorTab {
     // stopPropagation: the document's closer for the kit menu would shut the menu this press opens.
     more.onclick = (e) => { e.stopPropagation(); this.openMenu(); };
     this.moreBtn = more;
-    this.actsEl.append(more);
+    this.actsEl.append(editorDiffToggle(this), more);
   }
 
   // buildStatus makes the status bar (mockup B1): the branch and the "Saved" word on the left, then Ln/Col,
@@ -228,8 +234,9 @@ class EditorTab {
   paintStatus() {
     if (this.disposed || !this.model) return;
     const set = (n, t) => { if (n.textContent !== t) n.textContent = t; };
-    const owner = dockEditorOwner === this && dockEditor;
-    const pos = owner ? dockEditor.getPosition() : null;
+    // Where the cursor is: in the Changes view, on its new side; else in the editor, if this tab has it.
+    const ed = this.diff ? this.diff.diff.getModifiedEditor() : dockEditorOwner === this && dockEditor;
+    const pos = ed ? ed.getPosition() : null;
     const mo = this.model.getOptions();
     const p = statusBarParts({
       line: pos ? pos.lineNumber : 1, col: pos ? pos.column : 1,
@@ -246,7 +253,7 @@ class EditorTab {
     this.sbSaved.hidden = !this.statusText;
   }
 
-  // paint repaints everything this tab shows outside the editor: the read-only note, the ⋯, the status bar.
+  // paint repaints everything this tab shows outside the editor: the read-only note, the toggle and the ⋯, the status bar.
   paint() {
     if (this.disposed) return;
     const ready = !!this.model && !this.inner;
@@ -256,6 +263,7 @@ class EditorTab {
     if (this.roEl.textContent !== why) this.roEl.textContent = why;
     this.roEl.hidden = !why || !ready;
     this.paintStatus();
+    editorDiffPaintToggle(this);
   }
 
   // changed: something the dock shows moved (the lock, the dirty dot, the label). Like ViewerTab.changed.
@@ -409,18 +417,22 @@ class EditorTab {
     this.closeMenu();
     this.actsEl.remove();
     if (this.inner) { this.inner.onHide(); return; }
+    editorDiffDetach(this);
     this.stashView();
   }
 
-  // show: this tab is on screen with a model, so it takes the shared editor.
+  // show: this tab is on screen with a model, so it takes the shared editor, or, if it was left in Changes, puts that view back.
   show() {
-    editorClaim(this);
+    if (this.diff) editorDiffShow(this);
+    else editorClaim(this);
     this.paint();
+    editorDiffAttach(this);
   }
 
-  // stashView saves where the editor is over this model. Only the tab that has the editor has a live view.
+  // stashView saves where the editor is over this model. Only the tab that has the editor has a live view; one in Changes saved
+  // its view when it left Code.
   stashView() {
-    if (dockEditorOwner !== this || !dockEditor || !this.model) return;
+    if (dockEditorOwner !== this || !dockEditor || !this.model || this.diff) return;
     this.viewState = dockEditor.saveViewState();
     this.lastScroll = dockEditor.getScrollTop();
   }
@@ -432,23 +444,35 @@ class EditorTab {
     if (this.viewState) ed.restoreViewState(this.viewState);
     else if (this.lastScroll > 0) ed.setScrollTop(this.lastScroll, dockMonaco.editor.ScrollType.Immediate);
     if (this.pendingLine) { const p = this.pendingLine; this.pendingLine = null; this.revealNow(p.line, p.col); }
-    if (this.wantFocus) {
-      this.wantFocus = false;
-      const ae = document.activeElement;
-      if (!ae || ae === document.body || (ae.closest && ae.closest("#drawer"))) ed.focus();
-    }
+    this.takeWantedFocus(ed);
+  }
+
+  // takeWantedFocus gives `ed` the keyboard if it was asked for while the file was still loading and is still free.
+  takeWantedFocus(ed) {
+    if (!this.wantFocus) return;
+    this.wantFocus = false;
+    const ae = document.activeElement;
+    if (!ae || ae === document.body || (ae.closest && ae.closest("#drawer"))) ed.focus();
   }
 
   // scroll: where the file is read, in px, for the dock's stored state (layout.js savedScroll). Live for the tab
-  // that has the editor and on screen; the value saved at the last hide otherwise.
+  // that has the editor and on screen; the value saved at the last hide (or at the move to Changes) otherwise.
   get scroll() {
     if (this.inner) return this.inner.scroll;
-    if (this.attached && dockEditorOwner === this && dockEditor) return clampScroll(dockEditor.getScrollTop());
+    if (this.attached && !this.diff && dockEditorOwner === this && dockEditor) return clampScroll(dockEditor.getScrollTop());
     return this.lastScroll;
+  }
+
+  // fileScroll: savedScroll stores this instead of `scroll` while `changes` is set, since a viewer showing its diff stores where the
+  // FILE was read (the diff is not persisted). Here `changes` is also set in Code, where the gutter's data lives, and the Changes
+  // view has no scroll of its own to store, so the two are one answer: where the file is read.
+  get fileScroll() {
+    return this.scroll;
   }
 
   focusReader() {
     if (this.inner) { this.inner.focusReader(); return; }
+    if (this.diff) { this.diff.diff.getModifiedEditor().focus(); return; }
     if (this.attached && dockEditorOwner === this && dockEditor) dockEditor.focus();
     else this.wantFocus = true;
   }
@@ -457,6 +481,7 @@ class EditorTab {
     if (this.disposed) return;
     this.disposed = true;
     editorSyncDispose(this); // before the model goes: a compare view holds it
+    editorDiffDispose(this); // and so does the Changes view
     if (this.savedTimer) clearTimeout(this.savedTimer);
     this.closeMenu();
     this.actsEl.remove();
@@ -607,22 +632,27 @@ class EditorTab {
   // not read yet, keeps the line for when it is.
   revealLine(line, col) {
     if (this.inner) { this.inner.revealLine(line, col); return; }
-    if (!this.model || !this.attached || dockEditorOwner !== this) { this.pendingLine = { line, col }; return; }
+    if (!this.model || !this.attached || (!this.diff && dockEditorOwner !== this)) { this.pendingLine = { line, col }; return; }
     this.revealNow(line, col);
   }
 
+  // revealNow shows the line in the editor the user is looking at (Code's, or Changes' new side) and bands it, as the read view's
+  // target band did (editordiff.js).
   revealNow(line, col) {
     const n = this.model.getLineCount();
     const total = n > 1 && this.model.getLineLength(n) === 0 ? n - 1 : n; // the empty line after a final newline is not one
     const c = clampLine(line, total);
     if (c.clamped) showToast(linesOnlyText(this.name, total));
-    dockEditor.setPosition({ lineNumber: c.line, column: col > 0 ? col : 1 });
-    dockEditor.revealLineInCenter(c.line, dockMonaco.editor.ScrollType.Immediate);
+    const ed = this.diff ? this.diff.diff.getModifiedEditor() : dockEditor;
+    ed.setPosition({ lineNumber: c.line, column: col > 0 ? col : 1 });
+    ed.revealLineInCenter(c.line, dockMonaco.editor.ScrollType.Immediate);
+    editorDiffTarget(this, c.line);
   }
 
-  // showChanges(on): Task 7 (editordiff.js) replaces this with the inline diff vs HEAD. Today the file stays in Code.
+  // showChanges(on): the Changes view (editordiff.js), the file against git's base, read-only; false goes back to Code. A call with
+  // no argument turns it on, as ViewerTab.showChanges does (filesdrawer.js, a badge's click). Returns whether it is up or on its way.
   showChanges(on) {
-    return false;
+    return editorDiffSet(this, on !== false);
   }
 
   // --- preferences ---------------------------------------------------------------------------------------------

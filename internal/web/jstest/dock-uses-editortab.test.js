@@ -71,3 +71,33 @@ test("the dock's toolbar host gives the bar the session's name and a close that 
   assert.match(host, /sessionName: \(\) => .*drawerSessionName\(drawerState\.sessionId\)/);
   assert.match(host, /closeTab: \(v\) => \{[^}]*dockCloseTab\(key\)/, "dockCloseTab asks Discard / Cancel for a dirty tab; the deleted bar's Close is that close");
 });
+
+// Task 7 (P2): Changes vs HEAD and the gutter. The behaviour is run for real in editortab-contract.test.js; these pin the wiring that
+// has no unit: the script's place in the page, the two places that tell the diff the status or the scope moved, and the host's session.
+test("the page loads editordiff.js after linediff.js, editortab.js and editorsync.js and before the dock and app.js", () => {
+  const html = read("index.html");
+  const at = (f) => html.indexOf('<script src="/' + f + '"></script>');
+  assert.ok(at("editordiff.js") > at("editorsync.js"), "a DOM module the tab calls, after the class and the poll");
+  assert.ok(at("editordiff.js") > at("linediff.js"), "it diffs with the pure module");
+  assert.ok(at("editordiff.js") < at("filesdrawer.js") && at("editordiff.js") < at("app.js"));
+});
+
+test("a status that lands and a scope or base that moves each ask the editor's diff to look at its key (editorDiffSync)", () => {
+  assert.match(stripComments(fn("gitstatus.js", "gitPaintTree")), /editorDiffSync\(\)/, "a new HEAD in the tree's status means a new base text");
+  assert.match(stripComments(fn("dockchanges.js", "dockChangesRefresh")), /editorDiffSync\(\)/, "the scope toggle and the base landing both come through here");
+});
+
+test("the dock's toolbar host names the session whose scope the editor's diff follows", () => {
+  const host = stripComments(read("filesdrawer.js").slice(read("filesdrawer.js").indexOf("const drawerToolbarHost = {")));
+  assert.match(host, /sessionId: \(\) => drawerState\.sessionId \|\| null/);
+});
+
+test("the editor's diff asks the server for the file by path and scope only, never a revision, and never from a keystroke", () => {
+  const src = stripComments(read("editordiff.js"));
+  assert.match(src, /"\/api\/git\/show"/);
+  assert.match(src, /editorDiffPost\(\{ path: tab\.path, scope: k\.scope \}\)/);
+  assert.strictEqual((src.match(/editorDiffPost\(/g) || []).length, 2, "defined once and asked in one place");
+  // The one place that listens to the buffer only schedules the debounced recompute.
+  assert.match(src, /onDidChangeContent\(\(\) => editorDiffSoon\(tab\)\)/);
+  assert.match(src, /const DG_DEBOUNCE_MS = 300;/);
+});

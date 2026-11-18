@@ -18,6 +18,9 @@ test("culiboxTheme uses the tokens", () => {
     "editorGutter.addedBackground": "#4ccf8a",
     "editorGutter.modifiedBackground": "#6ea8fe",
     "editorGutter.deletedBackground": "#f06a6a",
+    "editorOverviewRuler.addedForeground": "#4ccf8a",
+    "editorOverviewRuler.modifiedForeground": "#6ea8fe",
+    "editorOverviewRuler.deletedForeground": "#f06a6a",
   });
 });
 

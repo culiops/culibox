@@ -1447,8 +1447,26 @@
   .dk-sb-branch[hidden], .dk-sb-saved[hidden] { display: none; }
   .dk-sb-saved { flex: none; color: var(--ok); }
   .dk-sb-r { flex: none; display: flex; gap: 14px; margin-left: auto; }
-  /* The tab's own actions in the bar (the ⋯; Tasks 7 and 8b add the Code | Changes toggle and Follow): left of Full. */
+  /* The tab's own actions in the bar (the Code | Changes toggle and the ⋯; Task 8b adds Follow): left of Full. */
   .dk-vact { flex: none; display: flex; align-items: center; gap: var(--sp-1); }
+  /* The Code | Changes toggle (editordiff.js): the kit's .seg, a size down so it sits level with the Full button beside it. Changes
+     can be aria-disabled, its reason in the title: it stays reachable by hover and keyboard, dimmed by the one disabled look
+     (#169), and gets no hover fill. */
+  .dk-seg.seg { flex: none; padding: 1px; }
+  .dk-seg > .seg-item { height: 22px; padding: 0 9px; }
+  .dk-seg > .seg-item[aria-disabled="true"]:hover { background: transparent; }
+  /* The Changes view (editordiff.js) fills the tab's body, in place of the editor; its header is the compare view's. */
+  .dk-ed-body > .dk-ed-cmp { position: absolute; inset: 0; }
+  /* The gutter marks of the lines that differ from git (editordiff.js), drawn by Monaco in the column beside the line numbers: a 3px
+     strip, green for added lines and blue for modified ones (the theme's own colours), and a small red wedge on the line a removal
+     sits in front of. Monaco sets the width of the column's box itself, so the strip's is stated over it. */
+  .dk-g-add, .dk-g-mod { margin-left: 3px; width: 3px !important; }
+  .dk-g-add { background: var(--ok); }
+  .dk-g-mod { background: var(--accent); }
+  .dk-g-del { margin-left: 3px; width: 7px !important; background: linear-gradient(135deg, var(--red) 50%, transparent 50%) top left / 7px 7px no-repeat; }
+  /* The line a path:line link opened (the read view's .vl-target): a faint band over the line and a bar in its margin. */
+  .dk-target { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .dk-target-m { box-shadow: inset 3px 0 0 var(--accent); }
   /* The ⋯ menu's font row: the label, A-, the size and A+. The two steps are menu rows (so the arrow keys reach them) that keep
      their own width, and a press leaves the menu open. They hang from #ft-menu because app.css's `#ft-menu button` (full width,
      no border) is an id rule that a class rule alone cannot out-rank. */

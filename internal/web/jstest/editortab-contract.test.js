@@ -1,9 +1,10 @@
 "use strict";
-// The real editortab.js and editorsync.js (and the real pure modules they call: the registry, monacokeys, editorref, fsedit,
-// ...) in a vm, against a fake page (fakedom.js) and a fake Monaco, with fsRead and fsWrite stubbed. It proves the contracts
+// The real editortab.js, editorsync.js and editordiff.js (and the real pure modules they call: the registry, monacokeys, editorref,
+// fsedit, linediff, ...) in a vm, against a fake page (fakedom.js) and a fake Monaco, with fsRead and fsWrite stubbed. It proves the contracts
 // the dock and the later tasks lean on: what a save sends and what it does to the buffer, what a 409 leaves alone, when the
 // host is told of an edit, what dispose() lets go of, and (the second half) what happens when the file changes on disk under
-// the buffer: the poll, the reload of a clean buffer, the conflict bar over a dirty one, and the races between them. How
+// the buffer: the poll, the reload of a clean buffer, the conflict bar over a dirty one, and the races between them; and (the third
+// half) Changes vs HEAD: the gutter drawn from a stubbed POST /api/git/show, the inline Changes view and what it lets go of. How
 // Monaco itself behaves is the browser check's (the task report); the fake only has to be as exact as the calls the code makes:
 // the alternative version id moves on every change, getValue takes (eol, preserveBOM), onDidChangeContent returns something
 // with dispose(), a replace of the whole text (setValue) sends a cursor and a scroll back to the top, which is what the code
@@ -27,6 +28,20 @@ class El extends Node {
   append(...cs) { super.append(...nodes(cs)); }
 }
 
+// A decoration store as a model or an editor keeps them: deltaDecorations(old ids, new) removes the old and returns an id per new.
+function decorStore() {
+  let n = 0;
+  const live = new Map();
+  return {
+    live,
+    delta(old, next) {
+      for (const id of old) live.delete(id);
+      return next.map((d) => { const id = "d" + (++n); live.set(id, d); return id; });
+    },
+    list: () => [...live.values()],
+  };
+}
+
 // A model as the class uses it. `type(text)` is a user's edit: new text, a new alternative version id, a step on the undo
 // stack, the listeners told. `undo()` is Ctrl+Z: the text and the alternative version id of the step before.
 const eolOf = (t) => (/\r\n/.test(t) ? "\r\n" : "\n");
@@ -45,6 +60,8 @@ function fakeModel(text, lang, log, id) {
     onDidChangeOptions() { return { dispose() {} }; },
     getOptions() { return { insertSpaces: true, tabSize: 4 }; },
     getEOL() { return this.eol; },
+    decor: decorStore(),
+    deltaDecorations(old, next) { return this.decor.delta(old, next); },
     getLanguageId() { return lang; },
     getLineCount() { return this.value.split("\n").length; },
     getLineLength(n) { return (this.value.split("\n")[n - 1] || "").length; },
@@ -54,16 +71,22 @@ function fakeModel(text, lang, log, id) {
 
 function fakeEditor() {
   return {
-    model: null, commands: [], options: [], top: 0, restored: [],
+    model: null, commands: [], options: [], top: 0, restored: [], decor: decorStore(), focused: 0,
     // A cursor and a scroll are lost to a replace of the text, as Monaco loses them: unless they are put back they are at the top.
-    setModel(m) { this.model = m; if (m) m.onDidChangeContent((e) => { if (e.replaced) this.top = 0; }); },
+    // The decorations this editor made go when its model does (Monaco's _postDetachModelCleanup).
+    setModel(m) {
+      if (m !== this.model) this.decor.live.clear();
+      this.model = m;
+      if (m) m.onDidChangeContent((e) => { if (e.replaced) this.top = 0; });
+    },
+    deltaDecorations(old, next) { return this.decor.delta(old, next); },
     getModel() { return this.model; },
     addCommand(keys, fn) { this.commands.push([keys, fn]); },
     onDidChangeCursorPosition() { return { dispose() {} }; },
     updateOptions(o) { this.options.push(o); },
     layout() {}, saveViewState() { return { saved: true, top: this.top }; }, restoreViewState(v) { this.restored.push(v); this.top = v.top; },
     getScrollTop() { return this.top; }, setScrollTop(v) { this.top = v; }, getPosition() { return { lineNumber: 1, column: 1 }; },
-    setPosition() {}, revealLineInCenter() {}, focus() {},
+    setPosition() {}, revealLineInCenter() {}, focus() { this.focused++; },
   };
 }
 
@@ -76,6 +99,10 @@ function page(over) {
     writes: [], reads: [], urls: [], toasts: [], models: [], editors: [], diffs: [], host: [], closed: [], log: [], gitRefresh: 0,
     timers: [], intervals: [],
     shown: false, page: null, session: "fix-fs-cap", // is the dock on screen; a page view over it; the session the dock shows
+    // The page's git, off until a test turns it on (on: the tree's status is known and names HEAD `head`): the scope the Changes
+    // section shows, the base it names, and what POST /api/git/show answers (an object, a function of the request body, or null
+    // for a request that failed), delivered after `gate` if one is set.
+    git: { on: false, head: "h1", scope: "head", base: null, answer: null, gate: null, shows: [] },
     metaGate: null, fullGate: null,                  // a promise a metadata / a full read waits on, after its answer is decided
   };
   const monaco = {
@@ -85,11 +112,16 @@ function page(over) {
     editor: {
       EndOfLinePreference: { TextDefined: 0 }, ScrollType: { Immediate: 1 },
       EndOfLineSequence: { LF: 0, CRLF: 1 },
+      OverviewRulerLane: { Left: 1, Center: 2, Right: 4, Full: 7 },
       createModel(text, lang) { const m = fakeModel(text, lang, st.log, st.models.length + 1); st.models.push(m); return m; },
       create() { const e = fakeEditor(); st.editors.push(e); return e; },
       createDiffEditor(el, opts) {
+        const modified = Object.assign(fakeEditor(), { revealed: [], cursorSubs: [], onDidChangeCursorPosition(fn) { this.cursorSubs.push(fn); return { dispose() {} }; }, revealLineInCenter(l) { this.revealed.push(l); } });
         const d = {
-          el, opts, model: undefined, disposed: false, revealed: 0, updated: [],
+          el, opts, model: undefined, disposed: false, revealed: 0, updated: [], modified, laid: 0, options: [],
+          getModifiedEditor() { return this.modified; },
+          layout() { this.laid++; },
+          updateOptions(o) { this.options.push(o); },
           setModel(m) { this.model = m; st.log.push(m ? "diff.setModel" : "diff.setModel(null)"); },
           onDidUpdateDiff(fn) { this.updated.push(fn); return { dispose: () => { this.updated = this.updated.filter((x) => x !== fn); } }; },
           revealFirstDiff() { this.revealed++; },
@@ -143,6 +175,18 @@ function page(over) {
       return answer;
     },
     fsWrite: (p, body) => { st.writes.push(body); return write(body); },
+    AbortController,
+    ftRoot: () => "/p",
+    dockScope: () => st.git.scope,
+    gitBaseFor: () => st.git.base,
+    gitStatusCurrent: () => (st.git.on ? { root: "/p", status: { state: "ok", head: st.git.head } } : null),
+    fetch: async (url, init) => {
+      const body = JSON.parse(init.body);
+      st.git.shows.push({ url, init, body });
+      const a = typeof st.git.answer === "function" ? st.git.answer(body) : st.git.answer;
+      if (st.git.gate) await st.git.gate;
+      return a === null ? { ok: false, status: 500, json: async () => null } : { ok: true, status: 200, json: async () => a };
+    },
     boxFileURL: (sid, p) => "/box/" + sid + p,
     fsAlternates: async () => [],
     // The dock's repoint (filesdrawer.js dockRepointViewer) moves the tab to the new path in place.
@@ -171,11 +215,12 @@ function page(over) {
     },
   }, over));
   const load = (f) => new vm.Script(src(f), { filename: f }).runInContext(ctx);
-  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "editortab.js", "editorsync.js"]) load(f);
+  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "editortab.js", "editorsync.js", "editordiff.js"]) load(f);
   const host = {
     onEditStart: () => st.host.push("start"),
     onDirtyChange: () => st.host.push("dirty"),
     sessionName: () => st.session,
+    sessionId: () => "s1",
     closeTab: (t) => st.closed.push(t),
   };
   // A class or a let at a script's top level is not a property of the vm's global: read it by name, in it.
@@ -1393,4 +1438,556 @@ test("a save after Keep mine ends it: a later discard goes back to what that sav
   assert.equal(tab.model.value, "mine\n");
   assert.equal(tab.version, p.hash("mine\n"));
   assert.equal(tab.dirty(), false);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Changes vs HEAD and the gutter (editordiff.js). The page's git is stubbed (page().st.git): the tree's status names HEAD "h1" and
+// POST /api/git/show answers what the test sets. What Monaco draws from the decorations and how the inline diff looks is the
+// browser check's (the task report); here are the calls the code makes, and when.
+
+const HEAD_TEXT = "l1\nl2\nl3\nl5\nl6\n";
+const BUF_TEXT = "l1\nl2 changed\nl3\nl4 new\nl5\n";
+const MARKS = [["dk-g-mod", 2, 2], ["dk-g-add", 4, 4], ["dk-g-del", 6, 6]]; // lineDiff(HEAD_TEXT, BUF_TEXT): l2 changed, l4 added, l6 removed
+const okBlob = (content) => ({ state: "ok", content });
+
+// withGit: a page whose file holds `text`, the tree's git status known and the show answer set, and a tab read and on screen with its
+// answer in. `o.opts` are the EditorTab's options.
+async function withGit(answer, text, o) {
+  const p = page();
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: text, version: "v1" } });
+  p.st.git.on = true;
+  p.st.git.answer = answer;
+  p.setShown(true);
+  const tab = await p.open((o && o.path) || "/p/a.go", o && o.opts);
+  await p.settle();
+  return { p, tab };
+}
+
+// What the shared editor draws in the gutter: [class, first line, last line] per decoration.
+const gutter = (p) => p.st.editors[0].decor.list().map((d) => [d.options.linesDecorationsClassName, d.range.startLineNumber, d.range.endLineNumber]);
+const debounce = (p) => p.st.timers.filter((t) => t.ms === 300 && !t.dead);
+const changesBtn = (tab) => tab.seg.changes;
+
+test("the gutter: the base text from POST /api/git/show against the buffer marks added, modified and removed lines, with the theme's overview ruler colours", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  assert.equal(p.st.git.shows.length, 1, "one request");
+  assert.equal(p.st.git.shows[0].url, "/api/git/show");
+  assert.deepEqual(p.st.git.shows[0].body, { path: "/p/a.go", scope: "head" }, "the path and the scope, never a revision");
+  assert.deepEqual(gutter(p), MARKS);
+  const decs = p.st.editors[0].decor.list();
+  assert.deepEqual(decs.map((d) => d.options.overviewRuler), [
+    { color: { id: "editorOverviewRuler.modifiedForeground" }, position: 1 },
+    { color: { id: "editorOverviewRuler.addedForeground" }, position: 1 },
+    { color: { id: "editorOverviewRuler.deletedForeground" }, position: 1 },
+  ]);
+  assert.ok(decs.every((d) => d.options.isWholeLine));
+  assert.deepEqual(tab.changes.lineChanges, [{ kind: "mod", from: 2, to: 2 }, { kind: "add", from: 4, to: 4 }, { kind: "del", from: 6, to: 6 }]);
+  assert.equal(tab.changes.head, HEAD_TEXT);
+  assert.equal(tab.changes.scope, "head");
+  assert.equal(tab.changes.capped, false);
+});
+
+test("the gutter: a removal at the very end sits one past the last line and is drawn on the last", async () => {
+  const { p } = await withGit(okBlob("a\nb\nc"), "a\nb");
+  assert.deepEqual(gutter(p), [["dk-g-del", 2, 2]], "lineDiff says line 3 of a 2-line buffer; the marker goes on line 2");
+});
+
+test("the gutter: typing asks git for nothing; the marks follow 300 ms after the last edit, as one recompute", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  tab.model.type(BUF_TEXT + "l7\n");
+  tab.model.type(BUF_TEXT + "l7\nl8\n");
+  tab.model.type("l1\nl2 changed\nl3\nl4 new\nl5\nl7\nl8\n");
+  assert.equal(p.st.git.shows.length, 1, "no show request per keystroke");
+  assert.equal(debounce(p).length, 1, "one pending recompute: each edit pushed the last one back");
+  assert.equal(debounce(p)[0].ms, 300);
+  assert.deepEqual(gutter(p), MARKS, "the marks wait for the pause");
+  debounce(p)[0].fn();
+  assert.deepEqual(gutter(p), [["dk-g-mod", 2, 2], ["dk-g-add", 4, 4], ["dk-g-mod", 6, 7]]);
+  assert.equal(p.st.git.shows.length, 1);
+  tab.model.type(HEAD_TEXT); // back to the base: no marks at all
+  debounce(p)[0].fn();
+  assert.deepEqual(gutter(p), []);
+  assert.deepEqual(tab.changes.lineChanges, []);
+});
+
+test("the gutter: marks that did not change are not written again", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  const ed = p.st.editors[0];
+  let calls = 0;
+  const delta = ed.deltaDecorations.bind(ed);
+  ed.deltaDecorations = (a, b) => { calls++; return delta(a, b); };
+  tab.model.type(BUF_TEXT.replace("l5", "l5")); // an edit that moves no line's status (same text)
+  tab.model.type("l1\nl2 changed again\nl3\nl4 new\nl5\n"); // still the same three marks
+  debounce(p)[0].fn();
+  assert.equal(calls, 0, "same marks, no deltaDecorations");
+});
+
+test("the gutter: a diff lineDiff declines (too different) draws nothing and costs nothing per keystroke; Changes is still offered", async () => {
+  const lines = (c) => Array.from({ length: 3000 }, (_, i) => c + i).join("\n") + "\n";
+  const { p, tab } = await withGit(okBlob(lines("a")), lines("b"));
+  assert.deepEqual(gutter(p), []);
+  assert.equal(tab.changes.capped, true);
+  assert.deepEqual(tab.changes.lineChanges, []);
+  assert.equal(changesBtn(tab).getAttribute("aria-disabled"), "false", "capped is about the marks, not about whether Monaco can diff");
+  assert.equal(p.st.git.shows.length, 1);
+});
+
+test("the gutter: a file the base does not have is all added", async () => {
+  const { p, tab } = await withGit({ state: "ok", missing: true, content: "" }, "x\ny\n");
+  assert.deepEqual(gutter(p), [["dk-g-add", 1, 3]], "x, y and the empty line after the final newline");
+  assert.equal(tab.changes.head, "");
+  assert.equal(tab.changes.missing, true);
+  assert.equal(changesBtn(tab).getAttribute("aria-disabled"), "false");
+});
+
+test("unavailable, notrepo, truncated and a failed request: no marks, the toggle is disabled with the reason, and Changes does not open", async () => {
+  const cases = [
+    [{ state: "unavailable", reason: "Git status needs the box runtime (docker)" }, "Git status needs the box runtime (docker)"],
+    [{ state: "unavailable" }, "git is not available here"],
+    [{ state: "notrepo" }, "this file is not in a git repository"],
+    [{ state: "ok", content: "partial", truncated: true }, "the version in git is over 2 MiB"],
+    [null, "the server did not answer"],
+  ];
+  for (const [answer, why] of cases) {
+    const { p, tab } = await withGit(answer, BUF_TEXT);
+    const b = changesBtn(tab);
+    assert.equal(b.getAttribute("aria-disabled"), "true", why);
+    assert.equal(b.title, "Changes unavailable: " + why);
+    assert.equal(tab.seg.code.getAttribute("aria-pressed"), "true");
+    assert.deepEqual(gutter(p), [], why);
+    assert.equal(tab.changes.head, null);
+    b.click(); // a disabled button does nothing
+    assert.equal(p.st.diffs.length, 0, why + ": no diff editor");
+    assert.equal(tab.showChanges(true), false);
+    assert.deepEqual(p.st.toasts.at(-1), ["Changes unavailable: " + why, undefined], "a call from outside (a badge's click) says why");
+    assert.equal(p.st.diffs.length, 0);
+    tab.model.type("more\n");
+    assert.equal(debounce(p).length, 0, "typing costs no recompute when there is nothing to compare with");
+    assert.deepEqual(tab.bodyEl.children, [p.get("dockEditorEl")], "the file stays in Code");
+  }
+});
+
+test("a box tab asks git nothing: Changes is disabled with the reason", async () => {
+  const p = page();
+  p.st.git.on = true;
+  p.st.git.answer = okBlob(HEAD_TEXT);
+  p.setShown(true);
+  const tab = await p.open("/p/shot.txt", { box: "s1" });
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 0);
+  assert.equal(changesBtn(tab).getAttribute("aria-disabled"), "true");
+  assert.equal(changesBtn(tab).title, "Changes unavailable: a file in a session's box has no git history");
+  assert.equal(tab.showChanges(true), false);
+  assert.equal(p.st.git.shows.length, 0);
+  assert.equal(p.st.diffs.length, 0);
+});
+
+test("git's status not known yet: nothing is asked until it is; a status that lands asks once", async () => {
+  const p = page();
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: BUF_TEXT, version: "v1" } });
+  p.st.git.answer = okBlob(HEAD_TEXT);
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 0, "no status, no HEAD to key the answer by");
+  p.st.git.on = true;
+  p.get("editorDiffSync")(); // gitPaintTree
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 1);
+  assert.deepEqual(gutter(p), MARKS);
+  p.get("editorDiffSync")();
+  assert.equal(p.st.git.shows.length, 1, "the same key asks nothing again");
+  assert.equal(tab.changes.key, "/p/a.go\nhead\nh1\n");
+});
+
+test("a dock that is not on screen asks nothing; it asks when it comes back", async () => {
+  const p = page();
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: BUF_TEXT, version: "v1" } });
+  p.st.git.on = true;
+  p.st.git.answer = okBlob(HEAD_TEXT);
+  const tab = await p.open(); // the dock is not shown
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 0);
+  p.setShown(true);
+  p.get("editorDiffSync")(); // drawerPaint, through dockChangesRefresh
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 1);
+  assert.deepEqual(gutter(p), MARKS);
+  assert.ok(tab.changes);
+});
+
+test("a new HEAD in the status asks again; the same one, an edit of the file or a save asks nothing", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  p.get("editorDiffSync")();
+  tab.model.type("edited\n");
+  await tab.save();
+  p.get("editorDiffSync")();
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 1, "a status of the same HEAD: the base text has not moved");
+  p.st.git.head = "h2";
+  p.st.git.answer = okBlob("edited\n");
+  p.get("editorDiffSync")();
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 2, "the commit moved the base text");
+  assert.equal(tab.changes.key, "/p/a.go\nhead\nh2\n");
+  assert.deepEqual(gutter(p), [], "the buffer is what HEAD has now");
+});
+
+test("a base text that could not be read is asked for again only after a while, not on every status", async () => {
+  const { p, tab } = await withGit(null, BUF_TEXT);
+  assert.equal(p.st.git.shows.length, 1);
+  p.get("editorDiffSync")();
+  p.get("editorDiffSync")();
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 1, "the failure stands for a while");
+  const fresh = p.get("editorDiffFresh");
+  const k = { key: tab.changes.key };
+  assert.equal(fresh(tab.changes, k, tab.changes.at + 29999), true);
+  assert.equal(fresh(tab.changes, k, tab.changes.at + 30000), false, "then it is asked again");
+  assert.equal(fresh({ key: k.key, head: "", at: 0 }, k, 1e12), true, "a text that was read stands until the key moves");
+  assert.equal(fresh(tab.changes, { key: "other" }, tab.changes.at), false);
+});
+
+test("a show answer for a scope the tab has left, or for a tab that was disposed, is dropped", async () => {
+  // The scope is switched while the request is out: that answer is about the old scope, and the new one is asked for.
+  const p = page();
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: BUF_TEXT, version: "v1" } });
+  p.st.git.on = true;
+  p.st.git.answer = (b) => okBlob(b.scope === "branch" ? "l1\nl2 changed\nl3\nl4 new\n" : HEAD_TEXT);
+  let release;
+  p.st.git.gate = new Promise((r) => { release = r; });
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 1);
+  p.st.git.scope = "branch";
+  p.st.git.base = { mergeBase: "mb1", baseName: "main" };
+  release();
+  await p.settle();
+  assert.deepEqual(p.st.git.shows.map((s) => s.body.scope), ["head", "branch"], "the old answer is not kept; the new scope is asked for");
+  assert.equal(tab.changes.scope, "branch");
+  assert.equal(tab.changes.key, "/p/a.go\nbranch\nh1\nmb1");
+  assert.deepEqual(gutter(p), [["dk-g-add", 5, 5]], "marks of the branch's base text (it lacks l5), not HEAD's");
+
+  // Disposed while the request is out.
+  const q = page();
+  q.setRead({ ok: true, status: 200, data: { kind: "text", content: BUF_TEXT, version: "v1" } });
+  q.st.git.on = true;
+  q.st.git.answer = okBlob(HEAD_TEXT);
+  let release2;
+  q.st.git.gate = new Promise((r) => { release2 = r; });
+  q.setShown(true);
+  const t2 = await q.open();
+  await q.settle();
+  assert.equal(q.st.git.shows.length, 1);
+  t2.showChanges(true); // the user had asked for Changes too
+  t2.dispose();
+  release2();
+  await q.settle();
+  assert.equal(t2.changes, null, "nothing kept");
+  assert.equal(q.st.diffs.length, 0, "no diff editor for a closed tab");
+  assert.equal(q.st.toasts.length, 0);
+});
+
+test("Changes: the toggle swaps the body for a read-only inline diff of the base text against the live model, headed 'vs HEAD'", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  tab.model.type(BUF_TEXT + "unsaved\n"); // an edit not saved: Changes shows it
+  assert.equal(tab.dirty(), true);
+  changesBtn(tab).click();
+  assert.equal(p.st.diffs.length, 1);
+  const d = p.st.diffs[0];
+  assert.equal(d.opts.renderSideBySide, false, "inline");
+  assert.equal(d.opts.readOnly, true, "a review view: typing in it does nothing");
+  assert.match(d.opts.readOnlyMessage.value, /Switch to Code to edit/);
+  assert.equal(d.opts.originalEditable, false);
+  assert.equal(d.opts.ignoreTrimWhitespace, false, "a whitespace-only change is shown, as git diff and the gutter do");
+  assert.equal(d.opts.theme, "culibox");
+  assert.equal(d.model.original.value, HEAD_TEXT, "the removed side is the base text");
+  assert.equal(d.model.original.getLanguageId(), "go");
+  assert.equal(d.model.modified, tab.model, "the new side is the tab's own model: the live buffer, not a copy");
+  assert.equal(d.model.modified.value, BUF_TEXT + "unsaved\n");
+  assert.notEqual(d.model.original, tab.model);
+  assert.equal(tab.diff.diff, d);
+  assert.deepEqual(tab.bodyEl.children.map((c) => c.className), ["dk-ed-cmp"], "the body is the view, not the editor");
+  const [head, body] = tab.bodyEl.children[0].children;
+  assert.equal(head.textContent, "vs HEAD");
+  assert.equal(d.el, body);
+  assert.equal(tab.seg.code.getAttribute("aria-pressed"), "false");
+  assert.equal(changesBtn(tab).getAttribute("aria-pressed"), "true");
+  assert.equal(p.st.git.shows.length, 1, "the toggle reuses the text the gutter asked for");
+  assert.ok(d.laid > 0);
+  [...d.updated].forEach((f) => f()); // Monaco computed the diff
+  assert.equal(d.revealed, 1, "it opens at the first change");
+  assert.equal(d.updated.length, 0);
+  // The tab's own state does not change under it.
+  assert.equal(tab.dirty(), true);
+  assert.equal(tab.model.value, BUF_TEXT + "unsaved\n");
+});
+
+test("Changes: the status bar reads the cursor of the diff's new side", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  changesBtn(tab).click();
+  const m = p.st.diffs[0].modified;
+  m.getPosition = () => ({ lineNumber: 4, column: 7 });
+  m.cursorSubs.forEach((f) => f());
+  assert.match(tab.sbParts.pos.textContent, /4/);
+  assert.match(tab.sbParts.pos.textContent, /7/);
+});
+
+test("Changes: leaving it disposes the diff editor and the model of the base text, and the editor is back at the place it was left", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  const ed = p.st.editors[0];
+  ed.top = 240;
+  changesBtn(tab).click();
+  const d = p.st.diffs[0];
+  const original = d.model.original;
+  p.st.log.length = 0;
+  tab.seg.code.click();
+  assert.equal(d.disposed, true);
+  assert.equal(original.disposed, true, "the base text's model is let go");
+  assert.equal(tab.model.disposed, false, "the tab's own model is not the view's");
+  assert.deepEqual(p.st.log.slice(0, 2), ["diff.setModel(null)", "diff.dispose"]);
+  assert.ok(p.st.log.some((l) => l.startsWith("dispose#")), "and the base model is disposed after the editor that held it");
+  assert.equal(tab.diff, null);
+  assert.deepEqual(tab.bodyEl.children, [p.get("dockEditorEl")], "the shared editor is the body again");
+  assert.deepEqual(ed.restored.at(-1), { saved: true, top: 240 }, "at the place it was left");
+  assert.deepEqual(gutter(p), MARKS, "and its gutter is drawn");
+  assert.equal(tab.seg.code.getAttribute("aria-pressed"), "true");
+  assert.equal(ed.focused, 1, "Code takes the keyboard back");
+  assert.equal(tab.showChanges(false), false);
+  // Another round makes a fresh view, and nothing is left behind.
+  changesBtn(tab).click();
+  assert.equal(p.st.diffs.length, 2);
+  assert.equal(p.st.diffs[1].disposed, false);
+});
+
+test("Changes: a tab closed in Changes disposes the diff editor and the base text's model, the timer and the subscription", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  changesBtn(tab).click();
+  const d = p.st.diffs[0];
+  const original = d.model.original;
+  tab.model.type("again\n");
+  assert.equal(debounce(p).length, 1);
+  const model = tab.model;
+  tab.dispose();
+  assert.equal(d.disposed, true);
+  assert.equal(original.disposed, true);
+  assert.equal(model.disposed, true);
+  const at = (l) => p.st.log.indexOf(l);
+  assert.ok(at("diff.dispose") >= 0 && at("diff.dispose") < at("dispose#" + (p.st.models.indexOf(original) + 1)), "the editor that holds the models goes first");
+  assert.ok(at("diff.dispose") < at("dispose#" + (p.st.models.indexOf(model) + 1)));
+  assert.equal(debounce(p).length, 0, "the pending recompute is cancelled");
+  assert.equal(tab.changes, null);
+  assert.equal(tab.diff, null);
+  assert.equal(model.listeners.length, 0, "no subscription of the gutter's is left on the model");
+});
+
+test("Changes opens when the base text lands if the user asked before it was in", async () => {
+  const p = page();
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: BUF_TEXT, version: "v1" } });
+  p.st.git.answer = okBlob(HEAD_TEXT); // status not known: nothing is asked by itself
+  p.setShown(true);
+  const tab = await p.open();
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 0);
+  assert.equal(changesBtn(tab).getAttribute("aria-disabled"), "false", "nothing says Changes cannot be had");
+  changesBtn(tab).click(); // asks, whatever the status says
+  await p.settle();
+  assert.equal(p.st.git.shows.length, 1);
+  assert.equal(p.st.diffs.length, 1);
+  assert.ok(tab.diff);
+});
+
+test("view: changes at open: the file opens in Changes once the model and the base text are in, in either order of attach and read", async () => {
+  // The model first, then the dock attaches the tab (what open() does).
+  const a = await withGit(okBlob(HEAD_TEXT), BUF_TEXT, { opts: { view: "changes" } });
+  assert.equal(a.p.st.diffs.length, 1);
+  assert.ok(a.tab.diff);
+  assert.deepEqual(a.tab.bodyEl.children.map((c) => c.className), ["dk-ed-cmp"]);
+  assert.equal(a.p.st.editors.length, 0, "no Code editor was made for a file that opened in Changes");
+  a.tab.seg.code.click();
+  assert.equal(a.p.st.editors.length, 1, "Code makes it when asked for");
+  assert.deepEqual(a.tab.bodyEl.children, [a.p.get("dockEditorEl")]);
+
+  // Attached while the file is still being read (the dock's order).
+  const p = page();
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: BUF_TEXT, version: "v1" } });
+  p.st.git.on = true;
+  p.st.git.answer = okBlob(HEAD_TEXT);
+  p.setShown(true);
+  const tab = new p.EditorTab("/p/a.go", { host: p.host, view: "changes" });
+  tab.onAttach();
+  for (let i = 0; i < 50 && !tab.diff; i++) await new Promise((r) => setImmediate(r));
+  assert.ok(tab.diff, "opened in Changes");
+  assert.equal(p.st.git.shows.length, 1, "one request: the gutter's, which Changes reuses");
+  assert.equal(p.st.diffs.length, 1);
+
+  // Git cannot give the base text: the file stays in Code, and the toast says why.
+  const u = await withGit({ state: "unavailable", reason: "Git status needs the box runtime (docker)" }, BUF_TEXT, { opts: { view: "changes" } });
+  assert.equal(u.p.st.diffs.length, 0);
+  assert.equal(u.tab.diff, null);
+  assert.deepEqual(u.p.st.toasts.at(-1), ["Changes unavailable: Git status needs the box runtime (docker)", undefined]);
+  assert.deepEqual(u.tab.bodyEl.children, [u.p.get("dockEditorEl")]);
+});
+
+test("Changes: a call with no argument (a badge's click on a tab that is open) turns it on, and one with false goes back", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  assert.equal(tab.showChanges(), true);
+  assert.equal(p.st.diffs.length, 1);
+  assert.equal(tab.showChanges(), true, "already on");
+  assert.equal(p.st.diffs.length, 1, "not made twice");
+  assert.equal(tab.showChanges(false), false);
+  assert.equal(tab.diff, null);
+});
+
+test("Changes: the label follows the scope; a switch of scope or a new HEAD while it is open puts the new base text in place", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  p.st.git.answer = (b) => okBlob(b.scope === "branch" ? "l1\nl2\n" : HEAD_TEXT);
+  changesBtn(tab).click();
+  const d = p.st.diffs[0];
+  const label = () => tab.bodyEl.children[0].children[0].children[0].textContent;
+  assert.equal(label(), "vs HEAD");
+  p.st.git.scope = "branch";
+  p.st.git.base = { mergeBase: "mb1", baseName: "main" };
+  p.get("editorDiffSync")(); // dockChangesRefresh: the scope was picked
+  await p.settle();
+  assert.equal(p.st.diffs.length, 1, "the same view, not a new one");
+  assert.equal(d.model.original.value, "l1\nl2\n", "the removed side is the merge base's text");
+  assert.deepEqual(d.model.original.sets, ["l1\nl2\n"]);
+  assert.equal(label(), "vs main (merge base)");
+  assert.equal(changesBtn(tab).title, "Changes vs main (merge base)");
+  p.st.git.scope = "head";
+  p.get("editorDiffSync")();
+  await p.settle();
+  assert.equal(d.model.original.value, HEAD_TEXT);
+  assert.equal(label(), "vs HEAD");
+  // Git can no longer give it: the view goes, and says why.
+  p.st.git.head = "h9";
+  p.st.git.answer = { state: "unavailable", reason: "Git took too long" };
+  p.get("editorDiffSync")();
+  await p.settle();
+  assert.equal(tab.diff, null);
+  assert.equal(d.disposed, true);
+  assert.deepEqual(p.st.toasts.at(-1), ["Changes unavailable: Git took too long", undefined]);
+  assert.equal(changesBtn(tab).getAttribute("aria-disabled"), "true");
+  assert.deepEqual(tab.bodyEl.children, [p.get("dockEditorEl")], "back in Code");
+});
+
+test("a tab left in Changes comes back in Changes: no new diff editor, and the gutter and the timer sleep while it is hidden", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  changesBtn(tab).click();
+  const d = p.st.diffs[0];
+  tab.model.type("more\n");
+  assert.equal(debounce(p).length, 1);
+  tab.onHide();
+  assert.equal(debounce(p).length, 0, "the recompute pending for a hidden tab is cancelled");
+  tab.model.type("hidden\n");
+  assert.equal(debounce(p).length, 0, "and a hidden tab's edits schedule none");
+  assert.equal(d.disposed, false, "the view is kept");
+  const laid = d.laid;
+  tab.onAttach();
+  assert.equal(p.st.diffs.length, 1);
+  assert.equal(tab.diff.diff, d);
+  assert.deepEqual(tab.bodyEl.children.map((c) => c.className), ["dk-ed-cmp"]);
+  assert.ok(d.laid > laid, "laid out again");
+  assert.equal(d.options.length, 1, "with the preferences of now");
+});
+
+test("the gutter is drawn again when a tab that another tab's claim of the editor stripped is shown again", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  assert.deepEqual(gutter(p), MARKS);
+  tab.onHide();
+  p.st.git.answer = okBlob(BUF_TEXT);
+  const second = await p.open("/p/b.go"); // its text is its base: no marks
+  await p.settle();
+  assert.deepEqual(gutter(p), [], "the first tab's marks went with its model");
+  second.onHide();
+  tab.onAttach(); // not edited meanwhile: the same marks as before, which must still be drawn
+  assert.deepEqual(gutter(p), MARKS);
+  assert.equal(p.st.git.shows.length, 2, "one request for each file: the first tab's text is kept");
+  tab.onHide();
+  tab.model.type("one more\n"); // while hidden: the gutter does not see it
+  second.onAttach();
+  tab.onAttach();
+  assert.deepEqual(gutter(p), [["dk-g-mod", 1, 1]], "drawn again for the buffer as it is now");
+});
+
+test("a path:line link bands the line with dk-target in Code and Changes, and the first change of the text takes the band away", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), "l1\nl2\nl3\nl4\nl5\n", { opts: { line: 3 } });
+  const band = () => tab.model.decor.list().map((d) => [d.options.className, d.options.marginClassName, d.range.startLineNumber, d.range.endLineNumber, d.options.isWholeLine]);
+  assert.deepEqual(band(), [["dk-target", "dk-target-m", 3, 3, true]]);
+  changesBtn(tab).click();
+  const d = p.st.diffs[0];
+  assert.deepEqual(band(), [["dk-target", "dk-target-m", 3, 3, true]], "a decoration of the model: the new side of the diff has it too");
+  [...d.updated].forEach((f) => f());
+  assert.deepEqual(d.modified.revealed, [3], "Changes opens at the line the link asked for");
+  assert.equal(d.revealed, 0, "not at the first change");
+  tab.revealLine(5); // another link, to the open tab
+  assert.deepEqual(d.modified.revealed, [3, 5]);
+  assert.deepEqual(band(), [["dk-target", "dk-target-m", 5, 5, true]], "one band: the new line's");
+  tab.model.type("changed\n");
+  assert.deepEqual(band(), [], "an edit takes it away");
+});
+
+test("the toggle: Code and Changes are a pressed pair; a press on Code in Code does nothing but give the keyboard", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  const { el, code, changes } = tab.seg;
+  assert.equal(el.className, "seg dk-seg");
+  assert.equal(el.getAttribute("role"), "group");
+  assert.deepEqual([code.textContent, changes.textContent], ["Code", "Changes"]);
+  assert.equal(code.getAttribute("aria-pressed"), "true");
+  assert.equal(changes.getAttribute("aria-pressed"), "false");
+  assert.equal(changes.title, "Changes vs HEAD");
+  assert.ok(tab.actsEl.children.indexOf(el) < tab.actsEl.children.indexOf(tab.moreBtn), "before the ⋯");
+  code.click();
+  assert.equal(p.st.diffs.length, 0);
+  changes.click();
+  changes.click();
+  assert.equal(p.st.diffs.length, 1, "a second press on Changes does not make a second view");
+  assert.equal(tab.seg.changes.getAttribute("aria-pressed"), "true");
+});
+
+test("the stored scroll of a tab is where the file is read, in Code and in Changes (layout.js savedScroll takes fileScroll once `changes` is set)", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  const ed = p.st.editors[0];
+  ed.top = 360;
+  const saved = (t) => (t.changes ? t.fileScroll : t.scroll); // layout.js savedScroll
+  assert.ok(tab.changes, "changes is set in Code too: the gutter's data");
+  assert.equal(tab.scroll, 360);
+  assert.equal(saved(tab), 360, "not the 0 of a viewer that never scrolled");
+  changesBtn(tab).click();
+  ed.top = 0; // whatever the hidden editor does
+  assert.equal(tab.scroll, 360, "in Changes the file's place is the one it was left at");
+  assert.equal(saved(tab), 360);
+});
+
+test("Changes: Mod+S in the tab still saves the buffer (a save is not typing); the view follows what was saved", async () => {
+  const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
+  tab.model.type("saved text\n");
+  changesBtn(tab).click();
+  tab.el.listeners.keydown(keydown());
+  await p.settle();
+  assert.equal(p.st.writes.length, 1);
+  assert.equal(p.st.writes[0].content, "saved text\n");
+  assert.equal(tab.dirty(), false);
+  assert.ok(tab.diff, "still in Changes");
+});
+
+test("editordiff's pure pieces: the label, the answer's reading, the decorations", async () => {
+  const p = page();
+  const label = p.get("editorDiffLabel");
+  assert.equal(label("head", ""), "vs HEAD");
+  assert.equal(label("branch", "origin/main"), "vs origin/main (merge base)");
+  assert.equal(label("branch", ""), "vs the merge base");
+  const base = p.get("editorDiffBase");
+  assert.deepEqual(base({ state: "ok", content: "x" }), { head: "x", missing: false, why: "" });
+  assert.deepEqual(base({ state: "ok", missing: true, content: "" }), { head: "", missing: true, why: "" });
+  assert.equal(base({ state: "ok", content: "partial", truncated: true }).head, null, "a text cut at the cap is not a base to diff against");
+  assert.equal(base({ state: "ok" }).head, "", "an ok answer with no content is an empty file");
+  assert.equal(base(undefined).head, null);
+  assert.equal(base({ state: "weird" }).head, null);
+  const decs = p.get("editorDiffDecorations")([{ kind: "add", from: 1, to: 2 }, { kind: "del", from: 4, to: 4 }, { kind: "mod", from: 3, to: 9 }], 3, 1);
+  assert.deepEqual(decs.map((d) => [d.options.linesDecorationsClassName, d.range.startLineNumber, d.range.endLineNumber]), [["dk-g-add", 1, 2], ["dk-g-del", 3, 3], ["dk-g-mod", 3, 3]], "clamped to the buffer");
+  assert.deepEqual(decs.map((d) => d.options.overviewRuler.position), [1, 1, 1]);
+  assert.ok(decs.every((d) => d.range.startColumn === 1 && d.range.endColumn > 1000));
 });

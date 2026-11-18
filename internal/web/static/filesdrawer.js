@@ -209,8 +209,8 @@ function drawerSessionCwd(sid) {
 //  - alt: {base, rel} of a relative terminal link (the viewer looks in other
 //    checkouts on a 404);
 //  - view: "changes" opens the file's diff vs HEAD (a tree badge's click), in a
-//    viewer that is open already too (it refuses, with a toast, while the file is
-//    being edited);
+//    viewer that is open already too (Changes compares the buffer, so an unsaved
+//    edit shows; it says why in a toast when git cannot give the HEAD text);
 //  - box: the session id of a file that exists only in that session's box.
 // Returns false only for no path.
 function drawerShowFile(path, opts) {
@@ -236,7 +236,7 @@ function drawerShowFile(path, opts) {
   dockShow({ user: key, line: o.line, col: o.col, alt: o.alt, view: o.view });
   if (had) { // an open viewer is told what the link or the badge asked of it
     if (o.line && typeof had.revealLine === "function") had.revealLine(o.line, o.col);
-    if (o.view === "changes") had.showChanges(); // refuses (with a toast) while the file is being edited
+    if (o.view === "changes") had.showChanges(); // says why in a toast when it cannot
   }
   dockTreeFold(); // a file chosen from the column opened off the strip: the column folds again
   return true;
@@ -897,6 +897,8 @@ const drawerToolbarHost = {
   onDirtyChange: () => dockRender(),
   // The conflict bar's "<session> changed <file>": the session the dock shows.
   sessionName: () => (typeof drawerSessionName === "function" ? drawerSessionName(drawerState.sessionId) : ""),
+  // The session whose scope (Uncommitted or Branch) the editor's diff against git follows.
+  sessionId: () => drawerState.sessionId || null,
   // The deleted bar's Close: the tab's own close, which asks first when the buffer holds an edit.
   closeTab: (v) => {
     const key = dockKeyOf(v);
