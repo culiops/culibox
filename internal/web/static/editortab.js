@@ -363,50 +363,15 @@ class EditorTab {
     this.load();
   }
 
-  // setAltNote shows where the file was opened from, as text (the worktree name is a directory name on disk).
+  // setAltNote shows where the file was opened from (altNoteNodes, viewer-tab.js: the phone's viewer draws the same).
   setAltNote(worktree) {
-    const n = altNote(worktree);
-    this.altEl.replaceChildren(n.pre);
-    if (n.name) {
-      const code = document.createElement("code");
-      code.textContent = n.name;
-      this.altEl.append(code, n.post);
-    }
+    this.altEl.replaceChildren(...altNoteNodes(worktree));
     this.altEl.hidden = false;
   }
 
-  // showAltPick lists the other checkouts that hold the file, in the tab: a list, not a modal.
+  // showAltPick lists the other checkouts that hold the file, in the tab: a list, not a modal (altPickNode, viewer-tab.js).
   showAltPick(items, alt, line) {
-    const box = document.createElement("div");
-    box.className = "viewer-msg viewer-alts";
-    const h = document.createElement("div");
-    h.className = "viewer-alts-title";
-    h.textContent = "This file exists in " + items.length + " places";
-    const sub = document.createElement("div");
-    sub.className = "viewer-alts-sub";
-    sub.textContent = alt.rel + " was not found here. Pick the copy to open:";
-    box.append(h, sub);
-    const now = Date.now() / 1000;
-    for (const it of items) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "viewer-alt";
-      b.title = it.path;
-      const name = document.createElement("span");
-      name.className = "viewer-alt-name";
-      name.textContent = it.worktree || "main checkout";
-      b.append(name);
-      const ago = agoText(it.mtime, now);
-      if (ago) {
-        const t = document.createElement("span");
-        t.className = "viewer-alt-ago";
-        t.textContent = ago;
-        b.append(t);
-      }
-      b.onclick = () => this.openAlternate(it.path, it.worktree, line);
-      box.append(b);
-    }
-    this.bodyEl.replaceChildren(box);
+    this.bodyEl.replaceChildren(altPickNode(items, alt, (it) => this.openAlternate(it.path, it.worktree, line)));
   }
 
   // --- the dock's lifecycle ---------------------------------------------------------------------------------

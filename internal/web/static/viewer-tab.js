@@ -743,53 +743,17 @@ class ViewerTab {
     this.load();
   }
 
-  // setAltNote shows where the file was opened from; null clears it. Text only:
-  // the worktree name comes from a directory name on disk.
+  // setAltNote shows where the file was opened from; null clears it (altNoteNodes draws it).
   setAltNote(worktree) {
     if (worktree === null) { this.noteEl.hidden = true; this.noteEl.replaceChildren(); return; }
-    const n = altNote(worktree);
-    this.noteEl.replaceChildren(n.pre);
-    if (n.name) {
-      const code = document.createElement("code");
-      code.textContent = n.name;
-      this.noteEl.append(code, n.post);
-    }
+    this.noteEl.replaceChildren(...altNoteNodes(worktree));
     this.noteEl.hidden = false;
   }
 
   // renderAltPick: several other checkouts hold the file. A list in the pane, not
   // a modal: it works on a phone and cannot collide with #ask-modal's single slot.
   renderAltPick(items, alt, line) {
-    const box = document.createElement("div");
-    box.className = "viewer-msg viewer-alts";
-    const h = document.createElement("div");
-    h.className = "viewer-alts-title";
-    h.textContent = "This file exists in " + items.length + " places";
-    const sub = document.createElement("div");
-    sub.className = "viewer-alts-sub";
-    sub.textContent = alt.rel + " was not found here. Pick the copy to open:";
-    box.append(h, sub);
-    const now = Date.now() / 1000;
-    for (const it of items) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "viewer-alt";
-      b.title = it.path;
-      const name = document.createElement("span");
-      name.className = "viewer-alt-name";
-      name.textContent = it.worktree || "main checkout";
-      b.append(name);
-      const ago = agoText(it.mtime, now);
-      if (ago) {
-        const t = document.createElement("span");
-        t.className = "viewer-alt-ago";
-        t.textContent = ago;
-        b.append(t);
-      }
-      b.onclick = () => this.openAlternate(it.path, it.worktree, line);
-      box.append(b);
-    }
-    this.content.replaceChildren(box);
+    this.content.replaceChildren(altPickNode(items, alt, (it) => this.openAlternate(it.path, it.worktree, line)));
     this.showingMsg = true;
     this.hasLines = false;
     this.lastContent = null;
@@ -1216,6 +1180,53 @@ function toggleViewerWrap() {
   ViewerTab.applyWrapAll();
   for (const restore of restores) restore();
   return on;
+}
+
+// altNoteNodes: what goes in the one-line note over a file opened from another checkout (#53), for replaceChildren: the
+// sentence, with the worktree's name in <code> when there is one. Text only: the name comes from a directory name on disk.
+// The phone's ViewerTab and the dock's EditorTab both draw it, so there is one copy of the markup.
+function altNoteNodes(worktree) {
+  const n = altNote(worktree);
+  if (!n.name) return [n.pre];
+  const code = document.createElement("code");
+  code.textContent = n.name;
+  return [n.pre, code, n.post];
+}
+
+// altPickNode: the list shown when several other checkouts hold the file a terminal link named (#53): a title, a line saying
+// what was not found, and a button per copy (its worktree, or "main checkout", and how long ago it changed). `onPick(item)`
+// is called with the item whose button was pressed. Text only. Shared by ViewerTab and EditorTab, like altNoteNodes.
+function altPickNode(items, alt, onPick) {
+  const box = document.createElement("div");
+  box.className = "viewer-msg viewer-alts";
+  const h = document.createElement("div");
+  h.className = "viewer-alts-title";
+  h.textContent = "This file exists in " + items.length + " places";
+  const sub = document.createElement("div");
+  sub.className = "viewer-alts-sub";
+  sub.textContent = alt.rel + " was not found here. Pick the copy to open:";
+  box.append(h, sub);
+  const now = Date.now() / 1000;
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "viewer-alt";
+    b.title = it.path;
+    const name = document.createElement("span");
+    name.className = "viewer-alt-name";
+    name.textContent = it.worktree || "main checkout";
+    b.append(name);
+    const ago = agoText(it.mtime, now);
+    if (ago) {
+      const t = document.createElement("span");
+      t.className = "viewer-alt-ago";
+      t.textContent = ago;
+      b.append(t);
+    }
+    b.onclick = () => onPick(it);
+    box.append(b);
+  }
+  return box;
 }
 
 function escapeHtml(s) {
