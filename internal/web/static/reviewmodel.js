@@ -208,9 +208,38 @@ function loadReviewed(storage, liveSids) {
   return out;
 }
 
+// --- image diff (imagediff.js) ---------------------------------------------------------------------------------------------
+
+// imgNum: v as a finite-or-infinite number, or NaN for anything that is not one (null, "", "  ", an object: Number() would make
+// 0 of the first three, and the divider or the blend must not jump to an end for want of a value). A numeric string is a number:
+// an <input type=range> hands its value over as one.
+function imgNum(v) {
+  if (typeof v === "number") return v;
+  if (typeof v === "string" && v.trim() !== "") return Number(v);
+  return NaN;
+}
+
+// swipeClip: where the Swipe divider is, as a percent (0..100) of the image's width, from `x` px in a box `width` px wide. The
+// new image is clipped to the part right of it. Clamped, so a drag past either edge sits on the edge; no usable width (not laid
+// out yet: zero, negative, not a number) or position gives the middle (50), never NaN.
+function swipeClip(x, width) {
+  const w = imgNum(width);
+  const px = imgNum(x);
+  if (!(w > 0) || w === Infinity || Number.isNaN(px)) return 50;
+  return Math.min(100, Math.max(0, (px / w) * 100));
+}
+
+// onionOpacity: the opacity (0..1) of the new image over the old one for the Onion skin slider's value (0..100). Clamped; a value
+// that is no number is the half-way blend (0.5), the slider's own start.
+function onionOpacity(v) {
+  const n = imgNum(v);
+  if (Number.isNaN(n)) return 0.5;
+  return Math.min(1, Math.max(0, n / 100));
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     REVIEWED_KEY, reviewFp, reviewMarkFor, reviewedState, reviewedCount, nextChange, pasteGate, saveReviewed, loadReviewed,
-    reviewRows, reviewNeighbour, reviewFirstOpen, reviewLineOf, reviewChangePos, notesPendingByPath,
+    reviewRows, reviewNeighbour, reviewFirstOpen, reviewLineOf, reviewChangePos, notesPendingByPath, swipeClip, onionOpacity,
   };
 }

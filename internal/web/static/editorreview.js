@@ -95,6 +95,7 @@ function editorReviewChanged() {
 // editorReviewRefresh: the Changes view on screen (if any) repaints its header: the rows or Activity's list moved.
 function editorReviewRefresh() {
   if (edTab && edTab.diff) editorReviewPaint(edTab);
+  editorImageSync(); // an image tab's toggle and comparer follow the same rows (imagediff.js)
 }
 
 function editorReviewSid(tab) {
@@ -288,6 +289,11 @@ function reviewOpenNext(sid, fromPath, dir) {
 // editorReviewKey: F7, Shift+F7 and Alt+Z pressed in the tab but outside the editor (on the header's buttons): the same as inside it.
 // true when it did something (the caller stops the key).
 function editorReviewKey(tab, e) {
+  if (editorImageOn(tab)) { // an image's Changes view: no change inside it to step to, so F7 goes straight to the next file
+    const dir = shortcutMatches("editor.nextChange", e, IS_MAC) ? 1 : shortcutMatches("editor.prevChange", e, IS_MAC) ? -1 : 0;
+    if (dir) editorImageStep(tab, dir);
+    return dir !== 0;
+  }
   if (!tab.diff) return false;
   if (shortcutMatches("editor.nextChange", e, IS_MAC)) { editorReviewStep(tab, 1); return true; }
   if (shortcutMatches("editor.prevChange", e, IS_MAC)) { editorReviewStep(tab, -1); return true; }

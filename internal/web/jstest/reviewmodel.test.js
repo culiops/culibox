@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   REVIEWED_KEY, reviewFp, reviewMarkFor, reviewedState, reviewedCount, nextChange, pasteGate, saveReviewed, loadReviewed,
-  reviewRows, reviewNeighbour, reviewFirstOpen, reviewLineOf, reviewChangePos, notesPendingByPath,
+  reviewRows, reviewNeighbour, reviewFirstOpen, reviewLineOf, reviewChangePos, notesPendingByPath, swipeClip, onionOpacity,
 } = require("../static/reviewmodel.js");
 
 function store(init) {
@@ -248,4 +248,41 @@ test("notesPendingByPath counts pending notes per file and nothing else", () => 
   assert.deepStrictEqual(notesPendingByPath([n("/r/a.go", "pending"), n("/r/a.go", "pending"), n("/r/b.go", "pending"), n("/r/a.go", "sent"), null, 4, { status: "pending" }]), { "/r/a.go": 2, "/r/b.go": 1 });
   assert.deepStrictEqual(notesPendingByPath(undefined), {});
   assert.deepStrictEqual(notesPendingByPath({ a: 1 }), {});
+});
+
+test("swipeClip is the divider's place as a percent of the width, clamped to 0..100", () => {
+  assert.strictEqual(swipeClip(0, 200), 0);
+  assert.strictEqual(swipeClip(50, 200), 25);
+  assert.strictEqual(swipeClip(200, 200), 100);
+  assert.strictEqual(swipeClip(-30, 200), 0, "left of the image");
+  assert.strictEqual(swipeClip(260, 200), 100, "right of the image");
+  assert.strictEqual(swipeClip(-Infinity, 200), 0);
+  assert.strictEqual(swipeClip(Infinity, 200), 100);
+});
+
+test("swipeClip with no usable width or position is the middle, never NaN", () => {
+  assert.strictEqual(swipeClip(10, 0), 50, "zero width");
+  assert.strictEqual(swipeClip(10, -5), 50, "negative width");
+  assert.strictEqual(swipeClip(10, NaN), 50);
+  assert.strictEqual(swipeClip(10, Infinity), 50);
+  assert.strictEqual(swipeClip(NaN, 200), 50);
+  assert.strictEqual(swipeClip(undefined, 200), 50);
+  assert.strictEqual(swipeClip(null, 200), 50);
+  assert.strictEqual(swipeClip("40", 200), 20, "a numeric string counts");
+  assert.strictEqual(swipeClip("x", 200), 50);
+});
+
+test("onionOpacity maps the slider's 0..100 to 0..1, clamped", () => {
+  assert.strictEqual(onionOpacity(0), 0);
+  assert.strictEqual(onionOpacity(50), 0.5);
+  assert.strictEqual(onionOpacity(100), 1);
+  assert.strictEqual(onionOpacity(-10), 0);
+  assert.strictEqual(onionOpacity(250), 1);
+  assert.strictEqual(onionOpacity(-Infinity), 0);
+  assert.strictEqual(onionOpacity(Infinity), 1);
+  assert.strictEqual(onionOpacity("25"), 0.25, "an input's value is a string");
+});
+
+test("onionOpacity of nothing usable is the half-way blend, never NaN", () => {
+  for (const v of [NaN, undefined, null, "", "  ", "abc", {}, []]) assert.strictEqual(onionOpacity(v), 0.5, String(v));
 });

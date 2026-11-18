@@ -53,7 +53,20 @@ const viewerPrefs = (function () {
     write(Object.assign(read(), { diffWrap }));
   }
 
-  return { KEY, getWrap, setWrap, getDiffMode, setDiffMode, getDiffWrap, setDiffWrap };
+  // The image comparer's mode (imagediff.js): "side" (Side by side, the default), "swipe" or "onion" (Onion skin). Anything else stored
+  // reads as the default.
+  const IMG_MODES = ["side", "swipe", "onion"];
+  let imgDiffMode = null;
+  function getImgDiffMode() {
+    if (imgDiffMode === null) { const m = read().imgDiffMode; imgDiffMode = IMG_MODES.includes(m) ? m : "side"; }
+    return imgDiffMode;
+  }
+  function setImgDiffMode(m) {
+    imgDiffMode = IMG_MODES.includes(m) ? m : "side";
+    write(Object.assign(read(), { imgDiffMode }));
+  }
+
+  return { KEY, getWrap, setWrap, getDiffMode, setDiffMode, getDiffWrap, setDiffWrap, getImgDiffMode, setImgDiffMode };
 })();
 
 if (typeof module !== "undefined" && module.exports) {

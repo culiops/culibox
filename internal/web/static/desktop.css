@@ -1500,6 +1500,40 @@
   }
   /* The Changes view (editordiff.js) fills the tab's body, in place of the editor; its header is the compare view's. */
   .dk-ed-body > .dk-ed-cmp { position: absolute; inset: 0; }
+  /* An image's Changes view (imagediff.js): the tab's header row (.dk-dhead, as the text view's), then a scrolling body holding the comparer.
+     Its mode control (.dk-imgmode, the kit's .seg) is centred over the stage. Side by side wraps to one column when the dock is narrow. A
+     picture sits on a faint checkerboard so a transparent one reads as one. Swipe and Onion skin lay the two pictures in the same grid
+     cell; the divider (a slider, role and keys in the script) is a line with a knob, and its hit area is wider than the line. */
+  .dk-imgd-tab { background: var(--bg); }
+  .dk-imgd-tab:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-imgd-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+  .dk-imgd { box-sizing: border-box; min-height: 100%; padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
+  .dk-imgd-bar { flex: none; display: flex; justify-content: center; }
+  .dk-imgd-bar[hidden] { display: none; }
+  .dk-imgmode.seg { flex: none; }
+  .dk-imgd-stage { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); min-width: 0; }
+  .dk-imgd-side { width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-4); align-items: start; }
+  .dk-imgd-fig { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+  .dk-imgd-lab { color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
+  .dk-imgd-frame, .dk-imgd-stack {
+    border: 1px solid var(--line); border-radius: var(--r-ctl); overflow: hidden; background-color: var(--panel);
+    background-image: conic-gradient(var(--bg) 25%, transparent 0 50%, var(--bg) 0 75%, transparent 0); background-size: 16px 16px;
+  }
+  .dk-imgd-frame { display: flex; align-items: center; justify-content: center; min-height: 96px; padding: var(--sp-2); }
+  .dk-imgd-img { display: block; max-width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+  .dk-imgd-cap { color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-mono); font-variant-numeric: tabular-nums; text-align: center; }
+  .dk-imgd-msg { color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui); text-align: center; padding: var(--sp-3); overflow-wrap: anywhere; }
+  .dk-imgd-msg.err { color: var(--red); }
+  .dk-imgd-stack { position: relative; display: grid; width: fit-content; max-width: 100%; touch-action: pan-y; user-select: none; }
+  .dk-imgd-layer { grid-area: 1 / 1; min-width: 0; }
+  .dk-imgd-onion > .dk-imgd-img { grid-area: 1 / 1; justify-self: start; align-self: start; }
+  .dk-imgd-swipe { cursor: ew-resize; }
+  .dk-imgd-div { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); cursor: ew-resize; touch-action: none; }
+  .dk-imgd-div::before { content: ""; position: absolute; top: 0; bottom: 0; left: -9px; right: -9px; }
+  .dk-imgd-div:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); } /* the stage clips an outside outline: a halo along the line */
+  .dk-imgd-knob { position: absolute; top: 50%; left: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; box-sizing: border-box; border-radius: 50%; background: var(--bg); border: 2px solid var(--accent); }
+  .dk-imgd-blend { display: flex; align-items: center; gap: var(--sp-2); width: min(320px, 100%); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
+  .dk-imgd-range { flex: 1; min-width: 0; accent-color: var(--accent); }
   /* The markdown Preview (editormd.js) fills the body the same way, and is the scroller. The document is the phone's .md-body (app.css),
      given mockup B4's margins: 36px on the left and 28px on the right, 18px above. The pane takes the keyboard (Mod+S, the arrows),
      so its ring sits inside it. */

@@ -23,8 +23,8 @@
 //   lineChanges  lineDiff's changes of head against the buffer (P3 reads them); [] when capped or head is null;
 //   capped       lineDiff declined (too big, or too different): no marks, and no cost per keystroke;
 //   at           when the answer landed.
-// A box tab has no host git: no request, the toggle says so. An image or a binary file has no toggle at all (the EditorTab's inner
-// viewer owns the bar).
+// A box tab has no host git: no request, the toggle says so. A binary file has no toggle at all (the EditorTab's inner viewer owns
+// the bar), and an image has its own Image | Changes toggle and comparer (imagediff.js).
 //
 // The Changes view (P3). Side by side is the default (Monaco's own `useInlineViewWhenSpaceIsLimited` makes a narrow dock inline by
 // itself), and the Inline | Side by side control in the dock's bar, the ⋯ menu's Line numbers and Wrap diff are the reader's: the mode
@@ -284,7 +284,7 @@ function editorWrapKey() {
 // says "reviewed n of m" while one is.
 function editorDiffAnyChanges() {
   if (typeof dockViewerList !== "function") return false;
-  return dockViewerList().some((t) => !t.disposed && !t.inner && (!!t.diff || !!t.pendingChanges || !!(t.dg && t.dg.resume)));
+  return dockViewerList().some((t) => !t.disposed && ((!t.inner && (!!t.diff || !!t.pendingChanges || !!(t.dg && t.dg.resume))) || editorImageOn(t)));
 }
 
 // editorDiffPaintToggle: which of them is on, and whether Changes can be had. Leaving Changes is always possible.
@@ -344,6 +344,7 @@ async function editorDiffPost(body) {
 // moved (a key is a few lookups), so every place that can move it calls this. `force`: the user asked for Changes, so git's status
 // being unknown yet is no reason to wait.
 function editorDiffSync(force) {
+  editorImageSync(); // an image's comparer follows the same key (imagediff.js)
   const tab = edTab;
   if (!tab || tab.disposed || !tab.attached || !tab.model || tab.inner) return;
   if (tab.box) return; // no host git for a file in a box

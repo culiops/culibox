@@ -119,3 +119,24 @@ test("with storage blocked the diff prefs live in memory", () => {
   assert.strictEqual(p.getDiffWrap(), true);
   global.localStorage = saved;
 });
+
+test("imgDiffMode is side by default, only side, swipe and onion are kept, a set round-trips and leaves the other prefs alone", () => {
+  for (const v of [null, "{not json", JSON.stringify({ imgDiffMode: "fade" }), JSON.stringify({ imgDiffMode: 1 }), JSON.stringify({ imgDiffMode: "SWIPE" })]) {
+    global.localStorage._v = v;
+    assert.strictEqual(fresh().getImgDiffMode(), "side", String(v));
+  }
+  for (const m of ["swipe", "onion", "side"]) {
+    global.localStorage._v = JSON.stringify({ imgDiffMode: m, wrap: true });
+    assert.strictEqual(fresh().getImgDiffMode(), m);
+  }
+  global.localStorage._v = JSON.stringify({ wrap: true, diffMode: "inline" });
+  const p = fresh();
+  p.setImgDiffMode("onion");
+  assert.strictEqual(p.getImgDiffMode(), "onion");
+  const o = JSON.parse(global.localStorage._v);
+  assert.strictEqual(o.imgDiffMode, "onion");
+  assert.strictEqual(o.wrap, true);
+  assert.strictEqual(o.diffMode, "inline", "the line diff's mode is left alone");
+  p.setImgDiffMode("anything else");
+  assert.strictEqual(p.getImgDiffMode(), "side", "an unknown mode is the default");
+});

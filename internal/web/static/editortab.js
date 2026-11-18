@@ -184,6 +184,7 @@ class EditorTab {
     this.modeSeg = null;        // the Inline | Side by side control, shown while in Changes: {el, inline, side}
     this.seg = null;            // the Code | Changes toggle in the bar (Preview | Source | Changes for markdown): {el, preview, code, changes}
     this.md = null;             // editormd.js: a markdown file's view and its Preview pane ({view, pane, text, timer, sub, top, live})
+    this.img = null;            // imagediff.js: an image's Image | Changes toggle and its comparer ({seg, on, view}), built with the bar
 
     this.el = document.createElement("div");
     this.el.className = "tab-body dk-ed";
@@ -239,7 +240,7 @@ class EditorTab {
     // stopPropagation: the document's closer for the kit menu would shut the menu this press opens.
     more.onclick = (e) => { e.stopPropagation(); this.openMenu(); };
     this.moreBtn = more;
-    this.actsEl.append(editorDiffToggle(this), editorDiffModeToggle(this), editorFollowButton(this), more);
+    this.actsEl.append(editorDiffToggle(this), editorDiffModeToggle(this), editorImageToggle(this), editorFollowButton(this), more);
     this.seg.el.hidden = true; // until the file is read as text (paint)
     more.hidden = true;
   }
@@ -297,6 +298,7 @@ class EditorTab {
     this.paintStatus();
     editorDiffPaintToggle(this);
     editorReviewPaint(this);
+    editorImagePaint(this);
     editorFollowPaintTab(this);
     editorSelBarUpdate(); // the Changes view or Preview took the editor's place, or gave it back: the bar is for Code only
   }
@@ -407,7 +409,9 @@ class EditorTab {
     this.pendingLine = null;
     this.el.replaceChildren(v.el);
     if (this.attached) { v.onShow(); v.onAttach(); }
-    this.changed(); // the viewer has its own toolbar: the bar keeps only Follow
+    this.changed(); // the viewer has its own toolbar: the bar keeps only Follow (and, for an image git lists, Image | Changes: imagediff.js)
+    // A D row, or a badge, asked for the Changes view: an image's is the comparer (a deleted one has only its old side).
+    if (mode === "image" && this.pendingChanges) { this.pendingChanges = false; editorImageSet(this, true); }
   }
 
   // findAlternates (#53): the first read of a relative terminal link was a 404. Look for the same repo-relative path
@@ -455,7 +459,7 @@ class EditorTab {
     const acts = document.getElementById("dock-acts");
     if (acts) acts.insertBefore(this.actsEl, document.getElementById("drawer-max"));
     this.placeBar(true);
-    if (this.inner) { this.inner.onAttach(); return; }
+    if (this.inner) { this.inner.onAttach(); if (editorImageOn(this)) editorImageEnter(this); return; }
     if (this.model) this.show();
     editorSyncStart(this); // the file on disk is asked about while this tab is the one on screen
   }
@@ -466,7 +470,11 @@ class EditorTab {
   placeBar(on) {
     const slot = on ? document.getElementById("dock-conflict") : null;
     if (slot) slot.replaceChildren(this.barEl);
-    else if (this.barEl.parentNode !== this.el) this.el.insertBefore(this.barEl, this.cmpEl);
+    else if (this.barEl.parentNode !== this.el) {
+      // An image or a binary file's tab (mountInner) holds only its viewer: cmpEl is no child of el, and insertBefore would throw out of
+      // dispose(). The bar is for a text file's conflicts: with no place in el it is simply taken out of the dock's slot.
+      if (this.cmpEl.parentNode === this.el) this.el.insertBefore(this.barEl, this.cmpEl); else this.barEl.remove();
+    }
   }
 
   // onHide: another tab is about to be shown. The view is kept for the way back.
@@ -534,6 +542,7 @@ class EditorTab {
   }
 
   focusReader() {
+    if (this.img && this.img.view) { this.img.view.el.focus({ preventScroll: true }); return; } // an image's comparer
     if (this.inner) { this.inner.focusReader(); return; }
     if (this.diff) { this.diff.diff.getModifiedEditor().focus(); return; }
     if (editorMdUp(this)) { this.md.pane.focus({ preventScroll: true }); return; }
@@ -551,6 +560,7 @@ class EditorTab {
     this.closeMenu();
     this.actsEl.remove();
     this.placeBar(false);
+    editorImageDispose(this); // the comparer's request and blob URL, before the viewer goes
     if (this.inner) this.inner.dispose();
     if (this.contentSub) this.contentSub.dispose();
     if (this.optionsSub) this.optionsSub.dispose();
@@ -734,6 +744,7 @@ class EditorTab {
   // showChanges(on): the Changes view (editordiff.js), the file against git's base, read-only; false goes back to Code. A call with
   // no argument turns it on, as ViewerTab.showChanges does (filesdrawer.js, a badge's click). Returns whether it is up or on its way.
   showChanges(on) {
+    if (this.inner && this.mode === "image") return editorImageSet(this, on !== false); // no Monaco: the comparer (imagediff.js)
     return editorDiffSet(this, on !== false);
   }
 
