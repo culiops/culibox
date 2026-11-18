@@ -12,8 +12,11 @@
 //
 // Two things the vendored 0.57.0 editor.main.js does by itself, measured, so this file does not:
 //  - it sets self.MonacoEnvironment = {getWorker}, replacing whatever the page set before it, and its
-//    getWorker starts every worker from /vendor/monaco/vs (the editor worker for a plain file, the json,
-//    css, html and ts workers for their languages), so the workers are the same origin without help;
+//    getWorker starts every worker from /vendor/monaco/vs (the editor worker for a plain file, the json
+//    worker for JSON), so the workers are the same origin without help. Its css, html and ts branches
+//    name workers that scripts/vendor-monaco.sh trims; nothing asks for them, because that script also
+//    stubs the chunks that would (JS, TS, CSS and HTML are highlighted by their Monarch tokenizers, with
+//    no language service, so no diagnostics squiggles);
 //  - it appends its own <link> for vs/editor/editor.main.css when it runs.
 
 const MONACO_BASE = "/vendor/monaco/vs";
