@@ -624,7 +624,7 @@ function openRowMenu(anchor, path, name, isDir, readOnly, at) {
   // toast already carries it on every folder download, and a toast is readable on
   // a phone where the old ⤓ tooltip never was.
   const act = {
-    insert: () => insertPathAtPrompt(path, { dock: true }),
+    insert: () => insertPathAtPrompt(path),
     copy: () => copyPath(path),
     copyrel: () => copyPath(relativeTo(ftRoot(), path)),
     copycontents: () => copyContents(path, name),
@@ -723,73 +723,15 @@ function ftShowMenu(anchor, nodes, alignLeft, kitLabel, at) {
 // whereas a relative path is silently wrong the moment the tree root and the
 // session's cwd diverge — which they do, because a manual root pick survives
 // until a DIFFERENT tab is focused.
-// opts.dock is the tree's row menu asking for the DOCK's target. The desktop tree is the dock's, and a pinned dock shows session
-// A's files while B may have the keyboard: the path goes to the dock session's terminal then, never to the focused one (it would
-// type A's file at B's prompt), unless the focused terminal is in that session's pane (dockInsertTarget). A dock session with no
-// terminal refuses. Without opts.dock (the palette's Ctrl/Cmd+Enter, whose contract is "at the focused prompt") and on the
-// phone's Files screen, where there is no dock, the target is the focused terminal, whatever the dock shows.
-function insertPathAtPrompt(path, opts) {
-  const dock = opts && opts.dock === true && typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerState !== "undefined" && drawerState
-    ? drawerState.sessionId : null;
-  const focused = typeof focusedTerminal === "function" ? focusedTerminal() : null;
-  let term = focused;
-  if (dock) {
-    term = dockInsertTarget(dock, focused);
-    if (!term) {
-      showToast("That session has no open terminal, so the path was not inserted", { error: true });
-      return;
-    }
-    if (!dockInsertVisible(term)) {
-      const name = typeof drawerSessionName === "function" ? drawerSessionName(dock) : "";
-      showToast((name ? name + "'s" : "That session's") + " terminal is a hidden tab: show it, then insert", { error: true });
-      return;
-    }
-  }
+function insertPathAtPrompt(path) {
+  const term = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
   const res = insertTextAtPrompt(term, shellQuote(path) + " ");
-  if (res.ok) { // closeRowMenu hid the button that had focus: the caret goes where the path went
-    if (dock && term !== focused) dockInsertFocus(term);
-    else focusTerminal();
-    return;
-  }
+  if (res.ok) { focusTerminal(); return; } // closeRowMenu hid the button that had focus
   showToast(
     res.reason === "noterm" ? "Focus a terminal first, then insert the path" :
     res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
     "That session is not connected, so the path was not inserted",
     { error: true });
-}
-
-// ftPaneOf: the pane (cell) that holds a terminal tab, as its agent tab or as a shell docked in it; null for none.
-function ftPaneOf(t) {
-  if (!t || typeof cells === "undefined") return null;
-  return cells.find((c) => c.tabs.includes(t) || c.dockTabFor(t.id) === t) || null;
-}
-
-// dockInsertTarget: where the tree's "Insert path at prompt" types for the dock's session `sid`. The session's own terminal, or
-// the shell docked in its pane that the user is typing in (Cell.dockTabFor: a companion shell, not a session tab). Never another
-// session's tab stacked in that pane (a full pane cap stacks sessions as tabs): that is another session's prompt. null when the
-// session has no terminal.
-function dockInsertTarget(sid, focused) {
-  const want = typeof terminalTabFor === "function" ? terminalTabFor(sid) : null;
-  const home = ftPaneOf(want);
-  if (focused && home && (focused === want || home.dockTabFor(focused.id) === focused)) return focused;
-  return want;
-}
-
-// dockInsertVisible: is the terminal on screen? It is its pane's active tab (Cell.activeTab: a stacked session tab or a viewer
-// over the terminals is not), or the docked shell its pane shows (Cell._shownShell: null while the dock is hidden). An inactive
-// tab is not in the page but its socket stays open, so a path typed at it would land unseen (perhaps in a permission card; P1 has
-// no state gate on insert), and the keyboard would go to whatever else the pane shows.
-function dockInsertVisible(term) {
-  const pane = ftPaneOf(term);
-  return !!pane && (pane.activeTab === term || pane._shownShell() === term);
-}
-
-// dockInsertFocus: the path went to a visible terminal other than the focused one, so its pane takes the focus first, as Show
-// terminal does (app.js dockShowTerminal): the pane's focus ring and focusedTerminal() are where the keys are. Then the keyboard.
-function dockInsertFocus(term) {
-  const pane = ftPaneOf(term);
-  if (pane && typeof setFocusedCell === "function") setFocusedCell(pane);
-  if (typeof term.grabFocus === "function") term.grabFocus();
 }
 
 // copyPath copies and says so: a clipboard write is otherwise invisible, and on
