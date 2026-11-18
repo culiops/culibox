@@ -624,7 +624,7 @@ function openRowMenu(anchor, path, name, isDir, readOnly, at) {
   // toast already carries it on every folder download, and a toast is readable on
   // a phone where the old ⤓ tooltip never was.
   const act = {
-    insert: () => insertPathAtPrompt(path),
+    insert: () => insertPathAtPrompt(path, { dock: true }),
     copy: () => copyPath(path),
     copyrel: () => copyPath(relativeTo(ftRoot(), path)),
     copycontents: () => copyContents(path, name),
@@ -723,25 +723,26 @@ function ftShowMenu(anchor, nodes, alignLeft, kitLabel, at) {
 // whereas a relative path is silently wrong the moment the tree root and the
 // session's cwd diverge — which they do, because a manual root pick survives
 // until a DIFFERENT tab is focused.
-// The desktop tree is the dock's, and a pinned dock shows session A's files while B may have the keyboard: the path goes to
-// the DOCK session's terminal then, never to the focused one (it would type A's file at B's prompt). A dock session with no
-// terminal refuses. The phone's Files screen is unchanged: the focused terminal.
-function insertPathAtPrompt(path) {
-  const dock = typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerState !== "undefined" && drawerState
+// opts.dock is the tree's row menu asking for the DOCK's target. The desktop tree is the dock's, and a pinned dock shows session
+// A's files while B may have the keyboard: the path goes to the dock session's terminal then, never to the focused one (it would
+// type A's file at B's prompt), unless the focused terminal is in that session's pane (dockInsertTarget). A dock session with no
+// terminal refuses. Without opts.dock (the palette's Ctrl/Cmd+Enter, whose contract is "at the focused prompt") and on the
+// phone's Files screen, where there is no dock, the target is the focused terminal, whatever the dock shows.
+function insertPathAtPrompt(path, opts) {
+  const dock = opts && opts.dock === true && typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerState !== "undefined" && drawerState
     ? drawerState.sessionId : null;
-  let term = null;
+  const focused = typeof focusedTerminal === "function" ? focusedTerminal() : null;
+  let term = focused;
   if (dock) {
-    term = typeof terminalTabFor === "function" ? terminalTabFor(dock) : null;
+    term = dockInsertTarget(dock, focused);
     if (!term) {
       showToast("That session has no open terminal, so the path was not inserted", { error: true });
       return;
     }
-  } else if (typeof focusedTerminal === "function") {
-    term = focusedTerminal();
   }
   const res = insertTextAtPrompt(term, shellQuote(path) + " ");
   if (res.ok) { // closeRowMenu hid the button that had focus: the caret goes where the path went
-    if (dock && typeof term.grabFocus === "function") term.grabFocus();
+    if (dock && term !== focused) dockInsertFocus(term);
     else focusTerminal();
     return;
   }
@@ -750,6 +751,31 @@ function insertPathAtPrompt(path) {
     res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
     "That session is not connected, so the path was not inserted",
     { error: true });
+}
+
+// ftPaneOf: the pane (cell) that holds a terminal tab, as its agent tab or as a shell docked in it; null for none.
+function ftPaneOf(t) {
+  if (!t || typeof cells === "undefined") return null;
+  return cells.find((c) => c.tabs.includes(t) || c.dockTabFor(t.id) === t) || null;
+}
+
+// dockInsertTarget: where the tree's "Insert path at prompt" types for the dock's session `sid`. The focused terminal when it is
+// in that session's pane (the agent, or a shell docked in the pane: the one the user is typing in), else the session's own
+// terminal. null when the session has none.
+function dockInsertTarget(sid, focused) {
+  const want = typeof terminalTabFor === "function" ? terminalTabFor(sid) : null;
+  const home = ftPaneOf(want);
+  if (focused && home && ftPaneOf(focused) === home) return focused;
+  return want;
+}
+
+// dockInsertFocus: the path went to a terminal other than the focused one, so its pane takes the focus first, as Show terminal
+// does (app.js dockShowTerminal): the pane's focus ring and focusedTerminal() are where the keys are. Then the keyboard.
+function dockInsertFocus(term) {
+  const pane = ftPaneOf(term);
+  if (pane && typeof setFocusedCell === "function") setFocusedCell(pane);
+  const shown = !pane || (typeof cellTerminal === "function" ? cellTerminal(pane) === term : true) || pane.dockTabFor(term.id) === term;
+  if (shown && typeof term.grabFocus === "function") term.grabFocus();
 }
 
 // copyPath copies and says so: a clipboard write is otherwise invisible, and on

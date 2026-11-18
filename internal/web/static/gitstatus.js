@@ -241,7 +241,11 @@ function gitAskNow(fresh, watch) {
   const root = typeof ftRoot === "function" ? ftRoot() : "";
   if (!root) return;
   if (watch) {
-    const wait = gitWatchAt + GIT_WATCH_MIN_MS - Date.now();
+    // Date.now() is the wall clock: a step back (NTP, a laptop waking) would leave the last send in the future and stall the asks
+    // for as long as it stepped. The last send is taken as no later than now, so the wait is never more than the floor.
+    const now = Date.now();
+    if (gitWatchAt > now) gitWatchAt = now;
+    const wait = gitWatchAt + GIT_WATCH_MIN_MS - now;
     if (wait > 0) {
       if (!gitWatchTimer) gitWatchTimer = setTimeout(() => { gitWatchTimer = null; gitAskNow(true, true); }, wait);
       return;

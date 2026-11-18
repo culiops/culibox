@@ -102,7 +102,7 @@ test("palModHint follows the selected row's kind (⌘↵ keeps inserting a file'
   assert.strictEqual(palModHint("view", false), "");
 });
 
-test("paletteShellCommands: desktop offers shortcuts, files drawer and the Activity and Access views once", () => {
+test("paletteShellCommands: desktop offers shortcuts, files dock and the Activity and Access views once", () => {
   const { paletteShellCommands } = require("../static/palette.js");
   const ran = [];
   const cmds = paletteShellCommands(false, true, { activityView: () => ran.push("activity"), accessView: () => ran.push("access") });
@@ -117,6 +117,7 @@ test("paletteShellCommands: desktop offers shortcuts, files drawer and the Activ
   cmds.find((c) => c.id === "access-view").run();
   assert.deepEqual(ran, ["activity", "access"]);
   assert.equal(cmds.find((c) => c.id === "files-drawer").hint, "Ctrl+Shift+E");
+  assert.equal(cmds.find((c) => c.id === "files-drawer").label, "Toggle files dock", "the approved spec's name for the feature (box ruling R18)");
 });
 
 test("paletteShellCommands: hints are the registry's, per platform", () => {

@@ -644,6 +644,53 @@ test("watch-driven asks: one held behind a slow request goes out at the landing 
   } finally { delete global.ftRoot; }
 });
 
+test("watch-driven asks: a clock that steps back never stalls them for longer than the floor", async (t) => {
+  // Date.now() is the wall clock: after a step back (NTP, a laptop waking) the last send is "in the future". The wait is clamped to
+  // the floor, not worked out against that future time, or the asks would stall for as long as the clock stepped.
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const realNow = Date.now;
+  let clock = 1700000000000;
+  Date.now = () => clock;
+  const calls = pendingFetch();
+  global.ftRoot = () => "/r";
+  const pass = (ms) => { clock += ms; t.mock.timers.tick(ms); };
+  try {
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    pass(1000);
+    assert.equal(calls.length, 1, "the first goes after the debounce");
+    calls[0].resolve(answerFor(1));
+    await settle();
+    clock -= 3600 * 1000; // the clock steps back an hour
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    pass(1000); // the debounce ends: the floor is measured, not an hour
+    assert.equal(calls.length, 1, "inside the floor: waits");
+    pass(2900);
+    assert.equal(calls.length, 1, "the wait is the floor from now, not less");
+    pass(100);
+    assert.equal(calls.length, 2, "and it goes after one floor (3 s), not an hour later");
+    assert.ok(calls[1].fresh);
+    calls[1].resolve(answerFor(1));
+    await settle();
+    // Back to normal afterwards: the floor is the floor.
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    pass(1000);
+    assert.equal(calls.length, 2);
+    pass(2000);
+    assert.equal(calls.length, 3);
+    // A step back while an ask waits for the floor: it still goes within the floor.
+    calls[2].resolve(answerFor(1));
+    await settle();
+    g.gitStatusRefreshSoon({ fresh: true, watch: true });
+    pass(1000);
+    clock -= 7200 * 1000;
+    pass(2000);
+    assert.equal(calls.length, 3, "the waiting timer fires, the clock is behind: not an ask yet");
+    pass(3000);
+    assert.equal(calls.length, 4, "but one more floor later it goes");
+  } finally { Date.now = realNow; delete global.ftRoot; }
+});
+
 test("a reset forgets the ask that was waiting for the floor", async (t) => {
   g.gitStatusReset();
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 100000 });
