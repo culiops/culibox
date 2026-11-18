@@ -29,7 +29,7 @@
 // on from (the scope was switched, HEAD moved, the file was re-pointed), is dropped and the newer key is asked for.
 //
 // What the editor lets go of. The dock has ONE editor instance, and at most one diff editor at any time: the one of the tab on screen
-// while it is in Changes. The diff editor and the model of the base text are disposed on leaving Changes, when the tab is hidden
+// while it is in Changes, or its compare view of a conflict (editorsync.js), never both: entering one closes the other. The diff editor and the model of the base text are disposed on leaving Changes, when the tab is hidden
 // (it is put back from the base text it holds, with no request, when the tab is shown again: `resume`) and on EditorTab.dispose().
 // The gutter's timer and model subscription exist only while the tab is on screen.
 //
@@ -390,6 +390,7 @@ function editorDiffEnter(tab) {
   if (tab.diff || tab.disposed || !tab.model || !ch || ch.head === null) return;
   const s = editorDiffOf(tab);
   if (!tab.attached) { s.resume = true; return; }
+  editorSyncCloseCompare(tab); // the compare view of a conflict, if it is open, goes: one diff editor
   tab.stashView();
   const original = dockMonaco.editor.createModel(ch.head, monacoLang(tab.path));
   const label = document.createElement("span");

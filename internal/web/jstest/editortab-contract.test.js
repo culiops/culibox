@@ -2125,3 +2125,138 @@ test("editordiff's pure pieces: the label, the answer's reading, the decorations
   assert.deepEqual(decs.map((d) => d.options.overviewRuler.position), [1, 1, 1]);
   assert.ok(decs.every((d) => d.range.startColumn === 1 && d.range.endColumn > 1000));
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Compare (editorsync.js) and Changes (editordiff.js) are both diff editors, and the dock has one at a time: a hidden tab keeps
+// neither, and on one tab entering the one closes the other.
+
+// A page whose one file is on disk (so a conflict bar can be made), with git's answer in: the dock is shown and a tab is open.
+async function conflictPage() {
+  const p = page();
+  const disk = p.serve("original\n");
+  p.st.git.on = true;
+  p.st.git.answer = okBlob("head\n");
+  p.setShown(true);
+  const tab = await p.open("/p/a.go");
+  await p.settle();
+  return { p, disk, tab };
+}
+// Make the conflict bar: an unsaved edit, and the agent writes the file.
+async function conflict(p, disk, tab) {
+  tab.model.type("mine\n");
+  disk.text = "agent\n";
+  await p.tick();
+  assert.equal(tab.barEl.hidden, false);
+}
+const compareBtn = (tab) => bar(tab).buttons[0];
+
+test("hiding a tab closes its Compare view (the bar stays), and a tab shown again can press Compare again", async () => {
+  const { p, disk, tab: a } = await conflictPage();
+  await conflict(p, disk, a);
+  compareBtn(a).click();
+  await p.settle();
+  assert.equal(liveDiffs(p).length, 1);
+  const cmp = p.st.diffs[0];
+  const disks = cmp.model.original;
+  a.onHide();
+  assert.equal(cmp.disposed, true, "a hidden tab keeps no diff editor");
+  assert.equal(disks.disposed, true, "nor the disk's model");
+  assert.equal(liveDiffs(p).length, 0);
+  assert.equal(a.cmpEl.hidden, true);
+  assert.equal(a.bodyEl.hidden, false, "the editor is the body again");
+  assert.equal(a.barEl.hidden, false, "the bar stays: Compare decides nothing");
+  assert.equal(a.model.disposed, false);
+  // Another tab takes the dock and goes into Changes: still one.
+  const b = await p.open("/p/b.go");
+  await p.settle();
+  changesBtn(b).click();
+  assert.equal(liveDiffs(p).length, 1);
+  assert.ok(b.diff);
+  b.onHide();
+  assert.equal(liveDiffs(p).length, 0);
+  // Back on the first: no compare view until it is asked for again.
+  a.onAttach();
+  assert.equal(liveDiffs(p).length, 0);
+  assert.equal(a.cmpEl.hidden, true);
+  assert.equal(a.barEl.hidden, false);
+  compareBtn(a).click();
+  await p.settle();
+  assert.equal(liveDiffs(p).length, 1, "Compare again: one");
+  assert.equal(liveDiffs(p)[0].opts.renderSideBySide, true);
+  assert.equal(liveDiffs(p)[0].model.original.value, "agent\n", "the disk as it is now");
+  a.dispose();
+  assert.equal(liveDiffs(p).length, 0);
+});
+
+test("a Compare whose disk read lands after the tab was hidden opens no diff editor", async () => {
+  const { p, disk, tab: a } = await conflictPage();
+  await conflict(p, disk, a);
+  let release;
+  p.st.fullGate = new Promise((r) => { release = r; });
+  compareBtn(a).click();
+  await p.settle();
+  p.st.fullGate = null;
+  a.onHide();
+  release();
+  await p.settle();
+  assert.equal(p.st.diffs.length, 0, "no diff editor for a tab that is not on screen");
+  assert.equal(a.cmpEl.hidden, true);
+  assert.equal(a.sync.acting, false, "and the bar's next press is not held up");
+  a.onAttach();
+  compareBtn(a).click();
+  await p.settle();
+  assert.equal(liveDiffs(p).length, 1);
+});
+
+test("Compare and Changes never coexist on a tab: entering one closes the other, and Back to editing returns to Code", async () => {
+  const { p, disk, tab } = await conflictPage();
+  await conflict(p, disk, tab);
+  const most = () => assert.ok(liveDiffs(p).length <= 1, "at most one diff editor in the dock");
+  // Compare, then Changes.
+  compareBtn(tab).click();
+  await p.settle();
+  most();
+  const cmp = p.st.diffs[0];
+  assert.equal(tab.cmpEl.hidden, false);
+  changesBtn(tab).click();
+  most();
+  assert.equal(cmp.disposed, true, "Changes closed the compare view");
+  assert.equal(p.st.models.filter((m) => m !== tab.model && !m.disposed).length, 1, "the disk's model went; only the base text's is live");
+  assert.equal(liveDiffs(p).length, 1);
+  assert.equal(tab.diff.diff, liveDiffs(p)[0]);
+  assert.equal(tab.cmpEl.hidden, true);
+  assert.equal(tab.bodyEl.hidden, false, "the body is shown again, with Changes in it");
+  assert.deepEqual(tab.bodyEl.children.map((c) => c.className), ["dk-ed-cmp"]);
+  assert.equal(tab.barEl.hidden, false);
+  // Changes, then Compare.
+  const chg = tab.diff.diff;
+  compareBtn(tab).click();
+  await p.settle();
+  most();
+  assert.equal(chg.disposed, true, "Compare left the Changes view");
+  assert.equal(tab.diff, null);
+  assert.equal(liveDiffs(p).length, 1);
+  assert.equal(liveDiffs(p)[0].opts.renderSideBySide, true, "and what is open is the compare view");
+  assert.equal(tab.cmpEl.hidden, false);
+  assert.equal(tab.bodyEl.hidden, true);
+  assert.equal(tab.seg.code.getAttribute("aria-pressed"), "true", "the toggle says Code: Changes is not what is up");
+  tab.cmpEl.children[0].children[1].click(); // Back to editing
+  most();
+  assert.equal(liveDiffs(p).length, 0);
+  assert.deepEqual(tab.bodyEl.children, [p.get("dockEditorEl")], "Code");
+  assert.equal(tab.bodyEl.hidden, false);
+  // Changes asked for while the compare read is out: whichever is made last wins, never both.
+  let release;
+  p.st.fullGate = new Promise((r) => { release = r; });
+  compareBtn(tab).click();
+  await p.settle();
+  p.st.fullGate = null;
+  changesBtn(tab).click();
+  most();
+  assert.equal(liveDiffs(p).length, 1);
+  release();
+  await p.settle();
+  most();
+  assert.equal(liveDiffs(p).length, 1, "the compare view that landed last left the Changes view");
+  assert.equal(tab.diff, null);
+});

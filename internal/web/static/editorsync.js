@@ -50,8 +50,11 @@ function editorSyncStart(tab) {
   editorSyncSync(true);
 }
 
+// A tab that leaves the screen lets its compare view go: the dock has one diff editor at a time (Compare and the Changes view of
+// editordiff.js never coexist either). The bar stays, so Compare can be pressed again when the tab is back.
 function editorSyncStop(tab) {
   if (esTab === tab) esTab = null;
+  editorSyncCloseCompare(tab);
   editorSyncSync();
 }
 
@@ -273,8 +276,9 @@ function editorSyncReadFailed(tab, got) {
 
 // --- compare --------------------------------------------------------------------------------------------------------
 
-// Compare: a read-only Monaco diff in the tab, in place of the editor, until it is dismissed: the disk on the left, the buffer
-// (live, not a copy) on the right.
+// Compare: a read-only Monaco diff in the tab, in place of the editor, until it is dismissed or the tab is hidden: the disk on the
+// left, the buffer (live, not a copy) on the right. It is the dock's one diff editor while it is open: a Changes view the tab had is
+// left first (Code is what "Back to editing" returns to), and opening Changes closes it (editordiff.js).
 async function editorSyncCompare(tab) {
   const s = editorSyncOf(tab);
   const bar = s.bar;
@@ -283,9 +287,11 @@ async function editorSyncCompare(tab) {
   s.acting = true;
   const got = await editorSyncRead(tab);
   s.acting = false;
-  if (!editorSyncStill(tab, ctx) || s.bar !== bar || s.cmp) return; // as Load: an answer for a bar that is gone is dropped
+  // As Load: an answer for a bar that is gone is dropped. So is one for a tab that left the screen meanwhile: no diff editor for it.
+  if (!editorSyncStill(tab, ctx) || s.bar !== bar || s.cmp || !tab.attached) return;
   if (!got.ok) { editorSyncReadFailed(tab, got); return; }
   bar.diskVersion = got.version; // what the diff shows is what Keep mine will overwrite
+  editorDiffSet(tab, false); // the Changes view, if the tab is in it, goes: one diff editor
   const original = dockMonaco.editor.createModel(got.text, monacoLang(tab.path));
   const body = document.createElement("div");
   body.className = "dk-cmp-body";
