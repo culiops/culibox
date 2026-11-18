@@ -48,14 +48,20 @@ function culiboxTheme() {
       "editorOverviewRuler.modifiedForeground": "#6ea8fe",
       "editorOverviewRuler.deletedForeground": "#f06a6a",
       // The diff editors (Changes, Compare): the tinted green and red lines of mockup B2 (#10261a and #2a1517) in place of Monaco's
-      // olive and pure red, and, for the characters that changed inside a line, the same two blended with the gutter's colours
-      // (#4ccf8a and #f06a6a at 25 %, over the line tint) so a changed word stands out from its line.
-      "diffEditor.insertedLineBackground": "#10261a",
-      "diffEditor.removedLineBackground": "#2a1517",
-      "diffEditor.insertedTextBackground": "#1f5036",
-      "diffEditor.removedTextBackground": "#5c2a2c",
-      "diffEditorGutter.insertedLineBackground": "#10261a",
-      "diffEditorGutter.removedLineBackground": "#2a1517",
+      // olive and pure red, and, for the characters that changed inside a line, a stronger tint of the same two. All four are the
+      // gutter's colours (#4ccf8a and #f06a6a) at low alpha, not opaque: Monaco asks for that so that a selection or a search match
+      // on a changed line still shows through. The alphas are the least-squares fit to the opaque colours they replace (line 7.5 %
+      // and 9.3 %, over the editor's background; text 25 %, over the line), within 8 of 255 on a channel.
+      "diffEditor.insertedLineBackground": "#4ccf8a13",
+      "diffEditor.removedLineBackground": "#f06a6a18",
+      "diffEditor.insertedTextBackground": "#4ccf8a40",
+      "diffEditor.removedTextBackground": "#f06a6a40",
+      // The gutter beside an inserted line wears the line's tint, so the two read as one band.
+      "diffEditorGutter.insertedLineBackground": "#4ccf8a13",
+      // Not set to a colour: Monaco paints this behind a `gutter-delete` filler, an alignment zone as tall as an inserted block
+      // (measured: a red strip beside every added block, in Changes and in an inline Compare). Transparent rather than
+      // removed, so the result does not hang on the stylesheet's fallback for a missing variable.
+      "diffEditorGutter.removedLineBackground": "#00000000",
       "diffEditorOverview.insertedForeground": "#4ccf8a",
       "diffEditorOverview.removedForeground": "#f06a6a",
     },

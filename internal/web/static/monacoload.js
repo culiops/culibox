@@ -28,9 +28,14 @@ const MONACO_THEME = "culibox";
 // removes that default binding; the key then does nothing in the editor.
 const MONACO_UNBOUND_KEYS = [{ command: "editor.action.quickCommand", code: "F1" }];
 
-// How long the stylesheet may take to apply once the editor module is in (the same origin, a few tens of KB): after this the load
-// fails, instead of leaving every open at "loading…" until the page is reloaded.
-const MONACO_CSS_TIMEOUT_MS = 10000;
+// How long the stylesheet may take to apply once the editor module is in: after this the load fails, instead of leaving every open
+// at "loading…" until the page is reloaded. editor.main.css is about 390 KB and the server does not compress it, so 60 s is a
+// floor of about 6.5 KB/s; 10 s failed every first load below about 39 KB/s.
+const MONACO_CSS_TIMEOUT_MS = 60000;
+
+// The stylesheet links whose wait ended in a timeout once. Running out of time does not say the request is dead (a slow link may
+// still be downloading it), so the first timeout leaves the link for the retry to wait on; a second one drops it.
+const monacoSlowStyles = new WeakSet();
 
 let monacoLoading = null;
 
@@ -44,22 +49,25 @@ function monacoInject(el) {
 }
 
 // monacoStyled settles when the editor's stylesheet is applied: an editor measured before it would be laid out
-// unstyled. The module injects the link itself; one is added here only if a build stops doing that. A link that failed is
-// not applied and never will be: the wait ends in an error (the browser's own, or MONACO_CSS_TIMEOUT_MS: an error that fired
-// before this listens, or a request that never answers, says nothing at all), and the dead link is taken out so that the retry,
-// the next open, finds none and makes a fresh one.
+// unstyled. The module injects the link itself; one is added here only if a build stops doing that. The wait ends in an error
+// when the browser refuses the link or after MONACO_CSS_TIMEOUT_MS (an error that fired before this listens, or a request that
+// never answers, says nothing at all). A link the browser refused is dead: it is taken out so that the retry, the next open, finds
+// none and makes a fresh one. A link that only timed out is kept the first time, so that the retry waits on the download already
+// under way instead of restarting it (which on a slow link would never finish); a second timeout takes it out too.
 async function monacoStyled() {
   let css = document.head.querySelector('link[href$="/vs/editor/editor.main.css"]');
   if (!css) { css = document.createElement("link"); css.rel = "stylesheet"; css.href = MONACO_BASE + "/editor/editor.main.css"; document.head.append(css); }
   if (css.sheet) return;
+  let timedOut = false;
   try {
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("could not load " + css.href + " (no answer in " + MONACO_CSS_TIMEOUT_MS / 1000 + " s)")), MONACO_CSS_TIMEOUT_MS);
+      const timer = setTimeout(() => { timedOut = true; reject(new Error("could not load " + css.href + " (no answer in " + MONACO_CSS_TIMEOUT_MS / 1000 + " s)")); }, MONACO_CSS_TIMEOUT_MS);
       css.addEventListener("load", () => { clearTimeout(timer); resolve(); }, { once: true });
       css.addEventListener("error", () => { clearTimeout(timer); reject(new Error("could not load " + css.href)); }, { once: true });
     });
   } catch (err) {
-    css.remove();
+    if (timedOut && !monacoSlowStyles.has(css)) monacoSlowStyles.add(css);
+    else css.remove();
     throw err;
   }
 }

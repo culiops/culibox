@@ -708,6 +708,7 @@ test("Compare opens a read-only diff, disk on the left and the live buffer on th
   assert.equal(d.revealed, 1, "it opens at the first difference");
   assert.equal(d.updated.length, 0, "once: a later refresh of the diff does not move it again");
   assert.equal(tab.cmpEl.hidden, false);
+  assert.equal(tab.cmpEl.children[0].children[0].textContent, "Red: on disk · green: your buffer", "the header says which side is which, in colour: true split and inline");
   assert.equal(tab.bodyEl.hidden, true, "in place of the editor");
   assert.equal(tab.barEl.hidden, false, "the bar is still up: Compare decides nothing");
   bar(tab).buttons[0].click();

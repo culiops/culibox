@@ -316,7 +316,9 @@ async function editorSyncCompare(tab) {
   const head = document.createElement("div");
   head.className = "dk-cmp-head";
   const label = document.createElement("span");
-  label.textContent = "On disk and your buffer";
+  // Said by colour, which holds in both views: Monaco's red is the disk's side (the left one when split, the removed lines when
+  // inline), its green the buffer's.
+  label.textContent = "Red: on disk · green: your buffer";
   head.append(label, editorSyncButton("Back to editing", "btn-ghost", () => { editorSyncCloseCompare(tab); tab.focusReader(); }));
   tab.cmpEl.replaceChildren(head, body);
   tab.cmpEl.hidden = false;
