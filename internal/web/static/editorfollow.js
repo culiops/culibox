@@ -10,18 +10,21 @@
 // root the tree has, dwUnderRoot), and the path opened is the one Activity's `files` lists, never an event's masked `detail`.
 //
 // It never takes the keyboard: the file is opened with drawerShowFile and revealed with revealLine, neither of which focuses
-// anything, so a terminal that has the keyboard keeps it. And it never moves the caret under the user's hands: a buffer that holds
-// an unsaved edit, or that the editor has the keyboard in, is shown but not revealed.
+// anything, so a terminal that has the keyboard keeps it. And it never moves things under the user's hands: while the editor has the
+// keyboard (the user is typing in it) Follow does nothing at all, because swapping the active tab moves the editor's element and drops
+// the caret; the mark stays where it was, so the next answer after the keyboard has left still shows that edit. A buffer that holds an
+// unsaved edit is shown but not revealed.
 //
 // The reveal waits until the tab can answer where the first change is: it is read, the disk was asked once after the agent's write
 // (a clean buffer reloads from it, so the lines are the agent's), and git's base text for the file is in (or git cannot give one:
 // line 1). That is a few frames of looking at fields, not a request, and it gives up after FOLLOW_SETTLE_MAX_MS.
 //
-// Persisted as {sid: true} under agent-box:dockFollow. The toggle (`.dk-follow`, an eye) is in each editor tab's actions in the dock's
-// bar; the state it shows is the session's, so every tab's toggle says the same.
+// Persisted as {sid: true} under agent-box:dockFollow. The toggle (`.dk-follow`, an eye) is in each tab's actions in the dock's bar
+// (a text file's, an image's, a binary's) and, with no tab open, in the dock's empty state: Follow's main scenario starts from an
+// empty dock. The state it shows is the session's, so every toggle says the same.
 //
-// editorFollowOn(sid), editorFollowSet(sid, on), editorFollowSync() (drawerPaint: subscribe to the session the dock shows),
-// editorFollowButton(tab) and editorFollowPaintTab(tab) (EditorTab).
+// editorFollowOn(sid), editorFollowSet(sid, on), editorFollowSync() (drawerPaint: subscribe to the session the dock shows, and keep the
+// empty dock's toggle), editorFollowButton(tab) and editorFollowPaintTab(tab) (EditorTab).
 
 const FOLLOW_KEY = "agent-box:dockFollow";
 const FOLLOW_SETTLE_MS = 100;       // how often a tab being followed is looked at until it can be revealed
@@ -31,6 +34,7 @@ const FOLLOW_GIT_WAIT_MS = 2000;    // how long a tab waits for git's base text 
 let efMap = null;     // sid -> true, read from storage once
 let efSub = null;     // {sid, off, seen}: the one subscription, for the session the dock shows while Follow is on for it
 let efSettle = null;  // {tab, waited, timer, synced, checking}: the reveal that is waiting for its tab
+let efEmpty = null;   // the toggle in the empty dock's hint (#drawer-vempty), once made
 
 function efStorage() {
   try { return window.localStorage; } catch (_) { return null; }
@@ -57,12 +61,15 @@ function editorFollowSet(sid, on) {
   try { const st = efStorage(); if (st) st.setItem(FOLLOW_KEY, JSON.stringify(efMap)); } catch (_) { /* quota or private mode: it lasts until the page goes */ }
   editorFollowSync();
   if (typeof dockViewerList === "function") for (const v of dockViewerList()) editorFollowPaintTab(v);
+  efPaintEmpty();
 }
 
 // editorFollowSync keeps the subscription for the session the dock shows (Files open on the desktop) when Follow is on for it, and
 // none otherwise. Called from drawerPaint, which runs on every change of session, every session poll and a close; a no-op when
 // nothing moved.
 function editorFollowSync() {
+  efMountEmpty();
+  efPaintEmpty();
   const shown = typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() ? drawerState.sessionId : null;
   const want = shown && editorFollowOn(shown) ? shown : "";
   if ((efSub ? efSub.sid : "") === want) return;
@@ -77,8 +84,22 @@ function editorFollowSync() {
 function editorFollowHear(sub, files, events) {
   if (efSub !== sub) return;
   const plan = followPlan(files, events, (p) => dwUnderRoot(p), sub.seen);
+  // The user is typing in the editor: showing another file would swap the editor's element under the caret. Nothing is done, and the
+  // mark is kept (a mark that was not set yet becomes 0: "everything up to now is news"), so the next answer after the keyboard has
+  // left shows the newest edit, this one included.
+  if (plan.path && efKeyboardInEditor()) {
+    if (sub.seen === null) sub.seen = 0;
+    return;
+  }
   sub.seen = plan.seen;
   if (plan.path) editorFollowShow(sub.sid, plan.path);
+}
+
+// efKeyboardInEditor: the editor has the keyboard, in Code or in the Changes view's new side.
+function efKeyboardInEditor() {
+  if (typeof dockEditor !== "undefined" && dockEditor && dockEditor.hasTextFocus()) return true;
+  const tab = typeof dockAttached === "function" ? dockAttached() : null;
+  return !!(tab && tab.diff && tab.diff.diff.getModifiedEditor().hasTextFocus());
 }
 
 // editorFollowShow opens `path` as the dock's preview tab, without the keyboard, and reveals it when it is ready.
@@ -139,10 +160,11 @@ function editorFollowReveal(tab) {
   tab.revealLine(Math.max(1, Math.min(ch.length ? ch[0].from : 1, total)));
 }
 
-// --- the toggle ----------------------------------------------------------------------------------------------------------------
+// --- the toggle ---------------------------------------------------------------------------------------------------------------
 
-// editorFollowButton builds the Follow toggle for the dock's bar: an eye and the word, pressed while Follow is on for the session.
-function editorFollowButton(tab) {
+// efButton builds a Follow toggle: an eye and the word. A press turns Follow on or off for the session `sidOf()` names; efPaint shows
+// the session's setting on it.
+function efButton(sidOf) {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "btn btn-sm dk-follow";
@@ -151,9 +173,27 @@ function editorFollowButton(tab) {
   t.textContent = "Follow";
   b.append(t);
   b.onclick = () => {
-    const sid = tab.host && typeof tab.host.sessionId === "function" ? tab.host.sessionId() : null;
+    const sid = sidOf();
     if (sid) editorFollowSet(sid, !editorFollowOn(sid));
   };
+  return b;
+}
+
+function efPaint(b, sid) {
+  const on = editorFollowOn(sid);
+  const pressed = on ? "true" : "false";
+  if (b.getAttribute("aria-pressed") !== pressed) b.setAttribute("aria-pressed", pressed);
+  const title = on ? "Following the agent: each file it edits opens here. Click to stop"
+    : "Follow the agent: open each file it edits, as the preview tab, and show what changed";
+  if (b.title !== title) b.title = title;
+}
+
+const efTabSid = (tab) => (tab.host && typeof tab.host.sessionId === "function" ? tab.host.sessionId() : null);
+const efDockSid = () => (typeof drawerState !== "undefined" ? drawerState.sessionId : null);
+
+// editorFollowButton is a tab's toggle, in its actions in the dock's bar (EditorTab.buildActs).
+function editorFollowButton(tab) {
+  const b = efButton(() => efTabSid(tab));
   tab.followBtn = b;
   editorFollowPaintTab(tab);
   return b;
@@ -162,12 +202,24 @@ function editorFollowButton(tab) {
 // editorFollowPaintTab brings a tab's toggle in step with the session's setting.
 function editorFollowPaintTab(tab) {
   const b = tab && tab.followBtn;
-  if (!b) return;
-  const sid = tab.host && typeof tab.host.sessionId === "function" ? tab.host.sessionId() : null;
-  const on = editorFollowOn(sid);
-  const pressed = on ? "true" : "false";
-  if (b.getAttribute("aria-pressed") !== pressed) b.setAttribute("aria-pressed", pressed);
-  const title = on ? "Following the agent: each file it edits opens here. Click to stop"
-    : "Follow the agent: open each file it edits, as the preview tab, and show what changed";
-  if (b.title !== title) b.title = title;
+  if (b) efPaint(b, efTabSid(tab));
+}
+
+// The empty dock's toggle: with no tab open the dock's bar is not drawn, and Follow has to be reachable from there (its main scenario
+// is turning it on, then waiting for the agent). One button in the hint under the empty viewer (#drawer-vempty, shown while the dock
+// has no tab), for the session the dock shows; hidden while it shows none.
+function efMountEmpty() {
+  if (efEmpty) return;
+  const host = document.getElementById("drawer-vempty");
+  if (!host) return;
+  efEmpty = efButton(efDockSid);
+  efEmpty.id = "dock-follow-empty";
+  host.append(efEmpty);
+}
+
+function efPaintEmpty() {
+  if (!efEmpty) return;
+  const sid = efDockSid();
+  efEmpty.hidden = !sid;
+  efPaint(efEmpty, sid);
 }

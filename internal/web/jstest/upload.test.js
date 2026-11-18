@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { shouldRefreshTree, insertTextAtPrompt } = require("../static/upload.js");
+const { shouldRefreshTree, insertTextAtPrompt, insertFailText } = require("../static/upload.js");
 
 test("an upload into the directory the tree is showing refreshes it", () => {
   assert.strictEqual(shouldRefreshTree("/home/u/proj", "/home/u/proj"), true);
@@ -170,4 +170,19 @@ test("a read-only zone ignores a drag that carries no files (text selection)", (
   const ev = { dataTransfer: { types: ["text/plain"] }, preventDefault() { throw new Error("must not claim"); }, stopPropagation() { throw new Error("must not claim"); } };
   z.handlers.dragenter(ev); z.handlers.dragover(ev); z.handlers.drop(ev);
   assert.deepStrictEqual(z.toasts, []);
+});
+
+test("insertFailText: the one sentence for each reason insertTextAtPrompt gives, shared by the viewer's insert and the editor's bar", () => {
+  assert.strictEqual(insertFailText("unsafe"), "That path contains control characters, so it was not inserted");
+  assert.strictEqual(insertFailText("noterm"), "This session has no terminal open here, so the path was not inserted");
+  assert.strictEqual(insertFailText("disconnected"), "That session is not connected, so the path was not inserted");
+  assert.strictEqual(insertFailText(undefined), "That session is not connected, so the path was not inserted", "anything else is a socket that is down");
+  // The two callers use it and keep no copy of the words.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  for (const f of ["viewer-tab.js", "editorselbar.js"]) {
+    const text = fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
+    assert.match(text, /insertFailText\(res\.reason\)/, f);
+    assert.doesNotMatch(text, /so it was not inserted|is not connected, so the path/, f + " repeats the sentences");
+  }
 });

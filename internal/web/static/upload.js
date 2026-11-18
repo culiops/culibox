@@ -272,6 +272,15 @@ function insertTextAtPrompt(term, text) {
   return { ok: true, reason: "" };
 }
 
+// insertFailText: the toast for an insertTextAtPrompt that did not type (its `reason`), in the words the viewer's insert and the editor's
+// selection bar share: the path can never be typed (a control character would submit the line), there is no terminal in a pane for
+// the session, or its socket is down. The tree's insert and an upload's own sentences differ and keep theirs.
+function insertFailText(reason) {
+  return reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
+    reason === "noterm" ? "This session has no terminal open here, so the path was not inserted" :
+    "That session is not connected, so the path was not inserted";
+}
+
 // insertPathsIntoTerminal types the uploaded paths at the prompt, followed by a
 // space and never a newline, so the user sees them before anything runs.
 function insertPathsIntoTerminal(term, data) {
@@ -297,7 +306,7 @@ function clipboardFiles(e) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt, dropHint, makeDropZone, uploadFiles };
+  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt, insertFailText, dropHint, makeDropZone, uploadFiles };
 }
 
 // pasteFileName keeps the name the browser supplied and only invents one when

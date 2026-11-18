@@ -11,7 +11,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { page } = require("./editorpage.js");
+const { page, El } = require("./editorpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const src = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
@@ -470,4 +470,171 @@ test("the reveal waits for git's base text, so it is the first change and not li
 test("drawerPaint tells Follow, so the subscription moves with the dock (the one place that runs on every session change, poll and close)", () => {
   const body = fnSource("filesdrawer.js", "drawerPaint");
   assert.match(body, /if \(typeof editorFollowSync === "function"\) editorFollowSync\(\);/);
+});
+
+// --- the user is typing in the editor ------------------------------------------------------------------------------------------
+
+test("while the editor has the keyboard Follow does nothing, not even swapping the tab, and the next answer after the keyboard left still shows the edit", async () => {
+  const f = await setup();
+  f.on();
+  f.hear([file("/p/a.go", 100)], [ev()]);
+  await f.drain();
+  assert.equal(f.dock.active.path, "/p/a.go");
+  const ed = f.ed();
+  ed.focus(); // the user clicked into the editor and is typing
+  const before = revealed(f).length;
+  f.hear([file("/p/b.go", 200), file("/p/a.go", 100)], [ev({ ts: 200, detail: "/p/b.go" })]);
+  assert.equal(f.shown.length, 1, "drawerShowFile was not called: the active tab is not swapped (that moves the editor's element and drops the caret)");
+  assert.equal(f.dock.active.path, "/p/a.go");
+  assert.equal(f.waiting(), 0);
+  // The user went back to the terminal. Nothing new happened, but the answer that comes next carries the edit that was held back.
+  ed.blur();
+  f.hear([file("/p/b.go", 200), file("/p/a.go", 100)], []);
+  assert.deepEqual(f.shown.map((x) => x[0]), ["/p/a.go", "/p/b.go"], "the mark was kept, so b.go is shown now");
+  await f.drain();
+  assert.equal(f.dock.active.path, "/p/b.go");
+  assert.ok(revealed(f).length > before);
+  f.hear([file("/p/b.go", 200), file("/p/a.go", 100)], []);
+  assert.equal(f.shown.length, 2, "and only once");
+});
+
+test("a new event after the keyboard left follows too, and a first answer that was held back leaves the mark at 'everything so far is news'", async () => {
+  const f = await setup();
+  f.on();
+  await f.p.open("/p/a.go"); // the editor exists and the user is in it
+  f.ed().focus();
+  f.hear([file("/p/c.go", 300)], [ev({ ts: 300, detail: "/p/c.go" })]); // the very first answer carries a finished edit
+  assert.deepEqual(f.shown, []);
+  f.ed().blur();
+  f.hear([file("/p/c.go", 300)], []);
+  assert.deepEqual(f.shown.map((x) => x[0]), ["/p/c.go"], "not lost as a baseline");
+  f.hear([file("/p/d.go", 400), file("/p/c.go", 300)], [ev({ ts: 400, detail: "/p/d.go" })]);
+  assert.deepEqual(f.shown.map((x) => x[0]), ["/p/c.go", "/p/d.go"]);
+});
+
+test("an answer with nothing to show moves the mark even while the keyboard is in the editor", async () => {
+  const f = await setup();
+  f.on();
+  await f.p.open("/p/a.go");
+  f.ed().focus();
+  f.hear([file("/p/x.go", 50)], []); // the baseline
+  f.hear([file("/p/x.go", 50)], [ev({ tool: "Read", ts: 60 })]);
+  f.ed().blur();
+  f.hear([file("/p/x.go", 50)], []);
+  assert.deepEqual(f.shown, [], "nothing was held back, so nothing is shown late");
+});
+
+test("the Changes view's new side having the keyboard counts as typing too", async () => {
+  const f = await setup();
+  f.on();
+  f.hear([file("/p/a.go", 100)], [ev()]);
+  await f.drain();
+  const side = { hasTextFocus: () => true };
+  f.dock.active.diff = { diff: { getModifiedEditor: () => side } };
+  f.hear([file("/p/b.go", 200)], [ev({ ts: 200, detail: "/p/b.go" })]);
+  assert.equal(f.shown.length, 1);
+  f.dock.active.diff = null;
+  f.hear([file("/p/b.go", 200)], []);
+  assert.equal(f.shown.length, 2);
+});
+
+// --- the toggle is reachable without a text tab ---------------------------------------------------------------------------------
+
+// A page whose document has the dock's two hosts: the bar's actions area and the empty dock's hint.
+function withHosts(f) {
+  const acts = new El("div", f.p.doc);
+  const empty = new El("div", f.p.doc);
+  empty.append("Open a file from the tree, or click a path in the terminal");
+  f.p.doc.getElementById = (id) => ({ "dock-acts": acts, "drawer-vempty": empty }[id] || null);
+  return { acts, empty };
+}
+
+test("an empty dock has a Follow toggle in its hint, for the session the dock shows, with the same state and storage as every other", async () => {
+  const f = await setup();
+  const { empty } = withHosts(f);
+  f.p.get("editorFollowSync")(); // drawerPaint runs it: the toggle is made
+  const b = empty.children.find((c) => c.id === "dock-follow-empty");
+  assert.ok(b, "in #drawer-vempty, after the hint");
+  assert.equal(empty.children[0].textContent, "Open a file from the tree, or click a path in the terminal", "the hint's own text is untouched");
+  assert.equal(b.className, "btn btn-sm dk-follow");
+  assert.equal(b.tag, "button");
+  assert.equal(b.type, "button");
+  assert.equal(b.textContent, "Follow");
+  assert.equal(b.hidden, false);
+  assert.equal(b.getAttribute("aria-pressed"), "false");
+  b.click();
+  assert.equal(f.p.get("editorFollowOn")("s1"), true, "the dock's session");
+  assert.deepEqual(JSON.parse(f.store["agent-box:dockFollow"]), { s1: true }, "the same storage");
+  assert.equal(b.getAttribute("aria-pressed"), "true");
+  assert.match(b.title, /^Following the agent/);
+  assert.deepEqual(f.live().map((s) => s.sid), ["s1"], "and it listens: turned on from an empty dock, it waits for the agent");
+  // The setting is the session's: a toggle on a tab and this one say the same.
+  const tab = await f.p.open("/p/a.go");
+  f.dock.tabs.set("/p/a.go", tab);
+  assert.equal(tab.followBtn.getAttribute("aria-pressed"), "true");
+  b.click();
+  assert.equal(tab.followBtn.getAttribute("aria-pressed"), "false");
+  assert.equal(b.getAttribute("aria-pressed"), "false");
+  assert.deepEqual(f.live().map((s) => s.sid), []);
+});
+
+test("the empty dock's toggle follows the dock's session, and is hidden while the dock shows none; one toggle, not one per repaint", async () => {
+  const f = await setup();
+  const { empty } = withHosts(f);
+  f.p.get("editorFollowSync")();
+  f.p.get("editorFollowSync")();
+  f.p.get("editorFollowSync")();
+  assert.equal(empty.children.filter((c) => c.id === "dock-follow-empty").length, 1);
+  const b = empty.children.find((c) => c.id === "dock-follow-empty");
+  f.p.get("editorFollowSet")("s2", true);
+  assert.equal(b.getAttribute("aria-pressed"), "false", "the dock shows s1");
+  f.p.ctx.drawerState.sessionId = "s2";
+  f.p.get("editorFollowSync")();
+  assert.equal(b.getAttribute("aria-pressed"), "true", "now s2, where it is on");
+  f.p.ctx.drawerState.sessionId = null;
+  f.p.get("editorFollowSync")();
+  assert.equal(b.hidden, true, "no session, nothing to follow");
+  b.click();
+  assert.equal(f.store["agent-box:dockFollow"], '{"s2":true}', "and a press with no session changes nothing");
+});
+
+test("the tab's actions keep Follow for a file that is not text (an image, a binary) and while it is still being read; the ⋯ and Code | Changes are for text", async () => {
+  const f = await setup({ serve: false });
+  const { acts } = withHosts(f);
+  f.p.setRead({ ok: true, status: 200, data: { kind: "binary", size: 9 } });
+  const bin = new f.p.EditorTab("/p/x.bin", { host: f.p.host });
+  assert.equal(bin.seg.el.hidden, true, "Code | Changes is not there before the file is read as text");
+  assert.equal(bin.moreBtn.hidden, true);
+  assert.equal(bin.followBtn.hidden, false, "Follow is, even while it loads");
+  bin.onAttach();
+  assert.ok(acts.children.includes(bin.actsEl), "the actions are in the dock's bar");
+  await f.p.settle();
+  assert.ok(bin.inner, "read as a binary file");
+  assert.equal(bin.actsEl.hidden, false);
+  assert.equal(bin.seg.el.hidden, true);
+  assert.equal(bin.moreBtn.hidden, true);
+  assert.equal(bin.followBtn.hidden, false);
+  assert.ok(acts.children.includes(bin.actsEl), "and they stayed there when the file turned out to be a binary one");
+  bin.followBtn.click();
+  assert.equal(f.p.get("editorFollowOn")("s1"), true, "the same state and storage");
+  assert.deepEqual(JSON.parse(f.store["agent-box:dockFollow"]), { s1: true });
+  bin.onHide();
+  assert.ok(!acts.children.includes(bin.actsEl), "hidden with its tab");
+  // A binary file's tab that is brought back (already read: it has its viewer) gets its Follow in the bar as well.
+  bin.onAttach();
+  assert.ok(acts.children.includes(bin.actsEl), "shown again with its tab");
+  const late = new f.p.EditorTab("/p/y.bin", { host: f.p.host });
+  await f.p.settle();
+  assert.ok(late.inner);
+  late.onAttach();
+  assert.ok(acts.children.includes(late.actsEl), "a tab read before it was shown puts its actions in the bar when it is");
+  assert.equal(late.followBtn.hidden, false);
+  // A text file: all three.
+  const f2 = await setup();
+  const h2 = withHosts(f2);
+  const txt = await f2.p.open("/p/a.go");
+  assert.ok(h2.acts.children.includes(txt.actsEl));
+  assert.equal(txt.seg.el.hidden, false);
+  assert.equal(txt.moreBtn.hidden, false);
+  assert.equal(txt.followBtn.hidden, false);
 });

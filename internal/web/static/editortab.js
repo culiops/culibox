@@ -198,11 +198,11 @@ class EditorTab {
   // --- the bar: ⋯ in the dock's action area, the status bar under the editor ---------------------------------
 
   // buildActs makes the actions this tab adds to the dock's bar (#dock-acts, left of Full): the Code | Changes toggle, Follow (the
-  // session's setting, so every tab's says the same: editorfollow.js) and the ⋯ menu.
+  // session's setting, so every tab's says the same: editorfollow.js) and the ⋯ menu. The toggle and the ⋯ are for a file that is read
+  // as text (paint); Follow stays for every tab, an image and a binary file's included, and while a file is still being read.
   buildActs() {
     this.actsEl = document.createElement("div");
     this.actsEl.className = "dk-vact";
-    this.actsEl.hidden = true;
     const more = document.createElement("button");
     more.type = "button";
     more.className = "btn btn-ghost btn-icon btn-sm";
@@ -217,6 +217,8 @@ class EditorTab {
     more.onclick = (e) => { e.stopPropagation(); this.openMenu(); };
     this.moreBtn = more;
     this.actsEl.append(editorDiffToggle(this), editorFollowButton(this), more);
+    this.seg.el.hidden = true; // until the file is read as text (paint)
+    more.hidden = true;
   }
 
   // buildStatus makes the status bar (mockup B1): the branch and the "Saved" word on the left, then Ln/Col,
@@ -262,7 +264,8 @@ class EditorTab {
   paint() {
     if (this.disposed) return;
     const ready = !!this.model && !this.inner;
-    this.actsEl.hidden = !ready;
+    this.seg.el.hidden = !ready;
+    this.moreBtn.hidden = !ready;
     this.sbEl.hidden = !ready;
     const why = this.readOnlyWhy();
     if (this.roEl.textContent !== why) this.roEl.textContent = why;
@@ -362,10 +365,9 @@ class EditorTab {
     v.onUpdate = () => this.changed();
     this.inner = v;
     this.pendingLine = null;
-    this.actsEl.remove(); // the viewer has its own toolbar: this tab adds nothing to the dock's bar
     this.el.replaceChildren(v.el);
     if (this.attached) { v.onShow(); v.onAttach(); }
-    this.changed();
+    this.changed(); // the viewer has its own toolbar: the bar keeps only Follow
   }
 
   // findAlternates (#53): the first read of a relative terminal link was a 404. Look for the same repo-relative path
@@ -410,9 +412,9 @@ class EditorTab {
   onAttach() {
     if (this.disposed) return;
     this.attached = true;
-    if (this.inner) { this.inner.onAttach(); return; }
     const acts = document.getElementById("dock-acts");
     if (acts) acts.insertBefore(this.actsEl, document.getElementById("drawer-max"));
+    if (this.inner) { this.inner.onAttach(); return; }
     if (this.model) this.show();
     editorSyncStart(this); // the file on disk is asked about while this tab is the one on screen
   }

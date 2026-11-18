@@ -84,15 +84,15 @@ function dockAgentPaint() {
 // dockAgentInsert: the strip's Insert at prompt. It types the dock's active file as editorRefFor says (the selected lines as
 // path:a-b, or the file's path when nothing is selected) at the session's prompt. The strip is there because Full mode covers the
 // terminal, and a covered terminal is a state the insert decision refuses (insertdecision.js, #337); no exception is made for it
-// (founder, 2026-11-18). So the button first leaves Full mode, as Show terminal does (dockShowTerminal: Ctrl+`, and a forced
-// Full mode closes the dock), and then asks the decision on the prompt that is on screen now: it types, or toasts why it will
-// not (the session waits on the user) and types nothing. What to type is read before leaving, because forced Full closes the
-// dock and its editor goes with it. Never Enter.
+// (founder, 2026-11-18). So the button first leaves Full mode, as Show terminal does, and then asks the decision on the prompt
+// that is on screen now: it types, or toasts why it will not (the session waits on the user) and types nothing. That is
+// editorInsertLeavingFull (editorselbar.js), which the selection bar's Insert uses too. Never Enter.
 function dockAgentInsert() {
   const tab = typeof dockAttached === "function" ? dockAttached() : null;
   const want = editorRefFor(tab);
-  if (!want || !want.sid) { showToast("Open a file in the dock first: that is what Insert at prompt types", { error: true }); return; }
-  dockShowTerminal(() => { editorInsertRef(want); });
+  if (!want) { showToast("Open a file in the dock first: that is what Insert at prompt types", { error: true }); return; }
+  if (!want.sid) { showToast("This dock has no session, so there is no prompt to insert at", { error: true }); return; }
+  editorInsertLeavingFull(want);
 }
 
 // dockAgentWant: the session the strip should be polling right now, "" for none.

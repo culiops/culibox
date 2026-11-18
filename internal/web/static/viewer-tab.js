@@ -269,11 +269,7 @@ class ViewerTab {
     const pl = pathLineText(this.path, line);
     const res = pl.ok ? insertTextAtPrompt(target.term, shellQuote(pl.text) + " ") : { ok: false, reason: pl.reason };
     if (res.ok) { if (target.term.term) target.term.term.focus(); return; }
-    showToast(
-      res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
-      res.reason === "noterm" ? "This session has no terminal open here, so the path was not inserted" :
-      "That session is not connected, so the path was not inserted",
-      { error: true });
+    showToast(insertFailText(res.reason), { error: true });
     this.focusReader();
   }
 

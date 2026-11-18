@@ -1,10 +1,12 @@
 "use strict";
-// The Full-mode agent strip's Insert at prompt (dockagent.js dockAgentInsert, app.js dockShowTerminal), founder 2026-11-18: it first
-// LEAVES Full mode by the action of Show terminal, then asks the insert decision on the prompt that is on screen, and types
-// `rangeRef + " "` (or the file's path when nothing is selected) or, when the decision still refuses, toasts why and types nothing.
+// Insert at prompt from Full mode: the agent strip's (dockagent.js dockAgentInsert) and the selection bar's (editorselbar.js), both
+// through editorInsertLeavingFull and app.js dockShowTerminal, founder 2026-11-18 (ruling R14 for the bar): it first LEAVES Full
+// mode by the action of Show terminal, then asks the insert decision on the prompt that is on screen, and types `rangeRef + " "` (or,
+// for the strip with nothing selected, the file's path) or, when the decision still refuses, toasts why and types nothing. Outside
+// Full mode the bar's Insert asks at once and nothing is left.
 // Run on insertpage.js's page: the REAL tabs.js layout (panes, tabs, maximize), the real insertdecision.js and insertvisible.js,
 // the real editorref.js, editorselbar.js, viewerpath.js, upload.js and dockagent.js, and the real dockShowTerminal, paintDrawerMax
-// and setDrawerMax cut out of app.js. Stood in: applyDrawer (forced Full mode closes the dock through it; dock-layout.test.js runs the
+// and setDrawerMax cut out of app.js. The bar is the real widget on editorpage.js's fake Monaco editor. Stood in: applyDrawer (forced Full mode closes the dock through it; dock-layout.test.js runs the
 // real one and pins that it applies the new state and then runs `after`), the dock's editor (a selection the test sets) and the
 // layout calls that need a browser. "Moves no focus" is read as: nothing but what leaving Full mode does (Show terminal gives the
 // session's terminal the keyboard); a refusal adds none and types nothing.
@@ -13,6 +15,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const { page } = require("./insertpage.js");
+const { fakeEditor } = require("./editorpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const src = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
@@ -26,7 +29,7 @@ function fnSource(file, name) {
 
 // A page with session a (alpha, idle) in one pane, the dock open on it in Full mode (forced or chosen) and a file in the dock.
 function strip(opts) {
-  const o = Object.assign({ forced: false, selection: null, filePath: "/work/a.go", box: "", activity: "idle", need: "", holdClose: false, file: true }, opts);
+  const o = Object.assign({ forced: false, full: true, bar: false, sid: "a", selection: null, filePath: "/work/a.go", box: "", activity: "idle", need: "", holdClose: false, file: true }, opts);
   const p = page();
   p.sessions({ id: "a", name: "alpha", activity: o.activity, need: o.need });
   const cell = p.pane(p.term("a", "alpha"));
@@ -59,18 +62,34 @@ function strip(opts) {
     if (op && typeof op.after === "function") op.after();
   };
   // The dock's editor and its active tab, with the selection the test gave it.
-  p.ctx.__tab = o.file ? { path: o.filePath, box: o.box, model: {}, disposed: false, inner: null, diff: null, host: { sessionId: () => "a" } } : null;
+  p.ctx.__tab = o.file ? {
+    path: o.filePath, box: o.box, model: { onDidChangeContent: () => ({ dispose() {} }) }, disposed: false, inner: null, diff: null, attached: true,
+    host: { sessionId: () => o.sid }, focusReader() {},
+  } : null;
   p.run("let dockEditor = null, dockEditorOwner = null;");
-  if (o.file) {
+  let ed = null;
+  if (o.file && o.bar) {
+    // The real selection bar on the fake Monaco editor, which holds the tab's model and the keyboard.
+    ed = fakeEditor();
+    ed.setModel(p.ctx.__tab.model);
+    p.ctx.__ed = ed;
+    p.ctx.__monaco = { editor: { ContentWidgetPositionPreference: { ABOVE: 1, BELOW: 2 } }, KeyCode: { Escape: 9 } };
+    p.run("dockEditor = __ed; dockEditorOwner = __tab; editorSelBarInstall(__ed, __monaco);");
+    p.ctx.__tab.focusReader = () => ed.focus();
+    ed.focus();
+    if (o.selection) { const q = o.selection; ed.select(q.startLineNumber, q.startColumn, q.endLineNumber, q.endColumn); }
+  } else if (o.file) {
     p.ctx.__sel = o.selection;
     p.run("dockEditor = { getSelection: () => __sel || { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } }; dockEditorOwner = __tab;");
   }
   p.ctx.dockAttached = () => p.ctx.__tab;
-  // Full mode, chosen or forced, as paintDrawerMax writes it.
+  // Full mode, chosen or forced, as paintDrawerMax writes it (or the pushed dock, beside the panes).
   p.drawer.hidden = false;
-  p.run("paintDrawerMax(true, " + (o.forced ? "true" : "false") + ")");
+  if (o.full) p.run("paintDrawerMax(true, " + (o.forced ? "true" : "false") + ")");
   const sent = () => p.st.sent.a || [];
-  return { p, o, log, term, sent, press: () => p.run("dockAgentInsert()"), toasts: () => p.st.toasts, full: () => p.drawer.dataset.max === "1", dockOpen: () => !p.drawer.hidden };
+  // The bar's Insert at prompt, the first of its buttons.
+  const barInsert = () => { assert.equal(ed.widgets.length, 1, "the bar is up"); ed.widgets[0].getDomNode().children[0].click(); };
+  return { p, o, log, term, sent, ed, barInsert, press: () => p.run("dockAgentInsert()"), toasts: () => p.st.toasts, full: () => p.drawer.dataset.max === "1", dockOpen: () => !p.drawer.hidden };
 }
 
 const SEL = { startLineNumber: 3, startColumn: 1, endLineNumber: 5, endColumn: 12 };
@@ -195,11 +214,97 @@ test("a path with a control character is refused and nothing is typed", () => {
   assert.deepEqual(s.toasts(), [["That path contains control characters, so it was not inserted", true]]);
 });
 
+test("no file in the dock and no session are two different toasts", () => {
+  const nofile = strip({ file: false });
+  nofile.press();
+  assert.deepEqual(nofile.toasts(), [["Open a file in the dock first: that is what Insert at prompt types", true]]);
+  const nosess = strip({ sid: null, selection: SEL });
+  nosess.press();
+  assert.deepEqual(nosess.toasts(), [["This dock has no session, so there is no prompt to insert at", true]]);
+  assert.equal(nosess.full(), true, "Full mode is not left for either");
+  assert.deepEqual(nosess.sent(), []);
+});
+
+// --- the selection bar's Insert in Full mode (ruling R14) ---------------------------------------------------------------------
+
+test("the bar is drawn in Full mode, and its Insert leaves Full mode first, then types path:a-b and a space at the prompt, no Enter", () => {
+  const s = strip({ bar: true, selection: SEL });
+  assert.equal(s.full(), true);
+  const asked = [];
+  s.p.run("const __ask = insertRefused; insertRefused = function (t, l) { __log(document.getElementById('drawer').dataset.max === '1'); return __ask(t, l); };");
+  s.p.ctx.__log = (full) => asked.push(full);
+  s.barInsert();
+  assert.equal(s.full(), false, "Full mode is over (Show terminal's action)");
+  assert.equal(s.dockOpen(), true, "the pushed dock stays beside the panes");
+  assert.deepEqual(asked, [false], "the decision is asked once, after Full mode is off");
+  assert.deepEqual(s.sent(), ["/work/a.go:3-5 "]);
+  assert.ok(!/[\r\n\x00-\x1f]/.test(s.sent()[0]), "no Enter, no control byte");
+  assert.deepEqual(s.toasts(), []);
+  assert.deepEqual(s.p.st.focused, ["a", "a"], "Show terminal gave the terminal the keyboard; the insert's success keeps it there");
+});
+
+test("the bar's Insert in Full mode with the session waiting: Full mode is left, a toast says why, nothing is typed, no focus is added", () => {
+  const s = strip({ bar: true, selection: SEL, activity: "waiting", need: "ask" });
+  s.barInsert();
+  assert.equal(s.full(), false, "the user lands on the terminal that is asking");
+  assert.deepEqual(s.sent(), []);
+  assert.deepEqual(s.toasts(), [["alpha is waiting on you; answer it first", true]]);
+  assert.deepEqual(s.p.st.focused, ["a"], "only Show terminal's own focus");
+});
+
+test("the bar's Insert in a FORCED Full mode: the dock closes first and the reference read before it closed is typed from applyDrawer's `after`", () => {
+  const s = strip({ bar: true, forced: true, selection: SEL });
+  assert.equal(s.p.drawer.dataset.forced, "1");
+  s.barInsert();
+  assert.deepEqual(s.log.applied.map((a) => a.open), [null], "applyDrawer({open: null}), as Show terminal does");
+  assert.equal(s.dockOpen(), false);
+  assert.equal(s.full(), false);
+  assert.deepEqual(s.sent(), ["/work/a.go:3-5 "], "though the editor and its tab were gone by then");
+  assert.deepEqual(s.toasts(), []);
+});
+
+test("forced Full mode, session waiting: the bar's Insert closes the dock, toasts why and types nothing; and a discard ask answered Cancel types and says nothing", () => {
+  const waiting = strip({ bar: true, forced: true, selection: SEL, activity: "waiting", need: "sso" });
+  waiting.barInsert();
+  assert.equal(waiting.dockOpen(), false);
+  assert.deepEqual(waiting.sent(), []);
+  assert.deepEqual(waiting.toasts(), [["alpha is waiting on you; answer it first", true]]);
+  const held = strip({ bar: true, forced: true, selection: SEL, holdClose: true });
+  held.barInsert();
+  assert.equal(held.dockOpen(), true);
+  assert.equal(held.full(), true);
+  assert.deepEqual(held.sent(), []);
+  assert.deepEqual(held.toasts(), [], "no refusal: the user has been asked, not refused");
+  assert.deepEqual(held.p.st.focused, []);
+});
+
+test("outside Full mode nothing is left: the bar's Insert asks the decision at once and types at the visible prompt", () => {
+  const s = strip({ bar: true, full: false, selection: SEL });
+  assert.equal(s.dockOpen(), true);
+  assert.equal(s.full(), false);
+  s.barInsert();
+  assert.deepEqual(s.log.applied, [], "the dock was not touched");
+  assert.equal(s.log.refit, 0, "and no layout was redone");
+  assert.equal(s.dockOpen(), true);
+  assert.deepEqual(s.sent(), ["/work/a.go:3-5 "]);
+  assert.deepEqual(s.toasts(), []);
+  // The decision still has its say there: a waiting session refuses, with nothing left either.
+  const waiting = strip({ bar: true, full: false, selection: SEL, activity: "waiting", need: "ask" });
+  waiting.barInsert();
+  assert.deepEqual(waiting.sent(), []);
+  assert.deepEqual(waiting.toasts(), [["alpha is waiting on you; answer it first", true]]);
+  assert.deepEqual(waiting.log.applied, []);
+});
+
 test("the strip's Insert reuses Show terminal and the one insert; it has no way of its own to leave Full mode or to the prompt", () => {
   const code = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const body = code(fnSource("dockagent.js", "dockAgentInsert"));
-  assert.match(body, /dockShowTerminal\(\(\) => \{ editorInsertRef\(want\); \}\);/);
+  assert.match(body, /editorInsertLeavingFull\(want\);/);
   assert.doesNotMatch(body, /setDrawerMax|applyDrawer|paintDrawerMax|insertTextAtPrompt|sendText|sendKey|\\n|\\r/);
+  const leaving = code(fnSource("editorselbar.js", "editorInsertLeavingFull"));
+  assert.match(leaving, /const run = \(\) => \{ editorInsertRef\(want\); \};\n\s*if \(!dockShowTerminal\(run\)\) run\(\);/, "Show terminal's own function, then the one insert; nothing of its own");
+  assert.doesNotMatch(leaving, /setDrawerMax|applyDrawer|paintDrawerMax|insertTextAtPrompt|sendText|sendKey/);
+  assert.match(code(fnSource("editorselbar.js", "editorSelBarBuild")), /editorInsertLeavingFull\(editorRefFor\(esbTab, esbLines\)\)/, "the bar's Insert goes through it too");
   assert.match(code(src("app.js")), /\$\("dock-agent-ins"\)\.onclick = \(\) => dockAgentInsert\(\);/);
   const html = src("index.html");
   const at = html.indexOf('id="dock-agent-ins"');

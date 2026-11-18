@@ -19,8 +19,9 @@
 // screen: lines of an unsaved edit are not the lines of the file the agent reads.
 //
 // Every insert asks insertRefused (insertdecision.js) before it types, and types only through insertTextAtPrompt, so the session
-// waiting on the user, or a terminal that is not on screen, refuses with a toast; insert-callers.test.js pins both. The Full-mode
-// agent strip's Insert (dockagent.js) uses editorRefFor and editorInsertRef below.
+// waiting on the user, or a terminal that is not on screen, refuses with a toast; insert-callers.test.js pins both. In Full mode
+// the terminal is covered, so the bar's Insert, like the Full-mode agent strip's (dockagent.js), leaves Full mode first and asks the
+// decision after (editorInsertLeavingFull); both read editorRefFor before leaving.
 
 let esbEd = null;         // the editor the widget belongs to, once installed
 let esbEl = null;         // the bar's element (the widget's DOM node)
@@ -81,12 +82,20 @@ function editorInsertRef(want) {
   if (insertRefused(target.term)) return false;
   const res = insertTextAtPrompt(target.term, shellQuote(want.ref) + " ");
   if (res.ok) { target.term.grabFocus(); return true; }
-  showToast(
-    res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
-    res.reason === "noterm" ? "This session has no terminal open here, so the path was not inserted" :
-    "That session is not connected, so the path was not inserted",
-    { error: true });
+  showToast(insertFailText(res.reason), { error: true });
   return false;
+}
+
+// editorInsertLeavingFull: Insert at prompt from where the terminal may be covered, the selection bar's and the strip's. Full mode
+// covers the terminal, and a covered terminal is a state the insert decision refuses (#337); no exception is made for it (founder,
+// 2026-11-18), so Full mode is left first, by the action of Show terminal (dockShowTerminal: Ctrl+`; a forced Full mode closes the
+// dock), and the decision is asked on the prompt that is on screen then, from `then`, which dockShowTerminal runs once Full mode is
+// really over (for the close, after applyDrawer applied it: never after a Cancel of its discard ask). `want` is editorRefFor's, read
+// before leaving, because a forced Full closes the dock and its editor goes with it. Outside Full mode nothing is left, and the
+// insert is asked at once.
+function editorInsertLeavingFull(want) {
+  const run = () => { editorInsertRef(want); };
+  if (!dockShowTerminal(run)) run();
 }
 
 // --- the widget -------------------------------------------------------------------------------------------------------------
@@ -109,7 +118,7 @@ function esbButton(primary, label, icon, run) {
 // editorSelBarBuild makes the buttons: Insert at prompt, Copy, then P3's. Copy's label is the lines', set on every paint.
 function editorSelBarBuild() {
   const [insert] = esbButton(true, "Insert at prompt", "insert", () => {
-    if (esbTab && esbLines) editorInsertRef(editorRefFor(esbTab, esbLines));
+    if (esbTab && esbLines) editorInsertLeavingFull(editorRefFor(esbTab, esbLines));
   });
   esbCopy = esbButton(false, "Copy", "copy", () => {
     if (!esbTab || !esbLines) return;

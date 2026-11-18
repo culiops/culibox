@@ -33,6 +33,8 @@ async function setup(over) {
       return true;
     },
     copyPath: (text, refocus) => { copied.push(text); refocus(); },
+    // app.js dockShowTerminal: false outside Full mode (dock-agent-insert.test.js runs the real one, with the bar, in and out of Full mode).
+    dockShowTerminal: () => false,
   }, over));
   p.load("upload.js");
   p.ctx.menuIconSvg = (kind) => { const n = new El("svg", p.doc); n.className = "icon-" + kind; return n; };
@@ -199,6 +201,27 @@ test("Insert goes to the dock's session, not to whichever terminal has the keybo
   p.host.sessionId = () => "s2";
   buttons(ed)[0].click();
   assert.deepEqual(typed, [["s2", "/work/b.go:1-2 "]], "its own session's prompt takes it");
+});
+
+test("outside Full mode the bar's Insert asks Show terminal to leave, is told there is nothing to leave, and inserts at once", async () => {
+  const calls = [];
+  const { ed, typed } = await setup({ dockShowTerminal: (then) => { calls.push(typeof then); return false; } });
+  ed.focus();
+  ed.select(3, 1, 5, 12);
+  buttons(ed)[0].click();
+  assert.deepEqual(calls, ["function"], "dockShowTerminal(then) is how Full mode is left");
+  assert.deepEqual(typed, [["s1", "/p/a.go:3-5 "]], "false: not in Full mode, so the insert is run directly");
+});
+
+test("in Full mode the insert waits for Show terminal's `then`, and not a moment before", async () => {
+  let release = null;
+  const { ed, typed } = await setup({ dockShowTerminal: (then) => { release = then; return true; } });
+  ed.focus();
+  ed.select(3, 1, 5, 12);
+  buttons(ed)[0].click();
+  assert.deepEqual(typed, [], "Full mode is not over yet");
+  release();
+  assert.deepEqual(typed, [["s1", "/p/a.go:3-5 "]]);
 });
 
 test("no terminal for the dock's session on this page: a toast, nothing typed", async () => {
