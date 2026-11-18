@@ -73,8 +73,9 @@ let editorChangeKeys = false;
 function editorBindChangeKeys(ed) {
   if (editorChangeKeys) return;
   editorChangeKeys = true;
-  editorBind(ed, "editor.nextChange", () => editorReviewStep(edTab, 1));
-  editorBind(ed, "editor.prevChange", () => editorReviewStep(edTab, -1));
+  // The All changes tab (reviewall.js) steps across its sections first; the single-file view is the one tab with a diff otherwise.
+  editorBind(ed, "editor.nextChange", () => { if (!(typeof reviewAllStep === "function" && reviewAllStep(1))) editorReviewStep(edTab, 1); });
+  editorBind(ed, "editor.prevChange", () => { if (!(typeof reviewAllStep === "function" && reviewAllStep(-1))) editorReviewStep(edTab, -1); });
 }
 
 // editorBindNoteKeys binds Add note (the registry's editor.addNote: `c` and Mod+Shift+A, editornotes.js), once, for the same reason as

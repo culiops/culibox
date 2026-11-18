@@ -42,7 +42,7 @@ function page(over) {
   legend.append(new Node("span", doc));
   doc.getElementById = (id) => nodes[id] || null;
 
-  const st = { fetches: [], store: new Map(), shown: [], reveals: [], toasts: [], menu: null, closed: 0, owns: true, root: "/w", sid: "s1", loads: 0, newfile: [], mkdir: [] };
+  const st = { reviewOpened: [], scrolled: [], reviewOn: false, reviewHas: new Set(), fetches: [], store: new Map(), shown: [], reveals: [], toasts: [], menu: null, closed: 0, owns: true, root: "/w", sid: "s1", loads: 0, newfile: [], mkdir: [] };
   const fetch = (url, init) => new Promise((resolve, reject) => {
     st.fetches.push({ url, body: JSON.parse(init.body), resolve, reject, signal: init.signal });
   });
@@ -76,6 +76,9 @@ function page(over) {
     drawerOwnsFileClicks: () => st.owns,
     drawerSessionName: (id) => ({ s1: "fix-fs-cap" }[id] || ""),
     drawerShowFile: (p, o) => { st.shown.push([p, o]); return true; },
+    // The All changes tab (reviewall.js): the tab opens through reviewAllOpen; while it is on screen (st.reviewOn) a row's click is its scrollTo.
+    reviewAllOpen: (sid, path) => { st.reviewOpened.push([sid, path]); return true; },
+    reviewAllScrollTo: (path) => { if (!st.reviewOn || !st.reviewHas.has(path)) return false; st.scrolled.push(path); return true; },
   }, over));
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load('let drawerState = { open: "files", sessionId: "s1", pinned: false }; let drawerChangedFiles = new Map(); let ftExpanded = new Set(["/w/a", "/w/a/b", "/other/x"]); let ftRootSel = null;', "state");
@@ -403,7 +406,7 @@ test("the list is capped with an 'and N more' row, and the count is the whole nu
   assert.strictEqual(text(p.el("drawer-strip-count")), "99+");
 });
 
-test("a row's click shows the file as a preview; a deleted file opens its diff; a folder is shown in the tree; Review pins the first file's Changes", async () => {
+test("a row's click shows the file as a preview; a deleted file opens its diff; a folder is shown in the tree; Review opens the All changes tab at the first file", async () => {
   const p = page();
   await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "gone.go", x: "D" }, { p: "newdir/", x: "U" }]));
   const by = Object.fromEntries(p.rows().map((r) => [text(r.querySelector(".dk-nm")), r]));
@@ -414,11 +417,36 @@ test("a row's click shows the file as a preview; a deleted file opens its diff; 
   assert.deepStrictEqual(p.st.reveals, ["/w/newdir"]);
   p.st.shown.length = 0;
   p.el("dock-review").click();
-  assert.deepStrictEqual(plain(p.st.shown), [["/w/a.go", { view: "changes", preview: false }]], "the first file, not the folder");
+  assert.deepStrictEqual(plain(p.st.shown), [], "Review no longer opens one file");
+  assert.deepStrictEqual(plain(p.st.reviewOpened), [["s1", "/w/a.go"]], "the tab, at the first file (not the folder)");
   assert.strictEqual(p.el("dock-review").hidden, false);
   const onlyDirs = page();
   await onlyDirs.status(okStatus([{ p: "newdir/", x: "U" }]));
   assert.strictEqual(onlyDirs.el("dock-review").hidden, true, "nothing to review but a folder");
+});
+
+test("while the All changes tab is on screen a row's click scrolls to its section and opens no editor; a row with no section opens as usual", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "b.go", x: "M" }, { p: "newdir/", x: "U" }]));
+  const by = Object.fromEntries(p.rows().map((r) => [text(r.querySelector(".dk-nm")), r]));
+  // The tab is not on screen: the click opens the file, as before.
+  by["a.go"].click();
+  assert.deepStrictEqual(plain(p.st.shown), [["/w/a.go", null]]);
+  assert.deepStrictEqual(p.st.scrolled, []);
+  p.st.shown.length = 0;
+  // The tab is on screen, with sections for a.go and b.go only (the cap, say).
+  p.st.reviewOn = true;
+  p.st.reviewHas = new Set(["/w/a.go", "/w/b.go"]);
+  by["a.go"].click();
+  by["b.go"].click();
+  assert.deepStrictEqual(p.st.scrolled, ["/w/a.go", "/w/b.go"]);
+  assert.deepStrictEqual(plain(p.st.shown), [], "no editor tab was opened");
+  p.st.reviewHas = new Set(["/w/b.go"]);
+  by["a.go"].click();
+  assert.deepStrictEqual(plain(p.st.shown), [["/w/a.go", null]], "a file with no section opens as usual");
+  by["newdir"].click();
+  assert.deepStrictEqual(p.st.reveals, ["/w/newdir"], "a folder is still the tree's");
+  assert.deepStrictEqual(p.st.scrolled, ["/w/a.go", "/w/b.go"]);
 });
 
 // The review loop's marks on the section (P3 Task 3). The review store and the editor are other scripts, so each test stands in for the
@@ -499,19 +527,19 @@ test("Review opens the first file whose mark does not stand, and the first file 
   const p = page();
   reviewStubs(p);
   await p.status(okStatus([{ p: "newdir/", x: "U" }, { p: "a.go", x: "M" }, { p: "b.go", x: "M" }]));
-  const review = () => { p.st.shown.length = 0; p.el("dock-review").click(); return plain(p.st.shown); };
-  assert.deepStrictEqual(review(), [["/w/a.go", { view: "changes", preview: false }]], "nothing reviewed: the first file");
+  const review = () => { p.st.reviewOpened.length = 0; p.el("dock-review").click(); return plain(p.st.reviewOpened); };
+  assert.deepStrictEqual(review(), [["s1", "/w/a.go"]], "nothing reviewed: the first file");
   p.ctx.__marks = { "/w/a.go": markFor(p, "/w/a.go") };
   p.ctx.dockChangesRender();
-  assert.deepStrictEqual(review(), [["/w/b.go", { view: "changes", preview: false }]], "a.go is reviewed: the second row opens");
+  assert.deepStrictEqual(review(), [["s1", "/w/b.go"]], "a.go is reviewed: the second row opens");
   // The agent edits a.go: its mark stops standing, so it is the first unreviewed again.
   p.run('drawerChangedFiles.set("s1", [{ path: "/w/a.go", ts: 50 }])');
   p.ctx.dockChangesRender();
-  assert.deepStrictEqual(review(), [["/w/a.go", { view: "changes", preview: false }]]);
+  assert.deepStrictEqual(review(), [["s1", "/w/a.go"]]);
   p.ctx.__marks = { "/w/a.go": markFor(p, "/w/a.go"), "/w/b.go": markFor(p, "/w/b.go") };
   p.run('drawerChangedFiles.set("s1", [])');
   p.ctx.dockChangesRender();
-  assert.deepStrictEqual(review(), [["/w/a.go", { view: "changes", preview: false }]], "all reviewed: Review still takes the reader to the first");
+  assert.deepStrictEqual(review(), [["s1", "/w/a.go"]], "all reviewed: Review still takes the reader to the first");
 });
 
 test("the root header is the root's name and its path, and a click shows the root field until the root changes or Escape", async () => {

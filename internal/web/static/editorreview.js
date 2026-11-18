@@ -95,6 +95,7 @@ function editorReviewChanged() {
 // editorReviewRefresh: the Changes view on screen (if any) repaints its header: the rows or Activity's list moved.
 function editorReviewRefresh() {
   if (edTab && edTab.diff) editorReviewPaint(edTab);
+  if (typeof reviewAllSync === "function") reviewAllSync(); // the All changes tab's headers and sections follow the same rows and marks
   editorImageSync(); // an image tab's toggle and comparer follow the same rows (imagediff.js)
 }
 
@@ -150,7 +151,14 @@ function editorReviewHead(tab) {
     const done = Object.prototype.hasOwnProperty.call(marks, tab.path) && reviewedState(marks[tab.path], row, reviewFilesOf(sid));
     if (done) reviewUnmark(sid, tab.path); else reviewMark(sid, tab.path, row);
   };
-  right.append(pos, prev, next, kbd, mark);
+  // View all: the All changes tab (reviewall.js), at this file's section.
+  const all = document.createElement("button");
+  all.type = "button";
+  all.className = "btn btn-ghost btn-sm dk-dh-all";
+  all.textContent = "View all";
+  all.title = "Show every changed file in one scroll";
+  all.onclick = () => { if (typeof reviewAllOpen === "function") reviewAllOpen(editorReviewSid(tab), tab.path); };
+  right.append(pos, prev, next, kbd, all, mark);
   el.append(name, label, ct, right);
   return { el, label, ct, add, del, pos, prev, next, mark, sig: "" };
 }

@@ -253,23 +253,27 @@ function diffModeSet(mode) {
     edTab.diff.diff.updateOptions(editorDiffOptions());
     edTab.paint();
   }
+  if (typeof reviewAllApplyPrefs === "function") reviewAllApplyPrefs(); // the All changes tab's sections follow
 }
 
 // diffWrapToggle: the ⋯ menu's Wrap diff and Alt+Z while the Changes view has the focus. Not the editor's wrap.
 function diffWrapToggle() {
   viewerPrefs.setDiffWrap(!viewerPrefs.getDiffWrap());
   if (edTab && edTab.diff) edTab.diff.diff.updateOptions(editorDiffOptions());
+  if (typeof reviewAllApplyPrefs === "function") reviewAllApplyPrefs();
   return viewerPrefs.getDiffWrap();
 }
 
 function diffLineNumbersToggle() {
   dgLineNumbers = !dgLineNumbers;
   if (edTab && edTab.diff) edTab.diff.diff.updateOptions(editorDiffOptions());
+  if (typeof reviewAllApplyPrefs === "function") reviewAllApplyPrefs();
   return dgLineNumbers;
 }
 
 // editorDiffFocused: the keyboard is in the Changes view on screen (either side, or its find widget).
 function editorDiffFocused() {
+  if (typeof reviewAllFocused === "function" && reviewAllFocused()) return true; // a section of the All changes tab
   const d = edTab && edTab.diff ? edTab.diff.diff : null;
   if (!d) return false;
   const has = (e) => !!e && (typeof e.hasWidgetFocus === "function" ? e.hasWidgetFocus() : typeof e.hasTextFocus === "function" && e.hasTextFocus());
@@ -620,6 +624,7 @@ function editorDiffLeave(tab) {
 // editorDiffApplyPrefs: the font size or the wrap changed (editorApplyPrefs): the Changes view on screen follows.
 function editorDiffApplyPrefs() {
   if (edTab && edTab.diff) edTab.diff.diff.updateOptions(editorDiffOptions());
+  if (typeof reviewAllApplyPrefs === "function") reviewAllApplyPrefs();
 }
 
 // editorDiffDispose: the tab is closed. Nothing it made stays: the view and the base text's model, the timer and the subscription.

@@ -253,6 +253,74 @@ function loadReviewed(storage, liveSids) {
   return out;
 }
 
+// --- the All changes tab (reviewall.js) -------------------------------------------------------------------------------------
+
+const REVIEW_ALL_MAX = 100;     // sections the tab makes; past it the Changes list is how files are opened one by one
+const REVIEW_ALL_HEIGHT = 1200; // px: a section's diff editor is as tall as its content up to here, then scrolls inside
+
+// The sections of the tab for the Changes rows: the files (reviewRows) in the section's own order, the first REVIEW_ALL_MAX of them,
+// and how many were left out. {rows, more}.
+function reviewAllRows(rows) {
+  const files = reviewRows(rows);
+  return { rows: files.slice(0, REVIEW_ALL_MAX), more: Math.max(0, files.length - REVIEW_ALL_MAX) };
+}
+
+// Where the section of `path` is among `shown` (reviewAllRows' rows), -1 when it has none (a folder, a path past the cap).
+function reviewAllIndex(shown, path) {
+  return Array.isArray(shown) ? shown.findIndex((r) => r && r.path === path) : -1;
+}
+
+// A section's editor height: its content's, at least 0 and at most REVIEW_ALL_HEIGHT; a height that is no number is 0.
+function reviewAllHeight(h) {
+  const n = Number(h);
+  return Number.isFinite(n) ? Math.min(REVIEW_ALL_HEIGHT, Math.max(0, Math.round(n))) : 0;
+}
+
+// Which sections get a diff editor and which lose theirs. `order` is the sections' paths in order; `live` the paths that have an editor
+// now; `near` those within a screen of the viewport (they need one); `far` those within two screens (the ones that may keep theirs).
+// {create, dispose} in `order`: a near section without an editor gets one, an editor whose section is out of `far` goes. A section that is
+// near but not in `far` cannot happen for one observer pair; it is kept rather than made and dropped in one step.
+function reviewAllPlan(order, live, near, far) {
+  const L = live instanceof Set ? live : new Set(live || []);
+  const N = near instanceof Set ? near : new Set(near || []);
+  const F = far instanceof Set ? far : new Set(far || []);
+  const list = Array.isArray(order) ? order : [];
+  return {
+    create: list.filter((p) => N.has(p) && !L.has(p)),
+    dispose: list.filter((p) => L.has(p) && !N.has(p) && !F.has(p)),
+  };
+}
+
+// F7 / Shift+F7 across the sections. `secs` is one entry per section in order: {kind: "text", changes (lineDiff's list), lineCount} for
+// a section whose diff is computed, {kind: "stop"} for one with nothing to step through (an image, a binary file, one that could not be
+// read: the reader stops at it once), {kind: "unknown"} for one that has no diff yet (it is not made, or not read). `from` is {idx, line}:
+// the section the reader is in and the line of the cursor in it (0: before the first line). The answer:
+//   {idx, at: "change", index, line}  a change of a computed section (the next one in the section, else the first/last of the next one
+//                                     that has any); `line` is clamped into the buffer as the single-file view does
+//   {idx, at: "section", land}        a section to go to and land in when its diff is there: "first" going forward, "last" going back
+//   null                              past the last (forward) or before the first (backward)
+function reviewAllStepPlan(secs, from, dir) {
+  if (!Array.isArray(secs) || (dir !== 1 && dir !== -1) || !from || !Number.isInteger(from.idx)) return null;
+  const shown = (s) => (Array.isArray(s.changes) ? s.changes : []).filter((c) => c && typeof c === "object").map((c) => Object.assign({}, c, { from: reviewLineOf(c, s.lineCount) }));
+  const line = Number.isFinite(from.line) ? from.line : 0;
+  const cur = secs[from.idx];
+  if (cur && cur.kind === "text") {
+    const hit = nextChange(shown(cur), line, dir);
+    if (hit) return { idx: from.idx, at: "change", index: hit.index, line: hit.line };
+  }
+  for (let i = from.idx + dir; i >= 0 && i < secs.length; i += dir) {
+    const s = secs[i];
+    if (!s || typeof s !== "object") continue;
+    if (s.kind === "unknown" || s.kind === "stop") return { idx: i, at: "section", land: dir === 1 ? "first" : "last" };
+    if (s.kind !== "text") continue;
+    const list = shown(s);
+    if (!list.length) continue;
+    const index = dir === 1 ? 0 : list.length - 1;
+    return { idx: i, at: "change", index, line: list[index].from };
+  }
+  return null;
+}
+
 // --- image diff (imagediff.js) ---------------------------------------------------------------------------------------------
 
 // imgNum: v as a finite-or-infinite number, or NaN for anything that is not one (null, "", "  ", an object: Number() would make
@@ -286,5 +354,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     REVIEWED_KEY, reviewFp, reviewMarkFor, reviewedState, reviewedCount, nextChange, pasteGate, dirtyNotedNames, pasteBarState, saveReviewed, loadReviewed,
     reviewRows, reviewNeighbour, reviewFirstOpen, reviewLineOf, reviewChangePos, notesPendingByPath, swipeClip, onionOpacity,
+    REVIEW_ALL_MAX, REVIEW_ALL_HEIGHT, reviewAllRows, reviewAllIndex, reviewAllHeight, reviewAllPlan, reviewAllStepPlan,
   };
 }

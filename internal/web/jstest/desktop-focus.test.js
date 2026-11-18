@@ -95,6 +95,7 @@ const THIN_ALLOW = [
   [".dk-tab:focus-visible", INSET + "the dock's tab strip scrolls sideways (overflow-x: auto clips both axes)"],
   [".dk-md:focus-visible", INSET + "the markdown Preview fills the editor's body, which is overflow: hidden, so an outside ring would be clipped"],
   [".dk-imgd-tab:focus-visible", INSET + "an image's Changes view fills the tab and its body scrolls, which clips an outside ring"],
+  [".dk-ra-scroll:focus-visible", INSET + "the All changes tab's scroll area fills the tab, whose overflow clips an outside ring"],
   [".dk-x:focus-visible", INSET + "a tab's close button sits inside the dock's scrolling tab strip"],
   ["button.dk-crumb:focus-visible", INSET + "the crumb trail is overflow: hidden, and its buttons sit at the row's edge"],
   [".dk-row:focus-visible", INSET + "a Changes row spans the full width of the section's scrolling list, which clips an outside ring"],

@@ -363,3 +363,31 @@ test("a tab the dock already has is told where to land before it is opened (a hi
   assert.equal(seen.length, 1);
   assert.deepEqual({ at: seen[0].at, focus: seen[0].focus }, { at: "first", focus: true }, "known to the tab when drawerShowFile runs");
 });
+
+test("View all in the header opens the All changes tab at this file's section; F7 goes to the tab first when it is on screen", async () => {
+  const opened = [];
+  const steps = [];
+  let on = false;
+  const { p, tab, d } = await review({
+    over: {
+      reviewAllOpen: (sid, path) => { opened.push([sid, path]); return true; },
+      reviewAllStep: (dir) => { steps.push(dir); return on; },
+    },
+  });
+  const all = tab.diff.head.el.querySelector(".dk-dh-all");
+  assert.ok(all, "a View all button in the header");
+  assert.equal(all.textContent, "View all");
+  all.click();
+  assert.deepEqual(opened, [["s1", "/p/b.go"]]);
+  // The tab is not on screen: the call is offered the key, answers no, and the file's own view steps.
+  const before = d.modified.getPosition().lineNumber;
+  command(p, F7)();
+  assert.deepEqual(steps, [1]);
+  assert.notEqual(d.modified.getPosition().lineNumber, before, "the single-file view moved");
+  // The tab is on screen: it took the key, so this view did not move.
+  on = true;
+  const at = d.modified.getPosition().lineNumber;
+  command(p, F7)();
+  assert.deepEqual(steps, [1, 1]);
+  assert.equal(d.modified.getPosition().lineNumber, at);
+});

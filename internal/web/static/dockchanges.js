@@ -69,6 +69,12 @@ function dockChangesRows() {
   return dkcView && dkcView.kind === "rows" ? dkcView.rows : [];
 }
 
+// dockChangesView: the view the section shows now (changesView's {kind, rows, ...}), null before the first paint. The All changes tab
+// (reviewall.js) draws its sections from the same rows and says the same note where there is no list.
+function dockChangesView() {
+  return dkcView;
+}
+
 // gitBaseFor: the last /api/git/base reply for `root` (a BaseInfo), or null when none has landed for it or the request failed.
 function gitBaseFor(root) {
   return dkcBase && root && dkcBase.root === root ? dkcBase.reply : null;
@@ -257,10 +263,15 @@ function dkcFillRow(b, r, label, rv) {
 }
 
 // dkcOpenRow: a row's click. A file opens as a preview tab; a deleted one has nothing to read, so its diff opens; an
-// untracked folder is a place in the tree, not a file, so the tree shows it.
+// untracked folder is a place in the tree, not a file, so the tree shows it. While the All changes tab is the one on screen the
+// Changes list is its file tree: the click scrolls to the file's section instead (a file past the tab's cap has none, and opens as usual).
 function dkcOpenRow(r) {
   if (r.folder) {
     if (typeof ftReveal === "function") ftReveal(r.path).then((ok) => { if (!ok) showToast("Could not show that folder in the tree", { error: true }); });
+    return;
+  }
+  if (typeof reviewAllScrollTo === "function" && reviewAllScrollTo(r.path)) {
+    if (typeof dockTreeFold === "function") dockTreeFold(); // an explorer opened from the strip folds again, as after a file
     return;
   }
   if (typeof drawerShowFile !== "function") return;
@@ -274,13 +285,13 @@ function dkcFirstFile(view) {
   return view && view.kind === "rows" ? reviewRows(view.rows)[0] || null : null;
 }
 
-// dkcReview: Review opens the Changes view of the first file whose reviewed mark does not stand, pinned (every one of them reviewed:
-// the first). The combined view is a later one's.
+// dkcReview: Review opens the All changes tab (reviewall.js) at the first file whose reviewed mark does not stand (every one of them
+// reviewed: the first).
 function dkcReview() {
   const sid = dkcSid();
   const files = typeof drawerChangedFiles !== "undefined" && sid ? drawerChangedFiles.get(sid) || null : null;
   const first = dkcView && dkcView.kind === "rows" ? reviewFirstOpen(dkcView.rows, typeof reviewMarksOf === "function" ? reviewMarksOf(sid) : {}, files) : null;
-  if (first && typeof drawerShowFile === "function") drawerShowFile(first.path, { view: "changes", preview: false });
+  if (first && typeof reviewAllOpen === "function") reviewAllOpen(sid, first.path);
 }
 
 // dkcReviewState: what the section draws of the review loop, for the file rows of `view`:

@@ -35,6 +35,13 @@ function dockTabKey(path, box) {
   return "v:" + path;
 }
 
+// The All changes tab (reviewall.js) is the one tab that is no file: key "r:" + the session id, `review: true`, no path. It is a view of
+// the session's Changes list, so it is never stored: dockMakeTab wants a path, and dockCleanState, which every stored or foreign
+// state goes through, drops what has none. After a reload the dock comes back with the files it had; Review opens the tab again.
+function dockReviewKey(sid) {
+  return typeof sid === "string" && sid ? "r:" + sid : null;
+}
+
 // dockScroll keeps an offset to a finite, non-negative whole number of pixels: a
 // stored entry is user-editable text and goes straight into scrollTop. The same
 // rule as layout.js's clampScroll, kept here so this file loads and tests alone.
@@ -97,6 +104,21 @@ function dockOpen(st, o) {
   }
   const after = next.findIndex((t) => t.key === active);
   next.splice(after < 0 ? next.length : after + 1, 0, tab);
+  return { tabs: next, active: key };
+}
+
+// dockOpenReview opens the session's All changes tab and makes it the active one: an existing one is activated, else it goes in right
+// after the active tab, as any new tab does. Never a preview (a click on a Changes row is what replaces a preview, and this tab is
+// not a file). A session id with no key leaves the state as it was.
+function dockOpenReview(st, sid) {
+  const tabs = dockTabsOf(st);
+  const active = dockActiveOf(st);
+  const key = dockReviewKey(sid);
+  if (!key) return { tabs: dockCopyTabs(tabs), active };
+  if (tabs.some((t) => t.key === key)) return { tabs: dockCopyTabs(tabs), active: key };
+  const next = dockCopyTabs(tabs);
+  const after = next.findIndex((t) => t.key === active);
+  next.splice(after < 0 ? next.length : after + 1, 0, { key, path: "", box: null, scroll: 0, preview: false, review: true });
   return { tabs: next, active: key };
 }
 
@@ -352,6 +374,12 @@ function dockTabItems(st, hooks) {
   const h = hooks || {};
   const active = dockActiveOf(st);
   return dockTabsOf(st).map((t) => {
+    if (t.review === true) {
+      return {
+        key: t.key, path: "", box: null, review: true, name: "All changes", title: "All changes: every changed file in one scroll", letter: "",
+        preview: false, dirty: false, locked: false, active: t.key === active,
+      };
+    }
     const label = dockTabLabel(t.path, t.box);
     const code = !t.box && typeof h.code === "function" ? h.code(t.path) : "";
     return {
@@ -424,7 +452,7 @@ function dockRepointTab(st, oldKey, path) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    DOCK_TABS_KEY, DOCK_MAX_TABS, dockTabKey, dockOpen, dockClose, dockPin, dockActivate, dockSetScroll,
+    DOCK_TABS_KEY, DOCK_MAX_TABS, dockTabKey, dockReviewKey, dockOpenReview, dockOpen, dockClose, dockPin, dockActivate, dockSetScroll,
     dockLeaveNeedsAsk, dockFollow, serializeDock, parseDock, dockFromLayout, dockCellSid, dockMerge,
     dockTabLabel, dockTabItems, dockRemoved, dockSyncScrolls, dockStepKey, dockRepointTab,
   };

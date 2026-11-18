@@ -1555,6 +1555,42 @@
   .dk-imgd-knob { position: absolute; top: 50%; left: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; box-sizing: border-box; border-radius: 50%; background: var(--bg); border: 2px solid var(--accent); }
   .dk-imgd-blend { display: flex; align-items: center; gap: var(--sp-2); width: min(320px, 100%); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
   .dk-imgd-range { flex: 1; min-width: 0; accent-color: var(--accent); }
+  /* The All changes tab (reviewall.js): the tab's own head (what is compared, the counts, "reviewed n of m"), then one scroll of sections. A
+     section's header is sticky inside its own section, so the file being read keeps its name, its circle and Open at the top. The body is
+     as tall as its diff editor's content (the script sets the height, 1200 px at most) and the editor scrolls inside past that. */
+  .dk-ra-head {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; min-height: 30px; padding: 2px 12px; box-sizing: border-box;
+    background: var(--bg); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui);
+  }
+  .dk-ra-title { color: var(--fg); font-weight: var(--w-medium); }
+  .dk-ra-cmp { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
+  .dk-ra-rev { margin-left: auto; white-space: nowrap; }
+  .dk-ra-head [hidden], .dk-sec-h [hidden] { display: none; }
+  .dk-ra-scroll { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; background: var(--bg); }
+  .dk-ra-scroll:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-ra-note { padding-top: 10px; }
+  .dk-ra-more { padding: 10px 12px; }
+  .dk-sec { position: relative; border-bottom: 1px solid var(--line); }
+  .dk-sec-h {
+    position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px 0 4px; box-sizing: border-box;
+    background: var(--panel); border-bottom: 1px solid var(--line); font: var(--t-sm)/var(--lh-sm) var(--font-ui); white-space: nowrap; min-width: 0;
+  }
+  .dk-sec-caret { width: 22px; height: 22px; padding: 0; flex: none; }
+  .dk-sec-caret[aria-expanded="false"] svg { transform: rotate(-90deg); }
+  .dk-sec-ck { position: relative; padding: 0; background: transparent; cursor: pointer; }
+  .dk-sec-ck::before { content: ""; position: absolute; inset: -6px; }
+  .dk-sec-ck:hover { border-color: var(--muted); }
+  .dk-sec-ck.dk-ck-done:hover { border-color: var(--ok); }
+  .dk-sec-ck:focus-visible, .dk-sec-caret:focus-visible, .dk-sec-open:focus-visible { outline: var(--focus); outline-offset: 2px; }
+  .dk-sec-h .dk-nm { color: var(--fg); font-weight: var(--w-medium); }
+  .dk-sec-h .dk-st { flex: none; min-width: 12px; text-align: center; }
+  .dk-dh-all { height: 22px; padding: 0 8px; }
+  .dk-sec-open { flex: none; margin-left: auto; height: 22px; padding: 0 10px; }
+  .dk-sec-h .dk-dir { flex: 1 1 0; }
+  .dk-sec-b { position: relative; overflow: hidden; min-width: 0; }
+  .dk-sec-b[hidden] { display: none; }
+  .dk-sec-in, .dk-sec-mon { width: 100%; height: 100%; min-width: 0; }
+  .dk-ra-msg { padding: var(--sp-3) var(--sp-4); }
   /* The markdown Preview (editormd.js) fills the body the same way, and is the scroller. The document is the phone's .md-body (app.css),
      given mockup B4's margins: 36px on the left and 28px on the right, 18px above. The pane takes the keyboard (Mod+S, the arrows),
      so its ring sits inside it. */

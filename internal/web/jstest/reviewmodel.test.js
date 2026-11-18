@@ -330,3 +330,95 @@ test("onionOpacity maps the slider's 0..100 to 0..1, clamped", () => {
 test("onionOpacity of nothing usable is the half-way blend, never NaN", () => {
   for (const v of [NaN, undefined, null, "", "  ", "abc", {}, []]) assert.strictEqual(onionOpacity(v), 0.5, String(v));
 });
+
+// --- the All changes tab (reviewall.js) ---
+const RA = require("../static/reviewmodel.js");
+
+const rowOf = (p, extra) => Object.assign({ path: p, name: p.split("/").pop(), dir: "", code: "M", add: 1, del: 0, folder: false, provisional: false }, extra);
+
+test("reviewAllRows: files only, in order, the first 100, and how many were left out", () => {
+  const rows = [rowOf("/w/a"), rowOf("/w/dir", { folder: true }), rowOf("/w/b", { provisional: true }), rowOf("/w/c")];
+  const r = RA.reviewAllRows(rows);
+  assert.deepStrictEqual(r.rows.map((x) => x.path), ["/w/a", "/w/c"], "a folder and a provisional row have no diff to read");
+  assert.strictEqual(r.more, 0);
+  const many = Array.from({ length: 130 }, (_, i) => rowOf("/w/f" + i));
+  const c = RA.reviewAllRows(many);
+  assert.strictEqual(c.rows.length, 100);
+  assert.strictEqual(c.rows[0].path, "/w/f0");
+  assert.strictEqual(c.rows[99].path, "/w/f99");
+  assert.strictEqual(c.more, 30);
+  assert.strictEqual(RA.reviewAllRows(Array.from({ length: 100 }, (_, i) => rowOf("/w/f" + i))).more, 0, "exactly 100 is all of them");
+  assert.deepStrictEqual(RA.reviewAllRows(null), { rows: [], more: 0 });
+});
+
+test("reviewAllIndex maps a path to its section, -1 for a folder, a path past the cap or nothing", () => {
+  const shown = RA.reviewAllRows(Array.from({ length: 105 }, (_, i) => rowOf("/w/f" + i))).rows;
+  assert.strictEqual(RA.reviewAllIndex(shown, "/w/f0"), 0);
+  assert.strictEqual(RA.reviewAllIndex(shown, "/w/f99"), 99);
+  assert.strictEqual(RA.reviewAllIndex(shown, "/w/f100"), -1, "past the cap");
+  assert.strictEqual(RA.reviewAllIndex(shown, "/w/nope"), -1);
+  assert.strictEqual(RA.reviewAllIndex(null, "/w/f0"), -1);
+});
+
+test("reviewAllHeight: content height, at most 1200, never negative or NaN", () => {
+  assert.strictEqual(RA.reviewAllHeight(340.4), 340);
+  assert.strictEqual(RA.reviewAllHeight(1200), 1200);
+  assert.strictEqual(RA.reviewAllHeight(5000), 1200);
+  assert.strictEqual(RA.reviewAllHeight(-3), 0);
+  for (const v of [NaN, undefined, "x", Infinity]) assert.strictEqual(RA.reviewAllHeight(v), 0, String(v));
+});
+
+test("reviewAllPlan: a near section without an editor gets one; an editor past two screens goes; the rest is left alone", () => {
+  const order = ["a", "b", "c", "d", "e", "f"];
+  // Scrolled to c..d: near = c,d ; far (two screens) = b,c,d,e. Live from before: a, b, c.
+  const p = RA.reviewAllPlan(order, new Set(["a", "b", "c"]), new Set(["c", "d"]), new Set(["b", "c", "d", "e"]));
+  assert.deepStrictEqual(p.create, ["d"]);
+  assert.deepStrictEqual(p.dispose, ["a"], "b is between one and two screens: it keeps its editor");
+  // Nothing moved: nothing to do (no per-scroll work).
+  assert.deepStrictEqual(RA.reviewAllPlan(order, ["c", "d"], ["c", "d"], ["b", "c", "d", "e"]), { create: [], dispose: [] });
+  // Far away and back: everything is made again.
+  const away = RA.reviewAllPlan(order, new Set(["a", "b"]), new Set(["e", "f"]), new Set(["d", "e", "f"]));
+  assert.deepStrictEqual(away, { create: ["e", "f"], dispose: ["a", "b"] });
+  const back = RA.reviewAllPlan(order, new Set(["e", "f"]), new Set(["a", "b"]), new Set(["a", "b", "c"]));
+  assert.deepStrictEqual(back, { create: ["a", "b"], dispose: ["e", "f"] });
+  // A path that is no longer a section is not made or kept by the plan (the caller disposes what it no longer lists).
+  assert.deepStrictEqual(RA.reviewAllPlan(["a"], new Set(["z"]), new Set(["z"]), new Set(["z"])), { create: [], dispose: [] });
+  // Nothing visible (a hidden tab): no section is near, and the ones past far go.
+  assert.deepStrictEqual(RA.reviewAllPlan(order, new Set(["a"]), new Set(), new Set()), { create: [], dispose: ["a"] });
+});
+
+test("reviewAllStepPlan: F7 walks the changes of a section, then the next section's, skipping unchanged ones", () => {
+  const text = (...froms) => ({ kind: "text", lineCount: 50, changes: froms.map((f) => ({ kind: "mod", from: f, to: f })) });
+  const secs = [text(5, 20), text(), text(7), text(9, 30)];
+  // inside the first section
+  assert.deepStrictEqual(RA.reviewAllStepPlan(secs, { idx: 0, line: 5 }, 1), { idx: 0, at: "change", index: 1, line: 20 });
+  // past its last: the next section that has a change (section 1 has none)
+  assert.deepStrictEqual(RA.reviewAllStepPlan(secs, { idx: 0, line: 20 }, 1), { idx: 2, at: "change", index: 0, line: 7 });
+  // backwards from the start of section 2: the previous section's LAST change
+  assert.deepStrictEqual(RA.reviewAllStepPlan(secs, { idx: 2, line: 7 }, -1), { idx: 0, at: "change", index: 1, line: 20 });
+  // forward into a section from "before its first line"
+  assert.deepStrictEqual(RA.reviewAllStepPlan(secs, { idx: 3, line: 0 }, 1), { idx: 3, at: "change", index: 0, line: 9 });
+  // the ends
+  assert.strictEqual(RA.reviewAllStepPlan(secs, { idx: 3, line: 30 }, 1), null);
+  assert.strictEqual(RA.reviewAllStepPlan(secs, { idx: 0, line: 5 }, -1), null);
+  // nothing selected yet (idx -1): forward is the first change
+  assert.deepStrictEqual(RA.reviewAllStepPlan(secs, { idx: -1, line: 0 }, 1), { idx: 0, at: "change", index: 0, line: 5 });
+  assert.strictEqual(RA.reviewAllStepPlan(secs, { idx: 0, line: 5 }, 0), null, "a step is 1 or -1");
+  assert.strictEqual(RA.reviewAllStepPlan(null, { idx: 0, line: 5 }, 1), null);
+});
+
+test("reviewAllStepPlan: an image or a section with no diff yet is a stop to go to; a trailing removal is clamped into the buffer", () => {
+  const secs = [
+    { kind: "text", lineCount: 10, changes: [{ kind: "del", from: 11, to: 11 }] }, // a removal at the very end carries lastLine + 1
+    { kind: "stop" },
+    { kind: "unknown" },
+    { kind: "text", lineCount: 4, changes: [{ kind: "add", from: 2, to: 3 }] },
+  ];
+  // The cursor sits on the clamped line (10): the removal is that change, not a later one, so F7 leaves the section.
+  assert.deepStrictEqual(RA.reviewAllStepPlan(secs, { idx: 0, line: 10 }, 1), { idx: 1, at: "section", land: "first" });
+  assert.deepStrictEqual(RA.reviewAllStepPlan(secs, { idx: 1, line: 0 }, 1), { idx: 2, at: "section", land: "first" });
+  assert.deepStrictEqual(RA.reviewAllStepPlan(secs, { idx: 2, line: 0 }, 1), { idx: 3, at: "change", index: 0, line: 2 });
+  // backwards over the stops, landing on the LAST change of a section that has no diff yet
+  assert.deepStrictEqual(RA.reviewAllStepPlan(secs, { idx: 3, line: 2 }, -1), { idx: 2, at: "section", land: "last" });
+  assert.deepStrictEqual(RA.reviewAllStepPlan(secs, { idx: 1, line: 0 }, -1), { idx: 0, at: "change", index: 0, line: 10 }, "the trailing removal is shown on line 10");
+});
