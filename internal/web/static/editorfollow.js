@@ -149,7 +149,7 @@ function efStep(s) {
 // Not in a buffer that holds an unsaved edit, and not in an editor that has the keyboard: the caret there is the user's.
 function editorFollowReveal(tab) {
   if (tab.disposed || !tab.model || tab.dirty()) return;
-  const owner = typeof dockEditorOwner !== "undefined" && dockEditorOwner === tab ? dockEditor : null;
+  const owner = typeof dockEditorOwner !== "undefined" && dockEditorOwner === tab && !tab.previewing ? dockEditor : null; // Preview has the body, not the editor
   const ed = tab.diff ? tab.diff.diff.getModifiedEditor() : owner;
   if (ed && ed.hasTextFocus()) return;
   editorDiffRecompute(tab); // a reload's own recompute is 300 ms away

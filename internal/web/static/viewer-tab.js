@@ -1064,29 +1064,25 @@ class ViewerTab {
     if (!(window.marked && marked.parse) || !window.DOMPurify) { this.renderCode(text, "markdown"); return; }
     let frag;
     try {
-      marked.setOptions({ breaks: false, gfm: true }); // NOTE: marked v12 removed the `highlight` option
-      // DOMPurify handles every XSS vector robustly (javascript:/data: schemes incl.
-      // control-char obfuscation, mXSS, on* handlers, svg/math): a hand-rolled
-      // strip-and-reserialize sanitizer is not safe against these.
-      frag = DOMPurify.sanitize(marked.parse(text), { RETURN_DOM_FRAGMENT: true });
+      // mdRenderFragment (mdsafe.js) is the one place markdown becomes DOM, here and in the dock: DOMPurify handles
+      // every XSS vector robustly (javascript:/data: schemes incl. control-char obfuscation, mXSS, on* handlers,
+      // svg/math), and the walk after it means the preview loads nothing remote and runs nothing. A relative <img src>
+      // is rewritten against the file's dir inside it, BEFORE the fragment is attached (no wasted 404 fetch).
+      frag = mdRenderFragment(text, {
+        marked,
+        purify: DOMPurify,
+        hljs: window.hljs,
+        rewrite: (rel) => (this.box
+          ? boxFileURL(this.box, dir + rel)
+          : "/api/fs/read?path=" + encodeURIComponent(dir + rel)),
+      });
     } catch (_) { this.renderCode(text, "markdown"); return; }
-    // rewrite relative <img src> against the file's dir BEFORE attaching (no wasted 404 fetch)
-    frag.querySelectorAll("img").forEach((img) => {
-      const src = img.getAttribute("src") || "";
-      if (!/^(https?:|data:|\/)/.test(src)) {
-        img.setAttribute("src", this.box
-          ? boxFileURL(this.box, dir + src)
-          : "/api/fs/read?path=" + encodeURIComponent(dir + src));
-      }
-      // An <img> here reserves no height until it loads, so the document is
-      // shorter than its final self when load() applies the offset and the
-      // browser clamps it. Re-apply as each image settles. Safe to repeat: if
-      // the reader has scrolled since, this.scroll is already where they are and
-      // applyScroll does nothing.
-      img.addEventListener("load", () => this.applyScroll());
-    });
-    // marked v12 dropped the highlight option: highlight fenced blocks here (hljs v11 API).
-    if (window.hljs) frag.querySelectorAll("pre code").forEach((el) => { try { hljs.highlightElement(el); } catch (_) {} });
+    // An <img> here reserves no height until it loads, so the document is
+    // shorter than its final self when load() applies the offset and the
+    // browser clamps it. Re-apply as each image settles. Safe to repeat: if
+    // the reader has scrolled since, this.scroll is already where they are and
+    // applyScroll does nothing.
+    frag.querySelectorAll("img").forEach((img) => img.addEventListener("load", () => this.applyScroll()));
     const wrap = document.createElement("div");
     wrap.className = "md-body";
     wrap.appendChild(frag);

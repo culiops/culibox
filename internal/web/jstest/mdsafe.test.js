@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isLocalSrc, mdUnsafeAttr, MD_PURIFY } = require("../static/mdsafe.js");
+const { isLocalSrc, mdUnsafeAttr, MD_PURIFY, mdIsRelative, mdUnsafeCss, mdUnsafeLink } = require("../static/mdsafe.js");
 const { boxFileURL } = require("../static/fsops.js");
 
 test("isLocalSrc: relative paths and same-origin file reads are local", () => {
@@ -127,4 +127,52 @@ test("MD_PURIFY cannot be loosened by a caller", () => {
   assert.throws(() => { MD_PURIFY.FORBID_ATTR.length = 0; }, TypeError);
   assert.throws(() => { MD_PURIFY.RETURN_DOM_FRAGMENT = true; }, TypeError);
   assert.strictEqual(MD_PURIFY.FORBID_TAGS.length, 11);
+});
+
+test("mdIsRelative: a path with no scheme and no leading slash, and nothing the browser would read as something else", () => {
+  for (const u of ["a.png", "./a.png", "../a/b.png", "docs/shot 1.png", "img.png?x=1#y", "#frag"]) assert.strictEqual(mdIsRelative(u), true, u);
+  for (const u of [
+    "/a.png", "/api/fs/read?path=a", "//evil.example/a.png", "https://evil.example/a.png", "data:image/png;base64,AAAA", "a:b.png",
+    "java\nscript:alert(1)", "  \\\\evil.example\\a.png", "", "   ", null, undefined,
+  ]) assert.strictEqual(mdIsRelative(u), false, JSON.stringify(u));
+});
+
+test("mdUnsafeCss: a url() whose target is not local is unsafe, whatever the quoting, case or spacing", () => {
+  for (const v of [
+    "url(https://evil.example/f.svg#f)", "url('https://evil.example/f.svg#f')", 'url("https://evil.example/f.svg#f")', "URL(https://evil.example/x)",
+    "url( https://evil.example/x )", "url ( //evil.example/x )", "none url(//evil.example/x) repeat", "url(javascript:alert(1))",
+    "url(data:image/svg+xml,x)", "url(/etc/x)", "url()", "url('", 'url("https://evil.example/x', "url(#a) url(https://evil.example/x)",
+  ]) assert.strictEqual(mdUnsafeCss(v), true, v);
+});
+
+test("mdUnsafeCss: a reference into the same document, a local path or a small inline image is not", () => {
+  for (const v of ["url(#grad)", "url('#grad')", 'url( "#a" )', "url(a.png)", "url(/api/fs/read?path=a.png)", "url(data:image/png;base64,iVBORw0KGgo=)", "url(#a) url(#b)"]) {
+    assert.strictEqual(mdUnsafeCss(v), false, v);
+  }
+});
+
+test("mdUnsafeCss: escapes are undone before the name is read", () => {
+  for (const v of ["u\\72l(https://evil.example/x)", "\\75 rl(https://evil.example/x)", "\\000075rl(https://evil.example/x)", "url(https\\3a //evil.example/x)", "\\75\\72\\6c(https://evil.example/x)"]) {
+    assert.strictEqual(mdUnsafeCss(v), true, v);
+  }
+  assert.strictEqual(mdUnsafeCss("url(\\23 a)"), false, "an escape that spells a same-document reference is one");
+  assert.strictEqual(mdUnsafeCss("url\\28 https://evil.example/x)"), false, "an escaped parenthesis is no call (and has no paren to find)");
+});
+
+test("mdUnsafeCss: the other CSS functions that take an image by address are unsafe; a function that fetches nothing and plain values are not", () => {
+  for (const v of ["image-set('https://evil.example/x.png' 1x)", "-webkit-image-set(url(#a) 1x)", "image('x.png')", "src('x.png')", "cross-fade(url(#a), url(#b), 50%)", "element(#a)"]) {
+    assert.strictEqual(mdUnsafeCss(v), true, v);
+  }
+  for (const v of ["rotate(45)", "translate(10px, 5px)", "rgb(1, 2, 3)", "calc(1px + 2px)", "0.5", "M0 0L1 1", "none", "", null, undefined, 5]) {
+    assert.strictEqual(mdUnsafeCss(v), false, String(v));
+  }
+});
+
+test("mdUnsafeLink: javascript:, vbscript: and data: hrefs, however they are spelled; every other link is the user's to follow", () => {
+  for (const u of ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "  javascript:alert(1)", "java\nscript:alert(1)", "\u0001javascript:x", "vbscript:msgbox(1)", "data:text/html,x", "DATA:text/html,x"]) {
+    assert.strictEqual(mdUnsafeLink(u), true, JSON.stringify(u));
+  }
+  for (const u of ["https://example.com/", "http://example.com/", "mailto:a@b.c", "tel:+1", "ftp://x/y", "#top", "other.md", "/docs/a.md", "//example.com/", "", null, undefined]) {
+    assert.strictEqual(mdUnsafeLink(u), false, JSON.stringify(u));
+  }
 });

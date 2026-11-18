@@ -1464,8 +1464,15 @@
   .dk-seg.seg { flex: none; padding: 1px; }
   .dk-seg > .seg-item { height: 22px; padding: 0 9px; }
   .dk-seg > .seg-item[aria-disabled="true"]:hover { background: transparent; }
+  .dk-seg > .seg-item[hidden] { display: none; } /* Preview, for a file that is not markdown (the kit's .seg-item is a flex box a hidden attribute does not beat) */
   /* The Changes view (editordiff.js) fills the tab's body, in place of the editor; its header is the compare view's. */
   .dk-ed-body > .dk-ed-cmp { position: absolute; inset: 0; }
+  /* The markdown Preview (editormd.js) fills the body the same way, and is the scroller. The document is the phone's .md-body (app.css),
+     given mockup B4's margins: 36px on the left and 28px on the right, 18px above. The pane takes the keyboard (Mod+S, the arrows),
+     so its ring sits inside it. */
+  .dk-ed-body > .dk-md { position: absolute; inset: 0; overflow: auto; background: var(--bg); }
+  .dk-md:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-md .md-body { padding: 18px 28px 24px 36px; }
   /* The gutter marks of the lines that differ from git (editordiff.js), drawn by Monaco in the column beside the line numbers: a 3px
      strip, green for added lines and blue for modified ones (the theme's own colours), and a small red wedge on the line a removal
      sits in front of. Monaco sets the width of the column's box itself, so the strip's is stated over it. */

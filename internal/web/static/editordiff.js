@@ -7,7 +7,8 @@
 //                in the overview ruler, from 300 ms after the last edit. An unsaved edit shows, as in VS Code;
 //   Changes      the Code | Changes toggle in the dock's bar swaps the tab's body for Monaco's inline diff: the base text on the removed
 //                side, the tab's own model on the new side. It is a review view (founder, 2026-11-17): read-only, editing is in Code,
-//                typing in it does nothing (which also keeps single keys free for review later).
+//                typing in it does nothing (which also keeps single keys free for review later). For a markdown file the toggle is
+//                Preview | Source | Changes (Source is Code's place; Preview is editormd.js's).
 //
 // The base text. POST /api/git/show {path, scope} answers {state: "ok" | "notrepo" | "unavailable", reason, missing, content, truncated}.
 // It is asked only for a tab on screen, with git's status known and the dock visible, and kept on the tab as `tab.changes`:
@@ -149,8 +150,10 @@ function editorDiffWhy(tab) {
 
 // --- the toggle ---------------------------------------------------------------------------------------------------
 
-// editorDiffToggle builds the Code | Changes segmented control for the dock's bar. A press on Changes that cannot be honoured
-// does nothing (the button is aria-disabled with its reason as the title, so the hover and the keyboard still reach it).
+// editorDiffToggle builds the Code | Changes segmented control for the dock's bar, with Preview in front of them for a markdown file
+// (paint hides it for any other, and calls Code "Source" for a markdown file: the one control, not a second one). A press on Changes
+// that cannot be honoured does nothing (the button is aria-disabled with its reason as the title, so the hover and the keyboard
+// still reach it).
 function editorDiffToggle(tab) {
   const el = document.createElement("div");
   el.className = "seg dk-seg";
@@ -164,21 +167,32 @@ function editorDiffToggle(tab) {
     b.onclick = () => { if (b.getAttribute("aria-disabled") !== "true") run(); };
     return b;
   };
-  const code = item("Code", () => { tab.showChanges(false); tab.focusReader(); });
+  const preview = item("Preview", () => { editorMdPick(tab, "preview"); tab.focusReader(); });
+  const code = item("Code", () => {
+    if (editorMdIs(tab)) editorMdPick(tab, "source"); else tab.showChanges(false);
+    tab.focusReader();
+  });
   const changes = item("Changes", () => { tab.showChanges(true); });
-  el.append(code, changes);
-  tab.seg = { el, code, changes };
+  preview.hidden = true; // until paint knows the file is markdown
+  el.append(preview, code, changes);
+  tab.seg = { el, preview, code, changes };
   return el;
 }
 
-// editorDiffPaintToggle: which of the two is on, and whether Changes can be had. Leaving Changes is always possible.
+// editorDiffPaintToggle: which of them is on, and whether Changes can be had. Leaving Changes is always possible.
 function editorDiffPaintToggle(tab) {
   const t = tab.seg;
   if (!t) return;
   const on = !!tab.diff;
   const why = on ? "" : editorDiffWhy(tab);
   const ch = tab.changes;
-  t.code.setAttribute("aria-pressed", on ? "false" : "true");
+  const md = editorMdIs(tab);
+  const prev = md && !on && editorMdView(tab) === "preview";
+  t.preview.hidden = !md;
+  const label = md ? "Source" : "Code";
+  if (t.code.textContent !== label) t.code.textContent = label;
+  t.preview.setAttribute("aria-pressed", prev ? "true" : "false");
+  t.code.setAttribute("aria-pressed", on || prev ? "false" : "true");
   t.changes.setAttribute("aria-pressed", on ? "true" : "false");
   t.changes.setAttribute("aria-disabled", why ? "true" : "false");
   const title = why ? "Changes unavailable: " + why : "Changes " + editorDiffLabel(ch ? ch.scope : "head", ch ? ch.baseName : "");
@@ -391,6 +405,7 @@ function editorDiffEnter(tab) {
   const s = editorDiffOf(tab);
   if (!tab.attached) { s.resume = true; return; }
   editorSyncCloseCompare(tab); // the compare view of a conflict, if it is open, goes: one diff editor
+  editorMdDrop(tab);           // so does a markdown Preview: the body is the diff's
   tab.stashView();
   const original = dockMonaco.editor.createModel(ch.head, monacoLang(tab.path));
   const label = document.createElement("span");

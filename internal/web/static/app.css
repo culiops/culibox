@@ -2148,6 +2148,9 @@
     .md-body blockquote { border-left: 3px solid var(--border); margin: 0; padding: 0 1em; color: var(--muted); }
     .md-body table { border-collapse: collapse; } .md-body th, .md-body td { border: 1px solid var(--border); padding: 6px 10px; }
     .md-body ul, .md-body ol { padding-left: 1.6em; }
+    /* what stands in for a remote image, video or audio the preview refused to load (mdsafe.js): it names the address and links to it */
+    .md-blocked { display: inline-block; max-width: 100%; padding: 2px 8px; border: 1px dashed var(--border); border-radius: 4px; color: var(--muted); font-size: .85em; line-height: 1.5; overflow-wrap: anywhere; }
+    .md-blocked a { margin-left: 4px; }
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
     .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--danger-tint); border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
     .pane-ended button { margin-left: auto; background: var(--danger); color: var(--bg); border: none; padding: 3px 12px; cursor: pointer; font-size: 12px; }

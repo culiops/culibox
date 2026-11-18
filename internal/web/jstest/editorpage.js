@@ -1,7 +1,7 @@
 "use strict";
 // editorpage.js: the page the editor tests run on. Not a test itself (the runner takes *.test.js only).
 //
-// The real editortab.js, editorsync.js and editordiff.js (and the pure modules they call) in a vm, against a fake page
+// The real editortab.js, editorsync.js, editordiff.js and editormd.js (and the pure modules they call) in a vm, against a fake page
 // (fakedom.js) and a fake Monaco, with fsRead and fsWrite stubbed. editortab-contract.test.js drives it for the save, disk and
 // Changes contracts; editor-follow.test.js and editor-selbar.test.js drive it for Follow agent and the selection bar. What the
 // fake Monaco has to be exact about is what each of them says in its own header.
@@ -115,7 +115,7 @@ function page(over) {
   doc.getElementById = () => null;
   const st = {
     writes: [], reads: [], urls: [], toasts: [], models: [], editors: [], diffs: [], host: [], closed: [], log: [], gitRefresh: 0,
-    timers: [], intervals: [],
+    timers: [], intervals: [], renders: [],
     shown: false, page: null, session: "fix-fs-cap", // is the dock on screen; a page view over it; the session the dock shows
     // The page's git, off until a test turns it on (on: the tree's status is known and names HEAD `head`): the scope the Changes
     // section shows, the base it names, and what POST /api/git/show answers (an object, a function of the request body, or null
@@ -198,6 +198,18 @@ function page(over) {
     dockScope: () => st.git.scope,
     gitBaseFor: () => st.git.base,
     gitStatusCurrent: () => (st.git.on ? { root: "/p", status: { state: "ok", head: st.git.head } } : null),
+    // The markdown Preview's render (mdsafe.js, tested on its own in md-render.test.js): here a fragment holding the text it was
+    // asked for, so what a test sees is when the preview draws and from which buffer.
+    MD_EXTS: new Set(["md", "markdown"]),
+    marked: { parse: () => "" },
+    DOMPurify: {},
+    mdRenderFragment: (text, deps) => {
+      st.renders.push({ text, deps });
+      const f = new El("div", doc);
+      f.className = "rendered";
+      f.textContent = text;
+      return f;
+    },
     fetch: async (url, init) => {
       const body = JSON.parse(init.body);
       st.git.shows.push({ url, init, body });
@@ -233,7 +245,7 @@ function page(over) {
     },
   }, over));
   const load = (f) => new vm.Script(src(f), { filename: f }).runInContext(ctx);
-  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "editortab.js", "editorsync.js", "editordiff.js", "editorselbar.js", "editorfollow.js"]) load(f);
+  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "editortab.js", "editorsync.js", "editordiff.js", "editormd.js", "editorselbar.js", "editorfollow.js"]) load(f);
   const host = {
     onEditStart: () => st.host.push("start"),
     onDirtyChange: () => st.host.push("dirty"),

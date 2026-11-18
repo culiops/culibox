@@ -55,7 +55,7 @@ function editorTabSelection(tab) {
   if (!tab || tab.disposed || !tab.model || tab.inner) return null;
   let ed = null;
   if (tab.diff) ed = tab.diff.diff.getModifiedEditor();
-  else if (typeof dockEditor !== "undefined" && dockEditorOwner === tab) ed = dockEditor;
+  else if (typeof dockEditor !== "undefined" && dockEditorOwner === tab && !tab.previewing) ed = dockEditor; // Preview has the body, not the editor
   return ed ? selectionLines(ed.getSelection()) : null;
 }
 
@@ -153,7 +153,7 @@ function editorSelBarUpdate() {
   if (!esbEd) return;
   const tab = typeof dockEditorOwner !== "undefined" ? dockEditorOwner : null;
   // The editor holds this tab's model (setModel runs before the owner is set, so a selection of another tab's text is never ours).
-  const live = !!(tab && tab.attached && !tab.diff && !tab.disposed && tab.model && !tab.inner && esbEd.getModel() === tab.model);
+  const live = !!(tab && tab.attached && !tab.diff && !tab.previewing && !tab.disposed && tab.model && !tab.inner && esbEd.getModel() === tab.model);
   const sel = live ? esbEd.getSelection() : null;
   const lines = sel ? selectionLines(sel) : null;
   const focused = live && esbEd.hasTextFocus();

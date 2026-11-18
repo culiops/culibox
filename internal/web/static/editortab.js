@@ -18,8 +18,9 @@
 // The file can change on disk under the buffer (the agent writes it, or a save is refused with a 409): editorsync.js
 // polls the shown tab, reloads a clean buffer in place (replaceFromDisk) and draws the amber conflict bar over a dirty one.
 //
-// The tab's body is the editor (Code) or Monaco's inline diff against git (Changes, editordiff.js, a read-only review view); the
-// gutter marks of the lines that differ from git are drawn on the editor.
+// The tab's body is the editor (Code), Monaco's inline diff against git (Changes, editordiff.js, a read-only review view) or, for a
+// markdown file, its rendered Preview (editormd.js, the view such a tab opens in); the gutter marks of the lines that differ from git
+// are drawn on the editor.
 //
 // Monaco itself is loaded lazily by loadMonaco (monacoload.js) when the first tab needs it, never at page boot.
 // Later tasks build on three things this file produces: the class, `dockEditor`, and `tab.model`.
@@ -163,7 +164,8 @@ class EditorTab {
     this.diff = null;           // the Changes view while it is up: {diff, original, wrap, label}
     this.followBtn = null;      // editorfollow.js: the Follow toggle in the bar
     this.dg = null;             // editordiff.js: the request slot, the gutter's debounce and decorations
-    this.seg = null;            // the Code | Changes toggle in the bar: {el, code, changes}
+    this.seg = null;            // the Code | Changes toggle in the bar (Preview | Source | Changes for markdown): {el, preview, code, changes}
+    this.md = null;             // editormd.js: a markdown file's view and its Preview pane ({view, pane, text, timer, sub, top, live})
 
     this.el = document.createElement("div");
     this.el.className = "tab-body dk-ed";
@@ -197,9 +199,10 @@ class EditorTab {
 
   // --- the bar: ⋯ in the dock's action area, the status bar under the editor ---------------------------------
 
-  // buildActs makes the actions this tab adds to the dock's bar (#dock-acts, left of Full): the Code | Changes toggle, Follow (the
-  // session's setting, so every tab's says the same: editorfollow.js) and the ⋯ menu. The toggle and the ⋯ are for a file that is read
-  // as text (paint); Follow stays for every tab, an image and a binary file's included, and while a file is still being read.
+  // buildActs makes the actions this tab adds to the dock's bar (#dock-acts, left of Full): the Code | Changes toggle (Preview |
+  // Source | Changes for a markdown file), Follow (the session's setting, so every tab's says the same: editorfollow.js) and the ⋯
+  // menu. The toggle and the ⋯ are for a file that is read as text (paint); Follow stays for every tab, an image and a binary
+  // file's included, and while a file is still being read.
   buildActs() {
     this.actsEl = document.createElement("div");
     this.actsEl.className = "dk-vact";
@@ -251,6 +254,8 @@ class EditorTab {
       lang: this.langName,
     });
     for (const k of Object.keys(this.sbParts)) set(this.sbParts[k], p[k]);
+    // Preview has no cursor and no indentation to speak of (mockup B4's bar says only Markdown, UTF-8 and LF).
+    this.sbParts.pos.hidden = this.sbParts.indent.hidden = editorMdUp(this);
     // R6: the branch, only when the git base for the tree's root has said one.
     const base = typeof gitBaseFor === "function" && typeof ftRoot === "function" ? gitBaseFor(ftRoot()) : null;
     const branch = base && typeof base.branch === "string" ? base.branch : "";
@@ -273,7 +278,7 @@ class EditorTab {
     this.paintStatus();
     editorDiffPaintToggle(this);
     editorFollowPaintTab(this);
-    editorSelBarUpdate(); // the Changes view took the editor's place, or gave it back: the bar is for Code only
+    editorSelBarUpdate(); // the Changes view or Preview took the editor's place, or gave it back: the bar is for Code only
   }
 
   // changed: something the dock shows moved (the lock, the dirty dot, the label). Like ViewerTab.changed.
@@ -285,6 +290,11 @@ class EditorTab {
   readOnlyWhy() {
     if (this.mode === "image" || this.mode === "binary") return "";
     return readOnlyReason({ box: this.box, readonly: this.serverReadOnly, unknown: this.mode === "read" });
+  }
+
+  // previewing: a markdown file's Preview is in the body (editormd.js), so the editor is not on screen even while this tab owns it.
+  get previewing() {
+    return editorMdUp(this);
   }
 
   // crumbNote: the right side of the crumbs row while the buffer holds an edit, in place of "Edited by" (dockRender).
@@ -426,15 +436,16 @@ class EditorTab {
     this.closeMenu();
     this.actsEl.remove();
     if (this.inner) { this.inner.onHide(); return; }
+    editorMdDetach(this);
     editorDiffDetach(this);
     this.stashView();
     editorSelBarUpdate(); // this tab is off screen: its selection bar goes with it
   }
 
   // show: this tab is on screen with a model, so it takes the shared editor, or, if it was left in Changes, opens that view again
-  // (its diff editor was let go when it was hidden: the dock has one at a time).
+  // (its diff editor was let go when it was hidden: the dock has one at a time), or, for a markdown file in Preview, shows that.
   show() {
-    if (!editorDiffResume(this)) editorClaim(this);
+    if (!editorDiffResume(this) && !editorMdAttach(this)) editorClaim(this);
     this.paint();
     editorDiffAttach(this);
   }
@@ -469,6 +480,7 @@ class EditorTab {
   // that has the editor and on screen; the value saved at the last hide (or at the move to Changes) otherwise.
   get scroll() {
     if (this.inner) return this.inner.scroll;
+    if (editorMdUp(this)) return clampScroll(editorMdScroll(this)); // Preview's own, in its own px
     if (this.attached && !this.diff && dockEditorOwner === this && dockEditor) return clampScroll(dockEditor.getScrollTop());
     return this.lastScroll;
   }
@@ -483,6 +495,7 @@ class EditorTab {
   focusReader() {
     if (this.inner) { this.inner.focusReader(); return; }
     if (this.diff) { this.diff.diff.getModifiedEditor().focus(); return; }
+    if (editorMdUp(this)) { this.md.pane.focus({ preventScroll: true }); return; }
     if (this.attached && dockEditorOwner === this && dockEditor) dockEditor.focus();
     else this.wantFocus = true;
   }
@@ -492,6 +505,7 @@ class EditorTab {
     this.disposed = true;
     editorSyncDispose(this); // before the model goes: a compare view holds it
     editorDiffDispose(this); // and so does the Changes view
+    editorMdDispose(this);   // and the Preview's subscription
     if (this.savedTimer) clearTimeout(this.savedTimer);
     this.closeMenu();
     this.actsEl.remove();
@@ -642,7 +656,8 @@ class EditorTab {
   // not read yet, keeps the line for when it is.
   revealLine(line, col) {
     if (this.inner) { this.inner.revealLine(line, col); return; }
-    if (!this.model || !this.attached || (!this.diff && dockEditorOwner !== this)) { this.pendingLine = { line, col }; return; }
+    // In Preview there is no line to show: it is kept for Source (restoreView), which is where the user can ask for it.
+    if (!this.model || !this.attached || (!this.diff && (dockEditorOwner !== this || editorMdUp(this)))) { this.pendingLine = { line, col }; return; }
     this.revealNow(line, col);
   }
 
@@ -718,9 +733,11 @@ class EditorTab {
     if (first) first.focus();
   }
 
-  // fontRow: "Font size  A−  12.5  A+", the code size every file view shares (fontPrefs surface "code"). A press steps
-  // it and leaves the menu open, so it can be pressed again.
+  // fontRow: "Font size  A−  12.5  A+", the code size every file view shares (fontPrefs surface "code"), or the markdown size
+  // while Preview is up (surface "markdown": the document reads --fs-md). A press steps it and leaves the menu open, so it can
+  // be pressed again.
   fontRow() {
+    const surface = editorMdUp(this) ? "markdown" : "code";
     const row = document.createElement("div");
     row.className = "dk-fs";
     row.setAttribute("role", "group");
@@ -730,7 +747,7 @@ class EditorTab {
     lbl.textContent = "Font size";
     const val = document.createElement("span");
     val.className = "dk-fs-val";
-    const paint = () => { val.textContent = String(fontPrefs.get("code")); };
+    const paint = () => { val.textContent = String(fontPrefs.get(surface)); };
     const step = (dir, label, aria) => {
       const b = document.createElement("button");
       b.type = "button";
@@ -739,8 +756,8 @@ class EditorTab {
       b.setAttribute("aria-label", aria);
       b.textContent = label;
       b.onclick = () => {
-        const next = fontStepped(fontPrefs.get("code"), dir, fontPrefs.STEP, fontPrefs.BOUNDS);
-        if (next !== null) fontPrefs.set("code", next);
+        const next = fontStepped(fontPrefs.get(surface), dir, fontPrefs.STEP, fontPrefs.BOUNDS);
+        if (next !== null) fontPrefs.set(surface, next);
         paint();
       };
       return b;
