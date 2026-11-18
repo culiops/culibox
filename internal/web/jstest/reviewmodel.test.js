@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  REVIEWED_KEY, reviewFp, reviewedState, reviewedCount, nextChange, pasteGate, saveReviewed, loadReviewed,
+  REVIEWED_KEY, reviewFp, reviewMarkFor, reviewedState, reviewedCount, nextChange, pasteGate, saveReviewed, loadReviewed,
 } = require("../static/reviewmodel.js");
 
 function store(init) {
@@ -11,7 +11,7 @@ function store(init) {
 }
 
 const row = (o) => Object.assign({ path: "/r/a.go", name: "a.go", dir: "", code: "M", add: 3, del: 1, mine: true, folder: false, provisional: false }, o);
-const markOf = (r, at) => ({ path: r.path, at, fp: reviewFp(r) });
+const markOf = (r, files, at) => reviewMarkFor(r, files || [], at === undefined ? 1000 : at);
 
 test("reviewFp is code:add:del and stable for a row with no counts", () => {
   assert.strictEqual(reviewFp(row()), "M:3:1");
@@ -20,41 +20,63 @@ test("reviewFp is code:add:del and stable for a row with no counts", () => {
   assert.strictEqual(reviewFp(row({ add: 0, del: 0 })), "M:0:0");
 });
 
+test("reviewMarkFor takes the server baseline from Activity, not the browser clock", () => {
+  const r = row();
+  assert.deepStrictEqual(reviewMarkFor(r, [], 1234), { path: "/r/a.go", at: 1234, fp: "M:3:1", seen: 0 });
+  assert.deepStrictEqual(reviewMarkFor(r, [{ path: "/r/a.go", ts: 777 }], 1234), { path: "/r/a.go", at: 1234, fp: "M:3:1", seen: 777 });
+  // Other files, entries with no ts, null entries and a missing list give seen 0; a repeated path gives its newest ts.
+  assert.strictEqual(reviewMarkFor(r, [{ path: "/r/b.go", ts: 9 }, { path: "/r/a.go" }, null], 1).seen, 0);
+  assert.strictEqual(reviewMarkFor(r, undefined, 1).seen, 0);
+  assert.strictEqual(reviewMarkFor(r, [{ path: "/r/a.go", ts: 5 }, { path: "/r/a.go", ts: 8 }, { path: "/r/a.go", ts: 6 }], 1).seen, 8);
+});
+
 test("reviewedState clears on a later agent edit or new counts", () => {
   const r = row();
-  const m = markOf(r, 1000);
+  const files0 = [{ path: "/r/a.go", ts: 5000 }];
+  const m = markOf(r, files0);
+  assert.strictEqual(reviewedState(m, r, files0), true);
   assert.strictEqual(reviewedState(m, r, []), true);
-  assert.strictEqual(reviewedState(undefined, r, []), false);
-  assert.strictEqual(reviewedState(null, r, []), false);
+  assert.strictEqual(reviewedState(undefined, r, files0), false);
+  assert.strictEqual(reviewedState(null, r, files0), false);
   // New counts, or a new letter, since the mark.
-  assert.strictEqual(reviewedState(m, row({ add: 4 }), []), false);
-  assert.strictEqual(reviewedState(m, row({ del: 2 }), []), false);
-  assert.strictEqual(reviewedState(m, row({ code: "A" }), []), false);
-  // Activity ts is unix ms, like mark.at (Date.now()): no conversion. 1001 is after 1000, 1000 is not, 1 (seconds-looking) is not.
-  assert.strictEqual(reviewedState(m, r, [{ path: "/r/a.go", ts: 1001 }]), false);
-  assert.strictEqual(reviewedState(m, r, [{ path: "/r/a.go", ts: 1000 }]), true);
-  assert.strictEqual(reviewedState(m, r, [{ path: "/r/a.go", ts: 1 }]), true);
-  const real = Date.now();
-  assert.strictEqual(reviewedState(markOf(r, real), r, [{ path: "/r/a.go", ts: real - 5000 }]), true);
-  assert.strictEqual(reviewedState(markOf(r, real), r, [{ path: "/r/a.go", ts: real + 5000 }]), false);
+  assert.strictEqual(reviewedState(m, row({ add: 4 }), files0), false);
+  assert.strictEqual(reviewedState(m, row({ del: 2 }), files0), false);
+  assert.strictEqual(reviewedState(m, row({ code: "A" }), files0), false);
+  // An edit with ts > seen clears it, even with the same counts; the same ts or an older one does not. Activity ts is unix ms.
+  assert.strictEqual(reviewedState(m, r, [{ path: "/r/a.go", ts: 5001 }]), false);
+  assert.strictEqual(reviewedState(m, r, [{ path: "/r/a.go", ts: 5000 }]), true);
+  assert.strictEqual(reviewedState(m, r, [{ path: "/r/a.go", ts: 4000 }]), true);
+  // The path was not in Activity's list when marked (seen 0): its first entry clears the mark.
+  const m0 = markOf(r, []);
+  assert.strictEqual(m0.seen, 0);
+  assert.strictEqual(reviewedState(m0, r, []), true);
+  assert.strictEqual(reviewedState(m0, r, [{ path: "/r/a.go", ts: 1 }]), false);
+  // The browser's clock does not matter: far ahead or far behind the server's ts, the mark answers on Activity ts alone.
+  const server = 1700000000000;
+  for (const now of [server + 3600000, server - 3600000, 0, Date.now()]) {
+    const sm = markOf(r, [{ path: "/r/a.go", ts: server }], now);
+    assert.strictEqual(reviewedState(sm, r, [{ path: "/r/a.go", ts: server }]), true, "marked file the agent just touched sticks, now=" + now);
+    assert.strictEqual(reviewedState(sm, r, [{ path: "/r/a.go", ts: server + 1 }]), false, "re-edit clears, now=" + now);
+  }
   // Another file's edit, an entry with no ts, and a missing or odd files list do not clear it.
-  assert.strictEqual(reviewedState(m, r, [{ path: "/r/b.go", ts: 9999 }]), true);
+  assert.strictEqual(reviewedState(m, r, [{ path: "/r/b.go", ts: 9999999 }]), true);
   assert.strictEqual(reviewedState(m, r, [{ path: "/r/a.go" }, null]), true);
   assert.strictEqual(reviewedState(m, r, undefined), true);
   assert.strictEqual(reviewedState(m, r, null), true);
-  // A mark for another path is not this row's.
-  assert.strictEqual(reviewedState({ path: "/r/z.go", at: 1000, fp: "M:3:1" }, r, []), false);
+  // A mark for another path is not this row's; a mark with no server baseline is not trusted.
+  assert.strictEqual(reviewedState({ path: "/r/z.go", at: 1000, fp: "M:3:1", seen: 0 }, r, []), false);
+  assert.strictEqual(reviewedState({ path: "/r/a.go", at: 1000, fp: "M:3:1" }, r, []), false);
   // A row with no counts (untracked) keeps its mark until its letter or counts change.
   const u = row({ code: "U", add: null, del: null });
-  assert.strictEqual(reviewedState(markOf(u, 1000), u, []), true);
-  assert.strictEqual(reviewedState(markOf(u, 1000), row({ code: "U", add: 5, del: 0 }), []), false);
+  assert.strictEqual(reviewedState(markOf(u), u, []), true);
+  assert.strictEqual(reviewedState(markOf(u), row({ code: "U", add: 5, del: 0 }), []), false);
 });
 
 test("reviewedCount", () => {
   const a = row({ path: "/r/a.go" });
   const b = row({ path: "/r/b.go", add: 2, del: 0 });
   const c = row({ path: "/r/c.go", code: "U", add: null, del: null });
-  const marks = { "/r/a.go": markOf(a, 1000), "/r/b.go": markOf(b, 1000), "/r/gone.go": { path: "/r/gone.go", at: 1, fp: "M:1:1" } };
+  const marks = { "/r/a.go": markOf(a), "/r/b.go": markOf(b), "/r/gone.go": { path: "/r/gone.go", at: 1, fp: "M:1:1", seen: 0 } };
   assert.deepStrictEqual(reviewedCount([a, b, c], marks, []), { done: 2, total: 3 });
   // b was edited again, so it is not done; a mark with no row counts for nothing.
   assert.deepStrictEqual(reviewedCount([a, b, c], marks, [{ path: "/r/b.go", ts: 2000 }]), { done: 1, total: 3 });
@@ -87,6 +109,14 @@ test("nextChange forward, backward, past the end", () => {
   assert.strictEqual(nextChange(undefined, 5, 1), null);
   assert.strictEqual(nextChange(lc, NaN, 1), null);
   assert.strictEqual(nextChange(lc, 5, 0), null);
+  // Null or non-object entries are skipped; the index is still the position in the list.
+  const holey = [null, { kind: "add", from: 4, to: 4 }, undefined, { kind: "mod", from: 9, to: 9 }];
+  assert.deepStrictEqual(nextChange(holey, 1, 1), { index: 1, line: 4 });
+  assert.deepStrictEqual(nextChange(holey, 4, 1), { index: 3, line: 9 });
+  assert.deepStrictEqual(nextChange(holey, 9, -1), { index: 1, line: 4 });
+  assert.strictEqual(nextChange([null], 1, 1), null);
+  // A trailing del past the end carries lastLine + 1; nextChange reports it as is, the caller clamps.
+  assert.deepStrictEqual(nextChange([{ kind: "del", from: 11, to: 11 }], 3, 1), { index: 0, line: 11 });
 });
 
 const term = (bp) => ({ term: { modes: { bracketedPasteMode: bp } } });
@@ -114,7 +144,7 @@ test("pasteGate working, waiting, need, no bracketed paste, no term", () => {
   assert.strictEqual(pasteGate(s({ activity: "working", need: "ask" }), term(false)).why, "api is working; notes wait here");
   assert.strictEqual(pasteGate(s({ activity: "waiting" }), term(false)).why, "api is waiting on you; answer it first");
   assert.strictEqual(pasteGate(s({ need: "ask" }), term(false)).why, "api is waiting on you; answer it first");
-  // Only the string true passes; a truthy non-boolean does not.
+  // Only boolean true passes; a truthy non-boolean does not.
   assert.strictEqual(pasteGate(s(), term(1)).ok, false);
   // A session that is over (done, crashed, exited) cannot take a paste either.
   for (const activity of ["done", "crashed", "exited", undefined]) {
@@ -128,12 +158,12 @@ test("pasteGate working, waiting, need, no bracketed paste, no term", () => {
 
 test("saveReviewed and loadReviewed round-trip, drop dead sessions, ignore a bad record", () => {
   assert.strictEqual(REVIEWED_KEY, "agent-box:reviewed");
-  const m1 = { "/r/a.go": { path: "/r/a.go", at: 5, fp: "M:1:1" } };
+  const m1 = { "/r/a.go": { path: "/r/a.go", at: 5, fp: "M:1:1", seen: 4 } };
   const st = store();
   saveReviewed(st, "s1", m1);
-  saveReviewed(st, "s2", { "/r/b.go": { path: "/r/b.go", at: 6, fp: "A:2:0" } });
+  saveReviewed(st, "s2", { "/r/b.go": { path: "/r/b.go", at: 6, fp: "A:2:0", seen: 0 } });
   assert.deepStrictEqual(JSON.parse(st.m.get(REVIEWED_KEY)).v, 1);
-  assert.deepStrictEqual([...loadReviewed(st, ["s1", "s2"])], [["s1", m1], ["s2", { "/r/b.go": { path: "/r/b.go", at: 6, fp: "A:2:0" } }]]);
+  assert.deepStrictEqual([...loadReviewed(st, ["s1", "s2"])], [["s1", m1], ["s2", { "/r/b.go": { path: "/r/b.go", at: 6, fp: "A:2:0", seen: 0 } }]]);
   // s2 is gone: not returned, and removed from the stored record.
   assert.deepStrictEqual([...loadReviewed(st, new Set(["s1"])).keys()], ["s1"]);
   assert.deepStrictEqual(Object.keys(JSON.parse(st.m.get(REVIEWED_KEY)).sessions), ["s1"]);
@@ -142,8 +172,9 @@ test("saveReviewed and loadReviewed round-trip, drop dead sessions, ignore a bad
   assert.deepStrictEqual(JSON.parse(st.m.get(REVIEWED_KEY)).sessions, {});
   // A malformed mark is dropped, the good one kept.
   const bad = store({ [REVIEWED_KEY]: JSON.stringify({ v: 1, sessions: { s1: { marks: {
-    "/r/a.go": { path: "/r/a.go", at: 5, fp: "M:1:1" }, "/r/b.go": { path: "/r/b.go", at: "x", fp: "M" }, "/r/c.go": 7,
-    "/r/d.go": { path: "/r/other.go", at: 5, fp: "M:1:1" } } } } }) });
+    "/r/a.go": { path: "/r/a.go", at: 5, fp: "M:1:1", seen: 4 }, "/r/b.go": { path: "/r/b.go", at: "x", fp: "M", seen: 0 }, "/r/c.go": 7,
+    "/r/d.go": { path: "/r/other.go", at: 5, fp: "M:1:1", seen: 4 },
+    "/r/e.go": { path: "/r/e.go", at: 5, fp: "M:1:1" }, "/r/f.go": { path: "/r/f.go", at: 5, fp: "M:1:1", seen: -1 } } } } }) });
   assert.strictEqual(loadReviewed(bad, ["s1"]).get("s1")["/r/a.go"].fp, "M:1:1");
   assert.deepStrictEqual(Object.keys(loadReviewed(bad, ["s1"]).get("s1")), ["/r/a.go"]);
   // Missing, corrupt, wrong-version records read as nothing; a throwing storage never throws.

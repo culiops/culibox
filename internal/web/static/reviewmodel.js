@@ -4,13 +4,17 @@
 // step from change to change in a diff, and whether the paste bar may type into the agent's terminal. DOM-free so `node --test`
 // reaches it; the diff header (F7, Mark reviewed) and the paste bar call it.
 //
-// Reviewed marks. A mark is {path, at, fp}: the file's absolute path, when it was marked (ms, Date.now()) and the fingerprint of
-// the Changes row at that moment. A mark stands only while it is still true (reviewedState): the row's fingerprint is the same, and the
-// agent has not edited the file since. Either one changing means the user has not seen what is there now.
-//   fp   "<code>:<add>:<del>", the row's git letter and numstat counts (reviewFp). A row with no counts (untracked, provisional) has
-//        empty counts, "U::", so its fingerprint is stable and not "U:null:null" or "U:undefined:undefined" by accident of the source.
-//   ts   Activity's file `ts` is unix MILLISECONDS (session.FileChange.TS), the same unit as mark.at, so the two are compared as they
-//        are. (Not seconds: nothing is converted, and a test pins it.)
+// Reviewed marks. A mark is {path, at, fp, seen}: the file's absolute path, when it was marked, the fingerprint of the Changes row at
+// that moment, and the newest agent edit of the file the page knew of. A mark stands only while it is still true (reviewedState): the
+// row's fingerprint is the same, and the agent has not edited the file since. Either one changing means the user has not seen what is
+// there now. reviewMarkFor builds a mark, so every caller builds it the same way.
+//   fp    "<code>:<add>:<del>", the row's git letter and numstat counts (reviewFp). A row with no counts (untracked, provisional) has
+//         empty counts, "U::", so its fingerprint is stable and not "U:null:null" or "U:undefined:undefined" by accident of the source.
+//   seen  the `ts` of the file's entry in Activity's files list when it was marked, 0 when the file was not in the list. Activity's
+//         `ts` is unix MILLISECONDS (session.FileChange.TS) stamped by the box server from the agent's transcript, which may be on
+//         another machine than the browser, so it is only ever compared with another Activity `ts`, never with the browser's clock:
+//         an edit is new when its ts is greater than `seen`, whatever the two clocks say.
+//   at    the browser's Date.now() when it was marked (ms). For display only; no decision reads it.
 //
 // Persistence. One JSON record in localStorage, {v:1, sessions:{<sid>:{marks:{<abs path>:<mark>}}}}, in the shape and with the
 // safety of notesmodel.js: dead sessions and malformed marks are dropped on load (and from storage), a missing, corrupt or
@@ -23,17 +27,29 @@ function reviewFp(row) {
   return n(row && row.code) + ":" + n(row && row.add) + ":" + n(row && row.del);
 }
 
-// Is `mark` (for the row's file) still a review of what the row shows now? False when there is no mark, it is for another path, the
-// row's fingerprint moved, or Activity says the agent edited the file after the mark (`files`: the session's Activity list, entries
-// {path, ts, ...}; a missing list or an entry with no ts says nothing).
-function reviewedState(mark, row, files) {
-  if (!mark || !row || mark.path !== row.path || mark.fp !== reviewFp(row)) return false;
+// The newest `ts` Activity has for `path` in `files` (the session's Activity list, entries {path, ts, ...}), 0 when there is none. A
+// missing list, a null entry or an entry with no ts says nothing.
+function reviewSeen(files, path) {
+  let seen = 0;
   if (Array.isArray(files)) {
     for (const f of files) {
-      if (f && f.path === row.path && Number.isFinite(f.ts) && f.ts > mark.at) return false;
+      if (f && typeof f === "object" && f.path === path && Number.isFinite(f.ts) && f.ts > seen) seen = f.ts;
     }
   }
-  return true;
+  return seen;
+}
+
+// The mark for `row` made now (`now`: the browser's Date.now(), ms, display only) against Activity's `files` as they stand.
+function reviewMarkFor(row, files, now) {
+  return { path: row.path, at: now, fp: reviewFp(row), seen: reviewSeen(files, row.path) };
+}
+
+// Is `mark` (for the row's file) still a review of what the row shows now? False when there is no mark (or one without a server
+// baseline), it is for another path, the row's fingerprint moved, or Activity has an edit of the file newer than the mark's `seen`
+// (a file that was not in the list when marked has seen 0, so its first entry clears the mark).
+function reviewedState(mark, row, files) {
+  if (!mark || !row || mark.path !== row.path || mark.fp !== reviewFp(row) || !Number.isFinite(mark.seen)) return false;
+  return reviewSeen(files, row.path) <= mark.seen;
 }
 
 // {done, total} over the Changes rows: `marks` is an object keyed by abs path. A mark whose file has no row counts for nothing.
@@ -52,16 +68,18 @@ function reviewedCount(rows, marks, files) {
 // `index` is its 0-based position. Forward is the first change that starts after the cursor line; backward is the last change that
 // starts strictly before the cursor line (as VS Code does), so from inside a change it goes to that change's start, and from its
 // start to the one before. null past the last (forward) or before the first (backward): the caller moves on to the neighbouring file.
+// A "del" at the very end of the text carries line = lastLine + 1 (see lineDiff), so the caller clamps `line` to the buffer's last line
+// before it reveals it. Null or non-object entries in the list are skipped.
 function nextChange(lineChanges, cursorLine, dir) {
   if (!Array.isArray(lineChanges) || !Number.isFinite(cursorLine) || (dir !== 1 && dir !== -1)) return null;
   if (dir === 1) {
     for (let i = 0; i < lineChanges.length; i++) {
-      if (lineChanges[i].from > cursorLine) return { index: i, line: lineChanges[i].from };
+      if (lineChanges[i] && lineChanges[i].from > cursorLine) return { index: i, line: lineChanges[i].from };
     }
     return null;
   }
   for (let i = lineChanges.length - 1; i >= 0; i--) {
-    if (lineChanges[i].from < cursorLine) return { index: i, line: lineChanges[i].from };
+    if (lineChanges[i] && lineChanges[i].from < cursorLine) return { index: i, line: lineChanges[i].from };
   }
   return null;
 }
@@ -84,7 +102,7 @@ function pasteGate(session, term) {
 }
 
 function markValid(path, m) {
-  return !!m && typeof m === "object" && m.path === path && typeof m.fp === "string" && Number.isFinite(m.at);
+  return !!m && typeof m === "object" && m.path === path && typeof m.fp === "string" && Number.isFinite(m.at) && Number.isFinite(m.seen) && m.seen >= 0;
 }
 
 // The stored record, or an empty one when it is missing, unreadable, corrupt or of another version.
@@ -132,6 +150,6 @@ function loadReviewed(storage, liveSids) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    REVIEWED_KEY, reviewFp, reviewedState, reviewedCount, nextChange, pasteGate, saveReviewed, loadReviewed,
+    REVIEWED_KEY, reviewFp, reviewMarkFor, reviewedState, reviewedCount, nextChange, pasteGate, saveReviewed, loadReviewed,
   };
 }
