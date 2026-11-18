@@ -2,7 +2,7 @@
 
 # CuliBox
 
-### Put your AI agent in a box. Hand it the cloud keys for 15 minutes. Take them back.
+### Put your AI agent in a box. Hand it the cloud keys for 15 minutes.
 
 A self-hosted control panel to run, watch, contain and steer Claude Code sessions.
 
@@ -37,11 +37,11 @@ A normal coding agent launched from your terminal receives whatever your termina
 | `~/.ssh` | Readable | Not mounted |
 | Home directory | Readable | Not mounted; only the project folder is writable |
 | Docker socket | Readable | Not mounted |
-| AWS | Your SSO session, valid for hours | Minted per session, valid for 15 minutes, using a read-only role and narrowed further |
+| AWS | Your SSO session, valid for hours | Minted per session, valid for 15 minutes, read-only role narrowed further (unless you grant a write window) |
 | GitHub | Your token, every repo it can access | One-hour GitHub App token, limited to listed repos and read-only by default |
-| Grafana, Sentry and Jira tokens | Sitting in your environment | Handed to one command, with egress opened only to that service |
-| Internet | All of it | Through CuliBox's proxy: port 443, hostnames only, no private addresses, and an allowlist for boxes holding credentials |
-| CloudTrail | You | The agent session |
+| Grafana, Sentry and Jira tokens | Sitting in your environment | Fetched per command; egress opened only to that service's hosts, for the whole session |
+| Internet | All of it | Through CuliBox's proxy: port 443, hostnames only, no private addresses, and an allowlist for boxes holding credentials (a profile can widen it). On Linux, host services listening on all addresses are reachable directly. |
+| CloudTrail | You | The agent session (not in SSO-direct mode) |
 | Several sessions | Terminal tabs | One page showing which sessions are working, idle or waiting for you, and why |
 | Cost | Unknown | Tokens and estimated cost per model, project and session |
 
@@ -59,7 +59,7 @@ sh setup.sh
 culibox serve
 ```
 
-The installer verifies checksums, installs into `~/.local/bin` without `sudo`, and runs the guided `culibox init`. CuliBox listens on `127.0.0.1:8899` and prints a login URL.
+The installer verifies checksums, installs into `~/.local/bin` without `sudo`, and runs the guided `culibox init`. Read `setup.sh` before you run it. CuliBox listens on `127.0.0.1:8899` and prints a login URL; open it in a browser on the same machine.
 
 ## What you get
 
@@ -125,7 +125,7 @@ Read the complete model and known limits in [docs/SECURITY.md](docs/SECURITY.md)
 - Keep a config file so boxes remain the default.
 - Use the AWS agent role, not SSO-direct. SSO-direct hands the agent your SSO role's own credentials for hours, and CloudTrail shows you.
 - Turn on the encrypted store. See [Store](docs/STORE.md).
-- Bind host services that boxes must not reach to `127.0.0.1`.
+- Bind host services that boxes must not reach to `127.0.0.1`. On Linux a box can reach a host service listening on all addresses directly, without the proxy and without an audit line.
 - Run CuliBox on a host where you trust the other accounts.
 - Run `culibox doctor` after setup and after every upgrade.
 
@@ -155,7 +155,7 @@ Maybe. Open an [issue](https://github.com/culiops/culibox/issues) and explain th
 
 ### Does data leave my machine?
 
-CuliBox is self-hosted, and its audit log and analytics are local. Agents still communicate with their model API, which for Claude Code means Anthropic's API, and configured integrations talk to the services you allow.
+CuliBox is self-hosted, and its audit log and analytics are local. Agents still communicate with their model API, which for Claude Code means Anthropic's API, and configured integrations talk to the services you allow. Setup downloads releases from GitHub and the box image from `ghcr.io`.
 
 ## Contributing
 
