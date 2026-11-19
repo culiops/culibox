@@ -103,7 +103,9 @@ function composeMessage(notes) {
     const where = n.side === "old" ? rel + " (removed line " + n.line + ")" : rel + ":" + n.line;
     text += "- " + where + (n.outdated ? " (line moved or removed since)" : "") + " — " + body + "\n  > " + quote + "\n";
   }
-  text = stripControls(text);
+  // No trailing newline: xterm turns a "\n" in a paste into "\r", and a message that ends in one could be taken as Enter by the agent's
+  // prompt. The cap counts what is pasted, so it is checked on this final text.
+  text = stripControls(text).replace(/\n+$/, "");
   if (text.length > MSG_MAX) return { ok: false, why: "too long; paste fewer notes" };
   return { ok: true, text };
 }

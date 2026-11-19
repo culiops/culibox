@@ -714,6 +714,7 @@ test("Compare opens a read-only diff, disk on the left and the live buffer on th
   bar(tab).buttons[0].click();
   await p.settle();
   assert.equal(p.st.diffs.length, 1, "a second press opens no second view");
+  assert.equal(d.model, p.st.vms[0], "the editor shows the view model we made (createViewModel), so we can dispose it");
   tab.cmpEl.children[0].children[1].click(); // Back to editing
   assert.equal(d.disposed, true);
   assert.equal(d.model, null);
@@ -722,7 +723,9 @@ test("Compare opens a read-only diff, disk on the left and the live buffer on th
   assert.equal(tab.cmpEl.hidden, true);
   assert.equal(tab.bodyEl.hidden, false);
   assert.equal(tab.barEl.hidden, false);
-  assert.deepEqual(p.st.log, ["diff.setModel", "diff.setModel(null)", "diff.dispose", "dispose#2"]);
+  assert.deepEqual(p.st.log, ["diff.setModel", "diff.setModel(null)", "diff.dispose", "vm.dispose", "dispose#2"], "the view model goes after the editor and before the disk's model");
+  assert.equal(p.st.vms.length, 1, "one view model, made by createViewModel and not by setModel({original, modified})");
+  assert.equal(p.st.vms[0].disposed, true);
 });
 
 test("while Compare is open a newer disk version is read into it, so Keep mine never overwrites what the diff did not show; and a decision, or a close of the tab, takes the view down", async () => {
@@ -765,7 +768,7 @@ test("while Compare is open a newer disk version is read into it, so Keep mine n
   const modelId = p.st.models.indexOf(tab.model) + 1;
   const diskId = p.st.models.length;
   tab.dispose();
-  assert.deepEqual(p.st.log, ["diff.setModel(null)", "diff.dispose", "dispose#" + diskId, "dispose#" + modelId]);
+  assert.deepEqual(p.st.log, ["diff.setModel(null)", "diff.dispose", "vm.dispose", "dispose#" + diskId, "dispose#" + modelId]);
   assert.equal(p.live(), 0);
 });
 

@@ -31,7 +31,7 @@
 // Every path, name, branch and base name goes to the page with textContent: a branch name may hold Unicode format
 // characters, and a file name anything at all.
 
-/* global notesFor -- the notes store (a later task's notes.js) has not landed: it is asked behind typeof, and until then there are no notes */
+/* global notesFor -- the notes store (editornotes.js): asked behind typeof so this section still draws where it is not loaded, with no notes */
 const DKC_FETCH_MS = 20000; // a request that never answers must not hold the one numstat slot for good
 const DKC_CODE_TITLES = { M: "Modified", A: "Added (staged)", U: "Untracked", D: "Deleted", C: "Conflict" };
 
@@ -296,8 +296,8 @@ function dkcReview() {
 
 // dkcReviewState: what the section draws of the review loop, for the file rows of `view`:
 //   {reviewing, done: {<path>: true}, notes: {<path>: pending notes}, doneN, total}
-// `reviewing`: some tab of the session is in Changes (the header says "reviewed n of m"). Notes come from notesFor(sid) (a later
-// task's store: until it exists there are none).
+// `reviewing`: some tab of the session is in Changes (the header says "reviewed n of m"). Notes come from notesFor(sid) (the store of
+// editornotes.js, asked behind typeof: where it is not loaded there are none).
 function dkcReviewState(view, sid, files) {
   const rows = view.kind === "rows" ? reviewRows(view.rows) : [];
   const marks = typeof reviewMarksOf === "function" ? reviewMarksOf(sid) : {};
