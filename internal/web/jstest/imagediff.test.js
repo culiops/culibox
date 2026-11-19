@@ -1,8 +1,8 @@
 "use strict";
 // The image comparer (imagediff.js) as it runs on the page, in a vm: the real imagediff.js, editordiff.js (its segmented control and
 // label helpers), reviewmodel.js (swipeClip, onionOpacity), viewerprefs.js and copyfile.js, against the fake DOM of fakedom.js and a fake
-// fetch, URL and timer. It proves what the browser check cannot see cheaply: what is asked (and not), that every blob URL made is revoked
-// and every request aborted when a mount goes, that no markup is ever built from an image, what each mode puts on the page and what a
+// fetch, URL and timer. It proves what the browser check cannot see cheaply: what is asked (and not), that the old side's bytes become a data: URL (never a
+// blob: one, never the page's origin) and every request and read is aborted when a mount goes, that no markup is ever built from an image, what each mode puts on the page and what a
 // key or a pointer does to the divider and the blend. The look is the visual check's.
 const test = require("node:test");
 const assert = require("node:assert");
@@ -25,7 +25,7 @@ function page() {
     n.replaceChildren = (...cs) => replace.apply(n, cs.map((c) => (typeof c === "string" ? new Text(c) : c)));
     return n;
   };
-  const st = { fetches: [], created: [], revoked: [], timers: [], toasts: [], store: new Map(), nBlob: 0 };
+  const st = { fetches: [], reads: [], hold: false, timers: [], toasts: [], store: new Map() };
   const fetch = (url, init) => new Promise((resolve, reject) => {
     const f = { url, init, body: JSON.parse(init.body), resolve, reject, signal: init.signal };
     if (init.signal) init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
@@ -36,7 +36,16 @@ function page() {
     document: doc,
     fetch,
     localStorage: { getItem: (k) => (st.store.has(k) ? st.store.get(k) : null), setItem: (k, v) => { st.store.set(k, v); } },
-    URL: { createObjectURL: (b) => { st.created.push(b); return "blob:t/" + ++st.nBlob; }, revokeObjectURL: (u) => { st.revoked.push(u); } },
+    // A FileReader that answers a data: URL for the blob's type; st.hold keeps it from answering until finish() is called.
+    FileReader: class {
+      readAsDataURL(b) {
+        const rd = { blob: b, aborted: false, finish: () => { if (rd.aborted) return; this.result = "data:" + (b.type || "") + ";base64,AAAA"; if (this.onload) this.onload(); } };
+        this.rd = rd;
+        st.reads.push(rd);
+        if (!st.hold) setImmediate(rd.finish);
+      }
+      abort() { this.rd.aborted = true; if (this.onabort) this.onabort(); }
+    },
     setTimeout: (fn, ms) => { st.timers.push({ fn, ms, live: true }); return st.timers.length; },
     clearTimeout: (id) => { if (st.timers[id - 1]) st.timers[id - 1].live = false; },
     svgIcon: () => new Node("svg", doc),
@@ -79,8 +88,9 @@ test("a changed image asks for its old side once, raw, with the scope, and shows
   assert.equal(texts(el, ".dk-imgd-msg")[0], "Loading the old version…");
   p.st.fetches[0].resolve(imgRes());
   await settle();
-  assert.deepEqual(p.st.created.length, 1);
+  assert.equal(p.st.reads.length, 1);
   assert.equal(el.querySelectorAll("img").length, 2);
+  assert.ok(el.querySelectorAll("img").some((i) => i.src.startsWith("data:image/png;base64,")), "the old side is a data: URL");
   assert.deepEqual(texts(el, ".dk-imgd-lab"), ["Old · HEAD", "New · working tree"]);
 });
 
@@ -138,7 +148,8 @@ test("an SVG goes only through <img>: the blob's type is kept, no markup is buil
   p.st.fetches[0].resolve(res);
   await settle();
   assert.equal(textRead, false);
-  assert.equal(p.st.created[0].type, "image/svg+xml");
+  assert.equal(p.st.reads[0].blob.type, "image/svg+xml");
+  assert.ok(el.querySelectorAll("img").some((i) => i.src.startsWith("data:image/svg+xml;base64,")), "the SVG's old side is an <img> with a data: URL");
   assert.deepEqual(el.querySelectorAll("img").length, 2);
   assert.equal(el.querySelector(".dk-imgd-stage").querySelectorAll("svg").length, 0, "no <svg> element in the comparer's picture area");
   const code = src("imagediff.js").replace(/\/\/.*$/gm, "");
@@ -153,7 +164,7 @@ test("an added image (the base has no such file) shows only its new side, with n
   const { el } = mount(p, { key: "k" });
   p.st.fetches[0].resolve(jsonRes({ state: "ok", missing: true }));
   await settle();
-  assert.equal(p.st.created.length, 0);
+  assert.equal(p.st.reads.length, 0);
   assert.deepEqual(texts(el, ".dk-imgd-lab"), ["New · working tree"]);
   assert.equal(el.querySelector(".dk-imgd-bar").hidden, true);
   assert.equal(el.querySelectorAll("img").length, 1);
@@ -187,7 +198,7 @@ test("what cannot be had is said in the side's place, and the other side is stil
     assert.deepEqual(texts(el, ".dk-imgd-msg"), [want]);
     assert.equal(el.querySelectorAll("img").length, 1, "the new side is there");
     assert.equal(el.querySelector(".dk-imgd-bar").hidden, true, "no stacking with a side that failed");
-    assert.equal(p.st.created.length, 0);
+    assert.equal(p.st.reads.length, 0);
   }
 });
 
@@ -214,33 +225,31 @@ test("a new side that does not load says so, and the old one is shown beside it"
   p.st.fetches[0].resolve(imgRes());
   await settle();
   const imgs = el.querySelectorAll("img");
-  const news = imgs.filter((i) => i.src && !i.src.startsWith("blob:"))[0];
+  const news = imgs.filter((i) => i.src && i.src.startsWith("/api/"))[0];
   news.onerror();
   assert.match(texts(el, ".dk-imgd-msg")[0], /^Could not load the new version/);
 });
 
-test("dispose aborts the request, revokes the blob URL once and empties the element", async () => {
+test("dispose aborts the request and the read and empties the element", async () => {
   const p = page();
   const { el, h } = mount(p, {});
   p.st.fetches[0].resolve(imgRes());
   await settle();
-  assert.deepEqual(p.st.revoked, []);
   h.dispose();
-  assert.deepEqual(p.st.revoked, ["blob:t/1"]);
   assert.equal(p.st.fetches[0].signal.aborted, true);
   assert.equal(el.children.length, 0);
-  h.dispose();
-  assert.deepEqual(p.st.revoked, ["blob:t/1"], "a second dispose revokes nothing again");
+  h.dispose(); // a second one is a no-op
+  assert.equal(el.children.length, 0);
 });
 
-test("a mount disposed while its request is out makes no blob URL, whenever the answer comes", async () => {
+test("a mount disposed while its request or read is out makes no URL, whenever the answer comes", async () => {
   let p = page();
   let m = mount(p, {});
   m.h.dispose();
   assert.equal(p.st.fetches[0].signal.aborted, true, "the request is aborted");
   p.st.fetches[0].resolve(imgRes()); // an answer that was already on its way
   await settle();
-  assert.equal(p.st.created.length, 0);
+  assert.equal(p.st.reads.length, 0);
 
   // Disposed between the headers and the body.
   p = page();
@@ -253,20 +262,48 @@ test("a mount disposed while its request is out makes no blob URL, whenever the 
   m.h.dispose();
   release();
   await settle();
-  assert.equal(p.st.created.length, 0, "no URL is made for a mount that is gone");
-  assert.deepEqual(p.st.revoked, []);
+  assert.equal(p.st.reads.length, 0, "no read is started for a mount that is gone");
+
+  // Disposed while the bytes are being read: the read is aborted and its late answer sets no src.
+  p = page();
+  p.st.hold = true;
+  m = mount(p, {});
+  p.st.fetches[0].resolve(imgRes("image/svg+xml"));
+  await settle();
+  assert.equal(p.st.reads.length, 1);
+  const imgs = m.el.querySelectorAll("img");
+  m.h.dispose();
+  assert.equal(p.st.reads[0].aborted, true, "the read is aborted");
+  p.st.reads[0].finish(); // a late answer
+  await settle();
+  assert.ok(imgs.every((i) => !String(i.src || "").startsWith("data:")), "no data: URL is set after dispose");
 });
 
-test("every blob URL made is revoked: mount, dispose, remount, dispose", async () => {
-  const p = page();
-  for (let i = 0; i < 3; i++) {
-    const m = mount(p, {});
-    p.st.fetches[i].resolve(imgRes());
+test("the old side never gets a same-origin URL: no object URL is made, for any type, and imagediff.js has none to make", async () => {
+  const code = src("imagediff.js").replace(/\/\/.*$/gm, "");
+  assert.ok(!/createObjectURL|revokeObjectURL/.test(code), "no object URLs");
+  assert.ok(!/["'`]blob:/.test(code), "no blob: URL is built");
+  assert.ok(code.includes("readAsDataURL"), "the bytes go through a data: URL");
+  for (const type of ["image/png", "image/svg+xml", "image/gif"]) {
+    const p = page();
+    p.ctx.URL = { createObjectURL: () => { throw new Error("createObjectURL must not be called"); } };
+    const { el } = mount(p, {});
+    p.st.fetches[0].resolve(imgRes(type));
     await settle();
-    m.h.dispose();
+    const olds = el.querySelectorAll("img").filter((i) => i.src.startsWith("data:"));
+    assert.equal(olds.length, 1, type);
+    assert.ok(olds[0].src.startsWith("data:" + type + ";"), type);
   }
-  assert.equal(p.st.created.length, 3);
-  assert.deepEqual(p.st.revoked, ["blob:t/1", "blob:t/2", "blob:t/3"]);
+});
+
+test("an old side whose read fails says so; the new side is still there", async () => {
+  const p = page();
+  p.ctx.FileReader = class { readAsDataURL() { setImmediate(() => this.onerror()); } abort() {} };
+  const { el } = mount(p, {});
+  p.st.fetches[0].resolve(imgRes());
+  await settle();
+  assert.deepEqual(texts(el, ".dk-imgd-msg"), ["Could not load the old version: the picture could not be read"]);
+  assert.equal(el.querySelectorAll("img").length, 1);
 });
 
 test("the three modes, in the control, are Side by side, Swipe and Onion skin, and the choice is kept", async () => {
@@ -290,7 +327,7 @@ test("the three modes, in the control, are Side by side, Swipe and Onion skin, a
   // The same two <img> elements are moved between modes: nothing is loaded again.
   assert.equal(el.querySelectorAll("img").length, 2);
   assert.equal(p.st.fetches.length, 1);
-  assert.equal(p.st.created.length, 1);
+  assert.equal(p.st.reads.length, 1);
 });
 
 test("a stored mode is the one a new mount opens in", async () => {
@@ -387,7 +424,7 @@ test("Onion skin: a range input blends the new image over the old, through onion
   assert.equal(range.max, "100");
   assert.equal(range.value, "50");
   assert.match(range.getAttribute("aria-label"), /Onion skin/);
-  const news = el.querySelectorAll("img").filter((i) => i.src && !i.src.startsWith("blob:"))[0];
+  const news = el.querySelectorAll("img").filter((i) => i.src && i.src.startsWith("/api/"))[0];
   assert.equal(news.style.opacity, "0.5");
   range.value = "20"; range.oninput();
   assert.equal(news.style.opacity, "0.2");
@@ -497,7 +534,7 @@ test("Changes swaps the viewer for the comparer and asks once for the old side; 
   p.ctx.editorImageSet(tab, false);
   assert.equal(tab.img.on, false);
   assert.equal(tab.el.children[0], tab.inner.el, "the viewer is back");
-  assert.deepEqual(p.st.revoked, ["blob:t/1"]);
+  assert.equal(tab.img.view, null, "the comparer is let go");
 });
 
 test("the same key asks nothing more; a moved HEAD or scope makes the pictures again and lets the old ones go", async () => {
@@ -512,7 +549,6 @@ test("the same key asks nothing more; a moved HEAD or scope makes the pictures a
   p.s.head = "h2"; // a commit
   p.ctx.editorImageSync();
   assert.equal(p.st.fetches.length, 2);
-  assert.deepEqual(p.st.revoked, ["blob:t/1"], "the first picture's URL went with its mount");
   p.s.scope = "branch";
   p.ctx.editorImageSync();
   assert.equal(p.st.fetches.length, 3);
@@ -546,7 +582,7 @@ test("a D row opens the comparer with the old side only, and asks for nothing of
   p.ctx.editorImageSet(tab, true);
   p.st.fetches[0].resolve(imgRes());
   await settle();
-  assert.equal(tab.el.querySelectorAll("img").filter((i) => i.src && !i.src.startsWith("blob:")).length, 0);
+  assert.equal(tab.el.querySelectorAll("img").filter((i) => i.src && i.src.startsWith("/api/")).length, 0);
   assert.deepEqual(texts(tab.el, ".dk-imgd-lab"), ["Old · HEAD"]);
 });
 
@@ -573,14 +609,13 @@ test("a box tab cannot have Changes, and says why", () => {
   assert.equal(p.st.fetches.length, 0);
 });
 
-test("closing the tab lets go of the request, the blob URL and the comparer", async () => {
+test("closing the tab lets go of the request, the read and the comparer", async () => {
   const p = tabPage();
   const tab = p.mk();
   p.ctx.editorImageSet(tab, true);
   p.st.fetches[0].resolve(imgRes());
   await settle();
   p.ctx.editorImageDispose(tab);
-  assert.deepEqual(p.st.revoked, ["blob:t/1"]);
   assert.equal(tab.img.view, null);
   assert.equal(p.ctx.editorImageOn(tab), false);
   // Disposed with a request still out.

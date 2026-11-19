@@ -18,9 +18,12 @@
 //   new  today's file, as the viewer shows it: <img src="/api/fs/read?path="> (the server's raw image route, with nosniff and a
 //        sandboxing CSP). A deleted file is not asked for.
 //   old  POST /api/git/show {path, scope, raw: true} (gitapi.go handleGitShow): the blob's bytes with an image type, which becomes a
-//        blob: URL for an <img>; JSON instead for the other outcomes ({state: "ok", missing: true} for a file the base does not have,
+//        data: URL (FileReader.readAsDataURL) for an <img>; JSON instead for the other outcomes ({state: "ok", missing: true} for a file the base does not have,
 //        notrepo, unavailable); 413 for a blob over 10 MiB. The request is aborted when the mount is disposed (or after IMG_FETCH_MS),
-//        and the blob URL is revoked when it is: a mount that is gone leaves nothing behind.
+//        and an unfinished read is aborted: a mount that is gone leaves nothing behind.
+// The old side's bytes are NEVER given a blob: URL. A blob: URL has the page's own origin and does not carry the response's
+// `Content-Security-Policy: sandbox`, so opening one of an SVG in a tab would run it as the app. A data: URL has an opaque origin and
+// browsers refuse a top-level navigation to it, for every image type alike.
 // Both sides only ever go through an <img>: an SVG is never read as text or put into the page, so a script in one cannot run (an image
 // loaded by <img> runs none).
 //
@@ -69,7 +72,7 @@ function imageDiffMount(el, path, scope, opts) {
   let disposed = false;
   let ac = null;
   let timer = null;
-  let blobUrl = "";
+  let reader = null; // the FileReader turning the old side's bytes into a data: URL, while it runs
   let swipeX = 50; // the divider, percent of the stage's width
   let blend = 50;  // the Onion skin slider, 0 (old) to 100 (new)
 
@@ -231,6 +234,19 @@ function imageDiffMount(el, path, scope, opts) {
     return [wrap, row, stackCaption()];
   }
 
+  // readDataUrl: the blob as a data: URL ("" when the read fails or is aborted). One read at a time; dispose aborts it.
+  function readDataUrl(blob) {
+    return new Promise((resolve) => {
+      if (typeof FileReader !== "function") { resolve(""); return; }
+      const r = new FileReader();
+      reader = r;
+      const done = (v) => { if (reader === r) reader = null; resolve(v); };
+      r.onload = () => done(typeof r.result === "string" && r.result.startsWith("data:") ? r.result : "");
+      r.onerror = r.onabort = () => done("");
+      r.readAsDataURL(blob);
+    });
+  }
+
   async function loadOld() {
     ac = typeof AbortController === "function" ? new AbortController() : null;
     let timedOut = false;
@@ -250,9 +266,11 @@ function imageDiffMount(el, path, scope, opts) {
       if (/^image\//i.test(type)) {
         const blob = await res.blob();
         if (disposed) return;
-        blobUrl = URL.createObjectURL(blob);
+        const url = await readDataUrl(blob);
+        if (disposed) return;
+        if (!url) return fail("the picture could not be read");
         oldS.state = "ok";
-        oldImg.src = blobUrl;
+        oldImg.src = url;
         paint();
         return;
       }
@@ -275,7 +293,7 @@ function imageDiffMount(el, path, scope, opts) {
     disposed = true;
     if (ac) ac.abort();
     if (timer) { clearTimeout(timer); timer = null; }
-    if (blobUrl) { URL.revokeObjectURL(blobUrl); blobUrl = ""; }
+    if (reader) { try { reader.abort(); } catch (_) { /* done already */ } reader = null; }
     oldImg.onload = oldImg.onerror = newImg.onload = newImg.onerror = null;
     oldImg.removeAttribute("src");
     newImg.removeAttribute("src");
@@ -387,7 +405,7 @@ function editorImageSync() {
   v.cmp = imageDiffMount(v.body, tab.path, k.scope, { key, deleted });
 }
 
-// editorImageLeave goes back to the image: the comparer is let go (its request, its blob URL) and the viewer is in the tab again.
+// editorImageLeave goes back to the image: the comparer is let go (its request, its read) and the viewer is in the tab again.
 function editorImageLeave(tab) {
   const s = tab.img;
   if (!s || !s.on) return;
