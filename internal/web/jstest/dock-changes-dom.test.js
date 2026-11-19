@@ -505,6 +505,8 @@ test("a file's pending notes are a chip on its row, 'N notes', that goes when th
   p.ctx.dockChangesRender();
   assert.strictEqual(text(chip(0)), "2 notes");
   assert.strictEqual(text(chip(1)), "1 note", "a sent note does not wait, and one is not 'notes'");
+  assert.strictEqual(chip(0).dataset.n, "2", "the number alone, for a narrow list (desktop.css)");
+  assert.strictEqual(chip(1).dataset.n, "1");
   assert.match(p.rows()[0].getAttribute("aria-label"), /2 notes/);
   assert.deepStrictEqual(Array.from(a.children, (c) => cls(c)[0]), ["dk-ck", "dk-ic", "dk-nm", "dk-dir", "dk-nt", "dk-st"], "the chip sits after the folder");
   // One is sent: the same list shape with a new content is a repaint (the dedupe reads the pending counts, not the list's identity).

@@ -116,3 +116,14 @@ test("a tall tree never takes the Changes section's height: the tree's basis is 
   assert.match(rulesFor(css, ".dk-list"), /overflow-y:\s*auto/, "past which its list scrolls");
   assert.match(rulesFor(css, ".dk-list"), /min-height:\s*0/);
 });
+
+test("fix wave: a section body is a stacking context under the sticky header, and a narrow Changes list keeps the file names", () => {
+  const css = stripComments(read("desktop.css"));
+  const rule = (sel) => { const m = css.match(new RegExp("(?:^|\\n)\\s*" + sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*\\{([^}]*)\\}")); return m ? m[1] : ""; };
+  assert.match(rule(".dk-sec-b"), /position:\s*relative;\s*z-index:\s*0/, "Monaco's overview ruler cannot paint over the header's Open button");
+  assert.match(rule(".dk-chg-head"), /flex-wrap:\s*wrap/, "the header wraps instead of cutting 'reviewed n of m'");
+  assert.match(rule(".dk-chg-sub"), /min-width:\s*max-content/);
+  assert.match(rule(".dk-list"), /container:\s*dklist/);
+  assert.match(css, /@container dklist \(max-width: 300px\)\s*\{[\s\S]*?\.dk-nt::before\s*\{[^}]*attr\(data-n\)/, "the chip shrinks to its number");
+  assert.match(css, /@container dklist \(max-width: 240px\)\s*\{\s*\.dk-row \.dk-ct\s*\{\s*display:\s*none/, "then the counts go");
+});

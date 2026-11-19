@@ -227,6 +227,7 @@ function dkcFillRow(b, r, label, rv) {
   const notes = rv.notes[r.path] || 0;
   if (notes > 0) {
     dkcSetText(p.nt, notes + (notes === 1 ? " note" : " notes"));
+    if (p.nt.dataset.n !== String(notes)) p.nt.dataset.n = String(notes); // the number a narrow list shows alone (desktop.css)
     if (p.nt.parentNode !== b) b.insertBefore(p.nt, p.ct.parentNode === b ? p.ct : p.st); // before the counts, else before the letter
   } else if (p.nt.parentNode === b) {
     p.nt.remove();
