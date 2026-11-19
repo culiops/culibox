@@ -701,3 +701,64 @@ test("dockCellSid: given the running sessions, a pane picks its session as recon
   assert.deepEqual([...out.map.keys()], ["y"]);
   assert.deepEqual(out.map.get("y").tabs.map((t) => t.key), ["v:/a.go"]);
 });
+
+// --- the All changes tab (P3 Task 3b) ---
+
+test("dockOpenReview: keyed r:<sid>, after the active tab, activated when it is already there, never a preview, inputs untouched", () => {
+  const st = freeze(D.dockOpen(D.dockOpen(EMPTY, { path: "/w/a.go", preview: false }), { path: "/w/b.go", preview: true }));
+  const r = D.dockOpenReview(st, "s1");
+  assert.strictEqual(D.dockReviewKey("s1"), "r:s1");
+  assert.deepStrictEqual(r.tabs.map((t) => t.key), ["v:/w/a.go", "v:/w/b.go", "r:s1"]);
+  assert.strictEqual(r.active, "r:s1");
+  const tab = r.tabs[2];
+  assert.strictEqual(tab.review, true);
+  assert.strictEqual(tab.preview, false);
+  assert.strictEqual(tab.path, "");
+  // Open again from another tab: the same tab, activated, not a second one.
+  const again = D.dockOpenReview(D.dockActivate(r, "v:/w/a.go"), "s1");
+  assert.strictEqual(again.tabs.length, 3);
+  assert.strictEqual(again.active, "r:s1");
+  // With the first tab active it goes right after it, not at the end.
+  const mid = D.dockOpenReview(D.dockActivate(st, "v:/w/a.go"), "s1");
+  assert.deepStrictEqual(mid.tabs.map((t) => t.key), ["v:/w/a.go", "r:s1", "v:/w/b.go"]);
+  // A file preview opened next replaces the preview file tab, not this one.
+  const next = D.dockOpen(r, { path: "/w/c.go", preview: true });
+  assert.ok(next.tabs.some((t) => t.key === "r:s1"), "the review tab stays");
+  assert.ok(!next.tabs.some((t) => t.key === "v:/w/b.go"), "the preview tab was replaced");
+  // No session id: nothing opens.
+  assert.deepStrictEqual(D.dockOpenReview(st, "").tabs.map((t) => t.key), ["v:/w/a.go", "v:/w/b.go"]);
+  assert.strictEqual(D.dockReviewKey(""), null);
+  assert.strictEqual(D.dockReviewKey(7), null);
+});
+
+test("the All changes tab is never stored: serializeDock and parseDock leave it out, and the active tab falls back to a file", () => {
+  let st = D.dockOpen(EMPTY, { path: "/w/a.go", preview: false });
+  st = D.dockOpenReview(st, "s1");
+  assert.strictEqual(st.active, "r:s1");
+  const raw = D.serializeDock(new Map([["s1", st]]), true);
+  assert.ok(!raw.includes("r:s1"), "no review tab in the stored text");
+  const back = D.parseDock(raw, ["s1"]);
+  assert.deepStrictEqual(back.map.get("s1").tabs.map((t) => t.key), ["v:/w/a.go"]);
+  assert.strictEqual(back.map.get("s1").active, "v:/w/a.go");
+  // A session with only the review tab has nothing to restore.
+  const only = D.serializeDock(new Map([["s1", D.dockOpenReview(EMPTY, "s1")]]), true);
+  assert.strictEqual(D.parseDock(only, ["s1"]).map.size, 0);
+  // A forged stored entry that claims to be one is a tab with no path: dropped.
+  const forged = JSON.stringify({ v: 1, open: true, sessions: { s1: { tabs: [{ key: "r:s1", review: true, path: "" }], active: "r:s1" } } });
+  assert.strictEqual(D.parseDock(forged, ["s1"]).map.size, 0);
+});
+
+test("dockTabItems: the review tab is an item named All changes with no letter, never dirty or locked, and asks the hooks nothing", () => {
+  const st = D.dockOpenReview(D.dockOpen(EMPTY, { path: "/w/a.go", preview: false }), "s1");
+  const asked = [];
+  const items = D.dockTabItems(st, { code: (p) => { asked.push(p); return "M"; }, dirty: () => true, locked: () => true });
+  const r = items[1];
+  assert.strictEqual(r.review, true);
+  assert.strictEqual(r.name, "All changes");
+  assert.strictEqual(r.letter, "");
+  assert.strictEqual(r.dirty, false);
+  assert.strictEqual(r.locked, false);
+  assert.strictEqual(r.active, true);
+  assert.deepStrictEqual(asked, ["/w/a.go"], "git was asked about the file only");
+  assert.ok(!items[0].review);
+});

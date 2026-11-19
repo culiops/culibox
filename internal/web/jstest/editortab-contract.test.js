@@ -714,6 +714,7 @@ test("Compare opens a read-only diff, disk on the left and the live buffer on th
   bar(tab).buttons[0].click();
   await p.settle();
   assert.equal(p.st.diffs.length, 1, "a second press opens no second view");
+  assert.equal(d.model, p.st.vms[0], "the editor shows the view model we made (createViewModel), so we can dispose it");
   tab.cmpEl.children[0].children[1].click(); // Back to editing
   assert.equal(d.disposed, true);
   assert.equal(d.model, null);
@@ -722,7 +723,9 @@ test("Compare opens a read-only diff, disk on the left and the live buffer on th
   assert.equal(tab.cmpEl.hidden, true);
   assert.equal(tab.bodyEl.hidden, false);
   assert.equal(tab.barEl.hidden, false);
-  assert.deepEqual(p.st.log, ["diff.setModel", "diff.setModel(null)", "diff.dispose", "dispose#2"]);
+  assert.deepEqual(p.st.log, ["diff.setModel", "diff.setModel(null)", "diff.dispose", "vm.dispose", "dispose#2"], "the view model goes after the editor and before the disk's model");
+  assert.equal(p.st.vms.length, 1, "one view model, made by createViewModel and not by setModel({original, modified})");
+  assert.equal(p.st.vms[0].disposed, true);
 });
 
 test("while Compare is open a newer disk version is read into it, so Keep mine never overwrites what the diff did not show; and a decision, or a close of the tab, takes the view down", async () => {
@@ -765,7 +768,7 @@ test("while Compare is open a newer disk version is read into it, so Keep mine n
   const modelId = p.st.models.indexOf(tab.model) + 1;
   const diskId = p.st.models.length;
   tab.dispose();
-  assert.deepEqual(p.st.log, ["diff.setModel(null)", "diff.dispose", "dispose#" + diskId, "dispose#" + modelId]);
+  assert.deepEqual(p.st.log, ["diff.setModel(null)", "diff.dispose", "vm.dispose", "dispose#" + diskId, "dispose#" + modelId]);
   assert.equal(p.live(), 0);
 });
 
@@ -1444,12 +1447,12 @@ test("the base name in the Changes header is a span of its own, isolated for bid
   p.get("editorDiffSync")();
   await p.settle();
   changesBtn(tab).click();
-  const label = tab.bodyEl.children[0].children[0].children[0];
-  assert.equal(label.textContent, "vs ma\u202Ein (merge base)");
+  const label = tab.diff.label;
+  assert.equal(label.textContent, "ma\u202Ein (merge base) ↔ working tree");
   const span = label.children.find((c) => c.className === "dk-cmp-base");
   assert.ok(span, "the name is in its own span");
   assert.equal(span.textContent, "ma\u202Ein");
-  assert.deepEqual(label.children.map((c) => c.textContent), ["vs ", "ma\u202Ein", " (merge base)"]);
+  assert.deepEqual(label.children.map((c) => c.textContent), ["ma\u202Ein", " (merge base) ↔ working tree"]);
   const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8");
   assert.match(css, /\.dk-cmp-base[^{]*\{ unicode-bidi: isolate; \}/, "desktop.css isolates it with the other git names");
 });
@@ -1495,14 +1498,17 @@ test("a show answer for a scope the tab has left, or for a tab that was disposed
   assert.equal(q.st.toasts.length, 0);
 });
 
-test("Changes: the toggle swaps the body for a read-only inline diff of the base text against the live model, headed 'vs HEAD'", async () => {
+test("Changes: the toggle swaps the body for a read-only side by side diff of the base text against the live model, headed 'HEAD ↔ working tree'", async () => {
   const { p, tab } = await withGit(okBlob(HEAD_TEXT), BUF_TEXT);
   tab.model.type(BUF_TEXT + "unsaved\n"); // an edit not saved: Changes shows it
   assert.equal(tab.dirty(), true);
   changesBtn(tab).click();
   assert.equal(p.st.diffs.length, 1);
   const d = p.st.diffs[0];
-  assert.equal(d.opts.renderSideBySide, false, "inline");
+  assert.equal(d.opts.renderSideBySide, true, "side by side is the default");
+  assert.equal(d.opts.useInlineViewWhenSpaceIsLimited, true, "Monaco's own fallback: a narrow dock shows it inline by itself");
+  assert.equal(d.opts.diffWordWrap, "off");
+  assert.equal(d.opts.lineNumbers, "on");
   assert.deepEqual(d.opts.stickyScroll, { enabled: false }, "no sticky rows over the first changed line (Code has none either)");
   assert.equal(d.opts.readOnly, true, "a review view: typing in it does nothing");
   assert.match(d.opts.readOnlyMessage.value, /Switch to Code to edit/);
@@ -1517,15 +1523,18 @@ test("Changes: the toggle swaps the body for a read-only inline diff of the base
   assert.equal(tab.diff.diff, d);
   assert.deepEqual(tab.bodyEl.children.map((c) => c.className), ["dk-ed-cmp"], "the body is the view, not the editor");
   const [head, body] = tab.bodyEl.children[0].children;
-  assert.equal(head.textContent, "vs HEAD");
+  assert.equal(head.className, "dk-dhead");
+  assert.equal(tab.diff.label.textContent, "HEAD ↔ working tree");
   assert.equal(d.el, body);
   assert.equal(tab.seg.code.getAttribute("aria-pressed"), "false");
   assert.equal(changesBtn(tab).getAttribute("aria-pressed"), "true");
   assert.equal(p.st.git.shows.length, 1, "the toggle reuses the text the gutter asked for");
   assert.ok(d.laid > 0);
   [...d.updated].forEach((f) => f()); // Monaco computed the diff
-  assert.equal(d.revealed, 1, "it opens at the first change");
-  assert.equal(d.updated.length, 0);
+  assert.equal(d.revealed, 0, "Monaco's own first difference is not asked: the first change of the gutter's list is");
+  assert.deepEqual(d.modified.positions.at(-1), { lineNumber: tab.changes.lineChanges[0].from, column: 1 }, "it opens at the first change, the cursor on it (F7 goes on from there)");
+  assert.deepEqual(d.modified.revealed, [tab.changes.lineChanges[0].from]);
+  assert.equal(d.updated.length, 1, "the open-at-first-change listener let go itself; what stays is the notes' (editornotes.js), which follows every new diff");
   // The tab's own state does not change under it.
   assert.equal(tab.dirty(), true);
   assert.equal(tab.model.value, BUF_TEXT + "unsaved\n");
@@ -1652,8 +1661,8 @@ test("Changes: the label follows the scope; a switch of scope or a new HEAD whil
   p.st.git.answer = (b) => okBlob(b.scope === "branch" ? "l1\nl2\n" : HEAD_TEXT);
   changesBtn(tab).click();
   const d = p.st.diffs[0];
-  const label = () => tab.bodyEl.children[0].children[0].children[0].textContent;
-  assert.equal(label(), "vs HEAD");
+  const label = () => tab.diff.label.textContent;
+  assert.equal(label(), "HEAD ↔ working tree");
   p.st.git.scope = "branch";
   p.st.git.base = { mergeBase: "mb1", baseName: "main" };
   p.get("editorDiffSync")(); // dockChangesRefresh: the scope was picked
@@ -1661,13 +1670,13 @@ test("Changes: the label follows the scope; a switch of scope or a new HEAD whil
   assert.equal(p.st.diffs.length, 1, "the same view, not a new one");
   assert.equal(d.model.original.value, "l1\nl2\n", "the removed side is the merge base's text");
   assert.deepEqual(d.model.original.sets, ["l1\nl2\n"]);
-  assert.equal(label(), "vs main (merge base)");
+  assert.equal(label(), "main (merge base) ↔ working tree");
   assert.equal(changesBtn(tab).title, "Changes vs main (merge base)");
   p.st.git.scope = "head";
   p.get("editorDiffSync")();
   await p.settle();
   assert.equal(d.model.original.value, HEAD_TEXT);
-  assert.equal(label(), "vs HEAD");
+  assert.equal(label(), "HEAD ↔ working tree");
   // Git can no longer give it: the view goes, and says why.
   p.st.git.head = "h9";
   p.st.git.answer = { state: "unavailable", reason: "Git took too long" };
@@ -1740,7 +1749,7 @@ test("Code asked for while the tab is hidden forgets where its Changes view was 
   d2.modified.setScrollTop = (v) => placed.push(v);
   [...d2.updated].forEach((f) => f());
   assert.deepEqual(placed, [], "no scroll to the old place: that view is gone");
-  assert.equal(d2.revealed, 1, "it opens at the first change, as a Changes view does");
+  assert.deepEqual(d2.modified.revealed, [tab.changes.lineChanges[0].from], "it opens at the first change, as a Changes view does");
 });
 
 test("one diff editor for the dock: two tabs left in Changes, switched back and forth, never have two", async () => {
@@ -2035,4 +2044,79 @@ test("Compare and Changes never coexist on a tab: entering one closes the other,
   most();
   assert.equal(liveDiffs(p).length, 1, "the compare view that landed last left the Changes view");
   assert.equal(tab.diff, null);
+});
+
+// A D row of the Changes section opens the file in Changes (dkcOpenRow), but the file is not there: the first read is a 404. The tab
+// then shows the base text as all removed, read-only, with no read error, and does not poll the file that is known gone.
+async function deletedRow(o) {
+  const p = page();
+  p.setRead({ ok: false, status: 404, data: { error: "not found" } });
+  p.st.git.on = true;
+  p.st.git.answer = o && o.answer ? o.answer : okBlob(HEAD_TEXT);
+  p.setShown(true);
+  const tab = await p.open("/p/gone.go", o && o.opts ? o.opts : { view: "changes" });
+  await p.settle();
+  return { p, tab };
+}
+
+test("a deleted file's Changes row: the base text on the old side, an empty new side, read-only, and no read error in the body", async () => {
+  const { p, tab } = await deletedRow();
+  assert.equal(tab.gone, true);
+  assert.equal(tab.model.value, "", "the new side is empty");
+  assert.ok(tab.diff, "Changes is up");
+  assert.equal(p.st.diffs.length, 1);
+  assert.equal(p.st.diffs[0].model.original.value, HEAD_TEXT, "the old side is the base text");
+  assert.deepEqual(p.st.git.shows.map((s) => s.body), [{ path: "/p/gone.go", scope: "head" }]);
+  assert.deepEqual(tab.bodyEl.children.map((c) => c.className), ["dk-ed-cmp"], "the diff, not a read error");
+  assert.equal(tab.mode, "read");
+  assert.equal(tab.readOnly, true);
+  assert.equal(tab.dirty(), false);
+  assert.match(tab.readOnlyWhy(), /deleted/);
+  assert.equal(p.st.writes.length, 0);
+  // Code (the empty buffer) is read-only, and a save says why instead of writing.
+  tab.seg.code.click();
+  await tab.save();
+  assert.equal(p.st.writes.length, 0, "nothing is ever written for a file that is gone");
+});
+
+test("a deleted file's tab does not ask the server about its file: no 404 poll while the file is known deleted", async () => {
+  const { p, tab } = await deletedRow();
+  assert.equal(p.metas().length, 0, "no metadata read when it was shown");
+  const reads = p.st.reads.length;
+  assert.equal(p.live(), 0, "the dock's interval is not even running for it");
+  await p.get("editorSyncCheck")(tab); // and a check asked for anyway reads nothing
+  await p.settle();
+  assert.equal(p.metas().length, 0, "no metadata read");
+  assert.equal(p.st.reads.length, reads, "no read at all");
+  assert.equal(tab.barEl.hidden, true, "and no deleted bar over a file that opened as deleted");
+  assert.equal(tab.sync && tab.sync.bar, null);
+});
+
+test("a base the git side does not have either is an empty diff, not an error; git that cannot answer says why and the tab stays", async () => {
+  const m = await deletedRow({ answer: { state: "ok", missing: true } });
+  assert.ok(m.tab.diff);
+  assert.equal(m.p.st.diffs[0].model.original.value, "");
+  const u = await deletedRow({ answer: { state: "unavailable", reason: "Git status needs the box runtime (docker)" } });
+  assert.equal(u.p.st.diffs.length, 0);
+  assert.deepEqual(u.p.st.toasts.at(-1), ["Changes unavailable: Git status needs the box runtime (docker)", undefined]);
+});
+
+test("a 404 on a tab that was not asked to open in Changes is still the read error, and a restored one still closes", async () => {
+  const plain = await deletedRow({ opts: {} });
+  assert.equal(plain.tab.gone, false);
+  assert.equal(plain.tab.model, null);
+  assert.equal(plain.tab.bodyEl.children[0].textContent, "not found");
+  assert.equal(plain.p.st.git.shows.length, 0);
+  const closed = [];
+  const p = page({ closeTabEverywhere: (t) => closed.push(t) });
+  p.setRead({ ok: false, status: 404, data: { error: "not found" } });
+  const r = await p.open("/p/gone.go", { restored: true, view: "changes" });
+  assert.deepEqual(closed, [r]);
+  assert.equal(r.gone, false);
+  // A 403 on a Changes open is an error as ever, not a deleted file.
+  const f = page();
+  f.setRead({ ok: false, status: 403, data: { error: "refused" } });
+  const t = await f.open("/p/x.go", { view: "changes" });
+  assert.equal(t.gone, false);
+  assert.equal(t.bodyEl.children[0].textContent, "refused");
 });

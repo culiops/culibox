@@ -1698,8 +1698,8 @@ func TestGitShowNotAFile(t *testing.T) {
 			t.Fatalf("%s: code = %d, want 400", p, rr.Code)
 		}
 	}
-	// A file that is not there has no disk side to compare: a 404, as for a diff.
-	if rr := postShow(s, filepath.Join(repo, "gone.go"), "head"); rr.Code != http.StatusNotFound {
+	// A file whose directory is not there has nothing to resolve: a 404.
+	if rr := postShow(s, filepath.Join(repo, "nodir", "gone.go"), "head"); rr.Code != http.StatusNotFound {
 		t.Fatalf("missing: code = %d, want 404", rr.Code)
 	}
 	if g.calls() != 0 {
@@ -1817,6 +1817,209 @@ func TestGitFileRel(t *testing.T) {
 		}
 		if rel, err := gitFileRel(tg, c.abs); rel != "" || !c.want(err) {
 			t.Errorf("%s: rel = %q, err = %v", name, rel, err)
+		}
+	}
+}
+
+// A deleted file's Changes row asks git show for the base text of a path that is
+// no longer on disk. Only POST /api/git/show accepts such a vanished leaf (see
+// gitTargetShow); every refusal below must leave the runner untouched.
+
+func TestGitShowDeletedTrackedFile(t *testing.T) {
+	s, repo, g := showRepo(t, "sub/keep.go")
+	g.blob = gitview.Blob{State: "ok", Content: "package gone\n"}
+	gone := filepath.Join(repo, "sub", "gone.go")
+	for _, scope := range []string{"head", "branch"} {
+		g.base = gitview.BaseInfo{State: "ok", MergeBase: "abc123", BaseRef: "origin/main"}
+		g.shows, g.bases = nil, nil
+		b := decodeBlob(t, postShow(s, gone, scope))
+		if b.State != "ok" || b.Missing || b.Content != "package gone\n" {
+			t.Fatalf("%s: show = %+v", scope, b)
+		}
+		rev := "HEAD"
+		if scope == "branch" {
+			rev = "abc123"
+		}
+		tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+		if len(g.shows) != 1 || g.shows[0] != (fakeShowCall{tg, rev, "sub/gone.go", false}) {
+			t.Fatalf("%s: shows = %+v, want one %s Show of sub/gone.go", scope, g.shows, rev)
+		}
+	}
+	// A path the base does not have either is the runner's "missing".
+	g.blob = gitview.Blob{State: "ok", Missing: true}
+	if b := decodeBlob(t, postShow(s, gone, "head")); b.State != "ok" || !b.Missing {
+		t.Fatalf("missing: %+v", b)
+	}
+	// The raw (image) form takes the same vanished path.
+	g.blob = gitview.Blob{State: "ok"}
+	g.raw = []byte("PNG")
+	g.shows = nil
+	rr := postShowRaw(s, filepath.Join(repo, "sub", "gone.png"), "head")
+	if rr.Code != http.StatusOK || rr.Body.String() != "PNG" {
+		t.Fatalf("raw: code %d body %q", rr.Code, rr.Body)
+	}
+	if len(g.shows) != 1 || g.shows[0].Rel != "sub/gone.png" || !g.shows[0].Raw {
+		t.Fatalf("raw shows = %+v", g.shows)
+	}
+}
+
+func TestGitShowDeletedFileBoxed(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	g := &fakeGit{}
+	s.Git = g
+	mainRepo(t, ws)
+	mustMkdirAll(t, filepath.Join(ws, "sub"))
+	if b := decodeBlob(t, postShow(s, filepath.Join(ws, "sub", "gone.go"), "head")); b.State != "ok" {
+		t.Fatalf("show = %+v", b)
+	}
+	want := fakeShowCall{gitview.Target{Root: ws, Top: ws, Common: filepath.Join(ws, ".git")}, "HEAD", "sub/gone.go", false}
+	if len(g.shows) != 1 || g.shows[0] != want {
+		t.Fatalf("calls = %+v, want %+v", g.shows, want)
+	}
+}
+
+func TestGitShowVanishedLeafRefusals(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	mustWrite(t, filepath.Join(repo, "a.go"), "x\n")
+	outside := t.TempDir() // a sibling of $HOME, not inside it
+	mustMkdirAll(t, filepath.Join(outside, "d"))
+	// A parent that is a link to a directory outside the viewable tree.
+	mustSymlink(t, filepath.Join(outside, "d"), filepath.Join(repo, "out"))
+	// A leaf that is a dangling link (to a missing file, and to one outside).
+	mustSymlink(t, filepath.Join(repo, "nowhere.go"), filepath.Join(repo, "dangling.go"))
+	mustSymlink(t, filepath.Join(outside, "nowhere.go"), filepath.Join(repo, "dangling-out.go"))
+
+	cases := []struct {
+		name string
+		path string
+		code int
+	}{
+		{"symlinked parent outside the tree", filepath.Join(repo, "out", "gone.go"), http.StatusForbidden},
+		{"dangling link leaf", filepath.Join(repo, "dangling.go"), http.StatusNotFound},
+		{"dangling link leaf to outside", filepath.Join(repo, "dangling-out.go"), http.StatusNotFound},
+		{"missing parent", filepath.Join(repo, "nodir", "gone.go"), http.StatusNotFound},
+		{"parent is a file", filepath.Join(repo, "a.go", "gone.go"), http.StatusNotFound},
+		{"parent is a dangling link", filepath.Join(repo, "dangling.go", "gone.go"), http.StatusNotFound},
+		{"outside home", filepath.Join(outside, "gone.go"), http.StatusForbidden},
+	}
+	for _, c := range cases {
+		for _, scope := range []string{"head", "branch"} {
+			if rr := postShow(s, c.path, scope); rr.Code != c.code {
+				t.Errorf("%s (%s): code = %d (%s), want %d", c.name, scope, rr.Code, rr.Body, c.code)
+			}
+		}
+	}
+	if n := g.calls(); n != 0 {
+		t.Fatalf("runner called %d times for a refused target: %+v", n, g.shows)
+	}
+}
+
+func TestGitShowVanishedLeafDenied(t *testing.T) {
+	s, h, ws := boxedServer(t)
+	g := &fakeGit{}
+	s.Git = g
+	mainRepo(t, ws)
+	// A vanished file in the denied tree (the data dir), and one reached by a
+	// link from the workspace into it.
+	mainRepo(t, filepath.Join(h, "data"))
+	mustSymlink(t, filepath.Join(h, "data"), filepath.Join(ws, "datalink"))
+	if rr := postShow(s, filepath.Join(h, "data", "gone.go"), "head"); rr.Code != http.StatusForbidden {
+		t.Errorf("in the denied tree: code = %d (%s), want 403", rr.Code, rr.Body)
+	}
+	// Through a box-planted link the strict walk leaves resolution to EvalSymlinks,
+	// which lands outside the contained root: refused as "outside".
+	if b := decodeBlob(t, postShow(s, filepath.Join(ws, "datalink", "gone.go"), "head")); b.State != "unavailable" || b.Reason != msgGitOutside {
+		t.Errorf("through a link to the denied tree: %+v, want unavailable %q", b, msgGitOutside)
+	}
+	if g.calls() != 0 {
+		t.Fatal("runner called")
+	}
+}
+
+func TestGitShowVanishedLeafBoxedEscapes(t *testing.T) {
+	s, h, ws := boxedServer(t)
+	g := &fakeGit{}
+	s.Git = g
+	mainRepo(t, ws)
+	hostDir := filepath.Join(h, "hostdir")
+	mustMkdirAll(t, hostDir)
+	// A box-planted link out of the contained root, used as a parent.
+	mustSymlink(t, hostDir, filepath.Join(ws, "out"))
+	// A dangling link leaf inside the box.
+	mustSymlink(t, filepath.Join(ws, "nowhere"), filepath.Join(ws, "dangling.go"))
+	mustWrite(t, filepath.Join(ws, "a.go"), "x\n")
+
+	if b := decodeBlob(t, postShow(s, filepath.Join(ws, "out", "gone.go"), "head")); b.State != "unavailable" || b.Reason != msgGitOutside {
+		t.Errorf("link parent out of the root: %+v, want unavailable %q", b, msgGitOutside)
+	}
+	for _, p := range []string{filepath.Join(ws, "dangling.go"), filepath.Join(ws, "nodir", "gone.go")} {
+		if rr := postShow(s, p, "head"); rr.Code != http.StatusNotFound {
+			t.Errorf("%s: code = %d (%s), want 404", p, rr.Code, rr.Body)
+		}
+	}
+	// A file as the parent: EvalSymlinks says "not a directory", an "outside" as before.
+	if b := decodeBlob(t, postShow(s, filepath.Join(ws, "a.go", "gone.go"), "head")); b.State != "unavailable" || b.Reason != msgGitOutside {
+		t.Errorf("file as parent: %+v, want unavailable %q", b, msgGitOutside)
+	}
+	if g.calls() != 0 {
+		t.Fatalf("runner called: %+v", g.shows)
+	}
+}
+
+// A link parent that stays inside the tree is followed (as for an existing
+// file), and git is asked about the resolved path.
+func TestGitShowVanishedLeafUnderInTreeLink(t *testing.T) {
+	s, repo, g := showRepo(t, "real/keep.go")
+	mustSymlink(t, filepath.Join(repo, "real"), filepath.Join(repo, "alias"))
+	if b := decodeBlob(t, postShow(s, filepath.Join(repo, "alias", "gone.go"), "head")); b.State != "ok" {
+		t.Fatalf("show = %+v", b)
+	}
+	if len(g.shows) != 1 || g.shows[0].Rel != "real/gone.go" {
+		t.Fatalf("shows = %+v, want rel real/gone.go", g.shows)
+	}
+}
+
+// A path that names a directory (also through "." and ".." which the resolver
+// cleans away) is not a vanished leaf.
+func TestGitShowVanishedLeafNotDotNames(t *testing.T) {
+	s, repo, g := showRepo(t, "sub/keep.go")
+	for _, p := range []string{filepath.Join(repo, "sub", "gone", ".."), repo + "/sub/gone/../.", filepath.Join(repo, "sub") + "/."} {
+		if rr := postShow(s, p, "head"); rr.Code != http.StatusBadRequest && rr.Code != http.StatusNotFound {
+			t.Errorf("%s: code = %d (%s), want 400/404", p, rr.Code, rr.Body)
+		}
+	}
+	if g.calls() != 0 {
+		t.Fatalf("runner called: %+v", g.shows)
+	}
+}
+
+// Only show takes a vanished leaf: diff, numstat, base and status refuse it as before.
+func TestGitVanishedLeafOnlyForShow(t *testing.T) {
+	s, repo, g := showRepo(t, "sub/keep.go")
+	gone := filepath.Join(repo, "sub", "gone.go")
+	for name, h := range map[string]http.HandlerFunc{
+		"diff": s.handleGitDiff, "status": s.handleGitStatus, "base": s.handleGitBase, "numstat": s.handleGitNumstat,
+	} {
+		b, _ := json.Marshal(map[string]any{"path": gone, "scope": "head"})
+		if rr := gitPost(h, "/api/git/"+name, string(b)); rr.Code != http.StatusNotFound {
+			t.Errorf("%s: code = %d (%s), want 404", name, rr.Code, rr.Body)
+		}
+	}
+	if g.calls() != 0 {
+		t.Fatalf("runner called for a vanished leaf outside show")
+	}
+}
+
+// gitTargetShow is gitTarget for every path that exists.
+func TestGitTargetShowExistingSameAsGitTarget(t *testing.T) {
+	s, repo, _ := showRepo(t, "sub/a.go")
+	for _, p := range []string{filepath.Join(repo, "sub", "a.go"), filepath.Join(repo, "sub"), repo} {
+		t1, a1, e1 := s.gitTarget(p)
+		t2, a2, e2 := s.gitTargetShow(p)
+		if t1 != t2 || a1 != a2 || e1 != e2 {
+			t.Errorf("%s: gitTarget = %+v %q %v, gitTargetShow = %+v %q %v", p, t1, a1, e1, t2, a2, e2)
 		}
 	}
 }

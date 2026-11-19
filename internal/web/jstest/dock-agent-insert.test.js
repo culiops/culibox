@@ -321,8 +321,12 @@ test("the strip's Insert reuses Show terminal and the one insert; it has no way 
   assert.match(body, /editorInsertLeavingFull\(want\);/);
   assert.doesNotMatch(body, /setDrawerMax|applyDrawer|paintDrawerMax|insertTextAtPrompt|sendText|sendKey|\\n|\\r/);
   const leaving = code(fnSource("editorselbar.js", "editorInsertLeavingFull"));
-  assert.match(leaving, /const run = \(\) => \{ editorInsertRef\(want\); \};\n\s*if \(!dockShowTerminal\(run\)\) run\(\);/, "Show terminal's own function, then the one insert; nothing of its own");
+  assert.match(leaving, /editorRunLeavingFull\(\(\) => \{ editorInsertRef\(want\); \}\);/, "the shared flow, then the one insert; nothing of its own");
   assert.doesNotMatch(leaving, /setDrawerMax|applyDrawer|paintDrawerMax|insertTextAtPrompt|sendText|sendKey/);
+  // The shared flow (also the review bar's Paste): the forced-Full refusal, then Show terminal's own function, `run` from its `then`.
+  const flow = code(fnSource("editorselbar.js", "editorRunLeavingFull"));
+  assert.match(flow, /if \(editorLeavingWouldDiscard\(\)\) \{ showToast\(EDITOR_SAVE_FIRST, \{ error: true \}\); return; \}\n\s*if \(!dockShowTerminal\(run\)\) run\(\);/);
+  assert.doesNotMatch(flow, /setDrawerMax|applyDrawer|paintDrawerMax|insertTextAtPrompt|sendText|sendKey/);
   assert.match(code(fnSource("editorselbar.js", "editorSelBarBuild")), /editorInsertLeavingFull\(editorRefFor\(esbTab, esbLines\)\)/, "the bar's Insert goes through it too");
   assert.match(code(src("app.js")), /\$\("dock-agent-ins"\)\.onclick = \(\) => dockAgentInsert\(\);/);
   const html = src("index.html");

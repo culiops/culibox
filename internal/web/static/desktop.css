@@ -1274,13 +1274,14 @@
     border-bottom: 1px solid var(--line);
   }
   #dock-changes[hidden], .dk-branch[hidden], .dk-chg-note[hidden], .dk-legend[hidden], .dk-review[hidden] { display: none; }
-  .dk-chg-head { flex: none; display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; min-width: 0; }
+  /* The header wraps rather than cut a word: in a narrow explorer "reviewed n of m" stays whole and Review drops to a second row. */
+  .dk-chg-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; row-gap: 0; min-height: 28px; padding: 0 10px; min-width: 0; }
   .dk-chg-title {
     flex: none; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
     letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg);
   }
-  .dk-chg-sub { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
-  .dk-review { flex: none; font-size: var(--t-sm); line-height: var(--lh-sm); }
+  .dk-chg-sub { flex: 1 1 auto; min-width: max-content; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .dk-review { flex: none; margin-left: auto; font-size: var(--t-sm); line-height: var(--lh-sm); }
   .dk-scope { flex: none; align-self: flex-start; margin: 0 10px 6px; }
   .dk-branch {
     flex: none; display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 10px 4px; min-width: 0; white-space: nowrap;
@@ -1290,7 +1291,7 @@
   .dk-br-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; color: var(--fg); }
   .dk-br-sep { flex: none; }
   .dk-chg-note { flex: none; margin: 0; padding: 2px 10px 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
-  .dk-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
+  .dk-list { container: dklist / inline-size; flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
   /* One changed file: the type icon, the name, its folder (the part that gives way), the counts and the letter. The name keeps
      its width and the folder takes what is left. The 2px bar on the left edge is the session bar, the one the tree rows wear. */
   .dk-row {
@@ -1305,7 +1306,22 @@
   .dk-ct { flex: none; display: inline-flex; gap: 4px; font: var(--w-medium) var(--t-xs)/1 var(--font-mono); color: var(--muted); }
   .dk-add { color: var(--ok); }
   .dk-del { color: var(--danger); }
+  /* The review loop's marks on a row (dockchanges.js): the circle at the left is filled green with a tick once the file is reviewed
+     (and while the mark still stands), and the chip counts the notes waiting to be sent. */
+  .dk-ck { flex: none; box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--faint); display: grid; place-items: center; }
+  .dk-ck-done { background: var(--ok); border-color: var(--ok); }
+  .dk-ck-done::after { content: ""; width: 6px; height: 3px; border: solid var(--bg); border-width: 0 0 1.5px 1.5px; transform: rotate(-45deg) translate(0, -1px); }
+  .dk-nt { flex: none; padding: 0 5px; border-radius: 7px; background: var(--accent-tint); color: var(--accent); font: var(--w-semibold) var(--t-xs)/14px var(--font-ui); }
   .dk-row .dk-st { min-width: 12px; text-align: center; }
+  /* A narrow list gives the file name priority: the notes chip keeps only its number (the words are in the row's label and title),
+     and below that the counts go too (they are in the label and title as well). */
+  @container dklist (max-width: 300px) {
+    .dk-nt { font-size: 0; line-height: 14px; }
+    .dk-nt::before { content: attr(data-n); font: var(--w-semibold) var(--t-xs)/14px var(--font-ui); }
+  }
+  @container dklist (max-width: 240px) {
+    .dk-row .dk-ct { display: none; }
+  }
   .dk-more { padding: 3px 10px; font-size: var(--t-sm); color: var(--muted); }
   .dk-legend { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 10px 8px 12px; font-size: var(--t-xs); line-height: var(--lh-xs); color: var(--muted); }
   .dk-legend i { flex: none; width: 2px; height: 10px; border-radius: 1px; background: var(--accent); }
@@ -1435,10 +1451,44 @@
   .dk-conflict-msg { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; color: var(--fg); unicode-bidi: isolate; }
   .dk-conflict-msg b { font-weight: var(--w-semibold); }
   .dk-conflict-acts { flex: none; display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  /* The review bar (reviewbar.js, mockup B2): first in a dock editor while notes wait. --accent-tint, like the mockup; the sentence takes the
+     room and is cut with an ellipsis, the buttons wrap under it when the dock is narrow. The Paste button's label is "Paste to <session>",
+     cut when the name is long (the title has it whole). */
+  .dk-rbar {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 12px; min-width: 0;
+    background: var(--accent-tint); border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line)); font: var(--t-md)/var(--lh-md) var(--font-ui);
+  }
+  .dk-rbar[hidden] { display: none; }
+  .dk-rbar-t { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+  .dk-rbar-t b { font-weight: var(--w-semibold); }
+  .dk-rbar-sub { color: var(--muted); }
+  .dk-rbar-r { flex: none; display: flex; align-items: center; gap: 8px; max-width: 100%; }
+  .dk-rbar-r > [hidden] { display: none; }
+  .dk-rbar-paste { min-width: 0; }
+  .dk-rbar-paste > span { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dk-rbar-sent[aria-pressed="true"] { background: var(--raise); box-shadow: inset 0 0 0 1px var(--accent); color: var(--fg); }
+  .dk-rbar-pre {
+    margin: 0 0 8px; padding: 10px 12px; max-height: 50vh; overflow: auto; background: var(--bg); border: 1px solid var(--line);
+    border-radius: var(--r-ctl); font: var(--t-sm)/var(--lh-sm) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg);
+  }
+  .dk-rbar-copyrow { display: flex; justify-content: flex-end; }
   /* Compare (the disk beside the buffer): a line saying what is shown and how to leave, then the diff, in place of the editor. */
   .dk-ed-cmp { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
   .dk-cmp-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 10px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
   .dk-cmp-body { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+  /* The Changes view's header row (editorreview.js, mockup B2): what is compared on the left (the name gives way first), and on the
+     right "Change N of M" with prev / next and the Mark reviewed toggle. In a narrow dock the right group drops under the left one. */
+  .dk-dhead { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; min-height: 30px; padding: 2px 12px; box-sizing: border-box; background: var(--bg); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui); }
+  .dk-dh-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: var(--w-medium); unicode-bidi: isolate; }
+  .dk-dh-cmp { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dk-dh-ct[hidden] { display: none; }
+  .dk-dh-r { flex: none; display: flex; align-items: center; gap: 4px; margin-left: auto; white-space: nowrap; }
+  .dk-dh-pos { margin-right: 4px; }
+  .dk-dh-kbd { margin: 0 6px 0 2px; font-family: var(--font-mono); font-size: var(--t-xs); color: var(--muted); }
+  .dk-dh-step { width: 22px; height: 22px; padding: 0; }
+  .dk-dh-mark { height: 22px; padding: 0 10px; }
+  .dk-dh-mark[aria-pressed="true"] { color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); }
+  .dk-dh-mark[aria-pressed="true"]::before { content: ""; width: 8px; height: 4px; margin-right: 6px; border: solid currentColor; border-width: 0 0 1.5px 1.5px; transform: rotate(-45deg) translate(1px, -1px); }
   /* The status bar (mockup B1 .esb): the branch and "Saved" on the left; Ln/Col, indentation, encoding, line ending and language on the
      right. One 24px line that never wraps; what does not fit is cut at the left group, so the right group keeps its words. */
   .dk-sb {
@@ -1481,6 +1531,78 @@
   }
   /* The Changes view (editordiff.js) fills the tab's body, in place of the editor; its header is the compare view's. */
   .dk-ed-body > .dk-ed-cmp { position: absolute; inset: 0; }
+  /* An image's Changes view (imagediff.js): the tab's header row (.dk-dhead, as the text view's), then a scrolling body holding the comparer.
+     Its mode control (.dk-imgmode, the kit's .seg) is centred over the stage. Side by side wraps to one column when the dock is narrow. A
+     picture sits on a faint checkerboard so a transparent one reads as one. Swipe and Onion skin lay the two pictures in the same grid
+     cell; the divider (a slider, role and keys in the script) is a line with a knob, and its hit area is wider than the line. */
+  .dk-imgd-tab { background: var(--bg); }
+  .dk-imgd-tab:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-imgd-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+  .dk-imgd { box-sizing: border-box; min-height: 100%; padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
+  .dk-imgd-bar { flex: none; display: flex; justify-content: center; }
+  .dk-imgd-bar[hidden] { display: none; }
+  .dk-imgmode.seg { flex: none; }
+  .dk-imgd-stage { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); min-width: 0; }
+  .dk-imgd-side { width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-4); align-items: start; }
+  .dk-imgd-fig { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+  .dk-imgd-lab { color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
+  .dk-imgd-frame, .dk-imgd-stack {
+    border: 1px solid var(--line); border-radius: var(--r-ctl); overflow: hidden; background-color: var(--panel);
+    background-image: conic-gradient(var(--bg) 25%, transparent 0 50%, var(--bg) 0 75%, transparent 0); background-size: 16px 16px;
+  }
+  .dk-imgd-frame { display: flex; align-items: center; justify-content: center; min-height: 96px; padding: var(--sp-2); }
+  .dk-imgd-img { display: block; max-width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+  .dk-imgd-cap { color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-mono); font-variant-numeric: tabular-nums; text-align: center; }
+  .dk-imgd-msg { color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui); text-align: center; padding: var(--sp-3); overflow-wrap: anywhere; }
+  .dk-imgd-msg.err { color: var(--red); }
+  .dk-imgd-stack { position: relative; display: grid; width: fit-content; max-width: 100%; touch-action: pan-y; user-select: none; }
+  .dk-imgd-layer { grid-area: 1 / 1; min-width: 0; }
+  .dk-imgd-onion > .dk-imgd-img { grid-area: 1 / 1; justify-self: start; align-self: start; }
+  .dk-imgd-swipe { cursor: ew-resize; }
+  .dk-imgd-div { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); cursor: ew-resize; touch-action: none; }
+  .dk-imgd-div::before { content: ""; position: absolute; top: 0; bottom: 0; left: -9px; right: -9px; }
+  .dk-imgd-div:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); } /* the stage clips an outside outline: a halo along the line */
+  .dk-imgd-knob { position: absolute; top: 50%; left: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; box-sizing: border-box; border-radius: 50%; background: var(--bg); border: 2px solid var(--accent); }
+  .dk-imgd-blend { display: flex; align-items: center; gap: var(--sp-2); width: min(320px, 100%); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
+  .dk-imgd-range { flex: 1; min-width: 0; accent-color: var(--accent); }
+  /* The All changes tab (reviewall.js): the tab's own head (what is compared, the counts, "reviewed n of m"), then one scroll of sections. A
+     section's header is sticky inside its own section, so the file being read keeps its name, its circle and Open at the top. The body is
+     as tall as its diff editor's content (the script sets the height, 1200 px at most) and the editor scrolls inside past that. */
+  .dk-ra-head {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; min-height: 30px; padding: 2px 12px; box-sizing: border-box;
+    background: var(--bg); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui);
+  }
+  .dk-ra-title { color: var(--fg); font-weight: var(--w-medium); }
+  .dk-ra-cmp { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
+  .dk-ra-rev { margin-left: auto; white-space: nowrap; }
+  .dk-ra-head [hidden], .dk-sec-h [hidden] { display: none; }
+  .dk-ra-scroll { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; background: var(--bg); }
+  .dk-ra-scroll:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-ra-note { padding-top: 10px; }
+  .dk-ra-more { padding: 10px 12px; }
+  .dk-sec { position: relative; border-bottom: 1px solid var(--line); }
+  .dk-sec-h {
+    position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px 0 4px; box-sizing: border-box;
+    background: var(--panel); border-bottom: 1px solid var(--line); font: var(--t-sm)/var(--lh-sm) var(--font-ui); white-space: nowrap; min-width: 0;
+  }
+  .dk-sec-caret { width: 22px; height: 22px; padding: 0; flex: none; }
+  .dk-sec-caret[aria-expanded="false"] svg { transform: rotate(-90deg); }
+  .dk-sec-ck { position: relative; padding: 0; cursor: pointer; }
+  .dk-sec-ck:not(.dk-ck-done) { background: transparent; }
+  .dk-sec-ck::before { content: ""; position: absolute; inset: -6px; }
+  .dk-sec-ck:hover { border-color: var(--muted); }
+  .dk-sec-ck.dk-ck-done:hover { border-color: var(--ok); }
+  .dk-sec-ck:focus-visible, .dk-sec-caret:focus-visible, .dk-sec-open:focus-visible { outline: var(--focus); outline-offset: 2px; }
+  .dk-sec-h .dk-nm { color: var(--fg); font-weight: var(--w-medium); }
+  .dk-sec-h .dk-st { flex: none; min-width: 12px; text-align: center; }
+  .dk-dh-all { height: 22px; padding: 0 8px; }
+  .dk-sec-open { flex: none; margin-left: auto; height: 22px; padding: 0 10px; }
+  .dk-sec-h .dk-dir { flex: 1 1 0; }
+  /* z-index 0 makes the body a stacking context: Monaco's overview ruler and viewport (z-index inside the editor) stay under the sticky header. */
+  .dk-sec-b { position: relative; z-index: 0; overflow: hidden; min-width: 0; }
+  .dk-sec-b[hidden] { display: none; }
+  .dk-sec-in, .dk-sec-mon { width: 100%; height: 100%; min-width: 0; }
+  .dk-ra-msg { padding: var(--sp-3) var(--sp-4); }
   /* The markdown Preview (editormd.js) fills the body the same way, and is the scroller. The document is the phone's .md-body (app.css),
      given mockup B4's margins: 36px on the left and 28px on the right, 18px above. The pane takes the keyboard (Mod+S, the arrows),
      so its ring sits inside it. */
@@ -1502,6 +1624,35 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: var(--e-pop);
   }
   .dk-selbar-b svg { flex: none; width: 14px; height: 14px; }
+  /* Line notes in the Changes view (editornotes.js, mockup B2). A note is a card (.dk-nz, an overlay widget) over a Monaco view zone that holds
+     its room; .dk-nz-in is what is measured for the room's height, and the card is .dk-note (--panel, 1px --line, 8px). The "+" is a glyph-margin
+     decoration (.dk-note-add) that shows under the pointer. Note text is pre-wrapped and breaks anywhere, so a long token cannot widen
+     the card past the dock. */
+  /* The card is an overlay widget (Monaco's view zone is an empty room under the line, .dk-nz-room), placed by editornotes.js. */
+  .dk-nz-room { pointer-events: none; }
+  .dk-nz { position: absolute; box-sizing: border-box; z-index: 5; }
+  .dk-nz-in { box-sizing: border-box; padding: 6px 16px 8px 12px; }
+  .dk-note { border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); color: var(--fg); font: var(--w-regular) var(--t-md)/var(--lh-md) var(--font-ui); text-align: left; }
+  .dk-note-h { display: flex; align-items: center; gap: 8px; padding: 7px 10px 0; color: var(--muted); font-size: var(--t-sm); }
+  .dk-note-av { flex: none; width: 18px; height: 18px; border-radius: 50%; background: var(--raise); color: var(--fg); font: var(--w-semibold) var(--t-xs)/18px var(--font-ui); text-align: center; }
+  .dk-note-who { flex: none; color: var(--fg); font-weight: var(--w-semibold); }
+  .dk-note-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dk-note-badge { flex: none; padding: 0 6px; border: 1px solid var(--amber); border-radius: var(--r-chip); color: var(--amber); font-size: var(--t-xs); line-height: var(--lh-xs); }
+  .dk-note-badge-sent { border-color: var(--line); color: var(--muted); }
+  .dk-note-act { flex: none; display: flex; gap: 10px; margin-left: auto; }
+  .dk-note-b-act { padding: 0; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+  .dk-note-b-act:hover { color: var(--fg); }
+  .dk-note-b-act:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  .dk-note-q { margin: 4px 10px 0 36px; padding: 0 6px; border-left: 2px solid var(--line); color: var(--muted); font: var(--w-regular) var(--t-sm)/var(--lh-sm) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .dk-note-body { padding: 4px 10px 8px 36px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+  .dk-note-sent .dk-note-body { color: var(--muted); }
+  .dk-note-edit { padding: 8px 10px; }
+  .dk-note-in { display: block; box-sizing: border-box; width: 100%; resize: none; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); color: var(--fg); font: var(--w-regular) var(--t-md)/var(--lh-md) var(--font-ui); }
+  .dk-note-in:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .dk-note-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+  .dk-note-hint { margin-right: auto; color: var(--muted); font-size: var(--t-xs); }
+  .dk-note-add { cursor: pointer; }
+  .dk-note-add::before { content: "+"; display: block; width: 16px; height: 16px; margin: 1px 0 0 1px; border: 1px solid var(--accent); border-radius: var(--r-chip); box-sizing: border-box; color: var(--accent); font: var(--w-semibold) var(--t-md)/14px var(--font-ui); text-align: center; }
   /* The line a path:line link opened (the read view's .vl-target): a faint band over the line and a bar in its margin. */
   .dk-target { background: color-mix(in srgb, var(--accent) 5%, transparent); }
   .dk-target-m { box-shadow: inset 3px 0 0 var(--accent); }

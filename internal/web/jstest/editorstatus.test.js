@@ -78,3 +78,10 @@ test("fontStepped: one step, clamped, and null at an end", () => {
   assert.strictEqual(fontStepped(8.5, -1, 1, b), 8, "clamped to the bound, not past it");
   assert.strictEqual(fontStepped(12, 1), 13);
 });
+
+test("readOnlyReason: a file known deleted says so, before any other reason", () => {
+  const r = readOnlyReason({ gone: true });
+  assert.match(r, /deleted/);
+  assert.strictEqual(readOnlyReason({ gone: true, unknown: true }), r);
+  assert.notStrictEqual(readOnlyReason({ unknown: true }), r);
+});

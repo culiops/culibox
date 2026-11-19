@@ -49,7 +49,7 @@ function fakeModel(text, lang, log, id) {
     undoTo(alt, v) { this.value = v; this.alt = alt; this.fire(); }, // an undo walks back to an earlier id
     undo() { const step = this.undos.pop(); if (!step) return false; this.value = step.value; this.alt = step.alt; this.fire(); return true; },
     // A new value: the undo history goes (Monaco's _commandManager.clear()), the alternative version id is a new one.
-    setValue(v) { this.undos = []; this.value = v; this.alt = ++this.ver; this.eol = eolOf(v); this.sets.push(v); this.fire({ replaced: true }); },
+    setValue(v) { this.decor.live.clear(); this.undos = []; this.value = v; this.alt = ++this.ver; this.eol = eolOf(v); this.sets.push(v); this.fire({ replaced: true }); },
     onDidChangeContent(fn) { this.listeners.push(fn); return { dispose: () => { this.listeners = this.listeners.filter((x) => x !== fn); } }; },
     onDidChangeOptions() { return { dispose() {} }; },
     getOptions() { return { insertSpaces: true, tabSize: 4 }; },
@@ -58,6 +58,39 @@ function fakeModel(text, lang, log, id) {
     deltaDecorations(old, next) { return this.decor.delta(old, next); },
     getLanguageId() { return lang; },
     getLineCount() { return this.value.split("\n").length; },
+    getLineContent(n) { return this.value.split("\n")[n - 1]; },
+    getLineMaxColumn(n) { return (this.value.split("\n")[n - 1] || "").length + 1; },
+    getDecorationRange(id) { const d = this.decor.live.get(id); return d ? Object.assign({}, d.range) : null; },
+    // The user's edits, with what Monaco does to a tracked range under them (stickiness NeverGrowsWhenTypingAtEdges): lines put in front
+    // of a line push its range down; a line deleted collapses the range on it to an empty one at its start and pulls the later ones up.
+    // The text change is the buffer's, so the listeners are told as for any edit.
+    insertLines(at, texts) {
+      const ls = this.value.split("\n");
+      ls.splice(at - 1, 0, ...texts);
+      this.value = ls.join("\n");
+      for (const d of this.decor.live.values()) if (d.range.startLineNumber >= at) { d.range.startLineNumber += texts.length; d.range.endLineNumber += texts.length; }
+      this.alt = ++this.ver;
+      this.fire();
+    },
+    deleteLine(n) {
+      const ls = this.value.split("\n");
+      ls.splice(n - 1, 1);
+      this.value = ls.join("\n");
+      for (const d of this.decor.live.values()) {
+        const r = d.range;
+        if (r.startLineNumber === n) { r.endLineNumber = n; r.startColumn = 1; r.endColumn = 1; } else if (r.startLineNumber > n) { r.startLineNumber--; r.endLineNumber--; }
+      }
+      this.alt = ++this.ver;
+      this.fire();
+    },
+    editLine(n, text) {
+      const ls = this.value.split("\n");
+      ls[n - 1] = text;
+      this.value = ls.join("\n");
+      for (const d of this.decor.live.values()) if (d.range.startLineNumber === n) d.range.endColumn = text.length + 1;
+      this.alt = ++this.ver;
+      this.fire();
+    },
     getLineLength(n) { return (this.value.split("\n")[n - 1] || "").length; },
     dispose() { this.disposed = true; this.listeners = []; if (log) log.push("dispose#" + id); },
   };
@@ -88,14 +121,34 @@ function fakeEditor() {
     },
     deltaDecorations(old, next) { return this.decor.delta(old, next); },
     getModel() { return this.model; },
-    addCommand(keys, fn) { this.commands.push([keys, fn]); },
+    addCommand(keys, fn, ctx) { this.commands.push([keys, fn, ctx]); },
     onDidChangeCursorPosition() { return { dispose() {} }; },
     onDidChangeCursorSelection: on("selection"), onDidFocusEditorText: on("focus"), onDidBlurEditorText: on("blur"),
     onDidChangeModel: on("model"), onKeyDown: on("key"),
+    // What editornotes.js asks of an editor: view zones (kept as Monaco keeps them, by id, with the zone object the caller gave), the
+    // pointer, the layout, the width the layout says (0: the editor is not on screen, as Inline's original side).
+    onMouseMove: on("mousemove"), onMouseLeave: on("mouseleave"), onMouseDown: on("mousedown"), onDidLayoutChange: on("layout"),
+    zones: new Map(), zoneSeq: 0, zoneCalls: 0, width: 600,
+    changeViewZones(cb) {
+      this.zoneCalls++;
+      cb({
+        addZone: (z) => { const id = "z" + (++this.zoneSeq); this.zones.set(id, z); return id; },
+        removeZone: (id) => this.zones.delete(id),
+        layoutZone: (id) => { if (!this.zones.has(id)) throw new Error("layoutZone: no zone " + id); this.laid = (this.laid || 0) + 1; },
+      });
+    },
+    getLayoutInfo() { return { width: this.width, contentWidth: this.width, contentLeft: 60, height: 500 }; },
+    // Overlay widgets (the notes' cards): by id, as Monaco keeps them; the scroll position the wheel over a card sets.
+    overlays: new Map(),
+    addOverlayWidget(w) { this.overlays.set(w.getId(), w); },
+    removeOverlayWidget(w) { this.overlays.delete(w.getId()); },
+    getScrollLeft() { return this.left || 0; },
+    setScrollPosition(p) { this.top = p.scrollTop; this.left = p.scrollLeft; this.scrolled = (this.scrolled || 0) + 1; },
+    revealLineInCenterIfOutsideViewport(l) { this.outside = (this.outside || []).concat(l); },
     updateOptions(o) { this.options.push(o); },
     layout() {}, saveViewState() { return { saved: true, top: this.top }; }, restoreViewState(v) { this.restored.push(v); this.top = v.top; },
-    getScrollTop() { return this.top; }, setScrollTop(v) { this.top = v; }, getPosition() { return { lineNumber: 1, column: 1 }; },
-    setPosition(p) { this.positions.push(p); }, revealLineInCenter(l) { this.centered.push(l); },
+    getScrollTop() { return this.top; }, setScrollTop(v) { this.top = v; }, getPosition() { return this.pos || { lineNumber: 1, column: 1 }; },
+    setPosition(p) { this.positions.push(p); this.pos = p; }, revealLineInCenter(l) { this.centered.push(l); },
     focus() { this.focused++; this.textFocus = true; this.fire("focus"); },
     blur() { this.textFocus = false; this.fire("blur"); },
     hasTextFocus() { return this.textFocus; },
@@ -124,10 +177,11 @@ function page(over) {
     metaGate: null, fullGate: null,                  // a promise a metadata / a full read waits on, after its answer is decided
   };
   const monaco = {
-    KeyCode: { KeyS: 49, KeyZ: 56, Escape: 9 },
+    KeyCode: { KeyS: 49, KeyZ: 56, F7: 65, Escape: 9, KeyC: 33, KeyA: 31 },
     KeyMod: { CtrlCmd: 2048, WinCtrl: 256, Shift: 1024, Alt: 512 },
     languages: { getLanguages: () => [{ id: "go", aliases: ["Go"] }, { id: "plaintext", aliases: ["Plain Text"] }] },
     editor: {
+      MouseTargetType: { GUTTER_GLYPH_MARGIN: 2, GUTTER_LINE_NUMBERS: 3, GUTTER_LINE_DECORATIONS: 4, CONTENT_TEXT: 6, CONTENT_EMPTY: 7, CONTENT_VIEW_ZONE: 8 },
       EndOfLinePreference: { TextDefined: 0 }, ScrollType: { Immediate: 1 }, ContentWidgetPositionPreference: { EXACT: 0, ABOVE: 1, BELOW: 2 },
       EndOfLineSequence: { LF: 0, CRLF: 1 },
       OverviewRulerLane: { Left: 1, Center: 2, Right: 4, Full: 7 },
@@ -135,12 +189,18 @@ function page(over) {
       create(el, opts) { const e = fakeEditor(); e.createOpts = opts; st.editors.push(e); return e; },
       createDiffEditor(el, opts) {
         const modified = Object.assign(fakeEditor(), { revealed: [], cursorSubs: [], onDidChangeCursorPosition(fn) { this.cursorSubs.push(fn); return { dispose() {} }; }, revealLineInCenter(l) { this.revealed.push(l); } });
+        const original = Object.assign(fakeEditor(), { onDidChangeCursorPosition() { return { dispose() {} }; } });
         const d = {
-          el, opts, model: undefined, disposed: false, revealed: 0, updated: [], modified, laid: 0, options: [],
+          el, opts, model: undefined, disposed: false, revealed: 0, updated: [], modified, original, laid: 0, options: [], lineChanges: [],
           getModifiedEditor() { return this.modified; },
+          getOriginalEditor() { return this.original; },
+          // Monaco's own diff of the two texts, as the legacy line changes (a test sets them): 1-based, an end of 0 is none on that side.
+          getLineChanges() { return this.lineChanges; },
           layout() { this.laid++; },
           updateOptions(o) { this.options.push(o); },
-          setModel(m) { this.model = m; st.log.push(m ? "diff.setModel" : "diff.setModel(null)"); },
+          // A view model as Monaco's: the caller disposes it (the log shows when, relative to the models).
+          createViewModel(pair) { const vm = { original: pair.original, modified: pair.modified, disposed: false, dispose() { this.disposed = true; st.log.push("vm.dispose"); } }; (st.vms = st.vms || []).push(vm); return vm; },
+          setModel(m) { this.model = m; this.original.model = m ? m.original : null; this.modified.model = m ? m.modified : null; st.log.push(m ? "diff.setModel" : "diff.setModel(null)"); },
           onDidUpdateDiff(fn) { this.updated.push(fn); return { dispose: () => { this.updated = this.updated.filter((x) => x !== fn); } }; },
           revealFirstDiff() { this.revealed++; },
           dispose() { this.disposed = true; st.log.push("diff.dispose"); },
@@ -236,7 +296,11 @@ function page(over) {
     showToast: (m, o) => { st.toasts.push([m, o]); },
     gitStatusRefreshSoon: () => { st.gitRefresh++; },
     fontPrefs: { get: () => 12.5, STEP: 1, BOUNDS: { min: 8, max: 32 }, set() {} },
-    viewerPrefs: { getWrap: () => false },
+    // The diff's prefs live here for the test: the mode ("side" the default) and the diff's wrap.
+    viewerPrefs: (() => {
+      const v = { diffMode: "side", diffWrap: false };
+      return { getWrap: () => false, getDiffMode: () => v.diffMode, setDiffMode: (m) => { v.diffMode = m; }, getDiffWrap: () => v.diffWrap, setDiffWrap: (b) => { v.diffWrap = b; } };
+    })(),
     toggleViewerWrap: () => {},
     ViewerTab: class {
       constructor(p, o) { this.path = p; this.opts = o; this.calls = []; this.el = new El("div", doc); this.scroll = 7; st.inner = this; }
@@ -245,7 +309,7 @@ function page(over) {
     },
   }, over));
   const load = (f) => new vm.Script(src(f), { filename: f }).runInContext(ctx);
-  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "editortab.js", "editorsync.js", "editordiff.js", "editormd.js", "editorselbar.js", "editorfollow.js"]) load(f);
+  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "editortab.js", "reviewmodel.js", "notesmodel.js", "editorsync.js", "editordiff.js", "imagediff.js", "editorreview.js", "editormd.js", "editorselbar.js", "editorfollow.js", "dockcrumbs.js", "editornotes.js"]) load(f);
   const host = {
     onEditStart: () => st.host.push("start"),
     onDirtyChange: () => st.host.push("dirty"),

@@ -52,9 +52,11 @@ function unsavedNote(keyText) {
 // refuses to write); `notUtf8` is a text file whose bytes are not valid UTF-8 (the
 // buffer shows U+FFFD for them, and a save would write those instead); `unknown` is a
 // kind of file this build does not know, opened read-only rather than risk saving
-// something that is not text.
+// something that is not text; `gone` is a file opened from a Changes row that is deleted from disk (an empty buffer, only for the
+// Changes view to compare with the base text).
 function readOnlyReason(f) {
-  const { box, readonly, notUtf8, unknown } = f || {};
+  const { box, readonly, notUtf8, unknown, gone } = f || {};
+  if (gone) return "This file was deleted from disk. Changes shows what was removed.";
   if (box) return "This file is inside a session's box, so it is read-only here.";
   if (readonly) return "This file is read-only: the server never saves to its folder.";
   if (notUtf8) return "This file is not UTF-8; saving it here would change its bytes.";

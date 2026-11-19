@@ -79,3 +79,64 @@ test("the pre-paint script in index.html reads the same key", () => {
   assert.ok(html.includes("'" + fresh().KEY + "'"), "index.html must read " + fresh().KEY);
   assert.ok(html.includes("viewer-wrap"));
 });
+
+test("diffMode is side by default and only a stored \"inline\" reads inline; a set round-trips and keeps wrap", () => {
+  for (const v of [null, "{not json", JSON.stringify({ diffMode: "table" }), JSON.stringify({ diffMode: 1 }), JSON.stringify({ diffMode: "side" })]) {
+    global.localStorage._v = v;
+    assert.strictEqual(fresh().getDiffMode(), "side", String(v));
+  }
+  global.localStorage._v = JSON.stringify({ diffMode: "inline", wrap: true });
+  assert.strictEqual(fresh().getDiffMode(), "inline");
+  const p = fresh();
+  p.setDiffMode("side");
+  assert.strictEqual(p.getDiffMode(), "side");
+  p.setDiffMode("inline");
+  assert.strictEqual(JSON.parse(global.localStorage._v).diffMode, "inline");
+  assert.strictEqual(JSON.parse(global.localStorage._v).wrap, true, "the editor's wrap is left alone");
+  p.setDiffMode("anything else");
+  assert.strictEqual(p.getDiffMode(), "side", "an unknown mode is the default");
+});
+
+test("diffWrap is off by default, separate from wrap, and only a stored true reads on", () => {
+  for (const v of [null, "[]", JSON.stringify({ diffWrap: "yes" }), JSON.stringify({ wrap: true })]) {
+    global.localStorage._v = v;
+    assert.strictEqual(fresh().getDiffWrap(), false, String(v));
+  }
+  global.localStorage._v = JSON.stringify({ diffWrap: true });
+  const p = fresh();
+  assert.strictEqual(p.getDiffWrap(), true);
+  assert.strictEqual(p.getWrap(), false, "the two are separate");
+  p.setDiffWrap(0);
+  assert.strictEqual(JSON.parse(global.localStorage._v).diffWrap, false);
+});
+
+test("with storage blocked the diff prefs live in memory", () => {
+  const saved = global.localStorage;
+  global.localStorage = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); } };
+  const p = fresh();
+  assert.doesNotThrow(() => { p.setDiffMode("inline"); p.setDiffWrap(true); });
+  assert.strictEqual(p.getDiffMode(), "inline");
+  assert.strictEqual(p.getDiffWrap(), true);
+  global.localStorage = saved;
+});
+
+test("imgDiffMode is side by default, only side, swipe and onion are kept, a set round-trips and leaves the other prefs alone", () => {
+  for (const v of [null, "{not json", JSON.stringify({ imgDiffMode: "fade" }), JSON.stringify({ imgDiffMode: 1 }), JSON.stringify({ imgDiffMode: "SWIPE" })]) {
+    global.localStorage._v = v;
+    assert.strictEqual(fresh().getImgDiffMode(), "side", String(v));
+  }
+  for (const m of ["swipe", "onion", "side"]) {
+    global.localStorage._v = JSON.stringify({ imgDiffMode: m, wrap: true });
+    assert.strictEqual(fresh().getImgDiffMode(), m);
+  }
+  global.localStorage._v = JSON.stringify({ wrap: true, diffMode: "inline" });
+  const p = fresh();
+  p.setImgDiffMode("onion");
+  assert.strictEqual(p.getImgDiffMode(), "onion");
+  const o = JSON.parse(global.localStorage._v);
+  assert.strictEqual(o.imgDiffMode, "onion");
+  assert.strictEqual(o.wrap, true);
+  assert.strictEqual(o.diffMode, "inline", "the line diff's mode is left alone");
+  p.setImgDiffMode("anything else");
+  assert.strictEqual(p.getImgDiffMode(), "side", "an unknown mode is the default");
+});
