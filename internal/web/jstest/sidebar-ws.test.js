@@ -167,17 +167,22 @@ test("the desktop list has one reconcile, deskListPaint, with the header signatu
   assert.ok(fnSrc(app, "deskListPaint").includes("deskWsHeaderSig(it)"));
 });
 
-test("header CSS: the name keeps room, the dots clip, the pip and + never shrink", () => {
+test("header CSS: the dots give way first, nothing paints over the pip or +", () => {
   const css = read("desktop.css").replace(/\/\*[\s\S]*?\*\//g, "");
   const rule = (sel) => {
     const esc = sel.replace(/[.[\]#]/g, "\\$&").replace(/ /g, "\\s+");
     const m = new RegExp("(?:^|[}\\s])" + esc + "\\s*\\{([^}]*)\\}").exec(css);
     return m ? m[1] : null;
   };
-  assert.match(rule("#sessions .wsh .wname") || "", /min-width:\s*48px/);
+  const name = rule("#sessions .wsh .wname") || "";
+  assert.match(name, /min-width:\s*0/, "a short name is as wide as its text: the count sits right after it");
+  assert.match(name, /flex:\s*0 1 auto/);
+  assert.match(name, /text-overflow:\s*ellipsis/);
   const dots = rule("#sessions .wsh .wdots") || "";
+  assert.match(dots, /flex:\s*0 1000 auto/, "the dots give up their room before the name does");
   assert.match(dots, /overflow:\s*hidden/);
   assert.match(dots, /min-width:\s*0/);
+  assert.match(rule("#sessions .wsh .wtog") || "", /overflow:\s*hidden/, "the toggle clips: nothing paints over the pip");
   assert.match(rule("#sessions .wsh .wpip") || "", /flex:\s*none/);
   assert.match(rule("#sessions.sess-stale .wsh .wpip") || "", /color:\s*var\(--muted\)/);
 });

@@ -749,19 +749,21 @@
      .is-needs amber), .grp only the spacing (12px above, 4px below, the label's text on the rows' dot edge). */
   .grp { list-style: none; padding: 12px 8px 4px; }
   /* A workspace group header (#340 S5, the mockup's .wsh): a 28px row, the toggle button takes the room and the amber
-     pip (and the "+" of a later task) never shrink. The name keeps 48px and the dots clip, so a crowded collapsed header
-     at the sidebar's 200px minimum loses dots first, then name width, and never pushes the pip out. */
+     pip (and the "+" of a later task) never shrink. The name is as wide as its text (the count sits right after it) and
+     ellipsizes when short of room; the dots give up their room first (flex-shrink 1000), and the toggle clips, so at the
+     sidebar's 200px minimum nothing inside it can paint over the pip or the "+". */
   #sessions .wsh { list-style: none; display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px 0 4px; margin-top: 8px; border-radius: var(--r-chip); }
   #sessions .wsh:first-child { margin-top: 4px; }
   #sessions .wsh:hover { background: var(--hover); }
   #sessions .wsh .wtog {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 100%; padding: 0; border: 0; background: transparent;
     font: inherit; font-size: var(--t-sm); font-weight: var(--w-semibold); color: var(--fg); text-align: left; cursor: pointer;
+    overflow: hidden;
   }
   #sessions .wsh .wcv, #sessions .wsh .wf { flex: none; display: inline-flex; color: var(--muted); }
-  #sessions .wsh .wname { flex: 0 1 auto; min-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sessions .wsh .wname { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #sessions .wsh .wcount { flex: none; color: var(--muted); font-weight: var(--w-regular); font-variant-numeric: tabular-nums; }
-  #sessions .wsh .wdots { display: inline-flex; gap: 3px; margin-left: 2px; flex: 0 1 auto; min-width: 0; overflow: hidden; }
+  #sessions .wsh .wdots { display: inline-flex; gap: 3px; margin-left: 2px; flex: 0 1000 auto; min-width: 0; overflow: hidden; }
   #sessions .wsh .wdot { flex: none; width: 6px; height: 6px; margin-top: 0; }
   #sessions .wsh .wpip {
     flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; height: 18px; border-radius: var(--r-chip);
