@@ -181,3 +181,92 @@ test("header CSS: the name keeps room, the dots clip, the pip and + never shrink
   assert.match(rule("#sessions .wsh .wpip") || "", /flex:\s*none/);
   assert.match(rule("#sessions.sess-stale .wsh .wpip") || "", /color:\s*var\(--muted\)/);
 });
+
+// ---- #340 S5 (Task 4): the row's kind icon, its tier chip's glyph, the aligned sub-line ----------------------
+// deskKindEl runs the page's real svgicon.js, claudemark.js and deskshell.js's deskRowKind, with the real
+// spawnIsShellProfile from the New session dialog's model.
+function kindCtx(profiles) {
+  const ctx = vm.createContext({
+    document: makeDoc(), String, profiles, deskRowKind: desk.deskRowKind,
+  });
+  vm.runInContext(read("svgicon.js").replace(/^const /gm, "var ") + "\n" + read("claudemark.js").replace(/^const /gm, "var ") +
+    "\n" + fnSrc(read("app.js"), "deskKindEl") + "\nglobalThis.deskKindEl = deskKindEl;", ctx);
+  return ctx;
+}
+
+test("deskKindEl: no profile, no terminal; the Claude mark comes from the session", () => {
+  const ctx = kindCtx([{ name: "sh", bin: "/usr/bin/bash" }]);
+  const sh = ctx.deskKindEl({ agent: "sh" });
+  assert.strictEqual(sh.className, "ak");
+  assert.strictEqual(sh.title, "bash shell");
+  assert.ok(sh.querySelector("polyline"), "the terminal's prompt chevron");
+  const cl = ctx.deskKindEl({ agent: "gone", claude: true });
+  assert.strictEqual(cl.className, "ak");
+  assert.strictEqual(cl.title, "Claude Code session");
+  assert.strictEqual(cl.children[0].attrs.fill, "currentColor");
+  assert.strictEqual(ctx.deskKindEl({ agent: "gone", claude: false }), null);
+  assert.doesNotThrow(() => kindCtx([]).deskKindEl({ agent: "sh" }));
+  assert.strictEqual(kindCtx([]).deskKindEl({ agent: "sh" }), null);
+});
+
+test("the compact row puts the kind icon before the name; the phone row has none", () => {
+  const src = fnSrc(read("app.js"), "renderSession");
+  const at = src.indexOf("compact ? deskKindEl(s)");
+  assert.ok(at > 0, "deskKindEl(s) sits behind compact ?");
+  assert.ok(at < src.indexOf("sname.appendChild(nm)"), "and before the name is added");
+  assert.strictEqual(src.split("deskKindEl(").length - 1, 1, "once");
+});
+
+function chipRow(chip, tier) {
+  const li = new Node("li", null);
+  li.classList = { contains: () => false };
+  const sname = new Node("div", null), grow = new Node("div", null);
+  const doc = makeDoc();
+  const ctx = vm.createContext({
+    document: doc, Date, boxRuntime: "", window: { HOME_DIR: "" },
+    rowChip: () => chip, acctBadge: () => null, awsBadge: () => null, tierBadge: () => tier || null,
+    rowSubline: () => ({ text: "" }), rowMenuOpenFor: () => false, openSessionMenu: () => {}, openTerminal: () => {},
+    openPaneView: () => false, wmCopyLine: () => "", sessionWorkHome: () => "", li, sname, grow, s: { id: "a" },
+  });
+  vm.runInContext(read("svgicon.js").replace(/^const /gm, "var ") + "\n" + fnSrc(read("app.js"), "deskChipIcon") + "\n" +
+    fnSrc(read("app.js"), "paintCompactRow") + "\npaintCompactRow(li, sname, grow, s, {});", ctx);
+  return sname.children[0];
+}
+
+test("paintCompactRow: a tier chip is .tchip with its glyph then its word; write is plain", () => {
+  const c = chipRow({ text: "clone", tone: "box", icon: "clone", title: "T" });
+  assert.strictEqual(c.className, "dchip box tchip");
+  assert.strictEqual(c.children[0].tag, "svg");
+  assert.strictEqual(c.children[0].attrs.class, "tchip-i");
+  assert.strictEqual(c.textContent, "clone");
+  assert.strictEqual(c.title, "T");
+  // box and host carry no title of their own: it still comes from tierBadge.
+  const box = chipRow({ text: "box", tone: "box", icon: "box" }, { title: "Runs in a box" });
+  assert.strictEqual(box.title, "Runs in a box");
+  assert.strictEqual(box.children[0].attrs.class, "tchip-i");
+  const w = chipRow({ text: "write", tone: "write" });
+  assert.strictEqual(w.className, "dchip write");
+  assert.strictEqual(w.title, "AWS write window open");
+  assert.strictEqual(w.querySelector("svg"), null);
+  assert.strictEqual(w.textContent, "write");
+});
+
+test("rowLocal carries the row kind, so a late profile list repaints the row", () => {
+  assert.ok(fnSrc(read("app.js"), "rowLocal").includes("kind: deskRowKind(s,"));
+});
+
+test("row CSS: the sub-line starts under the name", () => {
+  const css = read("desktop.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = (sel) => {
+    const esc = sel.replace(/[.[\]#():]/g, "\\$&").replace(/ /g, "\\s+");
+    const m = new RegExp("(?:^|[}\\s])" + esc + "\\s*\\{([^}]*)\\}").exec(css);
+    return m ? m[1] : null;
+  };
+  assert.match(rule("#sessions .drow:not(.nested):has(.ak) .sub") || "", /padding-left:\s*19px/);
+  assert.match(rule("#sessions .drow .sname .ak") || "", /flex:\s*none/);
+  assert.match(rule("#sessions .drow:not(.nested)") || "", /padding-left:\s*14px/);
+  assert.match(rule("#sessions .drow.nested .ak svg") || "", /width:\s*12px/);
+  assert.match(rule("#sessions .dchip.tchip") || "", /display:\s*inline-flex/);
+  assert.match(rule("#sessions .dchip .tchip-i") || "", /flex:\s*none/);
+  assert.match(rule("#sessions .dchip.host .tchip-i") || "", /color:\s*var\(--fg\)/);
+});

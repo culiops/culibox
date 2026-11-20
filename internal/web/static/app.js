@@ -2604,6 +2604,9 @@ function renderSession(s, opts) {
   // "↳ shell N". Mobile never passes compact, so its rows are unchanged.
   const nested = compact && isNestedShell(s, lastSessions);
   nm.textContent = nested ? shellLabel(s, lastSessions) : (s.name || s.id);
+  // What runs here, as an icon before the name: desktop only, the phone row has none.
+  const ak = compact ? deskKindEl(s) : null;
+  if (ak) sname.appendChild(ak);
   sname.appendChild(nm);
   grow.appendChild(sname);
   if (nested) {
@@ -2720,6 +2723,26 @@ function renderSession(s, opts) {
   return li;
 }
 
+// deskKindEl: the glyph before a desktop row's name, from deskRowKind: the terminal for a plain-shell
+// profile, the Claude mark for a Claude session; null when neither (profiles not loaded yet, or the profile
+// was deleted or renamed and the session is not a Claude one).
+function deskKindEl(s) {
+  const k = deskRowKind(s, profiles.find((p) => p.name === s.agent));
+  if (!k) return null;
+  const ak = document.createElement("span");
+  ak.className = "ak";
+  ak.title = k.title;
+  ak.append(k.kind === "claude" ? claudeMarkSvg(13) : svgIcon24(SVG_TERMINAL_24, 13));
+  return ak;
+}
+
+// deskChipIcon: the 11px glyph in a tier chip ("box", "clone" or "host").
+function deskChipIcon(name) {
+  const svg = svgIcon24({ box: SVG_BOX_24, clone: SVG_CLONE_24, host: SVG_HOST_24 }[name], 11);
+  svg.setAttribute("class", "tchip-i");
+  return svg;
+}
+
 // paintCompactRow adds the rest of a desktop sidebar row: ONE chip (rowChip),
 // the ⋯ menu button and the sub-line. The chip carries the tier or the open
 // write window; the account and AWS binding are in the row's tooltip instead of
@@ -2739,10 +2762,11 @@ function paintCompactRow(li, sname, grow, s, conn) {
   // header's meta and Analytics show it.
   if (chip) {
     const c = document.createElement("span");
-    c.className = "dchip " + chip.tone;
-    c.textContent = chip.text;
+    c.className = "dchip " + chip.tone + (chip.icon ? " tchip" : "");
+    if (chip.icon) c.append(deskChipIcon(chip.icon), document.createTextNode(chip.text));
+    else c.textContent = chip.text;
     const tier = tierBadge(s, boxRuntime);
-    c.title = chip.tone === "write" ? (aws ? aws.title : "AWS write window open") : tier ? tier.title : "";
+    c.title = chip.tone === "write" ? (aws ? aws.title : "AWS write window open") : chip.title || (tier ? tier.title : "");
     sname.appendChild(c);
   }
   const kb = document.createElement("button");
@@ -3721,6 +3745,8 @@ function rowLocal(s) {
     // No context %: the compact row does not draw it (the pane header does), and
     // it moves every few minutes, which would rebuild the row for nothing.
     boxRuntime: boxRuntime,
+    // The kind icon reads the session's profile, and the profile list lands after the first render.
+    kind: deskRowKind(s, profiles.find((p) => p.name === s.agent)),
     // The reply surfaces are built only when /api/meta says replies are on, and
     // that answer lands after the first render, so it must move the signature.
     replies: globalThis.repliesEnabled === true,

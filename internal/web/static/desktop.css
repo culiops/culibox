@@ -719,7 +719,7 @@
   #store-banner-slot .storeerr:empty { display: none; }
   #store-banner-slot .storeform .btn { align-self: flex-start; }
   /* Can't reach / signed out (M8.6, M8.6b): the rows are the last-known list. Groups and order stay; every dot is hollow, the
-     names are --muted (the frame's .m8-stale), and the amber goes: the Needs you label and an ask's sub-line read as neutral. A
+     names are --muted (the frame's .m8-stale), and the amber goes: a workspace header's waiting pip and an ask's sub-line read as neutral. A
      write window still open keeps its red ring around the hollow dot (R9). Muted text, not opacity, so it stays above 4.5:1. */
   #sessions.sess-stale .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
   #sessions.sess-stale .dot.is-elevated { box-shadow: inset 0 0 0 1.5px var(--muted), 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red); }
@@ -744,10 +744,9 @@
 
   /* --- session list: grouped compact rows (spec 5.2) ---------------------- */
   #sessions { padding: 0 8px 8px; }
-  /* A group header is `li.grp.grp-label`: the kit's .grp-label draws the type
-     (uppercase, muted; .is-needs makes Needs you amber and nothing else), .grp
-     only the sidebar's spacing (12px above, 4px below, the label's text on the rows' dot edge,
-     16px from the sidebar's edge: m1-1). "Done · your turn" is as neutral as Running. */
+  /* The sidebar's group header is `li.wsh`, the workspace header below. The old `li.grp.grp-label` status header
+     is gone from the desktop list; its rules stay (tests pin them): .grp-label is the kit's type (uppercase, muted;
+     .is-needs amber), .grp only the spacing (12px above, 4px below, the label's text on the rows' dot edge). */
   .grp { list-style: none; padding: 12px 8px 4px; }
   /* A workspace group header (#340 S5, the mockup's .wsh): a 28px row, the toggle button takes the room and the amber
      pip (and the "+" of a later task) never shrink. The name keeps 48px and the dots clip, so a crowded collapsed header
@@ -777,6 +776,8 @@
     position: relative; gap: 10px; align-items: flex-start; padding: 6px 8px; margin-bottom: 1px;
     border: 0; border-radius: var(--r-chip); background: transparent;
   }
+  /* A row under a workspace header is indented 14px; a nested shell 32px (the mockup's by-ws rows). */
+  #sessions .drow:not(.nested) { padding-left: 14px; }
   #sessions .drow:hover { background: var(--hover); } /* half a step: quieter than the selected row's --raise */
   #sessions .drow.sel { background: var(--raise); }
   /* Open in some pane (not necessarily the focused one): a 2px bar on the sidebar's own edge (the
@@ -794,6 +795,11 @@
   .dot.is-elevated.watching { outline: 0; box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red), 0 0 0 4.5px var(--panel), 0 0 0 6.5px var(--fg); }
   #sessions .drow .sname { gap: 6px; font-size: var(--t-md); line-height: var(--lh-md); }
   #sessions .drow .nm { flex: 1; min-width: 0; color: var(--fg); }
+  /* The kind icon before the name (terminal or the Claude mark). The sub-line starts under the name: 13px of icon plus
+     .sname's 6px gap. */
+  #sessions .drow .sname .ak { flex: none; display: inline-flex; color: var(--muted); }
+  #sessions .drow.nested .ak svg { width: 12px; height: 12px; }
+  #sessions .drow:not(.nested):has(.ak) .sub { padding-left: 19px; }
   #sessions .drow:not(.nested) .nm { font-weight: var(--w-medium); line-height: var(--lh-md); }
   #sessions .drow .bdg { flex: none; }
   /* One chip. Neutral: box is a raised tile, host adds a 1px outline, and only
@@ -808,6 +814,10 @@
   /* The kit's .chip-write, as the pane header's write chip. */
   .dchip.write { color: var(--red); background: var(--red-tint); box-shadow: inset 0 0 0 1px rgba(240,106,106,.45); font-family: var(--font-mono); font-weight: var(--w-semibold); }
   #sessions .drow:hover .dchip.box { background: var(--line); }
+  /* A tier chip is its glyph, then its word. */
+  #sessions .dchip.tchip { display: inline-flex; align-items: center; gap: 3px; }
+  #sessions .dchip .tchip-i { flex: none; }
+  #sessions .dchip.host .tchip-i { color: var(--fg); }
   /* The ⋯ takes no room until the row is hovered or something in it is
      focused; it stays tabbable so a keyboard user reaches it. Its look is the kit's .btn .btn-ghost
      .btn-icon .btn-sm (24px, --t-sm: the frames' .row-menu) from paintCompactRow; what is here is the
@@ -839,7 +849,7 @@
   /* A companion shell under its parent (v5-3): "↳ shell N" + the chip, indented,
      one line, no sub-line. The status dot is the shell's own, smaller than a
      session's so the row reads as a child. */
-  #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 26px; }
+  #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 32px; }
   #sessions .drow .nest-arrow {
     flex: none; width: 9px; font: 400 var(--t-sm)/var(--lh-md) var(--font-ui); color: var(--muted); text-align: center;
   }

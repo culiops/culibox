@@ -35,6 +35,7 @@ function rowLocalFor(tab) {
     terminalTabFor: () => tab, killing: new Set(), boxRuntime: "runc", globalThis: { repliesEnabled: false },
     pendingSends: new Set(), cardExpanded: new Set(), pendingAnswers: new Set(), ssoLocalSig: () => "",
     sessionElevated: () => false, isNestedShell: () => false, shellLabel: () => "", lastSessions: [], Date,
+    profiles: [], deskRowKind: () => null,
   };
   vm.runInNewContext(cut(app, "function rowLocal(s)") + "\nthis.out = rowLocal({ id: 'a' });", ctx);
   return ctx.out;
