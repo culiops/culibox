@@ -1766,7 +1766,9 @@ function pfvRemovalCount(r) {
 // The consequence under the cards (the mockup's when-host and when-box lines).
 const PFV_HOST_RISK = "its sessions run with your whole home, your SSH keys and the Docker socket";
 function pfvHostConsequence(doc) {
-  const rm = pfvHostRemovals(doc);
+  // The lock is in pfvHostRemovals for the confirms, but this line sits beside the Box only checkbox, whose pre-check refuses a
+  // ticked lock and whose untick leaves nothing to list: it never names it.
+  const rm = pfvHostRemovals(doc).filter((r) => r.kind !== "Box only");
   const name = typeof doc.name === "string" && doc.name !== "" ? doc.name : pfvState.name;
   if (rm.length === 0) return "Its sessions run with your whole home, your SSH keys and the Docker socket.";
   return "A host profile cannot hold box-only access. Saving removes " + pfvJoin(rm.map(pfvRemovalCount)) + " from " + name + ", and " + PFV_HOST_RISK + ".";
@@ -1926,8 +1928,9 @@ function pfvRunsForm(rec, c) {
   // host_block is the server's reason Host is not offered. With no lock stored that reason is a binding or context paths
   // (never a private copy), which forces the lock, so the box shows it ticked and off; a stored lock
   // stays the user's to clear, whatever else blocks Host. Once Host is picked the box is the user's own value again:
-  // the pre-check refuses a ticked lock there, and an unticked one saves as host with the bindings stripped.
-  const forced = !!c.view.host_block && c.view.box_only !== true && v.tier !== "host";
+  // the pre-check refuses a ticked lock there, and an unticked one saves as host with the bindings stripped. A lock the user
+  // ticked themselves is real, so it is never drawn as forced: it stays enabled and clearable.
+  const forced = !!c.view.host_block && c.view.box_only !== true && v.tier !== "host" && !v.boxOnly;
   const why = forced ? c.view.host_block.charAt(0).toUpperCase() + c.view.host_block.slice(1) + "." : "";
   out.push(pfaCheckbox(rec, "box_only", "Box only: never offer Host for this profile", why, v.boxOnly || forced,
     (on) => { v.boxOnly = on; pfvChanged(rec, "box_only"); }, null, forced));

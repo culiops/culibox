@@ -120,12 +120,12 @@ const PFE_NOT_A_HOST = /\bnormalised\b/;
 // A box-only setting on the host tier: "requires/require/needs/need runtime: box",
 // ErrContextNeedsBox's `needs runtime "box"`, and the clone refusal.
 const PFE_NEEDS_BOX = /\b(?:requires?|needs?) runtime[:\s]+"?box\b|\bruns only in a box\b/;
-// The `profile "<name>": ` some wrappers put in front (the name is %q-quoted, so a quote in it is escaped).
 // The lock beside runtime host (config.go: `box_only cannot be combined with runtime "host"; remove one`). The page's own
 // sentence for it is profilepage.js's PFV_BOX_ONLY_HOST; profileedit.js loads first and the node tests load it alone, so the
 // words are repeated here (profilepage.test.js pins them equal).
 const PFE_BOX_ONLY_HOST = "Box only is on, so this profile cannot be saved as host. Turn Box only off first.";
 const PFE_BOX_ONLY_REFUSAL = /\bcannot be combined with runtime\b/;
+// The `profile "<name>": ` some wrappers put in front (the name is %q-quoted, so a quote in it is escaped).
 const PFE_PROFILE_PREFIX = /^profile "(?:[^"\\]|\\.)*": /;
 
 // --- small helpers -------------------------------------------------------------------

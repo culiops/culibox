@@ -1509,12 +1509,49 @@ test("a binding-forced Box only checkbox stops reading as forced once Host is pi
   assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save as host…"), false);
   assert.strictEqual(t.box.asked.length, 0, "no host-switch confirm");
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), ["Box only is on, so this profile cannot be saved as host. Turn Box only off first."]);
-  // Back to Box: forced again, with the reason.
+  // Back to Box with the lock unticked: forced again, with the reason.
+  cb.checked = false;
+  cb.onchange();
   field(t, "tier-box").checked = true;
   field(t, "tier-box").onchange();
   assert.ok(forcedNow(), "Box again: ticked and disabled");
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-check-d"), [AWS_SENTENCE]);
   assert.ok(classesOf(boxOnlyLabel(t)).includes("pfv-off"));
+});
+
+test("a Box only lock the user ticked stays enabled and clearable after Host and back to Box", async () => {
+  const t = page();
+  await openRuns(t, "aws-ops");
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  field(t, "box_only").checked = true;
+  field(t, "box_only").onchange();
+  field(t, "tier-box").checked = true;
+  field(t, "tier-box").onchange();
+  const cb = field(t, "box_only");
+  assert.strictEqual(cb.checked, true);
+  assert.notStrictEqual(cb.disabled, true, "a deliberate tick is the user's to clear");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-check-d"), [], "no forcing reason");
+  assert.ok(!classesOf(boxOnlyLabel(t)).includes("pfv-off"));
+  cb.checked = false;
+  cb.onchange();
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save"), true);
+  assert.ok(!("box_only" in t.box.puts[0]));
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+});
+
+test("the Runs in consequence line never names the Box only lock", async () => {
+  const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { box_only: true, host_block: "this profile is set to box only" }) : p)) });
+  t.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { box_only: true });
+  await openRuns(t, "infra-terraform");
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  const want = "Its sessions run with your whole home, your SSH keys and the Docker socket.";
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-consq"), [want], "lock still ticked");
+  field(t, "box_only").checked = false;
+  field(t, "box_only").onchange();
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-consq"), [want], "lock unticked");
+  assert.ok(!texts(blockOf(t, "runs"), "pfv-consq").join(" ").includes("Box only"));
 });
 
 test("Host with Box only on is refused before the PUT", async () => {
