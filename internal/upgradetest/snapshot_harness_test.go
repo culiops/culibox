@@ -123,6 +123,7 @@ type Rule struct {
 	Why         string
 	Check       func(before, after *Entry) error
 	AllowNew    bool
+	CheckNew    func(after *Entry) error // when set, a new entry the rule allows must also pass this
 	AllowVanish bool
 }
 
@@ -171,8 +172,15 @@ func Diff(before, after Snapshot, o DiffOptions) []string {
 		if _, ok := mapped[rel]; ok || ignored(rel, o.Ignore) {
 			continue
 		}
-		if r := ruleFor(rel, o.Rules); r == nil || !r.AllowNew {
+		r := ruleFor(rel, o.Rules)
+		switch {
+		case r == nil || !r.AllowNew:
 			out = append(out, fmt.Sprintf("%s: new %s", rel, a))
+		case r.CheckNew != nil:
+			aa := a
+			if err := r.CheckNew(&aa); err != nil {
+				out = append(out, fmt.Sprintf("%s: new: %v", rel, err))
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

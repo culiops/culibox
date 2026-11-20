@@ -29,31 +29,14 @@ const (
 // left the file alone (not a regular file, too big, not a JSON object, I/O);
 // the caller only logs it.
 func ensureOnboarded(cr *os.Root) (changed bool, err error) {
-	// O_EXCL is the never-clobber rule: it fails when the name exists in any
-	// form, a symlink included, so a file Claude Code created a moment ago is
-	// never replaced.
-	f, err := cr.OpenFile(claudeStateName, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-	switch {
-	case err == nil:
-		b, merr := encodeClaudeState(map[string]json.RawMessage{
-			"hasCompletedOnboarding": json.RawMessage("true"),
-			"theme":                  json.RawMessage(`"dark"`),
-		})
-		if merr == nil {
-			_, merr = f.Write(b)
-		}
-		if cerr := f.Close(); merr == nil {
-			merr = cerr
-		}
-		if merr != nil {
-			_ = cr.Remove(claudeStateName) // never leave a half-written file that later reads as corrupt
-		}
-		return merr == nil, merr
-	case errors.Is(err, fs.ErrExist):
-		// state that is already there: merged below, never replaced
-	default:
+	created, err := createClaudeState(cr)
+	if err != nil {
 		return false, err
 	}
+	if created {
+		return true, nil
+	}
+	// state that is already there: merged below, never replaced
 
 	top, err := readClaudeState(cr)
 	if err != nil {
@@ -75,6 +58,47 @@ func ensureOnboarded(cr *os.Root) (changed bool, err error) {
 		return false, err
 	}
 	if err := writeFileAtomic(cr, claudeStateName, b, 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// createClaudeState writes the seed as a new .claude.json and reports whether
+// it did. The seed goes to a temp file first (0600, O_EXCL, fsynced) and is then
+// hard-linked into place, so a crash or a reader never sees an empty or partial
+// .claude.json. link(2) fails with EEXIST when the name exists in any form, a
+// symlink included, so a file Claude Code created a moment ago is never
+// replaced: created is false then, with no error. The temp file is always
+// removed.
+func createClaudeState(cr *os.Root) (created bool, err error) {
+	b, err := encodeClaudeState(map[string]json.RawMessage{
+		"hasCompletedOnboarding": json.RawMessage("true"),
+		"theme":                  json.RawMessage(`"dark"`),
+	})
+	if err != nil {
+		return false, err
+	}
+	const tmp = claudeStateName + ".seed.tmp"
+	_ = cr.Remove(tmp) // a leftover of a crash would fail the O_EXCL open below
+	f, err := cr.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	if err != nil {
+		return false, err
+	}
+	defer cr.Remove(tmp)
+	_, err = f.Write(b)
+	if err == nil {
+		err = f.Sync() // durable before the link
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := cr.Link(tmp, claudeStateName); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return false, nil
+		}
 		return false, err
 	}
 	return true, nil

@@ -120,14 +120,55 @@ func TestOnboardingRuleAllowsOnlyTheFlag(t *testing.T) {
 	if err := r.Check(before, entryOf(`{"userID":"abc","theme":"light","hasCompletedOnboarding":true}`)); err != nil {
 		t.Fatalf("the flag was refused: %v", err)
 	}
-	if err := r.Check(before, entryOf(`{"userID":"abc","theme":"light"}`)); err == nil {
-		t.Fatal("a file without the flag was allowed")
+	if err := r.Check(entryOf(`{"userID":"abc"}`), entryOf(`{"userID":"abc","theme":"dark","hasCompletedOnboarding":true}`)); err != nil {
+		t.Fatalf("the flag and a seeded theme were refused: %v", err)
 	}
-	if err := r.Check(before, entryOf(`{"userID":"x","theme":"light","hasCompletedOnboarding":true}`)); err == nil {
-		t.Fatal("a changed key was allowed")
+	refused := map[string]*Entry{
+		"no flag":           entryOf(`{"userID":"abc","theme":"light"}`),
+		"a changed key":     entryOf(`{"userID":"x","theme":"light","hasCompletedOnboarding":true}`),
+		"a dropped key":     entryOf(`{"userID":"abc","hasCompletedOnboarding":true}`),
+		"an added projects": entryOf(`{"userID":"abc","theme":"light","hasCompletedOnboarding":true,"projects":{}}`),
+		"a mode change":     {Type: "file", Mode: 0o644, Data: []byte(`{"userID":"abc","theme":"light","hasCompletedOnboarding":true}`)},
 	}
-	if err := r.Check(before, entryOf(`{"userID":"abc","hasCompletedOnboarding":true}`)); err == nil {
-		t.Fatal("a dropped key was allowed")
+	for name, after := range refused {
+		if err := r.Check(before, after); err == nil {
+			t.Errorf("%s was allowed", name)
+		}
+	}
+	// A theme that was there is never replaced, and a seeded one is only "dark".
+	if err := r.Check(entryOf(`{"userID":"abc"}`), entryOf(`{"userID":"abc","theme":"light","hasCompletedOnboarding":true}`)); err == nil {
+		t.Error("an added theme other than dark was allowed")
+	}
+}
+
+func TestOnboardingRuleNewFileIsExactlyTheSeed(t *testing.T) {
+	r := onboardingRule()
+	seed := `{"hasCompletedOnboarding":true,"theme":"dark"}`
+	if err := r.CheckNew(&Entry{Type: "file", Mode: 0o600, Data: []byte(seed)}); err != nil {
+		t.Fatalf("the seed was refused: %v", err)
+	}
+	for name, e := range map[string]*Entry{
+		"an extra key":  {Type: "file", Mode: 0o600, Data: []byte(`{"hasCompletedOnboarding":true,"theme":"dark","projects":{}}`)},
+		"mode 0644":     {Type: "file", Mode: 0o644, Data: []byte(seed)},
+		"a symlink":     {Type: "symlink", Mode: 0o600, Target: "/x"},
+		"a directory":   {Type: "dir", Mode: 0o600},
+		"no flag":       {Type: "file", Mode: 0o600, Data: []byte(`{"theme":"dark"}`)},
+		"not an object": {Type: "file", Mode: 0o600, Data: []byte(`[]`)},
+	} {
+		if err := r.CheckNew(e); err == nil {
+			t.Errorf("%s was allowed", name)
+		}
+	}
+	// Through Diff: a new file with an extra key is reported, the seed is not.
+	rules := AllowRules("r", nil)
+	const p = "r/accounts/alt/claude/.claude.json"
+	good := Snapshot{p: {Type: "file", Mode: 0o600, Data: []byte(seed)}}
+	if got := Diff(Snapshot{}, good, DiffOptions{Rules: rules}); len(got) != 0 {
+		t.Errorf("the seed was reported: %v", got)
+	}
+	bad := Snapshot{p: {Type: "file", Mode: 0o600, Data: []byte(`{"hasCompletedOnboarding":true,"theme":"dark","projects":{}}`)}}
+	if got := Diff(Snapshot{}, bad, DiffOptions{Rules: rules}); len(got) != 1 {
+		t.Errorf("a new file with projects: got %v", got)
 	}
 }
 

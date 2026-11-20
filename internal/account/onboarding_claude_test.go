@@ -216,3 +216,29 @@ func TestOpenSeedsOnboardingForExistingAccount(t *testing.T) {
 		t.Fatalf(".claude.json = %v", got)
 	}
 }
+
+func TestProvisionOnboardingLeavesNoTempFile(t *testing.T) {
+	s, _ := newStore(t)
+	r := mustCreate(t, s, "work", ProviderClaude)
+	p := claudeJSONPath(r)
+	tmp := p + ".seed.tmp"
+	if _, err := os.Lstat(tmp); !os.IsNotExist(err) {
+		t.Errorf("temp file left after create: %v", err)
+	}
+	// A leftover of a crash does not block the seed, and is cleaned up.
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("junk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := readJSON(t, p); got["hasCompletedOnboarding"] != true {
+		t.Errorf(".claude.json = %v", got)
+	}
+	if _, err := os.Lstat(tmp); !os.IsNotExist(err) {
+		t.Errorf("temp file left after re-seed: %v", err)
+	}
+}
