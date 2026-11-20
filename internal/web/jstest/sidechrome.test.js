@@ -243,6 +243,14 @@ test("the layout menu stays inside the sidebar, and its tick has a size", () => 
   assert.match(cssRule("#side-top .xmenu .menu-kbd svg"), /width: 14px; height: 14px;/);
 });
 
+// Measured (Task 5): at the 200px sidebar New session gets 85px beside the three icon buttons; its label is 80px at 600
+// 13px Inter, so the 12px side padding broke it onto two lines inside the 28px button.
+test("New session keeps its label on one line at the 200px sidebar", () => {
+  const b = cssRule("#side-top .xnewrow #side-new");
+  assert.match(b, /white-space: nowrap;/);
+  assert.match(b, /padding: 0 2px;/, "the label is centred, so the padding only sets how narrow it may get");
+});
+
 test("boot wires the layout button before the first applyCap", () => {
   const app = read("app.js");
   const init = app.indexOf("\ninitSideLayout();");

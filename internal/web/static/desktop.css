@@ -590,7 +590,9 @@
      wider than the row (measured: against the 24px button it ran past the sidebar's left edge). app.css's
      fixed 232px .menu width is reset to the content's. */
   #side-top .xnewrow { display: flex; align-items: center; gap: 2px; position: relative; }
-  #side-top .xnewrow #side-new { flex: 1; min-width: 0; margin-right: 4px; }
+  /* The label is centred, so the 2px side padding only shows at the 200px sidebar, where New session gets 85px for its
+     80px label (measured); the ellipsis is a guard for a wider fallback font, never a two-line button. */
+  #side-top .xnewrow #side-new { flex: 1; min-width: 0; margin-right: 4px; white-space: nowrap; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; }
   #side-top .xlay-wrap { display: inline-flex; }
   #side-top .xlay svg { display: block; }
   #side-top .xlay-wrap > .menu.xmenu:has(> .menu-item) { position: absolute; top: calc(100% + 4px); right: 0; z-index: 50; width: max-content; min-width: min(180px, 100%); max-width: 100%; }
