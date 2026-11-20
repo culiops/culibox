@@ -154,3 +154,7 @@ func TestSpawnBoundHostRefusalIsShown(t *testing.T) {
 		t.Fatalf("err = %q, wording changed", err)
 	}
 }
+
+// The production launcher is what answers; a rename on either side would
+// otherwise silently turn the host-block check off (box_only has no second net).
+var _ HostBlockResolver = (*launcher.AgentLauncher)(nil)

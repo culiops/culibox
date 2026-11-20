@@ -666,7 +666,7 @@ func (l *AgentLauncher) CloneFor(agent string) (*config.Clone, error) {
 func (l *AgentLauncher) HostBlockFor(agent string) (string, error) {
 	cfg, ok := l.agent(agent)
 	if !ok {
-		return "", fmt.Errorf("unknown agent %q", agent)
+		return "", fmt.Errorf("launcher: unknown agent %q", agent)
 	}
 	return config.HostBlock(cfg), nil
 }
