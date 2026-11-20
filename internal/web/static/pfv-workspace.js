@@ -165,9 +165,10 @@ function pfwFolderField(rec, c, copy) {
 
 // pfwModeField: the two ways of working on the folder, as cards.
 // card is wmCardState's answer. A private copy is a box's: where it cannot be chosen the card stays, off, with its reason and
-// Applies to Box (a host profile keeps the setting for the box). A profile that already is a copy keeps its card on.
-function pfwModeField(rec, copy, card) {
-  const off = card.copyDisabled && !copy;
+// Applies to Box (a host profile keeps the setting for the box). A profile that is stored as a copy keeps its card on, even
+// while the form is on the folder, so the way back is there.
+function pfwModeField(rec, copy, card, storedCopy) {
+  const off = card.copyDisabled && !copy && !storedCopy;
   const mk = (key, mode, title, text) => {
     const desc = pfvMk("span", "pfv-card-d", text);
     const lines = [desc];
@@ -234,7 +235,7 @@ function pfwDraw(rec, c) {
   // A control the user cannot use is not drawn, and its absence is said in one sentence. A profile that already is a
   // copy keeps both ways and the warning: switching it away is the user's to do.
   if (!card.copyDisabled || storedCopy || c.tier === "host") {
-    out.push(pfwModeField(rec, copy, card));
+    out.push(pfwModeField(rec, copy, card, storedCopy));
     if (card.hint) out.push(pfvMk("p", "pfv-hint", card.hint));
   } else if (c.tier !== "host") {
     out.push(pfvMk("p", "pfv-hint", "Private copies are not available on this instance: " + pfwUnavailable() + "."));

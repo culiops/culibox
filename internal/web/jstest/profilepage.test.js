@@ -1872,6 +1872,28 @@ test("Workspace: a private copy and back is no change, and the copy fields retur
   assert.strictEqual(head.hidden, false);
 });
 
+test("Workspace: a stored copy where copies cannot be chosen can pick the folder and then the copy again, with no change left", async () => {
+  const stuck = async (t, name) => {
+    await openWs(t, name);
+    const head = byCls(t.els["pfv-in"], "pfv-unsaved")[0];
+    assert.strictEqual(field(t, "mode-copy").checked, true);
+    assert.notStrictEqual(field(t, "mode-copy").disabled, true);
+    pickMode(t, "folder");
+    assert.strictEqual(head.hidden, false);
+    assert.strictEqual(field(t, "mode-folder").checked, true);
+    assert.notStrictEqual(field(t, "mode-copy").disabled, true, "the way back stays open after the redraw");
+    assert.ok(!byCls(blockOf(t, "workspace"), "pfv-card").some((n) => n.textContent.includes("Needs a box.")), "no reason is said for a card that can be picked");
+    pickMode(t, "copy");
+    assert.strictEqual(field(t, "mode-copy").checked, true);
+    assert.ok(head.hidden, "a copy and back is no change");
+    assert.strictEqual(t.box.puts.length, 0);
+  };
+  await stuck(clonePage({ cloneUnavailable: "Docker is not installed" }), "gitops-clone");
+  const h = page({ profiles: [view("gitops-host", { runtime: "host", default_cwd: "/home/you/box-clones/k8s-gitops", clone_of: "/home/you/work/k8s-gitops" }), PROFILES[1], PROFILES[3]] });
+  h.box.docs["gitops-host"] = Object.assign({}, CLONE_DOC, { name: "gitops-host", runtime: "host" });
+  await stuck(h, "gitops-host");
+});
+
 test("Workspace: a private copy with no folder or no place for the copy, or a relative one, is refused before any PUT, and the words go when the field changes", async () => {
   const t = page();
   await openWs(t);
@@ -1958,7 +1980,7 @@ test("Workspace on a host profile draws the private-copy card disabled, tagged A
   assert.ok(card.textContent.includes("Applies to Box"));
   assert.strictEqual(field(t, "mode-folder").checked, true);
   assert.notStrictEqual(field(t, "mode-folder").disabled, true);
-  assert.deepStrictEqual(texts(ws, "pfv-card-t").map((s) => s.replace(/Applies to Box$/, "")), ["Work in this folder", "Work on a private copy"]);
+  assert.deepStrictEqual(texts(ws, "pfv-card-t"), ["Work in this folder", "Work on a private copy"]);
 });
 
 test("Workspace where private copies are not available: the choice is hidden with the reason; a profile that already is a copy keeps both and the warning", async () => {

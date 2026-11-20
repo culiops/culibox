@@ -74,7 +74,8 @@ const pfaRepliesUsable = (c) => globalThis.repliesEnabled === true && isClaudeBi
 
 // pfaImportsRow: importsmodel.js's rule for the imports row, from the page's own state. Before /api/meta has answered
 // nothing is known and the row stays; once it has, "bundling off" (Ruling R8) and "no box layer" hide it like a host
-// (nothing to give). The profile's own tier does not hide it: a host profile keeps the setting for the box. hidden: not drawn. disabled: the account has no personal config; the row's sentence is said instead.
+// (nothing to give). The profile's own tier does not hide it: a host profile keeps the setting for the box.
+// hidden: not drawn. disabled: the account has no personal config; the row's sentence is said instead.
 function pfaImportsRow(c, checked) {
   const known = typeof metaLoaded !== "undefined" && metaLoaded === true;
   const bundleOff = known && !(typeof bundleImports !== "undefined" && bundleImports === true);
