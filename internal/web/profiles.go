@@ -18,6 +18,7 @@ import (
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credfile"
 	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/session"
 	"github.com/culiops/culibox/internal/store"
 )
@@ -105,6 +106,11 @@ type ProfileView struct {
 	// so a page reads this and never re-derives the rule.
 	BoxOnly   bool   `json:"box_only,omitempty"`
 	HostBlock string `json:"host_block,omitempty"`
+	// BoxClaudeCredential says whether a boxed claude of this profile has a login:
+	// "yes", "no", or "locked" (a token exists but the store cannot be read now, so
+	// never "no"). "" (absent) on a profile that is not claude, or with no source
+	// wired. Read-only; computed from presence, never from a decrypted secret.
+	BoxClaudeCredential string `json:"box_claude_credential,omitempty"`
 	// AutoReturn: a clone profile whose work comes home on its own (the switch
 	// is on). NotHome is what the clone's last return left behind, if anything.
 	AutoReturn bool                  `json:"auto_return,omitempty"`
@@ -177,6 +183,9 @@ type ProfileManager struct {
 	// notHome reports what a clone's last return left behind (cloneHooks.NotHome,
 	// wired at boot); nil = nothing to show.
 	notHome func(config.Clone) *session.NotHomeState
+	// boxCred reports whether a boxed claude of a profile has a login (wired at
+	// boot, by presence only); nil = the view carries no answer.
+	boxCred func(config.AgentConfig) secretchain.Presence
 	// contextCheck is the disk-side check of one context_paths entry
 	// (box.CheckContextPath plus the box-owned refusal, wired at boot); nil =
 	// pure validation only. Spawn re-checks.
@@ -367,6 +376,26 @@ func (m *ProfileManager) SetNotHome(f func(config.Clone) *session.NotHomeState) 
 	m.mu.Unlock()
 }
 
+// SetBoxClaudeCredential installs the source of ProfileView.BoxClaudeCredential.
+// Call at boot; nil shows none.
+func (m *ProfileManager) SetBoxClaudeCredential(f func(config.AgentConfig) secretchain.Presence) {
+	m.mu.Lock()
+	m.boxCred = f
+	m.mu.Unlock()
+}
+
+// boxCredWord is the wire word of a presence: a stored token the store cannot
+// show right now reads "locked", never "no".
+func boxCredWord(p secretchain.Presence) string {
+	switch p {
+	case secretchain.Present:
+		return "yes"
+	case secretchain.StoredLocked, secretchain.StoredUnavailable:
+		return "locked"
+	}
+	return "no"
+}
+
 // SetContextCheck installs the save-time check of one context_paths entry. Call
 // at boot; nil leaves only the pure validation.
 func (m *ProfileManager) SetContextCheck(f func(path string) error) {
@@ -507,7 +536,27 @@ func (m *ProfileManager) merged() []config.AgentConfig {
 // Views returns the merged profiles + their options for the UI.
 func (m *ProfileManager) Views() []ProfileView {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	out, boxCred, pending := m.viewsLocked()
+	m.mu.Unlock()
+	// The credential probe may start a process (the macOS keychain), so it runs
+	// after the lock is released: a slow answer must not stall Get, a spawn or a save.
+	for _, w := range pending {
+		out[w.idx].BoxClaudeCredential = boxCredWord(boxCred(w.cfg))
+	}
+	return out
+}
+
+// pendingBoxCred is a claude profile view whose box_claude_credential is still
+// to be asked, outside the lock.
+type pendingBoxCred struct {
+	idx int
+	cfg config.AgentConfig
+}
+
+// viewsLocked builds the views with m.mu held. It also returns the credential
+// hook and the claude views waiting for it (none when no hook is set).
+func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) secretchain.Presence, []pendingBoxCred) {
+	var pending []pendingBoxCred
 	editable := map[string]bool{}
 	for _, p := range m.store.List() {
 		editable[p.Name] = true
@@ -554,6 +603,9 @@ func (m *ProfileManager) Views() []ProfileView {
 			EgressAllow:    slices.Clone(a.EgressAllow),
 			CloneShare:     slices.Clone(a.CloneShare),
 		}
+		if pv.Claude && m.boxCred != nil {
+			pending = append(pending, pendingBoxCred{idx: len(out), cfg: a})
+		}
 		if c, err := a.Clone(); err == nil && c != nil {
 			pv.AutoReturn = !c.NoAutoReturn
 			if m.notHome != nil {
@@ -595,7 +647,7 @@ func (m *ProfileManager) Views() []ProfileView {
 		}
 		out = append(out, pv)
 	}
-	return out
+	return out, m.boxCred, pending
 }
 
 // OptionDefs returns the configured option definitions (for the profile editor).

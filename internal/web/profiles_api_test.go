@@ -12,10 +12,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/culiops/culibox/internal/awsprobe"
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/store"
 )
 
@@ -987,5 +989,114 @@ func TestProfileSaveBoxOnlyHostRefused(t *testing.T) {
 	rec = postProfile(s, `{"name":"q","bin":"claude","runtime":"host","box_only":true}`)
 	if rec.Code != 400 || apiBody(t, rec)["field"] != "box_only" {
 		t.Errorf("POST box_only + host: code %d body %s, want 400 on box_only", rec.Code, rec.Body)
+	}
+}
+
+// boxCredByName GETs /api/profiles and returns each profile's raw JSON object.
+func boxCredByName(t *testing.T, s *Server) map[string]map[string]any {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("GET", "/api/profiles", nil))
+	if rec.Code != 200 {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("list is not JSON: %v: %s", err, rec.Body)
+	}
+	byName := map[string]map[string]any{}
+	for _, p := range raw {
+		byName[p["name"].(string)] = p
+	}
+	return byName
+}
+
+func boxCredSeeds() []config.AgentConfig {
+	return []config.AgentConfig{
+		{Name: "claude", Bin: "claude"},
+		{Name: "ops", Bin: "/usr/local/bin/claude", Account: "claude-box"},
+		{Name: "sh", Bin: "bash"},
+	}
+}
+
+func TestProfilesListBoxClaudeCredential(t *testing.T) {
+	pm := NewProfileManager(boxCredSeeds(), nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	byKey := func(m map[string]secretchain.Presence) func(config.AgentConfig) secretchain.Presence {
+		return func(a config.AgentConfig) secretchain.Presence {
+			p, ok := m[a.Name]
+			if !ok {
+				t.Errorf("hook called for %q", a.Name)
+			}
+			return p
+		}
+	}
+	pm.SetBoxClaudeCredential(byKey(map[string]secretchain.Presence{
+		"claude": secretchain.Absent, "ops": secretchain.StoredLocked, "sh": secretchain.Present,
+	}))
+	got := boxCredByName(t, s)
+	for name, want := range map[string]string{"claude": "no", "ops": "locked"} {
+		if v, _ := got[name]["box_claude_credential"].(string); v != want {
+			t.Errorf("%s: box_claude_credential = %v, want %q", name, got[name]["box_claude_credential"], want)
+		}
+	}
+	if v, present := got["sh"]["box_claude_credential"]; present {
+		t.Errorf("sh: the key must be absent on a non-claude profile, got %v", v)
+	}
+
+	pm.SetBoxClaudeCredential(byKey(map[string]secretchain.Presence{
+		"claude": secretchain.Present, "ops": secretchain.StoredUnavailable, "sh": secretchain.Absent,
+	}))
+	got = boxCredByName(t, s)
+	for name, want := range map[string]string{"claude": "yes", "ops": "locked"} {
+		if v, _ := got[name]["box_claude_credential"].(string); v != want {
+			t.Errorf("%s: box_claude_credential = %v, want %q", name, got[name]["box_claude_credential"], want)
+		}
+	}
+	if _, present := got["sh"]["box_claude_credential"]; present {
+		t.Errorf("sh: the key must stay absent, got %v", got["sh"]["box_claude_credential"])
+	}
+}
+
+func TestProfilesListNoBoxCredentialHook(t *testing.T) {
+	pm := NewProfileManager(boxCredSeeds(), nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	for name, p := range boxCredByName(t, s) {
+		if v, present := p["box_claude_credential"]; present {
+			t.Errorf("%s: no hook set, but box_claude_credential = %v", name, v)
+		}
+	}
+}
+
+// The credential probe can start a process (the macOS keychain), so Views asks it
+// with m.mu released: a hook that takes the lock must not deadlock.
+func TestProfilesViewsAsksBoxCredentialWithoutTheLock(t *testing.T) {
+	pm := NewProfileManager(boxCredSeeds(), nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	var calls atomic.Int32
+	pm.SetBoxClaudeCredential(func(a config.AgentConfig) secretchain.Presence {
+		calls.Add(1)
+		if _, ok := pm.Get(a.Name); !ok { // takes m.mu
+			t.Errorf("Get(%q) found nothing", a.Name)
+		}
+		return secretchain.Present
+	})
+	done := make(chan []ProfileView, 1)
+	go func() { done <- pm.Views() }()
+	select {
+	case views := <-done:
+		if n := calls.Load(); n != 2 {
+			t.Errorf("hook called %d times, want 2 (the two claude profiles)", n)
+		}
+		for _, v := range views {
+			want := ""
+			if v.Claude {
+				want = "yes"
+			}
+			if v.BoxClaudeCredential != want {
+				t.Errorf("%s: BoxClaudeCredential = %q, want %q", v.Name, v.BoxClaudeCredential, want)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Views deadlocked: the box credential hook ran with m.mu held")
 	}
 }
