@@ -725,7 +725,7 @@ function anSyncPageControls() {
     row.hidden = !open;
   }
   const desc = dlg.querySelector("#an-pdesc");
-  if (desc) desc.textContent = "Token usage from Claude Code transcripts, priced at API list rates" +(AN.from && AN.to ? ` · ${AN.from} → ${AN.to} (UTC)` : "");
+  if (desc) desc.textContent = "Token usage from Claude Code transcripts, priced at API list rates" + (AN.from && AN.to ? ` · ${AN.from} → ${AN.to} (UTC)` : "");
 }
 
 // anWirePage: the page's clicks, wired once at boot (app.js). A group's one handler finds the item by its data attribute.
