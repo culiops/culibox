@@ -6065,6 +6065,7 @@ function paintSpawnAccount(prefillAccount) {
   if (!prof || !prof.claude || names.length < 2) {
     row.hidden = true;
     sel.replaceChildren();
+    paintSpawnAcctHint(); // one account only: the hint can still say `default` has no login, with Settings as the way out
     return;
   }
   const lims = acctLimitsMap(lastRateLimits);
@@ -6078,6 +6079,52 @@ function paintSpawnAccount(prefillAccount) {
   sel.value = pick;
   row.hidden = false;
   syncSpawnPreview(); // the reach box's Account row reads the picked account
+  paintSpawnAcctHint();
+}
+
+// paintSpawnAcctHint: the hint under the account row (spawnAcctHint decides it): the store is locked, or `default` has no login
+// inside a box. Desktop only, and drawn from what the dialog shows now: the account the select holds (else the profile's own) and
+// the card picked. It does nothing for the account it is about once `Use: <name>` switches it.
+function paintSpawnAcctHint() {
+  const el = $("spawn-acct-hint");
+  if (!el) return;
+  const prof = currentProfile() || {};
+  const chosen = $("spawn-account-row").hidden ? (prof.account || "default") : ($("spawn-account").value || "default");
+  const h = drawerDesktop() ? spawnAcctHint({ profile: prof, chosen, accounts: accountsCache, where: spawnWhere() }) : null;
+  el.replaceChildren();
+  el.hidden = h === null;
+  if (h === null) return;
+  const link = (text, fn) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "link";
+    b.textContent = text;
+    b.onclick = fn;
+    return b;
+  };
+  if (h.kind === "locked") {
+    const t = document.createElement("span");
+    t.textContent = h.text;
+    el.append(t, link("Unlock", () => showSpawnUnlock(h.text, { retry: false })));
+    return;
+  }
+  const code = document.createElement("code");
+  code.textContent = "default";
+  el.append(code, document.createTextNode(" has no login inside a box."));
+  for (const name of h.uses) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn btn-sm";
+    b.textContent = "Use: " + name;
+    b.onclick = () => {
+      $("spawn-account").value = name;
+      syncSpawnPreview();
+      paintSpawnAcctHint();
+    };
+    el.append(b);
+  }
+  // No token account to switch to: Settings is the way to make one. The dialog closes as its own data-close buttons do.
+  if (h.uses.length === 0) el.append(link("Settings \u2192 Agent accounts", () => { closeDialogFromUI("spawn-modal"); openSettings("accounts"); }));
 }
 
 // syncSpawnExtras shows the first-message field and the replies toggle only
@@ -6447,7 +6494,7 @@ function initSpawnControl() {
   // the sidebar top's button: the same flow as "+ new"
   $("side-new").onclick = () => withPending($("side-new"), "Opening…", () => openSpawnDialog());
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
-  $("spawn-account").addEventListener("change", syncSpawnPreview);
+  $("spawn-account").addEventListener("change", () => { syncSpawnPreview(); paintSpawnAcctHint(); });
   $("spawn-prompt-hint").textContent = shortcutHint("spawn.submit", IS_MAC) + " spawns";
   paintSpawnChrome();
   // From any field of the form (it bubbles up from the first message, the name,
@@ -6480,7 +6527,7 @@ function hideSpawnUnlock() {
 // showSpawnUnlock: a spawn was refused with 423 store_locked. The dialog stays
 // open with the unlock form inline; after a 204 it offers Retry, which submits
 // the same form again.
-function showSpawnUnlock(message) {
+function showSpawnUnlock(message, opts) {
   const box = $("spawn-unlock");
   if (!box) return;
   const txt = document.createElement("div");
@@ -6493,6 +6540,15 @@ function showSpawnUnlock(message) {
     done.className = "storeretry";
     const note = document.createElement("span");
     note.textContent = "Store unlocked.";
+    if (opts && opts.retry === false) {
+      // Opened from the account hint, not from a refused spawn: there is nothing to retry. Re-read what the lock hid, so the hint
+      // clears (login_state from /api/accounts, box_claude_credential from /api/profiles).
+      done.append(note);
+      slot.replaceChildren(done);
+      spawnCredsRefetch();
+      Promise.all([fetchAccounts(), refreshProfilesQuiet()]).then(() => paintSpawnAccount($("spawn-account-row").hidden ? undefined : $("spawn-account").value));
+      return;
+    }
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "btn pri";

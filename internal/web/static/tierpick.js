@@ -250,6 +250,7 @@ function tierPick(key) {
   updateRuntimeWarning();
   syncSpawnCopyLine();
   syncSpawnPreview();
+  paintSpawnAcctHint();
 }
 
 // tierSegChanged: the phone's seg changed. Host is host; Box keeps a clone card.
@@ -260,6 +261,7 @@ function tierSegChanged(v) {
   tierPicked = v === "host" ? "host" : (shown ? "clone" : "box");
   renderTierPick();
   updateRuntimeWarning();
+  paintSpawnAcctHint();
 }
 
 // tierReset: a profile change forgets the pick; the cards pre-select again.

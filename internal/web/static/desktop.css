@@ -2370,6 +2370,8 @@
   #spawn > #effort-row { order: 4; }
   #spawn > #runtime-row { order: 5; }
   #spawn > #spawn-account-row { order: 6; }
+  #spawn > #spawn-acct-hint:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; order: 6; font-size: var(--t-sm); color: var(--fg); }
+  #spawn > #spawn-acct-hint code { font-family: var(--font-mono); font-size: var(--t-xs); }
   #spawn > #spawn-replies-row { order: 7; }
   #spawn > #spawn-warn-row { order: 8; }
   #spawn > #spawn-adv { order: 9; }

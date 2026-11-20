@@ -555,6 +555,33 @@ function spawnWsNoteFor(source, count) {
   return idle(count);
 }
 
+// spawnAcctHint: the one line under the Agent account row, or null. o = {profile, chosen, accounts, where}.
+//   {kind:"locked", text}  the chosen account's token is in the locked store, or (inside a box) the profile's own login is;
+//   {kind:"nologin", uses} `default` has no login inside a box; `uses` are the token accounts that would work, in list order.
+// The no-login hint is shown only when it is exact: box_claude_credential describes the profile with its OWN account, so it
+// speaks for `chosen` only when chosen is that account. It is "" for a profile with no Claude login to check, so a shell or
+// any other agent never gets the hint.
+const SPAWN_ACCT_LOCKED = "This account needs the store unlocked.";
+function spawnAcctHint(o) {
+  const x = o || {};
+  const p = x.profile || {};
+  const accounts = Array.isArray(x.accounts) ? x.accounts : [];
+  const chosen = x.chosen || "default";
+  const mine = accounts.find((a) => a && a.name === chosen);
+  if (mine && mine.login_state === "token_locked") return { kind: "locked", text: SPAWN_ACCT_LOCKED };
+  if (!x.where || x.where.runtime !== "box" || chosen !== (p.account || "default")) return null;
+  if (p.box_claude_credential === "locked") return { kind: "locked", text: SPAWN_ACCT_LOCKED };
+  if (p.box_claude_credential === "no" && chosen === "default") {
+    const byName = new Map(accounts.map((a) => [a && a.name, a]));
+    const uses = spawnDep("acctChoices", "./accounts.js")(accounts).filter((n) => {
+      const st = byName.get(n) && byName.get(n).login_state;
+      return n !== "default" && (st === "token" || st === "token_locked");
+    });
+    return { kind: "nologin", uses };
+  }
+  return null;
+}
+
 // spawnHotkeyAction: what a submit of the New session form does (the Spawn button,
 // Ctrl/Cmd+Enter from any field, Retry after unlock). The workspace field
 // doubles as a live search box, so its text can differ from the directory that
@@ -585,5 +612,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { spawnIsShellProfile, profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
+  module.exports = { spawnIsShellProfile, profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
 }

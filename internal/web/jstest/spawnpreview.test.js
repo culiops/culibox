@@ -2,7 +2,7 @@
 // spawnpreview.js: the New session dialog's pure decisions (spec 5.6).
 const test = require("node:test");
 const assert = require("node:assert");
-const { profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
+const { profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
 const { spawnWsIdleNote } = require("../static/dirpicker.js");
 
 const sre = {
@@ -1185,4 +1185,24 @@ test("spawnBoxOwnedLine: says why, and names the original folder to use", () => 
   } finally {
     if (had) globalThis.window = prev; else delete globalThis.window;
   }
+});
+
+test("spawnAcctHint: only an exact no-login, the locked store, nothing else", () => {
+  const accounts = [{ name: "default", default: true, login_state: "logged_in" }, { name: "claude-box", login_state: "token" }, { name: "work", login_state: "token_locked" }];
+  const box = { runtime: "box", clone: false }, host = { runtime: "host", clone: false };
+  const locked = { kind: "locked", text: "This account needs the store unlocked." };
+  const h = (profile, chosen, where, acc) => spawnAcctHint({ profile, chosen, accounts: acc || accounts, where });
+  assert.deepStrictEqual(h({ box_claude_credential: "no" }, "default", box), { kind: "nologin", uses: ["claude-box", "work"] });
+  assert.strictEqual(h({ box_claude_credential: "no" }, "default", host), null, "the Host card has no box login to lack");
+  assert.strictEqual(h({ box_claude_credential: "no" }, "default", {}), null, "no box layer: no tier");
+  assert.strictEqual(h({ account: "claude-box", box_claude_credential: "yes" }, "default", box), null, "default is not the profile's own account");
+  assert.strictEqual(h({ account: "claude-box", box_claude_credential: "no" }, "default", box), null, "inexact: the field describes claude-box");
+  assert.strictEqual(h({ box_claude_credential: "" }, "default", box), null, "a shell or non-claude profile");
+  assert.strictEqual(h({}, "default", box), null);
+  assert.deepStrictEqual(h({ box_claude_credential: "locked" }, "default", box), locked);
+  assert.strictEqual(h({ box_claude_credential: "locked" }, "default", host), null);
+  assert.deepStrictEqual(h({ box_claude_credential: "yes" }, "work", box), locked);
+  assert.deepStrictEqual(h({ box_claude_credential: "" }, "work", host), locked, "a locked account is locked on any card");
+  assert.strictEqual(h({ account: "work", box_claude_credential: "yes" }, "claude-box", box), null);
+  assert.deepStrictEqual(h({ box_claude_credential: "no" }, "default", box, [{ name: "default", default: true }]), { kind: "nologin", uses: [] });
 });

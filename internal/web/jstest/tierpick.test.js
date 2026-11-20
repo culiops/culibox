@@ -188,6 +188,7 @@ function tpPage(over) {
     updateRuntimeWarning: () => calls.push(["updateRuntimeWarning"]),
     syncSpawnCopyLine: () => calls.push(["syncSpawnCopyLine"]),
     syncSpawnPreview: () => calls.push(["syncSpawnPreview"]),
+    paintSpawnAcctHint: () => calls.push(["paintSpawnAcctHint"]),
   };
   Object.assign(box, over || {});
   const ctx = vm.createContext(box);
@@ -548,4 +549,108 @@ test("claudemark.js loads between spawnpanel.js and tierpick.js", () => {
   const html = readStatic("index.html");
   const at = (s) => html.indexOf('<script src="' + s + '"></script>');
   assert.ok(at("/spawnpanel.js") > 0 && at("/claudemark.js") > at("/spawnpanel.js") && at("/tierpick.js") > at("/claudemark.js"));
+});
+
+// --- the account hint under the account row (Task 5) ---------------------------------------------------------------
+
+function acctPage(over) {
+  const pg = tpPage();
+  const doc = pg.doc;
+  const hint = doc.createElement("div");
+  const row = doc.createElement("div");
+  row.hidden = false;
+  const sel = doc.createElement("select");
+  sel.value = "default";
+  const calls = pg.calls;
+  const { spawnAcctHint } = require("../static/spawnpreview.js");
+  const { acctChoices } = require("../static/accounts.js");
+  const ctx = pg.ctx;
+  Object.assign(ctx, {
+    $: (id) => ({ "spawn-acct-hint": hint, "spawn-account-row": row, "spawn-account": sel, tierpick: pg.pick, "runtime-seg": pg.seg })[id] || null,
+    accountsCache: [{ name: "default", default: true, login_state: "logged_in" }, { name: "claude-box", login_state: "token" }, { name: "work", login_state: "token_locked" }],
+    spawnAcctHint, acctChoices,
+    spawnWhere: () => ({ runtime: "box", clone: false }),
+    profile: { name: "claude", box_claude_credential: "no" },
+    showSpawnUnlock: (msg, opts) => calls.push(["showSpawnUnlock", msg, opts]),
+    closeDialogFromUI: (id) => calls.push(["closeDialogFromUI", id]),
+    openSettings: (tab) => calls.push(["openSettings", tab]),
+  });
+  Object.assign(ctx, over || {});
+  vm.runInContext(appFnSrc("paintSpawnAcctHint"), ctx);
+  return Object.assign(pg, { hint, row, sel });
+}
+
+test("paintSpawnAcctHint draws Use buttons that switch the account", () => {
+  const pg = acctPage();
+  pg.run("paintSpawnAcctHint()");
+  assert.strictEqual(pg.hint.hidden, false);
+  assert.ok(pg.hint.textContent.startsWith("default has no login inside a box."), pg.hint.textContent);
+  const btns = pg.hint.querySelectorAll("button");
+  assert.deepStrictEqual(btns.map((b) => b.textContent), ["Use: claude-box", "Use: work"]);
+  assert.ok(btns.every((b) => hasClass(b, "btn") && hasClass(b, "btn-sm")));
+  assert.strictEqual(pg.hint.querySelectorAll("code")[0].textContent, "default");
+  btns[0].click();
+  assert.strictEqual(pg.sel.value, "claude-box");
+  assert.ok(pg.calls.some((c) => c[0] === "syncSpawnPreview"));
+  assert.strictEqual(pg.hint.hidden, true, "claude-box is not the profile's own account: nothing to warn about");
+});
+
+test("paintSpawnAcctHint: no token account offers Settings, which closes the dialog like its data-close button", () => {
+  const pg = acctPage({ accountsCache: [{ name: "default", default: true }] });
+  pg.row.hidden = true; // one account: the select is not offered, the chosen account is the profile's own
+  pg.run("paintSpawnAcctHint()");
+  assert.ok(pg.hint.textContent.startsWith("default has no login inside a box."));
+  const btns = pg.hint.querySelectorAll("button");
+  assert.deepStrictEqual(btns.map((b) => b.textContent), ["Settings → Agent accounts"]);
+  assert.ok(hasClass(btns[0], "link"));
+  btns[0].click();
+  assert.deepStrictEqual(pg.calls.filter((c) => c[0] === "closeDialogFromUI" || c[0] === "openSettings"), [["closeDialogFromUI", "spawn-modal"], ["openSettings", "accounts"]]);
+});
+
+test("paintSpawnAcctHint: the locked store says so, with Unlock; nothing on Host, a non-claude profile, a named account on default, or the phone", () => {
+  let pg = acctPage({ profile: { name: "claude", box_claude_credential: "locked" } });
+  pg.run("paintSpawnAcctHint()");
+  assert.strictEqual(pg.hint.hidden, false);
+  assert.ok(pg.hint.textContent.startsWith("This account needs the store unlocked."));
+  const un = pg.hint.querySelectorAll("button");
+  assert.deepStrictEqual(un.map((b) => b.textContent), ["Unlock"]);
+  assert.ok(hasClass(un[0], "link"));
+  un[0].click();
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(pg.calls.find((c) => c[0] === "showSpawnUnlock"))), ["showSpawnUnlock", "This account needs the store unlocked.", { retry: false }]);
+
+  pg = acctPage({ spawnWhere: () => ({ runtime: "host", clone: false }) });
+  pg.run("paintSpawnAcctHint()");
+  assert.strictEqual(pg.hint.hidden, true, "Host");
+  pg = acctPage({ profile: { name: "sh", box_claude_credential: "" } });
+  pg.run("paintSpawnAcctHint()");
+  assert.strictEqual(pg.hint.hidden, true, "non-claude");
+  pg = acctPage({ profile: { name: "claude", account: "claude-box", box_claude_credential: "no" } });
+  pg.sel.value = "default";
+  pg.run("paintSpawnAcctHint()");
+  assert.strictEqual(pg.hint.hidden, true, "a named-account profile switched to default");
+  pg = acctPage({ desktop: false });
+  pg.run("paintSpawnAcctHint()");
+  assert.strictEqual(pg.hint.hidden, true, "the phone");
+  assert.strictEqual(pg.hint.children.length, 0);
+});
+
+test("showSpawnUnlock with retry:false offers no Retry; the one-argument path is unchanged", () => {
+  const src = appFnSrc("showSpawnUnlock");
+  assert.match(src, /function showSpawnUnlock\(message, opts\)/);
+  assert.match(src, /opts && opts\.retry === false/);
+  assert.match(src, /fetchAccounts\(\)/);
+  assert.match(src, /refreshProfilesQuiet\(\)/);
+  assert.match(src, /paintSpawnAccount\(/);
+  assert.match(src, /"Retry"/, "the 423 path still offers Retry");
+  const app = readStatic("app.js");
+  assert.strictEqual((app.match(/showSpawnUnlock\(e\.message\)/g) || []).length, 1, "the 423 caller still passes one argument");
+  assert.strictEqual((app.match(/showSpawnUnlock\(/g) || []).length, 3, "the definition, the one 423 caller, and the Unlock hint");
+});
+
+test("the account hint is repainted by the cards, the seg, the account select and the account row", () => {
+  const tp = readStatic("tierpick.js");
+  assert.match(tp.match(/function tierPick\(key\)[\s\S]*?\n}/)[0], /paintSpawnAcctHint\(\)/);
+  assert.match(tp.match(/function tierSegChanged\(v\)[\s\S]*?\n}/)[0], /paintSpawnAcctHint\(\)/);
+  assert.match(appFnSrc("paintSpawnAccount"), /paintSpawnAcctHint\(\)/);
+  assert.match(readStatic("app.js"), /\$\("spawn-account"\)\.addEventListener\("change", \(\) => \{ syncSpawnPreview\(\); paintSpawnAcctHint\(\); \}\)/);
 });
