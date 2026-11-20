@@ -2778,34 +2778,94 @@ function paintCompactRow(li, sname, grow, s, conn) {
   }
 }
 
-// renderDesktopEntry: what the desktop list renders for one item — a group
-// header, or a compact row for a session.
+// renderDesktopEntry: what the desktop list renders for one item — a workspace
+// group header, or a compact row for a session. A header is the repo's folder
+// with a toggle (chevron, folder, name, count, and one dot per row while it is
+// collapsed) and, when a row waits on you, the amber pip. Every string is text.
 function renderDesktopEntry(it) {
   if (it.header) {
     const h = document.createElement("li");
-    // The kit's group label (uppercase, muted) carries the type; only Needs you
-    // is amber. "Done · your turn" is as neutral as Running and Idle. .grp keeps
-    // the sidebar's own spacing.
-    h.className = "grp grp-label" + (it.key === "needs-you" ? " is-needs" : "");
+    h.className = "wsh";
     h.dataset.sid = it.id;
-    const n = document.createElement("span");
-    n.className = "n";
-    n.textContent = String(it.count);
-    h.append(it.label + " \u00b7 ", n);
+    h.title = it.path ? shortPath(it.path) : "outside a git repo";
+    const tog = document.createElement("button");
+    tog.className = "wtog";
+    tog.setAttribute("type", "button");
+    tog.setAttribute("aria-expanded", it.collapsed ? "false" : "true");
+    tog.onclick = () => toggleWsGroup(it.key);
+    const cv = document.createElement("span");
+    cv.className = "wcv";
+    cv.append(svgIcon24(it.collapsed ? SVG_CHEVRON_RIGHT_24 : SVG_CHEVRON_DOWN_24, 12));
+    const folder = svgIcon24(SVG_FOLDER_24, 13);
+    folder.setAttribute("class", "wf");
+    const name = document.createElement("span");
+    name.className = "wname";
+    name.textContent = it.label;
+    const count = document.createElement("span");
+    count.className = "wcount";
+    count.textContent = String(it.count);
+    tog.append(cv, folder, name, count);
+    if (it.collapsed) {
+      const dots = document.createElement("span");
+      dots.className = "wdots";
+      for (const cls of it.dots) {
+        const d = document.createElement("span");
+        d.className = cls + " wdot";
+        dots.append(d);
+      }
+      tog.append(dots);
+    }
+    h.append(tog);
+    if (it.waiting > 0) {
+      const pip = document.createElement("span");
+      pip.className = "wpip";
+      pip.title = it.waiting + " waiting on you";
+      const d = document.createElement("span");
+      d.className = "dot waiting";
+      pip.append(d, document.createTextNode(it.waiting + " waiting"));
+      h.append(pip);
+    }
     return h;
   }
   return renderSession(it.s, { compact: true });
 }
 
+// The collapsed workspace groups (their keys), kept in localStorage.
+let deskWsCollapsed = wsCollapsedRead(deskStorage());
+function deskWsCollapsedSet() { return deskWsCollapsed; }
+
 // deskEntries: the desktop list as reconcile items, a header before each
-// group's rows. Keys are "grp:<key>" for headers and the session id for rows.
+// group's rows (none while the group is collapsed). Keys are "grp:<key>" for
+// headers and the session id for rows.
 function deskEntries(sessions) {
   const out = [];
-  for (const g of deskGroups(sessions)) {
-    out.push({ id: "grp:" + g.key, header: true, key: g.key, label: g.label, count: g.count });
-    for (const s of g.sessions) out.push({ id: s.id, s });
+  for (const g of deskGroups(sessions, deskWsCollapsed)) {
+    out.push({ id: "grp:" + g.key, header: true, key: g.key, label: g.label, path: g.path, count: g.count, waiting: g.waiting, dots: g.dots, collapsed: g.collapsed });
+    if (!g.collapsed) for (const s of g.sessions) out.push({ id: s.id, s });
   }
   return out;
+}
+
+// deskListPaint: the desktop list's one reconcile; it returns the id -> row map.
+function deskListPaint() {
+  return reconcileRows($("sessions"), deskEntries(lastSessions), renderDesktopEntry,
+    (it) => (it.header ? deskWsHeaderSig(it) : rowSig(it.s, rowLocal(it.s))));
+}
+
+// toggleWsGroup: flips a group and remembers it. A rename, a reply or the store's
+// unlock form holds the list, and the phone has no workspace groups: then only the
+// stored state changes and the next poll applies it. Otherwise the list repaints and
+// focus moves to the rebuilt header's toggle (the old one is gone, and Enter or
+// Space on it would leave focus on <body>).
+function toggleWsGroup(key) {
+  wsCollapsedToggle(deskWsCollapsed, key);
+  wsCollapsedWrite(deskStorage(), deskWsCollapsed);
+  if (mobileActive(window.innerWidth) || editing || replyFocused || storeUnlockFocused() || !lastSessions.length) return;
+  const rows = deskListPaint();
+  syncSelectedRow();
+  const h = rows.get("grp:" + key);
+  const tog = h && h.querySelector(".wtog");
+  if (tog) tog.focus();
 }
 
 // buildCardComposer: the one-line reply composer a desktop needs-you card
@@ -4229,9 +4289,7 @@ async function refreshSessionsRun() {
     }
     ul.replaceChildren(...nodes);
   } else {
-    rowById = reconcileRows(ul, deskEntries(lastSessions), renderDesktopEntry, (it) => (it.header
-      ? JSON.stringify(["grp", it.label, it.count])
-      : rowSig(it.s, rowLocal(it.s))));
+    rowById = deskListPaint();
   }
   // The answer block is a sibling, so it can only be inserted once its row is
   // in the document. On mobile a needs-you session's row is built but never

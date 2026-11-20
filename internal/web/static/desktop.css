@@ -749,6 +749,28 @@
      only the sidebar's spacing (12px above, 4px below, the label's text on the rows' dot edge,
      16px from the sidebar's edge: m1-1). "Done · your turn" is as neutral as Running. */
   .grp { list-style: none; padding: 12px 8px 4px; }
+  /* A workspace group header (#340 S5, the mockup's .wsh): a 28px row, the toggle button takes the room and the amber
+     pip (and the "+" of a later task) never shrink. The name keeps 48px and the dots clip, so a crowded collapsed header
+     at the sidebar's 200px minimum loses dots first, then name width, and never pushes the pip out. */
+  #sessions .wsh { list-style: none; display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px 0 4px; margin-top: 8px; border-radius: var(--r-chip); }
+  #sessions .wsh:first-child { margin-top: 4px; }
+  #sessions .wsh:hover { background: var(--hover); }
+  #sessions .wsh .wtog {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 100%; padding: 0; border: 0; background: transparent;
+    font: inherit; font-size: var(--t-sm); font-weight: var(--w-semibold); color: var(--fg); text-align: left; cursor: pointer;
+  }
+  #sessions .wsh .wcv, #sessions .wsh .wf { flex: none; display: inline-flex; color: var(--muted); }
+  #sessions .wsh .wname { flex: 0 1 auto; min-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sessions .wsh .wcount { flex: none; color: var(--muted); font-weight: var(--w-regular); font-variant-numeric: tabular-nums; }
+  #sessions .wsh .wdots { display: inline-flex; gap: 3px; margin-left: 2px; flex: 0 1 auto; min-width: 0; overflow: hidden; }
+  #sessions .wsh .wdot { flex: none; width: 6px; height: 6px; margin-top: 0; }
+  #sessions .wsh .wpip {
+    flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; height: 18px; border-radius: var(--r-chip);
+    color: var(--amber); background: var(--amber-tint); font-size: var(--t-xs); font-weight: var(--w-semibold);
+  }
+  #sessions .wsh .wpip .dot { margin-top: 0; }
+  /* A stale list drops its amber, as the Needs you label did (above). */
+  #sessions.sess-stale .wsh .wpip { color: var(--muted); background: var(--raise); }
   /* A row is 6px + the 20px name line + the 18px sub-line + 6px = 50px (the frame's .srow), the dot
      10px before the name. */
   #sessions .drow {

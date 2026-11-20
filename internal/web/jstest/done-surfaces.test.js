@@ -44,20 +44,22 @@ const desk = require("../static/deskshell.js");
 const rail = require("../static/steerrail.js");
 const act = require("../static/activity.js");
 
-test("renderDesktopEntry: Needs you is the one amber group header; Done · your turn is neutral", () => {
-  const ctx = vm.createContext({ document: doc, String });
-  new vm.Script(fnSrc(read("app.js"), "renderDesktopEntry") + "\nglobalThis.renderDesktopEntry = renderDesktopEntry;").runInContext(ctx);
-  const head = (key, label, count) => ctx.renderDesktopEntry({ id: "grp:" + key, header: true, key, label, count });
-  const needs = head("needs-you", "Needs you", 3);
-  assert.strictEqual(needs.className, "grp grp-label is-needs");
-  assert.strictEqual(needs.textContent, "Needs you · 3");
-  assert.strictEqual(needs.dataset.sid, "grp:needs-you");
-  assert.strictEqual(needs.children[1].className, "n", "the count is the kit's tabular .n");
-  for (const [k, l] of [["your-turn", "Done · your turn"], ["running", "Running"], ["idle", "Idle"]]) {
-    const h = head(k, l, 1);
-    assert.strictEqual(h.className, "grp grp-label", k + " is not amber");
-    assert.strictEqual(h.textContent, l + " · 1");
-  }
+test("renderDesktopEntry: a waiting group is the one amber header; a group with none has no pip", () => {
+  const { Node, Text } = require("./fakedom.js");
+  const fdoc = {};
+  fdoc.createElement = (t) => new Node(t, fdoc);
+  fdoc.createElementNS = (ns, t) => fdoc.createElement(t);
+  fdoc.createTextNode = (t) => new Text(t);
+  const ctx = vm.createContext({ document: fdoc, String, shortPath: (p) => p, toggleWsGroup: () => {} });
+  // The page's own svgicon.js gives the header its glyphs (svgIcon24, SVG_FOLDER_24, the chevrons).
+  new vm.Script(read("svgicon.js").replace(/^const /gm, "var ") + "\n" + fnSrc(read("app.js"), "renderDesktopEntry") + "\nglobalThis.renderDesktopEntry = renderDesktopEntry;").runInContext(ctx);
+  const head = (waiting) => ctx.renderDesktopEntry({ id: "grp:/r", header: true, key: "/r", label: "r", path: "/r", count: 2, waiting, dots: [], collapsed: false });
+  const hot = head(2);
+  assert.ok(hot.querySelector(".wpip"), "a waiting group carries the amber pip");
+  assert.strictEqual(hot.querySelector(".wpip").textContent, "2 waiting");
+  const calm = head(0);
+  assert.strictEqual(calm.querySelector(".wpip"), null, "no waiting, no pip");
+  for (const h of [hot, calm]) assert.ok(!h.querySelector(".is-needs") && !/is-needs/.test(h.className), "the kit's is-needs is gone");
 });
 
 test("buildNeedStrip: a finished turn's strip is .is-done, a blocked one is not", () => {
