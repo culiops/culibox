@@ -1524,6 +1524,48 @@ test("a server refusal of box_only with host lands in Runs in", async () => {
   assert.strictEqual(field(t, "box_only").getAttribute("aria-invalid"), "true");
 });
 
+test("picking Box again retires the Box only refusal", async () => {
+  const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { box_only: true, host_block: "this profile is set to box only" }) : p)) });
+  t.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { box_only: true });
+  await openRuns(t, "infra-terraform");
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save as host…"), false);
+  assert.strictEqual(texts(blockOf(t, "runs"), "pfv-ferr").length, 1, "refused");
+  field(t, "tier-box").checked = true;
+  field(t, "tier-box").onchange();
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), [], "the refusal went with the pick");
+  assert.notStrictEqual(field(t, "box_only").getAttribute("aria-invalid"), "true");
+});
+
+test("a bound profile saved without touching the lock does not send box_only, so removing the binding later frees Host", async () => {
+  const t = page();
+  await openRuns(t, "aws-ops");
+  assert.strictEqual(field(t, "box_only").checked, true, "drawn ticked because the bindings force it");
+  assert.strictEqual(t.run("pfvState").edits.runs.values.boxOnly, false, "but the value held is the stored one: no lock");
+  // Another block's change makes the save; Runs in rides along with its values as they were.
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.strictEqual(t.box.puts[0].options.model, "claude-sonnet-5", "the save went through");
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+  assert.ok(!("box_only" in t.box.puts[0]), "a forced tick is not a stored lock");
+});
+
+test("Box only cleared and Host picked on a locked profile saves host with no box_only", async () => {
+  const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { box_only: true, host_block: "this profile is set to box only" }) : p)) });
+  t.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { box_only: true });
+  await openRuns(t, "infra-terraform");
+  field(t, "box_only").checked = false;
+  field(t, "box_only").onchange();
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save as host…"), true);
+  assert.strictEqual(t.box.asked.length, 1, "the host question was asked and accepted");
+  assert.strictEqual(t.box.puts[0].runtime, "host");
+  assert.ok(!("box_only" in t.box.puts[0]));
+});
+
 test("ticking Box only and saving sends box_only", async () => {
   const t = page();
   await openRuns(t, "infra-terraform");

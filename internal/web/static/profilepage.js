@@ -1893,7 +1893,12 @@ function pfvTierCards(rec, c, o) {
 
 function pfvRunsForm(rec, c) {
   const v = rec.values;
-  const cards = pfvTierCards(rec, c, { tier: v.tier, pick: (tier) => { v.tier = tier; pfvChanged(rec, "runtime"); } });
+  const cards = pfvTierCards(rec, c, { tier: v.tier, pick: (tier) => {
+    v.tier = tier;
+    // The tier is what the Box only refusal was about (Host picked while it is on), so picking again retires it too.
+    rec.ferrs = rec.ferrs.filter((e) => !pfvFieldIs(e.field, "box_only"));
+    pfvChanged(rec, "runtime");
+  } });
   // The control to focus on open: the one that is lit and can be used.
   rec.first = [rec.fields["tier-box"], rec.fields["tier-host"]].find((r) => r.checked && !r.disabled) || rec.fields["tier-host"];
   const fs = pfvMk("fieldset", "pfv-field pfv-choice");
