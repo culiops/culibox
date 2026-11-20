@@ -26,7 +26,7 @@ const pfvList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string"
 const pfvBinName = (p) => String(p || "").split("/").filter(Boolean).pop() || "";
 // An option counts as set when a bool is on or an enum has a value.
 const pfvSet = (v) => v === true || (typeof v === "string" && v.trim() !== "");
-const pfvRow = (kind, name, over) => Object.assign({ kind, name, sub: "", scope: "", tag: "", missing: false }, over);
+const pfvRow = (kind, name, over) => Object.assign({ kind, name, sub: "", scope: "", tag: "", missing: false, applies: "" }, over);
 
 // pfvTierOf: the tier the profile runs under, as the page shows it and as every save writes it. The stored
 // profile's own runtime when it names "box" or "host" (the document the PUT is checked against by revision);
@@ -57,15 +57,21 @@ function pfvOptions(view, doc) {
   return out;
 }
 
+// pfvPreselectWord: what New session pre-selects for a profile of this tier: Host, or a box in place or on a private copy.
+function pfvPreselectWord(tier, copy) {
+  return tier === "host" ? "Host" : copy ? "Box · clone" : "Box · in place";
+}
+
 // pfvAdvancedItems: what the Advanced block holds that is not at its default,
-// one row per setting. The starting environment counts on host only (a box does
-// not use it); environment variables are listed by name, never by value.
+// one row per setting. The starting environment counts on any tier, tagged as
+// applying to Host (a box does not use it; the value is kept for when the profile
+// runs there), and the CLAUDE.md imports row is tagged Box. Environment variables
+// are listed by name, never by value. tier is accepted for the callers that pass it and gates nothing.
 function pfvAdvancedItems(doc, tier, defs) {
   const d = doc && typeof doc === "object" ? doc : {};
-  const t = tier || (d.runtime === "host" ? "host" : "box");
   const rows = [];
-  if (t === "host" && typeof d.base === "string" && d.base !== "" && d.base !== "inherit") {
-    rows.push(pfvRow("Starting environment", d.base, { scope: d.base === "clean" ? "No secrets" : d.base === "login" ? "Source profile" : "" }));
+  if (typeof d.base === "string" && d.base !== "" && d.base !== "inherit") {
+    rows.push(pfvRow("Starting environment", d.base, { applies: "host", scope: d.base === "clean" ? "No secrets" : d.base === "login" ? "Source profile" : "" }));
   }
   const args = pfvList(d.args);
   if (args.length) rows.push(pfvRow("Arguments", args.join(" ")));
@@ -74,7 +80,7 @@ function pfvAdvancedItems(doc, tier, defs) {
   const secrets = pfvList(d.secrets);
   if (secrets.length) rows.push(pfvRow("Secrets", secrets.join(", ")));
   if (d.replyable === true) rows.push(pfvRow("Replies", "Allow replies by default"));
-  if (d.imports_off === true) rows.push(pfvRow("Files", "CLAUDE.md imports", { scope: "Not given to the box" }));
+  if (d.imports_off === true) rows.push(pfvRow("Files", "CLAUDE.md imports", { applies: "box", scope: "Not given to the box" }));
   const opts = d.options && typeof d.options === "object" && !Array.isArray(d.options) ? d.options : {};
   for (const key of Object.keys(opts)) {
     if (PFV_AGENT_OPTIONS.includes(key) || !pfvSet(opts[key])) continue;
@@ -176,10 +182,10 @@ function pfvAgentLine(a) {
 function pfvAgentBlock(view, doc, a, edit) {
   const withParts = [a.model || (a.claude ? "its default model" : ""), a.effort ? a.effort + " effort" : ""].filter(Boolean);
   const main = (a.claude ? "Claude Code" : a.bin || "agent") + (withParts.length ? " with " + withParts.join(", ") : "");
-  if (!a.claude) return { id: "agent", label: "Agent", lines: [main], rows: [], edit, add: "", count: 0, note: "" };
+  if (!a.claude) return { id: "agent", label: "Agent", applies: "", lines: [main], rows: [], edit, add: "", count: 0, note: "" };
   const acct = pfvText(pfvField(view, doc, "account"));
   const sub = acct && acct !== "default" ? "Signs in with the " + acct + " Claude login" : "Signs in with the default Claude login (~/.claude)";
-  return { id: "agent", label: "Agent", lines: [main, sub], rows: [], edit, add: "", count: 0, note: "" };
+  return { id: "agent", label: "Agent", applies: "", lines: [main, sub], rows: [], edit, add: "", count: 0, note: "" };
 }
 
 // pfvWorkspaceBlock: the folder the sessions work in. A private copy lists the
@@ -215,14 +221,15 @@ function pfvWorkspaceBlock(view, doc, host, edit) {
       sub: cwd ? "Edits the folder directly, not a private copy" : "Picked in New session", scope: "Read and write",
     }));
   }
-  return { id: "workspace", label: "Workspace", lines: [], rows, edit, add: "", count: rows.length, note: "", notHome };
+  return { id: "workspace", label: "Workspace", applies: "", lines: [], rows, edit, add: "", count: rows.length, note: "", notHome };
 }
 
 // refused: a session of this profile is refused without a box layer (see pfvUnavailable).
 // daemon: /api/meta's box_daemon_reason (#154), why a box layer that exists cannot be used right now
 // ("Docker is not running"); "" when it can, and never given while there is no layer.
-function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon) {
-  const b = { id: "runs", label: "Runs in", lines: [], rows: [], edit, add: "", count: 0, note: "" };
+// preselect: the last line, what New session pre-selects (pfvPreselectWord). It follows every other line, so toneAt stays put.
+function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon, preselect) {
+  const b = { id: "runs", label: "Runs in", applies: "", lines: [], rows: [], edit, add: "", count: 0, note: "" };
   const u = pfvUnavailable(reason, refused);
   const dline = daemon ? "Boxes can't start right now: " + daemon + "." : "";
   if (daemon && host) {
@@ -247,6 +254,7 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon) {
   } else {
     b.lines.push("In a box", "A container on this machine. It can write only to its " + (copy ? "private copy" : "workspace") + " and reach only what this page lists.");
   }
+  b.lines.push("New session pre-selects: " + preselect);
   return b;
 }
 
@@ -267,13 +275,16 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon) {
 // Returns {header, note, blocks}:
 //   header  {name, tier: "box"|"host", agentLine, readOnly, source}
 //   note    the quiet line of a profile defined in config.json, else ""
-//   blocks  [{id, label, lines, rows, edit, add, count, note}] in page order
-//     runs, workspace, agent, cloud, reachable, network, advanced (box)
-//     runs, workspace, agent, canreach, advanced (host)
+//   blocks  [{id, label, applies, lines, rows, edit, add, count, note}], every profile, in this order:
+//     runs, workspace, agent, cloud, reachable, network, canreach, advanced
+//     (the tier is not a fixed property of a profile: the page shows every section)
+//   applies "box" on cloud, reachable and network (what a Box session gets), "host" on canreach
+//           (what a Host session gets), "" on the others. A row carries it too: "host" on Advanced's
+//           Starting environment, "box" on its CLAUDE.md imports, "" otherwise.
 //   lines   the statements, the first is the headline, the rest are muted; an
 //           empty string is a line not drawn (host Runs in has a second, "" unless
 //           boxes are unavailable). In a block with tone "error", the line at
-//           toneAt is the red one.
+//           toneAt is the red one. Runs in's last line is always "New session pre-selects: ...".
 //   rows    {kind, name, sub, scope, tag, missing} (reachModel's Item) plus, only
 //           where it applies, fix (a Not home row), action (Old-style AWS) or
 //           original (a file shared from a private copy's original: a Files row
@@ -282,7 +293,7 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon) {
 //           which the page draws red.
 //   edit    the block has an Edit link; add is "" or the "+ Add ..." link text.
 //   Workspace also carries notHome {label, title} (the chip) or null; Advanced
-//   {count, open, status}; Can reach {switchToBox}.
+//   {count, open, status}; Can reach {switchToBox} (true on an editable host profile with a box layer).
 // A read-only profile (config.json or built in) has edit false and no add action
 // anywhere. Never an ARN, a token value or a reference: only names.
 function pfvReadView(o) {
@@ -300,55 +311,52 @@ function pfvReadView(o) {
   const refused = pfvRefusedWithoutBox(view, doc, copy);
 
   const blocks = [
-    pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, refused, unavailable ? "" : pfvText(x.boxDaemonReason)),
+    pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, refused, unavailable ? "" : pfvText(x.boxDaemonReason), pfvPreselectWord(tier, copy)),
     pfvWorkspaceBlock(view, doc, host, edit),
     pfvAgentBlock(view, doc, a, edit),
   ];
 
-  if (host) {
-    blocks.push({
-      id: "canreach", label: "Can reach", edit: false, add: "", rows: [], count: 0, note: "",
-      lines: [
-        "Everything you can",
-        "Your whole home, your SSH keys, the Docker socket and any website.",
-        "Scoped AWS, GitHub, tokens and network limits need a box; CuliBox cannot scope them on this machine.",
-      ],
-      // Offered only when it can be used: with no box layer the reason is already in Runs in.
-      switchToBox: edit && !unavailable,
-    });
-  } else {
-    const short = pfvDep("shortPath", "./fsops.js");
-    const profile = Object.assign({}, view, { network: pfvPosture(view, doc, tier) });
-    const m = pfvDep("reachModel", "./spawnpreview.js")({
-      profile, tier, cwd: short(pfvText(pfvField(view, doc, "default_cwd"))), meta: x.meta, creds: x.creds, bundleImports: x.bundleImports,
-      githubLogins: x.githubLogins || pfvGithubLogins(doc),
-    });
-    const item = (it) => {
-      const r = pfvRow(it.kind, it.name, { sub: it.sub, scope: it.scope, tag: it.tag, missing: it.missing === true });
-      if (it.original === true) r.original = true;
-      if (r.missing) r.scope = PFV_MISSING;
-      if (it.kind === "Old-style AWS" && edit) r.action = "Move to a saved connection";
-      return r;
-    };
-    const cloud = m.cloud.map(item), reachable = m.reachable.map(item);
-    blocks.push({
-      id: "cloud", label: "Cloud and tokens", edit, add: edit ? "+ Add access" : "", rows: cloud, count: cloud.length, note: m.tokenNote,
-      // The value, then its helper line (frame M2.1): the page draws them as a value and a muted line, the block in edit as one sentence.
-      lines: cloud.length ? [] : ["Nothing yet", "It cannot use AWS, GitHub or any token."],
-    });
-    blocks.push({
-      id: "reachable", label: "Also reachable", edit, add: edit ? "+ Add folder or domain" : "", rows: reachable, count: reachable.length, note: "",
-      lines: reachable.length ? [] : ["Nothing yet", "It cannot read other folders or reach other domains."],
-    });
-    blocks.push({ id: "network", label: "Network", edit, add: "", rows: [], count: 0, note: "", lines: m.network ? [m.network.line, m.network.sub] : [] });
-  }
+  // Cloud, Also reachable and Network describe what a Box session of this profile gets, whatever tier it is stored with;
+  // Can reach says what a Host session gets. Each is tagged with the tier it applies to.
+  const short = pfvDep("shortPath", "./fsops.js");
+  const profile = Object.assign({}, view, { network: pfvPosture(view, doc, "box") });
+  const m = pfvDep("reachModel", "./spawnpreview.js")({
+    profile, tier: "box", cwd: short(pfvText(pfvField(view, doc, "default_cwd"))), meta: x.meta, creds: x.creds, bundleImports: x.bundleImports,
+    githubLogins: x.githubLogins || pfvGithubLogins(doc),
+  });
+  const item = (it) => {
+    const r = pfvRow(it.kind, it.name, { sub: it.sub, scope: it.scope, tag: it.tag, missing: it.missing === true });
+    if (it.original === true) r.original = true;
+    if (r.missing) r.scope = PFV_MISSING;
+    if (it.kind === "Old-style AWS" && edit) r.action = "Move to a saved connection";
+    return r;
+  };
+  const cloud = m.cloud.map(item), reachable = m.reachable.map(item);
+  blocks.push({
+    id: "cloud", label: "Cloud and tokens", applies: "box", edit, add: edit ? "+ Add access" : "", rows: cloud, count: cloud.length, note: m.tokenNote,
+    // The value, then its helper line (frame M2.1): the page draws them as a value and a muted line, the block in edit as one sentence.
+    lines: cloud.length ? [] : ["Nothing yet", "It cannot use AWS, GitHub or any token."],
+  });
+  blocks.push({
+    id: "reachable", label: "Also reachable", applies: "box", edit, add: edit ? "+ Add folder or domain" : "", rows: reachable, count: reachable.length, note: "",
+    lines: reachable.length ? [] : ["Nothing yet", "It cannot read other folders or reach other domains."],
+  });
+  blocks.push({ id: "network", label: "Network", applies: "box", edit, add: "", rows: [], count: 0, note: "", lines: m.network ? [m.network.line, m.network.sub] : [] });
+  blocks.push({
+    id: "canreach", label: "Can reach", applies: "host", edit: false, add: "", rows: [], count: 0, note: "",
+    lines: [
+      "Everything you can",
+      "Your whole home, your SSH keys, the Docker socket and any website.",
+      "Scoped AWS, GitHub, tokens and network limits need a box; CuliBox cannot scope them on this machine.",
+    ],
+    // Offered on a host profile only, and only when it can be used: with no box layer the reason is already in Runs in.
+    switchToBox: edit && !unavailable && host,
+  });
 
   const adv = pfvAdvancedItems(doc, tier, x.defs);
-  const sentence = host
-    ? "Starting environment, arguments, environment variables and sidebar replies."
-    : "Arguments, environment variables, sidebar replies and CLAUDE.md imports.";
+  const sentence = "Starting environment, arguments, environment variables, sidebar replies and CLAUDE.md imports.";
   blocks.push({
-    id: "advanced", label: "Advanced", edit, add: "", rows: adv, count: adv.length, note: "",
+    id: "advanced", label: "Advanced", applies: "", edit, add: "", rows: adv, count: adv.length, note: "",
     lines: [adv.length ? sentence : sentence + " All at their defaults."],
     open: adv.length > 0, status: adv.length ? adv.length + " set" : "none set",
   });
@@ -361,5 +369,5 @@ function pfvReadView(o) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { pfvReadView, pfvAdvancedCount, pfvUnavailable, pfvRefusedWithoutBox, pfvDaemonRefuses };
+  module.exports = { pfvReadView, pfvAdvancedCount, pfvAdvancedItems, pfvPreselectWord, pfvUnavailable, pfvRefusedWithoutBox, pfvDaemonRefuses };
 }

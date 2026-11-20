@@ -164,7 +164,7 @@ test("the nested profile list is the M2 list: a flex column, 1px gap, 12px in, n
   assert.strictEqual(list.get("margin"), undefined);
 });
 
-test("a profile row: 30px, gap 6, name grows, a muted lock, a box chip that steps down to --panel when selected", () => {
+test("a profile row: 30px, gap 6, name grows, a muted lock, a box only chip that steps down to --panel when selected", () => {
   const row = decls(NI);
   assert.strictEqual(row.get("display"), "flex");
   assert.strictEqual(row.get("align-items"), "center");

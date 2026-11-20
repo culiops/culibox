@@ -400,6 +400,7 @@ function pfvDrawRow(r, known, err, o) {
   else if (r.original === true || PFV_MONO_KINDS.includes(r.kind)) nm.append(pfvMk("span", "pfv-mono", r.name));
   else nm.append(...pfvMonoNodes(r.name, known));
   if (r.tag) nm.append(pfvMk("span", "pfv-tag", r.tag));
+  if (r.applies) nm.append(pfvAppliesTag(r.applies));
   id.append(nm);
   const sub = old ? r.name : r.sub;
   if (sub) {
@@ -522,6 +523,7 @@ function pfvDrawAdvanced(b, known) {
       if (PFV_MONO_KINDS.includes(r.kind)) dd.append(pfvMk("span", "pfv-mono", r.name));
       else dd.append(...pfvMonoNodes(r.name, known));
       if (r.scope) dd.append(" ", pfvMk("span", "pfv-muted", r.scope));
+      if (r.applies) dd.append(" ", pfvAppliesTag(r.applies));
       dl.append(pfvMk("dt", "", r.kind), dd);
     }
     body.append(dl);
@@ -532,13 +534,25 @@ function pfvDrawAdvanced(b, known) {
   return sec;
 }
 
+// pfvAppliesTag: the neutral tag that says which tier a block, row or Advanced entry applies to ("Applies to Box" / "Applies to Host").
+function pfvAppliesTag(applies) {
+  return pfvMk("span", "pfv-applies", "Applies to " + (applies === "host" ? "Host" : "Box"));
+}
+
+// pfvDrawLabel: a block's h3 label, with its Applies to tag after the name when it has one.
+function pfvDrawLabel(b) {
+  const h = pfvMk("h3", "pfv-label", b.label);
+  if (b.applies) h.append(" ", pfvAppliesTag(b.applies));
+  return h;
+}
+
 function pfvDrawBlock(b, known) {
   const rec = pfvState.edits[b.id];
   if (rec) return pfvDrawEditBlock(b, rec, known);
   if (b.id === "advanced") return pfvDrawAdvanced(b, known);
   const sec = pfvMk("section", "pfv-block");
   sec.dataset.block = b.id;
-  sec.append(pfvMk("h3", "pfv-label", b.label), pfvDrawBody(b, known), pfvDrawAct(b));
+  sec.append(pfvDrawLabel(b), pfvDrawBody(b, known), pfvDrawAct(b));
   return sec;
 }
 
@@ -1419,7 +1433,7 @@ function pfvDrawEditBlock(b, rec, known) {
   const save = pfvKitBtn("Save", "btn-primary", () => pfvSaveBlock(b.id));
   foot.append(status, discard, save);
   body.append(top, form);
-  const label = adv ? pfvDrawAdvLabel(b) : pfvMk("h3", "pfv-label", b.label);
+  const label = adv ? pfvDrawAdvLabel(b) : pfvDrawLabel(b);
   sec.append(label, body, foot);
   rec.block = b;
   rec.known = known;

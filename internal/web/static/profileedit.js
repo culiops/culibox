@@ -392,14 +392,15 @@ const PFE_COPY_BLOCKS = ["cloud", "reachable", "agent", "network", "advanced"];
 // pfvCopyList: the "This copy will also get" list from the read model (pfvReadView) of the profile as it will be created:
 // one item {id, label, lines, rows, note, count} per block that has something to say, in the read view's own words
 // (the rows of reachModel, the agent line, the network sentence). A cloud or folder block with no row is left out: nothing
-// is copied. Advanced is a count ("None set", "3 set") with its rows when there are any. A host copy's model has no cloud
-// blocks, so it lists its agent and Advanced only.
+// is copied. Advanced is a count ("None set", "3 set") with its rows when there are any. A host copy lists its agent and
+// Advanced only: the read model now draws the box blocks (Applies to Box) on every profile, and a copy that runs on this
+// machine gets none of them.
 function pfvCopyList(model) {
   const blocks = model && Array.isArray(model.blocks) ? model.blocks : [];
   const out = [];
   for (const id of PFE_COPY_BLOCKS) {
     const b = blocks.find((x) => x && x.id === id);
-    if (!b) continue;
+    if (!b || (b.applies === "box" && model.header && model.header.tier === "host")) continue;
     const lines = Array.isArray(b.lines) ? b.lines.filter((l) => l !== "") : [];
     const rows = Array.isArray(b.rows) ? b.rows : [];
     if ((id === "cloud" || id === "reachable") && rows.length === 0) continue;

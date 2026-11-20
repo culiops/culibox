@@ -317,7 +317,7 @@ test("an empty Also reachable block says 'Nothing yet' as its value, with its ow
   assert.strictEqual(byCls(reach, "pfv-empty").length, 0);
 });
 
-test("pfvShow fetches the stored profile and draws the seven blocks from the read model", async () => {
+test("pfvShow fetches the stored profile and draws the eight blocks from the read model", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
   assert.ok(t.calls.includes("GET /api/profiles/aws-ops"));
@@ -328,8 +328,8 @@ test("pfvShow fetches the stored profile and draws the seven blocks from the rea
   assert.deepStrictEqual(texts(root, "chip"), ["box"]);
   assert.deepStrictEqual(subs(root), ["Claude Code · claude-opus-5-5 · high effort"]);
   assert.deepStrictEqual(texts(root, "pfv-sheet-h"), ["This agent will be able to"]);
-  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
-  // Edit on every block of an editable profile, "+ Add" on the two row blocks.
+  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Can reach", "Advanced"]);
+  // Edit on every block of an editable profile but Can reach (its action is Switch to box, offered on a host profile only), "+ Add" on the two row blocks.
   assert.strictEqual(byText(root, "button", "Edit").length, 7);
   assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => b.getAttribute("aria-label")), [
     "Edit where it runs", "Edit workspace", "Edit agent", "Edit cloud and tokens", "Edit also reachable", "Edit network", "Edit advanced settings",
@@ -463,17 +463,18 @@ test("a GitHub App deleted from Credentials reads Not found in Credentials on th
   assert.strictEqual(byCls(ed.els["pfv-in"], "pfv-miss").length, 0, "re-pointed to an App that exists, the row stops saying it is gone");
 });
 
-test("a host profile has Can reach, Switch to box and no cloud blocks", async () => {
+test("a host profile has every block, Switch to box, and the box blocks tagged Applies to Box", async () => {
   const t = page();
   await t.box.pfvShow("runbook-host");
   const root = t.els["pfv-in"];
   assert.deepStrictEqual(texts(root, "chip"), ["host"]);
   assert.ok(byCls(root, "chip")[0].className.includes("chip-host"));
-  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Can reach", "Advanced"]);
+  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Can reach", "Advanced"]);
+  assert.deepStrictEqual(byCls(root, "pfv-label").map((l) => texts(l, "pfv-applies")), [[], [], [], ["Applies to Box"], ["Applies to Box"], ["Applies to Box"], ["Applies to Host"], []]);
   // Spec 5.4 sentence, one line.
   assert.deepStrictEqual(texts(byCls(root, "pfv-block")[0], "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
   assert.strictEqual(byText(root, "button", "Switch to box").length, 1);
-  assert.strictEqual(byCls(root, "pfv-add").length, 0);
+  assert.strictEqual(byCls(root, "pfv-add").length, 2, "Cloud and Also reachable offer their + Add on any tier");
 });
 
 test("a read-only profile has no Edit, the config.json note and no menu", async () => {
@@ -609,8 +610,8 @@ test("Edit is a ghost small button in column 3 with the block's aria-label", asy
   await t.box.pfvShow("aws-ops");
   const labels = t.run("PFV_EDIT_LABEL");
   const blocks = byCls(t.els["pfv-in"], "pfv-block");
-  assert.strictEqual(blocks.length, 7);
-  for (const b of blocks) {
+  assert.strictEqual(blocks.length, 8);
+  for (const b of blocks.filter((x) => x.dataset.block !== "canreach")) {
     const id = b.dataset.block;
     // Label, body, act: the grid's three columns in this order (label 132px, value, Edit).
     assert.deepStrictEqual(b.children.map((c) => classesOf(c)[0]), ["pfv-label", "pfv-body", "pfv-act"], id);
@@ -623,9 +624,9 @@ test("Edit is a ghost small button in column 3 with the block's aria-label", asy
   }
 });
 
-// Frame M2.1 (design digest §B2): Advanced is the seventh block of the one card, a normal block with an Edit button and no collapse:
+// Frame M2.1 (design digest §B2): Advanced is the last block of the one card, a normal block with an Edit button and no collapse:
 // its label with "none set" / "N set" under it, the helper as its value, Edit in column 3.
-const ADV_HELPER = "Arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults.";
+const ADV_HELPER = "Starting environment, arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults.";
 
 test("Advanced is the last block of the one card: its count under the label, the helper as its value, no fold", async () => {
   const t = page();
@@ -634,8 +635,8 @@ test("Advanced is the last block of the one card: its count under the label, the
   assert.strictEqual(sheets.length, 1, "one card: Advanced has none of its own");
   const adv = blockOf(t, "advanced");
   assert.strictEqual(adv.parent, sheets[0]);
-  assert.deepStrictEqual(sheets[0].children.map((b) => b.dataset.block), ["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]);
-  assert.strictEqual(sheets[0].children[6], adv, "the seventh block");
+  assert.deepStrictEqual(sheets[0].children.map((b) => b.dataset.block), ["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]);
+  assert.strictEqual(sheets[0].children[7], adv, "the eighth block");
   const label = byCls(adv, "pfv-label")[0];
   assert.strictEqual(label.tag, "h3");
   assert.strictEqual(labelName(label), "Advanced");
@@ -721,8 +722,9 @@ test("boxes unavailable on a box profile: the reason line is red, the consequenc
   assert.deepStrictEqual(texts(runs, "pfv-main"), ["In a box"]);
   assert.deepStrictEqual(texts(runs, "pfv-red"), ["Boxes are unavailable on this machine: Docker is not installed."]);
   const sub = byCls(runs, "pfv-sub");
-  assert.strictEqual(sub.length, 2);
+  assert.strictEqual(sub.length, 3, "the reason, the consequence, and what New session pre-selects");
   assert.ok(!sub[1].className.includes("pfv-red"));
+  assert.strictEqual(sub[2].textContent, "New session pre-selects: Box · in place");
   assert.strictEqual(sub[1].textContent, "Sessions with this profile can't start until Docker is installed.");
 });
 
@@ -734,8 +736,9 @@ test("boxes unavailable on a profile that names no tier: it says its sessions st
   assert.deepStrictEqual(texts(runs, "pfv-main"), ["In a box"]);
   assert.deepStrictEqual(texts(runs, "pfv-red"), ["Boxes are unavailable on this machine: Docker is not installed."]);
   const sub = byCls(runs, "pfv-sub");
-  assert.strictEqual(sub.length, 2);
+  assert.strictEqual(sub.length, 3, "the reason, the consequence, and what New session pre-selects");
   assert.ok(!sub[1].className.includes("pfv-red"));
+  assert.strictEqual(sub[2].textContent, "New session pre-selects: Box · in place");
   assert.strictEqual(sub[1].textContent, "Until it is, sessions start on this machine, uncontained.");
 });
 
@@ -3088,7 +3091,7 @@ test("a list row that says box over a stored host: the page reads On this machin
   await t.box.pfvShow("runbook-host");
   assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["host"]);
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
-  assert.ok(!blockOf(t, "cloud"), "a host profile has no Cloud block");
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-applies"), ["Applies to Box"], "a host profile shows its Cloud block, tagged");
   clickBtn(blockOf(t, "agent"), "Edit");
   pickModel(t, "claude-sonnet-5");
   await saveBlock(t, "agent");
@@ -3126,7 +3129,7 @@ test("after a host switch whose list refetch gave back the old row, the page rea
   assert.strictEqual(t.box.profiles.find((p) => p.name === "aws-ops").runtime, "box", "the list row is stale");
   assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["host"], "the page reads the stored tier");
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
-  assert.ok(!blockOf(t, "cloud"), "no Cloud block on a host profile");
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-applies"), ["Applies to Box"], "the Cloud block of a host profile is tagged, not hidden");
   clickBtn(blockOf(t, "agent"), "Edit");
   pickModel(t, "claude-sonnet-5");
   await saveBlock(t, "agent");
@@ -4099,7 +4102,7 @@ test("Switch to box opens Runs in with Box chosen and the line for it; nothing i
   const asked = recordAsks(t, true);
   t.box.loadProfiles = async () => { t.box.profiles = t.box.profiles.map((p) => (p.name === "runbook-host" ? Object.assign({}, p, { runtime: "box" }) : p)); return true; };
   await t.box.pfvShow("runbook-host");
-  assert.strictEqual(byText(t.els["pfv-in"], "button", "+ Add access").length + byText(t.els["pfv-in"], "button", "+ Add folder or domain").length, 0, "a host profile has no + Add");
+  assert.strictEqual(byText(t.els["pfv-in"], "button", "+ Add access").length + byText(t.els["pfv-in"], "button", "+ Add folder or domain").length, 2, "a host profile offers + Add too: its Cloud and Also reachable are tagged, not hidden");
   byText(t.els["pfv-in"], "button", "Switch to box")[0].click();
   assert.ok(blockOf(t, "runs").className.includes("pfv-editing"));
   assert.strictEqual(field(t, "tier-box").checked, true);
@@ -5167,7 +5170,7 @@ test("Create sends the three inputs through POST and lands on the new profile's 
   assert.deepStrictEqual(texts(root, "pfv-next-h"), ["Next, if this agent needs them"]);
   assert.deepStrictEqual(texts(root, "pfv-next-t"), ["Add cloud access", "Pick a model", "Add a folder it can read"]);
   assert.deepStrictEqual(texts(root, "pfv-next-d"), ["AWS, GitHub or a token", "Claude Code's default until you do", "Read only, outside the workspace"]);
-  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
+  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Can reach", "Advanced"]);
   // It is in the nav, and the picker of the New page is gone.
   assert.ok(byCls(t.els["pf-navlist"], "pfv-ni-name").map((n) => n.textContent).includes("payments-readonly"));
   assert.strictEqual(t.box.pickers[0].destroyed, true);
@@ -6321,7 +6324,7 @@ test("the edited block renders as its own card: the blocks before, the editing o
   assert.strictEqual(byCls(root, "pfv-sheet").length, 1, "read view: one card");
   clickBtn(blockOf(t, "agent"), "Edit");
   const sheets = byCls(root, "pfv-sheet");
-  assert.deepStrictEqual(sheets.map(ids), [["runs", "workspace"], ["agent"], ["cloud", "reachable", "network", "advanced"]]);
+  assert.deepStrictEqual(sheets.map(ids), [["runs", "workspace"], ["agent"], ["cloud", "reachable", "network", "canreach", "advanced"]]);
   assert.strictEqual(blockOf(t, "agent").parent, sheets[1], "the editing section sits alone in its card");
   assert.strictEqual(byCls(sheets[1], "pfv-foot").length, 1, "its foot is inside that card");
   assert.deepStrictEqual(sheets.map((s) => s.parent), [root, root, root], "the three cards are siblings, in order, under the heading");
@@ -6330,13 +6333,13 @@ test("the edited block renders as its own card: the blocks before, the editing o
   // The first block and the last block: two cards, the editing one at the end it is at.
   clickBtn(blockOf(t, "agent"), "Cancel");
   clickBtn(blockOf(t, "runs"), "Edit");
-  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs"], ["workspace", "agent", "cloud", "reachable", "network", "advanced"]]);
+  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs"], ["workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]]);
   clickBtn(blockOf(t, "runs"), "Cancel");
   clickBtn(blockOf(t, "advanced"), "Edit");
-  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs", "workspace", "agent", "cloud", "reachable", "network"], ["advanced"]]);
+  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach"], ["advanced"]]);
   assert.strictEqual(blockOf(t, "advanced").parent, byCls(root, "pfv-sheet")[1]);
   clickBtn(blockOf(t, "advanced"), "Cancel");
-  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]], "closed: one card again");
+  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]], "closed: one card again");
 });
 
 test("two blocks open at once are two cards: a refusal opens a second form under the first", async () => {
@@ -6346,7 +6349,7 @@ test("two blocks open at once are two cards: a refusal opens a second form under
   t.run("pfvOpenRepair('cloud')");
   t.run("pfvRender()");
   const sheets = byCls(t.els["pfv-in"], "pfv-sheet");
-  assert.deepStrictEqual(sheets.map((s) => s.children.map((b) => b.dataset.block)), [["runs", "workspace"], ["agent"], ["cloud"], ["reachable", "network", "advanced"]]);
+  assert.deepStrictEqual(sheets.map((s) => s.children.map((b) => b.dataset.block)), [["runs", "workspace"], ["agent"], ["cloud"], ["reachable", "network", "canreach", "advanced"]]);
 });
 
 test("the foot of a block in a narrow card is still the last child of its section, whichever block it is", async () => {
@@ -6421,4 +6424,25 @@ test("a hint in the New profile's 'Where it runs' fieldset is a direct child of 
   for (const root of [rootOf(t), rootOf(n)]) for (const c of byCls(root, "pfv-choice")) {
     assert.deepStrictEqual(c.children.filter((x) => x instanceof Node && !isCard(x) && x.tag !== "legend").map((x) => classesOf(x)[0]), c.children.filter((x) => x instanceof Node && classesOf(x)[0] === "pfv-hint").map(() => "pfv-hint"));
   }
+});
+
+// Task 2 (#340 S4): a section, a row and an Advanced entry say which tier they apply to, in words, as a neutral tag after the label or name.
+test("a tagged block, row and Advanced entry draw Applies to ...", () => {
+  const t = page();
+  const tags = (n) => byCls(n, "pfv-applies");
+  const block = (applies) => ({ id: "cloud", label: "Cloud and tokens", applies, edit: false, add: "", rows: [], count: 0, note: "", lines: ["Nothing yet"] });
+  const boxed = t.box.pfvDrawBlock(block("box"), []);
+  const label = byCls(boxed, "pfv-label")[0];
+  assert.strictEqual(label.tag, "h3");
+  assert.strictEqual(labelName(label), "Cloud and tokens");
+  assert.deepStrictEqual(tags(label).map((n) => [n.tag, n.textContent]), [["span", "Applies to Box"]]);
+  assert.strictEqual(tags(t.box.pfvDrawBlock(block(""), [])).length, 0, "an untagged block has none");
+  assert.strictEqual(tags(t.box.pfvDrawBlock(block(undefined), [])).length, 0);
+  const row = { kind: "Starting environment", name: "clean", sub: "", scope: "No secrets", tag: "", missing: false, applies: "host" };
+  const drawn = t.box.pfvDrawRow(row, []);
+  assert.deepStrictEqual(tags(drawn).map((n) => n.textContent), ["Applies to Host"]);
+  assert.strictEqual(tags(t.box.pfvDrawRow(Object.assign({}, row, { applies: "" }), [])).length, 0);
+  const adv = t.box.pfvDrawAdvanced({ id: "advanced", label: "Advanced", applies: "", edit: true, add: "", rows: [row, { kind: "Arguments", name: "--x", sub: "", scope: "", tag: "", missing: false, applies: "" }], count: 2, note: "", lines: ["x"], open: true, status: "2 set" }, []);
+  const dds = adv.all((n) => n.tag === "dd");
+  assert.deepStrictEqual(dds.map((d) => tags(d).map((n) => n.textContent)), [["Applies to Host"], []]);
 });
