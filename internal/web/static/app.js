@@ -4438,7 +4438,7 @@ function applyProfileCwd() {
   if (!p.default_cwd) {
     const again = spawnCwdReselect({
       source: spawnWsSource, prefill: spawnWsPrefill, cwd: getCwd(), text: $("spawn-ws-input").value,
-      profile: p, last: loadLastSpawn(), workspaces: workspacesCache, tier: segValue($("runtime-seg")), skipScratch: drawerDesktop(),
+      profile: p, last: loadLastSpawn(), workspaces: workspacesCache, tier: spawnWhere().runtime || "", skipScratch: drawerDesktop(),
     });
     if (!again) {
       // The folder stays (the user's), and it is no more the previous source's: the help line must stop claiming it.
@@ -5815,7 +5815,7 @@ function initSpawnWsPicker() {
     inline: drawerDesktop,
     lastUsed: () => { const l = loadLastSpawn(); return l && typeof l.cwd === "string" ? l.cwd : ""; },
     idleText: spawnWsCaption,
-    filter: (path) => { const f = spawnVMFilterFor(segValue($("runtime-seg")), spawnVMFilter); return f ? f(path) : true; },
+    filter: (path) => { const f = spawnVMFilterFor(spawnWhere().runtime || "", spawnVMFilter); return f ? f(path) : true; },
   });
   input.addEventListener("input", hideSpawnNotShared);
 }
@@ -5828,7 +5828,7 @@ const spawnVMLatest = spawnLatest();
 // list is redrawn, so a filter that arrives (or a runtime that changes) after the list opened shows at once.
 function syncSpawnVMFilter() {
   const help = $("spawn-ws-vmhelp");
-  const on = !!spawnVMFilterFor(segValue($("runtime-seg")), spawnVMFilter);
+  const on = !!spawnVMFilterFor(spawnWhere().runtime || "", spawnVMFilter);
   if (help) {
     if (on) help.textContent = SPAWN_VM_SEES_HELP;
     help.hidden = !on;
@@ -5906,6 +5906,7 @@ function getCwd() { return spawnWsPicker ? spawnWsPicker.value() : ""; }
 // profile default, the last-spawn fallback) so the box/host copy and the
 // unboxable-workspace warning never lag behind what will actually be spawned.
 function onSpawnCwdChanged() {
+  renderTierPick(); // the cards name the workspace, and a clone profile's pre-selection follows it
   hideSpawnNotShared();
   updateTierExplain();
   updateRuntimeWarning();
@@ -6034,7 +6035,9 @@ function syncRuntimeField() {
   const explain = $("tier-explain");
   if (explain) explain.style.display = shown;
   const value = spawnRuntimeDefault(currentProfile(), boxRuntime);
-  buildSeg(seg, runtimeSegChoices(), value, updateRuntimeWarning);
+  buildSeg(seg, runtimeSegChoices(), value, tierSegChanged);
+  tierReset(); // a profile change forgets the card the user picked
+  renderTierPick();
   updateRuntimeWarning(); // whether the picked cwd is boxable depends on the tier too
 }
 
@@ -6096,7 +6099,10 @@ function syncSpawnExtras(resetReplies) {
 function applySpawnPrefill(pf) {
   if (pf.cwd) setSpawnCwd(pf.cwd);
   const seg = $("runtime-seg");
-  if (pf.runtime && boxRuntime && seg) setSegValue(seg, pf.runtime);
+  if (pf.runtime && boxRuntime && seg) {
+    setSegValue(seg, pf.runtime);
+    tierApplyRuntime(pf.runtime, pf.clone); // a duplicate keeps its card (the open's profile reset ran before this)
+  }
   for (const ctrl of $("spawn").querySelectorAll("[data-key]")) {
     const k = ctrl.dataset.key;
     if (!Object.prototype.hasOwnProperty.call(pf.options, k)) continue;
@@ -6119,7 +6125,7 @@ let spawnPromptDraft = "";
 function updateSpawnBoxOwned() {
   const el = $("spawn-ws-owned");
   if (!el) return;
-  const host = (metaLoaded && !boxRuntime) || segValue($("runtime-seg")) === "host";
+  const host = (metaLoaded && !boxRuntime) || spawnWhere().runtime === "host";
   const hit = spawnBoxOwnedHit(getCwd(), host ? "host" : "box", profiles);
   el.textContent = hit ? spawnBoxOwnedLine(hit) : "";
   el.hidden = !hit;
@@ -6149,7 +6155,7 @@ function updateRuntimeWarning() {
     warn.hidden = true;
     return;
   }
-  if (segValue(seg) === "host") {
+  if (spawnWhere().runtime === "host") {
     warn.hidden = false;
     warn.textContent = "Runs on your host with your user's full access: files, keys, network.";
     return;
@@ -6238,7 +6244,7 @@ async function openSpawnDialog(preselectAgent, prefill) {
   // last cwd that is unusable on this tier is still restored; the warning below
   // names why, so choosing box vs. host stays the user's call, not a silent discard.
   // The source rides along: the help line under the field names it.
-  const choice = spawnCwdChoice({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")), skipScratch: drawerDesktop() });
+  const choice = spawnCwdChoice({ profile: currentProfile(), last, workspaces: workspacesCache, tier: spawnWhere().runtime || "", skipScratch: drawerDesktop() });
   setSpawnCwd(choice.cwd, choice.source);
   if (prefill) {
     if (want === prefill.agent) applySpawnPrefill(prefill);
@@ -6530,9 +6536,10 @@ $("spawn").addEventListener("submit", async (ev) => {
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
+  const w = spawnWhere();
   const req = spawnPayload({
-    agent: $("agent").value, name: $("sess-name").value, cwd: getCwd(), options: getOptions(),
-    runtime: segValue($("runtime-seg")), prompt: $("spawn-prompt").value,
+    agent: $("agent").value, name: $("sess-name").value, cwd: spawnCwdFor(w), options: getOptions(),
+    runtime: w.runtime || "", clone: w.clone, prompt: $("spawn-prompt").value,
     replyable: $("spawn-replyable").checked, profile: currentProfile(),
     account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
   });

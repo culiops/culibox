@@ -2300,6 +2300,35 @@
   #spawn .seg button:hover { color: var(--fg); background: var(--hover); }
   #spawn .seg button.on { background: var(--raise); color: var(--fg); }
   #spawn .seg button.dgr.on { background: var(--red-tint); color: var(--red); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .45); }
+  /* Where it runs (#340 S3): three cards (tierpick.js) in place of the Containment seg. The seg stays in the page, hidden, because the
+     phone's seg is the same control on a narrow screen (spawnWhere reads one or the other); the label reads "Where it runs" here and
+     "Containment" on the phone. The row takes both columns: a card is a sentence, not a button. Classes are tp-prefixed (the mockup's
+     rb/ti2/tn/xdft/td/k/v/why), so they cannot collide in the shared stylesheets. */
+  #spawn #runtime-row > #runtime-seg { display: none; }
+  #spawn #runtime-row .tp-lbl-ph { display: none; }
+  #spawn #runtime-row .tp-lbl { display: inline; }
+  #spawn > #runtime-row { grid-column: 1 / -1; }
+  #spawn #runtime-row > .tierpick { display: flex; flex-direction: column; gap: 6px; }
+  #spawn .tierpick .tp { display: grid; grid-template-columns: 18px 16px minmax(0, 1fr); column-gap: 8px; align-items: start; padding: 9px 12px;
+                         border: 1px solid var(--line); border-radius: var(--r-ctl); background: transparent; color: var(--fg); text-align: left; cursor: pointer; font: inherit; }
+  #spawn .tierpick .tp:hover { background: var(--hover); }
+  #spawn .tierpick .tp.on { border-color: var(--accent); background: var(--raise); }
+  #spawn .tierpick .tp .tp-rb { width: 14px; height: 14px; margin-top: 2px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--faint); }
+  #spawn .tierpick .tp.on .tp-rb { box-shadow: inset 0 0 0 4px var(--accent); }
+  #spawn .tierpick .tp .tp-i { display: flex; margin-top: 2px; color: var(--muted); }
+  #spawn .tierpick .tp .tp-n { font-weight: var(--w-semibold); font-size: var(--t-md); }
+  #spawn .tierpick .tp .tp-n .tp-dflt { font-weight: var(--w-regular); color: var(--muted); font-size: var(--t-xs); margin-left: 6px; }
+  #spawn .tierpick .tp .tp-d { grid-column: 3; display: grid; grid-template-columns: 112px minmax(0, 1fr); column-gap: 10px; row-gap: 1px; margin-top: 4px; font-size: var(--t-sm); }
+  #spawn .tierpick .tp .tp-d .tp-k { color: var(--muted); }
+  #spawn .tierpick .tp .tp-d .tp-v { color: var(--fg); }
+  #spawn .tierpick .tp .tp-d .tp-v b { font-weight: var(--w-semibold); }
+  #spawn .tierpick .tp .tp-d code { font-family: var(--font-mono); font-size: var(--t-xs); }
+  #spawn .tierpick .tp.dis { cursor: not-allowed; opacity: .55; }
+  #spawn .tierpick .tp.dis:hover { background: transparent; }
+  #spawn .tierpick .tp .tp-why, #spawn .tierpick .tp .tp-vm { grid-column: 3; margin-top: 4px; font-size: var(--t-sm); color: var(--fg); }
+  #spawn .tierpick .tp .tp-why { display: flex; gap: 6px; align-items: flex-start; }
+  #spawn .tierpick .tp .tp-why svg { flex: none; margin-top: 3px; color: var(--muted); }
+  #spawn .tierpick .tp .tp-vm { color: var(--muted); }
   /* The host warning (M4.2) is the kit's .elev: a red tint, 8px 12px, a bold red "host" before the sentence. The label is
      drawn here, desktop only, so the phone's box keeps its one sentence, and only while host is the chosen tier: the same
      box also says "<dir> cannot be boxed" on the box tier, which is not a host warning. An empty row would still take a
@@ -2310,7 +2339,7 @@
     color: var(--fg); font-size: var(--t-sm); line-height: var(--lh-md);
   }
   #spawn #spawn-warn-row #runtime-warn[hidden] { display: none; }
-  #spawn:has(#runtime-seg button.dgr.on) #spawn-warn-row #runtime-warn::before { content: "host"; color: var(--red); font-weight: var(--w-semibold); }
+  #spawn:has(#tierpick .tp-host.on) #spawn-warn-row #runtime-warn::before { content: "host"; color: var(--red); font-weight: var(--w-semibold); }
   #spawn-warn-row { margin-top: -4px; }
   #spawn-warn-row:not(:has(> #runtime-warn:not([hidden]))) { display: none; }
   .spawn-lbl-model { display: inline; }

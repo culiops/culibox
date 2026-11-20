@@ -1,8 +1,8 @@
 "use strict";
 
 // Where a new session runs, on the desktop New session dialog: three cards (Box · in place, Box · clone, Host).
-// This part is pure. It decides which card is picked, which are disabled and why, and what each card says.
-// Nothing here reads the page.
+// The first part is pure: it decides which card is picked, which are disabled and why, and what each card says.
+// The part after it (renderTierPick and the picks) is the only code that reads the page.
 //
 // Loaded as a classic script, so top-level names are shared globals: they are tier-/tp-prefixed on purpose.
 
@@ -119,6 +119,147 @@ function tierModel(o) {
     vm: o.vmStopped && key !== "host" ? TP_VM_LINE : "",
   }));
   return { pick, dflt, cards };
+}
+
+// --- the DOM part -------------------------------------------------------------------------------------------------
+// Everything below reads the page (the dialog's globals from app.js, spawnpanel.js, profileform.js and svgicon.js) and draws
+// #tierpick. Strings go in through textContent only.
+
+// The card the user picked, "" until they do. It stands unless its card becomes disabled (tierModel), and a profile change forgets it.
+let tierPicked = "";
+// The Box VM is stopped (the S1 /api/vm-state); a Box card then says starting it takes about a minute.
+let tierVmStopped = false;
+
+// The mockup's Lucide icons (24x24, stroke 2): package, copy, triangle-alert; and the lock before a disabled reason.
+const TP_ICONS = {
+  box: [
+    ["path", { d: "M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" }],
+    ["path", { d: "m3.3 7 8.7 5 8.7-5" }],
+    ["path", { d: "M12 22V12" }],
+  ],
+  clone: [
+    ["rect", { width: "14", height: "14", x: "8", y: "8", rx: "2" }],
+    ["path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" }],
+  ],
+  host: [
+    ["path", { d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" }],
+    ["path", { d: "M12 9v4" }],
+    ["path", { d: "M12 17h.01" }],
+  ],
+};
+const TP_LOCK_ICON = [
+  ["rect", { width: "18", height: "11", x: "3", y: "11", rx: "2" }],
+  ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }],
+];
+
+function tierEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function tierIcon(shapes, size) {
+  return svgIcon(shapes, { viewBox: "0 0 24 24", strokeWidth: "2", size });
+}
+
+// tierCard: one button for one model card. It reads the card and never changes it (the box and clone cards share a row object).
+function tierCard(c) {
+  const b = tierEl("button", "tp tp-" + c.key + (c.on ? " on" : "") + (c.disabled ? " dis" : ""));
+  b.type = "button";
+  b.setAttribute("type", "button");
+  b.setAttribute("aria-pressed", c.on ? "true" : "false");
+  if (c.disabled) {
+    b.disabled = true;
+    b.setAttribute("aria-disabled", "true");
+  }
+  b.onclick = () => tierPick(c.key);
+  const ic = tierEl("span", "tp-i");
+  ic.append(tierIcon(TP_ICONS[c.key], "14"));
+  const name = tierEl("span", "tp-n", c.title);
+  if (c.dflt) name.append(tierEl("span", "tp-dflt", "profile default"));
+  const rows = tierEl("span", "tp-d");
+  for (const r of c.rows) {
+    const v = tierEl("span", "tp-v");
+    for (const s of r.v) {
+      if (s.b !== undefined) v.append(tierEl("b", "", s.b));
+      else if (s.code !== undefined) v.append(tierEl("code", "", s.code));
+      else v.append(document.createTextNode(s.t));
+    }
+    rows.append(tierEl("span", "tp-k", r.k), v);
+  }
+  b.append(tierEl("span", "tp-rb"), ic, name, rows);
+  if (c.disabled && c.why) {
+    const why = tierEl("div", "tp-why");
+    why.append(tierIcon(TP_LOCK_ICON, "12"), tierEl("span", "", c.why));
+    b.append(why);
+  }
+  if (c.vm) b.append(tierEl("div", "tp-vm", c.vm));
+  return b;
+}
+
+// renderTierPick: redraw the three cards from the live dialog. Not drawn without a box layer.
+function renderTierPick() {
+  const el = $("tierpick");
+  if (!el || !boxRuntime) return;
+  const m = tierModel({
+    profile: currentProfile(), cwd: getCwd(), home: window.HOME_DIR || "", picked: tierPicked,
+    cloneUnavailable, vmStopped: tierVmStopped, short: shortPath,
+  });
+  el.replaceChildren(...m.cards.map(tierCard));
+  el.dataset.value = m.pick;
+}
+
+// tierPick: a click on a card. Box · in place on a clone profile whose workspace is the clone dir moves the workspace to the repo
+// the clone was made from (that is what "in place" edits), in the field and in the request.
+function tierPick(key) {
+  tierPicked = key;
+  const p = currentProfile() || {};
+  if (key !== "clone" && p.clone_of && tierSamePath(getCwd(), p.default_cwd, window.HOME_DIR || "")) {
+    setSpawnCwd(p.clone_of, "");
+    onSpawnCwdChanged();
+  }
+  setSegValue($("runtime-seg"), tierWhere(key).runtime);
+  renderTierPick();
+  updateRuntimeWarning();
+  syncSpawnCopyLine();
+  syncSpawnPreview();
+}
+
+// tierSegChanged: the phone's seg changed. Host is host; Box keeps a clone card.
+function tierSegChanged(v) {
+  tierPicked = v === "host" ? "host" : (tierPicked === "clone" ? "clone" : "box");
+  renderTierPick();
+  updateRuntimeWarning();
+}
+
+// tierReset: a profile change forgets the pick; the cards pre-select again.
+function tierReset() {
+  tierPicked = "";
+}
+
+// tierApplyRuntime: a Duplicate keeps its card. `clone` is whether the session it copies was a clone.
+function tierApplyRuntime(rt, clone) {
+  if (rt === "host") tierPicked = "host";
+  else if (rt === "box" && clone === true) tierPicked = "clone";
+  else if (rt === "box" && clone === false) tierPicked = "box";
+  else tierPicked = "";
+  renderTierPick();
+}
+
+// spawnWhere: the ONE reader of where the dialog's session runs. No box layer: {}, nothing about the tier is sent. The desktop reads
+// the cards ({runtime, clone}); the phone reads its seg, runtime only, so the profile still decides clone.
+function spawnWhere() {
+  if (!boxRuntime) return {};
+  if (drawerDesktop()) return tierWhere($("tierpick").dataset.value);
+  const v = segValue($("runtime-seg"));
+  return v ? { runtime: v } : {};
+}
+
+// spawnCwdFor: the folder the request names. A clone session starts in the profile's clone dir; every other card in the workspace.
+function spawnCwdFor(w) {
+  if (w && w.clone) return (currentProfile() || {}).default_cwd || getCwd();
+  return getCwd();
 }
 
 if (typeof module !== "undefined" && module.exports) {

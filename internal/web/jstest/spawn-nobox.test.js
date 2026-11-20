@@ -153,6 +153,7 @@ function dialog(over) {
     drawerDesktop: () => ctx.desktop,
     currentProfile: () => ctx.profile,
     segValue: () => ctx.tier,
+    spawnWhere: () => ({ runtime: ctx.tier }),
     $: (id) => els[id] || (id === "spawn" ? { querySelector: () => go } : null),
     setDialogError: (_id, msg) => { err.textContent = msg || ""; },
     ...over,

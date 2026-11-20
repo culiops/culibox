@@ -30,12 +30,12 @@ function spawnPanelEl(tag, cls, text) {
 // session is host, whatever the profile says.
 function spawnCurrentTier() {
   if (!boxRuntime) return "host";
-  return segValue($("runtime-seg")) === "host" ? "host" : "box";
+  return spawnWhere().runtime === "host" ? "host" : "box";
 }
 
 // spawnGateInput: what spawnBoxGate reads, from the page's own state.
 function spawnGateInput() {
-  return { profile: currentProfile(), metaLoaded, boxRuntime, boxUnavailableReason, boxDaemonReason, tier: segValue($("runtime-seg")) };
+  return { profile: currentProfile(), metaLoaded, boxRuntime, boxUnavailableReason, boxDaemonReason, tier: spawnWhere().runtime || "" };
 }
 
 // The sentence a blocked submit wrote on the dialog's error line (spawnGateErr), so syncSpawnGate clears it, and only it, once the
@@ -316,8 +316,10 @@ function syncSpawnCopyLine() {
   const line = wmCopyLine(p.clone_of || "", window.HOME_DIR);
   // The suffix is workHomeSuffix's alone; no profile means no line at all.
   const text = line ? line + workHomeSuffix(p, !!(p.clone_of && p.github_write)) : "";
-  el.textContent = text;
-  el.hidden = text === "";
+  // Box · in place edits the repo itself, not a private copy: on the desktop the line has nothing to say. The phone's is as it was.
+  const inPlace = drawerDesktop() && spawnWhere().clone === false;
+  el.textContent = inPlace ? "" : text;
+  el.hidden = inPlace || text === "";
 }
 
 // spawnPanelOpen: the dialog is about to show. Build the list, paint the box from

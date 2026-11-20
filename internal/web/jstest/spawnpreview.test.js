@@ -944,7 +944,7 @@ function captionPage(over) {
     onSpawnCwdChanged: () => { ctx.changed = (ctx.changed || 0) + 1; }, spawnWsNoteFor, spawnWsIdleNote,
     // applyProfileCwd's inputs: the box's text, the remembered last spawn, the roots, the tier, and the pure choice.
     $: (id) => (id === "spawn-ws-input" ? { value: picker.typed === null ? picker.v : picker.typed } : null),
-    loadLastSpawn: () => ctx.last, last: null, workspacesCache: WS, segValue: () => ctx.tier, tier: "host", spawnCwdReselect,
+    loadLastSpawn: () => ctx.last, last: null, workspacesCache: WS, segValue: () => ctx.tier, spawnWhere: () => ({ runtime: ctx.tier }), tier: "host", spawnCwdReselect,
   }, over));
   vm.runInContext("let spawnWsSource = '', spawnWsPrefill = '';\n" + ["setSpawnCwd", "spawnWsCaption", "getCwd", "applyProfileCwd"].map(appFn).join("\n"), ctx);
   return { ctx, picker, state: () => Array.from(vm.runInContext("[spawnWsSource, spawnWsPrefill]", ctx)) };
@@ -1059,7 +1059,7 @@ test("New session builds its picker inline, with the last used folder and the so
   assert.match(init, /lastUsed:\s*\(\) =>[^}]*loadLastSpawn\(\)/);
   assert.match(init, /idleText:\s*spawnWsCaption\b/);
   const open = appFn("openSpawnDialog");
-  assert.match(open, /const choice = spawnCwdChoice\(\{ profile: currentProfile\(\), last, workspaces: workspacesCache, tier: segValue\(\$\("runtime-seg"\)\), skipScratch: drawerDesktop\(\) \}\);/);
+  assert.match(open, /const choice = spawnCwdChoice\(\{ profile: currentProfile\(\), last, workspaces: workspacesCache, tier: spawnWhere\(\)\.runtime \|\| "", skipScratch: drawerDesktop\(\) \}\);/);
   assert.match(open, /setSpawnCwd\(choice\.cwd, choice\.source\);/);
   assert.match(open, /spawnWsPicker\.showIdleNote\(\)/);
   assert.ok(open.indexOf("setSpawnCwd(choice.cwd") < open.indexOf("spawnWsPicker.showIdleNote()"));
