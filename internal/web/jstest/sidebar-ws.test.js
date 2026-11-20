@@ -370,3 +370,47 @@ test("+ CSS: hidden until hover or focus, always shown without hover", () => {
   assert.ok(desktopAt >= 0 && noHoverAt > desktopAt, "nested after the desktop block opens");
   assert.match(m[1], /#sessions \.wsh \.wplus\s*\{\s*opacity:\s*1;\s*\}/);
 });
+
+// Task 6: only Mod+digit and the palette's digit hints skip a collapsed group. The palette's list, the
+// rail, the attention chip and Mod+Shift+J keep every session.
+test("Mod+digit numbers the visible rows: a collapsed group is skipped", () => {
+  const src = read("app.js");
+  const at = src.indexOf('bindShortcut("session.jump"');
+  assert.ok(at >= 0, "session.jump handler");
+  const handler = src.slice(at, src.indexOf("\n});", at));
+  assert.ok(handler.includes("jumpOrder(lastSessions, ctx.mobile, deskWsCollapsed)"), "jump reads the visible order");
+});
+
+test("the palette lists every session and numbers only the visible ones", () => {
+  const sess = (id, root) => ({ id, name: id, cwd: root, workspace_root: root });
+  const ctx = vm.createContext({
+    lastSessions: [sess("a1", "/r/a"), sess("a2", "/r/a"), sess("b1", "/r/b"), sess("b2", "/r/b")],
+    jumpOrder: desk.jumpOrder,
+    deskWsCollapsedSet: () => new Set(["/r/a"]),
+    mobileActive: () => false,
+    window: { innerWidth: 1280 },
+    palReg: () => ({ jumpHint: (n) => "K" + n }),
+    shortPath: (p) => p,
+    palSessionDot: () => ({ cls: "dot", title: "" }),
+    palSessionSub: () => "",
+    palSessionMatchText: (s) => s.name,
+    palSessionRun: () => () => {},
+    isNestedShell: () => false,
+    openTerminal: () => {},
+    revealShell: () => {},
+  });
+  vm.runInContext(fnSrc(read("palette.js"), "paletteSessions") + "\nglobalThis.paletteSessions = paletteSessions;", ctx);
+  const rows = ctx.paletteSessions(false);
+  assert.deepStrictEqual(Array.from(rows, (r) => r.label), ["a1", "a2", "b1", "b2"], "every session, in group order");
+  assert.deepStrictEqual(Array.from(rows.slice(2), (r) => r.hint), ["K1", "K2"], "visible rows are numbered from 1");
+  assert.deepStrictEqual(Array.from(rows.slice(0, 2), (r) => r.hint), ["/r/a", "/r/a"], "collapsed rows fall back to their cwd");
+});
+
+test("the rail, the attention chip and Mod+Shift+J read the full order", () => {
+  assert.ok(fnSrc(read("app.js"), "renderRail48").includes("jumpOrder(lastSessions, mobileActive(window.innerWidth))"));
+  assert.ok(fnSrc(read("attnchip.js"), "attnChipSync").includes("jumpOrder(lastSessions, false)"));
+  assert.ok(fnSrc(read("deskshell.js"), "nextNeedsYou").includes("jumpOrder(sessions, false)"));
+  for (const [f, fn] of [["app.js", "renderRail48"], ["attnchip.js", "attnChipSync"], ["deskshell.js", "nextNeedsYou"]]) {
+    assert.ok(!fnSrc(read(f), fn).includes("deskWsCollapsed"), fn + " does not read the collapse state");
+  }
+});

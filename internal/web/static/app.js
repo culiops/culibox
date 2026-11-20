@@ -7963,7 +7963,7 @@ bindShortcut("files.toggle", (e, ctx) => {
 bindShortcut("session.jump", (e, ctx) => {
   const m = /^Digit([1-9])$/.exec(e.code); // .code, not .key: layout-independent under a modifier
   if (!m) return false;
-  const s = jumpTarget(Number(m[1]), jumpOrder(lastSessions, ctx.mobile));
+  const s = jumpTarget(Number(m[1]), jumpOrder(lastSessions, ctx.mobile, deskWsCollapsed));
   // Out of range is a deliberate no-op, not a wrap-around: pressing 7 with four
   // sessions open must not land somewhere arbitrary. The handler still returns
   // true, so the digit is swallowed either way and never falls through to the agent.
