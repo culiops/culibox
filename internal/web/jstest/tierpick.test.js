@@ -654,3 +654,26 @@ test("the account hint is repainted by the cards, the seg, the account select an
   assert.match(appFnSrc("paintSpawnAccount"), /paintSpawnAcctHint\(\)/);
   assert.match(readStatic("app.js"), /\$\("spawn-account"\)\.addEventListener\("change", \(\) => \{ syncSpawnPreview\(\); paintSpawnAcctHint\(\); \}\)/);
 });
+
+test("syncSpawnAccount repaints the account hint after the fetch even when only an account's login_state changed", async () => {
+  const names = (state) => [{ name: "default", default: true, login_state: "logged_in" }, { name: "work", login_state: state }];
+  const pg = acctPage({
+    profile: { name: "claude", account: "work", box_claude_credential: "yes" },
+    accountsCache: names("token"),
+    paintSpawnAccount: () => {}, // the select is not under test: the row stays hidden, so the chosen account is the profile's own
+    fetchAccounts: async () => { pg.ctx.accountsCache = names("token_locked"); }, // same names, one login_state different
+  });
+  pg.row.hidden = true;
+  vm.runInContext(appFnSrc("syncSpawnAccount"), pg.ctx);
+  pg.run("paintSpawnAcctHint()");
+  assert.strictEqual(pg.hint.hidden, true, "before the fetch the cache says token: nothing to warn about");
+  pg.run("syncSpawnAccount()");
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(pg.hint.hidden, false, "the fetch says token_locked: the hint must follow");
+  assert.ok(pg.hint.textContent.startsWith("This account needs the store unlocked."));
+  // and the reverse: unlocked elsewhere, the stale locked hint clears
+  pg.ctx.fetchAccounts = async () => { pg.ctx.accountsCache = names("token"); };
+  pg.run("syncSpawnAccount()");
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(pg.hint.hidden, true);
+});

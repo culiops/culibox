@@ -6053,7 +6053,12 @@ function syncSpawnAccount(prefillAccount) {
   const before = acctChoices(accountsCache, "").join(",");
   paintSpawnAccount(prefillAccount);
   fetchAccounts().then(() => {
-    if (acctChoices(accountsCache, "").join(",") === before) return;
+    if (acctChoices(accountsCache, "").join(",") === before) {
+      // Same names, so the select stays; but a login_state can have changed (the store locked or unlocked since the last fetch),
+      // and the account hint reads it.
+      paintSpawnAcctHint();
+      return;
+    }
     paintSpawnAccount($("spawn-account-row").hidden ? prefillAccount : $("spawn-account").value);
   });
 }
