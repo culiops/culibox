@@ -572,15 +572,6 @@
     padding: 1px 6px; border-radius: var(--r-chip); white-space: nowrap;
   }
   #side-version[hidden], #side-env[hidden] { display: none; }
-  .side-ctl { display: flex; align-items: center; gap: 4px; }
-  .side-fill { flex: 1; }
-  #side-top .layouts { gap: 3px; }
-  #side-top .layouts button {
-    min-width: 26px; height: 24px; padding: 0 7px; font: 500 var(--t-sm) var(--font-ui); line-height: 1;
-    background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-ctl);
-  }
-  #side-top .layouts button:hover { color: var(--fg); background: var(--raise); }
-  #side-top .layouts button.active { color: var(--accent); background: var(--raise); border-color: var(--accent); }
   /* #side-palette (a drawn magnifier, 14px: the ⌕ glyph is ~7px in fallback fonts) and #side-collapse
      (the « text, which reads) are the kit's .btn .btn-ghost .btn-icon .btn-sm in index.html (m1-1):
      their look is the kit's, not ours. */
@@ -593,6 +584,15 @@
   /* New session is the sidebar's own .pbtn, sized like the kit's .btn: 28px high (--h-ctl), the full width of
      the sidebar's 16px padding (m1-1). */
   #side-new { height: var(--h-ctl); padding: 0 12px; }
+  /* #340 S6 (mockups t1, t2): New session shares its row with the layout button (sidechrome.js), the palette
+     and «. The layout menu is the kit's .menu, in flow under the button; the kit draws its surface. */
+  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; }
+  #side-top .xnewrow #side-new { flex: 1; min-width: 0; margin-right: 4px; }
+  #side-top .xlay-wrap { position: relative; display: inline-flex; }
+  #side-top .xlay svg { display: block; }
+  #side-top .xlay-wrap > .menu.xmenu:has(> .menu-item) { position: absolute; top: calc(100% + 4px); right: 0; z-index: 50; min-width: 180px; }
+  #side-top .xmenu .menu-item.on { color: var(--fg); }
+  #side-top .xmenu .menu-icon svg { color: var(--muted); }
 
   /* --- legacy layout keys (spec 7) ---------------------------------------- */
   /* agent-box:panesCollapsed (pre-paint html classes) and agent-box:sidebarSplit

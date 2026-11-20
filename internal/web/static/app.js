@@ -7531,12 +7531,13 @@ setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);
   anWirePage();
 }
 // Layout buttons 1/2/4 → set the max-window cap (auto-split grows up to it).
-// The header's group (mobile) and the sidebar top's (desktop) are the same control.
+// The header's group (mobile); the sidebar top's layout button and its menu (desktop) are sidechrome.js's.
 for (const grp of document.querySelectorAll(".layouts")) {
   grp.addEventListener("click", (e) => {
     if (e.target.dataset && e.target.dataset.cols) applyCap(Number(e.target.dataset.cols));
   });
 }
+initSideLayout();
 applyCap(4); // default: auto-split up to 4 windows
 initDialogs();
 initSplitter();

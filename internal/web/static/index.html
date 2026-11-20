@@ -55,17 +55,12 @@
           <span id="side-version" hidden></span>
           <span id="side-env" hidden></span>
         </div>
-        <div class="side-ctl">
-          <div class="layouts" id="side-layouts">
-            <button data-cols="1" title="One pane" aria-label="One pane">1</button>
-            <button data-cols="2" title="Two panes" aria-label="Two panes">2</button>
-            <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
-          </div>
-          <span class="side-fill"></span>
+        <div class="xnewrow">
+          <button id="side-new" type="button" class="pbtn">New session</button>
+          <span class="xlay-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm xlay" aria-haspopup="menu" aria-expanded="false" title="Layout: 4 panes (click to change)" aria-label="Layout: 4 panes"></button></span>
           <button id="side-palette" type="button" class="btn btn-ghost btn-icon btn-sm" title="Command palette" aria-label="Command palette"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.2" cy="6.2" r="4"/><path d="M9.2 9.2l3.3 3.3"/></svg></button>
           <button id="side-collapse" type="button" class="btn btn-ghost btn-icon btn-sm" title="Hide sidebar" aria-label="Hide sidebar">&#171;</button>
         </div>
-        <button id="side-new" type="button" class="pbtn">New session</button>
       </div>
       <!-- System banner (Plan 7 Task 7); the store banner (Task 9) has its own slot below it. Both empty and hidden until painted. -->
       <div id="sys-banner-slot" hidden></div>

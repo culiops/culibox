@@ -45,3 +45,143 @@ test("sidechrome.js loads after kitmenu.js and before tabs.js", () => {
   assert.ok(at("kitmenu.js") < at("sidechrome.js"), "after kitmenu.js");
   assert.ok(at("sidechrome.js") < at("tabs.js"), "before tabs.js");
 });
+
+// ---- Task 2: the layout button and its menu, against fakedom.js -------------------------------------
+// fakedom has no document, no createElementNS and no addEventListener: the test's own stand-in adds them.
+// svgicon.js and kitmenu.js are the page's, put on global the way the browser shares one scope.
+const { Node } = require("./fakedom.js");
+const SVG = require("../static/svgicon.js");
+const KM = require("../static/kitmenu.js");
+Object.assign(global, { svgIcon: SVG.svgIcon, svgShape: SVG.svgShape, menuIconSvg: KM.menuIconSvg, kitMenuKeys: KM.kitMenuKeys });
+
+function page() {
+  const doc = { activeElement: null, listeners: [] };
+  doc.createElement = (t) => new Node(t, doc);
+  doc.createElementNS = (ns, t) => doc.createElement(t);
+  doc.body = doc.createElement("body");
+  doc.querySelector = (s) => doc.body.querySelector(s);
+  doc.querySelectorAll = (s) => doc.body.querySelectorAll(s);
+  doc.addEventListener = (type, fn) => doc.listeners.push([type, fn]);
+  global.document = doc;
+  const wrap = doc.createElement("span");
+  wrap.className = "xlay-wrap";
+  const btn = doc.createElement("button");
+  btn.className = "btn btn-ghost btn-icon btn-sm xlay";
+  btn.setAttribute("aria-expanded", "false");
+  wrap.append(btn);
+  const other = doc.createElement("button");
+  doc.body.append(wrap, other);
+  const picked = [];
+  global.cap = 4;
+  global.applyCap = (n) => { picked.push(n); global.cap = n; };
+  return { doc, wrap, btn, other, picked, menu: () => wrap.querySelector(".xmenu") };
+}
+
+test("xlayPaint draws the glyph and the words for 1, 2 and 4", () => {
+  const { btn } = page();
+  SC.xlayPaint(btn, 2);
+  assert.equal(btn.children.length, 1);
+  const svg = btn.children[0];
+  assert.equal(svg.getAttribute("viewBox"), "0 0 24 24");
+  assert.equal(svg.getAttribute("stroke-width"), "2");
+  assert.equal(svg.children.length, 2);
+  assert.equal(btn.getAttribute("title"), "Layout: 2 panes (click to change)");
+  assert.equal(btn.getAttribute("aria-label"), "Layout: 2 panes");
+  SC.xlayPaint(btn, 1);
+  assert.equal(btn.children.length, 1, "a repaint replaces the glyph");
+  assert.equal(btn.children[0].children.length, 1);
+  assert.equal(btn.getAttribute("title"), "Layout: 1 pane (click to change)");
+  SC.xlayPaint(btn, 4);
+  assert.equal(btn.children[0].children.length, 3);
+  assert.equal(btn.getAttribute("aria-label"), "Layout: 4 panes");
+});
+
+test("xlayMenuBuild: three radio items, the current one ticked", () => {
+  page();
+  const got = [];
+  const m = SC.xlayMenuBuild(2, (n) => got.push(n));
+  assert.equal(m.getAttribute("role"), "menu");
+  assert.equal(m.getAttribute("aria-label"), "Layout");
+  assert.ok(m.classList.contains("menu") && m.classList.contains("xmenu"));
+  assert.equal(m.children[0].className, "menu-label grp-label");
+  assert.equal(m.children[0].textContent, "Layout");
+  const items = m.querySelectorAll(".menu-item");
+  assert.equal(items.length, 3);
+  assert.deepEqual(items.map((b) => b.getAttribute("role")), ["menuitemradio", "menuitemradio", "menuitemradio"]);
+  assert.deepEqual(items.map((b) => b.querySelector(".menu-text").textContent), ["1 pane", "2 panes", "4 panes"]);
+  assert.deepEqual(items.map((b) => b.getAttribute("aria-checked")), ["false", "true", "false"]);
+  assert.deepEqual(items.map((b) => b.classList.contains("on")), [false, true, false]);
+  assert.deepEqual(items.map((b) => b.querySelector(".menu-kbd").children.length), [0, 1, 0]);
+  assert.deepEqual(items.map((b) => b.querySelector(".menu-icon svg").children.length), [1, 2, 3], "each row draws its own layout");
+  items[2].click();
+  assert.deepEqual(got, [4]);
+});
+
+test("xlay menu: Esc closes it, refocuses the button and prevents the default", () => {
+  const p = page();
+  global.cap = 2;
+  SC.initSideLayout();
+  p.btn.click();
+  assert.ok(p.menu(), "open");
+  assert.equal(p.btn.getAttribute("aria-expanded"), "true");
+  assert.equal(p.doc.activeElement, p.menu().querySelectorAll(".menu-item")[1], "focus starts on the ticked row");
+  let prevented = 0;
+  SC.xlayWrapKeydown({ key: "Escape", preventDefault: () => prevented++ });
+  assert.equal(p.menu(), null);
+  assert.equal(p.btn.getAttribute("aria-expanded"), "false");
+  assert.equal(prevented, 1);
+  assert.equal(p.doc.activeElement, p.btn);
+  assert.deepEqual(p.picked, []);
+});
+
+test("xlay menu: the button toggles it and a click outside closes it", () => {
+  const p = page();
+  SC.initSideLayout();
+  assert.equal(p.wrap.onkeydown, SC.xlayWrapKeydown);
+  assert.deepEqual(p.doc.listeners, [["click", SC.xlayDocClick]]);
+  p.btn.click();
+  p.btn.click();
+  assert.equal(p.menu(), null, "a second press closes it");
+  assert.equal(p.btn.getAttribute("aria-expanded"), "false");
+  p.btn.click();
+  SC.xlayDocClick({ target: p.other });
+  assert.equal(p.menu(), null, "a click elsewhere closes it");
+  assert.deepEqual(p.picked, [], "without picking");
+  p.btn.click();
+  SC.xlayDocClick({ target: p.btn });
+  assert.ok(p.menu(), "the click that opened it does not close it");
+  // Picking closes the menu, gives focus back to the button, then sets the layout.
+  p.menu().querySelectorAll(".menu-item")[0].click();
+  assert.equal(p.menu(), null);
+  assert.equal(p.doc.activeElement, p.btn);
+  assert.deepEqual(p.picked, [1]);
+  // A repaint from elsewhere (the palette, a restored layout) closes an open menu, so its tick is never stale.
+  p.btn.click();
+  SC.xlayPaint(p.btn, 2);
+  assert.equal(p.menu(), null);
+  assert.equal(p.btn.getAttribute("aria-expanded"), "false");
+});
+
+// fnSrc: one top-level function's source, cut out of a page script by name.
+function fnSrc(src, name) {
+  const m = new RegExp("function " + name + "\\s*\\(").exec(src);
+  assert.ok(m, name + " not found");
+  const open = src.indexOf("{", src.indexOf(")", m.index));
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(m.index, i + 1);
+  }
+  throw new Error("unbalanced braces in " + name);
+}
+
+test("applyCap repaints every .xlay through querySelectorAll", () => {
+  assert.match(fnSrc(read("tabs.js"), "applyCap"), /querySelectorAll\("\.xlay"\)\) xlayPaint\(b, n\)/);
+});
+
+test("boot wires the layout button before the first applyCap", () => {
+  const app = read("app.js");
+  const init = app.indexOf("\ninitSideLayout();");
+  assert.ok(init > 0, "initSideLayout() is called at boot");
+  assert.ok(init < app.indexOf("\napplyCap(4);"), "before applyCap(4) paints it");
+});
