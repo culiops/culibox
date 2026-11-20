@@ -278,3 +278,12 @@ test("G3: the add card's picker opens only on demand (Browse…), never on focus
   const src = fs.readFileSync(path.join(__dirname, "../static/vmfolders.js"), "utf8");
   assert.ok(src.includes("openOnFocus: () => false, openOnClick: () => false, openOnType: () => false"));
 });
+
+test("#341: the Read & write card says boxes can change and delete files there, and stays the default", () => {
+  const src = fs.readFileSync(path.join(__dirname, "../static/vmfolders.js"), "utf8");
+  const call = src.split("\n").find((l) => l.includes('vmfModeCard("rw", "rw", "Read & write"'));
+  assert.ok(call, "the Read & write card is built in vmfBuildCard");
+  assert.ok(call.includes("change and delete"), call);
+  assert.ok(call.includes('mode !== "ro", pick'), "Read & write is on unless the add asked for read only");
+  assert.ok(src.includes('mode: mode === "ro" ? "ro" : "rw"'), "the default mode is rw");
+});

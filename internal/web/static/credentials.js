@@ -2205,8 +2205,10 @@ function awsBuildRow(row) {
   det.appendChild(row.advSummary);
   det.open = !!(row.egress || row.s3 || row.elevRole);
   const adv = awsEl("div", "frow");
-  adv.appendChild(awsField(row, "egress", "Extra hosts the agent may reach", { area: true, full: true, placeholder: "one per line, e.g. *.example.com" }).col);
-  const s3f = awsField(row, "s3", "S3 buckets the agent may read", { area: true, full: true, placeholder: "one per line" });
+  adv.appendChild(awsField(row, "egress", "Extra hosts the agent may reach", { area: true, full: true, placeholder: "one per line, e.g. *.example.com",
+    hint: "Added to the allowed hosts of a box that uses this connection, on top of the defaults (AWS, Anthropic, GitHub, package registries and release hosts)." }).col);
+  const s3f = awsField(row, "s3", "S3 buckets the agent may read", { area: true, full: true, placeholder: "one per line",
+    hint: "The agent may read objects only in these buckets or prefixes (bucket, or bucket/prefix/). Every other S3 object read is denied, so empty means none." });
   adv.appendChild(s3f.col);
   const elf = awsField(row, "elevRole", "Elevate role ARN (optional)", { full: true, repaints: true, placeholder: "arn:aws:iam::<account>:role/<write role>" });
   adv.appendChild(elf.col);
@@ -3612,7 +3614,7 @@ async function credAppForm(entry, opts) {
     if (useFile) {
       const f = credField(uid + "-path", edit ? "Key file (leave empty to keep the current key)" : "Key file", {
         full: true, placeholder: "/home/you/.config/culibox/app.pem",
-        hint: "An absolute path on this host. The daemon reads the file when a session needs a token; nothing is copied into the store.",
+        hint: "An absolute path on this host. The file must be a regular file (not a symlink), owned by the user CuliBox runs as, with no group or other permissions (for example chmod 600). CuliBox reads it the first time a session needs a token and keeps the key until it restarts, so restart it after replacing the file. Nothing is copied into the store.",
       });
       pathEl = f.inp;
       nodes.push(f.col, credEl("p", "hint"));
@@ -3678,7 +3680,7 @@ function credValueForm(replaceId) {
   const grid = credEl("div", "frow");
   const idf = credField(uid + "-id", "Id", {
     value: replaceId || "", readonly: replace, max: 64, full: true, placeholder: "e.g. MY_SERVICE_TOKEN",
-    hint: replace ? "" : "Letters, digits, - and _. A token or GitHub App you add on this screen names its own value; this is for values something else reads, such as a profile secret. An agent account's token is pasted on the Agent accounts tab.",
+    hint: replace ? "" : "Letters, digits, - and _. A token for an agent goes in Add service token, and a GitHub App names its own value; a stored value is for something else that reads the store by this id. An agent account's token is pasted on the Agent accounts tab.",
   });
   const valHost = credEl("div", "fcol full");
   grid.append(idf.col, valHost);

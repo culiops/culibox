@@ -2802,3 +2802,50 @@ test("CSS: the header menu is positioned under its trigger, above the page, and 
   assert.ok(Number(pop.get("z-index")) >= 30);
   assert.strictEqual(cssDecls(CR + ' .cred-add > .btn:where(:not(.pri))[aria-expanded="true"]').get("background"), "var(--raise)");
 });
+
+// --- #341 P1 hints: what a field does, in the Credentials forms ---------------------------------------------------
+
+const hintOf = (root, startsWith) => root.querySelectorAll("p.hint").find((h) => h.textContent.startsWith(startsWith));
+
+test("Set a value: the Id hint sends an agent's token to Add service token and no longer names a profile secret", () => {
+  const p = page({ tab: true });
+  const body = p.byId["creds-body"];
+  vmEval(p, 'credValueForm("")');
+  const hint = hintOf(body, "Letters, digits");
+  assert.ok(hint, "the Id hint is drawn");
+  assert.ok(hint.textContent.includes("Add service token"), hint.textContent);
+  assert.ok(!hint.textContent.includes("profile secret"), hint.textContent);
+  vmEval(p, 'credValueForm("MY_ID")');
+  assert.ok(!hintOf(body, "Letters, digits"), "a replace has a fixed id and no hint");
+});
+
+test("AWS Advanced: extra hosts say they add to the defaults, the S3 field says other reads are denied, and SSO direct hides the S3 one", async () => {
+  const p = page({ tab: true });
+  const { opts } = hostOpts();
+  p.box.reply = awsReply();
+  await awsTick(p, opts, "acme-dev");
+  const hosts = hintOf(opts.host, "Added to the allowed hosts");
+  assert.ok(hosts, "the extra-hosts hint is drawn");
+  assert.ok(/on top of the defaults/.test(hosts.textContent) && hosts.textContent.includes("Anthropic"), hosts.textContent);
+  const s3 = hintOf(opts.host, "The agent may read objects only");
+  assert.ok(s3, "the S3 hint is drawn");
+  assert.ok(/every other S3 object read is denied/i.test(s3.textContent), s3.textContent);
+  const col = (h) => h.closest("div.fcol");
+  assert.strictEqual(col(s3).hidden, false);
+  vmEval(p, 'awsSetMode(awsFlow.rows[0], "sso_direct")');
+  assert.strictEqual(col(s3).hidden, true, "the S3 field and its hint stay hidden in SSO direct mode");
+  assert.strictEqual(col(hosts).hidden, false, "extra hosts still apply there");
+});
+
+test("GitHub App Key file: the hint names the owner, symlink and 600 rules, in add and in edit", async () => {
+  for (const entry of [null, { name: "my-bot", client_id: "Iv1.abc" }]) {
+    const p = page({ tab: true });
+    const { opts } = hostOpts();
+    p.box.reply = credReply();
+    await p.box.credAppForm(entry, opts);
+    opts.host.querySelectorAll("a").find((a) => a.textContent === "Advanced: use a file instead").onclick();
+    const hint = hintOf(opts.host, "An absolute path");
+    assert.ok(hint, (entry ? "edit" : "add") + ": the Key file hint is drawn");
+    for (const w of ["owned by", "symlink", "600", "restart"]) assert.ok(hint.textContent.includes(w), w + ": " + hint.textContent);
+  }
+});
