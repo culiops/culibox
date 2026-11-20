@@ -29,7 +29,18 @@ const PFA_BASES = [
   { value: "clean", label: "Minimal, no secrets (clean)" },
   { value: "login", label: "Your login shell (login)" },
 ];
+// What each starting environment does, from the launcher (baseEnv, curatedBase, argv): every base leaves out the Claude session markers,
+// CuliBox's own AB_* variables and its login password's variable, and clean and login pass on only the names below (TERM is
+// defaulted by the launcher, not copied). A box always starts clean, which the "Applies to Host" chip says. A base not listed here
+// (kept as stored) has no line.
+const PFA_BASE_LINES = {
+  inherit: "Everything in the CuliBox service's environment, keys it holds included. Only CuliBox's own variables and Claude's session markers are left out.",
+  clean: "From the CuliBox service it passes on only PATH, HOME, USER, LOGNAME, SHELL, LANG and LC_*. Any other variable has to be added here.",
+  login: "Starts as Minimal does, then runs the login shell's startup files, which can set anything.",
+};
+const pfaBaseLine = (base) => (Object.prototype.hasOwnProperty.call(PFA_BASE_LINES, base) ? [PFA_BASE_LINES[base]] : []);
 const PFA_ARGS_HINT = "One per line.";
+const PFA_ENV_HINT = "Variables are saved as plain text in the profile. Put a token in Credentials instead.";
 const PFA_ENV_NONE_BOX = "None. The agent gets the box's minimal environment.";
 const PFA_ENV_NONE_HOST = "None added on top of the starting environment.";
 const PFA_SECRET_NO_SOURCE = "No secret source is configured, so a session with this profile will refuse to start. Use a service token instead.";
@@ -284,7 +295,7 @@ function pfaEnvField(rec, host, c) {
   const adds = pfvMk("div", "pfv-adds");
   const ctl = pfvMk("div", "pfv-env");
   ctl.append(rows, adds);
-  const box = pfvFieldBox(rec, "env", "Environment variables", ctl, [], "fieldset");
+  const box = pfvFieldBox(rec, "env", "Environment variables", ctl, [PFA_ENV_HINT], "fieldset");
   // The server names a secret on its own field; both are this list's.
   const secretsErr = pfvFerr(rec, "secrets");
   const secretsNode = secretsErr ? pfvMk("p", "pfv-ferr", secretsErr) : null;
@@ -376,7 +387,7 @@ function pfaDraw(rec, c) {
   const known = PFA_BASES.map((b) => b.value);
   const choices = typeof stored === "string" && stored !== "" && !known.includes(stored) ? PFA_BASES.concat([{ value: stored, label: stored }]) : PFA_BASES;
   const sel = pfvSelect(rec, "base", choices, v.base, false, (val) => { v.base = val; pfvChanged(rec, "base"); });
-  const baseBox = pfvFieldBox(rec, "base", "Environment it starts with", sel, []);
+  const baseBox = pfvFieldBox(rec, "base", "Environment it starts with", sel, pfaBaseLine(v.base));
   baseBox.children[0].append(" ", pfvAppliesTag("host"));
   out.push(baseBox);
   for (const def of pfaDefs(c)) out.push(pfaOptionField(rec, def));

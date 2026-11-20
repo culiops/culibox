@@ -28,7 +28,15 @@
 // GitHub rules and the credential lists of app.js are globals read at call time.
 
 const PFC_FOLDER_HINT = "Read only. List a folder rather than a single file.";
-const PFC_DOMAIN_HINT = "HTTPS only. IP addresses are not accepted.";
+// A domain adds a host to the allowlist of a box that holds a credential binding. "Allow all internet hosts" (Network) opens every
+// public host on 443 instead (docs/CONFIG.md, egress_allow and egress_open). With no binding a box already reaches any public
+// host, so a domain does nothing: the same rule as the save warning (config.go AgentConfig.EgressWarning, pfcBound).
+const PFC_DOMAIN_FORM = "HTTPS only. IP addresses are not accepted.";
+const PFC_DOMAIN_HINT = PFC_DOMAIN_FORM + " It adds this host to the box's allowed hosts; \"Allow all internet hosts\" in Network opens every public host instead.";
+const PFC_DOMAIN_NO_EFFECT = "This has no effect until the profile holds cloud access or a token: without one the box already reaches any public host.";
+const PFC_DOMAIN_PICK = "A hostname or *.example.com, over HTTPS";
+// The patterns are box/contextpaths.go SecretFilePatterns (the ones the server warns on), the common ones in short form.
+const PFC_FOLDER_PICK = "Read only, at the same path inside the box. Never list a folder holding secrets: files named like .env*, *.pem, *.key, id_*, credentials*, *.tfstate, *.tfvars, kubeconfig and similar.";
 // config/github.go: the permission set shapes the minted App token (broker/github.go passes it to Mint); a token owner's
 // credential is used as it is, so the set does nothing for it (the old form's note says the same).
 const PFC_PAT_NOTE = "A personal access token is not narrowed by CuliBox: it reaches whatever the token allows.";
@@ -90,9 +98,10 @@ function pfcRowNode(rec, r, o) {
   return row;
 }
 
-// pfcInputRow: a row that is one input: a folder or a domain being added. The kind column is its visible label.
+// pfcInputRow: a row that is one input: a folder or a domain being added. The kind column is its visible label. o.off: the row
+// has no effect as things stand (drawn dimmed, .pfv-off; the input stays usable).
 function pfcInputRow(rec, o) {
-  const row = pfvMk("div", "pfv-row");
+  const row = pfvMk("div", o.off === true ? "pfv-row pfv-off" : "pfv-row");
   row.append(pfvMk("span", "pfv-k", o.kind));
   const input = pfvTextCtl(rec, o.key, o.entry[o.prop], true, (val) => { o.entry[o.prop] = val; box.clear(); pfvPaint(); }, () => {});
   input.setAttribute("placeholder", o.placeholder);
@@ -639,8 +648,20 @@ function pfcReachCheck(rec) {
   return null;
 }
 
+// pfcBound: the profile holds a credential binding, by the server's rule (config.go AgentConfig.EgressWarning: AWS, AWSConnections,
+// GitHub, Tokens), over the saved profile; cloudRec, the open Cloud block's record, puts its draft in place of the fields it
+// writes (a row pending removal no longer counts, a row just added does).
+function pfcBound(doc, cloudRec) {
+  const d = doc && typeof doc === "object" ? doc : {};
+  const draft = cloudRec && cloudRec.id === "cloud" && cloudRec.values ? pfcCloudMerge(cloudRec) : null;
+  const src = draft ? Object.assign({}, d, draft) : d;
+  // pfcCloudMerge says aws: null for a legacy setting that is taken away, and leaves the key out otherwise.
+  return !!src.aws || pfcNames(src.aws_connections).length > 0 || !!src.github || pfcNames(src.tokens).length > 0;
+}
+
 function pfcReachDraw(rec, c) {
   const v = rec.values;
+  const off = !pfcBound(c.doc, pfvState.edits.cloud);
   const stored = (l) => l.filter((e) => e.fresh !== true);
   const rows = pfcRows("reachable", { context_paths: stored(v.folders).map((e) => e.path), egress_allow: stored(v.domains).map((e) => e.host) });
   const list = pfvMk("div", "pfv-rows");
@@ -685,19 +706,21 @@ function pfcReachDraw(rec, c) {
     if (e.fresh !== true) return;
     list.append(pfcInputRow(rec, {
       kind: "Domain", label: "Domain the agent can reach", entry: e, prop: "host", key: "domain:" + i, rmKey: "rm:domain:" + i,
-      errKey: domainAt(e) >= 0 ? "egress_allow[" + domainAt(e) + "]" : "", placeholder: "api.example.com or *.example.com", hint: PFC_DOMAIN_HINT,
+      errKey: domainAt(e) >= 0 ? "egress_allow[" + domainAt(e) + "]" : "", placeholder: "api.example.com or *.example.com",
+      hint: off ? PFC_DOMAIN_NO_EFFECT + " " + PFC_DOMAIN_FORM : PFC_DOMAIN_HINT, off,
       toggle: () => pfcToggle(rec, v.domains, e),
     }));
   });
-  return pfcFoot(rec, list, pfcReachPick);
+  return pfcFoot(rec, list, () => pfcReachPick(off));
 }
 
 // pfcReachPick: the Also reachable picker: the two kinds, each an input row (no drawer, nothing to filter).
-const pfcReachPick = () => ({
+// off: no credential binding, so a domain has no effect (pfcBound), and the item says so before it is picked.
+const pfcReachPick = (off) => ({
   label: "Add a folder or a domain", filter: "",
   groups: [{ title: "", note: "", items: [
-    { title: "Folder it can read", sub: "Read only, at the same path inside the box. Never list secrets.", add: { kind: "folder" } },
-    { title: "Domain it can reach", sub: "A hostname or *.example.com, over HTTPS", add: { kind: "domain" } },
+    { title: "Folder it can read", sub: PFC_FOLDER_PICK, add: { kind: "folder" } },
+    { title: "Domain it can reach", sub: off ? PFC_DOMAIN_PICK + ". It has no effect until the profile holds cloud access or a token." : PFC_DOMAIN_PICK, add: { kind: "domain" } },
   ] }],
 });
 

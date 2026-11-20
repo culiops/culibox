@@ -1984,6 +1984,21 @@ function pfvAccountChoices(account) {
   return acctChoices(list, account).map((n) => ({ value: n === ACCT_DEFAULT ? "" : n, label: n === ACCT_DEFAULT ? "default (~/.claude)" : n }));
 }
 
+// pfvNoLoginHint: the #340 sentence (app.js paintSpawnAcctHint) for the account the form holds, as hint pieces, or []. It is said only
+// when it is exact (spawnpreview.js spawnAcctHint): the profile's saved tier is Box, the chosen account is the profile's own and is
+// `default`, and the daemon says a boxed claude of the profile has no login (box_claude_credential "no": no Claude token among its
+// secrets either). A host session reads ~/.claude, so it has nothing to say.
+function pfvNoLoginHint(c, account) {
+  if (typeof spawnAcctHint !== "function") return [];
+  const accounts = typeof accountsCache !== "undefined" && Array.isArray(accountsCache) ? accountsCache : [];
+  const h = spawnAcctHint({
+    profile: { account: c.doc.account, box_claude_credential: c.view.box_claude_credential },
+    chosen: account || "default", accounts, where: { runtime: c.tier },
+  });
+  if (!h || h.kind !== "nologin") return [];
+  return [pfvMk("code", "", "default"), " has no login inside a box. Pick an account with a token. "];
+}
+
 function pfvAgentForm(rec, c) {
   const v = rec.values;
   const ui = rec.ui;
@@ -2028,7 +2043,7 @@ function pfvAgentForm(rec, c) {
     const manage = pfvDrawLink("Manage", "pfv-manage");
     // Leaving for the accounts page asks first when something here has changed.
     manage.onclick = async () => { if (await pfvLeaveGuard("leave")) openSettings("accounts"); };
-    out.push(pfvFieldBox(rec, "account", "Claude login", acct, ["Add more logins in Agent accounts. ", manage]));
+    out.push(pfvFieldBox(rec, "account", "Claude login", acct, pfvNoLoginHint(c, v.account).concat(["Add more logins in Agent accounts. ", manage])));
   }
   return out;
 }

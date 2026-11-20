@@ -2861,7 +2861,8 @@ test("Also reachable's picker is the same popover with its two kinds, no filter 
   assert.strictEqual(byCls(pop, "menu-label").length, 0);
   assert.deepStrictEqual(optsOf(t, "reachable").map(optName), ["Folder it can read", "Domain it can reach"]);
   assert.deepStrictEqual(optsOf(t, "reachable").map((b) => texts(b, "pfv-opt-s")[0]), [
-    "Read only, at the same path inside the box. Never list secrets.", "A hostname or *.example.com, over HTTPS",
+    "Read only, at the same path inside the box. Never list a folder holding secrets: files named like .env*, *.pem, *.key, id_*, credentials*, *.tfstate, *.tfvars, kubeconfig and similar.",
+    "A hostname or *.example.com, over HTTPS",
   ]);
   assert.strictEqual(Node.focused, optsOf(t, "reachable")[0], "focus starts on the first option");
   assert.strictEqual(t.box.puts.length, 0);
@@ -2935,7 +2936,7 @@ test("a domain is added as a row with the HTTPS-only hint and saves with the oth
   clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
   optBtn(t, "reachable", "Domain").click();
   const input = field(t, "domain:2");
-  assert.deepStrictEqual(texts(input.parent, "pfv-hint"), ["HTTPS only. IP addresses are not accepted."]);
+  assert.deepStrictEqual(texts(input.parent, "pfv-hint"), ["HTTPS only. IP addresses are not accepted. It adds this host to the box's allowed hosts; \"Allow all internet hosts\" in Network opens every public host instead."]);
   typeInto(input, "*.example.net");
   assert.strictEqual(await saveBlock(t, "reachable"), true);
   assert.deepStrictEqual(t.box.puts[0].egress_allow, ["api.example.com", "*.example.org", "*.example.net"]);
@@ -3849,14 +3850,16 @@ test("Advanced edit form: the mockup's fields in order, for a box profile and fo
   assert.deepStrictEqual(advLabels(t), ["Environment it starts with Applies to Host", "Extra command-line arguments", "Environment variables"]);
   assert.deepStrictEqual(texts(advOf(t), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session.", "Include files my CLAUDE.md pulls in with @Read-only copies in the box. Applies to Box"]);
   assert.strictEqual(field(t, "args").getAttribute("placeholder"), "--some-flag");
-  assert.deepStrictEqual(texts(advOf(t), "pfv-hint"), ["One per line.", "None. The agent gets the box's minimal environment."]);
+  const inheritLine = t.run("PFA_BASE_LINES").inherit;
+  const envLine = t.run("PFA_ENV_HINT");
+  assert.deepStrictEqual(texts(advOf(t), "pfv-hint"), [inheritLine, "One per line.", "None. The agent gets the box's minimal environment.", envLine]);
   assert.strictEqual(byText(advOf(t), "button", "+ Add variable").length + byText(advOf(t), "button", "+ Add secret").length, 2);
   assert.strictEqual(Node.focused, field(t, "base"), "focus goes to the first control");
   const h = page({ repliesEnabled: true });
   await openAdv(h, "runbook-host");
   assert.deepStrictEqual(advLabels(h), ["Environment it starts with Applies to Host", "Extra command-line arguments", "Environment variables"]);
   assert.deepStrictEqual(texts(advOf(h), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session.", "Include files my CLAUDE.md pulls in with @Read-only copies in the box. Applies to Box"]);
-  assert.deepStrictEqual(texts(advOf(h), "pfv-hint"), ["One per line.", "None added on top of the starting environment."]);
+  assert.deepStrictEqual(texts(advOf(h), "pfv-hint"), [inheritLine, "One per line.", "None added on top of the starting environment.", envLine]);
   assert.strictEqual(Node.focused, field(h, "base"));
   assert.ok(advOf(h).className.includes("pfv-editing"));
   // Opened and not touched holds no change, and the model and effort stay in the Agent block.
@@ -6922,4 +6925,169 @@ test("a block in edit keeps its Applies to tag in the label, and an untagged one
   clickBtn(blockOf(t, "agent"), "Edit");
   assert.ok(blockOf(t, "agent").className.includes("pfv-editing"));
   assert.deepStrictEqual(texts(byCls(blockOf(t, "agent"), "pfv-label")[0], "pfv-applies"), []);
+});
+
+// --- Hints that say what each choice does (#341 P1 item 2, 3, 6, 7, the `default` login, the Save warning) -----------------
+
+const hintsOf = (node) => texts(node, "pfv-hint");
+
+test("variables say they are saved as plain text", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops");
+  const line = hintsOf(advOf(t)).find((h) => h.includes("plain text"));
+  assert.ok(line, "a hint says plain text: " + JSON.stringify(hintsOf(advOf(t))));
+  assert.ok(line.includes("Credentials"), line);
+  // The line stays with a stored variable and a stored secret in the list.
+  const set = page(WITH_STORE);
+  await openAdv(set, "aws-ops", { env: { LOG_LEVEL: "debug" }, secrets: ["OLD_TOKEN"] });
+  assert.ok(hintsOf(advOf(set)).some((h) => h.includes("plain text") && h.includes("Credentials")));
+});
+
+test("base choice says what it does", async () => {
+  const t = page();
+  await openAdv(t, "runbook-host");
+  const lines = t.run("PFA_BASE_LINES");
+  assert.deepStrictEqual(Object.keys(lines).sort(), ["clean", "inherit", "login"]);
+  for (const base of ["inherit", "clean", "login"]) {
+    field(t, "base").value = base; field(t, "base").onchange();
+    const now = field(t, "base").parent;
+    assert.deepStrictEqual(hintsOf(now), [lines[base]], base);
+  }
+  // What each line says is what the launcher does (launcher.go baseEnv, curatedBase, argv).
+  assert.match(lines.inherit, /^Everything in the CuliBox service's environment/);
+  assert.match(lines.inherit, /CuliBox's own variables/);
+  assert.ok(lines.clean.includes("PATH, HOME, USER, LOGNAME, SHELL, LANG and LC_*"), lines.clean);
+  assert.ok(!/TERM/.test(lines.clean), "clean does not copy TERM");
+  assert.match(lines.login, /startup files/);
+  // A base the page does not know (kept as stored) has no line.
+  const odd = page();
+  await openAdv(odd, "runbook-host", { base: "weird" });
+  assert.deepStrictEqual(hintsOf(field(odd, "base").parent), []);
+  // A box profile says it too; the "Applies to Host" chip is the field's own.
+  const b = page();
+  await openAdv(b, "aws-ops", { base: "clean" });
+  assert.deepStrictEqual(hintsOf(field(b, "base").parent), [b.run("PFA_BASE_LINES").clean]);
+});
+
+const openDomainRow = async (t, name, doc) => {
+  if (doc) t.box.docs[name] = Object.assign({}, DOCS[name], doc);
+  await t.box.pfvShow(name);
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  const sub = texts(optBtn(t, "reachable", "Domain"), "pfv-opt-s")[0];
+  optBtn(t, "reachable", "Domain").click();
+  const input = field(t, "domain:0");
+  return { sub, input, row: input.parent.parent };
+};
+
+test("domain row says it has no effect without a binding, dimmed and still editable", async () => {
+  const t = page();
+  const d = await openDomainRow(t, "infra-terraform");
+  assert.ok(d.sub.includes("no effect"), d.sub);
+  assert.ok(d.sub.includes("HTTPS"), d.sub);
+  assert.ok(hintsOf(d.row).join(" ").includes("no effect"), "the row says it too");
+  assert.ok(d.row.className.split(/\s+/).includes("pfv-off"), "drawn with the .pfv-off pattern");
+  assert.strictEqual(d.input.disabled, false);
+  // Still editable: typing counts as a change and saves.
+  d.input.value = "api.example.net"; d.input.oninput();
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  assert.strictEqual(await clickBtn(blockOf(t, "reachable"), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].egress_allow, ["api.example.net"]);
+  // A host-tier profile with no binding says it too.
+  const h = page();
+  const dh = await openDomainRow(h, "runbook-host");
+  assert.ok(dh.sub.includes("no effect") && dh.row.className.includes("pfv-off"));
+  // A bound profile says neither, and says how the hosts relate to "Allow all internet hosts".
+  const b = page();
+  const db = await openDomainRow(b, "infra-terraform", { tokens: ["grafana-prod"] });
+  assert.ok(!db.sub.includes("no effect"), db.sub);
+  assert.ok(!hintsOf(db.row).join(" ").includes("no effect"));
+  assert.ok(!db.row.className.split(/\s+/).includes("pfv-off"));
+  assert.match(hintsOf(db.row).join(" "), /Allow all internet hosts/);
+});
+
+test("pfcBound is the server's rule (AgentConfig.EgressWarning): aws, aws_connections, github, tokens; an open Cloud draft replaces the saved fields", async () => {
+  const t = page();
+  const bound = (doc, rec) => t.box.pfcBound(doc, rec || null);
+  assert.strictEqual(bound({}), false);
+  assert.strictEqual(bound({ aws_connections: [] , tokens: [] }), false);
+  assert.strictEqual(bound({ aws: { role_arn: "arn:aws:iam::1:role/x" } }), true);
+  assert.strictEqual(bound({ aws_connections: ["prod-read"] }), true);
+  assert.strictEqual(bound({ github: { owners: [{ owner: "culiops", app: "acme-app", repos: ["a"] }] } }), true);
+  assert.strictEqual(bound({ tokens: ["grafana-prod"] }), true);
+  assert.strictEqual(bound({ github_owners: ["culiops"] }), false, "the list view's key is not the profile's");
+  // The open Cloud block: removing the one token unbinds, adding one binds.
+  const c = cloudPage();
+  await c.box.pfvShow("aws-ops");
+  c.box.docs["aws-ops"] = Object.assign({}, CLOUD_DOC);
+  clickBtn(blockOf(c, "cloud"), "Edit");
+  const rec = c.run("pfvState").edits.cloud;
+  assert.strictEqual(c.box.pfcBound(CLOUD_DOC, rec), true);
+  rec.values.aws.forEach((e) => { e.removed = true; });
+  rec.values.tokens.forEach((e) => { e.removed = true; });
+  rec.values.gh.forEach((e) => { e.removed = true; });
+  assert.strictEqual(c.box.pfcBound(CLOUD_DOC, rec), false, "everything removed in the draft");
+  assert.strictEqual(c.box.pfcBound(CLOUD_DOC, null), true, "the saved profile still holds it");
+  rec.values.tokens.push({ name: "grafana-prod", fresh: true });
+  assert.strictEqual(c.box.pfcBound(CLOUD_DOC, rec), true);
+  // The old-style inline AWS setting counts until the draft removes it.
+  const legacy = { aws: { role_arn: "arn:aws:iam::1:role/x" } };
+  rec.values.tokens = [];
+  rec.values.legacy = {};
+  assert.strictEqual(c.box.pfcBound(legacy, rec), true);
+  rec.values.legacy = { removed: true };
+  assert.strictEqual(c.box.pfcBound(legacy, rec), false);
+});
+
+test("Folder it can read names the secret patterns", async () => {
+  const t = page();
+  await t.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  const sub = texts(optBtn(t, "reachable", "Folder"), "pfv-opt-s")[0];
+  for (const p of [".env", "*.pem", "*.key", "id_*", "credentials*", "*.tfstate", "*.tfvars", "kubeconfig", "similar"]) assert.ok(sub.includes(p), p + " in: " + sub);
+  assert.ok(sub.includes("Read only"), sub);
+});
+
+test("default has no login inside a box", async () => {
+  const noLogin = (over) => page({ profiles: [PROFILES[0], PROFILES[1], view("infra-terraform", Object.assign({ box_claude_credential: "no" }, over)), PROFILES[3]] });
+  const hint = (t) => hintsOf(field(t, "account").parent).join("");
+  const t = noLogin();
+  await t.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  assert.ok(hint(t).startsWith("default has no login inside a box."), hint(t));
+  assert.ok(hint(t).includes("Agent accounts"), "the existing line stays");
+  // Host tier: a host session reads ~/.claude, so there is nothing to say.
+  const h = page({ profiles: [PROFILES[0], PROFILES[1], PROFILES[2], view("runbook-host", { runtime: "host", box_claude_credential: "no" })] });
+  await h.box.pfvShow("runbook-host");
+  clickBtn(blockOf(h, "agent"), "Edit");
+  assert.ok(!hint(h).includes("no login"), hint(h));
+  // A token account: it has one.
+  const w = noLogin({ account: "work" });
+  w.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { account: "work" });
+  await w.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(w, "agent"), "Edit");
+  assert.ok(!hint(w).includes("no login"), hint(w));
+  // A profile that carries a Claude token secret has a login, so the sentence would be false.
+  const y = noLogin({ box_claude_credential: "yes" });
+  await y.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(y, "agent"), "Edit");
+  assert.ok(!hint(y).includes("no login"), hint(y));
+  // Nothing known (no source wired, or a profile not yet answered): nothing is claimed.
+  const n = page();
+  await n.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(n, "agent"), "Edit");
+  assert.ok(!hint(n).includes("no login"), hint(n));
+});
+
+test("unresolved secret warning reads plainly", async () => {
+  const t = page();
+  t.box.putReply = { warnings: ['secret "GONE" is not found in any configured secret source; a session with this profile will refuse to start'] };
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  await clickBtn(blockOf(t, "agent"), "Save");
+  const w = texts(t.els["pfv-in"], "pfv-warn");
+  assert.strictEqual(w.length, 1);
+  assert.ok(w[0].includes("GONE"), w[0]);
+  assert.ok(!/secret_sources/.test(w[0]), "no config key");
+  assert.match(w[0], /refuse to start/);
 });
