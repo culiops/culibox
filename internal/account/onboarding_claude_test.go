@@ -81,25 +81,42 @@ func TestProvisionOnboardingFlipsFalse(t *testing.T) {
 }
 
 func TestProvisionOnboardingNoWriteWhenDone(t *testing.T) {
-	s, _ := newStore(t)
-	r := mustCreate(t, s, "work", ProviderClaude)
-	p := claudeJSONPath(r)
-	if err := os.WriteFile(p, []byte(`{"hasCompletedOnboarding":true,"theme":"light","userID":"abc"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.Stat(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Update("work", "", false); err != nil {
-		t.Fatal(err)
-	}
-	after, err := os.Stat(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
-		t.Error("provision rewrote a .claude.json that was already complete")
+	for name, content := range map[string]string{
+		"with theme": `{"hasCompletedOnboarding":true,"theme":"light","userID":"abc"}`,
+		// The no-theme cases are the state claude leaves after it runs (it drops theme:"dark"),
+		// so a "write when theme is missing" rule would rewrite the file on every start.
+		"no theme":  `{"hasCompletedOnboarding":true,"userID":"abc"}`,
+		"flag only": `{"hasCompletedOnboarding":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := newStore(t)
+			r := mustCreate(t, s, "work", ProviderClaude)
+			p := claudeJSONPath(r)
+			if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Stat(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Update("work", "", false); err != nil {
+				t.Fatal(err)
+			}
+			after, err := os.Stat(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+				t.Error("provision rewrote a .claude.json that was already complete")
+			}
+			got, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != content {
+				t.Errorf(".claude.json bytes changed: %s", got)
+			}
+		})
 	}
 }
 
