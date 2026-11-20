@@ -3610,17 +3610,16 @@
      (the .t.on rule above; no bold-on-transparent parent), and the list is a flex column, 12px in, with no rule line. */
   #page-host > #settings-modal.as-page > #settings-tabs > #pf-navlist { order: 2; gap: 1px; padding: 0 0 4px 12px; }
   #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on + #pf-navlist { display: flex; flex-direction: column; }
-  /* A profile row is a nav row with a 6px gap (`.m2-pitem`): the name grows, then the lock, then the tier chip. */
+  /* A profile row is a nav row with a 6px gap (`.m2-pitem`): the name grows, then the lock, then the `box only` chip, drawn only when Host is blocked for the profile. */
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni { display: flex; align-items: center; gap: 6px; width: 100%; height: 30px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: 400 var(--t-md)/var(--lh-md) var(--font-ui); text-align: left; cursor: pointer; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:hover { background: var(--hover); }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); font-weight: 500; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The tier is the kit chip (§C5 `.chip` + `.chip-box`; a host profile adds `.chip-host`'s faint ring); a chip on the
+  /* `box only` is the kit chip (§C5 `.chip`), drawn only when Host is blocked for the profile; a chip on the
      selected row steps down to --panel, because raise on raise is invisible. */
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 18px; font-weight: 400; white-space: nowrap; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-host { box-shadow: inset 0 0 0 1px var(--faint); }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] .pfv-ni-tier { background: var(--panel); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-boxonly { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 18px; font-weight: 400; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] .pfv-ni-boxonly { background: var(--panel); }
   /* "+ New profile" is the kit .link-add (§C2, §B1.2 `.m2-addp`): accent 12/18, padding 6px 10px, underline on hover. */
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add { height: auto; padding: 6px 10px; justify-content: flex-start; color: var(--accent); font-size: var(--t-sm); line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add:hover { background: transparent; text-decoration: underline; text-underline-offset: 2px; }
@@ -3692,6 +3691,9 @@
   #page-host > #settings-modal.as-page #pfv .pfv-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-nm .pfv-mono { line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-tag { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .55); color: var(--red); font-size: var(--t-xs); font-weight: 600; letter-spacing: .02em; }
+  #page-host > #settings-modal.as-page #pfv .pfv-applies { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; margin-left: 6px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font-size: var(--t-xs); font-weight: 400; letter-spacing: .02em; }
+  /* In a block label (a flex column) the tag would stretch to the 132px column: keep it a chip at the start, flush with the name. */
+  #page-host > #settings-modal.as-page #pfv .pfv-label > .pfv-applies { align-self: flex-start; margin-left: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-miss { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-tnote { margin-top: 12px; font-size: var(--t-sm); color: var(--muted); }
   /* + Add access / + Add folder or domain is the kit's .link-add.t-sm (§C2): 400 12/18, no padding, no radius (the .pfv-link look above is the
@@ -3771,6 +3773,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-card > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-off { cursor: default; }
   #page-host > #settings-modal.as-page #pfv .pfv-off .pfv-card-t { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-check.pfv-off .pfv-check-t { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-check.pfv-off input { cursor: default; }
   #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; line-height: var(--lh-md); }
   #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-chip-word { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 var(--t-sm)/1 var(--font-ui); }

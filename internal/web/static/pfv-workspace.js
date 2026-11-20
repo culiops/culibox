@@ -164,16 +164,28 @@ function pfwFolderField(rec, c, copy) {
 }
 
 // pfwModeField: the two ways of working on the folder, as cards.
-function pfwModeField(rec, copy) {
-  const card = (key, mode, title, text) => pfvCard(rec, key, {
-    group: "pfv_mode", checked: copy === (mode === "copy"), disabled: false, title, chip: "", pick: () => pfwPickMode(rec, mode),
-    lines: [pfvMk("span", "pfv-card-d", text)],
-  });
+// card is wmCardState's answer. A private copy is a box's: where it cannot be chosen the card stays, off, with its reason and
+// Applies to Box (a host profile keeps the setting for the box). A profile that is stored as a copy keeps its card on, even
+// while the form is on the folder, so the way back is there.
+function pfwModeField(rec, copy, card, storedCopy) {
+  const off = card.copyDisabled && !copy && !storedCopy;
+  const mk = (key, mode, title, text) => {
+    const desc = pfvMk("span", "pfv-card-d", text);
+    const lines = [desc];
+    if (mode === "copy") {
+      // The tag sits in the description's line, after its words, where the card's grid has a place for it.
+      desc.append(" ", pfvAppliesTag("box"));
+      if (off) lines.push(pfvMk("span", "pfv-card-d", card.copyReason));
+    }
+    return pfvCard(rec, key, {
+      group: "pfv_mode", checked: copy === (mode === "copy"), disabled: mode === "copy" && off, title, chip: "", pick: () => pfwPickMode(rec, mode), lines,
+    });
+  };
   const fs = pfvMk("fieldset", "pfv-field pfv-choice");
   fs.append(
     pfvMk("legend", "pfv-flabel", "How it works on the folder"),
-    card("mode-folder", "folder", "Work in this folder", "It changes your files, as you would."),
-    card("mode-copy", "copy", "Work on a private copy", "It gets its own git copy. Your folder is untouched until work comes home."),
+    mk("mode-folder", "folder", "Work in this folder", "It changes your files, as you would."),
+    mk("mode-copy", "copy", "Work on a private copy", "It gets its own git copy. Your folder is untouched until work comes home."),
   );
   return fs;
 }
@@ -222,8 +234,8 @@ function pfwDraw(rec, c) {
   const out = [pfwFolderField(rec, c, copy)];
   // A control the user cannot use is not drawn, and its absence is said in one sentence. A profile that already is a
   // copy keeps both ways and the warning: switching it away is the user's to do.
-  if (!card.copyDisabled || storedCopy) {
-    out.push(pfwModeField(rec, copy));
+  if (!card.copyDisabled || storedCopy || c.tier === "host") {
+    out.push(pfwModeField(rec, copy, card, storedCopy));
     if (card.hint) out.push(pfvMk("p", "pfv-hint", card.hint));
   } else if (c.tier !== "host") {
     out.push(pfvMk("p", "pfv-hint", "Private copies are not available on this instance: " + pfwUnavailable() + "."));

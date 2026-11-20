@@ -29,7 +29,6 @@ const PFA_BASES = [
   { value: "clean", label: "Minimal, no secrets (clean)" },
   { value: "login", label: "Your login shell (login)" },
 ];
-const PFA_BOX_BASE = "Environment it starts with only applies on this machine; a box always starts minimal.";
 const PFA_ARGS_HINT = "One per line.";
 const PFA_ENV_NONE_BOX = "None. The agent gets the box's minimal environment.";
 const PFA_ENV_NONE_HOST = "None added on top of the starting environment.";
@@ -75,17 +74,19 @@ const pfaRepliesUsable = (c) => globalThis.repliesEnabled === true && isClaudeBi
 
 // pfaImportsRow: importsmodel.js's rule for the imports row, from the page's own state. Before /api/meta has answered
 // nothing is known and the row stays; once it has, "bundling off" (Ruling R8) and "no box layer" hide it like a host
-// profile (nothing to give). hidden: not drawn. disabled: the account has no personal config; the row's sentence is said instead.
+// (nothing to give). The profile's own tier does not hide it: a host profile keeps the setting for the box.
+// hidden: not drawn. disabled: the account has no personal config; the row's sentence is said instead.
 function pfaImportsRow(c, checked) {
   const known = typeof metaLoaded !== "undefined" && metaLoaded === true;
   const bundleOff = known && !(typeof bundleImports !== "undefined" && bundleImports === true);
   const accounts = typeof accountsCache !== "undefined" && Array.isArray(accountsCache) ? accountsCache : [];
-  const tier = c.tier === "host" || !c.boxAvailable || bundleOff ? "host" : "box";
+  const tier = !c.boxAvailable || bundleOff ? "host" : "box";
   const st = importsRowState({ tier, account: c.doc.account || "", accounts, set: null, failed: false, off: !checked });
   return { hidden: st.hidden, disabled: st.disabled, text: st.disabled ? st.list : "" };
 }
 
-// pfaMerge: the values pfvMergeBlock is given. The starting environment is the host's only; a bool option that was
+// pfaMerge: the values pfvMergeBlock is given. The starting environment is drawn on both tiers, so the base always goes
+// (a box profile keeps the one stored while it was a host profile); a bool option that was
 // never stored and is off is not written (the server offers a stored bool at spawn, an absent one not).
 function pfaMerge(rec, c) {
   const v = rec.values;
@@ -107,7 +108,7 @@ function pfaMerge(rec, c) {
     imports: { usable: !imports.hidden && !imports.disabled, checked: v.importsChecked },
   };
   // "inherit" is the default and is stored as no base at all, unless the profile already says it.
-  if (c.tier === "host") out.base = v.base === "inherit" && c.doc.base !== "inherit" ? "" : v.base;
+  out.base = v.base === "inherit" && c.doc.base !== "inherit" ? "" : v.base;
   return out;
 }
 
@@ -129,16 +130,19 @@ function pfaArea(rec, key, value, onInput) {
   return pfvReg(rec, key, a);
 }
 
-// pfaCheckbox: a switch with its words, and under them what a refusal of its field says.
-function pfaCheckbox(rec, key, label, detail, checked, onChange) {
-  const lab = pfvMk("label", "pfv-check");
+// pfaCheckbox: a switch with its words, and under them what a refusal of its field says. tag: an Applies to chip after the
+// label. disabled: the switch cannot be used (it stays drawn, dimmed as .pfv-off, with detail saying why).
+function pfaCheckbox(rec, key, label, detail, checked, onChange, tag, disabled) {
+  const lab = pfvMk("label", disabled ? "pfv-check pfv-off" : "pfv-check");
   const cb = pfvMk("input");
   cb.type = "checkbox";
   cb.checked = checked;
+  if (disabled) cb.disabled = true;
   cb.onchange = () => onChange(cb.checked);
   pfvReg(rec, key, cb);
   const t = pfvMk("span", "pfv-check-t", label);
   if (detail) t.append(pfvMk("span", "pfv-check-d", detail));
+  if (tag) t.append(" ", tag);
   lab.append(cb, t);
   const err = pfvFerr(rec, key);
   if (!err) return lab;
@@ -282,13 +286,13 @@ function pfaDraw(rec, c) {
   const v = rec.values;
   const host = c.tier === "host";
   const out = [];
-  if (host) {
-    const stored = c.doc.base;
-    const known = PFA_BASES.map((b) => b.value);
-    const choices = typeof stored === "string" && stored !== "" && !known.includes(stored) ? PFA_BASES.concat([{ value: stored, label: stored }]) : PFA_BASES;
-    const sel = pfvSelect(rec, "base", choices, v.base, false, (val) => { v.base = val; pfvChanged(rec, "base"); });
-    out.push(pfvFieldBox(rec, "base", "Environment it starts with", sel, []));
-  }
+  const stored = c.doc.base;
+  const known = PFA_BASES.map((b) => b.value);
+  const choices = typeof stored === "string" && stored !== "" && !known.includes(stored) ? PFA_BASES.concat([{ value: stored, label: stored }]) : PFA_BASES;
+  const sel = pfvSelect(rec, "base", choices, v.base, false, (val) => { v.base = val; pfvChanged(rec, "base"); });
+  const baseBox = pfvFieldBox(rec, "base", "Environment it starts with", sel, []);
+  baseBox.children[0].append(" ", pfvAppliesTag("host"));
+  out.push(baseBox);
   for (const def of pfaDefs(c)) out.push(pfaOptionField(rec, def));
   const args = pfaArea(rec, "args", v.argsText, (text) => { v.argsText = text; argsBox.clear(); pfvPaint(); });
   const argsBox = pfvFieldBox(rec, "args", "Extra command-line arguments", args, [PFA_ARGS_HINT]);
@@ -299,9 +303,8 @@ function pfaDraw(rec, c) {
   const imports = pfaImportsRow(c, v.importsChecked);
   if (imports.text) out.push(pfvMk("p", "pfv-hint", imports.text));
   else if (!imports.hidden) {
-    out.push(pfaCheckbox(rec, "imports_off", "Include files my CLAUDE.md pulls in with @", "Read-only copies in the box.", v.importsChecked, (on) => { v.importsChecked = on; pfvChanged(rec, "imports_off"); }));
+    out.push(pfaCheckbox(rec, "imports_off", "Include files my CLAUDE.md pulls in with @", "Read-only copies in the box.", v.importsChecked, (on) => { v.importsChecked = on; pfvChanged(rec, "imports_off"); }, pfvAppliesTag("box")));
   }
-  if (!host) out.push(pfvMk("p", "pfv-hint", PFA_BOX_BASE));
   return out;
 }
 

@@ -164,7 +164,7 @@ test("the nested profile list is the M2 list: a flex column, 1px gap, 12px in, n
   assert.strictEqual(list.get("margin"), undefined);
 });
 
-test("a profile row: 30px, gap 6, name grows, a muted lock, a box chip that steps down to --panel when selected", () => {
+test("a profile row: 30px, gap 6, name grows, a muted lock, a box only chip that steps down to --panel when selected", () => {
   const row = decls(NI);
   assert.strictEqual(row.get("display"), "flex");
   assert.strictEqual(row.get("align-items"), "center");
@@ -181,8 +181,8 @@ test("a profile row: 30px, gap 6, name grows, a muted lock, a box chip that step
   assert.strictEqual(name.get("flex"), "1 1 auto");
   assert.strictEqual(name.get("text-overflow"), "ellipsis");
   assert.strictEqual(name.get("min-width"), "0");
-  // §C5 `.chip` + `.chip-box`: 18px, 0 6px, raise fill, muted mono 11px at 400.
-  const chip = decls(NI + "-tier");
+  // §C5 `.chip`: 18px, 0 6px, raise fill, muted mono 11px at 400. The `box only` chip, drawn only when Host is blocked.
+  const chip = decls(NI + "-boxonly");
   assert.strictEqual(chip.get("height"), "18px");
   assert.strictEqual(chip.get("padding"), "0 6px");
   assert.strictEqual(chip.get("border-radius"), "var(--r-chip)");
@@ -191,8 +191,7 @@ test("a profile row: 30px, gap 6, name grows, a muted lock, a box chip that step
   assert.strictEqual(chip.get("font-family"), "var(--font-mono)");
   assert.strictEqual(chip.get("font-size"), "var(--t-xs)");
   assert.strictEqual(chip.get("font-weight"), "400");
-  assert.strictEqual(decls(NI + '[aria-current="true"] .pfv-ni-tier').get("background"), "var(--panel)", "raise on raise is invisible");
-  assert.strictEqual(decls(NI + "-host").get("box-shadow"), "inset 0 0 0 1px var(--faint)", "§C5 `.chip-host`");
+  assert.strictEqual(decls(NI + '[aria-current="true"] .pfv-ni-boxonly').get("background"), "var(--panel)", "raise on raise is invisible");
   assert.strictEqual(decls(P + " #pf-navlist .pfv-lock").get("color"), "var(--muted)", "§B1.2: the lock is muted");
 });
 
@@ -1099,6 +1098,10 @@ test("a block is the frame's row: label 132px, the value, then Edit; 24px betwee
   const l = bdecls(PV + " .pfv-label");
   assert.deepStrictEqual([l.get("font-size"), l.get("font-weight"), l.get("line-height")], ["var(--t-md)", "600", "20px"]);
   assert.deepStrictEqual([l.get("display"), l.get("flex-direction"), l.get("gap")], ["flex", "column", "2px"]);
+  // The Applies to tag in that column is a chip at the start of it, not a bar the width of the column.
+  const at = bdecls(PV + " .pfv-label > .pfv-applies");
+  assert.deepStrictEqual([at.get("align-self"), at.get("margin-left")], ["flex-start", "0"]);
+  assert.strictEqual(bdecls(PV + " .pfv-applies").get("color"), "var(--muted)");
   // The value is --fg 500 and the helper --muted at --t-sm (§B2: no third text tier), with no measure of its own: it wraps with the column.
   const main = bdecls(PV + " .pfv-main");
   assert.strictEqual(main.get("font-weight"), "500");
@@ -1193,6 +1196,9 @@ test("the native checkboxes of the page are the kit's .check-box look: 14px, --b
   // Label: the words 8px from the box, the default cursor (the frame's `.check`), the box keeps the global 2px ring.
   const lab = bdecls(PV + " .pfv-check");
   assert.deepStrictEqual([lab.get("display"), lab.get("align-items"), lab.get("gap"), lab.get("cursor")], ["flex", "flex-start", "8px", "default"]);
+  // A switch the user cannot use (Box only, forced by a binding) is greyed like a disabled card, and its box is not a pointer.
+  assert.strictEqual(bdecls(PV + " .pfv-check.pfv-off .pfv-check-t").get("color"), "var(--muted)");
+  assert.strictEqual(bdecls(PV + " .pfv-check.pfv-off input").get("cursor"), "default");
   assert.ok(!bhas(PV + " .pfv-check input:focus-visible"), "nothing here touches the outline: the global :focus-visible 2px ring shows");
   assert.strictEqual(cb.get("outline"), undefined);
   // It is still the real control: nothing in the page's JS swaps the input for a drawn box.

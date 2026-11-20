@@ -5453,6 +5453,9 @@ function readForm() {
   // config, a locked profile) keeps the stored value rather than dropping it.
   const importsUsable = !$("pf-imports-row").hidden && !$("pf-imports").disabled;
   if (importsOffToSend(importsUsable, $("pf-imports").checked, pfLoaded && pfLoaded.imports_off)) p.imports_off = true;
+  // The phone has no Box only control (Settings > Profiles sets it): a stored lock is kept,
+  // never added or cleared here. Without this the whole-profile PUT would drop it silently.
+  if (pfLoaded && pfLoaded.box_only === true) p.box_only = true;
   // The tier is always sent as shown (see runtimeToSend): a blank would let the
   // instance default decide, and on a host-default instance that turns a profile
   // the editor lit as "box" into a host one. The server's own message answers an

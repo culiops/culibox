@@ -184,6 +184,51 @@ test("readForm never sends a box override", () => {
   assert.doesNotMatch(b, /pfLoadedBox/);
 });
 
+// A phone save builds the profile from scratch and the PUT replaces the stored one, so a
+// lock set on the desktop (Settings > Profiles) must ride along or the save drops it
+// silently. The phone has no Box only control: it only keeps a stored lock. readForm is
+// run for real: app.js needs a DOM, so its source is evaluated against stubs (every name
+// readForm reaches for is an inert stub unless set here).
+function runReadForm(loaded) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8");
+  const m = /function readForm\s*\(/.exec(app);
+  assert.ok(m, "readForm not found in app.js");
+  const open = app.indexOf("{", app.indexOf(")", m.index));
+  let depth = 0, end = -1;
+  for (let i = open; i < app.length && end < 0; i++) {
+    if (app[i] === "{") depth++;
+    else if (app[i] === "}" && --depth === 0) end = i;
+  }
+  const field = { value: "", checked: false, hidden: true, disabled: false, dataset: {}, querySelectorAll: () => [] };
+  const env = {
+    $: () => field,
+    rowsToConfig: () => ({ env: {}, secrets: [] }),
+    contextPathsFromText: () => [],
+    pfEnvRows: [],
+    pfLoaded: loaded,
+    ACCT_DEFAULT: "",
+  };
+  const guard = new Proxy(env, {
+    has: () => true,
+    get: (t, k) => (typeof k === "symbol" ? undefined : k in t ? t[k] : k in globalThis ? globalThis[k] : () => undefined),
+  });
+  const make = new Function("guard", "with (guard) { return (function readForm()" + app.slice(open, end + 1) + "); }");
+  return make(guard)();
+}
+
+test("readForm keeps a stored Box only lock through a phone save", () => {
+  const p = runReadForm({ name: "locked", box_only: true });
+  assert.strictEqual(p.box_only, true);
+});
+
+test("readForm adds no box_only key when the loaded profile has none", () => {
+  assert.ok(!("box_only" in runReadForm({ name: "plain" })));
+  assert.ok(!("box_only" in runReadForm({ name: "off", box_only: false })));
+  assert.ok(!("box_only" in runReadForm(null)));
+});
+
 test("a hidden replies row keeps what the profile stored", () => {
   assert.strictEqual(replyableToSend(false, false, true), true);
   assert.strictEqual(replyableToSend(false, false, undefined), false);
