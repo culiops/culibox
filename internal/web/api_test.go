@@ -837,6 +837,58 @@ func TestAPI_HostBlockedSpawnShowsReason(t *testing.T) {
 	}
 }
 
+// clone:true on the host is a 400 the dialog can show, and Spawn never runs: a
+// clone lives only in a box, whatever the profile says.
+func TestAPI_CloneTrueOnHostIs400(t *testing.T) {
+	m := &mockSvc{}
+	a := &API{Sessions: m}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"p","runtime":"host","clone":true}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	var got struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	if got.Error != "a clone runs only in a box" {
+		t.Fatalf("error = %q", got.Error)
+	}
+	if m.spawnedRuntime != "" || m.spawnedCwd != "" {
+		t.Fatalf("Spawn was called: runtime=%q cwd=%q", m.spawnedRuntime, m.spawnedCwd)
+	}
+}
+
+// The clone choice reaches Spawn as sent; an absent field stays nil so an old
+// client keeps today's behaviour.
+func TestAPI_ClonePassedThrough(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want *bool
+	}{
+		{`{"agent":"p","clone":false}`, ptrBool(false)},
+		{`{"agent":"p","clone":true}`, ptrBool(true)},
+		{`{"agent":"p","runtime":"host","clone":false}`, ptrBool(false)},
+		{`{"agent":"p"}`, nil},
+	} {
+		m := &mockSvc{}
+		a := &API{Sessions: m}
+		rec := httptest.NewRecorder()
+		a.handleSessions(rec, postReq("/api/sessions", c.body))
+		if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+			t.Fatalf("%s: code %d", c.body, rec.Code)
+		}
+		got := m.spawnedSpec.Clone
+		if (got == nil) != (c.want == nil) || (got != nil && *got != *c.want) {
+			t.Fatalf("%s: Spawn got Clone=%v, want %v", c.body, got, c.want)
+		}
+	}
+}
+
+func ptrBool(b bool) *bool { return &b }
+
 // A workspace refusal names the conflicting box and path; the user needs it
 // to pick another folder, so it is shown rather than hidden.
 func TestSpawnErrShowsWorkspaceHeld(t *testing.T) {

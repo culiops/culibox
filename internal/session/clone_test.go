@@ -492,7 +492,8 @@ func TestRestartReentersTheCloneRefusals(t *testing.T) {
 	l, dir := testCloneLauncher(t, config.RuntimeBox)
 	hooks := &fakeCloneHooks{}
 	m, _ := cloneManager(t, l, hooks)
-	old := &Session{ID: "clone-1", Agent: "clone", name: "c", Cwd: filepath.Join(dir, "sub"), Runtime: config.RuntimeBox, status: statusExited}
+	// A clone session (CloneOf set); an in-place one restarts in place instead.
+	old := &Session{ID: "clone-1", Agent: "clone", name: "c", Cwd: filepath.Join(dir, "sub"), Runtime: config.RuntimeBox, CloneOf: l.clone.Of, status: statusExited}
 	m.mu.Lock()
 	m.sessions[old.ID] = old
 	m.mu.Unlock()
@@ -1148,6 +1149,214 @@ func TestCloneSpawnClaudeGetsGuidance(t *testing.T) {
 	t.Run("a boxed claude that is not a clone gets no guidance", func(t *testing.T) {
 		if argv := spawnGuidance(t, "claude", "plain", false, nil); slices.Contains(argv, "--append-system-prompt") {
 			t.Fatalf("argv = %q", argv)
+		}
+	})
+}
+
+// specRecorder records the spec of every Build, so a test sees what a restart
+// asked Spawn for.
+type specRecorder struct {
+	cloneGHLauncher
+	mu    *sync.Mutex
+	specs *[]launcher.SpawnSpec
+}
+
+func (l specRecorder) Build(spec launcher.SpawnSpec) ([]string, []string, error) {
+	l.mu.Lock()
+	*l.specs = append(*l.specs, spec)
+	l.mu.Unlock()
+	return l.cloneGHLauncher.Build(spec)
+}
+
+// inPlaceDir is the repo the clone profile is a clone of: it exists, so a box
+// spawn can start in it.
+func inPlaceDir(t *testing.T, l *cloneLauncher) string {
+	t.Helper()
+	a := filepath.Join(t.TempDir(), "repo")
+	if err := os.Mkdir(a, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := *l.clone
+	c.Of = a
+	l.clone = &c
+	return a
+}
+
+// clone:false drops the profile's clone setup for this spawn and nothing else:
+// no clone dir, no clone_share mounts, no clone-derived GH_REPO.
+func TestSpawnCloneFalseRunsInPlace(t *testing.T) {
+	l, _ := testCloneLauncher(t, config.RuntimeBox)
+	a := inPlaceDir(t, &l)
+	hooks := &fakeCloneHooks{origin: "https://github.com/culiops/agent-box.git"}
+	gh := &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "culiops", App: "main", Repos: []string{"agent-box"}}}}
+	m := NewManager(cloneGHLauncher{cloneLauncher: l, gh: gh}, nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	m.SetBoxes(boxes)
+	m.SetClone(hooks)
+	m.SetBroker(&fakeBrokerHooks{})
+	m.SetEgress(&fakeEgressHooks{})
+
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeBox, Clone: boolPtr(false), Cwd: a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	info := s.Info()
+	if info.CloneOf != "" || info.Clone != nil {
+		t.Fatalf("CloneOf=%q Clone=%+v, want neither", info.CloneOf, info.Clone)
+	}
+	if info.Cwd != a {
+		t.Fatalf("Cwd = %q, want %q", info.Cwd, a)
+	}
+	if hooks.nPrepares() != 0 || len(hooks.refreshes) != 0 {
+		t.Fatalf("prepares=%d refreshes=%d, want a spawn with no clone setup", hooks.nPrepares(), len(hooks.refreshes))
+	}
+	if boxes.lastKey.Clone != nil {
+		t.Fatalf("box key carries clone mounts %+v", boxes.lastKey.Clone)
+	}
+	if got := envNamed(boxes.lastEnv, "GH_REPO"); len(got) != 0 {
+		t.Fatalf("GH_REPO = %q, want none derived from the clone", got)
+	}
+	if len(hooks.originOf) != 0 {
+		t.Fatalf("the clone's origin was read: %q", hooks.originOf)
+	}
+	// The binding's own git config (COUNT=2) stays; the clone's push rewrite
+	// (a third pair, KEY_2) does not exist.
+	if got := envNamed(boxes.lastEnv, "GIT_CONFIG_KEY_2"); len(got) != 0 {
+		t.Fatalf("git push rewrite env = %q, want none", got)
+	}
+	if got := envNamed(boxes.lastEnv, "GIT_CONFIG_COUNT"); !slices.Equal(got, []string{"GIT_CONFIG_COUNT=2"}) {
+		t.Fatalf("GIT_CONFIG_COUNT = %q, want the binding's own", got)
+	}
+}
+
+func TestSpawnCloneFalseOnHostAllowed(t *testing.T) {
+	l, _ := testCloneLauncher(t, config.RuntimeBox)
+	a := inPlaceDir(t, &l)
+	hooks := &fakeCloneHooks{}
+	m, _ := cloneManager(t, l, hooks)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeHost, Clone: boolPtr(false), Cwd: a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if s.Info().Runtime != config.RuntimeHost {
+		t.Fatalf("Runtime = %q, want host", s.Info().Runtime)
+	}
+}
+
+// An old client sends no clone field: the profile decides, as before.
+func TestSpawnCloneNilKeepsProfileBehaviour(t *testing.T) {
+	t.Run("box goes to the clone", func(t *testing.T) {
+		l, dir := testCloneLauncher(t, config.RuntimeBox)
+		a := inPlaceDir(t, &l)
+		hooks := &fakeCloneHooks{}
+		m, _ := cloneManager(t, l, hooks)
+		s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeBox, Cwd: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Kill(s.ID) })
+		if s.Info().CloneOf != a {
+			t.Fatalf("CloneOf = %q, want %q", s.Info().CloneOf, a)
+		}
+	})
+	t.Run("host is refused", func(t *testing.T) {
+		l, _ := testCloneLauncher(t, config.RuntimeBox)
+		a := inPlaceDir(t, &l)
+		m, _ := cloneManager(t, l, &fakeCloneHooks{})
+		s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeHost, Cwd: a})
+		if err == nil {
+			_ = m.Kill(s.ID)
+			t.Fatal("a clone profile spawned on the host tier")
+		}
+		if !strings.Contains(err.Error(), "is a clone-mode profile") || !errors.Is(err, box.ErrUnboxableWorkspace) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+func TestSpawnCloneTrueWithoutSetup(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	l.clone = nil
+	hooks := &fakeCloneHooks{}
+	m, boxes := cloneManager(t, l, hooks)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeBox, Clone: boolPtr(true), Cwd: dir})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("clone:true spawned a profile with no clone setup")
+	}
+	if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "this profile has no clone setup") {
+		t.Fatalf("err = %v", err)
+	}
+	if boxes.wraps != 0 || len(m.List()) != 0 {
+		t.Fatalf("a refused spawn wrapped=%d sessions=%d", boxes.wraps, len(m.List()))
+	}
+}
+
+// clone:true on a profile that has a setup is today's clone spawn.
+func TestSpawnCloneTrueWithSetupIsACloneSpawn(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	hooks := &fakeCloneHooks{}
+	m, boxes := cloneManager(t, l, hooks)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Clone: boolPtr(true), Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if hooks.nPrepares() != 1 || boxes.lastKey.Clone == nil {
+		t.Fatalf("prepares=%d key.Clone=%+v", hooks.nPrepares(), boxes.lastKey.Clone)
+	}
+}
+
+// A restart keeps the choice: the persisted CloneOf is the choice. An in-place
+// session of a clone profile restarts in place (not re-resolved into a clone
+// and refused for its cwd); a real clone session restarts as today.
+func TestRestartInPlaceOnCloneProfileStaysInPlace(t *testing.T) {
+	newMgr := func(t *testing.T) (*Manager, *fakeCloneHooks, *[]launcher.SpawnSpec, cloneLauncher, string) {
+		cl, _ := testCloneLauncher(t, config.RuntimeBox)
+		cl.tieredLauncher.argv = []string{"sh", "-c", "exit 0"}
+		a := inPlaceDir(t, &cl)
+		var mu sync.Mutex
+		var specs []launcher.SpawnSpec
+		m := NewManager(specRecorder{cloneGHLauncher: cloneGHLauncher{cloneLauncher: cl}, mu: &mu, specs: &specs}, nil, 1<<16, time.Minute)
+		hooks := &fakeCloneHooks{}
+		m.SetBoxes(&fakeBoxes{})
+		m.SetClone(hooks)
+		return m, hooks, &specs, cl, a
+	}
+	t.Run("in place", func(t *testing.T) {
+		m, hooks, specs, _, a := newMgr(t)
+		old := exitedSession(t, m, launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeBox, Clone: boolPtr(false), Cwd: a})
+		ns, err := m.Restart(old.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Kill(ns.ID) })
+		got := (*specs)[len(*specs)-1]
+		if got.Clone == nil || *got.Clone {
+			t.Fatalf("restart spec Clone = %v, want non-nil false", got.Clone)
+		}
+		if ns.Info().CloneOf != "" || ns.Info().Cwd != a || hooks.nPrepares() != 0 {
+			t.Fatalf("CloneOf=%q Cwd=%q prepares=%d, want an in-place restart", ns.Info().CloneOf, ns.Info().Cwd, hooks.nPrepares())
+		}
+	})
+	t.Run("clone", func(t *testing.T) {
+		m, hooks, specs, cl, _ := newMgr(t)
+		old := exitedSession(t, m, launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeBox, Cwd: cl.clone.Dir})
+		if old.Info().CloneOf == "" {
+			t.Fatal("the original is not a clone session")
+		}
+		ns, err := m.Restart(old.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Kill(ns.ID) })
+		if got := (*specs)[len(*specs)-1]; got.Clone != nil {
+			t.Fatalf("restart spec Clone = %v, want nil (the profile decides, as today)", *got.Clone)
+		}
+		if ns.Info().CloneOf != old.Info().CloneOf || hooks.nPrepares() != 2 {
+			t.Fatalf("CloneOf=%q prepares=%d, want the clone again", ns.Info().CloneOf, hooks.nPrepares())
 		}
 	})
 }

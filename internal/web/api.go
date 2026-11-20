@@ -184,6 +184,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Replyable *bool          `json:"replyable"` // nil = the profile's default
 			Account   string         `json:"account"`   // "" = the profile's own account, else default
 			Login     bool           `json:"login"`     // sign-in session for a named claude account (host tier)
+			Clone     *bool          `json:"clone"`     // nil = the profile decides; false = in place; true = its clone (box only)
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.Agent == "" {
 			writeErr(w, http.StatusBadRequest, "agent required")
@@ -196,6 +197,11 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		case "", config.RuntimeBox, config.RuntimeHost:
 		default:
 			writeErr(w, http.StatusBadRequest, "runtime must be box or host")
+			return
+		}
+		// A clone is a box's own copy of the repo: the host tier never gets one.
+		if req.Clone != nil && *req.Clone && req.Runtime == config.RuntimeHost {
+			writeErr(w, http.StatusBadRequest, "a clone runs only in a box")
 			return
 		}
 		cwd := strings.TrimSpace(req.Cwd)
@@ -215,7 +221,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		// a rejected first message) is shown instead — see writeSpawnErr.
 		spec := launcher.SpawnSpec{
 			Agent: req.Agent, Name: req.Name, Cwd: cwd, Options: req.Options, Runtime: req.Runtime,
-			Prompt: req.Prompt, Replyable: req.Replyable, Account: req.Account, Login: req.Login,
+			Prompt: req.Prompt, Replyable: req.Replyable, Account: req.Account, Login: req.Login, Clone: req.Clone,
 		}
 		info, err := a.Sessions.Spawn(spec)
 		if err != nil {

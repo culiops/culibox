@@ -51,6 +51,13 @@ type SpawnSpec struct {
 	// Replyable overrides the profile's reply default; nil = the default.
 	// Read by ReplyableFor, never by Build.
 	Replyable *bool
+	// Clone is the per-spawn choice between the profile's clone setup and the
+	// user's own folder. nil = the profile decides (today's behaviour, and every
+	// old client). false = spawn as if the profile had no clone_of, clone_share or
+	// clone_no_auto_return: in place, in Cwd. true = the profile must have a clone
+	// setup, and the spawn is a box one. Applied by the session layer's Spawn; Build
+	// never reads it.
+	Clone *bool
 	// ExtraArgs are flags the session layer adds (the boxed config bundle's).
 	// Build places them after the option flags and BEFORE the "--" that ends
 	// options — appended afterwards, they would become operands.

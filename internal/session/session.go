@@ -2030,6 +2030,20 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 		cl = c
 	}
+	// The per-spawn choice (spec.Clone) overrides the profile. false: the spawn
+	// treats the profile as if clone_of, clone_share and clone_no_auto_return were
+	// absent, so cl stays nil for every use below (the clone dir and its mounts,
+	// the clone-gated GH_REPO and push rewrite, the guidance, the session's
+	// CloneOf); bindings, egress, context paths and the account are untouched.
+	// true: the profile must have a setup. nil: the profile decides, as before.
+	if spec.Clone != nil {
+		if !*spec.Clone {
+			cl = nil
+		} else if cl == nil {
+			// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
+			return nil, fmt.Errorf("%w: profile %q: this profile has no clone setup", box.ErrUnboxableWorkspace, spec.Agent)
+		}
+	}
 	// context_paths are read-only mounts of host paths, which only a box has:
 	// a host session reads any path already. The paths are re-validated purely
 	// on every spawn (a hand-edited profiles.json), the disk check runs below.

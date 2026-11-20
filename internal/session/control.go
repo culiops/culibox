@@ -140,9 +140,16 @@ func (m *Manager) Restart(id string) (*Session, error) {
 			opts[k] = v
 		}
 	}
+	// The persisted CloneOf is the original spawn's clone choice: empty means it
+	// ran in place, so the restart must not be re-resolved into the profile's
+	// clone (and refused for its cwd). A clone session passes nil, as today.
+	var clone *bool
+	if s.CloneOf == "" {
+		clone = boolPtr(false)
+	}
 	ns, err := m.Spawn(launcher.SpawnSpec{
 		Agent: s.Agent, Name: name, Cwd: s.Cwd, Runtime: s.Runtime, Options: opts, Account: acct,
-		Resume: resumeFor(s.Runtime, bin, sid, s.Exclusive), ParentID: s.ParentID,
+		Resume: resumeFor(s.Runtime, bin, sid, s.Exclusive), ParentID: s.ParentID, Clone: clone,
 	})
 	if err != nil {
 		s.mu.Lock()
