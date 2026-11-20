@@ -129,7 +129,7 @@ test("before /api/meta answers a box profile is not called 'host · not containe
   // A profile that is host by its own setting is still host before meta.
   assert.strictEqual(by["claude"], "no credentials");
   assert.strictEqual(by["hostbash"], "no credentials");
-  for (const n of ["aws-ops", "bash", "agent-box", "elsewhere", "tokens"]) assert.notStrictEqual(by[n], "host · not contained", n);
+  for (const n of ["aws-ops", "bash", "agent-box", "elsewhere", "tokens"]) assert.notStrictEqual(by[n], "needs a box · unavailable", n);
 });
 
 test("after /api/meta answers, the same page reads as before the fix: a host-only machine reads every profile as host, a boxed one keeps box", () => {
@@ -145,6 +145,20 @@ test("the empty state repaints when meta answers on a host-only machine (the key
   assert.notStrictEqual(pre.ctx.emptyStateKey(m), post.ctx.emptyStateKey(m));
   assert.match(pre.ctx.emptyStateKey(m), /"none",false,/);
   assert.match(post.ctx.emptyStateKey(m), /"none",true,/);
+});
+
+// The key must carry the touch line itself: for a profile that asks for a box, the line changes when meta answers "no box
+// layer" (credentials before, "needs a box · unavailable" after), so a key without the touch line would fail here.
+test("the empty state key carries the touch line, which changes when meta answers for a profile that needs a box", () => {
+  const needsBox = { name: "nb", runtime: "box", runtime_asked: "box", bin: "claude", claude: true, aws_connections: ["staging"] };
+  const m = { kind: "none", profiles: ["nb"] };
+  const pre = page("", false), post = page("", true);
+  pre.ctx.profiles = [needsBox];
+  post.ctx.profiles = [needsBox];
+  assert.strictEqual(pre.ctx.profileTouchLine(needsBox, undefined), "aws staging");
+  assert.strictEqual(post.ctx.profileTouchLine(needsBox, ""), "needs a box · unavailable");
+  assert.ok(pre.ctx.emptyStateKey(m).includes('["nb","aws staging"]'), pre.ctx.emptyStateKey(m));
+  assert.ok(post.ctx.emptyStateKey(m).includes('["nb","needs a box · unavailable"]'), post.ctx.emptyStateKey(m));
 });
 
 test("the touches line is the dialog's, not the old 'binary · tier · workspace' one", () => {

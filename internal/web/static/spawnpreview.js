@@ -28,7 +28,7 @@ function spawnAWS(p) {
 }
 const spawnBase = (p) => String(p || "").split("/").filter(Boolean).pop() || "";
 // spawnIsShellProfile: the profile runs a plain shell (its bin is one of SPAWN_SHELL_BINS), so a session of it has no agent.
-// A capability test on what the profile runs, the one profileTouchLine uses for "host · bash", never "is it Claude".
+// A capability test on what the profile runs, the one profileKind uses for the row's terminal icon, never "is it Claude".
 function spawnIsShellProfile(p) {
   return !!p && SPAWN_SHELL_BINS.has(spawnBase(p.bin));
 }
