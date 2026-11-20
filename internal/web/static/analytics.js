@@ -26,6 +26,10 @@ function usd(n) {
   return "$" + n.toFixed(2);
 }
 
+// AN_API_VALUE_TITLE: the "API value" tile's tooltip, in the sidebar cost's words (#340): the amount is token
+// usage priced at list rates, not what a subscription bills.
+const AN_API_VALUE_TITLE = "Token usage today (UTC) priced at API list rates. A subscription does not bill this.";
+
 // tokensPerPrompt: total tokens / prompts, or 0 when there are none.
 function tokensPerPrompt(totalTokens, prompts) {
   return prompts > 0 ? Math.round(totalTokens / prompts) : 0;
@@ -401,7 +405,7 @@ function anLegendItems(models, colorModels) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
+    fmtCompact, usd, AN_API_VALUE_TITLE, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
     foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
     prevWindow, pctDelta, dowBuckets, modelColor, shortModel, projShort,
     collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
@@ -721,7 +725,7 @@ function anSyncPageControls() {
     row.hidden = !open;
   }
   const desc = dlg.querySelector("#an-pdesc");
-  if (desc) desc.textContent = "Spend read from Claude Code transcripts" + (AN.from && AN.to ? ` · ${AN.from} → ${AN.to} (UTC)` : "");
+  if (desc) desc.textContent = "Token usage from Claude Code transcripts, priced at API list rates" +(AN.from && AN.to ? ` · ${AN.from} → ${AN.to} (UTC)` : "");
 }
 
 // anWirePage: the page's clicks, wired once at boot (app.js). A group's one handler finds the item by its data attribute.
@@ -790,7 +794,7 @@ function anOverviewPage(root) {
   const d = AN.data, t = d.costByDay.totals;
   // The page's tiles: the kit's KPI row, the frame's labels and thousands separators on the counts.
   root.appendChild(anKpiRow([
-    { value: usd(t.cost), label: "Total cost" },
+    { value: usd(t.cost), label: "API value", title: AN_API_VALUE_TITLE },
     { value: fmtCompact(t.tokens), label: "Tokens" },
     { value: anCountText(d.sessionCount), label: "Sessions" },
     { value: anCountText(t.prompts), label: "Prompts" },
