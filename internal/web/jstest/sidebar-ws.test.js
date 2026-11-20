@@ -251,8 +251,16 @@ test("paintCompactRow: a tier chip is .tchip with its glyph then its word; write
   assert.strictEqual(w.textContent, "write");
 });
 
-test("rowLocal carries the row kind, so a late profile list repaints the row", () => {
+test("rowLocal carries the row kind, and rowSig moves with it, so a late profile list repaints the row", () => {
   assert.ok(fnSrc(read("app.js"), "rowLocal").includes("kind: deskRowKind(s,"));
+  const { rowSig } = require("../static/reconcile.js");
+  const s = { id: "a", agent: "sh" };
+  const shell = { kind: "shell", title: "bash shell" };
+  const none = rowSig(s, { kind: null });
+  assert.notStrictEqual(rowSig(s, { kind: shell }), none, "a shell kind arriving moves the signature");
+  assert.strictEqual(rowSig(s, { kind: { kind: "shell", title: "bash shell" } }), rowSig(s, { kind: shell }), "equal kinds, equal sigs");
+  assert.notStrictEqual(rowSig(s, { kind: { kind: "claude", title: "Claude Code session" } }), rowSig(s, { kind: shell }));
+  assert.strictEqual(rowSig(s, {}), none, "a caller that sets no kind reads as null");
 });
 
 test("row CSS: the sub-line starts under the name", () => {

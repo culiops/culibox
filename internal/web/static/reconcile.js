@@ -87,7 +87,8 @@ function reconcileRows(ul, sessions, render, sigOf) {
 // reads — a teardown in flight, whether this page holds the terminal, the
 // context %, the tier label, a reply in flight, a terminal parked because
 // another tab took the session (the row then reads "open in another tab"), and
-// a nested shell's "shell N" label (which moves when a sibling appears or goes).
+// a nested shell's "shell N" label (which moves when a sibling appears or goes), and
+// the row's kind icon (which appears when the profile list lands).
 // A field the row does not render must NOT be here, or the row re-renders (and
 // drops focus) for nothing.
 // The row's attention (blocked / finished turn, attentionClass) is derived from
@@ -100,6 +101,8 @@ function rowSig(s, local) {
     v.activity || "", v.need || "", v.ask || "", v.ask_full || "", v.summary || "",
     !!v.replyable, !!v.attached, !!v.claude, !!v.exited,
     !!l.killing, !!l.heldHere, !!l.takenOver, typeof l.pct === "number" ? l.pct : null,
+    // The kind icon (deskRowKind): null until the profile list lands, then the terminal or the Claude mark.
+    l.kind ? l.kind.kind + ":" + l.kind.title : "",
     l.boxRuntime || "", !!l.replies, !!l.sending, !!l.expanded, !!l.answering, !!l.elev,
     // The AWS chip (label, prod, the amber write state) and the SSO card's text
     // read the binding; elevated_until appears and goes with a grant and a drop.
