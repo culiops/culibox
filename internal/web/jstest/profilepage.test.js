@@ -1543,11 +1543,9 @@ test("a bound profile saved without touching the lock does not send box_only, so
   await openRuns(t, "aws-ops");
   assert.strictEqual(field(t, "box_only").checked, true, "drawn ticked because the bindings force it");
   assert.strictEqual(t.run("pfvState").edits.runs.values.boxOnly, false, "but the value held is the stored one: no lock");
-  // Another block's change makes the save; Runs in rides along with its values as they were.
-  clickBtn(blockOf(t, "agent"), "Edit");
-  pickModel(t, "claude-sonnet-5");
-  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
-  assert.strictEqual(t.box.puts[0].options.model, "claude-sonnet-5", "the save went through");
+  // Runs in has a Save while it is clean, and it merges through pfvRunsMerge.
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save"), true);
+  assert.strictEqual(t.box.puts.length, 1);
   assert.strictEqual(t.box.puts[0].runtime, "box");
   assert.ok(!("box_only" in t.box.puts[0]), "a forced tick is not a stored lock");
 });
