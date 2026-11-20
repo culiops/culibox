@@ -677,3 +677,68 @@ test("syncSpawnAccount repaints the account hint after the fetch even when only 
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(pg.hint.hidden, true);
 });
+
+// --- Task 6: the "+" prefill (cwd only) and the VM state ------------------------------------------------------------
+
+test("tierVmFetch: stopped only on a stopped answer, for the latest call", async () => {
+  const tick = () => new Promise((r) => setImmediate(r));
+  const asked = [];
+  let answer = async () => ({ state: "stopped" });
+  const pg = tpPage({
+    deadlineSignal: (ms) => ({ ms }),
+    api: (p, o) => { asked.push([p, o.signal.ms]); return answer(); },
+  });
+  const renders = () => pg.calls.filter((c) => c[0] === "render").length;
+  pg.ctx.renderTierPick = () => pg.calls.push(["render"]);
+  const stopped = () => pg.run("tierVmStopped");
+  const fetchVm = () => vm.runInContext("tierVmFetch()", pg.ctx); // pg.run would copy the promise into {}
+
+  await fetchVm();
+  assert.deepStrictEqual(asked[0], ["/api/vm-state", 35000]);
+  assert.strictEqual(stopped(), true);
+  assert.strictEqual(renders(), 1);
+
+  answer = async () => ({ state: "" });
+  await fetchVm();
+  assert.strictEqual(stopped(), false);
+
+  pg.run("tierVmStopped = true");
+  answer = async () => { throw new Error("boom"); };
+  await fetchVm(); // never throws
+  assert.strictEqual(stopped(), false);
+
+  // two calls, the first answering last: the second's answer wins
+  let late;
+  answer = () => new Promise((r) => { late = r; });
+  const first = fetchVm();
+  answer = async () => ({ state: "" });
+  const second = fetchVm();
+  await second;
+  late({ state: "stopped" });
+  await first;
+  await tick();
+  assert.strictEqual(stopped(), false, "the stale answer is dropped");
+
+  // no box layer: nothing asked
+  const n = asked.length;
+  pg.ctx.boxRuntime = "";
+  await fetchVm();
+  assert.strictEqual(asked.length, n);
+  // the phone: nothing asked either
+  pg.ctx.boxRuntime = "runc";
+  pg.ctx.desktop = false;
+  await fetchVm();
+  assert.strictEqual(asked.length, n);
+});
+
+test("openSpawnDialog takes a cwd-only prefill without the missing-profile toast", () => {
+  const body = appFnSrc("openSpawnDialog");
+  const cwdOnly = body.indexOf("!prefill.agent");
+  const toast = body.indexOf("showToast('Profile \"'");
+  assert.ok(cwdOnly > 0, "a branch on !prefill.agent");
+  assert.ok(cwdOnly < toast, "before the missing-profile toast");
+  assert.match(body.slice(cwdOnly, toast), /setSpawnCwd\(prefill\.cwd, prefill\.source \|\| ""\)/);
+  assert.ok(body.indexOf("spawnCwdChoice(") < cwdOnly, "after the spawnCwdChoice line");
+  const sync = body.indexOf("syncRuntimeField();");
+  assert.match(body.slice(sync, sync + 80), /^syncRuntimeField\(\);\s*\n\s*tierVmFetch\(\);/, "tierVmFetch follows syncRuntimeField, not awaited");
+});

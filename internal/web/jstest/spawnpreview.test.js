@@ -733,6 +733,8 @@ test("spawnWsNoteFor: the frames' help lines (M4.1 'From the profile', M4.2 'Las
   assert.strictEqual(spawnWsNoteFor("default", 48), spawnWsIdleNote(48));
   assert.strictEqual(spawnWsNoteFor("", 3), spawnWsIdleNote(3));
   assert.strictEqual(spawnWsNoteFor(undefined, 3), spawnWsIdleNote(3));
+  assert.strictEqual(spawnWsNoteFor("group", 3, "/home/u/culiops-agent-box"), "From the culiops-agent-box group's + · type to change");
+  assert.strictEqual(spawnWsNoteFor("last", 3, "/home/u/x"), "Last used · " + spawnWsIdleNote(3), "cwd is ignored for the other sources");
 });
 
 // --- the reach rows keep the full text for the tooltip and mark the paths (G7, M4.1) --------------------

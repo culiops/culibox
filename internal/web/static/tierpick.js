@@ -223,6 +223,24 @@ function renderTierPick() {
   }
 }
 
+// tierVmFetch: ask whether the Box VM is stopped (macOS colima; "" elsewhere) and let the Box cards say so when it answers. Not awaited
+// by the dialog: the cards draw first. The server caps its colima call at 30 s, so the page waits a little longer. Only the latest
+// call's answer counts, any failure leaves "not stopped", and it never throws.
+let tierVmSeq = 0;
+async function tierVmFetch() {
+  if (!boxRuntime || !drawerDesktop()) return;
+  tierVmStopped = false;
+  const seq = ++tierVmSeq;
+  try {
+    const r = await api("/api/vm-state", { signal: deadlineSignal(35000) });
+    if (seq !== tierVmSeq) return;
+    tierVmStopped = !!r && r.state === "stopped";
+    renderTierPick();
+  } catch (_) {
+    // no answer, or one that is not usable: no line
+  }
+}
+
 // tierLeaveCloneDir: a clone profile whose workspace is its clone dir, and the session will not be a clone: the workspace becomes the
 // repo the clone was made from. True when it moved. Not re-entrant: the redraw the move causes cannot move again, and a clone dir
 // that is the repo itself has nowhere to move to.
@@ -295,6 +313,6 @@ function spawnCwdFor(w) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel,
+    TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel, tierVmFetch,
   };
 }

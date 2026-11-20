@@ -5888,7 +5888,7 @@ function hideSpawnNotShared() {
 // where the value came from in front of it while the field holds that value, on the desktop only.
 function spawnWsCaption(count) {
   const named = drawerDesktop() && spawnWsSource !== "" && spawnWsPicker && spawnWsPicker.value() === spawnWsPrefill;
-  return spawnWsNoteFor(named ? spawnWsSource : "", count);
+  return spawnWsNoteFor(named ? spawnWsSource : "", count, spawnWsPrefill);
 }
 
 // setSpawnCwd writes the canonical cwd and the field's displayed value together
@@ -6281,6 +6281,7 @@ async function openSpawnDialog(preselectAgent, prefill) {
   renderProfileSeg();
   // Tier first: it decides which workspaces are boxable, for the warning below.
   syncRuntimeField();
+  tierVmFetch(); // not awaited: the cards draw first and gain the VM line when it answers
   hideSpawnNotShared();
   loadSpawnVMFilter(); // not awaited: the picker reads the filter when it draws
   // A Duplicate's account applies only where its prefill does (same profile).
@@ -6299,7 +6300,9 @@ async function openSpawnDialog(preselectAgent, prefill) {
   const choice = spawnCwdChoice({ profile: currentProfile(), last, workspaces: workspacesCache, tier: spawnWhere().runtime || "", skipScratch: drawerDesktop() });
   setSpawnCwd(choice.cwd, choice.source);
   if (prefill) {
-    if (want === prefill.agent) applySpawnPrefill(prefill);
+    // A group's + names a workspace and no profile: that is not a profile gone missing, so no toast.
+    if (!prefill.agent) setSpawnCwd(prefill.cwd, prefill.source || "");
+    else if (want === prefill.agent) applySpawnPrefill(prefill);
     else showToast('Profile "' + prefill.agent + '" no longer exists — pick one', { error: true });
   }
   onSpawnCwdChanged();

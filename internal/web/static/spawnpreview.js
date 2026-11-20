@@ -547,9 +547,13 @@ function pickSpawnCwd(o) {
 // spawnWsNoteFor: the help line under the Workspace field while it still holds what the dialog opened on (frames
 // M4.1 and M4.2): "Last used · 48 project roots · type to filter · ↵ to pick", "From the profile · type to
 // filter · ↵ to pick" (no count: the profile named the folder, the roots are not what is being offered), and the
-// plain caption for a default.
-function spawnWsNoteFor(source, count) {
+// plain caption for a default. "group" (a group header's +) names the folder's last segment: the field shows the full path.
+function spawnWsNoteFor(source, count, cwd) {
   const idle = spawnDep("spawnWsIdleNote", "./dirpicker.js");
+  if (source === "group") {
+    const seg = String(cwd || "").replace(/\/+$/, "").split("/").pop();
+    return "From the " + seg + " group's + \u00b7 type to change";
+  }
   if (source === "last") return "Last used · " + idle(count);
   if (source === "profile") return "From the profile · type to filter · \u21b5 to pick";
   return idle(count);
