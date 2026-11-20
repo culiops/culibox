@@ -333,13 +333,14 @@ test("refreshStore repaints the sidebar line from the state it just read, on the
   assert.ok(!/set(Interval|Timeout)\(/.test(src.slice(src.indexOf("function paintSideStore("))), "the line rides the 30 s store poll: store.js adds no timer for it");
 });
 
-test("the sidebar footer has div#side-store[hidden] on its own row, between the stats and the links", () => {
+test("the sidebar footer has div#side-store[hidden] on its own row, between the elevated line and the links", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"), "utf8");
   const foot = html.slice(html.indexOf('<div id="side-foot">'));
   const foot2 = foot.slice(0, foot.indexOf("</aside>"));
   assert.match(foot2, /<div id="side-store" hidden><\/div>/);
-  assert.ok(foot2.indexOf('id="side-store"') > foot2.indexOf('class="side-stats"'), "below the cost / elevated row");
-  assert.ok(foot2.indexOf('id="side-store"') < foot2.indexOf('class="side-links"'), "above the links");
+  assert.ok(foot2.indexOf('id="side-elevated"') > 0, "the elevated line is in the footer");
+  assert.ok(foot2.indexOf('id="side-store"') > foot2.indexOf('id="side-elevated"'), "below the elevated line");
+  assert.ok(foot2.indexOf('id="side-store"') < foot2.indexOf('class="xlinks"'), "above the cost and links line");
 });
 
 // --- Plan 7 Task 9 (#177): the store, one form (DD§A9, §B5, DC§7; R6, R19) ----------------------------

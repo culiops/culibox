@@ -179,6 +179,56 @@ test("applyCap repaints every .xlay through querySelectorAll", () => {
   assert.match(fnSrc(read("tabs.js"), "applyCap"), /querySelectorAll\("\.xlay"\)\) xlayPaint\(b, n\)/);
 });
 
+// ---- Task 3: the foot: the cost on the links line --------------------------------------------------
+const foot = (() => {
+  const s = html.slice(html.indexOf('<div id="side-foot">'));
+  return s.slice(0, s.indexOf("</aside>"));
+})();
+// cssRule: the declarations of the rule whose selector is exactly `sel` (desktop.css).
+function cssRule(sel) {
+  const css = read("desktop.css");
+  const at = css.indexOf("\n  " + sel + " {");
+  assert.ok(at > 0, sel + " rule not found");
+  return css.slice(css.indexOf("{", at) + 1, css.indexOf("}", at));
+}
+
+test("the foot: elevated, store, then the cost and the links on one line", () => {
+  assert.ok(!foot.includes("side-stats"), "no .side-stats row");
+  const links = /<div class="xlinks">\s*<span id="side-cost" class="xcost" hidden><\/span>\s*<div class="side-links">/.exec(foot);
+  assert.ok(links, "#side-cost sits in div.xlinks, before div.side-links");
+  const at = ['id="limits-side"', 'id="side-elevated"', 'id="side-store"', 'class="xlinks"'].map((s) => foot.indexOf(s));
+  assert.ok(at.every((i) => i > 0), "all four are in #side-foot");
+  assert.deepEqual([...at].sort((a, b) => a - b), at, "meters, elevated, store, links");
+  assert.match(foot, /<span id="side-elevated" hidden><\/span>/);
+});
+
+test("paintSideCost writes the label and the tooltip from sideCostLabel", () => {
+  const body = fnSrc(read("app.js"), "paintSideCost");
+  assert.match(body, /sideCostLabel\(/);
+  assert.match(body, /el\.textContent = lab\.text;/);
+  assert.match(body, /el\.title = lab\.title;/);
+  assert.ok(!body.includes('"Spend today'), "no Spend wording is left");
+});
+
+test("the cost line wraps instead of truncating", () => {
+  assert.match(cssRule("#side-foot .xlinks"), /flex-wrap: wrap;/);
+  const cost = cssRule("#side-foot .xcost");
+  assert.match(cost, /white-space: nowrap;/);
+  assert.ok(!/overflow|text-overflow|max-width/.test(cost), "never cut: " + cost);
+});
+
+test("with the cost hidden, the links keep today's left edge", () => {
+  assert.match(cssRule("#side-foot .xcost[hidden] + .side-links"), /margin-left: -8px;/);
+  assert.match(cssRule("#side-foot .xcost[hidden]"), /display: none;/);
+});
+
+test("the elevated line keeps the foot's small muted type on its own row", () => {
+  const el = cssRule("#side-elevated");
+  assert.match(el, /font-size: var\(--t-sm\);/);
+  assert.match(el, /color: var\(--muted\);/);
+  assert.ok(!/margin-left: auto/.test(el), "left-aligned like #side-store, not pushed right");
+});
+
 test("boot wires the layout button before the first applyCap", () => {
   const app = read("app.js");
   const init = app.indexOf("\ninitSideLayout();");

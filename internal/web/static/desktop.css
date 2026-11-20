@@ -642,12 +642,16 @@
      shrink and ellipsize before the label does. */
   #limits-side .mtr .pc[hidden] { display: none; }
   #limits-side .mtr .limit { width: auto; flex: 0 1 auto; color: var(--fg); font-weight: var(--w-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .side-stats { display: flex; align-items: baseline; gap: 8px; font-size: var(--t-sm); color: var(--muted); }
-  #side-cost { font-variant-numeric: tabular-nums; }
-  #side-cost[hidden] { display: none; }
-  /* With no cost and no elevated window the row is empty: no row, so no 8px gap above the links. */
-  .side-stats:not(:has(> :not([hidden]))) { display: none; }
-  #side-elevated { margin-left: auto; font-variant-numeric: tabular-nums; }
+  /* #340 S6 (mockups t1, t3): the cost sits on the links line, "≈ $454 today" with a dotted underline that
+     says it has a tooltip. When both do not fit (a narrow sidebar, a long amount) the line wraps: the cost
+     keeps its own line above the links and is never cut. With the cost hidden the links keep today's place. */
+  #side-foot .xlinks { display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 2px; font-size: var(--t-sm); }
+  #side-foot .xlinks > .side-links { margin: 0 -8px 0 auto; }
+  #side-foot .xcost { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; text-decoration: underline dotted var(--faint); text-underline-offset: 3px; cursor: help; }
+  #side-foot .xcost[hidden] { display: none; }
+  #side-foot .xcost[hidden] + .side-links { margin-left: -8px; }
+  /* The elevated window has its own row, shown only while one is open: 12px --muted like #side-store. */
+  #side-elevated { font-size: var(--t-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
   #side-elevated[hidden] { display: none; }
   #side-elevated.hot { color: var(--red); font-weight: var(--w-regular); }
   /* F77 (#174): "Store locks in 42 m", painted only in the store's last hour (paintSideStore, store.js).
