@@ -130,12 +130,14 @@ function pfaArea(rec, key, value, onInput) {
   return pfvReg(rec, key, a);
 }
 
-// pfaCheckbox: a switch with its words, and under them what a refusal of its field says.
-function pfaCheckbox(rec, key, label, detail, checked, onChange, tag) {
-  const lab = pfvMk("label", "pfv-check");
+// pfaCheckbox: a switch with its words, and under them what a refusal of its field says. tag: an Applies to chip after the
+// label. disabled: the switch cannot be used (it stays drawn, dimmed as .pfv-off, with detail saying why).
+function pfaCheckbox(rec, key, label, detail, checked, onChange, tag, disabled) {
+  const lab = pfvMk("label", disabled ? "pfv-check pfv-off" : "pfv-check");
   const cb = pfvMk("input");
   cb.type = "checkbox";
   cb.checked = checked;
+  if (disabled) cb.disabled = true;
   cb.onchange = () => onChange(cb.checked);
   pfvReg(rec, key, cb);
   const t = pfvMk("span", "pfv-check-t", label);

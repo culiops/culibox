@@ -115,6 +115,15 @@ test("mergeBlock reachable writes context_paths and egress_allow", () => {
   assert.deepStrictEqual(onlyPaths.egress_allow, ["api.example.com"], "a key the values do not name is kept");
 });
 
+test("runs writes box_only only when it is named", () => {
+  const locked = Object.assign(clone(awsOps), { box_only: true });
+  assert.strictEqual(pfvMergeBlock(awsOps, "runs", { tier: "box", boxAvailable: true, boxOnly: true }).box_only, true);
+  assert.strictEqual("box_only" in pfvMergeBlock(locked, "runs", { tier: "box", boxAvailable: true, boxOnly: false }), false, "off removes the key");
+  assert.strictEqual(pfvMergeBlock(locked, "runs", { tier: "box", boxAvailable: true }).box_only, true, "a save that does not name it keeps it as stored");
+  assert.strictEqual("box_only" in pfvMergeBlock(awsOps, "runs", { tier: "box", boxAvailable: true }), false);
+  assert.strictEqual(pfvBlockForField("box_only"), "runs");
+});
+
 test("mergeBlock runs sends the tier explicitly, and stays blank only with no box layer and no stored tier", () => {
   assert.strictEqual(pfvMergeBlock({ name: "p", bin: "claude" }, "runs", { tier: "box" }).runtime, "box");
   assert.strictEqual(pfvMergeBlock({ name: "p", bin: "claude", runtime: "box" }, "runs", { tier: "host" }).runtime, "host");

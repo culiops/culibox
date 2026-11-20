@@ -1445,6 +1445,96 @@ test("Runs in: a private copy cannot choose host; the refusal shows in place and
   assert.ok(byText(blockOf(t, "runs"), "button", "Save").every((b) => !b.hidden));
 });
 
+// --- Runs in: the Box only checkbox (S1's host_block and box_only on the profile view) ---------------------------------
+
+const BOX_ONLY_LABEL = "Box only: never offer Host for this profile";
+const AWS_SENTENCE = "This profile has an AWS binding, so it runs only in a box.";
+async function openRuns(t, name) {
+  await t.box.pfvShow(name);
+  clickBtn(blockOf(t, "runs"), "Edit");
+}
+const boxOnlyLabel = (t) => byCls(blockOf(t, "runs"), "pfv-check")[0];
+
+test("the Box only checkbox: forced by bindings is ticked and disabled with the reason, a set lock stays clearable", async () => {
+  // A plain box profile: the choice is free.
+  const plain = page();
+  await openRuns(plain, "infra-terraform");
+  const free = field(plain, "box_only");
+  assert.strictEqual(free.checked, false);
+  assert.notStrictEqual(free.disabled, true);
+  assert.deepStrictEqual(byCls(blockOf(plain, "runs"), "pfv-check-t").map(labelName), [BOX_ONLY_LABEL]);
+  assert.deepStrictEqual(texts(blockOf(plain, "runs"), "pfv-check-d"), []);
+  assert.ok(!classesOf(boxOnlyLabel(plain)).includes("pfv-off"));
+  // Bound, with no lock set: the bindings force it, so it is ticked, off for the user, and says why.
+  const bound = page();
+  await openRuns(bound, "aws-ops");
+  const forced = field(bound, "box_only");
+  assert.strictEqual(forced.checked, true);
+  assert.strictEqual(forced.disabled, true);
+  assert.deepStrictEqual(byCls(blockOf(bound, "runs"), "pfv-check-t").map(labelName), [BOX_ONLY_LABEL]);
+  assert.deepStrictEqual(texts(blockOf(bound, "runs"), "pfv-check-d"), [AWS_SENTENCE]);
+  assert.ok(classesOf(boxOnlyLabel(bound)).includes("pfv-off"));
+  // Bound and locked: the lock is redundant, but it is the user's to clear.
+  const locked = page({ profiles: PROFILES.map((p) => (p.name === "aws-ops" ? Object.assign({}, p, { box_only: true }) : p)) });
+  locked.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { box_only: true });
+  await openRuns(locked, "aws-ops");
+  const clearable = field(locked, "box_only");
+  assert.strictEqual(clearable.checked, true);
+  assert.notStrictEqual(clearable.disabled, true);
+  assert.deepStrictEqual(texts(blockOf(locked, "runs"), "pfv-check-d"), []);
+  assert.ok(!classesOf(boxOnlyLabel(locked)).includes("pfv-off"));
+  // Clearing it saves the profile with the key gone.
+  clearable.checked = false;
+  clearable.onchange();
+  assert.strictEqual(await clickBtn(blockOf(locked, "runs"), "Save"), true);
+  assert.ok(!("box_only" in locked.box.puts[0]));
+  assert.strictEqual(locked.box.puts[0].runtime, "box");
+});
+
+test("Host with Box only on is refused before the PUT", async () => {
+  const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { box_only: true, host_block: "this profile is set to box only" }) : p)) });
+  t.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { box_only: true });
+  await openRuns(t, "infra-terraform");
+  const host = field(t, "tier-host");
+  host.checked = true;
+  host.onchange();
+  const before = t.calls.length;
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save as host…"), false);
+  assert.strictEqual(t.box.puts.length, 0);
+  assert.ok(!t.calls.some((x) => x.startsWith("PUT /api/profiles/")), "no PUT was made");
+  assert.strictEqual(t.box.asked.length, 0, "no host-switch confirm was opened");
+  assert.ok(!t.calls.slice(before).some((x) => x.startsWith("confirm:")));
+  const PFV_BOX_ONLY_HOST = t.run("PFV_BOX_ONLY_HOST");
+  assert.strictEqual(PFV_BOX_ONLY_HOST, "Box only is on, so this profile cannot be saved as host. Turn Box only off first.");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), [PFV_BOX_ONLY_HOST]);
+  assert.strictEqual(field(t, "box_only").getAttribute("aria-invalid"), "true");
+});
+
+test("a server refusal of box_only with host lands in Runs in", async () => {
+  const t = page();
+  await openRuns(t, "infra-terraform");
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  t.box.confirmAnswer = true;
+  t.box.putFail = apiErr(400, { error: 'profile "infra-terraform": box_only: cannot be combined with runtime: host', field: "box_only" });
+  await clickBtn(blockOf(t, "runs"), "Save as host…");
+  const runs = blockOf(t, "runs");
+  assert.ok(runs.className.includes("pfv-editing"));
+  assert.strictEqual(texts(runs, "pfv-ferr").length, 1, "the field's words sit in the block that owns it");
+  assert.strictEqual(field(t, "box_only").getAttribute("aria-invalid"), "true");
+});
+
+test("ticking Box only and saving sends box_only", async () => {
+  const t = page();
+  await openRuns(t, "infra-terraform");
+  const cb = field(t, "box_only");
+  cb.checked = true;
+  cb.onchange();
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save"), true);
+  assert.strictEqual(t.box.puts[0].box_only, true);
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+});
+
 test("Runs in to On this machine saves through the same pipeline; a refusal from the server shows in words in the block it names", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
@@ -1882,11 +1972,19 @@ test("Workspace: a stored copy where copies cannot be chosen can pick the folder
     assert.strictEqual(head.hidden, false);
     assert.strictEqual(field(t, "mode-folder").checked, true);
     assert.notStrictEqual(field(t, "mode-copy").disabled, true, "the way back stays open after the redraw");
-    assert.ok(!byCls(blockOf(t, "workspace"), "pfv-card").some((n) => n.textContent.includes("Needs a box.")), "no reason is said for a card that can be picked");
+    // The copy card's own description is its one .pfv-card-d line; a reason, whatever its words, would be a second.
+    const copyCard = byCls(blockOf(t, "workspace"), "pfv-card").filter((n) => n.textContent.includes("Work on a private copy"))[0];
+    assert.strictEqual(byCls(copyCard, "pfv-card-d").length, 1, "no reason is said for a card that can be picked");
     pickMode(t, "copy");
     assert.strictEqual(field(t, "mode-copy").checked, true);
     assert.ok(head.hidden, "a copy and back is no change");
-    assert.strictEqual(t.box.puts.length, 0);
+    // Saving after the way back sends the stored copy as it was: the same folder, copy, share list and auto-return opt-out.
+    const stored = t.box.docs[name];
+    assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+    assert.strictEqual(t.box.puts.length, 1);
+    const body = t.box.puts[0];
+    for (const k of ["default_cwd", "clone_of", "clone_share", "clone_no_auto_return"]) assert.deepStrictEqual(body[k], stored[k], k + " is as stored");
+    assert.ok(stored.clone_of && stored.clone_share.length > 0, "the stored copy has something to lose");
   };
   await stuck(clonePage({ cloneUnavailable: "Docker is not installed" }), "gitops-clone");
   const h = page({ profiles: [view("gitops-host", { runtime: "host", default_cwd: "/home/you/box-clones/k8s-gitops", clone_of: "/home/you/work/k8s-gitops" }), PROFILES[1], PROFILES[3]] });

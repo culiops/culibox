@@ -15,9 +15,10 @@
 // see or use is left alone (spec 9: a hidden value is preserved); a key they name
 // with an empty value (undefined, null, "", false, [] or {}) is removed. Per block:
 //
-//   runs       { tier: "box"|"host", boxAvailable }
+//   runs       { tier: "box"|"host", boxAvailable, boxOnly }
 //                runtime, through runtimeToSend (always explicit). It reads the whole profile, so
-//                it is merged after every other block's keys are in.
+//                it is merged after every other block's keys are in. box_only is written only when
+//                the values name boxOnly (false removes the key); without it box_only stays as stored.
 //   workspace  { mode: "folder"|"copy", folder, copyDir, shareText, autoReturn }
 //                default_cwd, clone_of, clone_share, clone_no_auto_return, through
 //                wmFieldsToSend; the four are replaced as a unit, and no mode writes nothing.
@@ -70,7 +71,7 @@ const PFE_BOX_ONLY = ["aws_connections", "aws", "github", "tokens", "context_pat
 // The first key of each path the server's save refusals name (config.FieldError),
 // and the block that edits it. `options.<key>` and `name` are handled apart.
 const PFE_FIELD_BLOCK = new Map([
-  ["runtime", "runs"],
+  ["runtime", "runs"], ["box_only", "runs"],
   ["default_cwd", "workspace"], ["clone_of", "workspace"], ["clone_share", "workspace"], ["clone_no_auto_return", "workspace"],
   ["bin", "agent"], ["account", "agent"],
   ["aws", "cloud"], ["aws_connections", "cloud"], ["github", "cloud"], ["tokens", "cloud"],
@@ -179,6 +180,7 @@ const PFE_MERGE = {
     // out is the profile as it will be sent: with no box layer the tier depends on what it holds, so this merge has to run
     // after every other block's (pfvSaveBlock does).
     pfeSet(out, "runtime", pfeDep("runtimeToSend", "./profileform.js")(v.tier, doc.runtime, v.boxAvailable !== false, out));
+    if (pfeHas(v, "boxOnly")) pfeSet(out, "box_only", v.boxOnly === true);
   },
 
   workspace(out, v, doc) {

@@ -1723,12 +1723,16 @@ const pfvWithValue = (choices, value) => (value !== "" && !choices.includes(valu
 // --- Runs in -----------------------------------------------------------------------------------------
 
 function pfvRunsValues(c) {
-  return { tier: c.tier };
+  return { tier: c.tier, boxOnly: c.doc.box_only === true };
 }
 
 function pfvRunsMerge(rec, c) {
-  return { tier: rec.values.tier, boxAvailable: c.boxAvailable };
+  return { tier: rec.values.tier, boxAvailable: c.boxAvailable, boxOnly: rec.values.boxOnly };
 }
+
+// Said when Host is picked on a profile locked to the box. The server refuses the same save (S1); this is asked first, so no
+// host-switch question opens for a save that cannot go.
+const PFV_BOX_ONLY_HOST = "Box only is on, so this profile cannot be saved as host. Turn Box only off first.";
 
 // The consequence line is for a box that stays a box; choosing host asks the host question instead.
 function pfvRunsNote(rec, c) {
@@ -1914,6 +1918,12 @@ function pfvRunsForm(rec, c) {
     p.append(refusal, " ", link);
     out.push(p);
   }
+  // host_block is the server's reason Host is not offered. With no lock stored that reason is a binding (or a private copy), which
+  // forces the lock, so the box shows it ticked and off; a stored lock stays the user's to clear, whatever else blocks Host.
+  const forced = !!c.view.host_block && c.view.box_only !== true;
+  const why = forced ? c.view.host_block.charAt(0).toUpperCase() + c.view.host_block.slice(1) + "." : "";
+  out.push(pfaCheckbox(rec, "box_only", "Box only: never offer Host for this profile", why, v.boxOnly || forced,
+    (on) => { v.boxOnly = on; pfvChanged(rec, "box_only"); }, null, forced));
   return out;
 }
 
@@ -2053,6 +2063,7 @@ function pfvPreCheck(rec, c) {
   const v = rec.values;
   if (!v) return null;
   if (rec.id === "agent" && typeof v.bin === "string" && v.bin.trim() === "") return { field: "bin", text: PFV_NO_COMMAND };
+  if (rec.id === "runs" && v.tier === "host" && v.boxOnly) return { field: "box_only", text: PFV_BOX_ONLY_HOST };
   if (rec.id === "runs" && v.tier === "host" && pfvHostRefusal(c.doc)) return { field: "runtime", text: pfvHostRefusal(c.doc) };
   const ed = PFV_EDITORS[rec.id];
   const own = ed && ed.check ? ed.check(rec, c) : null;
