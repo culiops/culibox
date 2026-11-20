@@ -3692,6 +3692,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-nm .pfv-mono { line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-tag { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .55); color: var(--red); font-size: var(--t-xs); font-weight: 600; letter-spacing: .02em; }
   #page-host > #settings-modal.as-page #pfv .pfv-applies { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; margin-left: 6px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font-size: var(--t-xs); font-weight: 400; letter-spacing: .02em; }
+  /* In a block label (a flex column) the tag would stretch to the 132px column: keep it a chip at the start, flush with the name. */
+  #page-host > #settings-modal.as-page #pfv .pfv-label > .pfv-applies { align-self: flex-start; margin-left: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-miss { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-tnote { margin-top: 12px; font-size: var(--t-sm); color: var(--muted); }
   /* + Add access / + Add folder or domain is the kit's .link-add.t-sm (§C2): 400 12/18, no padding, no radius (the .pfv-link look above is the

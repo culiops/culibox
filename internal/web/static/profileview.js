@@ -91,7 +91,8 @@ function pfvAdvancedItems(doc, tier, defs) {
 }
 
 // pfvAdvancedCount: how many Advanced settings are not at their default. tier is
-// optional: without it the stored profile's runtime decides.
+// accepted for the callers that pass it and decides nothing: a stored starting
+// environment counts on any tier.
 function pfvAdvancedCount(doc, tier) {
   return pfvAdvancedItems(doc, tier, []).length;
 }

@@ -510,8 +510,8 @@ function pfvDrawAdvLabel(b) {
   return label;
 }
 
-// pfvDrawAdvanced: the seventh block of the card. With something set its value is the list of what is; with nothing set it is the helper
-// (b.lines[0]: "Arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults."). Edit is in column 3.
+// pfvDrawAdvanced: the last block of the card. With something set its value is the list of what is; with nothing set it is the helper
+// (b.lines[0]: "Starting environment, arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults."). Edit is in column 3.
 function pfvDrawAdvanced(b, known) {
   const sec = pfvMk("section", "pfv-block");
   sec.dataset.block = b.id;
@@ -599,7 +599,7 @@ function pfvRender() {
   pfvDrawn = pfvKey();
 }
 
-// pfvDrawSheets: the blocks as cards. One card holds them all (frame M2.1: Advanced is its seventh block); a block in edit is the card of its
+// pfvDrawSheets: the blocks as cards. One card holds them all (frame M2.1: Advanced is its last block); a block in edit is the card of its
 // own (frame M2.2, §B3: "the editing block as its own card"), with the blocks before it in one card and the blocks after it in another,
 // so the card holds the form and its foot and nothing else. Two blocks open at once (a refusal opens a second form) are two cards.
 function pfvDrawSheets(rv, known) {

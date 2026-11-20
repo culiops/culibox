@@ -1098,6 +1098,10 @@ test("a block is the frame's row: label 132px, the value, then Edit; 24px betwee
   const l = bdecls(PV + " .pfv-label");
   assert.deepStrictEqual([l.get("font-size"), l.get("font-weight"), l.get("line-height")], ["var(--t-md)", "600", "20px"]);
   assert.deepStrictEqual([l.get("display"), l.get("flex-direction"), l.get("gap")], ["flex", "column", "2px"]);
+  // The Applies to tag in that column is a chip at the start of it, not a bar the width of the column.
+  const at = bdecls(PV + " .pfv-label > .pfv-applies");
+  assert.deepStrictEqual([at.get("align-self"), at.get("margin-left")], ["flex-start", "0"]);
+  assert.strictEqual(bdecls(PV + " .pfv-applies").get("color"), "var(--muted)");
   // The value is --fg 500 and the helper --muted at --t-sm (§B2: no third text tier), with no measure of its own: it wraps with the column.
   const main = bdecls(PV + " .pfv-main");
   assert.strictEqual(main.get("font-weight"), "500");

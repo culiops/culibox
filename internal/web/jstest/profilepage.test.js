@@ -6446,3 +6446,18 @@ test("a tagged block, row and Advanced entry draw Applies to ...", () => {
   const dds = adv.all((n) => n.tag === "dd");
   assert.deepStrictEqual(dds.map((d) => tags(d).map((n) => n.textContent)), [["Applies to Host"], []]);
 });
+
+test("a block in edit keeps its Applies to tag in the label, and an untagged one has none", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.ok(blockOf(t, "cloud").className.includes("pfv-editing"));
+  const cl = byCls(blockOf(t, "cloud"), "pfv-label")[0];
+  assert.strictEqual(cl.tag, "h3");
+  assert.strictEqual(labelName(cl), "Cloud and tokens");
+  assert.deepStrictEqual(texts(cl, "pfv-applies"), ["Applies to Box"]);
+  clickBtn(blockOf(t, "cloud"), "Cancel");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  assert.ok(blockOf(t, "agent").className.includes("pfv-editing"));
+  assert.deepStrictEqual(texts(byCls(blockOf(t, "agent"), "pfv-label")[0], "pfv-applies"), []);
+});
