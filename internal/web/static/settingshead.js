@@ -33,10 +33,10 @@ function settingsHeadSpec(tab, info) {
       };
     case "tokens":
       return {
-        title: "API tokens",
+        title: "Device tokens",
         desc: "Let a client app or CLI connect with Authorization: Bearer … and no password. One per device.",
         mono: ["Authorization: Bearer …"],
-        action: { id: "set-act-tokens", label: "New token" },
+        action: { id: "set-act-tokens", label: "New device token" },
       };
     case "vmfolders":
       return {
@@ -59,7 +59,7 @@ function settingsHeadSpec(tab, info) {
   }
 }
 
-// What each header action does: the handler its old footer button had (+ new account, + new token, Reset to
+// What each header action does: the handler its old footer button had (+ new account, + new device token, Reset to
 // defaults, Report a problem). Reset clicks the footer's own button, which is hidden on the page but still wired
 // (app.js initSettings), so there is one reset and not a copy of it. set-act-creds is not here: Task 5's menu
 // code takes that button over (credAddMenuAttach).
@@ -137,7 +137,7 @@ function settingsHeadAction(action) {
 }
 
 // paintSettingsHead(tab): draw page `tab`'s head into its slot. A no-op unless Settings is the desktop page
-// (#settings-modal.as-page): on a phone the modal keeps its Done, + new token and + new account footers.
+// (#settings-modal.as-page): on a phone the modal keeps its Done, + new device token and + new account footers.
 // selectSettingsTab runs before the dialog becomes the page on the first open, so openSettings paints once more
 // afterwards, and loadAboutInfo again once the version has arrived; every call replaces the head.
 function paintSettingsHead(tab) {

@@ -1,6 +1,6 @@
 "use strict";
 
-// Access-token management (the "Access tokens" settings tab). Bearer tokens let
+// Device-token management (the "Device tokens" settings tab). Bearer tokens let
 // a client app / CLI authenticate to this box without the browser session; each
 // is named and independently revocable. The plaintext is shown exactly once, at
 // creation — the server only ever stores its hash.
@@ -31,7 +31,7 @@ function tokCreated(t) {
 // What the in-row confirm says, on the phone's row and on the page's alike.
 const TOK_ARM_COPY = "Revoke? That device is signed out on its next request. This cannot be undone.";
 // The approved footnote under the page's card (design digest §A7).
-const TOK_FOOTNOTE = "A token is shown once, when you create it. Revoking one signs that device out on its next request.";
+const TOK_FOOTNOTE = "A device token is shown once, when you create it. Revoking one signs that device out on its next request.";
 
 // The Settings dialog as the desktop page (pagehost.js sets as-page), not a phone's modal.
 function tokPageMode() {
@@ -59,7 +59,7 @@ function tokBtn(label, cls, onclick) {
 // Where keyboard focus lands once the page's list is repainted. loadTokens rebuilds every row, so the button that was
 // pressed is gone and focus would fall to <body>: { id, which } names a token's "cancel" or "revoke" button, found again
 // by the token's id (never by position: the list is fetched anew). An id that is not in the list (the last token was just
-// revoked, or it went away in another tab) falls back to the head's New token. Set only on the page, never on a phone.
+// revoked, or it went away in another tab) falls back to the head's New device token. Set only on the page, never on a phone.
 let tokFocus = null;
 // The ids of the tokens the page last drew, in order: after a revoke, the neighbour to land on.
 let tokIds = [];
@@ -70,7 +70,7 @@ function tokFocusTo(btns, want) {
   if (el && typeof el.focus === "function") el.focus();
 }
 
-// tokNextFocus(id): after token `id` is revoked, its next row's Revoke…, else the previous row's, else (no id) New token.
+// tokNextFocus(id): after token `id` is revoked, its next row's Revoke…, else the previous row's, else (no id) New device token.
 function tokNextFocus(id) {
   const i = tokIds.indexOf(id);
   return { id: i < 0 ? "" : (tokIds[i + 1] || tokIds[i - 1] || ""), which: "revoke" };
@@ -131,7 +131,7 @@ function tokRole(el, role) {
 // carries its explicit role (tokRole): the table, its two row groups, its rows, heads and cells.
 function tokPageTable(items, btns) {
   const table = tokRole(tokEl("table", "tbl tok-tbl"), "table");
-  table.setAttribute("aria-label", "API tokens");
+  table.setAttribute("aria-label", "Device tokens");
   const cols = tokEl("colgroup");
   for (let i = 0; i < 4; i++) cols.appendChild(tokEl("col"));
   table.appendChild(cols);
@@ -148,7 +148,7 @@ function tokPageTable(items, btns) {
   return table;
 }
 
-// tokPaintPage: the desktop page's list: one card holding the table (or the line "No tokens yet."), the approved
+// tokPaintPage: the desktop page's list: one card holding the table (or the line "No device tokens yet."), the approved
 // footnote under it. Both are items of #tok-list, so a repaint clears them with the rows. They are a card and a note, not
 // a list of two things, so the list and its items carry role="none" (the phone's branch takes it off again: the mode can
 // flip). `focus` is where keyboard focus goes after the repaint (see tokFocus).
@@ -159,7 +159,7 @@ function tokPaintPage(list, items, focus) {
   // after the phone's fetch answers, so a page card left behind would show amber until then. desktop.css gives .tok-card the fill.
   const card = tokEl("li", "tok-card");
   card.setAttribute("role", "none");
-  if (!items || items.length === 0) card.appendChild(tokEl("p", "tokempty", "No tokens yet."));
+  if (!items || items.length === 0) card.appendChild(tokEl("p", "tokempty", "No device tokens yet."));
   else card.appendChild(tokPageTable(items, btns));
   const note = tokEl("li", "tok-under t-sm muted", TOK_FOOTNOTE);
   note.setAttribute("role", "none");
@@ -186,7 +186,7 @@ async function loadTokens() {
   try {
     items = await api("/api/tokens");
   } catch (e) {
-    setTokErr("Could not load tokens: " + e.message);
+    setTokErr("Could not load device tokens: " + e.message);
     return;
   }
   // A refresh can never leave a row armed against a token that is gone —
@@ -199,7 +199,7 @@ async function loadTokens() {
   if (!items || items.length === 0) {
     const li = document.createElement("li");
     li.className = "tokempty";
-    li.textContent = "No tokens yet.";
+    li.textContent = "No device tokens yet.";
     list.appendChild(li);
     return;
   }
@@ -281,8 +281,8 @@ function revealToken(plain) {
 async function createToken() {
   setTokErr("");
   const name = await askPrompt({
-    title: "New access token",
-    body: "A name to recognise this token later (e.g. \"macbook\", \"cli\").",
+    title: "New device token",
+    body: "A name to recognise this device token later (e.g. \"macbook\", \"cli\").",
     label: "Name",
     placeholder: "macbook",
     confirmLabel: "Create",
@@ -313,7 +313,7 @@ async function createToken() {
 async function revokeToken(id) {
   setTokErr("");
   armedToken = "";
-  // On the page, focus moves to the next row's Revoke… (the previous one's, or New token) once the row is gone.
+  // On the page, focus moves to the next row's Revoke… (the previous one's, or New device token) once the row is gone.
   const next = tokPageMode() ? tokNextFocus(id) : null;
   try {
     await api("/api/tokens/" + encodeURIComponent(id), { method: "DELETE" });
@@ -331,7 +331,7 @@ async function logout(opts) {
   const ask = {
     title: "Sign out of this box",
     body: "This browser will need the password again. Your running agents keep " +
-          "running, and any access tokens you have created keep working — revoke " +
+          "running, and any device tokens you have created keep working — revoke " +
           "those individually if you want them gone.",
     confirmLabel: "Sign out",
     danger: true,

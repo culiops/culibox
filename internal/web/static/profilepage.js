@@ -1158,7 +1158,7 @@ function pfvTabLeave(tab) {
 
 // --- the Credentials drawer (spec 5.7) ---------------------------------------------------------------------------
 
-// The "New AWS connection...", "New GitHub App..." and "New token..." items of the "+ Add" picker open credentials.js's add flows in
+// The "New AWS connection...", "New GitHub App..." and "New service token..." items of the "+ Add" picker open credentials.js's add flows in
 // a drawer over the page (index.html: #cred-scrim and #cred-drawer, whose head is the header band that stays put (the flow's crumb and
 // intro), whose body is where a flow draws itself, whose foot is where its buttons and a refused Save go, and whose status line says
 // why a close has to wait). The flows are handed `opts` = {head, host, foot, saveLabel, onCreated, onIdle, onClose} and know nothing of
@@ -1184,7 +1184,7 @@ function pfvDrawerParts() {
 }
 
 // pfvDrawerStarter: the flow that makes a kind of credential, as a function of opts; null for a kind there is none of.
-// A token starts where the Credentials tab's own Add token does (no group, no provider chosen for the user).
+// A token starts where the Credentials tab's own Add service token does (no group, no provider chosen for the user).
 function pfvDrawerStarter(kind) {
   if (kind === "aws" && typeof awsOpenAdd === "function") return (opts) => awsOpenAdd(opts);
   if (kind === "github" && typeof credGitHubChoose === "function") return (opts) => credGitHubChoose(opts);

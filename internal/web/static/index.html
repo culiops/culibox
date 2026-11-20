@@ -345,7 +345,7 @@
       <button type="button" class="t" data-tab="creds" role="tab" aria-selected="false" aria-controls="creds">Credentials</button>
       <button type="button" class="t" data-tab="vmfolders" role="tab" aria-selected="false" aria-controls="vmfolders" hidden>VM folders</button>
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
-      <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">API tokens</button>
+      <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Device tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
       <button type="button" class="t" data-tab="about" role="tab" aria-selected="false" aria-controls="about">About</button>
       <button type="button" id="set-signout">Sign out…</button>
@@ -591,7 +591,7 @@
     </div>
     <div class="dbd pad" id="tokens" role="tabpanel" hidden>
       <div class="set-head"></div>
-      <p class="hint">An access token lets a client app or CLI connect to this box
+      <p class="hint">A device token lets a client app or CLI connect to this box
         with <code>Authorization: Bearer&nbsp;…</code>, with no password prompt.
         One per device; revoke any at any time.</p>
       <div id="tok-reveal" class="reveal" hidden>
@@ -649,7 +649,7 @@
     <div class="dft" id="foot-tokens" hidden>
       <button id="tok-logout" type="button" class="btn dgr">Sign out of this box…</button>
       <span class="grow"></span>
-      <button id="tok-new" type="button" class="btn">+ new token</button>
+      <button id="tok-new" type="button" class="btn">+ new device token</button>
       <button type="button" class="btn pri" data-close="settings-modal">Done</button>
     </div>
     <div class="dft" id="foot-vmfolders" hidden>

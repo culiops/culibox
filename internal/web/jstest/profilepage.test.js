@@ -2523,7 +2523,7 @@ test("the + Add picker is a dialog under its link: a filter, then AWS connection
   assert.deepStrictEqual(groupsOf(t).map((g) => byCls(g, "pfv-opt").map(optName)), [
     ["prod-read PROD", "staging-read", "sandbox", "sso-lab", "New AWS connection…"],
     ["Another org or user", "New GitHub App…"],
-    ["grafana-prod production", "sentry-staging", "pagerduty", "gh-pat", "New token…"],
+    ["grafana-prod production", "sentry-staging", "pagerduty", "gh-pat", "New service token…"],
   ]);
   assert.deepStrictEqual(texts(popOf(t), "pfv-pick-note"), ["Tokens are long-lived, and the agent can read them while it runs."]);
   assert.strictEqual(t.run("pfvState").picker, "cloud");
@@ -2544,7 +2544,7 @@ test("picker sub-line shows account and region, what the connection can do, a to
   assert.deepStrictEqual(sub("Another org or user"), ["Through the GitHub App: 1-hour tokens, read only unless you change it"]);
   assert.deepStrictEqual(sub("New AWS connection…"), ["Set it up in Credentials without leaving this page"]);
   assert.deepStrictEqual(sub("New GitHub App…"), ["Install the App on an org, or paste a personal access token"]);
-  assert.deepStrictEqual(sub("New token…"), ["Kept in the encrypted credential store"]);
+  assert.deepStrictEqual(sub("New service token…"), ["Kept in the encrypted credential store"]);
   assert.deepStrictEqual(texts(optsOf(t).find((b) => optName(b).startsWith("prod-read")), "pfv-tag"), ["PROD"]);
   assert.deepStrictEqual(texts(optsOf(t).find((b) => optName(b).startsWith("grafana-prod")), "pfv-tag"), ["production"]);
   // A connection the instance has no account or region for says only what it can do.
@@ -2802,7 +2802,7 @@ test("the create items call the Credentials drawer for their kind, once there is
   clickBtn(blockOf(t, "cloud"), "+ Add access");
   optBtn(t, "cloud", "New GitHub App…").click();
   clickBtn(blockOf(t, "cloud"), "+ Add access");
-  optBtn(t, "cloud", "New token…").click();
+  optBtn(t, "cloud", "New service token…").click();
   assert.deepStrictEqual(asked, ["aws", "github", "token"]);
   assert.ok(unsavedNote(t).hidden, "creating is not picking: no row is added here");
 });
@@ -2811,7 +2811,7 @@ test("a create item the page has no drawer for does nothing: the choice stays as
   const t = pickPage();
   await openPicker(t);
   const rows = rowsOf(t, "cloud").length;
-  for (const title of ["New AWS connection…", "New GitHub App…", "New token…"]) optBtn(t, "cloud", title).click();
+  for (const title of ["New AWS connection…", "New GitHub App…", "New service token…"]) optBtn(t, "cloud", title).click();
   assert.strictEqual(t.run("pfvState").picker, "cloud", "the picker is as it was");
   assert.strictEqual(rowsOf(t, "cloud").length, rows);
   assert.ok(unsavedNote(t).hidden);
@@ -2823,7 +2823,7 @@ test("a click outside the open picker closes it and leaves focus where the click
   await openPicker(t);
   docClick(t, byCls(popOf(t), "pfv-pick-find")[0]);
   assert.strictEqual(t.run("pfvState").picker, "cloud", "inside");
-  docClick(t, optBtn(t, "cloud", "New token…"));
+  docClick(t, optBtn(t, "cloud", "New service token…"));
   assert.strictEqual(t.run("pfvState").picker, "cloud", "on an option");
   docClick(t, field(t, "add"));
   assert.strictEqual(t.run("pfvState").picker, "cloud", "on its own link: the link toggles it");
@@ -4292,7 +4292,7 @@ test("Claude login opens the Agent block on the account select", async () => {
   assert.strictEqual(t.run("pfvState").picker, "");
 });
 
-test("a service token with none defined opens the New token drawer", async () => {
+test("a service token with none defined opens the New service token drawer", async () => {
   const t = page({ stEntries: [] });
   const asked = [];
   t.box.pfvOpenDrawer = (kind, id) => { asked.push([kind, id]); return true; };
@@ -6321,7 +6321,7 @@ test("the drawer opens from a create item of the picker with a host, a foot, a l
 
 test("each kind starts its own Credentials flow in the drawer; the primary button reads 'and add'", async () => {
   const labels = {};
-  for (const [title, kind] of [["New AWS connection…", "aws"], ["New GitHub App…", "github"], ["New token…", "token"]]) {
+  for (const [title, kind] of [["New AWS connection…", "aws"], ["New GitHub App…", "github"], ["New service token…", "token"]]) {
     const d = drawerPage({ awscEntries: PICK_AWS });
     const flow = await openDrawerFrom(d, title);
     assert.strictEqual(flow.kind, kind, title);
@@ -6342,11 +6342,11 @@ test("the drawer opens only while a block is open in edit mode", async () => {
   assert.strictEqual(d.t.run("pfvState").drawer, false);
 });
 
-test("a token made from New token… is a pending token row, one per name the server made", async () => {
+test("a token made from New service token… is a pending token row, one per name the server made", async () => {
   const d = drawerPage({ awscEntries: PICK_AWS });
   const { t } = d;
   defineAfterRefresh(t, { tokens: [{ name: "pd-eu", env: ["PAGERDUTY_TOKEN"], hosts: [{ host: "api.eu.pagerduty.com", port: 443 }] }, { name: "pd-us", env: ["PAGERDUTY_TOKEN"], hosts: [{ host: "api.pagerduty.com", port: 443 }] }] });
-  const flow = await openDrawerFrom(d, "New token…");
+  const flow = await openDrawerFrom(d, "New service token…");
   flow.opts.onCreated(["pd-eu", "pd-us"], "token");
   flow.opts.onClose();
   await settle();
@@ -6463,7 +6463,7 @@ test("every close empties the drawer's host and foot, hides it and its scrim, fr
   };
   for (const [how, close] of Object.entries(closers)) {
     const d = drawerPage({ awscEntries: PICK_AWS });
-    await openDrawerFrom(d, "New token…");
+    await openDrawerFrom(d, "New service token…");
     d.body.append(new Node("input"));
     assert.ok(d.head.children.length > 0 && d.body.children.length > 0 && d.foot.children.length > 0, how + ": drawn");
     close(d);
@@ -6540,7 +6540,7 @@ test("while a flow saves, a close is refused with a line that says why; once it 
 test("a close with no flow to end (it was still reading the server) drops the flow, so it draws nothing into the emptied host", async () => {
   const d = drawerPage({ awscEntries: PICK_AWS });
   const { t, st } = d;
-  await openDrawerFrom(d, "New token…");
+  await openDrawerFrom(d, "New service token…");
   st.cur = null;
   assert.strictEqual(t.box.pfvCloseDrawer(), true);
   assert.strictEqual(st.drops, 1);
@@ -6615,7 +6615,7 @@ test("a forced close keeps what the drawer's flow had already created, as pendin
 test("Tab cycles inside the open drawer, and a Tab from outside it goes in", async () => {
   const d = drawerPage({ awscEntries: PICK_AWS });
   const { t, drawer } = d;
-  await openDrawerFrom(d, "New token…");
+  await openDrawerFrom(d, "New service token…");
   const keys = t.doc.listeners.keydown || [];
   assert.ok(keys.length > 0, "the page listens for Tab on the document, so it also holds when focus fell to the body");
   const press = (shift) => { let stopped = false; keys.forEach((f) => f({ key: "Tab", shiftKey: shift, preventDefault: () => { stopped = true; } })); return stopped; };
@@ -6642,7 +6642,7 @@ test("Tab cycles inside the open drawer, and a Tab from outside it goes in", asy
   assert.strictEqual(press(false), false);
   // A question on screen is not the drawer's to steal Tab from.
   const e = drawerPage({ awscEntries: PICK_AWS });
-  await openDrawerFrom(e, "New token…");
+  await openDrawerFrom(e, "New service token…");
   e.t.els["ask-modal"] = { open: true };
   Node.focused = null;
   let stopped = false;
@@ -6652,13 +6652,13 @@ test("Tab cycles inside the open drawer, and a Tab from outside it goes in", asy
 
 test("focus goes into the drawer when it opens: the first control after the crumb, else the drawer itself", async () => {
   const d = drawerPage({ awscEntries: PICK_AWS });
-  await openDrawerFrom(d, "New token…");
+  await openDrawerFrom(d, "New service token…");
   const inputs = d.body.all((n) => n.tag === "input");
   assert.strictEqual(Node.focused, inputs[0], "not the crumb, which would close the drawer on Enter");
   // A flow that has drawn nothing yet (it is reading the server): the drawer takes focus, so Esc and Tab are already its own.
   const e = drawerPage({ awscEntries: PICK_AWS });
   e.t.box.credTokenAdd = (g, s, opts) => { e.st.started.push({ kind: "token", opts }); e.st.cur = opts; };
-  await openDrawerFrom(e, "New token…");
+  await openDrawerFrom(e, "New service token…");
   assert.strictEqual(Node.focused, e.drawer);
   assert.strictEqual(e.t.box.pfvEscTarget(), "drawer");
 });
@@ -6703,7 +6703,7 @@ test("the busy line goes as soon as the save has answered, whether or not the fl
   assert.strictEqual(status.hidden, true);
   // A late answer for a drawer that has gone does not touch a new one's line.
   t.box.pfvCloseDrawer();
-  const again = await openDrawerFrom(d, "New token…");
+  const again = await openDrawerFrom(d, "New service token…");
   again.opts.onIdle();
   flow.opts.onIdle();
   assert.strictEqual(status.hidden, true);
@@ -6726,7 +6726,7 @@ test("the header band is part of the drawer's markup, above the body", () => {
 
 test("the first control the drawer focuses is in the body, never the header's crumb link", async () => {
   const d = drawerPage({ awscEntries: PICK_AWS });
-  await openDrawerFrom(d, "New token…");
+  await openDrawerFrom(d, "New service token…");
   assert.ok(d.body.contains(Node.focused), "in the body");
   assert.ok(!d.head.contains(Node.focused));
 });

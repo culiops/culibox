@@ -687,7 +687,7 @@ function ghKeyID(name) {
   return "gh-" + String(name || "").replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 57) + "-key";
 }
 
-// templateForm: what the Add token form asks for, from one catalog template.
+// templateForm: what the Add service token form asks for, from one catalog template.
 // A select starts on its first option; Sentry's URL shows only when "Self-hosted"
 // is chosen (`when`). `values` are the secrets to paste, in the template's order
 // (Datadog has two). defaultName is "" when the operator has to name it ("other").
@@ -1355,7 +1355,7 @@ function credSection(g) {
     // (an add inside a block). The phone's card mode is unchanged.
     const add = kind && !(credPageMode() && kind !== "value") && credActionHandlers[kind] && credActionHandlers[kind].add;
     if (typeof add === "function") {
-      const b = credEl("button", "btn" + (g.key === "aws" ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub" : "Add token");
+      const b = credEl("button", "btn" + (g.key === "aws" ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub" : "Add service token");
       b.type = "button";
       b.onclick = () => add(g, loadCredentials);
       h.appendChild(b);
@@ -1468,7 +1468,7 @@ function credAddItems() {
   return [
     { label: "Add AWS accounts", kind: "aws" },
     { label: "Add GitHub", kind: "github" },
-    { label: "Add token", kind: "token" },
+    { label: "Add service token", kind: "token" },
   ];
 }
 
@@ -3315,7 +3315,7 @@ function credTokensEmpty() {
     // No add of its own on the desktop page's cards: the head's "Add credential ▾" adds a token (see credSection).
     const add = !credPageMode() && credActionHandlers.token && credActionHandlers.token.add;
     if (typeof add === "function") {
-      const b = credEl("button", "btn", "Add token");
+      const b = credEl("button", "btn", "Add service token");
       b.type = "button";
       b.onclick = () => add(null, loadCredentials);
       h.appendChild(b);
@@ -3445,7 +3445,7 @@ function credTokenDetails(t, taken, opts) {
   };
 }
 
-// credTokenAdd: the Add token view, starting on the template `startID` or the group's provider. Given
+// credTokenAdd: the Add service token view, starting on the template `startID` or the group's provider. Given
 // opts (a host, see above) it first reads the store and the tokens already there (credRefreshView), which
 // the tab's own load has done by then; a missing store is the inline "Create the encrypted store" step,
 // and a locked one does not stop the add. It reports the names the server created, kind "token".
@@ -3494,7 +3494,7 @@ async function credTokenAdd(group, startID, opts) {
   }
   tilesSec.append(th, tiles);
 
-  credOpenForm({ kind: "token-add", template: start.id, saveLabel: "Save" }, "Add token", [tilesSec, detHost], async () => {
+  credOpenForm({ kind: "token-add", template: start.id, saveLabel: "Save" }, "Add service token", [tilesSec, detHost], async () => {
     const body = fromTemplateBody(cur, det.collect());
     if (!body.name) { credFormErr("Give the token a name."); return false; }
     if (!det.ready()) { credFormErr(CRED_STORE_FIRST); return false; }

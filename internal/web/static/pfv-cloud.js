@@ -583,7 +583,7 @@ function pfcCloudPick(rec) {
   for (const t of tokens) {
     tok.items.push({ title: t.name, tag: t.prod === true ? "production" : "", sub: spawnJoin([t.description].concat(spawnTokenHosts(t.hosts))), added: heldTok.has(t.name), add: { kind: "token", name: t.name } });
   }
-  tok.items.push({ title: "New token…", sub: "Kept in the encrypted credential store", create: "token" });
+  tok.items.push({ title: "New service token…", sub: "Kept in the encrypted credential store", create: "token" });
   return { label: "Add cloud access or a token", filter: "Filter connections and tokens", groups: [aws, gh, tok] };
 }
 
