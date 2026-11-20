@@ -2829,7 +2829,8 @@ test("AWS Advanced: extra hosts say they add to the defaults, the S3 field says 
   assert.ok(/on top of the defaults/.test(hosts.textContent) && hosts.textContent.includes("Anthropic"), hosts.textContent);
   const s3 = hintOf(opts.host, "The agent may read objects only");
   assert.ok(s3, "the S3 hint is drawn");
-  assert.ok(/every other S3 object read is denied/i.test(s3.textContent), s3.textContent);
+  assert.ok(/other S3 object reads are denied/i.test(s3.textContent), s3.textContent);
+  assert.ok(/except in the box buckets an elevate window may use \(set in the config file\)/.test(s3.textContent), "the elevate box_bucket_prefix exception is named: " + s3.textContent);
   const col = (h) => h.closest("div.fcol");
   assert.strictEqual(col(s3).hidden, false);
   vmEval(p, 'awsSetMode(awsFlow.rows[0], "sso_direct")');

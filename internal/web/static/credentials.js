@@ -2208,7 +2208,7 @@ function awsBuildRow(row) {
   adv.appendChild(awsField(row, "egress", "Extra hosts the agent may reach", { area: true, full: true, placeholder: "one per line, e.g. *.example.com",
     hint: "Added to the allowed hosts of a box that uses this connection, on top of the defaults (AWS, Anthropic, GitHub, package registries and release hosts)." }).col);
   const s3f = awsField(row, "s3", "S3 buckets the agent may read", { area: true, full: true, placeholder: "one per line",
-    hint: "The agent may read objects only in these buckets or prefixes (bucket, or bucket/prefix/). Every other S3 object read is denied, so empty means none." });
+    hint: "The agent may read objects only in these buckets or prefixes (bucket, or bucket/prefix/). Other S3 object reads are denied, except in the box buckets an elevate window may use (set in the config file). Empty means no bucket of your own." });
   adv.appendChild(s3f.col);
   const elf = awsField(row, "elevRole", "Elevate role ARN (optional)", { full: true, repaints: true, placeholder: "arn:aws:iam::<account>:role/<write role>" });
   adv.appendChild(elf.col);
