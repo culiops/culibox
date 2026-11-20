@@ -818,6 +818,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	live.pm = pm
 	live.Apply(cfg)
 	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
+	pm.SetBoxClaudeCredential(secretchain.ProfileBoxCredential(resolver, acctTokenStore, func(n string) (account.Account, error) {
+		r, err := accts.Resolve(n)
+		return r.Account, err
+	}))
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works
 	// for profile-based claude sessions that survived a daemon restart.
