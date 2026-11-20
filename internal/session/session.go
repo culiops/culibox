@@ -2729,36 +2729,18 @@ func bindingKinds(bs config.Bindings) []string {
 	return k
 }
 
-// joinKinds reads a list as prose: "AWS", "AWS and GitHub", "AWS, GitHub and token".
-func joinKinds(k []string) string {
-	if len(k) <= 1 {
-		return strings.Join(k, "")
-	}
-	return strings.Join(k[:len(k)-1], ", ") + " and " + k[len(k)-1]
-}
-
 // bindingKind names a binding set for a refusal: "an AWS binding", "a GitHub
 // binding", "a token binding", or for several "AWS and GitHub bindings" /
-// "AWS, GitHub and token bindings".
+// "AWS, GitHub and token bindings". The wording lives in config, which also
+// words the host-tier refusal for a profile.
 func bindingKind(bs config.Bindings) string {
-	switch k := bindingKinds(bs); len(k) {
-	case 0:
-		// Only an empty set gets here; keep the historical wording.
-		return "an AWS binding"
-	case 1:
-		if k[0] == "AWS" {
-			return "an AWS binding"
-		}
-		return "a " + k[0] + " binding"
-	default:
-		return joinKinds(k) + " bindings"
-	}
+	return config.BindingPhrase(bindingKinds(bs))
 }
 
 // bindingNames is bindingKind without the article, for "preparing X access".
 func bindingNames(bs config.Bindings) string {
 	if k := bindingKinds(bs); len(k) > 0 {
-		return joinKinds(k)
+		return config.JoinKinds(k)
 	}
 	return "AWS"
 }
