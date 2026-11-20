@@ -140,10 +140,11 @@ function palSessionRun(s, nested, act) {
 }
 
 // --- item sources ------------------------------------------------------------
-// The first nine rows carry their jump shortcut instead of the cwd: past nine
-// there is no key to advertise, and a hint that names a key nothing is bound
-// to is worse than no hint. mac is threaded in from the caller (palRefresh)
-// rather than computed again here — see the mac note on paletteCommands.
+// The first nine rows the sidebar shows carry their jump shortcut instead of the
+// cwd: rows in a collapsed group are skipped and show their folder. Past nine there
+// is no key to advertise, and a hint that names a key nothing is bound to is worse
+// than no hint. mac is threaded in from the caller (palRefresh) rather than computed
+// again here — see the mac note on paletteCommands.
 function paletteSessions(mac) {
   // The list holds every session, so a search still finds one in a collapsed group. The digit comes from
   // the order the jump shortcut uses, which skips collapsed groups, so the hint on a row is the key that
