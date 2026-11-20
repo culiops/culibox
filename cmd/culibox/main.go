@@ -936,7 +936,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	api.QuickShell = srv.QuickShell
 	// The macOS VM state for the New session dialog; nil without the box layer.
 	if layer != nil {
-		api.VMState = layer.vmStateWord
+		api.VMState = layer.vmStateAnswer
 	}
 	// The file tree's git badges and diffs; nil without the box layer.
 	srv.Git = gitViewFor(layer, os.Getuid(), os.Getgid())

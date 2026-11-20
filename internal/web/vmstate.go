@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -66,7 +67,9 @@ func (c *vmStateCache) run(ctx context.Context, hook func(context.Context) strin
 	// A panicking hook must not take the process down from this goroutine, and
 	// its waiters must be released: no answer is "" ("unknown").
 	defer func() {
-		_ = recover()
+		if r := recover(); r != nil {
+			log.Printf("vm-state hook panicked: %v", r)
+		}
 		c.mu.Lock()
 		c.val, c.at, c.has = f.val, now(), true
 		c.flight = nil

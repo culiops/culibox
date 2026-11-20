@@ -532,8 +532,8 @@ func vmStateWord(hasVM, stopped, confirmed bool) string {
 	return ""
 }
 
-// vmStateWord is the layer's VM state word. Reading it never starts the VM.
-func (l *boxLayer) vmStateWord(ctx context.Context) string {
+// vmStateAnswer is the layer's VM state word. Reading it never starts the VM.
+func (l *boxLayer) vmStateAnswer(ctx context.Context) string {
 	stopped, confirmed := l.vmState(ctx)
 	return vmStateWord(l.vm != nil, stopped, confirmed)
 }

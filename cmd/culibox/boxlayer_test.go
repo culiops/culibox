@@ -1647,7 +1647,7 @@ func TestLinuxLayerVMStateIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := l.vmStateWord(context.Background()); got != "" {
+	if got := l.vmStateAnswer(context.Background()); got != "" {
 		t.Fatalf("linux has no VM: state = %q, want empty", got)
 	}
 }

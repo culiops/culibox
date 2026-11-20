@@ -55,7 +55,7 @@ type API struct {
 	// that omits cwd uses it before DefaultCwd. nil = no profile defaults.
 	ProfileCwd func(agent string) string
 	// VMState reports the macOS box VM for GET /api/vm-state: "running",
-	// "stopped" (only when confirmed) or "" (unknown, no VM). nil = no VM. It
+	// "stopped" (only when confirmed) or "" (unknown, no VM). nil = no box layer. It
 	// may take 30 s (colima status), so the endpoint caches it and runs one
 	// call at a time.
 	VMState func(ctx context.Context) string
