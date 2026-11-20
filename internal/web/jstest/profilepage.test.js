@@ -3850,7 +3850,7 @@ test("Advanced edit form: the mockup's fields in order, for a box profile and fo
   assert.deepStrictEqual(advLabels(t), ["Environment it starts with Applies to Host", "Extra command-line arguments", "Environment variables"]);
   assert.deepStrictEqual(texts(advOf(t), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session.", "Include files my CLAUDE.md pulls in with @Read-only copies in the box. Applies to Box"]);
   assert.strictEqual(field(t, "args").getAttribute("placeholder"), "--some-flag");
-  const inheritLine = t.run("PFA_BASE_LINES").inherit;
+  const inheritLine = t.run("PFA_BASE_LINES").inherit + t.run("PFA_INHERIT_CLAUDE");
   const envLine = t.run("PFA_ENV_HINT");
   assert.deepStrictEqual(texts(advOf(t), "pfv-hint"), [inheritLine, "One per line.", "None. The agent gets the box's minimal environment.", envLine]);
   assert.strictEqual(byText(advOf(t), "button", "+ Add variable").length + byText(advOf(t), "button", "+ Add secret").length, 2);
@@ -4273,6 +4273,35 @@ test("stored secrets show a true hint and round-trip", async () => {
   const file = page({ secretSources: [{ type: "file", path: "/etc/cb/s.env" }] });
   await openAdv(file, "aws-ops", { secrets: ["OLD_TOKEN"] });
   assert.deepStrictEqual(hint(file), ["Resolved at start from the file /etc/cb/s.env."]);
+});
+
+test("on a profile that does not run in a box the secret pointers say a service token needs the Box tier; the box strings stay", async () => {
+  // runbook-host: runtime host. The server refuses tokens unless runtime is box (statictoken.go validateTokens).
+  const host = page({ secretSources: [] });
+  await openAdv(host, "runbook-host", { secrets: ["OLD_TOKEN"] });
+  const hostHint = host.run("PFA_SECRET_NO_SOURCE_NOT_BOX");
+  assert.deepStrictEqual(texts(envRowsOf(host)[0], "pfv-hint"), [hostHint]);
+  assert.ok(!/Use a service token instead/.test(hostHint), hostHint);
+  assert.match(hostHint, /Box tier/);
+  assert.match(hostHint, /refuse to start/, "the true half of the line stays");
+  assert.deepStrictEqual(menuTitles(host), ["Claude login", "A service token"], "the item stays on every tier");
+  assert.deepStrictEqual(texts(popOf(host, "advanced"), "pfv-opt-s"), ["Pick the account this profile signs in with.", "An API key or token for a service. It needs the Box tier."]);
+  // Sources configured: the hint names them whatever the tier.
+  const withSrc = page({ secretSources: [{ type: "store" }] });
+  await openAdv(withSrc, "runbook-host", { secrets: ["OLD_TOKEN"] });
+  assert.deepStrictEqual(texts(envRowsOf(withSrc)[0], "pfv-hint"), ["Resolved at start from the credential store."]);
+  // A box profile: both strings as before.
+  const box = page({ secretSources: [] });
+  await openAdv(box, "aws-ops", { secrets: ["OLD_TOKEN"] });
+  assert.deepStrictEqual(texts(envRowsOf(box)[0], "pfv-hint"), ["No secret source is configured, so a session with this profile will refuse to start. Use a service token instead."]);
+  assert.strictEqual(box.box.pfaSecretHint([], "box"), box.box.pfaSecretHint([]));
+  assert.strictEqual(box.box.pfaSecretHint([], "host"), hostHint);
+  // No explicit runtime: the page reads the instance default, and that is not box when the default is host.
+  const dflt = page({ secretSources: [], profiles: [view("plain", { runtime: "host" })] });
+  dflt.box.docs.plain = { name: "plain", bin: "claude", rev: "r9", secrets: ["OLD_TOKEN"] };
+  await dflt.box.pfvShow("plain");
+  clickBtn(advOf(dflt), "Edit");
+  assert.deepStrictEqual(texts(envRowsOf(dflt)[0], "pfv-hint"), [hostHint]);
 });
 
 test("pfaSourcesWords and pfaSecretHint say each source, in config order", () => {
@@ -6951,7 +6980,8 @@ test("base choice says what it does", async () => {
   for (const base of ["inherit", "clean", "login"]) {
     field(t, "base").value = base; field(t, "base").onchange();
     const now = field(t, "base").parent;
-    assert.deepStrictEqual(hintsOf(now), [lines[base]], base);
+    // These profiles run claude: the inherit line carries the Claude login clause.
+    assert.deepStrictEqual(hintsOf(now), [lines[base] + (base === "inherit" ? t.run("PFA_INHERIT_CLAUDE") : "")], base);
   }
   // What each line says is what the launcher does (launcher.go baseEnv, curatedBase, argv).
   assert.match(lines.inherit, /^Everything in the CuliBox service's environment/);
@@ -6992,10 +7022,18 @@ test("domain row says it has no effect without a binding, dimmed and still edita
   assert.strictEqual(unsavedNote(t).hidden, false);
   assert.strictEqual(await clickBtn(blockOf(t, "reachable"), "Save"), true);
   assert.deepStrictEqual(t.box.puts[0].egress_allow, ["api.example.net"]);
-  // A host-tier profile with no binding says it too.
+  // A host-tier profile is refused at save (domains need runtime box), so it says that instead, in the picker and on the row.
   const h = page();
   const dh = await openDomainRow(h, "runbook-host");
-  assert.ok(dh.sub.includes("no effect") && dh.row.className.includes("pfv-off"));
+  assert.ok(dh.sub.includes("needs the Box tier") && !dh.sub.includes("no effect"), dh.sub);
+  assert.ok(dh.sub.includes("HTTPS"), dh.sub);
+  assert.strictEqual(hintsOf(dh.row).join(" "), h.run("PFV_DOMAIN_NEEDS_BOX") + " " + h.run("PFC_DOMAIN_FORM"));
+  assert.ok(dh.row.className.includes("pfv-off"));
+  // Even with a binding: a host profile that stores a token (hand-edited) still cannot save a domain.
+  const hb = page();
+  const dhb = await openDomainRow(hb, "runbook-host", { tokens: ["grafana-prod"] });
+  assert.ok(dhb.sub.includes("needs the Box tier"), dhb.sub);
+  assert.ok(hintsOf(dhb.row).join(" ").includes(hb.run("PFV_DOMAIN_NEEDS_BOX")));
   // A bound profile says neither, and says how the hosts relate to "Allow all internet hosts".
   const b = page();
   const db = await openDomainRow(b, "infra-terraform", { tokens: ["grafana-prod"] });
@@ -7126,9 +7164,39 @@ test("a stored domain on an unbound profile is dimmed and says it has no effect,
   assert.ok(!off(domainRow(b, "reachable")) && !texts(domainRow(b, "reachable"), "pfv-hint").join(" ").includes("no effect"));
 });
 
-test("the inherit line is true for a non-default Claude login too", () => {
-  const line = page().run("PFA_BASE_LINES").inherit;
-  assert.match(line, /other than default/);
-  assert.match(line, /Anthropic credentials/);
-  assert.ok(!/\bOnly CuliBox's own/.test(line), "no claim that only CuliBox's variables are left out");
+test("a stored domain on a profile that does not run in a box says it needs the Box tier, in the read view and in the editor", async () => {
+  const domainRow = (t, id) => rowsOf(t, id).find((r) => texts(r, "pfv-k")[0] === "Domain");
+  const t = page({ profiles: [PROFILES[0], PROFILES[1], PROFILES[2], view("runbook-host", { runtime: "host", egress_allow: ["api.example.com"], tokens: ["grafana-prod"] })] });
+  t.box.docs["runbook-host"] = Object.assign({}, DOCS["runbook-host"], { egress_allow: ["api.example.com"], tokens: ["grafana-prod"] });
+  await t.box.pfvShow("runbook-host");
+  let row = domainRow(t, "reachable");
+  assert.ok(row.className.split(/\s+/).includes("pfv-off"), "read view row is dimmed even with a binding");
+  assert.deepStrictEqual(texts(row, "pfv-hint"), [t.run("PFV_DOMAIN_NEEDS_BOX")]);
+  clickBtn(blockOf(t, "reachable"), "Edit");
+  row = domainRow(t, "reachable");
+  assert.ok(row.className.split(/\s+/).includes("pfv-off"));
+  assert.deepStrictEqual(texts(row, "pfv-hint"), [t.run("PFV_DOMAIN_NEEDS_BOX")]);
+  assert.ok(!/no effect/.test(t.run("PFV_DOMAIN_NEEDS_BOX")), "it is not the no-effect line");
+});
+
+test("the inherit line is true for a non-default Claude login too, and only a claude command gets that clause", async () => {
+  const t = page();
+  const base = t.run("PFA_BASE_LINES").inherit;
+  const clause = t.run("PFA_INHERIT_CLAUDE");
+  assert.match(clause, /other than default/);
+  assert.match(clause, /Anthropic credentials/);
+  assert.ok(!/\bOnly CuliBox's own/.test(base + clause), "no claim that only CuliBox's variables are left out");
+  assert.ok(!/Claude login/.test(base), "the base sentence says nothing about a Claude login");
+  assert.deepStrictEqual(Array.from(t.box.pfaBaseLine("inherit", "claude")), [base + clause]);
+  assert.deepStrictEqual(Array.from(t.box.pfaBaseLine("inherit", "/usr/local/bin/claude")), [base + clause]);
+  assert.deepStrictEqual(Array.from(t.box.pfaBaseLine("inherit", "bash")), [base]);
+  assert.deepStrictEqual(Array.from(t.box.pfaBaseLine("inherit", "")), [base]);
+  assert.deepStrictEqual(Array.from(t.box.pfaBaseLine("clean", "claude")), [t.run("PFA_BASE_LINES").clean], "only inherit carries it");
+  // Drawn: a bash profile's form says the base sentence alone; a claude one adds the clause; and it follows the Agent block's pending command.
+  const b = page();
+  await openAdv(b, "aws-ops", { bin: "bash" });
+  assert.deepStrictEqual(hintsOf(field(b, "base").parent), [base]);
+  const c = page();
+  await openAdv(c, "aws-ops");
+  assert.deepStrictEqual(hintsOf(field(c, "base").parent), [base + clause]);
 });

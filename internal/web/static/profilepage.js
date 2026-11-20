@@ -389,11 +389,15 @@ function pfvDrawScope(r, known, o) {
 // A domain row on a profile with no credential binding: the box already reaches any public host, so it does nothing (the same rule
 // as the server's save warning, config.go AgentConfig.EgressWarning).
 const PFV_DOMAIN_NO_EFFECT = "This has no effect until the profile holds cloud access or a token: without one the box already reaches any public host.";
+// A domain on a profile that does not run in a box: the server refuses egress_allow unless runtime is "box", set explicitly
+// (config/github.go validateEgressPolicy; an empty runtime is the instance default, which may be host), so this is the line, not the one above.
+const PFV_DOMAIN_NEEDS_BOX = "A domain needs the Box tier: set Runs in to Box, or the save is refused.";
 
 // err: a refusal that names this row (a folder that is gone, say), drawn under it in words. o: pfvDrawScope's.
 function pfvDrawRow(r, known, err, o) {
   // r.off: the row has no effect as things stand (a domain on a profile with no credential binding): dimmed, with its reason under
-  // the name, and still a normal row. o.off overrides it (the editor reads the draft, not the saved profile).
+  // the name, and still a normal row. o.off overrides it (the editor reads the draft, not the saved profile). needsBox (on the row or
+// in o): the profile is not in the Box tier, so the domain is refused and the reason is that.
   const off = o && typeof o.off === "boolean" ? o.off : r.off === true;
   const row = pfvMk("div", off ? "pfv-row pfv-off" : "pfv-row");
   // The old-style AWS setting is an AWS row named for what it is (the kind column is 52px: "Old-style AWS" would wrap
@@ -415,7 +419,7 @@ function pfvDrawRow(r, known, err, o) {
     s.append(...pfvMonoNodes(sub, known));
     id.append(s);
   }
-  if (off && r.kind === "Domain") id.append(pfvMk("p", "pfv-hint", PFV_DOMAIN_NO_EFFECT));
+  if (off && r.kind === "Domain") id.append(pfvMk("p", "pfv-hint", (o && o.needsBox === true) || r.needsBox === true ? PFV_DOMAIN_NEEDS_BOX : PFV_DOMAIN_NO_EFFECT));
   if (err) {
     const words = pfvMk("p", "pfv-ferr", err);
     if (o && typeof o.bad === "function") o.bad(words);

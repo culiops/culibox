@@ -335,7 +335,8 @@ function pfvReadView(o) {
     if (it.original === true) r.original = true;
     if (r.missing) r.scope = PFV_MISSING;
     if (it.kind === "Old-style AWS" && edit) r.action = "Move to a saved connection";
-    if (it.kind === "Domain" && !pfvBound(view)) r.off = true;
+    if (it.kind === "Domain" && pfvTierOf(view, doc) !== "box") { r.off = true; r.needsBox = true; }
+    else if (it.kind === "Domain" && !pfvBound(view)) r.off = true;
     return r;
   };
   const cloud = m.cloud.map(item), reachable = m.reachable.map(item);

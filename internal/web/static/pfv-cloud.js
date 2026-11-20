@@ -34,6 +34,7 @@ const PFC_FOLDER_HINT = "Read only. List a folder rather than a single file.";
 const PFC_DOMAIN_FORM = "HTTPS only. IP addresses are not accepted.";
 const PFC_DOMAIN_HINT = PFC_DOMAIN_FORM + " It adds this host to the box's allowed hosts; \"Allow all internet hosts\" in Network opens every public host instead.";
 const PFC_DOMAIN_NO_EFFECT = PFV_DOMAIN_NO_EFFECT;
+const PFC_DOMAIN_NEEDS_BOX = PFV_DOMAIN_NEEDS_BOX;
 const PFC_DOMAIN_PICK = "A hostname or *.example.com, over HTTPS";
 // The patterns are box/contextpaths.go SecretFilePatterns (the ones the server warns on), the common ones in short form.
 const PFC_FOLDER_PICK = "Read only, at the same path inside the box. Never list a folder holding secrets: files named like .env*, *.pem, *.key, id_*, credentials*, *.tfstate, *.tfvars, kubeconfig and similar.";
@@ -92,7 +93,7 @@ function pfcRowNode(rec, r, o) {
   const rm = pfcRmButton(rec, r.kind + " " + r.name, o.key, o.removed, o.toggle);
   // A refusal that names a stored row has no input to sit under: the Remove beside it is what answers it (a folder that is gone is
   // removed or replaced), so that is what reads it and what takes focus.
-  const row = pfvDrawRow(r, rec.known, o.err || "", { edit: true, block: rec.id, bad: (words) => pfvBad(rec, rm, words, true), off: o.off });
+  const row = pfvDrawRow(r, rec.known, o.err || "", { edit: true, block: rec.id, bad: (words) => pfvBad(rec, rm, words, true), off: o.off, needsBox: o.needsBox });
   if (o.removed) row.classList.add("pfv-removed");
   row.append(rm);
   return row;
@@ -661,7 +662,9 @@ function pfcBound(doc, cloudRec) {
 
 function pfcReachDraw(rec, c) {
   const v = rec.values;
-  const off = !pfcBound(c.doc, pfvState.edits.cloud);
+  // Not in the Box tier: the save refuses a domain (PFV_DOMAIN_NEEDS_BOX), whatever the profile holds; that is the stronger line.
+  const needsBox = c.tier !== "box";
+  const off = needsBox || !pfcBound(c.doc, pfvState.edits.cloud);
   const stored = (l) => l.filter((e) => e.fresh !== true);
   const rows = pfcRows("reachable", { context_paths: stored(v.folders).map((e) => e.path), egress_allow: stored(v.domains).map((e) => e.host) });
   const list = pfvMk("div", "pfv-rows");
@@ -690,7 +693,7 @@ function pfcReachDraw(rec, c) {
     if (e.fresh === true) return;
     const gone = e.removed === true;
     list.append(pfcRowNode(rec, pfcRowOf(rows, "Domain", e.host), {
-      removed: gone, key: "rm:domain:" + i, toggle: () => pfcToggle(rec, v.domains, e), off,
+      removed: gone, key: "rm:domain:" + i, toggle: () => pfcToggle(rec, v.domains, e), off, needsBox,
       err: gone || domainAt(e) < 0 ? "" : pfvFerr(rec, "egress_allow[" + domainAt(e) + "]"),
     }));
   });
@@ -707,20 +710,21 @@ function pfcReachDraw(rec, c) {
     list.append(pfcInputRow(rec, {
       kind: "Domain", label: "Domain the agent can reach", entry: e, prop: "host", key: "domain:" + i, rmKey: "rm:domain:" + i,
       errKey: domainAt(e) >= 0 ? "egress_allow[" + domainAt(e) + "]" : "", placeholder: "api.example.com or *.example.com",
-      hint: off ? PFC_DOMAIN_NO_EFFECT + " " + PFC_DOMAIN_FORM : PFC_DOMAIN_HINT, off,
+      hint: needsBox ? PFC_DOMAIN_NEEDS_BOX + " " + PFC_DOMAIN_FORM : off ? PFC_DOMAIN_NO_EFFECT + " " + PFC_DOMAIN_FORM : PFC_DOMAIN_HINT, off,
       toggle: () => pfcToggle(rec, v.domains, e),
     }));
   });
-  return pfcFoot(rec, list, () => pfcReachPick(off));
+  return pfcFoot(rec, list, () => pfcReachPick(off, needsBox));
 }
 
 // pfcReachPick: the Also reachable picker: the two kinds, each an input row (no drawer, nothing to filter).
-// off: no credential binding, so a domain has no effect (pfcBound), and the item says so before it is picked.
-const pfcReachPick = (off) => ({
+// off: no credential binding, so a domain has no effect (pfcBound), and the item says so before it is picked. needsBox: the profile
+// is not in the Box tier, so a domain is refused at save, and the item says that instead.
+const pfcReachPick = (off, needsBox) => ({
   label: "Add a folder or a domain", filter: "",
   groups: [{ title: "", note: "", items: [
     { title: "Folder it can read", sub: PFC_FOLDER_PICK, add: { kind: "folder" } },
-    { title: "Domain it can reach", sub: off ? PFC_DOMAIN_PICK + ". It has no effect until the profile holds cloud access or a token." : PFC_DOMAIN_PICK, add: { kind: "domain" } },
+    { title: "Domain it can reach", sub: needsBox ? PFC_DOMAIN_PICK + ". It needs the Box tier: set Runs in to Box, or the save is refused." : off ? PFC_DOMAIN_PICK + ". It has no effect until the profile holds cloud access or a token." : PFC_DOMAIN_PICK, add: { kind: "domain" } },
   ] }],
 });
 

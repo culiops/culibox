@@ -562,7 +562,9 @@ func TestMetaSecretSources(t *testing.T) {
 		{Type: "store"}, {Type: "file", Path: "/etc/cb/s.env"}, {Type: "env"},
 	}})
 	var want any
-	json.Unmarshal([]byte(`[{"type":"store"},{"type":"file","path":"/etc/cb/s.env"},{"type":"env"}]`), &want)
+	if err := json.Unmarshal([]byte(`[{"type":"store"},{"type":"file","path":"/etc/cb/s.env"},{"type":"env"}]`), &want); err != nil {
+		t.Fatalf("want: %v", err)
+	}
 	if !reflect.DeepEqual(got["secret_sources"], want) {
 		t.Fatalf("secret_sources = %v, want %v", got["secret_sources"], want)
 	}

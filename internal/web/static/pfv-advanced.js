@@ -35,21 +35,32 @@ const PFA_BASES = [
 // defaulted by the launcher, not copied). A box always starts clean, which the "Applies to Host" chip says. A base not listed here
 // (kept as stored) has no line.
 const PFA_BASE_LINES = {
-  inherit: "Everything in the CuliBox service's environment, keys it holds included, except CuliBox's own variables and Claude's session markers. With a Claude login other than default, the service's own Anthropic credentials and provider settings are left out too.",
+  inherit: "Everything in the CuliBox service's environment, keys it holds included, except CuliBox's own variables and Claude's session markers.",
   clean: "From the CuliBox service it passes on only PATH, HOME, USER, LOGNAME, SHELL, LANG and LC_*. Any other variable has to be added here.",
   login: "Starts as Minimal does, then runs the login shell's startup files, which can set anything.",
 };
-const pfaBaseLine = (base) => (Object.prototype.hasOwnProperty.call(PFA_BASE_LINES, base) ? [PFA_BASE_LINES[base]] : []);
+// The Claude login clause of the inherit line: only a claude command runs under a Claude login (launcher.go account check), so only
+// a profile whose command (bin) is claude gets it.
+const PFA_INHERIT_CLAUDE = " With a Claude login other than default, the service's own Anthropic credentials and provider settings are left out too.";
+function pfaBaseLine(base, bin) {
+  if (!Object.prototype.hasOwnProperty.call(PFA_BASE_LINES, base)) return [];
+  return [PFA_BASE_LINES[base] + (base === "inherit" && isClaudeBinName(bin) ? PFA_INHERIT_CLAUDE : "")];
+}
 const PFA_ARGS_HINT = "One per line.";
 const PFA_ENV_HINT = "Variables are saved as plain text in the profile. Put a token in Credentials instead.";
 const PFA_ENV_NONE_BOX = "None. The agent gets the box's minimal environment.";
 const PFA_ENV_NONE_HOST = "None added on top of the starting environment.";
 const PFA_SECRET_NO_SOURCE = "No secret source is configured, so a session with this profile will refuse to start. Use a service token instead.";
+// On a profile that does not run in a box a token binding is refused (config/statictoken.go validateTokens: runtime must be "box",
+// set explicitly), so the pointer to a service token says what it needs. c.tier is the tier a save writes (profilepage.js).
+const PFA_SECRET_NO_SOURCE_NOT_BOX = "No secret source is configured, so a session with this profile will refuse to start. A service token needs the Box tier: set Runs in to Box to use one.";
 const PFA_SECRET_PICK_LABEL = "Add a secret";
 const PFA_PICK_CLAUDE = "Pick the account this profile signs in with.";
 const PFA_PICK_TOKEN = "An API key or token for a service. It only reaches that service's hosts.";
+const PFA_PICK_TOKEN_NOT_BOX = "An API key or token for a service. It needs the Box tier.";
 
-// pfaSources: the secret sources the daemon has configured (app.js secretSources, from /api/meta), [] when none are.
+// pfaSources: the secret sources the daemon has configured (app.js secretSources, from /api/meta), [] when none are configured or
+// they are not known yet (pfaSourcesKnown tells the two apart).
 // pfaSourcesKnown: /api/meta has answered, so [] means none and not "not asked yet": until then the page claims nothing about them.
 const pfaSources = () => (typeof secretSources !== "undefined" && Array.isArray(secretSources) ? secretSources : []);
 const pfaSourcesKnown = () => typeof metaLoaded !== "undefined" && metaLoaded === true && typeof secretSources !== "undefined" && Array.isArray(secretSources);
@@ -68,10 +79,12 @@ function pfaSourcesWords(sources) {
 }
 
 // pfaSecretHint: what a stored secret row says about where its value comes from. True for every config: with sources it names
-// them, without any the launcher refuses a name it cannot resolve.
-function pfaSecretHint(sources) {
+// them, without any the launcher refuses a name it cannot resolve and the way out depends on the tier (tier: c.tier; anything but "box"
+// cannot hold a service token).
+function pfaSecretHint(sources, tier) {
   const words = pfaSourcesWords(sources);
-  return words ? "Resolved at start from " + words + "." : PFA_SECRET_NO_SOURCE;
+  if (words) return "Resolved at start from " + words + ".";
+  return tier !== undefined && tier !== "box" ? PFA_SECRET_NO_SOURCE_NOT_BOX : PFA_SECRET_NO_SOURCE;
 }
 
 const pfaLines = (text) => String(text || "").split("\n").map((s) => s.trim()).filter(Boolean);
@@ -269,7 +282,7 @@ function pfaSecretPick(rec, c) {
     });
   }
   items.push({
-    key: "token", title: "A service token", sub: PFA_PICK_TOKEN,
+    key: "token", title: "A service token", sub: c.tier === "box" ? PFA_PICK_TOKEN : PFA_PICK_TOKEN_NOT_BOX,
     act: () => {
       const tokens = typeof stEntries !== "undefined" && Array.isArray(stEntries) ? stEntries : [];
       // With none defined there is nothing to choose from: straight to the drawer that makes one (Cloud and tokens takes it from there).
@@ -302,7 +315,7 @@ function pfaEnvField(rec, host, c) {
   const secretsNode = secretsErr ? pfvMk("p", "pfv-ferr", secretsErr) : null;
   if (secretsNode) box.append(secretsNode);
   // Before /api/meta has answered nothing is known about the sources, so a stored secret's row says nothing about them yet.
-  const hint = pfaSourcesKnown() ? pfaSecretHint(pfaSources()) : "";
+  const hint = pfaSourcesKnown() ? pfaSecretHint(pfaSources(), c.tier) : "";
   let names = [];
   let btns = [];
   // A row was typed in or taken, put or brought back: a refusal about the list is stale.
@@ -388,7 +401,7 @@ function pfaDraw(rec, c) {
   const known = PFA_BASES.map((b) => b.value);
   const choices = typeof stored === "string" && stored !== "" && !known.includes(stored) ? PFA_BASES.concat([{ value: stored, label: stored }]) : PFA_BASES;
   const sel = pfvSelect(rec, "base", choices, v.base, false, (val) => { v.base = val; pfvChanged(rec, "base"); });
-  const baseBox = pfvFieldBox(rec, "base", "Environment it starts with", sel, pfaBaseLine(v.base));
+  const baseBox = pfvFieldBox(rec, "base", "Environment it starts with", sel, pfaBaseLine(v.base, pfaBin(c)));
   baseBox.children[0].append(" ", pfvAppliesTag("host"));
   out.push(baseBox);
   for (const def of pfaDefs(c)) out.push(pfaOptionField(rec, def));

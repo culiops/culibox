@@ -1036,7 +1036,7 @@ test("awsRegionSuggest: the host's regions first (each once, in order), then the
 
 test("AWS_REGIONS: every entry passes the server's region format (awsscope.regionRe), none repeats", () => {
   const goSrc = require("node:fs").readFileSync(require("node:path").join(__dirname, "../../awsscope/awsscope.go"), "utf8");
-  assert.ok(goSrc.includes("regionRe    = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\\d{1,2}$`)"), "the server regex is the one this test mirrors");
+  assert.match(goSrc, /regionRe\s*=\s*regexp\.MustCompile\(`\^\[a-z\]\{2\}\(-\[a-z\]\+\)\+-\\d\{1,2\}\$`\)/, "the server regex is the one this test mirrors");
   for (const r of AWS_REGIONS) assert.match(r, /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/);
   assert.strictEqual(new Set(AWS_REGIONS).size, AWS_REGIONS.length);
 });

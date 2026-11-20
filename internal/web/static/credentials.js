@@ -361,9 +361,9 @@ function valueUpdatedText(iso) {
 
 const AWS_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
-// AWS_REGIONS: the AWS commercial regions, offered after the regions the host's own profiles name. A list of
-// suggestions only: the input stays free text (a new region appears before this list does) and the server's
-// format check (awsscope.regionRe) is the one that decides.
+// AWS_REGIONS: the AWS commercial regions, offered after the regions the host's own profiles name. Source: the aws partition of
+// botocore endpoints.json (AWS CLI 2.38.1). A list of suggestions only: the input stays free text (a new region appears before
+// this list does) and the server's format check (awsscope.regionRe) is the one that decides.
 const AWS_REGIONS = [
   "us-east-1", "us-east-2", "us-west-1", "us-west-2",
   "af-south-1",
