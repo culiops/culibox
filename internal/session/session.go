@@ -728,6 +728,12 @@ type Info struct {
 	// re-lists after a spawn and never renders a row from those responses; a
 	// new surface that needs it must go through List or take m.mu itself.
 	Claude bool `json:"claude"`
+	// AgentPrompt is the capability "this session has an agent prompt that
+	// takes a typed message" (launcher.AcceptsPrompt), so the review bar's
+	// Paste can refuse a shell, whose prompt would run the notes as commands
+	// (#352). Not Replyable: that is the remote-reply opt-in. Filled by List
+	// only, like Claude.
+	AgentPrompt bool `json:"agent_prompt,omitempty"`
 	// CostUSD is the summed analytics cost of every conversation this session
 	// has had since spawn. Present only for a claude session whose whole
 	// conversation history is known (costComplete) while a cost source is set:
@@ -3037,6 +3043,7 @@ func (m *Manager) List() []Info {
 			// Bin is written under m.mu (ResolveBins), so this is the one place
 			// it can be read without racing.
 			i.Claude = isClaudeBin(s.Bin)
+			i.AgentPrompt = launcher.AcceptsPrompt(s.Bin)
 			i.Resumable = i.Exited && resumeFor(s.Runtime, s.Bin, s.claudeSID(), s.Exclusive) != ""
 			if costSrc != nil && i.Claude {
 				ids, complete := s.conversations()

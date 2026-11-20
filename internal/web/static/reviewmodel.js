@@ -146,7 +146,11 @@ function notesPendingByPath(list) {
 
 // May the paste bar type into this session's terminal right now? `term` is the session's TerminalTab (its `.term` is the xterm
 // instance). {ok, label, why}: the label is always "Paste to <name>" and `why` says why not ("" when ok). One refusal is reported
-// when several apply, in this order: no terminal, working, waiting on anything but a finished turn, bracketed paste off. Ruling R13:
+// when several apply, in this order: no agent prompt, no terminal, working, waiting on anything but a finished turn, bracketed paste
+// off. The first is the capability `agent_prompt` (the sessions row, launcher.AcceptsPrompt), a strict true only (#352): a plain or
+// companion shell has bracketed paste on too, and there the toast's "press Enter" would run the notes, quoted file lines and all, as
+// commands. It is not `replyable` (the per-session remote-reply opt-in) and not "is Claude", and it comes first because waiting,
+// answering or reconnecting will not change it. Ruling R13:
 // need "turn" passes, as in insertGate (editorref.js): a Claude session that finished its turn is {activity: "waiting", need: "turn"}
 // (internal/session/peek.go), and that open prompt is where the review message belongs; need "ask", "sso", "store_locked", any other
 // need, and a waiting session with no need are refused. A session that is neither idle, working nor waiting (done, crashed, exited)
@@ -156,6 +160,7 @@ function pasteGate(session, term) {
   if (!session) return { ok: false, label: "Paste to session", why: "Not connected" };
   const name = session.name;
   const no = (why) => ({ ok: false, label: "Paste to " + name, why });
+  if (session.agent_prompt !== true) return no("This session has no agent prompt");
   if (!term || !term.term) return no("Not connected");
   if (session.activity === "working") return no(name + " is working; notes wait here");
   const turn = session.need === "turn";

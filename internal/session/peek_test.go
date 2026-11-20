@@ -544,6 +544,21 @@ func TestListReportsClaude(t *testing.T) {
 	}
 }
 
+// AgentPrompt is the named capability the review bar's Paste gates on (#352):
+// an agent session has a prompt to type notes at, a shell does not, whatever
+// its replies setting.
+func TestListReportsAgentPrompt(t *testing.T) {
+	m, _ := newPeekTestManager(t, "/tmp/proj", "")
+	if !m.List()[0].AgentPrompt {
+		t.Error("AgentPrompt=false for a claude bin")
+	}
+	m.sessions["s1"].Bin = "/bin/bash"
+	m.sessions["s1"].replyable = true
+	if m.List()[0].AgentPrompt {
+		t.Error("AgentPrompt=true for a shell bin")
+	}
+}
+
 // The kill-switch (config replies_enabled, Manager.SetRepliesEnabled) refuses a
 // GRANT but never a revoke, so an operator can always take an opt-in back.
 func TestSetReplyableRefusedWhenRepliesDisabled(t *testing.T) {

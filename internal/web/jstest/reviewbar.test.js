@@ -30,9 +30,9 @@ function mkNotes(items) {
 
 // Session a (alpha) in one pane with the dock open on it, as the real page has it; the real bar mounted on a stand-in EditorTab.
 function rig(opts) {
-  const o = Object.assign({ forced: false, full: false, activity: "idle", need: "", bracketed: true, open: true, dirty: false, notes: null, tabs: null, unsaved: false }, opts);
+  const o = Object.assign({ forced: false, full: false, activity: "idle", need: "", prompt: true, bracketed: true, open: true, dirty: false, notes: null, tabs: null, unsaved: false }, opts);
   const p = page();
-  p.sessions({ id: "a", name: "alpha", activity: o.activity, need: o.need });
+  p.sessions({ id: "a", name: "alpha", activity: o.activity, need: o.need, agent_prompt: o.prompt });
   const cell = p.pane(p.term("a", "alpha"));
   p.focus(cell);
   const term = p.ctx.terminalTabFor("a");
@@ -157,6 +157,19 @@ test("a finished turn ({waiting, need: turn}) is pasted into; working, asking, w
   }
 });
 
+test("a session with no agent prompt (a plain shell with bracketed paste on) is refused with the reason, and a press pastes nothing (#352)", () => {
+  for (const [activity, need] of [["idle", ""], ["waiting", "turn"]]) {
+    const r = rig({ prompt: undefined, activity, need });
+    const t = r.texts();
+    assert.equal(t.disabled, "true", activity + "/" + need);
+    assert.equal(t.title, "This session has no agent prompt");
+    r.paste();
+    assert.deepEqual(r.toasts(), [["This session has no agent prompt", true]]);
+    assert.deepEqual(r.pasted, []);
+    assert.deepEqual(r.st.list.map((n) => n.status), ["pending", "pending"], "the notes wait");
+  }
+});
+
 test("bracketed paste off, a closed socket and no terminal each refuse; nothing is pasted", () => {
   const off = rig({ bracketed: false });
   assert.equal(off.texts().title, "This program does not accept pasted blocks");
@@ -198,7 +211,7 @@ test("R12: a file with pending notes that has unsaved edits blocks Paste ('Save 
 test("the gate is read AT THE CLICK: a state that changed since the last repaint refuses, and a refused click moves nothing", () => {
   const r = rig();
   assert.equal(r.texts().disabled, "false", "the bar says ok");
-  r.p.sessions({ id: "a", name: "alpha", activity: "working", need: "" }); // the poll has not repainted the bar yet
+  r.p.sessions({ id: "a", name: "alpha", activity: "working", need: "", agent_prompt: true }); // the poll has not repainted the bar yet
   r.paste();
   assert.deepEqual(r.pasted, []);
   assert.deepEqual(r.toasts(), [["alpha is working; notes wait here", true]]);
@@ -302,7 +315,7 @@ test("Preview opens the kit dialog with the exact composed text as textContent a
 test("repaint: the session poll updates the button (working -> idle) and writes nothing to the DOM when nothing changed", () => {
   const r = rig({ activity: "working" });
   assert.equal(r.texts().disabled, "true");
-  r.p.sessions({ id: "a", name: "alpha", activity: "idle", need: "" });
+  r.p.sessions({ id: "a", name: "alpha", activity: "idle", need: "", agent_prompt: true });
   r.p.run("reviewBarRender()");
   assert.equal(r.texts().disabled, "false");
   // Nothing changed: a marker written into the bar survives the repaint.
@@ -310,7 +323,7 @@ test("repaint: the session poll updates the button (working -> idle) and writes 
   r.p.run("reviewBarRender()");
   r.p.run("reviewBarRender('a')");
   assert.equal(r.bar().count.textContent, "MARK", "no DOM write when the state is the same");
-  r.p.sessions({ id: "a", name: "alpha", activity: "working", need: "" });
+  r.p.sessions({ id: "a", name: "alpha", activity: "working", need: "", agent_prompt: true });
   r.p.run("reviewBarRender()");
   assert.equal(r.texts().count, "2 notes", "a change repaints");
 });

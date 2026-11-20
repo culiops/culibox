@@ -123,11 +123,11 @@ test("nextChange forward, backward, past the end", () => {
 const term = (bp) => ({ term: { modes: { bracketedPasteMode: bp } } });
 
 test("pasteGate idle ok", () => {
-  assert.deepStrictEqual(pasteGate({ name: "api", activity: "idle" }, term(true)), { ok: true, label: "Paste to api", why: "" });
+  assert.deepStrictEqual(pasteGate({ name: "api", activity: "idle", agent_prompt: true }, term(true)), { ok: true, label: "Paste to api", why: "" });
 });
 
 test("pasteGate working, waiting, need, no bracketed paste, no term", () => {
-  const s = (o) => Object.assign({ name: "api", activity: "idle" }, o);
+  const s = (o) => Object.assign({ name: "api", activity: "idle", agent_prompt: true }, o);
   assert.deepStrictEqual(pasteGate(s({ activity: "working" }), term(true)), { ok: false, label: "Paste to api", why: "api is working; notes wait here" });
   assert.deepStrictEqual(pasteGate(s({ activity: "waiting" }), term(true)), { ok: false, label: "Paste to api", why: "api is waiting on you; answer it first" });
   // Any need but a finished turn, even on an idle session, is the same refusal.
@@ -159,7 +159,7 @@ test("pasteGate working, waiting, need, no bracketed paste, no term", () => {
 });
 
 test("pasteGate lets a finished turn through (R13): waiting with need turn, and idle with need turn", () => {
-  const s = (o) => Object.assign({ name: "api", activity: "waiting", need: "turn" }, o);
+  const s = (o) => Object.assign({ name: "api", activity: "waiting", need: "turn", agent_prompt: true }, o);
   assert.deepStrictEqual(pasteGate(s(), term(true)), { ok: true, label: "Paste to api", why: "" });
   assert.strictEqual(pasteGate(s({ activity: "idle" }), term(true)).ok, true);
   // The other refusals still apply to it.
@@ -171,6 +171,27 @@ test("pasteGate lets a finished turn through (R13): waiting with need turn, and 
   assert.strictEqual(pasteGate(s({ need: "" }), term(true)).why, "api is waiting on you; answer it first");
   assert.strictEqual(pasteGate(s({ need: undefined }), term(true)).why, "api is waiting on you; answer it first");
   assert.strictEqual(pasteGate(s({ need: "ask" }), term(true)).why, "api is waiting on you; answer it first");
+});
+
+test("pasteGate refuses a session with no agent prompt (#352): a plain shell with bracketed paste on is not a prompt", () => {
+  const no = { ok: false, label: "Paste to sh", why: "This session has no agent prompt" };
+  // A shell at its idle prompt with bracketed paste on (bash's default): the old gate passed it, and Enter would run the notes.
+  assert.deepStrictEqual(pasteGate({ name: "sh", activity: "idle" }, term(true)), no);
+  // Only a strict true is the capability: absent, false or a truthy non-boolean are refused.
+  for (const agent_prompt of [false, undefined, null, 1, "true"]) assert.deepStrictEqual(pasteGate({ name: "sh", activity: "idle", agent_prompt }, term(true)), no);
+  // The capability, not the agent's name or a raw "is Claude" flag; replyable (the remote-reply opt-in) does not grant it either.
+  assert.deepStrictEqual(pasteGate({ name: "sh", activity: "idle", claude: true, replyable: true, agent: "claude" }, term(true)), no);
+  // It is reported before every other reason: it will not change by waiting, answering or reconnecting.
+  for (const o of [{ activity: "working" }, { activity: "waiting", need: "ask" }, { activity: "waiting", need: "turn" }, { activity: "done" }]) {
+    assert.deepStrictEqual(pasteGate(Object.assign({ name: "sh" }, o), term(true)), no);
+  }
+  assert.deepStrictEqual(pasteGate({ name: "sh", activity: "idle" }, null), no);
+  // An agent session at a finished turn still passes, replyable or not.
+  assert.strictEqual(pasteGate({ name: "api", activity: "waiting", need: "turn", agent_prompt: true }, term(true)).ok, true);
+  assert.strictEqual(pasteGate({ name: "api", activity: "waiting", need: "turn", agent_prompt: true, replyable: false }, term(true)).ok, true);
+  // The bar carries the gate's sentence.
+  const bar = pasteBarState({ session: { name: "sh", activity: "idle" }, term: term(true), connected: true, list: [{ id: "1", path: "/a.go", status: "pending" }], tabs: [] });
+  assert.deepStrictEqual([bar.ok, bar.why], [false, "This session has no agent prompt"]);
 });
 
 const pn = (path, status) => ({ id: path + status, path, status });
@@ -185,19 +206,19 @@ test("dirtyNotedNames: only dirty tabs whose file has PENDING notes, each name o
 });
 
 test("pasteBarState: shape, counts, the gate's sentence, the socket, then the unsaved-file rule (R12)", () => {
-  const sess = { name: "api", activity: "idle" };
+  const sess = { name: "api", activity: "idle", agent_prompt: true };
   const list = [pn("/a.go", "pending"), pn("/a.go", "sent")];
   const base = { session: sess, term: term(true), connected: true, list, tabs: [] };
   assert.deepStrictEqual(pasteBarState(base), { shape: "full", pending: 1, sent: 1, label: "Paste to api", ok: true, why: "" });
   assert.strictEqual(pasteBarState(Object.assign({}, base, { list: [pn("/a.go", "sent")] })).shape, "sent");
   assert.strictEqual(pasteBarState(Object.assign({}, base, { list: [] })).shape, "none");
-  assert.strictEqual(pasteBarState(Object.assign({}, base, { session: { name: "api", activity: "working" } })).why, "api is working; notes wait here");
+  assert.strictEqual(pasteBarState(Object.assign({}, base, { session: { name: "api", activity: "working", agent_prompt: true } })).why, "api is working; notes wait here");
   assert.strictEqual(pasteBarState(Object.assign({}, base, { connected: false })).why, "Not connected");
   assert.strictEqual(pasteBarState(Object.assign({}, base, { connected: undefined })).ok, false, "only a strict true connects");
   const dirty = Object.assign({}, base, { tabs: [{ path: "/a.go", name: "a.go", dirty: true }] });
   assert.deepStrictEqual(pasteBarState(dirty), { shape: "full", pending: 1, sent: 1, label: "Paste to api", ok: false, why: "Save a.go first: the agent reads the file on disk" });
   // The gate's own refusal wins over the unsaved one.
-  assert.strictEqual(pasteBarState(Object.assign({}, dirty, { session: { name: "api", activity: "working" } })).why, "api is working; notes wait here");
+  assert.strictEqual(pasteBarState(Object.assign({}, dirty, { session: { name: "api", activity: "working", agent_prompt: true } })).why, "api is working; notes wait here");
   assert.strictEqual(pasteBarState({}).ok, false);
 });
 
