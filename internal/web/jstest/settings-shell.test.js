@@ -1196,6 +1196,9 @@ test("the native checkboxes of the page are the kit's .check-box look: 14px, --b
   // Label: the words 8px from the box, the default cursor (the frame's `.check`), the box keeps the global 2px ring.
   const lab = bdecls(PV + " .pfv-check");
   assert.deepStrictEqual([lab.get("display"), lab.get("align-items"), lab.get("gap"), lab.get("cursor")], ["flex", "flex-start", "8px", "default"]);
+  // A switch the user cannot use (Box only, forced by a binding) is greyed like a disabled card, and its box is not a pointer.
+  assert.strictEqual(bdecls(PV + " .pfv-check.pfv-off .pfv-check-t").get("color"), "var(--muted)");
+  assert.strictEqual(bdecls(PV + " .pfv-check.pfv-off input").get("cursor"), "default");
   assert.ok(!bhas(PV + " .pfv-check input:focus-visible"), "nothing here touches the outline: the global :focus-visible 2px ring shows");
   assert.strictEqual(cb.get("outline"), undefined);
   // It is still the real control: nothing in the page's JS swaps the input for a drawn box.
