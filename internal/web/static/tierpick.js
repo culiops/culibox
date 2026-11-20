@@ -208,6 +208,14 @@ function renderTierPick() {
   });
   el.replaceChildren(...m.cards.map(tierCard));
   el.dataset.value = m.pick;
+  // The seg is the phone's control and spawnWhere reads it there, so on the desktop it follows the cards: a window narrowed below
+  // the breakpoint with the dialog open then submits what the cards showed (a host profile Host is blocked for shows Box, not the
+  // seg's own default). The phone never has its seg touched from here.
+  if (drawerDesktop()) {
+    const seg = $("runtime-seg");
+    const rt = tierWhere(m.pick).runtime;
+    if (seg && segValue(seg) !== rt) setSegValue(seg, rt);
+  }
 }
 
 // tierPick: a click on a card. Box · in place on a clone profile whose workspace is the clone dir moves the workspace to the repo

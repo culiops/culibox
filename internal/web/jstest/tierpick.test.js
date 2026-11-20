@@ -455,3 +455,26 @@ test("tierpick.js loads after spawnpanel.js and before app.js; the cards are hid
   }
   assert.match(flat, /#tierpick,[^{}]*\{\s*display:\s*none;?\s*\}/);
 });
+
+test("on the desktop the seg follows the cards, so a resize submits what was shown", () => {
+  const blocked = { name: "x", runtime: "host", host_block: "this profile has credential bindings (AWS sandbox), so it runs only in a box" };
+  const pg = tpPage({ profile: blocked, cwd: "/home/u/else" });
+  pg.seg.dataset.value = "host";
+  pg.run("renderTierPick()");
+  assert.deepStrictEqual(pg.calls.filter((c) => c[0] === "setSegValue"), [["setSegValue", "box"]]);
+  assert.strictEqual(pg.seg.dataset.value, "box");
+  assert.strictEqual(pg.pick.dataset.value, "box");
+  // a seg already in step is left alone
+  pg.calls.length = 0;
+  pg.run("renderTierPick()");
+  assert.strictEqual(pg.calls.filter((c) => c[0] === "setSegValue").length, 0);
+  // crossing the breakpoint now submits Box
+  pg.ctx.desktop = false;
+  assert.deepStrictEqual(pg.run("spawnWhere()"), { runtime: "box" });
+  // the phone: renderTierPick leaves the seg alone
+  const ph = tpPage({ profile: blocked, cwd: "/home/u/else", desktop: false });
+  ph.seg.dataset.value = "host";
+  ph.run("renderTierPick()");
+  assert.strictEqual(ph.calls.filter((c) => c[0] === "setSegValue").length, 0);
+  assert.strictEqual(ph.seg.dataset.value, "host");
+});
