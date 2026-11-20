@@ -37,8 +37,10 @@ const PFA_SECRET_PICK_LABEL = "Add a secret";
 const PFA_PICK_CLAUDE = "Pick the account this profile signs in with.";
 const PFA_PICK_TOKEN = "An API key or token for a service. It only reaches that service's hosts.";
 
-// pfaSources: the secret sources the daemon has configured (app.js secretSources, from /api/meta), [] before it has answered.
+// pfaSources: the secret sources the daemon has configured (app.js secretSources, from /api/meta), [] when none are.
+// pfaSourcesKnown: /api/meta has answered, so [] means none and not "not asked yet": until then the page claims nothing about them.
 const pfaSources = () => (typeof secretSources !== "undefined" && Array.isArray(secretSources) ? secretSources : []);
+const pfaSourcesKnown = () => typeof metaLoaded !== "undefined" && metaLoaded === true && typeof secretSources !== "undefined" && Array.isArray(secretSources);
 
 // pfaSourcesWords: the configured sources in words, in config order ("" for none): the credential store, a file by its path,
 // the CuliBox service's environment (the daemon's own, never "your shell").
@@ -209,7 +211,7 @@ function pfaInput(row, prop, label, placeholder, onInput) {
 
 // pfaEnvRow: a row in the page's row grammar (the kind column, the content, Remove or Undo at the right; the mockup's
 // tpl-env and tpl-secret). A variable is a name and a value; a secret is a name only, with where its value comes from
-// (hint: pfaSecretHint's).
+// (hint: pfaSecretHint's, or "" while the sources are not known).
 // A row pending removal is its words, struck through like the Cloud rows, with Undo. {node, name, btn}.
 function pfaEnvRow(row, onInput, toggle, hint) {
   const secret = row.kind === "secret";
@@ -224,7 +226,8 @@ function pfaEnvRow(row, onInput, toggle, hint) {
   } else {
     name = pfaInput(row, "key", secret ? "Secret name" : "Variable name", "NAME", onInput);
     kv.append(name);
-    kv.append(secret ? pfvMk("span", "pfv-hint", hint) : pfaInput(row, "value", "Value", "value", onInput));
+    if (!secret) kv.append(pfaInput(row, "value", "Value", "value", onInput));
+    else if (hint) kv.append(pfvMk("span", "pfv-hint", hint));
   }
   const what = (secret ? "secret" : "variable") + (row.key.trim() ? " " + row.key.trim() : "");
   const btn = pfvMk("button", "pfv-rmbtn", gone ? "Undo" : "Remove");
@@ -263,7 +266,7 @@ function pfaSecretPick(rec, c) {
     },
   });
   const sources = pfaSources();
-  if (typeof metaLoaded !== "undefined" && metaLoaded === true && pfaSourcesWords(sources) !== "") {
+  if (pfaSourcesKnown() && pfaSourcesWords(sources) !== "") {
     // The row is added by the form drawn at this moment (the menu has closed and drawn it again), so the hook is read now.
     items.push({ key: "byname", title: "By name (older form)", sub: "Resolved from " + pfaSourcesWords(sources) + ".", act: () => rec.ui.pfaAddSecret() });
   }
@@ -286,7 +289,8 @@ function pfaEnvField(rec, host, c) {
   const secretsErr = pfvFerr(rec, "secrets");
   const secretsNode = secretsErr ? pfvMk("p", "pfv-ferr", secretsErr) : null;
   if (secretsNode) box.append(secretsNode);
-  const hint = pfaSecretHint(pfaSources());
+  // Before /api/meta has answered nothing is known about the sources, so a stored secret's row says nothing about them yet.
+  const hint = pfaSourcesKnown() ? pfaSecretHint(pfaSources()) : "";
   let names = [];
   let btns = [];
   // A row was typed in or taken, put or brought back: a refusal about the list is stale.

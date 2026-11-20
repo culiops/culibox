@@ -3925,7 +3925,11 @@
   #page-host > #settings-modal.as-page #pfv .pfv-addwrap { position: relative; margin-top: 12px; }
   #page-host > #settings-modal.as-page #pfv .pfv-empty + .pfv-addwrap { margin-top: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-addwrap > .pfv-add { margin-top: 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-adds > .pfv-addwrap { margin-top: 0; }
+  /* In the Advanced block the wrap is a flex item of .pfv-adds, so it is only as wide as its link, and a popover's max-width: 100% would
+     be that. The row is the containing block instead (the wrap is static) and the popover keeps its place in the wrap's flow, under the link. */
+  #page-host > #settings-modal.as-page #pfv .pfv-adds { position: relative; }
+  #page-host > #settings-modal.as-page #pfv .pfv-adds > .pfv-addwrap { position: static; margin-top: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-adds .pfv-pick { top: auto; left: auto; margin-top: 6px; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; box-sizing: border-box; display: block; width: 420px; max-width: 100%; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--e-pop); }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-find { display: block; margin: 2px 0 4px; max-width: none; }
   /* Tall enough for the mockup's whole list (578px); a longer one scrolls here, under the filter, instead of running down the page. It keeps the

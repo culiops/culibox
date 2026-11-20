@@ -4210,6 +4210,53 @@ test("By name is hidden before meta answers", async () => {
   assert.deepStrictEqual(menuTitles(t), ["Claude login", "A service token"]);
 });
 
+test("a stored secret says nothing about sources until meta answers, then the true hint", async () => {
+  const t = page({ metaLoaded: false, secretSources: null });
+  await openAdv(t, "aws-ops", { secrets: ["OLD_TOKEN"] });
+  assert.strictEqual(rowName(envRowsOf(t)[0]).value, "OLD_TOKEN", "the row is there to edit");
+  assert.deepStrictEqual(texts(envRowsOf(t)[0], "pfv-hint"), [], "no claim about sources before meta answers");
+  // A meta answer never redraws an open block (pfvRefresh), so the form keeps saying nothing: stale, not wrong. The next time the
+  // form is drawn (here: the menu opening) it says the true thing, and keeps what the row holds.
+  t.box.metaLoaded = true;
+  t.box.pfvMetaChanged();
+  assert.deepStrictEqual(texts(envRowsOf(t)[0], "pfv-hint"), []);
+  // metaLoaded alone is not enough: the sources arrive with applyCredLists, after it.
+  clickBtn(advOf(t), "+ Add secret");
+  assert.deepStrictEqual(texts(envRowsOf(t)[0], "pfv-hint"), [], "sources still unknown");
+  t.box.secretSources = [];
+  clickBtn(advOf(t), "+ Add secret");
+  clickBtn(advOf(t), "+ Add secret");
+  assert.deepStrictEqual(texts(envRowsOf(t)[0], "pfv-hint"), [t.box.pfaSecretHint([])]);
+  assert.strictEqual(rowName(envRowsOf(t)[0]).value, "OLD_TOKEN");
+  // The same form opened after the answer: the hint is there at once.
+  const late = page({ secretSources: [{ type: "env" }] });
+  await openAdv(late, "aws-ops", { secrets: ["OLD_TOKEN"] });
+  assert.deepStrictEqual(texts(envRowsOf(late)[0], "pfv-hint"), ["Resolved at start from the CuliBox service's environment."]);
+});
+
+test("Claude login follows the command the open Agent block will save", async () => {
+  // The Agent block holds a pending command that is not Claude: its account select is not drawn, so the menu does not offer it.
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickBin(t, "bash");
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": args refused', field: "args" });
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), false);
+  assert.ok(advOf(t).className.includes("pfv-editing"));
+  assert.deepStrictEqual(menuTitles(t), ["A service token"], "the stored command is claude, the pending one is not");
+  // The other way round: stored bash, pending claude: the account select is there, so the item is.
+  const u = page();
+  u.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { bin: "bash" });
+  await u.box.pfvShow("aws-ops");
+  clickBtn(blockOf(u, "agent"), "Edit");
+  pickBin(u, "claude");
+  u.box.putFail = apiErr(400, { error: 'profile "aws-ops": args refused', field: "args" });
+  assert.strictEqual(await clickBtn(blockOf(u, "agent"), "Save"), false);
+  assert.deepStrictEqual(menuTitles(u), ["Claude login", "A service token"]);
+  optBtn(u, "advanced", "Claude login").click();
+  assert.strictEqual(Node.focused, u.run("pfvState").edits.agent.fields.account);
+});
+
 test("stored secrets show a true hint and round-trip", async () => {
   const none = page({ secretSources: [] });
   await openAdv(none, "aws-ops", { secrets: ["OLD_TOKEN"] });

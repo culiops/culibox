@@ -4739,9 +4739,10 @@ let stEntries = [];
 // label, account, region, whether it can write; never the source profile).
 let awscEntries = [];
 // secretSources: the secret sources the daemon has configured, from /api/meta's secret_sources, in config order:
-// [{type: "store" | "file" | "env", path?}] (path only for a file; no values, no names). [] when none. They are read once at
-// daemon start, so the meta load that fills the lists is the only time they are read.
-let secretSources = [];
+// [{type: "store" | "file" | "env", path?}] (path only for a file; no values, no names). [] when none are configured, and null
+// until applyCredLists has read a /api/meta answer: the profile page says nothing about sources while it does not know them.
+// They are read once at daemon start, so the meta load that fills the lists is the only time they are read.
+let secretSources = null;
 // applyCredLists takes the credential lists out of a /api/meta answer and repaints
 // the profile form's pickers. The ticks the operator has made in an open form are
 // kept; only a tick on an entry that was defined a moment ago and is gone now is
