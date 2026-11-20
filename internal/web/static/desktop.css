@@ -585,14 +585,19 @@
      the sidebar's 16px padding (m1-1). */
   #side-new { height: var(--h-ctl); padding: 0 12px; }
   /* #340 S6 (mockups t1, t2): New session shares its row with the layout button (sidechrome.js), the palette
-     and «. The layout menu is the kit's .menu, in flow under the button; the kit draws its surface. */
-  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; }
+     and «. The layout menu is the kit's .menu, in flow under the button; the kit draws its surface. #sidebar
+     clips (overflow: hidden), so the menu is placed against the whole row, right-aligned under « and never
+     wider than the row (measured: against the 24px button it ran past the sidebar's left edge). app.css's
+     fixed 232px .menu width is reset to the content's. */
+  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; position: relative; }
   #side-top .xnewrow #side-new { flex: 1; min-width: 0; margin-right: 4px; }
-  #side-top .xlay-wrap { position: relative; display: inline-flex; }
+  #side-top .xlay-wrap { display: inline-flex; }
   #side-top .xlay svg { display: block; }
-  #side-top .xlay-wrap > .menu.xmenu:has(> .menu-item) { position: absolute; top: calc(100% + 4px); right: 0; z-index: 50; min-width: 180px; }
+  #side-top .xlay-wrap > .menu.xmenu:has(> .menu-item) { position: absolute; top: calc(100% + 4px); right: 0; z-index: 50; width: max-content; min-width: min(180px, 100%); max-width: 100%; }
   #side-top .xmenu .menu-item.on { color: var(--fg); }
   #side-top .xmenu .menu-icon svg { color: var(--muted); }
+  /* The tick is a menuIconSvg outside a .menu-icon slot, which is what sizes the kit's icons. */
+  #side-top .xmenu .menu-kbd svg { display: block; width: 14px; height: 14px; }
 
   /* --- legacy layout keys (spec 7) ---------------------------------------- */
   /* agent-box:panesCollapsed (pre-paint html classes) and agent-box:sidebarSplit

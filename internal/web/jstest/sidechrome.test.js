@@ -229,6 +229,20 @@ test("the elevated line keeps the foot's small muted type on its own row", () =>
   assert.ok(!/margin-left: auto/.test(el), "left-aligned like #side-store, not pushed right");
 });
 
+// Measured in the browser (Task 5): #sidebar clips (overflow: hidden), and app.css gives every .menu a fixed 232px. A menu
+// anchored to the 24px button's right edge ran 11px past the sidebar's left edge, and the tick (a menuIconSvg with no
+// size, outside a .menu-icon slot) drew at 0x0.
+test("the layout menu stays inside the sidebar, and its tick has a size", () => {
+  assert.match(cssRule("#side-top .xnewrow"), /position: relative;/, "the menu is placed against the whole row");
+  assert.ok(!/position/.test(cssRule("#side-top .xlay-wrap")), "not against the 24px button's wrap");
+  const m = cssRule("#side-top .xlay-wrap > .menu.xmenu:has(> .menu-item)");
+  assert.match(m, /right: 0;/);
+  assert.match(m, /width: max-content;/, "app.css's 232px .menu width is reset");
+  assert.match(m, /min-width: min\(180px, 100%\);/);
+  assert.match(m, /max-width: 100%;/, "never wider than the row, at the 200px sidebar too");
+  assert.match(cssRule("#side-top .xmenu .menu-kbd svg"), /width: 14px; height: 14px;/);
+});
+
 test("boot wires the layout button before the first applyCap", () => {
   const app = read("app.js");
   const init = app.indexOf("\ninitSideLayout();");
