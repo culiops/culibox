@@ -185,7 +185,7 @@ function pfvOnPage() {
 // --- the nav list -------------------------------------------------------------
 
 // pfvRenderNav: the profiles nested under Profiles in the Settings nav: name, a lock
-// for one you cannot edit, the tier chip, then "+ New profile". The list is
+// for one you cannot edit, `box only` when it may not run on the host, then "+ New profile". The list is
 // rebuilt only when what it shows changed (every loadProfiles hands back new objects);
 // otherwise only the current row's aria-current moves, so a refetch or a click never
 // replaces the button that has focus.
@@ -193,7 +193,7 @@ function pfvRenderNav() {
   const nav = document.getElementById("pf-navlist");
   if (!nav || !pfvOnPage()) return; // a phone's modal keeps its own list
   const list = typeof profiles === "object" && Array.isArray(profiles) ? profiles : [];
-  const key = JSON.stringify(list.map((p) => [p.name, p.runtime === "host" ? "host" : "box", !p.editable]));
+  const key = JSON.stringify(list.map((p) => [p.name, !!p.host_block, !p.editable]));
   if (key !== pfvNavKey || nav.children.length === 0) {
     const at = document.activeElement;
     const had = at && nav.contains(at) ? at.dataset.pfvName : undefined; // a profile's name, "" for the add row
@@ -201,15 +201,14 @@ function pfvRenderNav() {
       const b = pfvMk("button", "pfv-ni");
       b.type = "button";
       b.dataset.pfvName = p.name;
-      // The M2 row: name, a lock for a read-only profile, then the tier as a chip. The chip holds the word alone
-      // (it is a filled box), so the lock and its words for a screen reader sit beside it, in front.
-      const host = p.runtime === "host";
+      // The M2 row: name, a lock for a read-only profile, then `box only` as a chip when the server says Host is blocked
+      // (host_block). The chip holds the words alone (it is a filled box), so the lock and its words for a screen reader sit in front.
       b.append(pfvMk("span", "pfv-ni-name", p.name));
       if (!p.editable) {
         b.setAttribute("title", "Defined in config.json (read-only)");
         b.append(pfvLockIcon(), pfvMk("span", "pfv-sr", "read-only, "));
       }
-      b.append(pfvMk("span", host ? "pfv-ni-tier pfv-ni-host" : "pfv-ni-tier", host ? "host" : "box"));
+      if (p.host_block) b.append(pfvMk("span", "pfv-ni-boxonly", "box only"));
       b.onclick = () => pfvSwitch(p.name);
       return b;
     });
@@ -401,6 +400,7 @@ function pfvDrawRow(r, known, err, o) {
   else if (r.original === true || PFV_MONO_KINDS.includes(r.kind)) nm.append(pfvMk("span", "pfv-mono", r.name));
   else nm.append(...pfvMonoNodes(r.name, known));
   if (r.tag) nm.append(pfvMk("span", "pfv-tag", r.tag));
+  if (r.applies) nm.append(pfvAppliesTag(r.applies));
   id.append(nm);
   const sub = old ? r.name : r.sub;
   if (sub) {
@@ -510,8 +510,8 @@ function pfvDrawAdvLabel(b) {
   return label;
 }
 
-// pfvDrawAdvanced: the seventh block of the card. With something set its value is the list of what is; with nothing set it is the helper
-// (b.lines[0]: "Arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults."). Edit is in column 3.
+// pfvDrawAdvanced: the last block of the card. With something set its value is the list of what is; with nothing set it is the helper
+// (b.lines[0]: "Starting environment, arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults."). Edit is in column 3.
 function pfvDrawAdvanced(b, known) {
   const sec = pfvMk("section", "pfv-block");
   sec.dataset.block = b.id;
@@ -523,6 +523,7 @@ function pfvDrawAdvanced(b, known) {
       if (PFV_MONO_KINDS.includes(r.kind)) dd.append(pfvMk("span", "pfv-mono", r.name));
       else dd.append(...pfvMonoNodes(r.name, known));
       if (r.scope) dd.append(" ", pfvMk("span", "pfv-muted", r.scope));
+      if (r.applies) dd.append(" ", pfvAppliesTag(r.applies));
       dl.append(pfvMk("dt", "", r.kind), dd);
     }
     body.append(dl);
@@ -533,13 +534,25 @@ function pfvDrawAdvanced(b, known) {
   return sec;
 }
 
+// pfvAppliesTag: the neutral tag that says which tier a block, row or Advanced entry applies to ("Applies to Box" / "Applies to Host").
+function pfvAppliesTag(applies) {
+  return pfvMk("span", "pfv-applies", "Applies to " + (applies === "host" ? "Host" : "Box"));
+}
+
+// pfvDrawLabel: a block's h3 label, with its Applies to tag after the name when it has one.
+function pfvDrawLabel(b) {
+  const h = pfvMk("h3", "pfv-label", b.label);
+  if (b.applies) h.append(" ", pfvAppliesTag(b.applies));
+  return h;
+}
+
 function pfvDrawBlock(b, known) {
   const rec = pfvState.edits[b.id];
   if (rec) return pfvDrawEditBlock(b, rec, known);
   if (b.id === "advanced") return pfvDrawAdvanced(b, known);
   const sec = pfvMk("section", "pfv-block");
   sec.dataset.block = b.id;
-  sec.append(pfvMk("h3", "pfv-label", b.label), pfvDrawBody(b, known), pfvDrawAct(b));
+  sec.append(pfvDrawLabel(b), pfvDrawBody(b, known), pfvDrawAct(b));
   return sec;
 }
 
@@ -586,7 +599,7 @@ function pfvRender() {
   pfvDrawn = pfvKey();
 }
 
-// pfvDrawSheets: the blocks as cards. One card holds them all (frame M2.1: Advanced is its seventh block); a block in edit is the card of its
+// pfvDrawSheets: the blocks as cards. One card holds them all (frame M2.1: Advanced is its last block); a block in edit is the card of its
 // own (frame M2.2, §B3: "the editing block as its own card"), with the blocks before it in one card and the blocks after it in another,
 // so the card holds the form and its foot and nothing else. Two blocks open at once (a refusal opens a second form) are two cards.
 function pfvDrawSheets(rv, known) {
@@ -1420,7 +1433,7 @@ function pfvDrawEditBlock(b, rec, known) {
   const save = pfvKitBtn("Save", "btn-primary", () => pfvSaveBlock(b.id));
   foot.append(status, discard, save);
   body.append(top, form);
-  const label = adv ? pfvDrawAdvLabel(b) : pfvMk("h3", "pfv-label", b.label);
+  const label = adv ? pfvDrawAdvLabel(b) : pfvDrawLabel(b);
   sec.append(label, body, foot);
   rec.block = b;
   rec.known = known;
@@ -1710,12 +1723,16 @@ const pfvWithValue = (choices, value) => (value !== "" && !choices.includes(valu
 // --- Runs in -----------------------------------------------------------------------------------------
 
 function pfvRunsValues(c) {
-  return { tier: c.tier };
+  return { tier: c.tier, boxOnly: c.doc.box_only === true };
 }
 
 function pfvRunsMerge(rec, c) {
-  return { tier: rec.values.tier, boxAvailable: c.boxAvailable };
+  return { tier: rec.values.tier, boxAvailable: c.boxAvailable, boxOnly: rec.values.boxOnly };
 }
+
+// Said when Host is picked on a profile locked to the box. The server refuses the same save (S1); this is asked first, so no
+// host-switch question opens for a save that cannot go.
+const PFV_BOX_ONLY_HOST = "Box only is on, so this profile cannot be saved as host. Turn Box only off first.";
 
 // The consequence line is for a box that stays a box; choosing host asks the host question instead.
 function pfvRunsNote(rec, c) {
@@ -1749,7 +1766,9 @@ function pfvRemovalCount(r) {
 // The consequence under the cards (the mockup's when-host and when-box lines).
 const PFV_HOST_RISK = "its sessions run with your whole home, your SSH keys and the Docker socket";
 function pfvHostConsequence(doc) {
-  const rm = pfvHostRemovals(doc);
+  // The lock is in pfvHostRemovals for the confirms, but this line sits beside the Box only checkbox, whose pre-check refuses a
+  // ticked lock and whose untick leaves nothing to list: it never names it.
+  const rm = pfvHostRemovals(doc).filter((r) => r.kind !== "Box only");
   const name = typeof doc.name === "string" && doc.name !== "" ? doc.name : pfvState.name;
   if (rm.length === 0) return "Its sessions run with your whole home, your SSH keys and the Docker socket.";
   return "A host profile cannot hold box-only access. Saving removes " + pfvJoin(rm.map(pfvRemovalCount)) + " from " + name + ", and " + PFV_HOST_RISK + ".";
@@ -1876,7 +1895,12 @@ function pfvTierCards(rec, c, o) {
 
 function pfvRunsForm(rec, c) {
   const v = rec.values;
-  const cards = pfvTierCards(rec, c, { tier: v.tier, pick: (tier) => { v.tier = tier; pfvChanged(rec, "runtime"); } });
+  const cards = pfvTierCards(rec, c, { tier: v.tier, pick: (tier) => {
+    v.tier = tier;
+    // The tier is what the Box only refusal was about (Host picked while it is on), so picking again retires it too.
+    rec.ferrs = rec.ferrs.filter((e) => !pfvFieldIs(e.field, "box_only"));
+    pfvChanged(rec, "runtime");
+  } });
   // The control to focus on open: the one that is lit and can be used.
   rec.first = [rec.fields["tier-box"], rec.fields["tier-host"]].find((r) => r.checked && !r.disabled) || rec.fields["tier-host"];
   const fs = pfvMk("fieldset", "pfv-field pfv-choice");
@@ -1901,6 +1925,15 @@ function pfvRunsForm(rec, c) {
     p.append(refusal, " ", link);
     out.push(p);
   }
+  // host_block is the server's reason Host is not offered. With no lock stored that reason is a binding or context paths
+  // (never a private copy), which forces the lock, so the box shows it ticked and off; a stored lock
+  // stays the user's to clear, whatever else blocks Host. Once Host is picked the box is the user's own value again:
+  // the pre-check refuses a ticked lock there, and an unticked one saves as host with the bindings stripped. A lock the user
+  // ticked themselves is real, so it is never drawn as forced: it stays enabled and clearable.
+  const forced = !!c.view.host_block && c.view.box_only !== true && v.tier !== "host" && !v.boxOnly;
+  const why = forced ? c.view.host_block.charAt(0).toUpperCase() + c.view.host_block.slice(1) + "." : "";
+  out.push(pfaCheckbox(rec, "box_only", "Box only: never offer Host for this profile", why, v.boxOnly || forced,
+    (on) => { v.boxOnly = on; pfvChanged(rec, "box_only"); }, null, forced));
   return out;
 }
 
@@ -2040,6 +2073,7 @@ function pfvPreCheck(rec, c) {
   const v = rec.values;
   if (!v) return null;
   if (rec.id === "agent" && typeof v.bin === "string" && v.bin.trim() === "") return { field: "bin", text: PFV_NO_COMMAND };
+  if (rec.id === "runs" && v.tier === "host" && v.boxOnly) return { field: "box_only", text: PFV_BOX_ONLY_HOST };
   if (rec.id === "runs" && v.tier === "host" && pfvHostRefusal(c.doc)) return { field: "runtime", text: pfvHostRefusal(c.doc) };
   const ed = PFV_EDITORS[rec.id];
   const own = ed && ed.check ? ed.check(rec, c) : null;

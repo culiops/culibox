@@ -4,7 +4,7 @@
 // the rest is the approved mockup's (profile-mockups/shots/b-*.png).
 const test = require("node:test");
 const assert = require("node:assert");
-const { pfvReadView, pfvAdvancedCount } = require("../static/profileview.js");
+const { pfvReadView, pfvAdvancedCount, pfvAdvancedItems, pfvPreselectWord } = require("../static/profileview.js");
 const { reachModel } = require("../static/spawnpreview.js");
 const { notHomeReasonText, notHomeFix, notHomeLabel, notHomeTitle } = require("../static/workhome.js");
 
@@ -52,15 +52,15 @@ const hostView = { name: "runbook-host", editable: true, source: "runtime", runt
 const hostDoc = { name: "runbook-host", bin: "claude", runtime: "host", default_cwd: "/home/you/runbooks", rev: "r2" };
 const hostIn = (over) => Object.assign({ view: hostView, doc: hostDoc, meta, creds, boxRuntime: "runc", bundleImports: true, defs }, over);
 
-test("aws-ops read view has the seven blocks in order", () => {
+test("aws-ops read view has the eight blocks in order", () => {
   const v = pfvReadView(awsIn());
-  assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]);
-  assert.deepStrictEqual(v.blocks.map((b) => b.label), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
+  assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]);
+  assert.deepStrictEqual(v.blocks.map((b) => b.label), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Can reach", "Advanced"]);
   assert.deepStrictEqual(v.header, { name: "aws-ops", tier: "box", agentLine: "Claude Code · claude-opus-5-5 · high effort", readOnly: false, source: "runtime" });
   assert.strictEqual(v.note, "");
-  assert.ok(v.blocks.every((b) => b.edit === true), "every block of an editable profile has Edit");
+  assert.ok(v.blocks.every((b) => b.edit === (b.id !== "canreach")), "every block of an editable profile has Edit but Can reach, whose action is Switch to box");
 
-  assert.deepStrictEqual(byId(v, "runs").lines, ["In a box", "A container on this machine. It can write only to its workspace and reach only what this page lists."]);
+  assert.deepStrictEqual(byId(v, "runs").lines, ["In a box", "A container on this machine. It can write only to its workspace and reach only what this page lists.", "New session pre-selects: Box · in place"]);
   assert.ok(!byId(v, "runs").tone);
 
   const ws = byId(v, "workspace");
@@ -77,7 +77,7 @@ test("aws-ops read view has the seven blocks in order", () => {
 test("the Cloud, Also reachable and Network values are reachModel's, unchanged", () => {
   const v = pfvReadView(awsIn());
   const m = reachModel({ profile: awsOpsView, tier: "box", cwd: awsOpsView.default_cwd, meta, creds, bundleImports: true });
-  const strip = (it) => ({ kind: it.kind, name: it.name, sub: it.sub, scope: it.scope, tag: it.tag, missing: it.missing });
+  const strip = (it) => ({ kind: it.kind, name: it.name, sub: it.sub, scope: it.scope, tag: it.tag, missing: it.missing, applies: "" });
   assert.deepStrictEqual(byId(v, "cloud").rows, m.cloud.map(strip));
   assert.deepStrictEqual(byId(v, "reachable").rows, m.reachable.map(strip));
   assert.deepStrictEqual(byId(v, "network").lines, [m.network.line, m.network.sub]);
@@ -95,7 +95,7 @@ test("the Cloud, Also reachable and Network values are reachModel's, unchanged",
 test("a profile with nothing bound still lists Cloud and Also reachable, empty, with their add action", () => {
   const view = { name: "payments-readonly", editable: true, source: "runtime", runtime: "box", bin: "claude", claude: true, default_cwd: "/home/you/work/payments-api", network: "open" };
   const v = pfvReadView({ view, doc: { name: "payments-readonly", bin: "claude", default_cwd: view.default_cwd }, meta, creds, boxRuntime: "runc", bundleImports: true, defs });
-  assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]);
+  assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]);
   assert.deepStrictEqual(byId(v, "cloud").rows, []);
   assert.strictEqual(byId(v, "cloud").add, "+ Add access");
   assert.deepStrictEqual(byId(v, "cloud").lines, ["Nothing yet", "It cannot use AWS, GitHub or any token."], "the value, then the helper (frame M2.1): two lines");
@@ -116,13 +116,13 @@ test("a profile with nothing bound still lists Cloud and Also reachable, empty, 
   assert.deepStrictEqual(byId(bare, "reachable").lines, ["Nothing yet", "It cannot read other folders or reach other domains."], "the value, then the helper");
 });
 
-test("runbook-host read view has runs, workspace, agent, canreach, advanced and no cloud", () => {
+test("runbook-host read view has every block, Can reach last before Advanced", () => {
   const v = pfvReadView(hostIn());
-  assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "canreach", "advanced"]);
+  assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]);
   assert.strictEqual(v.header.tier, "host");
   assert.strictEqual(v.header.agentLine, "Claude Code · agent's default model");
   // The spec's sentence verbatim, on one line; the muted line is empty when boxes are available.
-  assert.deepStrictEqual(byId(v, "runs").lines, ["On this machine: runs as you, with your files, your network and your credentials", ""]);
+  assert.deepStrictEqual(byId(v, "runs").lines, ["On this machine: runs as you, with your files, your network and your credentials", "", "New session pre-selects: Host"]);
   assert.ok(!byId(v, "runs").tone);
   assert.deepStrictEqual(byId(v, "workspace").rows.map((r) => [r.kind, r.name, r.sub, r.scope]), [
     ["Folder", "/home/you/runbooks", "Sessions start here", "Read and write, like anything else you own"],
@@ -138,9 +138,8 @@ test("runbook-host read view has runs, workspace, agent, canreach, advanced and 
   assert.strictEqual(cr.edit, false, "the block has no Edit: its action is Switch to box");
   assert.deepStrictEqual(cr.rows, []);
   assert.deepStrictEqual(byId(v, "agent").lines, ["Claude Code with its default model", "Signs in with the default Claude login (~/.claude)"]);
-  assert.match(byId(v, "advanced").lines[0], /^Starting environment, arguments, environment variables and sidebar replies\./);
+  assert.match(byId(v, "advanced").lines[0], /^Starting environment, arguments, environment variables, sidebar replies and CLAUDE\.md imports\./);
   assert.ok(byId(v, "advanced").lines[0].endsWith("All at their defaults."));
-  for (const id of ["cloud", "reachable", "network"]) assert.strictEqual(byId(v, id), undefined, id);
 });
 
 test("a host profile with no folder says so; a shell shows its binary, not a model", () => {
@@ -179,11 +178,12 @@ test("boxes unavailable on a box profile is an error line with the reason", () =
     "In a box",
     "Boxes are unavailable on this machine: Docker is not installed.",
     "Sessions with this profile can't start until Docker is installed.",
+    "New session pre-selects: Box · in place",
   ]);
   assert.strictEqual(runs.tone, "error");
   assert.strictEqual(runs.toneAt, 1, "only the sentence that names the problem is red");
   assert.strictEqual(v.header.tier, "box", "the profile still says box; it is what will refuse to start");
-  assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]);
+  assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]);
   // On a box with no layer the list view reports no network posture: the block still reads from the builder.
   const noLayer = pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...awsOpsView, network: "" } }));
   assert.deepStrictEqual(byId(noLayer, "network").lines, byId(v, "network").lines);
@@ -218,6 +218,7 @@ test("boxes unavailable on a profile that names no tier says its sessions start 
     "In a box",
     "Boxes are unavailable on this machine: Docker is not installed.",
     "Until it is, sessions start on this machine, uncontained.",
+    "New session pre-selects: Box · in place",
   ]);
   assert.strictEqual(docker.tone, "error");
   assert.strictEqual(docker.toneAt, 1, "the red line is still the one that names the problem");
@@ -234,7 +235,7 @@ test("boxes unavailable on a profile that names no tier says its sessions start 
   // The stored profile comes first: a stored host or box tier is not the default's to change.
   const hostDoc = { ...unnamedDoc, runtime: "host" };
   const storedHost = byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...awsOpsView, runtime: "host", runtime_asked: "host" }, doc: hostDoc })), "runs");
-  assert.strictEqual(storedHost.lines.length, 2, "a host profile gets no box consequence at all");
+  assert.strictEqual(storedHost.lines.length, 3, "a host profile gets no box consequence at all: its two lines and the pre-select one");
   assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...awsOpsView, runtime_asked: "" } })), "runs").lines[2], "Sessions with this profile can't start until Docker is installed.", "a stored box is named whatever the row says");
   // A stored box tier is a named one: today's sentence stays.
   assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed" })), "runs").lines[2], "Sessions with this profile can't start until Docker is installed.");
@@ -267,7 +268,7 @@ test("boxes unavailable on a profile that names no tier but holds a readable fol
   assert.strictEqual(line({ ...bareView, context_paths: folders }, bare, "colima is not installed"), "Sessions with this profile can't start until colima is installed.");
   assert.strictEqual(line({ ...bareView, clone_of: repo }, bare, "run `culibox doctor` for details"), "Sessions with this profile can't start until boxes are available.");
   // A profile that stores host is not a box profile at all: it gets no consequence line.
-  assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...bareView, runtime: "host" }, doc: { ...bare, runtime: "host" } })), "runs").lines.length, 2);
+  assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...bareView, runtime: "host" }, doc: { ...bare, runtime: "host" } })), "runs").lines.length, 3, "the two host lines and the pre-select one, no consequence");
 });
 
 // With no box layer the list view reports no network posture for a boxed profile; the
@@ -288,14 +289,14 @@ test("no box layer: the network block reads the posture the profile will have", 
     assert.strictEqual(lines[0], "Internet only through CuliBox's proxy, HTTPS to hostnames");
     assert.match(lines[1], /^Because this profile holds cloud access and tokens/, JSON.stringify(only));
   }
-  // A host profile has no network block at all, layer or not.
-  assert.strictEqual(byId(pfvReadView(hostIn({ boxRuntime: "" })), "network"), undefined);
+  // A host profile's Network block reads as a box would, layer or not (it is tagged Applies to Box).
+  assert.strictEqual(byId(pfvReadView(hostIn({ boxRuntime: "" })), "network").lines[0], "Any public website over HTTPS, through CuliBox's proxy");
 });
 
 test("boxes available (or not yet known) is not an unavailable state", () => {
   for (const boxRuntime of ["runc", "sysbox-runc", undefined, null]) {
     const runs = byId(pfvReadView(awsIn({ boxRuntime })), "runs");
-    assert.strictEqual(runs.lines.length, 2, String(boxRuntime));
+    assert.strictEqual(runs.lines.length, 3, String(boxRuntime));
     assert.ok(!runs.tone);
   }
 });
@@ -306,6 +307,7 @@ test("boxes unavailable on a host profile is not an error", () => {
   assert.deepStrictEqual(runs.lines, [
     "On this machine: runs as you, with your files, your network and your credentials",
     "Boxes are unavailable on this machine: Docker is not installed.",
+    "New session pre-selects: Host",
   ]);
   assert.ok(!runs.tone && runs.toneAt === undefined, "muted, never red");
   // Switch to box would be a control the user cannot use: hidden, and the Runs in block says why.
@@ -323,6 +325,7 @@ test("a box layer whose daemon cannot be used says why, on a box profile and qui
     "In a box",
     "Boxes can't start right now: Docker is not running.",
     "Sessions with this profile can't start until that is fixed.",
+    "New session pre-selects: Box · in place",
   ]);
   assert.strictEqual(box.tone, "error");
   assert.strictEqual(box.toneAt, 1);
@@ -330,6 +333,7 @@ test("a box layer whose daemon cannot be used says why, on a box profile and qui
   assert.deepStrictEqual(host.lines, [
     "On this machine: runs as you, with your files, your network and your credentials",
     "Boxes can't start right now: Docker is not running.",
+    "New session pre-selects: Host",
   ]);
   assert.ok(!host.tone, "a host profile does not need a box: muted, never red");
   // An unclassified failure is not refused at spawn (only the two named ones are): the consequence is softer.
@@ -338,18 +342,19 @@ test("a box layer whose daemon cannot be used says why, on a box profile and qui
     "In a box",
     "Boxes can't start right now: run `culibox doctor` for details.",
     "Sessions with this profile may fail to start.",
+    "New session pre-selects: Box · in place",
   ]);
   const denied = byId(pfvReadView(awsIn({ boxRuntime: "runc", boxDaemonReason: "no permission to use Docker" })), "runs");
   assert.strictEqual(denied.lines[2], "Sessions with this profile can't start until that is fixed.");
   // The daemon answering, an older server, and no layer at all keep today's lines.
   for (const over of [{ boxDaemonReason: "" }, {}, { boxDaemonReason: undefined }]) {
     const ok = byId(pfvReadView(awsIn({ boxRuntime: "runc", ...over })), "runs");
-    assert.strictEqual(ok.lines.length, 2);
+    assert.strictEqual(ok.lines.length, 3);
     assert.ok(!ok.tone);
   }
   const noLayer = byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", boxDaemonReason: reason })), "runs");
   assert.strictEqual(noLayer.lines[1], "Boxes are unavailable on this machine: Docker is not installed.", "no layer: that reason wins and the daemon one is not added");
-  assert.strictEqual(noLayer.lines.length, 3);
+  assert.strictEqual(noLayer.lines.length, 4);
 });
 
 test("private copy workspace lists not-home branches with today's reason text", () => {
@@ -434,7 +439,7 @@ test("the tier is the stored profile's when it names one; the list row only when
   assert.strictEqual(tier({ ...awsOpsView, runtime: "host" }, boxDoc), "box");
   assert.strictEqual(tier({ ...awsOpsView, runtime: "box" }, hostDoc2), "host");
   assert.deepStrictEqual(byId(pfvReadView(awsIn({ view: { ...awsOpsView, runtime: "host" }, doc: boxDoc })), "runs").lines[0], "In a box");
-  assert.deepStrictEqual(ids(pfvReadView(awsIn({ view: { ...awsOpsView, runtime: "host" }, doc: boxDoc }))), ["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]);
+  assert.deepStrictEqual(ids(pfvReadView(awsIn({ view: { ...awsOpsView, runtime: "host" }, doc: boxDoc }))), ["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]);
   // A profile that stores none takes the resolved tier.
   assert.strictEqual(tier({ ...awsOpsView, runtime: "host" }, noTier), "host");
   assert.strictEqual(tier({ ...awsOpsView, runtime: "box" }, noTier), "box");
@@ -513,8 +518,8 @@ test("advanced count is 0 for replies off and imports on", () => {
   assert.strictEqual(pfvAdvancedCount(undefined), 0);
   // model and effort live in the Agent block, so they are not Advanced; an unset option is not set.
   assert.strictEqual(pfvAdvancedCount({ options: { model: "m", effort: "high", effortLevel: "low", dangerously: false, mode: "" } }), 0);
-  // The base environment only counts on host; "inherit" is the default there too.
-  assert.strictEqual(pfvAdvancedCount({ base: "clean", runtime: "box" }), 0);
+  // A stored base counts on any tier (the starting environment row is tagged host, not hidden); "inherit" is the default.
+  assert.strictEqual(pfvAdvancedCount({ base: "clean", runtime: "box" }), 1);
   assert.strictEqual(pfvAdvancedCount({ base: "inherit", runtime: "host" }), 0);
   assert.strictEqual(pfvAdvancedCount({ runtime: "host" }), 0);
 });
@@ -559,4 +564,47 @@ test("the model never carries a credential reference and does not change its inp
   assert.doesNotThrow(() => pfvReadView());
   assert.doesNotThrow(() => pfvReadView({}));
   assert.deepStrictEqual(pfvReadView({}).header.name, "");
+});
+
+test("every block carries the tier it applies to", () => {
+  const want = [["runs", ""], ["workspace", ""], ["agent", ""], ["cloud", "box"], ["reachable", "box"], ["network", "box"], ["canreach", "host"], ["advanced", ""]];
+  for (const v of [pfvReadView(hostIn()), pfvReadView(awsIn())]) {
+    assert.deepStrictEqual(v.blocks.map((b) => [b.id, b.applies]), want);
+  }
+});
+
+test("Runs in ends with what New session pre-selects", () => {
+  const last = (v) => { const l = byId(v, "runs").lines; return l[l.length - 1]; };
+  assert.strictEqual(last(pfvReadView(awsIn())), "New session pre-selects: Box · in place");
+  assert.strictEqual(last(pfvReadView(awsIn({ view: { ...awsOpsView, clone_of: "/home/you/work/payments-api" } }))), "New session pre-selects: Box · clone");
+  assert.strictEqual(last(pfvReadView(awsIn({ doc: { ...awsOpsDoc, clone_of: "/home/you/work/payments-api" } }))), "New session pre-selects: Box · clone");
+  assert.strictEqual(last(pfvReadView(hostIn())), "New session pre-selects: Host");
+  const daemon = byId(pfvReadView(awsIn({ boxDaemonReason: "Docker is not running" })), "runs");
+  assert.strictEqual(daemon.tone, "error");
+  assert.strictEqual(daemon.toneAt, 1);
+  assert.strictEqual(daemon.lines[daemon.lines.length - 1], "New session pre-selects: Box · in place");
+  const gone = byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed" })), "runs");
+  assert.strictEqual(gone.toneAt, 1);
+  assert.strictEqual(gone.lines[gone.lines.length - 1], "New session pre-selects: Box · in place");
+  assert.strictEqual(pfvPreselectWord("host", true), "Host");
+  assert.strictEqual(pfvPreselectWord("box", true), "Box · clone");
+  assert.strictEqual(pfvPreselectWord("box", false), "Box · in place");
+});
+
+test("a host profile's Cloud, Also reachable and Network read as a box would", () => {
+  const v = pfvReadView(hostIn());
+  assert.deepStrictEqual(byId(v, "cloud").lines, ["Nothing yet", "It cannot use AWS, GitHub or any token."]);
+  assert.strictEqual(byId(v, "network").lines[0], "Any public website over HTTPS, through CuliBox's proxy");
+  assert.strictEqual(byId(v, "cloud").add, "+ Add access");
+});
+
+test("Can reach offers Switch to box only on a host profile", () => {
+  assert.strictEqual(byId(pfvReadView(awsIn()), "canreach").switchToBox, false);
+  assert.strictEqual(byId(pfvReadView(hostIn()), "canreach").switchToBox, true);
+});
+
+test("Advanced lists the starting environment on any tier, tagged host, and the imports row tagged box", () => {
+  assert.deepStrictEqual(pfvAdvancedItems({ base: "clean", imports_off: true }, "box", []).map((r) => [r.kind, r.applies]), [["Starting environment", "host"], ["Files", "box"]]);
+  assert.strictEqual(byId(pfvReadView(awsIn()), "advanced").lines[0], "Starting environment, arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults.");
+  assert.deepStrictEqual(pfvAdvancedItems({ args: ["a"] }, "box", []).map((r) => r.applies), [""], "a row defaults applies to empty");
 });

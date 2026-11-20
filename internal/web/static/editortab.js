@@ -18,7 +18,7 @@
 // The file can change on disk under the buffer (the agent writes it, or a save is refused with a 409): editorsync.js
 // polls the shown tab, reloads a clean buffer in place (replaceFromDisk) and draws the amber conflict bar over a dirty one.
 //
-// The tab's body is the editor (Code), Monaco's inline diff against git (Changes, editordiff.js, a read-only review view) or, for a
+// The tab's body is the editor (Code), Monaco's diff against git (Changes, editordiff.js, a read-only review view) or, for a
 // markdown file, its rendered Preview (editormd.js, the view such a tab opens in); the gutter marks of the lines that differ from git
 // are drawn on the editor.
 //
@@ -65,6 +65,36 @@ function editorBind(ed, id, run) {
   }
 }
 
+// editorBindChangeKeys binds F7 / Shift+F7 (the Changes view's next and previous change, editorreview.js), once. Monaco's addCommand
+// makes a keybinding of the page, not of the editor it is called on (measured in the vendored 0.57.0: addDynamicKeybinding on the
+// shared service, never disposed, outranking the built-in F7 "next difference" of a diff editor), so the same call serves the Code
+// editor and the Changes view's, and a second one would only stack another. It is called with whichever editor exists first.
+let editorChangeKeys = false;
+function editorBindChangeKeys(ed) {
+  if (editorChangeKeys) return;
+  editorChangeKeys = true;
+  // The All changes tab (reviewall.js) steps across its sections first; the single-file view is the one tab with a diff otherwise.
+  editorBind(ed, "editor.nextChange", () => { if (!(typeof reviewAllStep === "function" && reviewAllStep(1))) editorReviewStep(edTab, 1); });
+  editorBind(ed, "editor.prevChange", () => { if (!(typeof reviewAllStep === "function" && reviewAllStep(-1))) editorReviewStep(edTab, -1); });
+}
+
+// editorBindNoteKeys binds Add note (the registry's editor.addNote: `c` and Mod+Shift+A, editornotes.js), once, for the same reason as
+// editorBindChangeKeys: addCommand makes a page keybinding. The plain `c` is typing everywhere but in a read-only diff editor that has
+// its text focus (the Changes view; not its find widget, not a note's text box, which are not the editor's text), so its context says so
+// and Monaco never runs the command (nor swallows the key) anywhere else. A chord with a modifier types nothing, and the command asks
+// where the keyboard is (a Changes view, or the Code editor).
+let editorNoteKeys = false;
+function editorBindNoteKeys(ed) {
+  if (editorNoteKeys) return;
+  editorNoteKeys = true;
+  const entry = scEntry("editor.addNote");
+  for (const chord of entry ? activeChords(entry, IS_MAC) : []) {
+    const keys = monacoKeyFor(chord, dockMonaco, IS_MAC);
+    const plain = !chord.mod && !chord.ctrl && !chord.alt && !chord.shift;
+    if (keys) ed.addCommand(keys, () => editorNotesKey(), plain ? "isInDiffEditor && editorReadonly && editorTextFocus" : undefined);
+  }
+}
+
 // editorEnsure creates the shared editor once. Options that are decisions, not defaults:
 //  - automaticLayout: the dock resizes (drag, Full mode, the explorer folding) and the editor follows by itself;
 //  - no minimap, no sticky scroll: mockup B1 shows neither;
@@ -93,7 +123,9 @@ function editorEnsure() {
     lineNumbersMinChars: 3,
   }, editorOptions()));
   editorBind(dockEditor, "editor.save", () => { if (dockEditorOwner) dockEditorOwner.save(); });
-  editorBind(dockEditor, "editor.wrap", () => toggleViewerWrap());
+  editorBind(dockEditor, "editor.wrap", () => editorWrapKey()); // Wrap lines, or Wrap diff while the Changes view has the keyboard
+  editorBindChangeKeys(dockEditor);
+  editorBindNoteKeys(dockEditor);
   dockEditor.onDidChangeCursorPosition(() => { if (dockEditorOwner) dockEditorOwner.paintStatus(); });
   editorSelBarInstall(dockEditor, dockMonaco); // editorselbar.js: the bar over a selection
   return dockEditor;
@@ -140,6 +172,7 @@ class EditorTab {
     // "edit" | "read" | "image" | "binary" once read (editorMode); null until then.
     this.mode = null;
     this.readOnly = !!this.box; // true for a tab shown locked: a box file is known so before any read, the rest after it
+    this.gone = false;          // opened from a Changes row of a file deleted from disk: an empty read-only buffer for the Changes view (load)
     this.serverReadOnly = false; // the server's own flag (a scratch folder), as read
     this.notUtf8 = false;       // the server's `utf8: false`: the bytes are not UTF-8, the buffer shows U+FFFD for them, so no save
     this.model = null;          // the monaco text model, once the file is read and Monaco is loaded
@@ -167,8 +200,10 @@ class EditorTab {
     this.diff = null;           // the Changes view while it is up: {diff, original, wrap, label}
     this.followBtn = null;      // editorfollow.js: the Follow toggle in the bar
     this.dg = null;             // editordiff.js: the request slot, the gutter's debounce and decorations
+    this.modeSeg = null;        // the Inline | Side by side control, shown while in Changes: {el, inline, side}
     this.seg = null;            // the Code | Changes toggle in the bar (Preview | Source | Changes for markdown): {el, preview, code, changes}
     this.md = null;             // editormd.js: a markdown file's view and its Preview pane ({view, pane, text, timer, sub, top, live})
+    this.img = null;            // imagediff.js: an image's Image | Changes toggle and its comparer ({seg, on, view}), built with the bar
 
     this.el = document.createElement("div");
     this.el.className = "tab-body dk-ed";
@@ -189,9 +224,12 @@ class EditorTab {
     this.bodyEl.className = "dk-ed-body";
     this.buildStatus();
     this.el.append(this.altEl, this.roEl, this.barEl, this.cmpEl, this.bodyEl, this.sbEl);
+    if (typeof reviewBarMount === "function") reviewBarMount(this); // the review bar (reviewbar.js): first in the tab, while notes wait
     // Mod+S saves from anywhere in the tab, not only from the editor: a key Monaco handled is stopped before here.
     this.el.addEventListener("keydown", (e) => {
-      if (!e.defaultPrevented && shortcutMatches("editor.save", e, IS_MAC)) { e.preventDefault(); e.stopPropagation(); this.save(); }
+      if (e.defaultPrevented) return;
+      if (shortcutMatches("editor.save", e, IS_MAC)) { e.preventDefault(); e.stopPropagation(); this.save(); }
+      else if (editorReviewKey(this, e)) { e.preventDefault(); e.stopPropagation(); } // F7 and Alt+Z on the Changes header's own buttons
     });
 
     this.buildActs();
@@ -222,7 +260,7 @@ class EditorTab {
     // stopPropagation: the document's closer for the kit menu would shut the menu this press opens.
     more.onclick = (e) => { e.stopPropagation(); this.openMenu(); };
     this.moreBtn = more;
-    this.actsEl.append(editorDiffToggle(this), editorFollowButton(this), more);
+    this.actsEl.append(editorDiffToggle(this), editorDiffModeToggle(this), editorImageToggle(this), editorFollowButton(this), more);
     this.seg.el.hidden = true; // until the file is read as text (paint)
     more.hidden = true;
   }
@@ -279,8 +317,17 @@ class EditorTab {
     this.roEl.hidden = !why || !ready;
     this.paintStatus();
     editorDiffPaintToggle(this);
+    editorReviewPaint(this);
+    editorImagePaint(this);
     editorFollowPaintTab(this);
     editorSelBarUpdate(); // the Changes view or Preview took the editor's place, or gave it back: the bar is for Code only
+    this.paintReviewBar();
+  }
+
+  // paintReviewBar: whether Paste may act depends on this tab's unsaved edit, for the bar of every tab of the session, not only this one's.
+  paintReviewBar() {
+    const sid = this.host && typeof this.host.sessionId === "function" ? this.host.sessionId() : null;
+    if (sid && typeof reviewBarRender === "function") reviewBarRender(sid);
   }
 
   // changed: something the dock shows moved (the lock, the dirty dot, the label). Like ViewerTab.changed.
@@ -291,7 +338,7 @@ class EditorTab {
 
   readOnlyWhy() {
     if (this.mode === "image" || this.mode === "binary") return "";
-    return readOnlyReason({ box: this.box, readonly: this.serverReadOnly, notUtf8: this.notUtf8, unknown: this.mode === "read" });
+    return readOnlyReason({ box: this.box, readonly: this.serverReadOnly, notUtf8: this.notUtf8, unknown: this.mode === "read", gone: this.gone });
   }
 
   // previewing: a markdown file's Preview is in the body (editormd.js), so the editor is not on screen even while this tab owns it.
@@ -321,11 +368,18 @@ class EditorTab {
     this.firstLoad = false;
     if (IMAGE_EXTS.has(extOf(this.path))) { this.mountInner("image"); return; }
     const url = this.box ? boxFileURL(this.box, this.path) : undefined;
-    const [res, mon] = await Promise.all([fsRead(this.path, url), loadMonaco().then((m) => ({ m }), (err) => ({ err }))]);
+    let [res, mon] = await Promise.all([fsRead(this.path, url), loadMonaco().then((m) => ({ m }), (err) => ({ err }))]);
     if (this.disposed || seq !== this.loadSeq) return;
     const alt = first ? this.alt : null; // the lookup is for the first read only: a file deleted later is a deletion
     this.alt = null;
     const altLine = alt ? this.pendingLine : null;
+    // A D row of the Changes section opens the file in Changes though it is gone: the 404 is the file's state, not an error (openDeleted).
+    // The tab gets an empty read-only buffer to compare the base text with; nothing reads or polls the file after this (editorsync.js).
+    if (!res.ok && openDeleted({ status: res.status, changes: this.pendingChanges, restored: first && this.restored, alt: !!alt, box: !!this.box })) {
+      this.gone = true;
+      res = { ok: true, status: 200, data: { kind: "text", readonly: false, utf8: true, content: "", version: "" } };
+      editorSyncSync(); // a tab on screen is not asked about its file any more
+    }
     if (!res.ok || res.data == null) {
       // A restored tab nobody asked for closes on a gone file instead of parking an error on it. Exactly 404: status 0
       // is "the fetch never completed", which says nothing about the file.
@@ -334,7 +388,7 @@ class EditorTab {
       this.showReadError(res);
       return;
     }
-    const mode = editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 });
+    const mode = this.gone ? "read" : editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 });
     if (mode === "image" || mode === "binary") { this.mountInner(mode); return; }
     if (mon.err) {
       // The next open tries again (loadMonaco forgets a failure), so say what failed rather than only "reload".
@@ -353,6 +407,7 @@ class EditorTab {
     this.diskText = res.data.content || "";
     this.model = dockMonaco.editor.createModel(this.diskText, monacoLang(this.path));
     this.savedAlt = this.model.getAlternativeVersionId();
+    if (typeof editorNotesTrack === "function") editorNotesTrack(this); // the file's notes follow its text for as long as the tab is open (editornotes.js)
     this.contentSub = this.model.onDidChangeContent(() => this.onContent());
     this.optionsSub = this.model.onDidChangeOptions(() => this.paintStatus());
     if (this.attached) this.show();
@@ -382,7 +437,9 @@ class EditorTab {
     this.pendingLine = null;
     this.el.replaceChildren(v.el);
     if (this.attached) { v.onShow(); v.onAttach(); }
-    this.changed(); // the viewer has its own toolbar: the bar keeps only Follow
+    this.changed(); // the viewer has its own toolbar: the bar keeps only Follow (and, for an image git lists, Image | Changes: imagediff.js)
+    // A D row, or a badge, asked for the Changes view: an image's is the comparer (a deleted one has only its old side).
+    if (mode === "image" && this.pendingChanges) { this.pendingChanges = false; editorImageSet(this, true); }
   }
 
   // findAlternates (#53): the first read of a relative terminal link was a 404. Look for the same repo-relative path
@@ -430,7 +487,7 @@ class EditorTab {
     const acts = document.getElementById("dock-acts");
     if (acts) acts.insertBefore(this.actsEl, document.getElementById("drawer-max"));
     this.placeBar(true);
-    if (this.inner) { this.inner.onAttach(); return; }
+    if (this.inner) { this.inner.onAttach(); if (editorImageOn(this)) editorImageEnter(this); return; }
     if (this.model) this.show();
     editorSyncStart(this); // the file on disk is asked about while this tab is the one on screen
   }
@@ -441,7 +498,11 @@ class EditorTab {
   placeBar(on) {
     const slot = on ? document.getElementById("dock-conflict") : null;
     if (slot) slot.replaceChildren(this.barEl);
-    else if (this.barEl.parentNode !== this.el) this.el.insertBefore(this.barEl, this.cmpEl);
+    else if (this.barEl.parentNode !== this.el) {
+      // An image or a binary file's tab (mountInner) holds only its viewer: cmpEl is no child of el, and insertBefore would throw out of
+      // dispose(). The bar is for a text file's conflicts: with no place in el it is simply taken out of the dock's slot.
+      if (this.cmpEl.parentNode === this.el) this.el.insertBefore(this.barEl, this.cmpEl); else this.barEl.remove();
+    }
   }
 
   // onHide: another tab is about to be shown. The view is kept for the way back.
@@ -509,6 +570,7 @@ class EditorTab {
   }
 
   focusReader() {
+    if (this.img && this.img.view) { this.img.view.el.focus({ preventScroll: true }); return; } // an image's comparer
     if (this.inner) { this.inner.focusReader(); return; }
     if (this.diff) { this.diff.diff.getModifiedEditor().focus(); return; }
     if (editorMdUp(this)) { this.md.pane.focus({ preventScroll: true }); return; }
@@ -521,11 +583,14 @@ class EditorTab {
     this.disposed = true;
     editorSyncDispose(this); // before the model goes: a compare view holds it
     editorDiffDispose(this); // and so does the Changes view
+    if (typeof editorNotesUntrack === "function") editorNotesUntrack(this); // its note decorations and its listener
+    if (typeof reviewBarUnmount === "function") reviewBarUnmount(this); // its review bar
     editorMdDispose(this);   // and the Preview's subscription
     if (this.savedTimer) clearTimeout(this.savedTimer);
     this.closeMenu();
     this.actsEl.remove();
     this.placeBar(false);
+    editorImageDispose(this); // the comparer's request and blob URL, before the viewer goes
     if (this.inner) this.inner.dispose();
     if (this.contentSub) this.contentSub.dispose();
     if (this.optionsSub) this.optionsSub.dispose();
@@ -562,6 +627,7 @@ class EditorTab {
     const d = this.dirty();
     if (d === this.dirtyShown) return;
     this.dirtyShown = d;
+    this.paintReviewBar();
     if (d && edit && this.host && this.host.onEditStart) this.host.onEditStart(this);
     if (this.host && this.host.onDirtyChange) this.host.onDirtyChange(this);
   }
@@ -709,6 +775,7 @@ class EditorTab {
   // showChanges(on): the Changes view (editordiff.js), the file against git's base, read-only; false goes back to Code. A call with
   // no argument turns it on, as ViewerTab.showChanges does (filesdrawer.js, a badge's click). Returns whether it is up or on its way.
   showChanges(on) {
+    if (this.inner && this.mode === "image") return editorImageSet(this, on !== false); // no Monaco: the comparer (imagediff.js)
     return editorDiffSet(this, on !== false);
   }
 
@@ -723,7 +790,7 @@ class EditorTab {
     if (this.moreBtn && this.moreBtn.getAttribute("aria-expanded") === "true") closeRowMenu();
   }
 
-  // openMenu: Copy path, Copy relative path, Reveal in tree, Download, Wrap lines (Alt+Z), Font size, Copy contents.
+  // openMenu: Copy path, Copy relative path, Reveal in tree, Download, Wrap lines (Alt+Z; in Changes Wrap diff and Line numbers), Font size, Copy contents.
   // The kit's menu, as the explorer's ⋯ is; a second press on the ⋯ closes it.
   openMenu() {
     const more = this.moreBtn;
@@ -742,20 +809,30 @@ class EditorTab {
       if (can === false) { b.setAttribute("aria-disabled", "true"); b.title = why || ""; }
       return b;
     };
-    const wrap = item("Wrap lines", viewerPrefs.getWrap() ? "check" : "", () => toggleViewerWrap());
-    const kbd = document.createElement("span");
-    kbd.className = "menu-kbd";
-    kbd.textContent = shortcutHint("editor.wrap", IS_MAC);
-    wrap.append(kbd);
-    wrap.setAttribute("role", "menuitemcheckbox");
-    wrap.setAttribute("aria-checked", viewerPrefs.getWrap() ? "true" : "false");
+    // A checkbox row with the chord that toggles it (the registry's editor.wrap: Wrap lines in Code, Wrap diff in Changes).
+    const check = (label, on, run, kbdId) => {
+      const row = item(label, on ? "check" : "", run);
+      if (kbdId) {
+        const kbd = document.createElement("span");
+        kbd.className = "menu-kbd";
+        kbd.textContent = shortcutHint(kbdId, IS_MAC);
+        row.append(kbd);
+      }
+      row.setAttribute("role", "menuitemcheckbox");
+      row.setAttribute("aria-checked", on ? "true" : "false");
+      return row;
+    };
+    // In Changes the view has its own two: Wrap diff (separate from the editor's wrap, so Wrap lines has nothing to say there) and Line numbers.
+    const viewRows = this.diff
+      ? [check("Wrap diff", viewerPrefs.getDiffWrap(), () => diffWrapToggle(), "editor.wrap"), check("Line numbers", dgLineNumbers, () => diffLineNumbersToggle())]
+      : [check("Wrap lines", viewerPrefs.getWrap(), () => toggleViewerWrap(), "editor.wrap")];
     const nodes = [
       item("Copy path", "copy", () => this.copyPath("abs")),
       item("Copy relative path", "copy", () => this.copyPath("rel"), rel.ok, rel.title),
       item("Reveal in tree", "files", () => this.revealInTree(), reveal.ok, reveal.title),
       item("Download", "download", () => this.download()),
       kitMenuSep(),
-      wrap,
+      ...viewRows,
       this.fontRow(),
       kitMenuSep(),
       item("Copy contents", "copy", () => this.copyContents()),

@@ -1860,10 +1860,11 @@ function fitAll() {
 function applyCap(n) {
   if (closePageHolds(() => applyCap(n))) return; // the layout the user just chose must be on screen
   cap = n;
-  // Every .layouts group: the header's (mobile) and the sidebar top's (desktop).
+  // The header's .layouts group (mobile) and the sidebar top's layout button (desktop, sidechrome.js).
   for (const b of document.querySelectorAll(".layouts button")) {
     b.classList.toggle("active", Number(b.dataset.cols) === n);
   }
+  for (const b of document.querySelectorAll(".xlay")) xlayPaint(b, n);
   while (cells.length > cap) {
     const extra = cells.pop();
     const keep = cells[cells.length - 1];

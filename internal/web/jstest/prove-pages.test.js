@@ -1184,7 +1184,7 @@ test("page controls are updated in place", () => {
   assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "true", "false", "false", "false"]);
   assert.strictEqual(el("an-compare").attrs["aria-pressed"], "false");
   assert.strictEqual(nodes.custom.hidden, true);
-  assert.strictEqual(el("an-pdesc").textContent, "Spend read from Claude Code transcripts · 2026-10-09 → 2026-11-07 (UTC)", "§A1, from AN before a window has loaded");
+  assert.strictEqual(el("an-pdesc").textContent, "Token usage from Claude Code transcripts, priced at API list rates · 2026-10-09 → 2026-11-07 (UTC)", "§A1, from AN before a window has loaded");
   same();
 
   run('AN.tab = "sessions"; AN.range = "90d"; AN.compare = true; anSyncPageControls();');
@@ -1213,9 +1213,9 @@ test("page controls are updated in place", () => {
   // The description names the window that was asked for (AN.from, AN.to), whatever window the body last loaded: a pressed range
   // must not read as the one before it while it loads, or after its load failed (Gate 3 D9).
   run('AN.data = { from: "2026-10-01", to: "2026-10-30", costByDay: { days: [] } }; anSyncPageControls();');
-  assert.strictEqual(el("an-pdesc").textContent, "Spend read from Claude Code transcripts · 2026-10-09 → 2026-11-07 (UTC)", "AN's window, not the loaded data's");
+  assert.strictEqual(el("an-pdesc").textContent, "Token usage from Claude Code transcripts, priced at API list rates · 2026-10-09 → 2026-11-07 (UTC)", "AN's window, not the loaded data's");
   run('AN.from = "2026-10-05"; AN.to = "2026-11-01"; anSyncPageControls();');
-  assert.strictEqual(el("an-pdesc").textContent, "Spend read from Claude Code transcripts · 2026-10-05 → 2026-11-01 (UTC)", "follows AN at once");
+  assert.strictEqual(el("an-pdesc").textContent, "Token usage from Claude Code transcripts, priced at API list rates · 2026-10-05 → 2026-11-01 (UTC)", "follows AN at once");
   same();
   // Nothing is ever built or removed by the sync: the head and the toolbar keep their children.
   assert.strictEqual(nodes.head.elements.length, 2);
@@ -1248,7 +1248,7 @@ test("the head names the window a range press asked for while it loads and after
   el("an-prange").onclick({ target: el("an-prange").elements[0] });
   const seven = `${run("AN.from")} → ${run("AN.to")}`;
   assert.notStrictEqual(seven, "2026-10-09 → 2026-11-07");
-  assert.strictEqual(desc(), `Spend read from Claude Code transcripts · ${seven} (UTC)`, "the window being loaded, not the one before it");
+  assert.strictEqual(desc(), `Token usage from Claude Code transcripts, priced at API list rates · ${seven} (UTC)`, "the window being loaded, not the one before it");
   assert.strictEqual(el("analytics-body").textContent, "Loading…");
   release({});
   await settle();
@@ -1258,7 +1258,7 @@ test("the head names the window a range press asked for while it loads and after
   const ninety = `${run("AN.from")} → ${run("AN.to")}`;
   await settle();
   assert.strictEqual(el("analytics-body").textContent, "Could not load analytics.");
-  assert.strictEqual(desc(), `Spend read from Claude Code transcripts · ${ninety} (UTC)`);
+  assert.strictEqual(desc(), `Token usage from Claude Code transcripts, priced at API list rates · ${ninety} (UTC)`);
   assert.notStrictEqual(ninety, seven);
 });
 
@@ -1348,7 +1348,7 @@ test("Apply on the page's Custom range row swaps a reversed range, loads it and 
   assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "false", "false", "false", "true"]);
   assert.strictEqual(el("an-papply").parent.hidden, false, "a custom range keeps its row open");
   assert.strictEqual(run("document.activeElement"), el("an-papply"), "Apply keeps focus");
-  assert.strictEqual(el("an-pdesc").textContent, "Spend read from Claude Code transcripts · 2026-10-05 → 2026-11-01 (UTC)");
+  assert.strictEqual(el("an-pdesc").textContent, "Token usage from Claude Code transcripts, priced at API list rates · 2026-10-05 → 2026-11-01 (UTC)");
   // A preset closes the row again; reopened, the fields show the window then.
   const seven = el("an-prange").elements[0];
   el("an-prange").onclick({ target: seven });
@@ -1367,7 +1367,7 @@ test("openAnalytics resets the page's controls with the state it resets", async 
   assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "true", "false", "false", "false"]);
   assert.strictEqual(el("an-compare").attrs["aria-pressed"], "false");
   assert.strictEqual(el("an-papply").parent.hidden, true);
-  assert.match(el("an-pdesc").textContent, /^Spend read from Claude Code transcripts · \d{4}-\d\d-\d\d → \d{4}-\d\d-\d\d \(UTC\)$/);
+  assert.match(el("an-pdesc").textContent, /^Token usage from Claude Code transcripts, priced at API list rates · \d{4}-\d\d-\d\d → \d{4}-\d\d-\d\d \(UTC\)$/);
 });
 
 test("the page's body holds no controls and no window line: the head carries them", async () => {
@@ -1696,12 +1696,16 @@ test("overview KPI labels on the page are the frame's", () => {
   const row = root.elements[0];
   assert.strictEqual(row.className, "kpi-row", "the page's KPI row is the kit's, first in the body");
   assert.deepStrictEqual(tilesOf(row), [
-    { value: "$4.3k", label: "Total cost" },
+    { value: "$4.3k", label: "API value" },
     { value: "10.4B", label: "Tokens" },
     { value: "1,420", label: "Sessions" },
     { value: "3,994", label: "Prompts" },
     { value: "$3.03", label: "Avg per session" },
   ], "§A2: the labels and the thousands separators on the counts; tokens stay compact");
+  // #340 S6: list-price token value is not a bill; the label's tooltip says so, in the sidebar cost's words.
+  assert.strictEqual(row.elements[0].elements[1].attrs.title,
+    "Token usage today (UTC) priced at API list rates. A subscription does not bill this.");
+  assert.strictEqual(row.elements[0].elements[1].attrs.title, require("../static/analytics.js").AN_API_VALUE_TITLE);
   assert.ok(!root.elements.some((n) => n.cls.includes("an-kpis")), "no legacy KPI grid beside it");
   // The rest of the Overview is Task 6's: still there, after the row.
   assert.ok(root.elements.length > 1);

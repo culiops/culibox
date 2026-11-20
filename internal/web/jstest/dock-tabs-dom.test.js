@@ -940,3 +940,92 @@ test("a page view open during the boot keeps the dock closed: openDrawer would c
   const free = boot({ currentPage: () => "" }, true);
   assert.deepEqual(free.st.opened, [["files", "a"]], "no page: it reopens as before");
 });
+
+// --- the All changes tab (P3 Task 3b) ---------------------------------------------------------------------------------
+
+// A stand-in ReviewAllTab: what the dock asks of it (reviewall.test.js runs the real one).
+function reviewPage() {
+  const made = [];
+  let doc = null;
+  class ReviewAllTab {
+    constructor(sid, opts) {
+      this.sid = sid; this.opts = opts; this.path = ""; this.box = ""; this.name = "All changes"; this.scroll = 0; this.readOnly = false;
+      this.el = new Node("div", doc); this.disposed = false; this.calls = []; this.toolbarApi = { paint() {} };
+      made.push(this);
+    }
+    dirty() { return false; }
+    generation() { return null; }
+    discardEdits() {}
+    dispose() { this.disposed = true; }
+    onHide() { this.calls.push("hide"); }
+    onShow() { this.calls.push("show"); }
+    onAttach() { this.calls.push("attach"); }
+    focusReader() { this.calls.push("focus"); }
+    scrollTo(p) { this.calls.push(["scrollTo", p]); }
+  }
+  const p = page({ ReviewAllTab });
+  doc = p.doc;
+  p.made = made;
+  return p;
+}
+
+test("dockShowReview opens the All changes tab after the active one, mounts a ReviewAllTab (not an EditorTab) and shows it", () => {
+  const p = reviewPage();
+  const [a] = files(1);
+  p.show(a, { preview: false });
+  assert.equal(p.ctx.dockShowReview("a", "/work/proj/f1.go"), true);
+  const st = p.state();
+  assert.deepEqual(st.tabs.map((t) => t.key), ["v:" + a, "r:a"]);
+  assert.equal(st.active, "r:a");
+  const rv = p.made[0];
+  assert.equal(p.nodes["drawer-vhost"].children[0], rv.el, "on screen");
+  assert.deepEqual(rv.calls.slice(0, 2), ["show", "attach"]);
+  assert.deepEqual(rv.calls[rv.calls.length - 1], ["scrollTo", "/work/proj/f1.go"], "at the section asked for");
+  assert.equal(p.st.made.filter((v) => !v.disposed).length, 1, "the file's viewer is kept, hidden");
+  assert.ok(p.viewer(a).calls.includes("hide"));
+  // The crumbs row says nothing for it (no path).
+  const last = p.st.crumbs[p.st.crumbs.length - 1];
+  assert.deepEqual(last.crumbs, []);
+  // Opened again: the same tab, the same viewer.
+  assert.equal(p.ctx.dockShowReview("a"), true);
+  assert.equal(p.made.length, 1);
+  assert.equal(p.state().tabs.length, 2);
+  // The strip item is named All changes with no letter and not dirty.
+  const items = p.st.strip[p.st.strip.length - 1];
+  assert.equal(items[1].name, "All changes");
+  assert.equal(items[1].review, true);
+});
+
+test("the All changes tab: closing it disposes the viewer; leaving the session parks it; it is not stored", async () => {
+  const p = reviewPage();
+  p.restore(); // the stored tabs are read, so a write is allowed
+  const [a] = files(1);
+  p.show(a, { preview: false });
+  p.ctx.dockShowReview("a");
+  const rv = p.made[0];
+  p.flush();
+  assert.ok(p.st.store.get(KEY) && !p.st.store.get(KEY).includes("r:a"), "the files are stored, the review tab is not");
+  p.drawer({ open: "files", sessionId: "b", pinned: false });
+  assert.equal(rv.disposed, true, "the session left: no section editor of it stays");
+  p.drawer({ open: "files", sessionId: "a", pinned: false });
+  assert.equal(p.made.length, 2, "coming back mounts it again");
+  await p.ctx.dockCloseTab("r:a");
+  assert.equal(p.made[1].disposed, true);
+  assert.deepEqual(p.state().tabs.map((t) => t.key), ["v:" + a]);
+});
+
+test("dockShowReview refuses a dock that is not on that session, and a restored page does not bring the tab back", () => {
+  const p = reviewPage();
+  assert.equal(p.ctx.dockShowReview("b"), false);
+  assert.equal(p.made.length, 0);
+  p.restore();
+  const [a] = files(1);
+  p.show(a, { preview: false });
+  p.ctx.dockShowReview("a");
+  p.flush();
+  const raw = p.st.store.get(KEY);
+  assert.ok(raw, "the files were stored");
+  const q = reviewPage();
+  q.restore([{ id: "a" }, { id: "b" }], raw);
+  assert.deepEqual(q.state("a").tabs.map((t) => t.key), ["v:" + a], "the files come back, the review tab does not");
+});

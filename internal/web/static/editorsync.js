@@ -21,6 +21,9 @@
 //  - a bar that is up takes the newest disk version a later answer brings: "Keep mine" will overwrite what the user was told
 //    about, never an older one, and an open compare view is read again for the same reason.
 //
+// A tab opened from a deleted file's Changes row (EditorTab.gone: an empty buffer for the Changes view) is never asked about: its file
+// is known gone, so there is no 404 to poll for and no bar to raise.
+//
 // editorSyncStart(tab) / editorSyncStop(tab): `tab` is on screen / is not (EditorTab.onAttach, onHide).
 // editorSyncOnReplace(tab, fn): fn(newText) after a reload or "Load the agent's version" replaced the model's text (P3 hooks here).
 
@@ -63,7 +66,7 @@ function editorSyncStop(tab) {
 // Called from every place that changes it: the tab's show and hide, the dock's paint (drawerPaint), a page view opening or
 // closing (pagehost.js) and the page being hidden or shown (below).
 function editorSyncSync(now) {
-  if (!esTab || !editorSyncShown()) {
+  if (!esTab || esTab.gone || !editorSyncShown()) { // a tab opened from a deleted file's Changes row has nothing to poll (EditorTab.load)
     if (esTimer) { clearInterval(esTimer); esTimer = null; }
     return;
   }
@@ -101,7 +104,7 @@ function editorSyncCurrent(tab, c) {
 // editorSyncCheck: one metadata read for `tab`, and what comes of it. One at a time, and not while the tab saves.
 async function editorSyncCheck(tab) {
   const s = editorSyncOf(tab);
-  if (s.flight || tab.disposed || !tab.attached || !tab.model || tab.inner || tab.saving) return;
+  if (s.flight || tab.disposed || !tab.attached || !tab.model || tab.inner || tab.saving || tab.gone) return;
   const ctx = editorSyncCtx(tab);
   s.flight = true;
   try {
@@ -312,7 +315,10 @@ async function editorSyncCompare(tab) {
     fixedOverflowWidgets: true,
   }, editorOptions()));
   const computed = diff.onDidUpdateDiff(() => { computed.dispose(); diff.revealFirstDiff(); }); // open at the first difference, not at line 1
-  diff.setModel({ original, modified: tab.model });
+  // The view model is ours to dispose (as editorDiffSet and the All changes view do): setModel({original, modified}) makes one that
+  // nothing ever releases (Monaco 0.57), and its pending diff then runs on against models that are gone.
+  const vm = diff.createViewModel({ original, modified: tab.model });
+  diff.setModel(vm);
   const head = document.createElement("div");
   head.className = "dk-cmp-head";
   const label = document.createElement("span");
@@ -323,7 +329,7 @@ async function editorSyncCompare(tab) {
   tab.cmpEl.replaceChildren(head, body);
   tab.cmpEl.hidden = false;
   tab.bodyEl.hidden = true;
-  s.cmp = { diff, original };
+  s.cmp = { diff, original, vm };
 }
 
 // editorSyncRefreshCompare: the disk moved again while the compare view is open: read it again, so the diff never shows an older
@@ -338,8 +344,8 @@ async function editorSyncRefreshCompare(tab) {
   if (s.bar) s.bar.diskVersion = got.version;
 }
 
-// editorSyncCloseCompare dismisses the compare view: the diff editor and the model of the disk's text are disposed (the buffer's
-// model is the tab's, and stays), and the editor is shown again.
+// editorSyncCloseCompare dismisses the compare view: the diff editor, its view model and the model of the disk's text are disposed, in
+// that order (the buffer's model is the tab's, and stays), and the editor is shown again.
 function editorSyncCloseCompare(tab) {
   const s = tab.sync;
   const cmp = s && s.cmp;
@@ -347,6 +353,7 @@ function editorSyncCloseCompare(tab) {
   s.cmp = null;
   cmp.diff.setModel(null);
   cmp.diff.dispose();
+  cmp.vm.dispose();
   cmp.original.dispose();
   tab.cmpEl.replaceChildren();
   tab.cmpEl.hidden = true;

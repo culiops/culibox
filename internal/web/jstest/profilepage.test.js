@@ -76,7 +76,7 @@ const labelNames = (root) => byCls(root, "pfv-label").map(labelName);
 const view = (name, over) => Object.assign({ name, editable: true, source: "runtime", runtime: "box", bin: "claude", claude: true }, over);
 const PROFILES = [
   view("claude", { editable: false, source: "config", runtime: "host" }),
-  view("aws-ops", { default_cwd: "/home/you/work/payments-api", aws_connections: ["prod-read", "staging-read"], tokens: ["grafana-prod"], network: "allowlist" }),
+  view("aws-ops", { default_cwd: "/home/you/work/payments-api", aws_connections: ["prod-read", "staging-read"], tokens: ["grafana-prod"], network: "allowlist", host_block: "this profile has an AWS binding, so it runs only in a box" }),
   view("infra-terraform"),
   view("runbook-host", { runtime: "host", default_cwd: "/home/you/runbooks" }),
 ];
@@ -209,12 +209,13 @@ function page(over) {
   return { box, els, calls, doc, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
 
-test("pfvRenderNav lists every profile with its tier word and a read-only marker for config.json", () => {
+test("pfvRenderNav lists every profile with a read-only marker for config.json and box only where Host is blocked", () => {
   const t = page();
   t.box.pfvRenderNav();
   const items = byCls(t.els["pf-navlist"], "pfv-ni").filter((n) => !hasCls("pfv-ni-add")(n));
   assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-name")[0].textContent), ["claude", "aws-ops", "infra-terraform", "runbook-host"]);
-  assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-tier")[0].textContent.replace(/^read-only, /, "")), ["host", "box", "box", "host"]);
+  assert.deepStrictEqual(items.map((n) => texts(n, "pfv-ni-boxonly")), [[], ["box only"], [], []]);
+  assert.strictEqual(byCls(t.els["pf-navlist"], "pfv-ni-tier").length, 0, "the tier chip is gone");
   // The marker: a lock glyph plus words for a screen reader, only on the config.json profile.
   assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-lock").length), [1, 0, 0, 0]);
   assert.deepStrictEqual(items.map((n) => texts(n, "pfv-sr")), [["read-only, "], [], [], []]);
@@ -226,18 +227,33 @@ test("pfvRenderNav lists every profile with its tier word and a read-only marker
   assert.strictEqual(t.els["pf-navlist"].children[t.els["pf-navlist"].children.length - 1], add[0]);
 });
 
-// The M2 nav row (UI plan 4, digest-design §B1.2): the name, then the lock, then the tier chip. The chip is the tier word alone
-// (it is a filled 18px box), so the lock and its screen-reader words are the row's own children, before it, not inside it.
-test("a nav row is name, lock, tier chip: the chip holds the tier word only, and a host chip says so", () => {
+// The M2 nav row: the name, then the lock, then `box only` when the server says Host is blocked for the profile. No tier chip:
+// the tier is not a fixed property of a profile. The lock and its screen-reader words are the row's own children, before the chip.
+test("a nav row is name, lock, then box only when Host is blocked", () => {
   const t = page();
   t.box.pfvRenderNav();
   const items = byCls(t.els["pf-navlist"], "pfv-ni").filter((n) => !hasCls("pfv-ni-add")(n));
   const order = (n) => n.children.filter((c) => c instanceof Node).map((c) => c.className.split(/\s+/)[0] + (c.tag === "svg" ? "(svg)" : ""));
-  assert.deepStrictEqual(order(items[0]), ["pfv-ni-name", "pfv-lock(svg)", "pfv-sr", "pfv-ni-tier"], "claude: read-only");
-  assert.deepStrictEqual(order(items[1]), ["pfv-ni-name", "pfv-ni-tier"], "aws-ops: editable, no lock");
-  assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-tier")[0].textContent), ["host", "box", "box", "host"]);
-  assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-tier")[0].children.length), [0, 0, 0, 0], "nothing but the word inside a chip");
-  assert.deepStrictEqual(items.map((n) => hasCls("pfv-ni-host")(byCls(n, "pfv-ni-tier")[0])), [true, false, false, true]);
+  assert.deepStrictEqual(order(items[0]), ["pfv-ni-name", "pfv-lock(svg)", "pfv-sr"], "claude: read-only");
+  assert.deepStrictEqual(order(items[1]), ["pfv-ni-name", "pfv-ni-boxonly"], "aws-ops: editable, Host blocked");
+  assert.deepStrictEqual(order(items[3]), ["pfv-ni-name"], "runbook-host: a host profile with no block");
+  assert.strictEqual(byCls(items[1], "pfv-ni-boxonly")[0].children.length, 0, "nothing but the words inside a chip");
+  assert.strictEqual(byCls(t.els["pf-navlist"], "pfv-ni-host").length, 0);
+});
+
+// A refetch hands back new objects. The nav is rebuilt only when what it shows changed: a new host_block sentence does, a runtime flip alone does not.
+test("the nav rebuilds when host_block changes, not when only runtime does", () => {
+  const t = page();
+  t.box.pfvRenderNav();
+  const kept = t.els["pf-navlist"].children[2];
+  t.box.profiles = t.box.profiles.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { runtime: "host" }) : p));
+  t.box.pfvRenderNav();
+  assert.strictEqual(t.els["pf-navlist"].children[2], kept, "only runtime changed: the same node");
+  t.box.profiles = t.box.profiles.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { host_block: "this profile is set to box only" }) : p));
+  t.box.pfvRenderNav();
+  const now = t.els["pf-navlist"].children[2];
+  assert.notStrictEqual(now, kept, "host_block changed: a new node");
+  assert.deepStrictEqual(texts(now, "pfv-ni-boxonly"), ["box only"]);
 });
 
 // N2 (diff M2.1#9): the lock is the frame's glyph, 10x12 (it was 10x11). Only the desktop page draws it: pfvRenderNav and pfvDrawNote run behind
@@ -301,7 +317,7 @@ test("an empty Also reachable block says 'Nothing yet' as its value, with its ow
   assert.strictEqual(byCls(reach, "pfv-empty").length, 0);
 });
 
-test("pfvShow fetches the stored profile and draws the seven blocks from the read model", async () => {
+test("pfvShow fetches the stored profile and draws the eight blocks from the read model", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
   assert.ok(t.calls.includes("GET /api/profiles/aws-ops"));
@@ -312,8 +328,8 @@ test("pfvShow fetches the stored profile and draws the seven blocks from the rea
   assert.deepStrictEqual(texts(root, "chip"), ["box"]);
   assert.deepStrictEqual(subs(root), ["Claude Code · claude-opus-5-5 · high effort"]);
   assert.deepStrictEqual(texts(root, "pfv-sheet-h"), ["This agent will be able to"]);
-  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
-  // Edit on every block of an editable profile, "+ Add" on the two row blocks.
+  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Can reach", "Advanced"]);
+  // Edit on every block of an editable profile but Can reach (its action is Switch to box, offered on a host profile only), "+ Add" on the two row blocks.
   assert.strictEqual(byText(root, "button", "Edit").length, 7);
   assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => b.getAttribute("aria-label")), [
     "Edit where it runs", "Edit workspace", "Edit agent", "Edit cloud and tokens", "Edit also reachable", "Edit network", "Edit advanced settings",
@@ -447,17 +463,18 @@ test("a GitHub App deleted from Credentials reads Not found in Credentials on th
   assert.strictEqual(byCls(ed.els["pfv-in"], "pfv-miss").length, 0, "re-pointed to an App that exists, the row stops saying it is gone");
 });
 
-test("a host profile has Can reach, Switch to box and no cloud blocks", async () => {
+test("a host profile has every block, Switch to box, and the box blocks tagged Applies to Box", async () => {
   const t = page();
   await t.box.pfvShow("runbook-host");
   const root = t.els["pfv-in"];
   assert.deepStrictEqual(texts(root, "chip"), ["host"]);
   assert.ok(byCls(root, "chip")[0].className.includes("chip-host"));
-  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Can reach", "Advanced"]);
+  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Can reach", "Advanced"]);
+  assert.deepStrictEqual(byCls(root, "pfv-label").map((l) => texts(l, "pfv-applies")), [[], [], [], ["Applies to Box"], ["Applies to Box"], ["Applies to Box"], ["Applies to Host"], []]);
   // Spec 5.4 sentence, one line.
   assert.deepStrictEqual(texts(byCls(root, "pfv-block")[0], "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
   assert.strictEqual(byText(root, "button", "Switch to box").length, 1);
-  assert.strictEqual(byCls(root, "pfv-add").length, 0);
+  assert.strictEqual(byCls(root, "pfv-add").length, 2, "Cloud and Also reachable offer their + Add on any tier");
 });
 
 test("a read-only profile has no Edit, the config.json note and no menu", async () => {
@@ -593,8 +610,8 @@ test("Edit is a ghost small button in column 3 with the block's aria-label", asy
   await t.box.pfvShow("aws-ops");
   const labels = t.run("PFV_EDIT_LABEL");
   const blocks = byCls(t.els["pfv-in"], "pfv-block");
-  assert.strictEqual(blocks.length, 7);
-  for (const b of blocks) {
+  assert.strictEqual(blocks.length, 8);
+  for (const b of blocks.filter((x) => x.dataset.block !== "canreach")) {
     const id = b.dataset.block;
     // Label, body, act: the grid's three columns in this order (label 132px, value, Edit).
     assert.deepStrictEqual(b.children.map((c) => classesOf(c)[0]), ["pfv-label", "pfv-body", "pfv-act"], id);
@@ -607,9 +624,9 @@ test("Edit is a ghost small button in column 3 with the block's aria-label", asy
   }
 });
 
-// Frame M2.1 (design digest §B2): Advanced is the seventh block of the one card, a normal block with an Edit button and no collapse:
+// Frame M2.1 (design digest §B2): Advanced is the last block of the one card, a normal block with an Edit button and no collapse:
 // its label with "none set" / "N set" under it, the helper as its value, Edit in column 3.
-const ADV_HELPER = "Arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults.";
+const ADV_HELPER = "Starting environment, arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults.";
 
 test("Advanced is the last block of the one card: its count under the label, the helper as its value, no fold", async () => {
   const t = page();
@@ -618,8 +635,8 @@ test("Advanced is the last block of the one card: its count under the label, the
   assert.strictEqual(sheets.length, 1, "one card: Advanced has none of its own");
   const adv = blockOf(t, "advanced");
   assert.strictEqual(adv.parent, sheets[0]);
-  assert.deepStrictEqual(sheets[0].children.map((b) => b.dataset.block), ["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]);
-  assert.strictEqual(sheets[0].children[6], adv, "the seventh block");
+  assert.deepStrictEqual(sheets[0].children.map((b) => b.dataset.block), ["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]);
+  assert.strictEqual(sheets[0].children[7], adv, "the eighth block");
   const label = byCls(adv, "pfv-label")[0];
   assert.strictEqual(label.tag, "h3");
   assert.strictEqual(labelName(label), "Advanced");
@@ -705,8 +722,9 @@ test("boxes unavailable on a box profile: the reason line is red, the consequenc
   assert.deepStrictEqual(texts(runs, "pfv-main"), ["In a box"]);
   assert.deepStrictEqual(texts(runs, "pfv-red"), ["Boxes are unavailable on this machine: Docker is not installed."]);
   const sub = byCls(runs, "pfv-sub");
-  assert.strictEqual(sub.length, 2);
+  assert.strictEqual(sub.length, 3, "the reason, the consequence, and what New session pre-selects");
   assert.ok(!sub[1].className.includes("pfv-red"));
+  assert.strictEqual(sub[2].textContent, "New session pre-selects: Box · in place");
   assert.strictEqual(sub[1].textContent, "Sessions with this profile can't start until Docker is installed.");
 });
 
@@ -718,8 +736,9 @@ test("boxes unavailable on a profile that names no tier: it says its sessions st
   assert.deepStrictEqual(texts(runs, "pfv-main"), ["In a box"]);
   assert.deepStrictEqual(texts(runs, "pfv-red"), ["Boxes are unavailable on this machine: Docker is not installed."]);
   const sub = byCls(runs, "pfv-sub");
-  assert.strictEqual(sub.length, 2);
+  assert.strictEqual(sub.length, 3, "the reason, the consequence, and what New session pre-selects");
   assert.ok(!sub[1].className.includes("pfv-red"));
+  assert.strictEqual(sub[2].textContent, "New session pre-selects: Box · in place");
   assert.strictEqual(sub[1].textContent, "Until it is, sessions start on this machine, uncontained.");
 });
 
@@ -1426,6 +1445,200 @@ test("Runs in: a private copy cannot choose host; the refusal shows in place and
   assert.ok(byText(blockOf(t, "runs"), "button", "Save").every((b) => !b.hidden));
 });
 
+// --- Runs in: the Box only checkbox (S1's host_block and box_only on the profile view) ---------------------------------
+
+const BOX_ONLY_LABEL = "Box only: never offer Host for this profile";
+const AWS_SENTENCE = "This profile has an AWS binding, so it runs only in a box.";
+async function openRuns(t, name) {
+  await t.box.pfvShow(name);
+  clickBtn(blockOf(t, "runs"), "Edit");
+}
+const boxOnlyLabel = (t) => byCls(blockOf(t, "runs"), "pfv-check")[0];
+
+test("the Box only checkbox: forced by bindings is ticked and disabled with the reason, a set lock stays clearable", async () => {
+  // A plain box profile: the choice is free.
+  const plain = page();
+  await openRuns(plain, "infra-terraform");
+  const free = field(plain, "box_only");
+  assert.strictEqual(free.checked, false);
+  assert.notStrictEqual(free.disabled, true);
+  assert.deepStrictEqual(byCls(blockOf(plain, "runs"), "pfv-check-t").map(labelName), [BOX_ONLY_LABEL]);
+  assert.deepStrictEqual(texts(blockOf(plain, "runs"), "pfv-check-d"), []);
+  assert.ok(!classesOf(boxOnlyLabel(plain)).includes("pfv-off"));
+  // Bound, with no lock set: the bindings force it, so it is ticked, off for the user, and says why.
+  const bound = page();
+  await openRuns(bound, "aws-ops");
+  const forced = field(bound, "box_only");
+  assert.strictEqual(forced.checked, true);
+  assert.strictEqual(forced.disabled, true);
+  assert.deepStrictEqual(byCls(blockOf(bound, "runs"), "pfv-check-t").map(labelName), [BOX_ONLY_LABEL]);
+  assert.deepStrictEqual(texts(blockOf(bound, "runs"), "pfv-check-d"), [AWS_SENTENCE]);
+  assert.ok(classesOf(boxOnlyLabel(bound)).includes("pfv-off"));
+  // Bound and locked: the lock is redundant, but it is the user's to clear.
+  const locked = page({ profiles: PROFILES.map((p) => (p.name === "aws-ops" ? Object.assign({}, p, { box_only: true }) : p)) });
+  locked.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { box_only: true });
+  await openRuns(locked, "aws-ops");
+  const clearable = field(locked, "box_only");
+  assert.strictEqual(clearable.checked, true);
+  assert.notStrictEqual(clearable.disabled, true);
+  assert.deepStrictEqual(texts(blockOf(locked, "runs"), "pfv-check-d"), []);
+  assert.ok(!classesOf(boxOnlyLabel(locked)).includes("pfv-off"));
+  // Clearing it saves the profile with the key gone.
+  clearable.checked = false;
+  clearable.onchange();
+  assert.strictEqual(await clickBtn(blockOf(locked, "runs"), "Save"), true);
+  assert.ok(!("box_only" in locked.box.puts[0]));
+  assert.strictEqual(locked.box.puts[0].runtime, "box");
+});
+
+test("a binding-forced Box only checkbox stops reading as forced once Host is picked", async () => {
+  const t = page();
+  await openRuns(t, "aws-ops");
+  const forcedNow = () => field(t, "box_only").checked === true && field(t, "box_only").disabled === true;
+  assert.ok(forcedNow(), "Box: ticked and disabled");
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  const cb = field(t, "box_only");
+  assert.strictEqual(cb.checked, false, "Host picked: the user's own value, unticked");
+  assert.notStrictEqual(cb.disabled, true, "enabled");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-check-d"), [], "no forcing reason");
+  assert.ok(!classesOf(boxOnlyLabel(t)).includes("pfv-off"));
+  // Ticking it with Host picked is refused by the pre-check, before any confirm.
+  cb.checked = true;
+  cb.onchange();
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save as host…"), false);
+  assert.strictEqual(t.box.asked.length, 0, "no host-switch confirm");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), ["Box only is on, so this profile cannot be saved as host. Turn Box only off first."]);
+  // Back to Box with the lock unticked: forced again, with the reason.
+  cb.checked = false;
+  cb.onchange();
+  field(t, "tier-box").checked = true;
+  field(t, "tier-box").onchange();
+  assert.ok(forcedNow(), "Box again: ticked and disabled");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-check-d"), [AWS_SENTENCE]);
+  assert.ok(classesOf(boxOnlyLabel(t)).includes("pfv-off"));
+});
+
+test("a Box only lock the user ticked stays enabled and clearable after Host and back to Box", async () => {
+  const t = page();
+  await openRuns(t, "aws-ops");
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  field(t, "box_only").checked = true;
+  field(t, "box_only").onchange();
+  field(t, "tier-box").checked = true;
+  field(t, "tier-box").onchange();
+  const cb = field(t, "box_only");
+  assert.strictEqual(cb.checked, true);
+  assert.notStrictEqual(cb.disabled, true, "a deliberate tick is the user's to clear");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-check-d"), [], "no forcing reason");
+  assert.ok(!classesOf(boxOnlyLabel(t)).includes("pfv-off"));
+  cb.checked = false;
+  cb.onchange();
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save"), true);
+  assert.ok(!("box_only" in t.box.puts[0]));
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+});
+
+test("the Runs in consequence line never names the Box only lock", async () => {
+  const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { box_only: true, host_block: "this profile is set to box only" }) : p)) });
+  t.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { box_only: true });
+  await openRuns(t, "infra-terraform");
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  const want = "Its sessions run with your whole home, your SSH keys and the Docker socket.";
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-consq"), [want], "lock still ticked");
+  field(t, "box_only").checked = false;
+  field(t, "box_only").onchange();
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-consq"), [want], "lock unticked");
+  assert.ok(!texts(blockOf(t, "runs"), "pfv-consq").join(" ").includes("Box only"));
+});
+
+test("Host with Box only on is refused before the PUT", async () => {
+  const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { box_only: true, host_block: "this profile is set to box only" }) : p)) });
+  t.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { box_only: true });
+  await openRuns(t, "infra-terraform");
+  const host = field(t, "tier-host");
+  host.checked = true;
+  host.onchange();
+  const before = t.calls.length;
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save as host…"), false);
+  assert.strictEqual(t.box.puts.length, 0);
+  assert.ok(!t.calls.some((x) => x.startsWith("PUT /api/profiles/")), "no PUT was made");
+  assert.strictEqual(t.box.asked.length, 0, "no host-switch confirm was opened");
+  assert.ok(!t.calls.slice(before).some((x) => x.startsWith("confirm:")));
+  const PFV_BOX_ONLY_HOST = t.run("PFV_BOX_ONLY_HOST");
+  assert.strictEqual(PFV_BOX_ONLY_HOST, "Box only is on, so this profile cannot be saved as host. Turn Box only off first.");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), [PFV_BOX_ONLY_HOST]);
+  assert.strictEqual(t.run("PFE_BOX_ONLY_HOST"), PFV_BOX_ONLY_HOST, "profileedit.js repeats the sentence for the server's refusal");
+  assert.strictEqual(field(t, "box_only").getAttribute("aria-invalid"), "true");
+});
+
+test("a server refusal of box_only with host lands in Runs in", async () => {
+  const t = page();
+  await openRuns(t, "infra-terraform");
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  t.box.confirmAnswer = true;
+  t.box.putFail = apiErr(400, { error: 'profile "infra-terraform": box_only: cannot be combined with runtime: host', field: "box_only" });
+  await clickBtn(blockOf(t, "runs"), "Save as host…");
+  const runs = blockOf(t, "runs");
+  assert.ok(runs.className.includes("pfv-editing"));
+  assert.strictEqual(texts(runs, "pfv-ferr").length, 1, "the field's words sit in the block that owns it");
+  assert.strictEqual(field(t, "box_only").getAttribute("aria-invalid"), "true");
+});
+
+test("picking Box again retires the Box only refusal", async () => {
+  const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { box_only: true, host_block: "this profile is set to box only" }) : p)) });
+  t.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { box_only: true });
+  await openRuns(t, "infra-terraform");
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save as host…"), false);
+  assert.strictEqual(texts(blockOf(t, "runs"), "pfv-ferr").length, 1, "refused");
+  field(t, "tier-box").checked = true;
+  field(t, "tier-box").onchange();
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), [], "the refusal went with the pick");
+  assert.notStrictEqual(field(t, "box_only").getAttribute("aria-invalid"), "true");
+});
+
+test("a bound profile saved without touching the lock does not send box_only, so removing the binding later frees Host", async () => {
+  const t = page();
+  await openRuns(t, "aws-ops");
+  assert.strictEqual(field(t, "box_only").checked, true, "drawn ticked because the bindings force it");
+  assert.strictEqual(t.run("pfvState").edits.runs.values.boxOnly, false, "but the value held is the stored one: no lock");
+  // Runs in has a Save while it is clean, and it merges through pfvRunsMerge.
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save"), true);
+  assert.strictEqual(t.box.puts.length, 1);
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+  assert.ok(!("box_only" in t.box.puts[0]), "a forced tick is not a stored lock");
+});
+
+test("Box only cleared and Host picked on a locked profile saves host with no box_only", async () => {
+  const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { box_only: true, host_block: "this profile is set to box only" }) : p)) });
+  t.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { box_only: true });
+  await openRuns(t, "infra-terraform");
+  field(t, "box_only").checked = false;
+  field(t, "box_only").onchange();
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save as host…"), true);
+  assert.strictEqual(t.box.asked.length, 1, "the host question was asked and accepted");
+  assert.strictEqual(t.box.puts[0].runtime, "host");
+  assert.ok(!("box_only" in t.box.puts[0]));
+});
+
+test("ticking Box only and saving sends box_only", async () => {
+  const t = page();
+  await openRuns(t, "infra-terraform");
+  const cb = field(t, "box_only");
+  cb.checked = true;
+  cb.onchange();
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save"), true);
+  assert.strictEqual(t.box.puts[0].box_only, true);
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+});
+
 test("Runs in to On this machine saves through the same pipeline; a refusal from the server shows in words in the block it names", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
@@ -1853,6 +2066,36 @@ test("Workspace: a private copy and back is no change, and the copy fields retur
   assert.strictEqual(head.hidden, false);
 });
 
+test("Workspace: a stored copy where copies cannot be chosen can pick the folder and then the copy again, with no change left", async () => {
+  const stuck = async (t, name) => {
+    await openWs(t, name);
+    const head = byCls(t.els["pfv-in"], "pfv-unsaved")[0];
+    assert.strictEqual(field(t, "mode-copy").checked, true);
+    assert.notStrictEqual(field(t, "mode-copy").disabled, true);
+    pickMode(t, "folder");
+    assert.strictEqual(head.hidden, false);
+    assert.strictEqual(field(t, "mode-folder").checked, true);
+    assert.notStrictEqual(field(t, "mode-copy").disabled, true, "the way back stays open after the redraw");
+    // The copy card's own description is its one .pfv-card-d line; a reason, whatever its words, would be a second.
+    const copyCard = byCls(blockOf(t, "workspace"), "pfv-card").filter((n) => n.textContent.includes("Work on a private copy"))[0];
+    assert.strictEqual(byCls(copyCard, "pfv-card-d").length, 1, "no reason is said for a card that can be picked");
+    pickMode(t, "copy");
+    assert.strictEqual(field(t, "mode-copy").checked, true);
+    assert.ok(head.hidden, "a copy and back is no change");
+    // Saving after the way back sends the stored copy as it was: the same folder, copy, share list and auto-return opt-out.
+    const stored = t.box.docs[name];
+    assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+    assert.strictEqual(t.box.puts.length, 1);
+    const body = t.box.puts[0];
+    for (const k of ["default_cwd", "clone_of", "clone_share", "clone_no_auto_return"]) assert.deepStrictEqual(body[k], stored[k], k + " is as stored");
+    assert.ok(stored.clone_of && stored.clone_share.length > 0, "the stored copy has something to lose");
+  };
+  await stuck(clonePage({ cloneUnavailable: "Docker is not installed" }), "gitops-clone");
+  const h = page({ profiles: [view("gitops-host", { runtime: "host", default_cwd: "/home/you/box-clones/k8s-gitops", clone_of: "/home/you/work/k8s-gitops" }), PROFILES[1], PROFILES[3]] });
+  h.box.docs["gitops-host"] = Object.assign({}, CLONE_DOC, { name: "gitops-host", runtime: "host" });
+  await stuck(h, "gitops-host");
+});
+
 test("Workspace: a private copy with no folder or no place for the copy, or a relative one, is refused before any PUT, and the words go when the field changes", async () => {
   const t = page();
   await openWs(t);
@@ -1912,19 +2155,34 @@ test("Workspace: a refusal that names the folder, the copy's folder or a shared 
   }
 });
 
-test("Workspace on a host profile: one folder field and one sentence saying why there is no private copy", async () => {
+test("Workspace on a host profile: one folder field, and the private-copy card off with the sentence saying why", async () => {
   const t = page();
   const pk = await openWs(t, "runbook-host");
   const ws = blockOf(t, "workspace");
-  assert.deepStrictEqual(byCls(ws, "pfv-flabel").map((n) => n.textContent), ["Folder"]);
+  assert.deepStrictEqual(byCls(ws, "pfv-flabel").map((n) => n.textContent), ["Folder", "How it works on the folder"]);
   assert.deepStrictEqual(texts(ws, "pfv-hint"), ["Where sessions start. A private copy needs a box."]);
-  assert.strictEqual(byCls(ws, "pfv-card").length, 0);
+  assert.strictEqual(byCls(ws, "pfv-card").length, 2, "both cards; the copy one is off");
+  assert.strictEqual(field(t, "mode-copy").disabled, true);
   assert.strictEqual(field(t, "folder").value, "/home/you/runbooks");
   assert.deepStrictEqual(texts(ws, "pfv-fnote"), [], "a host has no box to give the next session");
   pk.pick("/home/you/notes");
   await clickBtn(blockOf(t, "workspace"), "Save");
   assert.strictEqual(t.box.puts[0].default_cwd, "/home/you/notes");
   assert.strictEqual(t.box.puts[0].runtime, "host");
+});
+
+test("Workspace on a host profile draws the private-copy card disabled, tagged Applies to Box", async () => {
+  const t = page();
+  await openWs(t, "runbook-host");
+  const ws = blockOf(t, "workspace");
+  const copy = field(t, "mode-copy");
+  assert.strictEqual(copy.disabled, true);
+  const card = copy.parent;
+  assert.ok(card.textContent.includes("Needs a box."));
+  assert.ok(card.textContent.includes("Applies to Box"));
+  assert.strictEqual(field(t, "mode-folder").checked, true);
+  assert.notStrictEqual(field(t, "mode-folder").disabled, true);
+  assert.deepStrictEqual(texts(ws, "pfv-card-t"), ["Work in this folder", "Work on a private copy"]);
 });
 
 test("Workspace where private copies are not available: the choice is hidden with the reason; a profile that already is a copy keeps both and the warning", async () => {
@@ -3072,7 +3330,7 @@ test("a list row that says box over a stored host: the page reads On this machin
   await t.box.pfvShow("runbook-host");
   assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["host"]);
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
-  assert.ok(!blockOf(t, "cloud"), "a host profile has no Cloud block");
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-applies"), ["Applies to Box"], "a host profile shows its Cloud block, tagged");
   clickBtn(blockOf(t, "agent"), "Edit");
   pickModel(t, "claude-sonnet-5");
   await saveBlock(t, "agent");
@@ -3110,7 +3368,7 @@ test("after a host switch whose list refetch gave back the old row, the page rea
   assert.strictEqual(t.box.profiles.find((p) => p.name === "aws-ops").runtime, "box", "the list row is stale");
   assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["host"], "the page reads the stored tier");
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
-  assert.ok(!blockOf(t, "cloud"), "no Cloud block on a host profile");
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-applies"), ["Applies to Box"], "the Cloud block of a host profile is tagged, not hidden");
   clickBtn(blockOf(t, "agent"), "Edit");
   pickModel(t, "claude-sonnet-5");
   await saveBlock(t, "agent");
@@ -3391,13 +3649,10 @@ test("advanced lists what is set, and the form opened from Edit holds it", async
   assert.deepStrictEqual(t.box.puts[0].args, ["--verbose"]);
 });
 
-test("base is not offered on a box profile and its stored value is kept", async () => {
+test("base: a box profile shows the one it has and a save keeps it; a host profile offers it in the mockup's words, the default stored as none", async () => {
   const t = page();
   await openAdv(t, "aws-ops", { base: "clean" });
-  assert.strictEqual(field(t, "base"), undefined, "no select, no disabled wall");
-  assert.strictEqual(byCls(advOf(t), "pfv-select").length, 0);
-  assert.deepStrictEqual(texts(advOf(t), "pfv-hint").filter((x) => /starts with/.test(x)), ["Environment it starts with only applies on this machine; a box always starts minimal."]);
-  assert.ok(!advLabels(t).includes("Environment it starts with"));
+  assert.strictEqual(field(t, "base").value, "clean");
   typeArgs(t, "--verbose");
   assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
   assert.strictEqual(t.box.puts[0].base, "clean", "a save from a box profile keeps the base the profile has");
@@ -3407,7 +3662,6 @@ test("base is not offered on a box profile and its stored value is kept", async 
   await openAdv(h, "runbook-host", { base: "clean" });
   assert.deepStrictEqual(Array.from(field(h, "base").children).map((o) => o.textContent), ["Everything you have (inherit)", "Minimal, no secrets (clean)", "Your login shell (login)"]);
   assert.strictEqual(field(h, "base").value, "clean");
-  assert.strictEqual(byCls(advOf(h), "pfv-hint").filter((n) => /starts with only applies/.test(n.textContent)).length, 0, "the sentence is for a box");
   field(h, "base").value = "inherit"; field(h, "base").onchange();
   assert.strictEqual(await clickBtn(advOf(h), "Save"), true);
   assert.ok(!("base" in h.box.puts[0]), "inherit is the default: no base is stored");
@@ -3565,10 +3819,17 @@ test("imports row hidden when bundling is off keeps imports_off", async () => {
   late.box.bundleImports = false;
   assert.strictEqual(await clickBtn(advOf(late), "Save"), true);
   assert.ok(!("imports_off" in late.box.puts[0]), "the stored value, which was none");
-  // A host profile has no box to give the files to; an account with no personal config says so in the row's own words.
+  // A host profile keeps the row for the box: shown while there is a box layer, and with bundling off it goes like any other.
   const host = page();
   await openAdv(host, "runbook-host", { imports_off: true });
-  assert.strictEqual(field(host, "imports_off"), undefined);
+  assert.ok(field(host, "imports_off"));
+  const hostOff = page({ bundleImports: false });
+  await openAdv(hostOff, "runbook-host", { imports_off: true });
+  assert.strictEqual(field(hostOff, "imports_off"), undefined);
+  const hostNoBox = page({ boxRuntime: "" });
+  await openAdv(hostNoBox, "runbook-host", { imports_off: true });
+  assert.strictEqual(field(hostNoBox, "imports_off"), undefined, "no box layer, nothing to give");
+  // An account with no personal config says so in the row's own words.
   const acct = page({ accountsCache: [{ name: "work" }] });
   await openAdv(acct, "aws-ops", { account: "work", imports_off: true });
   assert.strictEqual(field(acct, "imports_off"), undefined);
@@ -3581,16 +3842,16 @@ test("imports row hidden when bundling is off keeps imports_off", async () => {
 test("Advanced edit form: the mockup's fields in order, for a box profile and for a host profile", async () => {
   const t = page({ repliesEnabled: true });
   await openAdv(t, "aws-ops");
-  assert.deepStrictEqual(advLabels(t), ["Extra command-line arguments", "Environment variables"]);
-  assert.deepStrictEqual(texts(advOf(t), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session.", "Include files my CLAUDE.md pulls in with @Read-only copies in the box."]);
+  assert.deepStrictEqual(advLabels(t), ["Environment it starts with Applies to Host", "Extra command-line arguments", "Environment variables"]);
+  assert.deepStrictEqual(texts(advOf(t), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session.", "Include files my CLAUDE.md pulls in with @Read-only copies in the box. Applies to Box"]);
   assert.strictEqual(field(t, "args").getAttribute("placeholder"), "--some-flag");
-  assert.deepStrictEqual(texts(advOf(t), "pfv-hint"), ["One per line.", "None. The agent gets the box's minimal environment.", "Environment it starts with only applies on this machine; a box always starts minimal."]);
+  assert.deepStrictEqual(texts(advOf(t), "pfv-hint"), ["One per line.", "None. The agent gets the box's minimal environment."]);
   assert.strictEqual(byText(advOf(t), "button", "+ Add variable").length + byText(advOf(t), "button", "+ Add secret").length, 2);
-  assert.strictEqual(Node.focused, field(t, "options.skip_permissions"), "focus goes to the first control");
+  assert.strictEqual(Node.focused, field(t, "base"), "focus goes to the first control");
   const h = page({ repliesEnabled: true });
   await openAdv(h, "runbook-host");
-  assert.deepStrictEqual(advLabels(h), ["Environment it starts with", "Extra command-line arguments", "Environment variables"]);
-  assert.deepStrictEqual(texts(advOf(h), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session."]);
+  assert.deepStrictEqual(advLabels(h), ["Environment it starts with Applies to Host", "Extra command-line arguments", "Environment variables"]);
+  assert.deepStrictEqual(texts(advOf(h), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session.", "Include files my CLAUDE.md pulls in with @Read-only copies in the box. Applies to Box"]);
   assert.deepStrictEqual(texts(advOf(h), "pfv-hint"), ["One per line.", "None added on top of the starting environment."]);
   assert.strictEqual(Node.focused, field(h, "base"));
   assert.ok(advOf(h).className.includes("pfv-editing"));
@@ -3598,6 +3859,48 @@ test("Advanced edit form: the mockup's fields in order, for a box profile and fo
   assert.ok(byCls(t.els["pfv-in"], "pfv-unsaved")[0].hidden);
   assert.strictEqual(field(t, "options.model"), undefined);
   assert.strictEqual(field(t, "options.effort"), undefined);
+});
+
+test("Advanced on a box profile draws Environment it starts with, tagged Applies to Host", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops");
+  const base = field(t, "base");
+  assert.ok(base, "the base select is drawn on a box profile");
+  const label = byCls(base.parent, "pfv-flabel")[0];
+  assert.deepStrictEqual(texts(label, "pfv-applies"), ["Applies to Host"]);
+  assert.ok(!texts(advOf(t), "pfv-hint").includes("Environment it starts with only applies on this machine; a box always starts minimal."));
+});
+
+test("an Advanced save keeps base on a box profile and writes the one picked", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops", { base: "login" });
+  assert.strictEqual(field(t, "base").value, "login");
+  typeArgs(t, "--x");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.strictEqual(t.box.puts[0].base, "login", "the base stored while it was a host profile stays");
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+  const u = page();
+  await openAdv(u, "aws-ops", { base: "login" });
+  const sel = field(u, "base");
+  sel.value = "clean";
+  sel.onchange();
+  assert.strictEqual(await clickBtn(advOf(u), "Save"), true);
+  assert.strictEqual(u.box.puts[0].base, "clean");
+  assert.strictEqual(u.box.puts[0].runtime, "box");
+});
+
+test("Advanced on a host profile offers the CLAUDE.md imports row, tagged Applies to Box", async () => {
+  const t = page({ metaLoaded: true, bundleImports: true });
+  await openAdv(t, "runbook-host", { imports_off: true });
+  const cb = field(t, "imports_off");
+  assert.ok(cb, "the imports checkbox is drawn on a host profile");
+  assert.strictEqual(cb.checked, false);
+  assert.deepStrictEqual(texts(cb.parent, "pfv-applies"), ["Applies to Box"]);
+  // Saved with something else changed: the stored imports_off stays.
+  typeArgs(t, "--x");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.strictEqual(t.box.puts[0].imports_off, true);
+  assert.strictEqual(t.box.puts[0].runtime, "host");
 });
 
 test("Advanced: the other options are drawn the old form's way and only what the user set is written", async () => {
@@ -3608,7 +3911,7 @@ test("Advanced: the other options are drawn the old form's way and only what the
   ]);
   const t = page({ optionDefs: defs });
   await openAdv(t, "aws-ops", { options: { model: "claude-opus-5-5", effort: "high", legacy_key: "keep me" } });
-  assert.deepStrictEqual(advLabels(t).slice(0, 2), ["Verbosity", "Pack"]);
+  assert.deepStrictEqual(advLabels(t).slice(1, 3), ["Verbosity", "Pack"]);
   assert.ok(hasCls("seg")(field(t, "options.verbosity")), "three choices: a segmented control");
   assert.strictEqual(field(t, "options.profile_pack").tag, "select", "five: a select");
   assert.deepStrictEqual(Array.from(field(t, "options.profile_pack").children).map((o) => o.textContent), ["(not set)", "a", "b", "c", "d", "e"]);
@@ -4083,7 +4386,7 @@ test("Switch to box opens Runs in with Box chosen and the line for it; nothing i
   const asked = recordAsks(t, true);
   t.box.loadProfiles = async () => { t.box.profiles = t.box.profiles.map((p) => (p.name === "runbook-host" ? Object.assign({}, p, { runtime: "box" }) : p)); return true; };
   await t.box.pfvShow("runbook-host");
-  assert.strictEqual(byText(t.els["pfv-in"], "button", "+ Add access").length + byText(t.els["pfv-in"], "button", "+ Add folder or domain").length, 0, "a host profile has no + Add");
+  assert.strictEqual(byText(t.els["pfv-in"], "button", "+ Add access").length + byText(t.els["pfv-in"], "button", "+ Add folder or domain").length, 2, "a host profile offers + Add too: its Cloud and Also reachable are tagged, not hidden");
   byText(t.els["pfv-in"], "button", "Switch to box")[0].click();
   assert.ok(blockOf(t, "runs").className.includes("pfv-editing"));
   assert.strictEqual(field(t, "tier-box").checked, true);
@@ -5151,7 +5454,7 @@ test("Create sends the three inputs through POST and lands on the new profile's 
   assert.deepStrictEqual(texts(root, "pfv-next-h"), ["Next, if this agent needs them"]);
   assert.deepStrictEqual(texts(root, "pfv-next-t"), ["Add cloud access", "Pick a model", "Add a folder it can read"]);
   assert.deepStrictEqual(texts(root, "pfv-next-d"), ["AWS, GitHub or a token", "Claude Code's default until you do", "Read only, outside the workspace"]);
-  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
+  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Can reach", "Advanced"]);
   // It is in the nav, and the picker of the New page is gone.
   assert.ok(byCls(t.els["pf-navlist"], "pfv-ni-name").map((n) => n.textContent).includes("payments-readonly"));
   assert.strictEqual(t.box.pickers[0].destroyed, true);
@@ -6305,7 +6608,7 @@ test("the edited block renders as its own card: the blocks before, the editing o
   assert.strictEqual(byCls(root, "pfv-sheet").length, 1, "read view: one card");
   clickBtn(blockOf(t, "agent"), "Edit");
   const sheets = byCls(root, "pfv-sheet");
-  assert.deepStrictEqual(sheets.map(ids), [["runs", "workspace"], ["agent"], ["cloud", "reachable", "network", "advanced"]]);
+  assert.deepStrictEqual(sheets.map(ids), [["runs", "workspace"], ["agent"], ["cloud", "reachable", "network", "canreach", "advanced"]]);
   assert.strictEqual(blockOf(t, "agent").parent, sheets[1], "the editing section sits alone in its card");
   assert.strictEqual(byCls(sheets[1], "pfv-foot").length, 1, "its foot is inside that card");
   assert.deepStrictEqual(sheets.map((s) => s.parent), [root, root, root], "the three cards are siblings, in order, under the heading");
@@ -6314,13 +6617,13 @@ test("the edited block renders as its own card: the blocks before, the editing o
   // The first block and the last block: two cards, the editing one at the end it is at.
   clickBtn(blockOf(t, "agent"), "Cancel");
   clickBtn(blockOf(t, "runs"), "Edit");
-  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs"], ["workspace", "agent", "cloud", "reachable", "network", "advanced"]]);
+  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs"], ["workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]]);
   clickBtn(blockOf(t, "runs"), "Cancel");
   clickBtn(blockOf(t, "advanced"), "Edit");
-  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs", "workspace", "agent", "cloud", "reachable", "network"], ["advanced"]]);
+  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach"], ["advanced"]]);
   assert.strictEqual(blockOf(t, "advanced").parent, byCls(root, "pfv-sheet")[1]);
   clickBtn(blockOf(t, "advanced"), "Cancel");
-  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]], "closed: one card again");
+  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs", "workspace", "agent", "cloud", "reachable", "network", "canreach", "advanced"]], "closed: one card again");
 });
 
 test("two blocks open at once are two cards: a refusal opens a second form under the first", async () => {
@@ -6330,7 +6633,7 @@ test("two blocks open at once are two cards: a refusal opens a second form under
   t.run("pfvOpenRepair('cloud')");
   t.run("pfvRender()");
   const sheets = byCls(t.els["pfv-in"], "pfv-sheet");
-  assert.deepStrictEqual(sheets.map((s) => s.children.map((b) => b.dataset.block)), [["runs", "workspace"], ["agent"], ["cloud"], ["reachable", "network", "advanced"]]);
+  assert.deepStrictEqual(sheets.map((s) => s.children.map((b) => b.dataset.block)), [["runs", "workspace"], ["agent"], ["cloud"], ["reachable", "network", "canreach", "advanced"]]);
 });
 
 test("the foot of a block in a narrow card is still the last child of its section, whichever block it is", async () => {
@@ -6405,4 +6708,40 @@ test("a hint in the New profile's 'Where it runs' fieldset is a direct child of 
   for (const root of [rootOf(t), rootOf(n)]) for (const c of byCls(root, "pfv-choice")) {
     assert.deepStrictEqual(c.children.filter((x) => x instanceof Node && !isCard(x) && x.tag !== "legend").map((x) => classesOf(x)[0]), c.children.filter((x) => x instanceof Node && classesOf(x)[0] === "pfv-hint").map(() => "pfv-hint"));
   }
+});
+
+// Task 2 (#340 S4): a section, a row and an Advanced entry say which tier they apply to, in words, as a neutral tag after the label or name.
+test("a tagged block, row and Advanced entry draw Applies to ...", () => {
+  const t = page();
+  const tags = (n) => byCls(n, "pfv-applies");
+  const block = (applies) => ({ id: "cloud", label: "Cloud and tokens", applies, edit: false, add: "", rows: [], count: 0, note: "", lines: ["Nothing yet"] });
+  const boxed = t.box.pfvDrawBlock(block("box"), []);
+  const label = byCls(boxed, "pfv-label")[0];
+  assert.strictEqual(label.tag, "h3");
+  assert.strictEqual(labelName(label), "Cloud and tokens");
+  assert.deepStrictEqual(tags(label).map((n) => [n.tag, n.textContent]), [["span", "Applies to Box"]]);
+  assert.strictEqual(tags(t.box.pfvDrawBlock(block(""), [])).length, 0, "an untagged block has none");
+  assert.strictEqual(tags(t.box.pfvDrawBlock(block(undefined), [])).length, 0);
+  const row = { kind: "Starting environment", name: "clean", sub: "", scope: "No secrets", tag: "", missing: false, applies: "host" };
+  const drawn = t.box.pfvDrawRow(row, []);
+  assert.deepStrictEqual(tags(drawn).map((n) => n.textContent), ["Applies to Host"]);
+  assert.strictEqual(tags(t.box.pfvDrawRow(Object.assign({}, row, { applies: "" }), [])).length, 0);
+  const adv = t.box.pfvDrawAdvanced({ id: "advanced", label: "Advanced", applies: "", edit: true, add: "", rows: [row, { kind: "Arguments", name: "--x", sub: "", scope: "", tag: "", missing: false, applies: "" }], count: 2, note: "", lines: ["x"], open: true, status: "2 set" }, []);
+  const dds = adv.all((n) => n.tag === "dd");
+  assert.deepStrictEqual(dds.map((d) => tags(d).map((n) => n.textContent)), [["Applies to Host"], []]);
+});
+
+test("a block in edit keeps its Applies to tag in the label, and an untagged one has none", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.ok(blockOf(t, "cloud").className.includes("pfv-editing"));
+  const cl = byCls(blockOf(t, "cloud"), "pfv-label")[0];
+  assert.strictEqual(cl.tag, "h3");
+  assert.strictEqual(labelName(cl), "Cloud and tokens");
+  assert.deepStrictEqual(texts(cl, "pfv-applies"), ["Applies to Box"]);
+  clickBtn(blockOf(t, "cloud"), "Cancel");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  assert.ok(blockOf(t, "agent").className.includes("pfv-editing"));
+  assert.deepStrictEqual(texts(byCls(blockOf(t, "agent"), "pfv-label")[0], "pfv-applies"), []);
 });

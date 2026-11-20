@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  rangeRef, insertGate, editorMode, conflictChoice, DELETED_TEXT, conflictText,
+  rangeRef, insertGate, editorMode, conflictChoice, DELETED_TEXT, conflictText, openDeleted,
   selectionLines, FOLLOW_TOOLS, followFile, followPlan, followParse, followWith,
 } = require("../static/editorref.js");
 
@@ -264,4 +264,16 @@ test("followParse and followWith: only {sid: true} is read, a toggle adds or rem
   assert.deepStrictEqual({ ...followWith(base, "c", true, []) }, { a: true, b: true, c: true }, "no list yet: nothing is dropped");
   assert.deepStrictEqual({ ...followWith(base, "", true) }, { a: true, b: true }, "no session, no entry");
   assert.deepStrictEqual({ ...followWith(undefined, "a", true) }, { a: true });
+});
+
+test("openDeleted: only a 404 on the first read of a tab asked to open in Changes (a D row) shows the diff of a vanished file", () => {
+  const ok = { status: 404, changes: true, restored: false, alt: false, box: false };
+  assert.strictEqual(openDeleted(ok), true);
+  // Every way it is not that: another status (0 is "the fetch never completed"), no Changes asked for, a restored tab (it closes),
+  // a terminal link's lookup in other checkouts, a box file (no host git).
+  for (const over of [{ status: 0 }, { status: 403 }, { status: 500 }, { status: 200 }, { changes: false }, { restored: true }, { alt: true }, { box: true }]) {
+    assert.strictEqual(openDeleted(Object.assign({}, ok, over)), false, JSON.stringify(over));
+  }
+  assert.strictEqual(openDeleted(null), false);
+  assert.strictEqual(openDeleted({}), false);
 });

@@ -154,10 +154,13 @@ function acctSpawnPick(prefillAccount, profileAccount) {
 // acctLoginProfile: the profile "Log in" spawns under the account — the bare
 // claude profile, else any claude profile not pinned to an account. The spawn
 // is sent with login:true, so the server drops the profile's own auth secrets
-// rather than refusing them; any other refusal is shown by the caller.
+// rather than refusing them; any other refusal is shown by the caller. Log in
+// spawns on the host, so a profile the server would refuse there (host_block
+// set, e.g. locked to the box) is skipped.
 function acctLoginProfile(profiles) {
   const ps = profiles || [];
-  return ps.find((x) => x.claude && x.name === "claude") || ps.find((x) => x.claude && !x.account) || null;
+  return ps.find((x) => x.claude && x.name === "claude" && !x.host_block)
+    || ps.find((x) => x.claude && !x.account && !x.host_block) || null;
 }
 
 function acctLoginText(state) {
@@ -611,7 +614,7 @@ async function acctLogin(name) {
   setAcctErr("");
   setAcctNote("");
   const p = acctLoginProfile(profiles);
-  if (!p) { setAcctErr("Log in needs a claude profile with no agent account set."); return; }
+  if (!p) { setAcctErr("Log in needs a claude profile that has no agent account set and can run on this machine."); return; }
   let started;
   try {
     started = await spawnSession(spawnPayload({

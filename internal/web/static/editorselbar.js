@@ -97,8 +97,15 @@ function editorInsertRef(want) {
 // whether to discard the edit, and an Insert must not put that question to the user: Discard would lose the edit, and the reference
 // typed after it would point at lines of a buffer that is gone. Save first, then insert.
 function editorInsertLeavingFull(want) {
+  editorRunLeavingFull(() => { editorInsertRef(want); });
+}
+
+// editorRunLeavingFull(run): the flow above for any action that types at the session's prompt and so needs the terminal on screen: the
+// review bar's Paste (reviewbar.js) is the second. `run` is called once, synchronously, when the prompt is on screen (at once outside
+// Full mode, else from dockShowTerminal's `then`), and must ask insertRefused itself; it is never called when the forced-Full refusal
+// (ruling R17) or a Cancel of the discard ask keeps the dock as it was.
+function editorRunLeavingFull(run) {
   if (editorLeavingWouldDiscard()) { showToast(EDITOR_SAVE_FIRST, { error: true }); return; }
-  const run = () => { editorInsertRef(want); };
   if (!dockShowTerminal(run)) run();
 }
 

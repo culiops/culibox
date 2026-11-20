@@ -115,6 +115,15 @@ test("mergeBlock reachable writes context_paths and egress_allow", () => {
   assert.deepStrictEqual(onlyPaths.egress_allow, ["api.example.com"], "a key the values do not name is kept");
 });
 
+test("runs writes box_only only when it is named", () => {
+  const locked = Object.assign(clone(awsOps), { box_only: true });
+  assert.strictEqual(pfvMergeBlock(awsOps, "runs", { tier: "box", boxAvailable: true, boxOnly: true }).box_only, true);
+  assert.strictEqual("box_only" in pfvMergeBlock(locked, "runs", { tier: "box", boxAvailable: true, boxOnly: false }), false, "off removes the key");
+  assert.strictEqual(pfvMergeBlock(locked, "runs", { tier: "box", boxAvailable: true }).box_only, true, "a save that does not name it keeps it as stored");
+  assert.strictEqual("box_only" in pfvMergeBlock(awsOps, "runs", { tier: "box", boxAvailable: true }), false);
+  assert.strictEqual(pfvBlockForField("box_only"), "runs");
+});
+
 test("mergeBlock runs sends the tier explicitly, and stays blank only with no box layer and no stored tier", () => {
   assert.strictEqual(pfvMergeBlock({ name: "p", bin: "claude" }, "runs", { tier: "box" }).runtime, "box");
   assert.strictEqual(pfvMergeBlock({ name: "p", bin: "claude", runtime: "box" }, "runs", { tier: "host" }).runtime, "host");
@@ -355,6 +364,32 @@ test("toHost removes them and sets runtime host", () => {
   });
   assert.deepStrictEqual(pfvHostRemovals(out), []);
   assert.strictEqual(pfvToHost({ name: "q", bin: "claude" }).runtime, "host");
+});
+
+test("a Box only lock is something the host switch removes", () => {
+  const locked = { name: "p", bin: "claude", runtime: "box", box_only: true, tokens: ["t"] };
+  assert.deepStrictEqual(pfvHostRemovals(locked), [{ kind: "Tokens", names: ["t"] }, { kind: "Box only", names: [] }]);
+  assert.deepStrictEqual(pfvHostRemovals({ name: "p", bin: "claude", box_only: true }), [{ kind: "Box only", names: [] }]);
+  assert.deepStrictEqual(pfvHostRemovals({ name: "p", bin: "claude", box_only: false }), []);
+  const out = pfvToHost(locked);
+  assert.ok(!("box_only" in out), "the server refuses box_only with runtime host");
+  assert.strictEqual(out.runtime, "host");
+  assert.deepStrictEqual(pfvHostRemovals(out), []);
+  assert.strictEqual(locked.box_only, true, "the loaded profile is not touched");
+  // Duplicate: the copy of a locked profile, saved as host, no longer carries the lock.
+  const dup = pfvDuplicateDoc({ name: "src", bin: "claude", runtime: "box", box_only: true, rev: "r1" }, "copy", { tier: "host", boxAvailable: true });
+  assert.strictEqual(dup.box_only, true, "Duplicate copies the lock");
+  assert.deepStrictEqual(pfvHostRemovals(dup), [{ kind: "Box only", names: [] }]);
+  assert.ok(!("box_only" in pfvToHost(dup)));
+});
+
+test("a server refusal of box_only with host is worded as the page's own sentence", () => {
+  const sentence = 'box_only cannot be combined with runtime "host"; remove one';
+  const want = "Box only is on, so this profile cannot be saved as host. Turn Box only off first.";
+  assert.deepStrictEqual(pfvSaveError(400, { error: sentence, field: "box_only" }), { kind: "field", block: "runs", field: "box_only", text: want });
+  assert.strictEqual(pfvSaveError(400, { error: 'profile "p": ' + sentence, field: "box_only" }).text, want);
+  // The same field with some other sentence keeps the server's own.
+  assert.strictEqual(pfvSaveError(400, { error: "box_only must be a boolean", field: "box_only" }).text, "box_only must be a boolean");
 });
 
 test("host refusal for a private copy", () => {

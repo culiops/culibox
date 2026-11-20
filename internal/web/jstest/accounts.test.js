@@ -103,6 +103,12 @@ test("acctLoginProfile prefers the bare claude profile, else any unpinned claude
   assert.equal(acctLoginProfile(null), null);
 });
 
+test("acctLoginProfile skips a profile that may not run on the host", () => {
+  const locked = "this profile is set to box only";
+  assert.equal(acctLoginProfile([{ name: "claude", claude: true, host_block: locked }, { name: "c2", claude: true }]).name, "c2");
+  assert.equal(acctLoginProfile([{ name: "claude", claude: true, host_block: "x" }, { name: "c2", claude: true, host_block: "y" }]), null);
+});
+
 test("acctLoginText names each state", () => {
   assert.equal(acctLoginText("token"), "token");
   assert.equal(acctLoginText("logged_in"), "logged in");

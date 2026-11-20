@@ -183,3 +183,110 @@ func TestOpenRegularRejectsSymlink(t *testing.T) {
 		f.Close()
 	}
 }
+
+// real is the symlink-free spelling of a temp dir (macOS temp dirs sit behind
+// /var -> /private/var), the form WorkspaceRoot reports.
+func real(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestWorkspaceRootMainCheckout(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	mkdir(t, filepath.Join(repo, ".git"))
+	mkdir(t, filepath.Join(repo, "a", "b"))
+	if got, want := WorkspaceRoot(filepath.Join(repo, "a", "b")), real(t, repo); got != want {
+		t.Fatalf("WorkspaceRoot = %q, want %q", got, want)
+	}
+}
+
+func TestWorkspaceRootLinkedWorktree(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	mkdir(t, filepath.Join(repo, ".git", "worktrees", "wt"))
+	wt := filepath.Join(root, "wt")
+	write(t, filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(repo, ".git", "worktrees", "wt")+"\n")
+	mkdir(t, filepath.Join(wt, "sub"))
+	if got, want := WorkspaceRoot(filepath.Join(wt, "sub")), real(t, repo); got != want {
+		t.Fatalf("WorkspaceRoot = %q, want the main repo %q", got, want)
+	}
+}
+
+// The .git file is box-writable: a pointer at a worktree gitdir that does not
+// exist (or is not a directory) must not make the session report that other
+// repository, only its own checkout.
+func TestWorkspaceRootIgnoresAForgedGitFile(t *testing.T) {
+	root := t.TempDir()
+	victim := filepath.Join(root, "victim")
+	mkdir(t, filepath.Join(victim, ".git", "worktrees"))
+	wt := filepath.Join(root, "wt")
+	mkdir(t, wt)
+	forged := filepath.Join(victim, ".git", "worktrees", "y")
+	write(t, filepath.Join(wt, ".git"), "gitdir: "+forged+"\n")
+	if got, want := WorkspaceRoot(wt), real(t, wt); got != want {
+		t.Fatalf("missing gitdir: WorkspaceRoot = %q, want the checkout's own top %q", got, want)
+	}
+	// A file where the gitdir should be is no gitdir either.
+	write(t, forged, "x")
+	if got, want := WorkspaceRoot(wt), real(t, wt); got != want {
+		t.Fatalf("gitdir is a file: WorkspaceRoot = %q, want the checkout's own top %q", got, want)
+	}
+}
+
+// A worktree of a bare repository has no main checkout to group under: its own
+// top is the workspace.
+func TestWorkspaceRootWorktreeOfBareRepo(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, "bare.git", "worktrees", "wt"))
+	wt := filepath.Join(root, "wt")
+	write(t, filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(root, "bare.git", "worktrees", "wt")+"\n")
+	if got, want := WorkspaceRoot(wt), real(t, wt); got != want {
+		t.Fatalf("WorkspaceRoot = %q, want the worktree's own top %q", got, want)
+	}
+}
+
+func TestWorkspaceRootOutsideRepo(t *testing.T) {
+	if got := WorkspaceRoot(t.TempDir()); got != "" {
+		t.Fatalf("WorkspaceRoot outside a repo = %q, want empty", got)
+	}
+	if got := WorkspaceRoot(""); got != "" {
+		t.Fatalf("WorkspaceRoot of empty = %q, want empty", got)
+	}
+}
+
+func TestWorkspaceRootResolvesSymlinks(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	mkdir(t, filepath.Join(repo, ".git"))
+	mkdir(t, filepath.Join(repo, "a"))
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatal(err)
+	}
+	viaLink, direct := WorkspaceRoot(filepath.Join(link, "a")), WorkspaceRoot(filepath.Join(repo, "a"))
+	if viaLink != direct || viaLink != Normalize(link) || viaLink != real(t, repo) {
+		t.Fatalf("via link %q, direct %q, Normalize(link) %q: want one spelling", viaLink, direct, Normalize(link))
+	}
+}
+
+func TestNormalize(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Symlink(root, filepath.Join(root, "l")); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := Normalize(filepath.Join(root, "l")+"/"), real(t, root); got != want {
+		t.Fatalf("Normalize(link) = %q, want %q", got, want)
+	}
+	// A path that does not exist falls back to Clean.
+	if got := Normalize("/no/such/../dir/"); got != "/no/dir" {
+		t.Fatalf("Normalize(missing) = %q, want /no/dir", got)
+	}
+	if got := Normalize(""); got != "" {
+		t.Fatalf("Normalize(empty) = %q, want empty", got)
+	}
+}

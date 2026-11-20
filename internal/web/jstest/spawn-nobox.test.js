@@ -26,11 +26,11 @@ const NONE = { metaLoaded: true, boxRuntime: "", boxUnavailableReason: "Docker i
 test("touch line: a profile that needs a box does not read 'host · not contained' when there is no box layer", () => {
   for (const p of [boxProfile, copyProfile, ctxProfile]) assert.strictEqual(profileTouchLine(p, ""), "needs a box · unavailable", p.name);
   // A profile that asks for nothing really does run on this machine, uncontained; a host one says what it is.
-  assert.strictEqual(profileTouchLine(plainProfile, ""), "host · not contained");
-  assert.strictEqual(profileTouchLine(hostProfile, ""), "host · bash");
+  assert.strictEqual(profileTouchLine(plainProfile, ""), "no credentials");
+  assert.strictEqual(profileTouchLine(hostProfile, ""), "no credentials");
   // With a layer, or before /api/meta answered, nothing changes.
-  assert.strictEqual(profileTouchLine(boxProfile, "runc"), "box · aws staging");
-  assert.strictEqual(profileTouchLine(boxProfile, undefined), "box · aws staging");
+  assert.strictEqual(profileTouchLine(boxProfile, "runc"), "aws staging");
+  assert.strictEqual(profileTouchLine(boxProfile, undefined), "aws staging");
 });
 
 test("gate, no box layer: a box profile is blocked with the reason, in the words of the profile page", () => {
@@ -153,6 +153,7 @@ function dialog(over) {
     drawerDesktop: () => ctx.desktop,
     currentProfile: () => ctx.profile,
     segValue: () => ctx.tier,
+    spawnWhere: () => ({ runtime: ctx.tier }),
     $: (id) => els[id] || (id === "spawn" ? { querySelector: () => go } : null),
     setDialogError: (_id, msg) => { err.textContent = msg || ""; },
     ...over,

@@ -15,9 +15,10 @@
 // see or use is left alone (spec 9: a hidden value is preserved); a key they name
 // with an empty value (undefined, null, "", false, [] or {}) is removed. Per block:
 //
-//   runs       { tier: "box"|"host", boxAvailable }
+//   runs       { tier: "box"|"host", boxAvailable, boxOnly }
 //                runtime, through runtimeToSend (always explicit). It reads the whole profile, so
-//                it is merged after every other block's keys are in.
+//                it is merged after every other block's keys are in. box_only is written only when
+//                the values name boxOnly (false removes the key); without it box_only stays as stored.
 //   workspace  { mode: "folder"|"copy", folder, copyDir, shareText, autoReturn }
 //                default_cwd, clone_of, clone_share, clone_no_auto_return, through
 //                wmFieldsToSend; the four are replaced as a unit, and no mode writes nothing.
@@ -70,7 +71,7 @@ const PFE_BOX_ONLY = ["aws_connections", "aws", "github", "tokens", "context_pat
 // The first key of each path the server's save refusals name (config.FieldError),
 // and the block that edits it. `options.<key>` and `name` are handled apart.
 const PFE_FIELD_BLOCK = new Map([
-  ["runtime", "runs"],
+  ["runtime", "runs"], ["box_only", "runs"],
   ["default_cwd", "workspace"], ["clone_of", "workspace"], ["clone_share", "workspace"], ["clone_no_auto_return", "workspace"],
   ["bin", "agent"], ["account", "agent"],
   ["aws", "cloud"], ["aws_connections", "cloud"], ["github", "cloud"], ["tokens", "cloud"],
@@ -84,6 +85,7 @@ const PFE_FIELD_BLOCK = new Map([
 const PFE_HOST_KIND = new Map([
   ["aws", "Old-style AWS"], ["aws_connections", "AWS connections"], ["github", "GitHub"], ["tokens", "Tokens"],
   ["context_paths", "Readable folders"], ["egress_allow", "Domains"], ["egress_open", "Network settings"],
+  ["box_only", "Box only"],
 ]);
 
 const PFE_STALE_TEXT = "This profile changed elsewhere";
@@ -118,6 +120,11 @@ const PFE_NOT_A_HOST = /\bnormalised\b/;
 // A box-only setting on the host tier: "requires/require/needs/need runtime: box",
 // ErrContextNeedsBox's `needs runtime "box"`, and the clone refusal.
 const PFE_NEEDS_BOX = /\b(?:requires?|needs?) runtime[:\s]+"?box\b|\bruns only in a box\b/;
+// The lock beside runtime host (config.go: `box_only cannot be combined with runtime "host"; remove one`). The page's own
+// sentence for it is profilepage.js's PFV_BOX_ONLY_HOST; profileedit.js loads first and the node tests load it alone, so the
+// words are repeated here (profilepage.test.js pins them equal).
+const PFE_BOX_ONLY_HOST = "Box only is on, so this profile cannot be saved as host. Turn Box only off first.";
+const PFE_BOX_ONLY_REFUSAL = /\bcannot be combined with runtime\b/;
 // The `profile "<name>": ` some wrappers put in front (the name is %q-quoted, so a quote in it is escaped).
 const PFE_PROFILE_PREFIX = /^profile "(?:[^"\\]|\\.)*": /;
 
@@ -179,6 +186,7 @@ const PFE_MERGE = {
     // out is the profile as it will be sent: with no box layer the tier depends on what it holds, so this merge has to run
     // after every other block's (pfvSaveBlock does).
     pfeSet(out, "runtime", pfeDep("runtimeToSend", "./profileform.js")(v.tier, doc.runtime, v.boxAvailable !== false, out));
+    if (pfeHas(v, "boxOnly")) pfeSet(out, "box_only", v.boxOnly === true);
   },
 
   workspace(out, v, doc) {
@@ -326,6 +334,7 @@ function pfvHostRemovals(doc) {
   const domains = pfeNames(d.egress_allow);
   if (domains.length) out.push({ kind: PFE_HOST_KIND.get("egress_allow"), names: domains });
   if (d.egress_open === true) out.push({ kind: PFE_HOST_KIND.get("egress_open"), names: [] });
+  if (d.box_only === true) out.push({ kind: PFE_HOST_KIND.get("box_only"), names: [] });
   return out;
 }
 
@@ -334,6 +343,8 @@ function pfvHostRemovals(doc) {
 function pfvToHost(doc) {
   const out = pfeClone(doc);
   for (const k of PFE_BOX_ONLY) delete out[k];
+  // The lock is not a box-only grant but the server refuses it beside runtime host, so it goes too.
+  delete out.box_only;
   out.runtime = "host";
   return out;
 }
@@ -392,14 +403,15 @@ const PFE_COPY_BLOCKS = ["cloud", "reachable", "agent", "network", "advanced"];
 // pfvCopyList: the "This copy will also get" list from the read model (pfvReadView) of the profile as it will be created:
 // one item {id, label, lines, rows, note, count} per block that has something to say, in the read view's own words
 // (the rows of reachModel, the agent line, the network sentence). A cloud or folder block with no row is left out: nothing
-// is copied. Advanced is a count ("None set", "3 set") with its rows when there are any. A host copy's model has no cloud
-// blocks, so it lists its agent and Advanced only.
+// is copied. Advanced is a count ("None set", "3 set") with its rows when there are any. A host copy lists its agent and
+// Advanced only: the read model now draws the box blocks (Applies to Box) on every profile, and a copy that runs on this
+// machine gets none of them.
 function pfvCopyList(model) {
   const blocks = model && Array.isArray(model.blocks) ? model.blocks : [];
   const out = [];
   for (const id of PFE_COPY_BLOCKS) {
     const b = blocks.find((x) => x && x.id === id);
-    if (!b) continue;
+    if (!b || (b.applies === "box" && model.header && model.header.tier === "host")) continue;
     const lines = Array.isArray(b.lines) ? b.lines.filter((l) => l !== "") : [];
     const rows = Array.isArray(b.rows) ? b.rows : [];
     if ((id === "cloud" || id === "reachable") && rows.length === 0) continue;
@@ -466,6 +478,7 @@ function pfeSentence(raw) {
 // config keys (see the constants) get plain sentences; any other keeps the server's own.
 function pfeFieldText(field, sentence) {
   const head = (/^[^.[\]]+/.exec(field) || [""])[0];
+  if (head === "box_only" && PFE_BOX_ONLY_REFUSAL.test(sentence)) return PFE_BOX_ONLY_HOST;
   if (PFE_PATH_FIELDS.has(head) && PFE_RELATIVE.test(sentence)) return PFE_RELATIVE_PATH;
   if (PFE_FOLDER_FIELD.test(field) && PFE_NOT_THERE.test(sentence)) return PFE_FOLDER_GONE;
   if (PFE_CREDENTIAL_FIELD.test(field) && PFE_UNDEFINED.test(sentence)) return PFE_CREDENTIAL_MISSING;

@@ -108,6 +108,9 @@ type sessionMeta struct {
 	// restart or a profile edit. Records from before lack both and read as none.
 	ContextPaths []string `json:"context_paths,omitempty"`
 	CloneOf      string   `json:"clone_of,omitempty"`
+	// WorkspaceRoot is Info.WorkspaceRoot as computed at spawn. Records from
+	// before it lack it and have it computed once at load.
+	WorkspaceRoot string `json:"workspace_root,omitempty"`
 	// LockedFiles are the files the box layer locked on the host for this
 	// session's box at spawn (macOS, Info.LockedFiles).
 	LockedFiles []string `json:"locked_files,omitempty"`

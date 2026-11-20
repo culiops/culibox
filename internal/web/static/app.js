@@ -959,10 +959,11 @@ function paintSideHints() {
   set("side-collapse", "Hide sidebar", "sidebar.toggle");
 }
 
-// paintSideCost: the footer's "$ today", the same sum the Analytics page shows
-// for today (summary over costTodayRange, folded and formatted like it). Only
-// asked when the analytics feature is on; a failed read leaves it hidden, with
-// no toast: the footer is a glance, not a place for errors.
+// paintSideCost: the footer's "≈ $ today", the same sum the Analytics page shows
+// as API value for today (summary over costTodayRange, folded and formatted like
+// it; sideCostLabel words it). Only asked when the analytics feature is on; a
+// failed read leaves it hidden, with no toast: the footer is a glance, not a
+// place for errors.
 let sideCostOn = false;
 async function paintSideCost() {
   const el = $("side-cost");
@@ -973,8 +974,9 @@ async function paintSideCost() {
   try {
     const r = costTodayRange(Date.now());
     const summary = await api("/api/analytics/summary?from=" + r.from + "&to=" + r.to);
-    el.textContent = usd(foldCostByDay((summary && summary.byDayModel) || []).totals.cost) + " today";
-    el.title = "Spend today (UTC), as the Analytics page counts it";
+    const lab = sideCostLabel(foldCostByDay((summary && summary.byDayModel) || []).totals.cost);
+    el.textContent = lab.text;
+    el.title = lab.title;
     el.hidden = false;
   } catch (_) { el.hidden = true; }
 }
@@ -2602,6 +2604,9 @@ function renderSession(s, opts) {
   // "↳ shell N". Mobile never passes compact, so its rows are unchanged.
   const nested = compact && isNestedShell(s, lastSessions);
   nm.textContent = nested ? shellLabel(s, lastSessions) : (s.name || s.id);
+  // What runs here, as an icon before the name: desktop only, the phone row has none.
+  const ak = compact ? deskKindEl(s) : null;
+  if (ak) sname.appendChild(ak);
   sname.appendChild(nm);
   grow.appendChild(sname);
   if (nested) {
@@ -2718,6 +2723,26 @@ function renderSession(s, opts) {
   return li;
 }
 
+// deskKindEl: the glyph before a desktop row's name, from deskRowKind: the terminal for a plain-shell
+// profile, the Claude mark for a Claude session; null when neither (profiles not loaded yet, or the profile
+// was deleted or renamed and the session is not a Claude one).
+function deskKindEl(s) {
+  const k = deskRowKind(s, profiles.find((p) => p.name === s.agent));
+  if (!k) return null;
+  const ak = document.createElement("span");
+  ak.className = "ak";
+  ak.title = k.title;
+  ak.append(k.kind === "claude" ? claudeMarkSvg(13) : svgIcon24(SVG_TERMINAL_24, 13));
+  return ak;
+}
+
+// deskChipIcon: the 11px glyph in a tier chip ("box", "clone" or "host").
+function deskChipIcon(name) {
+  const svg = svgIcon24({ box: SVG_BOX_24, clone: SVG_CLONE_24, host: SVG_HOST_24 }[name], 11);
+  svg.setAttribute("class", "tchip-i");
+  return svg;
+}
+
 // paintCompactRow adds the rest of a desktop sidebar row: ONE chip (rowChip),
 // the ⋯ menu button and the sub-line. The chip carries the tier or the open
 // write window; the account and AWS binding are in the row's tooltip instead of
@@ -2737,10 +2762,11 @@ function paintCompactRow(li, sname, grow, s, conn) {
   // header's meta and Analytics show it.
   if (chip) {
     const c = document.createElement("span");
-    c.className = "dchip " + chip.tone;
-    c.textContent = chip.text;
+    c.className = "dchip " + chip.tone + (chip.icon ? " tchip" : "");
+    if (chip.icon) c.append(deskChipIcon(chip.icon), document.createTextNode(chip.text));
+    else c.textContent = chip.text;
     const tier = tierBadge(s, boxRuntime);
-    c.title = chip.tone === "write" ? (aws ? aws.title : "AWS write window open") : tier ? tier.title : "";
+    c.title = chip.tone === "write" ? (aws ? aws.title : "AWS write window open") : chip.title || (tier ? tier.title : "");
     sname.appendChild(c);
   }
   const kb = document.createElement("button");
@@ -2776,34 +2802,105 @@ function paintCompactRow(li, sname, grow, s, conn) {
   }
 }
 
-// renderDesktopEntry: what the desktop list renders for one item — a group
-// header, or a compact row for a session.
+// renderDesktopEntry: what the desktop list renders for one item — a workspace
+// group header, or a compact row for a session. A header is the repo's folder
+// with a toggle (chevron, folder, name, count, and one dot per row while it is
+// collapsed) and, when a row waits on you, the amber pip. Every string is text.
 function renderDesktopEntry(it) {
   if (it.header) {
     const h = document.createElement("li");
-    // The kit's group label (uppercase, muted) carries the type; only Needs you
-    // is amber. "Done · your turn" is as neutral as Running and Idle. .grp keeps
-    // the sidebar's own spacing.
-    h.className = "grp grp-label" + (it.key === "needs-you" ? " is-needs" : "");
+    h.className = "wsh";
     h.dataset.sid = it.id;
-    const n = document.createElement("span");
-    n.className = "n";
-    n.textContent = String(it.count);
-    h.append(it.label + " \u00b7 ", n);
+    h.title = it.path ? shortPath(it.path) : "outside a git repo";
+    const tog = document.createElement("button");
+    tog.className = "wtog";
+    tog.setAttribute("type", "button");
+    tog.setAttribute("aria-expanded", it.collapsed ? "false" : "true");
+    tog.onclick = () => toggleWsGroup(it.key);
+    const cv = document.createElement("span");
+    cv.className = "wcv";
+    cv.append(svgIcon24(it.collapsed ? SVG_CHEVRON_RIGHT_24 : SVG_CHEVRON_DOWN_24, 12));
+    const folder = svgIcon24(SVG_FOLDER_24, 13);
+    folder.setAttribute("class", "wf");
+    const name = document.createElement("span");
+    name.className = "wname";
+    name.textContent = it.label;
+    const count = document.createElement("span");
+    count.className = "wcount";
+    count.textContent = String(it.count);
+    tog.append(cv, folder, name, count);
+    if (it.collapsed) {
+      const dots = document.createElement("span");
+      dots.className = "wdots";
+      for (const cls of it.dots) {
+        const d = document.createElement("span");
+        d.className = cls + " wdot";
+        dots.append(d);
+      }
+      tog.append(dots);
+    }
+    h.append(tog);
+    if (it.waiting > 0) {
+      const pip = document.createElement("span");
+      pip.className = "wpip";
+      pip.title = it.waiting + " waiting on you";
+      const d = document.createElement("span");
+      d.className = "dot waiting";
+      pip.append(d, document.createTextNode(it.waiting + " waiting"));
+      h.append(pip);
+    }
+    if (it.path !== "") {
+      // The + only opens New session with this folder in the field (the user sees it before Start); it never spawns.
+      const plus = document.createElement("button");
+      plus.className = "wplus";
+      plus.setAttribute("type", "button");
+      plus.title = "New session in " + shortPath(it.path);
+      plus.setAttribute("aria-label", "New session in " + it.label);
+      plus.append(svgIcon24(SVG_PLUS_24, 13));
+      plus.onclick = () => openSpawnDialog(null, { cwd: it.path, source: "group" });
+      h.append(plus);
+    }
     return h;
   }
   return renderSession(it.s, { compact: true });
 }
 
+// The collapsed workspace groups (their keys), kept in localStorage.
+let deskWsCollapsed = wsCollapsedRead(deskStorage());
+function deskWsCollapsedSet() { return deskWsCollapsed; }
+
 // deskEntries: the desktop list as reconcile items, a header before each
-// group's rows. Keys are "grp:<key>" for headers and the session id for rows.
+// group's rows (none while the group is collapsed). Keys are "grp:<key>" for
+// headers and the session id for rows.
 function deskEntries(sessions) {
   const out = [];
-  for (const g of deskGroups(sessions)) {
-    out.push({ id: "grp:" + g.key, header: true, key: g.key, label: g.label, count: g.count });
-    for (const s of g.sessions) out.push({ id: s.id, s });
+  for (const g of deskGroups(sessions, deskWsCollapsed)) {
+    out.push({ id: "grp:" + g.key, header: true, key: g.key, label: g.label, path: g.path, count: g.count, waiting: g.waiting, dots: g.dots, collapsed: g.collapsed });
+    if (!g.collapsed) for (const s of g.sessions) out.push({ id: s.id, s });
   }
   return out;
+}
+
+// deskListPaint: the desktop list's one reconcile; it returns the id -> row map.
+function deskListPaint() {
+  return reconcileRows($("sessions"), deskEntries(lastSessions), renderDesktopEntry,
+    (it) => (it.header ? deskWsHeaderSig(it) : rowSig(it.s, rowLocal(it.s))));
+}
+
+// toggleWsGroup: flips a group and remembers it. A rename, a reply or the store's
+// unlock form holds the list, and the phone has no workspace groups: then only the
+// stored state changes and the next poll applies it. Otherwise the list repaints and
+// focus moves to the rebuilt header's toggle (the old one is gone, and Enter or
+// Space on it would leave focus on <body>).
+function toggleWsGroup(key) {
+  wsCollapsedToggle(deskWsCollapsed, key);
+  wsCollapsedWrite(deskStorage(), deskWsCollapsed);
+  if (mobileActive(window.innerWidth) || editing || replyFocused || storeUnlockFocused() || !lastSessions.length) return;
+  const rows = deskListPaint();
+  syncSelectedRow();
+  const h = rows.get("grp:" + key);
+  const tog = h && h.querySelector(".wtog");
+  if (tog) tog.focus();
 }
 
 // buildCardComposer: the one-line reply composer a desktop needs-you card
@@ -3659,6 +3756,8 @@ function rowLocal(s) {
     // No context %: the compact row does not draw it (the pane header does), and
     // it moves every few minutes, which would rebuild the row for nothing.
     boxRuntime: boxRuntime,
+    // The kind icon reads the session's profile, and the profile list lands after the first render.
+    kind: deskRowKind(s, profiles.find((p) => p.name === s.agent)),
     // The reply surfaces are built only when /api/meta says replies are on, and
     // that answer lands after the first render, so it must move the signature.
     replies: globalThis.repliesEnabled === true,
@@ -4108,6 +4207,12 @@ async function refreshSessionsRun() {
   lastSessions = sessions;
   sessionsLoaded = true;
   noteReturns(lastSessions);
+  // The stored review marks are read once, from the first real list: a mark of a session the list does not name is dropped.
+  if (typeof reviewMarksLoad === "function") reviewMarksLoad(sessions.map((s) => s && s.id).filter(Boolean));
+  // The stored notes likewise (editornotes.js): notesLoad drops the notes of every session the list does not name.
+  if (typeof notesLoad === "function") notesLoad(sessions.map((s) => s && s.id).filter(Boolean));
+  // The review bars say "Paste to <session>" and may or may not act on the session's state, which this list just changed.
+  if (typeof reviewBarRender === "function") reviewBarRender();
   refreshEmptyState();
   // The Files drawer reads the list (box tier, workspace): at a boot restore
   // it opened before the list was here.
@@ -4221,9 +4326,7 @@ async function refreshSessionsRun() {
     }
     ul.replaceChildren(...nodes);
   } else {
-    rowById = reconcileRows(ul, deskEntries(lastSessions), renderDesktopEntry, (it) => (it.header
-      ? JSON.stringify(["grp", it.label, it.count])
-      : rowSig(it.s, rowLocal(it.s))));
+    rowById = deskListPaint();
   }
   // The answer block is a sibling, so it can only be inserted once its row is
   // in the document. On mobile a needs-you session's row is built but never
@@ -4427,12 +4530,15 @@ $("agent").addEventListener("change", () => {
 // its own last directory, else the tier's default): a host profile otherwise kept a
 // box-owned copy's folder and the server refused the spawn.
 function applyProfileCwd() {
+  // A folder the group's + put there stays over a profile's default_cwd until the user changes it (spawnGroupHolds): the
+  // help line says "From the <ws> group's +", and a silent move would contradict it.
   const p = currentProfile();
   if (!p) return;
+  if (spawnGroupHolds({ source: spawnWsSource, prefill: spawnWsPrefill, cwd: getCwd(), text: $("spawn-ws-input").value })) return;
   if (!p.default_cwd) {
     const again = spawnCwdReselect({
       source: spawnWsSource, prefill: spawnWsPrefill, cwd: getCwd(), text: $("spawn-ws-input").value,
-      profile: p, last: loadLastSpawn(), workspaces: workspacesCache, tier: segValue($("runtime-seg")), skipScratch: drawerDesktop(),
+      profile: p, last: loadLastSpawn(), workspaces: workspacesCache, tier: spawnWhere().runtime || "", skipScratch: drawerDesktop(),
     });
     if (!again) {
       // The folder stays (the user's), and it is no more the previous source's: the help line must stop claiming it.
@@ -5447,6 +5553,9 @@ function readForm() {
   // config, a locked profile) keeps the stored value rather than dropping it.
   const importsUsable = !$("pf-imports-row").hidden && !$("pf-imports").disabled;
   if (importsOffToSend(importsUsable, $("pf-imports").checked, pfLoaded && pfLoaded.imports_off)) p.imports_off = true;
+  // The phone has no Box only control (Settings > Profiles sets it): a stored lock is kept,
+  // never added or cleared here. Without this the whole-profile PUT would drop it silently.
+  if (pfLoaded && pfLoaded.box_only === true) p.box_only = true;
   // The tier is always sent as shown (see runtimeToSend): a blank would let the
   // instance default decide, and on a host-default instance that turns a profile
   // the editor lit as "box" into a host one. The server's own message answers an
@@ -5806,7 +5915,7 @@ function initSpawnWsPicker() {
     inline: drawerDesktop,
     lastUsed: () => { const l = loadLastSpawn(); return l && typeof l.cwd === "string" ? l.cwd : ""; },
     idleText: spawnWsCaption,
-    filter: (path) => { const f = spawnVMFilterFor(segValue($("runtime-seg")), spawnVMFilter); return f ? f(path) : true; },
+    filter: (path) => { const f = spawnVMFilterFor(spawnWhere().runtime || "", spawnVMFilter); return f ? f(path) : true; },
   });
   input.addEventListener("input", hideSpawnNotShared);
 }
@@ -5819,7 +5928,7 @@ const spawnVMLatest = spawnLatest();
 // list is redrawn, so a filter that arrives (or a runtime that changes) after the list opened shows at once.
 function syncSpawnVMFilter() {
   const help = $("spawn-ws-vmhelp");
-  const on = !!spawnVMFilterFor(segValue($("runtime-seg")), spawnVMFilter);
+  const on = !!spawnVMFilterFor(spawnWhere().runtime || "", spawnVMFilter);
   if (help) {
     if (on) help.textContent = SPAWN_VM_SEES_HELP;
     help.hidden = !on;
@@ -5879,7 +5988,7 @@ function hideSpawnNotShared() {
 // where the value came from in front of it while the field holds that value, on the desktop only.
 function spawnWsCaption(count) {
   const named = drawerDesktop() && spawnWsSource !== "" && spawnWsPicker && spawnWsPicker.value() === spawnWsPrefill;
-  return spawnWsNoteFor(named ? spawnWsSource : "", count);
+  return spawnWsNoteFor(named ? spawnWsSource : "", count, spawnWsPrefill);
 }
 
 // setSpawnCwd writes the canonical cwd and the field's displayed value together
@@ -5897,6 +6006,7 @@ function getCwd() { return spawnWsPicker ? spawnWsPicker.value() : ""; }
 // profile default, the last-spawn fallback) so the box/host copy and the
 // unboxable-workspace warning never lag behind what will actually be spawned.
 function onSpawnCwdChanged() {
+  renderTierPick(); // the cards name the workspace, and a clone profile's pre-selection follows it
   hideSpawnNotShared();
   updateTierExplain();
   updateRuntimeWarning();
@@ -6025,7 +6135,9 @@ function syncRuntimeField() {
   const explain = $("tier-explain");
   if (explain) explain.style.display = shown;
   const value = spawnRuntimeDefault(currentProfile(), boxRuntime);
-  buildSeg(seg, runtimeSegChoices(), value, updateRuntimeWarning);
+  buildSeg(seg, runtimeSegChoices(), value, tierSegChanged);
+  tierReset(); // a profile change forgets the card the user picked
+  renderTierPick();
   updateRuntimeWarning(); // whether the picked cwd is boxable depends on the tier too
 }
 
@@ -6034,14 +6146,21 @@ function syncRuntimeField() {
 // Duplicate's account when one is given, else the profile's own (ruling C2:
 // the default is the explicit "default", so picking it overrides a pinned
 // profile for this run). Painted from the cache at once; the fetch behind it
-// repaints only when the set of accounts changed, keeping the user's pick.
+// repaints the select only when the set of accounts changed, keeping the user's
+// pick, and repaints the account hint either way (a login_state can change
+// with the same names).
 // openSpawnDialog sets #agent programmatically (no change event), so it calls
 // this itself, like syncRuntimeField.
 function syncSpawnAccount(prefillAccount) {
   const before = acctChoices(accountsCache, "").join(",");
   paintSpawnAccount(prefillAccount);
   fetchAccounts().then(() => {
-    if (acctChoices(accountsCache, "").join(",") === before) return;
+    if (acctChoices(accountsCache, "").join(",") === before) {
+      // Same names, so the select stays; but a login_state can have changed (the store locked or unlocked since the last fetch),
+      // and the account hint reads it.
+      paintSpawnAcctHint();
+      return;
+    }
     paintSpawnAccount($("spawn-account-row").hidden ? prefillAccount : $("spawn-account").value);
   });
 }
@@ -6053,6 +6172,7 @@ function paintSpawnAccount(prefillAccount) {
   if (!prof || !prof.claude || names.length < 2) {
     row.hidden = true;
     sel.replaceChildren();
+    paintSpawnAcctHint(); // one account only: the hint can still say `default` has no login, with Settings as the way out
     return;
   }
   const lims = acctLimitsMap(lastRateLimits);
@@ -6066,6 +6186,52 @@ function paintSpawnAccount(prefillAccount) {
   sel.value = pick;
   row.hidden = false;
   syncSpawnPreview(); // the reach box's Account row reads the picked account
+  paintSpawnAcctHint();
+}
+
+// paintSpawnAcctHint: the hint under the account row (spawnAcctHint decides it): the store is locked, or `default` has no login
+// inside a box. Desktop only, and drawn from what the dialog shows now: the account the select holds (else the profile's own) and
+// the card picked. It does nothing for the account it is about once `Use: <name>` switches it.
+function paintSpawnAcctHint() {
+  const el = $("spawn-acct-hint");
+  if (!el) return;
+  const prof = currentProfile() || {};
+  const chosen = $("spawn-account-row").hidden ? (prof.account || "default") : ($("spawn-account").value || "default");
+  const h = drawerDesktop() ? spawnAcctHint({ profile: prof, chosen, accounts: accountsCache, where: spawnWhere() }) : null;
+  el.replaceChildren();
+  el.hidden = h === null;
+  if (h === null) return;
+  const link = (text, fn) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "link";
+    b.textContent = text;
+    b.onclick = fn;
+    return b;
+  };
+  if (h.kind === "locked") {
+    const t = document.createElement("span");
+    t.textContent = h.text;
+    el.append(t, link("Unlock", () => showSpawnUnlock(h.text, { retry: false })));
+    return;
+  }
+  const code = document.createElement("code");
+  code.textContent = "default";
+  el.append(code, document.createTextNode(" has no login inside a box."));
+  for (const name of h.uses) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn btn-sm";
+    b.textContent = "Use: " + name;
+    b.onclick = () => {
+      $("spawn-account").value = name;
+      syncSpawnPreview();
+      paintSpawnAcctHint();
+    };
+    el.append(b);
+  }
+  // No token account to switch to: Settings is the way to make one. The dialog closes as its own data-close buttons do.
+  if (h.uses.length === 0) el.append(link("Settings \u2192 Agent accounts", () => { closeDialogFromUI("spawn-modal"); openSettings("accounts"); }));
 }
 
 // syncSpawnExtras shows the first-message field and the replies toggle only
@@ -6087,7 +6253,10 @@ function syncSpawnExtras(resetReplies) {
 function applySpawnPrefill(pf) {
   if (pf.cwd) setSpawnCwd(pf.cwd);
   const seg = $("runtime-seg");
-  if (pf.runtime && boxRuntime && seg) setSegValue(seg, pf.runtime);
+  if (pf.runtime && boxRuntime && seg) {
+    setSegValue(seg, pf.runtime);
+    tierApplyRuntime(pf.runtime, pf.clone); // a duplicate keeps its card (the open's profile reset ran before this)
+  }
   for (const ctrl of $("spawn").querySelectorAll("[data-key]")) {
     const k = ctrl.dataset.key;
     if (!Object.prototype.hasOwnProperty.call(pf.options, k)) continue;
@@ -6110,7 +6279,7 @@ let spawnPromptDraft = "";
 function updateSpawnBoxOwned() {
   const el = $("spawn-ws-owned");
   if (!el) return;
-  const host = (metaLoaded && !boxRuntime) || segValue($("runtime-seg")) === "host";
+  const host = (metaLoaded && !boxRuntime) || spawnWhere().runtime === "host";
   const hit = spawnBoxOwnedHit(getCwd(), host ? "host" : "box", profiles);
   el.textContent = hit ? spawnBoxOwnedLine(hit) : "";
   el.hidden = !hit;
@@ -6140,7 +6309,7 @@ function updateRuntimeWarning() {
     warn.hidden = true;
     return;
   }
-  if (segValue(seg) === "host") {
+  if (spawnWhere().runtime === "host") {
     warn.hidden = false;
     warn.textContent = "Runs on your host with your user's full access: files, keys, network.";
     return;
@@ -6214,6 +6383,7 @@ async function openSpawnDialog(preselectAgent, prefill) {
   renderProfileSeg();
   // Tier first: it decides which workspaces are boxable, for the warning below.
   syncRuntimeField();
+  tierVmFetch(); // not awaited: the cards draw first and gain the VM line when it answers
   hideSpawnNotShared();
   loadSpawnVMFilter(); // not awaited: the picker reads the filter when it draws
   // A Duplicate's account applies only where its prefill does (same profile).
@@ -6229,10 +6399,14 @@ async function openSpawnDialog(preselectAgent, prefill) {
   // last cwd that is unusable on this tier is still restored; the warning below
   // names why, so choosing box vs. host stays the user's call, not a silent discard.
   // The source rides along: the help line under the field names it.
-  const choice = spawnCwdChoice({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")), skipScratch: drawerDesktop() });
+  const choice = spawnCwdChoice({ profile: currentProfile(), last, workspaces: workspacesCache, tier: spawnWhere().runtime || "", skipScratch: drawerDesktop() });
   setSpawnCwd(choice.cwd, choice.source);
   if (prefill) {
-    if (want === prefill.agent) applySpawnPrefill(prefill);
+    // A group's + names a workspace and no profile: that is not a profile gone missing, so no toast.
+    // With no path either there is nothing to apply: the workspace spawnCwdChoice chose stays.
+    if (!prefill.agent) {
+      if (typeof prefill.cwd === "string" && prefill.cwd !== "") setSpawnCwd(prefill.cwd, prefill.source || "");
+    } else if (want === prefill.agent) applySpawnPrefill(prefill);
     else showToast('Profile "' + prefill.agent + '" no longer exists — pick one', { error: true });
   }
   onSpawnCwdChanged();
@@ -6432,7 +6606,7 @@ function initSpawnControl() {
   // the sidebar top's button: the same flow as "+ new"
   $("side-new").onclick = () => withPending($("side-new"), "Opening…", () => openSpawnDialog());
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
-  $("spawn-account").addEventListener("change", syncSpawnPreview);
+  $("spawn-account").addEventListener("change", () => { syncSpawnPreview(); paintSpawnAcctHint(); });
   $("spawn-prompt-hint").textContent = shortcutHint("spawn.submit", IS_MAC) + " spawns";
   paintSpawnChrome();
   // From any field of the form (it bubbles up from the first message, the name,
@@ -6465,7 +6639,7 @@ function hideSpawnUnlock() {
 // showSpawnUnlock: a spawn was refused with 423 store_locked. The dialog stays
 // open with the unlock form inline; after a 204 it offers Retry, which submits
 // the same form again.
-function showSpawnUnlock(message) {
+function showSpawnUnlock(message, opts) {
   const box = $("spawn-unlock");
   if (!box) return;
   const txt = document.createElement("div");
@@ -6478,6 +6652,15 @@ function showSpawnUnlock(message) {
     done.className = "storeretry";
     const note = document.createElement("span");
     note.textContent = "Store unlocked.";
+    if (opts && opts.retry === false) {
+      // Opened from the account hint, not from a refused spawn: there is nothing to retry. Re-read what the lock hid, so the hint
+      // clears (login_state from /api/accounts, box_claude_credential from /api/profiles).
+      done.append(note);
+      slot.replaceChildren(done);
+      spawnCredsRefetch();
+      Promise.all([fetchAccounts(), refreshProfilesQuiet()]).then(() => paintSpawnAccount($("spawn-account-row").hidden ? undefined : $("spawn-account").value));
+      return;
+    }
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "btn pri";
@@ -6521,9 +6704,10 @@ $("spawn").addEventListener("submit", async (ev) => {
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
+  const w = spawnWhere();
   const req = spawnPayload({
-    agent: $("agent").value, name: $("sess-name").value, cwd: getCwd(), options: getOptions(),
-    runtime: segValue($("runtime-seg")), prompt: $("spawn-prompt").value,
+    agent: $("agent").value, name: $("sess-name").value, cwd: spawnCwdFor(w), options: getOptions(),
+    runtime: w.runtime || "", clone: w.clone, prompt: $("spawn-prompt").value,
     replyable: $("spawn-replyable").checked, profile: currentProfile(),
     account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
   });
@@ -7522,12 +7706,13 @@ setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);
   anWirePage();
 }
 // Layout buttons 1/2/4 → set the max-window cap (auto-split grows up to it).
-// The header's group (mobile) and the sidebar top's (desktop) are the same control.
+// The header's group (mobile); the sidebar top's layout button and its menu (desktop) are sidechrome.js's.
 for (const grp of document.querySelectorAll(".layouts")) {
   grp.addEventListener("click", (e) => {
     if (e.target.dataset && e.target.dataset.cols) applyCap(Number(e.target.dataset.cols));
   });
 }
+initSideLayout();
 applyCap(4); // default: auto-split up to 4 windows
 initDialogs();
 initSplitter();
@@ -7778,7 +7963,7 @@ bindShortcut("files.toggle", (e, ctx) => {
 bindShortcut("session.jump", (e, ctx) => {
   const m = /^Digit([1-9])$/.exec(e.code); // .code, not .key: layout-independent under a modifier
   if (!m) return false;
-  const s = jumpTarget(Number(m[1]), jumpOrder(lastSessions, ctx.mobile));
+  const s = jumpTarget(Number(m[1]), jumpOrder(lastSessions, ctx.mobile, deskWsCollapsed));
   // Out of range is a deliberate no-op, not a wrap-around: pressing 7 with four
   // sessions open must not land somewhere arbitrary. The handler still returns
   // true, so the digit is swallowed either way and never falls through to the agent.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,6 +62,12 @@ func (s *Store) provision(r Resolved) error {
 	defer cr.Close()
 	if err := s.mergeSettings(cr); err != nil {
 		return err
+	}
+	if r.Provider == ProviderClaude {
+		// Best effort: without it Claude Code just shows its first-run screens.
+		if _, err := ensureOnboarded(cr); err != nil {
+			log.Printf("account %q: .claude.json left as it is: %v", r.Name, err)
+		}
 	}
 	return s.syncInherit(cr, r.InheritPersonal)
 }

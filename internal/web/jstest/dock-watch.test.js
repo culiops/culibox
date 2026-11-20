@@ -652,7 +652,7 @@ function fullPage() {
   });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load('let drawerState = { open: "files", sessionId: "s1", pinned: false }; let drawerChangedFiles = new Map(); let lastSessions = [{ id: "s1", activity: "working" }]; let ftRootSel = null;', "state");
-  for (const f of ["accessmodel.js", "drawerfiles.js", "changesmodel.js", "gitstatus.js", "dockchanges.js"]) load(src(f), f);
+  for (const f of ["accessmodel.js", "drawerfiles.js", "changesmodel.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
   // filesdrawer.js's own: the list is set and the Changes section hears of it.
   load("function drawerSetChanged(sid, files) { drawerChangedFiles.set(sid, files); dockChangesRender(); }", "drawerSetChanged");
   load(src("dockwatch.js"), "dockwatch.js");
@@ -728,7 +728,7 @@ test("an edit shows at once as a provisional row, git is asked fresh, and git's 
   assert.strictEqual(p.rows().length, 1);
   const row = p.rows()[0];
   assert.deepStrictEqual(cls(row), ["dk-row", "dk-mine"]);
-  assert.deepStrictEqual(Array.from(row.children, (c) => cls(c)[0]), ["dk-ic", "dk-nm", "dk-dir", "dk-st"]);
+  assert.deepStrictEqual(Array.from(row.children, (c) => cls(c)[0]), ["dk-ck", "dk-ic", "dk-nm", "dk-dir", "dk-st"]);
   assert.strictEqual(text(row.querySelector(".dk-nm")), "new.go");
   assert.strictEqual(text(row.querySelector(".dk-dir")), "src");
   assert.strictEqual(text(row.querySelector(".dk-st")), "…");

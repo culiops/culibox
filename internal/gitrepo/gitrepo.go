@@ -14,10 +14,11 @@ import (
 
 // Repo is one checkout: Top is the directory holding .git (a directory or a
 // file), Common the repository's common git dir, Linked true when the checkout
-// is a linked worktree.
+// is a linked worktree. Gitdir is the directory a .git FILE names (empty for a
+// .git directory): a linked worktree's own gitdir, <Common>/worktrees/<name>.
 type Repo struct {
-	Top, Common string
-	Linked      bool
+	Top, Common, Gitdir string
+	Linked              bool
 }
 
 // Locate walks up from dir to the nearest .git. A .git directory is a main
@@ -42,9 +43,9 @@ func Locate(dir string) (Repo, bool) {
 			}
 			gitdir = filepath.Clean(gitdir)
 			if filepath.Base(filepath.Dir(gitdir)) == "worktrees" {
-				return Repo{Top: d, Common: filepath.Dir(filepath.Dir(gitdir)), Linked: true}, true
+				return Repo{Top: d, Common: filepath.Dir(filepath.Dir(gitdir)), Gitdir: gitdir, Linked: true}, true
 			}
-			return Repo{Top: d, Common: gitdir}, true
+			return Repo{Top: d, Common: gitdir, Gitdir: gitdir}, true
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
@@ -52,6 +53,47 @@ func Locate(dir string) (Repo, bool) {
 		}
 		d = parent
 	}
+}
+
+// Normalize is the one spelling of a path that workspace grouping compares:
+// filepath.Clean plus EvalSymlinks, falling back to Clean alone when the path
+// cannot be resolved (it does not exist, or a component is unreadable). "" stays "".
+func Normalize(p string) string {
+	if p == "" {
+		return ""
+	}
+	p = filepath.Clean(p)
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
+// WorkspaceRoot is the repository dir that dir belongs to, normalised, so every
+// checkout of one repository reports the same string: the checkout's Top, or for
+// a linked worktree of a normal repository (Common is <main>/.git) that main
+// checkout. A worktree of a bare repository has no main checkout, so its own Top
+// stands. "" when dir is not inside a repository. Like Locate it only reads the
+// filesystem. The .git file is written by the box in an in-place session, so the
+// main checkout is trusted only when the worktree's own gitdir the file names
+// exists as a real directory; a forged pointer to some other repository falls
+// back to the checkout's own Top.
+func WorkspaceRoot(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	// Walk the physical path: a dir reached through a symlink must not be
+	// searched along the link's own parents.
+	r, ok := Locate(Normalize(dir))
+	if !ok {
+		return ""
+	}
+	if r.Linked && filepath.Base(r.Common) == ".git" {
+		if fi, err := os.Lstat(r.Gitdir); err == nil && fi.IsDir() {
+			return Normalize(filepath.Dir(r.Common))
+		}
+	}
+	return Normalize(r.Top)
 }
 
 // CheckoutOf reports the repository's common git dir for the checkout holding

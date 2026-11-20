@@ -126,10 +126,15 @@ func TestProvisionInheritToggle(t *testing.T) {
 			t.Fatalf("%s link = %q %v", n, tgt, err)
 		}
 	}
-	for _, n := range []string{"agents", "commands", ".credentials.json", ".claude.json"} {
+	for _, n := range []string{"agents", "commands", ".credentials.json"} {
 		if _, err := os.Lstat(filepath.Join(r.ConfigDir, n)); err == nil {
 			t.Fatalf("%s must not be created", n)
 		}
+	}
+	// .claude.json is the onboarding seed only: nothing of the default's
+	// ~/.claude.json (its login, its servers) is copied into the account.
+	if st := readJSON(t, filepath.Join(r.ConfigDir, ".claude.json")); len(st) != 2 || st["hasCompletedOnboarding"] != true || st["theme"] != "dark" {
+		t.Fatalf(".claude.json = %v, want only the onboarding seed", st)
 	}
 	mcpPath := filepath.Join(r.ConfigDir, MCPFileName)
 	mcp := readJSON(t, mcpPath)

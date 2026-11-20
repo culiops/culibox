@@ -5,7 +5,7 @@
 // uses that text twice:
 //   the gutter   lineDiff (linediff.js) of it against the live buffer, drawn beside the line numbers (dk-g-add, dk-g-mod, dk-g-del) and
 //                in the overview ruler, from 300 ms after the last edit. An unsaved edit shows, as in VS Code;
-//   Changes      the Code | Changes toggle in the dock's bar swaps the tab's body for Monaco's inline diff: the base text on the removed
+//   Changes      the Code | Changes toggle in the dock's bar swaps the tab's body for Monaco's diff (side by side or inline): the base text on the removed
 //                side, the tab's own model on the new side. It is a review view (founder, 2026-11-17): read-only, editing is in Code,
 //                typing in it does nothing (which also keeps single keys free for review later). For a markdown file the toggle is
 //                Preview | Source | Changes (Source is Code's place; Preview is editormd.js's).
@@ -23,8 +23,14 @@
 //   lineChanges  lineDiff's changes of head against the buffer (P3 reads them); [] when capped or head is null;
 //   capped       lineDiff declined (too big, or too different): no marks, and no cost per keystroke;
 //   at           when the answer landed.
-// A box tab has no host git: no request, the toggle says so. An image or a binary file has no toggle at all (the EditorTab's inner
-// viewer owns the bar).
+// A box tab has no host git: no request, the toggle says so. A binary file has no toggle at all (the EditorTab's inner viewer owns
+// the bar), and an image has its own Image | Changes toggle and comparer (imagediff.js).
+//
+// The Changes view (P3). Side by side is the default (Monaco's own `useInlineViewWhenSpaceIsLimited` makes a narrow dock inline by
+// itself), and the Inline | Side by side control in the dock's bar, the ⋯ menu's Line numbers and Wrap diff are the reader's: the mode
+// and the diff's wrap are kept in viewerprefs.js (diffMode, diffWrap; the editor's own wrap is a separate setting), line numbers for
+// the page. The view's header row (name, what it compares, +a −d, Change N of M, prev/next, Mark reviewed) and F7 / Shift+F7 across
+// the session's changed files are editorreview.js's.
 //
 // Everything an answer touches is decided when it arrives: an answer for a tab that was disposed, or for a key the tab has moved
 // on from (the scope was switched, HEAD moved, the file was re-pointed), is dropped and the newer key is asked for.
@@ -53,16 +59,22 @@ const DG_RULER = {
 const DG_ICON_PREVIEW = [["path", { d: "M3.5 1.5h5l2.5 2.5v8.5h-7.5z" }], ["path", { d: "M5.3 7h3.4M5.3 9.5h3.4" }]];
 const DG_ICON_CODE = [["path", { d: "M5 4L2 7l3 3M9 4l3 3-3 3" }]];
 const DG_ICON_CHANGES = [["path", { d: "M7 2.5v5M4.5 5h5M4.5 11h5" }]];
+// The mode toggle's icons: a page split in two columns, and one column with a rule through it.
+const DG_ICON_SIDE = [["path", { d: "M2 2.5h10v9H2zM7 2.5v9" }]];
+const DG_ICON_INLINE = [["path", { d: "M2 2.5h10v9H2zM4.5 5.5h5M4.5 8.5h5" }]];
 const DG_BOX_WHY = "a file in a session's box has no git history";
 const DG_RO_MSG = "Changes is a review view. Switch to Code to edit.";
 
 let edTab = null; // the tab on screen with its model: the one a status or a scope change is for
+let dgLineNumbers = true; // the Changes view's line numbers (the ⋯ menu); on, as Code has them, and for this page only
 
 // editorDiffOf: what this file keeps on a tab: the request slot, the debounce, the gutter's decorations (ids, and the text of
 // the changes they draw), the line a link asked for, whether the user asked for Changes before the base text was in (`want`), whether
-// the tab is to open in Changes when it is next on screen (`resume`) and where its Changes view was scrolled to (`diffTop`).
+// the tab is to open in Changes when it is next on screen (`resume`) and where its Changes view was scrolled to and its cursor left
+// (`diffTop`, `diffPos`). `navIndex` is the change F7 last landed on and `land` where the next opening of the view is to land
+// ({at: "first" | "last", ts}: F7 across files, editorreview.js).
 function editorDiffOf(tab) {
-  if (!tab.dg) tab.dg = { flight: false, want: false, resume: false, diffTop: null, timer: null, sub: null, ids: [], last: "", targetIds: [], targetLine: null };
+  if (!tab.dg) tab.dg = { flight: false, want: false, resume: false, diffTop: null, diffPos: null, navIndex: null, land: null, timer: null, sub: null, ids: [], last: "", targetIds: [], targetLine: null };
   return tab.dg;
 }
 
@@ -74,20 +86,42 @@ function editorDiffLabel(scope, baseName) {
   return baseName ? "vs " + baseName + " (merge base)" : "vs the merge base";
 }
 
-// editorDiffPaintLabel writes the Changes view's header: "vs HEAD", or "vs <base> (merge base)" with the base's name in a span of its
-// own, isolated for bidirectional text like every git string the dock draws (a branch name may carry format characters).
+// editorDiffHeadLabel: what the Changes view's header says the two sides are: "HEAD ↔ working tree", or "<base> (merge base) ↔ working
+// tree" in Branch scope (the right side is the buffer, so an edit that is not saved yet is on it).
+function editorDiffHeadLabel(scope, baseName) {
+  if (scope !== "branch") return "HEAD ↔ working tree";
+  return (baseName ? baseName + " (merge base)" : "the merge base") + " ↔ working tree";
+}
+
+// editorDiffPaintLabel writes the header's label (editorDiffHeadLabel), with the base's name in a span of its own, isolated for
+// bidirectional text like every git string the dock draws (a branch name may carry format characters).
 function editorDiffPaintLabel(el, scope, baseName) {
-  const text = editorDiffLabel(scope, baseName);
+  const text = editorDiffHeadLabel(scope, baseName);
   if (el.dataset.text === text) return;
   el.dataset.text = text;
   if (scope === "branch" && baseName) {
     const base = document.createElement("span");
     base.className = "dk-cmp-base";
     base.textContent = baseName;
-    el.replaceChildren("vs ", base, " (merge base)");
+    el.replaceChildren(base, " (merge base) ↔ working tree");
   } else {
     el.replaceChildren(text);
   }
+}
+
+// editorDiffOptions: what the Changes view reads from the preferences, as updateOptions takes it. The editor's wrap is not among
+// them (the diff has its own, diffWordWrap), nor is its side by side choice the editor's: Monaco still shows one inline by itself
+// when the dock is too narrow for two sides.
+function editorDiffOptions() {
+  const o = editorOptions();
+  delete o.wordWrap;
+  return Object.assign(o, {
+    renderSideBySide: viewerPrefs.getDiffMode() === "side",
+    useInlineViewWhenSpaceIsLimited: true,
+    glyphMargin: true, // the "+" that adds a note (editornotes.js), on both sides
+    diffWordWrap: viewerPrefs.getDiffWrap() ? "on" : "off",
+    lineNumbers: dgLineNumbers ? "on" : "off",
+  });
 }
 
 // editorDiffBase turns the server's answer (null: the request failed) into {head, missing, why, retry}: the text to compare with, or
@@ -159,36 +193,103 @@ function editorDiffWhy(tab) {
 // that cannot be honoured does nothing (the button is aria-disabled with its reason as the title, so the hover and the keyboard
 // still reach it).
 function editorDiffToggle(tab) {
-  const el = document.createElement("div");
-  el.className = "seg dk-seg";
-  el.setAttribute("role", "group");
-  el.setAttribute("aria-label", "View");
-  // Each item has an icon and its word. The bar shows one of them: the word while the dock is wide, the icon when it is not (a size
-  // query in desktop.css), so the tab names keep their room. The word stays in the page for screen readers either way.
-  const item = (label, icon, run) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "seg-item";
-    const ic = svgIcon(icon, { icon: "view", size: "14" });
-    ic.setAttribute("class", "dk-seg-ic");
-    const t = document.createElement("span");
-    t.className = "dk-seg-t";
-    t.textContent = label;
-    b.append(ic, t);
-    b.title = label;
-    b.onclick = () => { if (b.getAttribute("aria-disabled") !== "true") run(); };
-    return b;
-  };
-  const preview = item("Preview", DG_ICON_PREVIEW, () => { editorMdPick(tab, "preview"); tab.focusReader(); });
-  const code = item("Code", DG_ICON_CODE, () => {
+  const el = editorDiffSeg("View");
+  const preview = editorDiffSegItem("Preview", DG_ICON_PREVIEW, () => { editorMdPick(tab, "preview"); tab.focusReader(); });
+  const code = editorDiffSegItem("Code", DG_ICON_CODE, () => {
     if (editorMdIs(tab)) editorMdPick(tab, "source"); else tab.showChanges(false);
     tab.focusReader();
   });
-  const changes = item("Changes", DG_ICON_CHANGES, () => { tab.showChanges(true); });
+  const changes = editorDiffSegItem("Changes", DG_ICON_CHANGES, () => { tab.showChanges(true); });
   preview.hidden = true; // until paint knows the file is markdown
   el.append(preview, code, changes);
   tab.seg = { el, preview, code, changes, codeText: code.querySelector(".dk-seg-t") };
   return el;
+}
+
+// editorDiffSeg / editorDiffSegItem: the dock bar's segmented control and one of its items. Each item has an icon and its word. The
+// bar shows one of them: the word while the dock is wide, the icon when it is not (a size query in desktop.css), so the tab names
+// keep their room. The word stays in the page for screen readers either way.
+function editorDiffSeg(label) {
+  const el = document.createElement("div");
+  el.className = "seg dk-seg";
+  el.setAttribute("role", "group");
+  el.setAttribute("aria-label", label);
+  return el;
+}
+
+function editorDiffSegItem(label, icon, run) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "seg-item";
+  const ic = svgIcon(icon, { icon: "view", size: "14" });
+  ic.setAttribute("class", "dk-seg-ic");
+  const t = document.createElement("span");
+  t.className = "dk-seg-t";
+  t.textContent = label;
+  b.append(ic, t);
+  b.title = label;
+  b.onclick = () => { if (b.getAttribute("aria-disabled") !== "true") run(); };
+  return b;
+}
+
+// editorDiffModeToggle builds the Inline | Side by side control (it shows only while the tab is in Changes: paint). The choice is
+// the reader's, kept for every file (diffModeSet).
+function editorDiffModeToggle(tab) {
+  const el = editorDiffSeg("Diff layout");
+  const inline = editorDiffSegItem("Inline", DG_ICON_INLINE, () => diffModeSet("inline"));
+  const side = editorDiffSegItem("Side by side", DG_ICON_SIDE, () => diffModeSet("side"));
+  side.title = "Side by side (shows inline by itself when the dock is too narrow for two sides)";
+  el.append(inline, side);
+  el.hidden = true;
+  tab.modeSeg = { el, inline, side };
+  return el;
+}
+
+// diffModeSet("inline" | "side"): the reader's choice of layout for the Changes view, kept in viewerprefs.js. The view on screen
+// follows at once, and every later one opens in it.
+function diffModeSet(mode) {
+  viewerPrefs.setDiffMode(mode);
+  if (edTab && edTab.diff) {
+    edTab.diff.diff.updateOptions(editorDiffOptions());
+    edTab.paint();
+  }
+  if (typeof reviewAllApplyPrefs === "function") reviewAllApplyPrefs(); // the All changes tab's sections follow
+}
+
+// diffWrapToggle: the ⋯ menu's Wrap diff and Alt+Z while the Changes view has the focus. Not the editor's wrap.
+function diffWrapToggle() {
+  viewerPrefs.setDiffWrap(!viewerPrefs.getDiffWrap());
+  if (edTab && edTab.diff) edTab.diff.diff.updateOptions(editorDiffOptions());
+  if (typeof reviewAllApplyPrefs === "function") reviewAllApplyPrefs();
+  return viewerPrefs.getDiffWrap();
+}
+
+function diffLineNumbersToggle() {
+  dgLineNumbers = !dgLineNumbers;
+  if (edTab && edTab.diff) edTab.diff.diff.updateOptions(editorDiffOptions());
+  if (typeof reviewAllApplyPrefs === "function") reviewAllApplyPrefs();
+  return dgLineNumbers;
+}
+
+// editorDiffFocused: the keyboard is in the Changes view on screen (either side, or its find widget).
+function editorDiffFocused() {
+  if (typeof reviewAllFocused === "function" && reviewAllFocused()) return true; // a section of the All changes tab
+  const d = edTab && edTab.diff ? edTab.diff.diff : null;
+  if (!d) return false;
+  const has = (e) => !!e && (typeof e.hasWidgetFocus === "function" ? e.hasWidgetFocus() : typeof e.hasTextFocus === "function" && e.hasTextFocus());
+  return has(d.getModifiedEditor()) || (typeof d.getOriginalEditor === "function" && has(d.getOriginalEditor()));
+}
+
+// editorWrapKey: Alt+Z in the editor (the registry's editor.wrap). In the Changes view it is Wrap diff, in Code Wrap lines.
+function editorWrapKey() {
+  if (editorDiffFocused()) diffWrapToggle(); else toggleViewerWrap();
+}
+
+// editorDiffAnyChanges: some tab of the dock's session is in Changes (or is to open there when it is shown). The Changes section
+// says "reviewed n of m" while one is.
+function editorDiffAnyChanges() {
+  if (typeof dockViewerList !== "function") return false;
+  return dockViewerList().some((t) => !t.disposed && ((!t.inner && (!!t.diff || !!t.pendingChanges || !!(t.dg && t.dg.resume))) || editorImageOn(t)));
 }
 
 // editorDiffPaintToggle: which of them is on, and whether Changes can be had. Leaving Changes is always possible.
@@ -210,6 +311,14 @@ function editorDiffPaintToggle(tab) {
   t.changes.setAttribute("aria-disabled", why ? "true" : "false");
   const title = why ? "Changes unavailable: " + why : "Changes " + editorDiffLabel(ch ? ch.scope : "head", ch ? ch.baseName : "");
   if (t.changes.title !== title) t.changes.title = title;
+  // The layout control is for the Changes view.
+  const m = tab.modeSeg;
+  if (m) {
+    const side = viewerPrefs.getDiffMode() === "side";
+    m.el.hidden = !on;
+    m.inline.setAttribute("aria-pressed", side ? "false" : "true");
+    m.side.setAttribute("aria-pressed", side ? "true" : "false");
+  }
 }
 
 // --- asking ---------------------------------------------------------------------------------------------------------
@@ -240,6 +349,7 @@ async function editorDiffPost(body) {
 // moved (a key is a few lookups), so every place that can move it calls this. `force`: the user asked for Changes, so git's status
 // being unknown yet is no reason to wait.
 function editorDiffSync(force) {
+  editorImageSync(); // an image's comparer follows the same key (imagediff.js)
   const tab = edTab;
   if (!tab || tab.disposed || !tab.attached || !tab.model || tab.inner) return;
   if (tab.box) return; // no host git for a file in a box
@@ -300,6 +410,7 @@ function editorDiffRecompute(tab) {
     ch.capped = r.capped;
   }
   editorDiffPaintGutter(tab);
+  editorReviewPaint(tab); // the header's "Change N of M"
 }
 
 // editorDiffPaintGutter draws the changes on the shared editor, which holds them for as long as it shows this tab's model (another
@@ -349,7 +460,9 @@ function editorDiffDetach(tab) {
   if (s.timer) { clearTimeout(s.timer); s.timer = null; }
   if (s.sub) { s.sub.dispose(); s.sub = null; }
   if (tab.diff) {
-    s.diffTop = tab.diff.diff.getModifiedEditor().getScrollTop();
+    const modified = tab.diff.diff.getModifiedEditor();
+    s.diffTop = modified.getScrollTop();
+    s.diffPos = modified.getPosition();
     s.resume = true;
     editorDiffDrop(tab);
     tab.bodyEl.replaceChildren();
@@ -396,7 +509,7 @@ function editorDiffSet(tab, on) {
   if (tab.disposed || tab.inner) return false;
   const s = editorDiffOf(tab);
   // diffTop is where a hidden tab's Changes view was left, for the view that was to come back: Code asked for, that view is not coming back.
-  if (!on) { s.want = false; s.resume = false; s.diffTop = null; editorDiffLeave(tab); return false; }
+  if (!on) { s.want = false; s.resume = false; s.diffTop = null; s.diffPos = null; s.land = null; editorDiffLeave(tab); return false; }
   if (tab.diff) return true;
   if (!tab.model) { tab.pendingChanges = true; return true; } // still reading: load() opens it when the model is there
   const why = editorDiffWhy(tab);
@@ -410,7 +523,7 @@ function editorDiffSet(tab, on) {
   return true;
 }
 
-// editorDiffEnter swaps the tab's body for the inline diff of the base text and the live buffer. The Code editor keeps its model
+// editorDiffEnter swaps the tab's body for the diff of the base text and the live buffer. The Code editor keeps its model
 // and its place (stashView), for the way back. Only the tab on screen has a diff editor: for any other tab this only notes that it
 // is to open in Changes when it is shown (the dock has one diff editor at a time).
 function editorDiffEnter(tab) {
@@ -422,49 +535,60 @@ function editorDiffEnter(tab) {
   editorMdDrop(tab);           // so does a markdown Preview: the body is the diff's
   tab.stashView();
   const original = dockMonaco.editor.createModel(ch.head, monacoLang(tab.path));
-  const label = document.createElement("span");
-  editorDiffPaintLabel(label, ch.scope, ch.baseName);
-  const head = document.createElement("div");
-  head.className = "dk-cmp-head";
-  head.append(label);
+  const head = editorReviewHead(tab); // the header row (editorreview.js): its label is painted from here and on a refill
   const body = document.createElement("div");
   body.className = "dk-cmp-body";
   const wrap = document.createElement("div");
   wrap.className = "dk-ed-cmp";
-  wrap.append(head, body);
+  wrap.append(head.el, body);
   // ignoreTrimWhitespace off: a review view shows a whitespace-only change, as git diff does and the gutter does.
   const diff = dockMonaco.editor.createDiffEditor(body, Object.assign({
     theme: MONACO_THEME,
     readOnly: true,
     readOnlyMessage: { value: DG_RO_MSG },
     originalEditable: false,
-    renderSideBySide: false,
     ignoreTrimWhitespace: false,
     automaticLayout: true,
     minimap: { enabled: false },
     stickyScroll: { enabled: false }, // as Code has it: the enclosing scope's rows would be drawn over the first changed line
     scrollBeyondLastLine: false,
     fixedOverflowWidgets: true,
-  }, editorOptions()));
+  }, editorDiffOptions()));
   const modified = diff.getModifiedEditor();
-  modified.onDidChangeCursorPosition(() => tab.paintStatus());
-  // Open where the view was left (a tab that comes back), else where a link asked to be, else at the first change: that is what
-  // the view is for.
+  editorBindChangeKeys(modified); // F7 / Shift+F7 are the page's keys: a tab opened straight in Changes has no Code editor to carry them
+  editorBindNoteKeys(modified); // likewise Add note
+  modified.onDidChangeCursorPosition(() => { tab.paintStatus(); editorReviewPaint(tab); });
+  // Open where F7 asked to land (the first or the last change), else where the view was left (a tab that comes back), else where a
+  // link asked to be, else at the first change: that is what the view is for.
   const target = s.targetLine;
   const top = s.diffTop;
+  const pos = s.diffPos;
+  const focus = editorReviewWantsFocus(tab);
   s.diffTop = null;
+  s.diffPos = null;
   const computed = diff.onDidUpdateDiff(() => {
     computed.dispose();
-    if (top !== null) modified.setScrollTop(top, dockMonaco.editor.ScrollType.Immediate);
-    else if (target !== null) modified.revealLineInCenter(target, dockMonaco.editor.ScrollType.Immediate);
+    const land = editorReviewLanding(tab);
+    if (land) editorReviewGo(tab, land === "last" ? tab.changes.lineChanges.length - 1 : 0);
+    else if (top !== null) {
+      modified.setScrollTop(top, dockMonaco.editor.ScrollType.Immediate);
+      if (pos) modified.setPosition(pos);
+    } else if (target !== null) modified.revealLineInCenter(target, dockMonaco.editor.ScrollType.Immediate);
+    else if (tab.changes.lineChanges.length) editorReviewGo(tab, 0);
     else diff.revealFirstDiff();
   });
-  diff.setModel({ original, modified: tab.model });
-  tab.diff = { diff, original, wrap, label };
+  // The view model is ours to dispose (editorDiffDrop): setModel({original, modified}) makes one that nothing ever releases (Monaco 0.57), and its
+  // pending diff then runs on against models that are gone ("no diff result available").
+  const vm = diff.createViewModel({ original, modified: tab.model });
+  diff.setModel(vm);
+  tab.diff = { diff, original, wrap, label: head.label, head, vm };
+  editorNotesAttach(tab); // the notes of the file (editornotes.js): zones under their lines, the "+" in the margin, the keys
   tab.bodyEl.replaceChildren(wrap);
+  editorDiffPaintLabel(head.label, ch.scope, ch.baseName);
   diff.layout();
-  if (tab.attached) tab.takeWantedFocus(modified);
+  if (tab.attached) { tab.takeWantedFocus(modified); if (focus) modified.focus(); }
   tab.paint();
+  editorReviewChanged(); // the Changes section says "reviewed n of m" from now on
 }
 
 // editorDiffRefill: the base text of the open Changes view moved (a commit, another scope): the view shows the new one.
@@ -472,7 +596,10 @@ function editorDiffRefill(tab) {
   const ch = tab.changes;
   const d = tab.diff;
   if (!d || !ch || ch.head === null) return;
-  if (d.original.getValue() !== ch.head) d.original.setValue(ch.head);
+  if (d.original.getValue() !== ch.head) {
+    d.original.setValue(ch.head);
+    editorNotesBaseMoved(tab); // the old-side notes are checked against the new base
+  }
   editorDiffPaintLabel(d.label, ch.scope, ch.baseName);
 }
 
@@ -481,9 +608,12 @@ function editorDiffDrop(tab) {
   const d = tab.diff;
   if (!d) return false;
   tab.diff = null;
+  editorNotesDetach(tab); // before the editors go: its zones, hover marks and listeners are theirs to remove
   d.diff.setModel(null);
   d.diff.dispose();
+  d.vm.dispose(); // cancels the diff in flight, before the models it reads go
   d.original.dispose();
+  editorReviewChanged(); // (a tab that left to come back in Changes still counts: its `resume` is set before this)
   return true;
 }
 
@@ -497,7 +627,8 @@ function editorDiffLeave(tab) {
 
 // editorDiffApplyPrefs: the font size or the wrap changed (editorApplyPrefs): the Changes view on screen follows.
 function editorDiffApplyPrefs() {
-  if (edTab && edTab.diff) edTab.diff.diff.updateOptions(editorOptions());
+  if (edTab && edTab.diff) edTab.diff.diff.updateOptions(editorDiffOptions());
+  if (typeof reviewAllApplyPrefs === "function") reviewAllApplyPrefs();
 }
 
 // editorDiffDispose: the tab is closed. Nothing it made stays: the view and the base text's model, the timer and the subscription.

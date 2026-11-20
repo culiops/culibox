@@ -639,7 +639,7 @@ test("sidebar group labels and rows follow the frame's rhythm", () => {
   assert.ok(!/margin-top/.test(sub), "the sub-line sits right under the name");
   assert.match(decl(".dchip"), /font:\s*500 var\(--t-xs\)\/18px/, "18px high chip");
   assert.match(decl(".dchip.box"), /font-family:\s*var\(--font-mono\)[^}]*font-weight:\s*var\(--w-regular\)/, "the tier is mono 400 like .chip-box");
-  assert.match(decl("#sessions .drow.nested"), /padding:\s*3px 8px 4px 26px/);
+  assert.match(decl("#sessions .drow.nested"), /padding:\s*3px 8px 4px 32px/);
 });
 
 test("the in-pane bar sits on the sidebar's edge on every in-pane row, faint, accent on the selected one", () => {

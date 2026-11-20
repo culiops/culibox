@@ -55,17 +55,12 @@
           <span id="side-version" hidden></span>
           <span id="side-env" hidden></span>
         </div>
-        <div class="side-ctl">
-          <div class="layouts" id="side-layouts">
-            <button data-cols="1" title="One pane" aria-label="One pane">1</button>
-            <button data-cols="2" title="Two panes" aria-label="Two panes">2</button>
-            <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
-          </div>
-          <span class="side-fill"></span>
+        <div class="xnewrow">
+          <button id="side-new" type="button" class="pbtn">New session</button>
+          <span class="xlay-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm xlay" aria-haspopup="menu" aria-expanded="false" title="Layout: 4 panes (click to change)" aria-label="Layout: 4 panes"></button></span>
           <button id="side-palette" type="button" class="btn btn-ghost btn-icon btn-sm" title="Command palette" aria-label="Command palette"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.2" cy="6.2" r="4"/><path d="M9.2 9.2l3.3 3.3"/></svg></button>
           <button id="side-collapse" type="button" class="btn btn-ghost btn-icon btn-sm" title="Hide sidebar" aria-label="Hide sidebar">&#171;</button>
         </div>
-        <button id="side-new" type="button" class="pbtn">New session</button>
       </div>
       <!-- System banner (Plan 7 Task 7); the store banner (Task 9) has its own slot below it. Both empty and hidden until painted. -->
       <div id="sys-banner-slot" hidden></div>
@@ -109,15 +104,15 @@
       </div>
       <div id="side-foot">
         <div id="limits-side"></div>
-        <div class="side-stats">
-          <span id="side-cost" hidden></span>
-          <span id="side-elevated" hidden></span>
-        </div>
+        <span id="side-elevated" hidden></span>
         <div id="side-store" hidden></div>
-        <div class="side-links">
-          <button id="side-audit" type="button" hidden>Audit</button>
-          <button id="side-analytics" type="button" hidden>Analytics</button>
-          <button id="side-settings" type="button">Settings</button>
+        <div class="xlinks">
+          <span id="side-cost" class="xcost" hidden></span>
+          <div class="side-links">
+            <button id="side-audit" type="button" hidden>Audit</button>
+            <button id="side-analytics" type="button" hidden>Analytics</button>
+            <button id="side-settings" type="button">Settings</button>
+          </div>
         </div>
       </div>
     </aside>
@@ -294,8 +289,9 @@
           <div class="form-hint" id="spawn-prompt-hint"></div>
         </div>
         <div id="runtime-row" style="display:none">
-          <label>Containment</label>
+          <label><span class="tp-lbl-ph">Containment</span><span class="tp-lbl">Where it runs</span></label>
           <div class="seg" id="runtime-seg" data-value="" role="group" aria-label="Containment"></div>
+          <div class="tierpick" id="tierpick" role="radiogroup" aria-label="Where it runs" data-value=""></div>
         </div>
         <div id="effort-row">
           <label><span class="spawn-lbl-model">Model &middot; </span>Effort</label>
@@ -305,6 +301,7 @@
           <label for="spawn-account">Agent account</label>
           <select id="spawn-account"></select>
         </div>
+        <div class="span2" id="spawn-acct-hint" role="status" hidden></div>
         <div class="span2 form-hint" id="tier-explain" style="display:none">
           <div><b>box</b> — the agent sees only <span id="tier-explain-cwd"></span>.</div>
           <div><b class="dgr">host</b> — the agent has your whole account.</div>
@@ -906,6 +903,7 @@
   <script src="/viewer-tab.js"></script>
   <script src="/svgicon.js"></script>
   <script src="/kitmenu.js"></script>
+  <script src="/sidechrome.js"></script>
   <script src="/tabs.js"></script>
   <script src="/upload.js"></script>
   <script src="/fsops.js"></script>
@@ -971,9 +969,16 @@
   <script src="/editortab.js"></script>
   <script src="/editorsync.js"></script>
   <script src="/editordiff.js"></script>
+  <script src="/imagediff.js"></script>
   <script src="/editormd.js"></script>
   <script src="/editorselbar.js"></script>
   <script src="/editorfollow.js"></script>
+  <script src="/notesmodel.js"></script>
+  <script src="/reviewmodel.js"></script>
+  <script src="/editorreview.js"></script>
+  <script src="/editornotes.js"></script>
+  <script src="/reviewall.js"></script>
+  <script src="/reviewbar.js"></script>
   <script src="/filesdrawer.js"></script>
   <script src="/dockagent.js"></script>
   <script src="/dockchanges.js"></script>
@@ -988,6 +993,8 @@
   <script src="/pfv-advanced.js"></script>
   <script src="/pfv-new.js"></script>
   <script src="/spawnpanel.js"></script>
+  <script src="/claudemark.js"></script>
+  <script src="/tierpick.js"></script>
   <script src="/envbadge.js"></script>
   <script src="/app.js"></script>
 </body>

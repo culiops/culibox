@@ -11,7 +11,6 @@
 
 function deskDep(name) {
   const g = {
-    sessionGroups: typeof sessionGroups === "function" ? sessionGroups : null,
     needsYou: typeof needsYou === "function" ? needsYou : null,
     attentionClass: typeof attentionClass === "function" ? attentionClass : null,
     activityClass: typeof activityClass === "function" ? activityClass : null,
@@ -25,43 +24,113 @@ function deskDep(name) {
     minutesLeft: typeof minutesLeft === "function" ? minutesLeft : null,
     awsBadgeParts: typeof awsBadgeParts === "function" ? awsBadgeParts : null,
     isNestedShell: typeof isNestedShell === "function" ? isNestedShell : null,
+    shellChildren: typeof shellChildren === "function" ? shellChildren : null,
     shortModel: typeof shortModel === "function" ? shortModel : null,
     connStateLabel: typeof connStateLabel === "function" ? connStateLabel : null,
+    spawnIsShellProfile: typeof spawnIsShellProfile === "function" ? spawnIsShellProfile : null,
+    claudeKindOf: typeof claudeKindOf === "function" ? claudeKindOf : null,
   };
   if (g[name]) return g[name];
-  const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", attentionClass: "./attention.js", activityClass: "./activity.js", cardContent: "./attention.js", plainSummary: "./attention.js",
+  const mod = { needsYou: "./attention.js", attentionClass: "./attention.js", activityClass: "./activity.js", cardContent: "./attention.js", plainSummary: "./attention.js",
     needLabel: "./attention.js", connSSOSources: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
     isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js",
-    isNestedShell: "./shellnest.js", shortModel: "./analytics.js", connStateLabel: "./activity.js" }[name];
+    isNestedShell: "./shellnest.js", shellChildren: "./shellnest.js", shortModel: "./analytics.js", connStateLabel: "./activity.js",
+    spawnIsShellProfile: "./spawnpreview.js", claudeKindOf: "./claudemark.js" }[name];
   return require(mod)[name];
 }
 
 const DESK_RECENT_MAX = 3;
 
-// deskGroups: the sidebar's groups. The mobile Sessions screen's buckets plus
-// "Done · your turn" right after Needs you (F21-B): a session blocked on you
-// (an ask, an expired AWS sign-in, a locked store) is bucketed as waiting, like
-// its dot, and one that finished its turn leaves amber for its own neutral group.
-// attentionClass, not needsYou, decides: an exited session never asks, so a stale
-// need on a dead one no longer puts it in Needs you. The phone's list does not
-// come through here and keeps needsYou (app.js refreshSessions).
-function deskGroups(sessions) {
+// deskWsLabels: the group titles for a set of workspace roots, Map<root, label>.
+// "" is "Other" (a session outside any git repo); any other root reads as its
+// basename. Two or more distinct roots that share a basename each read
+// "name · parent name", so /a/x/app and /b/y/app become "app · x" and
+// "app · y". A root with no parent segment (/app) keeps its bare basename.
+function deskWsLabels(roots) {
+  const distinct = [...new Set((roots || []).filter((r) => typeof r === "string"))];
+  const seen = new Map();
+  for (const r of distinct) if (r) seen.set(deskBaseName(r), (seen.get(deskBaseName(r)) || 0) + 1);
+  const out = new Map();
+  for (const r of distinct) {
+    if (!r) { out.set(r, "Other"); continue; }
+    const base = deskBaseName(r);
+    let label = base;
+    if (seen.get(base) > 1) {
+      const parent = deskBaseName(r.split("/").filter(Boolean).slice(0, -1).join("/"));
+      if (parent) label = base + " · " + parent;
+    }
+    out.set(r, label);
+  }
+  return out;
+}
+
+// deskWsGroups: the sidebar's groups, one per workspace_root (spec 7). The key
+// and path are the root exactly as the server sends it ("" is Other). A nested
+// shell rides with its parent and its own root is ignored; an orphan shell is an
+// ordinary row grouped by its own root. count, waiting and dots include those
+// shells. Groups holding a row blocked on you (attentionClass "block", so an
+// exited session's stale need does not count) come first; within each of those
+// two tiers Other is last and the rest go by label, then path. Inside a group:
+// blocked, then finished-turn, then working, then the rest, ties by name, then
+// id, each row followed by its nested shells. A collapsed group keeps its
+// sessions, its waiting count and its dots: only the sidebar hides the rows.
+function deskWsGroups(sessions, collapsed) {
   const attn = deskDep("attentionClass");
-  return deskDep("sessionGroups")(sessions, (s) => {
-    const a = attn(s);
-    return a === "block" ? "waiting" : a === "done" ? "your-turn" : s.activity;
-  });
+  const list = sessions || [];
+  const kids = deskDep("shellChildren")(list);
+  const nested = deskDep("isNestedShell");
+  const rank = (s) => { const a = attn(s); return a === "block" ? 0 : a === "done" ? 1 : s.activity === "working" ? 2 : 3; };
+  const nameOf = (s) => String(s.name || s.id || "");
+  const cmp = (a, b) => rank(a) - rank(b) || nameOf(a).localeCompare(nameOf(b)) || String(a.id).localeCompare(String(b.id));
+  const byRoot = new Map();
+  for (const s of list) {
+    if (nested(s, list)) continue;
+    const root = typeof s.workspace_root === "string" ? s.workspace_root : "";
+    if (!byRoot.has(root)) byRoot.set(root, []);
+    byRoot.get(root).push(s);
+  }
+  const labels = deskWsLabels([...byRoot.keys()]);
+  const groups = [];
+  for (const [root, tops] of byRoot) {
+    const rows = [];
+    for (const s of tops.sort(cmp)) rows.push(s, ...(kids.get(s.id) || []));
+    groups.push({
+      key: root, label: labels.get(root), path: root, count: rows.length,
+      waiting: rows.filter((s) => attn(s) === "block").length,
+      dots: rows.map((s) => deskDot(s).cls),
+      collapsed: !!(collapsed && collapsed.has(root)),
+      sessions: rows,
+    });
+  }
+  const text = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" });
+  return groups.sort((a, b) =>
+    (b.waiting > 0) - (a.waiting > 0) || (a.key === "") - (b.key === "") || text(a.label, b.label) || text(a.path, b.path));
+}
+
+// deskGroups: the desktop sidebar's groups, now by workspace (deskWsGroups). The
+// name stays for its callers. The phone's list does not come through here: it
+// keeps sessionGroups and needsYou (app.js refreshSessions).
+function deskGroups(sessions, collapsed) {
+  return deskWsGroups(sessions, collapsed);
 }
 
 // jumpOrder: the list Mod+1…9 and the palette's first nine index into. On
-// desktop that is the sidebar's visible order; mobile has no such list on
-// screen and keeps the API order. Nested shells are left out of both: the
-// numbers (and the rail dots) are for agents.
-function jumpOrder(sessions, mobile) {
+// desktop that is the sidebar's order; mobile has no such list on screen and
+// keeps the API order. Nested shells are left out of both: the numbers (and the
+// rail dots) are for agents. On desktop the groups are built from the FULL list,
+// as the sidebar builds them, and the shells are dropped from the flattened
+// order afterwards: a waiting shell lifts its group on screen, so it must lift
+// it here too, or Mod+1 would open a row that is not first. Given `collapsed`, a
+// collapsed group's rows are skipped too, because a number must point at a row
+// the user can see. Without it the order holds every agent (the rail, the
+// attention chip, the palette's list and nextNeedsYou read that one).
+function jumpOrder(sessions, mobile, collapsed) {
   const nested = deskDep("isNestedShell");
   const list = sessions || [];
-  const agents = list.some((s) => nested(s, list)) ? list.filter((s) => !nested(s, list)) : list;
-  return mobile ? agents : deskOrder(deskGroups(agents));
+  const hasShell = list.some((s) => nested(s, list));
+  if (mobile) return hasShell ? list.filter((s) => !nested(s, list)) : list;
+  const order = deskOrder(deskGroups(list, collapsed), !!collapsed);
+  return hasShell ? order.filter((s) => !nested(s, list)) : order;
 }
 
 // nextNeedsYou: Mod+Shift+J (F69). The session to go to: those blocked on you
@@ -80,12 +149,12 @@ function nextNeedsYou(sessions, currentId) {
   return list[(at + 1) % list.length]; // at -1 (not a candidate) lands on the first
 }
 
-// deskOrder: the groups flattened in the order the sidebar shows them. Mod+1…9
-// and the palette's first nine rows both index into this, so what you see is
-// what the number means.
-function deskOrder(groups) {
+// deskOrder: the groups flattened in the order the sidebar shows them, minus the
+// collapsed ones when skipCollapsed. Mod+1…9 and the palette's digit hints index
+// into the skipping form, so what you see is what the number means.
+function deskOrder(groups, skipCollapsed) {
   const out = [];
-  for (const g of groups || []) out.push(...g.sessions);
+  for (const g of groups || []) if (!(skipCollapsed && g.collapsed)) out.push(...g.sessions);
   return out;
 }
 
@@ -120,13 +189,29 @@ function deskContainmentChip(s, boxRuntime) {
   return { text: t.text, tone: t.tone === "danger" ? "host" : "box", title: t.title };
 }
 
+const DESK_CLONE_TITLE = "Contained: runs in a box on a private copy of the repo.";
+
 // rowChip: the ONE chip on a sidebar row. An open write window outranks the
 // tier because it is the fact a reader must not miss. null when there is
-// nothing to show (an exited session that is not elevated).
+// nothing to show (an exited session that is not elevated). A tier chip names
+// its glyph (icon: box, clone or host); a boxed session that has a clone_of is
+// a clone, and says what that means. The write chip has no glyph.
 function rowChip(s, nowMs, boxRuntime) {
   if (sessionElevated(s, nowMs)) return { text: "write", tone: "write" };
   const c = deskContainmentChip(s, boxRuntime);
-  return c ? { text: c.text, tone: c.tone } : null;
+  if (!c) return null;
+  if (c.tone === "host") return { text: c.text, tone: c.tone, icon: "host" };
+  if (s && s.clone_of) return { text: "clone", tone: c.tone, icon: "clone", title: DESK_CLONE_TITLE };
+  return { text: c.text, tone: c.tone, icon: "box" };
+}
+
+// deskRowKind: which glyph leads a sidebar row. A profile that runs a plain shell gets the terminal
+// (a capability of the profile, looked up by the session's agent); a session whose view says it is a
+// Claude one gets the mark. Identity for an icon, never a gate. null: no glyph.
+function deskRowKind(s, profile) {
+  if (deskDep("spawnIsShellProfile")(profile)) return { kind: "shell", title: deskBaseName(profile.bin) + " shell" };
+  if (deskDep("claudeKindOf")(s)) return { kind: "claude", title: "Claude Code session" };
+  return null;
 }
 
 // rowSubline: the row's second line. What the session needs, in amber, when it
@@ -472,6 +557,45 @@ function writeRecent(storage, list) {
   } catch (_) { /* a convenience, not state */ }
 }
 
+// deskWsHeaderSig: the repaint key of a group header. The dots move it only
+// while they are drawn (collapsed): a rebuild under the pointer eats a click
+// (renderRail48's note), so an open group's header must not churn with a dot.
+function deskWsHeaderSig(it) {
+  return JSON.stringify(["wsh", it.key, it.label, it.path, it.count, it.waiting, !!it.collapsed, it.collapsed ? it.dots : []]);
+}
+
+const DESK_WS_COLLAPSED_KEY = "agent-box:wsCollapsed";
+const DESK_WS_COLLAPSED_CAP = 500;
+
+// wsCollapsedRead / wsCollapsedWrite: the collapsed groups' keys in localStorage,
+// {"v":1,"keys":[...]}. Like the recent list it is a convenience: a wrong
+// version, bad JSON or a blocked storage reads as nothing collapsed, a failed
+// write is dropped. A read keeps the newest CAP keys, as treestate.js does.
+function wsCollapsedRead(storage) {
+  try {
+    const v = JSON.parse(storage.getItem(DESK_WS_COLLAPSED_KEY));
+    if (!v || v.v !== 1 || !Array.isArray(v.keys)) return new Set();
+    return new Set(v.keys.filter((k) => typeof k === "string").slice(-DESK_WS_COLLAPSED_CAP));
+  } catch (_) {
+    return new Set();
+  }
+}
+function wsCollapsedWrite(storage, set) {
+  try {
+    storage.setItem(DESK_WS_COLLAPSED_KEY, JSON.stringify({ v: 1, keys: [...set] }));
+  } catch (_) { /* a convenience, not state */ }
+}
+
+// wsCollapsedToggle: flips `key` in the set (it is mutated) and says whether it
+// is now collapsed. A new key evicts the oldest past the cap (insertion order,
+// as treestate.js addExpanded). "" (Other) is a valid key.
+function wsCollapsedToggle(set, key) {
+  if (set.delete(key)) return false;
+  set.add(key);
+  if (set.size > DESK_WS_COLLAPSED_CAP) set.delete(set.values().next().value);
+  return true;
+}
+
 // bootFlags: what boot reads from the legacy localStorage keys, decided once so
 // the desktop rules are testable. The keys predate the desktop shell and are not
 // renamed (spec 7): on desktop the rail is never shown (Access is a pane view;
@@ -526,6 +650,6 @@ function paneTabsClass(defs) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline, bashCommand,
+  module.exports = { deskWsLabels, deskWsGroups, deskWsHeaderSig, wsCollapsedRead, wsCollapsedWrite, wsCollapsedToggle, DESK_WS_COLLAPSED_KEY, DESK_WS_COLLAPSED_CAP, deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, deskRowKind, DESK_CLONE_TITLE, rowSubline, bashCommand,
     paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneFilesToggle, paneTabsClass, modelLabel, metaUnitsOff };
 }

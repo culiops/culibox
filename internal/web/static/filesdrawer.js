@@ -242,6 +242,19 @@ function drawerShowFile(path, opts) {
   return true;
 }
 
+// dockShowReview: show the session's All changes tab (reviewall.js), opening it as a tab after the active one when it is not open yet,
+// and the section of `path` in it when one is named. Not an ask, like drawerShowFile: nothing is discarded. false when the dock is not
+// on that session.
+function dockShowReview(sid, path) {
+  if (!sid || drawerState.open !== "files" || drawerState.sessionId !== sid) return false;
+  dockCommit(sid, dockOpenReview(dockStateOf(sid), sid));
+  dockShow();
+  const v = dockViewers.get(dockReviewKey(sid));
+  if (v && path && typeof v.scrollTo === "function") v.scrollTo(path);
+  dockTreeFold(); // a view chosen from the column opened off the strip: the column folds again
+  return !!v;
+}
+
 // dockOpenSid: the session whose dock a file lands in when it is opened from outside the tree (openFile, openBoxFile: the
 // palette, a terminal link, the directory picker): the focused pane's session. A focused pane with no session (an empty one)
 // leaves a dock that is open on the session it has (the spec's empty-pane rule), and otherwise there is none (null: a dock
@@ -297,6 +310,13 @@ function dockDropViewer(key) {
 // `restored`: its first read of a file that is gone closes it instead of parking an
 // error on a path that no longer exists. `o` says what this very open asked for.
 function dockMount(sid, tab, o) {
+  if (tab.review) { // the All changes tab (reviewall.js): no file, a view of the Changes list
+    const rv = new ReviewAllTab(sid, { host: drawerToolbarHost });
+    rv.onUpdate = () => drawerPaint(true);
+    dockViewers.set(tab.key, rv);
+    dockViewersSid = sid;
+    return rv;
+  }
   const asked = o.user === tab.key;
   const v = new EditorTab(tab.path, {
     box: tab.box || undefined,
@@ -507,7 +527,7 @@ function dockRender() {
     code: (path) => (typeof gitStatusCodeFor === "function" ? gitStatusCodeFor(path) : ""),
   }), dockStripOn);
   const tab = dockTabsOf(st).find((t) => t.key === st.active) || null;
-  if (!tab) { dockCrumbsPaint([], "", null); return; }
+  if (!tab || tab.review) { dockCrumbsPaint([], "", null); return; } // the All changes tab is no file: no crumbs
   // A box file is in no tree: its crumbs are text, and its path is read from "/".
   const crumbs = crumbsFor(tab.path, tab.box ? null : typeof ftRoot === "function" ? ftRoot() : null);
   const name = typeof drawerSessionName === "function" ? drawerSessionName(sid) : "";
@@ -940,6 +960,8 @@ function drawerPaint(fromViewer) {
   if (typeof dockWatchSync === "function") dockWatchSync();
   // And the poll of the file on screen (editorsync.js): while the dock is on screen, whatever the session is doing.
   if (typeof editorSyncSync === "function") editorSyncSync();
+  // And the All changes tab's section editors: made while the dock is on screen, none once it is not (reviewall.js).
+  if (typeof reviewAllSync === "function") reviewAllSync();
   // And Follow agent listens to the session the dock shows, when it is on for it (editorfollow.js).
   if (typeof editorFollowSync === "function") editorFollowSync();
 }

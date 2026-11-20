@@ -1623,3 +1623,31 @@ func TestProtectedDirsOfIncludesProgramDirs(t *testing.T) {
 		t.Fatalf("a folder holding docker's folder = %q, want a refusal naming a program", reason)
 	}
 }
+
+func TestVMStateWordUnconfirmedIsEmpty(t *testing.T) {
+	for _, c := range []struct {
+		name                 string
+		hasVM, stopped, conf bool
+		want                 string
+	}{
+		{"no VM", false, false, false, ""},
+		{"no VM, stale stopped", false, true, true, ""},
+		{"running", true, false, true, "running"},
+		{"stopped and confirmed", true, true, true, "stopped"},
+		{"stopped but unconfirmed (status unreadable)", true, true, false, ""},
+	} {
+		if got := vmStateWord(c.hasVM, c.stopped, c.conf); got != c.want {
+			t.Errorf("%s: vmStateWord(%v,%v,%v) = %q, want %q", c.name, c.hasVM, c.stopped, c.conf, got, c.want)
+		}
+	}
+}
+
+func TestLinuxLayerVMStateIsEmpty(t *testing.T) {
+	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, t.TempDir(), t.TempDir(), "linux", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.vmStateAnswer(context.Background()); got != "" {
+		t.Fatalf("linux has no VM: state = %q, want empty", got)
+	}
+}

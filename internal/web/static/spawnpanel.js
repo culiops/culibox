@@ -30,12 +30,12 @@ function spawnPanelEl(tag, cls, text) {
 // session is host, whatever the profile says.
 function spawnCurrentTier() {
   if (!boxRuntime) return "host";
-  return segValue($("runtime-seg")) === "host" ? "host" : "box";
+  return spawnWhere().runtime === "host" ? "host" : "box";
 }
 
 // spawnGateInput: what spawnBoxGate reads, from the page's own state.
 function spawnGateInput() {
-  return { profile: currentProfile(), metaLoaded, boxRuntime, boxUnavailableReason, boxDaemonReason, tier: segValue($("runtime-seg")) };
+  return { profile: currentProfile(), metaLoaded, boxRuntime, boxUnavailableReason, boxDaemonReason, tier: spawnWhere().runtime || "" };
 }
 
 // The sentence a blocked submit wrote on the dialog's error line (spawnGateErr), so syncSpawnGate clears it, and only it, once the
@@ -191,7 +191,12 @@ function renderSpawnPlist() {
       touch.append(" ", nh);
     }
     // A long name ends in an ellipsis (desktop.css), so its whole text is the tooltip (frame M4.1's title attributes).
-    const nm = spawnPanelEl("span", "sp-name", p.name);
+    const nm = spawnPanelEl("span", "sp-name");
+    // The kind icon comes first: a terminal for a shell, the Claude mark for a Claude profile, nothing for any other.
+    const kind = profileKind(p);
+    if (kind === "shell") nm.append(svgIcon(SVG_TERMINAL_24, { viewBox: "0 0 24 24", strokeWidth: "2", size: 12 }));
+    else if (kind === "claude") nm.append(claudeMarkSvg(12));
+    nm.append(p.name);
     nm.title = p.name;
     b.append(nm, touch);
     b.onclick = () => spawnPlistPick(p.name);
@@ -244,11 +249,13 @@ function renderSpawnReach() {
     return;
   }
   const acct = !$("spawn-account-row").hidden ? $("spawn-account").value : "";
+  const w = spawnWhere(); // clone is the card's: false drops the copy's rows, true adds Work home, absent (the phone) is the profile's
   const rows = reachRows({
     profile: acct ? Object.assign({}, p, { account: acct }) : p,
     tier: spawnCurrentTier(),
-    cwd: shortPath(getCwd()),
-    cwdFull: getCwd(),
+    clone: w.clone,
+    cwd: shortPath(spawnCwdFor(w)),
+    cwdFull: spawnCwdFor(w),
     meta: { aws_connections: awscEntries, static_tokens: stEntries },
     creds: spawnCreds,
     bundleImports,
@@ -316,8 +323,10 @@ function syncSpawnCopyLine() {
   const line = wmCopyLine(p.clone_of || "", window.HOME_DIR);
   // The suffix is workHomeSuffix's alone; no profile means no line at all.
   const text = line ? line + workHomeSuffix(p, !!(p.clone_of && p.github_write)) : "";
-  el.textContent = text;
-  el.hidden = text === "";
+  // Box · in place edits the repo itself, not a private copy: on the desktop the line has nothing to say. The phone's is as it was.
+  const inPlace = drawerDesktop() && spawnWhere().clone === false;
+  el.textContent = inPlace ? "" : text;
+  el.hidden = inPlace || text === "";
 }
 
 // spawnPanelOpen: the dialog is about to show. Build the list, paint the box from

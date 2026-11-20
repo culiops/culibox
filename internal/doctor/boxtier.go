@@ -51,53 +51,42 @@ func claudeBoxToken(c config.Config, st credref.StoreGetter, acctStore credref.S
 	var locked []string   // agents whose credential failed only because the store is locked
 	var unavailable error // the first Keychain failure met for an agent that found no other credential
 	var unavailableAgents []string
+	// secretAdapter: when the chain cannot be built every name is Absent (the
+	// secret path is skipped); otherwise it maps what the chain resolves.
+	secretAdapter := func(name string) (secretchain.Presence, error) {
+		if rerr != nil {
+			return secretchain.Absent, nil
+		}
+		_, ok, err := res.Resolve(name)
+		if err == nil && !ok {
+			return secretchain.Absent, nil
+		}
+		return presenceOf(err)
+	}
 	boxed := 0
 	for _, a := range c.Agents {
 		if filepath.Base(a.Bin) != "claude" || c.RuntimeFor(a) != config.RuntimeBox {
 			continue
 		}
 		boxed++
-		found, isLocked := false, false
-		var unavail error
-		for _, name := range a.Secrets {
-			if name != "CLAUDE_CODE_OAUTH_TOKEN" && name != "ANTHROPIC_API_KEY" {
-				continue
+		presence, unavail := secretchain.ClaudeBoxCredential(a, secretAdapter, func(name string) (secretchain.Presence, error) {
+			i := slices.IndexFunc(accts, func(x account.Account) bool { return x.Name == name })
+			if acctStore == nil || i < 0 || !accts[i].OwnsStoreToken() {
+				return secretchain.Absent, nil
 			}
-			if rerr == nil {
-				_, ok, err := res.Resolve(name)
-				switch {
-				case err == nil && ok:
-					found = true
-				case errors.Is(err, credref.ErrLocked):
-					isLocked = true
-				case errors.Is(err, secretstore.ErrKeeperUnavailable) && unavail == nil:
-					unavail = err
-				}
-			}
-		}
-		if !found && !isLocked && unavail == nil && a.Account != "" && a.Account != account.Default && acctStore != nil {
-			if i := slices.IndexFunc(accts, func(x account.Account) bool { return x.Name == a.Account }); i >= 0 && accts[i].OwnsStoreToken() {
-				_, err := acctStore.Get(accts[i].TokenSecret)
-				switch {
-				case err == nil:
-					found = true
-				case errors.Is(err, credref.ErrLocked):
-					isLocked = true
-				case errors.Is(err, secretstore.ErrKeeperUnavailable):
-					unavail = err
-				}
-			}
-		}
-		switch {
-		case found:
-		case unavail != nil:
+			_, err := acctStore.Get(accts[i].TokenSecret)
+			return presenceOf(err)
+		})
+		switch presence {
+		case secretchain.Present:
+		case secretchain.StoredUnavailable:
 			// A Keychain failure is neither "locked" nor "missing": the token is
 			// stored but unreadable, and the fix is the Keychain's.
 			unavailableAgents = append(unavailableAgents, a.Name)
 			if unavailable == nil {
 				unavailable = unavail
 			}
-		case isLocked:
+		case secretchain.StoredLocked:
 			locked = append(locked, a.Name)
 		default:
 			missing = append(missing, a.Name)
@@ -118,6 +107,21 @@ func claudeBoxToken(c config.Config, st credref.StoreGetter, acctStore credref.S
 			`Run "culibox init", or paste a setup-token under Settings → Agent accounts and set "account": "<name>" on the claude agent`}, false
 	}
 	return Result{Pass, check, fmt.Sprintf("%d boxed claude agent(s) have a credential", boxed)}, false
+}
+
+// presenceOf maps a read error to a Presence: nil is Present, a locked store is
+// StoredLocked, an unreadable Keychain is StoredUnavailable (with err), anything
+// else Absent.
+func presenceOf(err error) (secretchain.Presence, error) {
+	switch {
+	case err == nil:
+		return secretchain.Present, nil
+	case errors.Is(err, credref.ErrLocked):
+		return secretchain.StoredLocked, nil
+	case errors.Is(err, secretstore.ErrKeeperUnavailable):
+		return secretchain.StoredUnavailable, err
+	}
+	return secretchain.Absent, nil
 }
 
 // boxFacts is everything doctor learned about the box tier. Gathering never

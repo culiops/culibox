@@ -44,6 +44,7 @@ func AllowRules(rootRel string, rewrite func(string) string) []Rule {
 		{Pattern: p("backups"), Why: "part A's pre-upgrade backup (backupProblems checks it)", AllowNew: true},
 		{Pattern: p("backups/**"), Why: "part A's pre-upgrade backup (backupProblems checks it)", AllowNew: true},
 	}
+	rules = append(rules, withName(onboardingRule(), p("accounts/*/claude/.claude.json")))
 	rules = append(rules, db("audit.db", "SQLite: rows are compared (auditDBRows)")...)
 	rules = append(rules, db("analytics.db", "SQLite: compared through the analytics API")...)
 	if rewrite != nil {
@@ -194,6 +195,68 @@ func settingsRule(rewrite func(string) string) Rule {
 			}
 			if b.Mode != a.Mode {
 				return fmt.Errorf("settings.json mode %v -> %v", b.Mode, a.Mode)
+			}
+			return nil
+		},
+	}
+}
+
+// onboardingRule allows a Claude account's .claude.json to appear, or to gain
+// the first-run flag: vN marks the account's onboarding as done. A new file is
+// exactly the seed (the flag and theme "dark", mode 0600). A file vN-1 left
+// there keeps every key it had apart from hasCompletedOnboarding, and gains
+// only that flag, plus theme "dark" when it had no theme.
+func onboardingRule() Rule {
+	decode := func(e *Entry) (map[string]json.RawMessage, error) {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(e.Data, &m); err != nil || m == nil {
+			return nil, fmt.Errorf(".claude.json is not a JSON object: %s", e.Data)
+		}
+		return m, nil
+	}
+	return Rule{
+		Why:      "vN marks Claude Code's first-run setup as done in each Claude account",
+		AllowNew: true,
+		CheckNew: func(a *Entry) error {
+			if a.Type != "file" || a.Mode.Perm() != 0o600 {
+				return fmt.Errorf(".claude.json is %s, want a regular file of mode 0600", a)
+			}
+			after, err := decode(a)
+			if err != nil {
+				return err
+			}
+			if len(after) != 2 || string(after["hasCompletedOnboarding"]) != "true" || string(after["theme"]) != `"dark"` {
+				return fmt.Errorf("a new .claude.json holds more or less than the seed: %s", a.Data)
+			}
+			return nil
+		},
+		Check: func(b, a *Entry) error {
+			before, err := decode(b)
+			if err != nil {
+				return err
+			}
+			after, err := decode(a)
+			if err != nil {
+				return err
+			}
+			if string(after["hasCompletedOnboarding"]) != "true" {
+				return fmt.Errorf(".claude.json after the upgrade lacks hasCompletedOnboarding: %s", a.Data)
+			}
+			for k, v := range before {
+				if k != "hasCompletedOnboarding" && string(after[k]) != string(v) {
+					return fmt.Errorf(".claude.json key %q changed: %s -> %s", k, v, after[k])
+				}
+			}
+			for k, v := range after {
+				if _, had := before[k]; had || k == "hasCompletedOnboarding" {
+					continue
+				}
+				if k != "theme" || string(v) != `"dark"` {
+					return fmt.Errorf(".claude.json gained %q: %s", k, v)
+				}
+			}
+			if b.Mode != a.Mode {
+				return fmt.Errorf(".claude.json mode %v -> %v", b.Mode, a.Mode)
 			}
 			return nil
 		},

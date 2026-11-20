@@ -57,7 +57,7 @@ const FIXTURES = [
 
 // One page: the real helpers, the profiles, and the two functions that draw a profile's touches.
 function page(boxRuntime, metaLoaded = true) {
-  const doc = { createElement: (t) => new N(t) };
+  const doc = { createElement: (t) => new N(t), createElementNS: (ns, t) => new N(t) };
   const els = { "spawn-plist": new N("div"), agent: Object.assign(new N("select"), { value: "bash" }) };
   const ctx = vm.createContext({
     // The server sends a clone's source as an absolute path; window.HOME_DIR is what every other path on the page is
@@ -66,7 +66,7 @@ function page(boxRuntime, metaLoaded = true) {
     $: (id) => els[id], notHomeLabel: () => "", notHomeTitle: () => "", openSpawnDialog: () => {},
     metaLoaded,
   });
-  for (const f of ["fsops.js", "profileview.js", "spawnpreview.js", "spawnpanel.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
+  for (const f of ["fsops.js", "profileview.js", "svgicon.js", "claudemark.js", "spawnpreview.js", "spawnpanel.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   // The panel's own helpers that need more DOM than this fake has; the rows themselves are the real ones.
   vm.runInContext("spawnPanelOn = () => true; spawnPlistFilter = () => {};", ctx);
   const names = ["emptyEl", "emptyNoneEl", "emptyStateKey"];
@@ -123,43 +123,78 @@ test("before /api/meta answers a box profile is not called 'host · not containe
     assert.strictEqual(r.touch, dialog[r.name], r.name + ": the same words in both");
   }
   const by = Object.fromEntries(rows.map((r) => [r.name, r.touch]));
-  assert.strictEqual(by["aws-ops"], "box · aws culipulse-prod, sandbox · gh culiops");
-  assert.strictEqual(by["bash"], "box · no credentials");
-  assert.strictEqual(by["agent-box"], "box · private copy of ~/culiops-agent-box");
+  assert.strictEqual(by["aws-ops"], "aws culipulse-prod, sandbox · gh culiops");
+  assert.strictEqual(by["bash"], "no credentials");
+  assert.strictEqual(by["agent-box"], "private copy of ~/culiops-agent-box");
   // A profile that is host by its own setting is still host before meta.
-  assert.strictEqual(by["claude"], "host · not contained");
-  assert.strictEqual(by["hostbash"], "host · zsh");
-  for (const n of ["aws-ops", "bash", "agent-box", "elsewhere", "tokens"]) assert.notStrictEqual(by[n], "host · not contained", n);
+  assert.strictEqual(by["claude"], "no credentials");
+  assert.strictEqual(by["hostbash"], "no credentials");
+  for (const n of ["aws-ops", "bash", "agent-box", "elsewhere", "tokens"]) assert.notStrictEqual(by[n], "needs a box · unavailable", n);
 });
 
 test("after /api/meta answers, the same page reads as before the fix: a host-only machine reads every profile as host, a boxed one keeps box", () => {
   const hostOnly = emptyRows(page("", true), ["aws-ops", "bash", "claude"]);
-  assert.deepStrictEqual(hostOnly.map((r) => r.touch), ["host · not contained", "host · bash", "host · not contained"]);
+  assert.deepStrictEqual(hostOnly.map((r) => r.touch), ["aws culipulse-prod, sandbox · gh culiops", "no credentials", "no credentials"]);
   const boxed = emptyRows(page("sysbox-runc", true), ["aws-ops", "bash", "claude"]);
-  assert.deepStrictEqual(boxed.map((r) => r.touch), ["box · aws culipulse-prod, sandbox · gh culiops", "box · no credentials", "host · not contained"]);
+  assert.deepStrictEqual(boxed.map((r) => r.touch), ["aws culipulse-prod, sandbox · gh culiops", "no credentials", "no credentials"]);
 });
 
 test("the empty state repaints when meta answers on a host-only machine (the key reads metaLoaded and the touch line)", () => {
   const m = { kind: "none", profiles: ["aws-ops"] };
   const pre = page("", false), post = page("", true);
   assert.notStrictEqual(pre.ctx.emptyStateKey(m), post.ctx.emptyStateKey(m));
-  assert.match(pre.ctx.emptyStateKey(m), /box · aws/);
-  assert.match(post.ctx.emptyStateKey(m), /host · not contained/);
+  assert.match(pre.ctx.emptyStateKey(m), /"none",false,/);
+  assert.match(post.ctx.emptyStateKey(m), /"none",true,/);
+});
+
+// The key must carry the touch line itself: for a profile that asks for a box, the line changes when meta answers "no box
+// layer" (credentials before, "needs a box · unavailable" after), so a key without the touch line would fail here.
+test("the empty state key carries the touch line, which changes when meta answers for a profile that needs a box", () => {
+  const needsBox = { name: "nb", runtime: "box", runtime_asked: "box", bin: "claude", claude: true, aws_connections: ["staging"] };
+  const m = { kind: "none", profiles: ["nb"] };
+  const pre = page("", false), post = page("", true);
+  pre.ctx.profiles = [needsBox];
+  post.ctx.profiles = [needsBox];
+  assert.strictEqual(pre.ctx.profileTouchLine(needsBox, undefined), "aws staging");
+  assert.strictEqual(post.ctx.profileTouchLine(needsBox, ""), "needs a box · unavailable");
+  assert.ok(pre.ctx.emptyStateKey(m).includes('["nb","aws staging"]'), pre.ctx.emptyStateKey(m));
+  assert.ok(post.ctx.emptyStateKey(m).includes('["nb","needs a box · unavailable"]'), post.ctx.emptyStateKey(m));
 });
 
 test("the touches line is the dialog's, not the old 'binary · tier · workspace' one", () => {
   const pg = page("sysbox-runc");
   const rows = emptyRows(pg, ["aws-ops", "agent-box", "claude"]);
-  assert.deepStrictEqual(rows.map((r) => r.touch), ["box · aws culipulse-prod, sandbox · gh culiops", "box · private copy of ~/culiops-agent-box", "host · not contained"]);
+  assert.deepStrictEqual(rows.map((r) => r.touch), ["aws culipulse-prod, sandbox · gh culiops", "private copy of ~/culiops-agent-box", "no credentials"]);
 });
 
 test("a private copy's source is written with ~ for the home prefix in the empty state and the dialog list alike, and a path outside home is left whole", () => {
   const pg = page("sysbox-runc");
-  const want = { "agent-box": "box · private copy of ~/culiops-agent-box", elsewhere: "box · private copy of /srv/shared/api" };
+  const want = { "agent-box": "private copy of ~/culiops-agent-box", elsewhere: "private copy of /srv/shared/api" };
   const rows = emptyRows(pg, ["agent-box", "elsewhere"]);
   assert.deepStrictEqual(Object.fromEntries(rows.map((r) => [r.name, r.touch])), want);
   const dialog = dialogTouches(pg);
   for (const k of Object.keys(want)) assert.strictEqual(dialog[k], want[k], k + ": New session list");
+});
+
+test("a profile row's name starts with its kind icon: a terminal for a shell, the Claude mark for Claude, none for any other", () => {
+  const pg = page("sysbox-runc");
+  pg.ctx.profiles = [{ name: "bash", bin: "/bin/bash" }, { name: "claude", bin: "claude", claude: true }, { name: "py", bin: "python" }];
+  pg.ctx.renderSpawnPlist();
+  const nameOf = (n) => pg.els["spawn-plist"].find("sp-item").find((r) => r.dataset.name === n).find("sp-name")[0];
+  const sh = nameOf("bash");
+  assert.strictEqual(sh.children[0].tag, "svg");
+  assert.strictEqual(sh.children[0].attrs.stroke, "currentColor");
+  assert.strictEqual(sh.children[0].attrs.width, "12");
+  assert.strictEqual(sh.children[0].children[0].tag, "polyline");
+  assert.strictEqual(sh.children[1].textContent, "bash", "the name text follows the icon");
+  const cl = nameOf("claude");
+  assert.strictEqual(cl.children[0].tag, "svg");
+  assert.strictEqual(cl.children[0].attrs.fill, "currentColor");
+  assert.strictEqual(cl.children[0].children[0].tag, "path");
+  assert.strictEqual(cl.textContent, "claude");
+  const py = nameOf("py");
+  assert.strictEqual(py.children.length, 1, "no icon, just the text");
+  assert.strictEqual(py.textContent, "py");
 });
 
 test("each profile row's name carries its full name as the tooltip (a long one ends in an ellipsis, G9)", () => {

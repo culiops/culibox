@@ -572,15 +572,6 @@
     padding: 1px 6px; border-radius: var(--r-chip); white-space: nowrap;
   }
   #side-version[hidden], #side-env[hidden] { display: none; }
-  .side-ctl { display: flex; align-items: center; gap: 4px; }
-  .side-fill { flex: 1; }
-  #side-top .layouts { gap: 3px; }
-  #side-top .layouts button {
-    min-width: 26px; height: 24px; padding: 0 7px; font: 500 var(--t-sm) var(--font-ui); line-height: 1;
-    background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-ctl);
-  }
-  #side-top .layouts button:hover { color: var(--fg); background: var(--raise); }
-  #side-top .layouts button.active { color: var(--accent); background: var(--raise); border-color: var(--accent); }
   /* #side-palette (a drawn magnifier, 14px: the ⌕ glyph is ~7px in fallback fonts) and #side-collapse
      (the « text, which reads) are the kit's .btn .btn-ghost .btn-icon .btn-sm in index.html (m1-1):
      their look is the kit's, not ours. */
@@ -593,6 +584,22 @@
   /* New session is the sidebar's own .pbtn, sized like the kit's .btn: 28px high (--h-ctl), the full width of
      the sidebar's 16px padding (m1-1). */
   #side-new { height: var(--h-ctl); padding: 0 12px; }
+  /* #340 S6 (mockups t1, t2): New session shares its row with the layout button (sidechrome.js), the palette
+     and «. The layout menu is the kit's .menu, in flow under the button; the kit draws its surface. #sidebar
+     clips (overflow: hidden), so the menu is placed against the whole row, right-aligned under « and never
+     wider than the row (measured: against the 24px button it ran past the sidebar's left edge). app.css's
+     fixed 232px .menu width is reset to the content's. */
+  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; position: relative; }
+  /* The label is centred, so the 2px side padding only shows at the 200px sidebar, where New session gets 85px for its
+     80px label (measured); the ellipsis is a guard for a wider fallback font, never a two-line button. */
+  #side-top .xnewrow #side-new { flex: 1; min-width: 0; margin-right: 4px; white-space: nowrap; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; }
+  #side-top .xlay-wrap { display: inline-flex; }
+  #side-top .xlay svg { display: block; }
+  #side-top .xlay-wrap > .menu.xmenu:has(> .menu-item) { position: absolute; top: calc(100% + 4px); right: 0; z-index: 50; width: max-content; min-width: min(180px, 100%); max-width: 100%; }
+  #side-top .xmenu .menu-item.on { color: var(--fg); }
+  #side-top .xmenu .menu-icon svg { color: var(--muted); }
+  /* The tick is a menuIconSvg outside a .menu-icon slot, which is what sizes the kit's icons. */
+  #side-top .xmenu .menu-kbd svg { display: block; width: 14px; height: 14px; }
 
   /* --- legacy layout keys (spec 7) ---------------------------------------- */
   /* agent-box:panesCollapsed (pre-paint html classes) and agent-box:sidebarSplit
@@ -642,12 +649,16 @@
      shrink and ellipsize before the label does. */
   #limits-side .mtr .pc[hidden] { display: none; }
   #limits-side .mtr .limit { width: auto; flex: 0 1 auto; color: var(--fg); font-weight: var(--w-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .side-stats { display: flex; align-items: baseline; gap: 8px; font-size: var(--t-sm); color: var(--muted); }
-  #side-cost { font-variant-numeric: tabular-nums; }
-  #side-cost[hidden] { display: none; }
-  /* With no cost and no elevated window the row is empty: no row, so no 8px gap above the links. */
-  .side-stats:not(:has(> :not([hidden]))) { display: none; }
-  #side-elevated { margin-left: auto; font-variant-numeric: tabular-nums; }
+  /* #340 S6 (mockups t1, t3): the cost sits on the links line, "≈ $454 today" with a dotted underline that
+     says it has a tooltip. When both do not fit (a narrow sidebar, a long amount) the line wraps: the cost
+     keeps its own line above the links and is never cut. With the cost hidden the links keep today's place. */
+  #side-foot .xlinks { display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 2px; font-size: var(--t-sm); }
+  #side-foot .xlinks > .side-links { margin: 0 -8px 0 auto; }
+  #side-foot .xcost { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; text-decoration: underline dotted var(--faint); text-underline-offset: 3px; cursor: help; }
+  #side-foot .xcost[hidden] { display: none; }
+  #side-foot .xcost[hidden] + .side-links { margin-left: -8px; }
+  /* The elevated window has its own row, shown only while one is open: 12px --muted like #side-store. */
+  #side-elevated { font-size: var(--t-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
   #side-elevated[hidden] { display: none; }
   #side-elevated.hot { color: var(--red); font-weight: var(--w-regular); }
   /* F77 (#174): "Store locks in 42 m", painted only in the store's last hour (paintSideStore, store.js).
@@ -708,7 +719,7 @@
   #store-banner-slot .storeerr:empty { display: none; }
   #store-banner-slot .storeform .btn { align-self: flex-start; }
   /* Can't reach / signed out (M8.6, M8.6b): the rows are the last-known list. Groups and order stay; every dot is hollow, the
-     names are --muted (the frame's .m8-stale), and the amber goes: the Needs you label and an ask's sub-line read as neutral. A
+     names are --muted (the frame's .m8-stale), and the amber goes: a workspace header's waiting pip and an ask's sub-line read as neutral. A
      write window still open keeps its red ring around the hollow dot (R9). Muted text, not opacity, so it stays above 4.5:1. */
   #sessions.sess-stale .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
   #sessions.sess-stale .dot.is-elevated { box-shadow: inset 0 0 0 1.5px var(--muted), 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red); }
@@ -733,17 +744,49 @@
 
   /* --- session list: grouped compact rows (spec 5.2) ---------------------- */
   #sessions { padding: 0 8px 8px; }
-  /* A group header is `li.grp.grp-label`: the kit's .grp-label draws the type
-     (uppercase, muted; .is-needs makes Needs you amber and nothing else), .grp
-     only the sidebar's spacing (12px above, 4px below, the label's text on the rows' dot edge,
-     16px from the sidebar's edge: m1-1). "Done · your turn" is as neutral as Running. */
+  /* The sidebar's group header is `li.wsh`, the workspace header below. The old `li.grp.grp-label` status header
+     is gone from the desktop list; its rules stay (tests pin them): .grp-label is the kit's type (uppercase, muted;
+     .is-needs amber), .grp only the spacing (12px above, 4px below, the label's text on the rows' dot edge). */
   .grp { list-style: none; padding: 12px 8px 4px; }
+  /* A workspace group header (#340 S5, the mockup's .wsh): a 28px row, the toggle button takes the room and the amber
+     pip (and the "+" of a later task) never shrink. The name is as wide as its text (the count sits right after it) and
+     ellipsizes when short of room; the dots give up their room first (flex-shrink 1000), and the toggle clips, so at the
+     sidebar's 200px minimum nothing inside it can paint over the pip or the "+". */
+  #sessions .wsh { list-style: none; display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px 0 4px; margin-top: 8px; border-radius: var(--r-chip); }
+  #sessions .wsh:first-child { margin-top: 4px; }
+  #sessions .wsh:hover { background: var(--hover); }
+  #sessions .wsh .wtog {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 100%; padding: 0; border: 0; background: transparent;
+    font: inherit; font-size: var(--t-sm); font-weight: var(--w-semibold); color: var(--fg); text-align: left; cursor: pointer;
+    overflow: hidden;
+  }
+  #sessions .wsh .wcv, #sessions .wsh .wf { flex: none; display: inline-flex; color: var(--muted); }
+  #sessions .wsh .wname { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sessions .wsh .wcount { flex: none; color: var(--muted); font-weight: var(--w-regular); font-variant-numeric: tabular-nums; }
+  #sessions .wsh .wdots { display: inline-flex; gap: 3px; margin-left: 2px; flex: 0 1000 auto; min-width: 0; overflow: hidden; }
+  #sessions .wsh .wdot { flex: none; width: 6px; height: 6px; margin-top: 0; }
+  #sessions .wsh .wpip {
+    flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; height: 18px; border-radius: var(--r-chip);
+    color: var(--amber); background: var(--amber-tint); font-size: var(--t-xs); font-weight: var(--w-semibold);
+  }
+  #sessions .wsh .wpip .dot { margin-top: 0; }
+  /* The + (the mockup's .wplus): hidden until the header is hovered or holds focus, then 22px square. It never shrinks. */
+  #sessions .wsh .wplus {
+    flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0;
+    border-radius: var(--r-chip); background: transparent; color: var(--muted); cursor: pointer; opacity: 0;
+  }
+  #sessions .wsh:hover .wplus, #sessions .wsh:focus-within .wplus { opacity: 1; }
+  #sessions .wsh .wplus:hover { background: var(--line); color: var(--fg); }
+  /* A stale list drops its amber, as the Needs you label did (above). */
+  #sessions.sess-stale .wsh .wpip { color: var(--muted); background: var(--raise); }
   /* A row is 6px + the 20px name line + the 18px sub-line + 6px = 50px (the frame's .srow), the dot
      10px before the name. */
   #sessions .drow {
     position: relative; gap: 10px; align-items: flex-start; padding: 6px 8px; margin-bottom: 1px;
     border: 0; border-radius: var(--r-chip); background: transparent;
   }
+  /* A row under a workspace header is indented 14px; a nested shell 32px (the mockup's by-ws rows). */
+  #sessions .drow:not(.nested) { padding-left: 14px; }
   #sessions .drow:hover { background: var(--hover); } /* half a step: quieter than the selected row's --raise */
   #sessions .drow.sel { background: var(--raise); }
   /* Open in some pane (not necessarily the focused one): a 2px bar on the sidebar's own edge (the
@@ -761,6 +804,11 @@
   .dot.is-elevated.watching { outline: 0; box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red), 0 0 0 4.5px var(--panel), 0 0 0 6.5px var(--fg); }
   #sessions .drow .sname { gap: 6px; font-size: var(--t-md); line-height: var(--lh-md); }
   #sessions .drow .nm { flex: 1; min-width: 0; color: var(--fg); }
+  /* The kind icon before the name (terminal or the Claude mark). The sub-line starts under the name: 13px of icon plus
+     .sname's 6px gap. */
+  #sessions .drow .sname .ak { flex: none; display: inline-flex; color: var(--muted); }
+  #sessions .drow.nested .ak svg { width: 12px; height: 12px; }
+  #sessions .drow:not(.nested):has(.ak) .sub { padding-left: 19px; }
   #sessions .drow:not(.nested) .nm { font-weight: var(--w-medium); line-height: var(--lh-md); }
   #sessions .drow .bdg { flex: none; }
   /* One chip. Neutral: box is a raised tile, host adds a 1px outline, and only
@@ -775,6 +823,10 @@
   /* The kit's .chip-write, as the pane header's write chip. */
   .dchip.write { color: var(--red); background: var(--red-tint); box-shadow: inset 0 0 0 1px rgba(240,106,106,.45); font-family: var(--font-mono); font-weight: var(--w-semibold); }
   #sessions .drow:hover .dchip.box { background: var(--line); }
+  /* A tier chip is its glyph, then its word. */
+  #sessions .dchip.tchip { display: inline-flex; align-items: center; gap: 3px; }
+  #sessions .dchip .tchip-i { flex: none; }
+  #sessions .dchip.host .tchip-i { color: var(--fg); }
   /* The ⋯ takes no room until the row is hovered or something in it is
      focused; it stays tabbable so a keyboard user reaches it. Its look is the kit's .btn .btn-ghost
      .btn-icon .btn-sm (24px, --t-sm: the frames' .row-menu) from paintCompactRow; what is here is the
@@ -793,6 +845,7 @@
      keep it visible (#12). Nested in the desktop block on purpose. */
   @media (hover: none) {
     #sessions .drow .kbtn { width: var(--h-sm); opacity: 1; }
+    #sessions .wsh .wplus { opacity: 1; }
   }
   #sessions .drow .kbtn:hover { background: var(--line); color: var(--fg); }
   /* The kit's pressed look (.btn[aria-pressed="true"]): a menu button is expanded, not pressed, so it says so with aria-expanded. */
@@ -806,7 +859,7 @@
   /* A companion shell under its parent (v5-3): "↳ shell N" + the chip, indented,
      one line, no sub-line. The status dot is the shell's own, smaller than a
      session's so the row reads as a child. */
-  #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 26px; }
+  #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 32px; }
   #sessions .drow .nest-arrow {
     flex: none; width: 9px; font: 400 var(--t-sm)/var(--lh-md) var(--font-ui); color: var(--muted); text-align: center;
   }
@@ -1274,13 +1327,14 @@
     border-bottom: 1px solid var(--line);
   }
   #dock-changes[hidden], .dk-branch[hidden], .dk-chg-note[hidden], .dk-legend[hidden], .dk-review[hidden] { display: none; }
-  .dk-chg-head { flex: none; display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; min-width: 0; }
+  /* The header wraps rather than cut a word: in a narrow explorer "reviewed n of m" stays whole and Review drops to a second row. */
+  .dk-chg-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; row-gap: 0; min-height: 28px; padding: 0 10px; min-width: 0; }
   .dk-chg-title {
     flex: none; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
     letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg);
   }
-  .dk-chg-sub { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
-  .dk-review { flex: none; font-size: var(--t-sm); line-height: var(--lh-sm); }
+  .dk-chg-sub { flex: 1 1 auto; min-width: max-content; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .dk-review { flex: none; margin-left: auto; font-size: var(--t-sm); line-height: var(--lh-sm); }
   .dk-scope { flex: none; align-self: flex-start; margin: 0 10px 6px; }
   .dk-branch {
     flex: none; display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 10px 4px; min-width: 0; white-space: nowrap;
@@ -1290,7 +1344,7 @@
   .dk-br-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; color: var(--fg); }
   .dk-br-sep { flex: none; }
   .dk-chg-note { flex: none; margin: 0; padding: 2px 10px 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
-  .dk-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
+  .dk-list { container: dklist / inline-size; flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
   /* One changed file: the type icon, the name, its folder (the part that gives way), the counts and the letter. The name keeps
      its width and the folder takes what is left. The 2px bar on the left edge is the session bar, the one the tree rows wear. */
   .dk-row {
@@ -1305,7 +1359,22 @@
   .dk-ct { flex: none; display: inline-flex; gap: 4px; font: var(--w-medium) var(--t-xs)/1 var(--font-mono); color: var(--muted); }
   .dk-add { color: var(--ok); }
   .dk-del { color: var(--danger); }
+  /* The review loop's marks on a row (dockchanges.js): the circle at the left is filled green with a tick once the file is reviewed
+     (and while the mark still stands), and the chip counts the notes waiting to be sent. */
+  .dk-ck { flex: none; box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--faint); display: grid; place-items: center; }
+  .dk-ck-done { background: var(--ok); border-color: var(--ok); }
+  .dk-ck-done::after { content: ""; width: 6px; height: 3px; border: solid var(--bg); border-width: 0 0 1.5px 1.5px; transform: rotate(-45deg) translate(0, -1px); }
+  .dk-nt { flex: none; padding: 0 5px; border-radius: 7px; background: var(--accent-tint); color: var(--accent); font: var(--w-semibold) var(--t-xs)/14px var(--font-ui); }
   .dk-row .dk-st { min-width: 12px; text-align: center; }
+  /* A narrow list gives the file name priority: the notes chip keeps only its number (the words are in the row's label and title),
+     and below that the counts go too (they are in the label and title as well). */
+  @container dklist (max-width: 300px) {
+    .dk-nt { font-size: 0; line-height: 14px; }
+    .dk-nt::before { content: attr(data-n); font: var(--w-semibold) var(--t-xs)/14px var(--font-ui); }
+  }
+  @container dklist (max-width: 240px) {
+    .dk-row .dk-ct { display: none; }
+  }
   .dk-more { padding: 3px 10px; font-size: var(--t-sm); color: var(--muted); }
   .dk-legend { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 10px 8px 12px; font-size: var(--t-xs); line-height: var(--lh-xs); color: var(--muted); }
   .dk-legend i { flex: none; width: 2px; height: 10px; border-radius: 1px; background: var(--accent); }
@@ -1435,10 +1504,44 @@
   .dk-conflict-msg { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; color: var(--fg); unicode-bidi: isolate; }
   .dk-conflict-msg b { font-weight: var(--w-semibold); }
   .dk-conflict-acts { flex: none; display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  /* The review bar (reviewbar.js, mockup B2): first in a dock editor while notes wait. --accent-tint, like the mockup; the sentence takes the
+     room and is cut with an ellipsis, the buttons wrap under it when the dock is narrow. The Paste button's label is "Paste to <session>",
+     cut when the name is long (the title has it whole). */
+  .dk-rbar {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 12px; min-width: 0;
+    background: var(--accent-tint); border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line)); font: var(--t-md)/var(--lh-md) var(--font-ui);
+  }
+  .dk-rbar[hidden] { display: none; }
+  .dk-rbar-t { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+  .dk-rbar-t b { font-weight: var(--w-semibold); }
+  .dk-rbar-sub { color: var(--muted); }
+  .dk-rbar-r { flex: none; display: flex; align-items: center; gap: 8px; max-width: 100%; }
+  .dk-rbar-r > [hidden] { display: none; }
+  .dk-rbar-paste { min-width: 0; }
+  .dk-rbar-paste > span { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dk-rbar-sent[aria-pressed="true"] { background: var(--raise); box-shadow: inset 0 0 0 1px var(--accent); color: var(--fg); }
+  .dk-rbar-pre {
+    margin: 0 0 8px; padding: 10px 12px; max-height: 50vh; overflow: auto; background: var(--bg); border: 1px solid var(--line);
+    border-radius: var(--r-ctl); font: var(--t-sm)/var(--lh-sm) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg);
+  }
+  .dk-rbar-copyrow { display: flex; justify-content: flex-end; }
   /* Compare (the disk beside the buffer): a line saying what is shown and how to leave, then the diff, in place of the editor. */
   .dk-ed-cmp { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
   .dk-cmp-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 10px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
   .dk-cmp-body { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+  /* The Changes view's header row (editorreview.js, mockup B2): what is compared on the left (the name gives way first), and on the
+     right "Change N of M" with prev / next and the Mark reviewed toggle. In a narrow dock the right group drops under the left one. */
+  .dk-dhead { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; min-height: 30px; padding: 2px 12px; box-sizing: border-box; background: var(--bg); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui); }
+  .dk-dh-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: var(--w-medium); unicode-bidi: isolate; }
+  .dk-dh-cmp { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dk-dh-ct[hidden] { display: none; }
+  .dk-dh-r { flex: none; display: flex; align-items: center; gap: 4px; margin-left: auto; white-space: nowrap; }
+  .dk-dh-pos { margin-right: 4px; }
+  .dk-dh-kbd { margin: 0 6px 0 2px; font-family: var(--font-mono); font-size: var(--t-xs); color: var(--muted); }
+  .dk-dh-step { width: 22px; height: 22px; padding: 0; }
+  .dk-dh-mark { height: 22px; padding: 0 10px; }
+  .dk-dh-mark[aria-pressed="true"] { color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); }
+  .dk-dh-mark[aria-pressed="true"]::before { content: ""; width: 8px; height: 4px; margin-right: 6px; border: solid currentColor; border-width: 0 0 1.5px 1.5px; transform: rotate(-45deg) translate(1px, -1px); }
   /* The status bar (mockup B1 .esb): the branch and "Saved" on the left; Ln/Col, indentation, encoding, line ending and language on the
      right. One 24px line that never wraps; what does not fit is cut at the left group, so the right group keeps its words. */
   .dk-sb {
@@ -1481,6 +1584,78 @@
   }
   /* The Changes view (editordiff.js) fills the tab's body, in place of the editor; its header is the compare view's. */
   .dk-ed-body > .dk-ed-cmp { position: absolute; inset: 0; }
+  /* An image's Changes view (imagediff.js): the tab's header row (.dk-dhead, as the text view's), then a scrolling body holding the comparer.
+     Its mode control (.dk-imgmode, the kit's .seg) is centred over the stage. Side by side wraps to one column when the dock is narrow. A
+     picture sits on a faint checkerboard so a transparent one reads as one. Swipe and Onion skin lay the two pictures in the same grid
+     cell; the divider (a slider, role and keys in the script) is a line with a knob, and its hit area is wider than the line. */
+  .dk-imgd-tab { background: var(--bg); }
+  .dk-imgd-tab:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-imgd-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+  .dk-imgd { box-sizing: border-box; min-height: 100%; padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
+  .dk-imgd-bar { flex: none; display: flex; justify-content: center; }
+  .dk-imgd-bar[hidden] { display: none; }
+  .dk-imgmode.seg { flex: none; }
+  .dk-imgd-stage { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); min-width: 0; }
+  .dk-imgd-side { width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-4); align-items: start; }
+  .dk-imgd-fig { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+  .dk-imgd-lab { color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
+  .dk-imgd-frame, .dk-imgd-stack {
+    border: 1px solid var(--line); border-radius: var(--r-ctl); overflow: hidden; background-color: var(--panel);
+    background-image: conic-gradient(var(--bg) 25%, transparent 0 50%, var(--bg) 0 75%, transparent 0); background-size: 16px 16px;
+  }
+  .dk-imgd-frame { display: flex; align-items: center; justify-content: center; min-height: 96px; padding: var(--sp-2); }
+  .dk-imgd-img { display: block; max-width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+  .dk-imgd-cap { color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-mono); font-variant-numeric: tabular-nums; text-align: center; }
+  .dk-imgd-msg { color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui); text-align: center; padding: var(--sp-3); overflow-wrap: anywhere; }
+  .dk-imgd-msg.err { color: var(--red); }
+  .dk-imgd-stack { position: relative; display: grid; width: fit-content; max-width: 100%; touch-action: pan-y; user-select: none; }
+  .dk-imgd-layer { grid-area: 1 / 1; min-width: 0; }
+  .dk-imgd-onion > .dk-imgd-img { grid-area: 1 / 1; justify-self: start; align-self: start; }
+  .dk-imgd-swipe { cursor: ew-resize; }
+  .dk-imgd-div { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); cursor: ew-resize; touch-action: none; }
+  .dk-imgd-div::before { content: ""; position: absolute; top: 0; bottom: 0; left: -9px; right: -9px; }
+  .dk-imgd-div:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); } /* the stage clips an outside outline: a halo along the line */
+  .dk-imgd-knob { position: absolute; top: 50%; left: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; box-sizing: border-box; border-radius: 50%; background: var(--bg); border: 2px solid var(--accent); }
+  .dk-imgd-blend { display: flex; align-items: center; gap: var(--sp-2); width: min(320px, 100%); color: var(--muted); font: var(--t-xs)/var(--lh-xs) var(--font-ui); }
+  .dk-imgd-range { flex: 1; min-width: 0; accent-color: var(--accent); }
+  /* The All changes tab (reviewall.js): the tab's own head (what is compared, the counts, "reviewed n of m"), then one scroll of sections. A
+     section's header is sticky inside its own section, so the file being read keeps its name, its circle and Open at the top. The body is
+     as tall as its diff editor's content (the script sets the height, 1200 px at most) and the editor scrolls inside past that. */
+  .dk-ra-head {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; min-height: 30px; padding: 2px 12px; box-sizing: border-box;
+    background: var(--bg); border-bottom: 1px solid var(--line); color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui);
+  }
+  .dk-ra-title { color: var(--fg); font-weight: var(--w-medium); }
+  .dk-ra-cmp { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
+  .dk-ra-rev { margin-left: auto; white-space: nowrap; }
+  .dk-ra-head [hidden], .dk-sec-h [hidden] { display: none; }
+  .dk-ra-scroll { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; background: var(--bg); }
+  .dk-ra-scroll:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-ra-note { padding-top: 10px; }
+  .dk-ra-more { padding: 10px 12px; }
+  .dk-sec { position: relative; border-bottom: 1px solid var(--line); }
+  .dk-sec-h {
+    position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px 0 4px; box-sizing: border-box;
+    background: var(--panel); border-bottom: 1px solid var(--line); font: var(--t-sm)/var(--lh-sm) var(--font-ui); white-space: nowrap; min-width: 0;
+  }
+  .dk-sec-caret { width: 22px; height: 22px; padding: 0; flex: none; }
+  .dk-sec-caret[aria-expanded="false"] svg { transform: rotate(-90deg); }
+  .dk-sec-ck { position: relative; padding: 0; cursor: pointer; }
+  .dk-sec-ck:not(.dk-ck-done) { background: transparent; }
+  .dk-sec-ck::before { content: ""; position: absolute; inset: -6px; }
+  .dk-sec-ck:hover { border-color: var(--muted); }
+  .dk-sec-ck.dk-ck-done:hover { border-color: var(--ok); }
+  .dk-sec-ck:focus-visible, .dk-sec-caret:focus-visible, .dk-sec-open:focus-visible { outline: var(--focus); outline-offset: 2px; }
+  .dk-sec-h .dk-nm { color: var(--fg); font-weight: var(--w-medium); }
+  .dk-sec-h .dk-st { flex: none; min-width: 12px; text-align: center; }
+  .dk-dh-all { height: 22px; padding: 0 8px; }
+  .dk-sec-open { flex: none; margin-left: auto; height: 22px; padding: 0 10px; }
+  .dk-sec-h .dk-dir { flex: 1 1 0; }
+  /* z-index 0 makes the body a stacking context: Monaco's overview ruler and viewport (z-index inside the editor) stay under the sticky header. */
+  .dk-sec-b { position: relative; z-index: 0; overflow: hidden; min-width: 0; }
+  .dk-sec-b[hidden] { display: none; }
+  .dk-sec-in, .dk-sec-mon { width: 100%; height: 100%; min-width: 0; }
+  .dk-ra-msg { padding: var(--sp-3) var(--sp-4); }
   /* The markdown Preview (editormd.js) fills the body the same way, and is the scroller. The document is the phone's .md-body (app.css),
      given mockup B4's margins: 36px on the left and 28px on the right, 18px above. The pane takes the keyboard (Mod+S, the arrows),
      so its ring sits inside it. */
@@ -1502,6 +1677,35 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); box-shadow: var(--e-pop);
   }
   .dk-selbar-b svg { flex: none; width: 14px; height: 14px; }
+  /* Line notes in the Changes view (editornotes.js, mockup B2). A note is a card (.dk-nz, an overlay widget) over a Monaco view zone that holds
+     its room; .dk-nz-in is what is measured for the room's height, and the card is .dk-note (--panel, 1px --line, 8px). The "+" is a glyph-margin
+     decoration (.dk-note-add) that shows under the pointer. Note text is pre-wrapped and breaks anywhere, so a long token cannot widen
+     the card past the dock. */
+  /* The card is an overlay widget (Monaco's view zone is an empty room under the line, .dk-nz-room), placed by editornotes.js. */
+  .dk-nz-room { pointer-events: none; }
+  .dk-nz { position: absolute; box-sizing: border-box; z-index: 5; }
+  .dk-nz-in { box-sizing: border-box; padding: 6px 16px 8px 12px; }
+  .dk-note { border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); color: var(--fg); font: var(--w-regular) var(--t-md)/var(--lh-md) var(--font-ui); text-align: left; }
+  .dk-note-h { display: flex; align-items: center; gap: 8px; padding: 7px 10px 0; color: var(--muted); font-size: var(--t-sm); }
+  .dk-note-av { flex: none; width: 18px; height: 18px; border-radius: 50%; background: var(--raise); color: var(--fg); font: var(--w-semibold) var(--t-xs)/18px var(--font-ui); text-align: center; }
+  .dk-note-who { flex: none; color: var(--fg); font-weight: var(--w-semibold); }
+  .dk-note-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dk-note-badge { flex: none; padding: 0 6px; border: 1px solid var(--amber); border-radius: var(--r-chip); color: var(--amber); font-size: var(--t-xs); line-height: var(--lh-xs); }
+  .dk-note-badge-sent { border-color: var(--line); color: var(--muted); }
+  .dk-note-act { flex: none; display: flex; gap: 10px; margin-left: auto; }
+  .dk-note-b-act { padding: 0; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+  .dk-note-b-act:hover { color: var(--fg); }
+  .dk-note-b-act:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  .dk-note-q { margin: 4px 10px 0 36px; padding: 0 6px; border-left: 2px solid var(--line); color: var(--muted); font: var(--w-regular) var(--t-sm)/var(--lh-sm) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .dk-note-body { padding: 4px 10px 8px 36px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+  .dk-note-sent .dk-note-body { color: var(--muted); }
+  .dk-note-edit { padding: 8px 10px; }
+  .dk-note-in { display: block; box-sizing: border-box; width: 100%; resize: none; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); color: var(--fg); font: var(--w-regular) var(--t-md)/var(--lh-md) var(--font-ui); }
+  .dk-note-in:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .dk-note-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+  .dk-note-hint { margin-right: auto; color: var(--muted); font-size: var(--t-xs); }
+  .dk-note-add { cursor: pointer; }
+  .dk-note-add::before { content: "+"; display: block; width: 16px; height: 16px; margin: 1px 0 0 1px; border: 1px solid var(--accent); border-radius: var(--r-chip); box-sizing: border-box; color: var(--accent); font: var(--w-semibold) var(--t-md)/14px var(--font-ui); text-align: center; }
   /* The line a path:line link opened (the read view's .vl-target): a faint band over the line and a bar in its margin. */
   .dk-target { background: color-mix(in srgb, var(--accent) 5%, transparent); }
   .dk-target-m { box-shadow: inset 3px 0 0 var(--accent); }
@@ -2093,6 +2297,10 @@
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
   .sp-touch { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+  /* The kind icon (a terminal or the Claude mark) sits before the name, in the name's own line box. .sp-name stays a block
+     container on purpose: text-overflow: ellipsis does not apply to a flex container, so display:flex here would clip a
+     long name without its "…". The 6px is the gap the frame gives the icon; vertical-align centres it on the x-height. */
+  #spawn-plist .sp-item .sp-name svg { margin-right: 6px; vertical-align: -2px; color: var(--muted); }
 
   /* The right column: 1.55fr and 1fr, 14px between rows and 16px between columns, scrolling inside the body. */
   #spawn {
@@ -2149,6 +2357,35 @@
   #spawn .seg button:hover { color: var(--fg); background: var(--hover); }
   #spawn .seg button.on { background: var(--raise); color: var(--fg); }
   #spawn .seg button.dgr.on { background: var(--red-tint); color: var(--red); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .45); }
+  /* Where it runs (#340 S3): three cards (tierpick.js) in place of the Containment seg. The seg stays in the page, hidden, because the
+     phone's seg is the same control on a narrow screen (spawnWhere reads one or the other); the label reads "Where it runs" here and
+     "Containment" on the phone. The row takes both columns: a card is a sentence, not a button. Classes are tp-prefixed (the mockup's
+     rb/ti2/tn/xdft/td/k/v/why), so they cannot collide in the shared stylesheets. */
+  #spawn #runtime-row > #runtime-seg { display: none; }
+  #spawn #runtime-row .tp-lbl-ph { display: none; }
+  #spawn #runtime-row .tp-lbl { display: inline; }
+  #spawn > #runtime-row { grid-column: 1 / -1; }
+  #spawn #runtime-row > .tierpick { display: flex; flex-direction: column; gap: 6px; }
+  #spawn .tierpick .tp { display: grid; grid-template-columns: 18px 16px minmax(0, 1fr); column-gap: 8px; align-items: start; padding: 9px 12px;
+                         border: 1px solid var(--line); border-radius: var(--r-ctl); background: transparent; color: var(--fg); text-align: left; cursor: pointer; font: inherit; }
+  #spawn .tierpick .tp:hover { background: var(--hover); }
+  #spawn .tierpick .tp.on { border-color: var(--accent); background: var(--raise); }
+  #spawn .tierpick .tp .tp-rb { width: 14px; height: 14px; margin-top: 2px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--faint); }
+  #spawn .tierpick .tp.on .tp-rb { box-shadow: inset 0 0 0 4px var(--accent); }
+  #spawn .tierpick .tp .tp-i { display: flex; margin-top: 2px; color: var(--muted); }
+  #spawn .tierpick .tp .tp-n { font-weight: var(--w-semibold); font-size: var(--t-md); }
+  #spawn .tierpick .tp .tp-n .tp-dflt { font-weight: var(--w-regular); color: var(--muted); font-size: var(--t-xs); margin-left: 6px; }
+  #spawn .tierpick .tp .tp-d { grid-column: 3; display: grid; grid-template-columns: 112px minmax(0, 1fr); column-gap: 10px; row-gap: 1px; margin-top: 4px; font-size: var(--t-sm); }
+  #spawn .tierpick .tp .tp-d .tp-k { color: var(--muted); }
+  #spawn .tierpick .tp .tp-d .tp-v { color: var(--fg); }
+  #spawn .tierpick .tp .tp-d .tp-v b { font-weight: var(--w-semibold); }
+  #spawn .tierpick .tp .tp-d code { font-family: var(--font-mono); font-size: var(--t-xs); }
+  #spawn .tierpick .tp.dis { cursor: not-allowed; opacity: .55; }
+  #spawn .tierpick .tp.dis:hover { background: transparent; }
+  #spawn .tierpick .tp .tp-why, #spawn .tierpick .tp .tp-vm { grid-column: 3; margin-top: 4px; font-size: var(--t-sm); color: var(--fg); }
+  #spawn .tierpick .tp .tp-why { display: flex; gap: 6px; align-items: flex-start; }
+  #spawn .tierpick .tp .tp-why svg { flex: none; margin-top: 3px; color: var(--muted); }
+  #spawn .tierpick .tp .tp-vm { color: var(--muted); }
   /* The host warning (M4.2) is the kit's .elev: a red tint, 8px 12px, a bold red "host" before the sentence. The label is
      drawn here, desktop only, so the phone's box keeps its one sentence, and only while host is the chosen tier: the same
      box also says "<dir> cannot be boxed" on the box tier, which is not a host warning. An empty row would still take a
@@ -2159,7 +2396,7 @@
     color: var(--fg); font-size: var(--t-sm); line-height: var(--lh-md);
   }
   #spawn #spawn-warn-row #runtime-warn[hidden] { display: none; }
-  #spawn:has(#runtime-seg button.dgr.on) #spawn-warn-row #runtime-warn::before { content: "host"; color: var(--red); font-weight: var(--w-semibold); }
+  #spawn:has(#tierpick .tp-host.on) #spawn-warn-row #runtime-warn::before { content: "host"; color: var(--red); font-weight: var(--w-semibold); }
   #spawn-warn-row { margin-top: -4px; }
   #spawn-warn-row:not(:has(> #runtime-warn:not([hidden]))) { display: none; }
   .spawn-lbl-model { display: inline; }
@@ -2168,8 +2405,9 @@
      reach box says the same thing, so it stays hidden here. */
   #tier-explain { display: none !important; }
 
-  /* Fields in the order of the design, two columns: Workspace beside Name, the first message across, Effort beside
-     Containment. Workspace wears .span2 (the phone's one column), which would take the whole row. */
+  /* Fields in the order of the design, two columns: Workspace beside Name, the first message across, then Effort
+     in the left column and, when there is a box layer, Where it runs across both (the cards are sentences; its own grid-column rule
+     above). Workspace wears .span2 (the phone's one column), which would take the whole row. */
   #spawn > #spawn-ws-row { grid-column: auto; }
   /* Boxes unavailable (#142, syncSpawnGate): across the top, above the fields, so it is read before the profile is started. A --bg card
      like the reach box below; the reason line is muted, or red with a red ring while the profile on screen needs a box and Spawn is
@@ -2185,6 +2423,8 @@
   #spawn > #effort-row { order: 4; }
   #spawn > #runtime-row { order: 5; }
   #spawn > #spawn-account-row { order: 6; }
+  #spawn > #spawn-acct-hint:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; order: 6; font-size: var(--t-sm); color: var(--fg); }
+  #spawn > #spawn-acct-hint code { font-family: var(--font-mono); font-size: var(--t-xs); }
   #spawn > #spawn-replies-row { order: 7; }
   #spawn > #spawn-warn-row { order: 8; }
   #spawn > #spawn-adv { order: 9; }
@@ -2276,6 +2516,7 @@
   .sr-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   .sr-v { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
   .sr-path { font-family: var(--font-mono); font-size: var(--t-sm); line-height: var(--lh-sm); }
+  #spawn-reach code { font-family: var(--font-mono); font-size: var(--t-xs); }
   .sr-row.tone-warn .sr-v { color: var(--amber); }
   .sr-prod {
     margin: 0 6px; padding: 0 5px; border: 1px solid var(--red); border-radius: var(--r-chip);
@@ -3459,17 +3700,16 @@
      (the .t.on rule above; no bold-on-transparent parent), and the list is a flex column, 12px in, with no rule line. */
   #page-host > #settings-modal.as-page > #settings-tabs > #pf-navlist { order: 2; gap: 1px; padding: 0 0 4px 12px; }
   #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on + #pf-navlist { display: flex; flex-direction: column; }
-  /* A profile row is a nav row with a 6px gap (`.m2-pitem`): the name grows, then the lock, then the tier chip. */
+  /* A profile row is a nav row with a 6px gap (`.m2-pitem`): the name grows, then the lock, then the `box only` chip, drawn only when Host is blocked for the profile. */
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni { display: flex; align-items: center; gap: 6px; width: 100%; height: 30px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: 400 var(--t-md)/var(--lh-md) var(--font-ui); text-align: left; cursor: pointer; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:hover { background: var(--hover); }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); font-weight: 500; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The tier is the kit chip (§C5 `.chip` + `.chip-box`; a host profile adds `.chip-host`'s faint ring); a chip on the
+  /* `box only` is the kit chip (§C5 `.chip`), drawn only when Host is blocked for the profile; a chip on the
      selected row steps down to --panel, because raise on raise is invisible. */
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 18px; font-weight: 400; white-space: nowrap; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-host { box-shadow: inset 0 0 0 1px var(--faint); }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] .pfv-ni-tier { background: var(--panel); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-boxonly { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 18px; font-weight: 400; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] .pfv-ni-boxonly { background: var(--panel); }
   /* "+ New profile" is the kit .link-add (§C2, §B1.2 `.m2-addp`): accent 12/18, padding 6px 10px, underline on hover. */
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add { height: auto; padding: 6px 10px; justify-content: flex-start; color: var(--accent); font-size: var(--t-sm); line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add:hover { background: transparent; text-decoration: underline; text-underline-offset: 2px; }
@@ -3541,6 +3781,9 @@
   #page-host > #settings-modal.as-page #pfv .pfv-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-nm .pfv-mono { line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-tag { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .55); color: var(--red); font-size: var(--t-xs); font-weight: 600; letter-spacing: .02em; }
+  #page-host > #settings-modal.as-page #pfv .pfv-applies { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; margin-left: 6px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font-size: var(--t-xs); font-weight: 400; letter-spacing: .02em; }
+  /* In a block label (a flex column) the tag would stretch to the 132px column: keep it a chip at the start, flush with the name. */
+  #page-host > #settings-modal.as-page #pfv .pfv-label > .pfv-applies { align-self: flex-start; margin-left: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-miss { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-tnote { margin-top: 12px; font-size: var(--t-sm); color: var(--muted); }
   /* + Add access / + Add folder or domain is the kit's .link-add.t-sm (§C2): 400 12/18, no padding, no radius (the .pfv-link look above is the
@@ -3620,6 +3863,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-card > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-off { cursor: default; }
   #page-host > #settings-modal.as-page #pfv .pfv-off .pfv-card-t { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-check.pfv-off .pfv-check-t { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-check.pfv-off input { cursor: default; }
   #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; line-height: var(--lh-md); }
   #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-chip-word { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 var(--t-sm)/1 var(--font-ui); }

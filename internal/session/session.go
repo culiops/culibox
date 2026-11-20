@@ -35,6 +35,7 @@ import (
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/gitrepo"
 	"github.com/culiops/culibox/internal/launcher"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/sesstoken"
@@ -301,6 +302,14 @@ type EgressResolver interface {
 // nil answer means the profile has no clone_of.
 type CloneResolver interface {
 	CloneFor(agent string) (*config.Clone, error)
+}
+
+// HostBlockResolver is implemented by launchers that know why a profile may not
+// run on the host (config.HostBlock): "" when the host is allowed, else one
+// reason clause. Optional, like CloneResolver: without it only the binding,
+// context-path and clone checks in Spawn guard the host tier.
+type HostBlockResolver interface {
+	HostBlockFor(agent string) (string, error)
 }
 
 // ContextResolver is implemented by launchers that know a profile's
@@ -728,6 +737,12 @@ type Info struct {
 	// re-lists after a spawn and never renders a row from those responses; a
 	// new surface that needs it must go through List or take m.mu itself.
 	Claude bool `json:"claude"`
+	// AgentPrompt is the capability "this session has an agent prompt that
+	// takes a typed message" (launcher.AcceptsPrompt), so the review bar's
+	// Paste can refuse a shell, whose prompt would run the notes as commands
+	// (#352). Not Replyable: that is the remote-reply opt-in. Filled by List
+	// only, like Claude.
+	AgentPrompt bool `json:"agent_prompt,omitempty"`
 	// CostUSD is the summed analytics cost of every conversation this session
 	// has had since spawn. Present only for a claude session whose whole
 	// conversation history is known (costComplete) while a cost source is set:
@@ -802,6 +817,12 @@ type Info struct {
 	// Absent without them, so a plain session's wire shape is unchanged.
 	ContextPaths []string `json:"context_paths,omitempty"`
 	CloneOf      string   `json:"clone_of,omitempty"`
+	// WorkspaceRoot is the repository the session belongs to, so a client can
+	// group sessions by repo: a clone session's CloneOf, else the repo holding its
+	// cwd (a linked worktree reports its main repo), normalised; a shell reports
+	// its parent's. Set once at spawn and at load, never recomputed. Empty outside
+	// a repo ("Other").
+	WorkspaceRoot string `json:"workspace_root,omitempty"`
 	// LockedFiles are the workspace files the box layer keeps locked on the
 	// host while this session's box runs (macOS on a case-insensitive volume,
 	// where the box could otherwise change a guarded file through another
@@ -873,6 +894,8 @@ type Session struct {
 	// Info hands out a copy.
 	ContextPaths []string
 	CloneOf      string
+	// WorkspaceRoot is Info.WorkspaceRoot; immutable after publication.
+	WorkspaceRoot string
 	// LockedFiles is Info.LockedFiles; immutable after publication.
 	LockedFiles []string
 	// Exclusive: this session's box is its own (an elevate binding). Immutable;
@@ -1373,6 +1396,7 @@ func (s *Session) Info() Info {
 	in.Return = s.ret.copy()
 	in.ContextPaths = slices.Clone(s.ContextPaths)
 	in.CloneOf = s.CloneOf
+	in.WorkspaceRoot = s.WorkspaceRoot
 	in.LockedFiles = slices.Clone(s.LockedFiles)
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod,
@@ -1798,6 +1822,21 @@ func (m *Manager) SetBoxes(b Boxes) {
 	m.mu.Unlock()
 }
 
+// refusal is a spawn refusal whose text is the whole message. It reports
+// box.ErrUnboxableWorkspace, so the UI shows it verbatim (writeSpawnErr), without
+// that sentinel's "workspace cannot be contained" prefix, which misleads for a
+// profile setting.
+type refusal string
+
+func (r refusal) Error() string { return string(r) }
+
+func (r refusal) Unwrap() error { return box.ErrUnboxableWorkspace }
+
+// profileRefusal is `profile "<name>": <reason>`.
+func profileRefusal(agent, reason string) error {
+	return refusal(fmt.Sprintf("profile %q: %s", agent, reason))
+}
+
 // runtimeFor resolves the tier for a spawn. Without a tier-aware launcher or a
 // box layer the answer is host — containment is never assumed, only granted,
 // and never silently withdrawn from a request that named it: with no box layer,
@@ -1882,11 +1921,30 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// launcher composes for the tier the session will actually run on. Deciding
 	// it in two places let a host-tier session be built with boxed semantics
 	// (curated env, no login wrap) whenever containment was unavailable.
+	// asked is the tier the spawn itself named. A clone profile reaches the host
+	// only when the user picked Host explicitly, never because it resolved there.
+	asked := spec.Runtime
 	runtime, err := m.runtimeFor(spec)
 	if err != nil {
 		return nil, err
 	}
 	spec.Runtime = runtime
+
+	// A profile the host is closed to (bindings, context paths, box_only) never
+	// runs there, by any route: a per-spawn "host", a host-tier profile, or an
+	// instance with no box layer. ErrUnboxableWorkspace so the UI shows the
+	// reason (writeSpawnErr) rather than "could not start session".
+	if runtime != config.RuntimeBox {
+		if hr, ok := m.launcher.(HostBlockResolver); ok {
+			reason, err := hr.HostBlockFor(spec.Agent)
+			if err != nil {
+				return nil, err
+			}
+			if reason != "" {
+				return nil, profileRefusal(spec.Agent, reason)
+			}
+		}
+	}
 
 	// Resolve the agent binary once, up front: it gates claude-only features
 	// (usage, replies) and feeds the boxed config bundle below. Best-effort —
@@ -1971,7 +2029,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if bs.Any() {
 		kind := bindingKind(bs)
 		if runtime != config.RuntimeBox {
-			return nil, fmt.Errorf("profile %q has %s, so it can only run in a box, never on the host tier", spec.Agent, kind)
+			// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
+			return nil, profileRefusal(spec.Agent, "has "+kind+", so it can only run in a box, never on the host tier")
 		}
 		if brk == nil {
 			return nil, fmt.Errorf("profile %q has %s but the credential broker is not running", spec.Agent, kind)
@@ -2004,6 +2063,28 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 		}
 		cl = c
+	}
+	// The per-spawn choice (spec.Clone) overrides the profile. false: the spawn
+	// treats the profile as if clone_of, clone_share and clone_no_auto_return were
+	// absent, so cl stays nil for every use below (the clone dir and its mounts,
+	// the clone-gated GH_REPO and push rewrite, the guidance, the session's
+	// CloneOf); bindings, egress, context paths and the account are untouched.
+	// true: the profile must have a setup. nil: the profile decides, as before.
+	if spec.Clone != nil {
+		if !*spec.Clone {
+			// Dropping the clone must not be the way a clone profile reaches the
+			// host: the refusal below is skipped once cl is nil, so repeat it here
+			// for a host tier the spawn did not ask for. Restart passes the
+			// recorded runtime, so an in-place host session restarts fine.
+			if cl != nil && runtime != config.RuntimeBox && asked != config.RuntimeHost {
+				return nil, fmt.Errorf("%w: profile %q is a clone-mode profile, so it can only run in a box, never on the host tier",
+					box.ErrUnboxableWorkspace, spec.Agent)
+			}
+			cl = nil
+		} else if cl == nil {
+			// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
+			return nil, profileRefusal(spec.Agent, "this profile has no clone setup")
+		}
 	}
 	// context_paths are read-only mounts of host paths, which only a box has:
 	// a host session reads any path already. The paths are re-validated purely
@@ -2568,6 +2649,14 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 
 	created := time.Now()
 	base := deriveName(spec.Name, spec.Cwd, id)
+	// Once per spawn, before the session is published: cl is the resolved clone
+	// setup (nil after clone:false), so an in-place session of a clone profile
+	// reads its cwd, not the profile's clone_of.
+	cloneOf := ""
+	if cl != nil {
+		cloneOf = cl.Of
+	}
+	wsRoot := m.workspaceRootFor(spec.Cwd, cloneOf, spec.ParentID)
 	m.mu.Lock()
 	// Uniqueness is resolved in the SAME critical section that inserts
 	// m.sessions[id] below, so two concurrent spawns can never both win the
@@ -2606,9 +2695,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Clone = cloneInfo
 	sess.ContextPaths = slices.Clone(ctxPaths)
 	sess.LockedFiles = slices.Clone(lockedFiles)
-	if cl != nil {
-		sess.CloneOf = cl.Of
-	}
+	sess.CloneOf = cloneOf
+	sess.WorkspaceRoot = wsRoot
 	sess.Exclusive = exclusive
 	sess.cwdFormsCache = cwdForms
 	// Only a claude session born here has seen every conversation it will
@@ -2632,11 +2720,54 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
-			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, LockedFiles: slices.Clone(lockedFiles),
+			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, WorkspaceRoot: wsRoot, LockedFiles: slices.Clone(lockedFiles),
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
+}
+
+// workspaceRootOf is the repository a session belongs to: a clone session's
+// clone_of, else the repo holding cwd (gitrepo.WorkspaceRoot reads the
+// filesystem only). Both are normalised, so one repo reached through a symlink
+// is one group. "" means no repo.
+func workspaceRootOf(cwd, cloneOf string) string {
+	if cloneOf != "" {
+		return gitrepo.Normalize(cloneOf)
+	}
+	return gitrepo.WorkspaceRoot(cwd)
+}
+
+// workspaceRootFor is workspaceRootOf for a new session, except that a companion
+// shell takes its parent's value (its own cwd may be the agent's clone dir). A
+// parent that is not registered leaves the shell to its own cwd. WorkspaceRoot
+// is immutable once published, so the parent is read after the lock is released.
+func (m *Manager) workspaceRootFor(cwd, cloneOf, parentID string) string {
+	if parentID != "" {
+		m.mu.Lock()
+		p := m.sessions[parentID]
+		m.mu.Unlock()
+		if p != nil {
+			return p.WorkspaceRoot
+		}
+	}
+	return workspaceRootOf(cwd, cloneOf)
+}
+
+// workspaceRootOfMeta is the load-time value for a record without one. A shell
+// whose parent's record is in meta takes the parent's, recorded or computed from
+// the parent's own cwd and clone_of, so the answer does not depend on which of
+// the two is reattached first.
+func workspaceRootOfMeta(md sessionMeta, meta map[string]sessionMeta) string {
+	if md.ParentID != "" {
+		if pm, ok := meta[md.ParentID]; ok {
+			if pm.WorkspaceRoot != "" {
+				return pm.WorkspaceRoot
+			}
+			return workspaceRootOf(pm.Cwd, pm.CloneOf)
+		}
+	}
+	return workspaceRootOf(md.Cwd, md.CloneOf)
 }
 
 // tokenMCP writes the session's own MCP config when a bound token entry declares
@@ -2729,36 +2860,18 @@ func bindingKinds(bs config.Bindings) []string {
 	return k
 }
 
-// joinKinds reads a list as prose: "AWS", "AWS and GitHub", "AWS, GitHub and token".
-func joinKinds(k []string) string {
-	if len(k) <= 1 {
-		return strings.Join(k, "")
-	}
-	return strings.Join(k[:len(k)-1], ", ") + " and " + k[len(k)-1]
-}
-
 // bindingKind names a binding set for a refusal: "an AWS binding", "a GitHub
 // binding", "a token binding", or for several "AWS and GitHub bindings" /
-// "AWS, GitHub and token bindings".
+// "AWS, GitHub and token bindings". The wording lives in config, which also
+// words the host-tier refusal for a profile.
 func bindingKind(bs config.Bindings) string {
-	switch k := bindingKinds(bs); len(k) {
-	case 0:
-		// Only an empty set gets here; keep the historical wording.
-		return "an AWS binding"
-	case 1:
-		if k[0] == "AWS" {
-			return "an AWS binding"
-		}
-		return "a " + k[0] + " binding"
-	default:
-		return joinKinds(k) + " bindings"
-	}
+	return config.BindingPhrase(bindingKinds(bs))
 }
 
 // bindingNames is bindingKind without the article, for "preparing X access".
 func bindingNames(bs config.Bindings) string {
 	if k := bindingKinds(bs); len(k) > 0 {
-		return joinKinds(k)
+		return config.JoinKinds(k)
 	}
 	return "AWS"
 }
@@ -3037,6 +3150,7 @@ func (m *Manager) List() []Info {
 			// Bin is written under m.mu (ResolveBins), so this is the one place
 			// it can be read without racing.
 			i.Claude = isClaudeBin(s.Bin)
+			i.AgentPrompt = launcher.AcceptsPrompt(s.Bin)
 			i.Resumable = i.Exited && resumeFor(s.Runtime, s.Bin, s.claudeSID(), s.Exclusive) != ""
 			if costSrc != nil && i.Claude {
 				ids, complete := s.conversations()
@@ -3346,6 +3460,10 @@ func (m *Manager) Reconcile() error {
 				sc.put(id, md)
 			}
 		}
+		if md.WorkspaceRoot == "" {
+			// A record from before workspace_root: computed here, once per load.
+			md.WorkspaceRoot = workspaceRootOfMeta(md, meta)
+		}
 		if err := m.reattach(id, md); err != nil {
 			// Leave the abduco session running; it can be recovered on a later
 			// restart. Don't fail the whole reconcile for one bad re-attach.
@@ -3467,6 +3585,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.Clone = md.Clone.copy()
 	sess.ContextPaths = slices.Clone(md.ContextPaths)
 	sess.CloneOf = md.CloneOf
+	sess.WorkspaceRoot = md.WorkspaceRoot // filled in by Reconcile when the record predates it
 	sess.LockedFiles = slices.Clone(md.LockedFiles)
 	sess.Exclusive = md.Exclusive
 	// nil for a record from before the probe: every key reads "not checked"

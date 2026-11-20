@@ -227,6 +227,7 @@ func (s *Server) Handler() http.Handler {
 	protected := http.NewServeMux()
 	protected.HandleFunc("/api/sessions", s.API.handleSessions)
 	protected.HandleFunc("/api/sessions/", s.API.handleSession)
+	protected.HandleFunc("/api/vm-state", s.API.handleVMState)
 	protected.HandleFunc("/api/profiles", s.handleProfiles)
 	protected.HandleFunc("/api/profiles/", s.handleProfile)
 	if s.Accounts != nil {
