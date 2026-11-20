@@ -143,12 +143,20 @@ type AgentConfig struct {
 	// unless this is set. No effect on the host tier, which reads them directly.
 	ImportsOff bool `json:"imports_off,omitempty"`
 
+	// BoxOnly locks the profile to the box tier: it is refused on the host even
+	// when it has no binding or context path that would force the box (see
+	// HostBlock). Refused together with runtime "host".
+	BoxOnly bool `json:"box_only,omitempty"`
+
 	// EgressAllow adds hosts (exact or "*.suffix") to the allowlist of a bound
 	// box; EgressOpen opens it to any public host on 443. Neither has an effect
 	// without a credential binding: an unbound box is already open.
 	EgressAllow []string `json:"egress_allow,omitempty"`
 	EgressOpen  bool     `json:"egress_open,omitempty"`
 }
+
+// errBoxOnlyHost refuses a profile that is locked to the box and asks for the host.
+var errBoxOnlyHost = errors.New(`box_only cannot be combined with runtime "host"; remove one`)
 
 // EgressWarningText is the warning for an egress policy on an unbound profile.
 const EgressWarningText = "egress_allow and egress_open apply only to a profile with a credential binding; without one the box already reaches any public host"
@@ -540,6 +548,9 @@ func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[
 		default:
 			return fmt.Errorf("config: agent %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
 		}
+		if a.BoxOnly && a.Runtime == RuntimeHost {
+			return fmt.Errorf("config: agent %q: %w", a.Name, errBoxOnlyHost)
+		}
 		if err := validateAWS(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
@@ -692,6 +703,9 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 	case RuntimeBox, RuntimeHost:
 	default:
 		return WithField("runtime", fmt.Errorf("profile %q has invalid runtime %q (want box|host)", a.Name, a.Runtime))
+	}
+	if a.BoxOnly && a.Runtime == RuntimeHost {
+		return WithField("box_only", fmt.Errorf("profile %q: %w", a.Name, errBoxOnlyHost))
 	}
 	if err := validateAWS(a); err != nil {
 		return fmt.Errorf("profile %q: %w", a.Name, err)

@@ -51,6 +51,13 @@ type SpawnSpec struct {
 	// Replyable overrides the profile's reply default; nil = the default.
 	// Read by ReplyableFor, never by Build.
 	Replyable *bool
+	// Clone is the per-spawn choice between the profile's clone setup and the
+	// user's own folder. nil = the profile decides (today's behaviour, and every
+	// old client). false = spawn as if the profile had no clone_of, clone_share or
+	// clone_no_auto_return: in place, in Cwd. true = the profile must have a clone
+	// setup, and the spawn is a box one. Applied by the session layer's Spawn; Build
+	// never reads it.
+	Clone *bool
 	// ExtraArgs are flags the session layer adds (the boxed config bundle's).
 	// Build places them after the option flags and BEFORE the "--" that ends
 	// options — appended afterwards, they would become operands.
@@ -658,6 +665,17 @@ func (l *AgentLauncher) CloneFor(agent string) (*config.Clone, error) {
 		return nil, nil
 	}
 	return cfg.Clone()
+}
+
+// HostBlockFor returns config.HostBlock for the profile: "" when the host tier
+// is allowed, else the reason clause. An unknown profile is an error, so a
+// spawn naming one is refused rather than treated as unrestricted.
+func (l *AgentLauncher) HostBlockFor(agent string) (string, error) {
+	cfg, ok := l.agent(agent)
+	if !ok {
+		return "", fmt.Errorf("launcher: unknown agent %q", agent)
+	}
+	return config.HostBlock(cfg), nil
 }
 
 // ContextPathsFor returns a copy of the profile's context_paths, or nil, nil

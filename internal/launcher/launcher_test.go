@@ -810,3 +810,24 @@ func TestProfilesNewerGate_OnlyTheNewerState(t *testing.T) {
 		t.Error("normal file: SpawnRefusal must be nil")
 	}
 }
+
+func TestHostBlockFor(t *testing.T) {
+	l := New([]config.AgentConfig{
+		{Name: "plain", Bin: "claude"},
+		{Name: "boxonly", Bin: "claude", BoxOnly: true},
+		{Name: "bound", Bin: "claude", GitHub: &config.GitHubBinding{}},
+	}, fakeResolver{}, nil)
+
+	if r, err := l.HostBlockFor("plain"); r != "" || err != nil {
+		t.Fatalf("HostBlockFor(plain) = %q, %v, want allowed", r, err)
+	}
+	if r, err := l.HostBlockFor("boxonly"); err != nil || r != config.HostBlock(config.AgentConfig{BoxOnly: true}) || r == "" {
+		t.Fatalf("HostBlockFor(boxonly) = %q, %v", r, err)
+	}
+	if r, err := l.HostBlockFor("bound"); err != nil || !strings.Contains(r, "GitHub") {
+		t.Fatalf("HostBlockFor(bound) = %q, %v, want a reason naming the binding", r, err)
+	}
+	if _, err := l.HostBlockFor("missing"); err == nil {
+		t.Fatal("an unknown profile must be an error, not unrestricted")
+	}
+}

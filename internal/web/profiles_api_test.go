@@ -907,3 +907,85 @@ func savedClean(rec *httptest.ResponseRecorder) bool {
 	_, warned := got["warnings"]
 	return rev != "" && !warned
 }
+
+func TestProfilesListHostBlock(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "aws", Bin: "claude", Runtime: "box", AWSConnections: []string{"prod"}},
+		{Name: "plain", Bin: "claude", Runtime: "box"},
+	}
+	pm := NewProfileManager(seeds, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	if rec := postProfile(s, `{"name":"locked","bin":"claude","runtime":"box","box_only":true}`); rec.Code != 201 {
+		t.Fatalf("create box_only profile: %d %s", rec.Code, rec.Body)
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("GET", "/api/profiles", nil))
+	if rec.Code != 200 {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("list is not JSON: %v: %s", err, rec.Body)
+	}
+	byName := map[string]map[string]any{}
+	for _, p := range raw {
+		byName[p["name"].(string)] = p
+	}
+	for name, want := range map[string]string{
+		"aws":    "this profile has an AWS binding, so it runs only in a box",
+		"locked": "this profile is set to box only",
+	} {
+		if got, _ := byName[name]["host_block"].(string); got != want {
+			t.Errorf("%s: host_block = %q, want %q", name, got, want)
+		}
+	}
+	if _, present := byName["plain"]["host_block"]; present {
+		t.Errorf("plain: host_block must be absent, got %v", byName["plain"]["host_block"])
+	}
+	if byName["locked"]["box_only"] != true {
+		t.Errorf("locked: box_only = %v, want true", byName["locked"]["box_only"])
+	}
+	for _, name := range []string{"aws", "plain"} {
+		if _, present := byName[name]["box_only"]; present {
+			t.Errorf("%s: box_only must be absent, got %v", name, byName[name]["box_only"])
+		}
+	}
+
+	// The single-profile GET (the editor's read) carries box_only too, and a PUT
+	// that keeps it leaves the lock on.
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("GET", "/api/profiles/locked", nil))
+	if !strings.Contains(rec.Body.String(), `"box_only":true`) {
+		t.Fatalf("GET lost box_only: %s", rec.Body)
+	}
+	if rec := putProfile(t, s, "locked", `{"name":"locked","bin":"claude","runtime":"box","box_only":true}`); !savedClean(rec) {
+		t.Fatalf("PUT keeping box_only: %d %s", rec.Code, rec.Body)
+	}
+	if p, _ := pm.Get("locked"); !p.BoxOnly {
+		t.Fatal("a PUT that sends box_only dropped it")
+	}
+}
+
+func TestProfileSaveBoxOnlyHostRefused(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	if rec := postProfile(s, `{"name":"p","bin":"claude","runtime":"box"}`); rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	rec := putProfile(t, s, "p", `{"name":"p","bin":"claude","runtime":"host","box_only":true}`)
+	if rec.Code != 400 {
+		t.Fatalf("PUT box_only + host: code %d body %s, want 400", rec.Code, rec.Body)
+	}
+	body := apiBody(t, rec)
+	if body["field"] != "box_only" {
+		t.Errorf("field = %v, want box_only (body %s)", body["field"], rec.Body)
+	}
+	if e, _ := body["error"].(string); !strings.Contains(e, `box_only cannot be combined with runtime "host"; remove one`) {
+		t.Errorf("error = %q, want the box_only/host sentence", e)
+	}
+	rec = postProfile(s, `{"name":"q","bin":"claude","runtime":"host","box_only":true}`)
+	if rec.Code != 400 || apiBody(t, rec)["field"] != "box_only" {
+		t.Errorf("POST box_only + host: code %d body %s, want 400 on box_only", rec.Code, rec.Body)
+	}
+}
