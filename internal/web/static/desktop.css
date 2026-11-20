@@ -2595,7 +2595,7 @@
 
   /* Panels and their footers sit right of the nav. Done is modal chrome: the page head's Esc ✕ (settingshead.js)
      and the Esc key close the page, so every Done goes. So do the footers that held nothing else, and the three
-     "add" footers: Appearance, API tokens and Agent accounts keep their one action in the page head (Reset to
+     "add" footers: Appearance, device tokens and Agent accounts keep their one action in the page head (Reset to
      defaults, New token, Add account), and Sign out… is the nav's. A phone's modal keeps them all. */
   #page-host > #settings-modal.as-page > .dbd { grid-column: 2; grid-row: 2; background: var(--bg); }
   /* The content column (§B1.1, §B1.5): it starts 32px right of the nav and is at most 820px wide,
@@ -2670,7 +2670,7 @@
   #page-host > #settings-modal.as-page #manage input[type="checkbox"] { accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #manage .hint { font-size: var(--t-sm); line-height: 1.6; }
 
-  /* Agent accounts, API tokens, Appearance, About: the same content, on the page's tokens. The button rules
+  /* Agent accounts, device tokens, Appearance, About: the same content, on the page's tokens. The button rules
      start one step in from the panel (`> :not(.set-head)`): the page head is a child of each panel and its
      buttons are the kit's own (28px action, 24px ghost Esc ✕), which a panel-wide `.btn` rule would repaint
      raise-filled at 30px. The body's buttons are the kit's 28px too (min-height --h-ctl, padding 0 12px). */
@@ -2779,7 +2779,7 @@
   #vmfolders .vmf-add-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); }
   #vmfolders .vmf-hint { margin-right: auto; }
 
-  /* API tokens (UI plan 4 Task 7; digest-design §B5, frame M2.4): tokens.js draws one kit card (§C7 `.card`, clipped to its corners) holding
+  /* Device tokens (UI plan 4 Task 7; digest-design §B5, frame M2.4): tokens.js draws one kit card (§C7 `.card`, clipped to its corners) holding
      the kit's `.tbl` (Name · Created · Last used · Revoke…), and under it the approved footnote (the frame's `p.t-sm.muted.m2-under`; here `li.tok-under`, an
      item of #tok-list: 8px below the card, 2px in). The table has the Credentials tables' numbers (§B4): fixed columns, cells 7px above and below, the first 16px in and the
      last 12px, 24px buttons in 5px cells. Dates are `.tnum` (the kit's tabular figures), "Never used" is `.muted`. */
@@ -2935,7 +2935,7 @@
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-how { display: flex; flex-direction: column; gap: var(--sp-2); }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; }
   /* Check again and Keyboard shortcuts are the kit's buttons: the panel's `.btn` rule (0 12px, --t-md, --r-ctl, the raise fill) is id-weighted, so
-     the kit's own hover never reached them and Check again's `.btn-sm` values are asked for again, one id heavier (§C3, as API tokens' row buttons do). */
+     the kit's own hover never reached them and Check again's `.btn-sm` values are asked for again, one id heavier (§C3, as device tokens' row buttons do). */
   #page-host > #settings-modal.as-page > #settings .fs-card .btn:where(:not(.pri)):hover { background: var(--line); }
   #page-host > #settings-modal.as-page > #settings #notify-why .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
   /* A narrow card (D4). The card is the container: the window less the sidebar (290), the nav (212) and 64px of padding, 258px at a 760px window,
@@ -2956,7 +2956,7 @@
   }
 
   /* What the page head already says is not said twice (the phone keeps every one of these strings, so each is
-     hidden here and nothing is edited in index.html): the API tokens hint (its description), the Appearance hint
+     hidden here and nothing is edited in index.html): the device tokens hint (its description), the Appearance hint
      that still spoke of "the panes behind this dialog" (F35), the Agent accounts paragraph (its first sentence is
      the description, the rest is the note below), About's version line (its description) and its Report a
      problem button (its action). */
@@ -3865,6 +3865,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-off .pfv-card-t { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-check.pfv-off .pfv-check-t { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-check.pfv-off input { cursor: default; }
+  /* A row that has no effect as things stand (a domain on a profile with no credential binding) is dimmed, never disabled: the input stays usable and Remove works, its hint says why. */
+  #page-host > #settings-modal.as-page #pfv .pfv-row.pfv-off :is(.pfv-ctl, .pfv-nm, .pfv-scope) { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; line-height: var(--lh-md); }
   #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-chip-word { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 var(--t-sm)/1 var(--font-ui); }
@@ -3925,6 +3927,12 @@
   #page-host > #settings-modal.as-page #pfv .pfv-addwrap { position: relative; margin-top: 12px; }
   #page-host > #settings-modal.as-page #pfv .pfv-empty + .pfv-addwrap { margin-top: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-addwrap > .pfv-add { margin-top: 0; }
+  /* In the Advanced block the wrap is a flex item of .pfv-adds, so it is only as wide as its link, and a popover's max-width: 100% would
+     be that. The row is the containing block instead (the wrap is static) and the popover keeps its place in the wrap's flow, under the link,
+     starting at the row's left edge: anchored at the link it ran past the row's right edge. */
+  #page-host > #settings-modal.as-page #pfv .pfv-adds { position: relative; }
+  #page-host > #settings-modal.as-page #pfv .pfv-adds > .pfv-addwrap { position: static; margin-top: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-adds .pfv-pick { top: auto; left: 0; margin-top: 6px; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; box-sizing: border-box; display: block; width: 420px; max-width: 100%; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--e-pop); }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-find { display: block; margin: 2px 0 4px; max-width: none; }
   /* Tall enough for the mockup's whole list (578px); a longer one scrolls here, under the filter, instead of running down the page. It keeps the

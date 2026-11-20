@@ -28,7 +28,16 @@
 // GitHub rules and the credential lists of app.js are globals read at call time.
 
 const PFC_FOLDER_HINT = "Read only. List a folder rather than a single file.";
-const PFC_DOMAIN_HINT = "HTTPS only. IP addresses are not accepted.";
+// A domain adds a host to the allowlist of a box that holds a credential binding. "Allow all internet hosts" (Network) opens every
+// public host on 443 instead (docs/CONFIG.md, egress_allow and egress_open). With no binding a box already reaches any public
+// host, so a domain does nothing: the same rule as the save warning (config.go AgentConfig.EgressWarning, pfcBound).
+const PFC_DOMAIN_FORM = "HTTPS only. IP addresses are not accepted.";
+const PFC_DOMAIN_HINT = PFC_DOMAIN_FORM + " It adds this host to the box's allowed hosts; \"Allow all internet hosts\" in Network opens every public host instead.";
+const PFC_DOMAIN_NO_EFFECT = PFV_DOMAIN_NO_EFFECT;
+const PFC_DOMAIN_NEEDS_BOX = PFV_DOMAIN_NEEDS_BOX;
+const PFC_DOMAIN_PICK = "A hostname or *.example.com, over HTTPS";
+// The patterns are box/contextpaths.go SecretFilePatterns (the ones the server warns on), the common ones in short form.
+const PFC_FOLDER_PICK = "Read only, at the same path inside the box. Never list a folder holding secrets: files named like .env*, *.pem, *.key, id_*, credentials*, *.tfstate, *.tfvars, kubeconfig and similar.";
 // config/github.go: the permission set shapes the minted App token (broker/github.go passes it to Mint); a token owner's
 // credential is used as it is, so the set does nothing for it (the old form's note says the same).
 const PFC_PAT_NOTE = "A personal access token is not narrowed by CuliBox: it reaches whatever the token allows.";
@@ -79,20 +88,21 @@ function pfcToggle(rec, list, e) {
   pfvChanged(rec, "");
 }
 
-// pfcRowNode: a read view row with its Remove (Undo) at the right. o: {removed, key, toggle, err}.
+// pfcRowNode: a read view row with its Remove (Undo) at the right. o: {removed, key, toggle, err, off} (off: pfvDrawRow's).
 function pfcRowNode(rec, r, o) {
   const rm = pfcRmButton(rec, r.kind + " " + r.name, o.key, o.removed, o.toggle);
   // A refusal that names a stored row has no input to sit under: the Remove beside it is what answers it (a folder that is gone is
   // removed or replaced), so that is what reads it and what takes focus.
-  const row = pfvDrawRow(r, rec.known, o.err || "", { edit: true, block: rec.id, bad: (words) => pfvBad(rec, rm, words, true) });
+  const row = pfvDrawRow(r, rec.known, o.err || "", { edit: true, block: rec.id, bad: (words) => pfvBad(rec, rm, words, true), off: o.off, needsBox: o.needsBox });
   if (o.removed) row.classList.add("pfv-removed");
   row.append(rm);
   return row;
 }
 
-// pfcInputRow: a row that is one input: a folder or a domain being added. The kind column is its visible label.
+// pfcInputRow: a row that is one input: a folder or a domain being added. The kind column is its visible label. o.off: the row
+// has no effect as things stand (drawn dimmed, .pfv-off; the input stays usable).
 function pfcInputRow(rec, o) {
-  const row = pfvMk("div", "pfv-row");
+  const row = pfvMk("div", o.off === true ? "pfv-row pfv-off" : "pfv-row");
   row.append(pfvMk("span", "pfv-k", o.kind));
   const input = pfvTextCtl(rec, o.key, o.entry[o.prop], true, (val) => { o.entry[o.prop] = val; box.clear(); pfvPaint(); }, () => {});
   input.setAttribute("placeholder", o.placeholder);
@@ -105,8 +115,9 @@ function pfcInputRow(rec, o) {
 // --- the "+ Add" picker (spec 5.7; the mockup's `picker` state) -------------------------------------------------------------
 
 // A popover under the "+ Add" link. What it offers is data: groups [{title, note, items}], an item being {title, sub, tag,
-// added, add, create}: `add` is what pfvAddRow is given, `create` the kind of thing a "New ..." item makes (pfvOpenDrawer's), `added`
-// that the profile holds it already (drawn, disabled, "Added"). A group with no title is drawn without a heading. The popover is
+// added, add, create, act, key}: `add` is what pfvAddRow is given, `create` the kind of thing a "New ..." item makes (pfvOpenDrawer's),
+// `act` a function run after the popover has closed (the Advanced block's "+ Add secret" menu: its items go to other blocks; `key`
+// names the item), `added` that the profile holds it already (drawn, disabled, "Added"). A group with no title is drawn without a heading. The popover is
 // open while rec.ui.picker is true: that is what draws it and what pfvState.picker and the Esc layering read.
 const PFC_PICK_READ = "Read only";
 const PFC_PICK_AWS_WRITE = "Read only; write after a granted window";
@@ -132,6 +143,10 @@ function pfcPickOption(rec, it) {
     b.disabled = true;
     b.append(pfvMk("span", "pfv-opt-r", "Added"));
     return b;
+  }
+  if (typeof it.act === "function") {
+    b.onclick = () => { pfcPickClose(rec); it.act(); };
+    return pfvReg(rec, "pick:act:" + it.key, b);
   }
   b.onclick = it.create ? () => pfcPickCreate(rec, it.create) : () => pfvAddRow(rec.id, it.add);
   return pfvReg(rec, "pick:" + (it.create ? "new:" + it.create : it.add.kind + (it.add.name ? ":" + it.add.name : "")), b);
@@ -569,7 +584,7 @@ function pfcCloudPick(rec) {
   for (const t of tokens) {
     tok.items.push({ title: t.name, tag: t.prod === true ? "production" : "", sub: spawnJoin([t.description].concat(spawnTokenHosts(t.hosts))), added: heldTok.has(t.name), add: { kind: "token", name: t.name } });
   }
-  tok.items.push({ title: "New token…", sub: "Kept in the encrypted credential store", create: "token" });
+  tok.items.push({ title: "New service token…", sub: "Kept in the encrypted credential store", create: "token" });
   return { label: "Add cloud access or a token", filter: "Filter connections and tokens", groups: [aws, gh, tok] };
 }
 
@@ -634,8 +649,22 @@ function pfcReachCheck(rec) {
   return null;
 }
 
+// pfcBound: the profile holds a credential binding, by the server's rule (config.go AgentConfig.EgressWarning: AWS, AWSConnections,
+// GitHub, Tokens), over the saved profile; cloudRec, the open Cloud block's record, puts its draft in place of the fields it
+// writes (a row pending removal no longer counts, a row just added does).
+function pfcBound(doc, cloudRec) {
+  const d = doc && typeof doc === "object" ? doc : {};
+  const draft = cloudRec && cloudRec.id === "cloud" && cloudRec.values ? pfcCloudMerge(cloudRec) : null;
+  const src = draft ? Object.assign({}, d, draft) : d;
+  // pfcCloudMerge says aws: null for a legacy setting that is taken away, and leaves the key out otherwise.
+  return !!src.aws || pfcNames(src.aws_connections).length > 0 || !!src.github || pfcNames(src.tokens).length > 0;
+}
+
 function pfcReachDraw(rec, c) {
   const v = rec.values;
+  // Not in the Box tier: the save refuses a domain (PFV_DOMAIN_NEEDS_BOX), whatever the profile holds; that is the stronger line.
+  const needsBox = c.tier !== "box";
+  const off = needsBox || !pfcBound(c.doc, pfvState.edits.cloud);
   const stored = (l) => l.filter((e) => e.fresh !== true);
   const rows = pfcRows("reachable", { context_paths: stored(v.folders).map((e) => e.path), egress_allow: stored(v.domains).map((e) => e.host) });
   const list = pfvMk("div", "pfv-rows");
@@ -664,7 +693,7 @@ function pfcReachDraw(rec, c) {
     if (e.fresh === true) return;
     const gone = e.removed === true;
     list.append(pfcRowNode(rec, pfcRowOf(rows, "Domain", e.host), {
-      removed: gone, key: "rm:domain:" + i, toggle: () => pfcToggle(rec, v.domains, e),
+      removed: gone, key: "rm:domain:" + i, toggle: () => pfcToggle(rec, v.domains, e), off, needsBox,
       err: gone || domainAt(e) < 0 ? "" : pfvFerr(rec, "egress_allow[" + domainAt(e) + "]"),
     }));
   });
@@ -680,19 +709,22 @@ function pfcReachDraw(rec, c) {
     if (e.fresh !== true) return;
     list.append(pfcInputRow(rec, {
       kind: "Domain", label: "Domain the agent can reach", entry: e, prop: "host", key: "domain:" + i, rmKey: "rm:domain:" + i,
-      errKey: domainAt(e) >= 0 ? "egress_allow[" + domainAt(e) + "]" : "", placeholder: "api.example.com or *.example.com", hint: PFC_DOMAIN_HINT,
+      errKey: domainAt(e) >= 0 ? "egress_allow[" + domainAt(e) + "]" : "", placeholder: "api.example.com or *.example.com",
+      hint: needsBox ? PFC_DOMAIN_NEEDS_BOX + " " + PFC_DOMAIN_FORM : off ? PFC_DOMAIN_NO_EFFECT + " " + PFC_DOMAIN_FORM : PFC_DOMAIN_HINT, off,
       toggle: () => pfcToggle(rec, v.domains, e),
     }));
   });
-  return pfcFoot(rec, list, pfcReachPick);
+  return pfcFoot(rec, list, () => pfcReachPick(off, needsBox));
 }
 
 // pfcReachPick: the Also reachable picker: the two kinds, each an input row (no drawer, nothing to filter).
-const pfcReachPick = () => ({
+// off: no credential binding, so a domain has no effect (pfcBound), and the item says so before it is picked. needsBox: the profile
+// is not in the Box tier, so a domain is refused at save, and the item says that instead.
+const pfcReachPick = (off, needsBox) => ({
   label: "Add a folder or a domain", filter: "",
   groups: [{ title: "", note: "", items: [
-    { title: "Folder it can read", sub: "Read only, at the same path inside the box. Never list secrets.", add: { kind: "folder" } },
-    { title: "Domain it can reach", sub: "A hostname or *.example.com, over HTTPS", add: { kind: "domain" } },
+    { title: "Folder it can read", sub: PFC_FOLDER_PICK, add: { kind: "folder" } },
+    { title: "Domain it can reach", sub: needsBox ? PFC_DOMAIN_PICK + ". It needs the Box tier: set Runs in to Box, or the save is refused." : off ? PFC_DOMAIN_PICK + ". It has no effect until the profile holds cloud access or a token." : PFC_DOMAIN_PICK, add: { kind: "domain" } },
   ] }],
 });
 

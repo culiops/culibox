@@ -1449,7 +1449,7 @@
     /* Desktop-only parts of the Settings page (desktop.css shows them on the
        page above 700px): the nav's group labels, the profile form's Can touch
        box, section heads and Advanced fold, Discard, About's runtime line, the nav's
-       Sign out… item (a phone signs out from API tokens' footer), each page's head (the
+       Sign out… item (a phone signs out from device tokens' footer), each page's head (the
        empty .set-head slot settingshead.js fills on the page) and the Agent accounts note
        that carries the paragraph's later sentences once its first is the head's line. */
     .pg-group, .pf-touch, .pf-sec, .pf-adv, #pf-discard, #about-runtime, #set-signout, .set-head, #acct-desk-note { display: none; }

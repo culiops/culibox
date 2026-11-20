@@ -9,7 +9,7 @@ CuliBox can hold secret values itself: tokens, a GitHub App private key, the Cla
 - **It only protects what you move into it.** A value that is also in an env file, a shell profile or your home directory is still readable from a snapshot. The same goes for everything else on the machine that CuliBox does not own, such as SSH keys and cloud-CLI caches.
 - It is not a vault product: one machine, one user, no sync.
 
-**From the web UI.** **Settings → Credentials** is the usual way in. Its encrypted-store strip creates the store (**Create the encrypted store**) and, on Linux, locks it (**Lock now**). The forms that take a secret store it for you: **Add token** and the GitHub App form put the pasted value or key in the store. **Stored values → Set a value** adds any other value by id. Values are write-only: you can replace or delete one, never read it back. The CLI below does the same without the browser.
+**From the web UI.** **Settings → Credentials** is the usual way in. Its encrypted-store strip creates the store (**Create the encrypted store**) and, on Linux, locks it (**Lock now**). The forms that take a secret store it for you: **Add service token** and the GitHub App form put the pasted value or key in the store. **Stored values → Set a value** adds any other value by id. Values are write-only: you can replace or delete one, never read it back. The CLI below does the same without the browser.
 
 **Commands.** The CLI honours `-config` like the rest of CuliBox, writes the files directly and does not need the daemon running.
 

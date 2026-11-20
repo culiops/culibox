@@ -447,6 +447,14 @@ function makeDom({ page = true, version = "CuliBox v0.24.2 · commit abc1234", a
 const HEAD_TABS = ["creds", "tokens", "settings", "accounts", "about", "vmfolders"];
 const INFO = { version: "CuliBox v0.24.2 · commit abc1234", accountsLead: ACCOUNTS_LEAD };
 
+test("Settings -> Access names its tokens Device tokens: the old words are gone from its head, nav tab and phone footer", () => {
+  const { settingsHeadSpec } = require("../static/settingshead.js");
+  const spec = settingsHeadSpec("tokens", INFO);
+  assert.ok(!/API token|access token|New token/i.test(spec.title + " " + spec.desc + " " + spec.action.label), "head: " + JSON.stringify(spec));
+  assert.ok(!/API tokens|\+ new token|An access token/.test(HTML), "index.html: tab, hint and phone footer say device token");
+  assert.match(HTML, /\+ new device token<\/button>/);
+});
+
 test("settingsHeadSpec carries the approved copy", () => {
   // digest-design §A6-A8 (frames M2.3-M2.5) and the founder's answers for Agent accounts and About (2026-11-08).
   const { settingsHeadSpec } = require("../static/settingshead.js");
@@ -456,10 +464,10 @@ test("settingsHeadSpec carries the approved copy", () => {
     action: { id: "set-act-creds", label: "Add credential", menu: true },
   });
   assert.deepStrictEqual(settingsHeadSpec("tokens", INFO), {
-    title: "API tokens",
+    title: "Device tokens",
     desc: "Let a client app or CLI connect with Authorization: Bearer … and no password. One per device.",
     mono: ["Authorization: Bearer …"],
-    action: { id: "set-act-tokens", label: "New token" },
+    action: { id: "set-act-tokens", label: "New device token" },
   });
   assert.deepStrictEqual(settingsHeadSpec("settings", INFO), {
     title: "Appearance",
@@ -624,7 +632,7 @@ test("paintSettingsHead is a no-op unless the dialog is the page (a phone's moda
   assert.ok(panels.about, "fixture sanity");
 });
 
-test("the API tokens description sets its machine text in its own mono span", () => {
+test("the Device tokens description sets its machine text in its own mono span", () => {
   const { ctx, slot } = makeDom();
   ctx.paintSettingsHead("tokens");
   const desc = withCls(slot("tokens"), "page-desc")[0];
@@ -681,7 +689,7 @@ test("each header action runs the handler its old footer button had", () => {
   const { ctx, slot, calls } = makeDom();
   const run = (tab) => { ctx.paintSettingsHead(tab); withCls(slot(tab), "page-actions")[0].children[0].click(); };
   run("accounts");  // + new account -> acctNew
-  run("tokens");    // + new token -> createToken
+  run("tokens");    // + new device token -> createToken
   run("settings");  // Reset to defaults -> the #fs-reset handler (fontPrefs.reset(); initSettings())
   run("about");     // Report a problem -> openBugReport
   assert.deepStrictEqual(calls, ["acctNew", "createToken", "fs-reset", "openBugReport"]);
@@ -908,7 +916,7 @@ test("the add footers are gone on the page; the save footers are the kit footer"
   for (const id of ["foot-tokens", "foot-accounts", "foot-settings", "foot-creds", "foot-about"]) {
     assert.strictEqual(decls(P + " > #" + id).get("display"), "none", id);
   }
-  // Their buttons live on: "+ new token" and "+ new account" are the head's New token / Add account, Reset to
+  // Their buttons live on: "+ new device token" and "+ new account" are the head's New device token / Add account, Reset to
   // defaults is the head's, Sign out… is the nav's. On a phone the footers are as they were.
   for (const id of ["tok-new", "acct-new", "fs-reset", "tok-logout"]) assert.match(HTML, new RegExp('id="' + id + '"'), id + " is still in the DOM (the phone's footer)");
   assert.ok(!BASE_CSS.includes("foot-tokens") && !BASE_CSS.includes("foot-accounts") && !BASE_CSS.includes("foot-settings"), "no base rule hides them: the phone shows them");
@@ -949,7 +957,7 @@ test("on the page the stale or repeated copy is hidden: the old hints, the versi
   ];
   for (const [sel, why] of hidden) assert.strictEqual(decls(sel).get("display"), "none", why);
   // The static markup those selectors rest on.
-  assert.match(HTML, /id="tokens"[^>]*>\s*<div class="set-head"><\/div>\s*<p class="hint">An access token/);
+  assert.match(HTML, /id="tokens"[^>]*>\s*<div class="set-head"><\/div>\s*<p class="hint">A device token/);
   assert.match(HTML, /<\/div>\s*<p class="hint">Sizes apply as you change them/);
   assert.match(HTML, /id="accounts"[^>]*>\s*<div class="set-head"><\/div>\s*<p class="hint">Each agent account/);
   assert.match(HTML, /<p><button type="button" class="btn" id="bug-open">Report a problem<\/button><\/p>/);
@@ -2145,13 +2153,13 @@ test("initSettings draws the Shortcuts label once; app.css hides it below the br
 });
 
 // #70 Task 13: the VM folders page sits in the nav right after Credentials, hidden until /api/meta says the server has it.
-test("the nav lists VM folders after Credentials, hidden by default, and orders it between Credentials and API tokens", () => {
+test("the nav lists VM folders after Credentials, hidden by default, and orders it between Credentials and Device tokens", () => {
   const tabs = [...HTML.matchAll(/<button type="button" class="t[^"]*" data-tab="([a-z]+)"([^>]*)>/g)].map((m) => [m[1], m[2]]);
   const names = tabs.map((t) => t[0]);
   assert.ok(names.indexOf("vmfolders") === names.indexOf("creds") + 1, "right after Credentials in the DOM: " + names.join(","));
   assert.match(tabs[names.indexOf("vmfolders")][1], /\bhidden\b/, "hidden until META.vm_folders");
   const order = (t) => Number(decls(NAV + ' .t[data-tab="' + t + '"]').get("order"));
-  assert.ok(order("creds") < order("vmfolders") && order("vmfolders") < order("tokens"), "Credentials, VM folders, API tokens");
+  assert.ok(order("creds") < order("vmfolders") && order("vmfolders") < order("tokens"), "Credentials, VM folders, Device tokens");
   assert.ok(order("about") > order("settings") && Number(decls(NAV + " > #set-signout").get("order")) > order("about"));
   assert.strictEqual(decls(NAV + ' .t[hidden]').get("display"), "none", "a hidden nav button stays hidden under the .t rule's display:flex");
   assert.match(HTML, /<div class="dbd pad" id="vmfolders" role="tabpanel" hidden>\s*<div class="set-head"><\/div>\s*<div id="vmf-body"><\/div>/);

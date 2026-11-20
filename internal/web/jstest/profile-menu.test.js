@@ -241,7 +241,7 @@ function picker(spec) {
         { title: "bare", add: { kind: "aws", name: "bare" } },
       ] },
       { title: "Tokens", note: "Tokens are long-lived, and the agent can read them while it runs.", items: [
-        { title: "New token…", create: "token" },
+        { title: "New service token…", create: "token" },
       ] },
     ],
   });

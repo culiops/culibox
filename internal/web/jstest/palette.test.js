@@ -213,7 +213,7 @@ test("palettePageCommands: desktop lists Audit, Analytics and the six Settings s
   assert.deepEqual(cmds.map((c) => c.label), [
     "Audit", "Analytics",
     "Settings · Profiles", "Settings · Agent accounts", "Settings · Credentials",
-    "Settings · API tokens", "Settings · Appearance", "Settings · About",
+    "Settings · Device tokens", "Settings · Appearance", "Settings · About",
   ]);
   for (const c of cmds) assert.ok(c.kind === "settings" || c.kind === "view", c.label + " kind " + c.kind);
   cmds.forEach((c) => c.run());

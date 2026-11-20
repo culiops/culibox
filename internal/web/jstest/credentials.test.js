@@ -10,7 +10,7 @@ const {
   credTableRows, credTableHead, awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
   awsGateView, awsGateBoxEmpty, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
   GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
-  credTablesAt,
+  credTablesAt, AWS_REGIONS, awsRegionSuggest, awsProfileSuggest,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -1022,4 +1022,26 @@ test("every #creds rule also applies to #cred-drawer", () => {
   // Same specificity as before: the drawer's selector is an id plus what followed it.
   assert.match(base, /:is\(#creds, #cred-drawer\) \.ent \{/);
   assert.match(desk, /#page-host > #settings-modal\.as-page :is\(#creds, #cred-drawer\) \.ent \{/);
+});
+
+test("awsRegionSuggest: the host's regions first (each once, in order), then the built-in list without repeats", () => {
+  const out = awsRegionSuggest([{ region: "eu-west-1" }, { region: "" }, { region: "eu-west-1" }, { region: "ap-southeast-1" }]);
+  assert.deepStrictEqual(out.slice(0, 2), ["eu-west-1", "ap-southeast-1"]);
+  assert.strictEqual(out.filter((r) => r === "us-east-1").length, 1);
+  assert.strictEqual(out.filter((r) => r === "eu-west-1").length, 1);
+  assert.strictEqual(out.length, AWS_REGIONS.length + (AWS_REGIONS.includes("eu-west-1") ? 0 : 1), "nothing else is added");
+  assert.deepStrictEqual(awsRegionSuggest(undefined), AWS_REGIONS);
+  assert.deepStrictEqual(awsRegionSuggest([]), AWS_REGIONS);
+});
+
+test("AWS_REGIONS: every entry passes the server's region format (awsscope.regionRe), none repeats", () => {
+  const goSrc = require("node:fs").readFileSync(require("node:path").join(__dirname, "../../awsscope/awsscope.go"), "utf8");
+  assert.match(goSrc, /regionRe\s*=\s*regexp\.MustCompile\(`\^\[a-z\]\{2\}\(-\[a-z\]\+\)\+-\\d\{1,2\}\$`\)/, "the server regex is the one this test mirrors");
+  for (const r of AWS_REGIONS) assert.match(r, /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/);
+  assert.strictEqual(new Set(AWS_REGIONS).size, AWS_REGIONS.length);
+});
+
+test("awsProfileSuggest: selectable profile names only", () => {
+  assert.deepStrictEqual(awsProfileSuggest([{ name: "a", selectable: true }, { name: "b", selectable: false }, { name: "c", selectable: true }]), ["a", "c"]);
+  assert.deepStrictEqual(awsProfileSuggest(undefined), []);
 });

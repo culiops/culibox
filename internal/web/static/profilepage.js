@@ -386,9 +386,20 @@ function pfvDrawScope(r, known, o) {
   return p;
 }
 
+// A domain row on a profile with no credential binding: the box already reaches any public host, so it does nothing (the same rule
+// as the server's save warning, config.go AgentConfig.EgressWarning).
+const PFV_DOMAIN_NO_EFFECT = "This has no effect until the profile holds cloud access or a token: without one the box already reaches any public host.";
+// A domain on a profile that does not run in a box: the server refuses egress_allow unless runtime is "box", set explicitly
+// (config/github.go validateEgressPolicy; an empty runtime is the instance default, which may be host), so this is the line, not the one above.
+const PFV_DOMAIN_NEEDS_BOX = "A domain needs the Box tier: set Runs in to Box, or the save is refused.";
+
 // err: a refusal that names this row (a folder that is gone, say), drawn under it in words. o: pfvDrawScope's.
 function pfvDrawRow(r, known, err, o) {
-  const row = pfvMk("div", "pfv-row");
+  // r.off: the row has no effect as things stand (a domain on a profile with no credential binding): dimmed, with its reason under
+  // the name, and still a normal row. o.off overrides it (the editor reads the draft, not the saved profile). needsBox (on the row or
+// in o): the profile is not in the Box tier, so the domain is refused and the reason is that.
+  const off = o && typeof o.off === "boolean" ? o.off : r.off === true;
+  const row = pfvMk("div", off ? "pfv-row pfv-off" : "pfv-row");
   // The old-style AWS setting is an AWS row named for what it is (the kind column is 52px: "Old-style AWS" would wrap
   // in three lines); the binding's own label is its sub-line.
   const old = r.kind === "Old-style AWS";
@@ -408,6 +419,7 @@ function pfvDrawRow(r, known, err, o) {
     s.append(...pfvMonoNodes(sub, known));
     id.append(s);
   }
+  if (off && r.kind === "Domain") id.append(pfvMk("p", "pfv-hint", (o && o.needsBox === true) || r.needsBox === true ? PFV_DOMAIN_NEEDS_BOX : PFV_DOMAIN_NO_EFFECT));
   if (err) {
     const words = pfvMk("p", "pfv-ferr", err);
     if (o && typeof o.bad === "function") o.bad(words);
@@ -1150,7 +1162,7 @@ function pfvTabLeave(tab) {
 
 // --- the Credentials drawer (spec 5.7) ---------------------------------------------------------------------------
 
-// The "New AWS connection...", "New GitHub App..." and "New token..." items of the "+ Add" picker open credentials.js's add flows in
+// The "New AWS connection...", "New GitHub App..." and "New service token..." items of the "+ Add" picker open credentials.js's add flows in
 // a drawer over the page (index.html: #cred-scrim and #cred-drawer, whose head is the header band that stays put (the flow's crumb and
 // intro), whose body is where a flow draws itself, whose foot is where its buttons and a refused Save go, and whose status line says
 // why a close has to wait). The flows are handed `opts` = {head, host, foot, saveLabel, onCreated, onIdle, onClose} and know nothing of
@@ -1176,7 +1188,7 @@ function pfvDrawerParts() {
 }
 
 // pfvDrawerStarter: the flow that makes a kind of credential, as a function of opts; null for a kind there is none of.
-// A token starts where the Credentials tab's own Add token does (no group, no provider chosen for the user).
+// A token starts where the Credentials tab's own Add service token does (no group, no provider chosen for the user).
 function pfvDrawerStarter(kind) {
   if (kind === "aws" && typeof awsOpenAdd === "function") return (opts) => awsOpenAdd(opts);
   if (kind === "github" && typeof credGitHubChoose === "function") return (opts) => credGitHubChoose(opts);
@@ -1984,6 +1996,21 @@ function pfvAccountChoices(account) {
   return acctChoices(list, account).map((n) => ({ value: n === ACCT_DEFAULT ? "" : n, label: n === ACCT_DEFAULT ? "default (~/.claude)" : n }));
 }
 
+// pfvNoLoginHint: the #340 sentence (app.js paintSpawnAcctHint) for the account the form holds, as hint pieces, or []. It is said only
+// when it is exact (spawnpreview.js spawnAcctHint): the profile's saved tier is Box, the chosen account is the profile's own and is
+// `default`, and the daemon says a boxed claude of the profile has no login (box_claude_credential "no": no Claude token among its
+// secrets either). A host session reads ~/.claude, so it has nothing to say.
+function pfvNoLoginHint(c, account) {
+  if (typeof spawnAcctHint !== "function") return [];
+  const accounts = typeof accountsCache !== "undefined" && Array.isArray(accountsCache) ? accountsCache : [];
+  const h = spawnAcctHint({
+    profile: { account: c.doc.account, box_claude_credential: c.view.box_claude_credential },
+    chosen: account || "default", accounts, where: { runtime: c.tier },
+  });
+  if (!h || h.kind !== "nologin") return [];
+  return [pfvMk("code", "", "default"), " has no login inside a box. Pick an account with a token. "];
+}
+
 function pfvAgentForm(rec, c) {
   const v = rec.values;
   const ui = rec.ui;
@@ -2028,7 +2055,7 @@ function pfvAgentForm(rec, c) {
     const manage = pfvDrawLink("Manage", "pfv-manage");
     // Leaving for the accounts page asks first when something here has changed.
     manage.onclick = async () => { if (await pfvLeaveGuard("leave")) openSettings("accounts"); };
-    out.push(pfvFieldBox(rec, "account", "Claude login", acct, ["Add more logins in Agent accounts. ", manage]));
+    out.push(pfvFieldBox(rec, "account", "Claude login", acct, pfvNoLoginHint(c, v.account).concat(["Add more logins in Agent accounts. ", manage])));
   }
   return out;
 }

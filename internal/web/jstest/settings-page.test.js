@@ -32,11 +32,11 @@ function body(src, name) {
 
 const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "");
 
-test("the tokens tab is named API tokens (the palette already says so)", () => {
+test("the tokens tab is named Device tokens (the palette says so too)", () => {
   const m = /<button[^>]*data-tab="tokens"[^>]*>([^<]*)<\/button>/.exec(HTML);
   assert.ok(m, "tokens tab not found");
-  assert.strictEqual(m[1].trim(), "API tokens");
-  assert.ok(!/>Access tokens</.test(HTML), "no tab still says Access tokens");
+  assert.strictEqual(m[1].trim(), "Device tokens");
+  assert.ok(!/>Access tokens<|>API tokens</.test(HTML), "no tab still says Access tokens or API tokens");
 });
 
 test("the nav carries the three group labels, as presentation-only spans", () => {

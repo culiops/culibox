@@ -97,6 +97,12 @@ function pfvAdvancedCount(doc, tier) {
   return pfvAdvancedItems(doc, tier, []).length;
 }
 
+// pfvBound: the list view says the profile holds a credential binding (the server's rule over the fields ProfileView carries:
+// AWS inline, aws_connections, github owners, tokens).
+function pfvBound(view) {
+  return pfvList(view.aws_connections).length > 0 || !!view.aws_inline || pfvList(view.github_owners).length > 0 || pfvList(view.tokens).length > 0;
+}
+
 // pfvPosture: the network posture the profile has, for reachModel. The list
 // view reports none for a boxed profile on a machine with no box layer, but the
 // posture it will have once boxes exist is fixed by the profile alone (with a box
@@ -105,8 +111,7 @@ function pfvAdvancedCount(doc, tier) {
 function pfvPosture(view, doc, tier) {
   if (tier !== "box") return "";
   if (view.network === "allowlist" || view.network === "open") return view.network;
-  const bound = pfvList(view.aws_connections).length > 0 || !!view.aws_inline || pfvList(view.github_owners).length > 0 || pfvList(view.tokens).length > 0;
-  return bound && doc.egress_open !== true ? "allowlist" : "open";
+  return pfvBound(view) && doc.egress_open !== true ? "allowlist" : "open";
 }
 
 // pfvGithubLogins: how each GitHub owner of the stored profile signs in, {owner: "app:<name>" | "token:<name>"}, for
@@ -330,6 +335,8 @@ function pfvReadView(o) {
     if (it.original === true) r.original = true;
     if (r.missing) r.scope = PFV_MISSING;
     if (it.kind === "Old-style AWS" && edit) r.action = "Move to a saved connection";
+    if (it.kind === "Domain" && pfvTierOf(view, doc) !== "box") { r.off = true; r.needsBox = true; }
+    else if (it.kind === "Domain" && !pfvBound(view)) r.off = true;
     return r;
   };
   const cloud = m.cloud.map(item), reachable = m.reachable.map(item);

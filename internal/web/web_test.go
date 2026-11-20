@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -550,5 +551,24 @@ func TestMetaListsAWSConnectionsWithoutSourceProfile(t *testing.T) {
 	got = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, Profiles: NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})})
 	if l, ok := got["aws_connections"].([]any); !ok || len(l) != 0 {
 		t.Fatalf("aws_connections with none defined = %v, want []", got["aws_connections"])
+	}
+}
+
+// TestMetaSecretSources: /api/meta names the configured secret sources by type
+// (and the file path), in order, and nothing else; the key is absent when none
+// are configured.
+func TestMetaSecretSources(t *testing.T) {
+	got := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, SecretSources: []config.SecretSource{
+		{Type: "store"}, {Type: "file", Path: "/etc/cb/s.env"}, {Type: "env"},
+	}})
+	var want any
+	if err := json.Unmarshal([]byte(`[{"type":"store"},{"type":"file","path":"/etc/cb/s.env"},{"type":"env"}]`), &want); err != nil {
+		t.Fatalf("want: %v", err)
+	}
+	if !reflect.DeepEqual(got["secret_sources"], want) {
+		t.Fatalf("secret_sources = %v, want %v", got["secret_sources"], want)
+	}
+	if _, ok := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}})["secret_sources"]; ok {
+		t.Fatal("secret_sources present with no sources configured")
 	}
 }
