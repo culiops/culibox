@@ -99,6 +99,12 @@ type ProfileView struct {
 	// ImportsOff: a boxed claude of this profile does not get the files the
 	// bundled CLAUDE.md imports.
 	ImportsOff bool `json:"imports_off,omitempty"`
+	// BoxOnly is the profile's own lock to the box tier (config.AgentConfig.BoxOnly).
+	// HostBlock is why a session of it may not run on the host ("" when it may):
+	// config.HostBlock of the merged profile, the one rule the spawn also applies,
+	// so a page reads this and never re-derives the rule.
+	BoxOnly   bool   `json:"box_only,omitempty"`
+	HostBlock string `json:"host_block,omitempty"`
 	// AutoReturn: a clone profile whose work comes home on its own (the switch
 	// is on). NotHome is what the clone's last return left behind, if anything.
 	AutoReturn bool                  `json:"auto_return,omitempty"`
@@ -543,6 +549,8 @@ func (m *ProfileManager) Views() []ProfileView {
 			ContextPaths:   slices.Clone(a.ContextPaths),
 			CloneOf:        a.CloneOf,
 			ImportsOff:     a.ImportsOff,
+			BoxOnly:        a.BoxOnly,
+			HostBlock:      config.HostBlock(a),
 			EgressAllow:    slices.Clone(a.EgressAllow),
 			CloneShare:     slices.Clone(a.CloneShare),
 		}
