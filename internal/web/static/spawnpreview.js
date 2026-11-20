@@ -507,6 +507,17 @@ function spawnCwdReselect(o) {
   return spawnCwdChoice(x);
 }
 
+// spawnGroupHolds: the folder is still the one a workspace group's + put in the field. Same test as spawnCwdReselect's
+// "still holds its prefill", for the "group" source: the source is "group", something was prefilled, and both the resolved
+// folder (o.cwd) and the text in the box (o.text) still equal it. A profile switch keeps such a folder.
+//   -> boolean
+function spawnGroupHolds(o) {
+  const x = o || {};
+  if (x.source !== "group") return false;
+  const prefill = String(x.prefill == null ? "" : x.prefill);
+  return prefill !== "" && String(x.cwd == null ? "" : x.cwd) === prefill && String(x.text == null ? "" : x.text) === prefill;
+}
+
 // spawnBoxOwnedHit: the box-owned copy a host-tier folder is in, from the profiles the page already has: the default_cwd of
 // every profile with clone_of is a copy a box writes in. internal/clone BoxOwned is the server's check (it also follows
 // symlinks and reads the clone-dirs record, which no profile list carries); this is the advance notice, so only the plain
@@ -616,5 +627,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { spawnIsShellProfile, profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
+  module.exports = { spawnIsShellProfile, profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnGroupHolds, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
 }

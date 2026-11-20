@@ -2849,6 +2849,17 @@ function renderDesktopEntry(it) {
       pip.append(d, document.createTextNode(it.waiting + " waiting"));
       h.append(pip);
     }
+    if (it.path !== "") {
+      // The + only opens New session with this folder in the field (the user sees it before Start); it never spawns.
+      const plus = document.createElement("button");
+      plus.className = "wplus";
+      plus.setAttribute("type", "button");
+      plus.title = "New session in " + shortPath(it.path);
+      plus.setAttribute("aria-label", "New session in " + it.label);
+      plus.append(svgIcon24(SVG_PLUS_24, 13));
+      plus.onclick = () => openSpawnDialog(null, { cwd: it.path, source: "group" });
+      h.append(plus);
+    }
     return h;
   }
   return renderSession(it.s, { compact: true });
@@ -4519,8 +4530,11 @@ $("agent").addEventListener("change", () => {
 // its own last directory, else the tier's default): a host profile otherwise kept a
 // box-owned copy's folder and the server refused the spawn.
 function applyProfileCwd() {
+  // A folder the group's + put there stays over a profile's default_cwd until the user changes it (spawnGroupHolds): the
+  // help line says "From the <ws> group's +", and a silent move would contradict it.
   const p = currentProfile();
   if (!p) return;
+  if (spawnGroupHolds({ source: spawnWsSource, prefill: spawnWsPrefill, cwd: getCwd(), text: $("spawn-ws-input").value })) return;
   if (!p.default_cwd) {
     const again = spawnCwdReselect({
       source: spawnWsSource, prefill: spawnWsPrefill, cwd: getCwd(), text: $("spawn-ws-input").value,

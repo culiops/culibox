@@ -768,6 +768,13 @@
     color: var(--amber); background: var(--amber-tint); font-size: var(--t-xs); font-weight: var(--w-semibold);
   }
   #sessions .wsh .wpip .dot { margin-top: 0; }
+  /* The + (the mockup's .wplus): hidden until the header is hovered or holds focus, then 22px square. It never shrinks. */
+  #sessions .wsh .wplus {
+    flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0;
+    border-radius: var(--r-chip); background: transparent; color: var(--muted); cursor: pointer; opacity: 0;
+  }
+  #sessions .wsh:hover .wplus, #sessions .wsh:focus-within .wplus { opacity: 1; }
+  #sessions .wsh .wplus:hover { background: var(--line); color: var(--fg); }
   /* A stale list drops its amber, as the Needs you label did (above). */
   #sessions.sess-stale .wsh .wpip { color: var(--muted); background: var(--raise); }
   /* A row is 6px + the 20px name line + the 18px sub-line + 6px = 50px (the frame's .srow), the dot
@@ -836,6 +843,7 @@
      keep it visible (#12). Nested in the desktop block on purpose. */
   @media (hover: none) {
     #sessions .drow .kbtn { width: var(--h-sm); opacity: 1; }
+    #sessions .wsh .wplus { opacity: 1; }
   }
   #sessions .drow .kbtn:hover { background: var(--line); color: var(--fg); }
   /* The kit's pressed look (.btn[aria-pressed="true"]): a menu button is expanded, not pressed, so it says so with aria-expanded. */

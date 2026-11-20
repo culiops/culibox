@@ -278,3 +278,95 @@ test("row CSS: the sub-line starts under the name", () => {
   assert.match(rule("#sessions .dchip .tchip-i") || "", /flex:\s*none/);
   assert.match(rule("#sessions .dchip.host .tchip-i") || "", /color:\s*var\(--fg\)/);
 });
+
+// ---- #340 S5 (Task 5): the group's +, and its path surviving a profile switch ---------------------------------
+test("the group + opens New session on the group's path; Other has none", () => {
+  const calls = [];
+  const ctx = headerCtx({ openSpawnDialog: (...a) => calls.push(a) });
+  const li = ctx.renderDesktopEntry(APP);
+  const plus = li.querySelector(".wplus");
+  assert.ok(plus, ".wplus");
+  assert.strictEqual(plus.tag, "button");
+  assert.strictEqual(plus.attrs.type, "button");
+  assert.strictEqual(plus.title, "New session in ~/app");
+  assert.strictEqual(plus.getAttribute("aria-label"), "New session in app");
+  assert.strictEqual(Number(plus.children[0].attrs.width), 13, "the 13px plus glyph");
+  assert.strictEqual(plus.children[0].children[0].attrs.d, "M5 12h14");
+  assert.strictEqual(li.children[2], plus, "after the pip");
+  plus.click();
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0][0], null);
+  assert.deepStrictEqual(Object.assign({}, calls[0][1]), { cwd: "/h/u/app", source: "group" });
+
+  const noPip = ctx.renderDesktopEntry(Object.assign({}, APP, { waiting: 0 }));
+  assert.strictEqual(noPip.children[1], noPip.querySelector(".wplus"), "with no pip it follows the toggle");
+
+  const other = ctx.renderDesktopEntry({ id: "grp:", header: true, key: "", path: "", label: "Other", count: 1, waiting: 0, dots: ["dot idle"], collapsed: false });
+  assert.strictEqual(other.querySelector(".wplus"), null);
+  assert.strictEqual(calls.length, 1, "building a header never opens the dialog");
+});
+
+function groupHolds() {
+  const ctx = vm.createContext({});
+  vm.runInContext(fnSrc(read("spawnpreview.js"), "spawnGroupHolds") + "\nglobalThis.spawnGroupHolds = spawnGroupHolds;", ctx);
+  return ctx.spawnGroupHolds;
+}
+
+test("spawnGroupHolds: only a group prefill the user has not changed", () => {
+  const holds = groupHolds();
+  const o = { source: "group", prefill: "/r", cwd: "/r", text: "/r" };
+  assert.strictEqual(holds(o), true);
+  assert.strictEqual(holds(Object.assign({}, o, { text: "/r/x" })), false);
+  assert.strictEqual(holds(Object.assign({}, o, { cwd: "/q" })), false);
+  assert.strictEqual(holds(Object.assign({}, o, { source: "profile" })), false);
+  assert.strictEqual(holds(Object.assign({}, o, { prefill: "" })), false);
+  assert.strictEqual(holds(Object.assign({}, o, { prefill: "", cwd: "", text: "" })), false);
+  assert.strictEqual(holds(null), false);
+  assert.strictEqual(typeof require("../static/spawnpreview.js").spawnGroupHolds, "function", "exported");
+});
+
+test("applyProfileCwd keeps a group's path over the profile's default_cwd", () => {
+  const run = (source) => {
+    const calls = [];
+    const ctx = vm.createContext({
+      currentProfile: () => ({ default_cwd: "/home/u/other" }),
+      spawnWsSource: source, spawnWsPrefill: "/r/a", getCwd: () => "/r/a", $: () => ({ value: "/r/a" }),
+      spawnGroupHolds: groupHolds(),
+      setSpawnCwd: (...a) => calls.push(["set"].concat(a)), onSpawnCwdChanged: () => calls.push(["changed"]),
+      spawnWsPicker: null, drawerDesktop: () => false,
+    });
+    vm.runInContext(fnSrc(read("app.js"), "applyProfileCwd") + "\napplyProfileCwd();", ctx);
+    return calls;
+  };
+  assert.deepStrictEqual(run("group"), [], "the group's path stays; nothing is set or repainted");
+  assert.deepStrictEqual(run("profile"), [["set", "/home/u/other", "profile"], ["changed"]]);
+  assert.match(fnSrc(read("app.js"), "applyProfileCwd"), /if \(!p\) return;\s*\n\s*if \(spawnGroupHolds\(\{ source: spawnWsSource, prefill: spawnWsPrefill, cwd: getCwd\(\), text: \$\("spawn-ws-input"\)\.value \}\)\) return;/);
+});
+
+test("+ CSS: hidden until hover or focus, always shown without hover", () => {
+  const css = read("desktop.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = (sel) => {
+    const esc = sel.replace(/[.[\]#:()]/g, "\\$&").replace(/ /g, "\\s+");
+    const m = new RegExp("(?:^|[}\\s])" + esc + "\\s*\\{([^}]*)\\}").exec(css);
+    return m ? m[1] : null;
+  };
+  const base = rule("#sessions .wsh .wplus") || "";
+  assert.match(base, /width:\s*22px/);
+  assert.match(base, /height:\s*22px/);
+  assert.match(base, /background:\s*transparent/);
+  assert.match(base, /color:\s*var\(--muted\)/);
+  assert.match(base, /opacity:\s*0/);
+  assert.match(base, /flex:\s*none/);
+  assert.match(base, /padding:\s*0/);
+  assert.match(base, /border:\s*0/);
+  assert.match(css, /#sessions \.wsh:hover \.wplus,\s*#sessions \.wsh:focus-within \.wplus\s*\{\s*opacity:\s*1;\s*\}/);
+  const hov = rule("#sessions .wsh .wplus:hover") || "";
+  assert.match(hov, /background:\s*var\(--line\)/);
+  assert.match(hov, /color:\s*var\(--fg\)/);
+  // the hover: none rule sits inside the desktop block (desktop-scope.test.js guards the block itself)
+  const desktopAt = css.indexOf("@media (min-width: 701px)");
+  const noHoverAt = css.indexOf("@media (hover: none)");
+  const m = /@media \(hover: none\)\s*\{([^@]*?\})\s*\}/.exec(css);
+  assert.ok(desktopAt >= 0 && noHoverAt > desktopAt, "nested after the desktop block opens");
+  assert.match(m[1], /#sessions \.wsh \.wplus\s*\{\s*opacity:\s*1;\s*\}/);
+});

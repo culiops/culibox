@@ -2,7 +2,7 @@
 // spawnpreview.js: the New session dialog's pure decisions (spec 5.6).
 const test = require("node:test");
 const assert = require("node:assert");
-const { profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
+const { profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnGroupHolds, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
 const { spawnWsIdleNote } = require("../static/dirpicker.js");
 
 const sre = {
@@ -1006,7 +1006,7 @@ function captionPage(over) {
     onSpawnCwdChanged: () => { ctx.changed = (ctx.changed || 0) + 1; }, spawnWsNoteFor, spawnWsIdleNote,
     // applyProfileCwd's inputs: the box's text, the remembered last spawn, the roots, the tier, and the pure choice.
     $: (id) => (id === "spawn-ws-input" ? { value: picker.typed === null ? picker.v : picker.typed } : null),
-    loadLastSpawn: () => ctx.last, last: null, workspacesCache: WS, segValue: () => ctx.tier, spawnWhere: () => ({ runtime: ctx.tier }), tier: "host", spawnCwdReselect,
+    loadLastSpawn: () => ctx.last, last: null, workspacesCache: WS, segValue: () => ctx.tier, spawnWhere: () => ({ runtime: ctx.tier }), tier: "host", spawnCwdReselect, spawnGroupHolds,
   }, over));
   vm.runInContext("let spawnWsSource = '', spawnWsPrefill = '';\n" + ["setSpawnCwd", "spawnWsCaption", "getCwd", "applyProfileCwd"].map(appFn).join("\n"), ctx);
   return { ctx, picker, state: () => Array.from(vm.runInContext("[spawnWsSource, spawnWsPrefill]", ctx)) };
