@@ -202,7 +202,13 @@ function tierCard(c) {
 // renderTierPick: redraw the three cards from the live dialog. Not drawn without a box layer.
 function renderTierPick() {
   const el = $("tierpick");
-  if (!el || !boxRuntime) return;
+  if (!el) return;
+  if (!boxRuntime) {
+    // No box layer: nothing is drawn, and nothing of an earlier draw stays.
+    el.replaceChildren();
+    el.dataset.value = "";
+    return;
+  }
   const m = tierModel({
     profile: currentProfile(), cwd: getCwd(), home: window.HOME_DIR || "", picked: tierPicked,
     cloneUnavailable, vmStopped: tierVmStopped, short: shortPath,
@@ -219,8 +225,16 @@ function renderTierPick() {
     // In place says "each change lands in the repo", so the folder sent must be the repo: whichever way the pick ended on in place
     // (a click, the clone card unavailable, a seg tap) with the workspace still the clone dir, the workspace moves. The move
     // redraws through onSpawnCwdChanged, which is the last word on the DOM; this call has nothing more to draw.
-    if (m.pick !== "clone") tierLeaveCloneDir(currentProfile());
+    // Not while the user types in the workspace field: the picker reports every keystroke, so a path typed under the clone dir
+    // would be swapped for the repo halfway through. A click (tierPick) and an open or fallback render still move it.
+    if (m.pick !== "clone" && !tierTypingCwd()) tierLeaveCloneDir(currentProfile());
   }
+}
+
+// tierTypingCwd: the workspace field has the focus. activeElement is guarded: the fake document of the tests has none.
+function tierTypingCwd() {
+  const input = $("spawn-ws-input");
+  return !!input && typeof document !== "undefined" && !!document && document.activeElement === input;
 }
 
 // tierVmFetch: ask whether the Box VM is stopped (macOS colima; "" elsewhere) and let the Box cards say so when it answers. Not awaited
@@ -296,6 +310,7 @@ function tierApplyRuntime(rt, clone) {
   else if (rt === "box" && clone === false) tierPicked = "box";
   else tierPicked = "";
   renderTierPick();
+  paintSpawnAcctHint(); // the hint reads the card just applied
 }
 
 // spawnWhere: the ONE reader of where the dialog's session runs. No box layer: {}, nothing about the tier is sent. The desktop reads

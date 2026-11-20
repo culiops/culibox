@@ -6046,7 +6046,9 @@ function syncRuntimeField() {
 // Duplicate's account when one is given, else the profile's own (ruling C2:
 // the default is the explicit "default", so picking it overrides a pinned
 // profile for this run). Painted from the cache at once; the fetch behind it
-// repaints only when the set of accounts changed, keeping the user's pick.
+// repaints the select only when the set of accounts changed, keeping the user's
+// pick, and repaints the account hint either way (a login_state can change
+// with the same names).
 // openSpawnDialog sets #agent programmatically (no change event), so it calls
 // this itself, like syncRuntimeField.
 function syncSpawnAccount(prefillAccount) {

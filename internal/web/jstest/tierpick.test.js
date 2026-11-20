@@ -171,12 +171,13 @@ function tpPage(over) {
   const pick = doc.createElement("div");
   const seg = doc.createElement("div");
   seg.dataset.value = "box";
+  const ws = doc.createElement("input");
   const calls = [];
   const box = {
     console, document: doc, window: { HOME_DIR: "/home/u" },
     boxRuntime: "runc", cloneUnavailable: "", desktop: true, profile: clone, cwd: "/home/u/clones/repo",
     seg, pick, calls,
-    $: (id) => (id === "tierpick" ? pick : id === "runtime-seg" ? seg : null),
+    $: (id) => (id === "tierpick" ? pick : id === "runtime-seg" ? seg : id === "spawn-ws-input" ? ws : null),
     currentProfile: () => box.profile,
     getCwd: () => box.cwd,
     shortPath: (p) => short(p),
@@ -198,7 +199,7 @@ function tpPage(over) {
     const r = vm.runInContext(code, ctx);
     return r && typeof r === "object" ? JSON.parse(JSON.stringify(r)) : r;
   };
-  return { ctx, doc, pick, seg, calls, run };
+  return { ctx, doc, pick, seg, ws, calls, run };
 }
 
 const cardsOf = (pg) => pg.pick.querySelectorAll("button.tp");
@@ -290,6 +291,20 @@ test("renderTierPick draws nothing without a box layer, and spawnWhere is {}", (
   assert.doesNotThrow(() => bare.run("renderTierPick()"));
 });
 
+test("renderTierPick without a box layer clears the cards and the value it left", () => {
+  const pg = tpPage();
+  pg.run("renderTierPick()");
+  assert.strictEqual(pg.pick.dataset.value, "clone");
+  assert.strictEqual(pg.pick.children.length, 3);
+  pg.ctx.boxRuntime = "";
+  pg.run("renderTierPick()");
+  assert.strictEqual(pg.pick.dataset.value, "");
+  assert.strictEqual(pg.pick.children.length, 0);
+  assert.deepStrictEqual(pg.run("spawnWhere()"), {});
+  const bare = tpPage({ boxRuntime: "", $: () => null });
+  assert.doesNotThrow(() => bare.run("renderTierPick()"));
+});
+
 test("spawnWhere reads the cards on the desktop and the seg on the phone", () => {
   const pg = tpPage();
   pg.pick.dataset.value = "clone";
@@ -367,6 +382,14 @@ test("a duplicate keeps its card", () => {
   const b = tpPage({ profile: bound, cwd: "/home/u/repo" });
   b.run('tierApplyRuntime("host", false)');
   assert.strictEqual(b.pick.dataset.value, "box", "an unavailable card still falls back");
+});
+
+test("a duplicate repaints the account hint after its card is applied", () => {
+  const pg = tpPage();
+  pg.run('tierApplyRuntime("host", false)');
+  const names = pg.calls.map((c) => c[0]);
+  assert.ok(names.includes("paintSpawnAcctHint"), "tierApplyRuntime calls paintSpawnAcctHint");
+  assert.strictEqual(pg.pick.dataset.value, "host", "the hint reads the card, so the card is drawn first");
 });
 
 test("a profile change forgets the pick", () => {
@@ -473,6 +496,27 @@ test("in place at the clone dir moves the workspace without a click: clone unava
   const ok = tpPage();
   ok.run("renderTierPick()");
   assert.strictEqual(ok.calls.filter((c) => c[0] === "setSpawnCwd").length, 0);
+});
+
+test("typing in the workspace field is not moved out of the clone dir; a click and an unfocused render still move", () => {
+  const over = { cloneUnavailable: "clone mode needs git 2.40" };
+  const pg = tpPage(over);
+  pg.doc.activeElement = pg.ws;
+  pg.run("renderTierPick()");
+  assert.strictEqual(pg.calls.filter((c) => c[0] === "setSpawnCwd").length, 0, "focused field: no passive move");
+  assert.strictEqual(pg.pick.dataset.value, "box");
+  // an explicit click still moves, focused or not
+  pg.run('tierPick("box")');
+  assert.deepStrictEqual(pg.calls.filter((c) => c[0] === "setSpawnCwd"), [["setSpawnCwd", "/home/u/repo", ""]]);
+  // another element focused, or no activeElement at all (fakedom): the passive move runs
+  const other = tpPage(over);
+  other.doc.activeElement = other.pick;
+  other.run("renderTierPick()");
+  assert.strictEqual(other.calls.filter((c) => c[0] === "setSpawnCwd").length, 1);
+  const none = tpPage(over);
+  delete none.doc.activeElement;
+  none.run("renderTierPick()");
+  assert.strictEqual(none.calls.filter((c) => c[0] === "setSpawnCwd").length, 1, "undefined activeElement is guarded");
 });
 
 test("the move to the repo ends, and the redraw it triggers shows the card of the new folder", () => {
