@@ -536,7 +536,27 @@ func (m *ProfileManager) merged() []config.AgentConfig {
 // Views returns the merged profiles + their options for the UI.
 func (m *ProfileManager) Views() []ProfileView {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	out, boxCred, pending := m.viewsLocked()
+	m.mu.Unlock()
+	// The credential probe may start a process (the macOS keychain), so it runs
+	// after the lock is released: a slow answer must not stall Get, a spawn or a save.
+	for _, w := range pending {
+		out[w.idx].BoxClaudeCredential = boxCredWord(boxCred(w.cfg))
+	}
+	return out
+}
+
+// pendingBoxCred is a claude profile view whose box_claude_credential is still
+// to be asked, outside the lock.
+type pendingBoxCred struct {
+	idx int
+	cfg config.AgentConfig
+}
+
+// viewsLocked builds the views with m.mu held. It also returns the credential
+// hook and the claude views waiting for it (none when no hook is set).
+func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) secretchain.Presence, []pendingBoxCred) {
+	var pending []pendingBoxCred
 	editable := map[string]bool{}
 	for _, p := range m.store.List() {
 		editable[p.Name] = true
@@ -584,7 +604,7 @@ func (m *ProfileManager) Views() []ProfileView {
 			CloneShare:     slices.Clone(a.CloneShare),
 		}
 		if pv.Claude && m.boxCred != nil {
-			pv.BoxClaudeCredential = boxCredWord(m.boxCred(a))
+			pending = append(pending, pendingBoxCred{idx: len(out), cfg: a})
 		}
 		if c, err := a.Clone(); err == nil && c != nil {
 			pv.AutoReturn = !c.NoAutoReturn
@@ -627,7 +647,7 @@ func (m *ProfileManager) Views() []ProfileView {
 		}
 		out = append(out, pv)
 	}
-	return out
+	return out, m.boxCred, pending
 }
 
 // OptionDefs returns the configured option definitions (for the profile editor).

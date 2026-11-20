@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/culiops/culibox/internal/awsprobe"
 	"github.com/culiops/culibox/internal/broker"
@@ -1064,5 +1065,38 @@ func TestProfilesListNoBoxCredentialHook(t *testing.T) {
 		if v, present := p["box_claude_credential"]; present {
 			t.Errorf("%s: no hook set, but box_claude_credential = %v", name, v)
 		}
+	}
+}
+
+// The credential probe can start a process (the macOS keychain), so Views asks it
+// with m.mu released: a hook that takes the lock must not deadlock.
+func TestProfilesViewsAsksBoxCredentialWithoutTheLock(t *testing.T) {
+	pm := NewProfileManager(boxCredSeeds(), nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	var calls atomic.Int32
+	pm.SetBoxClaudeCredential(func(a config.AgentConfig) secretchain.Presence {
+		calls.Add(1)
+		if _, ok := pm.Get(a.Name); !ok { // takes m.mu
+			t.Errorf("Get(%q) found nothing", a.Name)
+		}
+		return secretchain.Present
+	})
+	done := make(chan []ProfileView, 1)
+	go func() { done <- pm.Views() }()
+	select {
+	case views := <-done:
+		if n := calls.Load(); n != 2 {
+			t.Errorf("hook called %d times, want 2 (the two claude profiles)", n)
+		}
+		for _, v := range views {
+			want := ""
+			if v.Claude {
+				want = "yes"
+			}
+			if v.BoxClaudeCredential != want {
+				t.Errorf("%s: BoxClaudeCredential = %q, want %q", v.Name, v.BoxClaudeCredential, want)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Views deadlocked: the box credential hook ran with m.mu held")
 	}
 }
