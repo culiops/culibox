@@ -54,6 +54,42 @@ func Locate(dir string) (Repo, bool) {
 	}
 }
 
+// Normalize is the one spelling of a path that workspace grouping compares:
+// filepath.Clean plus EvalSymlinks, falling back to Clean alone when the path
+// cannot be resolved (it does not exist, or a component is unreadable). "" stays "".
+func Normalize(p string) string {
+	if p == "" {
+		return ""
+	}
+	p = filepath.Clean(p)
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
+// WorkspaceRoot is the repository dir that dir belongs to, normalised, so every
+// checkout of one repository reports the same string: the checkout's Top, or for
+// a linked worktree of a normal repository (Common is <main>/.git) that main
+// checkout. A worktree of a bare repository has no main checkout, so its own Top
+// stands. "" when dir is not inside a repository. Like Locate it only reads the
+// filesystem.
+func WorkspaceRoot(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	// Walk the physical path: a dir reached through a symlink must not be
+	// searched along the link's own parents.
+	r, ok := Locate(Normalize(dir))
+	if !ok {
+		return ""
+	}
+	if r.Linked && filepath.Base(r.Common) == ".git" {
+		return Normalize(filepath.Dir(r.Common))
+	}
+	return Normalize(r.Top)
+}
+
 // CheckoutOf reports the repository's common git dir for the checkout holding
 // dir, plus the checkout root when that checkout is a linked worktree (empty for
 // a main checkout or a submodule).

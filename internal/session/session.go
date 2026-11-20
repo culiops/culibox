@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/culiops/culibox/internal/gitrepo"
 	"log"
 	"maps"
 	"os"
@@ -810,6 +811,12 @@ type Info struct {
 	// Absent without them, so a plain session's wire shape is unchanged.
 	ContextPaths []string `json:"context_paths,omitempty"`
 	CloneOf      string   `json:"clone_of,omitempty"`
+	// WorkspaceRoot is the repository the session belongs to, so a client can
+	// group sessions by repo: a clone session's CloneOf, else the repo holding its
+	// cwd (a linked worktree reports its main repo), normalised; a shell reports
+	// its parent's. Set once at spawn and at load, never recomputed. Empty outside
+	// a repo ("Other").
+	WorkspaceRoot string `json:"workspace_root,omitempty"`
 	// LockedFiles are the workspace files the box layer keeps locked on the
 	// host while this session's box runs (macOS on a case-insensitive volume,
 	// where the box could otherwise change a guarded file through another
@@ -881,6 +888,8 @@ type Session struct {
 	// Info hands out a copy.
 	ContextPaths []string
 	CloneOf      string
+	// WorkspaceRoot is Info.WorkspaceRoot; immutable after publication.
+	WorkspaceRoot string
 	// LockedFiles is Info.LockedFiles; immutable after publication.
 	LockedFiles []string
 	// Exclusive: this session's box is its own (an elevate binding). Immutable;
@@ -1381,6 +1390,7 @@ func (s *Session) Info() Info {
 	in.Return = s.ret.copy()
 	in.ContextPaths = slices.Clone(s.ContextPaths)
 	in.CloneOf = s.CloneOf
+	in.WorkspaceRoot = s.WorkspaceRoot
 	in.LockedFiles = slices.Clone(s.LockedFiles)
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod,
@@ -2607,6 +2617,14 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 
 	created := time.Now()
 	base := deriveName(spec.Name, spec.Cwd, id)
+	// Once per spawn, before the session is published: cl is the resolved clone
+	// setup (nil after clone:false), so an in-place session of a clone profile
+	// reads its cwd, not the profile's clone_of.
+	cloneOf := ""
+	if cl != nil {
+		cloneOf = cl.Of
+	}
+	wsRoot := m.workspaceRootFor(spec.Cwd, cloneOf, spec.ParentID)
 	m.mu.Lock()
 	// Uniqueness is resolved in the SAME critical section that inserts
 	// m.sessions[id] below, so two concurrent spawns can never both win the
@@ -2645,9 +2663,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Clone = cloneInfo
 	sess.ContextPaths = slices.Clone(ctxPaths)
 	sess.LockedFiles = slices.Clone(lockedFiles)
-	if cl != nil {
-		sess.CloneOf = cl.Of
-	}
+	sess.CloneOf = cloneOf
+	sess.WorkspaceRoot = wsRoot
 	sess.Exclusive = exclusive
 	sess.cwdFormsCache = cwdForms
 	// Only a claude session born here has seen every conversation it will
@@ -2671,11 +2688,54 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
-			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, LockedFiles: slices.Clone(lockedFiles),
+			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, WorkspaceRoot: wsRoot, LockedFiles: slices.Clone(lockedFiles),
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
+}
+
+// workspaceRootOf is the repository a session belongs to: a clone session's
+// clone_of, else the repo holding cwd (gitrepo.WorkspaceRoot reads the
+// filesystem only). Both are normalised, so one repo reached through a symlink
+// is one group. "" means no repo.
+func workspaceRootOf(cwd, cloneOf string) string {
+	if cloneOf != "" {
+		return gitrepo.Normalize(cloneOf)
+	}
+	return gitrepo.WorkspaceRoot(cwd)
+}
+
+// workspaceRootFor is workspaceRootOf for a new session, except that a companion
+// shell takes its parent's value (its own cwd may be the agent's clone dir). A
+// parent that is not registered leaves the shell to its own cwd. WorkspaceRoot
+// is immutable once published, so the parent is read after the lock is released.
+func (m *Manager) workspaceRootFor(cwd, cloneOf, parentID string) string {
+	if parentID != "" {
+		m.mu.Lock()
+		p := m.sessions[parentID]
+		m.mu.Unlock()
+		if p != nil {
+			return p.WorkspaceRoot
+		}
+	}
+	return workspaceRootOf(cwd, cloneOf)
+}
+
+// workspaceRootOfMeta is the load-time value for a record without one. A shell
+// whose parent's record is in meta takes the parent's, recorded or computed from
+// the parent's own cwd and clone_of, so the answer does not depend on which of
+// the two is reattached first.
+func workspaceRootOfMeta(md sessionMeta, meta map[string]sessionMeta) string {
+	if md.ParentID != "" {
+		if pm, ok := meta[md.ParentID]; ok {
+			if pm.WorkspaceRoot != "" {
+				return pm.WorkspaceRoot
+			}
+			return workspaceRootOf(pm.Cwd, pm.CloneOf)
+		}
+	}
+	return workspaceRootOf(md.Cwd, md.CloneOf)
 }
 
 // tokenMCP writes the session's own MCP config when a bound token entry declares
@@ -3367,6 +3427,10 @@ func (m *Manager) Reconcile() error {
 				sc.put(id, md)
 			}
 		}
+		if md.WorkspaceRoot == "" {
+			// A record from before workspace_root: computed here, once per load.
+			md.WorkspaceRoot = workspaceRootOfMeta(md, meta)
+		}
 		if err := m.reattach(id, md); err != nil {
 			// Leave the abduco session running; it can be recovered on a later
 			// restart. Don't fail the whole reconcile for one bad re-attach.
@@ -3488,6 +3552,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.Clone = md.Clone.copy()
 	sess.ContextPaths = slices.Clone(md.ContextPaths)
 	sess.CloneOf = md.CloneOf
+	sess.WorkspaceRoot = md.WorkspaceRoot // filled in by Reconcile when the record predates it
 	sess.LockedFiles = slices.Clone(md.LockedFiles)
 	sess.Exclusive = md.Exclusive
 	// nil for a record from before the probe: every key reads "not checked"
