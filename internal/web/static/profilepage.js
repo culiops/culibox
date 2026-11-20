@@ -1923,9 +1923,11 @@ function pfvRunsForm(rec, c) {
     p.append(refusal, " ", link);
     out.push(p);
   }
-  // host_block is the server's reason Host is not offered. With no lock stored that reason is a binding (or a private copy), which
-  // forces the lock, so the box shows it ticked and off; a stored lock stays the user's to clear, whatever else blocks Host.
-  const forced = !!c.view.host_block && c.view.box_only !== true;
+  // host_block is the server's reason Host is not offered. With no lock stored that reason is a binding or context paths
+  // (never a private copy), which forces the lock, so the box shows it ticked and off; a stored lock
+  // stays the user's to clear, whatever else blocks Host. Once Host is picked the box is the user's own value again:
+  // the pre-check refuses a ticked lock there, and an unticked one saves as host with the bindings stripped.
+  const forced = !!c.view.host_block && c.view.box_only !== true && v.tier !== "host";
   const why = forced ? c.view.host_block.charAt(0).toUpperCase() + c.view.host_block.slice(1) + "." : "";
   out.push(pfaCheckbox(rec, "box_only", "Box only: never offer Host for this profile", why, v.boxOnly || forced,
     (on) => { v.boxOnly = on; pfvChanged(rec, "box_only"); }, null, forced));

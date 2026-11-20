@@ -1491,6 +1491,32 @@ test("the Box only checkbox: forced by bindings is ticked and disabled with the 
   assert.strictEqual(locked.box.puts[0].runtime, "box");
 });
 
+test("a binding-forced Box only checkbox stops reading as forced once Host is picked", async () => {
+  const t = page();
+  await openRuns(t, "aws-ops");
+  const forcedNow = () => field(t, "box_only").checked === true && field(t, "box_only").disabled === true;
+  assert.ok(forcedNow(), "Box: ticked and disabled");
+  field(t, "tier-host").checked = true;
+  field(t, "tier-host").onchange();
+  const cb = field(t, "box_only");
+  assert.strictEqual(cb.checked, false, "Host picked: the user's own value, unticked");
+  assert.notStrictEqual(cb.disabled, true, "enabled");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-check-d"), [], "no forcing reason");
+  assert.ok(!classesOf(boxOnlyLabel(t)).includes("pfv-off"));
+  // Ticking it with Host picked is refused by the pre-check, before any confirm.
+  cb.checked = true;
+  cb.onchange();
+  assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save as host…"), false);
+  assert.strictEqual(t.box.asked.length, 0, "no host-switch confirm");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), ["Box only is on, so this profile cannot be saved as host. Turn Box only off first."]);
+  // Back to Box: forced again, with the reason.
+  field(t, "tier-box").checked = true;
+  field(t, "tier-box").onchange();
+  assert.ok(forcedNow(), "Box again: ticked and disabled");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-check-d"), [AWS_SENTENCE]);
+  assert.ok(classesOf(boxOnlyLabel(t)).includes("pfv-off"));
+});
+
 test("Host with Box only on is refused before the PUT", async () => {
   const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { box_only: true, host_block: "this profile is set to box only" }) : p)) });
   t.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { box_only: true });
@@ -1507,6 +1533,7 @@ test("Host with Box only on is refused before the PUT", async () => {
   const PFV_BOX_ONLY_HOST = t.run("PFV_BOX_ONLY_HOST");
   assert.strictEqual(PFV_BOX_ONLY_HOST, "Box only is on, so this profile cannot be saved as host. Turn Box only off first.");
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), [PFV_BOX_ONLY_HOST]);
+  assert.strictEqual(t.run("PFE_BOX_ONLY_HOST"), PFV_BOX_ONLY_HOST, "profileedit.js repeats the sentence for the server's refusal");
   assert.strictEqual(field(t, "box_only").getAttribute("aria-invalid"), "true");
 });
 

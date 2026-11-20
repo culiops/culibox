@@ -85,6 +85,7 @@ const PFE_FIELD_BLOCK = new Map([
 const PFE_HOST_KIND = new Map([
   ["aws", "Old-style AWS"], ["aws_connections", "AWS connections"], ["github", "GitHub"], ["tokens", "Tokens"],
   ["context_paths", "Readable folders"], ["egress_allow", "Domains"], ["egress_open", "Network settings"],
+  ["box_only", "Box only"],
 ]);
 
 const PFE_STALE_TEXT = "This profile changed elsewhere";
@@ -120,6 +121,11 @@ const PFE_NOT_A_HOST = /\bnormalised\b/;
 // ErrContextNeedsBox's `needs runtime "box"`, and the clone refusal.
 const PFE_NEEDS_BOX = /\b(?:requires?|needs?) runtime[:\s]+"?box\b|\bruns only in a box\b/;
 // The `profile "<name>": ` some wrappers put in front (the name is %q-quoted, so a quote in it is escaped).
+// The lock beside runtime host (config.go: `box_only cannot be combined with runtime "host"; remove one`). The page's own
+// sentence for it is profilepage.js's PFV_BOX_ONLY_HOST; profileedit.js loads first and the node tests load it alone, so the
+// words are repeated here (profilepage.test.js pins them equal).
+const PFE_BOX_ONLY_HOST = "Box only is on, so this profile cannot be saved as host. Turn Box only off first.";
+const PFE_BOX_ONLY_REFUSAL = /\bcannot be combined with runtime\b/;
 const PFE_PROFILE_PREFIX = /^profile "(?:[^"\\]|\\.)*": /;
 
 // --- small helpers -------------------------------------------------------------------
@@ -328,6 +334,7 @@ function pfvHostRemovals(doc) {
   const domains = pfeNames(d.egress_allow);
   if (domains.length) out.push({ kind: PFE_HOST_KIND.get("egress_allow"), names: domains });
   if (d.egress_open === true) out.push({ kind: PFE_HOST_KIND.get("egress_open"), names: [] });
+  if (d.box_only === true) out.push({ kind: PFE_HOST_KIND.get("box_only"), names: [] });
   return out;
 }
 
@@ -336,6 +343,8 @@ function pfvHostRemovals(doc) {
 function pfvToHost(doc) {
   const out = pfeClone(doc);
   for (const k of PFE_BOX_ONLY) delete out[k];
+  // The lock is not a box-only grant but the server refuses it beside runtime host, so it goes too.
+  delete out.box_only;
   out.runtime = "host";
   return out;
 }
@@ -469,6 +478,7 @@ function pfeSentence(raw) {
 // config keys (see the constants) get plain sentences; any other keeps the server's own.
 function pfeFieldText(field, sentence) {
   const head = (/^[^.[\]]+/.exec(field) || [""])[0];
+  if (head === "box_only" && PFE_BOX_ONLY_REFUSAL.test(sentence)) return PFE_BOX_ONLY_HOST;
   if (PFE_PATH_FIELDS.has(head) && PFE_RELATIVE.test(sentence)) return PFE_RELATIVE_PATH;
   if (PFE_FOLDER_FIELD.test(field) && PFE_NOT_THERE.test(sentence)) return PFE_FOLDER_GONE;
   if (PFE_CREDENTIAL_FIELD.test(field) && PFE_UNDEFINED.test(sentence)) return PFE_CREDENTIAL_MISSING;
