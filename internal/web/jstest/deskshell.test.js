@@ -13,11 +13,12 @@ const working = { id: "r", name: "r", activity: "working", runtime: "box" };
 const idle = { id: "i", name: "i", activity: "idle", runtime: "host", summary: "" };
 const sso = { id: "s", name: "s", activity: "working", need: "sso", runtime: "box" };
 
-test("deskGroups keeps Needs you, Running, Idle and drops empty groups", () => {
+test("deskGroups: sessions with no workspace_root share one Other group, blocked rows first", () => {
   const g = d.deskGroups([idle, working, waiting, sso]);
-  assert.deepEqual(g.map((x) => x.label), ["Needs you", "Running", "Idle"]);
-  assert.deepEqual(g[0].sessions.map((s) => s.id), ["w", "s"], "an SSO need counts as needs-you");
-  assert.deepEqual(d.deskGroups([working]).map((x) => x.key), ["running"]);
+  assert.equal(g.length, 1);
+  assert.equal(g[0].key, "");
+  assert.equal(g[0].label, "Other");
+  assert.deepEqual(g[0].sessions.map((s) => s.id), ["s", "w", "r", "i"], "both are blocked, so their names decide; an SSO need counts");
   assert.deepEqual(d.deskGroups([]), []);
   assert.deepEqual(d.deskGroups(null), []);
 });
@@ -100,13 +101,12 @@ test("jumpOrder skips nested shells, so Mod+1…9 and the rail target agents onl
   assert.ok(d.jumpOrder([idle, orphan], false).some((s) => s.id === "sh"), "an orphan shell is an ordinary row");
 });
 
-test("deskGroups lists a shell right after its parent and does not count it", () => {
+test("deskGroups lists a shell right after its parent and counts it", () => {
   const shell = { id: "sh", name: "sh", activity: "waiting", need: "ask", ask: "x", parent_id: "i", created: "2026-10-27T09:00:00Z" };
   const g = d.deskGroups([shell, idle, working]);
-  assert.deepEqual(g.map((x) => x.key), ["running", "idle"], "the waiting shell makes no Needs you group");
-  const idleGroup = g.find((x) => x.key === "idle");
-  assert.equal(idleGroup.count, 1);
-  assert.deepEqual(idleGroup.sessions.map((s) => s.id), ["i", "sh"]);
+  assert.equal(g.length, 1);
+  assert.deepEqual(g[0].sessions.map((s) => s.id), ["r", "i", "sh"], "the shell is listed after i, not ranked on its own");
+  assert.equal(g[0].count, 3);
 });
 
 test("paneHeaderModel: full slots in order for a wide pane", () => {
@@ -640,13 +640,11 @@ const A = {
 const noAttn = (s) => { const c = { ...s }; delete c.attention; return c; };
 const mixed = [A.ask, A.sso, A.store, A.turn, A.working, A.idle];
 
-test("deskGroups: a finished turn leaves Needs you for its own Done · your turn group, right after it", () => {
+test("deskGroups: inside a group a finished turn follows the blocked rows and precedes working", () => {
   const g = d.deskGroups(mixed);
-  assert.deepEqual(g.map((x) => x.key), ["needs-you", "your-turn", "running", "idle"]);
-  assert.deepEqual(g.map((x) => x.label), ["Needs you", "Done · your turn", "Running", "Idle"]);
-  assert.deepEqual(g.map((x) => x.count), [3, 1, 1, 1]);
-  assert.deepEqual(g[0].sessions.map((s) => s.id), ["ask", "sso", "store"]);
-  assert.deepEqual(g[1].sessions.map((s) => s.id), ["turn"]);
+  assert.equal(g.length, 1);
+  assert.deepEqual(g[0].sessions.map((s) => s.id), ["ask", "sso", "store", "turn", "work", "idle"]);
+  assert.equal(g[0].count, 6);
 });
 
 test("deskGroups: the same list without the server's attention field groups the same", () => {
@@ -655,23 +653,133 @@ test("deskGroups: the same list without the server's attention field groups the 
     d.deskGroups(mixed).map((x) => [x.key, x.count, x.sessions.map((s) => s.id)]));
 });
 
-test("deskGroups: Done · your turn is dropped when empty, and Mod+N order follows the sidebar", () => {
-  assert.deepEqual(d.deskGroups([A.ask, A.working]).map((x) => x.key), ["needs-you", "running"]);
+test("deskGroups: Mod+N order follows the sidebar", () => {
   assert.deepEqual(d.jumpOrder(mixed, false).map((s) => s.id), ["ask", "sso", "store", "turn", "work", "idle"]);
 });
 
-test("deskGroups: an exited session with a stale sign-in need is at rest, not in Needs you", () => {
+test("deskGroups: an exited session with a stale sign-in need is at rest, not waiting", () => {
   const dead = { id: "dead", name: "dead", exited: true, activity: "done", need: "sso", aws_connections: [{ name: "dev", sso_expired: "acme" }] };
   const g = d.deskGroups([dead]);
-  assert.deepEqual(g.map((x) => x.key), ["idle"]);
+  assert.equal(g[0].waiting, 0);
 });
 
-test("a nested shell rides with its parent in the Done · your turn group", () => {
+test("a nested shell rides with its parent, after it", () => {
   const sh = { id: "sh", name: "sh", activity: "working", parent_id: "turn", created: "2026-10-27T09:00:00Z" };
   const g = d.deskGroups([A.turn, sh]);
-  assert.deepEqual(g.map((x) => x.key), ["your-turn"]);
   assert.deepEqual(g[0].sessions.map((s) => s.id), ["turn", "sh"]);
-  assert.equal(g[0].count, 1);
+  assert.equal(g[0].count, 2);
+});
+
+// --- #340 S5: the sidebar groups by workspace ---
+const ws = (id, root, extra) => ({ id, name: id, activity: "idle", workspace_root: root, created: "2026-11-20T08:00:00Z", ...extra });
+const idsOf = (list) => list.map((s) => s.id);
+
+test("deskWsGroups: one group per workspace_root, alphabetical, Other last", () => {
+  const g = d.deskWsGroups([ws("z1", "/r/zeta"), ws("a1", "/r/alpha"), ws("o1", ""), ws("a2", "/r/alpha", { activity: "working" })]);
+  assert.deepEqual(g.map((x) => x.key), ["/r/alpha", "/r/zeta", ""]);
+  assert.deepEqual(g.map((x) => x.label), ["alpha", "zeta", "Other"]);
+  assert.deepEqual(g.map((x) => x.count), [2, 1, 1]);
+  assert.deepEqual(idsOf(g[0].sessions), ["a2", "a1"]);
+  assert.ok(g.every((x) => x.path === x.key));
+});
+
+test("deskWsGroups: a group holding a waiting row comes first, Other last within its tier", () => {
+  const g = d.deskWsGroups([ws("c", "/r/c"), ws("b", "/r/b", { activity: "waiting" }), ws("o", "", { activity: "waiting" }), ws("a", "/r/a", { attention: "done", need: "turn" })]);
+  assert.deepEqual(g.map((x) => x.key), ["/r/b", "", "/r/a", "/r/c"]);
+  assert.deepEqual(g.map((x) => x.waiting), [1, 1, 0, 0], "a finished turn does not lift its group");
+});
+
+test("deskWsGroups: inside a group, block, done, working, the rest, then name", () => {
+  const g = d.deskWsGroups([ws("b", "/r"), ws("c", "/r", { activity: "working" }), ws("d", "/r", { need: "turn", attention: "done" }), ws("e", "/r", { activity: "waiting" }), ws("a", "/r")]);
+  assert.deepEqual(idsOf(g[0].sessions), ["e", "d", "c", "a", "b"]);
+});
+
+test("deskWsGroups: a nested shell rides with its parent and counts; an orphan shell groups by its own root", () => {
+  const p = ws("p", "/r/x");
+  const sh = { ...ws("sh", "/r/y"), parent_id: "p", created: "2026-11-20T09:00:00Z" };
+  const g = d.deskWsGroups([p, sh]);
+  assert.equal(g.length, 1);
+  assert.equal(g[0].key, "/r/x");
+  assert.deepEqual(idsOf(g[0].sessions), ["p", "sh"]);
+  assert.equal(g[0].count, 2);
+  assert.equal(g[0].dots.length, 2);
+  const o = d.deskWsGroups([p, { ...sh, parent_id: "gone" }]);
+  assert.deepEqual(o.map((x) => x.key), ["/r/x", "/r/y"]);
+});
+
+test("deskWsLabels: a shared basename reads name · parent on every colliding root", () => {
+  const roots = ["/a/x/app", "/b/y/app", "/c/tools", ""];
+  const m = d.deskWsLabels(roots);
+  assert.deepEqual(roots.map((r) => m.get(r)), ["app · x", "app · y", "tools", "Other"]);
+  const g = d.deskWsGroups(roots.map((r, i) => ws("s" + i, r)));
+  assert.deepEqual(g.map((x) => x.label), ["app · x", "app · y", "tools", "Other"]);
+  assert.equal(d.deskWsLabels(["/a/app", "/a/app"]).get("/a/app"), "app", "the same root twice is no collision");
+});
+
+test("deskWsGroups: a collapsed group keeps its waiting count and dots, and sorts first", () => {
+  const list = [ws("w", "/r/m", { activity: "waiting" }), ws("k", "/r/m", { activity: "working" }), ws("i", "/r/a")];
+  const g = d.deskWsGroups(list, new Set(["/r/m"]));
+  assert.equal(g[0].key, "/r/m");
+  assert.equal(g[0].collapsed, true);
+  assert.equal(g[0].waiting, 1);
+  assert.deepEqual(g[0].dots, ["dot waiting", "dot working"]);
+  assert.deepEqual(idsOf(g[0].sessions), ["w", "k"]);
+  assert.equal(g[1].key, "/r/a");
+  assert.equal(g[1].collapsed, false);
+  const other = d.deskWsGroups([ws("o", "")], new Set([""]));
+  assert.equal(other[0].collapsed, true, "Other is a valid key");
+});
+
+test("jumpOrder skips collapsed groups only when given the set", () => {
+  const list = [ws("w", "/r/m", { activity: "waiting" }), ws("k", "/r/m", { activity: "working" }), ws("i", "/r/a")];
+  assert.deepEqual(idsOf(d.jumpOrder(list, false)), ["w", "k", "i"]);
+  assert.deepEqual(idsOf(d.jumpOrder(list, false, new Set(["/r/m"]))), ["i"]);
+  assert.equal(d.jumpOrder(list, true, new Set(["/r/m"])), list);
+  assert.equal(d.nextNeedsYou(list, null).id, "w", "the waiting session in a collapsed group is still reached");
+});
+
+test("deskWsHeaderSig moves with collapse and waiting, and with the dots only while collapsed", () => {
+  const it = { key: "/r", label: "r", path: "/r", count: 2, waiting: 0, dots: ["dot idle", "dot idle"], collapsed: false };
+  const sig = d.deskWsHeaderSig(it);
+  assert.equal(d.deskWsHeaderSig({ ...it, dots: ["dot working", "dot idle"] }), sig);
+  assert.notEqual(d.deskWsHeaderSig({ ...it, waiting: 1 }), sig);
+  assert.notEqual(d.deskWsHeaderSig({ ...it, collapsed: true }), sig);
+  const col = { ...it, collapsed: true };
+  assert.notEqual(d.deskWsHeaderSig({ ...col, dots: ["dot working", "dot idle"] }), d.deskWsHeaderSig(col));
+});
+
+test("wsCollapsed: toggle, write, read round-trip; bad stores read empty; the cap keeps the newest", () => {
+  const fake = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) }; };
+  const set = new Set();
+  assert.equal(d.wsCollapsedToggle(set, "/r/a"), true);
+  assert.equal(d.wsCollapsedToggle(set, "/r/a"), false);
+  assert.equal(d.wsCollapsedToggle(set, ""), true);
+  const st = fake();
+  d.wsCollapsedWrite(st, set);
+  assert.deepEqual(JSON.parse(st.getItem(d.DESK_WS_COLLAPSED_KEY)), { v: 1, keys: [""] });
+  assert.deepEqual([...d.wsCollapsedRead(st)], [""]);
+  const reads = (raw) => [...d.wsCollapsedRead({ getItem: () => raw })];
+  assert.deepEqual(reads('{"v":2,"keys":["/x"]}'), []);
+  assert.deepEqual(reads("not json"), []);
+  assert.deepEqual(reads('{"v":1,"keys":[1,"/y"]}'), ["/y"]);
+  assert.deepEqual(reads('{"v":1,"keys":"/y"}'), []);
+  assert.deepEqual(reads(null), []);
+  const boom = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("full"); } };
+  assert.equal(d.wsCollapsedRead(boom).size, 0);
+  assert.doesNotThrow(() => d.wsCollapsedWrite(boom, set));
+  assert.equal(d.wsCollapsedRead(null).size, 0);
+  assert.doesNotThrow(() => d.wsCollapsedWrite(null, set));
+  const big = new Set();
+  for (let i = 0; i <= d.DESK_WS_COLLAPSED_CAP; i++) d.wsCollapsedToggle(big, "/k" + i);
+  assert.equal(big.size, 500);
+  assert.equal(big.has("/k0"), false);
+  assert.equal(big.has("/k500"), true);
+  const stored = fake();
+  stored.setItem(d.DESK_WS_COLLAPSED_KEY, JSON.stringify({ v: 1, keys: Array.from({ length: 600 }, (_, i) => "/p" + i) }));
+  const back = d.wsCollapsedRead(stored);
+  assert.equal(back.size, 500);
+  assert.equal(back.has("/p99"), false);
+  assert.equal(back.has("/p599"), true);
 });
 
 test("rowSubline: a finished turn reads its summary, muted, no amber and no 'your turn:' prefix", () => {
