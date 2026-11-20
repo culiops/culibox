@@ -361,6 +361,34 @@ function valueUpdatedText(iso) {
 
 const AWS_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
+// AWS_REGIONS: the AWS commercial regions, offered after the regions the host's own profiles name. A list of
+// suggestions only: the input stays free text (a new region appears before this list does) and the server's
+// format check (awsscope.regionRe) is the one that decides.
+const AWS_REGIONS = [
+  "us-east-1", "us-east-2", "us-west-1", "us-west-2",
+  "af-south-1",
+  "ap-east-1", "ap-east-2", "ap-south-1", "ap-south-2",
+  "ap-southeast-1", "ap-southeast-2", "ap-southeast-3", "ap-southeast-4", "ap-southeast-5", "ap-southeast-6", "ap-southeast-7",
+  "ap-northeast-1", "ap-northeast-2", "ap-northeast-3",
+  "ca-central-1", "ca-west-1",
+  "eu-central-1", "eu-central-2", "eu-west-1", "eu-west-2", "eu-west-3", "eu-north-1", "eu-south-1", "eu-south-2",
+  "il-central-1", "me-south-1", "me-central-1", "mx-central-1", "sa-east-1",
+];
+
+// awsRegionSuggest(profiles): the regions the discovered profiles name (in profile order, each once), then
+// AWS_REGIONS that are not already listed.
+function awsRegionSuggest(profiles) {
+  const out = [];
+  for (const p of profiles || []) if (p && p.region && !out.includes(p.region)) out.push(p.region);
+  for (const r of AWS_REGIONS) if (!out.includes(r)) out.push(r);
+  return out;
+}
+
+// awsProfileSuggest(profiles): the names of the discovered profiles a connection can sign in with.
+function awsProfileSuggest(profiles) {
+  return (profiles || []).filter((p) => p && p.selectable && p.name).map((p) => p.name);
+}
+
 // awsConnName: a host profile's name as a connection name: lowercase, anything
 // outside [a-z0-9-] becomes "-", leading non-alphanumerics dropped, at most 63.
 // It can come out empty (a profile named "---"); the operator types one then.
@@ -872,6 +900,7 @@ if (typeof module !== "undefined" && module.exports) {
     credGroups, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
     providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, credTableRows, credTableHead, awsGateBoxEmpty,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
+    AWS_REGIONS, awsRegionSuggest, awsProfileSuggest,
     awsGateView, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
     awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC, awsFootNote, awsFootReasons, setDisabledReason,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
@@ -1862,6 +1891,20 @@ let awsRowSeq = 0;
 
 function awsEl(tag, cls, text) { return credEl(tag, cls, text); }
 
+// awsSetOptions: `dl` (a <datalist>) holds exactly one <option> per value.
+function awsSetOptions(dl, values) {
+  dl.replaceChildren(...values.map((v) => { const o = document.createElement("option"); o.value = v; return o; }));
+}
+
+// awsFillSuggest: put the flow's current suggestions into every row's lists (a row built before the host's
+// profiles were read starts with the built-in regions only).
+function awsFillSuggest(f) {
+  for (const row of f.rows) {
+    if (row.lists && row.lists.source_profile) awsSetOptions(row.lists.source_profile, awsProfileSuggest(f.profiles));
+    if (row.lists && row.lists.region) awsSetOptions(row.lists.region, awsRegionSuggest(f.profiles));
+  }
+}
+
 function awsBtn(label, cls, onclick) {
   const b = awsEl("button", "btn" + (cls ? " " + cls : ""), label);
   b.type = "button";
@@ -1920,6 +1963,9 @@ function awsOpenEdit(entry) {
   row.orig = { source_profile: row.source_profile, role_arn: row.role_arn, mode: row.mode };
   awsFlow = { mode: "edit", rows: [row], profiles: [], selected: new Set(), sso: {}, timers: new Set(), saving: false, msg: "", loadErr: "" };
   awsPaintFlow();
+  // The form is drawn at once; its suggestion lists fill when the host's profiles are read. A failure leaves
+  // them empty (awsPaintProfiles has no list to show it in on an edit): the fields stay plain free text.
+  return awsLoadProfiles(awsFlow);
 }
 
 function awsNewRow(base, extra) {
@@ -2025,6 +2071,7 @@ async function awsLoadProfiles(f) {
   }
   f.loaded = true;
   awsPaintProfiles();
+  awsFillSuggest(f);
 }
 
 function awsProfileDesc(p) {
@@ -2106,6 +2153,16 @@ function awsField(row, key, label, opts) {
   inp.spellcheck = false;
   if (o.placeholder) inp.placeholder = o.placeholder;
   if (o.readonly) { inp.readOnly = true; inp.classList.add("ro"); }
+  // A suggestion list: a native <datalist>, so the input stays free text. The list is filled by the caller
+  // (awsSetOptions) now or later, when what it suggests has been read; row.lists[key] is where to find it.
+  let dl = null;
+  if (o.suggest) {
+    dl = document.createElement("datalist");
+    dl.id = id + "-list";
+    awsSetOptions(dl, o.suggest);
+    inp.setAttribute("list", dl.id);
+    (row.lists = row.lists || {})[key] = dl;
+  }
   inp.oninput = () => {
     row[key] = inp.value;
     if (o.invalidates) awsInvalidate(row);
@@ -2114,8 +2171,9 @@ function awsField(row, key, label, opts) {
     awsPaintFoot();
   };
   col.append(lab, inp);
+  if (dl) col.appendChild(dl);
   if (o.hint) col.appendChild(awsEl("p", "hint", o.hint));
-  return { col, inp };
+  return { col, inp, dl };
 }
 
 // awsInvalidate: the role, its signing profile or the region changed, so the
@@ -2181,8 +2239,12 @@ function awsBuildRow(row) {
   grid.appendChild(nfull);
   row.modeNoteCol = nfull;
 
-  grid.appendChild(awsField(row, "source_profile", "Source profile", { readonly: !edit, invalidates: true }).col);
-  grid.appendChild(awsField(row, "region", "Region", { invalidates: true, placeholder: "ap-southeast-1" }).col);
+  const f = awsFlow;
+  // Add mode takes the source profile from the ticked host profile and keeps it read-only, so only an edit offers a list.
+  grid.appendChild(awsField(row, "source_profile", "Source profile", { readonly: !edit, invalidates: true,
+    suggest: edit ? awsProfileSuggest(f && f.profiles) : null,
+    hint: "A profile in the host's AWS config file (usually ~/.aws/config) that CuliBox signs in with." }).col);
+  grid.appendChild(awsField(row, "region", "Region", { invalidates: true, placeholder: "ap-southeast-1", suggest: awsRegionSuggest(f && f.profiles) }).col);
   if (edit) grid.appendChild(awsField(row, "description", "Description", { full: true }).col);
 
   const pcol = awsEl("div", "fcol full");

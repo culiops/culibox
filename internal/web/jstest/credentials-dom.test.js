@@ -2855,3 +2855,75 @@ test("GitHub App Key file: the hint names the owner, symlink and 600 rules, in a
     for (const w of ["owned by", "symlink", "600", "restart"]) assert.ok(hint.textContent.includes(w), w + ": " + hint.textContent);
   }
 });
+
+// AWS edit: the source profile and region fields suggest what the host already has (datalists), free text kept.
+const editEntry = { name: "web-conn", source_profile: "base", role_arn: "arn:aws:iam::111111111111:role/agentbox-dev", region: "eu-west-1", mode: "assume" };
+const hostProfilesReply = (profiles) => (path) => {
+  if (path === "/api/credentials/aws/host-profiles") return { profiles };
+  if (path === "/api/credentials/aws/check") return { assume: "ok", verdict: "read_only" };
+  return {};
+};
+const listOptions = (root, key) => {
+  const input = root.querySelectorAll("input").find((i) => i.id && i.id.endsWith("-" + key));
+  const dl = root.querySelectorAll("datalist").find((d) => d.id === input.attrs.list);
+  return { input, values: dl ? dl.children.map((o) => o.value) : null };
+};
+const editPuts = (p) => p.calls.filter((c) => c.method === "PUT");
+
+test("AWS edit fetches host profiles once and suggests them; typed free text is what saves", async () => {
+  const p = page({ tab: true });
+  p.box.reply = hostProfilesReply([
+    { name: "sandbox", kind: "sso", region: "ap-southeast-1", selectable: true },
+    { name: "second", kind: "assume-role", region: "", selectable: true },
+    { name: "locked", kind: "sso", region: "us-west-2", selectable: false, note: "no SSO session" },
+  ]);
+  p.box.awsOpenEdit(editEntry);
+  await settle();
+  assert.strictEqual(p.calls.filter((c) => c.path === "/api/credentials/aws/host-profiles").length, 1, "once per open");
+  const body = p.byId["creds-body"];
+  const sp = listOptions(body, "source_profile");
+  assert.deepStrictEqual(sp.values, ["sandbox", "second"], "selectable profiles only");
+  const rg = listOptions(body, "region");
+  assert.deepStrictEqual(rg.values.slice(0, 2), ["ap-southeast-1", "us-west-2"], "regions the host's profiles name come first");
+  assert.strictEqual(rg.values.filter((r) => r === "us-east-1").length, 1, "then the built-in list, each once");
+  assert.ok(!sp.input.readOnly, "an edit's source profile is editable");
+  sp.input.value = "my-custom";
+  sp.input.oninput();
+  await p.box.awsCheckAll();
+  await p.box.awsSaveAll();
+  assert.strictEqual(editPuts(p)[0].body.connection.source_profile, "my-custom");
+});
+
+test("AWS edit: a profile list that fails or is empty leaves plain free-text inputs that still save", async () => {
+  for (const how of ["500", "empty"]) {
+    const p = page({ tab: true });
+    p.box.reply = how === "500"
+      ? (path) => { if (path === "/api/credentials/aws/host-profiles") throw Object.assign(new Error("boom"), { status: 500 }); return path.endsWith("/check") ? { assume: "ok", verdict: "read_only" } : {}; }
+      : hostProfilesReply([]);
+    p.box.awsOpenEdit(editEntry);
+    await settle();
+    const body = p.byId["creds-body"];
+    assert.deepStrictEqual(listOptions(body, "source_profile").values, [], how + ": no profile suggestions");
+    assert.ok(listOptions(body, "region").values.includes("us-east-1"), how + ": the built-in regions still suggest");
+    assert.ok(!/Could not read/.test(body.textContent), how + ": no error text on the form");
+    const rg = listOptions(body, "region");
+    rg.input.value = "eu-north-9";
+    rg.input.oninput();
+    await p.box.awsCheckAll();
+    await p.box.awsSaveAll();
+    assert.strictEqual(editPuts(p)[0].body.connection.region, "eu-north-9", how);
+  }
+});
+
+test("AWS add: the source profile stays read-only with no list, and region suggests from the host's profiles", async () => {
+  const p = page({ tab: true });
+  p.box.reply = awsReply();
+  const opts = hostOpts().opts;
+  await awsTick(p, opts, "acme-dev");
+  const sp = listOptions(opts.host, "source_profile");
+  assert.strictEqual(sp.input.readOnly, true);
+  assert.strictEqual(sp.values, null, "no list on a read-only field");
+  const rg = listOptions(opts.host, "region");
+  assert.strictEqual(rg.values[0], "eu-west-1");
+  assert.strictEqual(rg.values.filter((r) => r === "eu-west-1").length, 1);
+});
