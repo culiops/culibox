@@ -1931,19 +1931,34 @@ test("Workspace: a refusal that names the folder, the copy's folder or a shared 
   }
 });
 
-test("Workspace on a host profile: one folder field and one sentence saying why there is no private copy", async () => {
+test("Workspace on a host profile: one folder field, and the private-copy card off with the sentence saying why", async () => {
   const t = page();
   const pk = await openWs(t, "runbook-host");
   const ws = blockOf(t, "workspace");
-  assert.deepStrictEqual(byCls(ws, "pfv-flabel").map((n) => n.textContent), ["Folder"]);
+  assert.deepStrictEqual(byCls(ws, "pfv-flabel").map((n) => n.textContent), ["Folder", "How it works on the folder"]);
   assert.deepStrictEqual(texts(ws, "pfv-hint"), ["Where sessions start. A private copy needs a box."]);
-  assert.strictEqual(byCls(ws, "pfv-card").length, 0);
+  assert.strictEqual(byCls(ws, "pfv-card").length, 2, "both cards; the copy one is off");
+  assert.strictEqual(field(t, "mode-copy").disabled, true);
   assert.strictEqual(field(t, "folder").value, "/home/you/runbooks");
   assert.deepStrictEqual(texts(ws, "pfv-fnote"), [], "a host has no box to give the next session");
   pk.pick("/home/you/notes");
   await clickBtn(blockOf(t, "workspace"), "Save");
   assert.strictEqual(t.box.puts[0].default_cwd, "/home/you/notes");
   assert.strictEqual(t.box.puts[0].runtime, "host");
+});
+
+test("Workspace on a host profile draws the private-copy card disabled, tagged Applies to Box", async () => {
+  const t = page();
+  await openWs(t, "runbook-host");
+  const ws = blockOf(t, "workspace");
+  const copy = field(t, "mode-copy");
+  assert.strictEqual(copy.disabled, true);
+  const card = copy.parent;
+  assert.ok(card.textContent.includes("Needs a box."));
+  assert.ok(card.textContent.includes("Applies to Box"));
+  assert.strictEqual(field(t, "mode-folder").checked, true);
+  assert.notStrictEqual(field(t, "mode-folder").disabled, true);
+  assert.deepStrictEqual(texts(ws, "pfv-card-t").map((s) => s.replace(/Applies to Box$/, "")), ["Work in this folder", "Work on a private copy"]);
 });
 
 test("Workspace where private copies are not available: the choice is hidden with the reason; a profile that already is a copy keeps both and the warning", async () => {
@@ -3410,13 +3425,10 @@ test("advanced lists what is set, and the form opened from Edit holds it", async
   assert.deepStrictEqual(t.box.puts[0].args, ["--verbose"]);
 });
 
-test("base is not offered on a box profile and its stored value is kept", async () => {
+test("base: a box profile shows the one it has and a save keeps it; a host profile offers it in the mockup's words, the default stored as none", async () => {
   const t = page();
   await openAdv(t, "aws-ops", { base: "clean" });
-  assert.strictEqual(field(t, "base"), undefined, "no select, no disabled wall");
-  assert.strictEqual(byCls(advOf(t), "pfv-select").length, 0);
-  assert.deepStrictEqual(texts(advOf(t), "pfv-hint").filter((x) => /starts with/.test(x)), ["Environment it starts with only applies on this machine; a box always starts minimal."]);
-  assert.ok(!advLabels(t).includes("Environment it starts with"));
+  assert.strictEqual(field(t, "base").value, "clean");
   typeArgs(t, "--verbose");
   assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
   assert.strictEqual(t.box.puts[0].base, "clean", "a save from a box profile keeps the base the profile has");
@@ -3426,7 +3438,6 @@ test("base is not offered on a box profile and its stored value is kept", async 
   await openAdv(h, "runbook-host", { base: "clean" });
   assert.deepStrictEqual(Array.from(field(h, "base").children).map((o) => o.textContent), ["Everything you have (inherit)", "Minimal, no secrets (clean)", "Your login shell (login)"]);
   assert.strictEqual(field(h, "base").value, "clean");
-  assert.strictEqual(byCls(advOf(h), "pfv-hint").filter((n) => /starts with only applies/.test(n.textContent)).length, 0, "the sentence is for a box");
   field(h, "base").value = "inherit"; field(h, "base").onchange();
   assert.strictEqual(await clickBtn(advOf(h), "Save"), true);
   assert.ok(!("base" in h.box.puts[0]), "inherit is the default: no base is stored");
@@ -3584,10 +3595,17 @@ test("imports row hidden when bundling is off keeps imports_off", async () => {
   late.box.bundleImports = false;
   assert.strictEqual(await clickBtn(advOf(late), "Save"), true);
   assert.ok(!("imports_off" in late.box.puts[0]), "the stored value, which was none");
-  // A host profile has no box to give the files to; an account with no personal config says so in the row's own words.
+  // A host profile keeps the row for the box: shown while there is a box layer, and with bundling off it goes like any other.
   const host = page();
   await openAdv(host, "runbook-host", { imports_off: true });
-  assert.strictEqual(field(host, "imports_off"), undefined);
+  assert.ok(field(host, "imports_off"));
+  const hostOff = page({ bundleImports: false });
+  await openAdv(hostOff, "runbook-host", { imports_off: true });
+  assert.strictEqual(field(hostOff, "imports_off"), undefined);
+  const hostNoBox = page({ boxRuntime: "" });
+  await openAdv(hostNoBox, "runbook-host", { imports_off: true });
+  assert.strictEqual(field(hostNoBox, "imports_off"), undefined, "no box layer, nothing to give");
+  // An account with no personal config says so in the row's own words.
   const acct = page({ accountsCache: [{ name: "work" }] });
   await openAdv(acct, "aws-ops", { account: "work", imports_off: true });
   assert.strictEqual(field(acct, "imports_off"), undefined);
@@ -3600,16 +3618,16 @@ test("imports row hidden when bundling is off keeps imports_off", async () => {
 test("Advanced edit form: the mockup's fields in order, for a box profile and for a host profile", async () => {
   const t = page({ repliesEnabled: true });
   await openAdv(t, "aws-ops");
-  assert.deepStrictEqual(advLabels(t), ["Extra command-line arguments", "Environment variables"]);
-  assert.deepStrictEqual(texts(advOf(t), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session.", "Include files my CLAUDE.md pulls in with @Read-only copies in the box."]);
+  assert.deepStrictEqual(advLabels(t), ["Environment it starts with Applies to Host", "Extra command-line arguments", "Environment variables"]);
+  assert.deepStrictEqual(texts(advOf(t), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session.", "Include files my CLAUDE.md pulls in with @Read-only copies in the box. Applies to Box"]);
   assert.strictEqual(field(t, "args").getAttribute("placeholder"), "--some-flag");
-  assert.deepStrictEqual(texts(advOf(t), "pfv-hint"), ["One per line.", "None. The agent gets the box's minimal environment.", "Environment it starts with only applies on this machine; a box always starts minimal."]);
+  assert.deepStrictEqual(texts(advOf(t), "pfv-hint"), ["One per line.", "None. The agent gets the box's minimal environment."]);
   assert.strictEqual(byText(advOf(t), "button", "+ Add variable").length + byText(advOf(t), "button", "+ Add secret").length, 2);
-  assert.strictEqual(Node.focused, field(t, "options.skip_permissions"), "focus goes to the first control");
+  assert.strictEqual(Node.focused, field(t, "base"), "focus goes to the first control");
   const h = page({ repliesEnabled: true });
   await openAdv(h, "runbook-host");
-  assert.deepStrictEqual(advLabels(h), ["Environment it starts with", "Extra command-line arguments", "Environment variables"]);
-  assert.deepStrictEqual(texts(advOf(h), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session."]);
+  assert.deepStrictEqual(advLabels(h), ["Environment it starts with Applies to Host", "Extra command-line arguments", "Environment variables"]);
+  assert.deepStrictEqual(texts(advOf(h), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session.", "Include files my CLAUDE.md pulls in with @Read-only copies in the box. Applies to Box"]);
   assert.deepStrictEqual(texts(advOf(h), "pfv-hint"), ["One per line.", "None added on top of the starting environment."]);
   assert.strictEqual(Node.focused, field(h, "base"));
   assert.ok(advOf(h).className.includes("pfv-editing"));
@@ -3617,6 +3635,48 @@ test("Advanced edit form: the mockup's fields in order, for a box profile and fo
   assert.ok(byCls(t.els["pfv-in"], "pfv-unsaved")[0].hidden);
   assert.strictEqual(field(t, "options.model"), undefined);
   assert.strictEqual(field(t, "options.effort"), undefined);
+});
+
+test("Advanced on a box profile draws Environment it starts with, tagged Applies to Host", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops");
+  const base = field(t, "base");
+  assert.ok(base, "the base select is drawn on a box profile");
+  const label = byCls(base.parent, "pfv-flabel")[0];
+  assert.deepStrictEqual(texts(label, "pfv-applies"), ["Applies to Host"]);
+  assert.ok(!texts(advOf(t), "pfv-hint").includes("Environment it starts with only applies on this machine; a box always starts minimal."));
+});
+
+test("an Advanced save keeps base on a box profile and writes the one picked", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops", { base: "login" });
+  assert.strictEqual(field(t, "base").value, "login");
+  typeArgs(t, "--x");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.strictEqual(t.box.puts[0].base, "login", "the base stored while it was a host profile stays");
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+  const u = page();
+  await openAdv(u, "aws-ops", { base: "login" });
+  const sel = field(u, "base");
+  sel.value = "clean";
+  sel.onchange();
+  assert.strictEqual(await clickBtn(advOf(u), "Save"), true);
+  assert.strictEqual(u.box.puts[0].base, "clean");
+  assert.strictEqual(u.box.puts[0].runtime, "box");
+});
+
+test("Advanced on a host profile offers the CLAUDE.md imports row, tagged Applies to Box", async () => {
+  const t = page({ metaLoaded: true, bundleImports: true });
+  await openAdv(t, "runbook-host", { imports_off: true });
+  const cb = field(t, "imports_off");
+  assert.ok(cb, "the imports checkbox is drawn on a host profile");
+  assert.strictEqual(cb.checked, false);
+  assert.deepStrictEqual(texts(cb.parent, "pfv-applies"), ["Applies to Box"]);
+  // Saved with something else changed: the stored imports_off stays.
+  typeArgs(t, "--x");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.strictEqual(t.box.puts[0].imports_off, true);
+  assert.strictEqual(t.box.puts[0].runtime, "host");
 });
 
 test("Advanced: the other options are drawn the old form's way and only what the user set is written", async () => {
@@ -3627,7 +3687,7 @@ test("Advanced: the other options are drawn the old form's way and only what the
   ]);
   const t = page({ optionDefs: defs });
   await openAdv(t, "aws-ops", { options: { model: "claude-opus-5-5", effort: "high", legacy_key: "keep me" } });
-  assert.deepStrictEqual(advLabels(t).slice(0, 2), ["Verbosity", "Pack"]);
+  assert.deepStrictEqual(advLabels(t).slice(1, 3), ["Verbosity", "Pack"]);
   assert.ok(hasCls("seg")(field(t, "options.verbosity")), "three choices: a segmented control");
   assert.strictEqual(field(t, "options.profile_pack").tag, "select", "five: a select");
   assert.deepStrictEqual(Array.from(field(t, "options.profile_pack").children).map((o) => o.textContent), ["(not set)", "a", "b", "c", "d", "e"]);
