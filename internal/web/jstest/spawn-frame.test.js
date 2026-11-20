@@ -334,7 +334,7 @@ test("the host warning is the kit .elev with a bold red 'host' before today's se
   assert.match(w, /font-size:\s*var\(--t-sm\)/);
   assert.match(rule("#spawn #spawn-warn-row #runtime-warn[hidden]"), /display:\s*none/);
   // Only while host is the chosen tier: the box tier's "cannot be boxed" shares the element.
-  const label = rule("#spawn:has(#runtime-seg button.dgr.on) #spawn-warn-row #runtime-warn::before");
+  const label = rule("#spawn:has(#tierpick .tp-host.on) #spawn-warn-row #runtime-warn::before");
   assert.deepStrictEqual(rulesFor("#spawn #spawn-warn-row #runtime-warn::before"), [], "never unconditional");
   assert.match(label, /content:\s*"host"/);
   assert.match(label, /color:\s*var\(--red\)/);
@@ -343,6 +343,15 @@ test("the host warning is the kit .elev with a bold red 'host' before today's se
   assert.match(rule("#spawn-warn-row:not(:has(> #runtime-warn:not([hidden])))"), /display:\s*none/);
   // The phone's markup has no 'host' word: the sentence is as it was.
   assert.match(read("index.html"), /<div class="warnbox" id="runtime-warn" hidden>Runs on your host with your user's full access: files, keys, network\.<\/div>/);
+});
+
+test("the tier cards: the seg hides on the desktop, the cards stack, a disabled card is dimmed", () => {
+  assert.match(rule("#spawn #runtime-row > #runtime-seg"), /display:\s*none/);
+  assert.match(rule("#spawn #runtime-row > .tierpick"), /flex-direction:\s*column/);
+  assert.match(rule("#spawn #runtime-row .tp-lbl-ph"), /display:\s*none/);
+  assert.match(rule("#spawn #runtime-row .tp-lbl"), /display:\s*inline/);
+  assert.match(rule("#spawn .tierpick .tp.on"), /border-color:\s*var\(--accent\)/);
+  assert.match(rule("#spawn .tierpick .tp.dis"), /cursor:\s*not-allowed/);
 });
 
 // --- gate fix wave (#173, DIFF G4 and G9) -----------------------------------------------------------

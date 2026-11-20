@@ -40,6 +40,10 @@ function svgIcon(shapes, opts) {
   return svg;
 }
 
+// SVG_TERMINAL_24: a terminal prompt (">_"), the "shell" icon of a profile row. The shapes are Lucide's "terminal" (ISC licence,
+// https://lucide.dev). Drawn with svgIcon(SVG_TERMINAL_24, { viewBox: "0 0 24 24", strokeWidth: "2", size }).
+const SVG_TERMINAL_24 = [["polyline", { points: "4 17 10 11 4 5" }], ["line", { x1: "12", x2: "20", y1: "19", y2: "19" }]];
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { svgIcon, svgShape };
+  module.exports = { svgIcon, svgShape, SVG_TERMINAL_24 };
 }

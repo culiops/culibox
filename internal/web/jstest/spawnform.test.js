@@ -47,6 +47,8 @@ test("the containment default always matches a seg button", () => {
     assert.ok(values.includes(spawnRuntimeDefault(p, "runc")), JSON.stringify(p));
   }
   assert.strictEqual(spawnRuntimeDefault({}, ""), ""); // no box layer: the row is hidden, nothing sent
+  // The phone seg never offers clone, so a clone profile is still plain "box" here; the desktop default is tierPreselect.
+  assert.strictEqual(spawnRuntimeDefault({ runtime: "box", clone_of: "/r", default_cwd: "/c" }, "runc"), "box");
   assert.strictEqual(runtimeSegChoices()[1].danger, true);
 });
 
@@ -61,13 +63,23 @@ test("spawnPayload carries prompt and replies only where they apply", () => {
     { agent: "bash", name: "api", cwd: "/w", options: { effort: "low" } });
 });
 
+test("spawnPayload sends clone only when it is a boolean", () => {
+  const base = { agent: "claude", name: "api", cwd: "/w", options: {}, runtime: "box" };
+  assert.strictEqual(spawnPayload({ ...base, clone: true, profile: claude }).clone, true);
+  assert.strictEqual(spawnPayload({ ...base, clone: false, profile: claude }).clone, false);
+  assert.ok(!("clone" in spawnPayload({ ...base, clone: undefined, profile: claude })));
+  assert.ok(!("clone" in spawnPayload({ ...base, clone: "yes", profile: claude })));
+});
+
 test("spawnPrefill copies profile, cwd, runtime and options — never the name or a first message", () => {
   const s = { id: "claude-3", agent: "claude", name: "api", cwd: "/w", runtime: "host", options: { effort: "low" }, summary: "x" };
   const pf = spawnPrefill(s);
-  assert.deepStrictEqual(pf, { agent: "claude", cwd: "/w", runtime: "host", account: "", options: { effort: "low" } });
+  assert.deepStrictEqual(pf, { agent: "claude", cwd: "/w", runtime: "host", account: "", clone: false, options: { effort: "low" } });
   pf.options.effort = "high";
   assert.strictEqual(s.options.effort, "low", "the prefill must not alias the session's options");
-  assert.deepStrictEqual(spawnPrefill({}), { agent: "", cwd: "", runtime: "", account: "", options: {} });
+  assert.deepStrictEqual(spawnPrefill({}), { agent: "", cwd: "", runtime: "", account: "", clone: false, options: {} });
+  // Only a clone session carries clone_of, so only it is duplicated as a clone.
+  assert.strictEqual(spawnPrefill({ ...s, clone_of: "/r" }).clone, true);
 });
 
 test("Ctrl+Enter (⌘+Enter on mac) spawns; plain Enter, AltGr and IME composition do not", () => {

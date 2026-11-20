@@ -28,7 +28,7 @@ function spawnAWS(p) {
 }
 const spawnBase = (p) => String(p || "").split("/").filter(Boolean).pop() || "";
 // spawnIsShellProfile: the profile runs a plain shell (its bin is one of SPAWN_SHELL_BINS), so a session of it has no agent.
-// A capability test on what the profile runs, the one profileTouchLine uses for "host · bash", never "is it Claude".
+// A capability test on what the profile runs, the one profileKind uses for the row's terminal icon, never "is it Claude".
 function spawnIsShellProfile(p) {
   return !!p && SPAWN_SHELL_BINS.has(spawnBase(p.bin));
 }
@@ -42,28 +42,36 @@ function spawnTierOf(profile, boxRuntime) {
 }
 
 // profileTouchLine: what a session of this profile can reach, in a line:
-//   box · aws culipulse-prod · gh culiops     host · not contained     host · bash
-// A private copy's source is written with the home prefix as ~ (frame M4.1, "private copy of ~/culiops-agent-box"), the way
-// every other path on the page is: shortPath (fsops.js) reads the page's HOME_DIR and leaves a path outside home whole.
+//   aws culipulse-prod · gh culiops     no credentials     aws sandbox · box only
+// It says nothing of the tier: the New session dialog's cards say where a session runs (#340). "box only" is the server's
+// host_block, the profile cannot run on the host. A private copy's source is written with the home prefix as ~ (frame M4.1,
+// "private copy of ~/culiops-agent-box"), the way every other path on the page is: shortPath (fsops.js) reads the page's
+// HOME_DIR and leaves a path outside home whole.
 // Its callers are the New session list and the empty state, both desktop-only.
 // boxRuntime is passed only once /api/meta has answered (`metaLoaded ? boxRuntime : undefined`): its "" before that reads as
-// "no box layer" and would call every box profile "host · not contained"; undefined falls back to the profile's own runtime.
+// "no box layer" and would call every box profile "needs a box · unavailable"; undefined falls back to the profile's own runtime.
 function profileTouchLine(p, boxRuntime) {
   const prof = p || {};
   // No box layer and the profile needs one (it asks for box, or holds a private copy or a readable folder): it will not run
   // on this machine, so it must not read like a host profile (#142).
   if (boxRuntime === "" && spawnNeedsBox(prof)) return "needs a box · unavailable";
-  if (spawnTierOf(prof, boxRuntime) === "host") {
-    return "host · " + (SPAWN_SHELL_BINS.has(spawnBase(prof.bin)) ? spawnBase(prof.bin) : "not contained");
-  }
-  const parts = ["box"];
+  const parts = [];
   const aws = spawnAWS(prof).map((e) => e.name), gh = spawnNames(prof.github_owners), tok = spawnNames(prof.tokens);
   if (aws.length) parts.push("aws " + aws.join(", "));
   if (gh.length) parts.push("gh " + gh.join(", "));
   if (tok.length) parts.push("tok " + tok.join(", "));
   if (prof.clone_of) parts.push("private copy of " + spawnDep("shortPath", "./fsops.js")(prof.clone_of));
-  if (parts.length === 1) parts.push("no credentials");
+  if (!parts.length) parts.push("no credentials");
+  // The server says Host is refused for this profile (S1 host_block): the row says so in two words; the sentence is the dialog's.
+  if (typeof prof.host_block === "string" && prof.host_block !== "") parts.push("box only");
   return parts.join(" · ");
+}
+
+// profileKind: what the row's icon says a profile is, by what it runs: "shell" (a terminal), "claude" (the mark) or "" (none).
+// Identity for a picture, not a gate: nothing is allowed or refused on it.
+function profileKind(p) {
+  if (spawnIsShellProfile(p)) return "shell";
+  return spawnDep("claudeKindOf", "./claudemark.js")(p) ? "claude" : "";
 }
 
 // spawnNeedsBox: a session of this profile is refused without a box layer: the one rule of the profile page's Runs in block
@@ -361,6 +369,14 @@ function spawnExpand(text, short, full) {
   return short && full && text.startsWith(short) ? full + text.slice(short.length) : text;
 }
 
+// reachWorkHome: where a private copy's work goes, for the Work home row. A copy that cannot push and brings its branches
+// home says so in the spec's words; every other case is workHomeSuffix's (a PR copy, auto-return off), minus its " · ".
+function reachWorkHome(p, repo) {
+  const pr = !!(p && p.clone_of && p.github_write);
+  if (p && p.auto_return && !pr) return "as box/<branch> branches in " + repo;
+  return spawnDep("workHomeSuffix", "./workhome.js")(p, pr).replace(/^ · /, "");
+}
+
 // reachRows: the rows of the "This agent will be able to" box, projected from
 // reachModel (one line per fact; the profile page draws the same model in blocks).
 //   profile  the ProfileView (with the account the form currently shows, if the
@@ -368,6 +384,8 @@ function spawnExpand(text, short, full) {
 //   tier     "box" | "host" as the form currently has it
 //   cwd      the workspace as it is to be shown (home written ~)
 //   cwdFull  the same workspace as the field holds it: the row's tooltip says this one
+//   clone    the desktop card's answer: false reads the profile without its copy (no Original, no shared files), true adds
+//            Work home after Original, undefined (the phone) lets the profile decide
 //   meta     /api/meta: aws_connections [{name, prod, write_capable}], static_tokens
 //   creds    GET /api/credentials, or null when it could not be read:
 //            store {initialized, locked, platform}, aws [{name, prod, elevate{max_minutes}}]
@@ -379,7 +397,15 @@ function spawnExpand(text, short, full) {
 // write only (the PROD flag), a host session is told in words.
 // Reads, Imports and Domains come after Tokens; on host there are none of them.
 function reachRows(o) {
-  const x = o || {};
+  let x = o || {};
+  // clone: false is a session in the workspace itself (Box · in place): read the profile as if it had no copy, so there is
+  // no Original row and the original's shared files are not read. undefined is the profile deciding, as on the phone.
+  if (x.clone === false && x.profile && (x.profile.clone_of || x.profile.clone_share)) {
+    const bare = Object.assign({}, x.profile);
+    delete bare.clone_of;
+    delete bare.clone_share;
+    x = Object.assign({}, x, { profile: bare });
+  }
   const m = reachModel(x);
   const shortOf = spawnDep("shortPath", "./fsops.js");
   const files = { k: "Files", v: m.files };
@@ -397,6 +423,7 @@ function reachRows(o) {
     const full = spawnExpand(m.original, shortOf(clone), clone);
     if (full !== m.original) row.full = full;
     rows.push(row);
+    if (x.clone === true) rows.push({ k: "Work home", v: reachWorkHome(x.profile, shortOf(clone)) });
   }
 
   for (const it of m.cloud.filter((i) => i.kind === "AWS" || i.kind === "Old-style AWS")) {
@@ -520,12 +547,43 @@ function pickSpawnCwd(o) {
 // spawnWsNoteFor: the help line under the Workspace field while it still holds what the dialog opened on (frames
 // M4.1 and M4.2): "Last used · 48 project roots · type to filter · ↵ to pick", "From the profile · type to
 // filter · ↵ to pick" (no count: the profile named the folder, the roots are not what is being offered), and the
-// plain caption for a default.
-function spawnWsNoteFor(source, count) {
+// plain caption for a default. "group" (a group header's +) names the folder's last segment: the field shows the full path.
+function spawnWsNoteFor(source, count, cwd) {
   const idle = spawnDep("spawnWsIdleNote", "./dirpicker.js");
+  if (source === "group") {
+    const seg = String(cwd || "").replace(/\/+$/, "").split("/").pop();
+    return "From the " + seg + " group's + \u00b7 type to change";
+  }
   if (source === "last") return "Last used · " + idle(count);
   if (source === "profile") return "From the profile · type to filter · \u21b5 to pick";
   return idle(count);
+}
+
+// spawnAcctHint: the one line under the Agent account row, or null. o = {profile, chosen, accounts, where}.
+//   {kind:"locked", text}  the chosen account's token is in the locked store, or (inside a box) the profile's own login is;
+//   {kind:"nologin", uses} `default` has no login inside a box; `uses` are the token accounts that would work, in list order.
+// The no-login hint is shown only when it is exact: box_claude_credential describes the profile with its OWN account, so it
+// speaks for `chosen` only when chosen is that account. It is "" for a profile with no Claude login to check, so a shell or
+// any other agent never gets the hint.
+const SPAWN_ACCT_LOCKED = "This account needs the store unlocked.";
+function spawnAcctHint(o) {
+  const x = o || {};
+  const p = x.profile || {};
+  const accounts = Array.isArray(x.accounts) ? x.accounts : [];
+  const chosen = x.chosen || "default";
+  const mine = accounts.find((a) => a && a.name === chosen);
+  if (mine && mine.login_state === "token_locked") return { kind: "locked", text: SPAWN_ACCT_LOCKED };
+  if (!x.where || x.where.runtime !== "box" || chosen !== (p.account || "default")) return null;
+  if (p.box_claude_credential === "locked") return { kind: "locked", text: SPAWN_ACCT_LOCKED };
+  if (p.box_claude_credential === "no" && chosen === "default") {
+    const byName = new Map(accounts.map((a) => [a && a.name, a]));
+    const uses = spawnDep("acctChoices", "./accounts.js")(accounts).filter((n) => {
+      const st = byName.get(n) && byName.get(n).login_state;
+      return n !== "default" && (st === "token" || st === "token_locked");
+    });
+    return { kind: "nologin", uses };
+  }
+  return null;
 }
 
 // spawnHotkeyAction: what a submit of the New session form does (the Spawn button,
@@ -558,5 +616,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { spawnIsShellProfile, profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
+  module.exports = { spawnIsShellProfile, profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
 }

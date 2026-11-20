@@ -53,6 +53,8 @@ function spawnPayload(f) {
   const v = f || {};
   const req = { agent: v.agent, name: String(v.name || "").trim(), cwd: v.cwd || "", options: v.options || {} };
   if (v.runtime) req.runtime = v.runtime;
+  // clone: the desktop card's pick (Box · clone / in place). Unset keeps the profile deciding, as the phone does.
+  if (typeof v.clone === "boolean") req.clone = v.clone;
   // Any chosen account is sent, "default" included: an explicit default pick
   // must override a profile pinned to another account. Unset = omit.
   if (v.account) req.account = v.account;
@@ -67,10 +69,11 @@ function spawnPayload(f) {
 
 // spawnPrefill: what Duplicate carries into the dialog. Not the name (two
 // rows with one name cannot be told apart) and never a first message (that
-// was the old run's task).
+// was the old run's task). clone: only a clone session carries clone_of, so a duplicate of an in-place session on a
+// clone profile stays in place.
 function spawnPrefill(s) {
   const v = s || {};
-  return { agent: v.agent || "", cwd: v.cwd || "", runtime: v.runtime || "", account: v.account || "", options: Object.assign({}, v.options || {}) };
+  return { agent: v.agent || "", cwd: v.cwd || "", runtime: v.runtime || "", account: v.account || "", clone: !!v.clone_of, options: Object.assign({}, v.options || {}) };
 }
 
 // isSubmitHotkey: spawn.submit in the shortcut registry (Ctrl+Enter, ⌘+Enter on

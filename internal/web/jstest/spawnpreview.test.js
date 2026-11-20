@@ -2,7 +2,7 @@
 // spawnpreview.js: the New session dialog's pure decisions (spec 5.6).
 const test = require("node:test");
 const assert = require("node:assert");
-const { profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
+const { profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
 const { spawnWsIdleNote } = require("../static/dirpicker.js");
 
 const sre = {
@@ -17,48 +17,65 @@ const creds = (over) => Object.assign({
 const byK = (rows, k) => rows.filter((r) => r.k === k);
 
 test("touch line: box with aws and gh", () => {
-  assert.strictEqual(profileTouchLine(sre), "box · aws culipulse-prod · gh culiops");
+  assert.strictEqual(profileTouchLine(sre), "aws culipulse-prod · gh culiops");
 });
 
 test("touch line: box with several names, clone and nothing", () => {
-  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a", "b"] }), "box · aws a, b");
-  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "learning-hubs" }), "box · private copy of learning-hubs");
-  assert.strictEqual(profileTouchLine({ runtime: "box" }), "box · no credentials");
-  assert.strictEqual(profileTouchLine({}), "box · no credentials");
+  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a", "b"] }), "aws a, b");
+  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "learning-hubs" }), "private copy of learning-hubs");
+  assert.strictEqual(profileTouchLine({ runtime: "box" }), "no credentials");
+  assert.strictEqual(profileTouchLine({}), "no credentials");
 });
 
 // The server sends clone_of as an absolute path; the page writes home as ~ everywhere else (fsops.js shortPath reads
-// window.HOME_DIR), and frame M4.1 draws "box · private copy of ~/culiops-agent-box".
+// window.HOME_DIR), and frame M4.1 draws "private copy of ~/culiops-agent-box".
 test("touch line: a private copy's source is written with ~ for the home prefix, whole components only", () => {
   const had = Object.prototype.hasOwnProperty.call(globalThis, "window"), prev = globalThis.window;
   globalThis.window = { HOME_DIR: "/home/me" };
   try {
     const line = (clone_of) => profileTouchLine({ runtime: "box", clone_of });
-    assert.strictEqual(line("/home/me/culiops-agent-box"), "box · private copy of ~/culiops-agent-box");
-    assert.strictEqual(line("/home/me"), "box · private copy of ~");
-    assert.strictEqual(line("/home/me2/x"), "box · private copy of /home/me2/x", "/home/me2 is not inside /home/me");
-    assert.strictEqual(line("/srv/shared/api"), "box · private copy of /srv/shared/api");
-    assert.strictEqual(line("~/culiops-agent-box"), "box · private copy of ~/culiops-agent-box", "already short");
-    assert.strictEqual(line("learning-hubs"), "box · private copy of learning-hubs");
-    assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a"], clone_of: "/home/me/w" }), "box · aws a · private copy of ~/w");
+    assert.strictEqual(line("/home/me/culiops-agent-box"), "private copy of ~/culiops-agent-box");
+    assert.strictEqual(line("/home/me"), "private copy of ~");
+    assert.strictEqual(line("/home/me2/x"), "private copy of /home/me2/x", "/home/me2 is not inside /home/me");
+    assert.strictEqual(line("/srv/shared/api"), "private copy of /srv/shared/api");
+    assert.strictEqual(line("~/culiops-agent-box"), "private copy of ~/culiops-agent-box", "already short");
+    assert.strictEqual(line("learning-hubs"), "private copy of learning-hubs");
+    assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a"], clone_of: "/home/me/w" }), "aws a · private copy of ~/w");
   } finally {
     if (had) globalThis.window = prev; else delete globalThis.window;
   }
 });
 
 test("touch line: before the home directory is known the path is left as the server sent it", () => {
-  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "/home/me/w" }), "box · private copy of /home/me/w");
+  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "/home/me/w" }), "private copy of /home/me/w");
 });
 
-test("touch line: host claude is not contained, host bash says bash", () => {
-  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "claude", claude: true }), "host · not contained");
-  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "bash" }), "host · bash");
-  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "/bin/zsh" }), "host · zsh");
+test("touch line: a host profile reads like any other: its credentials, or none", () => {
+  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "claude", claude: true }), "no credentials");
+  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "bash" }), "no credentials");
+  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "/bin/zsh" }), "no credentials");
 });
 
-test("touch line: no box layer means host whatever the profile says", () => {
-  assert.strictEqual(profileTouchLine(sre, ""), "host · not contained");
-  assert.strictEqual(profileTouchLine(sre, "sysbox-runc"), "box · aws culipulse-prod · gh culiops");
+test("touch line: box only is appended when the server blocks Host, after whatever else the line says", () => {
+  const blocked = "this profile has credential bindings (AWS sandbox, GitHub), so it runs only in a box";
+  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["sandbox"], host_block: blocked }), "aws sandbox · box only");
+  assert.strictEqual(profileTouchLine({ runtime: "box", host_block: blocked }), "no credentials · box only");
+  assert.strictEqual(profileTouchLine({ runtime: "box", host_block: "" }), "no credentials");
+  assert.strictEqual(profileTouchLine({ runtime: "box", host_block: undefined }), "no credentials");
+  assert.strictEqual(profileTouchLine({ runtime: "box", runtime_asked: "box", host_block: blocked }, ""), "needs a box · unavailable", "no layer: the needs-a-box line is unchanged");
+});
+
+test("profileKind: a terminal for bash and zsh, the Claude mark for a claude profile, else nothing", () => {
+  assert.strictEqual(profileKind({ bin: "/bin/bash" }), "shell");
+  assert.strictEqual(profileKind({ bin: "zsh" }), "shell");
+  assert.strictEqual(profileKind({ bin: "claude", claude: true }), "claude");
+  assert.strictEqual(profileKind({ bin: "python" }), "");
+  assert.strictEqual(profileKind({}), "");
+});
+
+test("touch line: no box layer does not change a profile that does not need one", () => {
+  assert.strictEqual(profileTouchLine(sre, ""), "aws culipulse-prod · gh culiops");
+  assert.strictEqual(profileTouchLine(sre, "sysbox-runc"), "aws culipulse-prod · gh culiops");
 });
 
 test("reach rows: a boxed claude session with a PROD connection (max window 60)", () => {
@@ -265,9 +282,9 @@ test("every submit of the spawn form asks the guard before spawning", () => {
 const legacy = { name: "legacy", runtime: "box", bin: "claude", claude: true, aws_inline: { name: "legacy-prod", prod: true, elevate_max_minutes: 30 } };
 
 test("touch line: an inline AWS binding is named like a connection", () => {
-  assert.strictEqual(profileTouchLine(legacy), "box · aws legacy-prod");
-  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a"], aws_inline: { name: "b" } }), "box · aws a, b");
-  assert.strictEqual(profileTouchLine({ runtime: "box", aws_inline: {} }), "box · no credentials", "an unnamed inline entry is left out, never guessed");
+  assert.strictEqual(profileTouchLine(legacy), "aws legacy-prod");
+  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a"], aws_inline: { name: "b" } }), "aws a, b");
+  assert.strictEqual(profileTouchLine({ runtime: "box", aws_inline: {} }), "no credentials", "an unnamed inline entry is left out, never guessed");
 });
 
 test("reach rows: an inline AWS binding gets an AWS row with its PROD flag and elevate window", () => {
@@ -320,6 +337,49 @@ test("reach rows: a private copy names the read-only original right after Files"
 test("reach rows: no Original row on the host tier or without a copy", () => {
   assert.strictEqual(byK(reachRows({ profile: { clone_of: "/h/r" }, tier: "host" }), "Original").length, 0);
   assert.strictEqual(byK(reachRows({ profile: {}, tier: "box", cwd: "~/x" }), "Original").length, 0);
+});
+
+const cloneProf = { clone_of: "/home/u/repo", default_cwd: "/home/u/clones/repo", clone_share: ["notes"], auto_return: true };
+
+test("reachRows with clone:false drops Original, clone shares and Work home", () => {
+  const rows = reachRows({ profile: cloneProf, tier: "box", clone: false, cwd: "~/repo" });
+  assert.strictEqual(byK(rows, "Original").length, 0);
+  assert.strictEqual(byK(rows, "Work home").length, 0);
+  const reads = byK(rows, "Reads");
+  assert.ok(reads.every((r) => !r.v.includes("notes")), "the clone shares are not read in place");
+  assert.ok(!JSON.stringify(rows).includes("notes"));
+});
+
+test("reachRows with clone:true adds Work home after Original", () => {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, "window"), prev = globalThis.window;
+  globalThis.window = { HOME_DIR: "/home/u" }; // shortPath writes home as ~
+  try {
+    workHomeRows();
+  } finally {
+    if (had) globalThis.window = prev; else delete globalThis.window;
+  }
+});
+
+function workHomeRows() {
+  const keys = (o) => reachRows(Object.assign({ tier: "box", clone: true, cwd: "~/clones/repo" }, o)).map((r) => r.k);
+  const rows = reachRows({ profile: cloneProf, tier: "box", clone: true, cwd: "~/clones/repo" });
+  const k = rows.map((r) => r.k);
+  assert.strictEqual(k[k.indexOf("Original") + 1], "Work home");
+  assert.strictEqual(byK(rows, "Work home")[0].v, "as box/<branch> branches in ~/repo");
+  const off = reachRows({ profile: { ...cloneProf, auto_return: undefined }, tier: "box", clone: true, cwd: "~/clones/repo" });
+  assert.strictEqual(byK(off, "Work home")[0].v, "work stays in the copy (auto-return off)");
+  const pr = reachRows({ profile: { ...cloneProf, github_write: true }, tier: "box", clone: true, cwd: "~/clones/repo" });
+  assert.ok(byK(pr, "Work home")[0].v.startsWith("work"), byK(pr, "Work home")[0].v);
+  assert.deepStrictEqual(keys({ profile: {} }).filter((x) => x === "Work home"), [], "no copy, no Work home");
+}
+
+test("reachRows with clone undefined is today's", () => {
+  const o = { profile: cloneProf, tier: "box", cwd: "~/clones/repo" };
+  const rows = reachRows(o);
+  assert.deepStrictEqual(rows, reachRows(Object.assign({}, o, { clone: undefined })));
+  assert.strictEqual(rows[1].k, "Original");
+  assert.strictEqual(byK(rows, "Work home").length, 0);
+  assert.ok(byK(rows, "Reads")[0].v.includes("notes"));
 });
 
 test("ghReachValue: read, read and write, and personal access token wording", () => {
@@ -673,6 +733,8 @@ test("spawnWsNoteFor: the frames' help lines (M4.1 'From the profile', M4.2 'Las
   assert.strictEqual(spawnWsNoteFor("default", 48), spawnWsIdleNote(48));
   assert.strictEqual(spawnWsNoteFor("", 3), spawnWsIdleNote(3));
   assert.strictEqual(spawnWsNoteFor(undefined, 3), spawnWsIdleNote(3));
+  assert.strictEqual(spawnWsNoteFor("group", 3, "/home/u/culiops-agent-box"), "From the culiops-agent-box group's + · type to change");
+  assert.strictEqual(spawnWsNoteFor("last", 3, "/home/u/x"), "Last used · " + spawnWsIdleNote(3), "cwd is ignored for the other sources");
 });
 
 // --- the reach rows keep the full text for the tooltip and mark the paths (G7, M4.1) --------------------
@@ -861,7 +923,7 @@ test("the reach box is painted on the desktop only (the phone hides it and never
   const at = sync.indexOf("function syncSpawnPreview");
   const fn = sync.slice(at, sync.indexOf("\n}\n", at));
   assert.ok(fn.indexOf("if (!spawnPanelOn())") < fn.indexOf("renderSpawnReach()"), "renderSpawnReach is behind the desktop gate");
-  assert.match(sync.slice(sync.indexOf("function renderSpawnReach"), sync.indexOf("function paintReachRows")), /cwdFull:\s*getCwd\(\)/);
+  assert.match(sync.slice(sync.indexOf("function renderSpawnReach"), sync.indexOf("function paintReachRows")), /cwdFull:\s*spawnCwdFor\(w\)/);
 });
 
 test("desktop.css: the Workspace list is a kit menu under the field, capped at 8 rows (frame M4.3)", () => {
@@ -944,7 +1006,7 @@ function captionPage(over) {
     onSpawnCwdChanged: () => { ctx.changed = (ctx.changed || 0) + 1; }, spawnWsNoteFor, spawnWsIdleNote,
     // applyProfileCwd's inputs: the box's text, the remembered last spawn, the roots, the tier, and the pure choice.
     $: (id) => (id === "spawn-ws-input" ? { value: picker.typed === null ? picker.v : picker.typed } : null),
-    loadLastSpawn: () => ctx.last, last: null, workspacesCache: WS, segValue: () => ctx.tier, tier: "host", spawnCwdReselect,
+    loadLastSpawn: () => ctx.last, last: null, workspacesCache: WS, segValue: () => ctx.tier, spawnWhere: () => ({ runtime: ctx.tier }), tier: "host", spawnCwdReselect,
   }, over));
   vm.runInContext("let spawnWsSource = '', spawnWsPrefill = '';\n" + ["setSpawnCwd", "spawnWsCaption", "getCwd", "applyProfileCwd"].map(appFn).join("\n"), ctx);
   return { ctx, picker, state: () => Array.from(vm.runInContext("[spawnWsSource, spawnWsPrefill]", ctx)) };
@@ -1059,7 +1121,7 @@ test("New session builds its picker inline, with the last used folder and the so
   assert.match(init, /lastUsed:\s*\(\) =>[^}]*loadLastSpawn\(\)/);
   assert.match(init, /idleText:\s*spawnWsCaption\b/);
   const open = appFn("openSpawnDialog");
-  assert.match(open, /const choice = spawnCwdChoice\(\{ profile: currentProfile\(\), last, workspaces: workspacesCache, tier: segValue\(\$\("runtime-seg"\)\), skipScratch: drawerDesktop\(\) \}\);/);
+  assert.match(open, /const choice = spawnCwdChoice\(\{ profile: currentProfile\(\), last, workspaces: workspacesCache, tier: spawnWhere\(\)\.runtime \|\| "", skipScratch: drawerDesktop\(\) \}\);/);
   assert.match(open, /setSpawnCwd\(choice\.cwd, choice\.source\);/);
   assert.match(open, /spawnWsPicker\.showIdleNote\(\)/);
   assert.ok(open.indexOf("setSpawnCwd(choice.cwd") < open.indexOf("spawnWsPicker.showIdleNote()"));
@@ -1125,4 +1187,24 @@ test("spawnBoxOwnedLine: says why, and names the original folder to use", () => 
   } finally {
     if (had) globalThis.window = prev; else delete globalThis.window;
   }
+});
+
+test("spawnAcctHint: only an exact no-login, the locked store, nothing else", () => {
+  const accounts = [{ name: "default", default: true, login_state: "logged_in" }, { name: "claude-box", login_state: "token" }, { name: "work", login_state: "token_locked" }];
+  const box = { runtime: "box", clone: false }, host = { runtime: "host", clone: false };
+  const locked = { kind: "locked", text: "This account needs the store unlocked." };
+  const h = (profile, chosen, where, acc) => spawnAcctHint({ profile, chosen, accounts: acc || accounts, where });
+  assert.deepStrictEqual(h({ box_claude_credential: "no" }, "default", box), { kind: "nologin", uses: ["claude-box", "work"] });
+  assert.strictEqual(h({ box_claude_credential: "no" }, "default", host), null, "the Host card has no box login to lack");
+  assert.strictEqual(h({ box_claude_credential: "no" }, "default", {}), null, "no box layer: no tier");
+  assert.strictEqual(h({ account: "claude-box", box_claude_credential: "yes" }, "default", box), null, "default is not the profile's own account");
+  assert.strictEqual(h({ account: "claude-box", box_claude_credential: "no" }, "default", box), null, "inexact: the field describes claude-box");
+  assert.strictEqual(h({ box_claude_credential: "" }, "default", box), null, "a shell or non-claude profile");
+  assert.strictEqual(h({}, "default", box), null);
+  assert.deepStrictEqual(h({ box_claude_credential: "locked" }, "default", box), locked);
+  assert.strictEqual(h({ box_claude_credential: "locked" }, "default", host), null);
+  assert.deepStrictEqual(h({ box_claude_credential: "yes" }, "work", box), locked);
+  assert.deepStrictEqual(h({ box_claude_credential: "" }, "work", host), locked, "a locked account is locked on any card");
+  assert.strictEqual(h({ account: "work", box_claude_credential: "yes" }, "claude-box", box), null);
+  assert.deepStrictEqual(h({ box_claude_credential: "no" }, "default", box, [{ name: "default", default: true }]), { kind: "nologin", uses: [] });
 });

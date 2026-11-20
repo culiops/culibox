@@ -4440,7 +4440,7 @@ function applyProfileCwd() {
   if (!p.default_cwd) {
     const again = spawnCwdReselect({
       source: spawnWsSource, prefill: spawnWsPrefill, cwd: getCwd(), text: $("spawn-ws-input").value,
-      profile: p, last: loadLastSpawn(), workspaces: workspacesCache, tier: segValue($("runtime-seg")), skipScratch: drawerDesktop(),
+      profile: p, last: loadLastSpawn(), workspaces: workspacesCache, tier: spawnWhere().runtime || "", skipScratch: drawerDesktop(),
     });
     if (!again) {
       // The folder stays (the user's), and it is no more the previous source's: the help line must stop claiming it.
@@ -5817,7 +5817,7 @@ function initSpawnWsPicker() {
     inline: drawerDesktop,
     lastUsed: () => { const l = loadLastSpawn(); return l && typeof l.cwd === "string" ? l.cwd : ""; },
     idleText: spawnWsCaption,
-    filter: (path) => { const f = spawnVMFilterFor(segValue($("runtime-seg")), spawnVMFilter); return f ? f(path) : true; },
+    filter: (path) => { const f = spawnVMFilterFor(spawnWhere().runtime || "", spawnVMFilter); return f ? f(path) : true; },
   });
   input.addEventListener("input", hideSpawnNotShared);
 }
@@ -5830,7 +5830,7 @@ const spawnVMLatest = spawnLatest();
 // list is redrawn, so a filter that arrives (or a runtime that changes) after the list opened shows at once.
 function syncSpawnVMFilter() {
   const help = $("spawn-ws-vmhelp");
-  const on = !!spawnVMFilterFor(segValue($("runtime-seg")), spawnVMFilter);
+  const on = !!spawnVMFilterFor(spawnWhere().runtime || "", spawnVMFilter);
   if (help) {
     if (on) help.textContent = SPAWN_VM_SEES_HELP;
     help.hidden = !on;
@@ -5890,7 +5890,7 @@ function hideSpawnNotShared() {
 // where the value came from in front of it while the field holds that value, on the desktop only.
 function spawnWsCaption(count) {
   const named = drawerDesktop() && spawnWsSource !== "" && spawnWsPicker && spawnWsPicker.value() === spawnWsPrefill;
-  return spawnWsNoteFor(named ? spawnWsSource : "", count);
+  return spawnWsNoteFor(named ? spawnWsSource : "", count, spawnWsPrefill);
 }
 
 // setSpawnCwd writes the canonical cwd and the field's displayed value together
@@ -5908,6 +5908,7 @@ function getCwd() { return spawnWsPicker ? spawnWsPicker.value() : ""; }
 // profile default, the last-spawn fallback) so the box/host copy and the
 // unboxable-workspace warning never lag behind what will actually be spawned.
 function onSpawnCwdChanged() {
+  renderTierPick(); // the cards name the workspace, and a clone profile's pre-selection follows it
   hideSpawnNotShared();
   updateTierExplain();
   updateRuntimeWarning();
@@ -6036,7 +6037,9 @@ function syncRuntimeField() {
   const explain = $("tier-explain");
   if (explain) explain.style.display = shown;
   const value = spawnRuntimeDefault(currentProfile(), boxRuntime);
-  buildSeg(seg, runtimeSegChoices(), value, updateRuntimeWarning);
+  buildSeg(seg, runtimeSegChoices(), value, tierSegChanged);
+  tierReset(); // a profile change forgets the card the user picked
+  renderTierPick();
   updateRuntimeWarning(); // whether the picked cwd is boxable depends on the tier too
 }
 
@@ -6045,14 +6048,21 @@ function syncRuntimeField() {
 // Duplicate's account when one is given, else the profile's own (ruling C2:
 // the default is the explicit "default", so picking it overrides a pinned
 // profile for this run). Painted from the cache at once; the fetch behind it
-// repaints only when the set of accounts changed, keeping the user's pick.
+// repaints the select only when the set of accounts changed, keeping the user's
+// pick, and repaints the account hint either way (a login_state can change
+// with the same names).
 // openSpawnDialog sets #agent programmatically (no change event), so it calls
 // this itself, like syncRuntimeField.
 function syncSpawnAccount(prefillAccount) {
   const before = acctChoices(accountsCache, "").join(",");
   paintSpawnAccount(prefillAccount);
   fetchAccounts().then(() => {
-    if (acctChoices(accountsCache, "").join(",") === before) return;
+    if (acctChoices(accountsCache, "").join(",") === before) {
+      // Same names, so the select stays; but a login_state can have changed (the store locked or unlocked since the last fetch),
+      // and the account hint reads it.
+      paintSpawnAcctHint();
+      return;
+    }
     paintSpawnAccount($("spawn-account-row").hidden ? prefillAccount : $("spawn-account").value);
   });
 }
@@ -6064,6 +6074,7 @@ function paintSpawnAccount(prefillAccount) {
   if (!prof || !prof.claude || names.length < 2) {
     row.hidden = true;
     sel.replaceChildren();
+    paintSpawnAcctHint(); // one account only: the hint can still say `default` has no login, with Settings as the way out
     return;
   }
   const lims = acctLimitsMap(lastRateLimits);
@@ -6077,6 +6088,52 @@ function paintSpawnAccount(prefillAccount) {
   sel.value = pick;
   row.hidden = false;
   syncSpawnPreview(); // the reach box's Account row reads the picked account
+  paintSpawnAcctHint();
+}
+
+// paintSpawnAcctHint: the hint under the account row (spawnAcctHint decides it): the store is locked, or `default` has no login
+// inside a box. Desktop only, and drawn from what the dialog shows now: the account the select holds (else the profile's own) and
+// the card picked. It does nothing for the account it is about once `Use: <name>` switches it.
+function paintSpawnAcctHint() {
+  const el = $("spawn-acct-hint");
+  if (!el) return;
+  const prof = currentProfile() || {};
+  const chosen = $("spawn-account-row").hidden ? (prof.account || "default") : ($("spawn-account").value || "default");
+  const h = drawerDesktop() ? spawnAcctHint({ profile: prof, chosen, accounts: accountsCache, where: spawnWhere() }) : null;
+  el.replaceChildren();
+  el.hidden = h === null;
+  if (h === null) return;
+  const link = (text, fn) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "link";
+    b.textContent = text;
+    b.onclick = fn;
+    return b;
+  };
+  if (h.kind === "locked") {
+    const t = document.createElement("span");
+    t.textContent = h.text;
+    el.append(t, link("Unlock", () => showSpawnUnlock(h.text, { retry: false })));
+    return;
+  }
+  const code = document.createElement("code");
+  code.textContent = "default";
+  el.append(code, document.createTextNode(" has no login inside a box."));
+  for (const name of h.uses) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn btn-sm";
+    b.textContent = "Use: " + name;
+    b.onclick = () => {
+      $("spawn-account").value = name;
+      syncSpawnPreview();
+      paintSpawnAcctHint();
+    };
+    el.append(b);
+  }
+  // No token account to switch to: Settings is the way to make one. The dialog closes as its own data-close buttons do.
+  if (h.uses.length === 0) el.append(link("Settings \u2192 Agent accounts", () => { closeDialogFromUI("spawn-modal"); openSettings("accounts"); }));
 }
 
 // syncSpawnExtras shows the first-message field and the replies toggle only
@@ -6098,7 +6155,10 @@ function syncSpawnExtras(resetReplies) {
 function applySpawnPrefill(pf) {
   if (pf.cwd) setSpawnCwd(pf.cwd);
   const seg = $("runtime-seg");
-  if (pf.runtime && boxRuntime && seg) setSegValue(seg, pf.runtime);
+  if (pf.runtime && boxRuntime && seg) {
+    setSegValue(seg, pf.runtime);
+    tierApplyRuntime(pf.runtime, pf.clone); // a duplicate keeps its card (the open's profile reset ran before this)
+  }
   for (const ctrl of $("spawn").querySelectorAll("[data-key]")) {
     const k = ctrl.dataset.key;
     if (!Object.prototype.hasOwnProperty.call(pf.options, k)) continue;
@@ -6121,7 +6181,7 @@ let spawnPromptDraft = "";
 function updateSpawnBoxOwned() {
   const el = $("spawn-ws-owned");
   if (!el) return;
-  const host = (metaLoaded && !boxRuntime) || segValue($("runtime-seg")) === "host";
+  const host = (metaLoaded && !boxRuntime) || spawnWhere().runtime === "host";
   const hit = spawnBoxOwnedHit(getCwd(), host ? "host" : "box", profiles);
   el.textContent = hit ? spawnBoxOwnedLine(hit) : "";
   el.hidden = !hit;
@@ -6151,7 +6211,7 @@ function updateRuntimeWarning() {
     warn.hidden = true;
     return;
   }
-  if (segValue(seg) === "host") {
+  if (spawnWhere().runtime === "host") {
     warn.hidden = false;
     warn.textContent = "Runs on your host with your user's full access: files, keys, network.";
     return;
@@ -6225,6 +6285,7 @@ async function openSpawnDialog(preselectAgent, prefill) {
   renderProfileSeg();
   // Tier first: it decides which workspaces are boxable, for the warning below.
   syncRuntimeField();
+  tierVmFetch(); // not awaited: the cards draw first and gain the VM line when it answers
   hideSpawnNotShared();
   loadSpawnVMFilter(); // not awaited: the picker reads the filter when it draws
   // A Duplicate's account applies only where its prefill does (same profile).
@@ -6240,10 +6301,14 @@ async function openSpawnDialog(preselectAgent, prefill) {
   // last cwd that is unusable on this tier is still restored; the warning below
   // names why, so choosing box vs. host stays the user's call, not a silent discard.
   // The source rides along: the help line under the field names it.
-  const choice = spawnCwdChoice({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")), skipScratch: drawerDesktop() });
+  const choice = spawnCwdChoice({ profile: currentProfile(), last, workspaces: workspacesCache, tier: spawnWhere().runtime || "", skipScratch: drawerDesktop() });
   setSpawnCwd(choice.cwd, choice.source);
   if (prefill) {
-    if (want === prefill.agent) applySpawnPrefill(prefill);
+    // A group's + names a workspace and no profile: that is not a profile gone missing, so no toast.
+    // With no path either there is nothing to apply: the workspace spawnCwdChoice chose stays.
+    if (!prefill.agent) {
+      if (typeof prefill.cwd === "string" && prefill.cwd !== "") setSpawnCwd(prefill.cwd, prefill.source || "");
+    } else if (want === prefill.agent) applySpawnPrefill(prefill);
     else showToast('Profile "' + prefill.agent + '" no longer exists — pick one', { error: true });
   }
   onSpawnCwdChanged();
@@ -6443,7 +6508,7 @@ function initSpawnControl() {
   // the sidebar top's button: the same flow as "+ new"
   $("side-new").onclick = () => withPending($("side-new"), "Opening…", () => openSpawnDialog());
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
-  $("spawn-account").addEventListener("change", syncSpawnPreview);
+  $("spawn-account").addEventListener("change", () => { syncSpawnPreview(); paintSpawnAcctHint(); });
   $("spawn-prompt-hint").textContent = shortcutHint("spawn.submit", IS_MAC) + " spawns";
   paintSpawnChrome();
   // From any field of the form (it bubbles up from the first message, the name,
@@ -6476,7 +6541,7 @@ function hideSpawnUnlock() {
 // showSpawnUnlock: a spawn was refused with 423 store_locked. The dialog stays
 // open with the unlock form inline; after a 204 it offers Retry, which submits
 // the same form again.
-function showSpawnUnlock(message) {
+function showSpawnUnlock(message, opts) {
   const box = $("spawn-unlock");
   if (!box) return;
   const txt = document.createElement("div");
@@ -6489,6 +6554,15 @@ function showSpawnUnlock(message) {
     done.className = "storeretry";
     const note = document.createElement("span");
     note.textContent = "Store unlocked.";
+    if (opts && opts.retry === false) {
+      // Opened from the account hint, not from a refused spawn: there is nothing to retry. Re-read what the lock hid, so the hint
+      // clears (login_state from /api/accounts, box_claude_credential from /api/profiles).
+      done.append(note);
+      slot.replaceChildren(done);
+      spawnCredsRefetch();
+      Promise.all([fetchAccounts(), refreshProfilesQuiet()]).then(() => paintSpawnAccount($("spawn-account-row").hidden ? undefined : $("spawn-account").value));
+      return;
+    }
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "btn pri";
@@ -6532,9 +6606,10 @@ $("spawn").addEventListener("submit", async (ev) => {
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
+  const w = spawnWhere();
   const req = spawnPayload({
-    agent: $("agent").value, name: $("sess-name").value, cwd: getCwd(), options: getOptions(),
-    runtime: segValue($("runtime-seg")), prompt: $("spawn-prompt").value,
+    agent: $("agent").value, name: $("sess-name").value, cwd: spawnCwdFor(w), options: getOptions(),
+    runtime: w.runtime || "", clone: w.clone, prompt: $("spawn-prompt").value,
     replyable: $("spawn-replyable").checked, profile: currentProfile(),
     account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
   });
