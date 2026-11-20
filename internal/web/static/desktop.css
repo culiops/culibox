@@ -3616,11 +3616,10 @@
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); font-weight: 500; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The tier is the kit chip (§C5 `.chip` + `.chip-box`; a host profile adds `.chip-host`'s faint ring); a chip on the
+  /* `box only` is the kit chip (§C5 `.chip`), drawn only when Host is blocked for the profile; a chip on the
      selected row steps down to --panel, because raise on raise is invisible. */
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 18px; font-weight: 400; white-space: nowrap; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-host { box-shadow: inset 0 0 0 1px var(--faint); }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] .pfv-ni-tier { background: var(--panel); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-boxonly { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 18px; font-weight: 400; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] .pfv-ni-boxonly { background: var(--panel); }
   /* "+ New profile" is the kit .link-add (§C2, §B1.2 `.m2-addp`): accent 12/18, padding 6px 10px, underline on hover. */
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add { height: auto; padding: 6px 10px; justify-content: flex-start; color: var(--accent); font-size: var(--t-sm); line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add:hover { background: transparent; text-decoration: underline; text-underline-offset: 2px; }

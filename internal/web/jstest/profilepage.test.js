@@ -76,7 +76,7 @@ const labelNames = (root) => byCls(root, "pfv-label").map(labelName);
 const view = (name, over) => Object.assign({ name, editable: true, source: "runtime", runtime: "box", bin: "claude", claude: true }, over);
 const PROFILES = [
   view("claude", { editable: false, source: "config", runtime: "host" }),
-  view("aws-ops", { default_cwd: "/home/you/work/payments-api", aws_connections: ["prod-read", "staging-read"], tokens: ["grafana-prod"], network: "allowlist" }),
+  view("aws-ops", { default_cwd: "/home/you/work/payments-api", aws_connections: ["prod-read", "staging-read"], tokens: ["grafana-prod"], network: "allowlist", host_block: "this profile has an AWS binding, so it runs only in a box" }),
   view("infra-terraform"),
   view("runbook-host", { runtime: "host", default_cwd: "/home/you/runbooks" }),
 ];
@@ -209,12 +209,13 @@ function page(over) {
   return { box, els, calls, doc, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
 
-test("pfvRenderNav lists every profile with its tier word and a read-only marker for config.json", () => {
+test("pfvRenderNav lists every profile with a read-only marker for config.json and box only where Host is blocked", () => {
   const t = page();
   t.box.pfvRenderNav();
   const items = byCls(t.els["pf-navlist"], "pfv-ni").filter((n) => !hasCls("pfv-ni-add")(n));
   assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-name")[0].textContent), ["claude", "aws-ops", "infra-terraform", "runbook-host"]);
-  assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-tier")[0].textContent.replace(/^read-only, /, "")), ["host", "box", "box", "host"]);
+  assert.deepStrictEqual(items.map((n) => texts(n, "pfv-ni-boxonly")), [[], ["box only"], [], []]);
+  assert.strictEqual(byCls(t.els["pf-navlist"], "pfv-ni-tier").length, 0, "the tier chip is gone");
   // The marker: a lock glyph plus words for a screen reader, only on the config.json profile.
   assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-lock").length), [1, 0, 0, 0]);
   assert.deepStrictEqual(items.map((n) => texts(n, "pfv-sr")), [["read-only, "], [], [], []]);
@@ -226,18 +227,33 @@ test("pfvRenderNav lists every profile with its tier word and a read-only marker
   assert.strictEqual(t.els["pf-navlist"].children[t.els["pf-navlist"].children.length - 1], add[0]);
 });
 
-// The M2 nav row (UI plan 4, digest-design §B1.2): the name, then the lock, then the tier chip. The chip is the tier word alone
-// (it is a filled 18px box), so the lock and its screen-reader words are the row's own children, before it, not inside it.
-test("a nav row is name, lock, tier chip: the chip holds the tier word only, and a host chip says so", () => {
+// The M2 nav row: the name, then the lock, then `box only` when the server says Host is blocked for the profile. No tier chip:
+// the tier is not a fixed property of a profile. The lock and its screen-reader words are the row's own children, before the chip.
+test("a nav row is name, lock, then box only when Host is blocked", () => {
   const t = page();
   t.box.pfvRenderNav();
   const items = byCls(t.els["pf-navlist"], "pfv-ni").filter((n) => !hasCls("pfv-ni-add")(n));
   const order = (n) => n.children.filter((c) => c instanceof Node).map((c) => c.className.split(/\s+/)[0] + (c.tag === "svg" ? "(svg)" : ""));
-  assert.deepStrictEqual(order(items[0]), ["pfv-ni-name", "pfv-lock(svg)", "pfv-sr", "pfv-ni-tier"], "claude: read-only");
-  assert.deepStrictEqual(order(items[1]), ["pfv-ni-name", "pfv-ni-tier"], "aws-ops: editable, no lock");
-  assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-tier")[0].textContent), ["host", "box", "box", "host"]);
-  assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-tier")[0].children.length), [0, 0, 0, 0], "nothing but the word inside a chip");
-  assert.deepStrictEqual(items.map((n) => hasCls("pfv-ni-host")(byCls(n, "pfv-ni-tier")[0])), [true, false, false, true]);
+  assert.deepStrictEqual(order(items[0]), ["pfv-ni-name", "pfv-lock(svg)", "pfv-sr"], "claude: read-only");
+  assert.deepStrictEqual(order(items[1]), ["pfv-ni-name", "pfv-ni-boxonly"], "aws-ops: editable, Host blocked");
+  assert.deepStrictEqual(order(items[3]), ["pfv-ni-name"], "runbook-host: a host profile with no block");
+  assert.strictEqual(byCls(items[1], "pfv-ni-boxonly")[0].children.length, 0, "nothing but the words inside a chip");
+  assert.strictEqual(byCls(t.els["pf-navlist"], "pfv-ni-host").length, 0);
+});
+
+// A refetch hands back new objects. The nav is rebuilt only when what it shows changed: a new host_block sentence does, a runtime flip alone does not.
+test("the nav rebuilds when host_block changes, not when only runtime does", () => {
+  const t = page();
+  t.box.pfvRenderNav();
+  const kept = t.els["pf-navlist"].children[2];
+  t.box.profiles = t.box.profiles.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { runtime: "host" }) : p));
+  t.box.pfvRenderNav();
+  assert.strictEqual(t.els["pf-navlist"].children[2], kept, "only runtime changed: the same node");
+  t.box.profiles = t.box.profiles.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { host_block: "this profile is set to box only" }) : p));
+  t.box.pfvRenderNav();
+  const now = t.els["pf-navlist"].children[2];
+  assert.notStrictEqual(now, kept, "host_block changed: a new node");
+  assert.deepStrictEqual(texts(now, "pfv-ni-boxonly"), ["box only"]);
 });
 
 // N2 (diff M2.1#9): the lock is the frame's glyph, 10x12 (it was 10x11). Only the desktop page draws it: pfvRenderNav and pfvDrawNote run behind

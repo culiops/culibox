@@ -185,7 +185,7 @@ function pfvOnPage() {
 // --- the nav list -------------------------------------------------------------
 
 // pfvRenderNav: the profiles nested under Profiles in the Settings nav: name, a lock
-// for one you cannot edit, the tier chip, then "+ New profile". The list is
+// for one you cannot edit, `box only` when it may not run on the host, then "+ New profile". The list is
 // rebuilt only when what it shows changed (every loadProfiles hands back new objects);
 // otherwise only the current row's aria-current moves, so a refetch or a click never
 // replaces the button that has focus.
@@ -193,7 +193,7 @@ function pfvRenderNav() {
   const nav = document.getElementById("pf-navlist");
   if (!nav || !pfvOnPage()) return; // a phone's modal keeps its own list
   const list = typeof profiles === "object" && Array.isArray(profiles) ? profiles : [];
-  const key = JSON.stringify(list.map((p) => [p.name, p.runtime === "host" ? "host" : "box", !p.editable]));
+  const key = JSON.stringify(list.map((p) => [p.name, !!p.host_block, !p.editable]));
   if (key !== pfvNavKey || nav.children.length === 0) {
     const at = document.activeElement;
     const had = at && nav.contains(at) ? at.dataset.pfvName : undefined; // a profile's name, "" for the add row
@@ -201,15 +201,14 @@ function pfvRenderNav() {
       const b = pfvMk("button", "pfv-ni");
       b.type = "button";
       b.dataset.pfvName = p.name;
-      // The M2 row: name, a lock for a read-only profile, then the tier as a chip. The chip holds the word alone
-      // (it is a filled box), so the lock and its words for a screen reader sit beside it, in front.
-      const host = p.runtime === "host";
+      // The M2 row: name, a lock for a read-only profile, then `box only` as a chip when the server says Host is blocked
+      // (host_block). The chip holds the words alone (it is a filled box), so the lock and its words for a screen reader sit in front.
       b.append(pfvMk("span", "pfv-ni-name", p.name));
       if (!p.editable) {
         b.setAttribute("title", "Defined in config.json (read-only)");
         b.append(pfvLockIcon(), pfvMk("span", "pfv-sr", "read-only, "));
       }
-      b.append(pfvMk("span", host ? "pfv-ni-tier pfv-ni-host" : "pfv-ni-tier", host ? "host" : "box"));
+      if (p.host_block) b.append(pfvMk("span", "pfv-ni-boxonly", "box only"));
       b.onclick = () => pfvSwitch(p.name);
       return b;
     });

@@ -181,8 +181,8 @@ test("a profile row: 30px, gap 6, name grows, a muted lock, a box chip that step
   assert.strictEqual(name.get("flex"), "1 1 auto");
   assert.strictEqual(name.get("text-overflow"), "ellipsis");
   assert.strictEqual(name.get("min-width"), "0");
-  // §C5 `.chip` + `.chip-box`: 18px, 0 6px, raise fill, muted mono 11px at 400.
-  const chip = decls(NI + "-tier");
+  // §C5 `.chip`: 18px, 0 6px, raise fill, muted mono 11px at 400. The `box only` chip, drawn only when Host is blocked.
+  const chip = decls(NI + "-boxonly");
   assert.strictEqual(chip.get("height"), "18px");
   assert.strictEqual(chip.get("padding"), "0 6px");
   assert.strictEqual(chip.get("border-radius"), "var(--r-chip)");
@@ -191,8 +191,7 @@ test("a profile row: 30px, gap 6, name grows, a muted lock, a box chip that step
   assert.strictEqual(chip.get("font-family"), "var(--font-mono)");
   assert.strictEqual(chip.get("font-size"), "var(--t-xs)");
   assert.strictEqual(chip.get("font-weight"), "400");
-  assert.strictEqual(decls(NI + '[aria-current="true"] .pfv-ni-tier').get("background"), "var(--panel)", "raise on raise is invisible");
-  assert.strictEqual(decls(NI + "-host").get("box-shadow"), "inset 0 0 0 1px var(--faint)", "§C5 `.chip-host`");
+  assert.strictEqual(decls(NI + '[aria-current="true"] .pfv-ni-boxonly').get("background"), "var(--panel)", "raise on raise is invisible");
   assert.strictEqual(decls(P + " #pf-navlist .pfv-lock").get("color"), "var(--muted)", "§B1.2: the lock is muted");
 });
 
