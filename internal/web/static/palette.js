@@ -140,17 +140,22 @@ function palSessionRun(s, nested, act) {
 }
 
 // --- item sources ------------------------------------------------------------
-// The first nine rows carry their jump shortcut instead of the cwd: past nine
-// there is no key to advertise, and a hint that names a key nothing is bound
-// to is worse than no hint. mac is threaded in from the caller (palRefresh)
-// rather than computed again here — see the mac note on paletteCommands.
+// The first nine rows the sidebar shows carry their jump shortcut instead of the
+// cwd: rows in a collapsed group are skipped and show their folder. Past nine there
+// is no key to advertise, and a hint that names a key nothing is bound to is worse
+// than no hint. mac is threaded in from the caller (palRefresh) rather than computed
+// again here — see the mac note on paletteCommands.
 function paletteSessions(mac) {
-  // In the order the jump shortcut uses, so the hint on a row is the key that opens it.
+  // The list holds every session, so a search still finds one in a collapsed group. The digit comes from
+  // the order the jump shortcut uses, which skips collapsed groups, so the hint on a row is the key that
+  // opens it and a row the sidebar hides has none (it shows its cwd instead).
   const mobile = typeof mobileActive === "function" && mobileActive(window.innerWidth);
-  return jumpOrder(lastSessions, mobile).map((s, i) => {
+  const numbered = jumpOrder(lastSessions, mobile, typeof deskWsCollapsedSet === "function" ? deskWsCollapsedSet() : null);
+  return jumpOrder(lastSessions, mobile).map((s) => {
     const name = s.name || s.id;
+    const n = numbered.findIndex((x) => x.id === s.id) + 1;
     // No digit hint on mobile: the jump shortcut has no keyboard there.
-    const hintN = !mobile && i < 9 ? palReg().jumpHint(i + 1, mac) : "";
+    const hintN = !mobile && n > 0 && n <= 9 ? palReg().jumpHint(n, mac) : "";
     // The same dot the sidebar row is built from (deskDot on desktop, activityClass
     // on the phone), so a session row here and its sidebar row agree on
     // colour/label for the same state.
