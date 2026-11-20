@@ -2348,8 +2348,9 @@
      reach box says the same thing, so it stays hidden here. */
   #tier-explain { display: none !important; }
 
-  /* Fields in the order of the design, two columns: Workspace beside Name, the first message across, Effort beside
-     Containment. Workspace wears .span2 (the phone's one column), which would take the whole row. */
+  /* Fields in the order of the design, two columns: Workspace beside Name, the first message across, then Effort
+     in the left column and, when there is a box layer, Where it runs across both (the cards are sentences; its own grid-column rule
+     above). Workspace wears .span2 (the phone's one column), which would take the whole row. */
   #spawn > #spawn-ws-row { grid-column: auto; }
   /* Boxes unavailable (#142, syncSpawnGate): across the top, above the fields, so it is read before the profile is started. A --bg card
      like the reach box below; the reason line is muted, or red with a red ring while the profile on screen needs a box and Spawn is

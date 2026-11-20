@@ -165,7 +165,8 @@ function tierIcon(shapes, size) {
 
 // tierCard: one button for one model card. It reads the card and never changes it (the box and clone cards share a row object).
 function tierCard(c) {
-  const b = tierEl("button", "tp tp-" + c.key + (c.on ? " on" : "") + (c.disabled ? " dis" : ""));
+  // tp-host is the one card with a class of its own: the host warning keys on it (desktop.css). Box and clone need none.
+  const b = tierEl("button", "tp" + (c.key === "host" ? " tp-host" : "") + (c.on ? " on" : "") + (c.disabled ? " dis" : ""));
   b.type = "button";
   b.setAttribute("type", "button");
   b.setAttribute("aria-pressed", c.on ? "true" : "false");
@@ -215,18 +216,35 @@ function renderTierPick() {
     const seg = $("runtime-seg");
     const rt = tierWhere(m.pick).runtime;
     if (seg && segValue(seg) !== rt) setSegValue(seg, rt);
+    // In place says "each change lands in the repo", so the folder sent must be the repo: whichever way the pick ended on in place
+    // (a click, the clone card unavailable, a seg tap) with the workspace still the clone dir, the workspace moves. The move
+    // redraws through onSpawnCwdChanged, which is the last word on the DOM; this call has nothing more to draw.
+    if (m.pick !== "clone") tierLeaveCloneDir(currentProfile());
   }
+}
+
+// tierLeaveCloneDir: a clone profile whose workspace is its clone dir, and the session will not be a clone: the workspace becomes the
+// repo the clone was made from. True when it moved. Not re-entrant: the redraw the move causes cannot move again, and a clone dir
+// that is the repo itself has nowhere to move to.
+let tierMoving = false;
+function tierLeaveCloneDir(p) {
+  if (tierMoving || !p || !p.clone_of || tierSamePath(p.clone_of, p.default_cwd, window.HOME_DIR || "")) return false;
+  if (!tierSamePath(getCwd(), p.default_cwd, window.HOME_DIR || "")) return false;
+  tierMoving = true;
+  try {
+    setSpawnCwd(p.clone_of, "");
+    onSpawnCwdChanged();
+  } finally {
+    tierMoving = false;
+  }
+  return true;
 }
 
 // tierPick: a click on a card. Box · in place on a clone profile whose workspace is the clone dir moves the workspace to the repo
 // the clone was made from (that is what "in place" edits), in the field and in the request.
 function tierPick(key) {
   tierPicked = key;
-  const p = currentProfile() || {};
-  if (key !== "clone" && p.clone_of && tierSamePath(getCwd(), p.default_cwd, window.HOME_DIR || "")) {
-    setSpawnCwd(p.clone_of, "");
-    onSpawnCwdChanged();
-  }
+  if (key !== "clone") tierLeaveCloneDir(currentProfile());
   setSegValue($("runtime-seg"), tierWhere(key).runtime);
   renderTierPick();
   updateRuntimeWarning();
@@ -236,7 +254,10 @@ function tierPick(key) {
 
 // tierSegChanged: the phone's seg changed. Host is host; Box keeps a clone card.
 function tierSegChanged(v) {
-  tierPicked = v === "host" ? "host" : (tierPicked === "clone" ? "clone" : "box");
+  // Box keeps a clone card: the one picked, or the one the cards show (a tap on the seg's selected Box fires this too).
+  const el = $("tierpick");
+  const shown = tierPicked === "clone" || (el && el.dataset.value === "clone");
+  tierPicked = v === "host" ? "host" : (shown ? "clone" : "box");
   renderTierPick();
   updateRuntimeWarning();
 }

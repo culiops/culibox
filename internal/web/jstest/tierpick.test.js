@@ -456,6 +456,50 @@ test("tierpick.js loads after spawnpanel.js and before app.js; the cards are hid
   assert.match(flat, /#tierpick,[^{}]*\{\s*display:\s*none;?\s*\}/);
 });
 
+test("in place at the clone dir moves the workspace without a click: clone unavailable, desktop only", () => {
+  const over = { cloneUnavailable: "clone mode needs git 2.40" };
+  const pg = tpPage(over);
+  pg.run("renderTierPick()");
+  assert.deepStrictEqual(pg.calls.filter((c) => c[0] === "setSpawnCwd"), [["setSpawnCwd", "/home/u/repo", ""]]);
+  assert.strictEqual(pg.calls.filter((c) => c[0] === "onSpawnCwdChanged").length, 1);
+  assert.strictEqual(pg.pick.dataset.value, "box");
+  // the phone moves nothing
+  const ph = tpPage(Object.assign({ desktop: false }, over));
+  ph.run("renderTierPick()");
+  assert.strictEqual(ph.calls.filter((c) => c[0] === "setSpawnCwd").length, 0);
+  assert.strictEqual(ph.calls.filter((c) => c[0] === "onSpawnCwdChanged").length, 0);
+  // the clone card showing: nothing to move
+  const ok = tpPage();
+  ok.run("renderTierPick()");
+  assert.strictEqual(ok.calls.filter((c) => c[0] === "setSpawnCwd").length, 0);
+});
+
+test("the move to the repo ends, and the redraw it triggers shows the card of the new folder", () => {
+  // the real onSpawnCwdChanged redraws the cards; so does a clone_of that equals the clone dir must not loop
+  const pg = tpPage({ cloneUnavailable: "clone mode needs git 2.40" });
+  pg.ctx.onSpawnCwdChanged = () => { pg.calls.push(["onSpawnCwdChanged"]); pg.run("renderTierPick()"); };
+  pg.run("renderTierPick()");
+  assert.strictEqual(pg.calls.filter((c) => c[0] === "setSpawnCwd").length, 1);
+  assert.strictEqual(pg.pick.dataset.value, "box");
+  assert.strictEqual(pg.ctx.cwd, "/home/u/repo");
+  assert.strictEqual(pg.pick.querySelectorAll("button.tp").length, 3, "one set of cards");
+  const same = tpPage({ profile: { name: "c", clone_of: "/home/u/repo", default_cwd: "/home/u/repo" }, cwd: "/home/u/repo", cloneUnavailable: "no" });
+  same.ctx.onSpawnCwdChanged = () => { same.calls.push(["onSpawnCwdChanged"]); same.run("renderTierPick()"); };
+  same.ctx.setSpawnCwd = (p) => { same.calls.push(["setSpawnCwd", p]); };
+  same.run("renderTierPick()");
+  assert.strictEqual(same.calls.filter((c) => c[0] === "setSpawnCwd").length, 0, "a clone dir that is the repo has nothing to move, and does not loop");
+});
+
+test("a seg tap on Box keeps the clone card the cards showed", () => {
+  const pg = tpPage();
+  pg.run("renderTierPick()");
+  assert.strictEqual(pg.pick.dataset.value, "clone", "pre-selected, nothing picked");
+  pg.run('tierSegChanged("box")');
+  assert.strictEqual(pg.pick.dataset.value, "clone");
+  pg.run('tierSegChanged("host")');
+  assert.strictEqual(pg.pick.dataset.value, "host");
+});
+
 test("on the desktop the seg follows the cards, so a resize submits what was shown", () => {
   const blocked = { name: "x", runtime: "host", host_block: "this profile has credential bindings (AWS sandbox), so it runs only in a box" };
   const pg = tpPage({ profile: blocked, cwd: "/home/u/else" });
