@@ -2,7 +2,7 @@
 // spawnpreview.js: the New session dialog's pure decisions (spec 5.6).
 const test = require("node:test");
 const assert = require("node:assert");
-const { profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
+const { profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
 const { spawnWsIdleNote } = require("../static/dirpicker.js");
 
 const sre = {
@@ -17,48 +17,65 @@ const creds = (over) => Object.assign({
 const byK = (rows, k) => rows.filter((r) => r.k === k);
 
 test("touch line: box with aws and gh", () => {
-  assert.strictEqual(profileTouchLine(sre), "box · aws culipulse-prod · gh culiops");
+  assert.strictEqual(profileTouchLine(sre), "aws culipulse-prod · gh culiops");
 });
 
 test("touch line: box with several names, clone and nothing", () => {
-  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a", "b"] }), "box · aws a, b");
-  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "learning-hubs" }), "box · private copy of learning-hubs");
-  assert.strictEqual(profileTouchLine({ runtime: "box" }), "box · no credentials");
-  assert.strictEqual(profileTouchLine({}), "box · no credentials");
+  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a", "b"] }), "aws a, b");
+  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "learning-hubs" }), "private copy of learning-hubs");
+  assert.strictEqual(profileTouchLine({ runtime: "box" }), "no credentials");
+  assert.strictEqual(profileTouchLine({}), "no credentials");
 });
 
 // The server sends clone_of as an absolute path; the page writes home as ~ everywhere else (fsops.js shortPath reads
-// window.HOME_DIR), and frame M4.1 draws "box · private copy of ~/culiops-agent-box".
+// window.HOME_DIR), and frame M4.1 draws "private copy of ~/culiops-agent-box".
 test("touch line: a private copy's source is written with ~ for the home prefix, whole components only", () => {
   const had = Object.prototype.hasOwnProperty.call(globalThis, "window"), prev = globalThis.window;
   globalThis.window = { HOME_DIR: "/home/me" };
   try {
     const line = (clone_of) => profileTouchLine({ runtime: "box", clone_of });
-    assert.strictEqual(line("/home/me/culiops-agent-box"), "box · private copy of ~/culiops-agent-box");
-    assert.strictEqual(line("/home/me"), "box · private copy of ~");
-    assert.strictEqual(line("/home/me2/x"), "box · private copy of /home/me2/x", "/home/me2 is not inside /home/me");
-    assert.strictEqual(line("/srv/shared/api"), "box · private copy of /srv/shared/api");
-    assert.strictEqual(line("~/culiops-agent-box"), "box · private copy of ~/culiops-agent-box", "already short");
-    assert.strictEqual(line("learning-hubs"), "box · private copy of learning-hubs");
-    assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a"], clone_of: "/home/me/w" }), "box · aws a · private copy of ~/w");
+    assert.strictEqual(line("/home/me/culiops-agent-box"), "private copy of ~/culiops-agent-box");
+    assert.strictEqual(line("/home/me"), "private copy of ~");
+    assert.strictEqual(line("/home/me2/x"), "private copy of /home/me2/x", "/home/me2 is not inside /home/me");
+    assert.strictEqual(line("/srv/shared/api"), "private copy of /srv/shared/api");
+    assert.strictEqual(line("~/culiops-agent-box"), "private copy of ~/culiops-agent-box", "already short");
+    assert.strictEqual(line("learning-hubs"), "private copy of learning-hubs");
+    assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a"], clone_of: "/home/me/w" }), "aws a · private copy of ~/w");
   } finally {
     if (had) globalThis.window = prev; else delete globalThis.window;
   }
 });
 
 test("touch line: before the home directory is known the path is left as the server sent it", () => {
-  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "/home/me/w" }), "box · private copy of /home/me/w");
+  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "/home/me/w" }), "private copy of /home/me/w");
 });
 
-test("touch line: host claude is not contained, host bash says bash", () => {
-  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "claude", claude: true }), "host · not contained");
-  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "bash" }), "host · bash");
-  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "/bin/zsh" }), "host · zsh");
+test("touch line: a host profile reads like any other: its credentials, or none", () => {
+  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "claude", claude: true }), "no credentials");
+  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "bash" }), "no credentials");
+  assert.strictEqual(profileTouchLine({ runtime: "host", bin: "/bin/zsh" }), "no credentials");
 });
 
-test("touch line: no box layer means host whatever the profile says", () => {
-  assert.strictEqual(profileTouchLine(sre, ""), "host · not contained");
-  assert.strictEqual(profileTouchLine(sre, "sysbox-runc"), "box · aws culipulse-prod · gh culiops");
+test("touch line: box only is appended when the server blocks Host, after whatever else the line says", () => {
+  const blocked = "this profile has credential bindings (AWS sandbox, GitHub), so it runs only in a box";
+  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["sandbox"], host_block: blocked }), "aws sandbox · box only");
+  assert.strictEqual(profileTouchLine({ runtime: "box", host_block: blocked }), "no credentials · box only");
+  assert.strictEqual(profileTouchLine({ runtime: "box", host_block: "" }), "no credentials");
+  assert.strictEqual(profileTouchLine({ runtime: "box", host_block: undefined }), "no credentials");
+  assert.strictEqual(profileTouchLine({ runtime: "box", runtime_asked: "box", host_block: blocked }, ""), "needs a box · unavailable", "no layer: the needs-a-box line is unchanged");
+});
+
+test("profileKind: a terminal for bash and zsh, the Claude mark for a claude profile, else nothing", () => {
+  assert.strictEqual(profileKind({ bin: "/bin/bash" }), "shell");
+  assert.strictEqual(profileKind({ bin: "zsh" }), "shell");
+  assert.strictEqual(profileKind({ bin: "claude", claude: true }), "claude");
+  assert.strictEqual(profileKind({ bin: "python" }), "");
+  assert.strictEqual(profileKind({}), "");
+});
+
+test("touch line: no box layer does not change a profile that does not need one", () => {
+  assert.strictEqual(profileTouchLine(sre, ""), "aws culipulse-prod · gh culiops");
+  assert.strictEqual(profileTouchLine(sre, "sysbox-runc"), "aws culipulse-prod · gh culiops");
 });
 
 test("reach rows: a boxed claude session with a PROD connection (max window 60)", () => {
@@ -265,9 +282,9 @@ test("every submit of the spawn form asks the guard before spawning", () => {
 const legacy = { name: "legacy", runtime: "box", bin: "claude", claude: true, aws_inline: { name: "legacy-prod", prod: true, elevate_max_minutes: 30 } };
 
 test("touch line: an inline AWS binding is named like a connection", () => {
-  assert.strictEqual(profileTouchLine(legacy), "box · aws legacy-prod");
-  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a"], aws_inline: { name: "b" } }), "box · aws a, b");
-  assert.strictEqual(profileTouchLine({ runtime: "box", aws_inline: {} }), "box · no credentials", "an unnamed inline entry is left out, never guessed");
+  assert.strictEqual(profileTouchLine(legacy), "aws legacy-prod");
+  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a"], aws_inline: { name: "b" } }), "aws a, b");
+  assert.strictEqual(profileTouchLine({ runtime: "box", aws_inline: {} }), "no credentials", "an unnamed inline entry is left out, never guessed");
 });
 
 test("reach rows: an inline AWS binding gets an AWS row with its PROD flag and elevate window", () => {

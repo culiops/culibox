@@ -42,28 +42,36 @@ function spawnTierOf(profile, boxRuntime) {
 }
 
 // profileTouchLine: what a session of this profile can reach, in a line:
-//   box · aws culipulse-prod · gh culiops     host · not contained     host · bash
-// A private copy's source is written with the home prefix as ~ (frame M4.1, "private copy of ~/culiops-agent-box"), the way
-// every other path on the page is: shortPath (fsops.js) reads the page's HOME_DIR and leaves a path outside home whole.
+//   aws culipulse-prod · gh culiops     no credentials     aws sandbox · box only
+// It says nothing of the tier: the New session dialog's cards say where a session runs (#340). "box only" is the server's
+// host_block, the profile cannot run on the host. A private copy's source is written with the home prefix as ~ (frame M4.1,
+// "private copy of ~/culiops-agent-box"), the way every other path on the page is: shortPath (fsops.js) reads the page's
+// HOME_DIR and leaves a path outside home whole.
 // Its callers are the New session list and the empty state, both desktop-only.
 // boxRuntime is passed only once /api/meta has answered (`metaLoaded ? boxRuntime : undefined`): its "" before that reads as
-// "no box layer" and would call every box profile "host · not contained"; undefined falls back to the profile's own runtime.
+// "no box layer" and would call every box profile "needs a box · unavailable"; undefined falls back to the profile's own runtime.
 function profileTouchLine(p, boxRuntime) {
   const prof = p || {};
   // No box layer and the profile needs one (it asks for box, or holds a private copy or a readable folder): it will not run
   // on this machine, so it must not read like a host profile (#142).
   if (boxRuntime === "" && spawnNeedsBox(prof)) return "needs a box · unavailable";
-  if (spawnTierOf(prof, boxRuntime) === "host") {
-    return "host · " + (SPAWN_SHELL_BINS.has(spawnBase(prof.bin)) ? spawnBase(prof.bin) : "not contained");
-  }
-  const parts = ["box"];
+  const parts = [];
   const aws = spawnAWS(prof).map((e) => e.name), gh = spawnNames(prof.github_owners), tok = spawnNames(prof.tokens);
   if (aws.length) parts.push("aws " + aws.join(", "));
   if (gh.length) parts.push("gh " + gh.join(", "));
   if (tok.length) parts.push("tok " + tok.join(", "));
   if (prof.clone_of) parts.push("private copy of " + spawnDep("shortPath", "./fsops.js")(prof.clone_of));
-  if (parts.length === 1) parts.push("no credentials");
+  if (!parts.length) parts.push("no credentials");
+  // The server says Host is refused for this profile (S1 host_block): the row says so in two words; the sentence is the dialog's.
+  if (typeof prof.host_block === "string" && prof.host_block !== "") parts.push("box only");
   return parts.join(" · ");
+}
+
+// profileKind: what the row's icon says a profile is, by what it runs: "shell" (a terminal), "claude" (the mark) or "" (none).
+// Identity for a picture, not a gate: nothing is allowed or refused on it.
+function profileKind(p) {
+  if (spawnIsShellProfile(p)) return "shell";
+  return spawnDep("claudeKindOf", "./claudemark.js")(p) ? "claude" : "";
 }
 
 // spawnNeedsBox: a session of this profile is refused without a box layer: the one rule of the profile page's Runs in block
@@ -577,5 +585,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { spawnIsShellProfile, profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
+  module.exports = { spawnIsShellProfile, profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue, spawnNeedsBox, spawnBoxGate, spawnReachNeedsBox, spawnBoxRefusalLine };
 }

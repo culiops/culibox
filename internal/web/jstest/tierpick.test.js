@@ -522,3 +522,30 @@ test("on the desktop the seg follows the cards, so a resize submits what was sho
   assert.strictEqual(ph.calls.filter((c) => c[0] === "setSegValue").length, 0);
   assert.strictEqual(ph.seg.dataset.value, "host");
 });
+
+test("claudeMarkSvg is a filled 24-unit mark built by svgIcon", () => {
+  const doc = { createElement: null };
+  doc.createElement = (t) => new Node(t, doc);
+  doc.createElementNS = (ns, t) => doc.createElement(t);
+  const ctx = vm.createContext({ console, document: doc });
+  vm.runInContext(readStatic("svgicon.js") + "\n" + readStatic("claudemark.js"), ctx);
+  const svg = vm.runInContext("claudeMarkSvg(12)", ctx);
+  assert.strictEqual(svg.tag, "svg");
+  assert.strictEqual(svg.attrs.viewBox, "0 0 24 24");
+  assert.strictEqual(svg.attrs.fill, "currentColor");
+  assert.strictEqual(svg.attrs.stroke, "none");
+  assert.strictEqual(svg.attrs.width, "12");
+  assert.strictEqual(svg.attrs.height, "12");
+  assert.strictEqual(svg.children.length, 1);
+  assert.strictEqual(svg.children[0].tag, "path");
+  assert.ok(svg.children[0].attrs.d.startsWith("m4.7144 15.9555"));
+  assert.strictEqual(vm.runInContext("claudeKindOf({ claude: true })", ctx), true);
+  assert.strictEqual(vm.runInContext("claudeKindOf({ claude: 1 })", ctx), false);
+  assert.strictEqual(vm.runInContext("claudeKindOf(null)", ctx), false);
+});
+
+test("claudemark.js loads between spawnpanel.js and tierpick.js", () => {
+  const html = readStatic("index.html");
+  const at = (s) => html.indexOf('<script src="' + s + '"></script>');
+  assert.ok(at("/spawnpanel.js") > 0 && at("/claudemark.js") > at("/spawnpanel.js") && at("/tierpick.js") > at("/claudemark.js"));
+});

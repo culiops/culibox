@@ -2244,6 +2244,10 @@
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   }
   .sp-touch { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+  /* The kind icon (a terminal or the Claude mark) sits before the name, in the name's own line box. .sp-name stays a block
+     container on purpose: text-overflow: ellipsis does not apply to a flex container, so display:flex here would clip a
+     long name without its "…". The 6px is the gap the frame gives the icon; vertical-align centres it on the x-height. */
+  #spawn-plist .sp-item .sp-name svg { margin-right: 6px; vertical-align: -2px; color: var(--muted); }
 
   /* The right column: 1.55fr and 1fr, 14px between rows and 16px between columns, scrolling inside the body. */
   #spawn {

@@ -191,7 +191,12 @@ function renderSpawnPlist() {
       touch.append(" ", nh);
     }
     // A long name ends in an ellipsis (desktop.css), so its whole text is the tooltip (frame M4.1's title attributes).
-    const nm = spawnPanelEl("span", "sp-name", p.name);
+    const nm = spawnPanelEl("span", "sp-name");
+    // The kind icon comes first: a terminal for a shell, the Claude mark for a Claude profile, nothing for any other.
+    const kind = profileKind(p);
+    if (kind === "shell") nm.append(svgIcon(SVG_TERMINAL_24, { viewBox: "0 0 24 24", strokeWidth: "2", size: 12 }));
+    else if (kind === "claude") nm.append(claudeMarkSvg(12));
+    nm.append(p.name);
     nm.title = p.name;
     b.append(nm, touch);
     b.onclick = () => spawnPlistPick(p.name);
