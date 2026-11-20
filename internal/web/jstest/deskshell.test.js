@@ -58,6 +58,38 @@ test("rowChip: write when elevated, else the tier", () => {
   assert.equal(d.rowChip({ ...working, exited: true }, NOW, "runc"), null);
 });
 
+test("rowChip: box, clone and host carry an icon; write does not", () => {
+  const live = { ...working, aws_connections: [{ name: "a", elevated_until: FUTURE }] };
+  assert.deepEqual(d.rowChip(live, NOW, "runc"), { text: "write", tone: "write" });
+  assert.deepEqual(d.rowChip(working, NOW, "runc"), { text: "box", tone: "box", icon: "box" });
+  assert.deepEqual(d.rowChip({ ...working, clone_of: "/r" }, NOW, "runc"), { text: "clone", tone: "box", icon: "clone", title: "Contained: runs in a box on a private copy of the repo." });
+  assert.equal(d.rowChip(idle, NOW, "runc").icon, "host");
+  assert.equal(d.rowChip({ ...idle, clone_of: "/r" }, NOW, "runc").text, "host", "a clone chip is for a boxed session only");
+});
+
+test("deskRowKind: terminal for a shell profile, the Claude mark from the session, else nothing", () => {
+  assert.deepEqual(d.deskRowKind({ claude: false }, { bin: "/bin/zsh" }), { kind: "shell", title: "zsh shell" });
+  assert.deepEqual(d.deskRowKind({ claude: true }, { bin: "claude" }), { kind: "claude", title: "Claude Code session" });
+  assert.deepEqual(d.deskRowKind({ claude: true }, undefined), { kind: "claude", title: "Claude Code session" });
+  assert.equal(d.deskRowKind({ claude: false }, undefined), null);
+  assert.equal(d.deskRowKind({ claude: false }, { bin: "codex" }), null);
+});
+
+test("svgicon: the Lucide glyphs are 24-unit shape lists", () => {
+  const icons = require("../static/svgicon.js");
+  for (const k of ["SVG_FOLDER_24", "SVG_CHEVRON_DOWN_24", "SVG_CHEVRON_RIGHT_24", "SVG_PLUS_24", "SVG_BOX_24", "SVG_CLONE_24", "SVG_HOST_24"]) {
+    const g = icons[k];
+    assert.ok(Array.isArray(g) && g.length > 0, k);
+    for (const sh of g) assert.ok(Array.isArray(sh) && typeof sh[0] === "string" && typeof sh[1] === "object", k);
+  }
+  assert.equal(icons.SVG_CLONE_24[0][0], "rect");
+  assert.equal(typeof icons.svgIcon24, "function");
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "svgicon.js"), "utf8");
+  const notes = src.split("\n").filter((l) => l.includes("lucide.dev"));
+  assert.equal(notes.filter((l) => l.includes("ISC")).length >= 1, true);
+  assert.equal(src.split("\n").filter((l) => /^\/\/.*lucide\.dev/.test(l) && /ISC/.test(l) && /SVG_FOLDER_24/.test(l)).length, 1, "one ISC comment line covers the new glyphs");
+});
+
 test("rowSubline: amber needs-you text, else summary or the activity word", () => {
   const n = d.rowSubline({ activity: "waiting", need: "ask", ask: "aws logs tail" });
   assert.equal(n.amber, true);

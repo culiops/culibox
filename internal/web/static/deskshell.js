@@ -27,12 +27,15 @@ function deskDep(name) {
     shellChildren: typeof shellChildren === "function" ? shellChildren : null,
     shortModel: typeof shortModel === "function" ? shortModel : null,
     connStateLabel: typeof connStateLabel === "function" ? connStateLabel : null,
+    spawnIsShellProfile: typeof spawnIsShellProfile === "function" ? spawnIsShellProfile : null,
+    claudeKindOf: typeof claudeKindOf === "function" ? claudeKindOf : null,
   };
   if (g[name]) return g[name];
   const mod = { needsYou: "./attention.js", attentionClass: "./attention.js", activityClass: "./activity.js", cardContent: "./attention.js", plainSummary: "./attention.js",
     needLabel: "./attention.js", connSSOSources: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
     isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js",
-    isNestedShell: "./shellnest.js", shellChildren: "./shellnest.js", shortModel: "./analytics.js", connStateLabel: "./activity.js" }[name];
+    isNestedShell: "./shellnest.js", shellChildren: "./shellnest.js", shortModel: "./analytics.js", connStateLabel: "./activity.js",
+    spawnIsShellProfile: "./spawnpreview.js", claudeKindOf: "./claudemark.js" }[name];
   return require(mod)[name];
 }
 
@@ -186,13 +189,29 @@ function deskContainmentChip(s, boxRuntime) {
   return { text: t.text, tone: t.tone === "danger" ? "host" : "box", title: t.title };
 }
 
+const DESK_CLONE_TITLE = "Contained: runs in a box on a private copy of the repo.";
+
 // rowChip: the ONE chip on a sidebar row. An open write window outranks the
 // tier because it is the fact a reader must not miss. null when there is
-// nothing to show (an exited session that is not elevated).
+// nothing to show (an exited session that is not elevated). A tier chip names
+// its glyph (icon: box, clone or host); a boxed session that has a clone_of is
+// a clone, and says what that means. The write chip has no glyph.
 function rowChip(s, nowMs, boxRuntime) {
   if (sessionElevated(s, nowMs)) return { text: "write", tone: "write" };
   const c = deskContainmentChip(s, boxRuntime);
-  return c ? { text: c.text, tone: c.tone } : null;
+  if (!c) return null;
+  if (c.tone === "host") return { text: c.text, tone: c.tone, icon: "host" };
+  if (s && s.clone_of) return { text: "clone", tone: c.tone, icon: "clone", title: DESK_CLONE_TITLE };
+  return { text: c.text, tone: c.tone, icon: "box" };
+}
+
+// deskRowKind: which glyph leads a sidebar row. A profile that runs a plain shell gets the terminal
+// (a capability of the profile, looked up by the session's agent); a session whose view says it is a
+// Claude one gets the mark. Identity for an icon, never a gate. null: no glyph.
+function deskRowKind(s, profile) {
+  if (deskDep("spawnIsShellProfile")(profile)) return { kind: "shell", title: deskBaseName(profile.bin) + " shell" };
+  if (deskDep("claudeKindOf")(s)) return { kind: "claude", title: "Claude Code session" };
+  return null;
 }
 
 // rowSubline: the row's second line. What the session needs, in amber, when it
@@ -631,6 +650,6 @@ function paneTabsClass(defs) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskWsLabels, deskWsGroups, deskWsHeaderSig, wsCollapsedRead, wsCollapsedWrite, wsCollapsedToggle, DESK_WS_COLLAPSED_KEY, DESK_WS_COLLAPSED_CAP, deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline, bashCommand,
+  module.exports = { deskWsLabels, deskWsGroups, deskWsHeaderSig, wsCollapsedRead, wsCollapsedWrite, wsCollapsedToggle, DESK_WS_COLLAPSED_KEY, DESK_WS_COLLAPSED_CAP, deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, deskRowKind, DESK_CLONE_TITLE, rowSubline, bashCommand,
     paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneFilesToggle, paneTabsClass, modelLabel, metaUnitsOff };
 }
