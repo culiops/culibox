@@ -33,7 +33,7 @@ const PFC_FOLDER_HINT = "Read only. List a folder rather than a single file.";
 // host, so a domain does nothing: the same rule as the save warning (config.go AgentConfig.EgressWarning, pfcBound).
 const PFC_DOMAIN_FORM = "HTTPS only. IP addresses are not accepted.";
 const PFC_DOMAIN_HINT = PFC_DOMAIN_FORM + " It adds this host to the box's allowed hosts; \"Allow all internet hosts\" in Network opens every public host instead.";
-const PFC_DOMAIN_NO_EFFECT = "This has no effect until the profile holds cloud access or a token: without one the box already reaches any public host.";
+const PFC_DOMAIN_NO_EFFECT = PFV_DOMAIN_NO_EFFECT;
 const PFC_DOMAIN_PICK = "A hostname or *.example.com, over HTTPS";
 // The patterns are box/contextpaths.go SecretFilePatterns (the ones the server warns on), the common ones in short form.
 const PFC_FOLDER_PICK = "Read only, at the same path inside the box. Never list a folder holding secrets: files named like .env*, *.pem, *.key, id_*, credentials*, *.tfstate, *.tfvars, kubeconfig and similar.";
@@ -87,12 +87,12 @@ function pfcToggle(rec, list, e) {
   pfvChanged(rec, "");
 }
 
-// pfcRowNode: a read view row with its Remove (Undo) at the right. o: {removed, key, toggle, err}.
+// pfcRowNode: a read view row with its Remove (Undo) at the right. o: {removed, key, toggle, err, off} (off: pfvDrawRow's).
 function pfcRowNode(rec, r, o) {
   const rm = pfcRmButton(rec, r.kind + " " + r.name, o.key, o.removed, o.toggle);
   // A refusal that names a stored row has no input to sit under: the Remove beside it is what answers it (a folder that is gone is
   // removed or replaced), so that is what reads it and what takes focus.
-  const row = pfvDrawRow(r, rec.known, o.err || "", { edit: true, block: rec.id, bad: (words) => pfvBad(rec, rm, words, true) });
+  const row = pfvDrawRow(r, rec.known, o.err || "", { edit: true, block: rec.id, bad: (words) => pfvBad(rec, rm, words, true), off: o.off });
   if (o.removed) row.classList.add("pfv-removed");
   row.append(rm);
   return row;
@@ -690,7 +690,7 @@ function pfcReachDraw(rec, c) {
     if (e.fresh === true) return;
     const gone = e.removed === true;
     list.append(pfcRowNode(rec, pfcRowOf(rows, "Domain", e.host), {
-      removed: gone, key: "rm:domain:" + i, toggle: () => pfcToggle(rec, v.domains, e),
+      removed: gone, key: "rm:domain:" + i, toggle: () => pfcToggle(rec, v.domains, e), off,
       err: gone || domainAt(e) < 0 ? "" : pfvFerr(rec, "egress_allow[" + domainAt(e) + "]"),
     }));
   });

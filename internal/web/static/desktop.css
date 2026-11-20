@@ -3865,8 +3865,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-off .pfv-card-t { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-check.pfv-off .pfv-check-t { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-check.pfv-off input { cursor: default; }
-  /* A row that has no effect as things stand (a domain on a profile with no credential binding) is dimmed, never disabled: the input stays usable, its hint says why. */
-  #page-host > #settings-modal.as-page #pfv .pfv-row.pfv-off .pfv-ctl { color: var(--muted); }
+  /* A row that has no effect as things stand (a domain on a profile with no credential binding) is dimmed, never disabled: the input stays usable and Remove works, its hint says why. */
+  #page-host > #settings-modal.as-page #pfv .pfv-row.pfv-off :is(.pfv-ctl, .pfv-nm) { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; line-height: var(--lh-md); }
   #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-chip-word { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 var(--t-sm)/1 var(--font-ui); }

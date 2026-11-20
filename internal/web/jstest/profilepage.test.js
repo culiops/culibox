@@ -7091,3 +7091,44 @@ test("unresolved secret warning reads plainly", async () => {
   assert.ok(!/secret_sources/.test(w[0]), "no config key");
   assert.match(w[0], /refuse to start/);
 });
+
+test("a stored domain on an unbound profile is dimmed and says it has no effect, in the editor and in the read view; on a bound profile neither", async () => {
+  const off = (n) => n.className.split(/\s+/).includes("pfv-off");
+  const domainRow = (t, id) => rowsOf(t, id).find((r) => texts(r, "pfv-k")[0] === "Domain");
+  const unbound = (over) => {
+    const t = page({ profiles: [PROFILES[0], PROFILES[1], view("infra-terraform", { egress_allow: ["api.example.com"], network: "open" }), PROFILES[3]] });
+    t.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { egress_allow: ["api.example.com"] }, over);
+    return t;
+  };
+  const t = unbound();
+  await t.box.pfvShow("infra-terraform");
+  // Read view.
+  let row = domainRow(t, "reachable");
+  assert.ok(off(row), "read view row is dimmed");
+  assert.ok(texts(row, "pfv-hint").join(" ").includes("no effect"));
+  // Editor: still editable (Remove works, the save sends the list).
+  clickBtn(blockOf(t, "reachable"), "Edit");
+  row = domainRow(t, "reachable");
+  assert.ok(off(row), "editor row is dimmed");
+  assert.ok(texts(row, "pfv-hint").join(" ").includes("no effect"));
+  const rm = byCls(row, "pfv-rmbtn")[0];
+  assert.strictEqual(rm.disabled, false);
+  rm.click();
+  assert.ok(domainRow(t, "reachable").className.includes("pfv-removed"), "Remove still works");
+  assert.strictEqual(await saveBlock(t, "reachable"), true);
+  assert.ok(!t.box.puts[0].egress_allow || t.box.puts[0].egress_allow.length === 0, "the removed domain is not sent");
+  // Bound profile (a token): neither, in either view.
+  const b = page({ profiles: [PROFILES[0], PROFILES[1], view("infra-terraform", { egress_allow: ["api.example.com"], tokens: ["grafana-prod"], network: "allowlist" }), PROFILES[3]] });
+  b.box.docs["infra-terraform"] = Object.assign({}, DOCS["infra-terraform"], { egress_allow: ["api.example.com"], tokens: ["grafana-prod"] });
+  await b.box.pfvShow("infra-terraform");
+  assert.ok(!off(domainRow(b, "reachable")) && !texts(domainRow(b, "reachable"), "pfv-hint").join(" ").includes("no effect"));
+  clickBtn(blockOf(b, "reachable"), "Edit");
+  assert.ok(!off(domainRow(b, "reachable")) && !texts(domainRow(b, "reachable"), "pfv-hint").join(" ").includes("no effect"));
+});
+
+test("the inherit line is true for a non-default Claude login too", () => {
+  const line = page().run("PFA_BASE_LINES").inherit;
+  assert.match(line, /other than default/);
+  assert.match(line, /Anthropic credentials/);
+  assert.ok(!/\bOnly CuliBox's own/.test(line), "no claim that only CuliBox's variables are left out");
+});

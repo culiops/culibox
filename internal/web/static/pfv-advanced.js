@@ -30,11 +30,12 @@ const PFA_BASES = [
   { value: "login", label: "Your login shell (login)" },
 ];
 // What each starting environment does, from the launcher (baseEnv, curatedBase, argv): every base leaves out the Claude session markers,
-// CuliBox's own AB_* variables and its login password's variable, and clean and login pass on only the names below (TERM is
+// CuliBox's own AB_* variables and its login password's variable (a non-default account also drops every account.IsAuthEnv name,
+// launcher.go Build: Anthropic credentials, Bedrock keys, provider switches, base URLs), and clean and login pass on only the names below (TERM is
 // defaulted by the launcher, not copied). A box always starts clean, which the "Applies to Host" chip says. A base not listed here
 // (kept as stored) has no line.
 const PFA_BASE_LINES = {
-  inherit: "Everything in the CuliBox service's environment, keys it holds included. Only CuliBox's own variables and Claude's session markers are left out.",
+  inherit: "Everything in the CuliBox service's environment, keys it holds included, except CuliBox's own variables and Claude's session markers. With a Claude login other than default, the service's own Anthropic credentials and provider settings are left out too.",
   clean: "From the CuliBox service it passes on only PATH, HOME, USER, LOGNAME, SHELL, LANG and LC_*. Any other variable has to be added here.",
   login: "Starts as Minimal does, then runs the login shell's startup files, which can set anything.",
 };
