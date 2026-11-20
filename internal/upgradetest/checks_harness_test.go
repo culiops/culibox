@@ -44,6 +44,7 @@ func AllowRules(rootRel string, rewrite func(string) string) []Rule {
 		{Pattern: p("backups"), Why: "part A's pre-upgrade backup (backupProblems checks it)", AllowNew: true},
 		{Pattern: p("backups/**"), Why: "part A's pre-upgrade backup (backupProblems checks it)", AllowNew: true},
 	}
+	rules = append(rules, withName(onboardingRule(), p("accounts/*/claude/.claude.json")))
 	rules = append(rules, db("audit.db", "SQLite: rows are compared (auditDBRows)")...)
 	rules = append(rules, db("analytics.db", "SQLite: compared through the analytics API")...)
 	if rewrite != nil {
@@ -194,6 +195,37 @@ func settingsRule(rewrite func(string) string) Rule {
 			}
 			if b.Mode != a.Mode {
 				return fmt.Errorf("settings.json mode %v -> %v", b.Mode, a.Mode)
+			}
+			return nil
+		},
+	}
+}
+
+// onboardingRule allows a Claude account's .claude.json to appear, or to gain
+// the first-run flag: vN marks the account's onboarding as done. A file vN-1
+// left there keeps every key it had, apart from hasCompletedOnboarding.
+func onboardingRule() Rule {
+	return Rule{
+		Why:      "vN marks Claude Code's first-run setup as done in each Claude account",
+		AllowNew: true,
+		Check: func(b, a *Entry) error {
+			var before, after map[string]json.RawMessage
+			if err := json.Unmarshal(b.Data, &before); err != nil {
+				return fmt.Errorf(".claude.json before: %v", err)
+			}
+			if err := json.Unmarshal(a.Data, &after); err != nil {
+				return fmt.Errorf(".claude.json after: %v", err)
+			}
+			if string(after["hasCompletedOnboarding"]) != "true" {
+				return fmt.Errorf(".claude.json after the upgrade lacks hasCompletedOnboarding: %s", a.Data)
+			}
+			for k, v := range before {
+				if k != "hasCompletedOnboarding" && string(after[k]) != string(v) {
+					return fmt.Errorf(".claude.json key %q changed: %s -> %s", k, v, after[k])
+				}
+			}
+			if b.Mode != a.Mode {
+				return fmt.Errorf(".claude.json mode %v -> %v", b.Mode, a.Mode)
 			}
 			return nil
 		},

@@ -1,0 +1,130 @@
+package account
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"syscall"
+)
+
+const (
+	claudeStateName = ".claude.json"
+	// claudeStateMax is the largest .claude.json read, the same cap as the box
+	// side's maxClaudeStateSize. Claude Code's own file stays far below it.
+	claudeStateMax = 8 << 20
+)
+
+// ensureOnboarded marks Claude Code's first-run setup as done in the account's
+// own .claude.json (cr is the account's config dir), so a token-only account
+// does not open on the welcome screens. It sets hasCompletedOnboarding to true
+// and adds theme "dark" only when no theme is set; every other key keeps its
+// value. Folder trust is not touched. changed reports whether it wrote.
+//
+// A running Claude Code rewrites this file all the time, so the file is only
+// written when the flag is missing or not true: once the account is set up,
+// provision never touches it again. It returns an error for every reason it
+// left the file alone (not a regular file, too big, not a JSON object, I/O);
+// the caller only logs it.
+func ensureOnboarded(cr *os.Root) (changed bool, err error) {
+	// O_EXCL is the never-clobber rule: it fails when the name exists in any
+	// form, a symlink included, so a file Claude Code created a moment ago is
+	// never replaced.
+	f, err := cr.OpenFile(claudeStateName, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	switch {
+	case err == nil:
+		b, merr := encodeClaudeState(map[string]json.RawMessage{
+			"hasCompletedOnboarding": json.RawMessage("true"),
+			"theme":                  json.RawMessage(`"dark"`),
+		})
+		if merr == nil {
+			_, merr = f.Write(b)
+		}
+		if cerr := f.Close(); merr == nil {
+			merr = cerr
+		}
+		if merr != nil {
+			_ = cr.Remove(claudeStateName) // never leave a half-written file that later reads as corrupt
+		}
+		return merr == nil, merr
+	case errors.Is(err, fs.ErrExist):
+		// state that is already there: merged below, never replaced
+	default:
+		return false, err
+	}
+
+	top, err := readClaudeState(cr)
+	if err != nil {
+		return false, err
+	}
+	var done bool
+	if raw, ok := top["hasCompletedOnboarding"]; ok {
+		_ = json.Unmarshal(raw, &done)
+	}
+	if done {
+		return false, nil
+	}
+	top["hasCompletedOnboarding"] = json.RawMessage("true")
+	if _, ok := top["theme"]; !ok {
+		top["theme"] = json.RawMessage(`"dark"`)
+	}
+	b, err := encodeClaudeState(top)
+	if err != nil {
+		return false, err
+	}
+	if err := writeFileAtomic(cr, claudeStateName, b, 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// readClaudeState reads .claude.json as a JSON object. It accepts only a
+// regular file of at most claudeStateMax bytes, the rules of the box side's
+// mergeClaudeState.
+func readClaudeState(cr *os.Root) (map[string]json.RawMessage, error) {
+	fi, err := cr.Lstat(claudeStateName)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file (%v)", claudeStateName, fi.Mode().Type())
+	}
+	// O_NONBLOCK, and the type checked again on the open file: a FIFO swapped in
+	// after the Lstat would otherwise block this open forever.
+	f, err := cr.OpenFile(claudeStateName, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if fi, err = f.Stat(); err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file (%v)", claudeStateName, fi.Mode().Type())
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, claudeStateMax+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > claudeStateMax {
+		return nil, fmt.Errorf("%s is larger than %d bytes", claudeStateName, claudeStateMax)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil, fmt.Errorf("%s: %w", claudeStateName, err)
+	}
+	if top == nil {
+		return nil, fmt.Errorf("%s is not a JSON object", claudeStateName)
+	}
+	return top, nil
+}
+
+func encodeClaudeState(top map[string]json.RawMessage) ([]byte, error) {
+	b, err := json.MarshalIndent(top, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
+}

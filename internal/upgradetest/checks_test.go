@@ -114,6 +114,23 @@ func TestSettingsRuleAllowsOnlyRootRewrite(t *testing.T) {
 	}
 }
 
+func TestOnboardingRuleAllowsOnlyTheFlag(t *testing.T) {
+	r := onboardingRule()
+	before := entryOf(`{"userID":"abc","theme":"light"}`)
+	if err := r.Check(before, entryOf(`{"userID":"abc","theme":"light","hasCompletedOnboarding":true}`)); err != nil {
+		t.Fatalf("the flag was refused: %v", err)
+	}
+	if err := r.Check(before, entryOf(`{"userID":"abc","theme":"light"}`)); err == nil {
+		t.Fatal("a file without the flag was allowed")
+	}
+	if err := r.Check(before, entryOf(`{"userID":"x","theme":"light","hasCompletedOnboarding":true}`)); err == nil {
+		t.Fatal("a changed key was allowed")
+	}
+	if err := r.Check(before, entryOf(`{"userID":"abc","hasCompletedOnboarding":true}`)); err == nil {
+		t.Fatal("a dropped key was allowed")
+	}
+}
+
 func TestAllowRulesRefuseUnknownRootChanges(t *testing.T) {
 	before := Snapshot{"r/profiles.json": *entryOf("[]"), "r/credentials.json": *entryOf("{}")}
 	after := Snapshot{
