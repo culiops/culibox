@@ -303,6 +303,14 @@ type CloneResolver interface {
 	CloneFor(agent string) (*config.Clone, error)
 }
 
+// HostBlockResolver is implemented by launchers that know why a profile may not
+// run on the host (config.HostBlock): "" when the host is allowed, else one
+// reason clause. Optional, like CloneResolver: without it only the binding,
+// context-path and clone checks in Spawn guard the host tier.
+type HostBlockResolver interface {
+	HostBlockFor(agent string) (string, error)
+}
+
 // ContextResolver is implemented by launchers that know a profile's
 // context_paths. Optional, like CloneResolver: without it no session mounts
 // context. A nil, nil answer means the profile has none.
@@ -1888,6 +1896,22 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	}
 	spec.Runtime = runtime
 
+	// A profile the host is closed to (bindings, context paths, box_only) never
+	// runs there, by any route: a per-spawn "host", a host-tier profile, or an
+	// instance with no box layer. ErrUnboxableWorkspace so the UI shows the
+	// reason (writeSpawnErr) rather than "could not start session".
+	if runtime != config.RuntimeBox {
+		if hr, ok := m.launcher.(HostBlockResolver); ok {
+			reason, err := hr.HostBlockFor(spec.Agent)
+			if err != nil {
+				return nil, err
+			}
+			if reason != "" {
+				return nil, fmt.Errorf("%w: profile %q: %s", box.ErrUnboxableWorkspace, spec.Agent, reason)
+			}
+		}
+	}
+
 	// Resolve the agent binary once, up front: it gates claude-only features
 	// (usage, replies) and feeds the boxed config bundle below. Best-effort —
 	// an unresolvable bin just means no usage, no replies and no bundle.
@@ -1971,7 +1995,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if bs.Any() {
 		kind := bindingKind(bs)
 		if runtime != config.RuntimeBox {
-			return nil, fmt.Errorf("profile %q has %s, so it can only run in a box, never on the host tier", spec.Agent, kind)
+			// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
+			return nil, fmt.Errorf("%w: profile %q has %s, so it can only run in a box, never on the host tier", box.ErrUnboxableWorkspace, spec.Agent, kind)
 		}
 		if brk == nil {
 			return nil, fmt.Errorf("profile %q has %s but the credential broker is not running", spec.Agent, kind)

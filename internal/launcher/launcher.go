@@ -660,6 +660,17 @@ func (l *AgentLauncher) CloneFor(agent string) (*config.Clone, error) {
 	return cfg.Clone()
 }
 
+// HostBlockFor returns config.HostBlock for the profile: "" when the host tier
+// is allowed, else the reason clause. An unknown profile is an error, so a
+// spawn naming one is refused rather than treated as unrestricted.
+func (l *AgentLauncher) HostBlockFor(agent string) (string, error) {
+	cfg, ok := l.agent(agent)
+	if !ok {
+		return "", fmt.Errorf("unknown agent %q", agent)
+	}
+	return config.HostBlock(cfg), nil
+}
+
 // ContextPathsFor returns a copy of the profile's context_paths, or nil, nil
 // for a profile without any (or an unknown one). A stored list that no longer
 // validates is an error: the spawn is refused rather than mount a list that

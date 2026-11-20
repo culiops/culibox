@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,5 +86,71 @@ func TestSpawnExplicitHostWithoutContainment(t *testing.T) {
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 	if s.Runtime != config.RuntimeHost {
 		t.Fatalf("runtime = %q, want host", s.Runtime)
+	}
+}
+
+// hostBlockLauncher is a tieredLauncher that also names why a profile may not
+// run on the host (the optional HostBlockResolver), like the real launcher.
+type hostBlockLauncher struct {
+	tieredLauncher
+	reason string
+}
+
+func (l hostBlockLauncher) HostBlockFor(string) (string, error) { return l.reason, nil }
+
+func TestSpawnHostRefusedByHostBlock(t *testing.T) {
+	const reason = "this profile is set to box only"
+	l := hostBlockLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, reason: reason}
+	m := NewManager(l, nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	m.SetBoxes(boxes)
+
+	_, err := m.Spawn(launcher.SpawnSpec{Agent: "p", Cwd: t.TempDir(), Runtime: config.RuntimeHost})
+	if err == nil {
+		t.Fatal("a host spawn the profile forbids was accepted")
+	}
+	if !errors.Is(err, box.ErrUnboxableWorkspace) {
+		t.Fatalf("err = %v, want ErrUnboxableWorkspace so the UI shows it", err)
+	}
+	if !strings.Contains(err.Error(), reason) || !strings.Contains(err.Error(), `"p"`) {
+		t.Fatalf("err = %q, want the profile and the reason", err)
+	}
+	if boxes.prepares != 0 || boxes.wraps != 0 || len(m.List()) != 0 {
+		t.Fatalf("refused spawn prepared=%d wrapped=%d sessions=%d", boxes.prepares, boxes.wraps, len(m.List()))
+	}
+
+	// The same profile in a box passes this check.
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "p", Cwd: t.TempDir(), Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatalf("box spawn refused: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+}
+
+// A profile with nothing forbidding the host is not touched by the check.
+func TestSpawnHostAllowedWhenHostBlockEmpty(t *testing.T) {
+	l := hostBlockLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeHost}}
+	m := NewManager(l, nil, 1<<16, time.Minute)
+	m.SetBoxes(&fakeBoxes{})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "p", Cwd: t.TempDir(), Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+}
+
+// The bound-on-host refusal (the second net, for a launcher without a
+// HostBlockResolver) is a message the UI shows, not "could not start session".
+func TestSpawnBoundHostRefusalIsShown(t *testing.T) {
+	m, _, _, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	_, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir(), Runtime: config.RuntimeHost})
+	if err == nil {
+		t.Fatal("a bound profile spawned on the host")
+	}
+	if !errors.Is(err, box.ErrUnboxableWorkspace) {
+		t.Fatalf("err = %v, want ErrUnboxableWorkspace so the UI shows it", err)
+	}
+	if !strings.Contains(err.Error(), "has an AWS binding, so it can only run in a box, never on the host tier") {
+		t.Fatalf("err = %q, wording changed", err)
 	}
 }

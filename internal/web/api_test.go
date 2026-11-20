@@ -812,6 +812,31 @@ func TestSpawnErrShowsUnboxableWorkspace(t *testing.T) {
 	}
 }
 
+// A host spawn the profile forbids reaches the caller with its reason, as the
+// 400 the New session dialog shows, never the generic "could not start session".
+func TestAPI_HostBlockedSpawnShowsReason(t *testing.T) {
+	wrapped := fmt.Errorf("%w: profile %q: %s", box.ErrUnboxableWorkspace, "p", "this profile is set to box only")
+	m := &mockSvc{spawnErr: wrapped}
+	a := &API{Sessions: m}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"p","runtime":"host"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	var got struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	if !strings.Contains(got.Error, "this profile is set to box only") || strings.Contains(got.Error, "could not start session") {
+		t.Fatalf("error = %q, want the reason and not the generic message", got.Error)
+	}
+	if m.spawnedRuntime != "host" {
+		t.Fatalf("spawned runtime = %q, want host passed through", m.spawnedRuntime)
+	}
+}
+
 // A workspace refusal names the conflicting box and path; the user needs it
 // to pick another folder, so it is shown rather than hidden.
 func TestSpawnErrShowsWorkspaceHeld(t *testing.T) {
