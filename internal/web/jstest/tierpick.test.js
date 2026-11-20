@@ -703,9 +703,11 @@ test("tierVmFetch: stopped only on a stopped answer, for the latest call", async
   assert.strictEqual(stopped(), false);
 
   pg.run("tierVmStopped = true");
+  const before = renders();
   answer = async () => { throw new Error("boom"); };
   await fetchVm(); // never throws
   assert.strictEqual(stopped(), false);
+  assert.strictEqual(renders(), before, "a failed answer draws nothing");
 
   // two calls, the first answering last: the second's answer wins
   let late;
@@ -718,17 +720,32 @@ test("tierVmFetch: stopped only on a stopped answer, for the latest call", async
   await first;
   await tick();
   assert.strictEqual(stopped(), false, "the stale answer is dropped");
+  assert.strictEqual(renders(), before + 1, "only the latest answer drew (the second call's)");
 
   // no box layer: nothing asked
   const n = asked.length;
   pg.ctx.boxRuntime = "";
   await fetchVm();
   assert.strictEqual(asked.length, n);
-  // the phone: nothing asked either
+  // the phone: nothing asked either, and an old "stopped" is cleared rather than kept on a guess (spec 3.5)
   pg.ctx.boxRuntime = "runc";
   pg.ctx.desktop = false;
+  pg.run("tierVmStopped = true");
   await fetchVm();
   assert.strictEqual(asked.length, n);
+  assert.strictEqual(stopped(), false);
+  pg.run("tierVmStopped = true");
+  pg.ctx.desktop = true;
+  pg.ctx.boxRuntime = "";
+  await fetchVm();
+  assert.strictEqual(stopped(), false, "no box layer clears it too");
+  assert.strictEqual(asked.length, n);
+});
+
+test("tierVmFetch: an exception from renderTierPick is not swallowed as a failed request", async () => {
+  const pg = tpPage({ deadlineSignal: () => ({}), api: async () => ({ state: "stopped" }) });
+  pg.ctx.renderTierPick = () => { throw new Error("draw bug"); };
+  await assert.rejects(vm.runInContext("tierVmFetch()", pg.ctx), /draw bug/);
 });
 
 test("openSpawnDialog takes a cwd-only prefill without the missing-profile toast", () => {
@@ -739,6 +756,7 @@ test("openSpawnDialog takes a cwd-only prefill without the missing-profile toast
   assert.ok(cwdOnly < toast, "before the missing-profile toast");
   assert.match(body.slice(cwdOnly, toast), /setSpawnCwd\(prefill\.cwd, prefill\.source \|\| ""\)/);
   assert.ok(body.indexOf("spawnCwdChoice(") < cwdOnly, "after the spawnCwdChoice line");
+  assert.match(body.slice(cwdOnly, toast), /typeof prefill\.cwd === "string" && prefill\.cwd !== ""\)\s*setSpawnCwd\(/, "no path, nothing applied: the chosen workspace stays");
   const sync = body.indexOf("syncRuntimeField();");
   assert.match(body.slice(sync, sync + 80), /^syncRuntimeField\(\);\s*\n\s*tierVmFetch\(\);/, "tierVmFetch follows syncRuntimeField, not awaited");
 });

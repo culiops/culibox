@@ -225,20 +225,22 @@ function renderTierPick() {
 
 // tierVmFetch: ask whether the Box VM is stopped (macOS colima; "" elsewhere) and let the Box cards say so when it answers. Not awaited
 // by the dialog: the cards draw first. The server caps its colima call at 30 s, so the page waits a little longer. Only the latest
-// call's answer counts, any failure leaves "not stopped", and it never throws.
+// call's answer counts, and a failed request leaves "not stopped"; it never throws for a network or API error.
 let tierVmSeq = 0;
 async function tierVmFetch() {
-  if (!boxRuntime || !drawerDesktop()) return;
+  // Cleared first, on every call: "stopped" is never shown on a guess, so a call that asks nothing (no box layer, the phone) leaves no old answer.
   tierVmStopped = false;
   const seq = ++tierVmSeq;
+  if (!boxRuntime || !drawerDesktop()) return;
+  let r;
   try {
-    const r = await api("/api/vm-state", { signal: deadlineSignal(35000) });
-    if (seq !== tierVmSeq) return;
-    tierVmStopped = !!r && r.state === "stopped";
-    renderTierPick();
+    r = await api("/api/vm-state", { signal: deadlineSignal(35000) });
   } catch (_) {
-    // no answer, or one that is not usable: no line
+    return; // no answer, or one that is not usable: no line
   }
+  if (seq !== tierVmSeq) return;
+  tierVmStopped = !!r && r.state === "stopped";
+  renderTierPick();
 }
 
 // tierLeaveCloneDir: a clone profile whose workspace is its clone dir, and the session will not be a clone: the workspace becomes the

@@ -6301,8 +6301,10 @@ async function openSpawnDialog(preselectAgent, prefill) {
   setSpawnCwd(choice.cwd, choice.source);
   if (prefill) {
     // A group's + names a workspace and no profile: that is not a profile gone missing, so no toast.
-    if (!prefill.agent) setSpawnCwd(prefill.cwd, prefill.source || "");
-    else if (want === prefill.agent) applySpawnPrefill(prefill);
+    // With no path either there is nothing to apply: the workspace spawnCwdChoice chose stays.
+    if (!prefill.agent) {
+      if (typeof prefill.cwd === "string" && prefill.cwd !== "") setSpawnCwd(prefill.cwd, prefill.source || "");
+    } else if (want === prefill.agent) applySpawnPrefill(prefill);
     else showToast('Profile "' + prefill.agent + '" no longer exists — pick one', { error: true });
   }
   onSpawnCwdChanged();
