@@ -124,8 +124,11 @@ func ValidatePrompt(p string) error {
 func IsClaudeBin(bin string) bool { return bin != "" && filepath.Base(bin) == "claude" }
 
 // AcceptsPrompt reports whether an agent binary takes a first message in
-// argv. Claude only: codex could not be measured (not installed), and a
-// refusal is the safe answer for an unmeasured CLI.
+// argv AND runs an interactive prompt where pasted text is a message, never
+// commands: the review bar's Paste is gated on it too (session Info.AgentPrompt,
+// #352). Enable it for another CLI only when both hold. Claude only: codex
+// could not be measured (not installed), and a refusal is the safe answer for
+// an unmeasured CLI.
 func AcceptsPrompt(bin string) bool { return IsClaudeBin(bin) }
 
 // claudeSessionEnvBlocklist: Claude Code session-identity vars that make a
