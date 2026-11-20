@@ -105,8 +105,9 @@ function pfcInputRow(rec, o) {
 // --- the "+ Add" picker (spec 5.7; the mockup's `picker` state) -------------------------------------------------------------
 
 // A popover under the "+ Add" link. What it offers is data: groups [{title, note, items}], an item being {title, sub, tag,
-// added, add, create}: `add` is what pfvAddRow is given, `create` the kind of thing a "New ..." item makes (pfvOpenDrawer's), `added`
-// that the profile holds it already (drawn, disabled, "Added"). A group with no title is drawn without a heading. The popover is
+// added, add, create, act, key}: `add` is what pfvAddRow is given, `create` the kind of thing a "New ..." item makes (pfvOpenDrawer's),
+// `act` a function run after the popover has closed (the Advanced block's "+ Add secret" menu: its items go to other blocks; `key`
+// names the item), `added` that the profile holds it already (drawn, disabled, "Added"). A group with no title is drawn without a heading. The popover is
 // open while rec.ui.picker is true: that is what draws it and what pfvState.picker and the Esc layering read.
 const PFC_PICK_READ = "Read only";
 const PFC_PICK_AWS_WRITE = "Read only; write after a granted window";
@@ -132,6 +133,10 @@ function pfcPickOption(rec, it) {
     b.disabled = true;
     b.append(pfvMk("span", "pfv-opt-r", "Added"));
     return b;
+  }
+  if (typeof it.act === "function") {
+    b.onclick = () => { pfcPickClose(rec); it.act(); };
+    return pfvReg(rec, "pick:act:" + it.key, b);
   }
   b.onclick = it.create ? () => pfcPickCreate(rec, it.create) : () => pfvAddRow(rec.id, it.add);
   return pfvReg(rec, "pick:" + (it.create ? "new:" + it.create : it.add.kind + (it.add.name ? ":" + it.add.name : "")), b);

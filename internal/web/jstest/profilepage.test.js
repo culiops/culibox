@@ -147,6 +147,7 @@ function page(over) {
     awscEntries: [{ name: "prod-read", prod: true, write_capable: true, account_id: "222222222222", region: "eu-west-1" }, { name: "staging-read", account_id: "111111111111", region: "eu-west-1" }],
     stEntries: [{ name: "grafana-prod", prod: true, env: ["GRAFANA_SERVICE_ACCOUNT_TOKEN"], hosts: [{ host: "grafana.acme.example.com", port: 443 }] }],
     pfCredsView: { store: { initialized: true, locked: false }, aws: [] },
+    secretSources: [],
     ghApps: ["acme-app"], refreshCredLists: async () => { calls.push("refreshCredLists"); },
     // tabs.js draws the dock's glyphs (the ⋯ menu's Duplicate… and Delete… icons); a bare svg stands in here.
     tabIcon: () => new Node("svg"), dockIcon: () => new Node("svg"),
@@ -3600,6 +3601,9 @@ test("Cloud and tokens and Also reachable register their editors through the sea
 
 const ENVROWS = require("../static/envrows.js");
 const advOf = (t) => blockOf(t, "advanced");
+const WITH_STORE = { secretSources: [{ type: "store" }] };
+// "+ Add secret" is a menu: the old direct click is its By name item (offered once a secret source is configured).
+const addByName = (t) => { clickBtn(advOf(t), "+ Add secret"); optBtn(t, "advanced", "By name (older form)").click(); };
 const advLabels = (t) => texts(advOf(t), "pfv-flabel");
 // The refusals the user can see: a field's line is hidden, not removed, once its words are stale.
 const advErrs = (t) => byCls(advOf(t), "pfv-ferr").filter((n) => !n.hidden).map((n) => n.textContent);
@@ -3673,7 +3677,7 @@ test("base: a box profile shows the one it has and a save keeps it; a host profi
 });
 
 test("env row errors block save", async () => {
-  const t = page();
+  const t = page(WITH_STORE);
   await openAdv(t, "aws-ops");
   clickBtn(advOf(t), "+ Add variable");
   assert.strictEqual(envRowsOf(t).length, 1);
@@ -3691,7 +3695,7 @@ test("env row errors block save", async () => {
   typeRow(envRowsOf(t)[0], "LEVEL");
   assert.deepStrictEqual(advErrs(t), [], "the refusal goes when the rows change");
   // A name listed twice is refused too, literal against secret as the server does.
-  clickBtn(advOf(t), "+ Add secret");
+  addByName(t);
   typeRow(envRowsOf(t)[1], "LEVEL");
   assert.strictEqual(await clickBtn(advOf(t), "Save"), false);
   assert.deepStrictEqual(advErrs(t), ['Listed twice: "LEVEL".']);
@@ -3721,14 +3725,14 @@ test("env row errors block save", async () => {
 });
 
 test("removing an env row is pending until save and undo restores it", async () => {
-  const t = page();
+  const t = page(WITH_STORE);
   await openAdv(t, "aws-ops", { env: { KEEP: "1", DROP: "2" }, secrets: ["TOKEN_NAME"] });
   // The mockup's rows: the kind, then a name and a value (a secret: a name and where it is read from), then Remove.
   const rows = envRowsOf(t);
   assert.deepStrictEqual(rows.map((r) => texts(r, "pfv-k")[0]), ["Variable", "Variable", "Secret"]);
   assert.deepStrictEqual(rowInputs(rows[0]).map((i) => [i.getAttribute("aria-label"), i.getAttribute("placeholder"), i.value]), [["Variable name", "NAME", "KEEP"], ["Value", "value", "1"]]);
   assert.deepStrictEqual(rowInputs(rows[2]).map((i) => [i.getAttribute("aria-label"), i.getAttribute("placeholder"), i.value]), [["Secret name", "NAME", "TOKEN_NAME"]]);
-  assert.deepStrictEqual(texts(rows[2], "pfv-hint"), ["Read from the credential store when it starts"]);
+  assert.deepStrictEqual(texts(rows[2], "pfv-hint"), ["Resolved at start from the credential store."]);
   assert.deepStrictEqual(rows.map((r) => rowRm(r).textContent), ["Remove", "Remove", "Remove"]);
   assert.ok(rows.every((r) => !r.className.includes("pfv-removed")) && !unsaved(t));
   // Edit the value, then Remove: the row stays, struck through, with Undo; the form holds a change; nothing is sent.
@@ -3966,20 +3970,20 @@ test("Advanced: an emptied list says its line, in the mockup's words for a box a
   await openAdv(none, "aws-ops");
   assert.deepStrictEqual(envRowsOf(none), []);
   assert.deepStrictEqual(texts(advOf(none), "pfv-hint").filter((x) => /^None/.test(x)), ["None. The agent gets the box's minimal environment."]);
-  const host = page();
+  const host = page(WITH_STORE);
   await openAdv(host, "runbook-host");
   assert.deepStrictEqual(texts(advOf(host), "pfv-hint").filter((x) => /^None/.test(x)), ["None added on top of the starting environment."]);
   // The line goes when a row is added and comes back when it is taken away again.
-  clickBtn(advOf(host), "+ Add secret");
+  addByName(host);
   assert.deepStrictEqual(texts(advOf(host), "pfv-hint").filter((x) => /^None/.test(x)), []);
   assert.deepStrictEqual(texts(envRowsOf(host)[0], "pfv-k"), ["Secret"]);
   rowRm(envRowsOf(host)[0]).click();
   assert.deepStrictEqual(texts(advOf(host), "pfv-hint").filter((x) => /^None/.test(x)), ["None added on top of the starting environment."]);
   // A row added and left blank is not a variable.
-  const b = page();
+  const b = page(WITH_STORE);
   await openAdv(b, "aws-ops");
   clickBtn(advOf(b), "+ Add variable");
-  clickBtn(advOf(b), "+ Add secret");
+  addByName(b);
   assert.strictEqual(await clickBtn(advOf(b), "Save"), true);
   assert.ok(!("env" in b.box.puts[0]) && !("secrets" in b.box.puts[0]));
 });
@@ -4151,15 +4155,142 @@ test("Advanced follows the command the open Agent block will save: its options g
   assert.strictEqual(body.replyable, true, "the stored default stays");
 });
 
+// --- "+ Add secret" is a menu (#341 P1, spec A) -----------------------------------------------------------------------------
+
+const secretMenu = (t) => { clickBtn(advOf(t), "+ Add secret"); return optsOf(t, "advanced"); };
+const menuTitles = (t) => secretMenu(t).map(optName);
+
+test("+ Add secret opens a menu; By name only with secret sources", async () => {
+  const none = page({ secretSources: [] });
+  await openAdv(none, "aws-ops");
+  assert.deepStrictEqual(menuTitles(none), ["Claude login", "A service token"]);
+  assert.strictEqual(envRowsOf(none).length, 0, "the click adds no row");
+  assert.strictEqual(popOf(none, "advanced").getAttribute("role"), "dialog");
+  assert.strictEqual(none.run("pfvState").picker, "advanced");
+  assert.deepStrictEqual(texts(popOf(none, "advanced"), "pfv-opt-s"), ["Pick the account this profile signs in with.", "An API key or token for a service. It only reaches that service's hosts."]);
+  const other = page({ secretSources: [] });
+  await openAdv(other, "aws-ops", { bin: "codex" });
+  assert.deepStrictEqual(menuTitles(other), ["A service token"], "Claude login is Claude's");
+  const some = page(WITH_STORE);
+  await openAdv(some, "aws-ops");
+  const opts = secretMenu(some);
+  assert.deepStrictEqual(opts.map(optName), ["Claude login", "A service token", "By name (older form)"]);
+  assert.deepStrictEqual(texts(opts[2], "pfv-opt-s"), ["Resolved from the credential store."]);
+  opts[2].click();
+  assert.strictEqual(envRowsOf(some).length, 1);
+  assert.deepStrictEqual(texts(envRowsOf(some)[0], "pfv-k"), ["Secret"]);
+  assert.strictEqual(Node.focused, rowName(envRowsOf(some)[0]), "what the old direct click did: focus on the name");
+  assert.strictEqual(some.run("pfvState").picker, "", "the menu closed");
+  // Every source in words, in config order.
+  const all = page({ secretSources: [{ type: "store" }, { type: "file", path: "/etc/cb/s.env" }, { type: "env" }] });
+  await openAdv(all, "aws-ops");
+  assert.deepStrictEqual(texts(secretMenu(all)[2], "pfv-opt-s"), ["Resolved from the credential store, the file /etc/cb/s.env and the CuliBox service's environment."]);
+});
+
+test("the + Add secret link toggles the menu, and Esc closes it with focus back on the link", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops");
+  const link = field(t, "add");
+  assert.strictEqual(link.getAttribute("aria-expanded"), "false");
+  clickBtn(advOf(t), "+ Add secret");
+  assert.strictEqual(field(t, "add").getAttribute("aria-expanded"), "true");
+  assert.strictEqual(Node.focused, optsOf(t, "advanced")[0], "focus goes to the first option");
+  clickBtn(advOf(t), "+ Add secret");
+  assert.strictEqual(t.run("pfvState").picker, "", "a second click closes it");
+  assert.strictEqual(Node.focused, field(t, "add"));
+  clickBtn(advOf(t), "+ Add secret");
+  assert.strictEqual(t.box.pfvEscTarget(), "picker");
+  docClick(t, field(t, "base"));
+  assert.strictEqual(t.run("pfvState").picker, "", "a click outside closes it");
+});
+
+test("By name is hidden before meta answers", async () => {
+  const t = page({ metaLoaded: false, secretSources: [{ type: "store" }] });
+  await openAdv(t, "aws-ops");
+  assert.deepStrictEqual(menuTitles(t), ["Claude login", "A service token"]);
+});
+
+test("stored secrets show a true hint and round-trip", async () => {
+  const none = page({ secretSources: [] });
+  await openAdv(none, "aws-ops", { secrets: ["OLD_TOKEN"] });
+  const hint = t0 => texts(envRowsOf(t0)[0], "pfv-hint");
+  assert.deepStrictEqual(hint(none), [none.box.pfaSecretHint([])]);
+  assert.deepStrictEqual(hint(none), ["No secret source is configured, so a session with this profile will refuse to start. Use a service token instead."]);
+  assert.strictEqual(rowName(envRowsOf(none)[0]).value, "OLD_TOKEN", "the row stays, editable");
+  typeArgs(none, "--x");
+  assert.strictEqual(await clickBtn(advOf(none), "Save"), true);
+  assert.deepStrictEqual(none.box.puts[0].secrets, ["OLD_TOKEN"]);
+  const file = page({ secretSources: [{ type: "file", path: "/etc/cb/s.env" }] });
+  await openAdv(file, "aws-ops", { secrets: ["OLD_TOKEN"] });
+  assert.deepStrictEqual(hint(file), ["Resolved at start from the file /etc/cb/s.env."]);
+});
+
+test("pfaSourcesWords and pfaSecretHint say each source, in config order", () => {
+  const t = page();
+  assert.strictEqual(t.box.pfaSourcesWords([]), "");
+  assert.strictEqual(t.box.pfaSourcesWords([{ type: "env" }, { type: "store" }]), "the CuliBox service's environment and the credential store");
+  assert.strictEqual(t.box.pfaSecretHint([{ type: "store" }]), "Resolved at start from the credential store.");
+});
+
+test("Claude login opens the Agent block on the account select", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops");
+  secretMenu(t);
+  optBtn(t, "advanced", "Claude login").click();
+  assert.strictEqual(t.run("pfvState").openBlock, "agent");
+  assert.strictEqual(Node.focused, t.run("pfvState").edits.agent.fields.account);
+  assert.strictEqual(t.run("pfvState").picker, "");
+});
+
+test("a service token with none defined opens the New token drawer", async () => {
+  const t = page({ stEntries: [] });
+  const asked = [];
+  t.box.pfvOpenDrawer = (kind, id) => { asked.push([kind, id]); return true; };
+  await openAdv(t, "aws-ops");
+  secretMenu(t);
+  optBtn(t, "advanced", "A service token").click();
+  assert.strictEqual(t.run("pfvState").openBlock, "cloud");
+  assert.deepStrictEqual(asked, [["token", "cloud"]]);
+  // With some defined: the Cloud block's picker, open.
+  const some = page();
+  await openAdv(some, "aws-ops");
+  secretMenu(some);
+  optBtn(some, "advanced", "A service token").click();
+  assert.strictEqual(some.run("pfvState").openBlock, "cloud");
+  assert.strictEqual(some.run("pfvState").edits.cloud.ui.picker, true);
+  assert.ok(optBtn(some, "cloud", "grafana-prod"), "the tokens are offered");
+});
+
+test("menu choices keep unsaved Advanced edits", async () => {
+  for (const [pick, drawer] of [["Claude login", false], ["A service token", false], ["A service token", true]]) {
+    const t = page(drawer ? { stEntries: [] } : {});
+    const asked = [];
+    t.box.pfvOpenDrawer = (kind) => { asked.push(kind); return true; };
+    await openAdv(t, "aws-ops");
+    clickBtn(advOf(t), "+ Add variable");
+    typeRow(envRowsOf(t)[0], "KEEP", "1");
+    secretMenu(t);
+    optBtn(t, "advanced", pick).click();
+    const label = pick + (drawer ? " (none defined)" : "");
+    assert.strictEqual(t.run("pfvState").openBlock, "advanced", label);
+    assert.deepStrictEqual(asked, [], label);
+    assert.deepStrictEqual(envRowsOf(t).map((r) => rowInputs(r).map((i) => i.value)), [["KEEP", "1"]], label);
+    assert.strictEqual(t.box.puts.length, 0, label);
+    assert.strictEqual(t.run("pfvState").picker, "", label + ": the menu closed");
+    assert.strictEqual(Node.focused, field(t, "add"), label + ": focus is back on the link");
+    assert.ok(unsaved(t), label);
+  }
+});
+
 // --- a row that was added and left blank is no change (R34) ----------------------------------------------------------------------
 
 const leaveAsk = (t) => t.calls.filter((c) => c.startsWith("confirm:")).length;
 
 test("a blank added env row does not make the block dirty", async () => {
-  const t = page();
+  const t = page(WITH_STORE);
   await openAdv(t, "aws-ops", { env: { KEEP: "1" } });
   clickBtn(advOf(t), "+ Add variable");
-  clickBtn(advOf(t), "+ Add secret");
+  addByName(t);
   assert.strictEqual(envRowsOf(t).length, 3, "the rows are there to type in");
   assert.ok(!unsaved(t), "no Unsaved changes in the header");
   assert.deepStrictEqual(texts(advOf(t), "pfv-st-dirty"), [], "nor in the footer");

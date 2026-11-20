@@ -4738,6 +4738,10 @@ let stEntries = [];
 // awscEntries: the instance's aws_connections as /api/meta describes them (name,
 // label, account, region, whether it can write; never the source profile).
 let awscEntries = [];
+// secretSources: the secret sources the daemon has configured, from /api/meta's secret_sources, in config order:
+// [{type: "store" | "file" | "env", path?}] (path only for a file; no values, no names). [] when none. They are read once at
+// daemon start, so the meta load that fills the lists is the only time they are read.
+let secretSources = [];
 // applyCredLists takes the credential lists out of a /api/meta answer and repaints
 // the profile form's pickers. The ticks the operator has made in an open form are
 // kept; only a tick on an entry that was defined a moment ago and is gone now is
@@ -4747,12 +4751,14 @@ function applyCredLists(meta) {
   const apps = meta && Array.isArray(meta.github_apps) ? meta.github_apps : [];
   const sts = meta && Array.isArray(meta.static_tokens) ? meta.static_tokens : [];
   const awscs = meta && Array.isArray(meta.aws_connections) ? meta.aws_connections : [];
+  const srcs = meta && Array.isArray(meta.secret_sources) ? meta.secret_sources : [];
   const names = (l) => l.map((e) => (typeof e === "string" ? e : e.name));
   const oldSt = names(stEntries), oldAwsc = names(awscEntries);
-  const changed = JSON.stringify([ghApps, stEntries, awscEntries]) !== JSON.stringify([apps, sts, awscs]);
+  const changed = JSON.stringify([ghApps, stEntries, awscEntries, secretSources]) !== JSON.stringify([apps, sts, awscs, srcs]);
   ghApps = apps;
   stEntries = sts;
   awscEntries = awscs;
+  secretSources = srcs;
   if (!changed && credListsPainted) return;
   credListsPainted = true;
   renderStPicker(ticksAfterRefresh(readStTicked(), oldSt, names(sts)));

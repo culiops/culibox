@@ -32,7 +32,33 @@ const PFA_BASES = [
 const PFA_ARGS_HINT = "One per line.";
 const PFA_ENV_NONE_BOX = "None. The agent gets the box's minimal environment.";
 const PFA_ENV_NONE_HOST = "None added on top of the starting environment.";
-const PFA_SECRET_HINT = "Read from the credential store when it starts";
+const PFA_SECRET_NO_SOURCE = "No secret source is configured, so a session with this profile will refuse to start. Use a service token instead.";
+const PFA_SECRET_PICK_LABEL = "Add a secret";
+const PFA_PICK_CLAUDE = "Pick the account this profile signs in with.";
+const PFA_PICK_TOKEN = "An API key or token for a service. It only reaches that service's hosts.";
+
+// pfaSources: the secret sources the daemon has configured (app.js secretSources, from /api/meta), [] before it has answered.
+const pfaSources = () => (typeof secretSources !== "undefined" && Array.isArray(secretSources) ? secretSources : []);
+
+// pfaSourcesWords: the configured sources in words, in config order ("" for none): the credential store, a file by its path,
+// the CuliBox service's environment (the daemon's own, never "your shell").
+function pfaSourcesWords(sources) {
+  const words = [];
+  for (const s of sources || []) {
+    if (!s) continue;
+    if (s.type === "store") words.push("the credential store");
+    else if (s.type === "file") words.push("the file " + s.path);
+    else if (s.type === "env") words.push("the CuliBox service's environment");
+  }
+  return pfvJoin(words);
+}
+
+// pfaSecretHint: what a stored secret row says about where its value comes from. True for every config: with sources it names
+// them, without any the launcher refuses a name it cannot resolve.
+function pfaSecretHint(sources) {
+  const words = pfaSourcesWords(sources);
+  return words ? "Resolved at start from " + words + "." : PFA_SECRET_NO_SOURCE;
+}
 
 const pfaLines = (text) => String(text || "").split("\n").map((s) => s.trim()).filter(Boolean);
 // pfaLive: the variable rows that count: not pending removal.
@@ -182,9 +208,10 @@ function pfaInput(row, prop, label, placeholder, onInput) {
 }
 
 // pfaEnvRow: a row in the page's row grammar (the kind column, the content, Remove or Undo at the right; the mockup's
-// tpl-env and tpl-secret). A variable is a name and a value; a secret is a name only, with where its value comes from.
+// tpl-env and tpl-secret). A variable is a name and a value; a secret is a name only, with where its value comes from
+// (hint: pfaSecretHint's).
 // A row pending removal is its words, struck through like the Cloud rows, with Undo. {node, name, btn}.
-function pfaEnvRow(row, onInput, toggle) {
+function pfaEnvRow(row, onInput, toggle, hint) {
   const secret = row.kind === "secret";
   const gone = row.removed === true;
   const node = pfvMk("div", "pfv-row" + (gone ? " pfv-removed" : ""));
@@ -197,7 +224,7 @@ function pfaEnvRow(row, onInput, toggle) {
   } else {
     name = pfaInput(row, "key", secret ? "Secret name" : "Variable name", "NAME", onInput);
     kv.append(name);
-    kv.append(secret ? pfvMk("span", "pfv-hint", PFA_SECRET_HINT) : pfaInput(row, "value", "Value", "value", onInput));
+    kv.append(secret ? pfvMk("span", "pfv-hint", hint) : pfaInput(row, "value", "Value", "value", onInput));
   }
   const what = (secret ? "secret" : "variable") + (row.key.trim() ? " " + row.key.trim() : "");
   const btn = pfvMk("button", "pfv-rmbtn", gone ? "Undo" : "Remove");
@@ -208,10 +235,46 @@ function pfaEnvRow(row, onInput, toggle) {
   return { node, name, btn };
 }
 
+// pfaSecretPick: the "+ Add secret" menu, in the picker's spec ({label, filter, groups}). Three ways to give the agent a secret, each
+// present when it can work: Claude login (the command is claude: the Agent block's account select), A service token (always: the
+// Cloud and tokens block) and By name (older form), only once /api/meta has said a secret source is configured, because a name
+// nothing resolves makes the session refuse to start. The two that leave the block go through pfvOpenBlock, which refuses (and
+// nudges) while this block holds changes: the menu never discards or saves them, and a refusal leaves the block as it was.
+function pfaSecretPick(rec, c) {
+  const back = () => { const add = rec.fields.add; if (add && typeof add.focus === "function") add.focus(); };
+  const items = [];
+  if (isClaudeBinName(pfaBin(c))) {
+    items.push({
+      key: "claude", title: "Claude login", sub: PFA_PICK_CLAUDE,
+      act: () => {
+        if (!pfvOpenBlock("agent")) { back(); return; }
+        const account = pfvState.edits.agent.fields.account;
+        if (account && typeof account.focus === "function") account.focus();
+      },
+    });
+  }
+  items.push({
+    key: "token", title: "A service token", sub: PFA_PICK_TOKEN,
+    act: () => {
+      const tokens = typeof stEntries !== "undefined" && Array.isArray(stEntries) ? stEntries : [];
+      // With none defined there is nothing to choose from: straight to the drawer that makes one (Cloud and tokens takes it from there).
+      const ok = tokens.length === 0 ? pfvOpenBlock("cloud") && pfvOpenDrawer("token", "cloud") : pfvOpenAdd("cloud");
+      if (!ok && pfvState.edits.advanced === rec) back();
+    },
+  });
+  const sources = pfaSources();
+  if (typeof metaLoaded !== "undefined" && metaLoaded === true && pfaSourcesWords(sources) !== "") {
+    // The row is added by the form drawn at this moment (the menu has closed and drawn it again), so the hook is read now.
+    items.push({ key: "byname", title: "By name (older form)", sub: "Resolved from " + pfaSourcesWords(sources) + ".", act: () => rec.ui.pfaAddSecret() });
+  }
+  return { label: PFA_SECRET_PICK_LABEL, filter: "", groups: [{ title: "", items }] };
+}
+
 // pfaEnvField: the variables and secrets as rows, with the two "+ Add" links under them. The rows are rec.values.envRows
 // itself, so a form drawn again keeps what was typed. Only this list is drawn again when a row is added, removed or
-// brought back: the other controls (and the focus in them) stay.
-function pfaEnvField(rec, host) {
+// brought back: the other controls (and the focus in them) stay. "+ Add secret" opens a menu (pfaSecretPick) that carries the
+// picker's mechanics (rec.ui.picker, pfv-cloud.js); only its "By name" item adds a row here.
+function pfaEnvField(rec, host, c) {
   const v = rec.values;
   const none = host ? PFA_ENV_NONE_HOST : PFA_ENV_NONE_BOX;
   const rows = pfvMk("div", "pfv-rows");
@@ -223,6 +286,7 @@ function pfaEnvField(rec, host) {
   const secretsErr = pfvFerr(rec, "secrets");
   const secretsNode = secretsErr ? pfvMk("p", "pfv-ferr", secretsErr) : null;
   if (secretsNode) box.append(secretsNode);
+  const hint = pfaSecretHint(pfaSources());
   let names = [];
   let btns = [];
   // A row was typed in or taken, put or brought back: a refusal about the list is stale.
@@ -253,7 +317,7 @@ function pfaEnvField(rec, host) {
       return;
     }
     rows.replaceChildren(...v.envRows.map((row) => {
-      const r = pfaEnvRow(row, changed, () => toggle(row));
+      const r = pfaEnvRow(row, changed, () => toggle(row), hint);
       names.push(r.name);
       btns.push(r.btn);
       return r.node;
@@ -269,16 +333,34 @@ function pfaEnvField(rec, host) {
     const input = names[bad >= 0 ? v.envRows.indexOf(live[bad]) : v.envRows.findIndex((r) => r.removed !== true)];
     if (input) pfvStandIn(rec, ctl, input, words);
   }
-  for (const [label, kind] of [["+ Add variable", "literal"], ["+ Add secret", "secret"]]) {
-    const b = pfvDrawLink(label, "");
-    b.onclick = () => {
-      v.envRows.push({ key: "", value: "", kind, fresh: true });
-      paint();
-      changed();
-      names[names.length - 1].focus();
-    };
-    adds.append(b);
+  const addRow = (kind) => {
+    v.envRows.push({ key: "", value: "", kind, fresh: true });
+    paint();
+    changed();
+    names[names.length - 1].focus();
+  };
+  rec.ui.pfaAddSecret = () => addRow("secret");
+  const addVar = pfvDrawLink("+ Add variable", "");
+  addVar.onclick = () => addRow("literal");
+  adds.append(addVar);
+  const wrap = pfvMk("div", "pfv-addwrap");
+  const addSecret = pfvDrawLink("+ Add secret", "");
+  addSecret.setAttribute("aria-expanded", rec.ui.picker === true ? "true" : "false");
+  addSecret.setAttribute("aria-haspopup", "dialog");
+  addSecret.onclick = () => {
+    if (rec.ui.picker !== true) { pfvOpenPicker(rec.id); return; }
+    pfvClosePicker(rec.id);
+  };
+  pfvReg(rec, "add", addSecret);
+  wrap.append(addSecret);
+  rec.ui.pickNodes = null;
+  if (rec.ui.picker === true) {
+    const pk = pfcPicker(rec, pfaSecretPick(rec, c));
+    wrap.append(pk.node);
+    rec.ui.pickNodes = { wrap, pop: pk.node, list: pk.list };
+    if (pk.first) rec.first = pk.first;
   }
+  adds.append(wrap);
   return box;
 }
 
@@ -296,7 +378,7 @@ function pfaDraw(rec, c) {
   for (const def of pfaDefs(c)) out.push(pfaOptionField(rec, def));
   const args = pfaArea(rec, "args", v.argsText, (text) => { v.argsText = text; argsBox.clear(); pfvPaint(); });
   const argsBox = pfvFieldBox(rec, "args", "Extra command-line arguments", args, [PFA_ARGS_HINT]);
-  out.push(argsBox, pfaEnvField(rec, host));
+  out.push(argsBox, pfaEnvField(rec, host, c));
   if (pfaRepliesUsable(c)) {
     out.push(pfaCheckbox(rec, "replyable", "Answer prompts from the sidebar", "Sets the default in New session.", v.repliesChecked, (on) => { v.repliesChecked = on; pfvChanged(rec, "replyable"); }));
   }
