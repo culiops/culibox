@@ -217,6 +217,27 @@ func TestWorkspaceRootLinkedWorktree(t *testing.T) {
 	}
 }
 
+// The .git file is box-writable: a pointer at a worktree gitdir that does not
+// exist (or is not a directory) must not make the session report that other
+// repository, only its own checkout.
+func TestWorkspaceRootIgnoresAForgedGitFile(t *testing.T) {
+	root := t.TempDir()
+	victim := filepath.Join(root, "victim")
+	mkdir(t, filepath.Join(victim, ".git", "worktrees"))
+	wt := filepath.Join(root, "wt")
+	mkdir(t, wt)
+	forged := filepath.Join(victim, ".git", "worktrees", "y")
+	write(t, filepath.Join(wt, ".git"), "gitdir: "+forged+"\n")
+	if got, want := WorkspaceRoot(wt), real(t, wt); got != want {
+		t.Fatalf("missing gitdir: WorkspaceRoot = %q, want the checkout's own top %q", got, want)
+	}
+	// A file where the gitdir should be is no gitdir either.
+	write(t, forged, "x")
+	if got, want := WorkspaceRoot(wt), real(t, wt); got != want {
+		t.Fatalf("gitdir is a file: WorkspaceRoot = %q, want the checkout's own top %q", got, want)
+	}
+}
+
 // A worktree of a bare repository has no main checkout to group under: its own
 // top is the workspace.
 func TestWorkspaceRootWorktreeOfBareRepo(t *testing.T) {

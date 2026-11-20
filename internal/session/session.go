@@ -11,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/culiops/culibox/internal/gitrepo"
 	"log"
 	"maps"
 	"os"
@@ -36,6 +35,7 @@ import (
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/gitrepo"
 	"github.com/culiops/culibox/internal/launcher"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/sesstoken"
@@ -1816,6 +1816,21 @@ func (m *Manager) SetBoxes(b Boxes) {
 	m.mu.Unlock()
 }
 
+// refusal is a spawn refusal whose text is the whole message. It reports
+// box.ErrUnboxableWorkspace, so the UI shows it verbatim (writeSpawnErr), without
+// that sentinel's "workspace cannot be contained" prefix, which misleads for a
+// profile setting.
+type refusal string
+
+func (r refusal) Error() string { return string(r) }
+
+func (r refusal) Unwrap() error { return box.ErrUnboxableWorkspace }
+
+// profileRefusal is `profile "<name>": <reason>`.
+func profileRefusal(agent, reason string) error {
+	return refusal(fmt.Sprintf("profile %q: %s", agent, reason))
+}
+
 // runtimeFor resolves the tier for a spawn. Without a tier-aware launcher or a
 // box layer the answer is host — containment is never assumed, only granted,
 // and never silently withdrawn from a request that named it: with no box layer,
@@ -1900,6 +1915,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// launcher composes for the tier the session will actually run on. Deciding
 	// it in two places let a host-tier session be built with boxed semantics
 	// (curated env, no login wrap) whenever containment was unavailable.
+	// asked is the tier the spawn itself named. A clone profile reaches the host
+	// only when the user picked Host explicitly, never because it resolved there.
+	asked := spec.Runtime
 	runtime, err := m.runtimeFor(spec)
 	if err != nil {
 		return nil, err
@@ -1917,7 +1935,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				return nil, err
 			}
 			if reason != "" {
-				return nil, fmt.Errorf("%w: profile %q: %s", box.ErrUnboxableWorkspace, spec.Agent, reason)
+				return nil, profileRefusal(spec.Agent, reason)
 			}
 		}
 	}
@@ -2006,7 +2024,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		kind := bindingKind(bs)
 		if runtime != config.RuntimeBox {
 			// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
-			return nil, fmt.Errorf("%w: profile %q has %s, so it can only run in a box, never on the host tier", box.ErrUnboxableWorkspace, spec.Agent, kind)
+			return nil, profileRefusal(spec.Agent, "has "+kind+", so it can only run in a box, never on the host tier")
 		}
 		if brk == nil {
 			return nil, fmt.Errorf("profile %q has %s but the credential broker is not running", spec.Agent, kind)
@@ -2048,10 +2066,18 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// true: the profile must have a setup. nil: the profile decides, as before.
 	if spec.Clone != nil {
 		if !*spec.Clone {
+			// Dropping the clone must not be the way a clone profile reaches the
+			// host: the refusal below is skipped once cl is nil, so repeat it here
+			// for a host tier the spawn did not ask for. Restart passes the
+			// recorded runtime, so an in-place host session restarts fine.
+			if cl != nil && runtime != config.RuntimeBox && asked != config.RuntimeHost {
+				return nil, fmt.Errorf("%w: profile %q is a clone-mode profile, so it can only run in a box, never on the host tier",
+					box.ErrUnboxableWorkspace, spec.Agent)
+			}
 			cl = nil
 		} else if cl == nil {
 			// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
-			return nil, fmt.Errorf("%w: profile %q: this profile has no clone setup", box.ErrUnboxableWorkspace, spec.Agent)
+			return nil, profileRefusal(spec.Agent, "this profile has no clone setup")
 		}
 	}
 	// context_paths are read-only mounts of host paths, which only a box has:

@@ -485,9 +485,11 @@ func TestHostSpawnWithoutHooksIsUnchanged(t *testing.T) {
 	_ = m.Kill(s.ID)
 }
 
-// Restart re-enters Spawn with the session's own cwd and runtime, so the clone
-// refusals apply to it: a session whose profile is later changed to a clone
-// elsewhere cannot be restarted outside that clone.
+// Restart re-enters Spawn with the session's own cwd and runtime. A real clone
+// session (CloneOf set) is spawned with the profile deciding, so it cannot
+// restart outside its clone dir: the clone refusals apply. An in-place session
+// (no CloneOf) of a profile that later became a clone restarts in place; see
+// TestRestartInPlaceOnCloneProfileStaysInPlace.
 func TestRestartReentersTheCloneRefusals(t *testing.T) {
 	l, dir := testCloneLauncher(t, config.RuntimeBox)
 	hooks := &fakeCloneHooks{}
@@ -1245,6 +1247,36 @@ func TestSpawnCloneFalseOnHostAllowed(t *testing.T) {
 	}
 }
 
+// clone:false with no runtime must not put a clone profile on the host by
+// omission: the tier resolves to host here (the profile's own), and the spawn
+// never asked for it, so the clone-mode refusal still applies.
+func TestSpawnCloneFalseWithoutRuntimeNeverReachesHost(t *testing.T) {
+	l, _ := testCloneLauncher(t, config.RuntimeHost)
+	a := inPlaceDir(t, &l)
+	hooks := &fakeCloneHooks{}
+	m, boxes := cloneManager(t, l, hooks)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Clone: boolPtr(false), Cwd: a})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatalf("a clone profile ran on the host (runtime %q) by omission", s.Info().Runtime)
+	}
+	if !strings.Contains(err.Error(), "is a clone-mode profile") || !errors.Is(err, box.ErrUnboxableWorkspace) {
+		t.Fatalf("err = %v, want the clone-mode refusal", err)
+	}
+	if boxes.wraps != 0 || len(m.List()) != 0 {
+		t.Fatalf("a refused spawn wrapped=%d sessions=%d", boxes.wraps, len(m.List()))
+	}
+	// Asked for explicitly, the same spawn is the user's call and runs.
+	s, err = m.Spawn(launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeHost, Clone: boolPtr(false), Cwd: a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if s.Info().Runtime != config.RuntimeHost {
+		t.Fatalf("Runtime = %q, want host", s.Info().Runtime)
+	}
+}
+
 // An old client sends no clone field: the profile decides, as before.
 func TestSpawnCloneNilKeepsProfileBehaviour(t *testing.T) {
 	t.Run("box goes to the clone", func(t *testing.T) {
@@ -1286,7 +1318,7 @@ func TestSpawnCloneTrueWithoutSetup(t *testing.T) {
 		_ = m.Kill(s.ID)
 		t.Fatal("clone:true spawned a profile with no clone setup")
 	}
-	if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "this profile has no clone setup") {
+	if !errors.Is(err, box.ErrUnboxableWorkspace) || err.Error() != `profile "clone": this profile has no clone setup` {
 		t.Fatalf("err = %v", err)
 	}
 	if boxes.wraps != 0 || len(m.List()) != 0 {
@@ -1339,6 +1371,21 @@ func TestRestartInPlaceOnCloneProfileStaysInPlace(t *testing.T) {
 		}
 		if ns.Info().CloneOf != "" || ns.Info().Cwd != a || hooks.nPrepares() != 0 {
 			t.Fatalf("CloneOf=%q Cwd=%q prepares=%d, want an in-place restart", ns.Info().CloneOf, ns.Info().Cwd, hooks.nPrepares())
+		}
+	})
+	t.Run("in place on the host", func(t *testing.T) {
+		// The session asked for the host explicitly, so its recorded runtime is
+		// host and a restart passes it back: the clone-by-omission refusal does
+		// not fire.
+		m, hooks, _, _, a := newMgr(t)
+		old := exitedSession(t, m, launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeHost, Clone: boolPtr(false), Cwd: a})
+		ns, err := m.Restart(old.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Kill(ns.ID) })
+		if ns.Info().Runtime != config.RuntimeHost || ns.Info().CloneOf != "" || hooks.nPrepares() != 0 {
+			t.Fatalf("Runtime=%q CloneOf=%q prepares=%d, want an in-place host restart", ns.Info().Runtime, ns.Info().CloneOf, hooks.nPrepares())
 		}
 	})
 	t.Run("clone", func(t *testing.T) {
