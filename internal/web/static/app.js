@@ -959,10 +959,11 @@ function paintSideHints() {
   set("side-collapse", "Hide sidebar", "sidebar.toggle");
 }
 
-// paintSideCost: the footer's "$ today", the same sum the Analytics page shows
-// for today (summary over costTodayRange, folded and formatted like it). Only
-// asked when the analytics feature is on; a failed read leaves it hidden, with
-// no toast: the footer is a glance, not a place for errors.
+// paintSideCost: the footer's "≈ $ today", the same sum the Analytics page shows
+// as API value for today (summary over costTodayRange, folded and formatted like
+// it; sideCostLabel words it). Only asked when the analytics feature is on; a
+// failed read leaves it hidden, with no toast: the footer is a glance, not a
+// place for errors.
 let sideCostOn = false;
 async function paintSideCost() {
   const el = $("side-cost");
@@ -973,8 +974,9 @@ async function paintSideCost() {
   try {
     const r = costTodayRange(Date.now());
     const summary = await api("/api/analytics/summary?from=" + r.from + "&to=" + r.to);
-    el.textContent = usd(foldCostByDay((summary && summary.byDayModel) || []).totals.cost) + " today";
-    el.title = "Spend today (UTC), as the Analytics page counts it";
+    const lab = sideCostLabel(foldCostByDay((summary && summary.byDayModel) || []).totals.cost);
+    el.textContent = lab.text;
+    el.title = lab.title;
     el.hidden = false;
   } catch (_) { el.hidden = true; }
 }
@@ -7531,12 +7533,13 @@ setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);
   anWirePage();
 }
 // Layout buttons 1/2/4 → set the max-window cap (auto-split grows up to it).
-// The header's group (mobile) and the sidebar top's (desktop) are the same control.
+// The header's group (mobile); the sidebar top's layout button and its menu (desktop) are sidechrome.js's.
 for (const grp of document.querySelectorAll(".layouts")) {
   grp.addEventListener("click", (e) => {
     if (e.target.dataset && e.target.dataset.cols) applyCap(Number(e.target.dataset.cols));
   });
 }
+initSideLayout();
 applyCap(4); // default: auto-split up to 4 windows
 initDialogs();
 initSplitter();

@@ -572,15 +572,6 @@
     padding: 1px 6px; border-radius: var(--r-chip); white-space: nowrap;
   }
   #side-version[hidden], #side-env[hidden] { display: none; }
-  .side-ctl { display: flex; align-items: center; gap: 4px; }
-  .side-fill { flex: 1; }
-  #side-top .layouts { gap: 3px; }
-  #side-top .layouts button {
-    min-width: 26px; height: 24px; padding: 0 7px; font: 500 var(--t-sm) var(--font-ui); line-height: 1;
-    background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-ctl);
-  }
-  #side-top .layouts button:hover { color: var(--fg); background: var(--raise); }
-  #side-top .layouts button.active { color: var(--accent); background: var(--raise); border-color: var(--accent); }
   /* #side-palette (a drawn magnifier, 14px: the ⌕ glyph is ~7px in fallback fonts) and #side-collapse
      (the « text, which reads) are the kit's .btn .btn-ghost .btn-icon .btn-sm in index.html (m1-1):
      their look is the kit's, not ours. */
@@ -593,6 +584,22 @@
   /* New session is the sidebar's own .pbtn, sized like the kit's .btn: 28px high (--h-ctl), the full width of
      the sidebar's 16px padding (m1-1). */
   #side-new { height: var(--h-ctl); padding: 0 12px; }
+  /* #340 S6 (mockups t1, t2): New session shares its row with the layout button (sidechrome.js), the palette
+     and «. The layout menu is the kit's .menu, in flow under the button; the kit draws its surface. #sidebar
+     clips (overflow: hidden), so the menu is placed against the whole row, right-aligned under « and never
+     wider than the row (measured: against the 24px button it ran past the sidebar's left edge). app.css's
+     fixed 232px .menu width is reset to the content's. */
+  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; position: relative; }
+  /* The label is centred, so the 2px side padding only shows at the 200px sidebar, where New session gets 85px for its
+     80px label (measured); the ellipsis is a guard for a wider fallback font, never a two-line button. */
+  #side-top .xnewrow #side-new { flex: 1; min-width: 0; margin-right: 4px; white-space: nowrap; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; }
+  #side-top .xlay-wrap { display: inline-flex; }
+  #side-top .xlay svg { display: block; }
+  #side-top .xlay-wrap > .menu.xmenu:has(> .menu-item) { position: absolute; top: calc(100% + 4px); right: 0; z-index: 50; width: max-content; min-width: min(180px, 100%); max-width: 100%; }
+  #side-top .xmenu .menu-item.on { color: var(--fg); }
+  #side-top .xmenu .menu-icon svg { color: var(--muted); }
+  /* The tick is a menuIconSvg outside a .menu-icon slot, which is what sizes the kit's icons. */
+  #side-top .xmenu .menu-kbd svg { display: block; width: 14px; height: 14px; }
 
   /* --- legacy layout keys (spec 7) ---------------------------------------- */
   /* agent-box:panesCollapsed (pre-paint html classes) and agent-box:sidebarSplit
@@ -642,12 +649,16 @@
      shrink and ellipsize before the label does. */
   #limits-side .mtr .pc[hidden] { display: none; }
   #limits-side .mtr .limit { width: auto; flex: 0 1 auto; color: var(--fg); font-weight: var(--w-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .side-stats { display: flex; align-items: baseline; gap: 8px; font-size: var(--t-sm); color: var(--muted); }
-  #side-cost { font-variant-numeric: tabular-nums; }
-  #side-cost[hidden] { display: none; }
-  /* With no cost and no elevated window the row is empty: no row, so no 8px gap above the links. */
-  .side-stats:not(:has(> :not([hidden]))) { display: none; }
-  #side-elevated { margin-left: auto; font-variant-numeric: tabular-nums; }
+  /* #340 S6 (mockups t1, t3): the cost sits on the links line, "≈ $454 today" with a dotted underline that
+     says it has a tooltip. When both do not fit (a narrow sidebar, a long amount) the line wraps: the cost
+     keeps its own line above the links and is never cut. With the cost hidden the links keep today's place. */
+  #side-foot .xlinks { display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 2px; font-size: var(--t-sm); }
+  #side-foot .xlinks > .side-links { margin: 0 -8px 0 auto; }
+  #side-foot .xcost { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; text-decoration: underline dotted var(--faint); text-underline-offset: 3px; cursor: help; }
+  #side-foot .xcost[hidden] { display: none; }
+  #side-foot .xcost[hidden] + .side-links { margin-left: -8px; }
+  /* The elevated window has its own row, shown only while one is open: 12px --muted like #side-store. */
+  #side-elevated { font-size: var(--t-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
   #side-elevated[hidden] { display: none; }
   #side-elevated.hot { color: var(--red); font-weight: var(--w-regular); }
   /* F77 (#174): "Store locks in 42 m", painted only in the store's last hour (paintSideStore, store.js).

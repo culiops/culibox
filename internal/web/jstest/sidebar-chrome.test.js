@@ -196,6 +196,16 @@ test("the sidebar top's palette and collapse are kit ghost icon buttons; the pal
   assert.match(svg[0], /<circle /);
   assert.ok(!/&#8984;|⌘|&#8981;|⌕/.test(pal), "no font glyph is left in the palette button");
   assert.match(tag("side-collapse")[0], /&#171;/, "the « stays the frame's text glyph");
+  // #340 S6: the layouts row is gone; New session shares one row with the layout button, the palette and «.
+  const row = /<div class="xnewrow">[\s\S]*?\n {8}<\/div>/.exec(html);
+  assert.ok(row, "div.xnewrow exists");
+  assert.match(row[0], /<button [^>]*class="btn btn-ghost btn-icon btn-sm xlay"/);
+  assert.ok(!html.includes('id="side-layouts"'), "no #side-layouts");
+  assert.ok(!html.includes('class="side-ctl"'), "no .side-ctl");
+  const top = html.slice(html.indexOf('<div id="side-top">'), html.indexOf('<div id="sys-banner-slot"'));
+  const at = ["id=\"side-new\"", "xlay\"", "id=\"side-palette\"", "id=\"side-collapse\""].map((s) => top.indexOf(s));
+  assert.ok(at.every((i) => i > 0), "all four are in #side-top");
+  assert.deepEqual([...at].sort((a, b) => a - b), at, "New session, layout, palette, collapse");
 });
 
 // ---- F57: the rail, top to bottom: logo, » toggle, +, dots, meters ----------------------------------
