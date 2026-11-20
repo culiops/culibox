@@ -114,15 +114,20 @@ function deskGroups(sessions, collapsed) {
 // jumpOrder: the list Mod+1…9 and the palette's first nine index into. On
 // desktop that is the sidebar's order; mobile has no such list on screen and
 // keeps the API order. Nested shells are left out of both: the numbers (and the
-// rail dots) are for agents. Given `collapsed`, a collapsed group's rows are
-// skipped too, because a number must point at a row the user can see. Without
-// it the order holds every session (the rail, the attention chip, the palette's
-// list and nextNeedsYou read that one).
+// rail dots) are for agents. On desktop the groups are built from the FULL list,
+// as the sidebar builds them, and the shells are dropped from the flattened
+// order afterwards: a waiting shell lifts its group on screen, so it must lift
+// it here too, or Mod+1 would open a row that is not first. Given `collapsed`, a
+// collapsed group's rows are skipped too, because a number must point at a row
+// the user can see. Without it the order holds every agent (the rail, the
+// attention chip, the palette's list and nextNeedsYou read that one).
 function jumpOrder(sessions, mobile, collapsed) {
   const nested = deskDep("isNestedShell");
   const list = sessions || [];
-  const agents = list.some((s) => nested(s, list)) ? list.filter((s) => !nested(s, list)) : list;
-  return mobile ? agents : deskOrder(deskGroups(agents, collapsed), !!collapsed);
+  const hasShell = list.some((s) => nested(s, list));
+  if (mobile) return hasShell ? list.filter((s) => !nested(s, list)) : list;
+  const order = deskOrder(deskGroups(list, collapsed), !!collapsed);
+  return hasShell ? order.filter((s) => !nested(s, list)) : order;
 }
 
 // nextNeedsYou: Mod+Shift+J (F69). The session to go to: those blocked on you

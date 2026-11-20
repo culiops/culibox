@@ -738,6 +738,15 @@ test("jumpOrder skips collapsed groups only when given the set", () => {
   assert.equal(d.nextNeedsYou(list, null).id, "w", "the waiting session in a collapsed group is still reached");
 });
 
+test("jumpOrder: a waiting nested shell lifts its group here as it does in the sidebar, and is not itself a number", () => {
+  const list = [ws("a", "/r/a"), ws("b", "/r/b"), { ...ws("sh", "/r/b", { activity: "waiting" }), parent_id: "b", created: "2026-11-20T09:00:00Z" }];
+  const side = d.deskGroups(list).map((g) => [g.key, g.waiting, idsOf(g.sessions)]);
+  assert.deepEqual(side, [["/r/b", 1, ["b", "sh"]], ["/r/a", 0, ["a"]]]);
+  assert.deepEqual(idsOf(d.jumpOrder(list, false)), ["b", "a"], "the first row on screen is Mod+1");
+  assert.deepEqual(idsOf(d.jumpOrder(list, false, new Set(["/r/b"]))), ["a"]);
+  assert.deepEqual(idsOf(d.jumpOrder(list, true)), ["a", "b"], "mobile: API order, no shell");
+});
+
 test("deskWsHeaderSig moves with collapse and waiting, and with the dots only while collapsed", () => {
   const it = { key: "/r", label: "r", path: "/r", count: 2, waiting: 0, dots: ["dot idle", "dot idle"], collapsed: false };
   const sig = d.deskWsHeaderSig(it);
