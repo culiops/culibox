@@ -244,11 +244,13 @@ function renderSpawnReach() {
     return;
   }
   const acct = !$("spawn-account-row").hidden ? $("spawn-account").value : "";
+  const w = spawnWhere(); // clone is the card's: false drops the copy's rows, true adds Work home, absent (the phone) is the profile's
   const rows = reachRows({
     profile: acct ? Object.assign({}, p, { account: acct }) : p,
     tier: spawnCurrentTier(),
-    cwd: shortPath(getCwd()),
-    cwdFull: getCwd(),
+    clone: w.clone,
+    cwd: shortPath(spawnCwdFor(w)),
+    cwdFull: spawnCwdFor(w),
     meta: { aws_connections: awscEntries, static_tokens: stEntries },
     creds: spawnCreds,
     bundleImports,

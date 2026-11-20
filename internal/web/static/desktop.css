@@ -2457,6 +2457,7 @@
   .sr-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   .sr-v { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
   .sr-path { font-family: var(--font-mono); font-size: var(--t-sm); line-height: var(--lh-sm); }
+  #spawn-reach code { font-family: var(--font-mono); font-size: var(--t-xs); }
   .sr-row.tone-warn .sr-v { color: var(--amber); }
   .sr-prod {
     margin: 0 6px; padding: 0 5px; border: 1px solid var(--red); border-radius: var(--r-chip);

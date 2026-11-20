@@ -361,6 +361,14 @@ function spawnExpand(text, short, full) {
   return short && full && text.startsWith(short) ? full + text.slice(short.length) : text;
 }
 
+// reachWorkHome: where a private copy's work goes, for the Work home row. A copy that cannot push and brings its branches
+// home says so in the spec's words; every other case is workHomeSuffix's (a PR copy, auto-return off), minus its " · ".
+function reachWorkHome(p, repo) {
+  const pr = !!(p && p.clone_of && p.github_write);
+  if (p && p.auto_return && !pr) return "as box/<branch> branches in " + repo;
+  return spawnDep("workHomeSuffix", "./workhome.js")(p, pr).replace(/^ · /, "");
+}
+
 // reachRows: the rows of the "This agent will be able to" box, projected from
 // reachModel (one line per fact; the profile page draws the same model in blocks).
 //   profile  the ProfileView (with the account the form currently shows, if the
@@ -368,6 +376,8 @@ function spawnExpand(text, short, full) {
 //   tier     "box" | "host" as the form currently has it
 //   cwd      the workspace as it is to be shown (home written ~)
 //   cwdFull  the same workspace as the field holds it: the row's tooltip says this one
+//   clone    the desktop card's answer: false reads the profile without its copy (no Original, no shared files), true adds
+//            Work home after Original, undefined (the phone) lets the profile decide
 //   meta     /api/meta: aws_connections [{name, prod, write_capable}], static_tokens
 //   creds    GET /api/credentials, or null when it could not be read:
 //            store {initialized, locked, platform}, aws [{name, prod, elevate{max_minutes}}]
@@ -379,7 +389,15 @@ function spawnExpand(text, short, full) {
 // write only (the PROD flag), a host session is told in words.
 // Reads, Imports and Domains come after Tokens; on host there are none of them.
 function reachRows(o) {
-  const x = o || {};
+  let x = o || {};
+  // clone: false is a session in the workspace itself (Box · in place): read the profile as if it had no copy, so there is
+  // no Original row and the original's shared files are not read. undefined is the profile deciding, as on the phone.
+  if (x.clone === false && x.profile && (x.profile.clone_of || x.profile.clone_share)) {
+    const bare = Object.assign({}, x.profile);
+    delete bare.clone_of;
+    delete bare.clone_share;
+    x = Object.assign({}, x, { profile: bare });
+  }
   const m = reachModel(x);
   const shortOf = spawnDep("shortPath", "./fsops.js");
   const files = { k: "Files", v: m.files };
@@ -397,6 +415,7 @@ function reachRows(o) {
     const full = spawnExpand(m.original, shortOf(clone), clone);
     if (full !== m.original) row.full = full;
     rows.push(row);
+    if (x.clone === true) rows.push({ k: "Work home", v: reachWorkHome(x.profile, shortOf(clone)) });
   }
 
   for (const it of m.cloud.filter((i) => i.kind === "AWS" || i.kind === "Old-style AWS")) {

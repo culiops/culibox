@@ -322,6 +322,49 @@ test("reach rows: no Original row on the host tier or without a copy", () => {
   assert.strictEqual(byK(reachRows({ profile: {}, tier: "box", cwd: "~/x" }), "Original").length, 0);
 });
 
+const cloneProf = { clone_of: "/home/u/repo", default_cwd: "/home/u/clones/repo", clone_share: ["notes"], auto_return: true };
+
+test("reachRows with clone:false drops Original, clone shares and Work home", () => {
+  const rows = reachRows({ profile: cloneProf, tier: "box", clone: false, cwd: "~/repo" });
+  assert.strictEqual(byK(rows, "Original").length, 0);
+  assert.strictEqual(byK(rows, "Work home").length, 0);
+  const reads = byK(rows, "Reads");
+  assert.ok(reads.every((r) => !r.v.includes("notes")), "the clone shares are not read in place");
+  assert.ok(!JSON.stringify(rows).includes("notes"));
+});
+
+test("reachRows with clone:true adds Work home after Original", () => {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, "window"), prev = globalThis.window;
+  globalThis.window = { HOME_DIR: "/home/u" }; // shortPath writes home as ~
+  try {
+    workHomeRows();
+  } finally {
+    if (had) globalThis.window = prev; else delete globalThis.window;
+  }
+});
+
+function workHomeRows() {
+  const keys = (o) => reachRows(Object.assign({ tier: "box", clone: true, cwd: "~/clones/repo" }, o)).map((r) => r.k);
+  const rows = reachRows({ profile: cloneProf, tier: "box", clone: true, cwd: "~/clones/repo" });
+  const k = rows.map((r) => r.k);
+  assert.strictEqual(k[k.indexOf("Original") + 1], "Work home");
+  assert.strictEqual(byK(rows, "Work home")[0].v, "as box/<branch> branches in ~/repo");
+  const off = reachRows({ profile: { ...cloneProf, auto_return: undefined }, tier: "box", clone: true, cwd: "~/clones/repo" });
+  assert.strictEqual(byK(off, "Work home")[0].v, "work stays in the copy (auto-return off)");
+  const pr = reachRows({ profile: { ...cloneProf, github_write: true }, tier: "box", clone: true, cwd: "~/clones/repo" });
+  assert.ok(byK(pr, "Work home")[0].v.startsWith("work"), byK(pr, "Work home")[0].v);
+  assert.deepStrictEqual(keys({ profile: {} }).filter((x) => x === "Work home"), [], "no copy, no Work home");
+}
+
+test("reachRows with clone undefined is today's", () => {
+  const o = { profile: cloneProf, tier: "box", cwd: "~/clones/repo" };
+  const rows = reachRows(o);
+  assert.deepStrictEqual(rows, reachRows(Object.assign({}, o, { clone: undefined })));
+  assert.strictEqual(rows[1].k, "Original");
+  assert.strictEqual(byK(rows, "Work home").length, 0);
+  assert.ok(byK(rows, "Reads")[0].v.includes("notes"));
+});
+
 test("ghReachValue: read, read and write, and personal access token wording", () => {
   assert.strictEqual(ghReachValue(["culiops"], false, false), "culiops/* · read, 1-hour tokens");
   assert.strictEqual(ghReachValue(["culiops"], true, false), "culiops/* · read and write, 1-hour tokens");
@@ -861,7 +904,7 @@ test("the reach box is painted on the desktop only (the phone hides it and never
   const at = sync.indexOf("function syncSpawnPreview");
   const fn = sync.slice(at, sync.indexOf("\n}\n", at));
   assert.ok(fn.indexOf("if (!spawnPanelOn())") < fn.indexOf("renderSpawnReach()"), "renderSpawnReach is behind the desktop gate");
-  assert.match(sync.slice(sync.indexOf("function renderSpawnReach"), sync.indexOf("function paintReachRows")), /cwdFull:\s*getCwd\(\)/);
+  assert.match(sync.slice(sync.indexOf("function renderSpawnReach"), sync.indexOf("function paintReachRows")), /cwdFull:\s*spawnCwdFor\(w\)/);
 });
 
 test("desktop.css: the Workspace list is a kit menu under the field, capped at 8 rows (frame M4.3)", () => {
