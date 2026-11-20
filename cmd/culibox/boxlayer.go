@@ -517,6 +517,27 @@ func (l *boxLayer) vmState(ctx context.Context) (stopped, confirmed bool) {
 	return err != nil || !st.Running, err == nil && st.Stopped
 }
 
+// vmStateWord maps vmState to the word GET /api/vm-state serves. "stopped" is
+// said only on colima's own word (confirmed): a status that could not be read
+// is "", never a guess. No VM (Linux, or no colima) is "".
+func vmStateWord(hasVM, stopped, confirmed bool) string {
+	switch {
+	case !hasVM:
+		return ""
+	case !stopped:
+		return "running"
+	case confirmed:
+		return "stopped"
+	}
+	return ""
+}
+
+// vmStateWord is the layer's VM state word. Reading it never starts the VM.
+func (l *boxLayer) vmStateWord(ctx context.Context) string {
+	stopped, confirmed := l.vmState(ctx)
+	return vmStateWord(l.vm != nil, stopped, confirmed)
+}
+
 // bootReconcile reaps this instance's orphaned boxes and their stale homes at
 // boot. With the VM stopped no box can be alive, so it waits for the first
 // boxed spawn, whose VM start runs the same pass (prepare). It reports whether

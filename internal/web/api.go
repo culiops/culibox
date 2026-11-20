@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -53,6 +54,12 @@ type API struct {
 	// ProfileCwd returns the named profile's default_cwd ("" = none); a spawn
 	// that omits cwd uses it before DefaultCwd. nil = no profile defaults.
 	ProfileCwd func(agent string) string
+	// VMState reports the macOS box VM for GET /api/vm-state: "running",
+	// "stopped" (only when confirmed) or "" (unknown, no VM). nil = no VM. It
+	// may take 30 s (colima status), so the endpoint caches it and runs one
+	// call at a time.
+	VMState func(ctx context.Context) string
+	vmCache vmStateCache
 	// QuickShell returns the verified quick-shell profile name ("" = none); a
 	// companion shell (POST /api/sessions/{id}/shell) runs it. nil = none.
 	QuickShell func() string
