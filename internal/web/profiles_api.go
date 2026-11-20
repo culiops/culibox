@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credfile"
+	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/store"
 )
 
@@ -151,10 +153,28 @@ func saveWarnings(s *Server, p config.AgentConfig) []string {
 	if w := p.EgressWarning(); w != "" {
 		warnings = append(warnings, w)
 	}
+	if s.SecretCheck != nil {
+		for _, name := range p.Secrets {
+			pres, err := s.SecretCheck(name)
+			if err != nil {
+				log.Printf("profile %q: checking secret %q: %v", p.Name, name, err)
+				continue
+			}
+			if pres == secretchain.Absent {
+				warnings = append(warnings, secretUnresolvedWarning(name))
+			}
+		}
+	}
 	for _, w := range warnings {
 		log.Printf("profile %q: %s", p.Name, w)
 	}
 	return warnings
+}
+
+// secretUnresolvedWarning is the Save warning for a secret name that no
+// configured source resolves. The save stands: the source may be filled in later.
+func secretUnresolvedWarning(name string) string {
+	return fmt.Sprintf("secret %q is not found in any configured secret source; a session with this profile will refuse to start", name)
 }
 
 // decodeProfile reads a profile with its rev and schema from the request body

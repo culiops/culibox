@@ -15,6 +15,7 @@ import (
 	"github.com/culiops/culibox/internal/auth"
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/session"
@@ -163,9 +164,12 @@ type Server struct {
 	// handing back the value (secretchain.Chain.Check). nil = every name reads
 	// "missing".
 	SecretCheck func(name string) (secretchain.Presence, error)
-	CredAWS     AWSCredService
-	CredAudit   CredRecorder
-	credLimit   callLimiter
+	// SecretSources is the configured source list (cfg.SecretSources), set once
+	// at start. /api/meta summarises it by type and file path only.
+	SecretSources []config.SecretSource
+	CredAWS       AWSCredService
+	CredAudit     CredRecorder
+	credLimit     callLimiter
 
 	// Analytics serves the token/prompt analytics endpoints and view. Nil → the
 	// feature is disabled: no routes registered, no data shown.
@@ -328,6 +332,12 @@ func (s *Server) Handler() http.Handler {
 		if s.Profiles != nil {
 			meta["aws_connections"] = s.Profiles.AWSConnectionMetaList()
 		}
+		// The configured secret sources, in order: type and file path only, so the
+		// profile page can say where a secret name is looked up. Never a name, a
+		// value or the store's ids. Omitted when none are configured.
+		if len(s.SecretSources) > 0 {
+			meta["secret_sources"] = secretSourcesMeta(s.SecretSources)
+		}
 		// Per-account 5h/weekly usage, read fresh (tiny files). Omitted when no
 		// account has data so the client shows nothing rather than an empty widget.
 		if m := s.rateLimitsByAccount(); len(m) > 0 {
@@ -466,4 +476,20 @@ func csrfGuard(next http.Handler, onRefuse func(*http.Request)) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// secretSourceMeta is one configured secret source as /api/meta shows it: the
+// type and, for a file source, its path. The store takes no path, and no id,
+// name or value ever appears here.
+type secretSourceMeta struct {
+	Type string `json:"type"`
+	Path string `json:"path,omitempty"`
+}
+
+func secretSourcesMeta(src []config.SecretSource) []secretSourceMeta {
+	out := make([]secretSourceMeta, len(src))
+	for i, x := range src {
+		out[i] = secretSourceMeta{Type: x.Type, Path: x.Path}
+	}
+	return out
 }

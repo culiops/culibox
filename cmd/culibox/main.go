@@ -908,7 +908,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			return secretchain.AccountTokenPresence(resolver, acctTokenStore, a)
 		},
 		// The credentials screen's legacy-secret status: presence only, no value.
-		SecretCheck: resolver.Check,
+		SecretCheck:   resolver.Check,
+		SecretSources: cfg.SecretSources,
 
 		// vstore is never nil (the daemon always opens one), so no typed-nil
 		// interface can reach the web layer.
