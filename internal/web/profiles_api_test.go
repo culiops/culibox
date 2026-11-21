@@ -1147,3 +1147,19 @@ func TestProfilesViewsAsksBoxCredentialWithoutTheLock(t *testing.T) {
 		t.Fatal("Views deadlocked: the box credential hook ran with m.mu held")
 	}
 }
+
+// #342: critical-rm needs Permission mode: Bypass; Save refuses it with the field.
+func TestProfileSaveCriticalRmNeedsBypass(t *testing.T) {
+	pm := NewProfileManager(nil, config.Defaults().Options, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	rec := postProfile(s, `{"name":"p","bin":"claude","runtime":"box","options":{"permission_mode":"plan","skip_critical_rm_prompt":true}}`)
+	if rec.Code != 400 {
+		t.Fatalf("POST: code %d body %s, want 400", rec.Code, rec.Body)
+	}
+	if f := apiBody(t, rec)["field"]; f != "options.skip_critical_rm_prompt" {
+		t.Errorf("field = %v, want options.skip_critical_rm_prompt (body %s)", f, rec.Body)
+	}
+	if rec := postProfile(s, `{"name":"p","bin":"claude","runtime":"box","options":{"permission_mode":"bypassPermissions","skip_critical_rm_prompt":true}}`); rec.Code != 201 {
+		t.Errorf("bypass + critical-rm: code %d body %s, want 201", rec.Code, rec.Body)
+	}
+}

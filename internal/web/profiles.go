@@ -31,6 +31,9 @@ type ProfileOption struct {
 	Type    string   `json:"type"`
 	Choices []string `json:"choices,omitempty"`
 	Value   any      `json:"value"`
+	// Tier is the lowest tier the option runs on ("box" = only in a box); ""
+	// means every tier. The UI dims a box-only row when the Host card is picked.
+	Tier string `json:"tier,omitempty"`
 }
 
 // Where a profile came from (ProfileView.Source). Provider-neutral: it says
@@ -76,6 +79,9 @@ type ProfileView struct {
 	// BypassArgs: the profile's own args already bypass permission checks, so
 	// the spawn form must warn when replies are on even with the option off.
 	BypassArgs bool `json:"bypass_args,omitempty"`
+	// LegacyBypassKey is the key of the older bypass bool the profile sets
+	// ("" when none), so the UI can show it as the Permission mode's source.
+	LegacyBypassKey string `json:"legacy_bypass_key,omitempty"`
 	// Bin is the profile's agent binary. The rest say what a session of it can
 	// reach, for the spawn dialog's "touches" line: names only, never a role
 	// ARN, a token reference or a value. Tokens are the static_tokens entry
@@ -578,19 +584,20 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			source = ProfileSourceBuiltin
 		}
 		pv := ProfileView{
-			Name:          a.Name,
-			Account:       a.Account,
-			Editable:      source == ProfileSourceRuntime,
-			Source:        source,
-			Runtime:       rt,
-			RuntimeAsked:  asked,
-			DefaultCwd:    a.DefaultCwd,
-			AcceptsPrompt: launcher.AcceptsPrompt(a.Bin),
-			Claude:        launcher.IsClaudeBin(a.Bin),
-			Replyable:     a.Replyable && launcher.IsClaudeBin(a.Bin),
-			BypassArgs:    argsBypassPermissions(a.Args),
-			Bin:           a.Bin,
-			Tokens:        slices.Clone(a.Tokens),
+			Name:            a.Name,
+			Account:         a.Account,
+			Editable:        source == ProfileSourceRuntime,
+			Source:          source,
+			Runtime:         rt,
+			RuntimeAsked:    asked,
+			DefaultCwd:      a.DefaultCwd,
+			AcceptsPrompt:   launcher.AcceptsPrompt(a.Bin),
+			Claude:          launcher.IsClaudeBin(a.Bin),
+			Replyable:       a.Replyable && launcher.IsClaudeBin(a.Bin),
+			BypassArgs:      argsBypassPermissions(a.Args),
+			LegacyBypassKey: config.LegacyBypassKey(m.optDefs, a),
+			Bin:             a.Bin,
+			Tokens:          slices.Clone(a.Tokens),
 			// A boxed spawn has egress when it is bound or egress is mandatory
 			// (the needEgress rule of Manager.Spawn); the host tier never has it.
 			Network:        session.EgressMode(rt == config.RuntimeBox && (bound || m.egressAll), bound && !a.EgressOpen),
@@ -599,7 +606,7 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			CloneOf:        a.CloneOf,
 			ImportsOff:     a.ImportsOff,
 			BoxOnly:        a.BoxOnly,
-			HostBlock:      config.HostBlock(a),
+			HostBlock:      config.HostBlockWith(a, m.optDefs),
 			EgressAllow:    slices.Clone(a.EgressAllow),
 			CloneShare:     slices.Clone(a.CloneShare),
 		}
@@ -634,7 +641,7 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 		// An unset enum is offered with a blank value (the agent's own default),
 		// so a profile made in the editor can still pick Model/Effort at spawn.
 		for _, def := range m.options {
-			if !def.AppliesTo(a.Bin) || !def.OfferedBy(a) {
+			if !def.AppliesTo(a.Bin) || !config.OptionOffered(def, a, m.optDefs) {
 				continue
 			}
 			v, ok := a.Options[def.Key]
@@ -642,7 +649,7 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 				v = ""
 			}
 			pv.Options = append(pv.Options, ProfileOption{
-				Key: def.Key, Label: def.Label, Type: def.Type, Choices: def.Choices, Value: v,
+				Key: def.Key, Label: def.Label, Type: def.Type, Choices: def.Choices, Value: v, Tier: def.Tier,
 			})
 		}
 		out = append(out, pv)
