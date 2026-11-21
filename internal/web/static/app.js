@@ -4436,12 +4436,21 @@ function renderOptions() {
   const opts = (p && p.options) || [];
   const effortRows = [], advRows = [];
   const deskModelSlot = drawerDesktop();
+  // The older bypass bool (#342) is shown as Permission mode: Bypass, not as a checkbox of its own: the server names its key, and
+  // its row is left out. The seg starts on Bypass while no permission_mode is stored (the profile's default then still applies).
+  const legacyKey = (p && p.legacy_bypass_key) || "";
+  const legacyOpt = legacyKey ? opts.find((x) => x.key === legacyKey) : null;
   for (const o of opts) {
+    if (legacyKey && o.key === legacyKey) continue;
     const row = document.createElement("div");
     row.className = "opt";
     const lbl = document.createElement("label");
     lbl.textContent = o.label || o.key;
     let ctrl;
+    const isMode = o.key === PERM_MODE_KEY;
+    const legacyStart = isMode && legacyKey !== "" && !o.value && (o.choices || []).includes(BYPASS_MODE);
+    const startValue = legacyStart ? BYPASS_MODE : (o.value || "");
+    const optText = (c) => (isMode ? permModeLabel(c) : c);
     // Desktop: Model sits beside Effort ("Model · effort", spec 5.6) as a select,
     // which is as narrow as the model name rather than a seg of long names.
     const deskModel = deskModelSlot && o.key === "model" && o.type !== "bool";
@@ -4456,7 +4465,7 @@ function renderOptions() {
       if (!deskModel && choices.length > 0 && choices.length <= 5) {
         ctrl = document.createElement("div");
         ctrl.className = "seg";
-        buildSeg(ctrl, choices.map((c) => ({ value: c, label: c })), o.value || "");
+        buildSeg(ctrl, choices.map((c) => ({ value: c, label: optText(c) })), startValue, isMode ? () => syncSpawnExtras(false) : undefined);
         // A seg needs the row's full width, not half of it beside a label —
         // see #options .opt.opt-seg in app.css.
         row.className = "opt opt-seg";
@@ -4464,24 +4473,53 @@ function renderOptions() {
         ctrl = document.createElement("select");
         // A profile without a default for this enum (#35) starts on the agent's
         // own default: blank is sent, and the launcher adds no flag for it.
-        if (!o.value) {
+        if (!startValue) {
           const none = document.createElement("option");
           none.value = ""; none.textContent = "(agent default)";
           ctrl.appendChild(none);
         }
         for (const c of choices) {
           const co = document.createElement("option");
-          co.value = c; co.textContent = c;
-          if (c === o.value) co.selected = true;
+          co.value = c; co.textContent = optText(c);
+          if (c === startValue) co.selected = true;
           ctrl.appendChild(co);
         }
         lbl.htmlFor = "opt-" + o.key;
+        if (isMode) ctrl.onchange = () => syncSpawnExtras(false);
       }
     }
     ctrl.id = "opt-" + o.key;
     ctrl.dataset.key = o.key;
     ctrl.dataset.type = o.type;
+    // A box-only option (tier "box") is hidden, and not sent, off a box: see syncCritRmRow and getOptions.
+    if (o.tier) ctrl.dataset.tier = o.tier;
+    if (legacyStart) {
+      ctrl.dataset.legacy = "1";
+      ctrl.dataset.legacyLabel = (legacyOpt && (legacyOpt.label || legacyOpt.key)) || legacyKey;
+    }
     row.append(lbl, ctrl);
+    // Lines under the control: what the choice does (the slot is redrawn on every pick), then, for the Claude rules, where it
+    // came from. Each slot is a .opt-line (the critical-rm slot turns .warnbox when the in-place card makes it a danger).
+    const slot = (name) => {
+      const el = document.createElement("div");
+      el.className = "opt-line";
+      el.dataset.line = name;
+      row.append(el);
+      if (!row.className.split(" ").includes("opt-note")) row.className += " opt-note";
+      return el;
+    };
+    if (isMode) {
+      slot("mode");
+      if (legacyStart) slot("legacy");
+      if (p && p.bypass_args) slot("args").textContent = CRIT_RM_COPY.args;
+    }
+    if (o.key === CRIT_RM_KEY) {
+      const detail = document.createElement("div");
+      detail.className = "opt-detail";
+      detail.textContent = CRIT_RM_COPY.detail;
+      row.append(detail);
+      slot("crit");
+    }
     if (deskModel) effortRows.unshift(row);
     else (isEffortOptionKey(o.key) ? effortRows : advRows).push(row);
   }
@@ -4494,18 +4532,74 @@ function renderOptions() {
   $("options").replaceChildren(...advRows);
   const advGroup = $("spawn-adv");
   if (advGroup) advGroup.style.display = advRows.length ? "" : "none";
+  syncCritRmRow();
 }
 // getOptions reads every option's control by [data-key] across the WHOLE
 // form, not just #options — Effort now lives in #effort-slot instead, and a
 // control this stops reading from is a silently-dropped spawn field.
 function getOptions() {
   const out = {};
+  // A box-only option's row is hidden off a box; what is hidden is not sent (a host spawn that sent it is refused).
+  const boxed = spawnWhere().runtime === "box";
   for (const ctrl of $("spawn").querySelectorAll("[data-key]")) {
-    if (ctrl.dataset.type === "bool") out[ctrl.dataset.key] = ctrl.checked;
-    else if (ctrl.classList.contains("seg")) out[ctrl.dataset.key] = segValue(ctrl);
-    else out[ctrl.dataset.key] = ctrl.value;
+    if (ctrl.dataset.tier === "box" && !boxed) continue;
+    let v = optCtrlValue(ctrl);
+    // The legacy rule: a profile that was Bypass through its older bool shows Bypass; left there it sends "" and the profile's
+    // own default applies. Only another pick is sent, and it replaces the bool on the server.
+    if (ctrl.dataset.legacy === "1" && v === BYPASS_MODE) v = "";
+    out[ctrl.dataset.key] = v;
   }
   return out;
+}
+// optCtrlValue reads one option control as getOptions sends it: a checkbox's state, a seg's pick, a select's value.
+function optCtrlValue(ctrl) {
+  if (ctrl.dataset.type === "bool") return ctrl.checked;
+  if (ctrl.classList.contains("seg")) return segValue(ctrl);
+  return ctrl.value;
+}
+// dialogOptions: getOptions with the Permission mode the dialog SHOWS. An untouched legacy profile sends "" (the profile decides)
+// while the seg reads Bypass, and the bypass decisions (the replies warning, the critical-rm row) follow what the seg reads.
+function dialogOptions() {
+  const out = getOptions();
+  const mode = $("spawn").querySelector('[data-key="' + PERM_MODE_KEY + '"]');
+  if (mode) out[PERM_MODE_KEY] = optCtrlValue(mode);
+  return out;
+}
+// syncCritRmRow redraws what depends on the Permission mode and the card picked: the consequence line under Permission mode, and
+// each box-only row (hidden off a box). The critical-rm row is also dimmed unless the run is in bypass, and its line follows the
+// card: plain on a clone, the warnbox in place. Called after renderOptions, on every Permission mode pick (syncSpawnExtras),
+// and by renderTierPick, which every card pick, seg change and workspace move goes through.
+function syncCritRmRow() {
+  const root = $("spawn");
+  if (!root) return;
+  const mode = root.querySelector('[data-key="' + PERM_MODE_KEY + '"]');
+  if (mode) {
+    const row = mode.parentNode;
+    const v = optCtrlValue(mode);
+    const set = (name, text) => {
+      const el = row.querySelector('[data-line="' + name + '"]');
+      if (!el) return;
+      el.textContent = text;
+      el.hidden = text === "";
+    };
+    set("mode", permModeLine(v));
+    set("legacy", mode.dataset.legacy === "1" && v === BYPASS_MODE ? CRIT_RM_COPY.legacy(mode.dataset.legacyLabel || "") : "");
+  }
+  const where = spawnWhere();
+  const bypass = effectiveBypass(currentProfile(), dialogOptions());
+  for (const ctrl of root.querySelectorAll("[data-tier]")) {
+    if (ctrl.dataset.tier !== "box") continue;
+    const row = ctrl.parentNode;
+    if (ctrl.dataset.key !== CRIT_RM_KEY) { row.hidden = where.runtime !== "box"; continue; }
+    const view = critRmView(where, bypass);
+    row.hidden = !view.show;
+    ctrl.disabled = view.disabled;
+    const line = row.querySelector('[data-line="crit"]');
+    if (line) {
+      line.className = view.strong ? "warnbox" : "opt-line";
+      line.textContent = view.line;
+    }
+  }
 }
 // Switching profile re-derives everything that profile owns: its options AND the
 // tier it runs under. Leaving the tier behind would show the previous profile's
@@ -6252,7 +6346,8 @@ function syncSpawnExtras(resetReplies) {
   $("spawn-prompt-row").hidden = !promptFieldVisible(p);
   $("spawn-replies-row").hidden = !repliesFieldVisible(p);
   if (resetReplies) $("spawn-replyable").checked = !!(p && p.replyable);
-  $("spawn-bypass-warn").hidden = !bypassWarningShown(p, getOptions(), $("spawn-replyable").checked);
+  $("spawn-bypass-warn").hidden = !bypassWarningShown(p, dialogOptions(), $("spawn-replyable").checked);
+  syncCritRmRow();
 }
 
 // applySpawnPrefill fills the dialog from a session (Duplicate): cwd, tier and
@@ -6269,7 +6364,7 @@ function applySpawnPrefill(pf) {
     if (!Object.prototype.hasOwnProperty.call(pf.options, k)) continue;
     const v = pf.options[k];
     if (ctrl.dataset.type === "bool") ctrl.checked = v === true;
-    else if (ctrl.classList.contains("seg")) setSegValue(ctrl, String(v));
+    else if (ctrl.classList.contains("seg")) setSegValue(ctrl, ctrl.dataset.legacy === "1" && v === "" ? BYPASS_MODE : String(v)); // a legacy session recorded "": it ran as Bypass
     else ctrl.value = String(v);
   }
   updateRuntimeWarning();

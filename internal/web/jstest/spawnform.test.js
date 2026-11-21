@@ -6,6 +6,7 @@ const assert = require("node:assert");
 const {
   BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
   runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText,
+  PERM_MODE_LABELS, PERM_MODE_LINES, CRIT_RM_COPY, permModeLabel, permModeLine, legacyBypassKeyFromDefs, effectiveMode, effectiveBypass, critRmView,
 } = require("../static/spawnform.js");
 const { spawnRuntimeDefault } = require("../static/tier.js");
 
@@ -36,6 +37,85 @@ test("the bypass warning shows only when replies are on for a bypass session", (
   assert.strictEqual(bypassWarningShown(claude, { [BYPASS_OPTION_KEY]: false }, true), false);
   assert.strictEqual(bypassWarningShown({ ...claude, bypass_args: true }, {}, true), true);
   assert.strictEqual(bypassWarningShown(shell, { [BYPASS_OPTION_KEY]: true }, true), false);
+});
+
+// Permission mode (#342): the founder-approved words, exact.
+test("permModeLabel and permModeLine give the approved words, and a raw label for an unknown choice", () => {
+  assert.deepStrictEqual(["manual", "acceptEdits", "auto", "plan", "bypassPermissions"].map(permModeLabel), ["Manual", "Accept edits", "Auto", "Plan", "Bypass"]);
+  assert.deepStrictEqual(PERM_MODE_LABELS, { manual: "Manual", acceptEdits: "Accept edits", auto: "Auto", plan: "Plan", bypassPermissions: "Bypass" });
+  assert.strictEqual(permModeLine(""), "Claude Code's default. On current versions that is Auto.");
+  assert.strictEqual(permModeLine("manual"), "Asks you before edits and commands.");
+  assert.strictEqual(permModeLine("acceptEdits"), "Edits files without asking. Still asks before other commands.");
+  assert.strictEqual(permModeLine("auto"), "A classifier reviews each action and blocks risky ones. Asks you less.");
+  assert.strictEqual(permModeLine("plan"), "Reads and plans only. Changes nothing until you approve the plan.");
+  assert.strictEqual(permModeLine("bypassPermissions"), "Runs every action without asking.");
+  assert.strictEqual(Object.keys(PERM_MODE_LINES).length, 6);
+  // A config.json def can offer other choices: the label is the choice as written, and it has no line.
+  assert.strictEqual(permModeLabel("default"), "default");
+  assert.strictEqual(permModeLine("default"), "");
+  // Names on Object.prototype are not choices.
+  assert.strictEqual(permModeLabel("toString"), "toString");
+  assert.strictEqual(permModeLine("toString"), "");
+});
+
+test("CRIT_RM_COPY holds the approved sentences", () => {
+  assert.strictEqual(CRIT_RM_COPY.detail, "In Bypass, Claude Code still stops before an rm of the working folder, ~ or /, waits 2 minutes, then refuses. This turns that stop off.");
+  assert.strictEqual(CRIT_RM_COPY.needsBypass, "Needs Permission mode: Bypass");
+  assert.strictEqual(CRIT_RM_COPY.clone, "The agent works on its own copy of the repo.");
+  assert.strictEqual(CRIT_RM_COPY.inPlace, "Your own folder is mounted live. With this on, the agent can delete it, and everything in it, without asking.");
+  assert.strictEqual(CRIT_RM_COPY.legacy("Bypass permissions"), "Set by Bypass permissions (older form)");
+  assert.strictEqual(CRIT_RM_COPY.args, "This profile's own arguments also turn Bypass on.");
+});
+
+test("effectiveMode: the enum wins, else the legacy bool reads as Bypass", () => {
+  assert.strictEqual(effectiveMode({ skip: true }, "skip"), "bypassPermissions");
+  assert.strictEqual(effectiveMode({ skip: true, permission_mode: "plan" }, "skip"), "plan");
+  assert.strictEqual(effectiveMode({ skip: true, permission_mode: "" }, "skip"), "bypassPermissions");
+  assert.strictEqual(effectiveMode({ skip: false }, "skip"), "");
+  assert.strictEqual(effectiveMode({ skip: true }, ""), "");
+  assert.strictEqual(effectiveMode({ skip: true }, undefined), "");
+  assert.strictEqual(effectiveMode(undefined, "skip"), "");
+});
+
+test("effectiveBypass: args, the enum, the legacy bool by key, or the flagless fixture key", () => {
+  assert.strictEqual(effectiveBypass({ bypass_args: true }, {}), true);
+  assert.strictEqual(effectiveBypass(claude, { permission_mode: "bypassPermissions" }), true);
+  assert.strictEqual(effectiveBypass(claude, { permission_mode: "plan" }), false);
+  assert.strictEqual(effectiveBypass({ ...claude, legacy_bypass_key: "yolo" }, { yolo: true }), true);
+  assert.strictEqual(effectiveBypass({ ...claude, legacy_bypass_key: "yolo" }, { yolo: true, permission_mode: "auto" }), false);
+  assert.strictEqual(effectiveBypass(claude, { yolo: true }), false, "a key with no flag is not bypass");
+  assert.strictEqual(effectiveBypass(claude, { [BYPASS_OPTION_KEY]: true }), true);
+  assert.strictEqual(effectiveBypass(undefined, undefined), false);
+});
+
+test("legacyBypassKeyFromDefs finds the bool by its flag, the first sorted key the options set", () => {
+  const defs = [
+    { key: "zzz_skip", type: "bool", flag: "--dangerously-skip-permissions" },
+    { key: "aaa_skip", type: "bool", flag: "--dangerously-skip-permissions" },
+    { key: "skip_permissions", type: "enum", flag: "--dangerously-skip-permissions" },
+    { key: "verbose", type: "bool", flag: "--verbose" },
+  ];
+  assert.strictEqual(legacyBypassKeyFromDefs(defs, { zzz_skip: true, aaa_skip: false }), "aaa_skip");
+  assert.strictEqual(legacyBypassKeyFromDefs(defs, { zzz_skip: true }), "zzz_skip");
+  assert.strictEqual(legacyBypassKeyFromDefs(defs, { verbose: true, skip_permissions: true }), "", "by flag and type, not by name");
+  assert.strictEqual(legacyBypassKeyFromDefs(defs, {}), "");
+  assert.strictEqual(legacyBypassKeyFromDefs(undefined, { zzz_skip: true }), "");
+});
+
+test("critRmView: hidden off a box, dimmed outside bypass, plain on a clone, strong in place", () => {
+  assert.strictEqual(critRmView({ runtime: "host", clone: false }, true).show, false);
+  assert.strictEqual(critRmView({}, true).show, false);
+  assert.deepStrictEqual(critRmView({ runtime: "box", clone: true }, true), { show: true, disabled: false, line: CRIT_RM_COPY.clone, strong: false });
+  assert.deepStrictEqual(critRmView({ runtime: "box", clone: false }, true), { show: true, disabled: false, line: CRIT_RM_COPY.inPlace, strong: true });
+  assert.deepStrictEqual(critRmView({ runtime: "box", clone: false }, false), { show: true, disabled: true, line: "Needs Permission mode: Bypass", strong: false });
+  assert.deepStrictEqual(critRmView({ runtime: "box", clone: true }, false), { show: true, disabled: true, line: "Needs Permission mode: Bypass", strong: false });
+});
+
+test("the bypass warning follows the effective mode (the enum, or a legacy bool by its flag)", () => {
+  assert.strictEqual(bypassWarningShown({ ...claude, legacy_bypass_key: "yolo" }, { yolo: true }, true), true);
+  assert.strictEqual(bypassWarningShown(claude, { permission_mode: "bypassPermissions" }, true), true);
+  assert.strictEqual(bypassWarningShown(claude, { permission_mode: "bypassPermissions" }, false), false);
+  assert.strictEqual(bypassWarningShown(claude, { permission_mode: "plan" }, true), false);
 });
 
 // Criterion 7: the effective default is always one of the seg's own values, so

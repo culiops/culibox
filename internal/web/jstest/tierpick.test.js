@@ -190,6 +190,8 @@ function tpPage(over) {
     syncSpawnCopyLine: () => calls.push(["syncSpawnCopyLine"]),
     syncSpawnPreview: () => calls.push(["syncSpawnPreview"]),
     paintSpawnAcctHint: () => calls.push(["paintSpawnAcctHint"]),
+    // app.js's critical-rm row (#342): counted apart from `calls`, whose order the tests below pin.
+    critSyncs: 0, syncCritRmRow: () => { box.critSyncs++; },
   };
   Object.assign(box, over || {});
   const ctx = vm.createContext(box);
@@ -803,4 +805,20 @@ test("openSpawnDialog takes a cwd-only prefill without the missing-profile toast
   assert.match(body.slice(cwdOnly, toast), /typeof prefill\.cwd === "string" && prefill\.cwd !== ""\)\s*setSpawnCwd\(/, "no path, nothing applied: the chosen workspace stays");
   const sync = body.indexOf("syncRuntimeField();");
   assert.match(body.slice(sync, sync + 80), /^syncRuntimeField\(\);\s*\n\s*tierVmFetch\(\);/, "tierVmFetch follows syncRuntimeField, not awaited");
+});
+
+// #342: the critical-rm row's line and visibility follow the card shown, so every redraw of the cards ends by syncing it (a card pick, a
+// seg change, a workspace move and the preselection all go through renderTierPick), with a box layer or without.
+test("renderTierPick syncs the critical-rm row after the cards are drawn, with or without a box layer", () => {
+  const t = tpPage();
+  const before = t.ctx.critSyncs;
+  t.run("renderTierPick()");
+  assert.strictEqual(t.ctx.critSyncs, before + 1);
+  const bare = tpPage({ boxRuntime: "" });
+  bare.run("renderTierPick()");
+  assert.strictEqual(bare.ctx.critSyncs, 1);
+  const picked = tpPage();
+  const n = picked.ctx.critSyncs;
+  picked.run('tierPick("host")');
+  assert.ok(picked.ctx.critSyncs > n, "a card pick syncs");
 });
