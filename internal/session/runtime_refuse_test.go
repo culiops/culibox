@@ -188,3 +188,51 @@ func TestSpawnBoundHostRefusalIsShown(t *testing.T) {
 // The production launcher is what answers; a rename on either side would
 // otherwise silently turn the host-block check off (box_only has no second net).
 var _ HostBlockResolver = (*launcher.AgentLauncher)(nil)
+
+// boxOnlyOptLauncher is a tieredLauncher that also names the box-only option the
+// spawn turns on (the optional BoxOnlyOptionResolver), like the real launcher.
+type boxOnlyOptLauncher struct {
+	tieredLauncher
+	reason string
+}
+
+func (l boxOnlyOptLauncher) BoxOnlyOptionFor(launcher.SpawnSpec) (string, error) {
+	return l.reason, nil
+}
+
+func TestSpawnHostRefusedByBoxOnlyOption(t *testing.T) {
+	const reason = `"Skip the critical-rm prompt" runs only in a box`
+	l := boxOnlyOptLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, reason: reason}
+	m := NewManager(l, nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	m.SetBoxes(boxes)
+
+	_, err := m.Spawn(launcher.SpawnSpec{Agent: "p", Cwd: t.TempDir(), Runtime: config.RuntimeHost})
+	if err == nil {
+		t.Fatal("a host spawn with a box-only option on was accepted")
+	}
+	if !errors.Is(err, box.ErrUnboxableWorkspace) {
+		t.Fatalf("err = %v, want ErrUnboxableWorkspace so the UI shows it", err)
+	}
+	if err.Error() != `profile "p": `+reason {
+		t.Fatalf("err = %q, want just the profile and the reason", err)
+	}
+	if boxes.prepares != 0 || boxes.wraps != 0 || len(m.List()) != 0 {
+		t.Fatalf("refused spawn prepared=%d wrapped=%d sessions=%d", boxes.prepares, boxes.wraps, len(m.List()))
+	}
+}
+
+func TestSpawnBoxAllowedWithBoxOnlyOption(t *testing.T) {
+	l := boxOnlyOptLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, reason: "any reason"}
+	m := NewManager(l, nil, 1<<16, time.Minute)
+	m.SetBoxes(&fakeBoxes{})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "p", Cwd: t.TempDir(), Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatalf("box spawn refused for a box-only option: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+}
+
+// The production launcher is what answers; a rename on either side would
+// otherwise silently turn the box-only option check off.
+var _ BoxOnlyOptionResolver = (*launcher.AgentLauncher)(nil)
