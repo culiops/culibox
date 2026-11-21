@@ -391,6 +391,7 @@ test("app.css carries a plain base for the link dialog's parts, so the phone vie
   assert.match(css, /#ask-modal \.lk-url \{[^}]*font: [^}]*ui-monospace[^}]*overflow-wrap: anywhere;/, "the URL is mono and wraps");
   assert.match(css, /#ask-modal \.lk-warn \{[^}]*border-left: 3px solid var\(--warn\); background: var\(--warn-tint\);/, "the warning row's amber rule");
   assert.doesNotMatch(css.slice(css.indexOf("#ask-modal .lk-url"), css.indexOf("#ask-modal .lk-sub[hidden]")), /\bwidth:/, "no width: desktop.css sizes the card");
+  assert.match(css, /#ask-modal \.lk-sub \{[^}]*color: var\(--muted\);/, "the subdomains row is muted on the phone too, as on desktop");
 });
 
 // askDialog puts opts.cls on #ask-modal itself. It used to be "link", and the kit's .link (desktop.css: accent text, pointer cursor,

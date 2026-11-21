@@ -1269,7 +1269,7 @@
     #ask-modal .lk-ico { flex: none; color: var(--warn); }
     #ask-modal .lk-trust { margin: 10px 0 0; }
     #ask-modal .lk-check { display: flex; align-items: center; gap: 6px; font-size: 13px; }
-    #ask-modal .lk-sub { margin: 6px 0 0 22px; }
+    #ask-modal .lk-sub { margin: 6px 0 0 22px; color: var(--muted); }
     #ask-modal .lk-sub[hidden], #ask-modal .lk-hint[hidden] { display: none; }
     /* The read-only Keyboard shortcuts dialog (askDialog info:true), ~33 lines.
        It is bounded by the dialog's OWN height cap (dialog { max-height: 88vh },

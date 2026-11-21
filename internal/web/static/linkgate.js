@@ -213,11 +213,13 @@ function lgIsPrivateIP(h) {
 }
 
 // lgUserinfoShown is the user name (and :password) of a link as the box and the warning print it, with its @: cut after
-// LG_USERINFO_MAX characters (code points) and an ellipsis.
+// LG_USERINFO_MAX characters (code points) and an ellipsis, backing off to before a %XX the cut would split.
 function lgUserinfoShown(u) {
   const full = u.username + (u.password ? ":" + u.password : "");
   const chars = Array.from(full);
-  return (chars.length > LG_USERINFO_MAX ? chars.slice(0, LG_USERINFO_MAX).join("") + "…" : full) + "@";
+  if (chars.length <= LG_USERINFO_MAX) return full + "@";
+  // Never inside a %XX: a cut that leaves a "%" or "%4" at the end goes back to before the "%".
+  return chars.slice(0, LG_USERINFO_MAX).join("").replace(/%[0-9a-f]?$/i, "") + "…@";
 }
 
 // --- warnings -------------------------------------------------------------------------------------------------------------------

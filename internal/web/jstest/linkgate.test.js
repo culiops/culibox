@@ -502,6 +502,21 @@ test("a long user name is cut in the box and the warning, and the whole link is 
   assert.strictEqual(p.opened[0][0], new URL(raw).href, "window.open gets the full link");
 });
 
+test("a cut never lands inside a %XX triplet: it backs off to before the %", () => {
+  const shown = (name) => lg.lgUrlParts(new URL("https://" + name + "@x.example/")).userinfo;
+  const tail = "z".repeat(30);
+  // the 40th character is the % or the first hex digit of a triplet: drop the part of it
+  assert.strictEqual(shown("a".repeat(39) + "%41" + tail), "a".repeat(39) + "…@");
+  assert.strictEqual(shown("a".repeat(38) + "%41" + tail), "a".repeat(38) + "…@");
+  // a triplet that ends exactly at 40 is whole, and one that starts after is not touched
+  assert.strictEqual(shown("a".repeat(37) + "%41" + tail), "a".repeat(37) + "%41…@");
+  assert.strictEqual(shown("a".repeat(40) + "%41" + tail), "a".repeat(40) + "…@");
+  // spaces in a user name are %20 once parsed, so the same holds for them
+  assert.strictEqual(shown("a".repeat(39) + " " + tail), "a".repeat(39) + "…@");
+  const w = lg.lgWarnings(new URL("https://" + "a".repeat(39) + "%41" + tail + "@evil.example/"), {}).find((x) => x.kind === "userinfo");
+  assert.ok(w.text.includes("a".repeat(39) + "…@"), w.text);
+});
+
 test("the meta line names the source", async () => {
   const p = page();
   await p.ready();

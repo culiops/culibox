@@ -32,6 +32,10 @@ const MONACO_UNBOUND_KEYS = [{ command: "editor.action.quickCommand", code: "F1"
 // at "loading…" until the page is reloaded. editor.main.css is about 390 KB and the server does not compress it, so 60 s is a
 // floor of about 6.5 KB/s; 10 s failed every first load below about 39 KB/s.
 const MONACO_CSS_TIMEOUT_MS = 60000;
+// What a link click may scan to find the link's text again (monacoLinkText): a model of more than 5 MB is skipped, and at most 20000
+// candidate links are tried in all, so a click on a huge generated file cannot stall the page.
+const MONACO_SCAN_MAX_CHARS = 5 * 1024 * 1024;
+const MONACO_SCAN_MAX_LINKS = 20000;
 
 // The stylesheet links whose wait ended in a timeout once. Running out of time does not say the request is dead (a slow link may
 // still be downloading it), so the first timeout leaves the link for the retry to wait on; a second one drops it.
@@ -72,6 +76,35 @@ async function monacoStyled() {
   }
 }
 
+// monacoLinkText finds the link as it is written in an open model, for the URI a click on it produced, or returns "". The opener is
+// only ever given a parsed URI, and URI.parse decodes every part, so rebuilding the text from it changes the link: %3F in a path turns
+// into %253F, %23 into %2523, an encoded nested query is split into extra parameters, and %2F in a user name moves the host. So the
+// text is read back out of the models: the first URL-looking run (links.js's LINK_URL_RE and trimUrl, so the same runs the terminal
+// links) that parses to this very URI is what Monaco's click was on, and it goes on exactly as written. Only on a click; it stops at the
+// first match, skips a model over MONACO_SCAN_MAX_CHARS and gives up after MONACO_SCAN_MAX_LINKS candidates. Any failure is "".
+function monacoLinkText(monaco, uri) {
+  try {
+    if (typeof monaco.editor.getModels !== "function" || !monaco.Uri || typeof monaco.Uri.parse !== "function") return "";
+    const want = uri.toString();
+    // A private copy of the regex: the shared one keeps its lastIndex between calls.
+    const re = new RegExp(typeof LINK_URL_RE !== "undefined" ? LINK_URL_RE.source : "https?:\\/\\/[^\\s<>\"'`]+", "gi");
+    const trim = typeof trimUrl === "function" ? trimUrl : (u) => u.replace(/[.,;:!?)\]}>'"]+$/, "");
+    let left = MONACO_SCAN_MAX_LINKS;
+    for (const model of monaco.editor.getModels()) {
+      if (model.getValueLength() > MONACO_SCAN_MAX_CHARS) continue;
+      const text = model.getValue();
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (--left < 0) return "";
+        const c = trim(m[0]);
+        if (c && monaco.Uri.parse(c).toString() === want) return c;
+      }
+    }
+  } catch (_) {}
+  return "";
+}
+
 // monacoBoot: loader.js, then require() of the editor, its stylesheet, then the theme, the unbound keys and the link opener.
 async function monacoBoot() {
   const loader = document.createElement("script");
@@ -86,14 +119,15 @@ async function monacoBoot() {
   // Ctrl/Cmd+click on a link in the editor text (the dock editor and every diff editor) goes to the link gate (linkgate.js), like a
   // link in the terminal or in a rendered markdown file: a file in the box can say anything, and its URLs are as much the agent's
   // as its output. Monaco puts a registered opener ahead of its own, and true says "handled" for every scheme, so its opener never
-  // runs; the gate itself refuses what is not http or https. open() is handed a URI (a string is parsed first). Its toString()
-  // percent-encodes the = & + : / of a query ("?next=https://evil.com" becomes "?next%3Dhttps%3A%2F%2Fevil.com"), which would hide
-  // a redirect from the gate and send the encoded form on. So the address is encodeURI(uri.toString(true)), what Monaco's own
-  // external opener does: the readable form, encoded once.
+  // runs; the gate itself refuses what is not http or https. open() is handed a parsed URI (registerLinkOpener's wrapper parses a
+  // string first), never the text that was clicked, and URI.parse decodes it, so the link has to be put back together. Best: the text
+  // as written, found again in the open models (monacoLinkText). Failing that, encodeURI(uri.toString(true)), what Monaco's own
+  // external opener does: the readable form, which keeps a query's = & + : / unencoded (toString() would encode them and hide a
+  // redirect from the gate) but is lossy for a %3F or %23 in the original.
   if (typeof monaco.editor.registerLinkOpener === "function") {
     monaco.editor.registerLinkOpener({
       open(uri) {
-        if (typeof openAgentLink === "function") openAgentLink(encodeURI(uri.toString(true)), { source: "editor" });
+        if (typeof openAgentLink === "function") openAgentLink(monacoLinkText(monaco, uri) || encodeURI(uri.toString(true)), { source: "editor" });
         return true;
       },
     });
