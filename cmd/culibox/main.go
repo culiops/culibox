@@ -878,6 +878,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// The workspace folders the file API serves besides $HOME. Every add and
 	// remove is audited first (storeAudit), so a failed audit saves nothing.
 	wsRoots := wsroots.NewService(dataDir, home, web.RootsAudit(storeAudit), time.Now)
+	api.Roots = wsRoots // a browser Start with add_root adds its folder here
 
 	srv := &web.Server{
 		Imports:          bundleImports,

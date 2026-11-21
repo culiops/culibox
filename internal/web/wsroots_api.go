@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/gitrepo"
+	"github.com/culiops/culibox/internal/session"
 	"github.com/culiops/culibox/internal/wsroots"
 )
 
@@ -219,4 +221,62 @@ func (s *Server) vmShared(p string) bool {
 		return false
 	}
 	return v.Check(p, false) == nil
+}
+
+// rootAdd is the "root" member of the 201 body of POST /api/sessions: whether
+// the Start made its folder a workspace root, and why not when it did not.
+type rootAdd struct {
+	Added  bool   `json:"added"`
+	Path   string `json:"path"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// rootAfterSpawn is the add_root step of a successful Start (#343 spec 6.3). It
+// notes the use of the covering root, then, only for the signed-in browser
+// (a cookie and a strict same-origin request; a bearer token or an agent never
+// widens what the page reaches), adds the session's repo top, or its folder when
+// it is in no repo. A clone-mode spawn is skipped: its folder is the box's own
+// copy (R3). Nil means nothing to report: no service, not asked, a folder home
+// or a root already reaches, or a clone.
+func (a *API) rootAfterSpawn(r *http.Request, info session.Info, addRoot, cloneAsked bool) *rootAdd {
+	if a.Roots == nil {
+		return nil
+	}
+	a.Roots.Touch(info.Cwd)
+	if !addRoot || credKindOf(r) != credCookie || !strictSameOrigin(r) || cloneAsked || info.CloneOf != "" {
+		return nil
+	}
+	target := info.WorkspaceRoot
+	if target == "" {
+		target = info.Cwd
+	}
+	if target == "" || !filepath.IsAbs(target) {
+		return nil
+	}
+	// The folder itself decides "already reachable": a repo top above a root
+	// must not widen the list to the top.
+	if a.Roots.Covering(info.Cwd) != "" || a.Roots.Covering(target) != "" {
+		return nil
+	}
+	root, err := a.Roots.Add(target, storeActor)
+	if err == nil {
+		return &rootAdd{Added: true, Path: root.Path}
+	}
+	var refused *wsroots.RefusedError
+	switch {
+	case errors.As(err, &refused):
+		return &rootAdd{Path: target, Reason: refused.Reason}
+	case errors.Is(err, wsroots.ErrCovered):
+		return nil
+	case errors.Is(err, wsroots.ErrCap):
+		return &rootAdd{Path: target, Reason: "the " + strconv.Itoa(wsroots.MaxRoots) + "-root limit is reached"}
+	case errors.Is(err, wsroots.ErrCorrupt):
+		return &rootAdd{Path: target, Reason: wsroots.FileName + " is damaged"}
+	case errors.Is(err, wsroots.ErrNotDir):
+		return &rootAdd{Path: target, Reason: "that folder is not a directory"}
+	}
+	// Anything else came from the audit callback. The raw error stays in the
+	// log; the body gets a fixed phrase.
+	log.Printf("web: workspace root %q not added after a start: %v", target, err)
+	return &rootAdd{Path: target, Reason: "the audit log could not record it"}
 }
