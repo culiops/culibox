@@ -100,11 +100,14 @@ function pfaBin(c) {
   return pending !== "" ? pending : typeof c.doc.bin === "string" ? c.doc.bin : "";
 }
 
-// pfaDefs: the options this block draws: every option the daemon defines except the Agent block's (model and
-// effort), for the commands they apply to.
+// pfaDefs: the options this block draws: every option the daemon defines except the Agent block's (model, effort, Permission
+// mode and the critical-rm option), for the commands they apply to. The older bypass bool (a stored key of any value) is left
+// out while the Permission mode control applies: that control owns it now.
 function pfaDefs(c) {
   const bin = pfaBin(c);
-  return c.defs.filter((d) => d && typeof d.key === "string" && !PFE_AGENT_OPTIONS.includes(d.key) && optApplies(d, bin));
+  const permOwns = c.defs.some((d) => d && d.key === PERM_MODE_KEY && optApplies(d, bin));
+  const legacy = permOwns ? legacyBypassKeyFromDefs(c.defs, pfvStoredOptions(c.doc)) : "";
+  return c.defs.filter((d) => d && typeof d.key === "string" && !PFE_AGENT_OPTIONS.includes(d.key) && d.key !== legacy && optApplies(d, bin));
 }
 
 function pfaValues(c) {

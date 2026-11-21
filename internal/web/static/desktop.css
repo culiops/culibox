@@ -3884,6 +3884,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-check-t { display: block; }
   #page-host > #settings-modal.as-page #pfv .pfv-check-d { display: block; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-consq { max-width: 440px; margin-top: 12px; font-size: var(--t-md); }
+  /* The critical-rm in-place warning (app.css .warnbox: danger tokens), set in the page's measure and type. */
+  #page-host > #settings-modal.as-page #pfv .warnbox { max-width: 440px; margin-top: 8px; font-size: var(--t-sm); line-height: var(--lh-sm); border-radius: var(--r-ctl); overflow-wrap: anywhere; }
   /* Workspace: the folder picker's dropdown (fixed under the field by wspicker.js, so the page's own scroll never clips it), the
      note under the field for a search that found nothing, and the textarea for the shared files. The rows are the shared
      .ft-opt/.ft-note ones. */
