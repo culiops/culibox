@@ -132,6 +132,8 @@ function pfwFolderBox(rec, o) {
     input, list,
     // An Esc that closes the list is not the page's to act on.
     keepEsc: true,
+    // Each folder's path under its name, and the added workspace roots (#343 slice 4). This page is desktop only.
+    paths: () => true,
     // The list is position: fixed and this page scrolls under it; New session's dialog never needed this.
     reanchor: true,
     // Opening the block puts focus here; the dropdown is for the user to ask for.
