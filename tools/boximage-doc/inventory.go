@@ -21,7 +21,7 @@ type toolInfo struct {
 
 const (
 	sha256Arch = "sha256 per arch, pinned"
-	npmPin     = "version pin only: npm checks the registry's integrity, no hash is pinned here"
+	npmPin     = "version pin only: npm checks the registry's integrity, no hash is pinned here, and its dependencies resolve at build time"
 )
 
 // tools is keyed by the ARG name without _VERSION. TestEveryVersionArgIsDescribed
@@ -107,7 +107,11 @@ func parse(dockerfile []byte) (inventory, error) {
 	}
 	for _, in := range ins[final:] {
 		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "apt-get install") {
-			inv.apt = append(inv.apt, aptPackages(in)...)
+			pkgs := aptPackages(in)
+			if len(pkgs) == 0 {
+				return inv, fmt.Errorf("cannot read the packages of %.80q: list them after --no-install-recommends", in)
+			}
+			inv.apt = append(inv.apt, pkgs...)
 		}
 		if strings.Contains(in, "printf") && strings.Contains(in, "/etc/agent-box/mcp.json") {
 			names, err := mcpServers(in)
@@ -197,6 +201,8 @@ func Render(dockerfile []byte) (string, error) {
 	w("\n")
 
 	w("## Debian packages\n\n")
+	w("The packages the Dockerfile installs by name. Their dependencies (Chromium pulls in many libraries) and the\n")
+	w("base image's own packages are not listed here; the scans below cover them.\n\n")
 	w("Installed with apt from Debian's signed bookworm and bookworm-security archives. The archive is live, not a\n")
 	w("snapshot, so each package is at the version Debian served when its image layer was last built. Layers are\n")
 	w("cached between builds, so a Debian fix (Chromium's, for one) reaches the image when that layer is rebuilt: a\n")

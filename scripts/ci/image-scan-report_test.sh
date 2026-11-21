@@ -112,6 +112,10 @@ has "### base" "two labels: first section"
 has "### release" "two labels: second section"
 fixable 2 "two labels: fixable sums"
 
+rc=$(run -d 2026-11-21 "base = release v1.0.0 linux/amd64=$tmp/mixed.json")
+[ "$rc" -eq 0 ] && pass "a label with = in it: exit 0" || fail "a label with = in it: exit $rc: $(cat "$tmp/err")"
+has "### base ? release v1.0.0 linux/amd64" "a label with = in it: the path is after the last ="
+
 rc=$(run -d 2026-11-21 "x=$tmp/bad.json")
 [ "$rc" -eq 1 ] && pass "invalid JSON: exit 1" || fail "invalid JSON: exit $rc"
 rc=$(run -d 2026-11-21 "x=$tmp/missing.json")

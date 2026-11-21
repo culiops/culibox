@@ -100,7 +100,7 @@ The full model and every known limit: [docs/SECURITY.md](docs/SECURITY.md).
 |---|---|
 | [Install](docs/INSTALL.md) | Requirements, the installer, release tarballs, building from source, macOS release verification. |
 | [Features](docs/FEATURES.md) | Every feature in detail: boxes, config bundle, box shell, credentials. |
-| [Box image](docs/BOX-IMAGE.md) | Every tool, MCP server and Debian package in the box image, at which version, and how it is scanned. |
+| [Box image](docs/BOX-IMAGE.md) | The pinned tools, MCP servers and named Debian packages in the box image, their versions, and how it is scanned. |
 | [Configuration](docs/CONFIG.md) | The data root, every `config.json` key, profile fields. |
 | [Clone mode](docs/CLONE-MODE.md) | Agents working on a private copy of a repo; bringing branches home. |
 | [Reading other repos](docs/CONTEXT-PATHS.md) | `context_paths`: read-only mounts of other folders. |

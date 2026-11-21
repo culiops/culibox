@@ -20,7 +20,7 @@ bumped.
 | aws (AWS CLI v2) | 2.38.1 | tool | awscli.amazonaws.com | sha256 per arch, pinned |
 | terraform | 1.16.6 | tool | releases.hashicorp.com | sha256 per arch, pinned, taken from HashiCorp's signed SHA256SUMS |
 | go | 1.26.11 | tool | go.dev/dl | sha256 per arch, pinned |
-| @playwright/mcp (with Debian chromium) | 0.0.83 | MCP server | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here |
+| @playwright/mcp (with Debian chromium) | 0.0.83 | MCP server | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here, and its dependencies resolve at build time |
 | kubectl | 1.37.1 | tool | dl.k8s.io | sha256 per arch, pinned |
 | helm | 4.3.0 | tool | get.helm.sh | sha256 per arch, pinned |
 | kubeconform | 0.8.0 | tool | github.com/yannh/kubeconform releases | sha256 per arch, pinned |
@@ -35,11 +35,14 @@ bumped.
 | tfenv | 3.2.2 | tool | github.com/tfutils/tfenv source tarball | sha256, pinned; `tfenv install` checks HashiCorp's signature with a fingerprint-pinned key |
 | gh | 2.102.0 | tool | github.com/cli/cli releases | sha256 per arch, pinned |
 | mcp-grafana | 2.0.0 | MCP server | github.com/grafana/mcp-grafana releases | sha256 per arch, pinned |
-| @sentry/mcp-server | 0.42.0 | MCP server | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here |
+| @sentry/mcp-server | 0.42.0 | MCP server | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here, and its dependencies resolve at build time |
 | mcp-atlassian | 0.23.1 | MCP server | PyPI | pip hash lock per arch (--require-hashes, wheels only) |
-| Claude Code (@anthropic-ai/claude-code) | 2.1.311 | tool | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here |
+| Claude Code (@anthropic-ai/claude-code) | 2.1.311 | tool | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here, and its dependencies resolve at build time |
 
 ## Debian packages
+
+The packages the Dockerfile installs by name. Their dependencies (Chromium pulls in many libraries) and the
+base image's own packages are not listed here; the scans below cover them.
 
 Installed with apt from Debian's signed bookworm and bookworm-security archives. The archive is live, not a
 snapshot, so each package is at the version Debian served when its image layer was last built. Layers are

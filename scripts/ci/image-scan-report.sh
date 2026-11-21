@@ -107,8 +107,9 @@ findings='def s: tostring | gsub("[^A-Za-z0-9._:+~/-]"; "?");
 
 total=0
 for arg in "$@"; do
-  label=$(printf '%s' "${arg%%=*}" | tr -c 'A-Za-z0-9._:+~/ -' '?')
-  report=${arg#*=}
+  # The path is after the LAST =: a label may hold one, a runner path does not.
+  label=$(printf '%s' "${arg%=*}" | tr -c 'A-Za-z0-9._:+~/ -' '?')
+  report=${arg##*=}
   [ -r "$report" ] || {
     echo "image-scan-report: cannot read $report" >&2
     exit 1

@@ -85,3 +85,12 @@ func TestRenderFailsOnMissingInfo(t *testing.T) {
 		t.Fatalf("err = %v, want one naming NEWTOOL", err)
 	}
 }
+
+// An apt install the parser cannot read must stop the generator, never vanish
+// from the doc.
+func TestRenderFailsOnUnreadableAptInstall(t *testing.T) {
+	df := "FROM node:24-bookworm-slim@sha256:" + strings.Repeat("a", 64) + "\nRUN apt-get update && apt-get install -y foo\n"
+	if _, err := Render([]byte(df)); err == nil || !strings.Contains(err.Error(), "--no-install-recommends") {
+		t.Fatalf("err = %v, want one about --no-install-recommends", err)
+	}
+}

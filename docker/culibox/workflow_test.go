@@ -137,8 +137,6 @@ func TestWorkflowSupplyChain(t *testing.T) {
 	}
 }
 
-// jobBlock returns the text of one top-level job (from `  <name>:` to the next
-// job or the end of the file).
 // #355: each built digest is scanned by the pinned Grype in a job of its own. The
 // scanner is third-party code, so the job holds a read-only token and no registry
 // login (the package is public). Report first: findings never fail it, and merge
@@ -276,6 +274,8 @@ func TestBoxImageWeeklyScan(t *testing.T) {
 	}
 }
 
+// jobBlock returns the text of one top-level job (from `  <name>:` to the next
+// job or the end of the file).
 func jobBlock(t *testing.T, wf, name string) string {
 	t.Helper()
 	_, rest, ok := strings.Cut(wf, "\njobs:\n")
