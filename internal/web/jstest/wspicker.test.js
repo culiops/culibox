@@ -1108,3 +1108,201 @@ test("Other places: a search shows search hits only, and the destroyed picker ig
   await flush();
   assert.strictEqual(q.list.hidden, true);
 });
+
+// --- slice 4 (#343): the flat picker: full paths, added roots, recents, the footer, name matches -----------------------------
+
+const wsp = () => env().box;
+const twoOf = (row) => row.children.find((c) => cls(c).includes("wsp-two"));
+const nameOf = (row) => { const t = twoOf(row); return t ? t.children[0].textContent : row.children[0].textContent; };
+const pathOf = (row) => { const t = twoOf(row); return t ? t.children[1].textContent : null; };
+const tagOf = (row) => { const t = row.children.find((c) => cls(c).includes("wsp-last")); return t ? t.textContent : ""; };
+const names = (p) => optionRows(p).map(nameOf);
+const footOf = (p) => { const n = p.list.children.filter((c) => c.attrs["aria-disabled"] === "true"); return n.length ? n[n.length - 1].textContent : ""; };
+// A page with home /home/me, its two folders, and one added root.
+function flat(extra) {
+  const t = env();
+  t.win.HOME_DIR = "/home/me";
+  t.win.WORKSPACE_ROOTS = ["/home/me", "/srv/code/proj"];
+  t.box.workspacesCache = [{ label: "~ (home)", path: "/home/me" }, { label: "culishop", path: "/home/me/culishop" }, { label: "notes", path: "/home/me/notes" }];
+  return Object.assign(t, extra || {});
+}
+
+test("wsShownPath: ~/rest under home, home itself and anything else absolute", () => {
+  const { wsShownPath } = wsp();
+  assert.strictEqual(wsShownPath("/home/me/a/b", "/home/me"), "~/a/b");
+  assert.strictEqual(wsShownPath("/home/me/a", "/home/me/"), "~/a", "a trailing slash on home is ignored");
+  assert.strictEqual(wsShownPath("/home/me", "/home/me"), "/home/me");
+  assert.strictEqual(wsShownPath("/home/meX/a", "/home/me"), "/home/meX/a", "a sibling with the same prefix is not under home");
+  assert.strictEqual(wsShownPath("/srv/x", "/home/me"), "/srv/x");
+  assert.strictEqual(wsShownPath("/srv/x", ""), "/srv/x");
+  assert.strictEqual(wsShownPath("/srv/x", "/"), "/srv/x", "a root home abbreviates nothing");
+});
+
+test("wsRecentsRead: the stored list, deduped and cut to 5; empty or damaged falls back to the last spawn's folder", () => {
+  const { wsRecentsRead } = wsp();
+  const raw = JSON.stringify({ v: 1, paths: ["/a", "/b/", "/b", "rel", 7, "/c", "/d", "/e", "/f"] });
+  assert.deepStrictEqual(Array.from(wsRecentsRead(raw, "/z")), ["/a", "/b/", "/c", "/d", "/e"]);
+  assert.deepStrictEqual(Array.from(wsRecentsRead(null, "/z")), ["/z"]);
+  assert.deepStrictEqual(Array.from(wsRecentsRead("{oops", "/z")), ["/z"]);
+  assert.deepStrictEqual(Array.from(wsRecentsRead(JSON.stringify({ v: 1, paths: [] }), "/z")), ["/z"]);
+  assert.deepStrictEqual(Array.from(wsRecentsRead(JSON.stringify({ v: 2, paths: ["/a"] }), "")), [], "an unknown version is not read");
+  assert.deepStrictEqual(Array.from(wsRecentsRead(null, "relative")), []);
+  assert.deepStrictEqual(Array.from(wsRecentsRead(null, undefined)), []);
+});
+
+test("wsRecentsPush: the folder goes first, once, and the list keeps 5", () => {
+  const { wsRecentsPush } = wsp();
+  assert.deepStrictEqual(Array.from(wsRecentsPush(["/a", "/b", "/c"], "/b/")), ["/b/", "/a", "/c"]);
+  assert.deepStrictEqual(Array.from(wsRecentsPush(["/a", "/b", "/c", "/d", "/e"], "/f")), ["/f", "/a", "/b", "/c", "/d"]);
+  assert.deepStrictEqual(Array.from(wsRecentsPush(["/a"], "")), ["/a"]);
+  assert.deepStrictEqual(Array.from(wsRecentsPush(["/a"], "rel")), ["/a"]);
+  assert.deepStrictEqual(Array.from(wsRecentsPush(null, "/a")), ["/a"]);
+});
+
+test("wsNameMatches: names that contain the query, case-insensitive, the ones that start with it first", () => {
+  const { wsNameMatches } = wsp();
+  const rows = [{ label: "billing-api" }, { label: "notes" }, { label: "API-server" }, { label: "rapid" }];
+  assert.deepStrictEqual(Array.from(wsNameMatches(rows, "api"), (r) => r.label), ["API-server", "billing-api", "rapid"]);
+  assert.deepStrictEqual(Array.from(wsNameMatches(rows, "  "), (r) => r.label), []);
+  assert.deepStrictEqual(Array.from(wsNameMatches(rows, "zzz"), (r) => r.label), []);
+});
+
+test("paths: idle rows are two lines, the name and its path, and the added roots follow the folders, tagged", () => {
+  const t = flat();
+  const p = t.make({ paths: () => true, inline: () => true });
+  fire(p.input, "focus");
+  assert.deepStrictEqual(names(p), ["~ (home)", "culishop", "notes", "proj"]);
+  assert.deepStrictEqual(optionRows(p).map(pathOf), ["/home/me", "~/culishop", "~/notes", "/srv/code/proj"]);
+  assert.deepStrictEqual(optionRows(p).map(tagOf), ["", "", "", "Workspace root"]);
+  const two = twoOf(optionRows(p)[1]);
+  assert.ok(cls(two.children[1]).includes("muted"), "the path is dimmed");
+  assert.strictEqual(optionRows(p)[3].title, "/srv/code/proj");
+  fire(optionRows(p)[3], "click");
+  assert.strictEqual(p.picker.value(), "/srv/code/proj", "an added root is picked like any row");
+});
+
+test("paths: a root that is home, already a row, or filtered out adds no row; without paths there is no root row (the phone)", () => {
+  const t = flat();
+  t.win.WORKSPACE_ROOTS = ["/home/me", "/home/me/notes", "/srv/a", "/mnt/b", "/srv/a"];
+  const p = t.make({ paths: () => true, inline: () => true, filter: (x) => x !== "/mnt/b" });
+  fire(p.input, "focus");
+  assert.deepStrictEqual(names(p), ["~ (home)", "culishop", "notes", "a"]);
+  const phone = t.make({ inline: () => false });
+  fire(phone.input, "focus");
+  assert.deepStrictEqual(rowsOf(phone), ["~ (home)", "culishop", "notes"]);
+  assert.strictEqual(twoOf(phone.list.children[0]), undefined, "the phone keeps its one-line rows");
+});
+
+test("paths, not inline (the profile page): legacy rows get the two lines too, and no footer", () => {
+  const t = flat();
+  const p = t.make({ paths: () => true });
+  fire(p.input, "focus");
+  const r = optionRows(p);
+  assert.ok(cls(r[0]).includes("ft-opt"));
+  assert.deepStrictEqual(r.map(pathOf), ["/home/me", "~/culishop", "~/notes", "/srv/code/proj"]);
+  assert.strictEqual(footOf(p), "");
+});
+
+test("paths + inline: the idle list ends with the footer, which the arrows skip and Enter cannot take", () => {
+  const t = flat();
+  const p = t.make({ paths: () => true, inline: () => true });
+  fire(p.input, "focus");
+  assert.strictEqual(footOf(p), "Type to search · or a full path (/…)");
+  const foot = p.list.children[p.list.children.length - 1];
+  assert.ok(cls(foot).includes("wsp-foot"));
+  for (let i = 0; i < 5; i++) fire(p.input, "keydown", { key: "ArrowDown" });
+  assert.strictEqual(p.input.attrs["aria-activedescendant"], optionRows(p)[0].id, "five downs wrap over the four rows, never the footer");
+});
+
+test("recents: a Recent group comes first, Last used on the last spawn's folder, then a Folders heading", () => {
+  const t = flat();
+  const p = t.make({
+    paths: () => true, inline: () => true, lastUsed: () => "/home/me/culishop/api",
+    recents: () => ["/home/me/culishop/api", "/srv/code/proj", "/home/me/notes"],
+  });
+  fire(p.input, "focus");
+  assert.deepStrictEqual(headings(p), ["Recent", "Folders"]);
+  assert.deepStrictEqual(names(p), ["api", "proj", "notes", "~ (home)", "culishop", "notes", "proj"]);
+  assert.deepStrictEqual(optionRows(p).slice(0, 3).map(pathOf), ["~/culishop/api", "/srv/code/proj", "~/notes"]);
+  assert.deepStrictEqual(optionRows(p).map(tagOf), ["Last used", "", "", "", "", "", "Workspace root"]);
+  assert.strictEqual(p.list.children[0].textContent, "Recent", "the heading is the first thing in the list");
+  fire(p.input, "keydown", { key: "ArrowDown" });
+  fire(p.input, "keydown", { key: "Enter" });
+  assert.strictEqual(p.picker.value(), "/home/me/culishop/api");
+});
+
+test("recents: Last used only when the first recent is the last spawn's; the filter applies; none means no headings", () => {
+  const t = flat();
+  const p = t.make({ paths: () => true, inline: () => true, lastUsed: () => "/elsewhere", recents: () => ["/home/me/notes", "/mnt/hidden"], filter: (x) => x !== "/mnt/hidden" });
+  fire(p.input, "focus");
+  assert.deepStrictEqual(names(p).slice(0, 2), ["notes", "~ (home)"]);
+  assert.strictEqual(tagOf(optionRows(p)[0]), "");
+  const q = t.make({ paths: () => true, inline: () => true, recents: () => [] });
+  fire(q.input, "focus");
+  assert.deepStrictEqual(headings(q), []);
+  assert.deepStrictEqual(names(q), ["~ (home)", "culishop", "notes", "proj"]);
+});
+
+test("recents: the root heading and Other places still follow; the folders are not reordered by Last used", async () => {
+  const t = flat();
+  t.server.roots = others("/opt/web");
+  const p = t.make({ paths: () => true, inline: () => true, otherPlaces: () => true, lastUsed: () => "/home/me/notes", recents: () => ["/home/me/notes"] });
+  fire(p.input, "focus");
+  await flush();
+  assert.deepStrictEqual(headings(p), ["Recent", "Folders", "Other places"]);
+  assert.deepStrictEqual(names(p), ["notes", "~ (home)", "culishop", "notes", "proj", "web"]);
+  assert.strictEqual(pathOf(optionRows(p)[5]), "/opt/web", "an other place shows its full path");
+  assert.strictEqual(p.calls.note[p.calls.note.length - 1][0], "4 project roots · type to filter · ↵ to pick", "the caption still counts the folders only");
+});
+
+test("search with paths: roots and other places whose name matches come first, tagged; hits show full paths; one row per path", async () => {
+  const t = flat();
+  t.win.WORKSPACE_ROOTS = ["/home/me", "/srv/code/proj", "/srv/api-gw"];
+  t.server.roots = others("/opt/api-server", "/opt/web");
+  const p = t.make({ paths: () => true, inline: () => true, otherPlaces: () => true });
+  fire(p.input, "focus");
+  await flush();
+  t.server.search = [
+    { rel: "billing-api", path: "/home/me/billing-api" },
+    { rel: "svc-api", path: "/srv/code/proj/svc-api", root: "/srv/code/proj" },
+    { rel: "api-gw", path: "/srv/api-gw", root: "/srv/api-gw" },
+  ];
+  type(p, "api");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(names(p), ["api-gw", "api-server", "billing-api", "svc-api"]);
+  assert.deepStrictEqual(optionRows(p).map(pathOf), ["/srv/api-gw", "/opt/api-server", "~/billing-api", "/srv/code/proj/svc-api"]);
+  assert.deepStrictEqual(optionRows(p).map(tagOf), ["Workspace root", "Other place", "", ""]);
+  assert.strictEqual(footOf(p), "4 matches · ↵ to pick");
+  assert.strictEqual(p.input.attrs["aria-activedescendant"], optionRows(p)[0].id, "the first row is the one Enter takes");
+});
+
+test("search with paths: one match says so; nothing found, a truncated index and a failure keep today's notes", async () => {
+  const t = flat();
+  const p = t.make({ paths: () => true, inline: () => true });
+  t.server.search = [{ rel: "notes", path: "/home/me/notes" }];
+  type(p, "note");
+  t.runDebounce();
+  await flush();
+  assert.strictEqual(footOf(p), "1 match · ↵ to pick");
+  t.server.search = [];
+  type(p, "zzz");
+  t.runDebounce();
+  await flush();
+  assert.strictEqual(footOf(p), "projects and top-level folders — type a full path");
+  type(p, "proj");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(names(p), ["proj"], "the added root is found by its own name although the server has no hit for it");
+});
+
+test("search without paths: no root or other-place rows join, and the note is today's", async () => {
+  const t = flat();
+  const p = t.make({ inline: () => true });
+  t.server.search = [{ rel: "work/notes", path: "/home/me/work/notes" }];
+  type(p, "proj");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(rowsOf(p), ["notes"]);
+  assert.strictEqual(p.list.children.filter((c) => c.attrs["aria-disabled"] === "true").length, 0);
+});
