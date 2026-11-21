@@ -19,7 +19,7 @@ function fake(o) {
   const opt = Object.assign({ script: "load", module: "load", css: "late-load" }, o);
   const head = { children: [], append(el) { this.children.push(el); el.parent = this; if (el.tag === "script") setImmediate(() => el.onload && opt.script === "load" && el.onload()); if (el.tag === "script" && opt.script === "error") setImmediate(() => el.onerror && el.onerror()); }, querySelector(sel) { return this.children.find((c) => c.tag === "link" && sel.includes("editor.main.css") && c.href.endsWith("/vs/editor/editor.main.css")) || null; } };
   const timers = [];
-  const log = { required: [], removed: [], themes: 0 };
+  const log = { required: [], removed: [], themes: 0, openers: [], gate: [] };
   let moduleRan = false; // an AMD module is evaluated once: only the first require() appends the stylesheet link
   const link = () => {
     const el = { tag: "link", rel: "", href: "", sheet: null, listeners: {}, addEventListener(t, fn) { this.listeners[t] = fn; if ((opt.css === "late-load" && t === "load") || (opt.css === "late-error" && t === "error")) setImmediate(fn); }, remove() { log.removed.push(this); head.children = head.children.filter((c) => c !== this); } };
@@ -27,16 +27,18 @@ function fake(o) {
   };
   const doc = { head, createElement: (tag) => (tag === "link" ? link() : { tag, src: "" }) };
   const monaco = {
-    editor: { defineTheme() { log.themes++; }, addKeybindingRule() {} },
+    editor: { defineTheme() { log.themes++; }, addKeybindingRule() {}, registerLinkOpener(o) { log.openers.push(o); return { dispose() {} }; } },
     KeyCode: { F1: 59 },
     languages: {},
   };
+  if (opt.noOpenerApi) delete monaco.editor.registerLinkOpener;
   const win = { monaco };
   const ctx = vm.createContext({
     document: doc, window: win, console, Promise, Error,
     setTimeout: (fn, ms) => { const t = { fn, ms, dead: false }; timers.push(t); return timers.length; },
     clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].dead = true; },
     culiboxTheme: () => ({}),
+    openAgentLink: opt.noGate ? undefined : (raw, c) => { log.gate.push([raw, c]); return Promise.resolve(true); },
     require: Object.assign((deps, ok, bad) => {
       log.required.push(deps[0]);
       if (opt.module === "error") { setImmediate(() => bad(new Error("module failed"))); return; }
@@ -169,4 +171,47 @@ test("the editor tab says why when the editor cannot be loaded: a toast with the
   assert.match(msg.textContent, /could not be loaded/, "the body says so too, not 'loading…'");
   assert.notEqual(msg.textContent, "loading…");
   assert.equal(tab.model, null);
+});
+
+// --- links (#348) ------------------------------------------------------------
+// Ctrl/Cmd+click on a link in the editor (the dock editor and every diff editor) would open it in Monaco's own opener. The boot
+// puts the link gate in front of that: the opener takes every link, so Monaco's never runs.
+// Monaco hands open() a URI (or a string, which its opener service parses first); both read the same through String().
+const uriOf = (s) => ({ toString: () => s });
+
+test("boot registers a link opener that hands the link to the gate as an editor link and takes it", { timeout: 4000 }, async () => {
+  const f = fake();
+  await f.loadMonaco();
+  assert.equal(f.log.openers.length, 1);
+  assert.strictEqual(f.log.openers[0].open(uriOf("https://example.com/a?b=1")), true);
+  assert.deepEqual(f.log.gate, [["https://example.com/a?b=1", { source: "editor" }]]);
+});
+
+test("the opener takes every scheme, so Monaco's own never opens one: the gate says no to the ones it will not open", { timeout: 4000 }, async () => {
+  const f = fake();
+  await f.loadMonaco();
+  for (const u of ["file:///etc/passwd", "command:workbench.action.x", "javascript:alert(1)", "mailto:a@b.c"]) {
+    assert.strictEqual(f.log.openers[0].open(uriOf(u)), true, u);
+  }
+  assert.equal(f.log.gate.length, 4);
+});
+
+test("the opener is registered once, however many opens share the load", { timeout: 4000 }, async () => {
+  const f = fake();
+  await f.loadMonaco();
+  await f.loadMonaco();
+  assert.equal(f.log.openers.length, 1);
+});
+
+test("without the gate loaded the opener still takes the link and opens nothing", { timeout: 4000 }, async () => {
+  const f = fake({ noGate: true });
+  await f.loadMonaco();
+  assert.strictEqual(f.log.openers[0].open(uriOf("https://example.com/")), true);
+  assert.deepEqual(f.log.gate, []);
+});
+
+test("a Monaco without registerLinkOpener still boots", { timeout: 4000 }, async () => {
+  const f = fake({ noOpenerApi: true });
+  assert.equal(await f.loadMonaco(), f.win.monaco);
+  assert.deepEqual(f.log.openers, []);
 });

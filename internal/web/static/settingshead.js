@@ -50,6 +50,11 @@ function settingsHeadSpec(tab, info) {
         desc: "Workspace roots are the folders CuliBox's Files, git and search can open. Home is always one. Starting a session in a folder outside them adds that folder here. Removing one does not stop sessions running in it.",
         action: { id: "set-act-wsroots", label: "Add folder" },
       };
+    case "linktrust":
+      return {
+        title: "Trusted hosts",
+        desc: "Links an agent shows open without the confirm dialog when they go to one of these hosts.",
+      };
     case "settings":
       return {
         title: "Appearance",

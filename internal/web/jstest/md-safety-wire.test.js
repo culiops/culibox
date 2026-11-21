@@ -37,19 +37,29 @@ test("both previews render through mdRenderFragment, with DOMPurify, and neither
   }
 });
 
+test("every <a> goes through the link gate: the walk gates it, the notice's link is made by the same function, and the dock names the file", () => {
+  const b = body("mdsafe.js", "function mdWalkFragment(root, rewrite, where) {");
+  assert.match(b, /if \(tag === "a"\) mdWalkLink\(el, where\);/);
+  const text = stripComments(read("mdsafe.js"));
+  const link = text.slice(text.indexOf("function mdLink("), text.indexOf("\n}\n", text.indexOf("function mdLink(")));
+  assert.match(link, /mdGate\(a, url, where\)/, "the blocked-image notice's link is gated too");
+  assert.ok(!/setAttribute\("href"/.test(text), "mdsafe.js sets no href on any link: an address is only ever kept in data-href");
+  assert.match(body("editormd.js", "function editorMdBody(tab, text) {"), /where: tab\.path\.slice\(tab\.path\.lastIndexOf\("\/"\) \+ 1\),/, "the dock says which file the link is in");
+});
+
 test("mdRenderFragment passes MD_PURIFY, merged with RETURN_DOM_FRAGMENT, to DOMPurify, and walks the fragment before it returns it", () => {
   const b = body("mdsafe.js", "function mdRenderFragment(text, deps) {");
   assert.match(b, /deps\.purify\.sanitize\(html, Object\.assign\(\{\}, MD_PURIFY, \{ RETURN_DOM_FRAGMENT: true \}\)\)/);
-  assert.ok(b.indexOf("mdWalkFragment(frag, deps.rewrite)") > b.indexOf("deps.purify.sanitize("), "the walk runs on what DOMPurify returned");
+  assert.ok(b.indexOf("mdWalkFragment(frag, deps.rewrite, deps.where)") > b.indexOf("deps.purify.sanitize("), "the walk runs on what DOMPurify returned");
   assert.ok(b.indexOf("return frag;") > b.indexOf("mdWalkFragment("), "and nothing is returned before it");
 });
 
 test("the walk checks every element's src, href and xlink:href with mdUnsafeAttr and every attribute for a CSS fetch, and mdIsRelative decides what is rewritten", () => {
-  const b = body("mdsafe.js", "function mdWalkFragment(root, rewrite) {");
+  const b = body("mdsafe.js", "function mdWalkFragment(root, rewrite, where) {");
   assert.match(b, /root\.querySelectorAll\("\*"\)/, "every element, not a list of them");
   assert.match(b, /for \(const attr of Array\.from\(el\.attributes\)\) \{\s*if \(mdUnsafeAttr\(tag, attr\.name, attr\.value\) \|\| mdUnsafeCss\(attr\.name, attr\.value\)\) el\.removeAttribute\(attr\.name\);/, "every attribute of every element, by name, not a list of three");
   assert.match(b, /if \(tag === "template"\) \{ el\.remove\(\); continue; \}/);
-  const m = body("mdsafe.js", "function mdWalkMedia(doc, el, tag, rewrite) {");
+  const m = body("mdsafe.js", "function mdWalkMedia(doc, el, tag, rewrite, where) {");
   assert.match(m, /if \(mdIsRelative\(src\)\) \{ src = rewrite\(src\); el\.setAttribute\("src", src\); \}\s*if \(!mdUnsafeAttr\(tag, "src", src\)\) return false;/, "rewritten first, then checked");
   // the policy functions answer through isLocalSrc, so one definition of "local" decides every one of them
   const text = stripComments(read("mdsafe.js"));

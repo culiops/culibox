@@ -208,6 +208,18 @@ test('"+ New profile" is the kit .link-add: accent, 12/18, padding 6px 10px, no 
   assert.strictEqual(hover.get("text-underline-offset"), "2px", "§C2 `.link:hover`");
 });
 
+test("the nav order: Trusted hosts (#348) sits after Appearance and before About, and Sign out… is last", () => {
+  const o = (tab) => Number(decls(NAV + ' .t[data-tab="' + tab + '"]').get("order"));
+  assert.strictEqual(o("settings"), 10);
+  assert.strictEqual(o("linktrust"), 11);
+  assert.strictEqual(o("about"), 12);
+  assert.strictEqual(Number(decls(NAV + " > #set-signout").get("order")), 13);
+  // The App group's label comes before its first row, and every tab has its own slot.
+  const orders = ["manage", "accounts", "creds", "vmfolders", "wsroots", "tokens", "settings", "linktrust", "about"].map(o);
+  assert.strictEqual(new Set(orders).size, orders.length, "no two tabs share an order");
+  assert.ok(orders.every((n) => n >= 2 && n <= 12));
+});
+
 test("Sign out… is a neutral nav item at the nav foot, desktop only", () => {
   const tabs = HTML.slice(HTML.indexOf('id="settings-tabs"'), HTML.indexOf('<div class="dbd split" id="manage"'));
   const m = /<button\b([^>]*)\bid="set-signout"([^>]*)>([^<]*)<\/button>/.exec(tabs);
@@ -223,7 +235,7 @@ test("Sign out… is a neutral nav item at the nav foot, desktop only", () => {
   const so = decls(NAV + " > #set-signout");
   assert.strictEqual(so.get("display"), "flex");
   assert.strictEqual(so.get("margin-top"), "auto", "the foot: the nav is a flex column, the spacer is the free space");
-  assert.ok(Number(so.get("order")) > 10, "after About, the last of the ten ordered rows");
+  assert.ok(Number(so.get("order")) > 12, "after About, the last of the ordered rows");
   // Neutral: the row's own colour (--fg), not red; Sign out… only ends a login, it deletes nothing.
   const all = [...decls(NAV + " > #set-signout"), ...decls(NAV + " > #set-signout:hover"), ...decls(ROW)].map(([, v]) => v).join(" ");
   assert.doesNotMatch(all, /--red|--danger|#f06a6a/);
@@ -411,7 +423,7 @@ function makeDom({ page = true, version = "CuliBox v0.24.2 · commit abc1234", a
   const root = el("body");
   const dlg = root.appendChild(el("dialog", "settings-modal", page ? "as-page" : ""));
   const panels = {};
-  for (const id of ["manage", "creds", "settings", "tokens", "accounts", "about", "vmfolders", "wsroots"]) {
+  for (const id of ["manage", "creds", "settings", "tokens", "accounts", "about", "vmfolders", "wsroots", "linktrust"]) {
     panels[id] = dlg.appendChild(el("div", id, "dbd"));
     if (id !== "manage") panels[id].appendChild(el("div", null, "set-head"));
   }
@@ -445,6 +457,8 @@ function makeDom({ page = true, version = "CuliBox v0.24.2 · commit abc1234", a
 }
 
 const HEAD_TABS = ["creds", "tokens", "settings", "accounts", "about", "vmfolders", "wsroots"];
+// Every page that has a head: the seven above (each with its one action) and Trusted hosts (#348), which has none.
+const HEAD_PAGES = [...HEAD_TABS, "linktrust"];
 const INFO = { version: "CuliBox v0.24.2 · commit abc1234", accountsLead: ACCOUNTS_LEAD };
 
 test("Settings -> Access names its tokens Device tokens: the old words are gone from its head, nav tab and phone footer", () => {
@@ -493,6 +507,15 @@ test("settingsHeadSpec carries the approved copy", () => {
   assert.strictEqual(settingsHeadSpec("about", { version: "CuliBox (build unknown)" }).desc, "CuliBox (build unknown)");
 });
 
+test("Trusted hosts (#348) has a head with a title and a line, and no action: just Esc ✕ in its actions block", () => {
+  const { ctx, slot } = makeDom();
+  ctx.paintSettingsHead("linktrust");
+  const [text, actions] = kids(slot("linktrust"));
+  assert.deepStrictEqual(kids(text).map((n) => n.textContent), ["Trusted hosts", "Links an agent shows open without the confirm dialog when they go to one of these hosts."]);
+  assert.strictEqual(kids(actions).length, 1, "no action and so no divider");
+  assert.ok(classesOf(kids(actions)[0]).includes("set-esc"));
+});
+
 test("settingsHeadSpec is null for Profiles (its head is the profile page's) and for any unknown tab", () => {
   const { settingsHeadSpec } = require("../static/settingshead.js");
   assert.strictEqual(settingsHeadSpec("manage", INFO), null);
@@ -518,11 +541,11 @@ test("the first sentence of the accounts hint is the lead", () => {
   assert.deepStrictEqual(accountsLead(undefined), { lead: "", rest: "" });
 });
 
-test("each of the seven pages starts with one empty .set-head slot", () => {
-  for (const id of HEAD_TABS) {
+test("each of the eight pages starts with one empty .set-head slot", () => {
+  for (const id of HEAD_PAGES) {
     const m = new RegExp('<div class="dbd pad" id="' + id + '"[^>]*>\\s*<div class="set-head"></div>').exec(HTML);
     assert.ok(m, "#" + id + " has the slot as its first child, empty (the phone's DOM carries nothing the head would draw)");
-    assert.strictEqual((HTML.match(/class="set-head"/g) || []).length, 7, "seven slots, none on Profiles");
+    assert.strictEqual((HTML.match(/class="set-head"/g) || []).length, 8, "eight slots, none on Profiles");
   }
   assert.doesNotMatch(HTML.slice(HTML.indexOf('id="manage"'), HTML.indexOf('id="pfv"')), /set-head/);
 });
@@ -572,7 +595,7 @@ test("paintSettingsHead draws title, description, the one action, a divider and 
 
 test("every page head's H1 carries its full text as a title: it ellipsizes when the window is narrow (final review M6)", () => {
   const { ctx, slot } = makeDom();
-  for (const tab of HEAD_TABS) {
+  for (const tab of HEAD_PAGES) {
     ctx.paintSettingsHead(tab);
     const h1 = withCls(slot(tab), "page-title")[0];
     assert.strictEqual(h1.getAttribute("title"), require("../static/settingshead.js").settingsHeadSpec(tab, INFO).title, tab);
@@ -622,7 +645,7 @@ test("a repaint of the head puts focus back on the equivalent control, when focu
 
 test("paintSettingsHead is a no-op unless the dialog is the page (a phone's modal draws nothing new)", () => {
   const { ctx, slot, panels } = makeDom({ page: false });
-  for (const tab of HEAD_TABS) { ctx.paintSettingsHead(tab); assert.strictEqual(slot(tab).children.length, 0, tab + " untouched"); }
+  for (const tab of HEAD_PAGES) { ctx.paintSettingsHead(tab); assert.strictEqual(slot(tab).children.length, 0, tab + " untouched"); }
   assert.strictEqual(ctx.document.getElementById("acct-desk-note"), null, "no desktop note either");
   // Profiles has no slot and no spec: nothing to paint, nothing to throw.
   const on = makeDom();

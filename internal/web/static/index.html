@@ -349,6 +349,7 @@
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
       <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Device tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
+      <button type="button" class="t" data-tab="linktrust" role="tab" aria-selected="false" aria-controls="linktrust">Trusted hosts</button>
       <button type="button" class="t" data-tab="about" role="tab" aria-selected="false" aria-controls="about">About</button>
       <button type="button" id="set-signout">Sign out…</button>
     </div>
@@ -639,6 +640,11 @@
     <div class="dbd pad" id="wsroots" role="tabpanel" hidden>
       <div class="set-head"></div>
       <div id="wsr-body"></div>
+    </div>
+
+    <div class="dbd pad" id="linktrust" role="tabpanel" hidden>
+      <div class="set-head"></div>
+      <div id="lt-body"></div>
     </div>
 
     <div class="dft" id="foot-manage">
@@ -933,6 +939,7 @@
   <script src="/vmapply.js"></script>
   <script src="/vmfolders.js"></script>
   <script src="/wsroots.js"></script>
+  <script src="/linktrust.js"></script>
   <script src="/store.js"></script>
   <script src="/credentials.js"></script>
   <script src="/sessionrow.js"></script>

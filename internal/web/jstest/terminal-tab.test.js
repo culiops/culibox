@@ -994,3 +994,73 @@ test("desktop.css frames the terminal edge to edge: graphite cell, kit padding, 
   assert.match(app, /\.cell \{[^}]*background: #000;/);
   assert.match(app, /\.pane-term \{ flex: 1; min-height: 0; padding: 4px; \}/);
 });
+
+// --- links (#348) ------------------------------------------------------------
+// Every URL a terminal can open goes to openAgentLink (linkgate.js), the regex provider and the OSC 8 handler alike. Built through
+// the real constructor with xterm stubbed, so the two call sites are the ones the browser runs.
+const { TerminalTab } = require("../static/terminal-tab.js");
+function linkTab(name) {
+  const element = () => ({
+    className: "", clientWidth: 0, clientHeight: 0, firstChild: null,
+    append() {}, insertBefore() {}, remove() {}, closest: () => null, querySelector: () => null,
+    addEventListener() {}, removeEventListener() {},
+  });
+  const seen = { opts: null, provider: null, gate: [], opened: [] };
+  const textarea = {};
+  global.IS_MAC = false;
+  global.window = { innerWidth: 1200, open: (...a) => seen.opened.push(a) };
+  global.location = { protocol: "http:", host: "h", hostname: "h" };
+  global.WebSocket = class { constructor(url) { this.url = url; } close() {} };
+  global.api = () => Promise.resolve([]);
+  global.document = { createElement: element, hasFocus: () => true, activeElement: textarea, visibilityState: "visible", addEventListener() {}, removeEventListener() {} };
+  global.Terminal = class {
+    constructor(opts) { seen.opts = opts; this.modes = { mouseTrackingMode: "any" }; this.parser = { registerOscHandler() {} }; this.textarea = textarea; this.rows = 24; this.cols = 80; }
+    loadAddon() {} open() {} onData() {} attachCustomKeyEventHandler() {}
+    registerLinkProvider(p) { seen.provider = p; }
+    reset() {} dispose() {} focus() {} write() {}
+  };
+  global.FitAddon = { FitAddon: class { fit() {} } };
+  global.WebglAddon = { WebglAddon: class {} };
+  global.linksForRow = () => [{ range: { start: { x: 1, y: 1 }, end: { x: 9, y: 1 } }, text: "https://example.com/a", kind: "url" }];
+  global.openAgentLink = (raw, ctx) => { seen.gate.push([raw, ctx]); return Promise.resolve(true); };
+  const tab = new TerminalTab("s1", name);
+  return { tab, seen, cleanup: () => { for (const k of ["IS_MAC", "window", "location", "WebSocket", "api", "document", "Terminal", "FitAddon", "WebglAddon", "linksForRow", "openAgentLink"]) delete global[k]; } };
+}
+
+test("a plain-text URL click goes to the link gate as a terminal link, named after the session", () => {
+  const r = linkTab("my session");
+  try {
+    let links;
+    r.seen.provider.provideLinks(1, (l) => { links = l; });
+    assert.strictEqual(links.length, 1);
+    links[0].activate();
+    assert.deepStrictEqual(r.seen.gate, [["https://example.com/a", { source: "terminal", where: "my session" }]]);
+    assert.deepStrictEqual(r.seen.opened, [], "the terminal opens nothing itself");
+  } finally { r.cleanup(); }
+});
+
+test("an OSC 8 link goes to the same gate, and a rename shows in where", () => {
+  const r = linkTab("");
+  try {
+    r.seen.opts.linkHandler.activate({}, "https://example.com/b");
+    r.tab.setTitle("renamed");
+    r.seen.opts.linkHandler.activate({}, "https://example.com/c");
+    assert.deepStrictEqual(r.seen.gate, [
+      ["https://example.com/b", { source: "terminal", where: "s1" }], // no name: the id
+      ["https://example.com/c", { source: "terminal", where: "renamed" }],
+    ]);
+    assert.deepStrictEqual(r.seen.opened, []);
+  } finally { r.cleanup(); }
+});
+
+test("a path click in the terminal never reaches the link gate", () => {
+  const r = linkTab("x");
+  try {
+    global.linksForRow = () => [{ range: { start: { x: 1, y: 1 }, end: { x: 9, y: 1 } }, text: "src/a.go", kind: "path", line: 1, col: 1 }];
+    r.tab.openClickedPath = () => {};
+    let links;
+    r.seen.provider.provideLinks(1, (l) => { links = l; });
+    links[0].activate();
+    assert.deepStrictEqual(r.seen.gate, []);
+  } finally { r.cleanup(); }
+});

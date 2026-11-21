@@ -438,10 +438,12 @@ class TerminalTab {
       // Cost: Option+drag no longer does a column selection on macOS.
       macOptionClickForcesSelection: true,
       // OSC 8 hyperlinks already work in xterm; installing a linkHandler REPLACES
-      // its default, which confirms before opening. Keep that confirmation (an OSC
-      // 8 link's visible text is arbitrary and can point anywhere) and add what
-      // the default lacks: localhost rewriting and noreferrer.
-      linkHandler: { activate: (_e, text) => openTerminalUrl(text, { confirm: true }) },
+      // its default confirm. Ours goes through the same link gate as a plain-text
+      // URL (an OSC 8 link's visible text is arbitrary and can point anywhere, and a
+      // plain one can be made to look like one you know), which asks before opening.
+      // this.name, read at the click: it is the display name, or the id when there
+      // is none, and a rename shows.
+      linkHandler: { activate: (_e, text) => openTerminalUrl(text, this.name) },
     });
     this.fitAddon = new FitAddon.FitAddon();
     this.term.loadAddon(this.fitAddon);
@@ -556,7 +558,7 @@ class TerminalTab {
             range: l.range,
             text: l.text,
             activate: () => {
-              if (l.kind === "url") openTerminalUrl(l.text);
+              if (l.kind === "url") openTerminalUrl(l.text, this.name);
               else this.openClickedPath(l.text, { line: l.line, col: l.col });
             },
           }));
@@ -1148,33 +1150,15 @@ class TerminalTab {
   }
 }
 
-// openTerminalUrl is the single gate for every URL a terminal can open: the regex
-// provider and the OSC 8 linkHandler both funnel through it. Terminal output is
-// semi-trusted (agent output, cloned repos), so the scheme check is here rather
-// than in the regex: OSC 8 text never passes through the regex. noopener denies
-// the opened page a handle back into the console; noreferrer keeps the console's
-// host out of a third party's logs.
-async function openTerminalUrl(raw, opts) {
-  if (!/^https?:\/\//i.test(raw)) return;
-  const url = rewriteLocalhost(raw, location.hostname);
-  // Only OSC 8 confirms. A plain-text URL is its own label: you read the target
-  // and then clicked it, but an OSC 8 link's visible text can say anything.
-  //
-  // The await moves window.open out of the click's own task. It stays inside the
-  // transient activation the confirm button's click grants, so the popup blocker
-  // does not fire; the visual gate exercises this path to keep it honest.
-  if (opts && opts.confirm) {
-    const ok = await askConfirm({ title: "Open this link?", body: url, confirmLabel: "Open" });
-    if (!ok) return;
-  }
-  window.open(url, "_blank", "noopener,noreferrer");
-  // The toast is the ONLY signal that the URL opened differs from the one on
-  // screen, so it is guarded by existence rather than wrapped in a catch that would
-  // swallow the failure silently. new URL() cannot throw here: url !== raw only
-  // when rewriteLocalhost already parsed it.
-  if (url !== raw && typeof showToast === "function") {
-    showToast("opened " + new URL(url).host + " instead of localhost");
-  }
+// openTerminalUrl is where every URL a terminal can open goes: the regex provider
+// and the OSC 8 linkHandler both call it, and it hands the link to the one gate
+// (openAgentLink, linkgate.js), which checks the scheme, rewrites localhost, asks,
+// and opens it. Terminal output is semi-trusted (agent output, cloned repos), so no
+// terminal link opens without that gate. where is the session's name, for the
+// dialog's "From the terminal of ..." line.
+function openTerminalUrl(raw, where) {
+  if (typeof openAgentLink !== "function") return Promise.resolve(false); // no gate loaded: nothing opens
+  return openAgentLink(raw, { source: "terminal", where });
 }
 
 // resolveTermPath turns a path token clicked in terminal output into an absolute
@@ -1376,5 +1360,5 @@ function termKeyAction(e, mac, hasSelection) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { TerminalTab, termTheme, currentTermTheme, applyTermThemeAll, resizeToSend, makeWebglPool, webglCapFor, webglPool, loadWebgl, dropWebgl, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, openTerminalUrl, termTheme, currentTermTheme, applyTermThemeAll, resizeToSend, makeWebglPool, webglCapFor, webglPool, loadWebgl, dropWebgl, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }

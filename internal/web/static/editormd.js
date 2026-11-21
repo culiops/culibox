@@ -70,6 +70,7 @@ function editorMdBody(tab, text) {
       marked,
       purify: DOMPurify,
       hljs: typeof hljs === "undefined" ? null : hljs,
+      where: tab.path.slice(tab.path.lastIndexOf("/") + 1), // the link gate's dialog says which file the link is in
       rewrite: (rel) => (tab.box ? boxFileURL(tab.box, dir + rel) : "/api/fs/read?path=" + encodeURIComponent(dir + rel)),
     }));
   } catch (_) {

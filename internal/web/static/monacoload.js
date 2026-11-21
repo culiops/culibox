@@ -72,7 +72,7 @@ async function monacoStyled() {
   }
 }
 
-// monacoBoot: loader.js, then require() of the editor, its stylesheet, then the theme and the unbound keys.
+// monacoBoot: loader.js, then require() of the editor, its stylesheet, then the theme, the unbound keys and the link opener.
 async function monacoBoot() {
   const loader = document.createElement("script");
   loader.src = MONACO_BASE + "/loader.js";
@@ -83,6 +83,19 @@ async function monacoBoot() {
   const monaco = window.monaco;
   monaco.editor.defineTheme(MONACO_THEME, culiboxTheme());
   for (const k of MONACO_UNBOUND_KEYS) monaco.editor.addKeybindingRule({ keybinding: monaco.KeyCode[k.code], command: "-" + k.command });
+  // Ctrl/Cmd+click on a link in the editor text (the dock editor and every diff editor) goes to the link gate (linkgate.js), like a
+  // link in the terminal or in a rendered markdown file: a file in the box can say anything, and its URLs are as much the agent's
+  // as its output. Monaco puts a registered opener ahead of its own, and true says "handled" for every scheme, so its opener never
+  // runs; the gate itself refuses what is not http or https. open() is handed a URI (a string is parsed first), and String() of
+  // one is the address.
+  if (typeof monaco.editor.registerLinkOpener === "function") {
+    monaco.editor.registerLinkOpener({
+      open(uri) {
+        if (typeof openAgentLink === "function") openAgentLink(String(uri), { source: "editor" });
+        return true;
+      },
+    });
+  }
   return monaco;
 }
 

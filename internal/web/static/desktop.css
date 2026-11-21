@@ -2582,7 +2582,7 @@
   #page-host > #settings-modal.as-page > .dhd { display: none; }
 
   /* The nav: Agents (Profiles, Agent accounts) · Access (Credentials, API
-     tokens) · App (Appearance, About), then Sign out… at the foot. The DOM
+     tokens) · App (Appearance, Trusted hosts, About), then Sign out… at the foot. The DOM
      keeps the mobile strip's order; `order` regroups it here. The look is the
      frame's `.m2-snav` (§B1.2): --panel, padding 16px 8px 12px, gap 1px. */
   #page-host > #settings-modal.as-page > #settings-tabs {
@@ -2604,7 +2604,8 @@
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="tokens"] { order: 8; }
   #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(3) { order: 9; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 10; }
-  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 11; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="linktrust"] { order: 11; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 12; }
   /* A row is the kit .nav-item (§C7): 30px, 0 10px, 4px radius, 13/20, hover --hover, selected --raise at 500
      (§B1.2: no accent bar). Sign out… is a row too, neutral, last: `margin-top: auto` takes the nav's free
      height, so it rests above the 12px foot padding (the frame's spacer). */
@@ -2613,7 +2614,7 @@
     display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
     background: transparent; font-family: var(--font-ui); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); cursor: pointer;
   }
-  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout { order: 12; margin-top: auto; }
+  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout { order: 13; margin-top: auto; }
   #page-host > #settings-modal.as-page > #settings-tabs .t:hover,
   #page-host > #settings-modal.as-page > #settings-tabs > #set-signout:hover { background: var(--hover); color: var(--fg); }
   #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); font-weight: 500; box-shadow: none; }
@@ -2902,6 +2903,61 @@
   /* At the 701px floor the card is 135px: beside Revoke… the name would have 20px, so Revoke… goes under the dates, at the left. */
   @container (max-width: 180px) {
     #page-host > #settings-modal.as-page #tok-list .tok-tbl td.num { grid-column: 1 / -1; grid-row: auto; justify-self: start; margin-top: 4px; }
+  }
+
+  /* Trusted hosts (#348; mockup 348-mock-4): linktrust.js draws the hint, one card holding the Device tokens look of table (fixed quarters: Host · Covers · Added ·
+     Remove…; the same 7px cells, 16px and 12px ends, 24px buttons, in-row red confirm), and the note under it. The tokens rules are pinned to #tok-list and #tokens by
+     their tests, so this block states the same values for its own ids rather than widening those selectors. The body's .btn rules (padding, border, radius, font,
+     secondary fill) also name the other panels, so they are restated here, one id deep and after them. */
+  #page-host > #settings-modal.as-page > #linktrust #lt-body { container-type: inline-size; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-hint { margin: 0 0 12px; font-size: var(--t-sm); line-height: 1.6; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-hint b { font-weight: 600; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-hint .mono { font-size: inherit; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-err { margin: 0 0 12px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--red); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-corrupt { margin: 0; padding: 12px 16px; background: var(--panel); border-radius: var(--r-card); box-shadow: inset 2px 0 0 var(--amber); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-card { overflow: hidden; position: relative; background: var(--panel); border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-empty { margin: 0; padding: 12px 16px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-under { margin: 8px 0 0; padding: 0 2px; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl { table-layout: fixed; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl col { width: 25%; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl td { height: auto; padding-top: 7px; padding-bottom: 7px; vertical-align: top; line-height: var(--lh-md); white-space: normal; overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl th:first-child, #page-host > #settings-modal.as-page > #linktrust .lt-tbl td:first-child { padding-left: 16px; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl th:last-child, #page-host > #settings-modal.as-page > #linktrust .lt-tbl td:last-child { padding-right: 12px; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl td.num { padding-top: 5px; padding-bottom: 5px; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl tr.arm { background: var(--red-tint); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl tr.arm > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl .lt-arm { padding-top: 5px; padding-bottom: 5px; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl .lt-confirm { display: flex; align-items: center; gap: 12px; }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl .lt-ask { flex: 1 1 auto; min-width: 0; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--red); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl .lt-acts { display: flex; flex: none; gap: 4px; }
+  #page-host > #settings-modal.as-page > #linktrust .btn { padding: 0 12px; border: 1px solid transparent; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page > #linktrust .btn:where(:not(.pri)) { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl .btn.btn-sm:where(:not(.pri)):where(:not(.btn-danger)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl .btn.btn-danger:where(:not(.pri)) { border-color: rgba(240,106,106,.45); background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-tbl .btn.btn-danger:where(:not(.pri)):hover { border-color: var(--red); background: var(--red-tint); }
+  /* A narrow card (the page's column less the sidebar and nav is 135px at the 701px floor): below 480px each row is a small grid, the host and Remove… on the first
+     line, what it covers and the day under it as muted lines, the head row clipped to a pixel so a screen reader keeps the column names. An armed row's question
+     takes the card's width and Cancel and Remove wrap under it. */
+  @container (max-width: 480px) {
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl, #page-host > #settings-modal.as-page > #linktrust .lt-tbl tbody { display: block; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl colgroup { display: none; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl thead { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 7px 12px 7px 16px; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl tr + tr { border-top: 1px solid var(--line); }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl td, #page-host > #settings-modal.as-page > #linktrust .lt-tbl td:first-child, #page-host > #settings-modal.as-page > #linktrust .lt-tbl td:last-child { padding: 0; border: 0; height: auto; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl .lt-host { grid-column: 1; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl td.num { grid-column: 2; grid-row: 1; margin-top: -2px; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl td.lt-cov, #page-host > #settings-modal.as-page > #linktrust .lt-tbl td.lt-add { grid-column: 1 / -1; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl .lt-arm { grid-column: 1 / -1; padding: 4px 0 0; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl .lt-confirm { flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl .lt-ask { flex: 1 1 100%; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl .lt-acts { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl tr.arm { box-shadow: inset 2px 0 0 var(--red); }
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl tr.arm > td:first-child { box-shadow: none; }
+  }
+  @container (max-width: 180px) {
+    #page-host > #settings-modal.as-page > #linktrust .lt-tbl td.num { grid-column: 1 / -1; grid-row: auto; justify-self: start; margin-top: 4px; }
   }
 
   /* Appearance (UI plan 4 Task 8; frame M2.5, digest-design §B6): one card of six rows on one grid. The card is §C7's `.card` (--panel, --r-card)
