@@ -300,3 +300,39 @@ func TestPolicyContainedAncestorOfExtraRootStaysStrict(t *testing.T) {
 		}
 	}
 }
+
+// A box can replace a folder inside its workspace with a link. An extra root
+// stored as W/api that now resolves elsewhere has been redirected and is
+// dropped, so the link's target is never served in host mode.
+func TestPolicyDropsRedirectedRoot(t *testing.T) {
+	home, base, victim := rootsFixture(t)
+	w := filepath.Join(base, "proj")
+	api := filepath.Join(w, "api")
+	mustMkdirAll(t, api)
+	mustWrite(t, filepath.Join(victim, "v.txt"), "secret")
+	if err := os.RemoveAll(api); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, api); err != nil {
+		t.Fatal(err)
+	}
+	p, err := newFsPolicy(home, []string{api}, BoxTrees{Contained: []string{w}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.roots) != 1 || p.roots[0] != home {
+		t.Fatalf("roots = %v, want only home (the redirected root dropped)", p.roots)
+	}
+	for _, req := range []string{filepath.Join(victim, "v.txt"), filepath.Join(api, "v.txt")} {
+		got, err := p.resolve(req)
+		if err == nil && (!got.Strict || got.Root != w) {
+			t.Fatalf("resolve(%s) = %+v, want errOutsideHome or Strict under %s", req, got, w)
+		}
+		if err != nil && !errors.Is(err, errOutsideHome) {
+			t.Fatalf("resolve(%s) err = %v", req, err)
+		}
+	}
+	if _, err := p.resolve(filepath.Join(victim, "v.txt")); !errors.Is(err, errOutsideHome) {
+		t.Fatalf("victim/v.txt err = %v, want errOutsideHome", err)
+	}
+}

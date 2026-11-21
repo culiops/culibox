@@ -86,9 +86,12 @@ type fsPolicy struct {
 }
 
 // newFsPolicy builds the policy for home, the extra workspace roots and trees.
-// An extra root is dropped when it does not resolve, is not a directory, equals
-// home, or wsroots.Refusal names a reason (the file API never serves what the
-// workspace picker would refuse). Entries of trees that do not exist are
+// An extra root is dropped when it does not resolve, is not a directory, is
+// equal to or under home (home already serves it), wsroots.Refusal names a
+// reason (the file API never serves what the workspace picker would refuse), or
+// it has been redirected: the store holds the path resolved at add time, so a
+// root that now resolves elsewhere (a box replaced a folder inside its
+// workspace with a link) is no longer the folder the operator added. Entries of trees that do not exist are
 // skipped. A contained entry that is $HOME, an ancestor of $HOME, or that holds a
 // denied tree (or is one) is ignored: treating it as a workspace root would make
 // everything under it strict, or would serve the denied tree through os.Root.
@@ -121,7 +124,7 @@ func newFsPolicy(home string, roots []string, trees BoxTrees, scratch ...string)
 	addSelfAndAncestors(rhome)
 	for _, r := range roots {
 		rr, err := filepath.EvalSymlinks(r)
-		if err != nil {
+		if err != nil || rr != filepath.Clean(r) {
 			continue
 		}
 		if fi, err := os.Stat(rr); err != nil || !fi.IsDir() {
@@ -321,7 +324,11 @@ func (p fsPolicy) resolve(req string) (fsTarget, error) {
 			}
 			// W is served when it is under a root, or when the target inside it
 			// is (a root nested in W, W being only an ancestor of that root).
-			// The target stays Strict under W either way.
+			// The target stays Strict under W either way. The served-root
+			// boundary inside W is lexical: a link in W/api to ../other.txt
+			// opens W/other.txt, outside every served root. That reach is
+			// bounded by os.Root(W) to W's own content, which the box already
+			// reads and writes, so it is accepted.
 			_, inRoot := p.rootOf(cur)
 			if !inRoot {
 				_, inRoot = p.rootOf(filepath.Join(cur, rel))
