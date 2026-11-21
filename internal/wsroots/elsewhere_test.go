@@ -253,6 +253,65 @@ func TestElsewhereAbandonedScanNeverOverwritesTheCache(t *testing.T) {
 	eventually(t, "a refresh after the zombie ended", func() bool { return n.Load() == 3 })
 }
 
+// I4: scans on a mount that never answers are each given up on, but at most
+// two given-up scans are ever left blocked, and a give-up serves the stale list
+// for another TTL instead of starting a new scan on every later request.
+func TestElsewhereHungScansAreBounded(t *testing.T) {
+	const budget = 50 * time.Millisecond
+	r := newScanRig(t, budget)
+	r.setGate(make(chan struct{})) // never released: every scan blocks for good
+	r.svc.Elsewhere(context.Background()) // scan 1 hangs; empty is published
+	r.advance(6 * time.Minute)
+	r.svc.Elsewhere(context.Background()) // abandons scan 1, starts scan 2
+	eventually(t, "scan 2 started", func() bool { return r.calls.Load() == 2 })
+	// Requests a few seconds apart inside the new TTL start nothing.
+	for i := 0; i < 20; i++ {
+		r.advance(10 * time.Second)
+		r.svc.Elsewhere(context.Background())
+	}
+	time.Sleep(30 * time.Millisecond)
+	if n := r.calls.Load(); n != 2 {
+		t.Fatalf("%d scans within the TTL after a give-up, want 2", n)
+	}
+	// Past many TTLs, the hung scans never pile up: two abandoned plus the current one.
+	for i := 0; i < 20; i++ {
+		r.advance(6 * time.Minute)
+		r.svc.Elsewhere(context.Background())
+		time.Sleep(2 * time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if n := r.calls.Load(); n != 3 {
+		t.Fatalf("%d blocked scans, want at most 2 abandoned plus the current one (3)", n)
+	}
+	r.svc.scanMu.Lock()
+	z := r.svc.scanZombies
+	r.svc.scanMu.Unlock()
+	if z != 2 {
+		t.Fatalf("abandoned scans counted %d, want 2", z)
+	}
+}
+
+// I4: an abandoned scan that finally ends frees its slot.
+func TestElsewhereZombieSlotFreedWhenItEnds(t *testing.T) {
+	const budget = 50 * time.Millisecond
+	r := newScanRig(t, budget)
+	gate := make(chan struct{})
+	r.setGate(gate)
+	r.svc.Elsewhere(context.Background())
+	for i := 0; i < 3; i++ {
+		r.advance(6 * time.Minute)
+		r.svc.Elsewhere(context.Background())
+		time.Sleep(2 * time.Millisecond)
+	}
+	eventually(t, "three scans started", func() bool { return r.calls.Load() >= 3 })
+	close(gate) // every blocked scan ends
+	eventually(t, "the abandoned scans were counted out", func() bool {
+		r.svc.scanMu.Lock()
+		defer r.svc.scanMu.Unlock()
+		return r.svc.scanZombies == 0
+	})
+}
+
 func TestDefaultSkips(t *testing.T) {
 	if got := DefaultSkips("darwin"); len(got) != 1 || got[0] != "/opt/homebrew" {
 		t.Fatalf("darwin: %v", got)

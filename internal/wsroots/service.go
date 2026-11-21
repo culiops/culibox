@@ -24,6 +24,9 @@ const touchEvery = time.Hour
 // new one may start.
 const scanAbandonAfter = 3
 
+// maxScanZombies bounds the abandoned scans left running at once.
+const maxScanZombies = 2
+
 // scanWaitMargin is added to the budget a first call waits: Scan's own budget
 // ends first, so a scan that finishes right at the budget is still seen.
 const scanWaitMargin = 100 * time.Millisecond
@@ -82,6 +85,9 @@ type Service struct {
 	scanning   chan struct{} // non-nil while a scan runs; closed when it ends
 	scanStart  time.Time     // when the running scan started
 	scanGen    uint64        // bumped when a scan is abandoned: its late result is dropped
+	// scanZombies counts abandoned scans still blocked; at maxScanZombies no
+	// more is abandoned, so a dead mount pins a bounded number of goroutines.
+	scanZombies int
 }
 
 // NewService returns a Service over dataDir. home is the user's home; it is
@@ -331,15 +337,18 @@ func (s *Service) SetScanBases(f func() []string) {
 
 // Elsewhere is the project folders found under the usual places outside home
 // (Scan, DefaultBases). It never makes a caller wait longer than the scan
-// budget (one second): a scan that has not finished by then is left running and
-// its result is served when it ends; meanwhile an empty list is served, so a
-// hung mount costs one request one second, not every request. A result is
-// served for five minutes; after that the stale list is returned at once while
-// one background scan refreshes it (never more than one at a time). A scan
-// still running after three budgets is given up on (a read on a hung mount
-// cannot be interrupted): a new one may start and the old one's late result is
-// dropped. It reads folder names only. It does not drop folders home or a root
-// already reaches: that is the caller's.
+// budget plus scanWaitMargin (1 s + 100 ms by default): a scan that has not
+// finished by then is left running and its result is served when it ends;
+// meanwhile an empty list is served, so a hung mount costs one request that
+// wait, not every request. A result is served for five minutes; after that the
+// stale list is returned at once while one background scan refreshes it (never
+// more than one at a time). A scan still running after three budgets is given
+// up on (a read on a hung mount cannot be interrupted): a new one may start,
+// the old one's late result is dropped, and the stale list is served for
+// another five minutes. At most maxScanZombies given-up scans are left
+// running; past that the running scan is kept and waited out. It reads folder
+// names only. It does not drop folders home or a root already reaches: that is
+// the caller's.
 func (s *Service) Elsewhere(ctx context.Context) []Place {
 	s.scanMu.Lock()
 	if s.havePlaces && s.now().Sub(s.placesAt) < elsewhereTTL {
@@ -379,12 +388,16 @@ func (s *Service) Elsewhere(ctx context.Context) []Place {
 // the channel that closes when the running one ends. The caller holds s.scanMu.
 func (s *Service) startScanLocked() <-chan struct{} {
 	if s.scanning != nil {
-		if s.now().Sub(s.scanStart) <= scanAbandonAfter*s.scanOpts.filled().Budget {
+		if s.now().Sub(s.scanStart) <= scanAbandonAfter*s.scanOpts.filled().Budget || s.scanZombies >= maxScanZombies {
 			return s.scanning
 		}
-		// Hung: let a new scan start, and never take the old one's result.
+		// Hung: let a new scan start, and never take the old one's result. The
+		// list in hand is served for another TTL, so the next request does not
+		// give up on the new scan in turn.
 		s.scanGen++
+		s.scanZombies++
 		s.scanning = nil
+		s.placesAt = s.now()
 	}
 	done := make(chan struct{})
 	s.scanning = done
@@ -411,6 +424,8 @@ func (s *Service) startScanLocked() <-chan struct{} {
 		if gen == s.scanGen {
 			s.places, s.placesAt, s.havePlaces = res, s.now(), true
 			s.scanning = nil
+		} else {
+			s.scanZombies-- // given up on earlier: only its slot is freed
 		}
 		s.scanMu.Unlock()
 		close(done)
