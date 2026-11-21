@@ -85,20 +85,9 @@ type fsPolicy struct {
 	deniedOrAbove map[fileKey]struct{}
 }
 
-// newFsPolicy builds the policy for home, the extra workspace roots and trees.
-// An extra root is dropped when it does not resolve, is not a directory, is
-// equal to or under home (home already serves it), wsroots.Refusal names a
-// reason (the file API never serves what the workspace picker would refuse), or
-// it has been redirected: the store holds the path resolved at add time, so a
-// root that now resolves elsewhere (a box replaced a folder inside its
-// workspace with a link) is no longer the folder the operator added. An extra root that is, sits in or holds a
-// denied tree is dropped too (spec 5, "CuliBox's own"). Entries of trees that do not exist are
-// skipped. A contained entry that is $HOME, an ancestor of $HOME, or that holds a
-// denied tree (or is one) is ignored: treating it as a workspace root would make
-// everything under it strict, or would serve the denied tree through os.Root.
-//
-// touchesAny reports whether resolved path p is, is inside, or contains any of the resolved dirs, compared by
-// whole path components (so /a/data2 is not inside /a/data).
+// touchesAny reports whether resolved path p is, is inside, or contains any of
+// the resolved dirs, compared by whole path components (so /a/data2 is not
+// inside /a/data).
 func touchesAny(p string, dirs []string) bool {
 	sep := string(os.PathSeparator)
 	for _, d := range dirs {
@@ -109,14 +98,38 @@ func touchesAny(p string, dirs []string) bool {
 	return false
 }
 
-// scratch lists candidate Claude Code temp folders; each is checked here, per
-// request, because Claude Code creates the folder lazily after the server
-// started. One is kept only if scratchRoot accepts it and it is not $HOME, not
-// inside $HOME (already served), not an ancestor of $HOME or of a denied tree.
+// newFsPolicy is newFsPolicyLive with each root's liveness checked directly
+// (rootIsLiveDir), for callers without a health cache.
 func newFsPolicy(home string, roots []string, trees BoxTrees, scratch ...string) (fsPolicy, error) {
 	return newFsPolicyLive(home, roots, nil, trees, scratch...)
 }
 
+// newFsPolicyLive builds the policy for home, the extra workspace roots and
+// the box trees. live reports whether a root is still the directory it was
+// (nil: rootIsLiveDir); it is the only root rule that touches the root itself,
+// so the server answers it from a cache (rootHealth) and a hung mount cannot
+// stall the build.
+//
+// An extra root is dropped, silently, when:
+//   - it is not live: it no longer resolves, is not a directory, or has been
+//     redirected. The store holds the path resolved at add time, so a root
+//     that now resolves elsewhere (a box replaced a folder inside its
+//     workspace with a link) is no longer the folder the operator added;
+//   - wsroots.Refusal names a reason (the file API never serves what the
+//     workspace picker would refuse);
+//   - it is, sits in or holds a denied tree (spec 5, "CuliBox's own");
+//   - it is home or under home (home already serves it);
+//   - it repeats a root already kept (a duplicate in a hand-edited file).
+//
+// Entries of trees that do not exist are skipped. A contained entry that is
+// $HOME, an ancestor of $HOME, or that holds a denied tree (or is one) is
+// ignored: treating it as a workspace root would make everything under it
+// strict, or would serve the denied tree through os.Root.
+//
+// scratch lists candidate Claude Code temp folders; each is checked here, per
+// request, because Claude Code creates the folder lazily after the server
+// started. One is kept only if scratchRoot accepts it and it is not $HOME, not
+// inside $HOME (already served), not an ancestor of $HOME or of a denied tree.
 func newFsPolicyLive(home string, roots []string, live func(root string) bool, trees BoxTrees, scratch ...string) (fsPolicy, error) {
 	if live == nil {
 		live = rootIsLiveDir
