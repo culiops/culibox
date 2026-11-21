@@ -75,6 +75,23 @@ function legacyBypassKeyFromDefs(defs, options) {
   return "";
 }
 
+// optionDefApplies: config.OptionDef.AppliesTo for a def (no bins: every agent; else the bin or its basename). Pure twin of app.js
+// optApplies, for the scripts that run under node.
+function optionDefApplies(d, bin) {
+  if (!d || !Array.isArray(d.bins) || d.bins.length === 0) return true;
+  const base = String(bin || "").split("/").pop();
+  return d.bins.includes(bin) || d.bins.includes(base);
+}
+
+// legacyKeysOwnedByEnum: the keys of the older bypass bools (any declared bool on the legacy flag) that the Permission mode control
+// owns for this command: they are the legacy form of Bypass, so Advanced does not draw them, whether or not the profile stores one.
+// Only while a permission_mode def applies to the command; with none, the checkbox is the only way to set it and stays.
+function legacyKeysOwnedByEnum(defs, bin) {
+  const list = Array.isArray(defs) ? defs : Object.values(defs || {});
+  if (!list.some((d) => d && d.key === PERM_MODE_KEY && optionDefApplies(d, bin))) return [];
+  return list.filter((d) => d && d.type === "bool" && d.flag === LEGACY_BYPASS_FLAG && optionDefApplies(d, bin)).map((d) => d.key);
+}
+
 // effectiveMode: permission_mode when it carries a value; else Bypass when the legacy bool is on; else "".
 function effectiveMode(options, legacyKey) {
   const o = options || {};
@@ -283,6 +300,6 @@ if (typeof module !== "undefined" && module.exports) {
     SPAWN_NOT_SHARED_TAIL, SPAWN_VM_SEES_HELP, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
     runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText, spawnSubmitLabel, spawnFootHint,
     PLIST_SEARCH_MIN, profileMatches,
-    PERM_MODE_KEY, BYPASS_MODE, CRIT_RM_KEY, PERM_MODE_LABELS, PERM_MODE_LINES, CRIT_RM_COPY, permModeLabel, permModeLine, legacyBypassKeyFromDefs, effectiveMode, effectiveBypass, critRmView,
+    PERM_MODE_KEY, BYPASS_MODE, CRIT_RM_KEY, PERM_MODE_LABELS, PERM_MODE_LINES, CRIT_RM_COPY, permModeLabel, permModeLine, legacyBypassKeyFromDefs, legacyKeysOwnedByEnum, optionDefApplies, effectiveMode, effectiveBypass, critRmView,
   };
 }

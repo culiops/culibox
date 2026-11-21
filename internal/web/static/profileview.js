@@ -11,6 +11,14 @@
 // the page scripts share one scope. Classic script: reachModel, shortPath and the
 // not-home words are browser globals; under node they are required.
 
+// pfvPerm: spawnform.js's Permission mode rules (shared with New session). Its functions and consts are page globals (a classic
+// script's const is in the shared scope, not on globalThis); under node they are required.
+function pfvPerm() {
+  return typeof PERM_MODE_KEY !== "undefined"
+    ? { PERM_MODE_KEY, CRIT_RM_KEY, CRIT_RM_COPY, permModeLabel, permModeLine, legacyBypassKeyFromDefs, legacyKeysOwnedByEnum, optionDefApplies, effectiveMode }
+    : require("./spawnform.js");
+}
+
 function pfvDep(name, file) {
   return typeof globalThis[name] === "function" ? globalThis[name] : require(file)[name];
 }
@@ -18,7 +26,8 @@ function pfvDep(name, file) {
 const PFV_CONFIG_NOTE = "Defined in config.json. Duplicate it to change it.";
 const PFV_MISSING = "Not found in Credentials";
 // The options the Agent block shows; any other option that is set is Advanced.
-const PFV_AGENT_OPTIONS = ["model", "effort", "effortLevel"];
+// Kept in step with profileedit.js PFE_AGENT_OPTIONS (the keys the Agent block's form owns); a test pins that they agree.
+const PFV_AGENT_OPTIONS = ["model", "effort", "effortLevel", "permission_mode", "skip_critical_rm_prompt"];
 const PFV_HOST_SCOPE = "Read and write, like anything else you own";
 
 const pfvText = (v) => (typeof v === "string" ? v.trim() : "");
@@ -67,7 +76,7 @@ function pfvPreselectWord(tier, copy) {
 // applying to Host (a box does not use it; the value is kept for when the profile
 // runs there), and the CLAUDE.md imports row is tagged Box. Environment variables
 // are listed by name, never by value. tier is accepted for the callers that pass it and gates nothing.
-function pfvAdvancedItems(doc, tier, defs) {
+function pfvAdvancedItems(doc, tier, defs, bin) {
   const d = doc && typeof doc === "object" ? doc : {};
   const rows = [];
   if (typeof d.base === "string" && d.base !== "" && d.base !== "inherit") {
@@ -82,8 +91,10 @@ function pfvAdvancedItems(doc, tier, defs) {
   if (d.replyable === true) rows.push(pfvRow("Replies", "Allow replies by default"));
   if (d.imports_off === true) rows.push(pfvRow("Files", "CLAUDE.md imports", { applies: "box", scope: "Not given to the box" }));
   const opts = d.options && typeof d.options === "object" && !Array.isArray(d.options) ? d.options : {};
+  // The older bypass bool is the Permission mode control's now (Agent block), whatever it holds.
+  const owned = pfvPerm().legacyKeysOwnedByEnum(defs, typeof bin === "string" ? bin : pfvText(d.bin));
   for (const key of Object.keys(opts)) {
-    if (PFV_AGENT_OPTIONS.includes(key) || !pfvSet(opts[key])) continue;
+    if (PFV_AGENT_OPTIONS.includes(key) || owned.includes(key) || !pfvSet(opts[key])) continue;
     const def = (Array.isArray(defs) ? defs : []).find((x) => x && x.key === key);
     rows.push(pfvRow((def && def.label) || key, opts[key] === true ? "On" : String(opts[key])));
   }
@@ -93,8 +104,8 @@ function pfvAdvancedItems(doc, tier, defs) {
 // pfvAdvancedCount: how many Advanced settings are not at their default. tier is
 // accepted for the callers that pass it and decides nothing: a stored starting
 // environment counts on any tier.
-function pfvAdvancedCount(doc, tier) {
-  return pfvAdvancedItems(doc, tier, []).length;
+function pfvAdvancedCount(doc, tier, defs) {
+  return pfvAdvancedItems(doc, tier, defs || []).length;
 }
 
 // pfvBound: the list view says the profile holds a credential binding (the server's rule over the fields ProfileView carries:
@@ -185,13 +196,38 @@ function pfvAgentLine(a) {
   return parts.join(" · ");
 }
 
-function pfvAgentBlock(view, doc, a, edit) {
+// pfvAgentModeRows: what the Agent block's read view says about Permission mode and the critical-rm option, from the profile's own
+// options (the form's rules, spawnform.js): the mode in force (permission_mode, else Bypass from an older bypass bool that is on,
+// with its "(older form)" line), and the critical-rm option when it is on, tagged Applies to Box. An unset mode says nothing,
+// like an unset effort. Only for a command the daemon's Permission mode def applies to.
+function pfvAgentModeRows(view, doc, defs, bin) {
+  const sf = pfvPerm();
+  const list = Array.isArray(defs) ? defs : [];
+  const has = (key) => list.find((d) => d && d.key === key && sf.optionDefApplies(d, bin));
+  const o = pfvOptions(view, doc);
+  const rows = [];
+  if (has(sf.PERM_MODE_KEY)) {
+    const legacy = sf.legacyBypassKeyFromDefs(list, o);
+    const mode = sf.effectiveMode(o, legacy);
+    if (mode !== "") {
+      const via = !o[sf.PERM_MODE_KEY] ? list.find((d) => d && d.key === legacy) : null;
+      const sub = [sf.permModeLine(mode), via ? sf.CRIT_RM_COPY.legacy(via.label || via.key) : ""].filter(Boolean).join(" ");
+      rows.push(pfvRow("Mode", sf.permModeLabel(mode), { sub }));
+    }
+  }
+  const crit = has(sf.CRIT_RM_KEY);
+  if (crit && o[sf.CRIT_RM_KEY] === true) rows.push(pfvRow("Option", crit.label || sf.CRIT_RM_KEY, { applies: "box" }));
+  return rows;
+}
+
+function pfvAgentBlock(view, doc, a, edit, defs) {
   const withParts = [a.model || (a.claude ? "its default model" : ""), a.effort ? a.effort + " effort" : ""].filter(Boolean);
   const main = (a.claude ? "Claude Code" : a.bin || "agent") + (withParts.length ? " with " + withParts.join(", ") : "");
   if (!a.claude) return { id: "agent", label: "Agent", applies: "", lines: [main], rows: [], edit, add: "", count: 0, note: "" };
   const acct = pfvText(pfvField(view, doc, "account"));
   const sub = acct && acct !== "default" ? "Signs in with the " + acct + " Claude login" : "Signs in with the default Claude login (~/.claude)";
-  return { id: "agent", label: "Agent", applies: "", lines: [main, sub], rows: [], edit, add: "", count: 0, note: "" };
+  const rows = pfvAgentModeRows(view, doc, defs, pfvText(pfvField(view, doc, "bin")) || a.bin);
+  return { id: "agent", label: "Agent", applies: "", lines: [main, sub], rows, edit, add: "", count: rows.length, note: "" };
 }
 
 // pfvWorkspaceBlock: the folder the sessions work in. A private copy lists the
@@ -319,7 +355,7 @@ function pfvReadView(o) {
   const blocks = [
     pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, refused, unavailable ? "" : pfvText(x.boxDaemonReason), pfvPreselectWord(tier, copy)),
     pfvWorkspaceBlock(view, doc, host, edit),
-    pfvAgentBlock(view, doc, a, edit),
+    pfvAgentBlock(view, doc, a, edit, x.defs),
   ];
 
   // Cloud, Also reachable and Network describe what a Box session of this profile gets, whatever tier it is stored with;
@@ -361,7 +397,7 @@ function pfvReadView(o) {
     switchToBox: edit && !unavailable && host,
   });
 
-  const adv = pfvAdvancedItems(doc, tier, x.defs);
+  const adv = pfvAdvancedItems(doc, tier, x.defs, pfvText(pfvField(view, doc, "bin")) || a.bin);
   const sentence = "Starting environment, arguments, environment variables, sidebar replies and CLAUDE.md imports.";
   blocks.push({
     id: "advanced", label: "Advanced", applies: "", edit, add: "", rows: adv, count: adv.length, note: "",

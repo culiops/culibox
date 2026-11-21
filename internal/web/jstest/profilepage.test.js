@@ -7356,3 +7356,34 @@ test("Agent: a server refusal on options.skip_critical_rm_prompt lands in the Ag
   assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), false);
   assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-ferr").map((x) => x.replace(/^options\.skip_critical_rm_prompt: /, "")), ['"Skip the critical-rm prompt" runs only in a box']);
 });
+
+test("Agent: a profile that has not stored the older bypass bool still gets no legacy checkbox beside the Permission mode control", async () => {
+  const t = page({ optionDefs: PM_DEFS });
+  await openAdv(t, "infra-terraform");
+  assert.strictEqual(field(t, "options.skip_permissions_legacy"), undefined, "declared, never stored: still the enum's");
+  assert.strictEqual(field(t, "options.permission_mode"), undefined);
+  assert.strictEqual(field(t, "options.skip_critical_rm_prompt"), undefined);
+  // Under bash neither def applies, so nothing is owned and nothing is drawn (Claude-only options).
+  const defs = PM_DEFS.map((d) => (d.key === "skip_permissions_legacy" ? { ...d, bins: [] } : d));
+  const u = page({ optionDefs: defs });
+  await openAdv(u, "infra-terraform");
+  assert.strictEqual(field(u, "options.skip_permissions_legacy"), undefined);
+});
+
+test("Agent: the read view puts Permission mode and the critical-rm option in the Agent block, not in Advanced", async () => {
+  const t = page({ optionDefs: PM_DEFS });
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { options: { model: "claude-opus-5-5", skip_permissions_legacy: true, skip_critical_rm_prompt: true } });
+  await t.box.pfvShow("aws-ops");
+  const agent = blockOf(t, "agent");
+  assert.deepStrictEqual(texts(agent, "pfv-k"), ["Mode", "Option"]);
+  assert.ok(texts(agent, "pfv-rsub").join(" ").includes("Set by Skip permissions (older form)"));
+  assert.deepStrictEqual(texts(agent, "pfv-applies"), ["Applies to Box"]);
+  assert.strictEqual(byCls(advOf(t), "pfv-row").length, 0, "nothing of it is in Advanced");
+});
+
+test("Agent: a profile with only the older bypass bool on keeps it, and gains no permission_mode, when something else is saved", async () => {
+  const t = await pmPage({ options: { model: "claude-opus-5-5", skip_permissions_legacy: true } });
+  pickModel(t, "claude-sonnet-5");
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].options, { model: "claude-sonnet-5", skip_permissions_legacy: true });
+});

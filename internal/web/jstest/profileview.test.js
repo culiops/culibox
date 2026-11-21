@@ -4,6 +4,8 @@
 // the rest is the approved mockup's (profile-mockups/shots/b-*.png).
 const test = require("node:test");
 const assert = require("node:assert");
+const fs = require("node:fs");
+const path = require("node:path");
 const { pfvReadView, pfvAdvancedCount, pfvAdvancedItems, pfvPreselectWord } = require("../static/profileview.js");
 const { reachModel } = require("../static/spawnpreview.js");
 const { notHomeReasonText, notHomeFix, notHomeLabel, notHomeTitle } = require("../static/workhome.js");
@@ -607,4 +609,61 @@ test("Advanced lists the starting environment on any tier, tagged host, and the 
   assert.deepStrictEqual(pfvAdvancedItems({ base: "clean", imports_off: true }, "box", []).map((r) => [r.kind, r.applies]), [["Starting environment", "host"], ["Files", "box"]]);
   assert.strictEqual(byId(pfvReadView(awsIn()), "advanced").lines[0], "Starting environment, arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults.");
   assert.deepStrictEqual(pfvAdvancedItems({ args: ["a"] }, "box", []).map((r) => r.applies), [""], "a row defaults applies to empty");
+});
+
+// --- Permission mode and the critical-rm option in the read view (#342) ---------------------------------------------------------
+
+const PM_READ_DEFS = defs.concat([
+  { key: "permission_mode", label: "Permission mode", type: "enum", choices: ["manual", "acceptEdits", "auto", "plan", "bypassPermissions"], bins: ["claude"] },
+  { key: "skip_critical_rm_prompt", label: "Skip the critical-rm prompt", type: "bool", tier: "box", bins: ["claude"] },
+  { key: "skip_permissions_legacy", label: "Skip permissions", type: "bool", flag: "--dangerously-skip-permissions", bins: ["claude"] },
+]);
+const pmRead = (options, over) => pfvReadView(awsIn(Object.assign({ defs: PM_READ_DEFS, doc: { ...awsOpsDoc, options } }, over)));
+
+test("the read view's Agent keys are the form's: PFV_AGENT_OPTIONS and PFE_AGENT_OPTIONS list the same keys", () => {
+  const list = (file, name) => {
+    const m = new RegExp("const " + name + " = (\\[[^\\]]*\\]);").exec(fs.readFileSync(path.join(__dirname, "..", "static", file), "utf8"));
+    assert.ok(m, name + " is declared in " + file);
+    return JSON.parse(m[1]);
+  };
+  assert.deepStrictEqual(list("profileview.js", "PFV_AGENT_OPTIONS"), list("profileedit.js", "PFE_AGENT_OPTIONS"));
+});
+
+test("Agent read rows: Permission mode reads by its label with its line; the critical-rm option when on, tagged Applies to Box; neither in Advanced", () => {
+  const v = pmRead({ model: "claude-opus-5-5", permission_mode: "bypassPermissions", skip_critical_rm_prompt: true });
+  const agent = byId(v, "agent");
+  assert.deepStrictEqual(agent.rows.map((r) => [r.kind, r.name, r.sub, r.applies]), [
+    ["Mode", "Bypass", "Runs every action without asking.", ""],
+    ["Option", "Skip the critical-rm prompt", "", "box"],
+  ]);
+  assert.strictEqual(agent.count, 2);
+  assert.deepStrictEqual(byId(v, "advanced").rows, []);
+  assert.strictEqual(byId(v, "advanced").count, 0);
+  // Off, or never set: no row, like an unset effort.
+  const off = pmRead({ permission_mode: "plan", skip_critical_rm_prompt: false });
+  assert.deepStrictEqual(byId(off, "agent").rows.map((r) => [r.kind, r.name]), [["Mode", "Plan"]]);
+  assert.deepStrictEqual(byId(pmRead({ model: "claude-opus-5-5" }), "agent").rows, []);
+  // A choice a config.json def adds shows as it is.
+  const odd = pmRead({ permission_mode: "default" }, { defs: PM_READ_DEFS.map((d) => (d.key === "permission_mode" ? { ...d, choices: ["default", "plan"] } : d)) });
+  assert.deepStrictEqual(byId(odd, "agent").rows.map((r) => [r.name, r.sub]), [["default", ""]]);
+});
+
+test("Agent read rows: the older bypass bool reads as Bypass only when true, with its (older form) line, and is never an Advanced row", () => {
+  const on = pmRead({ skip_permissions_legacy: true });
+  assert.deepStrictEqual(byId(on, "agent").rows.map((r) => [r.kind, r.name, r.sub]), [["Mode", "Bypass", "Runs every action without asking. Set by Skip permissions (older form)"]]);
+  assert.deepStrictEqual(byId(on, "advanced").rows, []);
+  // permission_mode wins over the bool, and the line is not said.
+  const both = pmRead({ skip_permissions_legacy: true, permission_mode: "plan" });
+  assert.deepStrictEqual(byId(both, "agent").rows.map((r) => [r.name, r.sub]), [["Plan", "Reads and plans only. Changes nothing until you approve the plan."]]);
+  // False is not Bypass and not a row anywhere.
+  const off = pmRead({ skip_permissions_legacy: false });
+  assert.deepStrictEqual(byId(off, "agent").rows, []);
+  assert.deepStrictEqual(byId(off, "advanced").rows, []);
+  // For a command the Permission mode def does not apply to, the older bool is an ordinary Advanced row again.
+  const sh = pmRead({ skip_permissions_legacy: true }, { view: { ...awsOpsView, bin: "bash", claude: false }, doc: { ...awsOpsDoc, bin: "bash", options: { skip_permissions_legacy: true } } });
+  assert.deepStrictEqual(byId(sh, "agent").rows, []);
+  assert.deepStrictEqual(byId(sh, "advanced").rows.map((r) => r.name), ["On"]);
+  // No Permission mode def at all (an older daemon): nothing changes, the bool stays in Advanced.
+  const none = pfvReadView(awsIn({ defs: PM_READ_DEFS.filter((d) => d.key !== "permission_mode"), doc: { ...awsOpsDoc, options: { skip_permissions_legacy: true } } }));
+  assert.deepStrictEqual(byId(none, "advanced").rows.map((r) => [r.kind, r.name]), [["Skip permissions", "On"]]);
 });
