@@ -118,7 +118,8 @@ func TestHungRootDoesNotStallRequests(t *testing.T) {
 }
 
 // A healthy root's check is cached: requests inside the TTL start no check,
-// and a root that goes bad is dropped once the TTL has passed.
+// and a root that goes bad is dropped once a re-check after the TTL answers
+// (the request that starts it keeps the old answer: it does not wait).
 func TestRootHealthCachesAndRechecks(t *testing.T) {
 	_, root, _ := rootsFixture(t)
 	var calls atomic.Int32
@@ -134,8 +135,14 @@ func TestRootHealthCachesAndRechecks(t *testing.T) {
 	}
 	bad.Store(true)
 	time.Sleep(150 * time.Millisecond)
-	if h.live([]string{root})[root] {
-		t.Fatal("a root that went bad is still live after the TTL")
+	h.live([]string{root}) // starts the re-check
+	gone := false
+	for i := 0; i < 100 && !gone; i++ {
+		gone = !h.live([]string{root})[root]
+		time.Sleep(time.Millisecond)
+	}
+	if !gone {
+		t.Fatal("a root that went bad is still live after its re-check")
 	}
 	if n := calls.Load(); n != 2 {
 		t.Fatalf("%d checks, want 2", n)
@@ -184,5 +191,75 @@ func TestRootHealthForgottenRootMidCall(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the first live() never returned")
+	}
+}
+
+// R15: a known-good root whose re-check is slow (300 ms, past the 200 ms wait)
+// stays served while the check runs, and no request waits on it.
+func TestRootHealthSlowRecheckKeepsKnownGoodRoot(t *testing.T) {
+	_, root, _ := rootsFixture(t)
+	var delay atomic.Int64
+	var calls atomic.Int32
+	h := &rootHealth{ttl: 20 * time.Millisecond, check: func(string) bool {
+		calls.Add(1)
+		time.Sleep(time.Duration(delay.Load()))
+		return true
+	}}
+	if !h.live([]string{root})[root] {
+		t.Fatal("first check: not live")
+	}
+	time.Sleep(30 * time.Millisecond) // stale
+	delay.Store(int64(300 * time.Millisecond))
+	end := time.Now().Add(400 * time.Millisecond)
+	for time.Now().Before(end) {
+		start := time.Now()
+		if !h.live([]string{root})[root] {
+			t.Fatalf("a known-good root flipped to not live %v into a slow re-check", time.Since(end.Add(-400*time.Millisecond)))
+		}
+		if d := time.Since(start); d > 50*time.Millisecond {
+			t.Fatalf("a request waited %v on a known-good root's re-check", d)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := calls.Load(); n < 2 || n > 3 {
+		t.Fatalf("%d checks, want the first, the slow one and at most one more", n)
+	}
+}
+
+// R15: a known-good root whose re-check never answers goes not live once the
+// check has run past the hang threshold, and stays so; nobody waits on it.
+func TestRootHealthHungRecheckDropsAfterThreshold(t *testing.T) {
+	_, root, _ := rootsFixture(t)
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	var hung atomic.Bool
+	h := &rootHealth{ttl: 20 * time.Millisecond, hang: 200 * time.Millisecond, check: func(string) bool {
+		if hung.Load() {
+			<-block
+		}
+		return true
+	}}
+	if !h.live([]string{root})[root] {
+		t.Fatal("first check: not live")
+	}
+	time.Sleep(30 * time.Millisecond)
+	hung.Store(true)
+	start := time.Now()
+	if !h.live([]string{root})[root] { // starts the hung re-check
+		t.Fatal("not live as soon as the re-check started")
+	}
+	if d := time.Since(start); d > 50*time.Millisecond {
+		t.Fatalf("waited %v on a known-good root's re-check", d)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if !h.live([]string{root})[root] {
+		t.Fatal("not live before the hang threshold")
+	}
+	time.Sleep(150 * time.Millisecond) // now past 200 ms
+	if h.live([]string{root})[root] {
+		t.Fatal("still live after the re-check hung past the threshold")
+	}
+	if h.live([]string{root})[root] {
+		t.Fatal("live again while the hung check still runs")
 	}
 }

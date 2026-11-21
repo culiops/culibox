@@ -257,9 +257,16 @@ func TestRootsListMarksUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The POST reply checked the root; the next check runs once that answer is
-	// older than the health TTL.
+	// older than the health TTL, and a root last seen live keeps its answer
+	// until that re-check answers.
 	time.Sleep(30 * time.Millisecond)
-	v := decodeRoots(t, g.roots("GET", ""))
+	var v rootsView
+	for i := 0; i < 100; i++ {
+		if v = decodeRoots(t, g.roots("GET", "")); len(v.Roots) == 2 && !v.Roots[1].Available {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if len(v.Roots) != 2 || v.Roots[1].Available || !v.Roots[0].Available {
 		t.Fatalf("a removed folder must show not available: %+v", v.Roots)
 	}
