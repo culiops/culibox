@@ -34,8 +34,10 @@
 //     It also removes any attribute that carries a CSS url() whose target is not one of those two
 //     (and, on an attribute that is CSS, one of the other CSS functions that fetch): SVG
 //     presentation attributes such as filter, mask, clip-path, fill and stroke survive DOMPurify
-//     and take one. <a href> is a link the user must click, so it stays (the walk gives it
-//     target=_blank rel="noopener noreferrer", and drops a javascript:, vbscript: or data: one).
+//     and take one. An <a> is the link gate's (#348): one that would run script (javascript:, vbscript:, data:) loses its href, and
+//     any other whose href is not a #fragment loses it too, its address kept in data-href with a click and Enter handler that hands
+//     it to openAgentLink (linkgate.js), which asks before anything opens. With no href there is no middle-click, no "open in new
+//     tab" in the context menu and no drag to the tab bar either, which a click handler alone could not stop.
 
 // Passed as the config of DOMPurify.sanitize. Frozen, so a caller that tries to
 // loosen it throws instead of quietly weakening every later render.
@@ -202,13 +204,38 @@ function mdUnsafeLink(url) {
 const MS_REMOTE_URL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i; // a scheme or a protocol-relative address: the author meant another host
 const MS_LINKABLE_URL = /^https?:\/\//i;
 
-// mdLink makes an <a> that opens `url` in a new tab with no opener and no referrer.
-function mdLink(doc, url, text) {
+// mdGate turns an <a> into a link the gate opens: `url` is kept in data-href (the caller has already taken the href off), the
+// element is still a link to the keyboard, a screen reader and the pointer (role, tabindex, md-link for the styling), its title
+// says where it goes, and a click or Enter hands the address to openAgentLink. Without openAgentLink in the page the handlers do
+// nothing: a link that cannot ask does not open. `where` names the file for the dialog; none is fine.
+function mdGate(a, url, where) {
+  a.setAttribute("data-href", url);
+  a.setAttribute("role", "link");
+  a.setAttribute("tabindex", "0");
+  const cls = (a.getAttribute("class") || "").split(/\s+/).filter(Boolean);
+  if (!cls.includes("md-link")) cls.push("md-link");
+  a.setAttribute("class", cls.join(" "));
+  a.setAttribute("title", url);
+  const ctx = where ? { source: "markdown", where } : { source: "markdown" };
+  const go = (e) => {
+    e.preventDefault();
+    if (typeof openAgentLink === "function") openAgentLink(url, ctx);
+  };
+  a.addEventListener("click", go);
+  // Enter is the link's key: claimed, so nothing else in the page acts on it too, and a held key's repeats do not ask again.
+  a.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    if (e.stopPropagation) e.stopPropagation();
+    if (e.repeat) e.preventDefault();
+    else go(e);
+  });
+}
+
+// mdLink makes a gated <a> for `url`: the one the blocked-image notice offers.
+function mdLink(doc, url, text, where) {
   const a = doc.createElement("a");
-  a.setAttribute("href", url);
-  a.setAttribute("target", "_blank");
-  a.setAttribute("rel", "noopener noreferrer");
   a.textContent = text;
+  mdGate(a, url, where);
   return a;
 }
 
@@ -217,13 +244,13 @@ function mdLink(doc, url, text) {
 // is the user's, and a javascript: or data: address is not something to offer. A span inside a video or audio is fallback
 // content that only a browser that cannot play media draws, so for a <source> there the notice goes before the video or
 // audio, and the source is removed.
-function mdPlaceholder(doc, el, tag, url) {
+function mdPlaceholder(doc, el, tag, url, where) {
   const n = url === null ? "" : msNormalize(url);
   const span = doc.createElement("span");
   span.className = "md-blocked";
   span.append((MS_REMOTE_URL.test(n) ? "remote " : "") + MS_MEDIA.get(tag) + " blocked");
   if (n) span.title = n;
-  if (MS_LINKABLE_URL.test(n)) span.append(" ", mdLink(doc, n, n.length > 60 ? n.slice(0, 59) + "\u2026" : n));
+  if (MS_LINKABLE_URL.test(n)) span.append(" ", mdLink(doc, n, n.length > 60 ? n.slice(0, 59) + "\u2026" : n, where));
   const parent = el.parentNode;
   const host = tag === "source" && parent && /^(?:video|audio)$/i.test(String(parent.localName)) ? parent : null;
   if (host) { host.before(span); el.remove(); } else el.replaceWith(span);
@@ -231,25 +258,34 @@ function mdPlaceholder(doc, el, tag, url) {
 
 // mdWalkMedia handles an img, video, audio or source: a relative src is rewritten to a read route first (so it is local),
 // then a src that is still not local, or an <img> with none, becomes a placeholder. True when the element was replaced.
-function mdWalkMedia(doc, el, tag, rewrite) {
+function mdWalkMedia(doc, el, tag, rewrite, where) {
   let src = el.getAttribute("src");
   if (src === null) {
     if (tag !== "img") return false; // a video or audio may take its sources from <source> children
-    mdPlaceholder(doc, el, tag, null);
+    mdPlaceholder(doc, el, tag, null, where);
     return true;
   }
   if (mdIsRelative(src)) { src = rewrite(src); el.setAttribute("src", src); }
   if (!mdUnsafeAttr(tag, "src", src)) return false;
-  mdPlaceholder(doc, el, tag, src);
+  mdPlaceholder(doc, el, tag, src, where);
   return true;
 }
 
-// mdWalkLink: a link opens in a new tab with no opener, so a click never navigates the app away or hands it a window, and
-// one that would run script has no href left.
-function mdWalkLink(el) {
+// mdWalkLink: a link that would run script has no href left. Any other whose href (or xlink:href) is not a reference into the
+// document is gated (mdGate): its href is taken off and kept in data-href, so a click opens nothing by itself. A #fragment stays an
+// ordinary link, in a new tab as before. When both attributes are there each is judged on its own and the first address found is
+// the one kept; the other, if it is not a fragment, is dropped.
+function mdWalkLink(el, where) {
+  let url = null;
   for (const name of ["href", "xlink:href"]) {
-    if (mdUnsafeLink(el.getAttribute(name))) el.removeAttribute(name);
+    const v = el.getAttribute(name);
+    if (v === null) continue;
+    if (mdUnsafeLink(v)) { el.removeAttribute(name); continue; }
+    if (msNormalize(v).startsWith("#")) continue;
+    el.removeAttribute(name);
+    if (url === null) url = v;
   }
+  if (url !== null) { mdGate(el, url, where); return; }
   if (el.hasAttribute("href") || el.hasAttribute("xlink:href")) {
     el.setAttribute("target", "_blank");
     el.setAttribute("rel", "noopener noreferrer");
@@ -257,24 +293,24 @@ function mdWalkLink(el) {
 }
 
 // mdWalkFragment applies the second half of the policy (the top of this file) to a sanitized fragment, in place. `rewrite(rel)`
-// turns a relative src into the read route that serves it. A <template> goes whole: its content is a second tree that no
+// turns a relative src into the read route that serves it; `where` (optional) names the file for the link gate's dialog. A <template> goes whole: its content is a second tree that no
 // query below reaches, and markdown has no use for one.
-function mdWalkFragment(root, rewrite) {
+function mdWalkFragment(root, rewrite, where) {
   const doc = root.ownerDocument;
   for (const el of Array.from(root.querySelectorAll("*"))) {
     if (!root.contains(el)) continue; // inside something that was replaced or removed above
     const tag = String(el.localName || el.tagName).toLowerCase();
     if (tag === "template") { el.remove(); continue; }
-    if (MS_MEDIA.has(tag) && mdWalkMedia(doc, el, tag, rewrite)) continue;
+    if (MS_MEDIA.has(tag) && mdWalkMedia(doc, el, tag, rewrite, where)) continue;
     for (const attr of Array.from(el.attributes)) {
       if (mdUnsafeAttr(tag, attr.name, attr.value) || mdUnsafeCss(attr.name, attr.value)) el.removeAttribute(attr.name);
     }
-    if (tag === "a") mdWalkLink(el);
+    if (tag === "a") mdWalkLink(el, where);
   }
 }
 
 // mdRenderFragment is the only place markdown becomes DOM: marked, DOMPurify (MD_PURIFY, as a fragment), highlight.js on the
-// fenced code, then the walk. `deps` = {marked, purify, hljs (optional), rewrite}. Throws when the markup cannot be made; the
+// fenced code, then the walk. `deps` = {marked, purify, hljs (optional), rewrite, where (optional)}. Throws when the markup cannot be made; the
 // caller shows the file as plain text instead. The fragment is not yet in the page: appending it is what starts a load.
 function mdRenderFragment(text, deps) {
   deps.marked.setOptions({ breaks: false, gfm: true }); // marked v12 removed the `highlight` option: the code is highlighted below
@@ -283,7 +319,7 @@ function mdRenderFragment(text, deps) {
   const frag = deps.purify.sanitize(html, Object.assign({}, MD_PURIFY, { RETURN_DOM_FRAGMENT: true }));
   if (!frag || typeof frag.querySelectorAll !== "function") throw new Error("the sanitizer returned no fragment");
   if (deps.hljs) frag.querySelectorAll("pre code").forEach((el) => { try { deps.hljs.highlightElement(el); } catch (_) {} });
-  mdWalkFragment(frag, deps.rewrite);
+  mdWalkFragment(frag, deps.rewrite, deps.where);
   return frag;
 }
 

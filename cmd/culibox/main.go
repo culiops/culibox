@@ -38,6 +38,7 @@ import (
 	"github.com/culiops/culibox/internal/egress"
 	"github.com/culiops/culibox/internal/instancelock"
 	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/linktrust"
 	"github.com/culiops/culibox/internal/logring"
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
@@ -887,6 +888,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		wsRoots.SetScanBases(uidemoScanBases) // nil unless a `-tags uidemo` build asks for it
 	}
 
+	// The hosts whose agent links open without the confirm dialog, per person.
+	// Every add and remove is audited first, like the workspace roots.
+	linkTrust := linktrust.NewService(dataDir, web.LinkTrustAudit(storeAudit), time.Now)
+
 	srv := &web.Server{
 		Imports:          bundleImports,
 		API:              api,
@@ -897,6 +902,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Home:             home,
 		DataDir:          dataDir,
 		Roots:            wsRoots,
+		LinkTrust:        linkTrust,
 		Protected:        protected,
 		Shares:           vmShares,
 		VMFolders:        vmFolders,

@@ -19,6 +19,14 @@ class Node {
     this.children = [];
     this.parentNode = null;
     this.text = "";
+    this.listeners = {};
+  }
+  addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
+  // fire(type, init) calls the listeners of `type` with an event that records preventDefault; it returns the event.
+  fire(type, init) {
+    const ev = Object.assign({ type, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }, init);
+    for (const fn of this.listeners[type] || []) fn(ev);
+    return ev;
   }
   getAttribute(n) { const a = this.attributes.find((x) => x.name === n); return a ? a.value : null; }
   hasAttribute(n) { return this.getAttribute(n) !== null; }
@@ -58,8 +66,14 @@ function h(tag, attrs, ...kids) {
 }
 const frag = (...kids) => { const f = new Node("#frag", doc); f.append(...kids); return f; };
 
+// The link gate (linkgate.js) is a global in the page; here it records what it is asked.
+const gate = [];
+global.openAgentLink = (raw, ctx) => { gate.push([raw, ctx]); return Promise.resolve(true); };
+const gateTaken = () => gate.splice(0);
+
 const REWRITE = (rel) => "/api/fs/read?path=" + encodeURIComponent("/work/docs/" + rel);
 const walk = (...kids) => { const f = frag(...kids); mdWalkFragment(f, REWRITE); return f; };
+const walkWhere = (where, ...kids) => { const f = frag(...kids); mdWalkFragment(f, REWRITE, where); return f; };
 const find = (root, tag) => root.querySelectorAll("*").filter((e) => e.localName === tag);
 
 test("a remote image becomes a notice that links to it, and no <img> is left", () => {
@@ -70,9 +84,9 @@ test("a remote image becomes a notice that links to it, and no <img> is left", (
   assert.equal(span.title, "https://example.com/p.png");
   assert.equal(span.children[0].text, "remote image blocked");
   const [a] = find(f, "a");
-  assert.equal(a.getAttribute("href"), "https://example.com/p.png");
-  assert.equal(a.getAttribute("target"), "_blank");
-  assert.equal(a.getAttribute("rel"), "noopener noreferrer");
+  assert.equal(a.getAttribute("href"), null, "the notice's link is gated like every other: no href for the browser to follow");
+  assert.equal(a.getAttribute("data-href"), "https://example.com/p.png");
+  assert.equal(a.getAttribute("role"), "link");
   assert.equal(a.textContent, "https://example.com/p.png");
   assert.equal(span.parentNode.localName, "p", "in the place the image was");
 });
@@ -224,11 +238,12 @@ test("a src on an element that is not media goes whatever it holds: mglyph, inpu
   assert.equal(find(f, "input")[0].getAttribute("type"), "image", "its other attributes stay");
 });
 
-test("a relative path on an <a> is a link: it stays (the walk gives it target and rel)", () => {
+test("a relative path on an <a> is a gated link: its value moves to data-href (the gate then refuses it, it is not http)", () => {
   const f = walk(h("a", { href: "api/health" }, "x"), h("svg", {}, h("a", { "xlink:href": "../a.svg" })));
-  assert.equal(find(f, "a")[0].getAttribute("href"), "api/health");
-  assert.equal(find(f, "a")[1].getAttribute("xlink:href"), "../a.svg");
-  assert.equal(find(f, "a")[0].getAttribute("target"), "_blank");
+  assert.equal(find(f, "a")[0].getAttribute("href"), null);
+  assert.equal(find(f, "a")[0].getAttribute("data-href"), "api/health");
+  assert.equal(find(f, "a")[1].getAttribute("xlink:href"), null);
+  assert.equal(find(f, "a")[1].getAttribute("data-href"), "../a.svg");
 });
 
 test("an element whose name is a property of Object is not mistaken for media: it just loses its src, and nothing throws", () => {
@@ -285,9 +300,9 @@ test("free text is not CSS: an alt, a title, an aria label and a link's address 
   assert.equal(span.getAttribute("aria-label"), "image-set(x) in a sentence");
   assert.equal(span.getAttribute("class"), "note (image)");
   const [a1, a2] = find(f, "a");
-  assert.equal(a1.getAttribute("href"), "https://example.com/image(1).png");
-  assert.equal(a1.getAttribute("title"), "image(1)");
-  assert.equal(a2.getAttribute("href"), "https://example.com/src(2).png");
+  assert.equal(a1.getAttribute("data-href"), "https://example.com/image(1).png", "a link's URL is looked at as a link, not as CSS: its parenthesis is kept");
+  assert.equal(a1.getAttribute("title"), "https://example.com/image(1).png", "and its title is the address it goes to");
+  assert.equal(a2.getAttribute("data-href"), "https://example.com/src(2).png");
   assert.equal(find(f, "p")[0].getAttribute("aria-description"), "A (src) B");
 });
 
@@ -311,23 +326,132 @@ test("the CSS functions that take an image by address other than url() go too", 
   assert.equal(d.getAttribute("transform"), "rotate(45)", "a function that fetches nothing stays");
 });
 
-test("a link stays a link and opens in a new tab with no opener; an <a> with no href is left alone", () => {
+test("an <a> to anywhere but the document itself is gated: no href, the value in data-href, and a #fragment or an <a> with no href is not", () => {
   const f = walk(
     h("a", { href: "https://example.com/doc" }, "x"),
     h("a", { href: "#top" }, "y"),
     h("a", { href: "other.md" }, "z"),
     h("a", { name: "n" }, "w"),
     h("svg", {}, h("a", { "xlink:href": "https://example.com/s" }, h("text", {}, "t"))),
+    h("a", { href: "  #padded" }, "p"),
   );
-  const [a1, a2, a3, a4, a5] = find(f, "a");
-  for (const a of [a1, a2, a3]) {
-    assert.equal(a.getAttribute("target"), "_blank", a.getAttribute("href"));
+  const [a1, a2, a3, a4, a5, a6] = find(f, "a");
+  for (const [a, v] of [[a1, "https://example.com/doc"], [a3, "other.md"], [a5, "https://example.com/s"]]) {
+    assert.equal(a.getAttribute("href"), null, v);
+    assert.equal(a.getAttribute("xlink:href"), null, v);
+    assert.equal(a.getAttribute("data-href"), v);
+    assert.equal(a.getAttribute("role"), "link");
+    assert.equal(a.getAttribute("tabindex"), "0");
+    assert.equal(a.getAttribute("class"), "md-link");
+    assert.equal(a.getAttribute("title"), v, "the title is where it goes");
+    assert.equal(a.getAttribute("target"), null, "nothing native is left to open it: no target either");
+    assert.equal(a.getAttribute("rel"), null);
+  }
+  // A reference into the document is no navigation away: it is what it was (target and rel as before), with no gate on it.
+  for (const a of [a2, a6]) {
+    assert.equal(a.getAttribute("data-href"), null);
+    assert.equal(a.getAttribute("role"), null);
+    assert.equal(a.getAttribute("class"), null);
+    assert.deepEqual(a.listeners, {}, "no handler");
+    assert.equal(a.getAttribute("target"), "_blank");
     assert.equal(a.getAttribute("rel"), "noopener noreferrer");
   }
-  assert.equal(a1.getAttribute("href"), "https://example.com/doc", "a link is a click, not a load: its remote address stays");
+  assert.equal(a2.getAttribute("href"), "#top");
+  assert.equal(a4.getAttribute("data-href"), null, "an <a> with no href has nothing to gate");
+  assert.equal(a4.getAttribute("class"), null);
   assert.equal(a4.getAttribute("target"), null);
-  assert.equal(a5.getAttribute("xlink:href"), "https://example.com/s");
-  assert.equal(a5.getAttribute("target"), "_blank");
+});
+
+test("a gated link keeps the classes it had", () => {
+  const f = walk(h("a", { href: "https://example.com/", class: "x y" }, "x"), h("a", { href: "https://example.com/", class: "md-link" }, "y"));
+  assert.equal(find(f, "a")[0].getAttribute("class"), "x y md-link");
+  assert.equal(find(f, "a")[1].getAttribute("class"), "md-link", "not twice");
+});
+
+test("a click and Enter on a gated link call the gate with source markdown and the file's name, and never navigate", () => {
+  gateTaken();
+  const f = walkWhere("README.md", h("a", { href: "https://example.com/doc" }, "x"), h("svg", {}, h("a", { "xlink:href": "https://example.com/s" })));
+  const [a, s] = find(f, "a");
+  const click = a.fire("click", {});
+  assert.equal(click.defaultPrevented, true);
+  const enter = a.fire("keydown", { key: "Enter" });
+  assert.equal(enter.defaultPrevented, true);
+  s.fire("click", {});
+  assert.deepEqual(gateTaken(), [
+    ["https://example.com/doc", { source: "markdown", where: "README.md" }],
+    ["https://example.com/doc", { source: "markdown", where: "README.md" }],
+    ["https://example.com/s", { source: "markdown", where: "README.md" }],
+  ]);
+});
+
+test("other keys on a gated link do nothing", () => {
+  gateTaken();
+  const [a] = find(walk(h("a", { href: "https://example.com/doc" }, "x")), "a");
+  for (const key of ["Tab", " ", "a", "Escape"]) assert.equal(a.fire("keydown", { key }).defaultPrevented, false, key);
+  assert.deepEqual(gateTaken(), []);
+});
+
+test("Enter on a gated link is claimed (the page does not also act on it), and a held key's repeats open nothing", () => {
+  gateTaken();
+  const [a] = find(walk(h("a", { href: "https://example.com/doc" }, "x")), "a");
+  const stopped = [];
+  const enter = a.fire("keydown", { key: "Enter", stopPropagation() { stopped.push(1); } });
+  assert.equal(enter.defaultPrevented, true);
+  assert.equal(stopped.length, 1, "the keydown goes no further");
+  assert.equal(gateTaken().length, 1, "one open");
+  const rep_ = a.fire("keydown", { key: "Enter", repeat: true, stopPropagation() { stopped.push(1); } });
+  assert.equal(rep_.defaultPrevented, true, "a repeat is still the link's key: no scroll or click from it either");
+  assert.deepEqual(gateTaken(), [], "but it asks nothing");
+});
+
+test("with no where the context carries none, and the existing two-argument walk still works", () => {
+  gateTaken();
+  const [a] = find(walk(h("a", { href: "https://example.com/doc" }, "x")), "a");
+  a.fire("click", {});
+  const [[raw, ctx]] = gateTaken();
+  assert.equal(raw, "https://example.com/doc");
+  assert.deepEqual(ctx, { source: "markdown" });
+});
+
+test("the blocked-image notice's link is gated, with the file's name", () => {
+  gateTaken();
+  const f = walkWhere("a.md", h("p", {}, h("img", { src: "https://img.example.com/p.png" })));
+  const [a] = find(f, "a");
+  assert.equal(a.getAttribute("href"), null);
+  a.fire("click", {});
+  assert.deepEqual(gateTaken(), [["https://img.example.com/p.png", { source: "markdown", where: "a.md" }]]);
+});
+
+test("without a link gate in the page a click does nothing at all: it fails closed, and still does not navigate", () => {
+  const saved = global.openAgentLink;
+  delete global.openAgentLink;
+  try {
+    const [a] = find(walk(h("a", { href: "https://example.com/doc" }, "x")), "a");
+    assert.equal(a.getAttribute("href"), null);
+    const ev = a.fire("click", {});
+    assert.equal(ev.defaultPrevented, true);
+    assert.deepEqual(gateTaken(), []);
+  } finally { global.openAgentLink = saved; }
+});
+
+test("a link that is gated is told apart from the ones that are not by what each has: only a gated one has a handler", () => {
+  const f = walk(h("a", { href: "https://example.com/" }, "g"), h("a", { href: "#x" }, "f"), h("a", { href: "javascript:alert(1)" }, "j"));
+  const [g, frag_, j] = find(f, "a");
+  assert.deepEqual(Object.keys(g.listeners).sort(), ["click", "keydown"]);
+  assert.deepEqual(frag_.listeners, {});
+  assert.deepEqual(j.listeners, {}, "a javascript: link loses its href and gets no handler");
+  assert.equal(j.getAttribute("data-href"), null);
+});
+
+test("when href and xlink:href are both there, neither survives, and a fragment one is left", () => {
+  const f = walk(h("svg", {}, h("a", { href: "#a", "xlink:href": "https://example.com/x" }), h("a", { href: "https://example.com/y", "xlink:href": "#b" })));
+  const [a, b] = find(f, "a");
+  assert.equal(a.getAttribute("xlink:href"), null);
+  assert.equal(a.getAttribute("href"), "#a");
+  assert.equal(a.getAttribute("data-href"), "https://example.com/x");
+  assert.equal(b.getAttribute("href"), null);
+  assert.equal(b.getAttribute("xlink:href"), "#b");
+  assert.equal(b.getAttribute("data-href"), "https://example.com/y");
 });
 
 test("a link that would run script has no href left, and so no target", () => {
@@ -337,17 +461,19 @@ test("a link that would run script has no href left, and so no target", () => {
     assert.equal(a.getAttribute("href"), null);
     assert.equal(a.getAttribute("xlink:href"), null);
     assert.equal(a.getAttribute("target"), null);
+    assert.equal(a.getAttribute("data-href"), null, "and no value kept for the gate to open");
+    assert.equal(a.getAttribute("role"), null);
   }
   assert.equal(find(f, "a")[0].textContent, "x", "the text stays");
 });
 
-test("a link that wraps a blocked image keeps its own address, with the notice and its link inside", () => {
+test("a link that wraps a blocked image keeps its own address, with the notice and its link inside, each gated", () => {
   const f = walk(h("a", { href: "https://example.com/build" }, h("img", { src: "https://img.example.com/badge.svg" })));
   const [outer, inner] = find(f, "a");
-  assert.equal(outer.getAttribute("href"), "https://example.com/build");
-  assert.equal(outer.getAttribute("target"), "_blank");
-  assert.equal(inner.getAttribute("href"), "https://img.example.com/badge.svg");
-  assert.equal(inner.getAttribute("rel"), "noopener noreferrer");
+  assert.equal(outer.getAttribute("data-href"), "https://example.com/build");
+  assert.equal(outer.getAttribute("href"), null);
+  assert.equal(inner.getAttribute("data-href"), "https://img.example.com/badge.svg");
+  assert.equal(inner.getAttribute("href"), null);
 });
 
 test("a <template> goes whole: its content is a second tree no query reaches", () => {
@@ -357,7 +483,7 @@ test("a <template> goes whole: its content is a second tree no query reaches", (
 });
 
 test("nothing inside what was replaced is visited again, and a tree with nothing to do is untouched", () => {
-  const clean = frag(h("h1", { id: "a" }, "T"), h("p", {}, h("a", { href: "x.md", target: "_blank", rel: "noopener noreferrer" }, "l")),
+  const clean = frag(h("h1", { id: "a" }, "T"), h("p", {}, h("a", { href: "#x", target: "_blank", rel: "noopener noreferrer" }, "l")),
     h("pre", {}, h("code", { class: "hljs" }, "x")), h("table", {}, h("tr", {}, h("td", { colspan: "2" }, "c"))));
   const before = clean.html;
   mdWalkFragment(clean, REWRITE);
