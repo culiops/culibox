@@ -40,6 +40,10 @@ sh scripts/release/build-abduco_test.sh
 sh scripts/release/build_test.sh
 # The CI secret-scan script, against a stub gitleaks and a throwaway repo.
 bash scripts/ci/secret-scan_test.sh
+# The pinned Grype install's refusals (platform, sum before unpacking), against a stub curl.
+sh scripts/ci/install-grype_test.sh
+# The scan report (counts, accepted findings and their expiry, sanitising), against fixtures.
+sh scripts/ci/image-scan-report_test.sh
 # The private-identifier gitleaks rules. Skips with a notice when gitleaks is not installed
 # (CI installs it and makes a skip a failure).
 bash scripts/ci/gitleaks-rules_test.sh

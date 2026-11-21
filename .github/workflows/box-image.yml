@@ -26,6 +26,8 @@
 #     reports
 #   - both jobs run on main only (job-level `if`), so a workflow_dispatch from
 #     another branch can never move the `base` tag or the dated tag
+#   - the scan job runs third-party code (Grype, pinned by sha256) with a read-only
+#     token and no registry login, and never blocks publishing (report first)
 #   - the BuildKit engine is pinned by image digest (driver-opts), not left at
 #     the mutable moby/buildkit:buildx-stable-1 tag: it runs every RUN and holds
 #     the push credentials
@@ -150,6 +152,66 @@ jobs:
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
+
+  # Scan each pushed digest (#355) with the pinned Grype (scripts/ci/install-grype.sh,
+  # a sha256-checked download, no scanner Action). The scanner is third-party code,
+  # so this job holds a read-only token and logs in nowhere: the package is public.
+  # Report first: findings go to the job summary and never fail the job, and merge
+  # does not wait for it, so a scanner or vulnerability-database outage never blocks
+  # publishing. The fail policy is in docs/BOX-IMAGE.md.
+  scan:
+    name: scan ${{ matrix.arch }}
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests
+
+      - name: Install the pinned Grype
+        run: scripts/ci/install-grype.sh "$RUNNER_TEMP/grype"
+
+      # The digest is the artifact's file name: checked, then used through env only.
+      - name: Scan the pushed digest
+        env:
+          ARCH: ${{ matrix.arch }}
+          GRYPE_CHECK_FOR_APP_UPDATE: "false"
+        run: |
+          set -euo pipefail
+          files=("$RUNNER_TEMP"/digests/*)
+          test "${#files[@]}" -eq 1
+          DIGEST="$(basename "${files[0]}")"
+          [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          "$RUNNER_TEMP/grype/bin/grype" "registry:${IMAGE}@sha256:${DIGEST}" --platform "linux/${ARCH}" \
+            -o json --file "$RUNNER_TEMP/scan.json"
+
+      - name: Report in the job summary
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          scripts/ci/image-scan-report.sh -a scripts/ci/image-scan-accepted.txt \
+            "linux/${ARCH}=$RUNNER_TEMP/scan.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scan-${{ matrix.arch }}
+          path: ${{ runner.temp }}/scan.json
+          if-no-files-found: error
+          retention-days: 30
 
   merge:
     name: merge manifest list
