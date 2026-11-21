@@ -184,6 +184,17 @@ ENV GOTOOLCHAIN=local
 ENV GOFLAGS=-modcacherw
 ENV PATH=/usr/local/go/bin:/home/agent/go/bin:$PATH
 
+# --- C compiler (go test -race) ---
+# go test -race needs cgo, and cgo needs a C compiler: without one the race run
+# could only happen on the host. From Debian's signed archive, following the
+# base's apt snapshot. With gcc on PATH Go turns cgo on by default, which would
+# make every Go build in a box (user projects too) a dynamically linked cgo build.
+# CGO_ENABLED=0 keeps the default a box had with no compiler; a race run asks for
+# cgo itself: CGO_ENABLED=1 go test -race ./...
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+ENV CGO_ENABLED=0
+
 # --- abduco ---
 # Built in the abduco-build stage above (see there for source, pin and bump).
 COPY --from=abduco-build /out/abduco /usr/local/bin/abduco

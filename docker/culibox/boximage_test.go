@@ -450,6 +450,33 @@ func TestDockerfileSetsGoEnvUnderHome(t *testing.T) {
 	}
 }
 
+// go test -race needs cgo, and cgo needs a C compiler (#353). The abduco-build
+// stage installs gcc too, so only the final stage counts. With gcc on PATH Go
+// would turn cgo on for every build in a box; the image pins it off so builds
+// stay static, as they were with no compiler, and a race run asks for it.
+func TestDockerfileFinalStageHasCCompilerWithCgoOff(t *testing.T) {
+	final := stageInstructions(t, regexp.MustCompile(`^FROM node:24-bookworm-slim@sha256:[0-9a-f]{64}$`))
+	var apt, cgoOff bool
+	for _, in := range final {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "apt-get install") &&
+			regexp.MustCompile(`\sgcc(\s|$)`).MatchString(in) && regexp.MustCompile(`\slibc6-dev(\s|$)`).MatchString(in) {
+			apt = true
+			if !strings.Contains(in, "rm -rf /var/lib/apt/lists/*") {
+				t.Errorf("C compiler block leaves the apt lists in the image: %s", in)
+			}
+		}
+		if in == "ENV CGO_ENABLED=0" {
+			cgoOff = true
+		}
+	}
+	if !apt {
+		t.Error("the final stage has no RUN apt-get install naming gcc and libc6-dev")
+	}
+	if !cgoOff {
+		t.Error("the final stage has no ENV CGO_ENABLED=0")
+	}
+}
+
 // The host bind-mounts its out dir at box.PlaywrightOutBox so the boxed
 // Playwright MCP's screenshots reach the host. If the image's --output-dir ever
 // drifts from that path, the browser keeps writing inside the box and the UI
