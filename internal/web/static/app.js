@@ -6259,14 +6259,17 @@ async function spawnSession(req, opts) {
     body: JSON.stringify(req),
   });
   if (opts.onCreated) opts.onCreated(s);
+  // Read before the last spawn is rewritten: an empty recents list falls back to the previous last folder. A convenience:
+  // nothing here may stop the session from opening.
+  let recents = null;
+  try { recents = wsRecentsPush(loadRecentWorkspaces(), req.cwd || ""); } catch (_) {}
   try {
-    // Read before the last spawn is rewritten: an empty recents list falls back to the previous last folder.
-    const recents = wsRecentsPush(loadRecentWorkspaces(), req.cwd || "");
-    localStorage.setItem(RECENT_WS_KEY, JSON.stringify({ v: 1, paths: recents }));
     localStorage.setItem(LAST_SPAWN_KEY, JSON.stringify({
       agent: req.agent, cwd: req.cwd || "", options: req.options || {},
     }));
   } catch (_) {}
+  // Its own try: a full storage must not cost the last-spawn write above.
+  if (recents) try { localStorage.setItem(RECENT_WS_KEY, JSON.stringify({ v: 1, paths: recents })); } catch (_) {}
   {
     const st = deskStorage();
     writeRecent(st, pushRecentProfile(readRecent(st), req.agent));

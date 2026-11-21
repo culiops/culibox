@@ -1243,7 +1243,7 @@ test("recents: Last used only when the first recent is the last spawn's; the fil
   assert.deepStrictEqual(names(q), ["~ (home)", "culishop", "notes", "proj"]);
 });
 
-test("recents: the root heading and Other places still follow; the folders are not reordered by Last used", async () => {
+test("recents: the root heading and Other places still follow; the folders are not reordered; the caption counts folders and roots", async () => {
   const t = flat();
   t.server.roots = others("/opt/web");
   const p = t.make({ paths: () => true, inline: () => true, otherPlaces: () => true, lastUsed: () => "/home/me/notes", recents: () => ["/home/me/notes"] });
@@ -1252,7 +1252,7 @@ test("recents: the root heading and Other places still follow; the folders are n
   assert.deepStrictEqual(headings(p), ["Recent", "Folders", "Other places"]);
   assert.deepStrictEqual(names(p), ["notes", "~ (home)", "culishop", "notes", "proj", "web"]);
   assert.strictEqual(pathOf(optionRows(p)[5]), "/opt/web", "an other place shows its full path");
-  assert.strictEqual(p.calls.note[p.calls.note.length - 1][0], "4 project roots · type to filter · ↵ to pick", "the caption still counts the folders only");
+  assert.strictEqual(p.calls.note[p.calls.note.length - 1][0], "4 project roots · type to filter · ↵ to pick", "the folders and roots the list shows; not the recents, not the other places");
 });
 
 test("search with paths: roots and other places whose name matches come first, tagged; hits show full paths; one row per path", async () => {
@@ -1305,4 +1305,51 @@ test("search without paths: no root or other-place rows join, and the note is to
   await flush();
   assert.deepStrictEqual(rowsOf(p), ["notes"]);
   assert.strictEqual(p.list.children.filter((c) => c.attrs["aria-disabled"] === "true").length, 0);
+});
+
+test("search with paths: a truncated index and a failed search keep today's notes; the field's note never gets the match count", async () => {
+  const t = flat();
+  const p = t.make({ paths: () => true, inline: () => true });
+  t.server.search = [{ rel: "notes", path: "/home/me/notes" }];
+  type(p, "note");
+  t.runDebounce();
+  await flush();
+  assert.strictEqual(footOf(p), "1 match · ↵ to pick");
+  assert.deepStrictEqual(p.calls.note[p.calls.note.length - 1], ["", false], "onNote hears dirPickerNote's words: nothing wrong");
+  const real = t.box.fetch;
+  t.box.fetch = async (url, init) => (String(url).includes("/api/fs/search") ? { ok: true, status: 200, json: async () => ({ results: [{ rel: "notes", path: "/home/me/notes" }], truncated: true }) } : real(url, init));
+  type(p, "notes");
+  t.runDebounce();
+  await flush();
+  assert.strictEqual(footOf(p), "index truncated: some folders are not listed");
+  t.box.fetch = async (url, init) => (String(url).includes("/api/fs/search") ? { ok: false, status: 500, json: async () => ({}) } : real(url, init));
+  type(p, "proj");
+  t.runDebounce();
+  await flush();
+  assert.strictEqual(footOf(p), "folder search unavailable");
+  assert.deepStrictEqual(names(p), ["proj"], "a failed search still offers the root found by name");
+});
+
+test("search with paths: the last spawn's folder is pinned first and says Last used, even when it is an added root", async () => {
+  const t = flat();
+  const p = t.make({ paths: () => true, inline: () => true, lastUsed: () => "/srv/code/proj" });
+  t.server.search = [{ rel: "work/projector", path: "/home/me/work/projector" }];
+  type(p, "proj");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(names(p), ["proj", "projector"]);
+  assert.strictEqual(tagOf(optionRows(p)[0]), "Last used");
+});
+
+test("Other places arriving keep the highlight on the row it was on, not an earlier row with the same path", async () => {
+  const t = flat();
+  t.server.roots = others("/opt/web");
+  const p = t.make({ paths: () => true, inline: () => true, otherPlaces: () => true, recents: () => ["/home/me/notes"] });
+  fire(p.input, "focus");
+  // Recent notes, ~ (home), culishop, notes: the fourth row is the Folders copy of the recent one.
+  for (let i = 0; i < 4; i++) fire(p.input, "keydown", { key: "ArrowDown" });
+  assert.strictEqual(p.input.attrs["aria-activedescendant"], optionRows(p)[3].id);
+  await flush();
+  assert.deepStrictEqual(names(p).slice(-1), ["web"]);
+  assert.strictEqual(p.input.attrs["aria-activedescendant"], optionRows(p)[3].id, "still the Folders copy");
 });

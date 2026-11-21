@@ -347,7 +347,8 @@ function createWsPicker(opts) {
       el.setAttribute("role", "option");
       el.setAttribute("aria-selected", "false");
       el.id = uid + "-opt-" + i;
-      const tagText = r.tag || (r.lastUsed === true ? "Last used" : "");
+      // "Last used" wins over the row's own tag: in a search the pinned last folder may be a root or an other place.
+      const tagText = r.lastUsed === true ? "Last used" : (r.tag || "");
       if (drawnPaths) {
         // Two lines (#343 slice 4): the name, and under it the path, dimmed (~/… under home).
         const two = document.createElement("div");
@@ -464,9 +465,9 @@ function createWsPicker(opts) {
     let hits = broke ? [] : pickerRows({ mode: "fuzzy", hits: data.results || [] });
     if (paths()) {
       // The added roots and the other places, by name, before the index's hits; each path once.
-      const mine = wsNameMatches(rootAll().concat(otherAll().map((r) => Object.assign({}, r, { tag: "Other place" }))), q);
-      const have = new Set(mine.map((r) => r.path));
-      hits = mine.concat(hits.filter((r) => !have.has(r.path)));
+      const named = wsNameMatches(rootAll().concat(otherAll().map((r) => Object.assign({}, r, { tag: "Other place" }))), q);
+      const have = new Set(named.map((r) => r.path));
+      hits = named.concat(hits.filter((r) => !have.has(r.path)));
     }
     const found = pinned(hits);
     const text = dirPickerNote(found.length, !!(data && data.truncated), broke);
@@ -610,9 +611,11 @@ function createWsPicker(opts) {
     if (gone || mine !== othersSeq || !data || !Array.isArray(data.elsewhere)) return;
     others = data.elsewhere.filter((p) => p && typeof p.path === "string" && p.path.charAt(0) === "/" && typeof p.label === "string" && p.label !== "");
     if (list.hidden) return;
-    const at = active >= 0 && shown[active] ? shown[active].path : "";
+    const was = active;
+    const at = was >= 0 && shown[was] ? shown[was].path : "";
     refresh();
-    const back = at ? shown.findIndex((r) => r.path === at) : -1;
+    // The same row if it is still there (Recent and Folders can both hold a path), else the first row with that path.
+    const back = !at ? -1 : (shown[was] && shown[was].path === at ? was : shown.findIndex((r) => r.path === at));
     if (back >= 0) setActive(back, false);
   }
 

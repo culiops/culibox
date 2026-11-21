@@ -2509,7 +2509,10 @@
   /* A shorter window gives the dialog's form less room below the field (measured with the Docker banner, the lowest the field
      sits: 382px free at 1024x700, 519px at 1280x900), so the list also stays 330px short of the viewport: the form's scroll box
      would clip it, footer first. */
-  #spawn-ws-list:has(.wsp-two) { max-height: min(470px, calc(100vh - 330px)); }
+  #spawn-ws-list:has(.wsp-two) { max-height: max(calc(3 * var(--h-menu)), min(470px, calc(100vh - 330px))); }
+  /* The arrows scroll a row into view above the footer, not under it; the first heading needs no rule above it. */
+  #spawn-ws-list:has(> .wsp-foot) { scroll-padding-bottom: calc(var(--h-menu) + var(--sp-1)); }
+  #spawn-ws-list > .wsp-head:first-child { margin-top: 0; border-top: 0; }
   #spawn-ws-list .menu-item:has(> .wsp-two) { height: auto; min-height: var(--h-menu); padding-top: 5px; padding-bottom: 5px; }
   #spawn-ws-list .wsp-two { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-width: 0; }
   #spawn-ws-list .wsp-path { font-family: var(--font-mono); font-size: var(--t-xs); line-height: var(--lh-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
