@@ -141,3 +141,48 @@ func TestRootHealthCachesAndRechecks(t *testing.T) {
 		t.Fatalf("%d checks, want 2", n)
 	}
 }
+
+// R15: a concurrent live() over a shorter list forgets a root between the two
+// locked phases of another live() that still lists it. The first call must not
+// dereference the forgotten entry. Real trigger: a DELETE of r2 (its reply
+// builds the list) while an fs request waits on r1's first check.
+func TestRootHealthForgottenRootMidCall(t *testing.T) {
+	_, r1, r2 := rootsFixture(t)
+	release := make(chan struct{})
+	h := &rootHealth{wait: 5 * time.Second, check: func(r string) bool {
+		if r == r1 {
+			<-release
+		}
+		return true
+	}}
+	state := func(f func() bool) bool { h.mu.Lock(); defer h.mu.Unlock(); return f() }
+	aDone := make(chan any, 1)
+	go func() {
+		defer func() { aDone <- recover() }()
+		h.live([]string{r1, r2}) // waits on r1; r2 answers at once
+	}()
+	eventually := func(what string, ok func() bool) {
+		t.Helper()
+		for i := 0; i < 400; i++ {
+			if ok() {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("timed out: %s", what)
+	}
+	eventually("r2's check answered", func() bool {
+		return state(func() bool { c := h.roots[r2]; return c != nil && c.known && c.running == nil })
+	})
+	go h.live([]string{r1}) // forgets r2, then waits on r1 too
+	eventually("r2 forgotten", func() bool { return state(func() bool { return h.roots[r2] == nil }) })
+	close(release)
+	select {
+	case p := <-aDone:
+		if p != nil {
+			t.Fatalf("live panicked on a root forgotten mid-call: %v", p)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first live() never returned")
+	}
+}

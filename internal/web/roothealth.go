@@ -115,6 +115,12 @@ func (h *rootHealth) live(roots []string) map[string]bool {
 	out := make(map[string]bool, len(roots))
 	for _, r := range roots {
 		c := h.roots[r]
+		if c == nil {
+			// A concurrent call over a shorter list forgot it between our two
+			// locked phases: it is no longer a root.
+			out[r] = false
+			continue
+		}
 		if c.running != nil && now.Sub(c.started) >= wait {
 			c.ok, c.known = false, true // no answer in time: not live until it answers
 		}
