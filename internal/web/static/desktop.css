@@ -2801,7 +2801,7 @@
   #wsroots .wsr-tbl col:nth-child(2) { width: 38%; }
   #wsroots .wsr-tbl col:nth-child(3) { width: 20%; }
   #wsroots .wsr-tbl td { height: auto; padding-top: 8px; padding-bottom: 8px; vertical-align: top; white-space: normal; overflow-wrap: anywhere; line-height: var(--lh-md); }
-  #wsroots .wsr-tbl td.wsr-note { white-space: nowrap; }
+  #wsroots .wsr-tbl td.wsr-note .wsr-nb { white-space: nowrap; }
   #wsroots .wsr-tbl th:first-child, #wsroots .wsr-tbl td:first-child { padding-left: 16px; }
   #wsroots .wsr-tbl th:last-child, #wsroots .wsr-tbl td:last-child { padding-right: 12px; }
   #wsroots .wsr-tbl tbody tr:hover { background: transparent; }

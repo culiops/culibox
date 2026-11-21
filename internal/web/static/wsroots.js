@@ -5,7 +5,7 @@
 // endpoint the New session form asks, shows the same line (wsCheckLine) and posts what that line promised: the repo top when the folder is
 // inside a repo. Remove and Add save at once, and the answer of each is the whole list.
 //
-// wsrModel, wsrRowNote and wsrAddState are pure (jstest/wsroots.test.js pins every word); the rest paints. Classic script: api, showToast,
+// wsrModel, wsrNoteParts, wsrRowNote and wsrAddState are pure (jstest/wsroots.test.js pins every word); the rest paints. Classic script: api, showToast,
 // createWsPicker, wsCheckLine (wspicker.js), openSettings, openVMFoldersAdd, loadWorkspaceRoots and loadWorkspaces are other files'
 // globals, read at call time.
 
@@ -35,13 +35,19 @@ function wsrModel(resp) {
   return { rows, corrupt: r.corrupt === true };
 }
 
-// wsrRowNote: the line beside a folder. Home is "always" (even when its folder is gone: it cannot be removed). A root that no longer
-// resolves is "not available" and stays removable. Else the two dates; a hand-edited row without them still reads.
-function wsrRowNote(row) {
-  if (row.always) return "always";
-  if (!row.available) return "not available";
+// wsrNoteParts: the note beside a folder as the pieces that may wrap apart. Home is "always" (even when its folder is gone: it cannot be
+// removed). A root that no longer resolves is "not available" and stays removable. Else the two dates, each with its label; a hand-edited
+// row without dates still reads.
+function wsrNoteParts(row) {
+  if (row.always) return ["always"];
+  if (!row.available) return ["not available"];
   const a = wsrDate(row.added), u = wsrDate(row.lastUsed);
-  return "added" + (a ? " " + a : "") + " · last used " + (u || "never");
+  return ["added" + (a ? " " + a : ""), "last used " + (u || "never")];
+}
+
+// wsrRowNote: the same note as one string (the pieces joined by " · ").
+function wsrRowNote(row) {
+  return wsrNoteParts(row).join(" · ");
 }
 
 // wsrAddState: what the add card shows and does for one check answer (null: none yet). The line is the form's own (host tier: there is no
@@ -114,7 +120,11 @@ function wsrRowEl(row, cells) {
   p.title = row.path;
   f.appendChild(p);
   const note = td("muted wsr-note");
-  note.textContent = wsrRowNote(row);
+  // One nowrap span per piece, so the note stays on one line where it fits and wraps at the separator where it does not.
+  wsrNoteParts(row).forEach((t, i) => {
+    if (i) note.appendChild(document.createTextNode(" · "));
+    note.appendChild(wsrEl("span", "wsr-nb", t));
+  });
   const act = td("num");
   if (row.removable) {
     const b = wsrBtn("Remove", "btn btn-ghost btn-sm", () => wsrRemove(row.path));
@@ -377,5 +387,5 @@ function openWsRootsAdd(path) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { wsrModel, wsrRowNote, wsrAddState, wsrDate, WSR_CORRUPT };
+  module.exports = { wsrModel, wsrNoteParts, wsrRowNote, wsrAddState, wsrDate, WSR_CORRUPT };
 }

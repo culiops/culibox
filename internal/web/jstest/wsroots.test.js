@@ -125,6 +125,37 @@ test("wsrRowNote: always, not available, or the added and last used dates (never
   assert.strictEqual(note({ always: false, available: true, added: "not a date", lastUsed: "" }), "added · last used never");
 });
 
+test("wsrNoteParts: the note as the pieces that may wrap apart; wsrRowNote is the pieces joined by the separator", () => {
+  const p = page();
+  const parts = (r) => JSON.parse(JSON.stringify(p.box.wsrNoteParts(r)));
+  assert.deepStrictEqual(parts({ always: true, available: true }), ["always"]);
+  assert.deepStrictEqual(parts({ always: false, available: false, added: DAY }), ["not available"]);
+  assert.deepStrictEqual(parts({ always: false, available: true, added: DAY, lastUsed: "2026-11-21T08:00:00Z" }), ["added " + fmt(DAY), "last used " + fmt("2026-11-21T08:00:00Z")]);
+  assert.deepStrictEqual(parts({ always: false, available: true, added: DAY, lastUsed: "" }), ["added " + fmt(DAY), "last used never"]);
+  for (const r of [{ always: true }, { available: false }, { available: true, added: DAY, lastUsed: "" }, { available: true, added: "", lastUsed: "" }]) {
+    assert.strictEqual(p.box.wsrRowNote(r), parts(r).join(" \u00b7 "));
+  }
+});
+
+test("the note cell holds one nowrap span per piece with the separator between, so it wraps only at the separator (R16)", () => {
+  const p = page();
+  p.box.wsrSetView(view());
+  const rows = p.body.querySelectorAll("tr").slice(1);
+  const note = (tr) => tr.querySelectorAll("td")[1];
+  const spans = note(rows[1]).querySelectorAll("span");
+  assert.deepStrictEqual(spans.map((s) => s.textContent), ["added " + fmt(DAY), "last used " + fmt("2026-11-21T08:00:00Z")]);
+  assert.ok(spans.every((s) => s.className.split(" ").includes("wsr-nb")), "each piece is nowrap");
+  assert.strictEqual(note(rows[1]).textContent, "added " + fmt(DAY) + " \u00b7 last used " + fmt("2026-11-21T08:00:00Z"), "the cell reads as the old one-line string");
+  assert.strictEqual(note(rows[0]).textContent, "always");
+  assert.strictEqual(note(rows[2]).textContent, "not available");
+});
+
+test("desktop.css: the note cell itself may wrap; only the pieces are nowrap (R16)", () => {
+  const css = read("desktop.css");
+  assert.doesNotMatch(css, /td\.wsr-note\s*\{[^}]*white-space:\s*nowrap/, "no cell-level nowrap on the note");
+  assert.match(css, /#wsroots \.wsr-tbl td\.wsr-note \.wsr-nb\s*\{[^}]*white-space:\s*nowrap/, "each piece is nowrap");
+});
+
 test("wsrAddState: Add waits for would_add and posts the repo top the line named", () => {
   const p = page();
   const st = (c) => JSON.parse(JSON.stringify(p.box.wsrAddState(c)));
