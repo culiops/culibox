@@ -85,12 +85,39 @@ test("revealable: box file and outside-home file are refused with a reason", () 
   assert.match(b.title, /box/);
   const o = revealable({ box: "", path: "/etc/nginx/nginx.conf" }, "/home/u");
   assert.equal(o.ok, false);
-  assert.match(o.title, /home/);
+  assert.match(o.title, /workspace roots/);
   assert.equal(revealable({ box: "", path: "/home/user2/a.go" }, "/home/user").ok, false);
 });
 
 test("revealable: unknown home allows (same convention as treeFollowTarget)", () => {
   assert.equal(revealable({ box: "", path: "/etc/x" }, "").ok, true);
+  assert.equal(revealable({ box: "", path: "/etc/x" }, []).ok, true);
+});
+
+test("revealable: a roots array lets a file under any root be shown and refuses the rest", () => {
+  const roots = ["/home/u", "/srv/code"];
+  assert.deepEqual(revealable({ box: "", path: "/srv/code/api/a.go" }, roots), { ok: true });
+  assert.deepEqual(revealable({ box: "", path: "/home/u/a.go" }, roots), { ok: true });
+  const o = revealable({ box: "", path: "/opt/x/a.go" }, roots);
+  assert.equal(o.ok, false);
+  assert.match(o.title, /workspace roots/);
+  assert.equal(revealable({ box: "", path: "/srv/code2/a.go" }, roots).ok, false, "whole components");
+  assert.equal(revealable({ box: "", path: "/srv/code/a.go" }, ["/srv/code/"]).ok, true, "a trailing slash does not matter");
+  assert.equal(revealable({ box: "s1", path: "/srv/code/a.go" }, roots).ok, false, "a box file is never revealable");
+});
+
+test("revealable: with no argument the page's window.WORKSPACE_ROOTS and HOME_DIR decide", () => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, "window");
+  try {
+    globalThis.window = { WORKSPACE_ROOTS: ["/data/u", "/srv/code"], HOME_DIR: "/home/u" };
+    assert.equal(revealable({ box: "", path: "/srv/code/a.go" }).ok, true);
+    assert.equal(revealable({ box: "", path: "/home/u/a.go" }).ok, true);
+    assert.equal(revealable({ box: "", path: "/opt/a.go" }).ok, false);
+    globalThis.window = { HOME_DIR: "/home/u" };
+    assert.equal(revealable({ box: "", path: "/srv/code/a.go" }).ok, false);
+  } finally {
+    if (had) Object.defineProperty(globalThis, "window", had); else delete globalThis.window;
+  }
 });
 
 // alternatesOutcome: what the viewer does with GET /api/fs/alternates after a 404.

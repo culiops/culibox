@@ -353,9 +353,11 @@ type searchResp struct {
 	Results []struct {
 		Path  string `json:"path"`
 		Rel   string `json:"rel"`
+		Root  string `json:"root"`
 		Score int    `json:"score"`
 	} `json:"results"`
 	Truncated bool `json:"truncated"`
+	Partial   bool `json:"partial"`
 }
 
 func doSearch(t *testing.T, s *Server, query string) (*httptest.ResponseRecorder, searchResp) {
@@ -1149,13 +1151,13 @@ func TestResolvePreferRejectsSkippedRoots(t *testing.T) {
 		".claude/projects",          // skipRelPaths, exact
 		".claude/projects/slug",     // skipRelPaths, a prefix of it
 	} {
-		if _, _, ok := resolvePrefer(pol, filepath.Join(home, rel)); ok {
+		if _, _, _, ok := resolvePrefer(pol, filepath.Join(home, rel)); ok {
 			t.Errorf("prefer=%q: resolved ok=true, want it silently ignored", rel)
 		}
 	}
 
 	// A sibling that shares no path with a skip rule must still resolve.
-	if _, rel, ok := resolvePrefer(pol, filepath.Join(home, "proj", "src")); !ok || rel != filepath.Join("proj", "src") {
+	if _, rel, _, ok := resolvePrefer(pol, filepath.Join(home, "proj", "src")); !ok || rel != filepath.Join("proj", "src") {
 		t.Fatalf("resolvePrefer(proj/src) = rel=%q ok=%v, want it to resolve normally", rel, ok)
 	}
 }
@@ -1259,5 +1261,331 @@ func TestFsSearchDataDirHidden(t *testing.T) {
 	_, out = doSearch(t, s, "q=secretname&prefer="+url.QueryEscape(data))
 	if want := []string{filepath.Join("proj", "secretname-public")}; !reflect.DeepEqual(hitRels(out), want) {
 		t.Fatalf("with prefer=data: hits = %v, want %v", hitRels(out), want)
+	}
+}
+
+// waitRootIndexes polls rootIndexes until every listed root has built, 2 s max.
+func waitRootIndexes(t *testing.T, s *Server, roots []string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(s.rootIndexes(roots)) < len(roots) {
+		if time.Now().After(deadline) {
+			t.Fatalf("root indexes for %v never built", roots)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestSearchFindsUnderExtraRoot(t *testing.T) {
+	home, extra, _ := rootsFixture(t)
+	mustWrite(t, filepath.Join(extra, "proj"), "x")
+	s := &Server{Home: home, Roots: fakeRoots{extra}}
+	waitRootIndexes(t, s, []string{extra})
+	rr, out := doSearch(t, s, "q=proj")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code = %d (%s)", rr.Code, rr.Body)
+	}
+	if len(out.Results) != 1 || out.Results[0].Path != extra+"/proj" || out.Results[0].Root != extra || out.Results[0].Rel != "proj" {
+		t.Fatalf("hits = %+v", out.Results)
+	}
+	if out.Partial {
+		t.Fatal("partial must be false once every root has built")
+	}
+}
+
+func TestSearchHomeHitsCarryNoRoot(t *testing.T) {
+	home, extra, _ := rootsFixture(t)
+	mustWrite(t, filepath.Join(home, "needle.txt"), "x")
+	s := &Server{Home: home, Roots: fakeRoots{extra}}
+	waitRootIndexes(t, s, []string{extra})
+	_, out := doSearch(t, s, "q=needle")
+	if len(out.Results) != 1 || out.Results[0].Root != "" || out.Results[0].Path != filepath.Join(home, "needle.txt") {
+		t.Fatalf("hits = %+v", out.Results)
+	}
+}
+
+func TestSearchPartialWhileBuilding(t *testing.T) {
+	home, extra, _ := rootsFixture(t)
+	mustWrite(t, filepath.Join(home, "needle.txt"), "x")
+	mustWrite(t, filepath.Join(extra, "needle2.txt"), "x")
+	s := &Server{Home: home, Roots: fakeRoots{extra}}
+	rr, out := doSearch(t, s, "q=needle")
+	if rr.Code != http.StatusOK || !out.Partial {
+		t.Fatalf("first call: code %d partial %v (%s)", rr.Code, out.Partial, rr.Body)
+	}
+	if len(out.Results) == 0 || out.Results[0].Rel != "needle.txt" {
+		t.Fatalf("the home hits must still be served while a root builds: %+v", out.Results)
+	}
+	waitRootIndexes(t, s, []string{extra})
+	_, out = doSearch(t, s, "q=needle")
+	if out.Partial || len(out.Results) != 2 {
+		t.Fatalf("after the build: partial %v hits %+v", out.Partial, out.Results)
+	}
+}
+
+func TestSearchDedupesNestedRoots(t *testing.T) {
+	home, extra, _ := rootsFixture(t)
+	api := filepath.Join(extra, "api")
+	mustWrite(t, filepath.Join(api, "main.go"), "x")
+	s := &Server{Home: home, Roots: fakeRoots{extra, api}}
+	waitRootIndexes(t, s, []string{extra, api})
+	// "main.go" matches in both indexes; "api" only in the outer one (its rel
+	// is api/main.go). Either way: one hit, owned by the deepest root.
+	for _, q := range []string{"main.go", "api"} {
+		_, out := doSearch(t, s, "q="+q)
+		if len(out.Results) != 1 {
+			t.Fatalf("q=%s: nested roots must give one hit per file: %+v", q, out.Results)
+		}
+		h := out.Results[0]
+		if h.Path != filepath.Join(api, "main.go") || h.Root != api || h.Rel != "main.go" {
+			t.Fatalf("q=%s: want root %s rel main.go, got %+v", q, api, h)
+		}
+	}
+	// Dropping the outer root: the inner one still serves the file.
+	s.Roots = fakeRoots{api}
+	_, out := doSearch(t, s, "q=main.go")
+	if len(out.Results) != 1 || out.Results[0].Root != api || out.Results[0].Rel != "main.go" {
+		t.Fatalf("after dropping the outer root: %+v", out.Results)
+	}
+}
+
+func TestSearchDropsRemovedRoot(t *testing.T) {
+	home, extra, _ := rootsFixture(t)
+	mustWrite(t, filepath.Join(extra, "proj"), "x")
+	roots := fakeRoots{extra}
+	s := &Server{Home: home, Roots: roots}
+	waitRootIndexes(t, s, []string{extra})
+	s.Roots = fakeRoots{}
+	_, out := doSearch(t, s, "q=proj")
+	if len(out.Results) != 0 || out.Partial {
+		t.Fatalf("a removed root must not be searched: %+v", out)
+	}
+	s.rootIdxMu.Lock()
+	n := len(s.rootIdx)
+	s.rootIdxMu.Unlock()
+	if n != 0 {
+		t.Fatalf("index of a removed root kept: %d entries", n)
+	}
+}
+
+// While a root builds, repeated requests start no second build: count the
+// walks, not the goroutines.
+func TestRootIndexesStartsOneBuildPerIndex(t *testing.T) {
+	home, extra, _ := rootsFixture(t)
+	mustWrite(t, filepath.Join(extra, "a"), "x")
+	s := &Server{Home: home}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				s.rootIndexes([]string{extra})
+			}
+		}()
+	}
+	wg.Wait()
+	waitRootIndexes(t, s, []string{extra})
+	time.Sleep(50 * time.Millisecond) // a stray second build would have started by now
+	s.rootIdxMu.Lock()
+	ix := s.rootIdx[extra]
+	s.rootIdxMu.Unlock()
+	ix.mu.Lock()
+	n := ix.builds
+	ix.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("walks started = %d, want exactly 1", n)
+	}
+}
+
+func TestSearchRootIndexSkipDirsApplyButNotHomeRelSkips(t *testing.T) {
+	home, extra, _ := rootsFixture(t)
+	// ".claude/projects" is a home-relative skip; under an extra root it is data.
+	mustWrite(t, filepath.Join(extra, ".claude", "projects", "keep.txt"), "x")
+	mustWrite(t, filepath.Join(extra, "node_modules", "dropped.txt"), "x")
+	s := &Server{Home: home, Roots: fakeRoots{extra}}
+	waitRootIndexes(t, s, []string{extra})
+	_, out := doSearch(t, s, "q=keep.txt")
+	if len(out.Results) != 1 || out.Results[0].Root != extra {
+		t.Fatalf("skipRelPaths must be home-only: %+v", out.Results)
+	}
+	_, out = doSearch(t, s, "q=dropped.txt")
+	if len(out.Results) != 0 {
+		t.Fatalf("skipDirs must apply under every root: %+v", out.Results)
+	}
+}
+
+func TestSearchPreferUnderExtraRoot(t *testing.T) {
+	home, extra, _ := rootsFixture(t)
+	mustWrite(t, filepath.Join(extra, "aaa", "peek.go"), "x")
+	mustWrite(t, filepath.Join(extra, "proj", "internal", "peek.go"), "x")
+	s := &Server{Home: home, Roots: fakeRoots{extra}}
+	waitRootIndexes(t, s, []string{extra})
+	_, plain := doSearch(t, s, "q=peek")
+	if len(plain.Results) != 2 || plain.Results[0].Rel != filepath.Join("aaa", "peek.go") {
+		t.Fatalf("baseline: %+v", plain.Results)
+	}
+	_, out := doSearch(t, s, "q=peek&prefer="+url.QueryEscape(filepath.Join(extra, "proj")))
+	want := filepath.Join("proj", "internal", "peek.go")
+	if len(out.Results) != 2 || out.Results[0].Rel != want ||
+		out.Results[0].Path != filepath.Join(extra, want) || out.Results[0].Root != extra {
+		t.Fatalf("prefer under an extra root: %+v", out.Results)
+	}
+	// It must never have been joined onto $HOME.
+	for _, r := range out.Results {
+		if strings.HasPrefix(r.Path, home) {
+			t.Fatalf("hit joined onto home: %+v", r)
+		}
+	}
+}
+
+// synthEntries is n index entries that all match "a": a few short real files
+// (created on disk, so they pass the per-hit check) rank first, the rest are
+// longer names that exist only in the index.
+func synthEntries(t testing.TB, root string, real, n int) []indexEntry {
+	t.Helper()
+	out := make([]indexEntry, 0, n)
+	for i := 0; i < n; i++ {
+		var rel string
+		if i < real {
+			rel = "a" + strconv.Itoa(i)
+			if err := os.WriteFile(filepath.Join(root, rel), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			rel = "pkg/sub" + strconv.Itoa(i%97) + "/file_" + strconv.Itoa(i) + "_data.txt"
+		}
+		l := strings.ToLower(rel)
+		out = append(out, indexEntry{rel: rel, lower: l, baseStart: baseStartOf(l)})
+	}
+	return out
+}
+
+// readyIndex is a built index over entries that never goes stale in a test.
+func readyIndex(root string, entries []indexEntry) *fileIndex {
+	ix := newFileIndex(root)
+	ix.noRelSkip = true
+	ix.entries, ix.built, ix.ttl = entries, time.Now(), time.Hour
+	return ix
+}
+
+// manyRootsServer is home plus nRoots added roots, each index holding n entries.
+func manyRootsServer(t testing.TB, nRoots, n int) *Server {
+	t.Helper()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Home: home, idx: readyIndex(home, synthEntries(t, home, 60, n)), rootIdx: map[string]*fileIndex{}}
+	var roots fakeRoots
+	for i := 0; i < nRoots; i++ {
+		r, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots = append(roots, r)
+		s.rootIdx[r] = readyIndex(r, synthEntries(t, r, 60, n))
+	}
+	s.Roots = roots
+	return s
+}
+
+// I2: the cost of one query over many large root indexes.
+func BenchmarkSearchManyRoots(b *testing.B) {
+	s := manyRootsServer(b, 32, maxIndexPaths)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rr := httptest.NewRecorder()
+		s.handleFsSearch(rr, httptest.NewRequest("GET", "/api/fs/search?q=a", nil))
+		if rr.Code != http.StatusOK {
+			b.Fatal(rr.Body)
+		}
+	}
+}
+
+// BenchmarkSearchHomeOnly is the same query over the home index alone.
+func BenchmarkSearchHomeOnly(b *testing.B) {
+	s := manyRootsServer(b, 0, maxIndexPaths)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rr := httptest.NewRecorder()
+		s.handleFsSearch(rr, httptest.NewRequest("GET", "/api/fs/search?q=a", nil))
+		if rr.Code != http.StatusOK {
+			b.Fatal(rr.Body)
+		}
+	}
+}
+
+// I2: scoreEntries with keep returns exactly the best keep hits of the full
+// ranking, in order, whatever order the index holds them in.
+func TestScoreEntriesKeepsBest(t *testing.T) {
+	var entries []indexEntry
+	for i := 999; i >= 0; i-- { // longest (worst) first, so every entry beats the last
+		rel := "a" + strings.Repeat("x", i%40) + "_" + strconv.Itoa(i)
+		l := strings.ToLower(rel)
+		entries = append(entries, indexEntry{rel: rel, lower: l, baseStart: baseStartOf(l)})
+	}
+	full := scoreEntries(entries, "a", "", 0, nil)
+	if len(full) != 1000 {
+		t.Fatalf("keep 0 must keep every hit: %d", len(full))
+	}
+	for _, keep := range []int{1, 7, 200, 999, 1000, 5000} {
+		got := scoreEntries(entries, "a", "", keep, nil)
+		want := full[:min(keep, len(full))]
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("keep %d: got %d hits, first %+v; want %d, first %+v", keep, len(got), got[:min(3, len(got))], len(want), want[:3])
+		}
+	}
+	// skip drops before the cut: the kept hits are the best of the rest.
+	skipX := func(rel string) bool { return strings.Contains(rel, "x") }
+	got := scoreEntries(entries, "a", "", 5, skipX)
+	if len(got) != 5 {
+		t.Fatalf("skip: %d hits", len(got))
+	}
+	for _, h := range got {
+		if strings.Contains(h.Rel, "x") {
+			t.Fatalf("skip kept %q", h.Rel)
+		}
+	}
+}
+
+// I2: per-index trimming must not lose the best hits across roots, nor their
+// order: a root with more matches than the cut still ranks against the others.
+func TestSearchManyRootsReturnsBestAcrossRoots(t *testing.T) {
+	home, a, b := rootsFixture(t)
+	_, c, _ := rootsFixture(t)
+	mk := func(root string, rels ...string) *fileIndex {
+		var es []indexEntry
+		for _, rel := range rels {
+			mustWrite(t, filepath.Join(root, rel), "x")
+			l := strings.ToLower(rel)
+			es = append(es, indexEntry{rel: rel, lower: l, baseStart: baseStartOf(l)})
+		}
+		return readyIndex(root, es)
+	}
+	var many []string
+	for i := 0; i < 500; i++ {
+		many = append(many, fmt.Sprintf("xa%04d", i)) // 294 each: more than the cut
+	}
+	s := &Server{Home: home, Roots: fakeRoots{a, b, c}, idx: mk(home, "a4444"), rootIdx: map[string]*fileIndex{
+		a: mk(a, many...),
+		b: mk(b, "a1"),
+		c: mk(c, "a22", "a333"),
+	}}
+	want := []string{filepath.Join(b, "a1"), filepath.Join(c, "a22"), filepath.Join(c, "a333"), filepath.Join(home, "a4444")}
+	for i := 0; i < 46; i++ {
+		want = append(want, filepath.Join(a, many[i]))
+	}
+	_, out := doSearch(t, s, "q=a&limit=50")
+	var got []string
+	for _, r := range out.Results {
+		got = append(got, r.Path)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("hits =\n%v\nwant\n%v", got, want)
+	}
+	_, out = doSearch(t, s, "q=a&limit=200")
+	if len(out.Results) != 200 || out.Results[199].Path != filepath.Join(a, many[195]) {
+		t.Fatalf("limit 200: %d hits, last %+v", len(out.Results), out.Results[len(out.Results)-1])
 	}
 }

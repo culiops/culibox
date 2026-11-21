@@ -19,7 +19,24 @@ import (
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/wsroots"
 )
+
+// WorkspaceRoots is the set of folders the file API serves besides $HOME, with
+// the audited add/remove the Settings page drives. *wsroots.Service satisfies it.
+type WorkspaceRoots interface {
+	Paths() []string
+	Covering(abs string) string
+	List() ([]wsroots.Root, error)
+	Add(abs, actor string) (wsroots.Root, error)
+	Remove(path, actor string) error
+	Touch(abs string)
+	// Elsewhere is the project folders found outside home (the "Other places"
+	// scan); it never waits long and reads folder names only.
+	Elsewhere(ctx context.Context) []wsroots.Place
+}
+
+var _ WorkspaceRoots = (*wsroots.Service)(nil)
 
 //go:embed static
 var staticFS embed.FS
@@ -101,6 +118,11 @@ type Server struct {
 	// os.Root so a box-planted symlink cannot reach host files. Nil → no boxed
 	// trees (host behaviour).
 	BoxTrees func() BoxTrees
+
+	// Roots are the workspace folders served besides $HOME. Nil → $HOME only.
+	Roots WorkspaceRoots
+	// DataDir is CuliBox's data directory; the workspace check refuses it as a root.
+	DataDir string
 
 	// ScratchDirs are candidate Claude Code temp folders (claude-<uid>), from
 	// ScratchCandidates. The fs API reads an accepted one read-only.
@@ -198,6 +220,15 @@ type Server struct {
 	prefMu    sync.Mutex
 	prefIdx   map[string]*fileIndex
 	prefOrder []string
+
+	// rootIdx holds one file index per added workspace root (never home),
+	// keyed by root path and dropped once the root is no longer served.
+	rootIdxMu sync.Mutex
+	rootIdx   map[string]*fileIndex
+
+	// rootHealth caches whether each added workspace root is still the
+	// directory it was, off the request path (roothealth.go).
+	rootHealth rootHealth
 }
 
 // QuickShell exposes the verified quick-shell name for startup diagnostics.
@@ -348,6 +379,10 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, listWorkspaces(s.Home, s.Protected, s.Shares))
 	})
+	if s.Roots != nil {
+		protected.HandleFunc("/api/workspace-roots", s.handleWorkspaceRoots)
+		protected.HandleFunc("/api/workspace/check", s.handleWorkspaceCheck)
+	}
 	protected.HandleFunc("/api/fs/list", s.handleFsList)
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)
 	protected.HandleFunc("/api/fs/search", s.handleFsSearch)

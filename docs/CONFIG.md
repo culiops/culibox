@@ -93,6 +93,10 @@ Permission mode: Bypass runs every action without asking. Even then, Claude Code
 
 On macOS the box VM shares only a list of folders, kept in `vm-shares.json` in the data root: `{"version":1,"shares":[{"path":"/Users/me/code","mode":"rw"}]}`, with `mode` `rw` or `ro`. CuliBox writes this file; it is not a `config.json` key, so do not add it there. Manage it in Settings › VM folders or with `culibox box share list|add <dir> [-ro]|rm <dir>|apply [-force]`. If the file is missing, CuliBox builds it from your profiles on the first run. A change reaches the VM only when applied (a stop and start, about 20 seconds). See [macOS](MACOS.md#vm-folders).
 
+## Workspace roots
+
+The folders the web UI's Files, git and search can open are your home folder (always) and the workspace roots, kept in `workspace-roots.json` in the data root: `{"version":1,"roots":[{"path":"/srv/api","added":"2026-11-21T09:00:00Z","added_by":"web"}]}`. CuliBox writes this file; it is not a `config.json` key, so do not add it there. A folder becomes a root when a session is started in it from the browser (the repo top when the folder is inside a repo), or when you add it in Settings › Workspace roots; remove one there too. At most 32 roots. If you edit the file by hand while CuliBox runs, CuliBox reads it again on the next request. An entry for a folder that may never be a root is not an error: Files does not serve it and Settings lists it as not available. That covers the filesystem root, `/var` itself and any folder above it, a folder above your home folder, and a system folder, `~/.ssh`, `~/.aws`, `~/.gnupg` or CuliBox's own data folder, with anything inside or above those (a project under `/var` is fine). A file CuliBox cannot parse leaves home as the only root, Settings says so, and the next change is refused until you fix or delete the file. See [Security](SECURITY.md#known-limits).
+
 ## Older forms that still load
 
 Configs and profiles written by earlier builds may carry these. They are not the way to set things up now, and none belongs in a new config.

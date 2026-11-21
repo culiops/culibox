@@ -1254,3 +1254,29 @@ func TestWorkspaceRefusalOK(t *testing.T) {
 		t.Fatalf("WorkspaceRefusal(home/work) = %q, %v; want allowed", reason, err)
 	}
 }
+
+func TestWorkspaceRefusalForbidden(t *testing.T) {
+	home := workspaceRefusalHome(t)
+	reason, err := WorkspaceRefusal("/etc", nil)
+	if err != nil || !strings.Contains(reason, "system folder") {
+		t.Fatalf("WorkspaceRefusal(/etc) = %q, %v; want a system folder reason", reason, err)
+	}
+	ssh := filepath.Join(home, ".ssh")
+	if err := os.Mkdir(ssh, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reason, err = WorkspaceRefusal(ssh, nil)
+	if err != nil || !strings.Contains(reason, "credentials") {
+		t.Fatalf("WorkspaceRefusal(~/.ssh) = %q, %v; want a credentials reason", reason, err)
+	}
+}
+
+func TestWorkspaceRefusalVarInsideAllowed(t *testing.T) {
+	workspaceRefusalHome(t)
+	if fi, err := os.Stat("/var/tmp"); err != nil || !fi.IsDir() {
+		t.Skip("/var/tmp does not exist")
+	}
+	if reason, err := WorkspaceRefusal("/var/tmp", nil); err != nil || reason != "" {
+		t.Fatalf("WorkspaceRefusal(/var/tmp) = %q, %v; want allowed", reason, err)
+	}
+}

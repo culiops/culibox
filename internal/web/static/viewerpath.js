@@ -64,14 +64,33 @@ function insertTargetFor(viewer, candidate) {
   return { ok: true, term: candidate };
 }
 
+// vpRoots: the roots revealable checks against: an array, or one string (an old caller's home), or
+// (undefined) what the page holds: window.WORKSPACE_ROOTS plus window.HOME_DIR (filetree.js's ftCurrentRoots,
+// kept here too because the editor page loads this file without filetree.js). Trailing slashes cut.
+function vpRoots(roots) {
+  let a = roots;
+  if (a === undefined) {
+    a = [];
+    if (typeof window !== "undefined") {
+      if (Array.isArray(window.WORKSPACE_ROOTS)) a = window.WORKSPACE_ROOTS.slice();
+      if (window.HOME_DIR && !a.includes(window.HOME_DIR)) a.push(window.HOME_DIR);
+    }
+  }
+  if (typeof a === "string") a = [a];
+  if (!Array.isArray(a)) return [];
+  return a.filter((r) => typeof r === "string" && r !== "").map((r) => (r.length > 1 ? r.replace(/\/+$/, "") || "/" : r));
+}
+
 // revealable: may the tree show this file? Not a box file (host listings would
-// show an unrelated directory of the same name), and not outside $HOME, where
-// /api/fs/list answers 403. With no home known yet the check cannot run, so it
-// allows (treeFollowTarget's convention).
-function revealable(viewer, home) {
+// show an unrelated directory of the same name), and not outside every workspace
+// root (home and the folders added to the list), where /api/fs/list answers 403.
+// `roots` is an array or one string; omitted, the page's own. With no root known yet
+// the check cannot run, so it allows (treeFollowTarget's convention).
+function revealable(viewer, roots) {
   if (viewer.box) return { ok: false, title: "This file is inside a session's box, not on the host" };
-  if (home && viewer.path.indexOf(home.replace(/\/+$/, "") + "/") !== 0) {
-    return { ok: false, title: "This file is outside your home folder, which the tree cannot list" };
+  const list = vpRoots(roots);
+  if (list.length && !list.some((r) => r === "/" || viewer.path.indexOf(r + "/") === 0)) {
+    return { ok: false, title: "This file is outside your workspace roots, which the tree cannot list" };
   }
   return { ok: true };
 }

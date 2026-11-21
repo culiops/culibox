@@ -5,7 +5,7 @@ package web
 // says WHY in words a user can act on. Founder-approved copy (#50); change it
 // there first.
 const (
-	msgOutside  = "outside your home folder and the Claude scratch folder — not viewable"
+	msgOutside  = "outside your workspace roots — add the folder in Settings › Workspace roots"
 	msgDenied   = "CuliBox's own data — not viewable"
 	msgEscape   = "blocked: a link here leads out of the box's workspace"
 	msgPerm     = "no permission to read this"

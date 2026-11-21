@@ -2499,12 +2499,21 @@
   #spawn-ws-list .wsp-last { flex: none; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); white-space: nowrap; }
   /* The list's one line of words (nothing found, folder search unavailable). */
   #spawn-ws-list .ft-note { flex: none; display: flex; align-items: center; min-height: var(--h-menu); padding: 0 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* A group heading in the idle list ("Other places"): not a row. It is the note's muted line, smaller, with a hairline above it
+     to set the group apart from the project roots. */
+  #spawn-ws-list .wsp-head { min-height: 26px; margin-top: var(--sp-1); border-top: 1px solid var(--line); border-radius: 0; font-size: var(--t-xs); line-height: var(--lh-xs); }
   /* The two help lines under the field read as the frame draws them: "Private copy of ..." first, then where the folder came
      from. The markup keeps its order (the phone's), so flex order does it; the 2px under the first line is the second one's,
      whichever that is. */
   #spawn #spawn-ws-row #spawn-copy-line { order: 1; margin-top: 0; }
   #spawn #spawn-ws-row #spawn-ws-note { order: 2; }
   #spawn #spawn-ws-row:has(> #spawn-copy-line:not([hidden])) #spawn-ws-note { margin-top: -4px; }
+  /* What Start here does to the workspace roots (wsCheckLine): one line after the caption. Neutral for the plain case, amber when
+     the folder cannot become a root or the box would refuse it, red when it is not a folder. The share button sits after the text. */
+  #spawn #spawn-ws-row .spawn-ws-check { order: 3; display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; margin-top: 4px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); overflow-wrap: anywhere; }
+  #spawn #spawn-ws-row .spawn-ws-check[hidden] { display: none; }
+  #spawn #spawn-ws-row .spawn-ws-check.ck-warn { color: var(--amber); }
+  #spawn #spawn-ws-row .spawn-ws-check.ck-error { color: var(--red); }
 
   /* The reach box (frame M4.1): what this session will be able to touch, from the profile. A --bg card with no border,
      the title, then ONE label/value grid (72px | the rest, 16px and 2px apart, baselines aligned) so every value starts
@@ -2576,10 +2585,11 @@
   #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(2) { order: 4; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="creds"] { order: 5; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="vmfolders"] { order: 6; }
-  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="tokens"] { order: 7; }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(3) { order: 8; }
-  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 9; }
-  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 10; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="wsroots"] { order: 7; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="tokens"] { order: 8; }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(3) { order: 9; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 10; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 11; }
   /* A row is the kit .nav-item (§C7): 30px, 0 10px, 4px radius, 13/20, hover --hover, selected --raise at 500
      (§B1.2: no accent bar). Sign out… is a row too, neutral, last: `margin-top: auto` takes the nav's free
      height, so it rests above the 12px foot padding (the frame's spacer). */
@@ -2588,7 +2598,7 @@
     display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
     background: transparent; font-family: var(--font-ui); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); cursor: pointer;
   }
-  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout { order: 11; margin-top: auto; }
+  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout { order: 12; margin-top: auto; }
   #page-host > #settings-modal.as-page > #settings-tabs .t:hover,
   #page-host > #settings-modal.as-page > #settings-tabs > #set-signout:hover { background: var(--hover); color: var(--fg); }
   #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); font-weight: 500; box-shadow: none; }
@@ -2636,7 +2646,7 @@
   #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; max-width: 884px; height: auto; min-height: 0; flex-wrap: wrap; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--bg); }
   #page-host > #settings-modal.as-page [data-close]:not(#settings-esc) { display: none; }
   #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about,
-  #page-host > #settings-modal.as-page > #foot-tokens, #page-host > #settings-modal.as-page > #foot-accounts, #page-host > #settings-modal.as-page > #foot-settings, #page-host > #settings-modal.as-page > #foot-vmfolders { display: none; }
+  #page-host > #settings-modal.as-page > #foot-tokens, #page-host > #settings-modal.as-page > #foot-accounts, #page-host > #settings-modal.as-page > #foot-settings, #page-host > #settings-modal.as-page > #foot-vmfolders, #page-host > #settings-modal.as-page > #foot-wsroots { display: none; }
   /* The Credentials drawer's foot (#cred-drawer-foot, over the profile page) is the same kit footer: its buttons are named in
      this rule, so the drawer's Check all / Cancel / Save are the page footer's 28px buttons by construction. The secondary fill,
      its hover (which skips an aria-disabled button) and the primary come from the Credentials `.btn` rules, which are the same
@@ -2778,6 +2788,37 @@
   #vmfolders .vmf-cmd code { font-size: var(--t-md); user-select: all; }
   #vmfolders .vmf-add-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); }
   #vmfolders .vmf-hint { margin-right: auto; }
+
+  /* Workspace roots (#343 Task 8): wsroots.js draws one fill holding the table (Folder, note, Remove), above it the add card and, when
+     the list file is damaged, the kit banner. Kit classes everywhere; the wsr-* rules are layout only, the VM folders page's numbers. */
+  #wsroots .wsr-fill { background: var(--panel); border-radius: var(--r-card); overflow: hidden; position: relative; }
+  #wsroots .wsr-main > * + *, #wsroots .wsr-cardslot + .wsr-main > :first-child { margin-top: 12px; }
+  #wsroots .wsr-cardslot:not(:empty) { margin-bottom: 12px; }
+  #wsroots .wsr-banner { margin: 0; padding: 12px 16px; background: var(--panel); box-shadow: none; }
+  #wsroots .card-head .wsr-title { font-weight: 600; }
+  #wsroots .wsr-tbl { table-layout: fixed; }
+  #wsroots .wsr-tbl col:nth-child(1) { width: 42%; }
+  #wsroots .wsr-tbl col:nth-child(2) { width: 38%; }
+  #wsroots .wsr-tbl col:nth-child(3) { width: 20%; }
+  #wsroots .wsr-tbl td { height: auto; padding-top: 8px; padding-bottom: 8px; vertical-align: top; white-space: normal; overflow-wrap: anywhere; line-height: var(--lh-md); }
+  #wsroots .wsr-tbl td.wsr-note .wsr-nb { white-space: nowrap; }
+  #wsroots .wsr-tbl th:first-child, #wsroots .wsr-tbl td:first-child { padding-left: 16px; }
+  #wsroots .wsr-tbl th:last-child, #wsroots .wsr-tbl td:last-child { padding-right: 12px; }
+  #wsroots .wsr-tbl tbody tr:hover { background: transparent; }
+  #wsroots .wsr-tbl td.num { padding-top: 6px; padding-bottom: 6px; }
+  #wsroots .wsr-tbl td.num .btn + .btn { margin-left: 4px; }
+  #wsroots .wsr-gone .wsr-folder .mono { color: var(--muted); }
+  #wsroots .wsr-add-body { display: grid; grid-template-columns: 156px minmax(0, 1fr); gap: 16px; padding: 16px 20px; }
+  #wsroots .wsr-add-lbl { font-size: var(--t-md); font-weight: 600; line-height: var(--lh-md); }
+  #wsroots .wsr-fieldbox { position: relative; min-width: 0; max-width: 560px; }
+  #wsroots .wsr-inrow { display: flex; gap: 8px; align-items: center; }
+  #wsroots .wsr-inrow .input { flex: 1 1 auto; min-width: 0; }
+  #wsroots .wsr-inrow .btn { flex: none; }
+  #wsroots .wsr-fieldbox > #wsr-msg { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere; }
+  #wsroots .wsr-fieldbox > #wsr-msg.ck-warn { color: var(--amber); }
+  #wsroots .wsr-wslist { position: fixed; z-index: 30; max-height: 260px; overflow-y: auto; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); }
+  #wsroots .wsr-wslist[hidden] { display: none; }
+  #wsroots .wsr-add-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); }
 
   /* Device tokens (UI plan 4 Task 7; digest-design §B5, frame M2.4): tokens.js draws one kit card (§C7 `.card`, clipped to its corners) holding
      the kit's `.tbl` (Name · Created · Last used · Revoke…), and under it the approved footnote (the frame's `p.t-sm.muted.m2-under`; here `li.tok-under`, an

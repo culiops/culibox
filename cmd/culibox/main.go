@@ -46,6 +46,7 @@ import (
 	"github.com/culiops/culibox/internal/storerefs"
 	"github.com/culiops/culibox/internal/terminal"
 	"github.com/culiops/culibox/internal/web"
+	"github.com/culiops/culibox/internal/wsroots"
 )
 
 // The registry-based transcript locator only runs when the backend can name the
@@ -59,6 +60,10 @@ const conversationPollEvery = 5 * time.Second
 
 // uidemoVMFolders is set only by the uidemo-tagged file; nil in every normal build.
 var uidemoVMFolders func(home string) web.VMFolders
+
+// uidemoScanBases is set only by the uidemo-tagged file: the folders the "Other places" scan
+// reads instead of the usual ones. nil in every normal build.
+var uidemoScanBases func() []string
 
 func main() {
 	args, err := parseArgs(os.Args[1:])
@@ -874,6 +879,14 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	creds := web.NewCredentialManager(baseCfg, credFile, dataDir, pm, vstore, storeAudit, chk, live.Apply, web.AccountsOf(accts))
 	creds.SetFileBad(credBad)
 
+	// The workspace folders the file API serves besides $HOME. Every add and
+	// remove is audited first (storeAudit), so a failed audit saves nothing.
+	wsRoots := wsroots.NewService(dataDir, home, web.RootsAudit(storeAudit), time.Now)
+	api.Roots = wsRoots // a browser Start with add_root adds its folder here
+	if uidemoScanBases != nil {
+		wsRoots.SetScanBases(uidemoScanBases) // nil unless a `-tags uidemo` build asks for it
+	}
+
 	srv := &web.Server{
 		Imports:          bundleImports,
 		API:              api,
@@ -882,6 +895,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Password:         login.Secret,
 		Profiles:         pm,
 		Home:             home,
+		DataDir:          dataDir,
+		Roots:            wsRoots,
 		Protected:        protected,
 		Shares:           vmShares,
 		VMFolders:        vmFolders,

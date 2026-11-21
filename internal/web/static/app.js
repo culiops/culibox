@@ -206,7 +206,7 @@ function openDrawer(kind, sessionId, opts) {
 // terminal for a pane viewer, none otherwise), the Files screen on mobile. Then
 // ftReveal expands down to the row. false (with a toast) when it cannot.
 async function revealInTree(viewer) {
-  const can = revealable(viewer, window.HOME_DIR || "");
+  const can = revealable(viewer);
   if (!can.ok) { showToast(can.title, { error: true }); return false; }
   if (mobileActive(window.innerWidth)) {
     setMobileScreen("files");
@@ -6017,6 +6017,10 @@ function initSpawnWsPicker() {
     inline: drawerDesktop,
     lastUsed: () => { const l = loadLastSpawn(); return l && typeof l.cwd === "string" ? l.cwd : ""; },
     idleText: spawnWsCaption,
+    // The one line under the field: what Start here does to the workspace roots (wspicker.js's wsCheckLine). Desktop only.
+    onCheck: setSpawnWsCheck, checkOn: drawerDesktop,
+    // The project folders found outside home (spec 6.8) are offered on the desktop only, under the project roots.
+    otherPlaces: drawerDesktop,
     filter: (path) => { const f = spawnVMFilterFor(spawnWhere().runtime || "", spawnVMFilter); return f ? f(path) : true; },
   });
   input.addEventListener("input", hideSpawnNotShared);
@@ -6047,6 +6051,53 @@ async function loadSpawnVMFilter() {
   if (!spawnVMLatest.current(mine)) return; // a newer open of the dialog asked again: this answer is stale
   spawnVMFilter = vmShareFilter(view);
   syncSpawnVMFilter();
+}
+
+// The /api/workspace/check answer for the folder in the field, null while there is none (desktop only: the phone never asks).
+// The line under the field and the Start gate are both drawn from it and the tier on screen (wsCheckLine / wsCheckBlock), so a
+// tier switch redraws them without another read. A clone card starts in the profile's own copy and never adds a root, so
+// it shows no line and blocks nothing.
+let spawnWsCheck = null;
+function spawnWsCheckOn() { return drawerDesktop() && !!spawnWsCheck && !spawnWhere().clone; }
+// spawnWsCheckBlock: why Start waits (syncSpawnGate reads it), "" when it need not.
+function spawnWsCheckBlock() { return spawnWsCheckOn() ? wsCheckBlock(spawnWsCheck, spawnCurrentTier()) : ""; }
+function setSpawnWsCheck(check) {
+  spawnWsCheck = check;
+  paintSpawnWsCheck();
+  syncSpawnGate();
+}
+function paintSpawnWsCheck() {
+  const el = $("spawn-ws-check");
+  if (!el) return;
+  const line = spawnWsCheckOn() ? wsCheckLine(spawnWsCheck, spawnCurrentTier()) : null;
+  if (!line || line.kind === "none") {
+    el.hidden = true;
+    el.className = "spawn-ws-check";
+    el.replaceChildren();
+    return;
+  }
+  const kids = [];
+  const text = document.createElement("span");
+  text.textContent = line.text;
+  kids.push(text);
+  if (line.share) {
+    // The folder to share is the one the root would be (the repo top), as the line names it. The card opens prefilled; the
+    // user adds it there (a share is the user's call, not a side effect of a click here).
+    const share = spawnWsCheck.add_root_path || spawnWsCheck.path || "";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-sm";
+    btn.textContent = "Share this folder…";
+    btn.onclick = () => {
+      closeDialog("spawn-modal");
+      openSettings("vmfolders");
+      openVMFoldersAdd(share, "rw", "spawn");
+    };
+    kids.push(btn);
+  }
+  el.className = "spawn-ws-check ck-" + line.kind;
+  el.hidden = false;
+  el.replaceChildren(...kids);
 }
 
 // The M9.9 refusal under the Workspace field: the line, and a "Share this folder…" button that closes the dialog and opens
@@ -6205,7 +6256,17 @@ async function spawnSession(req, opts) {
     writeRecent(st, pushRecentProfile(readRecent(st), req.agent));
   }
   await refreshSessions();
+  // A Start that added a root: the page learns it before the pane opens, so the new session's Files dock follows its folder.
+  if (s.root && s.root.added === true) {
+    await Promise.all([
+      typeof loadWorkspaces === "function" ? loadWorkspaces() : null,
+      typeof loadWorkspaceRoots === "function" ? loadWorkspaceRoots() : null,
+    ]);
+  }
   openTerminal(s.id, s.name);
+  if (s.root && s.root.added === false && s.root.path) {
+    showToast("Session started. " + s.root.path + " was not added as a workspace root: " + (s.root.reason || "unknown reason") + ".", { warn: true });
+  }
   if (opts.toast !== false) {
     // Report the directory the SERVER chose, not the one requested.
     const where = s.cwd || req.cwd;
@@ -6404,6 +6465,7 @@ function updateRuntimeWarning() {
   syncSpawnPreview(); // tier or workspace changed: the desktop reach box follows
   syncSpawnVMFilter(); // a box lists only shared folders; a host session lists them all
   updateSpawnBoxOwned();
+  paintSpawnWsCheck(); // the line follows the tier and the clone card
   const seg = $("runtime-seg"), warn = $("runtime-warn");
   if (!seg || !warn) return;
   if (drawerDesktop() && metaLoaded && !boxRuntime) {
@@ -6814,6 +6876,9 @@ $("spawn").addEventListener("submit", async (ev) => {
     replyable: $("spawn-replyable").checked, profile: currentProfile(),
     account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
   });
+  // Only this form asks: a folder outside every root becomes one when the session starts (the server decides, and only for
+  // this signed-in browser). Duplicate, the bearer API and scripts never send it.
+  req.add_root = true;
   const draft = $("spawn-prompt").value;
   // The dialog closes the moment the session exists, before the toast: a
   // fixed-position toast renders *beneath* a modal dialog's backdrop, so an Undo

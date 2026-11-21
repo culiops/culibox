@@ -66,7 +66,11 @@ type API struct {
 	// OptionsDropped reports the spawn option overrides the profile refused,
 	// for the 201 body only (never persisted). nil = nothing is reported.
 	OptionsDropped func(launcher.SpawnSpec) []launcher.OptionDrop
-	AWS            AWSStatusService // nil = the credential broker is not running; /aws is a 404
+	// Roots is the audited workspace-root list. A browser Start with add_root
+	// adds the session's folder to it (#343); nil = no roots service, and the
+	// spawn is unchanged.
+	Roots WorkspaceRoots
+	AWS   AWSStatusService // nil = the credential broker is not running; /aws is a 404
 	// Elevation serves the write-window and AWS sign-in endpoints; nil = the
 	// credential broker is not running, and they are 404.
 	Elevation ElevationService
@@ -192,6 +196,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Account   string         `json:"account"`   // "" = the profile's own account, else default
 			Login     bool           `json:"login"`     // sign-in session for a named claude account (host tier)
 			Clone     *bool          `json:"clone"`     // nil = the profile decides; false = in place; true = its clone (box only)
+			AddRoot   bool           `json:"add_root"`  // the New session form only: make the folder a workspace root (#343)
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.Agent == "" {
 			writeErr(w, http.StatusBadRequest, "agent required")
@@ -240,10 +245,14 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		resp := struct {
 			session.Info
 			OptionsDropped []launcher.OptionDrop `json:"options_dropped,omitempty"`
+			Root           *rootAdd              `json:"root,omitempty"`
 		}{Info: info}
 		if a.OptionsDropped != nil {
 			resp.OptionsDropped = a.OptionsDropped(spec)
 		}
+		// The root add comes last and never fails the spawn: the session is
+		// already running, and a refusal is only reported.
+		resp.Root = a.rootAfterSpawn(r, info, req.AddRoot, req.Clone != nil && *req.Clone)
 		writeJSON(w, http.StatusCreated, resp)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
