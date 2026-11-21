@@ -358,7 +358,9 @@ function wsrBuildCard(path) {
   card.addEventListener("keydown", (e) => {
     const open = wsrCard && wsrCard.picker && wsrCard.picker.isOpen();
     if (e.key === "Enter" && e.target === input && !open) { e.preventDefault(); wsrCardSubmit(); }
-    else if (e.key === "Escape" && !open) { e.stopPropagation(); wsrCloseCard(); }
+    // The picker's own Esc handler (the field's, so it ran first) has already closed its list and prevented the default: that Esc
+    // was the list's, and the card stays.
+    else if (e.key === "Escape" && !open && !e.defaultPrevented) { e.stopPropagation(); wsrCloseCard(); }
   });
   wsrCardSync();
   wsrSync();

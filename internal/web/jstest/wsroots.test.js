@@ -308,6 +308,40 @@ test("Enter in the field adds, Escape closes the card", async () => {
   assert.strictEqual(card(p).input, null);
 });
 
+test("an Escape the picker already took (it closed its list) leaves the card open", () => {
+  const p = page();
+  p.box.wsrSetView(view());
+  p.box.openWsRootsAdd("");
+  let n = card(p).input;
+  while (n && !n.className.split(" ").includes("wsr-add")) n = n.parent;
+  n.fire("keydown", { key: "Escape", target: card(p).input, defaultPrevented: true, preventDefault() {}, stopPropagation() {} });
+  assert.ok(card(p).input, "still open");
+  n.fire("keydown", { key: "Escape", target: card(p).input, defaultPrevented: false, preventDefault() {}, stopPropagation() {} });
+  assert.strictEqual(card(p).input, null, "an Esc nobody took closes it");
+});
+
+test("hostile paths and error strings are drawn as text: no element is made from them", async () => {
+  const BAD = "<img src=x onerror=alert(1)>";
+  const tags = (n, out = []) => { out.push(n.tag); for (const c of n.children || []) if (c instanceof Node) tags(c, out); return out; };
+  const p = page({ vmFoldersOn: true });
+  p.server.check["/srv/" + BAD] = { path: "/srv/" + BAD, exists: true, is_dir: true, vm_shared: false };
+  p.box.wsrSetView(view({ roots: [view().roots[0], { path: "/srv/" + BAD, added: DAY, available: true }] }));
+  await tick(); await tick();
+  assert.match(p.body.textContent, /<img src=x onerror=alert\(1\)>/, "the path is on the page as text");
+  p.box.openWsRootsAdd("");
+  p.box.picker.opts.onCheck(Object.assign({}, CHECK, { path: "/x/" + BAD, add_root_path: "/x/" + BAD, vm_shared: false }));
+  assert.match(card(p).msg.textContent, /<img src=x/);
+  p.server.fail = { status: 409, code: "cap", error: BAD };
+  card(p).add.click();
+  await tick();
+  assert.strictEqual(card(p).msg.textContent, BAD);
+  p.server.fail = { status: 409, code: "list_corrupt", error: BAD };
+  rowBtn(p, "/srv/" + BAD).click();
+  await tick();
+  assert.deepStrictEqual(p.box.toasts, [[BAD, true]], "a toast takes the text as it is");
+  assert.ok(!tags(p.body).includes("img"), "no <img> element exists: " + tags(p.body).join(","));
+});
+
 test("Cancel closes the card and the head's Add comes back", () => {
   const p = page();
   p.box.wsrSetView(view());

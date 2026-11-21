@@ -75,7 +75,7 @@ func isDir(p string) bool {
 
 // rootAvailable is true when the file API would serve this root now: still a
 // directory, not redirected through a symlink since it was added, and not a
-// forbidden folder (a hand-edited file can name one). It mirrors the fs
+// forbidden folder, CuliBox's own data folder included (a hand-edited file can name one). It mirrors the fs
 // policy's drop rules, so "not available" is what the Files view shows.
 func (s *Server) rootAvailable(path string) bool {
 	if !isDir(path) {
@@ -85,7 +85,7 @@ func (s *Server) rootAvailable(path string) bool {
 	if err != nil || real != filepath.Clean(path) {
 		return false
 	}
-	return wsroots.Refusal(real, wsroots.Env{Home: resolvedOrClean(s.Home)}) == ""
+	return wsroots.Refusal(real, wsroots.Env{Home: resolvedOrClean(s.Home), DataDir: resolvedOrClean(s.DataDir)}) == ""
 }
 
 func resolvedOrClean(p string) string {

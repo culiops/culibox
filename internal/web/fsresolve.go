@@ -91,11 +91,24 @@ type fsPolicy struct {
 // reason (the file API never serves what the workspace picker would refuse), or
 // it has been redirected: the store holds the path resolved at add time, so a
 // root that now resolves elsewhere (a box replaced a folder inside its
-// workspace with a link) is no longer the folder the operator added. Entries of trees that do not exist are
+// workspace with a link) is no longer the folder the operator added. An extra root that is, sits in or holds a
+// denied tree is dropped too (spec 5, "CuliBox's own"). Entries of trees that do not exist are
 // skipped. A contained entry that is $HOME, an ancestor of $HOME, or that holds a
 // denied tree (or is one) is ignored: treating it as a workspace root would make
 // everything under it strict, or would serve the denied tree through os.Root.
 //
+// touchesAny reports whether resolved path p is, is inside, or contains any of the resolved dirs, compared by
+// whole path components (so /a/data2 is not inside /a/data).
+func touchesAny(p string, dirs []string) bool {
+	sep := string(os.PathSeparator)
+	for _, d := range dirs {
+		if p == d || strings.HasPrefix(p, d+sep) || strings.HasPrefix(d, p+sep) {
+			return true
+		}
+	}
+	return false
+}
+
 // scratch lists candidate Claude Code temp folders; each is checked here, per
 // request, because Claude Code creates the folder lazily after the server
 // started. One is kept only if scratchRoot accepts it and it is not $HOME, not
@@ -122,6 +135,14 @@ func newFsPolicy(home string, roots []string, trees BoxTrees, scratch ...string)
 		}
 	}
 	addSelfAndAncestors(rhome)
+	// The denied trees (CuliBox's data dir, the box state root), resolved: an extra root that is, sits in or
+	// holds one of them is dropped below, so a hand-edited list cannot widen the Files reach over them.
+	var rdenied []string
+	for _, d := range trees.Denied {
+		if rd, err := filepath.EvalSymlinks(d); err == nil {
+			rdenied = append(rdenied, rd)
+		}
+	}
 	for _, r := range roots {
 		rr, err := filepath.EvalSymlinks(r)
 		if err != nil || rr != filepath.Clean(r) {
@@ -131,6 +152,9 @@ func newFsPolicy(home string, roots []string, trees BoxTrees, scratch ...string)
 			continue
 		}
 		if wsroots.Refusal(rr, wsroots.Env{Home: rhome}) != "" {
+			continue
+		}
+		if touchesAny(rr, rdenied) {
 			continue
 		}
 		// Home already serves everything under it, so such a root adds no reach.

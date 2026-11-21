@@ -336,3 +336,43 @@ func TestPolicyDropsRedirectedRoot(t *testing.T) {
 		t.Fatalf("victim/v.txt err = %v, want errOutsideHome", err)
 	}
 }
+
+// An extra root that is, sits in, or holds a denied tree (CuliBox's data dir, the box state root) is dropped
+// when the policy is built: spec 5 calls those "CuliBox's own", and a hand-edited list must not widen the
+// Files reach over them. A control root in the same list is kept.
+func TestPolicyDropsRootsTouchingDenied(t *testing.T) {
+	home, holder, ctrl := rootsFixture(t)
+	denied := filepath.Join(holder, "data")
+	inside := filepath.Join(denied, "sub")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, root string }{
+		{"equal to the denied dir", denied},
+		{"inside the denied dir", inside},
+		{"holding the denied dir", holder},
+	} {
+		p, err := newFsPolicy(home, []string{c.root, ctrl}, BoxTrees{Denied: []string{denied}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.hasRoot(c.root) {
+			t.Errorf("a root %s was kept: roots = %v", c.name, p.roots)
+		}
+		if !p.hasRoot(ctrl) {
+			t.Errorf("%s: the control root was dropped: roots = %v", c.name, p.roots)
+		}
+	}
+	// A sibling that only shares a name prefix is not "inside" (component-wise compare).
+	sib := filepath.Join(holder, "data2")
+	if err := os.Mkdir(sib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p, err := newFsPolicy(home, []string{sib}, BoxTrees{Denied: []string{denied}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.hasRoot(sib) {
+		t.Errorf("a sibling sharing a name prefix was dropped: roots = %v", p.roots)
+	}
+}

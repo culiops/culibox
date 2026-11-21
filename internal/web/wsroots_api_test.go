@@ -326,6 +326,22 @@ func TestRootsHandWrittenForbiddenRootEndToEnd(t *testing.T) {
 	}
 }
 
+// A root that is, sits in or holds CuliBox's data folder reads "not available": the Files policy drops it
+// (TestPolicyDropsRootsTouchingDenied), so the list says what Files shows.
+func TestRootsListMarksDataDirUnavailable(t *testing.T) {
+	g := newRootsAPIRig(t)
+	inside := filepath.Join(g.dir, "sub")
+	if err := os.Mkdir(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ok := realTemp(t)
+	writeRootsFile(t, g.dir, g.dir, inside, ok)
+	v := decodeRoots(t, g.roots("GET", ""))
+	if len(v.Roots) != 4 || v.Roots[1].Available || v.Roots[2].Available || !v.Roots[3].Available {
+		t.Fatalf("roots = %+v, want the data folder and a folder in it not available, the control available", v.Roots)
+	}
+}
+
 type checkResp struct {
 	Path        string `json:"path"`
 	Exists      bool   `json:"exists"`
