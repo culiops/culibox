@@ -1,0 +1,239 @@
+# Weekly vulnerability scan of the box images users actually run (#355): the one
+# tagged `base`, and the one the latest release pins (read from that release's
+# linux/amd64 binary). New CVEs land on an image that has not changed, so the
+# build-time scan in box-image.yml is not enough.
+#
+# It only REPORTS. While a HIGH or CRITICAL finding has a fix and is not accepted
+# (scripts/ci/image-scan-accepted.txt), it keeps one issue open and updated; when
+# there is none it closes that issue. It never edits the Dockerfile, rebuilds or
+# pushes: a bump is a reviewed human change. The issue also says whether the base
+# image digest is behind, because Debian's fixes reach the image through a rebuild.
+#
+# Supply chain (docker/culibox/workflow_test.go guards this):
+#   - every action is pinned by full commit SHA, the release in a comment
+#   - no pull-request trigger of any kind
+#   - Grype is third-party code: it is a sha256-checked download
+#     (scripts/ci/install-grype.sh), never a scanner Action, and it runs in a job
+#     with a read-only token and no registry login (the package is public)
+#   - GITHUB_TOKEN is read-only except the issues write grant in the issue job, where the
+#     token sits on the one step that runs gh and no repository code
+#   - every digest is checked against sha256:<64 hex> before it reaches a command,
+#     and every value from a scan is sanitised before it reaches the issue text
+#   - a failed scan skips the issue job: the issue is never closed on partial data
+name: box-image-scan
+
+on:
+  schedule:
+    # Mondays 03:41 UTC (off the hour, when scheduled runs queue less).
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: box-image-scan
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/culiops/culibox
+
+jobs:
+  targets:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      base: ${{ steps.base.outputs.line }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the latest release's linux/amd64 tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release"
+          gh release view --json tagName --jq .tagName > "$RUNNER_TEMP/release/tag"
+          gh release download --dir "$RUNNER_TEMP/release" --pattern '*_linux_amd64.tar.gz' --pattern SHA256SUMS
+
+      # The binary is read, never run: a release bakes the digest it pulls into it.
+      - name: List the digests to scan
+        id: matrix
+        run: |
+          set -euo pipefail
+          base=$(docker buildx imagetools inspect "${IMAGE}:base" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$base" =~ ^sha256:[0-9a-f]{64}$ ]]
+          targets=$(jq -nc --arg ref "${IMAGE}@${base}" '[{name: "base", ref: $ref}]')
+
+          cd "$RUNNER_TEMP/release"
+          tag=$(cat tag)
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          sha256sum -c --ignore-missing SHA256SUMS
+          tarballs=(*_linux_amd64.tar.gz)
+          test "${#tarballs[@]}" -eq 1
+          mkdir bin
+          tar -C bin -xzf "${tarballs[0]}" culibox
+          refs=$(grep -aoE 'ghcr\.io/culiops/culibox@sha256:[0-9a-f]{64}' bin/culibox | sort -u || true)
+          if [ "$(printf '%s' "$refs" | grep -c .)" -eq 1 ]; then
+            targets=$(jq -c --arg ref "$refs" --arg name "release $tag" '. + [{name: $name, ref: $ref}]' <<<"$targets")
+          else
+            echo "::warning::no box image ref in the latest release; scanning base only"
+          fi
+
+          # One scan per digest and arch; a release that pins the base digest is scanned once.
+          matrix=$(jq -c 'group_by(.ref) | map({ref: .[0].ref, name: (map(.name) | join(" = "))})
+            | unique_by(.ref)
+            | [.[] as $t | ("amd64", "arm64") as $a
+               | {id: ("\($t.name | gsub("[^A-Za-z0-9]"; "-"))-\($a)"), label: "\($t.name) linux/\($a)", ref: $t.ref, arch: $a}]' <<<"$targets")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          jq -r '.[] | "- \(.label): \(.ref)"' <<<"$matrix" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Is the base image digest behind?
+        id: base
+        run: |
+          set -euo pipefail
+          pinned=$(sed -n 's/^FROM node:24-bookworm-slim@\(sha256:[0-9a-f]\{64\}\).*/\1/p' docker/culibox/Dockerfile | sort -u)
+          now=$(docker buildx imagetools inspect node:24-bookworm-slim --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$pinned" =~ ^sha256:[0-9a-f]{64}$ ]] && [[ "$now" =~ ^sha256:[0-9a-f]{64}$ ]]
+          if [ "$pinned" = "$now" ]; then
+            line="The base image node:24-bookworm-slim is current (${pinned})."
+          else
+            line="The base image is behind: the Dockerfile pins node:24-bookworm-slim@${pinned}, Docker Hub now serves ${now}. Bumping the FROM digests rebuilds every layer, which also takes Debian's newer packages."
+          fi
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+
+  scan:
+    name: scan ${{ matrix.label }}
+    needs: targets
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Grype
+        run: scripts/ci/install-grype.sh "$RUNNER_TEMP/grype"
+
+      - name: Scan
+        env:
+          REF: ${{ matrix.ref }}
+          ARCH: ${{ matrix.arch }}
+          LABEL: ${{ matrix.label }}
+          GRYPE_CHECK_FOR_APP_UPDATE: "false"
+        run: |
+          set -euo pipefail
+          [[ "$REF" =~ ^ghcr\.io/culiops/culibox@sha256:[0-9a-f]{64}$ ]]
+          [[ "$ARCH" =~ ^(amd64|arm64)$ ]]
+          mkdir -p "$RUNNER_TEMP/out"
+          "$RUNNER_TEMP/grype/bin/grype" "registry:${REF}" --platform "linux/${ARCH}" \
+            -o json --file "$RUNNER_TEMP/out/scan.json"
+          printf '%s\n' "$LABEL" > "$RUNNER_TEMP/out/label"
+          scripts/ci/image-scan-report.sh -a scripts/ci/image-scan-accepted.txt \
+            "${LABEL}=$RUNNER_TEMP/out/scan.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scan-${{ matrix.id }}
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+          retention-days: 30
+
+  issue:
+    needs: [targets, scan]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: scan-*
+          path: ${{ runner.temp }}/scans
+
+      # No token in this step: it runs the repository's report script.
+      - name: Write the issue body
+        id: report
+        env:
+          BASE_LINE: ${{ needs.targets.outputs.base }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          args=()
+          for d in "$RUNNER_TEMP"/scans/scan-*/; do
+            args+=("$(head -n 1 "$d/label")=${d}scan.json")
+          done
+          test "${#args[@]}" -gt 0
+          scripts/ci/image-scan-report.sh -a scripts/ci/image-scan-accepted.txt "${args[@]}" > "$RUNNER_TEMP/report.md"
+          n=$(tail -n 1 "$RUNNER_TEMP/report.md" | sed -n 's/^<!-- fixable: \([0-9]*\) -->$/\1/p')
+          test -n "$n"
+          {
+            echo "The weekly box image scan finds **$n** HIGH or CRITICAL finding(s) with a fix that is not accepted."
+            echo
+            echo "$BASE_LINE"
+            echo
+            echo "To fix (a reviewed change, never automatic), in docker/culibox/Dockerfile: for a Debian"
+            echo "package, bump the base digest (every layer rebuilds, the apt ones take Debian's current"
+            echo "packages); for a pinned tool, bump its ARG. Or accept a finding in"
+            echo "scripts/ci/image-scan-accepted.txt with a date and a reason. Full reports: $RUN_URL"
+            echo
+            cat "$RUNNER_TEMP/report.md"
+            echo
+            echo "This issue is updated by the weekly box-image-scan workflow and closed once nothing is left."
+          } > "$RUNNER_TEMP/body.md"
+          # An issue body holds at most 65536 characters.
+          if [ "$(wc -c < "$RUNNER_TEMP/body.md")" -gt 60000 ]; then
+            head -c 60000 "$RUNNER_TEMP/body.md" > "$RUNNER_TEMP/cut.md"
+            printf '\n\n…cut at 60000 bytes. Full reports: %s\n' "$RUN_URL" >> "$RUNNER_TEMP/cut.md"
+            mv "$RUNNER_TEMP/cut.md" "$RUNNER_TEMP/body.md"
+          fi
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "fixable=$n" >> "$GITHUB_OUTPUT"
+
+      - name: Open, update or close the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FIXABLE: ${{ steps.report.outputs.fixable }}
+        run: |
+          set -euo pipefail
+          prefix="Box image: vulnerabilities with a fix"
+          # Search by title (the repo has more open issues than one page holds) and
+          # only ever touch the bot's own issue, never a human one with the same title.
+          open=$(gh issue list --state open --author app/github-actions --limit 20 \
+            --search 'in:title "Box image: vulnerabilities with a fix"' --json number,title \
+            --jq "[.[] | select(.title | startswith(\"$prefix\"))][0].number // empty")
+          if [ "$FIXABLE" -eq 0 ]; then
+            echo "Nothing with a fix."
+            if [ -n "$open" ]; then
+              gh issue close "$open" --comment "The weekly scan finds no HIGH or CRITICAL finding with a fix. Closed by box-image-scan."
+            fi
+            exit 0
+          fi
+          title="$prefix: $FIXABLE HIGH or CRITICAL"
+          if [ -n "$open" ]; then
+            gh issue edit "$open" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi
