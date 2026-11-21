@@ -22,9 +22,25 @@ function fn(file, name) {
 test("the dock mounts an EditorTab for a tab, and builds no ViewerTab of its own", () => {
   const body = stripComments(fn("filesdrawer.js", "dockMount"));
   assert.match(body, /new EditorTab\(tab\.path, \{/);
-  assert.ok(!body.includes("new ViewerTab("), "an image or a binary file gets its ViewerTab inside the EditorTab");
+  assert.ok(!body.includes("new ViewerTab("), "an image or a binary file gets its DockFileView inside the EditorTab");
   assert.match(body, /host: drawerToolbarHost/);
   assert.match(body, /v\.onUpdate = \(\) => drawerPaint\(true\)/);
+});
+
+// #344: every file the dock opens uses the dock's header. The phone's viewer (ViewerTab, with its own toolbar row) is not the dock's any more.
+test("the dock never builds a ViewerTab: EditorTab mounts a DockFileView for a file that is not text, and the page loads its scripts before editortab.js", () => {
+  const tab = stripComments(read("editortab.js"));
+  assert.ok(!/new ViewerTab\(/.test(tab), "no ViewerTab in editortab.js");
+  assert.match(tab, /new DockFileView\(\{/);
+  assert.match(tab, /dockKindOf\(extOf\(this\.path\)\)/, "the kind is decided from the extension, before any text read");
+  const html = read("index.html");
+  const at = (f) => html.indexOf('<script src="/' + f + '"></script>');
+  for (const f of ["filekinds.js", "dockfileview.js"]) assert.ok(at(f) > 0 && at(f) < at("editortab.js"), f + " loads before editortab.js");
+  assert.ok(at("filekinds.js") < at("dockfileview.js") && at("copyfile.js") < at("filekinds.js"), "the pure helpers first, after the extension lists");
+  assert.ok(at("upload.js") < at("dockfileview.js"), "humanBytes is upload.js's");
+  const view = stripComments(read("dockfileview.js"));
+  assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write|createContextualFragment/.test(view), "a file's name is only ever text in the view");
+  assert.ok(!/<(iframe|object|embed)\b|createElement\("(iframe|object|embed)"\)/.test(view), "a PDF is never embedded");
 });
 
 test("the dock asks the viewer for its crumb note, so a dirty buffer says Unsaved", () => {

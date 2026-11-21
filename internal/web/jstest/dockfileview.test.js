@@ -510,6 +510,26 @@ test("a card's and a player's facts follow a changed time too; media gets the ne
   assert.ok(m.media.src.endsWith("&raw=1&v=20"));
 });
 
+test("a card that an error made tries the file again when its time changes: a repaired image is an image again", async () => {
+  const p = page();
+  const v = p.make({ path: "/p/broken.png", kind: "image", meta: { size: 12, mtime: 1 }, fetchMeta: async () => ({ size: 3000, mtime: 2 }) });
+  v.img.dispatchEvent({ type: "error" });
+  assert.equal(v.kind, "card");
+  v.onAttach();
+  v.onHide(); v.onAttach();
+  await settle();
+  assert.equal(v.kind, "image");
+  assert.equal(v.el.dataset.kind, "image");
+  assert.equal(v.img.src, "/api/fs/read?path=" + encodeURIComponent("/p/broken.png") + "&v=2");
+  assert.equal(q(v, ".dk-fv-note"), null);
+  assert.equal(q(v, ".dk-sb-r").children.length, 5, "the zoom controls are back");
+  // a card that was always a card stays one
+  const c = p.make({ path: "/p/a.zip", kind: "card", meta: { size: 1, mtime: 1 }, fetchMeta: async () => ({ size: 3000, mtime: 2 }) });
+  c.onAttach(); c.onHide(); c.onAttach();
+  await settle();
+  assert.equal(c.kind, "card");
+});
+
 test("the image's scroll is kept across a hide and a show", () => {
   const p = page();
   const v = image(p);

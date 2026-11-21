@@ -1,7 +1,7 @@
 "use strict";
 // editorpage.js: the page the editor tests run on. Not a test itself (the runner takes *.test.js only).
 //
-// The real editortab.js, editorsync.js, editordiff.js and editormd.js (and the pure modules they call) in a vm, against a fake page
+// The real editortab.js, dockfileview.js, editorsync.js, editordiff.js and editormd.js (and the pure modules they call) in a vm, against a fake page
 // (fakedom.js) and a fake Monaco, with fsRead and fsWrite stubbed. editortab-contract.test.js drives it for the save, disk and
 // Changes contracts; editor-follow.test.js and editor-selbar.test.js drive it for Follow agent and the selection bar. What the
 // fake Monaco has to be exact about is what each of them says in its own header.
@@ -167,7 +167,7 @@ function page(over) {
   doc.createElement = (t) => new El(t, doc);
   doc.getElementById = () => null;
   const st = {
-    writes: [], reads: [], urls: [], toasts: [], models: [], editors: [], diffs: [], host: [], closed: [], log: [], gitRefresh: 0,
+    writes: [], reads: [], urls: [], downloads: [], toasts: [], models: [], editors: [], diffs: [], host: [], closed: [], log: [], gitRefresh: 0,
     timers: [], intervals: [], renders: [],
     shown: false, page: null, session: "fix-fs-cap", // is the dock on screen; a page view over it; the session the dock shows
     // The page's git, off until a test turns it on (on: the tree's status is known and names HEAD `head`): the scope the Changes
@@ -277,7 +277,7 @@ function page(over) {
       if (st.git.gate) await st.git.gate;
       return a === null ? { ok: false, status: 500, json: async () => null } : { ok: true, status: 200, json: async () => a };
     },
-    boxFileURL: (sid, p) => "/box/" + sid + p,
+    boxFileURL: (sid, p, download) => "/box/" + sid + p + (download ? "&download=1" : ""),
     fsAlternates: async () => [],
     // The dock's repoint (filesdrawer.js dockRepointViewer) moves the tab to the new path in place.
     repointViewer: (tab, p2) => { tab.path = p2; tab.name = p2.split("/").pop(); return true; },
@@ -302,14 +302,13 @@ function page(over) {
       return { getWrap: () => false, getDiffMode: () => v.diffMode, setDiffMode: (m) => { v.diffMode = m; }, getDiffWrap: () => v.diffWrap, setDiffWrap: (b) => { v.diffWrap = b; } };
     })(),
     toggleViewerWrap: () => {},
-    ViewerTab: class {
-      constructor(p, o) { this.path = p; this.opts = o; this.calls = []; this.el = new El("div", doc); this.scroll = 7; st.inner = this; }
-      onShow() { this.calls.push("show"); } onAttach() { this.calls.push("attach"); } onHide() { this.calls.push("hide"); }
-      dispose() { this.calls.push("dispose"); } focusReader() {} revealLine() {} wrapAnchor() { return () => {}; } applyWrap() {}
-    },
+    // The dock builds no ViewerTab (the phone's viewer): a tab with a file that is not text mounts a DockFileView. Not defined here, so a
+    // test that reached for one would throw. A save to disk is the page's downloadPath: what it was asked for is st.downloads.
+    humanBytes: require("../static/upload.js").humanBytes, // the real one: the card's and the bar's sizes
+    downloadPath: (p, isDir, url) => { st.downloads.push({ path: p, isDir, url }); },
   }, over));
   const load = (f) => new vm.Script(src(f), { filename: f }).runInContext(ctx);
-  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "editortab.js", "reviewmodel.js", "notesmodel.js", "editorsync.js", "editordiff.js", "imagediff.js", "editorreview.js", "editormd.js", "editorselbar.js", "editorfollow.js", "dockcrumbs.js", "editornotes.js"]) load(f);
+  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "filekinds.js", "dockfileview.js", "editortab.js", "reviewmodel.js", "notesmodel.js", "editorsync.js", "editordiff.js", "imagediff.js", "editorreview.js", "editormd.js", "editorselbar.js", "editorfollow.js", "dockcrumbs.js", "editornotes.js"]) load(f);
   const host = {
     onEditStart: () => st.host.push("start"),
     onDirtyChange: () => st.host.push("dirty"),
@@ -320,6 +319,13 @@ function page(over) {
   // A class or a let at a script's top level is not a property of the vm's global: read it by name, in it.
   const get = (name) => new vm.Script(name, { filename: "get" }).runInContext(ctx);
   const EditorTab = get("EditorTab");
+  // Every DockFileView of the page records the lifecycle calls it is given (calls: "attach", "hide", ...), as the ViewerTab stub did;
+  // st.inner is the last one to be called.
+  const DFV = get("DockFileView");
+  for (const [m, name] of [["onShow", "show"], ["onAttach", "attach"], ["onHide", "hide"], ["dispose", "dispose"]]) {
+    const orig = DFV.prototype[m];
+    DFV.prototype[m] = function (...a) { (this.calls = this.calls || []).push(name); st.inner = this; return orig.apply(this, a); };
+  }
   const settle = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r)); };
   return {
     ctx, st, host, doc, monaco, get, load, EditorTab, settle, hash, diskWrite,

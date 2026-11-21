@@ -296,16 +296,23 @@ test("a dirty tab kept detached keeps its model and its edit: hiding stashes the
   assert.equal(p.st.editors[0].getModel(), a.model);
 });
 
-test("an image mounts a ViewerTab without a read; the tab forwards the lifecycle and has no model, bar or dirt", async () => {
+test("an image mounts a DockFileView after one metadata read and no text read; the tab forwards the lifecycle and has no model, bar or dirt", async () => {
   const p = page();
+  p.setRead({ ok: true, status: 200, data: { kind: "image", size: 2048, mtime: 1700000000000 } });
   const tab = await p.open("/p/pic.png", { scroll: 40 });
-  assert.equal(p.st.reads.length, 0, "an image is known by its extension: no read");
+  assert.deepEqual(p.metas(), ["/api/fs/read?path=%2Fp%2Fpic.png&meta=1"], "an image is known by its extension: one small metadata read");
+  assert.deepEqual(p.fulls(), [], "no text read");
   assert.equal(tab.mode, "image");
   assert.equal(tab.inner, p.st.inner);
+  assert.equal(tab.inner.constructor.name, "DockFileView");
+  assert.equal(tab.inner.kind, "image");
+  assert.deepEqual({ ...tab.inner.meta }, { size: 2048, mtime: 1700000000000 }, "the facts the read gave");
   assert.equal(tab.model, null);
   assert.equal(tab.dirty(), false);
-  assert.equal(tab.scroll, 7, "the dock's stored scroll is the viewer's");
+  assert.equal(tab.scroll, 0, "the dock's stored scroll is the view's: a picture's zoom is not kept");
   assert.deepEqual(tab.inner.calls, ["attach"], "attached when the dock attached the tab (onShow is the dock's own call)");
+  p.setShown(true);
+  assert.equal(p.live(), 0, "an image is never asked about by the poll");
   tab.onHide();
   tab.dispose();
   assert.deepEqual(tab.inner.calls, ["attach", "hide", "dispose"]);
@@ -315,10 +322,10 @@ test("an image mounts a ViewerTab without a read; the tab forwards the lifecycle
 
 test("a read that fails paints the server's sentence, makes no model and no bar", async () => {
   const p = page();
-  p.setRead({ ok: false, status: 413, data: { error: "file too large to preview" } });
+  p.setRead({ ok: false, status: 500, data: { error: "read error" } });
   const tab = await p.open("/p/big.log");
   assert.equal(tab.model, null);
-  assert.equal(tab.bodyEl.children[0].textContent, "file too large to preview");
+  assert.equal(tab.bodyEl.children[0].textContent, "read error");
   assert.equal(tab.dirty(), false);
   assert.equal(p.st.models.length, 0);
 });
@@ -437,7 +444,7 @@ test("the poll: nothing is asked while the dock is off screen (closed, under a p
   const img = await p.open("/p/pic.png");
   await p.settle();
   assert.equal(p.live(), 0, "an image has no version: it is never asked about");
-  assert.equal(p.metas().length, n);
+  assert.equal(p.metas().length, n + 1, "only the metadata read of its own open");
   img.dispose();
   const box = await p.open("/work/out.txt", { box: "s1" });
   await p.settle();

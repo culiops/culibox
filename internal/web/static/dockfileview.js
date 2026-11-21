@@ -49,6 +49,7 @@ class DockFileView {
     this.box = o.box || "";
     this.name = String(o.path).split("/").pop() || o.path;
     this.ext = extOf(o.path);
+    this.orig = o.kind;                  // what it was made as: a card from an error becomes it again when the file changes
     this.kind = o.kind;                  // what is shown now (a media or image error turns it into "card")
     this.openable = o.kind === "pdf";    // has an "Open in new tab"
     this.meta = o.meta || null;
@@ -436,8 +437,12 @@ class DockFileView {
     if (!mtime || mtime === was) return;
     this.meta = { size: typeof next.size === "number" ? next.size : (this.meta && this.meta.size), mtime };
     if (this.kind === "image" && this.img) this.img.src = this.imageURL();
-    else if (this.media) { this.media.src = this.rawURL(); }
-    else this.build();
+    else if (this.media) this.media.src = this.rawURL();
+    else {
+      // A card the browser's error made (an image or a player that failed) tries again: the file is a new one.
+      if (this.kind === "card" && ["image", "video", "audio"].includes(this.orig)) { this.kind = this.orig; this.note = ""; }
+      this.build();
+    }
     this.paintFacts();
   }
 

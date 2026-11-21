@@ -75,8 +75,8 @@ function dockSetState(sid, st) {
 
 function dockViewerList() { return [...dockViewers.values()]; }
 
-// dockHolder: the dock's viewer that is `v` or holds it (an EditorTab mounts a ViewerTab for an image or a binary file, and
-// that one asks the dock things as a dock viewer: its insert target, its reveal in the tree), null for neither.
+// dockHolder: the dock's viewer that is `v` or holds it (an EditorTab mounts a DockFileView for an image, a video, a PDF or a binary file,
+// and the view is what other code may hand back as a dock viewer), null for neither.
 function dockHolder(v) {
   return v ? dockViewerList().find((x) => x === v || x.inner === v) || null : null;
 }
