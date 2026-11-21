@@ -821,6 +821,10 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	ready := s.rootIndexes(extra)
 	partial := len(ready) < len(extra)
+	// Each index contributes only its best keep hits to the merge: the slack over
+	// limit covers the hits the checks below drop (nested roots list a file
+	// twice, a stale entry is gone, a link leaves its root).
+	keep := max(limit*4, 200)
 	// prefer=<abs dir>: walk that subtree first (its own index, so a root walk
 	// that ran out of budget before reaching it cannot hide it), and list its
 	// hits before everything else. Files only: the directory picker is unchanged.
@@ -835,7 +839,7 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 			ix := s.preferIndexIn(pabs, filepath.ToSlash(prel), proot != pol.roots[0])
 			pentries, ptrunc := ix.snapshot(kindFiles)
 			truncated = truncated || ptrunc
-			hits = scoreEntries(pentries, lq, prel)
+			hits = scoreEntries(pentries, lq, prel, keep, nil)
 			if proot != pol.roots[0] {
 				for i := range hits {
 					hits[i].Root = proot
@@ -843,18 +847,16 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	rest := make([]searchHit, 0, 64)
-	for _, h := range scoreEntries(entries, lq, "") {
-		// The home index holds the preferred subtree too; list each file once.
-		if preferRel != "" && preferRoot == pol.roots[0] && strings.HasPrefix(h.Rel, preferRel+string(filepath.Separator)) {
-			continue
-		}
-		rest = append(rest, h)
+	// The home index holds the preferred subtree too; list each file once.
+	var skipPreferred func(string) bool
+	if preferRel != "" && preferRoot == pol.roots[0] {
+		skipPreferred = func(rel string) bool { return strings.HasPrefix(rel, preferRel+string(filepath.Separator)) }
 	}
+	rest := scoreEntries(entries, lq, "", keep, skipPreferred)
 	for _, ix := range ready {
 		ents, trunc := ix.snapshot(kind)
 		truncated = truncated || trunc
-		for _, h := range scoreEntries(ents, lq, "") {
+		for _, h := range scoreEntries(ents, lq, "", keep, nil) {
 			h.Root = ix.root
 			rest = append(rest, h)
 		}
@@ -924,11 +926,26 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 // scoreEntries fuzzy-scores an index against lq and returns the hits best
-// first. prefix (home-relative) is joined onto each entry's rel for an index
-// rooted below $HOME; the score is computed on the index's own rel, so a
-// preferred repo's files are not penalised for the length of its path.
-func scoreEntries(entries []indexEntry, lq, prefix string) []searchHit {
+// first (score, then rel). prefix (home-relative) is joined onto each entry's
+// rel for an index rooted below $HOME; the score is computed on the index's own
+// rel, so a preferred repo's files are not penalised for the length of its path.
+// skip (nil: none) drops a hit by its rel before the cut. keep > 0 returns only
+// the best keep hits, exactly the first keep of the full ranking, without
+// sorting every match: a query over many large indexes then costs a scan of
+// each, not a sort of every match in all of them.
+func scoreEntries(entries []indexEntry, lq, prefix string, keep int, skip func(rel string) bool) []searchHit {
+	better := func(a, b searchHit) bool {
+		if a.Score != b.Score {
+			return a.Score > b.Score
+		}
+		return a.Rel < b.Rel
+	}
+	sortHits := func(h []searchHit) { sort.Slice(h, func(i, j int) bool { return better(h[i], h[j]) }) }
 	hits := make([]searchHit, 0, 64)
+	// worst is the last kept hit once the list has been cut to keep: a hit
+	// that does not beat it can never make the cut.
+	var worst searchHit
+	cut := false
 	for _, e := range entries {
 		score, ok := fuzzyScoreLower(e.lower, e.baseStart, lq)
 		if !ok {
@@ -938,14 +955,26 @@ func scoreEntries(entries []indexEntry, lq, prefix string) []searchHit {
 		if prefix != "" {
 			rel = filepath.Join(prefix, e.rel)
 		}
-		hits = append(hits, searchHit{Rel: rel, Score: score})
-	}
-	sort.Slice(hits, func(i, j int) bool {
-		if hits[i].Score != hits[j].Score {
-			return hits[i].Score > hits[j].Score
+		h := searchHit{Rel: rel, Score: score}
+		if skip != nil && skip(rel) {
+			continue
 		}
-		return hits[i].Rel < hits[j].Rel
-	})
+		if cut && !better(h, worst) {
+			continue
+		}
+		hits = append(hits, h)
+		// Cut back to keep each time the list doubles: amortised, and the bar
+		// (worst) only rises.
+		if keep > 0 && len(hits) >= 2*keep {
+			sortHits(hits)
+			hits = hits[:keep]
+			worst, cut = hits[keep-1], true
+		}
+	}
+	sortHits(hits)
+	if keep > 0 && len(hits) > keep {
+		hits = hits[:keep]
+	}
 	return hits
 }
 

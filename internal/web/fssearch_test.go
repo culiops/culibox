@@ -1438,3 +1438,154 @@ func TestSearchPreferUnderExtraRoot(t *testing.T) {
 		}
 	}
 }
+
+// synthEntries is n index entries that all match "a": a few short real files
+// (created on disk, so they pass the per-hit check) rank first, the rest are
+// longer names that exist only in the index.
+func synthEntries(t testing.TB, root string, real, n int) []indexEntry {
+	t.Helper()
+	out := make([]indexEntry, 0, n)
+	for i := 0; i < n; i++ {
+		var rel string
+		if i < real {
+			rel = "a" + strconv.Itoa(i)
+			if err := os.WriteFile(filepath.Join(root, rel), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			rel = "pkg/sub" + strconv.Itoa(i%97) + "/file_" + strconv.Itoa(i) + "_data.txt"
+		}
+		l := strings.ToLower(rel)
+		out = append(out, indexEntry{rel: rel, lower: l, baseStart: baseStartOf(l)})
+	}
+	return out
+}
+
+// readyIndex is a built index over entries that never goes stale in a test.
+func readyIndex(root string, entries []indexEntry) *fileIndex {
+	ix := newFileIndex(root)
+	ix.noRelSkip = true
+	ix.entries, ix.built, ix.ttl = entries, time.Now(), time.Hour
+	return ix
+}
+
+// manyRootsServer is home plus nRoots added roots, each index holding n entries.
+func manyRootsServer(t testing.TB, nRoots, n int) *Server {
+	t.Helper()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Home: home, idx: readyIndex(home, synthEntries(t, home, 60, n)), rootIdx: map[string]*fileIndex{}}
+	var roots fakeRoots
+	for i := 0; i < nRoots; i++ {
+		r, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots = append(roots, r)
+		s.rootIdx[r] = readyIndex(r, synthEntries(t, r, 60, n))
+	}
+	s.Roots = roots
+	return s
+}
+
+// I2: the cost of one query over many large root indexes.
+func BenchmarkSearchManyRoots(b *testing.B) {
+	s := manyRootsServer(b, 32, maxIndexPaths)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rr := httptest.NewRecorder()
+		s.handleFsSearch(rr, httptest.NewRequest("GET", "/api/fs/search?q=a", nil))
+		if rr.Code != http.StatusOK {
+			b.Fatal(rr.Body)
+		}
+	}
+}
+
+// BenchmarkSearchHomeOnly is the same query over the home index alone.
+func BenchmarkSearchHomeOnly(b *testing.B) {
+	s := manyRootsServer(b, 0, maxIndexPaths)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rr := httptest.NewRecorder()
+		s.handleFsSearch(rr, httptest.NewRequest("GET", "/api/fs/search?q=a", nil))
+		if rr.Code != http.StatusOK {
+			b.Fatal(rr.Body)
+		}
+	}
+}
+
+// I2: scoreEntries with keep returns exactly the best keep hits of the full
+// ranking, in order, whatever order the index holds them in.
+func TestScoreEntriesKeepsBest(t *testing.T) {
+	var entries []indexEntry
+	for i := 999; i >= 0; i-- { // longest (worst) first, so every entry beats the last
+		rel := "a" + strings.Repeat("x", i%40) + "_" + strconv.Itoa(i)
+		l := strings.ToLower(rel)
+		entries = append(entries, indexEntry{rel: rel, lower: l, baseStart: baseStartOf(l)})
+	}
+	full := scoreEntries(entries, "a", "", 0, nil)
+	if len(full) != 1000 {
+		t.Fatalf("keep 0 must keep every hit: %d", len(full))
+	}
+	for _, keep := range []int{1, 7, 200, 999, 1000, 5000} {
+		got := scoreEntries(entries, "a", "", keep, nil)
+		want := full[:min(keep, len(full))]
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("keep %d: got %d hits, first %+v; want %d, first %+v", keep, len(got), got[:min(3, len(got))], len(want), want[:3])
+		}
+	}
+	// skip drops before the cut: the kept hits are the best of the rest.
+	skipX := func(rel string) bool { return strings.Contains(rel, "x") }
+	got := scoreEntries(entries, "a", "", 5, skipX)
+	if len(got) != 5 {
+		t.Fatalf("skip: %d hits", len(got))
+	}
+	for _, h := range got {
+		if strings.Contains(h.Rel, "x") {
+			t.Fatalf("skip kept %q", h.Rel)
+		}
+	}
+}
+
+// I2: per-index trimming must not lose the best hits across roots, nor their
+// order: a root with more matches than the cut still ranks against the others.
+func TestSearchManyRootsReturnsBestAcrossRoots(t *testing.T) {
+	home, a, b := rootsFixture(t)
+	_, c, _ := rootsFixture(t)
+	mk := func(root string, rels ...string) *fileIndex {
+		var es []indexEntry
+		for _, rel := range rels {
+			mustWrite(t, filepath.Join(root, rel), "x")
+			l := strings.ToLower(rel)
+			es = append(es, indexEntry{rel: rel, lower: l, baseStart: baseStartOf(l)})
+		}
+		return readyIndex(root, es)
+	}
+	var many []string
+	for i := 0; i < 500; i++ {
+		many = append(many, fmt.Sprintf("xa%04d", i)) // 294 each: more than the cut
+	}
+	s := &Server{Home: home, Roots: fakeRoots{a, b, c}, idx: mk(home, "a4444"), rootIdx: map[string]*fileIndex{
+		a: mk(a, many...),
+		b: mk(b, "a1"),
+		c: mk(c, "a22", "a333"),
+	}}
+	want := []string{filepath.Join(b, "a1"), filepath.Join(c, "a22"), filepath.Join(c, "a333"), filepath.Join(home, "a4444")}
+	for i := 0; i < 46; i++ {
+		want = append(want, filepath.Join(a, many[i]))
+	}
+	_, out := doSearch(t, s, "q=a&limit=50")
+	var got []string
+	for _, r := range out.Results {
+		got = append(got, r.Path)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("hits =\n%v\nwant\n%v", got, want)
+	}
+	_, out = doSearch(t, s, "q=a&limit=200")
+	if len(out.Results) != 200 || out.Results[199].Path != filepath.Join(a, many[195]) {
+		t.Fatalf("limit 200: %d hits, last %+v", len(out.Results), out.Results[len(out.Results)-1])
+	}
+}
