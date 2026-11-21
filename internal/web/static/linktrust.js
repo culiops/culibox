@@ -3,7 +3,7 @@
 // Settings > Trusted hosts (#348): the hosts whose links open without the confirm dialog (linkgate.js). A host gets here from the
 // dialog's "Always open links to ..." box; this page only lists them and takes one off. A row's Remove… asks inside the row, as the
 // Device tokens page's Revoke… does, and the answer is the whole list again. The gate owns the list and the server (lgLoadTrust,
-// lgTrustList, lgTrustCorrupt, lgRemoveTrust); this file reads it and paints.
+// lgTrustList, lgTrustCorrupt, lgTrustNewer, lgRemoveTrust); this file reads it and paints.
 //
 // Desktop only: the Settings tab is hidden on the phone (app.css). Classic script: lt/LT_-prefixed names but loadLinkTrust, the one
 // entry point shell.js calls when the tab is selected. Built with textContent only: a host is a string the user's browser parsed
@@ -17,6 +17,8 @@ const LT_EMPTY = 'No trusted hosts. Tick "Always open links to …" in the Open 
 const LT_UNDER = "Removing a host only stops links skipping the dialog. Nothing else changes.";
 const LT_LOADFAIL = "Could not load trusted hosts. Try again.";
 const LT_CORRUPT = "link-trust.json is damaged, so every link asks and no host can be added or removed until it is fixed or removed.";
+// A newer CuliBox wrote the file: it is not damaged and must not be deleted, only read by an updated CuliBox.
+const LT_NEWER = "link-trust.json was written by a newer CuliBox. Update CuliBox to change trusted hosts.";
 
 let ltArmed = "";   // the host whose row shows its in-row confirm
 let ltErr = "";     // the line of the last failed Remove
@@ -166,7 +168,8 @@ function ltPaint() {
     box.append(p, retry);
     kids.push(box);
   } else if (corrupt) {
-    const p = ltEl("p", "lt-corrupt", LT_CORRUPT);
+    const newer = typeof lgTrustNewer === "function" && lgTrustNewer();
+    const p = ltEl("p", "lt-corrupt", newer ? LT_NEWER : LT_CORRUPT);
     p.setAttribute("role", "status");
     kids.push(p);
   } else {

@@ -41,6 +41,7 @@ type ltView struct {
 		Actor      string `json:"actor"`
 	} `json:"hosts"`
 	Corrupt bool `json:"corrupt"`
+	Newer   bool `json:"newer"`
 }
 
 func decodeLT(t *testing.T, w *httptest.ResponseRecorder) ltView {
@@ -58,6 +59,9 @@ func decodeLT(t *testing.T, w *httptest.ResponseRecorder) ltView {
 func TestLinkTrustAPIListAddRemove(t *testing.T) {
 	g := newLinkTrustRig(t)
 	v := decodeLT(t, g.call("GET", ""))
+	if v.Newer || v.Corrupt {
+		t.Fatalf("a healthy list is neither newer nor corrupt: %+v", v)
+	}
 	if v.Hosts == nil || len(v.Hosts) != 0 || v.Corrupt {
 		t.Fatalf("initial = %+v (hosts nil=%v), want [] and false", v, v.Hosts == nil)
 	}
@@ -265,6 +269,9 @@ func TestLinkTrustAPICorrupt(t *testing.T) {
 	if !v.Corrupt || v.Hosts == nil || len(v.Hosts) != 0 {
 		t.Fatalf("GET on a damaged file = %+v", v)
 	}
+	if v.Newer {
+		t.Fatalf("a damaged file is not a newer one: %+v", v)
+	}
 	for _, c := range []struct{ method, body string }{
 		{"POST", `{"host":"github.com"}`},
 		{"DELETE", `{"host":"github.com"}`},
@@ -291,8 +298,8 @@ func TestLinkTrustAPINewerFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(g.dir, linktrust.FileName), []byte(`{"version":2,"hosts":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if v := decodeLT(t, g.call("GET", "")); !v.Corrupt {
-		t.Fatalf("a newer file must read as unusable: %+v", v)
+	if v := decodeLT(t, g.call("GET", "")); !v.Corrupt || !v.Newer {
+		t.Fatalf("a newer file must read as unusable and as newer, so the page says update: %+v", v)
 	}
 	for _, c := range []struct{ method, body string }{
 		{"POST", `{"host":"github.com"}`},

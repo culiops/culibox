@@ -86,12 +86,14 @@ async function monacoBoot() {
   // Ctrl/Cmd+click on a link in the editor text (the dock editor and every diff editor) goes to the link gate (linkgate.js), like a
   // link in the terminal or in a rendered markdown file: a file in the box can say anything, and its URLs are as much the agent's
   // as its output. Monaco puts a registered opener ahead of its own, and true says "handled" for every scheme, so its opener never
-  // runs; the gate itself refuses what is not http or https. open() is handed a URI (a string is parsed first), and String() of
-  // one is the address.
+  // runs; the gate itself refuses what is not http or https. open() is handed a URI (a string is parsed first). Its toString()
+  // percent-encodes the = & + : / of a query ("?next=https://evil.com" becomes "?next%3Dhttps%3A%2F%2Fevil.com"), which would hide
+  // a redirect from the gate and send the encoded form on. So the address is encodeURI(uri.toString(true)), what Monaco's own
+  // external opener does: the readable form, encoded once.
   if (typeof monaco.editor.registerLinkOpener === "function") {
     monaco.editor.registerLinkOpener({
       open(uri) {
-        if (typeof openAgentLink === "function") openAgentLink(String(uri), { source: "editor" });
+        if (typeof openAgentLink === "function") openAgentLink(encodeURI(uri.toString(true)), { source: "editor" });
         return true;
       },
     });

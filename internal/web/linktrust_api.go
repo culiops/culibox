@@ -58,7 +58,9 @@ type linkTrustRow struct {
 
 // linkTrustView is the reply of GET (and of a successful POST or DELETE): the
 // caller's hosts, oldest first. A list that cannot be read is empty with
-// corrupt set, and the page keeps every link asking.
+// corrupt set, and the page keeps every link asking. newer is set (with
+// corrupt) when the file was written by a newer CuliBox, so the page says
+// "update CuliBox" rather than "damaged".
 func (s *Server) linkTrustView() map[string]any {
 	list, err := s.LinkTrust.List(storeActor)
 	if err != nil {
@@ -69,7 +71,7 @@ func (s *Server) linkTrustView() map[string]any {
 	for _, h := range list {
 		rows = append(rows, linkTrustRow{Host: h.Host, Subdomains: h.Subdomains, Added: h.Added})
 	}
-	return map[string]any{"hosts": rows, "corrupt": err != nil}
+	return map[string]any{"hosts": rows, "corrupt": err != nil, "newer": errors.Is(err, datacompat.ErrNewer)}
 }
 
 // writeLinkTrustErr maps a link-trust error to the coded reply the page acts

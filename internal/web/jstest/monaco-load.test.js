@@ -187,6 +187,32 @@ test("boot registers a link opener that hands the link to the gate as an editor 
   assert.deepEqual(f.log.gate, [["https://example.com/a?b=1", { source: "editor" }]]);
 });
 
+// Monaco's URI.toString() percent-encodes the query's = & + : / ; toString(true) is the readable form. This stub encodes the way
+// Monaco's does, so a test that reads String(uri) sees what the gate would have been given before the fix.
+const monacoUri = (readable) => {
+  const i = readable.indexOf("?");
+  const enc = i < 0 ? readable : readable.slice(0, i + 1) + readable.slice(i + 1).replace(/[=&+:/]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  return { toString: (skipEncoding) => (skipEncoding ? readable : enc) };
+};
+
+test("the gate gets the readable link of a URI with a query, not Monaco's encoded form", { timeout: 4000 }, async () => {
+  const f = fake();
+  await f.loadMonaco();
+  f.log.openers[0].open(monacoUri("https://example.com/a?x=1&y=2&z=a+b"));
+  f.log.openers[0].open(monacoUri("https://ex.com/login?next=https://evil.com/x"));
+  assert.deepEqual(f.log.gate, [
+    ["https://example.com/a?x=1&y=2&z=a+b", { source: "editor" }],
+    ["https://ex.com/login?next=https://evil.com/x", { source: "editor" }],
+  ], "an encoded query hides the redirect from the gate's redirect warning");
+});
+
+test("a space or a non-ASCII letter in a URI reaches the gate encoded once, as Monaco's own opener sends it", { timeout: 4000 }, async () => {
+  const f = fake();
+  await f.loadMonaco();
+  f.log.openers[0].open(monacoUri("https://example.com/a b/é"));
+  assert.equal(f.log.gate[0][0], "https://example.com/a%20b/%C3%A9");
+});
+
 test("the opener takes every scheme, so Monaco's own never opens one: the gate says no to the ones it will not open", { timeout: 4000 }, async () => {
   const f = fake();
   await f.loadMonaco();

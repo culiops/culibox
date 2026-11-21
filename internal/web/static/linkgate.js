@@ -29,6 +29,10 @@ const LG_SCRIPT_RES = LG_SCRIPT_NAMES.map((n) => [n, new RegExp("\\p{Script=" + 
 // Another address inside a query value or the fragment: an optional scheme, then // and a character that is not a space.
 const LG_REDIRECT_RE = /^\s*(?:[a-z][a-z0-9+.-]*:)?\/\/\S/i;
 
+// The most of a user name (and password) the box and the warning show: a long one would push the real host out of the box, and
+// the user name is the part the agent chose. The link that opens is never cut.
+const LG_USERINFO_MAX = 40;
+
 const LG_API = "/api/link-trust";
 const LG_NOTICE = "CuliBox does not check where a link leads; your browser's own check still runs.";
 
@@ -208,6 +212,14 @@ function lgIsPrivateIP(h) {
   return false;
 }
 
+// lgUserinfoShown is the user name (and :password) of a link as the box and the warning print it, with its @: cut after
+// LG_USERINFO_MAX characters (code points) and an ellipsis.
+function lgUserinfoShown(u) {
+  const full = u.username + (u.password ? ":" + u.password : "");
+  const chars = Array.from(full);
+  return (chars.length > LG_USERINFO_MAX ? chars.slice(0, LG_USERINFO_MAX).join("") + "…" : full) + "@";
+}
+
 // --- warnings -------------------------------------------------------------------------------------------------------------------
 
 // A warning is {kind, text, parts}. `parts` is the text in pieces, a string or {mono: "..."}, so the dialog can set a host or an
@@ -269,7 +281,8 @@ function lgWarnings(u, opts) {
   const out = [];
   const uni = lgUnicodeHost(u.hostname);
   if (u.username || u.password) {
-    out.push(lgWarn("userinfo", { mono: u.username + (u.password ? ":" + u.password : "") + "@" }, " is a user name, not the host. This link goes to ", { mono: uni }, "."));
+    // The real host first, then the user name that comes before it, so a long one cannot bury the answer.
+    out.push(lgWarn("userinfo", "This link goes to ", { mono: uni }, ". ", { mono: lgUserinfoShown(u) }, " before it is a user name, not the host."));
   }
   const idn = lgIdnWarning(u);
   if (idn) out.push(idn);
@@ -299,8 +312,23 @@ function lgTrustMatch(entries, host) {
   return entries.some((e) => e && typeof e.host === "string" && (h === e.host || (!!e.subdomains && h.endsWith("." + e.host))));
 }
 
+// lgHostRefusal is "" for a host the server will take, else why not. It mirrors Validate in internal/linktrust, rule for rule (the
+// xn-- and "has a dot" rules are checked by the caller): a label is 1 to 63 characters, the host at most 253, no label starts or
+// ends with a hyphen, only lower-case letters, digits and hyphens, and the last label is not a number (digits only, or 0x and hex
+// digits) that a URL parser would read as part of an IPv4 address. Without this the dialog offered a trust the server refused.
+function lgHostRefusal(host) {
+  const labels = host.split(".");
+  if (host.length > 253 || labels.some((l) => l === "" || l.length > 63)) return "its host has an empty part or is too long";
+  if (labels.some((l) => l[0] === "-" || l[l.length - 1] === "-")) return "a part of its host starts or ends with a hyphen";
+  if (labels.some((l) => !/^[a-z0-9-]+$/.test(l))) return "its host has a character other than letters, digits and hyphens";
+  const last = labels[labels.length - 1];
+  if (last.startsWith("0x") ? /^[0-9a-f]*$/.test(last.slice(2)) : /^[0-9]*$/.test(last)) return "its host ends in a number";
+  return "";
+}
+
 // lgUntrustableWhy is "" for a link the dialog may offer to trust, else the first reason it may not (in the dialog's words):
-// clean https to a named, public, non-xn-- host with a dot. The server checks the same rules again on add.
+// clean https to a named, public, non-xn-- host with a dot that the server's host rules accept (lgHostRefusal). The server checks
+// the same rules again on add.
 function lgUntrustableWhy(u, warnings, loopback) {
   const host = lgHostKey(u);
   if (loopback) return "it is a localhost link";
@@ -308,6 +336,8 @@ function lgUntrustableWhy(u, warnings, loopback) {
   if (host.split(".").some((l) => /^xn--/i.test(l))) return "its host is an xn-- name";
   if (u.protocol !== "https:") return "it is not https";
   if (!host.includes(".")) return "its host has no dot";
+  const bad = lgHostRefusal(host);
+  if (bad) return bad;
   if (warnings.length) return "it has a warning above";
   return "";
 }
@@ -317,11 +347,11 @@ function lgTrustable(u, warnings, loopback) {
 }
 
 // lgUrlParts splits a link for the dialog's box. The host is the one that is really contacted (the ASCII form); the Unicode
-// form goes in the meta line.
+// form goes in the meta line. A long user name is cut (lgUserinfoShown); the link that opens is u.href, whole.
 function lgUrlParts(u) {
   return {
     scheme: u.protocol + "//",
-    userinfo: u.username || u.password ? u.username + (u.password ? ":" + u.password : "") + "@" : "",
+    userinfo: u.username || u.password ? lgUserinfoShown(u) : "",
     host: u.hostname,
     port: u.port ? ":" + u.port : "",
     rest: u.pathname + u.search + u.hash,
@@ -357,6 +387,7 @@ function lgBuildView(raw, ctx, pageHost, trusted) {
 // every link then asks.
 let lgTrustHosts = [];
 let lgTrustBad = false;
+let lgTrustNew = false;
 let lgTrustFailed = false;
 let lgLoadSeq = 0;
 
@@ -377,6 +408,11 @@ function lgTrustCorrupt() {
   return lgTrustBad;
 }
 
+// lgTrustNewer: the damaged-file case is specifically a newer CuliBox's file, which only an update can read. Still corrupt too.
+function lgTrustNewer() {
+  return lgTrustNew;
+}
+
 // lgTrustLoadFailed: the last load did not succeed (network error or an HTTP refusal), so the empty list is "unknown", not "none".
 function lgTrustLoadFailed() {
   return lgTrustFailed;
@@ -388,6 +424,7 @@ async function lgLoadTrust() {
   const mine = ++lgLoadSeq;
   let hosts = [];
   let bad = false;
+  let newer = false;
   let failed = true;
   try {
     const res = await fetch(LG_API, { credentials: "same-origin" });
@@ -395,12 +432,14 @@ async function lgLoadTrust() {
       const body = await res.json();
       hosts = lgCleanHosts(body && body.hosts);
       bad = !!(body && body.corrupt);
+      newer = bad && !!(body && body.newer);
       failed = false;
     }
   } catch (_) {}
   if (mine === lgLoadSeq) {
     lgTrustHosts = hosts;
     lgTrustBad = bad;
+    lgTrustNew = newer;
     lgTrustFailed = failed;
   }
   return lgTrustList();
@@ -444,11 +483,13 @@ function lgEl(tag, cls, text) {
   return n;
 }
 
-// lgFill puts pieces (a string, or {mono}) into `el` as text nodes and spans. textContent only: link text is hostile input.
+// lgFill puts pieces (a string, or {mono}) into `el` as text nodes and <bdi> elements. textContent only: link text is hostile input.
+// A mono piece is isolated from the direction of the line round it (<bdi>): the agent names the file or session in a "From ..." line,
+// and a right-to-left control in the name must not reorder the words next to it.
 function lgFill(el, pieces) {
   for (const p of pieces) {
     if (typeof p === "string") el.appendChild(document.createTextNode(p));
-    else el.appendChild(lgEl("span", "lk-mono", p.mono));
+    else el.appendChild(lgEl("bdi", "lk-mono", p.mono));
   }
   return el;
 }
@@ -544,7 +585,8 @@ async function lgDialog(v) {
   if (pieces.length || !warned) nodes.push(meta);
   for (const w of v.warnings) nodes.push(lgWarnNode(w));
   let boxes = null;
-  if (v.trustable) {
+  // Not while the list is damaged or from a newer CuliBox: the save is certain to be refused.
+  if (v.trustable && !lgTrustBad) {
     boxes = lgTrustNode(v);
     nodes.push(boxes.node);
   }
@@ -552,7 +594,7 @@ async function lgDialog(v) {
   let ans;
   try {
     ans = await askDialog({
-      title: "Open this link?", cls: warned ? "link-warn" : "link", confirmLabel: warned ? "Open anyway" : "Open",
+      title: "Open this link?", cls: warned ? "lk-ask-warn" : "lk-ask", confirmLabel: warned ? "Open anyway" : "Open",
       focusCancel: warned, extra: nodes, wide: false,
     });
   } catch (_) {
@@ -610,7 +652,7 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     lgParse, lgHostKey, lgIsLoopbackHost, lgPunyDecode, lgUnicodeHost, lgOsa, lgScripts, lgIsIPHost, lgIsPrivateIP, lgWarnings,
-    lgTrustMatch, lgTrustable, lgUntrustableWhy, lgUrlParts, lgBuildView, lgTrustList, lgTrustCorrupt, lgTrustLoadFailed, lgLoadTrust, lgAddTrust,
+    lgTrustMatch, lgTrustable, lgUntrustableWhy, lgUrlParts, lgBuildView, lgTrustList, lgTrustCorrupt, lgTrustNewer, lgTrustLoadFailed, lgLoadTrust, lgAddTrust,
     lgRemoveTrust, openAgentLink,
   };
 }

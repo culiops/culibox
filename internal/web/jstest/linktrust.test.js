@@ -37,12 +37,13 @@ function page(over) {
     const walk = (n) => { if (n.id === id) return n; for (const c of n.children || []) { const f = c instanceof Node ? walk(c) : null; if (f) return f; } return null; };
     return walk(doc.body);
   };
-  const gate = { list: [GH, AWS, EX], corrupt: false, failed: false, loads: 0, removed: [], failWith: null, hold: null };
+  const gate = { list: [GH, AWS, EX], corrupt: false, newer: false, failed: false, loads: 0, removed: [], failWith: null, hold: null };
   const box = {
     document: doc, window: { innerWidth: 1280 }, console, Date, JSON, Map, Set, Math, Promise, Array, Object, String, Number, Error,
     lgLoadTrust: async () => { gate.loads++; return gate.list.slice(); },
     lgTrustList: () => gate.list.slice(),
     lgTrustCorrupt: () => gate.corrupt,
+    lgTrustNewer: () => gate.newer,
     lgTrustLoadFailed: () => gate.failed,
     lgRemoveTrust: async (host) => {
       gate.removed.push(host);
@@ -122,6 +123,25 @@ test("a damaged file says so, in place of the table and the empty line: add and 
   assert.strictEqual(all(p.body, "table").length, 0);
   assert.ok(!all(p.body, "p").some((e) => /^No trusted hosts/.test(e.textContent)), "not the empty line: it would invite an add that is refused");
   assert.strictEqual(btns(p.body).length, 0);
+});
+
+test("a file from a newer CuliBox says to update, not that it is damaged or to delete it", async () => {
+  const p = page();
+  p.gate.list = [];
+  p.gate.corrupt = true;
+  p.gate.newer = true;
+  await p.load();
+  const line = all(p.body, "p").find((e) => e.className.split(" ").includes("lt-corrupt"));
+  assert.ok(line, "a status line");
+  assert.strictEqual(line.textContent, "link-trust.json was written by a newer CuliBox. Update CuliBox to change trusted hosts.");
+  assert.ok(!/damaged|fixed|removed/.test(line.textContent), line.textContent);
+  assert.strictEqual(line.getAttribute("role"), "status");
+  assert.strictEqual(all(p.body, "table").length, 0);
+  assert.strictEqual(btns(p.body).length, 0);
+  // a damaged one (not newer) keeps its own words
+  p.gate.newer = false;
+  await p.load();
+  assert.match(all(p.body, "p").find((e) => e.className.split(" ").includes("lt-corrupt")).textContent, /damaged/);
 });
 
 test("everything is text: a hostile host name is a string in a cell, never markup", async () => {
@@ -371,4 +391,38 @@ test("app.css carries a plain base for the link dialog's parts, so the phone vie
   assert.match(css, /#ask-modal \.lk-url \{[^}]*font: [^}]*ui-monospace[^}]*overflow-wrap: anywhere;/, "the URL is mono and wraps");
   assert.match(css, /#ask-modal \.lk-warn \{[^}]*border-left: 3px solid var\(--warn\); background: var\(--warn-tint\);/, "the warning row's amber rule");
   assert.doesNotMatch(css.slice(css.indexOf("#ask-modal .lk-url"), css.indexOf("#ask-modal .lk-sub[hidden]")), /\bwidth:/, "no width: desktop.css sizes the card");
+});
+
+// askDialog puts opts.cls on #ask-modal itself. It used to be "link", and the kit's .link (desktop.css: accent text, pointer cursor,
+// underline on hover) then styled the WHOLE dialog: title, buttons and notes blue and underlined under the mouse. The dialog's classes are
+// lk-ask and lk-ask-warn, one token each (askDialog's classList.toggle throws on a space), and a name the stylesheets use for something else is
+// not one of them.
+test("the classes linkgate gives askDialog are its own: not the kit's .link, one token each, styled only under #ask-modal", () => {
+  const src = read("linkgate.js");
+  const m = src.match(/cls: warned \? "([^"]*)" : "([^"]*)"/);
+  assert.ok(m, "linkgate.js passes cls: warned ? ... : ...");
+  const [, warnCls, cleanCls] = m;
+  assert.deepStrictEqual([cleanCls, warnCls], ["lk-ask", "lk-ask-warn"]);
+  for (const c of [cleanCls, warnCls]) {
+    assert.ok(!/\s/.test(c), c + " is one token");
+    assert.notStrictEqual(c, "link");
+  }
+  for (const f of ["desktop.css", "app.css"]) {
+    const css = read(f).replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const c of [cleanCls, warnCls]) {
+      // every use of the class is on #ask-modal itself: never a bare .lk-ask rule that could reach another element
+      const re = new RegExp("\\." + c + "(?![\\w-])", "g");
+      let hit;
+      while ((hit = re.exec(css))) assert.strictEqual(css.slice(hit.index - "#ask-modal".length, hit.index), "#ask-modal", f + ": ." + c + " outside #ask-modal");
+    }
+    // and no rule for the card itself behaves like a link: no pointer cursor, no underline
+    for (const r of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!/\.lk-ask(?![\w])/.test(r[1]) && !/\.lk-ask-warn/.test(r[1])) continue;
+      assert.doesNotMatch(r[2], /cursor\s*:\s*pointer|text-decoration/, f + ": " + r[1].trim());
+    }
+  }
+  // the old names are gone from both sheets
+  for (const f of ["desktop.css", "app.css"]) assert.doesNotMatch(read(f), /#ask-modal\.link\b/, f);
+  // with the kit class gone the card's text is the dialog's own --fg (app.css `dialog`), so the label needs no colour of its own
+  assert.doesNotMatch(read("desktop.css"), /\.lk-trust > \.lk-check \{/);
 });

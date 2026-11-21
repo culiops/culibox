@@ -87,13 +87,27 @@ test("no warning: a plain https link has no line at all", () => {
   assert.deepStrictEqual(plain(warnsOf("https://example.com/?next=/home&q=a:b")), []); // a path and a colon are not another address
 });
 
-test("userinfo: the text names the real host", () => {
+test("userinfo: the text names the real host first", () => {
   const w = warnsOf("https://github.com@evil.example/login");
   assert.deepStrictEqual(w.map((x) => x.kind), ["userinfo"]);
-  assert.strictEqual(w[0].text, "github.com@ is a user name, not the host. This link goes to evil.example.");
-  assert.strictEqual(warnsOf("https://user:pw@evil.example/")[0].text, "user:pw@ is a user name, not the host. This link goes to evil.example.");
+  assert.strictEqual(w[0].text, "This link goes to evil.example. github.com@ before it is a user name, not the host.");
+  assert.strictEqual(warnsOf("https://user:pw@evil.example/")[0].text, "This link goes to evil.example. user:pw@ before it is a user name, not the host.");
   // the host named is the Unicode one
-  assert.match(warnsOf("https://github.com@xn--gthub-zsa.com/x").find((x) => x.kind === "userinfo").text, /This link goes to gíthub\.com\.$/);
+  assert.match(warnsOf("https://github.com@xn--gthub-zsa.com/x").find((x) => x.kind === "userinfo").text, /^This link goes to gíthub\.com\. /);
+  // the host is a mono part, so the dialog sets it in the host's face
+  assert.deepStrictEqual(plain(w[0].parts), ["This link goes to ", { mono: "evil.example" }, ". ", { mono: "github.com@" }, " before it is a user name, not the host."]);
+});
+
+test("userinfo: a long one is cut to 40 characters and an ellipsis in the warning and in the box, never in the link that opens", () => {
+  const long = "a".repeat(200);
+  const u = new URL("https://" + long + "@evil.example/login");
+  const w = lg.lgWarnings(u, {}).find((x) => x.kind === "userinfo");
+  assert.strictEqual(w.text, "This link goes to evil.example. " + "a".repeat(40) + "…@ before it is a user name, not the host.");
+  assert.strictEqual(lg.lgUrlParts(u).userinfo, "a".repeat(40) + "…@");
+  assert.strictEqual(lg.lgBuildView(u.href, {}, "box.test", []).href, u.href, "window.open still gets the full link");
+  // exactly 40 is whole; a password counts in the same 40
+  assert.strictEqual(lg.lgUrlParts(new URL("https://" + "a".repeat(40) + "@x.example/")).userinfo, "a".repeat(40) + "@");
+  assert.strictEqual(lg.lgUrlParts(new URL("https://u:" + "p".repeat(60) + "@x.example/")).userinfo, "u:" + "p".repeat(38) + "…@");
 });
 
 test("idn: mixed scripts name the scripts, otherwise the non-ASCII letters", () => {
@@ -261,6 +275,25 @@ test("lgUntrustableWhy names the first reason", () => {
   assert.match(why("https://example.com:8443/x"), /warning/);
 });
 
+test("lgUntrustableWhy mirrors the server's label rules, so the dialog never offers a trust the server refuses", () => {
+  const why = (host, proto) => { const u = { hostname: host, protocol: proto || "https:" }; return lg.lgUntrustableWhy(u, [], false); };
+  for (const host of ["foo_bar.example.com", "-a.example.com", "a-.example.com", "a.-b.example.com", "a..example.com", "a.123", "a.0x1f", "a." + "b".repeat(64) + ".com"]) {
+    assert.notStrictEqual(why(host), "", host + " must not be offered");
+    assert.strictEqual(lg.lgTrustable({ hostname: host, protocol: "https:" }, [], false), false, host);
+  }
+  // what the real parser lets through: an underscore and the hyphen edges survive new URL()
+  for (const raw of ["https://foo_bar.example.com/x", "https://-a.example.com/x", "https://a-.example.com/x"]) {
+    const u = new URL(raw);
+    assert.notStrictEqual(lg.lgUntrustableWhy(u, lg.lgWarnings(u, {}), false), "", raw);
+  }
+  assert.match(why("foo_bar.example.com"), /letters, digits and hyphens/);
+  assert.match(why("-a.example.com"), /hyphen/);
+  assert.match(why("a-.example.com"), /hyphen/);
+  assert.match(why("a.123"), /number/);
+  // and the ones that are fine stay fine
+  for (const host of ["a-b.example.com", "1a.example.com", "docs.example.co", "a.b2", "x.0xz", "x-1.example.com"]) assert.strictEqual(why(host), "", host);
+});
+
 test("lgUrlParts splits the link for the dialog's box", () => {
   const p = lg.lgUrlParts(new URL("https://user:pw@grafana.example.com:8443/d/abc?x=1#top"));
   assert.deepStrictEqual(plain(p), { scheme: "https://", userinfo: "user:pw@", host: "grafana.example.com", port: ":8443", rest: "/d/abc?x=1#top" });
@@ -312,7 +345,7 @@ function page(over) {
       if (method === "GET") {
         events.push("get");
         // The answer is what the server held when the request ARRIVED, not when json() is read: a slow reply is an old one.
-        const answer = { hosts: server.hosts, corrupt: server.corrupt };
+        const answer = { hosts: server.hosts, corrupt: server.corrupt, newer: !!server.newer };
         if (server.getDelay) await server.getDelay();
         if (server.failGet) throw new Error("offline");
         if (server.getStatus) return { ok: false, status: server.getStatus, statusText: "Bad", json: async () => ({ error: "no" }) };
@@ -424,14 +457,14 @@ test("a trusted http link asks (the skip is https only)", async () => {
   assert.strictEqual(p.asks.length, 1);
 });
 
-test("an untrusted clean link asks: Open, primary, cls link, cancel focus is askDialog's default", async () => {
+test("an untrusted clean link asks: Open, primary, cls lk-ask, cancel focus is askDialog's default", async () => {
   const p = page();
   await p.ready();
   user(p, { outcome: "confirm" });
   assert.strictEqual(await p.open("https://docs.example.org/a/b?q=1", { source: "terminal", where: "s1" }), true);
   const a = p.asks[0];
   assert.strictEqual(a.title, "Open this link?");
-  assert.strictEqual(a.cls, "link");
+  assert.strictEqual(a.cls, "lk-ask");
   assert.strictEqual(a.confirmLabel, "Open");
   assert.ok(!a.focusCancel);
   assert.ok(!/\s/.test(a.cls), "askDialog's classList.toggle throws on a space");
@@ -451,6 +484,22 @@ test("the dialog's URL box: parts from nodes, the host in bold", async () => {
   assert.strictEqual(host[0].textContent, "docs.example.org");
   assert.deepStrictEqual(box.querySelectorAll(".lk-dim").map((n) => n.textContent), ["https://", "user:pw@", "/a/b?q=1#x"]);
   assert.strictEqual(box.querySelectorAll(".lk-port")[0].textContent, ":8443");
+});
+
+test("a long user name is cut in the box and the warning, and the whole link is what opens", async () => {
+  const p = page();
+  await p.ready();
+  const raw = "https://" + "u".repeat(300) + "@evil.example/login";
+  user(p, { outcome: "confirm" });
+  await p.open(raw, { source: "terminal" });
+  const box = findAll(p.asks[0], ".lk-url")[0];
+  assert.ok(box.textContent.length < 100, "the box is short: " + box.textContent.length);
+  assert.strictEqual(box.querySelectorAll(".lk-dim")[1].textContent, "u".repeat(40) + "…@");
+  assert.strictEqual(box.querySelectorAll(".lk-host")[0].textContent, "evil.example");
+  const warn = findAll(p.asks[0], ".lk-wt")[0].textContent;
+  assert.ok(warn.startsWith("This link goes to evil.example. "), warn);
+  assert.ok(warn.length < 120, warn.length);
+  assert.strictEqual(p.opened[0][0], new URL(raw).href, "window.open gets the full link");
 });
 
 test("the meta line names the source", async () => {
@@ -477,18 +526,18 @@ test("every dialog carries the muted notice", async () => {
   for (const a of p.asks) assert.ok(textOf(a).includes("CuliBox does not check where a link leads; your browser's own check still runs."));
 });
 
-test("a warned link: link-warn, Open anyway, focusCancel, one row per warning in order", async () => {
+test("a warned link: lk-ask-warn, Open anyway, focusCancel, one row per warning in order", async () => {
   const p = page({ hosts: [] });
   await p.ready();
   user(p, { outcome: "confirm" });
   await p.open("https://github.com@xn--gthub-zsa.com/login/oauth", { source: "markdown", where: "LINKS.md" });
   const a = p.asks[0];
-  assert.strictEqual(a.cls, "link-warn");
+  assert.strictEqual(a.cls, "lk-ask-warn");
   assert.strictEqual(a.confirmLabel, "Open anyway");
   assert.strictEqual(a.focusCancel, true);
   const rows = findAll(a, ".lk-warn");
   assert.strictEqual(rows.length, 2, "userinfo and idn fire; nothing is trusted here so there is no lookalike");
-  assert.match(rows[0].textContent, /github\.com@ is a user name, not the host\. This link goes to gíthub\.com\./);
+  assert.match(rows[0].textContent, /This link goes to gíthub\.com\. github\.com@ before it is a user name, not the host\./);
   assert.match(rows[1].textContent, /The host uses non-ASCII letters \(í\) that can look like ASCII ones\./);
   assert.match(findAll(a, ".lk-meta")[0].textContent, /^Host gíthub\.com · real form xn--gthub-zsa\.com · from LINKS\.md/);
   assert.strictEqual(p.opened.length, 1, "Open anyway opened it");
@@ -555,7 +604,7 @@ test("a localhost link is rewritten to the page's host, with the toast, and the 
   user(p, { outcome: "confirm" });
   await p.open("http://localhost:3030/app", { source: "terminal", where: "s1" });
   const a = p.asks[0];
-  assert.strictEqual(a.cls, "link", "no ip, http or port warning for a loopback link");
+  assert.strictEqual(a.cls, "lk-ask", "no ip, http or port warning for a loopback link");
   assert.strictEqual(findAll(a, ".lk-warn").length, 0);
   assert.strictEqual(findAll(a, ".lk-url")[0].textContent, "http://box.tail.ts.net:3030/app");
   assert.match(findAll(a, ".lk-meta")[0].textContent, /A localhost link: it opens on box\.tail\.ts\.net\./);
@@ -585,7 +634,7 @@ test("a loopback link with userinfo is not rewritten and warns", async () => {
   const p = page();
   await p.ready();
   await p.open("http://evil.example@localhost:3000/", { source: "terminal" });
-  assert.match(findAll(p.asks[0], ".lk-warn")[0].textContent, /evil\.example@ is a user name/);
+  assert.match(findAll(p.asks[0], ".lk-warn")[0].textContent, /evil\.example@ before it is a user name, not the host\./);
   assert.strictEqual(p.toasts.length, 0);
   // Not rewritten, so it opens the viewer's own localhost: the meta line must not say it opens on the page's host.
   const meta = findAll(p.asks[0], ".lk-meta")[0].textContent;
@@ -607,7 +656,7 @@ test("a loopback link never skips the dialog, even when the host it is rewritten
   await p.open("https://localhost:3000/", { source: "terminal", where: "s1" });
   assert.strictEqual(p.asks.length, 1, "it asked");
   assert.strictEqual(p.opened.length, 0, "and, cancelled, did not open");
-  assert.strictEqual(p.asks[0].cls, "link");
+  assert.strictEqual(p.asks[0].cls, "lk-ask");
   assert.strictEqual(findAll(p.asks[0], "input").length, 0, "a localhost link is never trustable");
   // the same for the subdomain form
   const q = page({ hostname: "box.tail.ts.net", hosts: [{ host: "tail.ts.net", subdomains: true }] });
@@ -840,6 +889,64 @@ test("lgTrustCorrupt reports the server's damaged-file flag", async () => {
   p.server.corrupt = false;
   await p.run("lgLoadTrust()");
   assert.strictEqual(p.run("lgTrustCorrupt()"), false);
+});
+
+test("lgTrustNewer tells a newer file from a damaged one; both are corrupt", async () => {
+  const p = page();
+  p.server.corrupt = true;
+  p.server.newer = true;
+  await p.ready();
+  assert.strictEqual(p.run("lgTrustNewer()"), true);
+  assert.strictEqual(p.run("lgTrustCorrupt()"), true, "newer stays corrupt too, so the old logic holds");
+  p.server.newer = false;
+  await p.run("lgLoadTrust()");
+  assert.strictEqual(p.run("lgTrustNewer()"), false, "damaged is not newer");
+  assert.strictEqual(p.run("lgTrustCorrupt()"), true);
+  p.server.corrupt = false;
+  await p.run("lgLoadTrust()");
+  assert.strictEqual(p.run("lgTrustNewer()"), false);
+  // a failed load says neither
+  p.server.corrupt = true; p.server.newer = true;
+  await p.run("lgLoadTrust()");
+  p.server.failGet = true;
+  await p.run("lgLoadTrust()");
+  assert.strictEqual(p.run("lgTrustNewer()"), false);
+});
+
+// F4: the box is hidden while the list is damaged or newer, because the POST is certain to fail.
+test("no trust checkbox while the list is damaged or newer: it would only fail on save", async () => {
+  for (const newer of [false, true]) {
+    const p = page();
+    p.server.corrupt = true;
+    p.server.newer = newer;
+    await p.ready();
+    await p.open("https://docs.example.org/a", { source: "terminal" });
+    const a = p.asks[0];
+    assert.strictEqual(findAll(a, "input").length, 0, "newer=" + newer);
+    assert.ok(!/Always open links/.test(textOf(a)));
+    assert.strictEqual(findAll(a, ".lk-trust").length, 0);
+  }
+  // control: a healthy list still offers it
+  const ok = page();
+  await ok.ready();
+  await ok.open("https://docs.example.org/a", { source: "terminal" });
+  assert.strictEqual(findAll(ok.asks[0], "input").length, 2);
+});
+
+// F7: the agent names the file or session, and a bidi control in it must not reorder the line around it.
+test("the source name is isolated from the meta line's direction", async () => {
+  const p = page();
+  await p.ready();
+  const where = "a\u202Eb.md";
+  await p.open("https://a.example.org/", { source: "markdown", where });
+  const meta = findAll(p.asks[0], ".lk-meta")[0];
+  const iso = meta.querySelectorAll("bdi");
+  assert.strictEqual(iso.length, 1, "one isolated element: the name");
+  assert.strictEqual(iso[0].textContent, where);
+  await p.open("https://a.example.org/", { source: "terminal", where });
+  const t = findAll(p.asks[1], ".lk-meta")[0].querySelectorAll("bdi");
+  assert.strictEqual(t.length, 1);
+  assert.strictEqual(t[0].textContent, where);
 });
 
 test("the dialog is built with textContent only: hostile text stays text", async () => {
