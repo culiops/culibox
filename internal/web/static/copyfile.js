@@ -12,7 +12,7 @@
 // Extensions with no copyable text. SVG is text, but /api/fs/read streams it as
 // image/svg+xml with no JSON route to its source, so it stays on the Download
 // path (see "Known limitation" in the design).
-const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico"]);
 
 // extOf returns the lowercase extension. Lowercase because the server lowercases
 // before matching, so photo.PNG is an image to it and must be one to us as well;

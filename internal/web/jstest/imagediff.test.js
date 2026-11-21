@@ -72,7 +72,7 @@ const loadImg = (img, w, h) => { img.naturalWidth = w; img.naturalHeight = h; im
 
 test("imageDiffIs is the viewer's image set, case aside", () => {
   const p = page();
-  for (const f of ["/a/x.png", "/a/x.JPG", "/a/x.jpeg", "/a/x.gif", "/a/x.webp", "/a/x.svg"]) assert.equal(p.ctx.imageDiffIs(f), true, f);
+  for (const f of ["/a/x.png", "/a/x.JPG", "/a/x.jpeg", "/a/x.gif", "/a/x.webp", "/a/x.svg", "/a/x.avif", "/a/x.BMP", "/a/x.ico"]) assert.equal(p.ctx.imageDiffIs(f), true, f);
   for (const f of ["/a/x.go", "/a/png", "/a/x.png.txt", "/a/x.pdf"]) assert.equal(p.ctx.imageDiffIs(f), false, f);
 });
 
