@@ -3646,6 +3646,38 @@
   #ask-modal .ask-para { margin: var(--sp-4) 0 0; font-size: var(--t-md); line-height: var(--lh-md); color: var(--muted); overflow-wrap: anywhere; }
   #ask-modal .ask-para .mono { font-size: var(--t-sm); }
 
+  /* Open this link? (#348, opts.cls "link" for a clean link, "link-warn" with any warning; linkgate.js). A 520px card (it
+     comes after .wide, which the gate also turns off): the link in a mono box with its host in bold, a muted meta line, one
+     amber-ruled row per warning, the trust box, and the muted notice. The warned card's confirm is "Open anyway", an amber
+     outline like .danger's red one, never a fill. These two come after #ask-modal:not(.info) #ask-ok on purpose: the specificity ties. */
+  #ask-modal.link, #ask-modal.link-warn { width: 520px; max-width: calc(100vw - 40px); }
+  #ask-modal .lk-url {
+    max-height: calc(8 * 1.5em + 2 * var(--sp-2)); overflow-y: auto; padding: var(--sp-2) var(--sp-3);
+    background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl);
+    font: var(--t-md)/1.5 var(--font-mono); overflow-wrap: anywhere; color: var(--fg);
+  }
+  #ask-modal .lk-url:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  #ask-modal .lk-dim { color: var(--muted); }
+  #ask-modal .lk-host { font-weight: var(--w-semibold); color: var(--fg); }
+  #ask-modal .lk-meta, #ask-modal .lk-note, #ask-modal .lk-hint { margin: var(--sp-2) 0 0; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); overflow-wrap: anywhere; }
+  #ask-modal .lk-note { margin-top: var(--sp-3); }
+  #ask-modal .lk-mono { font-family: var(--font-mono); color: var(--fg); }
+  #ask-modal .lk-warn {
+    display: flex; align-items: baseline; gap: var(--sp-2); margin: 6px 0 0; padding: 6px var(--sp-3);
+    border-left: 3px solid var(--warn); background: var(--warn-tint); font-size: var(--t-md); line-height: var(--lh-md); overflow-wrap: anywhere;
+  }
+  #ask-modal .lk-meta + .lk-warn { margin-top: var(--sp-3); }
+  #ask-modal .lk-ico { flex: none; color: var(--warn); }
+  #ask-modal .lk-wt .lk-mono { font-size: var(--t-sm); }
+  #ask-modal .lk-trust { margin: var(--sp-3) 0 0; }
+  #ask-modal .lk-check { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--t-md); line-height: var(--lh-md); cursor: pointer; }
+  #ask-modal .lk-check input { flex: none; margin: 0; accent-color: var(--accent); }
+  #ask-modal .lk-check .lk-mono { font-size: var(--t-sm); }
+  #ask-modal .lk-sub { margin: 6px 0 0 var(--sp-6); color: var(--muted); }
+  #ask-modal .lk-sub[hidden], #ask-modal .lk-hint[hidden] { display: none; }
+  #ask-modal.link-warn #ask-ok { background: transparent; color: var(--warn); border-color: var(--warn); font-weight: var(--w-medium); }
+  #ask-modal.link-warn #ask-ok:hover { background: var(--warn-bg); border-color: var(--warn); }
+
   /* Command palette. */
   #palette { width: 620px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: var(--t-md) var(--font-ui); overflow: hidden; }
   #pal-inputwrap { border-bottom: 1px solid var(--line); }
