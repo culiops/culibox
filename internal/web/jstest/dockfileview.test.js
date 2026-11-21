@@ -573,20 +573,24 @@ test("the card's badge says DB for a database and NB for a notebook; any other t
   }
 });
 
-test("a press on the stage's own scrollbar does not pan: no capture, no drag", () => {
+test("a press on the stage's own scrollbar does not pan; a press on the picture does, whatever offsetX says (the target is the <img>)", () => {
   const p = page();
   const v = image(p);
   press(btn(v, "one"));
   v.stage.scrollLeft = 500; v.stage.scrollTop = 400;
-  // the stage is 800 x 600: an offset at or past that is the scrollbar gutter
-  v.stage.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 9, clientX: 795, clientY: 100, offsetX: 805, offsetY: 100 });
-  assert.equal(v.stage.captured, undefined);
+  // the stage is 800 x 600 at (50, 20) on the page; the gutter is what lies past that, in the stage's own box
+  v.stage.getBoundingClientRect = () => ({ left: 50, top: 20, width: 815, height: 615 });
+  const press1 = (clientX, clientY, offsetX, offsetY) =>
+    v.stage.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 9, clientX, clientY, offsetX, offsetY });
+  press1(50 + 805, 120, 5, 100);
+  assert.equal(v.stage.captured, undefined, "the vertical scrollbar");
   assert.equal(v.drag, null);
   assert.ok(!v.stage.classList.contains("dk-fv-grabbing"));
-  v.stage.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 9, clientX: 100, clientY: 595, offsetX: 100, offsetY: 600 });
-  assert.equal(v.stage.captured, undefined);
+  press1(150, 20 + 610, 100, 5);
+  assert.equal(v.stage.captured, undefined, "the horizontal scrollbar");
   assert.equal(v.drag, null);
-  // a press inside the picture's area still pans
-  v.stage.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 9, clientX: 100, clientY: 100, offsetX: 100, offsetY: 100 });
+  // the target is the 2000 px <img>: its offsets run past the stage's size, and the press is still a pan
+  press1(150, 120, 1500, 1200);
   assert.equal(v.stage.captured, 9);
+  assert.ok(v.drag);
 });

@@ -395,8 +395,10 @@ class DockFileView {
     // Drag pans, when there is more picture than view.
     stage.addEventListener("pointerdown", (e) => {
       if (e.button !== 0 || !stage.classList.contains("dk-fv-pan")) return;
-      // Chrome fires pointerdown on the stage for a press on its own scrollbar: that is the scrollbar's, not a pan.
-      if (e.offsetX >= stage.clientWidth || e.offsetY >= stage.clientHeight) return;
+      // Chrome fires pointerdown on the stage for a press on its own scrollbar: that is the scrollbar's, not a pan. clientWidth leaves
+      // the scrollbar out, so a press past it, in the stage's own box (offsetX is the target's: the picture's, not the stage's), is the gutter.
+      const r = stage.getBoundingClientRect();
+      if (e.clientX - r.left >= stage.clientWidth || e.clientY - r.top >= stage.clientHeight) return;
       this.drag = { x: e.clientX, y: e.clientY, left: stage.scrollLeft, top: stage.scrollTop, id: e.pointerId };
       stage.setPointerCapture(e.pointerId);
       stage.classList.add("dk-fv-grabbing");
