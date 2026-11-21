@@ -1192,6 +1192,20 @@ func TestPublicFilesCiteNoLocalDocs(t *testing.T) {
 	}
 }
 
+// A release bakes the image digest into `published` with -ldflags -X, which
+// names this package by import path. A stale path still links, and silently: the
+// binary then pins nothing and every `box setup` builds the image locally.
+func TestReleaseBuildSetsPublishedByThisPackagePath(t *testing.T) {
+	sh, err := os.ReadFile("../../scripts/release/build.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "-X " + reflect.TypeOf(Ref{}).PkgPath() + ".published="
+	if !strings.Contains(string(sh), want) {
+		t.Errorf("scripts/release/build.sh lacks %q", want)
+	}
+}
+
 // agentbox-env is how a bound session asks the broker for a static token for one
 // command. The shim is a three-way branch: run the mounted script when the
 // session has a token binding, otherwise say so and exit 127.
