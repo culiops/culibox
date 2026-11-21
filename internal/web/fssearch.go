@@ -716,8 +716,9 @@ func (s *Server) searchIndex() *fileIndex {
 // missing index is created and built in the background (startBuild, then
 // runBuild: one build per index, started only when none is in flight and
 // nothing has built yet; later staleness goes through snapshot's
-// stale-while-rebuild), so a slow disk can never stall the palette. Entries for roots no longer listed are dropped.
-// The result is shorter than roots while any root is still building.
+// stale-while-rebuild), so a slow disk can never stall the palette. Entries
+// for roots no longer listed are dropped. The result is shorter than roots
+// while any root is still building.
 func (s *Server) rootIndexes(roots []string) []*fileIndex {
 	s.rootIdxMu.Lock()
 	defer s.rootIdxMu.Unlock()
