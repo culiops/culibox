@@ -96,7 +96,7 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
   echo "build $name"
   ldflags="-s -w -X main.version=$tag -X main.commit=$sha"
   if [ -n "$box_image" ]; then
-    ldflags="$ldflags -X github.com/culiops/culibox/docker/agent-box.published=$box_image"
+    ldflags="$ldflags -X github.com/culiops/culibox/docker/culibox.published=$box_image"
   fi
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
     -ldflags "$ldflags" \

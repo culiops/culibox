@@ -79,7 +79,7 @@ func TestWorkflowSupplyChain(t *testing.T) {
 	// #335: the merge job also tags the index dockerfile-<hash>, which the release
 	// resolves to the digest it bakes. It checks the tree out for the hash, so it
 	// needs contents: read next to packages: write.
-	for _, want := range []string{"      contents: read\n", "persist-credentials: false", "sha256sum docker/agent-box/Dockerfile | cut -c1-12", `:dockerfile-${DOCKERFILE}"`} {
+	for _, want := range []string{"      contents: read\n", "persist-credentials: false", "sha256sum docker/culibox/Dockerfile | cut -c1-12", `:dockerfile-${DOCKERFILE}"`} {
 		if !strings.Contains(merge, want) {
 			t.Errorf("the merge job lacks %q", want)
 		}
@@ -105,19 +105,19 @@ func TestWorkflowSupplyChain(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"sha256sum docker/agent-box/Dockerfile | cut -c1-12",
+		"sha256sum docker/culibox/Dockerfile | cut -c1-12",
 		"provenance: false",
 		"sbom: false",
 		"ubuntu-24.04-arm",
 		"push-by-digest=true",
 		"persist-credentials: false",
-		"docker/agent-box/**",
+		"docker/culibox/**",
 		".github/workflows/box-image.yml",
 		// Layer cache in the registry, per arch. GitHub's Actions cache drops an
 		// entry unused for 7 days: the 2026-11-02 run came 8 days after the last one
 		// and hit 0 steps, so every layer was new and every host re-pulled ~4 GB.
 		// Its own package, so cache manifests never list as versions of the image.
-		"  CACHE: ghcr.io/culiops/agent-box-cache\n",
+		"  CACHE: ghcr.io/culiops/culibox-cache\n",
 		"cache-from: type=registry,ref=${{ env.CACHE }}:${{ matrix.arch }}",
 		"cache-to: type=registry,ref=${{ env.CACHE }}:${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true",
 	} {
@@ -127,6 +127,13 @@ func TestWorkflowSupplyChain(t *testing.T) {
 	}
 	if strings.Contains(wf, "type=gha") {
 		t.Error("the layer cache must not use type=gha (entries expire after 7 days unused)")
+	}
+	// The source moved from docker/agent-box (#353). A path filter left on the old
+	// directory matches nothing, so the image would silently stop rebuilding.
+	for _, old := range []string{"docker/agent-box", "agent-box-cache"} {
+		if strings.Contains(wf, old) {
+			t.Errorf("workflow still names %q (renamed in #353)", old)
+		}
 	}
 }
 
@@ -159,10 +166,10 @@ func TestWorkflowCreatesEmptyExtraCABeforeBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	build := jobBlock(t, string(b), "build")
-	mk := strings.Index(build, ": > docker/agent-box/extra-ca.pem\n")
+	mk := strings.Index(build, ": > docker/culibox/extra-ca.pem\n")
 	bp := strings.Index(build, "docker/build-push-action@")
 	if mk < 0 {
-		t.Fatal("the build job lacks a step that writes an EMPTY docker/agent-box/extra-ca.pem (`: > docker/agent-box/extra-ca.pem`)")
+		t.Fatal("the build job lacks a step that writes an EMPTY docker/culibox/extra-ca.pem (`: > docker/culibox/extra-ca.pem`)")
 	}
 	if bp < 0 || mk > bp {
 		t.Error("the extra-ca.pem step must precede the build-push step")
@@ -172,8 +179,8 @@ func TestWorkflowCreatesEmptyExtraCABeforeBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`(?m)^docker/agent-box/extra-ca\.pem$`).Match(gi) {
-		t.Error(".gitignore must list docker/agent-box/extra-ca.pem")
+	if !regexp.MustCompile(`(?m)^docker/culibox/extra-ca\.pem$`).Match(gi) {
+		t.Error(".gitignore must list docker/culibox/extra-ca.pem")
 	}
 }
 

@@ -30,7 +30,7 @@ func TestHashIsStableAndShort(t *testing.T) {
 }
 
 // The CI workflow computes the label with
-// `sha256sum docker/agent-box/Dockerfile | cut -c1-12`; this is that computation.
+// `sha256sum docker/culibox/Dockerfile | cut -c1-12`; this is that computation.
 func TestHashMatchesShellPipeline(t *testing.T) {
 	b, err := os.ReadFile("Dockerfile")
 	if err != nil {

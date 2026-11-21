@@ -14,7 +14,7 @@
 # version that released binaries still pull. Never delete untagged versions of
 # this package: an old binary would fall back to a local build of several minutes.
 #
-# Supply chain (docker/agent-box/workflow_test.go guards this):
+# Supply chain (docker/culibox/workflow_test.go guards this):
 #   - every action is pinned by full commit SHA, the release in a comment
 #   - no pull-request trigger of any kind: merges here are local, and a fork
 #     must never be able to run a job that can push
@@ -36,14 +36,14 @@
 #
 # Label parity: the label is computed exactly as boximage.Hash() does, the
 # first 12 hex of the Dockerfile's sha256. TestHashMatchesShellPipeline in
-# docker/agent-box/boximage_test.go proves the two computations agree.
+# docker/culibox/boximage_test.go proves the two computations agree.
 name: box-image
 
 on:
   push:
     branches: [main]
     paths:
-      - "docker/agent-box/**"
+      - "docker/culibox/**"
       - ".github/workflows/box-image.yml"
   workflow_dispatch:
 
@@ -60,7 +60,7 @@ env:
   IMAGE: ghcr.io/culiops/culibox
   # The layer cache, a package of its own so cache manifests never show up as
   # versions of the public image (see the build step).
-  CACHE: ghcr.io/culiops/agent-box-cache
+  CACHE: ghcr.io/culiops/culibox-cache
 
 jobs:
   build:
@@ -88,7 +88,7 @@ jobs:
         id: label
         run: |
           set -euo pipefail
-          echo "dockerfile=$(sha256sum docker/agent-box/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "dockerfile=$(sha256sum docker/culibox/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       # BuildKit v0.33.1 (released 2026-09-30, the latest stable at least two
       # weeks old on 2026-10-19), pinned by its INDEX digest (covers amd64 and
@@ -107,7 +107,7 @@ jobs:
       # extra CA, so the file is empty (it is untracked and gitignored).
       - name: Create the empty extra-ca.pem build input
         run: |
-          : > docker/agent-box/extra-ca.pem
+          : > docker/culibox/extra-ca.pem
 
       # Layer cache in the registry, one tag per arch in its own package
       # ($CACHE:amd64/arm64, never pinned or run). Not GitHub's Actions cache: it drops an entry unused
@@ -125,8 +125,8 @@ jobs:
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: docker/agent-box
-          file: docker/agent-box/Dockerfile
+          context: docker/culibox
+          file: docker/culibox/Dockerfile
           platforms: linux/${{ matrix.arch }}
           pull: true
           labels: io.culiops.agent-box.dockerfile=${{ steps.label.outputs.dockerfile }}
@@ -170,7 +170,7 @@ jobs:
         id: label
         run: |
           set -euo pipefail
-          echo "dockerfile=$(sha256sum docker/agent-box/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "dockerfile=$(sha256sum docker/culibox/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
