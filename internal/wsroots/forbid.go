@@ -5,8 +5,17 @@ package wsroots
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 )
+
+// foldCase makes the comparisons ignore case, as macOS volumes do by default
+// (box/protected.go folds the same way). A variable so a test can set it.
+var foldCase = runtime.GOOS == "darwin"
+
+// evalSymlinks is filepath.EvalSymlinks; a variable so a test can count calls.
+var evalSymlinks = filepath.EvalSymlinks
 
 // Env is what the rule needs from the running machine.
 type Env struct {
@@ -30,16 +39,32 @@ var systemIsOrContains = []string{"/var"}
 // refused through this rule (it is lexical: .ssh need not exist).
 var credentialDirs = []string{".ssh", ".aws", ".gnupg"}
 
+// The system folders with their resolved forms, resolved once: they are
+// fixed, and Refusal runs per root on every policy build and per folder in
+// the "Other places" scan.
+var (
+	systemOnce                   sync.Once
+	systemWholeV, systemIsOrConV []string
+)
+
+func systemVariants() (whole, isOrContains []string) {
+	systemOnce.Do(func() {
+		systemWholeV, systemIsOrConV = variants(systemWhole), variants(systemIsOrContains)
+	})
+	return systemWholeV, systemIsOrConV
+}
+
 // Refusal reports why abs can never be a workspace root, or "" when it can.
 // abs must be absolute and symlink-resolved. The reason is plain words and
-// names only a class of folder.
+// names only a class of folder. On darwin case is ignored (foldCase).
 func Refusal(abs string, env Env) string {
 	abs = filepath.Clean(abs)
 	// "/" first: it contains everything, /etc included.
 	if abs == string(filepath.Separator) {
 		return "it is the filesystem root"
 	}
-	if reason := refusalWith(abs, systemWhole, systemIsOrContains); reason != "" {
+	whole, isOrContains := systemVariants()
+	if reason := refusalIn(abs, whole, isOrContains); reason != "" {
 		return reason
 	}
 	if env.Home != "" {
@@ -47,6 +72,7 @@ func Refusal(abs string, env Env) string {
 		for _, d := range credentialDirs {
 			creds = append(creds, filepath.Join(env.Home, d))
 		}
+		creds = variants(creds)
 		if matches(abs, creds, true) {
 			return "it holds credentials"
 		}
@@ -55,7 +81,7 @@ func Refusal(abs string, env Env) string {
 		}
 	}
 	if env.DataDir != "" {
-		if d := []string{env.DataDir}; matches(abs, d, true) || contains(abs, d) {
+		if d := variants([]string{env.DataDir}); matches(abs, d, true) || contains(abs, d) {
 			return "it holds CuliBox's own data"
 		}
 	}
@@ -66,6 +92,11 @@ func Refusal(abs string, env Env) string {
 // whole are refused when abs is, is inside or contains one; isOrContains when
 // abs is or contains one (inside is allowed).
 func refusalWith(abs string, whole, isOrContains []string) string {
+	return refusalIn(abs, variants(whole), variants(isOrContains))
+}
+
+// refusalIn is refusalWith over bases already expanded by variants.
+func refusalIn(abs string, whole, isOrContains []string) string {
 	if matches(abs, whole, true) || matches(abs, isOrContains, false) {
 		return "it is a system folder"
 	}
@@ -82,7 +113,7 @@ func variants(bases []string) []string {
 	for _, b := range bases {
 		b = filepath.Clean(b)
 		out = append(out, b)
-		if real, err := filepath.EvalSymlinks(b); err == nil && real != b {
+		if real, err := evalSymlinks(b); err == nil && real != b {
 			out = append(out, real)
 		}
 	}
@@ -94,10 +125,20 @@ func within(p, b string) bool {
 	return p == b || strings.HasPrefix(p, b+string(filepath.Separator))
 }
 
-// matches reports whether p is one of the bases, or, with inside, lies inside
-// one.
+// foldKey is p as Refusal compares it: lower case where case is ignored.
+func foldKey(p string) string {
+	if foldCase {
+		return strings.ToLower(p)
+	}
+	return p
+}
+
+// matches reports whether p is one of the bases (already expanded by
+// variants), or, with inside, lies inside one.
 func matches(p string, bases []string, inside bool) bool {
-	for _, b := range variants(bases) {
+	p = foldKey(p)
+	for _, b := range bases {
+		b = foldKey(b)
 		if p == b || (inside && within(p, b)) {
 			return true
 		}
@@ -105,9 +146,12 @@ func matches(p string, bases []string, inside bool) bool {
 	return false
 }
 
-// contains reports whether p is a strict ancestor of one of the bases.
+// contains reports whether p is a strict ancestor of one of the bases (already
+// expanded by variants).
 func contains(p string, bases []string) bool {
-	for _, b := range variants(bases) {
+	p = foldKey(p)
+	for _, b := range bases {
+		b = foldKey(b)
 		if p != b && within(b, p) {
 			return true
 		}

@@ -94,3 +94,60 @@ func TestRefusalResolvedBase(t *testing.T) {
 		t.Fatalf("unrelated path: got %q", got)
 	}
 }
+
+// M3: macOS volumes ignore case by default, so on darwin /ETC is /etc and
+// ~/.SSH is ~/.ssh. The toggle lets this run on Linux too.
+func TestRefusalFoldsCaseOnDarwin(t *testing.T) {
+	env := Env{Home: "/Users/u", DataDir: "/Users/u/Library/Application Support/culibox"}
+	rows := []struct{ path, want string }{
+		{"/ETC", "it is a system folder"},
+		{"/Etc/hosts.d", "it is a system folder"},
+		{"/usr/LOCAL/src", "it is a system folder"},
+		{"/VAR", "it is a system folder"},
+		{"/var/WWW/app", ""},
+		{"/users/u/.SSH", "it holds credentials"},
+		{"/users/U/.Aws/sub", "it holds credentials"},
+		{"/USERS", "it contains your credential folders"},
+		{"/users/u/library/application support/CULIBOX", "it holds CuliBox's own data"},
+		{"/Users/u/Code", ""},
+		{"/ETCETERA", ""},
+	}
+	old := foldCase
+	t.Cleanup(func() { foldCase = old })
+	foldCase = true
+	for _, r := range rows {
+		if got := Refusal(r.path, env); got != r.want {
+			t.Errorf("fold: Refusal(%q) = %q, want %q", r.path, got, r.want)
+		}
+	}
+	if got := refusalWith("/PRIVATE", nil, []string{"/private/var"}); got != "it contains a system folder" {
+		t.Errorf("fold: refusalWith(/PRIVATE) = %q", got)
+	}
+	// Linux paths are case-sensitive: /ETC is some other folder there.
+	foldCase = false
+	if got := Refusal("/ETC", env); got != "" {
+		t.Errorf("no fold: Refusal(/ETC) = %q, want allowed", got)
+	}
+	if got := Refusal("/users/u/.SSH", env); got != "" {
+		t.Errorf("no fold: Refusal(/users/u/.SSH) = %q, want allowed", got)
+	}
+}
+
+// M6: the fixed system folders are resolved once per process, not on every
+// call: a call resolves only the per-Env folders (three credential folders and
+// the data dir).
+func TestRefusalResolvesSystemBasesOnce(t *testing.T) {
+	var n int
+	old := evalSymlinks
+	t.Cleanup(func() { evalSymlinks = old })
+	evalSymlinks = func(p string) (string, error) { n++; return old(p) }
+	env := Env{Home: "/home/u", DataDir: "/home/u/.local/share/culibox"}
+	Refusal("/opt/proj", env) // warm up: the first call may resolve the system set
+	n = 0
+	for i := 0; i < 10; i++ {
+		Refusal("/opt/proj", env)
+	}
+	if want := 10 * (len(credentialDirs) + 1); n != want {
+		t.Fatalf("10 calls resolved %d paths, want %d (per-Env folders only)", n, want)
+	}
+}
