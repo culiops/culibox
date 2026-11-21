@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	boximage "github.com/culiops/culibox/docker/agent-box"
+	boximage "github.com/culiops/culibox/docker/culibox"
 	"github.com/culiops/culibox/internal/auth"
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxaddr"

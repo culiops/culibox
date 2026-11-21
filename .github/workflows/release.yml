@@ -15,7 +15,7 @@
 # builds without the digest and says so. This workflow never builds or pushes an
 # image and holds no packages scope.
 #
-# Supply chain (docker/agent-box/workflow_test.go guards this):
+# Supply chain (docker/culibox/workflow_test.go guards this):
 #   - every action is pinned by full commit SHA, the release in a comment
 #   - no pull-request trigger of any kind
 #   - GITHUB_TOKEN is read-only at the top; contents, id-token and attestations

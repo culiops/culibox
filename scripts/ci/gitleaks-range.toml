@@ -11,7 +11,7 @@
 # commits with the full config too.
 #
 # extend.path is read relative to the directory gitleaks runs in (the repo root).
-# docker/agent-box/gitleaks_test.go keeps this list equal to the custom rules in
+# docker/culibox/gitleaks_test.go keeps this list equal to the custom rules in
 # .gitleaks.toml, so a new custom rule has to be put on one side on purpose.
 [extend]
 path = ".gitleaks.toml"

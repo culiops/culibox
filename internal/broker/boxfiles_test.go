@@ -652,7 +652,7 @@ func TestHooksWriteSessionMCP(t *testing.T) {
 // The image's agentbox-env shim execs the script at a path the Dockerfile writes
 // by hand; the binding dir is mounted at BoxDir. Keep the two from drifting.
 func TestImageShimPathIsTheMountedScript(t *testing.T) {
-	df, err := os.ReadFile("../../docker/agent-box/Dockerfile")
+	df, err := os.ReadFile("../../docker/culibox/Dockerfile")
 	if err != nil {
 		t.Fatal(err)
 	}

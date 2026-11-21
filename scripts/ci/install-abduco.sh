@@ -4,7 +4,7 @@
 # tests run against the same abduco the box image ships (they must not skip).
 #
 # The version and sum are the Dockerfile's ARG ABDUCO_VERSION / ABDUCO_SHA256
-# (docker/agent-box/workflow_test.go fails if they drift apart). The tarball is
+# (docker/culibox/workflow_test.go fails if they drift apart). The tarball is
 # checked against the sum BEFORE it is unpacked or built. Runs on Linux and on
 # macOS: sha256sum where present, else `shasum -a 256`.
 set -eu

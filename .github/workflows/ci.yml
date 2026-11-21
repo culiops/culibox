@@ -14,7 +14,7 @@
 # release.yml calls this file (workflow_call), so the checks that gate a release
 # are the ones that gate main.
 #
-# Supply chain (docker/agent-box/workflow_test.go guards this):
+# Supply chain (docker/culibox/workflow_test.go guards this):
 #   - every action is pinned by full commit SHA, the release in a comment
 #   - no pull-request trigger of any kind
 #   - GITHUB_TOKEN is read-only for every job: nothing here needs a write grant

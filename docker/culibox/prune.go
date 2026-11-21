@@ -12,9 +12,10 @@ import (
 // BoxRepos are the repositories the code has ever named the box image under:
 // the Docker Hub style default (culiops/culibox, and culiops/agent-box from
 // before the rename, #255) and the ghcr package CI publishes to (and the one
-// it had before the rename). The ghcr layer-cache package agent-box-cache is
-// not here: it is never pulled or run. Nothing else is a box image, whatever
-// label it carries: an image built FROM the box image inherits the label.
+// it had before the rename). The ghcr layer-cache package culibox-cache
+// (agent-box-cache before #353) is not here: it is never pulled or run. Nothing
+// else is a box image, whatever label it carries: an image built FROM the box
+// image inherits the label.
 var BoxRepos = []string{
 	"culiops/culibox", "culiops/agent-box",
 	"ghcr.io/culiops/culibox", "ghcr.io/culiops/agent-box",

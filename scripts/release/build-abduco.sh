@@ -18,7 +18,7 @@
 # Pinned three times over, and every download is checked BEFORE it is unpacked or
 # run:
 #   - the abduco source: ABDUCO_VERSION / ABDUCO_SHA256 are the Dockerfile's ARGs and
-#     install-abduco.sh's (docker/agent-box/workflow_test.go fails if they drift);
+#     install-abduco.sh's (docker/culibox/workflow_test.go fails if they drift);
 #   - zig: the PyPI wheel the zig project publishes, by sha256;
 #   - the four binaries: the build is reproducible (no build path or date ends up in
 #     a stripped binary), so each one must match the sum below. A different sum means a
