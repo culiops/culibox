@@ -357,6 +357,7 @@ function lgBuildView(raw, ctx, pageHost, trusted) {
 // every link then asks.
 let lgTrustHosts = [];
 let lgTrustBad = false;
+let lgTrustFailed = false;
 let lgLoadSeq = 0;
 
 function lgCleanHosts(list) {
@@ -376,23 +377,31 @@ function lgTrustCorrupt() {
   return lgTrustBad;
 }
 
+// lgTrustLoadFailed: the last load did not succeed (network error or an HTTP refusal), so the empty list is "unknown", not "none".
+function lgTrustLoadFailed() {
+  return lgTrustFailed;
+}
+
 // lgLoadTrust fetches the list and resolves to it. Only the newest load may write the cache, so a slow older answer cannot
 // bring back an entry that a later load already saw removed.
 async function lgLoadTrust() {
   const mine = ++lgLoadSeq;
   let hosts = [];
   let bad = false;
+  let failed = true;
   try {
     const res = await fetch(LG_API, { credentials: "same-origin" });
     if (res.ok) {
       const body = await res.json();
       hosts = lgCleanHosts(body && body.hosts);
       bad = !!(body && body.corrupt);
+      failed = false;
     }
   } catch (_) {}
   if (mine === lgLoadSeq) {
     lgTrustHosts = hosts;
     lgTrustBad = bad;
+    lgTrustFailed = failed;
   }
   return lgTrustList();
 }
@@ -462,7 +471,8 @@ function lgMetaPieces(v) {
   if (src.length) segs.push(src);
   const out = [];
   segs.forEach((s, i) => out.push(...(i ? [" · "] : []), ...s));
-  const note = v.loopback ? ["A localhost link: it opens on ", { mono: v.pageHost }, "."] : [];
+  // Only when the link really was rewritten: a loopback link left alone (userinfo, or a page already on localhost) opens the viewer's own localhost.
+  const note = v.rewritten ? ["A localhost link: it opens on ", { mono: v.pageHost }, "."] : [];
   if (out.length && (note.length || !v.warnings.length)) out.push(".");
   if (out.length && note.length) out.push(" ");
   return out.concat(note);
@@ -600,7 +610,7 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     lgParse, lgHostKey, lgIsLoopbackHost, lgPunyDecode, lgUnicodeHost, lgOsa, lgScripts, lgIsIPHost, lgIsPrivateIP, lgWarnings,
-    lgTrustMatch, lgTrustable, lgUntrustableWhy, lgUrlParts, lgBuildView, lgTrustList, lgTrustCorrupt, lgLoadTrust, lgAddTrust,
+    lgTrustMatch, lgTrustable, lgUntrustableWhy, lgUrlParts, lgBuildView, lgTrustList, lgTrustCorrupt, lgTrustLoadFailed, lgLoadTrust, lgAddTrust,
     lgRemoveTrust, openAgentLink,
   };
 }

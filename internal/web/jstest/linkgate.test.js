@@ -311,9 +311,12 @@ function page(over) {
       server.calls.push({ url, method, init: init || {}, body: init && init.body ? JSON.parse(init.body) : null });
       if (method === "GET") {
         events.push("get");
+        // The answer is what the server held when the request ARRIVED, not when json() is read: a slow reply is an old one.
+        const answer = { hosts: server.hosts, corrupt: server.corrupt };
         if (server.getDelay) await server.getDelay();
         if (server.failGet) throw new Error("offline");
-        return { ok: true, status: 200, statusText: "OK", json: async () => ({ hosts: server.hosts, corrupt: server.corrupt }) };
+        if (server.getStatus) return { ok: false, status: server.getStatus, statusText: "Bad", json: async () => ({ error: "no" }) };
+        return { ok: true, status: 200, statusText: "OK", json: async () => answer };
       }
       events.push(method.toLowerCase());
       if (server.failPost) return { ok: false, status: server.failPost.status, statusText: "Bad", json: async () => ({ error: server.failPost.error }) };
@@ -358,7 +361,7 @@ test("the script is a classic script: every top-level name but openAgentLink is 
 });
 
 test("module.exports carries the pure functions and openAgentLink; require() works with no browser", () => {
-  for (const n of ["lgParse", "lgWarnings", "lgPunyDecode", "lgUnicodeHost", "lgOsa", "lgScripts", "lgTrustMatch", "lgTrustable", "lgUrlParts", "lgIsLoopbackHost", "openAgentLink", "lgTrustList", "lgLoadTrust", "lgRemoveTrust"]) {
+  for (const n of ["lgParse", "lgWarnings", "lgPunyDecode", "lgUnicodeHost", "lgOsa", "lgScripts", "lgTrustMatch", "lgTrustable", "lgUrlParts", "lgIsLoopbackHost", "openAgentLink", "lgTrustList", "lgLoadTrust", "lgRemoveTrust", "lgTrustLoadFailed"]) {
     assert.strictEqual(typeof lg[n], "function", n);
   }
 });
@@ -584,6 +587,34 @@ test("a loopback link with userinfo is not rewritten and warns", async () => {
   await p.open("http://evil.example@localhost:3000/", { source: "terminal" });
   assert.match(findAll(p.asks[0], ".lk-warn")[0].textContent, /evil\.example@ is a user name/);
   assert.strictEqual(p.toasts.length, 0);
+  // Not rewritten, so it opens the viewer's own localhost: the meta line must not say it opens on the page's host.
+  const meta = findAll(p.asks[0], ".lk-meta")[0].textContent;
+  assert.ok(!/opens on|localhost link/i.test(meta), meta);
+});
+
+test("the localhost note appears only when the link was rewritten", async () => {
+  const p = page({ hostname: "localhost" }); // the page is on localhost itself: nothing is rewritten
+  await p.ready();
+  await p.open("http://localhost:3000/", { source: "terminal", where: "s1" });
+  assert.ok(!/opens on/.test(findAll(p.asks[0], ".lk-meta")[0].textContent));
+  assert.strictEqual(p.toasts.length, 0);
+});
+
+test("a loopback link never skips the dialog, even when the host it is rewritten to is trusted", async () => {
+  const p = page({ hostname: "box.tail.ts.net", hosts: [{ host: "box.tail.ts.net", subdomains: false }] });
+  await p.ready();
+  // https://localhost:3000/ becomes https://box.tail.ts.net:3000/, has no warning (the port line is off for loopback) and matches.
+  await p.open("https://localhost:3000/", { source: "terminal", where: "s1" });
+  assert.strictEqual(p.asks.length, 1, "it asked");
+  assert.strictEqual(p.opened.length, 0, "and, cancelled, did not open");
+  assert.strictEqual(p.asks[0].cls, "link");
+  assert.strictEqual(findAll(p.asks[0], "input").length, 0, "a localhost link is never trustable");
+  // the same for the subdomain form
+  const q = page({ hostname: "box.tail.ts.net", hosts: [{ host: "tail.ts.net", subdomains: true }] });
+  await q.ready();
+  await q.open("https://127.0.0.1:3000/", { source: "terminal" });
+  assert.strictEqual(q.asks.length, 1);
+  assert.strictEqual(q.opened.length, 0);
 });
 
 test("the box on Open: the link opens first, then POST {host, subdomains} as JSON", async () => {
@@ -741,14 +772,48 @@ test("an older load that answers late does not overwrite a newer one", async () 
   await p.ready();
   let release;
   p.server.getDelay = () => new Promise((r) => { release = r; });
+  const slow = p.run("lgLoadTrust()"); // asked while github.com and grafana.example.com were trusted; answers last
+  await tick();
+  p.server.getDelay = null;
+  p.server.hosts = [{ host: "new.example.com", subdomains: false }]; // github.com was removed meanwhile
+  await p.run("lgLoadTrust()");
+  assert.deepStrictEqual(plain(p.run("lgTrustList()")).map((h) => h.host), ["new.example.com"]);
+  release();
+  const late = await slow;
+  assert.deepStrictEqual(plain(late).map((h) => h.host), ["new.example.com"], "the late call resolves to the cache, not its own stale answer");
+  assert.deepStrictEqual(plain(p.run("lgTrustList()")).map((h) => h.host), ["new.example.com"], "a removed host does not come back");
+  // so a link to the removed host asks again
+  await p.open("https://github.com/x", { source: "terminal" });
+  assert.strictEqual(p.asks.length, 1);
+});
+
+test("lgTrustLoadFailed tells a failed load from an empty list", async () => {
+  const p = page({ hosts: [] });
+  await p.ready();
+  assert.strictEqual(p.run("lgTrustLoadFailed()"), false, "an empty list is not a failure");
+  p.server.failGet = true; // network error
+  await p.run("lgLoadTrust()");
+  assert.strictEqual(p.run("lgTrustLoadFailed()"), true);
+  assert.deepStrictEqual(plain(p.run("lgTrustList()")), []);
+  p.server.failGet = false;
+  p.server.getStatus = 500; // an HTTP refusal
+  await p.run("lgLoadTrust()");
+  assert.strictEqual(p.run("lgTrustLoadFailed()"), true);
+  p.server.getStatus = 0;
+  await p.run("lgLoadTrust()");
+  assert.strictEqual(p.run("lgTrustLoadFailed()"), false, "a good load clears it");
+  // an older failed load that answers late does not set it over a newer good one
+  let release;
+  p.server.getDelay = () => new Promise((r) => { release = r; });
+  p.server.failGet = true;
   const slow = p.run("lgLoadTrust()");
   await tick();
   p.server.getDelay = null;
-  p.server.hosts = [{ host: "new.example.com", subdomains: false }];
+  p.server.failGet = false;
   await p.run("lgLoadTrust()");
   release();
   await slow;
-  assert.deepStrictEqual(plain(p.run("lgTrustList()")).map((h) => h.host), ["new.example.com"]);
+  assert.strictEqual(p.run("lgTrustLoadFailed()"), false);
 });
 
 test("lgRemoveTrust sends DELETE {host} and refreshes; a failure throws for the Settings tab", async () => {
