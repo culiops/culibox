@@ -258,6 +258,10 @@ boxed sessions have already run in.
   refuses to share its own config, profiles and data directories and the
   known credential folders above.
 
+### Workspace roots outside the shared folders
+
+Settings › Workspace roots lists the folders the web UI's Files, git and search can open (see [Configuration](CONFIG.md#workspace-roots)). On a Mac, `/Volumes/<disk>/proj` is a common one, and it is outside the folders the box VM shares. Git status runs in a container inside the VM, so a root the VM cannot see has no git, on the host tier too, and a box cannot start there. When you start a session in such a folder, the line under Workspace in New session says so, and so does the root's row in Settings › Workspace roots, each with a **Share this folder…** button. The button opens Settings › VM folders with the folder filled in; adding it there is your call, and it reaches the VM only when you apply (a VM restart, which ends running boxes). The folder can still become a root without being shared; only git and boxes need the share.
+
 ### Every box
 
 Every box, with or without a credential binding (AWS connections, a `github` binding or static tokens), gets a locked-down network,
