@@ -118,6 +118,8 @@ type Server struct {
 
 	// Roots are the workspace folders served besides $HOME. Nil → $HOME only.
 	Roots WorkspaceRoots
+	// DataDir is CuliBox's data directory; the workspace check refuses it as a root.
+	DataDir string
 
 	// ScratchDirs are candidate Claude Code temp folders (claude-<uid>), from
 	// ScratchCandidates. The fs API reads an accepted one read-only.
@@ -370,6 +372,10 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, listWorkspaces(s.Home, s.Protected, s.Shares))
 	})
+	if s.Roots != nil {
+		protected.HandleFunc("/api/workspace-roots", s.handleWorkspaceRoots)
+		protected.HandleFunc("/api/workspace/check", s.handleWorkspaceCheck)
+	}
 	protected.HandleFunc("/api/fs/list", s.handleFsList)
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)
 	protected.HandleFunc("/api/fs/search", s.handleFsSearch)

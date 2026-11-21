@@ -36,7 +36,8 @@ type RefusedError struct{ Reason string }
 func (e *RefusedError) Error() string { return e.Reason }
 
 // AuditFunc records a change before it is saved. action is "created" or
-// "deleted"; a non-nil error stops the change (fail closed).
+// "deleted"; a non-nil error stops the change (fail closed). It is called with
+// the service lock held; it must not call the Service.
 type AuditFunc func(action, path, actor string) error
 
 // Service is the audited root list. Every read and write re-reads the file

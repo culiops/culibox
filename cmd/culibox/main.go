@@ -46,6 +46,7 @@ import (
 	"github.com/culiops/culibox/internal/storerefs"
 	"github.com/culiops/culibox/internal/terminal"
 	"github.com/culiops/culibox/internal/web"
+	"github.com/culiops/culibox/internal/wsroots"
 )
 
 // The registry-based transcript locator only runs when the backend can name the
@@ -874,6 +875,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	creds := web.NewCredentialManager(baseCfg, credFile, dataDir, pm, vstore, storeAudit, chk, live.Apply, web.AccountsOf(accts))
 	creds.SetFileBad(credBad)
 
+	// The workspace folders the file API serves besides $HOME. Every add and
+	// remove is audited first (storeAudit), so a failed audit saves nothing.
+	wsRoots := wsroots.NewService(dataDir, home, web.RootsAudit(storeAudit), time.Now)
+
 	srv := &web.Server{
 		Imports:          bundleImports,
 		API:              api,
@@ -882,6 +887,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Password:         login.Secret,
 		Profiles:         pm,
 		Home:             home,
+		DataDir:          dataDir,
+		Roots:            wsRoots,
 		Protected:        protected,
 		Shares:           vmShares,
 		VMFolders:        vmFolders,

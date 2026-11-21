@@ -18,11 +18,7 @@ const vmFoldersBodyMax = 16 << 10
 // page's own signed-in browser session, never a bearer token (a token holder
 // must not widen the VM's view). Same rule as the store's lock.
 func vmFoldersBrowserOnly(w http.ResponseWriter, r *http.Request) bool {
-	if credKindOf(r) != credCookie || !strictSameOrigin(r) {
-		writeErr(w, http.StatusForbidden, "changing the VM folders needs this page's signed-in browser session")
-		return false
-	}
-	return true
+	return browserOnly(w, r, "changing the VM folders needs this page's signed-in browser session")
 }
 
 func decodeVMBody(w http.ResponseWriter, r *http.Request, v any) bool {
