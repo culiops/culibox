@@ -60,3 +60,10 @@ func TestBypassesPermissionsUnknownAgent(t *testing.T) {
 		t.Fatal("an unknown agent does not bypass")
 	}
 }
+
+// ArgsBypassPermissions delegates to config.ArgsBypass, where the cases live.
+func TestArgsBypassPermissionsDelegates(t *testing.T) {
+	if !ArgsBypassPermissions([]string{"--permission-mode", "bypassPermissions"}) || ArgsBypassPermissions([]string{"--permission-mode", "plan"}) {
+		t.Fatal("ArgsBypassPermissions does not follow config.ArgsBypass")
+	}
+}

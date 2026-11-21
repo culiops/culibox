@@ -1114,19 +1114,8 @@ func sortedKeys(m map[string]any) []string {
 	return ks
 }
 
-// truthy coerces a JSON-decoded value to bool without panicking on wrong types.
-func truthy(v any) bool {
-	switch t := v.(type) {
-	case bool:
-		return t
-	case string:
-		return t == "true" || t == "1"
-	case float64:
-		return t != 0
-	default:
-		return false
-	}
-}
+// truthy coerces a JSON-decoded value to bool; the rule lives in config.Truthy.
+func truthy(v any) bool { return config.Truthy(v) }
 
 func contains(ss []string, s string) bool {
 	for _, x := range ss {

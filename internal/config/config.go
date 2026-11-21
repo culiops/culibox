@@ -66,6 +66,9 @@ type OptionDef struct {
 	// OfferUnset: an enum is pickable at spawn on a profile that sets no default
 	// for it (blank = the agent's own default). nil = on for model, effort and effortLevel only.
 	OfferUnset *bool `json:"offer_unset,omitempty"`
+	// Tier: "" = runs anywhere; "box" = takes effect only in a box (a host
+	// session never gets it). Any other value is refused.
+	Tier string `json:"tier,omitempty"`
 }
 
 // AppliesTo reports whether this option is offered for an agent binary. No bins →
@@ -595,6 +598,9 @@ func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[
 		if o.Flag == "" && o.Env == "" {
 			return fmt.Errorf("config: option %q must set a flag and/or env", o.Key)
 		}
+		if o.Tier != "" && o.Tier != RuntimeBox {
+			return fmt.Errorf("config: option %q has invalid tier %q (want \"\" or \"box\")", o.Key, o.Tier)
+		}
 		optDefs[o.Key] = o
 	}
 	for _, a := range c.Agents {
@@ -751,7 +757,7 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 			return WithField(field, fmt.Errorf("profile %q option %q env %q collides with a declared secret", a.Name, k, def.Env))
 		}
 	}
-	return nil
+	return validateClaudePermission(a, optDefs)
 }
 
 func contains(ss []string, s string) bool {
