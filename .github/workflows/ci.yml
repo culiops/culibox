@@ -119,6 +119,8 @@ jobs:
         run: |
           bash scripts/macos-verify_test.sh
           bash scripts/ci/secret-scan_test.sh
+          sh scripts/ci/install-grype_test.sh
+          sh scripts/ci/image-scan-report_test.sh
       # scripts/lint.sh installs the exact eslint tree from scripts/lint/package-lock.json
       # (npm ci, integrity-checked, no install scripts) and needs python3 (both on the
       # runner). It SKIPS itself when eslint cannot run, which locally keeps an

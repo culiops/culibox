@@ -1,0 +1,4 @@
+# Accepted box image scan findings, read by scripts/ci/image-scan-report.sh.
+# One per line: <CVE or GHSA id> <YYYY-MM-DD accepted on> <reason>. An entry lapses
+# 180 days after its date and the finding counts again. Accepting one is a reviewed
+# change: say why the finding cannot reach anything in a box, or why it must wait.

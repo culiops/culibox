@@ -1106,6 +1106,8 @@ func TestCIWorkflow(t *testing.T) {
 		"bash scripts/macos-verify_test.sh",
 		"scripts/ci/secret-scan.sh",
 		"bash scripts/ci/secret-scan_test.sh",
+		"sh scripts/ci/install-grype_test.sh",
+		"sh scripts/ci/image-scan-report_test.sh",
 		// The custom private-identifier rules are tested with the pinned scanner, and
 		// the run fails (not skips) when the scanner is missing.
 		"GITLEAKS_RULES_TEST_REQUIRE=1 bash scripts/ci/gitleaks-rules_test.sh",

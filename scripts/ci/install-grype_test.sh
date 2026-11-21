@@ -87,6 +87,15 @@ else
   fail "GRYPE_SHA256 is not the pinned linux_amd64 sum"
 fi
 
+if command -v shellcheck >/dev/null 2>&1; then
+  if shellcheck -s sh "$script" >"$tmp/sc.out" 2>&1; then pass "shellcheck -s sh is clean"; else
+    fail "shellcheck -s sh found problems"
+    sed 's/^/        | /' "$tmp/sc.out" >&2
+  fi
+else
+  echo "SKIP shellcheck (not installed)"
+fi
+
 if [ "$fails" -ne 0 ]; then
   echo "install-grype_test: $fails failure(s)" >&2
   exit 1
