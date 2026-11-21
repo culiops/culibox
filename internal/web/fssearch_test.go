@@ -1329,9 +1329,23 @@ func TestSearchDedupesNestedRoots(t *testing.T) {
 	mustWrite(t, filepath.Join(api, "main.go"), "x")
 	s := &Server{Home: home, Roots: fakeRoots{extra, api}}
 	waitRootIndexes(t, s, []string{extra, api})
+	// "main.go" matches in both indexes; "api" only in the outer one (its rel
+	// is api/main.go). Either way: one hit, owned by the deepest root.
+	for _, q := range []string{"main.go", "api"} {
+		_, out := doSearch(t, s, "q="+q)
+		if len(out.Results) != 1 {
+			t.Fatalf("q=%s: nested roots must give one hit per file: %+v", q, out.Results)
+		}
+		h := out.Results[0]
+		if h.Path != filepath.Join(api, "main.go") || h.Root != api || h.Rel != "main.go" {
+			t.Fatalf("q=%s: want root %s rel main.go, got %+v", q, api, h)
+		}
+	}
+	// Dropping the outer root: the inner one still serves the file.
+	s.Roots = fakeRoots{api}
 	_, out := doSearch(t, s, "q=main.go")
-	if len(out.Results) != 1 || out.Results[0].Path != filepath.Join(api, "main.go") {
-		t.Fatalf("nested roots must give one hit per file: %+v", out.Results)
+	if len(out.Results) != 1 || out.Results[0].Root != api || out.Results[0].Rel != "main.go" {
+		t.Fatalf("after dropping the outer root: %+v", out.Results)
 	}
 }
 
@@ -1354,37 +1368,33 @@ func TestSearchDropsRemovedRoot(t *testing.T) {
 	}
 }
 
-// No walk goroutine piles up per request: while a root builds, repeated
-// requests start no second build.
+// While a root builds, repeated requests start no second build: count the
+// walks, not the goroutines.
 func TestRootIndexesStartsOneBuildPerIndex(t *testing.T) {
 	home, extra, _ := rootsFixture(t)
 	mustWrite(t, filepath.Join(extra, "a"), "x")
 	s := &Server{Home: home}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				s.rootIndexes([]string{extra})
+			}
+		}()
+	}
+	wg.Wait()
 	waitRootIndexes(t, s, []string{extra})
+	time.Sleep(50 * time.Millisecond) // a stray second build would have started by now
 	s.rootIdxMu.Lock()
 	ix := s.rootIdx[extra]
 	s.rootIdxMu.Unlock()
-	for { // the finished build clears `building` a moment after `built`
-		ix.mu.Lock()
-		idle := !ix.building
-		ix.mu.Unlock()
-		if idle {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
 	ix.mu.Lock()
-	ix.building = true // a build is "in flight"
-	ix.built = time.Time{}
+	n := ix.builds
 	ix.mu.Unlock()
-	for i := 0; i < 20; i++ {
-		s.rootIndexes([]string{extra})
-	}
-	ix.mu.Lock()
-	still := ix.building && ix.built.IsZero()
-	ix.mu.Unlock()
-	if !still {
-		t.Fatal("a second build was started while one was in flight")
+	if n != 1 {
+		t.Fatalf("walks started = %d, want exactly 1", n)
 	}
 }
 

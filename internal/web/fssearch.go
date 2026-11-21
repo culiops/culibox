@@ -232,6 +232,7 @@ type fileIndex struct {
 	dirsTruncated bool
 	built         time.Time
 	building      bool
+	builds        int // walks started by runBuild (tests count them)
 }
 
 func newFileIndex(root string) *fileIndex {
@@ -305,24 +306,53 @@ func (ix *fileIndex) snapshot(k searchKind) ([]indexEntry, bool) {
 	return ix.entries, ix.truncated
 }
 
+// claimBuild marks a build as in flight and reports whether the caller owns it
+// (false: one is already running). Claiming under the lock, BEFORE the goroutine
+// is spawned, is what keeps two requests from both starting a walk.
+func (ix *fileIndex) claimBuild() bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if ix.building {
+		return false
+	}
+	ix.building = true
+	return true
+}
+
+// startBuild is claimBuild for an index that has never built: it also fails once
+// a build has landed, checked under the same lock, so a request that saw "not
+// ready" an instant before the build finished cannot start a second walk.
+func (ix *fileIndex) startBuild() bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if ix.building || !ix.built.IsZero() {
+		return false
+	}
+	ix.building = true
+	return true
+}
+
 // refresh walks the tree and replaces the cache, unless a build is already in
 // flight. Unlike snapshot's first call it does NOT hold the lock across the
 // walk, so ready() stays answerable while it runs. Run it in a goroutine.
 func (ix *fileIndex) refresh() {
-	ix.mu.Lock()
-	if ix.building {
-		ix.mu.Unlock()
-		return
+	if ix.claimBuild() {
+		ix.runBuild()
 	}
-	ix.building = true
-	b := ix.bounds()
-	ix.mu.Unlock()
+}
+
+// runBuild is the walk of a build the caller has claimed (claimBuild).
+func (ix *fileIndex) runBuild() {
 	// Clearing `building` is deferred so a panic in the walk cannot wedge it on.
 	defer func() {
 		ix.mu.Lock()
 		ix.building = false
 		ix.mu.Unlock()
 	}()
+	ix.mu.Lock()
+	b := ix.bounds()
+	ix.builds++
+	ix.mu.Unlock()
 	entries, truncated, dirs, dirsTruncated := walkTree(b)
 	ix.mu.Lock()
 	ix.entries, ix.truncated, ix.dirs, ix.dirsTruncated, ix.built = entries, truncated, dirs, dirsTruncated, time.Now()
@@ -334,13 +364,6 @@ func (ix *fileIndex) ready() bool {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	return !ix.built.IsZero()
-}
-
-// needsBuild reports that nothing has built yet and no build is in flight.
-func (ix *fileIndex) needsBuild() bool {
-	ix.mu.Lock()
-	defer ix.mu.Unlock()
-	return ix.built.IsZero() && !ix.building
 }
 
 // bounds snapshots the limits for a walk. Caller holds mu, so the background
@@ -742,11 +765,10 @@ func (s *Server) rootIndexes(roots []string) []*fileIndex {
 			out = append(out, ix)
 			continue
 		}
-		// refresh claims the build under the index lock and returns at once when
-		// one is in flight; gating on the flag here as well keeps a request from
-		// even spawning a goroutine that would only return.
-		if ix.needsBuild() {
-			go ix.refresh()
+		// The build is claimed here, under the index lock, before the goroutine
+		// exists: a request arriving meanwhile sees it in flight and spawns nothing.
+		if ix.startBuild() {
+			go ix.runBuild()
 		}
 	}
 	return out
@@ -862,6 +884,19 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 		abs := filepath.Join(base, h.Rel)
 		if seen[abs] {
 			continue
+		}
+		// Nested roots: the file belongs to the deepest root holding it, whichever
+		// index found it. Re-attribute rather than drop, so a query that only the
+		// outer index matches ("api" for api/main.go) still gets the right root.
+		if h.Root != "" {
+			if r, ok := pol.rootOf(abs); ok && r != h.Root {
+				if rel, err := filepath.Rel(r, abs); err == nil {
+					h.Root, h.Rel = r, rel
+					if r == pol.roots[0] {
+						h.Root = ""
+					}
+				}
+			}
 		}
 		t, err := pol.resolve(abs)
 		if err != nil {
