@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/datacompat"
 	"github.com/culiops/culibox/internal/linktrust"
 )
 
@@ -28,6 +29,7 @@ const (
 	linkTrustCapMsg         = "Too many trusted hosts. Remove one first."
 	linkTrustNotFoundMsg    = "That host is not in your trusted hosts."
 	linkTrustCorruptMsg     = "The trusted hosts list is damaged, so it cannot be changed. Fix or delete link-trust.json in CuliBox's data folder."
+	linkTrustNewerMsg       = "link-trust.json was written by a newer CuliBox. Update CuliBox to change trusted hosts."
 	linkTrustKind           = "trusted_link_host"
 	linkTrustSubdomains     = "and its subdomains"
 )
@@ -59,6 +61,10 @@ type linkTrustRow struct {
 // corrupt set, and the page keeps every link asking.
 func (s *Server) linkTrustView() map[string]any {
 	list, err := s.LinkTrust.List(storeActor)
+	if err != nil {
+		// The page only learns "corrupt"; the cause (damaged or newer) is for the log.
+		log.Printf("link trust: list: %v", err)
+	}
 	rows := make([]linkTrustRow, 0, len(list))
 	for _, h := range list {
 		rows = append(rows, linkTrustRow{Host: h.Host, Subdomains: h.Subdomains, Added: h.Added})
@@ -76,6 +82,11 @@ func writeLinkTrustErr(w http.ResponseWriter, err error) {
 		writeErrCode(w, http.StatusBadRequest, linkTrustRefusedMsg, "refused")
 	case errors.Is(err, linktrust.ErrCap):
 		writeErrCode(w, http.StatusConflict, linkTrustCapMsg, "cap")
+	case errors.Is(err, datacompat.ErrNewer):
+		// Still list_corrupt for the page, but never "delete it": the file holds a
+		// newer CuliBox's data.
+		log.Printf("link trust: %v", err)
+		writeErrCode(w, http.StatusConflict, linkTrustNewerMsg, "list_corrupt")
 	case errors.Is(err, linktrust.ErrCorrupt):
 		log.Printf("link trust: %v", err)
 		writeErrCode(w, http.StatusConflict, linkTrustCorruptMsg, "list_corrupt")

@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -293,9 +294,39 @@ func TestLinkTrustAPINewerFile(t *testing.T) {
 	if v := decodeLT(t, g.call("GET", "")); !v.Corrupt {
 		t.Fatalf("a newer file must read as unusable: %+v", v)
 	}
-	w := g.call("POST", `{"host":"github.com"}`)
-	if code, _ := errCode(t, w); w.Code != 409 || code != "list_corrupt" {
-		t.Fatalf("POST on a newer file: %d %s", w.Code, w.Body)
+	for _, c := range []struct{ method, body string }{
+		{"POST", `{"host":"github.com"}`},
+		{"DELETE", `{"host":"github.com"}`},
+	} {
+		w := g.call(c.method, c.body)
+		code, msg := errCode(t, w)
+		if w.Code != 409 || code != "list_corrupt" {
+			t.Fatalf("%s on a newer file: %d %s", c.method, w.Code, w.Body)
+		}
+		// Deleting a newer CuliBox's file would throw its data away: say update, never delete.
+		if msg != "link-trust.json was written by a newer CuliBox. Update CuliBox to change trusted hosts." {
+			t.Errorf("%s newer-file text = %q", c.method, msg)
+		}
+		if strings.Contains(strings.ToLower(msg), "delete") || strings.Contains(msg, "damaged") {
+			t.Errorf("%s: the newer-file text tells the user to delete or calls it damaged: %q", c.method, msg)
+		}
+	}
+}
+
+// A list that cannot be read reaches the log, not only the page's corrupt flag.
+func TestLinkTrustAPIListErrorIsLogged(t *testing.T) {
+	g := newLinkTrustRig(t)
+	if err := os.WriteFile(filepath.Join(g.dir, linktrust.FileName), []byte("{nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	if v := decodeLT(t, g.call("GET", "")); !v.Corrupt {
+		t.Fatalf("view = %+v", v)
+	}
+	if !strings.Contains(buf.String(), "link trust") || !strings.Contains(buf.String(), linktrust.FileName) {
+		t.Errorf("log = %q, want the list error with the file name", buf.String())
 	}
 }
 
