@@ -15,17 +15,6 @@ import (
 	"github.com/culiops/culibox/internal/wsroots"
 )
 
-// touchRoots records Touch on top of the real service.
-type touchRoots struct {
-	WorkspaceRoots
-	touched []string
-}
-
-func (t *touchRoots) Touch(abs string) {
-	t.touched = append(t.touched, abs)
-	t.WorkspaceRoots.Touch(abs)
-}
-
 type spawnRootRig struct {
 	a    *API
 	m    *mockSvc
@@ -305,18 +294,54 @@ func TestSpawnAddRootFailureReasons(t *testing.T) {
 	}
 }
 
+// Every Start under a root is a use of it, even one that adds nothing (a
+// bearer request with add_root): the root's LastUsed is set.
 func TestSpawnTouchesCwdAlways(t *testing.T) {
 	dir := realTemp(t)
 	g := newSpawnRootRig(t, session.Info{ID: "s1", Cwd: dir})
-	tr := &touchRoots{WorkspaceRoots: g.svc}
-	g.a.Roots = tr
-	// A bearer request with add_root is not a root add, but still a use.
+	if _, err := g.svc.Add(dir, storeActor); err != nil {
+		t.Fatal(err)
+	}
 	r := browserSpawn(`{"agent":"claude","cwd":"` + dir + `","add_root":true}`)
 	r = r.WithContext(context.WithValue(r.Context(), credKindKey, credBearer))
 	g.post(t, r)
-	g.post(t, browserSpawn(`{"agent":"claude","cwd":"`+dir+`"}`))
-	if len(tr.touched) != 2 || tr.touched[0] != dir {
-		t.Fatalf("touched = %v", tr.touched)
+	list, err := g.svc.List()
+	if err != nil || len(list) != 1 || list[0].LastUsed.IsZero() {
+		t.Fatalf("a bearer Start under a root did not set its LastUsed: %+v, %v", list, err)
+	}
+}
+
+// I1: a cwd typed through a symlink names the same folder as its resolved
+// spelling. A folder a root already covers must not widen the list to its repo
+// top, and the covering root's LastUsed must be set.
+func TestSpawnSymlinkedCwdCoveredNoWiden(t *testing.T) {
+	repo := realTemp(t)
+	sub := filepath.Join(repo, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(realTemp(t), "link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatal(err)
+	}
+	typed := filepath.Join(link, "sub")
+	// The session reports the cwd as typed (filepath.Abs, not resolved) and the
+	// repo top resolved, as session.Spawn does.
+	g := newSpawnRootRig(t, session.Info{ID: "s1", Cwd: typed, WorkspaceRoot: repo})
+	if _, err := g.svc.Add(sub, storeActor); err != nil {
+		t.Fatal(err)
+	}
+	g.rec.events = nil
+	code, got, body := g.post(t, browserSpawn(`{"agent":"claude","cwd":"`+typed+`","add_root":true}`))
+	if code != http.StatusCreated || got.Root != nil {
+		t.Fatalf("code %d body %s", code, body)
+	}
+	list, err := g.svc.List()
+	if err != nil || len(list) != 1 || list[0].Path != sub || len(g.rec.events) != 0 {
+		t.Fatalf("a covered cwd typed through a link changed the list: %+v %v %+v", list, err, g.rec.events)
+	}
+	if list[0].LastUsed.IsZero() {
+		t.Fatalf("the covering root %q has no LastUsed after a Start through a link", sub)
 	}
 }
 

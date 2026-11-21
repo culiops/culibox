@@ -261,33 +261,40 @@ type rootAdd struct {
 // for the signed-in browser (a cookie and a strict same-origin request; a bearer
 // token or an agent never widens what the page reaches) it adds the session's repo
 // top, or its folder when it is in no repo. It then notes the use of the covering
-// root, after the add so a root just added counts. A clone-mode spawn is skipped: its folder is the box's own
-// copy (R3). Nil means nothing to report: no service, not asked, a folder home
-// or a root already reaches, or a clone.
+// root, after the add so a root just added counts. A clone-mode spawn is skipped:
+// its folder is the box's own copy (R3). Nil means nothing to report: no service,
+// not asked, a folder home or a root already reaches, or a clone.
+//
+// info.Cwd is the folder as typed (made absolute, links kept) while the roots
+// and info.WorkspaceRoot are resolved, so the cwd is resolved once here: a
+// covered folder typed through a link is still covered, and still a use.
 func (a *API) rootAfterSpawn(r *http.Request, info session.Info, addRoot, cloneAsked bool) *rootAdd {
 	if a.Roots == nil {
 		return nil
 	}
-	res := a.addRootAfterSpawn(r, info, addRoot, cloneAsked)
+	cwd := gitrepo.Normalize(info.Cwd)
+	res := a.addRootAfterSpawn(r, info, cwd, addRoot, cloneAsked)
 	// After the add, so a root this Start just added is also this Start's use.
-	a.Roots.Touch(info.Cwd)
+	a.Roots.Touch(cwd)
 	return res
 }
 
-func (a *API) addRootAfterSpawn(r *http.Request, info session.Info, addRoot, cloneAsked bool) *rootAdd {
+// addRootAfterSpawn adds the Start's repo top (else its resolved cwd) as a root
+// when the request may and nothing reaches it yet; see rootAfterSpawn.
+func (a *API) addRootAfterSpawn(r *http.Request, info session.Info, cwd string, addRoot, cloneAsked bool) *rootAdd {
 	if !addRoot || credKindOf(r) != credCookie || !strictSameOrigin(r) || cloneAsked || info.CloneOf != "" {
 		return nil
 	}
 	target := info.WorkspaceRoot
 	if target == "" {
-		target = info.Cwd
+		target = cwd
 	}
 	if target == "" || !filepath.IsAbs(target) {
 		return nil
 	}
 	// The folder itself decides "already reachable": a repo top above a root
 	// must not widen the list to the top.
-	if a.Roots.Covering(info.Cwd) != "" || a.Roots.Covering(target) != "" {
+	if a.Roots.Covering(cwd) != "" || a.Roots.Covering(target) != "" {
 		return nil
 	}
 	root, err := a.Roots.Add(target, storeActor)
