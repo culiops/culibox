@@ -233,18 +233,24 @@ type rootAdd struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// rootAfterSpawn is the add_root step of a successful Start (#343 spec 6.3). It
-// notes the use of the covering root, then, only for the signed-in browser
-// (a cookie and a strict same-origin request; a bearer token or an agent never
-// widens what the page reaches), adds the session's repo top, or its folder when
-// it is in no repo. A clone-mode spawn is skipped: its folder is the box's own
+// rootAfterSpawn is the add_root step of a successful Start (#343 spec 6.3). Only
+// for the signed-in browser (a cookie and a strict same-origin request; a bearer
+// token or an agent never widens what the page reaches) it adds the session's repo
+// top, or its folder when it is in no repo. It then notes the use of the covering
+// root, after the add so a root just added counts. A clone-mode spawn is skipped: its folder is the box's own
 // copy (R3). Nil means nothing to report: no service, not asked, a folder home
 // or a root already reaches, or a clone.
 func (a *API) rootAfterSpawn(r *http.Request, info session.Info, addRoot, cloneAsked bool) *rootAdd {
 	if a.Roots == nil {
 		return nil
 	}
+	res := a.addRootAfterSpawn(r, info, addRoot, cloneAsked)
+	// After the add, so a root this Start just added is also this Start's use.
 	a.Roots.Touch(info.Cwd)
+	return res
+}
+
+func (a *API) addRootAfterSpawn(r *http.Request, info session.Info, addRoot, cloneAsked bool) *rootAdd {
 	if !addRoot || credKindOf(r) != credCookie || !strictSameOrigin(r) || cloneAsked || info.CloneOf != "" {
 		return nil
 	}

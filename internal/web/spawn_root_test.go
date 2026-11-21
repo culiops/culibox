@@ -329,3 +329,21 @@ func TestSpawnWithoutRootsServiceUnchanged(t *testing.T) {
 		t.Fatalf("code %d %s", w.Code, w.Body)
 	}
 }
+
+// A root a browser Start adds is also that Start's use: its LastUsed is set,
+// not left at "never" while its first session runs.
+func TestSpawnAddedRootIsTouched(t *testing.T) {
+	dir := realTemp(t)
+	g := newSpawnRootRig(t, session.Info{ID: "s1", Cwd: dir})
+	code, got, body := g.post(t, browserSpawn(`{"agent":"claude","cwd":"`+dir+`","add_root":true}`))
+	if code != http.StatusCreated || got.Root == nil || !got.Root.Added {
+		t.Fatalf("code %d root %+v (%s)", code, got.Root, body)
+	}
+	list, err := g.svc.List()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("List = %v, %v", list, err)
+	}
+	if list[0].LastUsed.IsZero() {
+		t.Fatalf("added root %q has no LastUsed after its first Start", list[0].Path)
+	}
+}
