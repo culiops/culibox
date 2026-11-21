@@ -26,9 +26,9 @@ function usd(n) {
   return "$" + n.toFixed(2);
 }
 
-// AN_API_VALUE_TITLE: the "API value" tile's tooltip, in the sidebar cost's words (#340): the amount is token
-// usage priced at list rates, not what a subscription bills.
-const AN_API_VALUE_TITLE = "Token usage today (UTC) priced at API list rates. A subscription does not bill this.";
+// AN_API_VALUE_TITLE: the "API value" tile's tooltip (#340): the amount is token usage priced at list rates, not
+// what a subscription bills. Range-neutral, because the tile covers the chosen range; the sidebar says "today".
+const AN_API_VALUE_TITLE = "Token usage priced at API list rates. A subscription does not bill this.";
 
 // tokensPerPrompt: total tokens / prompts, or 0 when there are none.
 function tokensPerPrompt(totalTokens, prompts) {

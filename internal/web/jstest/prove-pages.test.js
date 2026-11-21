@@ -1702,9 +1702,10 @@ test("overview KPI labels on the page are the frame's", () => {
     { value: "3,994", label: "Prompts" },
     { value: "$3.03", label: "Avg per session" },
   ], "§A2: the labels and the thousands separators on the counts; tokens stay compact");
-  // #340 S6: list-price token value is not a bill; the label's tooltip says so, in the sidebar cost's words.
+  // #340 S6: list-price token value is not a bill; the label's tooltip says so, range-neutral (the tile covers
+  // the chosen range, not today).
   assert.strictEqual(row.elements[0].elements[1].attrs.title,
-    "Token usage today (UTC) priced at API list rates. A subscription does not bill this.");
+    "Token usage priced at API list rates. A subscription does not bill this.");
   assert.strictEqual(row.elements[0].elements[1].attrs.title, require("../static/analytics.js").AN_API_VALUE_TITLE);
   assert.ok(!root.elements.some((n) => n.cls.includes("an-kpis")), "no legacy KPI grid beside it");
   // The rest of the Overview is Task 6's: still there, after the row.
