@@ -1285,18 +1285,39 @@ func TestViewCriticalRmTierAndHostBlock(t *testing.T) {
 }
 
 // #342 Review Focus 5: a config.json permission_mode def replaces the built-in.
+// The option list is built the production way (config.Load adds the built-ins),
+// so one permission_mode def exists and it is the user's.
 func TestViewUserPermissionModeDefWins(t *testing.T) {
-	declared := []config.OptionDef{{Key: "permission_mode", Label: "Mode", Type: config.OptEnum,
-		Choices: []string{"default", "plan", "bypassPermissions"}, Flag: "--permission-mode", Bins: []string{"claude"}}}
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfgJSON := `{"options":[{"key":"permission_mode","label":"Mode","type":"enum",
+		"choices":["default","plan","bypassPermissions"],"flag":"--permission-mode","bins":["claude"]}]}`
+	if err := os.WriteFile(path, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	seeds := []config.AgentConfig{{Name: "c", Bin: "claude", Options: map[string]any{"permission_mode": "plan"}}}
-	m := NewProfileManager(seeds, append(declared, config.Defaults().Options[2:]...), "", nil, newFakeStore(), func([]config.AgentConfig) {})
-	for _, o := range m.Views()[0].Options {
-		if o.Key == "permission_mode" {
-			if got := strings.Join(o.Choices, ","); got != "default,plan,bypassPermissions" {
-				t.Errorf("choices = %s, want the user's three", got)
-			}
-			return
+	m := NewProfileManager(seeds, cfg.Options, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	views := m.Views()
+	if len(views) != 1 {
+		t.Fatalf("views = %d", len(views))
+	}
+	n := 0
+	for _, o := range views[0].Options {
+		if o.Key != "permission_mode" {
+			continue
+		}
+		n++
+		if got := strings.Join(o.Choices, ","); got != "default,plan,bypassPermissions" {
+			t.Errorf("choices = %s, want the user's three", got)
+		}
+		if o.Label != "Mode" {
+			t.Errorf("label = %q, want the user's Mode", o.Label)
 		}
 	}
-	t.Fatal("permission_mode not offered")
+	if n != 1 {
+		t.Fatalf("permission_mode rows = %d, want exactly 1", n)
+	}
 }
