@@ -58,8 +58,9 @@ function pfeDep(name, file) {
 const pfeGhWritable = () => (typeof GH_WRITABLE !== "undefined" ? GH_WRITABLE : require("./profileform.js").GH_WRITABLE);
 
 // The options the Agent block owns, by key: the read view leaves them out of
-// Advanced (PFV_AGENT_OPTIONS) and the server offers them unset (config.unsetOfferKeys).
-const PFE_AGENT_OPTIONS = ["model", "effort", "effortLevel"];
+// Advanced (PFV_AGENT_OPTIONS). The server offers model and effort unset (config.unsetOfferKeys); Permission mode is offered
+// when the profile sets it or holds the older bypass bool the enum owns, and the critical-rm option when the profile sets it.
+const PFE_AGENT_OPTIONS = ["model", "effort", "effortLevel", "permission_mode", "skip_critical_rm_prompt"];
 
 // The keys the Workspace block replaces as a unit.
 const PFE_WORKSPACE_KEYS = ["default_cwd", "clone_of", "clone_share", "clone_no_auto_return"];
@@ -210,7 +211,10 @@ const PFE_MERGE = {
       const a = pfeTrim(v.account);
       pfeSet(out, "account", a === "default" ? "" : a);
     }
-    pfeOptions(out, v.options, (k) => PFE_AGENT_OPTIONS.includes(k));
+    // legacyKey: the older bypass bool the Permission mode control now owns (pfvAgentMerge names it only while that control is
+    // offered): picking a mode writes it false, so the key stays set and the enum stays on offer.
+    const legacy = typeof v.legacyKey === "string" ? v.legacyKey : "";
+    pfeOptions(out, v.options, (k) => PFE_AGENT_OPTIONS.includes(k) || (legacy !== "" && k === legacy));
     if (Array.isArray(v.dropOptions) && out.options && typeof out.options === "object" && !Array.isArray(out.options)) {
       for (const k of v.dropOptions) delete out.options[k];
       if (!Object.keys(out.options).length) delete out.options;

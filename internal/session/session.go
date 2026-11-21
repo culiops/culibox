@@ -312,6 +312,14 @@ type HostBlockResolver interface {
 	HostBlockFor(agent string) (string, error)
 }
 
+// BoxOnlyOptionResolver is implemented by launchers that know which box-only
+// option the spawn's merged options turn on (config.BoxOnlyOptionReason): ""
+// when none, else one reason clause. Optional, like HostBlockResolver: a host
+// spawn that turns one on is refused with that reason.
+type BoxOnlyOptionResolver interface {
+	BoxOnlyOptionFor(spec launcher.SpawnSpec) (string, error)
+}
+
 // ContextResolver is implemented by launchers that know a profile's
 // context_paths. Optional, like CloneResolver: without it no session mounts
 // context. A nil, nil answer means the profile has none.
@@ -1937,6 +1945,17 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if runtime != config.RuntimeBox {
 		if hr, ok := m.launcher.(HostBlockResolver); ok {
 			reason, err := hr.HostBlockFor(spec.Agent)
+			if err != nil {
+				return nil, err
+			}
+			if reason != "" {
+				return nil, profileRefusal(spec.Agent, reason)
+			}
+		}
+		// The same for a box-only option the merged options turn on (the
+		// critical-rm skip): it has no meaning, and no safe form, on the host.
+		if br, ok := m.launcher.(BoxOnlyOptionResolver); ok {
+			reason, err := br.BoxOnlyOptionFor(spec)
 			if err != nil {
 				return nil, err
 			}

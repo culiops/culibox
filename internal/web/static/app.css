@@ -1385,6 +1385,13 @@
        enum with long values needs every pixel of row width before wrap even
        helps. Mobile keeps the pre-existing label-beside-seg look (below). */
     #options .opt.opt-seg, #effort-slot .opt.opt-seg { flex-direction: column; align-items: stretch; gap: 4px; }
+    /* A row with lines under its control (Permission mode, the critical-rm checkbox): each line takes the row's full width on a
+       row of its own. A seg row is a column, where wrap changes nothing (its height is auto); a checkbox row wraps. The id rule above sets display, so [hidden] needs its own. */
+    #options .opt[hidden] { display: none; }
+    #options .opt.opt-note { flex-wrap: wrap; }
+    #options .opt-line, #options .opt-detail { flex: none; width: 100%; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+    #options .opt-line[hidden] { display: none; }
+    #options .opt .warnbox { flex: none; width: 100%; margin-top: 2px; }
     /* D5 draws "CONTAINMENT" and "EFFORT" as identical section labels
        (uppercase, small, muted). Containment's is the static <label> above
        (styled by the generic #spawn label rule); Effort's matching static

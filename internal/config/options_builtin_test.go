@@ -60,11 +60,27 @@ func TestBuiltinOptionsInDefaults(t *testing.T) {
 	}
 }
 
-// Built-ins never include a capability: skip_permissions stays opt-in.
-func TestBuiltinOptionsHaveNoBool(t *testing.T) {
-	for _, o := range withBuiltinOptions(nil) {
-		if o.Type == OptBool {
-			t.Errorf("built-in bool option %q: a bool is a capability, keep it config-only", o.Key)
+// The only built-in capabilities are permission_mode (an enum) and the box-only
+// skip_critical_rm_prompt (the only built-in bool). Neither is offered unset.
+func TestBuiltinCapabilityOptions(t *testing.T) {
+	opts := withBuiltinOptions(nil)
+	for _, o := range opts {
+		if o.Type == OptBool && (o.Key != CriticalRmKey || o.Tier != RuntimeBox) {
+			t.Errorf("built-in bool %q (tier %q): only %s, box tier, may be one", o.Key, o.Tier, CriticalRmKey)
+		}
+	}
+	if o, ok := findOpt(opts, CriticalRmKey); !ok || o.Type != OptBool || o.Tier != RuntimeBox || o.Env != CriticalRmEnv {
+		t.Errorf("critical-rm built-in = %+v (found %v)", o, ok)
+	}
+	mode, ok := findOpt(opts, PermissionModeKey)
+	if !ok || mode.Type != OptEnum || mode.Flag != "--permission-mode" ||
+		!slices.Equal(mode.Choices, []string{"manual", "acceptEdits", "auto", "plan", "bypassPermissions"}) {
+		t.Errorf("permission_mode built-in = %+v (found %v)", mode, ok)
+	}
+	a := AgentConfig{Bin: "claude"}
+	for _, k := range []string{PermissionModeKey, CriticalRmKey} {
+		if o, _ := findOpt(opts, k); o.OfferedBy(a) {
+			t.Errorf("%s is offered unset on a plain claude profile", k)
 		}
 	}
 }
@@ -89,7 +105,7 @@ func TestBuiltinOptionsDeclaredKeyWins(t *testing.T) {
 		{Key: "model", Label: "Model", Type: OptEnum, Choices: []string{"claude-opus-4-8"}, Env: "ANTHROPIC_MODEL", Bins: []string{"claude"}},
 	}
 	got := withBuiltinOptions(declared)
-	if want := []string{"skip_permissions", "model", "effort"}; !slices.Equal(optKeys(got), want) {
+	if want := []string{"skip_permissions", "model", "effort", PermissionModeKey, CriticalRmKey}; !slices.Equal(optKeys(got), want) {
 		t.Fatalf("keys = %v, want %v", optKeys(got), want)
 	}
 	if m := got[1]; m.Env != "ANTHROPIC_MODEL" || !slices.Equal(m.Choices, []string{"claude-opus-4-8"}) {
@@ -119,7 +135,7 @@ func TestBuiltinOptionsFullyDeclared(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	if want := []string{"effort", "model"}; !slices.Equal(optKeys(c.Options), want) {
+	if want := []string{"effort", "model", PermissionModeKey, CriticalRmKey}; !slices.Equal(optKeys(c.Options), want) {
 		t.Errorf("keys = %v, want %v", optKeys(c.Options), want)
 	}
 }

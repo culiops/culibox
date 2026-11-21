@@ -7200,3 +7200,222 @@ test("the inherit line is true for a non-default Claude login too, and only a cl
   await openAdv(c, "aws-ops");
   assert.deepStrictEqual(hintsOf(field(c, "base").parent), [base + clause]);
 });
+
+// --- Agent block: Permission mode and the box-only critical-rm option (#342) -------------------------------------------
+
+const PM_DEFS = OPTION_DEFS.concat([
+  { key: "permission_mode", label: "Permission mode", type: "enum", choices: ["manual", "acceptEdits", "auto", "plan", "bypassPermissions"], flag: "--permission-mode", bins: ["claude"] },
+  { key: "skip_critical_rm_prompt", label: "Skip the critical-rm prompt", type: "bool", tier: "box", bins: ["claude"] },
+  { key: "skip_permissions_legacy", label: "Skip permissions", type: "bool", flag: "--dangerously-skip-permissions", bins: ["claude"] },
+]);
+const PM_UNSET = "Claude Code's default. On current versions that is Auto.";
+const PM_CLONE = "The agent works on its own copy of the repo.";
+const PM_INPLACE = "Your own folder is mounted live. With this on, the agent can delete it, and everything in it, without asking.";
+const agentHints = (t) => texts(blockOf(t, "agent"), "pfv-hint").join(" ");
+const modeSeg = (t) => field(t, "options.permission_mode");
+const pickPerm = (t, v) => modeSeg(t).children.find((b) => b.dataset.segvalue === v).click();
+const critRm = (t) => field(t, "options.skip_critical_rm_prompt");
+const pmPage = async (doc, over) => {
+  const t = page(Object.assign({ optionDefs: PM_DEFS }, over));
+  if (doc) t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], doc);
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  return t;
+};
+
+test("Agent: Permission mode shows the five labels and the unset line", async () => {
+  const t = await pmPage({ options: { model: "claude-opus-5-5", effort: "high" } });
+  assert.deepStrictEqual(modeSeg(t).children.map((b) => b.textContent), ["Manual", "Accept edits", "Auto", "Plan", "Bypass"]);
+  assert.strictEqual(modeSeg(t).dataset.value, "", "nothing lit");
+  assert.ok(agentHints(t).includes(PM_UNSET));
+  pickPerm(t, "plan");
+  assert.ok(agentHints(t).includes("Reads and plans only. Changes nothing until you approve the plan."));
+  assert.ok(!agentHints(t).includes(PM_UNSET));
+  // Model, effort, then the two new ones.
+  const labels = texts(blockOf(t, "agent"), "pfv-flabel");
+  assert.deepStrictEqual(labels.filter((l) => ["Model", "Effort", "Permission mode"].includes(l)), ["Model", "Effort", "Permission mode"]);
+});
+
+test("Agent: a legacy profile reads as Bypass and picking Plan clears the older form", async () => {
+  const t = await pmPage({ options: { model: "claude-opus-5-5", skip_permissions_legacy: true } });
+  assert.strictEqual(modeSeg(t).dataset.value, "bypassPermissions");
+  assert.ok(agentHints(t).includes("Set by Skip permissions (older form)"));
+  assert.ok(agentHints(t).includes("Runs every action without asking."));
+  assert.ok(!critRm(t).parent.className.includes("pfv-off"), "the legacy bool is Bypass, so critical-rm is on offer");
+  pickPerm(t, "plan");
+  assert.ok(!agentHints(t).includes("Set by Skip permissions"));
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].options, { model: "claude-opus-5-5", permission_mode: "plan", skip_permissions_legacy: false });
+  // The key stays set, so Advanced (opened on its own) still does not draw it.
+  const a = page({ optionDefs: PM_DEFS });
+  await openAdv(a, "aws-ops", t.box.docs["aws-ops"]);
+  assert.strictEqual(field(a, "options.skip_permissions_legacy"), undefined, "the enum owns it: not drawn in Advanced");
+});
+
+test("Agent: a legacy bool stored false is not Bypass, shows the unset line, and still leaves Advanced", async () => {
+  const t = await pmPage({ options: { skip_permissions_legacy: false } });
+  assert.strictEqual(modeSeg(t).dataset.value, "");
+  assert.ok(agentHints(t).includes(PM_UNSET));
+  assert.ok(!agentHints(t).includes("Set by"));
+  assert.ok(critRm(t).parent.className.includes("pfv-off"), "critical-rm stays dimmed");
+  const a = page({ optionDefs: PM_DEFS });
+  await openAdv(a, "aws-ops", { options: { skip_permissions_legacy: false } });
+  assert.strictEqual(field(a, "options.skip_permissions_legacy"), undefined, "any value of the legacy key is the enum's now");
+  // An untouched save keeps the stored false and writes nothing new.
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].options, { skip_permissions_legacy: false });
+});
+
+test("Agent: the legacy checkbox stays in Advanced when no Permission mode def applies", async () => {
+  const defs = OPTION_DEFS.concat([{ key: "skip_permissions_legacy", label: "Skip permissions", type: "bool", flag: "--dangerously-skip-permissions", bins: ["claude"] }]);
+  const t = page({ optionDefs: defs });
+  await openAdv(t, "aws-ops", { options: { skip_permissions_legacy: true } });
+  assert.ok(field(t, "options.skip_permissions_legacy"), "no enum to own it");
+});
+
+// A permission_mode def that cannot say Bypass does not own the older bool: Advanced draws its checkbox as before #342, the Agent
+// block says nothing about it, and a ticked one is still Bypass for the critical-rm option (the server counts the flag).
+const NOBYPASS_DEFS = PM_DEFS.map((d) => (d.key === "permission_mode" ? Object.assign({}, d, { choices: ["manual", "acceptEdits", "plan"] }) : d));
+
+test("Agent: a permission_mode def without Bypass leaves the legacy checkbox in Advanced and it still enables critical-rm", async () => {
+  const doc = { options: { skip_permissions_legacy: true } };
+  const a = page({ optionDefs: NOBYPASS_DEFS });
+  await openAdv(a, "aws-ops", doc);
+  const box = field(a, "options.skip_permissions_legacy");
+  assert.ok(box, "the legacy checkbox is drawn in Advanced");
+  assert.strictEqual(box.checked, true, "ticked");
+  const t = await pmPage(doc, { optionDefs: NOBYPASS_DEFS });
+  assert.strictEqual(modeSeg(t).dataset.value, "", "the seg does not read the bool as a mode");
+  assert.ok(!critRm(t).parent.className.includes("pfv-off"), "the ticked bool is Bypass, so critical-rm is on offer");
+  // The hint says what the run does: Bypass, set by the older bool, not "Claude Code's default".
+  assert.ok(agentHints(t).includes("Runs every action without asking."));
+  assert.ok(agentHints(t).includes("Set by Skip permissions (older form)"));
+  assert.ok(!agentHints(t).includes(PM_UNSET));
+  // Not ticked: critical-rm is dimmed, and the unset line stays.
+  const off = await pmPage({ options: { skip_permissions_legacy: false } }, { optionDefs: NOBYPASS_DEFS });
+  assert.ok(critRm(off).parent.className.includes("pfv-off"));
+  assert.ok(agentHints(off).includes(PM_UNSET));
+  assert.ok(!agentHints(off).includes("Set by"));
+  // A set mode supersedes the bool: its own line, no older-form line.
+  const planned = await pmPage({ options: { skip_permissions_legacy: true, permission_mode: "plan" } }, { optionDefs: NOBYPASS_DEFS });
+  assert.ok(agentHints(planned).includes("Reads and plans only."));
+  assert.ok(!agentHints(planned).includes("Set by"));
+  // An untouched save leaves the bool where it was.
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].options, { skip_permissions_legacy: true });
+});
+
+test("Agent: critical-rm is dimmed until Bypass, then shows the clone line and the in-place warnbox", async () => {
+  const t = await pmPage({ options: { permission_mode: "plan" } });
+  const consq = () => texts(blockOf(t, "agent"), "pfv-consq").join(" ");
+  assert.ok(critRm(t).parent.className.includes("pfv-off"));
+  assert.strictEqual(critRm(t).disabled, true);
+  assert.deepStrictEqual(texts(critRm(t).parent, "pfv-applies"), ["Applies to Box"]);
+  assert.ok(texts(critRm(t).parent, "pfv-check-d").join("").includes("In Bypass, Claude Code still stops before an rm of the working folder"));
+  assert.ok(consq().includes("Needs Permission mode: Bypass"));
+  assert.strictEqual(byCls(blockOf(t, "agent"), "warnbox").length, 0);
+  pickPerm(t, "bypassPermissions");
+  assert.ok(!critRm(t).parent.className.includes("pfv-off"));
+  assert.ok(!critRm(t).disabled);
+  assert.ok(consq().includes(PM_CLONE));
+  assert.ok(!consq().includes("Needs Permission mode"));
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "warnbox"), [PM_INPLACE]);
+  pickPerm(t, "auto");
+  assert.ok(critRm(t).parent.className.includes("pfv-off"));
+  assert.strictEqual(byCls(blockOf(t, "agent"), "warnbox").length, 0);
+});
+
+test("Agent: critical-rm is saved with Bypass, false is not invented, and leaving Bypass sends it off", async () => {
+  const t = await pmPage({ options: { permission_mode: "bypassPermissions" } });
+  assert.strictEqual(critRm(t).checked, false);
+  advTick(t, "options.skip_critical_rm_prompt", true);
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].options, { permission_mode: "bypassPermissions", skip_critical_rm_prompt: true });
+  // Never stored, never ticked: the key is not written.
+  const n = await pmPage({ options: { permission_mode: "bypassPermissions" } });
+  pickPerm(n, "plan");
+  assert.strictEqual(await clickBtn(blockOf(n, "agent"), "Save"), true);
+  assert.deepStrictEqual(n.box.puts[0].options, { permission_mode: "plan" });
+  // Stored on, then Plan: the dimmed box is drawn off and is sent off (the server refuses "on" without Bypass).
+  const o = await pmPage({ options: { permission_mode: "bypassPermissions", skip_critical_rm_prompt: true } });
+  assert.strictEqual(critRm(o).checked, true);
+  pickPerm(o, "plan");
+  assert.strictEqual(critRm(o).checked, false);
+  assert.strictEqual(await clickBtn(blockOf(o, "agent"), "Save"), true);
+  assert.deepStrictEqual(o.box.puts[0].options, { permission_mode: "plan", skip_critical_rm_prompt: false });
+});
+
+test("Agent: the profile's own arguments that turn Bypass on say so and keep critical-rm on offer", async () => {
+  const withArgs = PROFILES.map((p) => (p.name === "aws-ops" ? Object.assign({}, p, { bypass_args: true }) : p));
+  const t = await pmPage({ options: { permission_mode: "plan" } }, { profiles: withArgs });
+  assert.ok(agentHints(t).includes("This profile's own arguments also turn Bypass on."));
+  assert.ok(!critRm(t).parent.className.includes("pfv-off"));
+  const plain = await pmPage({ options: { permission_mode: "plan" } });
+  assert.ok(!agentHints(plain).includes("own arguments"));
+});
+
+test("Agent: a config.json choice outside the five shows as it is, with no line of its own", async () => {
+  const defs = PM_DEFS.map((d) => (d.key === "permission_mode" ? Object.assign({}, d, { choices: ["default", "plan", "bypassPermissions"] }) : d));
+  const t = await pmPage({ options: { permission_mode: "default" } }, { optionDefs: defs });
+  assert.deepStrictEqual(modeSeg(t).children.map((b) => b.textContent), ["default", "Plan", "Bypass"]);
+  assert.strictEqual(modeSeg(t).dataset.value, "default");
+  assert.ok(!agentHints(t).includes(PM_UNSET));
+});
+
+test("Agent: a profile with no legacy bool writes no legacy key when a mode is picked", async () => {
+  const t = await pmPage({ options: { model: "claude-opus-5-5" } });
+  pickPerm(t, "acceptEdits");
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].options, { model: "claude-opus-5-5", permission_mode: "acceptEdits" });
+});
+
+test("Agent: neither new option is offered for another command", async () => {
+  const t = await pmPage({ options: { permission_mode: "plan" } });
+  const bin = field(t, "bin");
+  bin.value = "bash";
+  bin.onchange();
+  assert.strictEqual(modeSeg(t), undefined);
+  assert.strictEqual(critRm(t), undefined);
+});
+
+test("Agent: a server refusal on options.skip_critical_rm_prompt lands in the Agent block", async () => {
+  assert.strictEqual(require("../static/profileedit.js").pfvBlockForField("options.skip_critical_rm_prompt"), "agent");
+  assert.strictEqual(require("../static/profileedit.js").pfvBlockForField("options.permission_mode"), "agent");
+  assert.strictEqual(require("../static/profileedit.js").pfvBlockForField("options.skip_permissions"), "advanced");
+  const t = await pmPage({ options: { permission_mode: "bypassPermissions" } });
+  advTick(t, "options.skip_critical_rm_prompt", true);
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": options.skip_critical_rm_prompt: "Skip the critical-rm prompt" runs only in a box', field: "options.skip_critical_rm_prompt" });
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), false);
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-ferr").map((x) => x.replace(/^options\.skip_critical_rm_prompt: /, "")), ['"Skip the critical-rm prompt" runs only in a box']);
+});
+
+test("Agent: a profile that has not stored the older bypass bool still gets no legacy checkbox beside the Permission mode control", async () => {
+  const t = page({ optionDefs: PM_DEFS });
+  await openAdv(t, "infra-terraform");
+  assert.strictEqual(field(t, "options.skip_permissions_legacy"), undefined, "declared, never stored: still the enum's");
+  assert.strictEqual(field(t, "options.permission_mode"), undefined);
+  assert.strictEqual(field(t, "options.skip_critical_rm_prompt"), undefined);
+  // Under bash neither def applies, so nothing is owned and nothing is drawn (Claude-only options).
+  const defs = PM_DEFS.map((d) => (d.key === "skip_permissions_legacy" ? { ...d, bins: [] } : d));
+  const u = page({ optionDefs: defs });
+  await openAdv(u, "infra-terraform");
+  assert.strictEqual(field(u, "options.skip_permissions_legacy"), undefined);
+});
+
+test("Agent: the read view puts Permission mode and the critical-rm option in the Agent block, not in Advanced", async () => {
+  const t = page({ optionDefs: PM_DEFS });
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { options: { model: "claude-opus-5-5", skip_permissions_legacy: true, skip_critical_rm_prompt: true } });
+  await t.box.pfvShow("aws-ops");
+  const agent = blockOf(t, "agent");
+  assert.deepStrictEqual(texts(agent, "pfv-k"), ["Mode", "Option"]);
+  assert.ok(texts(agent, "pfv-rsub").join(" ").includes("Set by Skip permissions (older form)"));
+  assert.deepStrictEqual(texts(agent, "pfv-applies"), ["Applies to Box"]);
+  assert.strictEqual(byCls(advOf(t), "pfv-row").length, 0, "nothing of it is in Advanced");
+});
+
+test("Agent: a profile with only the older bypass bool on keeps it, and gains no permission_mode, when something else is saved", async () => {
+  const t = await pmPage({ options: { model: "claude-opus-5-5", skip_permissions_legacy: true } });
+  pickModel(t, "claude-sonnet-5");
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].options, { model: "claude-sonnet-5", skip_permissions_legacy: true });
+});

@@ -207,6 +207,7 @@ function renderTierPick() {
     // No box layer: nothing is drawn, and nothing of an earlier draw stays.
     el.replaceChildren();
     el.dataset.value = "";
+    syncCritRmRow(); // no box: the box-only rows are hidden
     return;
   }
   const m = tierModel({
@@ -229,6 +230,8 @@ function renderTierPick() {
     // would be swapped for the repo halfway through. A click (tierPick) and an open or fallback render still move it.
     if (m.pick !== "clone" && !tierTypingCwd()) tierLeaveCloneDir(currentProfile());
   }
+  // The critical-rm row's line and visibility follow the card shown (clone, in place, host), however the pick came about.
+  syncCritRmRow();
 }
 
 // tierTypingCwd: the workspace field has the focus. activeElement is guarded: the fake document of the tests has none.

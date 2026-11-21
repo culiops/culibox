@@ -1721,10 +1721,11 @@ function pfvTextCtl(rec, key, value, mono, onInput, onCommit) {
 }
 
 // pfvSegCtl: the app's own segmented control (buildSeg), its value on the container (segValue).
-function pfvSegCtl(rec, key, choices, value, onPick) {
+// labelOf: the button text for a choice, when it is not the choice itself.
+function pfvSegCtl(rec, key, choices, value, onPick, labelOf) {
   const seg = pfvMk("div", "seg pfv-seg");
   seg.setAttribute("role", "group");
-  buildSeg(seg, choices.map((c) => ({ value: c, label: c })), value, onPick);
+  buildSeg(seg, choices.map((c) => ({ value: c, label: labelOf ? labelOf(c) : c })), value, onPick);
   return pfvReg(rec, key, seg);
 }
 
@@ -1959,12 +1960,33 @@ function pfvStoredOptions(doc) {
   return doc.options && typeof doc.options === "object" && !Array.isArray(doc.options) ? doc.options : {};
 }
 
-// pfvAgentDefs: the options the Agent block offers for this command: model and effort, as the
-// daemon defines them (GET /api/options), for the commands they apply to.
+// pfvAgentDefs: the options the Agent block offers for this command, as the daemon defines them (GET /api/options), for the
+// commands they apply to: the enums with choices (model, effort, Permission mode) and the bools the block owns (the box-only
+// critical-rm option).
 function pfvAgentDefs(c, bin) {
-  const ok = (d) => d.type === "enum" && Array.isArray(d.choices) && d.choices.length > 0 && optApplies(d, bin);
-  // Model, then effort: the order of the form (the daemon lists its options in its own).
+  const ok = (d) => (d.type === "bool" || (d.type === "enum" && Array.isArray(d.choices) && d.choices.length > 0)) && optApplies(d, bin);
+  // The order of the form (the daemon lists its options in its own).
   return PFE_AGENT_OPTIONS.map((k) => c.defs.find((d) => d.key === k)).filter((d) => d && ok(d));
+}
+
+// pfvLegacyKey: the key of the older bypass bool the profile holds (found by its flag, whatever its value), "" if none. It is
+// carried in the values while the Permission mode control owns the bool (the daemon's permission_mode def applies to the command and
+// can say Bypass), and the Agent save writes it only while that control applies. Otherwise the bool is a checkbox in Advanced.
+function pfvLegacyKey(c) {
+  return legacyBypassKeyFromDefs(c.defs, pfvStoredOptions(c.doc), pfaBin(c));
+}
+
+// pfvUnownedBypassDef: the older bypass bool the enum does not own (so Advanced draws it) that reads true now, from its pending
+// Advanced edit, else the stored value; null when none does. A mode that is set supersedes it, as on the server.
+function pfvUnownedBypassDef(c, options) {
+  if (options[PERM_MODE_KEY]) return null;
+  const bin = pfaBin(c);
+  const owned = legacyKeysOwnedByEnum(c.defs, bin);
+  const adv = pfvState.edits.advanced;
+  const pending = adv && adv.values && adv.values.options ? adv.values.options : {};
+  const stored = pfvStoredOptions(c.doc);
+  return c.defs.find((d) => d && d.type === "bool" && d.flag === LEGACY_BYPASS_FLAG && !owned.includes(d.key) && optApplies(d, bin)
+    && (Object.prototype.hasOwnProperty.call(pending, d.key) ? pending[d.key] === true : stored[d.key] === true)) || null;
 }
 
 // The values keep every agent option the daemon defines, applicable or not, so changing the
@@ -1972,8 +1994,31 @@ function pfvAgentDefs(c, bin) {
 function pfvAgentValues(c) {
   const stored = pfvStoredOptions(c.doc);
   const options = {};
-  for (const d of c.defs) if (PFE_AGENT_OPTIONS.includes(d.key) && d.type === "enum") options[d.key] = typeof stored[d.key] === "string" ? stored[d.key] : "";
+  for (const d of c.defs) {
+    if (!PFE_AGENT_OPTIONS.includes(d.key)) continue;
+    if (d.type === "enum") options[d.key] = typeof stored[d.key] === "string" ? stored[d.key] : "";
+    else if (d.type === "bool") options[d.key] = stored[d.key] === true;
+  }
+  const legacy = pfvLegacyKey(c);
+  if (legacy) options[legacy] = stored[legacy] === true;
   return { bin: typeof c.doc.bin === "string" ? c.doc.bin : "", account: typeof c.doc.account === "string" ? c.doc.account : "", options };
+}
+
+// pfvPermState: what the Permission mode control and the critical-rm row read, from the values in the form. mode: the enum, else
+// Bypass when the older bool is on (the value must be true: a false is not Bypass). viaLegacy: it reads as Bypass only from that
+// bool. bypass: the run skips permission checks (the mode, the older bool, or the profile's own arguments).
+function pfvPermState(rec, c) {
+  const options = rec.values.options;
+  const legacy = pfvLegacyKey(c);
+  const mode = effectiveMode(options, legacy);
+  const unowned = pfvUnownedBypassDef(c, options);
+  return {
+    legacy,
+    unowned,
+    mode,
+    viaLegacy: !options[PERM_MODE_KEY] && mode === BYPASS_MODE,
+    bypass: effectiveBypass({ bypass_args: c.view.bypass_args === true, legacy_bypass_key: legacy }, options) || unowned !== null,
+  };
 }
 
 // An option the command does not take is removed: the server refuses a Claude-only option on another command. Model and
@@ -1983,12 +2028,25 @@ function pfvAgentValues(c) {
 function pfvAgentMerge(rec, c) {
   const v = rec.values;
   const takes = new Set(pfvAgentDefs(c, v.bin).map((d) => d.key));
+  const stored = pfvStoredOptions(c.doc);
+  const st = pfvPermState(rec, c);
+  // The older bypass bool goes with the control that owns it, and only while that control is offered.
+  const legacyKey = takes.has(PERM_MODE_KEY) ? st.legacy : "";
   const options = {};
-  for (const k of Object.keys(v.options)) options[k] = takes.has(k) ? v.options[k] : "";
+  for (const k of Object.keys(v.options)) {
+    if (k === legacyKey) options[k] = v.options[k];
+    else if (!takes.has(k)) options[k] = "";
+    else if (typeof v.options[k] === "boolean") {
+      // critical-rm only means something in Bypass, and the server refuses it on otherwise (a dimmed box is drawn off). A bool
+      // that was never stored and is off is not invented.
+      const on = v.options[k] === true && (k !== CRIT_RM_KEY || st.bypass);
+      options[k] = on || Object.prototype.hasOwnProperty.call(stored, k) ? on : "";
+    } else options[k] = v.options[k];
+  }
   const bin = v.bin.trim();
   const changed = bin !== "" && bin !== (typeof c.doc.bin === "string" ? c.doc.bin.trim() : "");
   const dropOptions = changed ? c.defs.filter((d) => d && typeof d.key === "string" && !optApplies(d, bin)).map((d) => d.key) : [];
-  return { bin: v.bin, account: v.account, options, dropOptions };
+  return { bin: v.bin, account: v.account, options, dropOptions, legacyKey };
 }
 
 function pfvAccountChoices(account) {
@@ -2009,6 +2067,52 @@ function pfvNoLoginHint(c, account) {
   });
   if (!h || h.kind !== "nologin") return [];
   return [pfvMk("code", "", "default"), " has no login inside a box. Pick an account with a token. "];
+}
+
+// pfvPermModeField: the Permission mode control, with the line for the mode in force under it. On a profile that holds the older
+// bypass bool (on), it reads as Bypass and says so; picking a mode writes permission_mode and turns the bool off, so the older
+// form stops deciding (the merge keeps the key, which keeps the enum on offer to New session).
+function pfvPermModeField(rec, c, d) {
+  const v = rec.values;
+  const key = "options." + d.key;
+  const st = pfvPermState(rec, c);
+  const pick = (val) => {
+    v.options[d.key] = val;
+    if (st.legacy) v.options[st.legacy] = false;
+    pfvChanged(rec, key);
+  };
+  const lines = [];
+  // Unset mode, but a ticked older-form bool the enum does not own runs Bypass: say so, not "Claude Code's default".
+  const line = permModeLine(st.mode === "" && st.unowned ? BYPASS_MODE : st.mode);
+  if (line) lines.push(line);
+  if (st.viaLegacy) {
+    const def = c.defs.find((x) => x && x.key === st.legacy);
+    lines.push(CRIT_RM_COPY.legacy((def && def.label) || st.legacy));
+  } else if (st.mode === "" && st.unowned) {
+    lines.push(CRIT_RM_COPY.legacy(st.unowned.label || st.unowned.key));
+  }
+  if (c.view.bypass_args === true) lines.push(CRIT_RM_COPY.args);
+  const hint = lines.map((s, i) => (i < lines.length - 1 ? s + " " : s));
+  const choices = pfvWithValue(d.choices, v.options[d.key] || "");
+  if (choices.length > 6) {
+    const none = { value: "", label: "not set: Claude Code's default" };
+    const ctl = pfvSelect(rec, key, [none].concat(choices.map((x) => ({ value: x, label: permModeLabel(x) }))), st.mode, false, pick);
+    return pfvFieldBox(rec, key, d.label || d.key, ctl, hint);
+  }
+  return pfvFieldBox(rec, key, d.label || d.key, pfvSegCtl(rec, key, choices, st.mode, pick, permModeLabel), hint, "fieldset");
+}
+
+// pfvAgentBoolRows: a bool the Agent block owns, as a checkbox with its Applies to tag, then what it means. The only one today is
+// the box-only critical-rm option: dimmed unless the run is in Bypass; once on offer, both lines show, the clone's plain one and
+// the in-place warning, because the tier is picked at New session.
+function pfvAgentBoolRows(rec, c, d) {
+  const v = rec.values;
+  const key = "options." + d.key;
+  const st = pfvPermState(rec, c);
+  const on = st.bypass && v.options[d.key] === true;
+  const box = pfaCheckbox(rec, key, d.label || d.key, CRIT_RM_COPY.detail, on, (now) => { v.options[d.key] = now; pfvChanged(rec, key); }, pfvAppliesTag("box"), !st.bypass);
+  if (!st.bypass) return [box, pfvMk("p", "pfv-consq", CRIT_RM_COPY.needsBypass)];
+  return [box, pfvMk("p", "pfv-consq", CRIT_RM_COPY.clone), pfvMk("div", "warnbox", CRIT_RM_COPY.inPlace)];
 }
 
 function pfvAgentForm(rec, c) {
@@ -2038,6 +2142,8 @@ function pfvAgentForm(rec, c) {
   const claude = isClaudeBinName(v.bin);
   for (const d of pfvAgentDefs(c, v.bin)) {
     const key = "options." + d.key;
+    if (d.key === PERM_MODE_KEY) { out.push(pfvPermModeField(rec, c, d)); continue; }
+    if (d.type === "bool") { out.push(...pfvAgentBoolRows(rec, c, d)); continue; }
     const choiceList = pfvWithValue(d.choices, v.options[d.key] || "");
     const pickOpt = (val) => { v.options[d.key] = val; pfvChanged(rec, key); };
     if (d.key === "model" || choiceList.length > 6) {
