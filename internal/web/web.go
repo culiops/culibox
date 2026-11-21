@@ -215,6 +215,11 @@ type Server struct {
 	prefMu    sync.Mutex
 	prefIdx   map[string]*fileIndex
 	prefOrder []string
+
+	// rootIdx holds one file index per added workspace root (never home),
+	// keyed by root path and dropped once the root is no longer served.
+	rootIdxMu sync.Mutex
+	rootIdx   map[string]*fileIndex
 }
 
 // QuickShell exposes the verified quick-shell name for startup diagnostics.

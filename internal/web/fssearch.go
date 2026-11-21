@@ -213,7 +213,10 @@ type fileIndex struct {
 	// relPrefix is root's slash path relative to $HOME ("" for the home index
 	// itself), so skipRelPaths — which are home-relative — still apply to an
 	// index rooted deeper, e.g. at ~/.claude.
-	relPrefix      string
+	relPrefix string
+	// noRelSkip turns skipRelPaths off: they are $HOME-relative, so an index
+	// rooted at an added workspace root (or a folder under one) never applies them.
+	noRelSkip      bool
 	mu             sync.Mutex
 	ttl            time.Duration
 	maxPaths       int
@@ -302,10 +305,48 @@ func (ix *fileIndex) snapshot(k searchKind) ([]indexEntry, bool) {
 	return ix.entries, ix.truncated
 }
 
+// refresh walks the tree and replaces the cache, unless a build is already in
+// flight. Unlike snapshot's first call it does NOT hold the lock across the
+// walk, so ready() stays answerable while it runs. Run it in a goroutine.
+func (ix *fileIndex) refresh() {
+	ix.mu.Lock()
+	if ix.building {
+		ix.mu.Unlock()
+		return
+	}
+	ix.building = true
+	b := ix.bounds()
+	ix.mu.Unlock()
+	// Clearing `building` is deferred so a panic in the walk cannot wedge it on.
+	defer func() {
+		ix.mu.Lock()
+		ix.building = false
+		ix.mu.Unlock()
+	}()
+	entries, truncated, dirs, dirsTruncated := walkTree(b)
+	ix.mu.Lock()
+	ix.entries, ix.truncated, ix.dirs, ix.dirsTruncated, ix.built = entries, truncated, dirs, dirsTruncated, time.Now()
+	ix.mu.Unlock()
+}
+
+// ready reports whether a build has completed at least once.
+func (ix *fileIndex) ready() bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	return !ix.built.IsZero()
+}
+
+// needsBuild reports that nothing has built yet and no build is in flight.
+func (ix *fileIndex) needsBuild() bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	return ix.built.IsZero() && !ix.building
+}
+
 // bounds snapshots the limits for a walk. Caller holds mu, so the background
 // rebuild never reads a field another goroutine is writing.
 func (ix *fileIndex) bounds() walkBounds {
-	return walkBounds{ix.root, ix.maxPaths, ix.maxPerRoot, ix.maxDirs, ix.maxPerRootDirs, ix.maxDepth, ix.budget, ix.relPrefix}
+	return walkBounds{ix.root, ix.maxPaths, ix.maxPerRoot, ix.maxDirs, ix.maxPerRootDirs, ix.maxDepth, ix.budget, ix.relPrefix, ix.noRelSkip}
 }
 
 // walkBounds is every limit a walk honours, captured under the index lock so the
@@ -320,6 +361,7 @@ type walkBounds struct {
 	maxDepth       int
 	budget         time.Duration
 	relPrefix      string
+	noRelSkip      bool
 }
 
 // walkTree collects files AND directories under root in one pass, each with its
@@ -477,7 +519,7 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 		}
 
 		if d.IsDir() {
-			if skipDirs[d.Name()] || skipRelPaths[path.Join(b.relPrefix, slash)] || len(parts) >= b.maxDepth {
+			if skipDirs[d.Name()] || (!b.noRelSkip && skipRelPaths[path.Join(b.relPrefix, slash)]) || len(parts) >= b.maxDepth {
 				return fs.SkipDir
 			}
 			// A CONJUNCTION, not the old single test: skip the subtree only once
@@ -648,8 +690,11 @@ func fuzzyScoreLower(lrel string, baseStart int, lq string) (int, bool) {
 }
 
 type searchHit struct {
-	Path  string `json:"path"`
-	Rel   string `json:"rel"`
+	Path string `json:"path"`
+	// Rel is relative to Root, or to $HOME when Root is empty.
+	Rel string `json:"rel"`
+	// Root is the added workspace root holding the hit; empty for a $HOME hit.
+	Root  string `json:"root,omitempty"`
 	Score int    `json:"score"`
 }
 
@@ -663,10 +708,55 @@ func (s *Server) searchIndex() *fileIndex {
 	return s.idx
 }
 
+// rootIndexes returns the built indexes of the given added roots (never home,
+// never a dropped root: the caller passes the per-request policy's list). A
+// missing index is created and built in the background (refresh, one build per
+// index: it is started only when none is in flight and nothing has built yet;
+// later staleness goes through snapshot's stale-while-rebuild), so a slow disk
+// can never stall the palette. Entries for roots no longer listed are dropped.
+// The result is shorter than roots while any root is still building.
+func (s *Server) rootIndexes(roots []string) []*fileIndex {
+	s.rootIdxMu.Lock()
+	defer s.rootIdxMu.Unlock()
+	if s.rootIdx == nil {
+		s.rootIdx = map[string]*fileIndex{}
+	}
+	want := make(map[string]bool, len(roots))
+	for _, r := range roots {
+		want[r] = true
+	}
+	for r := range s.rootIdx {
+		if !want[r] {
+			delete(s.rootIdx, r)
+		}
+	}
+	out := make([]*fileIndex, 0, len(roots))
+	for _, r := range roots {
+		ix, ok := s.rootIdx[r]
+		if !ok {
+			ix = newFileIndex(r)
+			ix.noRelSkip = true
+			s.rootIdx[r] = ix
+		}
+		if ix.ready() {
+			out = append(out, ix)
+			continue
+		}
+		// refresh claims the build under the index lock and returns at once when
+		// one is in flight; gating on the flag here as well keeps a request from
+		// even spawning a goroutine that would only return.
+		if ix.needsBuild() {
+			go ix.refresh()
+		}
+	}
+	return out
+}
+
 // handleFsSearch serves GET /api/fs/search?q=&limit=&kind=&prefer= — fuzzy-matched
-// files under $HOME, best first. `truncated` reports that the underlying index hit
+// files under $HOME and every added workspace root, best first. `partial` is set
+// while an added root is still building its first index. `truncated` reports that the underlying index hit
 // one of its bounds, so a short result set is never mistaken for "no such file".
-// prefer=<abs dir inside $HOME> lists that subtree's matches first (see
+// prefer=<abs dir inside a served root> lists that subtree's matches first (see
 // resolvePrefer).
 func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -701,38 +791,78 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, truncated := s.searchIndex().snapshot(kind)
 	lq := strings.ToLower(q)
-	// prefer=<abs dir>: walk that subtree first (its own index, so a home walk
+	// Added roots: every index that has built is searched; one still building
+	// makes the answer partial instead of making the palette wait for it.
+	var extra []string
+	if len(pol.roots) > 1 {
+		extra = pol.roots[1:]
+	}
+	ready := s.rootIndexes(extra)
+	partial := len(ready) < len(extra)
+	// prefer=<abs dir>: walk that subtree first (its own index, so a root walk
 	// that ran out of budget before reaching it cannot hide it), and list its
 	// hits before everything else. Files only: the directory picker is unchanged.
+	// The folder may sit under an added root: its hits are then rooted there,
+	// never joined onto $HOME.
 	var hits []searchHit
-	preferRel := ""
+	preferRel, preferRoot := "", ""
 	if kind == kindFiles {
-		if pabs, prel, proot, ok := resolvePrefer(pol, r.URL.Query().Get("prefer")); ok && proot == pol.roots[0] {
-			preferRel = prel
-			pentries, ptrunc := s.preferIndex(pabs, filepath.ToSlash(prel)).snapshot(kindFiles)
+		if pabs, prel, proot, ok := resolvePrefer(pol, r.URL.Query().Get("prefer")); ok {
+			preferRel, preferRoot = prel, proot
+			// skipRelPaths are $HOME-relative: off under an added root.
+			ix := s.preferIndexIn(pabs, filepath.ToSlash(prel), proot != pol.roots[0])
+			pentries, ptrunc := ix.snapshot(kindFiles)
 			truncated = truncated || ptrunc
 			hits = scoreEntries(pentries, lq, prel)
+			if proot != pol.roots[0] {
+				for i := range hits {
+					hits[i].Root = proot
+				}
+			}
 		}
 	}
+	rest := make([]searchHit, 0, 64)
 	for _, h := range scoreEntries(entries, lq, "") {
 		// The home index holds the preferred subtree too; list each file once.
-		if preferRel != "" && strings.HasPrefix(h.Rel, preferRel+string(filepath.Separator)) {
+		if preferRel != "" && preferRoot == pol.roots[0] && strings.HasPrefix(h.Rel, preferRel+string(filepath.Separator)) {
 			continue
 		}
-		hits = append(hits, h)
+		rest = append(rest, h)
 	}
+	for _, ix := range ready {
+		ents, trunc := ix.snapshot(kind)
+		truncated = truncated || trunc
+		for _, h := range scoreEntries(ents, lq, "") {
+			h.Root = ix.root
+			rest = append(rest, h)
+		}
+	}
+	if len(ready) > 0 {
+		// One ranking across home and every root; stable, so home leads a tie.
+		sort.SliceStable(rest, func(i, j int) bool { return rest[i].Score > rest[j].Score })
+	}
+	hits = append(hits, rest...)
 
 	// Resolve and containment-check only what will actually be returned: a link
-	// that leaves $HOME, or that a box planted inside a boxed workspace to reach
-	// a host file, must never be surfaced — exactly as /api/fs/list and
+	// that leaves its root, or that a box planted inside a boxed workspace to
+	// reach a host file, must never be surfaced — exactly as /api/fs/list and
 	// /api/fs/read already guarantee. The same resolver decides here, so search
-	// cannot name a path the other endpoints would refuse.
+	// cannot name a path the other endpoints would refuse. Nested roots index the
+	// same file twice; the path is the identity, so each is listed once.
 	out := make([]searchHit, 0, limit)
+	seen := make(map[string]bool, limit)
 	for _, h := range hits {
 		if len(out) >= limit {
 			break
 		}
-		abs := filepath.Join(s.Home, h.Rel)
+		base := s.Home
+		if h.Root != "" {
+			base = h.Root
+		}
+		abs := filepath.Join(base, h.Rel)
+		if seen[abs] {
+			continue
+		}
 		t, err := pol.resolve(abs)
 		if err != nil {
 			continue
@@ -747,10 +877,15 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 		if info.IsDir() != (kind == kindDirs) {
 			continue
 		}
+		seen[abs] = true
 		h.Path = abs
 		out = append(out, h)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": out, "truncated": truncated})
+	resp := map[string]any{"results": out, "truncated": truncated}
+	if partial {
+		resp["partial"] = true
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // scoreEntries fuzzy-scores an index against lq and returns the hits best
@@ -793,8 +928,8 @@ func statTarget(t fsTarget) (os.FileInfo, error) {
 }
 
 // resolvePrefer turns ?prefer=<abs dir> into the directory to walk first and
-// its path relative to the served root holding it, which is returned too (the
-// search handler only walks a prefer root under $HOME for now). Anything
+// its path relative to the served root holding it, which is returned too (home
+// or an added root: the handler roots the hits there). Anything
 // unusable — relative, missing, not a directory, outside every root once
 // symlinks resolve, denied, or a root itself —
 // is ignored (ok=false), never an error: preferring is a ranking hint, not a
@@ -846,6 +981,12 @@ func resolvePrefer(pol fsPolicy, raw string) (abs, rel, root string, ok bool) {
 // preferIndex returns the index rooted at root (created on first use) and marks
 // it most recently used, evicting the oldest past maxPreferIndexes.
 func (s *Server) preferIndex(root, relPrefix string) *fileIndex {
+	return s.preferIndexIn(root, relPrefix, false)
+}
+
+// preferIndexIn is preferIndex with the index's skipRelPaths switched off for a
+// folder under an added root. The flag is fixed at creation, before any walk.
+func (s *Server) preferIndexIn(root, relPrefix string, noRelSkip bool) *fileIndex {
 	s.prefMu.Lock()
 	defer s.prefMu.Unlock()
 	if s.prefIdx == nil {
@@ -855,6 +996,7 @@ func (s *Server) preferIndex(root, relPrefix string) *fileIndex {
 	if !ok {
 		ix = newFileIndex(root)
 		ix.relPrefix = relPrefix
+		ix.noRelSkip = noRelSkip
 		ix.budget = preferIndexBudget
 		s.prefIdx[root] = ix
 	}
