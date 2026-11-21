@@ -2506,7 +2506,10 @@
      from the kit's 30px to about 44px and the list shows about nine of them before it scrolls. The list's last line (how to get
      past it while idle, the match count while searching) stays at the bottom as the rows scroll under it; the negative bottom
      covers the list's own 4px padding. */
-  #spawn-ws-list:has(.wsp-two) { max-height: 470px; }
+  /* A shorter window gives the dialog's form less room below the field (measured with the Docker banner, the lowest the field
+     sits: 382px free at 1024x700, 519px at 1280x900), so the list also stays 330px short of the viewport: the form's scroll box
+     would clip it, footer first. */
+  #spawn-ws-list:has(.wsp-two) { max-height: min(470px, calc(100vh - 330px)); }
   #spawn-ws-list .menu-item:has(> .wsp-two) { height: auto; min-height: var(--h-menu); padding-top: 5px; padding-bottom: 5px; }
   #spawn-ws-list .wsp-two { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-width: 0; }
   #spawn-ws-list .wsp-path { font-family: var(--font-mono); font-size: var(--t-xs); line-height: var(--lh-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3945,7 +3948,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-wslist .ft-opt { align-items: center; }
   #page-host > #settings-modal.as-page #pfv .pfv-wslist .wsp-two { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-wslist .wsp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #page-host > #settings-modal.as-page #pfv .pfv-wslist .wsp-last { flex: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-wslist .wsp-path { margin-top: 0; font-family: var(--font-mono); font-size: var(--t-xs); line-height: var(--lh-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pfv .pfv-wslist .wsp-last { flex: none; margin-top: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 72px; padding: 8px 10px; line-height: var(--lh-md); resize: vertical; }
