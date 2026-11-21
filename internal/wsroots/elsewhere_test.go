@@ -259,7 +259,7 @@ func TestElsewhereAbandonedScanNeverOverwritesTheCache(t *testing.T) {
 func TestElsewhereHungScansAreBounded(t *testing.T) {
 	const budget = 50 * time.Millisecond
 	r := newScanRig(t, budget)
-	r.setGate(make(chan struct{})) // never released: every scan blocks for good
+	r.setGate(make(chan struct{}))        // never released: every scan blocks for good
 	r.svc.Elsewhere(context.Background()) // scan 1 hangs; empty is published
 	r.advance(6 * time.Minute)
 	r.svc.Elsewhere(context.Background()) // abandons scan 1, starts scan 2
