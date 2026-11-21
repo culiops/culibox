@@ -6016,6 +6016,9 @@ function initSpawnWsPicker() {
     input, list, onPick: onSpawnCwdChanged, onNote: setSpawnWsNote,
     inline: drawerDesktop,
     lastUsed: () => { const l = loadLastSpawn(); return l && typeof l.cwd === "string" ? l.cwd : ""; },
+    // Desktop (#343 slice 4): each folder's path under its name, the added workspace roots, and the Recent group first.
+    paths: drawerDesktop,
+    recents: () => (drawerDesktop() ? loadRecentWorkspaces() : []),
     idleText: spawnWsCaption,
     // The one line under the field: what Start here does to the workspace roots (wspicker.js's wsCheckLine). Desktop only.
     onCheck: setSpawnWsCheck, checkOn: drawerDesktop,
@@ -6212,6 +6215,16 @@ let metaLoaded = false;
 // own: the form is always shown, so a stale value can be seen and changed
 // before anything starts.
 const LAST_SPAWN_KEY = "agent-box:lastSpawn";
+// The New session picker's Recent group (#343 slice 4): the folders the last sessions started in, newest first, in this
+// browser. wspicker.js owns the format (wsRecentsRead, wsRecentsPush); nothing stored reads as the last spawn's folder.
+const RECENT_WS_KEY = "agent-box:recentWorkspaces";
+function loadRecentWorkspaces() {
+  let raw = null;
+  try { raw = localStorage.getItem(RECENT_WS_KEY); } catch (_) {}
+  const l = loadLastSpawn();
+  return wsRecentsRead(raw, l && typeof l.cwd === "string" ? l.cwd : "");
+}
+
 function loadLastSpawn() {
   try {
     const v = JSON.parse(localStorage.getItem(LAST_SPAWN_KEY) || "null");
@@ -6247,6 +6260,9 @@ async function spawnSession(req, opts) {
   });
   if (opts.onCreated) opts.onCreated(s);
   try {
+    // Read before the last spawn is rewritten: an empty recents list falls back to the previous last folder.
+    const recents = wsRecentsPush(loadRecentWorkspaces(), req.cwd || "");
+    localStorage.setItem(RECENT_WS_KEY, JSON.stringify({ v: 1, paths: recents }));
     localStorage.setItem(LAST_SPAWN_KEY, JSON.stringify({
       agent: req.agent, cwd: req.cwd || "", options: req.options || {},
     }));

@@ -2502,6 +2502,15 @@
   /* A group heading in the idle list ("Other places"): not a row. It is the note's muted line, smaller, with a hairline above it
      to set the group apart from the project roots. */
   #spawn-ws-list .wsp-head { min-height: 26px; margin-top: var(--sp-1); border-top: 1px solid var(--line); border-radius: 0; font-size: var(--t-xs); line-height: var(--lh-xs); }
+  /* #343 slice 4: a row is two lines, the folder's name and under it its path (muted machine text, ~/… under home), so it grows
+     from the kit's 30px to about 44px and the list shows about nine of them before it scrolls. The list's last line (how to get
+     past it while idle, the match count while searching) stays at the bottom as the rows scroll under it; the negative bottom
+     covers the list's own 4px padding. */
+  #spawn-ws-list:has(.wsp-two) { max-height: 470px; }
+  #spawn-ws-list .menu-item:has(> .wsp-two) { height: auto; min-height: var(--h-menu); padding-top: 5px; padding-bottom: 5px; }
+  #spawn-ws-list .wsp-two { display: flex; flex-direction: column; gap: 1px; flex: 1 1 auto; min-width: 0; }
+  #spawn-ws-list .wsp-path { font-family: var(--font-mono); font-size: var(--t-xs); line-height: var(--lh-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #spawn-ws-list .wsp-foot { position: sticky; bottom: calc(-1 * var(--sp-1)); margin-top: var(--sp-1); background: var(--panel); border-top: 1px solid var(--line); border-radius: 0; }
   /* The two help lines under the field read as the frame draws them: "Private copy of ..." first, then where the folder came
      from. The markup keeps its order (the phone's), so flex order does it; the 2px under the first line is the second one's,
      whichever that is. */
@@ -3932,6 +3941,11 @@
      .ft-opt/.ft-note ones. */
   #page-host > #settings-modal.as-page #pfv .pfv-wslist { position: fixed; z-index: 30; max-height: 260px; overflow-y: auto; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); }
   #page-host > #settings-modal.as-page #pfv .pfv-wslist[hidden] { display: none; }
+  /* #343 slice 4: each row is the folder's name with its path under it, and an added root says so at the right. */
+  #page-host > #settings-modal.as-page #pfv .pfv-wslist .ft-opt { align-items: center; }
+  #page-host > #settings-modal.as-page #pfv .pfv-wslist .wsp-two { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-wslist .wsp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pfv .pfv-wslist .wsp-last { flex: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 72px; padding: 8px 10px; line-height: var(--lh-md); resize: vertical; }
