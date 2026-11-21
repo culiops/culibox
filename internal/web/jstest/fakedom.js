@@ -36,8 +36,10 @@ class Node {
   removeAttribute(k) { delete this.attrs[k]; }
   appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }
-  // Inserts `c` before `ref` (at the end for null), moving it if it is already placed.
+  // Inserts `c` before `ref` (at the end for null), moving it if it is already placed. A `ref` that is no child of this node throws,
+  // as the DOM's NotFoundError does (#350: a lax fake hid exactly that throw).
   insertBefore(c, ref) {
+    if (ref && ref.parent !== this) throw new Error("NotFoundError: insertBefore: the reference node is not a child of this node");
     if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1);
     c.parent = this;
     const at = ref ? this.children.indexOf(ref) : -1;

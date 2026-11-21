@@ -667,3 +667,42 @@ test("an image tab's conflict bar leaves the dock's slot without throwing: its e
   p.EditorTab.prototype.placeBar.call(text, false);
   assert.deepEqual(text.el.children, [text.barEl, text.cmpEl]);
 });
+
+// #350: after an image or a binary file, the dock opened no other file. The tab's hide (and its close) put the conflict bar back in front of
+// a compare view mountInner had taken out of the tab, the DOM threw, and dockShow stopped before the next tab was shown. Here the real
+// tab goes through what the dock does to it: shown with the slot on the page, hidden for a text file, shown again, and closed.
+test("an image or a binary file's tab hides, shows again and closes without throwing, and its viewer follows each step (#350)", async () => {
+  const { page: editorPage } = require("./editorpage.js");
+  const { Node: N } = require("./fakedom.js");
+  for (const kind of ["image", "binary"]) {
+    const p = editorPage();
+    const slot = new N("div", p.doc);
+    p.doc.getElementById = (id) => (id === "dock-conflict" ? slot : null);
+    if (kind === "binary") p.setRead({ ok: true, status: 200, data: { kind: "binary", size: 9 } });
+    const tab = await p.open(kind === "image" ? "/p/shot.png" : "/p/blob.bin");
+    const inner = p.st.inner;
+    assert.ok(tab.inner === inner && tab.mode === kind, kind + ": the viewer is mounted in the tab");
+    assert.deepEqual(tab.el.children, [inner.el], kind + ": the tab holds only its viewer");
+    assert.equal(tab.barEl.parent, slot, kind + ": on screen, the bar is in the dock's slot");
+
+    tab.onHide(); // a text file is shown: dockShow hides this tab first
+    assert.equal(tab.barEl.parent, null, kind + ": hidden, the bar leaves the slot and has no place in the tab");
+    assert.equal(tab.attached, false);
+    tab.onAttach(); // and back to it
+    assert.equal(tab.barEl.parent, slot, kind + ": shown again, the bar is back in the slot");
+    assert.deepEqual(tab.el.children, [inner.el], kind + ": still only its viewer");
+
+    tab.onHide();
+    tab.dispose(); // closed while hidden
+    assert.equal(tab.disposed, true);
+    assert.deepEqual(inner.calls, ["attach", "hide", "attach", "hide", "dispose"], kind + ": the viewer is told each step, once (mounted before the attach: no show)");
+  }
+  // Closed while it is the tab on screen.
+  const p = editorPage();
+  const slot = new N("div", p.doc);
+  p.doc.getElementById = (id) => (id === "dock-conflict" ? slot : null);
+  const tab = await p.open("/p/shot.png");
+  tab.dispose();
+  assert.equal(slot.children.length, 0, "the closed tab's bar leaves the slot");
+  assert.deepEqual(p.st.inner.calls.slice(-1), ["dispose"]);
+});
