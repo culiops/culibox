@@ -103,7 +103,7 @@ func TestResolveFs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := newFsPolicy(home, tc.trees)
+			p, err := newFsPolicy(home, nil, tc.trees)
 			if err != nil {
 				t.Fatalf("newFsPolicy: %v", err)
 			}

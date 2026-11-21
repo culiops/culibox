@@ -19,7 +19,21 @@ import (
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/wsroots"
 )
+
+// WorkspaceRoots is the set of folders the file API serves besides $HOME, with
+// the audited add/remove the Settings page drives. *wsroots.Service satisfies it.
+type WorkspaceRoots interface {
+	Paths() []string
+	Covering(abs string) string
+	List() ([]wsroots.Root, error)
+	Add(abs, actor string) (wsroots.Root, error)
+	Remove(path, actor string) error
+	Touch(abs string)
+}
+
+var _ WorkspaceRoots = (*wsroots.Service)(nil)
 
 //go:embed static
 var staticFS embed.FS
@@ -101,6 +115,9 @@ type Server struct {
 	// os.Root so a box-planted symlink cannot reach host files. Nil → no boxed
 	// trees (host behaviour).
 	BoxTrees func() BoxTrees
+
+	// Roots are the workspace folders served besides $HOME. Nil → $HOME only.
+	Roots WorkspaceRoots
 
 	// ScratchDirs are candidate Claude Code temp folders (claude-<uid>), from
 	// ScratchCandidates. The fs API reads an accepted one read-only.

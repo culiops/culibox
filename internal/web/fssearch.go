@@ -707,7 +707,7 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 	var hits []searchHit
 	preferRel := ""
 	if kind == kindFiles {
-		if pabs, prel, ok := resolvePrefer(pol, r.URL.Query().Get("prefer")); ok {
+		if pabs, prel, proot, ok := resolvePrefer(pol, r.URL.Query().Get("prefer")); ok && proot == pol.roots[0] {
 			preferRel = prel
 			pentries, ptrunc := s.preferIndex(pabs, filepath.ToSlash(prel)).snapshot(kindFiles)
 			truncated = truncated || ptrunc
@@ -793,27 +793,33 @@ func statTarget(t fsTarget) (os.FileInfo, error) {
 }
 
 // resolvePrefer turns ?prefer=<abs dir> into the directory to walk first and
-// its path relative to (resolved) $HOME. Anything unusable — relative, missing,
-// not a directory, outside home once symlinks resolve, denied, or home itself —
+// its path relative to the served root holding it, which is returned too (the
+// search handler only walks a prefer root under $HOME for now). Anything
+// unusable — relative, missing, not a directory, outside every root once
+// symlinks resolve, denied, or a root itself —
 // is ignored (ok=false), never an error: preferring is a ranking hint, not a
 // scope. It resolves through pol, so a prefer root inside a boxed workspace is
 // held to the same os.Root containment as the hits it will produce.
-func resolvePrefer(pol fsPolicy, raw string) (abs, rel string, ok bool) {
+func resolvePrefer(pol fsPolicy, raw string) (abs, rel, root string, ok bool) {
 	if raw == "" {
-		return "", "", false
+		return "", "", "", false
 	}
 	t, err := pol.resolve(raw)
-	if err != nil || t.Abs == pol.rhome {
-		return "", "", false
+	if err != nil {
+		return "", "", "", false
 	}
 	fi, err := statTarget(t)
 	if err != nil || !fi.IsDir() {
-		return "", "", false
+		return "", "", "", false
 	}
 	resolved := t.Abs
-	rel, err = filepath.Rel(pol.rhome, resolved)
+	root, inRoot := pol.rootOf(resolved)
+	if !inRoot {
+		return "", "", "", false
+	}
+	rel, err = filepath.Rel(root, resolved)
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-		return "", "", false
+		return "", "", "", false
 	}
 	// A prefer root that is itself a machine-generated/credential directory
 	// (skipDirs) or sits under a skipped home-relative path (skipRelPaths) is
@@ -823,15 +829,18 @@ func resolvePrefer(pol fsPolicy, raw string) (abs, rel string, ok bool) {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	for _, p := range parts {
 		if skipDirs[p] {
-			return "", "", false
+			return "", "", "", false
 		}
 	}
-	for i := range parts {
-		if skipRelPaths[strings.Join(parts[:i+1], "/")] {
-			return "", "", false
+	// skipRelPaths are $HOME-relative, so they only apply under home.
+	if root == pol.roots[0] {
+		for i := range parts {
+			if skipRelPaths[strings.Join(parts[:i+1], "/")] {
+				return "", "", "", false
+			}
 		}
 	}
-	return resolved, rel, true
+	return resolved, rel, root, true
 }
 
 // preferIndex returns the index rooted at root (created on first use) and marks

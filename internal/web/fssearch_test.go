@@ -1149,13 +1149,13 @@ func TestResolvePreferRejectsSkippedRoots(t *testing.T) {
 		".claude/projects",          // skipRelPaths, exact
 		".claude/projects/slug",     // skipRelPaths, a prefix of it
 	} {
-		if _, _, ok := resolvePrefer(pol, filepath.Join(home, rel)); ok {
+		if _, _, _, ok := resolvePrefer(pol, filepath.Join(home, rel)); ok {
 			t.Errorf("prefer=%q: resolved ok=true, want it silently ignored", rel)
 		}
 	}
 
 	// A sibling that shares no path with a skip rule must still resolve.
-	if _, rel, ok := resolvePrefer(pol, filepath.Join(home, "proj", "src")); !ok || rel != filepath.Join("proj", "src") {
+	if _, rel, _, ok := resolvePrefer(pol, filepath.Join(home, "proj", "src")); !ok || rel != filepath.Join("proj", "src") {
 		t.Fatalf("resolvePrefer(proj/src) = rel=%q ok=%v, want it to resolve normally", rel, ok)
 	}
 }

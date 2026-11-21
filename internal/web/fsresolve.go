@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/culiops/culibox/internal/wsroots"
 )
 
 // BoxTrees is the box-writable host trees the fs API must not trust.
@@ -64,7 +66,9 @@ func statKey(path string) (fileKey, bool) {
 // (or one batch, see handleFsSearch). It is not the boundary for strict paths —
 // os.Root is — so a box racing the snapshot gains nothing.
 type fsPolicy struct {
-	rhome     string
+	// roots is every served root, resolved, home first. Anything outside all of
+	// them (and the scratch folders) is refused; see rootOf.
+	roots     []string
 	denied    map[fileKey]struct{}
 	contained map[fileKey]struct{}
 	// scratch is the accepted Claude Code temp folders (claude-<uid>), identity
@@ -81,7 +85,10 @@ type fsPolicy struct {
 	deniedOrAbove map[fileKey]struct{}
 }
 
-// newFsPolicy builds the policy for home and trees. Entries that do not exist are
+// newFsPolicy builds the policy for home, the extra workspace roots and trees.
+// An extra root is dropped when it does not resolve, is not a directory, equals
+// home, or wsroots.Refusal names a reason (the file API never serves what the
+// workspace picker would refuse). Entries of trees that do not exist are
 // skipped. A contained entry that is $HOME, an ancestor of $HOME, or that holds a
 // denied tree (or is one) is ignored: treating it as a workspace root would make
 // everything under it strict, or would serve the denied tree through os.Root.
@@ -90,12 +97,12 @@ type fsPolicy struct {
 // request, because Claude Code creates the folder lazily after the server
 // started. One is kept only if scratchRoot accepts it and it is not $HOME, not
 // inside $HOME (already served), not an ancestor of $HOME or of a denied tree.
-func newFsPolicy(home string, trees BoxTrees, scratch ...string) (fsPolicy, error) {
+func newFsPolicy(home string, roots []string, trees BoxTrees, scratch ...string) (fsPolicy, error) {
 	rhome, err := filepath.EvalSymlinks(home)
 	if err != nil {
 		return fsPolicy{}, err
 	}
-	p := fsPolicy{rhome: rhome, denied: map[fileKey]struct{}{}, contained: map[fileKey]struct{}{},
+	p := fsPolicy{roots: []string{rhome}, denied: map[fileKey]struct{}{}, contained: map[fileKey]struct{}{},
 		scratch: map[fileKey]string{}, guarded: map[fileKey]struct{}{}, deniedOrAbove: map[fileKey]struct{}{}}
 
 	forbidden := map[fileKey]struct{}{}
@@ -112,6 +119,28 @@ func newFsPolicy(home string, trees BoxTrees, scratch ...string) (fsPolicy, erro
 		}
 	}
 	addSelfAndAncestors(rhome)
+	for _, r := range roots {
+		rr, err := filepath.EvalSymlinks(r)
+		if err != nil {
+			continue
+		}
+		if fi, err := os.Stat(rr); err != nil || !fi.IsDir() {
+			continue
+		}
+		if wsroots.Refusal(rr, wsroots.Env{Home: rhome}) != "" {
+			continue
+		}
+		if p.hasRoot(rr) {
+			continue
+		}
+		p.roots = append(p.roots, rr)
+		// A contained tree holding a root would make the root strict-or-nothing,
+		// so it is ignored like one holding home. The root itself is NOT
+		// forbidden: a box workspace that is a served root must stay strict.
+		if parent := filepath.Dir(rr); parent != rr {
+			addSelfAndAncestors(parent)
+		}
+	}
 	for _, d := range trees.Denied {
 		rd, err := filepath.EvalSymlinks(d)
 		if err != nil {
@@ -161,7 +190,7 @@ func newFsPolicy(home string, trees BoxTrees, scratch ...string) (fsPolicy, erro
 		if _, bad := p.denied[k]; bad {
 			continue
 		}
-		if p.underHome(real) {
+		if _, served := p.rootOf(real); served {
 			continue
 		}
 		p.scratch[k] = real
@@ -219,7 +248,11 @@ func (s *Server) fsPolicy() (fsPolicy, error) {
 	if s.BoxTrees != nil {
 		trees = s.BoxTrees()
 	}
-	return newFsPolicy(s.Home, trees, s.ScratchDirs...)
+	var roots []string
+	if s.Roots != nil {
+		roots = s.Roots.Paths()
+	}
+	return newFsPolicy(s.Home, roots, trees, s.ScratchDirs...)
 }
 
 // resolveFs resolves one request path against the server's current boxed trees.
@@ -284,8 +317,10 @@ func (p fsPolicy) resolve(req string) (fsTarget, error) {
 			if rel != "." && !filepath.IsLocal(rel) {
 				return fsTarget{}, errOutsideHome
 			}
-			if s, inScratch := p.underScratch(cur); !p.underHome(cur) && !(inScratch && passed[s]) {
-				return fsTarget{}, errOutsideHome
+			if _, inRoot := p.rootOf(cur); !inRoot {
+				if s, inScratch := p.underScratch(cur); !inScratch || !passed[s] {
+					return fsTarget{}, errOutsideHome
+				}
 			}
 			return fsTarget{Root: cur, Rel: rel, Abs: filepath.Join(cur, rel), Strict: true, ReadOnly: readOnly}, nil
 		}
@@ -339,8 +374,8 @@ func (p fsPolicy) resolve(req string) (fsTarget, error) {
 			return fsTarget{}, err
 		}
 	}
-	root := p.rhome
-	if !p.underHome(cur) {
+	root, inRoot := p.rootOf(cur)
+	if !inRoot {
 		s, ok := p.underScratch(cur)
 		if !ok || !passed[s] {
 			return fsTarget{}, errOutsideHome
@@ -354,8 +389,29 @@ func (p fsPolicy) resolve(req string) (fsTarget, error) {
 	return fsTarget{Root: root, Rel: rel, Abs: cur, Strict: false, ReadOnly: readOnly}, nil
 }
 
-func (p fsPolicy) underHome(path string) bool {
-	return path == p.rhome || strings.HasPrefix(path, p.rhome+string(os.PathSeparator))
+// rootOf returns the served root holding path (the root itself counts), the
+// longest one when roots nest, matched by whole components. path must be clean
+// and resolved.
+func (p fsPolicy) rootOf(path string) (string, bool) {
+	best, found := "", false
+	for _, r := range p.roots {
+		if path == r || strings.HasPrefix(path, r+string(os.PathSeparator)) {
+			if !found || len(r) > len(best) {
+				best, found = r, true
+			}
+		}
+	}
+	return best, found
+}
+
+// hasRoot reports whether r is already a served root, exactly.
+func (p fsPolicy) hasRoot(r string) bool {
+	for _, x := range p.roots {
+		if x == r {
+			return true
+		}
+	}
+	return false
 }
 
 func lstatKey(path string) (fileKey, error) {
