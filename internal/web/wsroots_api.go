@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -41,9 +42,28 @@ type rootRow struct {
 	Always    bool       `json:"always,omitempty"`
 }
 
+// placeRow is one entry of "elsewhere".
+type placeRow struct {
+	Path  string `json:"path"`
+	Label string `json:"label"`
+}
+
+// elsewhere is the "Other places" list: the scan's project folders minus any
+// that home or a root already reaches. Never nil, so it encodes as [].
+func (s *Server) elsewhere(ctx context.Context) []placeRow {
+	out := []placeRow{}
+	for _, p := range s.Roots.Elsewhere(ctx) {
+		if s.Roots.Covering(p.Path) == "" {
+			out = append(out, placeRow{Path: p.Path, Label: p.Label})
+		}
+	}
+	return out
+}
+
 // rootsView is the reply of GET (and of a successful POST or DELETE): home
-// first, then each added root.
-func (s *Server) rootsView() map[string]any {
+// first, then each added root. Only a GET (scan true) runs the "Other places"
+// scan; a write reply carries an empty list, the page keeps the one it has.
+func (s *Server) rootsView(ctx context.Context, scan bool) map[string]any {
 	// Home is shown as the resolved spelling Covering and the check use, so the
 	// client sees one spelling of it.
 	rows := []rootRow{{Path: resolvedOrClean(s.Home), Always: true, Available: isDir(s.Home)}}
@@ -60,10 +80,13 @@ func (s *Server) rootsView() map[string]any {
 		}
 		rows = append(rows, row)
 	}
+	places := []placeRow{}
+	if scan {
+		places = s.elsewhere(ctx)
+	}
 	return map[string]any{
-		"roots": rows,
-		// The project folders outside home and every root; the scan is a later slice.
-		"elsewhere": []any{},
+		"roots":     rows,
+		"elsewhere": places,
 		"corrupt":   err != nil,
 	}
 }
@@ -136,7 +159,7 @@ func (s *Server) handleWorkspaceRoots(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.rootsView())
+		writeJSON(w, http.StatusOK, s.rootsView(r.Context(), true))
 	case http.MethodPost, http.MethodDelete:
 		var req struct {
 			Path string `json:"path"`
@@ -154,7 +177,7 @@ func (s *Server) handleWorkspaceRoots(w http.ResponseWriter, r *http.Request) {
 			writeRootsErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, s.rootsView())
+		writeJSON(w, http.StatusOK, s.rootsView(r.Context(), false))
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

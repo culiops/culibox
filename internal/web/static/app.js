@@ -6019,6 +6019,8 @@ function initSpawnWsPicker() {
     idleText: spawnWsCaption,
     // The one line under the field: what Start here does to the workspace roots (wspicker.js's wsCheckLine). Desktop only.
     onCheck: setSpawnWsCheck, checkOn: drawerDesktop,
+    // The project folders found outside home (spec 6.8) are offered on the desktop only, under the project roots.
+    otherPlaces: drawerDesktop,
     filter: (path) => { const f = spawnVMFilterFor(spawnWhere().runtime || "", spawnVMFilter); return f ? f(path) : true; },
   });
   input.addEventListener("input", hideSpawnNotShared);

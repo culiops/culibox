@@ -1,10 +1,12 @@
 package wsroots
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -16,6 +18,10 @@ const MaxRoots = 32
 
 // touchEvery is the least gap between two last_used writes for one root.
 const touchEvery = time.Hour
+
+// elsewhereTTL is how long a scan result is served before a background
+// refresh starts.
+const elsewhereTTL = 5 * time.Minute
 
 // Errors Add and Remove return. ErrCorrupt (store.go) is the other one.
 var (
@@ -54,6 +60,17 @@ type Service struct {
 	list    []Root
 	corrupt error
 	file    fileStamp // workspace-roots.json as last read or written; zero = none
+
+	// The "Other places" scan has its own lock: a slow scan never holds up
+	// List, Covering or Add.
+	scanMu     sync.Mutex
+	scanBases  func() []string // nil: DefaultBases for this OS and user
+	scanOpts   ScanOpts
+	scanFn     func(ctx context.Context, bases []string, env Env, o ScanOpts) []Place
+	places     []Place
+	placesAt   time.Time
+	havePlaces bool
+	scanning   chan struct{} // non-nil while a scan runs; closed when it ends
 }
 
 // NewService returns a Service over dataDir. home is the user's home; it is
@@ -291,4 +308,88 @@ func (s *Service) commitLocked(action, path, actor string, next []Root) error {
 	}
 	s.list, s.file = next, statFile(s.dataDir)
 	return nil
+}
+
+// SetScanBases replaces the folders Elsewhere scans (nil: DefaultBases). It is
+// for a demo build; call it before the first Elsewhere.
+func (s *Service) SetScanBases(f func() []string) {
+	s.scanMu.Lock()
+	s.scanBases = f
+	s.scanMu.Unlock()
+}
+
+// Elsewhere is the project folders found under the usual places outside home
+// (Scan, DefaultBases). It never makes a caller wait longer than the scan
+// budget (one second): a scan that has not finished by then is left running and
+// its result is served by the next call. A result is served for five minutes;
+// after that the stale list is returned at once while one background scan
+// refreshes it (never more than one at a time). It reads folder names only. It
+// does not drop folders home or a root already reaches: that is the caller's.
+func (s *Service) Elsewhere(ctx context.Context) []Place {
+	s.scanMu.Lock()
+	if s.havePlaces && s.now().Sub(s.placesAt) < elsewhereTTL {
+		out := append([]Place{}, s.places...)
+		s.scanMu.Unlock()
+		return out
+	}
+	done := s.startScanLocked()
+	if s.havePlaces {
+		out := append([]Place{}, s.places...) // stale: the refresh is behind us
+		s.scanMu.Unlock()
+		return out
+	}
+	budget := s.scanOpts.filled().Budget
+	s.scanMu.Unlock()
+
+	t := time.NewTimer(budget)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	case <-ctx.Done():
+	}
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
+	return append([]Place{}, s.places...)
+}
+
+// startScanLocked starts a background scan unless one is running and returns
+// the channel that closes when the running one ends. The caller holds s.scanMu.
+func (s *Service) startScanLocked() <-chan struct{} {
+	if s.scanning != nil {
+		return s.scanning
+	}
+	done := make(chan struct{})
+	s.scanning = done
+	bases := s.scanBases
+	if bases == nil {
+		goos, user := runtime.GOOS, currentUser()
+		bases = func() []string { return DefaultBases(goos, user) }
+	}
+	scan := s.scanFn
+	if scan == nil {
+		scan = Scan
+	}
+	o := s.scanOpts
+	env := Env{Home: s.home, DataDir: resolvedOrClean(s.dataDir)}
+	go func() {
+		// The scan outlives the request that started it, bounded by its own budget.
+		res := scan(context.Background(), bases(), env, o)
+		s.scanMu.Lock()
+		s.places, s.placesAt, s.havePlaces = res, s.now(), true
+		s.scanning = nil
+		s.scanMu.Unlock()
+		close(done)
+	}()
+	return done
+}
+
+func resolvedOrClean(p string) string {
+	if p == "" {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	return filepath.Clean(p)
 }

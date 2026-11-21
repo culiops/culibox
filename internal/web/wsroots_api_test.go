@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -33,6 +34,7 @@ func newRootsAPIRig(t *testing.T) *rootsAPIRig {
 	}
 	rec := &fakeCredRec{}
 	svc := wsroots.NewService(data, home, RootsAudit(rec), nil)
+	svc.SetScanBases(func() []string { return nil }) // never scan this machine's real /srv, /opt ...
 	return &rootsAPIRig{s: &Server{Home: home, DataDir: data, Roots: svc}, home: home, dir: data, rec: rec}
 }
 
@@ -52,8 +54,11 @@ type rootsView struct {
 		Available bool   `json:"available"`
 		Always    bool   `json:"always"`
 	} `json:"roots"`
-	Elsewhere []any `json:"elsewhere"`
-	Corrupt   bool  `json:"corrupt"`
+	Elsewhere []struct {
+		Path  string `json:"path"`
+		Label string `json:"label"`
+	} `json:"elsewhere"`
+	Corrupt bool `json:"corrupt"`
 }
 
 func decodeRoots(t *testing.T, w *httptest.ResponseRecorder) rootsView {
@@ -541,9 +546,56 @@ func TestRootsListShowsResolvedHome(t *testing.T) {
 	}
 	data := realTemp(t)
 	svc := wsroots.NewService(data, real, RootsAudit(&fakeCredRec{}), nil)
+	svc.SetScanBases(func() []string { return nil })
 	s := &Server{Home: link, DataDir: data, Roots: svc}
 	v := decodeRoots(t, do(s.handleWorkspaceRoots, storeReq("GET", "/api/workspace-roots", "", "", credCookie)))
 	if len(v.Roots) != 1 || v.Roots[0].Path != real || !v.Roots[0].Always || !v.Roots[0].Available {
 		t.Fatalf("list = %+v, want the resolved home %s", v.Roots, real)
+	}
+}
+
+// scanSpy counts the scans a request asks for and answers with a fixed list.
+type scanSpy struct {
+	WorkspaceRoots
+	n      int
+	places []wsroots.Place
+}
+
+func (s *scanSpy) Elsewhere(context.Context) []wsroots.Place { s.n++; return s.places }
+
+// GET lists the scan's places, minus any home or a root already reaches; it
+// is the only request that scans, and a reply with none is [] and not null.
+func TestRootsAPIElsewhere(t *testing.T) {
+	g := newRootsAPIRig(t)
+	root := realTemp(t)
+	if _, err := g.s.Roots.Add(root, storeActor); err != nil {
+		t.Fatal(err)
+	}
+	spy := &scanSpy{WorkspaceRoots: g.s.Roots, places: []wsroots.Place{
+		{Path: "/srv/api", Label: "api"},
+		{Path: filepath.Join(g.home, "inside-home"), Label: "inside-home"},
+		{Path: filepath.Join(root, "inside-root"), Label: "inside-root"},
+		{Path: root, Label: "root-itself"},
+		{Path: "/opt/web", Label: "web"},
+	}}
+	g.s.Roots = spy
+	v := decodeRoots(t, g.roots("GET", ""))
+	if len(v.Elsewhere) != 2 || v.Elsewhere[0].Path != "/srv/api" || v.Elsewhere[0].Label != "api" || v.Elsewhere[1].Path != "/opt/web" {
+		t.Fatalf("elsewhere = %+v, want /srv/api and /opt/web only", v.Elsewhere)
+	}
+	if spy.n != 1 {
+		t.Fatalf("a GET scanned %d times, want 1", spy.n)
+	}
+	// A write reply does not scan.
+	extra := realTemp(t)
+	body, _ := json.Marshal(map[string]string{"path": extra})
+	w := g.roots("POST", string(body))
+	v = decodeRoots(t, w)
+	if spy.n != 1 || v.Elsewhere == nil || len(v.Elsewhere) != 0 || !strings.Contains(w.Body.String(), `"elsewhere":[]`) {
+		t.Fatalf("a POST reply scanned (%d) or carried %s", spy.n, w.Body)
+	}
+	spy.places = nil
+	if w := g.roots("GET", ""); !strings.Contains(w.Body.String(), `"elsewhere":[]`) {
+		t.Fatalf("no places must be [], got %s", w.Body)
 	}
 }

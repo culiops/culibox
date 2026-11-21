@@ -44,7 +44,7 @@ const count = (el) => Object.values(el.handlers).reduce((n, a) => n + a.length, 
 // One page: a document, a window, a fetch that answers from `server`, a clock that only moves
 // when the test says so, and the real helpers the factory calls.
 function env(extra) {
-  const server = { search: [], list: {}, searches: [], lists: [], check: {}, checks: [] };
+  const server = { search: [], list: {}, searches: [], lists: [], check: {}, checks: [], roots: null, rootsReads: 0, writes: [] };
   const timers = [];
   const toasts = [];
   const doc = new El("document");
@@ -58,6 +58,12 @@ function env(extra) {
     showToast: (m, o) => { toasts.push([m, o && o.error === true]); },
     fetch: async (url, init) => {
       const u = new URL(url, "http://x");
+      if (init && init.method && init.method !== "GET") server.writes.push(init.method + " " + u.pathname);
+      if (u.pathname === "/api/workspace-roots") {
+        server.rootsReads++;
+        const body = server.roots;
+        return { ok: !!body, status: body ? 200 : 500, json: async () => body || {} };
+      }
       if (u.pathname === "/api/fs/search") {
         server.searches.push(u.searchParams.get("q"));
         const hits = server.search;
@@ -965,4 +971,140 @@ test("a relative or unanswered check leaves no line; destroy stops a pending ask
   t.runDebounce();
   await flush();
   assert.deepStrictEqual(t.server.checks, ["/srv/none"]);
+});
+
+// --- "Other places" (spec 6.8) ------------------------------------------------------------------------------------------
+// The group is the idle list's tail: project folders the server found outside home. It is drawn when the read arrives.
+const others = (...paths) => ({ roots: [], corrupt: false, elsewhere: paths.map((p) => ({ path: p, label: p.slice(p.lastIndexOf("/") + 1) })) });
+const optionRows = (p) => p.list.children.filter((c) => c.attrs.role === "option" && c.attrs["aria-disabled"] === undefined);
+const headings = (p) => p.list.children.filter((c) => c.className.includes("wsp-head")).map((c) => c.textContent);
+
+test("Other places: rows arrive under a heading below the project roots, the caption counts roots only", async () => {
+  const t = env();
+  t.server.roots = others("/srv/api", "/opt/web");
+  const p = t.make({ otherPlaces: () => true, inline: () => true });
+  fire(p.input, "focus");
+  assert.deepStrictEqual(rowsOf(p), ["culishop", "notes"], "the roots are drawn at once, before the read answers");
+  assert.deepStrictEqual(headings(p), []);
+  await flush();
+  assert.deepStrictEqual(optionRows(p).map((c) => c.children[0].textContent), ["culishop", "notes", "api", "web"]);
+  assert.deepStrictEqual(headings(p), ["Other places"]);
+  const kids = p.list.children;
+  assert.strictEqual(kids[2].textContent, "Other places", "the heading sits between the roots and the other places");
+  assert.strictEqual(kids[3].children[0].textContent, "api");
+  assert.strictEqual(kids[3].children[1].textContent, "/srv", "the parent folder is the hint");
+  assert.strictEqual(kids[3].title, "/srv/api");
+  assert.strictEqual(p.calls.note[p.calls.note.length - 1][0], "2 project roots · type to filter · ↵ to pick");
+  assert.strictEqual(p.list.hidden, false);
+});
+
+test("Other places: picking one sets the folder and asks the check; nothing is added", async () => {
+  const t = env();
+  t.server.roots = others("/srv/api");
+  t.server.check["/srv/api"] = { path: "/srv/api", exists: true, is_dir: true, root: "", would_add: true, add_root_path: "/srv/api", refused: "", box: { ok: true }, vm_shared: true };
+  const checks = [];
+  const p = t.make({ otherPlaces: () => true, onCheck: (c) => checks.push(c) });
+  fire(p.input, "focus");
+  await flush();
+  const row = optionRows(p)[2];
+  fire(row, "click");
+  await flush();
+  assert.strictEqual(p.picker.value(), "/srv/api");
+  assert.strictEqual(p.input.value, "/srv/api");
+  assert.deepStrictEqual(p.calls.pick, ["/srv/api"]);
+  assert.deepStrictEqual(t.server.checks, ["/srv/api"]);
+  assert.strictEqual(checks[checks.length - 1].add_root_path, "/srv/api");
+  assert.strictEqual(p.list.hidden, true);
+  assert.deepStrictEqual(t.server.writes, [], "picking is no add: only Start adds a root");
+});
+
+test("Other places: the arrows skip the heading and Enter picks the highlighted other place", async () => {
+  const t = env();
+  t.server.roots = others("/srv/api");
+  const p = t.make({ otherPlaces: () => true });
+  fire(p.input, "focus");
+  await flush();
+  for (let i = 0; i < 3; i++) fire(p.input, "keydown", { key: "ArrowDown" });
+  const rows = optionRows(p);
+  assert.deepStrictEqual(rows.map((c) => c.attrs["aria-selected"]), ["false", "false", "true"]);
+  assert.strictEqual(p.input.attrs["aria-activedescendant"], rows[2].id);
+  fire(p.input, "keydown", { key: "Enter" });
+  assert.strictEqual(p.picker.value(), "/srv/api");
+});
+
+test("Other places: the highlighted row stays highlighted when the read arrives", async () => {
+  const t = env();
+  t.server.roots = others("/srv/api");
+  const p = t.make({ otherPlaces: () => true });
+  fire(p.input, "focus");
+  fire(p.input, "keydown", { key: "ArrowDown" });
+  fire(p.input, "keydown", { key: "ArrowDown" }); // notes
+  await flush();
+  const rows = optionRows(p);
+  assert.deepStrictEqual(rows.map((c) => c.attrs["aria-selected"]), ["false", "true", "false"]);
+});
+
+test("Other places: not asked, and not drawn, unless otherPlaces says yes", async () => {
+  const t = env();
+  t.server.roots = others("/srv/api");
+  const plain = t.make();
+  fire(plain.input, "focus");
+  const off = t.make({ otherPlaces: () => false });
+  fire(off.input, "focus");
+  await flush();
+  assert.strictEqual(t.server.rootsReads, 0);
+  assert.deepStrictEqual(rowsOf(plain), ["culishop", "notes"]);
+  assert.deepStrictEqual(rowsOf(off), ["culishop", "notes"]);
+});
+
+test("Other places: a failed read, a damaged answer or an empty list adds no group", async () => {
+  for (const roots of [null, { elsewhere: "no" }, { elsewhere: [] }, { elsewhere: [{ path: "rel/x", label: "x" }, { path: "/ok", label: "" }, null] }]) {
+    const t = env();
+    t.server.roots = roots;
+    const p = t.make({ otherPlaces: () => true, inline: () => true });
+    fire(p.input, "focus");
+    await flush();
+    assert.deepStrictEqual(headings(p), [], JSON.stringify(roots));
+    assert.deepStrictEqual(rowsOf(p), ["culishop", "notes"]);
+  }
+});
+
+test("Other places: a read that lands after the list closed does not reopen it", async () => {
+  const t = env();
+  t.server.roots = others("/srv/api");
+  const p = t.make({ otherPlaces: () => true });
+  fire(p.input, "focus");
+  fire(p.input, "keydown", { key: "Escape" });
+  await flush();
+  assert.strictEqual(p.list.hidden, true);
+  fire(p.input, "focus"); // the next open already has them
+  assert.deepStrictEqual(optionRows(p).map((c) => c.children[0].textContent), ["culishop", "notes", "api"]);
+});
+
+test("Other places: the project-root filter applies to them too, and a root is never listed twice", async () => {
+  const t = env();
+  t.server.roots = others("/srv/api", "/srv/vmless", "/home/me/notes");
+  const p = t.make({ otherPlaces: () => true, filter: (path) => path !== "/srv/vmless" });
+  fire(p.input, "focus");
+  await flush();
+  assert.deepStrictEqual(optionRows(p).map((c) => c.children[0].textContent), ["culishop", "notes", "api"]);
+});
+
+test("Other places: a search shows search hits only, and the destroyed picker ignores a late read", async () => {
+  const t = env();
+  t.server.roots = others("/srv/api");
+  const p = t.make({ otherPlaces: () => true });
+  fire(p.input, "focus");
+  await flush();
+  t.server.search = [{ rel: "work/culipulse", path: "/home/me/work/culipulse" }];
+  type(p, "culi");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(headings(p), []);
+  assert.deepStrictEqual(rowsOf(p), ["culipulse"]);
+  const q = t.make({ otherPlaces: () => true });
+  fire(q.input, "focus");
+  q.picker.destroy();
+  await flush();
+  assert.strictEqual(q.list.hidden, true);
 });

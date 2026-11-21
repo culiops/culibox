@@ -31,6 +31,9 @@ type WorkspaceRoots interface {
 	Add(abs, actor string) (wsroots.Root, error)
 	Remove(path, actor string) error
 	Touch(abs string)
+	// Elsewhere is the project folders found outside home (the "Other places"
+	// scan); it never waits long and reads folder names only.
+	Elsewhere(ctx context.Context) []wsroots.Place
 }
 
 var _ WorkspaceRoots = (*wsroots.Service)(nil)

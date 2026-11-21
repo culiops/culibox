@@ -2499,6 +2499,9 @@
   #spawn-ws-list .wsp-last { flex: none; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); white-space: nowrap; }
   /* The list's one line of words (nothing found, folder search unavailable). */
   #spawn-ws-list .ft-note { flex: none; display: flex; align-items: center; min-height: var(--h-menu); padding: 0 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* A group heading in the idle list ("Other places"): not a row. It is the note's muted line, smaller, with a hairline above it
+     to set the group apart from the project roots. */
+  #spawn-ws-list .wsp-head { min-height: 26px; margin-top: var(--sp-1); border-top: 1px solid var(--line); border-radius: 0; font-size: var(--t-xs); line-height: var(--lh-xs); }
   /* The two help lines under the field read as the frame draws them: "Private copy of ..." first, then where the folder came
      from. The markup keeps its order (the phone's), so flex order does it; the 2px under the first line is the second one's,
      whichever that is. */

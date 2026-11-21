@@ -61,6 +61,10 @@ const conversationPollEvery = 5 * time.Second
 // uidemoVMFolders is set only by the uidemo-tagged file; nil in every normal build.
 var uidemoVMFolders func(home string) web.VMFolders
 
+// uidemoScanBases is set only by the uidemo-tagged file: the folders the "Other places" scan
+// reads instead of the usual ones. nil in every normal build.
+var uidemoScanBases func() []string
+
 func main() {
 	args, err := parseArgs(os.Args[1:])
 	if err != nil {
@@ -879,6 +883,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// remove is audited first (storeAudit), so a failed audit saves nothing.
 	wsRoots := wsroots.NewService(dataDir, home, web.RootsAudit(storeAudit), time.Now)
 	api.Roots = wsRoots // a browser Start with add_root adds its folder here
+	if uidemoScanBases != nil {
+		wsRoots.SetScanBases(uidemoScanBases) // nil unless a `-tags uidemo` build asks for it
+	}
 
 	srv := &web.Server{
 		Imports:          bundleImports,

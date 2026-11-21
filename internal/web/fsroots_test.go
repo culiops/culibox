@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -15,12 +16,13 @@ import (
 // nothing else.
 type fakeRoots []string
 
-func (f fakeRoots) Paths() []string                          { return f }
-func (f fakeRoots) Covering(string) string                   { return "" }
-func (f fakeRoots) List() ([]wsroots.Root, error)            { return nil, nil }
-func (f fakeRoots) Add(string, string) (wsroots.Root, error) { return wsroots.Root{}, nil }
-func (f fakeRoots) Remove(string, string) error              { return nil }
-func (f fakeRoots) Touch(string)                             {}
+func (f fakeRoots) Paths() []string                           { return f }
+func (f fakeRoots) Covering(string) string                    { return "" }
+func (f fakeRoots) List() ([]wsroots.Root, error)             { return nil, nil }
+func (f fakeRoots) Add(string, string) (wsroots.Root, error)  { return wsroots.Root{}, nil }
+func (f fakeRoots) Remove(string, string) error               { return nil }
+func (f fakeRoots) Touch(string)                              {}
+func (f fakeRoots) Elsewhere(context.Context) []wsroots.Place { return nil }
 
 // rootsFixture is a resolved home, an extra root outside it and an unrelated
 // third directory, each a fresh temp dir.
