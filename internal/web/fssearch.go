@@ -306,22 +306,11 @@ func (ix *fileIndex) snapshot(k searchKind) ([]indexEntry, bool) {
 	return ix.entries, ix.truncated
 }
 
-// claimBuild marks a build as in flight and reports whether the caller owns it
-// (false: one is already running). Claiming under the lock, BEFORE the goroutine
-// is spawned, is what keeps two requests from both starting a walk.
-func (ix *fileIndex) claimBuild() bool {
-	ix.mu.Lock()
-	defer ix.mu.Unlock()
-	if ix.building {
-		return false
-	}
-	ix.building = true
-	return true
-}
-
-// startBuild is claimBuild for an index that has never built: it also fails once
-// a build has landed, checked under the same lock, so a request that saw "not
-// ready" an instant before the build finished cannot start a second walk.
+// startBuild marks the first build of an index as in flight and reports whether
+// the caller owns it. Claiming under the lock, BEFORE the goroutine is spawned,
+// keeps two requests from both starting a walk; it also fails once a build has
+// landed, checked under the same lock, so a request that saw "not ready" an
+// instant before the build finished cannot start a second walk.
 func (ix *fileIndex) startBuild() bool {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
@@ -332,16 +321,7 @@ func (ix *fileIndex) startBuild() bool {
 	return true
 }
 
-// refresh walks the tree and replaces the cache, unless a build is already in
-// flight. Unlike snapshot's first call it does NOT hold the lock across the
-// walk, so ready() stays answerable while it runs. Run it in a goroutine.
-func (ix *fileIndex) refresh() {
-	if ix.claimBuild() {
-		ix.runBuild()
-	}
-}
-
-// runBuild is the walk of a build the caller has claimed (claimBuild).
+// runBuild is the walk of a build the caller has claimed (startBuild).
 func (ix *fileIndex) runBuild() {
 	// Clearing `building` is deferred so a panic in the walk cannot wedge it on.
 	defer func() {
@@ -733,10 +713,10 @@ func (s *Server) searchIndex() *fileIndex {
 
 // rootIndexes returns the built indexes of the given added roots (never home,
 // never a dropped root: the caller passes the per-request policy's list). A
-// missing index is created and built in the background (refresh, one build per
-// index: it is started only when none is in flight and nothing has built yet;
-// later staleness goes through snapshot's stale-while-rebuild), so a slow disk
-// can never stall the palette. Entries for roots no longer listed are dropped.
+// missing index is created and built in the background (startBuild, then
+// runBuild: one build per index, started only when none is in flight and
+// nothing has built yet; later staleness goes through snapshot's
+// stale-while-rebuild), so a slow disk can never stall the palette. Entries for roots no longer listed are dropped.
 // The result is shorter than roots while any root is still building.
 func (s *Server) rootIndexes(roots []string) []*fileIndex {
 	s.rootIdxMu.Lock()
