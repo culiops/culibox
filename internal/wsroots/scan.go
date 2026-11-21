@@ -28,6 +28,19 @@ type ScanOpts struct {
 	Budget time.Duration
 	// Markers are the entry names that make a folder a project.
 	Markers []string
+	// Skip are folders that are neither entered nor reported (DefaultSkips).
+	// Nil means none here; the Service fills in DefaultSkips for its OS.
+	Skip []string
+}
+
+// DefaultSkips are folders a scan passes over for goos. On darwin that is
+// /opt/homebrew: the package manager's own checkout, which every Apple-silicon
+// Mac would otherwise list.
+func DefaultSkips(goos string) []string {
+	if goos == "darwin" {
+		return []string{"/opt/homebrew"}
+	}
+	return nil
 }
 
 // DefaultScanOpts are the limits of spec 6.8. The markers are the index's
@@ -75,7 +88,13 @@ func Scan(ctx context.Context, bases []string, env Env, o ScanOpts) []Place {
 	for _, m := range o.Markers {
 		markers[m] = true
 	}
-	s := scanner{ctx: ctx, env: env, o: o, markers: markers}
+	s := scanner{ctx: ctx, env: env, o: o, markers: markers, skip: map[string]bool{}}
+	for _, k := range o.Skip {
+		s.skip[filepath.Clean(k)] = true
+		if real, err := filepath.EvalSymlinks(k); err == nil {
+			s.skip[filepath.Clean(real)] = true
+		}
+	}
 	seen := map[string]bool{}
 	for _, b := range bases {
 		if !filepath.IsAbs(b) {
@@ -104,6 +123,7 @@ type scanner struct {
 	env     Env
 	o       ScanOpts
 	markers map[string]bool
+	skip    map[string]bool
 	found   []Place
 }
 
@@ -113,7 +133,7 @@ func (s *scanner) done() bool {
 
 // walk reads dir (at depth below its base) and descends into its folders.
 func (s *scanner) walk(dir string, depth int) {
-	if s.done() || Refusal(dir, s.env) != "" {
+	if s.done() || s.skip[dir] || Refusal(dir, s.env) != "" {
 		return
 	}
 	entries, err := os.ReadDir(dir)

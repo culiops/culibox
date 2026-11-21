@@ -599,3 +599,21 @@ func TestRootsAPIElsewhere(t *testing.T) {
 		t.Fatalf("no places must be [], got %s", w.Body)
 	}
 }
+
+// A device token may read the roots list but never triggers or receives the scan.
+func TestRootsAPIBearerGetDoesNotScan(t *testing.T) {
+	g := newRootsAPIRig(t)
+	spy := &scanSpy{WorkspaceRoots: g.s.Roots, places: []wsroots.Place{{Path: "/srv/api", Label: "api"}}}
+	g.s.Roots = spy
+	w := do(g.s.handleWorkspaceRoots, storeReq("GET", "/api/workspace-roots", "", "", credBearer))
+	v := decodeRoots(t, w)
+	if spy.n != 0 || v.Elsewhere == nil || len(v.Elsewhere) != 0 || !strings.Contains(w.Body.String(), `"elsewhere":[]`) {
+		t.Fatalf("bearer GET: %d scans, body %s", spy.n, w.Body)
+	}
+	if len(v.Roots) != 1 || !v.Roots[0].Always {
+		t.Fatalf("the roots list must still be readable: %+v", v.Roots)
+	}
+	if v := decodeRoots(t, g.roots("GET", "")); len(v.Elsewhere) != 1 || spy.n != 1 {
+		t.Fatalf("a cookie GET must still scan: %+v, %d", v.Elsewhere, spy.n)
+	}
+}

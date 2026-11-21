@@ -61,8 +61,9 @@ func (s *Server) elsewhere(ctx context.Context) []placeRow {
 }
 
 // rootsView is the reply of GET (and of a successful POST or DELETE): home
-// first, then each added root. Only a GET (scan true) runs the "Other places"
-// scan; a write reply carries an empty list, the page keeps the one it has.
+// first, then each added root. Only a GET from the signed-in browser (scan
+// true: a cookie, not a device token) runs the "Other places" scan; any other
+// reply carries an empty list, and the page keeps the one it has.
 func (s *Server) rootsView(ctx context.Context, scan bool) map[string]any {
 	// Home is shown as the resolved spelling Covering and the check use, so the
 	// client sees one spelling of it.
@@ -159,7 +160,7 @@ func (s *Server) handleWorkspaceRoots(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.rootsView(r.Context(), true))
+		writeJSON(w, http.StatusOK, s.rootsView(r.Context(), credKindOf(r) == credCookie))
 	case http.MethodPost, http.MethodDelete:
 		var req struct {
 			Path string `json:"path"`

@@ -164,3 +164,100 @@ func TestElsewhereStaleListIsServedWhileOneRefreshRuns(t *testing.T) {
 		t.Fatalf("%d scans after the refresh, want 2", n)
 	}
 }
+
+// A first scan that hangs (a dead mount) costs the first request its budget; the
+// requests after it get the empty list at once instead of each waiting.
+func TestElsewhereHungFirstScanCostsOneRequest(t *testing.T) {
+	r := newScanRig(t, 50*time.Millisecond)
+	r.setGate(make(chan struct{})) // never released
+	start := time.Now()
+	if got := r.svc.Elsewhere(context.Background()); len(got) != 0 {
+		t.Fatalf("got %v from a hung scan", got)
+	}
+	if d := time.Since(start); d < 40*time.Millisecond || d > 600*time.Millisecond {
+		t.Fatalf("the first request took %v, want about the budget", d)
+	}
+	for i := 0; i < 5; i++ {
+		start = time.Now()
+		if got := r.svc.Elsewhere(context.Background()); len(got) != 0 {
+			t.Fatalf("got %v", got)
+		}
+		if d := time.Since(start); d > 20*time.Millisecond {
+			t.Fatalf("request %d waited %v after the first one timed out", i+2, d)
+		}
+	}
+	if n := r.calls.Load(); n != 1 {
+		t.Fatalf("%d scans, want 1", n)
+	}
+}
+
+// A scan that has run past three budgets is given up on: a new one may start, both
+// for a refresh behind a stale list and for a cold start that published empty.
+func TestElsewhereAbandonsAHungScan(t *testing.T) {
+	const budget = 50 * time.Millisecond
+	t.Run("refresh behind a stale list", func(t *testing.T) {
+		r := newScanRig(t, budget)
+		r.svc.Elsewhere(context.Background()) // fills the cache
+		r.advance(6 * time.Minute)
+		r.setGate(make(chan struct{})) // the refresh hangs
+		r.svc.Elsewhere(context.Background())
+		eventually(t, "the refresh started", func() bool { return r.calls.Load() == 2 })
+		r.advance(2 * budget) // not yet three budgets
+		r.svc.Elsewhere(context.Background())
+		time.Sleep(50 * time.Millisecond)
+		if n := r.calls.Load(); n != 2 {
+			t.Fatalf("%d scans before three budgets passed, want 2", n)
+		}
+		r.advance(2 * budget) // now past three
+		r.svc.Elsewhere(context.Background())
+		eventually(t, "a new scan started after three budgets", func() bool { return r.calls.Load() == 3 })
+	})
+	t.Run("cold start", func(t *testing.T) {
+		r := newScanRig(t, budget)
+		r.setGate(make(chan struct{}))
+		r.svc.Elsewhere(context.Background()) // times out, publishes empty
+		r.advance(6 * time.Minute)            // the empty list is stale
+		r.svc.Elsewhere(context.Background())
+		eventually(t, "a new scan started", func() bool { return r.calls.Load() == 2 })
+	})
+}
+
+// The abandoned scan finishing late must not replace what the newer scan found.
+func TestElsewhereAbandonedScanNeverOverwritesTheCache(t *testing.T) {
+	const budget = 50 * time.Millisecond
+	r := newScanRig(t, budget)
+	zombie := make(chan struct{})
+	var n atomic.Int32
+	r.svc.scanFn = func(context.Context, []string, Env, ScanOpts) []Place {
+		if n.Add(1) == 1 {
+			<-zombie
+			return []Place{{Path: "/srv/old", Label: "old"}}
+		}
+		return []Place{{Path: "/srv/new", Label: "new"}}
+	}
+	r.svc.Elsewhere(context.Background()) // scan 1 hangs; empty is published
+	r.advance(6 * time.Minute)
+	r.svc.Elsewhere(context.Background()) // abandons scan 1, starts scan 2
+	eventually(t, "scan 2's result is served", func() bool {
+		g := r.svc.Elsewhere(context.Background())
+		return len(g) == 1 && g[0].Path == "/srv/new"
+	})
+	close(zombie) // scan 1 finishes late
+	time.Sleep(50 * time.Millisecond)
+	if g := r.svc.Elsewhere(context.Background()); len(g) != 1 || g[0].Path != "/srv/new" {
+		t.Fatalf("the abandoned scan overwrote the cache: %v", g)
+	}
+	// And it did not clear the running state of a newer scan: a stale list still refreshes.
+	r.advance(6 * time.Minute)
+	r.svc.Elsewhere(context.Background())
+	eventually(t, "a refresh after the zombie ended", func() bool { return n.Load() == 3 })
+}
+
+func TestDefaultSkips(t *testing.T) {
+	if got := DefaultSkips("darwin"); len(got) != 1 || got[0] != "/opt/homebrew" {
+		t.Fatalf("darwin: %v", got)
+	}
+	if got := DefaultSkips("linux"); got != nil {
+		t.Fatalf("linux: %v", got)
+	}
+}

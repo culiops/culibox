@@ -219,3 +219,16 @@ func TestDefaultBasesDarwinSkipsBootVolume(t *testing.T) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
+
+func TestScanSkipsTheSkipSet(t *testing.T) {
+	b := resolved(t)
+	mk(t, b, "homebrew/.git/", "homebrew/Library/x/.git/", "keep/.git/", "grp/brew/.git/")
+	got := Scan(context.Background(), []string{b}, Env{}, ScanOpts{Skip: []string{filepath.Join(b, "homebrew"), filepath.Join(b, "grp", "brew")}})
+	if want := []string{filepath.Join(b, "keep")}; !reflect.DeepEqual(paths(got), want) {
+		t.Fatalf("got %v, want %v", paths(got), want)
+	}
+	// With no skip set both are listed.
+	if got := Scan(context.Background(), []string{b}, Env{}, ScanOpts{}); len(got) != 3 {
+		t.Fatalf("without Skip: %v", paths(got))
+	}
+}

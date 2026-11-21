@@ -19,6 +19,15 @@ const MaxRoots = 32
 // touchEvery is the least gap between two last_used writes for one root.
 const touchEvery = time.Hour
 
+// scanAbandonAfter is how many budgets a scan may run before it counts as
+// abandoned (a blocking read on a hung mount cannot be interrupted), so that a
+// new one may start.
+const scanAbandonAfter = 3
+
+// scanWaitMargin is added to the budget a first call waits: Scan's own budget
+// ends first, so a scan that finishes right at the budget is still seen.
+const scanWaitMargin = 100 * time.Millisecond
+
 // elsewhereTTL is how long a scan result is served before a background
 // refresh starts.
 const elsewhereTTL = 5 * time.Minute
@@ -71,6 +80,8 @@ type Service struct {
 	placesAt   time.Time
 	havePlaces bool
 	scanning   chan struct{} // non-nil while a scan runs; closed when it ends
+	scanStart  time.Time     // when the running scan started
+	scanGen    uint64        // bumped when a scan is abandoned: its late result is dropped
 }
 
 // NewService returns a Service over dataDir. home is the user's home; it is
@@ -321,10 +332,14 @@ func (s *Service) SetScanBases(f func() []string) {
 // Elsewhere is the project folders found under the usual places outside home
 // (Scan, DefaultBases). It never makes a caller wait longer than the scan
 // budget (one second): a scan that has not finished by then is left running and
-// its result is served by the next call. A result is served for five minutes;
-// after that the stale list is returned at once while one background scan
-// refreshes it (never more than one at a time). It reads folder names only. It
-// does not drop folders home or a root already reaches: that is the caller's.
+// its result is served when it ends; meanwhile an empty list is served, so a
+// hung mount costs one request one second, not every request. A result is
+// served for five minutes; after that the stale list is returned at once while
+// one background scan refreshes it (never more than one at a time). A scan
+// still running after three budgets is given up on (a read on a hung mount
+// cannot be interrupted): a new one may start and the old one's late result is
+// dropped. It reads folder names only. It does not drop folders home or a root
+// already reaches: that is the caller's.
 func (s *Service) Elsewhere(ctx context.Context) []Place {
 	s.scanMu.Lock()
 	if s.havePlaces && s.now().Sub(s.placesAt) < elsewhereTTL {
@@ -341,15 +356,22 @@ func (s *Service) Elsewhere(ctx context.Context) []Place {
 	budget := s.scanOpts.filled().Budget
 	s.scanMu.Unlock()
 
-	t := time.NewTimer(budget)
+	t := time.NewTimer(budget + scanWaitMargin)
 	defer t.Stop()
+	timedOut := false
 	select {
 	case <-done:
 	case <-t.C:
+		timedOut = true
 	case <-ctx.Done():
 	}
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
+	if timedOut && !s.havePlaces {
+		// Nothing yet and the budget is spent: serve an empty list from now on, so
+		// the next requests do not each wait. The scan's own result replaces it.
+		s.places, s.placesAt, s.havePlaces = nil, s.now(), true
+	}
 	return append([]Place{}, s.places...)
 }
 
@@ -357,10 +379,17 @@ func (s *Service) Elsewhere(ctx context.Context) []Place {
 // the channel that closes when the running one ends. The caller holds s.scanMu.
 func (s *Service) startScanLocked() <-chan struct{} {
 	if s.scanning != nil {
-		return s.scanning
+		if s.now().Sub(s.scanStart) <= scanAbandonAfter*s.scanOpts.filled().Budget {
+			return s.scanning
+		}
+		// Hung: let a new scan start, and never take the old one's result.
+		s.scanGen++
+		s.scanning = nil
 	}
 	done := make(chan struct{})
 	s.scanning = done
+	s.scanStart = s.now()
+	gen := s.scanGen
 	bases := s.scanBases
 	if bases == nil {
 		goos, user := runtime.GOOS, currentUser()
@@ -371,13 +400,18 @@ func (s *Service) startScanLocked() <-chan struct{} {
 		scan = Scan
 	}
 	o := s.scanOpts
+	if o.Skip == nil {
+		o.Skip = DefaultSkips(runtime.GOOS)
+	}
 	env := Env{Home: s.home, DataDir: resolvedOrClean(s.dataDir)}
 	go func() {
 		// The scan outlives the request that started it, bounded by its own budget.
 		res := scan(context.Background(), bases(), env, o)
 		s.scanMu.Lock()
-		s.places, s.placesAt, s.havePlaces = res, s.now(), true
-		s.scanning = nil
+		if gen == s.scanGen {
+			s.places, s.placesAt, s.havePlaces = res, s.now(), true
+			s.scanning = nil
+		}
 		s.scanMu.Unlock()
 		close(done)
 	}()
