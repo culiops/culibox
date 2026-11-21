@@ -114,6 +114,13 @@ func touchesAny(p string, dirs []string) bool {
 // started. One is kept only if scratchRoot accepts it and it is not $HOME, not
 // inside $HOME (already served), not an ancestor of $HOME or of a denied tree.
 func newFsPolicy(home string, roots []string, trees BoxTrees, scratch ...string) (fsPolicy, error) {
+	return newFsPolicyLive(home, roots, nil, trees, scratch...)
+}
+
+func newFsPolicyLive(home string, roots []string, live func(root string) bool, trees BoxTrees, scratch ...string) (fsPolicy, error) {
+	if live == nil {
+		live = rootIsLiveDir
+	}
 	rhome, err := filepath.EvalSymlinks(home)
 	if err != nil {
 		return fsPolicy{}, err
@@ -144,11 +151,8 @@ func newFsPolicy(home string, roots []string, trees BoxTrees, scratch ...string)
 		}
 	}
 	for _, r := range roots {
-		rr, err := filepath.EvalSymlinks(r)
-		if err != nil || rr != filepath.Clean(r) {
-			continue
-		}
-		if fi, err := os.Stat(rr); err != nil || !fi.IsDir() {
+		rr := filepath.Clean(r)
+		if !live(r) {
 			continue
 		}
 		if wsroots.Refusal(rr, wsroots.Env{Home: rhome}) != "" {
@@ -269,18 +273,23 @@ func (p fsPolicy) treeOf(fi os.FileInfo) (denied, contained bool) {
 	return denied, contained
 }
 
-// fsPolicy snapshots the server's boxed trees. A nil BoxTrees means none: every
-// path resolves as a host path.
+// fsPolicy snapshots the server's boxed trees and workspace roots. A nil
+// BoxTrees means none: every path resolves as a host path. Whether each added
+// root is still a live directory comes from s.rootHealth, so a root on a hung
+// mount is dropped instead of stalling the request.
 func (s *Server) fsPolicy() (fsPolicy, error) {
 	var trees BoxTrees
 	if s.BoxTrees != nil {
 		trees = s.BoxTrees()
 	}
 	var roots []string
+	var live func(string) bool
 	if s.Roots != nil {
 		roots = s.Roots.Paths()
+		ok := s.rootHealth.live(roots)
+		live = func(r string) bool { return ok[r] }
 	}
-	return newFsPolicy(s.Home, roots, trees, s.ScratchDirs...)
+	return newFsPolicyLive(s.Home, roots, live, trees, s.ScratchDirs...)
 }
 
 // resolveFs resolves one request path against the server's current boxed trees.

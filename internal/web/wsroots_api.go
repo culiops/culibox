@@ -69,8 +69,13 @@ func (s *Server) rootsView(ctx context.Context, scan bool) map[string]any {
 	// client sees one spelling of it.
 	rows := []rootRow{{Path: resolvedOrClean(s.Home), Always: true, Available: isDir(s.Home)}}
 	list, err := s.Roots.List()
+	paths := make([]string, 0, len(list))
 	for _, r := range list {
-		row := rootRow{Path: r.Path, Available: s.rootAvailable(r.Path)}
+		paths = append(paths, r.Path)
+	}
+	live := s.rootHealth.live(paths)
+	for _, r := range list {
+		row := rootRow{Path: r.Path, Available: live[r.Path] && s.rootAllowed(r.Path)}
 		if !r.Added.IsZero() {
 			a := r.Added
 			row.Added = &a
@@ -97,19 +102,13 @@ func isDir(p string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// rootAvailable is true when the file API would serve this root now: still a
-// directory, not redirected through a symlink since it was added, and not a
-// forbidden folder, CuliBox's own data folder included (a hand-edited file can name one). It mirrors the fs
-// policy's drop rules, so "not available" is what the Files view shows.
-func (s *Server) rootAvailable(path string) bool {
-	if !isDir(path) {
-		return false
-	}
-	real, err := filepath.EvalSymlinks(path)
-	if err != nil || real != filepath.Clean(path) {
-		return false
-	}
-	return wsroots.Refusal(real, wsroots.Env{Home: resolvedOrClean(s.Home), DataDir: resolvedOrClean(s.DataDir)}) == ""
+// rootAllowed is the rest of "the file API would serve this root now", given
+// that the root is live (rootHealth: still a directory, not redirected through
+// a symlink since it was added): not a forbidden folder, CuliBox's own data
+// folder included (a hand-edited file can name one). With liveness it mirrors
+// the fs policy's drop rules, so "not available" is what the Files view shows.
+func (s *Server) rootAllowed(path string) bool {
+	return wsroots.Refusal(filepath.Clean(path), wsroots.Env{Home: resolvedOrClean(s.Home), DataDir: resolvedOrClean(s.DataDir)}) == ""
 }
 
 func resolvedOrClean(p string) string {

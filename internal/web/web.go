@@ -225,6 +225,10 @@ type Server struct {
 	// keyed by root path and dropped once the root is no longer served.
 	rootIdxMu sync.Mutex
 	rootIdx   map[string]*fileIndex
+
+	// rootHealth caches whether each added workspace root is still the
+	// directory it was, off the request path (roothealth.go).
+	rootHealth rootHealth
 }
 
 // QuickShell exposes the verified quick-shell name for startup diagnostics.

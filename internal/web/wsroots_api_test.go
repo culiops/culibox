@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/broker"
@@ -247,6 +248,7 @@ func TestRootsAPICorrupt(t *testing.T) {
 
 func TestRootsListMarksUnavailable(t *testing.T) {
 	g := newRootsAPIRig(t)
+	g.s.rootHealth.ttl = 20 * time.Millisecond
 	gone := realTemp(t)
 	if w := g.roots("POST", `{"path":"`+gone+`"}`); w.Code != 200 {
 		t.Fatal(w.Body)
@@ -254,6 +256,9 @@ func TestRootsListMarksUnavailable(t *testing.T) {
 	if err := os.Remove(gone); err != nil {
 		t.Fatal(err)
 	}
+	// The POST reply checked the root; the next check runs once that answer is
+	// older than the health TTL.
+	time.Sleep(30 * time.Millisecond)
 	v := decodeRoots(t, g.roots("GET", ""))
 	if len(v.Roots) != 2 || v.Roots[1].Available || !v.Roots[0].Available {
 		t.Fatalf("a removed folder must show not available: %+v", v.Roots)
