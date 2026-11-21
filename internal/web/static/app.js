@@ -4448,7 +4448,8 @@ function renderOptions() {
     lbl.textContent = o.label || o.key;
     let ctrl;
     const isMode = o.key === PERM_MODE_KEY;
-    const legacyStart = isMode && legacyKey !== "" && !o.value && (o.choices || []).includes(BYPASS_MODE);
+    // Only a legacy bool that is ON reads as Bypass: the server names the key whatever its value (a stored false included).
+    const legacyStart = isMode && legacyKey !== "" && !!legacyOpt && legacyOpt.value === true && !o.value && (o.choices || []).includes(BYPASS_MODE);
     const startValue = legacyStart ? BYPASS_MODE : (o.value || "");
     const optText = (c) => (isMode ? permModeLabel(c) : c);
     // Desktop: Model sits beside Effort ("Model · effort", spec 5.6) as a select,

@@ -68,7 +68,28 @@ test("a legacy profile renders Permission mode on Bypass, with no checkbox for t
   assert.ok(!("yolo" in o), "the legacy key is never sent");
   // The bypass decisions follow what the seg shows, not what is sent.
   assert.strictEqual(t.run("dialogOptions()").permission_mode, "bypassPermissions");
-  
+});
+
+test("a legacy bool that is FALSE is not Bypass: the enum is offered with nothing picked, and nothing reads as bypass", () => {
+  const off = Object.assign({}, LEGACY, { value: false });
+  const t = page(prof({ legacy_bypass_key: "yolo", options: [off, MODE, CRIT] }), { runtime: "box", clone: true });
+  t.run("renderOptions()");
+  t.run("syncSpawnExtras(false)");
+  assert.ok(seg(t), "the enum is still offered");
+  assert.strictEqual(t.at('[data-key="yolo"]'), null, "the legacy bool still has no control");
+  assert.strictEqual(seg(t).dataset.value, "", "no button pressed");
+  assert.strictEqual(seg(t).dataset.legacy, undefined);
+  assert.doesNotMatch(rowText(seg(t)), /older form/);
+  assert.match(rowText(seg(t)), /Claude Code's default\. On current versions that is Auto\./);
+  assert.strictEqual(t.run("dialogOptions()").permission_mode, "");
+  assert.strictEqual(t.els["spawn-bypass-warn"].hidden, true, "no replies warning");
+  assert.strictEqual(crit(t).disabled, true, "the critical-rm row is dimmed");
+  const o = t.run("getOptions()");
+  assert.strictEqual(o.permission_mode, "");
+  assert.ok(!("yolo" in o), "the legacy key is never sent");
+  segPick(t, "bypassPermissions");
+  assert.strictEqual(t.run("getOptions()").permission_mode, "bypassPermissions", "a pick of Bypass is sent as it is: no legacy default to lean on");
+  assert.strictEqual(t.els["spawn-bypass-warn"].hidden, false);
 });
 
 test("the replies warning shows for an untouched legacy profile and goes when another mode is picked", () => {
