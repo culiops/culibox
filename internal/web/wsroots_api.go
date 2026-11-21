@@ -44,7 +44,9 @@ type rootRow struct {
 // rootsView is the reply of GET (and of a successful POST or DELETE): home
 // first, then each added root.
 func (s *Server) rootsView() map[string]any {
-	rows := []rootRow{{Path: s.Home, Always: true, Available: isDir(s.Home)}}
+	// Home is shown as the resolved spelling Covering and the check use, so the
+	// client sees one spelling of it.
+	rows := []rootRow{{Path: resolvedOrClean(s.Home), Always: true, Available: isDir(s.Home)}}
 	list, err := s.Roots.List()
 	for _, r := range list {
 		row := rootRow{Path: r.Path, Available: s.rootAvailable(r.Path)}

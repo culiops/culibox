@@ -192,6 +192,8 @@ func TestRootsAPIErrorCodes(t *testing.T) {
 	}
 	if w := post(g.home); w.Code != 409 {
 		t.Fatalf("home: %d %s", w.Code, w.Body)
+	} else if code, _ := errCode(t, w); code != "covered" {
+		t.Fatalf("home code %q", code)
 	}
 	for i := 0; i < wsroots.MaxRoots-1; i++ {
 		if w := post(realTemp(t)); w.Code != 200 {
@@ -511,4 +513,21 @@ func realTemp(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// The home row is the resolved home, the spelling Covering and the check use,
+// even when the configured home is reached through a symlink.
+func TestRootsListShowsResolvedHome(t *testing.T) {
+	real := realTemp(t)
+	link := filepath.Join(realTemp(t), "home-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	data := realTemp(t)
+	svc := wsroots.NewService(data, real, RootsAudit(&fakeCredRec{}), nil)
+	s := &Server{Home: link, DataDir: data, Roots: svc}
+	v := decodeRoots(t, do(s.handleWorkspaceRoots, storeReq("GET", "/api/workspace-roots", "", "", credCookie)))
+	if len(v.Roots) != 1 || v.Roots[0].Path != real || !v.Roots[0].Always || !v.Roots[0].Available {
+		t.Fatalf("list = %+v, want the resolved home %s", v.Roots, real)
+	}
 }
