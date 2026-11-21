@@ -67,3 +67,11 @@ func TestArgsBypassPermissionsDelegates(t *testing.T) {
 		t.Fatal("ArgsBypassPermissions does not follow config.ArgsBypass")
 	}
 }
+
+// The built-in permission_mode def (its own choices) counts bypassPermissions.
+func TestBypassesPermissionsBuiltinEnum(t *testing.T) {
+	l := permLauncher(config.BaseClean, map[string]any{"permission_mode": config.BypassMode})
+	if !l.BypassesPermissions(SpawnSpec{Agent: "a"}) {
+		t.Fatal("permission_mode bypassPermissions must count as bypass")
+	}
+}

@@ -678,7 +678,7 @@ func (l *AgentLauncher) HostBlockFor(agent string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("launcher: unknown agent %q", agent)
 	}
-	return config.HostBlock(cfg), nil
+	return config.HostBlockWith(cfg, l.optionDefs), nil
 }
 
 // ContextPathsFor returns a copy of the profile's context_paths, or nil, nil
@@ -846,6 +846,10 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	// ENV part at the static-env layer — BEFORE secrets — so an injected secret
 	// always wins over an option env of the same name.
 	opts := l.mergeOptions(cfg, spec)
+	if !boxed {
+		opts = config.StripBoxOnly(l.optionDefs, opts)
+	}
+	opts = l.claudeGateOptions(cfg, opts)
 	l.applyOptionEnv(opts, env)
 
 	if !acct.IsDefault { // never let the daemon's own login reach another account
@@ -896,6 +900,9 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	if _, ok := env["TERM"]; !ok { // explicit agent.env TERM wins; else default
 		env["TERM"] = "xterm-256color"
 	}
+	if !boxed { // every env layer is written: a host process never sees a box-only name
+		stripBoxOnlyEnv(env)
+	}
 
 	// Agent command + option FLAGS appended to the cmd slice, so for base=login
 	// they pass through shellJoin's single-quoting (never string-concatenated
@@ -937,7 +944,7 @@ func (l *AgentLauncher) mergeOptions(cfg config.AgentConfig, spec SpawnSpec) map
 			merged[k] = v
 		}
 	}
-	return merged
+	return config.SupersedeLegacyBypass(l.optionDefs, merged)
 }
 
 // Reasons an override is dropped. The rejected value is never part of a
@@ -954,7 +961,7 @@ const (
 // no reason, so it is not reported as dropped. reason is "" when ok.
 func (l *AgentLauncher) checkOverride(cfg config.AgentConfig, k string, v any) (ok bool, reason string) {
 	def, known := l.optionDefs[k]
-	if !known || !def.OfferedBy(cfg) {
+	if !known || !config.OptionOffered(def, cfg, l.optionDefs) {
 		return false, dropNotExposed
 	}
 	if s, isStr := v.(string); isStr && s == "" && def.Type == config.OptEnum {
@@ -1019,6 +1026,12 @@ func (l *AgentLauncher) DroppedOptions(spec SpawnSpec) []OptionDrop {
 			out = append(out, OptionDrop{Key: truncateBytes(k, maxDroppedKeyBytes), Reason: reason})
 		}
 	}
+	for _, d := range l.claudeDrops(cfg, l.mergeOptions(cfg, spec)) {
+		if !slices.ContainsFunc(out, func(o OptionDrop) bool { return o.Key == d.Key }) {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	if len(out) > maxDroppedOptions {
 		out = out[:maxDroppedOptions]
 	}
@@ -1086,23 +1099,7 @@ func (l *AgentLauncher) applyOptionEnv(opts map[string]any, env map[string]strin
 // applyOptionFlags appends option-mapped flags to the agent command. Enum values
 // are validated against choices before use.
 func (l *AgentLauncher) applyOptionFlags(opts map[string]any, cmd []string) []string {
-	for _, k := range sortedKeys(opts) {
-		def, ok := l.optionDefs[k]
-		if !ok || def.Flag == "" {
-			continue
-		}
-		switch def.Type {
-		case config.OptBool:
-			if truthy(opts[k]) {
-				cmd = append(cmd, def.Flag)
-			}
-		case config.OptEnum:
-			if s, ok := opts[k].(string); ok && contains(def.Choices, s) {
-				cmd = append(cmd, def.Flag, s)
-			}
-		}
-	}
-	return cmd
+	return append(cmd, config.OptionFlags(l.optionDefs, opts)...)
 }
 
 func sortedKeys(m map[string]any) []string {
@@ -1182,7 +1179,11 @@ func (l *AgentLauncher) argv(cfg config.AgentConfig, cmd []string, pathv string,
 		if strings.Contains(filepath.Base(l.shell), "zsh") {
 			flags = []string{"-l", "-i", "-c"}
 		}
-		return append(append([]string{l.shell}, flags...), "exec "+shellJoin(cmd)), nil
+		var unset strings.Builder // a login shell's rc may set a box-only name: a host process never sees it
+		for _, n := range config.BoxOnlyEnv {
+			unset.WriteString("env -u " + n + " ")
+		}
+		return append(append([]string{l.shell}, flags...), "exec "+unset.String()+shellJoin(cmd)), nil
 	}
 	bin, err := lookPathIn(cmd[0], pathv)
 	if err != nil {
