@@ -1552,6 +1552,57 @@
   .dk-sb-branch[hidden], .dk-sb-saved[hidden] { display: none; }
   .dk-sb-saved { flex: none; color: var(--ok); }
   .dk-sb-r { flex: none; display: flex; gap: 14px; margin-left: auto; }
+  /* A file that is not text (dockfileview.js, #344): the view fills the tab, with its own .dk-sb under it. The status bar's left side is the
+     facts (size, type, pixel size, length), cut at the right end; the right side, the image's zoom controls, keeps its words. */
+  .dk-fv { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .dk-fv:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-fv-body { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+  .dk-fv-facts { flex: 0 1 auto; min-width: 0; display: flex; gap: 14px; overflow: hidden; }
+  .dk-fv-fact { flex: none; }
+  .dk-fv-fact:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .dk-fv-zb {
+    min-width: 18px; height: 18px; padding: 0 4px; border: 0; border-radius: var(--r-chip); background: transparent; color: inherit;
+    font: inherit; cursor: pointer;
+  }
+  .dk-fv-zb:hover:not(:disabled) { background: var(--raise); color: var(--fg); }
+  .dk-fv-zb:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-fv-zb[aria-pressed="true"] { color: var(--fg); }
+  .dk-fv-pct { min-width: 4ch; text-align: center; font-variant-numeric: tabular-nums; }
+  /* The image: a stage that scrolls a canvas of max(picture, stage) size, the picture centred in it (the sizes are the script's), on
+     a faint checkerboard so a transparent picture reads as one. The picture is not shown until it is placed. */
+  .dk-fv-stage {
+    flex: 1; min-height: 0; min-width: 0; overflow: auto; scrollbar-width: thin; background-color: var(--panel);
+    background-image: conic-gradient(var(--bg) 25%, transparent 0 50%, var(--bg) 0 75%, transparent 0); background-size: 16px 16px;
+  }
+  .dk-fv-stage:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .dk-fv-pan { cursor: grab; }
+  .dk-fv-grabbing { cursor: grabbing; user-select: none; }
+  .dk-fv-canvas { position: relative; }
+  .dk-fv-img { position: absolute; display: block; max-width: none; visibility: hidden; user-select: none; -webkit-user-drag: none; }
+  .dk-fv-placed .dk-fv-img { visibility: visible; }
+  /* A picture with no size of its own (an SVG with no width) is shown as the browser draws it, centred and no bigger than the stage. */
+  .dk-fv-unsized .dk-fv-canvas { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+  .dk-fv-unsized .dk-fv-img { position: static; max-width: 100%; max-height: 100%; visibility: visible; }
+  /* Video and audio: the browser's own player. */
+  .dk-fv[data-kind="video"] .dk-fv-body { background: #000; }
+  .dk-fv-media { display: block; }
+  video.dk-fv-media { flex: 1; min-height: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  audio.dk-fv-media { width: calc(100% - 48px); max-width: 640px; margin: auto; }
+  /* The card (mockup 344-mock-fallback): an extension badge beside the name and one meta line, the note under them, the buttons last. */
+  .dk-fv-cardwrap { flex: 1; min-height: 0; overflow: auto; padding: 48px 16px 16px; }
+  .dk-fv-card {
+    box-sizing: border-box; width: 100%; max-width: 300px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px; align-items: start; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card);
+  }
+  .dk-fv-badge {
+    box-sizing: border-box; min-width: 32px; height: 32px; padding: 0 4px; display: flex; align-items: center; justify-content: center;
+    border-radius: var(--r-ctl); background: var(--raise); color: var(--muted); font: var(--w-semibold) var(--t-xs)/1 var(--font-mono);
+  }
+  .dk-fv-head { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .dk-fv-name { color: var(--fg); font: var(--w-semibold) var(--t-md)/var(--lh-md) var(--font-ui); overflow-wrap: anywhere; unicode-bidi: isolate; }
+  .dk-fv-meta { color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui); overflow-wrap: anywhere; }
+  .dk-fv-note { grid-column: 1 / -1; color: var(--muted); font: var(--t-sm)/var(--lh-sm) var(--font-ui); }
+  .dk-fv-acts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
   /* The tab's own actions in the bar (the Code | Changes toggle, Follow and the ⋯): left of Full. */
   .dk-vact { flex: none; display: flex; align-items: center; gap: var(--sp-1); }
   /* Follow (editorfollow.js): an eye and the word, a size down like the toggle beside it. On it wears the accent (mockup B1): a faint

@@ -598,7 +598,7 @@ test("the empty dock's toggle follows the dock's session, and is hidden while th
   assert.equal(f.store["agent-box:dockFollow"], '{"s2":true}', "and a press with no session changes nothing");
 });
 
-test("the tab's actions keep Follow for a file that is not text (an image, a binary) and while it is still being read; the ⋯ and Code | Changes are for text", async () => {
+test("the tab's actions keep Follow for a file that is not text (an image, a binary) and while it is still being read; Code | Changes is for text, the ⋯ for every file once it is read", async () => {
   const f = await setup({ serve: false });
   const { acts } = withHosts(f);
   f.p.setRead({ ok: true, status: 200, data: { kind: "binary", size: 9 } });
@@ -612,7 +612,7 @@ test("the tab's actions keep Follow for a file that is not text (an image, a bin
   assert.ok(bin.inner, "read as a binary file");
   assert.equal(bin.actsEl.hidden, false);
   assert.equal(bin.seg.el.hidden, true);
-  assert.equal(bin.moreBtn.hidden, true);
+  assert.equal(bin.moreBtn.hidden, false, "the ⋯ is the dock's for every file (#344): Copy path, Reveal, Download");
   assert.equal(bin.followBtn.hidden, false);
   assert.ok(acts.children.includes(bin.actsEl), "and they stayed there when the file turned out to be a binary one");
   bin.followBtn.click();

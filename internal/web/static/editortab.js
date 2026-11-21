@@ -6,8 +6,9 @@
 //
 // The editor is always editable: no Edit button, a manual save (Mod+S, the registry's editor.save) guarded by
 // base_version, and a dirty dot in the tab strip while the buffer differs from what was last saved. A file in a
-// session's box, or one the server marks readonly, opens locked. An image or a binary file opens as it always
-// did: the ViewerTab is mounted inside the tab and gets the lifecycle calls (this.inner).
+// session's box, or one the server marks readonly, opens locked. A file that is not text (an image, a video, a PDF, a binary
+// file, a text file too large to read) gets a DockFileView (dockfileview.js) mounted inside the tab, which gets the lifecycle
+// calls (this.inner): the same header (Follow, ⋯, Full), a view and a status bar of its own.
 //
 // There is ONE Monaco editor for the whole dock (dockEditor). A tab owns a model (monaco.editor.createModel) and
 // the view state of the editor over it (cursor, selection, scroll); showing a tab puts its model into the shared
@@ -192,7 +193,7 @@ class EditorTab {
     this.pendingLine = Number.isInteger(o.line) && o.line > 0 ? { line: o.line, col: Number.isInteger(o.col) && o.col > 0 ? o.col : undefined } : null;
     this.pendingChanges = o.view === "changes"; // open in Changes as soon as the model is there (load)
     this.wantFocus = false;
-    this.inner = null;          // a ViewerTab, for an image or a binary file
+    this.inner = null;          // a DockFileView, for a file that is not text
     this.contentSub = null;
     this.optionsSub = null;
     this.savedTimer = null;
@@ -242,8 +243,8 @@ class EditorTab {
 
   // buildActs makes the actions this tab adds to the dock's bar (#dock-acts, left of Full): the Code | Changes toggle (Preview |
   // Source | Changes for a markdown file), Follow (the session's setting, so every tab's says the same: editorfollow.js) and the ⋯
-  // menu. The toggle and the ⋯ are for a file that is read as text (paint); Follow stays for every tab, an image and a binary
-  // file's included, and while a file is still being read.
+  // menu. The toggle is for a file that is read as text; the ⋯ for every file once it is read (a file that is not text has a shorter
+  // menu); Follow stays for every tab, an image and a binary file's included, and while a file is still being read (paint).
   buildActs() {
     this.actsEl = document.createElement("div");
     this.actsEl.className = "dk-vact";
@@ -310,7 +311,7 @@ class EditorTab {
     if (this.disposed) return;
     const ready = !!this.model && !this.inner;
     this.seg.el.hidden = !ready;
-    this.moreBtn.hidden = !ready;
+    this.moreBtn.hidden = !(ready || this.inner); // a view that is not text has its own status bar (DockFileView), so sbEl is for text only
     this.sbEl.hidden = !ready;
     const why = this.readOnlyWhy();
     if (this.roEl.textContent !== why) this.roEl.textContent = why;
@@ -360,13 +361,15 @@ class EditorTab {
     this.bodyEl.replaceChildren(d);
   }
 
-  // load reads the file and, in parallel, loads Monaco (the first tab pays for it; the rest share it). An image is
-  // known by its extension and needs no read. Everything else is decided by what the server says it is (editorMode).
+  // load reads the file and, in parallel, loads Monaco (the first tab pays for it; the rest share it). An image, a video, an audio
+  // file, a PDF and the types with no viewer are known by their extension and need no text read: one small metadata read, then the
+  // view (loadView). Everything else is decided by what the server says it is (editorMode).
   async load() {
     const seq = ++this.loadSeq;
     const first = this.firstLoad;
     this.firstLoad = false;
-    if (IMAGE_EXTS.has(extOf(this.path))) { this.mountInner("image"); return; }
+    const dock = dockKindOf(extOf(this.path));
+    if (dock !== "text") { this.loadView(dock, seq); return; }
     const url = this.box ? boxFileURL(this.box, this.path) : undefined;
     let [res, mon] = await Promise.all([fsRead(this.path, url), loadMonaco().then((m) => ({ m }), (err) => ({ err }))]);
     if (this.disposed || seq !== this.loadSeq) return;
@@ -385,11 +388,13 @@ class EditorTab {
       // is "the fetch never completed", which says nothing about the file.
       if (first && this.restored && res.status === 404) { closeTabEverywhere(this); return; }
       if (alt && res.status === 404 && !this.box) { this.findAlternates(alt, res, altLine); return; }
+      // Text over the limit: the card, with the size and time the server's refusal carries, and Download.
+      if (res.status === 413 && res.data) { this.mountInner("toolarge", res.data); return; }
       this.showReadError(res);
       return;
     }
     const mode = this.gone ? "read" : editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 });
-    if (mode === "image" || mode === "binary") { this.mountInner(mode); return; }
+    if (mode === "image" || mode === "binary") { this.mountInner(mode, res.data); return; }
     if (mon.err) {
       // The next open tries again (loadMonaco forgets a failure), so say what failed rather than only "reload".
       showToast("The editor could not be loaded: " + (mon.err.message || "unknown error"), { error: true });
@@ -421,25 +426,46 @@ class EditorTab {
     this.paint();
   }
 
-  // mountInner opens an image or a binary file as the ViewerTab always did, inside this tab. The dock sees one viewer:
-  // this one forwards the lifecycle and the dock's other calls (dockHolder finds the ViewerTab by its holder).
-  mountInner(mode) {
-    this.mode = mode;
-    const v = new ViewerTab(this.path, {
-      box: this.box || undefined,
-      scroll: this.lastScroll,
-      line: this.pendingLine ? this.pendingLine.line : undefined,
-      col: this.pendingLine ? this.pendingLine.col : undefined,
-      host: this.host,
+  // loadView: a file known by its extension to be an image, a video, an audio file, a PDF or a type with no viewer. The metadata read
+  // (size, modified time) is the only request; one that failed (null) still mounts the view, which leaves those facts out.
+  async loadView(kind, seq) {
+    const meta = await this.fetchMeta();
+    if (this.disposed || seq !== this.loadSeq) return;
+    this.mountInner(kind, meta);
+  }
+
+  // fetchMeta: GET ...&meta=1 for this file ({kind, size, readonly, mtime}, no content), or null when it did not answer. The view asks
+  // again when its tab is shown again (DockFileView.refresh). A text file over the limit answers 413 {error, size, mtime}: that carries
+  // the facts a too-large card shows, so it counts as meta too.
+  async fetchMeta() {
+    const res = await fsRead(this.path, editorSyncMetaURL(this));
+    const d = res.data && typeof res.data === "object" ? res.data : null;
+    if (!d) return null;
+    if (res.ok) return d;
+    return res.status === 413 && typeof d.size === "number" && typeof d.mtime === "number" ? d : null;
+  }
+
+  // mountInner opens a file that is not text inside this tab: `kind` is image | video | audio | pdf | card | binary | toolarge, `meta`
+  // what the server said of the file ({size, mtime}) or null. The dock sees one viewer: this one forwards the lifecycle and the
+  // dock's other calls (dockHolder finds the view by its holder). Only an image has the Image | Changes mode (imagediff.js).
+  mountInner(kind, meta) {
+    this.mode = kind === "image" ? "image" : "binary";
+    const v = new DockFileView({
+      path: this.path,
+      box: this.box,
+      kind,
+      meta: meta ? { size: meta.size, mtime: meta.mtime } : null,
+      download: () => this.download(),
+      fetchMeta: () => this.fetchMeta(),
     });
     v.onUpdate = () => this.changed();
     this.inner = v;
     this.pendingLine = null;
     this.el.replaceChildren(v.el);
     if (this.attached) { v.onShow(); v.onAttach(); }
-    this.changed(); // the viewer has its own toolbar: the bar keeps only Follow (and, for an image git lists, Image | Changes: imagediff.js)
+    this.changed(); // the view has its own status bar: the dock's bar keeps Follow, the ⋯ (and, for an image git lists, Image | Changes: imagediff.js)
     // A D row, or a badge, asked for the Changes view: an image's is the comparer (a deleted one has only its old side).
-    if (mode === "image" && this.pendingChanges) { this.pendingChanges = false; editorImageSet(this, true); }
+    if (kind === "image" && this.pendingChanges) { this.pendingChanges = false; editorImageSet(this, true); }
   }
 
   // findAlternates (#53): the first read of a relative terminal link was a 404. Look for the same repo-relative path
@@ -791,6 +817,7 @@ class EditorTab {
   }
 
   // openMenu: Copy path, Copy relative path, Reveal in tree, Download, Wrap lines (Alt+Z; in Changes Wrap diff and Line numbers), Font size, Copy contents.
+  // A file that is not text has only the first four (and a PDF, Open in new tab): nothing in it is for an editor.
   // The kit's menu, as the explorer's ⋯ is; a second press on the ⋯ closes it.
   openMenu() {
     const more = this.moreBtn;
@@ -823,20 +850,18 @@ class EditorTab {
       return row;
     };
     // In Changes the view has its own two: Wrap diff (separate from the editor's wrap, so Wrap lines has nothing to say there) and Line numbers.
-    const viewRows = this.diff
+    const viewRows = () => this.diff
       ? [check("Wrap diff", viewerPrefs.getDiffWrap(), () => diffWrapToggle(), "editor.wrap"), check("Line numbers", dgLineNumbers, () => diffLineNumbersToggle())]
       : [check("Wrap lines", viewerPrefs.getWrap(), () => toggleViewerWrap(), "editor.wrap")];
-    const nodes = [
+    const common = [
       item("Copy path", "copy", () => this.copyPath("abs")),
       item("Copy relative path", "copy", () => this.copyPath("rel"), rel.ok, rel.title),
       item("Reveal in tree", "files", () => this.revealInTree(), reveal.ok, reveal.title),
       item("Download", "download", () => this.download()),
-      kitMenuSep(),
-      ...viewRows,
-      this.fontRow(),
-      kitMenuSep(),
-      item("Copy contents", "copy", () => this.copyContents()),
     ];
+    const nodes = this.inner
+      ? (this.inner.openable ? [...common, kitMenuSep(), item("Open in new tab", "", () => this.inner.open())] : common)
+      : [...common, kitMenuSep(), ...viewRows(), this.fontRow(), kitMenuSep(), item("Copy contents", "copy", () => this.copyContents())];
     ftShowMenu(more, nodes, false, "File actions");
     const first = menu.querySelector(".menu-item");
     if (first) first.focus();
