@@ -11,6 +11,9 @@
 //
 // Loaded as a classic script: these top-level names are shared globals, so each helper is prefixed dfv.
 
+// The card's badge for the types whose extension is too long or too cryptic in four characters.
+const DFV_BADGES = { sqlite: "DB", sqlite3: "DB", db: "DB", ipynb: "NB" };
+
 // The raw bytes of the file, or a request about it, from the same route a read of it uses (a box file has its own).
 function dfvURL(box, path, extra) {
   return (box ? boxFileURL(box, path) : "/api/fs/read?path=" + encodeURIComponent(path)) + (extra || "");
@@ -102,9 +105,16 @@ class DockFileView {
     if (this.onUpdate) this.onUpdate();
   }
 
+  // badgeText: the card's badge. A database and a notebook have a short word of their own (the long extensions read as broken in four
+  // characters); any other type is its extension, upper-cased, four characters at most.
+  badgeText(binary) {
+    if (!this.ext) return binary ? "BIN" : "FILE";
+    return DFV_BADGES[this.ext.toLowerCase()] || this.ext.toUpperCase().slice(0, 4);
+  }
+
   buildCard() {
     const binary = this.kind === "binary";
-    const badge = dfvEl("div", "dk-fv-badge", this.ext ? this.ext.toUpperCase().slice(0, 4) : (binary ? "BIN" : "FILE"));
+    const badge = dfvEl("div", "dk-fv-badge", this.badgeText(binary));
     badge.setAttribute("aria-hidden", "true");
     const name = dfvEl("div", "dk-fv-name", this.name);
     name.title = this.name;
@@ -385,6 +395,8 @@ class DockFileView {
     // Drag pans, when there is more picture than view.
     stage.addEventListener("pointerdown", (e) => {
       if (e.button !== 0 || !stage.classList.contains("dk-fv-pan")) return;
+      // Chrome fires pointerdown on the stage for a press on its own scrollbar: that is the scrollbar's, not a pan.
+      if (e.offsetX >= stage.clientWidth || e.offsetY >= stage.clientHeight) return;
       this.drag = { x: e.clientX, y: e.clientY, left: stage.scrollLeft, top: stage.scrollTop, id: e.pointerId };
       stage.setPointerCapture(e.pointerId);
       stage.classList.add("dk-fv-grabbing");

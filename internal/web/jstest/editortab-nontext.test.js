@@ -281,3 +281,31 @@ test("the tab keeps the toolbarApi the dock calls, the view has none, and the ta
   tab.applyWrap();
   tab.revealLine(4, 1);
 });
+
+test("a too-large card that is shown again after its file grew shows the new size and time (the 413 of the metadata read counts as meta)", async () => {
+  const p = page();
+  const MB = 1024 * 1024;
+  p.setRead({ ok: false, status: 413, data: { error: "file too large to preview", size: 3 * MB, mtime: 1700000000000 } });
+  const tab = await p.open("/p/big.log");
+  assert.equal(tab.inner.kind, "toolarge");
+  assert.ok(tab.inner.el.querySelector(".dk-fv-meta").textContent.startsWith("LOG file · 3.0 MB"));
+  tab.onHide();
+  p.setRead({ ok: false, status: 413, data: { error: "file too large to preview", size: 5 * MB, mtime: 1700000060000 } });
+  tab.onAttach();
+  await WAIT(p);
+  assert.equal(p.metas().length, 1, "the refresh asked with meta=1");
+  assert.equal(tab.inner.meta.size, 5 * MB);
+  assert.equal(tab.inner.meta.mtime, 1700000060000);
+  assert.ok(tab.inner.el.querySelector(".dk-fv-meta").textContent.startsWith("LOG file · 5.0 MB"));
+  // a 413 without numbers, or any other failure, still says nothing
+  tab.onHide();
+  p.setRead({ ok: false, status: 413, data: { error: "x" } });
+  tab.onAttach();
+  await WAIT(p);
+  assert.equal(tab.inner.meta.size, 5 * MB);
+  p.setRead({ ok: false, status: 500, data: { error: "boom", size: 9, mtime: 1700000099999 } });
+  tab.onHide();
+  tab.onAttach();
+  await WAIT(p);
+  assert.equal(tab.inner.meta.size, 5 * MB);
+});

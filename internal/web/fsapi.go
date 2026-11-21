@@ -231,11 +231,11 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 
 // serveFsFile writes the response for an already-opened regular file: raw
 // download, raw image, raw video / audio / PDF on raw=1, or the text / binary /
-// too-large JSON preview. It is
-// the shared tail of /api/fs/read and the box file endpoint, so the two cannot
-// drift. name is the file's base name (it picks the extension and the download
-// filename); the caller has already authorised and opened f and closes it.
-// readOnly marks the JSON preview so the viewer offers no Edit.
+// too-large JSON preview. It is the shared tail of /api/fs/read and the box
+// file endpoint, so the two cannot drift. name is the file's base name (it
+// picks the extension and the download filename); the caller has already
+// authorised and opened f and closes it. readOnly marks the JSON preview so
+// the viewer offers no Edit.
 //
 // Every JSON body carries mtime (Unix ms), and the 413 carries {error, size, mtime},
 // so a header can show how big and how old a file is without reading it.

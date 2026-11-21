@@ -68,7 +68,7 @@ test("a card shows a badge, the name, a meta line, the note and Download; Downlo
   const p = page();
   const mtime = new Date(2020, 0, 2, 3, 4).getTime();
   const v = p.make({ path: "/p/data/app.sqlite", kind: "card", meta: { size: 3.4 * 1024 * 1024, mtime } });
-  assert.equal(text(v, ".dk-fv-badge"), "SQLI", "the extension in capitals, at most 4 characters");
+  assert.equal(text(v, ".dk-fv-badge"), "DB", "a database is DB");
   assert.equal(text(v, ".dk-fv-name"), "app.sqlite");
   assert.equal(text(v, ".dk-fv-meta"), "SQLite database · 3.4 MB · modified 2020-01-02 03:04");
   assert.equal(text(v, ".dk-fv-note"), "CuliBox has no viewer for this type.");
@@ -560,4 +560,33 @@ test("the interface EditorTab calls on its inner viewer: all there, the ones tha
   v.dispose();
   assert.equal(p.ros[0].gone, true);
   v.onHide(); // after a dispose, harmless
+});
+
+test("the card's badge says DB for a database and NB for a notebook; any other type is its extension, 4 characters at most", () => {
+  const p = page();
+  for (const [file, badge] of [
+    ["/p/a.sqlite", "DB"], ["/p/a.sqlite3", "DB"], ["/p/a.db", "DB"], ["/p/A.SQLITE", "DB"], ["/p/n.ipynb", "NB"],
+    ["/p/a.zip", "ZIP"], ["/p/a.epub", "EPUB"], ["/p/a.docx", "DOCX"], ["/p/a.xlsm", "XLSM"],
+  ]) {
+    const v = p.make({ path: file, kind: "card", meta: { size: 1, mtime: 1 } });
+    assert.equal(text(v, ".dk-fv-badge"), badge, file);
+  }
+});
+
+test("a press on the stage's own scrollbar does not pan: no capture, no drag", () => {
+  const p = page();
+  const v = image(p);
+  press(btn(v, "one"));
+  v.stage.scrollLeft = 500; v.stage.scrollTop = 400;
+  // the stage is 800 x 600: an offset at or past that is the scrollbar gutter
+  v.stage.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 9, clientX: 795, clientY: 100, offsetX: 805, offsetY: 100 });
+  assert.equal(v.stage.captured, undefined);
+  assert.equal(v.drag, null);
+  assert.ok(!v.stage.classList.contains("dk-fv-grabbing"));
+  v.stage.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 9, clientX: 100, clientY: 595, offsetX: 100, offsetY: 600 });
+  assert.equal(v.stage.captured, undefined);
+  assert.equal(v.drag, null);
+  // a press inside the picture's area still pans
+  v.stage.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 9, clientX: 100, clientY: 100, offsetX: 100, offsetY: 100 });
+  assert.equal(v.stage.captured, 9);
 });

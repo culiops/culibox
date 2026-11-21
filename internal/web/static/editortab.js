@@ -435,10 +435,14 @@ class EditorTab {
   }
 
   // fetchMeta: GET ...&meta=1 for this file ({kind, size, readonly, mtime}, no content), or null when it did not answer. The view asks
-  // again when its tab is shown again (DockFileView.refresh).
+  // again when its tab is shown again (DockFileView.refresh). A text file over the limit answers 413 {error, size, mtime}: that carries
+  // the facts a too-large card shows, so it counts as meta too.
   async fetchMeta() {
     const res = await fsRead(this.path, editorSyncMetaURL(this));
-    return res.ok && res.data && typeof res.data === "object" ? res.data : null;
+    const d = res.data && typeof res.data === "object" ? res.data : null;
+    if (!d) return null;
+    if (res.ok) return d;
+    return res.status === 413 && typeof d.size === "number" && typeof d.mtime === "number" ? d : null;
   }
 
   // mountInner opens a file that is not text inside this tab: `kind` is image | video | audio | pdf | card | binary | toolarge, `meta`
