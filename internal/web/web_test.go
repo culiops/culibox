@@ -14,6 +14,7 @@ import (
 	"github.com/culiops/culibox/internal/auth"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/linktrust"
 )
 
 // issueCookie ensures s has a Session and returns a valid session cookie for it.
@@ -60,7 +61,8 @@ func TestWSRouteRejectsAnonAcceptsCred(t *testing.T) {
 
 func TestProtectedRoutesGatedAndRegistered(t *testing.T) {
 	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
-		Profiles: NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})}
+		LinkTrust: linktrust.NewService(t.TempDir(), nil, nil),
+		Profiles:  NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})}
 	ck := issueCookie(t, s)
 	h := s.Handler()
 
@@ -101,6 +103,9 @@ func TestProtectedRoutesGatedAndRegistered(t *testing.T) {
 		{"GET", "/api/fs/delete", http.StatusMethodNotAllowed},
 		{"POST", "/api/bugreport", http.StatusServiceUnavailable}, // no builder wired
 		{"GET", "/api/bugreport", http.StatusMethodNotAllowed},
+		{"GET", "/api/link-trust", http.StatusOK},
+		{"POST", "/api/link-trust", http.StatusForbidden}, // no same-origin header: browserOnly
+		{"PUT", "/api/link-trust", http.StatusForbidden},
 	} {
 		rec = httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(probe.method, probe.path, nil))

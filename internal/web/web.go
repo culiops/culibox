@@ -123,6 +123,9 @@ type Server struct {
 	Roots WorkspaceRoots
 	// DataDir is CuliBox's data directory; the workspace check refuses it as a root.
 	DataDir string
+	// LinkTrust is the per-person list of hosts whose agent links open without
+	// the confirm dialog (#348). Nil → no /api/link-trust route.
+	LinkTrust LinkTrust
 
 	// ScratchDirs are candidate Claude Code temp folders (claude-<uid>), from
 	// ScratchCandidates. The fs API reads an accepted one read-only.
@@ -382,6 +385,9 @@ func (s *Server) Handler() http.Handler {
 	if s.Roots != nil {
 		protected.HandleFunc("/api/workspace-roots", s.handleWorkspaceRoots)
 		protected.HandleFunc("/api/workspace/check", s.handleWorkspaceCheck)
+	}
+	if s.LinkTrust != nil {
+		protected.HandleFunc("/api/link-trust", s.handleLinkTrust)
 	}
 	protected.HandleFunc("/api/fs/list", s.handleFsList)
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)
