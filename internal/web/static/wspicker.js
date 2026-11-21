@@ -3,7 +3,7 @@
 // The workspace folder picker, one factory for every place a folder is chosen: the New
 // session dialog's Workspace field and the profile page's Workspace block.
 //
-//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, openOnClick, openOnType, reanchor, inline, lastUsed, idleText })
+//   createWsPicker({ input, list, onPick, onNote, onCheck, checkOn, keepEsc, openOnFocus, openOnClick, openOnType, reanchor, inline, lastUsed, idleText })
 //     -> { value, set, open, close, destroy, isOpen, highlighted, settle, refresh, showIdleNote }
 //
 // It is a combobox on an <input> and its listbox <div>: the same backend as dirpicker.js's
@@ -50,11 +50,62 @@
 // trailing "Last used"), by reordering rows the server returned (pinLastUsed). idleText(count): the steady-state caption
 // instead of spawnWsIdleNote's (New session names where the field's value came from).
 // filter(path): optional; false drops a row from every list (typed paths are not filtered).
+// onCheck(check): optional. When set (and checkOn(), if given, says yes), the folder in the field is asked of
+// GET /api/workspace/check (typed paths 250 ms after the last key; picks and set() at once) and onCheck gets the
+// answer, or null while there is none (the field changed, is empty or relative, or the server could not say). The caller
+// draws it with wsCheckLine below. A pure existence check on one path, so nothing is listed.
 //
 // Classic script: the helpers above are dirpicker.js's, showToast is shell.js's and
 // workspacesCache is app.js's, all read at call time.
 
-const WSP_DEBOUNCE_MS = 120, WSP_FETCH_MS = 4000;
+const WSP_DEBOUNCE_MS = 120, WSP_FETCH_MS = 4000, WSP_CHECK_MS = 250;
+
+// wsCheckLine: the ONE line under the Workspace field from a /api/workspace/check answer (spec 6.4), and `tier`
+// ("box" or "host"), the tier the session would run on. {kind: "none"|"info"|"warn"|"error", text, share}: share asks the
+// caller for the "Share this folder…" button (the box VM cannot see add_root_path). In order:
+//   missing -> error; not a directory -> error; refused -> warn (an amber line: the folder cannot become a root);
+//   would_add -> info, naming the folder (add_root_path, the repo top when the folder is inside a repo);
+//   then, when the VM cannot see the folder, the share sentence is added;
+//   a folder already under a root says nothing, unless the box tier is chosen and the box would refuse it: warn.
+// A covered folder the VM cannot see says nothing on the host tier: the host session never needs the VM's view.
+function wsCheckLine(check, tier) {
+  const none = { kind: "none", text: "", share: false };
+  const c = check && typeof check === "object" ? check : null;
+  if (!c) return none;
+  const path = c.path || "";
+  if (!c.exists) return { kind: "error", text: "No such file or directory: " + path, share: false };
+  if (!c.is_dir) return { kind: "error", text: "Not a directory: " + path, share: false };
+  const where = c.add_root_path || path;
+  if (c.refused) {
+    return {
+      kind: "warn", share: false,
+      text: "CuliBox won't open " + where + " in Files (" + c.refused + "). A host session can still run here; a box can't.",
+    };
+  }
+  const boxBad = tier === "box" && !!c.box && c.box.ok === false;
+  const unseen = c.vm_shared === false && (c.would_add === true || boxBad);
+  let text = "";
+  if (c.would_add) {
+    text = "Starting here also lets CuliBox's Files, git and search open " + where + ".";
+    if (where !== path) text += " (the repo this folder is in)";
+  }
+  if (unseen) {
+    text += (text ? " " : "") + "The box VM can't see " + where + ", so git status and boxes won't work there.";
+  } else if (boxBad) {
+    const why = String((c.box && c.box.reason) || "").trim();
+    if (why) text += (text ? " " : "") + why + (/[.!?]$/.test(why) ? "" : ".");
+  }
+  if (text === "") return none;
+  return { kind: boxBad ? "warn" : "info", text, share: unseen };
+}
+
+// wsCheckBlock: why Start must wait for this answer, "" when it need not: the box tier is chosen and the box
+// would refuse the folder (a Mac's VM cannot see it: share it, or switch to host). The server refuses it too; this says so first.
+function wsCheckBlock(check, tier) {
+  const c = check && typeof check === "object" ? check : null;
+  if (!c || !c.exists || !c.is_dir || tier !== "box" || !c.box || c.box.ok !== false) return "";
+  return wsCheckLine(c, tier).text;
+}
 // Each picker's option ids start with its own number: aria-activedescendant must name ONE element on the page.
 let wspSerial = 0;
 
@@ -66,6 +117,8 @@ function createWsPicker(opts) {
   const uid = "wsp" + ++wspSerial;
   let shown = [], active = -1, seq = 0, timer = null, abort = null, cwd = "";
   let pointerGesture = false, gone = false;
+  // The folder check (onCheck): its own timer and sequence, so a pick that closes the list never cancels it.
+  let checkTimer = null, checkSeq = 0;
 
   // Every listener goes through here so destroy() can take them all away.
   const bound = [];
@@ -94,6 +147,34 @@ function createWsPicker(opts) {
   function set(path) {
     cwd = path || "";
     input.value = cwd;
+    checkPath(cwd, 0);
+  }
+
+  const checking = () => typeof o.onCheck === "function" && (typeof o.checkOn !== "function" || o.checkOn() === true);
+  function checkCancel() {
+    if (checkTimer) { clearTimeout(checkTimer); checkTimer = null; }
+    checkSeq++;
+  }
+  // checkPath: ask the server what Start in `path` would do, `delay` ms from now (0: now). The old answer goes at once: it
+  // was about another folder. A relative or empty path has no answer. The newest ask wins.
+  function checkPath(path, delay) {
+    checkCancel();
+    if (!checking()) return;
+    o.onCheck(null);
+    if (!path || path.charAt(0) !== "/") return;
+    const mine = checkSeq;
+    const run = async () => {
+      checkTimer = null;
+      let data = null;
+      try {
+        const res = await fetch("/api/workspace/check?path=" + encodeURIComponent(path));
+        if (res.ok) data = await res.json();
+      } catch (_) { /* no answer: no line */ }
+      if (gone || mine !== checkSeq || !data) return;
+      o.onCheck(data);
+    };
+    if (delay > 0) checkTimer = setTimeout(run, delay);
+    else run();
   }
 
   function setOpen(show) {
@@ -333,9 +414,15 @@ function createWsPicker(opts) {
       showToast("Not a directory: " + path, { error: true });
       return;
     }
+    // 403: outside every workspace root. Not an error any more: Start adds the folder as a root, and the check
+    // line under the field says so (or why not). The typed path is already the value.
+    if (res.status === 403) {
+      close();
+      checkPath(path, 0);
+      return;
+    }
     showToast(
       res.status === 404 ? "No such file or directory: " + path :
-      res.status === 403 ? "That path is outside your home directory" :
       "Could not read " + path,
       { error: true });
   }
@@ -356,6 +443,7 @@ function createWsPicker(opts) {
   function destroy() {
     if (gone) return;
     close();
+    checkCancel();
     gone = true;
     for (const [target, type, fn, capture] of bound.splice(0)) target.removeEventListener(type, fn, capture);
   }
@@ -370,6 +458,9 @@ function createWsPicker(opts) {
     else if (c.mode === "empty") cwd = "";
     if (typeof o.openOnType === "function" && !o.openOnType()) close(); // an on-demand list closes as the user types: it never covers the field message
     else query(input.value);
+    // A typed path is asked about after a pause; a fuzzy query leaves the value, and so its line, alone.
+    if (c.mode === "path") checkPath(c.value, WSP_CHECK_MS);
+    else if (c.mode === "empty") checkPath("", 0);
     if (cwd !== before) onPick(cwd);
   });
   // Mirrors dirpicker.js's mousedown/focus/click choreography verbatim (same pure functions, same measured
@@ -419,4 +510,8 @@ function createWsPicker(opts) {
   if (o.reanchor === true) on(document, "scroll", (e) => { if (!list.hidden && !list.contains(e.target)) setOpen(true); }, true);
 
   return { value, set, open, close, destroy, isOpen: () => !list.hidden, highlighted: () => active >= 0, settle, refresh, showIdleNote };
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { createWsPicker, wsCheckLine, wsCheckBlock };
 }

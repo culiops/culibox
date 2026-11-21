@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { treeFollowTarget, rootableCwd } = require("../static/filetree.js");
+const { treeFollowTarget, rootableCwd, insideAnyRoot } = require("../static/filetree.js");
 
 // Every case passes HOME explicitly. treeFollowTarget also reads window.HOME_DIR
 // when the argument is omitted (the shortPath/relativeTo convention in
@@ -139,4 +139,57 @@ test("rootableCwd: a session cwd is a root only inside $HOME (the drawer must no
   assert.strictEqual(rootableCwd("/home/username", HOME), false);
   assert.strictEqual(rootableCwd("", HOME), false);
   assert.strictEqual(rootableCwd(undefined, HOME), false);
+});
+
+// #343: the tree follows every workspace root, not only home. `roots` is an array (home first); a string is
+// still one root, for callers that pass home.
+const ROOTS = ["/home/u", "/srv/code"];
+
+test("treeFollowTarget with a roots array accepts a cwd or a viewer file under any root and rejects the rest", () => {
+  assert.deepStrictEqual(treeFollowTarget(term("s1", "/srv/code/api"), ROOTS), { root: "/srv/code/api", key: "sess:s1" });
+  assert.deepStrictEqual(treeFollowTarget(term("s1", "/srv/code"), ROOTS), { root: "/srv/code", key: "sess:s1" });
+  assert.deepStrictEqual(treeFollowTarget(viewer("/srv/code/api/main.go"), ROOTS), { root: "/srv/code/api", key: "view:/srv/code/api" });
+  assert.deepStrictEqual(treeFollowTarget(term("s1", "/home/u/x"), ROOTS), { root: "/home/u/x", key: "sess:s1" });
+  assert.strictEqual(treeFollowTarget(term("s1", "/opt/x"), ROOTS), null);
+  assert.strictEqual(treeFollowTarget(viewer("/opt/x/a.md"), ROOTS), null);
+  // Whole components: /srv/code2 is not under /srv/code.
+  assert.strictEqual(treeFollowTarget(term("s1", "/srv/code2"), ROOTS), null);
+  assert.strictEqual(treeFollowTarget(viewer("/srv/code2/a.md"), ROOTS), null);
+  // The agent's worktree outside every root falls back to the spawn cwd, as before.
+  assert.deepStrictEqual(treeFollowTarget(wterm("s1", "/srv/code/repo", "/opt/wt"), ROOTS), { root: "/srv/code/repo", key: "sess:s1" });
+  assert.deepStrictEqual(treeFollowTarget(wterm("s1", "/srv/code/repo", "/srv/code/repo/.claude/worktrees/w"), ROOTS),
+    { root: "/srv/code/repo/.claude/worktrees/w", key: "sess:s1@/srv/code/repo/.claude/worktrees/w" });
+});
+
+test("a string is one root, an empty array knows no root yet (allows), and a trailing slash does not matter", () => {
+  assert.deepStrictEqual(treeFollowTarget(term("s1", "/home/u/x"), "/home/u"), { root: "/home/u/x", key: "sess:s1" });
+  assert.strictEqual(treeFollowTarget(term("s1", "/srv/code"), "/home/u"), null);
+  assert.deepStrictEqual(treeFollowTarget(viewer("/etc/a.conf"), []), { root: "/etc", key: "view:/etc" });
+  assert.deepStrictEqual(treeFollowTarget(term("s1", "/srv/code/x"), ["/srv/code/"]), { root: "/srv/code/x", key: "sess:s1" });
+  assert.strictEqual(insideAnyRoot("/srv/code/x", ["", "/home/u"]), false, "an empty entry is no root");
+});
+
+test("rootableCwd with a roots array", () => {
+  assert.strictEqual(rootableCwd("/srv/code/api", ROOTS), true);
+  assert.strictEqual(rootableCwd("/home/u", ROOTS), true);
+  assert.strictEqual(rootableCwd("/opt/x", ROOTS), false);
+  assert.strictEqual(rootableCwd("", ROOTS), false);
+});
+
+test("with no argument the page's window.WORKSPACE_ROOTS and HOME_DIR decide; home's own spelling still counts", () => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, "window");
+  try {
+    globalThis.window = { WORKSPACE_ROOTS: ["/data/u", "/srv/code"], HOME_DIR: "/home/u" };
+    assert.strictEqual(rootableCwd("/srv/code/x"), true);
+    assert.strictEqual(rootableCwd("/data/u/x"), true);
+    assert.strictEqual(rootableCwd("/home/u/x"), true, "HOME_DIR is the spelling session paths use when home is a symlink");
+    assert.strictEqual(rootableCwd("/opt/x"), false);
+    globalThis.window = { HOME_DIR: "/home/u" }; // roots not loaded yet: home alone, as before
+    assert.strictEqual(rootableCwd("/srv/code/x"), false);
+    assert.strictEqual(rootableCwd("/home/u/x"), true);
+    globalThis.window = {}; // nothing known: allowed
+    assert.strictEqual(rootableCwd("/anything"), true);
+  } finally {
+    if (had) Object.defineProperty(globalThis, "window", had); else delete globalThis.window;
+  }
 });

@@ -489,3 +489,27 @@ test("source pin: only the newest root load sets the toolbar", () => {
   assert.ok(load.indexOf("ftApplyReadOnly(", gate) > gate, "the toolbar is set after the staleness check");
   assert.ok(load.slice(0, gate).indexOf("ftApplyReadOnly(") < 0, "not before it");
 });
+
+// #343: loadWorkspaceRoots feeds window.WORKSPACE_ROOTS, which the follow rules read.
+test("loadWorkspaceRoots keeps the available roots' paths, home first, and keeps the old list on a failure", async () => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const hadApi = Object.getOwnPropertyDescriptor(globalThis, "api");
+  try {
+    globalThis.window = { HOME_DIR: "/home/u" };
+    globalThis.api = async (u) => {
+      assert.strictEqual(u, "/api/workspace-roots");
+      return { roots: [{ path: "/home/u", always: true, available: true }, { path: "/srv/code", available: true }, { path: "/mnt/gone", available: false }], elsewhere: [], corrupt: false };
+    };
+    await FT.loadWorkspaceRoots();
+    assert.deepStrictEqual(globalThis.window.WORKSPACE_ROOTS, ["/home/u", "/srv/code"]);
+    globalThis.api = async () => { throw new Error("404"); };
+    await FT.loadWorkspaceRoots();
+    assert.deepStrictEqual(globalThis.window.WORKSPACE_ROOTS, ["/home/u", "/srv/code"], "a failed read changes nothing");
+    globalThis.api = async () => ({ error: "odd" }); // not the roots shape
+    await FT.loadWorkspaceRoots();
+    assert.deepStrictEqual(globalThis.window.WORKSPACE_ROOTS, ["/home/u", "/srv/code"]);
+  } finally {
+    if (had) Object.defineProperty(globalThis, "window", had); else delete globalThis.window;
+    if (hadApi) Object.defineProperty(globalThis, "api", hadApi); else delete globalThis.api;
+  }
+});

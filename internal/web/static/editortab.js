@@ -798,7 +798,7 @@ class EditorTab {
     if (!menu || typeof ftShowMenu !== "function") return;
     if (more.getAttribute("aria-expanded") === "true") { closeRowMenu(true); return; }
     const rel = relativeAvail(this, typeof ftRoot === "function" ? ftRoot() : "");
-    const reveal = revealable(this, window.HOME_DIR || "");
+    const reveal = revealable(this);
     // A row that cannot act stays in the menu, aria-disabled with its reason as the title (the arrow keys step over it).
     const item = (label, icon, run, can, why) => {
       const b = kitMenuButton(label, icon, false, () => {

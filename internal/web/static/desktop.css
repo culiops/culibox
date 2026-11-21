@@ -2505,6 +2505,12 @@
   #spawn #spawn-ws-row #spawn-copy-line { order: 1; margin-top: 0; }
   #spawn #spawn-ws-row #spawn-ws-note { order: 2; }
   #spawn #spawn-ws-row:has(> #spawn-copy-line:not([hidden])) #spawn-ws-note { margin-top: -4px; }
+  /* What Start here does to the workspace roots (wsCheckLine): one line after the caption. Neutral for the plain case, amber when
+     the folder cannot become a root or the box would refuse it, red when it is not a folder. The share button sits after the text. */
+  #spawn #spawn-ws-row .spawn-ws-check { order: 3; display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; margin-top: 4px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); overflow-wrap: anywhere; }
+  #spawn #spawn-ws-row .spawn-ws-check[hidden] { display: none; }
+  #spawn #spawn-ws-row .spawn-ws-check.ck-warn { color: var(--amber); }
+  #spawn #spawn-ws-row .spawn-ws-check.ck-error { color: var(--red); }
 
   /* The reach box (frame M4.1): what this session will be able to touch, from the profile. A --bg card with no border,
      the title, then ONE label/value grid (72px | the rest, 16px and 2px apart, baselines aligned) so every value starts

@@ -942,6 +942,45 @@ async function confirmDelete(path, name, isDir) {
   ftLoadRoot({ fresh: true });
 }
 
+// ftRootList: the workspace roots as a clean array: an array or one string (an old
+// caller's home), empty entries dropped, trailing slashes cut ("/" stays "/").
+function ftRootList(roots) {
+  const a = Array.isArray(roots) ? roots : typeof roots === "string" ? [roots] : [];
+  return a.filter((r) => typeof r === "string" && r !== "").map((r) => (r.length > 1 ? r.replace(/\/+$/, "") || "/" : r));
+}
+
+// insideAnyRoot: is `d` one of the roots or under one, by whole components
+// ("/home/user2" is not inside "/home/user")? No roots known yet: allowed (the
+// pre-/api/workspaces convention).
+function insideAnyRoot(d, roots) {
+  const list = ftRootList(roots);
+  if (!list.length) return true;
+  return list.some((r) => r === "/" || d === r || d.indexOf(r + "/") === 0);
+}
+
+// ftCurrentRoots: what the page knows now: window.WORKSPACE_ROOTS (the roots the
+// server serves, home first; loadWorkspaceRoots) plus window.HOME_DIR, which the
+// session paths on this page are spelled with even when home is a symlink.
+function ftCurrentRoots() {
+  if (typeof window === "undefined") return [];
+  const out = Array.isArray(window.WORKSPACE_ROOTS) ? window.WORKSPACE_ROOTS.slice() : [];
+  if (window.HOME_DIR && !out.includes(window.HOME_DIR)) out.push(window.HOME_DIR);
+  return out;
+}
+
+// loadWorkspaceRoots: GET /api/workspace-roots into window.WORKSPACE_ROOTS: the
+// paths of the roots the server would serve now (an unavailable root is left out:
+// the Files view refuses it). A failure keeps what the page had (an older server,
+// or no store: home alone, from HOME_DIR).
+async function loadWorkspaceRoots() {
+  try {
+    const v = await api("/api/workspace-roots");
+    const rows = v && Array.isArray(v.roots) ? v.roots : [];
+    const roots = rows.filter((r) => r && typeof r.path === "string" && r.path && r.available !== false).map((r) => r.path);
+    if (roots.length) window.WORKSPACE_ROOTS = roots;
+  } catch (_) { /* keep the roots the page holds */ }
+}
+
 // treeFollowTarget answers, for the focused tab, which directory the tree should
 // be rooted at and under what key the follow-guard records that it is already
 // there. null means "hold the current root".
@@ -957,24 +996,28 @@ async function confirmDelete(path, name, isDir) {
 // TerminalTab.resolvePath while its cwd is still empty, and a restored snapshot
 // that only tested for a truthy string. A relative root reaches /api/fs/list,
 // earns a 400, and paints ft-err over a tree that had been fine.
-function treeFollowTarget(tab, home) {
-  // Same optional-home convention as shortPath/relativeTo in fsops.js: an
-  // explicit argument for tests, window.HOME_DIR in the browser.
-  if (home === undefined) home = (typeof window !== "undefined" && window.HOME_DIR) || "";
+//
+// `roots` is the list of workspace roots the server serves (home first; see
+// ftCurrentRoots). A string is one root, for old callers that passed home.
+function treeFollowTarget(tab, roots) {
+  // Same optional-argument convention as shortPath/relativeTo in fsops.js: an
+  // explicit argument for tests, window.WORKSPACE_ROOTS in the browser.
+  if (roots === undefined) roots = ftCurrentRoots();
   if (!tab) return null;
   // A box viewer's path exists only inside that session's box, never on the
   // host: /api/fs/list would 403 or list an unrelated host directory of the
   // same name. Hold the current root (see the 403 note below).
   if (tab.box) return null;
-  // insideHome APPROXIMATES the server's rule, textually. /api/fs/list resolves
+  // insideAnyRoot APPROXIMATES the server's rule, textually. /api/fs/list resolves
   // symlinks on both sides (containedUnder, fsapi.go:40-47); this cannot, so the
   // two can disagree. It errs safe in one direction — textually-outside but
   // resolving inside just holds the root — but a depth-1 symlink in $HOME that
   // points OUT of it reads as inside here and would still earn the 403 below.
   // listWorkspaces offers such symlinks as workspaces (workspaces.go:49), so the
   // shape is legal; there are none on this host today.
-  // /api/fs/list is confined to $HOME and
-  // answers 403 for anything outside it, so rooting there does not fail
+  // /api/fs/list is confined to the workspace roots (home and the folders added
+  // in Settings or by a Start) and answers 403 for anything outside them, so
+  // rooting there does not fail
   // gracefully: ftLoadRoot replaces the whole tree with one "forbidden" line,
   // the follow-key has already been recorded so re-focusing will not retry, and
   // a junk transient option is left in the picker. Holding the previous root is
@@ -986,9 +1029,9 @@ function treeFollowTarget(tab, home) {
   // (terminal-tab.js:156). A session whose cwd is outside home reaches it too —
   // that path predates the viewer support and is covered by the same guard.
   //
-  // With no home known yet (pre-/api/workspaces) the check cannot run, so it
+  // With no root known yet (pre-/api/workspaces) the check cannot run, so it
   // allows: initFileTree re-asserts the root once the list arrives.
-  const insideHome = (d) => !home || d === home || d.indexOf(home + "/") === 0;
+  const insideHome = (d) => insideAnyRoot(d, roots);
   if (tab.kind === "terminal") {
     // agentCwd: the worktree root the agent moved into (Claude Code's
     // EnterWorktree does not chdir), from the usage poll; "" outside one. The
@@ -1019,11 +1062,11 @@ function treeFollowTarget(tab, home) {
 }
 
 // rootableCwd: may the tree be rooted at this session cwd? The same verdict
-// treeFollowTarget gives a terminal tab (inside $HOME, not empty), for callers
+// treeFollowTarget gives a terminal tab (inside a workspace root, not empty), for callers
 // that root the tree from a session record rather than a tab: the desktop
 // drawer. A cwd that /api/fs/list would refuse must never become the root.
-function rootableCwd(cwd, home) {
-  return treeFollowTarget({ kind: "terminal", id: "", cwd: cwd || "" }, home) !== null;
+function rootableCwd(cwd, roots) {
+  return treeFollowTarget({ kind: "terminal", id: "", cwd: cwd || "" }, roots) !== null;
 }
 
 // syncTreeToRoot re-roots the tree, but ONLY when the follow KEY changes — so a
@@ -1220,6 +1263,8 @@ async function initFileTree() {
     // load that has neither (a fresh page, or a boot that loses the cwd race).
     if (window.HOME_DIR) setFtRoot(window.HOME_DIR);
   } catch (_) {}
+  // Which folders besides home the tree may open: before anything seeds a root from a tab.
+  if (ws.length) await loadWorkspaceRoots();
 
   // A picked directory re-roots the tree but does NOT change which TAB we're
   // following, so it survives until a different tab is focused. workspaces is
@@ -1278,7 +1323,7 @@ async function initFileTree() {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    iconFor, treeBranch, treeFollowTarget, rootableCwd, actionsLabel,
+    iconFor, treeBranch, treeFollowTarget, rootableCwd, insideAnyRoot, loadWorkspaceRoots, actionsLabel,
     listingReadOnly, rowMenuIds, rowMenuLabel, openRowMenu, ftApplyReadOnly, ftRenderDir,
     ftKeyAction, ftMenuGroups, promptNewFile, promptMkdir, promptRename, confirmDelete,
   };
