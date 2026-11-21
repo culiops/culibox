@@ -125,6 +125,26 @@ func TestCriticalRmEnvBoxedBypassOnly(t *testing.T) {
 	}
 }
 
+// The older bypass bool is Bypass too: boxed with critical-rm on, the env is injected, and the enum flag stays out.
+func TestCriticalRmEnvBoxedLegacyBypass(t *testing.T) {
+	legacy := map[string]any{"skip_permissions": true, "skip_critical_rm_prompt": true}
+	l := permLauncher(config.BaseClean, legacy)
+	spec := SpawnSpec{Agent: "a", Runtime: config.RuntimeBox}
+	argv, env, err := l.Build(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envMap(env)[config.CriticalRmEnv]; got != "1" {
+		t.Fatalf("boxed legacy bypass: env = %q, want 1", got)
+	}
+	if !hasArg(argv, "--dangerously-skip-permissions") || hasArg(argv, "--permission-mode") {
+		t.Fatalf("argv = %v", argv)
+	}
+	if d := l.DroppedOptions(spec); len(d) != 0 {
+		t.Fatalf("dropped = %v", d)
+	}
+}
+
 // Review Focus 3.
 func TestCriticalRmNeverOnHost(t *testing.T) {
 	fakeClaudeOnPath(t)

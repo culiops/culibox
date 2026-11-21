@@ -58,7 +58,8 @@ function pfeDep(name, file) {
 const pfeGhWritable = () => (typeof GH_WRITABLE !== "undefined" ? GH_WRITABLE : require("./profileform.js").GH_WRITABLE);
 
 // The options the Agent block owns, by key: the read view leaves them out of
-// Advanced (PFV_AGENT_OPTIONS) and the server offers them unset (config.unsetOfferKeys).
+// Advanced (PFV_AGENT_OPTIONS). The server offers model and effort unset (config.unsetOfferKeys); Permission mode is offered
+// when the profile sets it or holds the older bypass bool the enum owns, and the critical-rm option when the profile sets it.
 const PFE_AGENT_OPTIONS = ["model", "effort", "effortLevel", "permission_mode", "skip_critical_rm_prompt"];
 
 // The keys the Workspace block replaces as a unit.

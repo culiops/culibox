@@ -955,7 +955,7 @@ const (
 )
 
 // checkOverride is the one rule for a per-spawn option override: the profile
-// offers the key (config.OptionDef.OfferedBy), and the value is valid for its
+// offers the key (config.OptionOffered), and the value is valid for its
 // type. An untrusted enum value never reaches the command. A blank enum is no
 // override at all (the profile's default, else the agent's own): not ok, and
 // no reason, so it is not reported as dropped. reason is "" when ok.
@@ -998,8 +998,9 @@ func (l *AgentLauncher) AcceptedOptions(spec SpawnSpec) map[string]any {
 	return out
 }
 
-// OptionDrop is one per-spawn override the profile refused: the key the caller
-// sent and why. It never carries the value.
+// OptionDrop is one per-spawn override the profile refused: the key and why. The
+// key is one the caller sent, or one the profile itself defaults (critical-rm
+// on without Bypass). It never carries the value.
 type OptionDrop struct {
 	Key    string `json:"key"`
 	Reason string `json:"reason"`
@@ -1012,9 +1013,11 @@ const (
 )
 
 // DroppedOptions returns the overrides in spec that Build would ignore (the
-// complement of AcceptedOptions up to the cap), sorted by key, capped at maxDroppedOptions
-// entries with each key cut to maxDroppedKeyBytes. nil when all are accepted
-// and for an unknown agent (the spawn fails elsewhere).
+// complement of AcceptedOptions up to the cap), plus a profile-default key the
+// Claude rules gate (critical-rm on without Bypass, even when the caller sent
+// nothing). Sorted by key, capped at maxDroppedOptions entries with each key cut
+// to maxDroppedKeyBytes. nil when all are accepted and for an unknown agent (the
+// spawn fails elsewhere).
 func (l *AgentLauncher) DroppedOptions(spec SpawnSpec) []OptionDrop {
 	cfg, ok := l.agent(spec.Agent)
 	if !ok {
