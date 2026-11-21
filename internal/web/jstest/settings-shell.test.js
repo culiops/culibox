@@ -411,7 +411,7 @@ function makeDom({ page = true, version = "CuliBox v0.24.2 · commit abc1234", a
   const root = el("body");
   const dlg = root.appendChild(el("dialog", "settings-modal", page ? "as-page" : ""));
   const panels = {};
-  for (const id of ["manage", "creds", "settings", "tokens", "accounts", "about", "vmfolders"]) {
+  for (const id of ["manage", "creds", "settings", "tokens", "accounts", "about", "vmfolders", "wsroots"]) {
     panels[id] = dlg.appendChild(el("div", id, "dbd"));
     if (id !== "manage") panels[id].appendChild(el("div", null, "set-head"));
   }
@@ -444,7 +444,7 @@ function makeDom({ page = true, version = "CuliBox v0.24.2 · commit abc1234", a
   return { ctx, dlg, panels, calls, hint, ver, reset, doc, slot: (tab) => panels[tab].children[0] };
 }
 
-const HEAD_TABS = ["creds", "tokens", "settings", "accounts", "about", "vmfolders"];
+const HEAD_TABS = ["creds", "tokens", "settings", "accounts", "about", "vmfolders", "wsroots"];
 const INFO = { version: "CuliBox v0.24.2 · commit abc1234", accountsLead: ACCOUNTS_LEAD };
 
 test("Settings -> Access names its tokens Device tokens: the old words are gone from its head, nav tab and phone footer", () => {
@@ -518,11 +518,11 @@ test("the first sentence of the accounts hint is the lead", () => {
   assert.deepStrictEqual(accountsLead(undefined), { lead: "", rest: "" });
 });
 
-test("each of the six pages starts with one empty .set-head slot", () => {
+test("each of the seven pages starts with one empty .set-head slot", () => {
   for (const id of HEAD_TABS) {
     const m = new RegExp('<div class="dbd pad" id="' + id + '"[^>]*>\\s*<div class="set-head"></div>').exec(HTML);
     assert.ok(m, "#" + id + " has the slot as its first child, empty (the phone's DOM carries nothing the head would draw)");
-    assert.strictEqual((HTML.match(/class="set-head"/g) || []).length, 6, "six slots, none on Profiles");
+    assert.strictEqual((HTML.match(/class="set-head"/g) || []).length, 7, "seven slots, none on Profiles");
   }
   assert.doesNotMatch(HTML.slice(HTML.indexOf('id="manage"'), HTML.indexOf('id="pfv"')), /set-head/);
 });

@@ -345,6 +345,7 @@
       <div id="pf-navlist" role="group" aria-label="Profiles"></div>
       <button type="button" class="t" data-tab="creds" role="tab" aria-selected="false" aria-controls="creds">Credentials</button>
       <button type="button" class="t" data-tab="vmfolders" role="tab" aria-selected="false" aria-controls="vmfolders" hidden>VM folders</button>
+      <button type="button" class="t" data-tab="wsroots" role="tab" aria-selected="false" aria-controls="wsroots">Workspace roots</button>
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
       <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Device tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
@@ -635,6 +636,11 @@
       <div id="vmf-body"></div>
     </div>
 
+    <div class="dbd pad" id="wsroots" role="tabpanel" hidden>
+      <div class="set-head"></div>
+      <div id="wsr-body"></div>
+    </div>
+
     <div class="dft" id="foot-manage">
       <button id="pf-delete" type="button" class="btn dgr" disabled>Delete…</button>
       <span class="grow"></span>
@@ -658,6 +664,11 @@
       <span class="grow"></span>
       <button id="vmf-foot-add" type="button" class="btn">Add folder</button>
       <button id="vmf-foot-apply" type="button" class="btn pri" hidden>Apply (restart box VM)</button>
+    </div>
+    <div class="dft" id="foot-wsroots" hidden>
+      <button type="button" class="btn" data-close="settings-modal">Done</button>
+      <span class="grow"></span>
+      <button id="wsr-foot-add" type="button" class="btn">Add folder</button>
     </div>
     <div class="dft" id="foot-creds" hidden>
       <span class="grow"></span>
@@ -920,6 +931,7 @@
   <script src="/settingshead.js"></script>
   <script src="/vmapply.js"></script>
   <script src="/vmfolders.js"></script>
+  <script src="/wsroots.js"></script>
   <script src="/store.js"></script>
   <script src="/credentials.js"></script>
   <script src="/sessionrow.js"></script>

@@ -827,7 +827,7 @@ test("wsCheckLine: would_add is the neutral line, with the repo note when the ro
   assert.deepStrictEqual(JSON.parse(JSON.stringify(l)), { kind: "info", text: "Starting here also lets CuliBox's Files, git and search open /srv/x.", share: false });
   l = t.box.wsCheckLine(chk({ path: "/srv/x/api", add_root_path: "/srv/x" }), "box");
   assert.strictEqual(l.kind, "info");
-  assert.strictEqual(l.text, "Starting here also lets CuliBox's Files, git and search open /srv/x. (the repo this folder is in)");
+  assert.strictEqual(l.text, "Starting here also lets CuliBox's Files, git and search open /srv/x (the repo this folder is in).");
 });
 
 test("wsCheckLine: a folder the VM cannot see adds the share sentence and asks for the button; box tier makes it a warning", () => {

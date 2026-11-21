@@ -86,8 +86,7 @@ function wsCheckLine(check, tier) {
   const unseen = c.vm_shared === false && (c.would_add === true || boxBad);
   let text = "";
   if (c.would_add) {
-    text = "Starting here also lets CuliBox's Files, git and search open " + where + ".";
-    if (where !== path) text += " (the repo this folder is in)";
+    text = "Starting here also lets CuliBox's Files, git and search open " + where + (where !== path ? " (the repo this folder is in)" : "") + ".";
   }
   if (unseen) {
     text += (text ? " " : "") + "The box VM can't see " + where + ", so git status and boxes won't work there.";
