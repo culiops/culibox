@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +31,7 @@ func TestIsBinary(t *testing.T) {
 }
 
 func TestImageExt(t *testing.T) {
-	for _, ext := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"} {
+	for _, ext := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".bmp", ".ico"} {
 		if imageExt[ext] == "" {
 			t.Fatalf("missing MIME for %s", ext)
 		}
@@ -255,9 +256,11 @@ func TestFsReadMetaHasVersionNoContent(t *testing.T) {
 			t.Errorf("%s: meta carries content: %.80s", name, rr.Body)
 		}
 	}
-	// The wire shape the client reads: kind, size, version, utf8, and readonly only when true.
+	// The wire shape the client reads: kind, size, mtime, version, utf8, and readonly only when true.
+	when := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	os.Chtimes(filepath.Join(home, "a.txt"), when, when)
 	rr := metaRead(s, filepath.Join(home, "a.txt"))
-	want := `{"kind":"text","size":6,"version":"` + hashText([]byte("hello\n")) + `","utf8":true}`
+	want := fmt.Sprintf(`{"kind":"text","size":6,"mtime":%d,"version":"`, when.UnixMilli()) + hashText([]byte("hello\n")) + `","utf8":true}`
 	if strings.TrimSpace(rr.Body.String()) != want {
 		t.Errorf("wire = %s, want %s", rr.Body, want)
 	}
@@ -567,5 +570,215 @@ func TestFsReadBoxedAbsoluteInTreeLinkRefused(t *testing.T) {
 	mustSymlink(t, filepath.Join(ws, "real.txt"), filepath.Join(ws, "abs"))
 	if rr := fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(ws, "abs")); rr.Code != http.StatusForbidden {
 		t.Fatalf("absolute in-tree link: code = %d, want 403 (%s)", rr.Code, rr.Body)
+	}
+}
+
+func TestRawExt(t *testing.T) {
+	want := map[string]string{
+		".mp4": "video/mp4", ".webm": "video/webm", ".mp3": "audio/mpeg",
+		".wav": "audio/wav", ".ogg": "audio/ogg", ".pdf": "application/pdf",
+	}
+	if len(rawExt) != len(want) {
+		t.Fatalf("rawExt = %v, want exactly %v", rawExt, want)
+	}
+	for ext, ctype := range want {
+		if rawExt[ext] != ctype {
+			t.Errorf("rawExt[%s] = %q, want %q", ext, rawExt[ext], ctype)
+		}
+	}
+}
+
+func TestFsReadRawServesMediaAndPDF(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+	body := []byte("0123456789abcdef\x00\x01")
+	for name, ctype := range map[string]string{
+		"a.mp4": "video/mp4", "a.webm": "video/webm", "a.mp3": "audio/mpeg",
+		"a.wav": "audio/wav", "a.ogg": "audio/ogg", "a.pdf": "application/pdf",
+		"UP.MP4": "video/mp4", // the extension is matched lowercase
+	} {
+		p := filepath.Join(home, name)
+		os.WriteFile(p, body, 0o644)
+		rr := fsGet(s.handleFsRead, "/api/fs/read", p, "raw=1")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: code = %d (%s)", name, rr.Code, rr.Body)
+		}
+		h := rr.Header()
+		if h.Get("Content-Type") != ctype {
+			t.Errorf("%s: Content-Type = %q, want %q", name, h.Get("Content-Type"), ctype)
+		}
+		if h.Get("X-Content-Type-Options") != "nosniff" || h.Get("Content-Security-Policy") != "sandbox" ||
+			h.Get("Cache-Control") != "no-cache" {
+			t.Errorf("%s: hardening headers = %v", name, h)
+		}
+		cd := h.Get("Content-Disposition")
+		if ctype == "application/pdf" {
+			if !strings.HasPrefix(cd, "inline;") || !strings.Contains(cd, `filename="a.pdf"`) ||
+				!strings.Contains(cd, "filename*=UTF-8''a.pdf") {
+				t.Errorf("%s: Content-Disposition = %q, want inline with the quoted name", name, cd)
+			}
+		} else if cd != "" {
+			t.Errorf("%s: Content-Disposition = %q, want none", name, cd)
+		}
+		if !bytes.Equal(rr.Body.Bytes(), body) {
+			t.Errorf("%s: body differs", name)
+		}
+	}
+}
+
+func TestFsReadRawPDFNameIsQuoted(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+	p := filepath.Join(home, `a"b.pdf`)
+	os.WriteFile(p, []byte("%PDF-1.4"), 0o644)
+	cd := fsGet(s.handleFsRead, "/api/fs/read", p, "raw=1").Header().Get("Content-Disposition")
+	if cd != `inline; filename="a\"b.pdf"; filename*=UTF-8''a%22b.pdf` {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+}
+
+func TestFsReadRawRangeSeeks(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+	p := filepath.Join(home, "a.mp4")
+	os.WriteFile(p, []byte("0123456789"), 0o644)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/fs/read?raw=1&path="+url.QueryEscape(p), nil)
+	req.Header.Set("Range", "bytes=2-5")
+	s.handleFsRead(rr, req)
+	if rr.Code != http.StatusPartialContent || rr.Body.String() != "2345" {
+		t.Fatalf("range: code = %d body = %q, want 206 and 2345", rr.Code, rr.Body)
+	}
+	if rr.Header().Get("Content-Range") != "bytes 2-5/10" || rr.Header().Get("Content-Security-Policy") != "sandbox" {
+		t.Errorf("range headers = %v", rr.Header())
+	}
+}
+
+func TestFsReadRawIsIgnoredOffTheAllowlist(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+	// Never active content raw: html and friends stay on today's JSON path.
+	for name, c := range map[string]struct {
+		body []byte
+		kind string
+	}{
+		"a.html":  {[]byte("<script>alert(1)</script>"), "text"},
+		"a.txt":   {[]byte("plain"), "text"},
+		"a.xhtml": {[]byte("<html/>"), "text"},
+		"a.swf":   {[]byte{0, 1, 2}, "binary"},
+		"a.bin":   {[]byte{0, 1, 2}, "binary"},
+	} {
+		p := filepath.Join(home, name)
+		os.WriteFile(p, c.body, 0o644)
+		rr := fsGet(s.handleFsRead, "/api/fs/read", p, "raw=1")
+		var fr fsRead
+		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &fr) != nil || fr.Kind != c.kind {
+			t.Errorf("%s: code = %d body = %q, want %s JSON", name, rr.Code, rr.Body, c.kind)
+		}
+		if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("%s: Content-Type = %q, want JSON", name, ct)
+		}
+	}
+}
+
+func TestFsReadMediaWithoutRawStaysJSON(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+	for _, name := range []string{"a.mp4", "a.pdf", "a.mp3"} {
+		p := filepath.Join(home, name)
+		os.WriteFile(p, []byte{0x00, 0x01, 0x02, 0x03}, 0o644)
+		for _, extra := range [][]string{nil, {"raw=0"}, {"raw=true"}} {
+			rr := fsGet(s.handleFsRead, "/api/fs/read", p, extra...)
+			var fr fsRead
+			if json.Unmarshal(rr.Body.Bytes(), &fr) != nil || fr.Kind != "binary" || fr.Size != 4 {
+				t.Errorf("%s %v: body = %q, want binary JSON", name, extra, rr.Body)
+			}
+		}
+	}
+}
+
+func TestFsReadRawLosesToDownloadAndMeta(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+	p := filepath.Join(home, "a.mp4")
+	os.WriteFile(p, []byte{0x00, 0x01, 0x02, 0x03}, 0o644)
+	rr := fsGet(s.handleFsRead, "/api/fs/read", p, "raw=1", "download=1")
+	if rr.Header().Get("Content-Type") != "application/octet-stream" ||
+		!strings.HasPrefix(rr.Header().Get("Content-Disposition"), "attachment;") {
+		t.Errorf("raw+download: headers = %v, want the download", rr.Header())
+	}
+	rr = fsGet(s.handleFsRead, "/api/fs/read", p, "raw=1", "meta=1")
+	var fr fsRead
+	if json.Unmarshal(rr.Body.Bytes(), &fr) != nil || fr.Kind != "binary" || fr.Size != 4 {
+		t.Errorf("raw+meta: body = %q, want binary JSON", rr.Body)
+	}
+}
+
+func TestFsReadRawKeepsContainment(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	creds := filepath.Join(home, ".claude", "secret.pdf")
+	mustWrite(t, creds, "TOPSECRET")
+	mustSymlink(t, creds, filepath.Join(ws, "doc.pdf"))
+	rr := fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(ws, "doc.pdf"), "raw=1")
+	if rr.Code != http.StatusForbidden || strings.Contains(rr.Body.String(), "TOPSECRET") {
+		t.Fatalf("raw through an escaping link: code = %d body = %s", rr.Code, rr.Body)
+	}
+}
+
+func TestFsReadReportsMtime(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+	when := time.Date(2026, 3, 4, 5, 6, 7, 123_000_000, time.UTC)
+	wantMs := when.UnixMilli()
+	files := map[string][]byte{
+		"a.txt": []byte("hi"), "b.bin": {0, 1, 2}, "img.png": []byte("\x89PNG\r\n\x1a\nrest"),
+	}
+	for name, b := range files {
+		p := filepath.Join(home, name)
+		os.WriteFile(p, b, 0o644)
+		if err := os.Chtimes(p, when, when); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		extra []string
+	}{
+		{"a.txt", nil}, {"a.txt", []string{"meta=1"}},
+		{"b.bin", nil}, {"b.bin", []string{"meta=1"}},
+		{"img.png", []string{"meta=1"}},
+	} {
+		rr := fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(home, c.name), c.extra...)
+		var fr fsRead
+		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &fr) != nil {
+			t.Fatalf("%s %v: code = %d body = %q", c.name, c.extra, rr.Code, rr.Body)
+		}
+		if fr.Mtime != wantMs {
+			t.Errorf("%s %v: mtime = %d, want %d", c.name, c.extra, fr.Mtime, wantMs)
+		}
+	}
+}
+
+func TestFsRead413ReportsSizeAndMtime(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+	p := filepath.Join(home, "big.txt")
+	os.WriteFile(p, bytes.Repeat([]byte("a"), maxTextBytes+10), 0o644)
+	when := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	os.Chtimes(p, when, when)
+	rr := fsGet(s.handleFsRead, "/api/fs/read", p)
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("code = %d, want 413", rr.Code)
+	}
+	var got struct {
+		Error string `json:"error"`
+		Size  int64  `json:"size"`
+		Mtime int64  `json:"mtime"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body not JSON: %q", rr.Body)
+	}
+	if got.Error != "file too large to preview" || got.Size != maxTextBytes+10 || got.Mtime != when.UnixMilli() {
+		t.Errorf("413 body = %+v", got)
 	}
 }
