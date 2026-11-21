@@ -16,11 +16,16 @@ Node.prototype.fire = function (t, ev) { for (const f of (this.listeners || {})[
 const STATIC = path.join(__dirname, "..", "static");
 const read = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
 const tick = () => new Promise((r) => setImmediate(r));
-const fmt = (iso) => new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+// The mockup's "Nov 19" for a day this year, "Nov 19, 2025" for any other year.
+const YEAR = new Date().getFullYear();
+const fmt = (iso) => {
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, d.getFullYear() === YEAR ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" });
+};
 
-const GH = { host: "github.com", subdomains: false, added: "2026-11-19T09:00:00Z" };
-const AWS = { host: "console.aws.amazon.com", subdomains: false, added: "2026-11-20T09:00:00Z" };
-const EX = { host: "example.org", subdomains: true, added: "2026-11-21T09:00:00Z" };
+const GH = { host: "github.com", subdomains: false, added: YEAR + "-11-19T12:00:00Z" };
+const AWS = { host: "console.aws.amazon.com", subdomains: false, added: YEAR + "-06-20T12:00:00Z" };
+const EX = { host: "example.org", subdomains: true, added: (YEAR - 1) + "-11-21T12:00:00Z" };
 
 // One page: linktrust.js alone, a gate stub that holds a list, and the panel as index.html carries it.
 function page(over) {
@@ -32,12 +37,13 @@ function page(over) {
     const walk = (n) => { if (n.id === id) return n; for (const c of n.children || []) { const f = c instanceof Node ? walk(c) : null; if (f) return f; } return null; };
     return walk(doc.body);
   };
-  const gate = { list: [GH, AWS, EX], corrupt: false, loads: 0, removed: [], failWith: null, hold: null };
+  const gate = { list: [GH, AWS, EX], corrupt: false, failed: false, loads: 0, removed: [], failWith: null, hold: null };
   const box = {
     document: doc, window: { innerWidth: 1280 }, console, Date, JSON, Map, Set, Math, Promise, Array, Object, String, Number, Error,
     lgLoadTrust: async () => { gate.loads++; return gate.list.slice(); },
     lgTrustList: () => gate.list.slice(),
     lgTrustCorrupt: () => gate.corrupt,
+    lgTrustLoadFailed: () => gate.failed,
     lgRemoveTrust: async (host) => {
       gate.removed.push(host);
       if (gate.hold) await gate.hold;
@@ -126,6 +132,59 @@ test("everything is text: a hostile host name is a string in a cell, never marku
   assert.strictEqual(row.children[0].textContent, "<img src=x onerror=alert(1)>");
   assert.strictEqual(all(p.body, "img").length, 0);
   assert.strictEqual(cells(row)[2], "", "a missing date is an empty cell, not a made-up day");
+});
+
+test("dates: a day this year is 'Nov 19', any other year carries its year, and a bad date is empty", async () => {
+  const p = page();
+  assert.strictEqual(p.lex("ltDate")(YEAR + "-11-19T12:00:00Z"), new Date(YEAR + "-11-19T12:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric" }));
+  assert.doesNotMatch(p.lex("ltDate")(YEAR + "-11-19T12:00:00Z"), /\d{4}/, "no year for this year");
+  assert.match(p.lex("ltDate")("2025-11-19T12:00:00Z"), /2025/, "a year for another");
+  assert.match(p.lex("ltDate")((YEAR + 1) + "-02-03T12:00:00Z"), new RegExp(String(YEAR + 1)), "and for next year");
+  assert.strictEqual(p.lex("ltDate")(""), "");
+  assert.strictEqual(p.lex("ltDate")("not a date"), "");
+});
+
+test("a list that could not be loaded is not 'No trusted hosts': one line says so, with Retry, and no table, no empty line", async () => {
+  const p = page();
+  p.gate.list = []; // what lgLoadTrust leaves after a failure
+  p.gate.failed = true;
+  await p.load();
+  const line = all(p.body, "p").find((e) => e.className.split(" ").includes("lt-loadfail"));
+  assert.ok(line, "a load-failure line");
+  assert.strictEqual(line.textContent, "Could not load trusted hosts. Try again.");
+  assert.strictEqual(line.getAttribute("role"), "alert");
+  assert.strictEqual(all(p.body, "table").length, 0);
+  assert.ok(!all(p.body, "p").some((e) => /^No trusted hosts/.test(e.textContent)), "the empty line would invite an add and say there are none");
+  assert.ok(!all(p.body, "p").some((e) => /Removing a host/.test(e.textContent)));
+  assert.deepStrictEqual(btns(p.body).map((b) => b.textContent), ["Retry"]);
+});
+
+test("Retry asks for the list again and paints what came: the table when it loads, the same line when it does not", async () => {
+  const p = page();
+  p.gate.list = [];
+  p.gate.failed = true;
+  await p.load();
+  const before = p.gate.loads;
+  btns(p.body)[0].click();
+  await tick();
+  assert.strictEqual(p.gate.loads, before + 1);
+  assert.ok(all(p.body, "p").some((e) => e.className.split(" ").includes("lt-loadfail")), "still failing: still says so");
+  p.gate.list = [GH];
+  p.gate.failed = false;
+  btns(p.body)[0].click();
+  await tick();
+  assert.deepStrictEqual(all(p.body, "tbody tr").map((r) => r.children[0].textContent), ["github.com"]);
+  assert.ok(!all(p.body, "p").some((e) => e.className.split(" ").includes("lt-loadfail")));
+});
+
+test("a damaged file that also failed to load says the load failed, not that the file is damaged", async () => {
+  const p = page();
+  p.gate.list = [];
+  p.gate.corrupt = true;
+  p.gate.failed = true;
+  await p.load();
+  assert.ok(all(p.body, "p").some((e) => e.className.split(" ").includes("lt-loadfail")));
+  assert.ok(!all(p.body, "p").some((e) => e.className.split(" ").includes("lt-corrupt")));
 });
 
 test("opening the tab asks the gate for the list afresh each time", async () => {

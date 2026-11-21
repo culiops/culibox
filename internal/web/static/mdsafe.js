@@ -222,7 +222,13 @@ function mdGate(a, url, where) {
     if (typeof openAgentLink === "function") openAgentLink(url, ctx);
   };
   a.addEventListener("click", go);
-  a.addEventListener("keydown", (e) => { if (e.key === "Enter") go(e); });
+  // Enter is the link's key: claimed, so nothing else in the page acts on it too, and a held key's repeats do not ask again.
+  a.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    if (e.stopPropagation) e.stopPropagation();
+    if (e.repeat) e.preventDefault();
+    else go(e);
+  });
 }
 
 // mdLink makes a gated <a> for `url`: the one the blocked-image notice offers.

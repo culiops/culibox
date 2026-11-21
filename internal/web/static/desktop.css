@@ -2915,6 +2915,9 @@
   #page-host > #settings-modal.as-page > #linktrust .lt-hint .mono { font-size: inherit; }
   #page-host > #settings-modal.as-page > #linktrust .lt-err { margin: 0 0 12px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--red); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page > #linktrust .lt-corrupt { margin: 0; padding: 12px 16px; background: var(--panel); border-radius: var(--r-card); box-shadow: inset 2px 0 0 var(--amber); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-loadfail-box { display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 16px; background: var(--panel); border-radius: var(--r-card); box-shadow: inset 2px 0 0 var(--red); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-loadfail { flex: 1 1 auto; min-width: 0; margin: 0; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #linktrust .lt-loadfail-box .btn.btn-sm { flex: none; padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page > #linktrust .lt-card { overflow: hidden; position: relative; background: var(--panel); border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page > #linktrust .lt-empty { margin: 0; padding: 12px 16px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page > #linktrust .lt-under { margin: 8px 0 0; padding: 0 2px; }

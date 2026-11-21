@@ -1064,3 +1064,15 @@ test("a path click in the terminal never reaches the link gate", () => {
     assert.deepStrictEqual(r.seen.gate, []);
   } finally { r.cleanup(); }
 });
+
+test("without the link gate loaded a terminal link opens nothing and throws nothing: it fails closed", async () => {
+  const { openTerminalUrl } = require("../static/terminal-tab.js");
+  const opened = [];
+  global.window = { open: (...a) => opened.push(a) };
+  delete global.openAgentLink;
+  try {
+    assert.strictEqual(typeof global.openAgentLink, "undefined");
+    assert.strictEqual(await openTerminalUrl("https://example.com/a", "s"), false);
+    assert.deepStrictEqual(opened, []);
+  } finally { delete global.window; }
+});

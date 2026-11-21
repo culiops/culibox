@@ -15,18 +15,20 @@ const LT_HINT = [
 ];
 const LT_EMPTY = 'No trusted hosts. Tick "Always open links to …" in the Open this link? dialog to add one.';
 const LT_UNDER = "Removing a host only stops links skipping the dialog. Nothing else changes.";
+const LT_LOADFAIL = "Could not load trusted hosts. Try again.";
 const LT_CORRUPT = "link-trust.json is damaged, so every link asks and no host can be added or removed until it is fixed or removed.";
 
 let ltArmed = "";   // the host whose row shows its in-row confirm
 let ltErr = "";     // the line of the last failed Remove
 let ltBusy = false; // a Remove is in flight
-let ltFocus = null; // { host, which } to focus after the next paint: "arm" | "cancel" | "go"; host "" is the card
+let ltFocus = null; // { host, which } to focus after the next paint: "arm" | "cancel" | "go" | "retry"; host "" is the card or the Retry button
 
-// ltDate: "Nov 21, 2026", the Device tokens page's way of writing a day, "" for anything that is not a date.
+// ltDate: "Nov 19" for a day this year (the approved mockup), "Nov 19, 2025" for any other year, "" for anything that is not a date.
 function ltDate(iso) {
   const d = new Date(iso);
   if (!iso || isNaN(d.getTime())) return "";
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const thisYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, thisYear ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" });
 }
 
 // ltCovers: what a trusted entry reaches.
@@ -143,6 +145,9 @@ function ltPaint() {
   if (!body) return;
   const list = typeof lgTrustList === "function" ? lgTrustList() : [];
   const corrupt = typeof lgTrustCorrupt === "function" && lgTrustCorrupt();
+  // A failed load leaves the gate's list empty, which here is "unknown", not "none": saying "No trusted hosts" would be false while
+  // the server holds some, and the next good load brings them back and their links skip the dialog.
+  const failed = typeof lgTrustLoadFailed === "function" && lgTrustLoadFailed();
   if (ltArmed && !list.some((e) => e.host === ltArmed)) ltArmed = ""; // gone in another tab
   const kids = [ltHint()];
   const btnOf = new Map();
@@ -152,7 +157,15 @@ function ltPaint() {
     p.setAttribute("role", "alert");
     kids.push(p);
   }
-  if (corrupt) {
+  if (failed) {
+    const box = ltEl("div", "lt-loadfail-box");
+    const p = ltEl("p", "lt-loadfail", LT_LOADFAIL);
+    p.setAttribute("role", "alert");
+    const retry = ltBtn("Retry", "btn btn-sm", "", "retry", () => ltReload({ host: "", which: "retry" }));
+    btnOf.set("", { retry });
+    box.append(p, retry);
+    kids.push(box);
+  } else if (corrupt) {
     const p = ltEl("p", "lt-corrupt", LT_CORRUPT);
     p.setAttribute("role", "status");
     kids.push(p);
@@ -194,15 +207,21 @@ async function ltRemove(host) {
   ltPaint();
 }
 
-// loadLinkTrust: the tab was selected. Starts clean (nothing armed, no old error), asks the gate for the list and paints it.
-async function loadLinkTrust() {
+// ltReload: start clean (nothing armed, no old error), ask the gate for the list and paint it. `focus` is where focus goes after
+// the paint (Retry's own button is gone by then), or null.
+async function ltReload(focus) {
   ltArmed = "";
   ltErr = "";
-  ltFocus = null;
+  ltFocus = focus;
   if (typeof lgLoadTrust === "function") {
     try { await lgLoadTrust(); } catch (_) {}
   }
   ltPaint();
+}
+
+// loadLinkTrust: the tab was selected.
+function loadLinkTrust() {
+  return ltReload(null);
 }
 
 if (typeof module !== "undefined" && module.exports) {

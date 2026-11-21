@@ -384,11 +384,24 @@ test("a click and Enter on a gated link call the gate with source markdown and t
   ]);
 });
 
-test("other keys on a gated link do nothing, and the keydown of Enter on it is claimed so the page does not also act on it", () => {
+test("other keys on a gated link do nothing", () => {
   gateTaken();
   const [a] = find(walk(h("a", { href: "https://example.com/doc" }, "x")), "a");
   for (const key of ["Tab", " ", "a", "Escape"]) assert.equal(a.fire("keydown", { key }).defaultPrevented, false, key);
   assert.deepEqual(gateTaken(), []);
+});
+
+test("Enter on a gated link is claimed (the page does not also act on it), and a held key's repeats open nothing", () => {
+  gateTaken();
+  const [a] = find(walk(h("a", { href: "https://example.com/doc" }, "x")), "a");
+  const stopped = [];
+  const enter = a.fire("keydown", { key: "Enter", stopPropagation() { stopped.push(1); } });
+  assert.equal(enter.defaultPrevented, true);
+  assert.equal(stopped.length, 1, "the keydown goes no further");
+  assert.equal(gateTaken().length, 1, "one open");
+  const rep_ = a.fire("keydown", { key: "Enter", repeat: true, stopPropagation() { stopped.push(1); } });
+  assert.equal(rep_.defaultPrevented, true, "a repeat is still the link's key: no scroll or click from it either");
+  assert.deepEqual(gateTaken(), [], "but it asks nothing");
 });
 
 test("with no where the context carries none, and the existing two-argument walk still works", () => {
