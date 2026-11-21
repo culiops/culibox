@@ -45,11 +45,13 @@ function dockKindOf(ext) {
 }
 
 // fileTypeLabel: the type in words for the card's meta line. `binary` only
-// matters for the wording when there is nothing better: no extension at all.
+// matters for the wording when there is nothing better: no extension at all
+// ("Binary file" if it is not text, else "File": a too-large text file).
 function fileTypeLabel(ext, binary) {
   const e = lowerExt(ext);
   if (Object.prototype.hasOwnProperty.call(FILE_TYPE_LABELS, e)) return FILE_TYPE_LABELS[e];
-  return e ? e.toUpperCase() + " file" : "Binary file";
+  if (e) return e.toUpperCase() + " file";
+  return binary ? "Binary file" : "File";
 }
 
 // fileTypeShort: the status bar's type, FILE when the name has no extension.
@@ -90,8 +92,10 @@ function zoomStep(cur, dir) {
 
 // fitScale: the scale at which the image fits the stage, never above 1. An image
 // with no intrinsic size (nw or nh 0, e.g. an SVG with no width) cannot be fitted: 1.
+// Nor can a stage with no size (measured while hidden): 1, never 0 (0 would turn
+// into NaN in zoomScroll). Callers still do not fit an unmeasured stage.
 function fitScale(nw, nh, bw, bh) {
-  if (!nw || !nh) return 1;
+  if (!nw || !nh || !(bw > 0) || !(bh > 0)) return 1;
   return Math.min(1, bw / nw, bh / nh);
 }
 

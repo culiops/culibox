@@ -34,7 +34,9 @@ test("fileTypeLabel names a type, falling back to '<EXT> file' or 'Binary file'"
   assert.equal(fileTypeLabel("dat", true), "DAT file");
   assert.equal(fileTypeLabel("xyz", false), "XYZ file");
   assert.equal(fileTypeLabel("", true), "Binary file");
-  assert.equal(fileTypeLabel("", false), "Binary file");
+  // a too-large extensionless text file is not "Binary file"
+  assert.equal(fileTypeLabel("", false), "File");
+  assert.equal(fileTypeLabel(undefined, false), "File");
   assert.equal(fileTypeLabel(undefined, true), "Binary file");
 });
 
@@ -93,6 +95,11 @@ test("fitScale never enlarges and fits the tighter axis", () => {
   assert.equal(fitScale(0, 100, 500, 500), 1);
   assert.equal(fitScale(100, 0, 500, 500), 1);
   assert.equal(fitScale(0, 0, 0, 0), 1);
+  // a stage measured while hidden (0 x 0) must never give scale 0 (NaN downstream)
+  assert.equal(fitScale(100, 100, 0, 0), 1);
+  assert.equal(fitScale(100, 100, 0, 500), 1);
+  assert.equal(fitScale(100, 100, 500, 0), 1);
+  assert.equal(fitScale(2000, 1000, -5, 800), 1);
 });
 
 test("wheelScale is cur * e^(-dy/300), line deltas x16, clamped to 5%..800%", () => {
