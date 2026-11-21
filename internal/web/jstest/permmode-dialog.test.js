@@ -197,6 +197,34 @@ test("the critical-rm row is enabled for a profile whose own args are Bypass, an
   assert.strictEqual(crit(b).disabled, false, "the seg reads Bypass");
 });
 
+// A config.json permission_mode def that cannot say Bypass does not own the older bool (the server then sends no legacy_bypass_key
+// and marks the bool): it is a checkbox like before #342, and a ticked one is still Bypass for the warning and the critical-rm row.
+test("a legacy bool the enum does not own stays a ticked checkbox and still reads as Bypass", () => {
+  const yolo = Object.assign({}, LEGACY, { bypass: true });
+  const t = page(prof({ options: [yolo, CRIT] }), { runtime: "box", clone: true });
+  t.run("renderOptions()");
+  t.run("syncSpawnExtras(false)");
+  assert.ok(t.at('[data-key="yolo"]'), "the legacy bool is drawn as a normal bool");
+  assert.strictEqual(t.at('[data-key="yolo"]').checked, true, "ticked");
+  assert.strictEqual(seg(t), null, "permission_mode is not offered: the profile does not set it");
+  assert.strictEqual(t.els["spawn-bypass-warn"].hidden, false, "the replies warning shows");
+  assert.strictEqual(crit(t).disabled, false, "critical-rm is enabled on a box tier");
+  assert.strictEqual(t.run("getOptions()").yolo, true, "sent as a normal bool");
+  // Unticking it ends Bypass: warning gone, critical-rm dimmed.
+  t.at('[data-key="yolo"]').checked = false;
+  t.run("syncSpawnExtras(false)");
+  assert.strictEqual(t.els["spawn-bypass-warn"].hidden, true);
+  assert.strictEqual(crit(t).disabled, true);
+  // The profile sets the mode too: the mode (here Plan) supersedes the bool, as on the server.
+  const def = Object.assign({}, MODE, { choices: ["default", "acceptEdits", "plan"], value: "plan" });
+  const u = page(prof({ options: [yolo, def, CRIT] }), { runtime: "box", clone: true });
+  u.run("renderOptions()");
+  u.run("syncSpawnExtras(false)");
+  assert.ok(u.at('[data-key="yolo"]'), "still a checkbox beside the mode");
+  assert.strictEqual(u.els["spawn-bypass-warn"].hidden, true);
+  assert.strictEqual(crit(u).disabled, true);
+});
+
 test("another box-only option is hidden and not sent off a box, by its tier alone", () => {
   const other = { key: "exotic", label: "Exotic", type: "bool", value: true, tier: "box" };
   const t = page(prof({ options: [other] }), { runtime: "host", clone: false });

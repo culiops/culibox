@@ -45,10 +45,23 @@ func IsLegacyBypassDef(d OptionDef) bool {
 	return d.Type == OptBool && d.Flag == legacyBypassFlag
 }
 
+// EnumOwnsLegacyBypass reports whether the Permission mode control owns the
+// older bypass bool for bin: the permission_mode def applies to bin and can say
+// Bypass. A def whose choices omit bypassPermissions cannot stand in for the
+// bool, so the bool stays a normal option of its own.
+func EnumOwnsLegacyBypass(defs map[string]OptionDef, bin string) bool {
+	d, ok := defs[PermissionModeKey]
+	return ok && d.AppliesTo(bin) && contains(d.Choices, BypassMode)
+}
+
 // LegacyBypassKey returns the first (sorted) key the profile sets, to any
-// value, whose def is a legacy bypass bool that applies to the profile's bin.
-// "" when there is none.
+// value, whose def is a legacy bypass bool that applies to the profile's bin,
+// while the Permission mode control owns it (EnumOwnsLegacyBypass). "" when
+// there is none.
 func LegacyBypassKey(defs map[string]OptionDef, a AgentConfig) string {
+	if !EnumOwnsLegacyBypass(defs, a.Bin) {
+		return ""
+	}
 	keys := make([]string, 0, len(a.Options))
 	for k := range a.Options {
 		keys = append(keys, k)
@@ -63,8 +76,8 @@ func LegacyBypassKey(defs map[string]OptionDef, a AgentConfig) string {
 }
 
 // OptionOffered reports whether the profile offers d at spawn time: OfferedBy,
-// and also permission_mode on a profile that carries the legacy bypass bool, so
-// the older form can be replaced by the enum.
+// and also permission_mode on a profile that carries the legacy bypass bool the
+// enum owns, so the older form can be replaced by the enum.
 func OptionOffered(d OptionDef, a AgentConfig, defs map[string]OptionDef) bool {
 	if d.OfferedBy(a) {
 		return true
@@ -110,6 +123,16 @@ func BoxOnlyEnvReason(a AgentConfig) string {
 	return ""
 }
 
+// ValidateBoxOnlyEnvDef refuses a config option def whose env is one only a box
+// may set unless the def is box tier: without the tier the host would be offered
+// an option that puts the env into a host process.
+func ValidateBoxOnlyEnvDef(d OptionDef) error {
+	if d.Tier != RuntimeBox && contains(BoxOnlyEnv, d.Env) {
+		return fmt.Errorf("config: option %q sets %s, which runs only in a box; add \"tier\": \"box\"", d.Key, d.Env)
+	}
+	return nil
+}
+
 // validateClaudePermission refuses the critical-rm option on a profile that does
 // not bypass permissions, and on one that pins the host (the option is box tier).
 func validateClaudePermission(a AgentConfig, defs map[string]OptionDef) error {
@@ -121,7 +144,16 @@ func validateClaudePermission(a AgentConfig, defs map[string]OptionDef) error {
 		return WithField(field, fmt.Errorf("profile %q: %s", a.Name, NeedsBypassReason))
 	}
 	if a.Runtime == RuntimeHost {
-		return WithField(field, fmt.Errorf("profile %q: %s", a.Name, BoxOnlyOptionReason(defs, a.Options)))
+		reason := BoxOnlyOptionReason(defs, a.Options)
+		if reason == "" {
+			// A config def that replaced the built-in without tier "box" is not named by the tier rule.
+			label := defs[CriticalRmKey].Label
+			if label == "" {
+				label = CriticalRmKey
+			}
+			reason = fmt.Sprintf("%q runs only in a box", label)
+		}
+		return WithField(field, fmt.Errorf("profile %q: %s", a.Name, reason))
 	}
 	return nil
 }

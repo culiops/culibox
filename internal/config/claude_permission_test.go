@@ -74,7 +74,10 @@ func TestLegacyBypassKeyByFlagNotName(t *testing.T) {
 	if k := LegacyBypassKey(noFlag, a); k != "" {
 		t.Errorf("a bool with no flag is legacy: %q", k)
 	}
-	yolo := map[string]OptionDef{"yolo": {Key: "yolo", Type: OptBool, Flag: "--dangerously-skip-permissions"}}
+	yolo := map[string]OptionDef{
+		"yolo":            {Key: "yolo", Type: OptBool, Flag: "--dangerously-skip-permissions"},
+		PermissionModeKey: legacyDefs()[PermissionModeKey],
+	}
 	for _, v := range []bool{false, true} {
 		a := AgentConfig{Bin: "claude", Options: map[string]any{"yolo": v}}
 		if k := LegacyBypassKey(yolo, a); k != "yolo" {
@@ -207,5 +210,92 @@ func TestHostBlockWith(t *testing.T) {
 	bound := AgentConfig{GitHub: &GitHubBinding{}, Options: map[string]any{CriticalRmKey: true}, Env: map[string]string{CriticalRmEnv: "1"}}
 	if got := HostBlockWith(bound, defs); got != HostBlock(bound) || got == "" {
 		t.Errorf("binding must win: %q", got)
+	}
+}
+
+// The enum owns the older bypass bool only when the Permission mode def that applies to the bin can say Bypass.
+func TestLegacyBypassKeyNeedsEnumThatCanBypass(t *testing.T) {
+	noBypass := func() map[string]OptionDef {
+		defs := legacyDefs()
+		m := defs[PermissionModeKey]
+		m.Choices = []string{"default", "acceptEdits", "plan"}
+		defs[PermissionModeKey] = m
+		return defs
+	}
+	a := AgentConfig{Bin: "claude", Options: map[string]any{"skip": true}}
+	defs := noBypass()
+	if k := LegacyBypassKey(defs, a); k != "" {
+		t.Errorf("enum without bypassPermissions: key = %q, want none (the checkbox stays the bool's own)", k)
+	}
+	if OptionOffered(defs[PermissionModeKey], a, defs) {
+		t.Error("permission_mode offered although the enum does not own the legacy bool")
+	}
+	if !OptionOffered(defs["skip"], a, defs) {
+		t.Error("the legacy bool is offered as a normal set key")
+	}
+	set := AgentConfig{Bin: "claude", Options: map[string]any{"skip": true, PermissionModeKey: "plan"}}
+	if !OptionOffered(defs[PermissionModeKey], set, defs) {
+		t.Error("permission_mode set on the profile is offered")
+	}
+	// The mode still supersedes the bool when it is set (spec §2), owned or not.
+	if got := OptionFlags(defs, SupersedeLegacyBypass(defs, set.Options)); !slices.Equal(got, []string{"--permission-mode", "plan"}) {
+		t.Errorf("flags = %v", got)
+	}
+	// The enum that does not apply to the bin owns nothing either.
+	other := legacyDefs()
+	m := other[PermissionModeKey]
+	m.Bins = []string{"codex"}
+	other[PermissionModeKey] = m
+	if k := LegacyBypassKey(other, a); k != "" {
+		t.Errorf("enum for another bin: key = %q", k)
+	}
+	// No permission_mode def at all: no owner.
+	bare := map[string]OptionDef{"skip": legacyDefs()["skip"]}
+	if k := LegacyBypassKey(bare, a); k != "" {
+		t.Errorf("no permission_mode def: key = %q", k)
+	}
+	// With bypassPermissions among the choices the enum owns it, as before.
+	if k := LegacyBypassKey(legacyDefs(), a); k != "skip" {
+		t.Errorf("key = %q, want skip", k)
+	}
+}
+
+func TestValidateProfileCriticalRmReasonWithoutTier(t *testing.T) {
+	// A config def that replaces the built-in without tier "box": the host refusal still says why.
+	defs := legacyDefs()
+	d := defs[CriticalRmKey]
+	d.Tier = ""
+	defs[CriticalRmKey] = d
+	a := AgentConfig{Name: "x", Bin: "claude", Runtime: RuntimeHost,
+		Options: map[string]any{CriticalRmKey: true, PermissionModeKey: BypassMode}}
+	err := ValidateProfile(a, defs)
+	want := `profile "x": "Skip the critical-rm prompt" runs only in a box`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want containing %q", err, want)
+	}
+	d.Label = ""
+	defs[CriticalRmKey] = d
+	err = ValidateProfile(a, defs)
+	want = `profile "x": "` + CriticalRmKey + `" runs only in a box`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("no label: err = %v, want containing %q", err, want)
+	}
+}
+
+func TestValidateRefusesBoxOnlyEnvWithoutBoxTier(t *testing.T) {
+	cfg := Defaults()
+	cfg.Options = []OptionDef{{Key: "x", Label: "X", Type: OptBool, Env: CriticalRmEnv}}
+	err := cfg.Validate()
+	want := `config: option "x" sets ` + CriticalRmEnv + `, which runs only in a box; add "tier": "box"`
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	cfg.Options[0].Tier = RuntimeBox
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("with tier box: %v", err)
+	}
+	// The built-in def passes.
+	if err := Defaults().Validate(); err != nil {
+		t.Fatalf("defaults: %v", err)
 	}
 }

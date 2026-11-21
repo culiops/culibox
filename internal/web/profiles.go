@@ -34,6 +34,10 @@ type ProfileOption struct {
 	// Tier is the lowest tier the option runs on ("box" = only in a box); ""
 	// means every tier. The UI dims a box-only row when the Host card is picked.
 	Tier string `json:"tier,omitempty"`
+	// Bypass marks a bool that is the older form of Permission mode: Bypass (its
+	// flag turns the permission checks off). The UI counts it by this mark, never
+	// by its key name, when the enum does not own it and it shows as a checkbox.
+	Bypass bool `json:"bypass,omitempty"`
 }
 
 // Where a profile came from (ProfileView.Source). Provider-neutral: it says
@@ -651,6 +655,7 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			}
 			pv.Options = append(pv.Options, ProfileOption{
 				Key: def.Key, Label: def.Label, Type: def.Type, Choices: def.Choices, Value: v, Tier: def.Tier,
+				Bypass: config.IsLegacyBypassDef(def),
 			})
 		}
 		out = append(out, pv)

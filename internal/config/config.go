@@ -601,6 +601,9 @@ func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[
 		if o.Tier != "" && o.Tier != RuntimeBox {
 			return fmt.Errorf("config: option %q has invalid tier %q (want \"\" or \"box\")", o.Key, o.Tier)
 		}
+		if err := ValidateBoxOnlyEnvDef(o); err != nil {
+			return err
+		}
 		optDefs[o.Key] = o
 	}
 	for _, a := range c.Agents {

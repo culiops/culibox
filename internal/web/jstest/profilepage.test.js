@@ -7273,6 +7273,29 @@ test("Agent: the legacy checkbox stays in Advanced when no Permission mode def a
   assert.ok(field(t, "options.skip_permissions_legacy"), "no enum to own it");
 });
 
+// A permission_mode def that cannot say Bypass does not own the older bool: Advanced draws its checkbox as before #342, the Agent
+// block says nothing about it, and a ticked one is still Bypass for the critical-rm option (the server counts the flag).
+const NOBYPASS_DEFS = PM_DEFS.map((d) => (d.key === "permission_mode" ? Object.assign({}, d, { choices: ["manual", "acceptEdits", "plan"] }) : d));
+
+test("Agent: a permission_mode def without Bypass leaves the legacy checkbox in Advanced and it still enables critical-rm", async () => {
+  const doc = { options: { skip_permissions_legacy: true } };
+  const a = page({ optionDefs: NOBYPASS_DEFS });
+  await openAdv(a, "aws-ops", doc);
+  const box = field(a, "options.skip_permissions_legacy");
+  assert.ok(box, "the legacy checkbox is drawn in Advanced");
+  assert.strictEqual(box.checked, true, "ticked");
+  const t = await pmPage(doc, { optionDefs: NOBYPASS_DEFS });
+  assert.strictEqual(modeSeg(t).dataset.value, "", "the Agent block does not read the bool as a mode");
+  assert.ok(!agentHints(t).includes("Set by"));
+  assert.ok(!critRm(t).parent.className.includes("pfv-off"), "the ticked bool is Bypass, so critical-rm is on offer");
+  // Not ticked: critical-rm is dimmed.
+  const off = await pmPage({ options: { skip_permissions_legacy: false } }, { optionDefs: NOBYPASS_DEFS });
+  assert.ok(critRm(off).parent.className.includes("pfv-off"));
+  // An untouched save leaves the bool where it was.
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].options, { skip_permissions_legacy: true });
+});
+
 test("Agent: critical-rm is dimmed until Bypass, then shows the clone line and the in-place warnbox", async () => {
   const t = await pmPage({ options: { permission_mode: "plan" } });
   const consq = () => texts(blockOf(t, "agent"), "pfv-consq").join(" ");

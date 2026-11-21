@@ -1252,6 +1252,26 @@ func TestViewLegacyProfileOffersPermissionMode(t *testing.T) {
 	}
 }
 
+// #342: a config.json permission_mode def without bypassPermissions does not own the
+// legacy bool: no legacy key, no Permission mode offered, and the bool is a marked
+// option of its own (the UI counts a ticked one as Bypass by the mark).
+func TestViewLegacyBoolNotOwnedByEnumWithoutBypass(t *testing.T) {
+	opts := []config.OptionDef{
+		{Key: "skip_permissions", Label: "Skip permissions", Type: config.OptBool, Flag: "--dangerously-skip-permissions", Bins: []string{"claude"}},
+		{Key: config.PermissionModeKey, Label: "Permission mode", Type: config.OptEnum, Flag: "--permission-mode",
+			Choices: []string{"default", "acceptEdits", "plan"}, Bins: []string{"claude"}},
+	}
+	seeds := []config.AgentConfig{{Name: "legacy", Bin: "claude", Options: map[string]any{"skip_permissions": true}}}
+	m := NewProfileManager(seeds, opts, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	v := m.Views()[0]
+	if v.LegacyBypassKey != "" {
+		t.Errorf("legacy_bypass_key = %q, want empty", v.LegacyBypassKey)
+	}
+	if len(v.Options) != 1 || v.Options[0].Key != "skip_permissions" || !v.Options[0].Bypass || v.Options[0].Value != true {
+		t.Errorf("options = %+v, want only the marked legacy bool", v.Options)
+	}
+}
+
 // #342: the critical-rm row carries its tier, and the host block names it.
 func TestViewCriticalRmTierAndHostBlock(t *testing.T) {
 	seeds := []config.AgentConfig{{Name: "c", Bin: "claude", Options: map[string]any{

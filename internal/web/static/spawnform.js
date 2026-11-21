@@ -63,18 +63,6 @@ function permModeLine(choice) {
 
 const LEGACY_BYPASS_FLAG = "--dangerously-skip-permissions";
 
-// legacyBypassKeyFromDefs: the key of the older bypass bool, found by its flag and never by its name (mirrors
-// config.LegacyBypassKey: a key the profile has, whatever its value). The first sorted such key. For the profile page, which has the defs;
-// New session reads profile.legacy_bypass_key.
-function legacyBypassKeyFromDefs(defs, options) {
-  const opts = options || {};
-  const isLegacy = (d) => !!d && d.type === "bool" && d.flag === LEGACY_BYPASS_FLAG;
-  const list = Array.isArray(defs) ? defs : Object.values(defs || {});
-  const keys = list.filter(isLegacy).map((d) => d.key).sort();
-  for (const k of keys) if (Object.prototype.hasOwnProperty.call(opts, k)) return k;
-  return "";
-}
-
 // optionDefApplies: config.OptionDef.AppliesTo for a def (no bins: every agent; else the bin or its basename). Pure twin of app.js
 // optApplies, for the scripts that run under node.
 function optionDefApplies(d, bin) {
@@ -83,13 +71,35 @@ function optionDefApplies(d, bin) {
   return d.bins.includes(bin) || d.bins.includes(base);
 }
 
+const isLegacyBypassDef = (d) => !!d && d.type === "bool" && d.flag === LEGACY_BYPASS_FLAG;
+
+// enumOwnsLegacyBypass: the Permission mode control owns the older bypass bool for this command only when the permission_mode def
+// that applies to it can say Bypass (has bypassPermissions among its choices). Mirrors config.EnumOwnsLegacyBypass. A def whose
+// choices omit it cannot stand in for the bool, so the bool stays a checkbox of its own, as before #342.
+function enumOwnsLegacyBypass(defs, bin) {
+  const list = Array.isArray(defs) ? defs : Object.values(defs || {});
+  return list.some((d) => d && d.key === PERM_MODE_KEY && optionDefApplies(d, bin) && Array.isArray(d.choices) && d.choices.includes(BYPASS_MODE));
+}
+
+// legacyBypassKeyFromDefs: the key of the older bypass bool, found by its flag and never by its name (mirrors
+// config.LegacyBypassKey: a key the profile has, whatever its value, while the enum owns it). The first sorted such key. For the
+// profile page, which has the defs; New session reads profile.legacy_bypass_key.
+function legacyBypassKeyFromDefs(defs, options, bin) {
+  if (!enumOwnsLegacyBypass(defs, bin)) return "";
+  const opts = options || {};
+  const list = Array.isArray(defs) ? defs : Object.values(defs || {});
+  const keys = list.filter((d) => isLegacyBypassDef(d) && optionDefApplies(d, bin)).map((d) => d.key).sort();
+  for (const k of keys) if (Object.prototype.hasOwnProperty.call(opts, k)) return k;
+  return "";
+}
+
 // legacyKeysOwnedByEnum: the keys of the older bypass bools (any declared bool on the legacy flag) that the Permission mode control
 // owns for this command: they are the legacy form of Bypass, so Advanced does not draw them, whether or not the profile stores one.
-// Only while a permission_mode def applies to the command; with none, the checkbox is the only way to set it and stays.
+// Only while the enum owns the bool (enumOwnsLegacyBypass); otherwise the checkbox is the only way to set it and stays.
 function legacyKeysOwnedByEnum(defs, bin) {
+  if (!enumOwnsLegacyBypass(defs, bin)) return [];
   const list = Array.isArray(defs) ? defs : Object.values(defs || {});
-  if (!list.some((d) => d && d.key === PERM_MODE_KEY && optionDefApplies(d, bin))) return [];
-  return list.filter((d) => d && d.type === "bool" && d.flag === LEGACY_BYPASS_FLAG && optionDefApplies(d, bin)).map((d) => d.key);
+  return list.filter((d) => isLegacyBypassDef(d) && optionDefApplies(d, bin)).map((d) => d.key);
 }
 
 // effectiveMode: permission_mode when it carries a value; else Bypass when the legacy bool is on; else "".
@@ -100,12 +110,16 @@ function effectiveMode(options, legacyKey) {
 }
 
 // effectiveBypass: the run skips permission checks. From the profile's own args, from the mode (the enum, or the legacy bool
-// by its flag), or from the flagless fixture key BYPASS_OPTION_KEY.
+// by its flag), from a ticked bool the server marks as the older bypass form (profile.options[].bypass: the enum does not own it,
+// so it is a checkbox; a mode that is set supersedes it, as on the server), or from the flagless fixture key BYPASS_OPTION_KEY.
 function effectiveBypass(profile, options) {
   const p = profile || {};
+  const o = options || {};
+  const markedOn = !o[PERM_MODE_KEY] && (Array.isArray(p.options) ? p.options : []).some((x) => x && x.bypass === true && o[x.key] === true);
   return !!(p.bypass_args
     || effectiveMode(options, p.legacy_bypass_key) === "bypassPermissions"
-    || (options && options[BYPASS_OPTION_KEY] === true));
+    || markedOn
+    || o[BYPASS_OPTION_KEY] === true);
 }
 
 // critRmView: the critical-rm row for the card picked. Hidden off a box; dimmed unless the run is in bypass; otherwise the
@@ -300,6 +314,6 @@ if (typeof module !== "undefined" && module.exports) {
     SPAWN_NOT_SHARED_TAIL, SPAWN_VM_SEES_HELP, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
     runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText, spawnSubmitLabel, spawnFootHint,
     PLIST_SEARCH_MIN, profileMatches,
-    PERM_MODE_KEY, BYPASS_MODE, CRIT_RM_KEY, PERM_MODE_LABELS, PERM_MODE_LINES, CRIT_RM_COPY, permModeLabel, permModeLine, legacyBypassKeyFromDefs, legacyKeysOwnedByEnum, optionDefApplies, effectiveMode, effectiveBypass, critRmView,
+    PERM_MODE_KEY, BYPASS_MODE, CRIT_RM_KEY, PERM_MODE_LABELS, PERM_MODE_LINES, CRIT_RM_COPY, permModeLabel, permModeLine, enumOwnsLegacyBypass, legacyBypassKeyFromDefs, legacyKeysOwnedByEnum, optionDefApplies, effectiveMode, effectiveBypass, critRmView,
   };
 }

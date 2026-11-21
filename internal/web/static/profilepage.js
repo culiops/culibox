@@ -1970,9 +1970,23 @@ function pfvAgentDefs(c, bin) {
 }
 
 // pfvLegacyKey: the key of the older bypass bool the profile holds (found by its flag, whatever its value), "" if none. It is
-// carried in the values when the daemon defines Permission mode, and the Agent save writes it only while that control applies.
+// carried in the values while the Permission mode control owns the bool (the daemon's permission_mode def applies to the command and
+// can say Bypass), and the Agent save writes it only while that control applies. Otherwise the bool is a checkbox in Advanced.
 function pfvLegacyKey(c) {
-  return c.defs.some((d) => d && d.key === PERM_MODE_KEY) ? legacyBypassKeyFromDefs(c.defs, pfvStoredOptions(c.doc)) : "";
+  return legacyBypassKeyFromDefs(c.defs, pfvStoredOptions(c.doc), pfaBin(c));
+}
+
+// pfvUnownedBypass: whether an older bypass bool the enum does not own (so Advanced draws it) reads true now, from its pending
+// Advanced edit, else the stored value. A mode that is set supersedes it, as on the server.
+function pfvUnownedBypass(c, options) {
+  if (options[PERM_MODE_KEY]) return false;
+  const bin = pfaBin(c);
+  const owned = legacyKeysOwnedByEnum(c.defs, bin);
+  const adv = pfvState.edits.advanced;
+  const pending = adv && adv.values && adv.values.options ? adv.values.options : {};
+  const stored = pfvStoredOptions(c.doc);
+  return c.defs.some((d) => d && d.type === "bool" && d.flag === LEGACY_BYPASS_FLAG && !owned.includes(d.key) && optApplies(d, bin)
+    && (Object.prototype.hasOwnProperty.call(pending, d.key) ? pending[d.key] === true : stored[d.key] === true));
 }
 
 // The values keep every agent option the daemon defines, applicable or not, so changing the
@@ -2001,7 +2015,7 @@ function pfvPermState(rec, c) {
     legacy,
     mode,
     viaLegacy: !options[PERM_MODE_KEY] && mode === BYPASS_MODE,
-    bypass: effectiveBypass({ bypass_args: c.view.bypass_args === true, legacy_bypass_key: legacy }, options),
+    bypass: effectiveBypass({ bypass_args: c.view.bypass_args === true, legacy_bypass_key: legacy }, options) || pfvUnownedBypass(c, options),
   };
 }
 

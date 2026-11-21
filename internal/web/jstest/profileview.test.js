@@ -666,4 +666,9 @@ test("Agent read rows: the older bypass bool reads as Bypass only when true, wit
   // No Permission mode def at all (an older daemon): nothing changes, the bool stays in Advanced.
   const none = pfvReadView(awsIn({ defs: PM_READ_DEFS.filter((d) => d.key !== "permission_mode"), doc: { ...awsOpsDoc, options: { skip_permissions_legacy: true } } }));
   assert.deepStrictEqual(byId(none, "advanced").rows.map((r) => [r.kind, r.name]), [["Skip permissions", "On"]]);
+  // A Permission mode def whose choices omit Bypass cannot stand in for the bool: it stays an Advanced row, and the Agent block
+  // says nothing of it.
+  const noBypass = pmRead({ skip_permissions_legacy: true }, { defs: PM_READ_DEFS.map((d) => (d.key === "permission_mode" ? { ...d, choices: ["manual", "plan"] } : d)) });
+  assert.deepStrictEqual(byId(noBypass, "agent").rows, []);
+  assert.deepStrictEqual(byId(noBypass, "advanced").rows.map((r) => [r.kind, r.name]), [["Skip permissions", "On"]]);
 });

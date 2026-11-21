@@ -6,7 +6,7 @@ const assert = require("node:assert");
 const {
   BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
   runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText,
-  PERM_MODE_LABELS, PERM_MODE_LINES, CRIT_RM_COPY, permModeLabel, permModeLine, legacyBypassKeyFromDefs, effectiveMode, effectiveBypass, critRmView,
+  PERM_MODE_LABELS, PERM_MODE_LINES, CRIT_RM_COPY, permModeLabel, permModeLine, enumOwnsLegacyBypass, legacyBypassKeyFromDefs, legacyKeysOwnedByEnum, effectiveMode, effectiveBypass, critRmView,
 } = require("../static/spawnform.js");
 const { spawnRuntimeDefault } = require("../static/tier.js");
 
@@ -94,12 +94,41 @@ test("legacyBypassKeyFromDefs finds the bool by its flag, the first sorted key t
     { key: "aaa_skip", type: "bool", flag: "--dangerously-skip-permissions" },
     { key: "skip_permissions", type: "enum", flag: "--dangerously-skip-permissions" },
     { key: "verbose", type: "bool", flag: "--verbose" },
+    MODE_DEF,
   ];
-  assert.strictEqual(legacyBypassKeyFromDefs(defs, { zzz_skip: true, aaa_skip: false }), "aaa_skip");
-  assert.strictEqual(legacyBypassKeyFromDefs(defs, { zzz_skip: true }), "zzz_skip");
-  assert.strictEqual(legacyBypassKeyFromDefs(defs, { verbose: true, skip_permissions: true }), "", "by flag and type, not by name");
-  assert.strictEqual(legacyBypassKeyFromDefs(defs, {}), "");
-  assert.strictEqual(legacyBypassKeyFromDefs(undefined, { zzz_skip: true }), "");
+  assert.strictEqual(legacyBypassKeyFromDefs(defs, { zzz_skip: true, aaa_skip: false }, "claude"), "aaa_skip");
+  assert.strictEqual(legacyBypassKeyFromDefs(defs, { zzz_skip: true }, "claude"), "zzz_skip");
+  assert.strictEqual(legacyBypassKeyFromDefs(defs, { verbose: true, skip_permissions: true }, "claude"), "", "by flag and type, not by name");
+  assert.strictEqual(legacyBypassKeyFromDefs(defs, {}, "claude"), "");
+  assert.strictEqual(legacyBypassKeyFromDefs(undefined, { zzz_skip: true }, "claude"), "");
+});
+
+// The enum owns the older bool only when the permission_mode def for the command can say Bypass (mirrors config.EnumOwnsLegacyBypass).
+const MODE_DEF = { key: "permission_mode", type: "enum", choices: ["manual", "plan", "bypassPermissions"], flag: "--permission-mode", bins: ["claude"] };
+const SKIP_DEF = { key: "skip", type: "bool", flag: "--dangerously-skip-permissions", bins: ["claude"] };
+
+test("the enum owns the legacy bool only when its def applies and has bypassPermissions", () => {
+  assert.strictEqual(enumOwnsLegacyBypass([MODE_DEF, SKIP_DEF], "claude"), true);
+  assert.strictEqual(enumOwnsLegacyBypass([MODE_DEF, SKIP_DEF], "/usr/bin/claude"), true);
+  assert.deepStrictEqual(legacyKeysOwnedByEnum([MODE_DEF, SKIP_DEF], "claude"), ["skip"]);
+  assert.strictEqual(legacyBypassKeyFromDefs([MODE_DEF, SKIP_DEF], { skip: false }, "claude"), "skip");
+  const noBypass = { ...MODE_DEF, choices: ["default", "acceptEdits", "plan"] };
+  assert.strictEqual(enumOwnsLegacyBypass([noBypass, SKIP_DEF], "claude"), false, "no bypassPermissions choice");
+  assert.deepStrictEqual(legacyKeysOwnedByEnum([noBypass, SKIP_DEF], "claude"), []);
+  assert.strictEqual(legacyBypassKeyFromDefs([noBypass, SKIP_DEF], { skip: true }, "claude"), "");
+  assert.strictEqual(enumOwnsLegacyBypass([{ ...MODE_DEF, bins: ["codex"] }, SKIP_DEF], "claude"), false, "def for another command");
+  assert.strictEqual(enumOwnsLegacyBypass([SKIP_DEF], "claude"), false, "no permission_mode def");
+  assert.strictEqual(enumOwnsLegacyBypass(undefined, "claude"), false);
+  assert.strictEqual(legacyBypassKeyFromDefs([MODE_DEF, SKIP_DEF], { skip: true }, "bash"), "", "legacy def does not apply to bash");
+});
+
+test("effectiveBypass counts a ticked bool the server marks as the older form when the enum does not own it", () => {
+  const p = { ...claude, options: [{ key: "skip", type: "bool", value: true, bypass: true }, { key: "other", type: "bool", value: true }] };
+  assert.strictEqual(effectiveBypass(p, { skip: true }), true);
+  assert.strictEqual(effectiveBypass(p, { skip: false }), false);
+  assert.strictEqual(effectiveBypass(p, { other: true }), false, "not marked");
+  assert.strictEqual(effectiveBypass(p, { skip: true, permission_mode: "plan" }), false, "a set mode supersedes the bool, as on the server");
+  assert.strictEqual(bypassWarningShown(p, { skip: true }, true), true);
 });
 
 test("critRmView: hidden off a box, dimmed outside bypass, plain on a clone, strong in place", () => {

@@ -207,7 +207,7 @@ function pfvAgentModeRows(view, doc, defs, bin) {
   const o = pfvOptions(view, doc);
   const rows = [];
   if (has(sf.PERM_MODE_KEY)) {
-    const legacy = sf.legacyBypassKeyFromDefs(list, o);
+    const legacy = sf.legacyBypassKeyFromDefs(list, o, bin);
     const mode = sf.effectiveMode(o, legacy);
     if (mode !== "") {
       const via = !o[sf.PERM_MODE_KEY] ? list.find((d) => d && d.key === legacy) : null;
