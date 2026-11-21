@@ -7285,12 +7285,21 @@ test("Agent: a permission_mode def without Bypass leaves the legacy checkbox in 
   assert.ok(box, "the legacy checkbox is drawn in Advanced");
   assert.strictEqual(box.checked, true, "ticked");
   const t = await pmPage(doc, { optionDefs: NOBYPASS_DEFS });
-  assert.strictEqual(modeSeg(t).dataset.value, "", "the Agent block does not read the bool as a mode");
-  assert.ok(!agentHints(t).includes("Set by"));
+  assert.strictEqual(modeSeg(t).dataset.value, "", "the seg does not read the bool as a mode");
   assert.ok(!critRm(t).parent.className.includes("pfv-off"), "the ticked bool is Bypass, so critical-rm is on offer");
-  // Not ticked: critical-rm is dimmed.
+  // The hint says what the run does: Bypass, set by the older bool, not "Claude Code's default".
+  assert.ok(agentHints(t).includes("Runs every action without asking."));
+  assert.ok(agentHints(t).includes("Set by Skip permissions (older form)"));
+  assert.ok(!agentHints(t).includes(PM_UNSET));
+  // Not ticked: critical-rm is dimmed, and the unset line stays.
   const off = await pmPage({ options: { skip_permissions_legacy: false } }, { optionDefs: NOBYPASS_DEFS });
   assert.ok(critRm(off).parent.className.includes("pfv-off"));
+  assert.ok(agentHints(off).includes(PM_UNSET));
+  assert.ok(!agentHints(off).includes("Set by"));
+  // A set mode supersedes the bool: its own line, no older-form line.
+  const planned = await pmPage({ options: { skip_permissions_legacy: true, permission_mode: "plan" } }, { optionDefs: NOBYPASS_DEFS });
+  assert.ok(agentHints(planned).includes("Reads and plans only."));
+  assert.ok(!agentHints(planned).includes("Set by"));
   // An untouched save leaves the bool where it was.
   assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
   assert.deepStrictEqual(t.box.puts[0].options, { skip_permissions_legacy: true });

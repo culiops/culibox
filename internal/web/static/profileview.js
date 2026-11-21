@@ -15,7 +15,7 @@
 // script's const is in the shared scope, not on globalThis); under node they are required.
 function pfvPerm() {
   return typeof PERM_MODE_KEY !== "undefined"
-    ? { PERM_MODE_KEY, CRIT_RM_KEY, CRIT_RM_COPY, permModeLabel, permModeLine, legacyBypassKeyFromDefs, legacyKeysOwnedByEnum, optionDefApplies, effectiveMode }
+    ? { PERM_MODE_KEY, CRIT_RM_KEY, CRIT_RM_COPY, permModeLabel, permModeLine, legacyBypassKeyFromDefs, legacyKeysOwnedByEnum, optionDefApplies, effectiveMode, BYPASS_MODE, isLegacyBypassDef }
     : require("./spawnform.js");
 }
 
@@ -213,6 +213,14 @@ function pfvAgentModeRows(view, doc, defs, bin) {
       const via = !o[sf.PERM_MODE_KEY] ? list.find((d) => d && d.key === legacy) : null;
       const sub = [sf.permModeLine(mode), via ? sf.CRIT_RM_COPY.legacy(via.label || via.key) : ""].filter(Boolean).join(" ");
       rows.push(pfvRow("Mode", sf.permModeLabel(mode), { sub }));
+    } else if (!o[sf.PERM_MODE_KEY]) {
+      // The enum does not own the older bool (it cannot say Bypass), but a true one still runs Bypass: say so beside its Advanced row.
+      const owned = sf.legacyKeysOwnedByEnum(list, bin);
+      const un = list.find((d) => sf.isLegacyBypassDef(d) && sf.optionDefApplies(d, bin) && !owned.includes(d.key) && o[d.key] === true);
+      if (un) {
+        const sub = [sf.permModeLine(sf.BYPASS_MODE), sf.CRIT_RM_COPY.legacy(un.label || un.key)].join(" ");
+        rows.push(pfvRow("Mode", sf.permModeLabel(sf.BYPASS_MODE), { sub }));
+      }
     }
   }
   const crit = has(sf.CRIT_RM_KEY);

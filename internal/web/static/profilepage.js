@@ -1976,17 +1976,17 @@ function pfvLegacyKey(c) {
   return legacyBypassKeyFromDefs(c.defs, pfvStoredOptions(c.doc), pfaBin(c));
 }
 
-// pfvUnownedBypass: whether an older bypass bool the enum does not own (so Advanced draws it) reads true now, from its pending
-// Advanced edit, else the stored value. A mode that is set supersedes it, as on the server.
-function pfvUnownedBypass(c, options) {
-  if (options[PERM_MODE_KEY]) return false;
+// pfvUnownedBypassDef: the older bypass bool the enum does not own (so Advanced draws it) that reads true now, from its pending
+// Advanced edit, else the stored value; null when none does. A mode that is set supersedes it, as on the server.
+function pfvUnownedBypassDef(c, options) {
+  if (options[PERM_MODE_KEY]) return null;
   const bin = pfaBin(c);
   const owned = legacyKeysOwnedByEnum(c.defs, bin);
   const adv = pfvState.edits.advanced;
   const pending = adv && adv.values && adv.values.options ? adv.values.options : {};
   const stored = pfvStoredOptions(c.doc);
-  return c.defs.some((d) => d && d.type === "bool" && d.flag === LEGACY_BYPASS_FLAG && !owned.includes(d.key) && optApplies(d, bin)
-    && (Object.prototype.hasOwnProperty.call(pending, d.key) ? pending[d.key] === true : stored[d.key] === true));
+  return c.defs.find((d) => d && d.type === "bool" && d.flag === LEGACY_BYPASS_FLAG && !owned.includes(d.key) && optApplies(d, bin)
+    && (Object.prototype.hasOwnProperty.call(pending, d.key) ? pending[d.key] === true : stored[d.key] === true)) || null;
 }
 
 // The values keep every agent option the daemon defines, applicable or not, so changing the
@@ -2011,11 +2011,13 @@ function pfvPermState(rec, c) {
   const options = rec.values.options;
   const legacy = pfvLegacyKey(c);
   const mode = effectiveMode(options, legacy);
+  const unowned = pfvUnownedBypassDef(c, options);
   return {
     legacy,
+    unowned,
     mode,
     viaLegacy: !options[PERM_MODE_KEY] && mode === BYPASS_MODE,
-    bypass: effectiveBypass({ bypass_args: c.view.bypass_args === true, legacy_bypass_key: legacy }, options) || pfvUnownedBypass(c, options),
+    bypass: effectiveBypass({ bypass_args: c.view.bypass_args === true, legacy_bypass_key: legacy }, options) || unowned !== null,
   };
 }
 
@@ -2080,11 +2082,14 @@ function pfvPermModeField(rec, c, d) {
     pfvChanged(rec, key);
   };
   const lines = [];
-  const line = permModeLine(st.mode);
+  // Unset mode, but a ticked older-form bool the enum does not own runs Bypass: say so, not "Claude Code's default".
+  const line = permModeLine(st.mode === "" && st.unowned ? BYPASS_MODE : st.mode);
   if (line) lines.push(line);
   if (st.viaLegacy) {
     const def = c.defs.find((x) => x && x.key === st.legacy);
     lines.push(CRIT_RM_COPY.legacy((def && def.label) || st.legacy));
+  } else if (st.mode === "" && st.unowned) {
+    lines.push(CRIT_RM_COPY.legacy(st.unowned.label || st.unowned.key));
   }
   if (c.view.bypass_args === true) lines.push(CRIT_RM_COPY.args);
   const hint = lines.map((s, i) => (i < lines.length - 1 ? s + " " : s));
