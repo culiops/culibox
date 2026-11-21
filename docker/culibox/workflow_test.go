@@ -216,7 +216,7 @@ func TestBoxImageWeeklyScan(t *testing.T) {
 			"gh release download",
 			"sha256sum -c --ignore-missing SHA256SUMS",
 			`ghcr\.io/culiops/culibox@sha256:[0-9a-f]{64}`,
-			"no box image ref in the latest release; scanning base only",
+			"latest release unavailable or has no box image ref; scanning base only",
 			"unique_by(.ref)",
 			"imagetools inspect node:24-bookworm-slim",
 		},

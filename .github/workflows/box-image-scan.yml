@@ -90,7 +90,7 @@ jobs:
           if [ "$(printf '%s' "$refs" | grep -c .)" -eq 1 ]; then
             targets=$(jq -c --arg ref "$refs" --arg name "release $tag" '. + [{name: $name, ref: $ref}]' <<<"$targets")
           else
-            echo "::warning::no box image ref in the latest release; scanning base only"
+            echo "::warning::latest release unavailable or has no box image ref; scanning base only"
           fi
 
           # One scan per digest and arch; a release that pins the base digest is scanned once.
