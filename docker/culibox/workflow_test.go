@@ -139,6 +139,45 @@ func TestWorkflowSupplyChain(t *testing.T) {
 
 // jobBlock returns the text of one top-level job (from `  <name>:` to the next
 // job or the end of the file).
+// #355: each built digest is scanned by the pinned Grype in a job of its own. The
+// scanner is third-party code, so the job holds a read-only token and no registry
+// login (the package is public). Report first: findings never fail it, and merge
+// does not wait for it, so a scanner or database outage never blocks publishing.
+func TestBoxImageScanJob(t *testing.T) {
+	b, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := string(b)
+	scan := jobBlock(t, wf, "scan")
+	for _, want := range []string{
+		"\n    needs: build\n",
+		"\n    if: github.ref == 'refs/heads/main'\n",
+		"\n    permissions:\n      contents: read\n",
+		"persist-credentials: false",
+		"scripts/ci/install-grype.sh",
+		`GRYPE_CHECK_FOR_APP_UPDATE: "false"`,
+		`"registry:${IMAGE}@sha256:${DIGEST}"`,
+		`--platform "linux/${ARCH}"`,
+		`^[0-9a-f]{64}$`,
+		"scripts/ci/image-scan-report.sh",
+		`>> "$GITHUB_STEP_SUMMARY"`,
+	} {
+		if !strings.Contains(scan, want) {
+			t.Errorf("the scan job lacks %q", want)
+		}
+	}
+	for _, banned := range []string{"packages: write", "docker/login-action", "secrets.", "--fail-on", "issues:"} {
+		if strings.Contains(scan, banned) {
+			t.Errorf("the scan job must not contain %q", banned)
+		}
+	}
+	merge := jobBlock(t, wf, "merge")
+	if !strings.Contains(merge, "\n    needs: build\n") || strings.Contains(merge, "scan") {
+		t.Error("merge must need build only: in report-first mode the scan never delays or blocks publishing")
+	}
+}
+
 func jobBlock(t *testing.T, wf, name string) string {
 	t.Helper()
 	_, rest, ok := strings.Cut(wf, "\njobs:\n")
