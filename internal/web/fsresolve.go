@@ -18,11 +18,11 @@ type BoxTrees struct {
 }
 
 // fsTarget is where an fs request lands. A host target (Strict false) is fully
-// resolved below $HOME, as the old EvalSymlinks check did. A strict target is inside a
+// resolved below a served root, as the old EvalSymlinks check did. A strict target is inside a
 // boxed workspace: Rel is the UNRESOLVED remainder and must only be opened
 // through os.Root(Root), which refuses any box-planted link that leaves it.
 type fsTarget struct {
-	Root   string // resolved dir the os.Root opens ($HOME for host paths, W for strict)
+	Root   string // resolved dir the os.Root opens (the served root for host paths, W for strict)
 	Rel    string // below Root, "." for Root; host: fully resolved; strict: unresolved remainder
 	Abs    string // filepath.Join(Root, Rel), returned to the client
 	Strict bool
@@ -130,16 +130,17 @@ func newFsPolicy(home string, roots []string, trees BoxTrees, scratch ...string)
 		if wsroots.Refusal(rr, wsroots.Env{Home: rhome}) != "" {
 			continue
 		}
+		// Home already serves everything under it, so such a root adds no reach.
+		if rr == rhome || strings.HasPrefix(rr, rhome+string(os.PathSeparator)) {
+			continue
+		}
 		if p.hasRoot(rr) {
 			continue
 		}
+		// Contained trees are unchanged under every root: a box workspace that
+		// is, holds, or sits in an extra root stays contained (and guarded), so
+		// the walk never follows its box-planted links in host mode.
 		p.roots = append(p.roots, rr)
-		// A contained tree holding a root would make the root strict-or-nothing,
-		// so it is ignored like one holding home. The root itself is NOT
-		// forbidden: a box workspace that is a served root must stay strict.
-		if parent := filepath.Dir(rr); parent != rr {
-			addSelfAndAncestors(parent)
-		}
 	}
 	for _, d := range trees.Denied {
 		rd, err := filepath.EvalSymlinks(d)
@@ -272,7 +273,8 @@ const maxLinkHops = 40
 // box-planted link out of a box-writable tree to any host file it names.
 //
 // Outside the boxed trees, links are host-owned and followed as before, and the
-// final path must be under $HOME or a scratch root (served ReadOnly). The moment the walk stands on a denied tree it
+// final path must be under a served root ($HOME or a workspace root) or a scratch
+// root (served ReadOnly). The moment the walk stands on a denied tree it
 // fails with errDenied. The moment it stands on a contained root W — whether
 // the request named W or a host link's target led into it — it stops: whatever
 // is left, including components still pending from that link's target, is
@@ -281,7 +283,7 @@ const maxLinkHops = 40
 //
 // Errors: errBadPath (empty, relative, too many links), os.ErrNotExist (a missing
 // component, or a non-directory with components after it), errDenied (a denied
-// tree), errOutsideHome (outside $HOME and every scratch root, or a remainder
+// tree), errOutsideHome (outside every served root and every scratch root, or a remainder
 // that climbs out of W).
 func (p fsPolicy) resolve(req string) (fsTarget, error) {
 	if req == "" || !filepath.IsAbs(req) {
@@ -317,7 +319,14 @@ func (p fsPolicy) resolve(req string) (fsTarget, error) {
 			if rel != "." && !filepath.IsLocal(rel) {
 				return fsTarget{}, errOutsideHome
 			}
-			if _, inRoot := p.rootOf(cur); !inRoot {
+			// W is served when it is under a root, or when the target inside it
+			// is (a root nested in W, W being only an ancestor of that root).
+			// The target stays Strict under W either way.
+			_, inRoot := p.rootOf(cur)
+			if !inRoot {
+				_, inRoot = p.rootOf(filepath.Join(cur, rel))
+			}
+			if !inRoot {
 				if s, inScratch := p.underScratch(cur); !inScratch || !passed[s] {
 					return fsTarget{}, errOutsideHome
 				}

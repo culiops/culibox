@@ -94,6 +94,14 @@ func TestPolicyDotDotOutOfExtraRoot(t *testing.T) {
 	if _, err := p.resolve(extra + "/../x"); !errors.Is(err, errOutsideHome) {
 		t.Fatalf("err = %v, want errOutsideHome", err)
 	}
+	// A relative link inside the root climbs out through the walk's own ".."
+	// handling, which the lexical Clean above never reaches.
+	if err := os.Symlink("../x", filepath.Join(extra, "up")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.resolve(filepath.Join(extra, "up")); !errors.Is(err, errOutsideHome) {
+		t.Fatalf("link ../x: err = %v, want errOutsideHome", err)
+	}
 }
 
 func TestPolicyContainedTreeUnderExtraRoot(t *testing.T) {
@@ -174,7 +182,9 @@ func TestPolicyDropsMissingRoot(t *testing.T) {
 	gone := filepath.Join(extra, "gone")
 	notDir := filepath.Join(extra, "file")
 	mustWrite(t, notDir, "x")
-	p, err := newFsPolicy(home, []string{gone, notDir, home}, BoxTrees{})
+	inHome := filepath.Join(home, "sub")
+	mustMkdirAll(t, inHome)
+	p, err := newFsPolicy(home, []string{gone, notDir, home, inHome}, BoxTrees{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,5 +241,62 @@ func TestResolvePreferReturnsRoot(t *testing.T) {
 	}
 	if _, _, _, ok := resolvePrefer(pol, extra); ok {
 		t.Fatal("a root itself must not be a prefer root")
+	}
+}
+
+// A box workspace that holds an extra root stays contained: a link the box
+// planted inside it must never be followed in host mode into $HOME.
+func TestPolicyContainedAncestorOfExtraRootStaysStrict(t *testing.T) {
+	home, base, _ := rootsFixture(t)
+	w := filepath.Join(base, "proj")
+	api := filepath.Join(w, "api")
+	mustMkdirAll(t, api)
+	mustWrite(t, filepath.Join(api, "a.txt"), "x")
+	mustWrite(t, filepath.Join(home, ".bashrc"), "secret")
+	if err := os.Symlink(filepath.Join(home, ".bashrc"), filepath.Join(api, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(home, filepath.Join(w, "evildir")); err != nil {
+		t.Fatal(err)
+	}
+	for _, roots := range [][]string{{api}, {w, api}} {
+		p, err := newFsPolicy(home, roots, BoxTrees{Contained: []string{w}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(p.contained) != 1 {
+			t.Fatalf("roots %v: contained = %d, want 1 (the workspace must stay contained)", roots, len(p.contained))
+		}
+		for _, link := range []string{filepath.Join(api, "evil"), filepath.Join(w, "evildir", ".bashrc")} {
+			got, err := p.resolve(link)
+			if err == nil && (!got.Strict || got.Root != w) {
+				t.Fatalf("roots %v: resolve(%s) = %+v, want Strict under %s or errOutsideHome", roots, link, got, w)
+			}
+			if err != nil && !errors.Is(err, errOutsideHome) {
+				t.Fatalf("roots %v: resolve(%s) err = %v", roots, link, err)
+			}
+			if err == nil {
+				if f, oerr := openFsTarget(got, 0); oerr == nil {
+					f.Close()
+					t.Fatalf("roots %v: opened %s, a link out of the workspace", roots, link)
+				}
+			}
+		}
+		got, err := p.resolve(filepath.Join(api, "a.txt"))
+		if err != nil {
+			t.Fatalf("roots %v: a.txt: %v", roots, err)
+		}
+		if !got.Strict || got.Root != w || got.Rel != "api/a.txt" {
+			t.Fatalf("roots %v: a.txt = %+v, want Strict Root=%s Rel=api/a.txt", roots, got, w)
+		}
+	}
+	// W is only an ancestor of the root: the workspace itself and its other
+	// content are not served.
+	p, _ := newFsPolicy(home, []string{api}, BoxTrees{Contained: []string{w}})
+	mustWrite(t, filepath.Join(w, "other.txt"), "x")
+	for _, req := range []string{w, filepath.Join(w, "other.txt")} {
+		if _, err := p.resolve(req); !errors.Is(err, errOutsideHome) {
+			t.Fatalf("resolve(%s) err = %v, want errOutsideHome", req, err)
+		}
 	}
 }
