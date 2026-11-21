@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/wsroots"
 )
 
 // Workspace is a selectable working directory (home + its subfolders).
@@ -53,6 +54,11 @@ func UnboxableDefaultCwd(dir, home string, protected []box.ProtectedDir, shares 
 	if rel, err := filepath.Rel(abs, h); err == nil && rel != "." &&
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
 		return "it contains your home directory", true
+	}
+	// System and credential folders (#343). DataDir stays empty: the protected
+	// list below already covers CuliBox's data.
+	if reason := wsroots.Refusal(abs, wsroots.Env{Home: h}); reason != "" {
+		return reason, true
 	}
 	if reason := box.ProtectedOverlap(abs, protected); reason != "" {
 		return reason, true

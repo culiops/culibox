@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/extraca"
+	"github.com/culiops/culibox/internal/wsroots"
 )
 
 // Container labels. Instance keeps the DEV and PROD daemons from adopting or
@@ -1012,6 +1013,7 @@ func unboxableResolved(abs string, protected []ProtectedDir, view func() (*Share
 	if abs == string(filepath.Separator) {
 		return "it is the filesystem root", nil
 	}
+	var resolvedHome string
 	if home, err := os.UserHomeDir(); err == nil {
 		if real, err := filepath.EvalSymlinks(home); err == nil {
 			home = real
@@ -1019,6 +1021,12 @@ func unboxableResolved(abs string, protected []ProtectedDir, view func() (*Share
 		if reason := homeReason(abs, home); reason != "" {
 			return reason, nil
 		}
+		resolvedHome = home
+	}
+	// System and credential folders (#343). DataDir stays empty: the protected
+	// list below already covers CuliBox's data.
+	if reason := wsroots.Refusal(abs, wsroots.Env{Home: resolvedHome}); reason != "" {
+		return reason, nil
 	}
 	if reason := protectedOverlapResolved(abs, protected); reason != "" {
 		return reason, nil
