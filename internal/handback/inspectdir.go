@@ -45,13 +45,18 @@ const readBatch = 1024
 // The error is non-nil only when root cannot be opened. Inspected counts the
 // files whose head was read plus the symlinks examined.
 func InspectDir(ctx context.Context, root string, since time.Time, lim Limits) (Report, error) {
-	lim = withDefaults(lim)
 	r, err := os.OpenRoot(root)
 	if err != nil {
 		return Report{}, err
 	}
 	defer r.Close()
+	return InspectRoot(ctx, r, since, lim)
+}
 
+// InspectRoot is InspectDir over a root the caller has opened (and may have
+// checked: the identity of what it opened) itself. It does not close r.
+func InspectRoot(ctx context.Context, r *os.Root, since time.Time, lim Limits) (Report, error) {
+	lim = withDefaults(lim)
 	s := &scanner{ctx: ctx, r: r, lim: lim, since: since, start: time.Now(), hashLeft: lim.HashTotal, flags: NewFlagSet(lim.MaxFlags)}
 	s.walkDir(".", 0)
 

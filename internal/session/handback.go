@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
 )
 
@@ -33,10 +34,12 @@ type HandbackNote struct {
 // layer, kept as an interface so this package does not import it. A nil
 // HandbackHooks means no scan runs.
 type HandbackHooks interface {
-	// ScanInPlace inspects workspace (symlinks resolved) for what a box wrote
-	// there since `since`, records the result and returns the note. sinceKnown
-	// is false when since is a guess (the session's start was lost); the hooks
-	// then prefer the last scan they recorded for the workspace.
+	// ScanInPlace inspects workspace (the real path the box was made over) for
+	// what a box wrote there since `since`, records the result and returns the
+	// note (Count is what this scan flagged). sinceKnown is false when since is
+	// a guess (the session's start was lost); the hooks then prefer the last
+	// scan they recorded for the workspace. Either way a recorded scan earlier
+	// than since wins, so no gap between scans goes unchecked.
 	ScanInPlace(ctx context.Context, workspace string, since time.Time, sinceKnown bool) (HandbackNote, error)
 }
 
@@ -61,25 +64,27 @@ func (n *HandbackNote) copy() *HandbackNote {
 // ended and stores the note on the session. It runs synchronously; callers
 // choose the goroutine. It acts on a capability, not on a kind of agent: a
 // session that runs in a box over the user's own folder (no clone, not a
-// companion shell) wrote into that folder, whatever agent it ran. Failures are
-// logged, never fatal: the session's exit has completed either way.
+// companion shell) wrote into that folder, whatever agent it ran. It scans the
+// workspace path the box was made over, never a fresh resolution of Cwd.
+// Failures and panics are logged, never fatal: the session's exit has
+// completed either way, and hostile input must not take the daemon down.
 func (m *Manager) handbackWork(sess *Session) {
 	m.mu.Lock()
 	h := m.handback
 	m.mu.Unlock()
-	if h == nil || sess.Runtime != config.RuntimeBox || sess.CloneOf != "" || sess.ParentID != "" || sess.Cwd == "" {
+	if h == nil || sess.Runtime != config.RuntimeBox || sess.CloneOf != "" || sess.ParentID != "" || sess.workspace == "" {
 		return
 	}
-	ws, err := filepath.EvalSymlinks(sess.Cwd)
-	if err != nil {
-		log.Printf("session %s: no handback scan, workspace %q: %v", sess.ID, sess.Cwd, err)
-		return
-	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("session %s: handback scan of %q stopped with an internal error: %v", sess.ID, sess.workspace, r)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), handbackScanTimeout)
 	defer cancel()
-	note, err := h.ScanInPlace(ctx, ws, sess.Created.Add(-handbackSkew), !sess.createdGuessed)
+	note, err := h.ScanInPlace(ctx, sess.workspace, sess.Created.Add(-handbackSkew), !sess.createdGuessed)
 	if err != nil {
-		log.Printf("session %s: handback scan of %q: %v", sess.ID, ws, err)
+		log.Printf("session %s: handback scan of %q: %v", sess.ID, sess.workspace, err)
 		return
 	}
 	sess.setHandback(&note)
@@ -89,4 +94,29 @@ func (s *Session) setHandback(n *HandbackNote) {
 	s.mu.Lock()
 	s.handback = n
 	s.mu.Unlock()
+}
+
+// spawnWorkspace is the real path of a workspace just wrapped in a box, "" when
+// it cannot be vouched for. The box layer resolved cwd itself and named the box
+// after the result, so the path counts only if naming the box after it gives
+// the box Wrap returned (box.Manager.NamedFor): a symlink that moved between
+// the box layer's resolution and this one makes the names differ, and then
+// nothing is scanned for the session rather than something else.
+func spawnWorkspace(boxes Boxes, cwd string, key box.BoxKey, boxName string) string {
+	if cwd == "" {
+		return ""
+	}
+	real, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		log.Printf("handback: workspace %q cannot be resolved (%v); its files are not scanned at exit", cwd, err)
+		return ""
+	}
+	// Optional: a Boxes without the check (a test fake) is taken at its word.
+	if v, ok := boxes.(interface {
+		NamedFor(real string, key box.BoxKey, name string) bool
+	}); ok && !v.NamedFor(real, key, boxName) {
+		log.Printf("handback: workspace %q changed while its box %s was made; its files are not scanned at exit", cwd, boxName)
+		return ""
+	}
+	return real
 }

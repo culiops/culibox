@@ -847,13 +847,20 @@ type Session struct {
 	Agent   string
 	Cwd     string
 	Created time.Time
-	// createdGuessed: Created is not the real start (an orphan adopted with no
-	// sidecar, or a record without a start time), so a handback scan cannot use
-	// it as the start of the window. Set before publication, never mutated.
+	// createdGuessed: Created is not the real start (a sidecar record with no
+	// start time; an orphan with no record at all is also marked, though it is
+	// a host session and never scanned), so a handback scan cannot use it as the
+	// start of the window. Set before publication, never mutated.
 	createdGuessed bool
-	Runtime        string // box | host; immutable for the session's lifetime
-	Box            string // container name for a boxed session; "" on the host tier
-	Bin            string // resolved agent binary (for claude-only features like usage)
+	// workspace is the boxed workspace's real path as it was when the box was
+	// made (the value the box layer labels the container with), "" when it is
+	// not known or the session is not boxed. A handback scan walks this path and
+	// never re-resolves Cwd: by exit another box may have put a symlink in its
+	// place. Set before publication, never mutated.
+	workspace string
+	Runtime   string // box | host; immutable for the session's lifetime
+	Box       string // container name for a boxed session; "" on the host tier
+	Bin       string // resolved agent binary (for claude-only features like usage)
 	// ParentID is the session this is a companion shell of. Set before
 	// publication and never mutated, so read without a lock.
 	ParentID string
@@ -2389,6 +2396,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var nonce, enonce string
 	var exclusive bool
 	var cwdForms []string    // boxed only: seeds Session.cwdFormsCache
+	var wsPath string        // boxed only: the workspace's real path when the box was made (Session.workspace)
 	var resumeSkipped string // boxed only: set when --resume was dropped
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
@@ -2604,6 +2612,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				box.ErrBoxUnavailable, spec.Agent, name, heldBrokerBox)
 		}
 		argv, env, boxName = wrapped, wrappedEnv, name
+		wsPath = spawnWorkspace(boxes, spec.Cwd, key, name)
 		if lf, ok := boxes.(interface{ LockedFiles(box string) []string }); ok {
 			lockedFiles = lf.LockedFiles(name)
 		}
@@ -2742,13 +2751,14 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.submitted = submitted
 	sess.options = opts
 	sess.ParentID = spec.ParentID
+	sess.workspace = wsPath
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
 	releaseClone() // published: the next spawn of this clone sees this session as live
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Workspace: wsPath, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, WorkspaceRoot: wsRoot, LockedFiles: slices.Clone(lockedFiles),
@@ -3598,6 +3608,14 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess := newSession(id, md.Agent, name, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	sess.Runtime = runtime
 	sess.createdGuessed = guessed
+	sess.workspace = md.Workspace
+	if sess.workspace == "" && runtime == config.RuntimeBox && md.Box != "" {
+		// A record from before the workspace was kept: the best there is is the
+		// path as it resolves now (the scan still checks it is stable).
+		if real, err := filepath.EvalSymlinks(md.Cwd); err == nil {
+			sess.workspace = real
+		}
+	}
 	sess.Box = md.Box
 	sess.brokerBox = heldBox
 	sess.Bin = bin

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/launcher"
 )
@@ -20,16 +21,20 @@ type scanCall struct {
 }
 
 type fakeHandback struct {
-	mu    sync.Mutex
-	calls []scanCall
-	note  HandbackNote
-	err   error
+	mu     sync.Mutex
+	calls  []scanCall
+	note   HandbackNote
+	err    error
+	panics bool
 }
 
 func (f *fakeHandback) ScanInPlace(_ context.Context, ws string, since time.Time, known bool) (HandbackNote, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, scanCall{ws, since, known})
+	if f.panics {
+		panic("hostile input")
+	}
 	return f.note, f.err
 }
 
@@ -46,11 +51,11 @@ func handbackManager(h HandbackHooks) *Manager {
 }
 
 func TestHandbackWorkInPlaceOnly(t *testing.T) {
-	ws := t.TempDir()
+	ws, _ := filepath.EvalSymlinks(t.TempDir())
 	created := time.Now().Add(-time.Hour).Truncate(time.Second)
 	note := HandbackNote{ID: "abc", Count: 3, InPlace: true}
 	mk := func(mut func(*Session)) *Session {
-		s := &Session{ID: "claude-1", Cwd: ws, Created: created, Runtime: config.RuntimeBox}
+		s := &Session{ID: "claude-1", Cwd: ws, workspace: ws, Created: created, Runtime: config.RuntimeBox}
 		mut(s)
 		return s
 	}
@@ -63,19 +68,18 @@ func TestHandbackWorkInPlaceOnly(t *testing.T) {
 		if len(calls) != 1 {
 			t.Fatalf("calls = %+v, want one", calls)
 		}
-		wantWS, _ := filepath.EvalSymlinks(ws)
-		if calls[0].ws != wantWS || !calls[0].since.Equal(created.Add(-2*time.Second)) || !calls[0].sinceKnown {
-			t.Fatalf("call = %+v, want ws %q since %v known", calls[0], wantWS, created.Add(-2*time.Second))
+		if calls[0].ws != ws || !calls[0].since.Equal(created.Add(-2*time.Second)) || !calls[0].sinceKnown {
+			t.Fatalf("call = %+v, want ws %q since %v known", calls[0], ws, created.Add(-2*time.Second))
 		}
 		if got := s.Info().Handback; got == nil || *got != note {
 			t.Fatalf("Info().Handback = %+v, want %+v", got, note)
 		}
 	})
 	for name, mut := range map[string]func(*Session){
-		"clone session":   func(s *Session) { s.CloneOf = "/home/u/repo" },
-		"companion shell": func(s *Session) { s.ParentID = "claude-1" },
-		"host-tier":       func(s *Session) { s.Runtime = config.RuntimeHost },
-		"no workspace":    func(s *Session) { s.Cwd = "" },
+		"clone session":         func(s *Session) { s.CloneOf = "/home/u/repo" },
+		"companion shell":       func(s *Session) { s.ParentID = "claude-1" },
+		"host-tier":             func(s *Session) { s.Runtime = config.RuntimeHost },
+		"no recorded workspace": func(s *Session) { s.workspace = "" },
 	} {
 		t.Run(name+" is not scanned", func(t *testing.T) {
 			f := &fakeHandback{note: note}
@@ -103,33 +107,38 @@ func TestHandbackWorkInPlaceOnly(t *testing.T) {
 		m := handbackManager(nil)
 		m.handbackWork(mk(func(*Session) {})) // must not panic
 	})
-	t.Run("a workspace that is gone is not scanned", func(t *testing.T) {
-		f := &fakeHandback{}
-		m := handbackManager(f)
-		m.handbackWork(mk(func(s *Session) { s.Cwd = filepath.Join(ws, "missing") }))
-		if len(f.got()) != 0 {
-			t.Fatalf("calls = %+v, want none", f.got())
-		}
-	})
-	t.Run("a workspace reached through a symlink is scanned by its real path", func(t *testing.T) {
+	// R12: Cwd is only a spelling; by exit another box may have put a symlink
+	// where it was. The scan takes the path the box was made over.
+	t.Run("the path recorded at spawn is scanned, whatever Cwd leads to now", func(t *testing.T) {
 		f := &fakeHandback{}
 		m := handbackManager(f)
 		link := filepath.Join(t.TempDir(), "link")
-		if err := os.Symlink(ws, link); err != nil {
+		if err := os.Symlink(t.TempDir(), link); err != nil { // Cwd now leads elsewhere
 			t.Fatal(err)
 		}
 		m.handbackWork(mk(func(s *Session) { s.Cwd = link }))
-		want, _ := filepath.EvalSymlinks(ws)
-		if c := f.got(); len(c) != 1 || c[0].ws != want {
-			t.Fatalf("calls = %+v, want ws %q", c, want)
+		if c := f.got(); len(c) != 1 || c[0].ws != ws {
+			t.Fatalf("calls = %+v, want ws %q", c, ws)
+		}
+	})
+	// R13: a panic in the scan must not take the daemon down.
+	t.Run("a panicking scan does not escape", func(t *testing.T) {
+		f := &fakeHandback{panics: true}
+		m := handbackManager(f)
+		s := mk(func(*Session) {})
+		m.handbackWork(s) // must not panic
+		if len(f.got()) != 1 || s.Info().Handback != nil {
+			t.Fatalf("calls=%d note=%+v", len(f.got()), s.Info().Handback)
 		}
 	})
 }
 
+// A guessed start reaches the hooks as sinceKnown=false.
 func TestHandbackWorkGuessedStart(t *testing.T) {
 	f := &fakeHandback{}
 	m := handbackManager(f)
-	s := &Session{ID: "claude-1", Cwd: t.TempDir(), Created: time.Now(), Runtime: config.RuntimeBox, createdGuessed: true}
+	ws, _ := filepath.EvalSymlinks(t.TempDir())
+	s := &Session{ID: "claude-1", Cwd: ws, workspace: ws, Created: time.Now(), Runtime: config.RuntimeBox, createdGuessed: true}
 	m.handbackWork(s)
 	if c := f.got(); len(c) != 1 || c[0].sinceKnown {
 		t.Fatalf("calls = %+v, want one with sinceKnown=false", c)
@@ -148,6 +157,10 @@ func TestExitRunsHandbackScan(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	want, _ := filepath.EvalSymlinks(dir)
+	if s.workspace != want {
+		t.Fatalf("workspace = %q, want the real path %q", s.workspace, want)
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for s.Info().Handback == nil {
 		if time.Now().After(deadline) {
@@ -155,8 +168,62 @@ func TestExitRunsHandbackScan(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if c := f.got(); len(c) != 1 || !c[0].sinceKnown {
-		t.Fatalf("calls = %+v, want one with a known start", c)
+	if c := f.got(); len(c) != 1 || !c[0].sinceKnown || c[0].ws != want {
+		t.Fatalf("calls = %+v, want one of %q with a known start", c, want)
+	}
+}
+
+// The workspace is only vouched for when the box layer says naming a box after
+// it gives the box Wrap made: a path that moved in between leaves the session
+// unscanned.
+type namedBoxes struct {
+	*fakeBoxes
+	match bool
+}
+
+func (n namedBoxes) NamedFor(string, box.BoxKey, string) bool { return n.match }
+
+func TestSpawnWorkspaceMustMatchTheBox(t *testing.T) {
+	dir := t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	if got := spawnWorkspace(namedBoxes{&fakeBoxes{}, true}, dir, box.BoxKey{}, "ab-box-a"); got != real {
+		t.Fatalf("spawnWorkspace = %q, want %q", got, real)
+	}
+	if got := spawnWorkspace(namedBoxes{&fakeBoxes{}, false}, dir, box.BoxKey{}, "ab-box-a"); got != "" {
+		t.Fatalf("a box that is not the one named after the path: spawnWorkspace = %q, want none", got)
+	}
+	if got := spawnWorkspace(&fakeBoxes{}, dir, box.BoxKey{}, "ab-box-a"); got != real {
+		t.Fatalf("a Boxes with no check is taken at its word: spawnWorkspace = %q, want %q", got, real)
+	}
+	if got := spawnWorkspace(&fakeBoxes{}, filepath.Join(dir, "missing"), box.BoxKey{}, "ab-box-a"); got != "" {
+		t.Fatalf("an unresolvable path: spawnWorkspace = %q, want none", got)
+	}
+}
+
+// The workspace survives a restart through the sidecar, and a sidecar record
+// with no start time is a guessed start (the reachable form of "start lost").
+func TestReconcileKeepsTheWorkspaceAndGuessesAMissingStart(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("bash-1")
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	ws, _ := filepath.EvalSymlinks(t.TempDir())
+	sc, err := openSidecar(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.put("bash-1", sessionMeta{Agent: "bash", Cwd: filepath.Join(ws, "renamed"), Workspace: ws, Runtime: config.RuntimeBox, Box: "ab-box-x"}) // no Created
+	m := newReconcileManager(t, fb, path)
+	m.SetBoxes(&fakeBoxes{})
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill("bash-1") })
+	s, ok := m.Get("bash-1")
+	if !ok {
+		t.Fatal("session not recovered")
+	}
+	if s.workspace != ws || !s.createdGuessed {
+		t.Fatalf("workspace = %q guessed = %v, want %q and true", s.workspace, s.createdGuessed, ws)
 	}
 }
 

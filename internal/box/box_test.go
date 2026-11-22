@@ -1387,3 +1387,25 @@ func TestBoxStopHook(t *testing.T) {
 		}
 	})
 }
+
+// NamedFor is how a caller that resolved a workspace itself checks it agrees
+// with the path Wrap named the box after (#346).
+func TestNamedFor(t *testing.T) {
+	f := newFake()
+	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	_, _, name, err := m.Wrap(context.Background(), dir, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.NamedFor(dir, BoxKey{}, name) {
+		t.Fatal("the path Wrap resolved must name its own box")
+	}
+	other, _ := filepath.EvalSymlinks(t.TempDir())
+	if m.NamedFor(other, BoxKey{}, name) {
+		t.Fatal("another path must not name this box")
+	}
+}
