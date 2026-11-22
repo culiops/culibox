@@ -205,8 +205,8 @@ func (s *Service) coveringLocked(abs string) string {
 
 // Add makes abs a root. It resolves symlinks and requires a directory, then
 // refuses, in order: home itself (ErrCovered), a forbidden folder
-// (*RefusedError), a folder home or a root already reaches (ErrCovered), a
-// full list (ErrCap). The audit is recorded before the save; if it fails,
+// (*RefusedError), a damaged list (ErrCorrupt), a folder home or a root
+// already reaches (ErrCovered), a full list (ErrCap). The audit is recorded before the save; if it fails,
 // nothing is saved. The folder is resolved, checked and refused before the
 // lock is taken (home and dataDir never change), so a mount that hangs here
 // holds up this call only, never List, Paths or Covering.

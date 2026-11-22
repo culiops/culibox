@@ -85,7 +85,7 @@ test("only the New session form's submit sends add_root; the account login and t
   assert.ok(body.indexOf("req.add_root = true") > body.indexOf("const req = spawnPayload("), "after the payload is built");
   assert.ok(!/add_root/.test(src("accounts.js")), "log in never asks to add a root");
   assert.ok(!/add_root/.test(src("spawnform.js")), "spawnPayload (also Duplicate's) never sets it");
-  assert.strictEqual((app.match(/req\.add_root/g) || []).length, 1, "one sender");
+  assert.strictEqual((app.match(/add_root\s*[:=]/g) || []).length, 1, "one sender, as an assignment or an object key");
 });
 
 // The phone shows no line saying what Start would open (#340 freeze), so it must not add a root either.
