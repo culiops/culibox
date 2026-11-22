@@ -824,10 +824,28 @@ func TestHostBlockFor(t *testing.T) {
 	if r, err := l.HostBlockFor("boxonly"); err != nil || r != config.HostBlock(config.AgentConfig{BoxOnly: true}) || r == "" {
 		t.Fatalf("HostBlockFor(boxonly) = %q, %v", r, err)
 	}
-	if r, err := l.HostBlockFor("bound"); err != nil || !strings.Contains(r, "GitHub") {
-		t.Fatalf("HostBlockFor(bound) = %q, %v, want a reason naming the binding", r, err)
+	if r, err := l.HostBlockFor("bound"); r != "" || err != nil {
+		t.Fatalf("HostBlockFor(bound) = %q, %v, want allowed (a binding is a drop, not a lock)", r, err)
 	}
 	if _, err := l.HostBlockFor("missing"); err == nil {
 		t.Fatal("an unknown profile must be an error, not unrestricted")
+	}
+}
+
+func TestHostDropsFor(t *testing.T) {
+	l := New([]config.AgentConfig{
+		{Name: "plain", Bin: "claude"},
+		{Name: "bound", Bin: "claude", GitHub: &config.GitHubBinding{}, ContextPaths: []string{"/srv/docs"}},
+	}, fakeResolver{}, nil)
+
+	if d, err := l.HostDropsFor("plain"); d != nil || err != nil {
+		t.Fatalf("HostDropsFor(plain) = %q, %v, want none", d, err)
+	}
+	d, err := l.HostDropsFor("bound")
+	if err != nil || strings.Join(d, "|") != "GitHub binding|context paths" {
+		t.Fatalf("HostDropsFor(bound) = %q, %v", d, err)
+	}
+	if _, err := l.HostDropsFor("missing"); err == nil {
+		t.Fatal("an unknown profile must be an error")
 	}
 }

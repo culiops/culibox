@@ -981,16 +981,14 @@ func TestProfilesListHostBlock(t *testing.T) {
 	for _, p := range raw {
 		byName[p["name"].(string)] = p
 	}
-	for name, want := range map[string]string{
-		"aws":    "this profile has an AWS binding, so it runs only in a box",
-		"locked": "this profile is set to box only",
-	} {
-		if got, _ := byName[name]["host_block"].(string); got != want {
-			t.Errorf("%s: host_block = %q, want %q", name, got, want)
-		}
+	if got, want := byName["locked"]["host_block"], "this profile is set to box only"; got != want {
+		t.Errorf("locked: host_block = %v, want %q", got, want)
 	}
-	if _, present := byName["plain"]["host_block"]; present {
-		t.Errorf("plain: host_block must be absent, got %v", byName["plain"]["host_block"])
+	// #359: a binding is dropped on the host, not a lock, so it is no host_block.
+	for _, name := range []string{"aws", "plain"} {
+		if _, present := byName[name]["host_block"]; present {
+			t.Errorf("%s: host_block must be absent, got %v", name, byName[name]["host_block"])
+		}
 	}
 	if byName["locked"]["box_only"] != true {
 		t.Errorf("locked: box_only = %v, want true", byName["locked"]["box_only"])

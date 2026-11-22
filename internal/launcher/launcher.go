@@ -671,14 +671,26 @@ func (l *AgentLauncher) CloneFor(agent string) (*config.Clone, error) {
 }
 
 // HostBlockFor returns config.HostBlock for the profile: "" when the host tier
-// is allowed, else the reason clause. An unknown profile is an error, so a
-// spawn naming one is refused rather than treated as unrestricted.
+// is allowed, else the reason clause (only the box_only lock). An unknown
+// profile is an error, so a spawn naming one is refused rather than treated as
+// unrestricted.
 func (l *AgentLauncher) HostBlockFor(agent string) (string, error) {
 	cfg, ok := l.agent(agent)
 	if !ok {
 		return "", fmt.Errorf("launcher: unknown agent %q", agent)
 	}
-	return config.HostBlockWith(cfg, l.optionDefs), nil
+	return config.HostBlock(cfg), nil
+}
+
+// HostDropsFor returns config.HostDrops for the profile: what a host run would
+// drop (bindings, context paths, box-only env and options), nil when nothing.
+// An unknown profile is an error, as in HostBlockFor.
+func (l *AgentLauncher) HostDropsFor(agent string) ([]string, error) {
+	cfg, ok := l.agent(agent)
+	if !ok {
+		return nil, fmt.Errorf("launcher: unknown agent %q", agent)
+	}
+	return config.HostDrops(cfg, l.optionDefs), nil
 }
 
 // ContextPathsFor returns a copy of the profile's context_paths, or nil, nil
@@ -979,13 +991,9 @@ func (l *AgentLauncher) acceptOverride(cfg config.AgentConfig, k string, v any) 
 	return ok
 }
 
-// AcceptedOptions returns the overrides Build would apply for spec — what a
-// restart must re-apply. nil when there are none.
-func (l *AgentLauncher) AcceptedOptions(spec SpawnSpec) map[string]any {
-	cfg, ok := l.agent(spec.Agent)
-	if !ok {
-		return nil
-	}
+// acceptedOverrides returns the spec's overrides that acceptOverride keeps, nil
+// when there are none. Runtime plays no part: a box-only key is kept here.
+func (l *AgentLauncher) acceptedOverrides(cfg config.AgentConfig, spec SpawnSpec) map[string]any {
 	var out map[string]any
 	for k, v := range spec.Options {
 		if l.acceptOverride(cfg, k, v) {
@@ -993,6 +1001,24 @@ func (l *AgentLauncher) AcceptedOptions(spec SpawnSpec) map[string]any {
 				out = map[string]any{}
 			}
 			out[k] = v
+		}
+	}
+	return out
+}
+
+// AcceptedOptions returns the overrides Build would apply for spec — what a
+// restart must re-apply. nil when there are none. A host spawn never carries a
+// box-only option (Build strips it), so it is left out.
+func (l *AgentLauncher) AcceptedOptions(spec SpawnSpec) map[string]any {
+	cfg, ok := l.agent(spec.Agent)
+	if !ok {
+		return nil
+	}
+	out := l.acceptedOverrides(cfg, spec)
+	if out != nil && spec.Runtime == config.RuntimeHost {
+		out = config.StripBoxOnly(l.optionDefs, out)
+		if len(out) == 0 {
+			out = nil
 		}
 	}
 	return out
