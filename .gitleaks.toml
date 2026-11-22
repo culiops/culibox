@@ -119,6 +119,9 @@ description = "The one fixture range, 100.64.0.0/24 (also the network address of
 regexes = [
   '''^100\.64\.0\.[0-9]{1,3}$''',
   '''^100\.127\.255\.254$''',
+  # the link gate's private-range tests (#348): the top of the range and one value outside the /24
+  '''^100\.127\.255\.255$''',
+  '''^100\.64\.1\.2$''',
 ]
 
 [[rules]]
@@ -130,7 +133,7 @@ keywords = ["/home/", "/users/"]
 
 [[rules.allowlists]]
 description = "Placeholder users in test fixtures and docs, plus agent, the user inside the box image. None is a real person or machine"
-regexes = ['''^(u|u2|you|me|me2|Me|a|ab|x|user|user2|username|op|nobody|svc|agent|alice|someone|hostuser|operator|macuser)$''']
+regexes = ['''^(u|u2|you|me|me2|Me|a|ab|x|user|user2|username|op|nobody|svc|agent|alice|someone|hostuser|operator|macuser|meX)$''']
 
 [[rules]]
 id = "culibox-aws-account-id"
