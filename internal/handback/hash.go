@@ -14,6 +14,15 @@ const (
 	noteCancel   = "not hashed: scan cancelled"
 )
 
+// The hash notes, for callers that hash on their own (the git walker in
+// package clone streams blobs it cannot hand to hashCapped as a reader).
+const (
+	NoteTooLarge = noteTooLarge
+	NoteBudget   = noteBudget
+	NoteUnread   = noteUnread
+	NoteCancel   = noteCancel
+)
+
 // hashCapped returns the hex SHA-256 of r, reading at most perFile bytes and
 // never more than what is left in *budget (nil means no scan-wide budget). A
 // longer stream gets no sum and a note saying which cap stopped it. The bytes

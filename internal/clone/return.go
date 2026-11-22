@@ -11,6 +11,7 @@ import (
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/handback"
 )
 
 // Return is auto-return (spec §6.4 and the work-home design): it asks the clone
@@ -49,10 +50,11 @@ type ReturnRequest struct {
 type ReturnResult struct {
 	At       time.Time
 	Base     string
-	Home     []string  // "box/<branch>" refs moved this run
-	NotHome  []NotHome // what is not home after this run
-	Warnings []string  // FetchResult.Warnings of the branches that came, "box/<b>: " prefixed
-	Error    string    // listing or host checks failed; NotHome is then the previous state's
+	Home     []string                   // "box/<branch>" refs moved this run
+	NotHome  []NotHome                  // what is not home after this run
+	Warnings []string                   // FetchResult.Warnings of the branches that came, "box/<b>: " prefixed
+	Handback map[string]handback.Report // what each branch that came brings that needs a look, keyed "box/<b>"
+	Error    string                     // listing or host checks failed; NotHome is then the previous state's
 }
 
 // ListArgs is the docker argv (after "docker") of the listing container. It has
@@ -245,6 +247,10 @@ func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev 
 			continue
 		}
 		res.Home = append(res.Home, "box/"+b)
+		if res.Handback == nil {
+			res.Handback = map[string]handback.Report{}
+		}
+		res.Handback["box/"+b] = fr.Handback
 		for _, w := range fr.Warnings {
 			res.Warnings = append(res.Warnings, "box/"+b+": "+w)
 		}

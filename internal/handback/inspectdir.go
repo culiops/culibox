@@ -52,7 +52,7 @@ func InspectDir(ctx context.Context, root string, since time.Time, lim Limits) (
 	}
 	defer r.Close()
 
-	s := &scanner{ctx: ctx, r: r, lim: lim, since: since, start: time.Now(), hashLeft: lim.HashTotal}
+	s := &scanner{ctx: ctx, r: r, lim: lim, since: since, start: time.Now(), hashLeft: lim.HashTotal, flags: NewFlagSet(lim.MaxFlags)}
 	s.walkDir(".", 0)
 
 	rep := Report{Flags: []Flag{}, Inspected: s.inspected}
@@ -63,12 +63,11 @@ func InspectDir(ctx context.Context, root string, since time.Time, lim Limits) (
 	if s.unreadable > 0 {
 		reasons = append(reasons, fmt.Sprintf("%d entries could not be read", s.unreadable))
 	}
-	if s.dropped > 0 {
-		reasons = append(reasons, fmt.Sprintf("flag cap of %d reached; %d more flagged files are not listed", lim.MaxFlags, s.dropped))
+	if d := s.flags.Dropped(); d > 0 {
+		reasons = append(reasons, fmt.Sprintf("flag cap of %d reached; %d more flagged files are not listed", lim.MaxFlags, d))
 	}
 	rep.Truncated = strings.Join(reasons, "; ")
-	rep.Flags = append(rep.Flags, s.flags...)
-	SortFlags(rep.Flags)
+	rep.Flags = s.flags.Sorted()
 	return rep, nil
 }
 
@@ -94,6 +93,50 @@ func (h *flagHeap) Pop() any {
 	return x
 }
 
+// FlagSet stores at most max flags and, once full, lets only a stronger flag
+// in, evicting the weakest kept one. A hostile tree full of weak flags (a
+// thousand archives) therefore cannot push a mismatch or an outward symlink
+// out of the record; what did not fit is counted in Dropped.
+type FlagSet struct {
+	h       flagHeap
+	max     int
+	dropped int
+}
+
+// NewFlagSet returns a set that keeps at most n flags (n < 1 means 1).
+func NewFlagSet(n int) *FlagSet { return &FlagSet{max: max(n, 1)} }
+
+// Offer stores fl if it fits or is stronger than the weakest kept flag. fill,
+// if not nil, is called on fl only when it is kept, so a costly step (hashing)
+// is skipped for a flag that is dropped.
+func (s *FlagSet) Offer(fl Flag, fill func(*Flag)) {
+	full := len(s.h) >= s.max
+	if full && !flagLess(fl, s.h[0]) {
+		s.dropped++
+		return
+	}
+	if fill != nil {
+		fill(&fl)
+	}
+	if !full {
+		heap.Push(&s.h, fl)
+		return
+	}
+	s.h[0] = fl
+	heap.Fix(&s.h, 0)
+	s.dropped++
+}
+
+// Dropped is how many offered flags are not in the set.
+func (s *FlagSet) Dropped() int { return s.dropped }
+
+// Sorted returns the kept flags in SortFlags order (never nil).
+func (s *FlagSet) Sorted() []Flag {
+	out := append([]Flag{}, s.h...)
+	SortFlags(out)
+	return out
+}
+
 // scanner holds the state of one InspectDir walk.
 type scanner struct {
 	ctx   context.Context
@@ -102,12 +145,12 @@ type scanner struct {
 	since time.Time
 	start time.Time
 
-	flags    flagHeap
+	flags    *FlagSet
 	reasons  []string
 	hashLeft int64
 
 	entries, candidates, inspected int
-	dropped, tooDeep, unreadable   int
+	tooDeep, unreadable            int
 	headsCapped, stopped           bool
 }
 
@@ -300,21 +343,11 @@ func (s *scanner) flagMode(p, base string, mode fs.FileMode) {
 // keep stores fl, hashing rd (a file of the given size) if it is kept. Once
 // the record is full a flag only gets in by evicting a weaker one.
 func (s *scanner) keep(fl Flag, rd io.Reader, size int64) {
-	full := len(s.flags) >= s.lim.MaxFlags
-	if full && !flagLess(fl, s.flags[0]) {
-		s.dropped++
-		return
-	}
+	var fill func(*Flag)
 	if rd != nil {
-		fl.SHA256, fl.HashNote = s.hashOpen(rd, size)
+		fill = func(f *Flag) { f.SHA256, f.HashNote = s.hashOpen(rd, size) }
 	}
-	if !full {
-		heap.Push(&s.flags, fl)
-		return
-	}
-	s.flags[0] = fl
-	heap.Fix(&s.flags, 0)
-	s.dropped++
+	s.flags.Offer(fl, fill)
 }
 
 // hashOpen hashes rd, which holds a file of the given size. A file already

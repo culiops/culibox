@@ -34,6 +34,9 @@ type Limits struct {
 	HashPerFile, HashTotal               int64
 }
 
+// WithDefaults returns l with every non-positive cap replaced by its default.
+func (l Limits) WithDefaults() Limits { return withDefaults(l) }
+
 // DefaultLimits returns the shipped caps.
 func DefaultLimits() Limits {
 	return Limits{

@@ -88,6 +88,15 @@ type StdinGit interface {
 	RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error)
 }
 
+// StreamGit is a Git that can hand a command's standard output to the caller
+// as it is produced, instead of buffering it under maxGitStdout. The handback
+// scan needs it: it reads blobs of any size and keeps only their first bytes.
+// It lives here for the same reason as StdinGit.
+type StreamGit interface {
+	Git
+	Stream(ctx context.Context, dir string, env []string, stdin io.Reader, stdout io.Writer, args ...string) error
+}
+
 // Run executes git with stdin closed and env as the whole environment. stdout
 // is capped at 16 MiB (more is an error, not a truncation); the error carries
 // at most 8 KiB of stderr. A non-zero exit is an *exec.ExitError under the
@@ -121,6 +130,60 @@ func (g ExecGit) RunStdin(ctx context.Context, dir string, env []string, stdin i
 		return nil, fmt.Errorf("git %s: output larger than %d bytes", sub, maxGitStdout)
 	}
 	return out.buf.Bytes(), nil
+}
+
+// Stream is RunStdin with stdout going to the caller's writer as git writes it.
+// A writer that returns an error stops git: the process is killed (WaitDelay
+// bounds the wait for its pipes) and that error is returned, so a reader that
+// has seen enough of a huge blob ends it without draining it. Stderr is kept up
+// to maxGitStderr for the error text, as in Run.
+func (g ExecGit) Stream(ctx context.Context, dir string, env []string, stdin io.Reader, stdout io.Writer, args ...string) error {
+	argv := make([]string, 0, len(args)+2)
+	if dir != "" {
+		argv = append(argv, "-C", dir)
+	}
+	argv = append(argv, args...)
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, g.Bin, argv...)
+	cmd.Env = append([]string{}, env...)
+	cmd.WaitDelay = 5 * time.Second
+	cmd.Stdin = stdin
+	sw := &stopWriter{w: stdout, stop: cancel}
+	errb := &capBuffer{max: maxGitStderr}
+	cmd.Stdout, cmd.Stderr = sw, errb
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	err := cmd.Run()
+	if sw.err != nil {
+		return sw.err // the reader stopped git; the kill is not a git failure
+	}
+	if err != nil {
+		return fmt.Errorf("git %s: %w: %s", sub, err, strings.TrimSpace(errb.buf.String()))
+	}
+	return nil
+}
+
+// stopWriter remembers the first error of w and calls stop on it, which kills
+// the process that is writing.
+type stopWriter struct {
+	w    io.Writer
+	stop func()
+	err  error
+}
+
+func (s *stopWriter) Write(p []byte) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	n, err := s.w.Write(p)
+	if err != nil {
+		s.err = err
+		s.stop()
+	}
+	return n, err
 }
 
 // capBuffer keeps the first max bytes and swallows the rest, so a chatty child
