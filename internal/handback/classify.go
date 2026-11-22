@@ -40,9 +40,10 @@ func Classify(name string, mode fs.FileMode, head []byte) (classes []Class, deta
 
 	var content Class
 	var what string
+	exe := executableKind(head)
 	switch {
-	case executableKind(head) != "":
-		content, what = ClassExecutable, executableKind(head)
+	case exe != "":
+		content, what = ClassExecutable, exe
 	case bytes.HasPrefix(head, []byte("#!")) && mode&0o111 != 0:
 		// A shebang file nobody can run is just text; the exec bit is the signal.
 		content, what = ClassScript, "script with exec bit"
@@ -85,13 +86,11 @@ func Classify(name string, mode fs.FileMode, head []byte) (classes []Class, deta
 // executableKind names the ELF, Mach-O or PE kind in head, or "" if it is none.
 // Magic and header fields only; the debug/* NewFile readers seek past the head.
 func executableKind(head []byte) string {
-	switch {
-	case bytes.HasPrefix(head, []byte(elf.ELFMAG)):
+	if bytes.HasPrefix(head, []byte(elf.ELFMAG)) {
 		return elfKind(head)
-	case len(head) >= 4:
-		if k := machoKind(head); k != "" {
-			return k
-		}
+	}
+	if k := machoKind(head); k != "" {
+		return k
 	}
 	return peKind(head)
 }
@@ -121,6 +120,9 @@ func elfKind(head []byte) string {
 }
 
 func machoKind(head []byte) string {
+	if len(head) < 4 {
+		return ""
+	}
 	magic := binary.BigEndian.Uint32(head)
 	switch magic {
 	case macho.MagicFat, fatMagic64:
