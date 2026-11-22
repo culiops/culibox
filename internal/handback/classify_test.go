@@ -42,6 +42,15 @@ func machoHead(magicLE bool, magic, ftype uint32) []byte {
 	return h
 }
 
+// swappedMachoHead writes the magic as the constant reads (big-endian), which
+// puts cf fa ed fe on disk, and the rest little-endian: a real LE Mach-O.
+func swappedMachoHead(magic, ftype uint32) []byte {
+	h := make([]byte, 32)
+	binary.BigEndian.PutUint32(h, magic)
+	binary.LittleEndian.PutUint32(h[12:], ftype)
+	return h
+}
+
 func fatHead(magic, second uint32) []byte {
 	h := make([]byte, 64)
 	binary.BigEndian.PutUint32(h, magic)
@@ -91,16 +100,24 @@ func TestClassify(t *testing.T) {
 		{name: "ELF bad data byte", file: "a.out", mode: 0o644, head: func() []byte { h := elfHead(le, 2); h[5] = 9; return h }(), want: nil},
 		{name: "ELF cut short", file: "a.out", mode: 0o644, head: []byte("\x7fELF\x02\x01"), want: nil},
 		{name: "ELF as pdf", file: "report.pdf", mode: 0o644, head: elfHead(le, 2), want: []Class{mm, ex}, detailWant: "ELF executable, extension says PDF"},
+		{name: "ELF as pdf with trailing space", file: "report.pdf ", mode: 0o644, head: elfHead(le, 2), want: []Class{mm, ex}, detailWant: "ELF executable, extension says PDF"},
+		{name: "ELF as pdf with trailing dot", file: "report.pdf.", mode: 0o644, head: elfHead(le, 2), want: []Class{mm, ex}, detailWant: "ELF executable, extension says PDF"},
+		{name: "ELF as pdf with dots and spaces", file: "report.pdf. .\t", mode: 0o644, head: elfHead(le, 2), want: []Class{mm, ex}},
 		{name: "ELF as uppercase PDF", file: "REPORT.PDF", mode: 0o644, head: elfHead(le, 2), want: []Class{mm, ex}, detailWant: "ELF executable, extension says PDF"},
 
 		{name: "Mach-O 64 LE", file: "tool", mode: 0o755, head: machoHead(true, 0xfeedfacf, 2), want: []Class{ex}, detailWant: "Mach-O executable"},
-		{name: "Mach-O 64 byte-swapped", file: "tool", mode: 0o755, head: machoHead(true, 0xcffaedfe, 2), want: []Class{ex}},
+		{name: "Mach-O 64 byte-swapped", file: "tool", mode: 0o755, head: swappedMachoHead(0xcffaedfe, 2), want: []Class{ex}, detailWant: "Mach-O executable"},
+		{name: "Mach-O 32 byte-swapped", file: "tool", mode: 0o755, head: swappedMachoHead(0xcefaedfe, 2), want: []Class{ex}},
 		{name: "Mach-O 32 LE", file: "tool", mode: 0o755, head: machoHead(true, 0xfeedface, 2), want: []Class{ex}},
 		{name: "Mach-O 64 BE", file: "tool", mode: 0o755, head: machoHead(false, 0xfeedfacf, 2), want: []Class{ex}},
 		{name: "Mach-O dylib", file: "x.dylib", mode: 0o644, head: machoHead(true, 0xfeedfacf, 6), want: []Class{ex}, detailWant: "Mach-O dynamic library"},
 		{name: "Mach-O bundle", file: "x.bundle", mode: 0o644, head: machoHead(true, 0xfeedfacf, 8), want: []Class{ex}, detailWant: "Mach-O bundle"},
 		{name: "Mach-O object", file: "x.o", mode: 0o644, head: machoHead(true, 0xfeedfacf, 1), want: []Class{ex}, detailWant: "Mach-O object"},
 		{name: "Mach-O cut short", file: "tool", mode: 0o755, head: []byte{0xcf, 0xfa, 0xed, 0xfe, 7, 0, 0, 1}, want: nil},
+		{name: "Mach-O filetype 0x99", file: "tool", mode: 0o755, head: machoHead(true, 0xfeedfacf, 0x99), want: nil},
+		{name: "Mach-O filetype 0", file: "tool", mode: 0o755, head: machoHead(true, 0xfeedfacf, 0), want: nil},
+		{name: "Mach-O filetype 13", file: "tool", mode: 0o755, head: machoHead(true, 0xfeedfacf, 13), want: nil},
+		{name: "Mach-O filetype 12", file: "tool", mode: 0o755, head: machoHead(true, 0xfeedfacf, 12), want: []Class{ex}, detailWant: "Mach-O file"},
 		{name: "Mach-O as png", file: "logo.png", mode: 0o644, head: machoHead(true, 0xfeedfacf, 2), want: []Class{mm, ex}, detailWant: "Mach-O executable, extension says PNG"},
 		{name: "fat Mach-O 2 archs", file: "tool", mode: 0o755, head: fatHead(0xcafebabe, 2), want: []Class{ex}, detailWant: "Mach-O universal binary"},
 		{name: "fat Mach-O 29 archs", file: "tool", mode: 0o755, head: fatHead(0xcafebabe, 29), want: []Class{ex}},
@@ -135,6 +152,10 @@ func TestClassify(t *testing.T) {
 		{name: "gzip as docx is a mismatch", file: "a.docx", mode: 0o644, head: []byte("\x1f\x8b\x08\x00"), want: []Class{mm, ar}},
 		{name: "gzip", file: "x.gz", mode: 0o644, head: []byte("\x1f\x8b\x08\x00"), want: []Class{ar}, detailWant: "gzip archive"},
 		{name: "bzip2", file: "x.bz2", mode: 0o644, head: []byte("BZh91AY"), want: []Class{ar}},
+		{name: "text starting with BZh", file: "a.txt", mode: 0o644, head: []byte("BZhello world"), want: nil},
+		{name: "BZh0 is not bzip2", file: "a.bz2", mode: 0o644, head: []byte("BZh0"), want: nil},
+		{name: "BZh9", file: "a.bz2", mode: 0o644, head: []byte("BZh9"), want: []Class{ar}},
+		{name: "BZh alone", file: "a.bz2", mode: 0o644, head: []byte("BZh"), want: nil},
 		{name: "xz", file: "x.xz", mode: 0o644, head: []byte("\xfd7zXZ\x00\x00"), want: []Class{ar}},
 		{name: "zstd", file: "x.zst", mode: 0o644, head: []byte("\x28\xb5\x2f\xfd\x00"), want: []Class{ar}},
 		{name: "7z", file: "x.7z", mode: 0o644, head: []byte("7z\xbc\xaf\x27\x1c\x00"), want: []Class{ar}},

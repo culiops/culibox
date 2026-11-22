@@ -9,10 +9,18 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode"
 )
 
-// fatMagic64 is the 64-bit-offset fat Mach-O magic; debug/macho has no const.
-const fatMagic64 = 0xcafebabf
+// debug/macho has no consts for these: the 64-bit-offset fat magic and the
+// byte-swapped thin magics (what a little-endian Mach-O file starts with when
+// the first four bytes are read big-endian).
+const (
+	fatMagic64      = 0xcafebabf
+	magic32Swapped  = 0xcefaedfe
+	magic64Swapped  = 0xcffaedfe
+	maxMachoFileTyp = 12 // MH_FILESET, the last filetype in <mach-o/loader.h>
+)
 
 // mismatchExt is the fixed set of extensions that claim a non-runnable type.
 // Content that is runnable or an archive under one of these is disguised.
@@ -36,6 +44,9 @@ var zipByDesign = map[string]bool{
 // sentence for the panel, built only from fixed words and the extension table,
 // so it carries nothing the box wrote.
 func Classify(name string, mode fs.FileMode, head []byte) (classes []Class, detail string) {
+	// Windows ignores trailing spaces and dots ("report.pdf " opens as
+	// report.pdf), so a disguise must not escape the table with them.
+	name = strings.TrimRightFunc(name, func(r rune) bool { return r == '.' || unicode.IsSpace(r) })
 	ext := strings.ToLower(strings.TrimPrefix(path.Ext(name), "."))
 
 	var content Class
@@ -141,7 +152,7 @@ func machoKind(head []byte) string {
 	switch magic {
 	case macho.Magic32, macho.Magic64: // bytes as written: a big-endian file
 		order = binary.BigEndian
-	case 0xcefaedfe, 0xcffaedfe: // byte-swapped: a little-endian file
+	case magic32Swapped, magic64Swapped: // byte-swapped: a little-endian file
 		order = binary.LittleEndian
 	default:
 		return ""
@@ -149,7 +160,11 @@ func machoKind(head []byte) string {
 	if len(head) < 16 { // magic, cputype, cpusubtype, filetype
 		return ""
 	}
-	switch macho.Type(order.Uint32(head[12:16])) {
+	ft := order.Uint32(head[12:16])
+	if ft < 1 || ft > maxMachoFileTyp { // not a real filetype: random bytes after a magic
+		return ""
+	}
+	switch macho.Type(ft) {
 	case macho.TypeExec:
 		return "Mach-O executable"
 	case macho.TypeDylib:
@@ -180,7 +195,6 @@ func archiveKind(head []byte) string {
 	}{
 		{"PK\x03\x04", "zip"},
 		{"\x1f\x8b", "gzip"},
-		{"BZh", "bzip2"},
 		{"\xfd7zXZ\x00", "xz"},
 		{"\x28\xb5\x2f\xfd", "zstd"},
 		{"7z\xbc\xaf\x27\x1c", "7z"},
@@ -189,6 +203,10 @@ func archiveKind(head []byte) string {
 		if bytes.HasPrefix(head, []byte(m.magic)) {
 			return m.kind
 		}
+	}
+	// "BZh" then the block-size digit; the bare prefix matches ordinary text.
+	if len(head) >= 4 && string(head[:3]) == "BZh" && head[3] >= '1' && head[3] <= '9' {
+		return "bzip2"
 	}
 	if len(head) >= 262 && bytes.Equal(head[257:262], []byte("ustar")) {
 		return "tar"
