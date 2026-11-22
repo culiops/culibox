@@ -42,15 +42,15 @@ function tierWhy(s) {
   return /[.!?]$/.test(cap) ? cap : cap + ".";
 }
 
+// tierJoin: tier.js's prose join, a global in the page and its export under node.
+function tierJoin(words) {
+  return (typeof tierJoinWords === "function" ? tierJoinWords : require("./tier.js").tierJoinWords)(words);
+}
+
 // tierHostDrops: what a Host run of the profile leaves out (ProfileView.host_drops, "AWS binding"...). Empty when it leaves nothing.
 function tierHostDrops(profile) {
   const d = profile && profile.host_drops;
   return Array.isArray(d) ? d.filter((x) => typeof x === "string" && x !== "") : [];
-}
-
-// tierJoinDrops: prose join like config.JoinKinds: "a", "a and b", "a, b and c".
-function tierJoinDrops(drops) {
-  return drops.length < 2 ? drops.join("") : drops.slice(0, -1).join(", ") + " and " + drops[drops.length - 1];
 }
 
 // What Host does instead of the dropped bindings; the card row, the confirm's hint and the Access tab say it the same way.
@@ -58,7 +58,7 @@ const TP_DROPS_TAIL = "The agent uses this machine's own logins (~/.aws, gh) ins
 
 // tierDropsLine: the Host card's warning as one sentence ("" when nothing is dropped).
 function tierDropsLine(drops) {
-  return drops && drops.length ? "Not on Host: " + tierJoinDrops(drops) + ". " + TP_DROPS_TAIL : "";
+  return drops && drops.length ? "Not on Host: " + tierJoin(drops) + ". " + TP_DROPS_TAIL : "";
 }
 
 // tierHostState: Host is off when the server says the profile may not run there (ProfileView.host_block). host_drops does not
@@ -128,7 +128,7 @@ function tierModel(o) {
     ],
   };
   const drops = tierHostDrops(p);
-  if (drops.length) rows.host.push({ k: "Not on Host", v: [{ b: tierJoinDrops(drops) + "." }, { t: " " + TP_DROPS_TAIL }] });
+  if (drops.length) rows.host.push({ k: "Not on Host", v: [{ b: tierJoin(drops) + "." }, { t: " " + TP_DROPS_TAIL }] });
   const titles = { box: "Box · in place", clone: "Box · clone", host: "Host · not contained" };
 
   const cards = TP_KEYS.map((key) => ({
@@ -373,6 +373,6 @@ function spawnCwdFor(w) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel, tierVmFetch,
-    tierHostDrops, tierJoinDrops, tierDropsLine,
+    tierHostDrops, tierDropsLine,
   };
 }

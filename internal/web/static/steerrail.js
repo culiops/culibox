@@ -195,11 +195,12 @@ function dropsRow(s) {
 }
 
 // hostDroppedRow: the Access tab's row for a host session that ran without what its profile binds (Info.host_dropped, #359).
-// Prose join like config.JoinKinds: "a", "a and b", "a, b and c". null when nothing was dropped, like dropsRow.
+// The list is joined as prose (tier.js tierJoinWords). null when nothing was dropped, like dropsRow.
 function hostDroppedRow(s) {
   const d = s && Array.isArray(s.host_dropped) ? s.host_dropped.map(String).filter(Boolean) : [];
   if (!d.length) return null;
-  return { k: "Dropped on Host", v: d.length < 2 ? d[0] : d.slice(0, -1).join(", ") + " and " + d[d.length - 1] };
+  const join = typeof tierJoinWords === "function" ? tierJoinWords : require("./tier.js").tierJoinWords;
+  return { k: "Dropped on Host", v: join(d) };
 }
 
 // lockedRow: the rail's "locked" row for a boxed session whose workspace files

@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel,
-  tierHostDrops, tierJoinDrops, tierDropsLine,
+  tierHostDrops, tierDropsLine,
 } = require("../static/tierpick.js");
 
 const home = "/home/u";
@@ -61,10 +61,7 @@ test("tierHostDrops: the profile's host_drops as a clean string list (#359)", ()
   assert.deepStrictEqual(tierHostDrops({ host_drops: ["AWS binding", "", 3] }), ["AWS binding"]);
 });
 
-test("tierJoinDrops / tierDropsLine join like config.JoinKinds and say what Host does instead (#359)", () => {
-  assert.strictEqual(tierJoinDrops(["AWS binding"]), "AWS binding");
-  assert.strictEqual(tierJoinDrops(["AWS binding", "GitHub binding"]), "AWS binding and GitHub binding");
-  assert.strictEqual(tierJoinDrops(["a", "b", "c"]), "a, b and c");
+test("tierDropsLine joins like config.JoinKinds and says what Host does instead (#359)", () => {
   const tail = " The agent uses this machine's own logins (~/.aws, gh) instead.";
   assert.strictEqual(tierDropsLine(["AWS binding", "GitHub binding"]),
     "Not on Host: AWS binding and GitHub binding." + tail);
@@ -244,7 +241,7 @@ function tpPage(over) {
   };
   Object.assign(box, over || {});
   const ctx = vm.createContext(box);
-  vm.runInContext(readStatic("svgicon.js") + "\n" + readStatic("tierpick.js"), ctx);
+  vm.runInContext(readStatic("svgicon.js") + "\n" + readStatic("tier.js") + "\n" + readStatic("tierpick.js"), ctx);
   // An object a vm script returns has the vm's own prototypes, which deepStrictEqual refuses: hand back a plain copy.
   const run = (code) => {
     const r = vm.runInContext(code, ctx);

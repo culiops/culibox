@@ -54,10 +54,18 @@ function tierBadge(session, boxRuntime) {
 // Same fail-loud posture as the badge: anything unrecognised resolves to box,
 // never host. Empty when there is no box layer, so the hidden row sends no tier
 // at all and the server keeps resolving it.
+//
+// A host profile whose Host run would drop bindings (host_drops, #359) opens on box: Host is one click away, never the default.
 function spawnRuntimeDefault(profile, boxRuntime) {
   if (!boxRuntime) return "";
+  if (profile && Array.isArray(profile.host_drops) && profile.host_drops.length) return TIER_BOX;
   const rt = profile && profile.runtime;
   return rt === TIER_HOST || rt === TIER_BOX ? rt : TIER_BOX;
+}
+
+// tierJoinWords: prose join like config.JoinKinds in Go: "a", "a and b", "a, b and c".
+function tierJoinWords(words) {
+  return words.length < 2 ? words.join("") : words.slice(0, -1).join(", ") + " and " + words[words.length - 1];
 }
 
 // workspaceOptions renders the workspace picker for a tier. On the boxed tier a
@@ -160,7 +168,7 @@ function shellSpawnPlan(neighbour) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    tierBadge, tierRuntimeLabel, spawnRuntimeDefault,
+    tierBadge, tierRuntimeLabel, spawnRuntimeDefault, tierJoinWords,
     workspaceOptions, defaultWorkspace, workspaceSelectionForCwd, unboxableCwdReason,
     pfCwdValue, shellSpawnPlan, TIER_BOX, TIER_HOST,
     profileFitsAsSeg, PROFILE_SEG_MAX,
