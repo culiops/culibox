@@ -81,6 +81,18 @@ test("containment: locked files (macOS #96) come from the same row the steer rai
   assert.strictEqual(model({ session: sess({ locked_files: [] }), aws: null }).containment.locked, null);
 });
 
+test("containment: a host session that dropped bindings says so in one row (#359)", () => {
+  const row = (s) => model({ session: s, aws: null }).containment.hostDropped;
+  const c = row(sess({ runtime: "host", host_dropped: ["AWS binding", "GitHub binding"] }));
+  assert.strictEqual(c.k + ": " + c.v, "Dropped on Host: AWS binding and GitHub binding");
+  const one = row(sess({ runtime: "host", host_dropped: ["AWS binding"] }));
+  assert.strictEqual(one.k + ": " + one.v, "Dropped on Host: AWS binding");
+  const three = row(sess({ runtime: "host", host_dropped: ["a", "b", "c"] }));
+  assert.strictEqual(three.v, "a, b and c");
+  assert.strictEqual(row(sess({ runtime: "host" })), null);
+  assert.strictEqual(row(sess({ runtime: "host", host_dropped: [] })), null);
+});
+
 test("containment: egress comes from the /aws reply when /egress was not asked, an empty account reads default", () => {
   const m = model({ session: sess(), aws: status({ egress: { mode: "open", allowed: 0, denied: 3 } }) });
   assert.deepStrictEqual(m.containment.network, { mode: "open", allowed: 0, denied: 3 });
@@ -94,6 +106,7 @@ test("containment: optional rows are absent, not empty strings, when the session
   assert.strictEqual(c.clone, null);
   assert.strictEqual(c.dropped, null);
   assert.strictEqual(c.locked, null);
+  assert.strictEqual(c.hostDropped, null);
   assert.strictEqual(c.model, "");
 });
 

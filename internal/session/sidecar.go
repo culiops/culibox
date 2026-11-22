@@ -99,6 +99,10 @@ type sessionMeta struct {
 	// kept so the UI still says so after a daemon restart. Records from before
 	// A3 lack it and read as none.
 	BundleDrops []bundle.Drop `json:"bundle_drops,omitempty"`
+	// HostDropped is what a host session runs without (Info.HostDropped), kept
+	// so the card still says so after a daemon restart. Records from before
+	// lack it and read as none.
+	HostDropped []string `json:"host_dropped,omitempty"`
 	// Clone is the clone refresh result of a clone-mode session, kept so the UI
 	// still shows it after a daemon restart. Records from before the refresh
 	// lack it and read as none.

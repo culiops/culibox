@@ -178,41 +178,6 @@ func TestValidateProfileCriticalRm(t *testing.T) {
 	}
 }
 
-func TestBoxOnlyEnvReason(t *testing.T) {
-	want := "this profile sets " + CriticalRmEnv + ", which runs only in a box"
-	if got := BoxOnlyEnvReason(AgentConfig{Env: map[string]string{CriticalRmEnv: "1"}}); got != want {
-		t.Errorf("env: %q", got)
-	}
-	if got := BoxOnlyEnvReason(AgentConfig{Secrets: []string{"X", CriticalRmEnv}}); got != want {
-		t.Errorf("secrets: %q", got)
-	}
-	if got := BoxOnlyEnvReason(AgentConfig{Env: map[string]string{"A": "1"}}); got != "" {
-		t.Errorf("none: %q", got)
-	}
-}
-
-func TestHostBlockWith(t *testing.T) {
-	defs := legacyDefs()
-	envWant := "this profile sets " + CriticalRmEnv + ", which runs only in a box"
-	if got := HostBlockWith(AgentConfig{Env: map[string]string{CriticalRmEnv: "1"}}, defs); got != envWant {
-		t.Errorf("env: %q", got)
-	}
-	if got := HostBlockWith(AgentConfig{Secrets: []string{CriticalRmEnv}}, defs); got != envWant {
-		t.Errorf("secrets: %q", got)
-	}
-	optWant := `"Skip the critical-rm prompt" runs only in a box`
-	if got := HostBlockWith(AgentConfig{Options: map[string]any{CriticalRmKey: true}}, defs); got != optWant {
-		t.Errorf("option: %q", got)
-	}
-	if got := HostBlockWith(AgentConfig{Options: map[string]any{CriticalRmKey: false}}, defs); got != "" {
-		t.Errorf("off: %q", got)
-	}
-	bound := AgentConfig{GitHub: &GitHubBinding{}, Options: map[string]any{CriticalRmKey: true}, Env: map[string]string{CriticalRmEnv: "1"}}
-	if got := HostBlockWith(bound, defs); got != HostBlock(bound) || got == "" {
-		t.Errorf("binding must win: %q", got)
-	}
-}
-
 // The enum owns the older bypass bool only when the Permission mode def that applies to the bin can say Bypass.
 func TestLegacyBypassKeyNeedsEnumThatCanBypass(t *testing.T) {
 	noBypass := func() map[string]OptionDef {

@@ -1,6 +1,6 @@
 # Static tokens for agents
 
-Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once, on the Credentials screen. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. A bound spawn is refused on the host tier. On macOS it goes through the egress allowlist like on Linux (the allowlist and the token wrapper are both verified on a Mac; see [docs/MACOS.md](MACOS.md#every-box)).
+Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once, on the Credentials screen. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. Tokens apply to Box only: a profile with one cannot be saved as host, and a session of it started on Host (from New session, or the API with `host_drops_bindings: true`) runs without them, with your own access. On macOS a boxed session goes through the egress allowlist like on Linux (the allowlist and the token wrapper are both verified on a Mac; see [docs/MACOS.md](MACOS.md#every-box)).
 
 ## What this does and does not protect against
 
@@ -37,7 +37,7 @@ An entry can also be declared in `config.json`, which is read at daemon start, s
 | `provider`, `label`, `description` | Optional, for the UI and `--list`. `provider` is `^[a-z0-9][a-z0-9-]{0,31}$` and groups the picker. `label` is at most 32 characters, `description` at most 200. |
 | `prod` | Optional. Shows a "production" chip in the picker and a `[prod]` mark in `--list`. A label only: it changes no behaviour. |
 
-**2. Bind it to a profile.** Set the profile's runtime to the box, then tick the entries in the profile form's **Tokens** block. In `config.json` or the profile's JSON, set `"runtime": "box"` explicitly and list the names:
+**2. Bind it to a profile.** Set the profile's runtime to the box (a profile with tokens cannot be saved as host), then tick the entries in the profile form's **Tokens** block. In `config.json` or the profile's JSON, set `"runtime": "box"` explicitly and list the names:
 
 ```json
 { "name": "claude-ops", "bin": "claude", "runtime": "box", "tokens": ["grafana-prod"] }

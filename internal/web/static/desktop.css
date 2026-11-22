@@ -3749,6 +3749,7 @@
   #ask-modal .ask-list { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 6px 14px; margin: 8px 0 0; padding: 12px 14px; background: var(--bg); border-radius: var(--r-ctl); font-size: var(--t-md); }
   #ask-modal .ask-list dt { color: var(--muted); }
   #ask-modal .ask-list dd { margin: 0; overflow-wrap: anywhere; }
+  #ask-modal .ask-bullets { margin: 8px 0 0; padding-left: 20px; font-size: var(--t-md); overflow-wrap: anywhere; }
   #ask-modal .ask-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
   #ask-modal .ask-q { margin: 14px 0 0; }
   /* opts.notes: a muted paragraph under the body, 16px apart as the frame's body gap; a path in one is mono at

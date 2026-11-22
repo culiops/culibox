@@ -1,6 +1,6 @@
 # Reading other repos (context_paths)
 
-`context_paths` lets a boxed agent read files outside its workspace: a partner repo's `CLAUDE.md`, a docs folder, a project registry. Each listed path is mounted **read-only at the same absolute path** inside the box, so a path written in your own notes resolves unchanged there. Boxed profiles only, in-place or clone mode.
+`context_paths` lets a boxed agent read files outside its workspace: a partner repo's `CLAUDE.md`, a docs folder, a project registry. Each listed path is mounted **read-only at the same absolute path** inside the box, so a path written in your own notes resolves unchanged there. Boxed profiles only, in-place or clone mode. On Host the paths do not apply: a session started there runs without the mounts, with your own access to every path (see [Security](SECURITY.md)).
 
 The box can read everything you list and has internet egress: never list secrets.
 
@@ -12,7 +12,7 @@ The box gets the list in `AGENTBOX_CONTEXT_PATHS`, `:`-separated, so the agent (
 
 **Refusals** (when you save the profile and when you spawn)
 
-- A host-tier profile, including one with no runtime set while `default_runtime` is `host`: a host session can already read any path.
+- A host-tier profile, including one with no runtime set while `default_runtime` is `host`: a host session can already read any path. This is about saving the profile. A session of a boxed profile can still be started on Host from New session (or the API with `host_drops_bindings: true`); it runs without the mounts.
 - More than 16 entries, a duplicate, or an entry inside another (list the outer one). A path that is not absolute or not clean, contains `:`, `,`, `"`, a control character or invalid UTF-8.
 - `/`, your home directory or any directory above it, and paths that would shadow the box's own filesystem: `/etc`, `/usr`, `/var`, `/opt`, `/root`, `/run`, `/home/agent` and the other system directories, and anything inside them; and exactly `/home`, `/tmp`, `/mnt` and `/media`. A directory below those (`/tmp/x`, `/mnt/data/repo`) is fine, except CuliBox's own in-box paths `/tmp/agentbox-gh` (and anything inside it) and any `/tmp/ac-session-*`.
 - A path that does not exist, has a symlink in any component, or is not a directory or regular file.

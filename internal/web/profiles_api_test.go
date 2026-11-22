@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -957,6 +958,47 @@ func savedClean(rec *httptest.ResponseRecorder) bool {
 	return rev != "" && !warned
 }
 
+// #359: a profile with bindings lists what a host run would drop in host_drops
+// and is not host-blocked; only the box_only lock is a host_block.
+func TestProfilesListHostDrops(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "aws", Bin: "claude", Runtime: "box", AWSConnections: []string{"prod"}},
+		{Name: "plain", Bin: "claude", Runtime: "box"},
+	}
+	pm := NewProfileManager(seeds, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	if rec := postProfile(s, `{"name":"locked","bin":"claude","runtime":"box","box_only":true}`); rec.Code != 201 {
+		t.Fatalf("create box_only profile: %d %s", rec.Code, rec.Body)
+	}
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("GET", "/api/profiles", nil))
+	if rec.Code != 200 {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("list is not JSON: %v: %s", err, rec.Body)
+	}
+	byName := map[string]map[string]any{}
+	for _, p := range raw {
+		byName[p["name"].(string)] = p
+	}
+	if got, want := byName["aws"]["host_drops"], []any{"AWS binding"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("aws: host_drops = %v, want %v", got, want)
+	}
+	if _, present := byName["aws"]["host_block"]; present {
+		t.Errorf("aws: host_block must be absent, got %v", byName["aws"]["host_block"])
+	}
+	for _, name := range []string{"plain", "locked"} {
+		if _, present := byName[name]["host_drops"]; present {
+			t.Errorf("%s: host_drops must be absent, got %v", name, byName[name]["host_drops"])
+		}
+	}
+	if got, want := byName["locked"]["host_block"], "this profile is set to box only"; got != want {
+		t.Errorf("locked: host_block = %v, want %q", got, want)
+	}
+}
+
 func TestProfilesListHostBlock(t *testing.T) {
 	seeds := []config.AgentConfig{
 		{Name: "aws", Bin: "claude", Runtime: "box", AWSConnections: []string{"prod"}},
@@ -981,16 +1023,14 @@ func TestProfilesListHostBlock(t *testing.T) {
 	for _, p := range raw {
 		byName[p["name"].(string)] = p
 	}
-	for name, want := range map[string]string{
-		"aws":    "this profile has an AWS binding, so it runs only in a box",
-		"locked": "this profile is set to box only",
-	} {
-		if got, _ := byName[name]["host_block"].(string); got != want {
-			t.Errorf("%s: host_block = %q, want %q", name, got, want)
-		}
+	if got, want := byName["locked"]["host_block"], "this profile is set to box only"; got != want {
+		t.Errorf("locked: host_block = %v, want %q", got, want)
 	}
-	if _, present := byName["plain"]["host_block"]; present {
-		t.Errorf("plain: host_block must be absent, got %v", byName["plain"]["host_block"])
+	// #359: a binding is dropped on the host, not a lock, so it is no host_block.
+	for _, name := range []string{"aws", "plain"} {
+		if _, present := byName[name]["host_block"]; present {
+			t.Errorf("%s: host_block must be absent, got %v", name, byName[name]["host_block"])
+		}
 	}
 	if byName["locked"]["box_only"] != true {
 		t.Errorf("locked: box_only = %v, want true", byName["locked"]["box_only"])

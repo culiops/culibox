@@ -202,15 +202,53 @@ func TestBoxOnlyOptionFor(t *testing.T) {
 	if err != nil || got != "" {
 		t.Fatalf("no override: got %q, %v", got, err)
 	}
+	// Host runtime must not hide the request: the override is still refused.
+	got, err = l.BoxOnlyOptionFor(SpawnSpec{Agent: "a", Runtime: config.RuntimeHost, Options: map[string]any{"skip_critical_rm_prompt": true}})
+	if err != nil || got == "" {
+		t.Fatalf("host override: got %q, %v", got, err)
+	}
 	if _, err := l.BoxOnlyOptionFor(SpawnSpec{Agent: "nope"}); err == nil {
 		t.Fatal("unknown agent should error")
+	}
+}
+
+// A profile default is not a request: only the spawn's own overrides count.
+func TestBoxOnlyOptionForIgnoresProfileDefault(t *testing.T) {
+	l := permLauncher(config.BaseClean, map[string]any{"skip_critical_rm_prompt": true})
+	got, err := l.BoxOnlyOptionFor(SpawnSpec{Agent: "a"})
+	if err != nil || got != "" {
+		t.Fatalf("profile default on, no override: got %q, %v", got, err)
+	}
+	got, err = l.BoxOnlyOptionFor(SpawnSpec{Agent: "a", Options: map[string]any{"skip_critical_rm_prompt": true}})
+	if err != nil || got != `"Skip the critical-rm prompt" runs only in a box` {
+		t.Fatalf("override on: got %q, %v", got, err)
 	}
 }
 
 func TestHostBlockForCriticalRm(t *testing.T) {
 	l := permLauncher(config.BaseClean, map[string]any{"skip_critical_rm_prompt": true})
 	got, err := l.HostBlockFor("a")
-	if err != nil || got != `"Skip the critical-rm prompt" runs only in a box` {
-		t.Fatalf("got %q, %v", got, err)
+	if err != nil || got != "" {
+		t.Fatalf("HostBlockFor = %q, %v, want no lock (the option is a drop)", got, err)
+	}
+	drops, err := l.HostDropsFor("a")
+	if err != nil || len(drops) != 1 || drops[0] != `"Skip the critical-rm prompt" option` {
+		t.Fatalf("HostDropsFor = %q, %v", drops, err)
+	}
+}
+
+func TestAcceptedOptionsHostStripsBoxOnly(t *testing.T) {
+	l := permLauncher(config.BaseClean, map[string]any{"skip_critical_rm_prompt": false, "permission_mode": "plan"})
+	opts := map[string]any{"skip_critical_rm_prompt": true, "permission_mode": "bypassPermissions"}
+	box := l.AcceptedOptions(SpawnSpec{Agent: "a", Runtime: config.RuntimeBox, Options: opts})
+	if _, ok := box["skip_critical_rm_prompt"]; !ok {
+		t.Fatalf("box keeps the box-only key: %v", box)
+	}
+	host := l.AcceptedOptions(SpawnSpec{Agent: "a", Runtime: config.RuntimeHost, Options: opts})
+	if _, ok := host["skip_critical_rm_prompt"]; ok {
+		t.Fatalf("host strips the box-only key: %v", host)
+	}
+	if host["permission_mode"] != "bypassPermissions" {
+		t.Fatalf("host keeps the other overrides: %v", host)
 	}
 }

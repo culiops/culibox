@@ -150,6 +150,9 @@ func (m *Manager) Restart(id string) (*Session, error) {
 	ns, err := m.Spawn(launcher.SpawnSpec{
 		Agent: s.Agent, Name: name, Cwd: s.Cwd, Runtime: s.Runtime, Options: opts, Account: acct,
 		Resume: resumeFor(s.Runtime, bin, sid, s.Exclusive), ParentID: s.ParentID, Clone: clone,
+		// A host session was started with its drops confirmed; the restart is that
+		// same session, so it carries the confirmation. A box session has no drops.
+		HostDropsAck: s.Runtime == config.RuntimeHost,
 	})
 	if err != nil {
 		s.mu.Lock()
