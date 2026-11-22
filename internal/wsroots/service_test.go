@@ -435,3 +435,48 @@ func TestErrorsText(t *testing.T) {
 		t.Errorf("Error() = %q", e.Error())
 	}
 }
+
+// A mount that hangs while Add resolves the folder must not hold up every
+// other reader: the lock is taken only after the path is resolved and checked.
+func TestAddResolvesOutsideTheLock(t *testing.T) {
+	r := newRig(t)
+	dir := realDir(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	old := evalSymlinks
+	t.Cleanup(func() { evalSymlinks = old })
+	evalSymlinks = func(p string) (string, error) {
+		if p == dir {
+			close(entered)
+			<-release
+		}
+		return old(p)
+	}
+	added := make(chan error, 1)
+	go func() {
+		_, err := r.svc.Add(dir, "web")
+		added <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Add never resolved the folder through evalSymlinks")
+	}
+	read := make(chan struct{})
+	go func() {
+		r.svc.Paths()
+		close(read)
+	}()
+	select {
+	case <-read:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("Paths blocked while Add was resolving a folder")
+	}
+	close(release)
+	if err := <-added; err != nil {
+		t.Fatalf("Add = %v", err)
+	}
+	if got := r.svc.Paths(); !reflect.DeepEqual(got, []string{dir}) {
+		t.Errorf("Paths = %v, want [%s]", got, dir)
+	}
+}
