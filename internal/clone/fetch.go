@@ -626,7 +626,7 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	// Inspecting what came home never fails the fetch, and runs on every exit
 	// from here on (a later step failing does not unmove the ref). It is a
 	// defer so that it runs once, after steps 8 and 9, whatever they return.
-	defer func() { res.Handback = InspectBranch(ctx, g, c.Of, base, ref, handback.DefaultLimits()) }()
+	defer func() { res.Handback = inspectBranchSafely(ctx, g, c.Of, base, ref) }()
 	if len(overridden) > 0 {
 		res.Warnings = append([]string{fmt.Sprintf("-allow-old-history: the history check was overridden (%s); review box/%s before any merge or push",
 			strings.Join(overridden, "; "), r.Branch)}, res.Warnings...)

@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"log"
 	"path"
 	"regexp"
 	"strconv"
@@ -111,6 +112,23 @@ func InspectBranch(ctx context.Context, g Git, of, base, ref string, lim handbac
 	}
 	rep.Truncated = strings.Join(s.reasons, "; ")
 	return rep
+}
+
+// scanPanickedNote is the report's sentence when the scan panicked.
+const scanPanickedNote = "the scan stopped with an internal error"
+
+// inspectBranchSafely is InspectBranch for a caller that must not die with it:
+// Fetch runs it in the return goroutine, and a bug met on hostile git data
+// would otherwise take the whole daemon down. A panic becomes a report that
+// says the scan stopped; the branch has already come home either way.
+func inspectBranchSafely(ctx context.Context, g Git, of, base, ref string) (rep handback.Report) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("clone fetch: inspecting %s of %s stopped with an internal error: %v", ref, of, p)
+			rep = handback.Report{Flags: []handback.Flag{}, Truncated: scanPanickedNote}
+		}
+	}()
+	return InspectBranch(ctx, g, of, base, ref, handback.DefaultLimits())
 }
 
 type branchScan struct {

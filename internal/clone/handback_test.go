@@ -609,3 +609,26 @@ func TestBlobInfoKeepsNoContent(t *testing.T) {
 		}
 	}
 }
+
+// panicStream is a Git whose Stream panics, as a bug met on hostile git data
+// would, while every other call goes to the wrapped recGit.
+type panicStream struct{ *recGit }
+
+func (panicStream) Stream(context.Context, string, []string, io.Reader, io.Writer, ...string) error {
+	panic("hostile git data")
+}
+
+// A panic while inspecting what came home must not escape Fetch (it runs in
+// the return goroutine, so it would take the daemon down): the result carries
+// a report that says the scan stopped, and the branch still came home.
+func TestFetchSurvivesAPanickingHandbackScan(t *testing.T) {
+	x := newFetchFx(t)
+	x.dockerCommitELF("tool.pdf")
+	res, err := Fetch(context.Background(), panicStream{x.rec}, x.dock, x.req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ref == "" || res.Handback.Truncated != "the scan stopped with an internal error" || res.Handback.Flags == nil || len(res.Handback.Flags) != 0 {
+		t.Errorf("Fetch = ref %q, Handback %+v", res.Ref, res.Handback)
+	}
+}
