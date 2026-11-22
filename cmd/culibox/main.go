@@ -828,6 +828,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if h != nil {
 		pm.SetNotHome(h.NotHome)
 	}
+	// The hand-back store the hooks write, as the profile rows' flag count and
+	// the /api/handback endpoints read it (#346).
+	flagged := newFlaggedView(hb.store)
+	pm.SetFlagged(flagged.Count)
 	// As mgr.SetEgressAll above: the profile list previews each box's network.
 	pm.SetEgressAll(layer != nil)
 	vmShares := layer.sharesFunc() // the box VM's live folder list; nil without a VM
@@ -857,6 +861,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		rateLimitsFile = filepath.Join(home, ".claude", "abtop-rate-limits.json")
 	}
 	api := &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd,
+		Handback:       flagged,
 		OptionsDropped: lnch.DroppedOptions,
 		ProfileCwd: func(name string) string {
 			p, ok := pm.Get(name)

@@ -60,6 +60,10 @@ type API struct {
 	// call at a time.
 	VMState func(ctx context.Context) string
 	vmCache vmStateCache
+	// Handback serves GET /api/handback and POST /api/handback/{id}/reviewed:
+	// what a boxed session handed back that the user has not reviewed (#346).
+	// nil = none wired; the list is then empty.
+	Handback HandbackStore
 	// QuickShell returns the verified quick-shell profile name ("" = none); a
 	// companion shell (POST /api/sessions/{id}/shell) runs it. nil = none.
 	QuickShell func() string
