@@ -296,6 +296,13 @@ type Options struct {
 
 	Prepare func(ctx context.Context) error             // before any docker call of a boxed spawn
 	Verify  func(ctx context.Context, box string) error // right after a NEW container starts
+	// OnStop is told that this process stopped a box, after the stop succeeded,
+	// with the box's workspace (symlinks resolved; "" when it could not be
+	// read). It runs in its own goroutine and outside opMu, so it may take as
+	// long as it likes and may call back into the Manager. Fired by the idle
+	// stop, the removal of an idle box in a spawn's way, and the sweep's
+	// removal; nil = no notice.
+	OnStop func(name, workspace string)
 	// VMIDs reads the identity of each host path as the docker daemon's kernel
 	// sees it, in order (on macOS: inside the VM, since a Mac inode number is
 	// not the one virtiofs shows the box). ensure calls it, once, for the
@@ -1966,9 +1973,11 @@ func (m *Manager) idle(name string) bool {
 func (m *Manager) removeIdle(ctx context.Context, name string) error {
 	m.keepEndedHold(ctx, name)
 	m.unverify(name)
+	ws := m.stopWorkspace(ctx, name)
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		return err
 	}
+	m.stopped(name, ws)
 	m.boxGone(name)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2294,6 +2303,35 @@ func (m *Manager) release(name string) bool {
 	return counted
 }
 
+// stopWorkspace is the workspace of box name, read before the box is stopped
+// (a stopped container is gone from the listing). "" when no OnStop is
+// installed (nothing to tell, so no docker call), or when neither the
+// exclusive owner's record nor the box's label gives an absolute path. Caller
+// holds opMu, as for labelRow.
+func (m *Manager) stopWorkspace(ctx context.Context, name string) string {
+	if m.opts.OnStop == nil {
+		return ""
+	}
+	m.mu.Lock()
+	ws := m.ownerWS[name]
+	m.mu.Unlock()
+	if knownWorkspace(ws) {
+		return ws
+	}
+	if row, found, err := m.labelRow(ctx, name); err == nil && found && !row.Unreadable && knownWorkspace(row.Workspace) {
+		return row.Workspace
+	}
+	return ""
+}
+
+// stopped tells OnStop that box name was stopped. It runs the hook in its own
+// goroutine, so a caller holding opMu never waits on it.
+func (m *Manager) stopped(name, ws string) {
+	if h := m.opts.OnStop; h != nil {
+		go h(name, ws)
+	}
+}
+
 // stopIfIdle re-checks under the lock, so a session started during the idle
 // window keeps the box alive even if the timer had already fired.
 func (m *Manager) stopIfIdle(name string) {
@@ -2311,11 +2349,13 @@ func (m *Manager) stopIfIdle(name string) {
 	m.mu.Unlock()
 	m.keepEndedHold(context.Background(), name)
 	m.unverify(name)
+	ws := m.stopWorkspace(context.Background(), name)
 	if m.opts.Client.Stop(context.Background(), name) != nil {
 		// Still there: keep its owner, so the removal that follows (the sweep,
 		// a spawn's check) still knows whose hold it is (#333).
 		return
 	}
+	m.stopped(name, ws)
 	m.boxGone(name)
 	m.mu.Lock()
 	m.forgetExclusiveLocked(name)
@@ -2511,9 +2551,11 @@ func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, 
 func (m *Manager) remove(ctx context.Context, name string) error {
 	m.keepEndedHold(ctx, name)
 	m.unverify(name)
+	ws := m.stopWorkspace(ctx, name)
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		return fmt.Errorf("box: sweep removing %s: %w", name, err)
 	}
+	m.stopped(name, ws)
 	m.boxGone(name)
 	m.mu.Lock()
 	if m.active[name] == 0 { // no release will come to clear it
