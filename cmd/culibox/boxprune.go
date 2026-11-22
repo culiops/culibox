@@ -61,6 +61,11 @@ type imagePins struct {
 // only images a registry can supply again, plus the one this setup orphaned, and
 // lists the rest.
 func (s pinSource) pins(ctx context.Context) (imagePins, error) {
+	// A context already done wins: select picks at random between two ready cases, so a fast read
+	// could otherwise beat a dead deadline.
+	if err := ctx.Err(); err != nil {
+		return imagePins{}, fmt.Errorf("reading the configs: %w", err)
+	}
 	type result struct {
 		p   imagePins
 		err error
