@@ -6061,6 +6061,11 @@ async function loadSpawnVMFilter() {
 // tier switch redraws them without another read. A clone card starts in the profile's own copy and never adds a root, so
 // it shows no line and blocks nothing.
 let spawnWsCheck = null;
+// spawnAddsRoot: whether a Start from the New session form may add its folder as a workspace root. Desktop only: the phone
+// shows no line saying what Start would open (#340 freeze), and a reach must never be granted without one.
+function spawnAddsRoot() {
+  return drawerDesktop();
+}
 function spawnWsCheckOn() { return drawerDesktop() && !!spawnWsCheck && !spawnWhere().clone; }
 // spawnWsCheckBlock: why Start waits (syncSpawnGate reads it), "" when it need not.
 function spawnWsCheckBlock() { return spawnWsCheckOn() ? wsCheckBlock(spawnWsCheck, spawnCurrentTier()) : ""; }
@@ -6283,6 +6288,10 @@ async function spawnSession(req, opts) {
     ]);
   }
   openTerminal(s.id, s.name);
+  // Either way the user hears about the root: a folder Files, git and search can now open is never added in silence.
+  if (s.root && s.root.added === true && s.root.path) {
+    showToast(s.root.path + " is now a workspace root. Remove it in Settings › Workspace roots.");
+  }
   if (s.root && s.root.added === false && s.root.path) {
     showToast("Session started. " + s.root.path + " was not added as a workspace root: " + (s.root.reason || "unknown reason") + ".", { warn: true });
   }
@@ -6896,8 +6905,8 @@ $("spawn").addEventListener("submit", async (ev) => {
     account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
   });
   // Only this form asks: a folder outside every root becomes one when the session starts (the server decides, and only for
-  // this signed-in browser). Duplicate, the bearer API and scripts never send it.
-  req.add_root = true;
+  // this signed-in browser). Duplicate, the bearer API and scripts never send it, nor does the phone (spawnAddsRoot).
+  if (spawnAddsRoot()) req.add_root = true;
   const draft = $("spawn-prompt").value;
   // The dialog closes the moment the session exists, before the toast: a
   // fixed-position toast renders *beneath* a modal dialog's backdrop, so an Undo

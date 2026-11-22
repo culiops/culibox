@@ -36,7 +36,7 @@ function spawnWorld(reply) {
     openTerminal: () => { log.push("open"); },
     loadWorkspaces: async () => { log.push("workspaces"); },
     loadWorkspaceRoots: async () => { log.push("roots"); },
-    showToast: (m, o) => { log.push(["toast", m, o && o.warn === true]); },
+    showToast: (m, o) => { log.push(["toast", m, !!(o && o.warn === true)]); },
     mobileActive: () => false, shortPath: (p) => p, toastDropsSuffix: () => "", toastCloneSuffix: () => "", toastReturnSuffix: () => "", cloneLevel: () => "",
     killSession() {},
   });
@@ -53,6 +53,14 @@ test("spawnSession: a Start that added a root refreshes the workspaces and the r
   assert.ok(!t.log.some((e) => Array.isArray(e) && /not added/.test(e[1])), "no failure toast");
 });
 
+test("spawnSession: a Start that added a root says so, naming the folder, after the session opens", async () => {
+  const t = spawnWorld({ id: "s1", name: "n", cwd: "/srv/code/api", root: { added: true, path: "/srv/code" } });
+  await t.box.spawnSession({ agent: "claude" }, { toast: false });
+  const toast = t.log.find((e) => Array.isArray(e) && /workspace root/.test(e[1]));
+  assert.deepStrictEqual(toast, ["toast", "/srv/code is now a workspace root. Remove it in Settings › Workspace roots.", false]);
+  assert.ok(t.log.indexOf(toast) > t.log.indexOf("open"), "after the pane opens, like the failure toast");
+});
+
 test("spawnSession: a root that was not added says why in the words of the spec, after the session opens", async () => {
   const t = spawnWorld({ id: "s1", name: "n", cwd: "/srv/code", root: { added: false, path: "/srv/code", reason: "the 32-root limit is reached" } });
   await t.box.spawnSession({ agent: "claude" });
@@ -65,7 +73,7 @@ test("spawnSession: a root that was not added says why in the words of the spec,
 test("spawnSession: no `root` in the answer changes nothing", async () => {
   const t = spawnWorld({ id: "s1", name: "n", cwd: "/home/u/x" });
   await t.box.spawnSession({ agent: "claude" });
-  assert.deepStrictEqual(t.log.filter((e) => e === "workspaces" || e === "roots" || (Array.isArray(e) && /not added/.test(e[1]))), []);
+  assert.deepStrictEqual(t.log.filter((e) => e === "workspaces" || e === "roots" || (Array.isArray(e) && /workspace root/.test(e[1]))), []);
 });
 
 // --- who sends add_root -----------------------------------------------------------------------------------------
@@ -73,11 +81,18 @@ test("only the New session form's submit sends add_root; the account login and t
   const app = src("app.js");
   const at = app.indexOf('$("spawn").addEventListener("submit"');
   const body = app.slice(at, app.indexOf("spawnSession(req", at));
-  assert.match(body, /req\.add_root = true;/);
+  assert.match(body, /if \(spawnAddsRoot\(\)\) req\.add_root = true;/);
   assert.ok(body.indexOf("req.add_root = true") > body.indexOf("const req = spawnPayload("), "after the payload is built");
   assert.ok(!/add_root/.test(src("accounts.js")), "log in never asks to add a root");
   assert.ok(!/add_root/.test(src("spawnform.js")), "spawnPayload (also Duplicate's) never sets it");
-  assert.strictEqual((app.match(/add_root/g) || []).length, 2, "the assignment and its comment: no other sender");
+  assert.strictEqual((app.match(/req\.add_root/g) || []).length, 1, "one sender");
+});
+
+// The phone shows no line saying what Start would open (#340 freeze), so it must not add a root either.
+test("spawnAddsRoot: the desktop form adds a root, the phone form never does", () => {
+  const run = (mobile) => world([["app.js", "drawerDesktop"], ["app.js", "spawnAddsRoot"]], { mobileActive: () => mobile }).spawnAddsRoot();
+  assert.strictEqual(run(false), true, "desktop");
+  assert.strictEqual(run(true), false, "phone");
 });
 
 // --- the line and the Start gate ---------------------------------------------------------------------------------

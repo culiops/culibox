@@ -207,18 +207,14 @@ func (s *Service) coveringLocked(abs string) string {
 // refuses, in order: home itself (ErrCovered), a forbidden folder
 // (*RefusedError), a folder home or a root already reaches (ErrCovered), a
 // full list (ErrCap). The audit is recorded before the save; if it fails,
-// nothing is saved.
+// nothing is saved. The folder is resolved, checked and refused before the
+// lock is taken (home and dataDir never change), so a mount that hangs here
+// holds up this call only, never List, Paths or Covering.
 func (s *Service) Add(abs, actor string) (Root, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.reload()
-	if s.corrupt != nil {
-		return Root{}, s.corrupt
-	}
 	if !filepath.IsAbs(abs) {
 		return Root{}, fmt.Errorf("%w: %q is not an absolute path", ErrNotDir, abs)
 	}
-	real, err := filepath.EvalSymlinks(abs)
+	real, err := evalSymlinks(abs)
 	if err != nil {
 		return Root{}, fmt.Errorf("%w: %v", ErrNotDir, err)
 	}
@@ -237,6 +233,12 @@ func (s *Service) Add(abs, actor string) (Root, error) {
 	}
 	if reason := Refusal(real, Env{Home: s.home, DataDir: s.dataDir}); reason != "" {
 		return Root{}, &RefusedError{Reason: reason}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reload()
+	if s.corrupt != nil {
+		return Root{}, s.corrupt
 	}
 	if s.coveringLocked(real) != "" {
 		return Root{}, ErrCovered
