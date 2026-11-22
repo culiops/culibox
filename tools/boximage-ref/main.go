@@ -1,7 +1,7 @@
 // Command boximage-ref prints the published box image a release binary pulls by
 // default: ghcr.io/culiops/culibox@<multi-arch index digest>, found under the tag
 // dockerfile-<Hash> that box-image.yml adds, where Hash is this tree's
-// docker/agent-box Dockerfile hash (boximage.Hash). It fails when that image is
+// docker/culibox Dockerfile hash (boximage.Hash). It fails when that image is
 // missing or does not match (both arches, the Dockerfile label on each).
 // scripts/release/build.sh bakes the ref into the binary. A build/release
 // helper, not shipped in tarballs. Anonymous: the package is public.
@@ -15,7 +15,7 @@ import (
 	"os"
 	"time"
 
-	boximage "github.com/culiops/culibox/docker/agent-box"
+	boximage "github.com/culiops/culibox/docker/culibox"
 )
 
 func main() {

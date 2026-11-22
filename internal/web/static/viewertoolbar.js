@@ -303,7 +303,6 @@ function buildViewerToolbar(viewer, host) {
   };
 
   function state() {
-    const home = typeof window !== "undefined" ? window.HOME_DIR || "" : "";
     const root = typeof ftRoot === "function" ? ftRoot() : "";
     return {
       path: viewer.path,
@@ -321,7 +320,7 @@ function buildViewerToolbar(viewer, host) {
       lines: !!viewer.hasLines || !!(viewer.editing && viewer.cm),
       insert: insertTargetFor(viewer, viewer.insertCandidate()),
       noInsert: !insertOffered(),
-      reveal: revealable(viewer, home),
+      reveal: revealable(viewer),
       rel: relativeAvail(viewer, root),
       extras: extras.map((x) => ({ key: x.key, label: x.label, title: x.title })),
       keys,

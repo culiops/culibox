@@ -74,7 +74,7 @@ func TestTokens_Revoke(t *testing.T) {
 	}
 }
 
-// The API tokens page (UI plan 4, #174) draws a Created and a Last used column from this very list, and says
+// The device tokens page (UI plan 4, #174) draws a Created and a Last used column from this very list, and says
 // "Never used" for a token that has not connected, so the JSON is the contract: created_at is always there (unix
 // seconds), last_used_at is absent until the token has authenticated once and a number from then on. Decoded into
 // a map, not auth.TokenInfo, so an omitted key and a key sent as 0 are told apart.

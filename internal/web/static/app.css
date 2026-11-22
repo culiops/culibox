@@ -1258,6 +1258,19 @@
        one offers no break opportunity. #toast-msg carries it for the same reason. */
     #ask-modal #ask-body { margin: 0 0 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
     #ask-modal #ask-body:empty { display: none; }
+    /* Open this link? (#348, linkgate.js). desktop.css gives the card its look and width; this is the plain base, so the dialog reads where mdsafe's
+       links open it on the phone viewer: the link in a mono box (a long one wraps), the host in bold, an amber rule on each warning, the notes muted. */
+    #ask-modal .lk-url { padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); font: 12.5px/1.5 ui-monospace, Menlo, monospace; overflow-wrap: anywhere; max-height: 12em; overflow-y: auto; }
+    #ask-modal .lk-dim { color: var(--muted); }
+    #ask-modal .lk-host { font-weight: 700; }
+    #ask-modal .lk-meta, #ask-modal .lk-note, #ask-modal .lk-hint { margin: 6px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+    #ask-modal .lk-mono { font-family: ui-monospace, Menlo, monospace; color: var(--fg); }
+    #ask-modal .lk-warn { display: flex; align-items: baseline; gap: 6px; margin: 6px 0 0; padding: 6px 10px; border-left: 3px solid var(--warn); background: var(--warn-tint); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+    #ask-modal .lk-ico { flex: none; color: var(--warn); }
+    #ask-modal .lk-trust { margin: 10px 0 0; }
+    #ask-modal .lk-check { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    #ask-modal .lk-sub { margin: 6px 0 0 22px; color: var(--muted); }
+    #ask-modal .lk-sub[hidden], #ask-modal .lk-hint[hidden] { display: none; }
     /* The read-only Keyboard shortcuts dialog (askDialog info:true), ~33 lines.
        It is bounded by the dialog's OWN height cap (dialog { max-height: 88vh },
        and #ask-modal is already a column flex via dialog[box-][open]), never by
@@ -1385,6 +1398,13 @@
        enum with long values needs every pixel of row width before wrap even
        helps. Mobile keeps the pre-existing label-beside-seg look (below). */
     #options .opt.opt-seg, #effort-slot .opt.opt-seg { flex-direction: column; align-items: stretch; gap: 4px; }
+    /* A row with lines under its control (Permission mode, the critical-rm checkbox): each line takes the row's full width on a
+       row of its own. A seg row is a column, where wrap changes nothing (its height is auto); a checkbox row wraps. The id rule above sets display, so [hidden] needs its own. */
+    #options .opt[hidden] { display: none; }
+    #options .opt.opt-note { flex-wrap: wrap; }
+    #options .opt-line, #options .opt-detail { flex: none; width: 100%; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+    #options .opt-line[hidden] { display: none; }
+    #options .opt .warnbox { flex: none; width: 100%; margin-top: 2px; }
     /* D5 draws "CONTAINMENT" and "EFFORT" as identical section labels
        (uppercase, small, muted). Containment's is the static <label> above
        (styled by the generic #spawn label rule); Effort's matching static
@@ -1449,10 +1469,13 @@
     /* Desktop-only parts of the Settings page (desktop.css shows them on the
        page above 700px): the nav's group labels, the profile form's Can touch
        box, section heads and Advanced fold, Discard, About's runtime line, the nav's
-       Sign out… item (a phone signs out from API tokens' footer), each page's head (the
+       Sign out… item (a phone signs out from device tokens' footer), each page's head (the
        empty .set-head slot settingshead.js fills on the page) and the Agent accounts note
        that carries the paragraph's later sentences once its first is the head's line. */
     .pg-group, .pf-touch, .pf-sec, .pf-adv, #pf-discard, #about-runtime, #set-signout, .set-head, #acct-desk-note { display: none; }
+    /* The Trusted hosts tab (#348) is the desktop page's: the phone is frozen and has no list of them. Its own rule, as the list above is
+       pinned. desktop.css's nav rule is heavier (it names the page host), so the page still draws it. */
+    .tabs .t[data-tab="linktrust"] { display: none; }
     /* The Appearance page's "Shortcuts" row label (app.js fsShortcutsLabel builds it; desktop.css
        shows it on the page above 700px). Its own rule: the list above is pinned. */
     #fs-kbd-lbl { display: none; }
@@ -2147,6 +2170,8 @@
     .md-body pre { background: var(--panel); border: 1px solid var(--border); padding: 12px; overflow: auto; }
     .md-body pre code { background: none; border: none; padding: 0; }
     .md-body a { color: var(--accent); } .md-body img { max-width: 100%; }
+    /* A link the gate opens (mdsafe.js) has no href, so the browser draws it as plain text: say it is a link. */
+    .md-body a.md-link { color: var(--accent); text-decoration: underline; cursor: pointer; }
     .md-body blockquote { border-left: 3px solid var(--border); margin: 0; padding: 0 1em; color: var(--muted); }
     /* A table wider than the column scrolls inside itself (display: block makes the table its own box to scroll; max-content keeps a narrow
        one as wide as its cells, not the whole column), instead of pushing the page, or the dock's preview, sideways. */

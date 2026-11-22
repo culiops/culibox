@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	boximage "github.com/culiops/culibox/docker/agent-box"
+	boximage "github.com/culiops/culibox/docker/culibox"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/dockerfake"
 )

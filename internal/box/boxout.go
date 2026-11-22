@@ -10,7 +10,7 @@ import (
 const (
 	// PlaywrightOutBox is where the boxed Playwright MCP writes its screenshots
 	// and snapshots. It must equal the --output-dir in the image's mcp.json
-	// (docker/agent-box/Dockerfile); a test pins the two together. It sits under
+	// (docker/culibox/Dockerfile); a test pins the two together. It sits under
 	// the box's /tmp tmpfs, and the host out dir is bind-mounted over it, so what
 	// the browser saves lands where the host can serve it.
 	PlaywrightOutBox = "/tmp/playwright-mcp"

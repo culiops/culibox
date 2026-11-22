@@ -109,6 +109,18 @@ func strictSameOrigin(r *http.Request) bool {
 	return (o == "http://"+r.Host || o == "https://"+r.Host) && sameOrigin(r)
 }
 
+// browserOnly is the gate for a change only this page's own signed-in browser
+// session may make: a cookie credential and a strict same-origin request, never
+// a bearer token (a token holder, an agent among them, must not widen what the
+// page can reach). It answers 403 with msg and returns false otherwise.
+func browserOnly(w http.ResponseWriter, r *http.Request, msg string) bool {
+	if credKindOf(r) != credCookie || !strictSameOrigin(r) {
+		writeErr(w, http.StatusForbidden, msg)
+		return false
+	}
+	return true
+}
+
 // credName is the fixed label of the credential kind a request arrived with.
 func credName(r *http.Request) string {
 	switch credKindOf(r) {

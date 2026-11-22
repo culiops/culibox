@@ -204,3 +204,33 @@ func TestBoxfileMethod(t *testing.T) {
 		}
 	}
 }
+
+func TestBoxfileRawServesMediaAndPDF(t *testing.T) {
+	a, dir := boxfileAPI(t)
+	body := []byte("%PDF-1.4\x00fake")
+	writeOut(t, dir, "doc.pdf", body)
+	writeOut(t, dir, "clip.mp4", body)
+	writeOut(t, dir, "page.html", []byte("<script>alert(1)</script>"))
+	for name, ctype := range map[string]string{"doc.pdf": "application/pdf", "clip.mp4": "video/mp4"} {
+		rec := boxfileGet(a, "bx", "/tmp/playwright-mcp/"+name, "raw", "1")
+		if rec.Code != 200 {
+			t.Fatalf("%s: code %d: %s", name, rec.Code, rec.Body)
+		}
+		h := rec.Header()
+		if h.Get("Content-Type") != ctype || h.Get("X-Content-Type-Options") != "nosniff" ||
+			h.Get("Content-Security-Policy") != "sandbox" {
+			t.Errorf("%s: headers = %v", name, h)
+		}
+		if !bytes.Equal(rec.Body.Bytes(), body) {
+			t.Errorf("%s: body differs", name)
+		}
+	}
+	if cd := boxfileGet(a, "bx", "/tmp/playwright-mcp/doc.pdf", "raw", "1").Header().Get("Content-Disposition"); !strings.HasPrefix(cd, "inline;") || !strings.Contains(cd, `"doc.pdf"`) {
+		t.Errorf("pdf Content-Disposition = %q", cd)
+	}
+	// Off the allowlist raw=1 is ignored: the html is JSON text, never a document.
+	rec := boxfileGet(a, "bx", "/tmp/playwright-mcp/page.html", "raw", "1")
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("html raw=1: Content-Type = %q, want JSON", ct)
+	}
+}

@@ -12,6 +12,7 @@ class Node {
     this.tag = tag; this.doc = doc; this.children = []; this.parent = null; this.own = "";
     this.className = ""; this.attrs = {}; this.style = {}; this.hidden = false; this.disabled = false;
     this.isConnected = true; this.tabIndex = -1;
+    this.scrollLeft = 0; this.scrollTop = 0; this.clientWidth = 0; this.clientHeight = 0; // no layout here: a test sets the sizes it needs
     const self = this;
     // dataset.x = "v" is the attribute data-x, as in a browser, so a [data-x="v"] selector finds it.
     this.dataset = new Proxy({}, {
@@ -25,8 +26,13 @@ class Node {
         self.className = [...set].join(" ");
       },
       contains: (c) => self.className.split(/\s+/).includes(c),
+      add(...cs) { for (const c of cs) this.toggle(c, true); },
+      remove(...cs) { for (const c of cs) this.toggle(c, false); },
     };
   }
+  // src is a reflecting attribute, as on an <img>, <video> or <audio>: setting it is setAttribute, removeAttribute("src") clears it.
+  get src() { return "src" in this.attrs ? this.attrs.src : ""; }
+  set src(v) { this.attrs.src = String(v); }
   get textContent() { return this.own + this.children.map((c) => c.textContent).join(""); }
   set textContent(v) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = String(v); }
   get firstChild() { return this.children[0] || null; }
@@ -36,8 +42,10 @@ class Node {
   removeAttribute(k) { delete this.attrs[k]; }
   appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }
-  // Inserts `c` before `ref` (at the end for null), moving it if it is already placed.
+  // Inserts `c` before `ref` (at the end for null), moving it if it is already placed. A `ref` that is no child of this node throws,
+  // as the DOM's NotFoundError does (#350: a lax fake hid exactly that throw).
   insertBefore(c, ref) {
+    if (ref && ref.parent !== this) throw new Error("NotFoundError: insertBefore: the reference node is not a child of this node");
     if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1);
     c.parent = this;
     const at = ref ? this.children.indexOf(ref) : -1;
@@ -57,6 +65,12 @@ class Node {
   getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
   focus() { this.doc.activeElement = this; }
   click() { if (this.onclick) this.onclick({ target: this }); }
+  // A layout box: what a test sets in `rect` (a stage on screen), else the origin and the client size.
+  getBoundingClientRect() {
+    return this.rect || { left: 0, top: 0, width: this.clientWidth || 0, height: this.clientHeight || 0 };
+  }
+  setPointerCapture(id) { this.captured = id; }
+  releasePointerCapture() { this.captured = undefined; }
   // Matches one compound selector (an optional tag, then any number of .classes and [attr] / [attr="v"] tests).
   is(compound) {
     const m = /^([a-z][a-z0-9]*)?((?:\.[\w-]+|\[[\w-]+(?:="[^"]*")?\])*)$/i.exec(compound);
@@ -92,4 +106,24 @@ class Node {
   querySelector(sel) { return this.all(sel, [])[0] || null; }
 }
 
-module.exports = { Node, Text };
+// EvNode: a Node that takes event listeners (a page of its own, like dockfileview.test.js's, makes its elements from it). Not on Node
+// itself: other tests give their fake elements an addEventListener of their own, and a Node that had one would shadow it.
+class EvNode extends Node {
+  constructor(tag, doc) { super(tag, doc); this.ev = {}; }
+  // Listeners run in the order added, after the element's own on<type> handler; the event gets target / currentTarget and a
+  // preventDefault that sets defaultPrevented. It does not bubble unless the event says so. Returns false when prevented.
+  addEventListener(type, fn) { (this.ev[type] = this.ev[type] || []).push(fn); }
+  removeEventListener(type, fn) { this.ev[type] = (this.ev[type] || []).filter((f) => f !== fn); }
+  dispatchEvent(e) {
+    e.target = e.target || this;
+    e.currentTarget = this;
+    if (!e.preventDefault) e.preventDefault = function () { this.defaultPrevented = true; };
+    e.defaultPrevented = !!e.defaultPrevented;
+    if (typeof this["on" + e.type] === "function") this["on" + e.type](e);
+    for (const fn of [...(this.ev[e.type] || [])]) fn(e);
+    if (e.bubbles && this.parent instanceof EvNode) this.parent.dispatchEvent(e);
+    return !e.defaultPrevented;
+  }
+}
+
+module.exports = { Node, Text, EvNode };

@@ -228,7 +228,7 @@ function palettePageCommands(desktop, flags, h) {
   out.push(settings("Profiles", "manage"), settings("Agent accounts", "accounts"), settings("Credentials", "creds"));
   if (flags && flags.vm_folders) out.push(settings("VM folders", "vmfolders"));
   out.push(
-    settings("API tokens", "tokens"), settings("Appearance", "settings"), settings("About", "about"),
+    settings("Device tokens", "tokens"), settings("Appearance", "settings"), settings("About", "about"),
   );
   return out;
 }

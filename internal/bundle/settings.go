@@ -78,7 +78,7 @@ func filterSettings(path string) (map[string]any, []Drop) {
 // read. attribution.sessionUrl:false also drops the Claude-Session trailer that
 // a Remote Control session adds (2.1.311's schema: "Set to false to omit the
 // Claude-Session trailer and PR-body link"). The image also pins the same keys
-// as managed policy (docker/agent-box/Dockerfile) for sessions with no bundle.
+// as managed policy (docker/culibox/Dockerfile) for sessions with no bundle.
 //
 // Both keys are on the keep-list so this can say what it replaced: a host value
 // that already means "off" is not reported, anything else is a drop row.

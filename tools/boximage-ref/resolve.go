@@ -13,7 +13,7 @@ import (
 	"slices"
 	"strings"
 
-	boximage "github.com/culiops/culibox/docker/agent-box"
+	boximage "github.com/culiops/culibox/docker/culibox"
 )
 
 // maxBody caps every registry response: an index, a manifest or an image config
@@ -64,7 +64,7 @@ func resolve(ctx context.Context, c *http.Client, registry, repoPath, hash strin
 	accept := strings.Join([]string{ociIndex, dockerList, ociManifest, dockerSchema2}, ", ")
 	body, hdr, err := get("manifests", tag, accept)
 	if err != nil {
-		return "", fmt.Errorf("%s:%s: %w (box-image.yml publishes it on main when docker/agent-box changes; run it, then re-run this release)", repoPath, tag, err)
+		return "", fmt.Errorf("%s:%s: %w (box-image.yml publishes it on main when docker/culibox changes; run it, then re-run this release)", repoPath, tag, err)
 	}
 	index := digest(body)
 	if h := hdr.Get("Docker-Content-Digest"); h != "" && h != index {

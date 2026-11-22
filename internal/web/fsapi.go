@@ -29,6 +29,15 @@ var (
 var imageExt = map[string]string{
 	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 	".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+	".avif": "image/avif", ".bmp": "image/bmp", ".ico": "image/x-icon",
+}
+
+// rawExt maps a lowercase extension to the MIME type served raw, only on request
+// (raw=1), for <video>, <audio> and a PDF opened in its own tab. It is an
+// allowlist of inert types: HTML and other active content are never in it.
+var rawExt = map[string]string{
+	".mp4": "video/mp4", ".webm": "video/webm", ".mp3": "audio/mpeg",
+	".wav": "audio/wav", ".ogg": "audio/ogg", ".pdf": "application/pdf",
 }
 
 // isBinary reports whether head (the first bytes of a file) looks binary, using
@@ -173,6 +182,7 @@ type fsRead struct {
 	Kind    string `json:"kind"`           // "text" | "image" | "binary"
 	Lang    string `json:"lang,omitempty"` // highlight.js hint (bare extension)
 	Size    int64  `json:"size"`
+	Mtime   int64  `json:"mtime,omitempty"` // modified time, Unix ms
 	Content string `json:"content,omitempty"`
 	Version string `json:"version,omitempty"` // sha256 of Content; text only, for edit locking
 	// ReadOnly: the file is served but can never be saved (scratch folder, box).
@@ -220,20 +230,30 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveFsFile writes the response for an already-opened regular file: raw
-// download, raw image, or the text / binary / too-large JSON preview. It is
-// the shared tail of /api/fs/read and the box file endpoint, so the two cannot
-// drift. name is the file's base name (it picks the extension and the download
-// filename); the caller has already authorised and opened f and closes it.
-// readOnly marks the JSON preview so the viewer offers no Edit.
+// download, raw image, raw video / audio / PDF on raw=1, or the text / binary /
+// too-large JSON preview. It is the shared tail of /api/fs/read and the box
+// file endpoint, so the two cannot drift. name is the file's base name (it
+// picks the extension and the download filename); the caller has already
+// authorised and opened f and closes it. readOnly marks the JSON preview so
+// the viewer offers no Edit.
+//
+// Every JSON body carries mtime (Unix ms), and the 413 carries {error, size, mtime},
+// so a header can show how big and how old a file is without reading it.
 //
 // meta=1 is the same read without the payload: {kind, size, version, readonly, utf8}
 // for text (the version is the sha256 the full read returns, of the same bytes,
 // under the same size cap), {kind, size} for an image or a binary file, which
 // it never streams. The editor polls it to see that a file changed on disk. It
 // wins over download=1: a metadata read never hands over the file.
+//
+// raw=1 streams a rawExt type (video, audio, pdf) for the dock's <video>, <audio>
+// and PDF tab. It is ignored for any other extension, which takes the JSON path
+// below, so it can never serve HTML or other active content raw. Without it a
+// video is still the binary JSON the phone's viewer reads.
 func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.FileInfo, name string, readOnly bool) {
 	ext := strings.ToLower(filepath.Ext(name))
 	meta := r.URL.Query().Get("meta") == "1"
+	mtime := info.ModTime().UnixMilli()
 
 	// download=1 is a byte pipe, not a preview: it deliberately bypasses both
 	// preview guards below (the binary-metadata branch and the maxTextBytes
@@ -251,7 +271,7 @@ func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.Fil
 
 	if ctype, ok := imageExt[ext]; ok {
 		if meta {
-			writeJSON(w, http.StatusOK, fsRead{Kind: "image", Size: info.Size(), ReadOnly: readOnly})
+			writeJSON(w, http.StatusOK, fsRead{Kind: "image", Size: info.Size(), Mtime: mtime, ReadOnly: readOnly})
 			return
 		}
 		w.Header().Set("Content-Type", ctype)
@@ -264,14 +284,29 @@ func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.Fil
 		return
 	}
 
+	if ctype, ok := rawExt[ext]; ok && !meta && r.URL.Query().Get("raw") == "1" {
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "sandbox")
+		if ext == ".pdf" {
+			w.Header().Set("Content-Disposition", dispositionHeader("inline", name))
+		}
+		// ServeContent answers Range, so a <video> can seek.
+		http.ServeContent(w, r, name, info.ModTime(), f)
+		return
+	}
+
 	head := make([]byte, 8000)
 	n, _ := io.ReadFull(f, head)
 	if isBinary(head[:n]) {
-		writeJSON(w, http.StatusOK, fsRead{Kind: "binary", Size: info.Size(), ReadOnly: readOnly})
+		writeJSON(w, http.StatusOK, fsRead{Kind: "binary", Size: info.Size(), Mtime: mtime, ReadOnly: readOnly})
 		return
 	}
 	if info.Size() > maxTextBytes {
-		writeErr(w, http.StatusRequestEntityTooLarge, "file too large to preview")
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+			"error": "file too large to preview", "size": info.Size(), "mtime": mtime,
+		})
 		return
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -284,7 +319,7 @@ func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.Fil
 		return
 	}
 	valid := utf8.Valid(content)
-	resp := fsRead{Kind: "text", Size: info.Size(), Version: hashText(content), ReadOnly: readOnly, UTF8: &valid}
+	resp := fsRead{Kind: "text", Size: info.Size(), Mtime: mtime, Version: hashText(content), ReadOnly: readOnly, UTF8: &valid}
 	if !meta {
 		resp.Lang, resp.Content = strings.TrimPrefix(ext, "."), string(content)
 	}
@@ -295,6 +330,12 @@ func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.Fil
 // escaped so a filename containing a quote cannot inject header syntax, and the
 // RFC 5987 filename* carries a non-ASCII name through intact.
 func contentDisposition(name string) string {
+	return dispositionHeader("attachment", name)
+}
+
+// dispositionHeader is contentDisposition for either disposition type: "attachment"
+// saves the file, "inline" lets a PDF open in the browser's own viewer.
+func dispositionHeader(kind, name string) string {
 	q := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\r", "", "\n", "").Replace(name)
-	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, q, url.PathEscape(name))
+	return fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, kind, q, url.PathEscape(name))
 }

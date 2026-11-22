@@ -15,10 +15,28 @@ import (
 	"github.com/culiops/culibox/internal/auth"
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/wsroots"
 )
+
+// WorkspaceRoots is the set of folders the file API serves besides $HOME, with
+// the audited add/remove the Settings page drives. *wsroots.Service satisfies it.
+type WorkspaceRoots interface {
+	Paths() []string
+	Covering(abs string) string
+	List() ([]wsroots.Root, error)
+	Add(abs, actor string) (wsroots.Root, error)
+	Remove(path, actor string) error
+	Touch(abs string)
+	// Elsewhere is the project folders found outside home (the "Other places"
+	// scan); it never waits long and reads folder names only.
+	Elsewhere(ctx context.Context) []wsroots.Place
+}
+
+var _ WorkspaceRoots = (*wsroots.Service)(nil)
 
 //go:embed static
 var staticFS embed.FS
@@ -101,6 +119,14 @@ type Server struct {
 	// trees (host behaviour).
 	BoxTrees func() BoxTrees
 
+	// Roots are the workspace folders served besides $HOME. Nil → $HOME only.
+	Roots WorkspaceRoots
+	// DataDir is CuliBox's data directory; the workspace check refuses it as a root.
+	DataDir string
+	// LinkTrust is the per-person list of hosts whose agent links open without
+	// the confirm dialog (#348). Nil → no /api/link-trust route.
+	LinkTrust LinkTrust
+
 	// ScratchDirs are candidate Claude Code temp folders (claude-<uid>), from
 	// ScratchCandidates. The fs API reads an accepted one read-only.
 	ScratchDirs []string
@@ -163,9 +189,12 @@ type Server struct {
 	// handing back the value (secretchain.Chain.Check). nil = every name reads
 	// "missing".
 	SecretCheck func(name string) (secretchain.Presence, error)
-	CredAWS     AWSCredService
-	CredAudit   CredRecorder
-	credLimit   callLimiter
+	// SecretSources is the configured source list (cfg.SecretSources), set once
+	// at start. /api/meta summarises it by type and file path only.
+	SecretSources []config.SecretSource
+	CredAWS       AWSCredService
+	CredAudit     CredRecorder
+	credLimit     callLimiter
 
 	// Analytics serves the token/prompt analytics endpoints and view. Nil → the
 	// feature is disabled: no routes registered, no data shown.
@@ -194,6 +223,15 @@ type Server struct {
 	prefMu    sync.Mutex
 	prefIdx   map[string]*fileIndex
 	prefOrder []string
+
+	// rootIdx holds one file index per added workspace root (never home),
+	// keyed by root path and dropped once the root is no longer served.
+	rootIdxMu sync.Mutex
+	rootIdx   map[string]*fileIndex
+
+	// rootHealth caches whether each added workspace root is still the
+	// directory it was, off the request path (roothealth.go).
+	rootHealth rootHealth
 }
 
 // QuickShell exposes the verified quick-shell name for startup diagnostics.
@@ -328,6 +366,12 @@ func (s *Server) Handler() http.Handler {
 		if s.Profiles != nil {
 			meta["aws_connections"] = s.Profiles.AWSConnectionMetaList()
 		}
+		// The configured secret sources, in order: type and file path only, so the
+		// profile page can say where a secret name is looked up. Never a name, a
+		// value or the store's ids. Omitted when none are configured.
+		if len(s.SecretSources) > 0 {
+			meta["secret_sources"] = secretSourcesMeta(s.SecretSources)
+		}
 		// Per-account 5h/weekly usage, read fresh (tiny files). Omitted when no
 		// account has data so the client shows nothing rather than an empty widget.
 		if m := s.rateLimitsByAccount(); len(m) > 0 {
@@ -338,6 +382,13 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, listWorkspaces(s.Home, s.Protected, s.Shares))
 	})
+	if s.Roots != nil {
+		protected.HandleFunc("/api/workspace-roots", s.handleWorkspaceRoots)
+		protected.HandleFunc("/api/workspace/check", s.handleWorkspaceCheck)
+	}
+	if s.LinkTrust != nil {
+		protected.HandleFunc("/api/link-trust", s.handleLinkTrust)
+	}
 	protected.HandleFunc("/api/fs/list", s.handleFsList)
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)
 	protected.HandleFunc("/api/fs/search", s.handleFsSearch)
@@ -466,4 +517,20 @@ func csrfGuard(next http.Handler, onRefuse func(*http.Request)) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// secretSourceMeta is one configured secret source as /api/meta shows it: the
+// type and, for a file source, its path. The store takes no path, and no id,
+// name or value ever appears here.
+type secretSourceMeta struct {
+	Type string `json:"type"`
+	Path string `json:"path,omitempty"`
+}
+
+func secretSourcesMeta(src []config.SecretSource) []secretSourceMeta {
+	out := make([]secretSourceMeta, len(src))
+	for i, x := range src {
+		out[i] = secretSourceMeta{Type: x.Type, Path: x.Path}
+	}
+	return out
 }

@@ -703,7 +703,7 @@ function vmfBuildCard(path, mode, from) {
   const fs = vmfEl("fieldset", "vmf-modes");
   fs.appendChild(vmfEl("legend", phone ? "flab" : "field-label", "Boxes can"));
   const pick = (m) => { vmfCard.mode = m; vmfCardSync(); vmfCardCheck(); };
-  const rw = vmfModeCard("rw", "rw", "Read & write", "For a workspace, or where clone copies live.", mode !== "ro", pick);
+  const rw = vmfModeCard("rw", "rw", "Read & write", "For a workspace, or where clone copies live. Boxes can change and delete files here.", mode !== "ro", pick);
   const ro = vmfModeCard("ro", "ro", "Read only", "For notes, docs or runbooks a box only reads.", mode === "ro", pick);
   els.opts.push(rw, ro);
   const opts = vmfEl("div", "vmf-optrow");

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	boximage "github.com/culiops/culibox/docker/agent-box"
+	boximage "github.com/culiops/culibox/docker/culibox"
 )
 
 const testHash = "0123456789ab"

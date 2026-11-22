@@ -28,12 +28,116 @@ function repliesFieldVisible(profile) {
   return !!(profile && profile.claude);
 }
 
+// Permission mode (#342): the Claude rules the dialog and the profile page share. The words are founder-approved;
+// the server's own strings (the box-only reason, "needs Permission mode: Bypass") live in Go.
+const PERM_MODE_KEY = "permission_mode";
+const BYPASS_MODE = "bypassPermissions";
+const CRIT_RM_KEY = "skip_critical_rm_prompt";
+const PERM_MODE_LABELS = { manual: "Manual", acceptEdits: "Accept edits", auto: "Auto", plan: "Plan", bypassPermissions: "Bypass" };
+const PERM_MODE_LINES = {
+  "": "Claude Code's default. On current versions that is Auto.",
+  manual: "Asks you before edits and commands.",
+  acceptEdits: "Edits files without asking. Still asks before other commands.",
+  auto: "A classifier reviews each action and blocks risky ones. Asks you less.",
+  plan: "Reads and plans only. Changes nothing until you approve the plan.",
+  bypassPermissions: "Runs every action without asking.",
+};
+const CRIT_RM_COPY = {
+  detail: "In Bypass, Claude Code still stops before an rm of the working folder, ~ or /, waits 2 minutes, then refuses. This turns that stop off.",
+  needsBypass: "Needs Permission mode: Bypass",
+  clone: "The agent works on its own copy of the repo.",
+  inPlace: "Your own folder is mounted live. With this on, the agent can delete it, and everything in it, without asking.",
+  legacy: (label) => "Set by " + label + " (older form)",
+  args: "This profile's own arguments also turn Bypass on.",
+};
+
+// permModeLabel: the seg's button text. A choice a config.json def adds (not one of the five) shows as it is.
+function permModeLabel(choice) {
+  return Object.prototype.hasOwnProperty.call(PERM_MODE_LABELS, choice) ? PERM_MODE_LABELS[choice] : choice;
+}
+
+// permModeLine: the consequence line under the control; "" for a choice with none.
+function permModeLine(choice) {
+  return Object.prototype.hasOwnProperty.call(PERM_MODE_LINES, choice) ? PERM_MODE_LINES[choice] : "";
+}
+
+const LEGACY_BYPASS_FLAG = "--dangerously-skip-permissions";
+
+// optionDefApplies: config.OptionDef.AppliesTo for a def (no bins: every agent; else the bin or its basename). Pure twin of app.js
+// optApplies, for the scripts that run under node.
+function optionDefApplies(d, bin) {
+  if (!d || !Array.isArray(d.bins) || d.bins.length === 0) return true;
+  const base = String(bin || "").split("/").pop();
+  return d.bins.includes(bin) || d.bins.includes(base);
+}
+
+const isLegacyBypassDef = (d) => !!d && d.type === "bool" && d.flag === LEGACY_BYPASS_FLAG;
+
+// enumOwnsLegacyBypass: the Permission mode control owns the older bypass bool for this command only when the permission_mode def
+// that applies to it can say Bypass (has bypassPermissions among its choices). Mirrors config.EnumOwnsLegacyBypass. A def whose
+// choices omit it cannot stand in for the bool, so the bool stays a checkbox of its own, as before #342.
+function enumOwnsLegacyBypass(defs, bin) {
+  const list = Array.isArray(defs) ? defs : Object.values(defs || {});
+  return list.some((d) => d && d.key === PERM_MODE_KEY && optionDefApplies(d, bin) && Array.isArray(d.choices) && d.choices.includes(BYPASS_MODE));
+}
+
+// legacyBypassKeyFromDefs: the key of the older bypass bool, found by its flag and never by its name (mirrors
+// config.LegacyBypassKey: a key the profile has, whatever its value, while the enum owns it). The first sorted such key. For the
+// profile page, which has the defs; New session reads profile.legacy_bypass_key.
+function legacyBypassKeyFromDefs(defs, options, bin) {
+  if (!enumOwnsLegacyBypass(defs, bin)) return "";
+  const opts = options || {};
+  const list = Array.isArray(defs) ? defs : Object.values(defs || {});
+  const keys = list.filter((d) => isLegacyBypassDef(d) && optionDefApplies(d, bin)).map((d) => d.key).sort();
+  for (const k of keys) if (Object.prototype.hasOwnProperty.call(opts, k)) return k;
+  return "";
+}
+
+// legacyKeysOwnedByEnum: the keys of the older bypass bools (any declared bool on the legacy flag) that the Permission mode control
+// owns for this command: they are the legacy form of Bypass, so Advanced does not draw them, whether or not the profile stores one.
+// Only while the enum owns the bool (enumOwnsLegacyBypass); otherwise the checkbox is the only way to set it and stays.
+function legacyKeysOwnedByEnum(defs, bin) {
+  if (!enumOwnsLegacyBypass(defs, bin)) return [];
+  const list = Array.isArray(defs) ? defs : Object.values(defs || {});
+  return list.filter((d) => isLegacyBypassDef(d) && optionDefApplies(d, bin)).map((d) => d.key);
+}
+
+// effectiveMode: permission_mode when it carries a value; else Bypass when the legacy bool is on; else "".
+function effectiveMode(options, legacyKey) {
+  const o = options || {};
+  if (o.permission_mode) return o.permission_mode;
+  return legacyKey && o[legacyKey] === true ? "bypassPermissions" : "";
+}
+
+// effectiveBypass: the run skips permission checks. From the profile's own args, from the mode (the enum, or the legacy bool
+// by its flag), from a ticked bool the server marks as the older bypass form (profile.options[].bypass: the enum does not own it,
+// so it is a checkbox; a mode that is set supersedes it, as on the server), or from the flagless fixture key BYPASS_OPTION_KEY.
+function effectiveBypass(profile, options) {
+  const p = profile || {};
+  const o = options || {};
+  const markedOn = !o[PERM_MODE_KEY] && (Array.isArray(p.options) ? p.options : []).some((x) => x && x.bypass === true && o[x.key] === true);
+  return !!(p.bypass_args
+    || effectiveMode(options, p.legacy_bypass_key) === "bypassPermissions"
+    || markedOn
+    || o[BYPASS_OPTION_KEY] === true);
+}
+
+// critRmView: the critical-rm row for the card picked. Hidden off a box; dimmed unless the run is in bypass; otherwise the
+// line for a clone (plain) or in place (strong). `where` is spawnWhere().
+function critRmView(where, bypass) {
+  const w = where || {};
+  const show = w.runtime === "box";
+  if (!bypass) return { show, disabled: true, line: CRIT_RM_COPY.needsBypass, strong: false };
+  if (w.clone) return { show, disabled: false, line: CRIT_RM_COPY.clone, strong: false };
+  return { show, disabled: false, line: CRIT_RM_COPY.inPlace, strong: true };
+}
+
 // bypassWarningShown: replies to a session that skips permission checks type
 // straight into an agent that runs anything — say so while the toggle is on.
-// Bypass comes from this run's option or from the profile's own args.
+// Bypass comes from this run's mode or option, or from the profile's own args.
 function bypassWarningShown(profile, options, replyable) {
   if (!replyable || !repliesFieldVisible(profile)) return false;
-  return !!(profile.bypass_args || (options && options[BYPASS_OPTION_KEY] === true));
+  return effectiveBypass(profile, options);
 }
 
 // runtimeSegChoices: the containment seg's buttons. Their values are the tier
@@ -210,5 +314,6 @@ if (typeof module !== "undefined" && module.exports) {
     SPAWN_NOT_SHARED_TAIL, SPAWN_VM_SEES_HELP, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
     runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText, spawnSubmitLabel, spawnFootHint,
     PLIST_SEARCH_MIN, profileMatches,
+    PERM_MODE_KEY, BYPASS_MODE, CRIT_RM_KEY, PERM_MODE_LABELS, PERM_MODE_LINES, CRIT_RM_COPY, permModeLabel, permModeLine, enumOwnsLegacyBypass, isLegacyBypassDef, legacyBypassKeyFromDefs, legacyKeysOwnedByEnum, optionDefApplies, effectiveMode, effectiveBypass, critRmView,
   };
 }

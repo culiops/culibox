@@ -14,7 +14,7 @@
 # version that released binaries still pull. Never delete untagged versions of
 # this package: an old binary would fall back to a local build of several minutes.
 #
-# Supply chain (docker/agent-box/workflow_test.go guards this):
+# Supply chain (docker/culibox/workflow_test.go guards this):
 #   - every action is pinned by full commit SHA, the release in a comment
 #   - no pull-request trigger of any kind: merges here are local, and a fork
 #     must never be able to run a job that can push
@@ -26,6 +26,8 @@
 #     reports
 #   - both jobs run on main only (job-level `if`), so a workflow_dispatch from
 #     another branch can never move the `base` tag or the dated tag
+#   - the scan job runs third-party code (Grype, pinned by sha256) with a read-only
+#     token and no registry login, and never blocks publishing (report first)
 #   - the BuildKit engine is pinned by image digest (driver-opts), not left at
 #     the mutable moby/buildkit:buildx-stable-1 tag: it runs every RUN and holds
 #     the push credentials
@@ -36,14 +38,14 @@
 #
 # Label parity: the label is computed exactly as boximage.Hash() does, the
 # first 12 hex of the Dockerfile's sha256. TestHashMatchesShellPipeline in
-# docker/agent-box/boximage_test.go proves the two computations agree.
+# docker/culibox/boximage_test.go proves the two computations agree.
 name: box-image
 
 on:
   push:
     branches: [main]
     paths:
-      - "docker/agent-box/**"
+      - "docker/culibox/**"
       - ".github/workflows/box-image.yml"
   workflow_dispatch:
 
@@ -60,7 +62,7 @@ env:
   IMAGE: ghcr.io/culiops/culibox
   # The layer cache, a package of its own so cache manifests never show up as
   # versions of the public image (see the build step).
-  CACHE: ghcr.io/culiops/agent-box-cache
+  CACHE: ghcr.io/culiops/culibox-cache
 
 jobs:
   build:
@@ -88,7 +90,7 @@ jobs:
         id: label
         run: |
           set -euo pipefail
-          echo "dockerfile=$(sha256sum docker/agent-box/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "dockerfile=$(sha256sum docker/culibox/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       # BuildKit v0.33.1 (released 2026-09-30, the latest stable at least two
       # weeks old on 2026-10-19), pinned by its INDEX digest (covers amd64 and
@@ -107,7 +109,7 @@ jobs:
       # extra CA, so the file is empty (it is untracked and gitignored).
       - name: Create the empty extra-ca.pem build input
         run: |
-          : > docker/agent-box/extra-ca.pem
+          : > docker/culibox/extra-ca.pem
 
       # Layer cache in the registry, one tag per arch in its own package
       # ($CACHE:amd64/arm64, never pinned or run). Not GitHub's Actions cache: it drops an entry unused
@@ -125,8 +127,8 @@ jobs:
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: docker/agent-box
-          file: docker/agent-box/Dockerfile
+          context: docker/culibox
+          file: docker/culibox/Dockerfile
           platforms: linux/${{ matrix.arch }}
           pull: true
           labels: io.culiops.agent-box.dockerfile=${{ steps.label.outputs.dockerfile }}
@@ -151,6 +153,66 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Scan each pushed digest (#355) with the pinned Grype (scripts/ci/install-grype.sh,
+  # a sha256-checked download, no scanner Action). The scanner is third-party code,
+  # so this job holds a read-only token and logs in nowhere: the package is public.
+  # Report first: findings go to the job summary and never fail the job, and merge
+  # does not wait for it, so a scanner or vulnerability-database outage never blocks
+  # publishing. The fail policy is in docs/BOX-IMAGE.md.
+  scan:
+    name: scan ${{ matrix.arch }}
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests
+
+      - name: Install the pinned Grype
+        run: scripts/ci/install-grype.sh "$RUNNER_TEMP/grype"
+
+      # The digest is the artifact's file name: checked, then used through env only.
+      - name: Scan the pushed digest
+        env:
+          ARCH: ${{ matrix.arch }}
+          GRYPE_CHECK_FOR_APP_UPDATE: "false"
+        run: |
+          set -euo pipefail
+          files=("$RUNNER_TEMP"/digests/*)
+          test "${#files[@]}" -eq 1
+          DIGEST="$(basename "${files[0]}")"
+          [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          "$RUNNER_TEMP/grype/bin/grype" "registry:${IMAGE}@sha256:${DIGEST}" --platform "linux/${ARCH}" \
+            -o json --file "$RUNNER_TEMP/scan.json"
+
+      - name: Report in the job summary
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          scripts/ci/image-scan-report.sh -a scripts/ci/image-scan-accepted.txt \
+            "linux/${ARCH}=$RUNNER_TEMP/scan.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scan-${{ matrix.arch }}
+          path: ${{ runner.temp }}/scan.json
+          if-no-files-found: error
+          retention-days: 30
+
   merge:
     name: merge manifest list
     needs: build
@@ -170,7 +232,7 @@ jobs:
         id: label
         run: |
           set -euo pipefail
-          echo "dockerfile=$(sha256sum docker/agent-box/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "dockerfile=$(sha256sum docker/culibox/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

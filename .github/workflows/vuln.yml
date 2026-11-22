@@ -9,7 +9,7 @@
 # runs once per GOOS. GOOS=darwin needs no macOS runner; the one macOS runner stays
 # darwin-test's (#293).
 #
-# Supply chain (docker/agent-box/workflow_test.go guards this):
+# Supply chain (docker/culibox/workflow_test.go guards this):
 #   - every action is pinned by full commit SHA, the release in a comment
 #   - no pull-request trigger of any kind
 #   - GITHUB_TOKEN is read-only

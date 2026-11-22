@@ -47,7 +47,11 @@ let spawnGateErr = "";
 // blocked: still hoverable, as every desktop control that cannot act yet (setDisabledReason); the submit handler refuses it. The
 // desktop only: on the phone the block stays hidden and Spawn stays live, as it was. Returns the gate, for the submit handler.
 function syncSpawnGate() {
-  const g = spawnBoxGate(spawnPanelOn() ? spawnGateInput() : undefined);
+  let g = spawnBoxGate(spawnPanelOn() ? spawnGateInput() : undefined);
+  // The workspace line's own block (app.js): the box tier is picked and the box would refuse the folder (a Mac's VM cannot see it).
+  // Not a boxes-unavailable case, so the submit handler need not re-read the daemon: noLayer says so.
+  const wsWhy = typeof spawnWsCheckBlock === "function" ? spawnWsCheckBlock() : "";
+  if (!g.blocked && wsWhy) g = Object.assign({}, g, { blocked: true, noLayer: true, text: wsWhy });
   const el = $("spawn-nobox");
   if (el) {
     el.hidden = !g.show;

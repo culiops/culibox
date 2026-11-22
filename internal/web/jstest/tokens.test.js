@@ -1,5 +1,5 @@
 "use strict";
-// tokens.js on the API tokens page (UI plan 4, #174, Task 7; frame M2.4, digest-design §A7 and §B5): a kit table in a
+// tokens.js on the Device tokens page (UI plan 4, #174, Task 7; frame M2.4, digest-design §A7 and §B5): a kit table in a
 // card, Name · Created · Last used and a Revoke… on every row, the approved footnote under the card. The phone's rows
 // are untouched ("used never", the in-row confirm), so both skins are pinned here, against a minimal fake DOM (the
 // repo has no jsdom, see credentials-dom.test.js) and, for the look, against the rules desktop.css carries.
@@ -21,7 +21,7 @@ const FLOOR_PX = 180;
 const CREATED = 1793404800;   // 2026-10-31
 const USED = 1793923200;      // 2026-11-06
 const ARM_COPY = "Revoke? That device is signed out on its next request. This cannot be undone.";
-const FOOTNOTE = "A token is shown once, when you create it. Revoking one signs that device out on its next request.";
+const FOOTNOTE = "A device token is shown once, when you create it. Revoking one signs that device out on its next request.";
 
 // --- the dates -----------------------------------------------------------------------------------------------
 
@@ -192,21 +192,21 @@ test("the footnote is the approved copy", async () => {
   assert.strictEqual(note.textContent, FOOTNOTE);
   assert.ok(note.has("tok-under") && note.has("t-sm") && note.has("muted"), "the kit's 12px muted line, outside the card");
   assert.strictEqual(list.children[0].byClass("tok-under").length, 0, "outside the card");
-  assert.strictEqual(FOOTNOTE, "A token is shown once, when you create it. Revoking one signs that device out on its next request.");
+  assert.strictEqual(FOOTNOTE, "A device token is shown once, when you create it. Revoking one signs that device out on its next request.");
 });
 
-test("no token yet: the card holds the line 'No tokens yet.' and the note stays", async () => {
+test("no token yet: the card holds the line 'No device tokens yet.' and the note stays", async () => {
   const { ctx, list } = page({ items: [] });
   await ctx.loadTokens();
   const card = list.children[0];
   assert.ok(card.has("tok-card") && !card.has("card"));
   assert.strictEqual(card.byTag("table").length, 0, "no table of nothing");
-  assert.strictEqual(card.textContent, "No tokens yet.");
+  assert.strictEqual(card.textContent, "No device tokens yet.");
   assert.ok(card.children[0].has("tokempty"));
   assert.strictEqual(list.children[1].textContent, FOOTNOTE);
   const none = page({ items: null });
   await none.ctx.loadTokens();
-  assert.strictEqual(none.list.children[0].textContent, "No tokens yet.", "a null list is an empty one");
+  assert.strictEqual(none.list.children[0].textContent, "No device tokens yet.", "a null list is an empty one");
 });
 
 test("Revoke… arms the row, which keeps today's confirm copy inside itself", async () => {
@@ -279,7 +279,7 @@ test("the phone's empty list is a bare line", async () => {
   assert.strictEqual(list.children.length, 1);
   assert.strictEqual(list.children[0].tag, "li");
   assert.strictEqual(list.children[0].className, "tokempty");
-  assert.strictEqual(list.children[0].textContent, "No tokens yet.");
+  assert.strictEqual(list.children[0].textContent, "No device tokens yet.");
 });
 
 // --- the look ------------------------------------------------------------------------------------------------
@@ -539,7 +539,7 @@ test("Cancel puts focus back on that row's Revoke…", async () => {
   assert.strictEqual(Node.focused.getAttribute("aria-label"), "Revoke gate-test-token");
 });
 
-test("after a revoke focus goes to the next row's Revoke…, else the previous row's, else New token", async () => {
+test("after a revoke focus goes to the next row's Revoke…, else the previous row's, else New device token", async () => {
   const { ctx, list, els, calls } = page({ items: THREE(), api: server(THREE()) });
   await ctx.loadTokens();
   const revoke = async (name) => {
@@ -559,8 +559,8 @@ test("after a revoke focus goes to the next row's Revoke…, else the previous r
   assert.strictEqual(Node.focused, rowFor(list, "macbook").byTag("button")[0], "the previous row");
   // The only one: nothing left, so the head's New token.
   await revoke("macbook");
-  assert.strictEqual(list.children[0].textContent, "No tokens yet.");
-  assert.strictEqual(Node.focused, els["set-act-tokens"], "New token");
+  assert.strictEqual(list.children[0].textContent, "No device tokens yet.");
+  assert.strictEqual(Node.focused, els["set-act-tokens"], "New device token");
   assert.deepStrictEqual(calls.filter(([, m]) => m === "DELETE").map(([u]) => u), ["/api/tokens/b2", "/api/tokens/c3", "/api/tokens/a1"]);
 });
 
@@ -576,7 +576,7 @@ test("focus finds its row by token id, not by position: the list is fetched anew
   assert.strictEqual(Node.focused, rowFor(list, "gate-test-token").byTag("button")[0], "macbook's next row was gate-test-token, wherever it is now");
 });
 
-test("a row that has gone elsewhere hands focus to New token instead of dropping it", async () => {
+test("a row that has gone elsewhere hands focus to New device token instead of dropping it", async () => {
   const gone = server(THREE());
   let drop = false;
   const { ctx, list, els } = page({ items: THREE(), api: (url, m) => { const l = gone(url, m); return drop ? l.filter((t) => t.id !== "b2") : l; } });
@@ -645,7 +645,7 @@ test("on the page the table, its row groups, rows, heads and cells carry their e
   await ctx.loadTokens();
   const table = list.children[0].byTag("table")[0];
   assert.strictEqual(table.getAttribute("role"), "table");
-  assert.strictEqual(table.getAttribute("aria-label"), "API tokens", "and keeps its name");
+  assert.strictEqual(table.getAttribute("aria-label"), "Device tokens", "and keeps its name");
   assert.deepStrictEqual(table.byTag("thead").map((n) => n.getAttribute("role")), ["rowgroup"]);
   assert.deepStrictEqual(table.byTag("tbody").map((n) => n.getAttribute("role")), ["rowgroup"]);
   const rows = table.byTag("tr");

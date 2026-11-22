@@ -216,3 +216,11 @@ func TestListWorkspacesDarwinMarksUnshared(t *testing.T) {
 		t.Errorf("a share read error must fail closed: %q %v", reason, bad)
 	}
 }
+
+func TestDefaultCwdForbidden(t *testing.T) {
+	home := t.TempDir()
+	reason, ok := UnboxableDefaultCwd("/etc", home, nil, nil)
+	if !ok || !strings.Contains(reason, "system folder") {
+		t.Fatalf("UnboxableDefaultCwd(/etc) = %q, %v; want (system folder reason, true)", reason, ok)
+	}
+}

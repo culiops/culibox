@@ -277,6 +277,7 @@
                  aria-autocomplete="list" placeholder="~/project">
           <div id="spawn-ws-list" role="listbox" aria-label="Directories" hidden></div>
           <div class="form-hint" id="spawn-ws-note"></div>
+          <div class="spawn-ws-check" id="spawn-ws-check" role="status" hidden></div>
           <div class="field-error spawn-owned" id="spawn-ws-owned" role="status" hidden></div>
           <div class="spawn-notshared" id="spawn-notshared" role="alert" hidden></div>
           <div class="form-hint" id="spawn-ws-vmhelp" hidden></div>
@@ -344,9 +345,11 @@
       <div id="pf-navlist" role="group" aria-label="Profiles"></div>
       <button type="button" class="t" data-tab="creds" role="tab" aria-selected="false" aria-controls="creds">Credentials</button>
       <button type="button" class="t" data-tab="vmfolders" role="tab" aria-selected="false" aria-controls="vmfolders" hidden>VM folders</button>
+      <button type="button" class="t" data-tab="wsroots" role="tab" aria-selected="false" aria-controls="wsroots">Workspace roots</button>
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
-      <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">API tokens</button>
+      <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Device tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
+      <button type="button" class="t" data-tab="linktrust" role="tab" aria-selected="false" aria-controls="linktrust">Trusted hosts</button>
       <button type="button" class="t" data-tab="about" role="tab" aria-selected="false" aria-controls="about">About</button>
       <button type="button" id="set-signout">Sign out…</button>
     </div>
@@ -591,7 +594,7 @@
     </div>
     <div class="dbd pad" id="tokens" role="tabpanel" hidden>
       <div class="set-head"></div>
-      <p class="hint">An access token lets a client app or CLI connect to this box
+      <p class="hint">A device token lets a client app or CLI connect to this box
         with <code>Authorization: Bearer&nbsp;…</code>, with no password prompt.
         One per device; revoke any at any time.</p>
       <div id="tok-reveal" class="reveal" hidden>
@@ -634,6 +637,16 @@
       <div id="vmf-body"></div>
     </div>
 
+    <div class="dbd pad" id="wsroots" role="tabpanel" hidden>
+      <div class="set-head"></div>
+      <div id="wsr-body"></div>
+    </div>
+
+    <div class="dbd pad" id="linktrust" role="tabpanel" hidden>
+      <div class="set-head"></div>
+      <div id="lt-body"></div>
+    </div>
+
     <div class="dft" id="foot-manage">
       <button id="pf-delete" type="button" class="btn dgr" disabled>Delete…</button>
       <span class="grow"></span>
@@ -649,7 +662,7 @@
     <div class="dft" id="foot-tokens" hidden>
       <button id="tok-logout" type="button" class="btn dgr">Sign out of this box…</button>
       <span class="grow"></span>
-      <button id="tok-new" type="button" class="btn">+ new token</button>
+      <button id="tok-new" type="button" class="btn">+ new device token</button>
       <button type="button" class="btn pri" data-close="settings-modal">Done</button>
     </div>
     <div class="dft" id="foot-vmfolders" hidden>
@@ -657,6 +670,11 @@
       <span class="grow"></span>
       <button id="vmf-foot-add" type="button" class="btn">Add folder</button>
       <button id="vmf-foot-apply" type="button" class="btn pri" hidden>Apply (restart box VM)</button>
+    </div>
+    <div class="dft" id="foot-wsroots" hidden>
+      <button type="button" class="btn" data-close="settings-modal">Done</button>
+      <span class="grow"></span>
+      <button id="wsr-foot-add" type="button" class="btn">Add folder</button>
     </div>
     <div class="dft" id="foot-creds" hidden>
       <span class="grow"></span>
@@ -876,6 +894,7 @@
   <script src="/fontprefs.js"></script>
   <script src="/viewerprefs.js"></script>
   <script src="/links.js"></script>
+  <script src="/linkgate.js"></script>
   <script src="/deadline.js"></script>
   <script src="/duration.js"></script>
   <script src="/pending.js"></script>
@@ -919,6 +938,8 @@
   <script src="/settingshead.js"></script>
   <script src="/vmapply.js"></script>
   <script src="/vmfolders.js"></script>
+  <script src="/wsroots.js"></script>
+  <script src="/linktrust.js"></script>
   <script src="/store.js"></script>
   <script src="/credentials.js"></script>
   <script src="/sessionrow.js"></script>
@@ -966,6 +987,8 @@
   <script src="/mdsafe.js"></script>
   <script src="/editorstatus.js"></script>
   <script src="/monacoload.js"></script>
+  <script src="/filekinds.js"></script>
+  <script src="/dockfileview.js"></script>
   <script src="/editortab.js"></script>
   <script src="/editorsync.js"></script>
   <script src="/editordiff.js"></script>

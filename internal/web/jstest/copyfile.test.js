@@ -131,6 +131,9 @@ test("the binary and too-large refusals point at Download, which does handle the
 test("extOf lowercases, so an uppercase image extension is still an image", () => {
   assert.equal(extOf("/tmp/photo.PNG"), "png");
   assert.ok(IMAGE_EXTS.has(extOf("/tmp/photo.PNG")));
+  // #344: one list for the dock, the phone viewer and the image diff
+  for (const e of ["avif", "bmp", "ico"]) assert.ok(IMAGE_EXTS.has(e), e);
+  assert.ok(!IMAGE_EXTS.has("pdf"));
   assert.equal(extOf("/tmp/README"), "");
   assert.equal(extOf("/tmp/a.b/c"), "");
 });

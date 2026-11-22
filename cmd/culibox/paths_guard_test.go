@@ -29,6 +29,9 @@ var pathEscapes = map[string]int{
 	// never be shared (a deny, never a read or a write).
 	"internal/vmshares/check.go literal .config": 3,
 	"internal/vmshares/check.go literal Library": 1,
+	// The workspace refusal list: /Library is named so it can never be a workspace
+	// or a root (a deny, never a read or a write).
+	"internal/wsroots/forbid.go literal Library": 1,
 	// Locating the data root itself, and the ~/.config fallback for the config file.
 	"internal/config/resolve.go literal .local":  1, // DefaultRoots; ResolvedDataDir goes through it
 	"internal/config/resolve.go literal .config": 1,

@@ -1086,7 +1086,7 @@ test("token add calls onCreated with the server's names", async () => {
   const before = tabFooters(p);
   await p.box.credTokenAdd(null, "sentry", opts);
   assert.deepStrictEqual(p.calls.map((c) => c.path), ["/api/credentials", "/api/credentials/templates"], "credView is primed first (the store state, the taken names), then the providers");
-  assert.ok(opts.host.textContent.includes("Add token"), "the flow drew itself into opts.host");
+  assert.ok(opts.host.textContent.includes("Add service token"), "the flow drew itself into opts.host");
   assert.strictEqual(p.byId["creds-body"].children.length, 0, "and left the Credentials tab's body alone");
   assert.deepStrictEqual(opts.foot.querySelectorAll("button").map((b) => b.textContent), ["Cancel", "Save"], "its buttons are in opts.foot");
   fieldIn(opts.host, "ct-sentry-name").value = "sentry-prod";
@@ -1423,7 +1423,7 @@ test("a flow in a host drops a tab flow left open, so the two never share one se
   // Its Add footer is gone. The list footer is not put on show: this ran on another tab (the Profiles page), and
   // selecting Credentials again shows it and reloads the list.
   assert.deepStrictEqual(tabFooters(p), [true, true, true]);
-  assert.ok(opts.host.textContent.includes("Add token"), "and the flow went on in its host");
+  assert.ok(opts.host.textContent.includes("Add service token"), "and the flow went on in its host");
 });
 
 test("credFlowDrop forgets a flow in a host without reporting anything (the drawer closed itself)", async () => {
@@ -1494,7 +1494,7 @@ test("without opts the Credentials tab behaves as before: token add", async () =
   p.box.reply = credReply();
   vmEval(p, "credView = " + JSON.stringify({ store: storeOK, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] })); // what loadCredentials left behind
   await p.box.credTokenAdd(null, "sentry");
-  assert.ok(p.byId["creds-body"].textContent.includes("Add token"));
+  assert.ok(p.byId["creds-body"].textContent.includes("Add service token"));
   assert.deepStrictEqual(tabFooters(p), [true, true, false], "the form footer replaces the list footer");
   assert.strictEqual(p.byId["cred-form-save"].textContent, "Save");
   fieldIn(p.byId["creds-body"], "ct-sentry-name").value = "sentry-prod";
@@ -1924,7 +1924,7 @@ test("framed token add: the crumb says Tokens, the intro is in the header, no tr
   const { opts } = framedOpts();
   p.box.reply = credReply();
   await p.box.credTokenAdd(null, "sentry", opts);
-  assert.deepStrictEqual(crumbParts(opts.head), ["Credentials", " › Tokens", "Add token"]);
+  assert.deepStrictEqual(crumbParts(opts.head), ["Credentials", " › Tokens", "Add service token"]);
   assert.strictEqual(opts.head.querySelector("p.intro").textContent, TOKEN_INTRO);
   assert.strictEqual(opts.host.querySelector("p.honest"), null, "the sentence moved to the header");
   assert.strictEqual(opts.host.querySelector("div.crumb"), null);
@@ -2049,7 +2049,7 @@ test("the Credentials tab still renders the old DOM: ' / ' crumb, the error unde
   p.box.reply = credReply({ store: { initialized: false, locked: false, platform: "linux", passphrase_mode: true } });
   await p.box.credTokenAdd(null, "sentry");
   const body = p.byId["creds-body"];
-  assert.deepStrictEqual(body.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add token"], "the crumb");
+  assert.deepStrictEqual(body.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add service token"], "the crumb");
   assert.ok(body.querySelector("p.honest"), "the sentence is the trailing one");
   assert.strictEqual(body.querySelector("p.honest").textContent, TOKEN_INTRO);
   assert.strictEqual(body.lastChild.className, "ent-err", "the error line is the last thing in the body");
@@ -2071,7 +2071,7 @@ test("the Credentials tab still renders the old DOM: ' / ' crumb, the error unde
   const { opts } = hostOpts();
   h.box.reply = credReply();
   await h.box.credTokenAdd(null, "sentry", opts);
-  assert.deepStrictEqual(opts.host.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add token"]);
+  assert.deepStrictEqual(opts.host.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add service token"]);
   assert.strictEqual(opts.host.lastChild.className, "ent-err");
   assert.ok(opts.host.querySelector("p.honest"));
 });
@@ -2125,7 +2125,7 @@ test("table mode: section headers carry a count chip and no add button", () => {
     assert.strictEqual(h.querySelectorAll("span.count").length, 0, "the count is a chip, not a glued span");
   }
   const labels = body.querySelectorAll("button").map((b) => b.textContent);
-  for (const l of ["Add AWS accounts", "Add GitHub", "Add token"]) assert.ok(!labels.includes(l), l + " is the header menu's now");
+  for (const l of ["Add AWS accounts", "Add GitHub", "Add service token"]) assert.ok(!labels.includes(l), l + " is the header menu's now");
   assert.ok(classesOf(sectionOf(body, "aws")).includes("ctab-sec"), "a section is the page's card (.ctab-sec: the kit's panel fill and radius are desktop.css's, not the phone's .card)");
 });
 
@@ -2140,7 +2140,7 @@ test("table mode: the empty Tokens section keeps its line, a 0 chip and no add b
 
 test("card mode: the phone keeps its add buttons and count spans; a narrow desktop page keeps the counts and Set a value only (final review I4)", () => {
   for (const [name, opts, adds] of [
-    ["the phone's modal", { asPage: false, width: 900 }, [["Add AWS accounts"], ["Add GitHub"], ["Add token"], ["Set a value"], []]],
+    ["the phone's modal", { asPage: false, width: 900 }, [["Add AWS accounts"], ["Add GitHub"], ["Add service token"], ["Set a value"], []]],
     // The page's head menu offers all three adds (My call 6), so its cards draw none of their own, and no primary: only "Set a value"
     // (an add inside a block, F10) stays.
     ["a narrow desktop page", { width: 500 }, [[], [], [], ["Set a value"], []]],
@@ -2164,9 +2164,9 @@ test("a narrow desktop page has no primary on Credentials; the phone's card mode
     const phone = paintPage(view, { asPage: false, width: 500 }).body;
     assert.deepStrictEqual(primaries(phone).map((b) => b.textContent), ["Add AWS accounts"], name + ": the phone's modal is unchanged: its AWS add is the primary");
     const adds = phone.querySelectorAll("button").map((b) => b.textContent).filter((t) => /^Add /.test(t));
-    assert.deepStrictEqual(adds, ["Add AWS accounts", "Add GitHub", "Add token"], name + ": and keeps all its adds");
+    assert.deepStrictEqual(adds, ["Add AWS accounts", "Add GitHub", "Add service token"], name + ": and keeps all its adds");
   }
-  // The empty Tokens section on the page's cards: its line, no "Add token".
+  // The empty Tokens section on the page's cards: its line, no "Add service token".
   const empty = paintPage(m23View({ tokens: [] }), { width: 500 }).body;
   assert.strictEqual(sectionOf(empty, "tokens").querySelectorAll("button").length, 0);
   assert.match(sectionOf(empty, "tokens").textContent, /No tokens yet\./);
@@ -2211,9 +2211,14 @@ function teachMenuKeys(pop) {
 }
 const keyEv = (key) => { const ev = { key, defaultPrevented: false, preventDefault() { ev.defaultPrevented = true; } }; return ev; };
 
+test("the header menu says service token, never a bare Add token", () => {
+  const labels = Array.from(page().box.credAddItems(), (i) => i.label);
+  assert.ok(labels.includes("Add service token") && !labels.includes("Add token"), labels.join(" | "));
+});
+
 test("the header menu offers today's three adds", () => {
   const p = page();
-  assert.deepStrictEqual(Array.from(p.box.credAddItems(), (i) => [i.label, i.kind]), [["Add AWS accounts", "aws"], ["Add GitHub", "github"], ["Add token", "token"]]);
+  assert.deepStrictEqual(Array.from(p.box.credAddItems(), (i) => [i.label, i.kind]), [["Add AWS accounts", "aws"], ["Add GitHub", "github"], ["Add service token", "token"]]);
   assert.strictEqual(typeof p.box.credAddMenuAttach, "function", "settingshead.js finds it on the global object");
   const { actions, sep, wrap, pop } = headWithTrigger(p);
   assert.strictEqual(wrap.className, "cred-add");
@@ -2221,7 +2226,7 @@ test("the header menu offers today's three adds", () => {
   assert.strictEqual(pop.getAttribute("role"), "menu");
   assert.strictEqual(pop.hidden, true, "closed until pressed");
   const rows = menuRows(pop);
-  assert.deepStrictEqual(rows.map((r) => r.querySelector("span.menu-text").textContent), ["Add AWS accounts", "Add GitHub", "Add token"]);
+  assert.deepStrictEqual(rows.map((r) => r.querySelector("span.menu-text").textContent), ["Add AWS accounts", "Add GitHub", "Add service token"]);
   for (const r of rows) {
     assert.ok(classesOf(r).includes("menu-item"), "a kitMenuButton row");
     assert.strictEqual(r.getAttribute("role"), "menuitem");
@@ -2335,7 +2340,7 @@ async function menuPageForFocus({ reply, view } = {}) {
 const opens = (m, i) => { m.btn.onclick(); m.rows[i].onclick(); };
 const insideBody = (m, n) => !!n && m.body.contains(n);
 
-test("Add token: focus moves into the flow once it has drawn, its first control after the crumb, not <body> (final review I3)", async () => {
+test("Add service token: focus moves into the flow once it has drawn, its first control after the crumb, not <body> (final review I3)", async () => {
   const m = await menuPageForFocus();
   opens(m, 2);
   await settle();
@@ -2801,4 +2806,124 @@ test("CSS: the header menu is positioned under its trigger, above the page, and 
   assert.strictEqual(pop.get("top"), "calc(100% + var(--sp-1))");
   assert.ok(Number(pop.get("z-index")) >= 30);
   assert.strictEqual(cssDecls(CR + ' .cred-add > .btn:where(:not(.pri))[aria-expanded="true"]').get("background"), "var(--raise)");
+});
+
+// --- #341 P1 hints: what a field does, in the Credentials forms ---------------------------------------------------
+
+const hintOf = (root, startsWith) => root.querySelectorAll("p.hint").find((h) => h.textContent.startsWith(startsWith));
+
+test("Set a value: the Id hint sends an agent's token to Add service token and no longer names a profile secret", () => {
+  const p = page({ tab: true });
+  const body = p.byId["creds-body"];
+  vmEval(p, 'credValueForm("")');
+  const hint = hintOf(body, "Letters, digits");
+  assert.ok(hint, "the Id hint is drawn");
+  assert.ok(hint.textContent.includes("Add service token"), hint.textContent);
+  assert.ok(!hint.textContent.includes("profile secret"), hint.textContent);
+  vmEval(p, 'credValueForm("MY_ID")');
+  assert.ok(!hintOf(body, "Letters, digits"), "a replace has a fixed id and no hint");
+});
+
+test("AWS Advanced: extra hosts say they add to the defaults, the S3 field says other reads are denied, and SSO direct hides the S3 one", async () => {
+  const p = page({ tab: true });
+  const { opts } = hostOpts();
+  p.box.reply = awsReply();
+  await awsTick(p, opts, "acme-dev");
+  const hosts = hintOf(opts.host, "Added to the allowed hosts");
+  assert.ok(hosts, "the extra-hosts hint is drawn");
+  assert.ok(/on top of the defaults/.test(hosts.textContent) && hosts.textContent.includes("Anthropic"), hosts.textContent);
+  const s3 = hintOf(opts.host, "The agent may read objects only");
+  assert.ok(s3, "the S3 hint is drawn");
+  assert.ok(/other S3 object reads are denied/i.test(s3.textContent), s3.textContent);
+  assert.ok(/except in the box buckets an elevate window may use \(set in the config file\)/.test(s3.textContent), "the elevate box_bucket_prefix exception is named: " + s3.textContent);
+  const col = (h) => h.closest("div.fcol");
+  assert.strictEqual(col(s3).hidden, false);
+  vmEval(p, 'awsSetMode(awsFlow.rows[0], "sso_direct")');
+  assert.strictEqual(col(s3).hidden, true, "the S3 field and its hint stay hidden in SSO direct mode");
+  assert.strictEqual(col(hosts).hidden, false, "extra hosts still apply there");
+});
+
+test("GitHub App Key file: the hint names the owner, symlink and 600 rules, in add and in edit", async () => {
+  for (const entry of [null, { name: "my-bot", client_id: "Iv1.abc" }]) {
+    const p = page({ tab: true });
+    const { opts } = hostOpts();
+    p.box.reply = credReply();
+    await p.box.credAppForm(entry, opts);
+    opts.host.querySelectorAll("a").find((a) => a.textContent === "Advanced: use a file instead").onclick();
+    const hint = hintOf(opts.host, "An absolute path");
+    assert.ok(hint, (entry ? "edit" : "add") + ": the Key file hint is drawn");
+    for (const w of ["owned by", "symlink", "600", "restart"]) assert.ok(hint.textContent.includes(w), w + ": " + hint.textContent);
+  }
+});
+
+// AWS edit: the source profile and region fields suggest what the host already has (datalists), free text kept.
+const editEntry = { name: "web-conn", source_profile: "base", role_arn: "arn:aws:iam::111111111111:role/agentbox-dev", region: "eu-west-1", mode: "assume" };
+const hostProfilesReply = (profiles) => (path) => {
+  if (path === "/api/credentials/aws/host-profiles") return { profiles };
+  if (path === "/api/credentials/aws/check") return { assume: "ok", verdict: "read_only" };
+  return {};
+};
+const listOptions = (root, key) => {
+  const input = root.querySelectorAll("input").find((i) => i.id && i.id.endsWith("-" + key));
+  const dl = root.querySelectorAll("datalist").find((d) => d.id === input.attrs.list);
+  return { input, values: dl ? dl.children.map((o) => o.value) : null };
+};
+const editPuts = (p) => p.calls.filter((c) => c.method === "PUT");
+
+test("AWS edit fetches host profiles once and suggests them; typed free text is what saves", async () => {
+  const p = page({ tab: true });
+  p.box.reply = hostProfilesReply([
+    { name: "sandbox", kind: "sso", region: "ap-southeast-1", selectable: true },
+    { name: "second", kind: "assume-role", region: "", selectable: true },
+    { name: "locked", kind: "sso", region: "us-west-2", selectable: false, note: "no SSO session" },
+  ]);
+  p.box.awsOpenEdit(editEntry);
+  await settle();
+  assert.strictEqual(p.calls.filter((c) => c.path === "/api/credentials/aws/host-profiles").length, 1, "once per open");
+  const body = p.byId["creds-body"];
+  const sp = listOptions(body, "source_profile");
+  assert.deepStrictEqual(sp.values, ["sandbox", "second"], "selectable profiles only");
+  const rg = listOptions(body, "region");
+  assert.deepStrictEqual(rg.values.slice(0, 2), ["ap-southeast-1", "us-west-2"], "regions the host's profiles name come first");
+  assert.strictEqual(rg.values.filter((r) => r === "us-east-1").length, 1, "then the built-in list, each once");
+  assert.ok(!sp.input.readOnly, "an edit's source profile is editable");
+  sp.input.value = "my-custom";
+  sp.input.oninput();
+  await p.box.awsCheckAll();
+  await p.box.awsSaveAll();
+  assert.strictEqual(editPuts(p)[0].body.connection.source_profile, "my-custom");
+});
+
+test("AWS edit: a profile list that fails or is empty leaves plain free-text inputs that still save", async () => {
+  for (const how of ["500", "empty"]) {
+    const p = page({ tab: true });
+    p.box.reply = how === "500"
+      ? (path) => { if (path === "/api/credentials/aws/host-profiles") throw Object.assign(new Error("boom"), { status: 500 }); return path.endsWith("/check") ? { assume: "ok", verdict: "read_only" } : {}; }
+      : hostProfilesReply([]);
+    p.box.awsOpenEdit(editEntry);
+    await settle();
+    const body = p.byId["creds-body"];
+    assert.deepStrictEqual(listOptions(body, "source_profile").values, [], how + ": no profile suggestions");
+    assert.ok(listOptions(body, "region").values.includes("us-east-1"), how + ": the built-in regions still suggest");
+    assert.ok(!/Could not read/.test(body.textContent), how + ": no error text on the form");
+    const rg = listOptions(body, "region");
+    rg.input.value = "eu-north-9";
+    rg.input.oninput();
+    await p.box.awsCheckAll();
+    await p.box.awsSaveAll();
+    assert.strictEqual(editPuts(p)[0].body.connection.region, "eu-north-9", how);
+  }
+});
+
+test("AWS add: the source profile stays read-only with no list, and region suggests from the host's profiles", async () => {
+  const p = page({ tab: true });
+  p.box.reply = awsReply();
+  const opts = hostOpts().opts;
+  await awsTick(p, opts, "acme-dev");
+  const sp = listOptions(opts.host, "source_profile");
+  assert.strictEqual(sp.input.readOnly, true);
+  assert.strictEqual(sp.values, null, "no list on a read-only field");
+  const rg = listOptions(opts.host, "region");
+  assert.strictEqual(rg.values[0], "eu-west-1");
+  assert.strictEqual(rg.values.filter((r) => r === "eu-west-1").length, 1);
 });

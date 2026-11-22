@@ -547,8 +547,9 @@ function dpKeydown(e) {
 //         that crosses a symlink would leave the root disagreeing with every
 //         path the tree lists.
 //   404 → no such path.
-//   403 → outside $HOME. The tree is rooted inside $HOME by construction, so
-//         neither re-rooting nor listing is available.
+//   403 → outside every workspace root (home and the added folders). The tree
+//         is rooted inside them by construction, so neither re-rooting nor
+//         listing is available; the toast says where to add the folder.
 //   500 → unreadable (a symlink loop, or a directory that stats fine but cannot
 //         be read).
 //   400 → not a directory. Fall through to opening it as a file, which is what
@@ -572,7 +573,7 @@ async function dpResolvePath(path) {
   if (res.status === 400) { dpClose(); dpInput.value = ""; dpOnOpenFile(path); return; }
   showToast(
     res.status === 404 ? "No such file or directory: " + path :
-    res.status === 403 ? "That path is outside your home directory" :
+    res.status === 403 ? "That path is outside your workspace roots — add the folder in Settings › Workspace roots" :
     "Could not read " + path,
     { error: true });
 }

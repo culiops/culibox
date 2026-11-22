@@ -79,7 +79,7 @@ func TestWorkflowSupplyChain(t *testing.T) {
 	// #335: the merge job also tags the index dockerfile-<hash>, which the release
 	// resolves to the digest it bakes. It checks the tree out for the hash, so it
 	// needs contents: read next to packages: write.
-	for _, want := range []string{"      contents: read\n", "persist-credentials: false", "sha256sum docker/agent-box/Dockerfile | cut -c1-12", `:dockerfile-${DOCKERFILE}"`} {
+	for _, want := range []string{"      contents: read\n", "persist-credentials: false", "sha256sum docker/culibox/Dockerfile | cut -c1-12", `:dockerfile-${DOCKERFILE}"`} {
 		if !strings.Contains(merge, want) {
 			t.Errorf("the merge job lacks %q", want)
 		}
@@ -105,19 +105,19 @@ func TestWorkflowSupplyChain(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"sha256sum docker/agent-box/Dockerfile | cut -c1-12",
+		"sha256sum docker/culibox/Dockerfile | cut -c1-12",
 		"provenance: false",
 		"sbom: false",
 		"ubuntu-24.04-arm",
 		"push-by-digest=true",
 		"persist-credentials: false",
-		"docker/agent-box/**",
+		"docker/culibox/**",
 		".github/workflows/box-image.yml",
 		// Layer cache in the registry, per arch. GitHub's Actions cache drops an
 		// entry unused for 7 days: the 2026-11-02 run came 8 days after the last one
 		// and hit 0 steps, so every layer was new and every host re-pulled ~4 GB.
 		// Its own package, so cache manifests never list as versions of the image.
-		"  CACHE: ghcr.io/culiops/agent-box-cache\n",
+		"  CACHE: ghcr.io/culiops/culibox-cache\n",
 		"cache-from: type=registry,ref=${{ env.CACHE }}:${{ matrix.arch }}",
 		"cache-to: type=registry,ref=${{ env.CACHE }}:${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true",
 	} {
@@ -127,6 +127,150 @@ func TestWorkflowSupplyChain(t *testing.T) {
 	}
 	if strings.Contains(wf, "type=gha") {
 		t.Error("the layer cache must not use type=gha (entries expire after 7 days unused)")
+	}
+	// The source moved from docker/agent-box (#353). A path filter left on the old
+	// directory matches nothing, so the image would silently stop rebuilding.
+	for _, old := range []string{"docker/agent-box", "agent-box-cache"} {
+		if strings.Contains(wf, old) {
+			t.Errorf("workflow still names %q (renamed in #353)", old)
+		}
+	}
+}
+
+// #355: each built digest is scanned by the pinned Grype in a job of its own. The
+// scanner is third-party code, so the job holds a read-only token and no registry
+// login (the package is public). Report first: findings never fail it, and merge
+// does not wait for it, so a scanner or database outage never blocks publishing.
+func TestBoxImageScanJob(t *testing.T) {
+	b, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := string(b)
+	scan := jobBlock(t, wf, "scan")
+	for _, want := range []string{
+		"\n    needs: build\n",
+		"\n    if: github.ref == 'refs/heads/main'\n",
+		"\n    permissions:\n      contents: read\n",
+		"persist-credentials: false",
+		"scripts/ci/install-grype.sh",
+		`GRYPE_CHECK_FOR_APP_UPDATE: "false"`,
+		`"registry:${IMAGE}@sha256:${DIGEST}"`,
+		`--platform "linux/${ARCH}"`,
+		`^[0-9a-f]{64}$`,
+		"scripts/ci/image-scan-report.sh",
+		`>> "$GITHUB_STEP_SUMMARY"`,
+	} {
+		if !strings.Contains(scan, want) {
+			t.Errorf("the scan job lacks %q", want)
+		}
+	}
+	for _, banned := range []string{"packages: write", "docker/login-action", "secrets.", "--fail-on", "issues:"} {
+		if strings.Contains(scan, banned) {
+			t.Errorf("the scan job must not contain %q", banned)
+		}
+	}
+	merge := jobBlock(t, wf, "merge")
+	if !strings.Contains(merge, "\n    needs: build\n") || strings.Contains(merge, "scan") {
+		t.Error("merge must need build only: in report-first mode the scan never delays or blocks publishing")
+	}
+}
+
+const weeklyScanWorkflowPath = "../../.github/workflows/box-image-scan.yml"
+
+// #355: the weekly scan of the images users actually run (base, and the digest
+// the latest release pins). The scanner runs in read-only jobs; the one job that
+// may write issues runs the report script without a token and gh with one.
+func TestBoxImageWeeklyScan(t *testing.T) {
+	b, err := os.ReadFile(weeklyScanWorkflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := string(b)
+	for _, want := range []string{`cron: "41 3 * * 1"`, "workflow_dispatch:"} {
+		if !strings.Contains(wf, want) {
+			t.Errorf("box-image-scan.yml lacks %q", want)
+		}
+	}
+	if n := strings.Count(wf, "issues: write"); n != 1 {
+		t.Errorf("issues: write appears %d times, want 1 (the issue job)", n)
+	}
+	for _, banned := range []string{"secrets.", "github.event.", "packages: write", "docker/login-action", "--fail-on", "git push"} {
+		if strings.Contains(wf, banned) {
+			t.Errorf("box-image-scan.yml must not contain %q", banned)
+		}
+	}
+	jobs := map[string]string{}
+	for _, name := range []string{"targets", "scan", "issue"} {
+		jobs[name] = jobBlock(t, wf, name)
+		if !strings.Contains(jobs[name], "\n    if: github.ref == 'refs/heads/main'\n") {
+			t.Errorf("job %s lacks the job-level `if: github.ref == 'refs/heads/main'`", name)
+		}
+		if !strings.Contains(jobs[name], "\n    permissions:\n      contents: read\n") {
+			t.Errorf("job %s must declare its own permissions starting with contents: read", name)
+		}
+	}
+	for name, want := range map[string][]string{
+		"targets": {
+			`imagetools inspect "${IMAGE}:base"`,
+			"gh release download",
+			"sha256sum -c --ignore-missing SHA256SUMS",
+			`ghcr\.io/culiops/culibox@sha256:[0-9a-f]{64}`,
+			"latest release unavailable or has no box image ref; scanning base only",
+			"unique_by(.ref)",
+			"imagetools inspect node:24-bookworm-slim",
+		},
+		"scan": {
+			"scripts/ci/install-grype.sh",
+			`GRYPE_CHECK_FOR_APP_UPDATE: "false"`,
+			`^ghcr\.io/culiops/culibox@sha256:[0-9a-f]{64}$`,
+			`--platform "linux/${ARCH}"`,
+			"scripts/ci/image-scan-report.sh",
+		},
+		"issue": {
+			"\n    needs: [targets, scan]\n",
+			"      issues: write\n",
+			"scripts/ci/image-scan-report.sh -a scripts/ci/image-scan-accepted.txt",
+			`"Box image: vulnerabilities with a fix"`,
+			"--author app/github-actions",
+			"gh issue close",
+			"--body-file",
+		},
+	} {
+		for _, w := range want {
+			if !strings.Contains(jobs[name], w) {
+				t.Errorf("job %s lacks %q", name, w)
+			}
+		}
+	}
+	for _, name := range []string{"targets", "scan"} {
+		if strings.Contains(jobs[name], "issues:") {
+			t.Errorf("job %s must not hold an issues scope", name)
+		}
+	}
+	// gh release download is the only token use in targets, and it runs no repo code.
+	for _, msg := range ghTokenViolations(jobs["targets"]) {
+		t.Error("targets: " + msg)
+	}
+	if strings.Contains(jobs["scan"], "GH_TOKEN") {
+		t.Error("the scan job runs third-party code and must not hold GH_TOKEN")
+	}
+	// In the issue job the token sits on the gh step only, which runs no repo code.
+	_, steps, _ := strings.Cut(jobs["issue"], "\n      - ")
+	tokenSteps := 0
+	for _, step := range strings.Split("- "+steps, "\n      - ") {
+		if !strings.Contains(step, "GH_TOKEN") {
+			continue
+		}
+		tokenSteps++
+		for _, repoCode := range []string{"scripts/", "go run", "./tools", "bash ", "make "} {
+			if strings.Contains(step, repoCode) {
+				t.Errorf("the issue job's GH_TOKEN step runs repository code (%s)", repoCode)
+			}
+		}
+	}
+	if tokenSteps != 1 {
+		t.Errorf("GH_TOKEN appears in %d steps of the issue job, want 1", tokenSteps)
 	}
 }
 
@@ -159,10 +303,10 @@ func TestWorkflowCreatesEmptyExtraCABeforeBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	build := jobBlock(t, string(b), "build")
-	mk := strings.Index(build, ": > docker/agent-box/extra-ca.pem\n")
+	mk := strings.Index(build, ": > docker/culibox/extra-ca.pem\n")
 	bp := strings.Index(build, "docker/build-push-action@")
 	if mk < 0 {
-		t.Fatal("the build job lacks a step that writes an EMPTY docker/agent-box/extra-ca.pem (`: > docker/agent-box/extra-ca.pem`)")
+		t.Fatal("the build job lacks a step that writes an EMPTY docker/culibox/extra-ca.pem (`: > docker/culibox/extra-ca.pem`)")
 	}
 	if bp < 0 || mk > bp {
 		t.Error("the extra-ca.pem step must precede the build-push step")
@@ -172,8 +316,8 @@ func TestWorkflowCreatesEmptyExtraCABeforeBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`(?m)^docker/agent-box/extra-ca\.pem$`).Match(gi) {
-		t.Error(".gitignore must list docker/agent-box/extra-ca.pem")
+	if !regexp.MustCompile(`(?m)^docker/culibox/extra-ca\.pem$`).Match(gi) {
+		t.Error(".gitignore must list docker/culibox/extra-ca.pem")
 	}
 }
 
@@ -1099,6 +1243,8 @@ func TestCIWorkflow(t *testing.T) {
 		"bash scripts/macos-verify_test.sh",
 		"scripts/ci/secret-scan.sh",
 		"bash scripts/ci/secret-scan_test.sh",
+		"sh scripts/ci/install-grype_test.sh",
+		"sh scripts/ci/image-scan-report_test.sh",
 		// The custom private-identifier rules are tested with the pinned scanner, and
 		// the run fails (not skips) when the scanner is missing.
 		"GITLEAKS_RULES_TEST_REQUIRE=1 bash scripts/ci/gitleaks-rules_test.sh",

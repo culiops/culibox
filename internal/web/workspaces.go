@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/wsroots"
 )
 
 // Workspace is a selectable working directory (home + its subfolders).
@@ -30,47 +31,67 @@ type Workspace struct {
 // shares is the live VM folder list (macOS), nil without a VM: a directory the
 // VM does not share read & write cannot be a workspace, so it is refused too.
 func UnboxableDefaultCwd(dir, home string, protected []box.ProtectedDir, shares box.SharesFunc) (string, bool) {
+	reason, _, bad := unboxableCwdCode(dir, home, protected, shares)
+	return reason, bad
+}
+
+// codeNotShared is the machine-readable code of a refusal that came from the
+// box VM share check (macOS): the fix is Settings › VM folders.
+const codeNotShared = "not_shared"
+
+// unboxableCwdCode is UnboxableDefaultCwd plus a code: codeNotShared when the
+// reason came from the VM share check (a folder the VM does not share, shares
+// read-only or has pending), "" for every other refusal.
+func unboxableCwdCode(dir, home string, protected []box.ProtectedDir, shares box.SharesFunc) (reason, code string, bad bool) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
 	}
 	if reason := box.MountUnsafe(abs); reason != "" {
-		return reason, true
+		return reason, "", true
 	}
 	h := filepath.Clean(home)
 	if real, err := filepath.EvalSymlinks(h); err == nil {
 		h = real
 	}
 	if abs == string(filepath.Separator) {
-		return "it is the filesystem root", true
+		return "it is the filesystem root", "", true
 	}
 	if abs == h {
-		return "a box here would mount your whole home, including ~/.ssh and your secrets", true
+		return "a box here would mount your whole home, including ~/.ssh and your secrets", "", true
 	}
 	if rel, err := filepath.Rel(abs, h); err == nil && rel != "." &&
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
-		return "it contains your home directory", true
+		return "it contains your home directory", "", true
+	}
+	// System and credential folders (#343). DataDir stays empty: the protected
+	// list below already covers CuliBox's data.
+	if reason := wsroots.Refusal(abs, wsroots.Env{Home: h}); reason != "" {
+		return reason, "", true
 	}
 	if reason := box.ProtectedOverlap(abs, protected); reason != "" {
-		return reason, true
+		return reason, "", true
 	}
 	if shares != nil {
 		v, err := shares()
 		if err != nil {
-			return "cannot read the box VM's folder list (" + err.Error() + "); run `culibox doctor`", true
+			return "cannot read the box VM's folder list (" + err.Error() + "); run `culibox doctor`", "", true
 		}
 		if err := v.Check(abs, true); err != nil {
 			var ns *box.NotSharedError
-			if errors.As(err, &ns) && !ns.Pending && !ns.ReadOnly {
-				return notSharedReason, true
+			if !errors.As(err, &ns) {
+				return err.Error(), "", true
 			}
-			return err.Error(), true
+			if !ns.Pending && !ns.ReadOnly {
+				return notSharedReason, codeNotShared, true
+			}
+			return err.Error(), codeNotShared, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // notSharedReason is the short why of a folder the box VM does not share.

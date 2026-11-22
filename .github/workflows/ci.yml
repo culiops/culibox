@@ -14,7 +14,7 @@
 # release.yml calls this file (workflow_call), so the checks that gate a release
 # are the ones that gate main.
 #
-# Supply chain (docker/agent-box/workflow_test.go guards this):
+# Supply chain (docker/culibox/workflow_test.go guards this):
 #   - every action is pinned by full commit SHA, the release in a comment
 #   - no pull-request trigger of any kind
 #   - GITHUB_TOKEN is read-only for every job: nothing here needs a write grant
@@ -119,6 +119,8 @@ jobs:
         run: |
           bash scripts/macos-verify_test.sh
           bash scripts/ci/secret-scan_test.sh
+          sh scripts/ci/install-grype_test.sh
+          sh scripts/ci/image-scan-report_test.sh
       # scripts/lint.sh installs the exact eslint tree from scripts/lint/package-lock.json
       # (npm ci, integrity-checked, no install scripts) and needs python3 (both on the
       # runner). It SKIPS itself when eslint cannot run, which locally keeps an

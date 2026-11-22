@@ -111,7 +111,7 @@ func (s *Server) resolveParent(abs string) (*os.Root, string, string, fsPolicy, 
 // the same containment sequence, so a change to it cannot reach one handler and
 // miss another.
 //
-// For a host path the root is $HOME and the directory is already fully resolved.
+// For a host path the root is the served root holding it ($HOME or a workspace root) and the directory is already fully resolved.
 // For a path inside a boxed workspace the root is the workspace and the directory
 // is NOT resolved: the Stat below, like every later operation, goes through the
 // os.Root, which refuses a box-planted link that leaves the workspace — so a
@@ -370,7 +370,7 @@ type deleteMeasure struct {
 // measureForDelete walks INSIDE the os.Root, so a link repointed after resolution
 // cannot move the measurement outside the root, as walking the caller's absolute
 // path would. The numbers are still an estimate: a box racing the delete can swap
-// a directory between this walk and the removal when the root is $HOME. They only
+// a directory between this walk and the removal when the root is a host root. They only
 // feed the confirmation dialog; RemoveAll, which works on file descriptors and
 // resolves nothing again, is what bounds the damage.
 //

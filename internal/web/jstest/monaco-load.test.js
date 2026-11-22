@@ -19,7 +19,7 @@ function fake(o) {
   const opt = Object.assign({ script: "load", module: "load", css: "late-load" }, o);
   const head = { children: [], append(el) { this.children.push(el); el.parent = this; if (el.tag === "script") setImmediate(() => el.onload && opt.script === "load" && el.onload()); if (el.tag === "script" && opt.script === "error") setImmediate(() => el.onerror && el.onerror()); }, querySelector(sel) { return this.children.find((c) => c.tag === "link" && sel.includes("editor.main.css") && c.href.endsWith("/vs/editor/editor.main.css")) || null; } };
   const timers = [];
-  const log = { required: [], removed: [], themes: 0 };
+  const log = { required: [], removed: [], themes: 0, openers: [], gate: [], reads: [] };
   let moduleRan = false; // an AMD module is evaluated once: only the first require() appends the stylesheet link
   const link = () => {
     const el = { tag: "link", rel: "", href: "", sheet: null, listeners: {}, addEventListener(t, fn) { this.listeners[t] = fn; if ((opt.css === "late-load" && t === "load") || (opt.css === "late-error" && t === "error")) setImmediate(fn); }, remove() { log.removed.push(this); head.children = head.children.filter((c) => c !== this); } };
@@ -27,16 +27,21 @@ function fake(o) {
   };
   const doc = { head, createElement: (tag) => (tag === "link" ? link() : { tag, src: "" }) };
   const monaco = {
-    editor: { defineTheme() { log.themes++; }, addKeybindingRule() {} },
+    editor: { defineTheme() { log.themes++; }, addKeybindingRule() {}, registerLinkOpener(o) { log.openers.push(o); return { dispose() {} }; } },
     KeyCode: { F1: 59 },
     languages: {},
   };
+  if (opt.noOpenerApi) delete monaco.editor.registerLinkOpener;
+  // opt.models: the text of each open model; opt.Uri: Monaco's URI class. log.reads counts getValue() calls (a scan reads a model once).
+  if (opt.Uri) monaco.Uri = opt.Uri;
+  if (opt.models) monaco.editor.getModels = () => opt.models.map((t, i) => ({ getValueLength: () => t.length, getValue: () => { log.reads.push(i); return t; } }));
   const win = { monaco };
   const ctx = vm.createContext({
     document: doc, window: win, console, Promise, Error,
     setTimeout: (fn, ms) => { const t = { fn, ms, dead: false }; timers.push(t); return timers.length; },
     clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].dead = true; },
     culiboxTheme: () => ({}),
+    openAgentLink: opt.noGate ? undefined : (raw, c) => { log.gate.push([raw, c]); return Promise.resolve(true); },
     require: Object.assign((deps, ok, bad) => {
       log.required.push(deps[0]);
       if (opt.module === "error") { setImmediate(() => bad(new Error("module failed"))); return; }
@@ -50,6 +55,7 @@ function fake(o) {
       setImmediate(() => ok());
     }, { config() {} }),
   });
+  if (opt.withLinks) new vm.Script(fs.readFileSync(path.join(__dirname, "..", "static", "links.js"), "utf8"), { filename: "links.js" }).runInContext(ctx);
   new vm.Script(SRC, { filename: "monacoload.js" }).runInContext(ctx);
   const loadMonaco = new vm.Script("loadMonaco", { filename: "get" }).runInContext(ctx);
   return { ctx, head, timers, log, loadMonaco, win };
@@ -169,4 +175,179 @@ test("the editor tab says why when the editor cannot be loaded: a toast with the
   assert.match(msg.textContent, /could not be loaded/, "the body says so too, not 'loading…'");
   assert.notEqual(msg.textContent, "loading…");
   assert.equal(tab.model, null);
+});
+
+// --- links (#348) ------------------------------------------------------------
+// Ctrl/Cmd+click on a link in the editor (the dock editor and every diff editor) would open it in Monaco's own opener. The boot
+// puts the link gate in front of that: the opener takes every link, so Monaco's never runs.
+// Monaco hands open() a URI (or a string, which its opener service parses first); both read the same through String().
+const uriOf = (s) => ({ toString: () => s });
+
+test("boot registers a link opener that hands the link to the gate as an editor link and takes it", { timeout: 4000 }, async () => {
+  const f = fake();
+  await f.loadMonaco();
+  assert.equal(f.log.openers.length, 1);
+  assert.strictEqual(f.log.openers[0].open(uriOf("https://example.com/a?b=1")), true);
+  assert.deepEqual(f.log.gate, [["https://example.com/a?b=1", { source: "editor" }]]);
+});
+
+// Monaco's URI.toString() percent-encodes the query's = & + : / ; toString(true) is the readable form. This stub encodes the way
+// Monaco's does, so a test that reads String(uri) sees what the gate would have been given before the fix.
+const monacoUri = (readable) => {
+  const i = readable.indexOf("?");
+  const enc = i < 0 ? readable : readable.slice(0, i + 1) + readable.slice(i + 1).replace(/[=&+:/]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  return { toString: (skipEncoding) => (skipEncoding ? readable : enc) };
+};
+
+test("the gate gets the readable link of a URI with a query, not Monaco's encoded form", { timeout: 4000 }, async () => {
+  const f = fake();
+  await f.loadMonaco();
+  f.log.openers[0].open(monacoUri("https://example.com/a?x=1&y=2&z=a+b"));
+  f.log.openers[0].open(monacoUri("https://ex.com/login?next=https://evil.com/x"));
+  assert.deepEqual(f.log.gate, [
+    ["https://example.com/a?x=1&y=2&z=a+b", { source: "editor" }],
+    ["https://ex.com/login?next=https://evil.com/x", { source: "editor" }],
+  ], "an encoded query hides the redirect from the gate's redirect warning");
+});
+
+test("with no open file holding the text, a space or a non-ASCII letter reaches the gate percent-encoded (the fallback)", { timeout: 4000 }, async () => {
+  const f = fake();
+  await f.loadMonaco();
+  f.log.openers[0].open(monacoUri("https://example.com/a b/é"));
+  assert.equal(f.log.gate[0][0], "https://example.com/a%20b/%C3%A9");
+});
+
+// The real URI class of the vendored Monaco (an AMD chunk: define(name, deps, factory) fills `exports`), so the test sees what its
+// parse() does to a link and what toString() gives back. Loaded once, in its own vm context.
+const URI_CHUNK = (() => {
+  const dir = path.join(__dirname, "..", "static", "vendor", "monaco", "vs");
+  return path.join(dir, fs.readdirSync(dir).find((n) => /^editorWorkerHost-.*\.js$/.test(n)));
+})();
+const realUri = (() => {
+  const ex = {};
+  const g = { navigator: { userAgent: "node", platform: "linux", language: "en", languages: ["en"] }, console, performance, setTimeout, clearTimeout, queueMicrotask, TextDecoder, TextEncoder, URL };
+  g.self = g; g.globalThis = g;
+  const c = vm.createContext(g);
+  c.define = (_n, _d, factory) => { factory(null, ex); };
+  vm.runInContext(fs.readFileSync(URI_CHUNK, "utf8"), c, { filename: "editorWorkerHost.js" });
+  return ex.URI;
+})();
+
+test("the vendored URI class is the one the tests below stand on: parse decodes, toString encodes", () => {
+  assert.equal(realUri.parse("https://ex.com/a%3Fb").toString(true), "https://ex.com/a%3Fb");
+  assert.equal(realUri.parse("https://ex.com/a?x=1").toString(), "https://ex.com/a?x%3D1");
+  assert.equal(encodeURI(realUri.parse("https://ex.com/a%3Fb").toString(true)), "https://ex.com/a%253Fb", "the lossy way: a %3F becomes %253F");
+});
+
+// encodeURI(uri.toString(true)) is lossy: URI.parse decodes every part, so a link that carries a %3F, %23 or an encoded nested query
+// opens as a different link. Monaco's own click hands its opener the original text, but registerLinkOpener's wrapper parses it first, so
+// the opener only gets the URI. The opener therefore finds the text again in the open models (a URI that parses back to the same URI) and
+// hands the gate that, exactly as written.
+const LOSSY = [
+  "https://ex.com/a%3Fb",
+  "https://ex.com/a%23b",
+  "https://ex.com/login?continue=https%3A%2F%2Fapp.example.com%2Fdash%3Ftab%3D2%26x%3D1&hl=en",
+  "https://evil.com%2F@good.com/x",
+];
+
+test("the gate gets the link exactly as written in the file, for a link a parse would change", { timeout: 4000 }, async () => {
+  for (const link of LOSSY) {
+    const f = fake({ Uri: realUri, models: ["// see " + link + " for more\nhttps://other.example/x\n"] });
+    await f.loadMonaco();
+    assert.strictEqual(f.log.openers[0].open(realUri.parse(link)), true);
+    assert.deepEqual(f.log.gate, [[link, { source: "editor" }]], link);
+  }
+});
+
+test("the written text is trimmed like the terminal's: a trailing full stop, and a ) the link did not open", { timeout: 4000 }, async () => {
+  const link = "https://ex.com/a%3Fb";
+  const f = fake({ Uri: realUri, models: ["(see " + link + "). Then " + link + ", or [x](" + link + ")"] });
+  await f.loadMonaco();
+  f.log.openers[0].open(realUri.parse(link));
+  assert.equal(f.log.gate[0][0], link);
+});
+
+test("with links.js on the page the scan uses its URL regex and trimmer, and finds the same links", { timeout: 4000 }, async () => {
+  for (const link of LOSSY) {
+    const f = fake({ withLinks: true, Uri: realUri, models: ["see (" + link + "). and more"] });
+    await f.loadMonaco();
+    f.log.openers[0].open(realUri.parse(link));
+    assert.equal(f.log.gate[0][0], link, link);
+    assert.equal(vm.runInContext("typeof trimUrl", f.ctx), "function", "links.js really was loaded in this page");
+  }
+});
+
+test("the first model that holds the link is read and the scan stops there", { timeout: 4000 }, async () => {
+  const link = "https://ex.com/a%3Fb";
+  const f = fake({ Uri: realUri, models: ["nothing here", "x " + link, "y " + link] });
+  await f.loadMonaco();
+  f.log.openers[0].open(realUri.parse(link));
+  assert.deepEqual(f.log.reads, [0, 1], "the third model is never read");
+  assert.equal(f.log.gate[0][0], link);
+});
+
+test("a model larger than 5 MB is skipped, not read", { timeout: 4000 }, async () => {
+  const link = "https://ex.com/a%3Fb";
+  const big = link + " " + "x".repeat(5 * 1024 * 1024);
+  const f = fake({ Uri: realUri, models: [big, "ok " + link] });
+  await f.loadMonaco();
+  f.log.openers[0].open(realUri.parse(link));
+  assert.deepEqual(f.log.reads, [1]);
+  assert.equal(f.log.gate[0][0], link);
+});
+
+test("no model holds the link: the gate gets encodeURI(toString(true)), as before", { timeout: 4000 }, async () => {
+  for (const models of [undefined, [], ["no links in here"], ["https://other.example/x"]]) {
+    const f = fake({ Uri: realUri, models });
+    await f.loadMonaco();
+    f.log.openers[0].open(realUri.parse("https://ex.com/login?next=https://evil.com/x"));
+    assert.equal(f.log.gate[0][0], "https://ex.com/login?next=https://evil.com/x");
+  }
+});
+
+test("a scan that throws, or a Monaco with no getModels or Uri, falls back and still takes the link", { timeout: 4000 }, async () => {
+  const link = "https://ex.com/a?x=1";
+  const bad = fake({ Uri: { parse() { throw new Error("boom"); } }, models: ["see " + link] });
+  await bad.loadMonaco();
+  assert.strictEqual(bad.log.openers[0].open(realUri.parse(link)), true);
+  assert.equal(bad.log.gate[0][0], link);
+  const none = fake({ Uri: realUri });
+  await none.loadMonaco();
+  assert.strictEqual(none.log.openers[0].open(realUri.parse(link)), true);
+  assert.equal(none.log.gate[0][0], link);
+});
+
+test("nothing is scanned at boot: only a click reads the models", { timeout: 4000 }, async () => {
+  const f = fake({ Uri: realUri, models: ["https://ex.com/a%3Fb"] });
+  await f.loadMonaco();
+  assert.deepEqual(f.log.reads, []);
+});
+
+test("the opener takes every scheme, so Monaco's own never opens one: the gate says no to the ones it will not open", { timeout: 4000 }, async () => {
+  const f = fake();
+  await f.loadMonaco();
+  for (const u of ["file:///etc/passwd", "command:workbench.action.x", "javascript:alert(1)", "mailto:a@b.c"]) {
+    assert.strictEqual(f.log.openers[0].open(uriOf(u)), true, u);
+  }
+  assert.equal(f.log.gate.length, 4);
+});
+
+test("the opener is registered once, however many opens share the load", { timeout: 4000 }, async () => {
+  const f = fake();
+  await f.loadMonaco();
+  await f.loadMonaco();
+  assert.equal(f.log.openers.length, 1);
+});
+
+test("without the gate loaded the opener still takes the link and opens nothing", { timeout: 4000 }, async () => {
+  const f = fake({ noGate: true });
+  await f.loadMonaco();
+  assert.strictEqual(f.log.openers[0].open(uriOf("https://example.com/")), true);
+  assert.deepEqual(f.log.gate, []);
+});
+
+test("a Monaco without registerLinkOpener still boots", { timeout: 4000 }, async () => {
+  const f = fake({ noOpenerApi: true });
+  assert.equal(await f.loadMonaco(), f.win.monaco);
+  assert.deepEqual(f.log.openers, []);
 });

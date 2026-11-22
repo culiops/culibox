@@ -73,7 +73,7 @@ regexes = [
 # Public identifiers.
 
 [[allowlists]]
-description = "docker/agent-box/Dockerfile and boximage_test.go: HashiCorp's published release-signing key fingerprint and the sha256 of the public key file, pinned to verify downloads"
+description = "docker/culibox/Dockerfile and boximage_test.go: HashiCorp's published release-signing key fingerprint and the sha256 of the public key file, pinned to verify downloads"
 regexes = [
   '''^C874011F0AB405110D02105534365D9472D7468F$''',
   '''^c2f5bc1163bd8d15a711616b587bcede212d045a5b8b52df01c74095897cd065$''',

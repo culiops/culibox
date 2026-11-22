@@ -20,6 +20,48 @@ func TestNormalBuildHasNoUIDemo(t *testing.T) {
 	}
 }
 
+// #343: the scan's base override is a demo hook too. A normal build never reads
+// CULIBOX_WSROOTS_SCAN_BASES: the hook is nil even when the variable is set, and
+// no file outside a uidemo-tagged one names it.
+func TestNormalBuildIgnoresTheScanBasesVariable(t *testing.T) {
+	t.Setenv("CULIBOX_WSROOTS_SCAN_BASES", "/tmp/should-never-be-read")
+	if uidemoScanBases != nil {
+		t.Fatal("uidemoScanBases is set in a build without the uidemo tag")
+	}
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f == "uidemo_wsroots.go" || strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "CULIBOX_WSROOTS_SCAN_BASES") {
+			t.Errorf("%s reads CULIBOX_WSROOTS_SCAN_BASES outside the uidemo file", f)
+		}
+	}
+	dirs, err := filepath.Glob("../../internal/*/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range dirs {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "CULIBOX_WSROOTS_SCAN_BASES") {
+			t.Errorf("%s reads CULIBOX_WSROOTS_SCAN_BASES", f)
+		}
+	}
+}
+
 func TestReleaseAssertRejectsAUIDemoBuild(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds two small programs")

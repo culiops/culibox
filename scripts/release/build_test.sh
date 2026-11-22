@@ -130,7 +130,7 @@ if cmp -s "$tmp/o5/SHA256SUMS" "$tmp/o6/SHA256SUMS"; then pass "two runs give th
 
 # 6. The box image ref (#335): baked when given, validated before anything is written.
 ref=ghcr.io/culiops/culibox@sha256:$(printf 'a%.0s' $(seq 64))
-flag="-X github.com/culiops/culibox/docker/agent-box.published=$ref"
+flag="-X github.com/culiops/culibox/docker/culibox.published=$ref"
 : >"$GO_ARGV"
 run v1.2.3 "$tmp/o7" "$tmp/a5" "$ref"
 if [ "$rc" -eq 0 ]; then pass "a run with a box image ref exits 0"; else fail "a run with a box image ref exits $rc"; fi

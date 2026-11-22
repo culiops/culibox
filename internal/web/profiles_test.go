@@ -1210,3 +1210,134 @@ func TestNormalProfilesFileStillSpawnsConfigSeed(t *testing.T) {
 		})
 	}
 }
+
+// #342: a profile that carries only the legacy bypass bool is offered the
+// Permission mode enum (blank), and the view names the legacy key for the UI.
+func TestViewLegacyProfileOffersPermissionMode(t *testing.T) {
+	opts := append([]config.OptionDef{
+		{Key: "skip_permissions", Label: "Skip permissions", Type: config.OptBool, Flag: "--dangerously-skip-permissions", Bins: []string{"claude"}},
+	}, config.Defaults().Options...)
+	seeds := []config.AgentConfig{
+		{Name: "legacy", Bin: "claude", Options: map[string]any{"skip_permissions": true}},
+		{Name: "plain", Bin: "claude"},
+	}
+	m := NewProfileManager(seeds, opts, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	views := map[string]ProfileView{}
+	for _, v := range m.Views() {
+		views[v.Name] = v
+	}
+	l := views["legacy"]
+	if l.LegacyBypassKey != "skip_permissions" {
+		t.Errorf("legacy_bypass_key = %q, want skip_permissions", l.LegacyBypassKey)
+	}
+	var mode *ProfileOption
+	for i := range l.Options {
+		if l.Options[i].Key == config.PermissionModeKey {
+			mode = &l.Options[i]
+		}
+	}
+	if mode == nil {
+		t.Fatalf("legacy profile does not offer permission_mode: %+v", l.Options)
+	}
+	if mode.Value != "" {
+		t.Errorf("permission_mode value = %v, want blank", mode.Value)
+	}
+	if p := views["plain"]; p.LegacyBypassKey != "" {
+		t.Errorf("plain profile legacy_bypass_key = %q, want empty", p.LegacyBypassKey)
+	}
+	for _, o := range views["plain"].Options {
+		if o.Key == config.PermissionModeKey {
+			t.Errorf("an unset plain profile must not offer permission_mode")
+		}
+	}
+}
+
+// #342: a config.json permission_mode def without bypassPermissions does not own the
+// legacy bool: no legacy key, no Permission mode offered, and the bool is a marked
+// option of its own (the UI counts a ticked one as Bypass by the mark).
+func TestViewLegacyBoolNotOwnedByEnumWithoutBypass(t *testing.T) {
+	opts := []config.OptionDef{
+		{Key: "skip_permissions", Label: "Skip permissions", Type: config.OptBool, Flag: "--dangerously-skip-permissions", Bins: []string{"claude"}},
+		{Key: config.PermissionModeKey, Label: "Permission mode", Type: config.OptEnum, Flag: "--permission-mode",
+			Choices: []string{"default", "acceptEdits", "plan"}, Bins: []string{"claude"}},
+	}
+	seeds := []config.AgentConfig{{Name: "legacy", Bin: "claude", Options: map[string]any{"skip_permissions": true}}}
+	m := NewProfileManager(seeds, opts, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	v := m.Views()[0]
+	if v.LegacyBypassKey != "" {
+		t.Errorf("legacy_bypass_key = %q, want empty", v.LegacyBypassKey)
+	}
+	if len(v.Options) != 1 || v.Options[0].Key != "skip_permissions" || !v.Options[0].Bypass || v.Options[0].Value != true {
+		t.Errorf("options = %+v, want only the marked legacy bool", v.Options)
+	}
+}
+
+// #342: the critical-rm row carries its tier, and the host block names it.
+func TestViewCriticalRmTierAndHostBlock(t *testing.T) {
+	seeds := []config.AgentConfig{{Name: "c", Bin: "claude", Options: map[string]any{
+		"permission_mode": "bypassPermissions", "skip_critical_rm_prompt": true,
+	}}}
+	m := NewProfileManager(seeds, config.Defaults().Options, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	vs := m.Views()
+	if len(vs) != 1 {
+		t.Fatalf("views = %d", len(vs))
+	}
+	var row *ProfileOption
+	for i := range vs[0].Options {
+		if vs[0].Options[i].Key == config.CriticalRmKey {
+			row = &vs[0].Options[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("critical-rm option not offered: %+v", vs[0].Options)
+	}
+	if row.Tier != "box" {
+		t.Errorf("tier = %q, want box", row.Tier)
+	}
+	if want := `"Skip the critical-rm prompt" runs only in a box`; vs[0].HostBlock != want {
+		t.Errorf("host_block = %q, want %q", vs[0].HostBlock, want)
+	}
+	for _, o := range vs[0].Options {
+		if o.Key != config.CriticalRmKey && o.Tier != "" {
+			t.Errorf("option %s has tier %q, want none", o.Key, o.Tier)
+		}
+	}
+}
+
+// #342 Review Focus 5: a config.json permission_mode def replaces the built-in.
+// The option list is built the production way (config.Load adds the built-ins),
+// so one permission_mode def exists and it is the user's.
+func TestViewUserPermissionModeDefWins(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfgJSON := `{"options":[{"key":"permission_mode","label":"Mode","type":"enum",
+		"choices":["default","plan","bypassPermissions"],"flag":"--permission-mode","bins":["claude"]}]}`
+	if err := os.WriteFile(path, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seeds := []config.AgentConfig{{Name: "c", Bin: "claude", Options: map[string]any{"permission_mode": "plan"}}}
+	m := NewProfileManager(seeds, cfg.Options, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	views := m.Views()
+	if len(views) != 1 {
+		t.Fatalf("views = %d", len(views))
+	}
+	n := 0
+	for _, o := range views[0].Options {
+		if o.Key != "permission_mode" {
+			continue
+		}
+		n++
+		if got := strings.Join(o.Choices, ","); got != "default,plan,bypassPermissions" {
+			t.Errorf("choices = %s, want the user's three", got)
+		}
+		if o.Label != "Mode" {
+			t.Errorf("label = %q, want the user's Mode", o.Label)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("permission_mode rows = %d, want exactly 1", n)
+	}
+}

@@ -62,3 +62,16 @@ func HostBlock(a AgentConfig) string {
 	}
 	return ""
 }
+
+// HostBlockWith is HostBlock plus the box-only rules that need the option defs:
+// a binding wins, then a box-only env the profile sets, then a box-only option
+// it turns on. "" when the profile may run on the host.
+func HostBlockWith(a AgentConfig, defs map[string]OptionDef) string {
+	if r := HostBlock(a); r != "" {
+		return r
+	}
+	if r := BoxOnlyEnvReason(a); r != "" {
+		return r
+	}
+	return BoxOnlyOptionReason(defs, a.Options)
+}

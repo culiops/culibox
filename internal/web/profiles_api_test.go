@@ -741,6 +741,53 @@ func TestSaveWarningsEgressWithoutBinding(t *testing.T) {
 	}
 }
 
+// TestSaveWarningsUnresolvedSecret: only (Absent, nil) warns. A name a locked or
+// unavailable store may hold, a name that is present and a check that errored
+// all stay quiet; with no SecretCheck, or no secrets, nothing is warned.
+func TestSaveWarningsUnresolvedSecret(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	pm.home = t.TempDir()
+	checks := map[string]struct {
+		p   secretchain.Presence
+		err error
+	}{
+		"IN_ENV":          {secretchain.Present, nil},
+		"IN_LOCKED_STORE": {secretchain.StoredLocked, nil},
+		"GONE":            {secretchain.Absent, nil},
+		"ERRS":            {secretchain.Absent, errors.New("boom")},
+	}
+	s := &Server{Profiles: pm, SecretCheck: func(name string) (secretchain.Presence, error) {
+		c := checks[name]
+		return c.p, c.err
+	}}
+	put := func(s *Server, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body)))
+		if rec.Code == 409 || rec.Code == 201 {
+			rec = putProfile(t, s, "u1", body)
+		}
+		return rec
+	}
+	var out struct {
+		Warnings []string `json:"warnings"`
+	}
+	rec := put(s, `{"name":"u1","bin":"claude","runtime":"box","secrets":["IN_ENV","IN_LOCKED_STORE","GONE","ERRS"]}`)
+	want := []string{secretUnresolvedWarning("GONE")}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil || strings.Join(out.Warnings, "|") != strings.Join(want, "|") {
+		t.Fatalf("checked: code %d body %s, want warnings %q", rec.Code, rec.Body, want)
+	}
+	s.SecretCheck = nil
+	rec = put(s, `{"name":"u1","bin":"claude","runtime":"box","secrets":["IN_ENV","IN_LOCKED_STORE","GONE","ERRS"]}`)
+	if !savedClean(rec) {
+		t.Fatalf("nil SecretCheck: code %d body %s, want 200 with no warnings", rec.Code, rec.Body)
+	}
+	s.SecretCheck = func(string) (secretchain.Presence, error) { return secretchain.Absent, nil }
+	rec = put(s, `{"name":"u1","bin":"claude","runtime":"box","secrets":[]}`)
+	if !savedClean(rec) {
+		t.Fatalf("no secrets: code %d body %s, want 200 with no warnings", rec.Code, rec.Body)
+	}
+}
+
 // TestSaveRefusalCarriesFieldPath pins the wire shape of a 400 save refusal: the
 // sentence an older client matches on, unchanged, plus the "field" path the
 // refusal is about. A refusal that names no field has no "field" key.
@@ -1098,5 +1145,21 @@ func TestProfilesViewsAsksBoxCredentialWithoutTheLock(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Views deadlocked: the box credential hook ran with m.mu held")
+	}
+}
+
+// #342: critical-rm needs Permission mode: Bypass; Save refuses it with the field.
+func TestProfileSaveCriticalRmNeedsBypass(t *testing.T) {
+	pm := NewProfileManager(nil, config.Defaults().Options, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	rec := postProfile(s, `{"name":"p","bin":"claude","runtime":"box","options":{"permission_mode":"plan","skip_critical_rm_prompt":true}}`)
+	if rec.Code != 400 {
+		t.Fatalf("POST: code %d body %s, want 400", rec.Code, rec.Body)
+	}
+	if f := apiBody(t, rec)["field"]; f != "options.skip_critical_rm_prompt" {
+		t.Errorf("field = %v, want options.skip_critical_rm_prompt (body %s)", f, rec.Body)
+	}
+	if rec := postProfile(s, `{"name":"p","bin":"claude","runtime":"box","options":{"permission_mode":"bypassPermissions","skip_critical_rm_prompt":true}}`); rec.Code != 201 {
+		t.Errorf("bypass + critical-rm: code %d body %s, want 201", rec.Code, rec.Body)
 	}
 }

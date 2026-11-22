@@ -257,3 +257,9 @@ test("boot wires the layout button before the first applyCap", () => {
   assert.ok(init > 0, "initSideLayout() is called at boot");
   assert.ok(init < app.indexOf("\napplyCap(4);"), "before applyCap(4) paints it");
 });
+
+test("Analytics API value tooltip is range-neutral; the sidebar keeps today (UTC) (#340)", () => {
+  const AN = require("../static/analytics.js");
+  assert.equal(AN.AN_API_VALUE_TITLE, "Token usage priced at API list rates. A subscription does not bill this.");
+  assert.equal(SC.SIDE_COST_TITLE, "Token usage today (UTC) priced at API list rates. A subscription does not bill this.");
+});

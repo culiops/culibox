@@ -38,6 +38,7 @@ import (
 	"github.com/culiops/culibox/internal/egress"
 	"github.com/culiops/culibox/internal/instancelock"
 	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/linktrust"
 	"github.com/culiops/culibox/internal/logring"
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
@@ -46,6 +47,7 @@ import (
 	"github.com/culiops/culibox/internal/storerefs"
 	"github.com/culiops/culibox/internal/terminal"
 	"github.com/culiops/culibox/internal/web"
+	"github.com/culiops/culibox/internal/wsroots"
 )
 
 // The registry-based transcript locator only runs when the backend can name the
@@ -59,6 +61,10 @@ const conversationPollEvery = 5 * time.Second
 
 // uidemoVMFolders is set only by the uidemo-tagged file; nil in every normal build.
 var uidemoVMFolders func(home string) web.VMFolders
+
+// uidemoScanBases is set only by the uidemo-tagged file: the folders the "Other places" scan
+// reads instead of the usual ones. nil in every normal build.
+var uidemoScanBases func() []string
 
 func main() {
 	args, err := parseArgs(os.Args[1:])
@@ -874,6 +880,18 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	creds := web.NewCredentialManager(baseCfg, credFile, dataDir, pm, vstore, storeAudit, chk, live.Apply, web.AccountsOf(accts))
 	creds.SetFileBad(credBad)
 
+	// The workspace folders the file API serves besides $HOME. Every add and
+	// remove is audited first (storeAudit), so a failed audit saves nothing.
+	wsRoots := wsroots.NewService(dataDir, home, web.RootsAudit(storeAudit), time.Now)
+	api.Roots = wsRoots // a browser Start with add_root adds its folder here
+	if uidemoScanBases != nil {
+		wsRoots.SetScanBases(uidemoScanBases) // nil unless a `-tags uidemo` build asks for it
+	}
+
+	// The hosts whose agent links open without the confirm dialog, per person.
+	// Every add and remove is audited first, like the workspace roots.
+	linkTrust := linktrust.NewService(dataDir, web.LinkTrustAudit(storeAudit), time.Now)
+
 	srv := &web.Server{
 		Imports:          bundleImports,
 		API:              api,
@@ -882,6 +900,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Password:         login.Secret,
 		Profiles:         pm,
 		Home:             home,
+		DataDir:          dataDir,
+		Roots:            wsRoots,
+		LinkTrust:        linkTrust,
 		Protected:        protected,
 		Shares:           vmShares,
 		VMFolders:        vmFolders,
@@ -908,7 +929,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			return secretchain.AccountTokenPresence(resolver, acctTokenStore, a)
 		},
 		// The credentials screen's legacy-secret status: presence only, no value.
-		SecretCheck: resolver.Check,
+		SecretCheck:   resolver.Check,
+		SecretSources: cfg.SecretSources,
 
 		// vstore is never nil (the daemon always opens one), so no typed-nil
 		// interface can reach the web layer.

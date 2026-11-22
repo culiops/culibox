@@ -3,7 +3,7 @@
 // The workspace folder picker, one factory for every place a folder is chosen: the New
 // session dialog's Workspace field and the profile page's Workspace block.
 //
-//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, openOnClick, openOnType, reanchor, inline, lastUsed, idleText })
+//   createWsPicker({ input, list, onPick, onNote, onCheck, checkOn, otherPlaces, keepEsc, openOnFocus, openOnClick, openOnType, reanchor, inline, lastUsed, idleText })
 //     -> { value, set, open, close, destroy, isOpen, highlighted, settle, refresh, showIdleNote }
 //
 // It is a combobox on an <input> and its listbox <div>: the same backend as dirpicker.js's
@@ -50,11 +50,117 @@
 // trailing "Last used"), by reordering rows the server returned (pinLastUsed). idleText(count): the steady-state caption
 // instead of spawnWsIdleNote's (New session names where the field's value came from).
 // filter(path): optional; false drops a row from every list (typed paths are not filtered).
+// onCheck(check): optional. When set (and checkOn(), if given, says yes), the folder in the field is asked of
+// GET /api/workspace/check (typed paths 250 ms after the last key; picks and set() at once) and onCheck gets the
+// answer, or null while there is none (the field changed, is empty or relative, or the server could not say). The caller
+// draws it with wsCheckLine below. A pure existence check on one path, so nothing is listed.
+// otherPlaces(): optional; true shows an "Other places" group under the project roots of the idle list (the project folders
+// GET /api/workspace-roots found outside home and every root, spec 6.8). They are read each time the idle list opens from
+// closed and drawn when they arrive. A row is picked like any path (the value is set and the check line runs); nothing is
+// added until Start. Typing searches the roots only, so the group is not in a search.
 //
 // Classic script: the helpers above are dirpicker.js's, showToast is shell.js's and
 // workspacesCache is app.js's, all read at call time.
 
-const WSP_DEBOUNCE_MS = 120, WSP_FETCH_MS = 4000;
+const WSP_DEBOUNCE_MS = 120, WSP_FETCH_MS = 4000, WSP_CHECK_MS = 250;
+
+// wsCheckLine: the ONE line under the Workspace field from a /api/workspace/check answer (spec 6.4), and `tier`
+// ("box" or "host"), the tier the session would run on. {kind: "none"|"info"|"warn"|"error", text, share}: share asks the
+// caller for the "Share this folder…" button (the box VM cannot see add_root_path). In order:
+//   missing -> error; not a directory -> error; refused -> warn (an amber line: the folder cannot become a root);
+//   would_add -> info, naming the folder (add_root_path, the repo top when the folder is inside a repo);
+//   then, when the VM cannot see the folder, the share sentence is added;
+//   a folder already under a root says nothing, unless the box tier is chosen and the box would refuse it: warn.
+// A covered folder the VM cannot see says nothing on the host tier: the host session never needs the VM's view.
+function wsCheckLine(check, tier) {
+  const none = { kind: "none", text: "", share: false };
+  const c = check && typeof check === "object" ? check : null;
+  if (!c) return none;
+  const path = c.path || "";
+  if (!c.exists) return { kind: "error", text: "No such file or directory: " + path, share: false };
+  if (!c.is_dir) return { kind: "error", text: "Not a directory: " + path, share: false };
+  const where = c.add_root_path || path;
+  if (c.refused) {
+    return {
+      kind: "warn", share: false,
+      text: "CuliBox won't open " + where + " in Files (" + c.refused + "). A host session can still run here; a box can't.",
+    };
+  }
+  const boxBad = tier === "box" && !!c.box && c.box.ok === false;
+  const unseen = c.vm_shared === false && (c.would_add === true || boxBad);
+  let text = "";
+  if (c.would_add) {
+    text = "Starting here also lets CuliBox's Files, git and search open " + where + (where !== path ? " (the repo this folder is in)" : "") + ".";
+  }
+  if (unseen) {
+    text += (text ? " " : "") + "The box VM can't see " + where + ", so git status and boxes won't work there.";
+  } else if (boxBad) {
+    const why = String((c.box && c.box.reason) || "").trim();
+    if (why) text += (text ? " " : "") + why + (/[.!?]$/.test(why) ? "" : ".");
+  }
+  if (text === "") return none;
+  return { kind: boxBad ? "warn" : "info", text, share: unseen };
+}
+
+// wsCheckBlock: why Start must wait for this answer, "" when it need not: the box tier is chosen and the box
+// would refuse the folder (a Mac's VM cannot see it: share it, or switch to host). The server refuses it too; this says so first.
+function wsCheckBlock(check, tier) {
+  const c = check && typeof check === "object" ? check : null;
+  if (!c || !c.exists || !c.is_dir || tier !== "box" || !c.box || c.box.ok !== false) return "";
+  return wsCheckLine(c, tier).text;
+}
+// wsShownPath: how a row shows a folder's path (#343 slice 4): "~/rest" under home, otherwise the absolute path. Home itself is
+// spelled out, under its "~ (home)" name. A sibling sharing home's prefix (/home/meX) is not under it.
+function wsShownPath(path, home) {
+  const p = String(path || "");
+  const h = String(home || "").replace(/\/+$/, "");
+  if (!h || p === h || p.indexOf(h + "/") !== 0) return p;
+  return "~" + p.slice(h.length);
+}
+
+// The New session list's Recent group: the folders the last sessions started in, newest first, kept in this browser
+// (localStorage, written by spawnSession). A convenience list like the recent profiles: a damaged value reads as empty.
+const WS_RECENTS_MAX = 5;
+const wsBare = (p) => (p.length > 1 ? p.replace(/\/+$/, "") || "/" : p);
+// wsRecentsPush: `cwd` first, once (a trailing "/" ignored), at most WS_RECENTS_MAX. A relative or empty cwd changes nothing.
+function wsRecentsPush(paths, cwd) {
+  const list = Array.isArray(paths) ? paths.filter((x) => typeof x === "string" && x.charAt(0) === "/") : [];
+  if (typeof cwd !== "string" || cwd.charAt(0) !== "/") return list.slice(0, WS_RECENTS_MAX);
+  const want = wsBare(cwd);
+  return [cwd].concat(list.filter((x) => wsBare(x) !== want)).slice(0, WS_RECENTS_MAX);
+}
+// wsRecentsRead: the stored {"v":1,"paths":[...]} as a list (absolute paths, deduped, at most WS_RECENTS_MAX). Nothing stored, or
+// nothing readable: the last spawn's folder alone, so a browser that spawned before this list existed still opens on it.
+function wsRecentsRead(raw, lastCwd) {
+  let paths = [];
+  try {
+    const v = JSON.parse(raw || "null");
+    if (v && v.v === 1 && Array.isArray(v.paths)) paths = v.paths;
+  } catch (_) { /* damaged: empty */ }
+  const out = [];
+  for (const x of paths) {
+    if (out.length >= WS_RECENTS_MAX) break;
+    if (typeof x === "string" && x.charAt(0) === "/" && !out.some((y) => wsBare(y) === wsBare(x))) out.push(x);
+  }
+  if (out.length) return out;
+  return typeof lastCwd === "string" && lastCwd.charAt(0) === "/" ? [lastCwd] : [];
+}
+
+// wsNameMatches: the rows whose name contains the query, case-insensitive; names that start with it first, otherwise in the
+// given order. The added roots and "Other places" are matched this way in a search: the server's index holds a root's
+// contents, never the root folder itself, and the other places are not indexed at all.
+function wsNameMatches(rows, q) {
+  const lq = String(q || "").trim().toLowerCase();
+  if (!lq) return [];
+  const starts = [], within = [];
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const at = String(r.label || "").toLowerCase().indexOf(lq);
+    if (at === 0) starts.push(r);
+    else if (at > 0) within.push(r);
+  }
+  return starts.concat(within);
+}
+
 // Each picker's option ids start with its own number: aria-activedescendant must name ONE element on the page.
 let wspSerial = 0;
 
@@ -64,8 +170,12 @@ function createWsPicker(opts) {
   const onPick = typeof o.onPick === "function" ? o.onPick : () => {};
   const onNote = typeof o.onNote === "function" ? o.onNote : () => {};
   const uid = "wsp" + ++wspSerial;
-  let shown = [], active = -1, seq = 0, timer = null, abort = null, cwd = "";
+  let shown = [], optEls = [], active = -1, seq = 0, timer = null, abort = null, cwd = "";
+  // "Other places": the rows of the last GET /api/workspace-roots, and the read in flight (its own sequence).
+  let others = [], othersSeq = 0;
   let pointerGesture = false, gone = false;
+  // The folder check (onCheck): its own timer and sequence, so a pick that closes the list never cancels it.
+  let checkTimer = null, checkSeq = 0;
 
   // Every listener goes through here so destroy() can take them all away.
   const bound = [];
@@ -83,7 +193,68 @@ function createWsPicker(opts) {
   // filtered; the server refuses them.
   const keep = (rows) => (typeof o.filter === "function" ? rows.filter((r) => o.filter(r.path) !== false) : rows);
   const pinned = (rows) => (inline() && typeof o.lastUsed === "function" ? pinLastUsed(keep(rows), o.lastUsed()) : keep(rows));
-  const idleRows = () => pinned(pickerRows({ mode: "empty", workspaces: workspaces() }));
+  const wantOthers = () => typeof o.otherPlaces === "function" && o.otherPlaces() === true;
+  // The "Other places" rows: the same row shape as a project root, the parent folder as the hint, the first row carrying the
+  // heading. Like the project rows they pass keep(), and a folder the project rows already name is not listed twice.
+  const otherAll = () => (wantOthers() ? keep(others.map((p) => ({
+    label: p.label, hint: p.path.slice(0, p.path.lastIndexOf("/")) || "/", path: p.path, kind: "other",
+  }))) : []);
+  const otherRows = (have) => {
+    const taken = new Set(have.map((r) => r.path));
+    const rows = otherAll().filter((r) => !taken.has(r.path));
+    if (rows.length) rows[0] = Object.assign({}, rows[0], { heading: "Other places" });
+    return rows;
+  };
+  // paths() (#343 slice 4): two-line rows, the name with its path dimmed under it, plus the added workspace roots. New session on
+  // the desktop and the profile page ask for it; the phone (frozen, #340) does not, and keeps its rows.
+  const paths = () => typeof o.paths === "function" && o.paths() === true;
+  const home = () => (typeof window !== "undefined" && typeof window.HOME_DIR === "string" ? window.HOME_DIR : "");
+  const baseName = (p) => p.slice(p.replace(/\/+$/, "").lastIndexOf("/") + 1).replace(/\/+$/, "") || p;
+  // The added roots (window.WORKSPACE_ROOTS: the roots the server serves now, home first), as rows: never home, never twice.
+  const rootAll = () => {
+    const roots = typeof window !== "undefined" && Array.isArray(window.WORKSPACE_ROOTS) ? window.WORKSPACE_ROOTS : [];
+    const h = home(), seen = new Set();
+    const rows = [];
+    roots.forEach((p, i) => {
+      if (typeof p !== "string" || p.charAt(0) !== "/" || i === 0 || p === h || seen.has(p)) return;
+      seen.add(p);
+      rows.push({ label: baseName(p), hint: "", path: p, kind: "root", tag: "Workspace root" });
+    });
+    return keep(rows);
+  };
+  // recents(): the folders the last sessions started in, newest first (New session on the desktop). The first carries "Last
+  // used" when it is the last spawn's folder.
+  const recentRows = () => {
+    const list = typeof o.recents === "function" ? o.recents() : [];
+    const h = home();
+    const rows = keep((Array.isArray(list) ? list : []).filter((p) => typeof p === "string" && p.charAt(0) === "/").map((p) => ({
+      label: p === h ? "~ (home)" : baseName(p), hint: "", path: p, kind: "recent",
+    })));
+    const last = typeof o.lastUsed === "function" ? o.lastUsed() : "";
+    if (rows.length && typeof last === "string" && last !== "" && wsBare(rows[0].path) === wsBare(last)) rows[0].tag = "Last used";
+    return rows;
+  };
+  const idleRows = () => {
+    if (!paths()) {
+      const top = pinned(pickerRows({ mode: "empty", workspaces: workspaces() }));
+      return top.concat(otherRows(top));
+    }
+    const recent = recentRows();
+    // With a Recent group the last folder is already first in it; the folders keep their own order.
+    let folders = recent.length ? keep(pickerRows({ mode: "empty", workspaces: workspaces() })) : pinned(pickerRows({ mode: "empty", workspaces: workspaces() }));
+    const listed = new Set(folders.map((r) => r.path));
+    folders = folders.concat(rootAll().filter((r) => !listed.has(r.path)));
+    if (recent.length) {
+      recent[0] = Object.assign({}, recent[0], { heading: "Recent" });
+      if (folders.length) folders[0] = Object.assign({}, folders[0], { heading: "Folders" });
+    }
+    return recent.concat(folders, otherRows(folders));
+  };
+  // The caption counts the folders and roots only: the recents repeat them and the other places are not roots.
+  const rootCount = (rows) => rows.filter((r) => r.kind !== "other" && r.kind !== "recent").length;
+  // The inline list's last line while idle: how to get past it (founder 2026-11-21: no Browse…, a typed path is the way).
+  const footText = () => (paths() && inline() ? "Type to search · or a full path (/…)" : "");
+  const renderIdle = (rows) => render(rows, footText(), "wsp-foot");
   const note = (text, idle) => onNote(text || "", idle === true);
   const idleNote = (count) => note(typeof o.idleText === "function" ? o.idleText(count) : spawnWsIdleNote(count), true);
 
@@ -94,6 +265,34 @@ function createWsPicker(opts) {
   function set(path) {
     cwd = path || "";
     input.value = cwd;
+    checkPath(cwd, 0);
+  }
+
+  const checking = () => typeof o.onCheck === "function" && (typeof o.checkOn !== "function" || o.checkOn() === true);
+  function checkCancel() {
+    if (checkTimer) { clearTimeout(checkTimer); checkTimer = null; }
+    checkSeq++;
+  }
+  // checkPath: ask the server what Start in `path` would do, `delay` ms from now (0: now). The old answer goes at once: it
+  // was about another folder. A relative or empty path has no answer. The newest ask wins.
+  function checkPath(path, delay) {
+    checkCancel();
+    if (!checking()) return;
+    o.onCheck(null);
+    if (!path || path.charAt(0) !== "/") return;
+    const mine = checkSeq;
+    const run = async () => {
+      checkTimer = null;
+      let data = null;
+      try {
+        const res = await fetch("/api/workspace/check?path=" + encodeURIComponent(path));
+        if (res.ok) data = await res.json();
+      } catch (_) { /* no answer: no line */ }
+      if (gone || mine !== checkSeq || !data) return;
+      o.onCheck(data);
+    };
+    if (delay > 0) checkTimer = setTimeout(run, delay);
+    else run();
   }
 
   function setOpen(show) {
@@ -124,42 +323,73 @@ function createWsPicker(opts) {
   }
 
   // `noteText`, when non-empty, renders one extra row that is NOT in `shown` (so move() cannot arrow onto
-  // it and choose() cannot pick it), appended LAST so move()'s list.children[active] lookup isn't shifted.
-  function render(next, noteText) {
+  // it and choose() cannot pick it), appended LAST. A row's `heading` draws a group heading before it; optEls (the option
+  // elements, in `shown` order) is what setActive indexes, so neither shifts the index math.
+  function render(next, noteText, noteClass) {
     shown = next;
     active = -1;
     drawnInline = inline();
+    const drawnPaths = paths();
     input.removeAttribute("aria-activedescendant");
-    list.replaceChildren(...next.map((r, i) => {
+    const els = [];
+    const nodes = [];
+    next.forEach((r, i) => {
+      if (r.heading) {
+        // A group heading, not a row: it is not in `shown`, and optEls keeps the row index math.
+        const head = document.createElement("div");
+        head.className = "ft-note wsp-head";
+        head.setAttribute("role", "presentation");
+        head.textContent = r.heading;
+        nodes.push(head);
+      }
       const el = document.createElement("div");
       el.className = drawnInline ? "menu-item" : "ft-opt";
       el.setAttribute("role", "option");
       el.setAttribute("aria-selected", "false");
       el.id = uid + "-opt-" + i;
-      const lab = document.createElement("span");
-      lab.textContent = r.label;
-      const hint = document.createElement("span");
-      // Not .hint inside a kit row: app.css's global .hint adds a 7px top margin and 11px type. The frame's parent folder is
-      // machine text, `mono t-xs muted` (M4.3).
-      hint.className = drawnInline ? "wsp-hint mono t-xs muted ellipsis" : "hint";
-      hint.textContent = r.hint;
-      if (drawnInline) lab.className = "menu-text mono t-sm ellipsis";
-      // A kit row spaces its cells by gap: an empty hint (a project root has no parent to show) would add a dead 10px.
-      el.append(lab);
-      if (!drawnInline || r.hint) el.append(hint);
-      if (drawnInline && r.lastUsed === true) {
+      // "Last used" wins over the row's own tag: in a search the pinned last folder may be a root or an other place.
+      const tagText = r.lastUsed === true ? "Last used" : (r.tag || "");
+      if (drawnPaths) {
+        // Two lines (#343 slice 4): the name, and under it the path, dimmed (~/… under home).
+        const two = document.createElement("div");
+        two.className = "wsp-two";
+        const name = document.createElement("span");
+        name.className = drawnInline ? "menu-text mono t-sm ellipsis wsp-name" : "wsp-name";
+        name.textContent = r.label;
+        const where = document.createElement("span");
+        where.className = drawnInline ? "wsp-path mono t-xs muted ellipsis" : "hint wsp-path muted";
+        where.textContent = wsShownPath(r.path, home());
+        two.append(name, where);
+        el.append(two);
+      } else {
+        const lab = document.createElement("span");
+        lab.textContent = r.label;
+        const hint = document.createElement("span");
+        // Not .hint inside a kit row: app.css's global .hint adds a 7px top margin and 11px type. The frame's parent folder is
+        // machine text, `mono t-xs muted` (M4.3).
+        hint.className = drawnInline ? "wsp-hint mono t-xs muted ellipsis" : "hint";
+        hint.textContent = r.hint;
+        if (drawnInline) lab.className = "menu-text mono t-sm ellipsis";
+        // A kit row spaces its cells by gap: an empty hint (a project root has no parent to show) would add a dead 10px.
+        el.append(lab);
+        if (!drawnInline || r.hint) el.append(hint);
+      }
+      if (tagText && (drawnInline || drawnPaths)) {
         const tag = document.createElement("span");
-        tag.className = "wsp-last t-sm muted";
-        tag.textContent = "Last used";
+        tag.className = drawnInline ? "wsp-last t-sm muted" : "hint wsp-last";
+        tag.textContent = tagText;
         el.append(tag);
       }
       el.title = r.path;
       el.onclick = () => choose(i);
-      return el;
-    }));
+      els.push(el);
+      nodes.push(el);
+    });
+    optEls = els;
+    list.replaceChildren(...nodes);
     if (noteText) {
       const el = document.createElement("div");
-      el.className = "ft-note";
+      el.className = noteClass ? "ft-note " + noteClass : "ft-note";
       el.setAttribute("role", "option");
       el.setAttribute("aria-disabled", "true");
       el.textContent = noteText;
@@ -174,6 +404,7 @@ function createWsPicker(opts) {
     if (abort) { abort.abort(); abort = null; }
     seq++;
     shown = [];
+    optEls = [];
     active = -1;
     input.removeAttribute("aria-activedescendant");
   }
@@ -183,9 +414,11 @@ function createWsPicker(opts) {
   function open() {
     const mode = pickerReopenMode(input.value, !list.hidden);
     if (mode === "empty") {
+      const was = list.hidden;
       const r = idleRows();
-      render(r);
-      idleNote(r.length);
+      renderIdle(r);
+      idleNote(rootCount(r));
+      if (was) loadOthers();
     } else if (mode === "search") query(input.value);
     // "none": the open list already shows this search: see pickerReopenMode.
   }
@@ -200,13 +433,13 @@ function createWsPicker(opts) {
       // caption still reads as steady-state, not as an active search, matching pickerReopenMode's own
       // path/empty split.
       close();
-      idleNote(idleRows().length);
+      idleNote(rootCount(idleRows()));
       return;
     }
     if (c.mode === "empty") {
       const r = idleRows();
-      render(r);
-      idleNote(r.length);
+      renderIdle(r);
+      idleNote(rootCount(r));
       return;
     }
     timer = setTimeout(() => search(c.value, mine), WSP_DEBOUNCE_MS);
@@ -229,9 +462,18 @@ function createWsPicker(opts) {
     if (mine !== seq) return; // a newer query already won
     abort = null;
     const broke = failed || !data;
-    const found = broke ? [] : pinned(pickerRows({ mode: "fuzzy", hits: data.results || [] }));
+    let hits = broke ? [] : pickerRows({ mode: "fuzzy", hits: data.results || [] });
+    if (paths()) {
+      // The added roots and the other places, by name, before the index's hits; each path once.
+      const named = wsNameMatches(rootAll().concat(otherAll().map((r) => Object.assign({}, r, { tag: "Other place" }))), q);
+      const have = new Set(named.map((r) => r.path));
+      hits = named.concat(hits.filter((r) => !have.has(r.path)));
+    }
+    const found = pinned(hits);
     const text = dirPickerNote(found.length, !!(data && data.truncated), broke);
-    render(found, text);
+    // The inline list says how many it found when nothing is wrong; the field's note keeps dirPickerNote's words.
+    const shownText = text || (paths() && inline() && found.length ? found.length + (found.length === 1 ? " match" : " matches") + " · ↵ to pick" : "");
+    render(found, shownText, text ? "" : "wsp-foot");
     // Inline (New session on the desktop, frame M4.3): the first hit is drawn highlighted, as the row Enter takes anyway (enter()
     // picks row 0 of a fuzzy list when none is active). The idle list, the phone's and the profile page's start with none.
     if (drawnInline && found.length) setActive(0, false);
@@ -242,10 +484,10 @@ function createWsPicker(opts) {
   // row, aria-activedescendant on the field. `reveal` scrolls it into view: the arrows ask, the first row does not (the list was
   // just drawn from the top, and typing must not scroll the form behind it).
   function setActive(i, reveal) {
-    const prev = list.children[active];
+    const prev = optEls[active];
     if (prev) prev.setAttribute("aria-selected", "false");
     active = i;
-    const el = list.children[active];
+    const el = optEls[active];
     if (el) {
       el.setAttribute("aria-selected", "true");
       if (reveal) el.scrollIntoView({ block: "nearest" });
@@ -263,7 +505,7 @@ function createWsPicker(opts) {
     if (!r) return;
     close();
     set(r.path);
-    idleNote(idleRows().length);
+    idleNote(rootCount(idleRows()));
     onPick(cwd);
   }
 
@@ -325,7 +567,7 @@ function createWsPicker(opts) {
       if (gone) return;
       close();
       set((data && data.path) || path);
-      idleNote(idleRows().length);
+      idleNote(rootCount(idleRows()));
       onPick(cwd);
       return;
     }
@@ -333,9 +575,15 @@ function createWsPicker(opts) {
       showToast("Not a directory: " + path, { error: true });
       return;
     }
+    // 403: outside every workspace root. Not an error any more: Start adds the folder as a root, and the check
+    // line under the field says so (or why not). The typed path is already the value.
+    if (res.status === 403) {
+      close();
+      checkPath(path, 0);
+      return;
+    }
     showToast(
       res.status === 404 ? "No such file or directory: " + path :
-      res.status === 403 ? "That path is outside your home directory" :
       "Could not read " + path,
       { error: true });
   }
@@ -345,17 +593,41 @@ function createWsPicker(opts) {
   function refresh() {
     if (classifyPickerQuery(input.value).mode === "fuzzy") return;
     const r = idleRows();
-    if (!list.hidden) render(r);
-    idleNote(r.length);
+    if (!list.hidden) renderIdle(r);
+    idleNote(rootCount(r));
+  }
+
+  // loadOthers: read the other places (the server caches its scan, so this is cheap) and redraw the idle list when they
+  // arrive, keeping the row the arrows had reached. A failed read, or one for a picker that is gone or for an older open,
+  // changes nothing.
+  async function loadOthers() {
+    if (!wantOthers()) return;
+    const mine = ++othersSeq;
+    let data = null;
+    try {
+      const res = await fetch("/api/workspace-roots");
+      if (res.ok) data = await res.json();
+    } catch (_) { /* no group */ }
+    if (gone || mine !== othersSeq || !data || !Array.isArray(data.elsewhere)) return;
+    others = data.elsewhere.filter((p) => p && typeof p.path === "string" && p.path.charAt(0) === "/" && typeof p.label === "string" && p.label !== "");
+    if (list.hidden) return;
+    const was = active;
+    const at = was >= 0 && shown[was] ? shown[was].path : "";
+    refresh();
+    // The same row if it is still there (Recent and Folders can both hold a path), else the first row with that path.
+    const back = !at ? -1 : (shown[was] && shown[was].path === at ? was : shown.findIndex((r) => r.path === at));
+    if (back >= 0) setActive(back, false);
   }
 
   function showIdleNote() {
-    idleNote(idleRows().length);
+    idleNote(rootCount(idleRows()));
   }
 
   function destroy() {
     if (gone) return;
     close();
+    checkCancel();
+    othersSeq++;
     gone = true;
     for (const [target, type, fn, capture] of bound.splice(0)) target.removeEventListener(type, fn, capture);
   }
@@ -370,6 +642,9 @@ function createWsPicker(opts) {
     else if (c.mode === "empty") cwd = "";
     if (typeof o.openOnType === "function" && !o.openOnType()) close(); // an on-demand list closes as the user types: it never covers the field message
     else query(input.value);
+    // A typed path is asked about after a pause; a fuzzy query leaves the value, and so its line, alone.
+    if (c.mode === "path") checkPath(c.value, WSP_CHECK_MS);
+    else if (c.mode === "empty") checkPath("", 0);
     if (cwd !== before) onPick(cwd);
   });
   // Mirrors dirpicker.js's mousedown/focus/click choreography verbatim (same pure functions, same measured
@@ -419,4 +694,8 @@ function createWsPicker(opts) {
   if (o.reanchor === true) on(document, "scroll", (e) => { if (!list.hidden && !list.contains(e.target)) setOpen(true); }, true);
 
   return { value, set, open, close, destroy, isOpen: () => !list.hidden, highlighted: () => active >= 0, settle, refresh, showIdleNote };
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { createWsPicker, wsCheckLine, wsCheckBlock, wsShownPath, wsRecentsRead, wsRecentsPush, wsNameMatches };
 }

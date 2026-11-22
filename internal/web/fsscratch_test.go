@@ -28,7 +28,7 @@ func scratchFixture(t *testing.T) (home, scratch, data string, pol fsPolicy) {
 	if err := os.Mkdir(scratch, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	pol, err = newFsPolicy(home, BoxTrees{Denied: []string{data}}, scratch)
+	pol, err = newFsPolicy(home, nil, BoxTrees{Denied: []string{data}}, scratch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestScratch_RootRejected(t *testing.T) {
 			mustMkdirAll(t, home)
 			mustMkdirAll(t, other)
 			cand := tc.setup(t, tmp, home)
-			pol, err := newFsPolicy(home, BoxTrees{Denied: []string{other}}, cand)
+			pol, err := newFsPolicy(home, nil, BoxTrees{Denied: []string{other}}, cand)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -212,7 +212,7 @@ func TestScratch_CandidateInsideHomeStaysHome(t *testing.T) {
 	cand := filepath.Join(home, "claude-x")
 	mustWrite(t, filepath.Join(cand, "f"))
 	mustChmod(t, cand, 0o700)
-	pol, err := newFsPolicy(home, BoxTrees{}, cand)
+	pol, err := newFsPolicy(home, nil, BoxTrees{}, cand)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestScratch_SymlinkedParentAccepted(t *testing.T) {
 	mustChmod(t, real, 0o700)
 	mustSymlink(t, realParent, filepath.Join(tmp, "tmplink"))
 	cand := filepath.Join(tmp, "tmplink", "claude-1")
-	pol, err := newFsPolicy(home, BoxTrees{}, cand)
+	pol, err := newFsPolicy(home, nil, BoxTrees{}, cand)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestScratch_ContainedWorkspaceUnderScratchIsStrictReadOnly(t *testing.T) {
 	home, scratch, data, _ := scratchFixture(t)
 	ws := filepath.Join(scratch, "ws")
 	mustWrite(t, filepath.Join(ws, "f"))
-	pol, err := newFsPolicy(home, BoxTrees{Denied: []string{data}, Contained: []string{ws}}, scratch)
+	pol, err := newFsPolicy(home, nil, BoxTrees{Denied: []string{data}, Contained: []string{ws}}, scratch)
 	if err != nil {
 		t.Fatal(err)
 	}

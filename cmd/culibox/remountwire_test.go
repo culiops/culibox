@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	boximage "github.com/culiops/culibox/docker/agent-box"
+	boximage "github.com/culiops/culibox/docker/culibox"
 	"github.com/culiops/culibox/internal/box"
 )
 

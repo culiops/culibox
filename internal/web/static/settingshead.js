@@ -33,16 +33,27 @@ function settingsHeadSpec(tab, info) {
       };
     case "tokens":
       return {
-        title: "API tokens",
+        title: "Device tokens",
         desc: "Let a client app or CLI connect with Authorization: Bearer … and no password. One per device.",
         mono: ["Authorization: Bearer …"],
-        action: { id: "set-act-tokens", label: "New token" },
+        action: { id: "set-act-tokens", label: "New device token" },
       };
     case "vmfolders":
       return {
         title: "VM folders",
         desc: "Folders on this Mac the box VM can see. If a box broke out of its container, these are all it could reach.",
         action: { id: "set-act-vmfolders", label: "Add folder" },
+      };
+    case "wsroots":
+      return {
+        title: "Workspace roots",
+        desc: "Workspace roots are the folders CuliBox's Files, git and search can open. Home is always one. Starting a session in a folder outside them adds that folder here. Removing one does not stop sessions running in it.",
+        action: { id: "set-act-wsroots", label: "Add folder" },
+      };
+    case "linktrust":
+      return {
+        title: "Trusted hosts",
+        desc: "Links an agent shows open without the confirm dialog when they go to one of these hosts.",
       };
     case "settings":
       return {
@@ -59,7 +70,7 @@ function settingsHeadSpec(tab, info) {
   }
 }
 
-// What each header action does: the handler its old footer button had (+ new account, + new token, Reset to
+// What each header action does: the handler its old footer button had (+ new account, + new device token, Reset to
 // defaults, Report a problem). Reset clicks the footer's own button, which is hidden on the page but still wired
 // (app.js initSettings), so there is one reset and not a copy of it. set-act-creds is not here: Task 5's menu
 // code takes that button over (credAddMenuAttach).
@@ -67,6 +78,7 @@ const SETTINGS_HEAD_RUN = {
   "set-act-accounts": () => acctNew(),
   "set-act-tokens": () => createToken(),
   "set-act-vmfolders": () => openVMFoldersAdd("", "rw", ""),
+  "set-act-wsroots": () => openWsRootsAdd(""),
   "set-act-settings": () => { const b = document.getElementById("fs-reset"); if (b) b.click(); },
   "set-act-about": () => openBugReport(),
 };
@@ -137,7 +149,7 @@ function settingsHeadAction(action) {
 }
 
 // paintSettingsHead(tab): draw page `tab`'s head into its slot. A no-op unless Settings is the desktop page
-// (#settings-modal.as-page): on a phone the modal keeps its Done, + new token and + new account footers.
+// (#settings-modal.as-page): on a phone the modal keeps its Done, + new device token and + new account footers.
 // selectSettingsTab runs before the dialog becomes the page on the first open, so openSettings paints once more
 // afterwards, and loadAboutInfo again once the version has arrived; every call replaces the head.
 function paintSettingsHead(tab) {
@@ -186,6 +198,7 @@ function paintSettingsHead(tab) {
   // function must be a top-level function declaration (which is what makes it a property of the global).
   if (spec.action && spec.action.menu && typeof globalThis.credAddMenuAttach === "function") globalThis.credAddMenuAttach(trigger);
   if (tab === "vmfolders" && typeof vmfSyncHead === "function") vmfSyncHead();
+  if (tab === "wsroots" && typeof wsrSync === "function") wsrSync();
   if (refocus) refocus();
 }
 
