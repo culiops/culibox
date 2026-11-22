@@ -116,6 +116,10 @@ type ProfileView struct {
 	// the spawn also applies, so a page reads this and never re-derives the rule.
 	BoxOnly   bool   `json:"box_only,omitempty"`
 	HostBlock string `json:"host_block,omitempty"`
+	// HostDrops lists what a host run of it would drop (its bindings and
+	// box-only options, config.HostDrops); empty when it drops nothing (#359).
+	// Not a block: the host run goes ahead once the caller acknowledges it.
+	HostDrops []string `json:"host_drops,omitempty"`
 	// BoxClaudeCredential says whether a boxed claude of this profile has a login:
 	// "yes", "no", or "locked" (a token exists but the store cannot be read now, so
 	// never "no"). "" (absent) on a profile that is not claude, or with no source
@@ -611,6 +615,7 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			ImportsOff:     a.ImportsOff,
 			BoxOnly:        a.BoxOnly,
 			HostBlock:      config.HostBlock(a),
+			HostDrops:      config.HostDrops(a, m.optDefs),
 			EgressAllow:    slices.Clone(a.EgressAllow),
 			CloneShare:     slices.Clone(a.CloneShare),
 		}
