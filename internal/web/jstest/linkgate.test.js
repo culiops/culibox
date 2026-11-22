@@ -289,6 +289,7 @@ test("lgUntrustableWhy refuses the page's own host, so an agent-printed CuliBox 
   assert.strictEqual(why("https://other.example.com/", "box.example.com"), "");
   assert.strictEqual(why("https://example.com/", "box.example.com"), "", "the parent domain is another host");
   assert.strictEqual(why("https://box.example.com/", ""), "", "no page host, no rule");
+  assert.strictEqual(lg.lgTrustable(new URL("https://box.example.com/"), [], false, "box.example.com"), false, "lgTrustable agrees");
   const v = lg.lgBuildView("https://box.example.com/x", {}, "box.example.com", []);
   assert.strictEqual(v.trustable, false);
 });

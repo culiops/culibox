@@ -353,8 +353,8 @@ function lgUntrustableWhy(u, warnings, loopback, pageHost) {
   return "";
 }
 
-function lgTrustable(u, warnings, loopback) {
-  return lgUntrustableWhy(u, warnings, loopback) === "";
+function lgTrustable(u, warnings, loopback, pageHost) {
+  return lgUntrustableWhy(u, warnings, loopback, pageHost) === "";
 }
 
 // lgUrlParts splits a link for the dialog's box. The host is the one that is really contacted (the ASCII form); the Unicode
