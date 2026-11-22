@@ -818,6 +818,9 @@ type Info struct {
 	// Return is the latest exit or "Bring work home now" return of a clone-mode
 	// session; absent until one has run.
 	Return *ReturnSummary `json:"return,omitempty"`
+	// Handback is what the scan of this session's in-place workspace flagged at
+	// its exit. In-place boxed sessions only; absent until a scan has run.
+	Handback *HandbackNote `json:"handback,omitempty"`
 	// ContextPaths are the host paths the box can read (the profile's
 	// context_paths at spawn, mounted read-only at the same path); CloneOf is
 	// the host repo a clone-mode session was cloned from. Both are snapshots
@@ -844,9 +847,13 @@ type Session struct {
 	Agent   string
 	Cwd     string
 	Created time.Time
-	Runtime string // box | host; immutable for the session's lifetime
-	Box     string // container name for a boxed session; "" on the host tier
-	Bin     string // resolved agent binary (for claude-only features like usage)
+	// createdGuessed: Created is not the real start (an orphan adopted with no
+	// sidecar, or a record without a start time), so a handback scan cannot use
+	// it as the start of the window. Set before publication, never mutated.
+	createdGuessed bool
+	Runtime        string // box | host; immutable for the session's lifetime
+	Box            string // container name for a boxed session; "" on the host tier
+	Bin            string // resolved agent binary (for claude-only features like usage)
 	// ParentID is the session this is a companion shell of. Set before
 	// publication and never mutated, so read without a lock.
 	ParentID string
@@ -897,6 +904,9 @@ type Session struct {
 	// state file keeps the truth).
 	ret       *ReturnSummary
 	returning bool
+	// handback is the exit scan's note (see Info.Handback); guarded by mu, not
+	// persisted, immutable once stored.
+	handback *HandbackNote
 	// ContextPaths and CloneOf are the spawn-time snapshots Info reports (see
 	// Info.ContextPaths). Immutable after publication, read without the lock;
 	// Info hands out a copy.
@@ -1402,6 +1412,7 @@ func (s *Session) Info() Info {
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	in.Clone = s.Clone.copy()
 	in.Return = s.ret.copy()
+	in.Handback = s.handback.copy()
 	in.ContextPaths = slices.Clone(s.ContextPaths)
 	in.CloneOf = s.CloneOf
 	in.WorkspaceRoot = s.WorkspaceRoot
@@ -1632,13 +1643,14 @@ type Manager struct {
 	// storeLocked reports whether the encrypted store is locked right now.
 	// Nil = no store: no session ever needs it unlocked.
 	storeLocked func() bool
-	egress      EgressHooks // nil = egress control not running; bound profiles are refused
-	egressAll   bool        // every boxed spawn needs egress; see SetEgressAll
-	clone       CloneHooks  // nil = clone mode unavailable; clone profiles are refused
-	home        string      // daemon user's home; where a host session's ~/.claude lives
-	stateDir    string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
-	costSrc     CostSource  // prices a session's conversations (analytics); nil = off, no session reports a cost
-	repliesOn   bool        // config replies_enabled kill-switch; false = no reply, answer or opt-in
+	egress      EgressHooks   // nil = egress control not running; bound profiles are refused
+	egressAll   bool          // every boxed spawn needs egress; see SetEgressAll
+	clone       CloneHooks    // nil = clone mode unavailable; clone profiles are refused
+	handback    HandbackHooks // nil = no scan of an in-place workspace at a session's exit
+	home        string        // daemon user's home; where a host session's ~/.claude lives
+	stateDir    string        // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
+	costSrc     CostSource    // prices a session's conversations (analytics); nil = off, no session reports a cost
+	repliesOn   bool          // config replies_enabled kill-switch; false = no reply, answer or opt-in
 
 	// contextCheck is the on-disk check of one context path (existence,
 	// symlinks, sockets, protected dirs). Nil = it cannot run, so a profile
@@ -3078,6 +3090,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 			m.releaseSessionBox(sess)
 			m.brokerRevoke(sess)
 			go m.returnWork(sess, ReturnOnExit)
+			go m.handbackWork(sess)
 		case <-sess.detachedCh: // agent alive, pipe lost → keep listed for restart recovery
 			return
 		}
@@ -3464,7 +3477,7 @@ func (m *Manager) Reconcile() error {
 			if !parsed {
 				agent = "unknown"
 			}
-			md = sessionMeta{Agent: agent, Created: time.Now()}
+			md = sessionMeta{Agent: agent, Created: time.Now(), createdGuessed: true}
 			if sc != nil {
 				sc.put(id, md)
 			}
@@ -3538,9 +3551,9 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	if err != nil {
 		return err
 	}
-	created := md.Created
+	created, guessed := md.Created, md.createdGuessed
 	if created.IsZero() {
-		created = time.Now()
+		created, guessed = time.Now(), true
 	}
 	name := md.Name
 	if name == "" { // pre-existing sidecar entries predate the Name field
@@ -3584,6 +3597,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	m.mu.Lock()
 	sess := newSession(id, md.Agent, name, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	sess.Runtime = runtime
+	sess.createdGuessed = guessed
 	sess.Box = md.Box
 	sess.brokerBox = heldBox
 	sess.Bin = bin
