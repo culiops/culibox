@@ -57,6 +57,13 @@ function lgHostKey(u) {
   return u.hostname.toLowerCase().replace(/\.$/, "");
 }
 
+// lgIsPageHost: the link's host (lgHostKey form) is the host this page was loaded from. The port is not compared: another port on
+// the same host is still this machine.
+function lgIsPageHost(host, pageHost) {
+  const p = String(pageHost || "").toLowerCase().replace(/\.$/, "");
+  return p !== "" && host === p;
+}
+
 function lgIsLoopbackHost(h) {
   return LG_LOOPBACK.has(String(h || "").toLowerCase());
 }
@@ -329,11 +336,13 @@ function lgHostRefusal(host) {
 }
 
 // lgUntrustableWhy is "" for a link the dialog may offer to trust, else the first reason it may not (in the dialog's words):
-// clean https to a named, public, non-xn-- host with a dot that the server's host rules accept (lgHostRefusal). The server checks
-// the same rules again on add.
-function lgUntrustableWhy(u, warnings, loopback) {
+// clean https to a named, public, non-xn-- host with a dot that the server's host rules accept (lgHostRefusal), and not the page's
+// own host: a trusted CuliBox address would open a signed-in page from an agent's link with no dialog. The server checks the same
+// host rules again on add.
+function lgUntrustableWhy(u, warnings, loopback, pageHost) {
   const host = lgHostKey(u);
   if (loopback) return "it is a localhost link";
+  if (lgIsPageHost(host, pageHost)) return "it is this CuliBox's own address";
   if (lgIsIPHost(u.hostname)) return "its host is an IP address";
   if (host.split(".").some((l) => /^xn--/i.test(l))) return "its host is an xn-- name";
   if (u.protocol !== "https:") return "it is not https";
@@ -374,11 +383,11 @@ function lgBuildView(raw, ctx, pageHost, trusted) {
   const list = loopback ? [] : trusted || [];
   const warnings = lgWarnings(u, { loopback, trusted: list });
   const host = lgHostKey(u);
-  const why = lgUntrustableWhy(u, warnings, loopback);
+  const why = lgUntrustableWhy(u, warnings, loopback, pageHost);
   return {
     ok: true, ctx: ctx || {}, u, href: u.href, rewritten: url !== raw, loopback, pageHost: pageHost || "", warnings,
     host, unicodeHost: lgUnicodeHost(u.hostname), trustable: why === "", why,
-    skip: u.protocol === "https:" && warnings.length === 0 && !loopback && lgTrustMatch(list, host),
+    skip: u.protocol === "https:" && warnings.length === 0 && !loopback && !lgIsPageHost(host, pageHost) && lgTrustMatch(list, host),
   };
 }
 
