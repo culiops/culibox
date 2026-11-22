@@ -120,8 +120,14 @@ test("idn: mixed scripts name the scripts, otherwise the non-ASCII letters", () 
   // at most 5 distinct letters
   const many = warnsOf("https://xn--80ak6aa92e.com/").find((x) => x.kind === "idn").text;
   assert.ok(/\(([^)]*)\)/.exec(many)[1].split(", ").length <= 5);
-  // a label that does not decode still warns
-  const bad = lg.lgWarnings(new URL("https://xn--a.com/"), {});
+  // a label that does not decode still warns. Whether the URL parser accepts such a label at all differs between Node patch
+  // versions (24.14 throws, 24.22 parses); when it refuses, the gate must refuse the link too.
+  let u = null;
+  try { u = new URL("https://xn--a.com/"); } catch (_) {}
+  if (u) assert.ok(lg.lgWarnings(u, {}).some((x) => x.kind === "idn"));
+  else assert.strictEqual(lg.lgParse("https://xn--a.com/"), null);
+  // the same rule, independent of the parser: a hand-made URL with that hostname
+  const bad = lg.lgWarnings({ hostname: "xn--a.com", protocol: "https:", port: "", username: "", password: "", href: "https://xn--a.com/", pathname: "/", search: "", hash: "", searchParams: new URLSearchParams() }, {});
   assert.ok(bad.some((x) => x.kind === "idn"));
 });
 
@@ -273,6 +279,19 @@ test("lgUntrustableWhy names the first reason", () => {
   assert.match(why("https://localhost/x", { loopback: true }), /localhost/);
   assert.match(why("https://intranet/x"), /no dot/);
   assert.match(why("https://example.com:8443/x"), /warning/);
+});
+
+test("lgUntrustableWhy refuses the page's own host, so an agent-printed CuliBox link can never skip the dialog", () => {
+  const why = (raw, pageHost) => { const u = new URL(raw); return lg.lgUntrustableWhy(u, lg.lgWarnings(u, {}), false, pageHost); };
+  assert.match(why("https://box.example.com/s/1", "box.example.com"), /this CuliBox/);
+  assert.match(why("https://BOX.example.com./s/1", "box.example.com"), /this CuliBox/, "case and a trailing dot are the same host");
+  assert.match(why("https://box.example.com/", "Box.Example.Com."), /this CuliBox/);
+  assert.strictEqual(why("https://other.example.com/", "box.example.com"), "");
+  assert.strictEqual(why("https://example.com/", "box.example.com"), "", "the parent domain is another host");
+  assert.strictEqual(why("https://box.example.com/", ""), "", "no page host, no rule");
+  assert.strictEqual(lg.lgTrustable(new URL("https://box.example.com/"), [], false, "box.example.com"), false, "lgTrustable agrees");
+  const v = lg.lgBuildView("https://box.example.com/x", {}, "box.example.com", []);
+  assert.strictEqual(v.trustable, false);
 });
 
 test("lgUntrustableWhy mirrors the server's label rules, so the dialog never offers a trust the server refuses", () => {
@@ -679,6 +698,24 @@ test("a loopback link never skips the dialog, even when the host it is rewritten
   await q.open("https://127.0.0.1:3000/", { source: "terminal" });
   assert.strictEqual(q.asks.length, 1);
   assert.strictEqual(q.opened.length, 0);
+});
+
+test("a link to the page's own host always asks and offers no trust, even when the list already matches it", async () => {
+  // an entry from before this rule, and a parent domain with subdomains on
+  for (const hosts of [[{ host: "box.example.com", subdomains: false }], [{ host: "example.com", subdomains: true }]]) {
+    const p = page({ hostname: "box.example.com", hosts });
+    await p.ready();
+    await p.open("https://box.example.com/#/s/1", { source: "terminal" });
+    assert.strictEqual(p.asks.length, 1, "it asked: " + JSON.stringify(hosts));
+    assert.strictEqual(p.opened.length, 0, "and, cancelled, did not open");
+    assert.strictEqual(findAll(p.asks[0], "input").length, 0, "no trust box for the page's own host");
+  }
+  // a sibling under the same trusted parent still skips
+  const q = page({ hostname: "box.example.com", hosts: [{ host: "example.com", subdomains: true }] });
+  await q.ready();
+  await q.open("https://docs.example.com/a", { source: "terminal" });
+  assert.strictEqual(q.asks.length, 0);
+  assert.strictEqual(q.opened.length, 1);
 });
 
 test("the box on Open: the link opens first, then POST {host, subdomains} as JSON", async () => {
