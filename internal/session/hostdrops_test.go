@@ -85,10 +85,10 @@ func (l dropsLauncher) CloneFor(string) (*config.Clone, error) {
 var _ HostDropsResolver = dropsLauncher{}
 var _ HostDropsResolver = (*launcher.AgentLauncher)(nil)
 
-var threeDrops = []string{"AWS binding", "GitHub binding", "token binding", "context paths"}
+var fourDrops = []string{"AWS binding", "GitHub binding", "token binding", "context paths"}
 
 func boundDropsLauncher(argv []string, tier string) dropsLauncher {
-	return dropsLauncher{tieredLauncher: tieredLauncher{argv: argv, runtime: tier}, bound: true, drops: threeDrops}
+	return dropsLauncher{tieredLauncher: tieredLauncher{argv: argv, runtime: tier}, bound: true, drops: fourDrops}
 }
 
 type dropsHarness struct {
@@ -194,7 +194,7 @@ func TestHostSpawnWithAckDropsBindings(t *testing.T) {
 			t.Fatalf("host process has %s in its env: %v", bad, names)
 		}
 	}
-	h.untouched2(t)
+	h.noBoxSideEffects(t)
 
 	in := s.Info()
 	if in.AWS != nil || in.GitHub != nil || len(in.Tokens) != 0 || len(in.AWSConnections) != 0 || len(in.ContextPaths) != 0 || in.Egress != "" {
@@ -203,21 +203,21 @@ func TestHostSpawnWithAckDropsBindings(t *testing.T) {
 	if s.BrokerNonce != "" || s.EgressNonce != "" || s.Bindings().Any() {
 		t.Fatalf("host session holds broker state: nonce=%q egress=%q bindings=%+v", s.BrokerNonce, s.EgressNonce, s.Bindings())
 	}
-	if !slices.Equal(in.HostDropped, threeDrops) {
-		t.Fatalf("Info.HostDropped = %q, want %q", in.HostDropped, threeDrops)
+	if !slices.Equal(in.HostDropped, fourDrops) {
+		t.Fatalf("Info.HostDropped = %q, want %q", in.HostDropped, fourDrops)
 	}
 	md := sidecarEntry(t, h.path, s.ID)
-	if !slices.Equal(md.HostDropped, threeDrops) {
-		t.Fatalf("sidecar host_dropped = %q, want %q", md.HostDropped, threeDrops)
+	if !slices.Equal(md.HostDropped, fourDrops) {
+		t.Fatalf("sidecar host_dropped = %q, want %q", md.HostDropped, fourDrops)
 	}
 	if md.AWS != nil || md.GitHub != nil || len(md.Tokens) != 0 || len(md.ContextPaths) != 0 || md.BrokerNonce != "" {
 		t.Fatalf("sidecar carries bindings: %+v", md)
 	}
 }
 
-// untouched2 is untouched for a session that exists: the broker, the egress and
+// noBoxSideEffects is untouched for a session that exists: the broker, the egress and
 // the box layer were never asked for anything.
-func (h *dropsHarness) untouched2(t *testing.T) {
+func (h *dropsHarness) noBoxSideEffects(t *testing.T) {
 	t.Helper()
 	if n, tk, bf := h.hooks.calls(); n+tk+bf != 0 {
 		t.Fatalf("broker called for a host spawn: nonce=%d token=%d boxFor=%d", n, tk, bf)
@@ -322,7 +322,7 @@ func TestRestartHostSessionOfBoundProfile(t *testing.T) {
 	spec := hostSpec(t)
 	spec.HostDropsAck = true
 	old := exitedSession(t, h.m, spec)
-	if !slices.Equal(old.HostDropped, threeDrops) {
+	if !slices.Equal(old.HostDropped, fourDrops) {
 		t.Fatalf("old HostDropped = %q", old.HostDropped)
 	}
 	ns, err := h.m.Restart(old.ID)
@@ -330,10 +330,10 @@ func TestRestartHostSessionOfBoundProfile(t *testing.T) {
 		t.Fatalf("a host session of a bound profile did not restart: %v", err)
 	}
 	t.Cleanup(func() { _ = h.m.Kill(ns.ID) })
-	if ns.Runtime != config.RuntimeHost || !slices.Equal(ns.HostDropped, threeDrops) || ns.Bindings().Any() {
+	if ns.Runtime != config.RuntimeHost || !slices.Equal(ns.HostDropped, fourDrops) || ns.Bindings().Any() {
 		t.Fatalf("restarted: runtime=%s dropped=%q bindings=%+v", ns.Runtime, ns.HostDropped, ns.Bindings())
 	}
-	h.untouched2(t)
+	h.noBoxSideEffects(t)
 }
 
 func TestRestartBoxSessionStaysBox(t *testing.T) {
@@ -376,7 +376,7 @@ func TestSidecarRestoresHostDropped(t *testing.T) {
 	if !ok {
 		t.Fatal("session not restored")
 	}
-	if !slices.Equal(r.HostDropped, threeDrops) || !slices.Equal(r.Info().HostDropped, threeDrops) {
+	if !slices.Equal(r.HostDropped, fourDrops) || !slices.Equal(r.Info().HostDropped, fourDrops) {
 		t.Fatalf("restored HostDropped = %q", r.Info().HostDropped)
 	}
 }
@@ -406,7 +406,7 @@ func TestHostSpawnCloneProfileInPlace(t *testing.T) {
 	if slices.Contains(envOfHostProcess(t, s), "GH_REPO") {
 		t.Fatal("GH_REPO reached a host process")
 	}
-	h.untouched2(t)
+	h.noBoxSideEffects(t)
 }
 
 // A launcher that cannot list drops (no HostDropsResolver) still never hands a
