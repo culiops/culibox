@@ -6,7 +6,7 @@ How a credential reaches the agent. The profile and role names in it are example
 
 ## Several AWS accounts in one session
 
-An **AWS connection** is a saved, named way into one AWS account: its own source profile, role, region, session policy, egress hosts and optional write role. You create connections once, on the Credentials screen, and a boxed profile lists the ones it may use by name. A profile can list several, so one session can reach a staging account and a production account, say. Like the other credential bindings, a bound spawn is refused on the host tier, and on macOS it goes through the egress allowlist (the allowlist is verified on a Mac; AWS credentials through the broker there are not yet; see [docs/MACOS.md](MACOS.md#every-box)).
+An **AWS connection** is a saved, named way into one AWS account: its own source profile, role, region, session policy, egress hosts and optional write role. You create connections once, on the Credentials screen, and a boxed profile lists the ones it may use by name. A profile can list several, so one session can reach a staging account and a production account, say. Like the other credential bindings, a connection applies to Box only. A profile with one cannot be saved as host. You can still start a session of it on Host from New session (or the API with `host_drops_bindings: true`), and that session runs without the connection: the broker never serves a host session, and the agent has your own access. On macOS it goes through the egress allowlist (the allowlist is verified on a Mac; AWS credentials through the broker there are not yet; see [docs/MACOS.md](MACOS.md#every-box)).
 
 **1. Create the connections.** Open **Settings → Credentials**, choose **Add credential → Add AWS accounts**, and pick the host AWS profiles to use as the source profile (the screen can start the SSO sign-in for one that has expired). For each, choose the role, the region and, under **Advanced**, extra egress hosts, S3 read and an elevate role. Saving runs the base-role check below. The connection is stored in `credentials.json` in CuliBox's data directory and takes effect at once: no restart is needed, and a profile or a new session sees it straight away (sessions already running keep the definition they were spawned with).
 
@@ -34,7 +34,7 @@ Each entry takes `source_profile`, `role_arn`, `region`, `s3_read`, `egress_allo
 | `mode` | Optional. Absent means the agent role. `"sso_direct"` uses the SSO permission set directly (see [SSO role directly](#sso-role-directly-opt-in)); then `role_arn`, `elevate` and `s3_read` must be left out. |
 | `s3_read` | Optional. Buckets (`bucket`) or prefixes (`bucket/prefix/`) whose objects the agent may read; every other object read is denied. General purpose buckets only: S3 Express One Zone directory buckets are never readable through a connection, in the read scope or a write window, whatever this list says. |
 
-**2. Pick them in a profile.** Set the profile's runtime to the box, then tick the connections in the profile's **AWS connections** block. In `config.json` or the profile's JSON, set `"runtime": "box"` explicitly and list the names:
+**2. Pick them in a profile.** Set the profile's runtime to the box (a profile with connections cannot be saved as host), then tick the connections in the profile's **AWS connections** block. In `config.json` or the profile's JSON, set `"runtime": "box"` explicitly and list the names:
 
 ```json
 { "name": "claude-aws", "bin": "claude", "runtime": "box", "aws_connections": ["staging-read", "prod-read"] }
