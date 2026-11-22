@@ -21,6 +21,33 @@ import (
 // treats the file as untrusted even though only the host writes it.
 const maxRecordFile = 4 << 20
 
+// ErrInvalidID is returned for a record id that is not 32 lower-case hex
+// characters. ErrNotFound is returned for a well-formed id with no record.
+// Callers map them to 400 and 404; any other error is a server fault.
+var (
+	ErrInvalidID = errors.New("handback: invalid record id")
+	ErrNotFound  = fmt.Errorf("handback: record not found: %w", fs.ErrNotExist)
+)
+
+// errUnreadable marks a regular record file that is corrupt or over the cap.
+// Merge replaces such a file; a symlink or other non-regular file is a plain
+// error and is never replaced.
+var errUnreadable = errors.New("handback: unreadable record")
+
+const (
+	replacedNote = "an earlier record could not be read and was replaced"
+	sizeCapFmt   = "record size cap reached; %d weaker flagged files are not listed"
+)
+
+var sizeCapNoteRe = regexp.MustCompile(`(?:^|; )record size cap reached; \d+ weaker flagged files are not listed`)
+
+// stripSizeCapNote removes every size-cap note from a Truncated sentence, so
+// the writer can add exactly one current note.
+func stripSizeCapNote(s string) string {
+	s = sizeCapNoteRe.ReplaceAllString(s, "")
+	return strings.TrimPrefix(s, "; ")
+}
+
 // recordIDRe is the shape of a record id and of a record file name stem.
 var recordIDRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
@@ -81,6 +108,12 @@ func (s Store) Merge(key string, base Record, scanAt time.Time, r Report) (Recor
 	}
 	defer unlock()
 	rec, _, err := readRecordIn(dir, id)
+	replaced := false
+	if errors.Is(err, errUnreadable) {
+		// A corrupt or oversized regular file must not block this key
+		// forever: start over from base and this scan, and say so.
+		rec, replaced, err = Record{}, true, nil
+	}
 	if err != nil {
 		return Record{}, err
 	}
@@ -90,6 +123,9 @@ func (s Store) Merge(key string, base Record, scanAt time.Time, r Report) (Recor
 	rec.Inspected = r.Inspected
 	if r.Truncated != "" {
 		rec.Truncated = r.Truncated
+	}
+	if replaced {
+		rec.Truncated = joinNote(rec.Truncated, replacedNote)
 	}
 
 	byPath := make(map[string]Flag, len(rec.Flags)+len(r.Flags))
@@ -106,10 +142,14 @@ func (s Store) Merge(key string, base Record, scanAt time.Time, r Report) (Recor
 	}
 	rec.Flags = set.Sorted()
 	rec = cleanRecord(rec, id)
-	if err := writeRecordIn(dir, rec); err != nil {
-		return Record{}, err
+	return writeRecordIn(dir, rec)
+}
+
+func joinNote(a, b string) string {
+	if a == "" {
+		return b
 	}
-	return rec, nil
+	return a + "; " + b
 }
 
 // LastScan reports when key was last scanned; false when it never was.
@@ -171,12 +211,12 @@ func (s Store) Pending() ([]Record, error) {
 }
 
 // Reviewed marks a record reviewed: its flags and Truncated note are cleared,
-// LastScan is kept (the next in-place scan starts there). An unknown id is a
-// no-op so a double click is harmless; an id that is not 32 lower-case hex
-// characters is refused.
+// LastScan is kept (the next in-place scan starts there). A well-formed id with
+// no record is ErrNotFound, a malformed id is ErrInvalidID, a corrupt record is
+// neither.
 func (s Store) Reviewed(id string) error {
 	if !recordIDRe.MatchString(id) {
-		return fmt.Errorf("handback: invalid record id")
+		return ErrInvalidID
 	}
 	dir, unlock, err := s.lock()
 	if err != nil {
@@ -184,12 +224,16 @@ func (s Store) Reviewed(id string) error {
 	}
 	defer unlock()
 	rec, ok, err := readRecordIn(dir, id)
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return ErrNotFound
 	}
 	rec.Flags = []Flag{}
 	rec.Truncated = ""
-	return writeRecordIn(dir, rec)
+	_, err = writeRecordIn(dir, rec)
+	return err
 }
 
 // openRead opens the store dir as a Root; nil, nil when it does not exist yet.
@@ -257,11 +301,11 @@ func readRecordIn(dir *os.Root, id string) (Record, bool, error) {
 		return Record{}, false, err
 	}
 	if len(raw) > maxRecordFile {
-		return Record{}, false, fmt.Errorf("handback record %s is larger than %d bytes", name, maxRecordFile)
+		return Record{}, false, fmt.Errorf("handback record %s is larger than %d bytes: %w", name, maxRecordFile, errUnreadable)
 	}
 	var rec Record
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return Record{}, false, fmt.Errorf("handback record %s: %w", name, err)
+		return Record{}, false, fmt.Errorf("handback record %s: %v: %w", name, err, errUnreadable)
 	}
 	return cleanRecord(rec, id), true, nil
 }
@@ -301,44 +345,45 @@ func cleanRecord(rec Record, id string) Record {
 }
 
 // writeRecordIn writes through a temp file in the same dir and renames it over
-// the record (the rename replaces, never follows, a symlink at the name).
-func writeRecordIn(dir *os.Root, rec Record) error {
+// the record (the rename replaces, never follows, a symlink at the name). It
+// returns the record exactly as persisted: when 5,000 flags of 1,024-rune
+// strings would exceed the read cap, the weakest flags (the slice is sorted
+// strongest first) are dropped and Truncated gains one size-cap note (an
+// earlier one is replaced, not stacked; with no trim an earlier note stays,
+// since those flags are still not listed), rather
+// than writing a file the reader would refuse.
+func writeRecordIn(dir *os.Root, rec Record) (Record, error) {
 	data, err := json.Marshal(rec)
 	if err != nil {
-		return err
+		return Record{}, err
 	}
-	// 5,000 flags of 1,024-rune strings can exceed the read cap. Drop the
-	// weakest (the flags are sorted strongest first) rather than write a
-	// file the reader would refuse, and say so.
 	if len(data) > maxRecordFile && len(rec.Flags) > 0 {
-		total := len(rec.Flags)
-		keep := total
+		total, keep, base := len(rec.Flags), len(rec.Flags), stripSizeCapNote(rec.Truncated)
+		all := rec.Flags
 		for len(data) > maxRecordFile && keep > 0 {
 			keep = min(keep-1, keep*(maxRecordFile-4096)/len(data))
-			rec.Flags = rec.Flags[:max(keep, 0)]
-			note := fmt.Sprintf("record size cap reached; %d weaker flagged files are not listed", total-len(rec.Flags))
-			if rec.Truncated == "" {
-				rec.Truncated = note
-			} else {
-				rec.Truncated = SanitizePath(rec.Truncated + "; " + note)
-			}
+			keep = max(keep, 0)
+			rec.Flags = all[:keep]
+			// Rebuilt from the clean base every pass: the note never stacks,
+			// and the size check below includes it.
+			rec.Truncated = joinNote(base, fmt.Sprintf(sizeCapFmt, total-keep))
 			if data, err = json.Marshal(rec); err != nil {
-				return err
+				return Record{}, err
 			}
 		}
 	}
 	if len(data) > maxRecordFile {
-		return fmt.Errorf("handback record is larger than %d bytes", maxRecordFile)
+		return Record{}, fmt.Errorf("handback record is larger than %d bytes", maxRecordFile)
 	}
 	name := recordName(rec.ID)
 	var rnd [8]byte
 	if _, err := rand.Read(rnd[:]); err != nil {
-		return err
+		return Record{}, err
 	}
 	tmpName := name + ".tmp-" + hex.EncodeToString(rnd[:])
 	tmp, err := dir.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return err
+		return Record{}, err
 	}
 	ok := false
 	defer func() {
@@ -348,18 +393,18 @@ func writeRecordIn(dir *os.Root, rec Record) error {
 	}()
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return err
+		return Record{}, err
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return err
+		return Record{}, err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return Record{}, err
 	}
 	if err := dir.Rename(tmpName, name); err != nil {
-		return err
+		return Record{}, err
 	}
 	ok = true
-	return nil
+	return rec, nil
 }

@@ -1,9 +1,12 @@
 package handback
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -171,12 +174,24 @@ func TestStoreReviewedClearsKeepsLastScan(t *testing.T) {
 func TestStoreReviewedRejectsBadID(t *testing.T) {
 	s := newStore(t)
 	for _, id := range []string{"../x", "", "abc", strings.Repeat("g", 32), strings.Repeat("A", 32), strings.Repeat("a", 33), "../" + strings.Repeat("a", 29)} {
-		if err := s.Reviewed(id); err == nil {
-			t.Errorf("Reviewed(%q) = nil, want error", id)
+		if err := s.Reviewed(id); !errors.Is(err, ErrInvalidID) {
+			t.Errorf("Reviewed(%q) = %v, want ErrInvalidID", id, err)
 		}
 	}
-	if err := s.Reviewed(RecordID("unknown")); err != nil {
-		t.Errorf("Reviewed of an unknown valid id should be a no-op, got %v", err)
+}
+
+func TestStoreReviewedUnknownIDIsNotFound(t *testing.T) {
+	s := newStore(t)
+	err := s.Reviewed(RecordID("unknown"))
+	if !errors.Is(err, ErrNotFound) || !errors.Is(err, fs.ErrNotExist) || errors.Is(err, ErrInvalidID) {
+		t.Fatalf("Reviewed of a valid absent id = %v, want ErrNotFound (wrapping fs.ErrNotExist)", err)
+	}
+	// Also once the store dir exists and holds other records.
+	if _, err := s.Merge(InPlaceKey("/w"), Record{Kind: "in-place"}, time.Unix(1, 0), Report{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reviewed(RecordID("unknown")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got %v, want ErrNotFound", err)
 	}
 }
 
@@ -259,23 +274,30 @@ func TestStoreConcurrentMergesLoseNothing(t *testing.T) {
 	}
 }
 
-// Review Focus 3: the store's own files are untrusted.
+// Review Focus 3: the store's own files are untrusted. A symlink or other
+// non-regular file is refused everywhere and never replaced; a corrupt or
+// oversized regular file is refused for reads but Merge replaces it (R7), so
+// one bad file cannot block a key forever.
 func TestStoreRefusesBadRecordFiles(t *testing.T) {
 	key := InPlaceKey("/ws")
 	id := RecordID(key)
 	base := Record{Kind: "in-place", Workspace: "/ws"}
-	cases := map[string]func(t *testing.T, dir string){
-		"corrupt json": func(t *testing.T, dir string) {
+	cases := []struct {
+		name          string
+		plant         func(t *testing.T, dir string)
+		mergeReplaces bool
+	}{
+		{"corrupt json", func(t *testing.T, dir string) {
 			if err := os.WriteFile(filepath.Join(dir, id+".json"), []byte("{not json"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-		},
-		"over 4 MiB": func(t *testing.T, dir string) {
+		}, true},
+		{"over 4 MiB", func(t *testing.T, dir string) {
 			if err := os.WriteFile(filepath.Join(dir, id+".json"), []byte(`{"flags":[],"pad":"`+strings.Repeat("x", 4<<20)+`"}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
-		},
-		"symlink": func(t *testing.T, dir string) {
+		}, true},
+		{"symlink", func(t *testing.T, dir string) {
 			target := filepath.Join(t.TempDir(), "secret.json")
 			if err := os.WriteFile(target, []byte(`{"id":"x","kind":"in-place","last_scan":"2026-01-01T00:00:00Z","flags":[{"path":"p","classes":["archive"],"detail":"d"}]}`), 0o600); err != nil {
 				t.Fatal(err)
@@ -283,39 +305,73 @@ func TestStoreRefusesBadRecordFiles(t *testing.T) {
 			if err := os.Symlink(target, filepath.Join(dir, id+".json")); err != nil {
 				t.Fatal(err)
 			}
-		},
-		"directory": func(t *testing.T, dir string) {
+		}, false},
+		{"directory", func(t *testing.T, dir string) {
 			if err := os.Mkdir(filepath.Join(dir, id+".json"), 0o700); err != nil {
 				t.Fatal(err)
 			}
-		},
+		}, false},
 	}
-	for name, plant := range cases {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			s := newStore(t)
 			if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			plant(t, s.Dir)
+			tc.plant(t, s.Dir)
 			if _, _, err := s.LastScan(key); err == nil {
 				t.Error("LastScan: want error")
 			}
-			if _, err := s.Merge(key, base, time.Unix(1, 0), Report{}); err == nil {
-				t.Error("Merge: want error")
-			}
-			if err := s.Reviewed(id); err == nil {
-				t.Error("Reviewed: want error")
+			if err := s.Reviewed(id); err == nil || errors.Is(err, ErrNotFound) {
+				t.Errorf("Reviewed: want a non-NotFound error, got %v", err)
 			}
 			if _, err := s.Pending(); err == nil {
 				t.Error("Pending: want error")
 			}
-			if name == "symlink" {
-				// The target must be untouched by the refused calls.
-				if fi, err := os.Lstat(filepath.Join(s.Dir, id+".json")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
-					t.Errorf("the symlink was replaced or followed: %v %v", fi, err)
+			at := time.Unix(77, 0).UTC()
+			rec, err := s.Merge(key, base, at, Report{Flags: []Flag{fl("n", ClassArchive)}, Inspected: 3})
+			if !tc.mergeReplaces {
+				if err == nil {
+					t.Fatal("Merge: want error")
 				}
+				fi, err := os.Lstat(filepath.Join(s.Dir, id+".json"))
+				if err != nil || fi.Mode().IsRegular() {
+					t.Errorf("the non-regular entry was replaced or followed: %v %v", fi, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Merge over an unreadable record must succeed: %v", err)
+			}
+			if !strings.Contains(rec.Truncated, "an earlier record could not be read and was replaced") ||
+				len(rec.Flags) != 1 || rec.Flags[0].Path != "n" || !rec.LastScan.Equal(at) || rec.Workspace != "/ws" || rec.Inspected != 3 {
+				t.Fatalf("replacement record = %+v", rec)
+			}
+			// The file is healthy again.
+			if last, ok, err := s.LastScan(key); err != nil || !ok || !last.Equal(at) {
+				t.Fatalf("LastScan after replace = %v %v %v", last, ok, err)
+			}
+			// The note is not sticky when the report names its own truncation.
+			rec, err = s.Merge(key, base, at, Report{Truncated: "cap hit"})
+			if err != nil || rec.Truncated != "cap hit" && !strings.Contains(rec.Truncated, "cap hit") {
+				t.Fatalf("second merge = %+v %v", rec, err)
 			}
 		})
+	}
+}
+
+func TestStoreReplacedNoteJoinsReportTruncated(t *testing.T) {
+	s := newStore(t)
+	key := InPlaceKey("/ws")
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, RecordID(key)+".json"), []byte("junk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := s.Merge(key, Record{Kind: "in-place"}, time.Unix(1, 0), Report{Truncated: "depth cap"})
+	if err != nil || !strings.Contains(rec.Truncated, "depth cap") || !strings.Contains(rec.Truncated, "an earlier record could not be read and was replaced") {
+		t.Fatalf("%+v %v", rec, err)
 	}
 }
 
@@ -396,5 +452,84 @@ func TestStoreWriteTrimsToReadCap(t *testing.T) {
 	}
 	if p[0].Flags[0].Path != "strong.pdf" || !strings.Contains(p[0].Truncated, "record size cap") {
 		t.Fatalf("strongest must survive and the trim be reported: first=%q trunc=%q", p[0].Flags[0].Path, p[0].Truncated)
+	}
+}
+
+func bigFlags(n int) []Flag {
+	big := strings.Repeat("é", 1000)
+	var flags []Flag
+	for i := 0; i < n; i++ {
+		flags = append(flags, Flag{Path: fmt.Sprintf("%04d%s.zip", i, big), Classes: []Class{ClassArchive}, Detail: big, Target: big})
+	}
+	return flags
+}
+
+// Merge must return exactly what it persisted, including a trim.
+func TestStoreMergeReturnsWhatWasPersisted(t *testing.T) {
+	s := newStore(t)
+	key := InPlaceKey("/ws")
+	flags := append(bigFlags(DefaultLimits().MaxFlags), Flag{Path: "strong.pdf", Classes: []Class{ClassMismatch}, Detail: "d"})
+	rec, err := s.Merge(key, Record{Kind: "in-place", Workspace: "/ws"}, time.Unix(1, 0), Report{Flags: flags, Inspected: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Pending()
+	if err != nil || len(p) != 1 {
+		t.Fatal(p, err)
+	}
+	if !reflect.DeepEqual(rec.Flags, p[0].Flags) || rec.Truncated != p[0].Truncated || rec.ID != p[0].ID || !rec.LastScan.Equal(p[0].LastScan) || rec.Inspected != p[0].Inspected {
+		t.Fatalf("returned record differs from persisted: returned %d flags trunc %q, persisted %d flags trunc %q", len(rec.Flags), rec.Truncated, len(p[0].Flags), p[0].Truncated)
+	}
+	if len(rec.Flags) >= len(flags) {
+		t.Fatalf("expected a trim, got %d flags", len(rec.Flags))
+	}
+}
+
+// The size-cap note is rebuilt, never stacked, across iterations and merges.
+func TestStoreSizeCapNoteNeverAccumulates(t *testing.T) {
+	s := newStore(t)
+	key := InPlaceKey("/ws")
+	base := Record{Kind: "in-place"}
+	var rec Record
+	for i := 0; i < 2; i++ {
+		var err error
+		rec, err = s.Merge(key, base, time.Unix(int64(i), 0), Report{Flags: bigFlags(DefaultLimits().MaxFlags), Truncated: "walk cap"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := strings.Count(rec.Truncated, "record size cap reached"); n != 1 {
+			t.Fatalf("merge %d: %d size-cap notes in %q", i, n, rec.Truncated)
+		}
+		if !strings.Contains(rec.Truncated, "walk cap") {
+			t.Fatalf("merge %d lost the scan's own note: %q", i, rec.Truncated)
+		}
+	}
+	// A later merge without its own note keeps a single, current size-cap note.
+	rec, err := s.Merge(key, base, time.Unix(9, 0), Report{Flags: bigFlags(5)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(rec.Truncated, "record size cap reached"); n != 1 {
+		t.Fatalf("%d size-cap notes in %q", n, rec.Truncated)
+	}
+	// The note's count matches what was dropped from this very record.
+	var dropped int
+	if _, err := fmt.Sscanf(rec.Truncated[strings.Index(rec.Truncated, "record size cap reached; "):], "record size cap reached; %d weaker", &dropped); err != nil || dropped < 1 {
+		t.Fatalf("cannot read the dropped count from %q: %v", rec.Truncated, err)
+	}
+}
+
+func TestStripSizeCapNote(t *testing.T) {
+	for in, want := range map[string]string{
+		"":         "",
+		"walk cap": "walk cap",
+		"record size cap reached; 12 weaker flagged files are not listed":                                                                   "",
+		"walk cap; record size cap reached; 12 weaker flagged files are not listed":                                                         "walk cap",
+		"record size cap reached; 3 weaker flagged files are not listed; walk cap":                                                          "walk cap",
+		"a; record size cap reached; 3 weaker flagged files are not listed; record size cap reached; 9 weaker flagged files are not listed": "a",
+	} {
+		if got := stripSizeCapNote(in); got != want {
+			t.Errorf("stripSizeCapNote(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
