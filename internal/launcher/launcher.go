@@ -58,6 +58,13 @@ type SpawnSpec struct {
 	// setup, and the spawn is a box one. Applied by the session layer's Spawn; Build
 	// never reads it.
 	Clone *bool
+	// HostDropsAck is the caller's confirmation that a host run drops what the
+	// profile's box setup carries (config.HostDrops: bindings, context paths,
+	// box-only settings). Applied by the session layer's Spawn, which refuses a
+	// host spawn of such a profile without it; Build never reads it. It does not
+	// lift a box_only lock, and it is never persisted: a restart of a host
+	// session sets it itself.
+	HostDropsAck bool
 	// ExtraArgs are flags the session layer adds (the boxed config bundle's).
 	// Build places them after the option flags and BEFORE the "--" that ends
 	// options — appended afterwards, they would become operands.

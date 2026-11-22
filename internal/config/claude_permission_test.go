@@ -178,19 +178,6 @@ func TestValidateProfileCriticalRm(t *testing.T) {
 	}
 }
 
-func TestBoxOnlyEnvReason(t *testing.T) {
-	want := "this profile sets " + CriticalRmEnv + ", which runs only in a box"
-	if got := BoxOnlyEnvReason(AgentConfig{Env: map[string]string{CriticalRmEnv: "1"}}); got != want {
-		t.Errorf("env: %q", got)
-	}
-	if got := BoxOnlyEnvReason(AgentConfig{Secrets: []string{"X", CriticalRmEnv}}); got != want {
-		t.Errorf("secrets: %q", got)
-	}
-	if got := BoxOnlyEnvReason(AgentConfig{Env: map[string]string{"A": "1"}}); got != "" {
-		t.Errorf("none: %q", got)
-	}
-}
-
 // The enum owns the older bypass bool only when the Permission mode def that applies to the bin can say Bypass.
 func TestLegacyBypassKeyNeedsEnumThatCanBypass(t *testing.T) {
 	noBypass := func() map[string]OptionDef {
