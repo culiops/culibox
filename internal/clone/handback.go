@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/culiops/culibox/internal/handback"
 )
@@ -24,15 +25,22 @@ import (
 // hardened one with no replace refs and the program from gitexec.go.
 
 const (
-	maxRawToken     = 1 << 20 // one NUL-terminated token of the raw log (a path, or a meta line)
+	maxRawToken     = 1 << 20 // one NUL-terminated token of the raw log (a path, or a meta line); a longer path is skipped
+	maxStoredPath   = 4096    // bytes of a path kept for classification (its tail, so the extension survives)
+	maxSymlinkBytes = 4096    // a symlink target is read to here; PATH_MAX, so a longer one cannot be a real link
 	maxBatchHeader  = 512     // one "<id> <type> <size>" line of cat-file --batch
 	symlinkOutByGit = "symlink points outside the repository"
+	symlinkTooLong  = "symlink target longer than 4 KiB"
 )
 
 // blobIDRE is a full object id: SHA-1 (40) or SHA-256 (64) hex.
 var blobIDRE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // errStop ends a stream on purpose: the reader has what it needs.
+// maxScanPathBytes bounds the path text one scan keeps in memory. A var so a
+// test can lower it.
+var maxScanPathBytes = 64 << 20
+
 var errStop = errors.New("stream stopped by the reader")
 
 // branchEntry is one file a commit of the branch added or changed.
@@ -42,16 +50,26 @@ type branchEntry struct {
 	mode fs.FileMode // 0o644, 0o755 or fs.ModeSymlink
 }
 
-// blobInfo is what the scan knows about one blob. head is the first HeadBytes
-// (or the whole blob when smaller); read says head is complete.
+// blobInfo is what the scan knows about one blob. Its head (the first bytes) is
+// never kept: each head is
+// classified as soon as it is complete, so memory does not grow with the
+// number of candidates.
 type blobInfo struct {
 	size     int64
-	known    bool // cat-file --batch-check found it
-	head     []byte
-	sum      string
-	note     string // why sum is empty, when it is
-	read     bool
-	linkOnly bool // every entry using it is a symlink: its text is a target, not content to hash
+	known    bool   // cat-file --batch-check found it
+	note     string // why a flag on this blob carries no sum
+	read     bool   // its head was classified
+	linkOnly bool   // every entry using it is a symlink: its text is a target, not content to hash
+	uses     []int  // indexes into branchScan.entries
+}
+
+// headCap is how much of the blob is read: a symlink target stops at PATH_MAX,
+// anything else at HeadBytes.
+func (b *blobInfo) headCap() int {
+	if b.linkOnly {
+		return maxSymlinkBytes
+	}
+	return handback.HeadBytes
 }
 
 // InspectBranch flags what the commits base..ref added or changed in the repo
@@ -110,6 +128,7 @@ type branchScan struct {
 	reasons    []string
 	inspected  int
 	unreadable int
+	longPaths  int
 }
 
 // stream runs one hardened host git in of, handing stdout to w.
@@ -138,11 +157,17 @@ func (s *branchScan) stopped() bool {
 }
 
 func (s *branchScan) run(base, ref string) {
-	if err := s.collect(base, ref); err != nil {
-		if !s.stopped() {
-			s.reasons = append(s.reasons, "could not inspect: "+err.Error())
+	err := s.collect(base, ref)
+	if err != nil {
+		if s.stopped() {
+			return
 		}
-		return
+		s.reasons = append(s.reasons, "could not inspect: "+err.Error())
+	}
+	// What was listed before a failure is still inspected: a git that dies
+	// half-way through a long log must not erase what it had already said.
+	if s.longPaths > 0 {
+		s.reasons = append(s.reasons, fmt.Sprintf("%d paths longer than 1 MiB were not inspected", s.longPaths))
 	}
 	if len(s.entries) == 0 {
 		return
@@ -154,73 +179,127 @@ func (s *branchScan) run(base, ref string) {
 		return
 	}
 	s.readBlobs()
-	s.classify()
+	for _, id := range s.order {
+		if bi := s.blobs[id]; !bi.read {
+			s.unreadable += len(bi.uses)
+		}
+	}
 	if s.unreadable > 0 {
 		s.reasons = append(s.reasons, fmt.Sprintf("%d files could not be read", s.unreadable))
 	}
+}
+
+// storedPath is p cut to its last maxStoredPath bytes (at a rune boundary), so
+// a huge path costs bounded memory and still ends in its extension.
+func storedPath(p []byte) string {
+	if len(p) <= maxStoredPath {
+		return string(p)
+	}
+	p = p[len(p)-maxStoredPath:]
+	for len(p) > 0 && !utf8.RuneStart(p[0]) {
+		p = p[1:]
+	}
+	return string(p)
+}
+
+// rawMeta is an accepted raw-log line: the new blob and mode of one file.
+type rawMeta struct {
+	id   string
+	mode fs.FileMode
+}
+
+// parseRawMeta reads ":<old mode> <new mode> <old id> <new id> <status>". paths
+// is how many path tokens follow it, whatever its verdict: the log is read as
+// a strict alternation of meta line and path(s), so a file named like a meta
+// line cannot be mistaken for one. m is nil when the line is not a file
+// the branch added or changed (a deletion, a submodule, a tree, a line this does not know).
+func parseRawMeta(tok []byte) (m *rawMeta, paths int) {
+	f := strings.Fields(string(tok[1:]))
+	if len(f) != 5 {
+		return nil, 1
+	}
+	if f[4][0] == 'R' || f[4][0] == 'C' { // not produced with --no-renames; two paths if it ever is
+		return nil, 2
+	}
+	if !blobIDRE.MatchString(f[3]) || !strings.ContainsAny(f[4][:1], "AMT") {
+		return nil, 1
+	}
+	switch f[1] {
+	case "100644":
+		return &rawMeta{f[3], 0o644}, 1
+	case "100755":
+		return &rawMeta{f[3], 0o755}, 1
+	case "120000":
+		return &rawMeta{f[3], fs.ModeSymlink}, 1
+	}
+	return nil, 1
 }
 
 // collect lists the files the range added, modified or changed the type of,
 // newest commit first, as (path, blob, mode). A deleted file is not a file the
 // branch hands back, but its earlier versions are listed by the commits that
 // added them. No rename detection and no external diff or text conversion.
+// A failed log keeps what was read before it failed.
 func (s *branchScan) collect(base, ref string) error {
 	seen := map[string]bool{}
-	type meta struct {
-		id   string
-		mode fs.FileMode
-	}
-	var pending *meta
-	capped := false
-	split := &nulSplitter{max: maxRawToken, fn: func(tok []byte) error {
-		if pending != nil {
-			m := *pending
-			pending = nil
-			key := string(tok) + "\x00" + m.id + "\x00" + strconv.Itoa(int(m.mode))
-			if seen[key] {
+	var cur *rawMeta // the accepted meta line the next path token belongs to
+	pathsLeft := 0   // path tokens still owed to the last meta line
+	pathBytes := 0
+	capped, pathCapped := false, false
+	split := &nulSplitter{max: maxRawToken, fn: func(tok []byte, over bool) error {
+		if pathsLeft == 0 { // a meta line is due
+			if over || len(tok) == 0 || tok[0] != ':' {
 				return nil
 			}
-			if len(s.entries) >= s.lim.Candidates {
-				capped = true
-				return errStop
-			}
-			seen[key] = true
-			s.entries = append(s.entries, branchEntry{path: string(tok), id: m.id, mode: m.mode})
-			if s.blobs[m.id] == nil {
-				s.blobs[m.id] = &blobInfo{linkOnly: true}
-				s.order = append(s.order, m.id)
-			}
-			if m.mode != fs.ModeSymlink {
-				s.blobs[m.id].linkOnly = false
-			}
+			cur, pathsLeft = parseRawMeta(tok)
 			return nil
 		}
-		if len(tok) == 0 || tok[0] != ':' {
+		pathsLeft--
+		if pathsLeft > 0 || cur == nil {
 			return nil
 		}
-		// ":<old mode> <new mode> <old id> <new id> <status>", then the path.
-		f := strings.Fields(string(tok[1:]))
-		if len(f) != 5 || !blobIDRE.MatchString(f[3]) || !strings.ContainsAny(f[4][:1], "AMT") {
-			return nil // a deletion, a submodule, a tree, or a line this does not know
-		}
-		var mode fs.FileMode
-		switch f[1] {
-		case "100644":
-			mode = 0o644
-		case "100755":
-			mode = 0o755
-		case "120000":
-			mode = fs.ModeSymlink
-		default:
+		m := cur
+		cur = nil
+		if over {
+			s.longPaths++
 			return nil
 		}
-		pending = &meta{id: f[3], mode: mode}
+		p := storedPath(tok)
+		key := p + "\x00" + m.id + "\x00" + strconv.Itoa(int(m.mode))
+		if seen[key] {
+			return nil
+		}
+		if len(s.entries) >= s.lim.Candidates {
+			capped = true
+			return errStop
+		}
+		if pathBytes += len(p); pathBytes > maxScanPathBytes {
+			pathCapped = true
+			return errStop
+		}
+		seen[key] = true
+		s.entries = append(s.entries, branchEntry{path: p, id: m.id, mode: m.mode})
+		bi := s.blobs[m.id]
+		if bi == nil {
+			bi = &blobInfo{linkOnly: true}
+			s.blobs[m.id] = bi
+			s.order = append(s.order, m.id)
+		}
+		bi.uses = append(bi.uses, len(s.entries)-1)
+		if m.mode != fs.ModeSymlink {
+			bi.linkOnly = false
+		}
 		return nil
 	}}
 	err := s.stream(nil, split, "log", "--no-ext-diff", "--no-textconv", "--no-renames", "--format=", "--raw", "-r",
 		"--no-abbrev", "-z", "--diff-merges=first-parent", base+".."+ref, "--")
-	if capped && errors.Is(err, errStop) {
-		s.reasons = append(s.reasons, fmt.Sprintf("candidate cap of %d files reached; the older files of the branch were not inspected", s.lim.Candidates))
+	if errors.Is(err, errStop) {
+		switch {
+		case capped:
+			s.reasons = append(s.reasons, fmt.Sprintf("candidate cap of %d files reached; the older files of the branch were not inspected", s.lim.Candidates))
+		case pathCapped:
+			s.reasons = append(s.reasons, fmt.Sprintf("path storage cap of %d bytes reached; the older files of the branch were not inspected", maxScanPathBytes))
+		}
 		return nil
 	}
 	if err == nil {
@@ -252,7 +331,8 @@ func (s *branchScan) sizes() error {
 	return nil
 }
 
-// readBlobs reads the head of every known blob, and hashes what the caps allow.
+// readBlobs reads the head of every known blob, classifies it at once, and
+// hashes what the caps allow.
 func (s *branchScan) readBlobs() {
 	var hashed, headOnly, big []string
 	for _, id := range s.order {
@@ -261,7 +341,7 @@ func (s *branchScan) readBlobs() {
 		case !bi.known:
 		case bi.size == 0:
 			sum := sha256.Sum256(nil)
-			bi.read, bi.sum = true, hex.EncodeToString(sum[:])
+			s.done(bi, nil, hex.EncodeToString(sum[:]))
 		case bi.size > s.lim.HashPerFile:
 			if !bi.linkOnly {
 				bi.note = handback.NoteTooLarge
@@ -285,39 +365,31 @@ func (s *branchScan) readBlobs() {
 		}
 		s.bigHead(id)
 	}
-	// A hash that could not be made says why, so a flagged blob never has
-	// neither a sum nor a note.
-	for _, id := range hashed {
-		if bi := s.blobs[id]; !bi.read || bi.sum == "" {
-			bi.note = handback.NoteUnread
-			if s.ctx.Err() != nil {
-				bi.note = handback.NoteCancel
-			}
-		}
-	}
 }
 
-// batch reads ids through one cat-file --batch, keeping each head and, when
-// hash is set, hashing every byte. A blob the stream did not finish stays unread.
+// batch reads ids through one cat-file --batch, classifying each blob when its
+// head is complete and, when withSum is set, hashing every byte. A blob the
+// stream did not finish stays unread (counted by run).
 func (s *branchScan) batch(ids []string, withSum bool) {
 	if len(ids) == 0 || s.stopped() {
 		return
 	}
 	var cur *blobInfo
+	var head []byte
 	var h hash.Hash
 	var n int64
 	p := &batchParser{
 		start: func(id string, size int64) {
 			cur, n = s.blobs[id], 0
-			cur.head = make([]byte, 0, min(size, int64(handback.HeadBytes)))
+			head = make([]byte, 0, min(size, int64(cur.headCap())))
 			h = nil
 			if withSum {
 				h = sha256.New()
 			}
 		},
 		data: func(b []byte) {
-			if room := handback.HeadBytes - len(cur.head); room > 0 {
-				cur.head = append(cur.head, b[:min(room, len(b))]...)
+			if room := cur.headCap() - len(head); room > 0 {
+				head = append(head, b[:min(room, len(b))]...)
 			}
 			if h != nil {
 				h.Write(b)
@@ -325,12 +397,15 @@ func (s *branchScan) batch(ids []string, withSum bool) {
 			n += int64(len(b))
 		},
 		end: func(id string) {
-			if n == cur.size {
-				cur.read = true
-				if h != nil {
-					cur.sum = hex.EncodeToString(h.Sum(nil))
-				}
+			if n != cur.size {
+				return
 			}
+			sum := ""
+			if h != nil {
+				sum = hex.EncodeToString(h.Sum(nil))
+			}
+			s.done(cur, head, sum)
+			head = nil
 		},
 		missing: func(string) {},
 	}
@@ -339,21 +414,21 @@ func (s *branchScan) batch(ids []string, withSum bool) {
 	}
 }
 
-// bigHead reads only the first HeadBytes of a blob over the per-file cap: the
+// bigHead reads only the first bytes of a blob over the per-file cap: the
 // writer stops git once it has them.
 func (s *branchScan) bigHead(id string) {
 	bi := s.blobs[id]
 	var head []byte
 	w := writerFunc(func(p []byte) (int, error) {
-		head = append(head, p[:min(len(p), handback.HeadBytes-len(head))]...)
-		if len(head) >= handback.HeadBytes {
+		head = append(head, p[:min(len(p), bi.headCap()-len(head))]...)
+		if len(head) >= bi.headCap() {
 			return len(p), errStop
 		}
 		return len(p), nil
 	})
 	err := s.stream(nil, w, "cat-file", "blob", id)
 	if err == nil || errors.Is(err, errStop) {
-		bi.head, bi.read = head, true
+		s.done(bi, head, "")
 		return
 	}
 	if !s.stopped() {
@@ -365,49 +440,58 @@ type writerFunc func([]byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
-// classify turns every listed file into a flag, or into a count of files that
-// could not be read. It runs per entry, not per blob: one blob under two names
-// is two verdicts.
-func (s *branchScan) classify() {
-	for _, e := range s.entries {
-		bi := s.blobs[e.id]
-		if bi == nil || !bi.read {
-			s.unreadable++
-			continue
-		}
+// done classifies every file that uses bi, whose head (and sum, when hashed) is
+// now known. It runs per entry, not per blob: one blob under two names is two
+// verdicts. The head is not kept.
+func (s *branchScan) done(bi *blobInfo, head []byte, sum string) {
+	bi.read = true
+	for _, i := range bi.uses {
+		e := s.entries[i]
 		s.inspected++
 		if e.mode == fs.ModeSymlink {
-			target, _, _ := strings.Cut(string(bi.head), "\x00")
-			if handback.OutsideRoot(e.path, target) {
-				s.flags.Offer(handback.Flag{
-					Path:    handback.SanitizePath(e.path),
-					Classes: []handback.Class{handback.ClassSymlinkOut},
-					Detail:  symlinkOutByGit,
-					Target:  handback.SanitizePath(target),
-				}, nil)
-			}
+			s.symlink(e, bi, head)
 			continue
 		}
-		classes, detail := handback.Classify(path.Base(e.path), e.mode, bi.head)
+		classes, detail := handback.Classify(path.Base(e.path), e.mode, head)
 		if len(classes) == 0 {
 			continue
 		}
-		s.flags.Offer(handback.Flag{
-			Path:     handback.SanitizePath(e.path),
-			Classes:  classes,
-			Detail:   handback.SanitizePath(detail),
-			SHA256:   bi.sum,
-			HashNote: bi.note,
-		}, nil)
+		fl := handback.Flag{Path: handback.SanitizePath(e.path), Classes: classes, Detail: handback.SanitizePath(detail), SHA256: sum}
+		if sum == "" {
+			fl.HashNote = bi.note
+		}
+		s.flags.Offer(fl, nil)
 	}
 }
 
+// symlink judges a symlink entry from its target text alone. A target over
+// PATH_MAX cannot be a real link, and a read cut there could not tell where it
+// climbs to, so it is flagged as outward with the first bytes shown.
+func (s *branchScan) symlink(e branchEntry, bi *blobInfo, head []byte) {
+	target, _, _ := strings.Cut(string(head), "\x00")
+	detail := symlinkOutByGit
+	if bi.size > maxSymlinkBytes {
+		detail = symlinkTooLong
+	} else if !handback.OutsideRoot(e.path, target) {
+		return
+	}
+	s.flags.Offer(handback.Flag{
+		Path:    handback.SanitizePath(e.path),
+		Classes: []handback.Class{handback.ClassSymlinkOut},
+		Detail:  detail,
+		Target:  handback.SanitizePath(target),
+	}, nil)
+}
+
 // nulSplitter is a writer that calls fn for each NUL-terminated token written
-// to it, across any split of the writes. A token over max bytes is an error.
+// to it, across any split of the writes. A token over max bytes is not kept: fn
+// gets over=true and no bytes once its NUL arrives, and the next token starts
+// clean, so one hostile path cannot end the stream.
 type nulSplitter struct {
-	max int
-	fn  func(tok []byte) error
-	buf []byte
+	max        int
+	fn         func(tok []byte, over bool) error
+	buf        []byte
+	discarding bool
 }
 
 func (n *nulSplitter) Write(p []byte) (int, error) {
@@ -415,21 +499,28 @@ func (n *nulSplitter) Write(p []byte) (int, error) {
 	for len(p) > 0 {
 		i := bytes.IndexByte(p, 0)
 		if i < 0 {
-			if len(n.buf)+len(p) > n.max {
-				return 0, errors.New("git log: a path is longer than the scan accepts")
+			switch {
+			case n.discarding:
+			case len(n.buf)+len(p) > n.max:
+				n.buf, n.discarding = n.buf[:0], true
+			default:
+				n.buf = append(n.buf, p...)
 			}
-			n.buf = append(n.buf, p...)
 			break
 		}
-		tok := p[:i]
-		if len(n.buf) > 0 {
-			if len(n.buf)+i > n.max {
-				return 0, errors.New("git log: a path is longer than the scan accepts")
-			}
-			n.buf = append(n.buf, tok...)
-			tok = n.buf
+		var err error
+		switch {
+		case n.discarding:
+			n.discarding = false
+			err = n.fn(nil, true)
+		case len(n.buf)+i > n.max:
+			err = n.fn(nil, true)
+		case len(n.buf) > 0:
+			n.buf = append(n.buf, p[:i]...)
+			err = n.fn(n.buf, false)
+		default:
+			err = n.fn(p[:i], false)
 		}
-		err := n.fn(tok)
 		n.buf = n.buf[:0]
 		if err != nil {
 			return 0, err
@@ -441,7 +532,7 @@ func (n *nulSplitter) Write(p []byte) (int, error) {
 
 // close reports a token cut off before its terminating NUL.
 func (n *nulSplitter) close() error {
-	if len(n.buf) > 0 {
+	if len(n.buf) > 0 || n.discarding {
 		return errors.New("git log: output ended inside a token")
 	}
 	return nil
