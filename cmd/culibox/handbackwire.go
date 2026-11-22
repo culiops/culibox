@@ -155,7 +155,7 @@ func (h *handbackHooks) ScanInPlace(ctx context.Context, workspace string, since
 	if err != nil {
 		return session.HandbackNote{}, fmt.Errorf("cannot record what was flagged in %s: %w", workspace, err)
 	}
-	return session.HandbackNote{ID: rec.ID, Count: len(rep.Flags), InPlace: true}, nil
+	return session.HandbackNote{ID: rec.ID, Count: len(rep.Flags), InPlace: true, Truncated: rep.Truncated != ""}, nil
 }
 
 func joinNotes(a, b string) string {
@@ -226,13 +226,14 @@ func (h *handbackHooks) recordClone(of, branch, hostRef string, rep handback.Rep
 	if err != nil {
 		return session.HandbackNote{}, err
 	}
-	return session.HandbackNote{ID: rec.ID, Count: len(rep.Flags), Branch: hostRef}, nil
+	return session.HandbackNote{ID: rec.ID, Count: len(rep.Flags), Branch: hostRef, Truncated: rep.Truncated != ""}, nil
 }
 
 // flaggedOf records every branch of a return that came home and lists the ones
-// with flags. A record that cannot be written is logged and said in warnings
-// (never dropped silently: the flags would be lost with it). Branches are
-// visited in sorted order so the summary is stable.
+// with flags or with a scan that was cut short. A record that cannot be
+// written is logged and said in warnings (never dropped silently: the flags
+// would be lost with it). Branches are visited in sorted order so the summary
+// is stable.
 func (h *handbackHooks) flaggedOf(of string, reports map[string]handback.Report) (flagged []session.HandbackNote, warnings []string) {
 	if h == nil {
 		return nil, nil
@@ -250,7 +251,7 @@ func (h *handbackHooks) flaggedOf(of string, reports map[string]handback.Report)
 			warnings = append(warnings, msg)
 			continue
 		}
-		if note.Count > 0 {
+		if note.Count > 0 || note.Truncated {
 			flagged = append(flagged, note)
 		}
 	}

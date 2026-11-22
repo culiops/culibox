@@ -533,3 +533,27 @@ func TestStripSizeCapNote(t *testing.T) {
 		}
 	}
 }
+
+// R10: a scan that was cut short (or never ran) with nothing flagged must still
+// reach the user; Reviewed clears the note and the record leaves Pending.
+func TestStorePendingKeepsAZeroFlagRecordWithATruncatedNote(t *testing.T) {
+	s := newStore(t)
+	at := time.Unix(7000, 0).UTC()
+	cut, err := s.Merge(InPlaceKey("/cut"), Record{Kind: KindInPlace, Workspace: "/cut"}, at, Report{Truncated: "walk time budget of 30s reached"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Merge(InPlaceKey("/quiet"), Record{Kind: KindInPlace, Workspace: "/quiet"}, at, Report{Inspected: 3}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Pending()
+	if err != nil || len(p) != 1 || p[0].ID != cut.ID || len(p[0].Flags) != 0 || p[0].Truncated == "" {
+		t.Fatalf("Pending = %+v %v, want only the cut-short record", p, err)
+	}
+	if err := s.Reviewed(cut.ID); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Pending(); err != nil || len(p) != 0 {
+		t.Fatalf("after Reviewed: %+v %v", p, err)
+	}
+}

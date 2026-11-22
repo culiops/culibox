@@ -619,3 +619,48 @@ func TestBoxLayerOnStopIsLateBound(t *testing.T) {
 		t.Fatal("a removed hook was still called")
 	}
 }
+
+// R16: a note says when its scan was cut short, so a count of 0 is not read
+// later as "nothing flagged".
+func TestHandbackNoteSaysTruncated(t *testing.T) {
+	ws := realDir(t)
+	started := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	t.Run("in-place scan cut short", func(t *testing.T) {
+		h := newStubHandback(t, nil)
+		h.rep = handback.Report{Truncated: "walk time budget of 30s reached"}
+		note, err := h.ScanInPlace(context.Background(), ws, started, true)
+		if err != nil || note.Count != 0 || !note.Truncated {
+			t.Fatalf("note = %+v, %v; want Count 0, Truncated", note, err)
+		}
+	})
+	t.Run("in-place scan that stopped on a path change", func(t *testing.T) {
+		h := newStubHandback(t, nil)
+		note, err := h.ScanInPlace(context.Background(), filepath.Join(ws, "gone"), started, true)
+		if err != nil || !note.Truncated {
+			t.Fatalf("note = %+v, %v; want Truncated", note, err)
+		}
+	})
+	t.Run("in-place scan that ran in full", func(t *testing.T) {
+		h := newStubHandback(t, nil)
+		h.rep = handback.Report{Inspected: 2}
+		note, err := h.ScanInPlace(context.Background(), ws, started, true)
+		if err != nil || note.Truncated {
+			t.Fatalf("note = %+v, %v; want not Truncated", note, err)
+		}
+	})
+	t.Run("a clone branch with nothing flagged but cut short is listed", func(t *testing.T) {
+		of := "/home/u/repo"
+		h := newStubHandback(t, nil)
+		sum := returnSummaryOf(session.ReturnOnExit, of, h.handbackHooks, clone.ReturnResult{
+			Home: []string{"box/x", "box/y"},
+			Handback: map[string]handback.Report{
+				"box/x": {Truncated: "inspection unavailable"},
+				"box/y": {Inspected: 4},
+			},
+		})
+		want := session.HandbackNote{ID: handback.RecordID(handback.CloneKey(of, "x")), Count: 0, Branch: "box/x", Truncated: true}
+		if len(sum.Flagged) != 1 || sum.Flagged[0] != want {
+			t.Fatalf("Flagged = %+v, want only %+v", sum.Flagged, want)
+		}
+	})
+}

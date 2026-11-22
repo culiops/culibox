@@ -28,6 +28,9 @@ type HandbackNote struct {
 	Count   int    `json:"count"`
 	Branch  string `json:"branch,omitempty"`
 	InPlace bool   `json:"in_place,omitempty"`
+	// Truncated is set when the scan was cut short, could not run or stopped
+	// with an internal error, so a Count of 0 is not read as "nothing flagged".
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // HandbackHooks is what scanning an in-place workspace needs from the handback

@@ -166,7 +166,9 @@ func (s Store) LastScan(key string) (time.Time, bool, error) {
 	return rec.LastScan, true, nil
 }
 
-// Pending returns the records that still hold at least one flag, newest
+// Pending returns the records that still hold at least one flag, or a
+// Truncated note (a scan that was cut short, could not run or stopped with an
+// internal error must reach the user even with nothing flagged), newest
 // LastScan first. A record file that cannot be trusted is skipped and
 // reported in the returned error (errors.Join), so one bad file does not hide
 // the others: callers should use the records even when err is not nil.
@@ -197,7 +199,7 @@ func (s Store) Pending() ([]Record, error) {
 			errs = append(errs, err)
 			continue
 		}
-		if ok && len(rec.Flags) > 0 {
+		if ok && (len(rec.Flags) > 0 || rec.Truncated != "") {
 			out = append(out, rec)
 		}
 	}
