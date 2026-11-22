@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel,
-  tierHostDrops, tierDropsLine,
+  tierHostDrops, tierDropsLine, tierHasCredentialDrop,
 } = require("../static/tierpick.js");
 
 const home = "/home/u";
@@ -66,8 +66,24 @@ test("tierDropsLine joins like config.JoinKinds and says what Host does instead 
   assert.strictEqual(tierDropsLine(["AWS binding", "GitHub binding"]),
     "Not on Host: AWS binding and GitHub binding." + tail);
   assert.strictEqual(tierDropsLine(["AWS binding"]), "Not on Host: AWS binding." + tail);
-  assert.strictEqual(tierDropsLine(["a", "b", "c"]), "Not on Host: a, b and c." + tail);
+  assert.strictEqual(tierDropsLine(["AWS binding", "context paths", "token binding"]),
+    "Not on Host: AWS binding, context paths and token binding." + tail);
   assert.strictEqual(tierDropsLine([]), "");
+});
+
+test("tierHasCredentialDrop: only the AWS, GitHub and token bindings count as credentials (#359)", () => {
+  assert.strictEqual(tierHasCredentialDrop(["context paths", "AWS binding"]), true);
+  assert.strictEqual(tierHasCredentialDrop(["GitHub binding"]), true);
+  assert.strictEqual(tierHasCredentialDrop(["token binding"]), true);
+  assert.strictEqual(tierHasCredentialDrop(["context paths"]), false);
+  assert.strictEqual(tierHasCredentialDrop(["context paths", "a box-only setting"]), false);
+  assert.strictEqual(tierHasCredentialDrop([]), false);
+});
+
+test("tierDropsLine has no logins tail when nothing credential drops (#359)", () => {
+  assert.strictEqual(tierDropsLine(["context paths"]), "Not on Host: context paths.");
+  assert.strictEqual(tierDropsLine(["context paths", "token binding"]),
+    "Not on Host: context paths and token binding. The agent uses this machine's own logins (~/.aws, gh) instead.");
 });
 
 test("tierPreselect: a host profile with host_drops opens on Box; a clone still wins on its workspace (#359)", () => {
@@ -90,6 +106,14 @@ test("tierModel: Host stays pickable with host_drops, and its card has the Not o
   assert.deepStrictEqual(none.rows.map((x) => x.k), ["Your folder", "Rest of machine"]);
   const box = m.cards[0];
   assert.ok(!box.rows.some((x) => x.k === "Not on Host"));
+});
+
+test("tierModel: the Not on Host row has no logins tail when only non-credential items drop (#359)", () => {
+  const p = { name: "ctx", runtime: "host", host_drops: ["context paths"] };
+  const host = tierModel({ profile: p, cwd: "/home/u/x", home, picked: "", short }).cards[2];
+  const r = rowOf(host, "Not on Host");
+  assert.strictEqual(r.k + ": " + flat(r), "Not on Host: context paths.");
+  assert.strictEqual(r.k + ": " + flat(r), tierDropsLine(p.host_drops));
 });
 
 test("tierPreselect: clone at its repo or clone dir, else host if saved so, else in place", () => {
@@ -879,7 +903,8 @@ test("hostDropsConfirm asks with the exact copy and the drops as a bullet list, 
   const o = asked[0];
   assert.strictEqual(o.title, "Start on Host without its bindings?");
   assert.strictEqual(o.body, "infra will run with your user's full access to this machine. These do not apply on Host:");
-  assert.strictEqual(o.hint, "The agent uses this machine's own logins (~/.aws, gh) instead. Box keeps them.");
+  assert.strictEqual(o.hint, undefined, "the default hint stays: the logins note is in the body, where askFitHint cannot hide it");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(o.notes)), [["The agent uses this machine's own logins (~/.aws, gh) instead. Box keeps them."]]);
   assert.strictEqual(o.confirmLabel, "Start on Host");
   assert.strictEqual(o.danger, true);
   assert.strictEqual(o.focusCancel, true);
@@ -887,6 +912,18 @@ test("hostDropsConfirm asks with the exact copy and the drops as a bullet list, 
   const ul = nodes[0];
   assert.strictEqual(ul.tag, "ul");
   assert.deepStrictEqual(ul.querySelectorAll("li").map((li) => li.textContent), ["AWS binding", "GitHub binding"]);
+});
+
+test("hostDropsConfirm with no credential drop names box settings and has no logins sentence (#359)", async () => {
+  const asked = [];
+  const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; } });
+  await vm.runInContext('hostDropsConfirm("infra", ["context paths"])', pg.ctx);
+  const o = asked[0];
+  assert.strictEqual(o.title, "Start on Host without its box settings?");
+  assert.strictEqual(o.hint, undefined);
+  assert.ok(!o.notes || o.notes.length === 0, "no logins note");
+  const ul = (Array.isArray(o.extra) ? o.extra : [o.extra])[0];
+  assert.deepStrictEqual(ul.querySelectorAll("li").map((li) => li.textContent), ["context paths"]);
 });
 
 test("hostDropsConfirm resolves what askConfirm resolves (#359)", async () => {

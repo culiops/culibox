@@ -171,7 +171,7 @@ func TestHostSpawnWithDropsNeedsAck(t *testing.T) {
 	if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "host_drops_bindings") {
 		t.Fatalf("err = %v, want ErrUnboxableWorkspace naming host_drops_bindings", err)
 	}
-	want := `profile "p": this profile has AWS binding, GitHub binding, token binding and context paths, which do not apply on the host; confirm to start it there without them (host_drops_bindings: true)`
+	want := `profile "p": on the host this profile runs without its AWS binding, GitHub binding, token binding and context paths; confirm to start it there (host_drops_bindings: true)`
 	if err.Error() != want {
 		t.Fatalf("err = %q\nwant  %q", err, want)
 	}

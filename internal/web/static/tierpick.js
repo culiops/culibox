@@ -56,9 +56,19 @@ function tierHostDrops(profile) {
 // What Host does instead of the dropped bindings; the card row, the confirm's hint and the Access tab say it the same way.
 const TP_DROPS_TAIL = "The agent uses this machine's own logins (~/.aws, gh) instead.";
 
-// tierDropsLine: the Host card's warning as one sentence ("" when nothing is dropped).
+// The drop items that are credentials (ProfileView.host_drops names): Host swaps these for the machine's own logins.
+const TP_CREDENTIAL_DROPS = ["AWS binding", "GitHub binding", "token binding"];
+
+// tierHasCredentialDrop: true when at least one dropped item is a credential binding. Context paths and box-only settings are not,
+// so "uses this machine's own logins instead" would claim a swap that did not happen.
+function tierHasCredentialDrop(drops) {
+  return Array.isArray(drops) && drops.some((d) => TP_CREDENTIAL_DROPS.includes(d));
+}
+
+// tierDropsLine: the Host card's warning as one sentence ("" when nothing is dropped). The logins tail only when a credential drops.
 function tierDropsLine(drops) {
-  return drops && drops.length ? "Not on Host: " + tierJoin(drops) + ". " + TP_DROPS_TAIL : "";
+  if (!drops || !drops.length) return "";
+  return "Not on Host: " + tierJoin(drops) + "." + (tierHasCredentialDrop(drops) ? " " + TP_DROPS_TAIL : "");
 }
 
 // tierHostState: Host is off when the server says the profile may not run there (ProfileView.host_block). host_drops does not
@@ -128,7 +138,11 @@ function tierModel(o) {
     ],
   };
   const drops = tierHostDrops(p);
-  if (drops.length) rows.host.push({ k: "Not on Host", v: [{ b: tierJoin(drops) + "." }, { t: " " + TP_DROPS_TAIL }] });
+  if (drops.length) {
+    const v = [{ b: tierJoin(drops) + "." }];
+    if (tierHasCredentialDrop(drops)) v.push({ t: " " + TP_DROPS_TAIL });
+    rows.host.push({ k: "Not on Host", v });
+  }
   const titles = { box: "Box · in place", clone: "Box · clone", host: "Host · not contained" };
 
   const cards = TP_KEYS.map((key) => ({
@@ -349,15 +363,17 @@ function spawnWhere() {
 }
 
 // hostDropsConfirm: the question before a Host spawn of a profile whose bindings Host drops. Resolves true only on "Start on Host";
-// Cancel has the focus. The drops are text nodes in a list, never markup.
+// Cancel has the focus. The drops are text nodes in a list, never markup. The logins sentence is a note in the body (the footer
+// hint is hidden when too wide) and only when a credential drops: otherwise the title names box settings and there is no sentence.
 async function hostDropsConfirm(profileName, drops) {
+  const creds = tierHasCredentialDrop(drops);
   const ul = tierEl("ul", "ask-bullets");
   for (const d of drops) ul.append(tierEl("li", "", d));
   return askConfirm({
-    title: "Start on Host without its bindings?",
+    title: creds ? "Start on Host without its bindings?" : "Start on Host without its box settings?",
     body: profileName + " will run with your user's full access to this machine. These do not apply on Host:",
     extra: [ul],
-    hint: TP_DROPS_TAIL + " Box keeps them.",
+    notes: creds ? [[TP_DROPS_TAIL + " Box keeps them."]] : [],
     confirmLabel: "Start on Host",
     danger: true,
     focusCancel: true,
@@ -373,6 +389,6 @@ function spawnCwdFor(w) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel, tierVmFetch,
-    tierHostDrops, tierDropsLine,
+    tierHostDrops, tierDropsLine, tierHasCredentialDrop,
   };
 }

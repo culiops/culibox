@@ -1993,8 +1993,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				return nil, err
 			}
 			if len(drops) > 0 && !spec.HostDropsAck {
-				return nil, profileRefusal(spec.Agent, "this profile has "+config.JoinKinds(drops)+
-					", which do not apply on the host; confirm to start it there without them (host_drops_bindings: true)")
+				return nil, profileRefusal(spec.Agent, "on the host this profile runs without its "+config.JoinKinds(drops)+
+					"; confirm to start it there (host_drops_bindings: true)")
 			}
 			hostDropped = drops
 		}
