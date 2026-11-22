@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -174,11 +175,26 @@ type stopWriter struct {
 	err  error
 }
 
-func (s *stopWriter) Write(p []byte) (int, error) {
+// errWriterPanicked is what Stream returns when the caller's writer panicked.
+// os/exec runs the writer on its own copy goroutine, so a panic there (a parser
+// meeting hostile bytes) would not reach any recover of the caller and would
+// kill the process. It is turned into this error here, the one place every
+// streamed byte passes through, which also stops git.
+var errWriterPanicked = errors.New("the stream's writer panicked")
+
+func (s *stopWriter) Write(p []byte) (n int, err error) {
 	if s.err != nil {
 		return 0, s.err
 	}
-	n, err := s.w.Write(p)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("clone: a git output reader stopped with an internal error: %v", r)
+			n, err = 0, errWriterPanicked
+			s.err = err
+			s.stop()
+		}
+	}()
+	n, err = s.w.Write(p)
 	if err != nil {
 		s.err = err
 		s.stop()

@@ -632,3 +632,26 @@ func TestFetchSurvivesAPanickingHandbackScan(t *testing.T) {
 		t.Errorf("Fetch = ref %q, Handback %+v", res.Ref, res.Handback)
 	}
 }
+
+// panicWriterGit is the real git, but the writer InspectBranch hands to Stream
+// panics on its first write: the panic then happens on os/exec's copy
+// goroutine, where the parsers of box-written bytes really run.
+type panicWriterGit struct{ ExecGit }
+
+func (p panicWriterGit) Stream(ctx context.Context, dir string, env []string, stdin io.Reader, stdout io.Writer, args ...string) error {
+	return p.ExecGit.Stream(ctx, dir, env, stdin, panicOnWrite{}, args...)
+}
+
+type panicOnWrite struct{}
+
+func (panicOnWrite) Write([]byte) (int, error) { panic("hostile bytes") }
+
+func TestInspectBranchSurvivesAParserPanicOnTheStreamGoroutine(t *testing.T) {
+	x := newBranchFx(t)
+	x.write("tool.pdf", string(elfBytes(100, 1)), 0o644)
+	x.commit("elf")
+	rep := InspectBranch(context.Background(), panicWriterGit{x.g}, x.of, x.base, "refs/heads/box", handback.DefaultLimits())
+	if rep.Truncated != scanPanickedNote || rep.Flags == nil || len(rep.Flags) != 0 {
+		t.Fatalf("report = %+v, want the internal-error note and no flags", rep)
+	}
+}

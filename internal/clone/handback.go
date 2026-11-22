@@ -92,8 +92,18 @@ func (b *blobInfo) headCap() int {
 // per-file cap is read by its own cat-file that stops after the head, so a
 // 100 MiB blob costs 8 KiB of reading. One blob at two paths is classified at
 // each path, because the extension is part of the verdict.
-func InspectBranch(ctx context.Context, g Git, of, base, ref string, lim handback.Limits) handback.Report {
-	rep := handback.Report{Flags: []handback.Flag{}}
+func InspectBranch(ctx context.Context, g Git, of, base, ref string, lim handback.Limits) (rep handback.Report) {
+	// A panic while reading what a box wrote (a bug met on hostile git data,
+	// including one a stream reader raised on os/exec's goroutine, which
+	// stopWriter hands back here) must not take the daemon down: the callers
+	// run in the return goroutine. The report says the scan stopped.
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("clone: inspecting %s of %s stopped with an internal error: %v", ref, of, p)
+			rep = handback.Report{Flags: []handback.Flag{}, Truncated: scanPanickedNote}
+		}
+	}()
+	rep = handback.Report{Flags: []handback.Flag{}}
 	sg, ok := g.(StreamGit)
 	if !ok {
 		rep.Truncated = "inspection unavailable"
@@ -116,20 +126,6 @@ func InspectBranch(ctx context.Context, g Git, of, base, ref string, lim handbac
 
 // scanPanickedNote is the report's sentence when the scan panicked.
 const scanPanickedNote = "the scan stopped with an internal error"
-
-// inspectBranchSafely is InspectBranch for a caller that must not die with it:
-// Fetch runs it in the return goroutine, and a bug met on hostile git data
-// would otherwise take the whole daemon down. A panic becomes a report that
-// says the scan stopped; the branch has already come home either way.
-func inspectBranchSafely(ctx context.Context, g Git, of, base, ref string) (rep handback.Report) {
-	defer func() {
-		if p := recover(); p != nil {
-			log.Printf("clone fetch: inspecting %s of %s stopped with an internal error: %v", ref, of, p)
-			rep = handback.Report{Flags: []handback.Flag{}, Truncated: scanPanickedNote}
-		}
-	}()
-	return InspectBranch(ctx, g, of, base, ref, handback.DefaultLimits())
-}
 
 type branchScan struct {
 	ctx      context.Context
@@ -154,6 +150,12 @@ func (s *branchScan) stream(stdin io.Reader, w io.Writer, args ...string) error 
 	err := s.sg.Stream(s.ctx, s.of, noReplaceEnv(), stdin, w, hardened(args...)...)
 	if err == nil || errors.Is(err, errStop) {
 		return err
+	}
+	if errors.Is(err, errWriterPanicked) {
+		// A parser of box-written bytes panicked (on os/exec's goroutine; git is
+		// already stopped). What it left is not trusted: hand the panic to
+		// inspectBranchSafely on this goroutine, which reports the scan as stopped.
+		panic(err)
 	}
 	if s.ctx.Err() != nil {
 		return s.ctx.Err()

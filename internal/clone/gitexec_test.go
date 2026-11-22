@@ -73,6 +73,46 @@ func TestExecGitStreamStopsOnWriterError(t *testing.T) {
 	}
 }
 
+// panicAfter is a writer that panics once n bytes went through, as a parser
+// would on hostile bytes. os/exec calls it on its own copy goroutine.
+type panicAfter struct{ n, got int }
+
+func (p *panicAfter) Write(b []byte) (int, error) {
+	p.got += len(b)
+	if p.got >= p.n {
+		panic("hostile bytes")
+	}
+	return len(b), nil
+}
+
+// The writer runs on os/exec's goroutine, not the caller's: a panic in it must
+// come back as an error that stops git, never crash the process.
+func TestExecGitStreamTurnsAWriterPanicIntoAnError(t *testing.T) {
+	g, err := NewExecGit()
+	if err != nil {
+		t.Skip("no git on PATH")
+	}
+	dir := t.TempDir()
+	fixtureGit(t, dir, "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "big"), bytes.Repeat([]byte("x"), 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSpace(string(mustRun(t, g, dir, "hash-object", "-w", "big")))
+	in := strings.NewReader(strings.Repeat(id+"\n", 50))
+	marker := fmt.Sprintf("user.name=panic-marker-%d", time.Now().UnixNano())
+	start := time.Now()
+	err = g.Stream(context.Background(), dir, CleanEnv(), in, &panicAfter{n: 10}, hardened("-c", marker, "cat-file", "--batch")...)
+	if !errors.Is(err, errWriterPanicked) {
+		t.Fatalf("err = %v, want errWriterPanicked", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("Stream took %s to stop", d)
+	}
+	if n := gitProcsWith(t, marker); n != 0 {
+		t.Errorf("%d git process(es) left running", n)
+	}
+}
+
 func TestExecGitStreamDeliversOutputAndStderr(t *testing.T) {
 	g, err := NewExecGit()
 	if err != nil {
