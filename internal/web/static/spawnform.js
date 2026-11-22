@@ -165,6 +165,8 @@ function spawnPayload(f) {
   // login: the Settings "Log in" session; the server drops the profile's own
   // auth and accepts it only for a named claude account on the host tier.
   if (v.login) req.login = true;
+  // host_drops_bindings: the user said yes to a Host run without the profile's bindings (hostDropsConfirm). Without it the server refuses.
+  if (v.hostDropsBindings === true) req.host_drops_bindings = true;
   const prompt = String(v.prompt || "").trim();
   if (prompt && promptFieldVisible(v.profile)) req.prompt = prompt;
   if (repliesFieldVisible(v.profile)) req.replyable = !!v.replyable;

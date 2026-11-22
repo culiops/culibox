@@ -261,6 +261,7 @@ function accessModel(o) {
     : { mode: "", allowed: 0, denied: 0 };
   const drops = accDep("dropsRow", "./steerrail.js")(s);
   const locked = accDep("lockedRow", "./steerrail.js")(s);
+  const hostDropped = accDep("hostDroppedRow", "./steerrail.js")(s);
   const cloneParts = accDep("cloneParts", "./steerrail.js");
   const cp = s.clone ? cloneParts(s.clone, s.agent) : { warn: [], info: [] };
   const containment = {
@@ -275,6 +276,7 @@ function accessModel(o) {
     readable: Array.isArray(s.context_paths) ? s.context_paths.map(String) : [],
     clone: s.clone_of || s.clone ? { of: s.clone_of || "", warn: cp.warn, info: cp.info } : null,
     dropped: drops || null,
+    hostDropped: hostDropped || null,
     locked: locked || null,
   };
 

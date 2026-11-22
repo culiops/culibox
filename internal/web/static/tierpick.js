@@ -42,7 +42,27 @@ function tierWhy(s) {
   return /[.!?]$/.test(cap) ? cap : cap + ".";
 }
 
-// tierHostState: Host is off when the server says the profile may not run there (ProfileView.host_block).
+// tierHostDrops: what a Host run of the profile leaves out (ProfileView.host_drops, "AWS binding"...). Empty when it leaves nothing.
+function tierHostDrops(profile) {
+  const d = profile && profile.host_drops;
+  return Array.isArray(d) ? d.filter((x) => typeof x === "string" && x !== "") : [];
+}
+
+// tierJoinDrops: prose join like config.JoinKinds: "a", "a and b", "a, b and c".
+function tierJoinDrops(drops) {
+  return drops.length < 2 ? drops.join("") : drops.slice(0, -1).join(", ") + " and " + drops[drops.length - 1];
+}
+
+// What Host does instead of the dropped bindings; the card row, the confirm's hint and the Access tab say it the same way.
+const TP_DROPS_TAIL = "The agent uses this machine's own logins (~/.aws, gh) instead.";
+
+// tierDropsLine: the Host card's warning as one sentence ("" when nothing is dropped).
+function tierDropsLine(drops) {
+  return drops && drops.length ? "Not on Host: " + tierJoinDrops(drops) + ". " + TP_DROPS_TAIL : "";
+}
+
+// tierHostState: Host is off when the server says the profile may not run there (ProfileView.host_block). host_drops does not
+// turn it off: Host runs without the bindings, after a confirm.
 function tierHostState(profile) {
   const b = profile && profile.host_block;
   if (typeof b === "string" && b !== "") return { ok: false, why: tierWhy(b) };
@@ -61,12 +81,13 @@ function tierCloneState(o) {
 }
 
 // tierPreselect: the card the profile and workspace point at, before any fallback (spec §5): a clone profile whose repo
-// (or clone dir) is the workspace, else a profile saved as host, else in place. Never a "last used" tier.
+// (or clone dir) is the workspace, else a profile saved as host, else in place. A host profile that drops bindings there opens on Box
+// (#359): Host is one click away, and never what a stray Enter starts. Never a "last used" tier.
 // o = {profile, cwd, home}.
 function tierPreselect(o) {
   const p = o.profile || {};
   if (p.clone_of && (tierSamePath(o.cwd, p.clone_of, o.home) || tierSamePath(o.cwd, p.default_cwd, o.home))) return "clone";
-  if (p.runtime === "host") return "host";
+  if (p.runtime === "host" && tierHostDrops(p).length === 0) return "host";
   return "box";
 }
 
@@ -106,6 +127,8 @@ function tierModel(o) {
       { k: "Rest of machine", v: [{ b: "your whole account:" }, { t: " every file, key and network this machine has." }] },
     ],
   };
+  const drops = tierHostDrops(p);
+  if (drops.length) rows.host.push({ k: "Not on Host", v: [{ b: tierJoinDrops(drops) + "." }, { t: " " + TP_DROPS_TAIL }] });
   const titles = { box: "Box · in place", clone: "Box · clone", host: "Host · not contained" };
 
   const cards = TP_KEYS.map((key) => ({
@@ -325,6 +348,22 @@ function spawnWhere() {
   return v ? { runtime: v } : {};
 }
 
+// hostDropsConfirm: the question before a Host spawn of a profile whose bindings Host drops. Resolves true only on "Start on Host";
+// Cancel has the focus. The drops are text nodes in a list, never markup.
+async function hostDropsConfirm(profileName, drops) {
+  const ul = tierEl("ul", "ask-bullets");
+  for (const d of drops) ul.append(tierEl("li", "", d));
+  return askConfirm({
+    title: "Start on Host without its bindings?",
+    body: profileName + " will run with your user's full access to this machine. These do not apply on Host:",
+    extra: [ul],
+    hint: TP_DROPS_TAIL + " Box keeps them.",
+    confirmLabel: "Start on Host",
+    danger: true,
+    focusCancel: true,
+  });
+}
+
 // spawnCwdFor: the folder the request names. A clone session starts in the profile's clone dir; every other card in the workspace.
 function spawnCwdFor(w) {
   if (w && w.clone) return (currentProfile() || {}).default_cwd || getCwd();
@@ -334,5 +373,6 @@ function spawnCwdFor(w) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel, tierVmFetch,
+    tierHostDrops, tierJoinDrops, tierDropsLine,
   };
 }
