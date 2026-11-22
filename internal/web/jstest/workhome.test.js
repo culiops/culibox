@@ -234,3 +234,31 @@ test("returnNews: a clone session leaving the list asks for a refetch; a plain o
 test("returnNews: tolerates a missing list", () => {
   assert.deepStrictEqual(returnNews(["x"], ["s1"], null).toasts, []);
 });
+
+// --- flagged files handed back (#346) ----------------------------------------
+test("returnToastText: flagged files end the line with their count", () => {
+  const sum = { trigger: "exit", home: ["box/feat"], not_home: [], flagged: [{ id: "h1", count: 2, branch: "feat" }] };
+  assert.strictEqual(returnToastText("p", sum), "p: box/feat came home · 2 files flagged for your review");
+  assert.ok(returnToastText("p", sum).endsWith("2 files flagged for your review"));
+  assert.strictEqual(returnToastText("p", { trigger: "exit", flagged: [{ id: "h1", count: 1 }] }), "p: 1 file flagged for your review");
+});
+
+test("returnToastText: a cut-short scan with nothing flagged does not read as nothing flagged", () => {
+  const t = returnToastText("p", { trigger: "exit", home: [], not_home: [], flagged: [{ id: "h1", count: 0, truncated: true }] });
+  assert.strictEqual(t, "p: Not everything was checked — open the review");
+  assert.doesNotMatch(t, /\b(clean|safe|no threats)\b/i);
+});
+
+test("returnToastText: a skipped return says nothing even with flagged notes", () => {
+  assert.strictEqual(returnToastText("p", { trigger: "exit", skipped: "in-use", flagged: [{ id: "h1", count: 2 }] }), "");
+});
+
+test("returnNews: a flagged return toasts once and carries the record ids for the link", () => {
+  const flagged = { id: "s1", agent: "p", clone_of: "/r", return: { trigger: "exit", at: "t1", home: [], flagged: [{ id: "h1", count: 2 }] } };
+  const first = returnNews(null, [], [{ id: "s1", agent: "p", clone_of: "/r" }]);
+  const n = returnNews(first.seen, first.cloneIds, [flagged]);
+  assert.deepStrictEqual(n.toasts, ["p: 2 files flagged for your review"]);
+  assert.deepStrictEqual(n.links, [["h1"]]);
+  const plain = returnNews(first.seen, first.cloneIds, [EXIT("s9", "p", "t9")]);
+  assert.deepStrictEqual(plain.links, [[]], "links runs in step with toasts");
+});

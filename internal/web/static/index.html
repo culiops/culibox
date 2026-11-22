@@ -105,6 +105,7 @@
       <div id="side-foot">
         <div id="limits-side"></div>
         <span id="side-elevated" hidden></span>
+        <button id="side-flagged" type="button" hidden></button>
         <div id="side-store" hidden></div>
         <div class="xlinks">
           <span id="side-cost" class="xcost" hidden></span>
@@ -724,6 +725,21 @@
     </div>
   </dialog>
 
+  <dialog id="handback-modal">
+    <div class="dhd">
+      <span class="grow">Flagged for your review</span>
+      <button type="button" class="btn gh" data-close="handback-modal" aria-label="Close (Esc)" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="dbd pad">
+      <div id="hb-body"></div>
+      <div class="dlg-err" id="hb-err"></div>
+    </div>
+    <div class="dft">
+      <span class="grow"></span>
+      <button type="button" class="btn pri" data-close="handback-modal">Done</button>
+    </div>
+  </dialog>
+
   <dialog id="palette">
     <div id="pal-inputwrap">
       <span id="pal-prompt" aria-hidden="true">&gt;</span>
@@ -1007,6 +1023,7 @@
   <script src="/dockchanges.js"></script>
   <script src="/dockwatch.js"></script>
   <script src="/spawnpreview.js"></script>
+  <script src="/handbackmodel.js"></script>
   <script src="/workhome.js"></script>
   <script src="/profileview.js"></script>
   <script src="/profileedit.js"></script>
@@ -1019,6 +1036,7 @@
   <script src="/claudemark.js"></script>
   <script src="/tierpick.js"></script>
   <script src="/envbadge.js"></script>
+  <script src="/handbackview.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

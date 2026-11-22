@@ -79,8 +79,15 @@ function notHomeFix(profile, base, nh, desktop) {
   }
 }
 
+// workHomeHb: a function of handbackmodel.js (the page loads it first; a node test
+// of this file alone requires it).
+function workHomeHb(name) {
+  return typeof globalThis[name] === "function" ? globalThis[name] : require("./handbackmodel.js")[name];
+}
+
 // returnToastText: what one return says, or "" when there is nothing to say.
-// A skipped run attempted nothing, so it says nothing.
+// A skipped run attempted nothing, so it says nothing. Files flagged for review
+// (#346) end the line, and a cut-short scan says so instead of saying nothing.
 function returnToastText(profile, sum) {
   if (!sum || sum.skipped) return "";
   const home = Array.isArray(sum.home) ? sum.home : [];
@@ -89,6 +96,8 @@ function returnToastText(profile, sum) {
   if (home.length) parts.push(home.join(", ") + " came home");
   if (notHome.length) parts.push(notHome.length === 1 ? "1 branch not home" : notHome.length + " branches not home");
   if (sum.error) parts.push("work not checked");
+  const flagged = workHomeHb("handbackNoteText")(sum.flagged);
+  if (flagged) parts.push(flagged);
   if (!parts.length) {
     if (sum.trigger !== "now") return "";
     parts.push("all work is home");
@@ -122,26 +131,31 @@ function notHomeNews(seen, profiles) {
 // seeds); cloneIds the clone sessions the previous poll listed. Returns the
 // toasts to show, the PROFILE sigs (returnSig(agent, at)) to mark seen for
 // notHomeNews so the same return is not announced twice, the next seen/cloneIds
-// to keep, and whether the profile list needs a refresh: a new return landed or
+// to keep (links runs in step with toasts: the hand-back record ids each one opens, often none),
+// and whether the profile list needs a refresh: a new return landed or
 // a clone session left the list (a kill). seen is pruned to the sessions still
 // listed, so it cannot grow. Inputs are not changed.
 function returnNews(seen, cloneIds, sessions) {
   const list = Array.isArray(sessions) ? sessions : [];
   const nextClones = list.filter((s) => s && s.clone_of).map((s) => s.id);
   const nextSeen = list.filter((s) => s && s.return).map((s) => returnSig(s.id, s.return.at));
-  if (!Array.isArray(seen)) return { toasts: [], sigs: [], seen: nextSeen, cloneIds: nextClones, refetch: false };
+  if (!Array.isArray(seen)) return { toasts: [], links: [], sigs: [], seen: nextSeen, cloneIds: nextClones, refetch: false };
   const known = new Set(seen);
   const toasts = [];
+  const links = [];
   const sigs = [];
   for (const s of list) {
     if (!s || !s.return || known.has(returnSig(s.id, s.return.at))) continue;
     const text = returnToastText(s.agent, s.return);
-    if (text) toasts.push(text);
+    if (text) {
+      toasts.push(text);
+      links.push(workHomeHb("handbackNoteIds")(s.return.flagged)); // the records the toast opens, if any
+    }
     sigs.push(returnSig(s.agent, s.return.at));
   }
   const now = new Set(nextClones);
   const left = (Array.isArray(cloneIds) ? cloneIds : []).some((id) => !now.has(id));
-  return { toasts, sigs, seen: nextSeen, cloneIds: nextClones, refetch: sigs.length > 0 || left };
+  return { toasts, links, sigs, seen: nextSeen, cloneIds: nextClones, refetch: sigs.length > 0 || left };
 }
 
 if (typeof module !== "undefined" && module.exports) {

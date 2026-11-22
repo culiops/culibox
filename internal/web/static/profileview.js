@@ -271,7 +271,11 @@ function pfvWorkspaceBlock(view, doc, host, edit) {
       sub: cwd ? "Edits the folder directly, not a private copy" : "Picked in New session", scope: "Read and write",
     }));
   }
-  return { id: "workspace", label: "Workspace", applies: "", lines: [], rows, edit, add: "", count: rows.length, note: "", notHome };
+  // Files a session handed back that are flagged for review (#346): the count, and what the link opens.
+  const flagged = view.flagged > 0
+    ? { text: pfvDep("handbackCountText", "./handbackmodel.js")(view.flagged), sel: pfvDep("handbackProfileSel", "./handbackmodel.js")(view) }
+    : null;
+  return { id: "workspace", label: "Workspace", applies: "", lines: [], rows, edit, add: "", count: rows.length, note: "", notHome, flagged };
 }
 
 // refused: a session of this profile is refused without a box layer (see pfvUnavailable).
@@ -342,7 +346,7 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon, pr
 //           A row with missing:true carries scope "Not found in Credentials",
 //           which the page draws red.
 //   edit    the block has an Edit link; add is "" or the "+ Add ..." link text.
-//   Workspace also carries notHome {label, title} (the chip) or null; Advanced
+//   Workspace also carries notHome {label, title} (the chip) or null, and flagged {text, sel} (the hand-back link) or null; Advanced
 //   {count, open, status}; Can reach {switchToBox} (true on an editable host profile with a box layer).
 // A read-only profile (config.json or built in) has edit false and no add action
 // anywhere. Never an ARN, a token value or a reference: only names.

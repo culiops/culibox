@@ -231,7 +231,7 @@ function chipRow(chip, tier) {
     document: doc, Date, boxRuntime: "", window: { HOME_DIR: "" },
     rowChip: () => chip, acctBadge: () => null, awsBadge: () => null, tierBadge: () => tier || null,
     rowSubline: () => ({ text: "" }), rowMenuOpenFor: () => false, openSessionMenu: () => {}, openTerminal: () => {},
-    openPaneView: () => false, wmCopyLine: () => "", sessionWorkHome: () => "", li, sname, grow, s: { id: "a" },
+    openPaneView: () => false, wmCopyLine: () => "", sessionWorkHome: () => "", handbackLine: () => null, li, sname, grow, s: { id: "a" },
   });
   vm.runInContext(read("svgicon.js").replace(/^const /gm, "var ") + "\n" + fnSrc(read("app.js"), "deskChipIcon") + "\n" +
     fnSrc(read("app.js"), "paintCompactRow") + "\npaintCompactRow(li, sname, grow, s, {});", ctx);

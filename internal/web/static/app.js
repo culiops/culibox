@@ -2096,7 +2096,14 @@ function noteReturns(sessions) {
   const n = returnNews(returnsSeen, returnsCloneIds, sessions);
   returnsSeen = n.seen;
   returnsCloneIds = n.cloneIds;
-  for (const t of n.toasts) showToast(t);
+  n.toasts.forEach((t, i) => {
+    const ids = n.links[i] || [];
+    // Files flagged for review (#346): the toast opens the review; the pending list is read again for the sidebar entry.
+    if (ids.length) handbackToast(t, ids);
+    else showToast(t);
+  });
+  if (n.links.some((l) => l.length)) handbackRefresh();
+  handbackOnSessions(sessions);
   // With no stored list there is nothing to add to: the next load seeds it whole.
   const stored = n.sigs.length ? notHomeSeenRead() : null;
   if (stored) notHomeSeenWrite(stored.concat(n.sigs));
@@ -2800,6 +2807,9 @@ function paintCompactRow(li, sname, grow, s, conn) {
     d.onclick = () => { if (sub.view === "access" && openPaneView(s.id, "access")) return; openTerminal(s.id, s.name); };
     grow.appendChild(d);
   }
+  // Files this session handed back that are flagged for review (#346): one line under the rest, until reviewed.
+  const hbl = li.classList.contains("nested") ? null : handbackLine(s);
+  if (hbl) grow.appendChild(hbl);
 }
 
 // renderDesktopEntry: what the desktop list renders for one item — a workspace
@@ -5585,6 +5595,19 @@ function renderPfNotHome(name) {
     row.textContent = notHomeLabel(nh) + ": " + nh.error;
     rows.push(row);
   }
+  // Files flagged for review (#346): the count opens the review of this profile's records.
+  const flText = handbackCountText(view && view.flagged);
+  if (flText && !mobileActive(window.innerWidth)) {
+    const row = document.createElement("div");
+    row.className = "pf-nh-row";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "btn gh pf-flagged";
+    open.textContent = flText;
+    open.onclick = () => openHandback(handbackProfileSel(view));
+    row.appendChild(open);
+    rows.push(row);
+  }
   host.replaceChildren(...rows);
   host.hidden = rows.length === 0;
 }
@@ -5899,6 +5922,15 @@ function renderProfileList() {
       nh.textContent = nhLabel;
       nh.title = notHomeTitle(p.not_home);
       b.appendChild(nh);
+    }
+    // Files flagged for review (#346): a warning-tinted count on the name's line, the same words everywhere.
+    const flText = handbackCountText(p.flagged);
+    if (flText) {
+      const fl = document.createElement("span");
+      fl.className = "pflagged";
+      fl.textContent = flText;
+      fl.title = HANDBACK_TITLE;
+      b.appendChild(fl);
     }
     b.onclick = () => editProfile(p.name);
     li.appendChild(b);

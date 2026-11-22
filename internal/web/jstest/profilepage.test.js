@@ -202,7 +202,7 @@ function page(over) {
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["svgicon.js", "kitmenu.js", "fsops.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
+  for (const f of ["svgicon.js", "kitmenu.js", "fsops.js", "handbackmodel.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
@@ -714,6 +714,21 @@ test("a private copy shows its branches that did not come home in the Workspace 
   assert.strictEqual(byCls(ws, "pfv-nh-row").length, 2);
   assert.deepStrictEqual(texts(ws, "pfv-nh-why")[0], "box/fix-drift on the host has commits this branch lacks");
   assert.match(texts(ws, "pfv-nh-fix")[0], /overwrites box\/fix-drift$/);
+});
+
+test("a profile with flagged files shows the count as a link that opens its review (#346)", async () => {
+  const prof = view("gitops-clone", { default_cwd: "/home/you/box-clones/k8s-gitops", clone_of: "/home/you/work/k8s-gitops", auto_return: true, flagged: 2 });
+  const t = page({ profiles: [prof] });
+  const opened = [];
+  t.box.openHandback = (sel) => opened.push(sel);
+  const real = t.box.api;
+  t.box.api = async (p, o) => (p === "/api/profiles/gitops-clone" ? { name: "gitops-clone", bin: "claude", runtime: "box" } : real(p, o));
+  await t.box.pfvShow("gitops-clone");
+  const ws = byCls(t.els["pfv-in"], "pfv-block").find((b) => b.dataset.block === "workspace");
+  const link = byCls(ws, "pfv-flagged")[0];
+  assert.strictEqual(link.textContent, "2 files flagged for your review");
+  link.click();
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(opened)), [{ cloneOf: "/home/you/work/k8s-gitops" }]);
 });
 
 test("boxes unavailable on a box profile: the reason line is red, the consequence is not", async () => {
