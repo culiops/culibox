@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -145,19 +146,283 @@ func TestInspectDirTouchBackStillCandidate(t *testing.T) {
 	}
 }
 
-func TestInspectDirSkipsGitObjects(t *testing.T) {
+func TestInspectDirGitObjects(t *testing.T) {
 	root := t.TempDir()
-	put(t, root, ".git/objects/aa/bb", elfExec(), 0o644)
+	loose := strings.Repeat("c", 38)
+	loose256 := strings.Repeat("d", 62)
+	put(t, root, ".git/objects/aa/"+loose, elfExec(), 0o644)
+	put(t, root, "sub/.git/objects/bb/"+loose256, elfExec(), 0o644)
+	put(t, root, ".git/objects/pack/pack-abc.pack", elfExec(), 0o644)
+	put(t, root, ".git/objects/pack/pack-abc.idx", elfExec(), 0o644)
+	put(t, root, ".git/objects/pack/x.pdf", elfExec(), 0o644)
+	put(t, root, ".git/objects/aa/notahash.pdf", elfExec(), 0o644)
+	put(t, root, ".git/objects/info/alternates", elfExec(), 0o644)
 	put(t, root, ".git/hooks/x", elfExec(), 0o755)
 	rep := scan(t, root, time.Now().Add(-time.Minute), DefaultLimits())
-	if f, ok := flagFor(rep, ".git/objects/aa/bb"); ok {
-		t.Errorf(".git/objects must be skipped, got %+v", f)
+	for _, p := range []string{".git/objects/aa/" + loose, "sub/.git/objects/bb/" + loose256,
+		".git/objects/pack/pack-abc.pack", ".git/objects/pack/pack-abc.idx"} {
+		if f, ok := flagFor(rep, p); ok {
+			t.Errorf("%s is an object-store file and must be skipped, got %+v", p, f)
+		}
 	}
-	if _, ok := flagFor(rep, ".git/hooks/x"); !ok {
-		t.Errorf(".git/hooks/x must be flagged, got %+v", rep.Flags)
+	if f, ok := flagFor(rep, ".git/objects/pack/x.pdf"); !ok || !hasClass(f, ClassMismatch) {
+		t.Errorf(".git/objects/pack/x.pdf = %+v ok=%v, want mismatch", f, ok)
+	}
+	for _, p := range []string{".git/objects/aa/notahash.pdf", ".git/objects/info/alternates", ".git/hooks/x"} {
+		if _, ok := flagFor(rep, p); !ok {
+			t.Errorf("%s must be inspected", p)
+		}
 	}
 }
 
+func skipIfRoot(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root can read chmod 000 entries")
+	}
+}
+
+func TestInspectDirUnreadableEntries(t *testing.T) {
+	skipIfRoot(t)
+	since := time.Now().Add(-time.Minute)
+
+	t.Run("chmod 000 file", func(t *testing.T) {
+		root := t.TempDir()
+		put(t, root, "hidden.pdf", elfExec(), 0o000)
+		rep := scan(t, root, since, DefaultLimits())
+		if !strings.Contains(rep.Truncated, "could not be read") {
+			t.Errorf("Truncated = %q, want an unreadable-entries reason", rep.Truncated)
+		}
+	})
+
+	t.Run("chmod 000 directory", func(t *testing.T) {
+		root := t.TempDir()
+		put(t, root, "d/x.pdf", elfExec(), 0o644)
+		if err := os.Chmod(filepath.Join(root, "d"), 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(filepath.Join(root, "d"), 0o755) })
+		rep := scan(t, root, since, DefaultLimits())
+		if !strings.Contains(rep.Truncated, "could not be read") {
+			t.Errorf("Truncated = %q, want an unreadable-entries reason", rep.Truncated)
+		}
+	})
+
+	t.Run("unreadable setuid file is still flagged from its mode", func(t *testing.T) {
+		root := t.TempDir()
+		put(t, root, "su", elfExec(), 0o644)
+		if err := os.Chmod(filepath.Join(root, "su"), fs.ModeSetuid); err != nil {
+			t.Skipf("chmod: %v", err)
+		}
+		if fi, err := os.Lstat(filepath.Join(root, "su")); err != nil || fi.Mode()&fs.ModeSetuid == 0 {
+			t.Skip("filesystem refused the setuid bit")
+		}
+		rep := scan(t, root, since, DefaultLimits())
+		if f, ok := flagFor(rep, "su"); !ok || !hasClass(f, ClassSetID) {
+			t.Errorf("su = %+v ok=%v, want setuid-setgid from the mode", f, ok)
+		}
+		if !strings.Contains(rep.Truncated, "could not be read") {
+			t.Errorf("Truncated = %q, want an unreadable-entries reason", rep.Truncated)
+		}
+	})
+
+	t.Run("empty file is not opened", func(t *testing.T) {
+		root := t.TempDir()
+		put(t, root, "empty", nil, 0o000)
+		rep := scan(t, root, since, DefaultLimits())
+		if rep.Truncated != "" {
+			t.Errorf("Truncated = %q, want none: an empty file is never opened", rep.Truncated)
+		}
+	})
+}
+
+func TestReadHeadRefusesSwappedSymlink(t *testing.T) {
+	root := t.TempDir()
+	put(t, root, "orig", []byte("original"), 0o644)
+	put(t, root, "other", elfExec(), 0o644)
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	lst, err := r.Lstat("orig")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "orig")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("other", filepath.Join(root, "orig")); err != nil {
+		t.Fatal(err)
+	}
+	if f, _, _, ok := readHead(r, "orig", lst); ok {
+		f.Close()
+		t.Fatal("a file swapped for a symlink after the Lstat must be refused")
+	}
+	// Sanity: the untouched file is accepted.
+	lst2, _ := r.Lstat("other")
+	f, head, _, ok := readHead(r, "other", lst2)
+	if !ok {
+		t.Fatal("readHead refused a plain regular file")
+	}
+	f.Close()
+	if len(head) == 0 {
+		t.Error("empty head")
+	}
+}
+
+// cancelAfter is a context that reports Canceled once Err has been asked n
+// times, so a test can cancel deterministically in the middle of a walk.
+type cancelAfter struct {
+	context.Context
+	n int
+}
+
+func (c *cancelAfter) Err() error {
+	c.n--
+	if c.n < 0 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestInspectDirCancelMidWalk(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 3000; i++ {
+		put(t, root, "d/f"+strconv.Itoa(i), []byte("x"), 0o644)
+	}
+	ctx := &cancelAfter{Context: context.Background(), n: 500}
+	start := time.Now()
+	rep, err := InspectDir(ctx, root, time.Now().Add(-time.Minute), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Error("did not return promptly")
+	}
+	if !strings.Contains(rep.Truncated, "cancelled") {
+		t.Errorf("Truncated = %q, want it to say cancelled", rep.Truncated)
+	}
+	if rep.Inspected == 0 || rep.Inspected >= 3000 {
+		t.Errorf("Inspected = %d, want a mid-walk stop (0 < n < 3000)", rep.Inspected)
+	}
+}
+
+func TestInspectDirFlagCapKeepsStrongest(t *testing.T) {
+	root := t.TempDir()
+	for i := 1; i <= 5; i++ {
+		put(t, root, "a"+strconv.Itoa(i), []byte("#!/bin/sh\n"), 0o755)
+	}
+	put(t, root, "zz.pdf", elfExec(), 0o644)
+	lim := DefaultLimits()
+	lim.MaxFlags = 3
+	rep := scan(t, root, time.Now().Add(-time.Minute), lim)
+	if len(rep.Flags) != 3 {
+		t.Fatalf("flags = %d, want 3", len(rep.Flags))
+	}
+	if _, ok := flagFor(rep, "zz.pdf"); !ok {
+		t.Errorf("the mismatch must survive the flag cap: %+v", rep.Flags)
+	}
+	if rep.Flags[0].Path != "zz.pdf" {
+		t.Errorf("mismatch should sort first, got %+v", rep.Flags[0])
+	}
+	if !strings.Contains(rep.Truncated, "3 more") {
+		t.Errorf("Truncated = %q, want 3 more", rep.Truncated)
+	}
+}
+
+func TestInspectDirEmptyFilesDoNotUseCandidates(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 5; i++ {
+		put(t, root, "e"+strconv.Itoa(i), nil, 0o644)
+	}
+	put(t, root, "x1.pdf", elfExec(), 0o644)
+	put(t, root, "x2.pdf", elfExec(), 0o644)
+	lim := DefaultLimits()
+	lim.Candidates = 2
+	rep := scan(t, root, time.Now().Add(-time.Minute), lim)
+	if rep.Truncated != "" || len(rep.Flags) != 2 {
+		t.Errorf("flags=%+v truncated=%q, want both ELF files and no truncation", rep.Flags, rep.Truncated)
+	}
+}
+
+func TestInspectDirCandidateCapKeepsCheapSignals(t *testing.T) {
+	root := t.TempDir()
+	for i := 1; i <= 3; i++ {
+		put(t, root, "a"+strconv.Itoa(i), []byte("content"), 0o644)
+	}
+	if err := os.Symlink("/etc/passwd", filepath.Join(root, "zz-link")); err != nil {
+		t.Fatal(err)
+	}
+	lim := DefaultLimits()
+	lim.Candidates = 2
+	rep := scan(t, root, time.Now().Add(-time.Minute), lim)
+	if f, ok := flagFor(rep, "zz-link"); !ok || !hasClass(f, ClassSymlinkOut) {
+		t.Errorf("zz-link = %+v ok=%v, want it flagged after the candidate cap", f, ok)
+	}
+	if !strings.Contains(rep.Truncated, "candidate") {
+		t.Errorf("Truncated = %q, want the candidate cap", rep.Truncated)
+	}
+}
+
+func TestInspectDirCandidateCapKeepsSetID(t *testing.T) {
+	root := t.TempDir()
+	for i := 1; i <= 3; i++ {
+		put(t, root, "a"+strconv.Itoa(i), []byte("content"), 0o644)
+	}
+	put(t, root, "su", []byte("content"), 0o644)
+	if err := os.Chmod(filepath.Join(root, "su"), 0o755|fs.ModeSetuid); err != nil {
+		t.Skip("chmod refused")
+	}
+	if fi, _ := os.Lstat(filepath.Join(root, "su")); fi.Mode()&fs.ModeSetuid == 0 {
+		t.Skip("filesystem refused the setuid bit")
+	}
+	lim := DefaultLimits()
+	lim.Candidates = 1
+	rep := scan(t, root, time.Now().Add(-time.Minute), lim)
+	if f, ok := flagFor(rep, "su"); !ok || !hasClass(f, ClassSetID) {
+		t.Errorf("su = %+v ok=%v, want setuid flagged from the mode past the cap", f, ok)
+	}
+}
+
+func TestHashCappedCtx(t *testing.T) {
+	ctx := &cancelAfter{Context: context.Background(), n: 1}
+	// 1 MiB is 32 chunks of io.Copy's 32 KiB buffer; the ctx dies on the second read.
+	budget := int64(1 << 30)
+	sum, note := hashCappedCtx(ctx, strings.NewReader(strings.Repeat("a", 1<<20)), 1<<30, &budget)
+	if sum != "" || note != "not hashed: scan cancelled" {
+		t.Errorf("sum=%q note=%q, want a cancelled note", sum, note)
+	}
+}
+
+func TestGitObjectStoreFile(t *testing.T) {
+	h38, h62 := strings.Repeat("0", 38), strings.Repeat("f", 62)
+	for p, want := range map[string]bool{
+		".git/objects/aa/" + h38:            true,
+		"x/y/.git/objects/ab/" + h62:        true,
+		".git/objects/aa/" + h38 + ".pdf":   false,
+		".git/objects/aa/" + h38[1:]:        false,
+		".git/objects/AA/" + h38:            false,
+		".git/objects/zz/" + h38:            false,
+		".git/objects/pack/pack-1.pack":     true,
+		".git/objects/pack/pack-1.idx":      true,
+		".git/objects/pack/pack-1.rev":      true,
+		".git/objects/pack/pack-1.bitmap":   true,
+		".git/objects/pack/pack-1.mtimes":   true,
+		".git/objects/pack/pack-1.promisor": true,
+		".git/objects/pack/pack-1.keep":     true,
+		".git/objects/pack/pack-1.pdf":      false,
+		".git/objects/pack/x.pack":          false,
+		".git/objects/info/alternates":      false,
+		".git/hooks/pre-commit":             false,
+		"objects/aa/" + h38:                 false,
+		".git/objects/aa/sub/" + h38:        false,
+	} {
+		if got := gitObjectStoreFile(p); got != want {
+			t.Errorf("gitObjectStoreFile(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
 func TestInspectDirBounds(t *testing.T) {
 	since := time.Now().Add(-time.Minute)
 
