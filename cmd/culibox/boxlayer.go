@@ -67,6 +67,9 @@ type boxLayer struct {
 	pins       pinSource          // where `box setup` looks for the images instances pin (set by runBoxDarwin)
 	protected  []box.ProtectedDir // CuliBox's own host dirs (config, profiles, bundle); no VM share may overlap them
 	stateRoot  string             // where box homes and the bundle live; resolved on darwin
+	// onStop is the box-stop hook, installed after the box manager exists
+	// (setOnStop): the hook needs the clone hooks, which need this layer.
+	onStop atomic.Pointer[func(name, workspace string)]
 	// daemon is the local docker daemon's state (nil on darwin: the box VM starts
 	// on the first boxed spawn, and prepare reports what stops it). See boxdaemon.go.
 	daemon *daemonWatch
@@ -231,6 +234,16 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 	return l, nil
 }
 
+// setOnStop installs the hook the box manager calls after it stops a box (see
+// box.Options.OnStop). Call once at boot; nil removes it.
+func (l *boxLayer) setOnStop(f func(name, workspace string)) {
+	if f == nil {
+		l.onStop.Store(nil)
+		return
+	}
+	l.onStop.Store(&f)
+}
+
 // options is what the box manager is built with. Off darwin there are no hooks:
 // Linux behaves exactly as before the VM existed.
 func (l *boxLayer) options(cfg config.Config) box.Options {
@@ -258,6 +271,11 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		// through colima virtiofs on a Mac, the partial overlay did not).
 		EgressAll:    true,
 		GuardInPlace: true,
+		OnStop: func(name, workspace string) {
+			if f := l.onStop.Load(); f != nil {
+				(*f)(name, workspace)
+			}
+		},
 	}
 	if l.adoptable {
 		// Linux: the legacy default is adopted before a spawn, retried until the

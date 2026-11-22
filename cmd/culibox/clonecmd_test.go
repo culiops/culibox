@@ -16,6 +16,7 @@ import (
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/handback"
 )
 
 func TestParseCloneFetch(t *testing.T) {
@@ -193,7 +194,8 @@ func TestRunCloneOutput(t *testing.T) {
 		"  abc1234 add thing\n" +
 		"  def5678 fix thing\n" +
 		"WARN: 1 commit carries an attribution trailer\n" +
-		"review: git -C /src/r log -p main..box/feat/x; merge per your review policy\n"
+		"review: git -C /src/r log -p main..box/feat/x; merge per your review policy\n" +
+		"Nothing flagged. This is not a malware scan.\n"
 	if rc != 0 || out != want {
 		t.Fatalf("rc=%d\ngot:\n%s\nwant:\n%s", rc, out, want)
 	}
@@ -364,8 +366,97 @@ func TestRunCloneOutputQuotesTheRepoPath(t *testing.T) {
 	e.res = clone.FetchResult{Ref: "refs/heads/box/b", Commits: []string{"abc1234 x"}}
 	rc, out := runCloneArgs(e, "p", "b", "main")
 	want := "review: git -C '/my repos/it'\\''s' log -p main..box/b; merge per your review policy\n"
-	if rc != 0 || !strings.HasSuffix(out, want) {
-		t.Fatalf("rc=%d out=%q want suffix %q", rc, out, want)
+	if rc != 0 || !strings.Contains(out, want) {
+		t.Fatalf("rc=%d out=%q want it to contain %q", rc, out, want)
+	}
+}
+
+func flaggedReport() handback.Report {
+	return handback.Report{
+		Inspected: 7,
+		Flags: []handback.Flag{
+			{Path: "docs/report.pdf", Classes: []handback.Class{handback.ClassMismatch}, Detail: "ELF executable named .pdf", SHA256: strings.Repeat("ab", 32)},
+			{Path: "big.bin", Classes: []handback.Class{handback.ClassExecutable}, Detail: "ELF executable", HashNote: "not hashed: larger than 64 MiB"},
+		},
+	}
+}
+
+func TestCloneFetchPrintsFlags(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
+	e.res = clone.FetchResult{Ref: "refs/heads/box/b", Commits: []string{"abc1234 x"}, Handback: flaggedReport()}
+	rc, out := runCloneArgs(e, "p", "b", "main")
+	if rc != 0 {
+		t.Fatalf("rc=%d out=%q", rc, out)
+	}
+	_, after, ok := strings.Cut(out, "review: git -C /src/r log -p main..box/b; merge per your review policy\n")
+	if !ok {
+		t.Fatalf("no review line in %q", out)
+	}
+	for _, want := range []string{
+		"Flagged for your review",
+		"docs/report.pdf  ELF executable named .pdf  sha256 " + strings.Repeat("ab", 32),
+		"big.bin  ELF executable  not hashed: larger than 64 MiB",
+		"This is not a malware scan.",
+	} {
+		if !strings.Contains(after, want) {
+			t.Errorf("output after the review line lacks %q:\n%s", want, after)
+		}
+	}
+	if strings.Contains(after, "Nothing flagged") {
+		t.Errorf("a flagged branch must not say nothing was flagged:\n%s", after)
+	}
+	// The same record the daemon's return writes, so the panel shows it.
+	recs, err := handback.Store{Dir: filepath.Join(e.data, "handback")}.Pending()
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("Pending = %+v, %v; want the branch's record", recs, err)
+	}
+	if r := recs[0]; r.Kind != handback.KindClone || r.CloneOf != "/src/r" || r.Branch != "box/b" || len(r.Flags) != 2 || r.ID != handback.RecordID(handback.CloneKey("/src/r", "b")) {
+		t.Fatalf("record = %+v", r)
+	}
+}
+
+func TestCloneFetchPrintsNothingFlaggedAndTruncation(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
+	e.res = clone.FetchResult{Ref: "refs/heads/box/b", Handback: handback.Report{Truncated: "walk cap of 500000 entries reached"}}
+	rc, out := runCloneArgs(e, "p", "b", "main")
+	if rc != 0 || !strings.Contains(out, "Nothing flagged. This is not a malware scan.\n") || !strings.Contains(out, "walk cap of 500000 entries reached") {
+		t.Fatalf("rc=%d out=%q", rc, out)
+	}
+}
+
+// The ref moved and a later step failed: the branch is home, so its flags are
+// still shown, before the failure.
+func TestCloneFetchPrintsFlagsWhenALaterStepFailed(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
+	e.res = clone.FetchResult{Ref: "refs/heads/box/b", Handback: flaggedReport()}
+	e.err = errors.New("fetched refs/heads/box/b but cannot list it")
+	rc, out := runCloneArgs(e, "p", "b", "main")
+	if rc != 1 || !strings.Contains(out, "Flagged for your review") || !strings.HasSuffix(out, "culibox clone: fetched refs/heads/box/b but cannot list it\n") {
+		t.Fatalf("rc=%d out=%q", rc, out)
+	}
+}
+
+// A record that cannot be written is said, and the flags are still printed.
+func TestCloneFetchSaysWhenTheRecordCannotBeWritten(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
+	e.res = clone.FetchResult{Ref: "refs/heads/box/b", Handback: flaggedReport()}
+	dir := filepath.Join(e.data, "handback")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.WriteFile(other, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, filepath.Join(dir, handback.RecordID(handback.CloneKey("/src/r", "b"))+".json")); err != nil {
+		t.Fatal(err)
+	}
+	rc, out := runCloneArgs(e, "p", "b", "main")
+	if rc != 0 || !strings.Contains(out, "WARN: could not record what was flagged for review") || !strings.Contains(out, "docs/report.pdf") {
+		t.Fatalf("rc=%d out=%q", rc, out)
+	}
+	if b, _ := os.ReadFile(other); string(b) != "x" {
+		t.Fatalf("the symlink target was written: %q", b)
 	}
 }
 

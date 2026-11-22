@@ -669,6 +669,25 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		mgr.SetClone(h)
 	}
 
+	// Handback (#346): what a boxed session leaves in the user's own folder is
+	// scanned when the session ends and when its box stops; what a clone's
+	// returned branch brings is recorded by the clone hooks. All three write the
+	// same store under the data dir.
+	hb := newHandbackHooks(dataDir, func(dir string) bool {
+		if h == nil {
+			return false
+		}
+		_, owned := h.BoxOwned(dir)
+		return owned
+	})
+	mgr.SetHandback(hb)
+	if h != nil {
+		h.handback = hb
+	}
+	if layer != nil {
+		layer.setOnStop(hb.OnStop)
+	}
+
 	// Credential broker (M3a): only with containment, because a bound session
 	// runs only in a box. Before Reconcile so reattached sessions find the hooks.
 	var brokerSvc *brokerService
