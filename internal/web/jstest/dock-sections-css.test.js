@@ -52,7 +52,7 @@ test("the divider is a focusable horizontal separator between the sections, ahea
 });
 
 test("the section's height: as tall as its rows up to the dragged share, else today's 45%", () => {
-  assert.match(rulesFor(css, "#dock-changes"), /max-height:\s*var\(--dk-chg-max,\s*45%\)/);
+  assert.match(rulesFor(css, "#dock-changes"), /max-height:\s*min\(var\(--dk-chg-max,\s*45%\),/);
 });
 
 test("collapsed Changes is its header row only: the count and Review stay", () => {
@@ -107,7 +107,7 @@ test("the phone's stylesheet knows none of it", () => {
 test("an explicit ask opens a collapsed section: Reveal in tree, and the folded strip's Changes button", () => {
   const ft = read("filetree.js");
   const body = stripComments(ft.slice(ft.indexOf("async function ftReveal("), ft.indexOf("\n}\n", ft.indexOf("async function ftReveal("))));
-  assert.match(body, /^async function ftReveal\(path\) \{\s*if \(typeof dockSecOpen === "function"\) dockSecOpen\("tree"\);/, "first thing in ftReveal");
+  assert.match(body, /^async function ftReveal\(path\) \{\s*if \(typeof dockSecOpen === "function" && ftDocked\(\)\) dockSecOpen\("tree"\);/, "first thing in ftReveal, and only for the dock's tree (the phone's Reveal leaves the desktop choice alone)");
   assert.match(stripComments(read("app.js")), /\$\("drawer-strip-changes"\)\.onclick = \(\) => \{\s*if \(typeof dockSecOpen === "function"\) dockSecOpen\("changes"\);\s*dockStripOpen\(\);\s*\};/);
 });
 
@@ -120,4 +120,18 @@ test("founder Q3: the Changes header keeps one row at the default 1280 width (20
   assert.match(chev, /width:\s*14px/);
   assert.match(chev, /margin-right:\s*-4px/);
   assert.match(rulesFor(css, ".dk-chev::after"), /inset:\s*-2px -5px/, "a 24px press area around the 14x20 box");
+});
+
+test("review 1: a breadcrumb press opens a collapsed tree, the root crumb too (it never reaches ftReveal)", () => {
+  const fd = read("filesdrawer.js");
+  const start = fd.indexOf("function dockCrumbsReveal(");
+  const body = stripComments(fd.slice(start, fd.indexOf("\n}\n", start)));
+  const open = body.indexOf('dockSecOpen("tree")');
+  assert.ok(open > 0, "dockCrumbsReveal opens the tree");
+  assert.ok(open < body.indexOf('if (where === "root")'), "before the root crumb's early return");
+});
+
+test("review 1: a share stored on a taller window never takes the tree's header and 3 rows on a shorter one", () => {
+  // 31 the top row, 26 the root header, 14 the tree body's padding (measured in Chromium), 3 rows of the tree's size.
+  assert.match(rulesFor(css, "#dock-changes"), /max-height:\s*min\(var\(--dk-chg-max,\s*45%\),\s*calc\(100% - 71px - 3 \* var\(--fs-tree\) \* 22 \/ 12\)\)/);
 });

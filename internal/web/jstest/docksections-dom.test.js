@@ -210,3 +210,36 @@ test("a lost capture ends the drag (window blur), keeping what was drawn", () =>
   assert.ok(!p.split.classList.contains("dragging"));
   assert.strictEqual(p.saved().share, 0.3);
 });
+
+test("review 1: collapsing the tree puts the root field away, so the next root press opens it again", () => {
+  const p = page();
+  p.tree.dataset.rootedit = "1";
+  const calls = [];
+  p.ctx.dkcRootEdit = (on) => { calls.push(on); if (!on) delete p.tree.dataset.rootedit; };
+  p.ctx.dockSecSet("tree", false);
+  assert.deepStrictEqual(calls, [false]);
+  assert.strictEqual(p.tree.dataset.rootedit, undefined);
+  p.ctx.dockSecSet("tree", true);
+  p.ctx.dockSecSet("changes", false);
+  assert.deepStrictEqual(calls, [false], "only the tree's collapse, and only with the field out");
+});
+
+test("review 1: the separator has its aria values from the first paint, not only after a focus", () => {
+  const p = page();
+  assert.strictEqual(p.split.getAttribute("aria-valuenow"), "38");
+});
+
+test("review 1: a drag move writes without measuring the column again (one layout read at the press)", () => {
+  const p = page();
+  p.split.dispatchEvent(ev("pointerdown", { clientY: 440 }));
+  let reads = 0;
+  for (const n of [p.tree, p.sec, p.list, p.row, p.roothead, p.ftNode]) {
+    const r = n.rect;
+    n.getBoundingClientRect = () => { reads++; return r; };
+  }
+  p.split.dispatchEvent(ev("pointermove", { clientY: 380 }));
+  p.split.dispatchEvent(ev("pointermove", { clientY: 400 }));
+  assert.strictEqual(reads, 0);
+  assert.strictEqual(p.split.getAttribute("aria-valuenow"), "33", "aria from the share and the press-time bounds");
+  p.split.dispatchEvent(ev("pointerup"));
+});

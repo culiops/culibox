@@ -114,16 +114,21 @@ function dockSecShareVar(share) {
   else col.style.setProperty("--dk-chg-max", dockSecPct(share));
 }
 
-// dockSecAria: the divider's aria values, whole percents of the column, from what is drawn.
+// dockSecAriaSet: the divider's aria values, whole percents of the column; `now` is a share.
+function dockSecAriaSet(el, now, m, b) {
+  const pct = (px) => String(Math.round(px / m.col * 100));
+  el.setAttribute("aria-valuenow", String(Math.round(now * 100)));
+  el.setAttribute("aria-valuemin", pct(b.lo));
+  el.setAttribute("aria-valuemax", pct(b.hi));
+}
+
+// dockSecAria: the divider's aria values from what is drawn (a layout read: not for every pointer move).
 function dockSecAria() {
   const el = dockSecEl("dock-secsplit");
   const m = dockSecMeasure();
   if (!el || !m) return;
   const b = dockSecBounds(m);
-  const pct = (px) => String(Math.round(px / m.col * 100));
-  el.setAttribute("aria-valuenow", pct(Math.min(b.hi, Math.max(b.lo, m.drawn))));
-  el.setAttribute("aria-valuemin", pct(b.lo));
-  el.setAttribute("aria-valuemax", pct(b.hi));
+  dockSecAriaSet(el, Math.min(b.hi, Math.max(b.lo, m.drawn)) / m.col, m, b);
 }
 
 // dockSecPaint: the state on the column and the chevrons.
@@ -142,6 +147,7 @@ function dockSecPaint() {
   };
   chev("dock-chg-chev", s.changes, "Changes");
   chev("dock-tree-chev", s.tree, "the folder tree");
+  dockSecAria();
 }
 
 // dockSecSave: a new state, kept and painted.
@@ -164,6 +170,9 @@ function dockSecSet(which, open) {
     const head = key === "tree" ? null : dockSecEl("dock-chg-chev") && dockSecEl("dock-chg-chev").parentNode;
     const chev = dockSecEl(key === "tree" ? "dock-tree-chev" : "dock-chg-chev");
     if (a && part && part.contains(a) && !(head && head.contains(a)) && chev) chev.focus();
+    // The root field lives in the tree: put it away with it, or the next root press would only close what cannot be seen.
+    const col = dockSecEl("drawer-tree");
+    if (key === "tree" && col && col.dataset.rootedit === "1" && typeof dkcRootEdit === "function") dkcRootEdit(false);
   }
   dockSecSave(Object.assign({}, s, { [key]: open }));
 }
@@ -189,6 +198,7 @@ function dockSecWireDivider(el) {
     const pid = e.pointerId;
     el.setPointerCapture(pid);
     el.classList.add("dragging");
+    const b = dockSecBounds(m);
     let r = null;
     const move = (ev) => {
       if (ev.pointerId !== pid) return;
@@ -196,7 +206,7 @@ function dockSecWireDivider(el) {
       if (v === null) return;
       r = v;
       dockSecShareVar(r);
-      dockSecAria();
+      dockSecAriaSet(el, r, m, b);
     };
     const up = (ev) => {
       if (ev.pointerId !== pid) return;

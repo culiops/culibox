@@ -1340,7 +1340,11 @@
   /* The section sits between the top row and the tree and is as tall as its rows, up to 45% of the column, then its list
      scrolls (the header, toggle and branch row stay). It never shrinks for the tree: the tree is the one that gives way. Rows are the tree's size: they follow Settings' "File tree text size". */
   #dock-changes {
-    flex: 0 0 auto; min-height: 0; max-height: var(--dk-chg-max, 45%); display: flex; flex-direction: column;
+    flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column;
+    /* A share the divider stored on a taller window still leaves the tree its header and 3 rows on a shorter one (measured:
+       31px the top row, 26px the root header, 14px the tree body's padding; the rows at the tree's text size), the same
+       bound the divider's End key goes to. */
+    max-height: min(var(--dk-chg-max, 45%), calc(100% - 71px - 3 * var(--fs-tree) * 22 / 12));
     border-bottom: 1px solid var(--line);
   }
   #dock-changes[hidden], .dk-branch[hidden], .dk-chg-note[hidden], .dk-legend[hidden], .dk-review[hidden] { display: none; }

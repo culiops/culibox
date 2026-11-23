@@ -1154,8 +1154,9 @@ async function ftSettled() {
 // finished), then select the file's row and bring it into view. Resolves true
 // when the row was found. A newer root load part-way (ftGen moved) abandons it.
 async function ftReveal(path) {
-  // An explicit ask: the dock's tree opens if it was collapsed (P3). An automatic reveal must not come this way.
-  if (typeof dockSecOpen === "function") dockSecOpen("tree");
+  // An explicit ask: the dock's tree opens if it was collapsed (P3). An automatic reveal must not come this way, and the
+  // phone's tree (not the dock's) leaves the desktop choice alone.
+  if (typeof dockSecOpen === "function" && ftDocked()) dockSecOpen("tree");
   if (!ftRootSel || !ftTreeEl || !path) return false;
   await ftSettled();
   if (ancestorsBetween(ftRoot(), path) === null) {
