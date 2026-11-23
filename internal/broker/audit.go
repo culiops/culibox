@@ -571,7 +571,7 @@ type tierRecorder struct {
 }
 
 func (t tierRecorder) Record(r Row) error {
-	if r.Tier == "" && r.SessionID != "" {
+	if r.Tier == "" && r.SessionID != "" && t.lookup != nil {
 		if sv, ok := t.lookup(r.SessionID); ok {
 			switch {
 			case sv.Host:

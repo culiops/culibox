@@ -1046,3 +1046,14 @@ func TestBrokerRecordsTheSessionTier(t *testing.T) {
 		t.Fatalf("tiers by session: %v", tiers)
 	}
 }
+
+// A tierRecorder with no lookup records the row as it came, without a tier.
+func TestTierRecorderWithoutLookup(t *testing.T) {
+	rec := &memRec{}
+	if err := (tierRecorder{Recorder: rec}).Record(Row{SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Tier != "" || rec.rows[0].SessionID != "s1" {
+		t.Fatalf("rows = %+v", rec.rows)
+	}
+}
