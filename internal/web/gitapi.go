@@ -16,8 +16,8 @@ import (
 	"github.com/culiops/culibox/internal/gitview"
 )
 
-// GitView runs git status, diff, base lookup, line counts and file-at-revision
-// reads for the file tree and the editor (gitview.Runner). Nil on the Server
+// GitView runs git status, diff, base lookup, line counts, file-at-revision
+// reads and line blame for the file tree and the editor (gitview.Runner). Nil on the Server
 // means no box runtime: every endpoint answers "unavailable". Base takes no
 // ref: the runner picks the base branch from the repository's own refs, so a
 // request can never name one. The Scope.BaseRef a handler gives Numstat is the
@@ -35,6 +35,7 @@ type GitView interface {
 	NumstatFresh(context.Context, gitview.Target, gitview.Scope) gitview.Numstat
 	Show(ctx context.Context, t gitview.Target, rev, rel string) gitview.Blob
 	ShowRaw(ctx context.Context, t gitview.Target, rev, rel string) ([]byte, gitview.Blob)
+	Blame(ctx context.Context, t gitview.Target, rel string, k gitview.BlameKey, still func() bool) gitview.Blame
 }
 
 // Every reason a client sees is one of these fixed messages. The runner's own

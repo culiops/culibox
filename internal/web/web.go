@@ -409,6 +409,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/git/base", s.handleGitBase)
 	protected.HandleFunc("/api/git/numstat", s.handleGitNumstat)
 	protected.HandleFunc("/api/git/show", s.handleGitShow)
+	protected.HandleFunc("/api/git/blame", s.handleGitBlame)
 
 	// Analytics routes only exist when the feature is enabled; the POST /ingest
 	// inherits csrfGuard's same-origin check like every other state-changing call.
