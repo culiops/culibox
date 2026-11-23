@@ -486,6 +486,8 @@ function dkcPaintRoot(root) {
   }
   dkcSetText(dkcEl("dock-root-name"), dkcRootName(root));
   dkcSetText(dkcEl("dock-root-path"), root ? (typeof shortPath === "function" ? shortPath(root) : root) : "");
+  // "worktree" or "clone" after the name, when the root is one (dockrootchip.js).
+  if (typeof dockRootChipPaint === "function") dockRootChipPaint(root);
   const dr = dkcEl("drawer");
   const box = !!dr && dr.dataset.box === "1";
   btn.setAttribute("aria-disabled", box ? "true" : "false");

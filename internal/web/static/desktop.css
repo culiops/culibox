@@ -1415,6 +1415,10 @@
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-xs); line-height: var(--lh-xs);
     font-weight: var(--w-semibold); letter-spacing: var(--track-caps); text-transform: uppercase;
   }
+  /* The root's "worktree" / "clone" chip (P4.10, founder pick B): the kit chip, one word that never shrinks; the path beside it
+     gives way first, and the name keeps its own share. Its title says of what and the branch. */
+  .dk-root-chip { flex: none; align-self: center; text-transform: none; letter-spacing: 0; }
+  .dk-root-chip[hidden] { display: none; }
   .dk-root-path { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   /* Today's root field stays in the DOM (the picker is wired to it) and is shown only while the header is being edited. */
   #drawer .dr-tree:not([data-rootedit="1"]) .ft-row { display: none; }

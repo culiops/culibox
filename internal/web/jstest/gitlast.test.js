@@ -34,6 +34,13 @@ test("a status and a view round-trip exactly, and put returns a new map", () => 
   assert.deepStrictEqual(back.view, view([row(), row({ path: "/w/b.go", name: "b.go", code: "U", add: null, del: null, mine: false })]));
 });
 
+test("the status keeps worktreeOf (the root header's chip) when it is a string, and drops anything else", () => {
+  const m = gitLastPut(new Map(), "/w", "status", Object.assign(status(1), { worktreeOf: "/main" }));
+  assert.equal(roundTrip(m).get("/w").status.worktreeOf, "/main");
+  const bad = gitLastPut(new Map(), "/w", "status", Object.assign(status(1), { worktreeOf: { x: 1 } }));
+  assert.strictEqual(roundTrip(bad).get("/w").status.worktreeOf, undefined);
+});
+
 test("a status over 500 entries is kept as no status (no marks), and a view keeps at most 200 rows", () => {
   const m = gitLastPut(new Map(), "/w", "status", status(GITLAST_ENTRIES + 1));
   assert.strictEqual(m.get("/w").status, null);
