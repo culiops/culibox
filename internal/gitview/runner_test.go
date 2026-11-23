@@ -1159,8 +1159,10 @@ func TestBaseRefusesUnsafeTargetAndSkipsNonRepos(t *testing.T) {
 	if bi := newRunner(f, newClock()).Base(context.Background(), tgt); bi.State != "notrepo" {
 		t.Fatalf("not a repository: %+v", bi)
 	}
-	if f.callCount() != 1 {
-		t.Fatalf("a non-repository ran %d containers, want only the status run", f.callCount())
+	// With no status known, the ref lookup runs beside the status (Base does not wait for one to start the other), so it may
+	// have reached docker too; nothing past them ever runs for a non-repository.
+	if n := f.callCount(); n < 1 || n > 2 || runsOf(f, "merge-base") != 0 {
+		t.Fatalf("a non-repository ran %d containers (%v), want the status and at most the ref lookup beside it", n, subsOf(f))
 	}
 }
 
