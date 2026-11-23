@@ -137,7 +137,7 @@ func TestLinkMayLeadRawSpelling(t *testing.T) {
 	if !p.linkMayLead("/data/u", "/home/u/proj") {
 		t.Error("a target under home's configured spelling must be walked")
 	}
-	if p.linkMayLead("/data/u", "/home/other") {
+	if p.linkMayLead("/data/u", "/home/someone") {
 		t.Error("whole components still")
 	}
 }
