@@ -1,0 +1,6 @@
+@fontsource-variable/jetbrains-mono@5.3.0 (npm, OFL-1.1)
+integrity sha512-F32xpS2NsGYoQi2ADSkKTgpJj7ozajsGgDJ8woTnqjmIB+dxDIqImjl4pXZVEExu8UFZ2ndhmX18EBS/hdz3Lw==
+tarball https://registry.npmjs.org/@fontsource-variable/jetbrains-mono/-/jetbrains-mono-5.3.0.tgz
+fontsource's repackage of JetBrains Mono's release, github.com/JetBrains/JetBrainsMono
+subsets: latin latin-ext vietnamese (wght 100-800, normal)
+written by scripts/vendor-jetbrains-mono.sh

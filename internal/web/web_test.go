@@ -145,6 +145,13 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 			t.Fatalf("%s Cache-Control=%q, want no-cache", p, cc)
 		}
 	}
+	// desktop.css's @font-face for the dock's code font (P5) names these unversioned paths: served as fonts, revalidated by ETag.
+	for _, f := range []string{"latin", "latin-ext", "vietnamese"} {
+		rec := get("/vendor/jetbrains-mono/jetbrains-mono-" + f + "-wght-normal.woff2")
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "font/woff2" || rec.Header().Get("ETag") == "" {
+			t.Fatalf("%s: code=%d Content-Type=%q ETag=%q", f, rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("ETag"))
+		}
+	}
 	if cc := get("/xterm/xterm.js").Header().Get("Cache-Control"); cc == "no-cache" {
 		t.Fatal("/xterm/xterm.js should stay cacheable, got no-cache")
 	}
@@ -249,7 +256,8 @@ func TestSharedStylesheetsArePublic(t *testing.T) {
 	// The public set is exact files, not a prefix or subtree: nothing else under
 	// vendor/inter, no directory listing and no trailing-slash alias may be
 	// reachable without a cookie.
-	for _, p := range []string{"/vendor/inter/LICENSE.txt", "/vendor/inter/", "/vendor/", "/desktop.css/"} {
+	// The code font (P5) is not the login page's: desktop.css names it, but only the dock uses it, so it stays behind the guard.
+	for _, p := range []string{"/vendor/inter/LICENSE.txt", "/vendor/inter/", "/vendor/", "/desktop.css/", "/vendor/jetbrains-mono/jetbrains-mono-latin-wght-normal.woff2"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
 		if rec.Code == http.StatusOK {
