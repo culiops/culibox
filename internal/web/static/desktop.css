@@ -1720,6 +1720,9 @@
   .dk-ed-body > .dk-md { position: absolute; inset: 0; overflow: auto; background: var(--bg); }
   .dk-md:focus-visible { outline: var(--focus); outline-offset: -2px; }
   .dk-md .md-body { padding: 18px 28px 24px 36px; }
+  /* A big document comes in chunks (editormd.js editorMdPump): the browser lays out and paints only the chunks near the view, and
+     remembers each one's height once it has been shown (measured: laying out a 2 MiB file at once was a 9.8 s task). */
+  .dk-md .md-chunk { content-visibility: auto; contain-intrinsic-size: auto 1200px; }
   /* The gutter marks of the lines that differ from git (editordiff.js), drawn by Monaco in the column beside the line numbers: a 3px
      strip, green for added lines and blue for modified ones (the theme's own colours), and a small red wedge on the line a removal
      sits in front of. Monaco sets the width of the column's box itself, so the strip's is stated over it. */

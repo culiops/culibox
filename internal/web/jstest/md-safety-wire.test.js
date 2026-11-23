@@ -47,11 +47,20 @@ test("every <a> goes through the link gate: the walk gates it, the notice's link
   assert.match(body("editormd.js", "function editorMdBody(tab, text) {"), /where: tab\.path\.slice\(tab\.path\.lastIndexOf\("\/"\) \+ 1\),/, "the dock says which file the link is in");
 });
 
-test("mdRenderFragment passes MD_PURIFY, merged with RETURN_DOM_FRAGMENT, to DOMPurify, and walks the fragment before it returns it", () => {
-  const b = body("mdsafe.js", "function mdRenderFragment(text, deps) {");
+test("mdFinish passes MD_PURIFY, merged with RETURN_DOM_FRAGMENT, to DOMPurify, and walks the fragment before it returns it", () => {
+  const b = body("mdsafe.js", "function mdFinish(html, deps) {");
   assert.match(b, /deps\.purify\.sanitize\(html, Object\.assign\(\{\}, MD_PURIFY, \{ RETURN_DOM_FRAGMENT: true \}\)\)/);
   assert.ok(b.indexOf("mdWalkFragment(frag, deps.rewrite, deps.where)") > b.indexOf("deps.purify.sanitize("), "the walk runs on what DOMPurify returned");
   assert.ok(b.indexOf("return frag;") > b.indexOf("mdWalkFragment("), "and nothing is returned before it");
+});
+
+test("mdsafe.js sanitizes in one place, and every HTML marked makes there goes straight into mdFinish", () => {
+  const text = stripComments(read("mdsafe.js"));
+  assert.equal(text.split(".sanitize(").length - 1, 1, "DOMPurify is called once, in mdFinish");
+  const made = text.match(/marked\.(parse|parser)\([^;]*/g) || [];
+  assert.ok(made.length >= 1, "mdsafe.js makes HTML with marked");
+  for (const m of made) assert.ok(/^marked\.(parse|parser)\([^)]*\)\s*,\s*deps\)/.test(m) && text.includes("mdFinish(deps." + m), "straight into mdFinish: " + m);
+  assert.match(body("mdsafe.js", "function mdRenderFragment(text, deps) {"), /mdFinish\(deps\.marked\.parse\(text\), deps\)/);
 });
 
 test("the walk checks every element's src, href and xlink:href with mdUnsafeAttr and every attribute for a CSS fetch, and mdIsRelative decides what is rewritten", () => {

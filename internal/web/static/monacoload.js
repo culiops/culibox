@@ -20,6 +20,10 @@
 //  - it appends its own <link> for vs/editor/editor.main.css when it runs.
 
 const MONACO_BASE = "/vendor/monaco/vs";
+// The versioned base the server writes into index.html's asset-base meta: "/v/<build id>" (web.go). Under it the vendored files are
+// cached for a year, and the id changes with every build, so an upgrade never serves a stale loader.js. Anything else in the tag
+// (none, or not exactly that shape) means the unversioned path, which revalidates.
+const MONACO_ASSET_BASE_RE = /^\/v\/[0-9a-f]{16}$/;
 // The name editortab.js gives the editor (culiboxTheme(), monacotheme.js).
 const MONACO_THEME = "culibox";
 
@@ -29,8 +33,8 @@ const MONACO_THEME = "culibox";
 const MONACO_UNBOUND_KEYS = [{ command: "editor.action.quickCommand", code: "F1" }];
 
 // How long the stylesheet may take to apply once the editor module is in: after this the load fails, instead of leaving every open
-// at "loading…" until the page is reloaded. editor.main.css is about 390 KB and the server does not compress it, so 60 s is a
-// floor of about 6.5 KB/s; 10 s failed every first load below about 39 KB/s.
+// at "loading…" until the page is reloaded. editor.main.css is about 390 KB uncompressed (a client that takes gzip gets far less, and
+// a reload revalidates or uses its cache), so 60 s is a floor of about 6.5 KB/s at worst; 10 s failed every first load below about 39 KB/s.
 const MONACO_CSS_TIMEOUT_MS = 60000;
 // What a link click may scan to find the link's text again (monacoLinkText): a model of more than 5 MB is skipped, and at most 20000
 // candidate links are tried in all, so a click on a huge generated file cannot stall the page.
@@ -42,6 +46,19 @@ const MONACO_SCAN_MAX_LINKS = 20000;
 const monacoSlowStyles = new WeakSet();
 
 let monacoLoading = null;
+
+// monacoAssetBase: the page's versioned base, or "" when it names none.
+function monacoAssetBase() {
+  const meta = typeof document !== "undefined" && typeof document.querySelector === "function" ? document.querySelector('meta[name="culibox-asset-base"]') : null;
+  const v = meta && typeof meta.content === "string" ? meta.content : "";
+  return MONACO_ASSET_BASE_RE.test(v) ? v : "";
+}
+
+// monacoBase: where vs/ is loaded from. Monaco finds its stylesheet and its workers from require's `vs` path (require.toUrl), so they
+// follow it.
+function monacoBase() {
+  return monacoAssetBase() + MONACO_BASE;
+}
 
 // monacoInject appends `el` to <head> and settles when the browser has loaded or refused it.
 function monacoInject(el) {
@@ -60,7 +77,7 @@ function monacoInject(el) {
 // under way instead of restarting it (which on a slow link would never finish); a second timeout takes it out too.
 async function monacoStyled() {
   let css = document.head.querySelector('link[href$="/vs/editor/editor.main.css"]');
-  if (!css) { css = document.createElement("link"); css.rel = "stylesheet"; css.href = MONACO_BASE + "/editor/editor.main.css"; document.head.append(css); }
+  if (!css) { css = document.createElement("link"); css.rel = "stylesheet"; css.href = monacoBase() + "/editor/editor.main.css"; document.head.append(css); }
   if (css.sheet) return;
   let timedOut = false;
   try {
@@ -108,9 +125,10 @@ function monacoLinkText(monaco, uri) {
 // monacoBoot: loader.js, then require() of the editor, its stylesheet, then the theme, the unbound keys and the link opener.
 async function monacoBoot() {
   const loader = document.createElement("script");
-  loader.src = MONACO_BASE + "/loader.js";
+  const base = monacoBase();
+  loader.src = base + "/loader.js";
   await monacoInject(loader);
-  require.config({ paths: { vs: MONACO_BASE } });
+  require.config({ paths: { vs: base } });
   await new Promise((resolve, reject) => require(["vs/editor/editor.main"], resolve, reject));
   await monacoStyled();
   const monaco = window.monaco;
@@ -143,5 +161,5 @@ function loadMonaco() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { MONACO_BASE, MONACO_THEME, MONACO_UNBOUND_KEYS, MONACO_CSS_TIMEOUT_MS, loadMonaco };
+  module.exports = { MONACO_BASE, monacoBase, MONACO_THEME, MONACO_UNBOUND_KEYS, MONACO_CSS_TIMEOUT_MS, loadMonaco };
 }

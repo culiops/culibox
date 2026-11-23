@@ -261,14 +261,18 @@ function page(over) {
     // The markdown Preview's render (mdsafe.js, tested on its own in md-render.test.js): here a fragment holding the text it was
     // asked for, so what a test sees is when the preview draws and from which buffer.
     MD_EXTS: new Set(["md", "markdown"]),
+    MD_HL_MAX_CHARS: 102400,
     marked: { parse: () => "" },
     DOMPurify: {},
+    // With deps.chunkChars (the dock always asks) and a text holding \f, the render comes in chunks as the real one does for a big file:
+    // an iterator whose steps yield null (lexing) then one fragment per \f-separated part. st.steps counts the steps taken.
     mdRenderFragment: (text, deps) => {
       st.renders.push({ text, deps });
-      const f = new El("div", doc);
-      f.className = "rendered";
-      f.textContent = text;
-      return f;
+      const part = (t) => { const f = new El("div", doc); f.className = "rendered"; f.textContent = t; return f; };
+      if (!(deps.chunkChars > 0 && text.includes("\f"))) return part(text);
+      return (function* () {
+        for (const t of text.split("\f")) { st.steps = (st.steps || 0) + 1; yield null; st.steps++; if (st.failAt === t) throw new Error("boom"); yield part(t); }
+      })();
     },
     fetch: async (url, init) => {
       const body = JSON.parse(init.body);
