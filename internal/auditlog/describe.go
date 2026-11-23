@@ -15,7 +15,7 @@ import (
 //	credential: a=provider b=entry c=subject d=account_id e=role_arn f=outcome n1=elevated n2=repos n3=sso_direct
 //	approval:   a=action   b=entry c=account_id d=profile e=reason f=cred n1=minutes
 //	egress:     a=host     b=outcome            n1=port n2=bytes_down n3=suppressed
-//	cred:       a=action b=kind c=name d=actor
+//	cred:       a=action b=kind c=name d=actor e=detail (shown for a profile row only)
 //	store:      a=action b=actor c=detail
 type rawRow struct {
 	ts, id           int64
@@ -172,6 +172,8 @@ func egressParts(r rawRow) []Part {
 
 // settingsParts: "<kind> <name> <action>" ("token cloudflare-dns created"). The
 // kind and action are fixed words; the name is free text and the identifier.
+// A profile row adds " · <detail>": the names of the fields an update changed
+// (#330), never their values. Other kinds keep their detail off the page.
 func settingsParts(r rawRow) []Part {
 	kind, action := words(r.b), words(r.a)
 	if r.c == "" {
@@ -184,8 +186,14 @@ func settingsParts(r rawRow) []Part {
 	if action != "" {
 		tail = " " + action
 	}
+	if r.b == profileKind && r.e != "" {
+		tail += " · " + r.e
+	}
 	return compact(txt(lead), ident(r.c), txt(tail))
 }
+
+// profileKind is the cred_audit kind of a profile change (web.profileKind).
+const profileKind = "profile"
 
 // storeParts: "encrypted store <action>" and, when the row has one, " · <detail>".
 // Only a value set or removed, and their _failed outcomes, carry an identifier

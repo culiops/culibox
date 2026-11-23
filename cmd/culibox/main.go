@@ -822,6 +822,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// unreadable, no spawn can be trusted to match what the user saved (#291).
 	lnch.SetProfilesGate(launcher.ProfilesNewerGate(parseErr))
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
+	// #330: who changed which fields of which profile, and when, in the same
+	// audit as credential edits; a row that cannot be written stops the change.
+	pm.SetAudit(storeAudit)
 	// What CuliBox added itself is "builtin" in the profile list; config.json's own
 	// agents are "config" (#15). Derived every boot, never written to a file.
 	pm.SetBuiltin(builtinProfileNames(doctorIn.Source, cfg.Agents, agents))
