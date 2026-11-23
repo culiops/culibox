@@ -36,9 +36,10 @@ func newFlaggedView(store handback.Store) *flaggedView {
 // files), uncached: the list a user is about to review is always current.
 func (v *flaggedView) Pending() ([]handback.Record, error) { return v.store.Pending() }
 
-// Reviewed marks a record reviewed and forgets the cached counts.
-func (v *flaggedView) Reviewed(id string) error {
-	err := v.store.Reviewed(id)
+// Reviewed marks a record reviewed (when it was not scanned again since
+// lastScan) and forgets the cached counts.
+func (v *flaggedView) Reviewed(id string, lastScan time.Time) error {
+	err := v.store.Reviewed(id, lastScan)
 	v.mu.Lock()
 	v.valid = false
 	v.mu.Unlock()

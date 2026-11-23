@@ -671,3 +671,106 @@ func TestHashCapped(t *testing.T) {
 		t.Errorf("empty budget: sum=%q note=%q", sum, note)
 	}
 }
+
+// R21: Incomplete is set only when the walk stopped before it had seen
+// everything (budget, entry cap, cancel, candidate cap). A reason that recurs
+// on every scan (an unreadable directory, the depth cap, the flag cap) must not
+// pin the next scan's window.
+func TestInspectDirIncomplete(t *testing.T) {
+	since := time.Now().Add(-time.Minute)
+
+	t.Run("an unreadable directory is not incomplete", func(t *testing.T) {
+		skipIfRoot(t)
+		root := t.TempDir()
+		put(t, root, "pgdata/x", []byte("x"), 0o644)
+		if err := os.Chmod(filepath.Join(root, "pgdata"), 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(filepath.Join(root, "pgdata"), 0o755) })
+		put(t, root, "run.sh", []byte("#!/bin/sh\n"), 0o755)
+		rep := scan(t, root, since, DefaultLimits())
+		if rep.Truncated == "" || rep.Incomplete {
+			t.Errorf("Truncated=%q Incomplete=%v, want a note and Incomplete false", rep.Truncated, rep.Incomplete)
+		}
+	})
+
+	t.Run("the depth cap is not incomplete", func(t *testing.T) {
+		root := t.TempDir()
+		put(t, root, "a/b/c/d/x", []byte("x"), 0o644)
+		lim := DefaultLimits()
+		lim.Depth = 2
+		rep := scan(t, root, since, lim)
+		if rep.Truncated == "" || rep.Incomplete {
+			t.Errorf("Truncated=%q Incomplete=%v, want a note and Incomplete false", rep.Truncated, rep.Incomplete)
+		}
+	})
+
+	t.Run("the flag cap is not incomplete", func(t *testing.T) {
+		root := t.TempDir()
+		for i := 1; i <= 4; i++ {
+			put(t, root, "a"+strconv.Itoa(i), []byte("#!/bin/sh\n"), 0o755)
+		}
+		lim := DefaultLimits()
+		lim.MaxFlags = 2
+		rep := scan(t, root, since, lim)
+		if rep.Truncated == "" || rep.Incomplete {
+			t.Errorf("Truncated=%q Incomplete=%v, want a note and Incomplete false", rep.Truncated, rep.Incomplete)
+		}
+	})
+
+	t.Run("the time budget is incomplete", func(t *testing.T) {
+		root := t.TempDir()
+		put(t, root, "a", []byte("x"), 0o644)
+		lim := DefaultLimits()
+		lim.Budget = time.Nanosecond
+		time.Sleep(time.Millisecond)
+		rep := scan(t, root, since, lim)
+		if !rep.Incomplete {
+			t.Errorf("Truncated=%q Incomplete=%v, want Incomplete", rep.Truncated, rep.Incomplete)
+		}
+	})
+
+	t.Run("the entry cap is incomplete", func(t *testing.T) {
+		root := t.TempDir()
+		for i := 0; i < 5; i++ {
+			put(t, root, "f"+strconv.Itoa(i), []byte("x"), 0o644)
+		}
+		lim := DefaultLimits()
+		lim.Entries = 2
+		if rep := scan(t, root, since, lim); !rep.Incomplete {
+			t.Errorf("Incomplete = false, Truncated=%q", rep.Truncated)
+		}
+	})
+
+	t.Run("a cancelled walk is incomplete", func(t *testing.T) {
+		root := t.TempDir()
+		for i := 0; i < 3000; i++ {
+			put(t, root, "d/f"+strconv.Itoa(i), []byte("x"), 0o644)
+		}
+		ctx := &cancelAfter{Context: context.Background(), n: 500}
+		rep, err := InspectDir(ctx, root, since, DefaultLimits())
+		if err != nil || !rep.Incomplete {
+			t.Errorf("Incomplete=%v err=%v", rep.Incomplete, err)
+		}
+	})
+
+	t.Run("the candidate cap is incomplete", func(t *testing.T) {
+		root := t.TempDir()
+		for i := 1; i <= 4; i++ {
+			put(t, root, "a"+strconv.Itoa(i), []byte("content"), 0o644)
+		}
+		lim := DefaultLimits()
+		lim.Candidates = 2
+		if rep := scan(t, root, since, lim); !rep.Incomplete {
+			t.Errorf("Incomplete = false, Truncated=%q", rep.Truncated)
+		}
+	})
+
+	t.Run("a finished walk is complete", func(t *testing.T) {
+		root := t.TempDir()
+		put(t, root, "a.pdf", elfExec(), 0o644)
+		if rep := scan(t, root, since, DefaultLimits()); rep.Incomplete || rep.Truncated != "" {
+			t.Errorf("Incomplete=%v Truncated=%q", rep.Incomplete, rep.Truncated)
+		}
+	})
+}

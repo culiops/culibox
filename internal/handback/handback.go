@@ -37,9 +37,16 @@ type Flag struct {
 }
 
 // Report is the result of one inspection. Truncated is a human sentence naming
-// the cap that stopped the scan early; it is empty when the scan finished.
+// whatever kept the scan from seeing everything; it is empty when the scan saw
+// everything. Incomplete is narrower: it is set only when the walk stopped
+// before it had visited every entry (time budget, entry cap, cancellation, the
+// candidate cap on head reads), so files in the window may be unseen and the
+// next scan must cover the same window again. A reason that comes back on every
+// scan of the same tree (an unreadable directory, the depth cap, the flag cap)
+// is in Truncated only: it must not pin the window forever.
 type Report struct {
-	Flags     []Flag `json:"flags"`
-	Inspected int    `json:"inspected"`
-	Truncated string `json:"truncated,omitempty"`
+	Flags      []Flag `json:"flags"`
+	Inspected  int    `json:"inspected"`
+	Truncated  string `json:"truncated,omitempty"`
+	Incomplete bool   `json:"incomplete,omitempty"`
 }

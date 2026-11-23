@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/culiops/culibox/internal/handback"
 )
@@ -13,14 +14,19 @@ import (
 // records still waiting for review, and marking one reviewed.
 type HandbackStore interface {
 	Pending() ([]handback.Record, error)
-	Reviewed(id string) error
+	Reviewed(id string, lastScan time.Time) error
 }
 
 // handleHandback serves the files a boxed session handed back that the user has
 // not yet reviewed (#346):
 //
 //	GET  /api/handback                  -> 200 {"records": [...]}, pending only
-//	POST /api/handback/{id}/reviewed    -> 204; 400 bad id; 404 unknown id
+//	POST /api/handback/{id}/reviewed    -> 204; 400 bad id or body; 404 unknown id;
+//	                                       409 scanned again since the page read it
+//
+// The POST body is {"last_scan": "<RFC3339Nano>"}, the last_scan of the record
+// as the page listed it: a record scanned again since holds flags the user has
+// not seen, so it is left as it is (409) and the page lists it again.
 //
 // One bad record file does not hide the others: the good records are listed and
 // the fault is logged, never sent (it names paths on the host).
@@ -66,9 +72,22 @@ func (a *API) markReviewed(w http.ResponseWriter, r *http.Request, id string) {
 		writeErr(w, http.StatusNotFound, "no such record")
 		return
 	}
-	switch err := a.Handback.Reviewed(id); {
+	var body struct {
+		LastScan string `json:"last_scan"`
+	}
+	if !decodeOpBody(w, r, &body) {
+		return
+	}
+	lastScan, err := time.Parse(time.RFC3339Nano, body.LastScan)
+	if err != nil || lastScan.IsZero() {
+		writeErr(w, http.StatusBadRequest, "last_scan is required")
+		return
+	}
+	switch err := a.Handback.Reviewed(id, lastScan); {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, handback.ErrChanged):
+		writeErr(w, http.StatusConflict, "record changed since it was read")
 	case errors.Is(err, handback.ErrInvalidID):
 		writeErr(w, http.StatusBadRequest, "invalid record id")
 	case errors.Is(err, handback.ErrNotFound):

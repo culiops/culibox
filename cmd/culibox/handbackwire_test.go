@@ -165,7 +165,7 @@ func TestScanInPlace(t *testing.T) {
 	// scan must start where this one did.
 	t.Run("a truncated scan does not move the window past what it did not check", func(t *testing.T) {
 		h := newStubHandback(t, nil)
-		h.rep = handback.Report{Truncated: "walk time budget of 30s reached"}
+		h.rep = handback.Report{Truncated: "walk time budget of 30s reached", Incomplete: true}
 		if _, err := h.ScanInPlace(context.Background(), ws, started, true); err != nil {
 			t.Fatal(err)
 		}
@@ -175,7 +175,7 @@ func TestScanInPlace(t *testing.T) {
 		}
 		// And the unknown-start sentence joins the cap's, not replaces it.
 		h2 := newStubHandback(t, nil)
-		h2.rep = handback.Report{Truncated: "walk time budget of 30s reached"}
+		h2.rep = handback.Report{Truncated: "walk time budget of 30s reached", Incomplete: true}
 		if _, err := h2.ScanInPlace(context.Background(), ws, started, false); err != nil {
 			t.Fatal(err)
 		}
@@ -663,4 +663,166 @@ func TestHandbackNoteSaysTruncated(t *testing.T) {
 			t.Fatalf("Flagged = %+v, want only %+v", sum.Flagged, want)
 		}
 	})
+}
+
+// R21: only a walk that stopped early rolls the window back. A reason that
+// comes back on every scan (an unreadable directory) must let it advance, or a
+// reviewed file would flag again at every exit.
+func TestScanInPlaceWindowRollbackIsForIncompleteWalksOnly(t *testing.T) {
+	ws := realDir(t)
+	key := handback.InPlaceKey(ws)
+	started := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+
+	t.Run("a truncated but complete walk advances the window", func(t *testing.T) {
+		h := newStubHandback(t, nil)
+		h.rep = handback.Report{Truncated: "3 entries could not be read"}
+		before := h.clock
+		if _, err := h.ScanInPlace(context.Background(), ws, started, true); err != nil {
+			t.Fatal(err)
+		}
+		if last, _, _ := h.store.LastScan(key); !last.Equal(before) {
+			t.Fatalf("LastScan = %v, want the scan start %v", last, before)
+		}
+	})
+	t.Run("an incomplete walk rolls the window back", func(t *testing.T) {
+		h := newStubHandback(t, nil)
+		h.rep = handback.Report{Truncated: "time budget of 30s used up", Incomplete: true}
+		if _, err := h.ScanInPlace(context.Background(), ws, started, true); err != nil {
+			t.Fatal(err)
+		}
+		if last, _, _ := h.store.LastScan(key); !last.Equal(started) {
+			t.Fatalf("LastScan = %v, want %v", last, started)
+		}
+		if r := recordOf(t, h.store, key); r.LastScanComplete {
+			t.Fatalf("record = %+v, want last_scan_complete false", r)
+		}
+	})
+	t.Run("an unreadable directory and a script: reviewed once, not flagged again", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads chmod 000 directories")
+		}
+		ws := realDir(t)
+		if err := os.MkdirAll(filepath.Join(ws, "pgdata"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(ws, "pgdata"), 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(filepath.Join(ws, "pgdata"), 0o755) })
+		if err := os.WriteFile(filepath.Join(ws, "run.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		h := newHandbackHooks(t.TempDir(), nil)
+		key := handback.InPlaceKey(ws)
+		note, err := h.ScanInPlace(context.Background(), ws, time.Now().Add(-time.Hour), true)
+		if err != nil || note.Count != 1 {
+			t.Fatalf("scan 1: note = %+v, %v", note, err)
+		}
+		rec := recordOf(t, h.store, key)
+		if !strings.Contains(rec.Truncated, "could not be read") || rec.LastScan.Before(time.Now().Add(-time.Minute)) {
+			t.Fatalf("scan 1 must advance LastScan despite the unreadable directory: %+v", rec)
+		}
+		if err := h.store.Reviewed(rec.ID, rec.LastScan); err != nil {
+			t.Fatal(err)
+		}
+		// Scan 2 reaches back (the exit scan looks at the last check) and
+		// sees run.sh again; it is already reviewed.
+		note, err = h.ScanInPlace(context.Background(), ws, time.Now().Add(-time.Hour), true)
+		if err != nil || note.Count != 0 {
+			t.Fatalf("scan 2: note = %+v, %v; run.sh was reviewed", note, err)
+		}
+		if p, _ := h.store.Pending(); len(p) != 1 || len(p[0].Flags) != 0 || p[0].Truncated == "" {
+			t.Fatalf("pending = %+v, want only the unreadable-entries note", p)
+		}
+	})
+}
+
+// R24: an exit scan reaches back to the last check only when the box was not
+// completely checked when it stopped.
+func TestScanInPlaceExitWindow(t *testing.T) {
+	ws := realDir(t)
+	key := handback.InPlaceKey(ws)
+	created := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	last := created.Add(-5 * time.Hour)
+	run := func(t *testing.T, kind string, incomplete bool) (since time.Time) {
+		t.Helper()
+		h := newStubHandback(t, nil)
+		base := handback.Record{Kind: handback.KindInPlace, Workspace: ws, LastScanKind: kind}
+		if _, err := h.store.Merge(key, base, last, handback.Report{Incomplete: incomplete}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.ScanInPlace(context.Background(), ws, created, true); err != nil {
+			t.Fatal(err)
+		}
+		c := h.got()
+		if len(c) != 1 {
+			t.Fatalf("calls = %+v", c)
+		}
+		return c[0].since
+	}
+	if got := run(t, handback.ScanStop, false); !got.Equal(created) {
+		t.Errorf("after a complete stop scan the window starts at the session (a host-built file between sessions is not flagged): got %v want %v", got, created)
+	}
+	if got := run(t, handback.ScanExit, false); !got.Equal(last) {
+		t.Errorf("after an exit-only record the window looks back: got %v want %v", got, last)
+	}
+	if got := run(t, handback.ScanStop, true); !got.Equal(last) {
+		t.Errorf("after an incomplete stop scan the window looks back: got %v want %v", got, last)
+	}
+	if got := run(t, "", false); !got.Equal(last) {
+		t.Errorf("a record with no kind looks back: got %v want %v", got, last)
+	}
+
+	t.Run("the box-stop scan starts at the last scan and records itself as a stop", func(t *testing.T) {
+		h := newStubHandback(t, nil)
+		if _, err := h.store.Merge(key, handback.Record{Kind: handback.KindInPlace, Workspace: ws, LastScanKind: handback.ScanExit}, last, handback.Report{}); err != nil {
+			t.Fatal(err)
+		}
+		h.OnStop("box-1", ws)
+		if c := h.got(); len(c) != 1 || !c[0].since.Equal(last) {
+			t.Fatalf("calls = %+v, want one from %v", c, last)
+		}
+		if r := recordOf(t, h.store, key); r.LastScanKind != handback.ScanStop || !r.LastScanComplete {
+			t.Fatalf("record = %+v, want kind stop, complete", r)
+		}
+	})
+	t.Run("an exit scan records itself as an exit", func(t *testing.T) {
+		h := newStubHandback(t, nil)
+		if _, err := h.ScanInPlace(context.Background(), ws, created, true); err != nil {
+			t.Fatal(err)
+		}
+		if r := recordOf(t, h.store, key); r.LastScanKind != handback.ScanExit {
+			t.Fatalf("record = %+v", r)
+		}
+	})
+	t.Run("a scan that could not run is incomplete", func(t *testing.T) {
+		h := newStubHandback(t, nil)
+		h.err = errors.New("read dir: input/output error")
+		if _, err := h.ScanInPlace(context.Background(), ws, created, true); err != nil {
+			t.Fatal(err)
+		}
+		if r := recordOf(t, h.store, key); r.LastScanComplete {
+			t.Fatalf("record = %+v, want last_scan_complete false", r)
+		}
+	})
+}
+
+// R22: the note counts what is new to the user, not what was cleared before.
+func TestScanInPlaceCountsOnlyUnreviewedFlags(t *testing.T) {
+	ws := realDir(t)
+	key := handback.InPlaceKey(ws)
+	h := newStubHandback(t, nil)
+	h.rep = onePDF()
+	started := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	if _, err := h.ScanInPlace(context.Background(), ws, started, true); err != nil {
+		t.Fatal(err)
+	}
+	rec := recordOf(t, h.store, key)
+	if err := h.store.Reviewed(rec.ID, rec.LastScan); err != nil {
+		t.Fatal(err)
+	}
+	note, err := h.ScanInPlace(context.Background(), ws, started, true)
+	if err != nil || note.Count != 0 {
+		t.Fatalf("note = %+v, %v; the same file was already reviewed", note, err)
+	}
 }

@@ -95,9 +95,19 @@ func TestStoreMergeReplacesSamePathKeepsOthers(t *testing.T) {
 	if rec.Truncated != "first" {
 		t.Fatalf("an empty Truncated must not clear the earlier one, got %q", rec.Truncated)
 	}
+	// R17 is sticky: a later, different note joins the earlier one (newest
+	// last); an exact repeat is not stacked.
 	rec, err = s.Merge(key, base, t2, Report{Truncated: "second"})
-	if err != nil || rec.Truncated != "second" {
-		t.Fatalf("latest non-empty Truncated wins: %q %v", rec.Truncated, err)
+	if err != nil || rec.Truncated != "first; second" {
+		t.Fatalf("a later note must join the earlier one: %q %v", rec.Truncated, err)
+	}
+	rec, err = s.Merge(key, base, t2, Report{Truncated: "second"})
+	if err != nil || rec.Truncated != "first; second" {
+		t.Fatalf("a repeated note must not stack: %q %v", rec.Truncated, err)
+	}
+	rec, err = s.Merge(key, base, t2, Report{Truncated: "first; third"})
+	if err != nil || rec.Truncated != "first; second; third" {
+		t.Fatalf("only the new part of a joined note is added: %q %v", rec.Truncated, err)
 	}
 	// Strongest first, as SortFlags orders them.
 	want := append([]Flag(nil), rec.Flags...)
@@ -154,7 +164,7 @@ func TestStoreReviewedClearsKeepsLastScan(t *testing.T) {
 	if p, err := s.Pending(); err != nil || len(p) != 1 {
 		t.Fatalf("pending = %v %v", p, err)
 	}
-	if err := s.Reviewed(rec.ID); err != nil {
+	if err := s.Reviewed(rec.ID, at); err != nil {
 		t.Fatal(err)
 	}
 	if p, err := s.Pending(); err != nil || len(p) != 0 {
@@ -174,7 +184,7 @@ func TestStoreReviewedClearsKeepsLastScan(t *testing.T) {
 func TestStoreReviewedRejectsBadID(t *testing.T) {
 	s := newStore(t)
 	for _, id := range []string{"../x", "", "abc", strings.Repeat("g", 32), strings.Repeat("A", 32), strings.Repeat("a", 33), "../" + strings.Repeat("a", 29)} {
-		if err := s.Reviewed(id); !errors.Is(err, ErrInvalidID) {
+		if err := s.Reviewed(id, time.Unix(1, 0)); !errors.Is(err, ErrInvalidID) {
 			t.Errorf("Reviewed(%q) = %v, want ErrInvalidID", id, err)
 		}
 	}
@@ -182,7 +192,7 @@ func TestStoreReviewedRejectsBadID(t *testing.T) {
 
 func TestStoreReviewedUnknownIDIsNotFound(t *testing.T) {
 	s := newStore(t)
-	err := s.Reviewed(RecordID("unknown"))
+	err := s.Reviewed(RecordID("unknown"), time.Unix(1, 0))
 	if !errors.Is(err, ErrNotFound) || !errors.Is(err, fs.ErrNotExist) || errors.Is(err, ErrInvalidID) {
 		t.Fatalf("Reviewed of a valid absent id = %v, want ErrNotFound (wrapping fs.ErrNotExist)", err)
 	}
@@ -190,7 +200,7 @@ func TestStoreReviewedUnknownIDIsNotFound(t *testing.T) {
 	if _, err := s.Merge(InPlaceKey("/w"), Record{Kind: "in-place"}, time.Unix(1, 0), Report{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Reviewed(RecordID("unknown")); !errors.Is(err, ErrNotFound) {
+	if err := s.Reviewed(RecordID("unknown"), time.Unix(1, 0)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("got %v, want ErrNotFound", err)
 	}
 }
@@ -322,7 +332,7 @@ func TestStoreRefusesBadRecordFiles(t *testing.T) {
 			if _, _, err := s.LastScan(key); err == nil {
 				t.Error("LastScan: want error")
 			}
-			if err := s.Reviewed(id); err == nil || errors.Is(err, ErrNotFound) {
+			if err := s.Reviewed(id, time.Unix(1, 0)); err == nil || errors.Is(err, ErrNotFound) {
 				t.Errorf("Reviewed: want a non-NotFound error, got %v", err)
 			}
 			if _, err := s.Pending(); err == nil {
@@ -550,10 +560,221 @@ func TestStorePendingKeepsAZeroFlagRecordWithATruncatedNote(t *testing.T) {
 	if err != nil || len(p) != 1 || p[0].ID != cut.ID || len(p[0].Flags) != 0 || p[0].Truncated == "" {
 		t.Fatalf("Pending = %+v %v, want only the cut-short record", p, err)
 	}
-	if err := s.Reviewed(cut.ID); err != nil {
+	if err := s.Reviewed(cut.ID, cut.LastScan); err != nil {
 		t.Fatal(err)
 	}
 	if p, err := s.Pending(); err != nil || len(p) != 0 {
 		t.Fatalf("after Reviewed: %+v %v", p, err)
+	}
+}
+
+func reviewOf(t *testing.T, s Store, rec Record) {
+	t.Helper()
+	if err := s.Reviewed(rec.ID, rec.LastScan); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// R22: a flag the user cleared stays cleared when the same file is handed back
+// again; a changed file flags again.
+func TestStoreReviewedFlagsStayReviewed(t *testing.T) {
+	h1, h2 := strings.Repeat("a1", 32), strings.Repeat("b2", 32)
+	hashed := func(h string) Flag {
+		return Flag{Path: "bin/x", Classes: []Class{ClassExecutable}, Detail: "ELF", SHA256: h}
+	}
+	unhashed := Flag{Path: "big.bin", Classes: []Class{ClassExecutable}, Detail: "ELF", HashNote: "not hashed: larger than 64 MiB"}
+	symlink := Flag{Path: "ln", Classes: []Class{ClassSymlinkOut}, Detail: "out", Target: "/etc/passwd"}
+	for _, kind := range []string{KindClone, KindInPlace} {
+		t.Run(kind, func(t *testing.T) {
+			s := newStore(t)
+			key, base := CloneKey("/r", "b"), Record{Kind: KindClone, CloneOf: "/r", Branch: "box/b"}
+			if kind == KindInPlace {
+				key, base = InPlaceKey("/ws"), Record{Kind: KindInPlace, Workspace: "/ws"}
+			}
+			rec, err := s.Merge(key, base, time.Unix(100, 0), Report{Flags: []Flag{hashed(h1), unhashed, symlink}})
+			if err != nil || len(rec.Flags) != 3 {
+				t.Fatalf("merge: %+v %v", rec, err)
+			}
+			reviewOf(t, s, rec)
+			// The same report again: nothing is pending, and none of it counts as new.
+			rec, n, err := s.MergeScan(key, base, time.Unix(200, 0), Report{Flags: []Flag{hashed(h1), unhashed, symlink}})
+			if err != nil || len(rec.Flags) != 0 || n != 0 {
+				t.Fatalf("a reviewed file flagged again: flags=%+v new=%d err=%v", rec.Flags, n, err)
+			}
+			if p, err := s.Pending(); err != nil || len(p) != 0 {
+				t.Fatalf("pending = %v %v", p, err)
+			}
+			// The same path with other content is a new file for review.
+			rec, n, err = s.MergeScan(key, base, time.Unix(300, 0), Report{Flags: []Flag{hashed(h2), unhashed}})
+			if err != nil || len(rec.Flags) != 1 || rec.Flags[0].SHA256 != h2 || n != 1 {
+				t.Fatalf("a changed file must flag again: flags=%+v new=%d err=%v", rec.Flags, n, err)
+			}
+			// A different target is a different link.
+			other := symlink
+			other.Target = "/etc/shadow"
+			rec, _, err = s.MergeScan(key, base, time.Unix(400, 0), Report{Flags: []Flag{other}})
+			if err != nil || len(rec.Flags) != 2 {
+				t.Fatalf("a link to another target must flag again: %+v %v", rec.Flags, err)
+			}
+		})
+	}
+}
+
+func TestStoreReviewedSetIsCappedKeepingNewest(t *testing.T) {
+	s := newStore(t)
+	key, base := InPlaceKey("/ws"), Record{Kind: KindInPlace, Workspace: "/ws"}
+	var first, last Flag
+	rounds := MaxReviewed/DefaultLimits().MaxFlags + 1
+	at := time.Unix(1, 0)
+	for r := 0; r < rounds; r++ {
+		var fs []Flag
+		for i := 0; i < DefaultLimits().MaxFlags; i++ {
+			fs = append(fs, Flag{Path: fmt.Sprintf("r%d/f%05d", r, i), Classes: []Class{ClassArchive}, Detail: "zip"})
+		}
+		if r == 0 {
+			first = fs[0]
+		}
+		last = fs[len(fs)-1]
+		at = at.Add(time.Second)
+		rec, err := s.Merge(key, base, at, Report{Flags: fs})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reviewOf(t, s, rec)
+	}
+	rec, _, err := s.MergeScan(key, base, at.Add(time.Second), Report{Flags: []Flag{first, last}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.ReviewedFP) != MaxReviewed {
+		t.Errorf("reviewed set holds %d, want the cap %d", len(rec.ReviewedFP), MaxReviewed)
+	}
+	if len(rec.Flags) != 1 || rec.Flags[0].Path != first.Path {
+		t.Errorf("the oldest reviewed flag must fall out of the set and the newest stay: %+v", paths(rec.Flags))
+	}
+}
+
+func TestStoreReviewedSetShrinksBeforeFlagsAtSizeCap(t *testing.T) {
+	s := newStore(t)
+	id := RecordID(InPlaceKey("/ws"))
+	long := strings.Repeat("p", 1000)
+	rec := Record{ID: id, Kind: KindInPlace, Workspace: "/ws", LastScan: time.Unix(1, 0).UTC()}
+	for i := 0; i < 3500; i++ {
+		rec.Flags = append(rec.Flags, Flag{Path: fmt.Sprintf("%s%05d", long, i), Classes: []Class{ClassArchive}, Detail: "zip " + long[:100]})
+	}
+	for i := 0; i < MaxReviewed; i++ {
+		rec.ReviewedFP = append(rec.ReviewedFP, fmt.Sprintf("%064x", i))
+	}
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	out, err := writeRecordIn(root, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Flags) != 3500 {
+		t.Fatalf("flags were trimmed (%d) before the reviewed set was", len(out.Flags))
+	}
+	if len(out.ReviewedFP) >= MaxReviewed || len(out.ReviewedFP) == 0 {
+		t.Fatalf("reviewed set = %d, want it trimmed but not emptied", len(out.ReviewedFP))
+	}
+	if out.ReviewedFP[len(out.ReviewedFP)-1] != fmt.Sprintf("%064x", MaxReviewed-1) {
+		t.Fatal("the newest fingerprints must be the ones kept")
+	}
+	if strings.Contains(out.Truncated, "size cap") {
+		t.Fatalf("trimming the set must leave no user-visible note: %q", out.Truncated)
+	}
+	got, ok, err := readRecordIn(root, id)
+	if err != nil || !ok || len(got.Flags) != 3500 || len(got.ReviewedFP) != len(out.ReviewedFP) {
+		t.Fatalf("read back: ok=%v err=%v flags=%d fp=%d", ok, err, len(got.Flags), len(got.ReviewedFP))
+	}
+}
+
+func TestStoreReviewedSetSurvivesReadAndHidesFromPending(t *testing.T) {
+	s := newStore(t)
+	key, base := InPlaceKey("/ws"), Record{Kind: KindInPlace, Workspace: "/ws"}
+	rec, err := s.Merge(key, base, time.Unix(1, 0), Report{Flags: []Flag{fl("a", ClassArchive)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewOf(t, s, rec)
+	// A fresh Store over the same dir (the CLI process) still has the set.
+	s2 := Store{Dir: s.Dir}
+	rec, _, err = s2.MergeScan(key, base, time.Unix(2, 0), Report{Flags: []Flag{fl("a", ClassArchive), fl("b", ClassArchive)}})
+	if err != nil || len(rec.Flags) != 1 || rec.Flags[0].Path != "b" || len(rec.ReviewedFP) != 1 {
+		t.Fatalf("%+v %v", rec, err)
+	}
+	// Garbage in the set is dropped on read.
+	rec.ReviewedFP = append(rec.ReviewedFP, "not a fingerprint", "../../x")
+	if c := cleanRecord(rec, rec.ID); len(c.ReviewedFP) != 1 {
+		t.Fatalf("cleanRecord kept %v", c.ReviewedFP)
+	}
+	// The list the UI polls never carries it.
+	p, err := s.Pending()
+	if err != nil || len(p) != 1 || len(p[0].ReviewedFP) != 0 {
+		t.Fatalf("pending = %+v %v", p, err)
+	}
+}
+
+// R23: marking reviewed clears only what the user saw.
+func TestStoreReviewedErrChanged(t *testing.T) {
+	s := newStore(t)
+	key, base := InPlaceKey("/ws"), Record{Kind: KindInPlace, Workspace: "/ws"}
+	t1, t2 := time.Unix(1000, 0).UTC(), time.Unix(2000, 0).UTC()
+	rec, err := s.Merge(key, base, t1, Report{Flags: []Flag{fl("a", ClassArchive)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Merge(key, base, t2, Report{Flags: []Flag{fl("b", ClassArchive)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reviewed(rec.ID, t1); !errors.Is(err, ErrChanged) {
+		t.Fatalf("Reviewed with a stale last_scan = %v, want ErrChanged", err)
+	}
+	if err := s.Reviewed(rec.ID, time.Time{}); !errors.Is(err, ErrChanged) {
+		t.Fatalf("Reviewed with a zero last_scan = %v, want ErrChanged", err)
+	}
+	if p, err := s.Pending(); err != nil || len(p) != 1 || len(p[0].Flags) != 2 {
+		t.Fatalf("a refused review must leave the flags: %+v %v", p, err)
+	}
+	// The same instant in another zone is the same scan.
+	if err := s.Reviewed(rec.ID, t2.In(time.FixedZone("x", 3600))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// R24: what kind of scan wrote LastScan and whether it finished.
+func TestStoreLastScanInfo(t *testing.T) {
+	s := newStore(t)
+	key := InPlaceKey("/ws")
+	if _, ok, err := s.LastScanInfo(key); ok || err != nil {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	at := time.Unix(1000, 0).UTC()
+	base := Record{Kind: KindInPlace, Workspace: "/ws", LastScanKind: ScanStop}
+	if _, err := s.Merge(key, base, at, Report{}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.LastScanInfo(key)
+	want := ScanInfo{At: at, Kind: ScanStop, Complete: true}
+	if err != nil || !ok || got != want {
+		t.Fatalf("LastScanInfo = %+v %v %v, want %+v", got, ok, err, want)
+	}
+	base.LastScanKind = ScanExit
+	if _, err := s.Merge(key, base, at, Report{Incomplete: true, Truncated: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = s.LastScanInfo(key)
+	if want = (ScanInfo{At: at, Kind: ScanExit, Complete: false}); got != want {
+		t.Fatalf("LastScanInfo = %+v, want %+v", got, want)
+	}
+	// An unknown kind on disk is not trusted.
+	if c := cleanRecord(Record{LastScanKind: "bogus\x00"}, "x"); c.LastScanKind != "" {
+		t.Fatalf("kind = %q", c.LastScanKind)
 	}
 }

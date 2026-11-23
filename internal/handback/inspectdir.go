@@ -72,6 +72,7 @@ func InspectRoot(ctx context.Context, r *os.Root, since time.Time, lim Limits) (
 		reasons = append(reasons, fmt.Sprintf("flag cap of %d reached; %d more flagged files are not listed", lim.MaxFlags, d))
 	}
 	rep.Truncated = strings.Join(reasons, "; ")
+	rep.Incomplete = s.stopped || s.headsCapped
 	rep.Flags = s.flags.Sorted()
 	return rep, nil
 }

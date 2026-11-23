@@ -102,31 +102,45 @@ func openWorkspace(path string) (*os.Root, error) {
 }
 
 // ScanInPlace inspects what a box wrote into workspace (the real path the box
-// was made over) since `since` and records it. The window starts at `since` or
-// at the last scan on record, whichever is earlier, so a gap between scans (a
-// process that kept writing after a session, a box reaped at boot) is never
-// left unchecked. With sinceKnown false the start is a guess: the last scan on
+// was made over) since `since` and records it. An exit scan's window starts at
+// `since` or at the last scan on record, whichever is earlier, when that last
+// scan was not a complete box-stop scan, so a gap between scans (a process that
+// kept writing after a session, a box reaped at boot) is never left unchecked;
+// after a complete stop scan the gap was already checked and the window starts
+// at `since`. With sinceKnown false the start is a guess: the last scan on
 // record replaces it, and with none the record says files before the guess
 // were not checked. The scan's start is taken before the walk, so a file
-// written during it is seen by the next scan. A scan that stopped early (a cap)
-// moves the window back to its own start instead, so the next scan still
-// covers what this one did not reach. A scan with nothing flagged still writes
+// written during it is seen by the next scan. A scan that stopped early
+// (Report.Incomplete: its time budget, the entry or candidate cap, a cancel)
+// moves the window back to its own start instead, so the next scan still covers
+// what this one did not reach. A scan with nothing flagged still writes
 // a record: the next scan (a box stop) starts from it. A workspace that cannot
 // be opened, whose path changed, or whose walk panicked is recorded with a
 // note saying it was not (fully) scanned. The note's Count is what this scan
 // flagged, not what the record holds.
 func (h *handbackHooks) ScanInPlace(ctx context.Context, workspace string, since time.Time, sinceKnown bool) (session.HandbackNote, error) {
+	return h.scanInPlace(ctx, workspace, since, sinceKnown, handback.ScanExit)
+}
+
+// scanInPlace is ScanInPlace for either caller: kind says whether it is a
+// session's exit scan or the box-stop scan, and is written into the record.
+func (h *handbackHooks) scanInPlace(ctx context.Context, workspace string, since time.Time, sinceKnown bool, kind string) (session.HandbackNote, error) {
 	key := handback.InPlaceKey(workspace)
 	scanAt := h.now()
 	note := ""
-	last, haveLast, err := h.store.LastScan(key)
+	info, haveLast, err := h.store.LastScanInfo(key)
+	last := info.At
 	if err != nil {
 		// A record that cannot be read does not stop the scan: Merge decides
 		// whether it can be replaced, and says so if it cannot.
 		log.Printf("handback: last scan of %q unreadable (%v); using the session's start", workspace, err)
 	}
 	switch {
-	case haveLast && (!sinceKnown || last.Before(since)):
+	case haveLast && !sinceKnown:
+		since = last
+	case haveLast && kind == handback.ScanExit && !(info.Kind == handback.ScanStop && info.Complete) && last.Before(since):
+		// The last check did not cover the time up to now (an exit scan only
+		// saw its own session, or the stop scan was cut short): reach back.
 		since = last
 	case !haveLast && !sinceKnown:
 		note = unknownStartNote(since)
@@ -140,22 +154,23 @@ func (h *handbackHooks) ScanInPlace(ctx context.Context, workspace string, since
 		if errors.Is(err, errWorkspaceMoved) {
 			rep.Truncated = pathChangedNote
 		}
-		scanAt = since
+		rep.Incomplete = true
 	default:
 		rep = h.safeInspect(ctx, r, since)
 		r.Close()
-		if rep.Truncated != "" {
-			scanAt = since // what this scan did not reach must stay inside the next window
-		}
+	}
+	if rep.Incomplete {
+		scanAt = since // what this scan did not reach must stay inside the next window
 	}
 	if note != "" {
 		rep.Truncated = joinNotes(rep.Truncated, note)
 	}
-	rec, err := h.store.Merge(key, handback.Record{Kind: handback.KindInPlace, Workspace: workspace}, scanAt, rep)
+	base := handback.Record{Kind: handback.KindInPlace, Workspace: workspace, LastScanKind: kind}
+	rec, fresh, err := h.store.MergeScan(key, base, scanAt, rep)
 	if err != nil {
 		return session.HandbackNote{}, fmt.Errorf("cannot record what was flagged in %s: %w", workspace, err)
 	}
-	return session.HandbackNote{ID: rec.ID, Count: len(rep.Flags), InPlace: true, Truncated: rep.Truncated != ""}, nil
+	return session.HandbackNote{ID: rec.ID, Count: fresh, InPlace: true, Truncated: rep.Truncated != ""}, nil
 }
 
 func joinNotes(a, b string) string {
@@ -172,12 +187,12 @@ func (h *handbackHooks) safeInspect(ctx context.Context, r *os.Root, since time.
 	defer func() {
 		if p := recover(); p != nil {
 			log.Printf("handback: scan of %q stopped with an internal error: %v", r.Name(), p)
-			rep = handback.Report{Truncated: scanPanickedNote}
+			rep = handback.Report{Truncated: scanPanickedNote, Incomplete: true}
 		}
 	}()
 	rep, err := h.inspect(ctx, r, since, handback.DefaultLimits())
 	if err != nil {
-		return handback.Report{Truncated: "the workspace could not be read: " + handback.SanitizePath(err.Error())}
+		return handback.Report{Truncated: "the workspace could not be read: " + handback.SanitizePath(err.Error()), Incomplete: true}
 	}
 	return rep
 }
@@ -206,7 +221,7 @@ func (h *handbackHooks) OnStop(name, workspace string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), handbackStopTimeout)
 	defer cancel()
-	if _, err := h.ScanInPlace(ctx, workspace, last, true); err != nil {
+	if _, err := h.scanInPlace(ctx, workspace, last, true, handback.ScanStop); err != nil {
 		log.Printf("handback: box %s stopped; scan of %q: %v", name, workspace, err)
 	}
 }
@@ -222,11 +237,13 @@ func cloneBranchKey(of, branch string) string { return handback.CloneKey(of, bra
 // record could not be written.
 func (h *handbackHooks) recordClone(of, branch, hostRef string, rep handback.Report) (session.HandbackNote, error) {
 	base := handback.Record{Kind: handback.KindClone, CloneOf: of, Branch: hostRef}
-	rec, err := h.store.Merge(cloneBranchKey(of, branch), base, h.now(), rep)
+	rec, fresh, err := h.store.MergeScan(cloneBranchKey(of, branch), base, h.now(), rep)
 	if err != nil {
 		return session.HandbackNote{}, err
 	}
-	return session.HandbackNote{ID: rec.ID, Count: len(rep.Flags), Branch: hostRef, Truncated: rep.Truncated != ""}, nil
+	// Count is what is new to the user: a file already reviewed and handed back
+	// unchanged is not counted (nor listed).
+	return session.HandbackNote{ID: rec.ID, Count: fresh, Branch: hostRef, Truncated: rep.Truncated != ""}, nil
 }
 
 // flaggedOf records every branch of a return that came home and lists the ones

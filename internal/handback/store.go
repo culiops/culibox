@@ -27,6 +27,10 @@ const maxRecordFile = 4 << 20
 var (
 	ErrInvalidID = errors.New("handback: invalid record id")
 	ErrNotFound  = fmt.Errorf("handback: record not found: %w", fs.ErrNotExist)
+	// ErrChanged is returned by Reviewed when the record was scanned again
+	// since the caller read it: the caller has not seen everything in it, so
+	// nothing is cleared. Callers map it to 409.
+	ErrChanged = errors.New("handback: record changed since it was read")
 )
 
 // errUnreadable marks a regular record file that is corrupt or over the cap.
@@ -57,6 +61,42 @@ const (
 	KindInPlace = "in-place"
 )
 
+// Kinds of scan that wrote a record's LastScan: the exit scan of a session, or
+// the scan when its box was stopped.
+const (
+	ScanExit = "exit"
+	ScanStop = "stop"
+)
+
+// MaxReviewed bounds the fingerprints of cleared flags kept in one record.
+const MaxReviewed = 20_000
+
+// fingerprintRe is the shape of one entry of the reviewed set.
+var fingerprintRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// Fingerprint identifies a flagged file's content for the reviewed set: its
+// path and SHA-256 when it was hashed, else its path, classes and link target.
+// The result is a fixed-width hash, so the set's size does not depend on the
+// path lengths. A file that changed (another hash) has another fingerprint and
+// flags again.
+func Fingerprint(f Flag) string {
+	var b strings.Builder
+	b.WriteString(f.Path)
+	b.WriteByte(0)
+	if f.SHA256 != "" {
+		b.WriteString("sha256:" + f.SHA256)
+	} else {
+		for _, c := range f.Classes {
+			b.WriteString(string(c))
+			b.WriteByte(',')
+		}
+		b.WriteByte(0)
+		b.WriteString(f.Target)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
 // Record is what one workspace (in-place) or one box branch (clone) has
 // handed back and the user has not yet marked reviewed. Every string in it
 // began as box text and was sanitized before it reached the store; the store
@@ -68,9 +108,26 @@ type Record struct {
 	CloneOf   string    `json:"clone_of,omitempty"`
 	Branch    string    `json:"branch,omitempty"`
 	LastScan  time.Time `json:"last_scan"`
-	Flags     []Flag    `json:"flags"`
-	Inspected int       `json:"inspected"`
-	Truncated string    `json:"truncated,omitempty"`
+	// LastScanKind says which scan wrote LastScan (ScanExit or ScanStop; empty
+	// for a clone record) and LastScanComplete whether that scan saw everything
+	// in its window. An exit scan reaches back to the last check only when the
+	// box was not completely checked when it stopped.
+	LastScanKind     string `json:"last_scan_kind,omitempty"`
+	LastScanComplete bool   `json:"last_scan_complete"`
+	Flags            []Flag `json:"flags"`
+	Inspected        int    `json:"inspected"`
+	Truncated        string `json:"truncated,omitempty"`
+	// ReviewedFP holds the Fingerprint of every flag the user cleared, oldest
+	// first and bounded by MaxReviewed, so a file already reviewed is not
+	// flagged again when it is handed back unchanged. Pending leaves it out.
+	ReviewedFP []string `json:"reviewed,omitempty"`
+}
+
+// ScanInfo is what a record says about its last scan.
+type ScanInfo struct {
+	At       time.Time
+	Kind     string
+	Complete bool
 }
 
 // Store persists records as <Dir>/<id>.json (0600) inside Dir (0700), which is
@@ -101,10 +158,19 @@ func recordName(id string) string { return id + ".json" }
 // is the latest scan's count. Kind, Workspace, CloneOf and Branch come from
 // base. When the merge holds more than MaxFlags flags the strongest are kept.
 func (s Store) Merge(key string, base Record, scanAt time.Time, r Report) (Record, error) {
+	rec, _, err := s.MergeScan(key, base, scanAt, r)
+	return rec, err
+}
+
+// MergeScan is Merge that also returns how many of the scan's flags are new to
+// the user: those not already in the record's reviewed set. A flag in that set
+// (a file the user cleared and that has not changed) is left out of the record.
+// LastScanKind comes from base and LastScanComplete from r.Incomplete.
+func (s Store) MergeScan(key string, base Record, scanAt time.Time, r Report) (Record, int, error) {
 	id := RecordID(key)
 	dir, unlock, err := s.lock()
 	if err != nil {
-		return Record{}, err
+		return Record{}, 0, err
 	}
 	defer unlock()
 	rec, _, err := readRecordIn(dir, id)
@@ -115,15 +181,14 @@ func (s Store) Merge(key string, base Record, scanAt time.Time, r Report) (Recor
 		rec, replaced, err = Record{}, true, nil
 	}
 	if err != nil {
-		return Record{}, err
+		return Record{}, 0, err
 	}
 	rec.ID = id
 	rec.Kind, rec.Workspace, rec.CloneOf, rec.Branch = base.Kind, base.Workspace, base.CloneOf, base.Branch
 	rec.LastScan = scanAt
+	rec.LastScanKind, rec.LastScanComplete = base.LastScanKind, !r.Incomplete
 	rec.Inspected = r.Inspected
-	if r.Truncated != "" {
-		rec.Truncated = r.Truncated
-	}
+	rec.Truncated = joinDistinctNotes(rec.Truncated, r.Truncated)
 	if replaced {
 		rec.Truncated = joinNote(rec.Truncated, replacedNote)
 	}
@@ -132,8 +197,17 @@ func (s Store) Merge(key string, base Record, scanAt time.Time, r Report) (Recor
 	for _, f := range rec.Flags {
 		byPath[f.Path] = f
 	}
+	reviewed := make(map[string]bool, len(rec.ReviewedFP))
+	for _, fp := range rec.ReviewedFP {
+		reviewed[fp] = true
+	}
+	fresh := 0
 	for _, f := range r.Flags {
 		f = cleanFlag(f)
+		if reviewed[Fingerprint(f)] {
+			continue
+		}
+		fresh++
 		byPath[f.Path] = f
 	}
 	set := NewFlagSet(DefaultLimits().MaxFlags)
@@ -142,7 +216,8 @@ func (s Store) Merge(key string, base Record, scanAt time.Time, r Report) (Recor
 	}
 	rec.Flags = set.Sorted()
 	rec = cleanRecord(rec, id)
-	return writeRecordIn(dir, rec)
+	rec, err = writeRecordIn(dir, rec)
+	return rec, fresh, err
 }
 
 func joinNote(a, b string) string {
@@ -152,18 +227,49 @@ func joinNote(a, b string) string {
 	return a + "; " + b
 }
 
+// joinDistinctNotes adds the parts of note that old does not have yet to the
+// end of old, so an earlier note is never lost to a later, different one and a
+// repeat is not stacked. Notes are "; "-joined parts; the sanitizer's cap keeps
+// the tail, the newest.
+func joinDistinctNotes(old, note string) string {
+	if note == "" {
+		return old
+	}
+	have := map[string]bool{}
+	if old != "" {
+		for _, p := range strings.Split(old, "; ") {
+			have[p] = true
+		}
+	}
+	out := old
+	for _, p := range strings.Split(note, "; ") {
+		if p == "" || have[p] {
+			continue
+		}
+		have[p] = true
+		out = joinNote(out, p)
+	}
+	return out
+}
+
 // LastScan reports when key was last scanned; false when it never was.
 func (s Store) LastScan(key string) (time.Time, bool, error) {
+	info, ok, err := s.LastScanInfo(key)
+	return info.At, ok, err
+}
+
+// LastScanInfo is LastScan with the kind of scan and whether it was complete.
+func (s Store) LastScanInfo(key string) (ScanInfo, bool, error) {
 	dir, err := s.openRead()
 	if err != nil || dir == nil {
-		return time.Time{}, false, err
+		return ScanInfo{}, false, err
 	}
 	defer dir.Close()
 	rec, ok, err := readRecordIn(dir, RecordID(key))
 	if err != nil || !ok {
-		return time.Time{}, false, err
+		return ScanInfo{}, false, err
 	}
-	return rec.LastScan, true, nil
+	return ScanInfo{At: rec.LastScan, Kind: rec.LastScanKind, Complete: rec.LastScanComplete}, true, nil
 }
 
 // Pending returns the records that still hold at least one flag, or a
@@ -200,6 +306,7 @@ func (s Store) Pending() ([]Record, error) {
 			continue
 		}
 		if ok && (len(rec.Flags) > 0 || rec.Truncated != "") {
+			rec.ReviewedFP = nil // bookkeeping for Merge, not for the list
 			out = append(out, rec)
 		}
 	}
@@ -213,10 +320,13 @@ func (s Store) Pending() ([]Record, error) {
 }
 
 // Reviewed marks a record reviewed: its flags and Truncated note are cleared,
-// LastScan is kept (the next in-place scan starts there). A well-formed id with
-// no record is ErrNotFound, a malformed id is ErrInvalidID, a corrupt record is
-// neither.
-func (s Store) Reviewed(id string) error {
+// LastScan is kept (the next in-place scan starts there) and each cleared
+// flag's Fingerprint joins the reviewed set, so the same file is not flagged
+// again. lastScan is the LastScan of the record as the caller read it: when the
+// record was scanned again since, it holds flags the caller has not seen and
+// nothing is cleared (ErrChanged). A well-formed id with no record is
+// ErrNotFound, a malformed id is ErrInvalidID, a corrupt record is neither.
+func (s Store) Reviewed(id string, lastScan time.Time) error {
 	if !recordIDRe.MatchString(id) {
 		return ErrInvalidID
 	}
@@ -231,6 +341,19 @@ func (s Store) Reviewed(id string) error {
 	}
 	if !ok {
 		return ErrNotFound
+	}
+	if !rec.LastScan.Equal(lastScan) {
+		return ErrChanged
+	}
+	known := make(map[string]bool, len(rec.ReviewedFP))
+	for _, fp := range rec.ReviewedFP {
+		known[fp] = true
+	}
+	for _, f := range rec.Flags {
+		if fp := Fingerprint(f); !known[fp] {
+			known[fp] = true
+			rec.ReviewedFP = append(rec.ReviewedFP, fp)
+		}
 	}
 	rec.Flags = []Flag{}
 	rec.Truncated = ""
@@ -335,6 +458,21 @@ func cleanRecord(rec Record, id string) Record {
 	rec.CloneOf = SanitizePath(rec.CloneOf)
 	rec.Branch = SanitizePath(rec.Branch)
 	rec.Truncated = SanitizePath(rec.Truncated)
+	if rec.LastScanKind != ScanExit && rec.LastScanKind != ScanStop {
+		rec.LastScanKind = ""
+	}
+	if len(rec.ReviewedFP) > 0 {
+		fps := make([]string, 0, len(rec.ReviewedFP))
+		for _, fp := range rec.ReviewedFP {
+			if fingerprintRe.MatchString(fp) {
+				fps = append(fps, fp)
+			}
+		}
+		if len(fps) > MaxReviewed {
+			fps = fps[len(fps)-MaxReviewed:] // oldest first: the newest stay
+		}
+		rec.ReviewedFP = fps
+	}
 	if max := DefaultLimits().MaxFlags; len(rec.Flags) > max {
 		rec.Flags = rec.Flags[:max]
 	}
@@ -345,6 +483,9 @@ func cleanRecord(rec Record, id string) Record {
 	rec.Flags = flags
 	return rec
 }
+
+// fingerprintSample has the width of one reviewed-set entry.
+const fingerprintSample = "0000000000000000000000000000000000000000000000000000000000000000"
 
 // writeRecordIn writes through a temp file in the same dir and renames it over
 // the record (the rename replaces, never follows, a symlink at the name). It
@@ -358,6 +499,15 @@ func writeRecordIn(dir *os.Root, rec Record) (Record, error) {
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return Record{}, err
+	}
+	// The reviewed set is bookkeeping: it shrinks first (oldest fingerprints
+	// out, no note), before any flag the user has not yet seen is dropped.
+	for len(data) > maxRecordFile && len(rec.ReviewedFP) > 0 {
+		drop := (len(data)-maxRecordFile)/(len(fingerprintSample)+3) + 1
+		rec.ReviewedFP = rec.ReviewedFP[min(drop, len(rec.ReviewedFP)):]
+		if data, err = json.Marshal(rec); err != nil {
+			return Record{}, err
+		}
 	}
 	if len(data) > maxRecordFile && len(rec.Flags) > 0 {
 		total, keep, base := len(rec.Flags), len(rec.Flags), stripSizeCapNote(rec.Truncated)

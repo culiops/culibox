@@ -80,7 +80,7 @@ func TestHandbackReviewed(t *testing.T) {
 	keep := mergeFlag(t, st, handback.InPlaceKey("/other"), handback.Record{Kind: handback.KindInPlace, Workspace: "/other"}, time.Unix(1, 0), oneFlag("b.pdf"))
 
 	w := httptest.NewRecorder()
-	a.handleHandback(w, postReq("/api/handback/"+rec.ID+"/reviewed", ""))
+	a.handleHandback(w, postReq("/api/handback/"+rec.ID+"/reviewed", lastScanBody(rec)))
 	if w.Code != http.StatusNoContent || w.Body.Len() != 0 {
 		t.Fatalf("POST = %d %q, want 204 with no body", w.Code, w.Body)
 	}
@@ -89,10 +89,57 @@ func TestHandbackReviewed(t *testing.T) {
 	}
 }
 
+// lastScanBody is the request body the page sends: the last_scan of the record
+// as it listed it.
+func lastScanBody(rec handback.Record) string {
+	b, _ := json.Marshal(map[string]time.Time{"last_scan": rec.LastScan})
+	return string(b)
+}
+
+// R23: marking reviewed clears only what the user saw.
+func TestHandbackReviewedNeedsTheLastScanTheUserSaw(t *testing.T) {
+	a, st := handbackAPI(t)
+	base := handback.Record{Kind: handback.KindInPlace, Workspace: "/ws"}
+	t1, t2 := time.Unix(1000, 0).UTC(), time.Unix(2000, 0).UTC()
+	rec := mergeFlag(t, st, handback.InPlaceKey("/ws"), base, t1, oneFlag("a.pdf"))
+	mergeFlag(t, st, handback.InPlaceKey("/ws"), base, t2, oneFlag("b.pdf"))
+
+	post := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		a.handleHandback(w, postReq("/api/handback/"+rec.ID+"/reviewed", body))
+		return w
+	}
+	if w := post(lastScanBody(rec)); w.Code != http.StatusConflict {
+		t.Fatalf("a stale last_scan = %d %s, want 409", w.Code, w.Body)
+	}
+	if got := listRecords(t, a); len(got) != 1 || len(got[0].Flags) != 2 {
+		t.Fatalf("a 409 must clear nothing: %+v", got)
+	}
+	for _, body := range []string{"", "{}", `{"last_scan":""}`, `{"last_scan":"0001-01-01T00:00:00Z"}`, `{"last_scan":"yesterday"}`, "not json", `{"last_scan":1}`} {
+		if w := post(body); w.Code != http.StatusBadRequest {
+			t.Errorf("body %q = %d %s, want 400", body, w.Code, w.Body)
+		}
+	}
+	if got := listRecords(t, a); len(got) != 1 || len(got[0].Flags) != 2 {
+		t.Fatalf("a 400 must clear nothing: %+v", got)
+	}
+	if w := post(`{"last_scan":"` + t2.Format(time.RFC3339Nano) + `"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("the current last_scan = %d %s, want 204", w.Code, w.Body)
+	}
+	if got := listRecords(t, a); len(got) != 0 {
+		t.Fatalf("after 204: %+v", got)
+	}
+	// A body past the bound is refused, not read to the end.
+	if w := post(`{"last_scan":"` + strings.Repeat("x", 1<<20) + `"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("an oversized body = %d, want 400", w.Code)
+	}
+}
+
 func TestHandbackReviewedErrors(t *testing.T) {
 	a, st := handbackAPI(t)
 	rec := mergeFlag(t, st, handback.InPlaceKey("/ws"), handback.Record{Kind: handback.KindInPlace, Workspace: "/ws"}, time.Unix(1, 0), oneFlag("a.pdf"))
 	unknown := handback.RecordID("nobody")
+	body := lastScanBody(rec)
 
 	for _, c := range []struct {
 		name string
@@ -101,9 +148,9 @@ func TestHandbackReviewedErrors(t *testing.T) {
 	}{
 		{"cross-site", crossSiteReq("/api/handback/"+rec.ID+"/reviewed", ""), http.StatusForbidden},
 		{"GET on /reviewed", httptest.NewRequest(http.MethodGet, "/api/handback/"+rec.ID+"/reviewed", nil), http.StatusMethodNotAllowed},
-		{"path traversal id", postReq("/api/handback/../../etc/reviewed", ""), http.StatusBadRequest},
-		{"short id", postReq("/api/handback/abc/reviewed", ""), http.StatusBadRequest},
-		{"unknown id", postReq("/api/handback/"+unknown+"/reviewed", ""), http.StatusNotFound},
+		{"path traversal id", postReq("/api/handback/../../etc/reviewed", body), http.StatusBadRequest},
+		{"short id", postReq("/api/handback/abc/reviewed", body), http.StatusBadRequest},
+		{"unknown id", postReq("/api/handback/"+unknown+"/reviewed", body), http.StatusNotFound},
 		{"no /reviewed suffix", postReq("/api/handback/"+rec.ID, ""), http.StatusNotFound},
 		{"extra segment", postReq("/api/handback/"+rec.ID+"/reviewed/x", ""), http.StatusNotFound},
 		{"POST on the list", postReq("/api/handback", ""), http.StatusMethodNotAllowed},
@@ -126,7 +173,16 @@ func TestHandbackRoutedBehindAuth(t *testing.T) {
 	s.API = a
 	h := s.Handler()
 	send := func(method, path, bearer string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(method, path, nil)
+		var rd *strings.Reader
+		if method == "POST" {
+			rd = strings.NewReader(lastScanBody(rec))
+		} else {
+			rd = strings.NewReader("")
+		}
+		r := httptest.NewRequest(method, path, rd)
+		if method == "POST" {
+			r.Header.Set("Content-Type", "application/json")
+		}
 		r.Host = "example.com"
 		if bearer != "" {
 			r.Header.Set("Authorization", "Bearer "+bearer)
