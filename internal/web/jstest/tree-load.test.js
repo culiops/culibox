@@ -134,3 +134,19 @@ test("the Tab stop goes back to the remembered row once its folder is drawn", as
   const stops = p.run(`ftTreeEl.querySelectorAll('.ft-node[tabindex="0"]').map((r) => ftRowPaths.get(r))`);
   assert.deepStrictEqual(stops, ["/w/a/x.go"]);
 });
+
+test("a remembered folder is drawn off the page and put under its row whole; one closed while it listed stays closed", async () => {
+  const p = tree(["/w/a", "/w/b"]);
+  p.run('setFtRoot("/w"); ftLoadRoot();');
+  await settle();
+  await p.answer("/w", [dir("a"), dir("b")]);
+  // The user closes b while its listing is out.
+  p.run('for (const r of ftTreeEl.querySelectorAll(".ft-node")) if (ftRowPaths.get(r) === "/w/b") r.onclick();');
+  const boxes = () => p.run("ftTreeEl.children.length");
+  const before = boxes();
+  await p.answer("/w/a", [file("x.go"), file("y.go")]);
+  assert.strictEqual(boxes(), before + 1, "a's rows arrive in one box, at once");
+  assert.deepStrictEqual(p.shown(), ["/w/a", "/w/a/x.go", "/w/a/y.go", "/w/b"]);
+  await p.answer("/w/b", [file("z.go")]);
+  assert.deepStrictEqual(p.shown(), ["/w/a", "/w/a/x.go", "/w/a/y.go", "/w/b"], "b was closed: its late listing is not shown");
+});

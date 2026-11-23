@@ -524,8 +524,16 @@ async function ftRenderDir(path, container, prefix, st) {
         open = true;
         icon.textContent = iconFor(ent.name, true, true);
         row.setAttribute("aria-expanded", "true");
-        if (rootCall && st.defer) st.defer.push(openChildren);
-        else await openChildren();
+        if (rootCall && st.defer) {
+          // Drawn off the page and put under its row whole (drawing a big folder into the live tree row by row costs
+          // a layout per row); a folder the user closed while it listed stays closed.
+          st.defer.push(async () => {
+            const box = document.createElement("div");
+            childBox = box;
+            await ftRenderDir(full, box, b.childPrefix, st);
+            if (open && childBox === box) row.after(box);
+          });
+        } else await openChildren();
       }
     } else {
       // The desktop Files dock shows the file beside the tree instead of in a
