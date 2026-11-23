@@ -116,10 +116,16 @@ type ProfileView struct {
 	// the spawn also applies, so a page reads this and never re-derives the rule.
 	BoxOnly   bool   `json:"box_only,omitempty"`
 	HostBlock string `json:"host_block,omitempty"`
-	// HostDrops lists what a host run of it would drop (its bindings and
-	// box-only options, config.HostDrops); empty when it drops nothing (#359).
-	// Not a block: the host run goes ahead once the caller acknowledges it.
+	// HostDrops lists what a host run of it would drop (context paths and
+	// box-only settings and options, config.HostDrops); empty when it drops
+	// nothing (#359). Not a block: the host run goes ahead once the caller
+	// acknowledges it.
 	HostDrops []string `json:"host_drops,omitempty"`
+	// HostGuardrail lists the bindings a host run of it keeps as the session's
+	// default credentials, not a limit (config.HostGuardrail: "AWS binding"...);
+	// empty for an unbound profile (#360). The page words them as such and, like
+	// HostDrops, asks for the acknowledgement the spawn requires.
+	HostGuardrail []string `json:"host_guardrail,omitempty"`
 	// HostKeeps names the profile's own secrets and env a host run still
 	// passes to the agent (config.HostKeeps), so the Host warning does not
 	// claim the agent has only this machine's logins.
@@ -637,6 +643,7 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			BoxOnly:        a.BoxOnly,
 			HostBlock:      config.HostBlock(a),
 			HostDrops:      config.HostDrops(a, m.optDefs),
+			HostGuardrail:  config.HostGuardrail(a),
 			HostKeeps:      config.HostKeeps(a),
 			EgressAllow:    slices.Clone(a.EgressAllow),
 			CloneShare:     slices.Clone(a.CloneShare),

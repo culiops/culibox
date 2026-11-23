@@ -688,8 +688,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		layer.setOnStop(hb.OnStop)
 	}
 
-	// Credential broker (M3a): only with containment, because a bound session
-	// runs only in a box. Before Reconcile so reattached sessions find the hooks.
+	// Credential broker (M3a): it starts only with a box layer, so on an
+	// instance without one a bound profile is refused on either tier, Host
+	// included (pinned by TestHostBoundSpawnRefusedWithoutBroker). Before
+	// Reconcile so reattached sessions find the hooks.
 	var brokerSvc *brokerService
 	if layer != nil {
 		svc, err := startBrokerWithStore(dataDir, layer.stateRoot, runtime.GOOS, cfg.BrokerPortOrDefault(),
@@ -878,7 +880,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 		stopBroker = brokerSvc.Stop
 		if boxes != nil {
-			es := elevationService{brk: brokerSvc.Hooks.B, get: mgr.Get, list: mgr.List, blocker: boxes.GrantBlocker, claim: boxes.ClaimForGrant}
+			es := elevationService{brk: brokerSvc.Hooks.B, get: mgr.Get, list: mgr.List, blocker: boxes.GrantBlocker, claim: boxes.ClaimForGrant,
+				hosts: newHostFolders()}
 			if brokerSvc.SSO != nil { // a nil *Runner must stay a nil interface
 				es.runner = brokerSvc.SSO
 			}
@@ -887,6 +890,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			// credentials. Before the API serves: no boxed spawn can run earlier,
 			// and without the hook exclusive boxes refuse every other spawn.
 			boxes.SetWriteHold(es.writeHold)
+			// #360: a broker-served Host session's window closes its folder
+			// too. Host sessions reattached at boot are held as adopted boxes.
+			es.seedHostFolders(time.Now())
+			boxes.SetHostHolds(es.hostHolds)
 			api.Elevation = es
 			status.Elevation = brokerSvc.Hooks.B.Elevation
 			status.SSO = es.ssoStatus

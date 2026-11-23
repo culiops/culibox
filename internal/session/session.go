@@ -313,12 +313,15 @@ type HostBlockResolver interface {
 }
 
 // HostDropsResolver is implemented by launchers that know what a host run of a
-// profile drops (config.HostDrops): its bindings, context paths and box-only
-// settings, each as a short noun phrase; nil when nothing. Optional, like
-// HostBlockResolver: without it a host spawn lists no drops, and the binding and
-// context-path checks in Spawn still refuse a profile that carries any.
+// profile changes: what it drops (HostDropsFor, config.HostDrops: context paths
+// and box-only settings) and which bindings it keeps as its default credentials
+// (HostGuardrailFor, config.HostGuardrail), each as a short noun phrase; nil
+// when nothing. Optional, like HostBlockResolver: without it a host spawn lists
+// nothing, and the binding and context-path checks in Spawn still refuse a
+// profile that carries any.
 type HostDropsResolver interface {
 	HostDropsFor(agent string) ([]string, error)
+	HostGuardrailFor(agent string) ([]string, error)
 }
 
 // BoxOnlyOptionResolver is implemented by launchers that know which box-only
@@ -569,6 +572,26 @@ type BrokerHooks interface {
 	// token binding adds) into the binding dir and returns its path inside the
 	// box. key names the file; the document carries no secret.
 	WriteSessionMCP(bs config.Bindings, key string, doc []byte) (string, error)
+	// HostFor prepares a bound Host session (#360): a reference on the
+	// session's own broker socket, its files in CuliBox's data dir, and the env
+	// (NAME=value, no token, no PATH) that points its tools at them, plus that
+	// dir. realGH is the absolute path of the real gh on the session PATH, or
+	// "". Every nil-error call is paired with exactly one ReleaseHost.
+	HostFor(sessionID string, bs config.Bindings, base map[string]awsprobe.Result, realGH string) (env []string, dir string, err error)
+	// WriteHostMCP writes a Host session's own MCP config (the entry servers a
+	// token binding adds) into the dir HostFor made, and returns its path. The
+	// document carries no secret.
+	WriteHostMCP(sessionID string, doc []byte) (path string, err error)
+	// ReleaseHost drops the reference HostFor took. remove deletes the
+	// session's dir once none is left (the session ended); without it the dir
+	// stays for the session to be found again after a daemon restart.
+	ReleaseHost(sessionID string, remove bool)
+	// SweepHostDirs deletes the host dirs of every session not in keep and not
+	// holding its socket. Run once at daemon start, after the reattach.
+	SweepHostDirs(keep []string)
+	// HostStripEnv names every variable a bound Host session must not inherit
+	// before HostFor's env is added (token entries' names excepted).
+	HostStripEnv(bs config.Bindings) []string
 }
 
 // EgressHooks is what spawning a bound session needs from the egress proxy,
@@ -822,10 +845,15 @@ type Info struct {
 	// wire shape is unchanged. Reasons are fixed strings, never an error text.
 	BundleDrops []bundle.Drop `json:"bundle_drops,omitempty"`
 	// HostDropped is what this host session runs without because the host has
-	// no box layer: the profile's bindings, context paths and box-only settings
-	// (config.HostDrops), as noun phrases. Host sessions of such a profile only;
-	// absent otherwise, so every other session's wire shape is unchanged.
+	// no box layer: the profile's context paths and box-only settings
+	// (config.HostDrops), and its bindings when node was not on the session's
+	// PATH (with that reason as one item), as noun phrases. Host sessions of such
+	// a profile only; absent otherwise, so every other session's wire shape is
+	// unchanged.
 	HostDropped []string `json:"host_dropped,omitempty"`
+	// HostBroker: a host session whose bindings reach it through the broker, on
+	// its own socket (#360). Absent otherwise.
+	HostBroker bool `json:"host_broker,omitempty"`
 	// Clone is what refreshing the clone before this spawn did. Clone-mode
 	// sessions only; absent otherwise.
 	Clone *CloneInfo `json:"clone,omitempty"`
@@ -920,6 +948,12 @@ type Session struct {
 	// HostDropped is Info.HostDropped; immutable after publication, read
 	// without the lock; Info hands out a copy.
 	HostDropped []string
+	// HostBroker is Info.HostBroker: a host session holding (or, restored after
+	// a restart whose HostFor failed, owning) its own broker socket and dir.
+	// HostDir is that dir ("" when unknown); never on the wire. Both immutable
+	// after publication, read without the lock.
+	HostBroker bool
+	HostDir    string
 	// Clone is the clone refresh result for a clone-mode session. Immutable
 	// after publication, read without the lock; Info hands out a deep copy.
 	Clone *CloneInfo
@@ -1015,6 +1049,8 @@ type Session struct {
 	// abandoned by the retention goroutine entirely — so both must be able to
 	// release without the risk of double-counting.
 	releaseOnce sync.Once
+	// hostReleaseOnce is releaseOnce for a HostBroker session's socket and dir.
+	hostReleaseOnce sync.Once
 
 	cmd  *exec.Cmd
 	ptmx *os.File
@@ -1438,6 +1474,7 @@ func (s *Session) Info() Info {
 	in.Egress = EgressMode(s.EgressNonce != "", s.Bindings().Any() && !s.EgressOpen)
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	in.HostDropped = slices.Clone(s.HostDropped)
+	in.HostBroker = s.HostBroker
 	in.Clone = s.Clone.copy()
 	in.Return = s.ret.copy()
 	in.Handback = s.handback.copy()
@@ -1885,6 +1922,25 @@ func profileRefusal(agent, reason string) error {
 	return refusal(fmt.Sprintf("profile %q: %s", agent, reason))
 }
 
+// causedRefusal is a refusal that keeps its cause in the chain, so a locked
+// secret store under it still reads as one.
+type causedRefusal struct {
+	msg   string
+	cause error
+}
+
+func (r causedRefusal) Error() string { return r.msg }
+
+func (r causedRefusal) Unwrap() []error { return []error{box.ErrUnboxableWorkspace, r.cause} }
+
+// hostBindRefusal is a Host spawn's refusal for a profile whose settings or
+// bindings could not be resolved or checked: msg as is, as a refusal, never
+// "containment unavailable", since the user chose Host (#360). A box spawn
+// words the same failure as a containment one.
+func hostBindRefusal(msg string, cause error) error {
+	return causedRefusal{msg: msg, cause: cause}
+}
+
 // runtimeFor resolves the tier for a spawn. Without a tier-aware launcher or a
 // box layer the answer is host — containment is never assumed, only granted,
 // and never silently withdrawn from a request that named it: with no box layer,
@@ -1981,12 +2037,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// The host is closed to a profile only by its box_only lock, by any route: a
 	// per-spawn "host", a host-tier profile, or an instance with no box layer.
 	// ErrUnboxableWorkspace so the UI shows the reason (writeSpawnErr) rather
-	// than "could not start session". Everything else a box setup carries
-	// (bindings, context paths, box-only settings) is DROPPED on the host, and
-	// only with the caller's say-so (HostDropsAck): a spawn that has not given it
-	// is refused with the list. Gate order: lock, the spawn's own box-only
-	// option, then the drops.
-	var hostDropped []string
+	// than "could not start session". The bindings reach a host run through the
+	// broker as its default credentials, a guardrail and not a limit (#360);
+	// everything else a box setup carries (context paths, box-only settings) is
+	// DROPPED on the host. Both only with the caller's say-so (HostDropsAck): a
+	// spawn that has not given it is refused with the list. Gate order: lock,
+	// the spawn's own box-only option, then the guardrail and drops.
+	var hostDropped, hostGuard []string
 	if runtime != config.RuntimeBox {
 		if hr, ok := m.launcher.(HostBlockResolver); ok {
 			reason, err := hr.HostBlockFor(spec.Agent)
@@ -2014,21 +2071,25 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			if err != nil {
 				return nil, err
 			}
-			if len(drops) > 0 && !spec.HostDropsAck {
-				return nil, profileRefusal(spec.Agent, "on the host this profile runs without its "+config.JoinKinds(drops)+
-					"; confirm to start it there (host_drops_bindings: true)")
+			guard, err := dr.HostGuardrailFor(spec.Agent)
+			if err != nil {
+				return nil, err
 			}
-			hostDropped = drops
+			if (len(drops) > 0 || len(guard) > 0) && !spec.HostDropsAck {
+				return nil, hostAckRefusal(spec.Agent, guard, drops)
+			}
+			hostDropped, hostGuard = drops, guard
 		}
 	}
 	// A launcher that lists drops decides here what the host run lacks, so the
-	// binding and context resolvers below run for a box only: nothing of the
-	// profile's bindings is read, minted or put in the process on the host, and a
-	// binding that no longer resolves cannot block a run that drops it. A launcher
-	// that cannot list drops keeps resolving, and the refusals below stop a bound
-	// profile on the host.
+	// context resolver below runs for a box only: a host run reads no context
+	// path. The bindings are resolved for every tier: a host run whose launcher
+	// listed them as its guardrail gets them through the broker (hostBound), and
+	// a launcher that cannot list them keeps the refusals below, which stop a
+	// bound profile on the host. The egress policy is a box's alone.
 	_, listsDrops := m.launcher.(HostDropsResolver)
-	resolveBound := runtime == config.RuntimeBox || !listsDrops
+	resolveCtx := runtime == config.RuntimeBox || !listsDrops
+	hostBound := runtime != config.RuntimeBox && len(hostGuard) > 0
 
 	// Resolve the agent binary once, up front: it gates claude-only features
 	// (usage, replies) and feeds the boxed config bundle below. Best-effort —
@@ -2059,9 +2120,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 	}
 
-	// An AWS binding runs only in a box, and only through the broker. A host
-	// spawn does not resolve any (resolveBound above) and so has none: where a
-	// launcher could not list the drops, the refusal below stops it before
+	// An AWS binding runs only through the broker: in a box, or on the host
+	// when the caller confirmed the guardrail (hostBound). Where a launcher could
+	// not list the guardrail, the refusal below stops a bound host spawn before
 	// anything is prepared, built or issued, and no token is minted for a spawn
 	// that is refused. A GitHub binding is the same: bound means "has any
 	// binding".
@@ -2071,32 +2132,38 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var tokens, pats []config.StaticToken
 	var egressAllow []string
 	var egressOpen bool
-	if resolveBound {
-		if r, ok := m.launcher.(AWSResolver); ok {
-			binding = r.AWSFor(spec.Agent)
-		}
-		if r, ok := m.launcher.(GitHubResolver); ok {
-			ghBinding = r.GitHubFor(spec.Agent)
-		}
-		if r, ok := m.launcher.(AWSConnResolver); ok {
-			var err error
-			awsConns, err = r.AWSConnectionsFor(spec.Agent)
-			if err != nil {
-				// ErrBoxUnavailable so the UI shows which profile and why.
-				return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
+	if r, ok := m.launcher.(AWSResolver); ok {
+		binding = r.AWSFor(spec.Agent)
+	}
+	if r, ok := m.launcher.(GitHubResolver); ok {
+		ghBinding = r.GitHubFor(spec.Agent)
+	}
+	if r, ok := m.launcher.(AWSConnResolver); ok {
+		var err error
+		awsConns, err = r.AWSConnectionsFor(spec.Agent)
+		if err != nil {
+			if runtime != config.RuntimeBox {
+				return nil, hostBindRefusal(err.Error(), err) // it names the profile
 			}
+			// ErrBoxUnavailable so the UI shows which profile and why.
+			return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
 		}
-		if r, ok := m.launcher.(TokenResolver); ok {
-			var err error
-			tokens, pats, err = r.TokensFor(spec.Agent)
-			if err != nil {
-				// ErrBoxUnavailable so the UI shows which profile and why.
-				return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
+	}
+	if r, ok := m.launcher.(TokenResolver); ok {
+		var err error
+		tokens, pats, err = r.TokensFor(spec.Agent)
+		if err != nil {
+			if runtime != config.RuntimeBox {
+				return nil, hostBindRefusal(err.Error(), err) // it names the profile
 			}
+			// ErrBoxUnavailable so the UI shows which profile and why.
+			return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
 		}
-		if r, ok := m.launcher.(EgressResolver); ok {
-			egressAllow, egressOpen = r.EgressFor(spec.Agent)
-		}
+	}
+	// Egress control is a box's: a host process has the host's network, and
+	// its policy must not split the binding hash a host session's files carry.
+	if r, ok := m.launcher.(EgressResolver); ok && runtime == config.RuntimeBox {
+		egressAllow, egressOpen = r.EgressFor(spec.Agent)
 	}
 	bs := config.Bindings{AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats,
 		EgressAllow: egressAllow, EgressOpen: egressOpen}
@@ -2114,14 +2181,14 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	needEgress := runtime == config.RuntimeBox && (bs.Any() || egressAll)
 	if bs.Any() {
 		kind := bindingKind(bs)
-		if runtime != config.RuntimeBox {
+		if runtime != config.RuntimeBox && !hostBound {
 			// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
 			return nil, profileRefusal(spec.Agent, "has "+kind+", so it can only run in a box, never on the host tier")
 		}
 		if brk == nil {
 			return nil, fmt.Errorf("profile %q has %s but the credential broker is not running", spec.Agent, kind)
 		}
-		if eg == nil {
+		if runtime == config.RuntimeBox && eg == nil {
 			// ErrBoxUnavailable: a containment refusal the UI shows verbatim.
 			return nil, fmt.Errorf("%w: profile %q has %s but egress control is not running, so it cannot spawn",
 				box.ErrBoxUnavailable, spec.Agent, kind)
@@ -2145,6 +2212,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if r, ok := m.launcher.(CloneResolver); ok {
 		c, err := r.CloneFor(spec.Agent)
 		if err != nil {
+			if runtime != config.RuntimeBox {
+				return nil, hostBindRefusal(fmt.Sprintf("profile %q: %v", spec.Agent, err), err)
+			}
 			// ErrBoxUnavailable so the UI shows which profile and why.
 			return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 		}
@@ -2177,9 +2247,12 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// on every spawn (a hand-edited profiles.json), the disk check runs below.
 	var ctxPaths []string
 	var lockedFiles []string // what the box layer locked on the host (macOS), set after Wrap
-	if r, ok := m.launcher.(ContextResolver); ok && resolveBound {
+	if r, ok := m.launcher.(ContextResolver); ok && resolveCtx {
 		p, err := r.ContextPathsFor(spec.Agent)
 		if err != nil {
+			if runtime != config.RuntimeBox {
+				return nil, hostBindRefusal(fmt.Sprintf("profile %q: %v", spec.Agent, err), err)
+			}
 			return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 		}
 		ctxPaths = p
@@ -2374,7 +2447,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			mt.Optional = !isClaudeBin(bin)
 			mounts = append(slices.Clip(mounts), mt)
 		}
-		if len(bs.Tokens) > 0 && isClaudeBin(bin) {
+		if len(bs.Tokens) > 0 && takesMCPConfig(bin) {
 			flags, drops, err := m.tokenMCP(spec, brk, bs, bundles, includeUser, bundleFailed, bundleDrops)
 			if err != nil {
 				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, err)
@@ -2385,7 +2458,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// separate argv elements, ahead of the "--" Build adds for a first message.
 		// The clone line and the credential note are provider-neutral text that
 		// reaches claude as ONE --append-system-prompt value.
-		if isClaudeBin(bin) {
+		if appendsSystemPrompt(bin) {
 			var guide []string
 			if cl != nil {
 				guide = append(guide, cloneGuidance(cl.Of, cloneInfo.PushRepo != "", !cl.NoAutoReturn))
@@ -2429,12 +2502,19 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// on. Until the session is published every way out gives it back (the defer
 	// below); after that the session owns it and gives it back when it ends.
 	var heldBrokerBox string
+	// heldHost: this spawn holds its Host socket and dir (HostFor). The same
+	// rule as heldBrokerBox: every way out before publication gives it back and
+	// removes the dir; after that the session's end does.
+	heldHost := false
 	defer func() {
 		if watched && !started {
 			brk.Forget(id)
 		}
 		if heldBrokerBox != "" && !started {
 			brk.ReleaseBox(heldBrokerBox)
+		}
+		if heldHost && !started {
+			brk.ReleaseHost(id, true)
 		}
 	}()
 
@@ -2486,44 +2566,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// symlink on the path flipped in between): a box made with the mounts
 			// prepared for another box would be taken for that box.
 			key.Expect = plannedBox
-			if bs.GitHub != nil {
-				// Doctor-style and secret-free, so its message can be shown as is.
-				if err := brk.CheckGitHub(*bs.GitHub); err != nil {
-					if errors.Is(err, credref.ErrLocked) {
-						// A key in the locked store: say so (423), not a containment failure.
-						return nil, fmt.Errorf("%w (GitHub App key, profile %q)", launcher.ErrStoreLocked, spec.Agent)
-					}
-					var ue *secretstore.UnavailableError
-					if errors.As(err, &ue) {
-						// The Keychain did not give the key: 503 with the fix, not a containment failure.
-						return nil, fmt.Errorf("%w: %w (GitHub App key, profile %q)", launcher.ErrStoreUnavailable, ue, spec.Agent)
-					}
-					return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
-				}
-			}
-			if bs.AWS != nil || len(bs.AWSConns) > 0 {
-				// An sso_direct binding hands the agent the human's own
-				// permission-set credentials, so unlike an assumed role it is
-				// refused unless the read-only gate says so. A passed gate is a
-				// definite base result for its key.
-				var gated map[string]awsprobe.Result
-				var err error
-				gated, ssoInfo, err = gateSSODirect(brk, bs, spec.Agent)
-				if err != nil {
-					return nil, err
-				}
-				// Warn, never block: the probe has no error, only results.
-				baseAccess = brk.ProbeBase(id, spec.Agent, bs)
-				if baseAccess == nil {
-					baseAccess = map[string]awsprobe.Result{}
-				}
-				maps.Copy(baseAccess, gated)
-				if keys := awsprobe.NeedsRecheck(baseAccess, awsKeysOf(bs)); len(keys) > 0 {
-					brk.WatchBase(id, keys)
-					watched = true
-				}
-			}
 			var err error
+			if baseAccess, ssoInfo, err = bindingPrechecks(brk, bs, id, spec.Agent, false, &watched); err != nil {
+				return nil, err
+			}
 			bm, benv, err = brk.BoxFor(bs, baseAccess)
 			if err != nil {
 				return nil, fmt.Errorf("spawn %s: preparing %s access: %w", spec.Agent, bindingNames(bs), err)
@@ -2709,6 +2755,76 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 	}
 
+	var hostDir string
+	if runtime != config.RuntimeBox && bs.Any() {
+		// hostBound holds here (the refusals above), and so does brk != nil.
+		// The credential helpers are node scripts: look for node on the PATH
+		// the session itself will have, never install it (D7). Without it the
+		// run goes ahead without its bindings, and says why.
+		if launcher.SessionLookPath(env, "node") == "" {
+			hostDropped = append(append(slices.Clone(hostGuard), hostNodeMissing), hostDropped...)
+			log.Printf("session %s: profile %q runs on Host without its %s: node was not found on this session's PATH; CuliBox's credential helpers need it",
+				id, spec.Agent, bindingNames(bs))
+			binding, awsConns, ghBinding, tokens, pats = nil, nil, nil, nil, nil
+			bs = config.Bindings{}
+		} else {
+			// Before PATH gets the shim dir: the real gh can never be our own shim.
+			realGH := launcher.SessionLookPath(env, "gh")
+			var err error
+			if baseAccess, ssoInfo, err = bindingPrechecks(brk, bs, id, spec.Agent, true, &watched); err != nil {
+				return nil, err
+			}
+			nonce = brk.NewNonce()
+			henv, dir, err := brk.HostFor(id, bs, baseAccess, realGH)
+			if err != nil {
+				// The user chose a bound profile: refuse rather than start it
+				// without its bindings. The reason (a socket path over the OS
+				// limit names the path) is shown as is.
+				return nil, profileRefusal(spec.Agent, fmt.Sprintf("cannot prepare its %s access on Host: %v", bindingNames(bs), err))
+			}
+			heldHost, hostDir = true, dir
+			// The note and the MCP config name the dir, which exists only now,
+			// after the launcher (a box's flags are known before it): with
+			// something to add, the launcher runs again with them, and its env
+			// replaces the first run's.
+			flags, drops, ferr := hostAgentFlags(brk, id, dir, bin, bs, env, bundleDrops)
+			if ferr != nil {
+				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, ferr)
+			}
+			bundleDrops = drops
+			if len(flags) > 0 {
+				spec.ExtraArgs = append(slices.Clip(spec.ExtraArgs), flags...)
+				if argv, env, err = m.launcher.Build(spec); err != nil {
+					return nil, err
+				}
+				if len(argv) == 0 {
+					return nil, fmt.Errorf("session: launcher produced empty argv")
+				}
+				if env == nil {
+					env = []string{} // fail closed, as after the first run
+				}
+			}
+			// Strip before adding, as for a box: whatever the profile or daemon
+			// env says about AWS, GitHub or a token entry must neither bypass the
+			// broker nor shadow one of its values. Every name set below is set
+			// exactly once.
+			strip := append(slices.Clone(brk.HostStripEnv(bs)), brokerTokenEnv, "PATH") // never append into the hooks' own slice
+			for _, e := range bs.Tokens {
+				strip = append(strip, e.Names()...)
+			}
+			for _, kv := range henv {
+				if i := strings.IndexByte(kv, '='); i > 0 {
+					strip = append(strip, kv[:i])
+				}
+			}
+			sessionPath := envValue(env, "PATH")
+			env = withoutEnv(env, strip)
+			env = append(env, henv...)
+			env = append(env, brokerTokenEnv+"="+brk.Token(id, nonce))
+			env = append(env, "PATH="+filepath.Join(dir, "bin")+string(os.PathListSeparator)+sessionPath)
+		}
+	}
+
 	if len(hostDropped) > 0 {
 		log.Printf("session %s: host run of profile %q without %s", id, spec.Agent, config.JoinKinds(hostDropped))
 	}
@@ -2781,6 +2897,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Tokens, sess.PATs = tokens, pats
 	sess.EgressAllow, sess.EgressOpen = egressAllow, egressOpen
 	sess.HostDropped = slices.Clone(hostDropped)
+	sess.HostBroker, sess.HostDir = heldHost, hostDir // published: the session now owns the Host socket and dir
 	sess.BrokerNonce = nonce
 	sess.EgressNonce = enonce
 	sess.brokerBox = heldBrokerBox // published: the session now owns the reference
@@ -2813,7 +2930,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Workspace: wsPath, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), Clone: cloneInfo.copy(), Exclusive: exclusive,
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), HostBroker: heldHost, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, WorkspaceRoot: wsRoot, LockedFiles: slices.Clone(lockedFiles),
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
@@ -2876,23 +2993,7 @@ func workspaceRootOfMeta(md sessionMeta, meta map[string]sessionMeta) string {
 // no image servers.
 func (m *Manager) tokenMCP(spec launcher.SpawnSpec, brk BrokerHooks, bs config.Bindings, bundles Bundles,
 	includeUser, bundleFailed bool, drops []bundle.Drop) ([]string, []bundle.Drop, error) {
-	bound := make(map[string]bool, len(bs.Tokens))
-	for _, e := range bs.Tokens {
-		bound[e.Name] = true
-	}
-	var entries []bundle.EntryServer
-	drops = slices.Clone(drops)
-	for _, e := range bs.Tokens {
-		if e.MCP == nil {
-			continue
-		}
-		args, err := config.EntryMCPArgs(e, bound)
-		if err != nil {
-			drops = append(drops, bundle.Drop{Kind: "mcp", Name: e.MCP.Server, Reason: err.Error()})
-			continue
-		}
-		entries = append(entries, bundle.EntryServer{Server: e.MCP.Server, Entry: e.Name, Command: e.MCP.Command, Args: args})
-	}
+	entries, drops := tokenServers(bs, drops)
 	if len(entries) == 0 {
 		// Nothing to add (no entry declares a server, or each was left out): the
 		// session keeps the bundle's own flags, byte for byte.
@@ -2902,7 +3003,7 @@ func (m *Manager) tokenMCP(spec launcher.SpawnSpec, brk BrokerHooks, bs config.B
 	var sm bundle.SessionMCP
 	if bundles == nil || bundleFailed {
 		log.Printf("spawn %s: no config bundle, so token MCP servers are written unprobed and without the image's servers", spec.Agent)
-		servers, d := bundle.ComposeSessionMCP(nil, nil, nil, drops, entries)
+		servers, d := bundle.ComposeSessionMCP(nil, nil, nil, drops, entries, boxEntryLauncher)
 		doc, err := bundle.MarshalSessionMCP(servers)
 		if err != nil {
 			return nil, nil, err
@@ -2934,6 +3035,90 @@ func (m *Manager) tokenMCP(spec launcher.SpawnSpec, brk BrokerHooks, bs config.B
 	return args, sm.Drops, nil
 }
 
+// boxEntryLauncher is the command a box's token MCP server runs: the box
+// image's agentbox-env.
+const boxEntryLauncher = "agentbox-env"
+
+// tokenServers is the MCP servers the bound token entries declare, in entry
+// order, and drops with one row added for each entry whose server cannot be
+// built (an extra it names is not bound). drops is never modified.
+func tokenServers(bs config.Bindings, drops []bundle.Drop) ([]bundle.EntryServer, []bundle.Drop) {
+	bound := make(map[string]bool, len(bs.Tokens))
+	for _, e := range bs.Tokens {
+		bound[e.Name] = true
+	}
+	var entries []bundle.EntryServer
+	drops = slices.Clone(drops)
+	for _, e := range bs.Tokens {
+		if e.MCP == nil {
+			continue
+		}
+		args, err := config.EntryMCPArgs(e, bound)
+		if err != nil {
+			drops = append(drops, bundle.Drop{Kind: "mcp", Name: e.MCP.Server, Reason: err.Error()})
+			continue
+		}
+		entries = append(entries, bundle.EntryServer{Server: e.MCP.Server, Entry: e.Name, Command: e.MCP.Command, Args: args})
+	}
+	return entries, drops
+}
+
+// hostAgentFlags is what a bound Host session's agent is handed that depends
+// on its host dir (#360): the session's own mcp.json when a token entry
+// declares an MCP server whose command is on the session PATH (D6), and the
+// credential note (D5). The flags are appended to the spawn's: a profile's own
+// --mcp-config stays, and --strict-mcp-config is never added, so the user's
+// own servers keep working. drops is what the caller holds; the result adds a
+// row for each server left out.
+func hostAgentFlags(brk BrokerHooks, id, dir, bin string, bs config.Bindings, env []string, drops []bundle.Drop) ([]string, []bundle.Drop, error) {
+	var flags []string
+	if takesMCPConfig(bin) && len(bs.Tokens) > 0 {
+		entries, d := tokenServers(bs, drops)
+		drops = d
+		var kept []bundle.EntryServer
+		for _, e := range entries {
+			if !hostCommandFound(env, e.Command) {
+				drops = append(drops, bundle.Drop{Kind: "mcp", Name: e.Server,
+					Reason: "command " + e.Command + " was not found on this session's PATH"})
+				continue
+			}
+			kept = append(kept, e)
+		}
+		if len(kept) > 0 {
+			// Nothing is probed again (the commands were looked up just above) and
+			// there is no image or host server set to merge: the agent reads the
+			// user's own config itself.
+			servers, d := bundle.ComposeSessionMCP(nil, nil, nil, drops, kept, filepath.Join(dir, "bin", "agentbox-env"))
+			doc, err := bundle.MarshalSessionMCP(servers)
+			if err != nil {
+				return nil, nil, err
+			}
+			path, err := brk.WriteHostMCP(id, doc)
+			if err != nil {
+				return nil, nil, err
+			}
+			flags, drops = append(flags, "--mcp-config", path), d
+		}
+	}
+	if appendsSystemPrompt(bin) {
+		if note := hostCredGuidance(bs); note != "" {
+			flags = append(flags, "--append-system-prompt", note)
+		}
+	}
+	return flags, drops, nil
+}
+
+// hostCommandFound reports whether an MCP server's command is an executable
+// the session will find: on its own PATH (the daemon's is never used), or an
+// absolute path.
+func hostCommandFound(env []string, cmd string) bool {
+	if strings.Contains(cmd, "/") {
+		fi, err := os.Stat(cmd)
+		return filepath.IsAbs(cmd) && err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
+	}
+	return launcher.SessionLookPath(env, cmd) != ""
+}
+
 // hasTokenMCP reports whether any bound entry declares a box-side MCP server.
 func hasTokenMCP(ts []config.StaticToken) bool {
 	return slices.ContainsFunc(ts, func(e config.StaticToken) bool { return e.MCP != nil })
@@ -2952,6 +3137,90 @@ func bindingKinds(bs config.Bindings) []string {
 		k = append(k, "token")
 	}
 	return k
+}
+
+// hostNodeMissing is the HostDropped item that says why a Host run went without
+// its bindings (D7).
+const hostNodeMissing = "bindings (node was not found on this session's PATH; CuliBox's credential helpers need it)"
+
+// hostAckRefusal is the refusal of a host spawn that has not confirmed what the
+// host run changes: the bindings it keeps as its default credentials (guard,
+// config.HostGuardrail) and what it drops (config.HostDrops). With no guardrail
+// it is the drops wording from before #360.
+func hostAckRefusal(agent string, guard, drops []string) error {
+	const confirm = "; confirm to start it there (host_drops_bindings: true)"
+	if len(guard) == 0 {
+		return profileRefusal(agent, "on the host this profile runs without its "+config.JoinKinds(drops)+confirm)
+	}
+	kinds := make([]string, len(guard))
+	for i, g := range guard {
+		kinds[i] = strings.TrimSuffix(g, " binding")
+	}
+	msg := fmt.Sprintf("profile %q runs on Host with %s as the default credentials, not a limit", agent, config.BindingPhrase(kinds))
+	if len(drops) > 0 {
+		msg += ", and without its " + config.JoinKinds(drops)
+	}
+	return refusal(msg + confirm)
+}
+
+// bindingPrechecks runs what a bound spawn checks before its credential files
+// are written, on either tier: a GitHub binding's Apps are usable, an
+// sso_direct connection passes the read-only gate, and the base roles are
+// probed (a warning, never a gate). It returns the base-role results and the
+// gate's per-key info; *watched is set once a key is watched for a re-probe,
+// which a spawn that fails afterwards must Forget.
+func bindingPrechecks(brk BrokerHooks, bs config.Bindings, id, agent string, host bool, watched *bool) (map[string]awsprobe.Result, map[string]ssoSpawnInfo, error) {
+	if bs.GitHub != nil {
+		// Doctor-style and secret-free, so its message can be shown as is.
+		if err := brk.CheckGitHub(*bs.GitHub); err != nil {
+			if errors.Is(err, credref.ErrLocked) {
+				// A key in the locked store: say so (423), not a containment failure.
+				return nil, nil, fmt.Errorf("%w (GitHub App key, profile %q)", launcher.ErrStoreLocked, agent)
+			}
+			var ue *secretstore.UnavailableError
+			if errors.As(err, &ue) {
+				// The Keychain did not give the key: 503 with the fix, not a containment failure.
+				return nil, nil, fmt.Errorf("%w: %w (GitHub App key, profile %q)", launcher.ErrStoreUnavailable, ue, agent)
+			}
+			if host {
+				return nil, nil, hostBindRefusal(fmt.Sprintf("profile %q: %v", agent, err), err)
+			}
+			return nil, nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, agent, err)
+		}
+	}
+	if bs.AWS == nil && len(bs.AWSConns) == 0 {
+		return nil, nil, nil
+	}
+	// An sso_direct binding hands the agent the human's own permission-set
+	// credentials, so unlike an assumed role it is refused unless the read-only
+	// gate says so. A passed gate is a definite base result for its key.
+	gated, ssoInfo, err := gateSSODirect(brk, bs, agent, host)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Warn, never block: the probe has no error, only results.
+	baseAccess := brk.ProbeBase(id, agent, bs)
+	if baseAccess == nil {
+		baseAccess = map[string]awsprobe.Result{}
+	}
+	maps.Copy(baseAccess, gated)
+	if keys := awsprobe.NeedsRecheck(baseAccess, awsKeysOf(bs)); len(keys) > 0 {
+		brk.WatchBase(id, keys)
+		*watched = true
+	}
+	return baseAccess, ssoInfo, nil
+}
+
+// envValue is the value exec would give name from env (the last entry wins),
+// "" when it is not set.
+func envValue(env []string, name string) string {
+	v := ""
+	for _, kv := range env {
+		if rest, ok := strings.CutPrefix(kv, name+"="); ok {
+			v = rest
+		}
+	}
+	return v
 }
 
 // bindingKind names a binding set for a refusal: "an AWS binding", "a GitHub
@@ -3088,6 +3357,26 @@ func (m *Manager) releaseSessionBox(s *Session) {
 	})
 }
 
+// releaseSessionHost gives back a HostBroker session's own broker socket and
+// removes its dir in CuliBox's data dir, exactly once, however the session
+// ended. Called next to releaseSessionBox, and like it never for a session that
+// merely detached: its agent still runs and is found again after a restart.
+// The id is never issued twice (nextIDLocked), so no later spawn can own this
+// dir while it is removed.
+func (m *Manager) releaseSessionHost(s *Session) {
+	if !s.HostBroker {
+		return
+	}
+	s.hostReleaseOnce.Do(func() {
+		m.mu.Lock()
+		brk := m.broker
+		m.mu.Unlock()
+		if brk != nil {
+			brk.ReleaseHost(s.ID, true)
+		}
+	})
+}
+
 // sessionEndedInBox tells a box layer that tracks it (the macOS guard locks'
 // display) which session ended in the box. Before releaseBoxNamed, which may
 // remove the box.
@@ -3158,6 +3447,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 			// alive inside its box, so releasing there would arm the idle timer
 			// and stop the box under a session we intend to recover.
 			m.releaseSessionBox(sess) // announces the exit scan first (handbackBegin), whichever path releases
+			m.releaseSessionHost(sess)
 			m.brokerRevoke(sess)
 			go m.returnWork(sess, ReturnOnExit)
 			go func() {
@@ -3492,15 +3782,18 @@ func (m *Manager) removeSession(id string, s *Session) {
 	// idle TTL forever. releaseSessionBox is once-guarded, so the common path
 	// (both here and there) still counts exactly one release.
 	m.releaseSessionBox(s)
+	m.releaseSessionHost(s)
 }
 
 // Reconcile rebuilds the registry from surviving abduco sessions after a daemon
 // restart: it re-attaches every live session, drops sidecar entries whose agent
 // died while the daemon was down, adopts sockets with no sidecar (agent from the
 // id), and seeds the per-agent counters so a fresh spawn cannot collide with a
-// recovered id. No-op without a backend.
+// recovered id. Last it sweeps the Host session dirs no live session owns. Without
+// a backend no session survived a restart, so that sweep is all it does.
 func (m *Manager) Reconcile() error {
 	if m.backend == nil {
+		m.sweepHostDirs(nil)
 		return nil
 	}
 	live, err := m.backend.List()
@@ -3586,7 +3879,29 @@ func (m *Manager) Reconcile() error {
 		}
 	}
 	m.mu.Unlock()
+
+	// After every reattach (each one re-took its socket) and before the daemon
+	// serves a spawn: what a crash or an ended session left goes. An alive Host
+	// session whose reattach failed keeps its dir, for a later restart.
+	var keep []string
+	for _, id := range aliveIDs {
+		if md, ok := meta[id]; ok && md.HostBroker {
+			keep = append(keep, id)
+		}
+	}
+	m.sweepHostDirs(keep)
 	return nil
+}
+
+// sweepHostDirs asks the broker, when it runs, to remove every Host session dir
+// but keep's.
+func (m *Manager) sweepHostDirs(keep []string) {
+	m.mu.Lock()
+	brk := m.broker
+	m.mu.Unlock()
+	if brk != nil {
+		brk.SweepHostDirs(keep)
+	}
 }
 
 // adoptSurvivingBoxes re-registers the box of every alive boxed session, so the
@@ -3668,6 +3983,28 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 			}
 		}
 	}
+	// A restored bound Host session gets its own socket back the same way, in
+	// the same dir (the dir is named for the id) and with the same files, so
+	// its running tools reach the broker again; its stored nonce keeps their
+	// token valid. HostFor, not only the socket: it records the binding on the
+	// socket, so a base-role re-probe refreshes this session's aws.json too. If
+	// it fails, the session still owns its dir (its end removes it) and its
+	// credential requests fail until it is respawned. The real gh is not looked
+	// up again: it lives only in the env the running session already has.
+	hostDir := ""
+	if md.HostBroker && runtime == config.RuntimeHost {
+		m.mu.Lock()
+		hbrk := m.broker
+		m.mu.Unlock()
+		if hbrk != nil {
+			bs := config.Bindings{AWS: md.AWS, AWSConns: md.AWSConns, GitHub: md.GitHub, Tokens: md.Tokens, PATs: md.PATs}
+			if _, dir, err := hbrk.HostFor(id, bs, md.BaseAccess, ""); err != nil {
+				log.Printf("session %s: its Host broker socket: %v (its credential requests are refused until it is respawned)", id, err)
+			} else {
+				hostDir = dir
+			}
+		}
+	}
 	m.mu.Lock()
 	sess := newSession(id, md.Agent, name, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	sess.Runtime = runtime
@@ -3698,6 +4035,8 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	}
 	sess.BundleDrops = md.BundleDrops
 	sess.HostDropped = slices.Clone(md.HostDropped)
+	sess.HostBroker = md.HostBroker && runtime == config.RuntimeHost
+	sess.HostDir = hostDir
 	sess.Clone = md.Clone.copy()
 	sess.ContextPaths = slices.Clone(md.ContextPaths)
 	sess.CloneOf = md.CloneOf

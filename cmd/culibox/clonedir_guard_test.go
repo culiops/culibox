@@ -29,6 +29,7 @@ var removeAllSites = map[string]int{
 	"internal/upgradebackup/copy.go":      1, // a leftover backups/.tmp-* dir, through an os.Root on the data root: only upgrade-backup copies of small files, never a clone dir (clone-dirs is copied as a file)
 	"internal/upgradebackup/retention.go": 1, // a pruned backups/<name> dir by retention, through an os.Root on the data root; the dir holds copies, never a clone dir
 	"internal/secretstore/store.go":       1, // the secret store's own dir
+	"internal/broker/hostfiles.go":        1, // a Host session's own dir, broker/h/<12 hex> under the state root, through an os.Root on it; only 12-hex names, never a clone dir
 }
 
 func TestNothingRemovesACloneDir(t *testing.T) {

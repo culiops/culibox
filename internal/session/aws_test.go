@@ -88,6 +88,111 @@ type fakeBrokerHooks struct {
 	released   []string
 	acquireErr error
 	adoptErr   error
+
+	// A Host session's own socket and files (HostFor/ReleaseHost/SweepHostDirs),
+	// recorded in call order. hostRoot is the state root the dirs are named
+	// under ("/state" when empty); hostErr fails HostFor.
+	hostCalls    []hostForCall
+	hostReleases []hostRelease
+	sweeps       [][]string
+	hostErr      error
+	hostRoot     string
+	hostMCP      map[string]string // WriteHostMCP: session id -> document
+	hostMCPErr   error
+}
+
+type hostForCall struct {
+	id     string
+	bs     config.Bindings
+	base   map[string]awsprobe.Result
+	realGH string
+}
+
+type hostRelease struct {
+	id     string
+	remove bool
+}
+
+// hostDirFor is the dir HostFor answers for a session: the real layout's name.
+func (f *fakeBrokerHooks) hostDirFor(id string) string {
+	root := f.hostRoot
+	if root == "" {
+		root = "/state"
+	}
+	return root + "/broker/h/" + broker.HostDirName(id)
+}
+
+// HostFor answers the names the real hook sets (no value of a credential), so
+// the session layer's strip and PATH handling are what a test sees.
+func (f *fakeBrokerHooks) HostFor(id string, bs config.Bindings, base map[string]awsprobe.Result, realGH string) ([]string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order.add("hostfor")
+	f.hostCalls = append(f.hostCalls, hostForCall{id: id, bs: bs, base: maps.Clone(base), realGH: realGH})
+	if f.hostErr != nil {
+		return nil, "", f.hostErr
+	}
+	dir := f.hostDirFor(id)
+	env := []string{"AGENTBOX_BROKER=unix://" + dir + "/s", broker.HostDirEnv + "=" + dir}
+	if bs.AWS != nil || len(bs.AWSConns) > 0 {
+		env = append(env, "AWS_CONFIG_FILE="+dir+"/aws-config", "AWS_PROFILE=agentbox",
+			"AWS_SHARED_CREDENTIALS_FILE="+dir+"/aws-credentials")
+	}
+	if bs.GitHub != nil {
+		env = append(env, "GH_CONFIG_DIR="+dir+"/gh", "GIT_TERMINAL_PROMPT=0")
+		if realGH != "" {
+			env = append(env, broker.GHRealEnv+"="+realGH)
+		}
+	}
+	return env, dir, nil
+}
+
+// WriteHostMCP records the document a Host session's mcp.json would hold.
+func (f *fakeBrokerHooks) WriteHostMCP(id string, doc []byte) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order.add("hostmcp")
+	if f.hostMCPErr != nil {
+		return "", f.hostMCPErr
+	}
+	if f.hostMCP == nil {
+		f.hostMCP = map[string]string{}
+	}
+	f.hostMCP[id] = string(doc)
+	return f.hostDirFor(id) + "/mcp.json", nil
+}
+
+func (f *fakeBrokerHooks) hostMCPDoc(id string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.hostMCP[id]
+	return d, ok
+}
+
+func (f *fakeBrokerHooks) ReleaseHost(id string, remove bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order.add("releasehost")
+	f.hostReleases = append(f.hostReleases, hostRelease{id: id, remove: remove})
+}
+
+func (f *fakeBrokerHooks) SweepHostDirs(keep []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order.add("sweep")
+	f.sweeps = append(f.sweeps, slices.Clone(keep))
+}
+
+// HostStripEnv is the real list, like StripEnv.
+func (f *fakeBrokerHooks) HostStripEnv(bs config.Bindings) []string {
+	return broker.Hooks{}.HostStripEnv(bs)
+}
+
+// hostState is a snapshot of the Host socket calls.
+func (f *fakeBrokerHooks) hostState() ([]hostForCall, []hostRelease, [][]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.hostCalls), slices.Clone(f.hostReleases), slices.Clone(f.sweeps)
 }
 
 type probeCall struct {

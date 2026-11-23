@@ -194,7 +194,7 @@ function dropsRow(s) {
   return { k: "left out", v, wrap: true };
 }
 
-// hostDroppedRow: the Access tab's row for a host session that ran without what its profile binds (Info.host_dropped, #359).
+// hostDroppedRow: the Access tab's row for a host session that ran without what its profile's box setup carries: context paths and box-only settings, and its bindings when node was missing (Info.host_dropped, #359, #360).
 // The list is joined as prose (tier.js tierJoinWords). null when nothing was dropped, like dropsRow.
 function hostDroppedRow(s) {
   const d = s && Array.isArray(s.host_dropped) ? s.host_dropped.map(String).filter(Boolean) : [];

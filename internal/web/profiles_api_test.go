@@ -958,11 +958,13 @@ func savedClean(rec *httptest.ResponseRecorder) bool {
 	return rev != "" && !warned
 }
 
-// #359: a profile with bindings lists what a host run would drop in host_drops
-// and is not host-blocked; only the box_only lock is a host_block.
+// #359: a profile lists what a host run would drop in host_drops and is not
+// host-blocked; only the box_only lock is a host_block. Bindings are not drops
+// (#360): they are host_guardrail.
 func TestProfilesListHostDrops(t *testing.T) {
 	seeds := []config.AgentConfig{
 		{Name: "aws", Bin: "claude", Runtime: "box", AWSConnections: []string{"prod"}},
+		{Name: "ctx", Bin: "claude", Runtime: "box", ContextPaths: []string{"/srv/docs"}},
 		{Name: "plain", Bin: "claude", Runtime: "box"},
 	}
 	pm := NewProfileManager(seeds, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
@@ -970,6 +972,52 @@ func TestProfilesListHostDrops(t *testing.T) {
 	if rec := postProfile(s, `{"name":"locked","bin":"claude","runtime":"box","box_only":true}`); rec.Code != 201 {
 		t.Fatalf("create box_only profile: %d %s", rec.Code, rec.Body)
 	}
+	byName := listProfilesByName(t, s)
+	if got, want := byName["ctx"]["host_drops"], []any{"context paths"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ctx: host_drops = %v, want %v", got, want)
+	}
+	if _, present := byName["aws"]["host_block"]; present {
+		t.Errorf("aws: host_block must be absent, got %v", byName["aws"]["host_block"])
+	}
+	for _, name := range []string{"aws", "plain", "locked"} {
+		if _, present := byName[name]["host_drops"]; present {
+			t.Errorf("%s: host_drops must be absent, got %v", name, byName[name]["host_drops"])
+		}
+	}
+	if got, want := byName["locked"]["host_block"], "this profile is set to box only"; got != want {
+		t.Errorf("locked: host_block = %v, want %q", got, want)
+	}
+}
+
+// #360: a bound profile lists the bindings a host run keeps in host_guardrail,
+// in config.BindingKinds order, and none of them in host_drops.
+func TestProfilesListHostGuardrail(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "aws", Bin: "claude", Runtime: "box", AWSConnections: []string{"prod"}},
+		{Name: "all", Bin: "claude", Runtime: "box", AWSConnections: []string{"prod"}, GitHub: &config.GitHubBinding{}, Tokens: []string{"NPM"}, ContextPaths: []string{"/srv/docs"}},
+		{Name: "plain", Bin: "claude", Runtime: "box"},
+	}
+	pm := NewProfileManager(seeds, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	byName := listProfilesByName(t, &Server{Profiles: pm})
+	if got, want := byName["aws"]["host_guardrail"], []any{"AWS binding"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("aws: host_guardrail = %v, want %v", got, want)
+	}
+	if got, want := byName["all"]["host_guardrail"], []any{"AWS binding", "GitHub binding", "token binding"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("all: host_guardrail = %v, want %v", got, want)
+	}
+	if got, want := byName["all"]["host_drops"], []any{"context paths"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("all: host_drops = %v, want only %v", got, want)
+	}
+	if _, present := byName["aws"]["host_drops"]; present {
+		t.Errorf("aws: host_drops must be absent, got %v", byName["aws"]["host_drops"])
+	}
+	if _, present := byName["plain"]["host_guardrail"]; present {
+		t.Errorf("plain: host_guardrail must be absent, got %v", byName["plain"]["host_guardrail"])
+	}
+}
+
+func listProfilesByName(t *testing.T, s *Server) map[string]map[string]any {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	s.handleProfiles(rec, httptest.NewRequest("GET", "/api/profiles", nil))
 	if rec.Code != 200 {
@@ -983,20 +1031,7 @@ func TestProfilesListHostDrops(t *testing.T) {
 	for _, p := range raw {
 		byName[p["name"].(string)] = p
 	}
-	if got, want := byName["aws"]["host_drops"], []any{"AWS binding"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("aws: host_drops = %v, want %v", got, want)
-	}
-	if _, present := byName["aws"]["host_block"]; present {
-		t.Errorf("aws: host_block must be absent, got %v", byName["aws"]["host_block"])
-	}
-	for _, name := range []string{"plain", "locked"} {
-		if _, present := byName[name]["host_drops"]; present {
-			t.Errorf("%s: host_drops must be absent, got %v", name, byName[name]["host_drops"])
-		}
-	}
-	if got, want := byName["locked"]["host_block"], "this profile is set to box only"; got != want {
-		t.Errorf("locked: host_block = %v, want %q", got, want)
-	}
+	return byName
 }
 
 func TestProfilesListHostBlock(t *testing.T) {

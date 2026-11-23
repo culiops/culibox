@@ -52,9 +52,10 @@ func BindingPhrase(k []string) string {
 // HostBlock says why the profile may not run on the host: "" when it may, else
 // one lowercase clause for the UI and for the refusal. Only the box_only lock
 // refuses a host run. Bindings, context paths and box-only env or options do
-// not: a host run drops them (see HostDrops) and the spawn must acknowledge
-// that. It does not look at Runtime: a profile that asks for the box is not
-// refused here, only a host run is.
+// not: a host run keeps the bindings as a guardrail (see HostGuardrail) and
+// drops the rest (see HostDrops), and the spawn must acknowledge that. It does
+// not look at Runtime: a profile that asks for the box is not refused here,
+// only a host run is.
 func HostBlock(a AgentConfig) string {
 	if a.BoxOnly {
 		return "this profile is set to box only"
@@ -62,17 +63,29 @@ func HostBlock(a AgentConfig) string {
 	return ""
 }
 
-// HostDrops lists what a host run of the profile would drop, one short noun
-// phrase per item, in a fixed order: each binding kind ("AWS binding",
-// "GitHub binding", "token binding"), "context paths", each box-only env the
-// profile sets ("<NAME> setting"), then each box-only option it turns on
-// (`"<Label>" option`, options in key order). nil when a host run drops nothing.
-// It is not a lock: HostBlock is.
-func HostDrops(a AgentConfig, defs map[string]OptionDef) []string {
+// HostGuardrail lists the bindings a host run of the profile keeps, one short
+// noun phrase per kind in BindingKinds order ("AWS binding", "GitHub binding",
+// "token binding"); nil for an unbound profile. On the host they are delivered
+// through the broker as the session's default credentials: a guardrail, not a
+// limit, since any process of the user can still reach the user's own logins
+// (#360). Like HostDrops, a host run needs the caller's say-so when it is
+// non-empty.
+func HostGuardrail(a AgentConfig) []string {
 	var out []string
 	for _, k := range a.BindingKinds() {
 		out = append(out, k+" binding")
 	}
+	return out
+}
+
+// HostDrops lists what a host run of the profile would drop, one short noun
+// phrase per item, in a fixed order: "context paths", each box-only env the
+// profile sets ("<NAME> setting"), then each box-only option it turns on
+// (`"<Label>" option`, options in key order). nil when a host run drops nothing.
+// Bindings are not dropped: HostGuardrail lists them. It is not a lock:
+// HostBlock is.
+func HostDrops(a AgentConfig, defs map[string]OptionDef) []string {
+	var out []string
 	if len(a.ContextPaths) > 0 {
 		out = append(out, "context paths")
 	}

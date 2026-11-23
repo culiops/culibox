@@ -71,9 +71,12 @@ func (s *serveLog) serve(l net.Listener) {
 	s.ls = append(s.ls, l)
 	s.mu.Unlock()
 	srv := &http.Server{BaseContext: BaseContext, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, shared := presenterOf(r.Context())
+		b, h, shared := presenterOf(r.Context())
 		if shared {
 			b = "<shared>"
+		}
+		if h != "" {
+			b = "host:" + h
 		}
 		io.WriteString(w, b)
 	})}
@@ -392,22 +395,22 @@ func TestPerBoxSocketIsNeverInsideTheSharedDir(t *testing.T) {
 }
 
 func TestBaseContextNamesThePresenter(t *testing.T) {
-	if b, shared := presenterOf(BaseContext(&boxListener{box: bx})); b != bx || shared {
+	if b, _, shared := presenterOf(BaseContext(&boxListener{box: bx})); b != bx || shared {
 		t.Fatalf("per-box listener: (%q, %v), want (%q, false)", b, shared, bx)
 	}
-	if b, shared := presenterOf(BaseContext(&sharedListener{})); b != "" || !shared {
+	if b, _, shared := presenterOf(BaseContext(&sharedListener{})); b != "" || !shared {
 		t.Fatalf("shared listener: (%q, %v), want (\"\", true)", b, shared)
 	}
-	if b, shared := presenterOf(BaseContext(&net.TCPListener{})); b != "" || shared {
+	if b, _, shared := presenterOf(BaseContext(&net.TCPListener{})); b != "" || shared {
 		t.Fatalf("plain listener: (%q, %v), want (\"\", false)", b, shared)
 	}
-	if b, shared := presenterOf(context.Background()); b != "" || shared {
+	if b, _, shared := presenterOf(context.Background()); b != "" || shared {
 		t.Fatalf("no presenter: (%q, %v)", b, shared)
 	}
-	if b, shared := presenterOf(withBox(context.Background(), bx)); b != bx || shared {
+	if b, _, shared := presenterOf(withBox(context.Background(), bx)); b != bx || shared {
 		t.Fatalf("withBox: (%q, %v)", b, shared)
 	}
-	if b, shared := presenterOf(withShared(context.Background())); b != "" || !shared {
+	if b, _, shared := presenterOf(withShared(context.Background())); b != "" || !shared {
 		t.Fatalf("withShared: (%q, %v)", b, shared)
 	}
 }

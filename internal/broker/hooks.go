@@ -72,9 +72,22 @@ func (h Hooks) ReleaseBox(boxName string) {
 }
 
 // WriteAWSListing rewrites aws.json in the binding's existing dir with new
-// base-role probe results; a no-op without named connections.
+// base-role probe results, and in the dir of every live Host session with the
+// same binding; a no-op without named connections. With no such Host session
+// it is the box's WriteAWSListing, unchanged (a missing binding dir is an
+// error); with one, a missing binding dir only means no box holds the binding.
 func (h Hooks) WriteAWSListing(bs config.Bindings, base map[string]awsprobe.Result) error {
-	return WriteAWSListing(h.StateRoot, bs, base)
+	if len(bs.AWSConns) == 0 {
+		return nil
+	}
+	var names []string
+	if h.EP.Hosts != nil {
+		names = h.EP.Hosts.dirsOf(bs.Hash())
+	}
+	if len(names) == 0 {
+		return WriteAWSListing(h.StateRoot, bs, base)
+	}
+	return writeAWSListingHosts(h.StateRoot, bs, base, names)
 }
 
 // WriteSessionMCP writes a session's MCP config file into its binding dir and

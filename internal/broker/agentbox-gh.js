@@ -10,11 +10,13 @@
 'use strict';
 const http = require('http');
 const { spawn, spawnSync } = require('child_process');
+const fs = require('fs');
 const os = require('os');
 
 const ep = process.env.AGENTBOX_BROKER || '';
 const tok = process.env.AGENTBOX_BROKER_TOKEN || '';
-// AGENTBOX_GH_REAL is a test-only override of the real gh's path.
+// AGENTBOX_GH_REAL is the real gh's path. A box never sets it (the image's gh
+// is the default); a Host session sets it to the gh on its PATH. Tests use it too.
 const realGh = process.env.AGENTBOX_GH_REAL || '/opt/gh/bin/gh';
 
 function fail(msg) {
@@ -151,6 +153,11 @@ function runGh(args, env) {
 
 function main() {
   if (!ep || !tok) fail('not a CuliBox GitHub session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
+  // Before any mint: a token for a gh that cannot run would be minted (and
+  // audited) for nothing. A Host session whose PATH had no gh lands here.
+  try { fs.accessSync(realGh, fs.constants.X_OK); } catch (e) {
+    fail('gh is not installed on this machine; install it, then start a new session');
+  }
   const args = process.argv.slice(2);
   const r = resolve(args);
   if (r && r.bad) fail('cannot read the repository in ' + JSON.stringify(r.bad) + '; use -R OWNER/REPO');

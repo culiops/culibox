@@ -59,8 +59,9 @@ type SpawnSpec struct {
 	// never reads it.
 	Clone *bool
 	// HostDropsAck is the caller's confirmation that a host run drops what the
-	// profile's box setup carries (config.HostDrops: bindings, context paths,
-	// box-only settings). Applied by the session layer's Spawn, which refuses a
+	// profile's box setup carries (config.HostDrops: context paths, box-only
+	// settings) and has its bindings as the default credentials, not a limit
+	// (config.HostGuardrail). Applied by the session layer's Spawn, which refuses a
 	// host spawn of such a profile without it; Build never reads it. It does not
 	// lift a box_only lock, and it is never persisted: a restart of a host
 	// session sets it itself.
@@ -690,14 +691,25 @@ func (l *AgentLauncher) HostBlockFor(agent string) (string, error) {
 }
 
 // HostDropsFor returns config.HostDrops for the profile: what a host run would
-// drop (bindings, context paths, box-only env and options), nil when nothing.
-// An unknown profile is an error, as in HostBlockFor.
+// drop (context paths, box-only env and options), nil when nothing. An unknown
+// profile is an error, as in HostBlockFor.
 func (l *AgentLauncher) HostDropsFor(agent string) ([]string, error) {
 	cfg, ok := l.agent(agent)
 	if !ok {
 		return nil, fmt.Errorf("launcher: unknown agent %q", agent)
 	}
 	return config.HostDrops(cfg, l.optionDefs), nil
+}
+
+// HostGuardrailFor returns config.HostGuardrail for the profile: the bindings a
+// host run keeps as its default credentials, nil when unbound. An unknown
+// profile is an error, as in HostDropsFor.
+func (l *AgentLauncher) HostGuardrailFor(agent string) ([]string, error) {
+	cfg, ok := l.agent(agent)
+	if !ok {
+		return nil, fmt.Errorf("launcher: unknown agent %q", agent)
+	}
+	return config.HostGuardrail(cfg), nil
 }
 
 // ContextPathsFor returns a copy of the profile's context_paths, or nil, nil
@@ -1275,6 +1287,36 @@ func lookPathIn(bin, pathv string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("not found")
+}
+
+// SessionLookPath finds bin on the PATH of a session's env (NAME=value; the
+// last PATH wins, as exec takes it), never the daemon's, and returns its
+// absolute path, or "" when it is not there. Relative PATH entries are skipped:
+// the answer names one file whatever the cwd. A bin with a slash is not looked
+// up ("").
+func SessionLookPath(env []string, bin string) string {
+	if strings.Contains(bin, "/") {
+		return ""
+	}
+	pathv, found := "", false
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			pathv, found = v, true
+		}
+	}
+	if !found {
+		return ""
+	}
+	for _, dir := range filepath.SplitList(pathv) {
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		cand := filepath.Join(dir, bin)
+		if info, err := os.Stat(cand); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return cand
+		}
+	}
+	return ""
 }
 
 // shellJoin single-quote-escapes each token for a shell -c string. bin/args

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// agent-box env wrapper. Runs inside a box (/opt/agentbox/agentbox-env.js).
+// agent-box env wrapper. Runs inside a box (/opt/agentbox/agentbox-env.js), or
+// on Host from the session's own dir (AGENTBOX_DIR).
 //
 //   agentbox-env NAME [NAME...] -- CMD [ARGS...]   run CMD with the named tokens in its env
 //   agentbox-env --list                            show what is bound (never a value)
@@ -21,10 +22,13 @@ const os = require('os');
 
 const ep = process.env.AGENTBOX_BROKER || '';
 const tok = process.env.AGENTBOX_BROKER_TOKEN || '';
+// The listings sit in the binding's dir: /opt/agentbox in a box, the session's
+// own dir on Host (AGENTBOX_DIR).
+const dir = process.env.AGENTBOX_DIR || '/opt/agentbox';
 // Test-only overrides: the listing paths, and the fetch timeout (default 10 s).
-const listFile = process.env.AGENTBOX_ENV_LIST_FILE || '/opt/agentbox/tokens.json';
-const awsFile = process.env.AGENTBOX_ENV_AWS_FILE || '/opt/agentbox/aws.json';
-const ghFile = process.env.AGENTBOX_ENV_GITHUB_FILE || '/opt/agentbox/github.json';
+const listFile = process.env.AGENTBOX_ENV_LIST_FILE || dir + '/tokens.json';
+const awsFile = process.env.AGENTBOX_ENV_AWS_FILE || dir + '/aws.json';
+const ghFile = process.env.AGENTBOX_ENV_GITHUB_FILE || dir + '/github.json';
 // The override can only shorten the default: a non-finite or junk value is ignored,
 // a huge one is capped (Node turns an overflowing delay into a 1 ms timer).
 const timeoutOverride = Number(process.env.AGENTBOX_ENV_TIMEOUT_MS);

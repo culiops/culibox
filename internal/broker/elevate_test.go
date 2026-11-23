@@ -1090,3 +1090,60 @@ func TestApprovalRowsCarryEntry(t *testing.T) {
 		}
 	}
 }
+
+// D8 (#360): a Host session may be granted write access exactly as a box may:
+// same request, same approval row. A session that is neither is still refused.
+func TestElevateAllowedForHostSession(t *testing.T) {
+	hostView := func() SessionView {
+		v := liveElev()
+		// As Spawn builds it: a Host session has no box, so no Exclusive and no Box.
+		v.Boxed, v.Host, v.Exclusive, v.Box = false, true, false, ""
+		return v
+	}
+	b, _, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev(), "host-1": hostView()})
+	withTimers(b)
+	want, err := b.Elevate("aws-1", ElevateRequest{Minutes: 30, Reason: "apply", Cred: CredCookie})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Elevate("host-1", ElevateRequest{Minutes: 30, Reason: "apply", Cred: CredCookie})
+	if err != nil {
+		t.Fatalf("Host session refused: %v", err)
+	}
+	if got.Active != want.Active || !got.Until.Equal(want.Until) {
+		t.Fatalf("host view %+v, box view %+v", got, want)
+	}
+	if len(rec.appr) != 2 || rec.appr[1].Action != ActionGranted || rec.appr[1].SessionID != "host-1" {
+		t.Fatalf("approval rows %+v", rec.appr)
+	}
+
+	neither := liveElev()
+	neither.Boxed = false
+	b2, _, rec2, _ := setup(t, map[string]SessionView{"s": neither})
+	_, err = b2.Elevate("s", ElevateRequest{Minutes: 30, Reason: "apply", Cred: CredCookie})
+	if err == nil || err.Error() != ErrElevateRefused.Error()+": this session has no AWS binding in a box" {
+		t.Fatalf("neither boxed nor host: err = %v", err)
+	}
+	if len(rec2.appr) != 1 || rec2.appr[0].Action != ActionRefused {
+		t.Fatalf("approval rows %+v", rec2.appr)
+	}
+}
+
+// D8 (#360): what a Host session's write window mints is audited as elevated,
+// with the tier "host".
+func TestHostElevatedMintIsAuditedAsHost(t *testing.T) {
+	v := liveElev()
+	v.Boxed, v.Host, v.Exclusive, v.Box = false, true, false, ""
+	b, _, rec, _ := setup(t, map[string]SessionView{"host-1": v})
+	withTimers(b)
+	if _, err := b.Elevate("host-1", cookie(30)); err != nil {
+		t.Fatal(err)
+	}
+	if w := present(b, credPaths[0], tokA("host-1"), onHostSocket("host-1")); w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	r := rec.rows[len(rec.rows)-1]
+	if !r.Elevated || r.RoleARN != writeRole || r.Outcome != OutcomeMinted || r.Tier != TierHost || r.SessionID != "host-1" {
+		t.Fatalf("audit %+v", r)
+	}
+}

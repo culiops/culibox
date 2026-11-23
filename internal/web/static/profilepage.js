@@ -1950,7 +1950,8 @@ function pfvRunsForm(rec, c) {
     out.push(p);
   }
   // host_block is now only the box_only lock, so the checkbox is the stored lock and nothing else: a binding or context paths do
-  // not tick it (Host drops them, by the user's choice, see pfvHostConsequence). Once Host is picked a ticked lock is refused by
+  // not tick it (a Host run of the profile is the user's choice: bindings are its default credentials, context paths are dropped; see
+  // pfvHostConsequence for saving it as host). Once Host is picked a ticked lock is refused by
   // the pre-check, and an unticked one saves as host.
   out.push(pfaCheckbox(rec, "box_only", "Box only: never offer Host for this profile", "", v.boxOnly,
     (on) => { v.boxOnly = on; pfvChanged(rec, "box_only"); }, null));

@@ -87,9 +87,10 @@ func definedTokens(ts *tokenSet) func([]config.StaticToken) []config.StaticToken
 // brokerSessionView is what the broker may know of a session. A session
 // carries the AWS connections it was spawned with (a copy that outlives their
 // removal from aws_connections), so unlike token entries they are passed through
-// without filtering.
+// without filtering. A Host session is a Host view only when its bindings were
+// delivered (HostBroker); it never has a box and is never exclusive.
 func brokerSessionView(s *session.Session, defined func([]config.StaticToken) []config.StaticToken) broker.SessionView {
-	return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, Box: s.Box, GitHub: s.GitHub,
+	return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, Host: s.HostBroker, Box: s.Box, GitHub: s.GitHub,
 		Live: !s.Exited(), AWS: s.AWS, AWSConns: s.AWSConns, Exclusive: s.Exclusive, Tokens: defined(s.Tokens), PATs: defined(s.PATs)}
 }
 
@@ -232,6 +233,11 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 		// socket and closed when its last session ends.
 		ep.Boxes.Start(func(l net.Listener) { go serveBroker(srv, l) })
 	}
+	// A listener per bound Host session, on both OSes, started as the session
+	// layer takes a session's socket and closed when its last reference goes.
+	if ep.Hosts != nil {
+		ep.Hosts.Start(func(l net.Listener) { go serveBroker(srv, l) })
+	}
 	// The aws CLI is resolved once. Without it the SSO card offers the host
 	// command only (the endpoint answers 502 with it).
 	var sso *ssologin.Runner
@@ -270,6 +276,12 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 			brk.RevokeAllGitHub(ctx)
 			if ep.Boxes != nil {
 				ep.Boxes.Close()
+			}
+			// Every Host session's socket closes and no new one opens; their dirs
+			// stay, for the sessions found again after the restart (Reconcile
+			// re-runs HostFor, then sweeps the rest).
+			if ep.Hosts != nil {
+				ep.Hosts.Close()
 			}
 			if err := srv.Shutdown(ctx); err != nil {
 				_ = srv.Close() // a mint outlived the grace period; the audit store closes next

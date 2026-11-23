@@ -22,15 +22,30 @@ type dropsLauncher struct {
 	tieredLauncher
 	hostBlock string   // HostBlockFor's answer
 	drops     []string // HostDropsFor's answer
+	guardrail []string // HostGuardrailFor's answer
+	path      string   // Build's PATH ("" = none, so node is never found)
+	extraEnv  []string // more of Build's env, after PATH
 	boxOpt    string   // BoxOnlyOptionFor's answer
 	bound     bool     // AWS + GitHub + token bindings, context paths, egress
 	badConn   bool     // AWSConnectionsFor errors (an undefined connection name)
 	clone     *config.Clone
 }
 
-func (l dropsLauncher) HostBlockFor(string) (string, error)                 { return l.hostBlock, nil }
-func (l dropsLauncher) HostDropsFor(string) ([]string, error)               { return slices.Clone(l.drops), nil }
+func (l dropsLauncher) HostBlockFor(string) (string, error)   { return l.hostBlock, nil }
+func (l dropsLauncher) HostDropsFor(string) ([]string, error) { return slices.Clone(l.drops), nil }
+func (l dropsLauncher) HostGuardrailFor(string) ([]string, error) {
+	return slices.Clone(l.guardrail), nil
+}
 func (l dropsLauncher) BoxOnlyOptionFor(launcher.SpawnSpec) (string, error) { return l.boxOpt, nil }
+
+func (l dropsLauncher) Build(spec launcher.SpawnSpec) ([]string, []string, error) {
+	argv, env, err := l.tieredLauncher.Build(spec)
+	env = slices.Clone(env)
+	if l.path != "" {
+		env = append(env, "PATH="+l.path)
+	}
+	return argv, append(env, l.extraEnv...), err
+}
 
 func (l dropsLauncher) AWSFor(string) *config.AWSBinding {
 	if !l.bound {
@@ -85,10 +100,22 @@ func (l dropsLauncher) CloneFor(string) (*config.Clone, error) {
 var _ HostDropsResolver = dropsLauncher{}
 var _ HostDropsResolver = (*launcher.AgentLauncher)(nil)
 
-var fourDrops = []string{"AWS binding", "GitHub binding", "token binding", "context paths"}
+// threeGuard is what a Host run of the bound profile keeps as its default
+// credentials (config.HostGuardrail); ctxDrops what it still drops.
+var (
+	threeGuard = []string{"AWS binding", "GitHub binding", "token binding"}
+	ctxDrops   = []string{"context paths"}
+	// nodeDropped is HostDropped when node is not on the session PATH: the
+	// bindings, the reason, then the drops.
+	nodeDropped = []string{"AWS binding", "GitHub binding", "token binding", nodeMissingItem, "context paths"}
+)
 
+const nodeMissingItem = "bindings (node was not found on this session's PATH; CuliBox's credential helpers need it)"
+
+// boundDropsLauncher's Build env has no PATH, so a Host run finds no node and
+// drops the bindings (see hostbroker_test.go for a Host run that keeps them).
 func boundDropsLauncher(argv []string, tier string) dropsLauncher {
-	return dropsLauncher{tieredLauncher: tieredLauncher{argv: argv, runtime: tier}, bound: true, drops: fourDrops}
+	return dropsLauncher{tieredLauncher: tieredLauncher{argv: argv, runtime: tier}, bound: true, drops: ctxDrops, guardrail: threeGuard}
 }
 
 type dropsHarness struct {
@@ -171,13 +198,25 @@ func TestHostSpawnWithDropsNeedsAck(t *testing.T) {
 	if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "host_drops_bindings") {
 		t.Fatalf("err = %v, want ErrUnboxableWorkspace naming host_drops_bindings", err)
 	}
-	want := `profile "p": on the host this profile runs without its AWS binding, GitHub binding, token binding and context paths; confirm to start it there (host_drops_bindings: true)`
+	want := `profile "p" runs on Host with AWS, GitHub and token bindings as the default credentials, not a limit, and without its context paths; confirm to start it there (host_drops_bindings: true)`
 	if err.Error() != want {
 		t.Fatalf("err = %q\nwant  %q", err, want)
 	}
 	h.untouched(t)
+
+	// Drops alone keep today's wording.
+	l := dropsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, drops: ctxDrops}
+	h = newDropsHarness(t, l)
+	_, err = h.m.Spawn(hostSpec(t))
+	want = `profile "p": on the host this profile runs without its context paths; confirm to start it there (host_drops_bindings: true)`
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v\nwant  %q", err, want)
+	}
+	h.untouched(t)
 }
 
+// Without node on the session PATH the Host run drops the bindings, as before
+// #360, and says why.
 func TestHostSpawnWithAckDropsBindings(t *testing.T) {
 	h := newDropsHarness(t, boundDropsLauncher(envDumpArgv, config.RuntimeBox))
 	spec := hostSpec(t)
@@ -203,15 +242,18 @@ func TestHostSpawnWithAckDropsBindings(t *testing.T) {
 	if s.BrokerNonce != "" || s.EgressNonce != "" || s.Bindings().Any() {
 		t.Fatalf("host session holds broker state: nonce=%q egress=%q bindings=%+v", s.BrokerNonce, s.EgressNonce, s.Bindings())
 	}
-	if !slices.Equal(in.HostDropped, fourDrops) {
-		t.Fatalf("Info.HostDropped = %q, want %q", in.HostDropped, fourDrops)
+	if !slices.Equal(in.HostDropped, nodeDropped) {
+		t.Fatalf("Info.HostDropped = %q, want %q", in.HostDropped, nodeDropped)
 	}
 	md := sidecarEntry(t, h.path, s.ID)
-	if !slices.Equal(md.HostDropped, fourDrops) {
-		t.Fatalf("sidecar host_dropped = %q, want %q", md.HostDropped, fourDrops)
+	if !slices.Equal(md.HostDropped, nodeDropped) {
+		t.Fatalf("sidecar host_dropped = %q, want %q", md.HostDropped, nodeDropped)
 	}
-	if md.AWS != nil || md.GitHub != nil || len(md.Tokens) != 0 || len(md.ContextPaths) != 0 || md.BrokerNonce != "" {
+	if md.AWS != nil || md.GitHub != nil || len(md.Tokens) != 0 || len(md.ContextPaths) != 0 || md.BrokerNonce != "" || md.HostBroker {
 		t.Fatalf("sidecar carries bindings: %+v", md)
+	}
+	if s.HostBroker || in.HostBroker {
+		t.Fatal("a Host session without node is marked as having its bindings")
 	}
 }
 
@@ -243,23 +285,29 @@ func TestHostSpawnWithoutDropsHasNoHostDropped(t *testing.T) {
 	}
 }
 
-func TestHostSpawnAckSkipsResolverErrors(t *testing.T) {
+// #360: a Host run keeps its bindings, so one that no longer resolves blocks it
+// as it blocks a box. The ack refusal still comes first.
+func TestHostSpawnResolverErrorsBlockAfterAck(t *testing.T) {
 	l := boundDropsLauncher(envDumpArgv, config.RuntimeBox)
 	l.badConn = true
 	h := newDropsHarness(t, l)
 
-	// Without the ack the refusal is the drops one, not the resolver's.
+	// Without the ack the refusal is the ack one, not the resolver's.
 	_, err := h.m.Spawn(hostSpec(t))
 	if err == nil || !strings.Contains(err.Error(), "host_drops_bindings") {
 		t.Fatalf("err = %v, want the drops refusal", err)
 	}
 	spec := hostSpec(t)
 	spec.HostDropsAck = true
-	s, err := h.m.Spawn(spec)
-	if err != nil {
-		t.Fatalf("an unresolvable binding must not block a host run that drops it: %v", err)
+	// The user chose Host: a profile refusal, never "containment unavailable".
+	if s, err := h.m.Spawn(spec); err == nil || errors.Is(err, box.ErrBoxUnavailable) || !errors.Is(err, box.ErrUnboxableWorkspace) ||
+		strings.Contains(err.Error(), "containment") || !strings.Contains(err.Error(), `"gone"`) {
+		if err == nil {
+			_ = h.m.Kill(s.ID)
+		}
+		t.Fatalf("host spawn err = %v, want the unresolvable connection as a profile refusal", err)
 	}
-	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	h.untouched(t)
 	// The same profile in a box still fails on the bad connection.
 	if _, err := h.m.Spawn(launcher.SpawnSpec{Agent: "p", Cwd: t.TempDir(), Runtime: config.RuntimeBox}); !errors.Is(err, box.ErrBoxUnavailable) {
 		t.Fatalf("box spawn err = %v, want ErrBoxUnavailable", err)
@@ -322,7 +370,7 @@ func TestRestartHostSessionOfBoundProfile(t *testing.T) {
 	spec := hostSpec(t)
 	spec.HostDropsAck = true
 	old := exitedSession(t, h.m, spec)
-	if !slices.Equal(old.HostDropped, fourDrops) {
+	if !slices.Equal(old.HostDropped, nodeDropped) {
 		t.Fatalf("old HostDropped = %q", old.HostDropped)
 	}
 	ns, err := h.m.Restart(old.ID)
@@ -330,7 +378,7 @@ func TestRestartHostSessionOfBoundProfile(t *testing.T) {
 		t.Fatalf("a host session of a bound profile did not restart: %v", err)
 	}
 	t.Cleanup(func() { _ = h.m.Kill(ns.ID) })
-	if ns.Runtime != config.RuntimeHost || !slices.Equal(ns.HostDropped, fourDrops) || ns.Bindings().Any() {
+	if ns.Runtime != config.RuntimeHost || !slices.Equal(ns.HostDropped, nodeDropped) || ns.Bindings().Any() {
 		t.Fatalf("restarted: runtime=%s dropped=%q bindings=%+v", ns.Runtime, ns.HostDropped, ns.Bindings())
 	}
 	h.noBoxSideEffects(t)
@@ -376,7 +424,7 @@ func TestSidecarRestoresHostDropped(t *testing.T) {
 	if !ok {
 		t.Fatal("session not restored")
 	}
-	if !slices.Equal(r.HostDropped, fourDrops) || !slices.Equal(r.Info().HostDropped, fourDrops) {
+	if !slices.Equal(r.HostDropped, nodeDropped) || !slices.Equal(r.Info().HostDropped, nodeDropped) {
 		t.Fatalf("restored HostDropped = %q", r.Info().HostDropped)
 	}
 }
@@ -385,7 +433,7 @@ func TestHostSpawnCloneProfileInPlace(t *testing.T) {
 	of := t.TempDir()
 	l := boundDropsLauncher(envDumpArgv, config.RuntimeBox)
 	l.clone = &config.Clone{Of: of, Dir: filepath.Join(t.TempDir(), "clone"), Shares: []string{"CLAUDE.md"}}
-	l.drops = []string{"GitHub binding"}
+	l.drops, l.guardrail = nil, []string{"GitHub binding"}
 	h := newDropsHarness(t, l)
 	h.m.SetClone(&fakeCloneHooks{})
 	no := false

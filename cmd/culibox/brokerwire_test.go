@@ -558,6 +558,26 @@ func TestBrokerSessionViewCarriesBox(t *testing.T) {
 	}
 }
 
+// #360: a Host session whose bindings were delivered is a Host view (its token
+// is honoured on its own host socket only); one that dropped them is not.
+func TestBrokerSessionViewCarriesHost(t *testing.T) {
+	s := boundSess("aws-1")
+	s.Runtime, s.Box, s.Exclusive = config.RuntimeHost, "", false
+	s.BrokerNonce = wireNonce
+	s.HostBroker = true
+	v := brokerSessionView(s, definedTokens(nil))
+	if !v.Host || v.Boxed || v.Box != "" || v.Exclusive {
+		t.Fatalf("host view = %+v, want Host and not Boxed, no box, not exclusive", v)
+	}
+	s.HostBroker = false
+	if v := brokerSessionView(s, definedTokens(nil)); v.Host || v.Boxed {
+		t.Fatalf("host session without its bindings: view = %+v, want neither Host nor Boxed", v)
+	}
+	if v := brokerSessionView(boundSess("aws-2"), definedTokens(nil)); v.Host || !v.Boxed {
+		t.Fatalf("box view = %+v, want Boxed and not Host", v)
+	}
+}
+
 // postCredsBody is postCreds with the reply body.
 func postCredsBody(t *testing.T, sock, token string) (int, string) {
 	t.Helper()

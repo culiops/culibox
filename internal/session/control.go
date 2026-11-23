@@ -150,8 +150,10 @@ func (m *Manager) Restart(id string) (*Session, error) {
 	ns, err := m.Spawn(launcher.SpawnSpec{
 		Agent: s.Agent, Name: name, Cwd: s.Cwd, Runtime: s.Runtime, Options: opts, Account: acct,
 		Resume: resumeFor(s.Runtime, bin, sid, s.Exclusive), ParentID: s.ParentID, Clone: clone,
-		// A host session was started with its drops confirmed; the restart is that
-		// same session, so it carries the confirmation. A box session has no drops.
+		// A host session was started with its drops and its bindings' guardrail
+		// confirmed; the restart is that same session, so it carries the
+		// confirmation (and, with node on its PATH, gets its bindings through the
+		// broker again, on a new id's socket). A box session has neither.
 		HostDropsAck: s.Runtime == config.RuntimeHost,
 	})
 	if err != nil {

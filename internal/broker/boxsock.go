@@ -57,6 +57,7 @@ type presenterKey struct{}
 
 type presenter struct {
 	box    string // the per-box listener's box
+	host   string // the per-session listener's Host session id
 	shared bool   // the shared socket
 }
 
@@ -68,12 +69,13 @@ func withShared(ctx context.Context) context.Context {
 	return context.WithValue(ctx, presenterKey{}, presenter{shared: true})
 }
 
-// presenterOf is who presented the request: a box (its per-box listener), the
-// shared socket, or neither (a plain listener: darwin, which identifies the box
-// by the request's source address instead).
-func presenterOf(ctx context.Context) (box string, shared bool) {
+// presenterOf is who presented the request: a box (its per-box listener), a
+// Host session (its own host listener), the shared socket, or none of them (a
+// plain listener: darwin, which identifies the box by the request's source
+// address instead).
+func presenterOf(ctx context.Context) (box string, host string, shared bool) {
 	p, _ := ctx.Value(presenterKey{}).(presenter)
-	return p.box, p.shared
+	return p.box, p.host, p.shared
 }
 
 // boxListener is the unix listener of one box: every connection accepted on it
@@ -97,6 +99,8 @@ func BaseContext(l net.Listener) context.Context {
 	switch v := l.(type) {
 	case *boxListener:
 		return withBox(context.Background(), v.box)
+	case *hostListener:
+		return withHost(context.Background(), v.sid)
 	case *sharedListener:
 		return withShared(context.Background())
 	}
@@ -155,7 +159,7 @@ func (s *BoxSockets) Acquire(boxName string) (box.Mount, error) {
 		bs.refs++
 		return box.Mount{Host: bs.dir, Box: SockBoxDir}, nil
 	}
-	l, dir, err := listenSocket(s.stateRoot, boxesRel+"/"+boxName[len(boxName)-12:], boxSockName)
+	l, dir, err := listenSocket(s.stateRoot, boxesRel+"/"+boxName[len(boxName)-12:], boxSockName, maxSockPath)
 	if err != nil {
 		return box.Mount{}, err
 	}
@@ -204,14 +208,15 @@ func (s *BoxSockets) Close() {
 // directories under stateRoot are created 0700 (each verified to be a plain
 // directory, so a planted symlink is refused instead of followed), a stale
 // socket is replaced, and the socket is 0600. Every write goes through os.Root.
+// max is the longest socket path the OS binds (maxSockPathFor).
 // It returns the directory (what a box mounts).
-func listenSocket(stateRoot, rel, name string) (l net.Listener, dir string, err error) {
+func listenSocket(stateRoot, rel, name string, max int) (l net.Listener, dir string, err error) {
 	dir = filepath.Join(stateRoot, filepath.FromSlash(rel))
 	sock := filepath.Join(dir, name)
 	// Fail closed before anything is created: sun_path is short and the state
 	// root is user-configurable. Nothing is truncated or bound elsewhere.
-	if n := len(sock); n > maxSockPath {
-		return nil, "", fmt.Errorf("broker: the socket path %s is %d bytes; a unix socket path holds at most %d. Use a shorter data directory", sock, n, maxSockPath)
+	if n := len(sock); n > max {
+		return nil, "", fmt.Errorf("broker: the socket path %s is %d bytes; a unix socket path holds at most %d. Use a shorter data directory", sock, n, max)
 	}
 	root, err := os.OpenRoot(stateRoot)
 	if err != nil {

@@ -56,8 +56,11 @@ type SessionMCP struct {
 // replaces a host server of the same name, and that is recorded as a drop; an
 // image server replaces an entry of the same name, the same way.
 //
+// launcher is the command an entry server runs: entryLauncher in a box, the
+// session's own shim (an absolute path) on Host, where nothing is probed.
+//
 // The result holds no value: an entry server is the launcher and its argv.
-func ComposeSessionMCP(user, image map[string]any, resolves map[string]bool, drops []Drop, entries []EntryServer) (map[string]any, []Drop) {
+func ComposeSessionMCP(user, image map[string]any, resolves map[string]bool, drops []Drop, entries []EntryServer, launcher string) (map[string]any, []Drop) {
 	out := make(map[string]any, len(user)+len(entries)+len(image))
 	for k, v := range user {
 		out[k] = v
@@ -65,7 +68,7 @@ func ComposeSessionMCP(user, image map[string]any, resolves map[string]bool, dro
 	drops = slices.Clone(drops)
 	for _, e := range entries {
 		switch {
-		case resolves != nil && !resolves[entryLauncher]:
+		case resolves != nil && !resolves[launcher]:
 			drops = append(drops, Drop{Kind: "mcp", Name: e.Server,
 				Reason: "the box image has no " + entryLauncher + "; update box_image"})
 			continue
@@ -90,7 +93,7 @@ func ComposeSessionMCP(user, image map[string]any, resolves map[string]bool, dro
 			kept = append(kept, d)
 		}
 		drops = kept
-		out[e.Server] = map[string]any{"type": "stdio", "command": entryLauncher, "args": slices.Clone(e.Args)}
+		out[e.Server] = map[string]any{"type": "stdio", "command": launcher, "args": slices.Clone(e.Args)}
 		if replaced {
 			drops = append(drops, Drop{Kind: "mcp", Name: e.Server, Reason: "replaced by token entry " + e.Entry})
 		}
@@ -126,7 +129,7 @@ func (p *Provider) SessionMCP(includeUser bool, drops []Drop, entries []EntrySer
 			delete(user, n)
 		}
 	}
-	servers, drops := ComposeSessionMCP(user, image, built.Lock.EntryResolves, drops, entries)
+	servers, drops := ComposeSessionMCP(user, image, built.Lock.EntryResolves, drops, entries, entryLauncher)
 	doc, err := marshalMCPDoc(servers)
 	if err != nil {
 		return SessionMCP{}, err

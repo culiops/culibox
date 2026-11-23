@@ -110,6 +110,11 @@ type sessionMeta struct {
 	// so the card still says so after a daemon restart. Records from before
 	// lack it and read as none.
 	HostDropped []string `json:"host_dropped,omitempty"`
+	// HostBroker marks a host session whose bindings reach it through its own
+	// broker socket (#360), so a daemon restart reopens that socket (with the
+	// stored nonce) and the start-up sweep keeps its dir. Records from before
+	// lack it and read as none.
+	HostBroker bool `json:"host_broker,omitempty"`
 	// Clone is the clone refresh result of a clone-mode session, kept so the UI
 	// still shows it after a daemon restart. Records from before the refresh
 	// lack it and read as none.

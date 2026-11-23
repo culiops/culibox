@@ -48,10 +48,11 @@ func TestHostDrops(t *testing.T) {
 	}{
 		{"unbound", AgentConfig{}, nil},
 		{"host profile", AgentConfig{Runtime: "host"}, nil},
-		{"aws", AgentConfig{AWS: aws}, []string{"AWS binding"}},
-		{"aws connections", AgentConfig{AWSConnections: []string{"prod"}}, []string{"AWS binding"}},
-		{"aws and github", AgentConfig{AWS: aws, GitHub: gh}, []string{"AWS binding", "GitHub binding"}},
-		{"token", AgentConfig{Tokens: []string{"x"}}, []string{"token binding"}},
+		// #360: a Host run keeps its bindings (HostGuardrail), so they are no drop.
+		{"aws", AgentConfig{AWS: aws}, nil},
+		{"aws connections", AgentConfig{AWSConnections: []string{"prod"}}, nil},
+		{"aws and github", AgentConfig{AWS: aws, GitHub: gh}, nil},
+		{"token", AgentConfig{Tokens: []string{"x"}}, nil},
 		{"context paths", AgentConfig{ContextPaths: []string{"/srv/docs"}}, []string{"context paths"}},
 		{"env", AgentConfig{Env: map[string]string{CriticalRmEnv: "1"}}, []string{envItem}},
 		{"secret", AgentConfig{Secrets: []string{CriticalRmEnv}}, []string{envItem}},
@@ -60,7 +61,7 @@ func TestHostDrops(t *testing.T) {
 		{"all", AgentConfig{
 			AWS: aws, GitHub: gh, Tokens: []string{"x"}, ContextPaths: []string{"/srv/docs"},
 			Env: map[string]string{CriticalRmEnv: "1"}, Options: map[string]any{CriticalRmKey: true},
-		}, []string{"AWS binding", "GitHub binding", "token binding", "context paths", envItem, optItem}},
+		}, []string{"context paths", envItem, optItem}},
 		{"box only alone adds nothing", AgentConfig{BoxOnly: true}, nil},
 	}
 	for _, c := range cases {
@@ -78,6 +79,31 @@ func TestHostDrops(t *testing.T) {
 			t.Fatalf("HostDrops = %q", got)
 		}
 	})
+}
+
+func TestHostGuardrail(t *testing.T) {
+	aws := &AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::123456789012:role/r", Region: "us-east-1"}
+	cases := []struct {
+		name string
+		a    AgentConfig
+		want []string
+	}{
+		{"unbound", AgentConfig{}, nil},
+		{"context paths only", AgentConfig{ContextPaths: []string{"/srv/docs"}, Env: map[string]string{CriticalRmEnv: "1"}}, nil},
+		{"aws", AgentConfig{AWS: aws}, []string{"AWS binding"}},
+		{"aws connections", AgentConfig{AWSConnections: []string{"prod"}}, []string{"AWS binding"}},
+		{"github", AgentConfig{GitHub: &GitHubBinding{}}, []string{"GitHub binding"}},
+		{"all", AgentConfig{AWS: aws, GitHub: &GitHubBinding{}, Tokens: []string{"x"}, ContextPaths: []string{"/srv/docs"}},
+			[]string{"AWS binding", "GitHub binding", "token binding"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := HostGuardrail(c.a)
+			if strings.Join(got, "|") != strings.Join(c.want, "|") || (got == nil) != (c.want == nil) {
+				t.Fatalf("HostGuardrail = %q, want %q", got, c.want)
+			}
+		})
+	}
 }
 
 func TestJoinKinds(t *testing.T) {

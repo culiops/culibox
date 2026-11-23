@@ -228,8 +228,10 @@ test("profileFitsAsSeg: zero profiles is also the select (nothing to segment)", 
   assert.equal(profileFitsAsSeg(0), false);
 });
 
-test("spawnRuntimeDefault: a profile whose Host run drops bindings opens on box, host or not (#359)", () => {
-  const drops = ["AWS binding"];
+test("spawnRuntimeDefault: a profile whose Host run drops settings or keeps bindings opens on box, host or not (#359, #360)", () => {
+  const drops = ["context paths"];
+  assert.equal(spawnRuntimeDefault({ runtime: "host", host_guardrail: ["AWS binding"] }, "runc"), "box");
+  assert.equal(spawnRuntimeDefault({ runtime: "host", host_guardrail: [] }, "runc"), "host");
   assert.equal(spawnRuntimeDefault({ runtime: "host", host_drops: drops }, "runc"), "box");
   assert.equal(spawnRuntimeDefault({ runtime: "box", host_drops: drops }, "runc"), "box");
   assert.equal(spawnRuntimeDefault({ runtime: "host", host_drops: [] }, "runc"), "host");
