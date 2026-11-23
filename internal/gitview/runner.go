@@ -184,10 +184,12 @@ type Runner struct {
 	baseFlights  map[string]*baseFlight
 	numCache     map[string]*numCached
 	numFlights   map[string]*numFlight
+	blameCache   map[string]*blameCached
+	blameSem     chan struct{} // the one blame turn (Blame)
 	slotMu       sync.Mutex
 	slotInit     bool
 	slotFree     int
-	slotQueue    [3][]chan struct{} // waiters per prio, oldest first
+	slotQueue    [4][]chan struct{} // waiters per prio, oldest first
 	sweepPending bool
 	sweepAgain   bool
 }
@@ -300,6 +302,9 @@ const (
 	prioView
 	// prioIdle is work nobody waits for: refreshing a stale base ref.
 	prioIdle
+	// prioBlame is the editor's line blame (Blame): wanted, but after everything
+	// else, so it never holds back the tree or the file's own diff.
+	prioBlame
 )
 
 // Status returns the change set of t. Concurrent calls for the same Top share
@@ -987,6 +992,12 @@ func (r *Runner) runGit(parent context.Context, argv func(name string) []string)
 
 // runGitAt is runGit at priority p.
 func (r *Runner) runGitAt(parent context.Context, p prio, argv func(name string) []string) ([]byte, error) {
+	return r.runCapped(parent, p, argv, maxBaseBytes)
+}
+
+// runCapped is runGitAt keeping at most max bytes; a run that printed more is
+// errCapped, with what it kept.
+func (r *Runner) runCapped(parent context.Context, p prio, argv func(name string) []string, max int) ([]byte, error) {
 	name := newName()
 	args := argv(name)
 	if args == nil {
@@ -997,10 +1008,13 @@ func (r *Runner) runGitAt(parent context.Context, p prio, argv func(name string)
 		return nil, errNoSlot
 	}
 	defer done()
-	out := &capBuffer{max: maxBaseBytes}
+	out := &capBuffer{max: max}
 	if err := r.Docker.RunStream(ctx, args, out); err != nil {
 		r.removeFailed(name)
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		switch {
+		case out.hit || errors.Is(err, errCapped):
+			return out.b, errCapped
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			return out.b, errTimedOut
 		}
 		return out.b, err

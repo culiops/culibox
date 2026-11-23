@@ -190,3 +190,86 @@ func TestStatusSharedRunsItsOwnWhenNoneComes(t *testing.T) {
 		t.Fatalf("status %+v, %d runs, %v", st, f.callCount(), time.Since(t0))
 	}
 }
+
+// TestBlameOneAtATime: with two slots, two blames never hold both, and a status asked for while a blame runs starts at
+// once on the other slot (anti-goal A2: the tree never waits on blame).
+func TestBlameOneAtATime(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	running, most := 0, 0
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		switch blameSub(a) {
+		case "status":
+			return okStatus()(ctx, a, w)
+		case "log", "blame":
+			mu.Lock()
+			running++
+			most = max(most, running)
+			mu.Unlock()
+			defer func() { mu.Lock(); running--; mu.Unlock() }()
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			if blameSub(a) == "log" {
+				_, err := io.WriteString(w, logRecord)
+				return err
+			}
+			_, err := io.WriteString(w, realPorcelain)
+			return err
+		}
+		return nil
+	}}
+	r := newRunner(f, newClock())
+	r.MaxParallel = 2
+	var wg sync.WaitGroup
+	for _, rel := range []string{"a", "b"} {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.Blame(context.Background(), tgt, rel, bkey, always) }()
+	}
+	waitCalls(t, f, 1)
+	time.Sleep(50 * time.Millisecond)
+	start := time.Now()
+	if st := r.StatusFresh(context.Background(), tgt); st.State != "ok" {
+		t.Fatalf("status %+v", st)
+	}
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Fatalf("status waited %v behind a blame", d)
+	}
+	close(release)
+	wg.Wait()
+	if most != 1 {
+		t.Fatalf("%d blame containers ran at once, want 1", most)
+	}
+	if n := runsOfBlame(f); n != 2 {
+		t.Fatalf("%d blame runs, want 2", n)
+	}
+}
+
+// TestBlameYieldsToEveryClass: with one slot taken, a waiting blame goes after the waiting status and show.
+func TestBlameYieldsToEveryClass(t *testing.T) {
+	release := make(chan struct{})
+	f := holdDocker(release)
+	r := newRunner(f, newClock())
+	r.MaxParallel = 1
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); r.StatusFresh(context.Background(), holdTgt) }()
+	waitCalls(t, f, 1)
+	wg.Add(1)
+	go func() { defer wg.Done(); r.Blame(context.Background(), tgt, "f", bkey, always) }()
+	time.Sleep(50 * time.Millisecond)
+	wg.Add(1)
+	go func() { defer wg.Done(); r.Show(context.Background(), tgt, "HEAD", "a.go") }()
+	time.Sleep(50 * time.Millisecond)
+	wg.Add(1)
+	go func() { defer wg.Done(); r.StatusFresh(context.Background(), tgt) }()
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	got := blameSubs(f)
+	if want := []string{"status", "status", "cat-file", "log", "blame"}; !slices.Equal(got, want) {
+		t.Fatalf("run order %v, want %v", got, want)
+	}
+}

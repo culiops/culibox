@@ -1,10 +1,15 @@
 package gitview
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -203,5 +208,273 @@ func TestRefOf(t *testing.T) {
 		if got := refOf(in); got != want {
 			t.Errorf("refOf(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// blameSub is the git subcommand of a blame-or-log argv: gitSub, past any "-c key=value" before it.
+func blameSub(a []string) string {
+	i := slices.Index(a, "safe.directory=*")
+	if i < 0 {
+		return ""
+	}
+	for i++; i+1 < len(a) && a[i] == "-c"; i += 2 {
+	}
+	if i < len(a) {
+		return a[i]
+	}
+	return ""
+}
+
+func blameSubs(f *fakeDocker) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []string{}
+	for _, a := range f.args {
+		out = append(out, blameSub(a))
+	}
+	return out
+}
+
+const logRecord = shaB + "\x00Lan Tran\x00l@x.io\x001795438750\x00edit\x00\n"
+
+// blameDocker answers log with logRecord and blame with realPorcelain, unless the hooks say otherwise.
+type blameHooks struct {
+	log, blame func(ctx context.Context, a []string, w io.Writer) error
+}
+
+func blameDocker(h blameHooks) *fakeDocker {
+	return &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		switch blameSub(a) {
+		case "log":
+			if h.log != nil {
+				return h.log(ctx, a, w)
+			}
+			_, err := io.WriteString(w, logRecord)
+			return err
+		case "blame":
+			if h.blame != nil {
+				return h.blame(ctx, a, w)
+			}
+			_, err := io.WriteString(w, realPorcelain)
+			return err
+		case "status":
+			return okStatus()(ctx, a, w)
+		}
+		return nil
+	}}
+}
+
+var bkey = BlameKey{Head: shaB, Version: strings.Repeat("1", 64)}
+
+func always() bool { return true }
+
+func TestBlameRunsLogThenBlame(t *testing.T) {
+	f := blameDocker(blameHooks{})
+	r := newRunner(f, newClock())
+	b := r.Blame(context.Background(), tgt, "f", bkey, always)
+	if b.State != "ok" || b.Last == nil || b.Last.SHA != shaB || len(b.Commits) != 3 || len(b.Lines) != 5 || b.IgnoredRevs {
+		t.Fatalf("blame = %+v", b)
+	}
+	if got := blameSubs(f); !slices.Equal(got, []string{"log", "blame"}) {
+		t.Fatalf("runs %v", got)
+	}
+	if a := f.args[1]; a[len(a)-1] != "f" || a[len(a)-2] != "--" || slices.Contains(a, "--ignore-revs-file") {
+		t.Fatalf("blame argv %q", a)
+	}
+}
+
+func TestBlameNoCommitTouchedIt(t *testing.T) {
+	f := blameDocker(blameHooks{log: func(context.Context, []string, io.Writer) error { return nil }})
+	b := newRunner(f, newClock()).Blame(context.Background(), tgt, "f", bkey, always)
+	if b.State != "ok" || b.Last != nil {
+		t.Fatalf("blame = %+v", b)
+	}
+}
+
+func TestBlameUntrackedFromGit(t *testing.T) {
+	f := blameDocker(blameHooks{
+		log: func(context.Context, []string, io.Writer) error { return nil },
+		blame: func(context.Context, []string, io.Writer) error {
+			return gitFatal(t, "fatal: no such path 'g' in HEAD")
+		},
+	})
+	r := newRunner(f, newClock())
+	if b := r.Blame(context.Background(), tgt, "g", bkey, always); b.State != "untracked" || len(b.Lines) != 0 {
+		t.Fatalf("blame = %+v", b)
+	}
+}
+
+func TestBlameFailures(t *testing.T) {
+	for name, c := range map[string]struct {
+		h     blameHooks
+		state string
+	}{
+		"timeout": {blameHooks{blame: func(ctx context.Context, _ []string, _ io.Writer) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}}, "slow"},
+		"log timeout": {blameHooks{log: func(ctx context.Context, _ []string, _ io.Writer) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}}, "slow"},
+		"too big": {blameHooks{blame: func(_ context.Context, _ []string, w io.Writer) error {
+			for {
+				if _, err := io.WriteString(w, strings.Repeat("x", 1<<20)); err != nil {
+					return err
+				}
+			}
+		}}, "toobig"},
+		"garbage": {blameHooks{blame: func(_ context.Context, _ []string, w io.Writer) error {
+			_, err := io.WriteString(w, "<html>\n")
+			return err
+		}}, "unavailable"},
+		"bad log record": {blameHooks{log: func(_ context.Context, _ []string, w io.Writer) error {
+			_, err := io.WriteString(w, "nope\x00\n")
+			return err
+		}}, "unavailable"},
+		"not a repo": {blameHooks{log: func(context.Context, []string, io.Writer) error {
+			return gitFatal(t, "fatal: not a git repository (or any of the parent directories): .git")
+		}}, "notrepo"},
+		"docker fails": {blameHooks{blame: func(context.Context, []string, io.Writer) error {
+			return errors.New("docker run: Unable to find image 'img:1' locally")
+		}}, "unavailable"},
+	} {
+		f := blameDocker(c.h)
+		r := newRunner(f, newClock())
+		r.Timeout = 50 * time.Millisecond
+		b := r.Blame(context.Background(), tgt, "f", bkey, always)
+		if b.State != c.state {
+			t.Errorf("%s: state %q (%+v), want %q", name, b.State, b.Reason, c.state)
+		}
+		n := f.callCount()
+		r.Blame(context.Background(), tgt, "f", bkey, always)
+		if f.callCount() == n {
+			t.Errorf("%s: a failure was cached", name)
+		}
+	}
+}
+
+func TestBlameIgnoreRevsRetry(t *testing.T) {
+	var withFlag []bool
+	var mu sync.Mutex
+	f := blameDocker(blameHooks{blame: func(_ context.Context, a []string, w io.Writer) error {
+		has := slices.Contains(a, "--ignore-revs-file")
+		mu.Lock()
+		withFlag = append(withFlag, has)
+		mu.Unlock()
+		if has {
+			return gitFatal(t, "fatal: invalid object name: zzz")
+		}
+		_, err := io.WriteString(w, realPorcelain)
+		return err
+	}})
+	k := bkey
+	k.IgnoreRevs = true
+	b := newRunner(f, newClock()).Blame(context.Background(), tgt, "f", k, always)
+	if b.State != "ok" || b.IgnoredRevs || !slices.Equal(withFlag, []bool{true, false}) {
+		t.Fatalf("blame %+v, runs with the flag %v", b, withFlag)
+	}
+
+	f = blameDocker(blameHooks{})
+	b = newRunner(f, newClock()).Blame(context.Background(), tgt, "f", k, always)
+	if b.State != "ok" || !b.IgnoredRevs || !slices.Contains(f.args[1], "--ignore-revs-file") {
+		t.Fatalf("blame %+v", b)
+	}
+	// A timeout is not the file's fault: no retry.
+	f = blameDocker(blameHooks{blame: func(ctx context.Context, _ []string, _ io.Writer) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}})
+	r := newRunner(f, newClock())
+	r.Timeout = 30 * time.Millisecond
+	if b := r.Blame(context.Background(), tgt, "f", k, always); b.State != "slow" || runsOfBlame(f) != 1 {
+		t.Fatalf("blame %+v, %d blame runs", b, runsOfBlame(f))
+	}
+}
+
+func runsOfBlame(f *fakeDocker) int {
+	n := 0
+	for _, s := range blameSubs(f) {
+		if s == "blame" {
+			n++
+		}
+	}
+	return n
+}
+
+func TestBlameCache(t *testing.T) {
+	f := blameDocker(blameHooks{})
+	r := newRunner(f, newClock())
+	ctx := context.Background()
+	r.Blame(ctx, tgt, "f", bkey, always)
+	b := r.Blame(ctx, tgt, "f", bkey, always)
+	if f.callCount() != 2 || b.State != "ok" {
+		t.Fatalf("second call ran git: %d runs", f.callCount())
+	}
+	b.Commits[0].Author = "changed by a caller"
+	if again := r.Blame(ctx, tgt, "f", bkey, always); again.Commits[0].Author != "Minh" {
+		t.Fatal("the cache hands out its own slices")
+	}
+	k := bkey
+	k.Version = strings.Repeat("2", 64)
+	r.Blame(ctx, tgt, "f", k, always)
+	k = bkey
+	k.Head = shaA
+	r.Blame(ctx, tgt, "f", k, always)
+	if f.callCount() != 6 {
+		t.Fatalf("a new version or HEAD must run again: %d runs", f.callCount())
+	}
+	// The file changed while git read it: not cached, and said so.
+	k.Version = strings.Repeat("3", 64)
+	if b := r.Blame(ctx, tgt, "f", k, func() bool { return false }); b.State != "changed" || len(b.Lines) != 0 {
+		t.Fatalf("blame %+v", b)
+	}
+	r.Blame(ctx, tgt, "f", k, always)
+	if f.callCount() != 10 {
+		t.Fatalf("a changed answer was cached: %d runs", f.callCount())
+	}
+}
+
+func TestBlameCacheIsLRU(t *testing.T) {
+	f := blameDocker(blameHooks{})
+	c := newClock()
+	r := newRunner(f, c)
+	ctx := context.Background()
+	for i := range maxBlameCache {
+		r.Blame(ctx, tgt, fmt.Sprintf("f%d", i), bkey, always)
+		c.add(time.Second)
+	}
+	r.Blame(ctx, tgt, "f0", bkey, always) // f0 is now the newest
+	c.add(time.Second)
+	r.Blame(ctx, tgt, "new", bkey, always) // evicts f1
+	n := f.callCount()
+	r.Blame(ctx, tgt, "f0", bkey, always)
+	if f.callCount() != n {
+		t.Fatal("f0 was evicted although it was used last")
+	}
+	r.Blame(ctx, tgt, "f1", bkey, always)
+	if f.callCount() != n+2 {
+		t.Fatal("f1 was not evicted")
+	}
+}
+
+func TestBlameRefusals(t *testing.T) {
+	f := blameDocker(blameHooks{})
+	r := newRunner(f, newClock())
+	for _, c := range []struct {
+		t   Target
+		rel string
+	}{
+		{Target{Top: "repo"}, "f"},
+		{tgt, "../f"},
+		{tgt, ""},
+		{tgt, "/etc/passwd"},
+	} {
+		if b := r.Blame(context.Background(), c.t, c.rel, bkey, always); b.State != "unavailable" {
+			t.Errorf("%+v %q: %+v", c.t, c.rel, b)
+		}
+	}
+	if f.callCount() != 0 {
+		t.Fatalf("%d runs for refused input", f.callCount())
 	}
 }

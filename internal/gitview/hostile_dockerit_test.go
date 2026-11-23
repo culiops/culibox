@@ -221,6 +221,18 @@ func runHostile(t *testing.T, r *Runner, tg Target) {
 		}
 	}
 
+	// Line blame of the modified file: the hostile config and attributes (textconv above all: plain blame would run it)
+	// neither run nor fail it; lines 2 and 4 are the working copy's. The untracked file has no history.
+	bl := r.Blame(ctx, tg, "a.txt", BlameKey{Head: st.Head, Version: "v"}, func() bool { return true })
+	t.Logf("blame a.txt: %+v", bl)
+	if bl.State != "ok" || bl.Last == nil || bl.Last.SHA != st.Head || bl.Last.Author != "t" || len(bl.Commits) != 2 ||
+		!slices.Equal(bl.Lines, [][2]int{{0, 1}, {1, 1}, {0, 1}, {1, 1}}) || !ZeroSHA(bl.Commits[1].SHA) {
+		t.Errorf("blame a.txt = %+v", bl)
+	}
+	if nb := r.Blame(ctx, tg, "new.txt", BlameKey{Head: st.Head, Version: "v"}, func() bool { return true }); nb.State != "untracked" {
+		t.Errorf("blame of an untracked file = %+v, want untracked", nb)
+	}
+
 	// The per-file counts of the tracked change (one line replaced, one added),
 	// against HEAD and against the merge base (HEAD itself here, so the same).
 	// The untracked files have no count here: the web layer counts those. The
@@ -278,6 +290,7 @@ func TestHostileConfigControl(t *testing.T) {
 	r.Status(ctx, tg)
 	r.Diff(ctx, tg, "a.txt", false)
 	r.Diff(ctx, tg, "new.txt", true)
+	r.Blame(ctx, tg, "a.txt", BlameKey{Version: "control"}, func() bool { return true })
 	m := markers(t, dir)
 	t.Logf("with writable mounts the hostile config left: %v", m)
 	// filter.x.clean is the one vector that legitimately fires inside the

@@ -2,10 +2,13 @@ package gitview
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -224,4 +227,196 @@ func ParseLogLast(b []byte) (*BlameCommit, error) {
 		Summary: cleanText(f[4], maxSummaryRunes)}
 	c.Ref = refOf(c.Summary)
 	return c, nil
+}
+
+// BlameKey is what a blame answer is kept under besides the target and path:
+// the HEAD it was read at, the sha256 of the file it describes (both from the
+// caller, which reads them before asking), and whether IgnoreRevsName was
+// passed.
+type BlameKey struct {
+	Head, Version string
+	IgnoreRevs    bool
+}
+
+// Blame is one file's line blame and its last commit. State is one of ok,
+// untracked (git has no history for the path, or the repository none at all),
+// slow (a run hit the Timeout), toobig (the output passed maxBlameBytes),
+// changed (the file changed while git read it), notrepo, unavailable. Lines are
+// runs of [index into Commits, line count] over the working-tree file, whose
+// uncommitted lines name the all-zero commit. Last is the last commit that
+// touched the path, nil when none did. IgnoredRevs reports that IgnoreRevsName
+// was applied. Reason carries git's stderr only for unavailable, so a web
+// handler must not forward it as it is.
+type Blame struct {
+	State       string        `json:"state"`
+	Reason      string        `json:"reason,omitempty"`
+	Last        *BlameCommit  `json:"last,omitempty"`
+	Commits     []BlameCommit `json:"commits,omitempty"`
+	Lines       [][2]int      `json:"lines,omitempty"`
+	IgnoredRevs bool          `json:"ignoredRevs,omitempty"`
+}
+
+const (
+	// maxBlameBytes bounds the porcelain buffer: a 2 MiB file of ~40-byte lines
+	// prints some 6 MiB (each line once, plus a ~45-byte header per line and the
+	// metadata of each commit once). Past it the answer is toobig.
+	maxBlameBytes = 16 << 20
+	// maxLogBytes bounds the last-commit record (one id, two idents, a summary).
+	maxLogBytes = 64 << 10
+	// maxBlameCache is how many answers are kept, the least recently used going first.
+	maxBlameCache = 32
+	// blameWait bounds the wait for the one blame turn (see Blame).
+	blameWait = 30 * time.Second
+)
+
+var (
+	// noHistoryRE is git saying the path or the repository has no commit to blame against.
+	noHistoryRE  = regexp.MustCompile(`(no such path '.*' in HEAD|no such ref: HEAD|does not have any commits yet)\s*$`)
+	errBlameTurn = errors.New("timed out waiting for the blame turn")
+)
+
+type blameCached struct {
+	b        Blame
+	lastUsed time.Time
+}
+
+// Blame returns the line blame and the last commit of rel (relative to t.Top):
+// a log run, then a blame run, each in one slot at prioBlame, the lowest. Only
+// one Blame runs at a time per Runner, so at most one of the MaxParallel slots
+// ever holds a blame and the tree's status always has the other (anti-goal A2).
+// The wait for that turn ends with ctx (a client that went away) or after
+// blameWait. ok and untracked answers are kept under (t, rel, k), the
+// maxBlameCache most recently used, but only when still() holds after the runs:
+// the caller re-reads the file there, and a file that changed meanwhile is
+// "changed", not kept. With k.IgnoreRevs, a blame that fails for any reason but
+// a timeout or the cap is run once more without the file (IgnoredRevs false).
+func (r *Runner) Blame(ctx context.Context, t Target, rel string, k BlameKey, still func() bool) Blame {
+	if why := t.Unsafe(); why != "" {
+		return Blame{State: "unavailable", Reason: why}
+	}
+	if !safePath(rel) {
+		return Blame{State: "unavailable", Reason: "invalid path"}
+	}
+	key := t.key() + "\x00" + rel + "\x00" + k.Head + "\x00" + k.Version + "\x00" + strconv.FormatBool(k.IgnoreRevs)
+	if b, ok := r.blameCachedGet(key); ok {
+		return b
+	}
+	release, err := r.blameTurn(ctx)
+	if err != nil {
+		return Blame{State: "unavailable", Reason: errBlameTurn.Error()}
+	}
+	defer release()
+	// Another request for the same file may have run while this one waited.
+	if b, ok := r.blameCachedGet(key); ok {
+		return b
+	}
+	b := r.doBlame(ctx, t, rel, k.IgnoreRevs)
+	if b.State != "ok" && b.State != "untracked" {
+		return b
+	}
+	if !still() {
+		return Blame{State: "changed"}
+	}
+	r.mu.Lock()
+	if r.blameCache == nil {
+		r.blameCache = map[string]*blameCached{}
+	}
+	r.blameCache[key] = &blameCached{b: cloneBlame(b), lastUsed: r.now()}
+	for len(r.blameCache) > maxBlameCache {
+		oldest := ""
+		for k, c := range r.blameCache {
+			if oldest == "" || c.lastUsed.Before(r.blameCache[oldest].lastUsed) {
+				oldest = k
+			}
+		}
+		delete(r.blameCache, oldest)
+	}
+	r.mu.Unlock()
+	return b
+}
+
+func (r *Runner) blameCachedGet(key string) (Blame, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.blameCache[key]
+	if !ok {
+		return Blame{}, false
+	}
+	c.lastUsed = r.now()
+	return cloneBlame(c.b), true
+}
+
+// blameTurn waits for the one blame turn of the Runner and returns its release.
+func (r *Runner) blameTurn(ctx context.Context) (func(), error) {
+	r.mu.Lock()
+	if r.blameSem == nil {
+		r.blameSem = make(chan struct{}, 1)
+	}
+	sem := r.blameSem
+	r.mu.Unlock()
+	wctx, cancel := context.WithTimeout(ctx, blameWait)
+	defer cancel()
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
+	case <-wctx.Done():
+		return nil, wctx.Err()
+	}
+}
+
+func (r *Runner) doBlame(ctx context.Context, t Target, rel string, ignoreRevs bool) Blame {
+	out, err := r.runCapped(ctx, prioBlame, func(name string) []string {
+		return LogLastArgs(t, r.Image, name, r.UID, r.GID, rel)
+	}, maxLogBytes)
+	if err != nil {
+		return blameFailed(err)
+	}
+	last, err := ParseLogLast(out)
+	if err != nil {
+		return Blame{State: "unavailable", Reason: "unexpected log output"}
+	}
+	run := func(ignore bool) ([]byte, error) {
+		return r.runCapped(ctx, prioBlame, func(name string) []string {
+			return BlameArgs(t, r.Image, name, r.UID, r.GID, rel, ignore)
+		}, maxBlameBytes)
+	}
+	out, err = run(ignoreRevs)
+	if err != nil && ignoreRevs && !errors.Is(err, errTimedOut) && !errors.Is(err, errCapped) && !errors.Is(err, errNoSlot) && ctx.Err() == nil {
+		ignoreRevs = false
+		out, err = run(false)
+	}
+	if err != nil {
+		return blameFailed(err)
+	}
+	commits, lines, err := ParseBlame(out)
+	if err != nil {
+		return Blame{State: "unavailable", Reason: "unexpected blame output"}
+	}
+	return Blame{State: "ok", Last: last, Commits: commits, Lines: lines, IgnoredRevs: ignoreRevs}
+}
+
+// blameFailed is the answer for a failed run.
+func blameFailed(err error) Blame {
+	msg := strings.TrimSpace(err.Error())
+	switch {
+	case errors.Is(err, errTimedOut):
+		return Blame{State: "slow"}
+	case errors.Is(err, errCapped):
+		return Blame{State: "toobig"}
+	case exitCode(err) == 128 && noHistoryRE.MatchString(msg):
+		return Blame{State: "untracked"}
+	case strings.Contains(msg, "not a git repository"):
+		return Blame{State: "notrepo"}
+	}
+	return Blame{State: "unavailable", Reason: failReasonText(msg)}
+}
+
+func cloneBlame(b Blame) Blame {
+	if b.Last != nil {
+		c := *b.Last
+		b.Last = &c
+	}
+	b.Commits = slices.Clone(b.Commits)
+	b.Lines = slices.Clone(b.Lines)
+	return b
 }
