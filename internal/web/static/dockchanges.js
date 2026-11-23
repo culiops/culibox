@@ -153,10 +153,11 @@ function dockChangesOnStatusAsk(o) {
   dkcAskNumstat(root, scope, o.seq, !!o.fresh);
 }
 
-// dkcAskScope: the scope to ask a numstat for before the status lands: the session's pick, else the default when the base
-// of the root is known, else "auto".
+// dkcAskScope: the scope to ask a numstat for before the status lands: the scope shown once the root's base is known (a
+// Branch pick with no ok base shows Uncommitted: a Branch run would not be shown), else the session's pick, else "auto".
 function dkcAskScope(root) {
   const sid = dkcSid();
+  if (dkcBase && dkcBase.root === root) return dockScope(sid);
   const pick = dkcPrefsMap().get(typeof sid === "string" ? sid : "");
   if (pick === "head" || pick === "branch") return pick;
   const base = gitBaseFor(root);
@@ -201,8 +202,11 @@ function dockChangesSync() {
   // Up to date: the answer for this status, or for a newer ask whose status has not landed (or failed), in the scope shown.
   // A newer answer is never replaced by an older one (dkcAskNumstat), so asking for the older status again would loop. Before
   // the root's base is known the scope shown is a guess (Uncommitted), so an "auto" answer stands until the base lands.
+  // The scope to ask for, and to hold the answer against: the one shown once the base is known; before it, the pick or "auto"
+  // (the scope shown is then a guess, and asking one scope while checking another would ask without end).
   const baseKnown = !!dkcBase && dkcBase.root === root;
-  if (dkcNum && dkcNum.root === root && dkcNum.seq >= cur.seq && (dkcNum.scope === scope || (dkcNum.auto && !baseKnown))) return;
+  const want = baseKnown ? scope : dkcAskScope(root);
+  if (dkcNum && dkcNum.root === root && dkcNum.seq >= cur.seq && (dkcNum.scope === want || (dkcNum.auto && !baseKnown))) return;
   // Uncommitted scope and a status with no entries: the numstat of nothing is nothing, so it is not asked for (a clean tree is
   // the common case, and each numstat is a container run). The record stands for the answer, at once even with a numstat out
   // (asked beside this status, before anyone knew it was clean), so a numstat from before the tree went clean cannot leave its
@@ -214,7 +218,7 @@ function dockChangesSync() {
     return;
   }
   if (dkcNumFlight) return; // its answer asks again for whatever it left stale
-  dkcAskNumstat(root, baseKnown ? scope : dkcAskScope(root), cur.seq, dkcFresh);
+  dkcAskNumstat(root, want, cur.seq, dkcFresh);
 }
 
 // dkcAskBase asks for the base of `root`. `head` and `branch` are the status's it is asked after; null for one asked beside

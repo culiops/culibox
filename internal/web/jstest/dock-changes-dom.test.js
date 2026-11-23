@@ -1042,3 +1042,26 @@ test("a scope picked while a newer status ask's numstat waits for its status ask
     assert.deepStrictEqual(p.rows().map((r) => text(r.querySelector(".dk-nm"))), ["b.go"], "the Branch list is shown");
   }
 });
+
+test("a remembered Branch pick whose numstat answers before the base asks it once, not until the base lands (answered or failed)", async () => {
+  for (const ok of [true, false]) {
+    const p = page();
+    p.st.store.set(KEY, JSON.stringify({ s1: "branch" }));
+    await p.status(okStatus([{ p: "a.go", x: "M" }]));
+    for (let i = 0; i < 5 && p.pending("/api/git/numstat").length > 0; i++) await p.answer("/api/git/numstat", num([{ p: "a.go", x: "A", a: 3, d: 0 }]), ok);
+    assert.strictEqual(p.calls("/api/git/numstat").length, 1, (ok ? "answered" : "failed") + ": the base is still out, the pick's answer stands");
+    await p.answer("/api/git/base", baseOk({ ahead: true }));
+    assert.ok(p.calls("/api/git/numstat").length <= 2, "at most one more once the base is known");
+  }
+});
+
+test("a Branch pick with a base that is known but not ok asks Uncommitted beside the status: no Branch run it cannot show", async () => {
+  const p = page();
+  p.st.store.set(KEY, JSON.stringify({ s1: "branch" }));
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/base", { state: "nobase", reason: "no base branch", branch: "feat/x", head: "h1" });
+  for (let i = 0; i < 5 && p.pending("/api/git/numstat").length > 0; i++) await p.answer("/api/git/numstat", num([]));
+  const n0 = p.calls("/api/git/numstat").length;
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  assert.deepStrictEqual(p.calls("/api/git/numstat").slice(n0).map((f) => f.body.scope), ["head"], "one Uncommitted ask per status");
+});
