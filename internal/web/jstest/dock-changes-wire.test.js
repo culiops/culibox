@@ -112,7 +112,7 @@ test("a tall tree never takes the Changes section's height: the tree's basis is 
   assert.match(rulesFor(css, "#drawer .dr-tree #files-pane"), /min-height:\s*0/, "and can scroll inside it");
   const sec = rulesFor(css, "#dock-changes");
   assert.match(sec, /flex:\s*0 0 auto/, "the section keeps its content height");
-  assert.match(sec, /max-height:\s*45%/, "up to 45% of the column");
+  assert.match(sec, /max-height:\s*var\(--dk-chg-max,\s*45%\)/, "up to 45% of the column, or the share the divider set");
   assert.match(rulesFor(css, ".dk-list"), /overflow-y:\s*auto/, "past which its list scrolls");
   assert.match(rulesFor(css, ".dk-list"), /min-height:\s*0/);
 });
