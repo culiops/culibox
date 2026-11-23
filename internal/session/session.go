@@ -832,6 +832,9 @@ type Info struct {
 	// Return is the latest exit or "Bring work home now" return of a clone-mode
 	// session; absent until one has run.
 	Return *ReturnSummary `json:"return,omitempty"`
+	// Handback is what the scan of this session's in-place workspace flagged at
+	// its exit. In-place boxed sessions only; absent until a scan has run.
+	Handback *HandbackNote `json:"handback,omitempty"`
 	// ContextPaths are the host paths the box can read (the profile's
 	// context_paths at spawn, mounted read-only at the same path); CloneOf is
 	// the host repo a clone-mode session was cloned from. Both are snapshots
@@ -858,9 +861,20 @@ type Session struct {
 	Agent   string
 	Cwd     string
 	Created time.Time
-	Runtime string // box | host; immutable for the session's lifetime
-	Box     string // container name for a boxed session; "" on the host tier
-	Bin     string // resolved agent binary (for claude-only features like usage)
+	// createdGuessed: Created is not the real start (a sidecar record with no
+	// start time; an orphan with no record at all is also marked, though it is
+	// a host session and never scanned), so a handback scan cannot use it as the
+	// start of the window. Set before publication, never mutated.
+	createdGuessed bool
+	// workspace is the boxed workspace's real path as it was when the box was
+	// made (the value the box layer labels the container with), "" when it is
+	// not known or the session is not boxed. A handback scan walks this path and
+	// never re-resolves Cwd: by exit another box may have put a symlink in its
+	// place. Set before publication, never mutated.
+	workspace string
+	Runtime   string // box | host; immutable for the session's lifetime
+	Box       string // container name for a boxed session; "" on the host tier
+	Bin       string // resolved agent binary (for claude-only features like usage)
 	// ParentID is the session this is a companion shell of. Set before
 	// publication and never mutated, so read without a lock.
 	ParentID string
@@ -914,6 +928,9 @@ type Session struct {
 	// state file keeps the truth).
 	ret       *ReturnSummary
 	returning bool
+	// handback is the exit scan's note (see Info.Handback); guarded by mu, not
+	// persisted, immutable once stored.
+	handback *HandbackNote
 	// ContextPaths and CloneOf are the spawn-time snapshots Info reports (see
 	// Info.ContextPaths). Immutable after publication, read without the lock;
 	// Info hands out a copy.
@@ -1420,6 +1437,7 @@ func (s *Session) Info() Info {
 	in.HostDropped = slices.Clone(s.HostDropped)
 	in.Clone = s.Clone.copy()
 	in.Return = s.ret.copy()
+	in.Handback = s.handback.copy()
 	in.ContextPaths = slices.Clone(s.ContextPaths)
 	in.CloneOf = s.CloneOf
 	in.WorkspaceRoot = s.WorkspaceRoot
@@ -1650,13 +1668,14 @@ type Manager struct {
 	// storeLocked reports whether the encrypted store is locked right now.
 	// Nil = no store: no session ever needs it unlocked.
 	storeLocked func() bool
-	egress      EgressHooks // nil = egress control not running; bound profiles are refused
-	egressAll   bool        // every boxed spawn needs egress; see SetEgressAll
-	clone       CloneHooks  // nil = clone mode unavailable; clone profiles are refused
-	home        string      // daemon user's home; where a host session's ~/.claude lives
-	stateDir    string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
-	costSrc     CostSource  // prices a session's conversations (analytics); nil = off, no session reports a cost
-	repliesOn   bool        // config replies_enabled kill-switch; false = no reply, answer or opt-in
+	egress      EgressHooks   // nil = egress control not running; bound profiles are refused
+	egressAll   bool          // every boxed spawn needs egress; see SetEgressAll
+	clone       CloneHooks    // nil = clone mode unavailable; clone profiles are refused
+	handback    HandbackHooks // nil = no scan of an in-place workspace at a session's exit
+	home        string        // daemon user's home; where a host session's ~/.claude lives
+	stateDir    string        // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
+	costSrc     CostSource    // prices a session's conversations (analytics); nil = off, no session reports a cost
+	repliesOn   bool          // config replies_enabled kill-switch; false = no reply, answer or opt-in
 
 	// contextCheck is the on-disk check of one context path (existence,
 	// symlinks, sockets, protected dirs). Nil = it cannot run, so a profile
@@ -2422,6 +2441,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var nonce, enonce string
 	var exclusive bool
 	var cwdForms []string    // boxed only: seeds Session.cwdFormsCache
+	var wsPath string        // boxed only: the workspace's real path when the box was made (Session.workspace)
 	var resumeSkipped string // boxed only: set when --resume was dropped
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
@@ -2637,6 +2657,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				box.ErrBoxUnavailable, spec.Agent, name, heldBrokerBox)
 		}
 		argv, env, boxName = wrapped, wrappedEnv, name
+		wsPath = spawnWorkspace(boxes, spec.Cwd, key, name)
 		if lf, ok := boxes.(interface{ LockedFiles(box string) []string }); ok {
 			lockedFiles = lf.LockedFiles(name)
 		}
@@ -2780,13 +2801,14 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.submitted = submitted
 	sess.options = opts
 	sess.ParentID = spec.ParentID
+	sess.workspace = wsPath
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
 	releaseClone() // published: the next spawn of this clone sees this session as live
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Workspace: wsPath, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, WorkspaceRoot: wsRoot, LockedFiles: slices.Clone(lockedFiles),
@@ -3128,6 +3150,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 			m.releaseSessionBox(sess)
 			m.brokerRevoke(sess)
 			go m.returnWork(sess, ReturnOnExit)
+			go m.handbackWork(sess)
 		case <-sess.detachedCh: // agent alive, pipe lost → keep listed for restart recovery
 			return
 		}
@@ -3514,7 +3537,7 @@ func (m *Manager) Reconcile() error {
 			if !parsed {
 				agent = "unknown"
 			}
-			md = sessionMeta{Agent: agent, Created: time.Now()}
+			md = sessionMeta{Agent: agent, Created: time.Now(), createdGuessed: true}
 			if sc != nil {
 				sc.put(id, md)
 			}
@@ -3588,9 +3611,9 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	if err != nil {
 		return err
 	}
-	created := md.Created
+	created, guessed := md.Created, md.createdGuessed
 	if created.IsZero() {
-		created = time.Now()
+		created, guessed = time.Now(), true
 	}
 	name := md.Name
 	if name == "" { // pre-existing sidecar entries predate the Name field
@@ -3634,6 +3657,15 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	m.mu.Lock()
 	sess := newSession(id, md.Agent, name, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	sess.Runtime = runtime
+	sess.createdGuessed = guessed
+	sess.workspace = md.Workspace
+	if sess.workspace == "" && runtime == config.RuntimeBox && md.Box != "" {
+		// A record from before the workspace was kept: the best there is is the
+		// path as it resolves now (the scan still checks it is stable).
+		if real, err := filepath.EvalSymlinks(md.Cwd); err == nil {
+			sess.workspace = real
+		}
+	}
 	sess.Box = md.Box
 	sess.brokerBox = heldBox
 	sess.Bin = bin

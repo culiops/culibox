@@ -675,3 +675,11 @@ test("Agent read rows: the older bypass bool reads as Bypass only when true, wit
   assert.deepStrictEqual(byId(pmRead({ skip_permissions_legacy: false }, { defs: noBypassDefs }), "agent").rows, []);
   assert.deepStrictEqual(byId(pmRead({ skip_permissions_legacy: true, permission_mode: "plan" }, { defs: noBypassDefs }), "agent").rows.map((r) => r.name), ["Plan"], "a set mode wins");
 });
+
+test("pfvReadView: the Workspace block carries the flagged-files link only while the profile has flagged files (#346)", () => {
+  const view = { name: "p", clone_of: "/r", default_cwd: "/c", flagged: 3, editable: true };
+  const ws = pfvReadView({ view, doc: {} }).blocks.find((b) => b.id === "workspace");
+  assert.deepStrictEqual(ws.flagged, { text: "3 files flagged for your review", sel: { cloneOf: "/r" } });
+  const none = pfvReadView({ view: Object.assign({}, view, { flagged: 0 }), doc: {} }).blocks.find((b) => b.id === "workspace");
+  assert.strictEqual(none.flagged, null);
+});

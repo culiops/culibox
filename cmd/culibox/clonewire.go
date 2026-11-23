@@ -58,6 +58,10 @@ type cloneHooks struct {
 	refresh                  func(context.Context, clone.Git, clone.Docker, clone.RefreshRequest) clone.RefreshResult
 	ret                      func(context.Context, clone.Git, clone.Docker, clone.ReturnRequest) clone.ReturnResult // clone.Return, swappable for tests
 
+	// handback records what a returned branch flagged for review (#346); nil
+	// records nothing.
+	handback *handbackHooks
+
 	// locks holds one single-slot channel per resolved clone dir: a spawn holds
 	// its clone's slot from before the refresh checks until its session is
 	// published (or the spawn failed), so a second spawn of the same clone
@@ -309,21 +313,27 @@ func (h *cloneHooks) doReturn(ctx context.Context, c config.Clone, trigger strin
 	if err := h.checkOf(c.Of); err != nil {
 		return session.ReturnSummary{Trigger: trigger, At: time.Now(), Error: clone.Sanitize(err.Error())}
 	}
-	return returnSummaryOf(trigger, h.ret(ctx, h.env.Git, h.docker, clone.ReturnRequest{
+	return returnSummaryOf(trigger, c.Of, h.handback, h.ret(ctx, h.env.Git, h.docker, clone.ReturnRequest{
 		Clone: c, Mode: mode, Image: h.image, Instance: h.instance,
 		TempDir: filepath.Join(h.dataDir, "clone-fetch"), Home: h.env.Home, DataDir: h.dataDir, Protected: h.env.Protected,
 	}))
 }
 
 // returnSummaryOf is the session's view of a return result. The clone layer has
-// already sanitized every string in it.
-func returnSummaryOf(trigger string, r clone.ReturnResult) session.ReturnSummary {
+// already sanitized every string in it. Each branch that came home has its
+// handback report merged into its record (a zero-flag one too, so an earlier
+// record of the branch is brought up to date) and, when it flagged anything,
+// is listed in Flagged. hb nil records nothing.
+func returnSummaryOf(trigger, of string, hb *handbackHooks, r clone.ReturnResult) session.ReturnSummary {
 	s := session.ReturnSummary{
 		Trigger: trigger, At: r.At, Base: r.Base, Home: r.Home, Warnings: r.Warnings, Error: r.Error,
 	}
 	for _, n := range r.NotHome {
 		s.NotHome = append(s.NotHome, session.NotHomeBranch{Branch: n.Branch, Reason: n.Reason, Detail: n.Detail})
 	}
+	flagged, warns := hb.flaggedOf(of, r.Handback)
+	s.Flagged = flagged
+	s.Warnings = append(s.Warnings[:len(s.Warnings):len(s.Warnings)], warns...)
 	return s
 }
 

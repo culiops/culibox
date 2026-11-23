@@ -129,6 +129,10 @@ type ProfileView struct {
 	// is on). NotHome is what the clone's last return left behind, if anything.
 	AutoReturn bool                  `json:"auto_return,omitempty"`
 	NotHome    *session.NotHomeState `json:"not_home,omitempty"`
+	// Flagged counts the files its box handed back that are still waiting for
+	// the user's review (#346): the clone's returned branches, or the folder an
+	// in-place box wrote into. A count of flags; absent when none.
+	Flagged int `json:"flagged,omitempty"`
 	// What the read view lists beyond the touch line (names, repos, paths and
 	// hosts only, like the fields above). GitHubRepos is each owner's repo list;
 	// GitHubPermissions the EFFECTIVE permission set (the defaults when the
@@ -197,6 +201,10 @@ type ProfileManager struct {
 	// notHome reports what a clone's last return left behind (cloneHooks.NotHome,
 	// wired at boot); nil = nothing to show.
 	notHome func(config.Clone) *session.NotHomeState
+	// flagged counts the pending hand-back flags of a clone's repo (of) or of an
+	// in-place workspace (its real path); exactly one of the two is non-empty.
+	// Wired at boot; nil = none shown.
+	flagged func(of, workspace string) int
 	// boxCred reports whether a boxed claude of a profile has a login (wired at
 	// boot, by presence only); nil = the view carries no answer.
 	boxCred func(config.AgentConfig) secretchain.Presence
@@ -387,6 +395,15 @@ func (m *ProfileManager) SetCloneCheck(f func(config.Clone) error) {
 func (m *ProfileManager) SetNotHome(f func(config.Clone) *session.NotHomeState) {
 	m.mu.Lock()
 	m.notHome = f
+	m.mu.Unlock()
+}
+
+// SetFlagged installs the source of ProfileView.Flagged: the pending flag count
+// of a clone's repo (of set, workspace empty) or of an in-place workspace
+// (workspace set, of empty). Call at boot; nil shows none.
+func (m *ProfileManager) SetFlagged(f func(of, workspace string) int) {
+	m.mu.Lock()
+	m.flagged = f
 	m.mu.Unlock()
 }
 
@@ -626,6 +643,15 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			pv.AutoReturn = !c.NoAutoReturn
 			if m.notHome != nil {
 				pv.NotHome = m.notHome(*c)
+			}
+			if m.flagged != nil {
+				pv.Flagged = m.flagged(c.Of, "")
+			}
+		} else if m.flagged != nil && rt == config.RuntimeBox && a.CloneOf == "" && a.DefaultCwd != "" {
+			// An in-place box profile: the folder it was made over, as the box layer
+			// resolves it (the scan records the real path).
+			if ws, err := filepath.EvalSymlinks(a.DefaultCwd); err == nil {
+				pv.Flagged = m.flagged("", ws)
 			}
 		}
 		if a.AWS != nil {

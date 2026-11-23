@@ -1280,3 +1280,132 @@ func TestWorkspaceRefusalVarInsideAllowed(t *testing.T) {
 		t.Fatalf("WorkspaceRefusal(/var/tmp) = %q, %v; want allowed", reason, err)
 	}
 }
+
+// OnStop is how a box stop reaches the handback scan of an in-place workspace
+// (#346). It carries the box's label workspace, fires once per successful stop,
+// and never for a box a session still uses or one whose Stop failed.
+func TestBoxStopHook(t *testing.T) {
+	type stop struct{ name, ws string }
+	setup := func(t *testing.T) (*Manager, *fakeClient, string, string, chan stop) {
+		f := newFake()
+		got := make(chan stop, 4)
+		m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+			OnStop: func(name, ws string) { got <- stop{name, ws} }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		_, _, name, err := m.Wrap(context.Background(), dir, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m, f, dir, name, got
+	}
+	none := func(t *testing.T, got chan stop) {
+		t.Helper()
+		select {
+		case s := <-got:
+			t.Fatalf("OnStop must not fire, got %+v", s)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+
+	t.Run("idle stop tells the label workspace once", func(t *testing.T) {
+		m, f, dir, name, got := setup(t)
+		want := f.labels[name][LabelWorkspace]
+		if want == "" {
+			t.Fatalf("the fake recorded no workspace label for %s", name)
+		}
+		if r, _ := filepath.EvalSymlinks(dir); r != want {
+			t.Fatalf("label workspace %q, want %q", want, r)
+		}
+		m.ReleaseBox(name)
+		m.stopIfIdle(name)
+		select {
+		case s := <-got:
+			if s.name != name || s.ws != want {
+				t.Fatalf("OnStop(%q, %q), want (%q, %q)", s.name, s.ws, name, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("OnStop did not fire after the idle stop")
+		}
+		none(t, got)
+	})
+	t.Run("not while a session still uses the box", func(t *testing.T) {
+		m, _, _, name, got := setup(t)
+		m.stopIfIdle(name) // active = 1
+		none(t, got)
+	})
+	t.Run("not when the stop failed", func(t *testing.T) {
+		m, f, _, name, got := setup(t)
+		m.ReleaseBox(name)
+		f.mu.Lock()
+		f.stopFails = 1
+		f.mu.Unlock()
+		m.stopIfIdle(name)
+		none(t, got)
+	})
+	t.Run("a removal that makes way for a spawn tells too", func(t *testing.T) {
+		m, f, _, name, got := setup(t)
+		want := f.labels[name][LabelWorkspace]
+		m.ReleaseBox(name)
+		m.opMu.Lock()
+		err := m.removeIdle(context.Background(), name)
+		m.opMu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case s := <-got:
+			if s.name != name || s.ws != want {
+				t.Fatalf("OnStop(%q, %q), want (%q, %q)", s.name, s.ws, name, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("OnStop did not fire after removeIdle")
+		}
+	})
+	t.Run("a hook that blocks does not hold opMu", func(t *testing.T) {
+		f := newFake()
+		block := make(chan struct{})
+		defer close(block)
+		m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+			OnStop: func(string, string) { <-block }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, name, err := m.Wrap(context.Background(), t.TempDir(), "s-1", BoxKey{}, []string{"claude"}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.ReleaseBox(name)
+		done := make(chan struct{})
+		go func() { m.stopIfIdle(name); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("stopIfIdle waited on OnStop")
+		}
+	})
+}
+
+// NamedFor is how a caller that resolved a workspace itself checks it agrees
+// with the path Wrap named the box after (#346).
+func TestNamedFor(t *testing.T) {
+	f := newFake()
+	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	_, _, name, err := m.Wrap(context.Background(), dir, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.NamedFor(dir, BoxKey{}, name) {
+		t.Fatal("the path Wrap resolved must name its own box")
+	}
+	other, _ := filepath.EvalSymlinks(t.TempDir())
+	if m.NamedFor(other, BoxKey{}, name) {
+		t.Fatal("another path must not name this box")
+	}
+}

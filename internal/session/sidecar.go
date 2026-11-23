@@ -24,6 +24,13 @@ type sessionMeta struct {
 	Name    string    `json:"name,omitempty"` // mutable display label
 	Cwd     string    `json:"cwd,omitempty"`
 	Created time.Time `json:"created"`
+	// Workspace is the boxed workspace's real path when the box was made (see
+	// Session.workspace); "" for a host session or a record from before it.
+	Workspace string `json:"workspace,omitempty"`
+	// createdGuessed marks an orphan adopted with no record: Created is the
+	// adoption time, not the start. In memory only, between reconcile and
+	// reattach.
+	createdGuessed bool
 	// Runtime is the tier the session was spawned under (box|host). It must
 	// survive a restart: without it, reconcile cannot tell which reattached
 	// sessions still own a box, and the orphan reaper would stop boxes out from

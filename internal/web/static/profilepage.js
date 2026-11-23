@@ -449,6 +449,16 @@ function pfvDrawBranches(notHome, rows) {
   return row;
 }
 
+// pfvDrawFlagged: "N files flagged for your review" (#346), a link that opens the review panel for this profile.
+function pfvDrawFlagged(f) {
+  const row = pfvMk("div", "pfv-row");
+  row.append(pfvMk("span", "pfv-k", "Flagged"));
+  const link = pfvDrawLink(f.text, "pfv-flagged");
+  link.onclick = () => openHandback(f.sel);
+  row.append(link);
+  return row;
+}
+
 // rec: the block's edit record when it is open without a form (a refused save sent the
 // user here): the refusals that name one of its rows are drawn under that row.
 function pfvDrawBody(b, known, rec) {
@@ -461,7 +471,7 @@ function pfvDrawBody(b, known, rec) {
     p.append(...pfvMonoNodes(line, known));
     body.append(p);
   });
-  if (b.rows.length || b.notHome) {
+  if (b.rows.length || b.notHome || b.flagged) {
     const rows = pfvMk("div", "pfv-rows");
     const nh = b.rows.filter((r) => r.kind === "Not home");
     for (const r of b.rows) {
@@ -471,6 +481,7 @@ function pfvDrawBody(b, known, rec) {
       rows.append(pfvDrawRow(r, known, e ? e.text : "", { block: b.id }));
     }
     if (b.notHome) rows.append(pfvDrawBranches(b.notHome, nh));
+    if (b.flagged) rows.append(pfvDrawFlagged(b.flagged));
     body.append(rows);
   }
   if (b.note) body.append(pfvMk("p", "pfv-tnote", b.note));

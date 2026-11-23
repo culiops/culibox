@@ -238,6 +238,9 @@ func TestReconcileAdoptsOrphan(t *testing.T) {
 	if s.Info().Agent != "claude-code" {
 		t.Fatalf("agent=%q, want claude-code (parsed from id)", s.Info().Agent)
 	}
+	if !s.createdGuessed {
+		t.Fatal("an orphan's start time is the adoption time: createdGuessed must be set (#346)")
+	}
 }
 
 // TestReconcileInitsCounter: after recovering claude-3, the next spawn is
