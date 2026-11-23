@@ -132,6 +132,16 @@ function editorEnsure() {
   return dockEditor;
 }
 
+// editorNextPaint settles once the page has painted what was just put in it (the frame after the next one starts), or after 100 ms
+// when no frame comes (a page in the background paints nothing).
+function editorNextPaint() {
+  if (typeof requestAnimationFrame !== "function") return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 100);
+    requestAnimationFrame(() => setTimeout(() => { clearTimeout(timer); resolve(); }, 0));
+  });
+}
+
 // editorAccessOptions: what the shared editor is told about whether the tab it shows may be typed into, and what it says when
 // someone tries.
 function editorAccessOptions(tab) {
@@ -362,7 +372,8 @@ class EditorTab {
     this.bodyEl.replaceChildren(d);
   }
 
-  // load reads the file and, in parallel, loads Monaco (the first tab pays for it; the rest share it). An image, a video, an audio
+  // load reads the file and, in parallel, loads Monaco (the first tab pays for it; the rest share it); a markdown file opening in
+  // Preview shows the read text first and asks for Monaco after (editorMdEarly). An image, a video, an audio
   // file, a PDF and the types with no viewer are known by their extension and need no text read: one small metadata read, then the
   // view (loadView). Everything else is decided by what the server says it is (editorMode).
   async load() {
@@ -372,7 +383,11 @@ class EditorTab {
     const dock = dockKindOf(extOf(this.path));
     if (dock !== "text") { this.loadView(dock, seq); return; }
     const url = this.box ? boxFileURL(this.box, this.path) : undefined;
-    const monaco = loadMonaco().then((m) => ({ m }), (err) => ({ err }));
+    const askMonaco = () => loadMonaco().then((m) => ({ m }), (err) => ({ err }));
+    // A markdown file that will open in Preview asks for Monaco only once its Preview is drawn and painted: the editor's start-up is a
+    // long task (measured: about 150 ms) that would otherwise hold the first paint of a document that never needed it.
+    const previewFirst = !dockMonaco && !this.pendingChanges && editorMdIs(this) && (!this.md || this.md.view === "preview");
+    let monaco = previewFirst ? null : askMonaco();
     let res = await fsRead(this.path, url);
     if (this.disposed || seq !== this.loadSeq) return;
     // A markdown file opening in Preview does not wait for Monaco (Files dock P1): its read text is drawn now (editorMdEarly), and the
@@ -383,7 +398,9 @@ class EditorTab {
       this.earlyText = res.data.content || "";
       editorMdEarly(this);
       this.paint();
+      if (!monaco) await editorNextPaint();
     }
+    if (!monaco) monaco = askMonaco();
     const mon = await monaco;
     if (this.disposed || seq !== this.loadSeq) return;
     const alt = first ? this.alt : null; // the lookup is for the first read only: a file deleted later is a deletion

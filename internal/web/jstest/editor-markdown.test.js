@@ -606,3 +606,19 @@ test("Monaco failing while the early Preview is up says so, as before, and leave
   assert.equal(tab.previewing, false);
   assert.equal(tab.seg.el.hidden, true, "no toggle for a tab that cannot show its text");
 });
+
+test("a markdown tab in Preview asks for Monaco only once its Preview is drawn, so the editor's start-up never holds the first paint; a code file asks at once", async () => {
+  const calls = [];
+  let p;
+  p = page({ loadMonaco: () => { calls.push({ renders: p.st.renders.length, reads: p.st.reads.length }); return Promise.resolve(p.monaco); } });
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: DOC, version: "v1" } });
+  const tab = new p.EditorTab("/p/README.md", { host: p.host });
+  tab.onAttach();
+  assert.equal(calls.length, 0, "not yet: the read comes first");
+  await p.settle();
+  assert.deepEqual(calls, [{ renders: 1, reads: 1 }], "after the Preview was drawn");
+  assert.ok(tab.model, "and the model follows");
+  const q = page({ loadMonaco: () => { calls.push("go"); return Promise.resolve(q.monaco); } });
+  new q.EditorTab("/p/a.go", { host: q.host });
+  assert.equal(calls.at(-1), "go", "a code file asks for Monaco with its read, in parallel");
+});

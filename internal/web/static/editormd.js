@@ -28,8 +28,8 @@
 // editorMdDetach(tab) / editorMdDrop(tab) / editorMdDispose(tab): the tab is hidden / Preview is left for another view / the tab is closed.
 
 const EMD_DEBOUNCE_MS = 300; // the preview follows an edit of the buffer this long after its last change
-const EMD_CHUNK_CHARS = 16384; // the source a chunk of the document holds, about (mdRenderFragment's chunkChars)
-const EMD_SLICE_MS = 40;       // how long a slice of a big file's draw runs before it lets the page breathe
+const EMD_CHUNK_CHARS = 8192;  // the source a chunk of the document holds, about (mdRenderFragment's chunkChars)
+const EMD_SLICE_MS = 30;       // how long a slice of a big file's draw runs before it lets the page breathe
 
 function editorMdOf(tab) {
   if (!tab.md) tab.md = { view: "preview", pane: null, text: null, timer: null, sub: null, top: tab.lastScroll || 0, live: false, gen: 0, job: null, drawn: null, restore: null, restoreAt: null };
