@@ -70,6 +70,8 @@ function editorMdBody(tab, text) {
       marked,
       purify: DOMPurify,
       hljs: typeof hljs === "undefined" ? null : hljs,
+      hlLabelledOnly: true,         // an unlabelled fence stays plain, as on GitHub: auto-detection was most of a long file's render
+      hlMaxChars: MD_HL_MAX_CHARS,  // and a block over 100 KB is not highlighted
       where: tab.path.slice(tab.path.lastIndexOf("/") + 1), // the link gate's dialog says which file the link is in
       rewrite: (rel) => (tab.box ? boxFileURL(tab.box, dir + rel) : "/api/fs/read?path=" + encodeURIComponent(dir + rel)),
     }));

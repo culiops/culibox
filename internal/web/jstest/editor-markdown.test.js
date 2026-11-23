@@ -52,6 +52,8 @@ test("the render gets the page's marked, DOMPurify and highlight.js, and reads a
   assert.equal(d.marked, p.ctx.marked);
   assert.equal(d.purify, p.ctx.DOMPurify);
   assert.equal(d.hljs, hl);
+  assert.equal(d.hlLabelledOnly, true, "the dock highlights only a block whose fence names its language (no auto-detect)");
+  assert.equal(d.hlMaxChars, 102400, "and none over 100 KB (MD_HL_MAX_CHARS)");
   assert.equal(d.rewrite("img/a b.png"), "/api/fs/read?path=" + encodeURIComponent("/p/img/a b.png"));
   // A file of a session's box is read through the box route.
   const b = page();

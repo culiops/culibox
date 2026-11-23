@@ -261,6 +261,7 @@ function page(over) {
     // The markdown Preview's render (mdsafe.js, tested on its own in md-render.test.js): here a fragment holding the text it was
     // asked for, so what a test sees is when the preview draws and from which buffer.
     MD_EXTS: new Set(["md", "markdown"]),
+    MD_HL_MAX_CHARS: 102400,
     marked: { parse: () => "" },
     DOMPurify: {},
     mdRenderFragment: (text, deps) => {

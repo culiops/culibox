@@ -309,22 +309,46 @@ function mdWalkFragment(root, rewrite, where) {
   }
 }
 
-// mdRenderFragment is the only place markdown becomes DOM: marked, DOMPurify (MD_PURIFY, as a fragment), highlight.js on the
-// fenced code, then the walk. `deps` = {marked, purify, hljs (optional), rewrite, where (optional)}. Throws when the markup cannot be made; the
-// caller shows the file as plain text instead. The fragment is not yet in the page: appending it is what starts a load.
-function mdRenderFragment(text, deps) {
-  deps.marked.setOptions({ breaks: false, gfm: true }); // marked v12 removed the `highlight` option: the code is highlighted below
-  const html = deps.marked.parse(text);
+// The longest code block the dock highlights (deps.hlMaxChars): highlight.js on a block of 100 KB already takes a noticeable while,
+// and such a block is generated text nobody reads for its colours.
+const MD_HL_MAX_CHARS = 102400;
+
+// mdHlLanguage: the language a fence named, as marked writes it on the <code> ("language-go"), when highlight.js knows it; else "".
+function mdHlLanguage(el, hljs) {
+  const cls = (typeof el.getAttribute === "function" && el.getAttribute("class")) || "";
+  const m = /(?:^|\s)(?:language|lang)-(\S+)/.exec(cls);
+  return m && typeof hljs.getLanguage === "function" && hljs.getLanguage(m[1]) ? m[1] : "";
+}
+
+// mdFinish is the one way a piece of marked's HTML becomes DOM: DOMPurify (MD_PURIFY, as a fragment), highlight.js on the code blocks
+// (every block; or, with deps.hlLabelledOnly, only a block whose fence named a language highlight.js knows, so nothing is
+// auto-detected; and with deps.hlMaxChars, none longer than that), then the walk. Every render goes through it, whole or in chunks.
+function mdFinish(html, deps) {
   if (typeof html !== "string") throw new Error("markdown did not render to a string");
   const frag = deps.purify.sanitize(html, Object.assign({}, MD_PURIFY, { RETURN_DOM_FRAGMENT: true }));
   if (!frag || typeof frag.querySelectorAll !== "function") throw new Error("the sanitizer returned no fragment");
-  if (deps.hljs) frag.querySelectorAll("pre code").forEach((el) => { try { deps.hljs.highlightElement(el); } catch (_) {} });
+  if (deps.hljs) {
+    frag.querySelectorAll("pre code").forEach((el) => {
+      if (deps.hlLabelledOnly && !mdHlLanguage(el, deps.hljs)) return;
+      if (deps.hlMaxChars && el.textContent.length > deps.hlMaxChars) return;
+      try { deps.hljs.highlightElement(el); } catch (_) {}
+    });
+  }
   mdWalkFragment(frag, deps.rewrite, deps.where);
   return frag;
 }
 
+// mdRenderFragment is the only place markdown becomes DOM: marked, then mdFinish (DOMPurify, highlight.js, the walk). `deps` =
+// {marked, purify, hljs (optional), rewrite, where (optional), hlLabelledOnly, hlMaxChars (optional, the dock sets them)}. Throws
+// when the markup cannot be made; the caller shows the file as plain text instead. The fragment is not yet in the page: appending it
+// is what starts a load.
+function mdRenderFragment(text, deps) {
+  deps.marked.setOptions({ breaks: false, gfm: true }); // marked v12 removed the `highlight` option: the code is highlighted below
+  return mdFinish(deps.marked.parse(text), deps);
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    isLocalSrc, mdUnsafeAttr, MD_PURIFY, mdIsRelative, mdInertRef, mdUnsafeCss, mdUnsafeLink, mdWalkFragment, mdRenderFragment,
+    isLocalSrc, mdUnsafeAttr, MD_PURIFY, mdIsRelative, mdInertRef, mdUnsafeCss, mdUnsafeLink, mdWalkFragment, mdRenderFragment, MD_HL_MAX_CHARS,
   };
 }
