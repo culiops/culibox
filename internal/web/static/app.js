@@ -640,7 +640,11 @@ function paintSteerToggle() {
 $("drawer-x").onclick = () => closeDrawerFor();
 $("drawer-pin").onclick = () => toggleDrawerPin();
 $("drawer-strip-tree").onclick = () => dockStripOpen();
-$("drawer-strip-changes").onclick = () => dockStripOpen();
+$("drawer-strip-changes").onclick = () => {
+  // "Open the explorer at Changes": a collapsed Changes opens (P3).
+  if (typeof dockSecOpen === "function") dockSecOpen("changes");
+  dockStripOpen();
+};
 $("drawer-strip-goto").onclick = () => drawerGoFocus();
 $("drawer-tree-fold").onclick = () => dockTreeFoldPress();
 

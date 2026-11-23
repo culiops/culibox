@@ -595,6 +595,8 @@ function dkcRootEdit(on, focus) {
   const tree = dkcEl("drawer-tree");
   if (!tree) return;
   const was = tree.dataset.rootedit === "1";
+  // The root field is in the tree: a collapsed tree opens (P3).
+  if (on && typeof dockSecOpen === "function") dockSecOpen("tree");
   if (on) tree.dataset.rootedit = "1"; else delete tree.dataset.rootedit;
   const btn = dkcEl("dock-root");
   if (btn && btn.getAttribute("aria-disabled") !== "true") btn.setAttribute("aria-expanded", on ? "true" : "false");

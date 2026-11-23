@@ -505,6 +505,7 @@ function dockCrumbsReveal(path) {
   const where = crumbReveal(path, root);
   if (where === "outside") { showToast("That folder is outside the tree's root"); return; }
   dockTreeReveal(); // a folded explorer cannot show the row: open its column
+  if (typeof dockSecOpen === "function") dockSecOpen("tree"); // and a collapsed tree its rows (P3)
   if (where === "root") {
     if (typeof ftTreeEl !== "undefined" && ftTreeEl) ftTreeEl.scrollTop = 0;
     return;

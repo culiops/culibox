@@ -1254,9 +1254,19 @@
   }
   .dr-count[hidden] { display: none; }
   .dr-edge:hover, .dr-edge.dragging, .dr-edge:focus-visible,
-  .dr-split:hover, .dr-split.dragging, .dr-split:focus-visible {
+  .dr-split:hover, .dr-split.dragging, .dr-split:focus-visible,
+  .dk-secsplit:hover, .dk-secsplit.dragging, .dk-secsplit:focus-visible {
     background: color-mix(in srgb, var(--accent) 40%, transparent);
   }
+  /* The grip (P3, mockup 5): a short accent pill on the column splitter and on the sections' divider, drawn only while the
+     pointer is over it, it has keyboard focus or it is being dragged (founder Q1, 2026-11-23); at rest the line is all. */
+  .dr-split::after, .dk-secsplit::after {
+    content: ""; position: absolute; left: 50%; top: 50%; border-radius: 2px; background: var(--accent); opacity: 0; pointer-events: none;
+  }
+  .dr-split::after { width: 3px; height: 32px; margin: -16px 0 0 -1px; }
+  .dk-secsplit::after { width: 32px; height: 3px; margin: -1px 0 0 -16px; }
+  .dr-split:hover::after, .dr-split:focus-visible::after, .dr-split.dragging::after,
+  .dk-secsplit:hover::after, .dk-secsplit:focus-visible::after, .dk-secsplit.dragging::after { opacity: 1; }
   /* The tree takes what the column has left (basis 0, so its content height never competes), and scrolls inside it. With basis
      auto a tree taller than the column took height from the Changes section below (rows cut, then none, the toggle painted over
      the root header). The section does not shrink either (#dock-changes). */
@@ -1330,12 +1340,17 @@
   /* The section sits between the top row and the tree and is as tall as its rows, up to 45% of the column, then its list
      scrolls (the header, toggle and branch row stay). It never shrinks for the tree: the tree is the one that gives way. Rows are the tree's size: they follow Settings' "File tree text size". */
   #dock-changes {
-    flex: 0 0 auto; min-height: 0; max-height: 45%; display: flex; flex-direction: column;
+    flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column;
+    /* A share the divider stored on a taller window still leaves the tree its header and 3 rows on a shorter one (measured:
+       31px the top row, 26px the root header, 14px the tree body's padding; the rows at the tree's text size, never under
+       their 22px minimum), the same
+       bound the divider's End key goes to. */
+    max-height: min(var(--dk-chg-max, 45%), calc(100% - 71px - 3 * max(22px, var(--fs-tree) * 22 / 12)));
     border-bottom: 1px solid var(--line);
   }
   #dock-changes[hidden], .dk-branch[hidden], .dk-chg-note[hidden], .dk-legend[hidden], .dk-review[hidden] { display: none; }
   /* The header wraps rather than cut a word: in a narrow explorer "reviewed n of m" stays whole and Review drops to a second row. */
-  .dk-chg-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; row-gap: 0; min-height: 28px; padding: 0 10px; min-width: 0; }
+  .dk-chg-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 0; min-height: 28px; padding: 0 10px 0 0; min-width: 0; cursor: pointer; }
   .dk-chg-title {
     flex: none; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
     letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg);
@@ -1388,8 +1403,9 @@
   .dk-legend span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The root header: the folder's name, then its path. A click shows the root field (today's picker) under it; a box session's
      tree is its workspace only, so there is nothing to edit. */
+  .dk-roothead { flex: none; display: flex; align-items: center; min-width: 0; }
   .dk-root {
-    flex: none; box-sizing: border-box; width: 100%; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 2px;
+    flex: 1 1 auto; box-sizing: border-box; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 2px 4px;
     border: 0; background: transparent; color: var(--fg); text-align: left; cursor: pointer;
   }
   .dk-root:hover { background: var(--hover); }
@@ -1402,7 +1418,40 @@
   .dk-root-path { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   /* Today's root field stays in the DOM (the picker is wired to it) and is shown only while the header is being edited. */
   #drawer .dr-tree:not([data-rootedit="1"]) .ft-row { display: none; }
-  #drawer[data-noroot="1"] #dock-changes, #drawer[data-noroot="1"] .dk-root { display: none; }
+  #drawer[data-noroot="1"] #dock-changes, #drawer[data-noroot="1"] .dk-roothead { display: none; }
+  /* --- the explorer's sections collapse, and a divider sets their split (P3, mockup 5) ----------------------------------- */
+  /* docksections.js paints the state on #drawer-tree: data-chg-shut, data-tree-shut, and --dk-chg-max (the section's cap
+     the divider set; unset, today's 45%). Collapsing is these rules only: the section keeps drawing what git says, so its
+     requests are the same either way. The chevron is the tree rows' own glyph, turned when open. */
+  /* It takes the header's 10px left padding and 4px more, and the header's gaps are 4px, so "CHANGES 42 changed Review" keeps
+     the one row it had in the default 1280px column (measured: 203px wide, 3.2px to spare before and after). Its box is drawn
+     small and its press area (::after) is the 24px square a pointer needs. */
+  .dk-chev {
+    flex: none; position: relative; width: 14px; height: 20px; margin-right: -4px; padding: 0; display: inline-grid; place-items: center;
+    border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .dk-chev::after { content: ""; position: absolute; inset: -2px -5px; }
+  .dk-chev::before { content: "\203A"; font-size: var(--t-lg); line-height: 1; }
+  .dk-chev[aria-expanded="true"]::before { transform: rotate(90deg); }
+  .dk-chev:hover { background: var(--hover); color: var(--fg); }
+  .dk-chev:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  /* Collapsed Changes is its header row: the title, the count (or Updating…) and Review. */
+  #drawer-tree[data-chg-shut="1"] #dock-changes > :not(.dk-chg-head) { display: none; }
+  /* A collapsed tree gives its rows' room to Changes, which then runs as long as its rows, and its header sits at the
+     bottom of the column (mockup ③). With both collapsed, each header stays where it was (founder Q2, 2026-11-23). Only
+     while there is a Changes section: with none (not a repository) there is nothing to give the room to, so the tree is
+     drawn and its chevron is not offered; the choice is kept for the next repository. */
+  #drawer-tree[data-tree-shut="1"]:has(> #dock-changes:not([hidden])) #files-pane { display: none; }
+  #drawer-tree[data-tree-shut="1"]:has(> #dock-changes:not([hidden])) .dk-roothead { margin-top: auto; border-top: 1px solid var(--line); padding-bottom: 4px; }
+  #drawer-tree[data-tree-shut="1"]:not([data-chg-shut="1"]) #dock-changes { max-height: none; flex: 0 1 auto; border-bottom: 0; }
+  #drawer-tree:has(> #dock-changes[hidden]) #dock-tree-chev { visibility: hidden; }
+  /* The divider: zero net height (the negative margins), straddling the section's bottom line, as .dr-split straddles the
+     column's border. Drawn only while both sections are open and shown. */
+  .dk-secsplit {
+    flex: none; height: 7px; margin: -4px 0 -3px; position: relative; z-index: 2; cursor: row-resize; touch-action: none;
+  }
+  #drawer-tree[data-chg-shut="1"] .dk-secsplit, #drawer-tree[data-tree-shut="1"] .dk-secsplit,
+  #dock-changes[hidden] + .dk-secsplit, #drawer[data-noroot="1"] .dk-secsplit { display: none; }
   /* A session workspace the fs API refuses is never a root (S1): the column
      says so instead of showing whatever tree was there before. */
   .dr-tnote { display: none; margin: 0; padding: 14px 12px; color: var(--muted); font-size: var(--t-sm); line-height: 1.5; }
