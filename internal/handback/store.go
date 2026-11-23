@@ -74,22 +74,30 @@ const MaxReviewed = 20_000
 // fingerprintRe is the shape of one entry of the reviewed set.
 var fingerprintRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// Fingerprint identifies a flagged file's content for the reviewed set: its
-// path and SHA-256 when it was hashed, else its path, classes and link target.
-// The result is a fixed-width hash, so the set's size does not depend on the
-// path lengths. A file that changed (another hash) has another fingerprint and
-// flags again.
+// Fingerprint identifies a flagged file for the reviewed set: its path, its
+// SHA-256 and its classes (so a setuid or exec bit added to unchanged content is
+// another flag), or for a symlink its path, classes and target. A flag with no
+// SHA-256 and no target (a file that was not hashed: over the size cap, the
+// hash budget used up, unreadable, or checked by mode only) has nothing to tell
+// its content by, so it has no fingerprint: "" is returned, never stored and
+// never matched, and such a file is flagged every time. The result is a
+// fixed-width hash, so the set's size does not depend on the path lengths.
 func Fingerprint(f Flag) string {
+	if f.SHA256 == "" && f.Target == "" {
+		return ""
+	}
 	var b strings.Builder
 	b.WriteString(f.Path)
 	b.WriteByte(0)
 	if f.SHA256 != "" {
 		b.WriteString("sha256:" + f.SHA256)
-	} else {
-		for _, c := range f.Classes {
-			b.WriteString(string(c))
-			b.WriteByte(',')
-		}
+		b.WriteByte(0)
+	}
+	for _, c := range f.Classes {
+		b.WriteString(string(c))
+		b.WriteByte(',')
+	}
+	if f.SHA256 == "" {
 		b.WriteByte(0)
 		b.WriteString(f.Target)
 	}
@@ -211,7 +219,7 @@ func (s Store) MergeScan(key string, base Record, scanAt time.Time, r Report) (R
 	fresh := 0
 	for _, f := range r.Flags {
 		f = cleanFlag(f)
-		if reviewed[Fingerprint(f)] {
+		if fp := Fingerprint(f); fp != "" && reviewed[fp] {
 			continue
 		}
 		fresh++
@@ -223,7 +231,12 @@ func (s Store) MergeScan(key string, base Record, scanAt time.Time, r Report) (R
 	}
 	rec.Flags = set.Sorted()
 	rec = cleanRecord(rec, id)
-	if replaced || !sameListing(before, rec) {
+	switch {
+	case replaced:
+		// The old revision is lost with the unreadable file, and a page may still hold
+		// it: continue from a value no earlier counter can reach.
+		rec.Revision = max(before.Revision+1, time.Now().UnixNano())
+	case !sameListing(before, rec):
 		rec.Revision = before.Revision + 1
 	}
 	rec, err = writeRecordIn(dir, rec)
@@ -369,7 +382,7 @@ func (s Store) Reviewed(id string, revision int64) error {
 		known[fp] = true
 	}
 	for _, f := range rec.Flags {
-		if fp := Fingerprint(f); !known[fp] {
+		if fp := Fingerprint(f); fp != "" && !known[fp] {
 			known[fp] = true
 			rec.ReviewedFP = append(rec.ReviewedFP, fp)
 		}

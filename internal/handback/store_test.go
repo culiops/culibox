@@ -596,27 +596,113 @@ func TestStoreReviewedFlagsStayReviewed(t *testing.T) {
 				t.Fatalf("merge: %+v %v", rec, err)
 			}
 			reviewOf(t, s, rec)
-			// The same report again: nothing is pending, and none of it counts as new.
+			// The same report again: the hashed file and the link stay reviewed; a file
+			// CuliBox could not hash has no fingerprint (R26), so it flags every time.
 			rec, n, err := s.MergeScan(key, base, time.Unix(200, 0), Report{Flags: []Flag{hashed(h1), unhashed, symlink}})
-			if err != nil || len(rec.Flags) != 0 || n != 0 {
-				t.Fatalf("a reviewed file flagged again: flags=%+v new=%d err=%v", rec.Flags, n, err)
+			if err != nil || len(rec.Flags) != 1 || rec.Flags[0].Path != "big.bin" || n != 1 {
+				t.Fatalf("only the unhashed file must flag again: flags=%+v new=%d err=%v", rec.Flags, n, err)
 			}
-			if p, err := s.Pending(); err != nil || len(p) != 0 {
+			if p, err := s.Pending(); err != nil || len(p) != 1 {
 				t.Fatalf("pending = %v %v", p, err)
+			}
+			if len(rec.ReviewedFP) != 2 {
+				t.Fatalf("reviewed set = %d entries, want 2 (no entry for the unhashed file)", len(rec.ReviewedFP))
+			}
+			for _, fp := range rec.ReviewedFP {
+				if fp == "" {
+					t.Fatal("an empty fingerprint was stored")
+				}
 			}
 			// The same path with other content is a new file for review.
 			rec, n, err = s.MergeScan(key, base, time.Unix(300, 0), Report{Flags: []Flag{hashed(h2), unhashed}})
-			if err != nil || len(rec.Flags) != 1 || rec.Flags[0].SHA256 != h2 || n != 1 {
+			if err != nil || len(rec.Flags) != 2 || n != 2 {
 				t.Fatalf("a changed file must flag again: flags=%+v new=%d err=%v", rec.Flags, n, err)
 			}
 			// A different target is a different link.
 			other := symlink
 			other.Target = "/etc/shadow"
 			rec, _, err = s.MergeScan(key, base, time.Unix(400, 0), Report{Flags: []Flag{other}})
-			if err != nil || len(rec.Flags) != 2 {
+			if err != nil || len(rec.Flags) != 3 {
 				t.Fatalf("a link to another target must flag again: %+v %v", rec.Flags, err)
 			}
 		})
+	}
+}
+
+// R26: a reviewed file is flagged again when its flags change, and a file with no
+// hash (nothing to tell its content by) is never treated as reviewed.
+func TestStoreReviewedFingerprintCoversFlagsAndNeedsAHash(t *testing.T) {
+	h := strings.Repeat("c3", 32)
+	s := newStore(t)
+	key, base := InPlaceKey("/ws"), Record{Kind: KindInPlace, Workspace: "/ws"}
+	exe := Flag{Path: "tool", Classes: []Class{ClassExecutable}, Detail: "ELF", SHA256: h}
+	rec, err := s.Merge(key, base, time.Unix(1, 0), Report{Flags: []Flag{exe}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewOf(t, s, rec)
+	// The same content, now with the setuid bit: another signal, flagged again.
+	suid := exe
+	suid.Classes = []Class{ClassExecutable, ClassSetID}
+	rec, n, err := s.MergeScan(key, base, time.Unix(2, 0), Report{Flags: []Flag{suid}})
+	if err != nil || len(rec.Flags) != 1 || n != 1 {
+		t.Fatalf("setuid added to a reviewed file must flag again: %+v new=%d %v", rec.Flags, n, err)
+	}
+	reviewOf(t, s, rec)
+	if rec2, n, err := s.MergeScan(key, base, time.Unix(3, 0), Report{Flags: []Flag{suid}}); err != nil || len(rec2.Flags) != 0 || n != 0 {
+		t.Fatalf("the same flags again stay reviewed: %+v new=%d %v", rec2.Flags, n, err)
+	}
+
+	// A file with no hash and no link target has no fingerprint at all.
+	run := Flag{Path: "run.sh", Classes: []Class{ClassScript}, Detail: "script", HashNote: "not hashed: time budget used up"}
+	if fp := Fingerprint(run); fp != "" {
+		t.Fatalf("Fingerprint of an unhashed file = %q, want none", fp)
+	}
+	if fp := Fingerprint(Flag{Path: "ln", Classes: []Class{ClassSymlinkOut}, Target: "/etc"}); fp == "" {
+		t.Fatal("a symlink keeps a fingerprint")
+	}
+	rec, err = s.Merge(key, base, time.Unix(4, 0), Report{Flags: []Flag{run}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewOf(t, s, rec)
+	// Swapped content, still unhashed: it must flag again.
+	swapped := run
+	swapped.Detail = "script (other content)"
+	rec, n, err = s.MergeScan(key, base, time.Unix(5, 0), Report{Flags: []Flag{swapped}})
+	if err != nil || len(rec.Flags) != 1 || n != 1 {
+		t.Fatalf("an unhashed file must flag every time: %+v new=%d %v", rec.Flags, n, err)
+	}
+	for _, fp := range rec.ReviewedFP {
+		if fp == "" {
+			t.Fatal("an empty fingerprint was stored")
+		}
+	}
+}
+
+// R26: a replaced (unreadable) record must not restart at a revision an open page may still hold.
+func TestStoreRevisionNeverRepeatsAfterAReplacedRecord(t *testing.T) {
+	s := newStore(t)
+	key, base := InPlaceKey("/ws"), Record{Kind: KindInPlace, Workspace: "/ws"}
+	rec, err := s.Merge(key, base, time.Unix(1, 0), Report{Flags: []Flag{fl("a", ClassArchive)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, rec.ID+".json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.Merge(key, base, time.Unix(2, 0), Report{Flags: []Flag{fl("a", ClassArchive)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Revision <= rec.Revision+1 {
+		t.Fatalf("revision %d -> %d after a replaced record: must jump past anything a page can hold", rec.Revision, again.Revision)
+	}
+	if err := s.Reviewed(rec.ID, rec.Revision); !errors.Is(err, ErrChanged) {
+		t.Fatalf("a page holding the old revision: %v, want ErrChanged", err)
+	}
+	if err := s.Reviewed(rec.ID, again.Revision); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -629,7 +715,7 @@ func TestStoreReviewedSetIsCappedKeepingNewest(t *testing.T) {
 	for r := 0; r < rounds; r++ {
 		var fs []Flag
 		for i := 0; i < DefaultLimits().MaxFlags; i++ {
-			fs = append(fs, Flag{Path: fmt.Sprintf("r%d/f%05d", r, i), Classes: []Class{ClassArchive}, Detail: "zip"})
+			fs = append(fs, Flag{Path: fmt.Sprintf("r%d/f%05d", r, i), Classes: []Class{ClassArchive}, Detail: "zip", SHA256: fmt.Sprintf("%064x", r*10000+i)})
 		}
 		if r == 0 {
 			first = fs[0]
@@ -695,17 +781,24 @@ func TestStoreReviewedSetShrinksBeforeFlagsAtSizeCap(t *testing.T) {
 	}
 }
 
+// flh is a flag with a hash, the kind the reviewed set can recognise.
+func flh(path string) Flag {
+	f := fl(path, ClassArchive)
+	f.SHA256 = fmt.Sprintf("%x", RecordID(path)+RecordID(path))
+	return f
+}
+
 func TestStoreReviewedSetSurvivesReadAndHidesFromPending(t *testing.T) {
 	s := newStore(t)
 	key, base := InPlaceKey("/ws"), Record{Kind: KindInPlace, Workspace: "/ws"}
-	rec, err := s.Merge(key, base, time.Unix(1, 0), Report{Flags: []Flag{fl("a", ClassArchive)}})
+	rec, err := s.Merge(key, base, time.Unix(1, 0), Report{Flags: []Flag{flh("a")}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	reviewOf(t, s, rec)
 	// A fresh Store over the same dir (the CLI process) still has the set.
 	s2 := Store{Dir: s.Dir}
-	rec, _, err = s2.MergeScan(key, base, time.Unix(2, 0), Report{Flags: []Flag{fl("a", ClassArchive), fl("b", ClassArchive)}})
+	rec, _, err = s2.MergeScan(key, base, time.Unix(2, 0), Report{Flags: []Flag{flh("a"), flh("b")}})
 	if err != nil || len(rec.Flags) != 1 || rec.Flags[0].Path != "b" || len(rec.ReviewedFP) != 1 {
 		t.Fatalf("%+v %v", rec, err)
 	}
