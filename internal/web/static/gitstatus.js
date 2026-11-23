@@ -94,8 +94,9 @@ const GIT_DEBOUNCE_MS = 1000;
 // not subject to it.
 const GIT_WATCH_MIN_MS = 3000;
 // A status request that never answers is abandoned after this, so it cannot hold the debounced asks back for good. The
-// server gives a git run 10 s (internal/gitview/runner.go defaultTimeout) and a run may first wait for one of its slots.
-const GIT_FETCH_MS = 15000;
+// server gives a run up to 5 s to get one of its slots (defaultSlotWait) and then 10 s of its own (defaultTimeout,
+// internal/gitview/runner.go): its worst answer comes after 15 s.
+const GIT_FETCH_MS = 17000;
 // How old an answer to a PLAIN (non-fresh) ask may be: the server answers it from a finished run up to this old, and joins a
 // run already in flight (internal/gitview/runner.go defaultReuse, 2 s, used by Status; StatusFresh never takes that cache).
 const GIT_REUSE_MS = 2000;
@@ -155,12 +156,17 @@ async function gitStatusRead(root, sid, opts, signal) {
   if (gitState && gitState.root !== root) { gitState = null; gitPaintTree(); }
   let status = null;
   try {
-    const res = await fetch("/api/git/status", {
+    const req = fetch("/api/git/status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(opts && opts.fresh ? { path: root, fresh: true } : { path: root }),
       signal,
     });
+    // The Changes section asks for its counts (and a first base) beside this status, not after it (dockchanges.js).
+    try {
+      if (typeof dockChangesOnStatusAsk === "function") dockChangesOnStatusAsk({ root, seq, fresh: !!(opts && opts.fresh) });
+    } catch (_) { /* the section's trouble is not the tree's */ }
+    const res = await req;
     if (res.ok) status = await res.json();
   } catch (_) { /* offline, or abandoned after GIT_FETCH_MS: keep the marks */ }
   // Statuses land in the order they were sent. A reply is dropped when a reset came after its ask, when the newest ask is for
@@ -177,17 +183,19 @@ async function gitStatusRead(root, sid, opts, signal) {
   const prevAt = gitState && gitState.root === root ? gitState.at : 0;
   const at = opts && opts.fresh ? sentAt : Math.max(sentAt - GIT_REUSE_MS, prevAt);
   gitState = { root, sid: sid || null, status, marks: gitMarks(status, root), at, seq };
+  // Kept for the tab's life (gitlast.js), so a reload or a session switch paints these marks at once.
+  if ((status.state === "ok" || status.state === "toomany") && typeof gitLastSet === "function") gitLastSet(root, "status", status);
   gitPaintTree();
   // The Changes section's counts and base follow each status that lands (dockchanges.js), fresh when this one was.
   if (typeof dockChangesOnStatus === "function") dockChangesOnStatus({ fresh: !!(opts && opts.fresh) });
   return gitState.marks;
 }
 
-// gitStatusCurrent: the last status that landed and the root it was for, {root, status}, or null when there is none or it
-// was for another root than `root` (a late or older one is nobody's). The Changes section reads it; it never reads
-// gitState itself. When it was asked for is gitStatusAt's.
+// gitStatusCurrent: the last status that landed, the root it was for and the number of the ask it answers, {root, status,
+// seq}, or null when there is none or it was for another root than `root` (a late or older one is nobody's). The Changes
+// section reads it; it never reads gitState itself. When it was asked for is gitStatusAt's.
 function gitStatusCurrent(root) {
-  return gitState && root && gitState.root === root ? { root: gitState.root, status: gitState.status } : null;
+  return gitState && root && gitState.root === root ? { root: gitState.root, status: gitState.status, seq: gitState.seq } : null;
 }
 
 // gitStatusAt: the status held is as new as this (ms), 0 when there is none. For a fresh ask it is when gitStatusLoad SENT the
@@ -292,9 +300,17 @@ function gitStatusNote() {
 
 // --- painting ----------------------------------------------------------------
 
+// gitCurrentMarks: the marks the tree draws: the live status's for the root, else, until one lands, those of the status kept
+// for the root (gitlast.js) from before a reload or a session switch. Drawing only: gitStatusCodeFor and the Changes section
+// read the live status alone, so nothing acts on a kept one.
+let gitKept = null; // {root, status, marks}: the kept status's marks, made once per kept status
 function gitCurrentMarks() {
   const root = typeof ftRoot === "function" ? ftRoot() : "";
-  return gitState && gitState.root === root ? gitState.marks : null;
+  if (gitState && gitState.root === root) return gitState.marks;
+  const rec = root && typeof gitLastGet === "function" ? gitLastGet(root) : null;
+  if (!rec || !rec.status) return null;
+  if (!gitKept || gitKept.root !== root || gitKept.status !== rec.status) gitKept = { root, status: rec.status, marks: gitMarks(rec.status, root) };
+  return gitKept.marks;
 }
 
 // gitMarkRow puts (or takes off) the row's badge or dot. A file's badge is a
@@ -371,19 +387,24 @@ function gitPaintTree() {
   if (typeof ViewerTab !== "undefined" && ViewerTab.allViewers) {
     for (const v of ViewerTab.allViewers()) if (v.toolbarApi) v.toolbarApi.paint();
   }
-  if (typeof ftTreeEl !== "undefined" && ftTreeEl && typeof ftRowPaths !== "undefined") {
-    for (const row of ftTreeEl.querySelectorAll(".ft-node")) {
-      const p = ftRowPaths.get(row);
-      if (p) gitMarkRow(row, p);
-    }
-    gitPaintNote();
-  }
+  gitRepaintRows();
   const refresh = document.getElementById("ft-refresh");
   if (refresh) {
     if (refresh.dataset.baseTitle === undefined) refresh.dataset.baseTitle = refresh.title;
     const why = gitStatusReason();
     refresh.title = refresh.dataset.baseTitle + (why ? " — git status unavailable: " + why : "");
   }
+}
+
+// gitRepaintRows brings every row of the tree to the marks of the moment, and the note above it. The tree calls it after it
+// swaps a newly drawn level in (filetree.js), since a status may have landed while the rows were drawn off the page.
+function gitRepaintRows() {
+  if (typeof ftTreeEl === "undefined" || !ftTreeEl || typeof ftRowPaths === "undefined") return;
+  for (const row of ftTreeEl.querySelectorAll(".ft-node")) {
+    const p = ftRowPaths.get(row);
+    if (p) gitMarkRow(row, p);
+  }
+  gitPaintNote();
 }
 
 // gitPaintNote keeps one line above the tree for the too-many-changes message.
@@ -401,5 +422,5 @@ function gitPaintNote() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset, GIT_REUSE_MS, GIT_WATCH_MIN_MS };
+  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset, gitCurrentMarks, GIT_REUSE_MS, GIT_WATCH_MIN_MS, GIT_FETCH_MS };
 }

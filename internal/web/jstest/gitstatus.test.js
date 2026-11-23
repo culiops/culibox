@@ -438,7 +438,7 @@ test("gitStatusRefreshSoon: a request that fails, or never answers, frees the sl
     assert.equal(calls.length, 2, "a failure releases it");
     g.gitStatusRefreshSoon(); t.mock.timers.tick(1000);
     assert.equal(calls.length, 2, "held behind the second");
-    t.mock.timers.tick(14000); // the second has been out for 15 s: abandoned
+    t.mock.timers.tick(g.GIT_FETCH_MS - 1000); // the second has been out for GIT_FETCH_MS: abandoned
     await settle();
     assert.equal(calls[1].aborted, true, "a request that never answers is aborted after GIT_FETCH_MS");
     assert.equal(calls.length, 3, "and the held ask is sent");
@@ -856,4 +856,73 @@ test("gitStatusAt never goes backwards for a root: a plain ask just after a fres
   calls[0].resolve(ok([]));
   await b;
   assert.equal(g.gitStatusAt(), 100000);
+});
+
+// --- P2: asks announce themselves; the last status per root paints the marks at once ---------------------------------------
+
+test("each status ask is announced to the Changes section with its root, number and freshness, before the reply lands", async () => {
+  g.gitStatusReset();
+  const heard = [];
+  global.dockChangesOnStatusAsk = (o) => heard.push(o);
+  try {
+    const calls = deferredFetch();
+    const a = g.gitStatusLoad("/r", "s1", { fresh: true });
+    await settle();
+    assert.equal(heard.length, 1, "heard at the ask, not at the landing");
+    assert.equal(heard[0].root, "/r");
+    assert.equal(heard[0].fresh, true);
+    assert.ok(Number.isInteger(heard[0].seq) && heard[0].seq > 0);
+    calls[0].resolve(ok([]));
+    await a;
+    assert.equal(g.gitStatusCurrent("/r").seq, heard[0].seq, "the status held names the ask it answers");
+    const b = g.gitStatusLoad("/r", "s1");
+    await settle();
+    assert.equal(heard[1].fresh, false);
+    assert.ok(heard[1].seq > heard[0].seq);
+    calls[1].resolve(ok([]));
+    await b;
+  } finally { delete global.dockChangesOnStatusAsk; }
+});
+
+test("with no live status for the root, the tree paints the kept status's marks; what acts on a file still reads the live one", async () => {
+  g.gitStatusReset();
+  global.ftRoot = () => "/r";
+  global.gitLastGet = (root) => (root === "/r" ? { status: ok([{ p: "a.go", x: "M" }]), view: null } : null);
+  try {
+    assert.equal(g.gitCurrentMarks().get("/r/a.go").code, "M", "kept marks are drawn");
+    assert.equal(g.gitStatusCodeFor("/r/a.go"), "", "the viewer's Changes button waits for git");
+    assert.equal(g.gitStatusCurrent("/r"), null, "the Changes section sees no status");
+    const calls = deferredFetch();
+    const a = g.gitStatusLoad("/r", "s1");
+    calls[0].resolve(ok([]));
+    await a;
+    assert.equal(g.gitCurrentMarks().size, 0, "the live status replaces the kept one");
+    global.ftRoot = () => "/other";
+    assert.equal(g.gitCurrentMarks(), null, "nothing kept for another root");
+  } finally { delete global.ftRoot; delete global.gitLastGet; }
+});
+
+test("a status that lands ok or toomany is kept for its root; one that is unavailable or failed is not", async () => {
+  g.gitStatusReset();
+  const kept = [];
+  global.gitLastSet = (root, part, v) => kept.push([root, part, v.state]);
+  try {
+    const calls = deferredFetch();
+    let p = g.gitStatusLoad("/r", "s1");
+    calls[0].resolve(ok([{ p: "a.go", x: "M" }]));
+    await p;
+    p = g.gitStatusLoad("/r", "s1");
+    calls[1].resolve({ state: "toomany", rootRel: ".", entries: [] });
+    await p;
+    p = g.gitStatusLoad("/r", "s1");
+    calls[2].resolve({ state: "unavailable", reason: "x", entries: [] });
+    await p;
+    global.fetch = () => Promise.reject(new Error("offline"));
+    await g.gitStatusLoad("/r", "s1");
+    assert.deepEqual(kept, [["/r", "status", "ok"], ["/r", "status", "toomany"]]);
+  } finally { delete global.gitLastSet; }
+});
+
+test("GIT_FETCH_MS covers the server's worst case: 5 s for a slot and 10 s for the run", () => {
+  assert.equal(g.GIT_FETCH_MS, 17000);
 });
