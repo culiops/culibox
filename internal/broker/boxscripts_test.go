@@ -448,6 +448,29 @@ func TestGhWrapperBrokerErrorExits1(t *testing.T) {
 	}
 }
 
+// #360: a Host session whose PATH had no gh gets the wrapper with no
+// AGENTBOX_GH_REAL. It says gh is not installed and mints nothing: a token
+// minted for a gh that cannot run is an audited "minted" row for nothing.
+func TestGhWrapperWithoutRealGhMintsNothing(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	js := filepath.Join(ghScriptDir(t), "agentbox-gh.js")
+	for _, real := range []string{filepath.Join(t.TempDir(), "gh"), ""} {
+		env := append(brokerEnv(f), "AGENTBOX_GH_OWNERS=culiops")
+		if real != "" {
+			env = append(env, "AGENTBOX_GH_REAL="+real)
+		} else if _, err := os.Stat("/opt/gh/bin/gh"); err == nil {
+			continue // this machine has the box's gh: the default path is real here
+		}
+		out, stderr, code := runNode(t, t.TempDir(), "", []string{js, "api", "user"}, env...)
+		if code != 1 || out != "" || !strings.Contains(stderr, "agentbox: gh is not installed on this machine") {
+			t.Fatalf("real=%q: code=%d out=%q stderr=%q", real, code, out, stderr)
+		}
+		if n := len(f.calls()); n != 0 {
+			t.Fatalf("real=%q: broker called %d times", real, n)
+		}
+	}
+}
+
 // A signal reaches the child, and the wrapper exits 128+n.
 func TestGhWrapperForwardsSignals(t *testing.T) {
 	f := newFakeTokenBroker(t)
