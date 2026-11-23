@@ -415,11 +415,11 @@ func TestCloneFetchPrintsFlags(t *testing.T) {
 	}
 }
 
-func TestCloneFetchPrintsNothingFlaggedAndTruncation(t *testing.T) {
+func TestCloneFetchPrintsTruncationInsteadOfNothingFlagged(t *testing.T) {
 	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
 	e.res = clone.FetchResult{Ref: "refs/heads/box/b", Handback: handback.Report{Truncated: "walk cap of 500000 entries reached"}}
 	rc, out := runCloneArgs(e, "p", "b", "main")
-	if rc != 0 || !strings.Contains(out, "Nothing flagged. This is not a malware scan.\n") || !strings.Contains(out, "walk cap of 500000 entries reached") {
+	if rc != 0 || !strings.Contains(out, "Not everything was checked: walk cap of 500000 entries reached\n") || strings.Contains(out, "Nothing flagged") {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 }

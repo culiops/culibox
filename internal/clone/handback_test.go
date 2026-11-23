@@ -655,3 +655,58 @@ func TestInspectBranchSurvivesAParserPanicOnTheStreamGoroutine(t *testing.T) {
 		t.Fatalf("report = %+v, want the internal-error note and no flags", rep)
 	}
 }
+
+// prefixLogGit is the real git, but whatever "git log" streams is preceded by
+// gpg-style text, as it is when a commit signature is shown.
+type prefixLogGit struct{ ExecGit }
+
+func (p prefixLogGit) Stream(ctx context.Context, dir string, env []string, stdin io.Reader, stdout io.Writer, args ...string) error {
+	if slices.Contains(args, "log") {
+		if _, err := io.WriteString(stdout, "gpg: Signature made Mon 01 Jan 2026\ngpg:                using RSA key 0123\ngpg: Good signature from \"someone\"\n"); err != nil {
+			return err
+		}
+	}
+	return p.ExecGit.Stream(ctx, dir, env, stdin, stdout, args...)
+}
+
+// The log is read as a strict alternation of meta line and path, so text git
+// prints before a raw line (a shown signature) can cost at most the entry it
+// glued onto: the entries after it are still found, not shifted by one.
+func TestInspectBranchLogTextPrefixDoesNotDesyncTheLog(t *testing.T) {
+	x := newBranchFx(t)
+	for _, n := range []string{"a.pdf", "b.pdf", "c.pdf"} {
+		x.write(n, string(elfBytes(100, 1)), 0o644)
+	}
+	x.commit("three disguised files")
+	rep := InspectBranch(context.Background(), prefixLogGit{x.g}, x.of, x.base, "refs/heads/box", handback.DefaultLimits())
+	for _, n := range []string{"b.pdf", "c.pdf"} {
+		if f, ok := flagFor(rep, n); !ok || !hasClass(f, handback.ClassMismatch) {
+			t.Errorf("%s not flagged after a text prefix: %+v", n, rep.Flags)
+		}
+	}
+}
+
+// The log is asked without signature display, so that text never appears.
+func TestInspectBranchAsksForNoSignature(t *testing.T) {
+	x := newBranchFx(t)
+	var logArgs []string
+	g := seenArgsGit{ExecGit: x.g, seen: func(a []string) {
+		if slices.Contains(a, "log") {
+			logArgs = a
+		}
+	}}
+	InspectBranch(context.Background(), g, x.of, x.base, "refs/heads/box", handback.DefaultLimits())
+	if !slices.Contains(logArgs, "--no-show-signature") {
+		t.Fatalf("git log args = %v, want --no-show-signature", logArgs)
+	}
+}
+
+type seenArgsGit struct {
+	ExecGit
+	seen func([]string)
+}
+
+func (a seenArgsGit) Stream(ctx context.Context, dir string, env []string, stdin io.Reader, stdout io.Writer, args ...string) error {
+	a.seen(args)
+	return a.ExecGit.Stream(ctx, dir, env, stdin, stdout, args...)
+}

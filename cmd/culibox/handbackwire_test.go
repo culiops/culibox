@@ -826,3 +826,40 @@ func TestScanInPlaceCountsOnlyUnreviewedFlags(t *testing.T) {
 		t.Fatalf("note = %+v, %v; the same file was already reviewed", note, err)
 	}
 }
+
+func TestPrintFlags(t *testing.T) {
+	var b strings.Builder
+	printFlags(&b, handback.Report{Flags: []handback.Flag{
+		{Path: "ln", Classes: []handback.Class{handback.ClassSymlinkOut}, Detail: "symlink points outside the workspace", Target: "/etc/passwd"},
+		{Path: "a.pdf", Classes: []handback.Class{handback.ClassMismatch}, Detail: "ELF named .pdf", SHA256: strings.Repeat("0a", 32)},
+	}})
+	got := b.String()
+	for _, want := range []string{
+		"  ln  symlink points outside the workspace  -> /etc/passwd\n",
+		"  a.pdf  ELF named .pdf  sha256 " + strings.Repeat("0a", 32) + "\n",
+		"This is not a malware scan.\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+
+	b.Reset()
+	printFlags(&b, handback.Report{})
+	if b.String() != "Nothing flagged. This is not a malware scan.\n" {
+		t.Errorf("finished scan, nothing flagged: %q", b.String())
+	}
+
+	// A scan that did not see everything cannot say "nothing flagged".
+	b.Reset()
+	printFlags(&b, handback.Report{Truncated: "time budget of 30s used up"})
+	if b.String() != "Not everything was checked: time budget of 30s used up\n" {
+		t.Errorf("cut-short scan, no flags: %q", b.String())
+	}
+
+	b.Reset()
+	printFlags(&b, handback.Report{Flags: []handback.Flag{{Path: "x", Detail: "d"}}, Truncated: "cap"})
+	if !strings.Contains(b.String(), "Flagged for your review (1):") || !strings.HasSuffix(b.String(), "Not everything was checked: cap\n") {
+		t.Errorf("flags and a note: %q", b.String())
+	}
+}

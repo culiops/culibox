@@ -788,9 +788,6 @@ func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	return m.nameFor(abs, k), nil
 }
 
-// nameFor is boxName for a workspace path that is already absolute and
-// symlink-resolved (workspace.Path). Wrap names the box from the same path it
-// checked and mounts; boxName resolves first, so BoxName and Wrap agree.
 // NamedFor reports whether the box Wrap named for key is the one a workspace at
 // the real path `real` gets: Wrap names a box after the path it resolved, so a
 // caller that resolved the same path itself can tell the two agree (a symlink
@@ -799,6 +796,9 @@ func (m *Manager) NamedFor(real string, key BoxKey, name string) bool {
 	return m.nameFor(real, key) == name
 }
 
+// nameFor is boxName for a workspace path that is already absolute and
+// symlink-resolved (workspace.Path). Wrap names the box from the same path it
+// checked and mounts; boxName resolves first, so BoxName and Wrap agree.
 func (m *Manager) nameFor(abs string, k BoxKey) string {
 	key := m.opts.Instance + "\x00" + abs
 	if k.Account != "" && k.Account != "default" { // account.Default; box does not import account

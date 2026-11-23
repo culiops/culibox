@@ -13,9 +13,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/handback"
 	"github.com/culiops/culibox/internal/session"
 )
+
+// The in-place scan trusts a workspace only if the box layer vouches for it
+// (session.spawnWorkspace asks through an optional interface, so a signature
+// drift would silently turn the check off): this fails the build instead.
+var _ interface {
+	NamedFor(real string, key box.BoxKey, name string) bool
+} = (*box.Manager)(nil)
 
 // handbackDir is the record store under the data dir: one file per in-place
 // workspace or returned clone branch, until the user marks it reviewed. The
@@ -276,24 +284,27 @@ func (h *handbackHooks) flaggedOf(of string, reports map[string]handback.Report)
 }
 
 // printFlags writes the flagged files of one fetched branch after the review
-// line: path, detail and SHA-256 (or why there is none). Every string is
-// already sanitized. Nothing is ever called clean: a short list is not a
-// verdict.
+// line: path, detail, the target of a symlink and the SHA-256 (or why there is
+// none). Every string is already sanitized. Nothing is ever called clean: a
+// short list is not a verdict, and a scan that did not see everything never
+// says "nothing flagged", only what it did not check.
 func printFlags(w io.Writer, rep handback.Report) {
-	if len(rep.Flags) == 0 {
+	switch {
+	case len(rep.Flags) == 0 && rep.Truncated == "":
 		fmt.Fprintln(w, "Nothing flagged. This is not a malware scan.")
-	} else {
+	case len(rep.Flags) > 0:
 		fmt.Fprintf(w, "Flagged for your review (%d):\n", len(rep.Flags))
 		for _, f := range rep.Flags {
-			hash := f.HashNote
+			line := "  " + f.Path + "  " + f.Detail
+			if f.Target != "" {
+				line += "  -> " + f.Target
+			}
 			if f.SHA256 != "" {
-				hash = "sha256 " + f.SHA256
+				line += "  sha256 " + f.SHA256
+			} else if f.HashNote != "" {
+				line += "  " + f.HashNote
 			}
-			if hash == "" {
-				fmt.Fprintf(w, "  %s  %s\n", f.Path, f.Detail)
-				continue
-			}
-			fmt.Fprintf(w, "  %s  %s  %s\n", f.Path, f.Detail, hash)
+			fmt.Fprintln(w, line)
 		}
 		fmt.Fprintln(w, "This is not a malware scan.")
 	}

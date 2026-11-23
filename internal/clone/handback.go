@@ -37,11 +37,11 @@ const (
 // blobIDRE is a full object id: SHA-1 (40) or SHA-256 (64) hex.
 var blobIDRE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
-// errStop ends a stream on purpose: the reader has what it needs.
 // maxScanPathBytes bounds the path text one scan keeps in memory. A var so a
 // test can lower it.
 var maxScanPathBytes = 64 << 20
 
+// errStop ends a stream on purpose: the reader has what it needs.
 var errStop = errors.New("stream stopped by the reader")
 
 // branchEntry is one file a commit of the branch added or changed.
@@ -154,7 +154,7 @@ func (s *branchScan) stream(stdin io.Reader, w io.Writer, args ...string) error 
 	if errors.Is(err, errWriterPanicked) {
 		// A parser of box-written bytes panicked (on os/exec's goroutine; git is
 		// already stopped). What it left is not trusted: hand the panic to
-		// inspectBranchSafely on this goroutine, which reports the scan as stopped.
+		// InspectBranch's recover on this goroutine, which reports the scan as stopped.
 		panic(err)
 	}
 	if s.ctx.Err() != nil {
@@ -311,7 +311,7 @@ func (s *branchScan) collect(base, ref string) error {
 		}
 		return nil
 	}}
-	err := s.stream(nil, split, "log", "--no-ext-diff", "--no-textconv", "--no-renames", "--format=", "--raw", "-r",
+	err := s.stream(nil, split, "log", "--no-show-signature", "--no-ext-diff", "--no-textconv", "--no-renames", "--format=", "--raw", "-r",
 		"--no-abbrev", "-z", "--diff-merges=first-parent", base+".."+ref, "--")
 	if errors.Is(err, errStop) {
 		switch {
