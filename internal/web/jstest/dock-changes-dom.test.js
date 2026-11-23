@@ -1083,3 +1083,20 @@ test("switching to a session with no pick while the root's base is out and a new
     assert.ok(p.calls("/api/git/numstat").length - n0 <= 1, (fails ? "status failed" : "status out") + ": " + (p.calls("/api/git/numstat").length - n0) + " asks");
   }
 });
+
+test("on a clean tree, Uncommitted → Branch → Uncommitted → Branch shows the Branch list every time (no ask is held back)", async () => {
+  const p = page();
+  await p.status(okStatus([]));
+  await p.answer("/api/git/base", baseOk({ ahead: true }));
+  await p.answer("/api/git/numstat", num([{ p: "c.go", x: "A", a: 4, d: 0 }], { scope: "branch" }));
+  const [head, branch] = p.el("dock-scope").children;
+  for (let i = 0; i < 2; i++) {
+    head.onclick();
+    await settle();
+    assert.strictEqual(text(p.el("dock-chg-note")), "No changes", "Uncommitted on a clean tree");
+    branch.onclick();
+    await settle();
+    for (let j = 0; j < 3 && p.pending("/api/git/numstat").length > 0; j++) await p.answer("/api/git/numstat", num([{ p: "c.go", x: "A", a: 4, d: 0 }]));
+    assert.strictEqual(text(p.el("dock-chg-count")), "1 changed", "round " + (i + 1) + ": the Branch list, not 'Reading branch changes…'");
+  }
+});

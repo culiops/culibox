@@ -214,6 +214,8 @@ function dockChangesSync() {
   // branch that differs from its base.
   if (scope !== "branch" && Array.isArray(cur.status.entries) && cur.status.entries.length === 0) {
     dkcNum = { root, scope, seq: cur.seq, reply: { state: "ok", rootRel: ".", entries: [] } };
+    // The record no longer holds the last ask's answer, so that ask may be needed again (Branch picked back on this status).
+    dkcLastAsk = null;
     dockChangesRender();
     return;
   }
