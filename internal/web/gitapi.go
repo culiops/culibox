@@ -112,6 +112,11 @@ func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, a
 	if err != nil {
 		return gitview.Target{}, "", err
 	}
+	return p.gitTargetIn(path, vanishedOK)
+}
+
+// gitTargetIn is gitTargetFor under a policy the caller already built (the status request reuses it for worktreeOf).
+func (p fsPolicy) gitTargetIn(path string, vanishedOK bool) (t gitview.Target, abs string, err error) {
 	req, err := p.resolve(path)
 	if err == nil {
 		abs, err = filepath.EvalSymlinks(req.Abs)
@@ -182,7 +187,7 @@ func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, a
 // request's tree, no denied tree); the main checkout must be served by the fs policy in that same tree too (boxed when
 // t is, host when it is not), or it is not named. "" otherwise: a main checkout, a submodule, a bare repository's
 // worktree. Read from the filesystem only, like everything gitTarget decides.
-func (s *Server) worktreeOf(t gitview.Target) string {
+func (p fsPolicy) worktreeOf(t gitview.Target) string {
 	if filepath.Base(t.Common) != ".git" {
 		return ""
 	}
@@ -191,10 +196,6 @@ func (s *Server) worktreeOf(t gitview.Target) string {
 		return ""
 	}
 	if fi, err := os.Lstat(t.Common); err != nil || !fi.IsDir() {
-		return ""
-	}
-	p, err := s.fsPolicy()
-	if err != nil {
 		return ""
 	}
 	if r, err := filepath.EvalSymlinks(m); err != nil || r != m {
@@ -382,7 +383,13 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, unavailableGitStatus(msgGitNoRuntime))
 		return
 	}
-	t, abs, err := s.gitTarget(path)
+	// One policy snapshot for the target and its worktreeOf.
+	p, err := s.fsPolicy()
+	var t gitview.Target
+	var abs string
+	if err == nil {
+		t, abs, err = p.gitTargetIn(path, false)
+	}
 	switch {
 	case errors.Is(err, errGitNotRepo):
 		writeJSON(w, http.StatusOK, gitview.Status{State: "notrepo", Entries: []gitview.Entry{}})
@@ -403,7 +410,7 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		st = s.Git.Status(r.Context(), t)
 	}
 	st.RootRel = rootRel(t.Top, abs)
-	st.WorktreeOf = s.worktreeOf(t)
+	st.WorktreeOf = p.worktreeOf(t)
 	if st.State == "unavailable" {
 		log.Printf("git status %q: %q", t.Top, st.Reason)
 		st.Reason = gitReason(st.Reason)
