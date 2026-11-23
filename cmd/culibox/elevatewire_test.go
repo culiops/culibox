@@ -96,6 +96,9 @@ func TestSSOLoginRunnerFailureOffersTheCommand(t *testing.T) {
 	}
 }
 
+// A plain Host session (HostBroker false: unbound, or started without node)
+// still has no card; see TestElevationAppliesToAHostBrokerSession for one
+// that does (#360).
 func TestElevationOnlyAppliesToLiveBoxedBoundSessions(t *testing.T) {
 	host := boundSess("h-1")
 	host.Runtime = config.RuntimeHost
@@ -116,6 +119,35 @@ func TestElevationOnlyAppliesToLiveBoxedBoundSessions(t *testing.T) {
 		if _, ok := e.ssoStatus(id); ok {
 			t.Errorf("ssoStatus(%s) answered for a session the card does not apply to", id)
 		}
+	}
+}
+
+// hostBrokerSess is a bound Host session whose bindings the broker serves
+// (#360): no box, not exclusive.
+func hostBrokerSess(id string) *session.Session {
+	s := boundSess(id)
+	s.Runtime, s.Box, s.Exclusive, s.HostBroker = config.RuntimeHost, "", false, true
+	return s
+}
+
+// D8 (#360): a bound Host session served by the broker gets the same card as a
+// box: grant, drop, sign-in and its status.
+func TestElevationAppliesToAHostBrokerSession(t *testing.T) {
+	r := &fakeRunner{status: &ssologin.State{State: "waiting", Code: "ABCD-EFGH"}}
+	e := elevationService{brk: testBroker(t), runner: r,
+		get: func(id string) (*session.Session, bool) { return hostBrokerSess(id), id == "hb-1" }}
+	// The broker itself answers (it knows no session here), not the service.
+	if _, err := e.Grant("hb-1", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie}); errors.Is(err, web.ErrElevationUnknown) || !errors.Is(err, broker.ErrElevateRefused) {
+		t.Errorf("Grant: %v", err)
+	}
+	if _, err := e.Drop("hb-1", broker.CredCookie); err != nil {
+		t.Errorf("Drop: %v", err)
+	}
+	if _, err := e.SSOLogin("hb-1", ""); err != nil || r.profile != "sandbox-admin" {
+		t.Errorf("SSOLogin: %v (runner profile %q)", err, r.profile)
+	}
+	if st, ok := e.ssoStatus("hb-1"); !ok || st.Login == nil {
+		t.Errorf("ssoStatus: %+v %v", st, ok)
 	}
 }
 

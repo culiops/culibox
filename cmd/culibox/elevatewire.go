@@ -48,9 +48,9 @@ type boxCheck func(ctx context.Context, cwd, self string) (box.GrantBlock, error
 
 var _ web.ElevationService = elevationService{}
 
-// bound is the session with that id when it is a live boxed session with an
-// AWS binding (inline or named connections): the only kind elevation and the
-// sign-in card apply to.
+// bound is the session with that id when it is a live session with an AWS
+// binding (inline or named connections), boxed or broker-served on Host (see
+// boundOrExited): the only kind elevation and the sign-in card apply to.
 func (e elevationService) bound(id string) (*session.Session, bool) {
 	s, ok := e.boundOrExited(id)
 	if !ok || e.isExited(s) {
@@ -66,15 +66,28 @@ func (e elevationService) isExited(s *session.Session) bool {
 	return s.Exited()
 }
 
-// boundOrExited is bound without the liveness test: a boxed session with an AWS
+// boundOrExited is bound without the liveness test: a session with an AWS
 // binding (inline or named connections) that may already have exited but is
-// still listed.
+// still listed. It is boxed, or a Host session whose bindings the broker
+// serves (D8, #360); a Host session without them (plain, or started without
+// node) has no card.
 func (e elevationService) boundOrExited(id string) (*session.Session, bool) {
 	s, ok := e.get(id)
-	if !ok || s == nil || (s.AWS == nil && len(s.AWSConns) == 0) || s.Runtime != config.RuntimeBox {
+	if !ok || s == nil || (s.AWS == nil && len(s.AWSConns) == 0) || !brokerTier(s) {
 		return nil, false
 	}
 	return s, true
+}
+
+// brokerTier: the session's bindings go through the broker, in a box or on
+// Host (HostBroker).
+func brokerTier(s *session.Session) bool {
+	return s.Runtime == config.RuntimeBox || (s.Runtime == config.RuntimeHost && s.HostBroker)
+}
+
+// hostTier: a Host session served by the broker. It has no box of its own.
+func hostTier(s *session.Session) bool {
+	return s.Runtime == config.RuntimeHost && s.HostBroker
 }
 
 // Grant asks the broker for a write window. The broker resolves req.Name
