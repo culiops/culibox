@@ -133,5 +133,5 @@ test("review 1: a breadcrumb press opens a collapsed tree, the root crumb too (i
 
 test("review 1: a share stored on a taller window never takes the tree's header and 3 rows on a shorter one", () => {
   // 31 the top row, 26 the root header, 14 the tree body's padding (measured in Chromium), 3 rows of the tree's size.
-  assert.match(rulesFor(css, "#dock-changes"), /max-height:\s*min\(var\(--dk-chg-max,\s*45%\),\s*calc\(100% - 71px - 3 \* var\(--fs-tree\) \* 22 \/ 12\)\)/);
+  assert.match(rulesFor(css, "#dock-changes"), /max-height:\s*min\(var\(--dk-chg-max,\s*45%\),\s*calc\(100% - 71px - 3 \* max\(22px, var\(--fs-tree\) \* 22 \/ 12\)\)\)/, "a tree row is never under 22px (#drawer .ft-node min-height)");
 });

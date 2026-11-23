@@ -1342,9 +1342,10 @@
   #dock-changes {
     flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column;
     /* A share the divider stored on a taller window still leaves the tree its header and 3 rows on a shorter one (measured:
-       31px the top row, 26px the root header, 14px the tree body's padding; the rows at the tree's text size), the same
+       31px the top row, 26px the root header, 14px the tree body's padding; the rows at the tree's text size, never under
+       their 22px minimum), the same
        bound the divider's End key goes to. */
-    max-height: min(var(--dk-chg-max, 45%), calc(100% - 71px - 3 * var(--fs-tree) * 22 / 12));
+    max-height: min(var(--dk-chg-max, 45%), calc(100% - 71px - 3 * max(22px, var(--fs-tree) * 22 / 12)));
     border-bottom: 1px solid var(--line);
   }
   #dock-changes[hidden], .dk-branch[hidden], .dk-chg-note[hidden], .dk-legend[hidden], .dk-review[hidden] { display: none; }
