@@ -308,9 +308,13 @@ var maxAdoptEntries = 10000
 // Each entry of <projects>/<slug>/ moves to <convDir>/<slug>/ when the folder has
 // no such name: a regular file is hard-linked there and then unlinked from the
 // home (a link never replaces a name), a real directory (a conversation's
-// subagents and tool results) is renamed (a rename never replaces a non-empty
-// directory). Both run on directory descriptors, one opened through an os.Root
-// on the home and one through an os.Root on the folder, so no path is resolved
+// subagents and tool results) is renamed. A rename never replaces a file or a
+// non-empty directory, but it does replace an empty directory: one that another
+// box of the profile creates under that name between the check and the rename
+// is replaced while it holds nothing yet (a no-replace rename is Linux-only,
+// and macOS must behave the same). Both run on directory descriptors, one
+// opened through an os.Root on the home and one through an os.Root on the
+// folder, so no path is resolved
 // again between the check and the move. Types come from the directory listing,
 // which does not follow links: a symlink, a FIFO or anything else stays in the
 // home, and so does a slug that is not a real directory. The hook, when set, is
