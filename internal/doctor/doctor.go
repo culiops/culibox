@@ -291,6 +291,7 @@ func Checks(in Input) []Result {
 	bt := gatherBoxTier(in, dataDir, vst)
 	out = append(out, bt.Rows...)
 	out = append(out, guardLockRows(runtime.GOOS, bt.facts)...)
+	out = append(out, checkKeptHomes(dataDir)...)
 	if _, err := box.LookDocker(c.DockerBin); err == nil && runtime.GOOS == "linux" {
 		out = append(out, CheckHostListeners())
 		out = append(out, CheckEgressPort(c))

@@ -56,6 +56,11 @@ type Reclaimed struct {
 	// Caches is true when only the allowlisted caches were removed and the home
 	// itself stays.
 	Caches bool
+	// Kept is true when the home is past the state TTL and would have been
+	// removed, but holds a conversation (see holdsConversations), so it stays.
+	// Caches and Bytes then say what its cache prune freed in this pass, if
+	// anything. Every pass reports every kept home.
+	Kept bool
 }
 
 // ReclaimState removes the host homes of boxes that no longer exist and have not
@@ -134,18 +139,33 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 		dir := m.stateDir(name)
 		var reclaimed *Reclaimed
 		var err error
-		if age >= ttl {
+		// A home past ttl that still holds a conversation is kept (#330): its
+		// box name can change under it (a scope change, an upgrade), and then
+		// nothing reuses it, yet /resume history is what the home is for. It
+		// is not re-checked under opMu: only a spawn can add a conversation,
+		// and a spawn touches the marker, which reclaimOne does re-read.
+		kept := age >= ttl && holdsConversations(ctx, dir)
+		switch {
+		case age >= ttl && !kept:
 			reclaimed, err = m.reclaimOne(ctx, name, dir, ttl, dirBytes(dir))
-		} else {
+		case cacheTTL >= ttl:
+			// The prune is off. Only a kept home gets here: the age gate above
+			// let through nothing younger than ttl.
+		default:
 			// Nothing to prune is the usual case on every pass after the first,
 			// and costs a few lstats instead of taking opMu. Whether there is
 			// something is the paths' existence, not the byte count: a tree
 			// deeper than the walk goes counts for nothing and still has to go.
 			size, found := cacheBytes(ctx, dir)
-			if !found || ctx.Err() != nil {
-				continue
+			if found && ctx.Err() == nil {
+				reclaimed, err = m.pruneOne(ctx, name, dir, cacheTTL, size)
 			}
-			reclaimed, err = m.pruneOne(ctx, name, dir, cacheTTL, size)
+		}
+		if kept {
+			if reclaimed == nil {
+				reclaimed = &Reclaimed{Box: name, Age: age}
+			}
+			reclaimed.Kept = true
 		}
 		// A prune can both free something and fail on another path, so the two
 		// are recorded independently.
@@ -466,10 +486,15 @@ func IsBoxName(s string) bool { return isBoxName(s) }
 // mtime, which is safe only because the caller has already refused every home
 // with a live session or a surviving container.
 func (m *Manager) homeAge(boxName string) (time.Duration, bool) {
-	if fi, err := os.Stat(m.markerPath(boxName)); err == nil {
+	return homeAgeAt(m.opts.StateRoot, boxName)
+}
+
+// homeAgeAt is homeAge for a state root, without a Manager (KeptHomes).
+func homeAgeAt(stateRoot, boxName string) (time.Duration, bool) {
+	if fi, err := os.Stat(filepath.Join(stateRoot, stateDirName, lastUsedDirName, boxName)); err == nil {
 		return time.Since(fi.ModTime()), true
 	}
-	fi, err := os.Stat(m.stateDir(boxName))
+	fi, err := os.Stat(filepath.Join(stateRoot, stateDirName, boxName))
 	if err != nil {
 		return 0, false
 	}
@@ -477,10 +502,20 @@ func (m *Manager) homeAge(boxName string) (time.Duration, bool) {
 }
 
 // dirBytes sums the regular-file bytes under dir. This is the one filesystem
-// walk the design accepts, and only for a directory already condemned.
+// walk the design accepts, and only for a directory already condemned (or, in
+// KeptHomes, one doctor was asked about).
 func dirBytes(dir string) int64 {
+	n, _ := dirBytesCtx(context.Background(), dir)
+	return n
+}
+
+// dirBytesCtx is dirBytes that stops with ctx's error when ctx is done.
+func dirBytesCtx(ctx context.Context, dir string) (int64, error) {
 	var total int64
-	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -489,7 +524,7 @@ func dirBytes(dir string) int64 {
 		}
 		return nil
 	})
-	return total
+	return total, err
 }
 
 // pruneOrphanMarkers drops markers whose home is gone, so the directory cannot
