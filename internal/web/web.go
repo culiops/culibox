@@ -428,19 +428,34 @@ func (s *Server) Handler() http.Handler {
 
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(sub))
+	assets := newStaticAssets(sub)
 	protected.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// App HTML/CSS/JS change on every rebuild → force revalidation, otherwise
-		// browsers serve stale assets until a manual hard-refresh. The vendored
-		// /xterm/* and /vendor/* bundles are immutable and stay cacheable.
+		// Every file carries a strong ETag (staticassets.go), so whatever the browser
+		// keeps it revalidates with a 304 instead of downloading again. App HTML/CSS/JS
+		// change on every rebuild → no-cache: always revalidated, never used stale.
+		// The unversioned /xterm/* and /vendor/* paths get no Cache-Control and so
+		// revalidate too.
 		pth := r.URL.Path
 		if pth == "/profileform.js" {
 			s.serveProfileForm(w, r)
 			return
 		}
+		cc := ""
 		app := strings.HasSuffix(pth, ".js") || strings.HasSuffix(pth, ".css")
 		if pth == "/" || (app &&
 			!strings.HasPrefix(pth, "/xterm/") && !strings.HasPrefix(pth, "/vendor/")) {
-			w.Header().Set("Cache-Control", "no-cache")
+			cc = "no-cache"
+		}
+		name := strings.TrimPrefix(pth, "/")
+		if pth == "/" {
+			name = "index.html"
+		}
+		// /index.html itself is left to FileServer, which redirects it to "/".
+		if pth != "/index.html" && assets.serve(w, r, name, cc) {
+			return
+		}
+		if cc != "" {
+			w.Header().Set("Cache-Control", cc)
 		}
 		fileServer.ServeHTTP(w, r)
 	})
