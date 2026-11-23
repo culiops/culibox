@@ -6931,7 +6931,7 @@ $("spawn").addEventListener("submit", async (ev) => {
   // dialog as it was. Nothing is asked when Host drops nothing (the profile is read from the same card the request is built from).
   const w = spawnWhere();
   const hostDrops = w.runtime === "host" ? tierHostDrops(currentProfile()) : [];
-  if (hostDrops.length && !(await hostDropsConfirm($("agent").value, hostDrops))) return;
+  if (hostDrops.length && !(await hostDropsConfirm($("agent").value, hostDrops, tierHostKeeps(currentProfile())))) return;
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }

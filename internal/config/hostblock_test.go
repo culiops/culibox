@@ -151,3 +151,28 @@ func TestValidateRefusesBoxOnlyHost(t *testing.T) {
 		t.Fatalf("ValidateProfile refused box_only with an empty runtime: %v", err)
 	}
 }
+
+// Host review 2026-11-23 (#346, #359): a host run still passes the profile's own
+// secrets and env, so the Host card and confirm must be able to name them.
+func TestHostKeeps(t *testing.T) {
+	cases := []struct {
+		name string
+		a    AgentConfig
+		want []string
+	}{
+		{"none", AgentConfig{}, nil},
+		{"secrets in order", AgentConfig{Secrets: []string{"GH_TOKEN", "A_KEY"}}, []string{"GH_TOKEN secret", "A_KEY secret"}},
+		{"env sorted", AgentConfig{Env: map[string]string{"ZED": "1", "ALPHA": "2"}}, []string{"ALPHA env", "ZED env"}},
+		{"secret wins over env", AgentConfig{Secrets: []string{"GH_TOKEN"}, Env: map[string]string{"GH_TOKEN": "x", "B": "y"}}, []string{"GH_TOKEN secret", "B env"}},
+		{"box-only names are dropped, not kept", AgentConfig{Secrets: []string{CriticalRmEnv}, Env: map[string]string{CriticalRmEnv: "1"}}, nil},
+		{"duplicate secret once", AgentConfig{Secrets: []string{"X", "X"}}, []string{"X secret"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := HostKeeps(c.a)
+			if strings.Join(got, "|") != strings.Join(c.want, "|") || (got == nil) != (c.want == nil) {
+				t.Fatalf("HostKeeps = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
