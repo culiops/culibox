@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/culiops/culibox/internal/awsprobe"
@@ -46,8 +47,19 @@ var hostShims = []struct{ name, script string }{
 
 // hostFileNames is every file HostFor may write, relative to the dir: a
 // respawn of the same session id removes the ones its binding no longer has.
-var hostFileNames = []string{"agentbox-cred.js", "agentbox-env.js", "agentbox-gh.js", "aws-config",
+var hostFileNames = []string{"agentbox-cred.js", "agentbox-env.js", "agentbox-gh.js", "aws-config", hostAWSCredsFile,
 	AWSListFile, GitHubListFile, TokensFile, hostBinDir + "/agentbox-env", hostBinDir + "/gh"}
+
+// hostAWSCredsFile is a Host session's AWS shared credentials file, always
+// empty. The SDKs read the shared credentials file before credential_process,
+// so the user's ~/.aws/credentials ([default], or a section named like a
+// connection) would silently replace the broker (D3).
+const hostAWSCredsFile = "aws-credentials"
+
+// hostGitReset comes before the broker's git helper: an empty helper value
+// clears every github.com credential helper git collected so far (the user's
+// system and global osxkeychain/store/manager), so only the broker answers.
+var hostGitReset = [][2]string{{"credential.https://github.com.helper", ""}}
 
 // hostGitRewrites send a GitHub SSH remote over HTTPS, where the broker's git
 // helper answers (D3: the user's own SSH key is not the session's login).
@@ -56,9 +68,15 @@ var hostGitRewrites = [][2]string{
 	{"url.https://github.com/.insteadOf", "ssh://git@github.com/"},
 }
 
+// hostGitPushIndex is the git config index the clone push rewrite
+// (session.withGitPushRewrite) takes after Host's entries; HostStripEnv
+// reserves every index up to it, as StripGitHubEnv reserves the box's 2.
+const hostGitPushIndex = 5
+
 var hostDirNameRe = regexp.MustCompile(`^[0-9a-f]{12}$`)
 
-// shq quotes s for a POSIX shell: single quotes, an embedded one as '\”.
+// shq quotes s for a POSIX shell: in single quotes, each embedded single quote
+// closed, backslash-escaped and reopened.
 func shq(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
@@ -128,7 +146,11 @@ func writeHostFiles(stateRoot, rel, dir string, bs config.Bindings, base map[str
 		}
 	}
 	written := map[string]bool{}
-	for _, f := range bindingFiles(bs, base, "node "+shq(dir+"/agentbox-cred.js")) {
+	files := bindingFiles(bs, base, "node "+shq(dir+"/agentbox-cred.js"))
+	if bs.AWS != nil || len(bs.AWSConns) > 0 {
+		files = append(files, bindingFile{hostAWSCredsFile, nil}) // empty: see hostAWSCredsFile
+	}
+	for _, f := range files {
 		if err := replaceFile(root, rel, f.name, f.data); err != nil {
 			return fmt.Errorf("broker: writing %s: %w", f.name, err)
 		}
@@ -162,10 +184,10 @@ func hostEnv(bs config.Bindings, dir, realGH string) []string {
 	env := []string{"AGENTBOX_BROKER=unix://" + dir + "/" + hostSockName, HostDirEnv + "=" + dir}
 	env = append(env, awsEnv(bs, dir+"/aws-config")...)
 	if bs.AWS != nil || len(bs.AWSConns) > 0 {
-		env = append(env, tfPlanNoLock)
+		env = append(env, "AWS_SHARED_CREDENTIALS_FILE="+dir+"/"+hostAWSCredsFile, tfPlanNoLock)
 	}
 	if bs.GitHub != nil {
-		env = append(env, gitHubEnv(*bs.GitHub, "node "+shq(dir+"/agentbox-cred.js"), dir+"/"+hostGHDir, hostGitRewrites)...)
+		env = append(env, gitHubEnv(*bs.GitHub, "node "+shq(dir+"/agentbox-cred.js"), dir+"/"+hostGHDir, hostGitReset, hostGitRewrites)...)
 		if realGH != "" {
 			env = append(env, GHRealEnv+"="+realGH)
 		}
@@ -180,7 +202,11 @@ func (h Hooks) HostStripEnv(bs config.Bindings) []string {
 	s := StripEnv()
 	if bs.GitHub != nil {
 		s = append(s, StripGitHubEnv()...)
-		s = append(s, "GIT_CONFIG_KEY_3", "GIT_CONFIG_VALUE_3")
+		// StripGitHubEnv covers 0..2; Host uses up to the push rewrite's index.
+		for i := 3; i <= hostGitPushIndex; i++ {
+			n := strconv.Itoa(i)
+			s = append(s, "GIT_CONFIG_KEY_"+n, "GIT_CONFIG_VALUE_"+n)
+		}
 	}
 	return append(s, HostDirEnv, GHRealEnv)
 }

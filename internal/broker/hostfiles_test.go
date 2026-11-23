@@ -151,9 +151,9 @@ func TestHostForFilesPerKind(t *testing.T) {
 		bs    config.Bindings
 		files []string // regular files and shims, besides the socket
 	}{
-		{"legacy aws", legacy, []string{"agentbox-cred.js", "aws-config"}},
+		{"legacy aws", legacy, []string{"agentbox-cred.js", "aws-config", "aws-credentials"}},
 		{"aws connections", config.Bindings{AWSConns: twoConns()},
-			[]string{"agentbox-cred.js", "agentbox-env.js", "aws-config", "aws.json", "bin/agentbox-env"}},
+			[]string{"agentbox-cred.js", "agentbox-env.js", "aws-config", "aws-credentials", "aws.json", "bin/agentbox-env"}},
 		{"github", config.Bindings{GitHub: ghTwoOwners()},
 			[]string{"agentbox-cred.js", "agentbox-env.js", "agentbox-gh.js", "github.json", "bin/agentbox-env", "bin/gh"}},
 		{"tokens", config.Bindings{Tokens: listingTokens()},
@@ -210,6 +210,13 @@ func TestHostForFilesPerKind(t *testing.T) {
 					}
 				}
 			}
+			if _, ok := got["aws-credentials"]; ok {
+				// Empty on purpose: it hides ~/.aws/credentials, which the SDKs read
+				// before credential_process.
+				if b, err := os.ReadFile(filepath.Join(dir, "aws-credentials")); err != nil || len(b) != 0 {
+					t.Errorf("aws-credentials = %q (%v), want empty", b, err)
+				}
+			}
 			if c.bs.AWS != nil {
 				b, _ := os.ReadFile(filepath.Join(dir, "aws-config"))
 				want := "[profile agentbox]\ncredential_process = node '" + dir + "/agentbox-cred.js'\nregion = ap-southeast-1\n"
@@ -257,26 +264,29 @@ func TestHostForEnvHasNoSecretAndExactNames(t *testing.T) {
 	}
 	helper := "!node '" + dir + "/agentbox-cred.js' github-git"
 	want := map[string]string{
-		"AGENTBOX_BROKER":     "unix://" + dir + "/s",
-		"AGENTBOX_DIR":        dir,
-		"AWS_CONFIG_FILE":     dir + "/aws-config",
-		"AWS_REGION":          "eu-west-1",
-		"AWS_DEFAULT_REGION":  "eu-west-1",
-		"TF_CLI_ARGS_plan":    "-lock=false",
-		"GIT_CONFIG_COUNT":    "4",
-		"GIT_CONFIG_KEY_0":    "credential.https://github.com.helper",
-		"GIT_CONFIG_VALUE_0":  helper,
-		"GIT_CONFIG_KEY_1":    "credential.https://github.com.useHttpPath",
-		"GIT_CONFIG_VALUE_1":  "true",
-		"GIT_CONFIG_KEY_2":    "url.https://github.com/.insteadOf",
-		"GIT_CONFIG_VALUE_2":  "git@github.com:",
-		"GIT_CONFIG_KEY_3":    "url.https://github.com/.insteadOf",
-		"GIT_CONFIG_VALUE_3":  "ssh://git@github.com/",
-		"GIT_TERMINAL_PROMPT": "0",
-		"GH_CONFIG_DIR":       dir + "/gh",
-		"GH_PROMPT_DISABLED":  "1",
-		"AGENTBOX_GH_OWNERS":  "culiops,CuliOps2",
-		"AGENTBOX_GH_REAL":    "/usr/bin/gh",
+		"AGENTBOX_BROKER":             "unix://" + dir + "/s",
+		"AGENTBOX_DIR":                dir,
+		"AWS_CONFIG_FILE":             dir + "/aws-config",
+		"AWS_SHARED_CREDENTIALS_FILE": dir + "/aws-credentials",
+		"AWS_REGION":                  "eu-west-1",
+		"AWS_DEFAULT_REGION":          "eu-west-1",
+		"TF_CLI_ARGS_plan":            "-lock=false",
+		"GIT_CONFIG_COUNT":            "5",
+		"GIT_CONFIG_KEY_0":            "credential.https://github.com.helper",
+		"GIT_CONFIG_VALUE_0":          "",
+		"GIT_CONFIG_KEY_1":            "credential.https://github.com.helper",
+		"GIT_CONFIG_VALUE_1":          helper,
+		"GIT_CONFIG_KEY_2":            "credential.https://github.com.useHttpPath",
+		"GIT_CONFIG_VALUE_2":          "true",
+		"GIT_CONFIG_KEY_3":            "url.https://github.com/.insteadOf",
+		"GIT_CONFIG_VALUE_3":          "git@github.com:",
+		"GIT_CONFIG_KEY_4":            "url.https://github.com/.insteadOf",
+		"GIT_CONFIG_VALUE_4":          "ssh://git@github.com/",
+		"GIT_TERMINAL_PROMPT":         "0",
+		"GH_CONFIG_DIR":               dir + "/gh",
+		"GH_PROMPT_DISABLED":          "1",
+		"AGENTBOX_GH_OWNERS":          "culiops,CuliOps2",
+		"AGENTBOX_GH_REAL":            "/usr/bin/gh",
 	}
 	got := map[string]string{}
 	for _, kv := range env {
@@ -295,8 +305,8 @@ func TestHostForEnvHasNoSecretAndExactNames(t *testing.T) {
 		}
 	}
 	for k, w := range want {
-		if got[k] != w {
-			t.Errorf("%s = %q, want %q", k, got[k], w)
+		if v, ok := got[k]; !ok || v != w {
+			t.Errorf("%s = %q (set %v), want %q", k, v, ok, w)
 		}
 	}
 	for k := range got {
@@ -322,7 +332,9 @@ func TestHostForEnvHasNoSecretAndExactNames(t *testing.T) {
 			t.Errorf("HostStripEnv lacks %s", k)
 		}
 	}
-	for _, k := range []string{"AWS_PROFILE", TokenEnv, "GH_TOKEN", "GITHUB_TOKEN", "GIT_CONFIG_PARAMETERS"} {
+	// Index 5 is where the clone push rewrite lands after Host's five entries.
+	for _, k := range []string{"AWS_PROFILE", TokenEnv, "GH_TOKEN", "GITHUB_TOKEN", "GIT_CONFIG_PARAMETERS",
+		"GIT_CONFIG_KEY_5", "GIT_CONFIG_VALUE_5"} {
 		if !slices.Contains(strip, k) {
 			t.Errorf("HostStripEnv lacks %s", k)
 		}
@@ -556,5 +568,119 @@ func TestWriteAWSListingRefreshesHostDirs(t *testing.T) {
 	// No box and no Host session: the box's error, unchanged.
 	if err := h.WriteAWSListing(config.Bindings{AWSConns: twoConns()[1:]}, nil); err == nil {
 		t.Error("no dir at all, no error")
+	}
+}
+
+// fakeHostBroker serves a host socket the way the broker answers a Host
+// session: AWS credentials AKIAHOST, and a GitHub token per owner.
+func fakeHostBroker(t *testing.T) func(net.Listener) {
+	return func(l net.Listener) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/v1/credentials", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"Version":1,"AccessKeyId":"AKIAHOST","SecretAccessKey":"s","SessionToken":"t"}`))
+		})
+		mux.HandleFunc("/v1/github/token", func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "ghs_host_" + body["owner"], "expires_at": "2027-01-15T08:15:00Z"})
+		})
+		srv := &http.Server{Handler: mux, BaseContext: BaseContext}
+		go srv.Serve(l)
+		t.Cleanup(func() { srv.Close() })
+	}
+}
+
+// The user's ~/.aws/credentials comes before credential_process in the SDKs'
+// order: a [default] or a section named like a connection would silently
+// replace the broker. A Host session points the SDKs at its own empty file.
+func TestHostUserAWSCredentialsDoNotWin(t *testing.T) {
+	home := shortDir(t)
+	if err := os.MkdirAll(filepath.Join(home, ".aws"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	creds := "[default]\naws_access_key_id = AKIAUSERDEFAULT\naws_secret_access_key = u\n\n" +
+		"[acme-prod-read]\naws_access_key_id = AKIAUSERCONN\naws_secret_access_key = u\n"
+	if err := os.WriteFile(filepath.Join(home, ".aws", "credentials"), []byte(creds), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".local", "share", "culibox")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h := hostHooks(t, root, fakeHostBroker(t))
+	for _, bs := range []config.Bindings{{AWS: binding()}, {AWSConns: twoConns()}} {
+		env, dir, err := h.HostFor("s-"+bs.Hash(), bs, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v, ok := envHas(env, "AWS_SHARED_CREDENTIALS_FILE"); !ok || v != dir+"/aws-credentials" || strings.HasPrefix(v, filepath.Join(home, ".aws")) {
+			t.Fatalf("AWS_SHARED_CREDENTIALS_FILE = %q (set %v), want %s/aws-credentials", v, ok, dir)
+		}
+	}
+	if _, err := exec.LookPath("aws"); err != nil {
+		t.Skip("aws CLI not installed: only the env was checked")
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed: only the env was checked")
+	}
+	env, _, err := h.HostFor("s-conns", config.Bindings{AWSConns: twoConns()}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("aws", append([]string{"configure", "export-credentials", "--format", "process"}, args...)...)
+		cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, TokenEnv + "=sess-tok",
+			"AWS_EC2_METADATA_DISABLED=true"}, env...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	out, err := run("--profile", "acme-prod-read")
+	if err != nil || !strings.Contains(out, "AKIAHOST") || strings.Contains(out, "AKIAUSER") {
+		t.Fatalf("named connection: %v\n%s", err, out)
+	}
+	// Several connections and no AWS_PROFILE: [default] is CuliBox's guidance
+	// profile, never the user's static key.
+	if out, _ := run(); strings.Contains(out, "AKIAUSER") {
+		t.Fatalf("[default] resolved to the user's key:\n%s", out)
+	}
+}
+
+// git asks every credential.helper in config order (system, global, local,
+// env) until one answers: a user's osxkeychain/store/manager would answer for
+// github.com before the broker. Host resets the github.com helper list first.
+func TestHostGitHelperResetsUserHelpers(t *testing.T) {
+	for _, bin := range []string{"git", "node"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skip(bin + " not installed")
+		}
+	}
+	h := hostHooks(t, shortDir(t), fakeHostBroker(t))
+	env, _, err := h.HostFor("s1", config.Bindings{GitHub: ghTwoOwners()}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const userHelper = "!f() { echo username=me; echo password=USER-TOKEN; }; f"
+	for _, key := range []string{"credential.helper", "credential.https://github.com.helper"} {
+		global := filepath.Join(t.TempDir(), "gitconfig")
+		if out, err := exec.Command("git", "config", "--file", global, key, userHelper).CombinedOutput(); err != nil {
+			t.Fatalf("git config: %v %s", err, out)
+		}
+		fill := func(extra ...string) string {
+			cmd := exec.Command("git", "credential", "fill")
+			cmd.Dir = t.TempDir()
+			cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "GIT_CONFIG_NOSYSTEM=1",
+				"GIT_CONFIG_GLOBAL=" + global, "GIT_TERMINAL_PROMPT=0"}, extra...)
+			cmd.Stdin = strings.NewReader("protocol=https\nhost=github.com\npath=culiops/agent-box.git\n\n")
+			out, _ := cmd.CombinedOutput()
+			return string(out)
+		}
+		// The competing helper does answer without the Host env: the test can fail.
+		if out := fill(); !strings.Contains(out, "password=USER-TOKEN") {
+			t.Fatalf("%s: the user's helper did not answer on its own:\n%s", key, out)
+		}
+		out := fill(append([]string{TokenEnv + "=sess-tok"}, env...)...)
+		if !strings.Contains(out, "password=ghs_host_culiops") || strings.Contains(out, "USER-TOKEN") {
+			t.Errorf("%s: git credential fill on Host gave:\n%s", key, out)
+		}
 	}
 }

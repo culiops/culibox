@@ -518,25 +518,24 @@ func awsEnv(bs config.Bindings, configFile string) []string {
 // stores nothing; gh keeps its config in a throwaway dir and never prompts. No
 // token is in this env: both fetch one over the broker socket when they need it.
 func GitHubEnv(g config.GitHubBinding) []string {
-	return gitHubEnv(g, "node "+BoxDir+"/agentbox-cred.js", GHConfigDir, nil)
+	return gitHubEnv(g, "node "+BoxDir+"/agentbox-cred.js", GHConfigDir, nil, nil)
 }
 
 // gitHubEnv is GitHubEnv with cred the command that runs agentbox-cred.js,
-// ghDir gh's config dir, and extra git config pairs after the helper's two.
-func gitHubEnv(g config.GitHubBinding, cred, ghDir string, extra [][2]string) []string {
+// ghDir gh's config dir, and extra git config pairs before (pre) and after
+// (post) the helper's two.
+func gitHubEnv(g config.GitHubBinding, cred, ghDir string, pre, post [][2]string) []string {
 	owners := make([]string, len(g.Owners))
 	for i, o := range g.Owners {
 		owners[i] = o.Owner
 	}
-	env := []string{
-		"GIT_CONFIG_COUNT=" + strconv.Itoa(2+len(extra)),
-		"GIT_CONFIG_KEY_0=credential.https://github.com.helper",
-		"GIT_CONFIG_VALUE_0=!" + cred + " github-git",
-		"GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath",
-		"GIT_CONFIG_VALUE_1=true",
-	}
-	for i, kv := range extra {
-		n := strconv.Itoa(2 + i)
+	pairs := slices.Concat(pre, [][2]string{
+		{"credential.https://github.com.helper", "!" + cred + " github-git"},
+		{"credential.https://github.com.useHttpPath", "true"},
+	}, post)
+	env := []string{"GIT_CONFIG_COUNT=" + strconv.Itoa(len(pairs))}
+	for i, kv := range pairs {
+		n := strconv.Itoa(i)
 		env = append(env, "GIT_CONFIG_KEY_"+n+"="+kv[0], "GIT_CONFIG_VALUE_"+n+"="+kv[1])
 	}
 	return append(env,
