@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
@@ -76,8 +75,5 @@ printf 'a \nB\nc\nd\ne\n' > f.tf`
 	bad := r.Blame(ctx, tg, "f.tf", BlameKey{Version: "2", IgnoreRevs: true}, yes)
 	if bad.State != "ok" || bad.IgnoredRevs {
 		t.Fatalf("blame with a broken ignore-revs file = %+v", bad)
-	}
-	if !strings.HasPrefix(plain.Commits[0].SHA, plain.Last.SHA[:7]) {
-		t.Logf("first line's commit %s, last commit %s", plain.Commits[0].SHA, plain.Last.SHA)
 	}
 }
