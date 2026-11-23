@@ -131,6 +131,7 @@ function editorEnsure() {
   editorBindNoteKeys(dockEditor);
   dockEditor.onDidChangeCursorPosition(() => { if (dockEditorOwner) dockEditorOwner.paintStatus(); });
   editorSelBarInstall(dockEditor, dockMonaco); // editorselbar.js: the bar over a selection
+  if (typeof editorBlameWireEditor === "function") editorBlameWireEditor(dockEditor); // editorblame.js: the inline blame's hover, scroll and layout
   return dockEditor;
 }
 
@@ -288,10 +289,16 @@ class EditorTab {
     this.sbEl.hidden = true; // not a live region: its Ln/Col changes with every key and click, and a screen reader would read out each
     this.sbBranch = span("dk-sb-branch");
     this.sbSaved = span("dk-sb-saved");
+    // The current line's blame when it does not fit inline (editorblame.js): after the branch and "Saved", the first to be cut.
+    this.sbBlame = document.createElement("button");
+    this.sbBlame.type = "button";
+    this.sbBlame.className = "dk-sb-blame";
+    this.sbBlame.hidden = true;
+    if (typeof editorBlameWireStatus === "function") editorBlameWireStatus(this, this.sbBlame);
     const right = span("dk-sb-r");
     this.sbParts = {};
     for (const k of ["pos", "indent", "enc", "eol", "lang"]) { this.sbParts[k] = span("dk-sb-" + k); right.append(this.sbParts[k]); }
-    this.sbEl.append(this.sbBranch, this.sbSaved, right);
+    this.sbEl.append(this.sbBranch, this.sbSaved, this.sbBlame, right);
   }
 
   // paintStatus writes the status bar from the editor and the model. Cheap: text is written only when it changed.
@@ -317,6 +324,7 @@ class EditorTab {
     this.sbBranch.hidden = !branch;
     set(this.sbSaved, this.statusText);
     this.sbSaved.hidden = !this.statusText;
+    if (typeof editorBlameSoon === "function") editorBlameSoon(this); // the cursor moved, or the view changed: the line's blame follows
   }
 
   // paint repaints everything this tab shows outside the editor: the read-only note, the toggle and the ⋯, the status bar.
@@ -449,6 +457,7 @@ class EditorTab {
     this.earlyText = null;
     this.savedAlt = this.model.getAlternativeVersionId();
     if (typeof editorNotesTrack === "function") editorNotesTrack(this); // the file's notes follow its text for as long as the tab is open (editornotes.js)
+    if (typeof editorBlameTrack === "function") editorBlameTrack(this); // and its line blame (editorblame.js)
     this.contentSub = this.model.onDidChangeContent(() => this.onContent());
     this.optionsSub = this.model.onDidChangeOptions(() => this.paintStatus());
     if (this.attached) this.show();
@@ -576,6 +585,7 @@ class EditorTab {
     this.actsEl.remove();
     this.placeBar(false);
     if (this.inner) { this.inner.onHide(); return; }
+    if (typeof editorBlameHide === "function") editorBlameHide(this);
     editorMdDetach(this);
     editorDiffDetach(this);
     this.stashView();
@@ -647,6 +657,7 @@ class EditorTab {
     editorSyncDispose(this); // before the model goes: a compare view holds it
     editorDiffDispose(this); // and so does the Changes view
     if (typeof editorNotesUntrack === "function") editorNotesUntrack(this); // its note decorations and its listener
+    if (typeof editorBlameUntrack === "function") editorBlameUntrack(this); // its blame request, decoration and listener
     if (typeof reviewBarUnmount === "function") reviewBarUnmount(this); // its review bar
     editorMdDispose(this);   // and the Preview's subscription
     if (this.savedTimer) clearTimeout(this.savedTimer);
@@ -853,7 +864,8 @@ class EditorTab {
     if (this.moreBtn && this.moreBtn.getAttribute("aria-expanded") === "true") closeRowMenu();
   }
 
-  // openMenu: Copy path, Copy relative path, Reveal in tree, Download, Wrap lines (Alt+Z; in Changes Wrap diff and Line numbers), Font size, Copy contents.
+  // openMenu: Copy path, Copy relative path, Reveal in tree, Download, Wrap lines (Alt+Z; in Changes Wrap diff and Line numbers), in Code
+  // Show line blame and Blame of this line (editorblame.js), Font size, Copy contents.
   // A file that is not text has only the first four (and a PDF, Open in new tab): nothing in it is for an editor.
   // The kit's menu, as the explorer's ⋯ is; a second press on the ⋯ closes it.
   openMenu() {
@@ -898,7 +910,7 @@ class EditorTab {
     ];
     const nodes = this.inner
       ? (this.inner.openable ? [...common, kitMenuSep(), item("Open in new tab", "", () => this.inner.open())] : common)
-      : [...common, kitMenuSep(), ...viewRows(), this.fontRow(), kitMenuSep(), item("Copy contents", "copy", () => this.copyContents())];
+      : [...common, kitMenuSep(), ...viewRows(), ...(typeof editorBlameMenuRows === "function" ? editorBlameMenuRows(this, item, check) : []), this.fontRow(), kitMenuSep(), item("Copy contents", "copy", () => this.copyContents())];
     ftShowMenu(more, nodes, false, "File actions");
     const first = menu.querySelector(".menu-item");
     if (first) first.focus();

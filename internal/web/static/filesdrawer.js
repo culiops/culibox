@@ -528,7 +528,11 @@ function dockRender() {
     code: (path) => (typeof gitStatusCodeFor === "function" ? gitStatusCodeFor(path) : ""),
   }), dockStripOn);
   const tab = dockTabsOf(st).find((t) => t.key === st.active) || null;
-  if (!tab || tab.review) { dockCrumbsPaint([], "", null); return; } // the All changes tab is no file: no crumbs
+  if (!tab || tab.review) { // the All changes tab is no file: no crumbs
+    dockCrumbsPaint([], "", null);
+    if (typeof editorBlameHeaderPaint === "function") editorBlameHeaderPaint(null);
+    return;
+  }
   // A box file is in no tree: its crumbs are text, and its path is read from "/".
   const crumbs = crumbsFor(tab.path, tab.box ? null : typeof ftRoot === "function" ? ftRoot() : null);
   const name = typeof drawerSessionName === "function" ? drawerSessionName(sid) : "";
@@ -539,6 +543,8 @@ function dockRender() {
   const outside = !tab.box && typeof dockRevealOutside === "function" && dockRevealOutside(tab.path);
   dockCrumbsPaint(crumbs, note || editedLabel(drawerChangedFiles.get(sid), tab.path, name, Date.now()),
     tab.box ? null : { reveal: dockCrumbsReveal, revealOutside: typeof dockRevealOutsideGo === "function" ? dockRevealOutsideGo : null }, outside);
+  // The file's last commit after "Edited by" (editorblame.js): only a host file's own tab knows it.
+  if (typeof editorBlameHeaderPaint === "function") editorBlameHeaderPaint(live && !tab.box ? live : null);
 }
 
 // --- what is stored -------------------------------------------------------------

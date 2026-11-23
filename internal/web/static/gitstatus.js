@@ -429,6 +429,7 @@ function gitPaintTree() {
   if (typeof dockRender === "function") dockRender();
   // The editor's gutter and Changes view compare with git's HEAD: a status that names another one asks for the new text.
   if (typeof editorDiffSync === "function") editorDiffSync();
+  if (typeof editorBlameSyncOwner === "function") editorBlameSyncOwner(); // HEAD may have moved: the open file's blame follows
   // And the Changes section lists the same status (a root change took it away: it repaints, with nothing).
   if (typeof dockChangesRender === "function") dockChangesRender();
   // An open viewer's Changes button follows the same marks: repaint the toolbars.
