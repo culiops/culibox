@@ -357,6 +357,10 @@ func TestSharedSocketRefusesEveryRequest(t *testing.T) {
 				t.Fatalf("garbage token: status %d body %s", w.Code, w.Body)
 			}
 			oneRow(t, e2.rec, "", OutcomeDeniedBox, cp.provider, whySharedSocket)
+			// Only a token whose MAC verifies may cause a session lookup.
+			if n := e2.lookups.Load(); n != 0 {
+				t.Fatalf("an unverified token caused %d session lookups, want 0", n)
+			}
 		})
 	}
 }
