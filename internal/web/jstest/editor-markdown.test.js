@@ -393,3 +393,86 @@ test("a table wider than the column scrolls inside itself instead of widening th
   assert.match(rule[1], /overflow-x:\s*auto/, "and scrolls sideways when its cells need more");
   assert.match(rule[1], /width:\s*max-content/, "a narrow table is as wide as its cells, not the column");
 });
+
+// --- chunks (Files dock P1): a big file is drawn a slice at a time --------------------------------------------------------------
+// The stub renders a text holding \f in chunks (editorpage.js). A slice of the pump runs steps until EMD_SLICE_MS has passed; the
+// clock below moves 30 ms per reading, so a slice takes one or two steps, and the next slice is a setTimeout(…, 0) the test runs.
+const BIG = "one\ftwo\fthree";
+const clock = () => { let t = 0; return { now: () => (t += 30) }; };
+const zeros = (p) => p.st.timers.filter((t) => t.ms === 0 && !t.dead);
+const pumpAll = (p) => { for (let i = 0; i < 100 && zeros(p).length; i++) { const t = zeros(p)[0]; t.dead = true; t.fn(); } };
+const chunkTexts = (tab) => pane(tab).children[0].children.map((c) => c.className + ":" + c.children[0].textContent);
+
+test("the dock asks for chunks, and a file of one chunk is drawn at once, exactly as before (no wrapper)", async () => {
+  const { p, tab } = await md();
+  assert.equal(p.st.renders[0].deps.chunkChars, p.get("EMD_CHUNK_CHARS"));
+  assert.ok(p.get("EMD_CHUNK_CHARS") >= 4096);
+  assert.equal(zeros(p).length, 0, "nothing left to do");
+  assert.equal(pane(tab).children[0].children[0].className, "rendered", "the fragment straight in .md-body");
+});
+
+test("a big file's first draw goes into the pane a slice at a time, each chunk in its own .md-chunk, in order", async () => {
+  const { p, tab } = await md(BIG, { over: { performance: clock() } });
+  assert.equal(tab.bodyEl.children[0], pane(tab), "the pane is up before the document is done");
+  const seen = [];
+  for (let i = 0; i < 20 && zeros(p).length; i++) { pumpAll1(p); seen.push(pane(tab).children[0].children.length); }
+  assert.deepEqual(chunkTexts(tab), ["md-chunk:one", "md-chunk:two", "md-chunk:three"]);
+  assert.ok(seen.length >= 2, "more than one slice");
+  assert.ok(seen.some((n) => n > 0 && n < 3), "the chunks arrived over several slices, not all at the end");
+});
+const pumpAll1 = (p) => { const t = zeros(p)[0]; if (t) { t.dead = true; t.fn(); } };
+
+test("a redraw of a big file is built aside and swapped in once complete: the old document stays until then", async () => {
+  const { p, tab } = await md(BIG, { over: { performance: clock() } });
+  pumpAll(p);
+  const before = pane(tab).children[0];
+  tab.model.type("uno\fdos\ftres");
+  debounce(p)[0].fn();
+  assert.equal(pane(tab).children[0], before, "still the old document");
+  pumpAll1(p);
+  assert.equal(pane(tab).children[0], before, "still the old document after a slice");
+  pumpAll(p);
+  assert.notEqual(pane(tab).children[0], before);
+  assert.deepEqual(chunkTexts(tab), ["md-chunk:uno", "md-chunk:dos", "md-chunk:tres"]);
+});
+
+test("a newer draw started while chunks are pending stops the old one: nothing of the old text is added after it", async () => {
+  const { p, tab } = await md(BIG, { over: { performance: clock() } });
+  pumpAll1(p);
+  tab.model.type("x\fy");
+  debounce(p)[0].fn();
+  pumpAll(p);
+  assert.deepEqual(chunkTexts(tab), ["md-chunk:x", "md-chunk:y"]);
+});
+
+test("while the first draw is under way the pane is scrolled back to where it was read, until the user scrolls it", async () => {
+  const p = page({ performance: clock() });
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: BIG, version: "v1" } });
+  const tab = await p.open("/p/README.md", { scroll: 500 }); // a restored tab: it was read at 500
+  await p.settle();
+  assert.equal(pane(tab).scrollTop, 500);
+  pumpAll1(p);
+  assert.equal(pane(tab).scrollTop, 500, "put back after a slice");
+  pane(tab).scrollTop = 40; // the user
+  pumpAll(p);
+  assert.equal(pane(tab).scrollTop, 40, "the user's place wins");
+  assert.deepEqual(chunkTexts(tab), ["md-chunk:one", "md-chunk:two", "md-chunk:three"]);
+});
+
+test("a chunked draw that throws part-way leaves the sentence, not half a document", async () => {
+  const { p, tab } = await md(BIG, { over: { performance: clock() } });
+  p.st.failAt = "two";
+  tab.model.type("one\ftwo\fthree!");
+  debounce(p)[0].fn();
+  pumpAll(p);
+  assert.equal(pane(tab).children[0].className, "viewer-msg");
+  assert.match(pane(tab).children[0].textContent, /could not be drawn/);
+});
+
+test("closing a tab stops a draw under way", async () => {
+  const { p, tab } = await md(BIG, { over: { performance: clock() } });
+  const steps = p.st.steps;
+  tab.dispose();
+  pumpAll(p);
+  assert.equal(p.st.steps, steps, "no step after the close");
+});
