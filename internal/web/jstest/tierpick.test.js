@@ -13,7 +13,7 @@ const plain = { name: "claude" };
 const hostp = { name: "sh", runtime: "host" };
 const dropper = { name: "infra", runtime: "host", host_drops: ["context paths", "\"Sandbox\" option"] };
 const guarded = { name: "infra", runtime: "host", host_guardrail: ["AWS binding", "GitHub binding"] };
-const GUARD = "On Host: AWS and GitHub bindings are the default credentials, not a limit. The agent keeps your full access to this machine, including its own logins.";
+const GUARD = "On Host: AWS and GitHub bindings are the default credentials, not a limit. The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default.";
 const bound = { name: "infra", host_block: "this profile has credential bindings (AWS sandbox, GitHub), so it runs only in a box" };
 
 // A row's text as the user reads it: the segs joined.
@@ -81,9 +81,9 @@ test("tierHostGuardrail: the profile's host_guardrail as a clean string list (#3
 test("tierGuardrailLine says the bindings are the default credentials, not a limit (#360)", () => {
   assert.strictEqual(tierGuardrailLine(["AWS binding", "GitHub binding"]), GUARD);
   assert.strictEqual(tierGuardrailLine(["AWS binding", "GitHub binding", "token binding"]),
-    "On Host: AWS, GitHub and token bindings are the default credentials, not a limit. The agent keeps your full access to this machine, including its own logins.");
+    "On Host: AWS, GitHub and token bindings are the default credentials, not a limit. The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default.");
   assert.strictEqual(tierGuardrailLine(["GitHub binding"]),
-    "On Host: the GitHub binding is the default credential, not a limit. The agent keeps your full access to this machine, including its own logins.");
+    "On Host: the GitHub binding is the default credential, not a limit. The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default.");
   assert.strictEqual(tierGuardrailLine([]), "");
   assert.ok(!/instead/.test(tierGuardrailLine(["AWS binding"])), "never the old 'uses this machine's own logins instead'");
 });
@@ -983,7 +983,7 @@ test("hostDropsConfirm with a guardrail and drops lists the drops and the guardr
   const ul = (Array.isArray(o.extra) ? o.extra : [o.extra])[0];
   assert.deepStrictEqual(ul.querySelectorAll("li").map((li) => li.textContent), ["context paths"]);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(o.notes)), [
-    ["On Host: the AWS binding is the default credential, not a limit. The agent keeps your full access to this machine, including its own logins."],
+    ["On Host: the AWS binding is the default credential, not a limit. The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default."],
     ["Still passed to the agent on Host: GH_TOKEN secret and FOO env."],
   ]);
 });
@@ -1015,4 +1015,16 @@ test("the submit asks hostDropsConfirm only for a host spawn that drops or keeps
   assert.match(body, /hostDropsBindings/);
   const call = body.slice(body.indexOf("spawnPayload({"));
   assert.match(call, /hostDropsBindings: hostDrops\.length > 0 \|\| hostGuardrail\.length > 0/);
+});
+
+test("the Host card row and the Host confirm both say a shell's rc files can override the bindings (#360)", async () => {
+  const limit = "your shell's rc files can override the default";
+  for (const g of [["AWS binding"], ["AWS binding", "GitHub binding"]]) {
+    assert.ok(tierGuardrailLine(g).includes(limit), "card line: " + tierGuardrailLine(g));
+  }
+  const asked = [];
+  const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; } });
+  await vm.runInContext('hostDropsConfirm("infra", [], [], ["GitHub binding"])', pg.ctx);
+  const notes = JSON.parse(JSON.stringify(asked[0].notes)).flat();
+  assert.ok(notes.some((n) => n.includes(limit)), "confirm notes: " + JSON.stringify(notes));
 });
