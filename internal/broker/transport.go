@@ -50,6 +50,9 @@ type Endpoint struct {
 	// Boxes are the Linux per-box sockets; nil on darwin, where the box is
 	// identified per request.
 	Boxes *BoxSockets
+	// Hosts are the per-session sockets of bound Host sessions, on both OSes (a
+	// Host session runs on the host itself, so the colima VM is not crossed).
+	Hosts *HostSockets
 }
 
 // Listen opens the broker's listeners. Linux: one unix socket per bound box
@@ -76,7 +79,12 @@ type Endpoint struct {
 // binding). The token guards the rest.
 func Listen(goos, stateRoot string, port int, relayKey proxyline.Key) (Endpoint, error) {
 	if goos == "darwin" {
-		return listenDarwin(port, relayKey, maxDarwinConns, maxDarwinPerSource)
+		ep, err := listenDarwin(port, relayKey, maxDarwinConns, maxDarwinPerSource)
+		if err != nil {
+			return Endpoint{}, err
+		}
+		ep.Hosts = newHostSockets(stateRoot, goos)
+		return ep, nil
 	}
 	return listenLinux(stateRoot)
 }
@@ -117,10 +125,10 @@ func listenLinux(stateRoot string) (Endpoint, error) {
 	if n := len(longestBoxSock(stateRoot)); n > maxSockPath {
 		return Endpoint{}, fmt.Errorf("broker: the data directory %s is too long for per-box sockets (%d bytes; a unix socket path holds at most %d). Use a shorter data directory", stateRoot, n, maxSockPath)
 	}
-	l, _, err := listenSocket(stateRoot, sharedRel, sharedSockName)
+	l, _, err := listenSocket(stateRoot, sharedRel, sharedSockName, maxSockPath)
 	if err != nil {
 		return Endpoint{}, err
 	}
 	return Endpoint{Listener: &sharedListener{netlimit.Listener(l, maxSockConns)}, BoxURL: "unix://" + SockBoxDir + "/" + boxSockName,
-		Boxes: newBoxSockets(stateRoot)}, nil
+		Boxes: newBoxSockets(stateRoot), Hosts: newHostSockets(stateRoot, "linux")}, nil
 }

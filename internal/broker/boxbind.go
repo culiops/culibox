@@ -57,7 +57,7 @@ func (b *Broker) fromBox(r *http.Request, want string) bool {
 	if want == "" { // the session's box is unknown: nothing to compare
 		return false
 	}
-	box, shared := presenterOf(r.Context())
+	box, _, shared := presenterOf(r.Context())
 	switch {
 	case shared:
 		return false

@@ -328,7 +328,7 @@ func (b *Broker) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Everything on the shared socket (boxes from before the per-box
 		// sockets) is refused with a respawn message, whatever the path.
-		if _, shared := presenterOf(r.Context()); shared {
+		if _, _, shared := presenterOf(r.Context()); shared {
 			b.serveShared(w, r)
 			return
 		}

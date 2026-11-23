@@ -232,6 +232,11 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 		// socket and closed when its last session ends.
 		ep.Boxes.Start(func(l net.Listener) { go serveBroker(srv, l) })
 	}
+	// A listener per bound Host session, on both OSes, started as the session
+	// layer takes a session's socket and closed when its last reference goes.
+	if ep.Hosts != nil {
+		ep.Hosts.Start(func(l net.Listener) { go serveBroker(srv, l) })
+	}
 	// The aws CLI is resolved once. Without it the SSO card offers the host
 	// command only (the endpoint answers 502 with it).
 	var sso *ssologin.Runner
