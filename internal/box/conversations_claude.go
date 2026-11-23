@@ -416,3 +416,53 @@ func (a *adoption) slug(slug string) {
 		a.moved++
 	}
 }
+
+// ConversationsStats is what ConversationsUsage found.
+type ConversationsStats struct {
+	Folders int   // conversations folders (names with a key's shape)
+	Bytes   int64 // their size: regular files only, no link followed
+	Sized   bool  // false when the walk did not finish
+}
+
+// ConversationsUsage counts the conversations folders under stateRoot and
+// their size, for doctor. Read-only; no link is followed (WalkDir does not
+// descend one, and a link's own size is not counted) and ctx bounds the walk:
+// cut short, it returns what it has with ctx's error and Sized false.
+func ConversationsUsage(ctx context.Context, stateRoot string) (ConversationsStats, error) {
+	var st ConversationsStats
+	dir := ConversationsRoot(stateRoot)
+	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return st, err
+		}
+		return st, nil
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return st, err
+	}
+	st.Sized = true
+	for _, e := range ents {
+		if !e.IsDir() || !ValidConversationsKey(e.Name()) {
+			continue
+		}
+		st.Folders++
+		err := filepath.WalkDir(filepath.Join(dir, e.Name()), func(_ string, d fs.DirEntry, err error) error {
+			if cerr := ctx.Err(); cerr != nil {
+				return cerr
+			}
+			if err != nil || !d.Type().IsRegular() {
+				return nil
+			}
+			if fi, err := d.Info(); err == nil {
+				st.Bytes += fi.Size()
+			}
+			return nil
+		})
+		if err != nil {
+			st.Sized = false
+			return st, err
+		}
+	}
+	return st, ctx.Err()
+}

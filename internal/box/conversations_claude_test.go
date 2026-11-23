@@ -568,3 +568,43 @@ func TestAdoptionOnlyWhenTheContainerIsCreated(t *testing.T) {
 		t.Fatalf("adopted with no folder: %q", *calls2)
 	}
 }
+
+// Doctor's numbers: how many folders, and their size, without following links.
+func TestConversationsUsage(t *testing.T) {
+	root := t.TempDir()
+	if u, err := ConversationsUsage(context.Background(), root); err != nil || u.Folders != 0 {
+		t.Fatalf("none: %+v %v", u, err)
+	}
+	for _, k := range []string{"0123456789ab", "ba9876543210"} {
+		d, err := ensureConversationsDir(root, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(d, "-w"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "-w", "s.jsonl"), make([]byte, 1000), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conv := ConversationsRoot(root)
+	big := filepath.Join(t.TempDir(), "big")
+	if err := os.WriteFile(big, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(big), filepath.Join(conv, "0123456789ab", "-w", "out")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(conv, "not-a-key"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	u, err := ConversationsUsage(context.Background(), root)
+	if err != nil || u.Folders != 2 || !u.Sized || u.Bytes != 2000 {
+		t.Fatalf("usage = %+v %v, want 2 folders, 2000 bytes", u, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if u, err := ConversationsUsage(ctx, root); err == nil || u.Sized {
+		t.Fatalf("a cut walk must say so: %+v %v", u, err)
+	}
+}
