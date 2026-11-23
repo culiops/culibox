@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/culiops/culibox/internal/wsroots"
@@ -84,10 +85,44 @@ type fsPolicy struct {
 	// handed out whole (the git status mounts, see gitapi.go).
 	deniedOrAbove map[fileKey]struct{}
 	// spellings is how home, the kept roots and the kept scratch folders were written before they were resolved (home
-	// through a link, macOS's /tmp for /private/tmp). It decides nothing about access: linkMayLead only uses it to say a
+	// through a link, macOS's /tmp for /private/tmp), plus each one's spelling through a link at the top of the
+	// filesystem (topLinkAliases), since an extra root is stored resolved. It decides nothing about access: linkMayLead only uses it to say a
 	// link's target text may lead in, which the full walk then judges.
 	spellings []string
 }
+
+// linkAlias is a symlink directly under the filesystem's top (link, e.g. /tmp) and the path its text names, read
+// lexically (target, e.g. /private/tmp).
+type linkAlias struct{ link, target string }
+
+// readTopLinks lists the symlinks directly in dir (in production "/"): one directory read and one Readlink per link,
+// nothing below them is followed or stat'ed.
+func readTopLinks(dir string) []linkAlias {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []linkAlias
+	for _, e := range ents {
+		if e.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		link := filepath.Join(dir, e.Name())
+		text, err := os.Readlink(link)
+		if err != nil || text == "" {
+			continue
+		}
+		if !filepath.IsAbs(text) {
+			text = filepath.Join(dir, text)
+		}
+		out = append(out, linkAlias{link: link, target: filepath.Clean(text)})
+	}
+	return out
+}
+
+// topLinkAliases is the symlinks directly under "/" (macOS: /tmp, /var and /etc into /private), read once per process;
+// a variable so a test can stand a temp dir in for "/".
+var topLinkAliases = sync.OnceValue(func() []linkAlias { return readTopLinks("/") })
 
 // touchesAny reports whether resolved path p is, is inside, or contains any of
 // the resolved dirs, compared by whole path components (so /a/data2 is not
@@ -247,6 +282,20 @@ func newFsPolicyLive(home string, roots []string, live func(root string) bool, t
 		p.scratch[k] = real
 		p.spellings = append(p.spellings, filepath.Clean(c))
 		addGuarded(p.guarded, real)
+	}
+	// An extra root is stored resolved, so the spelling it was reached by is gone: a root in /private/tmp (macOS) is
+	// also /tmp/..., the way a link's target text may write it. Every kept root and scratch folder gets the spelling
+	// through each link at the top of the filesystem that leads into it, so linkMayLead lets such a target on to the walk.
+	resolved := append([]string{}, p.roots...)
+	for _, real := range p.scratch {
+		resolved = append(resolved, real)
+	}
+	for _, a := range topLinkAliases() {
+		for _, r := range resolved {
+			if r == a.target || strings.HasPrefix(r, a.target+string(os.PathSeparator)) {
+				p.spellings = append(p.spellings, a.link+r[len(a.target):])
+			}
+		}
 	}
 	return p, nil
 }
