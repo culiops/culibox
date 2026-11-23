@@ -143,6 +143,26 @@ func (m *Manager) handbackWork(sess *Session) {
 	sess.setHandback(&note)
 }
 
+// setHandbackEnd keeps the end of the announced exit scan (handbackBegin).
+func (s *Session) setHandbackEnd(end func()) {
+	s.mu.Lock()
+	s.handbackEnd = end
+	s.mu.Unlock()
+}
+
+// takeHandbackEnd returns the end of the announced exit scan and forgets it,
+// so it is called at most once; a no-op when none was announced.
+func (s *Session) takeHandbackEnd() func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	end := s.handbackEnd
+	s.handbackEnd = nil
+	if end == nil {
+		return func() {}
+	}
+	return end
+}
+
 func (s *Session) setHandback(n *HandbackNote) {
 	s.mu.Lock()
 	s.handback = n

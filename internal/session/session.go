@@ -931,6 +931,9 @@ type Session struct {
 	// handback is the exit scan's note (see Info.Handback); guarded by mu, not
 	// persisted, immutable once stored.
 	handback *HandbackNote
+	// handbackEnd ends the exit scan announced at the box release
+	// (handbackBegin); guarded by mu, nil when none is pending.
+	handbackEnd func()
 	// ContextPaths and CloneOf are the spawn-time snapshots Info reports (see
 	// Info.ContextPaths). Immutable after publication, read without the lock;
 	// Info hands out a copy.
@@ -3072,6 +3075,13 @@ func (m *Manager) releaseSessionBox(s *Session) {
 		return
 	}
 	s.releaseOnce.Do(func() {
+		// Announce the exit scan before the release (a box stop may follow at
+		// once). A detached session gets no exit scan, so nothing to announce.
+		select {
+		case <-s.detachedCh:
+		default:
+			s.setHandbackEnd(m.handbackBegin(s))
+		}
 		m.sessionEndedInBox(s)
 		m.releaseBoxNamed(s.Box)
 		m.brokerReleaseBox(s)
@@ -3147,15 +3157,15 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 			// Release only on finalize. A DETACHED session's agent is still
 			// alive inside its box, so releasing there would arm the idle timer
 			// and stop the box under a session we intend to recover.
-			endScan := m.handbackBegin(sess) // before the release: a box stop that follows at once must know
-			m.releaseSessionBox(sess)
+			m.releaseSessionBox(sess) // announces the exit scan first (handbackBegin), whichever path releases
 			m.brokerRevoke(sess)
 			go m.returnWork(sess, ReturnOnExit)
 			go func() {
-				defer endScan()
+				defer sess.takeHandbackEnd()()
 				m.handbackWork(sess)
 			}()
 		case <-sess.detachedCh: // agent alive, pipe lost → keep listed for restart recovery
+			sess.takeHandbackEnd()() // a Kill racing the detach may have announced a scan that will not run
 			return
 		}
 		select {

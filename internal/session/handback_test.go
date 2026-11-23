@@ -315,3 +315,43 @@ func TestExitScanIsAnnouncedBeforeTheBoxIsReleased(t *testing.T) {
 		t.Fatalf("scans = %+v, want one, ended after it", f.got())
 	}
 }
+
+// Round 2 of the #346 rework review: Kill releases the box itself, before the
+// retention goroutine wakes; the scan must be announced on that path too, and
+// ended once it has run.
+func TestKillAnnouncesTheExitScanBeforeRelease(t *testing.T) {
+	f := &fakeHandback{note: HandbackNote{ID: "r1", InPlace: true}}
+	m := NewManager(tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	var begunAtRelease []string
+	boxes.onRelease = func() {
+		f.mu.Lock()
+		begunAtRelease = append([]string(nil), f.begun...)
+		f.mu.Unlock()
+	}
+	m.SetBoxes(boxes)
+	m.SetHandback(f)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox, Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Kill(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(begunAtRelease) != 1 {
+		t.Fatalf("begun at release = %v, want the scan announced first", begunAtRelease)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		f.mu.Lock()
+		n := len(f.ended)
+		f.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the announced scan was never ended")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
