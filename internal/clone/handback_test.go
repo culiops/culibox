@@ -267,10 +267,11 @@ func TestInspectBranchFlagCapKeepsTheStrongest(t *testing.T) {
 
 func TestInspectBranchSanitizesPaths(t *testing.T) {
 	x := newBranchFx(t)
-	// A name is at most 255 bytes on disk, so the long path is a chain of directories.
+	// The path only has to exist in git, not on disk: macOS refuses a path over 1024 bytes
+	// (PATH_MAX), so the blob goes into the index under its long name without a file.
 	name := strings.Repeat(strings.Repeat("d", 200)+"/", 6) + "ev‮il.pdf"
-	x.write(name, string(elfBytes(100, 1)), 0o644)
-	x.commit("long")
+	x.indexEntry("100644", name, elfBytes(100, 1))
+	fixtureGit(t, x.of, "commit", "-q", "-m", "long")
 	rep := x.inspect(handback.DefaultLimits())
 	if len(rep.Flags) != 1 {
 		t.Fatalf("flags = %+v", rep.Flags)
