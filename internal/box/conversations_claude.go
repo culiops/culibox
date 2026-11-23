@@ -152,37 +152,92 @@ func splitUnder(ms []Mount, base string) (outside, inside []Mount) {
 //     docker would resolve the mount target through it.
 //   - inside are the mounts that land inside the folder (clone mode's memory
 //     dir): their mountpoints are made in the folder, through an os.Root on it.
-func (m *Manager) ensureConversationsMount(name, convDir string, inside []Mount) error {
+//     Other live boxes of the profile write in that folder, so what is found at
+//     a mountpoint is not trusted: every component of its path must be a real
+//     directory and the mountpoint itself of the bind's type (a directory, or a
+//     regular file for a file bind), all read with Lstat. One that is not is
+//     never handed to docker: an Optional mount is dropped (returned, and
+//     logged), a required one refuses the spawn.
+//
+// What is left: another live box of the profile can still swap a checked
+// mountpoint for a link between this check and docker's mount. Docker resolves
+// the mount target inside the new container's own root, so the worst case is a
+// mount at another path inside that container, never on the host.
+func (m *Manager) ensureConversationsMount(name, convDir string, inside []Mount) ([]Mount, error) {
 	home, err := os.OpenRoot(m.stateDir(name))
 	if err != nil {
-		return fmt.Errorf("box: opening state dir of %s: %w", name, err)
+		return nil, fmt.Errorf("box: opening state dir of %s: %w", name, err)
 	}
 	defer home.Close()
 	for _, rel := range []string{".claude", conversationsRel} {
 		fi, err := home.Lstat(rel)
 		if errors.Is(err, fs.ErrNotExist) {
 			if err = home.Mkdir(rel, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-				return fmt.Errorf("box: creating mountpoint %q: %w", rel, err)
+				return nil, fmt.Errorf("box: creating mountpoint %q: %w", rel, err)
 			}
 			fi, err = home.Lstat(rel)
 		}
 		if err != nil {
-			return fmt.Errorf("box: checking mountpoint %q: %w", rel, err)
+			return nil, fmt.Errorf("box: checking mountpoint %q: %w", rel, err)
 		}
 		if !fi.IsDir() {
-			return fmt.Errorf("%w: box %s: %s in its home is not a plain directory (%s), so the conversations folder cannot be mounted there; remove it from %s",
+			return nil, fmt.Errorf("%w: box %s: %s in its home is not a plain directory (%s), so the conversations folder cannot be mounted there; remove it from %s",
 				ErrBoxUnavailable, name, rel, fi.Mode().Type(), m.stateDir(name))
 		}
 	}
 	if len(inside) == 0 {
-		return nil
+		return nil, nil
 	}
 	conv, err := os.OpenRoot(convDir)
 	if err != nil {
-		return fmt.Errorf("box: opening conversations folder: %w", err)
+		return nil, fmt.Errorf("box: opening conversations folder: %w", err)
 	}
 	defer conv.Close()
-	return ensureMountpointsUnder(conv, ConversationsBox, inside)
+	var dropped []Mount
+	for _, mt := range inside {
+		err := ensureMountpointsUnder(conv, ConversationsBox, []Mount{mt})
+		if err == nil {
+			err = plainMountpoint(conv, mt)
+		}
+		if err == nil {
+			continue
+		}
+		if !mt.Optional {
+			return nil, fmt.Errorf("%w: box %s: %v", ErrBoxUnavailable, name, err)
+		}
+		log.Printf("box: %s: optional mount at %s left out: %v", name, mt.Box, err)
+		dropped = append(dropped, mt)
+	}
+	return dropped, nil
+}
+
+// plainMountpoint checks, through root (mounted at ConversationsBox), that every
+// component of mt's mountpoint is a real directory and the mountpoint itself is
+// of mt's type: a directory for a directory bind, else a regular file. Lstat
+// throughout, so a link is never taken for either.
+func plainMountpoint(root *os.Root, mt Mount) error {
+	rel, err := filepath.Rel(ConversationsBox, filepath.Clean(mt.Box))
+	if err != nil {
+		return err
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for i := range parts {
+		p := strings.Join(parts[:i+1], "/")
+		fi, err := root.Lstat(p)
+		if err != nil {
+			return fmt.Errorf("mountpoint %q: %w", p, err)
+		}
+		last := i == len(parts)-1
+		wantDir := !last
+		if last {
+			hfi, herr := os.Stat(mt.Host)
+			wantDir = herr == nil && hfi.IsDir()
+		}
+		if wantDir && !fi.IsDir() || !wantDir && !fi.Mode().IsRegular() {
+			return fmt.Errorf("mountpoint %q is not a plain %s (%s)", p, map[bool]string{true: "directory", false: "file"}[wantDir], fi.Mode().Type())
+		}
+	}
+	return nil
 }
 
 // reuseConversations judges the conversations folder of a running box, the way

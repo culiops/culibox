@@ -608,3 +608,47 @@ func TestConversationsUsage(t *testing.T) {
 		t.Fatalf("a cut walk must say so: %+v %v", u, err)
 	}
 }
+
+// M1: the folder is written by other live boxes of the profile, so a link (or a
+// file) planted where a nested mount lands is never used as its mountpoint. An
+// optional mount (clone mode's memory dir) is dropped; a required one refuses.
+func TestNestedMountpointPlantedInTheFolderIsNotUsed(t *testing.T) {
+	plant := func(t *testing.T, m *Manager, ws string) string {
+		t.Helper()
+		conv := ConversationsDir(m.opts.StateRoot, ConversationsKey("TEST", ws, "", "p"))
+		if err := os.MkdirAll(filepath.Join(conv, "-w"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		target := t.TempDir()
+		if err := os.Symlink(target, filepath.Join(conv, "-w", "memory")); err != nil {
+			t.Fatal(err)
+		}
+		return target
+	}
+	box := ConversationsBox + "/-w/memory"
+
+	t.Run("optional mount dropped", func(t *testing.T) {
+		m, f := newTestManagerWithFake(t)
+		ws := realTemp(t)
+		plant(t, m, ws)
+		if _, _, _, err := m.Wrap(context.Background(), ws, "s1", convKey("p"), []string{"bash"}, nil,
+			[]Mount{{Host: t.TempDir(), Box: box, Optional: true}}); err != nil {
+			t.Fatal(err)
+		}
+		if f.runs() != 1 || hasDst(f.runArgs[0], box) {
+			t.Fatalf("the mount was made over a planted link: %q", f.runArgs)
+		}
+	})
+	t.Run("required mount refused", func(t *testing.T) {
+		m, f := newTestManagerWithFake(t)
+		ws := realTemp(t)
+		plant(t, m, ws)
+		if _, _, _, err := m.Wrap(context.Background(), ws, "s1", convKey("p"), []string{"bash"}, nil,
+			[]Mount{{Host: t.TempDir(), Box: box}}); err == nil {
+			t.Fatal("a required mount over a planted link was accepted")
+		}
+		if f.runs() != 0 {
+			t.Fatal("a box was started")
+		}
+	})
+}

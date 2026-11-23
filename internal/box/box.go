@@ -1561,10 +1561,16 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			return err
 		}
 		if convDir != "" {
-			if err := m.ensureConversationsMount(name, convDir, convRO); err != nil {
+			dropped, err := m.ensureConversationsMount(name, convDir, convRO)
+			if err != nil {
 				m.rearmIfIdle(name)
 				return err
 			}
+			// An optional mount whose mountpoint was not plain is left out: never
+			// handed to docker over what another box put there.
+			extraRO = slices.DeleteFunc(slices.Clone(extraRO), func(mt Mount) bool {
+				return slices.ContainsFunc(dropped, func(d Mount) bool { return d.Box == mt.Box && d.Host == mt.Host })
+			})
 			// No container, so nothing writes in the home: what it holds moves
 			// into the folder before the mount hides it.
 			m.adoptConversations(ctx, name, convDir)
