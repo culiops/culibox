@@ -717,8 +717,11 @@ const text = (n) => n.textContent;
 
 test("an edit shows at once as a provisional row, git is asked fresh, and git's answer takes the row over in place", async () => {
   const p = fullPage();
-  await p.status(okStatus([]), { fresh: true }); // sent at 1000000 (an empty status asks for no numstat)
-  assert.strictEqual(p.calls("/api/git/numstat").length, 0);
+  await p.status(okStatus([]), { fresh: true }); // sent at 1000000
+  // The first status of a root cannot be known clean before it lands: its numstat and base went out beside it.
+  assert.strictEqual(p.calls("/api/git/numstat").length, 1);
+  await p.answer("/api/git/base", { state: "ok", branch: "feat/x", head: "h1", baseRef: "refs/heads/main", baseName: "main", mergeBase: "abc", ahead: false });
+  await p.answer("/api/git/numstat", num([]));
   assert.strictEqual(p.ctx.gitStatusAt(), 1000000);
   p.run("dockWatchSync()");
   p.st.now += 2500;

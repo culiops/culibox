@@ -349,11 +349,13 @@ function ftSelect(row) {
 }
 
 // `st` is the root render's own bookkeeping, handed down to the folders it auto-opens: every row drawn under
-// it, in visible order, so the one Tab stop is chosen once the whole subtree is there.
+// it, in visible order, so the one Tab stop is chosen once the whole subtree is there. With st.defer (an array,
+// ftLoadRoot's), the root's own remembered folders are not opened here: their openers are queued there, for
+// ftLoadRoot to run once the top level is on screen. Deeper levels open as they render.
 async function ftRenderDir(path, container, prefix, st) {
   prefix = prefix || "";
-  const rootCall = !st && prefix === "";
-  if (rootCall) st = { rows: [] };
+  const rootCall = prefix === "" && (!st || !!st.defer);
+  if (!st) st = { rows: [] };
   // The pending line sits where the children will go, indented to match them
   // (app.css reads --ft-indent). One line per directory in flight: a restored
   // subtree loads level by level, each into its own box. It is gone before the
@@ -522,7 +524,16 @@ async function ftRenderDir(path, container, prefix, st) {
         open = true;
         icon.textContent = iconFor(ent.name, true, true);
         row.setAttribute("aria-expanded", "true");
-        await openChildren();
+        if (rootCall && st.defer) {
+          // Drawn off the page and put under its row whole (drawing a big folder into the live tree row by row costs
+          // a layout per row); a folder the user closed while it listed stays closed.
+          st.defer.push(async () => {
+            const box = document.createElement("div");
+            childBox = box;
+            await ftRenderDir(full, box, b.childPrefix, st);
+            if (open && childBox === box) row.after(box);
+          });
+        } else await openChildren();
       }
     } else {
       // The desktop Files dock shows the file beside the tree instead of in a
@@ -552,7 +563,14 @@ async function ftRenderDir(path, container, prefix, st) {
 // arrives and re-roots, and ftRenderDir appends after its own await, so painting
 // straight into the tree let a superseded load leave its rows behind (the tree
 // showed home while the picker said the session's directory).
-let ftLoading = Promise.resolve(); // settles when the newest ftLoadRoot has finished its render, so ftReveal can wait for it
+//
+// Git is asked as soon as the root is known, beside the listing, not after the
+// tree is drawn (its container run is the slow part). The top level is swapped
+// in as soon as it is listed; the folders the user had open under it are then
+// listed side by side, each into its own place under its row. Those rows are
+// already live, so a newer load that swaps in first leaves them detached: what
+// the old folders draw later lands nowhere on screen.
+let ftLoading = Promise.resolve(); // settles when the newest ftLoadRoot has finished its render, remembered folders included, so ftReveal can wait for it
 // opts.fresh: the caller just changed something on disk (or the user pressed
 // refresh), so git status must be re-read rather than reused.
 async function ftLoadRoot(opts) {
@@ -560,27 +578,41 @@ async function ftLoadRoot(opts) {
   const gen = ++ftGen;
   let release;
   ftLoading = new Promise((r) => { release = r; });
-  const box = document.createElement("div");
-  // The whole render happens in an off-DOM box, so the pending lines
-  // ftRenderDir paints there are never seen. This one sits in the live tree,
-  // above whatever it shows now, and covers every level of a restored subtree.
-  const done = pendingRegion(ftTreeEl, "Loading…");
-  let ro = false;
   try {
-    ro = await ftRenderDir(ftRoot(), box);
+    if (typeof gitStatusLoad === "function") gitStatusLoad(ftRoot(), typeof gitStatusTreeSid === "function" ? gitStatusTreeSid() : null, { fresh: !!(opts && opts.fresh) });
+    const box = document.createElement("div");
+    // The top level renders in an off-DOM box, so the pending lines ftRenderDir
+    // paints there are never seen. This one sits in the live tree, above
+    // whatever it shows now.
+    const done = pendingRegion(ftTreeEl, "Loading…");
+    const st = { rows: [], defer: [] };
+    let ro = false;
+    try {
+      ro = await ftRenderDir(ftRoot(), box, "", st);
+    } finally {
+      done();
+    }
+    if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
+    ftRootReadOnly = ro === true;
+    ftApplyReadOnly(ftRootReadOnly);
+    ftTreeEl.replaceChildren(...box.childNodes);
+    // A status that landed while the rows were drawn off the page painted the old ones: these get its marks now.
+    if (typeof gitRepaintRows === "function") gitRepaintRows();
+    // A refresh asks again what the agent has changed since (Files drawer only).
+    if (typeof drawerLoadChanged === "function" && typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks()) drawerLoadChanged(drawerState.sessionId);
+    if (st.defer.length > 0) {
+      await Promise.all(st.defer.map((open) => open()));
+      if (gen === ftGen) {
+        // The Tab stop was chosen from the top level; the remembered row may be one of the folders' own.
+        ftRoveRestore(ftTreeEl);
+        // A status that landed while the folders listed painted only the rows that were on the page then.
+        if (typeof gitRepaintRows === "function") gitRepaintRows();
+      }
+    }
   } finally {
-    done();
-    // Waiters resume in a later microtask, after the swap below has run.
+    // Waiters resume in a later microtask, after the swap above has run.
     release();
   }
-  if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
-  ftRootReadOnly = ro === true;
-  ftApplyReadOnly(ftRootReadOnly);
-  ftTreeEl.replaceChildren(...box.childNodes);
-  // The listing is on screen; now ask what git says about it (badges follow).
-  if (typeof gitStatusLoad === "function") gitStatusLoad(ftRoot(), typeof gitStatusTreeSid === "function" ? gitStatusTreeSid() : null, { fresh: !!(opts && opts.fresh) });
-  // A refresh asks again what the agent has changed since (Files drawer only).
-  if (typeof drawerLoadChanged === "function" && typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks()) drawerLoadChanged(drawerState.sessionId);
 }
 
 // --- row actions -------------------------------------------------------------

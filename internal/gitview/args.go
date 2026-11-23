@@ -147,22 +147,25 @@ func ValidBaseRef(ref string) bool {
 
 // BaseArgs is the argv of the container that lists the candidate base
 // branches in one run: origin/HEAD with the ref it points at, and each of
-// baseCandidates that exists. The names are fixed, nothing comes from a
-// caller. The caller MUST have checked t.Unsafe() == "" first.
+// baseCandidates that exists, each with the commit it points at. The names are
+// fixed, nothing comes from a caller. The caller MUST have checked
+// t.Unsafe() == "" first.
 func BaseArgs(t Target, image, name string, uid, gid int) []string {
-	sub := []string{"for-each-ref", "--format=%(refname)%00%(symref)%00", originHead}
+	sub := []string{"for-each-ref", "--format=%(refname)%00%(symref)%00%(objectname)%00", originHead}
 	return argv(t, image, name, uid, gid, append(sub, baseCandidates...)...)
 }
 
 // MergeBaseArgs is the argv of the container that prints the merge base of
-// HEAD and baseRef. It is nil for a baseRef that is not a ValidBaseRef, so a
-// caller that skips its own check runs nothing rather than a hostile ref. The
-// caller MUST have checked t.Unsafe() == "" first.
-func MergeBaseArgs(t Target, image, name string, uid, gid int, baseRef string) []string {
-	if !ValidBaseRef(baseRef) {
+// the commit head (a full object id: the HEAD a status printed, so the answer
+// is for exactly the HEAD it is kept under) and baseRef. It is nil for a head
+// that is not a full object id or a baseRef that is not a ValidBaseRef, so a
+// caller that skips its own check runs nothing rather than a hostile argument.
+// The caller MUST have checked t.Unsafe() == "" first.
+func MergeBaseArgs(t Target, image, name string, uid, gid int, head, baseRef string) []string {
+	if !oidRE.MatchString(head) || !ValidBaseRef(baseRef) {
 		return nil
 	}
-	return argv(t, image, name, uid, gid, "merge-base", "HEAD", baseRef)
+	return argv(t, image, name, uid, gid, "merge-base", head, baseRef)
 }
 
 // Scope is what a numstat compares the working tree with: HEAD, or for Branch

@@ -609,8 +609,8 @@ test("changesView: the toggle shows only with an ok base; the default is Branch 
   assert.equal(view({ status: st, base: basrec(okBase({ ahead: false })) }).scope, "head");
   // Ahead, nothing remembered: Branch, whose rows wait for their own numstat.
   const wait = view({ status: st, base: basrec(okBase({ ahead: true })) });
-  assert.deepStrictEqual(wait, { kind: "note", text: "Reading branch changes…", title: "", count: 0, scope: "branch", showScope: true },
-    "Branch, whose rows wait for their own numstat; the toggle stays so the way back is on screen");
+  assert.deepStrictEqual(wait, { kind: "note", text: "Reading branch changes…", title: "", count: 0, scope: "branch", showScope: true, waiting: true },
+    "Branch, whose rows wait for their own numstat (waiting: the last list may stay meanwhile); the toggle stays so the way back is on screen");
   const pick = view({ status: st, base: basrec(okBase({ ahead: true })), prefs: new Map([["s", "head"]]) });
   assert.equal(pick.scope, "head");
   assert.equal(pick.kind, "rows");

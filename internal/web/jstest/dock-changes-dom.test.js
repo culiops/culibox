@@ -42,7 +42,7 @@ function page(over) {
   legend.append(new Node("span", doc));
   doc.getElementById = (id) => nodes[id] || null;
 
-  const st = { reviewOpened: [], scrolled: [], reviewOn: false, reviewHas: new Set(), fetches: [], store: new Map(), shown: [], reveals: [], toasts: [], menu: null, closed: 0, owns: true, root: "/w", sid: "s1", loads: 0, newfile: [], mkdir: [] };
+  const st = { session: new Map((over && over.__session) || []), reviewOpened: [], scrolled: [], reviewOn: false, reviewHas: new Set(), fetches: [], store: new Map(), shown: [], reveals: [], toasts: [], menu: null, closed: 0, owns: true, root: "/w", sid: "s1", loads: 0, newfile: [], mkdir: [] };
   const fetch = (url, init) => new Promise((resolve, reject) => {
     st.fetches.push({ url, body: JSON.parse(init.body), resolve, reject, signal: init.signal });
   });
@@ -53,6 +53,10 @@ function page(over) {
     localStorage: {
       getItem: (k) => (st.store.has(k) ? st.store.get(k) : null),
       setItem: (k, v) => { st.store.set(k, v); },
+    },
+    sessionStorage: {
+      getItem: (k) => (st.session.has(k) ? st.session.get(k) : null),
+      setItem: (k, v) => { st.session.set(k, v); },
     },
     setTimeout: () => 1,
     clearTimeout: () => {},
@@ -82,7 +86,7 @@ function page(over) {
   }, over));
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load('let drawerState = { open: "files", sessionId: "s1", pinned: false }; let drawerChangedFiles = new Map(); let ftExpanded = new Set(["/w/a", "/w/a/b", "/other/x"]); let ftRootSel = null;', "state");
-  for (const f of ["drawerfiles.js", "changesmodel.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
+  for (const f of ["drawerfiles.js", "changesmodel.js", "gitlast.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
   const p = {
     ctx, st, doc, nodes,
     el: (id) => nodes[id],
@@ -114,7 +118,8 @@ function page(over) {
 
 const okStatus = (entries, extra) => Object.assign({ state: "ok", top: "/w", branch: "feat/x", head: "h1", rootRel: ".", entries }, extra || {});
 const num = (entries, extra) => Object.assign({ state: "ok", rootRel: ".", entries }, extra || {});
-const baseOk = (extra) => Object.assign({ state: "ok", branch: "feat/x", baseRef: "refs/heads/main", baseName: "main", mergeBase: "abc", ahead: false }, extra || {});
+// The server's base answer names the HEAD it is for (gitview BaseInfo.Head): h1, the head of okStatus.
+const baseOk = (extra) => Object.assign({ state: "ok", branch: "feat/x", head: "h1", baseRef: "refs/heads/main", baseName: "main", mergeBase: "abc", ahead: false }, extra || {});
 // Arrays and objects made inside the vm have its prototypes: compare them as plain data.
 const plain = (x) => JSON.parse(JSON.stringify(x === undefined ? null : x));
 const text = (n) => n.textContent;
@@ -124,7 +129,8 @@ test("a status that lands asks for the base (the path alone) and the numstat, on
   const p = page();
   await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "b.go", x: "U" }]));
   assert.deepStrictEqual(p.calls("/api/git/base").map((f) => f.body), [{ path: "/w" }], "the base body names no ref");
-  assert.deepStrictEqual(p.calls("/api/git/numstat").map((f) => f.body), [{ path: "/w", scope: "head" }]);
+  // Asked beside the status, before any base is known: the server picks the scope ("auto").
+  assert.deepStrictEqual(p.calls("/api/git/numstat").map((f) => f.body), [{ path: "/w", scope: "auto" }]);
   // Before the answers: the section is there with the status rows and no counts.
   assert.strictEqual(p.el("dock-changes").hidden, false);
   assert.deepStrictEqual(p.rows().map((r) => text(r.querySelector(".dk-nm"))), ["a.go", "b.go"]);
@@ -142,10 +148,11 @@ test("a status that lands asks for the base (the path alone) and the numstat, on
 test("a status that was read fresh asks for a fresh numstat; a plain one does not", async () => {
   const p = page();
   await p.status(okStatus([{ p: "a.go", x: "M" }]), { fresh: true });
-  assert.deepStrictEqual(p.calls("/api/git/numstat").map((f) => f.body), [{ path: "/w", scope: "head", fresh: true }]);
+  assert.deepStrictEqual(p.calls("/api/git/numstat").map((f) => f.body), [{ path: "/w", scope: "auto", fresh: true }]);
+  await p.answer("/api/git/base", baseOk());
   await p.answer("/api/git/numstat", num([]));
   await p.status(okStatus([{ p: "a.go", x: "M" }]));
-  assert.deepStrictEqual(p.calls("/api/git/numstat").map((f) => f.body), [{ path: "/w", scope: "head", fresh: true }, { path: "/w", scope: "head" }]);
+  assert.deepStrictEqual(p.calls("/api/git/numstat").map((f) => f.body), [{ path: "/w", scope: "auto", fresh: true }, { path: "/w", scope: "head" }]);
 });
 
 test("at most one numstat is out at a time: statuses that land meanwhile are folded into one request afterwards", async () => {
@@ -236,7 +243,11 @@ test("a status that is unavailable is one calm note with the reason on hover, an
   assert.strictEqual(p.el("dock-scope").hidden, true);
   assert.strictEqual(text(p.el("dock-chg-count")), "");
   assert.strictEqual(p.el("drawer-strip-count").hidden, true, "the strip says nothing either");
-  assert.strictEqual(p.calls("/api/git/numstat").length + p.calls("/api/git/base").length, 0, "no request while status is unavailable");
+  // The first ask could not know: its numstat and base went out beside it. Once a status said unavailable, nothing more.
+  const n = p.calls("/api/git/numstat").length + p.calls("/api/git/base").length;
+  assert.ok(n <= 2, n + " requests beside the first status");
+  await p.status({ state: "unavailable", reason: "Git status needs the box runtime (docker)", rootRel: "", entries: [] });
+  assert.strictEqual(p.calls("/api/git/numstat").length + p.calls("/api/git/base").length, n, "no request while status is unavailable");
 });
 
 test("a clean workspace says so, with no count in the header", async () => {
@@ -771,8 +782,8 @@ test("a base that fails once the page has a good one keeps the toggle and the Br
   const p = page();
   p.st.store.set(KEY, JSON.stringify({ s1: "branch" }));
   await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  assert.deepStrictEqual(p.calls("/api/git/numstat").map((f) => f.body), [{ path: "/w", scope: "branch" }], "the pick is asked beside the status");
   await p.answer("/api/git/base", baseOk({ ahead: false }));
-  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }])); // head, asked before the base was known
   await p.answer("/api/git/numstat", num([{ p: "a.go", x: "A", a: 7, d: 0 }])); // branch, the pick
   assert.strictEqual(p.el("dock-scope").hidden, false);
   assert.strictEqual(text(p.rows()[0].querySelector(".dk-ct")), "+7−0");
@@ -828,12 +839,16 @@ test("a second press on the ⋯ closes its menu; a page without the menu element
 
 test("Uncommitted scope with a status of no entries asks for no numstat: nothing is left to count", async () => {
   const p = page();
+  // The first status of a root cannot be known clean before it lands: its numstat goes out beside it.
   await p.status(okStatus([]));
-  assert.strictEqual(p.calls("/api/git/numstat").length, 0, "a clean tree's numstat would be empty by definition");
+  await p.answer("/api/git/base", baseOk({ ahead: false }));
+  await p.answer("/api/git/numstat", num([]));
+  assert.strictEqual(p.calls("/api/git/numstat").length, 1);
   assert.strictEqual(text(p.el("dock-chg-note")), "No changes");
-  // The same on every later empty status, and the explicit Refresh path (a fresh one) does not ask either.
+  // Once a status said clean, every later empty status asks none, and the explicit Refresh path (a fresh one) neither.
+  await p.status(okStatus([]));
   await p.status(okStatus([]), { fresh: true });
-  assert.strictEqual(p.calls("/api/git/numstat").length, 0);
+  assert.strictEqual(p.calls("/api/git/numstat").length, 1, "a clean tree's numstat would be empty by definition");
 });
 
 test("a status that turns empty after changes leaves no row behind, and the next one with entries asks again", async () => {
@@ -842,13 +857,19 @@ test("a status that turns empty after changes leaves no row behind, and the next
   await p.answer("/api/git/base", baseOk({ ahead: false }));
   await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 3, d: 1 }]));
   assert.strictEqual(p.rows().length, 1);
-  // Committed: the status is clean. The numstat of before must not keep a row (the numstat's own files make rows).
+  // Another status with the change: its numstat goes out beside it and is still out when the tree goes clean.
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  assert.strictEqual(p.calls("/api/git/numstat").length, 2);
+  // Committed: the status is clean. The numstat of before must not keep a row (the numstat's own files make rows), not even
+  // while one is out, nor when that older one lands late.
   await p.status(okStatus([], { head: "h2" }));
   assert.strictEqual(p.rows().length, 0, "no phantom row from the stale numstat");
   assert.strictEqual(p.el("dock-chg-note").hidden, false);
-  assert.strictEqual(p.calls("/api/git/numstat").length, 1, "and none was asked for the empty status");
+  assert.strictEqual(p.calls("/api/git/numstat").length, 2, "none was asked for the empty status");
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 3, d: 1 }]));
+  assert.strictEqual(p.rows().length, 0, "a numstat answer older than the clean status cannot bring a row back");
   await p.status(okStatus([{ p: "b.go", x: "M" }], { head: "h2" }));
-  assert.strictEqual(p.calls("/api/git/numstat").length, 2, "a status with entries asks");
+  assert.strictEqual(p.calls("/api/git/numstat").length, 3, "a status with entries asks");
 });
 
 test("Branch scope still asks with a clean working tree: the branch can differ from its base", async () => {
@@ -860,4 +881,222 @@ test("Branch scope still asks with a clean working tree: the branch can differ f
   const ns = p.calls("/api/git/numstat");
   assert.strictEqual(ns.length, 1);
   assert.deepStrictEqual(ns[0].body, { path: "/w", scope: "branch" });
+});
+
+// --- P2: asked beside the status; the last list per root, drawn while git answers -------------------------------------------
+
+// keptView: what gitlast.js keeps for /w, as its stored text.
+const keptRows = [
+  { path: "/w/a.go", name: "a.go", dir: "", code: "M", add: 3, del: 1, mine: false, folder: false, provisional: false },
+  { path: "/w/b.go", name: "b.go", dir: "", code: "U", add: null, del: null, mine: false, folder: false, provisional: false },
+];
+const kept = (root, view, status) => [["agent-box:gitLast", JSON.stringify([[root, { status: status || null, view }]])]];
+const keptView = { kind: "rows", scope: "branch", showScope: true, rows: keptRows, more: 0, count: 2, branch: { from: "feat/x", to: "main", add: 3, del: 1 } };
+
+test("a status ask sends the numstat (scope auto) and the base at once, before the status lands", async () => {
+  const p = page();
+  const before = p.st.fetches.length;
+  const done = p.ctx.gitStatusLoad("/w", "s1");
+  await settle();
+  assert.deepStrictEqual(p.st.fetches.slice(before).map((f) => [f.url, f.body]), [
+    ["/api/git/status", { path: "/w" }],
+    ["/api/git/base", { path: "/w" }],
+    ["/api/git/numstat", { path: "/w", scope: "auto" }],
+  ]);
+  p.st.fetches[before].resolve({ ok: true, json: async () => okStatus([{ p: "a.go", x: "M" }]) });
+  await done;
+  await settle();
+  assert.strictEqual(p.calls("/api/git/base").length, 1, "the landing does not ask the base again");
+  assert.strictEqual(p.calls("/api/git/numstat").length, 1, "nor the numstat");
+});
+
+test("a remembered Branch pick asks Branch beside the status; Uncommitted after a clean status waits for the landing", async () => {
+  const p = page();
+  p.st.store.set(KEY, JSON.stringify({ s1: "branch" }));
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  assert.deepStrictEqual(p.calls("/api/git/numstat").map((f) => f.body), [{ path: "/w", scope: "branch" }]);
+  const q = page();
+  q.st.store.set(KEY, JSON.stringify({ s1: "head" }));
+  await q.status(okStatus([])); // the first status of the root: not known clean before it lands, so one is asked beside it
+  await q.answer("/api/git/base", baseOk());
+  await q.answer("/api/git/numstat", num([]));
+  await q.status(okStatus([]));
+  assert.strictEqual(q.calls("/api/git/numstat").length, 1, "Uncommitted after a clean status: nothing beside the next one");
+  await q.status(okStatus([{ p: "a.go", x: "M" }]));
+  assert.deepStrictEqual(q.calls("/api/git/numstat").map((f) => f.body), [{ path: "/w", scope: "head" }, { path: "/w", scope: "head" }], "asked when a status with entries landed");
+});
+
+test("an auto answer that names Branch is the Branch list once the base lands, with no second numstat", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 2, d: 0 }, { p: "c.go", x: "A", a: 9, d: 0 }], { scope: "branch" }));
+  await p.answer("/api/git/base", baseOk({ ahead: true }));
+  assert.deepStrictEqual(Array.from(p.el("dock-scope").children, (b) => b.getAttribute("aria-pressed")), ["false", "true"]);
+  assert.deepStrictEqual(p.rows().map((r) => text(r.querySelector(".dk-nm"))), ["a.go", "c.go"]);
+  assert.strictEqual(text(p.rows()[1].querySelector(".dk-ct")), "+9−0");
+  assert.strictEqual(p.calls("/api/git/numstat").length, 1);
+});
+
+test("a kept list is drawn Updating… before git answers, and nothing reads it: no Review, no rows for the review loop", async () => {
+  const p = page({ __session: kept("/w", keptView) });
+  p.ctx.dockChangesRender();
+  assert.strictEqual(p.el("dock-changes").hidden, false);
+  assert.deepStrictEqual(p.rows().map((r) => text(r.querySelector(".dk-nm"))), ["a.go", "b.go"]);
+  assert.strictEqual(text(p.el("dock-chg-count")), "Updating…");
+  assert.strictEqual(p.el("dock-review").hidden, true, "Review waits for git");
+  assert.strictEqual(p.ctx.dockChangesRows().length, 0, "F7 and Mark reviewed see no rows");
+  assert.strictEqual(p.ctx.dockChangesView(), null, "All changes sees no view");
+  p.rows()[0].onclick();
+  assert.deepStrictEqual(plain(p.st.shown), [["/w/a.go", null]], "a row still opens its file (a read of the file as it is now)");
+});
+
+test("the live list replaces the kept one; Branch waiting for its list keeps the kept one; a folder that is not a repository hides it", async () => {
+  const p = page({ __session: kept("/w", keptView) });
+  p.st.store.set(KEY, JSON.stringify({ s1: "branch" }));
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/base", baseOk({ ahead: true }));
+  assert.strictEqual(text(p.el("dock-chg-count")), "Updating…", "Branch is still reading its list: the kept one stays");
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 5, d: 0 }]));
+  assert.strictEqual(text(p.el("dock-chg-count")), "1 changed");
+  assert.strictEqual(p.ctx.dockChangesRows().length, 1);
+  assert.strictEqual(p.el("dock-review").hidden, false);
+  const q = page({ __session: kept("/w", keptView) });
+  await q.status({ state: "notrepo", entries: [] });
+  assert.strictEqual(q.el("dock-changes").hidden, true);
+});
+
+test("a live list is kept for its root; a note or a kept list is not written back", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/base", baseOk());
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 3, d: 1 }]));
+  const saved = JSON.parse(p.st.session.get("agent-box:gitLast"));
+  assert.strictEqual(saved[0][0], "/w");
+  assert.deepStrictEqual(saved[0][1].view.rows.map((r) => [r.name, r.code, r.add, r.del]), [["a.go", "M", 3, 1]]);
+  assert.strictEqual(saved[0][1].status.entries.length, 1, "and the status the tree's marks come from");
+});
+
+test("a remembered Uncommitted pick sends no base beside the status (it needs none to list), and asks it when the status lands", async () => {
+  const p = page();
+  p.st.store.set(KEY, JSON.stringify({ s1: "head" }));
+  const before = p.st.fetches.length;
+  const done = p.ctx.gitStatusLoad("/w", "s1");
+  await settle();
+  // The base would take a git slot ahead of the numstat's own run: the counts would wait for it.
+  assert.deepStrictEqual(p.st.fetches.slice(before).map((f) => [f.url, f.body]), [
+    ["/api/git/status", { path: "/w" }],
+    ["/api/git/numstat", { path: "/w", scope: "head" }],
+  ]);
+  p.st.fetches[before].resolve({ ok: true, json: async () => okStatus([{ p: "a.go", x: "M" }]) });
+  await done;
+  await settle();
+  assert.deepStrictEqual(p.calls("/api/git/base").map((f) => f.body), [{ path: "/w" }], "the toggle's base, after the status");
+});
+
+test("with an Uncommitted pick the live list replaces the kept one as soon as the status lands, not when the base does", async () => {
+  const p = page({ __session: kept("/w", Object.assign({}, keptView, { scope: "head", branch: null, showScope: false })) });
+  p.st.store.set(KEY, JSON.stringify({ s1: "head" }));
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  assert.strictEqual(text(p.el("dock-chg-count")), "1 changed", "git's list, not the kept one");
+  assert.strictEqual(p.ctx.dockChangesRows().length, 1);
+});
+
+test("a numstat for a newer status ask that lands before its status is up to date: no re-ask, even when that status fails", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/base", baseOk());
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }]));
+  const n0 = p.calls("/api/git/numstat").length;
+  // A second status is asked; its numstat goes out beside it and answers first.
+  const before = p.st.fetches.length;
+  const done = p.ctx.gitStatusLoad("/w", "s1");
+  await settle();
+  assert.strictEqual(p.calls("/api/git/numstat").length, n0 + 1);
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 2, d: 0 }]));
+  await settle();
+  assert.strictEqual(p.calls("/api/git/numstat").length, n0 + 1, "the newer answer stands: nothing is asked for the older status");
+  // The status then fails (a restart, the network): still no request loop.
+  p.st.fetches[before].reject(new Error("offline"));
+  await done;
+  await settle();
+  assert.strictEqual(p.calls("/api/git/numstat").length, n0 + 1);
+});
+
+test("a scope picked while a newer status ask's numstat waits for its status asks once, not in a loop (in transit, or failed)", async () => {
+  for (const fails of [false, true]) {
+    const p = page();
+    await p.status(okStatus([{ p: "a.go", x: "M" }]));
+    await p.answer("/api/git/base", baseOk({ ahead: false }));
+    await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }]));
+    const before = p.st.fetches.length;
+    const done = p.ctx.gitStatusLoad("/w", "s1");
+    await settle();
+    await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 2, d: 0 }])); // the newer ask's numstat, Uncommitted
+    if (fails) { p.st.fetches[before].reject(new Error("offline")); await done; await settle(); }
+    const n0 = p.calls("/api/git/numstat").length;
+    p.el("dock-scope").children[1].onclick(); // Branch
+    await settle();
+    for (let i = 0; i < 5 && p.pending("/api/git/numstat").length > 0; i++) await p.answer("/api/git/numstat", num([{ p: "b.go", x: "A", a: 9, d: 0 }]));
+    assert.strictEqual(p.calls("/api/git/numstat").length, n0 + 1, (fails ? "status failed" : "status in transit") + ": one Branch ask");
+    assert.strictEqual(p.pending("/api/git/numstat").length, 0);
+    assert.deepStrictEqual(p.rows().map((r) => text(r.querySelector(".dk-nm"))), ["b.go"], "the Branch list is shown");
+  }
+});
+
+test("a remembered Branch pick whose numstat answers before the base asks it once, not until the base lands (answered or failed)", async () => {
+  for (const ok of [true, false]) {
+    const p = page();
+    p.st.store.set(KEY, JSON.stringify({ s1: "branch" }));
+    await p.status(okStatus([{ p: "a.go", x: "M" }]));
+    for (let i = 0; i < 5 && p.pending("/api/git/numstat").length > 0; i++) await p.answer("/api/git/numstat", num([{ p: "a.go", x: "A", a: 3, d: 0 }]), ok);
+    assert.strictEqual(p.calls("/api/git/numstat").length, 1, (ok ? "answered" : "failed") + ": the base is still out, the pick's answer stands");
+    await p.answer("/api/git/base", baseOk({ ahead: true }));
+    assert.ok(p.calls("/api/git/numstat").length <= 2, "at most one more once the base is known");
+  }
+});
+
+test("a Branch pick with a base that is known but not ok asks Uncommitted beside the status: no Branch run it cannot show", async () => {
+  const p = page();
+  p.st.store.set(KEY, JSON.stringify({ s1: "branch" }));
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/base", { state: "nobase", reason: "no base branch", branch: "feat/x", head: "h1" });
+  for (let i = 0; i < 5 && p.pending("/api/git/numstat").length > 0; i++) await p.answer("/api/git/numstat", num([]));
+  const n0 = p.calls("/api/git/numstat").length;
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  assert.deepStrictEqual(p.calls("/api/git/numstat").slice(n0).map((f) => f.body.scope), ["head"], "one Uncommitted ask per status");
+});
+
+test("switching to a session with no pick while the root's base is out and a newer numstat stands asks at most once (status out or failed)", async () => {
+  for (const fails of [false, true]) {
+    const p = page();
+    p.st.store.set(KEY, JSON.stringify({ s1: "head" })); // s1 picked Uncommitted; s2 picked nothing
+    p.ctx.gitStatusLoad("/w", "s1"); await settle();
+    await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }]));
+    await p.answer("/api/git/status", okStatus([{ p: "a.go", x: "M" }])); // its landing asks the base: held
+    p.ctx.gitStatusLoad("/w", "s1"); await settle();
+    await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }])); // the newer ask's numstat lands first
+    if (fails) await p.answer("/api/git/status", null, false);
+    const n0 = p.calls("/api/git/numstat").length;
+    p.run('drawerState.sessionId = "s2"; dockChangesRefresh();');
+    await settle();
+    for (let i = 0; i < 10 && p.pending("/api/git/numstat").length > 0; i++) await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }], { scope: "head" }));
+    assert.ok(p.calls("/api/git/numstat").length - n0 <= 1, (fails ? "status failed" : "status out") + ": " + (p.calls("/api/git/numstat").length - n0) + " asks");
+  }
+});
+
+test("on a clean tree, Uncommitted → Branch → Uncommitted → Branch shows the Branch list every time (no ask is held back)", async () => {
+  const p = page();
+  await p.status(okStatus([]));
+  await p.answer("/api/git/base", baseOk({ ahead: true }));
+  await p.answer("/api/git/numstat", num([{ p: "c.go", x: "A", a: 4, d: 0 }], { scope: "branch" }));
+  const [head, branch] = p.el("dock-scope").children;
+  for (let i = 0; i < 2; i++) {
+    head.onclick();
+    await settle();
+    assert.strictEqual(text(p.el("dock-chg-note")), "No changes", "Uncommitted on a clean tree");
+    branch.onclick();
+    await settle();
+    for (let j = 0; j < 3 && p.pending("/api/git/numstat").length > 0; j++) await p.answer("/api/git/numstat", num([{ p: "c.go", x: "A", a: 4, d: 0 }]));
+    assert.strictEqual(text(p.el("dock-chg-count")), "1 changed", "round " + (i + 1) + ": the Branch list, not 'Reading branch changes…'");
+  }
 });

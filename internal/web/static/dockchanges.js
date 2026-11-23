@@ -8,12 +8,19 @@
 // 2 px session bar on a file the session changed (Activity's files), a scope toggle (Uncommitted | Branch) and, in Branch
 // scope, the `branch → base · +a −d` row. Git stays the primary signal. The rows come from the status the tree already
 // holds (gitstatus.js); this file asks for what status cannot say:
-//   - /api/git/numstat {path, scope, fresh?}: the counts, and Branch's whole list. Asked after each status lands
-//     (gitStatusLoad calls dockChangesOnStatus, so it rides the same 1 s debounce), at most one at a time: a status that
-//     lands while one is out waits for it, and only the newest is asked for next;
+//   - /api/git/numstat {path, scope, fresh?}: the counts, and Branch's whole list. Asked BESIDE each status, not after it
+//     (gitStatusLoad calls dockChangesOnStatusAsk as it sends one, so it rides the same 1 s debounce), for the scope the
+//     user picked, else the default once the base is known, else "auto" (the server picks Branch or Uncommitted and the
+//     reply names it). The exception is Uncommitted after a status with no entries: that one is asked when the status
+//     lands, and only if it has entries. At most one is out at a time: a status that lands while one is out waits for it,
+//     and only the newest is asked for next (dockChangesOnStatus, when the status lands);
 //   - /api/git/base {path}: the branch, the base the SERVER picked (no ref is ever sent from here) and whether HEAD is
-//     ahead. Asked when the root, HEAD or branch changes, and again for a failure once it has been a while
-//     (changesBaseStale); a failure keeps the last good answer for that root on screen (changesBaseRecord).
+//     ahead. Asked beside the first status of a root, again when the root, HEAD or branch changes, and again for a failure
+//     once it has been a while (changesBaseStale); a failure keeps the last good answer for that root on screen
+//     (changesBaseRecord).
+// Until the first answers of a root land, the list it showed last (gitlast.js: a reload, a session switch) is drawn, with
+// "Updating…" in the header. It is a picture: Review is hidden, and dockChangesRows / dockChangesView say nothing, so the
+// review loop, F7 and All changes act only on git's answer.
 // Nothing is asked while the dock is closed, folded away from view or the page is hidden (dkcVisible), and coming back
 // asks (dockChangesRefresh). No answer is waited for with a spinner: Uncommitted shows the status rows at once, a status
 // that is unavailable is one calm line ("Status unavailable", the reason on hover), and a request that never answers is
@@ -36,7 +43,9 @@ const DKC_FETCH_MS = 20000; // a request that never answers must not hold the on
 const DKC_CODE_TITLES = { M: "Modified", A: "Added (staged)", U: "Untracked", D: "Deleted", C: "Conflict" };
 
 let dkcPrefs = null;          // Map: the remembered scope per session, read from storage on first use
-let dkcNum = null;            // {root, scope, status, reply}: the last numstat answer; reply null when the request failed
+let dkcNum = null;            // {root, scope, seq, reply, auto}: the last numstat answer, for the status ask `seq`; reply null when the request failed; auto: asked as "auto"
+let dkcNumAsk = null;         // {root, seq}: the numstat out, while dkcNumFlight
+let dkcLastAsk = null;        // {root, asked, seq}: the last numstat asked: dockChangesSync never asks the same one twice in a row
 let dkcBase = null;           // {root, head, reply, at}: the last base answer; reply null when the request failed
 let dkcNumFlight = false;
 let dkcBaseFlight = false;
@@ -118,10 +127,54 @@ async function dkcPost(url, body) {
 }
 
 // dockChangesOnStatus: a status landed (gitStatusLoad). `fresh`: it was read after something changed on disk, so the
-// counts are too.
+// counts asked for it must be too, unless they were asked beside it (dockChangesOnStatusAsk sent its freshness along).
 function dockChangesOnStatus(opts) {
-  if (opts && opts.fresh) dkcFresh = true;
+  if (opts && opts.fresh) {
+    const cur = typeof gitStatusCurrent === "function" ? gitStatusCurrent(dkcRoot()) : null;
+    const seq = cur ? cur.seq : -1;
+    if (!(dkcNumAsk && dkcNumAsk.seq === seq) && !(dkcNum && dkcNum.seq === seq)) dkcFresh = true;
+  }
   dockChangesSync();
+}
+
+// dockChangesOnStatusAsk: a status is being asked for `root` (gitStatusRead, `seq` its number). The counts are asked beside
+// it, and the base too when the root has none yet, so neither waits for the status to land first.
+function dockChangesOnStatusAsk(o) {
+  if (!o || !dkcVisible() || !o.root || o.root !== dkcRoot()) return;
+  const root = o.root;
+  // The last status said git cannot list this root (unavailable, too many): nothing is asked until one says it can.
+  const last = dkcLastStatus(root);
+  if (last && last.state !== "ok") return;
+  const scope = dkcAskScope(root);
+  // The base beside the status, when the list needs it (Branch, or a scope still to pick). Uncommitted lists without it, and a
+  // base asked now would take a git slot ahead of the numstat: the landing asks it (the toggle and the branch row).
+  if (scope !== "head" && !dkcBaseFlight && !(dkcBase && dkcBase.root === root)) dkcAskBase(root, null, null);
+  if (dkcNumFlight) return; // the landing asks for the newest once this one is back
+  if (scope === "head" && dkcLastClean(root)) return; // a clean tree has nothing to count: the landing decides
+  dkcAskNumstat(root, scope, o.seq, !!o.fresh);
+}
+
+// dkcAskScope: the scope to ask a numstat for before the status lands: the scope shown once the root's base is known (a
+// Branch pick with no ok base shows Uncommitted: a Branch run would not be shown), else the session's pick, else "auto".
+function dkcAskScope(root) {
+  const sid = dkcSid();
+  if (dkcBase && dkcBase.root === root) return dockScope(sid);
+  const pick = dkcPrefsMap().get(typeof sid === "string" ? sid : "");
+  return pick === "head" || pick === "branch" ? pick : "auto";
+}
+
+// dkcLastStatus: the last status known for the root, the live one, else the one kept from before (gitlast.js), else null.
+function dkcLastStatus(root) {
+  const cur = typeof gitStatusCurrent === "function" ? gitStatusCurrent(root) : null;
+  if (cur) return cur.status;
+  const kept = typeof gitLastGet === "function" ? gitLastGet(root) : null;
+  return kept ? kept.status : null;
+}
+
+// dkcLastClean: the last status known for the root had no entries.
+function dkcLastClean(root) {
+  const st = dkcLastStatus(root);
+  return !!st && st.state === "ok" && Array.isArray(st.entries) && st.entries.length === 0;
 }
 
 // dockChangesRefresh: the dock may have just appeared or changed (drawerPaint, once per session poll while it is open):
@@ -145,36 +198,68 @@ function dockChangesSync() {
   const branch = changesBranchOf(cur.status);
   if (!dkcBaseFlight && changesBaseStale(dkcBase, root, head, branch, Date.now())) dkcAskBase(root, head, branch);
   const scope = dockScope(dkcSid());
-  if (dkcNum && dkcNum.root === root && dkcNum.scope === scope && dkcNum.status === cur.status) return;
-  if (dkcNumFlight) return;
+  // Up to date: the answer for this status, or for a newer ask whose status has not landed (or failed), in the scope shown.
+  // A newer answer is never replaced by an older one (dkcAskNumstat), so asking for the older status again would loop. Before
+  // the root's base is known the scope shown is a guess (Uncommitted), so an "auto" answer stands until the base lands.
+  // The scope to ask for, and to hold the answer against: the one shown once the base is known; before it, the pick or "auto"
+  // (the scope shown is then a guess, and asking one scope while checking another would ask without end).
+  const baseKnown = !!dkcBase && dkcBase.root === root;
+  const want = baseKnown ? scope : dkcAskScope(root);
+  // Before the base, an "auto" ask is met by any answer for this status (the server's pick or a scope asked beside it).
+  if (dkcNum && dkcNum.root === root && dkcNum.seq >= cur.seq && (dkcNum.scope === want || (!baseKnown && (dkcNum.auto || want === "auto")))) return;
   // Uncommitted scope and a status with no entries: the numstat of nothing is nothing, so it is not asked for (a clean tree is
-  // the common case, and each numstat is a container run). The record stands for the answer, so a numstat from before the
-  // tree went clean cannot leave its rows on screen, and the next status with entries asks as usual. Branch scope still asks:
-  // a clean working tree can sit on a branch that differs from its base.
+  // the common case, and each numstat is a container run). The record stands for the answer, at once even with a numstat out
+  // (asked beside this status, before anyone knew it was clean), so a numstat from before the tree went clean cannot leave its
+  // rows on screen, and the next status with entries asks as usual. Branch scope still asks: a clean working tree can sit on a
+  // branch that differs from its base.
   if (scope !== "branch" && Array.isArray(cur.status.entries) && cur.status.entries.length === 0) {
-    dkcNum = { root, scope, status: cur.status, reply: { state: "ok", rootRel: ".", entries: [] } };
+    dkcNum = { root, scope, seq: cur.seq, reply: { state: "ok", rootRel: ".", entries: [] } };
+    // The record no longer holds the last ask's answer, so that ask may be needed again (Branch picked back on this status).
+    dkcLastAsk = null;
     dockChangesRender();
     return;
   }
-  dkcAskNumstat(root, scope, cur.status);
+  if (dkcNumFlight) return; // its answer asks again for whatever it left stale
+  // The same numstat as the last one asked has its answer already: recorded, or dropped for a newer one of its scope. Asking
+  // it again could only get the same answer, so whatever the record rule above misses, sync cannot loop.
+  if (dkcLastAsk && dkcLastAsk.root === root && dkcLastAsk.asked === want && dkcLastAsk.seq === cur.seq) return;
+  dkcAskNumstat(root, want, cur.seq, dkcFresh);
 }
 
+// dkcAskBase asks for the base of `root`. `head` and `branch` are the status's it is asked after; null for one asked beside
+// the first status of a root, whose reply says the HEAD and branch it is for (so the status that lands next does not ask again).
 async function dkcAskBase(root, head, branch) {
   dkcBaseFlight = true;
   const reply = await dkcPost("/api/git/base", { path: root });
   dkcBaseFlight = false;
+  if (head === null || branch === null) {
+    // Asked beside the first status: an answer says what it is for; a failure takes the status that has landed meanwhile,
+    // so the retry pause of changesBaseStale holds instead of a new ask at the next landing.
+    const said = !!reply && reply.state !== "unavailable";
+    const cur = typeof gitStatusCurrent === "function" ? gitStatusCurrent(root) : null;
+    head = said && typeof reply.head === "string" ? reply.head : cur && typeof cur.status.head === "string" ? cur.status.head : "";
+    branch = said && typeof reply.branch === "string" ? reply.branch : cur ? changesBranchOf(cur.status) : "";
+  }
   dkcBase = changesBaseRecord(dkcBase, root, head, branch, reply, Date.now());
   dockChangesRefresh();
 }
 
-async function dkcAskNumstat(root, scope, status) {
+// dkcAskNumstat asks for the counts of `root` in `asked` ("head", "branch" or "auto") for the status ask `seq`. The record
+// takes the scope the reply names for "auto" (Uncommitted when it names none, a failure included).
+async function dkcAskNumstat(root, asked, seq, fresh) {
   dkcNumFlight = true;
-  const fresh = dkcFresh;
-  dkcFresh = false;
-  const reply = await dkcPost("/api/git/numstat", fresh ? { path: root, scope, fresh: true } : { path: root, scope });
+  dkcNumAsk = { root, seq };
+  dkcLastAsk = { root, asked, seq };
+  if (fresh) dkcFresh = false;
+  const reply = await dkcPost("/api/git/numstat", fresh ? { path: root, scope: asked, fresh: true } : { path: root, scope: asked });
   dkcNumFlight = false;
-  // Kept even when it is for a root or scope no longer shown: changesView matches records by root and scope.
-  dkcNum = { root, scope, status, reply };
+  dkcNumAsk = null;
+  const scope = asked === "auto" ? (reply && reply.scope === "branch" ? "branch" : "head") : asked;
+  // Kept even when it is for a root or scope no longer shown: changesView matches records by root and scope. Never over a
+  // record for a newer status of the same root in the same scope (the clean-status record, made while this one was out). A
+  // record in another scope is replaced: dockChangesSync asked for this scope because it is the one shown, and keeping the
+  // other would make it ask again, without end.
+  if (!(dkcNum && dkcNum.root === root && dkcNum.scope === scope && dkcNum.seq > seq)) dkcNum = { root, scope, seq, reply, auto: asked === "auto" };
   dockChangesRefresh();
 }
 
@@ -438,22 +523,37 @@ function dockChangesRender() {
 
   // statusAt: when the status held was asked for, so an agent edit made since is a provisional row until git answers.
   const statusAt = cur && typeof gitStatusAt === "function" ? gitStatusAt() : 0;
-  const view = owns
+  let view = owns
     ? changesView({ root, status: cur, numstat: dkcNum, base: dkcBase, prefs: dkcPrefsMap(), sid, files, statusAt })
     : { kind: "none", count: 0 };
+  // Before git's first answers for this root (no status yet, no base yet so the scope is still a guess, or Branch waiting for
+  // its list), the list kept from the last time (gitlast.js) is drawn, Updating…, and read by nothing. While Branch waits, only
+  // a Branch list: an Uncommitted one would be a list of other changes.
+  // The scope shown is known once the base is, or with an Uncommitted pick (which needs no base to list).
+  const pick = dkcPrefsMap().get(typeof sid === "string" ? sid : "");
+  const scopeKnown = (!!dkcBase && dkcBase.root === root) || pick === "head";
+  let stale = false;
+  const listed = !cur || cur.status.state === "ok"; // a status that says not a repository, too many or unavailable says so itself
+  if (owns && root && listed && typeof gitLastGet === "function" && (!cur || !scopeKnown || (view.kind === "note" && view.waiting === true))) {
+    const kept = gitLastGet(root);
+    if (kept && kept.view && (!cur || !scopeKnown || kept.view.scope === view.scope)) { view = kept.view; stale = true; }
+  }
   const rv = dkcReviewState(view, sid, files);
-  const painted = JSON.stringify([view, root, name, box, owns, rv]);
+  const painted = JSON.stringify([view, root, name, box, owns, rv, stale]);
   if (painted === dkcPainted) { // nothing new to draw here; the Changes view's header reads some of the same inputs (Activity's list)
     if (typeof editorReviewRefresh === "function") editorReviewRefresh();
     return;
   }
   dkcPainted = painted;
   dkcPaintRoot(root);
-  dkcView = view;
+  dkcView = stale ? null : view;
+  // Kept for the next reload or session switch: git's answer, once the scope is known (not the guess before the base lands).
+  if (!stale && scopeKnown && view.kind === "rows" && root && typeof gitLastSet === "function") gitLastSet(root, "view", view);
   const rows = view.kind === "rows";
   sec.hidden = view.kind === "none";
-  dkcSetText(dkcEl("dock-chg-count"), rows && rv.reviewing && rv.total > 0 ? "reviewed " + rv.doneN + " of " + rv.total : rows && view.count > 0 ? view.count + " changed" : "");
-  dkcEl("dock-review").hidden = !dkcFirstFile(view);
+  const count = stale ? "Updating…" : rows && rv.reviewing && rv.total > 0 ? "reviewed " + rv.doneN + " of " + rv.total : rows && view.count > 0 ? view.count + " changed" : "";
+  dkcSetText(dkcEl("dock-chg-count"), count);
+  dkcEl("dock-review").hidden = stale || !dkcFirstFile(view);
   const scope = dkcEl("dock-scope");
   scope.hidden = !view.showScope;
   for (const b of scope.querySelectorAll("[data-scope]")) b.setAttribute("aria-pressed", b.dataset.scope === view.scope ? "true" : "false");

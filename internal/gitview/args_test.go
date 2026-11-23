@@ -174,7 +174,7 @@ func TestTargetKeyIncludesRoot(t *testing.T) {
 	}
 }
 
-var baseSub = []string{"for-each-ref", "--format=%(refname)%00%(symref)%00",
+var baseSub = []string{"for-each-ref", "--format=%(refname)%00%(symref)%00%(objectname)%00",
 	"refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master", "refs/heads/main", "refs/heads/master"}
 
 func TestBaseArgsGolden(t *testing.T) {
@@ -197,8 +197,8 @@ func TestBaseArgsGolden(t *testing.T) {
 		if w := want(c.mounts, c.t.Top, baseSub...); !slices.Equal(got, w) {
 			t.Errorf("BaseArgs %s:\n got %q\nwant %q", c.name, got, w)
 		}
-		got = MergeBaseArgs(c.t, "img", "n", uid, gid, "refs/remotes/origin/main")
-		if w := want(c.mounts, c.t.Top, "merge-base", "HEAD", "refs/remotes/origin/main"); !slices.Equal(got, w) {
+		got = MergeBaseArgs(c.t, "img", "n", uid, gid, oid1, "refs/remotes/origin/main")
+		if w := want(c.mounts, c.t.Top, "merge-base", oid1, "refs/remotes/origin/main"); !slices.Equal(got, w) {
 			t.Errorf("MergeBaseArgs %s:\n got %q\nwant %q", c.name, got, w)
 		}
 	}
@@ -208,7 +208,7 @@ func TestBaseArgsKeepTheGuards(t *testing.T) {
 	// Same isolation as status: no network, read-only mounts, hostile-config flags.
 	for name, a := range map[string][]string{
 		"base":      BaseArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2),
-		"mergebase": MergeBaseArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2, "refs/heads/main"),
+		"mergebase": MergeBaseArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2, oid1, "refs/heads/main"),
 	} {
 		i := slices.Index(a, "--network")
 		if i < 0 || a[i+1] != "none" || !slices.Contains(a, "--read-only") || !slices.Contains(a, "core.fsmonitor=false") || !slices.Contains(a, "core.hooksPath=/dev/null") {
@@ -229,10 +229,19 @@ func TestBaseArgsKeepTheGuards(t *testing.T) {
 	}
 }
 
+// oid1 is a full commit id, the HEAD a merge base is asked for.
+const oid1 = "1111111111111111111111111111111111111111"
+
 func TestMergeBaseArgsRefusesInvalidRef(t *testing.T) {
 	for _, ref := range []string{"", "-x", "--upload-pack=x", "HEAD", "main", "refs/tags/v1", "refs/heads/../x", "refs/heads/a b"} {
-		if a := MergeBaseArgs(Target{Top: "/w/repo"}, "img", "n", 1, 2, ref); a != nil {
+		if a := MergeBaseArgs(Target{Top: "/w/repo"}, "img", "n", 1, 2, oid1, ref); a != nil {
 			t.Errorf("ref %q built an argv: %q", ref, a)
+		}
+	}
+	// The HEAD side is a full object id from git's own status, nothing else: not "HEAD", not an option.
+	for _, head := range []string{"", "HEAD", "-x", "--upload-pack=x", oid1[:39], oid1 + "0", strings.Repeat("A", 40), "refs/heads/main"} {
+		if a := MergeBaseArgs(Target{Top: "/w/repo"}, "img", "n", 1, 2, head, "refs/heads/main"); a != nil {
+			t.Errorf("head %q built an argv: %q", head, a)
 		}
 	}
 }
