@@ -46,7 +46,7 @@ func (b *Broker) serveStaticToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if o, why := b.refusal(r, sid, sv, found, nonce, kindStatic); o != "" {
 		b.recordDenied(Row{Time: now, SessionID: sid, Provider: ProviderStatic, Outcome: o, Error: why})
-		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with a token binding") // same text for every reason: no oracle to the box
+		replyErr(w, http.StatusForbidden, deniedReply(sv, kindStatic)) // same text for every reason: no oracle to the box
 		return
 	}
 

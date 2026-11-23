@@ -2762,7 +2762,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// the session itself will have, never install it (D7). Without it the
 		// run goes ahead without its bindings, and says why.
 		if launcher.SessionLookPath(env, "node") == "" {
-			hostDropped = append(append(slices.Clone(hostGuard), hostNodeMissing), hostDropped...)
+			hostDropped = append([]string{hostNodeMissingItem(hostGuard)}, hostDropped...)
 			log.Printf("session %s: profile %q runs on Host without its %s: node was not found on this session's PATH; CuliBox's credential helpers need it",
 				id, spec.Agent, bindingNames(bs))
 			binding, awsConns, ghBinding, tokens, pats = nil, nil, nil, nil, nil
@@ -3139,9 +3139,16 @@ func bindingKinds(bs config.Bindings) []string {
 	return k
 }
 
-// hostNodeMissing is the HostDropped item that says why a Host run went without
-// its bindings (D7).
-const hostNodeMissing = "bindings (node was not found on this session's PATH; CuliBox's credential helpers need it)"
+// hostNodeMissingItem is the HostDropped item for a Host run that went without
+// its bindings because node is missing (D7): the bindings (guard, from
+// config.HostGuardrail) and the reason in one item, so they are named once.
+func hostNodeMissingItem(guard []string) string {
+	kinds := make([]string, len(guard))
+	for i, g := range guard {
+		kinds[i] = strings.TrimSuffix(g, " binding")
+	}
+	return config.BindingPhrase(kinds) + " (node was not found on this session's PATH; CuliBox's credential helpers need it)"
+}
 
 // hostAckRefusal is the refusal of a host spawn that has not confirmed what the
 // host run changes: the bindings it keeps as its default credentials (guard,

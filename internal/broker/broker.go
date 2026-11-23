@@ -362,7 +362,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 	// else's, and a stale token must not reset its cache or rate-limit window.
 	if o, why := b.refusal(r, sid, sv, found, nonce, kindAWS); o != "" {
 		b.recordDenied(Row{Time: now, SessionID: sid, Outcome: o, Error: why})
-		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with an AWS binding") // same text for every reason: no oracle to the box
+		replyErr(w, http.StatusForbidden, deniedReply(sv, kindAWS)) // same text for every reason: no oracle to the box
 		return
 	}
 	name, ok := readConnName(w, r)

@@ -106,11 +106,29 @@ var (
 	threeGuard = []string{"AWS binding", "GitHub binding", "token binding"}
 	ctxDrops   = []string{"context paths"}
 	// nodeDropped is HostDropped when node is not on the session PATH: the
-	// bindings, the reason, then the drops.
-	nodeDropped = []string{"AWS binding", "GitHub binding", "token binding", nodeMissingItem, "context paths"}
+	// bindings with the reason (one item, so they are named once), then the drops.
+	nodeDropped = []string{nodeMissingItem, "context paths"}
 )
 
-const nodeMissingItem = "bindings (node was not found on this session's PATH; CuliBox's credential helpers need it)"
+const nodeMissingItem = "AWS, GitHub and token bindings (node was not found on this session's PATH; CuliBox's credential helpers need it)"
+
+// The node item names the bindings once, whatever their number.
+func TestHostNodeMissingItemNamesBindingsOnce(t *testing.T) {
+	const why = " (node was not found on this session's PATH; CuliBox's credential helpers need it)"
+	for _, tc := range []struct {
+		guard []string
+		want  string
+	}{
+		{[]string{"AWS binding"}, "an AWS binding" + why},
+		{[]string{"token binding"}, "a token binding" + why},
+		{[]string{"AWS binding", "GitHub binding"}, "AWS and GitHub bindings" + why},
+		{threeGuard, nodeMissingItem},
+	} {
+		if got := hostNodeMissingItem(tc.guard); got != tc.want {
+			t.Errorf("hostNodeMissingItem(%q) = %q, want %q", tc.guard, got, tc.want)
+		}
+	}
+}
 
 // boundDropsLauncher's Build env has no PATH, so a Host run finds no node and
 // drops the bindings (see hostbroker_test.go for a Host run that keeps them).

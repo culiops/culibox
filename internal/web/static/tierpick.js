@@ -68,7 +68,7 @@ function tierHostGuardrail(profile) {
 
 // What a bound profile's Host run does with its bindings (#360): they are its default credentials, not a limit, since the agent
 // keeps the user's own access to the machine. The card row and the confirm say it the same way.
-const TP_GUARD_TAIL = "The agent keeps your full access to this machine, including its own logins.";
+const TP_GUARD_TAIL = "The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default.";
 
 // tierGuardrailParts: the sentence about the bindings as {subject, rest}, so the card can bold the subject. One binding reads
 // "the GitHub binding is the default credential"; several "AWS, GitHub and token bindings are the default credentials".
