@@ -366,7 +366,7 @@ func (e elevationService) grantContext(id string) web.GrantContext {
 	}
 	if e.list != nil {
 		for _, in := range e.list() {
-			if in.Runtime == config.RuntimeHost && !in.Exited {
+			if in.Runtime == config.RuntimeHost && !in.Exited && in.ID != id { // not the Host session being elevated (#360)
 				gc.HostSessions = append(gc.HostSessions, web.HostSession{ID: in.ID, Name: in.Name})
 			}
 		}

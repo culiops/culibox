@@ -296,6 +296,20 @@ func TestGrantContextListsLiveHostSessions(t *testing.T) {
 	}
 }
 
+// A Host session being elevated is not among the "other host sessions" that
+// can reach its credentials (#360).
+func TestGrantContextLeavesOutTheElevatedHostSession(t *testing.T) {
+	e := elevationService{get: func(id string) (*session.Session, bool) { return hostBrokerSess(id), true },
+		list: func() []session.Info {
+			return []session.Info{{ID: "zsh-1", Name: "zsh", Runtime: "host"}, {ID: "hb-1", Name: "me", Runtime: "host"}}
+		},
+		blocker: func(context.Context, string, string) (box.GrantBlock, error) { return box.GrantBlock{}, nil }}
+	gc := e.grantContext("hb-1")
+	if len(gc.HostSessions) != 1 || gc.HostSessions[0].ID != "zsh-1" || gc.Blocked != "" {
+		t.Fatalf("%+v", gc)
+	}
+}
+
 func TestGrantContextReportsABlockerAndALookupFailure(t *testing.T) {
 	e := elevationService{get: func(id string) (*session.Session, bool) { return boundSess(id), true },
 		blocker: func(context.Context, string, string) (box.GrantBlock, error) {
