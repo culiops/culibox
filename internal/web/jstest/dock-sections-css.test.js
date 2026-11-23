@@ -110,3 +110,14 @@ test("an explicit ask opens a collapsed section: Reveal in tree, and the folded 
   assert.match(body, /^async function ftReveal\(path\) \{\s*if \(typeof dockSecOpen === "function"\) dockSecOpen\("tree"\);/, "first thing in ftReveal");
   assert.match(stripComments(read("app.js")), /\$\("drawer-strip-changes"\)\.onclick = \(\) => \{\s*if \(typeof dockSecOpen === "function"\) dockSecOpen\("changes"\);\s*dockStripOpen\(\);\s*\};/);
 });
+
+test("founder Q3: the Changes header keeps one row at the default 1280 width (203px column, 3.2px to spare on main)", () => {
+  // Main: 10 padding + CHANGES 59.3 + 6 + "42 changed" 67.9 + 6 + Review 40.6 + 10 = 199.8 of 203. The chevron may not cost more.
+  const head = rulesFor(css, ".dk-chg-head");
+  assert.match(head, /column-gap:\s*4px/);
+  assert.match(head, /padding:\s*0 10px 0 0/);
+  const chev = rulesFor(css, ".dk-chev");
+  assert.match(chev, /width:\s*14px/);
+  assert.match(chev, /margin-right:\s*-4px/);
+  assert.match(rulesFor(css, ".dk-chev::after"), /inset:\s*-2px -5px/, "a 24px press area around the 14x20 box");
+});

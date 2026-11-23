@@ -1345,7 +1345,7 @@
   }
   #dock-changes[hidden], .dk-branch[hidden], .dk-chg-note[hidden], .dk-legend[hidden], .dk-review[hidden] { display: none; }
   /* The header wraps rather than cut a word: in a narrow explorer "reviewed n of m" stays whole and Review drops to a second row. */
-  .dk-chg-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; row-gap: 0; min-height: 28px; padding: 0 10px 0 4px; min-width: 0; cursor: pointer; }
+  .dk-chg-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 0; min-height: 28px; padding: 0 10px 0 0; min-width: 0; cursor: pointer; }
   .dk-chg-title {
     flex: none; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
     letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg);
@@ -1398,9 +1398,9 @@
   .dk-legend span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The root header: the folder's name, then its path. A click shows the root field (today's picker) under it; a box session's
      tree is its workspace only, so there is nothing to edit. */
-  .dk-roothead { flex: none; display: flex; align-items: center; min-width: 0; padding-left: 4px; }
+  .dk-roothead { flex: none; display: flex; align-items: center; min-width: 0; }
   .dk-root {
-    flex: 1 1 auto; box-sizing: border-box; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 2px 2px;
+    flex: 1 1 auto; box-sizing: border-box; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 2px 4px;
     border: 0; background: transparent; color: var(--fg); text-align: left; cursor: pointer;
   }
   .dk-root:hover { background: var(--hover); }
@@ -1418,10 +1418,14 @@
   /* docksections.js paints the state on #drawer-tree: data-chg-shut, data-tree-shut, and --dk-chg-max (the section's cap
      the divider set; unset, today's 45%). Collapsing is these rules only: the section keeps drawing what git says, so its
      requests are the same either way. The chevron is the tree rows' own glyph, turned when open. */
+  /* It takes the header's 10px left padding and 4px more, and the header's gaps are 4px, so "CHANGES 42 changed Review" keeps
+     the one row it had in the default 1280px column (measured: 203px wide, 3.2px to spare before and after). Its box is drawn
+     small and its press area (::after) is the 24px square a pointer needs. */
   .dk-chev {
-    flex: none; width: 16px; height: 20px; padding: 0; display: inline-grid; place-items: center; border: 0; border-radius: var(--r-chip);
-    background: transparent; color: var(--muted); cursor: pointer;
+    flex: none; position: relative; width: 14px; height: 20px; margin-right: -4px; padding: 0; display: inline-grid; place-items: center;
+    border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); cursor: pointer;
   }
+  .dk-chev::after { content: ""; position: absolute; inset: -2px -5px; }
   .dk-chev::before { content: "\203A"; font-size: var(--t-lg); line-height: 1; }
   .dk-chev[aria-expanded="true"]::before { transform: rotate(90deg); }
   .dk-chev:hover { background: var(--hover); color: var(--fg); }
