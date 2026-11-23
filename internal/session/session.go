@@ -578,6 +578,10 @@ type BrokerHooks interface {
 	// dir. realGH is the absolute path of the real gh on the session PATH, or
 	// "". Every nil-error call is paired with exactly one ReleaseHost.
 	HostFor(sessionID string, bs config.Bindings, base map[string]awsprobe.Result, realGH string) (env []string, dir string, err error)
+	// WriteHostMCP writes a Host session's own MCP config (the entry servers a
+	// token binding adds) into the dir HostFor made, and returns its path. The
+	// document carries no secret.
+	WriteHostMCP(sessionID string, doc []byte) (path string, err error)
 	// ReleaseHost drops the reference HostFor took. remove deletes the
 	// session's dir once none is left (the session ended); without it the dir
 	// stays for the session to be found again after a daemon restart.
@@ -2412,7 +2416,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			mt.Optional = !isClaudeBin(bin)
 			mounts = append(slices.Clip(mounts), mt)
 		}
-		if len(bs.Tokens) > 0 && isClaudeBin(bin) {
+		if len(bs.Tokens) > 0 && takesMCPConfig(bin) {
 			flags, drops, err := m.tokenMCP(spec, brk, bs, bundles, includeUser, bundleFailed, bundleDrops)
 			if err != nil {
 				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, err)
@@ -2423,7 +2427,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// separate argv elements, ahead of the "--" Build adds for a first message.
 		// The clone line and the credential note are provider-neutral text that
 		// reaches claude as ONE --append-system-prompt value.
-		if isClaudeBin(bin) {
+		if appendsSystemPrompt(bin) {
 			var guide []string
 			if cl != nil {
 				guide = append(guide, cloneGuidance(cl.Of, cloneInfo.PushRepo != "", !cl.NoAutoReturn))
@@ -2748,6 +2752,27 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				return nil, profileRefusal(spec.Agent, fmt.Sprintf("cannot prepare its %s access on Host: %v", bindingNames(bs), err))
 			}
 			heldHost, hostDir = true, dir
+			// The note and the MCP config name the dir, which exists only now,
+			// after the launcher (a box's flags are known before it): with
+			// something to add, the launcher runs again with them, and its env
+			// replaces the first run's.
+			flags, drops, ferr := hostAgentFlags(brk, id, dir, bin, bs, env, bundleDrops)
+			if ferr != nil {
+				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, ferr)
+			}
+			bundleDrops = drops
+			if len(flags) > 0 {
+				spec.ExtraArgs = append(slices.Clip(spec.ExtraArgs), flags...)
+				if argv, env, err = m.launcher.Build(spec); err != nil {
+					return nil, err
+				}
+				if len(argv) == 0 {
+					return nil, fmt.Errorf("session: launcher produced empty argv")
+				}
+				if env == nil {
+					env = []string{} // fail closed, as after the first run
+				}
+			}
 			// Strip before adding, as for a box: whatever the profile or daemon
 			// env says about AWS, GitHub or a token entry must neither bypass the
 			// broker nor shadow one of its values. Every name set below is set
@@ -2937,23 +2962,7 @@ func workspaceRootOfMeta(md sessionMeta, meta map[string]sessionMeta) string {
 // no image servers.
 func (m *Manager) tokenMCP(spec launcher.SpawnSpec, brk BrokerHooks, bs config.Bindings, bundles Bundles,
 	includeUser, bundleFailed bool, drops []bundle.Drop) ([]string, []bundle.Drop, error) {
-	bound := make(map[string]bool, len(bs.Tokens))
-	for _, e := range bs.Tokens {
-		bound[e.Name] = true
-	}
-	var entries []bundle.EntryServer
-	drops = slices.Clone(drops)
-	for _, e := range bs.Tokens {
-		if e.MCP == nil {
-			continue
-		}
-		args, err := config.EntryMCPArgs(e, bound)
-		if err != nil {
-			drops = append(drops, bundle.Drop{Kind: "mcp", Name: e.MCP.Server, Reason: err.Error()})
-			continue
-		}
-		entries = append(entries, bundle.EntryServer{Server: e.MCP.Server, Entry: e.Name, Command: e.MCP.Command, Args: args})
-	}
+	entries, drops := tokenServers(bs, drops)
 	if len(entries) == 0 {
 		// Nothing to add (no entry declares a server, or each was left out): the
 		// session keeps the bundle's own flags, byte for byte.
@@ -2963,7 +2972,7 @@ func (m *Manager) tokenMCP(spec launcher.SpawnSpec, brk BrokerHooks, bs config.B
 	var sm bundle.SessionMCP
 	if bundles == nil || bundleFailed {
 		log.Printf("spawn %s: no config bundle, so token MCP servers are written unprobed and without the image's servers", spec.Agent)
-		servers, d := bundle.ComposeSessionMCP(nil, nil, nil, drops, entries)
+		servers, d := bundle.ComposeSessionMCP(nil, nil, nil, drops, entries, boxEntryLauncher)
 		doc, err := bundle.MarshalSessionMCP(servers)
 		if err != nil {
 			return nil, nil, err
@@ -2993,6 +3002,90 @@ func (m *Manager) tokenMCP(spec launcher.SpawnSpec, brk BrokerHooks, bs config.B
 		args = append(args, "--mcp-config", path, "--strict-mcp-config")
 	}
 	return args, sm.Drops, nil
+}
+
+// boxEntryLauncher is the command a box's token MCP server runs: the box
+// image's agentbox-env.
+const boxEntryLauncher = "agentbox-env"
+
+// tokenServers is the MCP servers the bound token entries declare, in entry
+// order, and drops with one row added for each entry whose server cannot be
+// built (an extra it names is not bound). drops is never modified.
+func tokenServers(bs config.Bindings, drops []bundle.Drop) ([]bundle.EntryServer, []bundle.Drop) {
+	bound := make(map[string]bool, len(bs.Tokens))
+	for _, e := range bs.Tokens {
+		bound[e.Name] = true
+	}
+	var entries []bundle.EntryServer
+	drops = slices.Clone(drops)
+	for _, e := range bs.Tokens {
+		if e.MCP == nil {
+			continue
+		}
+		args, err := config.EntryMCPArgs(e, bound)
+		if err != nil {
+			drops = append(drops, bundle.Drop{Kind: "mcp", Name: e.MCP.Server, Reason: err.Error()})
+			continue
+		}
+		entries = append(entries, bundle.EntryServer{Server: e.MCP.Server, Entry: e.Name, Command: e.MCP.Command, Args: args})
+	}
+	return entries, drops
+}
+
+// hostAgentFlags is what a bound Host session's agent is handed that depends
+// on its host dir (#360): the session's own mcp.json when a token entry
+// declares an MCP server whose command is on the session PATH (D6), and the
+// credential note (D5). The flags are appended to the spawn's: a profile's own
+// --mcp-config stays, and --strict-mcp-config is never added, so the user's
+// own servers keep working. drops is what the caller holds; the result adds a
+// row for each server left out.
+func hostAgentFlags(brk BrokerHooks, id, dir, bin string, bs config.Bindings, env []string, drops []bundle.Drop) ([]string, []bundle.Drop, error) {
+	var flags []string
+	if takesMCPConfig(bin) && len(bs.Tokens) > 0 {
+		entries, d := tokenServers(bs, drops)
+		drops = d
+		var kept []bundle.EntryServer
+		for _, e := range entries {
+			if !hostCommandFound(env, e.Command) {
+				drops = append(drops, bundle.Drop{Kind: "mcp", Name: e.Server,
+					Reason: "command " + e.Command + " was not found on this session's PATH"})
+				continue
+			}
+			kept = append(kept, e)
+		}
+		if len(kept) > 0 {
+			// Nothing is probed again (the commands were looked up just above) and
+			// there is no image or host server set to merge: the agent reads the
+			// user's own config itself.
+			servers, d := bundle.ComposeSessionMCP(nil, nil, nil, drops, kept, filepath.Join(dir, "bin", "agentbox-env"))
+			doc, err := bundle.MarshalSessionMCP(servers)
+			if err != nil {
+				return nil, nil, err
+			}
+			path, err := brk.WriteHostMCP(id, doc)
+			if err != nil {
+				return nil, nil, err
+			}
+			flags, drops = append(flags, "--mcp-config", path), d
+		}
+	}
+	if appendsSystemPrompt(bin) {
+		if note := hostCredGuidance(bs); note != "" {
+			flags = append(flags, "--append-system-prompt", note)
+		}
+	}
+	return flags, drops, nil
+}
+
+// hostCommandFound reports whether an MCP server's command is an executable
+// the session will find: on its own PATH (the daemon's is never used), or an
+// absolute path.
+func hostCommandFound(env []string, cmd string) bool {
+	if strings.Contains(cmd, "/") {
+		fi, err := os.Stat(cmd)
+		return filepath.IsAbs(cmd) && err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
+	}
+	return launcher.SessionLookPath(env, cmd) != ""
 }
 
 // hasTokenMCP reports whether any bound entry declares a box-side MCP server.

@@ -177,6 +177,33 @@ func writeHostFiles(stateRoot, rel, dir string, bs config.Bindings, base map[str
 	return nil
 }
 
+// HostMCPFile is a Host session's own MCP config in its dir (0600, no secret:
+// the servers it names run under agentbox-env, which fetches their tokens).
+// It is not in hostFileNames on purpose: the session's agent was started with
+// --mcp-config pointing here, and the HostFor of a re-attach after a daemon
+// restart must not remove what that running agent still reads. It goes with
+// the dir.
+const HostMCPFile = "mcp.json"
+
+// WriteHostMCP writes a Host session's MCP config into its dir, which HostFor
+// made. Like the other files, through an os.Root: a symlink planted at the name
+// is replaced, never followed. It returns the file's path.
+func (h Hooks) WriteHostMCP(sessionID string, doc []byte) (string, error) {
+	root, err := os.OpenRoot(h.StateRoot)
+	if err != nil {
+		return "", fmt.Errorf("broker: opening state root: %w", err)
+	}
+	defer root.Close()
+	rel := hostRel(sessionID)
+	if fi, err := root.Lstat(rel); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("broker: %s is not a plain directory", rel)
+	}
+	if err := replaceFile(root, rel, HostMCPFile, doc); err != nil {
+		return "", fmt.Errorf("broker: writing %s: %w", HostMCPFile, err)
+	}
+	return filepath.Join(h.StateRoot, rel, HostMCPFile), nil
+}
+
 // hostEnv is a bound Host session's env for its dir: the broker socket and the
 // dir, the AWS block of a box with the dir's aws-config, and GitHub's helper,
 // the SSH-to-HTTPS rewrites and the dir's gh config.

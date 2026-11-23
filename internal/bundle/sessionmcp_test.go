@@ -31,7 +31,7 @@ func TestComposePrecedence(t *testing.T) {
 	image := map[string]any{"playwright": map[string]any{"command": "playwright-mcp"}}
 
 	t.Run("entry replaces a host server", func(t *testing.T) {
-		got, drops := ComposeSessionMCP(user, image, nil, nil, []EntryServer{grafanaServer()})
+		got, drops := ComposeSessionMCP(user, image, nil, nil, []EntryServer{grafanaServer()}, "agentbox-env")
 		if got["grafana"].(map[string]any)["command"] != "agentbox-env" {
 			t.Fatalf("grafana = %v", got["grafana"])
 		}
@@ -46,7 +46,7 @@ func TestComposePrecedence(t *testing.T) {
 
 	t.Run("image replaces an entry", func(t *testing.T) {
 		e := EntryServer{Server: "playwright", Entry: "pw", Command: "mcp-pw", Args: []string{"pw", "--", "mcp-pw"}}
-		got, drops := ComposeSessionMCP(nil, image, nil, nil, []EntryServer{e})
+		got, drops := ComposeSessionMCP(nil, image, nil, nil, []EntryServer{e}, "agentbox-env")
 		if got["playwright"].(map[string]any)["command"] != "playwright-mcp" {
 			t.Fatalf("playwright = %v", got["playwright"])
 		}
@@ -61,7 +61,7 @@ func TestComposePrecedence(t *testing.T) {
 			{Kind: "mcp", Name: "grafana", Reason: "uses ${VAR} substitution"},
 			{Kind: "mcp", Name: "other", Reason: "x"},
 		}
-		_, drops := ComposeSessionMCP(nil, nil, nil, in, []EntryServer{grafanaServer()})
+		_, drops := ComposeSessionMCP(nil, nil, nil, in, []EntryServer{grafanaServer()}, "agentbox-env")
 		want := []Drop{
 			{Kind: "mcp", Name: "other", Reason: "x"},
 			{Kind: "mcp", Name: "grafana", Reason: "replaced by token entry grafana-cloud"},
@@ -75,7 +75,7 @@ func TestComposePrecedence(t *testing.T) {
 	})
 
 	t.Run("no host server of that name: no replacement row", func(t *testing.T) {
-		_, drops := ComposeSessionMCP(nil, nil, nil, nil, []EntryServer{grafanaServer()})
+		_, drops := ComposeSessionMCP(nil, nil, nil, nil, []EntryServer{grafanaServer()}, "agentbox-env")
 		if len(drops) != 0 {
 			t.Fatalf("drops = %+v", drops)
 		}
@@ -86,7 +86,7 @@ func TestComposeProbe(t *testing.T) {
 	e := grafanaServer()
 	t.Run("command missing", func(t *testing.T) {
 		user := map[string]any{"grafana": map[string]any{"command": "old"}}
-		got, drops := ComposeSessionMCP(user, nil, map[string]bool{"agentbox-env": true, "mcp-grafana": false}, nil, []EntryServer{e})
+		got, drops := ComposeSessionMCP(user, nil, map[string]bool{"agentbox-env": true, "mcp-grafana": false}, nil, []EntryServer{e}, "agentbox-env")
 		want := []Drop{{Kind: "mcp", Name: "grafana", Reason: "command mcp-grafana does not exist inside the box image"}}
 		if !reflect.DeepEqual(drops, want) {
 			t.Fatalf("drops = %+v", drops)
@@ -98,7 +98,7 @@ func TestComposeProbe(t *testing.T) {
 	})
 	t.Run("agentbox-env missing drops every entry", func(t *testing.T) {
 		other := EntryServer{Server: "sentry", Entry: "sentry", Command: "npx", Args: []string{"sentry", "--", "npx"}}
-		got, drops := ComposeSessionMCP(nil, nil, map[string]bool{"mcp-grafana": true, "npx": true}, nil, []EntryServer{e, other})
+		got, drops := ComposeSessionMCP(nil, nil, map[string]bool{"mcp-grafana": true, "npx": true}, nil, []EntryServer{e, other}, "agentbox-env")
 		reason := "the box image has no agentbox-env; update box_image"
 		want := []Drop{{Kind: "mcp", Name: "grafana", Reason: reason}, {Kind: "mcp", Name: "sentry", Reason: reason}}
 		if !reflect.DeepEqual(drops, want) || len(got) != 0 {
@@ -106,7 +106,7 @@ func TestComposeProbe(t *testing.T) {
 		}
 	})
 	t.Run("nil resolves is unprobed", func(t *testing.T) {
-		got, drops := ComposeSessionMCP(nil, nil, nil, nil, []EntryServer{e})
+		got, drops := ComposeSessionMCP(nil, nil, nil, nil, []EntryServer{e}, "agentbox-env")
 		if len(got) != 1 || len(drops) != 0 {
 			t.Fatalf("servers = %v drops = %+v", got, drops)
 		}
@@ -114,8 +114,18 @@ func TestComposeProbe(t *testing.T) {
 }
 
 func TestComposeServerShape(t *testing.T) {
-	got, _ := ComposeSessionMCP(nil, nil, nil, nil, []EntryServer{grafanaServer()})
+	got, _ := ComposeSessionMCP(nil, nil, nil, nil, []EntryServer{grafanaServer()}, "agentbox-env")
 	want := `{"grafana":{"args":["grafana-cloud","--","mcp-grafana","--disable-docs"],"command":"agentbox-env","type":"stdio"}}`
+	if s := marshal(t, got); s != want {
+		t.Fatalf("got  %s\nwant %s", s, want)
+	}
+}
+
+// A Host session names its own launcher (the shim in its dir); the argv and
+// the rest of the shape are the box's.
+func TestComposeServerShapeHostLauncher(t *testing.T) {
+	got, _ := ComposeSessionMCP(nil, nil, nil, nil, []EntryServer{grafanaServer()}, "/d/bin/agentbox-env")
+	want := `{"grafana":{"args":["grafana-cloud","--","mcp-grafana","--disable-docs"],"command":"/d/bin/agentbox-env","type":"stdio"}}`
 	if s := marshal(t, got); s != want {
 		t.Fatalf("got  %s\nwant %s", s, want)
 	}

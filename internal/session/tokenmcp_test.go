@@ -1,7 +1,10 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -326,4 +329,155 @@ func TestSpawnTokenMCPFailureRefusesTheSpawn(t *testing.T) {
 			t.Fatal("a box was started for a refused spawn")
 		}
 	})
+}
+
+// #360: on Host the credential note and the token MCP servers reach the
+// agent as flags, though the dir they name only exists after the launcher.
+
+// hostFlagLauncher is the bound Host profile whose process prints the args it
+// was started with, so a test reads the real argv (the launcher's own flags
+// first, then the spawn's extra args, as Build does).
+type hostFlagLauncher struct {
+	dropsLauncher
+	lead   []string // flags the profile itself gives (a --mcp-config of its own)
+	builds *int
+}
+
+const argDumpScript = `for a in "$@"; do echo "ARG=$a"; done; echo ENDOFARGS; sleep 30`
+
+func (l hostFlagLauncher) Build(spec launcher.SpawnSpec) ([]string, []string, error) {
+	_, env, err := l.dropsLauncher.Build(spec)
+	*l.builds++
+	argv := []string{"sh", "-c", argDumpScript, "sh"}
+	argv = append(argv, l.lead...)
+	return append(argv, spec.ExtraArgs...), env, err
+}
+
+type hostFlagHarness struct {
+	*dropsHarness
+	tools  string
+	builds *int
+}
+
+// newHostFlagHarness is a bound Host profile with node on its PATH (or not)
+// and the given commands installed beside it.
+func newHostFlagHarness(t *testing.T, node bool, lead []string, cmds ...string) *hostFlagHarness {
+	t.Helper()
+	tools := sessionTools(t, node, true)
+	for _, c := range cmds {
+		if err := os.WriteFile(filepath.Join(tools, c), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	builds := new(int)
+	dl := dropsLauncher{tieredLauncher: tieredLauncher{runtime: config.RuntimeBox}, bound: true,
+		guardrail: threeGuard, path: tools}
+	h := &hostFlagHarness{dropsHarness: newDropsHarness(t, dl), tools: tools, builds: builds}
+	h.m.launcher = hostFlagLauncher{dropsLauncher: dl, lead: lead, builds: builds}
+	return h
+}
+
+// spawnHostFlags starts the harness's bound profile on Host and returns the
+// args the process got.
+func spawnHostFlags(t *testing.T, h *hostFlagHarness) (*Session, []string) {
+	t.Helper()
+	s, err := h.m.Spawn(hostAckSpec(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	out, cancel, _ := s.Subscribe()
+	defer cancel()
+	var b strings.Builder
+	deadline := time.After(5 * time.Second)
+	for !strings.Contains(b.String(), "ENDOFARGS") {
+		select {
+		case chunk, ok := <-out:
+			if !ok {
+				t.Fatalf("session ended; output %q", b.String())
+			}
+			b.WriteString(string(chunk))
+		case <-deadline:
+			t.Fatalf("no arg output; got %q", b.String())
+		}
+	}
+	var args []string
+	for _, line := range strings.Split(b.String(), "\n") {
+		if a, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "ARG="); ok {
+			args = append(args, a)
+		}
+	}
+	return s, args
+}
+
+func TestHostTokenMCPAppendsConfig(t *testing.T) {
+	h := newHostFlagHarness(t, true, []string{"--mcp-config", "profile.json"}, "mcp-grafana")
+	s, args := spawnHostFlags(t, h)
+	dir := h.hooks.hostDirFor(s.ID)
+	want := []string{"--mcp-config", "profile.json", "--mcp-config", dir + "/mcp.json"}
+	if got := args[:len(want)]; !slices.Equal(got, want) {
+		t.Fatalf("args = %q, want the profile's --mcp-config kept and ours appended: %q", args, want)
+	}
+	if slices.Contains(args, "--strict-mcp-config") {
+		t.Fatalf("a Host session must keep the user's own servers: %q", args)
+	}
+	doc, ok := h.hooks.hostMCPDoc(s.ID)
+	if !ok {
+		t.Fatal("no mcp.json written for the session")
+	}
+	var got struct {
+		MCPServers map[string]struct {
+			Type    string   `json:"type"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(doc), &got); err != nil {
+		t.Fatal(err)
+	}
+	g := got.MCPServers["grafana"]
+	if len(got.MCPServers) != 1 || g.Type != "stdio" || g.Command != dir+"/bin/agentbox-env" ||
+		!slices.Equal(g.Args, []string{"grafana-prod", "--", "mcp-grafana"}) {
+		t.Fatalf("mcp.json = %s", doc)
+	}
+	if strings.Contains(doc, "SECRET") || strings.Contains(doc, "tok-") {
+		t.Fatalf("a token value is in mcp.json: %s", doc)
+	}
+	if len(s.BundleDrops) != 0 {
+		t.Fatalf("drops = %+v", s.BundleDrops)
+	}
+	if *h.builds != 2 {
+		t.Fatalf("Build ran %d times, want 2 (before the dir exists, and with the flags)", *h.builds)
+	}
+}
+
+func TestHostTokenMCPMissingCommandDropped(t *testing.T) {
+	h := newHostFlagHarness(t, true, nil) // mcp-grafana is not installed
+	s, args := spawnHostFlags(t, h)
+	if slices.Contains(args, "--mcp-config") || slices.Contains(args, "--strict-mcp-config") {
+		t.Fatalf("args = %q, want no MCP config for a server whose command is missing", args)
+	}
+	if _, ok := h.hooks.hostMCPDoc(s.ID); ok {
+		t.Fatal("an mcp.json was written with nothing in it")
+	}
+	if len(s.BundleDrops) != 1 || s.BundleDrops[0].Kind != "mcp" || s.BundleDrops[0].Name != "grafana" ||
+		!strings.Contains(s.BundleDrops[0].Reason, "mcp-grafana") || !strings.Contains(s.BundleDrops[0].Reason, "PATH") {
+		t.Fatalf("drops = %+v, want grafana left out, naming the command and the PATH", s.BundleDrops)
+	}
+	// The credential note does not depend on the MCP server.
+	if argAfter(args, "--append-system-prompt") == "" {
+		t.Fatalf("no credential note: %q", args)
+	}
+}
+
+func TestHostTokenMCPWriteFailureRefusesTheStart(t *testing.T) {
+	h := newHostFlagHarness(t, true, nil, "mcp-grafana")
+	h.hooks.hostMCPErr = errors.New("disk full")
+	_, err := h.m.Spawn(hostAckSpec(t))
+	if err == nil || !strings.Contains(err.Error(), "preparing token MCP servers: disk full") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, rel, _ := h.hooks.hostState(); len(rel) != 1 || !rel[0].remove {
+		t.Fatalf("host releases = %+v, want the failed spawn's dir given back", rel)
+	}
 }

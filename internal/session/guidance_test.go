@@ -2,9 +2,11 @@ package session
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/config"
 )
 
@@ -155,6 +157,50 @@ func TestCredGuidance(t *testing.T) {
 			if strings.Contains(got, bad) {
 				t.Errorf("note shows %q: %q", bad, got)
 			}
+		}
+	})
+}
+
+// #360 (D5): a Host session is told about its credentials only when they
+// really are in place, with one extra line saying it is on the host.
+func TestHostNoteOnlyWhenCredsReady(t *testing.T) {
+	t.Run("bound, node present", func(t *testing.T) {
+		h := newHostFlagHarness(t, true, nil)
+		s, args := spawnHostFlags(t, h)
+		want := credGuidance(s.Bindings()) + " " + hostCredLine
+		if got := argAfter(args, "--append-system-prompt"); got != want {
+			t.Fatalf("note = %q\nwant   %q", got, want)
+		}
+		if n := strings.Count(strings.Join(args, "\n"), "--append-system-prompt"); n != 1 {
+			t.Fatalf("%d notes in %q", n, args)
+		}
+	})
+	t.Run("bound, node missing: no bindings, no note", func(t *testing.T) {
+		h := newHostFlagHarness(t, false, nil, "mcp-grafana")
+		s, args := spawnHostFlags(t, h)
+		if s.HostBroker || slices.Contains(args, "--append-system-prompt") || slices.Contains(args, "--mcp-config") {
+			t.Fatalf("host broker=%v args=%q, want a plain Host run", s.HostBroker, args)
+		}
+		if _, ok := h.hooks.hostMCPDoc(s.ID); ok {
+			t.Fatal("an mcp.json was written for a session without bindings")
+		}
+		if *h.builds != 1 {
+			t.Fatalf("Build ran %d times for a session with nothing to add", *h.builds)
+		}
+	})
+	t.Run("box: the note is as before, with no Host line", func(t *testing.T) {
+		m, boxes, _ := mcpManager(t, "claude", account.DefaultResolved(""), grafanaEntry())
+		spawnTok(t, m)
+		if got, want := argAfter(boxes.lastArgv, "--append-system-prompt"), credGuidance(config.Bindings{Tokens: []config.StaticToken{grafanaEntry()}}); got != want {
+			t.Fatalf("note = %q\nwant   %q", got, want)
+		}
+		if slices.ContainsFunc(boxes.lastArgv, func(a string) bool { return strings.Contains(a, "runs on the host") }) {
+			t.Fatalf("a box was told it runs on the host: %q", boxes.lastArgv)
+		}
+	})
+	t.Run("the line", func(t *testing.T) {
+		if hostCredLine != "This session runs on the host, not in a box: these are the default credentials, not a limit. Use them, not this machine's own logins." {
+			t.Fatalf("hostCredLine = %q", hostCredLine)
 		}
 	})
 }

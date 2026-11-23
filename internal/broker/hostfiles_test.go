@@ -684,3 +684,61 @@ func TestHostGitHelperResetsUserHelpers(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteHostMCP(t *testing.T) {
+	root := shortDir(t)
+	h := hostHooks(t, root, nil)
+	_, dir, err := h.HostFor("s1", allKinds(), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.WriteHostMCP("s1", []byte(`{"mcpServers":{}}`)); err != nil || got != filepath.Join(dir, "mcp.json") {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "mcp.json")
+	fi, err := os.Lstat(p)
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mcp.json: %v, %v", fi, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != `{"mcpServers":{}}` {
+		t.Fatalf("mcp.json = %q", b)
+	}
+	// A symlink planted at the name is replaced, never written through.
+	outside := filepath.Join(root, "outside")
+	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.WriteHostMCP("s1", []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "keep" {
+		t.Fatalf("the write went through a symlink: %q", b)
+	}
+	// The session's own re-attach runs HostFor again: the config its running
+	// agent was started with stays.
+	h.ReleaseHost("s1", false)
+	if _, _, err := h.HostFor("s1", allKinds(), nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(p); err != nil || string(b) != "new" {
+		t.Fatalf("mcp.json after HostFor = %q, %v", b, err)
+	}
+	// The dir's end takes it along.
+	h.ReleaseHost("s1", true)
+	if _, err := os.Lstat(p); !os.IsNotExist(err) {
+		t.Fatalf("mcp.json outlived its dir: %v", err)
+	}
+}
+
+func TestWriteHostMCPNeedsItsDir(t *testing.T) {
+	h := hostHooks(t, shortDir(t), nil)
+	if _, err := h.WriteHostMCP("nobody", []byte("{}")); err == nil {
+		t.Fatal("wrote an MCP config for a session with no dir")
+	}
+}

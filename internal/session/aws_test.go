@@ -97,6 +97,8 @@ type fakeBrokerHooks struct {
 	sweeps       [][]string
 	hostErr      error
 	hostRoot     string
+	hostMCP      map[string]string // WriteHostMCP: session id -> document
+	hostMCPErr   error
 }
 
 type hostForCall struct {
@@ -143,6 +145,28 @@ func (f *fakeBrokerHooks) HostFor(id string, bs config.Bindings, base map[string
 		}
 	}
 	return env, dir, nil
+}
+
+// WriteHostMCP records the document a Host session's mcp.json would hold.
+func (f *fakeBrokerHooks) WriteHostMCP(id string, doc []byte) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order.add("hostmcp")
+	if f.hostMCPErr != nil {
+		return "", f.hostMCPErr
+	}
+	if f.hostMCP == nil {
+		f.hostMCP = map[string]string{}
+	}
+	f.hostMCP[id] = string(doc)
+	return f.hostDirFor(id) + "/mcp.json", nil
+}
+
+func (f *fakeBrokerHooks) hostMCPDoc(id string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.hostMCP[id]
+	return d, ok
 }
 
 func (f *fakeBrokerHooks) ReleaseHost(id string, remove bool) {
