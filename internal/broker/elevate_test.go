@@ -1128,3 +1128,22 @@ func TestElevateAllowedForHostSession(t *testing.T) {
 		t.Fatalf("approval rows %+v", rec2.appr)
 	}
 }
+
+// D8 (#360): what a Host session's write window mints is audited as elevated,
+// with the tier "host".
+func TestHostElevatedMintIsAuditedAsHost(t *testing.T) {
+	v := liveElev()
+	v.Boxed, v.Host, v.Exclusive, v.Box = false, true, false, ""
+	b, _, rec, _ := setup(t, map[string]SessionView{"host-1": v})
+	withTimers(b)
+	if _, err := b.Elevate("host-1", cookie(30)); err != nil {
+		t.Fatal(err)
+	}
+	if w := present(b, credPaths[0], tokA("host-1"), onHostSocket("host-1")); w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	r := rec.rows[len(rec.rows)-1]
+	if !r.Elevated || r.RoleARN != writeRole || r.Outcome != OutcomeMinted || r.Tier != TierHost || r.SessionID != "host-1" {
+		t.Fatalf("audit %+v", r)
+	}
+}
