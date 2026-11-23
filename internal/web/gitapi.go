@@ -119,7 +119,7 @@ func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, a
 func (p fsPolicy) gitTargetIn(path string, vanishedOK bool) (t gitview.Target, abs string, err error) {
 	req, err := p.resolve(path)
 	if err == nil {
-		abs, err = filepath.EvalSymlinks(req.Abs)
+		abs, err = evalSymlinks(req.Abs)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return gitview.Target{}, "", errGitOutside
 		}
@@ -164,14 +164,16 @@ func (p fsPolicy) gitTargetIn(path string, vanishedOK bool) (t gitview.Target, a
 	if rel, err := filepath.Rel(repo.Top, dir); err != nil || !(rel == "." || filepath.IsLocal(rel)) {
 		return gitview.Target{}, "", errGitOutside
 	}
+	// Common comes from a .git file's text when the checkout is a linked worktree or a submodule (the agent writes it in
+	// a box): judged by path before inGitTree resolves it (#364).
 	for _, x := range []string{repo.Top, repo.Common} {
-		if !p.inGitTree(req, x) || p.holdsDenied(x) {
+		if !p.servesByPath(req, x) || !p.inGitTree(req, x) || p.holdsDenied(x) {
 			return gitview.Target{}, "", errGitOutside
 		}
 	}
 	t = gitview.Target{Top: repo.Top, Common: repo.Common}
 	if req.Strict {
-		if r, err := filepath.EvalSymlinks(req.Root); err != nil || r != req.Root {
+		if r, err := evalSymlinks(req.Root); err != nil || r != req.Root {
 			return gitview.Target{}, "", errGitOutside
 		}
 		t.Root = req.Root
@@ -195,10 +197,13 @@ func (p fsPolicy) worktreeOf(t gitview.Target) string {
 	if m == t.Top {
 		return ""
 	}
+	if !p.servesByPath(fsTarget{Root: t.Root, Strict: t.Root != ""}, m) {
+		return ""
+	}
 	if fi, err := os.Lstat(t.Common); err != nil || !fi.IsDir() {
 		return ""
 	}
-	if r, err := filepath.EvalSymlinks(m); err != nil || r != m {
+	if r, err := evalSymlinks(m); err != nil || r != m {
 		return ""
 	}
 	got, err := p.resolve(m)
@@ -225,7 +230,7 @@ func vanishedLeaf(p fsPolicy, path string) (preq fsTarget, parent, abs string, e
 	if preq, err = p.resolve(filepath.Dir(clean)); err != nil {
 		return fsTarget{}, "", "", err
 	}
-	if parent, err = filepath.EvalSymlinks(preq.Abs); err != nil {
+	if parent, err = evalSymlinks(preq.Abs); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fsTarget{}, "", "", os.ErrNotExist
 		}
@@ -247,12 +252,16 @@ func vanishedLeaf(p fsPolicy, path string) (preq fsTarget, parent, abs string, e
 	return preq, parent, abs, nil
 }
 
+// evalSymlinks is filepath.EvalSymlinks for the git, alternates and where code: a variable so a test can see every path
+// that code resolves.
+var evalSymlinks = filepath.EvalSymlinks
+
 // inGitTree reports whether x is a link-free path that the fs policy serves in
 // the same tree as req: for a boxed request, inside the same contained root; for
 // a host request, outside every contained root. A path EvalSymlinks would
 // change has a link in it and is refused, whoever planted the link.
 func (p fsPolicy) inGitTree(req fsTarget, x string) bool {
-	if r, err := filepath.EvalSymlinks(x); err != nil || r != x {
+	if r, err := evalSymlinks(x); err != nil || r != x {
 		return false
 	}
 	got, err := p.resolve(x)

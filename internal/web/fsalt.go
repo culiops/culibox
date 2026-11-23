@@ -61,7 +61,7 @@ func (s *Server) altCandidates(base, rel string) ([]altCandidate, bool) {
 	}
 	// Repo discovery compares paths lexically, so it is fed a link-free path in
 	// the request's own tree (see inGitTree).
-	abs, err := filepath.EvalSymlinks(req.Abs)
+	abs, err := evalSymlinks(req.Abs)
 	if err != nil || !p.inGitTree(req, abs) {
 		return nil, false
 	}
@@ -73,9 +73,11 @@ func (s *Server) altCandidates(base, rel string) ([]altCandidate, bool) {
 	if !ok || filepath.Base(repo.Common) != ".git" {
 		return nil, false
 	}
+	// root and Common come from a .git file's text in a linked worktree (the agent writes it in a box): judged by path
+	// before inGitTree resolves them (#364).
 	root := filepath.Dir(repo.Common)
 	for _, x := range []string{repo.Top, root, repo.Common} {
-		if !p.inGitTree(req, x) {
+		if !p.servesByPath(req, x) || !p.inGitTree(req, x) {
 			return nil, false
 		}
 	}
@@ -98,7 +100,7 @@ func (s *Server) altCandidates(base, rel string) ([]altCandidate, bool) {
 		}
 		// A worktree's dir comes from a text file the repository's owner writes: a checkout reached through any
 		// link is not served, nor one the fs policy does not serve in the request's own tree.
-		if r, err := filepath.EvalSymlinks(ck.dir); err != nil || r != ck.dir || !p.inGitTree(req, ck.dir) {
+		if r, err := evalSymlinks(ck.dir); err != nil || r != ck.dir || !p.inGitTree(req, ck.dir) {
 			continue
 		}
 		cand := filepath.Join(ck.dir, prefix, rel)
@@ -123,7 +125,7 @@ func (s *Server) altCandidates(base, rel string) ([]altCandidate, bool) {
 // file. The file is opened through its os.Root with O_NONBLOCK and judged on the
 // opened descriptor, so a FIFO swapped in by a box neither blocks nor passes.
 func (p fsPolicy) altFile(req fsTarget, cand string) (int64, bool) {
-	if r, err := filepath.EvalSymlinks(cand); err != nil || r != cand {
+	if r, err := evalSymlinks(cand); err != nil || r != cand {
 		return 0, false
 	}
 	t, err := p.resolve(cand)

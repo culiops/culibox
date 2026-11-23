@@ -462,3 +462,80 @@ func TestServesByPathNeedsNoFilesystem(t *testing.T) {
 		}
 	}
 }
+
+// recordEval notes every path the web package's git and alternates code hands to EvalSymlinks, for the test's life.
+func recordEval(t *testing.T) *[]string {
+	t.Helper()
+	var seen []string
+	old := evalSymlinks
+	evalSymlinks = func(p string) (string, error) { seen = append(seen, p); return old(p) }
+	t.Cleanup(func() { evalSymlinks = old })
+	return &seen
+}
+
+// noneUnder fails the test for every recorded path that is dir or below it.
+func noneUnder(t *testing.T, what string, seen []string, dir string) {
+	t.Helper()
+	for _, p := range seen {
+		if p == dir || strings.HasPrefix(p, dir+"/") {
+			t.Errorf("%s touched %s: a path outside the served roots that a .git pointer chose", what, p)
+		}
+	}
+}
+
+// outsidePointer makes a checkout under home whose .git FILE points at a worktree gitdir of a repository outside every
+// served root (the agent writes that file), returning the checkout and the outside repository.
+func outsidePointer(t *testing.T, home string) (wt, outside string) {
+	t.Helper()
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gd := filepath.Join(outside, ".git", "worktrees", "x")
+	mustMkdirAll(t, gd)
+	mustWrite(t, filepath.Join(outside, "f.txt"))
+	wt = filepath.Join(home, "wt")
+	mustWrite(t, filepath.Join(wt, ".git"), "gitdir: "+gd+"\n")
+	mustWrite(t, filepath.Join(wt, "f.txt"))
+	return wt, outside
+}
+
+// #364 review: the common dir and main checkout Locate derives from a .git file's text are judged by path before
+// anything resolves them, on the dock's status poll and on the alternates lookup.
+func TestGitPointerOutsideRootsNeverTouched(t *testing.T) {
+	s, h, _ := hostGitServer(t)
+	wt, outside := outsidePointer(t, h)
+	seen := recordEval(t)
+	if st := decodeStatus(t, gitPost(s.handleGitStatus, "/api/git/status", pathBody(wt))); st.State == "ok" {
+		t.Errorf("status of a checkout whose git dir is outside the roots = %+v, want refused", st)
+	}
+	noneUnder(t, "status", *seen, outside)
+	*seen = nil
+	if got := altGet(t, s, wt, "f.txt"); len(got) != 0 {
+		t.Errorf("alternates = %+v, want none", got)
+	}
+	noneUnder(t, "alternates", *seen, outside)
+}
+
+// The alternates lookup hands gitrepo.Worktrees its path gate: without it, a registered worktree outside every served
+// root would reach this package's own checks (and be resolved) at all.
+func TestAltWorktreeGateIsWired(t *testing.T) {
+	s, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	altRepo(t, repo)
+	mustWrite(t, filepath.Join(repo, "f.txt"))
+	out, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gd := filepath.Join(repo, ".git", "worktrees", "far")
+	far := filepath.Join(out, "far")
+	mustWrite(t, filepath.Join(gd, "gitdir"), filepath.Join(far, ".git")+"\n")
+	mustWrite(t, filepath.Join(far, ".git"), "gitdir: "+gd+"\n")
+	mustWrite(t, filepath.Join(far, "f.txt"))
+	seen := recordEval(t)
+	if got := altGet(t, s, filepath.Join(h, "repo"), "f.txt"); len(got) != 0 {
+		t.Errorf("alternates = %+v, want none", got)
+	}
+	noneUnder(t, "alternates", *seen, out)
+}

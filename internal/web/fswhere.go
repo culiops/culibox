@@ -52,7 +52,7 @@ func (s *Server) handleFsWhere(w http.ResponseWriter, r *http.Request) {
 // none the fs policy serves in req's own tree. Repo discovery compares paths lexically, so it starts from a link-free
 // spelling that inGitTree vouches for, as gitTarget does.
 func (p fsPolicy) checkoutTop(req fsTarget, isDir bool) string {
-	abs, err := filepath.EvalSymlinks(req.Abs)
+	abs, err := evalSymlinks(req.Abs)
 	if err != nil {
 		return ""
 	}
