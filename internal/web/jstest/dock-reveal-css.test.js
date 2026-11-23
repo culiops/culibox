@@ -19,13 +19,14 @@ test("the hint's markup: after the trail, before Edited by, hidden, its copy fix
   const row = html.slice(html.indexOf('id="dock-crumbs"'), html.indexOf("</div>", html.indexOf('id="dock-crumbs"')));
   const trail = row.indexOf('id="dock-trail"'), hint = row.indexOf('id="dock-outside"'), ed = row.indexOf('id="dock-edited"');
   assert.ok(trail > 0 && hint > trail && ed > hint, "trail · hint · Edited by");
-  assert.match(row, /<span id="dock-outside" class="dk-outside" hidden><span class="dk-outside-t">Outside this tree<\/span><span aria-hidden="true"> · <\/span><button type="button" class="link dk-outside-go"( [^>]*)?>Reveal<\/button><\/span>/);
+  assert.match(row, /<span id="dock-outside" class="dk-outside" hidden><span class="dk-outside-t">Outside this tree<\/span><span aria-hidden="true">·<\/span><button type="button" class="link dk-outside-go"( [^>]*)?>Reveal<\/button><\/span>/);
 });
 
 test("the hint gives way first: the trail shrinks, then the hint's words; Reveal and Edited by never do", () => {
   const css = read("desktop.css");
   assert.match(rule(css, ".dk-outside"), /flex:\s*0 1 auto/);
   assert.match(rule(css, ".dk-outside"), /min-width:\s*0/);
+  assert.match(rule(css, ".dk-outside"), /gap:\s*4px/, "a flex row trims the spaces around the dot: the gap spaces it");
   assert.match(rule(css, ".dk-outside-t"), /text-overflow:\s*ellipsis/);
   assert.match(rule(css, ".dk-outside-t"), /min-width:\s*0/);
   assert.match(rule(css, ".dk-outside-go"), /flex:\s*none/);
