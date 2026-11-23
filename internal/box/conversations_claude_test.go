@@ -639,6 +639,25 @@ func TestNestedMountpointPlantedInTheFolderIsNotUsed(t *testing.T) {
 			t.Fatalf("the mount was made over a planted link: %q", f.runArgs)
 		}
 	})
+	t.Run("linked folder on the way dropped", func(t *testing.T) {
+		m, f := newTestManagerWithFake(t)
+		ws := realTemp(t)
+		conv := ConversationsDir(m.opts.StateRoot, ConversationsKey("TEST", ws, "", "p"))
+		// x/memory is a real directory; -w is a link to x, inside the folder.
+		if err := os.MkdirAll(filepath.Join(conv, "x", "memory"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("x", filepath.Join(conv, "-w")); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, err := m.Wrap(context.Background(), ws, "s1", convKey("p"), []string{"bash"}, nil,
+			[]Mount{{Host: t.TempDir(), Box: box, Optional: true}}); err != nil {
+			t.Fatal(err)
+		}
+		if f.runs() != 1 || hasDst(f.runArgs[0], box) {
+			t.Fatalf("the mount was made through a linked folder: %q", f.runArgs)
+		}
+	})
 	t.Run("required mount refused", func(t *testing.T) {
 		m, f := newTestManagerWithFake(t)
 		ws := realTemp(t)
