@@ -2113,6 +2113,13 @@ func (m *Manager) grantBlock(ctx context.Context, cwd, self string, remove bool)
 	}
 	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance)
 	if err != nil {
+		// Only the listing's own error, while ctx is live, is classified (as
+		// Ping's is): nothing answering at the daemon's endpoint is marked
+		// ErrDockerNotRunning, text unchanged, so a Host session's grant can
+		// tell "no box can be running" from any other failure (#360).
+		if ctx.Err() == nil && errors.Is(classifyDaemonErr(err), ErrDockerNotRunning) {
+			err = daemonDownErr{err}
+		}
 		return GrantBlock{}, fmt.Errorf("box: listing boxes: %w", err)
 	}
 	for _, b := range boxes {

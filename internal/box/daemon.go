@@ -90,3 +90,12 @@ func DaemonReason(err error) string {
 	}
 	return "run `culibox doctor` for details"
 }
+
+// daemonDownErr is a docker error classifyDaemonErr reads as
+// ErrDockerNotRunning, with its own text unchanged (a log line stays what it
+// was).
+type daemonDownErr struct{ err error }
+
+func (e daemonDownErr) Error() string { return e.err.Error() }
+
+func (e daemonDownErr) Unwrap() []error { return []error{ErrDockerNotRunning, e.err} }

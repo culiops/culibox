@@ -195,7 +195,10 @@ func (e elevationService) claimCheck(id string) error {
 
 // blockerFor runs check for session s and words what it found: a box of this
 // instance is named by the live sessions in it (#325), anything else by the
-// box layer's own sentence.
+// box layer's own sentence. For a Host session a listing that failed because
+// Docker (or the Mac's VM) is confirmed not running is no blocker: no box can
+// be running, so none uses the folder (#360). Any other failure is an error,
+// for which the caller refuses; a box session's is always one, as before.
 func (e elevationService) blockerFor(s *session.Session, check boxCheck) (string, error) {
 	if check == nil {
 		return "", errors.New("no box manager")
@@ -203,6 +206,10 @@ func (e elevationService) blockerFor(s *session.Session, check boxCheck) (string
 	ctx, cancel := context.WithTimeout(context.Background(), grantCheckTimeout)
 	defer cancel()
 	gb, err := check(ctx, s.Cwd, s.Box)
+	if err != nil && hostTier(s) && s.Box == "" && errors.Is(err, box.ErrDockerNotRunning) {
+		log.Printf("grant check for %s: %v; no box can be running, so none uses its folder", s.ID, err)
+		return "", nil
+	}
 	if err != nil || gb.Why == "" {
 		return "", err
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -307,6 +308,50 @@ func TestGrantContextLeavesOutTheElevatedHostSession(t *testing.T) {
 	gc := e.grantContext("hb-1")
 	if len(gc.HostSessions) != 1 || gc.HostSessions[0].ID != "zsh-1" || gc.Blocked != "" {
 		t.Fatalf("%+v", gc)
+	}
+}
+
+// F1 (#360): with Docker (or the Mac's VM) confirmed not running no box can be
+// running, so none uses a Host session's folder: its grant goes ahead. A box
+// session is refused as before, and any other listing failure refuses both.
+// With Docker up a box over the folder still blocks the Host grant (#325).
+func TestHostGrantWithTheBoxLayerDown(t *testing.T) {
+	down := fmt.Errorf("box: listing boxes: %w", fmt.Errorf("%w: docker ps: Cannot connect to the Docker daemon", box.ErrDockerNotRunning))
+	other := errors.New("box: listing boxes: docker ps: daemon is restarting")
+	for _, tc := range []struct {
+		name string
+		sess *session.Session
+		err  error
+		ok   bool
+	}{
+		{"host, daemon down", hostBrokerSess("s-1"), down, true},
+		{"box, daemon down", boundSess("s-1"), down, false},
+		{"host, other error", hostBrokerSess("s-1"), other, false},
+		{"plain host, daemon down", func() *session.Session { s := hostBrokerSess("s-1"); s.HostBroker = false; return s }(), down, false},
+	} {
+		check := func(context.Context, string, string) (box.GrantBlock, error) { return box.GrantBlock{}, tc.err }
+		e := elevationService{get: func(string) (*session.Session, bool) { return tc.sess, true }, claim: check, blocker: check}
+		err := e.claimCheck("s-1")
+		if tc.ok && err != nil {
+			t.Errorf("%s: claimCheck %v", tc.name, err)
+		}
+		if !tc.ok && !errors.Is(err, errClaimUnchecked) {
+			t.Errorf("%s: claimCheck %v, want %v", tc.name, err, errClaimUnchecked)
+		}
+		if tc.sess.HostBroker || tc.sess.Runtime == config.RuntimeBox { // grantContext needs a session with a card
+			gc := e.grantContext("s-1")
+			if want := map[bool]string{true: "", false: errClaimUnchecked.Error()}[tc.ok]; gc.Blocked != want {
+				t.Errorf("%s: panel blocked %q, want %q", tc.name, gc.Blocked, want)
+			}
+		}
+	}
+	// Docker up: a box over the folder blocks the Host grant, as for a box.
+	e := elevationService{get: func(string) (*session.Session, bool) { return hostBrokerSess("s-1"), true },
+		claim: func(context.Context, string, string) (box.GrantBlock, error) {
+			return box.GrantBlock{Box: "ab-box-9", Why: "another box (instance PROD) uses /w/proj; stop the session in it first"}, nil
+		}}
+	if err := e.claimCheck("s-1"); err == nil || !strings.Contains(err.Error(), "another box (instance PROD) uses /w/proj") {
+		t.Fatalf("docker up, shared folder: %v", err)
 	}
 }
 
