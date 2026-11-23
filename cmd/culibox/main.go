@@ -688,8 +688,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		layer.setOnStop(hb.OnStop)
 	}
 
-	// Credential broker (M3a): only with containment, because a bound session
-	// runs only in a box. Before Reconcile so reattached sessions find the hooks.
+	// Credential broker (M3a): it starts only with a box layer, so on an
+	// instance without one a bound profile is refused on either tier, Host
+	// included (pinned by TestHostBoundSpawnRefusedWithoutBroker). Before
+	// Reconcile so reattached sessions find the hooks.
 	var brokerSvc *brokerService
 	if layer != nil {
 		svc, err := startBrokerWithStore(dataDir, layer.stateRoot, runtime.GOOS, cfg.BrokerPortOrDefault(),
