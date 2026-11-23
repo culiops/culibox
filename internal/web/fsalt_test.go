@@ -463,13 +463,15 @@ func TestServesByPathNeedsNoFilesystem(t *testing.T) {
 	}
 }
 
-// recordEval notes every path the web package's git and alternates code hands to EvalSymlinks, for the test's life.
+// recordEval notes every path the web package's git and alternates code hands to EvalSymlinks or its own Lstat walks,
+// for the test's life.
 func recordEval(t *testing.T) *[]string {
 	t.Helper()
 	var seen []string
-	old := evalSymlinks
+	old, ol := evalSymlinks, lstatFS
 	evalSymlinks = func(p string) (string, error) { seen = append(seen, p); return old(p) }
-	t.Cleanup(func() { evalSymlinks = old })
+	lstatFS = func(p string) (os.FileInfo, error) { seen = append(seen, p); return ol(p) }
+	t.Cleanup(func() { evalSymlinks, lstatFS = old, ol })
 	return &seen
 }
 
@@ -538,4 +540,113 @@ func TestAltWorktreeGateIsWired(t *testing.T) {
 		t.Errorf("alternates = %+v, want none", got)
 	}
 	noneUnder(t, "alternates", *seen, out)
+}
+
+// boxedEscape is a boxed workspace whose agent planted evil -> a directory outside every served root (holding a repository
+// with a worktree gitdir and a file), and wt/.git naming a gitdir through that link. It returns the server, the
+// workspace and the link.
+func boxedEscape(t *testing.T) (s *Server, ws, link string) {
+	t.Helper()
+	s, _, ws = boxedServer(t)
+	s.Git = &fakeGit{}
+	outside, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustMkdirAll(t, filepath.Join(outside, ".git", "worktrees", "x"))
+	mustMkdirAll(t, filepath.Join(outside, "sub"))
+	mustWrite(t, filepath.Join(outside, "f.txt"))
+	link = filepath.Join(ws, "evil")
+	mustSymlink(t, outside, link)
+	mustWrite(t, filepath.Join(ws, "wt", ".git"), "gitdir: "+filepath.Join(link, ".git", "worktrees", "x")+"\n")
+	mustWrite(t, filepath.Join(ws, "wt", "f.txt"))
+	return s, ws, link
+}
+
+// #364 review round 2: inside a boxed workspace a path is never resolved through a link the box planted: every path
+// handed to EvalSymlinks or Lstat lies at or before the link, none beyond it (beyond it is the link's target).
+func TestBoxedLinkNeverFollowed(t *testing.T) {
+	s, ws, link := boxedEscape(t)
+	seen := recordEval(t)
+	// EvalSymlinks follows the link even when handed the link itself; Lstat only beyond it.
+	evals := 0
+	old := evalSymlinks
+	evalSymlinks = func(p string) (string, error) {
+		if p == link || p == filepath.Join(ws, ".claude", "worktrees", "a", "evil") {
+			evals++
+		}
+		return old(p)
+	}
+	check := func(what string) {
+		t.Helper()
+		for _, p := range *seen {
+			if strings.HasPrefix(p, link+"/") {
+				t.Errorf("%s: %s resolved through the box's link", what, p)
+			}
+		}
+		if evals > 0 {
+			t.Errorf("%s: EvalSymlinks was handed the box's link itself", what)
+		}
+		*seen, evals = nil, 0
+	}
+	// The status poll on a checkout whose .git names a gitdir through the link.
+	if st := decodeStatus(t, gitPost(s.handleGitStatus, "/api/git/status", pathBody(filepath.Join(ws, "wt")))); st.State == "ok" {
+		t.Errorf("status through the link = %+v, want refused", st)
+	}
+	check("status, pointer")
+	// The status poll on a path through the link itself (req.Abs).
+	if st := decodeStatus(t, gitPost(s.handleGitStatus, "/api/git/status", pathBody(filepath.Join(link, "sub")))); st.State == "ok" {
+		t.Errorf("status of a path through the link = %+v, want refused", st)
+	}
+	check("status, request path")
+	// Alternates from the pointer's checkout, and from a base through the link.
+	if got := altGet(t, s, filepath.Join(ws, "wt"), "f.txt"); len(got) != 0 {
+		t.Errorf("alternates = %+v, want none", got)
+	}
+	check("alternates, pointer")
+	if got := altGet(t, s, filepath.Join(link, "sub"), "f.txt"); len(got) != 0 {
+		t.Errorf("alternates = %+v, want none", got)
+	}
+	check("alternates, base")
+	// A candidate file through a link in a worktree of the workspace's own repository (altFile).
+	wts := altRepo(t, ws, "a")
+	mustSymlink(t, filepath.Dir(link)+"/evil", filepath.Join(wts[0], "evil"))
+	if got := altGet(t, s, ws, "evil/f.txt"); len(got) != 0 {
+		t.Errorf("alternates = %+v, want none", got)
+	}
+	for _, p := range *seen {
+		if strings.HasPrefix(p, filepath.Join(wts[0], "evil")+"/") {
+			t.Errorf("altFile: %s resolved through the box's link", p)
+		}
+	}
+	check("altFile")
+	// The where lookup's checkout search on a boxed target through the link (os.Root refuses it before, so call it).
+	p, err := s.fsPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := fsTarget{Root: ws, Rel: "evil/sub", Abs: filepath.Join(link, "sub"), Strict: true}
+	if top := p.checkoutTop(req, true); top != "" {
+		t.Errorf("checkoutTop = %q, want none", top)
+	}
+	check("where")
+}
+
+// A link inside a boxed workspace to a folder inside it still resolves, as before.
+func TestBoxedInTreeLinkStillResolves(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	s.Git = &fakeGit{}
+	mainRepo(t, ws)
+	mustMkdirAll(t, filepath.Join(ws, "real", "d"))
+	mustSymlink(t, "real", filepath.Join(ws, "lnk"))
+	mustSymlink(t, filepath.Join(ws, "real", "d"), filepath.Join(ws, "abs"))
+	for _, c := range []struct{ in, want string }{
+		{filepath.Join(ws, "lnk", "d"), filepath.Join(ws, "real", "d")},
+		{filepath.Join(ws, "abs"), filepath.Join(ws, "real", "d")},
+	} {
+		tg, abs, err := s.gitTarget(c.in)
+		if err != nil || abs != c.want || tg.Top != ws || tg.Root != ws {
+			t.Errorf("gitTarget(%s) = %+v, %q, %v; want top %s, abs %s", c.in, tg, abs, err, ws, c.want)
+		}
+	}
 }

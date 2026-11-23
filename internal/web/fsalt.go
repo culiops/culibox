@@ -61,7 +61,7 @@ func (s *Server) altCandidates(base, rel string) ([]altCandidate, bool) {
 	}
 	// Repo discovery compares paths lexically, so it is fed a link-free path in
 	// the request's own tree (see inGitTree).
-	abs, err := evalSymlinks(req.Abs)
+	abs, err := realAbs(req)
 	if err != nil || !p.inGitTree(req, abs) {
 		return nil, false
 	}
@@ -100,7 +100,7 @@ func (s *Server) altCandidates(base, rel string) ([]altCandidate, bool) {
 		}
 		// A worktree's dir comes from a text file the repository's owner writes: a checkout reached through any
 		// link is not served, nor one the fs policy does not serve in the request's own tree.
-		if r, err := evalSymlinks(ck.dir); err != nil || r != ck.dir || !p.inGitTree(req, ck.dir) {
+		if !p.inGitTree(req, ck.dir) {
 			continue
 		}
 		cand := filepath.Join(ck.dir, prefix, rel)
@@ -125,7 +125,7 @@ func (s *Server) altCandidates(base, rel string) ([]altCandidate, bool) {
 // file. The file is opened through its os.Root with O_NONBLOCK and judged on the
 // opened descriptor, so a FIFO swapped in by a box neither blocks nor passes.
 func (p fsPolicy) altFile(req fsTarget, cand string) (int64, bool) {
-	if r, err := evalSymlinks(cand); err != nil || r != cand {
+	if !linkFreePath(cand) {
 		return 0, false
 	}
 	t, err := p.resolve(cand)

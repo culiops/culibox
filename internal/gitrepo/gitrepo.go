@@ -195,7 +195,7 @@ func Worktrees(common string, max int, allow func(dir string) bool) []string {
 		// The path is text the repository's owner wrote: the caller judges it before anything touches it, and the
 		// walk to it never follows a link, so neither a pointer outside what the caller serves nor one through a link
 		// out of it makes the host stat, open or mount anything there.
-		if allow == nil || !allow(wt) || !allow(dotgit) || !linkFreeDir(wt) {
+		if allow == nil || !allow(wt) || !linkFreeDir(wt) {
 			continue
 		}
 		back, ok := ReadGitFile(dotgit)
