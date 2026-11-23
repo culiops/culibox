@@ -27,6 +27,9 @@ type staticAssets struct {
 	idOnce sync.Once
 	id     string
 
+	indexOnce  sync.Once
+	indexEntry staticEntry // index.html as rewritten for this build (serveIndex)
+
 	mu      sync.Mutex
 	entries map[string]*staticEntry
 	gzips   int // how many gzip copies were made (a test checks each is made once)
@@ -170,4 +173,65 @@ func acceptsGzip(header string) bool {
 		return q > 0
 	}
 	return false
+}
+
+// staticImmutable: what a versioned URL is cached for. The URL names the build, so its content never changes.
+const staticImmutable = "public, max-age=31536000, immutable"
+
+// assetBaseMeta is the tag index.html carries for the page's scripts (monacoload.js reads it) to learn the versioned base.
+const assetBaseMeta = `<meta name="culibox-asset-base" content="">`
+
+// rewriteIndex points index.html's vendor and xterm URLs (attribute values starting "/vendor/" or "/xterm/") at `base`
+// ("/v/<build id>"), and fills the asset-base meta tag with it. Nothing else changes: app scripts and styles keep their
+// unversioned, revalidated URLs (they change with every build, and /profileform.js is generated per request).
+func rewriteIndex(html []byte, base string) []byte {
+	out := bytes.ReplaceAll(html, []byte(`="/vendor/`), []byte(`="`+base+`/vendor/`))
+	out = bytes.ReplaceAll(out, []byte(`="/xterm/`), []byte(`="`+base+`/xterm/`))
+	return bytes.Replace(out, []byte(assetBaseMeta), []byte(`<meta name="culibox-asset-base" content="`+base+`">`), 1)
+}
+
+// serveIndex answers "/" with index.html rewritten for this build, revalidated on every load.
+func (a *staticAssets) serveIndex(w http.ResponseWriter, r *http.Request) bool {
+	a.indexOnce.Do(func() {
+		raw, err := fs.ReadFile(a.fsys, "index.html")
+		if err != nil {
+			return
+		}
+		e := &a.indexEntry
+		e.raw = rewriteIndex(raw, "/v/"+a.buildID())
+		sum := sha256.Sum256(e.raw)
+		e.tag, e.ctype, e.ok = hex.EncodeToString(sum[:])[:16], "text/html; charset=utf-8", true
+		var buf bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		_, _ = zw.Write(e.raw)
+		_ = zw.Close()
+		if buf.Len() < len(e.raw) {
+			e.gz = buf.Bytes()
+		}
+	})
+	e := &a.indexEntry
+	if !e.ok {
+		return false
+	}
+	a.write(w, r, "index.html", e.raw, e.gz, e.tag, e.ctype, "no-cache")
+	return true
+}
+
+// serveVersioned answers /v/<id>/<rest>, given "<id>/<rest>": only a regular file under vendor/ or xterm/, by a clean
+// path, else 404. The current build's id gets a one-year immutable cache. Any other id is a page that was opened before
+// the server was upgraded: it gets the current file revalidated (no-cache), never a long max-age, so an old URL can never
+// pin a file across builds.
+func (a *staticAssets) serveVersioned(w http.ResponseWriter, r *http.Request, idAndRest string) {
+	id, rest, ok := strings.Cut(idAndRest, "/")
+	if !ok || rest != path.Clean(rest) || !(strings.HasPrefix(rest, "vendor/") || strings.HasPrefix(rest, "xterm/")) {
+		http.NotFound(w, r)
+		return
+	}
+	cc := "no-cache"
+	if id == a.buildID() {
+		cc = staticImmutable
+	}
+	if !a.serve(w, r, rest, cc) {
+		http.NotFound(w, r)
+	}
 }

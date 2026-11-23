@@ -434,10 +434,18 @@ func (s *Server) Handler() http.Handler {
 		// keeps it revalidates with a 304 instead of downloading again. App HTML/CSS/JS
 		// change on every rebuild → no-cache: always revalidated, never used stale.
 		// The unversioned /xterm/* and /vendor/* paths get no Cache-Control and so
-		// revalidate too.
+		// revalidate too; the page itself loads them from /v/<build id>/, cached for a
+		// year (index.html is rewritten to name the current build).
 		pth := r.URL.Path
 		if pth == "/profileform.js" {
 			s.serveProfileForm(w, r)
+			return
+		}
+		if pth == "/" && assets.serveIndex(w, r) {
+			return
+		}
+		if strings.HasPrefix(pth, "/v/") {
+			assets.serveVersioned(w, r, strings.TrimPrefix(pth, "/v/"))
 			return
 		}
 		cc := ""

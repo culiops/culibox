@@ -188,3 +188,60 @@ func gunzip(t *testing.T, b []byte) string {
 	out, _ := io.ReadAll(zr)
 	return string(out)
 }
+
+func TestRewriteIndex(t *testing.T) {
+	in := []byte(`<meta name="culibox-asset-base" content=""><link href="/vendor/a.css"><script src="/xterm/x.js"></script><script src="/vendor/m.js"></script><script src="/app.js"></script><p>/vendor/ in text</p>`)
+	got := string(rewriteIndex(in, "/v/0123456789abcdef"))
+	want := `<meta name="culibox-asset-base" content="/v/0123456789abcdef"><link href="/v/0123456789abcdef/vendor/a.css"><script src="/v/0123456789abcdef/xterm/x.js"></script><script src="/v/0123456789abcdef/vendor/m.js"></script><script src="/app.js"></script><p>/vendor/ in text</p>`
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestIndexNamesNewBuildAfterUpgrade(t *testing.T) {
+	html := []byte(`<meta name="culibox-asset-base" content=""><script src="/vendor/m.js"></script>`)
+	old := newStaticAssets(fstest.MapFS{"index.html": {Data: html}, "vendor/m.js": {Data: []byte("v1")}})
+	upg := newStaticAssets(fstest.MapFS{"index.html": {Data: html}, "vendor/m.js": {Data: []byte("v2")}})
+	if old.buildID() == upg.buildID() {
+		t.Fatal("a changed vendor file must change the build id")
+	}
+	for _, a := range []*staticAssets{old, upg} {
+		rec := httptest.NewRecorder()
+		a.serveIndex(rec, httptest.NewRequest("GET", "/", nil))
+		body := rec.Body.String()
+		if !strings.Contains(body, `src="/v/`+a.buildID()+`/vendor/m.js"`) || !strings.Contains(body, `content="/v/`+a.buildID()+`"`) {
+			t.Fatalf("index does not name its own build %s: %s", a.buildID(), body)
+		}
+		if rec.Header().Get("Cache-Control") != "no-cache" || !etagRE.MatchString(strings.TrimSuffix(rec.Header().Get("ETag"), "")) {
+			t.Fatalf("index headers: %v", rec.Header())
+		}
+	}
+}
+
+func TestVersionedRouting(t *testing.T) {
+	a := testAssets()
+	id := a.buildID()
+	get := func(p string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		a.serveVersioned(rec, httptest.NewRequest("GET", p, nil), strings.TrimPrefix(p, "/v/"))
+		return rec
+	}
+	for _, p := range []string{"/v/" + id + "/vendor/marked.min.js", "/v/" + id + "/xterm/xterm.js", "/v/" + id + "/vendor/monaco/vs/loader.js"} {
+		rec := get(p)
+		if rec.Code != 200 || rec.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+			t.Fatalf("%s: code=%d cc=%q", p, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	// Another build's URL (a page opened before an upgrade): the current file, never a long max-age.
+	rec := get("/v/0123456789abcdef/vendor/marked.min.js")
+	if rec.Code != 200 || rec.Header().Get("Cache-Control") != "no-cache" || !strings.HasSuffix(rec.Body.String(), "// marked\n") {
+		t.Fatalf("other build: code=%d cc=%q", rec.Code, rec.Header().Get("Cache-Control"))
+	}
+	// Only regular files under vendor/ and xterm/, by a clean path.
+	for _, p := range []string{"/v/" + id + "/app.js", "/v/" + id + "/index.html", "/v/" + id + "/vendor/", "/v/" + id + "/vendor/sub",
+		"/v/" + id + "/vendor/../app.js", "/v/" + id + "/vendor//marked.min.js", "/v/" + id, "/v/", "/v/" + id + "/vendor/nope.js"} {
+		if rec := get(p); rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: code=%d, want 404", p, rec.Code)
+		}
+	}
+}
