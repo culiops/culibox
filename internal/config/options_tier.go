@@ -78,9 +78,10 @@ func StripBoxOnly(defs map[string]OptionDef, opts map[string]any) map[string]any
 	return out
 }
 
-// BoxOnlyOptionReason names the first (sorted) box-tier option that opts turn
-// on, as `"<Label>" runs only in a box`. "" when there is none.
-func BoxOnlyOptionReason(defs map[string]OptionDef, opts map[string]any) string {
+// boxOnlyOptionLabels returns the display labels (the key when a def has no
+// label) of the box-tier options opts turn on, in sorted key order.
+func boxOnlyOptionLabels(defs map[string]OptionDef, opts map[string]any) []string {
+	var out []string
 	for _, k := range sortedOptionKeys(opts) {
 		def, ok := defs[k]
 		if !ok || def.Tier != RuntimeBox || !def.On(opts[k]) {
@@ -90,7 +91,16 @@ func BoxOnlyOptionReason(defs map[string]OptionDef, opts map[string]any) string 
 		if label == "" {
 			label = def.Key
 		}
-		return fmt.Sprintf("%q runs only in a box", label)
+		out = append(out, label)
+	}
+	return out
+}
+
+// BoxOnlyOptionReason names the first (sorted) box-tier option that opts turn
+// on, as `"<Label>" runs only in a box`. "" when there is none.
+func BoxOnlyOptionReason(defs map[string]OptionDef, opts map[string]any) string {
+	if l := boxOnlyOptionLabels(defs, opts); len(l) > 0 {
+		return fmt.Sprintf("%q runs only in a box", l[0])
 	}
 	return ""
 }

@@ -6927,15 +6927,20 @@ $("spawn").addEventListener("submit", async (ev) => {
     setDialogError("spawn-modal", gate.text);
     return;
   }
+  // Host on a profile with bindings runs without them: say so first, and send the yes. Before the busy state, so a No leaves the
+  // dialog as it was. Nothing is asked when Host drops nothing (the profile is read from the same card the request is built from).
+  const w = spawnWhere();
+  const hostDrops = w.runtime === "host" ? tierHostDrops(currentProfile()) : [];
+  if (hostDrops.length && !(await hostDropsConfirm($("agent").value, hostDrops))) return;
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
-  const w = spawnWhere();
   const req = spawnPayload({
     agent: $("agent").value, name: $("sess-name").value, cwd: spawnCwdFor(w), options: getOptions(),
     runtime: w.runtime || "", clone: w.clone, prompt: $("spawn-prompt").value,
     replyable: $("spawn-replyable").checked, profile: currentProfile(),
     account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
+    hostDropsBindings: hostDrops.length > 0,
   });
   // Only this form asks: a folder outside every root becomes one when the session starts (the server decides, and only for
   // this signed-in browser). Duplicate, the bearer API and scripts never send it, nor does the phone (spawnAddsRoot).

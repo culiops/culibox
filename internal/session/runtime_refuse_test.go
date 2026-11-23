@@ -171,7 +171,8 @@ func TestSpawnHostAllowedWhenHostBlockEmpty(t *testing.T) {
 
 // The bound-on-host refusal (the second net, for a launcher without a
 // HostBlockResolver) is a message the UI shows, not "could not start session".
-func TestSpawnBoundHostRefusalIsShown(t *testing.T) {
+// The user-facing wording of the drops refusal is pinned in hostdrops_test.go.
+func TestSpawnBoundHostBackstopWithoutDropsResolver(t *testing.T) {
 	m, _, _, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
 	_, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir(), Runtime: config.RuntimeHost})
 	if err == nil {

@@ -837,6 +837,30 @@ func TestAPI_HostBlockedSpawnShowsReason(t *testing.T) {
 	}
 }
 
+// The acknowledgement that a host run drops the profile's bindings reaches
+// Spawn as sent; absent means false, so an old client never acknowledges it.
+func TestAPI_HostDropsAckPassedThrough(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want bool
+	}{
+		{`{"agent":"p","runtime":"host","host_drops_bindings":true}`, true},
+		{`{"agent":"p","runtime":"host","host_drops_bindings":false}`, false},
+		{`{"agent":"p","runtime":"host"}`, false},
+	} {
+		m := &mockSvc{}
+		a := &API{Sessions: m}
+		rec := httptest.NewRecorder()
+		a.handleSessions(rec, postReq("/api/sessions", c.body))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("%s: code %d want 201: %s", c.body, rec.Code, rec.Body)
+		}
+		if m.spawnedSpec.HostDropsAck != c.want {
+			t.Errorf("%s: HostDropsAck = %v, want %v", c.body, m.spawnedSpec.HostDropsAck, c.want)
+		}
+	}
+}
+
 // clone:true on the host is a 400 the dialog can show, and Spawn never runs: a
 // clone lives only in a box, whatever the profile says.
 func TestAPI_CloneTrueOnHostIs400(t *testing.T) {

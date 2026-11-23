@@ -156,11 +156,13 @@ function acctSpawnPick(prefillAccount, profileAccount) {
 // is sent with login:true, so the server drops the profile's own auth secrets
 // rather than refusing them; any other refusal is shown by the caller. Log in
 // spawns on the host, so a profile the server would refuse there (host_block
-// set, e.g. locked to the box) is skipped.
+// set, e.g. locked to the box) is skipped, and so is one whose Host run drops
+// bindings (host_drops): that spawn needs the confirm this click does not ask.
 function acctLoginProfile(profiles) {
   const ps = profiles || [];
-  return ps.find((x) => x.claude && x.name === "claude" && !x.host_block)
-    || ps.find((x) => x.claude && !x.account && !x.host_block) || null;
+  const hostOK = (x) => !x.host_block && !(Array.isArray(x.host_drops) && x.host_drops.length);
+  return ps.find((x) => x.claude && x.name === "claude" && hostOK(x))
+    || ps.find((x) => x.claude && !x.account && hostOK(x)) || null;
 }
 
 function acctLoginText(state) {

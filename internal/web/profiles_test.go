@@ -1294,8 +1294,12 @@ func TestViewCriticalRmTierAndHostBlock(t *testing.T) {
 	if row.Tier != "box" {
 		t.Errorf("tier = %q, want box", row.Tier)
 	}
-	if want := `"Skip the critical-rm prompt" runs only in a box`; vs[0].HostBlock != want {
-		t.Errorf("host_block = %q, want %q", vs[0].HostBlock, want)
+	// #359: the option is a drop on the host, not a lock.
+	if vs[0].HostBlock != "" {
+		t.Errorf("host_block = %q, want none", vs[0].HostBlock)
+	}
+	if got, want := config.HostDrops(seeds[0], m.optDefs), []string{`"Skip the critical-rm prompt" option`}; !slices.Equal(got, want) {
+		t.Errorf("HostDrops = %q, want %q", got, want)
 	}
 	for _, o := range vs[0].Options {
 		if o.Key != config.CriticalRmKey && o.Tier != "" {

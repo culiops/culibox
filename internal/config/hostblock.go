@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // BindingKinds lists the credential bindings the profile declares, in a fixed
 // order: "AWS" (inline or connections), "GitHub", "token". Empty for an
@@ -46,32 +49,39 @@ func BindingPhrase(k []string) string {
 }
 
 // HostBlock says why the profile may not run on the host: "" when it may, else
-// one lowercase clause for the UI and for the refusal. The first rule that
-// holds wins, in this order: credential bindings, context paths, the box_only
-// lock. It does not look at Runtime: a profile that asks for the box is not
+// one lowercase clause for the UI and for the refusal. Only the box_only lock
+// refuses a host run. Bindings, context paths and box-only env or options do
+// not: a host run drops them (see HostDrops) and the spawn must acknowledge
+// that. It does not look at Runtime: a profile that asks for the box is not
 // refused here, only a host run is.
 func HostBlock(a AgentConfig) string {
-	if k := a.BindingKinds(); len(k) > 0 {
-		return "this profile has " + BindingPhrase(k) + ", so it runs only in a box"
-	}
-	if len(a.ContextPaths) > 0 {
-		return "this profile has context paths, which only a box can mount"
-	}
 	if a.BoxOnly {
 		return "this profile is set to box only"
 	}
 	return ""
 }
 
-// HostBlockWith is HostBlock plus the box-only rules that need the option defs:
-// a binding wins, then a box-only env the profile sets, then a box-only option
-// it turns on. "" when the profile may run on the host.
-func HostBlockWith(a AgentConfig, defs map[string]OptionDef) string {
-	if r := HostBlock(a); r != "" {
-		return r
+// HostDrops lists what a host run of the profile would drop, one short noun
+// phrase per item, in a fixed order: each binding kind ("AWS binding",
+// "GitHub binding", "token binding"), "context paths", each box-only env the
+// profile sets ("<NAME> setting"), then each box-only option it turns on
+// (`"<Label>" option`, options in key order). nil when a host run drops nothing.
+// It is not a lock: HostBlock is.
+func HostDrops(a AgentConfig, defs map[string]OptionDef) []string {
+	var out []string
+	for _, k := range a.BindingKinds() {
+		out = append(out, k+" binding")
 	}
-	if r := BoxOnlyEnvReason(a); r != "" {
-		return r
+	if len(a.ContextPaths) > 0 {
+		out = append(out, "context paths")
 	}
-	return BoxOnlyOptionReason(defs, a.Options)
+	for _, n := range BoxOnlyEnv {
+		if _, ok := a.Env[n]; ok || contains(a.Secrets, n) {
+			out = append(out, n+" setting")
+		}
+	}
+	for _, l := range boxOnlyOptionLabels(defs, a.Options) {
+		out = append(out, fmt.Sprintf("%q option", l))
+	}
+	return out
 }

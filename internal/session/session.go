@@ -312,6 +312,15 @@ type HostBlockResolver interface {
 	HostBlockFor(agent string) (string, error)
 }
 
+// HostDropsResolver is implemented by launchers that know what a host run of a
+// profile drops (config.HostDrops): its bindings, context paths and box-only
+// settings, each as a short noun phrase; nil when nothing. Optional, like
+// HostBlockResolver: without it a host spawn lists no drops, and the binding and
+// context-path checks in Spawn still refuse a profile that carries any.
+type HostDropsResolver interface {
+	HostDropsFor(agent string) ([]string, error)
+}
+
 // BoxOnlyOptionResolver is implemented by launchers that know which box-only
 // option the spawn's merged options turn on (config.BoxOnlyOptionReason): ""
 // when none, else one reason clause. Optional, like HostBlockResolver: a host
@@ -812,6 +821,11 @@ type Info struct {
 	// whose bundle was consulted only; absent otherwise, so a host session's
 	// wire shape is unchanged. Reasons are fixed strings, never an error text.
 	BundleDrops []bundle.Drop `json:"bundle_drops,omitempty"`
+	// HostDropped is what this host session runs without because the host has
+	// no box layer: the profile's bindings, context paths and box-only settings
+	// (config.HostDrops), as noun phrases. Host sessions of such a profile only;
+	// absent otherwise, so every other session's wire shape is unchanged.
+	HostDropped []string `json:"host_dropped,omitempty"`
 	// Clone is what refreshing the clone before this spawn did. Clone-mode
 	// sessions only; absent otherwise.
 	Clone *CloneInfo `json:"clone,omitempty"`
@@ -903,6 +917,9 @@ type Session struct {
 	// (see Info.BundleDrops). Immutable after publication, read without the
 	// lock; Info hands out a copy.
 	BundleDrops []bundle.Drop
+	// HostDropped is Info.HostDropped; immutable after publication, read
+	// without the lock; Info hands out a copy.
+	HostDropped []string
 	// Clone is the clone refresh result for a clone-mode session. Immutable
 	// after publication, read without the lock; Info hands out a deep copy.
 	Clone *CloneInfo
@@ -1417,6 +1434,7 @@ func (s *Session) Info() Info {
 	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, ParentID: s.ParentID, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account, ResumeSkipped: s.resumeSkipped}
 	in.Egress = EgressMode(s.EgressNonce != "", s.Bindings().Any() && !s.EgressOpen)
 	in.BundleDrops = slices.Clone(s.BundleDrops)
+	in.HostDropped = slices.Clone(s.HostDropped)
 	in.Clone = s.Clone.copy()
 	in.Return = s.ret.copy()
 	in.Handback = s.handback.copy()
@@ -1957,10 +1975,15 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	}
 	spec.Runtime = runtime
 
-	// A profile the host is closed to (bindings, context paths, box_only) never
-	// runs there, by any route: a per-spawn "host", a host-tier profile, or an
-	// instance with no box layer. ErrUnboxableWorkspace so the UI shows the
-	// reason (writeSpawnErr) rather than "could not start session".
+	// The host is closed to a profile only by its box_only lock, by any route: a
+	// per-spawn "host", a host-tier profile, or an instance with no box layer.
+	// ErrUnboxableWorkspace so the UI shows the reason (writeSpawnErr) rather
+	// than "could not start session". Everything else a box setup carries
+	// (bindings, context paths, box-only settings) is DROPPED on the host, and
+	// only with the caller's say-so (HostDropsAck): a spawn that has not given it
+	// is refused with the list. Gate order: lock, the spawn's own box-only
+	// option, then the drops.
+	var hostDropped []string
 	if runtime != config.RuntimeBox {
 		if hr, ok := m.launcher.(HostBlockResolver); ok {
 			reason, err := hr.HostBlockFor(spec.Agent)
@@ -1971,8 +1994,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				return nil, profileRefusal(spec.Agent, reason)
 			}
 		}
-		// The same for a box-only option the merged options turn on (the
-		// critical-rm skip): it has no meaning, and no safe form, on the host.
+		// A box-only option the spawn's own overrides turn on (the critical-rm
+		// skip) has no meaning, and no safe form, on the host: refused, not
+		// dropped, and the ack does not lift it.
 		if br, ok := m.launcher.(BoxOnlyOptionResolver); ok {
 			reason, err := br.BoxOnlyOptionFor(spec)
 			if err != nil {
@@ -1982,7 +2006,26 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				return nil, profileRefusal(spec.Agent, reason)
 			}
 		}
+		if dr, ok := m.launcher.(HostDropsResolver); ok {
+			drops, err := dr.HostDropsFor(spec.Agent)
+			if err != nil {
+				return nil, err
+			}
+			if len(drops) > 0 && !spec.HostDropsAck {
+				return nil, profileRefusal(spec.Agent, "on the host this profile runs without its "+config.JoinKinds(drops)+
+					"; confirm to start it there (host_drops_bindings: true)")
+			}
+			hostDropped = drops
+		}
 	}
+	// A launcher that lists drops decides here what the host run lacks, so the
+	// binding and context resolvers below run for a box only: nothing of the
+	// profile's bindings is read, minted or put in the process on the host, and a
+	// binding that no longer resolves cannot block a run that drops it. A launcher
+	// that cannot list drops keeps resolving, and the refusals below stop a bound
+	// profile on the host.
+	_, listsDrops := m.launcher.(HostDropsResolver)
+	resolveBound := runtime == config.RuntimeBox || !listsDrops
 
 	// Resolve the agent binary once, up front: it gates claude-only features
 	// (usage, replies) and feeds the boxed config bundle below. Best-effort —
@@ -2013,42 +2056,44 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 	}
 
-	// An AWS binding runs only in a box, and only through the broker. Refused
-	// here, before anything is prepared, built or issued: a host-tier spawn
-	// (the profile's tier, a per-spawn "host" override, or containment being
-	// unavailable) would hand the agent the host's own AWS access, and no token
-	// is minted for a spawn that is refused.
-	// A GitHub binding is the same: bound means "has any binding".
+	// An AWS binding runs only in a box, and only through the broker. A host
+	// spawn does not resolve any (resolveBound above) and so has none: where a
+	// launcher could not list the drops, the refusal below stops it before
+	// anything is prepared, built or issued, and no token is minted for a spawn
+	// that is refused. A GitHub binding is the same: bound means "has any
+	// binding".
 	var binding *config.AWSBinding
-	if r, ok := m.launcher.(AWSResolver); ok {
-		binding = r.AWSFor(spec.Agent)
-	}
 	var ghBinding *config.GitHubBinding
-	if r, ok := m.launcher.(GitHubResolver); ok {
-		ghBinding = r.GitHubFor(spec.Agent)
-	}
 	var awsConns []config.AWSConnection
-	if r, ok := m.launcher.(AWSConnResolver); ok {
-		var err error
-		awsConns, err = r.AWSConnectionsFor(spec.Agent)
-		if err != nil {
-			// ErrBoxUnavailable so the UI shows which profile and why.
-			return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
-		}
-	}
 	var tokens, pats []config.StaticToken
-	if r, ok := m.launcher.(TokenResolver); ok {
-		var err error
-		tokens, pats, err = r.TokensFor(spec.Agent)
-		if err != nil {
-			// ErrBoxUnavailable so the UI shows which profile and why.
-			return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
-		}
-	}
 	var egressAllow []string
 	var egressOpen bool
-	if r, ok := m.launcher.(EgressResolver); ok {
-		egressAllow, egressOpen = r.EgressFor(spec.Agent)
+	if resolveBound {
+		if r, ok := m.launcher.(AWSResolver); ok {
+			binding = r.AWSFor(spec.Agent)
+		}
+		if r, ok := m.launcher.(GitHubResolver); ok {
+			ghBinding = r.GitHubFor(spec.Agent)
+		}
+		if r, ok := m.launcher.(AWSConnResolver); ok {
+			var err error
+			awsConns, err = r.AWSConnectionsFor(spec.Agent)
+			if err != nil {
+				// ErrBoxUnavailable so the UI shows which profile and why.
+				return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
+			}
+		}
+		if r, ok := m.launcher.(TokenResolver); ok {
+			var err error
+			tokens, pats, err = r.TokensFor(spec.Agent)
+			if err != nil {
+				// ErrBoxUnavailable so the UI shows which profile and why.
+				return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
+			}
+		}
+		if r, ok := m.launcher.(EgressResolver); ok {
+			egressAllow, egressOpen = r.EgressFor(spec.Agent)
+		}
 	}
 	bs := config.Bindings{AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats,
 		EgressAllow: egressAllow, EgressOpen: egressOpen}
@@ -2129,7 +2174,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// on every spawn (a hand-edited profiles.json), the disk check runs below.
 	var ctxPaths []string
 	var lockedFiles []string // what the box layer locked on the host (macOS), set after Wrap
-	if r, ok := m.launcher.(ContextResolver); ok {
+	if r, ok := m.launcher.(ContextResolver); ok && resolveBound {
 		p, err := r.ContextPathsFor(spec.Agent)
 		if err != nil {
 			return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
@@ -2661,6 +2706,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 	}
 
+	if len(hostDropped) > 0 {
+		log.Printf("session %s: host run of profile %q without %s", id, spec.Agent, config.JoinKinds(hostDropped))
+	}
+
 	cmd, ptmx, err := m.startProcess(id, spec, argv, env)
 	if err != nil {
 		m.releaseBoxNamed(boxName) // never leak a box for a session that failed to start
@@ -2728,6 +2777,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.GitHub = ghBinding
 	sess.Tokens, sess.PATs = tokens, pats
 	sess.EgressAllow, sess.EgressOpen = egressAllow, egressOpen
+	sess.HostDropped = slices.Clone(hostDropped)
 	sess.BrokerNonce = nonce
 	sess.EgressNonce = enonce
 	sess.brokerBox = heldBrokerBox // published: the session now owns the reference
@@ -2760,7 +2810,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Workspace: wsPath, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, WorkspaceRoot: wsRoot, LockedFiles: slices.Clone(lockedFiles),
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
@@ -3633,6 +3683,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 		sess.EgressNonce = md.BrokerNonce
 	}
 	sess.BundleDrops = md.BundleDrops
+	sess.HostDropped = slices.Clone(md.HostDropped)
 	sess.Clone = md.Clone.copy()
 	sess.ContextPaths = slices.Clone(md.ContextPaths)
 	sess.CloneOf = md.CloneOf

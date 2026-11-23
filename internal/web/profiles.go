@@ -112,11 +112,14 @@ type ProfileView struct {
 	ImportsOff bool `json:"imports_off,omitempty"`
 	// BoxOnly is the profile's own lock to the box tier (config.AgentConfig.BoxOnly).
 	// HostBlock is why a session of it may not run on the host ("" when it may):
-	// config.HostBlockWith of the merged profile (the binding rules plus a
-	// box-only env or box-only option), the one rule the spawn also applies, so a
-	// page reads this and never re-derives the rule.
+	// config.HostBlock of the merged profile (the box_only lock), the one rule
+	// the spawn also applies, so a page reads this and never re-derives the rule.
 	BoxOnly   bool   `json:"box_only,omitempty"`
 	HostBlock string `json:"host_block,omitempty"`
+	// HostDrops lists what a host run of it would drop (its bindings and
+	// box-only options, config.HostDrops); empty when it drops nothing (#359).
+	// Not a block: the host run goes ahead once the caller acknowledges it.
+	HostDrops []string `json:"host_drops,omitempty"`
 	// BoxClaudeCredential says whether a boxed claude of this profile has a login:
 	// "yes", "no", or "locked" (a token exists but the store cannot be read now, so
 	// never "no"). "" (absent) on a profile that is not claude, or with no source
@@ -628,7 +631,8 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			CloneOf:        a.CloneOf,
 			ImportsOff:     a.ImportsOff,
 			BoxOnly:        a.BoxOnly,
-			HostBlock:      config.HostBlockWith(a, m.optDefs),
+			HostBlock:      config.HostBlock(a),
+			HostDrops:      config.HostDrops(a, m.optDefs),
 			EgressAllow:    slices.Clone(a.EgressAllow),
 			CloneShare:     slices.Clone(a.CloneShare),
 		}

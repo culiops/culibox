@@ -194,6 +194,15 @@ function dropsRow(s) {
   return { k: "left out", v, wrap: true };
 }
 
+// hostDroppedRow: the Access tab's row for a host session that ran without what its profile binds (Info.host_dropped, #359).
+// The list is joined as prose (tier.js tierJoinWords). null when nothing was dropped, like dropsRow.
+function hostDroppedRow(s) {
+  const d = s && Array.isArray(s.host_dropped) ? s.host_dropped.map(String).filter(Boolean) : [];
+  if (!d.length) return null;
+  const join = typeof tierJoinWords === "function" ? tierJoinWords : require("./tier.js").tierJoinWords;
+  return { k: "Dropped on Host", v: join(d) };
+}
+
 // lockedRow: the rail's "locked" row for a boxed session whose workspace files
 // are locked on the Mac while it runs (Info.locked_files, macOS #96). null
 // without any, like dropsRow. The names are workspace file names the server
@@ -1366,5 +1375,5 @@ function stRailRows(st) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
+  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, hostDroppedRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
 }

@@ -14,17 +14,15 @@ func TestHostBlock(t *testing.T) {
 		a    AgentConfig
 		want string
 	}{
-		{"aws", AgentConfig{AWS: aws, Runtime: "box"}, "this profile has an AWS binding, so it runs only in a box"},
-		{"aws connections", AgentConfig{AWSConnections: []string{"prod"}}, "this profile has an AWS binding, so it runs only in a box"},
-		{"aws and github", AgentConfig{AWS: aws, GitHub: gh, Runtime: "box"}, "this profile has AWS and GitHub bindings, so it runs only in a box"},
-		{"github", AgentConfig{GitHub: gh}, "this profile has a GitHub binding, so it runs only in a box"},
-		{"token", AgentConfig{Tokens: []string{"x"}, Runtime: "box"}, "this profile has a token binding, so it runs only in a box"},
-		{"all three", AgentConfig{AWS: aws, GitHub: gh, Tokens: []string{"x"}}, "this profile has AWS, GitHub and token bindings, so it runs only in a box"},
-		{"context paths", AgentConfig{ContextPaths: []string{"/srv/docs"}, Runtime: "box"}, "this profile has context paths, which only a box can mount"},
 		{"box only", AgentConfig{BoxOnly: true}, "this profile is set to box only"},
-		{"bindings win over box only", AgentConfig{AWS: aws, BoxOnly: true}, "this profile has an AWS binding, so it runs only in a box"},
-		{"bindings win over context paths", AgentConfig{Tokens: []string{"x"}, ContextPaths: []string{"/srv/docs"}}, "this profile has a token binding, so it runs only in a box"},
-		{"context paths win over box only", AgentConfig{ContextPaths: []string{"/srv/docs"}, BoxOnly: true}, "this profile has context paths, which only a box can mount"},
+		{"box only and bound", AgentConfig{AWS: aws, GitHub: gh, BoxOnly: true}, "this profile is set to box only"},
+		{"aws", AgentConfig{AWS: aws, Runtime: "box"}, ""},
+		{"aws connections", AgentConfig{AWSConnections: []string{"prod"}}, ""},
+		{"github", AgentConfig{GitHub: gh}, ""},
+		{"token", AgentConfig{Tokens: []string{"x"}, Runtime: "box"}, ""},
+		{"context paths", AgentConfig{ContextPaths: []string{"/srv/docs"}, Runtime: "box"}, ""},
+		{"box-only env", AgentConfig{Env: map[string]string{CriticalRmEnv: "1"}}, ""},
+		{"box-only option", AgentConfig{Options: map[string]any{CriticalRmKey: true}}, ""},
 		{"free profile", AgentConfig{}, ""},
 		{"host profile", AgentConfig{Runtime: "host"}, ""},
 	}
@@ -35,6 +33,51 @@ func TestHostBlock(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHostDrops(t *testing.T) {
+	aws := &AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::123456789012:role/r", Region: "us-east-1"}
+	gh := &GitHubBinding{}
+	defs := legacyDefs()
+	envItem := CriticalRmEnv + " setting"
+	optItem := `"Skip the critical-rm prompt" option`
+	cases := []struct {
+		name string
+		a    AgentConfig
+		want []string
+	}{
+		{"unbound", AgentConfig{}, nil},
+		{"host profile", AgentConfig{Runtime: "host"}, nil},
+		{"aws", AgentConfig{AWS: aws}, []string{"AWS binding"}},
+		{"aws connections", AgentConfig{AWSConnections: []string{"prod"}}, []string{"AWS binding"}},
+		{"aws and github", AgentConfig{AWS: aws, GitHub: gh}, []string{"AWS binding", "GitHub binding"}},
+		{"token", AgentConfig{Tokens: []string{"x"}}, []string{"token binding"}},
+		{"context paths", AgentConfig{ContextPaths: []string{"/srv/docs"}}, []string{"context paths"}},
+		{"env", AgentConfig{Env: map[string]string{CriticalRmEnv: "1"}}, []string{envItem}},
+		{"secret", AgentConfig{Secrets: []string{CriticalRmEnv}}, []string{envItem}},
+		{"option on", AgentConfig{Options: map[string]any{CriticalRmKey: true}}, []string{optItem}},
+		{"option off", AgentConfig{Options: map[string]any{CriticalRmKey: false}}, nil},
+		{"all", AgentConfig{
+			AWS: aws, GitHub: gh, Tokens: []string{"x"}, ContextPaths: []string{"/srv/docs"},
+			Env: map[string]string{CriticalRmEnv: "1"}, Options: map[string]any{CriticalRmKey: true},
+		}, []string{"AWS binding", "GitHub binding", "token binding", "context paths", envItem, optItem}},
+		{"box only alone adds nothing", AgentConfig{BoxOnly: true}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := HostDrops(c.a, defs)
+			if strings.Join(got, "|") != strings.Join(c.want, "|") || (got == nil) != (c.want == nil) {
+				t.Fatalf("HostDrops = %q, want %q", got, c.want)
+			}
+		})
+	}
+	t.Run("option without a label uses its key", func(t *testing.T) {
+		d := map[string]OptionDef{"nolabel": {Key: "nolabel", Type: OptBool, Tier: RuntimeBox}}
+		got := HostDrops(AgentConfig{Options: map[string]any{"nolabel": true}}, d)
+		if len(got) != 1 || got[0] != `"nolabel" option` {
+			t.Fatalf("HostDrops = %q", got)
+		}
+	})
 }
 
 func TestJoinKinds(t *testing.T) {

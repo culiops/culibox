@@ -109,6 +109,13 @@ test("acctLoginProfile skips a profile that may not run on the host", () => {
   assert.equal(acctLoginProfile([{ name: "claude", claude: true, host_block: "x" }, { name: "c2", claude: true, host_block: "y" }]), null);
 });
 
+test("acctLoginProfile skips a profile whose Host run would drop bindings (#359)", () => {
+  const drops = ["AWS binding"];
+  assert.equal(acctLoginProfile([{ name: "claude", claude: true, host_drops: drops }, { name: "c2", claude: true }]).name, "c2");
+  assert.equal(acctLoginProfile([{ name: "claude", claude: true, host_drops: drops }, { name: "c2", claude: true, host_drops: drops }]), null);
+  assert.equal(acctLoginProfile([{ name: "claude", claude: true, host_drops: [] }]).name, "claude");
+});
+
 test("acctLoginText names each state", () => {
   assert.equal(acctLoginText("token"), "token");
   assert.equal(acctLoginText("logged_in"), "logged in");
