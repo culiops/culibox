@@ -1096,7 +1096,8 @@ func TestApprovalRowsCarryEntry(t *testing.T) {
 func TestElevateAllowedForHostSession(t *testing.T) {
 	hostView := func() SessionView {
 		v := liveElev()
-		v.Boxed, v.Host = false, true
+		// As Spawn builds it: a Host session has no box, so no Exclusive and no Box.
+		v.Boxed, v.Host, v.Exclusive, v.Box = false, true, false, ""
 		return v
 	}
 	b, _, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev(), "host-1": hostView()})

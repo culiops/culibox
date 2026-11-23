@@ -223,7 +223,7 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 		return refuse(fmt.Sprintf("connection %s did not allow elevation when the session started; add elevate to it in aws_connections and start a new session", conn))
 	case bnd.Elevate == nil:
 		return refuse("this session's profile did not allow elevation when it started; add elevate to the profile and start a new session")
-	case !sv.Exclusive:
+	case !sv.Exclusive && !sv.Host: // a Host session has no box to share
 		return refuse("this session's box is shared; restart it to get its own box")
 	}
 	maxMin := bnd.Elevate.Max()
