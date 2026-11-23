@@ -57,7 +57,7 @@ Tested: on a data root filled through the previous release (host tier, no box VM
 - **The bundle cache** (`bundle/`): the filtered copy of your Claude config that boxes see. It is rebuilt at the next spawn, and copies unused for 14 days are removed.
 - **Usage numbers** in `analytics.db`, which are rebuilt from transcripts.
 
-**What an upgrade never touches:** `boxstate/`, your workspaces and clones, the store, and the agent accounts' transcripts and Claude login. One caution about `boxstate/`: that is not the upgrade but routine housekeeping. While `serve` runs, it removes the home of a box that no longer exists after 30 days unused, and prunes the regenerable caches in it (Go build cache, npm cache) after an hour. Back up a box home yourself if you need it longer.
+**What an upgrade never touches:** `boxstate/`, your workspaces and clones, the store, and the agent accounts' transcripts and Claude login. One caution about `boxstate/`: that is not the upgrade but routine housekeeping. While `serve` runs, it removes the home of a box that no longer exists after 30 days unused, unless the home still holds Claude Code conversations, and prunes the regenerable caches in it (Go build cache, npm cache) after an hour. A home kept for its conversations stays until you remove it; `culibox doctor` lists them. Back up any other box home yourself if you need it longer.
 
 ## The automatic backup
 

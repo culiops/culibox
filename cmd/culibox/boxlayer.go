@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,6 +90,9 @@ type boxLayer struct {
 	// reclaimErr remembers the last reclaim error that was logged, so one that
 	// is still there on the next pass is not logged again.
 	reclaimErr logOnChange
+	// reclaimKept remembers the kept box homes last logged (#330), so the same
+	// set is not logged on every pass.
+	reclaimKept logOnChange
 	// egressProbe is egress.Probe; a test replaces it.
 	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error
 	// ctl is the VM folder control (macOS, set by the daemon): while it reports
@@ -615,15 +619,33 @@ func (l *boxLayer) reconcileAndReclaim(ctx context.Context) {
 // testable without a daemon; the printing belongs here.
 func (l *boxLayer) reclaimBoxState(ctx context.Context) {
 	done, err := l.boxes.ReclaimState(ctx, box.DefaultStateTTL, box.DefaultCacheTTL)
+	var kept, keptNames []string
 	for _, r := range done {
 		mib := r.Bytes / (1024 * 1024)
+		if r.Kept {
+			kept = append(kept, fmt.Sprintf("%s (unused %d days)", r.Box, int(r.Age.Hours()/24)))
+			keptNames = append(keptNames, r.Box)
+		}
 		if r.Caches {
 			log.Printf("pruned caches of box state %s: unused for %s, %d MiB freed",
 				r.Box, r.Age.Round(time.Minute), mib)
 			continue
 		}
+		if r.Kept {
+			continue
+		}
 		log.Printf("reclaimed box state %s: unused for %d days, %d MiB freed",
 			r.Box, int(r.Age.Hours()/24), mib)
+	}
+	// A clean pass reports the whole kept set; it is logged when the set changes,
+	// not hourly. The ages are left out of the comparison: they change daily. A
+	// pass with an error that reports no kept home most likely stopped before any
+	// (the boxes could not be listed), so it is not read as "none kept". A stuck
+	// home elsewhere errs on every pass and must not hide the set.
+	if (err == nil || len(keptNames) > 0) && l.reclaimKept.changed(strings.Join(keptNames, " ")) {
+		log.Printf("kept box state %s: unused for over %d days, but each holds Claude Code conversations, "+
+			"so reclaim keeps it (its caches still go). `culibox doctor` lists their sizes and how to remove one.",
+			strings.Join(kept, ", "), int(box.DefaultStateTTL.Hours()/24))
 	}
 	if err == nil {
 		l.reclaimErr.changed("") // a clean pass: the same error later is news again
