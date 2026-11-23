@@ -125,3 +125,37 @@ test("contrast: muted text on panel is at least 5.79, faint (non-text) on panel 
   assert.ok(contrast(tok.get("--muted"), panel) >= 5.79, "muted on panel " + contrast(tok.get("--muted"), panel));
   assert.strictEqual(contrast(tok.get("--faint"), panel).toFixed(2), "3.05");
 });
+
+// The dock tree's T2 colours (P5, mockup 1). Names are text (4.5:1 on the tree's --panel), icons are not (3:1). A file family
+// is never amber, green or red, nor close to them: those mean needs-you, status and write (anti-goal A4).
+const TREE = {
+  "--tree-file": "#b6bdc6", "--tree-dir": "#e3e6ea", "--tree-icon": "#6f7884", "--tree-ign": "#7d838a",
+  "--fam-tf": "#a48cf2", "--fam-yaml": "#5fb6e3", "--fam-md": "#8ea4c8", "--fam-script": "#d49ad1", "--fam-build": "#56c2c8",
+};
+function hue(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => c / 255);
+  const mx = Math.max(r, g, b), d = mx - Math.min(r, g, b);
+  if (d === 0) return 0;
+  const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return (h * 60 + 360) % 360;
+}
+
+test("the dock tree's T2 tokens have the design's values and contrast on --panel (text 4.5:1, icons 3:1)", () => {
+  expectTokens(TREE);
+  const panel = tok.get("--panel");
+  for (const n of ["--tree-file", "--tree-dir", "--tree-ign"]) assert.ok(contrast(tok.get(n), panel) >= 4.5, n + " " + contrast(tok.get(n), panel));
+  for (const n of Object.keys(TREE).filter((k) => k.startsWith("--fam-") || k === "--tree-icon")) {
+    assert.ok(contrast(tok.get(n), panel) >= 3, n + " " + contrast(tok.get(n), panel));
+  }
+});
+
+test("no file family is amber, green or red, or within 25 degrees of their hue", () => {
+  for (const n of Object.keys(TREE).filter((k) => k.startsWith("--fam-"))) {
+    for (const sem of ["--amber", "--ok", "--red"]) {
+      const a = hue(tok.get(n)), b = hue(tok.get(sem));
+      const dist = Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
+      assert.ok(dist >= 25, n + " is " + dist.toFixed(0) + " degrees from " + sem);
+    }
+  }
+});
