@@ -354,10 +354,10 @@ function gitIgnoredNow(path) {
   return gitIgnoredAt(gitIgnKept.set, root, path);
 }
 
-// gitIgnoreRow dims a gitignored row: class ft-ign, drawn by desktop.css in the dock's tree only. The phone's tree is not
-// marked at all.
+// gitIgnoreRow marks a gitignored row with class ft-ign, whether or not the dock is open now (a tree drawn before it opens is the
+// one it shows). Only desktop.css's #drawer rules draw it: the phone's tree looks as it did.
 function gitIgnoreRow(row, path) {
-  const on = typeof ftDocked === "function" && ftDocked() && gitIgnoredNow(path);
+  const on = gitIgnoredNow(path);
   if (row.classList.contains("ft-ign") !== on) row.classList.toggle("ft-ign", on);
 }
 
@@ -470,5 +470,5 @@ function gitPaintNote() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { gitMarks, gitPlace, gitIgnored, gitIgnoredAt, gitIgnoredNow, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset, gitCurrentMarks, GIT_REUSE_MS, GIT_WATCH_MIN_MS, GIT_FETCH_MS };
+  module.exports = { gitMarks, gitPlace, gitIgnored, gitIgnoredAt, gitIgnoredNow, gitIgnoreRow, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset, gitCurrentMarks, GIT_REUSE_MS, GIT_WATCH_MIN_MS, GIT_FETCH_MS };
 }

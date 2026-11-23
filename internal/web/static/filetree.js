@@ -450,7 +450,9 @@ async function ftRenderDir(path, container, prefix, st) {
     icon.className = "ft-icon";
     icon.textContent = iconFor(ent.name, isDir, false);
     icon.setAttribute("aria-hidden", "true"); // decorative: the name is the label
-    if (docked && !isDir) {
+    // The file's family, for the dock's icon colours. Every tree gets it, whether or not the dock is open now: a tree drawn before
+    // the dock opens (the root, a restored folder) is the one the dock then shows. Only desktop.css's #drawer rules draw it.
+    if (!isDir) {
       const fam = fileFamily(ent.name);
       if (fam) row.dataset.fam = fam;
     }

@@ -948,3 +948,20 @@ test("gitIgnoredAt: the path itself or a folder between the root and it is ignor
   assert.equal(g.gitIgnoredAt(set, "/r", "/v/node_modules/a.js"), false, "outside the root");
   assert.equal(g.gitIgnoredAt(new Set(), "/r", "/r/a"), false);
 });
+
+test("gitIgnoreRow marks a row from the kept status whether or not the dock is open, and takes the mark off again", () => {
+  const kept = ok([], { ignored: ["build/"] });
+  global.ftRoot = () => "/kept"; // a root no earlier test has a live status for
+  global.gitLastGet = (root) => (root === "/kept" ? { status: kept } : null);
+  global.ftDocked = () => false; // the dock is not open on Files: the row is marked all the same
+  try {
+    const cls = new Set();
+    const row = { classList: { contains: (c) => cls.has(c), toggle: (c, on) => (on ? cls.add(c) : cls.delete(c)) } };
+    g.gitIgnoreRow(row, "/kept/build/out.bin");
+    assert.ok(cls.has("ft-ign"));
+    g.gitIgnoreRow(row, "/kept/src/a.go");
+    assert.ok(!cls.has("ft-ign"));
+  } finally {
+    delete global.ftRoot; delete global.gitLastGet; delete global.ftDocked;
+  }
+});

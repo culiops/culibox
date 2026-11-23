@@ -160,3 +160,15 @@ test("the marks are repainted once the remembered folders are attached: a status
   await p.answer("/w/a", [file("x.go")]);
   assert.ok(p.st.repaints > r0, "repainted after a's rows went in");
 });
+
+// P5: the family goes on every file row however the tree was drawn: a root or a restored folder is listed before the dock opens
+// on Files (found in the in-box check: those rows had none), and it is that tree the dock then shows.
+test("file rows carry their family even when the tree is drawn with the dock closed; folders carry none", async () => {
+  const p = tree(["/w/tf"]);
+  p.run('setFtRoot("/w"); ftLoadRoot();');
+  await settle();
+  await p.answer("/w", [dir("tf"), file("Dockerfile"), file("notes.txt")]);
+  await p.answer("/w/tf", [file("main.tf")]);
+  const fams = p.run('ftTreeEl.querySelectorAll(".ft-node").map((r) => ftRowPaths.get(r) + "=" + (r.dataset.fam || ""))');
+  assert.deepStrictEqual(fams, ["/w/tf=", "/w/tf/main.tf=tf", "/w/Dockerfile=build", "/w/notes.txt="]);
+});
