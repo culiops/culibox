@@ -444,6 +444,9 @@ type Manager struct {
 	// mounts none: a box from before #330, or a spawn with no profile), as ensure
 	// last found or made it. Dropped when the box is gone. Guarded by mu.
 	conv map[string]string
+	// adopt, when set, is told before each move adoptConversations makes out of
+	// a home (SetAdoptHook). Guarded by mu.
+	adopt AdoptHook
 	// started is when this Manager was made: write credentials minted before a
 	// restart cannot outlive it by more than bootHoldFor, so an orphan's hold
 	// (keepEndedHold with no owner) counts from here.
@@ -1562,6 +1565,9 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 				m.rearmIfIdle(name)
 				return err
 			}
+			// No container, so nothing writes in the home: what it holds moves
+			// into the folder before the mount hides it.
+			m.adoptConversations(ctx, name, convDir)
 		}
 		if preAcceptBypass {
 			// Best effort, like the trust entry: without it the agent just asks.

@@ -6,11 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // One conversations folder per (instance, workspace, account, profile), shared by
@@ -218,4 +222,197 @@ func (m *Manager) reuseConversations(ctx context.Context, name string, have []st
 		return StateRunning, "", fmt.Errorf("box: removing idle %s to recreate it with this profile's conversations folder: %w", name, err)
 	}
 	return StateMissing, "", nil
+}
+
+// AdoptHook is told, before adoptConversations moves a conversation (a file or a
+// conversation's folder) out of a home, the host path it is moved from and the
+// one it is moved to. An error stops the adoption before that move. The daemon
+// carries analytics' ingest offsets this way (internal/box does not import
+// analytics), so a moved transcript is not counted again.
+type AdoptHook func(from, to string) error
+
+// SetAdoptHook sets the hook adoptConversations calls; nil, the default, moves
+// with nobody told.
+func (m *Manager) SetAdoptHook(f AdoptHook) {
+	m.mu.Lock()
+	m.adopt = f
+	m.mu.Unlock()
+}
+
+// maxAdoptEntries caps how many directory entries one adoption reads, across the
+// home's projects dir and its workspace folders (a variable so a test can lower
+// it). Past it the rest stays in the home, for the next container created.
+var maxAdoptEntries = 10000
+
+// adoptConversations moves what box name's home holds in its projects dir into
+// the conversations folder convDir, so the folder's mount does not hide it from
+// /resume (#330, D3). ensure calls it only while the box has no container, so
+// nothing writes in the home meanwhile; boxes of the same profile in other
+// scopes may be writing in the folder, so nothing there is trusted.
+//
+// Each entry of <projects>/<slug>/ moves to <convDir>/<slug>/ when the folder has
+// no such name: a regular file is hard-linked there and then unlinked from the
+// home (a link never replaces a name), a real directory (a conversation's
+// subagents and tool results) is renamed (a rename never replaces a non-empty
+// directory). Both run on directory descriptors, one opened through an os.Root
+// on the home and one through an os.Root on the folder, so no path is resolved
+// again between the check and the move. Types come from the directory listing,
+// which does not follow links: a symlink, a FIFO or anything else stays in the
+// home, and so does a slug that is not a real directory. The hook, when set, is
+// told before each move; its error stops the adoption there. At most
+// maxAdoptEntries entries are read; ctx bounds it too. Nothing here fails the
+// spawn: what is not moved stays on disk in the home.
+func (m *Manager) adoptConversations(ctx context.Context, name, convDir string) {
+	m.mu.Lock()
+	hook := m.adopt
+	m.mu.Unlock()
+	homeDir := m.stateDir(name)
+	home, err := os.OpenRoot(homeDir)
+	if err != nil {
+		return
+	}
+	defer home.Close()
+	conv, err := os.OpenRoot(convDir)
+	if err != nil {
+		log.Printf("box: %s: conversations not adopted: %v", name, err)
+		return
+	}
+	defer conv.Close()
+	a := adoption{ctx: ctx, hook: hook, home: home, conv: conv,
+		from: filepath.Join(homeDir, filepath.FromSlash(conversationsRel)), to: convDir}
+	var slugs []string
+	err = eachEntry(ctx, home, conversationsRel, func(e fs.DirEntry) bool {
+		if a.read++; a.read > maxAdoptEntries {
+			a.cut = true
+			return false
+		}
+		if e.IsDir() {
+			slugs = append(slugs, e.Name())
+		} else {
+			a.kept++
+		}
+		return true
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		a.err = err
+	}
+	for _, slug := range slugs {
+		if a.err != nil || a.cut {
+			break
+		}
+		a.slug(slug)
+	}
+	if a.err != nil {
+		log.Printf("box: %s: adopting conversations into %s stopped: %v", name, convDir, a.err)
+	}
+	if a.moved > 0 || a.kept > 0 || a.cut {
+		more := ""
+		if a.cut {
+			more = fmt.Sprintf(", and more past the %d-entry cap (moved on a later start)", maxAdoptEntries)
+		}
+		log.Printf("box: %s: moved %d conversation file(s) or folder(s) from its home into %s; %d left in %s (the name is taken in the folder, or not a plain file or folder)%s",
+			name, a.moved, convDir, a.kept, a.from, more)
+	}
+}
+
+// adoption is one adoptConversations pass.
+type adoption struct {
+	ctx        context.Context
+	hook       AdoptHook
+	home, conv *os.Root
+	from, to   string // the home's projects dir and the folder, on the host
+	read       int    // entries read, against maxAdoptEntries
+	moved      int
+	kept       int
+	cut        bool  // the cap was reached
+	err        error // stops the pass
+}
+
+// slug moves the entries of one workspace folder of the home.
+func (a *adoption) slug(slug string) {
+	src, err := a.home.Open(conversationsRel + "/" + slug)
+	if err != nil {
+		a.kept++
+		return
+	}
+	defer src.Close()
+	if fi, err := src.Stat(); err != nil || !fi.IsDir() {
+		a.kept++
+		return
+	}
+	if err := a.conv.Mkdir(slug, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		a.kept++
+		return
+	}
+	if fi, err := a.conv.Lstat(slug); err != nil || !fi.IsDir() {
+		a.kept++ // a box of this profile put something else there
+		return
+	}
+	dst, err := a.conv.Open(slug)
+	if err != nil {
+		a.kept++
+		return
+	}
+	defer dst.Close()
+	if fi, err := dst.Stat(); err != nil || !fi.IsDir() {
+		a.kept++
+		return
+	}
+	// The names first, then the moves: the listing is not read while it changes.
+	var ents []fs.DirEntry
+	for {
+		if err := a.ctx.Err(); err != nil {
+			a.err = err
+			return
+		}
+		chunk, err := src.ReadDir(readDirChunk)
+		for _, e := range chunk {
+			if a.read++; a.read > maxAdoptEntries {
+				a.cut = true
+				break
+			}
+			ents = append(ents, e)
+		}
+		if a.cut || errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			a.kept += len(ents)
+			return
+		}
+	}
+	sfd, dfd := int(src.Fd()), int(dst.Fd())
+	for _, e := range ents {
+		if err := a.ctx.Err(); err != nil {
+			a.err = err
+			return
+		}
+		n := e.Name()
+		file, dir := e.Type().IsRegular(), e.Type().IsDir()
+		var st unix.Stat_t
+		if (!file && !dir) || unix.Fstatat(dfd, n, &st, unix.AT_SYMLINK_NOFOLLOW) != unix.ENOENT {
+			a.kept++
+			continue
+		}
+		if a.hook != nil {
+			if err := a.hook(filepath.Join(a.from, slug, n), filepath.Join(a.to, slug, n)); err != nil {
+				a.err = err
+				return
+			}
+		}
+		if file {
+			if err := unix.Linkat(sfd, n, dfd, n, 0); err != nil {
+				a.kept++
+				continue
+			}
+			if err := unix.Unlinkat(sfd, n, 0); err != nil {
+				// Moved all the same: the folder's copy is the one the box sees.
+				log.Printf("box: conversation %s copied into %s but not removed from the home: %v", n, a.to, err)
+			}
+		} else if err := unix.Renameat(sfd, n, dfd, n); err != nil {
+			a.kept++
+			continue
+		}
+		a.moved++
+	}
 }

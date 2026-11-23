@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -342,4 +345,226 @@ func TestReuseWithConversationsFolder(t *testing.T) {
 			t.Fatalf("err = %v", err)
 		}
 	})
+}
+
+// seedProjects writes files under a box home's projects dir, as an older build's
+// sessions left them; rel paths are below .claude/projects.
+func seedProjects(t *testing.T, home string, files map[string]string) {
+	t.Helper()
+	for rel, body := range files {
+		p := filepath.Join(home, ".claude", "projects", rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+type adoptCall struct{ from, to string }
+
+func adoptManager(t *testing.T) (*Manager, *fakeClient, *[]adoptCall) {
+	t.Helper()
+	m, f := newTestManagerWithFake(t)
+	var calls []adoptCall
+	m.SetAdoptHook(func(from, to string) error {
+		calls = append(calls, adoptCall{from, to})
+		return nil
+	})
+	return m, f, &calls
+}
+
+func readOr(p string) string {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return "<" + err.Error() + ">"
+	}
+	return string(b)
+}
+
+// D3: the first container on the new build takes the home's conversations into
+// the folder, so the mount does not hide them from /resume.
+func TestAdoptionMovesTheHomesConversations(t *testing.T) {
+	m, _, calls := adoptManager(t)
+	ws := realTemp(t)
+	name, _ := m.BoxName(ws, convKey("p"))
+	home := m.stateDir(name)
+	seedProjects(t, home, map[string]string{
+		"-w/a.jsonl":                 "A",
+		"-w/a/subagents/agent.jsonl": "S",
+		"-other/b.jsonl":             "B",
+	})
+	if _, _, _, err := m.Wrap(context.Background(), ws, "s1", convKey("p"), []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	conv := ConversationsDir(m.opts.StateRoot, ConversationsKey("TEST", ws, "", "p"))
+	for rel, want := range map[string]string{"-w/a.jsonl": "A", "-w/a/subagents/agent.jsonl": "S", "-other/b.jsonl": "B"} {
+		if got := readOr(filepath.Join(conv, rel)); got != want {
+			t.Errorf("%s in the folder = %q, want %q", rel, got, want)
+		}
+		if _, err := os.Lstat(filepath.Join(home, ".claude", "projects", rel)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s still in the home: %v", rel, err)
+		}
+	}
+	projects := filepath.Join(home, ".claude", "projects")
+	want := []adoptCall{
+		{filepath.Join(projects, "-other", "b.jsonl"), filepath.Join(conv, "-other", "b.jsonl")},
+		{filepath.Join(projects, "-w", "a"), filepath.Join(conv, "-w", "a")},
+		{filepath.Join(projects, "-w", "a.jsonl"), filepath.Join(conv, "-w", "a.jsonl")},
+	}
+	got := slices.Clone(*calls)
+	slices.SortFunc(got, func(a, b adoptCall) int { return strings.Compare(a.from, b.from) })
+	if !slices.Equal(got, want) {
+		t.Fatalf("hook calls:\n got  %q\n want %q", got, want)
+	}
+}
+
+// A name the folder already has stays in the home, and the folder's copy is untouched.
+func TestAdoptionLeavesATakenNameInTheHome(t *testing.T) {
+	m, _, calls := adoptManager(t)
+	ws := realTemp(t)
+	name, _ := m.BoxName(ws, convKey("p"))
+	home := m.stateDir(name)
+	seedProjects(t, home, map[string]string{"-w/a.jsonl": "home", "-w/d/x.jsonl": "home-d"})
+	conv := ConversationsDir(m.opts.StateRoot, ConversationsKey("TEST", ws, "", "p"))
+	for rel, body := range map[string]string{"-w/a.jsonl": "folder", "-w/d/y.jsonl": "folder-d"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(conv, rel)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(conv, rel), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, _, err := m.Wrap(context.Background(), ws, "s1", convKey("p"), []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	projects := filepath.Join(home, ".claude", "projects")
+	if readOr(filepath.Join(conv, "-w/a.jsonl")) != "folder" || readOr(filepath.Join(projects, "-w/a.jsonl")) != "home" {
+		t.Fatal("a taken file name was overwritten or moved")
+	}
+	if readOr(filepath.Join(conv, "-w/d/y.jsonl")) != "folder-d" || readOr(filepath.Join(projects, "-w/d/x.jsonl")) != "home-d" {
+		t.Fatal("a taken directory name was merged or replaced")
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("hook told of moves that did not happen: %q", *calls)
+	}
+}
+
+// Links, FIFOs and a linked workspace folder are never moved or followed.
+func TestAdoptionMovesOnlyPlainFilesAndDirectories(t *testing.T) {
+	m, _, calls := adoptManager(t)
+	ws := realTemp(t)
+	name, _ := m.BoxName(ws, convKey("p"))
+	home := m.stateDir(name)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.jsonl"), []byte("S"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projects := filepath.Join(home, ".claude", "projects")
+	if err := os.MkdirAll(filepath.Join(projects, "-w"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range []error{
+		os.Symlink(filepath.Join(outside, "secret.jsonl"), filepath.Join(projects, "-w", "link.jsonl")),
+		os.Symlink(outside, filepath.Join(projects, "-w", "linkdir")),
+		os.Symlink(outside, filepath.Join(projects, "-linked")),
+		syscall.Mkfifo(filepath.Join(projects, "-w", "fifo.jsonl"), 0o600),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, _, err := m.Wrap(context.Background(), ws, "s1", convKey("p"), []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	conv := ConversationsDir(m.opts.StateRoot, ConversationsKey("TEST", ws, "", "p"))
+	for _, rel := range []string{"-w/link.jsonl", "-w/linkdir", "-linked", "-w/fifo.jsonl"} {
+		if _, err := os.Lstat(filepath.Join(conv, rel)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s reached the folder: %v", rel, err)
+		}
+		if _, err := os.Lstat(filepath.Join(projects, rel)); err != nil {
+			t.Errorf("%s left the home: %v", rel, err)
+		}
+	}
+	if readOr(filepath.Join(outside, "secret.jsonl")) != "S" {
+		t.Fatal("the link's target was touched")
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("hook calls: %q", *calls)
+	}
+}
+
+// Bounded: past the entry cap the rest stays in the home.
+func TestAdoptionStopsAtTheEntryCap(t *testing.T) {
+	old := maxAdoptEntries
+	maxAdoptEntries = 3
+	t.Cleanup(func() { maxAdoptEntries = old })
+	m, _, calls := adoptManager(t)
+	ws := realTemp(t)
+	name, _ := m.BoxName(ws, convKey("p"))
+	files := map[string]string{}
+	for i := range 10 {
+		files["-w/"+strconv.Itoa(i)+".jsonl"] = "x"
+	}
+	seedProjects(t, m.stateDir(name), files)
+	if _, _, _, err := m.Wrap(context.Background(), ws, "s1", convKey("p"), []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(*calls); n == 0 || n >= 3 {
+		t.Fatalf("moved %d entries past a cap of 3 entries read", n)
+	}
+	left, _ := os.ReadDir(filepath.Join(m.stateDir(name), ".claude", "projects", "-w"))
+	if len(left)+len(*calls) != 10 {
+		t.Fatalf("left %d, moved %d: entries lost", len(left), len(*calls))
+	}
+}
+
+// The hook failing stops the adoption before that move: analytics would count
+// the moved transcript again.
+func TestAdoptionStopsWhenTheHookFails(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	m.SetAdoptHook(func(from, to string) error { return errors.New("db locked") })
+	ws := realTemp(t)
+	name, _ := m.BoxName(ws, convKey("p"))
+	seedProjects(t, m.stateDir(name), map[string]string{"-w/a.jsonl": "A", "-w/b.jsonl": "B"})
+	if _, _, _, err := m.Wrap(context.Background(), ws, "s1", convKey("p"), []string{"bash"}, nil, nil); err != nil {
+		t.Fatalf("an adoption failure must not fail the spawn: %v", err)
+	}
+	if f.runs() != 1 {
+		t.Fatal("no box")
+	}
+	for _, n := range []string{"a.jsonl", "b.jsonl"} {
+		if _, err := os.Lstat(filepath.Join(m.stateDir(name), ".claude", "projects", "-w", n)); err != nil {
+			t.Fatalf("%s moved although the hook failed: %v", n, err)
+		}
+	}
+}
+
+// Only when the container is created: a running box's agent may be writing in
+// its home.
+func TestAdoptionOnlyWhenTheContainerIsCreated(t *testing.T) {
+	m, f, calls := adoptManager(t)
+	ws := realTemp(t)
+	_, _, name, err := m.Wrap(context.Background(), ws, "s1", convKey("p"), []string{"bash"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedProjects(t, m.stateDir(name), map[string]string{"-w/late.jsonl": "L"})
+	if _, _, _, err := m.Wrap(context.Background(), ws, "s2", convKey("p"), []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.runs() != 1 || len(*calls) != 0 {
+		t.Fatalf("runs=%d calls=%q", f.runs(), *calls)
+	}
+	// No profile, no folder: nothing adopted either.
+	m2, _, calls2 := adoptManager(t)
+	name2, _ := m2.BoxName(ws, BoxKey{})
+	seedProjects(t, m2.stateDir(name2), map[string]string{"-w/a.jsonl": "A"})
+	if _, _, _, err := m2.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls2) != 0 {
+		t.Fatalf("adopted with no folder: %q", *calls2)
+	}
 }
