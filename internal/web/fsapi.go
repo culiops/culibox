@@ -52,7 +52,15 @@ type fsEntry struct {
 	Name  string `json:"name"`
 	IsDir bool   `json:"is_dir"`
 	Size  int64  `json:"size"`
+	// Link: the entry is a symlink (is_dir stays lstat's answer, false). TargetDir: its target resolves, under the same fs
+	// policy as a typed path, to a directory the listing endpoint would serve; see linkTargetDir.
+	Link      bool `json:"link,omitempty"`
+	TargetDir bool `json:"target_dir,omitempty"`
 }
+
+// maxLinkDirChecks bounds the symlinks one listing resolves: each is a walk from "/", so a folder of many links costs
+// this many at most. The rest still list, marked as links.
+const maxLinkDirChecks = 256
 
 // writeFsErr maps a resolveFs (or openParent) sentinel error to an HTTP status.
 func writeFsErr(w http.ResponseWriter, err error) {
@@ -124,7 +132,12 @@ func openFsTarget(t fsTarget, flag int) (*os.File, error) {
 // directories first then files, each sorted by name. A listing that touched the
 // scratch folder also says "readonly": true (the key is absent otherwise).
 func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
-	t, err := s.resolveFs(r.URL.Query().Get("path"))
+	p, err := s.fsPolicy()
+	if err != nil {
+		writeFsErr(w, err)
+		return
+	}
+	t, err := p.resolve(r.URL.Query().Get("path"))
 	if err != nil {
 		writeFsErr(w, err)
 		return
@@ -151,6 +164,7 @@ func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]fsEntry, 0, len(ents))
+	checked := 0
 	for _, e := range ents {
 		var size int64
 		// e.Info() is safe here: an entry read from a directory opened in a Root is
@@ -158,7 +172,15 @@ func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 		if fi, err := e.Info(); err == nil {
 			size = fi.Size()
 		}
-		out = append(out, fsEntry{Name: e.Name(), IsDir: e.IsDir(), Size: size})
+		ent := fsEntry{Name: e.Name(), IsDir: e.IsDir(), Size: size}
+		if e.Type()&os.ModeSymlink != 0 {
+			ent.Link = true
+			if checked < maxLinkDirChecks {
+				checked++
+				ent.TargetDir = p.linkTargetDir(filepath.Join(t.Abs, e.Name()))
+			}
+		}
+		out = append(out, ent)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].IsDir != out[j].IsDir {
@@ -174,6 +196,25 @@ func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 		resp["readonly"] = true
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// linkTargetDir reports whether the symlink at abs leads to a directory that a request naming abs itself would be
+// served: it goes through the same resolve as a typed path (served roots, denied trees, a boxed workspace's remainder
+// left for its os.Root) and is opened the way handleFsList opens one, through its root, as a directory. So a listing
+// reveals nothing about a target that a typed path does not; a loop, a dangling link, a link out of the roots, into a
+// denied tree or out of a boxed workspace is simply not a folder.
+func (p fsPolicy) linkTargetDir(abs string) bool {
+	t, err := p.resolve(abs)
+	if err != nil {
+		return false
+	}
+	d, err := openFsTarget(t, syscall.O_DIRECTORY)
+	if err != nil {
+		return false
+	}
+	defer d.Close()
+	fi, err := d.Stat()
+	return err == nil && fi.IsDir()
 }
 
 const maxTextBytes = 2 << 20 // 2 MiB preview cap for text files
