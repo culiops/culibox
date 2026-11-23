@@ -270,15 +270,7 @@ func TestInspectBranchSanitizesPaths(t *testing.T) {
 	// The path only has to exist in git, not on disk: macOS refuses a path over 1024 bytes
 	// (PATH_MAX), so the blob goes into the index under its long name without a file.
 	name := strings.Repeat(strings.Repeat("d", 200)+"/", 6) + "ev‮il.pdf"
-	x.write("blob.tmp", string(elfBytes(100, 1)), 0o644)
-	out, err := x.g.Run(context.Background(), x.of, CleanEnv(), "hash-object", "-w", "blob.tmp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(x.of, "blob.tmp")); err != nil {
-		t.Fatal(err)
-	}
-	fixtureGit(t, x.of, "update-index", "--add", "--cacheinfo", "100644,"+strings.TrimSpace(string(out))+","+name)
+	x.indexEntry("100644", name, elfBytes(100, 1))
 	fixtureGit(t, x.of, "commit", "-q", "-m", "long")
 	rep := x.inspect(handback.DefaultLimits())
 	if len(rep.Flags) != 1 {
