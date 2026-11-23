@@ -602,8 +602,12 @@ async function ftLoadRoot(opts) {
     if (typeof drawerLoadChanged === "function" && typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks()) drawerLoadChanged(drawerState.sessionId);
     if (st.defer.length > 0) {
       await Promise.all(st.defer.map((open) => open()));
-      // The Tab stop was chosen from the top level; the remembered row may be one of the folders' own.
-      if (gen === ftGen) ftRoveRestore(ftTreeEl);
+      if (gen === ftGen) {
+        // The Tab stop was chosen from the top level; the remembered row may be one of the folders' own.
+        ftRoveRestore(ftTreeEl);
+        // A status that landed while the folders listed painted only the rows that were on the page then.
+        if (typeof gitRepaintRows === "function") gitRepaintRows();
+      }
     }
   } finally {
     // Waiters resume in a later microtask, after the swap above has run.

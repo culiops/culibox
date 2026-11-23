@@ -150,3 +150,13 @@ test("a remembered folder is drawn off the page and put under its row whole; one
   await p.answer("/w/b", [file("z.go")]);
   assert.deepStrictEqual(p.shown(), ["/w/a", "/w/a/x.go", "/w/a/y.go", "/w/b"], "b was closed: its late listing is not shown");
 });
+
+test("the marks are repainted once the remembered folders are attached: a status that landed while they listed reaches their rows", async () => {
+  const p = tree(["/w/a"]);
+  p.run('setFtRoot("/w"); ftLoadRoot();');
+  await settle();
+  await p.answer("/w", [dir("a")]);
+  const r0 = p.st.repaints;
+  await p.answer("/w/a", [file("x.go")]);
+  assert.ok(p.st.repaints > r0, "repainted after a's rows went in");
+});
