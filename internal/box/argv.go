@@ -29,10 +29,11 @@ var hostOnlyEnv = map[string]bool{
 	"CODEX_HOME":        true,
 }
 
-// runArgs builds `docker run -d` for a box. Deny by default: exactly two
-// writable mounts (the workspace and the box home), and never the docker socket,
-// the host home, or ~/.ssh. Every extra bind, the in-place guards and a clone's
-// mounts included, is read-only. The workspace mounts at
+// runArgs builds `docker run -d` for a box. Deny by default: the only writable
+// mounts are the workspace, the box home, the out dir (PlaywrightOutBox) and,
+// when conv is not "", the profile's conversations folder over the home's
+// projects dir (#330); never the docker socket, the host home, or ~/.ssh. Every
+// extra bind, the in-place guards and a clone's mounts included, is read-only. The workspace mounts at
 // its identical host path so the file tree, viewer, upload/download and terminal
 // link tokenizing keep working untouched, and agent-printed paths stay clickable.
 // fenced (an AWS binding, or any box when EgressAll is on) adds the egress
@@ -43,7 +44,7 @@ var hostOnlyEnv = map[string]bool{
 // share a folder with. caBundle != "" adds the extra-CA label and bundle mount;
 // "" leaves the output exactly as it was before extra CAs existed.
 // memory is the resolved --memory value (see memoryCap), never "" or "max".
-func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool, caBundle, memory string) []string {
+func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool, caBundle, memory, conv string) []string {
 	pids, tmpSize := m.opts.PidsLimit, m.opts.TmpSize
 	if pids == 0 {
 		pids = DefaultPidsLimit
@@ -79,6 +80,12 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 		// the image's mcp.json). Writable, and outside the home on purpose: the
 		// host serves this one directory to the UI, never the home.
 		"--mount", bindMount(OutputDir(m.opts.StateRoot, boxName), PlaywrightOutBox, false),
+	}
+	if conv != "" {
+		// Nested in the home's mount: docker mounts the shallower destination
+		// first, so this one covers the home's projects dir. Writable: Claude Code
+		// writes its conversations there.
+		args = append(args, "--mount", bindMount(conv, ConversationsBox, false))
 	}
 	// No box_cpus, no flag: the box can use every core docker has.
 	if m.opts.CPUs > 0 {

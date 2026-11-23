@@ -729,6 +729,7 @@ func (m *Manager) boxGone(name string) {
 	m.mu.Lock()
 	delete(m.mismatched, name)
 	delete(m.guardsChecked, name)
+	delete(m.conv, name)
 	m.mu.Unlock()
 	if m.locks != nil {
 		m.locks.releaseBox(name)

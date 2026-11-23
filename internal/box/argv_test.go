@@ -12,7 +12,7 @@ func TestBoxArgvNeverDisablesSeccompOrPrivileges(t *testing.T) {
 	var all [][]string
 	for _, fenced := range []bool{false, true} {
 		for _, excl := range []bool{false, true} {
-			all = append(all, m.runArgs("ab-box-x", "/w", []Mount{{Host: "/h", Box: "/b"}}, fenced, excl, "", DefaultMemory))
+			all = append(all, m.runArgs("ab-box-x", "/w", []Mount{{Host: "/h", Box: "/b"}}, fenced, excl, "", DefaultMemory, ""))
 		}
 	}
 	all = append(all, m.execArgv("ab-box-x", "/w", "sid", []string{"claude"}, []string{"A=1"}))
@@ -30,7 +30,7 @@ func TestBoxArgvNeverDisablesSeccompOrPrivileges(t *testing.T) {
 // writable (the box writes into it) and keyed by the box name, outside the home.
 func TestRunArgsMountsOutputDir(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs(outTestBox, "/w", nil, false, false, "", DefaultMemory)
+	got := m.runArgs(outTestBox, "/w", nil, false, false, "", DefaultMemory, "")
 	want := "type=bind,src=" + OutputDir(m.opts.StateRoot, outTestBox) + ",dst=/tmp/playwright-mcp"
 	if !containsPair(got, "--mount", want) {
 		t.Fatalf("missing writable out dir mount %q in %q", want, strings.Join(got, " "))
