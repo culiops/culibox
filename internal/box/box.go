@@ -446,6 +446,8 @@ type Manager struct {
 	started time.Time
 	// writeHold is the hook SetWriteHold installs (guarded by mu); nil = none.
 	writeHold WriteHold
+	// hostHolds is the hook SetHostHolds installs (guarded by mu); nil = none.
+	hostHolds HostHolds
 	// memTotal is docker's MemTotal once read (0 = not yet); memFallbackLogged
 	// stops the unreadable-MemTotal fallback from logging on every spawn. Both
 	// guarded by mu.
@@ -553,6 +555,29 @@ func (m *Manager) SetWriteHold(f WriteHold) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writeHold = f
+}
+
+// HostHold is a Host session (#360) that may hold AWS write credentials: its
+// folder (symlink-resolved; "" = not known, which overlaps every folder) and
+// why, a WriteHold answer led by the session's name. Ended: the session has
+// ended, and write credentials it was given may still be valid (#333).
+type HostHold struct {
+	Workspace, Why string
+	Ended          bool
+}
+
+// HostHolds lists the Host sessions that hold their folder now. Host sessions
+// have no box, so no container listing shows them. It is called with opMu held,
+// so it must not call back into the Manager.
+type HostHolds func() []HostHold
+
+// SetHostHolds installs the Host-hold hook. Call it once at boot, before any
+// boxed spawn. Without it no Host session holds a folder (none can be granted
+// a window: the hook comes with the broker).
+func (m *Manager) SetHostHolds(f HostHolds) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.hostHolds = f
 }
 
 // RuntimeSysbox and RuntimeRunc are the isolation runtimes a box can get, for
@@ -1798,8 +1823,7 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 			continue // the exclusive spawn's own grant is refused while this box runs
 		}
 		if why := m.writeHeld(b.Name); why != "" {
-			return fmt.Errorf("%w: %s is closed to other boxes while a session in it can write to AWS: %s. "+
-				"Wait for it to end (or drop the window in that session), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, why)
+			return heldByWindow(cwd, why)
 		}
 	}
 	// After the loop: removing an idle box above can leave an ended hold.
@@ -1811,10 +1835,38 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 			return fmt.Errorf("%w: a box of a session that has ended was removed, and CuliBox could not read its folder, so no other box can start in any folder "+
 				"until write credentials of that session expire: %s. Wait until then.", ErrWorkspaceHeld, h.why)
 		}
-		return fmt.Errorf("%w: %s is closed to other boxes until write credentials of a session that has ended expire: %s. "+
-			"Wait until then (drop the window first if that session is still listed), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, h.why)
+		return heldByEnded(cwd, h.why)
+	}
+	// Host sessions (#360) have no box for the loops above to see; last, so a
+	// box's refusal reads as before. A folder not known overlaps every one.
+	m.mu.Lock()
+	hostHolds := m.hostHolds
+	m.mu.Unlock()
+	if hostHolds != nil {
+		for _, h := range hostHolds() {
+			if knownWorkspace(h.Workspace) && !Overlaps(h.Workspace, cwd) {
+				continue
+			}
+			if h.Ended {
+				return heldByEnded(cwd, h.Why)
+			}
+			return heldByWindow(cwd, h.Why)
+		}
 	}
 	return nil
+}
+
+// heldByWindow refuses a spawn into cwd while a session in it may write to AWS.
+func heldByWindow(cwd, why string) error {
+	return fmt.Errorf("%w: %s is closed to other boxes while a session in it can write to AWS: %s. "+
+		"Wait for it to end (or drop the window in that session), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, why)
+}
+
+// heldByEnded refuses a spawn into cwd while write credentials of an ended
+// session may still be valid.
+func heldByEnded(cwd, why string) error {
+	return fmt.Errorf("%w: %s is closed to other boxes until write credentials of a session that has ended expire: %s. "+
+		"Wait until then (drop the window first if that session is still listed), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, why)
 }
 
 // writeHeld is why the session owning exclusive box name may hold AWS write

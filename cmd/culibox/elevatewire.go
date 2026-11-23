@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
@@ -40,6 +43,7 @@ type elevationService struct {
 	blocker boxCheck                    // box.Manager.GrantBlocker: the grant panel's read-only view
 	claim   boxCheck                    // box.Manager.ClaimForGrant: the grant's own check
 	exited  func(*session.Session) bool // nil = (*session.Session).Exited; a seam for tests
+	hosts   *hostFolders                // Host sessions' folders for the box layer's hook (#360); nil = none
 }
 
 // boxCheck is the box layer's answer to "what stands in the way of a grant in
@@ -93,8 +97,14 @@ func hostTier(s *session.Session) bool {
 // Grant asks the broker for a write window. The broker resolves req.Name
 // against the session's own connections and applies every refusal.
 func (e elevationService) Grant(id string, req broker.ElevateRequest) (broker.ElevationView, error) {
-	if _, ok := e.bound(id); !ok {
+	s, ok := e.bound(id)
+	if !ok {
 		return broker.ElevationView{}, web.ErrElevationUnknown
+	}
+	if hostTier(s) {
+		// Before Elevate starts the write hold: from then on the box layer's
+		// hook sees the folder, as it sees an exclusive box's (#360).
+		e.hosts.add(id, s.Cwd, time.Time{})
 	}
 	return e.brk.Elevate(id, req)
 }
@@ -199,6 +209,10 @@ func (e elevationService) claimCheck(id string) error {
 // Docker (or the Mac's VM) is confirmed not running is no blocker: no box can
 // be running, so none uses the folder (#360). Any other failure is an error,
 // for which the caller refuses; a box session's is always one, as before.
+// The assumption: a Docker daemon that does not answer runs no box. A dockerd
+// with live-restore keeps containers running while it is stopped, and a remote
+// DOCKER_HOST that cannot be reached says nothing about the boxes on it; either
+// breaks it (docs/SECURITY.md, Known limits).
 func (e elevationService) blockerFor(s *session.Session, check boxCheck) (string, error) {
 	if check == nil {
 		return "", errors.New("no box manager")
@@ -400,4 +414,108 @@ func elevatable(s *session.Session) bool {
 		}
 	}
 	return false
+}
+
+// hostFolders records the folder of each broker-served Host session that asked
+// for a write window, or was running when CuliBox started, so the box layer
+// keeps boxes out of it while the session may hold write credentials (#360),
+// as it does for an exclusive box's folder (#325, #333). A Host session has no
+// box, so no container listing shows it.
+type hostFolders struct {
+	mu sync.Mutex
+	m  map[string]hostFolder
+}
+
+// hostFolder is one Host session's folder (symlink-resolved when it could be)
+// and when it was adopted at boot (zero for one this process granted).
+type hostFolder struct {
+	ws        string
+	adoptedAt time.Time
+}
+
+func newHostFolders() *hostFolders { return &hostFolders{m: map[string]hostFolder{}} }
+
+// add records sid's folder. A boot adoption is kept when the session asks
+// again. A cwd that is not absolute is kept as is: the box layer reads it as
+// not known, which overlaps every folder (fail closed).
+func (h *hostFolders) add(sid, cwd string, adoptedAt time.Time) {
+	if h == nil {
+		return
+	}
+	ws := cwd
+	if filepath.IsAbs(cwd) {
+		ws = filepath.Clean(cwd)
+		if r, err := filepath.EvalSymlinks(cwd); err == nil {
+			ws = r
+		}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if old, ok := h.m[sid]; ok && adoptedAt.IsZero() {
+		adoptedAt = old.adoptedAt
+	}
+	h.m[sid] = hostFolder{ws: ws, adoptedAt: adoptedAt}
+}
+
+func (h *hostFolders) remove(sid string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.m, sid)
+}
+
+func (h *hostFolders) snapshot() map[string]hostFolder {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make(map[string]hostFolder, len(h.m))
+	for k, v := range h.m {
+		out[k] = v
+	}
+	return out
+}
+
+// seedHostFolders records, at boot, every live broker-served Host session that
+// can be elevated: write credentials it was given before the restart may still
+// be valid, as for a box adopted then (#333). Call it before the API serves.
+func (e elevationService) seedHostFolders(now time.Time) {
+	if e.hosts == nil || e.list == nil {
+		return
+	}
+	for _, in := range e.list() {
+		if s, ok := e.get(in.ID); ok && s != nil && hostTier(s) && elevatable(s) && !e.isExited(s) {
+			e.hosts.add(in.ID, s.Cwd, now)
+		}
+	}
+}
+
+// hostHolds is the box layer's Host-hold hook (box.HostHolds): each recorded
+// Host session the broker still holds, with its folder. It runs under the box
+// layer's opMu, so, as writeHold, it takes only the broker's lock and one
+// lookup per recorded Host session, whose lock never waits on opMu (a Host
+// session makes no box call). Never the full session list. A session that has
+// ended and holds nothing is forgotten.
+func (e elevationService) hostHolds() []box.HostHold {
+	if e.hosts == nil {
+		return nil
+	}
+	held := e.hosts.snapshot()
+	ids := make([]string, 0, len(held))
+	for id := range held {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var out []box.HostHold
+	for _, id := range ids {
+		f := held[id]
+		why := e.writeHold(id, f.adoptedAt)
+		s, ok := e.get(id)
+		ended := !ok || s == nil || e.isExited(s)
+		if why == "" {
+			if ended {
+				e.hosts.remove(id)
+			}
+			continue
+		}
+		out = append(out, box.HostHold{Workspace: f.ws, Why: why, Ended: ended})
+	}
+	return out
 }

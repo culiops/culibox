@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -308,6 +309,94 @@ func TestGrantContextLeavesOutTheElevatedHostSession(t *testing.T) {
 	gc := e.grantContext("hb-1")
 	if len(gc.HostSessions) != 1 || gc.HostSessions[0].ID != "zsh-1" || gc.Blocked != "" {
 		t.Fatalf("%+v", gc)
+	}
+}
+
+// hostBroker is a broker whose lookup knows the given Host views.
+func hostBroker(t *testing.T, views map[string]broker.SessionView) *broker.Broker {
+	t.Helper()
+	audit, err := broker.OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = audit.Close() })
+	return broker.New([]byte(strings.Repeat("s", 32)),
+		func(id string) (broker.SessionView, bool) { v, ok := views[id]; return v, ok }, noMinter{}, audit)
+}
+
+// Fix round 1 (#360): a Host session's write window closes its folder to
+// boxes. The grant records the session's folder; the box layer's hook lists
+// it while the broker holds the session, and forgets it once the session has
+// ended and holds nothing. A plain Host session is never listed.
+func TestHostHoldsListTheGrantedHostSession(t *testing.T) {
+	dir := t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	hb := hostBrokerSess("hb-1")
+	hb.Cwd = dir
+	plain := hostBrokerSess("h-1")
+	plain.HostBroker = false
+	view := broker.SessionView{Agent: "aws", Host: true, Live: true, AWS: hb.AWS}
+	brk := hostBroker(t, map[string]broker.SessionView{"hb-1": view, "h-1": view})
+	sessions := map[string]*session.Session{"hb-1": hb, "h-1": plain}
+	var mu sync.Mutex
+	get := func(id string) (*session.Session, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		s, ok := sessions[id]
+		return s, ok
+	}
+	e := elevationService{brk: brk, get: get, hosts: newHostFolders()}
+
+	if got := e.hostHolds(); len(got) != 0 {
+		t.Fatalf("before any grant: %+v", got)
+	}
+	if _, err := e.Grant("h-1", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie}); !errors.Is(err, web.ErrElevationUnknown) {
+		t.Fatalf("plain host grant: %v", err)
+	}
+	if _, err := e.Grant("hb-1", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie}); err != nil {
+		t.Fatal(err)
+	}
+	got := e.hostHolds()
+	if len(got) != 1 || got[0].Workspace != real || got[0].Ended ||
+		!strings.HasPrefix(got[0].Why, "session hb-1 has a write window open until ") {
+		t.Fatalf("after the grant: %+v", got)
+	}
+	// Dropped with nothing issued: no hold, but the live session stays known.
+	if _, err := e.Drop("hb-1", broker.CredCookie); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.hostHolds(); len(got) != 0 {
+		t.Fatalf("after the drop: %+v", got)
+	}
+	if n := len(e.hosts.snapshot()); n != 1 {
+		t.Fatalf("a live session was forgotten: %d", n)
+	}
+	// Ended and holding nothing: forgotten.
+	mu.Lock()
+	delete(sessions, "hb-1")
+	mu.Unlock()
+	e.hostHolds()
+	if n := len(e.hosts.snapshot()); n != 0 {
+		t.Fatalf("an ended session with no hold is still listed: %d", n)
+	}
+}
+
+// A Host session reattached at boot may hold write credentials the broker no
+// longer knows about: it holds its folder as an adopted box does (#333).
+func TestHostHoldsSeededAtBoot(t *testing.T) {
+	hb := hostBrokerSess("hb-1")
+	plain := hostBrokerSess("h-1")
+	plain.HostBroker = false
+	box1 := boundSess("b-1")
+	sessions := map[string]*session.Session{"hb-1": hb, "h-1": plain, "b-1": box1}
+	brk := hostBroker(t, nil)
+	e := elevationService{brk: brk, get: func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		list:  func() []session.Info { return []session.Info{{ID: "hb-1"}, {ID: "h-1"}, {ID: "b-1"}} },
+		hosts: newHostFolders()}
+	e.seedHostFolders(time.Now())
+	got := e.hostHolds()
+	if len(got) != 1 || got[0].Workspace != "/w/proj" || !strings.Contains(got[0].Why, "restarted") {
+		t.Fatalf("seeded holds: %+v", got)
 	}
 }
 

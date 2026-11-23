@@ -880,7 +880,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 		stopBroker = brokerSvc.Stop
 		if boxes != nil {
-			es := elevationService{brk: brokerSvc.Hooks.B, get: mgr.Get, list: mgr.List, blocker: boxes.GrantBlocker, claim: boxes.ClaimForGrant}
+			es := elevationService{brk: brokerSvc.Hooks.B, get: mgr.Get, list: mgr.List, blocker: boxes.GrantBlocker, claim: boxes.ClaimForGrant,
+				hosts: newHostFolders()}
 			if brokerSvc.SSO != nil { // a nil *Runner must stay a nil interface
 				es.runner = brokerSvc.SSO
 			}
@@ -889,6 +890,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			// credentials. Before the API serves: no boxed spawn can run earlier,
 			// and without the hook exclusive boxes refuse every other spawn.
 			boxes.SetWriteHold(es.writeHold)
+			// #360: a broker-served Host session's window closes its folder
+			// too. Host sessions reattached at boot are held as adopted boxes.
+			es.seedHostFolders(time.Now())
+			boxes.SetHostHolds(es.hostHolds)
 			api.Elevation = es
 			status.Elevation = brokerSvc.Hooks.B.Elevation
 			status.SSO = es.ssoStatus
