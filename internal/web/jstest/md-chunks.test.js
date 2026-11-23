@@ -172,11 +172,34 @@ test("an element that really nests across blocks (<details>, an unclosed <b>) is
   const b = "# a\n\nsome <b>bold\n\nstill bold</b> here\n\n# b\n";
   const gb = mdChunkGroups(marked.lexer(b), 1);
   assert.ok(gb.some((g) => g.some((t) => t.raw.includes("<b>")) && g.some((t) => t.raw.includes("</b>"))), "<b> stays with its close");
-  // Left open for good: a group is closed anyway once it holds 8 × chunkChars (64 KB at the least), so the file still comes in chunks.
+  // Formatting left open for good: a group is closed anyway once it holds 8 × chunkChars (64 KB at the least).
   let rest = "";
   for (let i = 0; rest.length < 600000; i++) rest += "## S" + i + "\n\ntext\n\n";
-  const open = "# a\n\n<div>\n\n" + rest;
+  const open = "# a\n\nsome <b>bold\n\n" + rest; // formatting left open for good (a container is the next test's)
   const groups = mdChunkGroups(marked.lexer(open), 8192);
   assert.ok(groups.length >= 9, "groups: " + groups.length);
   for (const g of groups) assert.ok(g.reduce((n, t) => n + t.raw.length, 0) < 8 * 8192 + 200, "no group holds much more than 8 chunks");
+});
+
+// --- review round 2 ---------------------------------------------------------------------------------------------------------
+
+test("a <details> of 100 KB (a collapsed changelog) is never cut: only inline formatting left open is force-cut at 64 KB", () => {
+  let rel = "";
+  for (let i = 0; rel.length < 100000; i++) rel += "## v1." + i + "\n\n- fix\n\n";
+  const text = "# Changelog\n\n<details>\n<summary>Older releases</summary>\n\n" + rel + "</details>\n\n## After\n\ntext\n";
+  marked.setOptions({ breaks: false, gfm: true });
+  const groups = mdChunkGroups(marked.lexer(text), 8192);
+  const g = groups.find((x) => x.some((t) => t.type === "html" && t.raw.includes("<details>")));
+  assert.ok(g.some((t) => t.type === "html" && t.raw.includes("</details>")), "open and close in one group");
+  // An inline </div> closes a block <div>.
+  const inl = "# a\n\n<div>\n\n" + rel + "text</div> after\n\n" + rel;
+  const gi = mdChunkGroups(marked.lexer(inl), 8192);
+  assert.ok(gi.length > 5, "after the inline </div> the file is cut again: " + gi.length);
+  // A <div> left open for good is cut at 1 MiB, not 64 KB.
+  let big = "";
+  for (let i = 0; big.length < 300000; i++) big += "## S" + i + "\n\ntext\n\n";
+  const gd = mdChunkGroups(marked.lexer("# a\n\n<div>\n\n" + big), 8192);
+  assert.equal(gd.length, 1, "kept whole below 1 MiB");
+  const gb = mdChunkGroups(marked.lexer("# a\n\nsome <b>bold\n\n" + big), 8192);
+  assert.ok(gb.length >= 4, "an inline <b> left open is cut at 64 KB: " + gb.length);
 });

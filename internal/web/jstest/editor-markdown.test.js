@@ -647,3 +647,26 @@ test("Changes pressed during the early Preview shows as pressed with loading…,
   assert.equal(tab.diff, null, "Changes does not open by itself when Monaco arrives");
   assert.equal(tab.previewing, true);
 });
+
+// --- review round 2 ---------------------------------------------------------------------------------------------------------
+
+test("Changes pressed during the early Preview stays 'loading…' across a tab switch", async () => {
+  const { tab } = await early();
+  tab.seg.changes.click();
+  tab.onHide();
+  tab.onAttach();
+  assert.equal(tab.previewing, false);
+  assert.equal(tab.bodyEl.children[0].textContent, "loading…");
+  assert.deepEqual(pressed(tab), ["changes"]);
+});
+
+test("a tab hidden while its first draw is still putting the pane back keeps the place it was to go back to", async () => {
+  const p = page({ performance: clock() });
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: BIG, version: "v1" } });
+  const tab = await p.open("/p/README.md", { scroll: 500 });
+  await p.settle();
+  pane(tab).scrollTop = 120; // what the browser clamps to while the document is still short
+  tab.md.restoreAt = 120;
+  tab.onHide();
+  assert.equal(tab.md.top, 500, "the place to go back to, not the clamped one");
+});

@@ -227,7 +227,7 @@ function editorMdAttach(tab) {
 // with the model (editorsync.js), and a change it finds then is drawn as any other.
 function editorMdEarly(tab) {
   if (tab.disposed || tab.model || tab.inner || tab.earlyText === null || !tab.attached) return;
-  if (editorMdView(tab) !== "preview") {
+  if (editorMdView(tab) !== "preview" || tab.pendingChanges) { // Source, or Changes pressed (editorDiffSet): wait for the editor
     editorMdDrop(tab);
     tab.setBodyMessage("loading…");
     return;
@@ -240,7 +240,7 @@ function editorMdEarly(tab) {
 function editorMdDetach(tab) {
   const m = tab.md;
   if (!m || !m.live) return;
-  m.top = m.pane.scrollTop;
+  m.top = m.restore !== null ? m.restore : m.pane.scrollTop; // a first draw still putting the pane back: that place
   m.live = false;
   editorMdStop(m);
 }
@@ -251,7 +251,7 @@ function editorMdDetach(tab) {
 function editorMdDrop(tab) {
   const m = tab.md;
   if (!m || !m.pane) return;
-  if (m.live) m.top = m.pane.scrollTop;
+  if (m.live) m.top = m.restore !== null ? m.restore : m.pane.scrollTop;
   editorMdStop(m);
   m.live = false;
 }

@@ -400,18 +400,22 @@ function mdLexPieces(src, chunkChars) {
   return Array.from(mdLexPiecesIter(src, chunkChars));
 }
 
-// The elements whose nesting can carry across top-level blocks once the browser parses the HTML, so a chunk must not end inside one:
-// inline, only the formatting elements the HTML parser reopens in the next paragraph (its "active formatting elements"); in an HTML
-// block, those and the containers markdown is commonly wrapped in. Anything else (an unknown tag such as the T of "Vec<T>" in prose,
-// a <span>, a <p> or <li> the parser closes by itself) ends with its block, or is dropped by DOMPurify with its content kept in
-// place, so a cut after it changes nothing.
+// The elements whose nesting can carry across top-level blocks once the browser parses the HTML, so a chunk should not end inside one:
+// the formatting elements the HTML parser reopens in the next paragraph (its "active formatting elements"), and the containers
+// markdown is commonly wrapped in (a <details> around a changelog, a <div align="center">). Anything else (an unknown tag such as the
+// T of "Vec<T>" in prose, a <span>, a <p> or <li> the parser closes by itself) ends with its block, or is dropped by DOMPurify with
+// its content kept in place, so a cut after it changes nothing. Markup that is already broken in rarer ways (an unclosed inline
+// <pre>, <script>, <textarea>) swallows the rest of the document in one piece and only up to the next cut in chunks: the chunked
+// result is the more readable one, and both are sanitized the same.
 const MD_NEST_INLINE = new Set(["a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]);
-const MD_NEST_BLOCK = new Set([...MD_NEST_INLINE, "article", "aside", "blockquote", "center", "details", "div", "dl", "figure", "footer",
-  "header", "main", "nav", "ol", "section", "table", "tbody", "thead", "tfoot", "ul"]);
-// A run is closed after this many chunks' worth of source even with such an element still open (one left open for good, in a long
-// file, would otherwise hold the rest of it in one chunk): that file's nesting after the cut may differ, never its sanitizing.
+const MD_NEST_BLOCK = new Set(["article", "aside", "blockquote", "center", "details", "div", "dl", "figure", "footer", "header", "main",
+  "nav", "ol", "section", "table", "tbody", "thead", "tfoot", "ul"]);
+// A run with only formatting left open is closed anyway after this many chunks' worth of source (at least the floor): an unclosed <b>
+// in a long file would otherwise hold the rest of it in one chunk, and no cut is right for it. A container is cut only past
+// MD_GROUP_MAX_BLOCK: a <details> of a few hundred KB is a normal file and must stay whole.
 const MD_GROUP_MAX_CHUNKS = 8;
-const MD_GROUP_MAX_FLOOR = 65536; // and never below this, however small the chunks
+const MD_GROUP_MAX_FLOOR = 65536;
+const MD_GROUP_MAX_BLOCK = 1048576;
 
 // mdTagBalance: the tags of `names` an HTML snippet opens minus the ones it closes (self-closing tags and comments open nothing).
 function mdTagBalance(raw, names) {
@@ -423,14 +427,17 @@ function mdTagBalance(raw, names) {
 }
 
 // mdHtmlDepth: the balance of every HTML token in a token and the tokens inside it (a paragraph's inline tags, a list's items, a
-// table's cells), leaving code out: an HTML block counts MD_NEST_BLOCK, an inline tag MD_NEST_INLINE.
+// table's cells), leaving code out, as {block, inline}: containers (MD_NEST_BLOCK) and formatting (MD_NEST_INLINE).
 function mdHtmlDepth(token) {
-  let d = 0;
+  const d = { block: 0, inline: 0 };
   const visit = (x) => {
     if (!x || typeof x !== "object") return;
     if (Array.isArray(x)) { x.forEach(visit); return; }
     if (x.type === "code" || x.type === "codespan") return;
-    if (x.type === "html" && typeof x.raw === "string") d += mdTagBalance(x.raw, x.block ? MD_NEST_BLOCK : MD_NEST_INLINE);
+    if (x.type === "html" && typeof x.raw === "string") {
+      d.block += mdTagBalance(x.raw, MD_NEST_BLOCK);
+      d.inline += mdTagBalance(x.raw, MD_NEST_INLINE);
+    }
     for (const k of ["tokens", "items", "header", "rows"]) if (x[k]) visit(x[k]);
   };
   visit(token);
@@ -438,23 +445,30 @@ function mdHtmlDepth(token) {
 }
 
 // mdChunkGroups splits the top-level tokens into runs of about `chunkChars` of source: a run ends once it holds that much and no
-// element of MD_NEST_* it opened is still open (or once it holds MD_GROUP_MAX_CHUNKS times that, at least MD_GROUP_MAX_FLOOR) (a <details> around a few paragraphs stays in one run, so DOMPurify nests it as in one piece).
-// Every run carries the document's reference links, as marked's parser expects of a token list. mdChunkGroupsIter makes them one at a
-// time (the walk over a big file's tokens is itself about 100 ms, measured, so the chunked render spreads it over its steps).
+// element of MD_NEST_* it opened is still open; with only formatting open, once it holds MD_GROUP_MAX_CHUNKS times that (at least
+// MD_GROUP_MAX_FLOOR); with a container open, only past MD_GROUP_MAX_BLOCK. Every run carries the document's reference links, as
+// marked's parser expects of a token list. mdChunkGroupsIter makes them one at a time (the walk over a big file's tokens is itself
+// about 100 ms, measured, so the chunked render spreads it over its steps).
 function* mdChunkGroupsIter(tokens, chunkChars) {
+  const inlineMax = Math.max(MD_GROUP_MAX_CHUNKS * chunkChars, MD_GROUP_MAX_FLOOR);
   let cur = [];
   let size = 0;
-  let depth = 0;
+  let block = 0;
+  let inline = 0;
   for (const t of tokens) {
     cur.push(t);
     size += typeof t.raw === "string" ? t.raw.length : 0;
-    depth = Math.max(0, depth + mdHtmlDepth(t));
-    if ((size >= chunkChars && depth === 0) || size >= Math.max(MD_GROUP_MAX_CHUNKS * chunkChars, MD_GROUP_MAX_FLOOR)) {
-      depth = 0;
+    const d = mdHtmlDepth(t);
+    block = Math.max(0, block + d.block);
+    inline = Math.max(0, inline + d.inline);
+    const cut = (size >= chunkChars && block === 0 && inline === 0) || (block === 0 && size >= inlineMax) || size >= MD_GROUP_MAX_BLOCK;
+    if (cut) {
       cur.links = tokens.links;
       yield cur;
       cur = [];
       size = 0;
+      block = 0;
+      inline = 0;
     }
   }
   if (cur.length) {
