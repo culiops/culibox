@@ -1533,6 +1533,13 @@
   button.dk-crumb:focus-visible { outline: var(--focus); outline-offset: -2px; }
   .dk-sep { flex: none; padding: 0 3px; }
   .dk-edited { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+  /* "Outside this tree · Reveal" (P4.5): the open file is outside the tree's root. It sits after the trail and gives way
+     before anything on the right does: the trail shrinks first, then these words (ellipsis); Reveal and "Edited by" (and P6's
+     blame header after it) never shrink. Muted, as the row is; Reveal is the kit's link. */
+  .dk-outside { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; }
+  .dk-outside[hidden] { display: none; }
+  .dk-outside-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .dk-outside-go { flex: none; font: inherit; }
   .dk-edited::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
   /* A read-only file's tab wears a small padlock after its name (drawn here, like the dirty dot, so no glyph has to exist in a
      font): a body and a shackle in the muted colour. */

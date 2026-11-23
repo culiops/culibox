@@ -535,7 +535,10 @@ function dockRender() {
   // A buffer with an unsaved edit says so on the right ("Unsaved · Ctrl+S to save"), in place of "Edited by".
   const live = mine ? dockViewers.get(tab.key) : null;
   const note = live && typeof live.crumbNote === "function" ? live.crumbNote() : "";
-  dockCrumbsPaint(crumbs, note || editedLabel(drawerChangedFiles.get(sid), tab.path, name, Date.now()), tab.box ? null : { reveal: dockCrumbsReveal });
+  // A file outside the tree's root says so beside the trail (dockreveal.js), never in place of "Edited by".
+  const outside = !tab.box && typeof dockRevealOutside === "function" && dockRevealOutside(tab.path);
+  dockCrumbsPaint(crumbs, note || editedLabel(drawerChangedFiles.get(sid), tab.path, name, Date.now()),
+    tab.box ? null : { reveal: dockCrumbsReveal, revealOutside: typeof dockRevealOutsideGo === "function" ? dockRevealOutsideGo : null }, outside);
 }
 
 // --- what is stored -------------------------------------------------------------
