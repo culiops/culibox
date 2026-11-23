@@ -94,7 +94,7 @@ function tierDropsLine(drops, keeps) {
 }
 
 // tierHostState: Host is off when the server says the profile may not run there (ProfileView.host_block). host_drops does not
-// turn it off: Host runs without the bindings, after a confirm.
+// turn it off: Host runs with the box settings dropped and the bindings as its default credentials (host_guardrail), after a confirm.
 function tierHostState(profile) {
   const b = profile && profile.host_block;
   if (typeof b === "string" && b !== "") return { ok: false, why: tierWhy(b) };
@@ -113,7 +113,7 @@ function tierCloneState(o) {
 }
 
 // tierPreselect: the card the profile and workspace point at, before any fallback (spec §5): a clone profile whose repo
-// (or clone dir) is the workspace, else a profile saved as host, else in place. A host profile that drops bindings there opens on Box
+// (or clone dir) is the workspace, else a profile saved as host, else in place. A host profile whose Host run drops box settings or has bindings as its guardrail opens on Box
 // (#359, #360): Host is one click away, and never what a stray Enter starts. Never a "last used" tier.
 // o = {profile, cwd, home}.
 function tierPreselect(o) {

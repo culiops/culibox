@@ -416,6 +416,22 @@ without `sudo`, `lsof` does not list another account's process);
 the broker stays off until CuliBox restarts, and the proxy tries again at the
 next boxed spawn.
 
+### Bindings on Host
+
+A host session of a profile with bindings gets them as its default credentials,
+not a limit (see [Security](SECURITY.md#known-limits)). It runs on the Mac
+itself, so it does not use the relay, the VM or the broker's TCP port: the
+broker serves that one session on a unix socket at
+`<data directory>/broker/h/<12 hex>/s` (the data directory is
+`~/.local/share/culibox` unless you moved it), in a folder only you can open.
+A unix socket path is capped at 103 bytes on macOS (107 on Linux). With the
+default data directory the path is far shorter; a long custom data directory
+makes the Host start fail with the path and the cap in the message, and you
+shorten the directory. The helpers need `node` on the session's PATH (a
+Homebrew `node` counts when `/opt/homebrew/bin` is on the PATH the session
+gets); without it the session starts without its bindings and says why.
+Bindings on Host have not been verified on a Mac yet.
+
 ### In-place guard
 
 A box started in place sees the workspace root's `.git`, `.claude/` and any
