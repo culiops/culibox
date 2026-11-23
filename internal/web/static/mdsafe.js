@@ -359,9 +359,9 @@ const MD_HTML_SPANS = [
 
 // mdLexPieces cuts `src` (newlines already \n) into pieces of at least `chunkChars` where it can: only before a heading line
 // (MD_HEADING_CUT) that follows a blank line and is outside a fenced code block and outside an HTML block of MD_HTML_SPANS. A text
-// with no such place is one piece. Joined, the pieces are `src`.
-function mdLexPieces(src, chunkChars) {
-  const pieces = [];
+// with no such place is one piece. Joined, the pieces are `src`. mdLexPiecesIter hands them out one at a time, scanning only as far
+// as the next one (a scan of a whole 2 MiB file at once was a 50 to 65 ms step, measured).
+function* mdLexPiecesIter(src, chunkChars) {
   let start = 0;
   let pos = 0;
   let fence = "";   // the open fence's backticks or tildes
@@ -377,7 +377,7 @@ function mdLexPieces(src, chunkChars) {
     } else if (html) {
       if (html.test(line)) html = null;
     } else {
-      if (blank && pos > start && pos - start >= chunkChars && MD_HEADING_CUT.test(line)) { pieces.push(src.slice(start, pos)); start = pos; }
+      if (blank && pos > start && pos - start >= chunkChars && MD_HEADING_CUT.test(line)) { yield src.slice(start, pos); start = pos; }
       const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
       if (f && !(f[1][0] === "`" && line.slice(f[0].length).includes("`"))) fence = f[1];
       else {
@@ -393,8 +393,11 @@ function mdLexPieces(src, chunkChars) {
     blank = /^[ \t]*$/.test(line);
     pos = end + 1;
   }
-  pieces.push(src.slice(start));
-  return pieces;
+  yield src.slice(start);
+}
+
+function mdLexPieces(src, chunkChars) {
+  return Array.from(mdLexPiecesIter(src, chunkChars));
 }
 
 const MD_VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
@@ -426,21 +429,31 @@ function mdHtmlDepth(token) {
 
 // mdChunkGroups splits the top-level tokens into runs of about `chunkChars` of source: a run ends once it holds that much and no
 // HTML tag it opened is still open (a <details> around a few paragraphs stays in one run, so DOMPurify nests it as in one piece).
-// Every run carries the document's reference links, as marked's parser expects of a token list.
-function mdChunkGroups(tokens, chunkChars) {
-  const groups = [];
+// Every run carries the document's reference links, as marked's parser expects of a token list. mdChunkGroupsIter makes them one at a
+// time (the walk over a big file's tokens is itself about 100 ms, measured, so the chunked render spreads it over its steps).
+function* mdChunkGroupsIter(tokens, chunkChars) {
   let cur = [];
   let size = 0;
   let depth = 0;
-  const close = () => { cur.links = tokens.links; groups.push(cur); cur = []; size = 0; };
   for (const t of tokens) {
     cur.push(t);
     size += typeof t.raw === "string" ? t.raw.length : 0;
     depth = Math.max(0, depth + mdHtmlDepth(t));
-    if (size >= chunkChars && depth === 0) close();
+    if (size >= chunkChars && depth === 0) {
+      cur.links = tokens.links;
+      yield cur;
+      cur = [];
+      size = 0;
+    }
   }
-  if (cur.length) close();
-  return groups;
+  if (cur.length) {
+    cur.links = tokens.links;
+    yield cur;
+  }
+}
+
+function mdChunkGroups(tokens, chunkChars) {
+  return Array.from(mdChunkGroupsIter(tokens, chunkChars));
 }
 
 // mdOpenAtEnd: the last block of a piece lexed on its own is one that the rest of the text could have continued: a fenced code block
@@ -474,21 +487,24 @@ function mdOpenAtEnd(tokens) {
 // definition of a label winning as in marked, and the inline pass then runs over every piece's queue, in slices of about `chunkChars`,
 // on one Lexer that holds them, so a link resolves wherever its definition is.
 function* mdLexSteps(text, marked, chunkChars) {
-  const pieces = mdLexPieces(text.replace(/\r\n|\r/g, "\n"), chunkChars);
+  const src = text.replace(/\r\n|\r/g, "\n");
   const main = new marked.Lexer(marked.defaults);
   const queue = [];
-  for (let i = 0; i < pieces.length; i++) {
+  let at = 0; // where the next piece starts in src
+  for (const piece of mdLexPiecesIter(src, chunkChars)) {
     let lx = new marked.Lexer(marked.defaults);
-    lx.blockTokens(pieces[i], lx.tokens);
-    if (i < pieces.length - 1 && mdOpenAtEnd(lx.tokens)) {
+    lx.blockTokens(piece, lx.tokens);
+    const rest = at + piece.length < src.length && mdOpenAtEnd(lx.tokens); // the cut was wrong: lex everything from here at once
+    if (rest) {
       lx = new marked.Lexer(marked.defaults);
-      lx.blockTokens(pieces.slice(i).join(""), lx.tokens);
-      i = pieces.length;
+      lx.blockTokens(src.slice(at), lx.tokens);
     }
     for (const t of lx.tokens) main.tokens.push(t);
     for (const k of Object.keys(lx.tokens.links)) if (!(k in main.tokens.links)) main.tokens.links[k] = lx.tokens.links[k];
     for (const q of lx.inlineQueue) queue.push(q);
     yield null;
+    if (rest) break;
+    at += piece.length;
   }
   let done = 0;
   for (const q of queue) {
@@ -502,7 +518,7 @@ function* mdLexSteps(text, marked, chunkChars) {
 // mdChunks: the chunked render. A step that only lexed yields null (nothing to show yet); every other step yields one fragment.
 function* mdChunks(text, deps) {
   const tokens = yield* mdLexSteps(text, deps.marked, deps.chunkChars);
-  for (const group of mdChunkGroups(tokens, deps.chunkChars)) yield mdFinish(deps.marked.parser(group), deps);
+  for (const group of mdChunkGroupsIter(tokens, deps.chunkChars)) yield mdFinish(deps.marked.parser(group), deps);
 }
 
 // mdRenderFragment is the only place markdown becomes DOM: marked, then mdFinish (DOMPurify, highlight.js, the walk). `deps` =
