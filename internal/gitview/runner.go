@@ -120,7 +120,10 @@ type Numstat struct {
 	Reason string `json:"reason,omitempty"`
 	// RootRel is where the requested tree root sits inside the checkout top, as
 	// for Status: the web handler sets it, the runner leaves it empty.
-	RootRel string     `json:"rootRel"`
+	RootRel string `json:"rootRel"`
+	// Scope is the scope the entries are for, "head" or "branch": the web
+	// handler sets it (for an "auto" request, the one it picked).
+	Scope   string     `json:"scope,omitempty"`
 	Entries []NumEntry `json:"entries"`
 }
 

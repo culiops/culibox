@@ -65,8 +65,9 @@ type gitBody struct {
 	// arrived, not a reused or already-running one: a client sets it when it has
 	// just changed something on disk.
 	Fresh bool `json:"fresh,omitempty"`
-	// Scope (numstat and show) is "head" or "branch", nothing else: the base
-	// branch of "branch" is derived by the server, no client field can name a ref.
+	// Scope (numstat and show) is "head" or "branch", nothing else, and for
+	// numstat also "auto" (the server picks one of the two): the base branch of
+	// "branch" is derived by the server, no client field can name a ref.
 	Scope string `json:"scope,omitempty"`
 	// Raw (show only) asks for the bytes of an image, not the JSON text.
 	Raw bool `json:"raw,omitempty"`
@@ -607,19 +608,23 @@ func (s *Server) handleGitBase(w http.ResponseWriter, r *http.Request) {
 // the merge base id, so it waits for no status and no merge-base run). Tracked files are counted by git;
 // untracked ones are counted here (see withUntracked). Any other scope is a 400.
 // ok/notrepo/toomany/unavailable are all 200, and "branch" with no base branch
-// is "unavailable" with "no base branch". Fresh makes only the numstat run fresh
-// (see Runner.NumstatFresh): the status the untracked files come from is the
-// reused one, as the client refreshes status on its own.
+// is "unavailable" with "no base branch". "auto" is numstatAuto's pick, for a
+// client that has no scope to ask for yet. Every reply names its scope. Fresh
+// makes only the numstat run fresh (see Runner.NumstatFresh): the status the
+// untracked files come from is the shared one (StatusShared), as the client
+// asks for status on its own.
 func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 	body, ok := decodeGitBody(w, r)
 	if !ok {
 		return
 	}
-	var branch bool
+	var branch, auto bool
 	switch body.Scope {
 	case "head":
 	case "branch":
 		branch = true
+	case "auto":
+		auto = true
 	default:
 		writeErr(w, http.StatusBadRequest, "bad scope")
 		return
@@ -669,11 +674,17 @@ func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 	// ns is this request's own copy (Numstat returns a value with cloned
 	// entries), so RootRel and the appended entries never reach the runner's cache.
 	var ns gitview.Numstat
-	if body.Fresh {
-		ns = s.Git.NumstatFresh(r.Context(), t, sc)
-	} else {
-		ns = s.Git.Numstat(r.Context(), t, sc)
+	scope := "head"
+	switch {
+	case auto:
+		ns, scope = s.numstatAuto(r.Context(), t, body.Fresh)
+	default:
+		if branch {
+			scope = "branch"
+		}
+		ns = s.numstatOf(r.Context(), t, sc, body.Fresh)
 	}
+	ns.Scope = scope
 	ns.RootRel = rootRel(t.Top, abs)
 	if ns.State == "unavailable" {
 		log.Printf("git numstat %q: %q", t.Top, ns.Reason)
@@ -688,6 +699,46 @@ func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 		ns.Entries = s.withUntracked(r.Context(), t, ns.Entries, <-stc)
 	}
 	writeJSON(w, http.StatusOK, ns)
+}
+
+// numstatOf is one numstat, fresh or not.
+func (s *Server) numstatOf(ctx context.Context, t gitview.Target, sc gitview.Scope, fresh bool) gitview.Numstat {
+	if fresh {
+		return s.Git.NumstatFresh(ctx, t, sc)
+	}
+	return s.Git.Numstat(ctx, t, sc)
+}
+
+// numstatAuto answers a numstat whose scope the client does not know yet (it
+// has no base, and no remembered pick): Branch when HEAD is ahead of the merge
+// base with the base branch, else Uncommitted, as the client's own default
+// (changesScopeFor). It asks Base and, as soon as the ref is known, the Branch
+// numstat at once, so the answer is at most two runs deep. When HEAD is not
+// ahead, HEAD is the merge base and that same Branch diff IS the Uncommitted
+// one. With no base, a base that failed, or a Branch run that did not answer, it
+// is an Uncommitted numstat: never an empty list that reads as "no changes".
+func (s *Server) numstatAuto(ctx context.Context, t gitview.Target, fresh bool) (gitview.Numstat, string) {
+	bc := make(chan gitview.BaseInfo, 1) // Base may end unobserved
+	go func() { bc <- s.Git.Base(ctx, t) }()
+	var br gitview.Numstat
+	ref := s.Git.BaseRef(ctx, t)
+	if ref.State == "ok" {
+		br = s.numstatOf(ctx, t, gitview.Scope{Branch: true, BaseRef: ref.BaseRef}, fresh)
+	}
+	bi := <-bc
+	if bi.State == "notrepo" || ref.State == "notrepo" {
+		return gitview.Numstat{State: "notrepo", Entries: []gitview.NumEntry{}}, "head"
+	}
+	if bi.State == "ok" && ref.State == "ok" && bi.BaseRef == ref.BaseRef && br.State != "unavailable" {
+		if bi.Ahead {
+			return br, "branch"
+		}
+		return br, "head"
+	}
+	if bi.State == "unavailable" {
+		log.Printf("git numstat %q: base: %q", t.Top, bi.Reason)
+	}
+	return s.numstatOf(ctx, t, gitview.Scope{}, fresh), "head"
 }
 
 const (

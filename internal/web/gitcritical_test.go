@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -127,6 +128,20 @@ func TestCriticalPathBranchPickCold(t *testing.T) {
 		critReq{"base", s.handleGitBase, pathBody(repo)})
 	if d > 2 {
 		t.Fatalf("Branch (a remembered pick) cold is %d runs deep, want <= 2 (%v)", d, got)
+	}
+}
+
+func TestCriticalPathNoPickCold(t *testing.T) {
+	s, repo, _ := critServer(t)
+	d, got := depthOf(t,
+		critReq{"status", s.handleGitStatus, pathBody(repo)},
+		critReq{"numstat", s.handleGitNumstat, numstatBody(repo, "auto")},
+		critReq{"base", s.handleGitBase, pathBody(repo)})
+	if d > 2 {
+		t.Fatalf("no remembered scope, cold, is %d runs deep, want <= 2 (%v)", d, got)
+	}
+	if !strings.Contains(got["numstat"], `"scope":"branch"`) {
+		t.Fatalf("auto on a branch ahead of its base answered %s, want scope branch", got["numstat"])
 	}
 }
 

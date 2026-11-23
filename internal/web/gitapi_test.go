@@ -39,8 +39,10 @@ type fakeGit struct {
 	diff    gitview.Diff
 	base    gitview.BaseInfo
 	ns      gitview.Numstat
-	blob    gitview.Blob
-	raw     []byte // what ShowRaw returns beside blob
+	// nsBranch, when its State is set, answers the Branch-scope numstats instead of ns.
+	nsBranch gitview.Numstat
+	blob     gitview.Blob
+	raw      []byte // what ShowRaw returns beside blob
 }
 
 type fakeShowCall struct {
@@ -132,6 +134,9 @@ func (f *fakeGit) numstat(t gitview.Target, sc gitview.Scope, fresh bool) gitvie
 	f.mu.Lock()
 	f.numstats = append(f.numstats, fakeNumstatCall{t, sc, fresh})
 	ns, gate := f.ns, f.numGate
+	if sc.Branch && f.nsBranch.State != "" {
+		ns = f.nsBranch
+	}
 	f.mu.Unlock()
 	if gate != nil {
 		<-gate
@@ -1013,7 +1018,7 @@ func TestGitNumstatScopeIsHeadOrBranch(t *testing.T) {
 	repo := filepath.Join(h, "repo")
 	mainRepo(t, repo)
 	// Anything else is refused, the absent scope included: no client field names a ref.
-	for _, scope := range []string{"", "HEAD", "Head", "BRANCH", " branch", "branch\n", "refs/heads/main", "-x", "main", "origin/main", "merge-base"} {
+	for _, scope := range []string{"", "HEAD", "Head", "BRANCH", " branch", "branch\n", "refs/heads/main", "-x", "main", "origin/main", "merge-base", "AUTO", "auto ", "Auto"} {
 		if rr := postNumstat(s, repo, scope); rr.Code != http.StatusBadRequest {
 			t.Errorf("scope %q: code = %d, want 400 (%s)", scope, rr.Code, rr.Body)
 		}
@@ -1026,10 +1031,90 @@ func TestGitNumstatScopeIsHeadOrBranch(t *testing.T) {
 	if g.calls() != 0 {
 		t.Fatalf("runner called %d times for a bad scope", g.calls())
 	}
-	for _, scope := range []string{"head", "branch"} {
+	for _, scope := range []string{"head", "branch", "auto"} {
 		if ns := decodeNumstat(t, postNumstat(s, repo, scope)); ns.State != "ok" {
 			t.Errorf("scope %q: %+v", scope, ns)
 		}
+	}
+}
+
+func TestGitNumstatRepliesNameTheirScope(t *testing.T) {
+	s, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	for _, scope := range []string{"head", "branch"} {
+		if ns := decodeNumstat(t, postNumstat(s, repo, scope)); ns.Scope != scope {
+			t.Errorf("scope %q answered as %q", scope, ns.Scope)
+		}
+	}
+}
+
+// numstatRepo is a host repository and its target, for the auto-scope tests.
+func numstatRepo(t *testing.T) (*Server, string, *fakeGit, gitview.Target) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	return s, repo, g, gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
+}
+
+func TestGitNumstatAutoAheadIsBranch(t *testing.T) {
+	s, repo, g, tg := numstatRepo(t)
+	g.nsBranch = gitview.Numstat{State: "ok", Entries: []gitview.NumEntry{{P: "b.go", X: "A", A: 9}}}
+	ns := decodeNumstat(t, postNumstat(s, repo, "auto"))
+	if ns.Scope != "branch" || len(ns.Entries) != 1 || ns.Entries[0].P != "b.go" {
+		t.Fatalf("auto, ahead = %+v", ns)
+	}
+	want := []fakeNumstatCall{{tg, gitview.Scope{Branch: true, BaseRef: "refs/remotes/origin/main"}, false}}
+	if !slices.Equal(g.numstats, want) {
+		t.Fatalf("numstat calls %+v, want %+v", g.numstats, want)
+	}
+}
+
+func TestGitNumstatAutoNotAheadIsHeadFromOneRun(t *testing.T) {
+	s, repo, g, _ := numstatRepo(t)
+	g.base = gitview.BaseInfo{State: "ok", Branch: "main", BaseRef: "refs/remotes/origin/main", BaseName: "origin/main", MergeBase: strings.Repeat("a", 40), Ahead: false}
+	g.nsBranch = gitview.Numstat{State: "ok", Entries: []gitview.NumEntry{{P: "a.go", X: "M", A: 1, D: 1}}}
+	ns := decodeNumstat(t, postNumstat(s, repo, "auto"))
+	// HEAD is the merge base, so the diff against it is the diff against HEAD: one run, said as Uncommitted.
+	if ns.Scope != "head" || len(ns.Entries) != 1 || ns.Entries[0].P != "a.go" {
+		t.Fatalf("auto, not ahead = %+v", ns)
+	}
+	if len(g.numstats) != 1 || !g.numstats[0].Sc.Branch {
+		t.Fatalf("numstat calls %+v, want the one Branch run", g.numstats)
+	}
+}
+
+func TestGitNumstatAutoFallsBackToHead(t *testing.T) {
+	// No base branch: Uncommitted.
+	s, repo, g, tg := numstatRepo(t)
+	g.base = gitview.BaseInfo{State: "nobase", Reason: "no base branch found"}
+	if ns := decodeNumstat(t, postNumstat(s, repo, "auto")); ns.Scope != "head" || ns.State != "ok" {
+		t.Fatalf("nobase: %+v", ns)
+	}
+	if want := []fakeNumstatCall{{tg, gitview.Scope{}, false}}; !slices.Equal(g.numstats, want) {
+		t.Fatalf("nobase numstat calls %+v, want %+v", g.numstats, want)
+	}
+	// A Branch numstat that failed (a stale ref gone) is not shown as an empty list: Uncommitted is asked instead.
+	s, repo, g, _ = numstatRepo(t)
+	g.base = gitview.BaseInfo{State: "ok", Branch: "main", BaseRef: "refs/remotes/origin/main", BaseName: "origin/main", MergeBase: strings.Repeat("a", 40), Ahead: false}
+	g.nsBranch = gitview.Numstat{State: "unavailable", Reason: "fatal: bad revision"}
+	ns := decodeNumstat(t, postNumstat(s, repo, "auto"))
+	if ns.Scope != "head" || ns.State != "ok" || len(g.numstats) != 2 || g.numstats[1].Sc.Branch {
+		t.Fatalf("failed Branch run: %+v after %+v", ns, g.numstats)
+	}
+	// The base itself unavailable: Uncommitted, as the client shows without an ok base.
+	s, repo, g, _ = numstatRepo(t)
+	g.base = gitview.BaseInfo{State: "unavailable", Reason: "docker: boom"}
+	if ns := decodeNumstat(t, postNumstat(s, repo, "auto")); ns.Scope != "head" || ns.State != "ok" || ns.Reason != "" {
+		t.Fatalf("base unavailable: %+v", ns)
+	}
+}
+
+func TestGitNumstatAutoNotARepo(t *testing.T) {
+	s, repo, g, _ := numstatRepo(t)
+	g.base = gitview.BaseInfo{State: "notrepo"}
+	if ns := decodeNumstat(t, postNumstat(s, repo, "auto")); ns.State != "notrepo" {
+		t.Fatalf("notrepo: %+v", ns)
 	}
 }
 
