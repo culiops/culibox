@@ -513,6 +513,12 @@ function editorBlameWireEditor(ed) {
     if (owner && owner.bl && t && t.classList && t.classList.contains("dk-blame-inline")) blHoverOpen(owner, "line", t);
     else if (blHoverTimer || (blCard && !blCard.hidden && blCardOpener && blCardOpener.classList && blCardOpener.classList.contains("dk-blame-inline"))) blLeaveSoon();
   });
+  // Out of the editor altogether: no move inside it comes to say the pointer left the inline text.
+  if (typeof ed.onMouseLeave === "function") {
+    ed.onMouseLeave(() => {
+      if (blHoverTimer || (blCard && !blCard.hidden && blCardOpener && blCardOpener.classList && blCardOpener.classList.contains("dk-blame-inline"))) blLeaveSoon();
+    });
+  }
   const again = () => { const owner = typeof dockEditorOwner !== "undefined" ? dockEditorOwner : null; if (owner) editorBlameSoon(owner); };
   if (typeof ed.onDidLayoutChange === "function") ed.onDidLayoutChange(again);
   if (typeof ed.onDidScrollChange === "function") ed.onDidScrollChange(again);

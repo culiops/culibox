@@ -296,3 +296,22 @@ test("the card for an uncommitted line: Not committed yet, the agent's mark, Ope
   c.querySelectorAll("button")[1].listeners.click();
   assert.deepEqual(noted, [{ a: 1, b: 1 }]);
 });
+
+test("hovering the inline text opens the card after a pause; leaving the editor closes it", async () => {
+  const { p, tab, ed, sync } = await setup();
+  await sync();
+  const span = new (require("./editorpage.js").El)("span", p.doc);
+  span.className = "mtk1 dk-blame-inline";
+  ed.fire("mousemove", { target: { element: span } });
+  const hover = p.st.timers.filter((t) => !t.dead && t.ms === 400);
+  assert.equal(hover.length, 1, "a pause before it opens");
+  hover[0].fn();
+  assert.equal(cardOf(p).hidden, false);
+  assert.notEqual(p.doc.activeElement, cardOf(p).querySelector("button"), "a hover leaves the keyboard where it is");
+  ed.fire("mouseleave", {});
+  const leave = p.st.timers.filter((t) => !t.dead && t.ms === 300);
+  assert.equal(leave.length, 1);
+  leave[0].fn();
+  assert.equal(cardOf(p).hidden, true);
+  assert.ok(tab);
+});
