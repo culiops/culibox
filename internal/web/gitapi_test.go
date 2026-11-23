@@ -2128,3 +2128,15 @@ func TestGitTargetShowExistingSameAsGitTarget(t *testing.T) {
 		}
 	}
 }
+
+// The gitignored paths reach the client as the runner gave them (the tree dims those rows, P5).
+func TestGitStatusCarriesIgnored(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	g.st = gitview.Status{State: "ok", Entries: []gitview.Entry{}, Ignored: []string{"node_modules/", "x.log"}}
+	rec := gitPost(s.handleGitStatus, "/api/git/status", pathBody(repo))
+	if !strings.Contains(rec.Body.String(), `"ignored":["node_modules/","x.log"]`) {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}

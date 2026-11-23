@@ -95,6 +95,32 @@ func ParseStatus(b []byte, max int) (entries []Entry, noHead bool, tooMany bool,
 	return
 }
 
+// ParseIgnored returns the "! <path>" records of `git status --porcelain=v2 -z --ignored=matching` output: the paths
+// git ignores, relative to the checkout top (a trailing "/" marks a folder). They are not changes and never count toward
+// ParseStatus's cap. Unsafe paths are dropped as ParseStatus drops them; more than max safe ones return nil (the tree then
+// dims nothing). seen is true when any record starts the ignored section, even one cut off at the end of a capped buffer:
+// git prints that section after every other record, so every change before it is complete.
+func ParseIgnored(b []byte, max int) (paths []string, seen bool) {
+	over := false
+	for _, r := range bytes.Split(b, []byte{0}) {
+		if !bytes.HasPrefix(r, []byte("! ")) {
+			continue
+		}
+		seen = true
+		if p := string(r[2:]); !over && safePath(p) {
+			if len(paths) >= max {
+				over = true
+				continue
+			}
+			paths = append(paths, p)
+		}
+	}
+	if over {
+		return nil, seen
+	}
+	return paths, seen
+}
+
 // code maps an XY pair of an ordinary record to a badge code.
 func code(xy string) string {
 	x, y := xy[0], xy[1]

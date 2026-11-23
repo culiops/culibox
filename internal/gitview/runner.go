@@ -32,6 +32,9 @@ const (
 	refRefreshDelay = 500 * time.Millisecond
 
 	maxStatusEntries = 5000
+	// maxIgnored is the most gitignored paths a status carries; past it the tree dims nothing. They are kept apart from
+	// maxStatusEntries, so a repository that ignores a lot never turns the tree's status off.
+	maxIgnored = 1000
 	// maxStatusBytes bounds the porcelain buffer. Hitting it means far more than
 	// maxStatusEntries paths, so it reads as "toomany".
 	maxStatusBytes = 8 << 20
@@ -74,6 +77,9 @@ type Status struct {
 	WorktreeOf string  `json:"worktreeOf,omitempty"`
 	NoHead     bool    `json:"noHead,omitempty"`
 	Entries    []Entry `json:"entries"`
+	// Ignored is the gitignored paths (ParseIgnored), relative to Top, a trailing "/" for a folder: nil when there are
+	// none, more than maxIgnored, or the output was cut. Only the tree's dimming reads it.
+	Ignored []string `json:"ignored,omitempty"`
 }
 
 // BaseInfo is what branch-scoped review compares against. State is one of ok,
@@ -448,8 +454,14 @@ func (r *Runner) doStatus(t Target, f *flight) Status {
 		// every error, even one that still yields a result (the output cap).
 		r.removeFailed(name)
 	}
+	capped := out.hit || errors.Is(err, errCapped)
+	ignored, seen := ParseIgnored(out.b, maxIgnored)
 	switch {
-	case out.hit || errors.Is(err, errCapped):
+	case capped && seen:
+		// Cut inside the ignored records, which come last: every change is above the cut. The status stands; only the
+		// dimming goes (the cut list is not the whole list).
+		ignored = nil
+	case capped:
 		// Max 0 stops at the first entry, after the header records, which
 		// still say which branch and commit this is.
 		_, _, _, branch, head := ParseStatus(out.b, 0)
@@ -467,7 +479,7 @@ func (r *Runner) doStatus(t Target, f *flight) Status {
 	if entries == nil {
 		entries = []Entry{}
 	}
-	return Status{State: "ok", Top: t.Top, NoHead: noHead, Branch: branch, Head: head, Entries: entries}
+	return Status{State: "ok", Top: t.Top, NoHead: noHead, Branch: branch, Head: head, Entries: entries, Ignored: ignored}
 }
 
 // Diff returns the diff of one file, rel being its path relative to t.Top. It
@@ -1133,6 +1145,7 @@ func cloneNumstat(n Numstat) Numstat {
 
 func cloneStatus(s Status) Status {
 	s.Entries = slices.Clone(s.Entries)
+	s.Ignored = slices.Clone(s.Ignored)
 	if s.Entries == nil {
 		s.Entries = []Entry{}
 	}

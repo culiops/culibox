@@ -1887,3 +1887,51 @@ func TestRunnerShowRawKeepsBytesUpToTenMiB(t *testing.T) {
 		t.Fatalf("raw missing: %q %+v", data, b)
 	}
 }
+
+func TestStatusIgnored(t *testing.T) {
+	f := &fakeDocker{run: func(_ context.Context, _ []string, w io.Writer) error {
+		_, err := io.WriteString(w, porcelain+"! build/\x00! x.log\x00")
+		return err
+	}}
+	st := newRunner(f, newClock()).Status(context.Background(), tgt)
+	if st.State != "ok" || len(st.Entries) != 2 || !slices.Equal(st.Ignored, []string{"build/", "x.log"}) {
+		t.Fatalf("status = %+v", st)
+	}
+}
+
+// Git prints the ignored records after every other one, so output cut inside them still holds every change: the status
+// stays ok and only the dimming is dropped. Ignored paths never turn the tree's status off.
+func TestStatusCapInIgnoredSectionStaysOk(t *testing.T) {
+	f := &fakeDocker{run: func(_ context.Context, _ []string, w io.Writer) error {
+		if _, err := io.WriteString(w, porcelain); err != nil {
+			return err
+		}
+		for {
+			if _, err := io.WriteString(w, "! node_modules/some/long/ignored/path.js\x00"); err != nil {
+				return fmt.Errorf("docker run: writing its output: %w", err)
+			}
+		}
+	}}
+	st := newRunner(f, newClock()).Status(context.Background(), tgt)
+	want := []Entry{{P: "src/a.go", X: "M"}, {P: "new.txt", X: "U"}}
+	if st.State != "ok" || !slices.Equal(st.Entries, want) || st.Ignored != nil || st.Branch != "main" {
+		t.Fatalf("status = %+v", st)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.removed) != 1 {
+		t.Fatalf("Remove calls %q, want the run's container", f.removed)
+	}
+}
+
+func TestStatusIgnoredIsACopy(t *testing.T) {
+	r := newRunner(&fakeDocker{run: func(_ context.Context, _ []string, w io.Writer) error {
+		_, err := io.WriteString(w, porcelain+"! build/\x00")
+		return err
+	}}, newClock())
+	a := r.Status(context.Background(), tgt)
+	a.Ignored[0] = "mutated"
+	if b := r.Status(context.Background(), tgt); b.Ignored[0] != "build/" {
+		t.Fatalf("a caller's edit reached the cache: %+v", b.Ignored)
+	}
+}

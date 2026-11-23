@@ -33,7 +33,9 @@ func want(mounts []string, top string, sub ...string) []string {
 	return append(w, sub...)
 }
 
-var statusSub = []string{"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all"}
+var statusSub = []string{"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all",
+	// Ignored paths come from the same run (P5): "matching" does not walk into an ignored folder, so a big node_modules costs nothing.
+	"--ignored=matching"}
 
 func TestStatusArgsGolden(t *testing.T) {
 	uid, gid := os.Getuid(), os.Getgid()

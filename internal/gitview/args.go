@@ -107,7 +107,11 @@ func argv(t Target, image, name string, uid, gid int, sub ...string) []string {
 // t.Unsafe() == "" first.
 func StatusArgs(t Target, image, name string, uid, gid int) []string {
 	return argv(t, image, name, uid, gid,
-		"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all")
+		"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all",
+		// The tree dims gitignored rows from the same run. "matching" names an ignored folder once and does not walk into it
+		// (measured: 50,000 ignored files cost nothing, where the default mode walked them), and git prints these records
+		// after every other one (ParseIgnored).
+		"--ignored=matching")
 }
 
 // DiffArgs is the argv of the diff container for one file, rel being its path
