@@ -131,7 +131,8 @@ function monacoLinkText(monaco, uri) {
 // monacoFontReady settles when the code font is in, or after MONACO_FONT_WAIT_MS, whichever is first; it never fails (the editor then
 // draws with the fallback). A font that lands after the wait gets monaco.editor.remeasureFonts(), once, so the editors made meanwhile
 // lay the cursor out on the real widths. The latin subset is what a load with no text asks for; the others are the same widths.
-function monacoFontReady(monaco) {
+// monacoBoot starts it first, so the font downloads alongside the editor's script and stylesheet.
+function monacoFontReady(getMonaco) {
   const fonts = typeof document !== "undefined" ? document.fonts : undefined;
   if (!fonts || typeof fonts.load !== "function") return Promise.resolve();
   let late = false;
@@ -139,7 +140,8 @@ function monacoFontReady(monaco) {
   const load = Promise.resolve().then(() => fonts.load(MONACO_FONT)).then(() => true, () => false);
   load.then((ok) => {
     clearTimeout(timer);
-    if (ok && late && typeof monaco.editor.remeasureFonts === "function") monaco.editor.remeasureFonts();
+    const monaco = getMonaco();
+    if (ok && late && monaco && typeof monaco.editor.remeasureFonts === "function") monaco.editor.remeasureFonts();
   });
   const wait = new Promise((resolve) => { timer = setTimeout(() => { late = true; resolve(); }, MONACO_FONT_WAIT_MS); });
   return Promise.race([load, wait]).then(() => undefined);
@@ -147,6 +149,7 @@ function monacoFontReady(monaco) {
 
 // monacoBoot: loader.js, then require() of the editor, its stylesheet, then the theme, the unbound keys and the link opener.
 async function monacoBoot() {
+  const fontReady = monacoFontReady(() => window.monaco);
   const loader = document.createElement("script");
   const base = monacoBase();
   loader.src = base + "/loader.js";
@@ -155,7 +158,7 @@ async function monacoBoot() {
   await new Promise((resolve, reject) => require(["vs/editor/editor.main"], resolve, reject));
   await monacoStyled();
   const monaco = window.monaco;
-  await monacoFontReady(monaco);
+  await fontReady;
   monaco.editor.defineTheme(MONACO_THEME, culiboxTheme());
   for (const k of MONACO_UNBOUND_KEYS) monaco.editor.addKeybindingRule({ keybinding: monaco.KeyCode[k.code], command: "-" + k.command });
   // Ctrl/Cmd+click on a link in the editor text (the dock editor and every diff editor) goes to the link gate (linkgate.js), like a

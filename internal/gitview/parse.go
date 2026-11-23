@@ -107,7 +107,10 @@ func ParseIgnored(b []byte, max int) (paths []string, seen bool) {
 			continue
 		}
 		seen = true
-		if p := string(r[2:]); !over && safePath(p) {
+		if over {
+			continue // past the cap only the section's start matters
+		}
+		if p := string(r[2:]); safePath(p) {
 			if len(paths) >= max {
 				over = true
 				continue

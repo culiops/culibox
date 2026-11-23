@@ -415,3 +415,12 @@ test("a page with no FontFaceSet loads as before", { timeout: 4000 }, async () =
   assert.equal(await f.loadMonaco(), f.win.monaco);
   assert.equal(f.log.fontLoads.length, 0);
 });
+
+test("the font is asked for before the editor's script, so the two download side by side", { timeout: 4000 }, async () => {
+  const f = fake({ fonts: "now" });
+  let fontsAtRequire = -1;
+  const req = f.ctx.require;
+  f.ctx.require = Object.assign((...a) => { fontsAtRequire = f.log.fontLoads.length; return req(...a); }, { config: req.config });
+  await f.loadMonaco();
+  assert.equal(fontsAtRequire, 1);
+});
