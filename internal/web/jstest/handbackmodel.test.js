@@ -73,8 +73,10 @@ test("handbackFooter: clone, in-place and cut short", () => {
 
 test("handbackEmptyText and the window sentence", () => {
   assert.strictEqual(hb.handbackEmptyText(), "Nothing flagged. This is not a malware scan.");
-  assert.match(hb.handbackWindowText(rec([], { kind: "in-place" })), /created or changed since this folder was last checked/);
-  assert.doesNotMatch(hb.handbackWindowText(rec([])), /last checked/);
+  assert.match(hb.handbackWindowText(rec([], { kind: "in-place" })), /^Files created or changed while the session ran\.$/);
+  assert.doesNotMatch(hb.handbackWindowText(rec([])), /session ran/);
+  assert.strictEqual(hb.handbackAlreadyText(), "Already marked reviewed.");
+  assert.strictEqual(hb.handbackChangedText(), "New files were flagged since you opened this. Review them, then mark reviewed again.");
 });
 
 test("handbackNoteText: a count, a cut-short scan that never reads as nothing flagged, or both", () => {
@@ -151,7 +153,7 @@ test("handbackDue: a refresh is due when never done or the interval has passed",
 
 test("no wording from the model says clean, safe or no threats", () => {
   const out = [];
-  out.push(hb.handbackCountText(0), hb.handbackCountText(1), hb.handbackCountText(9), hb.handbackEmptyText());
+  out.push(hb.handbackAlreadyText(), hb.handbackChangedText(), hb.handbackCountText(0), hb.handbackCountText(1), hb.handbackCountText(9), hb.handbackEmptyText());
   out.push(...hb.handbackFooter(rec([], { kind: "in-place", truncated: "cut" })));
   out.push(hb.handbackWindowText(rec([], { kind: "in-place" })), hb.handbackWindowText(rec([])));
   out.push(hb.handbackNoteText([{ id: "a", count: 0, truncated: true }]), hb.handbackNoteText([{ id: "a", count: 3, truncated: true }]));

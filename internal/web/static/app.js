@@ -2103,11 +2103,12 @@ function noteReturns(sessions) {
     else showToast(t);
   });
   if (n.links.some((l) => l.length)) handbackRefresh();
-  handbackOnSessions(sessions);
+  // A new in-place hand-back note (#346) changes the profile badge's count, like a clone's return does.
+  const inPlaceNew = handbackOnSessions(sessions);
   // With no stored list there is nothing to add to: the next load seeds it whole.
   const stored = n.sigs.length ? notHomeSeenRead() : null;
   if (stored) notHomeSeenWrite(stored.concat(n.sigs));
-  if (n.refetch) refreshProfilesQuiet();
+  if (n.refetch || inPlaceNew) refreshProfilesQuiet();
 }
 
 // refreshProfilesQuiet: the background profile refresh (a return landed, a clone

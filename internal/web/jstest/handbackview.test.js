@@ -18,7 +18,7 @@ function page(over) {
   byId["side-flagged"].hidden = true;
   doc.getElementById = (id) => byId[id] || null;
   doc.createElement = (t) => new Node(t, doc);
-  const log = { api: [], dialogs: [], errors: [], toasts: [], copies: [], refreshed: 0, profiles: 0 };
+  const log = { api: [], bodies: [], dialogs: [], errors: [], toasts: [], copies: [], refreshed: 0, profiles: 0 };
   const state = { records: [], width: 1280, fail: null };
   const ctx = vm.createContext({
     document: doc, window: { get innerWidth() { return state.width; } }, Date, Set, Promise, setTimeout, clearTimeout, encodeURIComponent,
@@ -26,6 +26,7 @@ function page(over) {
     deadlineSignal: () => undefined,
     api: async (p, o) => {
       log.api.push([p, o && o.method || "GET"]);
+      log.bodies.push(o && o.body);
       if (state.fail && state.fail.when(p, o)) throw state.fail.err;
       return p === "/api/handback" ? { records: state.records } : null;
     },
@@ -52,7 +53,7 @@ test("openHandback renders every pending record with textContent only, and opens
   assert.strictEqual(body.querySelector(".hb-head").textContent, "/w/<img src=x>");
   assert.strictEqual(body.querySelector(".hb-path").textContent, "a/<b>.pdf");
   assert.strictEqual(body.querySelector(".hb-path").children.length, 0, "text, not markup");
-  assert.match(body.querySelector(".hb-window").textContent, /created or changed since this folder was last checked/);
+  assert.match(body.querySelector(".hb-window").textContent, /^Files created or changed while the session ran\.$/);
   assert.strictEqual(body.querySelector(".hb-shav").textContent, "ab12");
   const foot = body.querySelectorAll(".hb-foot").map((n) => n.textContent);
   assert.deepStrictEqual(foot, ["This is not a malware scan.", "These files have been on the host since the agent wrote them."]);
@@ -116,6 +117,61 @@ test("Mark reviewed POSTs, drops the section, refreshes the list and the profile
   assert.strictEqual(pg.byId["hb-body"].textContent, "Nothing flagged. This is not a malware scan.");
   assert.strictEqual(pg.log.profiles, 1);
   assert.strictEqual(pg.byId["side-flagged"].hidden, true);
+});
+
+test("Mark reviewed sends the last_scan of the record the user saw", async () => {
+  const pg = page();
+  pg.state.records = [REC({ last_scan: "2026-11-22T10:00:00.123456789Z", flags: [flag("x", ["archive"])] })];
+  await pg.ctx.openHandback();
+  pg.log.bodies.length = 0; pg.log.api.length = 0;
+  pg.byId["hb-body"].querySelector(".hb-reviewed").onclick();
+  await tick();
+  const i = pg.log.api.findIndex(([p, m]) => p.endsWith("/reviewed") && m === "POST");
+  assert.ok(i >= 0);
+  assert.deepStrictEqual(JSON.parse(pg.log.bodies[i]), { last_scan: "2026-11-22T10:00:00.123456789Z" });
+});
+
+test("Mark reviewed refused with 409 refreshes the list and says what happened", async () => {
+  const pg = page();
+  pg.state.records = [REC({ last_scan: "t1", flags: [flag("x", ["archive"])] })];
+  await pg.ctx.openHandback();
+  // The daemon scanned again: the record now holds a second file the user has not seen.
+  pg.state.records = [REC({ last_scan: "t2", flags: [flag("x", ["archive"]), flag("new.pdf", ["extension-mismatch"])] })];
+  pg.state.fail = { when: (p, o) => o && o.method === "POST", err: Object.assign(new Error("record changed since it was read"), { status: 409 }) };
+  const btn = pg.byId["hb-body"].querySelector(".hb-reviewed");
+  btn.onclick();
+  await tick(); await tick(); await tick();
+  const paths = pg.byId["hb-body"].querySelectorAll(".hb-path").map((n) => n.textContent);
+  assert.deepStrictEqual(paths, ["new.pdf", "x"], "the list shows the new file");
+  assert.deepStrictEqual(pg.log.errors.at(-1), ["handback-modal", "New files were flagged since you opened this. Review them, then mark reviewed again."]);
+  assert.strictEqual(pg.byId["hb-body"].querySelector(".hb-reviewed").disabled, false);
+  // The next click sends the new last_scan.
+  pg.state.fail = null;
+  pg.log.bodies.length = 0; pg.log.api.length = 0;
+  pg.byId["hb-body"].querySelector(".hb-reviewed").onclick();
+  await tick();
+  const i = pg.log.api.findIndex(([p, m]) => p.endsWith("/reviewed") && m === "POST");
+  assert.deepStrictEqual(JSON.parse(pg.log.bodies[i]), { last_scan: "t2" });
+});
+
+test("a stale link to records already reviewed says so, not 'Nothing flagged'", async () => {
+  const pg = page();
+  pg.state.records = [REC({ id: "1".repeat(32), flags: [flag("a", ["archive"])] })];
+  await pg.ctx.openHandback("9".repeat(32));
+  assert.strictEqual(pg.byId["hb-body"].textContent, "Already marked reviewed.");
+  await pg.ctx.openHandback(["8".repeat(32), "9".repeat(32)]);
+  assert.strictEqual(pg.byId["hb-body"].textContent, "Already marked reviewed.");
+  // The all-pending view with nothing pending keeps the usual words.
+  pg.state.records = [];
+  await pg.ctx.openHandback();
+  assert.strictEqual(pg.byId["hb-body"].textContent, "Nothing flagged. This is not a malware scan.");
+  // A profile selection that matches nothing and nothing pending is the same.
+  await pg.ctx.openHandback({ workspace: "/nowhere" });
+  assert.strictEqual(pg.byId["hb-body"].textContent, "Nothing flagged. This is not a malware scan.");
+  // Some of the ids still pending: those are shown.
+  pg.state.records = [REC({ id: "1".repeat(32), flags: [flag("a", ["archive"])] })];
+  await pg.ctx.openHandback(["1".repeat(32), "9".repeat(32)]);
+  assert.strictEqual(pg.byId["hb-body"].querySelectorAll(".hb-rec").length, 1);
 });
 
 test("Mark reviewed that fails keeps the record and says so in the dialog", async () => {
@@ -207,13 +263,14 @@ test("noteReturns: a flagged return toasts with a link; the others are plain toa
   assert.ok(m, "noteReturns found");
   const wh = require("../static/workhome.js");
   const calls = [];
+  let pollNew = false;
   const ctx = vm.createContext(Object.assign({}, wh, {
     returnsSeen: [], returnsCloneIds: [],
     showToast: (t, o) => calls.push(["toast", t, o]),
     handbackToast: (t, ids) => calls.push(["link", t, ids]),
-    handbackOnSessions: () => calls.push(["poll"]),
+    handbackOnSessions: () => { calls.push(["poll"]); return pollNew; },
     handbackRefresh: () => calls.push(["refresh"]),
-    notHomeSeenRead: () => null, notHomeSeenWrite: () => {}, refreshProfilesQuiet: () => {},
+    notHomeSeenRead: () => null, notHomeSeenWrite: () => {}, refreshProfilesQuiet: () => calls.push(["profiles"]),
   }));
   new vm.Script(m[0] + "\nglobalThis.noteReturns = noteReturns;").runInContext(ctx);
   ctx.noteReturns([
@@ -225,5 +282,25 @@ test("noteReturns: a flagged return toasts with a link; the others are plain toa
     ["toast", "q: x came home", null], // (undefined, as JSON)
     ["refresh"],
     ["poll"],
+    ["profiles"], // a clone return refreshes the badges (as before)
   ]);
+});
+
+// Item 12: the profile badge counts flags from an in-place scan too, so a new in-place note refreshes the profiles.
+test("noteReturns refreshes the profiles quietly when handbackOnSessions reports a new in-place note", () => {
+  const src = fs.readFileSync(path.join(STATIC, "app.js"), "utf8");
+  const m = /function noteReturns\(sessions\) \{[\s\S]*?\n\}\n/.exec(src);
+  const wh = require("../static/workhome.js");
+  for (const [fresh, want] of [[true, 1], [false, 0]]) {
+    let profiles = 0;
+    const ctx = vm.createContext(Object.assign({}, wh, {
+      returnsSeen: [], returnsCloneIds: [],
+      showToast: () => {}, handbackToast: () => {}, handbackRefresh: () => {},
+      handbackOnSessions: () => fresh,
+      notHomeSeenRead: () => null, notHomeSeenWrite: () => {}, refreshProfilesQuiet: () => { profiles++; },
+    }));
+    new vm.Script(m[0] + "\nglobalThis.noteReturns = noteReturns;").runInContext(ctx);
+    ctx.noteReturns([{ id: "s1", agent: "p", handback: { id: "h1", count: 1, in_place: true } }]);
+    assert.strictEqual(profiles, want, "fresh=" + fresh);
+  }
 });

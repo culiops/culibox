@@ -13,6 +13,7 @@ let handbackFetchedAt = 0;
 let handbackListSeq = 0; // a slow earlier fetch must not overwrite a later one
 let handbackSeen = null; // in-place note sigs already announced; null until the first sessions poll seeds it
 let handbackPanelSeq = 0;
+let handbackShownIds = []; // the record ids the panel lists, so a refused Mark reviewed can list them again
 
 function hbEl(tag, cls, text) {
   const el = document.createElement(tag);
@@ -25,7 +26,7 @@ function hbDesktop() {
   return !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
 }
 
-// handbackFetch: the pending records, or null when they could not be read.
+// handbackFetch: the pending records (an empty list when there are none); a failed read throws.
 async function handbackFetch() {
   const got = await api("/api/handback", { signal: typeof deadlineSignal === "function" ? deadlineSignal(8000) : undefined });
   return got && Array.isArray(got.records) ? got.records : [];
@@ -66,12 +67,14 @@ async function handbackRefresh() {
 
 // handbackOnSessions: what one sessions poll means for hand-back. An in-place scan that flagged
 // something (or could not finish) toasts once, with a link into the panel; the pending list is read
-// again then, and otherwise at most once per HANDBACK_POLL_MS.
+// again then, and otherwise at most once per HANDBACK_POLL_MS. Returns whether a new note appeared, so the
+// caller can refresh what counts flags (the profile badges).
 function handbackOnSessions(sessions) {
   const n = handbackNews(handbackSeen, sessions);
   handbackSeen = n.seen;
   for (const t of n.toasts) handbackToast(t.text, t.ids);
   if (n.toasts.length || handbackDue(handbackFetchedAt, Date.now(), HANDBACK_POLL_MS)) handbackRefresh();
+  return n.toasts.length > 0;
 }
 
 // handbackToast: a warning toast that opens the review.
@@ -159,25 +162,34 @@ function hbRecord(r, onReviewed) {
   return sec;
 }
 
-// handbackRender: the panel's body for these records (an empty list says so).
-function handbackRender(records) {
+// handbackRender: the panel's body for these records. An empty list says so: with emptyText when the
+// caller has a better sentence than the default one.
+function handbackRender(records, emptyText) {
   const body = document.getElementById("hb-body");
   if (!body) return;
+  handbackShownIds = records.map((r) => r.id);
   const seen = [];
   const onReviewed = (r, btn) => handbackMarkReviewed(r, btn, seen);
   const secs = records.map((r) => { const s = hbRecord(r, onReviewed); seen.push(s); return s; });
-  if (!secs.length) body.replaceChildren(hbEl("p", "hb-empty", handbackEmptyText()));
+  if (!secs.length) body.replaceChildren(hbEl("p", "hb-empty", emptyText || handbackEmptyText()));
   else body.replaceChildren(...secs);
 }
 
-// handbackMarkReviewed: POST, then drop the section, repaint the entry and the profile badges. A 404 means the
-// record is already gone (another tab reviewed it): the same outcome.
+// handbackMarkReviewed: POST the last_scan of the record as the user saw it, then drop the section, repaint
+// the entry and the profile badges. A 404 means the record is already gone (another tab reviewed it): the
+// same outcome. A 409 means the record was scanned again since it was listed: it may hold files the user
+// has not seen, so nothing was cleared; the list is read again and the user is told.
 async function handbackMarkReviewed(r, btn, secs) {
   btn.disabled = true;
   setDialogError("handback-modal", "");
   try {
-    await api("/api/handback/" + encodeURIComponent(r.id) + "/reviewed", { method: "POST" });
+    await api("/api/handback/" + encodeURIComponent(r.id) + "/reviewed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ last_scan: r.last_scan }),
+    });
   } catch (e) {
+    if (e && e.status === 409) { handbackReload(); return; }
     if (!e || e.status !== 404) {
       btn.disabled = false;
       setDialogError("handback-modal", "Could not mark this reviewed: " + ((e && e.message) || "unknown error"));
@@ -190,6 +202,22 @@ async function handbackMarkReviewed(r, btn, secs) {
   if (body && !body.querySelector(".hb-rec")) body.replaceChildren(hbEl("p", "hb-empty", handbackEmptyText()));
   handbackRefresh();
   if (typeof refreshProfilesQuiet === "function") refreshProfilesQuiet();
+}
+
+// handbackReload: after a refused Mark reviewed, list the same records again (their files and last_scan are
+// current now) and say why nothing was cleared.
+async function handbackReload() {
+  const seq = ++handbackPanelSeq;
+  let records;
+  try { records = await handbackFetch(); } catch (e) {
+    if (seq !== handbackPanelSeq) return;
+    setDialogError("handback-modal", "Could not load the list: " + ((e && e.message) || "unknown error"));
+    return;
+  }
+  if (seq !== handbackPanelSeq) return;
+  handbackRender(handbackSelect(records, handbackShownIds), handbackShownIds.length ? handbackAlreadyText() : undefined);
+  handbackSetPending(records);
+  setDialogError("handback-modal", handbackChangedText());
 }
 
 // openHandback(sel): the review panel. sel is a record id, an array of ids, a profile's {cloneOf} or
@@ -209,7 +237,10 @@ async function openHandback(sel) {
     return;
   }
   if (seq !== handbackPanelSeq) return;
-  handbackRender(handbackSelect(records, sel));
+  // A link to records (a toast, a session row) that are no longer pending was acted on already; that is not
+  // "nothing flagged". Selecting by profile, or everything, keeps the usual empty text.
+  const byId = typeof sel === "string" || Array.isArray(sel);
+  handbackRender(handbackSelect(records, sel), byId ? handbackAlreadyText() : undefined);
   handbackSetPending(records);
 }
 
