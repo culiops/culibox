@@ -1000,3 +1000,24 @@ test("with an Uncommitted pick the live list replaces the kept one as soon as th
   assert.strictEqual(text(p.el("dock-chg-count")), "1 changed", "git's list, not the kept one");
   assert.strictEqual(p.ctx.dockChangesRows().length, 1);
 });
+
+test("a numstat for a newer status ask that lands before its status is up to date: no re-ask, even when that status fails", async () => {
+  const p = page();
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  await p.answer("/api/git/base", baseOk());
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }]));
+  const n0 = p.calls("/api/git/numstat").length;
+  // A second status is asked; its numstat goes out beside it and answers first.
+  const before = p.st.fetches.length;
+  const done = p.ctx.gitStatusLoad("/w", "s1");
+  await settle();
+  assert.strictEqual(p.calls("/api/git/numstat").length, n0 + 1);
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 2, d: 0 }]));
+  await settle();
+  assert.strictEqual(p.calls("/api/git/numstat").length, n0 + 1, "the newer answer stands: nothing is asked for the older status");
+  // The status then fails (a restart, the network): still no request loop.
+  p.st.fetches[before].reject(new Error("offline"));
+  await done;
+  await settle();
+  assert.strictEqual(p.calls("/api/git/numstat").length, n0 + 1);
+});

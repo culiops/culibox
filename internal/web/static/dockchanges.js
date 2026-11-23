@@ -198,10 +198,11 @@ function dockChangesSync() {
   const branch = changesBranchOf(cur.status);
   if (!dkcBaseFlight && changesBaseStale(dkcBase, root, head, branch, Date.now())) dkcAskBase(root, head, branch);
   const scope = dockScope(dkcSid());
-  // Up to date: the answer for this status in the scope shown. Before the root's base is known the scope shown is a guess
-  // (Uncommitted), so an "auto" answer for this status (the server's pick) stands until the base lands.
+  // Up to date: the answer for this status, or for a newer ask whose status has not landed (or failed), in the scope shown.
+  // A newer answer is never replaced by an older one (dkcAskNumstat), so asking for the older status again would loop. Before
+  // the root's base is known the scope shown is a guess (Uncommitted), so an "auto" answer stands until the base lands.
   const baseKnown = !!dkcBase && dkcBase.root === root;
-  if (dkcNum && dkcNum.root === root && dkcNum.seq === cur.seq && (dkcNum.scope === scope || (dkcNum.auto && !baseKnown))) return;
+  if (dkcNum && dkcNum.root === root && dkcNum.seq >= cur.seq && (dkcNum.scope === scope || (dkcNum.auto && !baseKnown))) return;
   // Uncommitted scope and a status with no entries: the numstat of nothing is nothing, so it is not asked for (a clean tree is
   // the common case, and each numstat is a container run). The record stands for the answer, at once even with a numstat out
   // (asked beside this status, before anyone knew it was clean), so a numstat from before the tree went clean cannot leave its
