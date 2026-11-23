@@ -107,7 +107,14 @@ func argv(t Target, image, name string, uid, gid int, sub ...string) []string {
 // t.Unsafe() == "" first.
 func StatusArgs(t Target, image, name string, uid, gid int) []string {
 	return argv(t, image, name, uid, gid,
-		"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all")
+		"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all",
+		// The tree dims gitignored rows from the same run (git prints these records after every other one, ParseIgnored).
+		// "matching" names an ignored folder once and does not walk into it: 50,000 ignored files cost nothing, where the
+		// default mode walked them. It does walk the whole of an UNTRACKED folder, to find ignored files inside, where
+		// -unormal alone stops at its first file: measured on Linux, warm cache, git 2.39, 100,000 untracked files took
+		// 85-93 ms instead of 7 ms. A host/Mac cold-cache timing is a row in the P5 handoff; dropping this flag (the
+		// tree then dims nothing) is the way back if it costs too much there.
+		"--ignored=matching")
 }
 
 // DiffArgs is the argv of the diff container for one file, rel being its path

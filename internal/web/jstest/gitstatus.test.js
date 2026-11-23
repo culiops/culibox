@@ -926,3 +926,42 @@ test("a status that lands ok or toomany is kept for its root; one that is unavai
 test("GIT_FETCH_MS covers the server's worst case: 5 s for a slot and 10 s for the run", () => {
   assert.equal(g.GIT_FETCH_MS, 17000);
 });
+
+test("gitIgnored: the reply's ignored paths under the tree root, as absolute paths without the folder's slash", () => {
+  const st = ok([], { ignored: ["node_modules/", "a/x.log", "sub/build/"] });
+  assert.deepEqual([...g.gitIgnored(st, "/r")].sort(), ["/r/a/x.log", "/r/node_modules", "/r/sub/build"]);
+  assert.deepEqual([...g.gitIgnored(Object.assign({}, st, { rootRel: "sub" }), "/r/sub")], ["/r/sub/build"]);
+  assert.equal(g.gitIgnored(ok([]), "/r").size, 0, "no ignored field");
+  for (const bad of [{ state: "toomany" }, { state: "unavailable" }, { rootRel: "" }, { ignored: "node_modules/" }]) {
+    assert.equal(g.gitIgnored(Object.assign({}, st, bad), "/r").size, 0, JSON.stringify(bad));
+  }
+  assert.deepEqual([...g.gitIgnored(ok([], { ignored: [7, null, { p: "x" }, "", "ok/"] }), "/r")], ["/r/ok"], "only strings that place");
+});
+
+test("gitIgnoredAt: the path itself or a folder between the root and it is ignored", () => {
+  const set = new Set(["/r/node_modules", "/r/a/x.log"]);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/node_modules/p/q.js"), true);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/node_modules"), true);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/a/x.log"), true);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/a"), false);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/node_modulesx/a.js"), false, "whole names only");
+  assert.equal(g.gitIgnoredAt(set, "/r", "/v/node_modules/a.js"), false, "outside the root");
+  assert.equal(g.gitIgnoredAt(new Set(), "/r", "/r/a"), false);
+});
+
+test("gitIgnoreRow marks a row from the kept status whether or not the dock is open, and takes the mark off again", () => {
+  const kept = ok([], { ignored: ["build/"] });
+  global.ftRoot = () => "/kept"; // a root no earlier test has a live status for
+  global.gitLastGet = (root) => (root === "/kept" ? { status: kept } : null);
+  global.ftDocked = () => false; // the dock is not open on Files: the row is marked all the same
+  try {
+    const cls = new Set();
+    const row = { classList: { contains: (c) => cls.has(c), toggle: (c, on) => (on ? cls.add(c) : cls.delete(c)) } };
+    g.gitIgnoreRow(row, "/kept/build/out.bin");
+    assert.ok(cls.has("ft-ign"));
+    g.gitIgnoreRow(row, "/kept/src/a.go");
+    assert.ok(!cls.has("ft-ign"));
+  } finally {
+    delete global.ftRoot; delete global.gitLastGet; delete global.ftDocked;
+  }
+});

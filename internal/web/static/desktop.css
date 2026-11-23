@@ -12,6 +12,33 @@
     font-weight: 100 900;
     font-display: swap;
   }
+  /* JetBrains Mono 5.3.0 (SIL OFL 1.1, vendor/jetbrains-mono/: fontsource's repackage, scripts/vendor-jetbrains-mono.sh), the
+     dock's code font (P5): the upright variable font in three subsets, each fetched only when text in its unicode-range is drawn
+     (the ranges are the package's). Vietnamese is there for comments written in it. */
+  @font-face {
+    font-family: "JetBrains Mono";
+    src: url("/vendor/jetbrains-mono/jetbrains-mono-latin-wght-normal.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 100 800;
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: "JetBrains Mono";
+    src: url("/vendor/jetbrains-mono/jetbrains-mono-latin-ext-wght-normal.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 100 800;
+    font-display: swap;
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  @font-face {
+    font-family: "JetBrains Mono";
+    src: url("/vendor/jetbrains-mono/jetbrains-mono-vietnamese-wght-normal.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 100 800;
+    font-display: swap;
+    unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+  }
 
   :root {
     /* New tokens. */
@@ -19,11 +46,16 @@
     --amber: #f5b94a; --red: #f06a6a;
     --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    /* The dock's code text (P5): the editor, the diffs, the read view, markdown code. Not the terminal, not --font-mono. */
+    --font-code: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --r-chip: 4px; --r-ctl: 6px; --r-card: 8px; --r-dlg: 10px;
 
     /* The existing tokens, remapped to the graphite palette. Colour roles:
        amber = needs-you only, green = status only, red = write/prod/destructive
        /error only. */
+    /* The dock tree (P5, mockup 1 T2): names, icons and the file families (never amber, green or red). */
+    --tree-file: #b6bdc6; --tree-dir: #e3e6ea; --tree-icon: #6f7884; --tree-ign: #7d838a;
+    --fam-tf: #a48cf2; --fam-yaml: #5fb6e3; --fam-md: #8ea4c8; --fam-script: #d49ad1; --fam-build: #56c2c8;
     --bg: #0d0f12; --panel: #14171b; --fg: #e6e8eb; --muted: #8b939e;
     --accent: #6ea8fe; --ok: #4ccf8a;
     /* Analytics chart palette (S4 Task 8; UI plan 5 Task 6, call 8): categorical, no green/amber/red (those are status colours)
@@ -1780,6 +1812,13 @@
   .dk-ed-body > .dk-md { position: absolute; inset: 0; overflow: auto; background: var(--bg); }
   .dk-md:focus-visible { outline: var(--focus); outline-offset: -2px; }
   .dk-md .md-body { padding: 18px 28px 24px 36px; }
+  /* M1 (P5, mockup 3): the preview is Inter, as the rest of the app, at the reader's size and line-height (app.css: var(--fs-md),
+     1.6), the same on every OS. Prose is held to a 72-character measure; tables and code blocks may use the whole width, so the
+     document itself has no cap. The phone keeps app.css's look. */
+  .md-body { font-family: var(--font-ui); max-width: none; }
+  .md-body p, .md-body ul, .md-body ol, .md-body dl, .md-body blockquote { max-width: 72ch; }
+  /* Markdown code (inline and blocks) is the dock's code font, the face the file has in the editor (P5). */
+  .md-body code, .md-body pre { font-family: var(--font-code); }
   /* A big document comes in chunks (editormd.js editorMdPump): the browser lays out and paints only the chunks near the view, and
      remembers each one's height once it has been shown (measured: laying out a 2 MiB file at once was a 9.8 s task). */
   .dk-md .md-chunk { content-visibility: auto; contain-intrinsic-size: auto 1200px; }
@@ -1858,7 +1897,7 @@
   .dk-agent .btn { flex: none; }
   /* Long lines scroll, never wrap. */
   /* ... unless Wrap lines is on (id + class here beats app.css's .viewer-wrap rule, so say it again). */
-  #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; }
+  #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; font-family: var(--font-code); }
   .viewer-wrap #drawer .viewer-pre { white-space: pre-wrap; width: auto; min-width: 0; }
   /* The viewer toolbar's Save is app.css's filled primary (.vt-btn.pri); its hover is the kit's (F11). */
   .vt-btn.pri:hover:not(.vt-off) { background: var(--accent-hover); border-color: var(--accent-hover); }
@@ -1904,6 +1943,22 @@
   #drawer .ft-node.dir[aria-expanded="true"]::before { transform: rotate(90deg); }
   /* A folder's name is the text colour, not app.css's accent, so that the tint below can mean "something changed in here". */
   #drawer .ft-node.dir { color: var(--fg); }
+  /* T2 (P5, mockup 1): a quiet hierarchy. File names a step under the text colour, folder names bright and medium weight, icons
+     grey (not accent); a file family colours its icon only (filetree.js fileFamily sets data-fam), in hues that are never
+     amber, green or red. Every rule here comes before the git tints below and is no stronger, so a change keeps its tint. */
+  #drawer .ft-node > .ft-name { color: var(--tree-file); }
+  #drawer .ft-node.dir > .ft-name { color: var(--tree-dir); font-weight: var(--w-medium); }
+  #drawer .ft-icon { color: var(--tree-icon); }
+  #drawer .ft-node[data-fam="tf"] > .ft-icon { color: var(--fam-tf); }
+  #drawer .ft-node[data-fam="yaml"] > .ft-icon { color: var(--fam-yaml); }
+  #drawer .ft-node[data-fam="md"] > .ft-icon { color: var(--fam-md); }
+  #drawer .ft-node[data-fam="script"] > .ft-icon { color: var(--fam-script); }
+  #drawer .ft-node[data-fam="build"] > .ft-icon { color: var(--fam-build); }
+  /* A gitignored row (git status's ignored list, gitstatus.js gitIgnoreRow) is dimmed, 4.7:1 on --panel so it still reads (the
+     mockup's 45 % measured 2.9:1), and its icon loses its family colour. A selected one reads at full colour: the dim on the
+     selection tint is under 4.5:1. As strong as the rules above and after them, so it wins over them; before the tints. */
+  #drawer .ft-ign:not(.ft-sel) > .ft-name { color: var(--tree-ign); }
+  #drawer .ft-ign:not(.ft-sel) > .ft-icon { color: var(--tree-icon); }
   /* The git letter keeps app.css's colours (M accent, A and U ok, D and C red) and takes the kit's mono step. */
   #drawer .ft-git { min-width: 12px; padding: 0; font: var(--w-semibold) var(--t-xs)/1 var(--font-mono); }
   /* Changed names: the colour of the letter, a half step toward the text colour (mockup B1's #a9c9ff and #8fe0b4; conflicts and

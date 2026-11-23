@@ -71,6 +71,32 @@ function gitMarks(status, root) {
   return out;
 }
 
+// gitIgnored: Set<absolute path> of the reply's gitignored paths under the tree rooted at `root` (a folder's without its
+// trailing slash). Empty unless the reply is ok with a usable rootRel; anything but a string that places is left out.
+function gitIgnored(status, root) {
+  const out = new Set();
+  if (!status || status.state !== "ok" || typeof status.rootRel !== "string" || status.rootRel === "") return out;
+  if (!Array.isArray(status.ignored) || typeof root !== "string" || root === "") return out;
+  const base = root.replace(/\/+$/, "");
+  for (const p of status.ignored) {
+    const at = gitPlace(p, status.rootRel, base);
+    if (at) out.add(at.abs);
+  }
+  return out;
+}
+
+// gitIgnoredAt: is `path` in `set`, or below a folder that is (only folders strictly under `root` are looked at)?
+function gitIgnoredAt(set, root, path) {
+  if (!set || set.size === 0 || typeof path !== "string") return false;
+  if (set.has(path)) return true;
+  const base = String(root).replace(/\/+$/, "");
+  if (!path.startsWith(base + "/")) return false;
+  for (let cut = path.lastIndexOf("/"); cut > base.length; cut = path.lastIndexOf("/", cut - 1)) {
+    if (set.has(path.slice(0, cut))) return true;
+  }
+  return false;
+}
+
 // --- state -------------------------------------------------------------------
 
 let gitSeq = 0;          // the number of the newest ask: asks are numbered in the order they were sent
@@ -313,6 +339,28 @@ function gitCurrentMarks() {
   return gitKept.marks;
 }
 
+// gitIgnoredNow: is `path` gitignored, by the status the tree draws (the live one for the root, else the kept one)? Drawing
+// and the automatic reveal only.
+let gitIgnKept = null; // {root, status, set}: the set of the status last asked about, made once per status
+function gitIgnoredNow(path) {
+  const root = typeof ftRoot === "function" ? ftRoot() : "";
+  let status = gitState && gitState.root === root ? gitState.status : null;
+  if (!status) {
+    const rec = root && typeof gitLastGet === "function" ? gitLastGet(root) : null;
+    status = rec && rec.status;
+  }
+  if (!status) return false;
+  if (!gitIgnKept || gitIgnKept.root !== root || gitIgnKept.status !== status) gitIgnKept = { root, status, set: gitIgnored(status, root) };
+  return gitIgnoredAt(gitIgnKept.set, root, path);
+}
+
+// gitIgnoreRow marks a gitignored row with class ft-ign, whether or not the dock is open now (a tree drawn before it opens is the
+// one it shows). Only desktop.css's #drawer rules draw it: the phone's tree looks as it did.
+function gitIgnoreRow(row, path) {
+  const on = gitIgnoredNow(path);
+  if (row.classList.contains("ft-ign") !== on) row.classList.toggle("ft-ign", on);
+}
+
 // gitMarkRow puts (or takes off) the row's badge or dot. A file's badge is a
 // button that opens its changes; a folder's dot is just a mark, and the row's own
 // click still toggles the folder. The untracked folder's U is a letter, not a dot.
@@ -402,7 +450,7 @@ function gitRepaintRows() {
   if (typeof ftTreeEl === "undefined" || !ftTreeEl || typeof ftRowPaths === "undefined") return;
   for (const row of ftTreeEl.querySelectorAll(".ft-node")) {
     const p = ftRowPaths.get(row);
-    if (p) gitMarkRow(row, p);
+    if (p) { gitMarkRow(row, p); gitIgnoreRow(row, p); }
   }
   gitPaintNote();
 }
@@ -422,5 +470,5 @@ function gitPaintNote() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { gitMarks, gitPlace, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset, gitCurrentMarks, GIT_REUSE_MS, GIT_WATCH_MIN_MS, GIT_FETCH_MS };
+  module.exports = { gitMarks, gitPlace, gitIgnored, gitIgnoredAt, gitIgnoredNow, gitIgnoreRow, gitStatusLoad, gitStatusRefreshSoon, gitStatusOnActivity, gitStatusCodeFor, gitStatusCurrent, gitStatusAt, gitStatusReason, gitStatusNote, gitStatusReset, gitCurrentMarks, GIT_REUSE_MS, GIT_WATCH_MIN_MS, GIT_FETCH_MS };
 }

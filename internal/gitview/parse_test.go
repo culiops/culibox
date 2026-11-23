@@ -3,6 +3,7 @@ package gitview
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -345,5 +346,49 @@ func TestParseNumstatCap(t *testing.T) {
 	got, many = ParseNumstat(rec("1\t0\ta", "1\t0\tb", "1\t0\tc"), 2)
 	if !many || len(got) != 2 {
 		t.Errorf("3 over a cap of 2: many=%v got=%+v", many, got)
+	}
+}
+
+func TestParseIgnored(t *testing.T) {
+	b := rec("# branch.oid "+oid, one(".M", "a"), "? new", "! node_modules/", "! x.log")
+	got, seen := ParseIgnored(b, 100)
+	if !seen || !slices.Equal(got, []string{"node_modules/", "x.log"}) {
+		t.Errorf("got %q seen=%v", got, seen)
+	}
+	// Unsafe paths are dropped, as ParseStatus drops them.
+	got, seen = ParseIgnored(rec("! /abs", "! ../up", "! a/../b", "! \xff", "! ", "! ok"), 100)
+	if !seen || !slices.Equal(got, []string{"ok"}) {
+		t.Errorf("hostile: got %q seen=%v", got, seen)
+	}
+	// Past the cap there is no list at all (no dimming), but the section was seen.
+	got, seen = ParseIgnored(rec("! a", "! b", "! c"), 2)
+	if !seen || got != nil {
+		t.Errorf("over cap: got %q seen=%v", got, seen)
+	}
+	got, seen = ParseIgnored(rec("! a", "! b"), 2)
+	if !seen || len(got) != 2 {
+		t.Errorf("at cap: got %q seen=%v", got, seen)
+	}
+	got, seen = ParseIgnored(rec(one(".M", "a"), "? new"), 100)
+	if seen || got != nil {
+		t.Errorf("no section: got %q seen=%v", got, seen)
+	}
+	// A record cut at the end of a capped buffer still says the section began.
+	if _, seen = ParseIgnored([]byte("? u\x00! node_mo"), 100); !seen {
+		t.Error("a cut ignored record must count as the section")
+	}
+}
+
+func TestParseStatusIgnoredDoNotCountTowardTheCap(t *testing.T) {
+	var parts []string
+	for i := range 5 {
+		parts = append(parts, "? u"+strconv.Itoa(i))
+	}
+	for i := range 3000 {
+		parts = append(parts, "! i"+strconv.Itoa(i))
+	}
+	got, _, tooMany, _, _ := ParseStatus(rec(parts...), 5)
+	if tooMany || len(got) != 5 {
+		t.Errorf("tooMany=%v entries=%d", tooMany, len(got))
 	}
 }

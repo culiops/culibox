@@ -36,6 +36,14 @@ test("node_modules and bower_components between the root and the file are skippe
   assert.strictEqual(revealExcluded("/w", "/w/my_node_modules/a.js"), false, "whole names only");
 });
 
+test("a gitignored folder between the root and the file is skipped too; the file itself and the root are not judged", () => {
+  const ign = (d) => d === "/w/build" || d === "/w";
+  assert.strictEqual(revealExcluded("/w", "/w/build/out/a.js", ign), true);
+  assert.strictEqual(revealExcluded("/w", "/w/src/a.js", ign), false);
+  assert.strictEqual(revealExcluded("/w", "/w/.env", () => true), false, "an ignored file in a shown folder is revealed");
+  assert.strictEqual(revealExcluded("/w", "/w/src/a.js"), false, "no ignored list: as before");
+});
+
 test("the file the dock wants revealed: the active tab's host file, nothing for a box file, the All changes tab, a closed dock", () => {
   const tab = (t) => ({ open: true, tab: t });
   assert.strictEqual(revealWant(tab({ key: "k", path: "/w/a.go" })), "/w/a.go");
