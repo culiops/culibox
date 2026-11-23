@@ -19,11 +19,36 @@ import (
 // sends it: nothing there is a credential or an oracle for another box.
 const sharedSocketReply = "this box was started before CuliBox tied credentials to the box that holds them; respawn this session to get credentials again"
 
-// Audit reasons for denied_box rows (the box is never told which).
+// hostSharedReply is what a Host session's token gets on the shared socket: a
+// Host session never mounts it, so the box's respawn advice does not apply.
+const hostSharedReply = "this Host session gets credentials only on its own socket"
+
+// Audit reasons for denied_box rows (the caller is never told which).
 const (
-	whySharedSocket = "box from before per-box broker sockets; respawn the session"
-	whyOtherBox     = "not presented from the session's box"
+	whySharedSocket     = "box from before per-box broker sockets; respawn the session"
+	whyOtherBox         = "not presented from the session's box"
+	whyHostSharedSocket = "Host session token presented on the shared box socket"
+	whyOtherHostSocket  = "not presented on the session's own host socket"
 )
+
+// deniedReply is the one 403 text a refused request for a credential of kind k
+// gets, whatever the reason: it names the session's kind (a Host session is
+// not "boxed") and the binding. A session that is unknown gets the box wording.
+func deniedReply(sv SessionView, k bindingKind) string {
+	kind, binding := "boxed", ""
+	if sv.Host {
+		kind = "Host"
+	}
+	switch k {
+	case kindAWS:
+		binding = "an AWS binding"
+	case kindGitHub:
+		binding = "a GitHub binding"
+	default:
+		binding = "a token binding"
+	}
+	return "this session is not a live " + kind + " session with " + binding
+}
 
 // BoxSource tells whether src is the current address of box on the egress
 // network: the macOS way to learn which box a request came from. *boxaddr.Cache
@@ -50,7 +75,7 @@ func (b *Broker) refusal(r *http.Request, sid string, sv SessionView, found bool
 	if sv.Host {
 		// A Host session has no box: it is served only on its own host socket.
 		if !fromHost(r, sid) {
-			return OutcomeDeniedBox, whyOtherBox
+			return OutcomeDeniedBox, whyOtherHostSocket
 		}
 		return "", ""
 	}
@@ -106,6 +131,17 @@ func (b *Broker) serveShared(w http.ResponseWriter, r *http.Request) {
 			sid = id
 		}
 	}
-	b.recordDenied(Row{Time: b.now(), SessionID: sid, Provider: provider, Outcome: OutcomeDeniedBox, Error: whySharedSocket, Tier: TierBox}) // only a box mounts the shared socket; Tier set so the recorder needs no lookup here
-	replyErr(w, http.StatusForbidden, sharedSocketReply)
+	// A Host session never mounts the shared socket: a verified token whose
+	// session is a Host one gets the Host wording and tier. The look is
+	// read-only and only for a token that verifies, so it tells nothing to
+	// anyone but the session's own holder.
+	row := Row{Time: b.now(), SessionID: sid, Provider: provider, Outcome: OutcomeDeniedBox, Error: whySharedSocket, Tier: TierBox} // only a box mounts the shared socket; Tier set so the recorder needs no lookup here
+	reply := sharedSocketReply
+	if sid != "" {
+		if sv, found := b.lookup(sid); found && sv.Host {
+			row.Error, row.Tier, reply = whyHostSharedSocket, TierHost, hostSharedReply
+		}
+	}
+	b.recordDenied(row)
+	replyErr(w, http.StatusForbidden, reply)
 }
