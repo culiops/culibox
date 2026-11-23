@@ -299,11 +299,13 @@ func TestHostSpawnResolverErrorsBlockAfterAck(t *testing.T) {
 	}
 	spec := hostSpec(t)
 	spec.HostDropsAck = true
-	if s, err := h.m.Spawn(spec); !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), `"gone"`) {
+	// The user chose Host: a profile refusal, never "containment unavailable".
+	if s, err := h.m.Spawn(spec); err == nil || errors.Is(err, box.ErrBoxUnavailable) || !errors.Is(err, box.ErrUnboxableWorkspace) ||
+		strings.Contains(err.Error(), "containment") || !strings.Contains(err.Error(), `"gone"`) {
 		if err == nil {
 			_ = h.m.Kill(s.ID)
 		}
-		t.Fatalf("host spawn err = %v, want the unresolvable connection", err)
+		t.Fatalf("host spawn err = %v, want the unresolvable connection as a profile refusal", err)
 	}
 	h.untouched(t)
 	// The same profile in a box still fails on the bad connection.

@@ -434,3 +434,44 @@ func TestBoxSpawnNeverAsksForHostFiles(t *testing.T) {
 		t.Fatalf("box PATH = %q", got)
 	}
 }
+
+// A GitHub precheck that fails on a Host spawn is a profile refusal, not
+// "containment unavailable": the user chose Host.
+func TestHostPrecheckErrorIsAProfileRefusal(t *testing.T) {
+	l, _ := hostBoundLauncher(t, envDumpArgv)
+	h := newDropsHarness(t, l)
+	h.hooks.checkErr = errors.New("the GitHub App key cannot be read")
+	s, err := h.m.Spawn(hostAckSpec(t))
+	if err == nil {
+		_ = h.m.Kill(s.ID)
+		t.Fatal("a host spawn whose GitHub check failed started")
+	}
+	want := `profile "p": the GitHub App key cannot be read`
+	if err.Error() != want || errors.Is(err, box.ErrBoxUnavailable) || !errors.Is(err, box.ErrUnboxableWorkspace) {
+		t.Fatalf("err = %v\nwant  %q as a refusal", err, want)
+	}
+	if calls, _, _ := h.hooks.hostState(); len(calls) != 0 {
+		t.Fatalf("a refused spawn asked for host files: %+v", calls)
+	}
+}
+
+// The sso_direct gate words a Host refusal as the profile's, a box one as
+// before.
+func TestSSOGateRefusalWordingPerTier(t *testing.T) {
+	bs := config.Bindings{AWSConns: []config.AWSConnection{ssoConn("ro")}}
+	_, _, err := gateSSODirect(&fakeBrokerHooks{}, bs, "p", true)
+	want := `profile "p": this CuliBox cannot check that an SSO permission set is read-only, so it will not hand one out`
+	if err == nil || err.Error() != want || errors.Is(err, box.ErrBoxUnavailable) || !errors.Is(err, box.ErrUnboxableWorkspace) {
+		t.Fatalf("host: %v\nwant  %q", err, want)
+	}
+	_, _, err = gateSSODirect(&fakeBrokerHooks{}, bs, "p", false)
+	want = `containment unavailable: spawn p: this CuliBox cannot check that an SSO permission set is read-only, so it will not hand one out`
+	if err == nil || err.Error() != want || !errors.Is(err, box.ErrBoxUnavailable) {
+		t.Fatalf("box: %v\nwant  %q", err, want)
+	}
+	hooks := &ssoHooks{fakeBrokerHooks: &fakeBrokerHooks{}}
+	_, _, err = gateSSODirect(hooks, bs, "p", true)
+	if err == nil || !strings.HasPrefix(err.Error(), `profile "p": `) || strings.Contains(err.Error(), "containment") {
+		t.Fatalf("host gate refusal: %v", err)
+	}
+}

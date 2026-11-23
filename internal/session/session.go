@@ -1922,6 +1922,25 @@ func profileRefusal(agent, reason string) error {
 	return refusal(fmt.Sprintf("profile %q: %s", agent, reason))
 }
 
+// causedRefusal is a refusal that keeps its cause in the chain, so a locked
+// secret store under it still reads as one.
+type causedRefusal struct {
+	msg   string
+	cause error
+}
+
+func (r causedRefusal) Error() string { return r.msg }
+
+func (r causedRefusal) Unwrap() []error { return []error{box.ErrUnboxableWorkspace, r.cause} }
+
+// hostBindRefusal is a Host spawn's refusal for a profile whose settings or
+// bindings could not be resolved or checked: msg as is, as a refusal, never
+// "containment unavailable", since the user chose Host (#360). A box spawn
+// words the same failure as a containment one.
+func hostBindRefusal(msg string, cause error) error {
+	return causedRefusal{msg: msg, cause: cause}
+}
+
 // runtimeFor resolves the tier for a spawn. Without a tier-aware launcher or a
 // box layer the answer is host — containment is never assumed, only granted,
 // and never silently withdrawn from a request that named it: with no box layer,
@@ -2123,6 +2142,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		var err error
 		awsConns, err = r.AWSConnectionsFor(spec.Agent)
 		if err != nil {
+			if runtime != config.RuntimeBox {
+				return nil, hostBindRefusal(err.Error(), err) // it names the profile
+			}
 			// ErrBoxUnavailable so the UI shows which profile and why.
 			return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
 		}
@@ -2131,6 +2153,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		var err error
 		tokens, pats, err = r.TokensFor(spec.Agent)
 		if err != nil {
+			if runtime != config.RuntimeBox {
+				return nil, hostBindRefusal(err.Error(), err) // it names the profile
+			}
 			// ErrBoxUnavailable so the UI shows which profile and why.
 			return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
 		}
@@ -2187,6 +2212,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if r, ok := m.launcher.(CloneResolver); ok {
 		c, err := r.CloneFor(spec.Agent)
 		if err != nil {
+			if runtime != config.RuntimeBox {
+				return nil, hostBindRefusal(fmt.Sprintf("profile %q: %v", spec.Agent, err), err)
+			}
 			// ErrBoxUnavailable so the UI shows which profile and why.
 			return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 		}
@@ -2222,6 +2250,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if r, ok := m.launcher.(ContextResolver); ok && resolveCtx {
 		p, err := r.ContextPathsFor(spec.Agent)
 		if err != nil {
+			if runtime != config.RuntimeBox {
+				return nil, hostBindRefusal(fmt.Sprintf("profile %q: %v", spec.Agent, err), err)
+			}
 			return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 		}
 		ctxPaths = p
@@ -2536,7 +2567,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// prepared for another box would be taken for that box.
 			key.Expect = plannedBox
 			var err error
-			if baseAccess, ssoInfo, err = bindingPrechecks(brk, bs, id, spec.Agent, &watched); err != nil {
+			if baseAccess, ssoInfo, err = bindingPrechecks(brk, bs, id, spec.Agent, false, &watched); err != nil {
 				return nil, err
 			}
 			bm, benv, err = brk.BoxFor(bs, baseAccess)
@@ -2740,7 +2771,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// Before PATH gets the shim dir: the real gh can never be our own shim.
 			realGH := launcher.SessionLookPath(env, "gh")
 			var err error
-			if baseAccess, ssoInfo, err = bindingPrechecks(brk, bs, id, spec.Agent, &watched); err != nil {
+			if baseAccess, ssoInfo, err = bindingPrechecks(brk, bs, id, spec.Agent, true, &watched); err != nil {
 				return nil, err
 			}
 			nonce = brk.NewNonce()
@@ -3138,7 +3169,7 @@ func hostAckRefusal(agent string, guard, drops []string) error {
 // probed (a warning, never a gate). It returns the base-role results and the
 // gate's per-key info; *watched is set once a key is watched for a re-probe,
 // which a spawn that fails afterwards must Forget.
-func bindingPrechecks(brk BrokerHooks, bs config.Bindings, id, agent string, watched *bool) (map[string]awsprobe.Result, map[string]ssoSpawnInfo, error) {
+func bindingPrechecks(brk BrokerHooks, bs config.Bindings, id, agent string, host bool, watched *bool) (map[string]awsprobe.Result, map[string]ssoSpawnInfo, error) {
 	if bs.GitHub != nil {
 		// Doctor-style and secret-free, so its message can be shown as is.
 		if err := brk.CheckGitHub(*bs.GitHub); err != nil {
@@ -3151,6 +3182,9 @@ func bindingPrechecks(brk BrokerHooks, bs config.Bindings, id, agent string, wat
 				// The Keychain did not give the key: 503 with the fix, not a containment failure.
 				return nil, nil, fmt.Errorf("%w: %w (GitHub App key, profile %q)", launcher.ErrStoreUnavailable, ue, agent)
 			}
+			if host {
+				return nil, nil, hostBindRefusal(fmt.Sprintf("profile %q: %v", agent, err), err)
+			}
 			return nil, nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, agent, err)
 		}
 	}
@@ -3160,7 +3194,7 @@ func bindingPrechecks(brk BrokerHooks, bs config.Bindings, id, agent string, wat
 	// An sso_direct binding hands the agent the human's own permission-set
 	// credentials, so unlike an assumed role it is refused unless the read-only
 	// gate says so. A passed gate is a definite base result for its key.
-	gated, ssoInfo, err := gateSSODirect(brk, bs, agent)
+	gated, ssoInfo, err := gateSSODirect(brk, bs, agent, host)
 	if err != nil {
 		return nil, nil, err
 	}
