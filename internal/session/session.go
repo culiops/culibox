@@ -900,9 +900,15 @@ type Session struct {
 	// never re-resolves Cwd: by exit another box may have put a symlink in its
 	// place. Set before publication, never mutated.
 	workspace string
-	Runtime   string // box | host; immutable for the session's lifetime
-	Box       string // container name for a boxed session; "" on the host tier
-	Bin       string // resolved agent binary (for claude-only features like usage)
+	// transcriptKey is the key of the conversations folder the session's box
+	// mounts over its projects dir (box.ConversationsKey, #330), "" when it
+	// mounts none: a host session, or a box from before the folder. Recorded
+	// at spawn so a profile renamed or removed later does not lose it. Set
+	// before publication, never mutated.
+	transcriptKey string
+	Runtime       string // box | host; immutable for the session's lifetime
+	Box           string // container name for a boxed session; "" on the host tier
+	Bin           string // resolved agent binary (for claude-only features like usage)
 	// ParentID is the session this is a companion shell of. Set before
 	// publication and never mutated, so read without a lock.
 	ParentID string
@@ -2526,12 +2532,15 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var cwdForms []string    // boxed only: seeds Session.cwdFormsCache
 	var wsPath string        // boxed only: the workspace's real path when the box was made (Session.workspace)
 	var resumeSkipped string // boxed only: set when --resume was dropped
+	var transcriptKey string // boxed only: the conversations folder the box mounts (Session.transcriptKey)
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
 		recordBoxed := m.boxedRecorder
 		m.mu.Unlock()
-		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports}
+		// Profile is not identity: it names the conversations folder a box this
+		// spawn creates mounts (#330), shared by the profile's boxes in this folder.
+		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports, Profile: spec.Agent}
 		// The bypass option the user chose for the profile or this spawn is the
 		// consent: the box home it creates pre-accepts the warning that nothing
 		// would answer in an unattended session. Not tied to the bundle or the
@@ -2707,6 +2716,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 		argv, env, boxName = wrapped, wrappedEnv, name
 		wsPath = spawnWorkspace(boxes, spec.Cwd, key, name)
+		transcriptKey = boxTranscriptKey(boxes, name)
 		if lf, ok := boxes.(interface{ LockedFiles(box string) []string }); ok {
 			lockedFiles = lf.LockedFiles(name)
 		}
@@ -2719,11 +2729,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			m.mu.Lock()
 			stateDir := m.stateDir
 			m.mu.Unlock()
-			boxDir := ""
+			// Where the box's claude looks: the conversations folder it mounts,
+			// else its home. Only that one: a copy the mount hides does not count.
+			var seen transcriptRoot
 			if boxName != "" && stateDir != "" {
-				boxDir = boxHome(stateDir, boxName)
+				seen = boxTranscriptRoots(stateDir, boxName, transcriptKey)[0]
 			}
-			if !boxedTranscriptPresent(boxDir, spec.Resume, cwdForms) {
+			if !boxedTranscriptPresent(seen, spec.Resume, cwdForms) {
 				// Drop only on the agent argv's own tail of the wrapped argv: the
 				// wrapper's prefix (docker args, a profile's args) may hold a "--"
 				// that would stop dropResume short. Fail closed: a claude started
@@ -2922,13 +2934,14 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.options = opts
 	sess.ParentID = spec.ParentID
 	sess.workspace = wsPath
+	sess.transcriptKey = transcriptKey
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
 	releaseClone() // published: the next spawn of this clone sees this session as live
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Workspace: wsPath, Created: created, Runtime: runtime, Box: boxName,
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Workspace: wsPath, TranscriptKey: transcriptKey, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), HostBroker: heldHost, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, WorkspaceRoot: wsRoot, LockedFiles: slices.Clone(lockedFiles),
@@ -4025,6 +4038,9 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 		}
 	}
 	sess.Box = md.Box
+	if box.ValidConversationsKey(md.TranscriptKey) { // joined into a path: never a malformed one
+		sess.transcriptKey = md.TranscriptKey
+	}
 	sess.brokerBox = heldBox
 	sess.Bin = bin
 	sess.Account = md.Account

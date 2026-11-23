@@ -27,6 +27,10 @@ type sessionMeta struct {
 	// Workspace is the boxed workspace's real path when the box was made (see
 	// Session.workspace); "" for a host session or a record from before it.
 	Workspace string `json:"workspace,omitempty"`
+	// TranscriptKey is the key of the conversations folder the session's box
+	// mounted (Session.transcriptKey); "" for a host session or a record from
+	// before #330, whose transcripts are in the box home.
+	TranscriptKey string `json:"transcript_key,omitempty"`
 	// createdGuessed marks an orphan adopted with no record: Created is the
 	// adoption time, not the start. In memory only, between reconcile and
 	// reattach.

@@ -591,8 +591,9 @@ func TestUnboundSpawnIgnoresTheBroker(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
-	if boxes.lastKey != (box.BoxKey{}) {
-		t.Fatalf("unbound box key = %+v, want zero", boxes.lastKey)
+	// Profile names the conversations folder and is not identity (#330).
+	if boxes.lastKey != (box.BoxKey{Profile: "plain"}) {
+		t.Fatalf("unbound box key = %+v, want zero but for the profile", boxes.lastKey)
 	}
 	if !slices.Contains(boxes.lastEnv, "AWS_ACCESS_KEY_ID=AKIASTATIC") {
 		t.Fatal("an unbound session's env must not be rewritten")

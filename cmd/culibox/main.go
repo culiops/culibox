@@ -822,6 +822,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// unreadable, no spawn can be trusted to match what the user saved (#291).
 	lnch.SetProfilesGate(launcher.ProfilesNewerGate(parseErr))
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
+	// #330: who changed which fields of which profile, and when, in the same
+	// audit as credential edits; a row that cannot be written stops the change.
+	pm.SetAudit(storeAudit)
 	// What CuliBox added itself is "builtin" in the profile list; config.json's own
 	// agents are "config" (#15). Derived every boot, never written to a file.
 	pm.SetBuiltin(builtinProfileNames(doctorIn.Source, cfg.Agents, agents))
@@ -1032,8 +1035,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 
 	// Analytics: durable token/prompt rollups mined from the Claude Code
 	// transcripts. Enabled by default; only an explicit config false turns it off.
-	// Roots default to ~/.claude/projects (all host + direct usage — the bulk) plus
-	// this instance's boxed-session and agent-account transcript dirs.
+	// Roots default to analytics.DefaultRoots: ~/.claude/projects (all host +
+	// direct usage — the bulk) plus this instance's boxed-session, conversations
+	// folder and agent-account transcript dirs.
 	var analyticsSvc *analytics.Service
 	if cfg.Analytics.On() {
 		dbPath := cfg.Analytics.DBPath
@@ -1042,13 +1046,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 		roots := cfg.Analytics.Roots
 		if len(roots) == 0 {
-			// Glob patterns, expanded on every ingest (not at boot) so boxes
-			// and agent accounts created while the daemon runs are picked up.
-			roots = []string{
-				filepath.Join(home, ".claude", "projects"),
-				filepath.Join(dataDir, "boxstate", "*", ".claude", "projects"),
-				filepath.Join(dataDir, "accounts", "*", "claude", "projects"),
-			}
+			// Glob patterns, expanded on every ingest (not at boot) so boxes,
+			// conversations folders and agent accounts created while the daemon
+			// runs are picked up.
+			roots = analytics.DefaultRoots(home, dataDir)
 		}
 		interval := 2 * time.Minute
 		if cfg.Analytics.IngestInterval != "" {
@@ -1066,6 +1067,12 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			srv.Analytics = svc
 			// Only a live service: a nil *Service must never reach the manager.
 			mgr.SetCostSource(svc)
+			if boxes != nil {
+				// #330: a box home's conversations moved into its profile's
+				// folder keep their read offsets, so they are not counted twice.
+				// Before the API serves: no spawn creates a box earlier.
+				boxes.SetAdoptHook(svc.CarryOffsets)
+			}
 			log.Printf("analytics: db %s, %d root(s), ingest every %s", dbPath, len(roots), interval)
 		}
 	}

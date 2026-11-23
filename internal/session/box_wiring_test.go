@@ -64,6 +64,13 @@ type fakeBoxes struct {
 	prepares   int
 	prepareErr error
 	order      *callLog // optional: shared with fakeBundles to pin call order
+	conv       string   // ConversationsKeyOf's answer
+}
+
+func (f *fakeBoxes) ConversationsKeyOf(string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.conv
 }
 
 // callLog records the order of calls across fakes.

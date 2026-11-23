@@ -1,6 +1,8 @@
 package web
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -15,6 +17,7 @@ import (
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/awsscope"
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credfile"
 	"github.com/culiops/culibox/internal/launcher"
@@ -238,6 +241,10 @@ type ProfileManager struct {
 	// (both OSes; Manager.SetEgressAll). It decides whether an unbound boxed profile
 	// previews as "open" or as no egress control.
 	egressAll bool
+	// rec records one row per profile change (created, updated, deleted)
+	// before the store write, like a credential change (#330); nil = not
+	// recorded (tests). A row that cannot be written stops the change.
+	rec CredRecorder
 	// builtin names the seeds CuliBox added itself (see SetBuiltin); nil = none.
 	builtin map[string]bool
 }
@@ -435,6 +442,79 @@ func boxCredWord(p secretchain.Presence) string {
 		return "locked"
 	}
 	return "no"
+}
+
+// SetAudit installs the recorder of profile changes (the credential audit:
+// cred_audit, kind "profile"). Call at boot, before the API serves; nil turns
+// recording off.
+func (m *ProfileManager) SetAudit(rec CredRecorder) {
+	m.mu.Lock()
+	m.rec = rec
+	m.mu.Unlock()
+}
+
+// profileKind is the cred_audit kind of a profile change.
+const profileKind = "profile"
+
+// recordLocked writes the audit row of a profile change, before the store write
+// it describes. Its error, a *storeFailure, means nothing may be written.
+// Caller holds m.mu.
+func (m *ProfileManager) recordLocked(action, name, detail string) error {
+	if m.rec == nil {
+		return nil
+	}
+	if err := m.rec.RecordCred(broker.CredEvent{Action: action, Kind: profileKind, Name: name, Actor: storeActor, Detail: detail}); err != nil {
+		return &storeFailure{cause: fmt.Errorf("profile %q: audit: %w", name, err)}
+	}
+	return nil
+}
+
+// changedFields names the top-level fields (their JSON names, sorted) whose
+// values differ between a and b, joined by ", "; "no field changed" when none
+// does. Only names: a value (env, secrets) can hold a secret.
+func changedFields(a, b config.AgentConfig) string {
+	var ma, mb map[string]json.RawMessage
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	if errA != nil || errB != nil || json.Unmarshal(ja, &ma) != nil || json.Unmarshal(jb, &mb) != nil {
+		return "fields not compared"
+	}
+	var names []string
+	for k, v := range ma {
+		if w, ok := mb[k]; !ok || !bytes.Equal(v, w) {
+			names = append(names, k)
+		}
+	}
+	for k := range mb {
+		if _, ok := ma[k]; !ok {
+			names = append(names, k)
+		}
+	}
+	if len(names) == 0 {
+		return "no field changed"
+	}
+	sort.Strings(names)
+	return fieldList(names)
+}
+
+// maxProfileDetail is the audit's bound on a detail (broker's maxCredDetail):
+// past it the row is cut mid-text, so fieldList stays within it.
+const maxProfileDetail = 200
+
+// fieldList joins names with ", " in at most maxProfileDetail bytes. When they do
+// not all fit it stops at a whole name and ends with ", and N more" (or reads
+// "N fields" when not even one fits with that tail).
+func fieldList(names []string) string {
+	if all := strings.Join(names, ", "); len(all) <= maxProfileDetail {
+		return all
+	}
+	for k := len(names) - 1; k > 0; k-- {
+		s := strings.Join(names[:k], ", ") + fmt.Sprintf(", and %d more", len(names)-k)
+		if len(s) <= maxProfileDetail {
+			return s
+		}
+	}
+	return fmt.Sprintf("%d fields", len(names))
 }
 
 // SetContextCheck installs the save-time check of one context_paths entry. Call
@@ -857,6 +937,13 @@ func (m *ProfileManager) save(p config.AgentConfig, guard func() error) (string,
 			return "", err
 		}
 	}
+	action, detail := "created", ""
+	if cur, ok := m.getLocked(p.Name); ok {
+		action, detail = "updated", changedFields(cur, m.scopeOptions(p))
+	}
+	if err := m.recordLocked(action, p.Name, detail); err != nil {
+		return "", err
+	}
 	if err := m.store.Save(p); err != nil {
 		return "", profileStoreErr(err)
 	}
@@ -1024,6 +1111,9 @@ func (m *ProfileManager) remove(name string, rev *string) error {
 		if cur, ok := m.getLocked(name); !ok || profileRev(cur) != *rev {
 			return ErrProfileChanged
 		}
+	}
+	if err := m.recordLocked("deleted", name, ""); err != nil {
+		return err
 	}
 	if err := m.store.Delete(name); err != nil {
 		return profileStoreErr(err)

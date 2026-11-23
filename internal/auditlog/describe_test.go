@@ -442,3 +442,31 @@ func TestDescribeStoreFailedOutcomes(t *testing.T) {
 		}
 	}
 }
+
+// #330: a profile row says which fields changed; other kinds keep their detail
+// off the page.
+func TestProfileRowShowsChangedFields(t *testing.T) {
+	s := newSeeder(t)
+	for i, q := range []string{
+		`INSERT INTO cred_audit (ts, action, kind, name, actor, detail) VALUES (?, 'updated', 'profile', 'clone', 'web', 'egress_allow, aws_connections')`,
+		`INSERT INTO cred_audit (ts, action, kind, name, actor, detail) VALUES (?, 'created', 'profile', 'clone', 'web', '')`,
+		`INSERT INTO cred_audit (ts, action, kind, name, actor, detail) VALUES (?, 'created', 'token', 'cf', 'web', 'ignored')`,
+	} {
+		if _, err := s.raw.Exec(q, int64(1_800_000_000+i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := s.open().Query(Query{From: 1_800_000_000, To: 1_800_000_002, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range p.Events {
+		got[e.What] = true
+	}
+	for _, w := range []string{"profile clone updated · egress_allow, aws_connections", "profile clone created", "token cf created"} {
+		if !got[w] {
+			t.Errorf("no event %q in %v", w, got)
+		}
+	}
+}

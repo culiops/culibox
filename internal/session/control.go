@@ -5,13 +5,11 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/culiops/culibox/internal/account"
-	"github.com/culiops/culibox/internal/boxread"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/launcher"
 )
@@ -72,24 +70,6 @@ func dropResume(argv []string, sid string) ([]string, bool) {
 		}
 	}
 	return slices.Clone(argv), false
-}
-
-// boxedTranscriptPresent reports whether sid's transcript is in the box home
-// boxDir for one of the spawn cwd forms (C1: that project dir only). The only
-// read is boxread.Open, which refuses a symlink, a non-regular file and any path
-// out of boxDir; the file is closed again at once. An empty boxDir is "no".
-func boxedTranscriptPresent(boxDir, sid string, cwds []string) bool {
-	if boxDir == "" || !sessionIDRe.MatchString(sid) {
-		return false
-	}
-	for _, c := range cwds {
-		rel := filepath.Join(".claude", "projects", projectSlug(filepath.Clean(c)), sid+".jsonl")
-		if f, _, ok := boxread.Open(boxDir, rel); ok {
-			f.Close()
-			return true
-		}
-	}
-	return false
 }
 
 // resumeSkippedNote is Info.ResumeSkipped's text.
