@@ -277,7 +277,8 @@ function changesTotals(numstat, root) {
 // scopes (a Map); `sid` the session; `files` its Activity files.
 //   {kind: "none", count: 0}                      nothing to draw (no root, no reply for this root, not a repository)
 //   {kind: "note", text, title, count: 0}         one calm line: status unavailable, too many, Branch waiting or failed
-//                                                 (a Branch note also carries scope and showScope: the toggle stays)
+//                                                 (a Branch note also carries scope and showScope: the toggle stays, and
+//                                                 the one still waiting for its first answer says waiting: true)
 //   {kind: "rows", scope, showScope, rows, more, count, branch}   (count: the rows git has answered for, plus more)
 // `statusAt` (gitStatusAt: when the status held was asked for) reaches changesRows, which makes the provisional rows.
 // A reply is used only for the root (and scope) it was asked for: a late one for the root before is
@@ -301,7 +302,8 @@ function changesView(o) {
   if (scope === "branch") {
     // A note in Branch scope keeps the toggle (scope, showScope): the way back to Uncommitted must stay on screen.
     const waits = (text, title) => Object.assign(note(text, title), { scope, showScope: true });
-    if (!rec) return waits("Reading branch changes…", "");
+    // `waiting`: no answer yet, so the section may keep the last list it had for this root on screen meanwhile (dockchanges.js).
+    if (!rec) return Object.assign(waits("Reading branch changes…", ""), { waiting: true });
     if (reply && reply.state === "toomany") return waits(CHANGES_TOOMANY, "");
     if (!reply || reply.state !== "ok") return waits("Branch changes unavailable", reply ? reply.reason : "");
   }
