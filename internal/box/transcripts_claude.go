@@ -47,8 +47,18 @@ func holdsConversations(ctx context.Context, dir string) bool {
 		return !errors.Is(err, fs.ErrNotExist)
 	}
 	defer root.Close()
-	if !plainPath(root, conversationsRel) {
-		return false
+	// plainPath, except that a component that cannot be read keeps the home:
+	// only "not there" and "not a real directory" (a symlink is never followed)
+	// mean no conversation.
+	parts := strings.Split(conversationsRel, "/")
+	for i := range parts {
+		fi, err := root.Lstat(strings.Join(parts[:i+1], "/"))
+		if err != nil {
+			return !errors.Is(err, fs.ErrNotExist)
+		}
+		if !fi.IsDir() {
+			return false
+		}
 	}
 	found := false
 	read := 0

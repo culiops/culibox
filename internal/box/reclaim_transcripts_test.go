@@ -320,3 +320,36 @@ func TestKeptHomesNamesTheOutDir(t *testing.T) {
 		t.Fatalf("out dir %q, want %q", got[0].OutDir, want)
 	}
 }
+
+// "Cannot read" means keep at every level, the .claude folder and the projects
+// folder included, not only the workspace folders.
+func TestReclaimKeepsAHomeWhoseClaudeOrProjectsFolderIsUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission failure cannot be simulated")
+	}
+	for _, rel := range []string{".claude", ".claude/projects"} {
+		t.Run(rel, func(t *testing.T) {
+			m, _ := newTestManagerWithFake(t)
+			const name = "ab-box-abababababab"
+			dir := seedHome(t, m, name, 40*24*time.Hour)
+			seedConversation(t, dir, convRel)
+			p := filepath.Join(dir, filepath.FromSlash(rel))
+			if err := os.Chmod(p, 0o000); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(p, 0o700) })
+			when := time.Now().Add(-40 * 24 * time.Hour)
+			if err := os.Chtimes(dir, when, when); err != nil {
+				t.Fatal(err)
+			}
+			done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultCacheTTL)
+			if err != nil {
+				t.Fatalf("the home was condemned: %v", err)
+			}
+			if len(done) != 1 || !done[0].Kept {
+				t.Fatalf("want the home kept, got %+v", done)
+			}
+			mustExist(t, dir)
+		})
+	}
+}
