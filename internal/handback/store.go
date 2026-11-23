@@ -80,10 +80,16 @@ var fingerprintRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // SHA-256 and no target (a file that was not hashed: over the size cap, the
 // hash budget used up, unreadable, or checked by mode only) has nothing to tell
 // its content by, so it has no fingerprint: "" is returned, never stored and
-// never matched, and such a file is flagged every time. The result is a
+// never matched, and such a file is flagged every time. The same goes for a
+// flag whose path or target was cut to its tail (it starts with "…"). The result is a
 // fixed-width hash, so the set's size does not depend on the path lengths.
 func Fingerprint(f Flag) string {
 	if f.SHA256 == "" && f.Target == "" {
+		return ""
+	}
+	// SanitizePath cuts a long value to its tail behind "…": two different values
+	// can then be the same text, so a flag that carries one cannot be recognised.
+	if strings.HasPrefix(f.Path, "…") || strings.HasPrefix(f.Target, "…") {
 		return ""
 	}
 	var b strings.Builder
@@ -235,7 +241,7 @@ func (s Store) MergeScan(key string, base Record, scanAt time.Time, r Report) (R
 	case replaced:
 		// The old revision is lost with the unreadable file, and a page may still hold
 		// it: continue from a value no earlier counter can reach.
-		rec.Revision = max(before.Revision+1, time.Now().UnixNano())
+		rec.Revision = max(before.Revision+1, time.Now().UnixMicro())
 	case !sameListing(before, rec):
 		rec.Revision = before.Revision + 1
 	}

@@ -1,6 +1,7 @@
 package handback
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -698,11 +699,66 @@ func TestStoreRevisionNeverRepeatsAfterAReplacedRecord(t *testing.T) {
 	if again.Revision <= rec.Revision+1 {
 		t.Fatalf("revision %d -> %d after a replaced record: must jump past anything a page can hold", rec.Revision, again.Revision)
 	}
+	// The page is JavaScript: a revision it cannot hold exactly would be refused forever.
+	if again.Revision >= 1<<53 {
+		t.Fatalf("revision %d does not survive a JavaScript number (2^53)", again.Revision)
+	}
+	raw, err := json.Marshal(again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var viaFloat struct {
+		Revision float64 `json:"revision"`
+	}
+	if err := json.Unmarshal(raw, &viaFloat); err != nil || int64(viaFloat.Revision) != again.Revision {
+		t.Fatalf("revision %d came back as %v through a float64: %v", again.Revision, viaFloat.Revision, err)
+	}
 	if err := s.Reviewed(rec.ID, rec.Revision); !errors.Is(err, ErrChanged) {
 		t.Fatalf("a page holding the old revision: %v, want ErrChanged", err)
 	}
 	if err := s.Reviewed(rec.ID, again.Revision); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// R26: text that was cut to its tail (a leading "…") cannot tell two different
+// values apart, so a flag carrying it has no fingerprint and flags every time.
+func TestStoreFingerprintNeedsUntruncatedPathAndTarget(t *testing.T) {
+	tail := strings.Repeat("t", 1100)
+	linkTo := func(head string) Flag {
+		return Flag{Path: "ln", Classes: []Class{ClassSymlinkOut}, Detail: "out", Target: SanitizePath(head + tail)}
+	}
+	hashedAt := func(head string) Flag {
+		return Flag{Path: SanitizePath(head + tail + ".pdf"), Classes: []Class{ClassMismatch}, Detail: "ELF", SHA256: strings.Repeat("d4", 32)}
+	}
+	for name, mk := range map[string]func(string) Flag{"symlink target": linkTo, "path": hashedAt} {
+		t.Run(name, func(t *testing.T) {
+			a, b := mk("/etc/a/"), mk("/home/u/b/")
+			if !strings.HasPrefix(a.Path+a.Target, "…") && !strings.Contains(a.Path+a.Target, "…") {
+				t.Fatal("fixture: the value must have been cut")
+			}
+			if a.Path != b.Path || a.Target != b.Target {
+				t.Fatal("fixture: after the cut the two values are the same text, which is the hazard")
+			}
+			if Fingerprint(a) != "" || Fingerprint(b) != "" {
+				t.Fatalf("a truncated value must give no fingerprint: %q %q", Fingerprint(a), Fingerprint(b))
+			}
+			s := newStore(t)
+			key, base := InPlaceKey("/ws"), Record{Kind: KindInPlace, Workspace: "/ws"}
+			rec, err := s.Merge(key, base, time.Unix(1, 0), Report{Flags: []Flag{a}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reviewOf(t, s, rec)
+			rec, n, err := s.MergeScan(key, base, time.Unix(2, 0), Report{Flags: []Flag{b}})
+			if err != nil || len(rec.Flags) != 1 || n != 1 {
+				t.Fatalf("a swapped value with the same tail must flag: %+v new=%d %v", rec.Flags, n, err)
+			}
+		})
+	}
+	// Short values keep their fingerprints.
+	if Fingerprint(Flag{Path: "ln", Classes: []Class{ClassSymlinkOut}, Target: "/etc"}) == "" {
+		t.Fatal("a short link lost its fingerprint")
 	}
 }
 
