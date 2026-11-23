@@ -179,6 +179,35 @@ test("a folded explorer is not unfolded, and the file is revealed when the strip
   assert.deepStrictEqual(d.st.reveals.map((r) => r.p), ["/w/a/f.go"]);
 });
 
+test("the strip opening the folded explorer reveals at once, though it puts focus in the tree (dockRevealNow)", async () => {
+  const d = dock();
+  d.drawer.dataset.folded = "1";
+  d.open("/w/a/f.go");
+  d.run("dockRevealSync()");
+  await d.flush();
+  assert.deepStrictEqual(d.st.reveals, []);
+  d.drawer.dataset.treeOpen = "1";
+  d.ctx.document.activeElement = d.treeRow; // dockStripOpen focuses the tree's Tab stop
+  const ok = await d.run("dockRevealNow()");
+  assert.strictEqual(ok, true);
+  assert.deepStrictEqual(d.st.reveals.map((r) => [r.p, r.opts.auto]), [["/w/a/f.go", true]]);
+  d.run("dockRevealSync()");
+  await d.flush();
+  assert.strictEqual(d.st.reveals.length, 1, "dealt with: the sync after it adds nothing");
+  const off = dock({ pref: "0" });
+  off.open("/w/a/f.go");
+  assert.strictEqual(await off.run("dockRevealNow()"), false, "off: the strip only opens the column");
+  assert.deepStrictEqual(off.st.reveals, []);
+});
+
+test("dockStripOpen focuses the tree at once and hands focus to the revealed row when the reveal lands (source pin)", () => {
+  const s = src("app.js");
+  const at = s.indexOf("function dockStripOpen(");
+  const body = s.slice(at, s.indexOf("\n}\n", at));
+  assert.match(body, /dockRevealNow\(\)/);
+  assert.match(body, /document\.activeElement === to/, "only when the user has not moved focus meanwhile");
+});
+
 test("Reveal open file off: no reveal, but a row already on screen is selected; the ⋯ row toggles it and reveals at once", async () => {
   const d = dock({ pref: "0" });
   d.st.rows = ["/w/f.go"];

@@ -153,39 +153,54 @@ function dockRevealAfterLoad() {
   dockRevealSync();
 }
 
-async function drvRun() {
-  drvTimer = null;
-  drvQueued = "";
+// drvRun: the debounced attempt. `now` is dockRevealNow's: the tree has just been put on screen for the user, focus in it
+// included, so the hold for a user in the tree does not apply. Resolves true when the file's row was revealed.
+async function drvRun(now) {
+  if (!now) {
+    drvTimer = null;
+    drvQueued = "";
+  }
   const want = dockRevealWant();
-  if (want === null) return;
+  if (want === null) return false;
   const sig = drvSig(want);
-  if (sig === drvDone) return;
+  if (sig === drvDone && !now) return false;
   const root = ftRoot();
   let where = null;
   if (ftRevealTarget(want, null) === null) {
     where = await drvWhereOf(want);
-    if (dockRevealWant() !== want || drvSig(want) !== sig) return; // moved on meanwhile: that change has its own run
+    if (dockRevealWant() !== want || drvSig(want) !== sig) return false; // moved on meanwhile: that change has its own run
   }
   const target = ftRevealTarget(want, where);
   if (target === null) {
     drvSetOutside(where && drvCanShow(want) ? { path: want, root } : null);
     drvDone = sig;
-    return;
+    return false;
   }
   drvSetOutside(null);
-  if (revealExcluded(root, target)) { drvDone = sig; return; }
+  if (revealExcluded(root, target)) { drvDone = sig; return false; }
   if (!revealPrefOn(drvStorage())) {
     // Off: nothing opens, but a row already on screen is the open file's, so it is the one selected.
     const row = ftRowFor(target);
     if (row) ftSelect(row);
     drvDone = sig;
-    return;
+    return false;
   }
-  if (!drvTreeShown()) return; // the next sync (the tree shown again) tries again
-  if (drvUserInTree()) { drvArmWait(); return; }
+  if (!now) {
+    if (!drvTreeShown()) return false; // the next sync (the tree shown again) tries again
+    if (drvUserInTree()) { drvArmWait(); return false; }
+  }
   drvDisarm();
   drvDone = sig;
-  await ftReveal(want, where ? { auto: true, where } : { auto: true });
+  return ftReveal(want, where ? { auto: true, where } : { auto: true });
+}
+
+// dockRevealNow: the folded explorer was just opened from its strip (app.js dockStripOpen), which puts focus in the tree for
+// the user: reveal the open file now rather than wait for focus to leave. Still automatic (no focus move of its own, nothing
+// stored); off when "Reveal open file" is off. Resolves true when the row was revealed.
+function dockRevealNow() {
+  if (drvTimer) { clearTimeout(drvTimer); drvTimer = null; }
+  drvQueued = "";
+  return drvRun(true);
 }
 
 // dockRevealOutside: does the breadcrumb row say "Outside this tree" for `path`? Only for the open file, once the server
