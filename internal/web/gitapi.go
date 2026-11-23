@@ -201,6 +201,7 @@ func (p fsPolicy) worktreeOf(t gitview.Target) string {
 	if fi, err := os.Lstat(t.Common); err != nil || !fi.IsDir() {
 		return ""
 	}
+	// Defence in depth, not test-covered: implied by inGitTree's check of t.Common; matters only in a race.
 	if !linkFreePath(m) {
 		return ""
 	}
