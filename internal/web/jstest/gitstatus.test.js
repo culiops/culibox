@@ -926,3 +926,25 @@ test("a status that lands ok or toomany is kept for its root; one that is unavai
 test("GIT_FETCH_MS covers the server's worst case: 5 s for a slot and 10 s for the run", () => {
   assert.equal(g.GIT_FETCH_MS, 17000);
 });
+
+test("gitIgnored: the reply's ignored paths under the tree root, as absolute paths without the folder's slash", () => {
+  const st = ok([], { ignored: ["node_modules/", "a/x.log", "sub/build/"] });
+  assert.deepEqual([...g.gitIgnored(st, "/r")].sort(), ["/r/a/x.log", "/r/node_modules", "/r/sub/build"]);
+  assert.deepEqual([...g.gitIgnored(Object.assign({}, st, { rootRel: "sub" }), "/r/sub")], ["/r/sub/build"]);
+  assert.equal(g.gitIgnored(ok([]), "/r").size, 0, "no ignored field");
+  for (const bad of [{ state: "toomany" }, { state: "unavailable" }, { rootRel: "" }, { ignored: "node_modules/" }]) {
+    assert.equal(g.gitIgnored(Object.assign({}, st, bad), "/r").size, 0, JSON.stringify(bad));
+  }
+  assert.deepEqual([...g.gitIgnored(ok([], { ignored: [7, null, { p: "x" }, "", "ok/"] }), "/r")], ["/r/ok"], "only strings that place");
+});
+
+test("gitIgnoredAt: the path itself or a folder between the root and it is ignored", () => {
+  const set = new Set(["/r/node_modules", "/r/a/x.log"]);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/node_modules/p/q.js"), true);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/node_modules"), true);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/a/x.log"), true);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/a"), false);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/node_modulesx/a.js"), false, "whole names only");
+  assert.equal(g.gitIgnoredAt(set, "/r", "/v/node_modules/a.js"), false, "outside the root");
+  assert.equal(g.gitIgnoredAt(new Set(), "/r", "/r/a"), false);
+});

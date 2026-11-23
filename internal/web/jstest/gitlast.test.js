@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  GITLAST_KEY, GITLAST_ROOTS, GITLAST_ENTRIES, GITLAST_BYTES, gitLastParse, gitLastPut, gitLastSave,
+  GITLAST_KEY, GITLAST_ROOTS, GITLAST_ENTRIES, GITLAST_IGNORED, GITLAST_BYTES, gitLastParse, gitLastPut, gitLastSave,
 } = require("../static/gitlast.js");
 
 const status = (n, extra) => Object.assign({
@@ -102,4 +102,15 @@ test("at most 8 roots, the most recently put last; save drops the oldest roots u
   const kept = [...gitLastParse(text).keys()];
   assert.ok(kept.length >= 1 && kept.length < 5);
   assert.equal(kept[kept.length - 1], "/b4", "the newest root is kept");
+});
+
+test("the status keeps its ignored paths (the tree's dimming) up to 500 strings; more, or any non-string, keeps the status without them", () => {
+  assert.equal(GITLAST_IGNORED, 500);
+  const kept = (st) => roundTrip(gitLastPut(new Map(), "/w", "status", st)).get("/w").status;
+  assert.deepEqual(kept(status(1, { ignored: ["node_modules/", "x.log"] })).ignored, ["node_modules/", "x.log"]);
+  const many = Array.from({ length: 501 }, (_, i) => "i" + i);
+  assert.equal(kept(status(1, { ignored: many })).ignored, undefined);
+  assert.equal(kept(status(1, { ignored: ["a", 7] })).ignored, undefined);
+  assert.equal(kept(status(1, { ignored: "a" })).ignored, undefined);
+  assert.equal(kept(status(1, { ignored: ["a"] })).entries.length, 1, "the marks stay either way");
 });

@@ -488,6 +488,7 @@ async function ftRenderDir(path, container, prefix, st) {
     // Marks from the status already held: a folder opened later, or a re-list
     // while a refresh is in flight, paints at once instead of waiting.
     if (typeof gitMarkRow === "function") gitMarkRow(row, full);
+    if (typeof gitIgnoreRow === "function") gitIgnoreRow(row, full);
     // Appended BEFORE the directory branch, not after it: auto-open below calls
     // row.after(childBox), and ChildNode.after() is a silent no-op while the node
     // has no parent — so an orphaned row would render its restored subtree into a

@@ -12,6 +12,7 @@
 const GITLAST_KEY = "agent-box:gitLast";
 const GITLAST_ROOTS = 8; // roots kept; the least recently written is the first one out
 const GITLAST_ENTRIES = 500; // a status with more entries keeps no marks for its root
+const GITLAST_IGNORED = 500; // a status's ignored paths (the tree's dimming): more are not kept, and the status is kept without them
 const GITLAST_ROWS = 200; // a view's rows (CHANGES_MAX)
 const GITLAST_BYTES = 200 * 1024; // the saved text, at most
 const GITLAST_CODES = new Set(["M", "A", "U", "D", "C"]);
@@ -30,6 +31,8 @@ function gitLastStatus(st) {
   if (gitLastStr(st.head)) out.head = st.head;
   if (gitLastStr(st.branch)) out.branch = st.branch;
   if (gitLastStr(st.worktreeOf)) out.worktreeOf = st.worktreeOf; // the root header's chip (dockrootchip.js)
+  const ign = st.ignored;
+  if (Array.isArray(ign) && ign.length <= GITLAST_IGNORED && ign.every(gitLastStr)) out.ignored = ign.slice();
   return out;
 }
 
@@ -133,6 +136,6 @@ function gitLastSet(root, part, value) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    GITLAST_KEY, GITLAST_ROOTS, GITLAST_ENTRIES, GITLAST_ROWS, GITLAST_BYTES, gitLastParse, gitLastPut, gitLastSave,
+    GITLAST_KEY, GITLAST_ROOTS, GITLAST_ENTRIES, GITLAST_IGNORED, GITLAST_ROWS, GITLAST_BYTES, gitLastParse, gitLastPut, gitLastSave,
   };
 }

@@ -24,6 +24,8 @@
     /* The existing tokens, remapped to the graphite palette. Colour roles:
        amber = needs-you only, green = status only, red = write/prod/destructive
        /error only. */
+    /* The dock tree (P5, mockup 1 T2). */
+    --tree-ign: #7d838a;
     --bg: #0d0f12; --panel: #14171b; --fg: #e6e8eb; --muted: #8b939e;
     --accent: #6ea8fe; --ok: #4ccf8a;
     /* Analytics chart palette (S4 Task 8; UI plan 5 Task 6, call 8): categorical, no green/amber/red (those are status colours)
@@ -1904,6 +1906,10 @@
   #drawer .ft-node.dir[aria-expanded="true"]::before { transform: rotate(90deg); }
   /* A folder's name is the text colour, not app.css's accent, so that the tint below can mean "something changed in here". */
   #drawer .ft-node.dir { color: var(--fg); }
+  /* A gitignored row (git status's ignored list, gitstatus.js gitIgnoreRow) is dimmed, 4.7:1 on --panel so it still reads
+     (P5; the mockup's 45 % measured 2.9:1). A selected one reads at full colour: the dim on the selection tint is under 4.5:1. It
+     comes before the git tints, at their strength, so a change is still the strongest signal. */
+  #drawer .ft-node.ft-ign:not(.ft-sel) > .ft-name { color: var(--tree-ign); }
   /* The git letter keeps app.css's colours (M accent, A and U ok, D and C red) and takes the kit's mono step. */
   #drawer .ft-git { min-width: 12px; padding: 0; font: var(--w-semibold) var(--t-xs)/1 var(--font-mono); }
   /* Changed names: the colour of the letter, a half step toward the text colour (mockup B1's #a9c9ff and #8fe0b4; conflicts and

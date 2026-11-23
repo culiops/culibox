@@ -25,12 +25,12 @@ function revealPrefSet(storage, on) {
 }
 
 // revealExcluded: does an automatic reveal of `path` stop short because a folder between the root and it is one of
-// REVEAL_SKIP? The root itself is not judged (a root the user picked inside node_modules is theirs), nor a path outside it.
+// REVEAL_SKIP, or one `ignoredDir` says git ignores? The root itself is not judged (a root the user picked inside node_modules is theirs), nor a path outside it.
 // The explicit Reveal in tree goes in anyway.
-function revealExcluded(root, path) {
+function revealExcluded(root, path, ignoredDir) {
   const chain = ancestorsBetween(root, path);
   if (!chain) return false;
-  return chain.some((d) => REVEAL_SKIP.has(d.slice(d.lastIndexOf("/") + 1)));
+  return chain.some((d) => REVEAL_SKIP.has(d.slice(d.lastIndexOf("/") + 1)) || (typeof ignoredDir === "function" && ignoredDir(d)));
 }
 
 // revealWant: the file the dock wants shown in the tree, from {open, tab}: the active tab's absolute host path, or null for
@@ -179,7 +179,9 @@ async function drvRun(now) {
     return false;
   }
   drvSetOutside(null);
-  if (revealExcluded(root, target)) { drvDone = sig; return false; }
+  // A gitignored folder on the way is skipped too (git status's ignored list, gitstatus.js): build output, .terraform, vendored
+  // trees. The explicit Reveal in tree goes in all the same.
+  if (revealExcluded(root, target, (d) => typeof gitIgnoredNow === "function" && gitIgnoredNow(d))) { drvDone = sig; return false; }
   if (!revealPrefOn(drvStorage())) {
     // Off: nothing opens, but a row already on screen is the open file's, so it is the one selected.
     const row = ftRowFor(target);
