@@ -44,6 +44,11 @@ type HandbackHooks interface {
 	// scan they recorded for the workspace. Either way a recorded scan earlier
 	// than since wins, so no gap between scans goes unchecked.
 	ScanInPlace(ctx context.Context, workspace string, since time.Time, sinceKnown bool) (HandbackNote, error)
+	// NotScanned records that the workspace of a session that ended was not
+	// scanned, because the path the box was made over could not be confirmed at
+	// spawn. cwd is the session's working directory as given (unresolved);
+	// since is the window the scan would have covered.
+	NotScanned(cwd string, since time.Time) (HandbackNote, error)
 }
 
 // SetHandback installs the handback hooks. Call once at boot. Nil means no
@@ -69,13 +74,15 @@ func (n *HandbackNote) copy() *HandbackNote {
 // session that runs in a box over the user's own folder (no clone, not a
 // companion shell) wrote into that folder, whatever agent it ran. It scans the
 // workspace path the box was made over, never a fresh resolution of Cwd.
-// Failures and panics are logged, never fatal: the session's exit has
-// completed either way, and hostile input must not take the daemon down.
+// A session whose workspace could not be vouched for at spawn is not walked;
+// a record says so instead. Failures and panics are logged, never fatal: the
+// session's exit has completed either way, and hostile input must not take
+// the daemon down.
 func (m *Manager) handbackWork(sess *Session) {
 	m.mu.Lock()
 	h := m.handback
 	m.mu.Unlock()
-	if h == nil || sess.Runtime != config.RuntimeBox || sess.CloneOf != "" || sess.ParentID != "" || sess.workspace == "" {
+	if h == nil || sess.Runtime != config.RuntimeBox || sess.CloneOf != "" || sess.ParentID != "" {
 		return
 	}
 	defer func() {
@@ -83,9 +90,25 @@ func (m *Manager) handbackWork(sess *Session) {
 			log.Printf("session %s: handback scan of %q stopped with an internal error: %v", sess.ID, sess.workspace, r)
 		}
 	}()
+	since := sess.Created.Add(-handbackSkew)
+	if sess.workspace == "" {
+		// spawnWorkspace could not vouch for the path: nothing is walked, but
+		// the user is told, not only the log.
+		if sess.Cwd == "" {
+			log.Printf("session %s: no workspace on record; its files are not scanned", sess.ID)
+			return
+		}
+		note, err := h.NotScanned(sess.Cwd, since)
+		if err != nil {
+			log.Printf("session %s: recording that %q was not scanned: %v", sess.ID, sess.Cwd, err)
+			return
+		}
+		sess.setHandback(&note)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), handbackScanTimeout)
 	defer cancel()
-	note, err := h.ScanInPlace(ctx, sess.workspace, sess.Created.Add(-handbackSkew), !sess.createdGuessed)
+	note, err := h.ScanInPlace(ctx, sess.workspace, since, !sess.createdGuessed)
 	if err != nil {
 		log.Printf("session %s: handback scan of %q: %v", sess.ID, sess.workspace, err)
 		return

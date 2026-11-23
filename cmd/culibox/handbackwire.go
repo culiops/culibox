@@ -74,6 +74,10 @@ const (
 	// notReachedNote is added when a walk stopped early: the window still moves
 	// on, so what it did not reach is left to the user.
 	notReachedNote = "files this scan did not reach are not checked by a later scan"
+	// notVouchedNote: the session's workspace could not be confirmed at spawn.
+	notVouchedNote = "the workspace could not be confirmed when its box started; it was not scanned"
+	// noEarlierScanNote: a box stopped over a workspace no scan had recorded.
+	noEarlierScanNote = "its box stopped with no earlier scan on record, so files it wrote were not checked"
 )
 
 // errWorkspaceMoved: the path no longer leads to the directory the box was made over.
@@ -195,6 +199,26 @@ func (h *handbackHooks) scanInPlace(ctx context.Context, workspace string, since
 	return session.HandbackNote{ID: rec.ID, Count: fresh, InPlace: true, Truncated: rep.Truncated != ""}, nil
 }
 
+// NotScanned records that the workspace of a session that ended was not
+// scanned: the box layer could not vouch for the path at spawn. It walks
+// nothing (cwd is unresolved) and keys the record on cwd as given. The window
+// stays at since, so a box-stop scan of the same path still covers it.
+func (h *handbackHooks) NotScanned(cwd string, since time.Time) (session.HandbackNote, error) {
+	return h.recordUnscanned(cwd, since, handback.ScanExit, notVouchedNote)
+}
+
+// recordUnscanned writes a record for workspace that says why nothing was
+// checked, with its window at scanAt.
+func (h *handbackHooks) recordUnscanned(workspace string, scanAt time.Time, kind, why string) (session.HandbackNote, error) {
+	key := handback.InPlaceKey(workspace)
+	base := handback.Record{Kind: handback.KindInPlace, Workspace: workspace, LastScanKind: kind}
+	rec, _, err := h.store.MergeScan(key, base, scanAt, handback.Report{Truncated: why, Incomplete: true})
+	if err != nil {
+		return session.HandbackNote{}, fmt.Errorf("cannot record that %s was not scanned: %w", workspace, err)
+	}
+	return session.HandbackNote{ID: rec.ID, InPlace: true, Truncated: true}, nil
+}
+
 func joinNotes(a, b string) string {
 	if a == "" {
 		return b
@@ -223,9 +247,12 @@ func (h *handbackHooks) safeInspect(ctx context.Context, r *os.Root, since time.
 
 // OnStop is the box layer's stop hook: a box over an in-place workspace was
 // stopped, and files its sessions wrote since the last scan are on the host.
-// It scans only a workspace that has a record (a session of ours ended there
-// and scanned it) and is not a clone: a clone's flags come from its branches.
-// Failures and panics are logged; the stop has already happened.
+// It scans a workspace that has a record (a session of ours ended there and
+// scanned it) and is not a clone: a clone's flags come from its branches. A
+// workspace with no record has no start to scan from (a box from before the
+// scan existed, or one swept at boot), so a record says it was not checked,
+// and the next stop scans from now. Failures and panics are logged; the stop
+// has already happened.
 func (h *handbackHooks) OnStop(name, workspace string) {
 	defer func() {
 		if p := recover(); p != nil {
@@ -241,6 +268,9 @@ func (h *handbackHooks) OnStop(name, workspace string) {
 		return
 	}
 	if !ok {
+		if _, err := h.recordUnscanned(workspace, h.now(), handback.ScanStop, noEarlierScanNote); err != nil {
+			log.Printf("handback: box %s stopped; %v", name, err)
+		}
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), handbackStopTimeout)

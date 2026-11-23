@@ -464,11 +464,22 @@ func TestOnStopScansInPlaceWorkspace(t *testing.T) {
 		seed(h2, ws)
 		h2.OnStop("box-1", ws) // must not panic
 	})
-	t.Run("a workspace with no record is not scanned", func(t *testing.T) {
+	// Host review 2026-11-23 (#346): no record means no start to scan from; a
+	// record says so, and the next stop scans from this one.
+	t.Run("a workspace with no record is not scanned but recorded as not checked", func(t *testing.T) {
 		h := newStubHandback(t, func(string) bool { return false })
+		at := h.clock
 		h.OnStop("box-1", ws)
 		if c := h.got(); len(c) != 0 {
 			t.Fatalf("inspect calls = %+v, want none", c)
+		}
+		r := recordOf(t, h.store, handback.InPlaceKey(ws))
+		if r.Truncated != noEarlierScanNote || !r.LastScan.Equal(at) || r.LastScanKind != handback.ScanStop || r.LastScanComplete {
+			t.Fatalf("record = %+v, want the no-earlier-scan note at %v", r, at)
+		}
+		h.OnStop("box-1", ws)
+		if c := h.got(); len(c) != 1 || !c[0].since.Equal(at) {
+			t.Fatalf("inspect calls = %+v, want the next stop to scan from %v", c, at)
 		}
 	})
 	t.Run("a clone dir is not scanned", func(t *testing.T) {
@@ -485,7 +496,37 @@ func TestOnStopScansInPlaceWorkspace(t *testing.T) {
 		if c := h.got(); len(c) != 0 {
 			t.Fatalf("inspect calls = %+v, want none", c)
 		}
+		if p, _ := h.store.Pending(); len(p) != 0 {
+			t.Fatalf("pending = %+v, want nothing recorded for an unknown path", p)
+		}
 	})
+}
+
+// Host review 2026-11-23 (#346): a session whose workspace could not be
+// confirmed is recorded as not scanned, and a box-stop scan of the same path
+// still covers the session's window.
+func TestNotScannedIsRecorded(t *testing.T) {
+	ws := realDir(t)
+	since := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	h := newStubHandback(t, func(string) bool { return false })
+	note, err := h.NotScanned(ws, since)
+	if err != nil || !note.Truncated || !note.InPlace || note.ID != handback.RecordID(handback.InPlaceKey(ws)) {
+		t.Fatalf("note = %+v, %v", note, err)
+	}
+	if c := h.got(); len(c) != 0 {
+		t.Fatalf("inspect calls = %+v, want none", c)
+	}
+	r := recordOf(t, h.store, handback.InPlaceKey(ws))
+	if r.Truncated != notVouchedNote || !r.LastScan.Equal(since) || r.LastScanComplete {
+		t.Fatalf("record = %+v", r)
+	}
+	if p, _ := h.store.Pending(); len(p) != 1 {
+		t.Fatalf("pending = %+v, want the note listed", p)
+	}
+	h.OnStop("box-1", ws)
+	if c := h.got(); len(c) != 1 || !c[0].since.Equal(since) {
+		t.Fatalf("inspect calls = %+v, want the stop scan from %v", c, since)
+	}
 }
 
 func TestReturnSummaryFlagged(t *testing.T) {

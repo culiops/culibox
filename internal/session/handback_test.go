@@ -21,11 +21,19 @@ type scanCall struct {
 }
 
 type fakeHandback struct {
-	mu     sync.Mutex
-	calls  []scanCall
-	note   HandbackNote
-	err    error
-	panics bool
+	mu         sync.Mutex
+	calls      []scanCall
+	notScanned []scanCall
+	note       HandbackNote
+	err        error
+	panics     bool
+}
+
+func (f *fakeHandback) NotScanned(cwd string, since time.Time) (HandbackNote, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notScanned = append(f.notScanned, scanCall{ws: cwd, since: since})
+	return HandbackNote{ID: "ns", InPlace: true, Truncated: true}, f.err
 }
 
 func (f *fakeHandback) ScanInPlace(_ context.Context, ws string, since time.Time, known bool) (HandbackNote, error) {
@@ -76,10 +84,9 @@ func TestHandbackWorkInPlaceOnly(t *testing.T) {
 		}
 	})
 	for name, mut := range map[string]func(*Session){
-		"clone session":         func(s *Session) { s.CloneOf = "/home/u/repo" },
-		"companion shell":       func(s *Session) { s.ParentID = "claude-1" },
-		"host-tier":             func(s *Session) { s.Runtime = config.RuntimeHost },
-		"no recorded workspace": func(s *Session) { s.workspace = "" },
+		"clone session":   func(s *Session) { s.CloneOf = "/home/u/repo" },
+		"companion shell": func(s *Session) { s.ParentID = "claude-1" },
+		"host-tier":       func(s *Session) { s.Runtime = config.RuntimeHost },
 	} {
 		t.Run(name+" is not scanned", func(t *testing.T) {
 			f := &fakeHandback{note: note}
@@ -94,6 +101,23 @@ func TestHandbackWorkInPlaceOnly(t *testing.T) {
 			}
 		})
 	}
+	// Host review 2026-11-23 (#346): a workspace that could not be vouched for
+	// at spawn leaves a record saying it was not scanned, not only a log line.
+	t.Run("no recorded workspace is recorded as not scanned", func(t *testing.T) {
+		f := &fakeHandback{note: note}
+		m := handbackManager(f)
+		s := mk(func(s *Session) { s.workspace = "" })
+		m.handbackWork(s)
+		if c := f.got(); len(c) != 0 {
+			t.Fatalf("scans = %+v, want none", c)
+		}
+		if len(f.notScanned) != 1 || f.notScanned[0].ws != ws || !f.notScanned[0].since.Equal(created.Add(-2*time.Second)) {
+			t.Fatalf("NotScanned calls = %+v, want one for %q", f.notScanned, ws)
+		}
+		if got := s.Info().Handback; got == nil || !got.Truncated || got.ID != "ns" {
+			t.Fatalf("Info().Handback = %+v, want the not-scanned note", got)
+		}
+	})
 	t.Run("a failing scan leaves no note", func(t *testing.T) {
 		f := &fakeHandback{err: errors.New("record is a symlink")}
 		m := handbackManager(f)
