@@ -68,9 +68,12 @@ type Status struct {
 	// RootRel is where the requested tree root sits inside Top (slash form,
 	// "." for Top itself). The web handler sets it per request; the runner
 	// and its cache, shared by every root of one checkout, leave it empty.
-	RootRel string  `json:"rootRel"`
-	NoHead  bool    `json:"noHead,omitempty"`
-	Entries []Entry `json:"entries"`
+	RootRel string `json:"rootRel"`
+	// WorktreeOf is the main checkout of a linked worktree ("" for a main checkout, a submodule, a bare repository's
+	// worktree). Like RootRel the web handler sets it per request, from the files git keeps; the runner leaves it empty.
+	WorktreeOf string  `json:"worktreeOf,omitempty"`
+	NoHead     bool    `json:"noHead,omitempty"`
+	Entries    []Entry `json:"entries"`
 }
 
 // BaseInfo is what branch-scoped review compares against. State is one of ok,

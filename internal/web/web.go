@@ -395,6 +395,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)
 	protected.HandleFunc("/api/fs/search", s.handleFsSearch)
 	protected.HandleFunc("/api/fs/alternates", s.handleFsAlternates)
+	protected.HandleFunc("/api/fs/where", s.handleFsWhere)
 	protected.HandleFunc("/api/fs/upload", s.handleFsUpload)
 	protected.HandleFunc("/api/fs/archive", s.handleFsArchive)
 	protected.HandleFunc("/api/fs/mkdir", s.handleFsMkdir)

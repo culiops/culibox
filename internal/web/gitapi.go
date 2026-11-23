@@ -176,6 +176,36 @@ func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, a
 	return t, abs, nil
 }
 
+// worktreeOf is the main checkout of t when t is a linked worktree of a repository that has one: its common dir is a
+// real <main>/.git directory that is not t's own. t's Top and Common already passed gitTarget (link-free, served in the
+// request's tree, no denied tree); the main checkout must be served by the fs policy in that same tree too (boxed when
+// t is, host when it is not), or it is not named. "" otherwise: a main checkout, a submodule, a bare repository's
+// worktree. Read from the filesystem only, like everything gitTarget decides.
+func (s *Server) worktreeOf(t gitview.Target) string {
+	if filepath.Base(t.Common) != ".git" {
+		return ""
+	}
+	m := filepath.Dir(t.Common)
+	if m == t.Top {
+		return ""
+	}
+	if fi, err := os.Lstat(t.Common); err != nil || !fi.IsDir() {
+		return ""
+	}
+	p, err := s.fsPolicy()
+	if err != nil {
+		return ""
+	}
+	if r, err := filepath.EvalSymlinks(m); err != nil || r != m {
+		return ""
+	}
+	got, err := p.resolve(m)
+	if err != nil || got.Strict != (t.Root != "") || (got.Strict && got.Root != t.Root) {
+		return ""
+	}
+	return m
+}
+
 // vanishedLeaf resolves path, whose resolution failed with "does not exist",
 // as a leaf under an existing directory: it returns the fs target of the PARENT
 // (what inGitTree must compare against), the resolved parent, and abs, that
@@ -372,6 +402,7 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		st = s.Git.Status(r.Context(), t)
 	}
 	st.RootRel = rootRel(t.Top, abs)
+	st.WorktreeOf = s.worktreeOf(t)
 	if st.State == "unavailable" {
 		log.Printf("git status %q: %q", t.Top, st.Reason)
 		st.Reason = gitReason(st.Reason)
