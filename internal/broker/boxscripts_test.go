@@ -1068,3 +1068,102 @@ func TestEnvListGitHubFileMissingIsFine(t *testing.T) {
 		t.Fatalf("code=%d out=%q stderr=%q", code, out, stderr)
 	}
 }
+
+// --- #360: the same scripts on Host, from the session's own dir ---
+
+// runNodeRaw is runNode without the listing overrides: the script picks its
+// own paths.
+func runNodeRaw(t *testing.T, args []string, env ...string) (string, string, int) {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	cmd := exec.Command("node", args...)
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}, env...)
+	var out, errb strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err := cmd.Run()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	return out.String(), errb.String(), code
+}
+
+func TestAgentboxEnvListUsesAgentboxDir(t *testing.T) {
+	dir := envScriptDir(t)
+	js := filepath.Join(dir, "agentbox-env.js")
+	out, stderr, code := runNodeRaw(t, []string{js, "--list"}, "AGENTBOX_DIR="+dir)
+	if code != 0 || stderr != "" || !strings.Contains(out, "grafana-cloud") {
+		t.Fatalf("AGENTBOX_DIR listing: code=%d out=%q stderr=%q", code, out, stderr)
+	}
+	// Unset: exactly what the /opt/agentbox paths give (in a box they exist).
+	o1, e1, c1 := runNodeRaw(t, []string{js, "--list"})
+	o2, e2, c2 := runNodeRaw(t, []string{js, "--list"}, "AGENTBOX_ENV_LIST_FILE=/opt/agentbox/tokens.json",
+		"AGENTBOX_ENV_AWS_FILE=/opt/agentbox/aws.json", "AGENTBOX_ENV_GITHUB_FILE=/opt/agentbox/github.json")
+	if o1 != o2 || e1 != e2 || c1 != c2 {
+		t.Fatalf("default dir is not /opt/agentbox:\n%q %q %d\n%q %q %d", o1, e1, c1, o2, e2, c2)
+	}
+	if strings.Contains(o1, "grafana-cloud") {
+		t.Fatalf("unset AGENTBOX_DIR still read %s", dir)
+	}
+	// A test override still wins over AGENTBOX_DIR.
+	none := filepath.Join(t.TempDir(), "none.json")
+	_, stderr, code = runNodeRaw(t, []string{js, "--list"}, "AGENTBOX_DIR="+dir, "AGENTBOX_ENV_LIST_FILE="+none,
+		"AGENTBOX_ENV_AWS_FILE="+none, "AGENTBOX_ENV_GITHUB_FILE="+none)
+	if code != 1 || !strings.Contains(stderr, none) {
+		t.Fatalf("override lost to AGENTBOX_DIR: code=%d stderr=%q", code, stderr)
+	}
+}
+
+func TestAgentboxEnvFetchOverHostSocket(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	e := boxSetup(t, map[string]SessionView{"h1": hostSession(), "h2": hostSession()})
+	root := shortDir(t)
+	h := hostHooks(t, root, func(l net.Listener) {
+		srv := &http.Server{Handler: e.b.Handler(), BaseContext: BaseContext}
+		go srv.Serve(l)
+		t.Cleanup(func() { srv.Close() })
+	})
+	bs := config.Bindings{Tokens: []config.StaticToken{grafanaEntry()}}
+	env, dir, err := h.HostFor("h1", bs, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range env {
+		if strings.Contains(kv, staticSecret) || strings.HasPrefix(kv, "GRAFANA_") {
+			t.Fatalf("session env carries %q", kv)
+		}
+	}
+	// Through the shim, as the agent's shell would run it.
+	cmd := exec.Command(filepath.Join(dir, "bin", "agentbox-env"), "grafana-prod", "--", "node", "-e",
+		"console.log(process.env.GRAFANA_SERVICE_ACCOUNT_TOKEN + ' ' + process.env.GRAFANA_URL)")
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), TokenEnv + "=" + tokA("h1")}, env...)
+	var errb strings.Builder
+	cmd.Stderr = &errb
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("agentbox-env: %v: %s", err, errb.String())
+	}
+	if string(out) != staticSecret+" https://grafana.example.com\n" {
+		t.Fatalf("child saw %q", out)
+	}
+	if strings.Contains(errb.String(), staticSecret) {
+		t.Fatalf("wrapper leaked the value: %q", errb.String())
+	}
+	// h1's token on h2's own socket is refused.
+	_, dir2, err := h.HostFor("h2", bs, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command(filepath.Join(dir2, "bin", "agentbox-env"), "grafana-prod", "--", "true")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), TokenEnv + "=" + tokA("h1"),
+		"AGENTBOX_BROKER=unix://" + dir2 + "/s", "AGENTBOX_DIR=" + dir2}
+	if err := cmd.Run(); err == nil {
+		t.Fatal("h1's token was honoured on h2's socket")
+	}
+}

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log"
 	"net"
+	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/culiops/culibox/internal/netlimit"
@@ -64,6 +66,9 @@ type hostSock struct {
 	l    *hostListener
 	dir  string
 	refs int
+	// hash is the binding hash of the files last written into dir (HostFor),
+	// so a re-probe can refresh every live dir of one binding. "" until then.
+	hash string
 }
 
 func newHostSockets(stateRoot, goos string) *HostSockets {
@@ -115,18 +120,58 @@ func (s *HostSockets) Acquire(sessionID string) (dir string, err error) {
 // Release drops one reference. At zero the listener closes (Go unlinks the
 // socket file); the directory stays, for the session layer to remove with the
 // rest of the session's files. A session with no references is a no-op.
-func (s *HostSockets) Release(sessionID string) {
+func (s *HostSockets) Release(sessionID string) { s.release(sessionID) }
+
+// release is Release, reporting whether the session still holds a reference
+// afterwards.
+func (s *HostSockets) release(sessionID string) (held bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	hs := s.socks[sessionID]
 	if hs == nil {
-		return
+		return false
 	}
 	if hs.refs--; hs.refs > 0 {
-		return
+		return true
 	}
 	_ = hs.l.Close()
 	delete(s.socks, sessionID)
+	return false
+}
+
+// setHash records the binding hash of the files in a held session's dir.
+func (s *HostSockets) setHash(sessionID, hash string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if hs := s.socks[sessionID]; hs != nil {
+		hs.hash = hash
+	}
+}
+
+// dirsOf is the base names of the held sessions' dirs whose files are of
+// binding hash, sorted.
+func (s *HostSockets) dirsOf(hash string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, hs := range s.socks {
+		if hs.hash == hash {
+			out = append(out, filepath.Base(hs.dir))
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// held is the set of base names of every held session's dir.
+func (s *HostSockets) held() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]bool, len(s.socks))
+	for _, hs := range s.socks {
+		out[filepath.Base(hs.dir)] = true
+	}
+	return out
 }
 
 // Close closes every listener; later Acquires fail.

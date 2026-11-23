@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/culiops/culibox/internal/awsprobe"
@@ -97,12 +98,9 @@ func StripGitHubEnv() []string {
 		"GIT_CONFIG_PARAMETERS", "GIT_ASKPASS", "SSH_ASKPASS"}
 }
 
-// EnsureBindingDir writes <stateRoot>/broker/binding-<hash>/: aws-config when
-// there is an AWS binding (or named AWS connections, which also get aws.json and
-// agentbox-env.js), agentbox-cred.js always, agentbox-gh.js, github.json and
-// agentbox-env.js when there is a GitHub binding, agentbox-env.js and tokens.json
-// when there are static tokens (PAT entries go through the gh/git helpers and do
-// not count). The bindings
+// EnsureBindingDir writes <stateRoot>/broker/binding-<hash>/ with the files of
+// bindingFiles (PAT entries go through the gh/git helpers and do not count as
+// static tokens). The bindings
 // and each token entry are validated first (a hand-edited profiles.json
 // is not re-validated at load, and Region is formatted into an INI file). With
 // only an AWS binding the directory and its contents are what they always were.
@@ -121,35 +119,55 @@ func EnsureBindingDirWith(stateRoot string, bs config.Bindings, base map[string]
 		return "", err
 	}
 	defer root.Close()
-	type file struct {
-		name string
-		data []byte
-	}
-	files := []file{{"agentbox-cred.js", clientScript}}
-	if bs.AWS != nil {
-		cfg := fmt.Sprintf("[profile agentbox]\ncredential_process = node %s/agentbox-cred.js\nregion = %s\n", BoxDir, bs.AWS.Region)
-		files = append(files, file{"aws-config", []byte(cfg)})
-	}
-	if len(bs.AWSConns) > 0 {
-		files = append(files, file{"aws-config", AWSConfigFor(bs.AWSConns)}, file{AWSListFile, AWSListing(bs.AWSConns, base)})
-	}
-	if bs.GitHub != nil {
-		files = append(files, file{"agentbox-gh.js", ghScript}, file{GitHubListFile, GitHubListing(*bs.GitHub)})
-	}
-	// The image's agentbox-env shim requires the script, so connections and a
-	// GitHub binding get it too (for --list); tokens.json only exists with tokens.
-	if len(bs.Tokens) > 0 || len(bs.AWSConns) > 0 || bs.GitHub != nil {
-		files = append(files, file{"agentbox-env.js", envScript})
-	}
-	if len(bs.Tokens) > 0 {
-		files = append(files, file{TokensFile, TokensListing(bs.Tokens)})
-	}
-	for _, f := range files {
+	for _, f := range bindingFiles(bs, base, "node "+BoxDir+"/agentbox-cred.js") {
 		if err := replaceFile(root, rel, f.name, f.data); err != nil {
 			return "", fmt.Errorf("broker: writing %s: %w", f.name, err)
 		}
 	}
 	return filepath.Join(stateRoot, rel), nil
+}
+
+// bindingFile is one file of a binding's script dir.
+type bindingFile struct {
+	name string
+	data []byte
+}
+
+// bindingFiles is the file set of a binding's script dir, shared by a box's
+// binding dir and a Host session's own dir. cred is the command that runs
+// agentbox-cred.js as aws-config's credential_process names it: the box's
+// fixed path, or a Host dir's single-quoted one. aws-config when there is an
+// AWS binding (or named AWS connections, which also get aws.json and
+// agentbox-env.js), agentbox-cred.js always, agentbox-gh.js, github.json and
+// agentbox-env.js when there is a GitHub binding, agentbox-env.js and
+// tokens.json when there are static tokens.
+func bindingFiles(bs config.Bindings, base map[string]awsprobe.Result, cred string) []bindingFile {
+	files := []bindingFile{{"agentbox-cred.js", clientScript}}
+	if bs.AWS != nil {
+		cfg := fmt.Sprintf("[profile agentbox]\ncredential_process = %s\nregion = %s\n", cred, bs.AWS.Region)
+		files = append(files, bindingFile{"aws-config", []byte(cfg)})
+	}
+	if len(bs.AWSConns) > 0 {
+		files = append(files, bindingFile{"aws-config", awsConfigFor(bs.AWSConns, cred)},
+			bindingFile{AWSListFile, AWSListing(bs.AWSConns, base)})
+	}
+	if bs.GitHub != nil {
+		files = append(files, bindingFile{"agentbox-gh.js", ghScript}, bindingFile{GitHubListFile, GitHubListing(*bs.GitHub)})
+	}
+	// The image's agentbox-env shim requires the script, so connections and a
+	// GitHub binding get it too (for --list); tokens.json only exists with tokens.
+	if hasEnvScript(bs) {
+		files = append(files, bindingFile{"agentbox-env.js", envScript})
+	}
+	if len(bs.Tokens) > 0 {
+		files = append(files, bindingFile{TokensFile, TokensListing(bs.Tokens)})
+	}
+	return files
+}
+
+// hasEnvScript: the binding's script dir holds agentbox-env.js.
+func hasEnvScript(bs config.Bindings) bool {
+	return len(bs.Tokens) > 0 || len(bs.AWSConns) > 0 || bs.GitHub != nil
 }
 
 // openBindingDir validates the bindings, then opens the state root and makes
@@ -225,16 +243,18 @@ func WriteAWSListing(stateRoot string, bs config.Bindings, base map[string]awspr
 		return fmt.Errorf("broker: opening state root: %w", err)
 	}
 	defer root.Close()
-	rel := filepath.Join("broker", "binding-"+bs.Hash())
+	return writeAWSListingIn(root, filepath.Join("broker", "binding-"+bs.Hash()), bs, base)
+}
+
+// writeAWSListingIn rewrites aws.json and agentbox-env.js in rel, an existing
+// plain directory of root (a binding dir or a Host session's dir).
+func writeAWSListingIn(root *os.Root, rel string, bs config.Bindings, base map[string]awsprobe.Result) error {
 	if fi, err := root.Lstat(rel); err != nil || !fi.IsDir() {
 		return fmt.Errorf("broker: %s is not a plain directory", rel)
 	}
 	// The env script goes too: a box spawned before the base-role probe has an
 	// old one, and the re-probe would otherwise leave its --list output stale.
-	for _, f := range []struct {
-		name string
-		data []byte
-	}{{"agentbox-env.js", envScript}, {AWSListFile, AWSListing(bs.AWSConns, base)}} {
+	for _, f := range []bindingFile{{"agentbox-env.js", envScript}, {AWSListFile, AWSListing(bs.AWSConns, base)}} {
 		if err := replaceFile(root, rel, f.name, f.data); err != nil {
 			return fmt.Errorf("broker: writing %s: %w", f.name, err)
 		}
@@ -247,12 +267,18 @@ func WriteAWSListing(stateRoot string, bs config.Bindings, base map[string]awspr
 // profile per connection, sorted by name, each asking the broker for that
 // connection. Names and regions are validated by the caller (EnsureBindingDir).
 func AWSConfigFor(conns []config.AWSConnection) []byte {
+	return awsConfigFor(conns, "node "+BoxDir+"/agentbox-cred.js")
+}
+
+// awsConfigFor is AWSConfigFor with cred, the command that runs
+// agentbox-cred.js (already shell-quoted where it has to be).
+func awsConfigFor(conns []config.AWSConnection, cred string) []byte {
 	sorted := slices.Clone(conns)
 	slices.SortFunc(sorted, func(a, b config.AWSConnection) int { return strings.Compare(a.Name, b.Name) })
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "[default]\ncredential_process = node %s/agentbox-cred.js aws\n", BoxDir)
+	fmt.Fprintf(&sb, "[default]\ncredential_process = %s aws\n", cred)
 	for _, c := range sorted {
-		fmt.Fprintf(&sb, "\n[profile %s]\ncredential_process = node %s/agentbox-cred.js aws %s\nregion = %s\n", c.Name, BoxDir, c.Name, c.Region)
+		fmt.Fprintf(&sb, "\n[profile %s]\ncredential_process = %s aws %s\nregion = %s\n", c.Name, cred, c.Name, c.Region)
 	}
 	return []byte(sb.String())
 }
@@ -415,12 +441,21 @@ func WriteSessionMCP(stateRoot string, bs config.Bindings, key string, doc []byt
 // first (ENOENT, a failed spawn). O_EXCL refuses anything already at the temp
 // path, a planted symlink included; the temp file is removed on any failure.
 func replaceFile(root *os.Root, dir, name string, data []byte) error {
+	return replaceFileMode(root, dir, name, data, 0o600)
+}
+
+// replaceFileMode is replaceFile for a file of mode perm (a Host session's
+// shims are 0700); a mode other than 0600 is set explicitly, whatever the umask.
+func replaceFileMode(root *os.Root, dir, name string, data []byte, perm os.FileMode) error {
 	tmp := filepath.Join(dir, "."+name+"."+NewNonce()+".tmp")
-	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 	if err != nil {
 		return err
 	}
 	_, err = f.Write(data)
+	if err == nil && perm != 0o600 {
+		err = f.Chmod(perm)
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -438,10 +473,27 @@ func replaceFile(root *os.Root, dir, name string, data []byte) error {
 // and GitHubEnv when there is a GitHub binding. The per-session token is added
 // by the session layer, not here.
 func BoxEnv(bs config.Bindings, boxURL string) []string {
+	env := awsEnv(bs, BoxDir+"/aws-config")
+	env = append(env, "AGENTBOX_BROKER="+boxURL)
+	if bs.AWS != nil || len(bs.AWSConns) > 0 {
+		env = append(env, tfPlanNoLock)
+	}
+	if bs.GitHub != nil {
+		env = append(env, GitHubEnv(*bs.GitHub)...)
+	}
+	return env
+}
+
+// tfPlanNoLock: plan never takes the state lock, M3a is strictly read-only.
+const tfPlanNoLock = "TF_CLI_ARGS_plan=-lock=false"
+
+// awsEnv is the AWS block of a bound session's env; configFile is the path of
+// its aws-config as the session sees it.
+func awsEnv(bs config.Bindings, configFile string) []string {
 	var env []string
 	if bs.AWS != nil {
 		env = append(env,
-			"AWS_CONFIG_FILE="+BoxDir+"/aws-config",
+			"AWS_CONFIG_FILE="+configFile,
 			"AWS_PROFILE=agentbox",
 			"AWS_REGION="+bs.AWS.Region,
 			"AWS_DEFAULT_REGION="+bs.AWS.Region)
@@ -450,20 +502,13 @@ func BoxEnv(bs config.Bindings, boxURL string) []string {
 		// A profile selector only when there is nothing to choose; a region only
 		// when every connection shares it (an AWS_REGION would override each
 		// profile's own region). Otherwise the SDK takes both from the profile.
-		env = append(env, "AWS_CONFIG_FILE="+BoxDir+"/aws-config")
+		env = append(env, "AWS_CONFIG_FILE="+configFile)
 		if len(bs.AWSConns) == 1 {
 			env = append(env, "AWS_PROFILE="+bs.AWSConns[0].Name)
 		}
 		if r := config.AWSConnectionsRegion(bs.AWSConns); r != "" {
 			env = append(env, "AWS_REGION="+r, "AWS_DEFAULT_REGION="+r)
 		}
-	}
-	env = append(env, "AGENTBOX_BROKER="+boxURL)
-	if bs.AWS != nil || len(bs.AWSConns) > 0 {
-		env = append(env, "TF_CLI_ARGS_plan=-lock=false") // plan never takes the state lock: M3a is strictly read-only
-	}
-	if bs.GitHub != nil {
-		env = append(env, GitHubEnv(*bs.GitHub)...)
 	}
 	return env
 }
@@ -473,19 +518,30 @@ func BoxEnv(bs config.Bindings, boxURL string) []string {
 // stores nothing; gh keeps its config in a throwaway dir and never prompts. No
 // token is in this env: both fetch one over the broker socket when they need it.
 func GitHubEnv(g config.GitHubBinding) []string {
+	return gitHubEnv(g, "node "+BoxDir+"/agentbox-cred.js", GHConfigDir, nil)
+}
+
+// gitHubEnv is GitHubEnv with cred the command that runs agentbox-cred.js,
+// ghDir gh's config dir, and extra git config pairs after the helper's two.
+func gitHubEnv(g config.GitHubBinding, cred, ghDir string, extra [][2]string) []string {
 	owners := make([]string, len(g.Owners))
 	for i, o := range g.Owners {
 		owners[i] = o.Owner
 	}
-	return []string{
-		"GIT_CONFIG_COUNT=2",
+	env := []string{
+		"GIT_CONFIG_COUNT=" + strconv.Itoa(2+len(extra)),
 		"GIT_CONFIG_KEY_0=credential.https://github.com.helper",
-		"GIT_CONFIG_VALUE_0=!node " + BoxDir + "/agentbox-cred.js github-git",
+		"GIT_CONFIG_VALUE_0=!" + cred + " github-git",
 		"GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath",
 		"GIT_CONFIG_VALUE_1=true",
-		"GIT_TERMINAL_PROMPT=0",
-		"GH_CONFIG_DIR=" + GHConfigDir,
-		"GH_PROMPT_DISABLED=1",
-		"AGENTBOX_GH_OWNERS=" + strings.Join(owners, ","),
 	}
+	for i, kv := range extra {
+		n := strconv.Itoa(2 + i)
+		env = append(env, "GIT_CONFIG_KEY_"+n+"="+kv[0], "GIT_CONFIG_VALUE_"+n+"="+kv[1])
+	}
+	return append(env,
+		"GIT_TERMINAL_PROMPT=0",
+		"GH_CONFIG_DIR="+ghDir,
+		"GH_PROMPT_DISABLED=1",
+		"AGENTBOX_GH_OWNERS="+strings.Join(owners, ","))
 }

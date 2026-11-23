@@ -14,7 +14,8 @@ const os = require('os');
 
 const ep = process.env.AGENTBOX_BROKER || '';
 const tok = process.env.AGENTBOX_BROKER_TOKEN || '';
-// AGENTBOX_GH_REAL is a test-only override of the real gh's path.
+// AGENTBOX_GH_REAL is the real gh's path. A box never sets it (the image's gh
+// is the default); a Host session sets it to the gh on its PATH. Tests use it too.
 const realGh = process.env.AGENTBOX_GH_REAL || '/opt/gh/bin/gh';
 
 function fail(msg) {

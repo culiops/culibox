@@ -776,6 +776,22 @@ func TestWithGitPushRewrite(t *testing.T) {
 	}
 }
 
+// A Host session's GitHub env already holds four entries (the helper pair and
+// the two SSH-to-HTTPS rewrites): the push rewrite goes after them, at 4, and
+// leaves them as they were.
+func TestClonePushRewriteAppendsAfterHostRewrites(t *testing.T) {
+	in := []string{"GIT_CONFIG_COUNT=4",
+		"GIT_CONFIG_KEY_0=credential.https://github.com.helper", "GIT_CONFIG_VALUE_0=!node '/d/agentbox-cred.js' github-git",
+		"GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath", "GIT_CONFIG_VALUE_1=true",
+		"GIT_CONFIG_KEY_2=url.https://github.com/.insteadOf", "GIT_CONFIG_VALUE_2=git@github.com:",
+		"GIT_CONFIG_KEY_3=url.https://github.com/.insteadOf", "GIT_CONFIG_VALUE_3=ssh://git@github.com/"}
+	want := append([]string{"GIT_CONFIG_COUNT=5"}, in[1:]...)
+	want = append(want, "GIT_CONFIG_KEY_4=url.https://github.com/o/r.git.pushInsteadOf", "GIT_CONFIG_VALUE_4=/of")
+	if got := withGitPushRewrite(slices.Clone(in), "/of", "o/r"); !slices.Equal(got, want) {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+
 func TestCloneSpawnRefreshesAfterPrepare(t *testing.T) {
 	l, dir := testCloneLauncher(t, config.RuntimeBox)
 	order := &callLog{}
