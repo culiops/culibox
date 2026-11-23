@@ -45,7 +45,7 @@ func altReq(s *Server, base, rel string) *httptest.ResponseRecorder {
 }
 
 // altRepo makes a main checkout at top with live linked worktrees named names
-// under .claude/worktrees, returning their dirs.
+// under .claude/worktrees, registered in .git/worktrees as git does, returning their dirs.
 func altRepo(t *testing.T, top string, names ...string) []string {
 	t.Helper()
 	mainRepo(t, top)
@@ -55,6 +55,7 @@ func altRepo(t *testing.T, top string, names ...string) []string {
 		mustMkdirAll(t, gd)
 		wt := filepath.Join(top, ".claude", "worktrees", n)
 		mustWrite(t, filepath.Join(wt, ".git"), "gitdir: "+gd+"\n")
+		mustWrite(t, filepath.Join(gd, "gitdir"), filepath.Join(wt, ".git")+"\n") // git's registry: the pointer back
 		out = append(out, wt)
 	}
 	return out
@@ -205,6 +206,43 @@ func TestAltBoxedBaseInWorktreeFindsMain(t *testing.T) {
 	got := altGet(t, s, wts[0], "docs/p.md")
 	if len(got) != 1 || got[0].Path != f || got[0].Worktree != "" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// A worktree beside the repository (git worktree add ../x), not under .claude/worktrees, is a checkout too.
+func TestFsAlternatesSiblingWorktree(t *testing.T) {
+	s, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	altRepo(t, repo)
+	gd := filepath.Join(repo, ".git", "worktrees", "side")
+	wt := filepath.Join(h, "repo-side")
+	mustWrite(t, filepath.Join(gd, "gitdir"), filepath.Join(wt, ".git")+"\n")
+	mustWrite(t, filepath.Join(wt, ".git"), "gitdir: "+gd+"\n")
+	f := filepath.Join(wt, "f.txt")
+	mustWrite(t, f)
+	got := altGet(t, s, repo, "f.txt")
+	if len(got) != 1 || got[0].Path != f || got[0].Worktree != "repo-side" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// A registered worktree outside every served root is never offered (and nothing in the answer says it exists).
+func TestFsAlternatesWorktreeOutsideRoots(t *testing.T) {
+	s, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	altRepo(t, repo)
+	out, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gd := filepath.Join(repo, ".git", "worktrees", "far")
+	wt := filepath.Join(out, "far")
+	mustWrite(t, filepath.Join(gd, "gitdir"), filepath.Join(wt, ".git")+"\n")
+	mustWrite(t, filepath.Join(wt, ".git"), "gitdir: "+gd+"\n")
+	mustWrite(t, filepath.Join(wt, "f.txt"))
+	rr := altReq(s, repo, "f.txt")
+	if rr.Code != http.StatusOK || strings.TrimSpace(rr.Body.String()) != `{"candidates":[]}` {
+		t.Fatalf("code %d body %s", rr.Code, rr.Body)
 	}
 }
 

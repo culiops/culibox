@@ -20,8 +20,8 @@ type altCandidate struct {
 
 // handleFsAlternates serves GET /api/fs/alternates?base=<abs dir>&rel=<relative>:
 // where rel (a path an agent printed relative to base) exists in the OTHER
-// checkouts of base's repository: the main checkout and the live linked
-// worktrees under <repo>/.claude/worktrees, newest first. A path printed in one
+// checkouts of base's repository: the main checkout and every live linked
+// worktree git has registered (gitrepo.Worktrees), newest first. A path printed in one
 // checkout is clicked in another (a subagent works in a worktree and prints
 // paths relative to the main checkout, or the agent moves between them), joins
 // onto the wrong tree and finds nothing. The main checkout's candidate has
@@ -86,7 +86,7 @@ func (s *Server) altCandidates(base, rel string) ([]altCandidate, bool) {
 	// worktrees. The checkout base lies in is never offered.
 	type checkout struct{ dir, name string }
 	cks := []checkout{{root, ""}}
-	for _, wt := range gitrepo.LinkedWorktrees(root, repo.Common, maxAltWorktrees) {
+	for _, wt := range gitrepo.Worktrees(repo.Common, maxAltWorktrees) {
 		cks = append(cks, checkout{wt, filepath.Base(wt)})
 	}
 	out := []altCandidate{}
@@ -94,9 +94,9 @@ func (s *Server) altCandidates(base, rel string) ([]altCandidate, bool) {
 		if ck.dir == repo.Top {
 			continue
 		}
-		// LinkedWorktrees follows a linked .claude or .claude/worktrees; a
-		// checkout reached through any link is not served.
-		if r, err := filepath.EvalSymlinks(ck.dir); err != nil || r != ck.dir {
+		// A worktree's dir comes from a text file the repository's owner writes: a checkout reached through any
+		// link is not served, nor one the fs policy does not serve in the request's own tree.
+		if r, err := filepath.EvalSymlinks(ck.dir); err != nil || r != ck.dir || !p.inGitTree(req, ck.dir) {
 			continue
 		}
 		cand := filepath.Join(ck.dir, prefix, rel)

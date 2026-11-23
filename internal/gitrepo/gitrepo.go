@@ -110,50 +110,88 @@ func CheckoutOf(dir string) (common, wtRoot string, ok bool) {
 	return r.Common, "", true
 }
 
-// LinkedWorktrees lists the live linked worktrees of the repository whose common
-// git dir is common, as absolute dirs root/.claude/worktrees/<name>, sorted by
-// name. At most max directory entries are READ (the directory is opened and read
-// with ReadDir(max), in directory order, so a directory of millions of entries
-// costs max of them, not all); the entries read are then sorted. An entry counts only if it is
-// a real directory (Lstat: a symlink never is), its .git is a regular file naming
-// a gitdir directly under common/worktrees, and that gitdir exists.
-func LinkedWorktrees(root, common string, max int) []string {
+// maxGitdirBytes bounds a pointer file read: a path longer than this is no checkout git wrote.
+const maxGitdirBytes = 4096
+
+// Worktrees lists the live linked worktrees of the repository whose common git dir is common, wherever they live
+// (beside the repository, under .worktrees or .claude/worktrees), as their checkout dirs, sorted. It reads git's own
+// registry, <common>/worktrees/<name>/gitdir, as text: never a git process. Every file there is written by whoever owns
+// the repository, so each entry must hold up both ways before it counts:
+//   - <common>/worktrees is a real directory (not a link), read with ReadDir(max): at most max entries are READ;
+//   - <name> is a real directory, its gitdir a regular file (opened O_NOFOLLOW|O_NONBLOCK, judged on the fd) of at most
+//     maxGitdirBytes, holding a path ending in /.git (a relative one is read from <common>/worktrees/<name>, as git does);
+//   - the checkout dir that path names is a real directory, not a link;
+//   - that checkout's own .git file points back at <common>/worktrees/<name>.
+//
+// A pointer to any other place (/etc, another repository) fails the last check. The caller still decides whether a
+// checkout is one it may show (the fs policy); this only says which ones git has.
+func Worktrees(common string, max int) []string {
 	if max <= 0 {
 		return nil
 	}
-	base := filepath.Join(root, ".claude", "worktrees")
-	d, err := os.Open(base)
+	common = filepath.Clean(common)
+	reg := filepath.Join(common, "worktrees")
+	if fi, err := os.Lstat(reg); err != nil || !fi.IsDir() {
+		return nil
+	}
+	d, err := os.Open(reg)
 	if err != nil {
 		return nil
 	}
 	defer d.Close()
 	// A short read or an error mid-read still leaves the entries read so far.
 	ents, _ := d.ReadDir(max)
-	wtParent := filepath.Join(common, "worktrees")
 	var out []string
 	for _, e := range ents {
-		dir := filepath.Join(base, e.Name())
-		if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		gd := filepath.Join(reg, e.Name())
+		if fi, err := os.Lstat(gd); err != nil || !fi.IsDir() {
 			continue
 		}
-		gitdir, ok := ReadGitFile(filepath.Join(dir, ".git"))
-		if !ok || gitdir == "" {
+		dotgit, ok := readPointer(filepath.Join(gd, "gitdir"))
+		if !ok {
 			continue
 		}
-		if !filepath.IsAbs(gitdir) {
-			gitdir = filepath.Join(dir, gitdir)
+		if !filepath.IsAbs(dotgit) {
+			dotgit = filepath.Join(gd, dotgit)
 		}
-		gitdir = filepath.Clean(gitdir)
-		if filepath.Dir(gitdir) != wtParent {
+		dotgit = filepath.Clean(dotgit)
+		if filepath.Base(dotgit) != ".git" {
 			continue
 		}
-		if fi, err := os.Stat(gitdir); err != nil || !fi.IsDir() {
+		wt := filepath.Dir(dotgit)
+		if fi, err := os.Lstat(wt); err != nil || !fi.IsDir() {
 			continue
 		}
-		out = append(out, dir)
+		back, ok := ReadGitFile(dotgit)
+		if !ok || back == "" {
+			continue
+		}
+		if !filepath.IsAbs(back) {
+			back = filepath.Join(wt, back)
+		}
+		if filepath.Clean(back) != gd {
+			continue
+		}
+		out = append(out, wt)
 	}
 	sort.Strings(out)
 	return out
+}
+
+// readPointer reads a one-line pointer file (gitdir), trimmed; ok=false for anything but a regular file of at most
+// maxGitdirBytes with something in it.
+func readPointer(p string) (string, bool) {
+	f, ok := OpenRegular(p)
+	if !ok {
+		return "", false
+	}
+	defer f.Close()
+	b, _ := io.ReadAll(io.LimitReader(f, maxGitdirBytes+1))
+	if len(b) > maxGitdirBytes {
+		return "", false
+	}
+	v := strings.TrimSpace(string(b))
+	return v, v != ""
 }
 
 // ReadGitFile returns the gitdir a .git FILE points at; ok=false for anything
