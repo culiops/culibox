@@ -203,6 +203,7 @@ class EditorTab {
     this.dg = null;             // editordiff.js: the request slot, the gutter's debounce and decorations
     this.modeSeg = null;        // the Inline | Side by side control, shown while in Changes: {el, inline, side}
     this.seg = null;            // the Code | Changes toggle in the bar (Preview | Source | Changes for markdown): {el, preview, code, changes}
+    this.earlyText = null;      // a markdown file's read text while Monaco is still loading (editorMdEarly), else null
     this.md = null;             // editormd.js: a markdown file's view and its Preview pane ({view, pane, text, timer, sub, top, live})
     this.img = null;            // imagediff.js: an image's Image | Changes toggle and its comparer ({seg, on, view}), built with the bar
 
@@ -310,7 +311,7 @@ class EditorTab {
   paint() {
     if (this.disposed) return;
     const ready = !!this.model && !this.inner;
-    this.seg.el.hidden = !ready;
+    this.seg.el.hidden = !(ready || (this.earlyText !== null && !this.inner)); // an early Preview has its toggle (Source says "loading…")
     this.moreBtn.hidden = !(ready || this.inner); // a view that is not text has its own status bar (DockFileView), so sbEl is for text only
     this.sbEl.hidden = !ready;
     const why = this.readOnlyWhy();
@@ -371,7 +372,19 @@ class EditorTab {
     const dock = dockKindOf(extOf(this.path));
     if (dock !== "text") { this.loadView(dock, seq); return; }
     const url = this.box ? boxFileURL(this.box, this.path) : undefined;
-    let [res, mon] = await Promise.all([fsRead(this.path, url), loadMonaco().then((m) => ({ m }), (err) => ({ err }))]);
+    const monaco = loadMonaco().then((m) => ({ m }), (err) => ({ err }));
+    let res = await fsRead(this.path, url);
+    if (this.disposed || seq !== this.loadSeq) return;
+    // A markdown file opening in Preview does not wait for Monaco (Files dock P1): its read text is drawn now (editorMdEarly), and the
+    // model made below from the same text finds it drawn. Monaco already up, Changes asked for, or anything but a readable text file:
+    // the flow below, as for any other file.
+    const readMode = res.ok && res.data ? editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 }) : "";
+    if (!dockMonaco && readMode && readMode !== "image" && readMode !== "binary" && !this.pendingChanges && editorMdIs(this) && editorMdView(this) === "preview") {
+      this.earlyText = res.data.content || "";
+      editorMdEarly(this);
+      this.paint();
+    }
+    const mon = await monaco;
     if (this.disposed || seq !== this.loadSeq) return;
     const alt = first ? this.alt : null; // the lookup is for the first read only: a file deleted later is a deletion
     this.alt = null;
@@ -396,10 +409,13 @@ class EditorTab {
     const mode = this.gone ? "read" : editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 });
     if (mode === "image" || mode === "binary") { this.mountInner(mode, res.data); return; }
     if (mon.err) {
+      this.earlyText = null;
+      editorMdDrop(this); // an early Preview gives the body back for the sentence
       // The next open tries again (loadMonaco forgets a failure), so say what failed rather than only "reload".
       showToast("The editor could not be loaded: " + (mon.err.message || "unknown error"), { error: true });
       this.setBodyMessage("The editor could not be loaded. Close this tab and open the file again, or reload the page.", "err");
       this.statusText = "";
+      this.paint(); // the early Preview's toggle goes with it
       return;
     }
     dockMonaco = mon.m;
@@ -411,6 +427,7 @@ class EditorTab {
     this.version = res.data.version || "";
     this.diskText = res.data.content || "";
     this.model = dockMonaco.editor.createModel(this.diskText, monacoLang(this.path));
+    this.earlyText = null;
     this.savedAlt = this.model.getAlternativeVersionId();
     if (typeof editorNotesTrack === "function") editorNotesTrack(this); // the file's notes follow its text for as long as the tab is open (editornotes.js)
     this.contentSub = this.model.onDidChangeContent(() => this.onContent());
@@ -515,6 +532,7 @@ class EditorTab {
     this.placeBar(true);
     if (this.inner) { this.inner.onAttach(); if (editorImageOn(this)) editorImageEnter(this); return; }
     if (this.model) this.show();
+    else if (this.earlyText !== null) { editorMdEarly(this); this.paint(); } // read, and Monaco still loading
     editorSyncStart(this); // the file on disk is asked about while this tab is the one on screen
   }
 

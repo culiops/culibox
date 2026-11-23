@@ -24,6 +24,7 @@
 //   live   the pane is on screen and being read.
 //
 // editorMdAttach(tab): the tab is on screen with its model and is not in Changes (EditorTab.show): Preview takes the body, or not.
+// editorMdEarly(tab): the same for a tab whose file is read while Monaco is still loading: Preview from the read text, or "loading…".
 // editorMdDetach(tab) / editorMdDrop(tab) / editorMdDispose(tab): the tab is hidden / Preview is left for another view / the tab is closed.
 
 const EMD_DEBOUNCE_MS = 300; // the preview follows an edit of the buffer this long after its last change
@@ -185,12 +186,8 @@ function editorMdStop(m) {
   if (m.sub) { m.sub.dispose(); m.sub = null; }
 }
 
-// editorMdAttach puts Preview in the body when the tab is a markdown file whose view is Preview, and returns true; otherwise it
-// returns false and the caller gives the body to the editor (Source, any other file). A tab that comes back from being hidden
-// draws the buffer again only if it changed meanwhile, and is read at the place it was left.
-function editorMdAttach(tab) {
-  if (tab.disposed || !tab.model || tab.inner) return false;
-  if (editorMdView(tab) !== "preview") { editorMdDrop(tab); return false; }
+// editorMdShow puts the pane in the body showing `text` (drawn only if it is not what the pane already shows), at the place it was read.
+function editorMdShow(tab, text) {
   const m = tab.md;
   if (!m.pane) {
     m.pane = document.createElement("div");
@@ -201,17 +198,41 @@ function editorMdAttach(tab) {
   }
   if (!m.live) {
     tab.stashView(); // the editor, if this body has it, keeps its place for the way back
-    editorMdRender(tab);
+    editorMdRender(tab, text);
     tab.bodyEl.replaceChildren(m.pane);
     m.pane.scrollTop = m.top;
     if (m.job && m.top) { m.restore = m.top; m.restoreAt = m.pane.scrollTop; } // the document is still coming: keep putting it back
     m.live = true;
   } else {
-    editorMdRender(tab);
+    editorMdRender(tab, text);
   }
-  if (!m.sub) m.sub = tab.model.onDidChangeContent(() => editorMdSoon(tab));
   tab.takeWantedFocus(m.pane);
+}
+
+// editorMdAttach puts Preview in the body when the tab is a markdown file whose view is Preview, and returns true; otherwise it
+// returns false and the caller gives the body to the editor (Source, any other file). A tab that comes back from being hidden
+// draws the buffer again only if it changed meanwhile, and is read at the place it was left.
+function editorMdAttach(tab) {
+  if (tab.disposed || !tab.model || tab.inner) return false;
+  if (editorMdView(tab) !== "preview") { editorMdDrop(tab); return false; }
+  editorMdShow(tab, tab.model.getValue());
+  const m = tab.md;
+  if (!m.sub) m.sub = tab.model.onDidChangeContent(() => editorMdSoon(tab));
   return true;
+}
+
+// editorMdEarly: a markdown tab on screen whose file is read (tab.earlyText) while Monaco is still loading. Preview shows the read
+// text at once (it never needed the editor); Source says "loading…" until the editor is there. When the model is made from the same
+// text, editorMdAttach finds it already drawn. Nothing follows the file before the model exists: the poll of the file on disk starts
+// with the model (editorsync.js), and a change it finds then is drawn as any other.
+function editorMdEarly(tab) {
+  if (tab.disposed || tab.model || tab.inner || tab.earlyText === null || !tab.attached) return;
+  if (editorMdView(tab) !== "preview") {
+    editorMdDrop(tab);
+    tab.setBodyMessage("loading…");
+    return;
+  }
+  editorMdShow(tab, tab.earlyText);
 }
 
 // editorMdDetach: the tab is not on screen. Nothing runs for it until it is shown again; the pane stays with the place it was read at.
@@ -243,7 +264,10 @@ function editorMdPick(tab, view) {
   m.view = view;
   if (tab.diff) editorDiffSet(tab, false);
   else if (tab.attached && tab.model) tab.show();
-  else tab.paint();
+  else {
+    editorMdEarly(tab); // read, and Monaco still loading
+    tab.paint();
+  }
 }
 
 // editorMdDispose: the tab is closed. Before its model goes: the pane holds a subscription to it. The pane and its document go too,

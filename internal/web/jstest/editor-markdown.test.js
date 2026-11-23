@@ -531,3 +531,78 @@ test("a big file's draw left for Source keeps going, and is complete when Previe
   assert.deepEqual(chunkTexts(tab), ["md-chunk:one", "md-chunk:two", "md-chunk:three"]);
   assert.equal(p.st.renders.length, 1);
 });
+
+// --- Preview does not wait for Monaco (Files dock P1) ---------------------------------------------------------------------------
+// Monaco is held back by a gate; the tab is attached before its read lands, as the dock mounts it. `read` is what the read answers.
+async function early(o) {
+  let release, fail;
+  const gate = new Promise((res, rej) => { release = res; fail = rej; });
+  const p = page(Object.assign({ loadMonaco: () => gate }, o && o.over));
+  p.setRead((o && o.read) || { ok: true, status: 200, data: { kind: "text", content: DOC, version: "v1" } });
+  const tab = new p.EditorTab((o && o.path) || "/p/README.md", Object.assign({ host: p.host }, o && o.opts));
+  if (!(o && o.late)) tab.onAttach();
+  await p.settle();
+  return { p, tab, monaco: async () => { release(p.monaco); await p.settle(); }, fail: async (e) => { fail(e); await p.settle(); } };
+}
+
+test("a markdown tab shows its Preview as soon as the file is read, before Monaco; Monaco then makes the model and nothing is drawn again", async () => {
+  const { p, tab, monaco } = await early();
+  assert.equal(p.st.models.length, 0, "no model yet: Monaco is still loading");
+  assert.equal(tab.bodyEl.children[0], pane(tab), "the Preview has the body");
+  assert.equal(shown(tab), DOC, "drawn from the read text");
+  assert.equal(p.st.renders.length, 1);
+  assert.equal(tab.seg.el.hidden, false, "the toggle is there");
+  assert.deepEqual(pressed(tab), ["preview"]);
+  await monaco();
+  assert.equal(p.st.models.length, 1);
+  assert.equal(tab.model.getValue(), DOC);
+  assert.equal(p.st.renders.length, 1, "the same text: not drawn again");
+  assert.equal(tab.previewing, true);
+  assert.ok(tab.md.sub, "and it follows the buffer from now on");
+  assert.equal(tab.earlyText, null);
+});
+
+test("Source pressed before Monaco is up says loading…, then shows the editor; Preview pressed again puts the drawn document back", async () => {
+  const { p, tab, monaco } = await early();
+  const doc = pane(tab).children[0];
+  tab.seg.code.click();
+  assert.equal(tab.previewing, false);
+  assert.equal(tab.bodyEl.children[0].textContent, "loading…");
+  assert.deepEqual(pressed(tab), ["code"]);
+  tab.seg.preview.click();
+  assert.equal(tab.previewing, true);
+  assert.equal(pane(tab).children[0], doc, "not drawn again");
+  tab.seg.code.click();
+  await monaco();
+  assert.equal(tab.bodyEl.children[0], p.get("dockEditorEl"), "Source is the editor once Monaco is up");
+  assert.equal(p.st.renders.length, 1);
+});
+
+test("a tab attached only after its read shows the early Preview when it is attached", async () => {
+  const { p, tab } = await early({ late: true });
+  assert.equal(p.st.renders.length, 0, "nothing drawn for a tab off screen");
+  tab.onAttach();
+  assert.equal(tab.previewing, true);
+  assert.equal(shown(tab), DOC);
+});
+
+test("no early Preview for a file that is not markdown, a tab asked to open in Changes, or a read that failed", async () => {
+  const go = await early({ path: "/p/a.go", read: { ok: true, status: 200, data: { kind: "text", content: "package a\n", version: "v1" } } });
+  assert.equal(go.p.st.renders.length, 0);
+  assert.equal(go.tab.bodyEl.children[0].textContent, "loading…", "a code file waits for the editor, as before");
+  const ch = await early({ opts: { view: "changes" } });
+  assert.equal(ch.p.st.renders.length, 0, "Changes was asked: nothing drawn before Monaco");
+  const bad = await early({ read: { ok: false, status: 500, data: { error: "boom" } } });
+  assert.equal(bad.p.st.renders.length, 0);
+  const bin = await early({ read: { ok: true, status: 200, data: { kind: "binary", size: 9 } } });
+  assert.equal(bin.p.st.renders.length, 0);
+});
+
+test("Monaco failing while the early Preview is up says so, as before, and leaves no pane in the body", async () => {
+  const { p, tab, fail } = await early();
+  await fail(new Error("offline"));
+  assert.ok(p.st.toasts.some(([m]) => /editor could not be loaded: offline/.test(m)));
+  assert.match(tab.bodyEl.children[0].textContent, /could not be loaded/);
+  assert.equal(tab.previewing, false);
+  assert.equal(tab.seg.el.hidden, true, "no toggle for a tab that cannot show its text");
+});
