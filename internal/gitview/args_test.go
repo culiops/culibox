@@ -396,3 +396,71 @@ func TestShowArgsRefusesBadRev(t *testing.T) {
 		}
 	}
 }
+
+var blameTargets = []struct {
+	name   string
+	t      Target
+	mounts []string
+	rel    string
+}{
+	{"head", Target{Top: "/w/repo", Common: "/w/repo/.git"}, []string{"/w/repo"}, "src/a b.go"},
+	{"common outside top", Target{Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w/wt", "/w/main/.git"}, "x.txt"},
+	{"boxed", Target{Root: "/w", Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w"}, "*.go"},
+	// The path follows "--", so one that looks like an option is not one.
+	{"option-like path", Target{Top: "/w/repo", Common: "/w/repo/.git"}, []string{"/w/repo"}, "--output=/x"},
+}
+
+func TestLogLastArgsGolden(t *testing.T) {
+	uid, gid := os.Getuid(), os.Getgid()
+	for _, c := range blameTargets {
+		got := LogLastArgs(c.t, "img", "n", uid, gid, c.rel)
+		w := want(c.mounts, c.t.Top, "-c", "log.showSignature=false", "log", "-1", "--no-show-signature",
+			"--format=%H%x00%aN%x00%aE%x00%at%x00%s%x00", "--", c.rel)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, w)
+		}
+	}
+}
+
+func TestBlameArgsGolden(t *testing.T) {
+	uid, gid := os.Getuid(), os.Getgid()
+	for _, c := range blameTargets {
+		got := BlameArgs(c.t, "img", "n", uid, gid, c.rel, false)
+		w := want(c.mounts, c.t.Top, "blame", "--porcelain", "--no-textconv", "--", c.rel)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, w)
+		}
+		got = BlameArgs(c.t, "img", "n", uid, gid, c.rel, true)
+		w = want(c.mounts, c.t.Top, "blame", "--porcelain", "--no-textconv", "--ignore-revs-file", ".git-blame-ignore-revs", "--", c.rel)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s, ignore revs:\n got %q\nwant %q", c.name, got, w)
+		}
+	}
+}
+
+func TestBlameArgsKeepTheGuards(t *testing.T) {
+	tt := Target{Top: "/a", Common: "/b/.git"}
+	for _, got := range [][]string{BlameArgs(tt, "img", "n", 1, 2, "f", true), LogLastArgs(tt, "img", "n", 1, 2, "f")} {
+		for _, must := range []string{"core.fsmonitor=false", "--read-only", "core.hooksPath=/dev/null", "core.attributesFile=/dev/null"} {
+			if !slices.Contains(got, must) {
+				t.Errorf("argv lacks %q: %q", must, got)
+			}
+		}
+		for _, never := range []string{"--textconv", "--contents", "-S", "--show-signature", "--follow"} {
+			if slices.Contains(got, never) {
+				t.Errorf("argv has %q: %q", never, got)
+			}
+		}
+		if i := slices.Index(got, "--network"); i < 0 || got[i+1] != "none" {
+			t.Errorf("no --network none: %q", got)
+		}
+		for i, a := range got {
+			if a == "--mount" && !strings.HasSuffix(got[i+1], ",readonly") {
+				t.Errorf("mount %q not read-only", got[i+1])
+			}
+		}
+		if got[len(got)-2] != "--" {
+			t.Errorf("path does not follow --: %q", got)
+		}
+	}
+}
