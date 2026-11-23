@@ -13,15 +13,18 @@
 //
 // What a tab keeps here, as `tab.md`:
 //   view   "preview" | "source": which of the two the tab shows when it is not in Changes (Changes is `tab.diff`);
-//   pane   the scroller that holds the rendered document while Preview is in the body, else null;
-//   text   the buffer the pane shows (a render of the same text is skipped);
+//   pane   the scroller that holds the rendered document, kept while the tab shows Source or Changes, null until the first Preview and
+//          after the close;
+//   text   the text the pane shows or is being drawn from (a render of the same text is skipped);
+//   gen, job, drawn   the number of the latest draw, the timer of its next slice (a big file), the document complete in the pane;
+//   restore, restoreAt   the place a first draw puts the pane back at after each slice, and where it last put it (a user's scroll stops it);
 //   timer  the re-render that is 300 ms away, after an edit of the buffer;
 //   sub    the subscription to the buffer's changes, held only while the tab is on screen in Preview;
 //   top    where the pane was read, in px, kept for the way back (Source, Changes, another tab) and read from the pane while it is live;
 //   live   the pane is on screen and being read.
 //
 // editorMdAttach(tab): the tab is on screen with its model and is not in Changes (EditorTab.show): Preview takes the body, or not.
-// editorMdDetach(tab) / editorMdDrop(tab): the tab is hidden / Preview is left for another view or the tab is closed.
+// editorMdDetach(tab) / editorMdDrop(tab) / editorMdDispose(tab): the tab is hidden / Preview is left for another view / the tab is closed.
 
 const EMD_DEBOUNCE_MS = 300; // the preview follows an edit of the buffer this long after its last change
 const EMD_CHUNK_CHARS = 16384; // the source a chunk of the document holds, about (mdRenderFragment's chunkChars)
@@ -220,17 +223,14 @@ function editorMdDetach(tab) {
   editorMdStop(m);
 }
 
-// editorMdDrop: Preview is left (Source, Changes) or the tab is closed. The pane goes; the place it was read at is kept.
+// editorMdDrop: Preview is left for Source or Changes. Its redraw and its subscription go; the pane, the document drawn in it (and a
+// big file's draw still under way) and the place it was read at are kept, so coming back with the same text shows it at once instead of
+// drawing it again (editorMdRender skips a text it already drew).
 function editorMdDrop(tab) {
   const m = tab.md;
   if (!m || !m.pane) return;
   if (m.live) m.top = m.pane.scrollTop;
   editorMdStop(m);
-  if (m.job) { clearTimeout(m.job); m.job = null; }
-  m.gen++;
-  m.pane = null;
-  m.text = null;
-  m.drawn = null;
   m.live = false;
 }
 
@@ -246,7 +246,15 @@ function editorMdPick(tab, view) {
   else tab.paint();
 }
 
-// editorMdDispose: the tab is closed. Before its model goes: the pane holds a subscription to it.
+// editorMdDispose: the tab is closed. Before its model goes: the pane holds a subscription to it. The pane and its document go too,
+// and a draw under way stops.
 function editorMdDispose(tab) {
+  const m = tab.md;
+  if (!m) return;
   editorMdDrop(tab);
+  if (m.job) { clearTimeout(m.job); m.job = null; }
+  m.gen++;
+  m.pane = null;
+  m.text = null;
+  m.drawn = null;
 }

@@ -125,7 +125,7 @@ test("the status bar in Preview has no Ln/Col or indentation (mockup B4), and ha
   assert.ok(p.st.editors.length === 1);
 });
 
-test("Source gives the body to the editor at the place it was left; Preview lets go of its redraw and its subscription, and comes back at its own place", async () => {
+test("Source gives the body to the editor at the place it was left; Preview lets go of its redraw and its subscription, keeps its document, and comes back at its own place", async () => {
   const { p, tab } = await md();
   assert.ok(tab.md.sub, "Preview follows the buffer");
   pane(tab).scrollTop = 120;
@@ -134,7 +134,8 @@ test("Source gives the body to the editor at the place it was left; Preview lets
   const first = pane(tab);
   tab.seg.code.click();
   assert.equal(tab.previewing, false);
-  assert.equal(tab.md.pane, null);
+  assert.equal(tab.md.pane, first, "the drawn document is kept for the way back (Files dock P1)");
+  assert.notEqual(first.parentNode, tab.bodyEl, "but it is out of the body");
   assert.equal(tab.md.top, 120, "where Preview was read is kept");
   assert.equal(debounce(p).length, 0, "the pending redraw went with it");
   assert.equal(tab.md.sub, null, "so did the subscription to the buffer");
@@ -148,9 +149,9 @@ test("Source gives the body to the editor at the place it was left; Preview lets
   assert.equal(debounce(p).length, 0, "typing in Source costs the preview nothing");
   tab.seg.preview.click();
   assert.equal(tab.previewing, true);
-  assert.notEqual(pane(tab), first, "a new pane");
+  assert.equal(pane(tab), first, "the same pane");
   assert.equal(pane(tab).scrollTop, 120, "read where it was left");
-  assert.equal(shown(tab), "# edited more\n", "from the buffer as it is now");
+  assert.equal(shown(tab), "# edited more\n", "drawn again from the buffer as it is now: it changed in Source");
   assert.ok(tab.md.sub, "following it again");
   assert.deepEqual(pressed(tab), ["preview"]);
   assert.equal(p.get("dockEditorEl").parentNode === tab.bodyEl, false, "the editor is out of the body");
@@ -186,7 +187,7 @@ test("the editor comes back in Source with the view it had: cursor and scroll ar
   assert.equal(ed.top, 240, "put back");
 });
 
-test("Changes from Preview takes the body and drops the pane; leaving Changes returns to the view the tab had", async () => {
+test("Changes from Preview takes the body and puts the pane aside; leaving Changes returns to the view the tab had", async () => {
   const p = page();
   p.setRead({ ok: true, status: 200, data: { kind: "text", content: DOC, version: "v1" } });
   p.st.git.on = true;
@@ -198,8 +199,9 @@ test("Changes from Preview takes the body and drops the pane; leaving Changes re
   tab.seg.changes.click();
   assert.equal(p.st.diffs.length, 1, "the diff editor");
   assert.ok(tab.diff);
-  assert.equal(tab.md.pane, null, "Preview's pane is gone, not hidden under the diff");
-  assert.equal(tab.md.sub, null, "and its subscription");
+  assert.equal(tab.previewing, false, "Preview's pane is out of the body, not hidden under the diff");
+  assert.notEqual(tab.md.pane.parentNode, tab.bodyEl);
+  assert.equal(tab.md.sub, null, "and its subscription is let go");
   assert.deepEqual(pressed(tab), ["changes"]);
   assert.equal(tab.md.top, 77);
   tab.seg.preview.click();
@@ -230,7 +232,7 @@ test("a tab opened in Changes (view: changes) shows Preview behind it, and its P
   const tab = await p.open("/p/README.md", { view: "changes" });
   await p.settle();
   assert.ok(tab.diff, "Changes is up");
-  assert.equal(tab.md.pane, null);
+  assert.equal(tab.previewing, false);
   tab.showChanges(false);
   assert.equal(tab.previewing, true);
 });
@@ -475,4 +477,57 @@ test("closing a tab stops a draw under way", async () => {
   tab.dispose();
   pumpAll(p);
   assert.equal(p.st.steps, steps, "no step after the close");
+});
+
+// --- keep the render (Files dock P1) --------------------------------------------------------------------------------------------
+
+test("Preview → Source → Preview with no edit puts the same document back without drawing it again", async () => {
+  const { p, tab } = await md();
+  const first = pane(tab);
+  const doc = first.children[0];
+  const n = p.st.renders.length;
+  tab.seg.code.click();
+  tab.seg.preview.click();
+  assert.equal(p.st.renders.length, n, "not drawn again");
+  assert.equal(pane(tab), first);
+  assert.equal(pane(tab).children[0], doc, "the very same document");
+  assert.equal(tab.bodyEl.children[0], first);
+});
+
+test("Preview → Changes → back with no edit puts the same document back without drawing it again", async () => {
+  const p = page();
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: DOC, version: "v1" } });
+  p.st.git.on = true;
+  p.st.git.answer = { state: "ok", content: "# Old\n" };
+  p.setShown(true);
+  const tab = await p.open("/p/README.md");
+  await p.settle();
+  const doc = pane(tab).children[0];
+  const n = p.st.renders.length;
+  tab.seg.changes.click();
+  assert.ok(tab.diff);
+  tab.seg.preview.click();
+  assert.equal(p.st.renders.length, n);
+  assert.equal(pane(tab).children[0], doc);
+});
+
+test("a model whose text differs from what Preview drew (line endings Monaco changed) is drawn again once", async () => {
+  const { p, tab } = await md("# a\r\nb\n");
+  const n = p.st.renders.length;
+  tab.md.text = "# a\nb\n"; // what an earlier draw was given, before the model normalised it
+  tab.seg.code.click();
+  tab.seg.preview.click();
+  assert.equal(p.st.renders.length, n + 1);
+  tab.seg.code.click();
+  tab.seg.preview.click();
+  assert.equal(p.st.renders.length, n + 1, "and only once");
+});
+
+test("a big file's draw left for Source keeps going, and is complete when Preview comes back", async () => {
+  const { p, tab } = await md(BIG, { over: { performance: clock() } });
+  tab.seg.code.click();
+  pumpAll(p);
+  tab.seg.preview.click();
+  assert.deepEqual(chunkTexts(tab), ["md-chunk:one", "md-chunk:two", "md-chunk:three"]);
+  assert.equal(p.st.renders.length, 1);
 });
