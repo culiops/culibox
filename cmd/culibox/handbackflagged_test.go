@@ -43,7 +43,7 @@ func TestFlaggedViewCounts(t *testing.T) {
 	}
 
 	// Reviewed through the view drops the cache at once.
-	if err := v.Reviewed(ip.ID, ip.LastScan); err != nil {
+	if err := v.Reviewed(ip.ID, ip.Revision); err != nil {
 		t.Fatal(err)
 	}
 	if got := v.Count("", "/ws"); got != 0 {
@@ -63,7 +63,7 @@ func TestFlaggedViewCachesBetweenAsks(t *testing.T) {
 		t.Fatal("first read")
 	}
 	// Written behind the cache's back (a scan): not seen until the TTL passes.
-	if err := h.store.Reviewed(handback.RecordID(handback.InPlaceKey("/ws")), clock); err != nil {
+	if err := h.store.Reviewed(handback.RecordID(handback.InPlaceKey("/ws")), 1); err != nil {
 		t.Fatal(err)
 	}
 	if v.Count("", "/ws") != 1 {

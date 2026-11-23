@@ -722,7 +722,7 @@ func TestScanInPlaceWindowRollbackIsForIncompleteWalksOnly(t *testing.T) {
 		if !strings.Contains(rec.Truncated, "could not be read") || rec.LastScan.Before(time.Now().Add(-time.Minute)) {
 			t.Fatalf("scan 1 must advance LastScan despite the unreadable directory: %+v", rec)
 		}
-		if err := h.store.Reviewed(rec.ID, rec.LastScan); err != nil {
+		if err := h.store.Reviewed(rec.ID, rec.Revision); err != nil {
 			t.Fatal(err)
 		}
 		// Scan 2 reaches back (the exit scan looks at the last check) and
@@ -818,7 +818,7 @@ func TestScanInPlaceCountsOnlyUnreviewedFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := recordOf(t, h.store, key)
-	if err := h.store.Reviewed(rec.ID, rec.LastScan); err != nil {
+	if err := h.store.Reviewed(rec.ID, rec.Revision); err != nil {
 		t.Fatal(err)
 	}
 	note, err := h.ScanInPlace(context.Background(), ws, started, true)

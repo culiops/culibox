@@ -164,7 +164,7 @@ func TestStoreReviewedClearsKeepsLastScan(t *testing.T) {
 	if p, err := s.Pending(); err != nil || len(p) != 1 {
 		t.Fatalf("pending = %v %v", p, err)
 	}
-	if err := s.Reviewed(rec.ID, at); err != nil {
+	if err := s.Reviewed(rec.ID, rec.Revision); err != nil {
 		t.Fatal(err)
 	}
 	if p, err := s.Pending(); err != nil || len(p) != 0 {
@@ -184,7 +184,7 @@ func TestStoreReviewedClearsKeepsLastScan(t *testing.T) {
 func TestStoreReviewedRejectsBadID(t *testing.T) {
 	s := newStore(t)
 	for _, id := range []string{"../x", "", "abc", strings.Repeat("g", 32), strings.Repeat("A", 32), strings.Repeat("a", 33), "../" + strings.Repeat("a", 29)} {
-		if err := s.Reviewed(id, time.Unix(1, 0)); !errors.Is(err, ErrInvalidID) {
+		if err := s.Reviewed(id, 1); !errors.Is(err, ErrInvalidID) {
 			t.Errorf("Reviewed(%q) = %v, want ErrInvalidID", id, err)
 		}
 	}
@@ -192,7 +192,7 @@ func TestStoreReviewedRejectsBadID(t *testing.T) {
 
 func TestStoreReviewedUnknownIDIsNotFound(t *testing.T) {
 	s := newStore(t)
-	err := s.Reviewed(RecordID("unknown"), time.Unix(1, 0))
+	err := s.Reviewed(RecordID("unknown"), 1)
 	if !errors.Is(err, ErrNotFound) || !errors.Is(err, fs.ErrNotExist) || errors.Is(err, ErrInvalidID) {
 		t.Fatalf("Reviewed of a valid absent id = %v, want ErrNotFound (wrapping fs.ErrNotExist)", err)
 	}
@@ -200,7 +200,7 @@ func TestStoreReviewedUnknownIDIsNotFound(t *testing.T) {
 	if _, err := s.Merge(InPlaceKey("/w"), Record{Kind: "in-place"}, time.Unix(1, 0), Report{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Reviewed(RecordID("unknown"), time.Unix(1, 0)); !errors.Is(err, ErrNotFound) {
+	if err := s.Reviewed(RecordID("unknown"), 1); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("got %v, want ErrNotFound", err)
 	}
 }
@@ -332,7 +332,7 @@ func TestStoreRefusesBadRecordFiles(t *testing.T) {
 			if _, _, err := s.LastScan(key); err == nil {
 				t.Error("LastScan: want error")
 			}
-			if err := s.Reviewed(id, time.Unix(1, 0)); err == nil || errors.Is(err, ErrNotFound) {
+			if err := s.Reviewed(id, 1); err == nil || errors.Is(err, ErrNotFound) {
 				t.Errorf("Reviewed: want a non-NotFound error, got %v", err)
 			}
 			if _, err := s.Pending(); err == nil {
@@ -560,7 +560,7 @@ func TestStorePendingKeepsAZeroFlagRecordWithATruncatedNote(t *testing.T) {
 	if err != nil || len(p) != 1 || p[0].ID != cut.ID || len(p[0].Flags) != 0 || p[0].Truncated == "" {
 		t.Fatalf("Pending = %+v %v, want only the cut-short record", p, err)
 	}
-	if err := s.Reviewed(cut.ID, cut.LastScan); err != nil {
+	if err := s.Reviewed(cut.ID, cut.Revision); err != nil {
 		t.Fatal(err)
 	}
 	if p, err := s.Pending(); err != nil || len(p) != 0 {
@@ -570,7 +570,7 @@ func TestStorePendingKeepsAZeroFlagRecordWithATruncatedNote(t *testing.T) {
 
 func reviewOf(t *testing.T, s Store, rec Record) {
 	t.Helper()
-	if err := s.Reviewed(rec.ID, rec.LastScan); err != nil {
+	if err := s.Reviewed(rec.ID, rec.Revision); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -721,30 +721,64 @@ func TestStoreReviewedSetSurvivesReadAndHidesFromPending(t *testing.T) {
 	}
 }
 
-// R23: marking reviewed clears only what the user saw.
+// R23: marking reviewed clears only what the user saw. The record carries a
+// revision that every change to what it lists bumps, so a scan that adds flags
+// without moving LastScan (an incomplete one rolls the window back) is still seen.
 func TestStoreReviewedErrChanged(t *testing.T) {
 	s := newStore(t)
 	key, base := InPlaceKey("/ws"), Record{Kind: KindInPlace, Workspace: "/ws"}
-	t1, t2 := time.Unix(1000, 0).UTC(), time.Unix(2000, 0).UTC()
+	t1 := time.Unix(1000, 0).UTC()
 	rec, err := s.Merge(key, base, t1, Report{Flags: []Flag{fl("a", ClassArchive)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Merge(key, base, t2, Report{Flags: []Flag{fl("b", ClassArchive)}}); err != nil {
+	if rec.Revision < 1 {
+		t.Fatalf("a first record has revision %d, want at least 1", rec.Revision)
+	}
+	// An incomplete scan rolled back to the same LastScan and added a flag.
+	again, err := s.Merge(key, base, t1, Report{Flags: []Flag{fl("b", ClassArchive)}, Incomplete: true, Truncated: "time budget used up"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Reviewed(rec.ID, t1); !errors.Is(err, ErrChanged) {
-		t.Fatalf("Reviewed with a stale last_scan = %v, want ErrChanged", err)
+	if !again.LastScan.Equal(rec.LastScan) || again.Revision <= rec.Revision {
+		t.Fatalf("LastScan %v -> %v, revision %d -> %d: want the same LastScan and a higher revision", rec.LastScan, again.LastScan, rec.Revision, again.Revision)
 	}
-	if err := s.Reviewed(rec.ID, time.Time{}); !errors.Is(err, ErrChanged) {
-		t.Fatalf("Reviewed with a zero last_scan = %v, want ErrChanged", err)
+	if err := s.Reviewed(rec.ID, rec.Revision); !errors.Is(err, ErrChanged) {
+		t.Fatalf("Reviewed with a stale revision = %v, want ErrChanged", err)
+	}
+	if err := s.Reviewed(rec.ID, 0); !errors.Is(err, ErrChanged) {
+		t.Fatalf("Reviewed with revision 0 = %v, want ErrChanged", err)
 	}
 	if p, err := s.Pending(); err != nil || len(p) != 1 || len(p[0].Flags) != 2 {
 		t.Fatalf("a refused review must leave the flags: %+v %v", p, err)
 	}
-	// The same instant in another zone is the same scan.
-	if err := s.Reviewed(rec.ID, t2.In(time.FixedZone("x", 3600))); err != nil {
+	if err := s.Reviewed(rec.ID, again.Revision); err != nil {
 		t.Fatal(err)
+	}
+	// Reviewing bumps it too: a second tab holding the old revision is refused.
+	if err := s.Reviewed(rec.ID, again.Revision); !errors.Is(err, ErrChanged) {
+		t.Fatalf("a second Reviewed with the same revision = %v, want ErrChanged", err)
+	}
+}
+
+// A scan that changes nothing the user can see does not invalidate the page.
+func TestStoreRevisionIgnoresScansThatChangeNothingVisible(t *testing.T) {
+	s := newStore(t)
+	key, base := InPlaceKey("/ws"), Record{Kind: KindInPlace, Workspace: "/ws"}
+	rec, err := s.Merge(key, base, time.Unix(1, 0), Report{Flags: []Flag{fl("a", ClassArchive)}, Truncated: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, err := s.Merge(key, base, time.Unix(2, 0), Report{Flags: []Flag{fl("a", ClassArchive)}, Truncated: "t", Inspected: 9})
+	if err != nil || same.Revision != rec.Revision {
+		t.Fatalf("revision %d -> %d, want it unchanged", rec.Revision, same.Revision)
+	}
+	// An old record file without the field reads as revision 0.
+	if c := cleanRecord(Record{}, "x"); c.Revision != 0 {
+		t.Fatalf("revision = %d", c.Revision)
+	}
+	if c := cleanRecord(Record{Revision: -5}, "x"); c.Revision != 0 {
+		t.Fatalf("a negative revision on disk reads as %d, want 0", c.Revision)
 	}
 }
 

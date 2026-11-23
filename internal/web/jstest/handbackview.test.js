@@ -9,7 +9,7 @@ const { Node } = require("./fakedom.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const flag = (p, classes, more) => Object.assign({ path: p, classes, detail: "d", sha256: "", hash_note: "", target: "" }, more);
-const REC = (more) => Object.assign({ id: "a".repeat(32), kind: "in-place", workspace: "/w", clone_of: "", branch: "", last_scan: "t", flags: [], inspected: 3, truncated: "" }, more);
+const REC = (more) => Object.assign({ id: "a".repeat(32), kind: "in-place", workspace: "/w", clone_of: "", branch: "", last_scan: "t", revision: 1, flags: [], inspected: 3, truncated: "" }, more);
 
 function page(over) {
   const doc = { activeElement: null };
@@ -119,24 +119,24 @@ test("Mark reviewed POSTs, drops the section, refreshes the list and the profile
   assert.strictEqual(pg.byId["side-flagged"].hidden, true);
 });
 
-test("Mark reviewed sends the last_scan of the record the user saw", async () => {
+test("Mark reviewed sends the revision of the record the user saw", async () => {
   const pg = page();
-  pg.state.records = [REC({ last_scan: "2026-11-22T10:00:00.123456789Z", flags: [flag("x", ["archive"])] })];
+  pg.state.records = [REC({ last_scan: "2026-11-22T10:00:00.123456789Z", revision: 7, flags: [flag("x", ["archive"])] })];
   await pg.ctx.openHandback();
   pg.log.bodies.length = 0; pg.log.api.length = 0;
   pg.byId["hb-body"].querySelector(".hb-reviewed").onclick();
   await tick();
   const i = pg.log.api.findIndex(([p, m]) => p.endsWith("/reviewed") && m === "POST");
   assert.ok(i >= 0);
-  assert.deepStrictEqual(JSON.parse(pg.log.bodies[i]), { last_scan: "2026-11-22T10:00:00.123456789Z" });
+  assert.deepStrictEqual(JSON.parse(pg.log.bodies[i]), { revision: 7 });
 });
 
 test("Mark reviewed refused with 409 refreshes the list and says what happened", async () => {
   const pg = page();
-  pg.state.records = [REC({ last_scan: "t1", flags: [flag("x", ["archive"])] })];
+  pg.state.records = [REC({ last_scan: "t", revision: 3, flags: [flag("x", ["archive"])] })];
   await pg.ctx.openHandback();
   // The daemon scanned again: the record now holds a second file the user has not seen.
-  pg.state.records = [REC({ last_scan: "t2", flags: [flag("x", ["archive"]), flag("new.pdf", ["extension-mismatch"])] })];
+  pg.state.records = [REC({ last_scan: "t", revision: 4, flags: [flag("x", ["archive"]), flag("new.pdf", ["extension-mismatch"])] })];
   pg.state.fail = { when: (p, o) => o && o.method === "POST", err: Object.assign(new Error("record changed since it was read"), { status: 409 }) };
   const btn = pg.byId["hb-body"].querySelector(".hb-reviewed");
   btn.onclick();
@@ -145,13 +145,13 @@ test("Mark reviewed refused with 409 refreshes the list and says what happened",
   assert.deepStrictEqual(paths, ["new.pdf", "x"], "the list shows the new file");
   assert.deepStrictEqual(pg.log.errors.at(-1), ["handback-modal", "New files were flagged since you opened this. Review them, then mark reviewed again."]);
   assert.strictEqual(pg.byId["hb-body"].querySelector(".hb-reviewed").disabled, false);
-  // The next click sends the new last_scan.
+  // The next click sends the new revision (last_scan did not move).
   pg.state.fail = null;
   pg.log.bodies.length = 0; pg.log.api.length = 0;
   pg.byId["hb-body"].querySelector(".hb-reviewed").onclick();
   await tick();
   const i = pg.log.api.findIndex(([p, m]) => p.endsWith("/reviewed") && m === "POST");
-  assert.deepStrictEqual(JSON.parse(pg.log.bodies[i]), { last_scan: "t2" });
+  assert.deepStrictEqual(JSON.parse(pg.log.bodies[i]), { revision: 4 });
 });
 
 test("a stale link to records already reviewed says so, not 'Nothing flagged'", async () => {

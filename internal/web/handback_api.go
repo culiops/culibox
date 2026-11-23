@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/culiops/culibox/internal/handback"
 )
@@ -14,7 +13,7 @@ import (
 // records still waiting for review, and marking one reviewed.
 type HandbackStore interface {
 	Pending() ([]handback.Record, error)
-	Reviewed(id string, lastScan time.Time) error
+	Reviewed(id string, revision int64) error
 }
 
 // handleHandback serves the files a boxed session handed back that the user has
@@ -24,9 +23,9 @@ type HandbackStore interface {
 //	POST /api/handback/{id}/reviewed    -> 204; 400 bad id or body; 404 unknown id;
 //	                                       409 scanned again since the page read it
 //
-// The POST body is {"last_scan": "<RFC3339Nano>"}, the last_scan of the record
-// as the page listed it: a record scanned again since holds flags the user has
-// not seen, so it is left as it is (409) and the page lists it again.
+// The POST body is {"revision": N}, the revision of the record as the page
+// listed it: a record that changed since may hold flags the user has not seen,
+// so it is left as it is (409) and the page lists it again.
 //
 // One bad record file does not hide the others: the good records are listed and
 // the fault is logged, never sent (it names paths on the host).
@@ -73,17 +72,16 @@ func (a *API) markReviewed(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	var body struct {
-		LastScan string `json:"last_scan"`
+		Revision *int64 `json:"revision"`
 	}
 	if !decodeOpBody(w, r, &body) {
 		return
 	}
-	lastScan, err := time.Parse(time.RFC3339Nano, body.LastScan)
-	if err != nil || lastScan.IsZero() {
-		writeErr(w, http.StatusBadRequest, "last_scan is required")
+	if body.Revision == nil || *body.Revision < 0 {
+		writeErr(w, http.StatusBadRequest, "revision is required")
 		return
 	}
-	switch err := a.Handback.Reviewed(id, lastScan); {
+	switch err := a.Handback.Reviewed(id, *body.Revision); {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, handback.ErrChanged):

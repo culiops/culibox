@@ -108,6 +108,12 @@ type Record struct {
 	CloneOf   string    `json:"clone_of,omitempty"`
 	Branch    string    `json:"branch,omitempty"`
 	LastScan  time.Time `json:"last_scan"`
+	// Revision counts the changes to what the record lists (its flags and its
+	// note), and Reviewed bumps it too. It is what a page sends back with Mark
+	// reviewed, so nothing the page has not shown is cleared: LastScan cannot
+	// tell, because a scan that stopped early rolls it back. A record file
+	// without the field reads as 0.
+	Revision int64 `json:"revision"`
 	// LastScanKind says which scan wrote LastScan (ScanExit or ScanStop; empty
 	// for a clone record) and LastScanComplete whether that scan saw everything
 	// in its window. An exit scan reaches back to the last check only when the
@@ -183,6 +189,7 @@ func (s Store) MergeScan(key string, base Record, scanAt time.Time, r Report) (R
 	if err != nil {
 		return Record{}, 0, err
 	}
+	before := rec // flags and note as the user could have seen them
 	rec.ID = id
 	rec.Kind, rec.Workspace, rec.CloneOf, rec.Branch = base.Kind, base.Workspace, base.CloneOf, base.Branch
 	rec.LastScan = scanAt
@@ -216,8 +223,20 @@ func (s Store) MergeScan(key string, base Record, scanAt time.Time, r Report) (R
 	}
 	rec.Flags = set.Sorted()
 	rec = cleanRecord(rec, id)
+	if replaced || !sameListing(before, rec) {
+		rec.Revision = before.Revision + 1
+	}
 	rec, err = writeRecordIn(dir, rec)
 	return rec, fresh, err
+}
+
+// sameListing reports whether two records list the same thing to the user: the
+// same flags in the same order and the same note.
+func sameListing(a, b Record) bool {
+	return a.Truncated == b.Truncated && slices.EqualFunc(a.Flags, b.Flags, func(x, y Flag) bool {
+		return x.Path == y.Path && x.Detail == y.Detail && x.SHA256 == y.SHA256 && x.HashNote == y.HashNote &&
+			x.Target == y.Target && slices.Equal(x.Classes, y.Classes)
+	})
 }
 
 func joinNote(a, b string) string {
@@ -322,11 +341,11 @@ func (s Store) Pending() ([]Record, error) {
 // Reviewed marks a record reviewed: its flags and Truncated note are cleared,
 // LastScan is kept (the next in-place scan starts there) and each cleared
 // flag's Fingerprint joins the reviewed set, so the same file is not flagged
-// again. lastScan is the LastScan of the record as the caller read it: when the
-// record was scanned again since, it holds flags the caller has not seen and
-// nothing is cleared (ErrChanged). A well-formed id with no record is
+// again. revision is the Revision of the record as the caller read it: when the
+// record changed since, it may hold flags the caller has not seen and nothing
+// is cleared (ErrChanged). A successful review bumps the revision. A well-formed id with no record is
 // ErrNotFound, a malformed id is ErrInvalidID, a corrupt record is neither.
-func (s Store) Reviewed(id string, lastScan time.Time) error {
+func (s Store) Reviewed(id string, revision int64) error {
 	if !recordIDRe.MatchString(id) {
 		return ErrInvalidID
 	}
@@ -342,7 +361,7 @@ func (s Store) Reviewed(id string, lastScan time.Time) error {
 	if !ok {
 		return ErrNotFound
 	}
-	if !rec.LastScan.Equal(lastScan) {
+	if rec.Revision != revision {
 		return ErrChanged
 	}
 	known := make(map[string]bool, len(rec.ReviewedFP))
@@ -357,6 +376,7 @@ func (s Store) Reviewed(id string, lastScan time.Time) error {
 	}
 	rec.Flags = []Flag{}
 	rec.Truncated = ""
+	rec.Revision++
 	_, err = writeRecordIn(dir, rec)
 	return err
 }
@@ -458,6 +478,9 @@ func cleanRecord(rec Record, id string) Record {
 	rec.CloneOf = SanitizePath(rec.CloneOf)
 	rec.Branch = SanitizePath(rec.Branch)
 	rec.Truncated = SanitizePath(rec.Truncated)
+	if rec.Revision < 0 {
+		rec.Revision = 0
+	}
 	if rec.LastScanKind != ScanExit && rec.LastScanKind != ScanStop {
 		rec.LastScanKind = ""
 	}

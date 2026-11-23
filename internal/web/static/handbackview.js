@@ -175,7 +175,7 @@ function handbackRender(records, emptyText) {
   else body.replaceChildren(...secs);
 }
 
-// handbackMarkReviewed: POST the last_scan of the record as the user saw it, then drop the section, repaint
+// handbackMarkReviewed: POST the revision of the record as the user saw it, then drop the section, repaint
 // the entry and the profile badges. A 404 means the record is already gone (another tab reviewed it): the
 // same outcome. A 409 means the record was scanned again since it was listed: it may hold files the user
 // has not seen, so nothing was cleared; the list is read again and the user is told.
@@ -186,7 +186,7 @@ async function handbackMarkReviewed(r, btn, secs) {
     await api("/api/handback/" + encodeURIComponent(r.id) + "/reviewed", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ last_scan: r.last_scan }),
+      body: JSON.stringify({ revision: r.revision }),
     });
   } catch (e) {
     if (e && e.status === 409) { handbackReload(); return; }
@@ -204,7 +204,7 @@ async function handbackMarkReviewed(r, btn, secs) {
   if (typeof refreshProfilesQuiet === "function") refreshProfilesQuiet();
 }
 
-// handbackReload: after a refused Mark reviewed, list the same records again (their files and last_scan are
+// handbackReload: after a refused Mark reviewed, list the same records again (their files and revision are
 // current now) and say why nothing was cleared.
 async function handbackReload() {
   const seq = ++handbackPanelSeq;
