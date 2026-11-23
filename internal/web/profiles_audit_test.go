@@ -2,6 +2,8 @@ package web
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,5 +95,40 @@ func TestProfileChangeRefusedWhenTheAuditFails(t *testing.T) {
 	}
 	if _, ok := st.m["work"]; !ok {
 		t.Fatal("removed without a row")
+	}
+}
+
+// M4: the detail fits the audit's 200-byte detail whole: it stops at a whole
+// field name and says how many more changed.
+func TestChangedFieldsFitTheAuditDetail(t *testing.T) {
+	var names []string
+	for i := range 40 {
+		names = append(names, fmt.Sprintf("field_name_%02d", i))
+	}
+	got := fieldList(names)
+	if len(got) > 200 {
+		t.Fatalf("%d bytes: %q", len(got), got)
+	}
+	if !strings.HasSuffix(got, " more") || !strings.Contains(got, ", and ") {
+		t.Fatalf("no count of the rest: %q", got)
+	}
+	shown := strings.Split(strings.TrimSuffix(got[:strings.Index(got, ", and ")], ","), ", ")
+	for _, n := range shown {
+		if !slices.Contains(names, n) {
+			t.Fatalf("cut name %q in %q", n, got)
+		}
+	}
+	if want := fmt.Sprintf(", and %d more", 40-len(shown)); !strings.HasSuffix(got, want) {
+		t.Fatalf("%q does not end with %q", got, want)
+	}
+	if got := fieldList([]string{"args", "env"}); got != "args, env" {
+		t.Fatalf("short list = %q", got)
+	}
+	// Through a real update with many fields changed.
+	a := config.AgentConfig{Name: "w", Bin: "claude"}
+	b := config.AgentConfig{Name: "w", Bin: "codex", Args: []string{"x"}, Env: map[string]string{"A": "1"}, Secrets: []string{"S"},
+		EgressAllow: []string{"h"}, EgressOpen: true, Runtime: config.RuntimeBox, DefaultCwd: "/x", Account: "acc"}
+	if d := changedFields(a, b); len(d) > 200 || strings.Contains(d, "1") {
+		t.Fatalf("detail %q", d)
 	}
 }

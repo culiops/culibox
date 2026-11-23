@@ -494,7 +494,27 @@ func changedFields(a, b config.AgentConfig) string {
 		return "no field changed"
 	}
 	sort.Strings(names)
-	return strings.Join(names, ", ")
+	return fieldList(names)
+}
+
+// maxProfileDetail is the audit's bound on a detail (broker's maxCredDetail):
+// past it the row is cut mid-text, so fieldList stays within it.
+const maxProfileDetail = 200
+
+// fieldList joins names with ", " in at most maxProfileDetail bytes. When they do
+// not all fit it stops at a whole name and ends with ", and N more" (or reads
+// "N fields" when not even one fits with that tail).
+func fieldList(names []string) string {
+	if all := strings.Join(names, ", "); len(all) <= maxProfileDetail {
+		return all
+	}
+	for k := len(names) - 1; k > 0; k-- {
+		s := strings.Join(names[:k], ", ") + fmt.Sprintf(", and %d more", len(names)-k)
+		if len(s) <= maxProfileDetail {
+			return s
+		}
+	}
+	return fmt.Sprintf("%d fields", len(names))
 }
 
 // SetContextCheck installs the save-time check of one context_paths entry. Call
