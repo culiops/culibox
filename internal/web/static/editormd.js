@@ -161,7 +161,7 @@ function editorMdPump(tab, gen, job) {
     job.held = [];
   }
   if (done && job.swap) m.pane.replaceChildren(job.wrap);
-  if (!job.swap && m.restore !== null) {
+  if (!job.swap && m.restore !== null && m.live) { // a pane off screen reads 0: leave the place to put back alone until it is shown
     if (m.restoreAt !== null && m.pane.scrollTop !== m.restoreAt) m.restore = null; // the user scrolled: their place wins
     else { m.pane.scrollTop = m.restore; m.restoreAt = m.pane.scrollTop; }
   }
@@ -235,7 +235,8 @@ function editorMdEarly(tab) {
   editorMdShow(tab, tab.earlyText);
 }
 
-// editorMdDetach: the tab is not on screen. Nothing runs for it until it is shown again; the pane stays with the place it was read at.
+// editorMdDetach: the tab is not on screen. Its redraw and its subscription stop until it is shown again (a big file's draw under way
+// finishes, a slice at a time, so the document is complete when the tab comes back); the pane stays with the place it was read at.
 function editorMdDetach(tab) {
   const m = tab.md;
   if (!m || !m.live) return;
@@ -260,7 +261,9 @@ function editorMdDrop(tab) {
 function editorMdPick(tab, view) {
   if (tab.disposed || tab.inner) return;
   const m = editorMdOf(tab);
-  if (!tab.diff && m.view === view) return; // already there
+  const asked = !tab.model && tab.pendingChanges; // Changes pressed while the editor loads (editorDiffSet): this press takes it back
+  if (!tab.diff && !asked && m.view === view) return; // already there
+  if (asked) tab.pendingChanges = false;
   m.view = view;
   if (tab.diff) editorDiffSet(tab, false);
   else if (tab.attached && tab.model) tab.show();

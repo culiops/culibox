@@ -622,3 +622,28 @@ test("a markdown tab in Preview asks for Monaco only once its Preview is drawn, 
   new q.EditorTab("/p/a.go", { host: q.host });
   assert.equal(calls.at(-1), "go", "a code file asks for Monaco with its read, in parallel");
 });
+
+// --- review round 1 ---------------------------------------------------------------------------------------------------------
+
+test("Monaco failing while a big file's early Preview is still drawing stops the draw", async () => {
+  const { p, tab, fail } = await early({ over: { performance: clock() }, read: { ok: true, status: 200, data: { kind: "text", content: BIG, version: "v1" } } });
+  assert.ok(zeros(p).length > 0, "a draw under way");
+  await fail(new Error("offline"));
+  const steps = p.st.steps;
+  pumpAll(p);
+  assert.equal(p.st.steps, steps, "no step after the failure");
+});
+
+test("Changes pressed during the early Preview shows as pressed with loading…, and Preview takes it back", async () => {
+  const { p, tab, monaco } = await early();
+  tab.seg.changes.click();
+  assert.deepEqual(pressed(tab), ["changes"], "the press shows");
+  assert.equal(tab.bodyEl.children[0].textContent, "loading…");
+  tab.seg.preview.click();
+  assert.deepEqual(pressed(tab), ["preview"]);
+  assert.equal(tab.previewing, true, "the early Preview is back");
+  assert.equal(tab.pendingChanges, false, "Changes is no longer asked for");
+  await monaco();
+  assert.equal(tab.diff, null, "Changes does not open by itself when Monaco arrives");
+  assert.equal(tab.previewing, true);
+});

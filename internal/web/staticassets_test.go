@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -228,7 +229,7 @@ func TestVersionedRouting(t *testing.T) {
 	}
 	for _, p := range []string{"/v/" + id + "/vendor/marked.min.js", "/v/" + id + "/xterm/xterm.js", "/v/" + id + "/vendor/monaco/vs/loader.js"} {
 		rec := get(p)
-		if rec.Code != 200 || rec.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		if rec.Code != 200 || rec.Header().Get("Cache-Control") != "private, max-age=31536000, immutable" {
 			t.Fatalf("%s: code=%d cc=%q", p, rec.Code, rec.Header().Get("Cache-Control"))
 		}
 	}
@@ -243,5 +244,20 @@ func TestVersionedRouting(t *testing.T) {
 		if rec := get(p); rec.Code != http.StatusNotFound {
 			t.Fatalf("%s: code=%d, want 404", p, rec.Code)
 		}
+	}
+}
+
+func TestStaticMissesAreNotKept(t *testing.T) {
+	a := testAssets()
+	for i := 0; i < 50; i++ {
+		serveAsset(a, fmt.Sprintf("nope-%d.js", i), "", nil)
+	}
+	serveAsset(a, "vendor", "", nil)
+	if n := len(a.entries); n != 0 {
+		t.Fatalf("%d entries kept for paths that are not files", n)
+	}
+	serveAsset(a, "app.js", "", nil)
+	if n := len(a.entries); n != 1 {
+		t.Fatalf("entries=%d, want 1", n)
 	}
 }

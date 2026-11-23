@@ -427,7 +427,7 @@ class EditorTab {
     if (mode === "image" || mode === "binary") { this.mountInner(mode, res.data); return; }
     if (mon.err) {
       this.earlyText = null;
-      editorMdDrop(this); // an early Preview gives the body back for the sentence
+      editorMdDispose(this); // an early Preview gives the body back for the sentence, and a draw under way stops
       // The next open tries again (loadMonaco forgets a failure), so say what failed rather than only "reload".
       showToast("The editor could not be loaded: " + (mon.err.message || "unknown error"), { error: true });
       this.setBodyMessage("The editor could not be loaded. Close this tab and open the file again, or reload the page.", "err");

@@ -87,6 +87,14 @@ func (a *staticAssets) entry(name string) *staticEntry {
 	}
 	a.mu.Unlock()
 	e.once.Do(func() { a.load(e, name) })
+	if !e.ok {
+		// Not a file (a directory, a miss): nothing is kept for it, so asking for ever new paths cannot grow the map.
+		a.mu.Lock()
+		if a.entries[name] == e {
+			delete(a.entries, name)
+		}
+		a.mu.Unlock()
+	}
 	return e
 }
 
@@ -175,8 +183,9 @@ func acceptsGzip(header string) bool {
 	return false
 }
 
-// staticImmutable: what a versioned URL is cached for. The URL names the build, so its content never changes.
-const staticImmutable = "public, max-age=31536000, immutable"
+// staticImmutable: what a versioned URL is cached for. The URL names the build, so its content never changes. private: the
+// answer needs a login, so no shared cache in front of the server keeps it.
+const staticImmutable = "private, max-age=31536000, immutable"
 
 // assetBaseMeta is the tag index.html carries for the page's scripts (monacoload.js reads it) to learn the versioned base.
 const assetBaseMeta = `<meta name="culibox-asset-base" content="">`

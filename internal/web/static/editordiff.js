@@ -296,7 +296,7 @@ function editorDiffAnyChanges() {
 function editorDiffPaintToggle(tab) {
   const t = tab.seg;
   if (!t) return;
-  const on = !!tab.diff;
+  const on = !!tab.diff || (!tab.model && !!tab.pendingChanges); // Changes asked for while the editor loads shows as pressed
   const why = on ? "" : editorDiffWhy(tab);
   const ch = tab.changes;
   const md = editorMdIs(tab);
@@ -511,7 +511,11 @@ function editorDiffSet(tab, on) {
   // diffTop is where a hidden tab's Changes view was left, for the view that was to come back: Code asked for, that view is not coming back.
   if (!on) { s.want = false; s.resume = false; s.diffTop = null; s.diffPos = null; s.land = null; editorDiffLeave(tab); return false; }
   if (tab.diff) return true;
-  if (!tab.model) { tab.pendingChanges = true; return true; } // still reading: load() opens it when the model is there
+  if (!tab.model) {
+    tab.pendingChanges = true; // still reading: load() opens it when the model is there
+    if (tab.earlyText !== null && tab.attached) { editorMdDrop(tab); tab.setBodyMessage("loading…"); tab.paint(); } // an early Preview gives way
+    return true;
+  }
   const why = editorDiffWhy(tab);
   const k = editorDiffKey(tab);
   const ch = tab.changes;

@@ -162,7 +162,7 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 	}
 	for _, p := range []string{m[1] + "/vendor/marked.min.js", m[1] + "/xterm/xterm.js", m[1] + "/vendor/monaco/vs/loader.js"} {
 		rec := get(p)
-		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "private, max-age=31536000, immutable" {
 			t.Fatalf("%s: code=%d Cache-Control=%q", p, rec.Code, rec.Header().Get("Cache-Control"))
 		}
 	}

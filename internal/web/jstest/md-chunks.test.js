@@ -111,11 +111,11 @@ test("mdChunkGroups never closes a group while an HTML block is open, so <detail
   // Void, self-closing, comments and declarations do not open anything.
   const flat = "# a\n\n<br>\n\n# b\n\n<img src=x />\n\n# c\n\n<!-- c -->\n\n# d\n\n<hr>\n\n# e\n";
   assert.equal(mdChunkGroups(marked.lexer(flat), 1).length, marked.lexer(flat).length, "every token is its own group");
-  // An inline tag left open in one paragraph and closed in a later one keeps them together too.
-  const inline = "# a\n\nsome <span>open\n\nstill</span> closed\n\n# b\n";
+  // A formatting tag left open in one paragraph (the parser reopens it in the next) and closed in a later one keeps them together too.
+  const inline = "# a\n\nsome <em>open\n\nstill</em> closed\n\n# b\n";
   const ig = mdChunkGroups(marked.lexer(inline), 1);
-  const sp = ig.find((g) => g.some((t) => t.raw && t.raw.includes("<span>")));
-  assert.ok(sp.some((t) => t.raw && t.raw.includes("</span>")));
+  const sp = ig.find((g) => g.some((t) => t.raw && t.raw.includes("<em>")));
+  assert.ok(sp.some((t) => t.raw && t.raw.includes("</em>")));
 });
 
 test("without chunkChars the render is one fragment, exactly as before; with it, the first steps lex and the rest hand back fragments", () => {
@@ -143,4 +143,40 @@ test("a cut that falls inside a block mdLexPieces could not see is caught after 
   marked.setOptions({ breaks: false, gfm: true });
   assert.deepEqual(plain(lexChunked(HTMLFENCE, 1)), plain(marked.lexer(HTMLFENCE)));
   assert.equal(drain(HTMLFENCE, 1).html, oneShot(HTMLFENCE));
+});
+
+// --- review round 1 ---------------------------------------------------------------------------------------------------------
+
+test("a fence of 200,000 blank lines before a cut takes linear time, not quadratic (a hostile file must not freeze the page)", () => {
+  const text = "x".repeat(9000) + "\n\n```\n" + "\n".repeat(200000) + "y\n```\n\n# h\n\nend\n";
+  const t0 = Date.now();
+  const got = drain(text, 8192);
+  const ms = Date.now() - t0;
+  assert.ok(ms < 3000, "took " + ms + " ms");
+  assert.equal(got.html, oneShot(text));
+});
+
+test("prose with a generic type (Vec<T>) or an unclosed span does not hold the rest of the file in one chunk", () => {
+  let body = "";
+  for (let i = 0; body.length < 200000; i++) body += "## S" + i + "\n\nSome text " + i + " here.\n\n";
+  for (const head of ["Use a Vec<T> here.\n\n", "An <span>open span.\n\n", "<foo>\n\n"]) {
+    const text = "# Top\n\n" + head + body;
+    const got = drain(text, 8192);
+    assert.ok(got.frags.length > 15, head.trim() + ": " + got.frags.length + " chunks");
+    assert.equal(got.html, oneShot(text), head.trim() + ": the same HTML");
+  }
+});
+
+test("an element that really nests across blocks (<details>, an unclosed <b>) is kept together, up to 8 chunks' worth", () => {
+  marked.setOptions({ breaks: false, gfm: true });
+  const b = "# a\n\nsome <b>bold\n\nstill bold</b> here\n\n# b\n";
+  const gb = mdChunkGroups(marked.lexer(b), 1);
+  assert.ok(gb.some((g) => g.some((t) => t.raw.includes("<b>")) && g.some((t) => t.raw.includes("</b>"))), "<b> stays with its close");
+  // Left open for good: a group is closed anyway once it holds 8 × chunkChars (64 KB at the least), so the file still comes in chunks.
+  let rest = "";
+  for (let i = 0; rest.length < 600000; i++) rest += "## S" + i + "\n\ntext\n\n";
+  const open = "# a\n\n<div>\n\n" + rest;
+  const groups = mdChunkGroups(marked.lexer(open), 8192);
+  assert.ok(groups.length >= 9, "groups: " + groups.length);
+  for (const g of groups) assert.ok(g.reduce((n, t) => n + t.raw.length, 0) < 8 * 8192 + 200, "no group holds much more than 8 chunks");
 });

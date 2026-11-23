@@ -400,27 +400,37 @@ function mdLexPieces(src, chunkChars) {
   return Array.from(mdLexPiecesIter(src, chunkChars));
 }
 
-const MD_VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+// The elements whose nesting can carry across top-level blocks once the browser parses the HTML, so a chunk must not end inside one:
+// inline, only the formatting elements the HTML parser reopens in the next paragraph (its "active formatting elements"); in an HTML
+// block, those and the containers markdown is commonly wrapped in. Anything else (an unknown tag such as the T of "Vec<T>" in prose,
+// a <span>, a <p> or <li> the parser closes by itself) ends with its block, or is dropped by DOMPurify with its content kept in
+// place, so a cut after it changes nothing.
+const MD_NEST_INLINE = new Set(["a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]);
+const MD_NEST_BLOCK = new Set([...MD_NEST_INLINE, "article", "aside", "blockquote", "center", "details", "div", "dl", "figure", "footer",
+  "header", "main", "nav", "ol", "section", "table", "tbody", "thead", "tfoot", "ul"]);
+// A run is closed after this many chunks' worth of source even with such an element still open (one left open for good, in a long
+// file, would otherwise hold the rest of it in one chunk): that file's nesting after the cut may differ, never its sanitizing.
+const MD_GROUP_MAX_CHUNKS = 8;
+const MD_GROUP_MAX_FLOOR = 65536; // and never below this, however small the chunks
 
-// mdTagBalance: the tags an HTML snippet opens minus the ones it closes (void elements, self-closing tags, comments and declarations
-// open nothing).
-function mdTagBalance(raw) {
+// mdTagBalance: the tags of `names` an HTML snippet opens minus the ones it closes (self-closing tags and comments open nothing).
+function mdTagBalance(raw, names) {
   const s = raw.replace(/<!--[\s\S]*?(?:-->|$)/g, "");
   let d = 0;
-  for (const m of s.matchAll(/<([A-Za-z][A-Za-z0-9-]*)(?:\s[^<>]*)?>/g)) if (!MD_VOID_TAGS.has(m[1].toLowerCase()) && !m[0].endsWith("/>")) d++;
-  for (const _ of s.matchAll(/<\/[A-Za-z][A-Za-z0-9-]*\s*>/g)) d--;
+  for (const m of s.matchAll(/<([A-Za-z][A-Za-z0-9-]*)(?:\s[^<>]*)?>/g)) if (names.has(m[1].toLowerCase()) && !m[0].endsWith("/>")) d++;
+  for (const m of s.matchAll(/<\/([A-Za-z][A-Za-z0-9-]*)\s*>/g)) if (names.has(m[1].toLowerCase())) d--;
   return d;
 }
 
 // mdHtmlDepth: the balance of every HTML token in a token and the tokens inside it (a paragraph's inline tags, a list's items, a
-// table's cells), leaving code out.
+// table's cells), leaving code out: an HTML block counts MD_NEST_BLOCK, an inline tag MD_NEST_INLINE.
 function mdHtmlDepth(token) {
   let d = 0;
   const visit = (x) => {
     if (!x || typeof x !== "object") return;
     if (Array.isArray(x)) { x.forEach(visit); return; }
     if (x.type === "code" || x.type === "codespan") return;
-    if (x.type === "html" && typeof x.raw === "string") d += mdTagBalance(x.raw);
+    if (x.type === "html" && typeof x.raw === "string") d += mdTagBalance(x.raw, x.block ? MD_NEST_BLOCK : MD_NEST_INLINE);
     for (const k of ["tokens", "items", "header", "rows"]) if (x[k]) visit(x[k]);
   };
   visit(token);
@@ -428,7 +438,7 @@ function mdHtmlDepth(token) {
 }
 
 // mdChunkGroups splits the top-level tokens into runs of about `chunkChars` of source: a run ends once it holds that much and no
-// HTML tag it opened is still open (a <details> around a few paragraphs stays in one run, so DOMPurify nests it as in one piece).
+// element of MD_NEST_* it opened is still open (or once it holds MD_GROUP_MAX_CHUNKS times that, at least MD_GROUP_MAX_FLOOR) (a <details> around a few paragraphs stays in one run, so DOMPurify nests it as in one piece).
 // Every run carries the document's reference links, as marked's parser expects of a token list. mdChunkGroupsIter makes them one at a
 // time (the walk over a big file's tokens is itself about 100 ms, measured, so the chunked render spreads it over its steps).
 function* mdChunkGroupsIter(tokens, chunkChars) {
@@ -439,7 +449,8 @@ function* mdChunkGroupsIter(tokens, chunkChars) {
     cur.push(t);
     size += typeof t.raw === "string" ? t.raw.length : 0;
     depth = Math.max(0, depth + mdHtmlDepth(t));
-    if (size >= chunkChars && depth === 0) {
+    if ((size >= chunkChars && depth === 0) || size >= Math.max(MD_GROUP_MAX_CHUNKS * chunkChars, MD_GROUP_MAX_FLOOR)) {
+      depth = 0;
       cur.links = tokens.links;
       yield cur;
       cur = [];
@@ -467,7 +478,11 @@ function mdOpenAtEnd(tokens) {
   if (last.type === "code") {
     const open = /^ {0,3}(`{3,}|~{3,})/.exec(last.raw);
     if (!open) return false; // indented code: a heading at the margin ends it
-    const lines = last.raw.replace(/\n+$/, "").split("\n");
+    // The trailing newlines go by an index scan: a regex such as /\n+$/ is quadratic on a long run of newlines followed by text,
+    // and the file is the agent's (measured: 38 s for a 209 KB fence of blank lines).
+    let end = last.raw.length;
+    while (end > 0 && last.raw.charCodeAt(end - 1) === 10) end--;
+    const lines = last.raw.slice(0, end).split("\n");
     const close = lines.length > 1 ? /^ {0,3}([`~]+) *$/.exec(lines[lines.length - 1]) : null;
     return !(close && close[1].startsWith(open[1]));
   }
