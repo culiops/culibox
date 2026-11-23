@@ -104,10 +104,10 @@ test("the phone's stylesheet knows none of it", () => {
   assert.doesNotMatch(stripComments(read("app.css")), /dk-chev|dk-secsplit|dk-roothead|data-chg-shut|data-tree-shut/);
 });
 
-test("an explicit ask opens a collapsed section: Reveal in tree, and the folded strip's Changes button", () => {
+test("an explicit ask opens a collapsed section: Reveal in tree (not the automatic reveal), and the folded strip's Changes button", () => {
   const ft = read("filetree.js");
   const body = stripComments(ft.slice(ft.indexOf("async function ftReveal("), ft.indexOf("\n}\n", ft.indexOf("async function ftReveal("))));
-  assert.match(body, /^async function ftReveal\(path\) \{\s*if \(typeof dockSecOpen === "function" && ftDocked\(\)\) dockSecOpen\("tree"\);/, "first thing in ftReveal, and only for the dock's tree (the phone's Reveal leaves the desktop choice alone)");
+  assert.match(body, /^async function ftReveal\(path, opts\) \{\s*const o = opts \|\| \{\};\s*if \(!o\.auto && typeof dockSecOpen === "function" && ftDocked\(\)\) dockSecOpen\("tree"\);/, "first thing in ftReveal, only for an explicit ask (P4: never the automatic reveal) and only for the dock's tree (the phone's Reveal leaves the desktop choice alone)");
   assert.match(stripComments(read("app.js")), /\$\("drawer-strip-changes"\)\.onclick = \(\) => \{\s*if \(typeof dockSecOpen === "function"\) dockSecOpen\("changes"\);\s*dockStripOpen\(\);\s*\};/);
 });
 
