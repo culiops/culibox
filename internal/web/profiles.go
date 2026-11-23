@@ -112,11 +112,18 @@ type ProfileView struct {
 	ImportsOff bool `json:"imports_off,omitempty"`
 	// BoxOnly is the profile's own lock to the box tier (config.AgentConfig.BoxOnly).
 	// HostBlock is why a session of it may not run on the host ("" when it may):
-	// config.HostBlockWith of the merged profile (the binding rules plus a
-	// box-only env or box-only option), the one rule the spawn also applies, so a
-	// page reads this and never re-derives the rule.
+	// config.HostBlock of the merged profile (the box_only lock), the one rule
+	// the spawn also applies, so a page reads this and never re-derives the rule.
 	BoxOnly   bool   `json:"box_only,omitempty"`
 	HostBlock string `json:"host_block,omitempty"`
+	// HostDrops lists what a host run of it would drop (its bindings and
+	// box-only options, config.HostDrops); empty when it drops nothing (#359).
+	// Not a block: the host run goes ahead once the caller acknowledges it.
+	HostDrops []string `json:"host_drops,omitempty"`
+	// HostKeeps names the profile's own secrets and env a host run still
+	// passes to the agent (config.HostKeeps), so the Host warning does not
+	// claim the agent has only this machine's logins.
+	HostKeeps []string `json:"host_keeps,omitempty"`
 	// BoxClaudeCredential says whether a boxed claude of this profile has a login:
 	// "yes", "no", or "locked" (a token exists but the store cannot be read now, so
 	// never "no"). "" (absent) on a profile that is not claude, or with no source
@@ -126,6 +133,10 @@ type ProfileView struct {
 	// is on). NotHome is what the clone's last return left behind, if anything.
 	AutoReturn bool                  `json:"auto_return,omitempty"`
 	NotHome    *session.NotHomeState `json:"not_home,omitempty"`
+	// Flagged counts the files its box handed back that are still waiting for
+	// the user's review (#346): the clone's returned branches, or the folder an
+	// in-place box wrote into. A count of flags; absent when none.
+	Flagged int `json:"flagged,omitempty"`
 	// What the read view lists beyond the touch line (names, repos, paths and
 	// hosts only, like the fields above). GitHubRepos is each owner's repo list;
 	// GitHubPermissions the EFFECTIVE permission set (the defaults when the
@@ -194,6 +205,10 @@ type ProfileManager struct {
 	// notHome reports what a clone's last return left behind (cloneHooks.NotHome,
 	// wired at boot); nil = nothing to show.
 	notHome func(config.Clone) *session.NotHomeState
+	// flagged counts the pending hand-back flags of a clone's repo (of) or of an
+	// in-place workspace (its real path); exactly one of the two is non-empty.
+	// Wired at boot; nil = none shown.
+	flagged func(of, workspace string) int
 	// boxCred reports whether a boxed claude of a profile has a login (wired at
 	// boot, by presence only); nil = the view carries no answer.
 	boxCred func(config.AgentConfig) secretchain.Presence
@@ -384,6 +399,15 @@ func (m *ProfileManager) SetCloneCheck(f func(config.Clone) error) {
 func (m *ProfileManager) SetNotHome(f func(config.Clone) *session.NotHomeState) {
 	m.mu.Lock()
 	m.notHome = f
+	m.mu.Unlock()
+}
+
+// SetFlagged installs the source of ProfileView.Flagged: the pending flag count
+// of a clone's repo (of set, workspace empty) or of an in-place workspace
+// (workspace set, of empty). Call at boot; nil shows none.
+func (m *ProfileManager) SetFlagged(f func(of, workspace string) int) {
+	m.mu.Lock()
+	m.flagged = f
 	m.mu.Unlock()
 }
 
@@ -611,7 +635,9 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			CloneOf:        a.CloneOf,
 			ImportsOff:     a.ImportsOff,
 			BoxOnly:        a.BoxOnly,
-			HostBlock:      config.HostBlockWith(a, m.optDefs),
+			HostBlock:      config.HostBlock(a),
+			HostDrops:      config.HostDrops(a, m.optDefs),
+			HostKeeps:      config.HostKeeps(a),
 			EgressAllow:    slices.Clone(a.EgressAllow),
 			CloneShare:     slices.Clone(a.CloneShare),
 		}
@@ -622,6 +648,15 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			pv.AutoReturn = !c.NoAutoReturn
 			if m.notHome != nil {
 				pv.NotHome = m.notHome(*c)
+			}
+			if m.flagged != nil {
+				pv.Flagged = m.flagged(c.Of, "")
+			}
+		} else if m.flagged != nil && rt == config.RuntimeBox && a.CloneOf == "" && a.DefaultCwd != "" {
+			// An in-place box profile: the folder it was made over, as the box layer
+			// resolves it (the scan records the real path).
+			if ws, err := filepath.EvalSymlinks(a.DefaultCwd); err == nil {
+				pv.Flagged = m.flagged("", ws)
 			}
 		}
 		if a.AWS != nil {

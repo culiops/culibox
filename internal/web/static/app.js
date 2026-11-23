@@ -2096,11 +2096,19 @@ function noteReturns(sessions) {
   const n = returnNews(returnsSeen, returnsCloneIds, sessions);
   returnsSeen = n.seen;
   returnsCloneIds = n.cloneIds;
-  for (const t of n.toasts) showToast(t);
+  n.toasts.forEach((t, i) => {
+    const ids = n.links[i] || [];
+    // Files flagged for review (#346): the toast opens the review; the pending list is read again for the sidebar entry.
+    if (ids.length) handbackToast(t, ids);
+    else showToast(t);
+  });
+  if (n.links.some((l) => l.length)) handbackRefresh();
+  // A new in-place hand-back note (#346) changes the profile badge's count, like a clone's return does.
+  const inPlaceNew = handbackOnSessions(sessions);
   // With no stored list there is nothing to add to: the next load seeds it whole.
   const stored = n.sigs.length ? notHomeSeenRead() : null;
   if (stored) notHomeSeenWrite(stored.concat(n.sigs));
-  if (n.refetch) refreshProfilesQuiet();
+  if (n.refetch || inPlaceNew) refreshProfilesQuiet();
 }
 
 // refreshProfilesQuiet: the background profile refresh (a return landed, a clone
@@ -2800,6 +2808,9 @@ function paintCompactRow(li, sname, grow, s, conn) {
     d.onclick = () => { if (sub.view === "access" && openPaneView(s.id, "access")) return; openTerminal(s.id, s.name); };
     grow.appendChild(d);
   }
+  // Files this session handed back that are flagged for review (#346): one line under the rest, until reviewed.
+  const hbl = li.classList.contains("nested") ? null : handbackLine(s);
+  if (hbl) grow.appendChild(hbl);
 }
 
 // renderDesktopEntry: what the desktop list renders for one item — a workspace
@@ -5585,6 +5596,19 @@ function renderPfNotHome(name) {
     row.textContent = notHomeLabel(nh) + ": " + nh.error;
     rows.push(row);
   }
+  // Files flagged for review (#346): the count opens the review of this profile's records.
+  const flText = handbackCountText(view && view.flagged);
+  if (flText && !mobileActive(window.innerWidth)) {
+    const row = document.createElement("div");
+    row.className = "pf-nh-row";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "btn gh pf-flagged";
+    open.textContent = flText;
+    open.onclick = () => openHandback(handbackProfileSel(view));
+    row.appendChild(open);
+    rows.push(row);
+  }
   host.replaceChildren(...rows);
   host.hidden = rows.length === 0;
 }
@@ -5899,6 +5923,15 @@ function renderProfileList() {
       nh.textContent = nhLabel;
       nh.title = notHomeTitle(p.not_home);
       b.appendChild(nh);
+    }
+    // Files flagged for review (#346): a warning-tinted count on the name's line, the same words everywhere.
+    const flText = handbackCountText(p.flagged);
+    if (flText) {
+      const fl = document.createElement("span");
+      fl.className = "pflagged";
+      fl.textContent = flText;
+      fl.title = HANDBACK_TITLE;
+      b.appendChild(fl);
     }
     b.onclick = () => editProfile(p.name);
     li.appendChild(b);
@@ -6894,15 +6927,20 @@ $("spawn").addEventListener("submit", async (ev) => {
     setDialogError("spawn-modal", gate.text);
     return;
   }
+  // Host on a profile with bindings runs without them: say so first, and send the yes. Before the busy state, so a No leaves the
+  // dialog as it was. Nothing is asked when Host drops nothing (the profile is read from the same card the request is built from).
+  const w = spawnWhere();
+  const hostDrops = w.runtime === "host" ? tierHostDrops(currentProfile()) : [];
+  if (hostDrops.length && !(await hostDropsConfirm($("agent").value, hostDrops, tierHostKeeps(currentProfile())))) return;
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
-  const w = spawnWhere();
   const req = spawnPayload({
     agent: $("agent").value, name: $("sess-name").value, cwd: spawnCwdFor(w), options: getOptions(),
     runtime: w.runtime || "", clone: w.clone, prompt: $("spawn-prompt").value,
     replyable: $("spawn-replyable").checked, profile: currentProfile(),
     account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
+    hostDropsBindings: hostDrops.length > 0,
   });
   // Only this form asks: a folder outside every root becomes one when the session starts (the server decides, and only for
   // this signed-in browser). Duplicate, the bearer API and scripts never send it, nor does the phone (spawnAddsRoot).

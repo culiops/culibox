@@ -18,6 +18,7 @@ import (
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/handback"
 )
 
 // The return path (spec §6.4, D9). Code leaves a clone only as a git bundle
@@ -207,6 +208,11 @@ type FetchResult struct {
 	BaseSHA  string
 	Commits  []string // "<hash> <subject>", newest first, sanitized
 	Warnings []string
+	// Handback is what the branch's blobs hold that the user should look at
+	// before running or merging anything: executables, disguised files, archives,
+	// outward symlinks. It is a review signal, not a malware scan, and is set
+	// whenever the ref moved, even when a later step of the fetch failed.
+	Handback handback.Report `json:"handback"`
 }
 
 // BundleArgs is the docker argv (after "docker") of the bundle container: no
@@ -617,6 +623,10 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		}
 	}
 	res = FetchResult{Ref: ref, BaseSHA: base}
+	// Inspecting what came home never fails the fetch, and runs on every exit
+	// from here on (a later step failing does not unmove the ref). It is a
+	// defer so that it runs once, after steps 8 and 9, whatever they return.
+	defer func() { res.Handback = InspectBranch(ctx, g, c.Of, base, ref, handback.DefaultLimits()) }()
 	if len(overridden) > 0 {
 		res.Warnings = append([]string{fmt.Sprintf("-allow-old-history: the history check was overridden (%s); review box/%s before any merge or push",
 			strings.Join(overridden, "; "), r.Branch)}, res.Warnings...)

@@ -385,7 +385,7 @@ function paintRow(s, over) {
   const ctx = {
     document: { createElement: (t) => new El(t) }, Date, boxRuntime: "", window: { HOME_DIR: "" },
     rowChip: () => null, acctBadge: () => null, awsBadge: () => null, fmtSessionCost: () => "", tierBadge: () => null,
-    rowSubline: D.rowSubline, rowMenuOpenFor: () => false, openSessionMenu: () => {}, openTerminal: () => {}, openPaneView: () => false, wmCopyLine: () => "", sessionWorkHome: () => "",
+    rowSubline: D.rowSubline, rowMenuOpenFor: () => false, openSessionMenu: () => {}, openTerminal: () => {}, openPaneView: () => false, wmCopyLine: () => "", sessionWorkHome: () => "", handbackLine: () => null,
   };
   vm.runInNewContext(fn(app, "paintCompactRow") + "\npaintCompactRow(li, sname, grow, s, {});", Object.assign(ctx, { li, sname, grow, s }, over && over.ctx));
   return { li, sname, grow, sub: grow.children[0] };

@@ -533,3 +533,23 @@ func TestReturnCancelledReportsTheCancel(t *testing.T) {
 		t.Errorf("Error = %q, want cancelled", res.Error)
 	}
 }
+
+func TestReturnCarriesHandbackPerBranch(t *testing.T) {
+	x := newReturnFx(t)
+	x.inClone("checkout", "-q", "feat")
+	x.dockerCommitELF("tool.pdf")
+	res := x.ret(ReturnAuto)
+	if res.Error != "" {
+		t.Fatalf("Error = %q", res.Error)
+	}
+	rep, ok := res.Handback["box/feat"]
+	if !ok {
+		t.Fatalf("Handback = %+v, want an entry for box/feat", res.Handback)
+	}
+	if f, ok := flagFor(rep, "tool.pdf"); !ok || len(f.Classes) == 0 {
+		t.Errorf("box/feat report = %+v", rep)
+	}
+	if _, ok := res.Handback["box/old"]; ok {
+		t.Error("a branch that did not come home has a report")
+	}
+}

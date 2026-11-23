@@ -16,6 +16,7 @@ import (
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/extraca"
+	"github.com/culiops/culibox/internal/handback"
 	"github.com/culiops/culibox/internal/launcher"
 	"github.com/culiops/culibox/internal/store"
 )
@@ -148,7 +149,13 @@ func runClone(a cliArgs, cfg config.Config, home, goos string, cfgFiles []string
 		DataDir:         dataDir,
 		AllowOldHistory: a.AllowOldHistory,
 	})
+	hb := newHandbackHooks(dataDir, nil)
 	if err != nil {
+		if res.Ref != "" {
+			// The ref moved and a later step failed: the branch is home, so what it
+			// flagged is shown before the failure.
+			reportFlags(w, hb, c.Of, a.Branch, strings.TrimPrefix(res.Ref, "refs/heads/"), res.Handback)
+		}
 		return fail("%v", err)
 	}
 	ref := strings.TrimPrefix(res.Ref, "refs/heads/")
@@ -166,7 +173,19 @@ func runClone(a cliArgs, cfg config.Config, home, goos string, cfgFiles []string
 		fmt.Fprintf(w, "WARN: could not clear %s from the not-home list: %s\n", a.Branch, clone.Sanitize(forgetErr.Error()))
 	}
 	fmt.Fprintf(w, "review: git -C %s log -p %s..%s; merge per your review policy\n", shellQuote(c.Of), a.Base, ref)
+	reportFlags(w, hb, c.Of, a.Branch, ref, res.Handback)
 	return 0
+}
+
+// reportFlags records what a fetched branch flagged for review, the same record
+// the daemon's return writes (so the web panel shows it too), and prints it. A
+// record that cannot be written is said, never dropped: the flags are printed
+// either way.
+func reportFlags(w io.Writer, hb *handbackHooks, of, branch, ref string, rep handback.Report) {
+	if _, err := hb.recordClone(of, branch, ref, rep); err != nil {
+		fmt.Fprintf(w, "WARN: could not record what was flagged for review: %s\n", clone.Sanitize(err.Error()))
+	}
+	printFlags(w, rep)
 }
 
 // shellQuote makes s safe to paste into a shell: left bare when it has only

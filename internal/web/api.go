@@ -60,6 +60,10 @@ type API struct {
 	// call at a time.
 	VMState func(ctx context.Context) string
 	vmCache vmStateCache
+	// Handback serves GET /api/handback and POST /api/handback/{id}/reviewed:
+	// what a boxed session handed back that the user has not reviewed (#346).
+	// nil = none wired; the list is then empty.
+	Handback HandbackStore
 	// QuickShell returns the verified quick-shell profile name ("" = none); a
 	// companion shell (POST /api/sessions/{id}/shell) runs it. nil = none.
 	QuickShell func() string
@@ -197,6 +201,9 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Login     bool           `json:"login"`     // sign-in session for a named claude account (host tier)
 			Clone     *bool          `json:"clone"`     // nil = the profile decides; false = in place; true = its clone (box only)
 			AddRoot   bool           `json:"add_root"`  // the New session form only: make the folder a workspace root (#343)
+			// HostDropsAck: the caller knows a host run of a profile with bindings
+			// runs without them (#359); the spawn refuses a host run of one without it.
+			HostDropsAck bool `json:"host_drops_bindings"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.Agent == "" {
 			writeErr(w, http.StatusBadRequest, "agent required")
@@ -234,6 +241,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		spec := launcher.SpawnSpec{
 			Agent: req.Agent, Name: req.Name, Cwd: cwd, Options: req.Options, Runtime: req.Runtime,
 			Prompt: req.Prompt, Replyable: req.Replyable, Account: req.Account, Login: req.Login, Clone: req.Clone,
+			HostDropsAck: req.HostDropsAck,
 		}
 		info, err := a.Sessions.Spawn(spec)
 		if err != nil {

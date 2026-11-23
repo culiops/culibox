@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { tierBadge, tierRuntimeLabel, spawnRuntimeDefault } = require("../static/tier.js");
+const { tierBadge, tierRuntimeLabel, spawnRuntimeDefault, tierJoinWords } = require("../static/tier.js");
 
 // --- which tier the New-session form opens on ------------------------------
 // The form used to open on "box" unconditionally and always send that tier, so a
@@ -226,4 +226,20 @@ test("profileFitsAsSeg: past the threshold falls back to the plain select", () =
 
 test("profileFitsAsSeg: zero profiles is also the select (nothing to segment)", () => {
   assert.equal(profileFitsAsSeg(0), false);
+});
+
+test("spawnRuntimeDefault: a profile whose Host run drops bindings opens on box, host or not (#359)", () => {
+  const drops = ["AWS binding"];
+  assert.equal(spawnRuntimeDefault({ runtime: "host", host_drops: drops }, "runc"), "box");
+  assert.equal(spawnRuntimeDefault({ runtime: "box", host_drops: drops }, "runc"), "box");
+  assert.equal(spawnRuntimeDefault({ runtime: "host", host_drops: [] }, "runc"), "host");
+  assert.equal(spawnRuntimeDefault({ runtime: "host" }, "runc"), "host");
+  assert.equal(spawnRuntimeDefault({ runtime: "host", host_drops: drops }, ""), "", "no box layer: still nothing sent");
+});
+
+test("tierJoinWords joins like config.JoinKinds", () => {
+  assert.equal(tierJoinWords([]), "");
+  assert.equal(tierJoinWords(["a"]), "a");
+  assert.equal(tierJoinWords(["a", "b"]), "a and b");
+  assert.equal(tierJoinWords(["a", "b", "c"]), "a, b and c");
 });

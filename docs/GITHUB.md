@@ -1,6 +1,6 @@
 # GitHub access for agents
 
-A boxed profile can carry a `github` binding. The credential broker then mints short-lived GitHub App installation tokens for the repositories you list, read-only unless you allow write on contents, pull requests or issues, so the agent can `git clone`, `git fetch`, `git push` (when write is allowed) and use `gh` without a personal access token in the box. A bound profile is refused on the host tier. On macOS its box goes through the same egress allowlist as on Linux (the allowlist is verified on a Mac; minting GitHub tokens there is not yet), and an existing VM needs `culibox box setup -recreate` once (see [docs/MACOS.md](MACOS.md#every-box)).
+A boxed profile can carry a `github` binding. The credential broker then mints short-lived GitHub App installation tokens for the repositories you list, read-only unless you allow write on contents, pull requests or issues, so the agent can `git clone`, `git fetch`, `git push` (when write is allowed) and use `gh` without a personal access token in the box. The binding applies to Box only: a profile with one cannot be saved as host, and a session of it started on Host (from New session, or the API with `host_drops_bindings: true`) runs without it, with no broker token and no `GH_REPO`, using the machine user's own GitHub access. On macOS its box goes through the same egress allowlist as on Linux (the allowlist is verified on a Mac; minting GitHub tokens there is not yet), and an existing VM needs `culibox box setup -recreate` once (see [docs/MACOS.md](MACOS.md#every-box)).
 
 **1. Create the GitHub App.** The in-app guide (**How to create the App**, under Settings › Credentials › Add credential › Add GitHub › GitHub App) lists the permissions to tick. Give it read access, and add write on Contents, Pull requests and Issues only if agents should push and open PRs. Make it public ("Any account") if you will install it on more than its owner account; otherwise create it under the org that owns the repos. Install it on each owner you want to reach and select the repositories. Generate a private key and note the App's client id.
 
@@ -19,7 +19,7 @@ An App can also be declared in `config.json` (see the `github_apps` row in [Conf
 
 The key is never copied into a box. For a key file, CuliBox reads it once per daemon run and caches it after the first load, so after you rotate or change the key file, restart CuliBox. When a bound session spawns, CuliBox checks that the App is configured and its key loads (no network call), and refuses the spawn if not.
 
-**3. Add the binding to a profile.** Set the profile's runtime to the box, then fill in the GitHub section of the profile form. In `config.json` or the profile's JSON, set `"runtime": "box"` explicitly and write the binding:
+**3. Add the binding to a profile.** Set the profile's runtime to the box (a profile with a binding cannot be saved as host), then fill in the GitHub section of the profile form. In `config.json` or the profile's JSON, set `"runtime": "box"` explicitly and write the binding:
 
 ```json
 "github": {

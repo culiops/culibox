@@ -146,6 +146,16 @@ test("the product's own containment facts stay: readable paths, clone, left out 
   assert.ok(paths.querySelectorAll("div").every((d) => has(d, "mono", "t-sm")));
 });
 
+test("a host session that dropped bindings shows a Dropped on Host row in the same grid (#359)", async () => {
+  const { host } = await mount(claudeBox({ runtime: "host", host_dropped: ["AWS binding", "GitHub binding"] }), status());
+  const kvs = host.querySelector(".ac-kvs");
+  const at = kvs.children.findIndex((c) => c.textContent === "Dropped on Host");
+  assert.ok(at >= 0 && at % 2 === 0, "a label cell");
+  assert.strictEqual(kvs.children[at + 1].textContent, "AWS binding and GitHub binding");
+  const none = await mount(claudeBox({ runtime: "host" }), status());
+  assert.ok(!none.host.querySelector(".ac-kvs").children.some((c) => c.textContent === "Dropped on Host"));
+});
+
 test("locked files show in the same grid as a textContent-only value (macOS #96)", async () => {
   const { host } = await mount(claudeBox({ locked_files: ["CLAUDE.md", "<b>x</b>"] }), status());
   const kvs = host.querySelector(".ac-kvs");

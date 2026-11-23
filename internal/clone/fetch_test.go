@@ -171,6 +171,14 @@ func (r *recGit) RunStdin(ctx context.Context, dir string, env []string, stdin i
 	return r.g.(StdinGit).RunStdin(ctx, dir, env, stdin, args...)
 }
 
+// Stream records the call and forwards it, so recGit satisfies StreamGit.
+func (r *recGit) Stream(ctx context.Context, dir string, env []string, stdin io.Reader, stdout io.Writer, args ...string) error {
+	r.mu.Lock()
+	r.calls = append(r.calls, call{dir, slices.Clone(env), slices.Clone(args)})
+	r.mu.Unlock()
+	return r.g.(StreamGit).Stream(ctx, dir, env, stdin, stdout, args...)
+}
+
 type fetchFx struct {
 	t    *testing.T
 	of   string

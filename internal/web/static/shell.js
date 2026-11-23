@@ -49,6 +49,8 @@ function placeToast(box) {
 // showToast(msg, opts) -> handle. opts:
 //   error, warn   the tint (error wins). An error is role=alert, the rest role=status (F62).
 //   undo          a callback: reveals Undo, which dismisses the toast, then runs it
+//   link          desktop only: {label, run}, a button that dismisses the toast, then runs it (a toast that points
+//                 somewhere, such as the hand-back review). Undo wins when both are given.
 //   ms            the auto-hide delay (6000)
 //   sticky        no auto-hide: a pending toast, which its owner resolves or hides
 //   progress      a number 0..1 reveals the progress rail
@@ -146,6 +148,7 @@ function toastStacked() {
 let toastStack = null;
 let toastStackTimer = null;
 const toastUndos = new Map(); // entry id -> the caller's Undo callback
+const toastLinks = new Map(); // entry id -> the caller's {label, run} link
 const toastNodes = new Map(); // entry id -> { node, shape }
 let toastHover = false;
 let toastFocus = false;
@@ -153,12 +156,12 @@ let toastBusy = false; // toastChanged is running
 let toastAgain = false; // ...and something changed meanwhile
 
 // toastView(entry): what one stack entry looks like. Pure. An error is the only
-// role=alert; a pending entry has the spinner; the one action is Undo, else "Copy
-// details" on an error that has raw text. Every entry has its ×, a pending one too
+// role=alert; a pending entry has the spinner; the one action is Undo, else a link
+// the caller gave (hasLink), else "Copy details" on an error that has raw text. Every entry has its ×, a pending one too
 // (#183, founder 2026-11-13, option A): its request can hang, and with no way to
 // remove it the entry stayed until a reload. Removing it does not lose the result: the
 // owner's update then fails and the result is pushed as a new toast.
-function toastView(entry) {
+function toastView(entry, hasLink) {
   const kind = entry.kind;
   const cls = ["toast"];
   if (kind === "error") cls.push("is-error");
@@ -168,7 +171,7 @@ function toastView(entry) {
     cls: cls,
     dot: kind === "error" ? "crashed" : kind === "warn" ? "needs" : null,
     spin: kind === "pending",
-    action: entry.undo ? "undo" : kind === "error" && entry.detail ? "copy" : null,
+    action: entry.undo ? "undo" : hasLink ? "link" : kind === "error" && entry.detail ? "copy" : null,
   };
 }
 
@@ -192,6 +195,8 @@ function stackToast(msg, opts) {
   const id = opts.replace != null && toastStack.update(opts.replace, spec, now) ? opts.replace : toastStack.push(spec, now);
   if (opts.undo) toastUndos.set(id, opts.undo);
   else toastUndos.delete(id);
+  if (opts.link && typeof opts.link.run === "function") toastLinks.set(id, opts.link);
+  else toastLinks.delete(id);
   toastChanged();
   return id;
 }
@@ -301,10 +306,12 @@ function renderToasts() {
     rec.node.remove();
   }
   for (const id of toastUndos.keys()) if (!live.has(id)) toastUndos.delete(id);
+  for (const id of toastLinks.keys()) if (!live.has(id)) toastLinks.delete(id);
   let prev = null;
   for (const e of list) {
-    const v = toastView(e);
-    const shape = [v.cls.join(" "), v.role, v.dot, v.spin, v.action, e.kind, e.progress !== null].join("|");
+    const link = toastLinks.get(e.id);
+    const v = toastView(e, !!link);
+    const shape = [v.cls.join(" "), v.role, v.dot, v.spin, v.action, link ? link.label : "", e.kind, e.progress !== null].join("|");
     let rec = toastNodes.get(e.id);
     if (!rec || rec.shape !== shape) {
       const node = toastBuild(e, v);
@@ -337,10 +344,12 @@ function toastBuild(e, v) {
   if (v.spin) node.appendChild(toastEl("span", "spin")).setAttribute("aria-hidden", "true");
   parts.text = node.appendChild(toastEl("span", "toast-text"));
   if (v.action) {
-    const b = toastEl("button", "btn btn-ghost btn-sm toast-act", v.action === "undo" ? "Undo" : "Copy details");
+    const lk = toastLinks.get(e.id);
+    const label = v.action === "undo" ? "Undo" : v.action === "link" ? String((lk && lk.label) || "Open") : "Copy details";
+    const b = toastEl("button", "btn btn-ghost btn-sm toast-act", label);
     b.type = "button";
     b.dataset.act = v.action;
-    b.onclick = v.action === "undo" ? () => toastUndoClick(e.id) : () => toastCopyClick(e.id, b);
+    b.onclick = v.action === "undo" ? () => toastUndoClick(e.id) : v.action === "link" ? () => toastLinkClick(e.id) : () => toastCopyClick(e.id, b);
     node.appendChild(b);
   }
   const x = toastEl("button", "btn btn-ghost btn-icon btn-sm toast-x", "×");
@@ -371,6 +380,13 @@ function toastUndoClick(id) {
   const fn = toastUndos.get(id);
   dismissToast(id);
   if (fn) fn();
+}
+
+// A link: the toast goes first, then the callback runs (Undo's order).
+function toastLinkClick(id) {
+  const lk = toastLinks.get(id);
+  dismissToast(id);
+  if (lk) lk.run();
 }
 
 // Copy details: the entry's raw text to the clipboard (app.js copyText), and the

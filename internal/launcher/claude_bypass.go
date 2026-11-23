@@ -26,15 +26,17 @@ func (l *AgentLauncher) BypassesPermissions(spec SpawnSpec) bool {
 	return config.ProfileBypasses(cfg, l.optionDefs, l.mergeOptions(cfg, spec))
 }
 
-// BoxOnlyOptionFor names the box-only option the spawn's merged options turn
-// on (config.BoxOnlyOptionReason), "" when there is none. An unknown agent is
-// an error, as in HostBlockFor, so a spawn naming one is refused.
+// BoxOnlyOptionFor names the box-only option the spawn's own overrides turn on
+// (config.BoxOnlyOptionReason), "" when there is none. The profile's defaults
+// are not looked at: HostDropsFor lists those, and a host run drops them. An
+// unknown agent is an error, as in HostBlockFor, so a spawn naming one is
+// refused.
 func (l *AgentLauncher) BoxOnlyOptionFor(spec SpawnSpec) (string, error) {
 	cfg, ok := l.agent(spec.Agent)
 	if !ok {
 		return "", fmt.Errorf("launcher: unknown agent %q", spec.Agent)
 	}
-	return config.BoxOnlyOptionReason(l.optionDefs, l.mergeOptions(cfg, spec)), nil
+	return config.BoxOnlyOptionReason(l.optionDefs, l.acceptedOverrides(cfg, spec)), nil
 }
 
 // claudeGateOptions deletes the critical-rm option unless the profile runs in

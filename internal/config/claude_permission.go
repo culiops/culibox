@@ -112,17 +112,6 @@ func ProfileBypasses(a AgentConfig, defs map[string]OptionDef, opts map[string]a
 	return ArgsBypass(cmd)
 }
 
-// BoxOnlyEnvReason names the first BoxOnlyEnv name the profile sets in Env or
-// lists in Secrets. "" when there is none.
-func BoxOnlyEnvReason(a AgentConfig) string {
-	for _, n := range BoxOnlyEnv {
-		if _, ok := a.Env[n]; ok || contains(a.Secrets, n) {
-			return "this profile sets " + n + ", which runs only in a box"
-		}
-	}
-	return ""
-}
-
 // ValidateBoxOnlyEnvDef refuses a config option def whose env is one only a box
 // may set unless the def is box tier: without the tier the host would be offered
 // an option that puts the env into a host process.

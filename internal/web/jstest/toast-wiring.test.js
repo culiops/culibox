@@ -290,6 +290,31 @@ test("Undo runs the callback and removes its entry; an Undo is pushed down, neve
   assert.deepStrictEqual(texts(pg), ["c", "b"]);
 });
 
+test("a link toast shows its own label, runs the callback and removes its entry; Undo wins over a link (#346)", (t) => {
+  const pg = page(t);
+  let opened = 0;
+  pg.shell.showToast("p: 2 files flagged for your review", { warn: true, link: { label: "Review", run: () => { opened++; } } });
+  const btn = pg.node(0).find("toast-act");
+  assert.strictEqual(btn.textContent, "Review");
+  assert.strictEqual(btn.dataset.act, "link");
+  btn.onclick();
+  assert.strictEqual(opened, 1);
+  assert.deepStrictEqual(texts(pg), []);
+  let undone = 0;
+  pg.shell.showToast("Spawned", { undo: () => { undone++; }, link: { label: "Review", run: () => { opened++; } } });
+  assert.strictEqual(pg.node(0).find("toast-act").dataset.act, "undo");
+  pg.shell.showToast("plain");
+  assert.strictEqual(pg.entries()[0].act, null, "a toast without a link has no button");
+});
+
+test("toastView: a link is the action unless Undo is there; the pure view takes it as a flag (#346)", () => {
+  const { toastView } = require("../static/shell.js");
+  const e = (more) => Object.assign({ id: 1, text: "x", kind: "warn", undo: false, detail: "", progress: null }, more);
+  assert.strictEqual(toastView(e(), true).action, "link");
+  assert.strictEqual(toastView(e(), false).action, null);
+  assert.strictEqual(toastView(e({ undo: true }), true).action, "undo");
+});
+
 test("Undo and × on the focused toast: the blur fired by its removal does not break the click", (t) => {
   const pg = page(t);
   let undone = 0;

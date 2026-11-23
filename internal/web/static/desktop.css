@@ -666,6 +666,13 @@
      hidden it takes no row and so no 8px gap. */
   #side-store { font-size: var(--t-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
   #side-store[hidden] { display: none; }
+  /* #346: "N flagged for your review", its own row above the links while a hand-back record is pending.
+     Warning-tinted text, not a button chrome: it is a pointer to the review, never a verdict. */
+  #side-flagged:not([hidden]) {
+    display: block; width: 100%; padding: 4px 0; text-align: left; cursor: pointer;
+    background: transparent; border: 0; font: var(--t-sm) var(--font-ui); color: var(--warn-fg);
+  }
+  #side-flagged:not([hidden]):hover { text-decoration: underline; }
   .side-links { display: flex; gap: 2px; margin: 0 -8px; } /* the buttons' 8px padding: the first word starts on the 16px edge */
   .side-links button {
     padding: 5px 8px; font: var(--t-sm) var(--font-ui); cursor: pointer;
@@ -3648,6 +3655,34 @@
   #bug-modal #bug-status { margin: 0; color: var(--muted); }
   #bug-modal #bug-status a { color: var(--accent); }
 
+  /* Flagged for your review (#346). Neutral and warning tones only: nothing here is ever a green "all good". */
+  #handback-modal { width: 760px; }
+  #handback-modal #hb-body { max-height: 60vh; overflow-y: auto; }
+  #handback-modal .hb-rec { padding: 0 0 14px; margin: 0 0 14px; border-bottom: 1px solid var(--line); }
+  #handback-modal .hb-rec:last-child { margin-bottom: 0; border-bottom: 0; }
+  #handback-modal .hb-head { margin: 0 0 4px; font-size: var(--t-md); font-weight: 600; overflow-wrap: anywhere; }
+  #handback-modal .hb-window { margin: 0 0 10px; font-size: var(--t-sm); color: var(--muted); }
+  #handback-modal .hb-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  #handback-modal .hb-file { padding: 6px 10px; border-left: 2px solid var(--warn); background: var(--warn-bg); overflow-wrap: anywhere; }
+  #handback-modal .hb-path { font: var(--t-sm)/1.4 var(--font-mono); color: var(--fg); }
+  #handback-modal .hb-why { font-size: var(--t-sm); color: var(--warn-fg); }
+  #handback-modal .hb-detail { font-size: var(--t-sm); color: var(--muted); }
+  #handback-modal .hb-sha { display: flex; align-items: center; gap: 8px; font-size: var(--t-sm); color: var(--muted); }
+  #handback-modal .hb-shav { font: var(--t-xs)/1.4 var(--font-mono); color: var(--fg); overflow-wrap: anywhere; user-select: all; }
+  #handback-modal .hb-copy { flex: none; padding: 2px 8px; font-size: var(--t-sm); }
+  #handback-modal .hb-group { padding: 6px 10px; border-left: 2px solid var(--faint); background: var(--bg); }
+  #handback-modal .hb-gsum { cursor: pointer; font-size: var(--t-sm); overflow-wrap: anywhere; }
+  #handback-modal .hb-group .hb-list { margin: 8px 0 0; }
+  #handback-modal .hb-empty { margin: 0 0 10px; color: var(--muted); }
+  #handback-modal .hb-foot { margin: 0 0 4px; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+  #handback-modal .hb-act { display: flex; justify-content: flex-end; margin-top: 8px; }
+  /* The session row's line: a button that reads as a sub-line, in the warning tone. */
+  #sessions .drow .sub.hb-line {
+    display: block; width: 100%; padding: 0; border: 0; background: transparent; text-align: left; font-family: inherit;
+    color: var(--warn-fg);
+  }
+  #sessions .drow .sub.hb-line:hover { text-decoration: underline; }
+
   /* Ask / confirm / prompt dialog (shell.js askDialog), frame M5.2 (#173): a plain card, the title as the
      head, the body, and a footer that carries the "Esc to cancel" hint and the buttons. The box frame is hidden. */
   #ask-modal { width: 420px; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: var(--e-dlg); font: var(--t-md)/1.5 var(--font-ui); overflow: hidden; }
@@ -3749,6 +3784,7 @@
   #ask-modal .ask-list { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 6px 14px; margin: 8px 0 0; padding: 12px 14px; background: var(--bg); border-radius: var(--r-ctl); font-size: var(--t-md); }
   #ask-modal .ask-list dt { color: var(--muted); }
   #ask-modal .ask-list dd { margin: 0; overflow-wrap: anywhere; }
+  #ask-modal .ask-bullets { margin: 8px 0 0; padding-left: 20px; font-size: var(--t-md); overflow-wrap: anywhere; }
   #ask-modal .ask-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
   #ask-modal .ask-q { margin: 14px 0 0; }
   /* opts.notes: a muted paragraph under the body, 16px apart as the frame's body gap; a path in one is mono at
@@ -3990,6 +4026,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-sub + .pfv-add { margin-top: 10px; }
 
   /* Branches that did not come home: today's amber chip and rows (the old list and form). */
+  /* #346: the profile page's "N files flagged for your review" link, in the warning tone. */
+  #page-host > #settings-modal.as-page #pfv .pfv-flagged { grid-column: 2 / -1; justify-self: start; color: var(--warn-fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-nhome { grid-column: 2 / -1; display: grid; gap: 6px; justify-items: start; }
   #page-host > #settings-modal.as-page #pfv .pfv-nh-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--warn); border-radius: var(--r-chip); background: var(--warn-bg); color: var(--warn-fg); font-size: var(--t-xs); white-space: nowrap; }
   #page-host > #settings-modal.as-page #pfv .pfv-nh-row { display: grid; gap: 1px; justify-self: stretch; padding: 6px 8px; border-left: 2px solid var(--warn); background: var(--warn-bg); overflow-wrap: anywhere; }

@@ -1294,8 +1294,12 @@ func TestViewCriticalRmTierAndHostBlock(t *testing.T) {
 	if row.Tier != "box" {
 		t.Errorf("tier = %q, want box", row.Tier)
 	}
-	if want := `"Skip the critical-rm prompt" runs only in a box`; vs[0].HostBlock != want {
-		t.Errorf("host_block = %q, want %q", vs[0].HostBlock, want)
+	// #359: the option is a drop on the host, not a lock.
+	if vs[0].HostBlock != "" {
+		t.Errorf("host_block = %q, want none", vs[0].HostBlock)
+	}
+	if got, want := config.HostDrops(seeds[0], m.optDefs), []string{`"Skip the critical-rm prompt" option`}; !slices.Equal(got, want) {
+		t.Errorf("HostDrops = %q, want %q", got, want)
 	}
 	for _, o := range vs[0].Options {
 		if o.Key != config.CriticalRmKey && o.Tier != "" {
@@ -1339,5 +1343,16 @@ func TestViewUserPermissionModeDefWins(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("permission_mode rows = %d, want exactly 1", n)
+	}
+}
+
+// Host review 2026-11-23 (#346, #359): a profile's view names the secrets and
+// env a host run still passes, next to what it drops.
+func TestViewHostKeeps(t *testing.T) {
+	seeds := []config.AgentConfig{{Name: "c", Bin: "claude", Secrets: []string{"GH_TOKEN"}, Env: map[string]string{"FOO": "1"}}}
+	m := NewProfileManager(seeds, config.Defaults().Options, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	vs := m.Views()
+	if len(vs) != 1 || !slices.Equal(vs[0].HostKeeps, []string{"GH_TOKEN secret", "FOO env"}) {
+		t.Fatalf("views = %+v, want host_keeps GH_TOKEN secret, FOO env", vs)
 	}
 }

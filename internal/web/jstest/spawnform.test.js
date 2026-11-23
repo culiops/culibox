@@ -224,6 +224,12 @@ test("spawnPayload sends login:true only when set (the Settings Log in session)"
   assert.strictEqual("login" in spawnPayload({ agent: "c", login: false }), false);
 });
 
+test("spawnPayload sends host_drops_bindings:true only when set (#359)", () => {
+  assert.strictEqual(spawnPayload({ agent: "c", runtime: "host", hostDropsBindings: true }).host_drops_bindings, true);
+  assert.strictEqual("host_drops_bindings" in spawnPayload({ agent: "c", runtime: "host" }), false);
+  assert.strictEqual("host_drops_bindings" in spawnPayload({ agent: "c", hostDropsBindings: false }), false);
+});
+
 // Kill-switch: the replies field closes unless globalThis.repliesEnabled is the boolean true.
 for (const off of [undefined, "true"]) {
   test("replies field is hidden when repliesEnabled is " + String(off), () => {

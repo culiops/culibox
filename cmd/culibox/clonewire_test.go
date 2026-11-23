@@ -1090,7 +1090,7 @@ func TestCloneReturnLockWaitTimesOut(t *testing.T) {
 
 func TestCloneReturnSummary(t *testing.T) {
 	at := time.Date(2026, 10, 31, 1, 2, 3, 0, time.UTC)
-	got := returnSummaryOf(session.ReturnNow, clone.ReturnResult{
+	got := returnSummaryOf(session.ReturnNow, "/r", nil, clone.ReturnResult{
 		At: at, Base: "main", Home: []string{"box/a"},
 		NotHome:  []clone.NotHome{{Branch: "b", Reason: clone.ReasonNotFF, Detail: "d"}},
 		Warnings: []string{"w"}, Error: "e",

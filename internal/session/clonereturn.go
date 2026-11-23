@@ -64,6 +64,10 @@ type ReturnSummary struct {
 	NotHome  []NotHomeBranch `json:"not_home,omitempty"`
 	Warnings []string        `json:"warnings,omitempty"`
 	Error    string          `json:"error,omitempty"`
+	// Flagged lists the branches that came home with files flagged for review
+	// (#346): one note per branch, with the count and the record to read them
+	// from. Absent when nothing was flagged.
+	Flagged []HandbackNote `json:"flagged,omitempty"`
 }
 
 // copy returns an independent ReturnSummary, nil for nil.
@@ -75,6 +79,7 @@ func (r *ReturnSummary) copy() *ReturnSummary {
 	out.Home = slices.Clone(r.Home)
 	out.NotHome = slices.Clone(r.NotHome)
 	out.Warnings = slices.Clone(r.Warnings)
+	out.Flagged = slices.Clone(r.Flagged)
 	return &out
 }
 

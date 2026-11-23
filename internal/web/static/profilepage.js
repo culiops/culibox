@@ -185,7 +185,7 @@ function pfvOnPage() {
 // --- the nav list -------------------------------------------------------------
 
 // pfvRenderNav: the profiles nested under Profiles in the Settings nav: name, a lock
-// for one you cannot edit, `box only` when it may not run on the host, then "+ New profile". The list is
+// for one you cannot edit, `box only` when it is locked to Box (box_only), then "+ New profile". The list is
 // rebuilt only when what it shows changed (every loadProfiles hands back new objects);
 // otherwise only the current row's aria-current moves, so a refetch or a click never
 // replaces the button that has focus.
@@ -201,8 +201,8 @@ function pfvRenderNav() {
       const b = pfvMk("button", "pfv-ni");
       b.type = "button";
       b.dataset.pfvName = p.name;
-      // The M2 row: name, a lock for a read-only profile, then `box only` as a chip when the server says Host is blocked
-      // (host_block). The chip holds the words alone (it is a filled box), so the lock and its words for a screen reader sit in front.
+      // The M2 row: name, a lock for a read-only profile, then `box only` as a chip when the profile is locked to Box
+      // (host_block is only that lock). The chip holds the words alone (it is a filled box), so the lock and its words for a screen reader sit in front.
       b.append(pfvMk("span", "pfv-ni-name", p.name));
       if (!p.editable) {
         b.setAttribute("title", "Defined in config.json (read-only)");
@@ -449,6 +449,16 @@ function pfvDrawBranches(notHome, rows) {
   return row;
 }
 
+// pfvDrawFlagged: "N files flagged for your review" (#346), a link that opens the review panel for this profile.
+function pfvDrawFlagged(f) {
+  const row = pfvMk("div", "pfv-row");
+  row.append(pfvMk("span", "pfv-k", "Flagged"));
+  const link = pfvDrawLink(f.text, "pfv-flagged");
+  link.onclick = () => openHandback(f.sel);
+  row.append(link);
+  return row;
+}
+
 // rec: the block's edit record when it is open without a form (a refused save sent the
 // user here): the refusals that name one of its rows are drawn under that row.
 function pfvDrawBody(b, known, rec) {
@@ -461,7 +471,7 @@ function pfvDrawBody(b, known, rec) {
     p.append(...pfvMonoNodes(line, known));
     body.append(p);
   });
-  if (b.rows.length || b.notHome) {
+  if (b.rows.length || b.notHome || b.flagged) {
     const rows = pfvMk("div", "pfv-rows");
     const nh = b.rows.filter((r) => r.kind === "Not home");
     for (const r of b.rows) {
@@ -471,6 +481,7 @@ function pfvDrawBody(b, known, rec) {
       rows.append(pfvDrawRow(r, known, e ? e.text : "", { block: b.id }));
     }
     if (b.notHome) rows.append(pfvDrawBranches(b.notHome, nh));
+    if (b.flagged) rows.append(pfvDrawFlagged(b.flagged));
     body.append(rows);
   }
   if (b.note) body.append(pfvMk("p", "pfv-tnote", b.note));
@@ -1938,15 +1949,11 @@ function pfvRunsForm(rec, c) {
     p.append(refusal, " ", link);
     out.push(p);
   }
-  // host_block is the server's reason Host is not offered. With no lock stored that reason is a binding or context paths
-  // (never a private copy), which forces the lock, so the box shows it ticked and off; a stored lock
-  // stays the user's to clear, whatever else blocks Host. Once Host is picked the box is the user's own value again:
-  // the pre-check refuses a ticked lock there, and an unticked one saves as host with the bindings stripped. A lock the user
-  // ticked themselves is real, so it is never drawn as forced: it stays enabled and clearable.
-  const forced = !!c.view.host_block && c.view.box_only !== true && v.tier !== "host" && !v.boxOnly;
-  const why = forced ? c.view.host_block.charAt(0).toUpperCase() + c.view.host_block.slice(1) + "." : "";
-  out.push(pfaCheckbox(rec, "box_only", "Box only: never offer Host for this profile", why, v.boxOnly || forced,
-    (on) => { v.boxOnly = on; pfvChanged(rec, "box_only"); }, null, forced));
+  // host_block is now only the box_only lock, so the checkbox is the stored lock and nothing else: a binding or context paths do
+  // not tick it (Host drops them, by the user's choice, see pfvHostConsequence). Once Host is picked a ticked lock is refused by
+  // the pre-check, and an unticked one saves as host.
+  out.push(pfaCheckbox(rec, "box_only", "Box only: never offer Host for this profile", "", v.boxOnly,
+    (on) => { v.boxOnly = on; pfvChanged(rec, "box_only"); }, null));
   return out;
 }
 

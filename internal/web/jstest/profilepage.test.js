@@ -76,7 +76,7 @@ const labelNames = (root) => byCls(root, "pfv-label").map(labelName);
 const view = (name, over) => Object.assign({ name, editable: true, source: "runtime", runtime: "box", bin: "claude", claude: true }, over);
 const PROFILES = [
   view("claude", { editable: false, source: "config", runtime: "host" }),
-  view("aws-ops", { default_cwd: "/home/you/work/payments-api", aws_connections: ["prod-read", "staging-read"], tokens: ["grafana-prod"], network: "allowlist", host_block: "this profile has an AWS binding, so it runs only in a box" }),
+  view("aws-ops", { default_cwd: "/home/you/work/payments-api", aws_connections: ["prod-read", "staging-read"], tokens: ["grafana-prod"], network: "allowlist" }),
   view("infra-terraform"),
   view("runbook-host", { runtime: "host", default_cwd: "/home/you/runbooks" }),
 ];
@@ -202,7 +202,7 @@ function page(over) {
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["svgicon.js", "kitmenu.js", "fsops.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
+  for (const f of ["svgicon.js", "kitmenu.js", "fsops.js", "handbackmodel.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
@@ -210,12 +210,16 @@ function page(over) {
   return { box, els, calls, doc, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
 
-test("pfvRenderNav lists every profile with a read-only marker for config.json and box only where Host is blocked", () => {
-  const t = page();
+const LOCK = "this profile is set to box only";
+const lockedInfra = () => PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { box_only: true, host_block: LOCK }) : p));
+
+test("pfvRenderNav lists every profile with a read-only marker for config.json and box only where the lock is set", () => {
+  const t = page({ profiles: lockedInfra() });
   t.box.pfvRenderNav();
   const items = byCls(t.els["pf-navlist"], "pfv-ni").filter((n) => !hasCls("pfv-ni-add")(n));
   assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-name")[0].textContent), ["claude", "aws-ops", "infra-terraform", "runbook-host"]);
-  assert.deepStrictEqual(items.map((n) => texts(n, "pfv-ni-boxonly")), [[], ["box only"], [], []]);
+  // aws-ops holds an AWS binding and a token but no lock: Host is the user's choice, so no chip. Only the lock draws one.
+  assert.deepStrictEqual(items.map((n) => texts(n, "pfv-ni-boxonly")), [[], [], ["box only"], []]);
   assert.strictEqual(byCls(t.els["pf-navlist"], "pfv-ni-tier").length, 0, "the tier chip is gone");
   // The marker: a lock glyph plus words for a screen reader, only on the config.json profile.
   assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-lock").length), [1, 0, 0, 0]);
@@ -230,15 +234,16 @@ test("pfvRenderNav lists every profile with a read-only marker for config.json a
 
 // The M2 nav row: the name, then the lock, then `box only` when the server says Host is blocked for the profile. No tier chip:
 // the tier is not a fixed property of a profile. The lock and its screen-reader words are the row's own children, before the chip.
-test("a nav row is name, lock, then box only when Host is blocked", () => {
-  const t = page();
+test("a nav row is name, lock, then box only when the lock is set", () => {
+  const t = page({ profiles: lockedInfra() });
   t.box.pfvRenderNav();
   const items = byCls(t.els["pf-navlist"], "pfv-ni").filter((n) => !hasCls("pfv-ni-add")(n));
   const order = (n) => n.children.filter((c) => c instanceof Node).map((c) => c.className.split(/\s+/)[0] + (c.tag === "svg" ? "(svg)" : ""));
   assert.deepStrictEqual(order(items[0]), ["pfv-ni-name", "pfv-lock(svg)", "pfv-sr"], "claude: read-only");
-  assert.deepStrictEqual(order(items[1]), ["pfv-ni-name", "pfv-ni-boxonly"], "aws-ops: editable, Host blocked");
+  assert.deepStrictEqual(order(items[1]), ["pfv-ni-name"], "aws-ops: bound but not locked");
+  assert.deepStrictEqual(order(items[2]), ["pfv-ni-name", "pfv-ni-boxonly"], "infra-terraform: locked");
   assert.deepStrictEqual(order(items[3]), ["pfv-ni-name"], "runbook-host: a host profile with no block");
-  assert.strictEqual(byCls(items[1], "pfv-ni-boxonly")[0].children.length, 0, "nothing but the words inside a chip");
+  assert.strictEqual(byCls(items[2], "pfv-ni-boxonly")[0].children.length, 0, "nothing but the words inside a chip");
   assert.strictEqual(byCls(t.els["pf-navlist"], "pfv-ni-host").length, 0);
 });
 
@@ -714,6 +719,21 @@ test("a private copy shows its branches that did not come home in the Workspace 
   assert.strictEqual(byCls(ws, "pfv-nh-row").length, 2);
   assert.deepStrictEqual(texts(ws, "pfv-nh-why")[0], "box/fix-drift on the host has commits this branch lacks");
   assert.match(texts(ws, "pfv-nh-fix")[0], /overwrites box\/fix-drift$/);
+});
+
+test("a profile with flagged files shows the count as a link that opens its review (#346)", async () => {
+  const prof = view("gitops-clone", { default_cwd: "/home/you/box-clones/k8s-gitops", clone_of: "/home/you/work/k8s-gitops", auto_return: true, flagged: 2 });
+  const t = page({ profiles: [prof] });
+  const opened = [];
+  t.box.openHandback = (sel) => opened.push(sel);
+  const real = t.box.api;
+  t.box.api = async (p, o) => (p === "/api/profiles/gitops-clone" ? { name: "gitops-clone", bin: "claude", runtime: "box" } : real(p, o));
+  await t.box.pfvShow("gitops-clone");
+  const ws = byCls(t.els["pfv-in"], "pfv-block").find((b) => b.dataset.block === "workspace");
+  const link = byCls(ws, "pfv-flagged")[0];
+  assert.strictEqual(link.textContent, "2 files flagged for your review");
+  link.click();
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(opened)), [{ cloneOf: "/home/you/work/k8s-gitops" }]);
 });
 
 test("boxes unavailable on a box profile: the reason line is red, the consequence is not", async () => {
@@ -1449,14 +1469,13 @@ test("Runs in: a private copy cannot choose host; the refusal shows in place and
 // --- Runs in: the Box only checkbox (S1's host_block and box_only on the profile view) ---------------------------------
 
 const BOX_ONLY_LABEL = "Box only: never offer Host for this profile";
-const AWS_SENTENCE = "This profile has an AWS binding, so it runs only in a box.";
 async function openRuns(t, name) {
   await t.box.pfvShow(name);
   clickBtn(blockOf(t, "runs"), "Edit");
 }
 const boxOnlyLabel = (t) => byCls(blockOf(t, "runs"), "pfv-check")[0];
 
-test("the Box only checkbox: forced by bindings is ticked and disabled with the reason, a set lock stays clearable", async () => {
+test("the Box only checkbox: a binding does not tick it, a set lock is ticked and stays clearable", async () => {
   // A plain box profile: the choice is free.
   const plain = page();
   await openRuns(plain, "infra-terraform");
@@ -1466,15 +1485,21 @@ test("the Box only checkbox: forced by bindings is ticked and disabled with the 
   assert.deepStrictEqual(byCls(blockOf(plain, "runs"), "pfv-check-t").map(labelName), [BOX_ONLY_LABEL]);
   assert.deepStrictEqual(texts(blockOf(plain, "runs"), "pfv-check-d"), []);
   assert.ok(!classesOf(boxOnlyLabel(plain)).includes("pfv-off"));
-  // Bound, with no lock set: the bindings force it, so it is ticked, off for the user, and says why.
+  // Bound, with no lock set: the bindings do not tick it. Host is the user's choice, so the box is free and says nothing.
   const bound = page();
   await openRuns(bound, "aws-ops");
-  const forced = field(bound, "box_only");
-  assert.strictEqual(forced.checked, true);
-  assert.strictEqual(forced.disabled, true);
+  const unforced = field(bound, "box_only");
+  assert.strictEqual(unforced.checked, false);
+  assert.notStrictEqual(unforced.disabled, true);
   assert.deepStrictEqual(byCls(blockOf(bound, "runs"), "pfv-check-t").map(labelName), [BOX_ONLY_LABEL]);
-  assert.deepStrictEqual(texts(blockOf(bound, "runs"), "pfv-check-d"), [AWS_SENTENCE]);
-  assert.ok(classesOf(boxOnlyLabel(bound)).includes("pfv-off"));
+  assert.deepStrictEqual(texts(blockOf(bound, "runs"), "pfv-check-d"), []);
+  assert.ok(!classesOf(boxOnlyLabel(bound)).includes("pfv-off"));
+  // A view that carries a host_block without the lock (an older server's reason) is no lock either: only box_only ticks the box.
+  const stale = page({ profiles: PROFILES.map((p) => (p.name === "aws-ops" ? Object.assign({}, p, { host_block: "this profile has an AWS binding, so it runs only in a box" }) : p)) });
+  await openRuns(stale, "aws-ops");
+  assert.strictEqual(field(stale, "box_only").checked, false);
+  assert.notStrictEqual(field(stale, "box_only").disabled, true);
+  assert.deepStrictEqual(texts(blockOf(stale, "runs"), "pfv-check-d"), []);
   // Bound and locked: the lock is redundant, but it is the user's to clear.
   const locked = page({ profiles: PROFILES.map((p) => (p.name === "aws-ops" ? Object.assign({}, p, { box_only: true }) : p)) });
   locked.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { box_only: true });
@@ -1492,32 +1517,31 @@ test("the Box only checkbox: forced by bindings is ticked and disabled with the 
   assert.strictEqual(locked.box.puts[0].runtime, "box");
 });
 
-test("a binding-forced Box only checkbox stops reading as forced once Host is picked", async () => {
+test("a bound profile's Box only checkbox is the user's own value on Box and on Host", async () => {
   const t = page();
   await openRuns(t, "aws-ops");
-  const forcedNow = () => field(t, "box_only").checked === true && field(t, "box_only").disabled === true;
-  assert.ok(forcedNow(), "Box: ticked and disabled");
+  assert.strictEqual(field(t, "box_only").checked, false, "Box: unticked");
   field(t, "tier-host").checked = true;
   field(t, "tier-host").onchange();
   const cb = field(t, "box_only");
-  assert.strictEqual(cb.checked, false, "Host picked: the user's own value, unticked");
+  assert.strictEqual(cb.checked, false, "Host picked: still unticked");
   assert.notStrictEqual(cb.disabled, true, "enabled");
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-check-d"), [], "no forcing reason");
-  assert.ok(!classesOf(boxOnlyLabel(t)).includes("pfv-off"));
   // Ticking it with Host picked is refused by the pre-check, before any confirm.
   cb.checked = true;
   cb.onchange();
   assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save as host…"), false);
   assert.strictEqual(t.box.asked.length, 0, "no host-switch confirm");
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), ["Box only is on, so this profile cannot be saved as host. Turn Box only off first."]);
-  // Back to Box with the lock unticked: forced again, with the reason.
+  // Back to Box with the lock unticked: free again, with no reason.
   cb.checked = false;
   cb.onchange();
   field(t, "tier-box").checked = true;
   field(t, "tier-box").onchange();
-  assert.ok(forcedNow(), "Box again: ticked and disabled");
-  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-check-d"), [AWS_SENTENCE]);
-  assert.ok(classesOf(boxOnlyLabel(t)).includes("pfv-off"));
+  assert.strictEqual(field(t, "box_only").checked, false, "Box again: unticked");
+  assert.notStrictEqual(field(t, "box_only").disabled, true);
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-check-d"), []);
+  assert.ok(!classesOf(boxOnlyLabel(t)).includes("pfv-off"));
 });
 
 test("a Box only lock the user ticked stays enabled and clearable after Host and back to Box", async () => {
@@ -1603,16 +1627,16 @@ test("picking Box again retires the Box only refusal", async () => {
   assert.notStrictEqual(field(t, "box_only").getAttribute("aria-invalid"), "true");
 });
 
-test("a bound profile saved without touching the lock does not send box_only, so removing the binding later frees Host", async () => {
+test("a bound profile saved without touching the lock does not send box_only", async () => {
   const t = page();
   await openRuns(t, "aws-ops");
-  assert.strictEqual(field(t, "box_only").checked, true, "drawn ticked because the bindings force it");
+  assert.strictEqual(field(t, "box_only").checked, false, "a binding does not tick it");
   assert.strictEqual(t.run("pfvState").edits.runs.values.boxOnly, false, "but the value held is the stored one: no lock");
   // Runs in has a Save while it is clean, and it merges through pfvRunsMerge.
   assert.strictEqual(await clickBtn(blockOf(t, "runs"), "Save"), true);
   assert.strictEqual(t.box.puts.length, 1);
   assert.strictEqual(t.box.puts[0].runtime, "box");
-  assert.ok(!("box_only" in t.box.puts[0]), "a forced tick is not a stored lock");
+  assert.ok(!("box_only" in t.box.puts[0]), "no lock was ticked, so none is stored");
 });
 
 test("Box only cleared and Host picked on a locked profile saves host with no box_only", async () => {

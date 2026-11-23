@@ -216,6 +216,7 @@ function accContainment(c, s) {
     kv("Cloned from", lines, "", true);
   }
   if (c.dropped) kv("Left out of the box", c.dropped.v);
+  if (c.hostDropped) kv(c.hostDropped.k, c.hostDropped.v);
   if (c.locked) kv("Locked files", c.locked.v);
   if (kvs.children.length) card.appendChild(kvs);
   return card;

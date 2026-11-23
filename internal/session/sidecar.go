@@ -24,6 +24,13 @@ type sessionMeta struct {
 	Name    string    `json:"name,omitempty"` // mutable display label
 	Cwd     string    `json:"cwd,omitempty"`
 	Created time.Time `json:"created"`
+	// Workspace is the boxed workspace's real path when the box was made (see
+	// Session.workspace); "" for a host session or a record from before it.
+	Workspace string `json:"workspace,omitempty"`
+	// createdGuessed marks an orphan adopted with no record: Created is the
+	// adoption time, not the start. In memory only, between reconcile and
+	// reattach.
+	createdGuessed bool
 	// Runtime is the tier the session was spawned under (box|host). It must
 	// survive a restart: without it, reconcile cannot tell which reattached
 	// sessions still own a box, and the orphan reaper would stop boxes out from
@@ -99,6 +106,10 @@ type sessionMeta struct {
 	// kept so the UI still says so after a daemon restart. Records from before
 	// A3 lack it and read as none.
 	BundleDrops []bundle.Drop `json:"bundle_drops,omitempty"`
+	// HostDropped is what a host session runs without (Info.HostDropped), kept
+	// so the card still says so after a daemon restart. Records from before
+	// lack it and read as none.
+	HostDropped []string `json:"host_dropped,omitempty"`
 	// Clone is the clone refresh result of a clone-mode session, kept so the UI
 	// still shows it after a daemon restart. Records from before the refresh
 	// lack it and read as none.
