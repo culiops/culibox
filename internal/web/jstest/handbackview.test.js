@@ -27,7 +27,7 @@ function page(over) {
     api: async (p, o) => {
       log.api.push([p, o && o.method || "GET"]);
       log.bodies.push(o && o.body);
-      if (state.fail && state.fail.when(p, o)) throw state.fail.err;
+      if (state.fail && state.fail.when(p, o)) throw typeof state.fail.err === "function" ? state.fail.err(p, o) : state.fail.err;
       return p === "/api/handback" ? { records: state.records } : null;
     },
     openDialog: (id) => log.dialogs.push(id),
@@ -143,7 +143,7 @@ test("Mark reviewed refused with 409 refreshes the list and says what happened",
   await tick(); await tick(); await tick();
   const paths = pg.byId["hb-body"].querySelectorAll(".hb-path").map((n) => n.textContent);
   assert.deepStrictEqual(paths, ["new.pdf", "x"], "the list shows the new file");
-  assert.deepStrictEqual(pg.log.errors.at(-1), ["handback-modal", "New files were flagged since you opened this. Review them, then mark reviewed again."]);
+  assert.deepStrictEqual(pg.log.errors.at(-1), ["handback-modal", "This list changed since you opened it. Review it, then mark reviewed again."]);
   assert.strictEqual(pg.byId["hb-body"].querySelector(".hb-reviewed").disabled, false);
   // The next click sends the new revision (last_scan did not move).
   pg.state.fail = null;
@@ -152,6 +152,22 @@ test("Mark reviewed refused with 409 refreshes the list and says what happened",
   await tick();
   const i = pg.log.api.findIndex(([p, m]) => p.endsWith("/reviewed") && m === "POST");
   assert.deepStrictEqual(JSON.parse(pg.log.bodies[i]), { revision: 4 });
+});
+
+test("a 409 whose reload fails re-enables Mark reviewed and shows the error", async () => {
+  const pg = page();
+  pg.state.records = [REC({ revision: 3, flags: [flag("x", ["archive"])] })];
+  await pg.ctx.openHandback();
+  pg.state.fail = {
+    when: () => true,
+    err: (p, o) => (o && o.method === "POST" ? Object.assign(new Error("changed"), { status: 409 }) : Object.assign(new Error("offline"), { status: 500 })),
+  };
+  const btn = pg.byId["hb-body"].querySelector(".hb-reviewed");
+  btn.onclick();
+  await tick(); await tick(); await tick();
+  assert.strictEqual(btn.disabled, false, "the user can try again");
+  assert.deepStrictEqual(pg.log.errors.at(-1), ["handback-modal", "Could not load the list: offline"]);
+  assert.strictEqual(pg.byId["hb-body"].querySelectorAll(".hb-rec").length, 1, "the list on screen is kept");
 });
 
 test("a stale link to records already reviewed says so, not 'Nothing flagged'", async () => {

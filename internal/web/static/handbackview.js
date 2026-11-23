@@ -189,7 +189,7 @@ async function handbackMarkReviewed(r, btn, secs) {
       body: JSON.stringify({ revision: r.revision }),
     });
   } catch (e) {
-    if (e && e.status === 409) { handbackReload(); return; }
+    if (e && e.status === 409) { handbackReload(btn); return; }
     if (!e || e.status !== 404) {
       btn.disabled = false;
       setDialogError("handback-modal", "Could not mark this reviewed: " + ((e && e.message) || "unknown error"));
@@ -205,11 +205,13 @@ async function handbackMarkReviewed(r, btn, secs) {
 }
 
 // handbackReload: after a refused Mark reviewed, list the same records again (their files and revision are
-// current now) and say why nothing was cleared.
-async function handbackReload() {
+// current now) and say why nothing was cleared. If the list cannot be read the old one stays on screen, so
+// the button that was disabled for the request is given back with the error.
+async function handbackReload(btn) {
   const seq = ++handbackPanelSeq;
   let records;
   try { records = await handbackFetch(); } catch (e) {
+    if (btn) btn.disabled = false;
     if (seq !== handbackPanelSeq) return;
     setDialogError("handback-modal", "Could not load the list: " + ((e && e.message) || "unknown error"));
     return;

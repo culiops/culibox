@@ -76,7 +76,7 @@ test("handbackEmptyText and the window sentence", () => {
   assert.match(hb.handbackWindowText(rec([], { kind: "in-place" })), /^Files created or changed while the session ran\.$/);
   assert.doesNotMatch(hb.handbackWindowText(rec([])), /session ran/);
   assert.strictEqual(hb.handbackAlreadyText(), "Already marked reviewed.");
-  assert.strictEqual(hb.handbackChangedText(), "New files were flagged since you opened this. Review them, then mark reviewed again.");
+  assert.strictEqual(hb.handbackChangedText(), "This list changed since you opened it. Review it, then mark reviewed again.");
 });
 
 test("handbackNoteText: a count, a cut-short scan that never reads as nothing flagged, or both", () => {

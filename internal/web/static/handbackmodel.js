@@ -15,7 +15,7 @@ const HANDBACK_NOT_A_SCAN = "This is not a malware scan.";
 const HANDBACK_IN_PLACE_LINE = "These files have been on the host since the agent wrote them.";
 const HANDBACK_CUT_SHORT = "Not everything was checked — open the review";
 const HANDBACK_ALREADY = "Already marked reviewed.";
-const HANDBACK_CHANGED = "New files were flagged since you opened this. Review them, then mark reviewed again.";
+const HANDBACK_CHANGED = "This list changed since you opened it. Review it, then mark reviewed again.";
 // More than this many weaker flags in one directory collapse into one group row.
 const HANDBACK_GROUP_OVER = 20;
 // The classes that are never grouped: each is a reason to look at that one file.
@@ -54,8 +54,8 @@ function handbackAlreadyText() {
   return HANDBACK_ALREADY;
 }
 
-// handbackChangedText: Mark reviewed was refused because the record was scanned
-// again after the user opened it.
+// handbackChangedText: Mark reviewed was refused because the record changed after
+// the user opened it.
 function handbackChangedText() {
   return HANDBACK_CHANGED;
 }
