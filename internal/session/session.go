@@ -3147,10 +3147,14 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 			// Release only on finalize. A DETACHED session's agent is still
 			// alive inside its box, so releasing there would arm the idle timer
 			// and stop the box under a session we intend to recover.
+			endScan := m.handbackBegin(sess) // before the release: a box stop that follows at once must know
 			m.releaseSessionBox(sess)
 			m.brokerRevoke(sess)
 			go m.returnWork(sess, ReturnOnExit)
-			go m.handbackWork(sess)
+			go func() {
+				defer endScan()
+				m.handbackWork(sess)
+			}()
 		case <-sess.detachedCh: // agent alive, pipe lost → keep listed for restart recovery
 			return
 		}

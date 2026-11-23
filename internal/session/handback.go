@@ -49,6 +49,10 @@ type HandbackHooks interface {
 	// spawn. cwd is the session's working directory as given (unresolved);
 	// since is the window the scan would have covered.
 	NotScanned(cwd string, since time.Time) (HandbackNote, error)
+	// BeginExit says an exit scan of workspace is coming. It is called before
+	// the session's box is released, so a box stop that follows at once knows
+	// the record is on its way; end is called once the scan has finished.
+	BeginExit(workspace string) (end func())
 }
 
 // SetHandback installs the handback hooks. Call once at boot. Nil means no
@@ -57,6 +61,29 @@ func (m *Manager) SetHandback(h HandbackHooks) {
 	m.mu.Lock()
 	m.handback = h
 	m.mu.Unlock()
+}
+
+// handbackBegin tells the hooks that sess's exit scan (or not-scanned record)
+// is coming, before the box is released; the returned func ends it. A session
+// handbackWork would skip gets a no-op.
+func (m *Manager) handbackBegin(sess *Session) func() {
+	m.mu.Lock()
+	h := m.handback
+	m.mu.Unlock()
+	if !handbackEligible(h, sess) {
+		return func() {}
+	}
+	ws := sess.workspace
+	if ws == "" {
+		ws = sess.Cwd
+	}
+	return h.BeginExit(ws)
+}
+
+// handbackEligible: the session ran in a box over the user's own folder (no
+// clone, not a companion shell) and there are hooks to scan with.
+func handbackEligible(h HandbackHooks, sess *Session) bool {
+	return h != nil && sess.Runtime == config.RuntimeBox && sess.CloneOf == "" && sess.ParentID == ""
 }
 
 // copy returns an independent HandbackNote, nil for nil.
@@ -82,7 +109,7 @@ func (m *Manager) handbackWork(sess *Session) {
 	m.mu.Lock()
 	h := m.handback
 	m.mu.Unlock()
-	if h == nil || sess.Runtime != config.RuntimeBox || sess.CloneOf != "" || sess.ParentID != "" {
+	if !handbackEligible(h, sess) {
 		return
 	}
 	defer func() {

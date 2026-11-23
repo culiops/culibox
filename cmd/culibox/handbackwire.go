@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
@@ -45,6 +46,12 @@ type handbackHooks struct {
 	// flags come from its returned branches, never from walking the clone. nil
 	// = nothing is known to be owned.
 	owned func(dir string) bool
+
+	// pending counts the exit scans announced (BeginExit) and not yet ended,
+	// per workspace, so a box stop that comes first does not record "not
+	// checked" for a window the exit scan is about to cover.
+	mu      sync.Mutex
+	pending map[string]int
 
 	// Swappable for tests.
 	inspect func(ctx context.Context, root *os.Root, since time.Time, lim handback.Limits) (handback.Report, error)
@@ -128,11 +135,15 @@ func openWorkspace(path string) (*os.Root, error) {
 // were not checked. The scan's start is taken before the walk, so a file
 // written during it is seen by the next scan. A walk that stopped early
 // (Report.Incomplete: its time budget, the entry or candidate cap, a cancel)
-// moves the window on too, or a tree over a cap would be walked to the same
-// cap at full cost on every exit and stop: the record says what it did not
-// reach (notReachedNote) until the user marks it reviewed. Only a scan that
-// could not walk at all (the workspace could not be opened or read) leaves the
-// window at its own start, so the next scan covers it. A scan with nothing flagged still writes
+// moves the window on too: left in place, the candidates of the old window
+// would be read and hashed again by every exit and stop scan. The record says
+// what it did not reach (notReachedNote) until the user marks it reviewed.
+// Moving the window does not help a tree over the entry cap or the time
+// budget: those count every entry, old or new, so each walk of such a tree
+// stops at the same place and the files past it are never checked (a known
+// limit, in docs/SECURITY.md). Only a scan that could not walk at all (the
+// workspace could not be opened or read) leaves the window at its own start,
+// so the next scan covers it. A scan with nothing flagged still writes
 // a record: the next scan (a box stop) starts from it. A workspace that cannot
 // be opened, whose path changed, or whose walk panicked is recorded with a
 // note saying it was not (fully) scanned. The note's Count is what this scan
@@ -183,9 +194,9 @@ func (h *handbackHooks) scanInPlace(ctx context.Context, workspace string, since
 	case rep.Incomplete && !walked:
 		scanAt = since // nothing was looked at, at no cost: the next scan covers this window
 	case rep.Incomplete:
-		// A walk cut short by a cap would stop at the same cap again if the
-		// window stayed put, at its full cost on every exit and stop. It moves
-		// on, and the record says what was left unchecked until it is reviewed.
+		// Left in place, the window would make every later scan read and hash
+		// the same candidates again. It moves on, and the record says what was
+		// left unchecked until it is reviewed.
 		rep.Truncated = joinNotes(rep.Truncated, notReachedNote)
 	}
 	if note != "" {
@@ -199,11 +210,44 @@ func (h *handbackHooks) scanInPlace(ctx context.Context, workspace string, since
 	return session.HandbackNote{ID: rec.ID, Count: fresh, InPlace: true, Truncated: rep.Truncated != ""}, nil
 }
 
+// BeginExit is session.HandbackHooks.BeginExit: an exit scan of workspace is
+// coming. end must be called once it has finished; a second call is a no-op.
+func (h *handbackHooks) BeginExit(workspace string) (end func()) {
+	h.mu.Lock()
+	if h.pending == nil {
+		h.pending = map[string]int{}
+	}
+	h.pending[workspace]++
+	h.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			h.mu.Lock()
+			if h.pending[workspace]--; h.pending[workspace] <= 0 {
+				delete(h.pending, workspace)
+			}
+			h.mu.Unlock()
+		})
+	}
+}
+
+// exitPending reports whether an exit scan of workspace is announced and not
+// yet finished.
+func (h *handbackHooks) exitPending(workspace string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.pending[workspace] > 0
+}
+
 // NotScanned records that the workspace of a session that ended was not
 // scanned: the box layer could not vouch for the path at spawn. It walks
 // nothing (cwd is unresolved) and keys the record on cwd as given. The window
-// stays at since, so a box-stop scan of the same path still covers it.
+// goes back to since (never forward past an earlier scan on record), so a
+// box-stop scan of the same path still covers it.
 func (h *handbackHooks) NotScanned(cwd string, since time.Time) (session.HandbackNote, error) {
+	if info, ok, err := h.store.LastScanInfo(handback.InPlaceKey(cwd)); err == nil && ok && info.At.Before(since) {
+		since = info.At
+	}
 	return h.recordUnscanned(cwd, since, handback.ScanExit, notVouchedNote)
 }
 
@@ -251,7 +295,8 @@ func (h *handbackHooks) safeInspect(ctx context.Context, r *os.Root, since time.
 // scanned it) and is not a clone: a clone's flags come from its branches. A
 // workspace with no record has no start to scan from (a box from before the
 // scan existed, or one swept at boot), so a record says it was not checked,
-// and the next stop scans from now. Failures and panics are logged; the stop
+// and the next stop scans from now; unless an exit scan of it is pending
+// (BeginExit), which will write the record itself. Failures and panics are logged; the stop
 // has already happened.
 func (h *handbackHooks) OnStop(name, workspace string) {
 	defer func() {
@@ -268,6 +313,9 @@ func (h *handbackHooks) OnStop(name, workspace string) {
 		return
 	}
 	if !ok {
+		if h.exitPending(workspace) {
+			return // the session's exit scan is still running and writes the record
+		}
 		if _, err := h.recordUnscanned(workspace, h.now(), handback.ScanStop, noEarlierScanNote); err != nil {
 			log.Printf("handback: box %s stopped; %v", name, err)
 		}

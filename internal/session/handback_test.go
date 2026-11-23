@@ -24,9 +24,22 @@ type fakeHandback struct {
 	mu         sync.Mutex
 	calls      []scanCall
 	notScanned []scanCall
+	begun      []string
+	ended      []string
 	note       HandbackNote
 	err        error
 	panics     bool
+}
+
+func (f *fakeHandback) BeginExit(ws string) func() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.begun = append(f.begun, ws)
+	return func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.ended = append(f.ended, ws)
+	}
 }
 
 func (f *fakeHandback) NotScanned(cwd string, since time.Time) (HandbackNote, error) {
@@ -257,5 +270,48 @@ func TestReturnSummaryCopiesFlagged(t *testing.T) {
 	c.Flagged[0].Count = 9
 	if r.Flagged[0].Count != 2 {
 		t.Fatal("copy shares Flagged with the original")
+	}
+}
+
+// Host review 2026-11-23 (#346): an exclusive or guard-locked box stops as soon
+// as it is released, and its stop hook must already know that the session's
+// exit scan is coming, or it records a false "not checked" note.
+func TestExitScanIsAnnouncedBeforeTheBoxIsReleased(t *testing.T) {
+	f := &fakeHandback{note: HandbackNote{ID: "r1", InPlace: true}}
+	m := NewManager(tieredLauncher{argv: []string{"sh", "-c", "exit 0"}, runtime: config.RuntimeBox}, nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	var begunAtRelease []string
+	boxes.onRelease = func() {
+		f.mu.Lock()
+		begunAtRelease = append([]string(nil), f.begun...)
+		f.mu.Unlock()
+	}
+	m.SetBoxes(boxes)
+	m.SetHandback(f)
+	dir := t.TempDir()
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox, Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	want, _ := filepath.EvalSymlinks(dir)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		f.mu.Lock()
+		n := len(f.ended)
+		f.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the exit scan never ended; begun %v", f.begun)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(begunAtRelease) != 1 || begunAtRelease[0] != want {
+		t.Fatalf("begun at release = %v, want [%s]", begunAtRelease, want)
+	}
+	if len(f.got()) != 1 {
+		t.Fatalf("scans = %+v, want one, ended after it", f.got())
 	}
 }

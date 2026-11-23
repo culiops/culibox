@@ -50,6 +50,8 @@ type fakeBoxes struct {
 	kills    int
 	adopted  []string
 	marked   []string // AdoptExclusive calls, as box@session
+	// onRelease, when set, runs at each ReleaseBox (outside the lock).
+	onRelease func()
 
 	wrapErr error // returned by Wrap when set
 	// name is BoxName's answer and, unless wrapName is set, Wrap's ("" is
@@ -151,8 +153,12 @@ func (f *fakeBoxes) AdoptExclusive(name, sessionID string) {
 
 func (f *fakeBoxes) ReleaseBox(string) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.releases++
+	hook := f.onRelease
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 }
 
 func (f *fakeBoxes) KillSession(_ context.Context, _, _ string) error {

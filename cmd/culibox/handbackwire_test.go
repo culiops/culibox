@@ -482,6 +482,23 @@ func TestOnStopScansInPlaceWorkspace(t *testing.T) {
 			t.Fatalf("inspect calls = %+v, want the next stop to scan from %v", c, at)
 		}
 	})
+	t.Run("no note while the session's exit scan is pending", func(t *testing.T) {
+		h := newStubHandback(t, func(string) bool { return false })
+		end := h.BeginExit(ws)
+		h.OnStop("box-1", ws)
+		if _, err := os.Stat(filepath.Join(h.store.Dir, handback.RecordID(handback.InPlaceKey(ws))+".json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("record written while the exit scan was pending: %v", err)
+		}
+		end()
+		end() // a second call is a no-op
+		if h.exitPending(ws) {
+			t.Fatal("still pending after end")
+		}
+		h.OnStop("box-1", ws)
+		if r := recordOf(t, h.store, handback.InPlaceKey(ws)); r.Truncated != noEarlierScanNote {
+			t.Fatalf("record = %+v, want the note once nothing is pending", r)
+		}
+	})
 	t.Run("a clone dir is not scanned", func(t *testing.T) {
 		h := newStubHandback(t, func(dir string) bool { return dir == ws })
 		seed(h, ws)
@@ -526,6 +543,20 @@ func TestNotScannedIsRecorded(t *testing.T) {
 	h.OnStop("box-1", ws)
 	if c := h.got(); len(c) != 1 || !c[0].since.Equal(since) {
 		t.Fatalf("inspect calls = %+v, want the stop scan from %v", c, since)
+	}
+
+	// A record with an earlier scan keeps that start: NotScanned never moves
+	// the window forward past what was not checked.
+	h2 := newStubHandback(t, func(string) bool { return false })
+	earlier := since.Add(-3 * time.Hour)
+	if _, err := h2.store.Merge(handback.InPlaceKey(ws), handback.Record{Kind: handback.KindInPlace, Workspace: ws}, earlier, handback.Report{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h2.NotScanned(ws, since); err != nil {
+		t.Fatal(err)
+	}
+	if r := recordOf(t, h2.store, handback.InPlaceKey(ws)); !r.LastScan.Equal(earlier) {
+		t.Fatalf("LastScan = %v, want the earlier scan %v kept", r.LastScan, earlier)
 	}
 }
 
@@ -963,5 +994,35 @@ func TestScanInPlaceCappedScanCostsOnce(t *testing.T) {
 	}
 	if rec.Truncated != "" || !rec.LastScanComplete {
 		t.Fatalf("scan 2: record = %+v, want no note and a complete scan", rec)
+	}
+}
+
+// Host review 2026-11-23 (#346): the entry cap counts every entry, old or new,
+// so moving the window does not let a later walk past it. The window still
+// moves (no head read or hash is repeated) and each capped scan says so.
+func TestScanInPlaceEntryCapIsSaidEveryTime(t *testing.T) {
+	ws := realDir(t)
+	for i := range 6 {
+		if err := os.WriteFile(filepath.Join(ws, "f"+string(rune('a'+i))+".sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := newHandbackHooks(t.TempDir(), nil)
+	h.limits = handback.Limits{Entries: 3}
+	key := handback.InPlaceKey(ws)
+	if _, err := h.ScanInPlace(context.Background(), ws, time.Now().Add(-time.Hour), true); err != nil {
+		t.Fatal(err)
+	}
+	rec := recordOf(t, h.store, key)
+	if !strings.Contains(rec.Truncated, "entry cap of 3") || !strings.Contains(rec.Truncated, notReachedNote) || rec.LastScanComplete {
+		t.Fatalf("scan 1: record = %+v", rec)
+	}
+	if err := h.store.Reviewed(rec.ID, rec.Revision); err != nil {
+		t.Fatal(err)
+	}
+	h.OnStop("box-1", ws)
+	rec = recordOf(t, h.store, key)
+	if rec.Inspected != 0 || !strings.Contains(rec.Truncated, "entry cap of 3") {
+		t.Fatalf("scan 2: record = %+v, want no head read again and the cap said again", rec)
 	}
 }
