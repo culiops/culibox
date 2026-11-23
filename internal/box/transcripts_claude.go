@@ -23,14 +23,24 @@ const conversationsRel = ".claude/projects"
 // only until then, or one full read when there is none.
 const readDirChunk = 256
 
+// maxConversationEntries caps how many directory entries one check reads, across
+// the projects dir and its workspace folders. The check runs on every pass for
+// every kept home, forever, over folders the agent fills: unbounded, a home with
+// millions of entries would cost seconds per pass and hold up the homes after
+// it. Claude Code makes one folder per workspace and one file per conversation,
+// so a real home is far below this. Past the cap the home is kept, unread (a
+// variable so a test can lower it).
+var maxConversationEntries = 10000
+
 // holdsConversations reports whether the home at dir holds at least one
 // conversation: a regular *.jsonl file in a real directory directly below
 // conversationsRel. Everything goes through an os.Root on the home and nothing is
 // followed: the entry types come from the directory listing, so a symlink (to a
 // file, a folder or the projects dir itself) is never taken for the real thing.
 //
-// When the answer cannot be read (ctx done, a folder that will not open) it is
-// true: the caller deletes the home on false, and a deletion cannot be undone.
+// When the answer cannot be read (ctx done, a folder that will not open, more
+// than maxConversationEntries entries) it is true: the caller deletes the home
+// on false, and a deletion cannot be undone.
 func holdsConversations(ctx context.Context, dir string) bool {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -41,19 +51,27 @@ func holdsConversations(ctx context.Context, dir string) bool {
 		return false
 	}
 	found := false
-	err = eachEntry(ctx, root, conversationsRel, func(ws fs.DirEntry) bool {
-		if !ws.IsDir() {
-			return true
-		}
-		err := eachEntry(ctx, root, conversationsRel+"/"+ws.Name(), func(f fs.DirEntry) bool {
-			found = f.Type().IsRegular() && strings.HasSuffix(f.Name(), ".jsonl")
+	read := 0
+	visit := func(match func(fs.DirEntry) bool) func(fs.DirEntry) bool {
+		return func(e fs.DirEntry) bool {
+			if read++; read > maxConversationEntries {
+				found = true // past the cap: keep, unread
+				return false
+			}
+			found = match(e)
 			return !found
-		})
-		if err != nil {
-			found = true // unreadable: keep
 		}
-		return !found
-	})
+	}
+	err = eachEntry(ctx, root, conversationsRel, visit(func(ws fs.DirEntry) bool {
+		if !ws.IsDir() {
+			return false
+		}
+		err := eachEntry(ctx, root, conversationsRel+"/"+ws.Name(), visit(func(f fs.DirEntry) bool {
+			return f.Type().IsRegular() && strings.HasSuffix(f.Name(), ".jsonl")
+		}))
+		// Unreadable keeps the home; a cut short by the cap has set found.
+		return found || err != nil
+	}))
 	return found || err != nil
 }
 
@@ -89,7 +107,10 @@ func eachEntry(ctx context.Context, root *os.Root, rel string, visit func(fs.Dir
 type KeptHome struct {
 	Box string
 	Dir string // the home on the host
-	Age time.Duration
+	// OutDir is the box's out dir (screenshots), beside the home: removing the
+	// home by hand should remove it too.
+	OutDir string
+	Age    time.Duration
 	// Bytes is the home's size; Sized is false when the walk did not finish.
 	Bytes int64
 	Sized bool
@@ -130,7 +151,7 @@ func KeptHomes(ctx context.Context, stateRoot string, ttl time.Duration) ([]Kept
 		if !holdsConversations(ctx, home) {
 			continue
 		}
-		h := KeptHome{Box: name, Dir: home, Age: age}
+		h := KeptHome{Box: name, Dir: home, OutDir: filepath.Dir(OutputDir(stateRoot, name)), Age: age}
 		h.Bytes, err = dirBytesCtx(ctx, home)
 		h.Sized = err == nil
 		out = append(out, h)

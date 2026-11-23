@@ -637,9 +637,12 @@ func (l *boxLayer) reclaimBoxState(ctx context.Context) {
 		log.Printf("reclaimed box state %s: unused for %d days, %d MiB freed",
 			r.Box, int(r.Age.Hours()/24), mib)
 	}
-	// Every pass reports the whole kept set; it is logged when the set changes,
-	// not hourly. The ages are left out of the comparison: they change daily.
-	if l.reclaimKept.changed(strings.Join(keptNames, " ")) {
+	// A clean pass reports the whole kept set; it is logged when the set changes,
+	// not hourly. The ages are left out of the comparison: they change daily. A
+	// pass with an error that reports no kept home most likely stopped before any
+	// (the boxes could not be listed), so it is not read as "none kept". A stuck
+	// home elsewhere errs on every pass and must not hide the set.
+	if (err == nil || len(keptNames) > 0) && l.reclaimKept.changed(strings.Join(keptNames, " ")) {
 		log.Printf("kept box state %s: unused for over %d days, but each holds Claude Code conversations, "+
 			"so reclaim keeps it (its caches still go). `culibox doctor` lists their sizes and how to remove one.",
 			strings.Join(kept, ", "), int(box.DefaultStateTTL.Hours()/24))

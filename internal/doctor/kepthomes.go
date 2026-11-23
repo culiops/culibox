@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -45,6 +46,6 @@ func checkKeptHomes(dataDir string) []Result {
 		more = " (the list may be incomplete: ran out of time)"
 	}
 	return []Result{{Pass, check, fmt.Sprintf("%d %s unused for over %d days kept because each holds conversations%s: %s. "+
-		"To remove one, check that `culibox box status` lists no box by that name, then delete its folder.",
-		len(homes), noun, int(box.DefaultStateTTL.Hours()/24), more, strings.Join(parts, "; "))}}
+		"To remove one, check that `culibox box status` lists no box by that name, then delete its folder and its out dir (%s).",
+		len(homes), noun, int(box.DefaultStateTTL.Hours()/24), more, strings.Join(parts, "; "), filepath.Join(filepath.Dir(homes[0].OutDir), "<name>"))}}
 }

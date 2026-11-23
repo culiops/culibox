@@ -2,6 +2,8 @@ package box
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -224,19 +226,97 @@ func TestKeptHomesWithNoStateIsEmpty(t *testing.T) {
 	}
 }
 
-// Out of time, the size is reported as unknown rather than as a wrong number.
-func TestKeptHomesLeavesTheSizeUnknownWhenOutOfTime(t *testing.T) {
+// An agent can fill .claude/projects with folders; the hourly pass must not read
+// them all every hour. Past the cap the home is kept, unread (fail safe), and the
+// rest of the pass still runs.
+func TestHoldsConversationsStopsAtTheEntryCap(t *testing.T) {
+	old := maxConversationEntries
+	maxConversationEntries = 50
+	t.Cleanup(func() { maxConversationEntries = old })
 	m, _ := newTestManagerWithFake(t)
-	seedConversation(t, seedHome(t, m, "ab-box-444444444444", 40*24*time.Hour), convRel)
+	const name = "ab-box-555555555555"
+	dir := seedHome(t, m, name, 40*24*time.Hour)
+	for i := 0; i < 200; i++ {
+		if err := os.MkdirAll(filepath.Join(dir, ".claude", "projects", fmt.Sprintf("-w%03d", i)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// No folder holds a conversation, so only the cap can make this true.
+	if !holdsConversations(context.Background(), dir) {
+		t.Fatal("a home past the cap must be kept, unread")
+	}
+	// The next home in the pass is still reclaimed.
+	gone := seedHome(t, m, "ab-box-666666666666", 40*24*time.Hour)
+	if _, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultCacheTTL); err != nil {
+		t.Fatal(err)
+	}
+	mustBeGone(t, gone)
+	mustExist(t, dir)
+}
+
+// A workspace folder the daemon cannot read keeps the home: a deletion cannot be
+// undone, and "unknown" must not read as "no conversation".
+func TestReclaimKeepsAHomeWhoseWorkspaceFolderIsUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission failure cannot be simulated")
+	}
+	m, _ := newTestManagerWithFake(t)
+	const name = "ab-box-777777777777"
+	dir := seedHome(t, m, name, 40*24*time.Hour)
+	seedConversation(t, dir, convRel)
+	ws := filepath.Join(dir, ".claude", "projects", "-work-repo")
+	if err := os.Chmod(ws, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ws, 0o700) })
+	if _, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultCacheTTL); err != nil {
+		t.Fatal(err)
+	}
+	mustExist(t, dir)
+}
+
+// A pass whose time runs out reports no home as kept on a guess: the home stays,
+// and the next full pass decides.
+func TestReclaimOutOfTimeReportsNoKeptHome(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	dir := seedHome(t, m, "ab-box-888888888888", 40*24*time.Hour)
+	seedConversation(t, dir, ".claude/projects/-work-repo/notes.txt") // no conversation
+	// The deadline passes inside the conversation check.
+	done, err := m.ReclaimState(&flipCtx{Context: context.Background()}, DefaultStateTTL, DefaultCacheTTL)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a pass cut short must say so: %v", err)
+	}
+	for _, r := range done {
+		if r.Kept {
+			t.Fatalf("a pass out of time reported %+v as kept", r)
+		}
+	}
+	mustExist(t, dir)
+}
+
+func TestDirBytesCtxStopsWhenTheContextIsDone(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a", "b"), "0123456789")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	got, err := KeptHomes(ctx, m.opts.StateRoot, DefaultStateTTL)
-	if err == nil {
+	if _, err := dirBytesCtx(ctx, dir); err == nil {
 		t.Fatal("want the context's error")
 	}
-	for _, h := range got {
-		if h.Sized {
-			t.Fatalf("a home was sized with the context done: %+v", h)
-		}
+	if n, err := dirBytesCtx(context.Background(), dir); err != nil || n != 10 {
+		t.Fatalf("got %d, %v; want 10", n, err)
+	}
+}
+
+// KeptHomes names the out dir too: removing a home by hand must not leave its
+// screenshots behind.
+func TestKeptHomesNamesTheOutDir(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	seedConversation(t, seedHome(t, m, "ab-box-999999999999", 40*24*time.Hour), convRel)
+	got, err := KeptHomes(context.Background(), m.opts.StateRoot, DefaultStateTTL)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if want := filepath.Dir(OutputDir(m.opts.StateRoot, "ab-box-999999999999")); got[0].OutDir != want {
+		t.Fatalf("out dir %q, want %q", got[0].OutDir, want)
 	}
 }

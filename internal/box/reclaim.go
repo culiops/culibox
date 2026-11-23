@@ -145,6 +145,11 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 		// is not re-checked under opMu: only a spawn can add a conversation,
 		// and a spawn touches the marker, which reclaimOne does re-read.
 		kept := age >= ttl && holdsConversations(ctx, dir)
+		if ctx.Err() != nil {
+			// The check may have been cut short, and then says "keep" on a
+			// guess: the home stays, unreported, and the next pass decides.
+			break
+		}
 		switch {
 		case age >= ttl && !kept:
 			reclaimed, err = m.reclaimOne(ctx, name, dir, ttl, dirBytes(dir))

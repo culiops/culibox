@@ -40,7 +40,7 @@ func TestKeptHomesRowListsKeptHomes(t *testing.T) {
 	if r.Status != Pass || r.Check != "kept box homes" {
 		t.Fatalf("row %+v", r)
 	}
-	for _, want := range []string{"1 home", "ab-box-aaaaaaaaaaaa", "unused 40 days", "3.0 MiB", filepath.Join(dataDir, "boxstate", "ab-box-aaaaaaaaaaaa"), "culibox box status"} {
+	for _, want := range []string{"1 home", "ab-box-aaaaaaaaaaaa", "unused 40 days", "3.0 MiB", filepath.Join(dataDir, "boxstate", "ab-box-aaaaaaaaaaaa"), "culibox box status", filepath.Join(dataDir, "boxstate", ".boxout", "<name>")} {
 		if !strings.Contains(r.Detail, want) {
 			t.Errorf("detail lacks %q:\n%s", want, r.Detail)
 		}
