@@ -1021,3 +1021,24 @@ test("a numstat for a newer status ask that lands before its status is up to dat
   await settle();
   assert.strictEqual(p.calls("/api/git/numstat").length, n0 + 1);
 });
+
+test("a scope picked while a newer status ask's numstat waits for its status asks once, not in a loop (in transit, or failed)", async () => {
+  for (const fails of [false, true]) {
+    const p = page();
+    await p.status(okStatus([{ p: "a.go", x: "M" }]));
+    await p.answer("/api/git/base", baseOk({ ahead: false }));
+    await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }]));
+    const before = p.st.fetches.length;
+    const done = p.ctx.gitStatusLoad("/w", "s1");
+    await settle();
+    await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 2, d: 0 }])); // the newer ask's numstat, Uncommitted
+    if (fails) { p.st.fetches[before].reject(new Error("offline")); await done; await settle(); }
+    const n0 = p.calls("/api/git/numstat").length;
+    p.el("dock-scope").children[1].onclick(); // Branch
+    await settle();
+    for (let i = 0; i < 5 && p.pending("/api/git/numstat").length > 0; i++) await p.answer("/api/git/numstat", num([{ p: "b.go", x: "A", a: 9, d: 0 }]));
+    assert.strictEqual(p.calls("/api/git/numstat").length, n0 + 1, (fails ? "status failed" : "status in transit") + ": one Branch ask");
+    assert.strictEqual(p.pending("/api/git/numstat").length, 0);
+    assert.deepStrictEqual(p.rows().map((r) => text(r.querySelector(".dk-nm"))), ["b.go"], "the Branch list is shown");
+  }
+});

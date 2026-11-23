@@ -246,8 +246,10 @@ async function dkcAskNumstat(root, asked, seq, fresh) {
   dkcNumAsk = null;
   const scope = asked === "auto" ? (reply && reply.scope === "branch" ? "branch" : "head") : asked;
   // Kept even when it is for a root or scope no longer shown: changesView matches records by root and scope. Never over a
-  // record for a newer status of the same root (the clean-status record, made while this one was out).
-  if (!(dkcNum && dkcNum.root === root && dkcNum.seq > seq)) dkcNum = { root, scope, seq, reply, auto: asked === "auto" };
+  // record for a newer status of the same root in the same scope (the clean-status record, made while this one was out). A
+  // record in another scope is replaced: dockChangesSync asked for this scope because it is the one shown, and keeping the
+  // other would make it ask again, without end.
+  if (!(dkcNum && dkcNum.root === root && dkcNum.scope === scope && dkcNum.seq > seq)) dkcNum = { root, scope, seq, reply, auto: asked === "auto" };
   dockChangesRefresh();
 }
 
