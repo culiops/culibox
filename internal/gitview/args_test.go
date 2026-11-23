@@ -425,22 +425,30 @@ func TestLogLastArgsGolden(t *testing.T) {
 func TestBlameArgsGolden(t *testing.T) {
 	uid, gid := os.Getuid(), os.Getgid()
 	for _, c := range blameTargets {
-		got := BlameArgs(c.t, "img", "n", uid, gid, c.rel, false)
+		got := BlameArgs(c.t, "img", "n", uid, gid, c.rel, false, false)
 		w := want(c.mounts, c.t.Top, "blame", "--porcelain", "--no-textconv", "--", c.rel)
 		if !slices.Equal(got, w) {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, got, w)
 		}
-		got = BlameArgs(c.t, "img", "n", uid, gid, c.rel, true)
+		got = BlameArgs(c.t, "img", "n", uid, gid, c.rel, true, false)
 		w = want(c.mounts, c.t.Top, "blame", "--porcelain", "--no-textconv", "--ignore-revs-file", ".git-blame-ignore-revs", "--", c.rel)
 		if !slices.Equal(got, w) {
 			t.Errorf("%s, ignore revs:\n got %q\nwant %q", c.name, got, w)
+		}
+		// The retry drops every list, the repository's own included; it wins over the file.
+		for _, ign := range []bool{false, true} {
+			got = BlameArgs(c.t, "img", "n", uid, gid, c.rel, ign, true)
+			w = want(c.mounts, c.t.Top, "blame", "--porcelain", "--no-textconv", "--no-ignore-revs-file", "--", c.rel)
+			if !slices.Equal(got, w) {
+				t.Errorf("%s, no revs:\n got %q\nwant %q", c.name, got, w)
+			}
 		}
 	}
 }
 
 func TestBlameArgsKeepTheGuards(t *testing.T) {
 	tt := Target{Top: "/a", Common: "/b/.git"}
-	for _, got := range [][]string{BlameArgs(tt, "img", "n", 1, 2, "f", true), LogLastArgs(tt, "img", "n", 1, 2, "f")} {
+	for _, got := range [][]string{BlameArgs(tt, "img", "n", 1, 2, "f", true, false), BlameArgs(tt, "img", "n", 1, 2, "f", false, true), LogLastArgs(tt, "img", "n", 1, 2, "f")} {
 		for _, must := range []string{"core.fsmonitor=false", "--read-only", "core.hooksPath=/dev/null", "core.attributesFile=/dev/null"} {
 			if !slices.Contains(got, must) {
 				t.Errorf("argv lacks %q: %q", must, got)

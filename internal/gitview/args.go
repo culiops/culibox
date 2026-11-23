@@ -251,11 +251,18 @@ func LogLastArgs(t Target, image, name string, uid, gid int, rel string) []strin
 // back under the all-zero id. --no-textconv is required: plain blame runs a
 // textconv command the repository's own attributes declare (measured with git
 // 2.39.5), where diff already passes the same flag. ignoreRevs adds
-// IgnoreRevsName, a path relative to t.Top (git runs with -C t.Top). The caller
-// MUST have checked t.Unsafe() == "" first. rel follows "--".
-func BlameArgs(t Target, image, name string, uid, gid int, rel string, ignoreRevs bool) []string {
+// IgnoreRevsName, a path relative to t.Top (git runs with -C t.Top). noRevs
+// (the retry after a failure) passes --no-ignore-revs-file instead: it drops
+// every list, the file's and one the repository's own blame.ignoreRevsFile
+// names, which git opens before any other option could reset it (measured with
+// git 2.39.5: a config naming a missing file fails every plain blame). The
+// caller MUST have checked t.Unsafe() == "" first. rel follows "--".
+func BlameArgs(t Target, image, name string, uid, gid int, rel string, ignoreRevs, noRevs bool) []string {
 	sub := []string{"blame", "--porcelain", "--no-textconv"}
-	if ignoreRevs {
+	switch {
+	case noRevs:
+		sub = append(sub, "--no-ignore-revs-file")
+	case ignoreRevs:
 		sub = append(sub, "--ignore-revs-file", IgnoreRevsName)
 	}
 	return argv(t, image, name, uid, gid, append(sub, "--", rel)...)

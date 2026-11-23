@@ -12,7 +12,9 @@
 
 const BL_MIN_GAP_MS = 10000;
 const BL_DEBOUNCE_MS = 120;
-const BL_FETCH_MS = 60000; // the server may wait for another file's blame (30 s) before its own two runs
+// The server may wait for another file's blame (30 s), then run up to three containers (each up to a 5 s slot wait and a 10 s
+// run): 75 s at worst.
+const BL_FETCH_MS = 90000;
 const BL_HOVER_MS = 400;
 const BL_LEAVE_MS = 300;
 const BL_GAP = "\u00a0\u00a0\u00a0";
@@ -26,7 +28,12 @@ function editorBlameTrack(tab) {
     res: null, idx: null, text: null, key: "", at: 0, ctl: null, seq: 0,
     map: null, mapAlt: -1, deco: [], timer: 0, gapTimer: 0, slowFor: "",
   };
-  tab.blSub = tab.model.onDidChangeContent(() => editorBlameSoon(tab));
+  tab.blSub = tab.model.onDidChangeContent(() => {
+    // The inline text sits at the line's end and moves with what is typed there: it goes at once, not after the pause, so a
+    // line that grows can never push it past the editor's edge (A5). The pause's repaint puts it back where it fits.
+    if (tab.bl && tab.bl.deco.length && typeof dockEditor !== "undefined" && dockEditor) tab.bl.deco = dockEditor.deltaDecorations(tab.bl.deco, []);
+    editorBlameSoon(tab);
+  });
 }
 
 // editorBlameUntrack: the tab is closing (EditorTab.dispose).
@@ -136,7 +143,10 @@ async function blFetch(tab, key, head) {
   if (!tab.bl || bl.seq !== seq || tab.disposed) return; // a newer question, another tab, or closed
   bl.ctl = null;
   if (!res || typeof res.state !== "string") {
-    res = { state: "unavailable", reason: "Git status is not available for this folder" };
+    // The request failed or gave up (no answer from the server): said as such, and asked again after the gap.
+    res = { state: "unavailable", reason: "Blame could not be read; it is asked again shortly" };
+    bl.key = "";
+    if (!bl.gapTimer) bl.gapTimer = setTimeout(() => { bl.gapTimer = 0; editorBlameSync(tab); }, BL_MIN_GAP_MS);
   }
   if (res.state === "changed" || (res.version && res.version !== snap.version)) {
     // The file moved while git read it, or since this tab read it: keep what is shown and ask again after the gap.
@@ -443,7 +453,7 @@ function blUncommittedNodes(tab, line) {
   const sid = tab.host && typeof tab.host.sessionId === "function" ? tab.host.sessionId() : null;
   const files = sid && typeof drawerChangedFiles !== "undefined" ? drawerChangedFiles.get(sid) : null;
   if (typeof editedLabel === "function" && editedLabel(files, tab.path, "agent", blNow())) {
-    head.append(blEl("span", "dk-bcard-chip", "changed by this session's agent"));
+    head.append(blEl("span", "dk-bcard-chip", "file changed by this session's agent"));
   }
   const out = [head, blEl("div", "dk-bcard-when", "The working copy differs from the last commit on this line.")];
   const acts = blEl("div", "dk-bcard-acts");

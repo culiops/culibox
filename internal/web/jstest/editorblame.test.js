@@ -291,7 +291,7 @@ test("the card for an uncommitted line: Not committed yet, the agent's mark, Ope
   p.get("editorBlameCardFor")(tab, "line", tab.sbBlame, false);
   const c = cardOf(p);
   assert.equal(c.querySelector(".dk-bcard-who").textContent, "Not committed yet");
-  assert.equal(c.querySelector(".dk-bcard-chip").textContent, "changed by this session's agent");
+  assert.equal(c.querySelector(".dk-bcard-chip").textContent, "file changed by this session's agent", "the file is known, not the line");
   assert.deepEqual(texts(c), ["Open changes", "Add note"]);
   c.querySelectorAll("button")[1].listeners.click();
   assert.deepEqual(noted, [{ a: 1, b: 1 }]);
@@ -314,4 +314,30 @@ test("hovering the inline text opens the card after a pause; leaving the editor 
   leave[0].fn();
   assert.equal(cardOf(p).hidden, true);
   assert.ok(tab);
+});
+
+test("typing at the line's end takes the inline text away at once; the pause puts it back", async () => {
+  const { p, tab, ed, sync } = await setup();
+  await sync();
+  assert.equal(inline(ed).length, 1);
+  tab.model.type(TEXT.replace("resource x {", "resource x { # a comment typed fast"));
+  assert.equal(inline(ed).length, 0, "gone before the 120 ms pause");
+  p.st.timers.filter((t) => !t.dead && t.ms === 120).forEach((t) => { t.dead = true; t.fn(); });
+  assert.equal(inline(ed).length, 1, "back once the pause repaints");
+});
+
+test("a request that fails is said as such and asked again after the gap", async () => {
+  const { p, tab, sync } = await setup();
+  p.st.git.blame = null; // a 500
+  await sync();
+  assert.equal(tab.bl.res.state, "unavailable");
+  assert.match(tab.bl.res.reason, /Blame could not be read/);
+  const gap = p.st.timers.filter((t) => !t.dead && t.ms === 10000);
+  assert.equal(gap.length, 1);
+  p.st.git.blame = () => answer(p.disk.text);
+  p.clock += 10000;
+  gap[0].fn();
+  await p.settle();
+  assert.equal(p.st.git.blames.length, 2);
+  assert.equal(tab.bl.res.state, "ok");
 });

@@ -478,3 +478,58 @@ func TestBlameRefusals(t *testing.T) {
 		t.Fatalf("%d runs for refused input", f.callCount())
 	}
 }
+
+// A repository whose own blame.ignoreRevsFile names a missing file fails every plain blame: the retry drops every list.
+func TestBlameRetryDropsTheRepositorysList(t *testing.T) {
+	var runs [][]string
+	var mu sync.Mutex
+	f := blameDocker(blameHooks{blame: func(_ context.Context, a []string, w io.Writer) error {
+		mu.Lock()
+		runs = append(runs, a)
+		mu.Unlock()
+		if !slices.Contains(a, "--no-ignore-revs-file") {
+			return gitFatal(t, "fatal: could not open object name list: nosuch")
+		}
+		_, err := io.WriteString(w, realPorcelain)
+		return err
+	}})
+	b := newRunner(f, newClock()).Blame(context.Background(), tgt, "f", bkey, always)
+	if b.State != "ok" || b.IgnoredRevs || len(runs) != 2 {
+		t.Fatalf("blame %+v after %d runs", b, len(runs))
+	}
+	if slices.Contains(runs[1], "--ignore-revs-file") {
+		t.Fatalf("retry argv %q", runs[1])
+	}
+}
+
+// What would fail the same way again is not retried: no history, not a repository.
+func TestBlameNoRetryForNoHistory(t *testing.T) {
+	k := bkey
+	k.IgnoreRevs = true
+	for _, msg := range []string{"fatal: no such path 'g' in HEAD", "fatal: not a git repository (or any of the parent directories): .git"} {
+		f := blameDocker(blameHooks{blame: func(context.Context, []string, io.Writer) error { return gitFatal(t, msg) }})
+		newRunner(f, newClock()).Blame(context.Background(), tgt, "g", k, always)
+		if n := runsOfBlame(f); n != 1 {
+			t.Errorf("%q: %d blame runs, want 1", msg, n)
+		}
+	}
+}
+
+// One cache entry per file: a newer version replaces the older one.
+func TestBlameCacheKeepsOneVersionPerFile(t *testing.T) {
+	f := blameDocker(blameHooks{})
+	r := newRunner(f, newClock())
+	ctx := context.Background()
+	for i := range 40 {
+		k := bkey
+		k.Version = fmt.Sprintf("%064d", i)
+		r.Blame(ctx, tgt, "f", k, always)
+	}
+	r.Blame(ctx, tgt, "other", bkey, always)
+	r.mu.Lock()
+	n := len(r.blameCache)
+	r.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("%d cache entries, want 2 (one per file)", n)
+	}
+}

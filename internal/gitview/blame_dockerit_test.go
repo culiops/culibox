@@ -76,4 +76,16 @@ printf 'a \nB\nc\nd\ne\n' > f.tf`
 	if bad.State != "ok" || bad.IgnoredRevs {
 		t.Fatalf("blame with a broken ignore-revs file = %+v", bad)
 	}
+	// The repository's own config names a missing list: every plain blame fails, the retry without any list does not.
+	cfg, err := os.OpenFile(filepath.Join(dir, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.WriteString("[blame]\n\tignoreRevsFile = nosuch\n"); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Close()
+	if b := r.Blame(ctx, tg, "f.tf", BlameKey{Version: "3"}, yes); b.State != "ok" || b.IgnoredRevs {
+		t.Fatalf("blame with a broken blame.ignoreRevsFile = %+v", b)
+	}
 }

@@ -321,6 +321,14 @@ func (r *Runner) Blame(ctx context.Context, t Target, rel string, k BlameKey, st
 	if r.blameCache == nil {
 		r.blameCache = map[string]*blameCached{}
 	}
+	// One answer per file: an older version or HEAD of the same path goes, so a file rewritten every few seconds holds one
+	// entry, not all of them.
+	file := t.key() + "\x00" + rel + "\x00"
+	for k := range r.blameCache {
+		if strings.HasPrefix(k, file) {
+			delete(r.blameCache, k)
+		}
+	}
 	r.blameCache[key] = &blameCached{b: cloneBlame(b), lastUsed: r.now()}
 	for len(r.blameCache) > maxBlameCache {
 		oldest := ""
@@ -375,15 +383,17 @@ func (r *Runner) doBlame(ctx context.Context, t Target, rel string, ignoreRevs b
 	if err != nil {
 		return Blame{State: "unavailable", Reason: "unexpected log output"}
 	}
-	run := func(ignore bool) ([]byte, error) {
+	run := func(noRevs bool) ([]byte, error) {
 		return r.runCapped(ctx, prioBlame, func(name string) []string {
-			return BlameArgs(t, r.Image, name, r.UID, r.GID, rel, ignore)
+			return BlameArgs(t, r.Image, name, r.UID, r.GID, rel, ignoreRevs, noRevs)
 		}, maxBlameBytes)
 	}
-	out, err = run(ignoreRevs)
-	if err != nil && ignoreRevs && !errors.Is(err, errTimedOut) && !errors.Is(err, errCapped) && !errors.Is(err, errNoSlot) && ctx.Err() == nil {
+	out, err = run(false)
+	if err != nil && blameRetries(err) && ctx.Err() == nil {
+		// A list of revisions to look through (the file, or one the repository's config names) may be what failed: once more
+		// without any.
 		ignoreRevs = false
-		out, err = run(false)
+		out, err = run(true)
 	}
 	if err != nil {
 		return blameFailed(err)
@@ -393,6 +403,16 @@ func (r *Runner) doBlame(ctx context.Context, t Target, rel string, ignoreRevs b
 		return Blame{State: "unavailable", Reason: "unexpected blame output"}
 	}
 	return Blame{State: "ok", Last: last, Commits: commits, Lines: lines, IgnoredRevs: ignoreRevs}
+}
+
+// blameRetries reports whether a failed blame run is worth one more without any ignore-revs list: not a timeout, the cap,
+// a slot never had, git saying the path has no history, or not a repository (those would fail the same way again).
+func blameRetries(err error) bool {
+	if errors.Is(err, errTimedOut) || errors.Is(err, errCapped) || errors.Is(err, errNoSlot) {
+		return false
+	}
+	b := blameFailed(err)
+	return b.State == "unavailable"
 }
 
 // blameFailed is the answer for a failed run.
