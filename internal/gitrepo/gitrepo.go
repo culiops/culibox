@@ -12,10 +12,12 @@ import (
 	"syscall"
 )
 
-// lstat and openFile are os.Lstat and os.OpenFile, variables so a test can see every path the package touches.
+// lstat, openFile and evalSymlinks are os.Lstat, os.OpenFile and filepath.EvalSymlinks, variables so a test can see
+// every path the package touches.
 var (
-	lstat    = os.Lstat
-	openFile = os.OpenFile
+	lstat        = os.Lstat
+	openFile     = os.OpenFile
+	evalSymlinks = filepath.EvalSymlinks
 )
 
 // Repo is one checkout: Top is the directory holding .git (a directory or a
@@ -36,7 +38,7 @@ type Repo struct {
 func Locate(dir string) (Repo, bool) {
 	for d := dir; ; {
 		g := filepath.Join(d, ".git")
-		if fi, err := os.Lstat(g); err == nil {
+		if fi, err := lstat(g); err == nil {
 			if fi.IsDir() {
 				return Repo{Top: d, Common: g}, true
 			}
@@ -69,7 +71,7 @@ func Normalize(p string) string {
 		return ""
 	}
 	p = filepath.Clean(p)
-	if r, err := filepath.EvalSymlinks(p); err == nil {
+	if r, err := evalSymlinks(p); err == nil {
 		return r
 	}
 	return p
@@ -84,6 +86,13 @@ func Normalize(p string) string {
 // main checkout is trusted only when the worktree's own gitdir the file names
 // exists as a real directory; a forged pointer to some other repository falls
 // back to the checkout's own Top.
+//
+// That .git file can be box-written wherever the host calls this (#364): at spawn and at load for a session's cwd
+// (session.workspaceRootOf), which can lie in an in-place box's workspace, and for any typed folder in the workspace
+// check API (web handleWorkspaceCheck). So the gitdir it names is never stat'ed on its say-so: the main checkout it
+// implies must be this checkout's folder, an ancestor of it, or a sibling of it (git worktree add ../x), judged by path
+// text alone (mainNear), and the walk to the gitdir then refuses any link (linkFreeDir). A pointer anywhere else is
+// not touched, and the checkout stands as its own workspace.
 func WorkspaceRoot(dir string) string {
 	if dir == "" {
 		return ""
@@ -95,11 +104,25 @@ func WorkspaceRoot(dir string) string {
 		return ""
 	}
 	if r.Linked && filepath.Base(r.Common) == ".git" {
-		if fi, err := os.Lstat(r.Gitdir); err == nil && fi.IsDir() {
-			return Normalize(filepath.Dir(r.Common))
+		// Judged by its text first: the main checkout the pointer implies must hold this checkout or sit beside it.
+		// Only then is the gitdir walked, following no link, so the walk stays in or beside the checkout's folders.
+		if main := filepath.Dir(r.Common); mainNear(main, r.Top) && linkFreeDir(r.Gitdir) {
+			return main
 		}
 	}
 	return Normalize(r.Top)
+}
+
+// mainNear reports, by path text alone, whether main (a main checkout a linked worktree's .git file implies) holds the
+// checkout top or sits beside it, so that reading it only looks in the checkout's own folder or its ancestors. top is
+// resolved and clean; main is clean.
+func mainNear(main, top string) bool {
+	if !filepath.IsAbs(main) {
+		return false
+	}
+	sep := string(filepath.Separator)
+	return main == top || strings.HasPrefix(top, strings.TrimSuffix(main, sep)+sep) ||
+		filepath.Dir(main) == filepath.Dir(top)
 }
 
 // CheckoutOf reports the repository's common git dir for the checkout holding

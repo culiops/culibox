@@ -356,13 +356,14 @@ func TestNormalize(t *testing.T) {
 func recordIO(t *testing.T) *[]string {
 	t.Helper()
 	var seen []string
-	ol, oo := lstat, openFile
+	ol, oo, oe := lstat, openFile, evalSymlinks
 	lstat = func(p string) (os.FileInfo, error) { seen = append(seen, p); return ol(p) }
+	evalSymlinks = func(p string) (string, error) { seen = append(seen, p); return oe(p) }
 	openFile = func(p string, flag int, perm os.FileMode) (*os.File, error) {
 		seen = append(seen, p)
 		return oo(p, flag, perm)
 	}
-	t.Cleanup(func() { lstat, openFile = ol, oo })
+	t.Cleanup(func() { lstat, openFile, evalSymlinks = ol, oo, oe })
 	return &seen
 }
 
@@ -411,5 +412,46 @@ func TestWorktreesAskBeforeTouching(t *testing.T) {
 	// A nil check serves nothing: the caller must say what it serves.
 	if got := Worktrees(common, 64, nil); len(got) != 0 {
 		t.Errorf("nil allow: %v", got)
+	}
+}
+
+// A linked worktree under the repository (Claude Code's .claude/worktrees) groups under the main checkout.
+func TestWorkspaceRootWorktreeUnderRepo(t *testing.T) {
+	repo := real(t, t.TempDir())
+	mkdir(t, filepath.Join(repo, ".git", "worktrees", "x"))
+	wt := filepath.Join(repo, ".claude", "worktrees", "x")
+	write(t, filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(repo, ".git", "worktrees", "x")+"\n")
+	if got := WorkspaceRoot(wt); got != repo {
+		t.Fatalf("WorkspaceRoot = %q, want the main repo %q", got, repo)
+	}
+}
+
+// #364: in an in-place session the box writes the .git file WorkspaceRoot reads (at spawn, at load, and from the
+// workspace-roots API), so the gitdir it names is judged by its text before anything stats it: the main checkout it
+// implies must hold the checkout or sit beside it, and the walk to the gitdir follows no link. A pointer anywhere else,
+// or one through a link out of the checkout's folder, is never touched, and the checkout stands as its own workspace.
+func TestWorkspaceRootJudgesPointerBeforeTouching(t *testing.T) {
+	base := real(t, t.TempDir())
+	outside := filepath.Join(base, "outside")
+	mkdir(t, filepath.Join(outside, ".git", "worktrees", "wt"))
+	ws := filepath.Join(base, "ws")
+	far := filepath.Join(ws, "far")
+	write(t, filepath.Join(far, ".git"), "gitdir: "+filepath.Join(outside, ".git", "worktrees", "wt")+"\n")
+	if err := os.Symlink(outside, filepath.Join(ws, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	via := filepath.Join(ws, "via")
+	write(t, filepath.Join(via, ".git"), "gitdir: "+filepath.Join(ws, "evil", ".git", "worktrees", "wt")+"\n")
+
+	seen := recordIO(t)
+	for _, wt := range []string{far, via} {
+		if got := WorkspaceRoot(wt); got != wt {
+			t.Errorf("WorkspaceRoot(%s) = %q, want the checkout's own top", wt, got)
+		}
+	}
+	for _, p := range *seen {
+		if p == outside || strings.HasPrefix(p, outside+"/") || strings.HasPrefix(p, filepath.Join(ws, "evil")+"/") {
+			t.Errorf("touched %s: a path the pointer chose outside the checkout's repository", p)
+		}
 	}
 }
