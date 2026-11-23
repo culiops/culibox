@@ -41,6 +41,12 @@ const MONACO_CSS_TIMEOUT_MS = 60000;
 const MONACO_SCAN_MAX_CHARS = 5 * 1024 * 1024;
 const MONACO_SCAN_MAX_LINKS = 20000;
 
+// The dock's code font (P5, desktop.css @font-face "JetBrains Mono"; editortab.js EDITOR_FONT names it first). Monaco measures its
+// font's widths when an editor is made and never again by itself (0.57.0 has no FontFaceSet listener), so the load waits up to
+// MONACO_FONT_WAIT_MS for the font; one that comes later makes the editors measure again (monacoFontReady).
+const MONACO_FONT = '400 13px "JetBrains Mono"';
+const MONACO_FONT_WAIT_MS = 1500;
+
 // The stylesheet links whose wait ended in a timeout once. Running out of time does not say the request is dead (a slow link may
 // still be downloading it), so the first timeout leaves the link for the retry to wait on; a second one drops it.
 const monacoSlowStyles = new WeakSet();
@@ -122,6 +128,23 @@ function monacoLinkText(monaco, uri) {
   return "";
 }
 
+// monacoFontReady settles when the code font is in, or after MONACO_FONT_WAIT_MS, whichever is first; it never fails (the editor then
+// draws with the fallback). A font that lands after the wait gets monaco.editor.remeasureFonts(), once, so the editors made meanwhile
+// lay the cursor out on the real widths. The latin subset is what a load with no text asks for; the others are the same widths.
+function monacoFontReady(monaco) {
+  const fonts = typeof document !== "undefined" ? document.fonts : undefined;
+  if (!fonts || typeof fonts.load !== "function") return Promise.resolve();
+  let late = false;
+  let timer = 0;
+  const load = Promise.resolve().then(() => fonts.load(MONACO_FONT)).then(() => true, () => false);
+  load.then((ok) => {
+    clearTimeout(timer);
+    if (ok && late && typeof monaco.editor.remeasureFonts === "function") monaco.editor.remeasureFonts();
+  });
+  const wait = new Promise((resolve) => { timer = setTimeout(() => { late = true; resolve(); }, MONACO_FONT_WAIT_MS); });
+  return Promise.race([load, wait]).then(() => undefined);
+}
+
 // monacoBoot: loader.js, then require() of the editor, its stylesheet, then the theme, the unbound keys and the link opener.
 async function monacoBoot() {
   const loader = document.createElement("script");
@@ -132,6 +155,7 @@ async function monacoBoot() {
   await new Promise((resolve, reject) => require(["vs/editor/editor.main"], resolve, reject));
   await monacoStyled();
   const monaco = window.monaco;
+  await monacoFontReady(monaco);
   monaco.editor.defineTheme(MONACO_THEME, culiboxTheme());
   for (const k of MONACO_UNBOUND_KEYS) monaco.editor.addKeybindingRule({ keybinding: monaco.KeyCode[k.code], command: "-" + k.command });
   // Ctrl/Cmd+click on a link in the editor text (the dock editor and every diff editor) goes to the link gate (linkgate.js), like a

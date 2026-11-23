@@ -33,7 +33,9 @@ let dockEditorOwner = null; // the EditorTab whose model is in the editor now, o
 
 // How long "Saved" stays in the status bar.
 const EDITOR_SAVED_MS = 2000;
-const EDITOR_FONT = "ui-monospace, Menlo, monospace"; // the read view's own (app.css .viewer-pre), so a file does not change face
+// The dock's code font (desktop.css --font-code; P5): JetBrains Mono, shipped, so code looks the same on every OS. The dock's read view
+// (#drawer .viewer-pre) has the same stack, so a file does not change face. monacoload.js waits for the font before an editor is made.
+const EDITOR_FONT = '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 const EDITOR_LINE = 1.55;                             // and its line height (the read view's, in font sizes)
 
 // editorOptions: what the editor reads from the user's preferences, as updateOptions takes it: the code font size
