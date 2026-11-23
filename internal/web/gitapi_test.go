@@ -43,6 +43,37 @@ type fakeGit struct {
 	nsBranch gitview.Numstat
 	blob     gitview.Blob
 	raw      []byte // what ShowRaw returns beside blob
+	blames   []fakeBlameCall
+	blame    gitview.Blame
+	// blameHook, when set, runs inside Blame before still() is asked (a file changing while git reads it).
+	blameHook func()
+}
+
+type fakeBlameCall struct {
+	T     gitview.Target
+	Rel   string
+	K     gitview.BlameKey
+	Still bool // what still() said
+}
+
+func (f *fakeGit) Blame(_ context.Context, t gitview.Target, rel string, k gitview.BlameKey, still func() bool) gitview.Blame {
+	f.mu.Lock()
+	hook, b := f.blameHook, f.blame
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	ok := still()
+	f.mu.Lock()
+	f.blames = append(f.blames, fakeBlameCall{t, rel, k, ok})
+	f.mu.Unlock()
+	if b.State == "" {
+		b = gitview.Blame{State: "ok", Commits: []gitview.BlameCommit{{SHA: strings.Repeat("a", 40), Author: "A", Time: 1}}, Lines: [][2]int{{0, 1}}}
+	}
+	if !ok && b.State == "ok" {
+		return gitview.Blame{State: "changed"}
+	}
+	return b
 }
 
 type fakeShowCall struct {
@@ -179,7 +210,7 @@ func (f *fakeGit) statusCalls() int {
 func (f *fakeGit) calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.statuses) + len(f.diffs) + len(f.bases) + len(f.baseRefs) + len(f.numstats) + len(f.shows)
+	return len(f.statuses) + len(f.diffs) + len(f.bases) + len(f.baseRefs) + len(f.numstats) + len(f.shows) + len(f.blames)
 }
 
 // hostGitServer is a server with a resolved temp $HOME and no boxed trees.

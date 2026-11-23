@@ -227,3 +227,43 @@ func ShowArgs(t Target, image, name string, uid, gid int, rev, rel string) []str
 	}
 	return argv(t, image, name, uid, gid, "cat-file", "blob", rev+":"+rel)
 }
+
+// IgnoreRevsName is the file at a checkout's top that lists the commits blame
+// should look through (formatting sweeps). The web handler checks that it is a
+// regular file on the host, by stat, never by asking git.
+const IgnoreRevsName = ".git-blame-ignore-revs"
+
+// LogLastArgs is the argv of the container that prints the last commit that
+// touched rel (relative to t.Top) as one NUL-terminated record: full id, author
+// name and email (both after .mailmap, as blame's porcelain), author time and
+// summary (ParseLogLast). log.showSignature is forced off twice, by config and
+// by flag: a repository that turns it on would otherwise run its own
+// gpg.program on a signed commit and mix that output into the record. The
+// caller MUST have checked t.Unsafe() == "" first. rel follows "--".
+func LogLastArgs(t Target, image, name string, uid, gid int, rel string) []string {
+	return argv(t, image, name, uid, gid,
+		"-c", "log.showSignature=false", "log", "-1", "--no-show-signature",
+		"--format=%H%x00%aN%x00%aE%x00%at%x00%s%x00", "--", rel)
+}
+
+// BlameArgs is the argv of the container that prints the porcelain blame of
+// rel (relative to t.Top) as it is in the working tree: uncommitted lines come
+// back under the all-zero id. --no-textconv is required: plain blame runs a
+// textconv command the repository's own attributes declare (measured with git
+// 2.39.5), where diff already passes the same flag. ignoreRevs adds
+// IgnoreRevsName, a path relative to t.Top (git runs with -C t.Top). noRevs
+// (the retry after a failure) passes --no-ignore-revs-file instead: it drops
+// every list, the file's and one the repository's own blame.ignoreRevsFile
+// names, which git opens before any other option could reset it (measured with
+// git 2.39.5: a config naming a missing file fails every plain blame). The
+// caller MUST have checked t.Unsafe() == "" first. rel follows "--".
+func BlameArgs(t Target, image, name string, uid, gid int, rel string, ignoreRevs, noRevs bool) []string {
+	sub := []string{"blame", "--porcelain", "--no-textconv"}
+	switch {
+	case noRevs:
+		sub = append(sub, "--no-ignore-revs-file")
+	case ignoreRevs:
+		sub = append(sub, "--ignore-revs-file", IgnoreRevsName)
+	}
+	return argv(t, image, name, uid, gid, append(sub, "--", rel)...)
+}

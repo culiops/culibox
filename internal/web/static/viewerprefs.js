@@ -32,6 +32,17 @@ const viewerPrefs = (function () {
     write(Object.assign(read(), { wrap }));
   }
 
+  // The dock's line blame (editorblame.js), on unless a stored false says off: the one choice here that defaults to on.
+  let blame = null;
+  function getBlame() {
+    if (blame === null) blame = read().blame !== false;
+    return blame;
+  }
+  function setBlame(b) {
+    blame = !!b;
+    write(Object.assign(read(), { blame }));
+  }
+
   // The Changes view's own two choices (editordiff.js), kept beside wrap and apart from it: "side" (Side by side, the default) or
   // "inline", and whether the diff wraps long lines (separate from the editor's wrap). Anything else stored reads as the default.
   let diffMode = null;
@@ -66,7 +77,7 @@ const viewerPrefs = (function () {
     write(Object.assign(read(), { imgDiffMode }));
   }
 
-  return { KEY, getWrap, setWrap, getDiffMode, setDiffMode, getDiffWrap, setDiffWrap, getImgDiffMode, setImgDiffMode };
+  return { KEY, getWrap, setWrap, getBlame, setBlame, getDiffMode, setDiffMode, getDiffWrap, setDiffWrap, getImgDiffMode, setImgDiffMode };
 })();
 
 if (typeof module !== "undefined" && module.exports) {

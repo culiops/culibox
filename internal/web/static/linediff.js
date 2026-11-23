@@ -89,14 +89,16 @@ function ldWalkBack(trace, dEnd, n, m, delA, insB) {
   }
 }
 
-function lineDiff(oldText, newText, maxLines = 20000) {
-  const capped = { changes: [], capped: true };
+// ldMark hashes both texts into lines and flags, in delA, the old lines that are gone and, in insB, the new lines
+// that are not in the old text; null when the diff is capped (see lineDiff). The lines neither array flags are the
+// common part, in order, so they pair up one to one.
+function ldMark(oldText, newText, maxLines) {
   const o = oldText == null ? "" : String(oldText);
   const t = newText == null ? "" : String(newText);
-  if (o.length > LD_MAX_CHARS || t.length > LD_MAX_CHARS) return capped;
+  if (o.length > LD_MAX_CHARS || t.length > LD_MAX_CHARS) return null;
   const oldLines = ldLines(o);
   const newLines = ldLines(t);
-  if (oldLines.length > maxLines || newLines.length > maxLines) return capped;
+  if (oldLines.length > maxLines || newLines.length > maxLines) return null;
 
   const ids = new Map(); // a line's text -> a small integer, so Myers compares numbers and never re-reads a long line
   const idOf = (line) => {
@@ -117,7 +119,14 @@ function lineDiff(oldText, newText, maxLines = 20000) {
   const insB = new Uint8Array(b.length); // 1 where a new line is not in the old text
   if (aEnd === head) insB.fill(1, head, bEnd);
   else if (bEnd === head) delA.fill(1, head, aEnd);
-  else if (!ldMyers(a.subarray(head, aEnd), b.subarray(head, bEnd), delA.subarray(head, aEnd), insB.subarray(head, bEnd))) return capped;
+  else if (!ldMyers(a.subarray(head, aEnd), b.subarray(head, bEnd), delA.subarray(head, aEnd), insB.subarray(head, bEnd))) return null;
+  return { a, b, delA, insB };
+}
+
+function lineDiff(oldText, newText, maxLines = 20000) {
+  const mk = ldMark(oldText, newText, maxLines);
+  if (!mk) return { changes: [], capped: true };
+  const { a, b, delA, insB } = mk;
 
   // The lines neither array flags are the common part, in order, so they pair up one to one; anything
   // between two pairs is one block, and its shape names it.
@@ -139,6 +148,24 @@ function lineDiff(oldText, newText, maxLines = 20000) {
   return { changes, capped: false };
 }
 
+// lineMap(oldText, newText, maxLines = 20000) -> {map, capped}: map[i] is the old (1-based) line that new line i+1 is,
+// 0 where the new line was added or changed; null when capped, as lineDiff. The line blame reads the blame of the text
+// it was computed for through it, so edits made since move with their lines.
+function lineMap(oldText, newText, maxLines = 20000) {
+  const mk = ldMark(oldText, newText, maxLines);
+  if (!mk) return { map: null, capped: true };
+  const { a, b, delA, insB } = mk;
+  const map = new Int32Array(b.length);
+  let i = 0;
+  for (let j = 0; j < b.length; j++) {
+    if (insB[j]) continue;
+    while (i < a.length && delA[i]) i++;
+    map[j] = i + 1;
+    i++;
+  }
+  return { map, capped: false };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { lineDiff };
+  module.exports = { lineDiff, lineMap };
 }

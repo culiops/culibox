@@ -154,6 +154,7 @@
             <nav id="dock-trail" class="dk-trail" aria-label="File path"></nav>
             <span id="dock-outside" class="dk-outside" hidden><span class="dk-outside-t">Outside this tree</span><span aria-hidden="true">·</span><button type="button" class="link dk-outside-go" title="Show this file in the tree, rooted where it is">Reveal</button></span>
             <span id="dock-edited" class="dk-edited" hidden></span>
+            <button id="dock-blame" class="dk-blame" type="button" hidden><svg class="dk-blame-i" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="2.4"/><path d="M0.8 7h3.8M9.4 7h3.8"/></svg><span class="dk-blame-who"></span><span class="dk-blame-sep" aria-hidden="true">·</span><span class="dk-blame-when"></span><span class="dk-blame-short"></span></button>
           </div>
           <div id="drawer-vhost" class="dr-vhost" hidden></div>
           <div id="drawer-vempty" class="dr-vempty">Open a file from the tree, or click a path in the terminal</div>
@@ -1004,6 +1005,7 @@
   <script src="/monacotheme.js"></script>
   <script src="/monacokeys.js"></script>
   <script src="/linediff.js"></script>
+  <script src="/blamemodel.js"></script>
   <script src="/editorref.js"></script>
   <script src="/insertvisible.js"></script>
   <script src="/insertdecision.js"></script>
@@ -1023,6 +1025,7 @@
   <script src="/reviewmodel.js"></script>
   <script src="/editorreview.js"></script>
   <script src="/editornotes.js"></script>
+  <script src="/editorblame.js"></script>
   <script src="/reviewall.js"></script>
   <script src="/reviewbar.js"></script>
   <script src="/filesdrawer.js"></script>
