@@ -29,6 +29,7 @@ function gitLastStatus(st) {
   const out = { state: st.state, rootRel: st.rootRel, entries };
   if (gitLastStr(st.head)) out.head = st.head;
   if (gitLastStr(st.branch)) out.branch = st.branch;
+  if (gitLastStr(st.worktreeOf)) out.worktreeOf = st.worktreeOf; // the root header's chip (dockrootchip.js)
   return out;
 }
 

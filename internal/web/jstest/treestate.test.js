@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   loadExpanded, saveExpanded, addExpanded, removeExpanded, forgetSubtree,
-  shouldAutoOpen, TREESTATE_KEY,
+  shouldAutoOpen, TREESTATE_KEY, TREESTATE_CAP,
 } = require("../static/treestate.js");
 
 // Same localStorage stand-in shape as layout.test.js: the two storage functions
@@ -19,10 +19,10 @@ function fakeStorage() {
   return map;
 }
 
-test("addExpanded appends, dedups, and preserves insertion order", () => {
+test("addExpanded appends and dedups; re-adding moves the path to the end (newest)", () => {
   const s = addExpanded(addExpanded(new Set(), "/a"), "/a/b");
-  addExpanded(s, "/a"); // already present: no move, no duplicate
-  assert.deepStrictEqual([...s], ["/a", "/a/b"]);
+  addExpanded(s, "/a"); // already present: moved to newest, no duplicate
+  assert.deepStrictEqual([...s], ["/a/b", "/a"]);
 });
 
 test("addExpanded trims the oldest entry once over the cap", () => {
@@ -33,6 +33,17 @@ test("addExpanded trims the oldest entry once over the cap", () => {
   assert.ok(!s.has("/d/4"), "five oldest dropped");
   assert.ok(s.has("/d/5"), "sixth oldest kept");
   assert.ok(s.has("/d/504"), "newest kept");
+});
+
+test("addExpanded is least-recently-used: re-adding moves a path to newest, so the cap evicts the least recently opened", () => {
+  const s = new Set();
+  for (let i = 0; i < TREESTATE_CAP; i++) addExpanded(s, "/d/" + i);
+  addExpanded(s, "/d/0"); // opened again: now the newest
+  assert.deepStrictEqual([...s].slice(-1), ["/d/0"]);
+  addExpanded(s, "/d/new");
+  assert.ok(s.has("/d/0"), "the folder opened again is kept");
+  assert.ok(!s.has("/d/1"), "the least recently opened goes");
+  assert.strictEqual(s.size, TREESTATE_CAP);
 });
 
 test("removeExpanded deletes only that path; descendants remain", () => {

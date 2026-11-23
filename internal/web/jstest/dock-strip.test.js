@@ -21,7 +21,12 @@ function page(mac) {
   const doc = { activeElement: null };
   doc.createElement = (t) => new Node(t, doc);
   const nodes = {};
-  for (const id of ["dock-bar", "dock-tabs", "dock-crumbs", "dock-trail", "dock-edited"]) nodes[id] = Object.assign(new Node("div", doc), { id });
+  for (const id of ["dock-bar", "dock-tabs", "dock-crumbs", "dock-trail", "dock-edited", "dock-outside"]) nodes[id] = Object.assign(new Node("div", doc), { id });
+  // The hint's markup is static (index.html): its Reveal button is there from the start.
+  nodes["dock-outside"].hidden = true;
+  const go = new Node("button", doc);
+  go.className = "link dk-outside-go";
+  nodes["dock-outside"].appendChild(go);
   doc.getElementById = (id) => nodes[id] || null;
   // Focus is document.activeElement in the fake; a real focus() also fires the element's focus handler.
   const focus = Node.prototype.focus;
@@ -283,6 +288,25 @@ test("crumbs are buttons that reveal their folder; the last is the file; the lab
     assert.equal(p.nodes["dock-crumbs"].hidden, false);
     assert.equal(p.nodes["dock-edited"].textContent, "Edited by alpha · 2 min ago");
     assert.equal(p.nodes["dock-edited"].hidden, false);
+  } finally { p.restore(); }
+});
+
+test("a file outside the tree's root shows the hint beside the trail; its Reveal calls on.revealOutside; \"Edited by\" is untouched", () => {
+  const p = page();
+  try {
+    let asked = 0;
+    const crumbs = [{ name: "/", path: "/" }, { name: "v", path: "/v" }, { name: "n.md", path: "/v/n.md" }];
+    p.ctx.dockCrumbsPaint(crumbs, "Edited by alpha", { reveal() {}, revealOutside: () => { asked++; } }, true);
+    const out = p.nodes["dock-outside"];
+    assert.equal(out.hidden, false);
+    out.querySelector(".dk-outside-go").onclick();
+    assert.equal(asked, 1);
+    assert.equal(p.nodes["dock-edited"].textContent, "Edited by alpha");
+    assert.equal(p.nodes["dock-edited"].hidden, false, "the hint never displaces Edited by");
+    p.ctx.dockCrumbsPaint(crumbs, "", { reveal() {} }, false);
+    assert.equal(out.hidden, true);
+    p.ctx.dockCrumbsPaint(crumbs, "", null);
+    assert.equal(out.hidden, true, "no fourth argument: no hint");
   } finally { p.restore(); }
 });
 

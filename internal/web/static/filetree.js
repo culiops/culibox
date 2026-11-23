@@ -67,6 +67,21 @@ function listingReadOnly(data) {
   return !!data && data.readonly === true;
 }
 
+// ftEntryIsDir: does this listing entry draw as a folder? A symlink keeps is_dir false (lstat's answer) and says
+// target_dir when the server would list its target as a folder (P4.9). Only the dock's tree expands those; the phone's
+// draws what it always drew.
+function ftEntryIsDir(ent, docked) {
+  return !!ent.is_dir || (!!docked && ent.target_dir === true);
+}
+
+// ftEntriesFor: the entries in drawing order. The server sorts folders first, each part by name; in the dock a link to a
+// folder is a folder, so it moves up into the folders, keeping the server's order inside each part.
+function ftEntriesFor(entries, docked) {
+  if (!docked || !entries.some((e) => !e.is_dir && e.target_dir === true)) return entries;
+  return entries.filter((e) => ftEntryIsDir(e, true)).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .concat(entries.filter((e) => !ftEntryIsDir(e, true)));
+}
+
 // The row menu's items by id. The ids and their order are what the tests pin;
 // the labels are the strings the menu has always shown.
 const ROW_MENU_LABELS = {
@@ -197,6 +212,10 @@ function treeBranch(prefix, isLast) {
 }
 
 let ftRootSel = null, ftTreeEl = null, ftRootPath = "";
+// The root as the server resolved it (the newest root listing's "path"), "" until one has answered: a file reached through
+// another spelling (a link) is matched against it (ftRevealTarget, P4.7).
+let ftRootResolvedPath = "";
+function ftRootResolved() { return ftRootResolvedPath; }
 // ftRoot / setFtRoot are the ONLY way any other script reads or writes the
 // tree's root. They exist so the control underneath can change shape without
 // three other files reaching into its .value — upload.js did that in three
@@ -209,6 +228,7 @@ let ftRootSel = null, ftTreeEl = null, ftRootPath = "";
 // would silently re-root the tree at abandoned search text.
 function ftRoot() { return ftRootPath; }
 function setFtRoot(path) {
+  if ((path || "") !== ftRootPath) ftRootResolvedPath = "";
   ftRootPath = path || "";
   if (ftRootSel) { ftRootSel.value = ftRootPath; ftRootSel.title = ftRootPath; }
   // Keep a collapsed Files bar's root readout live even though the tree
@@ -218,6 +238,7 @@ function setFtRoot(path) {
   if (typeof dockChangesRender === "function") dockChangesRender();
 }
 let lastSyncedKey = null;       // which tab the tree is currently following (see treeFollowTarget)
+let ftFollowKeySeen = null;     // the newest follow key any syncTreeToRoot was asked with, held or not
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
 let ftExpanded = new Set();     // absolute dir paths the user has opened; see treestate.js
 // The root listing's own read-only answer, kept so the whole-tree drop zone
@@ -375,14 +396,19 @@ async function ftRenderDir(path, container, prefix, st) {
   // and back, so each directory answers for itself. Every row below acts on
   // THIS listing's folder (rename, delete, drop onto it).
   const ro = listingReadOnly(data);
+  // The root's own listing names the path the server resolved it to: reveals compare a file's resolved path with it (P4.7).
+  if (rootCall && typeof data.path === "string") st.resolved = data.path;
+  const docked = ftDocked();
+  const entries = ftEntriesFor(data.entries, docked);
   const chg = typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerChangedFor === "function"
     ? drawerChangedFor(ftRoot()) : null;
-  for (let i = 0; i < data.entries.length; i++) {
-    const ent = data.entries[i];
+  for (let i = 0; i < entries.length; i++) {
+    const ent = entries[i];
+    const isDir = ftEntryIsDir(ent, docked);
     // Indexed, not for..of: a row cannot draw itself without knowing whether it
     // is the last of its siblings — that is what decides └ against ├, and
     // whether its own children keep the vertical running.
-    const b = treeBranch(prefix, i === data.entries.length - 1);
+    const b = treeBranch(prefix, i === entries.length - 1);
     const full = path.replace(/\/$/, "") + "/" + ent.name;
     const row = document.createElement("div");
     row.className = "ft-node";
@@ -400,7 +426,7 @@ async function ftRenderDir(path, container, prefix, st) {
     // that string would have to be re-derived there too.
     const icon = document.createElement("span");
     icon.className = "ft-icon";
-    icon.textContent = iconFor(ent.name, ent.is_dir, false);
+    icon.textContent = iconFor(ent.name, isDir, false);
     icon.setAttribute("aria-hidden", "true"); // decorative: the name is the label
     const label = document.createElement("span");
     label.className = "ft-name";
@@ -410,6 +436,16 @@ async function ftRenderDir(path, container, prefix, st) {
     // it also answers "which of the three index.html files is this one".
     label.title = shortPath(full);
     row.append(branch, icon, label);
+    // A symlink says so in the dock (a folder one expands when its target is a folder the server serves, ftEntryIsDir).
+    if (docked && ent.link) {
+      row.classList.add("ft-link");
+      const mark = document.createElement("span");
+      mark.className = "ft-linkmark";
+      mark.textContent = "↗";
+      mark.setAttribute("aria-hidden", "true");
+      mark.title = "Link";
+      row.append(mark);
+    }
     // A tree item, one level per two characters of prefix, named by its entry (not by its content, which
     // would add the ⋯'s "Folder actions" and the git badge to every name). Out of the Tab order until the
     // roving stop is chosen (below, or ftRoveTo).
@@ -429,7 +465,7 @@ async function ftRenderDir(path, container, prefix, st) {
     // Folder vs File so a screen reader announces which kind of row this menu
     // acts on, matching the session row's kebab (app.js sets both aria-label
     // and title to the same string).
-    const moreLabel = actionsLabel(ent.is_dir);
+    const moreLabel = actionsLabel(isDir);
     more.title = moreLabel;
     // A button's accessible name comes from its TEXT CONTENT before its title,
     // and the title is only consulted when that text is empty. This button's text
@@ -442,7 +478,7 @@ async function ftRenderDir(path, container, prefix, st) {
     more.setAttribute("aria-expanded", "false");
     // The one way this row's menu opens: the ⋯, the menu key (which presses the ⋯) and the dock's right-click, which
     // adds where the pointer is (`at`).
-    const openMenu = (at) => openRowMenu(more, full, ent.name, ent.is_dir, ro, at);
+    const openMenu = (at) => openRowMenu(more, full, ent.name, isDir, ro, at);
     more.onclick = (e) => { e.stopPropagation(); openMenu(); };
     ftRowMenus.set(row, openMenu);
     row.append(more);
@@ -458,36 +494,47 @@ async function ftRenderDir(path, container, prefix, st) {
     // box that is never inserted. Nothing between here and the branch touches
     // container, and a click's row.after() still lands correctly.
     container.append(row);
-    if (ent.is_dir) {
-      let open = false, childBox = null;
+    if (isDir) {
+      let open = false, childBox = null, childLoad = null;
       row.classList.add("dir");
       row.setAttribute("aria-expanded", "false");
       // openChildren renders this directory's contents into a fresh box right
       // after its row. Shared by the click toggle and the auto-open on render so
       // the two cannot drift in how the subtree is built.
+      // childLoad settles when the children are drawn: ftReveal waits on it for a folder that is open but still listing.
       const openChildren = async () => {
         childBox = document.createElement("div");
         row.after(childBox);
-        await ftRenderDir(full, childBox, b.childPrefix, st);
+        childLoad = ftRenderDir(full, childBox, b.childPrefix, st);
+        await childLoad;
       };
       // setOpen is the one expand/collapse path: the click toggles it, and
-      // ftReveal drives it through ftRowOpeners to open the ancestors of a file,
-      // so a revealed folder is persisted (treestate) exactly like a clicked one.
-      const setOpen = async (want) => {
-        if (want === open) return;
+      // ftReveal drives it through ftRowOpeners to open the ancestors of a file.
+      // A folder the user opens is persisted (treestate, least recently used
+      // first out); one a reveal opens (`persist: false`) is not: the open file is
+      // remembered with its tab and revealed again (P4.8). Asked to open a folder
+      // that is open already, it waits for its children if they are still listing.
+      const setOpen = async (want, o) => {
+        if (want === open) {
+          if (open && childLoad) await childLoad;
+          return;
+        }
         open = want;
         icon.textContent = iconFor(ent.name, true, open);
         row.setAttribute("aria-expanded", open ? "true" : "false");
         if (open) {
           // Persist BEFORE the await: a second click that closes the row toggles
           // `open` synchronously, so the stored state must already reflect open.
-          addExpanded(ftExpanded, full);
-          saveExpanded(ftExpanded);
+          if (!o || o.persist !== false) {
+            addExpanded(ftExpanded, full);
+            saveExpanded(ftExpanded);
+          }
           await openChildren();
         } else {
           removeExpanded(ftExpanded, full);
           saveExpanded(ftExpanded);
           if (childBox) { childBox.remove(); childBox = null; }
+          childLoad = null;
           ftRoveEnsure(row.closest ? row.closest('[role="tree"]') : null);
         }
       };
@@ -530,7 +577,8 @@ async function ftRenderDir(path, container, prefix, st) {
           st.defer.push(async () => {
             const box = document.createElement("div");
             childBox = box;
-            await ftRenderDir(full, box, b.childPrefix, st);
+            childLoad = ftRenderDir(full, box, b.childPrefix, st);
+            await childLoad;
             if (open && childBox === box) row.after(box);
           });
         } else await openChildren();
@@ -593,6 +641,7 @@ async function ftLoadRoot(opts) {
       done();
     }
     if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
+    ftRootResolvedPath = typeof st.resolved === "string" ? st.resolved : ftRoot();
     ftRootReadOnly = ro === true;
     ftApplyReadOnly(ftRootReadOnly);
     ftTreeEl.replaceChildren(...box.childNodes);
@@ -609,6 +658,8 @@ async function ftLoadRoot(opts) {
         if (typeof gitRepaintRows === "function") gitRepaintRows();
       }
     }
+    // The selection went with the old rows: the dock's open file is shown again (dockreveal.js, P4.6).
+    if (gen === ftGen && typeof dockRevealAfterLoad === "function") dockRevealAfterLoad();
   } finally {
     // Waiters resume in a later microtask, after the swap above has run.
     release();
@@ -1112,6 +1163,7 @@ function rootableCwd(cwd, roots) {
 // are already following a tab we never rooted at.
 async function syncTreeToRoot(root, key) {
   if (!ftRootSel || !root) return;
+  ftFollowKeySeen = key || null; // what focus asks the tree to follow now, kept or not (ftRerootSticky); a keyless pick ends it
   if (key && key === lastSyncedKey) return; // already following this tab (respect manual pick)
   lastSyncedKey = key || null;
   setFtRoot(root);
@@ -1147,42 +1199,130 @@ async function ftSettled() {
   do { p = ftLoading; try { await p; } catch (_) {} } while (p !== ftLoading);
 }
 
-// ftReveal shows `path` in the tree: re-root at the file's directory when it is
-// outside the current root (the root treeFollowTarget picks for a viewer; never
-// one it refuses), open each ancestor in turn through the tree's own expand path
-// (each level loads asynchronously, and the next row does not exist until it has
-// finished), then select the file's row and bring it into view. Resolves true
-// when the row was found. A newer root load part-way (ftGen moved) abandons it.
-async function ftReveal(path) {
-  // An explicit ask: the dock's tree opens if it was collapsed (P3). An automatic reveal must not come this way, and the
-  // phone's tree (not the dock's) leaves the desktop choice alone.
-  if (typeof dockSecOpen === "function" && ftDocked()) dockSecOpen("tree");
+// ftRevealTarget: the spelling of `path` to walk the tree with, or null when the tree's root does not hold it. A path
+// textually under the root is itself. Otherwise `where` ({path}: /api/fs/where's answer, the server's resolved spelling)
+// is compared with the root's resolved spelling, by whole components, and mapped onto the root's own spelling: a file
+// opened through a link still finds its row (P4.7).
+function ftRevealTarget(path, where) {
+  const root = ftRoot();
+  if (!root || !path) return null;
+  if (ancestorsBetween(root, path) !== null) return path;
+  const rp = where && typeof where.path === "string" ? where.path : "";
+  const rr = ftRootResolved();
+  if (!rp || !rr || ancestorsBetween(rr, rp) === null) return null;
+  if (rr === root) return rp;
+  const tail = rp.slice(rr === "/" ? 0 : rr.replace(/\/+$/, "").length);
+  return (root === "/" ? "" : root.replace(/\/+$/, "")) + tail;
+}
+
+// ftRowShown: is the row wholly inside the tree's visible box? An automatic reveal scrolls only when it is not, so a tree
+// that already shows the file does not move at all.
+function ftRowShown(row) {
+  const box = ftTreeEl && ftTreeEl.getBoundingClientRect ? ftTreeEl.getBoundingClientRect() : null;
+  const r = row.getBoundingClientRect ? row.getBoundingClientRect() : null;
+  if (!box || !r || !box.height) return false;
+  return r.top >= box.top && r.bottom <= box.bottom;
+}
+
+// ftRerootSticky roots the tree at `root` for an explicit reveal of a file outside it, and keeps it there while focus asks
+// for the same thing: the follow key becomes the one focus asked for last, so the next drawerRootTree or syncFocusedTree
+// for that key holds (no snap-back); a different key (another session or tab focused) re-roots as always (P4.5).
+async function ftRerootSticky(root) {
+  lastSyncedKey = ftFollowKeySeen;
+  setFtRoot(root);
+  dpClose();
+  await ftLoadRoot();
+}
+
+// ftRevealRoot: where an explicit reveal of `path` (outside the root) roots the tree: the top of the git checkout that holds
+// it, when the server serves that folder, else the file's folder. With no answer from the server (an older one, a refusal),
+// the folder treeFollowTarget would give a viewer of the file, or null when it refuses one.
+async function ftRevealRoot(path) {
+  let w = null;
+  try { w = await api("/api/fs/where?path=" + encodeURIComponent(path)); } catch (_) { w = null; }
+  if (w && typeof w.top === "string" && w.top && insideAnyRoot(w.top, ftCurrentRoots())) return { root: w.top, where: w };
+  const target = treeFollowTarget({ kind: "viewer", path, box: "" });
+  return target ? { root: target.root, where: w } : null;
+}
+
+let ftRevealSeq = 0; // the newest reveal: an older one still opening folders gives up
+// The explicit reveal in progress, as {seq, gen} (its ftRevealSeq and the ftGen it started in), or null: while it is the
+// newest reveal in the same tree load, an automatic one does not run (it would cancel it). A newer reveal or a newer root
+// load ends the hold, so a listing that never answers cannot turn the automatic reveal off for the page.
+let ftRevealManual = null;
+
+// ftReveal shows `path` in the tree: open each ancestor between the root and it in turn through the tree's own expand path
+// (each level loads asynchronously, and the next row does not exist until it has finished; a folder still listing is
+// waited for), then select its row, make it the Tab stop and bring it into view. The folders it opens are not remembered
+// (P4.8). Resolves true when the row was found; a newer reveal or a newer root load part-way abandons it.
+//
+// opts.auto: the dock's automatic reveal of the open file (dockreveal.js). It never moves focus, never opens a collapsed
+// tree, scrolls only when the row is not already in view, and does nothing for a path the root does not hold.
+// Without it (Reveal in tree, a crumb, a Changes folder, the "Outside this tree" hint) a collapsed tree opens, the row takes
+// focus, and a path outside the root roots the tree at its repository (ftRevealRoot), sticky (ftRerootSticky).
+// opts.where: /api/fs/where's answer for `path`, when the caller has it (ftRevealTarget). opts.still: the caller's own
+// "is this still wanted?" (the dock's open file is still this one), checked with every step, like a newer reveal.
+// An automatic reveal does nothing while an explicit one is in progress (ftRevealManual): every explicit reveal that re-roots
+// or shows the tree also starts the dock's automatic one, and it must not cancel what the user asked for.
+async function ftReveal(path, opts) {
+  const o = opts || {};
+  // An explicit ask: the dock's tree opens if it was collapsed (P3). The phone's tree (not the dock's) leaves the desktop
+  // choice alone.
+  if (!o.auto && typeof dockSecOpen === "function" && ftDocked()) dockSecOpen("tree");
   if (!ftRootSel || !ftTreeEl || !path) return false;
-  await ftSettled();
-  if (ancestorsBetween(ftRoot(), path) === null) {
-    const target = treeFollowTarget({ kind: "viewer", path, box: "" });
-    if (!target) return false;
-    // No follow key: this is an explicit pick, so the tree resumes following
-    // focus at the next change (syncTreeToRoot clears the guard).
-    await syncTreeToRoot(target.root);
+  if (o.auto) {
+    if (ftRevealManual && ftRevealManual.seq === ftRevealSeq && ftRevealManual.gen === ftGen) return false;
+    return ftRevealRun(path, o);
   }
+  const mine = { seq: ftRevealSeq + 1, gen: ftGen }; // ftRevealRun takes that seq, synchronously
+  ftRevealManual = mine;
+  try { return await ftRevealRun(path, o); } finally { if (ftRevealManual === mine) ftRevealManual = null; }
+}
+
+// ftRevealRun is ftReveal's body. The phone's tree (not the dock's) reveals as it always did: a file outside the root roots
+// the tree at its folder with no follow key, and the folders it opens are remembered (it has no automatic reveal to show
+// the file again).
+async function ftRevealRun(path, o) {
+  const docked = ftDocked();
+  const seq = ++ftRevealSeq;
+  const live = () => seq === ftRevealSeq && (typeof o.still !== "function" || o.still());
   await ftSettled();
-  const gen = ftGen;
-  const chain = ancestorsBetween(ftRoot(), path);
+  if (!live()) return false;
+  let where = o.where || null;
+  if (ftRevealTarget(path, where) === null) {
+    if (o.auto) return false;
+    if (docked) {
+      const to = await ftRevealRoot(path);
+      if (!to || !live()) return false;
+      where = where || to.where;
+      await ftRerootSticky(to.root);
+    } else {
+      const target = treeFollowTarget({ kind: "viewer", path, box: "" });
+      if (!target) return false;
+      await syncTreeToRoot(target.root);
+    }
+    // The load this reveal made is its own: its hold on the automatic reveal moves to it.
+    if (ftRevealManual && ftRevealManual.seq === seq) ftRevealManual.gen = ftGen;
+    await ftSettled();
+    if (!live()) return false;
+  }
+  const target = ftRevealTarget(path, where);
+  const chain = target === null ? null : ancestorsBetween(ftRoot(), target);
   if (chain === null) return false;
+  const gen = ftGen;
   for (const dir of chain) {
     const row = ftRowFor(dir);
     const op = row && ftRowOpeners.get(row);
     if (!op) return false;
-    await op.setOpen(true);
-    if (gen !== ftGen) return false;
+    await op.setOpen(true, { persist: !docked });
+    if (gen !== ftGen || !live()) return false;
   }
-  const file = ftRowFor(path);
+  const file = ftRowFor(target);
   if (!file) return false;
   ftSelect(file);
-  ftRoveTo(file); // the revealed row is the tree's Tab stop (it was tabindex -1 and out of reach)
-  file.scrollIntoView({ block: "nearest" });
-  file.focus({ preventScroll: true });
+  ftRoveTo(file); // the revealed row is the tree's Tab stop (it was tabindex -1 and out of reach); this moves no focus
+  if (!o.auto || !ftRowShown(file)) file.scrollIntoView({ block: "nearest" });
+  if (!o.auto) file.focus({ preventScroll: true });
   return true;
 }
 
@@ -1358,7 +1498,7 @@ async function initFileTree() {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    iconFor, treeBranch, treeFollowTarget, rootableCwd, insideAnyRoot, loadWorkspaceRoots, actionsLabel,
+    iconFor, treeBranch, treeFollowTarget, ftEntriesFor, ftEntryIsDir, rootableCwd, insideAnyRoot, loadWorkspaceRoots, actionsLabel,
     listingReadOnly, rowMenuIds, rowMenuLabel, openRowMenu, ftApplyReadOnly, ftRenderDir,
     ftKeyAction, ftMenuGroups, promptNewFile, promptMkdir, promptRename, confirmDelete,
   };

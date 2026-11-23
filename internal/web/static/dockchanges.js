@@ -486,6 +486,8 @@ function dkcPaintRoot(root) {
   }
   dkcSetText(dkcEl("dock-root-name"), dkcRootName(root));
   dkcSetText(dkcEl("dock-root-path"), root ? (typeof shortPath === "function" ? shortPath(root) : root) : "");
+  // "worktree" or "clone" after the name, when the root is one (dockrootchip.js).
+  if (typeof dockRootChipPaint === "function") dockRootChipPaint(root);
   const dr = dkcEl("drawer");
   const box = !!dr && dr.dataset.box === "1";
   btn.setAttribute("aria-disabled", box ? "true" : "false");
@@ -639,6 +641,8 @@ function dkcOpenMore() {
   }
   nodes.push(item("Refresh", "refresh", () => ftLoadRoot({ fresh: true })));
   nodes.push(item("Collapse all", "collapse", dkcCollapseAll));
+  // The "Reveal open file" checkbox (dockreveal.js): the menu closes before the choice is made.
+  if (typeof dockRevealMenuRow === "function") nodes.push(kitMenuSep(), dockRevealMenuRow(() => closeRowMenu(true)));
   ftShowMenu(more, nodes, false, "Explorer actions");
   const first = menu.querySelector(".menu-item");
   if (first) first.focus();

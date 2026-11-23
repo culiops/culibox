@@ -83,6 +83,10 @@ type fsPolicy struct {
 	// identity: a directory in it would carry a denied tree along if it were
 	// handed out whole (the git status mounts, see gitapi.go).
 	deniedOrAbove map[fileKey]struct{}
+	// spellings is how home, the kept roots and the kept scratch folders were written before they were resolved (home
+	// through a link, macOS's /tmp for /private/tmp). It decides nothing about access: linkMayLead only uses it to say a
+	// link's target text may lead in, which the full walk then judges.
+	spellings []string
 }
 
 // touchesAny reports whether resolved path p is, is inside, or contains any of
@@ -139,7 +143,8 @@ func newFsPolicyLive(home string, roots []string, live func(root string) bool, t
 		return fsPolicy{}, err
 	}
 	p := fsPolicy{roots: []string{rhome}, denied: map[fileKey]struct{}{}, contained: map[fileKey]struct{}{},
-		scratch: map[fileKey]string{}, guarded: map[fileKey]struct{}{}, deniedOrAbove: map[fileKey]struct{}{}}
+		scratch: map[fileKey]string{}, guarded: map[fileKey]struct{}{}, deniedOrAbove: map[fileKey]struct{}{},
+		spellings: []string{filepath.Clean(home)}}
 
 	forbidden := map[fileKey]struct{}{}
 	addSelfAndAncestors := func(dir string) {
@@ -185,6 +190,7 @@ func newFsPolicyLive(home string, roots []string, live func(root string) bool, t
 		// is, holds, or sits in an extra root stays contained (and guarded), so
 		// the walk never follows its box-planted links in host mode.
 		p.roots = append(p.roots, rr)
+		p.spellings = append(p.spellings, rr)
 	}
 	for _, d := range trees.Denied {
 		rd, err := filepath.EvalSymlinks(d)
@@ -239,6 +245,7 @@ func newFsPolicyLive(home string, roots []string, live func(root string) bool, t
 			continue
 		}
 		p.scratch[k] = real
+		p.spellings = append(p.spellings, filepath.Clean(c))
 		addGuarded(p.guarded, real)
 	}
 	return p, nil

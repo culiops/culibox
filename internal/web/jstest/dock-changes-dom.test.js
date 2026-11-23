@@ -624,6 +624,15 @@ test("the top row: New file goes to the root; the ⋯ menu lists New folder, Upl
   assert.deepStrictEqual(plain([p.st.loads, p.st.lastLoad]), [1, { fresh: true }]);
 });
 
+test("the ⋯ menu ends with the \"Reveal open file\" checkbox (dockreveal.js), after a rule; it closes the menu first", async () => {
+  let closer = null;
+  const p = page({ dockRevealMenuRow: (close) => { closer = close; return { label: "Reveal open file", tag: "item" }; } });
+  p.el("dock-more").onclick({ stopPropagation() {} });
+  assert.deepStrictEqual(Array.from(p.st.menu.items, (i) => i.label || i.tag), ["New folder…", "Upload…", "sep", "Refresh", "Collapse all", "sep", "Reveal open file"]);
+  closer();
+  assert.strictEqual(p.st.closed, 1);
+});
+
 test("Collapse all forgets every folder opened under the root, keeps others, and reloads", async () => {
   const p = page();
   p.el("dock-more").onclick({ stopPropagation() {} });

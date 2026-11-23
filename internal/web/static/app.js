@@ -515,6 +515,8 @@ function paintDrawerLayout(avail, over) {
   if (parts.treeFolded) dr.dataset.folded = "1";
   else delete dr.dataset.folded;
   dockDrawn = { fold, avail, dockW: full ? avail : lay.dockW, treeW: parts.treeW };
+  // An explorer that unfolds (or opens from the strip) shows the open file it could not show folded (dockreveal.js).
+  if (typeof dockRevealSync === "function") dockRevealSync();
 }
 
 // dockForcesFull: would the dock, opened now, land in forced Full mode (dockLayout full)? What the first paint of an open
@@ -581,6 +583,13 @@ function dockStripOpen() {
   dockTreeReveal();
   const to = [$("drawer-tree").querySelector('.ft-node[tabindex="0"]'), $("drawer-goto-in"), $("drawer-x")].find((n) => n && n.getClientRects().length > 0);
   if (to) to.focus();
+  // The open file is revealed now (it could not be while the column was folded), and becomes the Tab stop: focus follows it
+  // there unless the user has moved it meanwhile (dockreveal.js).
+  if (typeof dockRevealNow !== "function") return;
+  dockRevealNow().then((ok) => {
+    const row = ok && $("drawer-tree").querySelector('.ft-node[tabindex="0"]');
+    if (row && to && document.activeElement === to && row !== to) row.focus({ preventScroll: true });
+  });
 }
 
 // dockRefit: the grid's width changed (the dock opened, closed or was resized), so the visible terminals refit. Each

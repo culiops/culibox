@@ -1415,6 +1415,10 @@
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-xs); line-height: var(--lh-xs);
     font-weight: var(--w-semibold); letter-spacing: var(--track-caps); text-transform: uppercase;
   }
+  /* The root's "worktree" / "clone" chip (P4.10, founder pick B): the kit chip, one word that never shrinks; the path beside it
+     gives way first, and the name keeps its own share. Its title says of what and the branch. */
+  .dk-root-chip { flex: none; align-self: center; text-transform: none; letter-spacing: 0; }
+  .dk-root-chip[hidden] { display: none; }
   .dk-root-path { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   /* Today's root field stays in the DOM (the picker is wired to it) and is shown only while the header is being edited. */
   #drawer .dr-tree:not([data-rootedit="1"]) .ft-row { display: none; }
@@ -1533,6 +1537,13 @@
   button.dk-crumb:focus-visible { outline: var(--focus); outline-offset: -2px; }
   .dk-sep { flex: none; padding: 0 3px; }
   .dk-edited { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+  /* "Outside this tree · Reveal" (P4.5): the open file is outside the tree's root. It sits after the trail and gives way
+     before anything on the right does: the trail shrinks first, then these words (ellipsis); Reveal and "Edited by" (and P6's
+     blame header after it) never shrink. Muted, as the row is; Reveal is the kit's link. */
+  .dk-outside { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 4px; }
+  .dk-outside[hidden] { display: none; }
+  .dk-outside-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .dk-outside-go { flex: none; font: inherit; }
   .dk-edited::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
   /* A read-only file's tab wears a small padlock after its name (drawn here, like the dirty dot, so no glyph has to exist in a
      font): a body and a shackle in the muted colour. */
@@ -1885,6 +1896,8 @@
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, var(--accent-tint));
   }
   #drawer .ft-branch { display: none; }
+  /* A symlink's row ends its name with a muted ↗ (P4.9); a link to a folder the server serves expands like a folder. */
+  #drawer .ft-link .ft-linkmark { flex: none; color: var(--muted); font-size: var(--t-xs); line-height: 1; }
   /* The chevron, drawn by the row's ::before; a file's is empty, the same width, so every icon starts at the same column. */
   #drawer .ft-node::before { content: ""; flex: none; width: 14px; text-align: center; color: var(--muted); }
   #drawer .ft-node.dir::before { content: "\203A"; font-size: calc(var(--fs-tree) * 15 / 12); }

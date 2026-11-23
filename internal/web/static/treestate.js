@@ -11,9 +11,14 @@
 // disabled loses the feature, not the app.
 //
 // The runtime structure is a Set, and that is load-bearing: a JS Set iterates in
-// insertion order and re-adding an existing key does not move it, so the oldest
-// entry is always the first one out — which is exactly the eviction the cap
-// wants. Do not replace it with something that loses that order.
+// insertion order, so the first entry is always the least recently opened one —
+// addExpanded moves a folder opened again to the end (delete, then add) — which
+// is exactly the eviction the cap wants (least recently used, P4). Do not replace
+// it with something that loses that order.
+//
+// Only folders the USER opens come here: the ones a reveal opens to show the open
+// file are not stored (filetree.js setOpen's persist), since the open file is
+// remembered with its tab and revealed again on restore.
 
 const TREESTATE_KEY = "agent-box:tree-expanded";
 const TREESTATE_V = 1;
@@ -22,7 +27,8 @@ const TREESTATE_CAP = 500; // an upper bound on stored paths, not a UX limit; a
                            // backstop against unbounded growth from stale paths.
 
 function addExpanded(set, path) {
-  if (!path || set.has(path)) return set;
+  if (!path) return set;
+  set.delete(path); // opened again: it is the newest now
   set.add(path);
   // One over at most, since we add one at a time: delete the single oldest.
   if (set.size > TREESTATE_CAP) set.delete(set.values().next().value);
@@ -72,6 +78,6 @@ function saveExpanded(set) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     loadExpanded, saveExpanded, addExpanded, removeExpanded, forgetSubtree,
-    shouldAutoOpen, TREESTATE_KEY,
+    shouldAutoOpen, TREESTATE_KEY, TREESTATE_CAP,
   };
 }
