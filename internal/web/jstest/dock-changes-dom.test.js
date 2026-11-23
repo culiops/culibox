@@ -1100,3 +1100,57 @@ test("on a clean tree, Uncommitted → Branch → Uncommitted → Branch shows t
     assert.strictEqual(text(p.el("dock-chg-count")), "1 changed", "round " + (i + 1) + ": the Branch list, not 'Reading branch changes…'");
   }
 });
+
+// --- P3: the explorer's sections (docksections.js) --------------------------------------------------------------------------
+// Collapsing Changes or the tree is a paint (data attributes, desktop.css): the section keeps drawing what git says and keeps
+// asking exactly as it does when open, so its request rule (one numstat at a time, the base when the root or HEAD moves) is
+// untouched by it. These run the real docksections.js in the same page as the real dockchanges.js.
+function withSections(p) {
+  p.el("drawer-tree").style = { setProperty() {}, removeProperty() {} };
+  p.run(src("docksections.js"));
+  return p;
+}
+
+async function sectionsScenario(shut) {
+  const p = withSections(page());
+  const log = () => p.st.fetches.map((f) => f.url + " " + JSON.stringify(f.body));
+  await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "b.go", x: "U" }]));
+  const before = log();
+  if (shut) {
+    p.ctx.dockSecSet("changes", false);
+    p.ctx.dockSecSet("tree", false);
+    p.ctx.dockSecSet("tree", true);
+  }
+  await settle();
+  const afterToggle = log();
+  await p.answer("/api/git/base", baseOk());
+  await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 3, d: 1 }, { p: "b.go", x: "U", a: 5, d: 0 }]));
+  await p.status(okStatus([{ p: "a.go", x: "M" }, { p: "b.go", x: "U" }, { p: "c.go", x: "M" }]), { fresh: true });
+  const pend = p.pending("/api/git/numstat");
+  if (pend.length) await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 3, d: 1 }, { p: "b.go", x: "U", a: 5, d: 0 }, { p: "c.go", x: "M", a: 1, d: 0 }]));
+  return { p, before, afterToggle, all: log() };
+}
+
+test("P3: collapsing either section asks nothing and stops nothing: the same requests, in the same order, as with both open", async () => {
+  const open = await sectionsScenario(false);
+  const shut = await sectionsScenario(true);
+  assert.deepStrictEqual(shut.afterToggle, shut.before, "the toggles themselves asked nothing");
+  assert.deepStrictEqual(shut.all, open.all, "a status that lands while Changes is collapsed asks what it asks when it is open");
+  assert.ok(open.all.length >= 3, "the scenario did ask (base, numstat, then a fresh numstat)");
+  assert.strictEqual(shut.p.el("drawer-tree").getAttribute("data-chg-shut"), "1");
+});
+
+test("P3: collapsed Changes keeps its header's count and Review, drawn from git's answer", async () => {
+  const { p } = await sectionsScenario(true);
+  assert.strictEqual(text(p.el("dock-chg-count")), "3 changed");
+  assert.strictEqual(p.el("dock-review").hidden, false);
+});
+
+test("P3: a root-name press with the tree collapsed opens the tree, where the root field is", () => {
+  const p = withSections(page());
+  p.ctx.dockSecSet("tree", false);
+  assert.strictEqual(p.el("drawer-tree").getAttribute("data-tree-shut"), "1");
+  p.ctx.dkcRootPress();
+  assert.strictEqual(p.el("drawer-tree").getAttribute("data-tree-shut"), null);
+  assert.strictEqual(p.el("drawer-tree").dataset.rootedit, "1");
+});

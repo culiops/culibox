@@ -103,3 +103,10 @@ test("the chevron is the tree's own glyph, turned when open, with the kit's focu
 test("the phone's stylesheet knows none of it", () => {
   assert.doesNotMatch(stripComments(read("app.css")), /dk-chev|dk-secsplit|dk-roothead|data-chg-shut|data-tree-shut/);
 });
+
+test("an explicit ask opens a collapsed section: Reveal in tree, and the folded strip's Changes button", () => {
+  const ft = read("filetree.js");
+  const body = stripComments(ft.slice(ft.indexOf("async function ftReveal("), ft.indexOf("\n}\n", ft.indexOf("async function ftReveal("))));
+  assert.match(body, /^async function ftReveal\(path\) \{\s*if \(typeof dockSecOpen === "function"\) dockSecOpen\("tree"\);/, "first thing in ftReveal");
+  assert.match(stripComments(read("app.js")), /\$\("drawer-strip-changes"\)\.onclick = \(\) => \{\s*if \(typeof dockSecOpen === "function"\) dockSecOpen\("changes"\);\s*dockStripOpen\(\);\s*\};/);
+});
