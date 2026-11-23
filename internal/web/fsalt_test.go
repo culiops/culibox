@@ -431,3 +431,34 @@ func TestAltHostRepoBesideBoxedTrees(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// #364: a worktree dir named in git's registry is judged by path alone before anything stats it. The roots here do not
+// exist, so a check that resolved or stat'ed the path could not say yes to any of them.
+func TestServesByPathNeedsNoFilesystem(t *testing.T) {
+	const b = "/nonexistent-364"
+	p := fsPolicy{roots: []string{b + "/home/u", b + "/srv"}, scratch: map[fileKey]string{{dev: 1, ino: 2}: b + "/tmp/claude-1"}}
+	host := fsTarget{Root: b + "/home/u", Abs: b + "/home/u/repo"}
+	boxed := fsTarget{Root: b + "/home/u/ws", Abs: b + "/home/u/ws", Strict: true}
+	for _, c := range []struct {
+		req  fsTarget
+		dir  string
+		want bool
+	}{
+		{host, b + "/home/u/repo-wt", true},
+		{host, b + "/home/u", true},
+		{host, b + "/srv/x/.git", true},
+		{host, b + "/tmp/claude-1/wt", true},
+		{host, "/net/host/share/wt", false},
+		{host, b + "/home/user/wt", false}, // whole components
+		{host, b + "/home/u/../../etc", false},
+		{host, "rel/wt", false},
+		{boxed, b + "/home/u/ws/.claude/worktrees/a", true},
+		{boxed, b + "/home/u/ws", true},
+		{boxed, b + "/home/u/repo-wt", false}, // served for a host request, not in the boxed request's tree
+		{boxed, b + "/home/u/wsx", false},
+	} {
+		if got := p.servesByPath(c.req, c.dir); got != c.want {
+			t.Errorf("servesByPath(strict=%v, %q) = %v, want %v", c.req.Strict, c.dir, got, c.want)
+		}
+	}
+}

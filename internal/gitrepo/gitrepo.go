@@ -12,6 +12,12 @@ import (
 	"syscall"
 )
 
+// lstat and openFile are os.Lstat and os.OpenFile, variables so a test can see every path the package touches.
+var (
+	lstat    = os.Lstat
+	openFile = os.OpenFile
+)
+
 // Repo is one checkout: Top is the directory holding .git (a directory or a
 // file), Common the repository's common git dir, Linked true when the checkout
 // is a linked worktree. Gitdir is the directory a .git FILE names (empty for a
@@ -120,21 +126,25 @@ const maxGitdirBytes = 4096
 //   - <common>/worktrees is a real directory (not a link), read with ReadDir(max): at most max entries are READ;
 //   - <name> is a real directory, its gitdir a regular file (opened O_NOFOLLOW|O_NONBLOCK, judged on the fd) of at most
 //     maxGitdirBytes, holding a path ending in /.git (a relative one is read from <common>/worktrees/<name>, as git does);
-//   - the checkout dir that path names is a real directory, not a link;
+//   - the checkout dir that path names is a real directory, and no component of the path to it is a link;
 //   - that checkout's own .git file points back at <common>/worktrees/<name>.
+//
+// Before the checkout dir that path names (or its .git) is touched at all, allow must accept both: a check by path
+// alone, with no filesystem access, of whether the caller could serve them (a nil allow serves nothing). The dir is
+// then reached one component at a time with Lstat, so no link on the way is followed.
 //
 // A pointer to any other place (/etc, another repository) fails the last check. The caller still decides whether a
 // checkout is one it may show (the fs policy); this only says which ones git has.
-func Worktrees(common string, max int) []string {
+func Worktrees(common string, max int, allow func(dir string) bool) []string {
 	if max <= 0 {
 		return nil
 	}
 	common = filepath.Clean(common)
 	reg := filepath.Join(common, "worktrees")
-	if fi, err := os.Lstat(reg); err != nil || !fi.IsDir() {
+	if fi, err := lstat(reg); err != nil || !fi.IsDir() {
 		return nil
 	}
-	d, err := os.Open(reg)
+	d, err := openFile(reg, os.O_RDONLY, 0)
 	if err != nil {
 		return nil
 	}
@@ -144,7 +154,7 @@ func Worktrees(common string, max int) []string {
 	var out []string
 	for _, e := range ents {
 		gd := filepath.Join(reg, e.Name())
-		if fi, err := os.Lstat(gd); err != nil || !fi.IsDir() {
+		if fi, err := lstat(gd); err != nil || !fi.IsDir() {
 			continue
 		}
 		dotgit, ok := readPointer(filepath.Join(gd, "gitdir"))
@@ -159,7 +169,10 @@ func Worktrees(common string, max int) []string {
 			continue
 		}
 		wt := filepath.Dir(dotgit)
-		if fi, err := os.Lstat(wt); err != nil || !fi.IsDir() {
+		// The path is text the repository's owner wrote: the caller judges it before anything touches it, and the
+		// walk to it never follows a link, so neither a pointer outside what the caller serves nor one through a link
+		// out of it makes the host stat, open or mount anything there.
+		if allow == nil || !allow(wt) || !allow(dotgit) || !linkFreeDir(wt) {
 			continue
 		}
 		back, ok := ReadGitFile(dotgit)
@@ -176,6 +189,25 @@ func Worktrees(common string, max int) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// linkFreeDir reports whether the absolute, clean path p is a directory reached with no link anywhere on the way: each
+// component is Lstat'ed in turn from "/", so the walk stops at the first link or non-directory instead of following it.
+func linkFreeDir(p string) bool {
+	if !filepath.IsAbs(p) {
+		return false
+	}
+	cur := string(filepath.Separator)
+	for _, c := range strings.Split(p, string(filepath.Separator)) {
+		if c == "" {
+			continue
+		}
+		cur = filepath.Join(cur, c)
+		if fi, err := lstat(cur); err != nil || !fi.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 // readPointer reads a one-line pointer file (gitdir), trimmed; ok=false for anything but a regular file of at most
@@ -213,7 +245,7 @@ func ReadGitFile(p string) (string, bool) {
 // blocks with no timeout (one pinned thread per poll). O_NONBLOCK makes that open
 // return at once; O_NOFOLLOW refuses a symlink.
 func OpenRegular(p string) (*os.File, bool) {
-	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	f, err := openFile(p, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, false
 	}
