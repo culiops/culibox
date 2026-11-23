@@ -25,7 +25,8 @@ function fake(o) {
     const el = { tag: "link", rel: "", href: "", sheet: null, listeners: {}, addEventListener(t, fn) { this.listeners[t] = fn; if ((opt.css === "late-load" && t === "load") || (opt.css === "late-error" && t === "error")) setImmediate(fn); }, remove() { log.removed.push(this); head.children = head.children.filter((c) => c !== this); } };
     return el;
   };
-  const doc = { head, createElement: (tag) => (tag === "link" ? link() : { tag, src: "" }) };
+  // opt.base: the content of the page's asset-base meta (index.html as the server rewrote it); undefined = no such tag.
+  const doc = { head, createElement: (tag) => (tag === "link" ? link() : { tag, src: "" }), querySelector: (sel) => (sel === 'meta[name="culibox-asset-base"]' && opt.base !== undefined ? { content: opt.base } : null) };
   const monaco = {
     editor: { defineTheme() { log.themes++; }, addKeybindingRule() {}, registerLinkOpener(o) { log.openers.push(o); return { dispose() {} }; } },
     KeyCode: { F1: 59 },
@@ -53,7 +54,7 @@ function fake(o) {
         head.children.push(l);
       }
       setImmediate(() => ok());
-    }, { config() {} }),
+    }, { config(c) { log.config = c; } }),
   });
   if (opt.withLinks) new vm.Script(fs.readFileSync(path.join(__dirname, "..", "static", "links.js"), "utf8"), { filename: "links.js" }).runInContext(ctx);
   new vm.Script(SRC, { filename: "monacoload.js" }).runInContext(ctx);
@@ -350,4 +351,30 @@ test("a Monaco without registerLinkOpener still boots", { timeout: 4000 }, async
   const f = fake({ noOpenerApi: true });
   assert.equal(await f.loadMonaco(), f.win.monaco);
   assert.deepEqual(f.log.openers, []);
+});
+
+test("the loader, the editor module's base and the stylesheet come from the build's versioned base the page names", { timeout: 4000 }, async () => {
+  const f = fake({ base: "/v/0123456789abcdef", css: "applied" });
+  await f.loadMonaco();
+  const script = f.head.children.find((c) => c.tag === "script");
+  assert.equal(script.src, "/v/0123456789abcdef/vendor/monaco/vs/loader.js");
+  assert.deepEqual(JSON.parse(JSON.stringify(f.log.config)), { paths: { vs: "/v/0123456789abcdef/vendor/monaco/vs" } });
+});
+
+test("a page with no asset base, or one that is not /v/<16 hex>, loads from the unversioned /vendor/monaco/vs", { timeout: 4000 }, async () => {
+  for (const base of [undefined, "", "//evil.example", "https://evil.example/v/0123456789abcdef", "/v/../x", "/v/0123456789abcdeg", "/v/0123456789abcdef/", "javascript:alert(1)", "/v/0123456789ABCDEF"]) {
+    const f = fake({ base, css: "applied" });
+    await f.loadMonaco();
+    assert.equal(f.head.children.find((c) => c.tag === "script").src, "/vendor/monaco/vs/loader.js", String(base));
+    assert.equal(f.log.config.paths.vs, "/vendor/monaco/vs", String(base));
+  }
+});
+
+test("a stylesheet the loader has to add itself comes from the versioned base too", { timeout: 4000 }, async () => {
+  const f = fake({ base: "/v/0123456789abcdef", css: "late-load" });
+  // A module that does not append its stylesheet: the loader appends one.
+  f.ctx.require = Object.assign((deps, ok) => setImmediate(() => ok()), { config() {} });
+  await f.loadMonaco();
+  const l = f.head.children.find((c) => c.tag === "link");
+  assert.equal(l.href, "/v/0123456789abcdef/vendor/monaco/vs/editor/editor.main.css");
 });
