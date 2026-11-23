@@ -975,3 +975,28 @@ test("a live list is kept for its root; a note or a kept list is not written bac
   assert.deepStrictEqual(saved[0][1].view.rows.map((r) => [r.name, r.code, r.add, r.del]), [["a.go", "M", 3, 1]]);
   assert.strictEqual(saved[0][1].status.entries.length, 1, "and the status the tree's marks come from");
 });
+
+test("a remembered Uncommitted pick sends no base beside the status (it needs none to list), and asks it when the status lands", async () => {
+  const p = page();
+  p.st.store.set(KEY, JSON.stringify({ s1: "head" }));
+  const before = p.st.fetches.length;
+  const done = p.ctx.gitStatusLoad("/w", "s1");
+  await settle();
+  // The base would take a git slot ahead of the numstat's own run: the counts would wait for it.
+  assert.deepStrictEqual(p.st.fetches.slice(before).map((f) => [f.url, f.body]), [
+    ["/api/git/status", { path: "/w" }],
+    ["/api/git/numstat", { path: "/w", scope: "head" }],
+  ]);
+  p.st.fetches[before].resolve({ ok: true, json: async () => okStatus([{ p: "a.go", x: "M" }]) });
+  await done;
+  await settle();
+  assert.deepStrictEqual(p.calls("/api/git/base").map((f) => f.body), [{ path: "/w" }], "the toggle's base, after the status");
+});
+
+test("with an Uncommitted pick the live list replaces the kept one as soon as the status lands, not when the base does", async () => {
+  const p = page({ __session: kept("/w", Object.assign({}, keptView, { scope: "head", branch: null, showScope: false })) });
+  p.st.store.set(KEY, JSON.stringify({ s1: "head" }));
+  await p.status(okStatus([{ p: "a.go", x: "M" }]));
+  assert.strictEqual(text(p.el("dock-chg-count")), "1 changed", "git's list, not the kept one");
+  assert.strictEqual(p.ctx.dockChangesRows().length, 1);
+});

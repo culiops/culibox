@@ -144,9 +144,11 @@ function dockChangesOnStatusAsk(o) {
   // The last status said git cannot list this root (unavailable, too many): nothing is asked until one says it can.
   const last = dkcLastStatus(root);
   if (last && last.state !== "ok") return;
-  if (!dkcBaseFlight && !(dkcBase && dkcBase.root === root)) dkcAskBase(root, null, null);
-  if (dkcNumFlight) return; // the landing asks for the newest once this one is back
   const scope = dkcAskScope(root);
+  // The base beside the status, when the list needs it (Branch, or a scope still to pick). Uncommitted lists without it, and a
+  // base asked now would take a git slot ahead of the numstat: the landing asks it (the toggle and the branch row).
+  if (scope !== "head" && !dkcBaseFlight && !(dkcBase && dkcBase.root === root)) dkcAskBase(root, null, null);
+  if (dkcNumFlight) return; // the landing asks for the newest once this one is back
   if (scope === "head" && dkcLastClean(root)) return; // a clean tree has nothing to count: the landing decides
   dkcAskNumstat(root, scope, o.seq, !!o.fresh);
 }
@@ -514,12 +516,14 @@ function dockChangesRender() {
   // Before git's first answers for this root (no status yet, no base yet so the scope is still a guess, or Branch waiting for
   // its list), the list kept from the last time (gitlast.js) is drawn, Updating…, and read by nothing. While Branch waits, only
   // a Branch list: an Uncommitted one would be a list of other changes.
-  const baseKnown = !!dkcBase && dkcBase.root === root;
+  // The scope shown is known once the base is, or with an Uncommitted pick (which needs no base to list).
+  const pick = dkcPrefsMap().get(typeof sid === "string" ? sid : "");
+  const scopeKnown = (!!dkcBase && dkcBase.root === root) || pick === "head";
   let stale = false;
   const listed = !cur || cur.status.state === "ok"; // a status that says not a repository, too many or unavailable says so itself
-  if (owns && root && listed && typeof gitLastGet === "function" && (!cur || !baseKnown || (view.kind === "note" && view.waiting === true))) {
+  if (owns && root && listed && typeof gitLastGet === "function" && (!cur || !scopeKnown || (view.kind === "note" && view.waiting === true))) {
     const kept = gitLastGet(root);
-    if (kept && kept.view && (!cur || !baseKnown || kept.view.scope === view.scope)) { view = kept.view; stale = true; }
+    if (kept && kept.view && (!cur || !scopeKnown || kept.view.scope === view.scope)) { view = kept.view; stale = true; }
   }
   const rv = dkcReviewState(view, sid, files);
   const painted = JSON.stringify([view, root, name, box, owns, rv, stale]);
@@ -531,7 +535,7 @@ function dockChangesRender() {
   dkcPaintRoot(root);
   dkcView = stale ? null : view;
   // Kept for the next reload or session switch: git's answer, once the scope is known (not the guess before the base lands).
-  if (!stale && baseKnown && view.kind === "rows" && root && typeof gitLastSet === "function") gitLastSet(root, "view", view);
+  if (!stale && scopeKnown && view.kind === "rows" && root && typeof gitLastSet === "function") gitLastSet(root, "view", view);
   const rows = view.kind === "rows";
   sec.hidden = view.kind === "none";
   const count = stale ? "Updating…" : rows && rv.reviewing && rv.total > 0 ? "reviewed " + rv.doneN + " of " + rv.total : rows && view.count > 0 ? view.count + " changed" : "";
