@@ -155,3 +155,38 @@ func TestSlotWaiterThatGivesUpFreesNothing(t *testing.T) {
 		t.Fatalf("runs = %d, want 3", n-n0)
 	}
 }
+
+func TestStatusSharedJoinsAStatusAskedAtTheSameTime(t *testing.T) {
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		time.Sleep(80 * time.Millisecond)
+		return okStatus()(ctx, a, w)
+	}}
+	r := newRunner(f, newClock())
+	r.Now = time.Now // a fresh call compares launch and arrival times: they must move
+	var wg sync.WaitGroup
+	var shared, fresh Status
+	wg.Add(2)
+	go func() { defer wg.Done(); shared = r.StatusShared(context.Background(), tgt) }()
+	time.Sleep(30 * time.Millisecond) // the client's fresh status arrives a moment after the numstat
+	go func() { defer wg.Done(); fresh = r.StatusFresh(context.Background(), tgt) }()
+	wg.Wait()
+	if shared.State != "ok" || fresh.State != "ok" {
+		t.Fatalf("shared %+v, fresh %+v", shared, fresh)
+	}
+	if n := f.callCount(); n != 1 {
+		t.Fatalf("status ran %d times, want 1: the shared reader joins the status asked beside it", n)
+	}
+}
+
+func TestStatusSharedRunsItsOwnWhenNoneComes(t *testing.T) {
+	f := &fakeDocker{run: okStatus()}
+	r := newRunner(f, newClock())
+	if st := r.StatusShared(context.Background(), tgt); st.State != "ok" || f.callCount() != 1 {
+		t.Fatalf("status %+v after %d runs", st, f.callCount())
+	}
+	// A reused status (inside Reuse) is taken at once.
+	t0 := time.Now()
+	if st := r.StatusShared(context.Background(), tgt); st.State != "ok" || f.callCount() != 1 || time.Since(t0) > 50*time.Millisecond {
+		t.Fatalf("status %+v, %d runs, %v", st, f.callCount(), time.Since(t0))
+	}
+}

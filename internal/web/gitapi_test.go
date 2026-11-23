@@ -30,6 +30,7 @@ type fakeGit struct {
 	fresh    []bool // per Status/StatusFresh call: was it fresh
 	diffs    []fakeDiffCall
 	bases    []gitview.Target
+	baseRefs []gitview.Target
 	numstats []fakeNumstatCall
 	shows    []fakeShowCall
 	// numGate, when set, holds every Numstat until it is closed: a slow diff.
@@ -61,6 +62,10 @@ type fakeDiffCall struct {
 }
 
 func (f *fakeGit) Status(ctx context.Context, t gitview.Target) gitview.Status {
+	return f.status(t, false)
+}
+
+func (f *fakeGit) StatusShared(ctx context.Context, t gitview.Target) gitview.Status {
 	return f.status(t, false)
 }
 
@@ -99,6 +104,20 @@ func (f *fakeGit) Base(_ context.Context, t gitview.Target) gitview.BaseInfo {
 		return gitview.BaseInfo{State: "ok", Branch: "feat", BaseRef: "refs/remotes/origin/main", BaseName: "origin/main", MergeBase: strings.Repeat("a", 40), Ahead: true}
 	}
 	return f.base
+}
+
+// BaseRef answers from the same canned base (its ref part), recorded apart from Base.
+func (f *fakeGit) BaseRef(ctx context.Context, t gitview.Target) gitview.BaseInfo {
+	f.mu.Lock()
+	f.baseRefs = append(f.baseRefs, t)
+	f.mu.Unlock()
+	f.mu.Lock()
+	bi := f.base
+	f.mu.Unlock()
+	if bi.State == "" {
+		return gitview.BaseInfo{State: "ok", BaseRef: "refs/remotes/origin/main", BaseName: "origin/main"}
+	}
+	return gitview.BaseInfo{State: bi.State, Reason: bi.Reason, BaseRef: bi.BaseRef, BaseName: bi.BaseName}
 }
 
 func (f *fakeGit) Numstat(_ context.Context, t gitview.Target, sc gitview.Scope) gitview.Numstat {
@@ -155,7 +174,7 @@ func (f *fakeGit) statusCalls() int {
 func (f *fakeGit) calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.statuses) + len(f.diffs) + len(f.bases) + len(f.numstats) + len(f.shows)
+	return len(f.statuses) + len(f.diffs) + len(f.bases) + len(f.baseRefs) + len(f.numstats) + len(f.shows)
 }
 
 // hostGitServer is a server with a resolved temp $HOME and no boxed trees.
@@ -952,13 +971,14 @@ func TestGitNumstatBranchScopeUsesTheServersBase(t *testing.T) {
 	repo := filepath.Join(h, "repo")
 	mainRepo(t, repo)
 	g.base = gitview.BaseInfo{State: "ok", Branch: "feat", BaseRef: "refs/remotes/origin/develop", BaseName: "origin/develop", MergeBase: strings.Repeat("b", 40), Ahead: true}
-	// A ref in the body is not read: the base is the one Base derived.
+	// A ref in the body is not read: the base is the one BaseRef derived.
 	body := `{"path":` + strconv.Quote(repo) + `,"scope":"branch","baseRef":"-x","base":"refs/heads/evil"}`
 	decodeNumstat(t, gitPost(s.handleGitNumstat, "/api/git/numstat", body))
 	tg := gitview.Target{Top: repo, Common: filepath.Join(repo, ".git")}
 	want := fakeNumstatCall{tg, gitview.Scope{Branch: true, BaseRef: "refs/remotes/origin/develop"}, false}
-	if len(g.numstats) != 1 || g.numstats[0] != want || len(g.bases) != 1 || g.bases[0] != tg {
-		t.Fatalf("calls: numstats=%+v bases=%+v, want one Base and %+v", g.numstats, g.bases, want)
+	// The ref alone is looked up (BaseRef): a Branch numstat never waits for a status or a merge-base run.
+	if len(g.numstats) != 1 || g.numstats[0] != want || len(g.baseRefs) != 1 || g.baseRefs[0] != tg || len(g.bases) != 0 {
+		t.Fatalf("calls: numstats=%+v baseRefs=%+v bases=%+v, want one BaseRef, no Base and %+v", g.numstats, g.baseRefs, g.bases, want)
 	}
 }
 
@@ -1386,8 +1406,8 @@ func TestGitNumstatFreshReachesTheRunner(t *testing.T) {
 			t.Fatalf("Status call %d of a fresh numstat request was StatusFresh", i)
 		}
 	}
-	if len(g.bases) != 2 {
-		t.Fatalf("Base ran %d times for two branch requests, want 2", len(g.bases))
+	if len(g.baseRefs) != 2 {
+		t.Fatalf("BaseRef ran %d times for two branch requests, want 2", len(g.baseRefs))
 	}
 }
 

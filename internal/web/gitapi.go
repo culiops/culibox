@@ -20,15 +20,17 @@ import (
 // reads for the file tree and the editor (gitview.Runner). Nil on the Server
 // means no box runtime: every endpoint answers "unavailable". Base takes no
 // ref: the runner picks the base branch from the repository's own refs, so a
-// request can never name one. The Scope.BaseRef a handler gives Numstat and the
-// rev it gives Show are the ones Base returned (or HEAD). The Fresh
+// request can never name one. The Scope.BaseRef a handler gives Numstat is the
+// one BaseRef (or Base) returned, and the rev it gives Show is Base's (or HEAD). The Fresh
 // variants (StatusFresh, NumstatFresh) are for a request that has just changed
 // something on disk.
 type GitView interface {
 	Status(context.Context, gitview.Target) gitview.Status
 	StatusFresh(context.Context, gitview.Target) gitview.Status
+	StatusShared(context.Context, gitview.Target) gitview.Status
 	Diff(context.Context, gitview.Target, string, bool) gitview.Diff
 	Base(context.Context, gitview.Target) gitview.BaseInfo
+	BaseRef(context.Context, gitview.Target) gitview.BaseInfo
 	Numstat(context.Context, gitview.Target, gitview.Scope) gitview.Numstat
 	NumstatFresh(context.Context, gitview.Target, gitview.Scope) gitview.Numstat
 	Show(ctx context.Context, t gitview.Target, rev, rel string) gitview.Blob
@@ -601,7 +603,8 @@ func (s *Server) handleGitBase(w http.ResponseWriter, r *http.Request) {
 // handleGitNumstat is POST /api/git/numstat {"path": abs, "scope": "head" or
 // "branch", "fresh": bool}: per-file line counts of the changes in the checkout
 // holding path, against HEAD or, for "branch", against the merge base with the
-// base branch the server picks (Base). Tracked files are counted by git;
+// base branch the server picks (BaseRef: a Branch numstat needs the ref, never
+// the merge base id, so it waits for no status and no merge-base run). Tracked files are counted by git;
 // untracked ones are counted here (see withUntracked). Any other scope is a 400.
 // ok/notrepo/toomany/unavailable are all 200, and "branch" with no base branch
 // is "unavailable" with "no base branch". Fresh makes only the numstat run fresh
@@ -639,8 +642,8 @@ func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 	}
 	var sc gitview.Scope
 	if branch {
-		// The ref is the server's: Base derived it from the repository's refs.
-		bi := s.Git.Base(r.Context(), t)
+		// The ref is the server's: BaseRef derived it from the repository's refs.
+		bi := s.Git.BaseRef(r.Context(), t)
 		switch bi.State {
 		case "ok":
 			sc = gitview.Scope{Branch: true, BaseRef: bi.BaseRef}
@@ -661,7 +664,8 @@ func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 	// it a second cold container run, and one request would wait for two. The
 	// buffer lets the goroutine finish unobserved when the numstat is not ok.
 	stc := make(chan gitview.Status, 1)
-	go func() { stc <- s.Git.Status(r.Context(), t) }()
+	// StatusShared: the client asks a status with each numstat, and this joins it rather than racing it for a run.
+	go func() { stc <- s.Git.StatusShared(r.Context(), t) }()
 	// ns is this request's own copy (Numstat returns a value with cloned
 	// entries), so RootRel and the appended entries never reach the runner's cache.
 	var ns gitview.Numstat
