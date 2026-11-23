@@ -3,7 +3,9 @@ package gitrepo
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -75,6 +77,9 @@ func TestLocateNone(t *testing.T) {
 	}
 }
 
+// all is a check that serves every dir.
+func all(string) bool { return true }
+
 // addWorktree registers a linked worktree the way git does: <common>/worktrees/<name>/gitdir names <wt>/.git, and
 // <wt>/.git names that gitdir back.
 func addWorktree(t *testing.T, common, name, wt string) {
@@ -99,14 +104,14 @@ func TestWorktreesSiblingAndNested(t *testing.T) {
 	write(t, filepath.Join(common, "worktrees", "proj-wt", "gitdir"), "../../../../proj-wt/.git\n")
 	want := []string{dot, cl, sib}
 	sort.Strings(want)
-	got := Worktrees(common, 64)
+	got := Worktrees(common, 64, all)
 	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("Worktrees = %v, want %v", got, want)
 	}
-	if got := Worktrees(common, 0); len(got) != 0 {
+	if got := Worktrees(common, 0, all); len(got) != 0 {
 		t.Fatalf("max=0: %v", got)
 	}
-	if got := Worktrees(filepath.Join(base, "nothing", ".git"), 64); len(got) != 0 {
+	if got := Worktrees(filepath.Join(base, "nothing", ".git"), 64, all); len(got) != 0 {
 		t.Fatalf("no worktrees dir: %v", got)
 	}
 }
@@ -155,7 +160,7 @@ func TestWorktreesHostile(t *testing.T) {
 	write(t, filepath.Join(common, "worktrees", "plainfile"), "x")
 
 	done := make(chan []string, 1)
-	go func() { done <- Worktrees(common, 64) }()
+	go func() { done <- Worktrees(common, 64, all) }()
 	select {
 	case got := <-done:
 		want := []string{good, real}
@@ -178,7 +183,7 @@ func TestWorktreesLinkedDirAndBound(t *testing.T) {
 	if err := os.Symlink(filepath.Join(store, "worktrees"), filepath.Join(common, "worktrees")); err != nil {
 		t.Fatal(err)
 	}
-	if got := Worktrees(common, 64); len(got) != 0 {
+	if got := Worktrees(common, 64, all); len(got) != 0 {
 		t.Fatalf("linked worktrees dir: %v", got)
 	}
 	c2 := filepath.Join(base, "p2", ".git")
@@ -186,10 +191,10 @@ func TestWorktreesLinkedDirAndBound(t *testing.T) {
 		n := string(rune('a'+i/26)) + string(rune('a'+i%26))
 		addWorktree(t, c2, n, filepath.Join(base, "w", n))
 	}
-	if got := Worktrees(c2, 64); len(got) > 64 || !sort.StringsAreSorted(got) {
+	if got := Worktrees(c2, 64, all); len(got) > 64 || !sort.StringsAreSorted(got) {
 		t.Fatalf("max=64: %d %v", len(got), sort.StringsAreSorted(got))
 	}
-	if got := Worktrees(c2, 1000); len(got) != 100 {
+	if got := Worktrees(c2, 1000, all); len(got) != 100 {
 		t.Fatalf("max=1000: %d", len(got))
 	}
 }
@@ -344,5 +349,109 @@ func TestNormalize(t *testing.T) {
 	}
 	if got := Normalize(""); got != "" {
 		t.Fatalf("Normalize(empty) = %q, want empty", got)
+	}
+}
+
+// recordIO swaps the package's filesystem seams for ones that note every path they are handed, for the test's life.
+func recordIO(t *testing.T) *[]string {
+	t.Helper()
+	var seen []string
+	ol, oo, oe := lstat, openFile, evalSymlinks
+	lstat = func(p string) (os.FileInfo, error) { seen = append(seen, p); return ol(p) }
+	evalSymlinks = func(p string) (string, error) { seen = append(seen, p); return oe(p) }
+	openFile = func(p string, flag int, perm os.FileMode) (*os.File, error) {
+		seen = append(seen, p)
+		return oo(p, flag, perm)
+	}
+	t.Cleanup(func() { lstat, openFile, evalSymlinks = ol, oo, oe })
+	return &seen
+}
+
+// #364: a worktree dir read from git's registry is text the repository's owner (an agent) wrote. The caller's
+// no-I/O check (allow) judges it before anything stats or opens it, and nothing on the way to it follows a link: a
+// planted pointer to a path outside what the caller serves, or to a path inside it that crosses a link out, makes no
+// filesystem call on that path at all.
+func TestWorktreesAskBeforeTouching(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := filepath.Join(base, "served")
+	common := filepath.Join(served, "proj", ".git")
+	inside := filepath.Join(served, "inside")
+	addWorktree(t, common, "inside", inside)
+	// A real checkout that answers the pointer, but outside what the caller serves.
+	outside := filepath.Join(base, "outside")
+	addWorktree(t, common, "far", filepath.Join(outside, "far"))
+	// A path inside the served tree, through a link that leads outside it.
+	if err := os.Symlink(outside, filepath.Join(served, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	gd := filepath.Join(common, "worktrees", "via")
+	write(t, filepath.Join(gd, "gitdir"), filepath.Join(served, "evil", "via", ".git")+"\n")
+	write(t, filepath.Join(outside, "via", ".git"), "gitdir: "+gd+"\n")
+
+	var asked []string
+	allow := func(dir string) bool {
+		asked = append(asked, dir)
+		return dir == served || strings.HasPrefix(dir, served+"/")
+	}
+	seen := recordIO(t)
+	got := Worktrees(common, 64, allow)
+	if len(got) != 1 || got[0] != inside {
+		t.Errorf("Worktrees = %v, want [%s]", got, inside)
+	}
+	for _, p := range *seen {
+		if strings.HasPrefix(p, outside+"/") || strings.HasPrefix(p, filepath.Join(served, "evil")+"/") {
+			t.Errorf("touched %s: a path outside the served tree", p)
+		}
+	}
+	if !slices.Contains(asked, filepath.Join(outside, "far")) {
+		t.Errorf("allow was not asked about the outside checkout: %v", asked)
+	}
+	// A nil check serves nothing: the caller must say what it serves.
+	if got := Worktrees(common, 64, nil); len(got) != 0 {
+		t.Errorf("nil allow: %v", got)
+	}
+}
+
+// A linked worktree under the repository (Claude Code's .claude/worktrees) groups under the main checkout.
+func TestWorkspaceRootWorktreeUnderRepo(t *testing.T) {
+	repo := real(t, t.TempDir())
+	mkdir(t, filepath.Join(repo, ".git", "worktrees", "x"))
+	wt := filepath.Join(repo, ".claude", "worktrees", "x")
+	write(t, filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(repo, ".git", "worktrees", "x")+"\n")
+	if got := WorkspaceRoot(wt); got != repo {
+		t.Fatalf("WorkspaceRoot = %q, want the main repo %q", got, repo)
+	}
+}
+
+// #364: in an in-place session the box writes the .git file WorkspaceRoot reads (at spawn, at load, and from the
+// workspace-roots API), so the gitdir it names is judged by its text before anything stats it: the main checkout it
+// implies must hold the checkout or sit beside it, and the walk to the gitdir follows no link. A pointer anywhere else,
+// or one through a link out of the checkout's folder, is never touched, and the checkout stands as its own workspace.
+func TestWorkspaceRootJudgesPointerBeforeTouching(t *testing.T) {
+	base := real(t, t.TempDir())
+	outside := filepath.Join(base, "outside")
+	mkdir(t, filepath.Join(outside, ".git", "worktrees", "wt"))
+	ws := filepath.Join(base, "ws")
+	far := filepath.Join(ws, "far")
+	write(t, filepath.Join(far, ".git"), "gitdir: "+filepath.Join(outside, ".git", "worktrees", "wt")+"\n")
+	if err := os.Symlink(outside, filepath.Join(ws, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	via := filepath.Join(ws, "via")
+	write(t, filepath.Join(via, ".git"), "gitdir: "+filepath.Join(ws, "evil", ".git", "worktrees", "wt")+"\n")
+
+	seen := recordIO(t)
+	for _, wt := range []string{far, via} {
+		if got := WorkspaceRoot(wt); got != wt {
+			t.Errorf("WorkspaceRoot(%s) = %q, want the checkout's own top", wt, got)
+		}
+	}
+	for _, p := range *seen {
+		if p == outside || strings.HasPrefix(p, outside+"/") || strings.HasPrefix(p, filepath.Join(ws, "evil")+"/") {
+			t.Errorf("touched %s: a path the pointer chose outside the checkout's repository", p)
+		}
 	}
 }

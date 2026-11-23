@@ -137,7 +137,7 @@ func TestLinkMayLeadRawSpelling(t *testing.T) {
 	if !p.linkMayLead("/data/u", "/home/u/proj") {
 		t.Error("a target under home's configured spelling must be walked")
 	}
-	if p.linkMayLead("/data/u", "/home/other") {
+	if p.linkMayLead("/data/u", "/home/someone") {
 		t.Error("whole components still")
 	}
 }
@@ -155,5 +155,35 @@ func TestFsListSymlinkDirViaHomeSpelling(t *testing.T) {
 	s := &Server{Home: home}
 	if e := listEntries(t, s, home)["abs_spelled"]; !e.Link || !e.TargetDir {
 		t.Errorf("abs_spelled = %+v, want a link to a folder", e)
+	}
+}
+
+// #364, Mac row MP4-1: an extra root is stored resolved (/private/tmp/labs on macOS), and a folder link whose absolute
+// target is written through a link at the top of the filesystem (/tmp/labs/...) must still expand, as it does for home.
+// On Linux a link base/tmp -> private/tmp stands in for macOS's /tmp, with base standing in for "/".
+func TestFsListSymlinkDirViaTopLinkToExtraRoot(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := filepath.Join(base, "private", "tmp", "labs")
+	mustMkdirAll(t, filepath.Join(extra, "sub"))
+	mustMkdirAll(t, filepath.Join(base, "private", "tmp", "other"))
+	mustSymlink(t, "private/tmp", filepath.Join(base, "tmp"))
+	home := filepath.Join(base, "Users", "u")
+	mustMkdirAll(t, home)
+	mustSymlink(t, filepath.Join(base, "tmp", "labs"), filepath.Join(home, "labs"))
+	mustSymlink(t, filepath.Join(base, "tmp", "other"), filepath.Join(home, "other"))
+	old := topLinkAliases
+	topLinkAliases = func() []linkAlias { return readTopLinks(base) }
+	t.Cleanup(func() { topLinkAliases = old })
+
+	s := &Server{Home: home, Roots: fakeRoots{extra}}
+	got := listEntries(t, s, home)
+	if e := got["labs"]; !e.Link || !e.TargetDir {
+		t.Errorf("labs = %+v, want a link to a folder (the extra root, through the top-level link)", e)
+	}
+	if e := got["other"]; !e.Link || e.TargetDir {
+		t.Errorf("other = %+v, want a link that is not a folder the policy serves", e)
 	}
 }

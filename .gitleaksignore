@@ -1,0 +1,4 @@
+# Findings gitleaks reports in history that are not secrets. One fingerprint per line: commit:file:rule:line.
+# Both are a made-up user name in a test fixture path (#364); the fixture now uses an allowlisted placeholder.
+414e0aeea726926e15af23c6612b5c2f46b7507a:internal/web/fslink_test.go:culibox-home-path:140
+eb83747b4275647e9269cc878bf605624cf42379:internal/web/fslink_test.go:culibox-home-path:140

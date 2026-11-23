@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/culiops/culibox/internal/gitrepo"
 	"github.com/culiops/culibox/internal/gitview"
@@ -79,8 +80,8 @@ type gitBody struct {
 //
 // Repo discovery compares paths lexically, so it is fed a resolved path: the
 // request is resolved by the fs policy (fs errors pass through), then by
-// EvalSymlinks, and that result must still land where the request did (same
-// tree, see inGitTree). Top and Common from the checkout must each be free of
+// realAbs (a boxed remainder never through a link out of its root), and that
+// result must still land where the request did (same tree, see inGitTree). Top and Common from the checkout must each be free of
 // links, pass the fs policy in that same tree, and not hold a denied tree:
 // mounted whole, such a directory would carry agent-box's data dir or box
 // state into the container. For a boxed request Target.Root is the contained
@@ -98,7 +99,7 @@ func (s *Server) gitTarget(path string) (t gitview.Target, abs string, err error
 // Changes view shows as all removed. The leaf is accepted only when its own
 // Lstat says it does not exist (a dangling link is not that) and its PARENT
 // directory passes every check an existing path does: the fs policy, a
-// link-free EvalSymlinks result, inGitTree. The returned abs is that resolved
+// link-free realAbs result, inGitTree. The returned abs is that resolved
 // parent plus the leaf's single local name. Nothing reads or stats the leaf
 // itself afterwards (see gitShowRel); git only reads an object of the
 // repository by that name. Every other outcome is gitTarget's.
@@ -112,16 +113,21 @@ func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, a
 	if err != nil {
 		return gitview.Target{}, "", err
 	}
+	return p.gitTargetIn(path, vanishedOK)
+}
+
+// gitTargetIn is gitTargetFor under a policy the caller already built (the status request reuses it for worktreeOf).
+func (p fsPolicy) gitTargetIn(path string, vanishedOK bool) (t gitview.Target, abs string, err error) {
 	req, err := p.resolve(path)
 	if err == nil {
-		abs, err = filepath.EvalSymlinks(req.Abs)
+		abs, err = realAbs(req)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return gitview.Target{}, "", errGitOutside
 		}
 	}
 	// gone: the request names nothing that exists. The host walk says so in
 	// resolve, a boxed one (whose resolve stops at the contained root) in
-	// EvalSymlinks.
+	// realAbs.
 	gone := errors.Is(err, os.ErrNotExist)
 	if err != nil && !(gone && vanishedOK) {
 		if gone {
@@ -159,14 +165,16 @@ func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, a
 	if rel, err := filepath.Rel(repo.Top, dir); err != nil || !(rel == "." || filepath.IsLocal(rel)) {
 		return gitview.Target{}, "", errGitOutside
 	}
+	// Common comes from a .git file's text when the checkout is a linked worktree or a submodule (the agent writes it in
+	// a box): judged by path before inGitTree resolves it (#364).
 	for _, x := range []string{repo.Top, repo.Common} {
-		if !p.inGitTree(req, x) || p.holdsDenied(x) {
+		if !p.servesByPath(req, x) || !p.inGitTree(req, x) || p.holdsDenied(x) {
 			return gitview.Target{}, "", errGitOutside
 		}
 	}
 	t = gitview.Target{Top: repo.Top, Common: repo.Common}
 	if req.Strict {
-		if r, err := filepath.EvalSymlinks(req.Root); err != nil || r != req.Root {
+		if r, err := evalSymlinks(req.Root); err != nil || r != req.Root {
 			return gitview.Target{}, "", errGitOutside
 		}
 		t.Root = req.Root
@@ -182,7 +190,7 @@ func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, a
 // request's tree, no denied tree); the main checkout must be served by the fs policy in that same tree too (boxed when
 // t is, host when it is not), or it is not named. "" otherwise: a main checkout, a submodule, a bare repository's
 // worktree. Read from the filesystem only, like everything gitTarget decides.
-func (s *Server) worktreeOf(t gitview.Target) string {
+func (p fsPolicy) worktreeOf(t gitview.Target) string {
 	if filepath.Base(t.Common) != ".git" {
 		return ""
 	}
@@ -193,11 +201,8 @@ func (s *Server) worktreeOf(t gitview.Target) string {
 	if fi, err := os.Lstat(t.Common); err != nil || !fi.IsDir() {
 		return ""
 	}
-	p, err := s.fsPolicy()
-	if err != nil {
-		return ""
-	}
-	if r, err := filepath.EvalSymlinks(m); err != nil || r != m {
+	// Defence in depth, not test-covered: implied by inGitTree's check of t.Common; matters only in a race.
+	if !linkFreePath(m) {
 		return ""
 	}
 	got, err := p.resolve(m)
@@ -224,7 +229,7 @@ func vanishedLeaf(p fsPolicy, path string) (preq fsTarget, parent, abs string, e
 	if preq, err = p.resolve(filepath.Dir(clean)); err != nil {
 		return fsTarget{}, "", "", err
 	}
-	if parent, err = filepath.EvalSymlinks(preq.Abs); err != nil {
+	if parent, err = realAbs(preq); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fsTarget{}, "", "", os.ErrNotExist
 		}
@@ -246,12 +251,109 @@ func vanishedLeaf(p fsPolicy, path string) (preq fsTarget, parent, abs string, e
 	return preq, parent, abs, nil
 }
 
+// evalSymlinks is filepath.EvalSymlinks for the git, alternates and where code: a variable so a test can see every path
+// that code resolves.
+var evalSymlinks = filepath.EvalSymlinks
+
+// lstatFS is os.Lstat for the same code's link-refusing walks, a variable for the same reason.
+var lstatFS = os.Lstat
+
+// linkFreePath reports whether the absolute, clean path x exists with no symlink in any component, found by Lstat'ing
+// each component in turn from "/" and stopping at the first link: the same verdict as EvalSymlinks(x) == x, without
+// ever following a link to see where it goes.
+func linkFreePath(x string) bool {
+	if !filepath.IsAbs(x) || filepath.Clean(x) != x {
+		return false
+	}
+	cur := "/"
+	parts := strings.Split(x[1:], "/")
+	for i, c := range parts {
+		if c == "" {
+			continue
+		}
+		cur = filepath.Join(cur, c)
+		fi, err := lstatFS(cur)
+		if err != nil || fi.Mode()&os.ModeSymlink != 0 || (i < len(parts)-1 && !fi.IsDir()) {
+			return false
+		}
+	}
+	return true
+}
+
+// realAbs is the link-free spelling of req's path. A host target is already resolved by the fs walk (its links are the
+// host's), so EvalSymlinks only confirms it. A boxed target's remainder below its contained root is resolved by
+// resolveIn, which follows a link only when its text stays inside that root: a link the box planted to anywhere else is
+// refused before anything looks there (#364).
+func realAbs(req fsTarget) (string, error) {
+	if !req.Strict {
+		return evalSymlinks(req.Abs)
+	}
+	return resolveIn(req.Root, req.Rel)
+}
+
+// resolveIn resolves rel below root (a link-free directory) one component at a time with Lstat, like the fs walk: a
+// link's text is read and followed only when, taken from where the link is, it stays at or below root; a link out of
+// root, or ".." above it, is refused (errOutsideHome) without touching its target. Errors otherwise match
+// EvalSymlinks: a missing component wraps os.ErrNotExist, a file with components after it is ENOTDIR.
+func resolveIn(root, rel string) (string, error) {
+	cur := root
+	pending := strings.Split(rel, "/")
+	hops := 0
+	inRoot := func(x string) bool { return x == root || strings.HasPrefix(x, root+"/") }
+	for len(pending) > 0 {
+		c := pending[0]
+		pending = pending[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			if cur == root {
+				return "", errOutsideHome
+			}
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, c)
+		fi, err := lstatFS(next)
+		if err != nil {
+			return "", err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			if hops++; hops > maxLinkHops {
+				return "", errBadPath
+			}
+			text, err := os.Readlink(next)
+			if err != nil {
+				return "", err
+			}
+			target := text
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(cur, target)
+			}
+			target = filepath.Clean(target)
+			if !inRoot(target) {
+				return "", errOutsideHome
+			}
+			rest, _ := filepath.Rel(root, target)
+			cur = root
+			pending = append(strings.Split(rest, "/"), pending...)
+			continue
+		}
+		if !fi.IsDir() && len(pending) > 0 {
+			return "", &os.PathError{Op: "lstat", Path: next, Err: syscall.ENOTDIR}
+		}
+		cur = next
+	}
+	return cur, nil
+}
+
 // inGitTree reports whether x is a link-free path that the fs policy serves in
 // the same tree as req: for a boxed request, inside the same contained root; for
-// a host request, outside every contained root. A path EvalSymlinks would
-// change has a link in it and is refused, whoever planted the link.
+// a host request, outside every contained root. A path with a link in it is
+// refused, whoever planted the link, and the link is never followed to find out
+// (linkFreePath): in a boxed tree the box chose where it leads (#364).
 func (p fsPolicy) inGitTree(req fsTarget, x string) bool {
-	if r, err := filepath.EvalSymlinks(x); err != nil || r != x {
+	if !linkFreePath(x) {
 		return false
 	}
 	got, err := p.resolve(x)
@@ -382,7 +484,13 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, unavailableGitStatus(msgGitNoRuntime))
 		return
 	}
-	t, abs, err := s.gitTarget(path)
+	// One policy snapshot for the target and its worktreeOf.
+	p, err := s.fsPolicy()
+	var t gitview.Target
+	var abs string
+	if err == nil {
+		t, abs, err = p.gitTargetIn(path, false)
+	}
 	switch {
 	case errors.Is(err, errGitNotRepo):
 		writeJSON(w, http.StatusOK, gitview.Status{State: "notrepo", Entries: []gitview.Entry{}})
@@ -403,7 +511,7 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		st = s.Git.Status(r.Context(), t)
 	}
 	st.RootRel = rootRel(t.Top, abs)
-	st.WorktreeOf = s.worktreeOf(t)
+	st.WorktreeOf = p.worktreeOf(t)
 	if st.State == "unavailable" {
 		log.Printf("git status %q: %q", t.Top, st.Reason)
 		st.Reason = gitReason(st.Reason)
