@@ -1345,3 +1345,14 @@ func TestViewUserPermissionModeDefWins(t *testing.T) {
 		t.Fatalf("permission_mode rows = %d, want exactly 1", n)
 	}
 }
+
+// Host review 2026-11-23 (#346, #359): a profile's view names the secrets and
+// env a host run still passes, next to what it drops.
+func TestViewHostKeeps(t *testing.T) {
+	seeds := []config.AgentConfig{{Name: "c", Bin: "claude", Secrets: []string{"GH_TOKEN"}, Env: map[string]string{"FOO": "1"}}}
+	m := NewProfileManager(seeds, config.Defaults().Options, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	vs := m.Views()
+	if len(vs) != 1 || !slices.Equal(vs[0].HostKeeps, []string{"GH_TOKEN secret", "FOO env"}) {
+		t.Fatalf("views = %+v, want host_keeps GH_TOKEN secret, FOO env", vs)
+	}
+}

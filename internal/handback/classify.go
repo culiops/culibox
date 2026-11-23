@@ -214,16 +214,50 @@ func archiveKind(head []byte) string {
 	return ""
 }
 
-// OutsideRoot reports whether a symlink leaves the workspace, judged on the
+// SymlinkThroughNote is the detail of a symlink flagged by ClimbsThroughName.
+const SymlinkThroughNote = "symlink climbs back out of another path in its target; where it leads cannot be told from its text"
+
+// OutsideRoot reports whether a symlink may leave the workspace, judged on the
 // link text alone (nothing is resolved or followed). linkPath is the link's
-// slash-separated path relative to the root; the target is outside when it is
-// absolute or its ".." steps climb past the root.
+// slash-separated path relative to the root; the target may leave when
+// LeavesByText or ClimbsThroughName.
 func OutsideRoot(linkPath, target string) bool {
+	return LeavesByText(linkPath, target) || ClimbsThroughName(target)
+}
+
+// LeavesByText reports whether target is absolute or its ".." steps, read as
+// text, climb past the root. A link OutsideRoot flags for any other reason
+// gets SymlinkThroughNote as its detail.
+func LeavesByText(linkPath, target string) bool {
 	if strings.HasPrefix(target, "/") {
 		return true
 	}
 	joined := path.Join(path.Dir(linkPath), target)
 	return joined == ".." || strings.HasPrefix(joined, "../")
+}
+
+// ClimbsThroughName reports whether a relative target has a ".." step after a
+// named step ("s/.." in "s/../../x"). The kernel resolves ".." from where the
+// named step leads, not from its text: when s is itself a symlink in the tree
+// (now or after a later change), "s/.." can be anywhere, outside the root
+// included, while the text looks inside. The text alone cannot tell, so such a
+// target is always treated as leaving. ".." steps at the start climb through
+// the link's own parent directories, which a walk (or a git tree) has seen as
+// directories, so they are judged on the text.
+func ClimbsThroughName(target string) bool {
+	named := false
+	for _, step := range strings.Split(target, "/") {
+		switch step {
+		case "", ".":
+		case "..":
+			if named {
+				return true
+			}
+		default:
+			named = true
+		}
+	}
+	return false
 }
 
 // rank orders classes for SortFlags: the lower, the sooner shown.

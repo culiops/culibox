@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -82,6 +83,35 @@ func HostDrops(a AgentConfig, defs map[string]OptionDef) []string {
 	}
 	for _, l := range boxOnlyOptionLabels(defs, a.Options) {
 		out = append(out, fmt.Sprintf("%q option", l))
+	}
+	return out
+}
+
+// HostKeeps lists the profile's own secrets and env variables that a host run
+// still hands the agent, as "<NAME> secret" (in the profile's order) then
+// "<NAME> env" (sorted), each name once (a secret wins over an env of the same
+// name, as at spawn). Box-only names are left out: HostDrops lists them. nil
+// when there are none. The names come from the user's own profile, never a
+// value.
+func HostKeeps(a AgentConfig) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, n := range a.Secrets {
+		if n == "" || seen[n] || slices.Contains(BoxOnlyEnv, n) {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n+" secret")
+	}
+	envs := make([]string, 0, len(a.Env))
+	for n := range a.Env {
+		if !seen[n] && !slices.Contains(BoxOnlyEnv, n) {
+			envs = append(envs, n)
+		}
+	}
+	slices.Sort(envs)
+	for _, n := range envs {
+		out = append(out, n+" env")
 	}
 	return out
 }

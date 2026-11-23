@@ -120,6 +120,10 @@ type ProfileView struct {
 	// box-only options, config.HostDrops); empty when it drops nothing (#359).
 	// Not a block: the host run goes ahead once the caller acknowledges it.
 	HostDrops []string `json:"host_drops,omitempty"`
+	// HostKeeps names the profile's own secrets and env a host run still
+	// passes to the agent (config.HostKeeps), so the Host warning does not
+	// claim the agent has only this machine's logins.
+	HostKeeps []string `json:"host_keeps,omitempty"`
 	// BoxClaudeCredential says whether a boxed claude of this profile has a login:
 	// "yes", "no", or "locked" (a token exists but the store cannot be read now, so
 	// never "no"). "" (absent) on a profile that is not claude, or with no source
@@ -633,6 +637,7 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			BoxOnly:        a.BoxOnly,
 			HostBlock:      config.HostBlock(a),
 			HostDrops:      config.HostDrops(a, m.optDefs),
+			HostKeeps:      config.HostKeeps(a),
 			EgressAllow:    slices.Clone(a.EgressAllow),
 			CloneShare:     slices.Clone(a.CloneShare),
 		}

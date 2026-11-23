@@ -710,3 +710,36 @@ func (a seenArgsGit) Stream(ctx context.Context, dir string, env []string, stdin
 	a.seen(args)
 	return a.ExecGit.Stream(ctx, dir, env, stdin, stdout, args...)
 }
+
+// Host review 2026-11-23 (#346): "a/s -> .." is the root, so "a/t -> s/.."
+// leads to the root's parent though its text stays inside the repository.
+func TestInspectBranchSymlinkClimbingThroughALink(t *testing.T) {
+	x := newBranchFx(t)
+	x.indexEntry("120000", "a/s", []byte(".."))
+	x.indexEntry("120000", "a/t", []byte("s/../x"))
+	fixtureGit(t, x.of, "commit", "-q", "-m", "links")
+	rep := x.inspect(handback.DefaultLimits())
+	f, ok := flagFor(rep, "a/t")
+	if !ok || !hasClass(f, handback.ClassSymlinkOut) || f.Detail != handback.SymlinkThroughNote {
+		t.Fatalf("a/t = %+v, %v; want symlink-outside with the climb-through note", f, ok)
+	}
+	if f, ok := flagFor(rep, "a/s"); ok {
+		t.Errorf("a/s leads to the root, inside: flagged %+v", f)
+	}
+}
+
+// Host review 2026-11-23 (#346): a root commit's files are listed whatever the
+// user's log.showRoot says.
+func TestInspectBranchRootCommitIgnoresShowRoot(t *testing.T) {
+	x := newBranchFx(t)
+	fixtureGit(t, x.of, "config", "log.showRoot", "false")
+	fixtureGit(t, x.of, "checkout", "-q", "--orphan", "fresh")
+	fixtureGit(t, x.of, "rm", "-rqf", ".")
+	x.write("run.sh", "#!/bin/sh\n", 0o755)
+	x.commit("root")
+	fixtureGit(t, x.of, "branch", "-qf", "box", "fresh")
+	rep := x.inspect(handback.DefaultLimits())
+	if f, ok := flagFor(rep, "run.sh"); !ok || !hasClass(f, handback.ClassScript) {
+		t.Fatalf("run.sh = %+v, %v; report %+v", f, ok, rep)
+	}
+}

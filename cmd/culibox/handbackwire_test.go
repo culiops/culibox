@@ -161,17 +161,22 @@ func TestScanInPlace(t *testing.T) {
 		}
 	})
 
-	// R8: a scan that stopped at a cap did not look at every file, so the next
-	// scan must start where this one did.
-	t.Run("a truncated scan does not move the window past what it did not check", func(t *testing.T) {
+	// R8, revised by the host review of 2026-11-23: a scan that stopped at a cap
+	// did not look at every file. It still moves the window (the same cap would
+	// stop the next scan too, at full cost) and says what it left unchecked.
+	t.Run("a truncated scan moves the window and says what it did not check", func(t *testing.T) {
 		h := newStubHandback(t, nil)
 		h.rep = handback.Report{Truncated: "walk time budget of 30s reached", Incomplete: true}
+		before := h.clock
 		if _, err := h.ScanInPlace(context.Background(), ws, started, true); err != nil {
 			t.Fatal(err)
 		}
 		last, ok, err := h.store.LastScan(key)
-		if err != nil || !ok || !last.Equal(started) {
-			t.Fatalf("LastScan = %v %v %v, want the scan's own since %v", last, ok, err, started)
+		if err != nil || !ok || !last.Equal(before) {
+			t.Fatalf("LastScan = %v %v %v, want the scan's start %v", last, ok, err, before)
+		}
+		if r := recordOf(t, h.store, key); !strings.Contains(r.Truncated, notReachedNote) || r.LastScanComplete {
+			t.Fatalf("record = %+v, want the not-reached note and an incomplete scan", r)
 		}
 		// And the unknown-start sentence joins the cap's, not replaces it.
 		h2 := newStubHandback(t, nil)
@@ -250,8 +255,9 @@ func TestScanInPlace(t *testing.T) {
 		if err != nil || note.Count != 0 {
 			t.Fatalf("note = %+v, %v", note, err)
 		}
+		// The walk had already spent its time: the window moves on, as for a cap.
 		r := recordOf(t, h.store, key)
-		if r.Truncated != "the scan stopped with an internal error" || !r.LastScan.Equal(started) {
+		if r.Truncated != scanPanickedNote+"; "+notReachedNote || r.LastScanComplete || r.LastScan.Equal(started) {
 			t.Fatalf("record = %+v", r)
 		}
 	})
@@ -458,11 +464,39 @@ func TestOnStopScansInPlaceWorkspace(t *testing.T) {
 		seed(h2, ws)
 		h2.OnStop("box-1", ws) // must not panic
 	})
-	t.Run("a workspace with no record is not scanned", func(t *testing.T) {
+	// Host review 2026-11-23 (#346): no record means no start to scan from; a
+	// record says so, and the next stop scans from this one.
+	t.Run("a workspace with no record is not scanned but recorded as not checked", func(t *testing.T) {
 		h := newStubHandback(t, func(string) bool { return false })
+		at := h.clock
 		h.OnStop("box-1", ws)
 		if c := h.got(); len(c) != 0 {
 			t.Fatalf("inspect calls = %+v, want none", c)
+		}
+		r := recordOf(t, h.store, handback.InPlaceKey(ws))
+		if r.Truncated != noEarlierScanNote || !r.LastScan.Equal(at) || r.LastScanKind != handback.ScanStop || r.LastScanComplete {
+			t.Fatalf("record = %+v, want the no-earlier-scan note at %v", r, at)
+		}
+		h.OnStop("box-1", ws)
+		if c := h.got(); len(c) != 1 || !c[0].since.Equal(at) {
+			t.Fatalf("inspect calls = %+v, want the next stop to scan from %v", c, at)
+		}
+	})
+	t.Run("no note while the session's exit scan is pending", func(t *testing.T) {
+		h := newStubHandback(t, func(string) bool { return false })
+		end := h.BeginExit(ws)
+		h.OnStop("box-1", ws)
+		if _, err := os.Stat(filepath.Join(h.store.Dir, handback.RecordID(handback.InPlaceKey(ws))+".json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("record written while the exit scan was pending: %v", err)
+		}
+		end()
+		end() // a second call is a no-op
+		if h.exitPending(ws) {
+			t.Fatal("still pending after end")
+		}
+		h.OnStop("box-1", ws)
+		if r := recordOf(t, h.store, handback.InPlaceKey(ws)); r.Truncated != noEarlierScanNote {
+			t.Fatalf("record = %+v, want the note once nothing is pending", r)
 		}
 	})
 	t.Run("a clone dir is not scanned", func(t *testing.T) {
@@ -479,7 +513,51 @@ func TestOnStopScansInPlaceWorkspace(t *testing.T) {
 		if c := h.got(); len(c) != 0 {
 			t.Fatalf("inspect calls = %+v, want none", c)
 		}
+		if p, _ := h.store.Pending(); len(p) != 0 {
+			t.Fatalf("pending = %+v, want nothing recorded for an unknown path", p)
+		}
 	})
+}
+
+// Host review 2026-11-23 (#346): a session whose workspace could not be
+// confirmed is recorded as not scanned, and a box-stop scan of the same path
+// still covers the session's window.
+func TestNotScannedIsRecorded(t *testing.T) {
+	ws := realDir(t)
+	since := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	h := newStubHandback(t, func(string) bool { return false })
+	note, err := h.NotScanned(ws, since)
+	if err != nil || !note.Truncated || !note.InPlace || note.ID != handback.RecordID(handback.InPlaceKey(ws)) {
+		t.Fatalf("note = %+v, %v", note, err)
+	}
+	if c := h.got(); len(c) != 0 {
+		t.Fatalf("inspect calls = %+v, want none", c)
+	}
+	r := recordOf(t, h.store, handback.InPlaceKey(ws))
+	if r.Truncated != notVouchedNote || !r.LastScan.Equal(since) || r.LastScanComplete {
+		t.Fatalf("record = %+v", r)
+	}
+	if p, _ := h.store.Pending(); len(p) != 1 {
+		t.Fatalf("pending = %+v, want the note listed", p)
+	}
+	h.OnStop("box-1", ws)
+	if c := h.got(); len(c) != 1 || !c[0].since.Equal(since) {
+		t.Fatalf("inspect calls = %+v, want the stop scan from %v", c, since)
+	}
+
+	// A record with an earlier scan keeps that start: NotScanned never moves
+	// the window forward past what was not checked.
+	h2 := newStubHandback(t, func(string) bool { return false })
+	earlier := since.Add(-3 * time.Hour)
+	if _, err := h2.store.Merge(handback.InPlaceKey(ws), handback.Record{Kind: handback.KindInPlace, Workspace: ws}, earlier, handback.Report{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h2.NotScanned(ws, since); err != nil {
+		t.Fatal(err)
+	}
+	if r := recordOf(t, h2.store, handback.InPlaceKey(ws)); !r.LastScan.Equal(earlier) {
+		t.Fatalf("LastScan = %v, want the earlier scan %v kept", r.LastScan, earlier)
+	}
 }
 
 func TestReturnSummaryFlagged(t *testing.T) {
@@ -665,10 +743,11 @@ func TestHandbackNoteSaysTruncated(t *testing.T) {
 	})
 }
 
-// R21: only a walk that stopped early rolls the window back. A reason that
-// comes back on every scan (an unreadable directory) must let it advance, or a
-// reviewed file would flag again at every exit.
-func TestScanInPlaceWindowRollbackIsForIncompleteWalksOnly(t *testing.T) {
+// R21, revised by the host review of 2026-11-23: only a scan that could not
+// walk rolls the window back. A walk cut short by a cap or with a reason that
+// comes back on every scan (an unreadable directory) advances it, or the same
+// cost and the same flags would come back at every exit.
+func TestScanInPlaceWindowRollbackIsForScansThatCouldNotWalk(t *testing.T) {
 	ws := realDir(t)
 	key := handback.InPlaceKey(ws)
 	started := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
@@ -684,17 +763,28 @@ func TestScanInPlaceWindowRollbackIsForIncompleteWalksOnly(t *testing.T) {
 			t.Fatalf("LastScan = %v, want the scan start %v", last, before)
 		}
 	})
-	t.Run("an incomplete walk rolls the window back", func(t *testing.T) {
+	t.Run("an incomplete walk advances the window and is marked incomplete", func(t *testing.T) {
 		h := newStubHandback(t, nil)
 		h.rep = handback.Report{Truncated: "time budget of 30s used up", Incomplete: true}
+		before := h.clock
+		if _, err := h.ScanInPlace(context.Background(), ws, started, true); err != nil {
+			t.Fatal(err)
+		}
+		if last, _, _ := h.store.LastScan(key); !last.Equal(before) {
+			t.Fatalf("LastScan = %v, want %v", last, before)
+		}
+		if r := recordOf(t, h.store, key); r.LastScanComplete {
+			t.Fatalf("record = %+v, want last_scan_complete false", r)
+		}
+	})
+	t.Run("a scan that could not walk rolls the window back", func(t *testing.T) {
+		h := newStubHandback(t, nil)
+		h.err = errors.New("read dir: input/output error")
 		if _, err := h.ScanInPlace(context.Background(), ws, started, true); err != nil {
 			t.Fatal(err)
 		}
 		if last, _, _ := h.store.LastScan(key); !last.Equal(started) {
 			t.Fatalf("LastScan = %v, want %v", last, started)
-		}
-		if r := recordOf(t, h.store, key); r.LastScanComplete {
-			t.Fatalf("record = %+v, want last_scan_complete false", r)
 		}
 	})
 	t.Run("an unreadable directory and a script: reviewed once, not flagged again", func(t *testing.T) {
@@ -861,5 +951,78 @@ func TestPrintFlags(t *testing.T) {
 	printFlags(&b, handback.Report{Flags: []handback.Flag{{Path: "x", Detail: "d"}}, Truncated: "cap"})
 	if !strings.Contains(b.String(), "Flagged for your review (1):") || !strings.HasSuffix(b.String(), "Not everything was checked: cap\n") {
 		t.Errorf("flags and a note: %q", b.String())
+	}
+}
+
+// Host review 2026-11-23 (#346): a scan cut short by a cap costs once. The next
+// scan starts where it did, so it reads only what is new, and once the user
+// marks the record reviewed the cap's note does not come back.
+func TestScanInPlaceCappedScanCostsOnce(t *testing.T) {
+	ws := realDir(t)
+	for i := range 5 {
+		if err := os.WriteFile(filepath.Join(ws, "s"+string(rune('a'+i))+".sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := newHandbackHooks(t.TempDir(), nil)
+	h.limits = handback.Limits{Candidates: 2}
+	key := handback.InPlaceKey(ws)
+
+	note, err := h.ScanInPlace(context.Background(), ws, time.Now().Add(-time.Hour), true)
+	if err != nil || !note.Truncated {
+		t.Fatalf("scan 1: note = %+v, %v; want a capped scan", note, err)
+	}
+	rec := recordOf(t, h.store, key)
+	if rec.Inspected != 2 || !strings.Contains(rec.Truncated, "candidate cap") || !strings.Contains(rec.Truncated, notReachedNote) {
+		t.Fatalf("scan 1: record = %+v, want 2 heads read, the cap and the not-reached note", rec)
+	}
+	if rec.LastScanComplete || rec.LastScan.Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("scan 1: record = %+v, want the window moved to the scan's start and marked incomplete", rec)
+	}
+	if err := h.store.Reviewed(rec.ID, rec.Revision); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(20 * time.Millisecond) // a ctime after scan 1's start, at any timestamp granularity
+	if err := os.WriteFile(filepath.Join(ws, "new.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.OnStop("box-1", ws)
+	rec = recordOf(t, h.store, key)
+	if rec.Inspected != 1 || len(rec.Flags) != 1 || rec.Flags[0].Path != "new.sh" {
+		t.Fatalf("scan 2: record = %+v, want only new.sh read and flagged", rec)
+	}
+	if rec.Truncated != "" || !rec.LastScanComplete {
+		t.Fatalf("scan 2: record = %+v, want no note and a complete scan", rec)
+	}
+}
+
+// Host review 2026-11-23 (#346): the entry cap counts every entry, old or new,
+// so moving the window does not let a later walk past it. The window still
+// moves (no head read or hash is repeated) and each capped scan says so.
+func TestScanInPlaceEntryCapIsSaidEveryTime(t *testing.T) {
+	ws := realDir(t)
+	for i := range 6 {
+		if err := os.WriteFile(filepath.Join(ws, "f"+string(rune('a'+i))+".sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := newHandbackHooks(t.TempDir(), nil)
+	h.limits = handback.Limits{Entries: 3}
+	key := handback.InPlaceKey(ws)
+	if _, err := h.ScanInPlace(context.Background(), ws, time.Now().Add(-time.Hour), true); err != nil {
+		t.Fatal(err)
+	}
+	rec := recordOf(t, h.store, key)
+	if !strings.Contains(rec.Truncated, "entry cap of 3") || !strings.Contains(rec.Truncated, notReachedNote) || rec.LastScanComplete {
+		t.Fatalf("scan 1: record = %+v", rec)
+	}
+	if err := h.store.Reviewed(rec.ID, rec.Revision); err != nil {
+		t.Fatal(err)
+	}
+	h.OnStop("box-1", ws)
+	rec = recordOf(t, h.store, key)
+	if rec.Inspected != 0 || !strings.Contains(rec.Truncated, "entry cap of 3") {
+		t.Fatalf("scan 2: record = %+v, want no head read again and the cap said again", rec)
 	}
 }

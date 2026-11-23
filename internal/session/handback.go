@@ -44,6 +44,15 @@ type HandbackHooks interface {
 	// scan they recorded for the workspace. Either way a recorded scan earlier
 	// than since wins, so no gap between scans goes unchecked.
 	ScanInPlace(ctx context.Context, workspace string, since time.Time, sinceKnown bool) (HandbackNote, error)
+	// NotScanned records that the workspace of a session that ended was not
+	// scanned, because the path the box was made over could not be confirmed at
+	// spawn. cwd is the session's working directory as given (unresolved);
+	// since is the window the scan would have covered.
+	NotScanned(cwd string, since time.Time) (HandbackNote, error)
+	// BeginExit says an exit scan of workspace is coming. It is called before
+	// the session's box is released, so a box stop that follows at once knows
+	// the record is on its way; end is called once the scan has finished.
+	BeginExit(workspace string) (end func())
 }
 
 // SetHandback installs the handback hooks. Call once at boot. Nil means no
@@ -52,6 +61,29 @@ func (m *Manager) SetHandback(h HandbackHooks) {
 	m.mu.Lock()
 	m.handback = h
 	m.mu.Unlock()
+}
+
+// handbackBegin tells the hooks that sess's exit scan (or not-scanned record)
+// is coming, before the box is released; the returned func ends it. A session
+// handbackWork would skip gets a no-op.
+func (m *Manager) handbackBegin(sess *Session) func() {
+	m.mu.Lock()
+	h := m.handback
+	m.mu.Unlock()
+	if !handbackEligible(h, sess) {
+		return func() {}
+	}
+	ws := sess.workspace
+	if ws == "" {
+		ws = sess.Cwd
+	}
+	return h.BeginExit(ws)
+}
+
+// handbackEligible: the session ran in a box over the user's own folder (no
+// clone, not a companion shell) and there are hooks to scan with.
+func handbackEligible(h HandbackHooks, sess *Session) bool {
+	return h != nil && sess.Runtime == config.RuntimeBox && sess.CloneOf == "" && sess.ParentID == ""
 }
 
 // copy returns an independent HandbackNote, nil for nil.
@@ -69,13 +101,15 @@ func (n *HandbackNote) copy() *HandbackNote {
 // session that runs in a box over the user's own folder (no clone, not a
 // companion shell) wrote into that folder, whatever agent it ran. It scans the
 // workspace path the box was made over, never a fresh resolution of Cwd.
-// Failures and panics are logged, never fatal: the session's exit has
-// completed either way, and hostile input must not take the daemon down.
+// A session whose workspace could not be vouched for at spawn is not walked;
+// a record says so instead. Failures and panics are logged, never fatal: the
+// session's exit has completed either way, and hostile input must not take
+// the daemon down.
 func (m *Manager) handbackWork(sess *Session) {
 	m.mu.Lock()
 	h := m.handback
 	m.mu.Unlock()
-	if h == nil || sess.Runtime != config.RuntimeBox || sess.CloneOf != "" || sess.ParentID != "" || sess.workspace == "" {
+	if !handbackEligible(h, sess) {
 		return
 	}
 	defer func() {
@@ -83,14 +117,50 @@ func (m *Manager) handbackWork(sess *Session) {
 			log.Printf("session %s: handback scan of %q stopped with an internal error: %v", sess.ID, sess.workspace, r)
 		}
 	}()
+	since := sess.Created.Add(-handbackSkew)
+	if sess.workspace == "" {
+		// spawnWorkspace could not vouch for the path: nothing is walked, but
+		// the user is told, not only the log.
+		if sess.Cwd == "" {
+			log.Printf("session %s: no workspace on record; its files are not scanned", sess.ID)
+			return
+		}
+		note, err := h.NotScanned(sess.Cwd, since)
+		if err != nil {
+			log.Printf("session %s: recording that %q was not scanned: %v", sess.ID, sess.Cwd, err)
+			return
+		}
+		sess.setHandback(&note)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), handbackScanTimeout)
 	defer cancel()
-	note, err := h.ScanInPlace(ctx, sess.workspace, sess.Created.Add(-handbackSkew), !sess.createdGuessed)
+	note, err := h.ScanInPlace(ctx, sess.workspace, since, !sess.createdGuessed)
 	if err != nil {
 		log.Printf("session %s: handback scan of %q: %v", sess.ID, sess.workspace, err)
 		return
 	}
 	sess.setHandback(&note)
+}
+
+// setHandbackEnd keeps the end of the announced exit scan (handbackBegin).
+func (s *Session) setHandbackEnd(end func()) {
+	s.mu.Lock()
+	s.handbackEnd = end
+	s.mu.Unlock()
+}
+
+// takeHandbackEnd returns the end of the announced exit scan and forgets it,
+// so it is called at most once; a no-op when none was announced.
+func (s *Session) takeHandbackEnd() func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	end := s.handbackEnd
+	s.handbackEnd = nil
+	if end == nil {
+		return func() {}
+	}
+	return end
 }
 
 func (s *Session) setHandback(n *HandbackNote) {

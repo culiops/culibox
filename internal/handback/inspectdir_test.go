@@ -774,3 +774,28 @@ func TestInspectDirIncomplete(t *testing.T) {
 		}
 	})
 }
+
+// Host review 2026-11-23 (#346): "a/s -> .." is the root, so "a/t -> s/.."
+// leads to the root's parent though its text stays inside the workspace.
+func TestInspectDirSymlinkClimbingThroughALink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for link, target := range map[string]string{"a/s": "..", "a/t": "s/.."} {
+		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := InspectDir(context.Background(), root, time.Time{}, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, ok := flagFor(rep, "a/t")
+	if !ok || !hasClass(f, ClassSymlinkOut) || f.Detail != SymlinkThroughNote {
+		t.Fatalf("a/t = %+v, %v; want symlink-outside with the climb-through note", f, ok)
+	}
+	if f, ok := flagFor(rep, "a/s"); ok {
+		t.Errorf("a/s leads to the root, inside: flagged %+v", f)
+	}
+}

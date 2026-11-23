@@ -259,7 +259,8 @@ func parseRawMeta(tok []byte) (m *rawMeta, paths int) {
 // newest commit first, as (path, blob, mode). A deleted file is not a file the
 // branch hands back, but its earlier versions are listed by the commits that
 // added them. No rename detection and no external diff or text conversion.
-// A failed log keeps what was read before it failed.
+// A root commit is listed whatever log.showRoot says (--root). A failed log
+// keeps what was read before it failed.
 func (s *branchScan) collect(base, ref string) error {
 	seen := map[string]bool{}
 	var cur *rawMeta // the accepted meta line the next path token belongs to
@@ -311,7 +312,7 @@ func (s *branchScan) collect(base, ref string) error {
 		}
 		return nil
 	}}
-	err := s.stream(nil, split, "log", "--no-show-signature", "--no-ext-diff", "--no-textconv", "--no-renames", "--format=", "--raw", "-r",
+	err := s.stream(nil, split, "log", "--root", "--no-show-signature", "--no-ext-diff", "--no-textconv", "--no-renames", "--format=", "--raw", "-r",
 		"--no-abbrev", "-z", "--diff-merges=first-parent", base+".."+ref, "--")
 	if errors.Is(err, errStop) {
 		switch {
@@ -494,6 +495,8 @@ func (s *branchScan) symlink(e branchEntry, bi *blobInfo, head []byte) {
 		detail = symlinkTooLong
 	} else if !handback.OutsideRoot(e.path, target) {
 		return
+	} else if !handback.LeavesByText(e.path, target) {
+		detail = handback.SymlinkThroughNote
 	}
 	s.flags.Offer(handback.Flag{
 		Path:    handback.SanitizePath(e.path),

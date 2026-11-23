@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel,
-  tierHostDrops, tierDropsLine, tierHasCredentialDrop,
+  tierHostDrops, tierDropsLine, tierHasCredentialDrop, tierHostKeeps,
 } = require("../static/tierpick.js");
 
 const home = "/home/u";
@@ -84,6 +84,28 @@ test("tierDropsLine has no logins tail when nothing credential drops (#359)", ()
   assert.strictEqual(tierDropsLine(["context paths"]), "Not on Host: context paths.");
   assert.strictEqual(tierDropsLine(["context paths", "token binding"]),
     "Not on Host: context paths and token binding. The agent uses this machine's own logins (~/.aws, gh) instead.");
+});
+
+// Host review 2026-11-23 (#346): Host still passes the profile's own secrets and env, so the warning names them.
+test("tierHostKeeps: the profile's host_keeps as a clean string list", () => {
+  assert.deepStrictEqual(tierHostKeeps({ host_keeps: ["GH_TOKEN secret", "", 3, "FOO env"] }), ["GH_TOKEN secret", "FOO env"]);
+  assert.deepStrictEqual(tierHostKeeps({ host_keeps: "GH_TOKEN secret" }), []);
+  assert.deepStrictEqual(tierHostKeeps(null), []);
+});
+
+test("tierDropsLine names what Host still passes after what it drops", () => {
+  assert.strictEqual(tierDropsLine(["GitHub binding"], ["GH_TOKEN secret", "FOO env"]),
+    "Not on Host: GitHub binding. The agent uses this machine's own logins (~/.aws, gh) instead. Still on Host: GH_TOKEN secret and FOO env.");
+  assert.strictEqual(tierDropsLine([], ["GH_TOKEN secret"]), "", "nothing dropped: no warning at all");
+});
+
+test("tierModel: the Host card has a Still on Host row when the profile drops and keeps", () => {
+  const p = { ...dropper, host_keeps: ["GH_TOKEN secret"] };
+  const host = tierModel({ profile: p, cwd: "/home/u/x", home, picked: "", short }).cards[2];
+  assert.deepStrictEqual(host.rows.map((r) => r.k), ["Your folder", "Rest of machine", "Not on Host", "Still on Host"]);
+  assert.strictEqual(flat(rowOf(host, "Still on Host")), "GH_TOKEN secret.");
+  const plain = tierModel({ profile: { ...hostp, host_keeps: ["GH_TOKEN secret"] }, cwd: "/home/u/x", home, picked: "", short }).cards[2];
+  assert.ok(!plain.rows.some((x) => x.k === "Still on Host"), "nothing dropped: the card says nothing new");
 });
 
 test("tierPreselect: a host profile with host_drops opens on Box; a clone still wins on its workspace (#359)", () => {
@@ -924,6 +946,19 @@ test("hostDropsConfirm with no credential drop names box settings and has no log
   assert.ok(!o.notes || o.notes.length === 0, "no logins note");
   const ul = (Array.isArray(o.extra) ? o.extra : [o.extra])[0];
   assert.deepStrictEqual(ul.querySelectorAll("li").map((li) => li.textContent), ["context paths"]);
+});
+
+test("hostDropsConfirm names the secrets and env Host still passes", async () => {
+  const asked = [];
+  const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; } });
+  await vm.runInContext('hostDropsConfirm("infra", ["GitHub binding"], ["GH_TOKEN secret", "FOO env"])', pg.ctx);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(asked[0].notes)), [
+    ["The agent uses this machine's own logins (~/.aws, gh) instead. Box keeps them."],
+    ["Still passed to the agent on Host: GH_TOKEN secret and FOO env."],
+  ]);
+  asked.length = 0;
+  await vm.runInContext('hostDropsConfirm("infra", ["context paths"], ["GH_TOKEN secret"])', pg.ctx);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(asked[0].notes)), [["Still passed to the agent on Host: GH_TOKEN secret."]]);
 });
 
 test("hostDropsConfirm resolves what askConfirm resolves (#359)", async () => {

@@ -209,13 +209,38 @@ func TestOutsideRoot(t *testing.T) {
 		{"l", "../x", true},
 		{"a/l", "..", false},
 		{"a/b/l", "../../..", true},
-		{"a/l", "./b/../c", false},
+		{"a/l", "./b/../c", true}, // b may be a link: "b/.." is wherever b leads
 		{"a/l", "b/../../../x", true},
 		{"l", "", false},
 		{"l", "/", true},
+		// Host review 2026-11-23: "a/s -> .." is the root, so "a/t -> s/.." is
+		// the root's parent, though its text stays inside.
+		{"a/s", "..", false},
+		{"a/t", "s/..", true},
+		{"a/t", "s/../b", true},
+		{"a/b/t", "../../s/..", true},
+		{"a/b/t", "../c/d", false},
+		{"a/b/t", "../../c", false},
+		{"t", "x/./y", false},
+		{"t", "x//y", false},
 	} {
 		if got := OutsideRoot(tt.link, tt.target); got != tt.want {
 			t.Errorf("OutsideRoot(%q, %q) = %v, want %v", tt.link, tt.target, got, tt.want)
+		}
+	}
+}
+
+func TestClimbsThroughName(t *testing.T) {
+	for _, tt := range []struct {
+		target string
+		want   bool
+	}{
+		{"..", false}, {"../..", false}, {"../x", false}, {"./../x", false},
+		{"x/..", true}, {"../x/..", true}, {"x/./..", true}, {"x//../y", true},
+		{"x", false}, {"", false}, {"x/y/z", false},
+	} {
+		if got := ClimbsThroughName(tt.target); got != tt.want {
+			t.Errorf("ClimbsThroughName(%q) = %v, want %v", tt.target, got, tt.want)
 		}
 	}
 }

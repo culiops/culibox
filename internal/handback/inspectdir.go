@@ -298,10 +298,14 @@ func (s *scanner) symlink(p string) {
 	if !OutsideRoot(p, target) {
 		return
 	}
+	detail := "symlink points outside the workspace"
+	if !LeavesByText(p, target) {
+		detail = SymlinkThroughNote
+	}
 	s.keep(Flag{
 		Path:    SanitizePath(p),
 		Classes: []Class{ClassSymlinkOut},
-		Detail:  "symlink points outside the workspace",
+		Detail:  detail,
 		Target:  SanitizePath(target),
 	}, nil, 0)
 }

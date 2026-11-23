@@ -53,6 +53,12 @@ function tierHostDrops(profile) {
   return Array.isArray(d) ? d.filter((x) => typeof x === "string" && x !== "") : [];
 }
 
+// tierHostKeeps: the profile's own secrets and env a Host run still passes (ProfileView.host_keeps, "GH_TOKEN secret"...).
+function tierHostKeeps(profile) {
+  const k = profile && profile.host_keeps;
+  return Array.isArray(k) ? k.filter((x) => typeof x === "string" && x !== "") : [];
+}
+
 // What Host does instead of the dropped bindings; the card row, the confirm's hint and the Access tab say it the same way.
 const TP_DROPS_TAIL = "The agent uses this machine's own logins (~/.aws, gh) instead.";
 
@@ -65,10 +71,12 @@ function tierHasCredentialDrop(drops) {
   return Array.isArray(drops) && drops.some((d) => TP_CREDENTIAL_DROPS.includes(d));
 }
 
-// tierDropsLine: the Host card's warning as one sentence ("" when nothing is dropped). The logins tail only when a credential drops.
-function tierDropsLine(drops) {
+// tierDropsLine: the Host card's warning as one sentence ("" when nothing is dropped). The logins tail only when a credential drops;
+// then what Host still passes (keeps), so the tail never reads as "only this machine's logins".
+function tierDropsLine(drops, keeps) {
   if (!drops || !drops.length) return "";
-  return "Not on Host: " + tierJoin(drops) + "." + (tierHasCredentialDrop(drops) ? " " + TP_DROPS_TAIL : "");
+  const kept = Array.isArray(keeps) && keeps.length ? " Still on Host: " + tierJoin(keeps) + "." : "";
+  return "Not on Host: " + tierJoin(drops) + "." + (tierHasCredentialDrop(drops) ? " " + TP_DROPS_TAIL : "") + kept;
 }
 
 // tierHostState: Host is off when the server says the profile may not run there (ProfileView.host_block). host_drops does not
@@ -142,6 +150,8 @@ function tierModel(o) {
     const v = [{ b: tierJoin(drops) + "." }];
     if (tierHasCredentialDrop(drops)) v.push({ t: " " + TP_DROPS_TAIL });
     rows.host.push({ k: "Not on Host", v });
+    const keeps = tierHostKeeps(p);
+    if (keeps.length) rows.host.push({ k: "Still on Host", v: [{ b: tierJoin(keeps) + "." }] });
   }
   const titles = { box: "Box · in place", clone: "Box · clone", host: "Host · not contained" };
 
@@ -365,15 +375,18 @@ function spawnWhere() {
 // hostDropsConfirm: the question before a Host spawn of a profile whose bindings Host drops. Resolves true only on "Start on Host";
 // Cancel has the focus. The drops are text nodes in a list, never markup. The logins sentence is a note in the body (the footer
 // hint is hidden when too wide) and only when a credential drops: otherwise the title names box settings and there is no sentence.
-async function hostDropsConfirm(profileName, drops) {
+// keeps (ProfileView.host_keeps) are the profile's own secrets and env Host still passes: a second note names them.
+async function hostDropsConfirm(profileName, drops, keeps) {
   const creds = tierHasCredentialDrop(drops);
   const ul = tierEl("ul", "ask-bullets");
   for (const d of drops) ul.append(tierEl("li", "", d));
+  const notes = creds ? [[TP_DROPS_TAIL + " Box keeps them."]] : [];
+  if (Array.isArray(keeps) && keeps.length) notes.push(["Still passed to the agent on Host: " + tierJoin(keeps) + "."]);
   return askConfirm({
     title: creds ? "Start on Host without its bindings?" : "Start on Host without its box settings?",
     body: profileName + " will run with your user's full access to this machine. These do not apply on Host:",
     extra: [ul],
-    notes: creds ? [[TP_DROPS_TAIL + " Box keeps them."]] : [],
+    notes,
     confirmLabel: "Start on Host",
     danger: true,
     focusCancel: true,
@@ -389,6 +402,6 @@ function spawnCwdFor(w) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel, tierVmFetch,
-    tierHostDrops, tierDropsLine, tierHasCredentialDrop,
+    tierHostDrops, tierDropsLine, tierHasCredentialDrop, tierHostKeeps,
   };
 }
