@@ -1065,3 +1065,21 @@ test("a Branch pick with a base that is known but not ok asks Uncommitted beside
   await p.status(okStatus([{ p: "a.go", x: "M" }]));
   assert.deepStrictEqual(p.calls("/api/git/numstat").slice(n0).map((f) => f.body.scope), ["head"], "one Uncommitted ask per status");
 });
+
+test("switching to a session with no pick while the root's base is out and a newer numstat stands asks at most once (status out or failed)", async () => {
+  for (const fails of [false, true]) {
+    const p = page();
+    p.st.store.set(KEY, JSON.stringify({ s1: "head" })); // s1 picked Uncommitted; s2 picked nothing
+    p.ctx.gitStatusLoad("/w", "s1"); await settle();
+    await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }]));
+    await p.answer("/api/git/status", okStatus([{ p: "a.go", x: "M" }])); // its landing asks the base: held
+    p.ctx.gitStatusLoad("/w", "s1"); await settle();
+    await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }])); // the newer ask's numstat lands first
+    if (fails) await p.answer("/api/git/status", null, false);
+    const n0 = p.calls("/api/git/numstat").length;
+    p.run('drawerState.sessionId = "s2"; dockChangesRefresh();');
+    await settle();
+    for (let i = 0; i < 10 && p.pending("/api/git/numstat").length > 0; i++) await p.answer("/api/git/numstat", num([{ p: "a.go", x: "M", a: 1, d: 0 }], { scope: "head" }));
+    assert.ok(p.calls("/api/git/numstat").length - n0 <= 1, (fails ? "status failed" : "status out") + ": " + (p.calls("/api/git/numstat").length - n0) + " asks");
+  }
+});

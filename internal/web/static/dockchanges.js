@@ -45,6 +45,7 @@ const DKC_CODE_TITLES = { M: "Modified", A: "Added (staged)", U: "Untracked", D:
 let dkcPrefs = null;          // Map: the remembered scope per session, read from storage on first use
 let dkcNum = null;            // {root, scope, seq, reply, auto}: the last numstat answer, for the status ask `seq`; reply null when the request failed; auto: asked as "auto"
 let dkcNumAsk = null;         // {root, seq}: the numstat out, while dkcNumFlight
+let dkcLastAsk = null;        // {root, asked, seq}: the last numstat asked: dockChangesSync never asks the same one twice in a row
 let dkcBase = null;           // {root, head, reply, at}: the last base answer; reply null when the request failed
 let dkcNumFlight = false;
 let dkcBaseFlight = false;
@@ -159,9 +160,7 @@ function dkcAskScope(root) {
   const sid = dkcSid();
   if (dkcBase && dkcBase.root === root) return dockScope(sid);
   const pick = dkcPrefsMap().get(typeof sid === "string" ? sid : "");
-  if (pick === "head" || pick === "branch") return pick;
-  const base = gitBaseFor(root);
-  return base && base.state === "ok" ? changesScopeFor(dkcPrefsMap(), sid, base) : "auto";
+  return pick === "head" || pick === "branch" ? pick : "auto";
 }
 
 // dkcLastStatus: the last status known for the root, the live one, else the one kept from before (gitlast.js), else null.
@@ -206,7 +205,8 @@ function dockChangesSync() {
   // (the scope shown is then a guess, and asking one scope while checking another would ask without end).
   const baseKnown = !!dkcBase && dkcBase.root === root;
   const want = baseKnown ? scope : dkcAskScope(root);
-  if (dkcNum && dkcNum.root === root && dkcNum.seq >= cur.seq && (dkcNum.scope === want || (dkcNum.auto && !baseKnown))) return;
+  // Before the base, an "auto" ask is met by any answer for this status (the server's pick or a scope asked beside it).
+  if (dkcNum && dkcNum.root === root && dkcNum.seq >= cur.seq && (dkcNum.scope === want || (!baseKnown && (dkcNum.auto || want === "auto")))) return;
   // Uncommitted scope and a status with no entries: the numstat of nothing is nothing, so it is not asked for (a clean tree is
   // the common case, and each numstat is a container run). The record stands for the answer, at once even with a numstat out
   // (asked beside this status, before anyone knew it was clean), so a numstat from before the tree went clean cannot leave its
@@ -218,6 +218,9 @@ function dockChangesSync() {
     return;
   }
   if (dkcNumFlight) return; // its answer asks again for whatever it left stale
+  // The same numstat as the last one asked has its answer already: recorded, or dropped for a newer one of its scope. Asking
+  // it again could only get the same answer, so whatever the record rule above misses, sync cannot loop.
+  if (dkcLastAsk && dkcLastAsk.root === root && dkcLastAsk.asked === want && dkcLastAsk.seq === cur.seq) return;
   dkcAskNumstat(root, want, cur.seq, dkcFresh);
 }
 
@@ -244,6 +247,7 @@ async function dkcAskBase(root, head, branch) {
 async function dkcAskNumstat(root, asked, seq, fresh) {
   dkcNumFlight = true;
   dkcNumAsk = { root, seq };
+  dkcLastAsk = { root, asked, seq };
   if (fresh) dkcFresh = false;
   const reply = await dkcPost("/api/git/numstat", fresh ? { path: root, scope: asked, fresh: true } : { path: root, scope: asked });
   dkcNumFlight = false;
