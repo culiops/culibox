@@ -240,7 +240,8 @@ func (s Store) MergeScan(key string, base Record, scanAt time.Time, r Report) (R
 	switch {
 	case replaced:
 		// The old revision is lost with the unreadable file, and a page may still hold
-		// it: continue from a value no earlier counter can reach.
+		// it: continue from a value no earlier counter can reach. Microseconds, not
+		// nanoseconds: the page is JavaScript and must hold it exactly (below 2^53).
 		rec.Revision = max(before.Revision+1, time.Now().UnixMicro())
 	case !sameListing(before, rec):
 		rec.Revision = before.Revision + 1
