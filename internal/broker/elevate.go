@@ -206,7 +206,7 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 		return refuse("granting write access needs a signed-in browser session")
 	case !found || !sv.Live:
 		return refuse("this session is not running")
-	case !sv.Boxed:
+	case !sv.Boxed && !sv.Host:
 		return refuse("this session has no AWS binding in a box")
 	}
 	bnd, entry, why := elevBinding(sv, req.Name)

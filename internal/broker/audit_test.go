@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -972,5 +973,76 @@ func TestAuditModeColumn(t *testing.T) {
 	}
 	if OutcomeDeniedNotReadOnly != "denied_not_read_only" {
 		t.Fatal(OutcomeDeniedNotReadOnly)
+	}
+}
+
+// Row.Tier says which kind of session a credential row belongs to (#360).
+func TestAuditRowCarriesTier(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	for _, r := range []Row{
+		{Time: time.Unix(1, 0), SessionID: "h", Outcome: OutcomeMinted, Tier: "host"},
+		{Time: time.Unix(1, 0), SessionID: "b", Outcome: OutcomeMinted, Tier: "box"},
+		{Time: time.Unix(1, 0), SessionID: "u", Outcome: OutcomeDeniedToken},
+	} {
+		if err := a.Record(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for sid, want := range map[string]string{"h": "host", "b": "box", "u": ""} {
+		rows, err := a.ForSession(sid, 10)
+		if err != nil || len(rows) != 1 || rows[0].Tier != want {
+			t.Fatalf("session %s: rows %+v err %v, want tier %q", sid, rows, err, want)
+		}
+	}
+}
+
+func TestAuditOldDBGetsTheTierColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(m3aSchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO credential_audit (ts, session_id, outcome) VALUES (1, 'pre-tier', 'minted')`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+	for i := 0; i < 2; i++ { // reopening must be idempotent
+		a, err := OpenAudit(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := a.ForSession("pre-tier", 10)
+		if err != nil || len(rows) != 1 || rows[0].Tier != "" {
+			t.Fatalf("old row: %+v %v", rows, err)
+		}
+		a.Close()
+	}
+}
+
+// The broker fills Row.Tier in one place: from the session's view, when the
+// call site left it empty.
+func TestBrokerRecordsTheSessionTier(t *testing.T) {
+	host := hostSession()
+	e := boxSetup(t, map[string]SessionView{"h": host, "b": boxedSession()})
+	if w := present(e.b, credPaths[0], tokA("h"), onHostSocket("h")); w.Code != http.StatusOK {
+		t.Fatalf("host: %d %s", w.Code, w.Body)
+	}
+	if w := present(e.b, credPaths[0], tokA("b"), fromBox(ownBox)); w.Code != http.StatusOK {
+		t.Fatalf("box: %d %s", w.Code, w.Body)
+	}
+	present(e.b, credPaths[0], tokA("h"), onHostSocket("other")) // a refusal row is tiered too
+	tiers := map[string][]string{}
+	for _, r := range e.rec.rows {
+		tiers[r.SessionID] = append(tiers[r.SessionID], r.Tier)
+	}
+	if len(tiers["h"]) != 2 || tiers["h"][0] != "host" || tiers["h"][1] != "host" || len(tiers["b"]) != 1 || tiers["b"][0] != "box" {
+		t.Fatalf("tiers by session: %v", tiers)
 	}
 }

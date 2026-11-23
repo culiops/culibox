@@ -38,13 +38,21 @@ type BoxSource interface {
 func (b *Broker) SetBoxSource(s BoxSource) { b.boxSrc = s }
 
 // refusal is the one point that judges a request for a credential: the session
-// (live, boxed, bound, this spawn's nonce) first, then the box. "" means serve.
-// The session reasons come first so a stale token from another box is still a
+// (live, boxed or Host, bound, this spawn's nonce) first, then who presented
+// it. "" means serve. sid is the token's MAC-verified session id. The session
+// reasons come first so a stale token from another box is still a
 // denied_session "nonce mismatch". The three handlers and the GitHub post-mint
 // re-check all call it, so they cannot diverge.
-func (b *Broker) refusal(r *http.Request, sv SessionView, found bool, nonce string, k bindingKind) (Outcome, string) {
+func (b *Broker) refusal(r *http.Request, sid string, sv SessionView, found bool, nonce string, k bindingKind) (Outcome, string) {
 	if why := refusalReason(sv, found, nonce, k); why != "" {
 		return OutcomeDeniedSession, why
+	}
+	if sv.Host {
+		// A Host session has no box: it is served only on its own host socket.
+		if !fromHost(r, sid) {
+			return OutcomeDeniedBox, whyOtherBox
+		}
+		return "", ""
 	}
 	if !b.fromBox(r, sv.Box) {
 		return OutcomeDeniedBox, whyOtherBox
@@ -52,14 +60,23 @@ func (b *Broker) refusal(r *http.Request, sv SessionView, found bool, nonce stri
 	return "", ""
 }
 
+// fromHost: the request arrived on the host socket of session sid, and on no
+// other transport. Fail closed.
+func fromHost(r *http.Request, sid string) bool {
+	box, host, shared := presenterOf(r.Context())
+	return sid != "" && host == sid && box == "" && !shared
+}
+
 // fromBox: the request was presented from box want. Fail closed at every step.
+// A request that arrived on a host socket is never a box request, whatever the
+// socket's session.
 func (b *Broker) fromBox(r *http.Request, want string) bool {
 	if want == "" { // the session's box is unknown: nothing to compare
 		return false
 	}
-	box, _, shared := presenterOf(r.Context())
+	box, host, shared := presenterOf(r.Context())
 	switch {
-	case shared:
+	case shared, host != "":
 		return false
 	case box != "":
 		return box == want
@@ -89,6 +106,6 @@ func (b *Broker) serveShared(w http.ResponseWriter, r *http.Request) {
 			sid = id
 		}
 	}
-	b.recordDenied(Row{Time: b.now(), SessionID: sid, Provider: provider, Outcome: OutcomeDeniedBox, Error: whySharedSocket})
+	b.recordDenied(Row{Time: b.now(), SessionID: sid, Provider: provider, Outcome: OutcomeDeniedBox, Error: whySharedSocket, Tier: TierBox}) // only a box mounts the shared socket; Tier set so the recorder needs no lookup here
 	replyErr(w, http.StatusForbidden, sharedSocketReply)
 }

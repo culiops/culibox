@@ -1090,3 +1090,40 @@ func TestApprovalRowsCarryEntry(t *testing.T) {
 		}
 	}
 }
+
+// D8 (#360): a Host session may be granted write access exactly as a box may:
+// same request, same approval row. A session that is neither is still refused.
+func TestElevateAllowedForHostSession(t *testing.T) {
+	hostView := func() SessionView {
+		v := liveElev()
+		v.Boxed, v.Host = false, true
+		return v
+	}
+	b, _, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev(), "host-1": hostView()})
+	withTimers(b)
+	want, err := b.Elevate("aws-1", ElevateRequest{Minutes: 30, Reason: "apply", Cred: CredCookie})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Elevate("host-1", ElevateRequest{Minutes: 30, Reason: "apply", Cred: CredCookie})
+	if err != nil {
+		t.Fatalf("Host session refused: %v", err)
+	}
+	if got.Active != want.Active || !got.Until.Equal(want.Until) {
+		t.Fatalf("host view %+v, box view %+v", got, want)
+	}
+	if len(rec.appr) != 2 || rec.appr[1].Action != ActionGranted || rec.appr[1].SessionID != "host-1" {
+		t.Fatalf("approval rows %+v", rec.appr)
+	}
+
+	neither := liveElev()
+	neither.Boxed = false
+	b2, _, rec2, _ := setup(t, map[string]SessionView{"s": neither})
+	_, err = b2.Elevate("s", ElevateRequest{Minutes: 30, Reason: "apply", Cred: CredCookie})
+	if err == nil || err.Error() != ErrElevateRefused.Error()+": this session has no AWS binding in a box" {
+		t.Fatalf("neither boxed nor host: err = %v", err)
+	}
+	if len(rec2.appr) != 1 || rec2.appr[0].Action != ActionRefused {
+		t.Fatalf("approval rows %+v", rec2.appr)
+	}
+}

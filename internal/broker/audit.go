@@ -90,7 +90,17 @@ type Row struct {
 	// Mode is the AWS binding's mode: "" for AssumeRole (and every non-AWS
 	// row), config.AWSModeSSODirect for the permission set's own credentials.
 	Mode string `json:"mode,omitempty"`
+	// Tier is the kind of session the row belongs to: TierBox or TierHost; ""
+	// when unknown (a row written before the column existed, or a token that
+	// named no session).
+	Tier string `json:"tier,omitempty"`
 }
+
+// Row.Tier values.
+const (
+	TierBox  = "box"
+	TierHost = "host"
+)
 
 // Action classifies one row of the approval log: a human decision about write
 // elevation, or a sign-in outcome.
@@ -204,6 +214,7 @@ func OpenAudit(path string) (*Audit, error) {
 		{"repos", "INTEGER NOT NULL DEFAULT 0"},
 		{"entry", "TEXT NOT NULL DEFAULT ''"},
 		{"mode", "TEXT NOT NULL DEFAULT ''"},
+		{"tier", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := addColumnIfMissing(db, "credential_audit", c[0], c[1]); err != nil {
 			db.Close()
@@ -254,10 +265,10 @@ func (a *Audit) Record(r Row) error {
 	}
 	_, err := a.db.Exec(`INSERT INTO credential_audit
 		(ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
-		 provider, subject, installation, repos, entry, mode)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 provider, subject, installation, repos, entry, mode, tier)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.Time.Unix(), r.SessionID, r.Profile, r.AccountID, r.RoleARN, r.SourceIdentity, r.ScopeHash, exp, string(r.Outcome), r.Error, b2i(r.Elevated),
-		provider, r.Subject, r.Installation, r.Repos, r.Entry, r.Mode)
+		provider, r.Subject, r.Installation, r.Repos, r.Entry, r.Mode, r.Tier)
 	return err
 }
 
@@ -457,7 +468,7 @@ func b2i(b bool) int {
 // auditCols is the credential_audit column list every row query selects, in
 // the order queryRows reads it.
 const auditCols = `ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
-	provider, subject, installation, repos, entry, mode`
+	provider, subject, installation, repos, entry, mode, tier`
 
 // ForSession returns up to limit rows for a session, newest first.
 func (a *Audit) ForSession(sessionID string, limit int) ([]Row, error) {
@@ -516,7 +527,7 @@ func (a *Audit) queryRows(query string, args ...any) ([]Row, error) {
 		var o string
 		var elevated int
 		if err := rows.Scan(&ts, &r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &r.SourceIdentity, &r.ScopeHash, &exp, &o, &r.Error, &elevated,
-			&r.Provider, &r.Subject, &r.Installation, &r.Repos, &r.Entry, &r.Mode); err != nil {
+			&r.Provider, &r.Subject, &r.Installation, &r.Repos, &r.Entry, &r.Mode, &r.Tier); err != nil {
 			return nil, err
 		}
 		r.Time, r.Outcome, r.Elevated = time.Unix(ts, 0), Outcome(o), elevated != 0
@@ -548,4 +559,27 @@ func (a *Audit) SessionIDs() ([]string, error) {
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// tierRecorder stamps Row.Tier, in one place, from the session's view when the
+// call site left it empty: a Host session is "host", a boxed one "box", an
+// unknown session or a token that named none stays "". The wrapped Recorder is
+// the caller's own (Broker.appr is taken from it, not from the wrapper).
+type tierRecorder struct {
+	Recorder
+	lookup Lookup
+}
+
+func (t tierRecorder) Record(r Row) error {
+	if r.Tier == "" && r.SessionID != "" {
+		if sv, ok := t.lookup(r.SessionID); ok {
+			switch {
+			case sv.Host:
+				r.Tier = TierHost
+			case sv.Boxed:
+				r.Tier = TierBox
+			}
+		}
+	}
+	return t.Recorder.Record(r)
 }
