@@ -48,6 +48,28 @@ function iconFor(name, isDir, open) {
   return ICON_EXT[lower.slice(cut + 1)] || ICON_FILE;
 }
 
+// File families for the dock tree's icon colours (P5, mockup 1 T2): desktop.css colours a file row's icon by its
+// data-fam. Ops families only, and never amber, green or red (those mean needs-you, status, write). Object.create(null)
+// for the reason given above ICON_EXACT.
+const FAMILY_EXACT = Object.assign(Object.create(null), {
+  dockerfile: "build", containerfile: "build", makefile: "build",
+});
+const FAMILY_EXT = Object.assign(Object.create(null), {
+  tf: "tf", tfvars: "tf", hcl: "tf",
+  yaml: "yaml", yml: "yaml",
+  md: "md",
+  sh: "script", bash: "script", zsh: "script", py: "script",
+});
+
+// fileFamily: "tf", "yaml", "md", "script", "build", or "" for a file of no family.
+function fileFamily(name) {
+  const lower = String(name || "").toLowerCase();
+  if (FAMILY_EXACT[lower]) return FAMILY_EXACT[lower];
+  if (lower.startsWith("dockerfile.")) return "build"; // Dockerfile.prod, Dockerfile.dev
+  const cut = lower.lastIndexOf(".");
+  return (cut > 0 && FAMILY_EXT[lower.slice(cut + 1)]) || "";
+}
+
 // actionsLabel names the row's ⋯ menu button by what it acts on, matching the
 // session row's kebab (app.js: "Session actions" on both aria-label and title).
 // A glyph button has no accessible name from its own text, so screen readers
@@ -428,6 +450,10 @@ async function ftRenderDir(path, container, prefix, st) {
     icon.className = "ft-icon";
     icon.textContent = iconFor(ent.name, isDir, false);
     icon.setAttribute("aria-hidden", "true"); // decorative: the name is the label
+    if (docked && !isDir) {
+      const fam = fileFamily(ent.name);
+      if (fam) row.dataset.fam = fam;
+    }
     const label = document.createElement("span");
     label.className = "ft-name";
     label.textContent = ent.name;
@@ -1499,7 +1525,7 @@ async function initFileTree() {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    iconFor, treeBranch, treeFollowTarget, ftEntriesFor, ftEntryIsDir, rootableCwd, insideAnyRoot, loadWorkspaceRoots, actionsLabel,
+    iconFor, fileFamily, treeBranch, treeFollowTarget, ftEntriesFor, ftEntryIsDir, rootableCwd, insideAnyRoot, loadWorkspaceRoots, actionsLabel,
     listingReadOnly, rowMenuIds, rowMenuLabel, openRowMenu, ftApplyReadOnly, ftRenderDir,
     ftKeyAction, ftMenuGroups, promptNewFile, promptMkdir, promptRename, confirmDelete,
   };

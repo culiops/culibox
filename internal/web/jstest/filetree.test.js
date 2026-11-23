@@ -513,3 +513,16 @@ test("loadWorkspaceRoots keeps the available roots' paths, home first, and keeps
     if (hadApi) Object.defineProperty(globalThis, "api", hadApi); else delete globalThis.api;
   }
 });
+
+test("fileFamily: the dock tree's icon colour family, by extension or exact name, case-insensitive (P5, mockup 1 T2)", () => {
+  const fam = FT.fileFamily;
+  for (const n of ["main.tf", "x.TFVARS", "a.hcl", ".terraform.lock.hcl"]) assert.strictEqual(fam(n), "tf", n);
+  for (const n of ["k.yaml", "k.YML"]) assert.strictEqual(fam(n), "yaml", n);
+  assert.strictEqual(fam("README.md"), "md");
+  for (const n of ["a.sh", "a.bash", "a.zsh", "report.py"]) assert.strictEqual(fam(n), "script", n);
+  for (const n of ["Dockerfile", "dockerfile", "Dockerfile.prod", "Containerfile", "Makefile", "MAKEFILE"]) assert.strictEqual(fam(n), "build", n);
+  // A name that is a property of Object.prototype must not find it; everything else has no family.
+  for (const n of ["constructor", "toString", "__proto__", "x.constructor", ".env", "x.go", "tf", "Dockerfiles", "", null, undefined]) {
+    assert.strictEqual(fam(n), "", String(n));
+  }
+});
