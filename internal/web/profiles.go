@@ -119,6 +119,9 @@ type ProfileView struct {
 	// HostDrops lists what a host run of it would drop (its bindings and
 	// box-only options, config.HostDrops); empty when it drops nothing (#359).
 	// Not a block: the host run goes ahead once the caller acknowledges it.
+	// Until the page shows the bindings a Host run keeps on their own line
+	// (#360), they lead this list (config.HostGuardrail), so the page still asks
+	// for the acknowledgement the spawn requires for them.
 	HostDrops []string `json:"host_drops,omitempty"`
 	// HostKeeps names the profile's own secrets and env a host run still
 	// passes to the agent (config.HostKeeps), so the Host warning does not
@@ -636,7 +639,7 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 			ImportsOff:     a.ImportsOff,
 			BoxOnly:        a.BoxOnly,
 			HostBlock:      config.HostBlock(a),
-			HostDrops:      config.HostDrops(a, m.optDefs),
+			HostDrops:      append(config.HostGuardrail(a), config.HostDrops(a, m.optDefs)...),
 			HostKeeps:      config.HostKeeps(a),
 			EgressAllow:    slices.Clone(a.EgressAllow),
 			CloneShare:     slices.Clone(a.CloneShare),
