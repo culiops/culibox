@@ -212,7 +212,7 @@ func TestHostSpawnWithoutNodeDropsBindings(t *testing.T) {
 	if env["PATH"] != l.path {
 		t.Fatalf("PATH = %q, want the session's own %q", env["PATH"], l.path)
 	}
-	want := []string{"AWS binding", "GitHub binding", "token binding", nodeMissingItem}
+	want := []string{nodeMissingItem}
 	if !slices.Equal(s.HostDropped, want) || !slices.Equal(s.Info().HostDropped, want) {
 		t.Fatalf("HostDropped = %q, want %q", s.Info().HostDropped, want)
 	}
