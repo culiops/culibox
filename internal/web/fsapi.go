@@ -177,7 +177,15 @@ func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 			ent.Link = true
 			if checked < maxLinkDirChecks {
 				checked++
-				ent.TargetDir = p.linkTargetDir(filepath.Join(t.Abs, e.Name()))
+				abs := filepath.Join(t.Abs, e.Name())
+				// A host link's target is walked (a boxed workspace's walk stops at the workspace), so one that plainly
+				// leaves every root is judged from its text, never walked: a link to a hung network mount must not hang
+				// the listing of the folder holding it (the same reason rootHealth exists).
+				if t.Strict {
+					ent.TargetDir = p.linkTargetDir(abs)
+				} else if target, err := os.Readlink(abs); err == nil && p.linkMayLead(t.Abs, target) {
+					ent.TargetDir = p.linkTargetDir(abs)
+				}
 			}
 		}
 		out = append(out, ent)
@@ -215,6 +223,31 @@ func (p fsPolicy) linkTargetDir(abs string) bool {
 	defer d.Close()
 	fi, err := d.Stat()
 	return err == nil && fi.IsDir()
+}
+
+// linkMayLead reports whether a link in dir with the given target text could lead somewhere this policy serves, judged by
+// path components alone (no filesystem access): the target, read from dir when relative, is a served root, a scratch root,
+// inside one, or an ancestor of one. A false is final (no walk); a true still goes through the full resolve, since a link
+// inside the roots may lead out again, which the walk refuses.
+func (p fsPolicy) linkMayLead(dir, target string) bool {
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(dir, target)
+	}
+	target = filepath.Clean(target)
+	near := func(r string) bool {
+		return target == r || r == "/" || strings.HasPrefix(target, r+"/") || strings.HasPrefix(r, target+"/") || target == "/"
+	}
+	for _, r := range p.roots {
+		if near(r) {
+			return true
+		}
+	}
+	for _, r := range p.scratch {
+		if near(r) {
+			return true
+		}
+	}
+	return false
 }
 
 const maxTextBytes = 2 << 20 // 2 MiB preview cap for text files

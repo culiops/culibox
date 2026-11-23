@@ -102,3 +102,30 @@ func TestFsListSymlinkCap(t *testing.T) {
 		t.Errorf("links = %d, target_dir = %d; want %d and %d", links, dirs, n, maxLinkDirChecks)
 	}
 }
+
+// Review round 1 (Important 3): a link whose own target text lies, by whole components, outside every served root and
+// scratch root (and is no ancestor of one) is judged without walking it, so a link to a hung network mount
+// (~/share -> /mnt/nfs/share) cannot hang the listing of the folder that holds it. A relative target is read from the
+// listed folder. Only host listings walk targets at all (a boxed workspace's walk stops at the workspace).
+func TestLinkMayLead(t *testing.T) {
+	p := fsPolicy{roots: []string{"/home/u", "/srv/work"}, scratch: map[fileKey]string{{dev: 1, ino: 2}: "/tmp/claude-1000"}}
+	for _, c := range []struct {
+		dir, target string
+		want        bool
+	}{
+		{"/home/u", "/mnt/nfs/share", false},
+		{"/home/u", "/home/u/real", true},
+		{"/home/u", "/home/u", true},
+		{"/home/u", "/home", true}, // an ancestor of a root: the walk refuses it itself, cheaply
+		{"/home/u", "/srv/work/x", true},
+		{"/home/u", "/srv/workshop", false}, // whole components
+		{"/home/u", "/tmp/claude-1000/a", true},
+		{"/home/u/a", "../b", true},
+		{"/home/u/a", "../../../mnt/nfs", false},
+		{"/home/u/a", "real", true},
+	} {
+		if got := p.linkMayLead(c.dir, c.target); got != c.want {
+			t.Errorf("linkMayLead(%q, %q) = %v, want %v", c.dir, c.target, got, c.want)
+		}
+	}
+}

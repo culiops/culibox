@@ -48,7 +48,7 @@ let drvQueued = "";   // the signature a timer is set for
 let drvDone = "";     // the signature last dealt with: the same file, root and tree load is not revealed twice
 let drvWait = null;   // the cleanup of the wait for the user to leave the tree
 let drvOut = null;    // {path, root}: the open file is outside that root and the tree could show it (the hint)
-const drvWhere = new Map(); // path -> /api/fs/where answer {path, top?}, or null when it was refused
+const drvWhere = new Map(); // path -> /api/fs/where answer {path, top?} (a failure is not kept: the next chance asks again)
 
 function drvStorage() {
   try { return typeof localStorage !== "undefined" ? localStorage : null; } catch (_) { return null; }
@@ -109,7 +109,8 @@ function drvSetOutside(v) {
   if (typeof dockRender === "function") dockRender();
 }
 
-// drvWhereOf: /api/fs/where's answer for `path`, asked once per page (a refusal is kept as null).
+// drvWhereOf: /api/fs/where's answer for `path`, asked once per page while it answers; null when it did not (a refusal or a
+// network blip), which is asked again at the next chance (a tab, root or tree change) rather than kept until a reload.
 async function drvWhereOf(path) {
   if (drvWhere.has(path)) return drvWhere.get(path);
   let w = null;
@@ -117,6 +118,7 @@ async function drvWhereOf(path) {
     const a = await api("/api/fs/where?path=" + encodeURIComponent(path));
     w = a && typeof a.path === "string" ? a : null;
   } catch (_) { w = null; }
+  if (!w) return null;
   drvWhere.set(path, w);
   if (drvWhere.size > REVEAL_WHERE_CAP) drvWhere.delete(drvWhere.keys().next().value);
   return w;
@@ -191,7 +193,9 @@ async function drvRun(now) {
   }
   drvDisarm();
   drvDone = sig;
-  return ftReveal(want, where ? { auto: true, where } : { auto: true });
+  // still: the user may switch tabs while the folders list; this reveal then stops before it selects or scrolls.
+  const still = () => dockRevealWant() === want;
+  return ftReveal(want, where ? { auto: true, where, still } : { auto: true, still });
 }
 
 // dockRevealNow: the folded explorer was just opened from its strip (app.js dockStripOpen), which puts focus in the tree for

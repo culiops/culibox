@@ -1163,7 +1163,7 @@ function rootableCwd(cwd, roots) {
 // are already following a tab we never rooted at.
 async function syncTreeToRoot(root, key) {
   if (!ftRootSel || !root) return;
-  if (key) ftFollowKeySeen = key; // what focus asks the tree to follow now, kept or not (ftRerootSticky)
+  ftFollowKeySeen = key || null; // what focus asks the tree to follow now, kept or not (ftRerootSticky); a keyless pick ends it
   if (key && key === lastSyncedKey) return; // already following this tab (respect manual pick)
   lastSyncedKey = key || null;
   setFtRoot(root);
@@ -1246,6 +1246,7 @@ async function ftRevealRoot(path) {
 }
 
 let ftRevealSeq = 0; // the newest reveal: an older one still opening folders gives up
+let ftRevealManual = 0; // explicit reveals in progress: an automatic one never cancels them (it simply does not run)
 
 // ftReveal shows `path` in the tree: open each ancestor between the root and it in turn through the tree's own expand path
 // (each level loads asynchronously, and the next row does not exist until it has finished; a folder still listing is
@@ -1256,24 +1257,44 @@ let ftRevealSeq = 0; // the newest reveal: an older one still opening folders gi
 // tree, scrolls only when the row is not already in view, and does nothing for a path the root does not hold.
 // Without it (Reveal in tree, a crumb, a Changes folder, the "Outside this tree" hint) a collapsed tree opens, the row takes
 // focus, and a path outside the root roots the tree at its repository (ftRevealRoot), sticky (ftRerootSticky).
-// opts.where: /api/fs/where's answer for `path`, when the caller has it (ftRevealTarget).
+// opts.where: /api/fs/where's answer for `path`, when the caller has it (ftRevealTarget). opts.still: the caller's own
+// "is this still wanted?" (the dock's open file is still this one), checked with every step, like a newer reveal.
+// An automatic reveal does nothing while an explicit one is in progress (ftRevealManual): every explicit reveal that re-roots
+// or shows the tree also starts the dock's automatic one, and it must not cancel what the user asked for.
 async function ftReveal(path, opts) {
   const o = opts || {};
   // An explicit ask: the dock's tree opens if it was collapsed (P3). The phone's tree (not the dock's) leaves the desktop
   // choice alone.
   if (!o.auto && typeof dockSecOpen === "function" && ftDocked()) dockSecOpen("tree");
   if (!ftRootSel || !ftTreeEl || !path) return false;
+  if (o.auto && ftRevealManual > 0) return false;
+  if (o.auto) return ftRevealRun(path, o);
+  ftRevealManual++;
+  try { return await ftRevealRun(path, o); } finally { ftRevealManual--; }
+}
+
+// ftRevealRun is ftReveal's body. The phone's tree (not the dock's) reveals as it always did: a file outside the root roots
+// the tree at its folder with no follow key, and the folders it opens are remembered (it has no automatic reveal to show
+// the file again).
+async function ftRevealRun(path, o) {
+  const docked = ftDocked();
   const seq = ++ftRevealSeq;
-  const live = () => seq === ftRevealSeq;
+  const live = () => seq === ftRevealSeq && (typeof o.still !== "function" || o.still());
   await ftSettled();
   if (!live()) return false;
   let where = o.where || null;
   if (ftRevealTarget(path, where) === null) {
     if (o.auto) return false;
-    const to = await ftRevealRoot(path);
-    if (!to || !live()) return false;
-    where = where || to.where;
-    await ftRerootSticky(to.root);
+    if (docked) {
+      const to = await ftRevealRoot(path);
+      if (!to || !live()) return false;
+      where = where || to.where;
+      await ftRerootSticky(to.root);
+    } else {
+      const target = treeFollowTarget({ kind: "viewer", path, box: "" });
+      if (!target) return false;
+      await syncTreeToRoot(target.root);
+    }
     await ftSettled();
     if (!live()) return false;
   }
@@ -1285,7 +1306,7 @@ async function ftReveal(path, opts) {
     const row = ftRowFor(dir);
     const op = row && ftRowOpeners.get(row);
     if (!op) return false;
-    await op.setOpen(true, { persist: false });
+    await op.setOpen(true, { persist: !docked });
     if (gen !== ftGen || !live()) return false;
   }
   const file = ftRowFor(target);

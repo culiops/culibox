@@ -88,7 +88,7 @@ function tree(expanded, opts) {
     pending: () => st.lists.filter((x) => !x.done).map((x) => x.path),
     shown: () => load('ftTreeEl.querySelectorAll(".ft-node").map((r) => ftRowPaths.get(r))', "shown"),
     selected: () => load('ftTreeEl.querySelectorAll(".ft-sel").map((r) => ftRowPaths.get(r))', "sel"),
-    stored: () => JSON.parse(load("JSON.stringify([...loadExpanded()])", "stored")),
+    stored: () => (st.saves.length ? st.saves[st.saves.length - 1] : expanded || []),
   };
   return p;
 }
@@ -269,3 +269,72 @@ test("the dock lists a link to a folder as a folder, with the folders, and marks
   assert.deepStrictEqual(m.run('ftTreeEl.querySelectorAll(".ft-node").map((r) => r.getAttribute("aria-expanded"))'), ["false", null, null, null]);
   assert.deepStrictEqual(m.run('ftTreeEl.querySelectorAll(".ft-link").length'), 0);
 });
+
+// Review round 1 (Important 1): every manual reveal that re-roots, opens a collapsed tree or unfolds the column also starts
+// the dock's automatic reveal 150 ms later; it must never cancel the manual one still opening folders.
+test("review 1: an automatic reveal never supersedes a manual one in progress", async () => {
+  const p = tree();
+  await rooted(p, "/w", [dir("a"), dir("c")]);
+  const manual = p.run('ftReveal("/w/a/b/f.go")');
+  await settle();
+  await p.answer("/w/a", [dir("b")]);
+  const auto = p.run('ftReveal("/w/c/x.go", { auto: true })');
+  await settle();
+  await p.answer("/w/a/b", [file("f.go")]);
+  assert.strictEqual(await manual, true, "the manual reveal finishes (no false error toast)");
+  assert.strictEqual(await auto, false);
+  assert.deepStrictEqual(p.selected(), ["/w/a/b/f.go"]);
+  assert.strictEqual(p.run("ftRowPaths.get(document.activeElement)"), "/w/a/b/f.go", "focus reaches the row");
+});
+
+// Review round 1 (Minor): an automatic reveal for a tab the user has already left stops before it selects or scrolls.
+test("review 1: an automatic reveal stops when opts.still() says the file is no longer the open one", async () => {
+  const p = tree();
+  await rooted(p, "/w", [dir("a")]);
+  p.run("globalThis.wantA = true;");
+  const done = p.run('ftReveal("/w/a/x.go", { auto: true, still: () => globalThis.wantA })');
+  await settle();
+  p.run("globalThis.wantA = false;");
+  await p.answer("/w/a", [file("x.go")]);
+  assert.strictEqual(await done, false);
+  assert.deepStrictEqual(p.selected(), []);
+  assert.deepStrictEqual(p.st.scrolls, []);
+});
+
+// Review round 1 (Important 2): the phone's Reveal in tree is what it was on main: a file outside the root roots the tree at
+// the file's folder with no follow key (focus is followed again at the next change), and the folders it opens are kept.
+test("review 1: the phone's Reveal is main's: folder root, no sticky key, no /api/fs/where, opened folders saved", async () => {
+  const p = tree(null, { docked: false, where: { "/v/repo/sub/f.go": { path: "/v/repo/sub/f.go", top: "/v/repo" } } });
+  p.run('syncTreeToRoot("/w", "sess:1");');
+  await settle();
+  await p.answer("/w", [dir("a")]);
+  const out = p.run('ftReveal("/v/repo/sub/f.go")');
+  await settle();
+  await p.answer("/v/repo/sub", [file("f.go")]);
+  assert.strictEqual(await out, true);
+  assert.strictEqual(p.run("ftRoot()"), "/v/repo/sub");
+  assert.strictEqual(p.run("lastSyncedKey"), null);
+  assert.deepStrictEqual(p.st.wheres, []);
+  const q = tree(null, { docked: false });
+  await rooted(q, "/w", [dir("a")]);
+  const r = q.run('ftReveal("/w/a/f.go")');
+  await settle();
+  await q.answer("/w/a", [file("f.go")]);
+  assert.strictEqual(await r, true);
+  assert.deepStrictEqual(q.st.saves[q.st.saves.length - 1], ["/w/a"], "the phone keeps what Reveal opened, as on main");
+  assert.deepStrictEqual(q.st.opens, [], "and never touches the desktop's sections");
+});
+
+// Review round 1 (Minor): a keyless syncTreeToRoot (an explicit Open files here) forgets the key seen before it, so a sticky
+// re-root after it does not store a stale key.
+test("review 1: the follow key seen is cleared by a keyless re-root", async () => {
+  const p = tree();
+  p.run('syncTreeToRoot("/w", "sess:old");');
+  await settle();
+  await p.answer("/w", []);
+  p.run('syncTreeToRoot("/v");');
+  await settle();
+  await p.answer("/v", []);
+  assert.strictEqual(p.run("ftFollowKeySeen"), null);
+});
+

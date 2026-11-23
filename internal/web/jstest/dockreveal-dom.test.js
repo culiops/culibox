@@ -335,3 +335,26 @@ test("drawerPaint, paintDrawerLayout, dockSecPaint and ftLoadRoot hand the revea
   const idx = src("index.html");
   assert.ok(idx.indexOf('src="/dockreveal.js"') > idx.indexOf('src="/docksections.js"'), "dockreveal.js loads after docksections.js");
 });
+
+test("review 1: the automatic reveal carries still(): true while the file is the open one, false once the user moved on", async () => {
+  const d = dock();
+  d.open("/w/a/f.go");
+  d.run("dockRevealSync()");
+  await d.flush();
+  const still = d.st.reveals[0].opts.still;
+  assert.strictEqual(typeof still, "function");
+  assert.strictEqual(still(), true);
+  d.open("/w/b.go");
+  assert.strictEqual(still(), false);
+});
+
+test("review 1: a failed /api/fs/where is not kept: the next chance asks again", async () => {
+  const d = dock();
+  d.open("/v/flaky.md"); // the where call rejects (a network blip)
+  d.run("dockRevealSync()");
+  await d.flush();
+  d.run("ftGen = 2; dockRevealAfterLoad();");
+  await d.flush();
+  assert.deepStrictEqual(d.st.wheres, ["/v/flaky.md", "/v/flaky.md"]);
+});
+
