@@ -1812,6 +1812,11 @@
   .dk-ed-body > .dk-md { position: absolute; inset: 0; overflow: auto; background: var(--bg); }
   .dk-md:focus-visible { outline: var(--focus); outline-offset: -2px; }
   .dk-md .md-body { padding: 18px 28px 24px 36px; }
+  /* M1 (P5, mockup 3): the preview is Inter, as the rest of the app, at the reader's size and line-height (app.css: var(--fs-md),
+     1.6), the same on every OS. Prose is held to a 72-character measure; tables and code blocks may use the whole width, so the
+     document itself has no cap. The phone keeps app.css's look. */
+  .md-body { font-family: var(--font-ui); max-width: none; }
+  .md-body p, .md-body ul, .md-body ol, .md-body dl, .md-body blockquote { max-width: 72ch; }
   /* Markdown code (inline and blocks) is the dock's code font, the face the file has in the editor (P5). */
   .md-body code, .md-body pre { font-family: var(--font-code); }
   /* A big document comes in chunks (editormd.js editorMdPump): the browser lays out and paints only the chunks near the view, and
