@@ -47,7 +47,8 @@ function tierJoin(words) {
   return (typeof tierJoinWords === "function" ? tierJoinWords : require("./tier.js").tierJoinWords)(words);
 }
 
-// tierHostDrops: what a Host run of the profile leaves out (ProfileView.host_drops, "AWS binding"...). Empty when it leaves nothing.
+// tierHostDrops: what a Host run of the profile leaves out (ProfileView.host_drops: "context paths", box-only settings and options;
+// never a binding since #360). Empty when it leaves nothing.
 function tierHostDrops(profile) {
   const d = profile && profile.host_drops;
   return Array.isArray(d) ? d.filter((x) => typeof x === "string" && x !== "") : [];
@@ -59,24 +60,37 @@ function tierHostKeeps(profile) {
   return Array.isArray(k) ? k.filter((x) => typeof x === "string" && x !== "") : [];
 }
 
-// What Host does instead of the dropped bindings; the card row, the confirm's hint and the Access tab say it the same way.
-const TP_DROPS_TAIL = "The agent uses this machine's own logins (~/.aws, gh) instead.";
-
-// The drop items that are credentials (ProfileView.host_drops names): Host swaps these for the machine's own logins.
-const TP_CREDENTIAL_DROPS = ["AWS binding", "GitHub binding", "token binding"];
-
-// tierHasCredentialDrop: true when at least one dropped item is a credential binding. Context paths and box-only settings are not,
-// so "uses this machine's own logins instead" would claim a swap that did not happen.
-function tierHasCredentialDrop(drops) {
-  return Array.isArray(drops) && drops.some((d) => TP_CREDENTIAL_DROPS.includes(d));
+// tierHostGuardrail: the bindings a Host run of the profile keeps (ProfileView.host_guardrail, "AWS binding"...). Empty when it has none.
+function tierHostGuardrail(profile) {
+  const g = profile && profile.host_guardrail;
+  return Array.isArray(g) ? g.filter((x) => typeof x === "string" && x !== "") : [];
 }
 
-// tierDropsLine: the Host card's warning as one sentence ("" when nothing is dropped). The logins tail only when a credential drops;
-// then what Host still passes (keeps), so the tail never reads as "only this machine's logins".
+// What a bound profile's Host run does with its bindings (#360): they are its default credentials, not a limit, since the agent
+// keeps the user's own access to the machine. The card row and the confirm say it the same way.
+const TP_GUARD_TAIL = "The agent keeps your full access to this machine, including its own logins.";
+
+// tierGuardrailParts: the sentence about the bindings as {subject, rest}, so the card can bold the subject. One binding reads
+// "the GitHub binding is the default credential"; several "AWS, GitHub and token bindings are the default credentials".
+function tierGuardrailParts(guardrail) {
+  const kinds = guardrail.map((g) => g.replace(/ binding$/, ""));
+  if (kinds.length === 1) return { subject: "the " + kinds[0] + " binding", rest: " is the default credential, not a limit. " + TP_GUARD_TAIL };
+  return { subject: tierJoin(kinds) + " bindings", rest: " are the default credentials, not a limit. " + TP_GUARD_TAIL };
+}
+
+// tierGuardrailLine: the Host card's and the confirm's line about the bindings ("" when the profile has none).
+function tierGuardrailLine(guardrail) {
+  if (!guardrail || !guardrail.length) return "";
+  const p = tierGuardrailParts(guardrail);
+  return "On Host: " + p.subject + p.rest;
+}
+
+// tierDropsLine: the Host card's warning about what Host leaves out, as one sentence ("" when nothing is dropped), then what Host
+// still passes (keeps).
 function tierDropsLine(drops, keeps) {
   if (!drops || !drops.length) return "";
   const kept = Array.isArray(keeps) && keeps.length ? " Still on Host: " + tierJoin(keeps) + "." : "";
-  return "Not on Host: " + tierJoin(drops) + "." + (tierHasCredentialDrop(drops) ? " " + TP_DROPS_TAIL : "") + kept;
+  return "Not on Host: " + tierJoin(drops) + "." + kept;
 }
 
 // tierHostState: Host is off when the server says the profile may not run there (ProfileView.host_block). host_drops does not
@@ -100,12 +114,12 @@ function tierCloneState(o) {
 
 // tierPreselect: the card the profile and workspace point at, before any fallback (spec §5): a clone profile whose repo
 // (or clone dir) is the workspace, else a profile saved as host, else in place. A host profile that drops bindings there opens on Box
-// (#359): Host is one click away, and never what a stray Enter starts. Never a "last used" tier.
+// (#359, #360): Host is one click away, and never what a stray Enter starts. Never a "last used" tier.
 // o = {profile, cwd, home}.
 function tierPreselect(o) {
   const p = o.profile || {};
   if (p.clone_of && (tierSamePath(o.cwd, p.clone_of, o.home) || tierSamePath(o.cwd, p.default_cwd, o.home))) return "clone";
-  if (p.runtime === "host" && tierHostDrops(p).length === 0) return "host";
+  if (p.runtime === "host" && tierHostDrops(p).length === 0 && tierHostGuardrail(p).length === 0) return "host";
   return "box";
 }
 
@@ -145,11 +159,14 @@ function tierModel(o) {
       { k: "Rest of machine", v: [{ b: "your whole account:" }, { t: " every file, key and network this machine has." }] },
     ],
   };
+  const guard = tierHostGuardrail(p);
+  if (guard.length) {
+    const g = tierGuardrailParts(guard);
+    rows.host.push({ k: "On Host", v: [{ b: g.subject }, { t: g.rest }] });
+  }
   const drops = tierHostDrops(p);
-  if (drops.length) {
-    const v = [{ b: tierJoin(drops) + "." }];
-    if (tierHasCredentialDrop(drops)) v.push({ t: " " + TP_DROPS_TAIL });
-    rows.host.push({ k: "Not on Host", v });
+  if (drops.length) rows.host.push({ k: "Not on Host", v: [{ b: tierJoin(drops) + "." }] });
+  if (guard.length || drops.length) {
     const keeps = tierHostKeeps(p);
     if (keeps.length) rows.host.push({ k: "Still on Host", v: [{ b: tierJoin(keeps) + "." }] });
   }
@@ -372,25 +389,27 @@ function spawnWhere() {
   return v ? { runtime: v } : {};
 }
 
-// hostDropsConfirm: the question before a Host spawn of a profile whose bindings Host drops. Resolves true only on "Start on Host";
-// Cancel has the focus. The drops are text nodes in a list, never markup. The logins sentence is a note in the body (the footer
-// hint is hidden when too wide) and only when a credential drops: otherwise the title names box settings and there is no sentence.
-// keeps (ProfileView.host_keeps) are the profile's own secrets and env Host still passes: a second note names them.
-async function hostDropsConfirm(profileName, drops, keeps) {
-  const creds = tierHasCredentialDrop(drops);
-  const ul = tierEl("ul", "ask-bullets");
-  for (const d of drops) ul.append(tierEl("li", "", d));
-  const notes = creds ? [[TP_DROPS_TAIL + " Box keeps them."]] : [];
+// hostDropsConfirm: the question before a Host spawn of a profile that has bindings (guardrail, ProfileView.host_guardrail) or box
+// settings Host drops (drops). Resolves true only on "Start on Host"; Cancel has the focus. The drops are text nodes in a list,
+// never markup. The sentence about the bindings is a note in the body (the footer hint is hidden when too wide).
+// keeps (ProfileView.host_keeps) are the profile's own secrets and env Host still passes: a note names them.
+async function hostDropsConfirm(profileName, drops, keeps, guardrail) {
+  const guard = Array.isArray(guardrail) ? guardrail : [];
+  const dropped = Array.isArray(drops) ? drops : [];
+  const notes = guard.length ? [[tierGuardrailLine(guard)]] : [];
   if (Array.isArray(keeps) && keeps.length) notes.push(["Still passed to the agent on Host: " + tierJoin(keeps) + "."]);
-  return askConfirm({
-    title: creds ? "Start on Host without its bindings?" : "Start on Host without its box settings?",
-    body: profileName + " will run with your user's full access to this machine. These do not apply on Host:",
-    extra: [ul],
-    notes,
-    confirmLabel: "Start on Host",
-    danger: true,
-    focusCancel: true,
-  });
+  const o = { confirmLabel: "Start on Host", danger: true, focusCancel: true, notes };
+  if (!dropped.length) {
+    o.title = "Start on Host?";
+    o.body = profileName + " will run with your user's full access to this machine, not in a box.";
+    return askConfirm(o);
+  }
+  const ul = tierEl("ul", "ask-bullets");
+  for (const d of dropped) ul.append(tierEl("li", "", d));
+  o.title = "Start on Host without its box settings?";
+  o.body = profileName + " will run with your user's full access to this machine. These do not apply on Host:";
+  o.extra = [ul];
+  return askConfirm(o);
 }
 
 // spawnCwdFor: the folder the request names. A clone session starts in the profile's clone dir; every other card in the workspace.
@@ -402,6 +421,6 @@ function spawnCwdFor(w) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel, tierVmFetch,
-    tierHostDrops, tierDropsLine, tierHasCredentialDrop, tierHostKeeps,
+    tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine,
   };
 }
