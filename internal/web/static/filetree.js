@@ -1246,7 +1246,10 @@ async function ftRevealRoot(path) {
 }
 
 let ftRevealSeq = 0; // the newest reveal: an older one still opening folders gives up
-let ftRevealManual = 0; // explicit reveals in progress: an automatic one never cancels them (it simply does not run)
+// The explicit reveal in progress, as {seq, gen} (its ftRevealSeq and the ftGen it started in), or null: while it is the
+// newest reveal in the same tree load, an automatic one does not run (it would cancel it). A newer reveal or a newer root
+// load ends the hold, so a listing that never answers cannot turn the automatic reveal off for the page.
+let ftRevealManual = null;
 
 // ftReveal shows `path` in the tree: open each ancestor between the root and it in turn through the tree's own expand path
 // (each level loads asynchronously, and the next row does not exist until it has finished; a folder still listing is
@@ -1267,10 +1270,13 @@ async function ftReveal(path, opts) {
   // choice alone.
   if (!o.auto && typeof dockSecOpen === "function" && ftDocked()) dockSecOpen("tree");
   if (!ftRootSel || !ftTreeEl || !path) return false;
-  if (o.auto && ftRevealManual > 0) return false;
-  if (o.auto) return ftRevealRun(path, o);
-  ftRevealManual++;
-  try { return await ftRevealRun(path, o); } finally { ftRevealManual--; }
+  if (o.auto) {
+    if (ftRevealManual && ftRevealManual.seq === ftRevealSeq && ftRevealManual.gen === ftGen) return false;
+    return ftRevealRun(path, o);
+  }
+  const mine = { seq: ftRevealSeq + 1, gen: ftGen }; // ftRevealRun takes that seq, synchronously
+  ftRevealManual = mine;
+  try { return await ftRevealRun(path, o); } finally { if (ftRevealManual === mine) ftRevealManual = null; }
 }
 
 // ftRevealRun is ftReveal's body. The phone's tree (not the dock's) reveals as it always did: a file outside the root roots
@@ -1295,6 +1301,8 @@ async function ftRevealRun(path, o) {
       if (!target) return false;
       await syncTreeToRoot(target.root);
     }
+    // The load this reveal made is its own: its hold on the automatic reveal moves to it.
+    if (ftRevealManual && ftRevealManual.seq === seq) ftRevealManual.gen = ftGen;
     await ftSettled();
     if (!live()) return false;
   }

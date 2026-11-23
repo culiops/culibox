@@ -338,3 +338,34 @@ test("review 1: the follow key seen is cleared by a keyless re-root", async () =
   assert.strictEqual(p.run("ftFollowKeySeen"), null);
 });
 
+
+// Review round 2 (Minor 3): an explicit reveal whose listing never answers must not turn the automatic reveal off for the
+// page: a newer root load (or any newer reveal) ends its hold.
+test("review 2: a hung explicit reveal holds the automatic one only until the tree loads again", async () => {
+  const p = tree();
+  await rooted(p, "/w", [dir("a"), dir("c")]);
+  p.run('ftReveal("/w/a/f.go")'); // /w/a never answers
+  await settle();
+  assert.strictEqual(await p.run('ftReveal("/w/c/x.go", { auto: true })'), false, "held while it is the newest, in this load");
+  p.run("ftLoadRoot();");
+  await settle();
+  await p.answer("/w", [dir("a"), dir("c")]);
+  const auto = p.run('ftReveal("/w/c/x.go", { auto: true })');
+  await settle();
+  await p.answer("/w/c", [file("x.go")]);
+  assert.strictEqual(await auto, true);
+});
+
+test("review 2: the root load an explicit reveal makes itself (outside the root) does not end its own hold", async () => {
+  const p = tree(null, { where: { "/v/repo/a/f.go": { path: "/v/repo/a/f.go", top: "/v/repo" } } });
+  await rooted(p, "/w", [dir("x")]);
+  const manual = p.run('ftReveal("/v/repo/a/f.go")');
+  await settle();
+  await p.answer("/v/repo", [dir("a")]);
+  const auto = p.run('ftReveal("/v/repo/a/f.go", { auto: true })'); // the dock's, after the re-root's load
+  await settle();
+  await p.answer("/v/repo/a", [file("f.go")]);
+  assert.strictEqual(await auto, false);
+  assert.strictEqual(await manual, true);
+  assert.strictEqual(p.run("ftRowPaths.get(document.activeElement)"), "/v/repo/a/f.go");
+});

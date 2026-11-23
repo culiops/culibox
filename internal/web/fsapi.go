@@ -227,7 +227,7 @@ func (p fsPolicy) linkTargetDir(abs string) bool {
 
 // linkMayLead reports whether a link in dir with the given target text could lead somewhere this policy serves, judged by
 // path components alone (no filesystem access): the target, read from dir when relative, is a served root, a scratch root,
-// inside one, or an ancestor of one. A false is final (no walk); a true still goes through the full resolve, since a link
+// inside one, or an ancestor of one, under their resolved or their configured spelling. A false is final (no walk); a true still goes through the full resolve, since a link
 // inside the roots may lead out again, which the walk refuses.
 func (p fsPolicy) linkMayLead(dir, target string) bool {
 	if !filepath.IsAbs(target) {
@@ -243,6 +243,11 @@ func (p fsPolicy) linkMayLead(dir, target string) bool {
 		}
 	}
 	for _, r := range p.scratch {
+		if near(r) {
+			return true
+		}
+	}
+	for _, r := range p.spellings {
 		if near(r) {
 			return true
 		}

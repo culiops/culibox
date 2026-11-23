@@ -129,3 +129,31 @@ func TestLinkMayLead(t *testing.T) {
 		}
 	}
 }
+
+// Review round 2 (Minor 1): a link whose absolute target is written with the configured, unresolved spelling of a root
+// ($HOME through a symlink, macOS's /tmp for /private/tmp) may lead in: it is walked, as a typed path would be.
+func TestLinkMayLeadRawSpelling(t *testing.T) {
+	p := fsPolicy{roots: []string{"/data/u"}, spellings: []string{"/home/u"}}
+	if !p.linkMayLead("/data/u", "/home/u/proj") {
+		t.Error("a target under home's configured spelling must be walked")
+	}
+	if p.linkMayLead("/data/u", "/home/other") {
+		t.Error("whole components still")
+	}
+}
+
+func TestFsListSymlinkDirViaHomeSpelling(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(base, "var", "home", "u")
+	mustMkdirAll(t, filepath.Join(real, "proj"))
+	mustSymlink(t, filepath.Join(base, "var"), filepath.Join(base, "alias"))
+	home := filepath.Join(base, "alias", "home", "u") // home as configured: through a link
+	mustSymlink(t, filepath.Join(home, "proj"), filepath.Join(real, "abs_spelled"))
+	s := &Server{Home: home}
+	if e := listEntries(t, s, home)["abs_spelled"]; !e.Link || !e.TargetDir {
+		t.Errorf("abs_spelled = %+v, want a link to a folder", e)
+	}
+}
