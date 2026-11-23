@@ -159,7 +159,8 @@ test("a fence of 200,000 blank lines before a cut takes linear time, not quadrat
 test("prose with a generic type (Vec<T>) or an unclosed span does not hold the rest of the file in one chunk", () => {
   let body = "";
   for (let i = 0; body.length < 200000; i++) body += "## S" + i + "\n\nSome text " + i + " here.\n\n";
-  for (const head of ["Use a Vec<T> here.\n\n", "An <span>open span.\n\n", "<foo>\n\n"]) {
+  // (An unknown tag alone on its line, an HTML block, is kept together on purpose: the round-3 test below.)
+  for (const head of ["Use a Vec<T> here.\n\n", "An <span>open span.\n\n", "Option<String> and HashMap<K, V>.\n\n"]) {
     const text = "# Top\n\n" + head + body;
     const got = drain(text, 8192);
     assert.ok(got.frags.length > 15, head.trim() + ": " + got.frags.length + " chunks");
@@ -202,4 +203,37 @@ test("a <details> of 100 KB (a collapsed changelog) is never cut: only inline fo
   assert.equal(gd.length, 1, "kept whole below 1 MiB");
   const gb = mdChunkGroups(marked.lexer("# a\n\nsome <b>bold\n\n" + big), 8192);
   assert.ok(gb.length >= 4, "an inline <b> left open is cut at 64 KB: " + gb.length);
+});
+
+// --- review round 3: keep together whenever unsure ---------------------------------------------------------------------------
+
+test("any element an HTML block leaves open (span, del, h1, an unknown tag) keeps its paragraphs together", () => {
+  marked.setOptions({ breaks: false, gfm: true });
+  const paras = (n, w) => { let s = ""; for (let i = 0; i < n; i++) s += "Paragraph " + i + " " + "word ".repeat(w) + "\n\n"; return s; };
+  for (const open of ['<span style="color:red">', "<del>", '<h1 align="center">', "<foo-bar>", "<sup>"]) {
+    const name = /<([a-z0-9-]+)/.exec(open)[1];
+    const text = paras(10, 200) + open + "\n\n" + paras(20, 200) + "</" + name + ">\n\n" + paras(30, 200);
+    const groups = mdChunkGroups(marked.lexer(text), 8192);
+    const g = groups.find((x) => x.some((t) => t.type === "html" && t.raw.startsWith(open)));
+    assert.ok(g.some((t) => t.type === "html" && t.raw.includes("</" + name + ">")), open + ": open and close in one group");
+    assert.ok(groups.length >= 3, open + ": still cut before and after: " + groups.length);
+  }
+});
+
+test("optional end tags and void elements hold nothing open; an unrelated close never cancels an open container", () => {
+  marked.setOptions({ breaks: false, gfm: true });
+  let big = "";
+  for (let i = 0; big.length < 200000; i++) big += "## S" + i + "\n\ntext\n\n";
+  const tbody = "<table><tbody>\n<tr><td>x</td></tr>\n</table>\n\n" + big;
+  assert.ok(mdChunkGroups(marked.lexer(tbody), 8192).length > 10, "tbody/tr/td are closed by the parser");
+  const voids = "<p>\n<img src=x>\n<br>\n<hr>\n\n" + big;
+  assert.ok(mdChunkGroups(marked.lexer(voids), 8192).length > 10, "p, img, br, hr open nothing");
+  // A <div> around 30 KB holding paragraphs with balanced and unbalanced inline spans: the stray </span> is not the div's close.
+  let inner = "";
+  for (let i = 0; inner.length < 30000; i++) inner += "Para " + i + " with <span>a span</span> and a stray </span>.\n\n";
+  const div = "# a\n\n<div>\n\n" + inner + "</div>\n\n" + big;
+  const groups = mdChunkGroups(marked.lexer(div), 8192);
+  const g = groups.find((x) => x.some((t) => t.type === "html" && t.raw.startsWith("<div>")));
+  assert.ok(g.some((t) => t.type === "html" && t.raw.includes("</div>")), "the div stays whole");
+  assert.ok(groups.length > 10, "and the file is cut after it");
 });

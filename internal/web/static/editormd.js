@@ -114,7 +114,7 @@ function editorMdRender(tab, text) {
   const gen = ++m.gen;
   if (m.job) { clearTimeout(m.job); m.job = null; }
   const body = editorMdBody(tab, text);
-  if (body.el) { m.pane.replaceChildren(body.el); m.drawn = body.el; return; }
+  if (body.el) { m.pane.replaceChildren(body.el); m.drawn = body.el; m.restore = null; m.restoreAt = null; return; }
   const wrap = document.createElement("div");
   wrap.className = "md-body";
   const job = { it: body.it, wrap, swap: !!m.drawn && m.drawn.parentNode === m.pane, held: [], count: 0 };
@@ -235,12 +235,19 @@ function editorMdEarly(tab) {
   editorMdShow(tab, tab.earlyText);
 }
 
+// editorMdPlace: where the live pane is read, to keep for the way back. While a first draw is still putting the pane back (m.restore),
+// that place, unless the user has scrolled since (the pane is no longer where the draw last put it), in which case theirs.
+function editorMdPlace(m) {
+  if (m.restore !== null && !(m.restoreAt !== null && m.pane.scrollTop !== m.restoreAt)) return m.restore;
+  return m.pane.scrollTop;
+}
+
 // editorMdDetach: the tab is not on screen. Its redraw and its subscription stop until it is shown again (a big file's draw under way
 // finishes, a slice at a time, so the document is complete when the tab comes back); the pane stays with the place it was read at.
 function editorMdDetach(tab) {
   const m = tab.md;
   if (!m || !m.live) return;
-  m.top = m.restore !== null ? m.restore : m.pane.scrollTop; // a first draw still putting the pane back: that place
+  m.top = editorMdPlace(m);
   m.live = false;
   editorMdStop(m);
 }
@@ -251,7 +258,7 @@ function editorMdDetach(tab) {
 function editorMdDrop(tab) {
   const m = tab.md;
   if (!m || !m.pane) return;
-  if (m.live) m.top = m.restore !== null ? m.restore : m.pane.scrollTop;
+  if (m.live) m.top = editorMdPlace(m);
   editorMdStop(m);
   m.live = false;
 }

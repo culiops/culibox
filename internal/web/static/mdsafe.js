@@ -400,75 +400,92 @@ function mdLexPieces(src, chunkChars) {
   return Array.from(mdLexPiecesIter(src, chunkChars));
 }
 
-// The elements whose nesting can carry across top-level blocks once the browser parses the HTML, so a chunk should not end inside one:
-// the formatting elements the HTML parser reopens in the next paragraph (its "active formatting elements"), and the containers
-// markdown is commonly wrapped in (a <details> around a changelog, a <div align="center">). Anything else (an unknown tag such as the
-// T of "Vec<T>" in prose, a <span>, a <p> or <li> the parser closes by itself) ends with its block, or is dropped by DOMPurify with
-// its content kept in place, so a cut after it changes nothing. Markup that is already broken in rarer ways (an unclosed inline
-// <pre>, <script>, <textarea>) swallows the rest of the document in one piece and only up to the next cut in chunks: the chunked
-// result is the more readable one, and both are sanitized the same.
+// Where a chunk may end. Once the browser parses the HTML, an element left open can hold the blocks after it (a <details> around a
+// changelog, a <span style> or <h1 align> wrapping paragraphs), and a cut inside it would draw those blocks outside it. So the rule
+// keeps blocks together whenever it is unsure, and a wrong guess only makes one step of the draw longer, never the document different:
+//  - an HTML block (a token marked.lexer calls block html) opens EVERY element it does not close, except void elements and those
+//    whose end tag is optional (the parser closes a <p>, <li>, <td>, <tbody> by itself);
+//  - inside a paragraph (an inline html token), only the formatting elements the parser reopens in the next paragraph (its "active
+//    formatting elements") and the block elements that end the <p> they appear in (MD_P_CLOSERS) open anything: any other inline
+//    element is closed by its own block's end tag;
+//  - a close tag only cancels an open element of the same name, so a stray </span> never ends a <div>.
+// Markup that is broken in rarer ways (an unclosed inline <pre>, <script>, <textarea>) swallows the rest of the document in one piece
+// and only up to the next cut in chunks: the chunked result is the more readable one, and both are sanitized the same.
+const MD_VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr", "keygen"]);
+const MD_OPTIONAL_END = new Set(["p", "li", "dt", "dd", "tr", "td", "th", "option", "optgroup", "thead", "tbody", "tfoot", "colgroup", "rb", "rt", "rtc", "rp", "html", "head", "body"]);
 const MD_NEST_INLINE = new Set(["a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]);
-const MD_NEST_BLOCK = new Set(["article", "aside", "blockquote", "center", "details", "div", "dl", "figure", "footer", "header", "main",
-  "nav", "ol", "section", "table", "tbody", "thead", "tfoot", "ul"]);
+const MD_P_CLOSERS = new Set(["address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "fieldset",
+  "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "main", "menu", "nav", "ol", "pre",
+  "section", "summary", "table", "ul"]);
 // A run with only formatting left open is closed anyway after this many chunks' worth of source (at least the floor): an unclosed <b>
-// in a long file would otherwise hold the rest of it in one chunk, and no cut is right for it. A container is cut only past
+// in a long file would otherwise hold the rest of it in one chunk, and no cut is right for it. Any other element open is cut only past
 // MD_GROUP_MAX_BLOCK: a <details> of a few hundred KB is a normal file and must stay whole.
 const MD_GROUP_MAX_CHUNKS = 8;
 const MD_GROUP_MAX_FLOOR = 65536;
 const MD_GROUP_MAX_BLOCK = 1048576;
 
-// mdTagBalance: the tags of `names` an HTML snippet opens minus the ones it closes (self-closing tags and comments open nothing).
-function mdTagBalance(raw, names) {
-  const s = raw.replace(/<!--[\s\S]*?(?:-->|$)/g, "");
-  let d = 0;
-  for (const m of s.matchAll(/<([A-Za-z][A-Za-z0-9-]*)(?:\s[^<>]*)?>/g)) if (names.has(m[1].toLowerCase()) && !m[0].endsWith("/>")) d++;
-  for (const m of s.matchAll(/<\/([A-Za-z][A-Za-z0-9-]*)\s*>/g)) if (names.has(m[1].toLowerCase())) d--;
-  return d;
+// mdNestNew: what is open at a point of the document: per element name, how many; and how many in all, for formatting and the rest.
+function mdNestNew() {
+  return { fmt: new Map(), blk: new Map(), fmtN: 0, blkN: 0 };
 }
 
-// mdHtmlDepth: the balance of every HTML token in a token and the tokens inside it (a paragraph's inline tags, a list's items, a
-// table's cells), leaving code out, as {block, inline}: containers (MD_NEST_BLOCK) and formatting (MD_NEST_INLINE).
-function mdHtmlDepth(token) {
-  const d = { block: 0, inline: 0 };
+// mdNestTag applies one tag (its lower-case name, whether it closes, whether it came from an HTML block) to `st`.
+function mdNestTag(st, name, close, block) {
+  const fmt = MD_NEST_INLINE.has(name);
+  if (!fmt && (MD_VOID_TAGS.has(name) || MD_OPTIONAL_END.has(name))) return;
+  if (!fmt && !block && !close && !MD_P_CLOSERS.has(name)) return; // closed by its own paragraph
+  const map = fmt ? st.fmt : st.blk;
+  const n = map.get(name) || 0;
+  if (close) {
+    if (n === 0) return; // nothing of that name is open: a stray close
+    map.set(name, n - 1);
+    if (fmt) st.fmtN--; else st.blkN--;
+  } else {
+    map.set(name, n + 1);
+    if (fmt) st.fmtN++; else st.blkN++;
+  }
+}
+
+// mdNestToken applies every tag of the HTML tokens in a token and the tokens inside it (a paragraph's inline tags, a list's items, a
+// table's cells), in document order, leaving code out. Comments and self-closing tags (<x/>) open nothing.
+function mdNestToken(st, token) {
   const visit = (x) => {
     if (!x || typeof x !== "object") return;
     if (Array.isArray(x)) { x.forEach(visit); return; }
     if (x.type === "code" || x.type === "codespan") return;
     if (x.type === "html" && typeof x.raw === "string") {
-      d.block += mdTagBalance(x.raw, MD_NEST_BLOCK);
-      d.inline += mdTagBalance(x.raw, MD_NEST_INLINE);
+      const s = x.raw.replace(/<!--[\s\S]*?(?:-->|$)/g, "");
+      for (const m of s.matchAll(/<(\/?)([A-Za-z][A-Za-z0-9-]*)(?:\s[^<>]*)?>/g)) {
+        if (!m[1] && m[0].endsWith("/>")) continue;
+        mdNestTag(st, m[2].toLowerCase(), m[1] === "/", !!x.block);
+      }
     }
     for (const k of ["tokens", "items", "header", "rows"]) if (x[k]) visit(x[k]);
   };
   visit(token);
-  return d;
 }
 
-// mdChunkGroups splits the top-level tokens into runs of about `chunkChars` of source: a run ends once it holds that much and no
-// element of MD_NEST_* it opened is still open; with only formatting open, once it holds MD_GROUP_MAX_CHUNKS times that (at least
-// MD_GROUP_MAX_FLOOR); with a container open, only past MD_GROUP_MAX_BLOCK. Every run carries the document's reference links, as
-// marked's parser expects of a token list. mdChunkGroupsIter makes them one at a time (the walk over a big file's tokens is itself
-// about 100 ms, measured, so the chunked render spreads it over its steps).
+// mdChunkGroups splits the top-level tokens into runs of about `chunkChars` of source: a run ends once it holds that much and nothing
+// is open (mdNestToken); with only formatting open, once it holds MD_GROUP_MAX_CHUNKS times that (at least MD_GROUP_MAX_FLOOR); with
+// anything else open, only past MD_GROUP_MAX_BLOCK. Every run carries the document's reference links, as marked's parser expects of a
+// token list. mdChunkGroupsIter makes them one at a time (the walk over a big file's tokens is itself about 100 ms, measured, so the
+// chunked render spreads it over its steps).
 function* mdChunkGroupsIter(tokens, chunkChars) {
   const inlineMax = Math.max(MD_GROUP_MAX_CHUNKS * chunkChars, MD_GROUP_MAX_FLOOR);
   let cur = [];
   let size = 0;
-  let block = 0;
-  let inline = 0;
+  let st = mdNestNew();
   for (const t of tokens) {
     cur.push(t);
     size += typeof t.raw === "string" ? t.raw.length : 0;
-    const d = mdHtmlDepth(t);
-    block = Math.max(0, block + d.block);
-    inline = Math.max(0, inline + d.inline);
-    const cut = (size >= chunkChars && block === 0 && inline === 0) || (block === 0 && size >= inlineMax) || size >= MD_GROUP_MAX_BLOCK;
+    mdNestToken(st, t);
+    const cut = (size >= chunkChars && st.blkN === 0 && st.fmtN === 0) || (st.blkN === 0 && size >= inlineMax) || size >= MD_GROUP_MAX_BLOCK;
     if (cut) {
       cur.links = tokens.links;
       yield cur;
       cur = [];
       size = 0;
-      block = 0;
-      inline = 0;
+      st = mdNestNew();
     }
   }
   if (cur.length) {

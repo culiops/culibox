@@ -670,3 +670,29 @@ test("a tab hidden while its first draw is still putting the pane back keeps the
   tab.onHide();
   assert.equal(tab.md.top, 500, "the place to go back to, not the clamped one");
 });
+
+// --- review round 3 -----------------------------------------------------------------------------------------------------------
+
+test("a redraw to a one-chunk text while a first draw was putting the pane back forgets that place", async () => {
+  const p = page({ performance: clock() });
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: BIG, version: "v1" } });
+  const tab = await p.open("/p/README.md", { scroll: 500 });
+  await p.settle();
+  assert.equal(tab.md.restore, 500);
+  tab.model.type("short now");
+  debounce(p)[0].fn();
+  assert.equal(tab.md.restore, null);
+  pane(tab).scrollTop = 30;
+  tab.onHide();
+  assert.equal(tab.md.top, 30, "the place it was really read at");
+});
+
+test("a user who scrolled during a first draw and then hid the tab keeps their own place", async () => {
+  const p = page({ performance: clock() });
+  p.setRead({ ok: true, status: 200, data: { kind: "text", content: BIG, version: "v1" } });
+  const tab = await p.open("/p/README.md", { scroll: 500 });
+  await p.settle();
+  pane(tab).scrollTop = 42; // the user, before the next slice
+  tab.onHide();
+  assert.equal(tab.md.top, 42);
+});
