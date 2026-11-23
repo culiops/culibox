@@ -710,3 +710,20 @@ func (a seenArgsGit) Stream(ctx context.Context, dir string, env []string, stdin
 	a.seen(args)
 	return a.ExecGit.Stream(ctx, dir, env, stdin, stdout, args...)
 }
+
+// Host review 2026-11-23 (#346): "a/s -> .." is the root, so "a/t -> s/.."
+// leads to the root's parent though its text stays inside the repository.
+func TestInspectBranchSymlinkClimbingThroughALink(t *testing.T) {
+	x := newBranchFx(t)
+	x.indexEntry("120000", "a/s", []byte(".."))
+	x.indexEntry("120000", "a/t", []byte("s/../x"))
+	fixtureGit(t, x.of, "commit", "-q", "-m", "links")
+	rep := x.inspect(handback.DefaultLimits())
+	f, ok := flagFor(rep, "a/t")
+	if !ok || !hasClass(f, handback.ClassSymlinkOut) || f.Detail != handback.SymlinkThroughNote {
+		t.Fatalf("a/t = %+v, %v; want symlink-outside with the climb-through note", f, ok)
+	}
+	if f, ok := flagFor(rep, "a/s"); ok {
+		t.Errorf("a/s leads to the root, inside: flagged %+v", f)
+	}
+}

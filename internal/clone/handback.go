@@ -494,6 +494,8 @@ func (s *branchScan) symlink(e branchEntry, bi *blobInfo, head []byte) {
 		detail = symlinkTooLong
 	} else if !handback.OutsideRoot(e.path, target) {
 		return
+	} else if !handback.LeavesByText(e.path, target) {
+		detail = handback.SymlinkThroughNote
 	}
 	s.flags.Offer(handback.Flag{
 		Path:    handback.SanitizePath(e.path),
