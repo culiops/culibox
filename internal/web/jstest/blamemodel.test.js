@@ -84,6 +84,22 @@ test("link builders only from a checked base and checked ids", () => {
   }
 });
 
+test("blameLineFit: the summary gives way to the room, down to a floor", () => {
+  const now = 2000 * 1000 + 3 * 86400 * 1000;
+  const c = { author: "Lan Tran", time: 2000, summary: "fix: raise RDS storage, disk hit 91%" };
+  assert.strictEqual(m.blameLineFit(c, now, 200), "Lan Tran, 3 days ago · fix: raise RDS storage, disk hit 91%");
+  assert.strictEqual(m.blameLineFit(c, now, 40), "Lan Tran, 3 days ago · fix: raise RDS s…");
+  assert.ok(m.blameLineFit(c, now, 40).length <= 40);
+  assert.strictEqual(m.blameLineFit(c, now, 30), "", "author and time with under 8 summary characters: not inline");
+  assert.strictEqual(m.blameLineFit(null, now, 40), "Not committed yet");
+  assert.strictEqual(m.blameLineFit(null, now, 10), "");
+  // Wide characters count two cells.
+  const wide = (t) => [...t].reduce((n, ch) => n + (/[\u3000-\u9fff]/.test(ch) ? 2 : 1), 0);
+  const cj = { author: "山田", time: 2000, summary: "修正修正修正修正修正修正" };
+  const t = m.blameLineFit(cj, now, 36, wide);
+  assert.ok(wide(t) <= 36 && t.endsWith("…"), t);
+});
+
 test("blameFits: the line end plus the text inside the content width", () => {
   assert.strictEqual(m.blameFits({ endLeft: 100, scrollLeft: 0, textWidth: 200, contentWidth: 400, gap: 24 }), true);
   assert.strictEqual(m.blameFits({ endLeft: 200, scrollLeft: 0, textWidth: 200, contentWidth: 400, gap: 24 }), false);

@@ -39,6 +39,7 @@ async function setup(opts) {
 }
 
 const inline = (ed) => ed.decor.list().filter((d) => d.options && d.options.after);
+const GAP = "\u00a0\u00a0\u00a0"; // the inline text's leading gap
 
 test("a text file in Code asks once for its version and HEAD, and draws the line's blame inline", async () => {
   const { p, tab, ed, sync } = await setup();
@@ -51,7 +52,7 @@ test("a text file in Code asks once for its version and HEAD, and draws the line
   assert.equal(d.length, 1);
   assert.equal(d[0].options.showIfCollapsed, true);
   assert.equal(d[0].options.after.inlineClassName, "dk-blame-inline");
-  assert.match(d[0].options.after.content, /^Minh, .* ago · add rds \(#12\)$/);
+  assert.match(d[0].options.after.content, /^\u00a0{3}Minh, .* ago · add rds \(#12\)$/);
   assert.deepEqual([d[0].range.startLineNumber, d[0].range.startColumn, d[0].range.endColumn], [1, 13, 13], "collapsed at the line's end");
   assert.equal(tab.sbBlame.hidden, true, "never both");
 });
@@ -81,14 +82,14 @@ test("the cursor's line is the one blamed; edits since the blame move with their
   await sync();
   ed.setPosition({ lineNumber: 2, column: 1 });
   p.get("blPaint")(tab);
-  assert.match(inline(ed)[0].options.after.content, /^Lan Tran, /);
+  assert.match(inline(ed)[0].options.after.content, /^\u00a0{3}Lan Tran, /);
   tab.model.type("# added\n" + TEXT);
   ed.setPosition({ lineNumber: 3, column: 1 });
   p.get("blPaint")(tab);
-  assert.match(inline(ed)[0].options.after.content, /^Lan Tran, /, "blamed line 2 is buffer line 3 now");
+  assert.match(inline(ed)[0].options.after.content, /^\u00a0{3}Lan Tran, /, "blamed line 2 is buffer line 3 now");
   ed.setPosition({ lineNumber: 1, column: 1 });
   p.get("blPaint")(tab);
-  assert.equal(inline(ed)[0].options.after.content, "Not committed yet");
+  assert.equal(inline(ed)[0].options.after.content, GAP + "Not committed yet");
   assert.equal(p.st.git.blames.length, 1, "a dirty buffer never asks");
 });
 

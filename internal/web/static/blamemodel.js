@@ -103,6 +103,27 @@ function blamePrUrl(remote, ref) {
   return base + path + m[2];
 }
 
+// blameLineFit: the line text cut to at most `cols` character cells (colsOf counts them), the summary giving way first; ""
+// when not even the author, the time and BL_MIN_SUMMARY characters of the summary fit (the status bar takes it then). An
+// uncommitted line is "Not committed yet" or "".
+const BL_MIN_SUMMARY = 8;
+function blameLineFit(c, nowMs, cols, colsOf) {
+  const width = colsOf || ((t) => t.length);
+  if (!c) return width("Not committed yet") <= cols ? "Not committed yet" : "";
+  const full = blameLineText(c, nowMs);
+  if (width(full) <= cols) return full;
+  const head = c.author + ", " + blameAgo(c.time, nowMs).long + " · ";
+  const sum = String(c.summary || "");
+  let room = cols - width(head) - 1; // the ellipsis
+  if (room < Math.min(BL_MIN_SUMMARY, sum.length)) return "";
+  let cut = "";
+  for (const ch of sum) {
+    if (width(cut + ch) > room) break;
+    cut += ch;
+  }
+  return head + cut + "…";
+}
+
 // blameFits: whether inline text of textWidth px, gap px after the line's end, stays inside the editor's content
 // width. endLeft is the end's x as Monaco reports it (relative to the scrolled view); the text extends the line, so
 // what must fit is its absolute end, or the line grows a horizontal scrollbar (anti-goal A5).
@@ -123,5 +144,5 @@ function blameHeaderForm({ rowWidth, otherWidth, wideWidth, shortWidth, trailNee
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { blameIndex, blameAt, blameAgo, blameLineText, blameCommitUrl, blamePrUrl, blameFits, blameHeaderForm, blameZero };
+  module.exports = { blameIndex, blameAt, blameAgo, blameLineText, blameLineFit, blameCommitUrl, blamePrUrl, blameFits, blameHeaderForm, blameZero };
 }

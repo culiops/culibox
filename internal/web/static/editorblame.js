@@ -15,6 +15,7 @@ const BL_DEBOUNCE_MS = 120;
 const BL_FETCH_MS = 60000; // the server may wait for another file's blame (30 s) before its own two runs
 const BL_HOVER_MS = 400;
 const BL_LEAVE_MS = 300;
+const BL_GAP = "\u00a0\u00a0\u00a0";
 
 function blNow() { return Date.now(); }
 
@@ -201,10 +202,13 @@ function blPaintLine(tab) {
   const text = blameLineText(b.commit, blNow());
   const L = pos.lineNumber;
   const maxCol = tab.model.getLineMaxColumn(L);
-  if (blInlineFits(tab, L, maxCol, text)) {
+  const short = blameLineFit(b.commit, blNow(), blInlineCols(L, maxCol), blCols);
+  if (short) {
     const want = [{
       range: { startLineNumber: L, startColumn: maxCol, endLineNumber: L, endColumn: maxCol },
-      options: { after: { content: text, inlineClassName: "dk-blame-inline" }, showIfCollapsed: true },
+      // The gap is part of the text (three no-break spaces, the 3 cells the fit counts): Monaco cuts injected text into several
+      // spans, so a margin on the class would repeat inside it.
+      options: { after: { content: BL_GAP + short, inlineClassName: "dk-blame-inline" }, showIfCollapsed: true },
     }];
     bl.deco = dockEditor.deltaDecorations(bl.deco, want);
     if (tab.sbBlame && !tab.sbBlame.hidden) { tab.sbBlame.hidden = true; tab.sbBlame.textContent = ""; }
@@ -218,21 +222,25 @@ function blPaintLine(tab) {
   }
 }
 
-// blInlineFits: the line's end, a gap and the text (plus the room Monaco keeps past the longest line,
-// scrollBeyondLastColumn) inside the content width at the editor's character width.
-function blInlineFits(tab, line, maxCol, text) {
-  if (typeof dockEditor.getScrolledVisiblePosition !== "function") return false;
+// blInlineCols: how many character cells of inline text fit after the line's end: the line's end, a gap and the text, plus
+// the room Monaco keeps past the longest line (scrollBeyondLastColumn), inside the content width at the editor's character
+// width (blameFits). 0 when the line is not drawn.
+function blInlineCols(line, maxCol) {
+  if (typeof dockEditor.getScrolledVisiblePosition !== "function") return 0;
   const p = dockEditor.getScrolledVisiblePosition({ lineNumber: line, column: maxCol });
-  if (!p) return false;
+  if (!p) return 0;
   const lay = dockEditor.getLayoutInfo();
   const opt = dockMonaco && dockMonaco.editor && dockMonaco.editor.EditorOption;
   const fi = opt ? dockEditor.getOption(opt.fontInfo) : null;
   const cw = fi && fi.typicalHalfwidthCharacterWidth > 0 ? fi.typicalHalfwidthCharacterWidth : 7.5;
-  const beyond = opt ? Number(dockEditor.getOption(opt.scrollBeyondLastColumn)) || 0 : 5;
-  return blameFits({
-    endLeft: p.left - lay.contentLeft, scrollLeft: dockEditor.getScrollLeft(),
-    textWidth: (blCols(text) + beyond) * cw, contentWidth: lay.contentWidth, gap: 3 * cw,
-  });
+  // The room Monaco keeps past the longest line matters only when this line could become the longest: when another line
+  // already scrolls the editor sideways, staying inside the visible width is enough.
+  const scrolls = typeof dockEditor.getScrollWidth === "function" && dockEditor.getScrollWidth() > lay.contentWidth + 1;
+  const beyond = scrolls ? 0 : opt ? Number(dockEditor.getOption(opt.scrollBeyondLastColumn)) || 0 : 5;
+  const geo = { endLeft: p.left - lay.contentLeft, scrollLeft: dockEditor.getScrollLeft(), contentWidth: lay.contentWidth, gap: 3 * cw };
+  let cols = Math.floor((geo.contentWidth - geo.endLeft - geo.scrollLeft - geo.gap) / cw) - beyond - 1; // a cell of slack for rounding
+  while (cols > 0 && !blameFits(Object.assign({ textWidth: (cols + beyond) * cw }, geo))) cols--;
+  return Math.max(0, cols);
 }
 
 // editorBlameToggle: the ⋯ menu's "Show line blame". The header stays: it is the file's, not the line's.

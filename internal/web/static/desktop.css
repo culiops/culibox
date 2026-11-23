@@ -1670,17 +1670,19 @@
   .dk-sb-branch[hidden], .dk-sb-saved[hidden] { display: none; }
   .dk-sb-saved { flex: none; color: var(--ok); }
   .dk-sb-r { flex: none; display: flex; gap: 14px; margin-left: auto; }
-  /* The current line's blame when it does not fit inline (P6): after the branch and "Saved", the first thing cut. */
+  /* The current line's blame when it does not fit inline (P6): after the branch and "Saved", the first thing cut: it takes only
+     the room the others leave (a basis of 0), so the branch keeps its name. */
   .dk-sb-blame {
-    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate;
+    flex: 1 1 0; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate;
     padding: 0; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer;
   }
   .dk-sb-blame[hidden] { display: none; }
   .dk-sb-blame:hover { color: var(--fg); }
   .dk-sb-blame:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
-  /* The inline blame: Monaco's injected text after the cursor line's end. No font of its own (editorblame.js measures it at the
-     editor's character width), 3ch off the code as the fit counts. */
-  .dk-blame-inline { margin-left: 3ch; color: var(--muted); }
+  /* The inline blame: Monaco's injected text after the cursor line's end, its gap leading in the text itself (Monaco cuts it into
+     spans, each with this class). No font or spacing of its own: editorblame.js measures it at the editor's character width.
+     Monaco's token colour (.monaco-editor .mtk1) is on the same spans, hence the id. */
+  #drawer .monaco-editor .dk-blame-inline { color: var(--muted); }
   /* The blame card (editorblame.js): a kit panel by the header, the status item or the inline text. */
   .dk-bcard {
     position: fixed; z-index: 40; box-sizing: border-box; width: min(380px, calc(100vw - 16px)); padding: 10px 12px;

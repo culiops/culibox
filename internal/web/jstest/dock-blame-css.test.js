@@ -34,18 +34,18 @@ test("the header gives way before Edited by, which never does; its forms are the
 });
 
 test("the status bar item is cut first and is a quiet button", () => {
-  assert.match(rule(".dk-sb-blame"), /flex:\s*0 1 auto/);
+  assert.match(rule(".dk-sb-blame"), /flex:\s*1 1 0/, "only the room the branch, Saved and the right side leave");
   assert.match(rule(".dk-sb-blame"), /min-width:\s*0/);
   assert.match(rule(".dk-sb-blame"), /text-overflow:\s*ellipsis/);
   assert.match(css, /\.dk-sb-blame\[hidden\]\s*\{\s*display:\s*none/);
   assert.match(rule(".dk-sb-r"), /flex:\s*none/, "the position and language keep their place");
 });
 
-test("the inline text is muted, spaced off the code by the gap the fit counts, and in the editor's own font", () => {
-  const r = rule(".dk-blame-inline");
+test("the inline text is muted over Monaco's token colour, with no font or spacing of its own (Monaco cuts it into spans)", () => {
+  const r = rule("#drawer .monaco-editor .dk-blame-inline");
   assert.match(r, /color:\s*var\(--muted\)/);
-  assert.match(r, /margin-left:\s*3ch/, "editorblame.js counts 3 character widths of gap");
-  assert.doesNotMatch(r, /font(-family|-size)?:/, "a font of its own would make the width the fit measured wrong");
+  assert.doesNotMatch(r, /font(-family|-size)?:|margin|padding|letter-spacing/, "the width the fit measured must be the width drawn");
+  assert.match(read("editorblame.js"), /content: BL_GAP \+ short/, "the gap is in the text");
 });
 
 test("the card: a kit panel, the SHA in the code font, names isolated, no amber/green/red", () => {
