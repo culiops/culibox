@@ -175,44 +175,6 @@ func contextMax(model string) (int, bool) {
 	return 0, false
 }
 
-// transcriptPathIn finds a boxed session's transcript by its conversation id.
-// It never trusts what is in the box dir, and it never guesses across sessions:
-// only <sid>.jsonl under projects/<slug(c)>/ for each cwd form c, and sid must
-// be a valid session id. Not found means no transcript. The registry is
-// skipped for an exited session, so this is what keeps a fresh or exited
-// session from showing another session's file from the same box. It stats at
-// most two paths per cwd form and never lists a directory.
-//
-// cwds are the session's spawn-dir forms (cwdFormsOf): the box runs claude with
-// -w <resolved>, so the slug may be of the symlink-resolved path. One os.Root
-// on boxDir serves the whole call; both checks use root.Lstat (confined, no
-// final-symlink follow, never blocks), and the winner is opened later, through
-// boxread (openTranscript), which re-checks it with fstat. The returned path
-// is absolute under boxDir.
-func transcriptPathIn(boxDir string, cwds []string, sid string) (string, bool) {
-	if !sessionIDRe.MatchString(sid) {
-		return "", false
-	}
-	root, err := os.OpenRoot(boxDir)
-	if err != nil {
-		return "", false
-	}
-	defer root.Close()
-	for _, c := range cwds {
-		relDir := filepath.Join(".claude", "projects", projectSlug(filepath.Clean(c)))
-		// A slug dir that is itself a symlink (even one staying inside the box)
-		// is refused: Lstat does not follow the final component.
-		if fi, err := root.Lstat(relDir); err != nil || !fi.IsDir() {
-			continue
-		}
-		rel := filepath.Join(relDir, sid+".jsonl")
-		if fi, err := root.Lstat(rel); err == nil && fi.Mode().IsRegular() {
-			return filepath.Join(boxDir, rel), true
-		}
-	}
-	return "", false
-}
-
 // UsageFor reads the latest transcript usage for a claude session. ok=false for
 // a non-claude session, one whose transcript can't be located/read, or one whose
 // tail carries no usage line. Reads only a transcript bound to this session

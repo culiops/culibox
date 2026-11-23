@@ -115,21 +115,3 @@ func readBoxedRegistry(boxDir, sessionID string, cwds []string) (claudeRegEntry,
 	}
 	return e, true
 }
-
-// boxedTranscriptPath is the validated entry's transcript, or "" when none of
-// the candidates opens as a regular file inside the box: the registry cwd's
-// project dir first (2.1.286 moves the transcript into a worktree's), then each
-// spawn form's. Named by sessionId, so never a sibling's file. The slug is
-// derived from a cleaned absolute path by a character-class replace, so it can
-// never traverse.
-func boxedTranscriptPath(boxDir string, e claudeRegEntry, cwds []string) string {
-	dirs := append([]string{filepath.Clean(e.Cwd)}, cwds...)
-	for _, d := range dirs {
-		rel := filepath.Join(".claude", "projects", projectSlug(filepath.Clean(d)), e.SessionID+".jsonl")
-		if f, _, ok := boxread.Open(boxDir, rel); ok {
-			f.Close()
-			return filepath.Join(boxDir, rel)
-		}
-	}
-	return ""
-}

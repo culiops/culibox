@@ -278,6 +278,10 @@ type located struct {
 	// tier. Everything under it was written by the contained agent, so every
 	// read of a path in it goes through boxread (openTranscript).
 	boxDir string
+	// roots are where a boxed session's transcripts may be (boxTranscriptRoots:
+	// its conversations folder, then boxDir); nil on the host tier. Every read
+	// of a transcript under one goes through boxread on that root.
+	roots []transcriptRoot
 	// cwds are the forms of the spawn dir a boxed session is known by (cleaned,
 	// and symlink-resolved when different); nil on the host tier or when the
 	// session has no usable state dir. Host-chosen, never box-supplied.
@@ -319,11 +323,11 @@ func (m *Manager) locate(id string) located {
 	m.mu.Lock()
 	s := m.sessions[id]
 	home, stateDir, backend, procStart := m.home, m.stateDir, m.backend, m.procStart
-	var bin, cwd, box, configDir string
+	var bin, cwd, box, configDir, tkey string
 	var created time.Time
 	var exited bool
 	if s != nil {
-		bin, cwd, box, configDir, created = s.Bin, s.Cwd, s.Box, s.ConfigDir, s.Created
+		bin, cwd, box, configDir, created, tkey = s.Bin, s.Cwd, s.Box, s.ConfigDir, s.Created, s.transcriptKey
 		s.mu.Lock()
 		exited = s.status == statusExited
 		s.mu.Unlock()
@@ -351,6 +355,7 @@ func (m *Manager) locate(id string) located {
 	}
 	if box != "" {
 		l.boxDir = boxHome(stateDir, box)
+		l.roots = boxTranscriptRoots(stateDir, box, tkey)
 		l.cwds = s.cwdForms()
 		claudeDir = filepath.Join(l.boxDir, ".claude")
 	}
@@ -364,7 +369,7 @@ func (m *Manager) locate(id string) located {
 			m.noteClaudeSessionID(s, id, e.SessionID)
 			// Trusted as is, whether or not the transcript exists: never fall
 			// back to a sibling's file.
-			l.path = boxedTranscriptPath(l.boxDir, e, l.cwds)
+			l.path = boxedTranscriptPath(l.roots, e, l.cwds)
 			return l
 		}
 	}
@@ -401,19 +406,19 @@ func (m *Manager) locate(id string) located {
 }
 
 // openTranscript opens the located transcript for reading and returns it with
-// its Fstat info; the caller closes the file. Boxed: through boxread, so a
-// symlink, a FIFO, or a path outside the box dir is "no data". Host: a plain
-// open, exactly as before.
+// its Fstat info; the caller closes the file. Boxed: through boxread on the
+// root the path is under (l.roots), so a symlink, a FIFO, or a path outside
+// every root is "no data". Host: a plain open, exactly as before.
 func (l located) openTranscript() (*os.File, os.FileInfo, bool) {
 	if l.path == "" {
 		return nil, nil, false
 	}
 	if l.boxDir != "" {
-		rel, err := filepath.Rel(l.boxDir, l.path)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		dir, rel, ok := l.readRoot(l.path)
+		if !ok {
 			return nil, nil, false
 		}
-		return boxread.Open(l.boxDir, rel)
+		return boxread.Open(dir, rel)
 	}
 	f, err := os.Open(l.path)
 	if err != nil {
@@ -520,7 +525,7 @@ func (m *Manager) boundTranscript(id string) (located, bool) {
 		return l, true
 	}
 	if l.boxDir != "" {
-		if p, ok := transcriptPathIn(l.boxDir, l.cwds, sid); ok {
+		if p, ok := transcriptPathIn(l.roots, l.cwds, sid); ok {
 			l.path = p
 			return l, true
 		}
