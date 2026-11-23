@@ -22,6 +22,7 @@ const (
 	defaultReuse       = 2 * time.Second
 	defaultIdle        = 5 * time.Minute
 	defaultMaxParallel = 2
+	defaultSlotWait    = 5 * time.Second
 	// baseReuse is how long a base answer is trusted for one HEAD. HEAD moving
 	// is what usually changes it, but a fetch or a branch update can move the
 	// base ref (and so the merge base) with HEAD where it is.
@@ -150,8 +151,11 @@ type Runner struct {
 	Image                string
 	UID, GID             int
 	Timeout, Reuse, Idle time.Duration
-	MaxParallel          int
-	Now                  func() time.Time
+	// SlotWait bounds how long a run waits for one of the MaxParallel slots;
+	// its Timeout starts only once it has one. Zero is 5s.
+	SlotWait    time.Duration
+	MaxParallel int
+	Now         func() time.Time
 	// AfterFunc schedules SweepLater's sweep; nil is time.AfterFunc.
 	AfterFunc func(time.Duration, func())
 
@@ -162,8 +166,10 @@ type Runner struct {
 	baseFlights  map[string]*baseFlight
 	numCache     map[string]*numCached
 	numFlights   map[string]*numFlight
-	semOnce      sync.Once
-	sem          chan struct{}
+	slotMu       sync.Mutex
+	slotInit     bool
+	slotFree     int
+	slotQueue    [2][]chan struct{} // waiters per prio, oldest first
 	sweepPending bool
 	sweepAgain   bool
 }
@@ -244,16 +250,18 @@ func (r *Runner) now() time.Time {
 	return time.Now()
 }
 
-func (r *Runner) semaphore() chan struct{} {
-	r.semOnce.Do(func() {
-		n := r.MaxParallel
-		if n <= 0 {
-			n = defaultMaxParallel
-		}
-		r.sem = make(chan struct{}, n)
-	})
-	return r.sem
-}
+// prio orders the waiters for a slot: every prioList waiter is served before
+// any prioView one, and each class first come, first served.
+type prio int
+
+const (
+	// prioList is the tree's and the Changes list's git: status, numstat and
+	// the base lookups.
+	prioList prio = iota
+	// prioView is one file's git for the editor: its diff and its text at a
+	// revision (the gutter, the Changes view, All changes).
+	prioView
+)
 
 // Status returns the change set of t. Concurrent calls for the same Top share
 // one container run, and a finished result is reused for Reuse. A refused
@@ -359,13 +367,11 @@ func (r *Runner) runStatus(t Target, key string, f *flight) {
 }
 
 func (r *Runner) doStatus(t Target, f *flight) Status {
-	ctx, cancel := context.WithTimeout(context.Background(), orDur(r.Timeout, defaultTimeout))
-	defer cancel()
-	release, err := r.acquire(ctx)
+	ctx, done, err := r.slot(context.Background(), prioList)
 	if err != nil {
-		return unavailableStatus(t, "timed out waiting for a free git container")
+		return unavailableStatus(t, errNoSlot.Error())
 	}
-	defer release()
+	defer done()
 	r.mu.Lock()
 	f.started, f.hasStarted = r.now(), true
 	r.mu.Unlock()
@@ -408,13 +414,11 @@ func (r *Runner) Diff(ctx context.Context, t Target, rel string, untracked bool)
 	if !safePath(rel) {
 		return Diff{State: "unavailable", Reason: "invalid path"}
 	}
-	ctx, cancel := context.WithTimeout(ctx, orDur(r.Timeout, defaultTimeout))
-	defer cancel()
-	release, err := r.acquire(ctx)
+	ctx, done, err := r.slot(ctx, prioView)
 	if err != nil {
-		return Diff{State: "unavailable", Reason: "timed out waiting for a free git container"}
+		return Diff{State: "unavailable", Reason: errNoSlot.Error()}
 	}
-	defer release()
+	defer done()
 	name := newName()
 	out := &capBuffer{max: maxDiffBytes}
 	err = r.Docker.RunStream(ctx, DiffArgs(t, r.Image, name, r.UID, r.GID, rel, untracked), out)
@@ -495,13 +499,11 @@ func (r *Runner) cat(ctx context.Context, t Target, rev, rel string, limit int) 
 	if !safePath(rel) {
 		return nil, Blob{State: "unavailable", Reason: "invalid path"}
 	}
-	ctx, cancel := context.WithTimeout(ctx, orDur(r.Timeout, defaultTimeout))
-	defer cancel()
-	release, err := r.acquire(ctx)
+	ctx, done, err := r.slot(ctx, prioView)
 	if err != nil {
 		return nil, Blob{State: "unavailable", Reason: errNoSlot.Error()}
 	}
-	defer release()
+	defer done()
 	name := newName()
 	out := &capBuffer{max: limit}
 	err = r.Docker.RunStream(ctx, ShowArgs(t, r.Image, name, r.UID, r.GID, rev, rel), out)
@@ -604,23 +606,21 @@ func (r *Runner) runBase(t Target, key, head string, f *baseFlight) {
 // merge base: two containers, the second only when there is a base. Its
 // Branch is empty (see baseCached).
 func (r *Runner) doBase(t Target, head string) BaseInfo {
-	ctx, cancel := context.WithTimeout(context.Background(), orDur(r.Timeout, defaultTimeout))
-	defer cancel()
-	out, err := r.runGit(ctx, func(name string) []string { return BaseArgs(t, r.Image, name, r.UID, r.GID) })
+	out, err := r.runGit(context.Background(), func(name string) []string { return BaseArgs(t, r.Image, name, r.UID, r.GID) })
 	if err != nil {
-		return BaseInfo{State: "unavailable", Reason: failReason(ctx, err)}
+		return BaseInfo{State: "unavailable", Reason: failReasonText(err.Error())}
 	}
 	ref := pickBase(out)
 	if ref == "" {
 		return BaseInfo{State: "nobase", Reason: reasonNoBase}
 	}
-	out, err = r.runGit(ctx, func(name string) []string { return MergeBaseArgs(t, r.Image, name, r.UID, r.GID, ref) })
+	out, err = r.runGit(context.Background(), func(name string) []string { return MergeBaseArgs(t, r.Image, name, r.UID, r.GID, ref) })
 	if err != nil {
 		// Exit 1 with nothing printed is merge-base's "no common ancestor".
 		if exitCode(err) == 1 && len(out) == 0 {
 			return BaseInfo{State: "nobase", Reason: reasonNoCommon}
 		}
-		return BaseInfo{State: "unavailable", Reason: failReason(ctx, err)}
+		return BaseInfo{State: "unavailable", Reason: failReasonText(err.Error())}
 	}
 	mb := strings.TrimSpace(string(out))
 	if !oidRE.MatchString(mb) {
@@ -720,13 +720,11 @@ func (r *Runner) doNumstat(t Target, sc Scope, f *numFlight) Numstat {
 	if args == nil { // NumstatArgs refused the ref: run nothing
 		return unavailableNumstat("invalid base ref")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), orDur(r.Timeout, defaultTimeout))
-	defer cancel()
-	release, err := r.acquire(ctx)
+	ctx, done, err := r.slot(context.Background(), prioList)
 	if err != nil {
 		return unavailableNumstat(errNoSlot.Error())
 	}
-	defer release()
+	defer done()
 	r.mu.Lock()
 	f.started, f.hasStarted = r.now(), true
 	r.mu.Unlock()
@@ -763,38 +761,100 @@ var (
 	errRefused = errors.New("git argv refused")
 )
 
-// runGit runs one git container under a MaxParallel slot and returns what it
+// errTimedOut is what runGit returns for a run that hit its Timeout.
+var errTimedOut = errors.New("git timed out")
+
+// runGit runs one list-priority git container (see slot) and returns what it
 // printed, at most maxBaseBytes. argv builds the docker argv for the
 // container's name; a nil one (a builder refusing its input) runs nothing. The
-// container of a failed run is removed, as for status.
-func (r *Runner) runGit(ctx context.Context, argv func(name string) []string) ([]byte, error) {
+// container of a failed run is removed, as for status. A run that hit its
+// Timeout is errTimedOut.
+func (r *Runner) runGit(parent context.Context, argv func(name string) []string) ([]byte, error) {
 	name := newName()
 	args := argv(name)
 	if args == nil {
 		return nil, errRefused
 	}
-	release, err := r.acquire(ctx)
+	ctx, done, err := r.slot(parent, prioList)
 	if err != nil {
 		return nil, errNoSlot
 	}
-	defer release()
+	defer done()
 	out := &capBuffer{max: maxBaseBytes}
 	if err := r.Docker.RunStream(ctx, args, out); err != nil {
 		r.removeFailed(name)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return out.b, errTimedOut
+		}
 		return out.b, err
 	}
 	return out.b, nil
 }
 
-// acquire takes one of the MaxParallel slots, or fails when ctx ends first.
-func (r *Runner) acquire(ctx context.Context) (release func(), err error) {
-	sem := r.semaphore()
-	select {
-	case sem <- struct{}{}:
-		return func() { <-sem }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+// slot waits for one of the MaxParallel slots, for at most SlotWait and while
+// parent lives, and then gives the run a context of its own Timeout, which
+// starts now: time spent queueing never eats a run's budget. done cancels that
+// context and frees the slot. A waiter that gives up takes no slot.
+func (r *Runner) slot(parent context.Context, p prio) (ctx context.Context, done func(), err error) {
+	wctx, wcancel := context.WithTimeout(parent, orDur(r.SlotWait, defaultSlotWait))
+	err = r.acquire(wctx, p)
+	wcancel()
+	if err != nil {
+		return nil, nil, err
 	}
+	ctx, cancel := context.WithTimeout(parent, orDur(r.Timeout, defaultTimeout))
+	return ctx, func() { cancel(); r.releaseSlot() }, nil
+}
+
+// acquire takes a slot, or fails when ctx ends first. With none free it queues
+// in its class; releaseSlot hands a freed slot straight to the next waiter.
+func (r *Runner) acquire(ctx context.Context, p prio) error {
+	r.slotMu.Lock()
+	if !r.slotInit {
+		r.slotInit = true
+		r.slotFree = r.MaxParallel
+		if r.slotFree <= 0 {
+			r.slotFree = defaultMaxParallel
+		}
+	}
+	if r.slotFree > 0 {
+		r.slotFree--
+		r.slotMu.Unlock()
+		return nil
+	}
+	w := make(chan struct{})
+	r.slotQueue[p] = append(r.slotQueue[p], w)
+	r.slotMu.Unlock()
+	select {
+	case <-w:
+		return nil
+	case <-ctx.Done():
+	}
+	r.slotMu.Lock()
+	if i := slices.Index(r.slotQueue[p], w); i >= 0 {
+		r.slotQueue[p] = slices.Delete(r.slotQueue[p], i, i+1)
+		r.slotMu.Unlock()
+		return ctx.Err()
+	}
+	r.slotMu.Unlock()
+	// Granted while it was giving up: the slot goes to the next one.
+	r.releaseSlot()
+	return ctx.Err()
+}
+
+// releaseSlot gives a slot to the oldest waiter of the first class that has
+// one, else back to the free count.
+func (r *Runner) releaseSlot() {
+	r.slotMu.Lock()
+	defer r.slotMu.Unlock()
+	for p := range r.slotQueue {
+		if q := r.slotQueue[p]; len(q) > 0 {
+			r.slotQueue[p] = q[1:]
+			close(q[0])
+			return
+		}
+	}
+	r.slotFree++
 }
 
 // removeFailed removes the container of a failed run, and schedules a sweep
