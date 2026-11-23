@@ -25,7 +25,7 @@ func checkConversations(dataDir string) []Result {
 	if st.Folders == 1 {
 		noun = "folder"
 	}
-	size := "size not measured: ran out of time"
+	size := "size not fully measured (time or depth limit)"
 	if st.Sized {
 		size = fmt.Sprintf("%.1f MiB", float64(st.Bytes)/(1024*1024))
 	}

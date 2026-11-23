@@ -480,12 +480,18 @@ func (a *adoption) slug(slug string) {
 type ConversationsStats struct {
 	Folders int   // conversations folders (names with a key's shape)
 	Bytes   int64 // their size: regular files only, no link followed
-	Sized   bool  // false when the walk did not finish
+	// Sized is false when the walk did not read everything: ctx ran out, or a
+	// folder is deeper than maxCacheDepth. Bytes is then a lower bound.
+	Sized bool
 }
 
 // ConversationsUsage counts the conversations folders under stateRoot and
-// their size, for doctor. Read-only; no link is followed (WalkDir does not
-// descend one, and a link's own size is not counted) and ctx bounds the walk:
+// their size, for doctor. Read-only. Boxes write in these folders while it
+// runs, so each folder is walked through an os.Root on it: no link is followed
+// (one is not descended, its own size is not counted), and a directory swapped
+// for a link while it is walked leads nowhere outside the folder. At most
+// maxCacheDepth levels are read (an os.Root walk costs the square of the
+// depth); deeper, nothing is counted and Sized is false. ctx bounds the walk:
 // cut short, it returns what it has with ctx's error and Sized false.
 func ConversationsUsage(ctx context.Context, stateRoot string) (ConversationsStats, error) {
 	var st ConversationsStats
@@ -506,11 +512,27 @@ func ConversationsUsage(ctx context.Context, stateRoot string) (ConversationsSta
 			continue
 		}
 		st.Folders++
-		err := filepath.WalkDir(filepath.Join(dir, e.Name()), func(_ string, d fs.DirEntry, err error) error {
+		root, err := os.OpenRoot(filepath.Join(dir, e.Name()))
+		if err != nil {
+			st.Sized = false
+			continue
+		}
+		err = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 			if cerr := ctx.Err(); cerr != nil {
 				return cerr
 			}
-			if err != nil || !d.Type().IsRegular() {
+			if err != nil {
+				st.Sized = false
+				return nil
+			}
+			if d.IsDir() {
+				if p != "." && strings.Count(p, "/") >= maxCacheDepth {
+					st.Sized = false
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if !d.Type().IsRegular() {
 				return nil
 			}
 			if fi, err := d.Info(); err == nil {
@@ -518,6 +540,7 @@ func ConversationsUsage(ctx context.Context, stateRoot string) (ConversationsSta
 			}
 			return nil
 		})
+		root.Close()
 		if err != nil {
 			st.Sized = false
 			return st, err

@@ -671,3 +671,40 @@ func TestNestedMountpointPlantedInTheFolderIsNotUsed(t *testing.T) {
 		}
 	})
 }
+
+// The size walk goes through an os.Root on each folder (a folder swapped for a
+// link while it is walked leads nowhere outside it) and reads at most
+// maxCacheDepth levels: os.Root walks cost the square of the depth, and boxes
+// fill these folders. Past the cap nothing is counted and the size is partial.
+func TestConversationsUsageStopsAtTheDepthCap(t *testing.T) {
+	root := t.TempDir()
+	d, err := ensureConversationsDir(root, "0123456789ab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "top.jsonl"), make([]byte, 10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deep := d
+	for range maxCacheDepth + 5 {
+		deep = filepath.Join(deep, "a")
+	}
+	if err := os.MkdirAll(deep, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deep, "deep.jsonl"), make([]byte, 1000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A link to an outside folder full of bytes: never counted.
+	out := t.TempDir()
+	if err := os.WriteFile(filepath.Join(out, "big"), make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(out, filepath.Join(d, "out")); err != nil {
+		t.Fatal(err)
+	}
+	u, err := ConversationsUsage(context.Background(), root)
+	if err != nil || u.Folders != 1 || u.Bytes != 10 || u.Sized {
+		t.Fatalf("usage = %+v %v, want 1 folder, 10 bytes counted, size partial", u, err)
+	}
+}
