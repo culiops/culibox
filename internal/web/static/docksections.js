@@ -148,6 +148,8 @@ function dockSecPaint() {
   chev("dock-chg-chev", s.changes, "Changes");
   chev("dock-tree-chev", s.tree, "the folder tree");
   dockSecAria();
+  // A tree opened again shows the open file it could not show collapsed (dockreveal.js).
+  if (typeof dockRevealSync === "function") dockRevealSync();
 }
 
 // dockSecSave: a new state, kept and painted.

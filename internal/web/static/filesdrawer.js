@@ -965,6 +965,8 @@ function drawerPaint(fromViewer) {
   if (typeof reviewAllSync === "function") reviewAllSync();
   // And Follow agent listens to the session the dock shows, when it is on for it (editorfollow.js).
   if (typeof editorFollowSync === "function") editorFollowSync();
+  // And the tree shows the open file (dockreveal.js): every way the active tab changes ends here.
+  if (typeof dockRevealSync === "function") dockRevealSync();
 }
 
 initDrawerGoto();

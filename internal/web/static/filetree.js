@@ -658,6 +658,8 @@ async function ftLoadRoot(opts) {
         if (typeof gitRepaintRows === "function") gitRepaintRows();
       }
     }
+    // The selection went with the old rows: the dock's open file is shown again (dockreveal.js, P4.6).
+    if (gen === ftGen && typeof dockRevealAfterLoad === "function") dockRevealAfterLoad();
   } finally {
     // Waiters resume in a later microtask, after the swap above has run.
     release();

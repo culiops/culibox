@@ -515,6 +515,8 @@ function paintDrawerLayout(avail, over) {
   if (parts.treeFolded) dr.dataset.folded = "1";
   else delete dr.dataset.folded;
   dockDrawn = { fold, avail, dockW: full ? avail : lay.dockW, treeW: parts.treeW };
+  // An explorer that unfolds (or opens from the strip) shows the open file it could not show folded (dockreveal.js).
+  if (typeof dockRevealSync === "function") dockRevealSync();
 }
 
 // dockForcesFull: would the dock, opened now, land in forced Full mode (dockLayout full)? What the first paint of an open

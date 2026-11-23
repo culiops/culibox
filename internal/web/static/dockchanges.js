@@ -639,6 +639,8 @@ function dkcOpenMore() {
   }
   nodes.push(item("Refresh", "refresh", () => ftLoadRoot({ fresh: true })));
   nodes.push(item("Collapse all", "collapse", dkcCollapseAll));
+  // The "Reveal open file" checkbox (dockreveal.js): the menu closes before the choice is made.
+  if (typeof dockRevealMenuRow === "function") nodes.push(kitMenuSep(), dockRevealMenuRow(() => closeRowMenu(true)));
   ftShowMenu(more, nodes, false, "Explorer actions");
   const first = menu.querySelector(".menu-item");
   if (first) first.focus();
