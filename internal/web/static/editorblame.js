@@ -300,7 +300,8 @@ function blHeaderLayout(el) {
   const row = el.parentNode;
   if (!row || typeof row.querySelector !== "function") return;
   el.dataset.form = "measure"; // every part drawn, to be measured (no paint happens before the form below is set)
-  const w = (n) => (n && !n.hidden ? (typeof n.getBoundingClientRect === "function" ? n.getBoundingClientRect().width : n.offsetWidth) || 0 : 0);
+  // A part's own width: what it draws, or what it would draw uncut (the author's name may be ellipsized right now).
+  const w = (n) => (n && !n.hidden ? Math.max(typeof n.getBoundingClientRect === "function" ? n.getBoundingClientRect().width : 0, n.scrollWidth || 0, n.offsetWidth || 0) : 0);
   const part = (cls) => el.querySelector("." + cls);
   const icon = w(part("dk-blame-i"));
   const gap = 4;

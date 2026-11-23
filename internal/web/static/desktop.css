@@ -1577,6 +1577,25 @@
   .dk-outside-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .dk-outside-go { flex: none; font: inherit; }
   .dk-edited::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  /* The file's last commit (P6, editorblame.js), after "Edited by" and giving way before it in the script's three steps
+     (data-form): icon, author and when; icon and "3d"; the icon alone, the long form in the title. "measure" draws every part
+     for the script to measure, within the same task. Muted, as the row is; a button that opens the commit's card. */
+  .dk-blame {
+    flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; overflow: hidden;
+    border: 0; border-radius: var(--r-chip); background: transparent; color: inherit; font: inherit; cursor: pointer;
+  }
+  .dk-blame[hidden] { display: none; }
+  .dk-blame:hover { background: var(--raise); color: var(--fg); }
+  .dk-blame:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  .dk-blame-i { flex: none; width: 12px; height: 12px; }
+  .dk-blame-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+  .dk-blame-sep, .dk-blame-when { flex: none; }
+  .dk-blame-short { display: none; flex: none; }
+  .dk-blame[data-form="short"] :is(.dk-blame-who, .dk-blame-sep, .dk-blame-when),
+  .dk-blame[data-form="icon"] :is(.dk-blame-who, .dk-blame-sep, .dk-blame-when) { display: none; }
+  .dk-blame[data-form="short"] .dk-blame-short, .dk-blame[data-form="measure"] .dk-blame-short { display: inline; }
+  .dk-blame:has(.dk-blame-when:empty) .dk-blame-sep { display: none; }
+  .dk-blame-muted { font-style: italic; }
   /* A read-only file's tab wears a small padlock after its name (drawn here, like the dirty dot, so no glyph has to exist in a
      font): a body and a shackle in the muted colour. */
   .dk-lock { display: none; flex: none; position: relative; width: 8px; height: 6px; margin: 5px 3px 0; border-radius: 1.5px; background: var(--muted); }
@@ -1651,6 +1670,32 @@
   .dk-sb-branch[hidden], .dk-sb-saved[hidden] { display: none; }
   .dk-sb-saved { flex: none; color: var(--ok); }
   .dk-sb-r { flex: none; display: flex; gap: 14px; margin-left: auto; }
+  /* The current line's blame when it does not fit inline (P6): after the branch and "Saved", the first thing cut. */
+  .dk-sb-blame {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate;
+    padding: 0; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer;
+  }
+  .dk-sb-blame[hidden] { display: none; }
+  .dk-sb-blame:hover { color: var(--fg); }
+  .dk-sb-blame:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  /* The inline blame: Monaco's injected text after the cursor line's end. No font of its own (editorblame.js measures it at the
+     editor's character width), 3ch off the code as the fit counts. */
+  .dk-blame-inline { margin-left: 3ch; color: var(--muted); }
+  /* The blame card (editorblame.js): a kit panel by the header, the status item or the inline text. */
+  .dk-bcard {
+    position: fixed; z-index: 40; box-sizing: border-box; width: min(380px, calc(100vw - 16px)); padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); color: var(--fg);
+    font: var(--w-regular) var(--t-sm)/var(--lh-sm) var(--font-ui); text-align: left;
+  }
+  .dk-bcard[hidden] { display: none; }
+  .dk-bcard-h { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .dk-bcard-sha { flex: none; color: var(--accent); font-family: var(--font-code); }
+  .dk-bcard-who { flex: 0 1 auto; min-width: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--w-semibold); unicode-bidi: isolate; }
+  .dk-bcard-mail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); unicode-bidi: isolate; }
+  .dk-bcard-chip { flex: none; padding: 0 6px; border: 1px solid var(--accent); border-radius: var(--r-chip); color: var(--accent); font-size: var(--t-xs); line-height: var(--lh-xs); }
+  .dk-bcard-when { margin-top: 2px; color: var(--muted); font-size: var(--t-xs); line-height: var(--lh-xs); }
+  .dk-bcard-sum { margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; unicode-bidi: isolate; }
+  .dk-bcard-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
   /* A file that is not text (dockfileview.js, #344): the view fills the tab, with its own .dk-sb under it. The status bar's left side is the
      facts (size, type, pixel size, length), cut at the right end; the right side, the image's zoom controls, keeps its words. */
   .dk-fv { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
