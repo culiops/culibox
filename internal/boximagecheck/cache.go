@@ -6,6 +6,7 @@ package boximagecheck
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -168,7 +169,8 @@ func Due(c *Cache, now time.Time, retryFailed bool) bool {
 // RunIfDue runs the check when this instance may ask the network and the cache is
 // due, and saves the answer. Otherwise it returns the cache as loaded (nil when
 // there is none). A cache from a newer CuliBox is (nil, err) and is never written.
-// A failed save still returns the fresh answer, with the error; the cache on disk
+// A check cut short by a cancelled context returns its answer with context.Canceled
+// and writes nothing. A failed save still returns the fresh answer, with the error; the cache on disk
 // is then still the old one, so the check is due again on the very next call.
 // Callers that call repeatedly (the server's hourly tick) must rate-limit
 // themselves, for instance by remembering the time of their last attempt in memory.
@@ -181,5 +183,11 @@ func RunIfDue(ctx context.Context, k Checker, dataDir string, in Inputs, retryFa
 		return c, nil
 	}
 	c = k.Check(ctx)
+	// A cancelled context is shutdown, not a registry that failed: saving the
+	// "unreachable" it produced would hold the check off for a day. A deadline that
+	// ran out is a real failure and is saved.
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return c, ctx.Err()
+	}
 	return c, SaveCache(dataDir, c)
 }

@@ -104,6 +104,9 @@ func imageCheckPass(cfg config.Config, dataDir string, k boximagecheck.Checker, 
 		ctx, cancel := context.WithTimeout(ctx, imageCheckPassTimeout)
 		defer cancel()
 		c, err := boximagecheck.RunIfDue(ctx, k, dataDir, in, false)
+		if errors.Is(err, context.Canceled) {
+			return // shutdown cut the check short: nothing was learned or saved, so nothing to log or count
+		}
 		// A fresh answer is one stamped at or after the start of this pass; a cache
 		// that was merely not due is older, and must not use up the day.
 		asked := c != nil && !c.CheckedAt.Before(start)

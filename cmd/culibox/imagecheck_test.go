@@ -283,3 +283,45 @@ func TestImageCheckPassErrorsNeverReachTheLog(t *testing.T) {
 		t.Fatalf("log = %q, want one line without the error text or path", out.String())
 	}
 }
+
+// Shutdown cancels a pass mid-request: no cache, no log line, and the day is not
+// used up, so the next start (or the next tick) asks again.
+func TestImageCheckPassCancelledIsNothing(t *testing.T) {
+	swapPublished(t, "")
+	dir := t.TempDir()
+	var hits atomic.Int32
+	inflight := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			inflight <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	now := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	k := boximagecheck.Checker{Client: srv.Client(), Registry: srv.URL, GitHubAPI: srv.URL, Now: func() time.Time { return now }}
+	var lines []string
+	pass := imageCheckPass(config.Config{}, dir, k, func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { pass(ctx); close(done) }()
+	<-inflight
+	cancel()
+	<-done
+	if len(lines) != 0 {
+		t.Fatalf("a cancelled pass logged %q", lines)
+	}
+	if _, err := os.Stat(filepath.Join(dir, boximagecheck.CacheFile)); !os.IsNotExist(err) {
+		t.Fatalf("a cache was written: %v", err)
+	}
+
+	now = now.Add(time.Minute) // far inside 24 h of the cancelled attempt
+	before := hits.Load()
+	pass(context.Background())
+	if hits.Load() == before {
+		t.Fatal("the cancelled pass used up the day")
+	}
+}

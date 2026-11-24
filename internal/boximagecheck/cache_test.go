@@ -298,3 +298,38 @@ func TestRunIfDueChecksAndSaves(t *testing.T) {
 		t.Fatalf("saved %+v", got)
 	}
 }
+
+// Shutdown cancels the context mid-check: the "unreachable" that produces is not
+// an answer, and saving it would park the check for a day.
+func TestRunIfDueCancelledWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	k := Checker{Client: srv.Client(), Registry: srv.URL, GitHubAPI: srv.URL, Now: func() time.Time { return t0 }}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := RunIfDue(ctx, k, dir, Inputs{CheckOn: true, Explicit: true}, false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, CacheFile)); !os.IsNotExist(err) {
+		t.Fatalf("a cache was written for a cancelled check: %v", err)
+	}
+}
+
+// A deadline that runs out is a real failure and is saved.
+func TestRunIfDueDeadlineIsSaved(t *testing.T) {
+	dir := t.TempDir()
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	k := Checker{Client: srv.Client(), Registry: srv.URL, GitHubAPI: srv.URL, Now: func() time.Time { return t0 }}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	c, err := RunIfDue(ctx, k, dir, Inputs{CheckOn: true, Explicit: true}, false)
+	if err != nil || c == nil || c.RegistryErr == "" {
+		t.Fatalf("RunIfDue: %v, %v", c, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, CacheFile)); err != nil {
+		t.Fatalf("no cache for a timed-out check: %v", err)
+	}
+}
