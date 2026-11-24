@@ -44,9 +44,9 @@ function sysBannerBuild(model) {
     dot.setAttribute("aria-hidden", "true");
     title.appendChild(dot);
   }
-  // The glyph by banner kind (#168): the unreachable one sits after the dot, the signed-out one is on its button below.
+  // The glyph by banner kind (#168): after the dot, on the title only (the action buttons stay words, G4 left-out j).
   const kindIcon = iconOf(ICON_SYS_BANNER, model.kind);
-  if (kindIcon && model.kind === "unreachable") title.appendChild(uiIcon(kindIcon, { size: 14 }));
+  if (kindIcon) title.appendChild(uiIcon(kindIcon, { size: 14 }));
   title.appendChild(document.createTextNode(model.title));
   root.appendChild(title);
   sysBannerBody = null;
@@ -65,7 +65,6 @@ function sysBannerBuild(model) {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "btn btn-sm" + (a.primary ? " btn-primary" : "");
-      if (kindIcon && model.kind === "signedout" && a.id === "signin") b.appendChild(uiIcon(kindIcon, { size: 14 }));
       b.appendChild(document.createTextNode(a.label));
       b.dataset.act = a.id;
       b.onclick = () => sysBannerAct(a.id);

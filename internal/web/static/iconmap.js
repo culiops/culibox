@@ -73,8 +73,8 @@ const ICON_DOCK_VIEW = iconMapOf({
 // The layout picker, by pane count (G4 1; 1 matches the shape drawn today, sidechrome.js; 4 follows the approved G4 legend n1).
 const ICON_LAYOUT = iconMapOf({ 1: "square", 2: "columns-2", 4: "layout-grid" });
 
-// The system banner's glyphs by banner kind (notifymodel.js sysBannerModel): unreachable draws it beside the dot in
-// its title, signedout on its "Sign in again" button. Paused and updated have no drawn glyph (G4's left-out `p`
+// The system banner's glyphs by banner kind (notifymodel.js sysBannerModel): both sit after the dot in the title
+// (the action buttons stay words). Paused and updated have no drawn glyph (G4's left-out `p`
 // was a proposal, not drawn), so they are not keys.
 const ICON_SYS_BANNER = iconMapOf({ unreachable: ICON_STATUS.unreachable, signedout: ICON_STATUS["signed-out"] });
 

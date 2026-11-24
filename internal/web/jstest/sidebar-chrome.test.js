@@ -484,27 +484,34 @@ test("the desktop row's ⋯ holds the ellipsis glyph, keeps its name, and is no 
   assert.equal(kb.title, "Session actions");
 });
 
-test("a desktop nested row's ↳ becomes corner-down-right at 12 (paintCompactRow), and stays aria-hidden", () => {
-  const arrow = new El("span");
-  arrow.className = "nest-arrow"; arrow.setAttribute("aria-hidden", "true"); arrow.textContent = "\u21B3";
-  const li = new El("li"); li.classList.add("drow"); li.classList.add("nested"); li.children.push(arrow);
-  const { sname, grow } = { sname: new El("div"), grow: new El("div") };
-  const ctx = {
-    document: { createElement: (t) => new El(t) }, Date, boxRuntime: "", window: { HOME_DIR: "" }, ...iconStubs(() => new El("svg")),
-    rowChip: () => null, acctBadge: () => null, awsBadge: () => null, tierBadge: () => null, rowSubline: () => ({ text: "" }),
-    rowMenuOpenFor: () => false, openSessionMenu() {}, openTerminal() {}, openPaneView: () => false, wmCopyLine: () => "", sessionWorkHome: () => "", handbackLine: () => null,
-  };
-  vm.runInNewContext(fn(app, "paintCompactRow") + "\npaintCompactRow(li, sname, grow, s, {});", Object.assign(ctx, { li, sname, grow, s: { id: "n", name: "n" } }));
-  assert.equal(arrow.text, "");
-  assert.equal(arrow.children.length, 1);
-  assert.equal(arrow.children[0].getAttribute("data-icon"), "corner-down-right");
-  assert.equal(arrow.children[0].getAttribute("width"), "12");
-  assert.equal(arrow.getAttribute("aria-hidden"), "true");
+test("a nested row's ↳ is drawn as corner-down-right at 12 where renderSession builds it, aria-hidden, with no text and no later swap", () => {
+  const rs = fn(app, "renderSession");
+  const at = rs.indexOf('arrow.className = "nest-arrow"');
+  assert.ok(at > 0, "the arrow is built in renderSession's nested branch");
+  const branch = rs.slice(rs.lastIndexOf("if (nested)", at), rs.indexOf("li.insertBefore(arrow, adot)", at));
+  assert.match(branch, /arrow\.setAttribute\("aria-hidden", "true"\)/);
+  assert.match(branch, /arrow\.append\(uiIcon\(ICON_ROW\.nested, \{ size: 12 \}\)\)/);
+  assert.ok(!/u21B3|↳"/.test(branch.replace(/\/\/.*$/gm, "")), "no ↳ text left in the branch");
+  assert.ok(!fn(app, "paintCompactRow").includes("nest-arrow"), "paintCompactRow no longer touches the arrow");
+  assert.equal(require("../static/iconmap.js").ICON_ROW.nested, "corner-down-right");
 });
 
-test("phone row keeps its text glyphs: renderSession writes ⋯ and ↳ as text, the swap is paintCompactRow's alone", () => {
+test("phone row keeps its text glyph: renderSession writes ⋯ as text, the swap is paintCompactRow's alone", () => {
   const rs = fn(app, "renderSession");
   assert.match(rs, /kb\.textContent = "⋯"/);
-  assert.match(rs, /arrow\.textContent = "\\u21B3"/);
   assert.ok(!/uiIcon|ICON_/.test(rs.slice(rs.indexOf("const kb = document.createElement"))), "no icon in the phone's ⋯ path");
+});
+
+// #168 fix round 1: the footer links are one line at every sidebar width (200 to 560).
+test("footer link buttons are inline-flex nowrap with a 6px glyph gap, and the row drops the glyphs when they do not fit", () => {
+  const css = read("desktop.css");
+  const rule = (sel) => { const m = new RegExp("(?:^|\\n)\\s*" + sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + " \\{([^}]*)\\}").exec(css); assert.ok(m, sel); return m[1]; };
+  const b = rule("#side-foot .side-links button");
+  assert.match(b, /display: inline-flex;/);
+  assert.match(b, /align-items: center;/);
+  assert.match(b, /gap: 6px;/);
+  assert.match(b, /white-space: nowrap;/);
+  assert.match(rule("#side-foot .xlinks"), /container-type: inline-size;/);
+  assert.match(css, /@container \(max-width: 239px\) \{ #side-foot \.side-links \.ui-icon \{ display: none; \} \}/);
+  assert.match(rule("#side-foot .side-links button[hidden]"), /display: none;/);
 });

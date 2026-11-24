@@ -255,8 +255,8 @@ test("R27: phone -> the Error line as today, even after a list loaded", async ()
   assert.strictEqual(p.list.classList.contains("sess-stale"), false);
 });
 
-// #168 S2: the banner glyphs. wifi-off sits after the dot on the unreachable title, log-in on the "Sign in again"
-// button, and paused / updated have no drawn glyph (G4's left-out proposal was not drawn).
+// #168 S2: the banner glyphs. wifi-off and log-in sit after the dot in their titles (the buttons stay words), and
+// paused / updated have no drawn glyph (G4's left-out proposal was not drawn).
 const iconsIn = (n) => {
   const out = [];
   const walk = (x) => { if (x.attrs && x.attrs["data-icon"]) out.push(x); (x.children || []).forEach(walk); };
@@ -283,15 +283,20 @@ test("banner glyphs: unreachable has wifi-off right after the dot in its title, 
   assert.strictEqual(iconsIn(slot).length, 1);
 });
 
-test("banner glyphs: signed out has log-in before the words of its Sign in again button, and none in the title", () => {
+test("banner glyphs: signed out has log-in right after the dot in its title, 14 px, and its button stays words", () => {
   const { box, slot } = page({ signedOut: true });
   box.sysBannerSync();
+  const title = slot.children[0].querySelector(".banner-title");
+  assert.strictEqual(title.children[0].className, "dot dot-detached");
+  assert.strictEqual(title.children[1].attrs["data-icon"], "log-in");
+  assert.strictEqual(title.children[1].attrs.width, "14");
+  assert.strictEqual(title.textContent, "Signed out");
   const btn = slot.children[0].querySelector(".btn");
-  assert.strictEqual(btn.children[0].attrs["data-icon"], "log-in");
-  assert.strictEqual(btn.children[0].attrs.width, "14");
+  assert.strictEqual(btn.children.length, 1, "only the text node");
+  assert.strictEqual(iconsIn(btn).length, 0);
   assert.strictEqual(btn.textContent, "Sign in again");
-  assert.strictEqual(iconsIn(slot.children[0].querySelector(".banner-title")).length, 0);
   assert.strictEqual(btn.dataset.act, "signin");
+  assert.strictEqual(iconsIn(slot).length, 1);
 });
 
 test("banner glyphs: paused and updated draw no glyph (updated's close keeps its text ✕)", () => {

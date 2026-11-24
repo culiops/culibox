@@ -2641,7 +2641,7 @@ function renderSession(s, opts) {
     const arrow = document.createElement("span");
     arrow.className = "nest-arrow";
     arrow.setAttribute("aria-hidden", "true");
-    arrow.textContent = "\u21B3"; // ↳
+    arrow.append(uiIcon(ICON_ROW.nested, { size: 12 })); // ↳ as the corner-down-right glyph (#168); nested is desktop-only
     li.insertBefore(arrow, adot);
   }
 
@@ -2783,9 +2783,6 @@ function paintCompactRow(li, sname, grow, s, conn) {
   if (aws) facts.push("AWS: " + aws.title);
   if (s.clone_of) facts.push(wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s));
   li.title = facts.join("\n");
-  // A nested shell's ↳ (written as text by renderSession, which the phone shares) is the corner-down-right glyph on the desktop (#168).
-  const nestArrow = li.querySelector(".nest-arrow");
-  if (nestArrow) nestArrow.replaceChildren(uiIcon(ICON_ROW.nested, { size: 12 }));
   // No per-session cost on the row (the M1 frames draw none; founder 2026-11-08): the pane
   // header's meta and Analytics show it.
   if (chip) {
