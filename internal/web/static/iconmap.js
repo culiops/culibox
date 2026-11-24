@@ -166,9 +166,18 @@ const ICON_ACT_KIND = iconMapOf({ you: "message-square", clear: "eraser", ask: "
 // A kind with no entry draws no glyph (left-out k).
 const ICON_TOOL_KIND = iconMapOf({ mcp_server: "server", plugin: "puzzle", mcp_tool: "plug", skill: "book-open" });
 
+// The file glyph by fileIconKind's declared kind (filekinds.js; G5 3, 20-37). A markdown file and a PDF both read as a text file;
+// the kinds differ only where the extension tables say so.
+const ICON_FILE_KIND = iconMapOf({
+  dir: "folder", "dir-open": "folder-open", code: "file-code", script: "file-terminal", data: "file-braces", config: "file-cog",
+  markdown: "file-text", lock: "file-lock", image: "file-image", video: "file-video-camera", audio: "file-headphone", pdf: "file-text",
+  archive: "file-archive", database: "file-database", notebook: "notebook-text", document: "file-type",
+  spreadsheet: "file-spreadsheet", slides: "presentation", ebook: "book-open", file: "file",
+});
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    ICON_TOOL_KIND,
+    ICON_TOOL_KIND, ICON_FILE_KIND,
     ICON_AUDIT_KIND, ICON_CRED_PROVIDER, ICON_ACT_TOOL, ICON_ACT_TOOL_OTHER, ICON_ACT_KIND,
     emptyState, ICON_EMPTY, ICON_SETTINGS_TAB, ICON_AGENT_PROVIDER,
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_REACH,

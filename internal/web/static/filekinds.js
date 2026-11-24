@@ -44,6 +44,58 @@ function dockKindOf(ext) {
   return "text";
 }
 
+// ---- the file's glyph (#168 G5 3, 20-37) ----
+// fileIconKind decides ONE declared kind from the name alone (never the content), then ICON_FILE_KIND (iconmap.js) names its
+// glyph. Precedence: directory, exact name, no extension (or a leading-dot-only name), FILE_ICON_EXT, the viewer kinds of
+// dockKindOf (image / video / audio / pdf), FILE_CARD_KIND for the card types, else "file". The tables have no prototype and
+// are read by own key, so a name such as `constructor` or `a.__proto__` is a plain file.
+const toTable = (kind, exts) => {
+  const t = Object.create(null);
+  for (const e of exts.split(" ")) t[e] = kind;
+  return t;
+};
+const FILE_ICON_EXT = Object.freeze(Object.assign(Object.create(null),
+  toTable("code", "go js mjs cjs css html htm py"), toTable("script", "sh bash zsh"), toTable("data", "json"),
+  toTable("config", "yml yaml toml ini conf tf tfvars hcl"), toTable("markdown", "md markdown"), toTable("lock", "lock sum")));
+// One entry per CARD_EXTS extension (a jstest keeps the two in step).
+const FILE_CARD_KIND = Object.freeze(Object.assign(Object.create(null),
+  toTable("archive", "zip tar gz tgz 7z rar xz bz2 zst"), toTable("database", "sqlite sqlite3 db"), toTable("notebook", "ipynb"),
+  toTable("document", "doc docx odt"), toTable("spreadsheet", "xls xlsx ods"), toTable("slides", "ppt pptx odp"),
+  toTable("ebook", "epub mobi azw3")));
+// Names whose kind is the whole name, not an extension (lower-cased).
+const FILE_ICON_NAME = Object.freeze(Object.assign(Object.create(null),
+  toTable("config", ".gitignore .gitattributes .gitmodules dockerfile containerfile makefile")));
+
+const ownKind = (table, key) => (Object.prototype.hasOwnProperty.call(table, key) ? table[key] : "");
+
+function fileIconKind(name, isDir, open) {
+  if (isDir) return open ? "dir-open" : "dir";
+  const n = String(name || "").toLowerCase();
+  const exact = ownKind(FILE_ICON_NAME, n);
+  if (exact) return exact;
+  if (n.startsWith("dockerfile.")) return "config";
+  const dot = n.lastIndexOf(".");
+  if (dot <= 0) return "file"; // no extension, or only a leading dot (.env)
+  const ext = n.slice(dot + 1);
+  if (!ext) return "file";
+  const byExt = ownKind(FILE_ICON_EXT, ext);
+  if (byExt) return byExt;
+  const dk = dockKindOf(ext);
+  if (dk === "image" || dk === "video" || dk === "audio" || dk === "pdf") return dk;
+  return ownKind(FILE_CARD_KIND, ext) || "file";
+}
+
+// uiIcon and ICON_FILE_KIND are page globals (svgicon.js, iconmap.js); under node they are required.
+const fileIconDeps = () => (typeof uiIcon === "function" && typeof ICON_FILE_KIND !== "undefined"
+  ? { uiIcon, ICON_FILE_KIND }
+  : { uiIcon: require("./svgicon.js").uiIcon, ICON_FILE_KIND: require("./iconmap.js").ICON_FILE_KIND });
+
+// fileIcon: the kind's glyph as an <svg> of `size` px (uiIcon's default when omitted).
+function fileIcon(name, isDir, open, size) {
+  const d = fileIconDeps();
+  return d.uiIcon(d.ICON_FILE_KIND[fileIconKind(name, isDir, open)], { size });
+}
+
 // fileTypeLabel: the type in words for the card's meta line. `binary` only
 // matters for the wording when there is nothing better: no extension at all
 // ("Binary file" if it is not text, else "File": a too-large text file).
@@ -121,5 +173,5 @@ function zoomScroll({ stageW, stageH, nw, nh, s0, s1, left, top, px, py }) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { dockKindOf, fileTypeLabel, fileTypeShort, fmtModified, ZOOM_STEPS, zoomStep, fitScale, wheelScale, zoomScroll };
+  module.exports = { CARD_EXTS, FILE_ICON_EXT, FILE_CARD_KIND, fileIconKind, fileIcon, dockKindOf, fileTypeLabel, fileTypeShort, fmtModified, ZOOM_STEPS, zoomStep, fitScale, wheelScale, zoomScroll };
 }
