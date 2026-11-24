@@ -159,7 +159,7 @@ func TestProxyFollowsTheProfileEdit(t *testing.T) {
 			t.Fatalf("policy rows = %q", policyRows)
 		}
 	}
-	if policyRows[0] != "+pypi.org" || policyRows[1] != "-pypi.org closed:1" {
+	if policyRows[0] != "+pypi.org" || policyRows[1] != "closed:1 -pypi.org" {
 		t.Fatalf("policy rows = %q", policyRows)
 	}
 }

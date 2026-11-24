@@ -72,6 +72,11 @@ func TestLauncherLiveEgressFor(t *testing.T) {
 			t.Fatalf("%s: %v %v %v, want fail closed", name, a, o, ok)
 		}
 	}
+	// A profile naming no tier on a host-default instance is not "removed".
+	l.SetDefaultRuntime(config.RuntimeHost)
+	if a, o, ok := l.LiveEgressFor("dflt"); !ok || a != nil || o {
+		t.Fatalf("host-default dflt: %v %v %v", a, o, ok)
+	}
 	// Renamed: the old name is gone.
 	l.SetAgents([]config.AgentConfig{{Name: "c2", Bin: "claude", EgressAllow: []string{"pkg.example"}}})
 	if _, _, ok := l.LiveEgressFor("c"); ok {

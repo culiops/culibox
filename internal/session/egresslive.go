@@ -311,6 +311,36 @@ func newEgressLive(spawn egressPolicy, md *egressLiveMeta) egressLive {
 	return l
 }
 
+// joinBoxEgressLocked lowers a session about to be published into its box to
+// the meet of its own policy and the policy every live member of that box
+// applies now, so a co-tenant never borrows a policy wider than the box's
+// through the newcomer's token in the moment before refreshEgressBox runs
+// (#95). It returns the sidecar record when the policy was lowered, else nil.
+// m.mu must be held (m.mu -> s.mu is the lock order).
+func (m *Manager) joinBoxEgressLocked(sess *Session, now time.Time) *egressLiveMeta {
+	if sess.Runtime != config.RuntimeBox || sess.Box == "" || sess.egressFixed() {
+		return nil
+	}
+	own := sess.egress.applied
+	ps := []egressPolicy{own}
+	for _, s := range m.sessions {
+		if s == sess || s.Box != sess.Box || s.Runtime != config.RuntimeBox || s.egressFixed() {
+			continue
+		}
+		s.mu.Lock()
+		if !s.exited {
+			ps = append(ps, s.egressLocked().applied)
+		}
+		s.mu.Unlock()
+	}
+	applied := meet(ps)
+	if applied.equal(own) {
+		return nil
+	}
+	sess.egress.applied, sess.egress.changed = applied, now
+	return &egressLiveMeta{egressPolicy: applied, Changed: now}
+}
+
 // egressLiveMeta is the sidecar's record of a session's applied policy once it
 // has changed (#95); absent until then and in records from before.
 type egressLiveMeta struct {

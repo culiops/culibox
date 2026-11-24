@@ -2951,6 +2951,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.ParentID = spec.ParentID
 	sess.workspace = wsPath
 	sess.transcriptKey = transcriptKey
+	// Never wider than the box it joins (#95): its token works from the
+	// publication just below, before refreshEgressBox can run. m.mu is held.
+	liveMeta := m.joinBoxEgressLocked(sess, created)
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
@@ -2959,7 +2962,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Workspace: wsPath, TranscriptKey: transcriptKey, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), HostBroker: heldHost, Clone: cloneInfo.copy(), Exclusive: exclusive,
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, EgressLive: liveMeta, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), HostBroker: heldHost, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, WorkspaceRoot: wsRoot, LockedFiles: slices.Clone(lockedFiles),
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
@@ -3490,6 +3493,9 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 			m.releaseSessionBox(sess) // announces the exit scan first (handbackBegin), whichever path releases
 			m.releaseSessionHost(sess)
 			m.brokerRevoke(sess)
+			// The box's meet no longer counts this session (#95): a widening
+			// it held back applies now, not after the retention.
+			go m.refreshEgressBox(sess)
 			go m.returnWork(sess, ReturnOnExit)
 			go func() {
 				defer sess.takeHandbackEnd()()

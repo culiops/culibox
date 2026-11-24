@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -398,5 +399,84 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// I1: the newcomer is never wider than its box between publication and the
+// refresh that follows it. The refresh is held off by holding egressMu.
+func TestSpawnIsNeverWiderThanItsBoxBeforeTheRefresh(t *testing.T) {
+	l := newLiveLauncher()
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	m, _, eg := liveManager(t, l, path)
+	m.RefreshEgress()
+	a := spawnLive(t, m, "gh")
+	l.set("gh", nil, false)
+	m.RefreshEgress()
+	eg.reset()
+
+	m.egressMu.Lock()
+	var unlock sync.Once
+	release := func() { unlock.Do(m.egressMu.Unlock) }
+	t.Cleanup(release) // runs before the Kill cleanups, so a failure here never deadlocks them
+	done := make(chan *Session, 1)
+	go func() {
+		s, err := m.Spawn(launcher.SpawnSpec{Agent: "gh2", Cwd: t.TempDir()})
+		if err != nil {
+			t.Error(err)
+		}
+		done <- s
+	}()
+	var b *Session
+	waitFor(t, "gh2 published", func() bool {
+		for _, in := range m.List() {
+			if in.Agent == "gh2" {
+				b, _ = m.Get(in.ID)
+				return b != nil
+			}
+		}
+		return false
+	})
+	assertPolicy(t, b, nil, false) // the box's policy, not gh2's pkg.example
+	if b.Box != a.Box {
+		t.Fatalf("boxes %q %q", a.Box, b.Box)
+	}
+	release()
+	if s := <-done; s != nil {
+		t.Cleanup(func() { _ = m.Kill(s.ID) })
+	}
+	if md := sidecarEntry(t, path, b.ID); md.EgressLive == nil || md.EgressLive.Allow != nil || md.EgressLive.Open {
+		t.Fatalf("sidecar live policy = %+v, want the box's", md.EgressLive)
+	}
+	assertPolicy(t, b, nil, false)
+	if c := b.Info().EgressChange; c == nil || c.Reason != "shared_box" || !reflect.DeepEqual(c.Held, []string{"pkg.example"}) {
+		t.Fatalf("change = %+v", c)
+	}
+}
+
+// M2: a co-tenant whose agent exits stops holding the box back at once, not
+// when the retention prunes it.
+func TestExitedCoTenantStopsHoldingTheBox(t *testing.T) {
+	l := newLiveLauncher()
+	// Ephemeral (no backend): the agent is the daemon's own child, so killing
+	// it is an exit, not a detach.
+	m := NewManager(l, nil, 1<<16, time.Minute)
+	m.SetBoxes(&fakeBoxes{})
+	m.SetBroker(&fakeBrokerHooks{})
+	m.SetEgress(&liveEgressHooks{})
+	m.RefreshEgress()
+	a := spawnLive(t, m, "gh")
+	b := spawnLive(t, m, "gh2")
+	l.set("gh", nil, false)
+	m.RefreshEgress()
+	assertPolicy(t, b, nil, false)
+	if err := a.signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "gh2 back on its own policy", func() bool {
+		x, _ := b.EgressPolicy()
+		return reflect.DeepEqual(x, []string{"pkg.example"})
+	})
+	if _, ok := m.Get(a.ID); !ok {
+		t.Fatal("the exited session should still be retained")
 	}
 }

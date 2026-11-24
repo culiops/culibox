@@ -173,7 +173,7 @@ func TestPolicyChangedAuditsAndCloses(t *testing.T) {
 		}
 		return false
 	})
-	if got.SessionID != "s1" || got.Box != "box-1" || got.Host != "-pypi.org closed:1" || got.Port != 0 {
+	if got.SessionID != "s1" || got.Box != "box-1" || got.Host != "closed:1 -pypi.org" || got.Port != 0 {
 		t.Fatalf("row = %+v", got)
 	}
 	// Widening closes nothing and still writes its row.

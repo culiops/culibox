@@ -335,7 +335,8 @@ func (p *Proxy) Reconcile(id string) int {
 func (p *Proxy) PolicyChanged(id, box, summary string) int {
 	n := p.Reconcile(id)
 	if n > 0 {
-		summary = strings.TrimSpace(summary + " closed:" + strconv.Itoa(n))
+		// First: the host column is cut at 253 bytes, and the count must survive.
+		summary = strings.TrimSpace("closed:" + strconv.Itoa(n) + " " + summary)
 	}
 	p.record(Row{Time: p.o.Now(), SessionID: id, Box: box, Host: cleanHost(summary), Outcome: OutcomePolicyChanged})
 	return n
