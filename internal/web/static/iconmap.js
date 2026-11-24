@@ -67,6 +67,15 @@ const ICON_MENU = iconMapOf({
   bringhome: "arrow-down-to-line", check: "check", download: "download", upload: "upload", refresh: "refresh-cw",
   collapse: "chevrons-down-up", insert: "arrow-right-to-line", "folder-plus": "folder-plus",
   restart: "rotate-cw", "replies-on": "message-square-reply", "replies-off": "message-square-off",
+  // The Credentials page's Add credential menu (G1 18-20), by the row's declared kind (credAddItems): one concept, one glyph.
+  aws: ICON_RESOURCE.aws, github: ICON_RESOURCE.github, token: ICON_RESOURCE.token,
+});
+
+// A Credentials token section's provider mark (G1 15, 17), keyed by the catalog template id a token entry declares
+// (internal/credtemplates/catalog.go). The provider field is free text the user types and never picks a mark; `other`
+// has no entry, so a section of it (or of a token an older server sent with no template) draws ICON_RESOURCE.token.
+const ICON_TOKEN_TEMPLATE = iconMapOf({
+  "github-pat": "si:github", sentry: "si:sentry", grafana: "si:grafana", datadog: "si:datadog", pagerduty: "si:pagerduty",
 });
 
 // Where the shell bar docks a terminal. No legend covers it: the picks (port) match today's drawings (tabs.js).
@@ -122,6 +131,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     emptyState, ICON_EMPTY,
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_REACH,
-    ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_TOAST, ICON_ROW, ICON_PALETTE_KIND,
+    ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_TOKEN_TEMPLATE, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_TOAST, ICON_ROW, ICON_PALETTE_KIND,
   };
 }

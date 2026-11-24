@@ -10,7 +10,7 @@ const {
   credTableRows, credTableHead, awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
   awsGateView, awsGateBoxEmpty, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
   GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
-  credTablesAt, AWS_REGIONS, awsRegionSuggest, awsProfileSuggest,
+  credTablesAt, AWS_REGIONS, awsRegionSuggest, awsProfileSuggest, credGroupIcon,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -1044,4 +1044,41 @@ test("AWS_REGIONS: every entry passes the server's region format (awsscope.regio
 test("awsProfileSuggest: selectable profile names only", () => {
   assert.deepStrictEqual(awsProfileSuggest([{ name: "a", selectable: true }, { name: "b", selectable: false }, { name: "c", selectable: true }]), ["a", "c"]);
   assert.deepStrictEqual(awsProfileSuggest(undefined), []);
+});
+
+// --- #168 G1: the section head's glyph, from declared fields only ------------------------------------------------------------
+const tokGroup = (entries) => ({ key: "token:x", title: "X", entries });
+
+test("section glyph from template: a token section shows a provider mark only when every entry has a catalog template of one glyph", () => {
+  assert.strictEqual(credGroupIcon(tokGroup([{ template: "sentry" }])), "si:sentry");
+  assert.strictEqual(credGroupIcon(tokGroup([{ template: "github-pat" }])), "si:github");
+  assert.strictEqual(credGroupIcon(tokGroup([{ template: "grafana" }, { template: "grafana" }])), "si:grafana");
+  for (const [t, g] of [["datadog", "si:datadog"], ["pagerduty", "si:pagerduty"]]) assert.strictEqual(credGroupIcon(tokGroup([{ template: t }])), g);
+  assert.strictEqual(credGroupIcon(tokGroup([{ template: "sentry" }, { template: "other" }])), "key-round", "a mixed section is generic");
+  assert.strictEqual(credGroupIcon(tokGroup([{ template: "sentry" }, {}])), "key-round", "an entry from an older server (no template) is generic");
+  assert.strictEqual(credGroupIcon(tokGroup([{ template: "sentry" }, { template: "grafana" }])), "key-round", "two different marks are generic");
+  assert.strictEqual(credGroupIcon(tokGroup([{ template: "other" }])), "key-round");
+  assert.strictEqual(credGroupIcon(tokGroup([])), "key-round");
+});
+
+test("section glyph: the free-text provider never picks a mark, and hostile templates fall back", () => {
+  assert.strictEqual(credGroupIcon(tokGroup([{ provider: "sentry" }])), "key-round");
+  assert.strictEqual(credGroupIcon(tokGroup([{ provider: "sentry", template: "" }])), "key-round");
+  for (const t of ["constructor", "__proto__", "toString", "hasOwnProperty", "SENTRY", null, 7, {}, ["sentry"]]) {
+    assert.strictEqual(credGroupIcon(tokGroup([{ template: t }])), "key-round", String(t));
+  }
+  // the key is the group's own, whatever the entries say
+  assert.strictEqual(credGroupIcon({ key: "token:sentry", title: "Sentry", entries: [{ provider: "sentry" }] }), "key-round");
+});
+
+test("section glyph: AWS and GitHub Apps by group key, Stored values and Legacy secrets none, unknown keys none", () => {
+  assert.strictEqual(credGroupIcon({ key: "aws", entries: [] }), "cloud");
+  assert.strictEqual(credGroupIcon({ key: "github", entries: [] }), "si:github");
+  assert.strictEqual(credGroupIcon({ key: "values", entries: [] }), "", "G1 left-out p");
+  assert.strictEqual(credGroupIcon({ key: "legacy", entries: [] }), "", "G1 left-out q");
+  for (const k of ["constructor", "__proto__", "", "tokens", undefined]) assert.strictEqual(credGroupIcon({ key: k, entries: [] }), "", String(k));
+  assert.strictEqual(credGroupIcon(null), "");
+  assert.strictEqual(credGroupIcon({ key: "aws" }), "cloud", "no entries field");
+  const gs = credGroups(view({ tokens: [tok("a", "sentry", { template: "sentry" }), tok("b", "acme")] }));
+  assert.deepStrictEqual(gs.map((g) => credGroupIcon(g)), ["cloud", "si:github", "key-round", "si:sentry", ""]);
 });

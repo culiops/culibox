@@ -73,7 +73,11 @@ search-x
 settings
 shield
 si:claude
+si:datadog
 si:github
+si:grafana
+si:pagerduty
+si:sentry
 square
 square-equal
 square-split-horizontal

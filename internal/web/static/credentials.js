@@ -131,6 +131,33 @@ function credGroups(view) {
   return out;
 }
 
+// credIconMaps: iconmap.js's lookup and maps, a page global in the browser and required under node (as accessmodel.js does).
+const credIconMaps = () => (typeof iconOf === "function" ? { iconOf, ICON_RESOURCE, ICON_TOKEN_TEMPLATE } : require("./iconmap.js"));
+
+// credGroupIcon: the glyph that heads a group (#168 G1 13-17), from declared fields only. AWS and GitHub Apps by the group key; a token
+// section draws a provider mark only when EVERY entry declares a catalog template (token.template) that maps to one same mark, else
+// the generic token glyph. The provider is free text and never picks a mark, and an older server's entry has no template. Stored
+// values and Legacy secrets are left out (G1 p, q) and an unknown key has none: "" means no glyph.
+function credGroupIcon(group) {
+  const m = credIconMaps();
+  const key = group && typeof group.key === "string" ? group.key : "";
+  if (key === "aws" || key === "github") return m.iconOf(m.ICON_RESOURCE, key);
+  if (!key.startsWith("token:")) return "";
+  const generic = m.iconOf(m.ICON_RESOURCE, "token");
+  const entries = Array.isArray(group.entries) ? group.entries : [];
+  const marks = new Set(entries.map((e) => (e && typeof e.template === "string" ? m.iconOf(m.ICON_TOKEN_TEMPLATE, e.template) : "")));
+  return marks.size === 1 && !marks.has("") ? [...marks][0] : generic;
+}
+
+// credTitleNode: a heading element whose text is `text`, with `glyph` (when there is one) drawn first at the heading size (16).
+function credTitleNode(tag, cls, text, glyph) {
+  if (!glyph) return credEl(tag, cls, text);
+  const el = credEl(tag, cls);
+  el.appendChild(uiIcon(glyph, { size: 16 }));
+  el.appendChild(document.createTextNode(text));
+  return el;
+}
+
 const pad2 = (n) => String(n).padStart(2, "0");
 
 // checkedText: "checked 14:02 today" or "checked 2026-10-18", "" when there is no time.
@@ -897,7 +924,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
     tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
-    credGroups, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
+    credGroups, credGroupIcon, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
     providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, credTableRows, credTableHead, awsGateBoxEmpty,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
     AWS_REGIONS, awsRegionSuggest, awsProfileSuggest,
@@ -1356,9 +1383,9 @@ function credValuesFold(g) {
 
 // credSecHead: a section's head on the page's tables (frame M2.3): the kit's .card-head with the title and the count as a
 // chip beside it. No add button: the page head's "Add credential" menu is the one add.
-function credSecHead(title, count) {
+function credSecHead(title, count, glyph) {
   const h = credEl("div", "sec-h card-head");
-  h.append(credEl("h2", "t-md w-600", title), credEl("span", "chip tnum", String(count)));
+  h.append(credTitleNode("h2", "t-md w-600", title, glyph), credEl("span", "chip tnum", String(count)));
   return h;
 }
 
@@ -1372,7 +1399,7 @@ function credSection(g) {
   sec.dataset.group = g.key;
   sec.setAttribute("aria-label", g.title);
   if (tables) {
-    sec.appendChild(credSecHead(g.title, g.entries.length));
+    sec.appendChild(credSecHead(g.title, g.entries.length, credGroupIcon(g)));
   } else {
     const h = credEl("div", "sec-h");
     const title = credEl("span", "grow", g.title + " ");
@@ -1601,7 +1628,7 @@ function credAddMenuAttach(btn) {
   pop.setAttribute("aria-label", "Add credential");
   pop.hidden = true;
   for (const it of credAddItems()) {
-    pop.appendChild(kitMenuButton(it.label, "", false, () => {
+    pop.appendChild(kitMenuButton(it.label, it.kind, false, () => {
       // Focus goes to the trigger first, so an add that does not open (its error is in the tab's error line) leaves it there and
       // not on the menu row that has just closed. An add that does open draws over the list and hides the trigger
       // (credAddMenuSync): credAddRun then moves focus into the flow once it has drawn (credFlowFocus), and credAddMenuRefocus gives
@@ -3653,7 +3680,8 @@ async function credAppForm(entry, opts) {
   const sec = credEl("section", "sec");
   sec.setAttribute("aria-label", "GitHub App");
   const h = credEl("div", "sec-h");
-  h.appendChild(credEl("span", "grow", edit ? entry.name : "GitHub App"));
+  // The Edit heading is only the entry's name: on the desktop page the GitHub kind is said once, by a glyph (G1 21). Not on a phone's modal.
+  h.appendChild(credTitleNode("span", "grow", edit ? entry.name : "GitHub App", edit && credPageMode() ? credGroupIcon({ key: "github" }) : ""));
   const grid = credEl("div", "frow");
   const nm = credField(uid + "-name", "App name", { value: edit ? entry.name : "", readonly: edit, max: 64, placeholder: "my-bot" });
   const cid = credField(uid + "-cid", "Client ID", { value: edit ? entry.client_id || "" : "", placeholder: "Iv1.…", max: 100 });
