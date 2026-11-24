@@ -92,7 +92,8 @@ func addWorktree(t *testing.T, common, name, wt string) {
 // Worktrees finds a linked worktree wherever it lives: beside the repository, under .worktrees, under
 // .claude/worktrees. Relative pointers (git worktree add --relative-paths) count too, both ways.
 func TestWorktreesSiblingAndNested(t *testing.T) {
-	base := t.TempDir()
+	// git writes the checkout's real path into both pointers (measured 2026-11-24 with Apple git 2.50.1: /private/tmp/..., /private/var/...), and a temp dir on macOS sits under the /var link, so the fixture uses the real path too.
+	base := real(t, t.TempDir())
 	root := filepath.Join(base, "proj")
 	common := filepath.Join(root, ".git")
 	mkdir(t, common)
@@ -119,7 +120,8 @@ func TestWorktreesSiblingAndNested(t *testing.T) {
 // Everything in <common>/worktrees is written by whoever owns the repository (an agent): a pointer that is not
 // answered by the checkout it names, a link, a FIFO, a huge file or a relative path is skipped, and nothing blocks.
 func TestWorktreesHostile(t *testing.T) {
-	base := t.TempDir()
+	// git writes the checkout's real path into both pointers (measured 2026-11-24 with Apple git 2.50.1: /private/tmp/..., /private/var/...), and a temp dir on macOS sits under the /var link, so the fixture uses the real path too.
+	base := real(t, t.TempDir())
 	root := filepath.Join(base, "proj")
 	common := filepath.Join(root, ".git")
 	good := filepath.Join(base, "good")
@@ -175,7 +177,8 @@ func TestWorktreesHostile(t *testing.T) {
 
 // <common>/worktrees itself being a link is refused whole; and the directory read is bounded.
 func TestWorktreesLinkedDirAndBound(t *testing.T) {
-	base := t.TempDir()
+	// git writes the checkout's real path into both pointers (measured 2026-11-24 with Apple git 2.50.1: /private/tmp/..., /private/var/...), and a temp dir on macOS sits under the /var link, so the fixture uses the real path too.
+	base := real(t, t.TempDir())
 	common := filepath.Join(base, "proj", ".git")
 	store := filepath.Join(base, "store")
 	addWorktree(t, store, "a", filepath.Join(base, "a"))
@@ -267,7 +270,8 @@ func TestWorkspaceRootMainCheckout(t *testing.T) {
 }
 
 func TestWorkspaceRootLinkedWorktree(t *testing.T) {
-	root := t.TempDir()
+	// git writes the checkout's real path into both pointers (measured 2026-11-24 with Apple git 2.50.1: /private/tmp/..., /private/var/...), and a temp dir on macOS sits under the /var link, so the fixture uses the real path too.
+	root := real(t, t.TempDir())
 	repo := filepath.Join(root, "repo")
 	mkdir(t, filepath.Join(repo, ".git", "worktrees", "wt"))
 	wt := filepath.Join(root, "wt")
@@ -453,5 +457,31 @@ func TestWorkspaceRootJudgesPointerBeforeTouching(t *testing.T) {
 		if p == outside || strings.HasPrefix(p, outside+"/") || strings.HasPrefix(p, filepath.Join(ws, "evil")+"/") {
 			t.Errorf("touched %s: a path the pointer chose outside the checkout's repository", p)
 		}
+	}
+}
+
+// A pointer spelled through a link (git never writes one: it records real paths) is not followed, even when the
+// link only sits above the checkout: Worktrees walks the path it was given link-free from "/".
+func TestWorktreesPointerThroughALinkIsSkipped(t *testing.T) {
+	base := real(t, t.TempDir())
+	root := filepath.Join(base, "proj")
+	common := filepath.Join(root, ".git")
+	mkdir(t, common)
+	realdir := filepath.Join(base, "realdir")
+	mkdir(t, realdir)
+	if err := os.Symlink(realdir, filepath.Join(base, "lnk")); err != nil {
+		t.Fatal(err)
+	}
+	// The checkout is real, but its gitdir entry names it through base/lnk.
+	wt := filepath.Join(realdir, "wt")
+	addWorktree(t, common, "wt", wt)
+	write(t, filepath.Join(common, "worktrees", "wt", "gitdir"), filepath.Join(base, "lnk", "wt", ".git")+"\n")
+	if got := Worktrees(common, 64, all); len(got) != 0 {
+		t.Fatalf("Worktrees = %v, want none (the pointer goes through a link)", got)
+	}
+	// The same checkout named by its real path is found.
+	write(t, filepath.Join(common, "worktrees", "wt", "gitdir"), filepath.Join(wt, ".git")+"\n")
+	if got := Worktrees(common, 64, all); len(got) != 1 || got[0] != wt {
+		t.Fatalf("Worktrees = %v, want [%s]", got, wt)
 	}
 }
