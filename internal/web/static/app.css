@@ -1,7 +1,8 @@
     /* Symbols only — no letterforms. It is a FALLBACK at the end of every font
        stack, so ordinary text never reaches it and only icon codepoints do.
        The Mono variant specifically: its glyphs are single-width, and a
-       proportional fallback would break xterm's character-cell measurement. */
+       proportional fallback would break xterm's character-cell measurement.
+       Symbols Nerd Font now serves only the xterm fallback (terminal-tab.js:422-427) and the frozen phone UI (the Files tree glyphs and the header settings gear). The desktop UI draws no Nerd glyph since #168. */
     @font-face {
       font-family: "Symbols Nerd Font";
       src: url("/vendor/symbols-nerd-font-subset.ttf") format("truetype");
@@ -949,6 +950,9 @@
        character cells or a wide glyph shifts every name in the column. */
     .ft-icon { flex: none; width: 2ch; text-align: center; font-family: "Symbols Nerd Font"; color: var(--muted); }
     .ft-node.dir .ft-icon { color: var(--accent); }
+    /* The tree draws the glyph its width shows (filetree.js): the phone's Nerd text, or the desktop's Lucide svgs, which only
+       desktop.css shows; the phone never shows one, even from a row drawn before a crossing redrew it. */
+    .ft-icon > .ui-icon, .ft-more > .ui-icon, .ft-chev { display: none; }
     /* Box-drawing, so it must sit on the character grid: no letter-spacing, no
        ellipsis, never shrink. --border would measure 1.38 here and vanish (the
        mistake the status-line separators made); full --muted at 5.65 competes

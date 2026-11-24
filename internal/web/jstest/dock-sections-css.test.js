@@ -37,7 +37,7 @@ test("each section's header has a chevron: a real button with aria-expanded, nam
   assert.match(tr, /^<button /);
   for (const a of ['type="button"', 'class="dk-chev"', 'aria-expanded="true"', 'aria-controls="files-pane"', 'aria-label="Folder tree"', 'title="Collapse the folder tree"']) assert.ok(tr.includes(a), "tree chevron: " + a);
   // The root name keeps opening the root picker: the chevron is a separate control before it, in one header row.
-  assert.match(tree, /<div class="dk-roothead"><button id="dock-tree-chev"[^>]*><\/button><button id="dock-root" /);
+  assert.match(tree, /<div class="dk-roothead"><button id="dock-tree-chev"[^>]*>(?:<svg[^>]*><\/svg>){2}<\/button><button id="dock-root" /);
 });
 
 test("the divider is a focusable horizontal separator between the sections, ahead of the root header", () => {
@@ -94,9 +94,17 @@ test("founder Q1: the grips' pill shows on hover, keyboard focus and drag only, 
   }
 });
 
-test("the chevron is the tree's own glyph, turned when open, with the kit's focus ring", () => {
-  assert.match(rulesFor(css, ".dk-chev::before"), /content:\s*"\\203A"/);
-  assert.match(rulesFor(css, '.dk-chev[aria-expanded="true"]::before'), /transform:\s*rotate\(90deg\)/);
+test("the chevron is the tree's own glyph (two Lucide svgs, aria-expanded shows one), with the kit's focus ring", () => {
+  // #168 G5 2: the CSS "\203A" turned 90deg became chevron-right / chevron-down, both in the markup.
+  assert.ok(!/\.dk-chev::before/.test(stripComments(css)), "no CSS text chevron is left");
+  for (const id of ["dock-chg-chev", "dock-tree-chev"]) {
+    const btn = tree.slice(tree.indexOf('<button id="' + id + '"'), tree.indexOf("</button>", tree.indexOf('<button id="' + id + '"')));
+    assert.match(btn, /<svg data-uicon="chevron-right" class="dk-chev-r" width="14" height="14" aria-hidden="true"><\/svg><svg data-uicon="chevron-down" class="dk-chev-d" width="14" height="14" aria-hidden="true"><\/svg>/, id);
+  }
+  assert.match(rulesFor(css, ".dk-chev > .ui-icon"), /display:\s*block/);
+  assert.match(rulesFor(css, '.dk-chev[aria-expanded="true"] > .dk-chev-r'), /display:\s*none/, "open: the right chevron goes");
+  assert.match(rulesFor(css, ".dk-chev > .dk-chev-d"), /display:\s*none/, "closed: the down chevron is hidden");
+  assert.match(rulesFor(css, '.dk-chev[aria-expanded="true"] > .dk-chev-d'), /display:\s*block/, "open: the down chevron shows");
   assert.match(rulesFor(css, ".dk-chev:focus-visible"), /outline:\s*var\(--focus\)/);
 });
 

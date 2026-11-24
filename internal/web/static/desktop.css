@@ -1220,10 +1220,9 @@
   #session-menu .menu-item[aria-current="true"] { font-weight: var(--w-semibold); }
   #session-menu .menu-check { flex: none; width: 16px; display: inline-flex; justify-content: center; color: var(--muted); }
   #session-menu > .menu-row > .menu-x { flex: none; font-size: var(--t-lg); line-height: 1; }
-  /* #365: a row's kind glyph and, for a session, its tier. A file's glyph is the Files tree's (.ft-icon's font); the
+  /* #365: a row's kind glyph and, for a session, its tier. A file's glyph is its kind's Lucide svg (fileIcon); the
      tier is the sidebar row's chip, glyph then word (.dchip, its box and host tones), kept whole while the title
      ellipsizes before it. */
-  #session-menu .menu-item .menu-ficon { font-family: "Symbols Nerd Font"; line-height: 1; }
   #session-menu .menu-item > .menu-tier { display: inline-flex; align-items: center; gap: 3px; }
   #session-menu .menu-item .menu-tier .tchip-i { flex: none; }
   #session-menu .menu-item .menu-tier.host .tchip-i { color: var(--fg); }
@@ -1512,8 +1511,10 @@
     border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); cursor: pointer;
   }
   .dk-chev::after { content: ""; position: absolute; inset: -2px -5px; }
-  .dk-chev::before { content: "\203A"; font-size: var(--t-lg); line-height: 1; }
-  .dk-chev[aria-expanded="true"]::before { transform: rotate(90deg); }
+  /* The glyph is two svgs (index.html), chevron-right and chevron-down; aria-expanded shows one. */
+  .dk-chev > .ui-icon { display: block; }
+  .dk-chev > .dk-chev-d, .dk-chev[aria-expanded="true"] > .dk-chev-r { display: none; }
+  .dk-chev[aria-expanded="true"] > .dk-chev-d { display: block; }
   .dk-chev:hover { background: var(--hover); color: var(--fg); }
   .dk-chev:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
   /* Collapsed Changes is its header row: the title, the count (or Updating…) and Review. */
@@ -1571,7 +1572,7 @@
   .dk-tab:focus-visible { outline: var(--focus); outline-offset: -2px; }
   /* The preview tab, the one the next single click replaces, is italic (a double-click, an edit or a save keeps it). */
   .dk-prev .dk-name { font-style: italic; }
-  .dk-ic { flex: none; width: 2ch; text-align: center; font-family: "Symbols Nerd Font"; color: var(--muted); }
+  .dk-ic { flex: none; width: 2ch; text-align: center; color: var(--muted); }
   /* The right padding keeps an italic name's last slanted letter inside the clip. */
   .dk-name { min-width: 0; padding-right: 2px; overflow: hidden; text-overflow: ellipsis; }
   /* The git letter, in the tree's colours (app.css .ft-git-*). */
@@ -1779,15 +1780,14 @@
   .dk-fv-media { display: block; }
   video.dk-fv-media { flex: 1; min-height: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
   audio.dk-fv-media { width: calc(100% - 48px); max-width: 640px; margin: auto; }
-  /* The card (mockup 344-mock-fallback): an extension badge beside the name and one meta line, the note under them, the buttons last. */
+  /* The card (mockup 344-mock-fallback): the file kind's glyph (32px, no tile) beside the name and one meta line, the note under them, the buttons last. */
   .dk-fv-cardwrap { flex: 1; min-height: 0; overflow: auto; padding: 48px 16px 16px; }
   .dk-fv-card {
     box-sizing: border-box; width: 100%; max-width: 300px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: auto minmax(0, 1fr);
     gap: 12px; align-items: start; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card);
   }
   .dk-fv-badge {
-    box-sizing: border-box; min-width: 32px; height: 32px; padding: 0 4px; display: flex; align-items: center; justify-content: center;
-    border-radius: var(--r-ctl); background: var(--raise); color: var(--muted); font: var(--w-semibold) var(--t-xs)/1 var(--font-mono);
+    box-sizing: border-box; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--muted);
   }
   .dk-fv-head { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .dk-fv-name { color: var(--fg); font: var(--w-semibold) var(--t-md)/var(--lh-md) var(--font-ui); overflow-wrap: anywhere; unicode-bidi: isolate; }
@@ -2016,6 +2016,11 @@
     background-image: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 14px);
     background-repeat: no-repeat; background-position: 15px 0; background-size: calc(var(--lvl, 0) * 14px) 100%;
   }
+  /* #168 perf: a row's glyph is an svg, several elements per row, so a 2000-entry folder was ~70 % slower to expand than with
+     the Nerd text. A row off screen skips its style and layout (as .md-chunk does), held at a row's height: exactly max(22px,
+     the line), as above, with no remembered height, so a --fs-tree change reaches the unseen rows too. Nothing in a row draws
+     outside it (the ring and the washes are inset, a long name ellipsizes). */
+  #drawer .ft-node { content-visibility: auto; contain-intrinsic-size: max(22px, var(--fs-tree) * 22 / 12); }
   #drawer #filetree .pending-line { box-sizing: border-box; min-height: 22px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px + 18px); line-height: inherit; }
   /* The hover and selected washes are background-color only: app.css's `background:` shorthand on the same rows would reset
      the image, and the guides would vanish under the pointer. Hover is the kit's, a half step under the selected row's. The
@@ -2029,10 +2034,19 @@
   #drawer .ft-branch { display: none; }
   /* A symlink's row ends its name with a muted ↗ (P4.9); a link to a folder the server serves expands like a folder. */
   #drawer .ft-link .ft-linkmark { flex: none; color: var(--muted); font-size: var(--t-xs); line-height: 1; }
-  /* The chevron, drawn by the row's ::before; a file's is empty, the same width, so every icon starts at the same column. */
+  /* A file's chevron slot is the row's empty ::before, 14px, so every icon starts at the same column. A folder's slot is its
+     .ft-chev (filetree.js): chevron-right and chevron-down svgs, aria-expanded shows one; the ::before steps aside. */
   #drawer .ft-node::before { content: ""; flex: none; width: 14px; text-align: center; color: var(--muted); }
-  #drawer .ft-node.dir::before { content: "\203A"; font-size: calc(var(--fs-tree) * 15 / 12); }
-  #drawer .ft-node.dir[aria-expanded="true"]::before { transform: rotate(90deg); }
+  #drawer .ft-node.dir::before { content: none; }
+  #drawer .ft-chev { flex: none; width: 14px; display: grid; place-items: center; color: var(--muted); }
+  #drawer .ft-chev > .ui-icon { display: block; }
+  #drawer .ft-chev > .ft-chev-d, #drawer .ft-node.dir[aria-expanded="true"] > .ft-chev > .ft-chev-r { display: none; }
+  #drawer .ft-node.dir[aria-expanded="true"] > .ft-chev > .ft-chev-d { display: block; }
+  /* The row's file glyph and its menu button: the Lucide svg (filetree.js draws it, not the phone's Nerd text, at this width).
+     The svg is a block centred in the 2ch cell, so it has no line box to sit high in (the Nerd font's line box put a 14px glyph
+     2px high). */
+  #drawer .ft-node > .ft-icon { display: flex; justify-content: center; }
+  #drawer .ft-icon > .ui-icon, #drawer .ft-more > .ui-icon { display: block; }
   /* A folder's name is the text colour, not app.css's accent, so that the tint below can mean "something changed in here". */
   #drawer .ft-node.dir { color: var(--fg); }
   /* T2 (P5, mockup 1): a quiet hierarchy. File names a step under the text colour, folder names bright and medium weight, icons

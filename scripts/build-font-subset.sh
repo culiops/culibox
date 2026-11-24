@@ -8,6 +8,8 @@
 #
 # CODEPOINTS is the union of the file-type map in filetree.js and the chrome
 # glyphs in index.html. Keep this comment and that map in sync.
+#
+# Symbols Nerd Font now serves only the xterm fallback (terminal-tab.js:422-427) and the frozen phone UI (the Files tree glyphs and the header settings gear). The desktop UI draws no Nerd glyph since #168.
 set -e
 cd "$(dirname "$0")/.."
 SRC="${1:?usage: build-font-subset.sh /path/to/SymbolsNerdFontMono-Regular.ttf}"

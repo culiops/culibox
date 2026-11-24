@@ -645,7 +645,6 @@ function fullPage() {
     setInterval: (fn, ms) => { st.intervals.push({ fn, ms, live: true }); return st.intervals.length; },
     clearInterval: (id) => { if (st.intervals[id - 1]) st.intervals[id - 1].live = false; },
     shortPath: (p) => p,
-    iconFor: (name, isDir) => (isDir ? "D" : "F"),
     ftRoot: () => st.root,
     drawerOwnsFileClicks: () => true,
     drawerSessionName: () => "fix-fs-cap",
@@ -655,7 +654,7 @@ function fullPage() {
   });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load('let drawerState = { open: "files", sessionId: "s1", pinned: false }; let drawerChangedFiles = new Map(); let lastSessions = [{ id: "s1", activity: "working" }]; let ftRootSel = null;', "state");
-  for (const f of ["accessmodel.js", "drawerfiles.js", "changesmodel.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
+  for (const f of ["copyfile.js", "filekinds.js", "accessmodel.js", "drawerfiles.js", "changesmodel.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
   // filesdrawer.js's own: the list is set and the Changes section hears of it.
   load("function drawerSetChanged(sid, files) { drawerChangedFiles.set(sid, files); dockChangesRender(); }", "drawerSetChanged");
   load(src("dockwatch.js"), "dockwatch.js");

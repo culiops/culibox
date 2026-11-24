@@ -116,7 +116,6 @@ function page() {
     gitBaseFor: () => null,
     ftRoot: () => "/w",
     relativePath: (root, p) => (p.startsWith(root + "/") ? p.slice(root.length + 1) : null),
-    iconFor: () => "F",
     shortPath: (p) => p,
     drawerShowFile: (p, o) => { st.opened.push([p, o]); return true; },
     editorDiffKey: (t) => ({ known: true, scope: st.scope, baseName: "", key: [t.path, st.scope, st.head].join("\n") }),
@@ -137,7 +136,7 @@ function page() {
   });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load('let dockMonaco = null; const MONACO_THEME = "culibox"; const DKC_CODE_TITLES = { M: "Modified", A: "Added", U: "Untracked", D: "Deleted", C: "Conflict" };', "state");
-  for (const f of ["reviewmodel.js", "linediff.js", "reviewall.js"]) load(src(f), f);
+  for (const f of ["copyfile.js", "filekinds.js", "reviewmodel.js", "linediff.js", "reviewall.js"]) load(src(f), f);
   const p = { ctx, st, doc, nodes, monaco, run: (c) => load(c, "test") };
   // The answers a section's two requests get (the tests resolve them as they like).
   p.answer = async (pathOrFetch) => {
@@ -370,6 +369,15 @@ test("the sections follow the Changes list: order, additions, removals, and a fo
   p.st.view = { kind: "rows", rows: [] };
   tab.sync();
   assert.strictEqual(tab.noteEl.textContent, "No changes");
+});
+
+test("header glyph: a section's .dk-ic is the file kind's Lucide glyph at 14, never text, and follows a renamed row", () => {
+  const p = page();
+  const tab = p.tab([row("a.go"), row("logo.svg"), row("constructor")]);
+  const glyph = (path) => { const ic = tab.secs.get(path).el.querySelector(".dk-ic"); assert.strictEqual(ic.textContent, ""); return Array.from(ic.children, (n) => [n.getAttribute("data-icon"), n.getAttribute("width")]); };
+  assert.deepStrictEqual(glyph("/w/a.go"), [["file-code", "14"]]);
+  assert.deepStrictEqual(glyph("/w/logo.svg"), [["file-image", "14"]]);
+  assert.deepStrictEqual(glyph("/w/constructor"), [["file", "14"]], "a hostile name is the plain file");
 });
 
 test("a section header: name, folder, letter, counts, the notes chip, the reviewed circle (a toggle) and Open", () => {

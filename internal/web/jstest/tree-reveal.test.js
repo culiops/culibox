@@ -34,6 +34,7 @@ function tree(expanded, opts) {
     n.scrollIntoView = (a) => { st.scrolls.push(a); };
     return n;
   };
+  doc.createElementNS = (_ns, t) => doc.createElement(t); // the tree draws its glyphs through uiIcon (svgicon.js)
   doc.getElementById = () => null;
   doc.addEventListener = () => {};
   const st = { lists: [], wheres: [], saves: [], opens: [], scrolls: [] };
@@ -63,6 +64,7 @@ function tree(expanded, opts) {
     },
   });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "copyfile.js", "filekinds.js"]) load(src(f), f);
   load(src("treestate.js"), "treestate.js");
   load(src("viewerpath.js"), "viewerpath.js");
   load(src("filetree.js"), "filetree.js");

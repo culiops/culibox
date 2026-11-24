@@ -334,7 +334,7 @@ class ReviewAllTab {
   paintHead(sec, row, marks, files, pend) {
     const p = sec.parts;
     const set = (n, t) => { if (n.textContent !== t) n.textContent = t; };
-    set(p.ic, typeof iconFor === "function" ? iconFor(row.name, false, false) : "");
+    fileIconInto(p.ic, row.name, false);
     set(p.nm, row.name);
     set(p.dir, row.dir);
     const full = typeof shortPath === "function" ? shortPath(row.path) : row.path;

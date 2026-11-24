@@ -153,3 +153,101 @@ test("zoomScroll on a mixed case: wide image fits the width, tall after the zoom
   const r = zoomScroll({ stageW: 800, stageH: 600, nw: 800, nh: 2000, s0: 1, s1: 1, left: 0, top: 500, px: 400, py: 300 });
   assert.deepEqual(r, { left: 0, top: 500 });
 });
+
+// ---- fileIconKind (#168 G5 3, 20-37): one declared kind per file name, from the extension alone ----
+const { fileIconKind, fileIcon, FILE_ICON_EXT, FILE_CARD_KIND, CARD_EXTS } = require("../static/filekinds.js");
+const { ICON_FILE_KIND } = require("../static/iconmap.js");
+const { ICON_SET } = require("../static/icons.js");
+
+test("fileIconKind: every extension of the tables maps to its kind", () => {
+  const want = {
+    code: ["go", "js", "mjs", "cjs", "css", "html", "htm", "py"],
+    script: ["sh", "bash", "zsh"],
+    data: ["json"],
+    config: ["yml", "yaml", "toml", "ini", "conf", "tf", "tfvars", "hcl"],
+    markdown: ["md", "markdown"],
+    lock: ["lock", "sum"],
+    image: ["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico"],
+    video: ["mp4", "webm"],
+    audio: ["mp3", "wav", "ogg"],
+    pdf: ["pdf"],
+    archive: ["zip", "tar", "gz", "tgz", "7z", "rar", "xz", "bz2", "zst"],
+    database: ["sqlite", "sqlite3", "db"],
+    notebook: ["ipynb"],
+    document: ["doc", "docx", "odt"],
+    spreadsheet: ["xls", "xlsx", "ods"],
+    slides: ["ppt", "pptx", "odp"],
+    ebook: ["epub", "mobi", "azw3"],
+  };
+  let n = 0;
+  for (const [kind, exts] of Object.entries(want)) {
+    for (const e of exts) { n++; assert.equal(fileIconKind("x." + e, false, false), kind, e); }
+  }
+  assert.equal(n, 64, "every extension of the tables, once");
+});
+
+test("fileIconKind: exact names, case, compound names", () => {
+  for (const nm of ["Makefile", "Dockerfile", "Containerfile", "Dockerfile.prod", "dockerfile.dev", ".gitignore", ".gitattributes", ".gitmodules"]) {
+    assert.equal(fileIconKind(nm, false, false), "config", nm);
+  }
+  assert.equal(fileIconKind("README.MD", false, false), "markdown");
+  assert.equal(fileIconKind("policies_before.json.gz", false, false), "archive");
+  assert.equal(fileIconKind("a.b.PNG", false, false), "image");
+});
+
+test("fileIconKind: no extension, leading-dot-only, unknown and non-listed are file", () => {
+  for (const nm of [".env", "LICENSE", "notes.txt", "x.woff2", "go.mod", "x.", "", ".", "csv.csv", "x.tsx"]) {
+    assert.equal(fileIconKind(nm, false, false), "file", JSON.stringify(nm));
+  }
+  assert.equal(fileIconKind(undefined, false, false), "file");
+});
+
+test("fileIconKind: hostile names are file, never a prototype member", () => {
+  for (const nm of ["constructor", "a.constructor", "a.__proto__", "__proto__", "x.toString", "x.hasOwnProperty", "x.valueOf"]) {
+    assert.equal(fileIconKind(nm, false, false), "file", nm);
+  }
+});
+
+test("fileIconKind: a directory is dir or dir-open whatever its name", () => {
+  assert.equal(fileIconKind("src", true, false), "dir");
+  assert.equal(fileIconKind("src", true, true), "dir-open");
+  assert.equal(fileIconKind("a.go", true, false), "dir");
+  assert.equal(fileIconKind("Makefile", true, true), "dir-open");
+});
+
+test("FILE_CARD_KIND keys equal CARD_EXTS, and the tables have no prototype", () => {
+  assert.deepEqual(Object.keys(FILE_CARD_KIND).sort(), [...CARD_EXTS].sort());
+  assert.equal(Object.getPrototypeOf(FILE_CARD_KIND), null);
+  assert.equal(Object.getPrototypeOf(FILE_ICON_EXT), null);
+});
+
+test("ICON_FILE_KIND: every kind fileIconKind can return has a glyph in ICON_SET", () => {
+  const kinds = ["dir", "dir-open", "code", "script", "data", "config", "markdown", "lock", "image", "video", "audio", "pdf",
+    "archive", "database", "notebook", "document", "spreadsheet", "slides", "ebook", "file"];
+  assert.deepEqual(Object.keys(ICON_FILE_KIND).sort(), [...kinds].sort());
+  for (const k of kinds) assert.ok(ICON_SET[ICON_FILE_KIND[k]], k + " -> " + ICON_FILE_KIND[k]);
+  assert.equal(ICON_FILE_KIND.dir, "folder");
+  assert.equal(ICON_FILE_KIND["dir-open"], "folder-open");
+  assert.equal(ICON_FILE_KIND.pdf, "file-text");
+  assert.equal(ICON_FILE_KIND.ebook, "book-open");
+});
+
+test("fileIcon draws the kind's glyph at the given size, and a dir by its open state", () => {
+  const mk = (t) => ({
+    tag: t, attrs: {}, children: [],
+    setAttribute(k, v) { this.attrs[k] = String(v); }, removeAttribute(k) { delete this.attrs[k]; }, append(...n) { this.children.push(...n); },
+  });
+  const had = Object.prototype.hasOwnProperty.call(globalThis, "document"), old = globalThis.document;
+  globalThis.document = { createElementNS: (ns, t) => mk(t) };
+  try {
+    const a = fileIcon("main.go", false, false, 16);
+    assert.equal(a.attrs["data-icon"], "file-code");
+    assert.equal(a.attrs.width, "16");
+    assert.equal(fileIcon("src", true, false).attrs["data-icon"], "folder");
+    assert.equal(fileIcon("src", true, true).attrs["data-icon"], "folder-open");
+    assert.equal(fileIcon("constructor", false, false).attrs["data-icon"], "file");
+    assert.equal(fileIcon("a.pdf", false, false, 14).attrs["data-icon"], "file-text");
+  } finally {
+    if (had) globalThis.document = old; else delete globalThis.document;
+  }
+});

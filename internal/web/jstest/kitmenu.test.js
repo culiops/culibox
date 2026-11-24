@@ -47,6 +47,8 @@ function world(extra) {
   run(read("icons.js"));
   run(read("iconmap.js"));
   run(read("svgicon.js"));
+  run(read("copyfile.js")); // IMAGE_EXTS, which filekinds.js's fileIcon reads
+  run(read("filekinds.js"));
   run(read("kitmenu.js"));
   return { ctx, run };
 }
@@ -266,11 +268,10 @@ function switcher(width, tabs, activeIdx, sessions, profiles) {
     setFocusedCell: (c) => calls.focusedCell.push(c === cell),
     placeSessionMenu: (m, a) => calls.placed.push(a),
     sessionMenuAnchor: null, sessionMenuSid: "x",
-    // The row's facts are deskshell.js's own (tested there); the Files tree's glyph is a tagged stand-in, and the
-    // Claude mark, the terminal and the tier chip's glyph are uiIcon's own (the real icons.js and iconmap.js).
+    // The row's facts are deskshell.js's own (tested there); the Claude mark, the terminal, the tier chip's glyph and a
+    // file's kind glyph (fileIcon) are the real icons.js, iconmap.js and filekinds.js.
     lastSessions: sessions || [], profiles: profiles || [],
     tabSwitchFacts: require("../static/deskshell.js").tabSwitchFacts,
-    iconFor: (name, isDir, open) => "G:" + name + ":" + isDir + ":" + open,
   });
   const app = read("app.js");
   run(fnSrc(app, "deskChipIcon") + "\n" + fnSrc(app, "kitTabRow") + "\n" + fnSrc(app, "openTabSwitcher") + "\nglobalThis.openTabSwitcher = openTabSwitcher;");
@@ -351,13 +352,27 @@ test("desktop: the .menu-icon slot shows the tab's kind: the Claude mark, the sh
   assert.strictEqual(iconOf(shell), "terminal", "the sidebar's shell glyph, for a shell titled claude");
   for (const i of [0, 1]) assert.strictEqual(slot(i).children[0].getAttribute("width"), "14", "the menu row's size");
   const file = slot(2).children[0];
-  assert.strictEqual(file.className, "menu-ficon", "a file wears the Files tree's type glyph, in its font");
-  assert.strictEqual(file.textContent, "G:main.go:false:false", "by the path's file name");
-  assert.strictEqual(slot(3).children[0].textContent, "G:notes:false:false", "a file with no path goes by its title");
+  assert.strictEqual(file.tag, "svg", "a file wears its kind's glyph, drawn: no Nerd text, no .menu-ficon");
+  assert.strictEqual(iconOf(file), "file-code", "by the path's file name (main.go)");
+  assert.strictEqual(file.getAttribute("width"), "13");
+  assert.strictEqual(iconOf(slot(3).children[0]), "file", "a file with no path goes by its title (notes: no extension)");
   assert.strictEqual(iconOf(slot(4).children[0]), "square-terminal", "neither Claude nor a shell: the pane header's terminal glyph");
   assert.strictEqual(iconOf(slot(5).children[0]), "square-terminal", "a session the list does not hold: the same");
   assert.strictEqual(t.menu.children[0].children[0].children[1].textContent, "bash", "the title is the .menu-text");
   assert.strictEqual(t.menu.children[2].children[0].children[1].textContent, "main.go");
+});
+
+test("tab switcher file row: the glyph is the kind's (logo.svg is file-image), by the path's name and never the title; a hostile name is the plain file", () => {
+  const img = { id: "v3", kind: "viewer", path: "/src/assets/logo.svg", title: () => "logo" };
+  const titled = { id: "v4", kind: "viewer", path: "", title: () => "logo.svg" };
+  const hostile = { id: "v5", kind: "viewer", path: "/src/constructor", title: () => "constructor" };
+  const t = switcher(1440, [img, titled, hostile]);
+  t.open();
+  const slot = (i) => t.menu.children[i].children[0].children[0];
+  assert.strictEqual(iconOf(slot(0).children[0]), "file-image");
+  assert.strictEqual(iconOf(slot(1).children[0]), "file-image", "no path: the title's extension");
+  assert.strictEqual(iconOf(slot(2).children[0]), "file");
+  for (const i of [0, 1, 2]) assert.strictEqual(slot(i).children.length, 1);
 });
 
 test("desktop: a session's row names its tier (Host, Box, Box clone) with the sidebar's glyph; a file and an unknown session have none", () => {
