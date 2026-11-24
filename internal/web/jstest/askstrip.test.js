@@ -12,6 +12,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { iconStubs } = require("./iconpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const read = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
@@ -509,6 +510,7 @@ test("F63: buildNeedStrip draws the line with a ✕, alone as a neutral strip or
       renderNeedsBody: () => new Node("div"), ResizeObserver: undefined, SSO_DONE_TOAST: "Signed in. The agent's next AWS call works. Tell it to retry if it stopped.",
       ssoDoneShown: () => done, dismissSSODone: (id) => dismissed.push(id),
       ssoDoneFirstShow: (id) => { if (heard.has(id)) return false; heard.add(id); return true; },
+      ...iconStubs(() => new Node("svg")),
     };
       const ctx = vm.createContext(box);
     new vm.Script(fnSrc(tabs, "buildSSODoneLine") + "\n" + fnSrc(tabs, "buildNeedStrip") + "\nglobalThis.buildNeedStrip = buildNeedStrip;").runInContext(ctx);
@@ -524,7 +526,10 @@ test("F63: buildNeedStrip draws the line with a ✕, alone as a neutral strip or
   assert.strictEqual(x.className, "btn btn-ghost btn-icon btn-sm");
   assert.strictEqual(x.getAttribute("aria-label"), "Dismiss");
   assert.strictEqual(x.title, "Dismiss");
-  assert.strictEqual(x.textContent, "✕");
+  // every icon-only control has an aria-label: the dismiss is the x glyph (14), not the text ✕.
+  assert.strictEqual(x.textContent, "");
+  assert.deepStrictEqual(x.children.map((n) => [n.getAttribute("data-icon"), n.getAttribute("width")]), [["x", "14"]]);
+  assert.ok(x.getAttribute("aria-label").trim());
   x.onclick({ stopPropagation() {} });
   assert.deepStrictEqual(m.dismissed, ["a"]);
   // Under a need: the same line is the strip's last row, the strip keeps its own tone.
@@ -544,7 +549,7 @@ test("F63: buildNeedStrip draws the line with a ✕, alone as a neutral strip or
 test("F63: the kept line is role=status only the first time it appears; a rebuild is silent", () => {
   const tabs = read("tabs.js");
   const heard = new Set();
-  const box = { document: { createElement: (t) => new Node(t) }, SSO_DONE_TOAST: "Signed in.", dismissSSODone() {},
+  const box = { document: { createElement: (t) => new Node(t) }, SSO_DONE_TOAST: "Signed in.", dismissSSODone() {}, ...iconStubs(() => new Node("svg")),
     ssoDoneFirstShow: (id) => { if (heard.has(id)) return false; heard.add(id); return true; } };
   const ctx = vm.createContext(box);
   new vm.Script(fnSrc(tabs, "buildSSODoneLine") + "\nglobalThis.build = buildSSODoneLine;").runInContext(ctx);

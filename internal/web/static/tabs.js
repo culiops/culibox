@@ -1362,7 +1362,7 @@ function dockHolding(id) {
 
 // buildSSODoneLine: the line a pane keeps after this tab finished an AWS sign-in
 // (F63): the toast's own words, which are the part to act on (tell the agent to
-// retry), and the kit's ghost ✕. role="status" so it is read once as it appears,
+// retry), and the kit's ghost close (the x glyph). role="status" so it is read once as it appears,
 // as the toast was: only on the line's first appearance for this sign-in
 // (ssoDoneFirstShow, app.js). The strip is rebuilt whenever something else on it
 // moves, and a rebuilt live region would read the same sentence out again.
@@ -1378,7 +1378,7 @@ function buildSSODoneLine(s) {
   x.className = "btn btn-ghost btn-icon btn-sm";
   x.setAttribute("aria-label", "Dismiss");
   x.title = "Dismiss";
-  x.textContent = "\u2715";
+  x.append(uiIcon(ICON_ACTION.close, { size: 14 }));
   x.onclick = (e) => { e.stopPropagation(); dismissSSODone(s.id); };
   row.append(txt, x);
   return row;
