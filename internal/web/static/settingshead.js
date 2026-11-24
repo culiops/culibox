@@ -133,6 +133,8 @@ function settingsHeadAction(action) {
   b.type = "button";
   b.id = action.id;
   b.className = "btn";
+  // Add account carries the shared add glyph (#168 G2 12); the other actions stay words (their glyphs are not drawn).
+  if (action.id === "set-act-accounts") b.appendChild(uiIcon(ICON_ACTION.add, { size: 14 }));
   b.appendChild(document.createTextNode(action.label));
   if (action.menu) {
     const caret = document.createElement("span");

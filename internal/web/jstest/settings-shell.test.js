@@ -223,7 +223,7 @@ test("the nav order: Trusted hosts (#348) sits after Appearance and before About
 
 test("Sign out… is a neutral nav item at the nav foot, desktop only", () => {
   const tabs = HTML.slice(HTML.indexOf('id="settings-tabs"'), HTML.indexOf('<div class="dbd split" id="manage"'));
-  const m = /<button\b([^>]*)\bid="set-signout"([^>]*)>([^<]*)<\/button>/.exec(tabs);
+  const m = /<button\b([^>]*)\bid="set-signout"([^>]*)>(?:<svg[^>]*><\/svg>)?([^<]*)<\/button>/.exec(tabs);
   assert.ok(m, "button#set-signout is a child of the nav");
   assert.strictEqual(m[3], "Sign out…", "U+2026, as the frame writes it (§A1)");
   const attrs = m[1] + m[2];

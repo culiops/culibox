@@ -320,7 +320,16 @@ function acctRow(a, limits, now) {
   nm.textContent = a.name;
   const meta = document.createElement("span");
   meta.className = "acct-meta";
-  meta.textContent = a.provider + " · " + acctLoginText(a.login_state) + " · " + a.config_dir;
+  const rest = " · " + acctLoginText(a.login_state) + " · " + a.config_dir;
+  // The provider's mark (#168 G2 13) keys on the declared provider; one with no mark keeps the plain word. The glyph is
+  // the desktop page's (app.css hides it on the phone), the words are the same on both.
+  const mark = iconOf(ICON_AGENT_PROVIDER, a.provider);
+  if (mark) {
+    const pv = document.createElement("span");
+    pv.className = "acct-prov";
+    pv.append(uiIcon(mark, { size: 14 }), document.createTextNode(a.provider));
+    meta.append(pv, document.createTextNode(rest));
+  } else meta.textContent = a.provider + rest;
   head.append(nm, meta);
   li.appendChild(head);
 

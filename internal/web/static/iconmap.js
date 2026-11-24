@@ -127,9 +127,21 @@ function emptyState(kind) {
   return { icon: ICON_EMPTY[kind], hero: EMPTY_HERO[kind] };
 }
 
+// The Settings nav's glyph by the tab's declared data-tab (G2 1-9), drawn at 15 before the row's words; Sign out takes
+// log-out beside it. index.html carries the placeholders (data-uicon): this map is the pinned record of them, and a test
+// checks the two agree. VM folders is the macOS-only tab, hidden elsewhere.
+const ICON_SETTINGS_TAB = iconMapOf({
+  manage: "id-card", accounts: "circle-user-round", creds: "key-round", vmfolders: "hard-drive", wsroots: "folders",
+  tokens: "monitor-smartphone", settings: "sliders-horizontal", linktrust: "link", about: "info",
+});
+
+// The agent account row's provider mark by its declared `provider` (G2 13; Go account.ProviderClaude). A provider with no
+// entry draws no mark and the word stays: a second provider gets its own here, never a generic one.
+const ICON_AGENT_PROVIDER = iconMapOf({ claude: "si:claude" });
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    emptyState, ICON_EMPTY,
+    emptyState, ICON_EMPTY, ICON_SETTINGS_TAB, ICON_AGENT_PROVIDER,
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_REACH,
     ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_TOKEN_TEMPLATE, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_TOAST, ICON_ROW, ICON_PALETTE_KIND,
   };

@@ -33,7 +33,7 @@ function body(src, name) {
 const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "");
 
 test("the tokens tab is named Device tokens (the palette says so too)", () => {
-  const m = /<button[^>]*data-tab="tokens"[^>]*>([^<]*)<\/button>/.exec(HTML);
+  const m = /<button[^>]*data-tab="tokens"[^>]*>(?:<svg[^>]*><\/svg>)?([^<]*)<\/button>/.exec(HTML);
   assert.ok(m, "tokens tab not found");
   assert.strictEqual(m[1].trim(), "Device tokens");
   assert.ok(!/>Access tokens<|>API tokens</.test(HTML), "no tab still says Access tokens or API tokens");
@@ -143,7 +143,7 @@ test("the meta reads set bundleImports and boxUnavailableReason beside boxRuntim
 // the base sheet hides them for a phone (the modal keeps today's form).
 test("#pf-navlist follows the Profiles tab", () => {
   const tabs = /<div class="tabs" id="settings-tabs"[\s\S]*?<button type="button" class="t" data-tab="creds"/.exec(HTML)[0];
-  assert.match(tabs, /data-tab="manage"[^>]*>Profiles<\/button>\s*<div id="pf-navlist"[^>]*><\/div>\s*<button type="button" class="t" data-tab="creds"/);
+  assert.match(tabs, /data-tab="manage"[^>]*>(?:<svg[^>]*><\/svg>)?Profiles<\/button>\s*<div id="pf-navlist"[^>]*><\/div>\s*<button type="button" class="t" data-tab="creds"/);
 });
 
 test("#pfv is inside #manage", () => {
