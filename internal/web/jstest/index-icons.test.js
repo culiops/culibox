@@ -73,3 +73,17 @@ test("a placeholder carries only what paintStaticIcons keeps", () => {
     for (const a of attrs) assert.ok(["id", "class", "width", "height", "aria-hidden"].includes(a), m[0] + " has " + a);
   }
 });
+
+// #168 G2 11 / G3 2: the page Esc buttons (Analytics .page-esc, Audit #au-esc) draw the shared close glyph at chip size
+// 12 after the "Esc" hint, not the ✕ text. They keep their label. settingshead.js builds Settings' own (settings-shell.test.js).
+test("page Esc buttons", () => {
+  const escs = [...html.matchAll(/<button\b[^>]*\bpage-esc\b[^>]*>[\s\S]*?<\/button>/g)].map((m) => m[0]);
+  assert.equal(escs.length, 2, "Analytics and Audit");
+  assert.ok(escs.some((b) => b.includes('id="au-esc"')));
+  for (const b of escs) {
+    assert.match(b, /aria-label="Close \(Esc\)"/);
+    assert.match(b, /title="Close \(Esc\)"/);
+    assert.match(b, /<span class="kbd-hint">Esc<\/span><svg data-uicon="x" width="12" height="12" aria-hidden="true"><\/svg><\/button>$/);
+    assert.ok(!b.includes("✕"), "no ✕ text");
+  }
+});

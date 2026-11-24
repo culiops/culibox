@@ -83,7 +83,7 @@ const SETTINGS_HEAD_RUN = {
   "set-act-about": () => openBugReport(),
 };
 
-// settingsEscButton: "Esc ✕", the kit's small ghost button (frame A9). It is not a [data-close] button: the page
+// settingsEscButton: "Esc" and the close glyph, the kit's small ghost button (frame A9). It is not a [data-close] button: the page
 // hides every one of those (Done is modal chrome), so this one closes through closeDialogFromUI itself, which asks
 // the open page's leave hook first (unsaved profile changes) exactly as the old ✕ did.
 function settingsEscButton() {
@@ -95,7 +95,7 @@ function settingsEscButton() {
   const key = document.createElement("span");
   key.className = "kbd-hint";
   key.textContent = "Esc";
-  b.append(key, document.createTextNode("✕"));
+  b.append(key, uiIcon(ICON_ACTION.close, { size: 12 })); // the shared close glyph at chip size (#168), not the ✕ text
   b.onclick = () => closeDialogFromUI("settings-modal");
   return b;
 }
