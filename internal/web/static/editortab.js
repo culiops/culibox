@@ -270,8 +270,7 @@ class EditorTab {
     more.setAttribute("aria-haspopup", "menu");
     more.setAttribute("aria-expanded", "false");
     more.dataset.menuFrom = "1"; // ftShowMenu: this button owns the menu while it is open
-    const dot = (cx) => ["circle", { cx, cy: "7", r: "1.1", fill: "currentColor", stroke: "none" }];
-    more.append(svgIcon([dot("2.5"), dot("7"), dot("11.5")], { icon: "more", size: "14" }));
+    more.append(uiIcon(iconOf(ICON_DOCK_VIEW, "more"), { size: 14 }));
     // stopPropagation: the document's closer for the kit menu would shut the menu this press opens.
     more.onclick = (e) => { e.stopPropagation(); this.openMenu(); };
     this.moreBtn = more;

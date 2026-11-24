@@ -1,10 +1,8 @@
 "use strict";
-// One SVG preamble (#173 task 1). tabs.js tabIcon and dockIcon and the kit menu's menuIconSvg each wrote
-// the same eight-attribute <svg> by hand; svgIcon (svgicon.js) is the one place now. The PIN_* tables
-// below are what the three builders drew BEFORE that refactor, written out by running the old code once
-// (every attribute, in the order it was set, and every child shape): the refactor must not move a pixel.
-// The builders are classic scripts that cannot be required, so svgicon.js and kitmenu.js are run whole
-// and tabIcon / dockIcon are cut out of tabs.js by name, against a stand-in document that records attributes.
+// svgIcon (svgicon.js) is the one place an inline icon's <svg> is built, and uiIcon (#168) the one builder
+// every call site uses: a glyph of the vendored set (icons.js) at the 24 grid, stroke 2. svgicon.js and
+// icons.js are classic scripts that cannot be required as modules of the page, so they are run whole against
+// a stand-in document that records attributes.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
@@ -12,17 +10,6 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const read = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
-function fnSrc(src, name) {
-  const m = new RegExp("(async )?function " + name + "\\s*\\(").exec(src);
-  assert.ok(m, name + " not found");
-  const open = src.indexOf("{", src.indexOf(")", m.index));
-  let depth = 0;
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === "{") depth++;
-    else if (src[i] === "}" && --depth === 0) return src.slice(m.index, i + 1);
-  }
-  throw new Error("unbalanced braces in " + name);
-}
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 // A stand-in node that keeps its attributes as an ordered list, a repeated setAttribute replacing in place.
@@ -33,8 +20,10 @@ function node(tag, ns) {
       const hit = this.attrs.find((a) => a[0] === k);
       if (hit) hit[1] = String(v); else this.attrs.push([k, String(v)]);
     },
+    removeAttribute(k) { this.attrs = this.attrs.filter((a) => a[0] !== k); },
     getAttribute(k) { const hit = this.attrs.find((a) => a[0] === k); return hit ? hit[1] : null; },
     append(...n) { this.children.push(...n); },
+    replaceWith(n) { this.replacedBy = n; },
   };
 }
 const line = (n) => n.tag + " " + n.attrs.map(([k, v]) => k + "=" + v).join(" ");
@@ -43,142 +32,13 @@ const drawn = (n) => (n === null ? null : [line(n)].concat(n.children.map(line))
 function world() {
   const ctx = vm.createContext({ document: { createElementNS: (ns, t) => node(t, ns) } });
   const run = (src) => new vm.Script(src).runInContext(ctx);
+  run(read("icons.js"));
   run(read("svgicon.js"));
-  run(read("kitmenu.js"));
-  const tabs = read("tabs.js");
-  run(fnSrc(tabs, "dockIcon") + "\n" + fnSrc(tabs, "tabIcon"));
   return ctx;
 }
 
 const BASE = "svg viewBox=0 0 14 14 aria-hidden=true fill=none stroke=currentColor stroke-width=1.2";
 const ROUND = " stroke-linecap=round stroke-linejoin=round";
-
-// ---- what the three builders drew before the refactor ------------------------------------------------------------------
-const PIN_TAB = {
-  "terminal": [
-    BASE + ROUND,
-    "rect x=1.5 y=2.5 width=11 height=9 rx=1.5",
-    "path d=M4 5.8l2 1.7-2 1.7M7.6 9.3H10",
-  ],
-  "files": [
-    BASE + ROUND,
-    "path d=M1.5 3.5c0-.55.45-1 1-1h2.8l1.4 1.5h4.8c.55 0 1 .45 1 1v6c0 .55-.45 1-1 1h-9c-.55 0-1-.45-1-1z",
-  ],
-  "activity": [
-    BASE + ROUND,
-    "path d=M1 7.5h2.6l1.5-4.2 3 8.4 1.7-4.2H13",
-  ],
-  "access": [
-    BASE + ROUND,
-    "path d=M7 1.5l4.5 1.7v3.7c0 2.6-1.9 4.4-4.5 5.6-2.6-1.2-4.5-3-4.5-5.6V3.2z",
-    "path d=M5 7l1.5 1.5L9.2 5.7",
-  ],
-};
-const PIN_DOCK = {
-  "below": [
-    BASE,
-    "rect x=1.5 y=1.5 width=11 height=11 rx=1.5",
-    "rect x=1.5 y=8 width=11 height=4.5 fill=currentColor stroke=none",
-  ],
-  "right": [
-    BASE,
-    "rect x=1.5 y=1.5 width=11 height=11 rx=1.5",
-    "rect x=7 y=1.5 width=5.5 height=11 fill=currentColor stroke=none",
-  ],
-  "own": [
-    BASE,
-    "rect x=1.5 y=4.5 width=8 height=8 rx=1.2",
-    "path d=M4.5 4.5V2.7c0-.7.5-1.2 1.2-1.2h5.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H9.5",
-  ],
-  "hide": [
-    BASE,
-    "path d=M3.5 3.5l7 7M10.5 3.5l-7 7",
-  ],
-};
-const PIN_MENU = {
-  "files": [
-    BASE + ROUND + " data-icon=files",
-    "path d=M1.5 3.5c0-.55.45-1 1-1h2.8l1.4 1.5h4.8c.55 0 1 .45 1 1v6c0 .55-.45 1-1 1h-9c-.55 0-1-.45-1-1z",
-  ],
-  "copy": [
-    BASE + ROUND + " data-icon=copy",
-    "rect x=1.5 y=4.5 width=8 height=8 rx=1.2",
-    "path d=M4.5 4.5V2.7c0-.7.5-1.2 1.2-1.2h5.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H9.5",
-  ],
-  "duplicate": [
-    BASE + ROUND + " data-icon=duplicate",
-    "rect x=1.5 y=4.5 width=8 height=8 rx=1.2",
-    "path d=M4.5 4.5V2.7c0-.7.5-1.2 1.2-1.2h5.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H9.5",
-    "path d=M5.5 7v3M4 8.5h3",
-  ],
-  "end": [
-    BASE + ROUND + " data-icon=end",
-    "path d=M3.5 3.5l7 7M10.5 3.5l-7 7",
-  ],
-  "pencil": [
-    BASE + ROUND + " data-icon=pencil",
-    "path d=M2 12l.7-3L9.7 2a1.2 1.2 0 0 1 1.7 0l.6.6a1.2 1.2 0 0 1 0 1.7L5 11.3z",
-    "path d=M8.4 3.3l2.3 2.3",
-  ],
-  "pie": [
-    BASE + ROUND + " data-icon=pie",
-    "circle cx=7 cy=7 r=5.5",
-    "path d=M7 7V1.5A5.5 5.5 0 0 1 12.5 7z fill=currentColor stroke=none",
-  ],
-  "split": [
-    BASE + ROUND + " data-icon=split",
-    "rect x=1.5 y=2.5 width=11 height=9 rx=1.5",
-    "path d=M7 2.5v9",
-  ],
-  "pause": [
-    BASE + ROUND + " data-icon=pause",
-    "rect x=3.5 y=2.5 width=2.5 height=9 rx=.8 fill=currentColor stroke=none",
-    "rect x=8 y=2.5 width=2.5 height=9 rx=.8 fill=currentColor stroke=none",
-  ],
-  "tray": [
-    BASE + ROUND + " data-icon=tray",
-    "path d=M7 2v6.5M4.2 6l2.8 2.8L9.8 6",
-    "path d=M2 9.5v2c0 .55.45 1 1 1h8c.55 0 1-.45 1-1v-2",
-  ],
-};
-
-test("tabIcon draws every kind exactly as before, round caps and joins set up front", () => {
-  const w = world();
-  for (const k of Object.keys(PIN_TAB)) assert.deepStrictEqual(drawn(w.tabIcon(k)), PIN_TAB[k], "tabIcon(" + k + ")");
-});
-
-test("dockIcon draws every kind exactly as before, with no linecap or linejoin", () => {
-  const w = world();
-  for (const k of Object.keys(PIN_DOCK)) assert.deepStrictEqual(drawn(w.dockIcon(k)), PIN_DOCK[k], "dockIcon(" + k + ")");
-});
-
-test("menuIconSvg draws every kind it drew before exactly as before: round caps and joins, data-icon last", () => {
-  const w = world();
-  for (const k of Object.keys(PIN_MENU)) assert.deepStrictEqual(drawn(w.menuIconSvg(k)), PIN_MENU[k], "menuIconSvg(" + k + ")");
-  assert.strictEqual(w.menuIconSvg(""), null, "no kind, no icon: the slot stays an empty box");
-  assert.strictEqual(w.menuIconSvg(undefined), null);
-});
-
-test("menuIconSvg's added kinds (delete, check, download, insert, folder-plus) carry the same preamble, data-icon last", () => {
-  const w = world();
-  for (const k of ["delete", "check", "download", "insert", "folder-plus"]) {
-    const d = drawn(w.menuIconSvg(k));
-    assert.strictEqual(d[0], BASE + ROUND + " data-icon=" + k, k);
-    assert.ok(d.length >= 2, k + " draws a shape");
-  }
-  // delete is the End session cross, folder-plus the pane header's folder and one more path.
-  assert.deepStrictEqual(drawn(w.menuIconSvg("delete")).slice(1), PIN_MENU.end.slice(1));
-  assert.deepStrictEqual(drawn(w.menuIconSvg("folder-plus")).slice(1, 2), PIN_MENU.files.slice(1));
-  assert.strictEqual(drawn(w.menuIconSvg("folder-plus")).length, 3);
-});
-
-test("every built shape and the svg itself are in the SVG namespace", () => {
-  const w = world();
-  for (const svg of [w.tabIcon("access"), w.dockIcon("below"), w.menuIconSvg("duplicate"), w.menuIconSvg("pie")]) {
-    assert.strictEqual(svg.ns, SVG_NS);
-    for (const c of svg.children) assert.strictEqual(c.ns, SVG_NS);
-  }
-});
 
 // ---- svgIcon itself ----------------------------------------------------------------------------------------------------
 test("svgIcon: the preamble is the product's icon style, round by default, shapes in order with their attributes in order", () => {
@@ -234,4 +94,115 @@ test("index.html loads svgicon.js and kitmenu.js before tabs.js (lint.sh bundles
   assert.ok(order.indexOf("svgicon.js") >= 0 && order.indexOf("kitmenu.js") >= 0, "both scripts are in index.html");
   assert.ok(order.indexOf("svgicon.js") < order.indexOf("kitmenu.js"), "svgIcon first");
   assert.ok(order.indexOf("kitmenu.js") < order.indexOf("tabs.js"), "the menu builders before tabs.js");
+});
+
+// ---- uiIcon: the one builder -------------------------------------------------------------------------------------------
+const attrsOf = (n) => Object.fromEntries(n.attrs);
+const shapesOf = (n) => n.children.map((c) => [c.tag, Object.fromEntries(c.attrs)]);
+
+test("uiIcon draws a Lucide glyph at 24-grid stroke 2", () => {
+  const w = world();
+  const svg = w.uiIcon("x", { size: 12 });
+  assert.strictEqual(svg.tag, "svg");
+  assert.strictEqual(svg.ns, SVG_NS);
+  assert.deepStrictEqual(attrsOf(svg), {
+    viewBox: "0 0 24 24", "aria-hidden": "true", fill: "none", stroke: "currentColor", "stroke-width": "2",
+    "stroke-linecap": "round", "stroke-linejoin": "round", "data-icon": "x", width: "12", height: "12",
+    focusable: "false", class: "ui-icon",
+  });
+  assert.deepStrictEqual(shapesOf(svg), JSON.parse(vm.runInContext("JSON.stringify(ICON_SET.x[1])", w)));
+  for (const c of svg.children) assert.strictEqual(c.ns, SVG_NS);
+});
+
+test("uiIcon: the default size is 14", () => {
+  assert.strictEqual(world().uiIcon("x").getAttribute("width"), "14");
+  assert.strictEqual(world().uiIcon("x").getAttribute("height"), "14");
+});
+
+test("uiIcon fills a Simple Icons mark", () => {
+  const svg = world().uiIcon("si:claude");
+  assert.strictEqual(svg.getAttribute("fill"), "currentColor");
+  assert.strictEqual(svg.getAttribute("stroke"), "none");
+  assert.strictEqual(svg.getAttribute("width"), "14");
+  assert.strictEqual(svg.getAttribute("data-icon"), "si:claude");
+  assert.ok(svg.children.length >= 1);
+});
+
+test("uiIcon keeps a child's own fill: key-round's dot stays filled in a stroked glyph", () => {
+  const w = world();
+  const svg = w.uiIcon("key-round");
+  assert.strictEqual(svg.getAttribute("fill"), "none");
+  assert.ok(svg.children.some((c) => c.getAttribute("fill") === "currentColor"), "the dot keeps fill=currentColor");
+});
+
+test("uiIcon with a label is an image, not hidden", () => {
+  const svg = world().uiIcon("lock", { label: "Always shared, set by CuliBox" });
+  assert.strictEqual(svg.getAttribute("role"), "img");
+  assert.strictEqual(svg.getAttribute("aria-label"), "Always shared, set by CuliBox");
+  assert.strictEqual(svg.getAttribute("aria-hidden"), null);
+  assert.strictEqual(world().uiIcon("lock").getAttribute("role"), null, "no label, no role");
+});
+
+test("uiIcon unknown name draws an empty glyph", () => {
+  const w = world();
+  for (const name of ["nope", "constructor", "__proto__", "toString", ""]) {
+    let svg;
+    assert.doesNotThrow(() => { svg = w.uiIcon(name); }, JSON.stringify(name));
+    assert.strictEqual(svg.tag, "svg");
+    assert.strictEqual(svg.children.length, 0, JSON.stringify(name) + " draws nothing");
+    assert.strictEqual(svg.getAttribute("data-icon"), name);
+  }
+});
+
+test("uiIcon cls appends", () => {
+  const w = world();
+  assert.strictEqual(w.uiIcon("x", { cls: "tchip-i" }).getAttribute("class"), "ui-icon tchip-i");
+  assert.strictEqual(w.uiIcon("x", { cls: "" }).getAttribute("class"), "ui-icon");
+});
+
+test("uiIcon never builds an icon from markup", () => {
+  assert.ok(!/innerHTML|insertAdjacentHTML/.test(read("svgicon.js").replace(/\/\/.*$/gm, "")));
+});
+
+test("paintStaticIcons replaces placeholders keeping id and class", () => {
+  const w = world();
+  const ph = node("svg", SVG_NS);
+  ph.setAttribute("id", "drawer-pin");
+  ph.setAttribute("class", "a");
+  ph.setAttribute("width", "14");
+  ph.dataset = { uicon: "pin" };
+  const bare = node("svg", SVG_NS);
+  bare.dataset = { uicon: "x" };
+  const root = { querySelectorAll: (sel) => { root.sel = sel; return [ph, bare]; } };
+  assert.strictEqual(w.paintStaticIcons(root), 2);
+  assert.strictEqual(root.sel, "svg[data-uicon]");
+  const n = ph.replacedBy;
+  assert.strictEqual(n.getAttribute("id"), "drawer-pin");
+  assert.strictEqual(n.getAttribute("class"), "ui-icon a");
+  assert.strictEqual(n.getAttribute("data-icon"), "pin");
+  assert.strictEqual(n.getAttribute("width"), "14");
+  assert.strictEqual(bare.replacedBy.getAttribute("width"), "14", "no width attribute: the default size");
+  assert.strictEqual(bare.replacedBy.getAttribute("id"), null);
+  assert.strictEqual(w.paintStaticIcons({ querySelectorAll: () => [] }), 0);
+});
+
+test("the shared stylesheet aligns every .ui-icon, phone included", () => {
+  // Shared builders (renderSession, tierpick) also draw on the phone, so the rule is in app.css, outside any media block.
+  const css = read("app.css");
+  const m = /^ {4}\.ui-icon \{([^}]*)\}/m.exec(css);
+  assert.ok(m, "a top-level .ui-icon rule in app.css");
+  for (const d of ["flex: none", "display: inline-block", "vertical-align: -2px"]) assert.ok(m[1].includes(d), d);
+});
+
+test("only svgicon.js builds an <svg>", () => {
+  // analytics.js draws chart primitives (anSvg), notifymodel.js a favicon string.
+  const skip = new Set(["svgicon.js", "analytics.js", "notifymodel.js"]);
+  const dir = path.join(__dirname, "..", "static");
+  const bad = [];
+  for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".js") && !skip.has(f))) {
+    const src = read(f);
+    if (/createElementNS\([^)]*["']svg["']/.test(src)) bad.push(f + ": createElementNS svg");
+    if (/["'`]<svg/.test(src)) bad.push(f + ": <svg string");
+  }
+  assert.deepStrictEqual(bad, []);
 });

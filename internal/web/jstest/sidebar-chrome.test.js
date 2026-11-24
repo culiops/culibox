@@ -180,7 +180,7 @@ test("boot paints those titles once, after the sidebar markup exists", () => {
   assert.match(app, /^paintSideHints\(\);$/m);
 });
 
-test("the sidebar top's palette and collapse are kit ghost icon buttons; the palette draws a magnifier, not a glyph", () => {
+test("the sidebar top's palette and collapse are kit ghost icon buttons; the palette is a search placeholder, not a font glyph", () => {
   const tag = (id) => new RegExp('<button id="' + id + '"[^>]*>[\\s\\S]*?</button>').exec(html);
   for (const id of ["side-palette", "side-collapse"]) {
     const m = tag(id);
@@ -188,12 +188,10 @@ test("the sidebar top's palette and collapse are kit ghost icon buttons; the pal
     assert.match(m[0], /class="btn btn-ghost btn-icon btn-sm"/, id);
   }
   const pal = tag("side-palette")[0];
-  // The tabs.js tabIcon style: 14x14 viewBox, no fill, currentColor, 1.2 stroke, round caps and joins, hidden from AT.
-  const svg = /<svg[^>]*>[\s\S]*?<\/svg>/.exec(pal);
-  assert.ok(svg, "the palette button draws an inline svg");
-  for (const a of ['viewBox="0 0 14 14"', 'aria-hidden="true"', 'fill="none"', 'stroke="currentColor"', 'stroke-width="1.2"',
-    'stroke-linecap="round"', 'stroke-linejoin="round"']) assert.ok(svg[0].includes(a), a);
-  assert.match(svg[0], /<circle /);
+  // The magnifier is a placeholder painted at boot from the vendored set (#168): the 14-grid, 1.2-stroke family is retired.
+  const svg = /<svg[^>]*><\/svg>/.exec(pal);
+  assert.ok(svg, "the palette button holds an empty svg placeholder");
+  for (const a of ['data-uicon="search"', 'width="14"', 'height="14"', 'aria-hidden="true"']) assert.ok(svg[0].includes(a), a);
   assert.ok(!/&#8984;|⌘|&#8981;|⌕/.test(pal), "no font glyph is left in the palette button");
   assert.match(tag("side-collapse")[0], /&#171;/, "the « stays the frame's text glyph");
   // #340 S6: the layouts row is gone; New session shares one row with the layout button, the palette and «.

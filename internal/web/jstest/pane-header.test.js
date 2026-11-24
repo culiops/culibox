@@ -339,3 +339,34 @@ test("fitPaneMeta toggles .mi-off on the units the wrap left below the line, usi
   ctx.f(meta);
   assert.deepStrictEqual(units.map((u) => u.classes.has("mi-off")), [false, false, false]);
 });
+
+// tabIcon and dockIcon (tabs.js) are the vendored glyphs: ICON_PANE_TAB and ICON_DOCK_PLACE, drawn by uiIcon at 14px.
+function iconWorld() {
+  const { Node } = require("./fakedom.js");
+  const doc = { createElement: (t) => new Node(t, doc), createElementNS: (_ns, t) => new Node(t, doc) };
+  const ctx = vm.createContext({ document: doc, console });
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js"]) vm.runInContext(read(f), ctx, { filename: f });
+  const tabs = read("tabs.js");
+  vm.runInContext(fnSrc(tabs, "tabIcon") + "\n" + fnSrc(tabs, "dockIcon"), ctx);
+  return ctx;
+}
+
+test("view tab glyphs", () => {
+  const ctx = iconWorld();
+  for (const [kind, name] of [["terminal", "square-terminal"], ["activity", "activity"], ["access", "shield"], ["files", "folder-tree"]]) {
+    const svg = vm.runInContext("tabIcon(" + JSON.stringify(kind) + ")", ctx);
+    assert.strictEqual(svg.getAttribute("data-icon"), name, kind);
+    assert.strictEqual(svg.getAttribute("width"), "14", kind);
+    assert.strictEqual(svg.getAttribute("aria-hidden"), "true", kind);
+  }
+  assert.strictEqual(vm.runInContext('tabIcon("constructor")', ctx).children.length, 0, "an unknown tab draws nothing");
+});
+
+test("dock placement glyphs", () => {
+  const ctx = iconWorld();
+  for (const [kind, name] of [["below", "panel-bottom"], ["right", "panel-right"], ["own", "square-stack"], ["hide", "x"], ["nope", "x"]]) {
+    const svg = vm.runInContext("dockIcon(" + JSON.stringify(kind) + ")", ctx);
+    assert.strictEqual(svg.getAttribute("data-icon"), name, kind);
+    assert.strictEqual(svg.getAttribute("width"), "14", kind);
+  }
+});

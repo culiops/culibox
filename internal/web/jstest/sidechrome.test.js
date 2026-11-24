@@ -22,14 +22,6 @@ test("xlay words for 1, 2 and 4", () => {
   assert.equal(SC.xlayAria(4), "Layout: 4 panes");
 });
 
-test("xlay shapes: a frame, then one divider per split", () => {
-  assert.deepEqual([1, 2, 4].map((n) => SC.xlayShapes(n).length), [1, 2, 3]);
-  assert.equal(SC.xlayShapes(1)[0][0], "rect");
-  assert.equal(SC.xlayShapes(1)[0][1].rx, "2");
-  assert.deepEqual(SC.xlayShapes(2)[1][1].d, "M12 3v18");
-  assert.deepEqual(SC.xlayShapes(4).slice(1).map((s) => s[1].d), ["M3 12h18", "M12 3v18"]);
-});
-
 test("sideCostLabel: an approximate amount for today, in the Analytics page's format", () => {
   assert.equal(SC.sideCostLabel(454.2).text, "≈ $454 today");
   assert.equal(SC.sideCostLabel(99.5).text, "≈ $99.50 today");
@@ -52,7 +44,8 @@ test("sidechrome.js loads after kitmenu.js and before tabs.js", () => {
 const { Node } = require("./fakedom.js");
 const SVG = require("../static/svgicon.js");
 const KM = require("../static/kitmenu.js");
-Object.assign(global, { svgIcon: SVG.svgIcon, svgShape: SVG.svgShape, menuIconSvg: KM.menuIconSvg, kitMenuKeys: KM.kitMenuKeys });
+const MAP = require("../static/iconmap.js");
+Object.assign(global, MAP, { svgIcon: SVG.svgIcon, svgShape: SVG.svgShape, uiIcon: SVG.uiIcon, menuIconSvg: KM.menuIconSvg, kitMenuKeys: KM.kitMenuKeys });
 
 function page() {
   const doc = { activeElement: null, listeners: [] };
@@ -77,23 +70,20 @@ function page() {
   return { doc, wrap, btn, other, picked, menu: () => wrap.querySelector(".xmenu") };
 }
 
-test("xlayPaint draws the glyph and the words for 1, 2 and 4", () => {
+test("layout button glyph by pane count", () => {
   const { btn } = page();
-  SC.xlayPaint(btn, 2);
-  assert.equal(btn.children.length, 1);
-  const svg = btn.children[0];
-  assert.equal(svg.getAttribute("viewBox"), "0 0 24 24");
-  assert.equal(svg.getAttribute("stroke-width"), "2");
-  assert.equal(svg.children.length, 2);
-  assert.equal(btn.getAttribute("title"), "Layout: 2 panes (click to change)");
-  assert.equal(btn.getAttribute("aria-label"), "Layout: 2 panes");
-  SC.xlayPaint(btn, 1);
-  assert.equal(btn.children.length, 1, "a repaint replaces the glyph");
-  assert.equal(btn.children[0].children.length, 1);
-  assert.equal(btn.getAttribute("title"), "Layout: 1 pane (click to change)");
-  SC.xlayPaint(btn, 4);
-  assert.equal(btn.children[0].children.length, 3);
-  assert.equal(btn.getAttribute("aria-label"), "Layout: 4 panes");
+  for (const [n, name] of [[1, "square"], [2, "columns-2"], [4, "layout-grid"]]) {
+    SC.xlayPaint(btn, n);
+    assert.equal(btn.children.length, 1, "a repaint replaces the glyph");
+    const svg = btn.children[0];
+    assert.equal(svg.getAttribute("data-icon"), name);
+    assert.equal(svg.getAttribute("width"), "15");
+    assert.equal(svg.getAttribute("stroke-width"), "2");
+    assert.ok(svg.getAttribute("class").split(" ").includes("ui-icon"));
+    assert.equal(btn.getAttribute("title"), SC.xlayTitle(n));
+    assert.equal(btn.getAttribute("aria-label"), SC.xlayAria(n));
+  }
+  assert.equal(SC.xlayShapes, undefined, "the hand-drawn shapes are gone");
 });
 
 test("xlayMenuBuild: three radio items, the current one ticked", () => {
@@ -112,7 +102,8 @@ test("xlayMenuBuild: three radio items, the current one ticked", () => {
   assert.deepEqual(items.map((b) => b.getAttribute("aria-checked")), ["false", "true", "false"]);
   assert.deepEqual(items.map((b) => b.classList.contains("on")), [false, true, false]);
   assert.deepEqual(items.map((b) => b.querySelector(".menu-kbd").children.length), [0, 1, 0]);
-  assert.deepEqual(items.map((b) => b.querySelector(".menu-icon svg").children.length), [1, 2, 3], "each row draws its own layout");
+  assert.deepEqual(items.map((b) => b.querySelector(".menu-icon svg").getAttribute("data-icon")), ["square", "columns-2", "layout-grid"], "each row draws its own layout");
+  assert.deepEqual(items.map((b) => b.querySelector(".menu-icon svg").getAttribute("width")), ["14", "14", "14"]);
   items[2].click();
   assert.deepEqual(got, [4]);
 });

@@ -65,6 +65,9 @@ test("the header row: the name, what is compared, git's +a −d for the file, Ch
   assert.equal(head.prev.getAttribute("aria-disabled"), "false", "there is a file before this one");
   assert.match(head.next.title, /Next change \(F7\)/);
   assert.match(head.prev.title, /Previous change \(Shift\+F7\)/);
+  assert.equal(head.prev.children[0].getAttribute("data-icon"), "chevron-up", "the review steps are chevrons");
+  assert.equal(head.next.children[0].getAttribute("data-icon"), "chevron-down");
+  assert.equal(head.next.children[0].getAttribute("width"), "14");
 });
 
 test("a file with no Changes row has no counts, and no neighbour to go to", async () => {

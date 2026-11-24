@@ -17,15 +17,6 @@ function xlayAria(n) {
   return "Layout: " + xlayLabel(n);
 }
 
-// xlayShapes: the layout glyph as svgIcon shapes (24x24): a frame, then one divider per split. The paths are
-// Lucide's square, columns-2 and layout-grid (ISC licence), as mockup t1 draws them.
-function xlayShapes(n) {
-  const frame = ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }];
-  if (n === 1) return [frame];
-  if (n === 2) return [frame, ["path", { d: "M12 3v18" }]];
-  return [frame, ["path", { d: "M3 12h18" }], ["path", { d: "M12 3v18" }]];
-}
-
 // The open layout menu: {btn, wrap, menu}, or null. One button exists (the sidebar top's).
 let xlayMenu = null;
 
@@ -33,7 +24,7 @@ let xlayMenu = null;
 // so a layout set from the menu, the palette or a restored layout all read the same; an open menu closes, so
 // its tick is never stale.
 function xlayPaint(btn, n) {
-  btn.replaceChildren(svgIcon(xlayShapes(n), { viewBox: "0 0 24 24", strokeWidth: "2", size: 15 }));
+  btn.replaceChildren(uiIcon(ICON_LAYOUT[n], { size: 15 }));
   btn.setAttribute("title", xlayTitle(n));
   btn.setAttribute("aria-label", xlayAria(n));
   if (xlayMenu && xlayMenu.btn === btn) xlayMenuClose(false);
@@ -61,7 +52,7 @@ function xlayMenuBuild(n, onPick) {
     b.setAttribute("aria-checked", on ? "true" : "false");
     const icon = mk("span", "menu-icon");
     icon.setAttribute("aria-hidden", "true");
-    icon.append(svgIcon(xlayShapes(c), { viewBox: "0 0 24 24", strokeWidth: "2", size: 14 }));
+    icon.append(uiIcon(ICON_LAYOUT[c], { size: 14 }));
     const text = mk("span", "menu-text");
     text.textContent = xlayLabel(c);
     const tick = mk("span", "menu-kbd");
@@ -142,7 +133,7 @@ function sideCostLabel(cost) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    xlayLabel, xlayTitle, xlayAria, xlayShapes, xlayPaint, xlayMenuBuild, xlayMenuOpen, xlayMenuClose,
+    xlayLabel, xlayTitle, xlayAria, xlayPaint, xlayMenuBuild, xlayMenuOpen, xlayMenuClose,
     xlayDocClick, xlayWrapKeydown, initSideLayout, SIDE_COST_TITLE, sideCostLabel,
   };
 }

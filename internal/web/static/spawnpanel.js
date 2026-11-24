@@ -198,8 +198,8 @@ function renderSpawnPlist() {
     const nm = spawnPanelEl("span", "sp-name");
     // The kind icon comes first: a terminal for a shell, the Claude mark for a Claude profile, nothing for any other.
     const kind = profileKind(p);
-    if (kind === "shell") nm.append(svgIcon(SVG_TERMINAL_24, { viewBox: "0 0 24 24", strokeWidth: "2", size: 12 }));
-    else if (kind === "claude") nm.append(claudeMarkSvg(12));
+    if (kind === "shell") nm.append(uiIcon(ICON_LOCKED.shell, { size: 12 }));
+    else if (kind === "claude") nm.append(uiIcon(ICON_LOCKED["agent-claude"], { size: 12 }));
     nm.append(p.name);
     nm.title = p.name;
     b.append(nm, touch);

@@ -1,5 +1,11 @@
 "use strict";
 
+// --- static chrome glyphs ----------------------------------------------------------------------------------
+// index.html holds an empty <svg data-uicon="name"> where a chrome glyph goes (#168); this fills them, first of all: it
+// REPLACES each node, so anything bound to or fetched from one earlier would be lost. Every id these sit in is on the
+// <button> around the svg, which stays; the scripts that run before this one touch only those buttons.
+if (typeof document !== "undefined" && typeof paintStaticIcons === "function") paintStaticIcons(document);
+
 // --- fetch helpers -----------------------------------------------------------
 // api(path, opts) is fetch + the error shape below. opts.timeoutMs (session actions: deadline.js ACTION_*_MS) bounds the
 // whole call, body included: past it the request is aborted and the call rejects with actionTimeoutError (`timedOut`, no
@@ -2753,15 +2759,13 @@ function deskKindEl(s) {
   const ak = document.createElement("span");
   ak.className = "ak";
   ak.title = k.title;
-  ak.append(k.kind === "claude" ? claudeMarkSvg(13) : svgIcon24(SVG_TERMINAL_24, 13));
+  ak.append(uiIcon(k.kind === "claude" ? ICON_LOCKED["agent-claude"] : ICON_LOCKED.shell, { size: 13 }));
   return ak;
 }
 
 // deskChipIcon: the 11px glyph in a tier chip ("box", "clone" or "host").
 function deskChipIcon(name) {
-  const svg = svgIcon24({ box: SVG_BOX_24, clone: SVG_CLONE_24, host: SVG_HOST_24 }[name], 11);
-  svg.setAttribute("class", "tchip-i");
-  return svg;
+  return uiIcon(ICON_LOCKED["tier-" + name], { size: 11, cls: "tchip-i" });
 }
 
 // paintCompactRow adds the rest of a desktop sidebar row: ONE chip (rowChip),
@@ -2843,9 +2847,8 @@ function renderDesktopEntry(it) {
     tog.onclick = () => toggleWsGroup(it.key);
     const cv = document.createElement("span");
     cv.className = "wcv";
-    cv.append(svgIcon24(it.collapsed ? SVG_CHEVRON_RIGHT_24 : SVG_CHEVRON_DOWN_24, 12));
-    const folder = svgIcon24(SVG_FOLDER_24, 13);
-    folder.setAttribute("class", "wf");
+    cv.append(uiIcon(it.collapsed ? ICON_LOCKED.expand : ICON_LOCKED.collapse, { size: 12 }));
+    const folder = uiIcon(ICON_LOCKED.folder, { size: 13, cls: "wf" });
     const name = document.createElement("span");
     name.className = "wname";
     name.textContent = it.label;
@@ -2880,7 +2883,7 @@ function renderDesktopEntry(it) {
       plus.setAttribute("type", "button");
       plus.title = "New session in " + shortPath(it.path);
       plus.setAttribute("aria-label", "New session in " + it.label);
-      plus.append(svgIcon24(SVG_PLUS_24, 13));
+      plus.append(uiIcon(ICON_LOCKED.new, { size: 13 }));
       plus.onclick = () => openSpawnDialog(null, { cwd: it.path, source: "group" });
       h.append(plus);
     }
@@ -7560,13 +7563,13 @@ function kitTabRow(cell, t) {
   const b = kitMenuButton(t.title(), "", false, () => { closeSessionMenu(false); setFocusedCell(cell); cell.activate(t); });
   const facts = tabSwitchFacts(t, lastSessions, profiles);
   let glyph;
-  if (facts.kind === "claude") glyph = claudeMarkSvg();
-  else if (facts.kind === "shell") glyph = svgIcon24(SVG_TERMINAL_24);
+  if (facts.kind === "claude") glyph = uiIcon(ICON_LOCKED["agent-claude"]);
+  else if (facts.kind === "shell") glyph = uiIcon(ICON_LOCKED.shell);
   else if (facts.kind === "file") {
     glyph = document.createElement("span");
     glyph.className = "menu-ficon";
     glyph.textContent = iconFor((t.path || "").split("/").pop() || t.title(), false, false);
-  } else glyph = tabIcon("terminal");
+  } else glyph = uiIcon(ICON_PANE_TAB.terminal);
   b.children[0].append(glyph);
   if (facts.tier) {
     const c = document.createElement("span");

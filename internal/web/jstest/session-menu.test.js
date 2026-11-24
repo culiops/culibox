@@ -36,19 +36,7 @@ function el(tag, ns) {
     replaceChildren(...n) { this.children = n; },
   };
 }
-// The product's own icon builders (tabs.js tabIcon / dockIcon), as stand-ins that draw what the real ones
-// draw at the top level: a 14x14 SVG, fill none, stroke currentColor, 1.2 wide, with one shape inside.
 const SVG_NS = "http://www.w3.org/2000/svg";
-function stubSvg() {
-  const svg = el("svg", SVG_NS);
-  svg.setAttribute("viewBox", "0 0 14 14");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.2");
-  svg.append(el("path", SVG_NS));
-  return svg;
-}
 // shape: one compact, comparable line per node. An icon is "svg:<kind>" (the builder tags it data-icon).
 function shape(n) {
   if (n.tag === "svg") return "svg:" + n.attrs["data-icon"];
@@ -60,12 +48,10 @@ function shape(n) {
 const NAMES = ["kitMenuNodes", "openSessionMenu"];
 function setup(width, nestedFn) {
   const menu = el("div");
-  const calls = { placed: [], closed: [], ran: [], reused: [] };
+  const calls = { placed: [], closed: [], ran: [] };
   const ctx = vm.createContext({
     $: (id) => (id === "session-menu" ? menu : null),
     document: { createElement: (t) => el(t), createElementNS: (ns, t) => el(t, ns) },
-    tabIcon: (k) => { calls.reused.push("tabIcon:" + k); return stubSvg(); },
-    dockIcon: (k) => { calls.reused.push("dockIcon:" + k); return stubSvg(); },
     window: { innerWidth: width },
     mobileActive: (w) => Number(w) <= 700,
     isNestedShell: nestedFn || (() => false),
@@ -76,7 +62,7 @@ function setup(width, nestedFn) {
     placeSessionMenu: (m, a) => calls.placed.push(a),
     sessionMenuSid: null,
   });
-  new vm.Script(read("svgicon.js")).runInContext(ctx);
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js"]) new vm.Script(read(f)).runInContext(ctx);
   new vm.Script(read("kitmenu.js")).runInContext(ctx);
   const src = NAMES.map((n) => fnSrc(read("app.js"), n)).join("\n") + "\nglobalThis.openSessionMenu = openSessionMenu;";
   new vm.Script(src).runInContext(ctx);
@@ -90,10 +76,10 @@ test("desktop: the row menu is four groups of kit rows, a separator between grou
   const t = setup(1440);
   t.open({}, live);
   assert.deepStrictEqual(t.menu.children.map(shape), [
-    btn("pencil", "Rename…"), SEP,
-    btn("files", "Open files here"), btn("pie", "Context by tool"), btn("copy", "Copy working directory"), btn("split", "Open in new pane"), SEP,
-    btn("pause", "Interrupt"), btn("", "Allow replies"), btn("tray", "Bring work home now"), btn("duplicate", "Duplicate…"), SEP,
-    btn("end", "End session…", true),
+    btn("pencil-line", "Rename…"), SEP,
+    btn("folder-tree", "Open files here"), btn("chart-pie", "Context by tool"), btn("clipboard-copy", "Copy working directory"), btn("columns-2", "Open in new pane"), SEP,
+    btn("pause", "Interrupt"), btn("", "Allow replies"), btn("arrow-down-to-line", "Bring work home now"), btn("copy-plus", "Duplicate…"), SEP,
+    btn("power", "End session…", true),
   ]);
   const kids = t.menu.children;
   assert.ok(kids[0].tag === "button" && kids[kids.length - 1].tag === "button", "no separator first or last");
@@ -112,7 +98,7 @@ test("desktop: no row wears the legacy .mi class, so no divider is drawn under e
   assert.ok(t.menu.children.every((n) => !/\bmi\b|\bdgr\b/.test(n.className)));
 });
 
-test("desktop: every icon is an inline SVG in the product's icon style, never a font glyph", () => {
+test("desktop: every icon is a vendored glyph (uiIcon, 14px), never a font glyph", () => {
   const t = setup(1440);
   t.open({}, live);
   const slots = t.menu.children.filter((n) => n.tag === "button").map((b) => b.children[0]);
@@ -129,26 +115,23 @@ test("desktop: every icon is an inline SVG in the product's icon style, never a 
     assert.strictEqual(svg.tag, "svg", kind);
     assert.strictEqual(svg.namespaceURI, SVG_NS, kind);
     assert.deepStrictEqual(
-      ["viewBox", "aria-hidden", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"].map((a) => svg.attrs[a]),
-      ["0 0 14 14", "true", "none", "currentColor", "1.2", "round", "round"], kind);
+      ["viewBox", "aria-hidden", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "width", "height"].map((a) => svg.attrs[a]),
+      ["0 0 24 24", "true", "none", "currentColor", "2", "round", "round", "14", "14"], kind);
     assert.ok(svg.children.length >= 1, kind + " has a shape");
   }
-  // Shapes the product already draws are reused, not drawn a second time.
-  assert.deepStrictEqual(t.calls.reused.sort(), ["dockIcon:hide", "dockIcon:own", "dockIcon:own", "tabIcon:files"]);
 });
 
-test("desktop: Duplicate is Copy's two windows plus a small plus, so the two rows read apart", () => {
+test("desktop: Duplicate and Copy working directory are two glyphs, so the two rows read apart", () => {
   const t = setup(1440);
   t.open({}, live);
   const svgOf = (text) => t.menu.children.filter((n) => n.tag === "button").find((b) => b.children[1].textContent === text).children[0].children[0];
-  assert.strictEqual(svgOf("Copy working directory").children.length, 1);
-  assert.ok(svgOf("Duplicate…").children.length > svgOf("Copy working directory").children.length, "the plus is extra");
+  assert.notStrictEqual(svgOf("Copy working directory").attrs["data-icon"], svgOf("Duplicate…").attrs["data-icon"]);
 });
 
 test("phone: no SVG is built for the legacy menu", () => {
   const t = setup(390);
   t.open({}, live);
-  assert.deepStrictEqual(t.calls.reused, []);
+  assert.ok(t.menu.children.every((n) => n.tag !== "svg"));
   assert.ok(t.menu.children.every((n) => n.children.length === 0));
 });
 

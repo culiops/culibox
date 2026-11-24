@@ -24,8 +24,6 @@
 
 const REVIEW_NONE = Object.freeze({});
 const REVIEW_LAND_MS = 10000; // a landing asked for that the view did not take (Changes could not open) is forgotten after this
-const DG_ICON_UP = [["path", { d: "M3.5 8.5L7 5l3.5 3.5" }]];
-const DG_ICON_DOWN = [["path", { d: "M3.5 5.5L7 9l3.5-3.5" }]];
 
 let reviewMarks = null; // Map: session id -> {<abs path>: mark}; null until the stored marks were read
 
@@ -114,12 +112,12 @@ function editorReviewRow(tab) {
 // editorReviewHead builds the header row of the Changes view: {el, label, ...} (label: the span editorDiffPaintLabel writes).
 function editorReviewHead(tab) {
   const span = (cls, text) => { const e = document.createElement("span"); e.className = cls; if (text !== undefined) e.textContent = text; return e; };
-  const iconBtn = (icon, label, dir) => {
+  const iconBtn = (viewKey, label, dir) => {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "btn btn-ghost btn-icon btn-sm dk-dh-step";
     b.setAttribute("aria-label", label);
-    b.append(svgIcon(icon, { icon: "view", size: "14" }));
+    b.append(uiIcon(iconOf(ICON_DOCK_VIEW, viewKey), { size: 14 }));
     b.onclick = () => { if (b.getAttribute("aria-disabled") !== "true") editorReviewStep(tab, dir); };
     return b;
   };
@@ -135,8 +133,8 @@ function editorReviewHead(tab) {
   const right = span("dk-dh-r");
   const pos = span("dk-dh-pos");
   pos.setAttribute("aria-live", "polite");
-  const prev = iconBtn(DG_ICON_UP, "Previous change", -1);
-  const next = iconBtn(DG_ICON_DOWN, "Next change", 1);
+  const prev = iconBtn("prev", "Previous change", -1);
+  const next = iconBtn("next", "Next change", 1);
   const kbd = span("dk-dh-kbd", typeof shortcutHint === "function" ? shortcutHint("editor.nextChange", IS_MAC) : "");
   const mark = document.createElement("button");
   mark.type = "button";

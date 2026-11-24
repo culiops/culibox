@@ -135,14 +135,12 @@ function menuGroups(items) {
   return groups.filter((g) => g.length > 0);
 }
 
-// MENU_ICON: the drawing in each row's 16px icon slot, as a KIND the DOM code (menuIconSvg in
-// kitmenu.js) draws as inline SVG in the product's icon style. A font glyph is not used: the frame's
-// placeholder characters are tofu wherever no installed font has them. Reply opt-in and Restart
-// have none drawn, so they keep an empty slot and their text lines up with the rest. One kind per
-// id; Copy working directory and Duplicate are neighbours, so they differ (Duplicate adds a plus).
+// MENU_ICON: the drawing in each row's 16px icon slot, as an ICON_MENU kind (iconmap.js) that menuIconSvg
+// (kitmenu.js) draws as a vendored glyph. Reply opt-in and Restart have none drawn, so they keep an empty
+// slot and their text lines up with the rest. One kind per id.
 const MENU_ICON = {
-  rename: "pencil", files: "files", attribution: "pie", copycwd: "copy", newpane: "split",
-  interrupt: "pause", bringhome: "tray", duplicate: "duplicate", end: "end",
+  rename: "rename", files: "files", attribution: "attribution", copycwd: "copy", newpane: "split",
+  interrupt: "interrupt", bringhome: "bringhome", duplicate: "duplicate", end: "end",
 };
 
 // menuIcon: the icon kind for a menuItems id, "" where there is none.

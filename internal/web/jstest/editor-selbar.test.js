@@ -325,7 +325,7 @@ test("selBarAddAction (P3's seam) appends a button that runs with the tab and th
   const ran = [];
   ed.focus();
   ed.select(3, 1, 5, 12);
-  assert.equal(get("selBarAddAction")({ key: "extra", label: "Extra", icon: "pencil", run: (t, r) => ran.push([t, r]) }), true);
+  assert.equal(get("selBarAddAction")({ key: "extra", label: "Extra", icon: "edit", run: (t, r) => ran.push([t, r]) }), true);
   assert.deepEqual(labels(ed), ["Insert at prompt", "Copy a.go:3-5", "Add note", "Extra"], "drawn at once while the bar is up, after the built-in two and Add note");
   buttons(ed)[3].click();
   assert.equal(ran.length, 1);

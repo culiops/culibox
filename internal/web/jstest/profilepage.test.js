@@ -149,8 +149,6 @@ function page(over) {
     pfCredsView: { store: { initialized: true, locked: false }, aws: [] },
     secretSources: [],
     ghApps: ["acme-app"], refreshCredLists: async () => { calls.push("refreshCredLists"); },
-    // tabs.js draws the dock's glyphs (the ⋯ menu's Duplicate… and Delete… icons); a bare svg stands in here.
-    tabIcon: () => new Node("svg"), dockIcon: () => new Node("svg"),
     awsErrText: (e) => "aws: " + e.message,
     CRED_D4: "The agent will be able to change this AWS account: create, modify and delete resources.",
     CRED_D4_REMEDY: "Use a role without write access as the base and put this one under Elevate.",
@@ -202,7 +200,7 @@ function page(over) {
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["svgicon.js", "kitmenu.js", "fsops.js", "handbackmodel.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "fsops.js", "handbackmodel.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
@@ -238,7 +236,7 @@ test("a nav row is name, lock, then box only when the lock is set", () => {
   const t = page({ profiles: lockedInfra() });
   t.box.pfvRenderNav();
   const items = byCls(t.els["pf-navlist"], "pfv-ni").filter((n) => !hasCls("pfv-ni-add")(n));
-  const order = (n) => n.children.filter((c) => c instanceof Node).map((c) => c.className.split(/\s+/)[0] + (c.tag === "svg" ? "(svg)" : ""));
+  const order = (n) => n.children.filter((c) => c instanceof Node).map((c) => (c.tag === "svg" ? c.className.split(/\s+/).pop() + "(svg)" : c.className.split(/\s+/)[0]));
   assert.deepStrictEqual(order(items[0]), ["pfv-ni-name", "pfv-lock(svg)", "pfv-sr"], "claude: read-only");
   assert.deepStrictEqual(order(items[1]), ["pfv-ni-name"], "aws-ops: bound but not locked");
   assert.deepStrictEqual(order(items[2]), ["pfv-ni-name", "pfv-ni-boxonly"], "infra-terraform: locked");
@@ -262,21 +260,28 @@ test("the nav rebuilds when host_block changes, not when only runtime does", () 
   assert.deepStrictEqual(texts(now, "pfv-ni-boxonly"), ["box only"]);
 });
 
-// N2 (diff M2.1#9): the lock is the frame's glyph, 10x12 (it was 10x11). Only the desktop page draws it: pfvRenderNav and pfvDrawNote run behind
-// pfvOnPage(), and the phone's own list and its note have no lock, so the phone cannot change with it.
-test("the read-only lock is the frame's 10x12 glyph: viewBox 0 0 10 12, rect y 5.5 h 5.5 rx 1, stroke 1, the shackle M3 5.5V3.75a2 2 0 0 1 4 0V5.5", () => {
+// The lock is the vendored lock at 12px (#168). Only the desktop page draws it: pfvRenderNav and pfvDrawNote run behind pfvOnPage(), and the
+// phone's own list and its note have no lock, so the phone cannot change with it.
+test("read-only lock is the vendored lock", () => {
   const t = page();
   t.box.pfvRenderNav();
   const lock = byCls(t.els["pf-navlist"], "pfv-lock")[0];
   assert.strictEqual(lock.tag, "svg");
-  assert.deepStrictEqual(["width", "height", "viewBox", "aria-hidden"].map((k) => lock.getAttribute(k)), ["10", "12", "0 0 10 12", "true"]);
-  const [rect, shackle] = lock.children;
-  assert.deepStrictEqual([rect.tag, rect.getAttribute("x"), rect.getAttribute("y"), rect.getAttribute("width"), rect.getAttribute("height"), rect.getAttribute("rx")], ["rect", "1.5", "5.5", "7", "5.5", "1"]);
-  assert.deepStrictEqual([shackle.tag, shackle.getAttribute("d")], ["path", "M3 5.5V3.75a2 2 0 0 1 4 0V5.5"]);
-  for (const n of [rect, shackle]) assert.deepStrictEqual(["fill", "stroke", "stroke-width"].map((k) => n.getAttribute(k)), ["none", "currentColor", "1"]);
-  assert.strictEqual(lock.children.length, 2);
+  assert.strictEqual(lock.getAttribute("data-icon"), "lock");
+  assert.deepStrictEqual(["width", "height", "viewBox", "aria-hidden"].map((k) => lock.getAttribute(k)), ["12", "12", "0 0 24 24", "true"]);
+  assert.match(lock.getAttribute("class"), /\bui-icon\b.*\bpfv-lock\b/);
+  assert.ok(lock.children.length >= 1);
   assert.ok(!/pfv-lock/.test(fs.readFileSync(path.join(STATIC, "app.css"), "utf8")), "the phone's stylesheet never styles it");
   for (const f of ["app.js", "mobileterm.js", "shell.js"]) assert.ok(!/pfvLockIcon/.test(fs.readFileSync(path.join(STATIC, f), "utf8")), f + " (phone code) does not draw it");
+});
+
+test("profilepage.js draws no <svg> of its own: the lock, the ⋯ and the saved tick are the vendored set's", () => {
+  const src = fs.readFileSync(path.join(STATIC, "profilepage.js"), "utf8");
+  assert.ok(!/pfvIcon|PFV_STROKE|PFV_SVG|createElementNS/.test(src));
+  const t = page();
+  t.box.pfvRenderNav();
+  assert.strictEqual(t.box.pfvDotsIcon().getAttribute("data-icon"), "ellipsis");
+  assert.strictEqual(t.box.pfvDotsIcon().getAttribute("width"), "14");
 });
 
 test("pfvRenderNav marks the shown profile", async () => {
