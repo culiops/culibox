@@ -249,6 +249,7 @@ type Config struct {
 	RepliesEnabled    bool    `json:"replies_enabled,omitempty"`      // kill-switch for reply + remote Yes/No; absent = off
 	BundleSource      string  `json:"bundle_source,omitempty"`        // "" → auto-detect; "off" → no bundle
 	BoxImage          string  `json:"box_image,omitempty"`            // the image every box runs; DefaultBoxImage when unset
+	ImageCheck        *bool   `json:"image_check,omitempty"`          // nil/true → look up the published image once a day; false → never
 	BoxIdleTTLSeconds int     `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
 	BoxPidsLimit      int     `json:"box_pids_limit,omitempty"`       // processes+threads per box; 0 → 512
 	BoxTmpSize        string  `json:"box_tmp_size,omitempty"`         // box /tmp tmpfs size, number + k/m/g; "" → 512m
@@ -328,6 +329,10 @@ func (c Config) BoxImageOrDefault() string {
 	}
 	return DefaultBoxImage
 }
+
+// ImageCheckOn reports whether the daily registry lookup for the published box
+// image may run: on unless image_check is false.
+func (c Config) ImageCheckOn() bool { return c.ImageCheck == nil || *c.ImageCheck }
 
 // BoxVMSize is the macOS box VM's CPUs and memory in GiB. Unset means all the
 // host's cores and half its RAM in whole GiB, but never less than 4 GiB, so a

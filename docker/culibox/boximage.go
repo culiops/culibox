@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -399,4 +400,75 @@ func (s ImageState) CheckFor(image, serverArch string) (fatal bool, msg string) 
 func mustRepo(image string) string {
 	r, _ := Repo(image)
 	return r
+}
+
+// ImageInfo is what the daemon says about an image, as far as it can be trusted:
+// every field comes from the image itself, so a malformed value is dropped (its
+// field left empty or nil) rather than passed on.
+type ImageInfo struct {
+	Present     bool
+	ID          string   // sha256:<64 hex>
+	RepoDigests []string // repo@sha256:<64 hex> only
+	Created     time.Time
+	Arch, Hash  string
+	ClaudeCode  string   // ValidClaudeCode only
+	DiffIDs     []string // RootFS.Layers; nil when any is malformed
+}
+
+var (
+	sha256Ref  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	repoDigest = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
+)
+
+// Describe reads one image's facts with a single `docker image inspect`. Like
+// Inspect it reads stdout only and tells a missing image (Present false, no error)
+// from a real failure by stderr.
+func (d Docker) Describe(ctx context.Context, image string) (ImageInfo, error) {
+	out, err := d.command(ctx, "image", "inspect", "--format", "{{json .}}", image).Output()
+	if err != nil {
+		var stderr string
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			stderr = strings.TrimSpace(string(ee.Stderr))
+			if strings.Contains(strings.ToLower(stderr), "no such image") {
+				return ImageInfo{}, nil
+			}
+		}
+		return ImageInfo{}, fmt.Errorf("docker image inspect: %w: %s", err, stderr)
+	}
+	var raw struct {
+		ID           string   `json:"Id"`
+		RepoDigests  []string `json:"RepoDigests"`
+		Created      string   `json:"Created"`
+		Architecture string   `json:"Architecture"`
+		Config       struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+		RootFS struct {
+			Layers []string `json:"Layers"`
+		} `json:"RootFS"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return ImageInfo{}, fmt.Errorf("docker image inspect: unreadable answer: %w", err)
+	}
+	info := ImageInfo{Present: true, Arch: raw.Architecture, Hash: raw.Config.Labels[LabelHash]}
+	if sha256Ref.MatchString(raw.ID) {
+		info.ID = raw.ID
+	}
+	for _, r := range raw.RepoDigests {
+		if repoDigest.MatchString(r) {
+			info.RepoDigests = append(info.RepoDigests, r)
+		}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw.Created); err == nil {
+		info.Created = t
+	}
+	if v := raw.Config.Labels[LabelClaudeCode]; ValidClaudeCode(v) {
+		info.ClaudeCode = v
+	}
+	// One bad diff id and the list stops being a set to compare against.
+	if ids := raw.RootFS.Layers; len(ids) > 0 && !slices.ContainsFunc(ids, func(s string) bool { return !sha256Ref.MatchString(s) }) {
+		info.DiffIDs = ids
+	}
+	return info, nil
 }

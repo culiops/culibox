@@ -2096,3 +2096,70 @@ func TestCheckAdvisesPlainSetup(t *testing.T) {
 		t.Errorf("missing: msg = %q, want it to say the image is not set up", msg)
 	}
 }
+
+const (
+	hexA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	hexB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	hexC = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+)
+
+func TestDescribeParses(t *testing.T) {
+	js := `{"Id":"sha256:` + hexA + `","RepoDigests":["ghcr.io/culiops/culibox@sha256:` + hexB + `"],` +
+		`"Created":"2026-11-20T10:11:12.123456789Z","Architecture":"arm64",` +
+		`"Config":{"Labels":{"` + LabelHash + `":"abc123def456","` + LabelClaudeCode + `":"2.1.325"}},` +
+		`"RootFS":{"Type":"layers","Layers":["sha256:` + hexA + `","sha256:` + hexC + `"]}}`
+	bin, log := fakeDocker(t, "cat <<'EOF'\n"+js+"\nEOF\necho 'warning: context' >&2\n")
+	got, err := Docker{Bin: bin, Args: []string{"--host", "unix:///s"}}.Describe(context.Background(), "culiops/culibox:base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ImageInfo{
+		Present: true, ID: "sha256:" + hexA,
+		RepoDigests: []string{"ghcr.io/culiops/culibox@sha256:" + hexB},
+		Created:     time.Date(2026, 11, 20, 10, 11, 12, 123456789, time.UTC),
+		Arch:        "arm64", Hash: "abc123def456", ClaudeCode: "2.1.325",
+		DiffIDs: []string{"sha256:" + hexA, "sha256:" + hexC},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Describe =\n%+v\nwant\n%+v", got, want)
+	}
+	b, _ := os.ReadFile(log)
+	if !strings.Contains(string(b), "--host unix:///s image inspect --format {{json .}} culiops/culibox:base") {
+		t.Fatalf("argv = %q", b)
+	}
+}
+
+func TestDescribeMissing(t *testing.T) {
+	bin, _ := fakeDocker(t, "echo 'Error: No such image: x' >&2\nexit 1\n")
+	got, err := Docker{Bin: bin}.Describe(context.Background(), "x")
+	if err != nil || got.Present {
+		t.Fatalf("Describe = %+v, %v; want Present=false and no error", got, err)
+	}
+	bin, _ = fakeDocker(t, "echo 'Cannot connect to the Docker daemon' >&2\nexit 1\n")
+	if _, err := (Docker{Bin: bin}).Describe(context.Background(), "x"); err == nil {
+		t.Fatal("a daemon failure must be an error")
+	}
+}
+
+// Everything in the inspect output is the image's word: a bad value is dropped,
+// never passed on.
+func TestDescribeDropsInvalid(t *testing.T) {
+	js := `{"Id":"nope","RepoDigests":["evil","ghcr.io/culiops/culibox@sha256:` + hexB + `"],` +
+		`"Created":"nope","Architecture":"amd64",` +
+		`"Config":{"Labels":{"` + LabelHash + `":"abc","` + LabelClaudeCode + `":"2.1.x$(id)"}},` +
+		`"RootFS":{"Layers":["sha256:` + hexA + `","sha256:short"]}}`
+	bin, _ := fakeDocker(t, "cat <<'EOF'\n"+js+"\nEOF\n")
+	got, err := Docker{Bin: bin}.Describe(context.Background(), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Present || got.ID != "" || !got.Created.IsZero() || got.ClaudeCode != "" || got.DiffIDs != nil {
+		t.Fatalf("invalid values survived: %+v", got)
+	}
+	if !slices.Equal(got.RepoDigests, []string{"ghcr.io/culiops/culibox@sha256:" + hexB}) {
+		t.Fatalf("RepoDigests = %v, want only the well-formed one", got.RepoDigests)
+	}
+	if got.Arch != "amd64" {
+		t.Fatalf("Arch = %q", got.Arch)
+	}
+}
