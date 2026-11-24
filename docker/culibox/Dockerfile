@@ -7,6 +7,8 @@
 # node:24-bookworm-slim, pinned by the INDEX digest (the multi-arch manifest list,
 # so one pin covers amd64 and arm64). Tag and digest read on 2026-10-19 with
 #   docker buildx imagetools inspect node:24-bookworm-slim
+# Bumped 2026-11-24 to the index Docker Hub served the weekly scan (#357): Node
+# 24.22.1 and Debian's current apt, which fix the scan's node and apt findings.
 # Every stage must carry the same digest (a test enforces it). Bumping the base is
 # a manual edit of both FROM lines, which changes the Dockerfile hash on purpose.
 # RESIDUAL, accepted: apt packages (git, python3, chromium, make, ...)
@@ -19,7 +21,7 @@
 #   https://github.com/martanne/abduco/releases/download/v0.6/abduco-0.6.tar.gz
 # To bump: change ABDUCO_VERSION, download the tarball, recompute the sum and
 # compare it with Homebrew's Formula/a/abduco.rb.
-FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS abduco-build
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS abduco-build
 ARG ABDUCO_VERSION=0.6
 ARG ABDUCO_SHA256=c90909e13fa95770b5afc3b59f311b3d3d2fdfae23f9569fa4f96a3e192a35f4
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -52,7 +54,7 @@ RUN set -eu; \
 # HashiCorp extending the key's expiry changes the file (and so this sum): that is
 # a manual bump, not a failure to work around. (tfenv's own bundled copy of the
 # key expired on 2026-04-18, which is why it is replaced.)
-FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS hashicorp-key
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS hashicorp-key
 ARG HASHICORP_PGP_FPR=C874011F0AB405110D02105534365D9472D7468F
 ARG HASHICORP_PGP_SHA256=c2f5bc1163bd8d15a711616b587bcede212d045a5b8b52df01c74095897cd065
 RUN apt-get update && apt-get install -y --no-install-recommends gnupg curl ca-certificates \
@@ -69,7 +71,7 @@ RUN set -eu; \
     mkdir -p /out; gpg --dearmor -o /out/hashicorp-keys.pgp /tmp/hashicorp-key.txt; \
     [ -s /out/hashicorp-keys.pgp ]
 
-FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 
 # Links the published ghcr package to this repository.
 LABEL org.opencontainers.image.source="https://github.com/culiops/culibox"

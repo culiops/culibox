@@ -59,7 +59,7 @@ func TestRenderListsPinsAndPackages(t *testing.T) {
 	}
 	for _, want := range []string{
 		"| kubectl | 1.37.1 |",
-		"a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5",
+		"dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54",
 		"`gcc`", "`libc6-dev`", "`chromium`", "`zsh`", "`git`",
 		"| `playwright` |",
 		"CGO_ENABLED=1 go test -race",

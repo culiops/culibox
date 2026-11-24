@@ -8,7 +8,7 @@ test fails when the two drift apart.
 
 ## Base image
 
-`node:24-bookworm-slim`, pinned by digest `sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5`.
+`node:24-bookworm-slim`, pinned by digest `sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54`.
 It carries Node.js, npm and the Debian packages of the base itself, which change only when this digest is
 bumped.
 
