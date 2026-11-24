@@ -105,10 +105,11 @@ func errorText(t *testing.T, w *httptest.ResponseRecorder) string {
 // oneRow is the only audit row, checked for outcome, session, provider, error.
 func oneRow(t *testing.T, rec *memRec, sid string, o Outcome, provider, why string) {
 	t.Helper()
-	if len(rec.rows) != 1 {
-		t.Fatalf("rows = %+v, want exactly one", rec.rows)
+	rows := rec.snapshot()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want exactly one", rows)
 	}
-	if r := rec.rows[0]; r.SessionID != sid || r.Outcome != o || r.Provider != provider || r.Error != why {
+	if r := rows[0]; r.SessionID != sid || r.Outcome != o || r.Provider != provider || r.Error != why {
 		t.Fatalf("row = %+v, want session %q outcome %s provider %q error %q", r, sid, o, provider, why)
 	}
 }

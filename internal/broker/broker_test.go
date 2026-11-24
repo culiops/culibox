@@ -63,6 +63,21 @@ type memRec struct {
 	recErr  error // fails every Record while set
 }
 
+// snapshot is a copy of the rows recorded so far, read under the lock: a
+// background revoke (revokeAsync) may still be appending.
+func (m *memRec) snapshot() []Row {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]Row(nil), m.rows...)
+}
+
+// reset forgets the rows recorded so far, under the lock.
+func (m *memRec) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rows = nil
+}
+
 func (m *memRec) RecordApproval(r ApprovalRow) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
