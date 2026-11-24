@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,6 +31,27 @@ const (
 	ociManifest   = "application/vnd.oci.image.manifest.v1+json"
 	dockerSchema2 = "application/vnd.docker.distribution.manifest.v2+json"
 )
+
+// ErrNotFound marks a Resolve that failed because the registry has no index under
+// dockerfile-<hash>: the image for that Dockerfile is not published (yet). Only
+// that: a 404 on anything else the registry names is a different failure.
+var ErrNotFound = errors.New("no image is published for this Dockerfile")
+
+// tagMissing is the Resolve error for an absent tag. Its text is the wrapped
+// error's, unchanged (release.yml logs it), and it is ErrNotFound.
+type tagMissing struct{ err error }
+
+func (e tagMissing) Error() string        { return e.err.Error() }
+func (e tagMissing) Unwrap() error        { return e.err }
+func (e tagMissing) Is(target error) bool { return target == ErrNotFound }
+
+// statusError is a registry answer other than 200. Its text is what fetch always said.
+type statusError struct {
+	path, status string
+	code         int
+}
+
+func (e *statusError) Error() string { return fmt.Sprintf("GET %s: %s", e.path, e.status) }
 
 // digestForm is the only digest form fetched: it becomes part of a request path
 // and of error messages, so nothing else the registry names may get that far.
@@ -95,7 +117,12 @@ func Resolve(ctx context.Context, c *http.Client, registry, repoPath, hash strin
 	accept := strings.Join([]string{ociIndex, dockerList, ociManifest, dockerSchema2}, ", ")
 	body, hdr, err := get("manifests", tag, accept)
 	if err != nil {
-		return Index{}, fmt.Errorf("%s:%s: %w (box-image.yml publishes it on main when docker/culibox changes; run it, then re-run this release)", repoPath, tag, err)
+		err = fmt.Errorf("%s:%s: %w (box-image.yml publishes it on main when docker/culibox changes; run it, then re-run this release)", repoPath, tag, err)
+		var se *statusError
+		if errors.As(err, &se) && se.code == http.StatusNotFound {
+			err = tagMissing{err}
+		}
+		return Index{}, err
 	}
 	index := digest(body)
 	if h := hdr.Get("Docker-Content-Digest"); h != "" && h != index {
@@ -260,7 +287,7 @@ func fetch(ctx context.Context, c *http.Client, u, token, accept string) ([]byte
 		return nil, nil, fmt.Errorf("GET %s: answer larger than %d bytes", req.URL.Path, maxBody)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("GET %s: %s", req.URL.Path, resp.Status)
+		return nil, nil, &statusError{path: req.URL.Path, status: resp.Status, code: resp.StatusCode}
 	}
 	return body, resp.Header, nil
 }

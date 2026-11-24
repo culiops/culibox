@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -428,5 +429,37 @@ func TestResolveDropsMalformedDiffIDs(t *testing.T) {
 	}
 	if p := got.Platforms["amd64"]; len(p.DiffIDs) != 2 {
 		t.Errorf("amd64 DiffIDs = %v, want kept", p.DiffIDs)
+	}
+}
+
+// A missing tag is told apart from every other failure, so a caller can say "not
+// published yet"; a 404 on anything else the index names is not that.
+func TestResolveMissingTagIsErrNotFound(t *testing.T) {
+	r := newRegistry(t, both(testHash)...)
+	r.missing = true
+	_, err := resolveFrom(t, r)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	// release.yml logs the text: it stays as it was.
+	want := "culiops/culibox:dockerfile-" + testHash + ": GET /v2/culiops/culibox/manifests/dockerfile-" + testHash +
+		": 404 Not Found (box-image.yml publishes it on main when docker/culibox changes; run it, then re-run this release)"
+	if err.Error() != want {
+		t.Fatalf("text changed:\n got %q\nwant %q", err.Error(), want)
+	}
+}
+
+func TestResolveOtherFailuresAreNotErrNotFound(t *testing.T) {
+	r := newRegistry(t, both(testHash)...)
+	r.tokenCode = http.StatusNotFound
+	if _, err := resolveFrom(t, r); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("a refused token: err = %v", err)
+	}
+	r = newRegistry(t, both(testHash)...)
+	for dig := range r.blobs { // a config blob the manifest names is gone
+		delete(r.blobs, dig)
+	}
+	if _, err := resolveFrom(t, r); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("a missing blob: err = %v", err)
 	}
 }
