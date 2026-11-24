@@ -71,6 +71,7 @@ func TestGenerateRefuses(t *testing.T) {
 		{"version mismatch", func(o *options) { o.LucideVersion = "1.71.0" }, "1.71.0"},
 		{"nested g", func(o *options) { o.Names = []string{"bad-g"} }, "bad-g.svg"},
 		{"bad attribute", func(o *options) { o.Names = []string{"bad-attr"} }, "bad-attr.svg"},
+		{"bad attribute names style", func(o *options) { o.Names = []string{"bad-attr"} }, "style"},
 		{"short lucide integrity", func(o *options) { o.LucideIntegrity = "sha512-short" }, "-lucide-integrity"},
 		{"short si integrity", func(o *options) { o.SIIntegrity = "sha512-short" }, "-si-integrity"},
 		{"no names", func(o *options) { o.Names = nil }, "no icon names"},
@@ -114,6 +115,9 @@ func TestGenerateRefusesShapes(t *testing.T) {
 		{"no children", "lucide", lucide("0 0 24 24", ""), "no drawable"},
 		{"text node", "lucide", lucide("0 0 24 24", good+"hello"), "text"},
 		{"namespaced attribute", "lucide", lucide("0 0 24 24", `<path d="M1 1" xlink:href="#a" xmlns:xlink="http://www.w3.org/1999/xlink" />`), "href"},
+		{"fill red", "lucide", lucide("0 0 24 24", `<circle cx="1" cy="1" r="1" fill="red" />`), `fill="red"`},
+		{"fill none", "lucide", lucide("0 0 24 24", `<circle cx="1" cy="1" r="1" fill="none" />`), `fill="none"`},
+		{"si fill currentColor", "si", `<svg viewBox="0 0 24 24"><title>A</title><path d="M1 1" fill="currentColor"/></svg>`, "fill"},
 		{"si two paths", "si", `<svg viewBox="0 0 24 24"><title>A</title><path d="M1 1"/><path d="M2 2"/></svg>`, "exactly"},
 		{"si no title", "si", `<svg viewBox="0 0 24 24"><path d="M1 1"/></svg>`, "exactly"},
 		{"si extra attr", "si", `<svg viewBox="0 0 24 24"><title>A</title><path d="M1 1" fill="red"/></svg>`, "fill"},
@@ -136,6 +140,20 @@ func TestGenerateRefusesShapes(t *testing.T) {
 				t.Errorf("error %q should name x.svg and %q", err, c.want)
 			}
 		})
+	}
+}
+
+func TestGenerateKeepsCurrentColorFill(t *testing.T) {
+	o := fixtureOpts("x")
+	o.LucideDir = writeSVG(t, "x", "<!-- @license lucide-static v1.70.0 - ISC -->\n<svg viewBox=\"0 0 24 24\">\n"+
+		`<circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />`+"\n</svg>\n")
+	out, err := generate(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"x": ["s", [["circle", { "cx": "16.5", "cy": "7.5", "r": ".5", "fill": "currentColor" }]]],`
+	if !strings.Contains(string(out), want) {
+		t.Errorf("output lacks %s\n%s", want, out)
 	}
 }
 

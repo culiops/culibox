@@ -28,7 +28,7 @@ var (
 )
 
 // Elements and attributes a glyph may use: drawing primitives only, no
-// styling, scripting or references, so the output cannot carry anything else.
+// styling, scripting or references (plus fill="currentColor", see walk), so the output cannot carry anything else.
 var (
 	allowedTags = map[string]bool{"path": true, "circle": true, "rect": true, "line": true, "polyline": true, "polygon": true, "ellipse": true}
 	allowedAttr = map[string]bool{"d": true, "cx": true, "cy": true, "r": true, "rx": true, "ry": true, "x": true, "y": true,
@@ -240,8 +240,11 @@ func walk(path string, si bool) (els []element, license string, err error) {
 					if a.Name.Space == "" && a.Name.Local == "class" {
 						continue
 					}
-					if a.Name.Space != "" || !allowedAttr[a.Name.Local] || (si && a.Name.Local != "d") {
-						return fail("attribute %q on <%s> is not allowed", a.Name.Local, e.Tag)
+					// fill is allowed only as currentColor: Lucide's filled dots
+					// (key-round, vault) keep their fill, any other paint is refused.
+					fillOK := a.Name.Local == "fill" && a.Value == "currentColor"
+					if a.Name.Space != "" || !(allowedAttr[a.Name.Local] || fillOK) || (si && a.Name.Local != "d") {
+						return fail("attribute %s=%q on <%s> is not allowed; pick another glyph or widen the allowlist in gen.go", a.Name.Local, a.Value, e.Tag)
 					}
 					e.Attrs = append(e.Attrs, attr{a.Name.Local, a.Value})
 				}
