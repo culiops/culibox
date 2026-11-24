@@ -71,21 +71,22 @@ func NeedsNetwork(in Inputs) bool {
 // Evaluate decides which image is this version's and how the running one compares.
 func Evaluate(in Inputs) Report {
 	r := Report{Configured: in.Configured, Explicit: in.Explicit, Info: in.Info, CheckOn: in.CheckOn}
-	if c := in.Cache; c != nil {
-		r.CheckedAt, r.CheckErr, r.Scan = c.CheckedAt, c.RegistryErr, c.Scan
-	}
 
-	// The registry's answer counts only for this binary's Dockerfile, and only where
-	// a call is allowed: a cache left over from a config that has since turned the
-	// check off must not speak.
+	// The cache speaks only for this binary's Dockerfile, and only where a call is
+	// allowed: one left over from a config that has since turned the check off, or
+	// from another binary, must not show its time, error, scan or registry answer.
 	var plat boxregistry.Platform
-	if c := in.Cache; NeedsNetwork(in) && c != nil && c.Hash == boximage.Hash() && c.Registry != nil && c.Registry.Ref != "" {
-		r.Want, r.WantSource = c.Registry.Ref, SourceRegistry
-		var ok bool
-		if plat, ok = c.Registry.Platforms[in.Arch]; ok {
-			r.WantCreated, r.WantClaudeCode = plat.Created, plat.ClaudeCode
+	if c := in.Cache; NeedsNetwork(in) && c != nil && c.Hash == boximage.Hash() {
+		r.CheckedAt, r.CheckErr, r.Scan = c.CheckedAt, c.RegistryErr, c.Scan
+		if c.Registry != nil && c.Registry.Ref != "" {
+			r.Want, r.WantSource = c.Registry.Ref, SourceRegistry
+			var ok bool
+			if plat, ok = c.Registry.Platforms[in.Arch]; ok {
+				r.WantCreated, r.WantClaudeCode = plat.Created, plat.ClaudeCode
+			}
 		}
-	} else if in.Published != "" {
+	}
+	if r.Want == "" && in.Published != "" {
 		r.Want, r.WantSource = in.Published, SourceBaked
 	}
 

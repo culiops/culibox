@@ -183,6 +183,41 @@ func TestEvaluateCarriesCacheFacts(t *testing.T) {
 	}
 }
 
+// A cache speaks only where the registry's answer would: a release default, or a
+// check turned off, must not show a leftover cache's time, error or scan.
+func TestEvaluateLeftoverCacheStaysSilent(t *testing.T) {
+	left := registryCache(ref("b"), platform(1))
+	left.Hash = "another-dockerfile"
+	left.RegistryErr = "registry unreachable"
+	left.Scan = &Scan{Number: 357, Count: 680}
+	same := registryCache(ref("b"), platform(1))
+	same.RegistryErr = "registry unreachable"
+	same.Scan = &Scan{Number: 357, Count: 680}
+	for _, tc := range []struct {
+		name string
+		in   Inputs
+		show bool
+	}{
+		{"release default, cache of another hash", Inputs{Configured: defaultImage, Published: ref("a"), CheckOn: true, Cache: left}, false},
+		{"release default, cache of this hash", Inputs{Configured: defaultImage, Published: ref("a"), CheckOn: true, Cache: same}, false},
+		{"check off, cache of another hash", Inputs{Configured: defaultImage, Explicit: true, Cache: left}, false},
+		{"check off, cache of this hash", Inputs{Configured: defaultImage, Explicit: true, Cache: same}, false},
+		{"check on, cache of another hash", Inputs{Configured: defaultImage, Explicit: true, CheckOn: true, Cache: left}, false},
+		{"check on, cache of this hash", Inputs{Configured: defaultImage, Explicit: true, CheckOn: true, Cache: same}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Evaluate(tc.in)
+			shown := r.Scan != nil || !r.CheckedAt.IsZero() || r.CheckErr != ""
+			if shown != tc.show {
+				t.Fatalf("cache facts shown = %v, want %v: %+v", shown, tc.show, r)
+			}
+			if tc.show && (r.Scan == nil || r.CheckErr != "registry unreachable" || r.CheckedAt.IsZero()) {
+				t.Errorf("happy case lost a fact: %+v", r)
+			}
+		})
+	}
+}
+
 // Sizes are the registry's word, already capped per layer; the sum must still
 // not wrap however many layers claim the cap.
 func TestEvaluateMBDoesNotOverflow(t *testing.T) {
