@@ -107,8 +107,8 @@ test("update without a config line (the release default) says run, with no confi
 test("stale-unknown names why: the registry's error, not checked yet, or the check being off", () => {
   const base = { verdict: "stale-unknown", check_on: true };
   const msg = (over) => boxImageRows(report(Object.assign({}, base, over))).find((r) => /^Built from an older/.test(r.text)).text;
-  assert.equal(msg({ check_err: "the registry could not be reached" }),
-    "Built from an older Dockerfile than this CuliBox. Whether CI published this version's image is unknown (the registry could not be reached)");
+  assert.equal(msg({ check_err: "registry unreachable" }),
+    "Built from an older Dockerfile than this CuliBox. Whether CI published this version's image is unknown (registry unreachable)");
   assert.match(msg({}), /unknown \(not checked yet\)$/);
   assert.match(msg({ check_on: false, check_err: "stale error" }), /unknown \(check off: image_check is false\)$/);
   assert.ok(!boxImageRows(report(Object.assign({}, base, { check_err: "x" }))).some((r) => r.label === "For this version"));
