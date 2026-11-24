@@ -105,7 +105,7 @@ func TestBuildUnresolvedSecretSaysWhy(t *testing.T) {
 	if !errors.Is(err, ErrSecretUnresolved) {
 		t.Fatalf("err = %v, want ErrSecretUnresolved", err)
 	}
-	for _, want := range []string{`"MY_TOKEN"`, "Stored value", `{"type": "store"}`, "secret_sources", "service token"} {
+	for _, want := range []string{`"MY_TOKEN"`, "Stored value", `{"type": "store"}`, "secret_sources", "restart CuliBox", "run in a Box", "service token"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("stored-outside refusal should say %q: %v", want, err)
 		}
@@ -124,5 +124,11 @@ func TestBuildUnresolvedSecretSaysWhy(t *testing.T) {
 	l = New(cfgs, fakeResolver{}, nil)
 	if _, _, err = l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost}); !errors.Is(err, ErrSecretUnresolved) {
 		t.Fatalf("err = %v, want ErrSecretUnresolved", err)
+	}
+
+	// A Box profile can take a service token as it is.
+	box := []config.AgentConfig{{Name: "c", Bin: "/usr/bin/claude", Base: "clean", Runtime: config.RuntimeBox, Secrets: []string{"MY_TOKEN"}}}
+	if err := New(box, storedOutsideResolver{}, nil).unresolvedSecret("MY_TOKEN", true); strings.Contains(err.Error(), "run in a Box") {
+		t.Errorf("a Box profile is not told to run in a Box: %v", err)
 	}
 }

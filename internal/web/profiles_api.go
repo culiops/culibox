@@ -162,7 +162,7 @@ func saveWarnings(s *Server, p config.AgentConfig) []string {
 			}
 			if pres == secretchain.Absent {
 				if s.SecretStoredOutside != nil && s.SecretStoredOutside(name) {
-					warnings = append(warnings, secretStoredOutsideWarning(name))
+					warnings = append(warnings, secretStoredOutsideWarning(name, p.Runtime == config.RuntimeBox))
 				} else {
 					warnings = append(warnings, secretUnresolvedWarning(name))
 				}
@@ -183,8 +183,13 @@ func secretUnresolvedWarning(name string) string {
 
 // secretStoredOutsideWarning is the Save warning for a secret name the store
 // holds while no store secret_source is configured, so nothing reads it (#336).
-func secretStoredOutsideWarning(name string) string {
-	return fmt.Sprintf(`secret %q is a Stored value, but the credential store is not one of the configured secret_sources, so a session with this profile will refuse to start. Add {"type": "store"} to secret_sources in the config, or give the profile a service token instead`, name)
+// A service token binds only a Box profile (config validateTokens).
+func secretStoredOutsideWarning(name string, boxed bool) string {
+	token := "or give the profile a service token instead"
+	if !boxed {
+		token = "or set the profile to run in a Box and give it a service token instead"
+	}
+	return fmt.Sprintf(`secret %q is a Stored value, but the credential store is not one of the configured secret_sources, so a session with this profile will refuse to start. Add {"type": "store"} to secret_sources in config.json and restart CuliBox, %s`, name, token)
 }
 
 // decodeProfile reads a profile with its rev and schema from the request body
