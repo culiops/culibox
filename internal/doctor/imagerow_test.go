@@ -39,25 +39,25 @@ func TestImageUpdateRows(t *testing.T) {
 			[]Result{{Pass, "box image update", "current: culiops/box:x"}}},
 		{"current-local", &boximagecheck.Report{Verdict: boximagecheck.CurrentLocal, Configured: "culiops/box:x", Info: info},
 			[]Result{{Pass, "box image update", "current (built here from this version's Dockerfile): culiops/box:x, Claude Code 2.1.292, built 2026-11-06"}}},
-		{"update with config line", &boximagecheck.Report{Verdict: boximagecheck.Update, Want: wantRef, WantClaudeCode: "2.1.311",
+		{"update with config line", &boximagecheck.Report{Verdict: boximagecheck.Update, Configured: "culiops/box:x", Info: info, Want: wantRef, WantClaudeCode: "2.1.311",
 			WantCreated: time.Date(2026, 11, 20, 1, 0, 0, 0, time.UTC), DownloadMB: "212",
 			ConfigLine: `"box_image": "` + wantRef + `"`, SetupCmd: "culibox box setup"},
-			[]Result{{Warn, "box image update", "an image for this version exists: " + wantRef + " (Claude Code 2.1.311, built 2026-11-20); about 212 MB to download; set \"box_image\": \"" + wantRef + "\" in the config, then run `culibox box setup`"}}},
-		{"update release default", &boximagecheck.Report{Verdict: boximagecheck.Update, Want: wantRef, SetupCmd: "culibox box setup"},
-			[]Result{{Warn, "box image update", "an image for this version exists: " + wantRef + "; run `culibox box setup`"}}},
-		{"stale unknown with error", &boximagecheck.Report{Verdict: boximagecheck.StaleUnknown, CheckOn: true, CheckErr: "registry unreachable"},
-			[]Result{{Warn, "box image update", "built from an older Dockerfile than this CuliBox; whether CI published this version's image is unknown (registry unreachable)"}}},
-		{"stale unknown not checked", &boximagecheck.Report{Verdict: boximagecheck.StaleUnknown, CheckOn: true},
-			[]Result{{Warn, "box image update", "built from an older Dockerfile than this CuliBox; whether CI published this version's image is unknown (not checked yet)"}}},
-		{"stale unknown check off", &boximagecheck.Report{Verdict: boximagecheck.StaleUnknown},
-			[]Result{{Warn, "box image update", "built from an older Dockerfile than this CuliBox; whether CI published this version's image is unknown (check off: image_check is false)"}}},
+			[]Result{{Warn, "box image update", "an image for this version exists: " + wantRef + " (Claude Code 2.1.311, built 2026-11-20); about 212 MB to download; set \"box_image\": \"" + wantRef + "\" in the config, then run `culibox box setup`; running culiops/box:x, Claude Code 2.1.292, built 2026-11-06"}}},
+		{"update release default", &boximagecheck.Report{Verdict: boximagecheck.Update, Configured: "culiops/box:x", Info: &boximage.ImageInfo{Present: true}, Want: wantRef, SetupCmd: "culibox box setup"},
+			[]Result{{Warn, "box image update", "an image for this version exists: " + wantRef + "; run `culibox box setup`; running culiops/box:x"}}},
+		{"stale unknown with error", &boximagecheck.Report{Verdict: boximagecheck.StaleUnknown, Configured: "culiops/box:x", Info: info, CheckOn: true, CheckErr: "registry unreachable"},
+			[]Result{{Warn, "box image update", "built from an older Dockerfile than this CuliBox; whether CI published this version's image is unknown (registry unreachable); running culiops/box:x, Claude Code 2.1.292, built 2026-11-06"}}},
+		{"stale unknown not checked", &boximagecheck.Report{Verdict: boximagecheck.StaleUnknown, Configured: "culiops/box:x", Info: &boximage.ImageInfo{Present: true, ClaudeCode: "2.1.292"}, CheckOn: true},
+			[]Result{{Warn, "box image update", "built from an older Dockerfile than this CuliBox; whether CI published this version's image is unknown (not checked yet); running culiops/box:x, Claude Code 2.1.292"}}},
+		{"stale unknown check off", &boximagecheck.Report{Verdict: boximagecheck.StaleUnknown, Configured: "culiops/box:x", Info: &boximage.ImageInfo{Present: true, Created: builtOn}},
+			[]Result{{Warn, "box image update", "built from an older Dockerfile than this CuliBox; whether CI published this version's image is unknown (check off: image_check is false); running culiops/box:x, built 2026-11-06"}}},
 		{"scan with findings", &boximagecheck.Report{Verdict: boximagecheck.Unknown, Scan: &boximagecheck.Scan{Number: 357, Count: 680}},
 			[]Result{{Warn, "box image scan", "680 fixable HIGH/CRITICAL in the published images (https://github.com/culiops/culibox/issues/357)"}}},
 		{"scan clean", &boximagecheck.Report{Verdict: boximagecheck.Missing, Scan: &boximagecheck.Scan{Number: 0, Count: 0}},
 			[]Result{{Pass, "box image scan", "no fixable HIGH/CRITICAL in the published images"}}},
-		{"update and scan", &boximagecheck.Report{Verdict: boximagecheck.Update, Want: wantRef, SetupCmd: "culibox box setup", Scan: &boximagecheck.Scan{Number: 357, Count: 3}},
+		{"update and scan", &boximagecheck.Report{Verdict: boximagecheck.Update, Configured: "culiops/box:x", Info: &boximage.ImageInfo{Present: true}, Want: wantRef, SetupCmd: "culibox box setup", Scan: &boximagecheck.Scan{Number: 357, Count: 3}},
 			[]Result{
-				{Warn, "box image update", "an image for this version exists: " + wantRef + "; run `culibox box setup`"},
+				{Warn, "box image update", "an image for this version exists: " + wantRef + "; run `culibox box setup`; running culiops/box:x"},
 				{Warn, "box image scan", "3 fixable HIGH/CRITICAL in the published images (https://github.com/culiops/culibox/issues/357)"},
 			}},
 	} {
@@ -168,6 +168,44 @@ func useChecker(t *testing.T, k boximagecheck.Checker) {
 	old := imageChecker
 	imageChecker = func() boximagecheck.Checker { return k }
 	t.Cleanup(func() { imageChecker = old })
+}
+
+// The daemon giving no facts hides the verdict, not the cached scan: the report is
+// still built, and the live check still asks.
+func TestImageReportWithoutImageFactsStillCarriesTheScan(t *testing.T) {
+	useChecker(t, boximagecheck.Checker{Client: failingClient(t), Registry: "http://x.invalid", GitHubAPI: "http://x.invalid"})
+	dir := t.TempDir()
+	if err := boximagecheck.SaveCache(dir, &boximagecheck.Cache{Version: 1, CheckedAt: time.Now(), Hash: boximage.Hash(), Scan: &boximagecheck.Scan{Number: 357, Count: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	r := imageReport(Input{Config: config.Config{BoxImage: "culiops/box:x"}}, dir, boxFacts{})
+	if r == nil || r.Verdict != boximagecheck.Unknown || r.Scan == nil || r.Scan.Number != 357 {
+		t.Fatalf("report = %+v, want unknown with the scan", r)
+	}
+	rows := imageUpdateRows(r)
+	if len(rows) != 1 || rows[0].Check != "box image scan" {
+		t.Errorf("rows = %s, want the scan row only", rowsText(rows))
+	}
+}
+
+func TestImageReportWithoutImageFactsStillRunsTheLiveCheck(t *testing.T) {
+	calls := 0
+	useChecker(t, boximagecheck.Checker{
+		Client: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			calls++
+			return nil, context.DeadlineExceeded
+		})},
+		Registry: "https://ghcr.io", GitHubAPI: "https://api.github.com"})
+	r := imageReport(Input{Config: config.Config{BoxImage: "culiops/box:x"}, LiveImageCheck: true}, t.TempDir(), boxFacts{})
+	if calls == 0 {
+		t.Fatal("LiveImageCheck did not ask")
+	}
+	if r == nil || r.Verdict != boximagecheck.Unknown {
+		t.Fatalf("report = %+v", r)
+	}
+	if rows := imageUpdateRows(r); len(rows) != 0 {
+		t.Errorf("unknown verdict, yet rows: %s", rowsText(rows))
+	}
 }
 
 func TestImageReportNeverTouchesTheNetworkWithoutLiveCheck(t *testing.T) {

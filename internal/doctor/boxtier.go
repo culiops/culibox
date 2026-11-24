@@ -563,12 +563,10 @@ var imageChecker = func() boximagecheck.Checker { return boximagecheck.NewChecke
 // version. Only the CLI doctor (in.LiveImageCheck) may ask the network, and then
 // only when the cache is due or holds a failure, since a user runs doctor to
 // confirm a fix; everyone else reads the cache the server keeps. The answer is
-// used even when it could not be saved (the data dir may not exist yet). nil when
-// the daemon gave no facts.
+// used even when it could not be saved (the data dir may not exist yet). A daemon
+// that gave no facts leaves the verdict unknown (no update row), but the cached
+// scan and the live check still go ahead.
 func imageReport(in Input, dataDir string, f boxFacts) *boximagecheck.Report {
-	if f.ImageInfo == nil {
-		return nil
-	}
 	c := in.Config
 	ii := boximagecheck.Inputs{
 		Configured: c.BoxImageOrDefault(),
@@ -593,6 +591,21 @@ func imageReport(in Input, dataDir string, f boxFacts) *boximagecheck.Report {
 	return &r
 }
 
+// runningImage names the image that runs: its configured ref, then the Claude Code
+// version and build date when the daemon gave them.
+func runningImage(r *boximagecheck.Report) string {
+	out := r.Configured
+	if r.Info != nil {
+		if r.Info.ClaudeCode != "" {
+			out += ", Claude Code " + r.Info.ClaudeCode
+		}
+		if !r.Info.Created.IsZero() {
+			out += ", built " + r.Info.Created.UTC().Format(time.DateOnly)
+		}
+	}
+	return out
+}
+
 // imageUpdateRows says whether the image that runs is the one CI published for
 // this version, and the weekly scan's count when it is known. Pure: every value
 // comes from the validated report (doctor prints on a terminal), never from raw
@@ -610,16 +623,7 @@ func imageUpdateRows(r *boximagecheck.Report) []Result {
 		if r.Verdict == boximagecheck.CurrentLocal {
 			lead = "current (built here from this version's Dockerfile): "
 		}
-		detail := lead + r.Configured
-		if r.Info != nil {
-			if r.Info.ClaudeCode != "" {
-				detail += ", Claude Code " + r.Info.ClaudeCode
-			}
-			if !r.Info.Created.IsZero() {
-				detail += ", built " + r.Info.Created.UTC().Format(time.DateOnly)
-			}
-		}
-		out = append(out, Result{Pass, ck, detail})
+		out = append(out, Result{Pass, ck, lead + runningImage(r)})
 	case boximagecheck.Update:
 		detail := "an image for this version exists: " + r.Want
 		var facts []string
@@ -639,7 +643,7 @@ func imageUpdateRows(r *boximagecheck.Report) []Result {
 		if r.ConfigLine != "" {
 			detail += "set " + r.ConfigLine + " in the config, then "
 		}
-		out = append(out, Result{Warn, ck, detail + "run `" + r.SetupCmd + "`"})
+		out = append(out, Result{Warn, ck, detail + "run `" + r.SetupCmd + "`; running " + runningImage(r)})
 	case boximagecheck.StaleUnknown:
 		why := r.CheckErr
 		switch {
@@ -648,7 +652,7 @@ func imageUpdateRows(r *boximagecheck.Report) []Result {
 		case why == "":
 			why = "not checked yet"
 		}
-		out = append(out, Result{Warn, ck, "built from an older Dockerfile than this CuliBox; whether CI published this version's image is unknown (" + why + ")"})
+		out = append(out, Result{Warn, ck, "built from an older Dockerfile than this CuliBox; whether CI published this version's image is unknown (" + why + "); running " + runningImage(r)})
 	}
 	if s := r.Scan; s != nil {
 		if s.Count > 0 {
