@@ -166,6 +166,27 @@ func (c *Chain) Check(name string) (Presence, error) {
 	return Absent, nil
 }
 
+// StoredOutsideSources reports whether the store holds name while no store
+// source is configured, so a name no source resolves can be told apart from a
+// Stored value the chain never reads (#336). It asks by id only (List works
+// while the store is locked) and never decrypts; a store that cannot list, or
+// any List error, answers false.
+func (c *Chain) StoredOutsideSources(name string) bool {
+	if c == nil || c.probe == nil || !secretstore.ValidID(name) {
+		return false
+	}
+	for _, s := range c.steps {
+		if s.store != nil {
+			return false
+		}
+	}
+	ents, err := c.probe.List()
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(ents, func(e secretstore.Entry) bool { return e.ID == name })
+}
+
 // AccountTokenPresence is Check for an agent account's token: the
 // secret_sources chain first, then, only for the account's own pasted token
 // (account.OwnsStoreToken), the store-only chain. Like Check it never

@@ -87,3 +87,48 @@ func TestBuildUnavailableStoreRefusesAccountToken(t *testing.T) {
 		t.Fatalf("err = %v, want ErrStoreUnavailable only", err)
 	}
 }
+
+// storedOutsideResolver resolves nothing, and says which names the store holds
+// while it is not a secret source (secretchain.Chain.StoredOutsideSources).
+type storedOutsideResolver struct{ stored map[string]bool }
+
+func (storedOutsideResolver) Resolve(string) (string, bool, error)    { return "", false, nil }
+func (r storedOutsideResolver) StoredOutsideSources(name string) bool { return r.stored[name] }
+
+// #336: an unresolved profile secret is a shown refusal that names the secret
+// and the fix, and a Stored value the chain never reads says so.
+func TestBuildUnresolvedSecretSaysWhy(t *testing.T) {
+	cfgs := []config.AgentConfig{{Name: "c", Bin: "/usr/bin/claude", Base: "clean", Secrets: []string{"MY_TOKEN"}}}
+
+	l := New(cfgs, storedOutsideResolver{stored: map[string]bool{"MY_TOKEN": true}}, nil)
+	_, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost})
+	if !errors.Is(err, ErrSecretUnresolved) {
+		t.Fatalf("err = %v, want ErrSecretUnresolved", err)
+	}
+	for _, want := range []string{`"MY_TOKEN"`, "Stored value", `{"type": "store"}`, "secret_sources", "restart CuliBox", "run in a Box", "service token"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("stored-outside refusal should say %q: %v", want, err)
+		}
+	}
+
+	l = New(cfgs, storedOutsideResolver{}, nil)
+	_, _, err = l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost})
+	if !errors.Is(err, ErrSecretUnresolved) {
+		t.Fatalf("err = %v, want ErrSecretUnresolved", err)
+	}
+	if !strings.Contains(err.Error(), `"MY_TOKEN"`) || strings.Contains(err.Error(), "Stored value") {
+		t.Errorf("a name no source has should be named, without the store sentence: %v", err)
+	}
+
+	// A resolver without the store query (secrets.New's) gets the plain sentence.
+	l = New(cfgs, fakeResolver{}, nil)
+	if _, _, err = l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost}); !errors.Is(err, ErrSecretUnresolved) {
+		t.Fatalf("err = %v, want ErrSecretUnresolved", err)
+	}
+
+	// A Box profile can take a service token as it is.
+	box := []config.AgentConfig{{Name: "c", Bin: "/usr/bin/claude", Base: "clean", Runtime: config.RuntimeBox, Secrets: []string{"MY_TOKEN"}}}
+	if err := New(box, storedOutsideResolver{}, nil).unresolvedSecret("MY_TOKEN", true); strings.Contains(err.Error(), "run in a Box") {
+		t.Errorf("a Box profile is not told to run in a Box: %v", err)
+	}
+}
