@@ -17,11 +17,16 @@ import (
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/doctor"
 	"github.com/culiops/culibox/internal/egress"
+	"github.com/culiops/culibox/internal/launcher"
 	"github.com/culiops/culibox/internal/session"
 )
 
-// The egress service is the only implementation of session.EgressHooks.
-var _ session.EgressHooks = (*egress.Service)(nil)
+// The egress service is the only implementation of session.EgressHooks, and
+// lets a running session's policy change (#95).
+var (
+	_ session.EgressHooks       = (*egress.Service)(nil)
+	_ session.EgressPolicyHooks = (*egress.Service)(nil)
+)
 
 // bootReadyTimeout bounds bringing the listener up at boot for a network that
 // already exists.
@@ -38,20 +43,36 @@ type egressService struct {
 
 // egressLookup is the proxy's view of a session. It reads the registry through
 // get (Manager.Get, which takes the manager lock for the map read only) and the
-// session's own lock for Exited; the proxy calls it with none of its own locks
-// held, so neither lock order is ever inverted. A session that has left the
-// registry is unknown, which the proxy refuses.
+// session's own lock for Exited and the live egress policy (#95: a profile
+// edit changes it); the proxy calls it with none of its own locks held, so
+// neither lock order is ever inverted. A session that has left the registry is
+// unknown, which the proxy refuses.
 func egressLookup(get func(id string) (*session.Session, bool)) egress.Lookup {
 	return func(id string) (egress.SessionView, bool) {
 		s, ok := get(id)
 		if !ok {
 			return egress.SessionView{}, false
 		}
+		allow, open := s.EgressPolicy()
 		return egress.SessionView{Nonce: s.EgressNonce, Box: s.Box, Boxed: s.Runtime == config.RuntimeBox,
 			Live: !s.Exited(), AWS: s.AWS, AWSConns: s.AWSConns, GitHub: s.GitHub, Tokens: s.Tokens, PATs: s.PATs,
-			EgressAllow: s.EgressAllow, EgressOpen: s.EgressOpen}, true
+			EgressAllow: allow, EgressOpen: open}, true
 	}
 }
+
+// applyProfiles is the profile manager's apply: the launcher gets the merged
+// profile set, then every running bound boxed session re-reads its profile's
+// egress policy (#95). The profile manager calls it at construction (boot) and
+// after every save and delete.
+func applyProfiles(l *launcher.AgentLauncher, m *session.Manager) func([]config.AgentConfig) {
+	return func(list []config.AgentConfig) {
+		l.SetAgents(list)
+		m.RefreshEgress()
+	}
+}
+
+// The launcher answers a running session's current profile policy (#95).
+var _ session.EgressLiveResolver = (*launcher.AgentLauncher)(nil)
 
 // egressServiceOptions is the service configuration. Linux: an internal-only
 // network on which boxes cannot reach each other, loopback kept off the proxy,

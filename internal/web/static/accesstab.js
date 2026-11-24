@@ -218,6 +218,8 @@ function accContainment(c, s) {
   if (c.dropped) kv("Left out of the box", c.dropped.v);
   if (c.hostDropped) kv(c.hostDropped.k, c.hostDropped.v);
   if (c.locked) kv("Locked files", c.locked.v);
+  // #95: a profile edit changed this session's egress while it runs; a widening reads bold, as a clone warning does.
+  if (c.policy) kv("Egress policy", c.policy.v, c.policy.chip ? "w-600" : "");
   if (kvs.children.length) card.appendChild(kvs);
   return card;
 }

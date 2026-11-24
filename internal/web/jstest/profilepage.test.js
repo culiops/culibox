@@ -1695,7 +1695,9 @@ test("the box consequence line shows on Runs in (box) and Network, not on Agent,
   assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-fnote"), []);
   clickBtn(blockOf(t, "agent"), "Cancel");
   clickBtn(blockOf(t, "network"), "Edit");
-  assert.deepStrictEqual(texts(blockOf(t, "network"), "pfv-fnote"), [line]);
+  // #95: the network setting also reaches running sessions, and the line says so.
+  assert.deepStrictEqual(texts(blockOf(t, "network"), "pfv-fnote"),
+    ["Saving gives the next session a new box. Running sessions keep theirs and follow this setting from their next connection."]);
 
   const h = page();
   await h.box.pfvShow("runbook-host");
@@ -3003,6 +3005,14 @@ test("Also reachable: the files the original and Advanced control are rows with 
   assert.deepStrictEqual(files.map((r) => texts(r, "pfv-inote")[0]), ["Set in Workspace", "Set in Advanced"]);
   for (const r of files) assert.strictEqual(byText(r, "button", "Remove").length, 0);
   assert.deepStrictEqual(rowsOf(t, "reachable").map((r) => texts(r, "pfv-k")[0]), ["Folder", "Files", "Files", "Domain", "Domain"]);
+});
+
+test("Also reachable: the footer says a domain change reaches running sessions and a folder change does not (#95)", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "Edit");
+  assert.deepStrictEqual(texts(blockOf(t, "reachable"), "pfv-fnote"),
+    ["Saving gives the next session a new box. Running sessions keep theirs; a domain change reaches them at their next connection, a folder change does not."]);
 });
 
 test("GitHub: the owner row shows its fields and a Read only preset; untouched, no permissions are written", async () => {

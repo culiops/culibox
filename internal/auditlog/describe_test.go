@@ -50,8 +50,9 @@ func TestDescribe(t *testing.T) {
 	rec(err)
 	_, err = s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, 'unlocked', 'web', 'ttl=168h0m0s')`, ts(19))
 	rec(err)
+	rec(s.e.Record(egress.Row{Time: at(20), SessionID: "s1", Host: "+pypi.org -example.com open:on", Outcome: egress.OutcomePolicyChanged}))
 
-	p, err := s.open().Query(Query{From: ts(1), To: ts(19), Limit: 100})
+	p, err := s.open().Query(Query{From: ts(1), To: ts(20), Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,6 +85,7 @@ func TestDescribe(t *testing.T) {
 		{17, "store", "encrypted store unlocked", "unlocked", "you", "", 0, false},
 		{18, "store", "encrypted store value set · cf-token", "value_set", "daemon", "", 0, false},
 		{19, "store", "encrypted store unlocked · ttl=168h0m0s", "unlocked", "you", "", 0, false},
+		{20, "egress", "policy +pypi.org -example.com open:on", "policy_changed", "", "", 0, false},
 	}
 	for _, c := range cases {
 		e, ok := byTS[ts(c.n)]

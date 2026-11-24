@@ -4,7 +4,7 @@
 // a screen reader cannot name is not a button anyone can use.
 const test = require("node:test");
 const assert = require("node:assert");
-const { railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
+const { railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, policyRow, dropLabel, toastDropsSuffix, dropsRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
 // steerrail.js is a browser script: withCommas is usage.js's global there.
 globalThis.withCommas = require("../static/usage.js").withCommas;
 // The real tierBadge, not a hand-written stand-in: the point of the change these
@@ -292,6 +292,48 @@ test("egressRow: open mode says open and counts denials; anything else stays all
   assert.strictEqual(egressRow({ egress: { mode: "open", denied: "x" } }).v, "open \u00b7 0 denied since start");
   assert.strictEqual(egressRow({ egress: { mode: "allowlist", denied: 2 } }).v, "allowlist \u00b7 2 denied since start");
   assert.strictEqual(egressRow({ egress: { denied: 1 } }).v, "allowlist \u00b7 1 denied since start");
+});
+
+test("egressRow: the polled session's mode wins over the cached one, which is only as fresh as the last focus (#95)", () => {
+  assert.strictEqual(egressRow({ egress: { mode: "allowlist", denied: 1 } }, "open").v, "open \u00b7 1 denied since start");
+  assert.strictEqual(egressRow({ egress: { mode: "open", denied: 1 } }, "allowlist").v, "allowlist \u00b7 1 denied since start");
+  assert.strictEqual(egressRow({ egress: { mode: "open", denied: 1 } }, "").v, "open \u00b7 1 denied since start");
+  assert.strictEqual(egressRow(null, "open"), null);
+});
+
+// egress_change (#95): a profile edit reached the running session.
+test("policyRow: absent without egress_change", () => {
+  assert.strictEqual(policyRow(null), null);
+  assert.strictEqual(policyRow({}), null);
+});
+
+test("policyRow: a widening says what was added, that it applies now, and is a warning", () => {
+  const at = "2026-11-24T09:05:00Z";
+  const r = policyRow({ egress_change: { at, added: ["pypi.org", "files.pythonhosted.org"], open: false } });
+  assert.strictEqual(r.k, "policy");
+  assert.strictEqual(r.v, "changed " + hhmm(at) + " \u00b7 added pypi.org, files.pythonhosted.org \u00b7 applies now");
+  assert.strictEqual(r.chip, "v warn");
+  assert.strictEqual(r.wrap, true);
+  assert.ok(r.title.includes("next connection"));
+  const o = policyRow({ egress_change: { at, open: true, open_changed: true } });
+  assert.strictEqual(o.v, "changed " + hhmm(at) + " \u00b7 now open to any public host on 443 \u00b7 applies now");
+  assert.strictEqual(o.chip, "v warn");
+});
+
+test("policyRow: a narrowing names what was removed and the tunnels it closed, without a warning", () => {
+  const at = "2026-11-24T09:05:00Z";
+  const r = policyRow({ egress_change: { at, removed: ["pypi.org"], open: false, open_changed: true, closed: 2 } });
+  assert.strictEqual(r.v, "changed " + hhmm(at) + " \u00b7 removed pypi.org \u00b7 no longer open \u00b7 2 tunnels closed \u00b7 applies now");
+  assert.strictEqual(r.chip, undefined);
+  assert.ok(policyRow({ egress_change: { at, removed: ["a.example"], closed: 1 } }).v.includes("1 tunnel closed"));
+});
+
+test("policyRow: a hold says what the box holds back and why", () => {
+  const r = policyRow({ egress_change: { open: false, held: ["pypi.org"], held_open: true, reason: "shared_box" } });
+  assert.strictEqual(r.v, "held back: pypi.org, open \u2014 another profile shares this box; applies when its sessions end, or on a new session");
+  assert.strictEqual(r.chip, undefined);
+  const g = policyRow({ egress_change: { at: "2026-11-24T09:05:00Z", removed: ["pypi.org"], open: false, reason: "profile_gone" } });
+  assert.ok(g.v.endsWith("profile removed or no longer boxed: only the binding's own hosts apply"), g.v);
 });
 
 // bundle_drops: what the config bundle left out of a box. The toast is a glance,

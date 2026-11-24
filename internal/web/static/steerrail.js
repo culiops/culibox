@@ -153,12 +153,55 @@ function awsStatsRows(st, nowMs) {
 // egress at all, so absent means no row, not "0 denied". denied is coerced so a
 // missing or garbled count reads 0 rather than NaN. The count is the daemon's
 // in-memory tally, so it says "since start": after a restart it restarts at 0
-// while egress_audit keeps the history.
-function egressRow(st) {
+// while egress_audit keeps the history. live is the polled session's own mode
+// (Info.egress): a profile edit can change it while the session runs (#95), and
+// the cached response is only as fresh as the last focus.
+function egressRow(st, live) {
   const e = st && st.egress;
   if (!e) return null;
-  const mode = e.mode === "open" ? "open" : "allowlist";
+  const mode = (live || e.mode) === "open" ? "open" : "allowlist";
   return { k: "egress", v: mode + " \u00b7 " + (Number(e.denied) || 0) + " denied since start", wrap: true };
+}
+
+// policyRow: the rail's "policy" row for a session whose egress policy a profile
+// edit changed while it runs, or whose box holds back part of what its profile
+// asks for (Info.egress_change, #95). null without one. A widening is a warning:
+// the agent can reach more than when it started. Host patterns are server data
+// and only ever reach the page through textContent.
+function policyRow(s) {
+  const c = s && s.egress_change;
+  if (!c) return null;
+  const list = (a) => (Array.isArray(a) ? a.map(String) : []);
+  const added = list(c.added), removed = list(c.removed), held = list(c.held);
+  const parts = [];
+  if (added.length) parts.push("added " + added.join(", "));
+  if (removed.length) parts.push("removed " + removed.join(", "));
+  if (c.open_changed) parts.push(c.open ? "now open to any public host on 443" : "no longer open");
+  const n = Number(c.closed) || 0;
+  if (n > 0) parts.push(n + (n === 1 ? " tunnel" : " tunnels") + " closed");
+  if (parts.length) {
+    const t = Date.parse(c.at);
+    if (Number.isFinite(t)) {
+      const dt = new Date(t);
+      parts.unshift("changed " + String(dt.getHours()).padStart(2, "0") + ":" + String(dt.getMinutes()).padStart(2, "0"));
+    }
+    parts.push("applies now");
+  }
+  if (c.reason === "shared_box") {
+    const what = held.concat(c.held_open ? ["open"] : []);
+    parts.push("held back: " + (what.length ? what.join(", ") : "part of the profile's policy") +
+      " \u2014 another profile shares this box; applies when its sessions end, or on a new session");
+  } else if (c.reason === "profile_gone") {
+    parts.push("profile removed or no longer boxed: only the binding's own hosts apply");
+  }
+  if (!parts.length) return null;
+  return {
+    k: "policy",
+    v: parts.join(" \u00b7 "),
+    wrap: true,
+    chip: added.length || (c.open && c.open_changed) ? "v warn" : undefined,
+    title: "The profile's egress settings changed while this session runs. The proxy applies them from the next connection.",
+  };
 }
 
 // dropLabel: what one bundle drop is called on screen. A whole-kind drop has
@@ -519,11 +562,11 @@ function renderSteerFacts(s) {
   const egressRows = s.aws || hasConns(s) || s.github || (s.tokens && s.tokens.length)
     ? [...awsRailRows(s, brokerSt, Date.now(), deskWords), ...(s.aws ? awsStatsRows(brokerSt, Date.now()) : []),
       ...awsConnRailRows(s, brokerSt, Date.now(), awsConnExpanded.has(s.id), deskWords),
-      ...ghRailRows(brokerSt), ...stRailRows(brokerSt), egressRow(brokerSt)]
-    : s.egress ? [egressRow(egressRailCache.get(s.id))] : [];
+      ...ghRailRows(brokerSt), ...stRailRows(brokerSt), egressRow(brokerSt, s.egress)]
+    : s.egress ? [egressRow(egressRailCache.get(s.id), s.egress)] : [];
   // The bundle's drops and the clone's refresh state ride after the egress row, and on a boxed session with
   // no egress row at all; railMeta skips null rows.
-  const extraRows = [...egressRows, dropsRow(s), lockedRow(s), cloneRow(s)];
+  const extraRows = [...egressRows, policyRow(s), dropsRow(s), lockedRow(s), cloneRow(s)];
   const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge, extraRows);
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,
@@ -1375,5 +1418,5 @@ function stRailRows(st) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, hostDroppedRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
+  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, policyRow, dropLabel, toastDropsSuffix, dropsRow, hostDroppedRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
 }

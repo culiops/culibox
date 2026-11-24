@@ -100,12 +100,24 @@ test("containment: egress comes from the /aws reply when /egress was not asked, 
   assert.deepStrictEqual(model({ session: sess(), aws: null }).containment.network, { mode: "", allowed: 0, denied: 0 });
 });
 
+test("containment: a live egress change (#95) comes from the rail's row, and the mode follows the polled session", () => {
+  const egress = { egress: { mode: "allowlist", allowed: 4, denied: 1 } };
+  const m = model({ session: sess({ egress: "open", egress_change: { at: iso(-3), open: true, open_changed: true } }), aws: null, egress });
+  assert.deepStrictEqual(m.containment.network, { mode: "open", allowed: 4, denied: 1 });
+  assert.strictEqual(m.containment.policy.k, "policy");
+  assert.match(m.containment.policy.v, /now open to any public host on 443 · applies now$/);
+  assert.strictEqual(m.containment.policy.chip, "v warn");
+  const n = model({ session: sess({ egress: "allowlist" }), aws: null, egress: { egress: { mode: "open", allowed: 0, denied: 0 } } });
+  assert.strictEqual(n.containment.network.mode, "allowlist");
+});
+
 test("containment: optional rows are absent, not empty strings, when the session has none", () => {
   const c = model({ session: sess(), aws: null }).containment;
   assert.deepStrictEqual(c.readable, []);
   assert.strictEqual(c.clone, null);
   assert.strictEqual(c.dropped, null);
   assert.strictEqual(c.locked, null);
+  assert.strictEqual(c.policy, null);
   assert.strictEqual(c.hostDropped, null);
   assert.strictEqual(c.model, "");
 });

@@ -102,7 +102,10 @@ type sessionMeta struct {
 	// a record from before them restores with none.
 	EgressAllow []string `json:"egress_allow,omitempty"`
 	EgressOpen  bool     `json:"egress_open,omitempty"`
-	BrokerNonce string   `json:"aws_nonce,omitempty"`
+	// EgressLive is the policy a live change applied (#95); absent until one
+	// does. The spawn-time pair above stays: it is in the binding hash.
+	EgressLive  *egressLiveMeta `json:"egress_live,omitempty"`
+	BrokerNonce string          `json:"aws_nonce,omitempty"`
 	// EgressNonce is the spawn's egress-token nonce (any boxed session with
 	// egress). Records from before A1 lack it; restore backfills BrokerNonce.
 	EgressNonce string `json:"egress_nonce,omitempty"`
@@ -223,6 +226,20 @@ func (sc *sidecar) setReplyable(id string, v bool) {
 		return
 	}
 	md.Replyable = v
+	sc.m[id] = md
+	_ = sc.flushLocked()
+}
+
+// setEgressLive records the policy a live change applied (#95). No-op if the
+// id is absent.
+func (sc *sidecar) setEgressLive(id string, v *egressLiveMeta) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	md, ok := sc.m[id]
+	if !ok {
+		return
+	}
+	md.EgressLive = v
 	sc.m[id] = md
 	_ = sc.flushLocked()
 }
