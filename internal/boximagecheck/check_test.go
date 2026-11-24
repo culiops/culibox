@@ -286,3 +286,15 @@ func TestCheckNilClient(t *testing.T) {
 		t.Fatalf("%+v / %q / %+v", c.Registry, c.RegistryErr, c.Scan)
 	}
 }
+
+// The two production callers share these endpoints; a typo in either would
+// silently turn the check into a permanent "unreachable".
+func TestNewCheckerUsesTheProductionEndpoints(t *testing.T) {
+	k := NewChecker(7 * time.Second)
+	if k.Registry != "https://ghcr.io" || k.GitHubAPI != "https://api.github.com" {
+		t.Errorf("endpoints = %q, %q", k.Registry, k.GitHubAPI)
+	}
+	if k.Client == nil || k.Client.Timeout != 7*time.Second {
+		t.Errorf("client = %+v, want the given timeout", k.Client)
+	}
+}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -556,16 +555,9 @@ func describeImage(ctx context.Context, d boximage.Docker, image string) (string
 // imageCheckTimeout bounds the live registry check the CLI doctor runs.
 const imageCheckTimeout = 15 * time.Second
 
-// imageChecker is the anonymous check's client for the CLI doctor: the default
-// transport honours HTTPS_PROXY, and nothing it sends carries a credential. A
-// variable so a test can hand in a client that fails the test when it is used.
-var imageChecker = func() boximagecheck.Checker {
-	return boximagecheck.Checker{
-		Client:    &http.Client{Timeout: imageCheckTimeout},
-		Registry:  "https://ghcr.io",
-		GitHubAPI: "https://api.github.com",
-	}
-}
+// imageChecker is the anonymous check for the CLI doctor. A variable so a test can
+// hand in a client that fails the test when it is used.
+var imageChecker = func() boximagecheck.Checker { return boximagecheck.NewChecker(imageCheckTimeout) }
 
 // imageReport compares the running image (f.ImageInfo) with the image for this
 // version. Only the CLI doctor (in.LiveImageCheck) may ask the network, and then

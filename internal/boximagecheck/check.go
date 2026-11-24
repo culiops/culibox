@@ -36,6 +36,17 @@ type Checker struct {
 	Now       func() time.Time
 }
 
+// NewChecker is the production check: ghcr.io and the GitHub API, anonymous. The
+// client's default transport honours HTTPS_PROXY, timeout bounds each request, and
+// nothing it sends carries a credential.
+func NewChecker(timeout time.Duration) Checker {
+	return Checker{
+		Client:    &http.Client{Timeout: timeout},
+		Registry:  "https://ghcr.io",
+		GitHubAPI: "https://api.github.com",
+	}
+}
+
 func (k Checker) now() time.Time {
 	if k.Now == nil {
 		return time.Now()

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strings"
 	"time"
 
@@ -71,14 +70,9 @@ func imageInputs(cfg config.Config) boximagecheck.Inputs {
 	}
 }
 
-// newImageChecker is the anonymous check's client: the default transport honours
-// HTTPS_PROXY, and nothing it sends carries a credential.
+// newImageChecker is the anonymous check's client, bounded per request like the pass.
 func newImageChecker() boximagecheck.Checker {
-	return boximagecheck.Checker{
-		Client:    &http.Client{Timeout: imageCheckPassTimeout},
-		Registry:  "https://ghcr.io",
-		GitHubAPI: "https://api.github.com",
-	}
+	return boximagecheck.NewChecker(imageCheckPassTimeout)
 }
 
 // imageCheckPass is one background pass of the daily check. It never touches
