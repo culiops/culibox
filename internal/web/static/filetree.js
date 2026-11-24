@@ -48,29 +48,63 @@ function iconFor(name, isDir, open) {
   return ICON_EXT[lower.slice(cut + 1)] || ICON_FILE;
 }
 
-// The tree's glyphs are drawn twice, because the tree is shared with the phone (frozen) and a row cannot know the width: the
-// Nerd Font text the phone has always shown (.ft-nf) and the Lucide glyph the desktop shows (a .ui-icon svg, fileIcon in
-// filekinds.js). app.css hides the svg and desktop.css hides the text, so each width paints one of them.
-function ftNerdSpan(glyph) {
-  const nf = document.createElement("span");
-  nf.className = "ft-nf";
-  nf.textContent = glyph;
-  return nf;
+// The tree's glyphs follow the width (#168): the phone (frozen) draws today's Nerd Font text, the desktop draws Lucide svgs
+// (fileIcon in filekinds.js, the ellipsis, the folder chevrons). A row draws only the glyph its width shows: drawing both and
+// hiding one in CSS made a 2000-entry folder about 75 % slower to expand, phone included. A crossing of the breakpoint redraws
+// them (ftGlyphsCrossed, from app.js's breakpoint listener).
+// ftWideGlyphs: the desktop's glyphs. Read once per listing, not per row: window.innerWidth can force a layout.
+function ftWideGlyphs() {
+  return !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
 }
 
-// ftSetFileGlyph (re)fills a row's .ft-icon with both glyphs for the file or folder state: the first draw and each toggle.
-function ftSetFileGlyph(icon, name, isDir, open) {
-  icon.replaceChildren(ftNerdSpan(iconFor(name, isDir, open)), fileIcon(name, isDir, open, 14));
+// ftSetFileGlyph (re)fills a row's .ft-icon for the file or folder state at the width `wide` says: the first draw, each
+// toggle and a crossing.
+function ftSetFileGlyph(icon, name, isDir, open, wide) {
+  if (wide) icon.replaceChildren(fileIcon(name, isDir, open, 14));
+  else icon.textContent = iconFor(name, isDir, open);
 }
 
-// ftChevrons: a folder row's chevron, both directions, 14px. desktop.css shows chevron-down while the row is aria-expanded and
-// chevron-right otherwise; the phone's row has no chevron (app.css hides this).
+// ftSetMoreGlyph: the row's ⋯ button, the desktop's ellipsis or the phone's Nerd F141.
+function ftSetMoreGlyph(more, wide) {
+  if (wide) more.replaceChildren(uiIcon("ellipsis", { size: 14 }));
+  else more.textContent = "\uf141";
+}
+
+// ftChevrons: a desktop folder row's chevron, both directions, 14px. desktop.css shows chevron-down while the row is
+// aria-expanded and chevron-right otherwise; the phone's row has no chevron.
 function ftChevrons() {
   const c = document.createElement("span");
   c.className = "ft-chev";
   c.setAttribute("aria-hidden", "true");
   c.append(uiIcon("chevron-right", { size: 14, cls: "ft-chev-r" }), uiIcon("chevron-down", { size: 14, cls: "ft-chev-d" }));
   return c;
+}
+
+// ftGlyphEpoch counts the breakpoint crossings: a subtree drawn off the page (ftLoadRoot, a remembered folder) while the width
+// crossed is redrawn before it goes on the page, as the rows already there were.
+let ftGlyphEpoch = 0;
+
+// ftGlyphsCrossed: the viewport crossed the phone breakpoint (app.js). Every row on the tree gets the new width's glyphs.
+function ftGlyphsCrossed() {
+  ftGlyphEpoch++;
+  ftRepaintGlyphs(ftTreeEl);
+}
+
+// ftRepaintGlyphs redraws the glyphs of every row under `root` for the width now, from what the row says it is (its name,
+// .dir, aria-expanded): the icon, the ⋯, and a folder's chevrons (desktop only, first in the row).
+function ftRepaintGlyphs(root) {
+  if (!root) return;
+  const wide = ftWideGlyphs();
+  for (const row of root.querySelectorAll(".ft-node")) {
+    const isDir = row.classList.contains("dir");
+    const icon = row.querySelector(":scope > .ft-icon");
+    if (icon) ftSetFileGlyph(icon, row.getAttribute("aria-label"), isDir, row.getAttribute("aria-expanded") === "true", wide);
+    const more = row.querySelector(":scope > .ft-more");
+    if (more) ftSetMoreGlyph(more, wide);
+    const chev = row.querySelector(":scope > .ft-chev");
+    if (chev && !wide) chev.remove();
+    else if (!chev && wide && isDir) row.prepend(ftChevrons());
+  }
 }
 
 // File families for the dock tree's icon colours (P5, mockup 1 T2): desktop.css colours a file row's icon by its
@@ -449,6 +483,7 @@ async function ftRenderDir(path, container, prefix, st) {
   const entries = ftEntriesFor(data.entries, docked);
   const chg = typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerChangedFor === "function"
     ? drawerChangedFor(ftRoot()) : null;
+  const wide = ftWideGlyphs(); // the whole listing draws one width's glyphs (#168)
   for (let i = 0; i < entries.length; i++) {
     const ent = entries[i];
     const isDir = ftEntryIsDir(ent, docked);
@@ -473,9 +508,8 @@ async function ftRenderDir(path, container, prefix, st) {
     // that string would have to be re-derived there too.
     const icon = document.createElement("span");
     icon.className = "ft-icon";
-    // Two children (#168): the Nerd glyph the phone draws (.ft-nf, iconFor) and the Lucide glyph the desktop draws (fileIcon).
-    // The shared tree cannot choose by width here, so each side's CSS hides the other (app.css, desktop.css).
-    ftSetFileGlyph(icon, ent.name, isDir, false);
+    // The glyph its width shows (#168): the phone's Nerd text (iconFor) or the desktop's Lucide svg (fileIcon).
+    ftSetFileGlyph(icon, ent.name, isDir, false, wide);
     icon.setAttribute("aria-hidden", "true"); // decorative: the name is the label
     // The file's family, for the dock's icon colours. Every tree gets it, whether or not the dock is open now: a tree drawn before
     // the dock opens (the root, a restored folder) is the one the dock then shows. Only desktop.css's #drawer rules draw it.
@@ -492,7 +526,7 @@ async function ftRenderDir(path, container, prefix, st) {
     label.title = shortPath(full);
     // A folder's chevron, desktop only (the phone's row has none): both glyphs are built once, the CSS shows the one that
     // aria-expanded says, so the expand toggle changes no DOM here.
-    if (isDir) row.append(ftChevrons());
+    if (isDir && wide) row.append(ftChevrons());
     row.append(branch, icon, label);
     // A symlink says so in the dock (a folder one expands when its target is a folder the server serves, ftEntryIsDir).
     if (docked && ent.link) {
@@ -519,8 +553,8 @@ async function ftRenderDir(path, container, prefix, st) {
     // touch device can reach.
     const more = document.createElement("button");
     more.className = "ft-more nf";
-    // Two children as the row's icon has: the phone's Nerd F141 and the desktop's Lucide ellipsis.
-    more.append(ftNerdSpan("\uf141"), uiIcon("ellipsis", { size: 14 }));
+    // As the row's icon: the phone's Nerd F141 or the desktop's Lucide ellipsis.
+    ftSetMoreGlyph(more, wide);
     // Folder vs File so a screen reader announces which kind of row this menu
     // acts on, matching the session row's kebab (app.js sets both aria-label
     // and title to the same string).
@@ -580,7 +614,7 @@ async function ftRenderDir(path, container, prefix, st) {
           return;
         }
         open = want;
-        ftSetFileGlyph(icon, ent.name, true, open);
+        ftSetFileGlyph(icon, ent.name, true, open, ftWideGlyphs());
         row.setAttribute("aria-expanded", open ? "true" : "false");
         if (open) {
           // Persist BEFORE the await: a second click that closes the row toggles
@@ -629,17 +663,21 @@ async function ftRenderDir(path, container, prefix, st) {
       // handful of folders is imperceptible on a local server.
       if (shouldAutoOpen(ftExpanded, full)) {
         open = true;
-        ftSetFileGlyph(icon, ent.name, true, true);
+        ftSetFileGlyph(icon, ent.name, true, true, wide);
         row.setAttribute("aria-expanded", "true");
         if (rootCall && st.defer) {
           // Drawn off the page and put under its row whole (drawing a big folder into the live tree row by row costs
           // a layout per row); a folder the user closed while it listed stays closed.
           st.defer.push(async () => {
             const box = document.createElement("div");
+            const epoch = ftGlyphEpoch;
             childBox = box;
             childLoad = ftRenderDir(full, box, b.childPrefix, st);
             await childLoad;
-            if (open && childBox === box) row.after(box);
+            if (open && childBox === box) {
+              if (epoch !== ftGlyphEpoch) ftRepaintGlyphs(box); // the width crossed while it listed
+              row.after(box);
+            }
           });
         } else await openChildren();
       }
@@ -689,6 +727,7 @@ async function ftLoadRoot(opts) {
   try {
     if (typeof gitStatusLoad === "function") gitStatusLoad(ftRoot(), typeof gitStatusTreeSid === "function" ? gitStatusTreeSid() : null, { fresh: !!(opts && opts.fresh) });
     const box = document.createElement("div");
+    const epoch = ftGlyphEpoch;
     // The top level renders in an off-DOM box, so the pending lines ftRenderDir
     // paints there are never seen. This one sits in the live tree, above
     // whatever it shows now.
@@ -704,6 +743,7 @@ async function ftLoadRoot(opts) {
     ftRootResolvedPath = typeof st.resolved === "string" ? st.resolved : ftRoot();
     ftRootReadOnly = ro === true;
     ftApplyReadOnly(ftRootReadOnly);
+    if (epoch !== ftGlyphEpoch) ftRepaintGlyphs(box); // the width crossed while it listed: its rows get the new glyphs
     ftTreeEl.replaceChildren(...box.childNodes);
     // A status that landed while the rows were drawn off the page painted the old ones: these get its marks now.
     if (typeof gitRepaintRows === "function") gitRepaintRows();

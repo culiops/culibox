@@ -248,5 +248,5 @@ test("iconFor survives only where the phone's tree needs it: filetree.js is its 
     read(f).split("\n").forEach((l, i) => { if (/\biconFor\(/.test(l)) hits.push(f + ":" + (i + 1)); });
   }
   assert.deepStrictEqual(hits.filter((h) => !h.startsWith("filetree.js:")), []);
-  assert.ok(hits.some((h) => h.startsWith("filetree.js:")), "the phone's .ft-nf text still comes from it");
+  assert.ok(hits.some((h) => h.startsWith("filetree.js:")), "the phone tree's Nerd text still comes from it");
 });

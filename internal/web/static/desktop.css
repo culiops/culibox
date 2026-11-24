@@ -2037,9 +2037,9 @@
   #drawer .ft-chev > .ui-icon { display: block; }
   #drawer .ft-chev > .ft-chev-d, #drawer .ft-node.dir[aria-expanded="true"] > .ft-chev > .ft-chev-r { display: none; }
   #drawer .ft-node.dir[aria-expanded="true"] > .ft-chev > .ft-chev-d { display: block; }
-  /* The row's file glyph and its menu button: the Lucide svg shows, the Nerd text (the phone's) does not. The svg is a block
-     centred in the 2ch cell, so it has no line box to sit high in (the Nerd font's line box put a 14px glyph 2px high). */
-  #drawer .ft-icon > .ft-nf, #drawer .ft-more > .ft-nf { display: none; }
+  /* The row's file glyph and its menu button: the Lucide svg (filetree.js draws it, not the phone's Nerd text, at this width).
+     The svg is a block centred in the 2ch cell, so it has no line box to sit high in (the Nerd font's line box put a 14px glyph
+     2px high). */
   #drawer .ft-node > .ft-icon { display: flex; justify-content: center; }
   #drawer .ft-icon > .ui-icon, #drawer .ft-more > .ui-icon { display: block; }
   /* A folder's name is the text colour, not app.css's accent, so that the tint below can mean "something changed in here". */

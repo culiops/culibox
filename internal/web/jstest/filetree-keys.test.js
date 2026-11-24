@@ -145,6 +145,8 @@ class Node {
   removeAttribute(k) { delete this.attrs[k]; }
   appendChild(c) { if (typeof c === "string") c = new Text(c); if (c.parent) c.remove(); c.parent = this; this.children.push(c); return c; }
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }
+  prepend(c) { if (c.parent) c.remove(); c.parent = this; this.children.unshift(c); }
+  get childNodes() { return this.children.slice(); }
   replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; cs.forEach((c) => this.appendChild(c)); }
   after(n) { const i = this.parent.children.indexOf(this); if (n.parent) n.remove(); n.parent = this.parent; this.parent.children.splice(i + 1, 0, n); }
   remove() { if (this.parent) { this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; } }
@@ -1092,65 +1094,89 @@ test("the legacy #ft-menu look stays in app.css for the phone", () => {
   assert.match(ruleBody(app, "#ft-menu .ft-menu-path"), /word-break:\s*break-all/);
 });
 
-// ---- the tree's glyphs, two per row (#168 G5 1, 3): the phone's Nerd text and the desktop's Lucide svg -----------------------
+// ---- the tree's glyphs (#168 G5 1, 3): the phone's Nerd text, the desktop's Lucide svg, one per row ---------------------------
+// A row draws only the glyph its width shows (drawing both and hiding one in CSS made a 2000-entry folder ~75 % slower to
+// expand, phone included): the phone row is exactly today's (Nerd text, no svg, no chevron), the desktop row the svgs.
 const GLYPH_LISTING = {
   "/h/w": { entries: [{ name: "src", is_dir: true }, { name: "main.go", is_dir: false }, { name: "notes.bin", is_dir: false }] },
-  "/h/w/src": { entries: [{ name: "x.md", is_dir: false }] },
+  "/h/w/src": { entries: [{ name: "x.md", is_dir: false }, { name: "sub", is_dir: true }] },
+  "/h/w/src/sub": { entries: [{ name: "y.tf", is_dir: false }] },
 };
 const kids = (n) => n.children.filter((c) => c instanceof Node);
-const nfOf = (icon) => kids(icon).find((c) => c.className === "ft-nf");
 const svgOf = (icon) => kids(icon).find((c) => hasCls("ui-icon")(c));
+const iconOfRow = (c, name) => byCls(rowNamed(c, name), "ft-icon")[0];
+// What the phone row's cells hold: the text alone, no element.
+const phoneCell = (cell) => ({ text: cell.textContent, kids: kids(cell).length });
+const nerd = (w, name, isDir, open) => w.run("iconFor(" + JSON.stringify(name) + ", " + isDir + ", " + open + ")");
 
-test("row icon holds the phone glyph and the desktop glyph", async () => {
-  for (const width of [1280, 390]) { // one DOM at every width: the stylesheets choose (app.css hides the svg, desktop.css the text)
-    const c = await world(width, GLYPH_LISTING).render();
-    const go = byCls(rowNamed(c, "main.go"), "ft-icon")[0];
-    assert.strictEqual(nfOf(go).textContent, "", "today's Go Nerd glyph is still the .ft-nf text");
-    assert.strictEqual(svgOf(go).attrs["data-icon"], "file-code");
-    assert.strictEqual(svgOf(go).attrs.width, "14");
-    assert.strictEqual(go.textContent, "", "the cell's text is the Nerd glyph alone: the svg adds none");
-    assert.strictEqual(svgOf(byCls(rowNamed(c, "notes.bin"), "ft-icon")[0]).attrs["data-icon"], "file", "an unknown extension is the plain file");
-    const dir = byCls(rowNamed(c, "src"), "ft-icon")[0];
-    assert.strictEqual(nfOf(dir).textContent, "");
-    assert.strictEqual(svgOf(dir).attrs["data-icon"], "folder");
-    assert.strictEqual(kids(dir).length, 2, "exactly the two glyphs");
+test("a phone row draws today's Nerd glyphs only: the icon and the ⋯ are text, no svg, no chevron", async () => {
+  const w = world(390, GLYPH_LISTING);
+  const c = await w.render();
+  assert.deepStrictEqual(phoneCell(iconOfRow(c, "main.go")), { text: nerd(w, "main.go", false, false), kids: 0 }, "today's Go Nerd glyph");
+  assert.deepStrictEqual(phoneCell(iconOfRow(c, "src")), { text: nerd(w, "src", true, false), kids: 0 });
+  for (const r of rowsOf(c)) {
+    assert.deepStrictEqual(phoneCell(byCls(r, "ft-more")[0]), { text: "\uf141", kids: 0 }, nameOf(r) + ": F141, as before #168");
+    assert.strictEqual(byCls(r, "ft-chev").length, 0, nameOf(r) + ": the phone row has no chevron");
+    assert.strictEqual(r.all((n) => n.tag === "svg").length, 0, nameOf(r) + ": no svg at all");
   }
 });
 
-test("row icon: opening and closing a folder updates both glyphs", async () => {
+test("a desktop row draws the Lucide glyph only: the svg is the cell's one child and adds no text", async () => {
+  const w = world(1280, GLYPH_LISTING);
+  const c = await w.render();
+  const go = iconOfRow(c, "main.go");
+  assert.strictEqual(kids(go).length, 1);
+  assert.strictEqual(svgOf(go).attrs["data-icon"], "file-code");
+  assert.strictEqual(svgOf(go).attrs.width, "14");
+  assert.strictEqual(go.textContent, "", "no Nerd text on the desktop");
+  assert.strictEqual(svgOf(iconOfRow(c, "notes.bin")).attrs["data-icon"], "file", "an unknown extension is the plain file");
+  const dir = iconOfRow(c, "src");
+  assert.strictEqual(svgOf(dir).attrs["data-icon"], "folder");
+  assert.strictEqual(kids(dir).length, 1, "exactly one glyph");
+});
+
+test("row icon: opening and closing a folder updates the glyph its width shows", async () => {
   const w = world(1280, GLYPH_LISTING);
   const c = await w.render();
   const row = rowNamed(c, "src");
   const icon = byCls(row, "ft-icon")[0];
   await w.run("ftRowOpeners").get(row).setOpen(true);
-  assert.strictEqual(nfOf(icon).textContent, "");
   assert.strictEqual(svgOf(icon).attrs["data-icon"], "folder-open");
-  assert.strictEqual(kids(icon).length, 2, "replaced, not added to");
+  assert.strictEqual(kids(icon).length, 1, "replaced, not added to");
   await w.run("ftRowOpeners").get(row).setOpen(false);
-  assert.strictEqual(nfOf(icon).textContent, "");
   assert.strictEqual(svgOf(icon).attrs["data-icon"], "folder");
+  assert.strictEqual(kids(icon).length, 1);
+  const p = world(390, GLYPH_LISTING);
+  const pc = await p.render();
+  const prow = rowNamed(pc, "src");
+  const picon = byCls(prow, "ft-icon")[0];
+  await p.run("ftRowOpeners").get(prow).setOpen(true);
+  assert.deepStrictEqual(phoneCell(picon), { text: nerd(p, "src", true, true), kids: 0 });
+  await p.run("ftRowOpeners").get(prow).setOpen(false);
+  assert.deepStrictEqual(phoneCell(picon), { text: nerd(p, "src", true, false), kids: 0 });
 });
 
-test("a remembered-open folder is drawn open: both glyphs say so on the first render", async () => {
+test("a remembered-open folder is drawn open on the first render, at either width", async () => {
   const w = world(1280, GLYPH_LISTING);
   w.run("addExpanded(ftExpanded, '/h/w/src');");
-  const c = await w.render();
-  const icon = byCls(rowNamed(c, "src"), "ft-icon")[0];
-  assert.strictEqual(nfOf(icon).textContent, "");
-  assert.strictEqual(svgOf(icon).attrs["data-icon"], "folder-open");
+  assert.strictEqual(svgOf(iconOfRow(await w.render(), "src")).attrs["data-icon"], "folder-open");
+  const p = world(390, GLYPH_LISTING);
+  p.run("addExpanded(ftExpanded, '/h/w/src');");
+  assert.deepStrictEqual(phoneCell(iconOfRow(await p.render(), "src")), { text: nerd(p, "src", true, true), kids: 0 });
 });
 
-test("a row's menu button holds the phone's F141 and the desktop's ellipsis, and keeps its name", async () => {
+test("a desktop row's menu button is the ellipsis glyph alone, and keeps its name", async () => {
   const c = await world(1280, GLYPH_LISTING).render();
   for (const r of rowsOf(c)) {
     const more = byCls(r, "ft-more")[0];
-    assert.strictEqual(nfOf(more).textContent, "", nameOf(r));
+    assert.strictEqual(kids(more).length, 1, nameOf(r));
     assert.strictEqual(svgOf(more).attrs["data-icon"], "ellipsis", nameOf(r));
+    assert.strictEqual(more.textContent, "", nameOf(r));
     assert.ok(more.attrs["aria-label"], "an icon-only control keeps its accessible name");
   }
 });
 
-test("chevrons follow aria-expanded: a folder row carries both, a file row none, and a toggle redraws neither", async () => {
+test("chevrons follow aria-expanded: a desktop folder row carries both, a file row none, and a toggle redraws neither", async () => {
   const w = world(1280, GLYPH_LISTING);
   const c = await w.render();
   const row = rowNamed(c, "src");
@@ -1167,10 +1193,56 @@ test("chevrons follow aria-expanded: a folder row carries both, a file row none,
   assert.deepStrictEqual(kids(chev), before, "the same two svgs: CSS picks the one to show");
 });
 
-test("the tree's glyph CSS: the phone shows the Nerd text, the desktop the svg, the family colour keeps reaching it", () => {
+// The shape every row has at a width, read back from the tree: what a crossing must leave behind.
+const glyphShape = (c) => rowsOf(c).map((r) => {
+  const icon = byCls(r, "ft-icon")[0], more = byCls(r, "ft-more")[0], chev = byCls(r, "ft-chev");
+  return [nameOf(r), svgOf(icon) ? svgOf(icon).attrs["data-icon"] : "nf:" + icon.textContent, kids(icon).length,
+    svgOf(more) ? svgOf(more).attrs["data-icon"] : "nf:" + more.textContent, chev.length ? r.children.indexOf(chev[0]) : -1];
+});
+
+test("crossing the breakpoint redraws every row's glyphs for the new width, open folders included", async () => {
+  const w = world(1280, GLYPH_LISTING);
+  w.run("addExpanded(ftExpanded, '/h/w/src');");
+  const c = await w.render();
+  const wide = glyphShape(c);
+  const p = world(390, GLYPH_LISTING);
+  p.run("addExpanded(ftExpanded, '/h/w/src');");
+  const narrow = glyphShape(await p.render());
+  assert.notDeepStrictEqual(wide, narrow);
+  w.ctx.window.innerWidth = 390;
+  w.ctx.ftGlyphsCrossed();
+  assert.deepStrictEqual(glyphShape(c), narrow, "the phone's rows, exactly as a phone render draws them");
+  assert.strictEqual(c.all((n) => n.tag === "svg").length, 0);
+  w.ctx.window.innerWidth = 1280;
+  w.ctx.ftGlyphsCrossed();
+  assert.deepStrictEqual(glyphShape(c), wide, "and back: the desktop's rows, chevrons first");
+});
+
+test("a root load that the width crosses while it lists draws its whole subtree for the new width", async () => {
+  const w = world(1280, GLYPH_LISTING);
+  w.run("ftRootSel = document.createElement('input'); addExpanded(ftExpanded, '/h/w/src'); addExpanded(ftExpanded, '/h/w/src/sub');");
+  const list = w.ctx.api;
+  // The crossing lands while the deepest remembered folder lists: src's rows are drawn (off the page) for the desktop by then.
+  w.ctx.api = async (u) => {
+    if (u.includes(encodeURIComponent("/h/w/src/sub"))) { w.ctx.window.innerWidth = 390; w.ctx.ftGlyphsCrossed(); }
+    return list(u);
+  };
+  await w.ctx.ftLoadRoot();
+  assert.ok(rowNamed(w.tree, "y.tf"), "the remembered subtree is drawn");
+  assert.strictEqual(w.tree.all((n) => n.tag === "svg").length, 0, "no desktop glyph is left on the phone");
+  assert.deepStrictEqual(phoneCell(iconOfRow(w.tree, "x.md")), { text: nerd(w, "x.md", false, false), kids: 0 });
+});
+
+test("app.js's breakpoint listener redraws the tree's glyphs", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8");
+  const at = app.indexOf("window.matchMedia(mobileMediaQuery()).addEventListener(\"change\"");
+  assert.ok(at > 0);
+  assert.match(app.slice(at, app.indexOf("\n  });", at)), /ftGlyphsCrossed\(\)/);
+});
+
+test("the tree's glyph CSS: the desktop shows the svg centred, the phone never shows one, the family colour keeps reaching it", () => {
   for (const sel of [".ft-icon > .ui-icon", ".ft-more > .ui-icon", ".ft-chev"]) assert.match(ruleBody(app, sel), /display:\s*none/, "app.css hides " + sel);
-  assert.ok(!/\.ft-nf/.test(app), "app.css never hides the Nerd text: that is the phone's glyph");
-  for (const sel of ["#drawer .ft-icon > .ft-nf", "#drawer .ft-more > .ft-nf"]) assert.match(ruleBody(desktop, sel), /display:\s*none/, sel);
+  assert.ok(!/\.ft-nf/.test(app + desktop), "no .ft-nf: a row holds one glyph, not two");
   for (const sel of ["#drawer .ft-icon > .ui-icon", "#drawer .ft-more > .ui-icon"]) assert.match(ruleBody(desktop, sel), /display:\s*block/, sel);
   assert.match(ruleBody(desktop, "#drawer .ft-node > .ft-icon"), /display:\s*flex[^}]*justify-content:\s*center/, "centred in the 2ch cell");
   assert.match(ruleBody(desktop, "#drawer .ft-icon"), /color:\s*var\(--tree-icon\)/, "the family colours set the cell's colour, the svg is currentColor");

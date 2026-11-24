@@ -8165,6 +8165,8 @@ if (typeof mobileMediaQuery === "function" && window.matchMedia) {
     applyCollapsed(bootFlags(deskStorage(), mobileActive(window.innerWidth)).ignoreCollapsed ? { sessions: false, files: false } : readCollapsed());
     if (mobileActive(window.innerWidth)) restoreDrawerNodes();
     else paintSideCost(); // the footer was skipped while narrow
+    // The Files tree draws only the glyphs its width shows (#168): the phone's Nerd text or the desktop's svgs.
+    if (typeof ftGlyphsCrossed === "function") ftGlyphsCrossed();
     paintSteerToggle(); // its meaning changed with the layout (steerRailOpen)
     refreshSessions();
     // F05: the terminals were built at the old width; a desktop's graphite and a phone's black are
