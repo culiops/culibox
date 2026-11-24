@@ -237,7 +237,8 @@ function spawnTokenHosts(hosts) {
 //              or egress_open on a bound profile (all internet hosts, no allowlist)
 //   account    the agent account as shown ("" for a non-claude profile)
 //   store      {v, tone:"warn"} when the credential store is locked and something is bound, else null
-// Item = {kind, name, sub, scope, tag, missing}: tag "PROD" | "production" | "";
+// Item = {kind, kindId, name, sub, scope, tag, missing}: kindId declares what the item is (aws_legacy, aws, github, token, folder,
+// files, domain) and is what draws its glyph, the kind text being only the word; tag "PROD" | "production" | "";
 // missing: the name is bound but /api/meta does not list it (sub, scope and tag
 // are then blank: nothing is guessed about it; a GitHub owner whose App or token is gone
 // keeps its sub, the repositories the profile itself names). AWS and GitHub items also carry
@@ -262,12 +263,12 @@ function reachModel(o) {
     const f = spawnAWSFacts(ent, metaConns, credConns);
     const facts = { write: f.write, max: f.max, direct: f.direct, prod: f.prod };
     if (ent.inline) {
-      cloud.push(spawnItem("Old-style AWS", ent.name, { scope: spawnAWSScope(f), tag: f.prod ? "PROD" : "", facts }));
+      cloud.push(spawnItem("Old-style AWS", ent.name, { kindId: "aws_legacy", scope: spawnAWSScope(f), tag: f.prod ? "PROD" : "", facts }));
     } else if (awsKnown && !f.found) {
-      cloud.push(spawnItem("AWS", ent.name, { missing: true, facts }));
+      cloud.push(spawnItem("AWS", ent.name, { kindId: "aws", missing: true, facts }));
     } else {
       cloud.push(spawnItem("AWS", ent.name, {
-        sub: spawnJoin([f.m.account_id ? "account " + f.m.account_id : "", f.m.region]),
+        kindId: "aws", sub: spawnJoin([f.m.account_id ? "account " + f.m.account_id : "", f.m.region]),
         scope: spawnAWSScope(f), tag: f.prod ? "PROD" : "", facts,
       }));
     }
@@ -291,20 +292,20 @@ function reachModel(o) {
     const repos = repoOf(owner);
     const sub = repos.length ? "repo " + repos.join(", ") : "";
     cloud.push(loginGone(owner)
-      ? spawnItem("GitHub", owner, { sub, missing: true, facts: ghFacts })
-      : spawnItem("GitHub", owner, { sub, scope: spawnGitHubScope(p), facts: ghFacts }));
+      ? spawnItem("GitHub", owner, { kindId: "github", sub, missing: true, facts: ghFacts })
+      : spawnItem("GitHub", owner, { kindId: "github", sub, scope: spawnGitHubScope(p), facts: ghFacts }));
   }
 
   const tokens = spawnNames(p.tokens);
   for (const name of tokens) {
     const t = metaTokens.find((e) => e && e.name === name);
     if (!t) {
-      cloud.push(spawnItem("Token", name, { missing: tokensKnown }));
+      cloud.push(spawnItem("Token", name, { kindId: "token", missing: tokensKnown }));
       continue;
     }
     const hosts = spawnTokenHosts(t.hosts);
     cloud.push(spawnItem("Token", name, {
-      sub: spawnJoin([t.description].concat(Array.isArray(t.env) ? t.env : [])),
+      kindId: "token", sub: spawnJoin([t.description].concat(Array.isArray(t.env) ? t.env : [])),
       scope: hosts.length ? "Reaches " + hosts.join(", ") : "",
       tag: t.prod === true ? "production" : "",
     }));
@@ -312,13 +313,13 @@ function reachModel(o) {
 
   const reachable = [];
   if (!host) {
-    for (const path of spawnNames(p.context_paths)) reachable.push(spawnItem("Folder", path, { scope: "Read only" }));
+    for (const path of spawnNames(p.context_paths)) reachable.push(spawnItem("Folder", path, { kindId: "folder", scope: "Read only" }));
     // The original's shared files: a Files row like the imports item (the b-clone shot), told apart from it by `original`.
-    for (const path of spawnNames(p.clone_share)) reachable.push(spawnItem("Files", path, { scope: "From the original, read only", original: true }));
+    for (const path of spawnNames(p.clone_share)) reachable.push(spawnItem("Files", path, { kindId: "files", scope: "From the original, read only", original: true }));
     if (x.bundleImports === true && !p.imports_off) {
-      reachable.push(spawnItem("Files", "CLAUDE.md imports", { sub: "The files your CLAUDE.md pulls in with @", scope: "Read-only copies" }));
+      reachable.push(spawnItem("Files", "CLAUDE.md imports", { kindId: "files", sub: "The files your CLAUDE.md pulls in with @", scope: "Read-only copies" }));
     }
-    for (const d of spawnNames(p.egress_allow)) reachable.push(spawnItem("Domain", d, { scope: d.startsWith("*.") ? "HTTPS, its subdomains" : "HTTPS" }));
+    for (const d of spawnNames(p.egress_allow)) reachable.push(spawnItem("Domain", d, { kindId: "domain", scope: d.startsWith("*.") ? "HTTPS, its subdomains" : "HTTPS" }));
   }
 
   // Three postures, told apart by what the profile holds. "open" is two different
@@ -390,7 +391,8 @@ function reachWorkHome(p, repo) {
 //   creds    GET /api/credentials, or null when it could not be read:
 //            store {initialized, locked, platform}, aws [{name, prod, elevate{max_minutes}}]
 //   bundleImports  /api/meta bundle_imports: lists the CLAUDE.md imports row
-// A row is {k, v, prod?, name?, tone?, full?, path?}: `full` is the tooltip text when it is longer than `v` (a path
+// A row is {k, id, v, prod?, name?, tone?, full?, path?}: `id` declares the row's kind (files, original, workhome, aws, github,
+// tokens, reads, imports, domains, network, account, store) and the glyph comes from it, never from the label `k`; `full` is the tooltip text when it is longer than `v` (a path
 // not abbreviated), `path` the part of `v` drawn as machine text. An AWS row with prod set is drawn by the
 // caller as name + a red PROD tag + the rest of v (v starts with name). tone:
 // "warn" (amber, needs you). Containment is never coloured: red is for PROD and
@@ -408,7 +410,7 @@ function reachRows(o) {
   }
   const m = reachModel(x);
   const shortOf = spawnDep("shortPath", "./fsops.js");
-  const files = { k: "Files", v: m.files };
+  const files = { k: "Files", id: "files", v: m.files };
   // The workspace is drawn short (~/…), its tooltip long: `full` is the same text with the path as the field holds it,
   // `path` the part of `v` drawn as machine text. Neither is sent when there is no workspace, or on the host.
   if (x.tier !== "host" && x.cwd) {
@@ -419,11 +421,11 @@ function reachRows(o) {
   const rows = [files];
   if (m.original) {
     const clone = String(x.profile && x.profile.clone_of || "");
-    const row = { k: "Original", v: m.original, path: shortOf(clone) + "/.git" };
+    const row = { k: "Original", id: "original", v: m.original, path: shortOf(clone) + "/.git" };
     const full = spawnExpand(m.original, shortOf(clone), clone);
     if (full !== m.original) row.full = full;
     rows.push(row);
-    if (x.clone === true) rows.push({ k: "Work home", v: reachWorkHome(x.profile, shortOf(clone)) });
+    if (x.clone === true) rows.push({ k: "Work home", id: "workhome", v: reachWorkHome(x.profile, shortOf(clone)) });
   }
 
   for (const it of m.cloud.filter((i) => i.kind === "AWS" || i.kind === "Old-style AWS")) {
@@ -432,33 +434,33 @@ function reachRows(o) {
     if (f.direct) v += " only · SSO role directly";
     else if (f.write) v += " · write only after you elevate" + (f.max ? " (max " + f.max + " min)" : "");
     else v += " only";
-    const row = { k: "AWS", v, name: it.name };
+    const row = { k: "AWS", id: "aws", v, name: it.name };
     if (f.prod) row.prod = true;
     rows.push(row);
   }
 
   const gh = m.cloud.filter((i) => i.kind === "GitHub");
-  if (gh.length) rows.push({ k: "GitHub", v: ghReachValue(gh.map((i) => i.name), gh[0].facts.write, gh[0].facts.pat) });
+  if (gh.length) rows.push({ k: "GitHub", id: "github", v: ghReachValue(gh.map((i) => i.name), gh[0].facts.write, gh[0].facts.pat) });
 
   const tokens = m.cloud.filter((i) => i.kind === "Token");
-  if (tokens.length) rows.push({ k: "Tokens", v: tokens.map((i) => i.name).join(", ") });
+  if (tokens.length) rows.push({ k: "Tokens", id: "tokens", v: tokens.map((i) => i.name).join(", ") });
 
   const names = (kinds) => m.reachable.filter((i) => kinds.includes(i.kind)).map((i) => i.name);
   const reads = m.reachable.filter((i) => i.kind === "Folder" || i.original === true).map((i) => i.name);
-  if (reads.length) rows.push({ k: "Reads", v: reads.join(", "), path: reads.join(", ") });
-  if (m.reachable.some((i) => i.kind === "Files" && i.original !== true)) rows.push({ k: "Imports", v: "CLAUDE.md imports, read-only copies" });
+  if (reads.length) rows.push({ k: "Reads", id: "reads", v: reads.join(", "), path: reads.join(", ") });
+  if (m.reachable.some((i) => i.kind === "Files" && i.original !== true)) rows.push({ k: "Imports", id: "imports", v: "CLAUDE.md imports, read-only copies" });
   const domains = names(["Domain"]);
-  if (domains.length) rows.push({ k: "Domains", v: domains.join(", ") });
+  if (domains.length) rows.push({ k: "Domains", id: "domains", v: domains.join(", ") });
 
-  if (x.tier === "host") rows.push({ k: "Network", v: "not contained" });
-  else if (m.network) rows.push({ k: "Network", v: m.network.open ? "open" : "allowlist only" });
+  if (x.tier === "host") rows.push({ k: "Network", id: "network", v: "not contained" });
+  else if (m.network) rows.push({ k: "Network", id: "network", v: m.network.open ? "open" : "allowlist only" });
 
   if (m.account) {
-    const row = { k: "Account", v: m.account };
+    const row = { k: "Account", id: "account", v: m.account };
     if (m.account.includes(SPAWN_CLAUDE_HOME)) row.path = SPAWN_CLAUDE_HOME; // "default (~/.claude)": the folder is machine text
     rows.push(row);
   }
-  if (m.store) rows.push({ k: "Store", v: m.store.v, tone: m.store.tone });
+  if (m.store) rows.push({ k: "Store", id: "store", v: m.store.v, tone: m.store.tone });
   return rows;
 }
 

@@ -1170,11 +1170,11 @@ test("Edit sits beside the value, on its first line, and a row does not light up
 
 // ---- Plan 4 gate fix wave: Profiles (DIFF.md §3 P1-P6, digest-design §B2 `.m2-rows` / `.m2-add` / §C6 `.check-box`) ------------------------------------
 
-test("a grant row is the frame's .m2-rows grid: 52px, the value, a 196px status column, 16px between, 10px between rows (P1)", () => {
+test("a grant row is the frame's .m2-rows grid: 72px (room for a 14px kind glyph), the value, a 196px status column, 16px between, 10px between rows (P1)", () => {
   assert.strictEqual(bdecls(PV + " .pfv-rows").get("gap"), "10px", "§B2 `.m2-rows` row-gap 10px (it was 12px)");
   const row = bdecls(PV + " .pfv-row");
   assert.strictEqual(row.get("display"), "grid");
-  assert.strictEqual(row.get("grid-template-columns"), "52px minmax(0, 1fr) 196px", "three tracks: an empty fourth one would still cost a 16px gap in every read row");
+  assert.strictEqual(row.get("grid-template-columns"), "72px minmax(0, 1fr) 196px", "three tracks: an empty fourth one would still cost a 16px gap in every read row");
   assert.strictEqual(row.get("column-gap"), "16px");
   assert.strictEqual(row.get("align-items"), "start");
   // Remove / Undo and the "Set in ..." note of a row in edit take a trailing auto track of their own (column 4, the implicit one), as they did.
@@ -1183,8 +1183,20 @@ test("a grant row is the frame's .m2-rows grid: 52px, the value, a 196px status 
   }
   // The narrow steps still put them in column 3 (863) or under the content (440): they come after the base and are not touched.
   const steps = parseRules(DESK_CSS).filter((r) => r.selector.startsWith(PV + " .pfv-row"));
-  assert.ok(steps.some((r) => r.decls.get("grid-template-columns") === "52px minmax(0, 1fr) auto"), "863px: 52px, content, auto");
+  assert.ok(steps.some((r) => r.decls.get("grid-template-columns") === "72px minmax(0, 1fr) auto"), "863px: 72px, content, auto");
   assert.ok(steps.some((r) => r.decls.get("grid-template-columns") === "52px minmax(0, 1fr)"), "440px: 52px, content");
+});
+
+test("profile kind column is 72px: a glyph-less kind word is indented 20px, the glyph has 6px after it, and the 440px step keeps 52px with no glyph and no indent (#168 G1)", () => {
+  assert.strictEqual(bdecls(PV + " .pfv-row").get("grid-template-columns"), "72px minmax(0, 1fr) 196px");
+  assert.strictEqual(bdecls(PV + " .pfv-k:not(.has-ic)").get("padding-left"), "20px");
+  assert.strictEqual(bdecls(PV + " .pfv-k .ui-icon").get("margin-right"), "6px");
+  assert.strictEqual(bdecls(PV + " .pfv-k.has-ic").get("white-space"), "nowrap");
+  const steps = parseRules(DESK_CSS).filter((r) => r.selector.startsWith(PV + " .pfv-"));
+  const at = (sel) => steps.filter((r) => r.selector === PV + " " + sel);
+  assert.ok(at(".pfv-row").some((r) => r.decls.get("grid-template-columns") === "52px minmax(0, 1fr)"), "440px keeps the 52px column");
+  assert.ok(at(".pfv-k:not(.has-ic)").some((r) => r.decls.get("padding-left") === "0"), "no indent in a 52px column");
+  assert.ok(at(".pfv-k .ui-icon").some((r) => r.decls.get("display") === "none"), "the glyph steps aside in a 52px column, the word stays");
 });
 
 test("a row's kind word, status and mono part are 12/18, as the frame's t-sm lines (P2)", () => {

@@ -48,6 +48,12 @@ const ICON_RESOURCE = iconMapOf({
   files: "files", credential: "key-round", resource: "circle-dashed",
 });
 
+// The New session reach box's label column (G1 22-28), keyed by the row's declared `id` (reachRows). Files, Original, Work home,
+// Network and Account stay plain (G1 left-outs w, x, y, z), so they have no entry.
+const ICON_REACH = iconMapOf({
+  aws: "cloud", github: "si:github", tokens: "key-round", reads: "folder", imports: "files", domains: "globe", store: "lock",
+});
+
 // The tabs of a pane (G4 18-21).
 const ICON_PANE_TAB = iconMapOf({ terminal: "square-terminal", activity: "activity", access: "shield", files: "folder-tree" });
 
@@ -115,7 +121,7 @@ function emptyState(kind) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     emptyState, ICON_EMPTY,
-    iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE,
+    iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_REACH,
     ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_TOAST, ICON_ROW, ICON_PALETTE_KIND,
   };
 }

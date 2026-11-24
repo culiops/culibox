@@ -378,7 +378,16 @@ function pfvDrawRow(r, known, err, o) {
   // The old-style AWS setting is an AWS row named for what it is (the kind column is 52px: "Old-style AWS" would wrap
   // in three lines); the binding's own label is its sub-line.
   const old = r.kind === "Old-style AWS";
-  row.append(pfvMk("span", "pfv-k", old ? "AWS" : r.kind));
+  // The kind column draws the glyph of the row's declared kindId (reachModel's spawnItem), never of the word: a row with no kindId
+  // (Workspace, Agent, Advanced rows, or an older shape) draws the word alone.
+  const kind = pfvMk("span", "pfv-k");
+  const glyph = iconOf(ICON_RESOURCE, r.kindId);
+  if (glyph) {
+    kind.className = "pfv-k has-ic";
+    kind.append(uiIcon(glyph, { size: 14 }));
+  }
+  kind.append(old ? "AWS" : r.kind);
+  row.append(kind);
   const id = pfvMk("div", "pfv-id");
   const nm = pfvMk("p", "pfv-nm");
   // The file shared from a private copy's original is a path; the CLAUDE.md imports row, also Files, is words.

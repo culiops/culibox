@@ -294,7 +294,16 @@ function paintReachRows(box, rows, opts) {
   for (const r of rows || []) {
     const row = spawnPanelEl("div", "sr-row");
     if (r.tone) row.classList.add("tone-" + r.tone);
-    row.append(spawnPanelEl("span", "sr-k", r.k), value(r, "sr-v"));
+    // The glyph comes from the row's declared id (reachRows), never from its label: a row with no id, or one the map does not
+    // know, draws the label alone.
+    const k = spawnPanelEl("span", "sr-k");
+    const glyph = iconOf(ICON_REACH, r.id);
+    if (glyph) {
+      k.classList.add("has-ic");
+      k.append(uiIcon(glyph, { size: 14 }));
+    }
+    k.append(r.k);
+    row.append(k, value(r, "sr-v"));
     grid.append(row);
   }
   kids.push(grid);

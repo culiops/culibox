@@ -2801,13 +2801,17 @@
   #spawn #spawn-ws-row .spawn-ws-check.ck-error { color: var(--red); }
 
   /* The reach box (frame M4.1): what this session will be able to touch, from the profile. A --bg card with no border,
-     the title, then ONE label/value grid (72px | the rest, 16px and 2px apart, baselines aligned) so every value starts
+     the title, then ONE label/value grid (88px | the rest, 16px and 2px apart, baselines aligned) so every value starts
      on the same line. A row is only the grid's two cells (display: contents). A path in a value is machine text --t-sm. */
   #spawn-reach { display: flex; flex-direction: column; gap: var(--sp-2); box-sizing: border-box; padding: var(--sp-3) var(--sp-4); background: var(--bg); border-radius: var(--r-card); }
   .sr-title { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-semibold); color: var(--fg); }
-  .sr-grid { display: grid; grid-template-columns: 72px minmax(0, 1fr); column-gap: var(--sp-4); row-gap: 2px; align-items: baseline; }
+  .sr-grid { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: var(--sp-4); row-gap: 2px; align-items: baseline; }
   .sr-row { display: contents; }
   .sr-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* 88px: a 14px glyph, 6px, and Domains / Imports. A label with no glyph is indented the glyph's 20px so every label starts on one line (#168 G1). */
+  .sr-k.has-ic { white-space: nowrap; }
+  .sr-k .ui-icon { margin-right: 6px; }
+  .sr-k:not(.has-ic) { padding-left: 20px; }
   .sr-v { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
   .sr-path { font-family: var(--font-mono); font-size: var(--t-sm); line-height: var(--lh-sm); }
   #spawn-reach code { font-family: var(--font-mono); font-size: var(--t-xs); }
@@ -4238,9 +4242,14 @@
      column 3 (863px) or under the content (440px). The kind word, the status and the mono part are the frame's 12/18 `t-sm` lines (the value
      line around the mono part stays 20px). */
   #page-host > #settings-modal.as-page #pfv .pfv-rows { display: grid; gap: 10px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) 196px; column-gap: 16px; align-items: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) 196px; column-gap: 16px; align-items: start; }
   #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 4; grid-row: 1; }
   #page-host > #settings-modal.as-page #pfv .pfv-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* The kind column is 72px: a 14px glyph, 6px, and the longest word (Domain, GitHub). A kind word with no glyph is indented the glyph's 20px, so every
+     word in the card starts on one line (#168 G1). The glyph is drawn only from a row's declared kindId. */
+  #page-host > #settings-modal.as-page #pfv .pfv-k.has-ic { white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pfv .pfv-k .ui-icon { margin-right: 6px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-k:not(.has-ic) { padding-left: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-id { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-nm { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-weight: 500; line-height: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-rsub { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
@@ -4482,7 +4491,7 @@
 
   /* Below 863px of page (a 1365px window, as the mockup draws it) the scope moves under the name, so a mono id never clips. */
   @container (max-width: 863px) {
-    #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 72px minmax(0, 1fr) auto; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-scope { grid-column: 2; margin-top: 2px; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 3; grid-row: 1; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-kv { grid-column: 2; }
@@ -4512,6 +4521,9 @@
      never sit on an input. A variable's value goes under its name, a definition under its term. */
   @container (max-width: 440px) {
     #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr); }
+    /* The 52px column here has no room for a glyph or an indent: the words stay, the glyph steps aside. */
+    #page-host > #settings-modal.as-page #pfv .pfv-k .ui-icon { display: none; }
+    #page-host > #settings-modal.as-page #pfv .pfv-k:not(.has-ic) { padding-left: 0; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn { grid-column: 2; grid-row: auto; justify-self: end; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 2; grid-row: auto; }
     #page-host > #settings-modal.as-page #pfv .pfv-kv, #page-host > #settings-modal.as-page #pfv .pfv-dl { grid-template-columns: minmax(0, 1fr); }

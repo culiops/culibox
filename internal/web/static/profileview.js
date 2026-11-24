@@ -379,7 +379,7 @@ function pfvReadView(o) {
     githubLogins: x.githubLogins || pfvGithubLogins(doc),
   });
   const item = (it) => {
-    const r = pfvRow(it.kind, it.name, { sub: it.sub, scope: it.scope, tag: it.tag, missing: it.missing === true });
+    const r = pfvRow(it.kind, it.name, { sub: it.sub, scope: it.scope, tag: it.tag, missing: it.missing === true, kindId: it.kindId });
     if (it.original === true) r.original = true;
     if (r.missing) r.scope = PFV_MISSING;
     if (it.kind === "Old-style AWS" && edit) r.action = "Move to a saved connection";
