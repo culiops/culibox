@@ -4426,6 +4426,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-pick-list { min-height: min(var(--pfv-pick-min, 0px), calc(100vh - 180px)); max-height: min(580px, calc(100vh - 180px)); overflow-y: auto; overscroll-behavior: contain; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp:not([hidden]) ~ .pfv-pick-grp:not([hidden])::before { content: ""; display: block; height: 1px; margin: 6px 4px; background: var(--line); }
+  /* The glyph of a group heading (12px: the heading is 11px caps) and of an item that has no heading above it (#168 G1). */
+  #page-host > #settings-modal.as-page #pfv .pfv-pick .grp-label .ui-icon { margin-right: 6px; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 0 10px 4px; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-none { padding: 6px 10px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-none[hidden] { display: none; }
