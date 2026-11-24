@@ -14,6 +14,7 @@ import (
 	"github.com/culiops/culibox/internal/analytics"
 	"github.com/culiops/culibox/internal/auth"
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boximagecheck"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/secretchain"
@@ -75,6 +76,10 @@ type Server struct {
 	// wait on docker for about a second at most, and only while that runtime is
 	// still unknown.
 	BoxRuntime func() string
+	// BoxImage answers GET /api/box-image: the running box image against the one
+	// for this version. It reads docker (5 s at most) and the check's cache file,
+	// never the network. nil → the route answers 404.
+	BoxImage func(ctx context.Context) boximagecheck.Report
 	// BoxUnavailableReason is a plain sentence for why BoxRuntime is empty
 	// because the containment layer failed to build ("Docker is not installed");
 	// empty when it did build. Published in /api/meta as
@@ -266,6 +271,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/sessions", s.API.handleSessions)
 	protected.HandleFunc("/api/sessions/", s.API.handleSession)
 	protected.HandleFunc("/api/vm-state", s.API.handleVMState)
+	protected.HandleFunc("/api/box-image", s.handleBoxImage)
 	protected.HandleFunc("/api/handback", s.API.handleHandback)
 	protected.HandleFunc("/api/handback/", s.API.handleHandback)
 	protected.HandleFunc("/api/profiles", s.handleProfiles)
