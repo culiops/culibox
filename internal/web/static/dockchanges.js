@@ -319,7 +319,7 @@ function dkcFillRow(b, r, label, rv) {
   }
   const cls = r.mine ? "dk-row dk-mine" : "dk-row";
   if (b.className !== cls) b.className = cls;
-  dkcSetText(p.ic, typeof iconFor === "function" ? iconFor(r.name, r.folder, false) : "");
+  fileIconInto(p.ic, r.name, !!r.folder);
   dkcSetText(p.nm, r.name);
   dkcSetText(p.dir, r.dir);
   // The counts are there only where git gave both (never a guess); a zero side is still said: "+0 −12" is a deleted file's own count.

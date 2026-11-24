@@ -224,3 +224,29 @@ test("every name the dock draws from the workspace or git is isolated for bidire
   }
   assert.doesNotMatch(app, /unicode-bidi/, "the phone's tree (app.css) is left as it was: the rule is the desktop block's");
 });
+
+// #168 G5: the desktop draws no Nerd glyph. The font and its @font-face stay for xterm's fallback and the frozen phone.
+test("no desktop Nerd font: desktop.css names it nowhere, app.css keeps its @font-face and the phone's rules, and the file is shipped", () => {
+  assert.ok(!/Symbols Nerd Font/.test(read("desktop.css")), "not even in a comment");
+  assert.ok(!/menu-ficon/.test(read("desktop.css")) && !/menu-ficon/.test(read("app.js")), "the switcher's Nerd span is gone");
+  assert.ok(!/font-family/.test(rulesFor(css, ".dk-ic")), ".dk-ic draws an svg: it has no font");
+  assert.match(read("app.css"), /@font-face\s*\{\s*font-family:\s*"Symbols Nerd Font"/);
+  assert.match(rulesFor(app, ".ft-icon"), /font-family:\s*"Symbols Nerd Font"/, "the phone's tree glyphs");
+  assert.ok(fs.existsSync(path.join(STATIC, "vendor", "symbols-nerd-font-subset.ttf")));
+  assert.match(read("app.css"), /The desktop UI draws no Nerd glyph since #168\./);
+});
+
+test("the fallback card's badge is the bare 32px glyph: no tile, no padding, no text font", () => {
+  const badge = rulesFor(css, ".dk-fv-badge");
+  assert.match(badge, /width: 32px; height: 32px/);
+  assert.ok(!/background|padding|border-radius|font:/.test(badge), badge);
+});
+
+test("iconFor survives only where the phone's tree needs it: filetree.js is its one caller", () => {
+  const hits = [];
+  for (const f of fs.readdirSync(STATIC).filter((n) => n.endsWith(".js"))) {
+    read(f).split("\n").forEach((l, i) => { if (/\biconFor\(/.test(l)) hits.push(f + ":" + (i + 1)); });
+  }
+  assert.deepStrictEqual(hits.filter((h) => !h.startsWith("filetree.js:")), []);
+  assert.ok(hits.some((h) => h.startsWith("filetree.js:")), "the phone's .ft-nf text still comes from it");
+});

@@ -1220,10 +1220,9 @@
   #session-menu .menu-item[aria-current="true"] { font-weight: var(--w-semibold); }
   #session-menu .menu-check { flex: none; width: 16px; display: inline-flex; justify-content: center; color: var(--muted); }
   #session-menu > .menu-row > .menu-x { flex: none; font-size: var(--t-lg); line-height: 1; }
-  /* #365: a row's kind glyph and, for a session, its tier. A file's glyph is the Files tree's (.ft-icon's font); the
+  /* #365: a row's kind glyph and, for a session, its tier. A file's glyph is its kind's Lucide svg (fileIcon); the
      tier is the sidebar row's chip, glyph then word (.dchip, its box and host tones), kept whole while the title
      ellipsizes before it. */
-  #session-menu .menu-item .menu-ficon { font-family: "Symbols Nerd Font"; line-height: 1; }
   #session-menu .menu-item > .menu-tier { display: inline-flex; align-items: center; gap: 3px; }
   #session-menu .menu-item .menu-tier .tchip-i { flex: none; }
   #session-menu .menu-item .menu-tier.host .tchip-i { color: var(--fg); }
@@ -1573,7 +1572,7 @@
   .dk-tab:focus-visible { outline: var(--focus); outline-offset: -2px; }
   /* The preview tab, the one the next single click replaces, is italic (a double-click, an edit or a save keeps it). */
   .dk-prev .dk-name { font-style: italic; }
-  .dk-ic { flex: none; width: 2ch; text-align: center; font-family: "Symbols Nerd Font"; color: var(--muted); }
+  .dk-ic { flex: none; width: 2ch; text-align: center; color: var(--muted); }
   /* The right padding keeps an italic name's last slanted letter inside the clip. */
   .dk-name { min-width: 0; padding-right: 2px; overflow: hidden; text-overflow: ellipsis; }
   /* The git letter, in the tree's colours (app.css .ft-git-*). */
@@ -1781,15 +1780,14 @@
   .dk-fv-media { display: block; }
   video.dk-fv-media { flex: 1; min-height: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
   audio.dk-fv-media { width: calc(100% - 48px); max-width: 640px; margin: auto; }
-  /* The card (mockup 344-mock-fallback): an extension badge beside the name and one meta line, the note under them, the buttons last. */
+  /* The card (mockup 344-mock-fallback): the file kind's glyph (32px, no tile) beside the name and one meta line, the note under them, the buttons last. */
   .dk-fv-cardwrap { flex: 1; min-height: 0; overflow: auto; padding: 48px 16px 16px; }
   .dk-fv-card {
     box-sizing: border-box; width: 100%; max-width: 300px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: auto minmax(0, 1fr);
     gap: 12px; align-items: start; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card);
   }
   .dk-fv-badge {
-    box-sizing: border-box; min-width: 32px; height: 32px; padding: 0 4px; display: flex; align-items: center; justify-content: center;
-    border-radius: var(--r-ctl); background: var(--raise); color: var(--muted); font: var(--w-semibold) var(--t-xs)/1 var(--font-mono);
+    box-sizing: border-box; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--muted);
   }
   .dk-fv-head { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .dk-fv-name { color: var(--fg); font: var(--w-semibold) var(--t-md)/var(--lh-md) var(--font-ui); overflow-wrap: anywhere; unicode-bidi: isolate; }

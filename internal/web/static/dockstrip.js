@@ -131,11 +131,11 @@ function dkTabFill(el, it) {
   el.dataset.locked = it.locked ? "1" : "";
   el.dataset.box = it.box ? "1" : "";
   // The All changes tab has no file, so no file glyph: the Changes icon, drawn once (a tab element is made for one key, which stays one kind).
+  const ic = el.querySelector(".dk-ic");
   if (it.review) {
-    const ic = el.querySelector(".dk-ic");
     if (ic && !ic.firstChild) ic.append(uiIcon(iconOf(ICON_DOCK_VIEW, "changes"), { size: 14 }));
-  } else {
-    set("dk-ic", typeof iconFor === "function" ? iconFor(it.path.split("/").pop() || it.path, false, false) : "");
+  } else if (ic) {
+    fileIconInto(ic, it.path.split("/").pop() || it.path, false);
   }
   set("dk-name", it.name);
   const st = set("dk-st", it.letter);

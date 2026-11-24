@@ -96,6 +96,15 @@ function fileIcon(name, isDir, open, size) {
   return d.uiIcon(d.ICON_FILE_KIND[fileIconKind(name, isDir, open)], { size });
 }
 
+// fileIconInto: the glyph slot `el` (a tab's, a Changes row's, an All changes header's .dk-ic) shows the file's kind glyph, at 14. A
+// slot is reused for other files, so it is redrawn only when the kind changed (data-fk); a repaint that changes nothing costs nothing.
+function fileIconInto(el, name, isDir) {
+  const kind = fileIconKind(name, isDir, false);
+  if (el.firstChild && el.getAttribute("data-fk") === kind) return;
+  el.setAttribute("data-fk", kind);
+  el.replaceChildren(fileIcon(name, isDir, false, 14));
+}
+
 // fileTypeLabel: the type in words for the card's meta line. `binary` only
 // matters for the wording when there is nothing better: no extension at all
 // ("Binary file" if it is not text, else "File": a too-large text file).
@@ -173,5 +182,5 @@ function zoomScroll({ stageW, stageH, nw, nh, s0, s1, left, top, px, py }) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { CARD_EXTS, FILE_ICON_EXT, FILE_CARD_KIND, fileIconKind, fileIcon, dockKindOf, fileTypeLabel, fileTypeShort, fmtModified, ZOOM_STEPS, zoomStep, fitScale, wheelScale, zoomScroll };
+  module.exports = { CARD_EXTS, FILE_ICON_EXT, FILE_CARD_KIND, fileIconKind, fileIcon, fileIconInto, dockKindOf, fileTypeLabel, fileTypeShort, fmtModified, ZOOM_STEPS, zoomStep, fitScale, wheelScale, zoomScroll };
 }

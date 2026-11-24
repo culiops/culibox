@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { EvNode } = require("./fakedom.js");
+const { iconStubs } = require("./iconpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 
@@ -31,6 +32,7 @@ function page(over) {
     console, Array, Object, Set, Map, Math, Number, JSON, Date, Promise, String, Error, document: doc,
     boxFileURL: (sid, p) => "/api/sessions/" + sid + "/boxfile?path=" + encodeURIComponent(p),
     ResizeObserver: RO,
+    ...iconStubs(() => new EvNode("svg", doc)),
   }, over));
   for (const f of ["copyfile.js", "filekinds.js", "upload.js", "dockfileview.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   const get = (n) => new vm.Script(n, { filename: "get" }).runInContext(ctx);
@@ -45,6 +47,8 @@ const walk = (n, out = []) => { for (const c of n.children) { if (c.tag) { out.p
 const q = (v, sel) => v.el.querySelector(sel);
 const text = (v, sel) => { const n = q(v, sel); return n ? n.textContent : null; };
 const facts = (v) => v.factsEl.children.map((c) => c.textContent);
+// The card's hero: [data-icon, width] of every child of the badge, and its text.
+const hero = (v) => q(v, ".dk-fv-badge").children.map((n) => [n.getAttribute("data-icon"), n.getAttribute("width")]);
 const press = (n) => n.onclick({ target: n });
 
 // An image view whose stage is `sw` x `sh` and whose picture has loaded at `nw` x `nh`.
@@ -68,7 +72,7 @@ test("a card shows a badge, the name, a meta line, the note and Download; Downlo
   const p = page();
   const mtime = new Date(2020, 0, 2, 3, 4).getTime();
   const v = p.make({ path: "/p/data/app.sqlite", kind: "card", meta: { size: 3.4 * 1024 * 1024, mtime } });
-  assert.equal(text(v, ".dk-fv-badge"), "DB", "a database is DB");
+  assert.deepEqual(hero(v), [["file-database", "32"]], "a database is the database glyph, drawn at 32");
   assert.equal(text(v, ".dk-fv-name"), "app.sqlite");
   assert.equal(text(v, ".dk-fv-meta"), "SQLite database · 3.4 MB · modified 2020-01-02 03:04");
   assert.equal(text(v, ".dk-fv-note"), "CuliBox has no viewer for this type.");
@@ -91,12 +95,12 @@ test("a card leaves out what is not known: no size, no modified time", () => {
 test("a binary file with no extension is BIN and a Binary file; a too-large one with none is FILE and a File, with the limit note", () => {
   const p = page();
   const b = p.make({ path: "/p/blob", kind: "binary", meta: { size: 9, mtime: 0 } });
-  assert.equal(text(b, ".dk-fv-badge"), "BIN");
+  assert.deepEqual(hero(b), [["file", "32"]], "no extension: the plain file");
   assert.equal(text(b, ".dk-fv-meta"), "Binary file · 9 bytes");
   assert.equal(text(b, ".dk-fv-note"), "Not text, and CuliBox has no viewer for this type.");
   assert.deepEqual(facts(b), ["FILE", "9 bytes"]);
   const t = p.make({ path: "/p/server", kind: "toolarge", meta: { size: 3 * 1024 * 1024, mtime: 0 } });
-  assert.equal(text(t, ".dk-fv-badge"), "FILE");
+  assert.deepEqual(hero(t), [["file", "32"]]);
   assert.equal(text(t, ".dk-fv-meta"), "File · 3.0 MB");
   assert.equal(text(t, ".dk-fv-note"), "Larger than the 2 MB preview limit. Download it to read it.");
   const log = p.make({ path: "/p/a.log", kind: "toolarge", meta: { size: 3 * 1024 * 1024, mtime: 0 } });
@@ -105,13 +109,14 @@ test("a binary file with no extension is BIN and a Binary file; a too-large one 
 
 test("a file name is text, never markup: a hostile name and a hostile extension add no element", () => {
   const p = page();
-  for (const name of ["<img src=x onerror=alert(1)>.bin", "a.<svg onload=alert(1)>", "<b onclick=x>.zip", "<script>x;.zip"]) {
+  for (const [name, glyph] of [["<img src=x onerror=alert(1)>.bin", "file"], ["a.<svg onload=alert(1)>", "file"], ["<b onclick=x>.zip", "file-archive"], ["<script>x;.zip", "file-archive"]]) {
     const v = p.make({ path: "/p/" + name, kind: "binary", meta: null });
     const tags = walk(v.el).map((n) => n.tag);
-    for (const bad of ["img", "svg", "script", "b", "iframe"]) assert.ok(!tags.includes(bad), name + ": no <" + bad + ">");
+    for (const bad of ["img", "script", "b", "iframe"]) assert.ok(!tags.includes(bad), name + ": no <" + bad + ">");
+    assert.equal(tags.filter((t) => t === "svg").length, 1, name + ": the one svg is the card's own hero glyph");
     assert.equal(text(v, ".dk-fv-name"), name, "the name as typed, as text");
-    assert.equal(q(v, ".dk-fv-badge").children.length, 0, "the badge holds text only");
-    assert.ok(q(v, ".dk-fv-badge").textContent.length <= 4);
+    assert.deepEqual(hero(v), [[glyph, "32"]], "the hero is one glyph by the declared kind, never the name");
+    assert.equal(q(v, ".dk-fv-badge").textContent, "");
   }
   // and the one place an element is made with the name in a property, the image's alt, keeps it a string
   const v = p.make({ path: "/p/<img src=x onerror=alert(1)>.png", kind: "image", meta: null });
@@ -124,7 +129,7 @@ test("a file name is text, never markup: a hostile name and a hostile extension 
 test("a PDF is a card with Open in new tab (primary) then Download, its note and its status bar", () => {
   const p = page();
   const v = p.make({ path: "/p/docs/report.pdf", kind: "pdf", meta: { size: 1.2 * 1024 * 1024, mtime: 0 } });
-  assert.equal(text(v, ".dk-fv-badge"), "PDF");
+  assert.deepEqual(hero(v), [["file-text", "32"]]);
   assert.equal(text(v, ".dk-fv-meta"), "PDF document · 1.2 MB");
   assert.equal(text(v, ".dk-fv-note"), "Opens in its own browser tab, sandboxed: nothing in the PDF can reach CuliBox.");
   const acts = q(v, ".dk-fv-acts").children.map((c) => c.textContent);
@@ -562,15 +567,29 @@ test("the interface EditorTab calls on its inner viewer: all there, the ones tha
   v.onHide(); // after a dispose, harmless
 });
 
-test("the card's badge says DB for a database and NB for a notebook; any other type is its extension, 4 characters at most", () => {
+test("the card's type word (badgeText) is still DB for a database and NB for a notebook; any other type is its extension, 4 characters at most", () => {
   const p = page();
   for (const [file, badge] of [
     ["/p/a.sqlite", "DB"], ["/p/a.sqlite3", "DB"], ["/p/a.db", "DB"], ["/p/A.SQLITE", "DB"], ["/p/n.ipynb", "NB"],
     ["/p/a.zip", "ZIP"], ["/p/a.epub", "EPUB"], ["/p/a.docx", "DOCX"], ["/p/a.xlsm", "XLSM"],
   ]) {
     const v = p.make({ path: file, kind: "card", meta: { size: 1, mtime: 1 } });
-    assert.equal(text(v, ".dk-fv-badge"), badge, file);
+    assert.equal(v.badgeText(false), badge, file);
   }
+});
+
+test("card hero: policies_before.json.gz is one 32 px file-archive glyph in the badge, no badge text and no tile; a binary and a too-large file follow their extension's kind", () => {
+  const p = page();
+  const v = p.make({ path: "/p/policies_before.json.gz", kind: "card", meta: { size: 1, mtime: 1 } });
+  const badge = q(v, ".dk-fv-badge");
+  assert.deepEqual(hero(v), [["file-archive", "32"]]);
+  assert.equal(badge.textContent, "", "no GZ text");
+  assert.equal(badge.getAttribute("aria-hidden"), "true", "decoration: the type word stays in the meta line");
+  assert.match(text(v, ".dk-fv-meta"), /^Gzip archive/, "the type in words stays");
+  assert.equal(facts(v)[0], "GZ", "the status bar keeps GZ");
+  assert.deepEqual(hero(p.make({ path: "/p/dump.sqlite", kind: "binary", meta: null })), [["file-database", "32"]], "a NUL-bearing file keeps its extension's kind");
+  assert.deepEqual(hero(p.make({ path: "/p/big.json", kind: "toolarge", meta: null })), [["file-braces", "32"]], "so does a too-large one");
+  assert.deepEqual(hero(p.make({ path: "/p/constructor", kind: "card", meta: null })), [["file", "32"]], "a hostile name is the plain file");
 });
 
 test("a press on the stage's own scrollbar does not pan; a press on the picture does, whatever offsetX says (the target is the <img>)", () => {

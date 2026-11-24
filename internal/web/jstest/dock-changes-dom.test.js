@@ -63,7 +63,6 @@ function page(over) {
     setTimeout: () => 1,
     clearTimeout: () => {},
     shortPath: (p) => p.replace(/^\/home\/u/, "~"),
-    iconFor: (name, isDir) => (isDir ? "D" : "F"),
     ftRoot: () => st.root,
     ftReveal: async (p) => { st.reveals.push(p); return true; },
     ftLoadRoot: (o) => { st.loads++; st.lastLoad = o; },
@@ -88,7 +87,7 @@ function page(over) {
   }, over));
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load('let drawerState = { open: "files", sessionId: "s1", pinned: false }; let drawerChangedFiles = new Map(); let ftExpanded = new Set(["/w/a", "/w/a/b", "/other/x"]); let ftRootSel = null;', "state");
-  for (const f of ["drawerfiles.js", "changesmodel.js", "gitlast.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
+  for (const f of ["copyfile.js", "filekinds.js", "drawerfiles.js", "changesmodel.js", "gitlast.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
   const p = {
     ctx, st, doc, nodes,
     el: (id) => nodes[id],
@@ -725,6 +724,26 @@ test("rows are matched by path: a row that goes loses its element, one that move
   assert.strictEqual(p.rows()[0], a);
   assert.strictEqual(p.rows()[2], c);
   assert.ok(!cls(c).includes("dk-mine"));
+});
+
+test("Changes row glyph: the kind's Lucide glyph at 14 for a file, a folder for a folder, never text, and a row reused for another kind redraws", async () => {
+  const p = page();
+  const ent = [{ p: "ci.yml", x: "M" }, { p: "web.go", x: "U" }, { p: "notes.gz", x: "U" }, { p: "constructor", x: "U" }, { p: "newdir/", x: "U" }];
+  await p.status(okStatus(ent));
+  await p.answer("/api/git/base", baseOk());
+  await p.answer("/api/git/numstat", num([]));
+  const glyph = (r) => { const ic = r.querySelector(".dk-ic"); assert.strictEqual(ic.textContent, "", "no text glyph"); return Array.from(ic.children, (n) => [n.getAttribute("data-icon"), n.getAttribute("width")]); };
+  const byName = (n) => p.rows().find((r) => text(r.querySelector(".dk-nm")) === n);
+  assert.deepStrictEqual(glyph(byName("ci.yml")), [["file-cog", "14"]]);
+  assert.deepStrictEqual(glyph(byName("web.go")), [["file-code", "14"]]);
+  assert.deepStrictEqual(glyph(byName("notes.gz")), [["file-archive", "14"]]);
+  assert.deepStrictEqual(glyph(byName("constructor")), [["file", "14"]], "a hostile name is the plain file");
+  assert.deepStrictEqual(glyph(byName("newdir")), [["folder", "14"]]);
+  const row = byName("ci.yml");
+  await p.status(okStatus([{ p: "ci.yml", x: "M" }]));
+  await p.answer("/api/git/numstat", num([]));
+  assert.strictEqual(p.rows()[0], row);
+  assert.strictEqual(row.querySelector(".dk-ic").children.length, 1, "a repaint draws nothing twice");
 });
 
 test("a count that goes away takes its element out, and comes back into the same row", async () => {

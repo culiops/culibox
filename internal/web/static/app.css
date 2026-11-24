@@ -1,7 +1,8 @@
     /* Symbols only — no letterforms. It is a FALLBACK at the end of every font
        stack, so ordinary text never reaches it and only icon codepoints do.
        The Mono variant specifically: its glyphs are single-width, and a
-       proportional fallback would break xterm's character-cell measurement. */
+       proportional fallback would break xterm's character-cell measurement.
+       Symbols Nerd Font now serves only the xterm fallback (terminal-tab.js:422-427) and the frozen phone UI (the Files tree glyphs and the header settings gear). The desktop UI draws no Nerd glyph since #168. */
     @font-face {
       font-family: "Symbols Nerd Font";
       src: url("/vendor/symbols-nerd-font-subset.ttf") format("truetype");

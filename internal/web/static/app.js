@@ -7564,7 +7564,7 @@ function toggleSessionMenuAt(anchor, s, extra) {
 // kitTabRow: one row of the desktop tab switcher, a .menu-row of the tab as a kit row (its kind's glyph in
 // the icon slot, its title, a session's tier chip, a check and aria-current on the shown one) and its own
 // close. The kind and tier are tabSwitchFacts' (#365): the Claude mark or the shell's terminal as on a
-// sidebar row, a file's type glyph from the Files tree, else (a session of unknown kind) the pane header's terminal glyph; the tier
+// sidebar row, a file's kind glyph (fileIcon, as the Files tree draws it), else (a session of unknown kind) the pane header's terminal glyph; the tier
 // chip is the sidebar's, glyph then word, and the word stays in the row's accessible name.
 function kitTabRow(cell, t) {
   const row = document.createElement("div");
@@ -7574,11 +7574,8 @@ function kitTabRow(cell, t) {
   let glyph;
   if (facts.kind === "claude") glyph = uiIcon(ICON_LOCKED["agent-claude"]);
   else if (facts.kind === "shell") glyph = uiIcon(ICON_LOCKED.shell);
-  else if (facts.kind === "file") {
-    glyph = document.createElement("span");
-    glyph.className = "menu-ficon";
-    glyph.textContent = iconFor((t.path || "").split("/").pop() || t.title(), false, false);
-  } else glyph = uiIcon(ICON_PANE_TAB.terminal);
+  else if (facts.kind === "file") glyph = fileIcon((t.path || "").split("/").pop() || t.title(), false, false, 13);
+  else glyph = uiIcon(ICON_PANE_TAB.terminal);
   b.children[0].append(glyph);
   if (facts.tier) {
     const c = document.createElement("span");
