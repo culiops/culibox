@@ -1476,6 +1476,8 @@
     /* The Trusted hosts tab (#348) is the desktop page's: the phone is frozen and has no list of them. Its own rule, as the list above is
        pinned. desktop.css's nav rule is heavier (it names the page host), so the page still draws it. */
     .tabs .t[data-tab="linktrust"] { display: none; }
+    /* About's Box image rows are the desktop page's (desktop.css shows them). Its own rule, as the list above is pinned. */
+    #about-image { display: none; }
     /* The Appearance page's "Shortcuts" row label (app.js fsShortcutsLabel builds it; desktop.css
        shows it on the page above 700px). Its own rule: the list above is pinned. */
     #fs-kbd-lbl { display: none; }

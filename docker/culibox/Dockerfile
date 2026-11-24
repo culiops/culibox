@@ -7,6 +7,8 @@
 # node:24-bookworm-slim, pinned by the INDEX digest (the multi-arch manifest list,
 # so one pin covers amd64 and arm64). Tag and digest read on 2026-10-19 with
 #   docker buildx imagetools inspect node:24-bookworm-slim
+# Bumped 2026-11-24 to the index Docker Hub served the weekly scan (#357): Node
+# 24.22.1 and Debian's current apt, which fix the scan's node and apt findings.
 # Every stage must carry the same digest (a test enforces it). Bumping the base is
 # a manual edit of both FROM lines, which changes the Dockerfile hash on purpose.
 # RESIDUAL, accepted: apt packages (git, python3, chromium, make, ...)
@@ -19,7 +21,7 @@
 #   https://github.com/martanne/abduco/releases/download/v0.6/abduco-0.6.tar.gz
 # To bump: change ABDUCO_VERSION, download the tarball, recompute the sum and
 # compare it with Homebrew's Formula/a/abduco.rb.
-FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS abduco-build
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS abduco-build
 ARG ABDUCO_VERSION=0.6
 ARG ABDUCO_SHA256=c90909e13fa95770b5afc3b59f311b3d3d2fdfae23f9569fa4f96a3e192a35f4
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -52,7 +54,7 @@ RUN set -eu; \
 # HashiCorp extending the key's expiry changes the file (and so this sum): that is
 # a manual bump, not a failure to work around. (tfenv's own bundled copy of the
 # key expired on 2026-04-18, which is why it is replaced.)
-FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS hashicorp-key
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS hashicorp-key
 ARG HASHICORP_PGP_FPR=C874011F0AB405110D02105534365D9472D7468F
 ARG HASHICORP_PGP_SHA256=c2f5bc1163bd8d15a711616b587bcede212d045a5b8b52df01c74095897cd065
 RUN apt-get update && apt-get install -y --no-install-recommends gnupg curl ca-certificates \
@@ -69,7 +71,7 @@ RUN set -eu; \
     mkdir -p /out; gpg --dearmor -o /out/hashicorp-keys.pgp /tmp/hashicorp-key.txt; \
     [ -s /out/hashicorp-keys.pgp ]
 
-FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 
 # Links the published ghcr package to this repository.
 LABEL org.opencontainers.image.source="https://github.com/culiops/culibox"
@@ -999,7 +1001,7 @@ RUN printf '%s\n' '#!/bin/sh' \
 
 # --- Claude Code ---
 # @anthropic-ai/claude-code, pinned to the version the npm `stable` dist-tag points
-# at (measured 2026-11-06: stable 2.1.311, latest 2.1.318). The `stable` tag is the
+# at (measured 2026-11-24: stable 2.1.325, latest 2.1.331). The `stable` tag is the
 # deliberate exception to the two-week rule: Anthropic's own soak period stands in
 # for ours, and it is a deliberate downgrade from `latest`. Self-update is off
 # (DISABLE_UPDATES above), so the image is the only way this version moves.
@@ -1011,7 +1013,7 @@ RUN printf '%s\n' '#!/bin/sh' \
 # Last of the pins on purpose: it is bumped most often (npm stable moves about
 # weekly), and every layer after a changed one is rebuilt and re-pulled. Here a
 # bump costs its own layer only; first in the tail it rebuilt ~1.2 GB.
-ARG CLAUDE_CODE_VERSION=2.1.311
+ARG CLAUDE_CODE_VERSION=2.1.325
 RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
 
 # Claude Code adds a "Co-Authored-By: Claude" trailer (and a "Generated with" line
@@ -1020,9 +1022,10 @@ RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthr
 # it, and the config bundle reaches only some sessions, so the image pins it off as
 # Claude Code's managed policy: root-owned, read by every claude in every box, and
 # above any user, project or --settings value. Both spellings: Claude Code 2.1.311
-# reads attribution (an empty commit/pr text hides it; sessionUrl false drops the
-# Claude-Session trailer of Remote Control sessions) and the deprecated
-# includeCoAuthoredBy. Small, so it sits after the big layer and costs a bump nothing.
+# (the pin when this was measured) reads attribution (an empty commit/pr text hides
+# it; sessionUrl false drops the Claude-Session trailer of Remote Control sessions)
+# and the deprecated includeCoAuthoredBy. Small, so it sits after the big layer and
+# costs a bump nothing.
 RUN mkdir -p /etc/claude-code && printf '%s\n' '{"includeCoAuthoredBy":false,"attribution":{"commit":"","pr":"","sessionUrl":false}}' > /etc/claude-code/managed-settings.json && jq -e '.includeCoAuthoredBy == false and .attribution.commit == "" and .attribution.pr == "" and .attribution.sessionUrl == false' /etc/claude-code/managed-settings.json
 
 # Nothing but the base image's two dotfiles may be left in /root: every RUN above
@@ -1049,3 +1052,6 @@ WORKDIR /home/agent
 RUN chromium --version && playwright-mcp --version | grep -q "${PLAYWRIGHT_MCP_VERSION}"
 ENTRYPOINT ["/usr/local/bin/agent-box-entrypoint"]
 CMD ["bash"]
+# The Claude Code version this image was built with, read back by doctor and Settings.
+# Metadata only and last: it moves no layer and invalidates no instruction above it.
+LABEL io.culiops.agent-box.claude-code="${CLAUDE_CODE_VERSION}"

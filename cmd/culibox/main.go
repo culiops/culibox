@@ -148,6 +148,9 @@ func main() {
 			Home: home, XDGConfig: xdg, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
 			EnvNotice: envNotice, EnvErr: envErr}
 		if args.Cmd == "doctor" {
+			// Only here may doctor ask the registry; the bug report and the
+			// in-app doctor read the cache alone.
+			in.LiveImageCheck = true
 			os.Exit(doctor.Run(os.Stdout, in))
 		}
 		host, _ := os.Hostname()
@@ -944,6 +947,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		VMFolders:        vmFolders,
 		Terminal:         terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime:       layerRuntime(layer),
+		BoxImage:         boxImageHook(cfg, dataDir, layerImageFacts(layer)),
 		CloneUnavailable: cloneUnavailableReason(h),
 		BoxTrees:         boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
 		ScratchDirs:      web.ScratchCandidates(os.Getenv, os.Getuid(), os.TempDir()),
@@ -1136,6 +1140,11 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		stopBundleGC = layer.startBundleGC(func(ctx context.Context) { layer.bundleGCPass(ctx, bundles) }, log.Printf)
 	}
 
+	// Look daily, from the registry and GitHub, for the image published for this
+	// version. Network only: it never touches docker or a spawn lock. Whether this
+	// instance may ask at all is decided per pass from the config.
+	stopImageCheck := runImageCheck(imageCheckPass(cfg, dataDir, newImageChecker(), log.Printf), imageCheckFirst, imageCheckTick)
+
 	// No WriteTimeout, deliberately: on macOS the first boxed spawn holds its
 	// POST while the box VM starts (20-30 s, see boxLayer.prepare), and the
 	// UI's spawn request has no deadline either. Adding a write timeout here
@@ -1152,10 +1161,11 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 				_ = analyticsSvc.Close()
 			}
 		},
-		StopRetention: stopRetention,
-		StopBundleGC:  stopBundleGC,
-		StopEgress:    stopEgress,
-		StopBroker:    stopBroker,
+		StopRetention:  stopRetention,
+		StopBundleGC:   stopBundleGC,
+		StopImageCheck: stopImageCheck,
+		StopEgress:     stopEgress,
+		StopBroker:     stopBroker,
 		ShutdownHTTP: func(ctx context.Context) error {
 			// The reader closes after the drain, so no request reads a closed handle.
 			err := httpSrv.Shutdown(ctx)

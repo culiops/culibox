@@ -1015,7 +1015,7 @@ test("Agent accounts and About, which have no frame, put their body in one kit c
   assert.strictEqual(decls(rows[1]).get("border-top"), "1px solid var(--line)");
   assert.strictEqual(decls(rows[2]).get("border-top"), "1px solid var(--line)");
   assert.strictEqual(decls(rows[0]).get("display"), "block");
-  assert.match(HTML, /<p id="about-runtime"><\/p>\s*<p><button type="button" class="btn" id="kbd-open-about">Keyboard shortcuts<\/button><\/p>\s*<p class="hint">Something not working\?/);
+  assert.match(HTML, /<p id="about-runtime"><\/p>\s*<div id="about-image" hidden><\/div>\s*<p><button type="button" class="btn" id="kbd-open-about">Keyboard shortcuts<\/button><\/p>\s*<p class="hint">Something not working\?/);
 });
 
 test("desktop.css says Esc ✕ closes the page now (the stale comment is reworded)", () => {

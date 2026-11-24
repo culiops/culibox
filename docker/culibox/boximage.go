@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,19 @@ var zshrc []byte
 // LabelHash records which Dockerfile built an image, so doctor can tell an
 // image older than this binary.
 const LabelHash = "io.culiops.agent-box.dockerfile"
+
+// LabelClaudeCode holds the Claude Code version the image was built with, so the
+// version can be read from the image without running it.
+const LabelClaudeCode = "io.culiops.agent-box.claude-code"
+
+var claudeCodeVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]{1,32})?$`)
+
+// ValidClaudeCode reports whether s has the shape of a Claude Code version: x.y.z
+// with an optional short suffix. A label value is checked with it before it is
+// taken for a version.
+func ValidClaudeCode(s string) bool {
+	return claudeCodeVersion.MatchString(s)
+}
 
 // Hash is the first 12 hex digits of the embedded Dockerfile's sha256.
 func Hash() string {
@@ -309,23 +323,34 @@ type ImageState struct {
 	Arch, Hash string
 }
 
+// inspectImage runs `docker image inspect --format format image` and returns its
+// stdout. A missing image is reported as missing with no error; stderr is read only
+// to tell that from a real failure.
+func (d Docker) inspectImage(ctx context.Context, image, format string) (out []byte, missing bool, err error) {
+	out, err = d.command(ctx, "image", "inspect", "--format", format, image).Output()
+	if err == nil {
+		return out, false, nil
+	}
+	var stderr string
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		stderr = strings.TrimSpace(string(ee.Stderr))
+		if strings.Contains(strings.ToLower(stderr), "no such image") {
+			return nil, true, nil
+		}
+	}
+	return nil, false, fmt.Errorf("docker image inspect: %w: %s", err, stderr)
+}
+
 // Inspect reads the image's architecture and Dockerfile label. Stdout only: a
 // CLI or context warning on stderr must not become part of the arch, or a
 // current image reads as built for another architecture. stderr is read only
 // on failure, to tell a missing image from a real error.
 func (d Docker) Inspect(ctx context.Context, image string) (ImageState, error) {
-	out, err := d.command(ctx, "image", "inspect", "--format",
-		`{{.Architecture}}|{{index .Config.Labels "`+LabelHash+`"}}`, image).Output()
-	if err != nil {
-		var stderr string
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			stderr = strings.TrimSpace(string(ee.Stderr))
-			if strings.Contains(strings.ToLower(stderr), "no such image") {
-				return ImageState{}, nil
-			}
-		}
-		return ImageState{}, fmt.Errorf("docker image inspect: %w: %s", err, stderr)
+	out, missing, err := d.inspectImage(ctx, image,
+		`{{.Architecture}}|{{index .Config.Labels "`+LabelHash+`"}}`)
+	if missing || err != nil {
+		return ImageState{}, err
 	}
 	s := strings.TrimSpace(string(out))
 	arch, hash, _ := strings.Cut(s, "|")
@@ -386,4 +411,78 @@ func (s ImageState) CheckFor(image, serverArch string) (fatal bool, msg string) 
 func mustRepo(image string) string {
 	r, _ := Repo(image)
 	return r
+}
+
+// ImageInfo is what the daemon says about an image, as far as it can be trusted:
+// every field comes from the image itself, so a malformed value is dropped (its
+// field left empty or nil) rather than passed on.
+type ImageInfo struct {
+	Present     bool      `json:"present"`
+	ID          string    `json:"id,omitempty"`           // sha256:<64 hex>
+	RepoDigests []string  `json:"repo_digests,omitempty"` // repo@sha256:<64 hex> only
+	Created     time.Time `json:"created,omitzero"`
+	Arch        string    `json:"arch,omitempty"`
+	Hash        string    `json:"hash,omitempty"`        // 12 hex digits
+	ClaudeCode  string    `json:"claude_code,omitempty"` // ValidClaudeCode only
+	DiffIDs     []string  `json:"diff_ids,omitempty"`    // RootFS.Layers; nil when any is malformed
+}
+
+var (
+	sha256Ref  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	repoDigest = regexp.MustCompile(`^[a-z0-9./:_-]+@sha256:[0-9a-f]{64}$`)
+	hashLabel  = regexp.MustCompile(`^[0-9a-f]{12}$`)
+	archName   = regexp.MustCompile(`^[a-z0-9_-]{1,16}$`)
+)
+
+// Describe reads one image's facts with a single `docker image inspect`. Like
+// Inspect it reads stdout only and tells a missing image (Present false, no error)
+// from a real failure by stderr.
+func (d Docker) Describe(ctx context.Context, image string) (ImageInfo, error) {
+	out, missing, err := d.inspectImage(ctx, image, "{{json .}}")
+	if missing || err != nil {
+		return ImageInfo{}, err
+	}
+	var raw struct {
+		ID           string   `json:"Id"`
+		RepoDigests  []string `json:"RepoDigests"`
+		Created      string   `json:"Created"`
+		Architecture string   `json:"Architecture"`
+		Config       struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+		RootFS struct {
+			Layers []string `json:"Layers"`
+		} `json:"RootFS"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return ImageInfo{}, fmt.Errorf("docker image inspect: unreadable answer: %w", err)
+	}
+	info := ImageInfo{Present: true}
+	// An agent in a box can build an image, so what the image says about itself
+	// reaches the UI only in the shape CI would have written it.
+	if archName.MatchString(raw.Architecture) {
+		info.Arch = raw.Architecture
+	}
+	if h := raw.Config.Labels[LabelHash]; hashLabel.MatchString(h) {
+		info.Hash = h
+	}
+	if sha256Ref.MatchString(raw.ID) {
+		info.ID = raw.ID
+	}
+	for _, r := range raw.RepoDigests {
+		if repoDigest.MatchString(r) {
+			info.RepoDigests = append(info.RepoDigests, r)
+		}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw.Created); err == nil {
+		info.Created = t
+	}
+	if v := raw.Config.Labels[LabelClaudeCode]; ValidClaudeCode(v) {
+		info.ClaudeCode = v
+	}
+	// One bad diff id and the list stops being a set to compare against.
+	if ids := raw.RootFS.Layers; len(ids) > 0 && !slices.ContainsFunc(ids, func(s string) bool { return !sha256Ref.MatchString(s) }) {
+		info.DiffIDs = ids
+	}
+	return info, nil
 }

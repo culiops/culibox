@@ -303,6 +303,9 @@ type shutdownSteps struct {
 	StopRetention func()
 	// StopBundleGC cancels the config-bundle GC and waits for it. Nil when none runs.
 	StopBundleGC func()
+	// StopImageCheck cancels the daily box image check and waits for it. It makes
+	// network calls only, so its order among the others does not matter.
+	StopImageCheck func()
 	// StopEgress stops the egress proxy (waiting for every tunnel to be audited)
 	// and closes its audit store. Nil when egress control is not running. It runs
 	// before the broker: a tunnel in flight is not worth keeping once we drain.
@@ -330,6 +333,9 @@ func awaitShutdown(stop <-chan os.Signal, s shutdownSteps, logf func(string, ...
 	}
 	if s.StopBundleGC != nil {
 		s.StopBundleGC()
+	}
+	if s.StopImageCheck != nil {
+		s.StopImageCheck()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
