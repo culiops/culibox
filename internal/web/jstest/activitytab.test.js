@@ -24,6 +24,7 @@ function page() {
   const doc = { activeElement: null, hidden: false };
   doc.createElement = (t) => new Node(t, doc);
   doc.createTextNode = (t) => new Text(t);
+  doc.createElementNS = (_ns, t) => new Node(t, doc);
   const box = {
     document: doc, window: { getSelection: () => null }, console, AbortController, Promise, JSON, Date: PinnedDate,
     lastSessions: [], paneViewRenderers: {}, replyFocused: false, replyDraft: null, repliesEnabled: true,
@@ -44,7 +45,7 @@ function page() {
   };
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["attribution.js", "duration.js", "activitymodel.js", "activitytab.js"]) {
+  for (const f of ["icons.js", "svgicon.js", "iconmap.js", "attribution.js", "duration.js", "activitymodel.js", "activitytab.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   return { box, doc, host: doc.createElement("div") };
@@ -620,6 +621,44 @@ test("every class on the drawn view is defined in a stylesheet", async () => {
   assert.ok(used.has("act-wrap") && used.has("act-tbl") && used.has("act-empty-state"), "the walk reached the view");
 });
 
+// #168 G2 21, 22, 27-37: a row's Kind cell draws its glyph (14) before the kind word, its Outcome cell one only for a refusal or an
+// error. The words, the cell classes and the Kind cell's title are what they were; a success draws no glyph.
+test("a Kind cell draws its glyph first and keeps its word; an Outcome cell draws one only for a refusal or an error", async () => {
+  const { host } = await claudeView(null, null, REPLY({ events: [
+    { ts: ago(10), kind: "tool", tool: "Bash", detail: "go test ./...", state: "error", exit: 1 },
+    { ts: ago(20), kind: "tool", tool: "mcp__github__list", detail: "list prs", state: "ok", ms: 900 },
+    { ts: ago(30), kind: "credential", provider: "github", detail: "github org", state: "refused" },
+    { ts: ago(40), kind: "credential", detail: "aws old-server", state: "minted" },
+    { ts: ago(50), kind: "approval", detail: "write 30 min", state: "granted" },
+    { ts: ago(60), kind: "you", detail: "hello" },
+    { ts: ago(70), kind: "clear" },
+  ] }));
+  const glyphs = (td) => td.children.filter((c) => c.tag === "svg");
+  const rows = rowsOf(host).map((tr) => cellsOf(tr));
+  const first = (c) => glyphs(c)[0];
+  assert.deepStrictEqual(rows.map((c) => glyphs(c[1]).length), [1, 1, 1, 1, 1, 1, 1], "one glyph per Kind cell");
+  assert.deepStrictEqual(rows.map((c) => first(c[1]).attrs["data-icon"]),
+    ["terminal", "plug", "si:github", "key-round", "shield-alert", "message-square", "eraser"]);
+  for (const c of rows) {
+    const g = first(c[1]);
+    assert.deepStrictEqual([g.attrs.width, g.attrs.height, g.attrs["aria-hidden"], g.className, c[1].children[0] === g], ["14", "14", "true", "ui-icon", true]);
+  }
+  assert.deepStrictEqual(rows.map((c) => c[1].textContent), ["Bash", "mcp__github__list", "Credential", "Credential", "Approval", "You", "Cleared"]);
+  assert.deepStrictEqual(rows.map((c) => c[1].title), ["Bash", "mcp__github__list", "Credential", "Credential", "Approval", "You", "Cleared"]);
+  assert.deepStrictEqual(rows.map((c) => glyphs(c[3]).map((g) => [g.attrs["data-icon"], g.attrs.width, c[3].children[0] === g])),
+    [[["circle-x", "14", true]], [], [["ban", "14", true]], [], [], [], []]);
+  assert.deepStrictEqual(rows.map((c) => c[3].textContent), ["error · exit 1", "ok · 0.9s", "refused", "minted", "granted", "message", ""]);
+  assert.deepStrictEqual(rows.map((c) => c[3].className), ["num c-red", "num c-ok", "num sub", "num c-ok", "num c-red", "num sub", "num sub"]);
+});
+
+test("the pending ask's row draws the hand before its amber word", async () => {
+  const { host } = await claudeView(null, { need: "ask", ask: "Run it?" }, REPLY({ waiting_since: ago(90) }));
+  const kind = cellsOf(rowsOf(host)[0])[1];
+  assert.strictEqual(kind.textContent, "Asks to run");
+  assert.strictEqual(kind.className, "c-amber");
+  assert.strictEqual(kind.children[0].attrs["data-icon"], "hand");
+});
+
 // ---- the view's rules (desktop.css) -----------------------------------------------------------------
 const desktopCss = () => fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 const activityCss = () => {
@@ -661,10 +700,10 @@ test("the port traps are handled: the view root sets the 20px line, h2 and p los
   assert.match(block, /\.act-plain\.act-listed > \.act-empty-state\s*\{[^}]*flex:\s*none/);
 });
 
-test("the table is the frame's: fixed layout, 88 / 104 / 124 columns, a wrapping 6px-padded detail cell", () => {
+test("the table is the frame's: fixed layout, 88 / 124 (104 + the Kind glyph) / 124 columns, a wrapping 6px-padded detail cell", () => {
   const block = activityCss();
   assert.match(block, /\.act-tbl\s*\{[^}]*table-layout:\s*fixed/);
-  for (const [n, w] of [[1, 88], [2, 104], [4, 124]]) {
+  for (const [n, w] of [[1, 88], [2, 124], [4, 124]]) {
     assert.match(block, new RegExp("\\.act-tbl th:nth-child\\(" + n + "\\)\\s*\\{[^}]*width:\\s*" + w + "px"));
   }
   assert.match(block, /\.act-tbl td\.act-det\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere[^}]*height:\s*auto[^}]*padding-top:\s*6px[^}]*padding-bottom:\s*6px[^}]*line-height:\s*var\(--lh-md\)/);
@@ -683,4 +722,23 @@ test("a narrow pane (under 648px: five 120px tiles and the view's 24px sides) wr
   assert.match(m[1], /\.act-wrap \.kpi-row\s*\{[^}]*repeat\(auto-fill, minmax\(120px, 1fr\)\)/);
   assert.match(m[1], /\.act-card\s*\{[^}]*overflow-x:\s*auto/);
   assert.match(m[1], /\.act-tbl\s*\{[^}]*table-layout:\s*auto/);
+});
+
+// #168 G2: the glyph's margin and the narrow rule. The pane view is the size container (named `act`, beside the unnamed queries
+// above, which still read it); a pane narrower than the table with its kind glyphs drops the kind glyphs, and only those: the
+// outcome glyphs and every word stay. Desktop only (the Activity view never opens on a phone).
+test("a narrow pane drops the kind glyphs, keeps the outcome glyphs and every word", () => {
+  const css = desktopCss();
+  const open = css.indexOf("@media (min-width: 701px)");
+  assert.ok(open > 0, "the desktop block");
+  const block = activityCss();
+  assert.match(block, /\.pane-view\[data-view="activity"\]\s*\{\s*container:\s*act \/ inline-size;\s*\}/);
+  const m = /@container act \(max-width: (\d+)px\)\s*\{([^}]*\})\s*\}/.exec(block);
+  assert.ok(m, "a named narrow-pane rule");
+  assert.strictEqual(m[1], "496", "the pane width at which the table with both glyphs stops scrolling in its card (measured: 497px)");
+  assert.strictEqual(m[2].replace(/\s+/g, " ").trim(), ".act-tbl td:nth-child(2) > .ui-icon { display: none; }");
+  assert.ok(css.indexOf("@container act (max-width: 496px)") > open, "inside the desktop media block");
+  assert.match(block, /\.act-tbl td:is\(:nth-child\(2\), :nth-child\(4\)\) > \.ui-icon\s*\{\s*margin-right:\s*6px/);
+  assert.doesNotMatch(m[2], /nth-child\(4\)/, "the outcome glyph is not hidden");
+  assert.ok(block.indexOf("@container act") > block.indexOf("margin-right: 6px"), "the narrow rule follows the base rule it overrides");
 });

@@ -104,6 +104,14 @@ function auTimeCell(time) {
   return td;
 }
 
+// auCell: a Kind or Outcome cell. Its glyph (14, auditRowView's kindIcon / outcomeIcon: declared fields, never the words) comes
+// before the word and inherits the cell's colour; "" draws none. The words are the cell's text, unchanged.
+function auCell(cls, text, icon) {
+  const td = auText("td", cls, text);
+  if (icon) td.prepend(uiIcon(icon, { size: 14 }));
+  return td;
+}
+
 function auRow(ev, names) {
   const v = auditRowView(ev, names);
   const tr = document.createElement("tr");
@@ -114,9 +122,9 @@ function auRow(ev, names) {
   tr.append(
     auTimeCell(v.time),
     auText("td", "au-sess", v.session),
-    auText("td", v.elevated ? "au-kind au-bad" : "au-kind", v.kind),
+    auCell(v.elevated ? "au-kind au-bad" : "au-kind", v.kind, v.kindIcon),
     what,
-    auText("td", "au-out" + (AU_TONE_CLASS[v.tone] ? " " + AU_TONE_CLASS[v.tone] : ""), v.outcome),
+    auCell("au-out" + (AU_TONE_CLASS[v.tone] ? " " + AU_TONE_CLASS[v.tone] : ""), v.outcome, v.outcomeIcon),
   );
   return tr;
 }

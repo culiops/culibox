@@ -55,6 +55,7 @@ type Event struct {
 	Reason   string `json:"reason,omitempty"` // elevation reason, masked
 	Count    int    `json:"count,omitempty"`  // egress: 1 + suppressed when > 1
 	Elevated bool   `json:"elevated,omitempty"`
+	Provider string `json:"provider,omitempty"` // credential rows only: aws | github | static, derived at read, not stored
 }
 
 // Part is one run of an Event's description. ID marks an identifier the page

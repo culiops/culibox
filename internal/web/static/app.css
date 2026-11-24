@@ -1477,6 +1477,9 @@
     /* The Trusted hosts tab (#348) is the desktop page's: the phone is frozen and has no list of them. Its own rule, as the list above is
        pinned. desktop.css's nav rule is heavier (it names the page host), so the page still draws it. */
     .tabs .t[data-tab="linktrust"] { display: none; }
+    /* The Settings nav's glyphs (#168 G2 1-10) and the account row's provider mark (G2 13) are the desktop page's: the phone is
+       frozen, so it draws none of them. desktop.css shows them on the page. */
+    #settings-tabs :is(.t, #set-signout) > .ui-icon, .acct-prov .ui-icon { display: none; }
     /* About's Box image rows are the desktop page's (desktop.css shows them). Its own rule, as the list above is pinned. */
     #about-image { display: none; }
     /* The Appearance page's "Shortcuts" row label (app.js fsShortcutsLabel builds it; desktop.css

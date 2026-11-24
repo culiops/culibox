@@ -36,16 +36,17 @@ const (
 // human typed, or a /clear divider. It carries descriptions only — never a
 // tool result, file content, an edit body or a prompt. Read's Lines is a count.
 type TimelineEvent struct {
-	TS     int64  `json:"ts"`              // unix ms
-	Kind   string `json:"kind"`            // "tool" | "you" | "clear"
-	Tool   string `json:"tool,omitempty"`  // Bash, Read, Edit, Write, MultiEdit, NotebookEdit, Grep, Glob, WebFetch, WebSearch, Task, mcp__…
-	Detail string `json:"detail"`          // masked, ≤300 runes, path only for file tools
-	State  string `json:"state,omitempty"` // "ok" | "error" | "pending"
-	MS     int64  `json:"ms,omitempty"`    // result ts − use ts
-	Exit   *int   `json:"exit,omitempty"`  // Bash "Exit code N" on error
-	Add    *int   `json:"add,omitempty"`   // lines added by an edit
-	Del    *int   `json:"del,omitempty"`   // lines removed by an edit
-	Lines  *int   `json:"lines,omitempty"` // Read: line count of the result (count only)
+	TS       int64  `json:"ts"`                 // unix ms
+	Kind     string `json:"kind"`               // "tool" | "you" | "clear"
+	Tool     string `json:"tool,omitempty"`     // Bash, Read, Edit, Write, MultiEdit, NotebookEdit, Grep, Glob, WebFetch, WebSearch, Task, mcp__…
+	Detail   string `json:"detail"`             // masked, ≤300 runes, path only for file tools
+	State    string `json:"state,omitempty"`    // "ok" | "error" | "pending"
+	MS       int64  `json:"ms,omitempty"`       // result ts − use ts
+	Exit     *int   `json:"exit,omitempty"`     // Bash "Exit code N" on error
+	Add      *int   `json:"add,omitempty"`      // lines added by an edit
+	Del      *int   `json:"del,omitempty"`      // lines removed by an edit
+	Lines    *int   `json:"lines,omitempty"`    // Read: line count of the result (count only)
+	Provider string `json:"provider,omitempty"` // credential rows only: aws | github | static, from the broker row
 }
 
 // FileChange is the running line total of one file the agent edited.

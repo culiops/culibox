@@ -127,9 +127,44 @@ function emptyState(kind) {
   return { icon: ICON_EMPTY[kind], hero: EMPTY_HERO[kind] };
 }
 
+// The Settings nav's glyph by the tab's declared data-tab (G2 1-9), drawn at 15 before the row's words; Sign out takes
+// log-out beside it. index.html carries the placeholders (data-uicon): this map is the pinned record of them, and a test
+// checks the two agree. VM folders is the macOS-only tab, hidden elsewhere.
+const ICON_SETTINGS_TAB = iconMapOf({
+  manage: "id-card", accounts: "circle-user-round", creds: "key-round", vmfolders: "hard-drive", wsroots: "folders",
+  tokens: "monitor-smartphone", settings: "sliders-horizontal", linktrust: "link", about: "info",
+});
+
+// The agent account row's provider mark by its declared `provider` (G2 13; Go account.ProviderClaude). A provider with no
+// entry draws no mark and the word stays: a second provider gets its own here, never a generic one.
+const ICON_AGENT_PROVIDER = iconMapOf({ claude: "si:claude" });
+
+// The Audit row's Kind glyph by the declared `kind` (G2 14-19, drawn at 14 before the word; the Credentials, Elevations, Egress
+// and Settings filters take the same glyph). A credential row takes its provider's glyph instead (G2 14, ICON_CRED_PROVIDER;
+// Activity's credential rows read it too); a kind with no entry draws none.
+const ICON_AUDIT_KIND = iconMapOf({
+  credential: "key-round", elevation: "shield-alert", signin: "log-in", egress: "globe", settings: "settings", store: "vault",
+});
+
+// A credential row's glyph by the broker's declared `provider` (aws | github | static). A row with none (an older server) or an
+// unknown one falls back to key-round at the call site.
+const ICON_CRED_PROVIDER = iconMapOf({ aws: "cloud", github: "si:github", static: "key-round" });
+
+// The Activity row's Kind glyph (G2 27-37, drawn at 14 before the word). A tool row takes its glyph from the declared `tool`
+// (a tool with no entry: mcp__* -> plug, any other -> wrench, at the call site); the rest from the declared `kind`. A credential
+// row takes its provider's glyph (ICON_CRED_PROVIDER) and the pending ask's hand is the model's own row.
+const ICON_ACT_TOOL = iconMapOf({
+  Bash: "terminal", Read: "file-text", Edit: "file-pen", Write: "file-pen", MultiEdit: "file-pen", NotebookEdit: "file-pen",
+  Grep: "text-search", Glob: "text-search", WebFetch: "globe", WebSearch: "globe", Task: "bot",
+});
+// A tool with no entry above: an MCP tool (the `mcp__` prefix, same glyph as Analytics' mcp_tool, G2 33) or any other (G2 34).
+const ICON_ACT_TOOL_OTHER = iconMapOf({ mcp: "plug", other: "wrench" });
+const ICON_ACT_KIND = iconMapOf({ you: "message-square", clear: "eraser", ask: "hand", approval: "shield-alert" });
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    emptyState, ICON_EMPTY,
+    ICON_AUDIT_KIND, ICON_CRED_PROVIDER, ICON_ACT_TOOL, ICON_ACT_TOOL_OTHER, ICON_ACT_KIND,
+    emptyState, ICON_EMPTY, ICON_SETTINGS_TAB, ICON_AGENT_PROVIDER,
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_REACH,
     ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_TOKEN_TEMPLATE, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_TOAST, ICON_ROW, ICON_PALETTE_KIND,
   };
