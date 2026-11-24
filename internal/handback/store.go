@@ -421,7 +421,7 @@ func (s Store) lock() (*os.Root, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	f, err := dir.OpenFile(".lock", os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	f, err := openLockRetryENOENT(dir)
 	if err != nil {
 		dir.Close()
 		return nil, nil, err
@@ -432,6 +432,38 @@ func (s Store) lock() (*os.Root, func(), error) {
 		return nil, nil, err
 	}
 	return dir, func() { f.Close(); dir.Close() }, nil
+}
+
+// lockOpen creates or opens .lock in dir; a test replaces it.
+var lockOpen = func(dir *os.Root) (*os.File, error) {
+	return dir.OpenFile(".lock", os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+}
+
+// lockOpenTries bounds openLockRetryENOENT.
+const lockOpenTries = 5
+
+// openLockRetryENOENT opens .lock and retries the open on ENOENT.
+//
+// Why: macOS returns a spurious ENOENT from a concurrent first creation of the
+// same name through an os.Root (measured 2026-11-24 on macOS 26.7.3, M1: two
+// goroutines each opening a Root and creating .lock, 1 of 400 opens failed with
+// "openat .lock: no such file or directory"; a plain os.OpenFile of the same
+// path never failed; TestStoreConcurrentMergesLoseNothing failed 30 of 30 runs).
+// The same cause was found in clone's import-record lock (#293). Nothing removes
+// .lock or the store dir while the Root is held, so the error is not a missing
+// parent. Linux never returns it. A real ENOENT (the dir was removed under us)
+// persists and is returned after lockOpenTries attempts; any other error is
+// returned at once. Only the open is retried: the flock after it is the lock.
+func openLockRetryENOENT(dir *os.Root) (*os.File, error) {
+	var f *os.File
+	var err error
+	for i := 0; i < lockOpenTries; i++ {
+		if f, err = lockOpen(dir); !errors.Is(err, syscall.ENOENT) {
+			return f, err
+		}
+		time.Sleep(time.Duration(i+1) * time.Millisecond)
+	}
+	return f, err
 }
 
 // readRecordIn reads and cleans <id>.json. A missing file is (zero, false,
