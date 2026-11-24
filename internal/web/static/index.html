@@ -841,16 +841,16 @@
     <div class="page-head">
       <div class="page-head-text"><h1 class="page-title">Audit</h1>
         <p class="page-desc">Every credential issued, write elevation, egress connection and settings change, newest first.</p></div>
-      <div class="page-actions"><a class="btn" id="au-csv" href="/api/audit.csv" download>Export CSV</a>
+      <div class="page-actions"><a class="btn" id="au-csv" href="/api/audit.csv" download><svg data-uicon="download" width="14" height="14" aria-hidden="true"></svg>Export CSV</a>
         <button class="btn btn-ghost page-esc" id="au-esc" type="button" data-close="audit-page" aria-label="Close (Esc)" title="Close (Esc)"><span class="kbd-hint">Esc</span><svg data-uicon="x" width="12" height="12" aria-hidden="true"></svg></button></div>
     </div>
     <div class="toolbar au-tools">
       <div class="seg" id="au-filters" role="group" aria-label="Kind">
         <button class="seg-item" type="button" data-filter="" aria-pressed="true">All</button>
-        <button class="seg-item" type="button" data-filter="credentials" aria-pressed="false">Credentials</button>
-        <button class="seg-item" type="button" data-filter="elevations" aria-pressed="false">Elevations</button>
-        <button class="seg-item" type="button" data-filter="egress" aria-pressed="false">Egress</button>
-        <button class="seg-item" type="button" data-filter="settings" aria-pressed="false">Settings changes</button>
+        <button class="seg-item" type="button" data-filter="credentials" aria-pressed="false"><svg data-uicon="key-round" width="14" height="14" aria-hidden="true"></svg>Credentials</button>
+        <button class="seg-item" type="button" data-filter="elevations" aria-pressed="false"><svg data-uicon="shield-alert" width="14" height="14" aria-hidden="true"></svg>Elevations</button>
+        <button class="seg-item" type="button" data-filter="egress" aria-pressed="false"><svg data-uicon="globe" width="14" height="14" aria-hidden="true"></svg>Egress</button>
+        <button class="seg-item" type="button" data-filter="settings" aria-pressed="false"><svg data-uicon="settings" width="14" height="14" aria-hidden="true"></svg>Settings changes</button>
       </div>
       <select class="input" id="au-session" aria-label="Session"></select>
       <span class="grow"></span>

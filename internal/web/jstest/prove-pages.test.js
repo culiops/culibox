@@ -285,6 +285,11 @@ class El {
     }
   }
   appendChild(n) { this.append(n); return n; }
+  prepend(...nodes) {
+    const kids = nodes.map((n) => (typeof n === "string" ? new TextNode(n) : n));
+    for (const c of kids) c.parent = this;
+    this.children.unshift(...kids);
+  }
   // A node taken out of its parent is no longer in the page (a browser drops focus from it).
   replaceChildren(...nodes) { for (const c of this.children) c.parent = null; this.children = []; this.append(...nodes); }
   focus() { focused = this; }
@@ -351,7 +356,7 @@ function findId(root, id) {
 }
 
 // auditEnv: accessmodel.js, auditmodel.js and auditpage.js, in their page order, in a context whose document is the real
-// Audit dialog markup. `run` evaluates a snippet in it (the scripts' top-level consts are visible to it).
+// Audit dialog markup (the icon scripts load first, as in index.html). `run` evaluates a snippet in it (the scripts' top-level consts are visible to it).
 function auditEnv() {
   focused = null;
   const dlg = fromParsed(auditTree());
@@ -361,13 +366,14 @@ function auditEnv() {
     getElementById: (id) => findId(dlg, id),
     querySelectorAll: (sel) => queryAll(dlg, sel),
     createElement: (tag) => new El(tag),
+    createElementNS: (_ns, tag) => new El(tag),
     createTextNode: (t) => new TextNode(t),
     body,
     get activeElement() { return focused && inPage(focused) ? focused : body; },
   };
   const ctx = { document, window: { innerWidth: 1440 }, lastSessions: [], console, AbortController, fetch: async () => ({}) };
   vm.createContext(ctx);
-  for (const f of ["accessmodel.js", "auditmodel.js", "auditpage.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
+  for (const f of ["icons.js", "svgicon.js", "iconmap.js", "accessmodel.js", "auditmodel.js", "auditpage.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   return { ctx, dlg, run: (code) => vm.runInContext(code, ctx), el: (id) => findId(dlg, id) };
 }
 
@@ -816,9 +822,13 @@ test("a card too narrow for the fixed columns sizes them to content, in a contai
   assert.strictEqual(inside(AU + " .au-tbl").get("table-layout"), "auto");
   for (const i of [1, 2, 3, 5]) assert.strictEqual(inside(AU + " .au-tbl th:nth-child(" + i + ")").get("width"), "auto", "th " + i);
   // Nothing else changes in the narrow card: What stays the one column with no width of its own, and the wrap cells keep
-  // wrapping (the base rules above are not repeated or undone here).
+  // wrapping (the base rules above are not repeated or undone here). The one undo is the Outcome: the fixed layout keeps it on
+  // one line beside its glyph (#168 G2 22), the content-sized columns of the narrow card wrap it again.
   assert.deepStrictEqual(tier(769).filter((r) => parts(r.selector).some((s) => s.startsWith(AU))).flatMap((r) => [...r.decls.keys()]).sort(),
-    ["table-layout", "width"]);
+    ["display", "table-layout", "white-space", "width"]);
+  assert.strictEqual(inside(AU + " .au-tbl :is(td.au-kind, td.au-out) > .ui-icon").get("display"), "none", "no glyph where What would pay for it");
+  assert.strictEqual(decls(AU + " .au-tbl td.au-out").get("white-space"), "nowrap");
+  assert.strictEqual(inside(AU + " .au-tbl td.au-out").get("white-space"), "normal");
 
   // Under 480px of card (a window of 840px or less) the columns' own minimums still overran it (Gate 3 D1: What 54px at 701px, the
   // table 53px wider than its card, Outcome cut). Time, Session, Kind and Outcome are held to their narrowest (1%: a column never
@@ -855,6 +865,47 @@ test("the Time cell keeps its text and holds the date as one run, so a narrow ca
   assert.strictEqual(run("auRow({ kind: \"credential\", what: \"x\", outcome: \"minted\" }, {})").elements[0].textContent, "");
 });
 
+// #168 G2 14-23: the Kind and Outcome cells carry a 14px glyph before their word (the text is unchanged), the kind filters and
+// Export CSV carry theirs as static placeholders; the page is the desktop's (openAudit returns on a phone).
+test("an audit row's Kind and Outcome cells draw their glyph first and keep their words", () => {
+  const { run } = auditEnv();
+  const cells = (ev) => run("auRow(" + JSON.stringify(ev) + ", {})").elements;
+  const glyph = (td) => { const g = td.elements.filter((n) => n.tag === "svg"); return g.length ? [g[0].attrs["data-icon"], g[0].attrs.width, td.children[0] === g[0]] : null; };
+  let c = cells({ ts: 1_760_000_000, kind: "credential", provider: "github", what: "github x", outcome: "minted" });
+  assert.deepStrictEqual(glyph(c[2]), ["si:github", "14", true]);
+  assert.strictEqual(c[2].textContent, "Credential");
+  assert.deepStrictEqual(glyph(c[4]), ["circle-check", "14", true]);
+  assert.strictEqual(c[4].textContent, "minted");
+  assert.strictEqual(c[2].className, "au-kind");
+  assert.strictEqual(c[4].className, "au-out au-ok");
+  // A granted elevation: its Kind glyph inherits the red cell, and no Outcome glyph.
+  c = cells({ ts: 1_760_000_000, kind: "elevation", what: "write", outcome: "granted", actor: "you" });
+  assert.deepStrictEqual(glyph(c[2]), ["shield-alert", "14", true]);
+  assert.strictEqual(c[2].className, "au-kind au-bad");
+  assert.strictEqual(glyph(c[4]), null);
+  assert.strictEqual(c[4].textContent, "granted · you");
+  // An older server: no provider, key-round; an unknown kind and a neutral outcome draw no glyph, never "undefined".
+  assert.strictEqual(glyph(cells({ ts: 1, kind: "credential", what: "x", outcome: "minted" })[2])[0], "key-round");
+  c = cells({ ts: 1, kind: "mystery", what: "x", outcome: "created" });
+  assert.strictEqual(glyph(c[2]), null);
+  assert.strictEqual(c[2].textContent, "mystery");
+  assert.strictEqual(glyph(c[4]), null);
+});
+
+test("the Audit page's kind filters and Export CSV hold their glyph placeholders; All stays plain", () => {
+  const { el } = auditEnv();
+  const holes = (b) => b.elements.filter((n) => n.tag === "svg").map((n) => [n.dataset.uicon, n.attrs.width, n.attrs.height, n.attrs["aria-hidden"]]);
+  const want = { "": null, credentials: "key-round", elevations: "shield-alert", egress: "globe", settings: "settings" };
+  for (const b of el("au-filters").elements) {
+    const g = want[b.dataset.filter];
+    assert.deepStrictEqual(holes(b), g ? [[g, "14", "14", "true"]] : [], b.dataset.filter || "All");
+  }
+  assert.deepStrictEqual(holes(el("au-csv")), [["download", "14", "14", "true"]]);
+  assert.strictEqual(el("au-csv").textContent, "Export CSV");
+  // The glyphs are the desktop page's: the Audit page does not open on a phone (no app.css rule names it).
+  assert.match(stripJsComments(read("auditpage.js")), /function openAudit[\s\S]*?mobileActive\(window\.innerWidth\)\) return;/);
+});
+
 // Gate 3 D1 (toolbar half) and D4: a seg cannot wrap, so a toolbar narrower than its widest seg lets the seg run past the page.
 test("both pages' toolbars tighten their seg items when narrower than the widest seg, so 701px never scrolls sideways", () => {
   const shared = BASE_RULES.filter((r) => parts(r.selector).includes(AU + " > .toolbar.au-tools") && r.decls.has("container-type"));
@@ -888,7 +939,8 @@ test("the Audit and Analytics pages' text sits on the kit's 20px line, not the b
 test("What and Session wrap, never clip: normal white-space, anywhere, 20px lines, 6px above and below", () => {
   for (const cell of ["au-sess", "au-what", "au-out"]) {
     const c = decls(AU + " .au-tbl td." + cell);
-    assert.strictEqual(c.get("white-space"), "normal", cell);
+    // The Outcome is the exception in the fixed layout: one line beside its glyph (#168 G2 22); the narrow card wraps it (above).
+    assert.strictEqual(c.get("white-space"), cell === "au-out" ? "nowrap" : "normal", cell);
     assert.strictEqual(c.get("overflow-wrap"), "anywhere", cell);
     assert.strictEqual(c.get("line-height"), "var(--lh-md)", cell);
     assert.strictEqual(c.get("padding-top"), "6px", cell);

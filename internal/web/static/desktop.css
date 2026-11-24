@@ -3608,6 +3608,11 @@
      a side, which brings the widest seg to 329px, inside the 340px the page has at 701px. */
   #page-host > #audit-page.as-page > .toolbar.au-tools,
   #page-host > #analytics-modal.as-page > .toolbar.an-ptools { container-name: page-tools; container-type: inline-size; }
+  /* The kind filters' glyphs (#168) make the Kind seg 469px: under that the glyphs go and the words stay, so the seg is the 389px it
+     was and the 388px rule below still applies to it. */
+  @container page-tools (max-width: 468px) {
+    #page-host > #audit-page.as-page #au-filters .seg-item > .ui-icon { display: none; }
+  }
   @container page-tools (max-width: 388px) {
     #page-host > #audit-page.as-page > .toolbar .seg > .seg-item,
     #page-host > #analytics-modal.as-page > .toolbar .seg > .seg-item { padding: 0 var(--sp-1); }
@@ -3646,6 +3651,10 @@
      instead: Time and Kind stay on one line, Session, What and Outcome wrap, nothing clips and nothing scrolls sideways. */
   @container au-card (max-width: 769px) {
     #page-host > #audit-page.as-page .au-tbl { table-layout: auto; }
+    /* The glyphs would take 40px of What here and push the table past its card at 760px; without them this card is what it was
+       before the glyphs (#168), so the glyphs show only where the columns are fixed and What has room. */
+    #page-host > #audit-page.as-page .au-tbl :is(td.au-kind, td.au-out) > .ui-icon { display: none; }
+    #page-host > #audit-page.as-page .au-tbl td.au-out { white-space: normal; }
     #page-host > #audit-page.as-page .au-tbl th:nth-child(1),
     #page-host > #audit-page.as-page .au-tbl th:nth-child(2),
     #page-host > #audit-page.as-page .au-tbl th:nth-child(3),
@@ -3675,6 +3684,15 @@
   #page-host > #audit-page.as-page .au-tbl td.au-kind,
   #page-host > #audit-page.as-page .au-tbl td.au-out { color: var(--muted); }
   #page-host > #audit-page.as-page .au-tbl td.au-what .au-reason { color: var(--muted); }
+  /* The Kind and Outcome glyphs (#168 G2 14-22, 14px) sit 6px before their word and take the cell's colour, so a red elevation
+     row and a green or red outcome carry theirs. Export CSV and the Kind filter's glyphs: the .btn is a flex box with its own
+     6px gap; a seg item is not, so each glyph carries the 6px. */
+  #page-host > #audit-page.as-page .au-tbl :is(td.au-kind, td.au-out) > .ui-icon,
+  #page-host > #audit-page.as-page #au-filters .seg-item > .ui-icon { margin-right: 6px; }
+  /* In the fixed layout the 150px Outcome column holds 126px of text and the glyph takes 20 of it, so "unlock failed · you" (112px)
+     wrapped. There the Outcome stays on one line, spilling the few px it needs into its own right padding (the frame's gate fix);
+     the narrow card, whose columns size to content, wraps it again below. */
+  #page-host > #audit-page.as-page .au-tbl td.au-out { white-space: nowrap; }
   /* au-ok has the muted rules' weight and comes after them, so it wins; au-bad out-weighs them. */
   #page-host > #audit-page.as-page .au-tbl td.au-ok { color: var(--ok); }
   #page-host > #audit-page.as-page .au-tbl td.au-kind.au-bad,

@@ -139,8 +139,20 @@ const ICON_SETTINGS_TAB = iconMapOf({
 // entry draws no mark and the word stays: a second provider gets its own here, never a generic one.
 const ICON_AGENT_PROVIDER = iconMapOf({ claude: "si:claude" });
 
+// The Audit row's Kind glyph by the declared `kind` (G2 14-19, drawn at 14 before the word; the Credentials, Elevations, Egress
+// and Settings filters take the same glyph). A credential row takes its provider's glyph instead (G2 14, ICON_CRED_PROVIDER;
+// Activity's credential rows read it too); a kind with no entry draws none.
+const ICON_AUDIT_KIND = iconMapOf({
+  credential: "key-round", elevation: "shield-alert", signin: "log-in", egress: "globe", settings: "settings", store: "vault",
+});
+
+// A credential row's glyph by the broker's declared `provider` (aws | github | static). A row with none (an older server) or an
+// unknown one falls back to key-round at the call site.
+const ICON_CRED_PROVIDER = iconMapOf({ aws: "cloud", github: "si:github", static: "key-round" });
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    ICON_AUDIT_KIND, ICON_CRED_PROVIDER,
     emptyState, ICON_EMPTY, ICON_SETTINGS_TAB, ICON_AGENT_PROVIDER,
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_REACH,
     ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_TOKEN_TEMPLATE, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_TOAST, ICON_ROW, ICON_PALETTE_KIND,

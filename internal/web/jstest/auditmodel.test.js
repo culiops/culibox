@@ -278,3 +278,73 @@ test("every range's window is within the server's 31-day cap", () => {
     }
   }
 });
+
+// #168 G2 14-22: the Kind cell's glyph by the declared kind (a credential row by its provider) and the Outcome cell's glyph,
+// derived from the row's tone so it never disagrees with the colour.
+test("kind icon: one glyph per declared kind, nothing for an unknown one", () => {
+  const want = { credential: "key-round", elevation: "shield-alert", signin: "log-in", egress: "globe", settings: "settings", store: "vault" };
+  for (const [kind, glyph] of Object.entries(want)) {
+    assert.strictEqual(auditRowView(ev({ kind, provider: "" }), {}).kindIcon, glyph, kind);
+  }
+  assert.strictEqual(auditRowView(ev({ kind: "mystery" }), {}).kindIcon, "");
+  assert.strictEqual(auditRowView(ev({ kind: undefined }), {}).kindIcon, "");
+  assert.strictEqual(auditRowView({}, {}).kindIcon, "");
+  assert.strictEqual(auditRowView(null, {}).kindIcon, "");
+  for (const kind of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    assert.strictEqual(auditRowView(ev({ kind }), {}).kindIcon, "", kind);
+  }
+});
+
+test("kind icon: a credential row draws its provider's glyph", () => {
+  for (const [provider, glyph] of [["aws", "cloud"], ["github", "si:github"], ["static", "key-round"]]) {
+    assert.strictEqual(auditRowView(ev({ kind: "credential", provider }), {}).kindIcon, glyph, provider);
+  }
+  // Only a credential row reads the provider.
+  assert.strictEqual(auditRowView(ev({ kind: "egress", provider: "aws" }), {}).kindIcon, "globe");
+});
+
+test("credential rows without provider use key-round", () => {
+  assert.strictEqual(auditRowView({ kind: "credential", outcome: "minted" }, {}).kindIcon, "key-round");
+  for (const provider of [undefined, null, "", "gitlab", "constructor", "__proto__", 7]) {
+    assert.strictEqual(auditRowView(ev({ kind: "credential", provider }), {}).kindIcon, "key-round", String(provider));
+  }
+});
+
+test("outcome icon pairs with tone", () => {
+  const row = (kind, outcome) => auditRowView(ev({ kind, outcome }), {});
+  const table = [
+    ["circle-check", "credential", ["minted", "fetched", "probe_minted"]],
+    ["circle-check", "egress", ["allowed"]],
+    ["circle-check", "signin", ["ok"]],
+    ["ban", "egress", ["denied", "bad_auth", "bad_method", "private_addr"]],
+    ["ban", "credential", ["denied_session", "denied_policy"]],
+    ["ban", "elevation", ["refused"]],
+    ["circle-x", "egress", ["dial_error"]],
+    ["circle-x", "credential", ["failed", "sts_error", "unlock_failed", "sso_expired", "rate_limited", "store_locked", "store_unavailable", "unresolved", "not_installed"]],
+    // Red because it is a live write, not because it failed: no outcome glyph (G2 left-out l).
+    ["", "elevation", ["granted", "extended"]],
+    ["", "settings", ["created", "updated", "deleted"]],
+    ["", "store", ["unlocked", "locked"]],
+    ["", "elevation", ["dropped", "expired", "ended", "revoked"]],
+    ["", "egress", ["write_ack", "allowed_private"]],
+    ["", "credential", ["", "something_new"]],
+  ];
+  const seen = [];
+  for (const [glyph, kind, outcomes] of table) {
+    for (const o of outcomes) {
+      const v = row(kind, o);
+      assert.strictEqual(v.outcomeIcon, glyph, kind + "/" + o);
+      seen.push(v);
+    }
+  }
+  for (const v of seen) {
+    if (v.outcomeIcon === "circle-check") assert.strictEqual(v.tone, "ok", v.outcome);
+    if (v.outcomeIcon === "circle-x") assert.strictEqual(v.tone, "bad", v.outcome);
+  }
+  assert.strictEqual(auditRowView({}, {}).outcomeIcon, "");
+  assert.strictEqual(auditRowView(null, {}).outcomeIcon, "");
+});
+
+test("outcome icon: a granted or extended word on a non-elevation row is not an error and gets no glyph", () => {
+  assert.strictEqual(auditRowView(ev({ kind: "credential", outcome: "granted" }), {}).outcomeIcon, "");
+});

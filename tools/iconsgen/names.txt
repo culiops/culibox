@@ -79,6 +79,7 @@ search
 search-x
 settings
 shield
+shield-alert
 si:claude
 si:datadog
 si:github
@@ -95,5 +96,6 @@ terminal
 trash-2
 triangle-alert
 upload
+vault
 wifi-off
 x
