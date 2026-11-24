@@ -1022,9 +1022,10 @@ RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthr
 # it, and the config bundle reaches only some sessions, so the image pins it off as
 # Claude Code's managed policy: root-owned, read by every claude in every box, and
 # above any user, project or --settings value. Both spellings: Claude Code 2.1.311
-# reads attribution (an empty commit/pr text hides it; sessionUrl false drops the
-# Claude-Session trailer of Remote Control sessions) and the deprecated
-# includeCoAuthoredBy. Small, so it sits after the big layer and costs a bump nothing.
+# (the pin when this was measured) reads attribution (an empty commit/pr text hides
+# it; sessionUrl false drops the Claude-Session trailer of Remote Control sessions)
+# and the deprecated includeCoAuthoredBy. Small, so it sits after the big layer and
+# costs a bump nothing.
 RUN mkdir -p /etc/claude-code && printf '%s\n' '{"includeCoAuthoredBy":false,"attribution":{"commit":"","pr":"","sessionUrl":false}}' > /etc/claude-code/managed-settings.json && jq -e '.includeCoAuthoredBy == false and .attribution.commit == "" and .attribution.pr == "" and .attribution.sessionUrl == false' /etc/claude-code/managed-settings.json
 
 # Nothing but the base image's two dotfiles may be left in /root: every RUN above
