@@ -106,3 +106,11 @@ test("one concept one glyph: tier glyphs are not reused", () => {
     for (const v of Object.values(m)) assert.ok(!["copy", "triangle-alert", "box"].includes(v), v);
   }
 });
+
+test("ICON_TOAST: warn and error carry the status glyphs (G4 80, 81); info and pending have none", () => {
+  assert.deepStrictEqual({ ...maps.ICON_TOAST }, { warn: "circle-alert", error: "circle-x" });
+  assert.equal(maps.ICON_TOAST.warn, ICON_STATUS.warning);
+  assert.equal(maps.ICON_TOAST.error, ICON_STATUS.error);
+  assert.equal(iconOf(maps.ICON_TOAST, "info"), "");
+  assert.equal(iconOf(maps.ICON_TOAST, "pending"), "");
+});

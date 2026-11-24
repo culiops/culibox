@@ -475,6 +475,13 @@
   }
   .toast-text { flex: 1 1 auto; min-width: 0; }
   .toast .dot { margin-right: 2px; }
+  /* #168: a warn or error toast's status glyph is a sibling after the dot, never inside .toast-text, so a long message still
+     wraps. The dot and the glyph sit on the text's FIRST line, not on the toast's centre: a one-line toast is as tall as its
+     24px buttons (--h-sm) and centres everything in that row, so the text, the dot and the glyph are all offset inside the same
+     24px; a wrapped message then keeps them on its first line. The × and the action keep the toast's centre. */
+  .toast:has(> .ui-icon) > .toast-text { align-self: flex-start; margin-block: calc((var(--h-sm) - 1.5em) / 2); }
+  .toast > .ui-icon { align-self: flex-start; margin-top: calc((var(--h-sm) - 14px) / 2); }
+  .toast > .dot:has(+ .ui-icon) { align-self: flex-start; margin-top: calc((var(--h-sm) - 8px) / 2); }
   .toast.is-error { background: var(--red-tint); border-color: rgba(240,106,106,.45); }
   /* Warn (the clone-needs-you toast) is neutral: amber is locked to "blocked" (#184), so it keeps the
      base toast's --raise surface and --line border. Only the error toast takes a colour (red). */

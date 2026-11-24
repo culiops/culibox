@@ -17,6 +17,8 @@ const read = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
 const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "");
 const { createToastStack, toastFailText } = require("../static/toaststack.js");
 const { mobileActive } = require("../static/mobileshell.js");
+const { iconStubs } = require("./iconpage.js");
+const { iconOf, ICON_TOAST } = require("../static/iconmap.js");
 
 // --- fake DOM ----------------------------------------------------------------
 class El {
@@ -78,7 +80,7 @@ function phoneSlot() {
   return { toast, "toast-msg": new El("span"), "toast-undo": new El("button"), visible: () => classes.has("show") };
 }
 
-const GLOBALS = ["document", "window", "mobileActive", "createToastStack", "copyText"];
+const GLOBALS = ["document", "window", "mobileActive", "createToastStack", "copyText", "uiIcon", "iconOf", "ICON_TOAST"];
 
 // A page at `width` with the real shell.js (fresh module state) and toaststack.js.
 // `host: false` leaves #toasts out of the page. `blur: false` is Firefox and
@@ -105,6 +107,7 @@ function page(t, { width = 1280, host = true, blur = true } = {}) {
     mobileActive,
     createToastStack,
     copyText: (text, done) => copies.push({ text, done }),
+    ...iconStubs(() => new El("svg")),
   });
   El.beforeRemove = (n) => {
     if (!toasts || !n.contains(doc.activeElement)) return;
@@ -133,6 +136,12 @@ function view(n) {
     paused: n.find("toast-paused") ? n.find("toast-paused").textContent : null,
     act: act ? act.textContent : null,
     x: x ? { text: x.textContent, label: x.getAttribute("aria-label"), title: x.title, cls: x.className } : null,
+    xIcon: x ? x.children.map((c) => [c.getAttribute("data-icon"), c.getAttribute("width")]) : null,
+    // the entry's own glyphs in child order, with the close's inside its button and so not listed: [data-icon, width, previous sibling's class, next sibling's class]
+    glyphs: n.children.filter((c) => c.getAttribute("data-icon")).map((c) => {
+      const i = n.children.indexOf(c);
+      return [c.getAttribute("data-icon"), c.getAttribute("width"), i > 0 ? n.children[i - 1].className : null, c.nextSibling ? c.nextSibling.className : null];
+    }),
     spin: !!n.find("spin"),
     dot: dot ? dot.className : null,
     meter: meter ? meter.children[0].style.width : null,
@@ -142,15 +151,17 @@ const texts = (pg) => pg.entries().map((e) => e.text);
 
 // --- toastView (pure) ----------------------------------------------------------
 test("toastView: role is status for info, warn and pending, alert for error (F62)", () => {
+  Object.assign(globalThis, { iconOf, ICON_TOAST }); // page globals (iconmap.js)
   const { toastView } = require("../static/shell.js");
   const v = (kind, more) => toastView(Object.assign({ id: 1, text: "x", kind, undo: false, detail: "", progress: null }, more));
-  assert.deepStrictEqual(v("info"), { role: "status", cls: ["toast"], dot: null, spin: false, action: null });
-  assert.deepStrictEqual(v("warn"), { role: "status", cls: ["toast", "is-warn"], dot: "needs", spin: false, action: null });
-  assert.deepStrictEqual(v("pending"), { role: "status", cls: ["toast"], dot: null, spin: true, action: null });
-  assert.deepStrictEqual(v("error"), { role: "alert", cls: ["toast", "is-error"], dot: "crashed", spin: false, action: null });
+  assert.deepStrictEqual(v("info"), { role: "status", cls: ["toast"], dot: null, icon: null, spin: false, action: null });
+  assert.deepStrictEqual(v("warn"), { role: "status", cls: ["toast", "is-warn"], dot: "needs", icon: "circle-alert", spin: false, action: null });
+  assert.deepStrictEqual(v("pending"), { role: "status", cls: ["toast"], dot: null, icon: null, spin: true, action: null });
+  assert.deepStrictEqual(v("error"), { role: "alert", cls: ["toast", "is-error"], dot: "crashed", icon: "circle-x", spin: false, action: null });
 });
 
 test("toastView: Copy details only on an error that carries detail; Undo on an undo entry", () => {
+  Object.assign(globalThis, { iconOf, ICON_TOAST }); // page globals (iconmap.js)
   const { toastView } = require("../static/shell.js");
   const v = (kind, more) => toastView(Object.assign({ id: 1, text: "x", kind, undo: false, detail: "", progress: null }, more));
   assert.strictEqual(v("error", { detail: "docker stop failed: timeout (HTTP 500)" }).action, "copy");
@@ -227,11 +238,34 @@ test("entry markup: kit classes, roles, a dot for error and warn, × labelled Di
   assert.strictEqual(info.role, "status");
   assert.strictEqual(info.dot, null);
   for (const e of [err, warn, info]) {
-    assert.deepStrictEqual(e.x, { text: "×", label: "Dismiss", title: "Dismiss", cls: "btn btn-ghost btn-icon btn-sm toast-x" });
+    assert.deepStrictEqual(e.x, { text: "", label: "Dismiss", title: "Dismiss", cls: "btn btn-ghost btn-icon btn-sm toast-x" });
+    assert.deepStrictEqual(e.xIcon, [["x", "14"]], "the close is the shared x glyph, 14, inside its labelled button");
     assert.strictEqual(e.spin, false);
     assert.strictEqual(e.meter, null);
   }
   assert.strictEqual(pg.node(0).getAttribute("data-id") || pg.node(0).dataset.id, String(err.id));
+});
+
+test("#168: warn and error toasts carry their status glyph as a sibling after the dot and before the text; info stays plain; pending keeps the spinner", (t) => {
+  const pg = page(t);
+  pg.shell.showToast("Saved");
+  pg.shell.showToast("Clone needs you", { warn: true });
+  pg.shell.showToast("End failed: boom", { error: true });
+  const [err, warn, info] = pg.entries();
+  assert.deepStrictEqual(warn.glyphs, [["circle-alert", "14", "dot dot-needs", "toast-text"]]);
+  assert.deepStrictEqual(err.glyphs, [["circle-x", "14", "dot dot-crashed", "toast-text"]]);
+  assert.deepStrictEqual(info.glyphs, [], "an info confirmation stays icon-less (founder); the close is its only svg");
+  assert.deepStrictEqual(info.xIcon, [["x", "14"]]);
+  const text = pg.node(1).find("toast-text");
+  assert.strictEqual(text.children.length, 0, "the glyph is a sibling: .toast-text stays text only, so it keeps wrapping");
+  const h = pg.shell.showToast("Ending docs…", { sticky: true });
+  const pending = pg.entries()[0];
+  assert.strictEqual(pending.spin, true);
+  assert.deepStrictEqual(pending.glyphs, [], "pending keeps the CSS spinner, no glyph");
+  assert.deepStrictEqual(pending.xIcon, [["x", "14"]]);
+  // a pending toast turned into an error in place gains the glyph (its shape changed)
+  pg.shell.resolveToast(h, "Could not end docs.", { error: true });
+  assert.deepStrictEqual(pg.entries()[0].glyphs, [["circle-x", "14", "dot dot-crashed", "toast-text"]]);
 });
 
 test("message text goes in as text, never markup", (t) => {
@@ -308,6 +342,7 @@ test("a link toast shows its own label, runs the callback and removes its entry;
 });
 
 test("toastView: a link is the action unless Undo is there; the pure view takes it as a flag (#346)", () => {
+  Object.assign(globalThis, { iconOf, ICON_TOAST }); // page globals (iconmap.js)
   const { toastView } = require("../static/shell.js");
   const e = (more) => Object.assign({ id: 1, text: "x", kind: "warn", undo: false, detail: "", progress: null }, more);
   assert.strictEqual(toastView(e(), true).action, "link");
@@ -445,7 +480,7 @@ test("a pending entry has a spinner and the same × as every toast, and resolveT
   const pending = pg.entries()[1];
   assert.strictEqual(pending.text, "Ending docs…");
   assert.strictEqual(pending.spin, true);
-  assert.deepStrictEqual(pending.x, { text: "×", label: "Dismiss", title: "Dismiss", cls: "btn btn-ghost btn-icon btn-sm toast-x" }, "#183: a request that hangs must not leave a toast nobody can remove");
+  assert.deepStrictEqual(pending.x, { text: "", label: "Dismiss", title: "Dismiss", cls: "btn btn-ghost btn-icon btn-sm toast-x" }, "#183: a request that hangs must not leave a toast nobody can remove");
   assert.strictEqual(pending.role, "status");
   t.mock.timers.tick(60000);
   assert.deepStrictEqual(texts(pg), ["Ending docs…"], "the infos expired; pending has no timer");
@@ -680,6 +715,19 @@ test("desktop.css: .toast-paused and .toast-act live in the kit section; the pen
   assert.match(kit, /\.toast-act\[data-act="undo"\][^{]*\{[^}]*color:\s*var\(--accent\)/, "Undo is the accent action (M7.5)");
   // Below app.css's reduced-motion `.toast .spin` (0,2,0), which loads first.
   assert.match(kit, /:where\(\.toast\) \.spin\s*\{[^}]*animation:\s*spawn-pulse/);
+});
+
+test("desktop.css: a toast's glyph and dot sit on the text's first line, and the glyph is never inside .toast-text (#168)", () => {
+  const raw = read("desktop.css");
+  const kit = stripComments(raw.slice(raw.indexOf("/* === kit primitives (2026-11, #171) === */"), raw.indexOf("/* === end kit primitives === */")));
+  assert.match(kit, /\.toast > \.ui-icon\s*\{[^}]*align-self:\s*flex-start/);
+  assert.match(kit, /\.toast > \.dot:has\(\+ \.ui-icon\)\s*\{[^}]*align-self:\s*flex-start/);
+  assert.match(kit, /\.toast:has\(> \.ui-icon\) > \.toast-text\s*\{[^}]*align-self:\s*flex-start/);
+  assert.ok(!/\.toast-text[^{]*\.ui-icon/.test(kit), "no rule styles an icon inside the text");
+  // The phone keeps its own slot and its ×: shell.js's phone path writes the text glyph, never an icon.
+  const shell = read("shell.js");
+  const phone = shell.slice(shell.indexOf("function showToast"), shell.indexOf("function showToast") + 4000);
+  assert.ok(!/uiIcon/.test(phone.slice(0, phone.indexOf("\n}\n"))), "showToast's phone path draws no icon");
 });
 
 // --- callers -------------------------------------------------------------------------

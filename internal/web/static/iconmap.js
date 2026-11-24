@@ -82,6 +82,10 @@ const ICON_LAYOUT = iconMapOf({ 1: "square", 2: "columns-2", 4: "layout-grid" })
 // was a proposal, not drawn), so they are not keys.
 const ICON_SYS_BANNER = iconMapOf({ unreachable: ICON_STATUS.unreachable, signedout: ICON_STATUS["signed-out"] });
 
+// The desktop toast stack's status glyph by toast kind (G4 80, 81): warn and error carry their status glyph after the kind dot.
+// Info (a confirmation, the founder's call) stays plain and pending keeps the CSS spinner, so neither is a key.
+const ICON_TOAST = iconMapOf({ warn: ICON_STATUS.warning, error: ICON_STATUS.error });
+
 // The desktop sidebar row's own marks (G4 12): a companion shell's arrow under its parent, drawn at chip size 12.
 const ICON_ROW = iconMapOf({ nested: "corner-down-right" });
 
@@ -97,6 +101,6 @@ const ICON_PALETTE_KIND = iconMapOf({
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE,
-    ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_ROW, ICON_PALETTE_KIND,
+    ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_TOAST, ICON_ROW, ICON_PALETTE_KIND,
   };
 }
