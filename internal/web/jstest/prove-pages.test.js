@@ -2086,9 +2086,9 @@ test("Models, Projects and Tools on the page: cards, kit tables and section titl
   const grid = tools.elements[0].elements[1];
   assert.strictEqual(grid.className, "an-pgrid");
   assert.deepStrictEqual(grid.elements.map((c) => c.className), ["an-card", "an-card"]);
-  // The head is the kind's glyph (#168 G3, keyed on the kind) and then the kind word, as today.
-  assert.deepStrictEqual(grid.elements.map((c) => c.elements[0].elements[1].textContent), ["skill", "mcp_server"], "a card per kind, titled as today");
-  assert.deepStrictEqual(grid.elements.map((c) => c.elements[0].elements[0].attrs["data-icon"]), ["book-open", "server"]);
+  // The head's h3 holds the kind's glyph (#168 G3, keyed on the kind) and then the kind word, as today.
+  assert.deepStrictEqual(grid.elements.map((c) => c.elements[0].elements[0].textContent), ["skill", "mcp_server"], "a card per kind, titled as today");
+  assert.deepStrictEqual(grid.elements.map((c) => c.elements[0].elements[0].elements[0].attrs["data-icon"]), ["book-open", "server"]);
   assert.deepStrictEqual(grid.elements[0].elements[1].elements.map((r) => [r.elements[0].textContent, r.elements[2].textContent]), [["review", "40"], ["deploy", "7"]]);
   // No tools: today's sentence, in the section.
   loadWindow(env, { tools: [] });

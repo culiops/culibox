@@ -464,22 +464,37 @@ function toolCards(page, kinds) {
   return root.querySelectorAll(".an-card");
 }
 
-test("a Tools card head draws the glyph of its declared kind at 16, before the kind word", () => {
+test("a Tools card head draws the glyph of its declared kind at 16, inside the heading before the kind word", () => {
   const want = { mcp_server: "server", plugin: "puzzle", mcp_tool: "plug", skill: "book-open" };
-  const cards = toolCards(true, Object.keys(want));
+  const kinds = Object.keys(want);
+  const cards = toolCards(true, kinds);
   assert.equal(cards.length, 4);
-  for (const c of cards) {
+  cards.forEach((c, i) => {
     const head = c.querySelector(".card-head");
     const h3 = head.querySelector("h3");
-    const svgs = head.querySelectorAll("svg");
-    assert.equal(svgs.length, 1, h3.textContent);
-    assert.equal(svgs[0].getAttribute("data-icon"), want[h3.textContent], h3.textContent);
-    assert.equal(svgs[0].getAttribute("width"), "16");
-    assert.equal(svgs[0].getAttribute("aria-hidden"), "true");
-    assert.ok(head.children.indexOf(svgs[0]) < head.children.indexOf(h3), "the glyph comes before the word");
-    assert.equal(h3.querySelector("svg"), null);
-    assert.equal(h3.textContent, Object.keys(want).find((k) => want[k] === svgs[0].getAttribute("data-icon")), "the words are the kind, unchanged");
+    assert.equal(h3.textContent, kinds[i], "the words are the kind, unchanged");
+    assert.equal(head.querySelectorAll("svg").length, 1, kinds[i]);
+    assert.equal(h3.children[0].tag, "svg", "the glyph is the heading's first child");
+    assert.equal(h3.children[0].getAttribute("data-icon"), want[kinds[i]], kinds[i]);
+    assert.equal(h3.children[0].getAttribute("width"), "16");
+    assert.equal(h3.children[0].getAttribute("aria-hidden"), "true");
+    assert.equal(head.children.length, 1, "the head holds only the heading (no sibling glyph for the flex gap to push away)");
+  });
+});
+
+test("the Tools glyph is 6px from its word: a margin on the h3's glyph, in the desktop page's rules", () => {
+  const css = readStatic("desktop.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(css, /#page-host > #analytics-modal\.as-page \.an-card \.card-head > h3 > \.ui-icon \{ margin-right: 6px; \}/);
+});
+
+test("anToolGroups: a hostile kind gets the default colour string, never a function", () => {
+  for (const kind of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    const [g] = anToolGroups([{ kind, name: "x", records: 3 }]);
+    assert.equal(g.kind, kind);
+    assert.equal(g.color, "var(--accent)", kind);
+    assert.equal(g.items.length, 1);
   }
+  assert.equal(anToolGroups([{ kind: "skill", name: "x", records: 1 }])[0].color, "var(--an-2)");
 });
 
 test("a Tools card head of an unknown kind keeps its words and draws no glyph", () => {
@@ -547,4 +562,17 @@ test("anRescan keeps the glyph while it says Scanning… and after, and still wo
   await ctx.anRescan(p);
   assert.deepEqual(seen, ["Scanning…"]);
   assert.equal(p.textContent, "Re-scan");
+});
+
+test("anRescan: a rejected request leaves the glyph and the word in place and the button enabled", async () => {
+  const { ctx, doc } = anPage(true);
+  const b = new Node("button", doc);
+  const s = new Node("svg", doc); s.className = "ui-icon";
+  b.append(s, doc.createTextNode("Re-scan"));
+  ctx.api = async () => { throw new Error("boom"); };
+  ctx.anLoad = async () => {};
+  await ctx.anRescan(b);
+  assert.equal(b.textContent, "Re-scan");
+  assert.equal(b.querySelectorAll("svg").length, 1);
+  assert.equal(b.disabled, false);
 });

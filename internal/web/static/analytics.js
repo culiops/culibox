@@ -1287,8 +1287,12 @@ function anCard(title, caption, level, glyph) {
   const card = el("div", "an-card");
   if (title || caption) {
     const head = el("div", "card-head");
-    if (title && glyph) head.appendChild(uiIcon(glyph, { size: 16 })); // `glyph` is an icon name (the Tools heads, #168); before the title
-    if (title) head.appendChild(el(level || "h3", "t-md w-600", title));
+    if (title && glyph) {
+      // `glyph` is an icon name (the Tools heads, #168): it sits inside the heading, before the words, so the two wrap as one.
+      const h = el(level || "h3", "t-md w-600");
+      h.append(uiIcon(glyph, { size: 16 }), document.createTextNode(title));
+      head.appendChild(h);
+    } else if (title) head.appendChild(el(level || "h3", "t-md w-600", title));
     if (caption) head.appendChild(el("span", "t-sm muted", caption));
     card.appendChild(head);
   }
