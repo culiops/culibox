@@ -494,6 +494,20 @@ func (l *AgentLauncher) EgressFor(agent string) ([]string, bool) {
 	return slices.Clone(cfg.EgressAllow), cfg.EgressOpen
 }
 
+// LiveEgressFor is EgressFor for a session already running (#95): ok is false
+// when the profile no longer exists or now names another tier than the box,
+// and the session then fails closed. A profile that names no tier on an
+// instance whose default is host still answers (its sessions were boxed per
+// spawn): egress_allow and egress_open need an explicit runtime: box, so its
+// policy is empty either way, and it must not read as removed.
+func (l *AgentLauncher) LiveEgressFor(agent string) (allow []string, open, ok bool) {
+	cfg, found := l.agent(agent)
+	if !found || (cfg.Runtime != "" && l.tierOf(cfg) != config.RuntimeBox) {
+		return nil, false, false
+	}
+	return slices.Clone(cfg.EgressAllow), cfg.EgressOpen, true
+}
+
 // SetStaticTokens installs the instance's static-token entries (deep-copied).
 // Safe to call again (a credential save pushes the new list); a running
 // session keeps the copy it was spawned with.

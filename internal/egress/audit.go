@@ -26,6 +26,10 @@ const (
 	// OutcomeDialError: the host is allowed but the upstream dial failed.
 	// Recording that as "allowed" would be a lie.
 	OutcomeDialError Outcome = "dial_error"
+	// OutcomePolicyChanged is not a tunnel: a running session's egress policy
+	// followed a profile edit (#95). Host carries a short summary of the change
+	// ("+pypi.org -example.com open:on closed:1"), Port is 0.
+	OutcomePolicyChanged Outcome = "policy_changed"
 )
 
 // maxHost is the longest DNS name; the audit store never keeps more of the

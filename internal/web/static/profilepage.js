@@ -831,6 +831,9 @@ function pfvRegisterEditor(id, spec) {
 }
 
 const PFV_NEW_BOX = "Saving gives the next session a new box. Running sessions keep theirs.";
+// The network settings reach running sessions too (#95): their box stays, the proxy applies the change.
+const PFV_NEW_BOX_LIVE_NET = "Saving gives the next session a new box. Running sessions keep theirs and follow this setting from their next connection.";
+const PFV_NEW_BOX_LIVE_DOMAINS = "Saving gives the next session a new box. Running sessions keep theirs; a domain change reaches them at their next connection, a folder change does not.";
 const PFV_NUDGE = "Save or discard these changes first";
 const PFV_NO_COMMAND = "A command is required.";
 // What a refused field is, for the note on the block that was being saved ("Not saved: a folder in Also reachable ...").
@@ -1509,11 +1512,15 @@ function pfvPaint() {
   for (const rec of Object.values(pfvState.edits)) pfvPaintEdit(rec);
 }
 
+// pfvBoxNote: the footer's box line, "" for none. An editor's note answers true for PFV_NEW_BOX, or its own text.
 function pfvBoxNote(rec, c) {
   const ed = PFV_EDITORS[rec.id];
-  if (ed) return !!(ed.note && ed.note(rec, c));
+  if (ed) {
+    const n = ed.note && ed.note(rec, c);
+    return typeof n === "string" ? n : n ? PFV_NEW_BOX : "";
+  }
   // A block that is only showing a refusal: its bindings and paths belong to a box.
-  return c.tier === "box" && (rec.id === "cloud" || rec.id === "reachable");
+  return c.tier === "box" && (rec.id === "cloud" || rec.id === "reachable") ? PFV_NEW_BOX : "";
 }
 
 function pfvPaintEdit(rec) {
@@ -1581,7 +1588,8 @@ function pfvStatusKids(rec, dirty, c) {
   // Both footers save the same merged profile (spec 5.6): say what else this Save takes along.
   const others = Object.values(pfvState.edits).filter((r) => r !== rec && pfvEditDirty(r)).map((r) => (r.block ? r.block.label : r.id));
   if (others.length) out.push(pfvMk("p", "pfv-fnote", "Saving also saves your " + pfvJoin(others) + (others.length > 1 ? " changes." : " change.")));
-  if (pfvBoxNote(rec, c)) out.push(pfvMk("p", "pfv-fnote", PFV_NEW_BOX));
+  const boxNote = pfvBoxNote(rec, c);
+  if (boxNote) out.push(pfvMk("p", "pfv-fnote", boxNote));
   return out;
 }
 
@@ -2180,9 +2188,9 @@ function pfvNetworkValues(c) {
   return { egress_open: c.doc.egress_open === true };
 }
 
-// Only a box has a Network block, so a save here always gives the next session a new box.
+// Only a box has a Network block, so a save here always gives the next session a new box; running ones follow it (#95).
 function pfvNetworkNote(rec, c) {
-  return c.tier === "box";
+  return c.tier === "box" ? PFV_NEW_BOX_LIVE_NET : "";
 }
 
 function pfvNetworkForm(rec) {

@@ -330,7 +330,8 @@ func TestSummaryCounts(t *testing.T) {
 	s.egress(ts, "c1", egress.OutcomeAllowedPrivate, 0)
 	s.egress(ts, "c1", egress.OutcomeDenied, 3) // counts 4
 	s.egress(ts, "c1", egress.OutcomeDialError, 0)
-	s.egress(ts, "", egress.OutcomeBadAuth, 0) // unauthenticated: counts, but no session
+	s.egress(ts, "", egress.OutcomeBadAuth, 0)         // unauthenticated: counts, but no session
+	s.egress(ts, "c1", egress.OutcomePolicyChanged, 0) // not a tunnel: neither allowed nor denied
 	// Outside the range: ignored.
 	s.credential(ts+100, "late", broker.OutcomeMinted)
 	s.egress(ts-100, "early", egress.OutcomeDenied, 9)
