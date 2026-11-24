@@ -954,7 +954,7 @@
   }
   .ph-switch:hover { background: var(--raise); }
   .ph-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .ph-cnt { flex: none; font-weight: 500; font-size: var(--t-sm); color: var(--muted); }
+  .ph-cnt { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 3px; font-weight: 500; font-size: var(--t-sm); color: var(--muted); }
   .ph-st { flex: none; font-size: var(--t-sm); color: var(--muted); }
   /* Neutral containment and read credential; only an open write window is
      red (D23). A short chip never shrinks (a clipped "h…" says nothing); the
@@ -968,6 +968,10 @@
   }
   .ph-chip.cloud, .ph-chip.write { flex: 0 10000 auto; min-width: 7ch; }
   .ph-chip.host { box-shadow: inset 0 0 0 1px var(--faint); }
+  /* A tier chip draws its declared glyph (11px, deskContainmentChip) before the word; the host glyph is --fg, as the sidebar chip's
+     (#sessions .dchip.host .tchip-i). The write and cloud chips have none. */
+  .ph-chip.has-tier { display: inline-flex; align-items: center; gap: 3px; }
+  .ph-chip.host .ui-icon { color: var(--fg); }
   /* The kit's .chip-write (M6.4: red tint, a 45% ring, mono 600): the same recipe as the sidebar row's .dchip.write. */
   .ph-chip.write { color: var(--red); background: var(--red-tint); box-shadow: inset 0 0 0 1px rgba(240,106,106,.45); font-family: var(--font-mono); font-weight: var(--w-semibold); }
   .ph-main .bdg.acct { flex: 0 3 auto; min-width: 0; }
@@ -1025,6 +1029,8 @@
   .ph-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--line); }
   /* + Shell is the kit's .btn .btn-ghost .btn-sm (tabs.js): its look is the kit's, not ours. */
   .ph-shell[hidden] { display: none; }
+  /* The button holds its words and the plus glyph: wide shows the words, the compact rule below swaps them. */
+  .ph-sh-i { display: none; }
   /* ⋯ ⛶ × keep their 24px at all times and only fade in while the header is hovered or holds focus,
      so the pointer entering never moves the header (F18: the meta's room is the same in or out).
      No pointer-events while they are invisible, so a click cannot land on an icon nobody sees;
@@ -1037,7 +1043,7 @@
   }
   .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { opacity: 1; pointer-events: auto; }
   .ph-ic:hover { color: var(--fg); background: var(--raise); }
-  .ph-more { font-size: var(--t-lg); }
+  .ph-ic .ui-icon { display: block; margin: auto; }
   /* A narrow header's one control is always visible, never an overlay. */
   .ph-ics.nar .ph-more { opacity: 1; pointer-events: auto; }
   .ph-max.pin { color: var(--fg); }
@@ -1060,8 +1066,9 @@
     .ph-sep { display: none; }
     .ph-tab { padding: 0 5px; }
     .ph-files { padding: 0 5px; }
-    .ph-shell { font-size: 0; padding: 0 8px; gap: 0; }
-    .ph-shell::before { content: "+"; font: 500 var(--t-md)/1 var(--font-ui); }
+    /* 14px glyph + 5px each side + the 1px border = 26px, the "+" text's own 26.7px width: the floor rules below keep their slack. */
+    .ph-shell { font-size: 0; padding: 0 5px; gap: 0; }
+    .ph-shell .ph-sh-i { display: block; }
   }
   /* Too narrow for three words beside Files (the compact text look needs a 439px pane,
      419px of content box, measured): the three tabs and Files as icons, 24px squares like
@@ -1265,6 +1272,7 @@
     background: transparent; border: 0; border-radius: var(--r-ctl);
   }
   #drawer-x:hover { color: var(--fg); background: var(--raise); }
+  #drawer-x .ui-icon, .dk-x .ui-icon { display: block; margin: auto; }
   /* The pin is the kit's ghost icon button (24px); pressed it takes the kit's pressed look. */
   #drawer-pin { flex: none; }
   .dr-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }

@@ -18,6 +18,7 @@ const CHROME = [
   ["side-audit", "scroll-text", true],
   ["side-analytics", "chart-no-axes-column", true],
   ["side-settings", "settings", true],
+  ["drawer-x", "x", false],
   ["drawer-pin", "pin", false],
   ["drawer-max", "maximize", true],
   ["dock-blame", "git-commit-horizontal", true],

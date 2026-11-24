@@ -51,6 +51,9 @@ const ICON_RESOURCE = iconMapOf({
 // The tabs of a pane (G4 18-21).
 const ICON_PANE_TAB = iconMapOf({ terminal: "square-terminal", activity: "activity", access: "shield", files: "folder-tree" });
 
+// The pane's maximize toggle (G4 25): the dock's Full button draws maximize too, one concept for pane and dock.
+const ICON_PANE_CTL = iconMapOf({ maximize: "maximize", restore: "minimize" });
+
 // The kit menu's items (G4 50-61). Port picks: interrupt, bringhome, insert (G4 left-out `r` and today's drawing).
 const ICON_MENU = iconMapOf({
   rename: "pencil-line", edit: "pencil", files: "folder-tree", attribution: "chart-pie", copy: "clipboard-copy",
@@ -84,6 +87,6 @@ const ICON_ROW = iconMapOf({ nested: "corner-down-right" });
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE,
-    ICON_PANE_TAB, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_ROW,
+    ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_ROW,
   };
 }

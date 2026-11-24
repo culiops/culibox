@@ -944,8 +944,9 @@ class Cell {
       name.className = "ph-name ph-switch";
       const nm = el("span", m.name);
       nm.className = "ph-nm";
-      const cnt = el("span", "\u25BE \u00B7 " + this.tabs.length);
+      const cnt = el("span");
       cnt.className = "ph-cnt";
+      cnt.append(uiIcon(ICON_LOCKED.collapse, { size: 12 }), " \u00B7 " + this.tabs.length);
       name.append(nm, cnt);
       name.title = paneTitle(m.name, t, s, this.tabs.length);
       name.setAttribute("aria-haspopup", "menu");
@@ -968,8 +969,11 @@ class Cell {
       main.append(st);
     }
     for (const c of m.chips) {
-      const chip = el("span", c.text);
-      chip.className = "ph-chip " + c.tone;
+      // A tier chip declares its glyph (c.icon, deskContainmentChip): drawn before the word. The write and cloud chips have none.
+      const chip = el("span");
+      if (c.icon) chip.append(uiIcon(ICON_LOCKED["tier-" + c.icon], { size: 11 }), c.text);
+      else chip.textContent = c.text;
+      chip.className = "ph-chip " + c.tone + (c.icon ? " has-tier" : "");
       if (c.title) chip.title = c.title;
       main.append(chip);
     }
@@ -1101,7 +1105,11 @@ class Cell {
       filesPress(files);
       side.append(files);
     }
-    const sh = el("button", "+ Shell");
+    // The words and the plus glyph both stay: wide shows "+ Shell", the compact rule (desktop.css) hides the words and
+    // shows the glyph, so the button keeps its name (aria-label) either way.
+    const sh = el("button");
+    sh.append(uiIcon(ICON_ACTION.add, { size: 14, cls: "ph-sh-i" }), "+ Shell");
+    sh.setAttribute("aria-label", "Shell");
     sh.className = "btn btn-ghost btn-sm ph-shell";
     sh.title = "New shell for this session, same directory and tier, docked below by default (" + shortcutHint("shell.below", IS_MAC) + ")";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
@@ -1120,7 +1128,8 @@ class Cell {
     let more = null;
     if (s || narrow) {
       // The same menu as the sidebar row's ⋯, End session included (spec 7).
-      more = el("button", "\u22EF");
+      more = el("button");
+      more.append(uiIcon(ICON_ACTION.more, { size: 14 }));
       more.className = "ph-ic ph-more";
       more.title = narrow ? "Pane and session actions" : "Session actions";
       more.setAttribute("aria-label", more.title);
@@ -1133,12 +1142,14 @@ class Cell {
     }
     // ⛶ stays visible while maximized: a stored maximized pane must always have
     // its way back (spec 7, localStorage hazards).
-    const max = el("button", pinned ? "\u2750" : "\u26F6");
+    const max = el("button");
+    max.append(uiIcon(pinned ? ICON_PANE_CTL.restore : ICON_PANE_CTL.maximize, { size: 14 }));
     max.className = "ph-ic ph-max" + (pinned ? " pin" : "");
     max.title = pinned ? "Restore" : "Maximize";
     max.setAttribute("aria-label", max.title);
     max.onclick = (e) => { e.stopPropagation(); toggleMax(this); };
-    const del = el("button", "\u00D7");
+    const del = el("button");
+    del.append(uiIcon(ICON_ACTION.close, { size: 14 }));
     del.className = "ph-ic ph-del";
     del.title = "Close pane (the session keeps running)";
     del.setAttribute("aria-label", "Close pane");

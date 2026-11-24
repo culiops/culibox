@@ -49,6 +49,7 @@ loader-circle
 lock
 log-in
 maximize
+minimize
 panel-bottom
 panel-left-close
 panel-right

@@ -81,6 +81,10 @@ test('ICON_RESOURCE equals GLYPHS.md "Resources and credentials"', () => {
   });
 });
 
+test("ICON_PANE_CTL is G4 25: maximize and, while the pane is pinned, minimize", () => {
+  assert.deepStrictEqual({ ...maps.ICON_PANE_CTL }, { maximize: "maximize", restore: "minimize" });
+});
+
 test("every map is frozen and prototype-free", () => {
   const names = Object.keys(maps).filter((k) => k.startsWith("ICON_"));
   assert.ok(names.length >= 10, "the S1 maps: " + names.join(","));

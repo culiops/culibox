@@ -562,8 +562,27 @@ test("+ Shell is the kit's ghost button: the header keeps no look of its own for
   assert.ok(rulesFor(".ph-shell").every((b) => !look(b)), "only the compact + label's size and padding, never a fill, colour or border");
   assert.deepStrictEqual(rulesFor(".ph-shell:hover"), [], "hover is .btn-ghost:hover");
   assert.ok(rulesFor(".ph-shell[hidden]").some((b) => /display:\s*none/.test(b)), "a header with no shell profile hides it");
-  // The compact "+": the kit button's 6px gap would sit between the label's empty text and the glyph (+6px), so it is 0.
-  assert.match(headerRule(/\.ph-sep\s*\{/).body, /\.ph-shell \{ font-size: 0; padding: 0 8px; gap: 0; \}/);
+  // The compact plus: the kit button's 6px gap would sit between the label's empty text and the glyph (+6px), so it is 0; 5px padding keeps the old 26.7px width (the thresholds below were measured with it).
+  assert.match(headerRule(/\.ph-sep\s*\{/).body, /\.ph-shell \{ font-size: 0; padding: 0 5px; gap: 0; \}/);
+});
+
+// #168: the compact + is the vendored plus (.ph-sh-i, in the button beside its words), not a CSS "+" ::before. Wide, the
+// button is its words alone (the glyph is hidden); the compact rule shows the glyph and takes the words' size to 0.
+test("+ Shell: the plus glyph is hidden wide and shown by the compact rule, which draws no text '+'", () => {
+  assert.ok(rulesFor(".ph-sh-i").some((b) => /display:\s*none/.test(b)), "hidden by default: a wide header keeps its words");
+  const compact = headerRule(/\.ph-sep\s*\{/).body;
+  assert.match(compact, /\.ph-shell \.ph-sh-i \{ display: block; \}/, "the compact rule shows it");
+  assert.ok(!/ph-shell::before/.test(compact) && rulesFor(".ph-shell::before").length === 0, "no text plus");
+});
+
+test("the header's chip, switcher count and icon buttons lay their glyphs out", () => {
+  assert.ok(rulesFor(".ph-chip.has-tier").some((b) => /display:\s*inline-flex/.test(b) && /align-items:\s*center/.test(b) && /gap:\s*3px/.test(b)), "a tier chip: glyph, 3px, word");
+  assert.ok(rulesFor(".ph-chip.host .ui-icon").some((b) => /color:\s*var\(--fg\)/.test(b)), "the host glyph is --fg, as the sidebar's");
+  assert.ok(rulesFor(".ph-cnt").some((b) => /display:\s*inline-flex/.test(b) && /align-items:\s*center/.test(b)), "the count: chevron beside ' · N'");
+  // (.menu-x is a kit .btn-icon: its own flex centres the glyph.)
+  for (const sel of [".ph-ic .ui-icon", "#drawer-x .ui-icon", ".dk-x .ui-icon"]) {
+    assert.ok(rulesFor(sel).some((b) => /display:\s*block/.test(b)), sel + " is a centred block in its button");
+  }
 });
 
 // F18 / ruling 2: hovering the header never moves it. ⋯ ⛶ × keep their 24px at all times and only fade in

@@ -7593,7 +7593,7 @@ function kitTabRow(cell, t) {
   const x = document.createElement("button");
   x.type = "button";
   x.className = "menu-x btn btn-ghost btn-icon btn-sm";
-  x.textContent = "\u00D7";
+  x.append(uiIcon(ICON_ACTION.close));
   x.title = t.kind === "terminal" ? "Close tab (the session keeps running)" : "Close tab";
   x.setAttribute("aria-label", "Close " + t.title());
   x.onclick = () => { closeSessionMenu(false); cell.closeTab(t); };
