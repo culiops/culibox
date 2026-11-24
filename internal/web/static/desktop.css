@@ -2016,6 +2016,11 @@
     background-image: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 14px);
     background-repeat: no-repeat; background-position: 15px 0; background-size: calc(var(--lvl, 0) * 14px) 100%;
   }
+  /* #168 perf: a row's glyph is an svg, several elements per row, so a 2000-entry folder was ~70 % slower to expand than with
+     the Nerd text. A row off screen skips its style and layout (as .md-chunk does), held at a row's height (max(22px, the
+     line), as above) and at its own height once it has been seen. Nothing in a row draws outside it (the ring and the washes
+     are inset, a long name ellipsizes). */
+  #drawer .ft-node { content-visibility: auto; contain-intrinsic-size: auto max(22px, var(--fs-tree) * 22 / 12); }
   #drawer #filetree .pending-line { box-sizing: border-box; min-height: 22px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px + 18px); line-height: inherit; }
   /* The hover and selected washes are background-color only: app.css's `background:` shorthand on the same rows would reset
      the image, and the guides would vanish under the pointer. Hover is the kit's, a half step under the selected row's. The

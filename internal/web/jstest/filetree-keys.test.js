@@ -1248,3 +1248,11 @@ test("the tree's glyph CSS: the desktop shows the svg centred, the phone never s
   assert.match(ruleBody(desktop, "#drawer .ft-icon"), /color:\s*var\(--tree-icon\)/, "the family colours set the cell's colour, the svg is currentColor");
   assert.ok(!/font-family/.test(ruleBody(desktop, "#drawer .ft-node > .ft-icon")));
 });
+
+test("the dock's tree rows off screen skip their style and layout (content-visibility), held at a row's height; the phone's rows do not", () => {
+  const b = ruleBody(desktop, "#drawer .ft-node");
+  assert.match(b, /content-visibility:\s*auto/, "a 2000-entry folder lays out only the rows near the view (#168 perf)");
+  // A row is max(22px, the --fs-tree line) high (the rule above): an unseen row is held at that, and at its own height once seen.
+  assert.match(b, /contain-intrinsic-size:\s*auto max\(22px, var\(--fs-tree\) \* 22 \/ 12\)/);
+  assert.ok(!/content-visibility/.test(ruleBody(app, ".ft-node")), "the phone's tree is untouched");
+});
