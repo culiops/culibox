@@ -18,9 +18,6 @@ import (
 	boximage "github.com/culiops/culibox/docker/culibox"
 )
 
-// Strings the registry supplies are printed with %q: this runs in a GitHub
-// Actions step, which reads "::" commands from a line's start.
-
 // maxBody caps every registry response: an index, a manifest or an image config
 // is a few KB.
 const maxBody = 4 << 20
@@ -81,6 +78,8 @@ type Layer struct {
 }
 
 // Platform is what one platform's manifest and image config say about the image.
+// Layers and DiffIDs are nil when unusable (an implausible size, a malformed or
+// miscounted diff id): the platform still resolves, it just has no download figure.
 type Platform struct {
 	Created    time.Time `json:"created,omitzero"`      // zero when absent or not RFC 3339
 	ClaudeCode string    `json:"claude_code,omitempty"` // boximage.ValidClaudeCode, "" when absent or not of that shape
@@ -108,9 +107,6 @@ func (p Platform) Sanitized() Platform {
 	}
 	return p
 }
-
-// Layers and DiffIDs are nil when unusable (an implausible size, a malformed or
-// miscounted diff id): the platform still resolves, it just has no download figure.
 
 // Index is a resolved published image: the ref to pull and what each platform
 // (keyed by architecture, "amd64" or "arm64") says about it.
@@ -275,6 +271,9 @@ func pullToken(ctx context.Context, c *http.Client, registry, repoPath string) (
 	return t.Token, nil
 }
 
+// fetch GETs u and returns the body, capped at maxBody, and the headers. Strings the
+// registry supplies are printed with %q wherever they reach an error: this runs in a
+// GitHub Actions step, which reads "::" commands from a line's start.
 func fetch(ctx context.Context, c *http.Client, u, token, accept string) ([]byte, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
