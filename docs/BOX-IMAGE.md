@@ -37,7 +37,7 @@ bumped.
 | mcp-grafana | 2.0.0 | MCP server | github.com/grafana/mcp-grafana releases | sha256 per arch, pinned |
 | @sentry/mcp-server | 0.42.0 | MCP server | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here, and its dependencies resolve at build time |
 | mcp-atlassian | 0.23.1 | MCP server | PyPI | pip hash lock per arch (--require-hashes, wheels only) |
-| Claude Code (@anthropic-ai/claude-code) | 2.1.311 | tool | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here, and its dependencies resolve at build time |
+| Claude Code (@anthropic-ai/claude-code) | 2.1.325 | tool | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here, and its dependencies resolve at build time |
 
 ## Debian packages
 

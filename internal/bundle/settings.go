@@ -72,7 +72,7 @@ func filterSettings(path string) (map[string]any, []Drop) {
 // core.hooksPath=/dev/null on purpose) and public repos allow no AI attribution,
 // so a host that wants it on does not get it in a box.
 //
-// Both spellings, because Claude Code 2.1.311 (the box image's pin) honours
+// Both spellings, because Claude Code 2.1.311 (the pin when this was measured) honours
 // both: attribution.commit/pr set to "" hide the commit and PR text, and the
 // deprecated includeCoAuthoredBy:false is what older settings files and versions
 // read. attribution.sessionUrl:false also drops the Claude-Session trailer that

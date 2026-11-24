@@ -1001,7 +1001,7 @@ RUN printf '%s\n' '#!/bin/sh' \
 
 # --- Claude Code ---
 # @anthropic-ai/claude-code, pinned to the version the npm `stable` dist-tag points
-# at (measured 2026-11-06: stable 2.1.311, latest 2.1.318). The `stable` tag is the
+# at (measured 2026-11-24: stable 2.1.325, latest 2.1.331). The `stable` tag is the
 # deliberate exception to the two-week rule: Anthropic's own soak period stands in
 # for ours, and it is a deliberate downgrade from `latest`. Self-update is off
 # (DISABLE_UPDATES above), so the image is the only way this version moves.
@@ -1013,7 +1013,7 @@ RUN printf '%s\n' '#!/bin/sh' \
 # Last of the pins on purpose: it is bumped most often (npm stable moves about
 # weekly), and every layer after a changed one is rebuilt and re-pulled. Here a
 # bump costs its own layer only; first in the tail it rebuilt ~1.2 GB.
-ARG CLAUDE_CODE_VERSION=2.1.311
+ARG CLAUDE_CODE_VERSION=2.1.325
 RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
 
 # Claude Code adds a "Co-Authored-By: Claude" trailer (and a "Generated with" line
