@@ -53,6 +53,8 @@ test("current: the digest row with Copy, the facts line, and the one status line
     label: "Box image", text: REPO + "@sha256:3f2a…9c1d", code: true, title: OLD, copy: OLD,
   });
   assert.equal(rows[1].text, "linux/amd64 · built 2026-11-06 · Claude Code 2.1.292");
+  assert.equal(rows[1].muted, true, "the facts line is secondary text");
+  assert.ok(!rows[2].muted && !rows[2].fine, "the status line is not");
   assert.equal(rows[2].text, "Current: this is the image for this version");
   assert.equal(rows.length, 3);
 });
@@ -86,7 +88,9 @@ test("update: the block with the new image, download size, config line with Copy
   assert.equal(cfg.copy, '"box_image": "' + NEW + '"');
   assert.equal(cfg.title, cfg.copy);
   const run = byText(rows, /^then run: culibox box setup$/);
-  assert.equal(run.note, "Checked 2026-11-24 09:12 · nothing changes until you do");
+  assert.equal(run.note, undefined);
+  const checked = rows[rows.indexOf(run) + 1];
+  assert.deepEqual(checked, { label: "", text: "Checked 2026-11-24 09:12 · nothing changes until you do", fine: true });
 });
 
 test("update without a config line (the release default) says run, with no config row", () => {
@@ -97,7 +101,7 @@ test("update without a config line (the release default) says run, with no confi
   assert.ok(!rows.some((r) => r.copy && /box_image/.test(r.text)));
   assert.ok(!rows.some((r) => /MB to download/.test(r.text)));
   assert.equal(rows.find((r) => r.label === "For this version").note, undefined);
-  assert.ok(!rows.some((r) => /Checked/.test(r.note || "")), "no checked_at, no Checked part");
+  assert.ok(!rows.some((r) => /Checked/.test(r.text)), "no checked_at, no Checked row");
 });
 
 test("stale-unknown names why: the registry's error, not checked yet, or the check being off", () => {
@@ -133,7 +137,7 @@ test("the weekly scan row: a link to the issue built from the number, no row wit
 });
 
 test("a scan number that is not a positive integer gives no link and no URL", () => {
-  for (const number of ["357/../../x", 3.5, -1, 0, null, "<b>"]) {
+  for (const number of ["357/../../x", 3.5, -1, 0, null, "<b>", 1e21]) {
     const rows = boxImageRows(report({ scan: { number, count: 4 } }));
     const scan = rows[rows.length - 1];
     assert.equal(scan.href, undefined, String(number));
@@ -149,7 +153,7 @@ test("a report that is not an object gives no rows", () => {
 });
 
 // --- loadBoxImage against the fake DOM ------------------------------------------------------------------------------------------
-function page(apiImpl) {
+function page(apiImpl, win) {
   const doc = { created: [] };
   const mk = (tag) => { doc.created.push(tag); const n = new Node(tag, doc); n.ev = {}; return n; };
   doc.createElement = mk;
@@ -165,6 +169,7 @@ function page(apiImpl) {
     openAgentLink: (u, c) => { opened.push([u, c]); return Promise.resolve(true); },
     showToast: () => {},
   };
+  if (win) ctx.window = win;
   vm.createContext(ctx);
   new vm.Script(read("boximage.js"), { filename: "boximage.js" }).runInContext(ctx);
   return { ctx, el, doc, copied, opened };
@@ -229,6 +234,62 @@ test("an answer that is not a report keeps it hidden", async () => {
   assert.equal(p.el.hidden, true);
 });
 
+test("the rows come in three groups, one per labelled row, each with its continuation lines", async () => {
+  const p = page(async () => report({
+    verdict: "update", want: NEW, want_source: "registry", download_mb: "5", config_line: '"box_image": "' + NEW + '"',
+    checked_at: local(2026, 11, 24, 9, 12), scan: { number: 357, count: 680 },
+  }));
+  await p.ctx.loadBoxImage();
+  const groups = p.el.children.filter((c) => c.className === "bi-group");
+  assert.equal(groups.length, p.el.children.length, "only groups sit directly in the container");
+  assert.deepEqual(groups.map((g) => g.querySelector(".bi-l").textContent), ["Box image", "For this version", "Weekly scan"]);
+  assert.ok(/Built from an older/.test(groups[0].textContent) && !/Built from an older/.test(groups[1].textContent));
+  assert.ok(/Checked 2026-11-24 09:12/.test(groups[1].textContent));
+  const rowOf = (re) => all(p.el).find((n) => n.className === "bi-row" && re.test(n.textContent));
+  assert.ok(rowOf(/Checked/) !== rowOf(/then run/), "Checked is its own line");
+  assert.ok(all(p.el).some((n) => /bi-fine/.test(n.className) && /Checked/.test(n.textContent)));
+  assert.ok(all(p.el).some((n) => /bi-muted/.test(n.className) && /linux\/amd64/.test(n.textContent)));
+});
+
+test("an older answer never overwrites a newer one", async () => {
+  const waits = [];
+  const p = page(() => new Promise((res) => waits.push(res)));
+  const first = p.ctx.loadBoxImage();
+  const second = p.ctx.loadBoxImage();
+  waits[1](report({ verdict: "current-local" }));
+  await second;
+  waits[0](report({ verdict: "current" }));
+  await first;
+  assert.match(p.el.textContent, /built here from this version/);
+  assert.doesNotMatch(p.el.textContent, /this is the image for this version/);
+  // An older failure does not hide a newer success either.
+  const q = page(() => new Promise((res, rej) => waits.push({ res, rej })));
+  waits.length = 0;
+  const a = q.ctx.loadBoxImage();
+  const b = q.ctx.loadBoxImage();
+  waits[1].res(report());
+  await b;
+  waits[0].rej(new Error("late"));
+  await a;
+  assert.equal(q.el.hidden, false);
+});
+
+test("a phone does not fetch; a desktop width does; no matchMedia fetches", async () => {
+  const run = async (win) => {
+    let calls = 0;
+    const p = page(async () => { calls++; return report(); }, win);
+    await p.ctx.loadBoxImage();
+    return { calls, hidden: p.el.hidden };
+  };
+  const asked = [];
+  const mm = (matches) => ({ matchMedia: (q) => { asked.push(q); return { matches }; } });
+  assert.deepEqual(await run(mm(false)), { calls: 0, hidden: true });
+  assert.deepEqual(await run(mm(true)), { calls: 1, hidden: false });
+  assert.deepEqual(asked, ["(min-width: 701px)", "(min-width: 701px)"]);
+  assert.deepEqual(await run({}), { calls: 1, hidden: false });
+  assert.deepEqual(await run(undefined), { calls: 1, hidden: false });
+});
+
 // --- wiring ---------------------------------------------------------------------------------------------------------------------
 test("index.html: the hidden container follows the runtime line and the script sits beside bugreport.js", () => {
   const html = read("index.html");
@@ -257,6 +318,18 @@ test("desktop.css draws the rows in the About card with kit tokens only", () => 
   assert.match(body, /var\(--font-code\)/);
   assert.ok(!/#[0-9a-f]{3,8}\b|rgb\(/i.test(body), "no literal colours");
   assert.ok(!/font-weight:\s*(700|800|900|bold)/.test(body));
+  // Each group is a card row divided like the others; the lines in it sit 4px apart; secondary text is --muted.
+  const g = /#about-image \.bi-group \{([^}]*)\}/.exec(css);
+  assert.ok(g, "a rule for the groups");
+  assert.match(g[1], /padding: 12px 16px/);
+  assert.match(g[1], /border-top: 1px solid var\(--line\)/);
+  assert.match(g[1], /flex-direction: column/);
+  assert.match(g[1], /gap: 4px/);
+  assert.match(/#about-image \.bi-fine \{([^}]*)\}/.exec(css)[1], /color: var\(--muted\); font-size: var\(--t-sm\)/);
+  assert.match(/#about-image \.bi-muted \{([^}]*)\}/.exec(css)[1], /color: var\(--muted\)/);
+  // Nothing outside the desktop media block can show the container: every #about-image rule is in it, and [hidden] still wins.
+  assert.match(css, /#about-image\[hidden\] \{ display: none; \}/);
+  assert.ok(!/(^|\})\s*#about-image/m.test(css.replace(/@media \(min-width: 701px\) \{[\s\S]*$/, "")));
   // The runtime row is no longer the card's only top row once the image rows follow it: it keeps the top radius, the last row the bottom one.
   assert.match(css, /#about > #about-runtime \{[^}]*border-radius: var\(--r-card\) var\(--r-card\) 0 0/);
 });

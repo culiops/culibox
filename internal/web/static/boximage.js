@@ -79,11 +79,10 @@ function biUpdateRows(r) {
   }
   if (typeof r.download_mb === "string" && r.download_mb) rows.push({ label: "", text: "about " + r.download_mb + " MB to download" });
   const line = typeof r.config_line === "string" ? r.config_line : "";
-  if (line) rows.push(Object.assign(biDigestRow("", line, true), { code: true }));
-  const run = { label: "", text: (line ? "then run: " : "run: ") + (r.setup_cmd || BI_SETUP) };
+  if (line) rows.push(biDigestRow("", line, true));
+  rows.push({ label: "", text: (line ? "then run: " : "run: ") + (r.setup_cmd || BI_SETUP) });
   const at = biDate(r.checked_at, true);
-  if (at) run.note = "Checked " + at + " · nothing changes until you do";
-  rows.push(run);
+  if (at) rows.push({ label: "", text: "Checked " + at + " · nothing changes until you do", fine: true });
   return rows;
 }
 
@@ -91,7 +90,7 @@ function biScanRow(s) {
   if (!s || typeof s !== "object" || !Number.isInteger(s.count) || s.count < 0) return null;
   if (s.count === 0) return { label: "Weekly scan", text: "no fixable HIGH/CRITICAL in the published images" };
   const row = { label: "Weekly scan", text: s.count + " fixable HIGH/CRITICAL in the published images" };
-  if (Number.isInteger(s.number) && s.number > 0) {
+  if (Number.isSafeInteger(s.number) && s.number > 0) {
     row.text += " (#" + s.number + ")";
     row.href = BI_ISSUES + s.number;
   }
@@ -99,7 +98,7 @@ function biScanRow(s) {
 }
 
 // boxImageRows turns a /api/box-image report into display rows: {label, text, code?, title?, note?, copy?, href?}. An empty
-// label is a continuation of the row above. [] when r is not a report, so the container stays hidden.
+// label is a continuation of the row above; muted / fine rows are secondary text (fine is also the smaller size). [] when r is not a report, so the container stays hidden.
 function boxImageRows(r) {
   if (!r || typeof r !== "object" || Array.isArray(r)) return [];
   const rows = [];
@@ -112,7 +111,7 @@ function boxImageRows(r) {
     const built = biDate(info.created, false);
     if (built) facts.push("built " + built);
     if (typeof info.claude_code === "string" && info.claude_code) facts.push("Claude Code " + info.claude_code);
-    if (facts.length) rows.push({ label: "", text: facts.join(" · ") });
+    if (facts.length) rows.push({ label: "", text: facts.join(" · "), muted: true });
   } else if (typeof r.configured === "string" && r.configured) {
     rows.push(biDigestRow("Box image", r.configured, false));
   }
@@ -142,7 +141,7 @@ function biValue(row) {
     };
     return a;
   }
-  const v = biEl("span", row.code ? "bi-code" : "bi-text", row.text);
+  const v = biEl("span", row.code ? "bi-code" : "bi-text" + (row.fine ? " bi-fine" : row.muted ? " bi-muted" : ""), row.text);
   if (row.title) v.setAttribute("title", row.title);
   return v;
 }
@@ -166,18 +165,40 @@ function biRow(row) {
   return div;
 }
 
+// A row with a label starts a group (Box image, For this version, Weekly scan); the unlabelled rows after it belong to it.
+function groupRows(rows) {
+  const groups = [];
+  for (const row of rows) {
+    if (row.label || !groups.length) groups.push([row]);
+    else groups[groups.length - 1].push(row);
+  }
+  return groups;
+}
+
+function biGroup(rows) {
+  const g = biEl("div", "bi-group");
+  rows.forEach((row) => g.appendChild(biRow(row)));
+  return g;
+}
+
 // loadBoxImage fills #about-image. The container is shown only after a report arrived: a CuliBox with no hook (404), a
 // network failure or an answer that is not a report leaves it hidden and empty, so About looks as it did before.
+// A phone never shows the rows (app.css hides them), so it does not ask; an environment with no matchMedia asks.
+// A slower, older answer never overwrites a newer one (the tab can be opened twice quickly).
+let biSeq = 0;
 async function loadBoxImage() {
   const el = document.getElementById("about-image");
   if (!el) return;
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 701px)").matches) return;
+  const seq = ++biSeq;
   let rows = [];
   try {
     rows = boxImageRows(await api("/api/box-image"));
   } catch (_) {
     rows = [];
   }
-  el.replaceChildren(...rows.map(biRow));
+  if (seq !== biSeq) return;
+  el.replaceChildren(...groupRows(rows).map(biGroup));
   el.hidden = rows.length === 0;
 }
 
