@@ -38,11 +38,11 @@ folder-tree
 git-commit-horizontal
 git-compare
 globe
-grid-2x2
 image
 info
 key-round
 layers
+layout-grid
 list-filter
 loader-circle
 lock

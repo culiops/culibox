@@ -70,8 +70,8 @@ const ICON_DOCK_VIEW = iconMapOf({
   more: "ellipsis", swipe: "square-split-horizontal", onion: "layers",
 });
 
-// The layout picker, by pane count (G4 1; 1 and 4 match the shapes drawn today, sidechrome.js).
-const ICON_LAYOUT = iconMapOf({ 1: "square", 2: "columns-2", 4: "grid-2x2" });
+// The layout picker, by pane count (G4 1; 1 matches the shape drawn today, sidechrome.js; 4 follows the approved G4 legend n1).
+const ICON_LAYOUT = iconMapOf({ 1: "square", 2: "columns-2", 4: "layout-grid" });
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {

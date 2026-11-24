@@ -72,7 +72,7 @@ function page() {
 
 test("layout button glyph by pane count", () => {
   const { btn } = page();
-  for (const [n, name] of [[1, "square"], [2, "columns-2"], [4, "grid-2x2"]]) {
+  for (const [n, name] of [[1, "square"], [2, "columns-2"], [4, "layout-grid"]]) {
     SC.xlayPaint(btn, n);
     assert.equal(btn.children.length, 1, "a repaint replaces the glyph");
     const svg = btn.children[0];
@@ -102,7 +102,7 @@ test("xlayMenuBuild: three radio items, the current one ticked", () => {
   assert.deepEqual(items.map((b) => b.getAttribute("aria-checked")), ["false", "true", "false"]);
   assert.deepEqual(items.map((b) => b.classList.contains("on")), [false, true, false]);
   assert.deepEqual(items.map((b) => b.querySelector(".menu-kbd").children.length), [0, 1, 0]);
-  assert.deepEqual(items.map((b) => b.querySelector(".menu-icon svg").getAttribute("data-icon")), ["square", "columns-2", "grid-2x2"], "each row draws its own layout");
+  assert.deepEqual(items.map((b) => b.querySelector(".menu-icon svg").getAttribute("data-icon")), ["square", "columns-2", "layout-grid"], "each row draws its own layout");
   assert.deepEqual(items.map((b) => b.querySelector(".menu-icon svg").getAttribute("width")), ["14", "14", "14"]);
   items[2].click();
   assert.deepEqual(got, [4]);
