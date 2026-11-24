@@ -1,0 +1,2 @@
+# One icon name per line, sorted; "si:" prefix = Simple Icons mark, else Lucide.
+# Input of tools/iconsgen (docs/ICONS.md "Regenerating").
