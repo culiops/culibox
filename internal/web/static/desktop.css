@@ -1114,6 +1114,14 @@
   @container (max-width: 210px) {
     .ph-shell { display: none; }
   }
+  /* The tier chip's glyph costs the name 14px (11 + the 3px gap). In a pane under 262px (243px of content box) with the tab
+     switcher, that is where "agent-box ▾ · 2" ellipsized where it did not before (measured 227-255px). The chip's word still names the tier;
+     the count's chevron closes up (no gap, -2px: the glyph's own side padding stays) to give back the rest of what the text caret took. */
+  @container (max-width: 243px) {
+    .ph-chip .ui-icon { display: none; }
+    .ph-cnt { gap: 0; }
+    .ph-cnt .ui-icon { margin-right: -2px; }
+  }
 
   /* Panes meet on a 1px line, edge to edge (p0/p2), instead of floating in
      an 8px gutter: the room goes to the panes. Two panes at 1440px (575px each,

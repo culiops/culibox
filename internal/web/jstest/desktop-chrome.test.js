@@ -575,6 +575,17 @@ test("+ Shell: the plus glyph is hidden wide and shown by the compact rule, whic
   assert.ok(!/ph-shell::before/.test(compact) && rulesFor(".ph-shell::before").length === 0, "no text plus");
 });
 
+test("a pane under 262px hides the chip's tier glyph, so the name keeps the 14px it costs; the word still names the tier", () => {
+  const rule = headerRule(/^\s*\.ph-chip \.ui-icon\s*\{/);
+  assert.ok(rule, "the rule exists, inside a container query");
+  assert.ok(/\.ph-chip \.ui-icon \{ display: none; \}/.test(rule.body.replace(/\s+/g, " ")));
+  assert.strictEqual(rule.px, 243, "243px of content box = a 262px pane (measured: the name ellipsized at 227-255 with the glyph)");
+  assert.ok(rule.px + 18 > 255 && rule.px < headerRule(/^\s*\.ph-tabs:not\(\.one\), \.ph-files\s*\{/).px, "above the widest measured loss, below the collapse rule");
+  const flat = rule.body.replace(/\s+/g, " ");
+  assert.ok(!/\.ph-sh-i|\.ph-ic\b/.test(flat) && !/\.ph-cnt[^}]*display/.test(flat), "only the chip's glyph goes: the switcher chevron and the controls stay");
+  assert.ok(/\.ph-cnt \{ gap: 0; \}/.test(flat) && /\.ph-cnt \.ui-icon \{ margin-right: -2px; \}/.test(flat), "the count's chevron closes up in the same pane widths");
+});
+
 test("the header's chip, switcher count and icon buttons lay their glyphs out", () => {
   assert.ok(rulesFor(".ph-chip.has-tier").some((b) => /display:\s*inline-flex/.test(b) && /align-items:\s*center/.test(b) && /gap:\s*3px/.test(b)), "a tier chip: glyph, 3px, word");
   assert.ok(rulesFor(".ph-chip.host .ui-icon").some((b) => /color:\s*var\(--fg\)/.test(b)), "the host glyph is --fg, as the sidebar's");
