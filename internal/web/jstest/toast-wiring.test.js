@@ -717,17 +717,14 @@ test("desktop.css: .toast-paused and .toast-act live in the kit section; the pen
   assert.match(kit, /:where\(\.toast\) \.spin\s*\{[^}]*animation:\s*spawn-pulse/);
 });
 
-test("desktop.css: a toast's glyph and dot sit on the text's first line, and the glyph is never inside .toast-text (#168)", () => {
-  const raw = read("desktop.css");
-  const kit = stripComments(raw.slice(raw.indexOf("/* === kit primitives (2026-11, #171) === */"), raw.indexOf("/* === end kit primitives === */")));
-  assert.match(kit, /\.toast > \.ui-icon\s*\{[^}]*align-self:\s*flex-start/);
-  assert.match(kit, /\.toast > \.dot:has\(\+ \.ui-icon\)\s*\{[^}]*align-self:\s*flex-start/);
-  assert.match(kit, /\.toast:has\(> \.ui-icon\) > \.toast-text\s*\{[^}]*align-self:\s*flex-start/);
-  assert.ok(!/\.toast-text[^{]*\.ui-icon/.test(kit), "no rule styles an icon inside the text");
-  // The phone keeps its own slot and its ×: shell.js's phone path writes the text glyph, never an icon.
-  const shell = read("shell.js");
-  const phone = shell.slice(shell.indexOf("function showToast"), shell.indexOf("function showToast") + 4000);
-  assert.ok(!/uiIcon/.test(phone.slice(0, phone.indexOf("\n}\n"))), "showToast's phone path draws no icon");
+test("the phone's #toast-x keeps its × text and draws no svg (#168: the desktop glyph is not on the phone)", () => {
+  const html = read("index.html");
+  const at = html.indexOf('id="toast-x"');
+  assert.ok(at >= 0, "#toast-x is in index.html");
+  const open = html.lastIndexOf("<button", at);
+  const whole = html.slice(open, html.indexOf("</button>", at) + 9);
+  assert.match(whole, />\s*×\s*<\/button>$/);
+  assert.ok(!whole.includes("<svg"), "no svg in the phone's close");
 });
 
 // --- callers -------------------------------------------------------------------------
