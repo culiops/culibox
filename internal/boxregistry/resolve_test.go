@@ -1,4 +1,4 @@
-package main
+package boxregistry
 
 import (
 	"context"
@@ -135,7 +135,7 @@ func both(label string) []platform {
 func resolveFrom(t *testing.T, r *registry) (string, error) {
 	t.Helper()
 	srv := r.serve()
-	return resolve(context.Background(), srv.Client(), srv.URL, "culiops/culibox", testHash)
+	return Resolve(context.Background(), srv.Client(), srv.URL, "culiops/culibox", testHash)
 }
 
 func TestResolveHappy(t *testing.T) {

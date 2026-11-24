@@ -1,4 +1,4 @@
-package main
+package boxregistry
 
 import (
 	"context"
@@ -46,13 +46,13 @@ type descriptor struct {
 // Strings the registry supplies are printed with %q: this runs in a GitHub
 // Actions step, which reads "::" commands from a line's start.
 //
-// resolve finds the published box image built from the Dockerfile whose Hash is
+// Resolve finds the published box image built from the Dockerfile whose Hash is
 // hash: the index tagged dockerfile-<hash> in repoPath on registry. It returns
 // boximage.PublishedRepo@<index digest> only when the index holds exactly
 // wantPlatforms and every platform's image carries the label boximage.LabelHash =
 // hash. Every body is hashed and must equal the digest that named it, so nothing
 // here trusts the registry's word for what it served.
-func resolve(ctx context.Context, c *http.Client, registry, repoPath, hash string) (string, error) {
+func Resolve(ctx context.Context, c *http.Client, registry, repoPath, hash string) (string, error) {
 	tag := "dockerfile-" + hash
 	token, err := pullToken(ctx, c, registry, repoPath)
 	if err != nil {
