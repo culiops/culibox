@@ -389,32 +389,31 @@ type adoption struct {
 
 // slug moves the entries of one workspace folder of the home.
 func (a *adoption) slug(slug string) {
-	src, err := a.home.Open(conversationsRel + "/" + slug)
+	// Both opens are openDirIn's: a name swapped for a FIFO after it was
+	// listed or Lstat'ed fails to open, it never blocks ensure under opMu.
+	src, err := openDirIn(a.home, conversationsRel+"/"+slug)
 	if err != nil {
 		a.kept++
 		return
 	}
 	defer src.Close()
-	if fi, err := src.Stat(); err != nil || !fi.IsDir() {
-		a.kept++
-		return
-	}
 	if err := a.conv.Mkdir(slug, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 		a.kept++
 		return
 	}
-	if fi, err := a.conv.Lstat(slug); err != nil || !fi.IsDir() {
+	lfi, err := a.conv.Lstat(slug)
+	if err != nil || !lfi.IsDir() {
 		a.kept++ // a box of this profile put something else there
 		return
 	}
-	dst, err := a.conv.Open(slug)
+	dst, err := openDirIn(a.conv, slug)
 	if err != nil {
 		a.kept++
 		return
 	}
 	defer dst.Close()
-	if fi, err := dst.Stat(); err != nil || !fi.IsDir() {
-		a.kept++
+	if fi, err := dst.Stat(); err != nil || !os.SameFile(lfi, fi) {
+		a.kept++ // swapped since the Lstat (os.Root follows a link inside the folder)
 		return
 	}
 	// The names first, then the moves: the listing is not read while it changes.

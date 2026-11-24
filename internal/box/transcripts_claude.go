@@ -87,8 +87,9 @@ func holdsConversations(ctx context.Context, dir string) bool {
 
 // eachEntry calls visit for every entry of the directory rel under root, in
 // chunks, until visit returns false. It stops with ctx's error when ctx is done.
+// rel is opened with openDirIn: one swapped for a FIFO fails, never blocks.
 func eachEntry(ctx context.Context, root *os.Root, rel string, visit func(fs.DirEntry) bool) error {
-	f, err := root.Open(rel)
+	f, err := openDirIn(root, rel)
 	if err != nil {
 		return err
 	}

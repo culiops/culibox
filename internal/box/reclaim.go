@@ -393,10 +393,11 @@ const maxCacheDepth = 64
 
 // walkCache calls visit for every entry under rel, which has passed plainPath,
 // down to maxCacheDepth, and stops with ctx's error as soon as ctx is done.
-// visit runs on a directory before it is read.
+// visit runs on a directory before it is read. Directories are opened with
+// openDirIn (dirFS): one swapped for a FIFO is skipped, never waited on.
 func walkCache(ctx context.Context, root *os.Root, rel string, visit func(p string, d fs.DirEntry)) error {
 	top := strings.Count(rel, "/")
-	return fs.WalkDir(root.FS(), rel, func(p string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(dirFS{root}, rel, func(p string, d fs.DirEntry, err error) error {
 		if cerr := ctx.Err(); cerr != nil {
 			return cerr
 		}
