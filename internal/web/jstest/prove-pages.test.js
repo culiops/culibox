@@ -814,11 +814,12 @@ test("a card too narrow for the fixed columns sizes them to content, in a contai
   // Three @containers, all on the card: the first below the fixed columns plus ~240px for What, the second (the narrow tier) below,
   // the third at and above the fixed layout (the Outcome's one line, next test).
   const queries = [...new Set(CONTAINER_RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(AU + " .au-tbl"))).flatMap((r) => r.at.filter((a) => a.startsWith("@container"))))];
-  assert.deepStrictEqual(queries, ["@container au-card (max-width: 769px)", "@container au-card (max-width: 479px)", "@container au-card (min-width: 770px)"]);
-  const max = Number(/max-width:\s*(\d+)px/.exec(queries[0])[1]);
-  assert.ok(max + 1 >= fixed + 240, "What keeps about 240px (" + (max + 1 - fixed) + "px)");
-  assert.ok(max + 1 <= fixed + 260, "and the fixed layout is not given up sooner than that");
-  const tier = (q) => CONTAINER_RULES.filter((r) => r.at.includes("@container au-card (max-width: " + q + "px)"));
+  assert.deepStrictEqual(queries, ["@container au-card (width < 770px)", "@container au-card (max-width: 479px)", "@container au-card (width >= 770px)"]);
+  // The pair is range syntax so a fractional card width (769.5px) falls in exactly one of them.
+  const limit = Number(/width < (\d+)px/.exec(queries[0])[1]);
+  assert.ok(limit >= fixed + 240, "What keeps about 240px (" + (limit - fixed) + "px)");
+  assert.ok(limit <= fixed + 260, "and the fixed layout is not given up sooner than that");
+  const tier = (q) => CONTAINER_RULES.filter((r) => r.at.includes(q === 769 ? "@container au-card (width < 770px)" : "@container au-card (max-width: " + q + "px)"));
   const inside = (sel, q = 769) => decls(sel, tier(q));
   assert.strictEqual(inside(AU + " .au-tbl").get("table-layout"), "auto");
   for (const i of [1, 2, 3, 5]) assert.strictEqual(inside(AU + " .au-tbl th:nth-child(" + i + ")").get("width"), "auto", "th " + i);
@@ -827,7 +828,6 @@ test("a card too narrow for the fixed columns sizes them to content, in a contai
   assert.deepStrictEqual(tier(769).filter((r) => parts(r.selector).some((s) => s.startsWith(AU))).flatMap((r) => [...r.decls.keys()]).sort(),
     ["display", "table-layout", "width"]);
   assert.strictEqual(inside(AU + " .au-tbl :is(td.au-kind, td.au-out) > .ui-icon").get("display"), "none", "no glyph where What would pay for it");
-
 
   // Under 480px of card (a window of 840px or less) the columns' own minimums still overran it (Gate 3 D1: What 54px at 701px, the
   // table 53px wider than its card, Outcome cut). Time, Session, Kind and Outcome are held to their narrowest (1%: a column never
@@ -860,22 +860,26 @@ test("a card too narrow for the fixed columns sizes them to content, in a contai
 // nowrap comes before the narrow card's wrap or is a base rule.
 test("the Outcome is one line at a card of 770px or more and wraps below, whatever the rule order", () => {
   const sel = AU + " .au-tbl td.au-out";
+  // The condition is one of (min-width: N), (max-width: N), (width < N) or (width >= N); anything else fails closed (holds nothing).
   const holds = (r, w) => r.at.filter((a) => a.startsWith("@container")).every((a) => {
-    const m = /\((min|max)-width:\s*(\d+)px\)/.exec(a);
-    return m && (m[1] === "min" ? w >= Number(m[2]) : w <= Number(m[2]));
+    const m = /\((?:(min|max)-width:\s*(\d+)px|width (<|>=) (\d+)px)\)$/.exec(a);
+    if (!m) return false;
+    if (m[1]) return m[1] === "min" ? w >= Number(m[2]) : w <= Number(m[2]);
+    return m[3] === "<" ? w < Number(m[4]) : w >= Number(m[4]);
   });
   const ws = (w) => {
     let v;
     for (const r of RULES) if (parts(r.selector).includes(sel) && r.decls.has("white-space") && holds(r, w)) v = r.decls.get("white-space");
     return v;
   };
-  for (const w of [340, 399, 479, 480, 600, 769]) assert.strictEqual(ws(w), "normal", w + "px card wraps");
+  for (const w of [340, 399, 479, 480, 600, 769, 769.5]) assert.strictEqual(ws(w), "normal", w + "px card wraps");
   for (const w of [770, 919, 1079]) assert.strictEqual(ws(w), "nowrap", w + "px card is one line");
   // The nowrap is a container rule on the card, not a base rule.
   assert.ok(!BASE_RULES.some((r) => parts(r.selector).includes(sel) && r.decls.get("white-space") === "nowrap"));
   // Its glyph is hidden exactly where the Outcome wraps.
   const hidden = (w) => CONTAINER_RULES.some((r) => parts(r.selector).includes(AU + " .au-tbl :is(td.au-kind, td.au-out) > .ui-icon") && r.decls.get("display") === "none" && holds(r, w));
   assert.strictEqual(hidden(769), true);
+  assert.strictEqual(hidden(769.5), true);
   assert.strictEqual(hidden(770), false);
 });
 

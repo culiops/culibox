@@ -117,10 +117,10 @@ test("account row: an unknown provider draws no mark and the text is unchanged",
   }
 });
 
-test("account row: a missing or empty provider shows no word, no mark, no undefined and no leading separator", () => {
+test("account row: a missing, empty or whitespace-only provider shows no word, no mark, no undefined and no leading separator", () => {
   const ctxRow = (a) => ctxWith(["accounts.js"], fakeDoc(), { renderRateLimitsInto: () => 0 }).acctRow(a, null, 0).querySelector(".acct-meta");
   const base = { name: "old", login_state: "logged_in", config_dir: "/h/.claude-old", default: true };
-  for (const a of [base, { ...base, provider: "" }, { ...base, provider: null }]) {
+  for (const a of [base, { ...base, provider: "" }, { ...base, provider: null }, { ...base, provider: "  " }]) {
     const meta = ctxRow(a);
     assert.equal(meta.querySelector("svg"), null);
     assert.equal(meta.querySelector(".acct-prov"), null);

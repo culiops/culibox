@@ -321,8 +321,8 @@ function acctRow(a, limits, now) {
   const meta = document.createElement("span");
   meta.className = "acct-meta";
   const rest = acctLoginText(a.login_state) + " · " + a.config_dir;
-  // An account from an older server may carry no provider: then there is no word, no mark and no leading separator.
-  if (a.provider == null || a.provider === "") meta.textContent = rest;
+  // An account from an older server may carry no provider (or an empty / whitespace-only one): then there is no word, no mark and no leading separator.
+  if (a.provider == null || String(a.provider).trim() === "") meta.textContent = rest;
   else {
     // The provider's mark (#168 G2 13) keys on the declared provider, at chip size 12 (the frame's); one with no mark
     // keeps the plain word. The glyph is the desktop page's (app.css hides it on the phone), the words are the same on both.

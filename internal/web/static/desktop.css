@@ -3661,7 +3661,7 @@
      about 1124px, the sidebar being 290px and the page's sides 64px) What would shrink to its cell padding and every row wrap to a
      character a line, with the card clipping whatever ran past its edge. There the table sizes its columns to their content
      instead: Time and Kind stay on one line, Session, What and Outcome wrap, nothing clips and nothing scrolls sideways. */
-  @container au-card (max-width: 769px) {
+  @container au-card (width < 770px) {
     #page-host > #audit-page.as-page .au-tbl { table-layout: auto; }
     /* The glyphs would take 40px of What here and push the table past its card at 760px; without them this card is what it was
        before the glyphs (#168), so the glyphs show only where the columns are fixed and What has room. */
@@ -3706,7 +3706,7 @@
      glyph); a longer one would be cut by the card's edge, not wrapped. Below 770px the columns size to content, the glyph is
      hidden and the base rule above wraps it, as before. This rule is inside the container query, not a base rule: a container
      rule adds no weight, so it must come after the base white-space it overrides and apply only here. */
-  @container au-card (min-width: 770px) {
+  @container au-card (width >= 770px) {
     #page-host > #audit-page.as-page .au-tbl td.au-out { white-space: nowrap; }
   }
   /* au-ok has the muted rules' weight and comes after them, so it wins; au-bad out-weighs them. */

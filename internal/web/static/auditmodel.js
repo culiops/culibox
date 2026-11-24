@@ -21,7 +21,7 @@ const AUD_BAD = new Set(["dial_error", "failed"]);
 const AUD_ELEV_LIVE = new Set(["granted", "extended"]);
 
 // iconmap.js's lookup and maps: page globals in the browser, required under node (as accessmodel.js does for credentials.js).
-const audIconMaps = () => (typeof iconOf === "function" ? { iconOf, ICON_AUDIT_KIND, ICON_CRED_PROVIDER } : require("./iconmap.js"));
+const AUD_ICON_MAPS = typeof iconOf === "function" ? { iconOf, ICON_AUDIT_KIND, ICON_CRED_PROVIDER } : require("./iconmap.js");
 
 // A refusal is containment working: neutral in colour, but the glyph says it was stopped (G2 21).
 function audRefused(o) {
@@ -88,11 +88,12 @@ function auditRowView(ev, names) {
   // or extended elevation is red because it is a live write, not an error, so it gets none (G2 left-out l); every other
   // neutral outcome (created, unlocked, dropped, allowed_private ...) gets none too.
   let outcomeIcon = "";
-  if (elevated) outcomeIcon = "";
-  else if (tone === "ok") outcomeIcon = "circle-check";
-  else if (audRefused(o)) outcomeIcon = "ban";
-  else if (tone === "bad") outcomeIcon = "circle-x";
-  const m = audIconMaps();
+  if (!elevated) {
+    if (tone === "ok") outcomeIcon = "circle-check";
+    else if (audRefused(o)) outcomeIcon = "ban";
+    else if (tone === "bad") outcomeIcon = "circle-x";
+  }
+  const m = AUD_ICON_MAPS;
   const kindIcon = e.kind === "credential" ? m.iconOf(m.ICON_CRED_PROVIDER, e.provider, "key-round") : m.iconOf(m.ICON_AUDIT_KIND, e.kind);
   return {
     time: audTime(e.ts),
