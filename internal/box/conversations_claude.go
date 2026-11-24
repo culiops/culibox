@@ -120,6 +120,18 @@ func (m *Manager) ConversationsKeyOf(name string) string {
 	return m.conv[name]
 }
 
+// ConversationsKeyFor is the key of the conversations folder Wrap mounts for a
+// spawn of profile under account in workspace (its real, symlink-resolved
+// path), or "" when profile is "" (Wrap mounts none). Wrap computes its key with
+// this, so a session record from before #330, which kept no key, can be given
+// the same one (#330).
+func (m *Manager) ConversationsKeyFor(workspace, account, profile string) string {
+	if profile == "" {
+		return ""
+	}
+	return ConversationsKey(m.opts.Instance, workspace, account, profile)
+}
+
 // conversationsKeyAt is the key of the conversations folder at host path src
 // under stateRoot, or "" when src is not one.
 func conversationsKeyAt(stateRoot, src string) string {
@@ -308,14 +320,14 @@ var maxAdoptEntries = 10000
 // Each entry of <projects>/<slug>/ moves to <convDir>/<slug>/ when the folder has
 // no such name: a regular file is hard-linked there and then unlinked from the
 // home (a link never replaces a name), a real directory (a conversation's
-// subagents and tool results) is renamed. A rename never replaces a file or a
-// non-empty directory, but it does replace an empty directory: one that another
-// box of the profile creates under that name between the check and the rename
-// is replaced while it holds nothing yet (a no-replace rename is Linux-only,
-// and macOS must behave the same). Both run on directory descriptors, one
-// opened through an os.Root on the home and one through an os.Root on the
-// folder, so no path is resolved
-// again between the check and the move. Types come from the directory listing,
+// subagents and tool results) is renamed with renameNoReplace (renameat2
+// RENAME_NOREPLACE on Linux, renameatx_np RENAME_EXCL on macOS), so not even
+// an empty directory another box of the profile creates under that name
+// between the check and the rename is replaced; only where the filesystem has
+// no such rename does a plain one replace that empty directory. Both run on
+// directory descriptors, one opened through an os.Root on the home and one
+// through an os.Root on the folder, so no path is resolved again between the
+// check and the move. Types come from the directory listing,
 // which does not follow links: a symlink, a FIFO or anything else stays in the
 // home, and so does a slug that is not a real directory. The hook, when set, is
 // told before each move; its error stops the adoption there. At most
@@ -389,32 +401,31 @@ type adoption struct {
 
 // slug moves the entries of one workspace folder of the home.
 func (a *adoption) slug(slug string) {
-	src, err := a.home.Open(conversationsRel + "/" + slug)
+	// Both opens are openDirIn's: a name swapped for a FIFO after it was
+	// listed or Lstat'ed fails to open, it never blocks ensure under opMu.
+	src, err := openDirIn(a.home, conversationsRel+"/"+slug)
 	if err != nil {
 		a.kept++
 		return
 	}
 	defer src.Close()
-	if fi, err := src.Stat(); err != nil || !fi.IsDir() {
-		a.kept++
-		return
-	}
 	if err := a.conv.Mkdir(slug, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 		a.kept++
 		return
 	}
-	if fi, err := a.conv.Lstat(slug); err != nil || !fi.IsDir() {
+	lfi, err := a.conv.Lstat(slug)
+	if err != nil || !lfi.IsDir() {
 		a.kept++ // a box of this profile put something else there
 		return
 	}
-	dst, err := a.conv.Open(slug)
+	dst, err := openDirIn(a.conv, slug)
 	if err != nil {
 		a.kept++
 		return
 	}
 	defer dst.Close()
-	if fi, err := dst.Stat(); err != nil || !fi.IsDir() {
-		a.kept++
+	if fi, err := dst.Stat(); err != nil || !os.SameFile(lfi, fi) {
+		a.kept++ // swapped since the Lstat (os.Root follows a link inside the folder)
 		return
 	}
 	// The names first, then the moves: the listing is not read while it changes.
@@ -468,7 +479,7 @@ func (a *adoption) slug(slug string) {
 				// Moved all the same: the folder's copy is the one the box sees.
 				log.Printf("box: conversation %s copied into %s but not removed from the home: %v", n, a.to, err)
 			}
-		} else if err := unix.Renameat(sfd, n, dfd, n); err != nil {
+		} else if err := renameNoReplace(sfd, n, dfd, n); err != nil {
 			a.kept++
 			continue
 		}
@@ -488,8 +499,9 @@ type ConversationsStats struct {
 // ConversationsUsage counts the conversations folders under stateRoot and
 // their size, for doctor. Read-only. Boxes write in these folders while it
 // runs, so each folder is walked through an os.Root on it: no link is followed
-// (one is not descended, its own size is not counted), and a directory swapped
-// for a link while it is walked leads nowhere outside the folder. At most
+// (one is not descended, its own size is not counted), a directory swapped
+// for a link while it is walked leads nowhere outside the folder, and one
+// swapped for a FIFO fails to open (openDirIn) rather than hang doctor. At most
 // maxCacheDepth levels are read (an os.Root walk costs the square of the
 // depth); deeper, nothing is counted and Sized is false. ctx bounds the walk:
 // cut short, it returns what it has with ctx's error and Sized false.
@@ -517,7 +529,7 @@ func ConversationsUsage(ctx context.Context, stateRoot string) (ConversationsSta
 			st.Sized = false
 			continue
 		}
-		err = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
+		err = fs.WalkDir(dirFS{root}, ".", func(p string, d fs.DirEntry, err error) error {
 			if cerr := ctx.Err(); cerr != nil {
 				return cerr
 			}

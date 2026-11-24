@@ -708,3 +708,83 @@ func TestConversationsUsageStopsAtTheDepthCap(t *testing.T) {
 		t.Fatalf("usage = %+v %v, want 1 folder, 10 bytes counted, size partial", u, err)
 	}
 }
+
+// A session record from before #330 has no key: ConversationsKeyFor gives the
+// session layer the key Wrap would mount for the same workspace, account and
+// profile, with the same normalisation ("default" is ""), and none without a
+// profile, as Wrap mounts none.
+func TestConversationsKeyForMatchesWrap(t *testing.T) {
+	for _, acct := range []string{"", "default", "work"} {
+		m, _ := newTestManagerWithFake(t)
+		ws := realTemp(t)
+		key := BoxKey{Profile: "p", Account: acct}
+		_, _, name, err := m.Wrap(context.Background(), ws, "s1", key, []string{"bash"}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := m.ConversationsKeyFor(ws, acct, "p"), m.ConversationsKeyOf(name); got != want || want == "" {
+			t.Fatalf("account %q: ConversationsKeyFor = %q, Wrap mounted %q", acct, got, want)
+		}
+	}
+	m := newTestManager(t)
+	if got := m.ConversationsKeyFor("/w", "", ""); got != "" {
+		t.Fatalf("no profile: %q", got)
+	}
+}
+
+// A box of the profile can create an empty folder under the name a home's
+// conversation folder is about to move to, after the check: the rename does
+// not replace it (no-replace rename on Linux and macOS), so the home keeps its
+// folder and the box's stays as it made it.
+func TestAdoptionRenameNeverReplacesAFolderMadeAfterTheCheck(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	ws := realTemp(t)
+	name, _ := m.BoxName(ws, convKey("p"))
+	home := m.stateDir(name)
+	seedProjects(t, home, map[string]string{"-w/a/subagents/agent.jsonl": "S"})
+	conv, err := ensureConversationsDir(m.opts.StateRoot, ConversationsKey("TEST", ws, "", "p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetAdoptHook(func(_, to string) error { return os.Mkdir(to, 0o700) })
+	m.adoptConversations(context.Background(), name, conv)
+	if got := readOr(filepath.Join(home, ".claude", "projects", "-w", "a", "subagents", "agent.jsonl")); got != "S" {
+		t.Fatalf("the home's folder was moved over the box's: %q", got)
+	}
+	if ents, err := os.ReadDir(filepath.Join(conv, "-w", "a")); err != nil || len(ents) != 0 {
+		t.Fatalf("the box's folder was replaced: %v %v", ents, err)
+	}
+}
+
+// renameNoReplace moves a name that is free and refuses one that is taken,
+// whatever is there, on every OS CuliBox builds for.
+func TestRenameNoReplace(t *testing.T) {
+	dir := t.TempDir()
+	for _, p := range []string{"src", "src2", "empty"} {
+		if err := os.Mkdir(filepath.Join(dir, p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	fd := int(d.Fd())
+	for _, taken := range []string{"empty", "file"} {
+		if err := renameNoReplace(fd, "src", fd, taken); !errors.Is(err, syscall.EEXIST) {
+			t.Fatalf("onto %s: %v, want EEXIST", taken, err)
+		}
+	}
+	if err := renameNoReplace(fd, "src", fd, "free"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"free", "empty", "file", "src2"} {
+		if _, err := os.Lstat(filepath.Join(dir, p)); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+	}
+}

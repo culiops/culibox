@@ -2,3 +2,6 @@
 # Both are a made-up user name in a test fixture path (#364); the fixture now uses an allowlisted placeholder.
 414e0aeea726926e15af23c6612b5c2f46b7507a:internal/web/fslink_test.go:culibox-home-path:140
 eb83747b4275647e9269cc878bf605624cf42379:internal/web/fslink_test.go:culibox-home-path:140
+# A made-up conversations-folder id in a test fixture, named like a key (#330); the fixture no longer is.
+f5a31f26ac9e93131e1c9204a0ca97fc5af529df:internal/session/transcripts_claude_test.go:generic-api-key:15
+735ecdf9006339d4b31082f87eb86ba1238e38d5:internal/session/transcripts_claude_test.go:generic-api-key:15

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -598,5 +599,57 @@ func TestRewritePathPrefixKeepsSiblingPrefix(t *testing.T) {
 	got := strings.Join(ingestPaths(t, s), " ")
 	if want := "/r/agent-box-prod/x.jsonl /r/agent-box/y.jsonl /r/agent-boxx /r/culibox/y.jsonl"; got != want {
 		t.Errorf("paths = %s, want %s", got, want)
+	}
+}
+
+// Adoption calls RewritePathPrefix once per moved entry under the box
+// manager's lock (#330): the rows under the root are found through the path
+// index, never by reading the whole table.
+func TestRewritePathPrefixUsesThePathIndex(t *testing.T) {
+	s := openTemp(t)
+	rows, err := s.db.Query("EXPLAIN QUERY PLAN "+rewritePrefixQuery, underRoot("/r/agent-box")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if got := strings.Join(plan, "; "); !strings.Contains(got, "SEARCH") || strings.Contains(got, "SCAN") {
+		t.Fatalf("query plan %q: want a SEARCH on the path index, no SCAN", got)
+	}
+}
+
+// The range is bytewise: names that sort right around "<root>/" (".", "-", "0"
+// after the root) are not under it, and every name below it is, whatever its
+// bytes.
+func TestRewritePathPrefixRangeEdges(t *testing.T) {
+	s := openTemp(t)
+	under := []string{"/r/a", "/r/a/", "/r/a/x", "/r/a/été.jsonl", "/r/a/\xff", "/r/a//x"}
+	beside := []string{"/r/a-prod/x", "/r/a.bak/x", "/r/a0/x", "/r/a0", "/r/", "/r/b/x", "/r/A/x"}
+	for _, p := range append(slices.Clone(under), beside...) {
+		if err := s.Apply("S1", "proj", p, newParsed(), 10, 10, 1, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := s.RewritePathPrefix("/r/a", "/n")
+	if err != nil || n != len(under) {
+		t.Fatalf("rewrite = %d, %v; want %d", n, err, len(under))
+	}
+	for _, p := range under {
+		if _, _, ok, _, _ := s.State("/n" + p[len("/r/a"):]); !ok {
+			t.Errorf("%q not copied", p)
+		}
+	}
+	for _, p := range ingestPaths(t, s) {
+		if strings.HasPrefix(p, "/n") && !slices.ContainsFunc(under, func(u string) bool { return "/n"+u[len("/r/a"):] == p }) {
+			t.Errorf("copied %q, which is not under the root", p)
+		}
 	}
 }
