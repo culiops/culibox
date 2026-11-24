@@ -256,11 +256,14 @@ function accessModel(o) {
   // Fail loud: only an explicit box tier reads as contained.
   const tier = s.runtime === "box" ? "box" : "host";
   const eg = (x.egress && x.egress.egress) || (aws && aws.egress) || (x.egress && x.egress.mode ? x.egress : null);
+  // The mode is the polled session's own (Info.egress) when it has one: a profile edit can change it while the session
+  // runs (#95), and the egress reply is only as fresh as its last fetch. The counts come from that reply.
   const network = eg
-    ? { mode: eg.mode === "open" ? "open" : "allowlist", allowed: Number(eg.allowed) || 0, denied: Number(eg.denied) || 0 }
+    ? { mode: (s.egress || eg.mode) === "open" ? "open" : "allowlist", allowed: Number(eg.allowed) || 0, denied: Number(eg.denied) || 0 }
     : { mode: "", allowed: 0, denied: 0 };
   const drops = accDep("dropsRow", "./steerrail.js")(s);
   const locked = accDep("lockedRow", "./steerrail.js")(s);
+  const policy = accDep("policyRow", "./steerrail.js")(s);
   const hostDropped = accDep("hostDroppedRow", "./steerrail.js")(s);
   const cloneParts = accDep("cloneParts", "./steerrail.js");
   const cp = s.clone ? cloneParts(s.clone, s.agent) : { warn: [], info: [] };
@@ -278,6 +281,7 @@ function accessModel(o) {
     dropped: drops || null,
     hostDropped: hostDropped || null,
     locked: locked || null,
+    policy: policy || null,
   };
 
   const conns = accConns(s);

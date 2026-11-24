@@ -830,5 +830,6 @@ pfvRegisterEditor("cloud", {
 pfvRegisterEditor("reachable", {
   values: pfcReachValues, draw: pfcReachDraw, merge: pfcReachMerge, check: pfcReachCheck, add: pfcReachAdd,
   settled: (v) => ({ folders: v.folders.filter((e) => !pfcBlankNew(e, "path")), domains: v.domains.filter((e) => !pfcBlankNew(e, "host")) }),
-  note: (rec, c) => c.tier === "box",
+  // Domains (egress_allow) reach running sessions too (#95); folders only the next one.
+  note: (rec, c) => (c.tier === "box" ? PFV_NEW_BOX_LIVE_DOMAINS : ""),
 });
