@@ -1196,6 +1196,7 @@
   #session-menu .menu-item > .menu-tier { display: inline-flex; align-items: center; gap: 3px; }
   #session-menu .menu-item .menu-tier .tchip-i { flex: none; }
   #session-menu .menu-item .menu-tier.host .tchip-i { color: var(--fg); }
+  #session-menu .menu-item:hover > .menu-tier.box { background: var(--line); }
 
   /* --- the Files dock (spec 5.4, the dock design's Layout) ----------------- */
   /* A column right of the pane grid, full height: the panes shrink for it and nothing is covered. app.js sizes it
