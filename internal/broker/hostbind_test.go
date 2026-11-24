@@ -132,7 +132,7 @@ func TestHostFetchAfterTheSessionEndsIsRefused(t *testing.T) {
 			if w := present(e.b, cp, tokA("s1"), onHostSocket("s1")); w.Code != http.StatusOK {
 				t.Fatalf("while live: status %d: %s", w.Code, w.Body)
 			}
-			e.rec.rows = nil
+			e.rec.reset()
 			minted := e.minted()
 
 			v.Live = false // the session ended; the token is still well formed
@@ -141,9 +141,21 @@ func TestHostFetchAfterTheSessionEndsIsRefused(t *testing.T) {
 			if w.Code != http.StatusForbidden || errorText(t, w) != cp.hostUniform {
 				t.Fatalf("after the end: status %d body %s", w.Code, w.Body)
 			}
-			oneRow(t, e.rec, "s1", OutcomeDeniedSession, cp.provider, "not live")
-			if e.rec.rows[0].Tier != TierHost {
-				t.Fatalf("row tier = %q, want %q", e.rec.rows[0].Tier, TierHost)
+			// The refused fetch calls Forget, which revokes the session's cached
+			// GitHub tokens in the background (revokeAsync) and records its own
+			// row: wait for it, then check the refusal by its outcome.
+			e.b.revokeWG.Wait()
+			var denied []Row
+			for _, r := range e.rec.snapshot() {
+				if r.Outcome != OutcomeRevoked && r.Outcome != OutcomeRevokeFailed {
+					denied = append(denied, r)
+				}
+			}
+			if len(denied) != 1 {
+				t.Fatalf("rows besides revokes = %+v, want exactly the refusal", denied)
+			}
+			if r := denied[0]; r.SessionID != "s1" || r.Outcome != OutcomeDeniedSession || r.Provider != cp.provider || r.Error != "not live" || r.Tier != TierHost {
+				t.Fatalf("refusal row = %+v, want session s1, %s, %q, \"not live\", tier %q", r, OutcomeDeniedSession, cp.provider, TierHost)
 			}
 			if n := e.minted(); n != minted {
 				t.Fatalf("a credential was fetched after the session ended (%d new calls)", n-minted)
