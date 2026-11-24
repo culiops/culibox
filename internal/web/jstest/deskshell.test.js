@@ -1078,3 +1078,59 @@ test("rowSubline: an ended session reads 'ended', a crashed one 'crashed' (the p
   assert.deepEqual(d.rowSubline({ activity: "working", summary: "fixing" }), { text: "fixing", amber: false });
   assert.deepEqual(d.rowSubline({ activity: "done", summary: "all fixed" }), { text: "all fixed", amber: false });
 });
+
+// ---- the pane's tab switcher rows (#365) -------------------------------------------------------------------------------
+const tabT = (id) => ({ kind: "terminal", id, title: () => "Claude Code: the title says nothing" });
+const shellProfile = { name: "sh", bin: "/bin/bash" };
+const claudeProfile = { name: "cc", bin: "claude" };
+
+test("tabSwitchFacts: kind from declared fields: the Claude mark, a shell, a file, else generic", () => {
+  const sessions = [
+    { id: "c", agent: "cc", claude: true, runtime: "box" },
+    { id: "s", agent: "sh", claude: false, runtime: "host" },
+    { id: "o", agent: "codex", claude: false, runtime: "box" },
+  ];
+  const profiles = [claudeProfile, shellProfile];
+  assert.equal(d.tabSwitchFacts(tabT("c"), sessions, profiles).kind, "claude");
+  assert.equal(d.tabSwitchFacts(tabT("s"), sessions, profiles).kind, "shell");
+  assert.equal(d.tabSwitchFacts(tabT("o"), sessions, profiles).kind, "generic", "an agent that is neither Claude nor a shell");
+  assert.equal(d.tabSwitchFacts(tabT("gone"), sessions, profiles).kind, "generic", "a session the list does not hold");
+  assert.equal(d.tabSwitchFacts({ kind: "viewer", id: "v", path: "/a/claude.sh", title: () => "claude.sh" }, sessions, profiles).kind, "file");
+  assert.equal(d.tabSwitchFacts({ kind: "something-new", id: "x", title: () => "x" }, sessions, profiles).kind, "generic");
+  // Never from the title: a shell session titled like Claude is a shell, a Claude one titled "bash" is Claude.
+  const named = [{ id: "s", agent: "sh", claude: false, runtime: "host", name: "claude" }, { id: "c", agent: "cc", claude: true, runtime: "box", name: "bash" }];
+  assert.equal(d.tabSwitchFacts({ kind: "terminal", id: "s", title: () => "claude" }, named, profiles).kind, "shell");
+  assert.equal(d.tabSwitchFacts({ kind: "terminal", id: "c", title: () => "bash" }, named, profiles).kind, "claude");
+  // Before the profile list lands a Claude session still knows itself; a shell is generic until then.
+  assert.equal(d.tabSwitchFacts(tabT("c"), sessions, []).kind, "claude");
+  assert.equal(d.tabSwitchFacts(tabT("s"), sessions, undefined).kind, "generic");
+});
+
+test("tabSwitchFacts: a session's tier is its runtime and clone_of (Host, Box, Box clone); a file or an unknown session has none", () => {
+  const sessions = [
+    { id: "h", agent: "cc", claude: true, runtime: "host" },
+    { id: "b", agent: "cc", claude: true, runtime: "box" },
+    { id: "k", agent: "cc", claude: true, runtime: "box", clone_of: "/home/u/repo" },
+    { id: "hk", agent: "cc", claude: true, runtime: "host", clone_of: "/home/u/repo" },
+    { id: "x", agent: "sh", runtime: "box", exited: true },
+  ];
+  const tier = (id) => d.tabSwitchFacts(tabT(id), sessions, [claudeProfile, shellProfile]).tier;
+  assert.deepEqual(tier("h"), { key: "host", label: "Host" });
+  assert.deepEqual(tier("b"), { key: "box", label: "Box" });
+  assert.deepEqual(tier("k"), { key: "clone", label: "Box clone" });
+  assert.deepEqual(tier("hk"), { key: "host", label: "Host" }, "a clone is a boxed session only, as the sidebar's chip");
+  assert.deepEqual(tier("x"), { key: "box", label: "Box" }, "an ended session's tab still says where it ran");
+  assert.equal(tier("gone"), null, "not in the list: no tier, never a guess");
+  assert.equal(d.tabSwitchFacts({ kind: "viewer", id: "v", path: "/a/b.go", title: () => "b.go" }, sessions, []).tier, null);
+  assert.equal(d.tabSwitchFacts(null, sessions, []).kind, "generic");
+});
+
+test("svgicon: the sidebar's tier glyphs are New session's TP_ICONS, so a tier looks the same everywhere", () => {
+  const icons = require("../static/svgicon.js");
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "tierpick.js"), "utf8");
+  const start = src.indexOf("const TP_ICONS = ");
+  assert.ok(start >= 0, "TP_ICONS is in tierpick.js");
+  const body = src.slice(start + "const TP_ICONS = ".length, src.indexOf("\n};", start) + 2);
+  const tp = require("node:vm").runInNewContext("(" + body + ")");
+  assert.deepEqual(JSON.parse(JSON.stringify(tp)), { box: icons.SVG_BOX_24, clone: icons.SVG_CLONE_24, host: icons.SVG_HOST_24 });
+});
