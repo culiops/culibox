@@ -46,6 +46,8 @@ type TimelineEvent struct {
 	Add    *int   `json:"add,omitempty"`   // lines added by an edit
 	Del    *int   `json:"del,omitempty"`   // lines removed by an edit
 	Lines  *int   `json:"lines,omitempty"` // Read: line count of the result (count only)
+
+	Provider string `json:"provider,omitempty"` // credential rows only: aws | github | static, from the broker row
 }
 
 // FileChange is the running line total of one file the agent edited.

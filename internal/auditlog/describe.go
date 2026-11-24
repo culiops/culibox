@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/mask"
 )
 
@@ -41,6 +42,7 @@ func describe(r rawRow) Event {
 	switch r.src {
 	case srcCredential:
 		ev.Kind, ev.Outcome, ev.Elevated = KindCredential, r.f, r.n1 != 0
+		ev.Provider = broker.NormalizeProvider(r.a)
 		parts = credentialParts(r)
 	case srcApproval:
 		parts = approvalEvent(&ev, r)
