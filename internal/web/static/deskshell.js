@@ -215,7 +215,7 @@ function deskRowKind(s, profile) {
 }
 
 // TAB_TIER_LABEL: a session's tier as the pane's tab switcher words it. The keys name the glyphs, the sidebar chip's and
-// New session's (svgicon.js SVG_HOST_24, SVG_BOX_24, SVG_CLONE_24, which are tierpick.js's TP_ICONS).
+// New session's (iconmap.js ICON_LOCKED "tier-host", "tier-box" and "tier-clone").
 const TAB_TIER_LABEL = { host: "Host", box: "Box", clone: "Box clone" };
 
 // tabSwitchFacts: what a row of the pane's tab switcher shows for tab `t` (#365): its kind (claude, shell, file or

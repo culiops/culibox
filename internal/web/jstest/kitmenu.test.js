@@ -44,6 +44,8 @@ function world(extra) {
     dockIcon: (k) => { const s = el("svg", SVG_NS); s.attrs.kind = "dock:" + k; s.append(el("path", SVG_NS)); return s; },
   }, extra || {}));
   const run = (src) => new vm.Script(src).runInContext(ctx);
+  run(read("icons.js"));
+  run(read("iconmap.js"));
   run(read("svgicon.js"));
   run(read("kitmenu.js"));
   return { ctx, run };
@@ -275,11 +277,10 @@ function switcher(width, tabs, activeIdx, sessions, profiles) {
     setFocusedCell: (c) => calls.focusedCell.push(c === cell),
     placeSessionMenu: (m, a) => calls.placed.push(a),
     sessionMenuAnchor: null, sessionMenuSid: "x",
-    // The row's facts are deskshell.js's own (tested there); the glyphs the Claude mark and the Files tree draw are tagged
-    // stand-ins, and the tier chip's glyph is app.js's deskChipIcon over the real svgicon.js shapes.
+    // The row's facts are deskshell.js's own (tested there); the Files tree's glyph is a tagged stand-in, and the
+    // Claude mark, the terminal and the tier chip's glyph are uiIcon's own (the real icons.js and iconmap.js).
     lastSessions: sessions || [], profiles: profiles || [],
     tabSwitchFacts: require("../static/deskshell.js").tabSwitchFacts,
-    claudeMarkSvg: () => { const s = el("svg", SVG_NS); s.attrs.kind = "claude"; s.setAttribute("aria-hidden", "true"); return s; },
     iconFor: (name, isDir, open) => "G:" + name + ":" + isDir + ":" + open,
   });
   const app = read("app.js");
@@ -325,9 +326,7 @@ const SESSIONS = [
   { id: "k1", agent: "cc", claude: true, runtime: "box", clone_of: "/home/u/repo" },
 ];
 const PROFILES = [{ name: "cc", bin: "claude" }, { name: "sh", bin: "/bin/bash" }];
-const ICONS = require("../static/svgicon.js");
-const svgDs = (svg) => JSON.stringify(svg.children.map((c) => [c.tag, c.attrs]));
-const shapesDs = (shapes) => JSON.stringify(shapes.map(([tag, attrs]) => [tag, attrs]));
+const iconOf = (svg) => svg.getAttribute("data-icon");
 
 test("desktop: the .menu-icon slot shows the tab's kind: the Claude mark, the shell's terminal, the file's type, else the pane header's glyph", () => {
   const t = switcher(1440, [S_CLAUDE, S_SHELL, view, files, S_OTHER, S_GONE], 0, SESSIONS, PROFILES);
@@ -338,17 +337,18 @@ test("desktop: the .menu-icon slot shows the tab's kind: the Claude mark, the sh
     assert.strictEqual(slot(i).getAttribute("aria-hidden"), "true", "row " + i + ": the glyph is decoration");
     assert.strictEqual(slot(i).children.length, 1, "row " + i + ": one glyph");
   }
-  assert.strictEqual(slot(0).children[0].attrs.kind, "claude", "a Claude session titled bash is still Claude");
+  assert.strictEqual(iconOf(slot(0).children[0]), "si:claude", "a Claude session titled bash is still Claude");
   const shell = slot(1).children[0];
   assert.strictEqual(shell.tag, "svg");
   assert.strictEqual(shell.getAttribute("viewBox"), "0 0 24 24");
-  assert.strictEqual(svgDs(shell), shapesDs(ICONS.SVG_TERMINAL_24), "the sidebar's shell glyph, for a shell titled claude");
+  assert.strictEqual(iconOf(shell), "terminal", "the sidebar's shell glyph, for a shell titled claude");
+  for (const i of [0, 1]) assert.strictEqual(slot(i).children[0].getAttribute("width"), "14", "the menu row's size");
   const file = slot(2).children[0];
   assert.strictEqual(file.className, "menu-ficon", "a file wears the Files tree's type glyph, in its font");
   assert.strictEqual(file.textContent, "G:main.go:false:false", "by the path's file name");
   assert.strictEqual(slot(3).children[0].textContent, "G:notes:false:false", "a file with no path goes by its title");
-  assert.strictEqual(slot(4).children[0].attrs.kind, "tab:terminal", "neither Claude nor a shell: the generic terminal glyph");
-  assert.strictEqual(slot(5).children[0].attrs.kind, "tab:terminal", "a session the list does not hold: the same");
+  assert.strictEqual(iconOf(slot(4).children[0]), "square-terminal", "neither Claude nor a shell: the pane header's terminal glyph");
+  assert.strictEqual(iconOf(slot(5).children[0]), "square-terminal", "a session the list does not hold: the same");
   assert.strictEqual(t.menu.children[0].children[0].children[1].textContent, "bash", "the title is the .menu-text");
   assert.strictEqual(t.menu.children[2].children[0].children[1].textContent, "main.go");
 });
@@ -367,7 +367,9 @@ test("desktop: a session's row names its tier (Host, Box, Box clone) with the si
     const [ic, word] = c.children;
     assert.strictEqual(ic.tag, "svg");
     assert.strictEqual(ic.getAttribute("aria-hidden"), "true");
-    assert.strictEqual(svgDs(ic), shapesDs(ICONS["SVG_" + key.toUpperCase() + "_24"]), "row " + i + ": the " + key + " glyph");
+    assert.strictEqual(iconOf(ic), { box: "box", clone: "copy", host: "triangle-alert" }[key], "row " + i + ": the " + key + " glyph");
+    assert.strictEqual(ic.getAttribute("width"), "11");
+    assert.ok(ic.getAttribute("class").split(" ").includes("tchip-i"));
     assert.strictEqual(word.textContent, label, "row " + i + ": the word is text, so it is part of the row's name");
   });
   assert.deepStrictEqual(item(0).children.map((c) => c.className.split(" ")[0]), ["menu-icon", "menu-text", "menu-tier"], "the chip follows the title");

@@ -75,19 +75,11 @@ test("deskRowKind: terminal for a shell profile, the Claude mark from the sessio
   assert.equal(d.deskRowKind({ claude: false }, { bin: "codex" }), null);
 });
 
-test("svgicon: the Lucide glyphs are 24-unit shape lists", () => {
+test("svgicon: the hand-drawn 24-unit glyph lists are gone, every glyph is uiIcon's", () => {
   const icons = require("../static/svgicon.js");
-  for (const k of ["SVG_FOLDER_24", "SVG_CHEVRON_DOWN_24", "SVG_CHEVRON_RIGHT_24", "SVG_PLUS_24", "SVG_BOX_24", "SVG_CLONE_24", "SVG_HOST_24"]) {
-    const g = icons[k];
-    assert.ok(Array.isArray(g) && g.length > 0, k);
-    for (const sh of g) assert.ok(Array.isArray(sh) && typeof sh[0] === "string" && typeof sh[1] === "object", k);
-  }
-  assert.equal(icons.SVG_CLONE_24[0][0], "rect");
-  assert.equal(typeof icons.svgIcon24, "function");
+  assert.deepEqual(Object.keys(icons).sort(), ["paintStaticIcons", "svgIcon", "svgShape", "uiIcon"]);
   const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "svgicon.js"), "utf8");
-  const notes = src.split("\n").filter((l) => l.includes("lucide.dev"));
-  assert.equal(notes.filter((l) => l.includes("ISC")).length >= 1, true);
-  assert.equal(src.split("\n").filter((l) => /^\/\/.*lucide\.dev/.test(l) && /ISC/.test(l) && /SVG_FOLDER_24/.test(l)).length, 1, "one ISC comment line covers the new glyphs");
+  assert.ok(!/SVG_[A-Z_]*_24|svgIcon24/.test(src));
 });
 
 test("rowSubline: amber needs-you text, else summary or the activity word", () => {
@@ -1125,12 +1117,12 @@ test("tabSwitchFacts: a session's tier is its runtime and clone_of (Host, Box, B
   assert.equal(d.tabSwitchFacts(null, sessions, []).kind, "generic");
 });
 
-test("svgicon: the sidebar's tier glyphs are New session's TP_ICONS, so a tier looks the same everywhere", () => {
-  const icons = require("../static/svgicon.js");
-  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "tierpick.js"), "utf8");
-  const start = src.indexOf("const TP_ICONS = ");
-  assert.ok(start >= 0, "TP_ICONS is in tierpick.js");
-  const body = src.slice(start + "const TP_ICONS = ".length, src.indexOf("\n};", start) + 2);
-  const tp = require("node:vm").runInNewContext("(" + body + ")");
-  assert.deepEqual(JSON.parse(JSON.stringify(tp)), { box: icons.SVG_BOX_24, clone: icons.SVG_CLONE_24, host: icons.SVG_HOST_24 });
+test("the tier glyphs are ICON_LOCKED's, so a tier looks the same on the sidebar chip, New session and the tab switcher", () => {
+  const { ICON_LOCKED } = require("../static/iconmap.js");
+  assert.deepEqual(["box", "clone", "host"].map((k) => ICON_LOCKED["tier-" + k]), ["box", "copy", "triangle-alert"]);
+  const dir = require("node:path").join(__dirname, "..", "static");
+  const read = (f) => require("node:fs").readFileSync(require("node:path").join(dir, f), "utf8");
+  assert.match(read("tierpick.js"), /ICON_LOCKED\["tier-" \+ c\.key\]/);
+  assert.match(read("app.js"), /ICON_LOCKED\["tier-" \+ name\]/);
+  assert.ok(read("deskshell.js").includes("ICON_LOCKED") && !/SVG_|TP_ICONS/.test(read("deskshell.js")), "deskshell.js names ICON_LOCKED, not the retired lists");
 });

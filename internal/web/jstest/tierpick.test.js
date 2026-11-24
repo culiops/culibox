@@ -1,5 +1,6 @@
 "use strict";
 const test = require("node:test");
+const { ICON_SRC } = require("./iconpage.js");
 const assert = require("node:assert");
 const {
   TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel,
@@ -310,7 +311,7 @@ function tpPage(over) {
   };
   Object.assign(box, over || {});
   const ctx = vm.createContext(box);
-  vm.runInContext(readStatic("svgicon.js") + "\n" + readStatic("tier.js") + "\n" + readStatic("tierpick.js"), ctx);
+  vm.runInContext(ICON_SRC + "\n" + readStatic("tier.js") + "\n" + readStatic("tierpick.js"), ctx);
   // An object a vm script returns has the vm's own prototypes, which deepStrictEqual refuses: hand back a plain copy.
   const run = (code) => {
     const r = vm.runInContext(code, ctx);
@@ -363,7 +364,6 @@ test("renderTierPick draws the card text: title, default tag, rows with b and co
     assert.strictEqual(svg.tag, "svg");
     assert.strictEqual(svg.attrs.viewBox, "0 0 24 24");
     assert.strictEqual(svg.attrs["stroke-width"], "2");
-    assert.strictEqual(svg.attrs.width, "14");
   }
   const ks = (c) => c.querySelectorAll(".tp-k").map((n) => n.textContent);
   const vs = (c) => c.querySelectorAll(".tp-v").map((n) => n.textContent);
@@ -685,22 +685,31 @@ test("on the desktop the seg follows the cards, so a resize submits what was sho
   assert.strictEqual(ph.seg.dataset.value, "host");
 });
 
-test("claudeMarkSvg is a filled 24-unit mark built by svgIcon", () => {
-  const doc = { createElement: null };
-  doc.createElement = (t) => new Node(t, doc);
-  doc.createElementNS = (ns, t) => doc.createElement(t);
-  const ctx = vm.createContext({ console, document: doc });
-  vm.runInContext(readStatic("svgicon.js") + "\n" + readStatic("claudemark.js"), ctx);
-  const svg = vm.runInContext("claudeMarkSvg(12)", ctx);
-  assert.strictEqual(svg.tag, "svg");
-  assert.strictEqual(svg.attrs.viewBox, "0 0 24 24");
-  assert.strictEqual(svg.attrs.fill, "currentColor");
-  assert.strictEqual(svg.attrs.stroke, "none");
-  assert.strictEqual(svg.attrs.width, "12");
-  assert.strictEqual(svg.attrs.height, "12");
-  assert.strictEqual(svg.children.length, 1);
-  assert.strictEqual(svg.children[0].tag, "path");
-  assert.ok(svg.children[0].attrs.d.startsWith("m4.7144 15.9555"));
+test("tier cards draw ICON_LOCKED tier glyphs", () => {
+  const pg = tpPage({ profile: bound, cwd: "/home/u/repo" });
+  pg.run("renderTierPick()");
+  const cards = cardsOf(pg);
+  assert.deepStrictEqual(cards.map((c) => c.querySelector(".tp-i").children[0].attrs["data-icon"]), ["box", "copy", "triangle-alert"]);
+  for (const c of cards) {
+    const svg = c.querySelector(".tp-i").children[0];
+    assert.strictEqual(svg.attrs.width, "14");
+    assert.ok(svg.attrs.class.split(" ").includes("ui-icon"));
+  }
+  // a disabled card's reason starts with the lock, at 12
+  const why = cards[2].querySelector(".tp-why");
+  assert.strictEqual(why.children[0].attrs["data-icon"], "lock");
+  assert.strictEqual(why.children[0].attrs.width, "12");
+  const src = readStatic("tierpick.js");
+  for (const gone of ["TP_ICONS", "TP_LOCK_ICON", "tierIcon"]) assert.ok(!src.includes(gone), gone + " is gone");
+});
+
+test("claudemark.js exports only claudeKindOf", () => {
+  const mod = require("../static/claudemark.js");
+  assert.deepStrictEqual(Object.keys(mod), ["claudeKindOf"]);
+  assert.ok(!readStatic("claudemark.js").includes("CLAUDE_MARK_D"), "the path lives in icons.js only");
+  assert.ok(readStatic("claudemark.js").includes("docs/ICONS.md"), "the trademark note points to docs/ICONS.md");
+  const ctx = vm.createContext({});
+  vm.runInContext(readStatic("claudemark.js"), ctx);
   assert.strictEqual(vm.runInContext("claudeKindOf({ claude: true })", ctx), true);
   assert.strictEqual(vm.runInContext("claudeKindOf({ claude: 1 })", ctx), false);
   assert.strictEqual(vm.runInContext("claudeKindOf(null)", ctx), false);

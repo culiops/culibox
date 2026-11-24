@@ -51,8 +51,8 @@ test("renderDesktopEntry: a waiting group is the one amber header; a group with 
   fdoc.createElementNS = (ns, t) => fdoc.createElement(t);
   fdoc.createTextNode = (t) => new Text(t);
   const ctx = vm.createContext({ document: fdoc, String, shortPath: (p) => p, toggleWsGroup: () => {} });
-  // The page's own svgicon.js gives the header its glyphs (svgIcon24, SVG_FOLDER_24, the chevrons).
-  new vm.Script(read("svgicon.js").replace(/^const /gm, "var ") + "\n" + fnSrc(read("app.js"), "renderDesktopEntry") + "\nglobalThis.renderDesktopEntry = renderDesktopEntry;").runInContext(ctx);
+  // The page's own icon scripts give the header its glyphs (uiIcon and the concept maps).
+  new vm.Script(require("./iconpage.js").ICON_SRC + "\n" + fnSrc(read("app.js"), "renderDesktopEntry") + "\nglobalThis.renderDesktopEntry = renderDesktopEntry;").runInContext(ctx);
   const head = (waiting) => ctx.renderDesktopEntry({ id: "grp:/r", header: true, key: "/r", label: "r", path: "/r", count: 2, waiting, dots: [], collapsed: false });
   const hot = head(2);
   assert.ok(hot.querySelector(".wpip"), "a waiting group carries the amber pip");
