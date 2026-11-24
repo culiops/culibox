@@ -152,11 +152,15 @@ type tunnel struct {
 	last atomic.Int64
 }
 
-func (t *tunnel) close() {
+// close closes both ends once; it reports whether this call did it. A closed
+// tunnel stays registered until its handler has audited it.
+func (t *tunnel) close() (closed bool) {
 	t.once.Do(func() {
 		t.client.Close()
 		t.up.Close()
+		closed = true
 	})
+	return closed
 }
 
 type probePrincipal struct {
@@ -288,8 +292,9 @@ func (p *Proxy) Drain(ctx context.Context, quiet time.Duration) DrainResult {
 		p.mu.Unlock()
 		for _, t := range stale {
 			quieted[t] = true
-			t.close()
-			res.Quiet++
+			if t.close() { // one Forget or Reconcile closed is theirs, not the drain's
+				res.Quiet++
+			}
 		}
 		if busy == 0 {
 			return res
@@ -394,8 +399,9 @@ func (p *Proxy) Reconcile(id string) int {
 	n := 0
 	for _, t := range ts {
 		if !live || !pol.holds(t.host, t.port, t.viaPrivate) {
-			t.close()
-			n++
+			if t.close() { // one already closed (still being audited) is not counted again
+				n++
+			}
 		}
 	}
 	return n

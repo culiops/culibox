@@ -190,3 +190,25 @@ func TestPolicyChangedAuditsAndCloses(t *testing.T) {
 		return false
 	})
 }
+
+// A tunnel Reconcile already closed stays registered until its handler has
+// audited it; a Reconcile in that window must not count it again (the count
+// feeds PolicyChanged's audit summary).
+func TestReconcileDoesNotCountAClosedTunnelTwice(t *testing.T) {
+	h := newHarness(t, nil)
+	h.setView("s1", liveView(nil, false))
+	c1, c2 := net.Pipe()
+	tun := &tunnel{sid: "s1", client: c1, up: c2, host: "pypi.org", port: 443}
+	h.p.mu.Lock()
+	h.p.tunnels[tun] = struct{}{} // registered, no handler: it stays until removed
+	h.p.mu.Unlock()
+	if n := h.p.Reconcile("s1"); n != 1 {
+		t.Fatalf("first Reconcile closed %d, want 1", n)
+	}
+	if n := h.p.Reconcile("s1"); n != 0 {
+		t.Fatalf("a second Reconcile counted the closed tunnel again: %d", n)
+	}
+	h.p.mu.Lock()
+	delete(h.p.tunnels, tun)
+	h.p.mu.Unlock()
+}
