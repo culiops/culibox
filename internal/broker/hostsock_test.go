@@ -3,6 +3,7 @@ package broker
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -122,9 +123,17 @@ func TestHostSocketPathCapPerOS(t *testing.T) {
 	if !strings.Contains(err.Error(), "at most 103") || !strings.Contains(err.Error(), hostSockPath(root, "s1")) {
 		t.Fatalf("the error must name the limit and the path: %v", err)
 	}
+	// The linux leg really binds the socket, which only a Linux kernel allows at
+	// 105 bytes (darwin's sun_path is 104 with the NUL). Elsewhere it checks that
+	// the linux cap did not refuse the path: any error must come from the kernel.
 	sl, _ := startedHostSockets(t, root, "linux")
-	if _, err := sl.Acquire("s1"); err != nil {
-		t.Fatalf("a 105 byte path must work on linux: %v", err)
+	_, err = sl.Acquire("s1")
+	if runtime.GOOS == "linux" {
+		if err != nil {
+			t.Fatalf("a 105 byte path must work on linux: %v", err)
+		}
+	} else if err != nil && strings.Contains(err.Error(), "at most") {
+		t.Fatalf("the linux cap refused a 105 byte path: %v", err)
 	}
 }
 
