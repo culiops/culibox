@@ -708,3 +708,26 @@ func TestConversationsUsageStopsAtTheDepthCap(t *testing.T) {
 		t.Fatalf("usage = %+v %v, want 1 folder, 10 bytes counted, size partial", u, err)
 	}
 }
+
+// A session record from before #330 has no key: ConversationsKeyFor gives the
+// session layer the key Wrap would mount for the same workspace, account and
+// profile, with the same normalisation ("default" is ""), and none without a
+// profile, as Wrap mounts none.
+func TestConversationsKeyForMatchesWrap(t *testing.T) {
+	for _, acct := range []string{"", "default", "work"} {
+		m, _ := newTestManagerWithFake(t)
+		ws := realTemp(t)
+		key := BoxKey{Profile: "p", Account: acct}
+		_, _, name, err := m.Wrap(context.Background(), ws, "s1", key, []string{"bash"}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := m.ConversationsKeyFor(ws, acct, "p"), m.ConversationsKeyOf(name); got != want || want == "" {
+			t.Fatalf("account %q: ConversationsKeyFor = %q, Wrap mounted %q", acct, got, want)
+		}
+	}
+	m := newTestManager(t)
+	if got := m.ConversationsKeyFor("/w", "", ""); got != "" {
+		t.Fatalf("no profile: %q", got)
+	}
+}

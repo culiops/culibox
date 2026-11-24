@@ -1267,10 +1267,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	}
 	// The profile's conversations folder, from the same resolution as the name
 	// (#330). Not identity: the name above does not hash it.
-	conv := ""
-	if key.Profile != "" {
-		conv = ConversationsKey(m.opts.Instance, ws.Path, key.Account, key.Profile)
-	}
+	conv := m.ConversationsKeyFor(ws.Path, key.Account, key.Profile)
 	if err := m.ensure(ctx, name, ws, extraRO, conv, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
 		if key.Session != "" {
 			m.mu.Lock()

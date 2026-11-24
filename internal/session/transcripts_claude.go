@@ -50,6 +50,27 @@ func boxTranscriptKey(boxes Boxes, name string) string {
 	return ""
 }
 
+// derivedTranscriptKey is the conversations folder key of a boxed session
+// record from before #330, which kept none: the box layer's key for the
+// record's workspace (real path), account and profile, the inputs and
+// normalisation Wrap uses. When that box's next container is created, the
+// home's conversations move into that folder, and without the key the
+// session's peek, timeline and usage would look only in the home. "" when the
+// box layer cannot tell, the workspace is not known, or it is no key. The home
+// stays the fallback root, so a wrong guess hides nothing.
+func derivedTranscriptKey(boxes Boxes, workspace, account, profile string) string {
+	kf, ok := boxes.(interface {
+		ConversationsKeyFor(workspace, account, profile string) string
+	})
+	if !ok || workspace == "" {
+		return ""
+	}
+	if k := kf.ConversationsKeyFor(workspace, account, profile); box.ValidConversationsKey(k) {
+		return k
+	}
+	return ""
+}
+
 // transcriptPathIn finds a boxed session's transcript by its conversation id.
 // It never trusts what is in a root, and it never guesses across sessions: only
 // <sid>.jsonl in the project dir of each cwd form c, in each root in order, and

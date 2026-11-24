@@ -67,6 +67,14 @@ type fakeBoxes struct {
 	conv       string   // ConversationsKeyOf's answer
 }
 
+// ConversationsKeyFor is the box layer's: the key under instance "TEST".
+func (f *fakeBoxes) ConversationsKeyFor(workspace, account, profile string) string {
+	if profile == "" {
+		return ""
+	}
+	return box.ConversationsKey("TEST", workspace, account, profile)
+}
+
 func (f *fakeBoxes) ConversationsKeyOf(string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

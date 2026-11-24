@@ -88,6 +88,53 @@ func TestReconcileRestoresTheTranscriptKey(t *testing.T) {
 	}
 }
 
+// A boxed record from before #330 has no key. Once its box's next container
+// moves the home's conversations into the profile's folder, its readers would
+// find nothing: the key is derived from the record's workspace, account and
+// profile, through the box layer, the way Wrap computes it. A host record, or
+// a box layer that cannot tell, gets none.
+func TestReconcileDerivesTheTranscriptKeyOfAnOldRecord(t *testing.T) {
+	ws := t.TempDir()
+	real, err := filepath.EvalSymlinks(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		md   sessionMeta
+		want string
+	}{
+		{"boxed", sessionMeta{Agent: "claude", Cwd: ws, Workspace: real, Account: "work", Runtime: config.RuntimeBox, Box: "ab-box-live"},
+			box.ConversationsKey("TEST", real, "work", "claude")},
+		{"boxed, no workspace recorded", sessionMeta{Agent: "claude", Cwd: ws, Runtime: config.RuntimeBox, Box: "ab-box-live"},
+			box.ConversationsKey("TEST", real, "", "claude")},
+		{"host", sessionMeta{Agent: "claude", Cwd: ws, Runtime: config.RuntimeHost}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			be := newFakeBackend()
+			be.alive["claude-1"] = true
+			be.list = []string{"claude-1"}
+			m := NewManager(tieredLauncher{argv: []string{"true"}, runtime: config.RuntimeBox}, be, 1<<16, time.Minute)
+			if err := m.SetSidecarPath(filepath.Join(t.TempDir(), "sessions.json")); err != nil {
+				t.Fatal(err)
+			}
+			md := tc.md
+			md.Created = time.Now()
+			m.sidecar.put("claude-1", md)
+			m.SetBoxes(&fakeBoxes{})
+			if err := m.Reconcile(); err != nil {
+				t.Fatal(err)
+			}
+			m.mu.Lock()
+			s := m.sessions["claude-1"]
+			m.mu.Unlock()
+			if s == nil || s.transcriptKey != tc.want {
+				t.Fatalf("restored key %q, want %q", s.transcriptKey, tc.want)
+			}
+		})
+	}
+}
+
 // boxedConvManager is boxedRegManager with every transcript in the
 // conversations folder instead of the home.
 func boxedConvManager(t *testing.T) (*Manager, string, string) {

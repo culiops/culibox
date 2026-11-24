@@ -4040,6 +4040,10 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.Box = md.Box
 	if box.ValidConversationsKey(md.TranscriptKey) { // joined into a path: never a malformed one
 		sess.transcriptKey = md.TranscriptKey
+	} else if md.TranscriptKey == "" && runtime == config.RuntimeBox && md.Box != "" {
+		// A record from before #330: the key its profile's folder has (m.mu is
+		// held: m.boxes is read under it, as everywhere).
+		sess.transcriptKey = derivedTranscriptKey(m.boxes, sess.workspace, md.Account, md.Agent)
 	}
 	sess.brokerBox = heldBox
 	sess.Bin = bin

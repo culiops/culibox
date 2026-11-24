@@ -120,6 +120,18 @@ func (m *Manager) ConversationsKeyOf(name string) string {
 	return m.conv[name]
 }
 
+// ConversationsKeyFor is the key of the conversations folder Wrap mounts for a
+// spawn of profile under account in workspace (its real, symlink-resolved
+// path), or "" when profile is "" (Wrap mounts none). Wrap computes its key with
+// this, so a session record from before #330, which kept no key, can be given
+// the same one (#330).
+func (m *Manager) ConversationsKeyFor(workspace, account, profile string) string {
+	if profile == "" {
+		return ""
+	}
+	return ConversationsKey(m.opts.Instance, workspace, account, profile)
+}
+
 // conversationsKeyAt is the key of the conversations folder at host path src
 // under stateRoot, or "" when src is not one.
 func conversationsKeyAt(stateRoot, src string) string {
