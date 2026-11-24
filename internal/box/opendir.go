@@ -50,7 +50,14 @@ func openDirIn(root *os.Root, rel string) (*os.File, error) {
 // open instead of blocking the walk.
 type dirFS struct{ root *os.Root }
 
-func (d dirFS) Open(name string) (fs.File, error) { return d.root.FS().Open(name) }
+// Open opens directories only, through openDirIn: this FS serves walks, and a
+// plain open of a FIFO would block (fs.ReadFile of a regular file is refused).
+func (d dirFS) Open(name string) (fs.File, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+	}
+	return openDirIn(d.root, name)
+}
 
 func (d dirFS) Stat(name string) (fs.FileInfo, error) { return fs.Stat(d.root.FS(), name) }
 

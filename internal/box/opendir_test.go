@@ -72,6 +72,26 @@ func TestOpenDirInRefusesAFIFO(t *testing.T) {
 	})
 }
 
+// dirFS.Open, which fs.WalkDir does not call today, refuses a FIFO too: a later
+// caller such as fs.ReadFile must not get a blocking open through it.
+func TestDirFSOpenRefusesAFIFO(t *testing.T) {
+	dir := t.TempDir()
+	if err := syscall.Mkfifo(filepath.Join(dir, "p"), 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	returnsPromptly(t, "dirFS.Open", func() {
+		if f, err := (dirFS{root}).Open("p"); err == nil {
+			f.Close()
+			t.Error("dirFS.Open on a FIFO: no error")
+		}
+	})
+}
+
 // Adoption runs under opMu: a home's projects dir, one of its workspace
 // folders, or the folder's workspace folder (written by live boxes of the
 // profile) swapped for a FIFO right before it is opened leaves the entries in
