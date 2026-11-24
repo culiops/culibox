@@ -320,14 +320,14 @@ var maxAdoptEntries = 10000
 // Each entry of <projects>/<slug>/ moves to <convDir>/<slug>/ when the folder has
 // no such name: a regular file is hard-linked there and then unlinked from the
 // home (a link never replaces a name), a real directory (a conversation's
-// subagents and tool results) is renamed. A rename never replaces a file or a
-// non-empty directory, but it does replace an empty directory: one that another
-// box of the profile creates under that name between the check and the rename
-// is replaced while it holds nothing yet (a no-replace rename is Linux-only,
-// and macOS must behave the same). Both run on directory descriptors, one
-// opened through an os.Root on the home and one through an os.Root on the
-// folder, so no path is resolved
-// again between the check and the move. Types come from the directory listing,
+// subagents and tool results) is renamed with renameNoReplace (renameat2
+// RENAME_NOREPLACE on Linux, renameatx_np RENAME_EXCL on macOS), so not even
+// an empty directory another box of the profile creates under that name
+// between the check and the rename is replaced; only where the filesystem has
+// no such rename does a plain one replace that empty directory. Both run on
+// directory descriptors, one opened through an os.Root on the home and one
+// through an os.Root on the folder, so no path is resolved again between the
+// check and the move. Types come from the directory listing,
 // which does not follow links: a symlink, a FIFO or anything else stays in the
 // home, and so does a slug that is not a real directory. The hook, when set, is
 // told before each move; its error stops the adoption there. At most
@@ -479,7 +479,7 @@ func (a *adoption) slug(slug string) {
 				// Moved all the same: the folder's copy is the one the box sees.
 				log.Printf("box: conversation %s copied into %s but not removed from the home: %v", n, a.to, err)
 			}
-		} else if err := unix.Renameat(sfd, n, dfd, n); err != nil {
+		} else if err := renameNoReplace(sfd, n, dfd, n); err != nil {
 			a.kept++
 			continue
 		}
