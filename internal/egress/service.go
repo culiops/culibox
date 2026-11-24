@@ -267,9 +267,11 @@ func (s *Service) warnCIDROverlap(subnet netip.Prefix) {
 
 // DrainQuiet is how long a tunnel may carry no byte before a drain closes it.
 // A streamed API response keeps bytes moving; a connection that is only kept
-// alive does not. (A guess, not measured: the drain's log line counts how many
-// tunnels it closed as quiet and how many the bound cut, #362.)
-const DrainQuiet = 10 * time.Second
+// alive does not. Long, so a request still waiting for its first token is not
+// taken for an idle one: a guess, not measured. The drain's log line counts the
+// tunnels closed as quiet and those the bound cut, but cannot tell an idle
+// keep-alive from a silent live request (#362).
+const DrainQuiet = 30 * time.Second
 
 // Drain lets the open tunnels finish (Proxy.Drain, with DrainQuiet) until ctx
 // ends, and logs what it did. Close afterwards cuts what is left.

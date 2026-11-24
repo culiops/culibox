@@ -1864,3 +1864,48 @@ func TestDrainRefusesAConnectInSetup(t *testing.T) {
 		t.Fatalf("a refused setup is not an allowed tunnel: %+v", rows)
 	}
 }
+
+// During a drain a CONNECT on a proxy connection that was already open gets a
+// 503 (no row), Forget still closes the session's tunnel, and a second Drain
+// returns at once.
+func TestDrainRefusesOnAnOpenConnAndForgetStillCloses(t *testing.T) {
+	h := newHarness(t, nil)
+	tok := h.tok("s1", nonceA)
+	_, tun := h.connect(t, "api.anthropic.com:443", "s1", tok)
+	echoRoundTrip(t, tun, "x")
+	open, err := net.DialTimeout("tcp", h.addr, 2*time.Second) // accepted before the drain, no request yet
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer open.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	drained := make(chan DrainResult, 1)
+	go func() { drained <- h.p.Drain(ctx, time.Minute) }()
+	waitFor(t, "the drain to start", func() bool { h.p.mu.Lock(); defer h.p.mu.Unlock(); return h.p.closed })
+
+	open.SetDeadline(time.Now().Add(3 * time.Second))
+	io.WriteString(open, "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\nProxy-Authorization: "+basic("s1", tok)+"\r\n\r\n")
+	if resp, err := http.ReadResponse(bufio.NewReader(open), &http.Request{Method: http.MethodConnect}); err == nil && resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("CONNECT during a drain on an open conn = %d, want 503 (or the conn closed)", resp.StatusCode)
+	}
+
+	if r := h.p.Drain(ctx, time.Minute); r != (DrainResult{}) {
+		t.Fatalf("a second Drain = %+v, want an immediate empty result", r)
+	}
+	h.p.Forget("s1")
+	assertClosedByServer(t, tun)
+	select {
+	case r := <-drained:
+		if r != (DrainResult{Open: 1}) {
+			t.Fatalf("result = %+v, want 1 open that ended on its own (Forget)", r)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Drain did not return after Forget closed the last tunnel")
+	}
+	if rows := h.waitRows(t, 1); len(rows) != 1 || rows[0].Outcome != OutcomeAllowed {
+		t.Fatalf("only the tunnel is audited: %+v", rows)
+	}
+}

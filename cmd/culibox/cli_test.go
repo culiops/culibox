@@ -501,7 +501,9 @@ func TestEgressDrainBound(t *testing.T) {
 	if got := egressDrainBound("linux"); got != time.Minute {
 		t.Errorf("linux = %s, want 1m", got)
 	}
-	if got := egressDrainBound("darwin"); got >= 20*time.Second {
-		t.Errorf("darwin = %s, want under launchd's 20 s default", got)
+	// Under launchd's 20 s default with room for StopRetention, StopImageCheck
+	// (2 s each) and the 3 s stop context.
+	if got := egressDrainBound("darwin"); got+7*time.Second >= 20*time.Second {
+		t.Errorf("darwin = %s, want room under launchd's 20 s default", got)
 	}
 }

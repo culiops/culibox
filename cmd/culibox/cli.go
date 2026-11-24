@@ -297,12 +297,12 @@ func shutdownSignalsFor(ignored func(os.Signal) bool) []os.Signal {
 // egressDrainBound is how long a shutdown lets open egress tunnels finish
 // (#362). The systemd unit gives the daemon 90 s to stop (TimeoutStopSec in
 // internal/service). On darwin it is shorter: launchd sends SIGKILL about 20 s
-// after SIGTERM unless the plist sets ExitTimeOut, and an installed plist is
-// never rewritten, so a longer drain would be killed before Close audits the
+// after SIGTERM unless the plist sets ExitTimeOut (CuliBox's does not), and the
+// steps after the drain take up to about 7 s more before Close audits the
 // tunnels it cuts.
 func egressDrainBound(goos string) time.Duration {
 	if goos == "darwin" {
-		return 15 * time.Second
+		return 10 * time.Second
 	}
 	return 60 * time.Second
 }

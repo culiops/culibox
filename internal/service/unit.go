@@ -67,8 +67,9 @@ func (s Spec) check() error {
 // RenderSystemd is the systemd --user unit. KillMode=process: stopping or
 // restarting the service ends only serve, never the abduco sessions it
 // started (they are in the same cgroup), so they survive and reattach.
-// TimeoutStopSec covers serve's shutdown, which first lets open egress tunnels
-// finish for up to 60 s (#362), whatever the host's default stop timeout is.
+// TimeoutStopSec (stopTimeoutSec) covers serve's shutdown, which first lets
+// open egress tunnels finish for up to 60 s (#362), whatever the host's default
+// stop timeout is.
 func RenderSystemd(s Spec) ([]byte, error) {
 	if err := s.check(); err != nil {
 		return nil, err
@@ -85,7 +86,7 @@ func RenderSystemd(s Spec) ([]byte, error) {
 	for _, e := range s.Env {
 		fmt.Fprintf(&b, "Environment=\"%s=%s\"\n", e.Key, pct(e.Value))
 	}
-	fmt.Fprintf(&b, "KillMode=process\nTimeoutStopSec=90\nRestart=on-failure\nRestartSec=5\nRestartPreventExitStatus=%d\n", ExitRefused)
+	fmt.Fprintf(&b, "KillMode=process\nTimeoutStopSec=%d\nRestart=on-failure\nRestartSec=5\nRestartPreventExitStatus=%d\n", stopTimeoutSec, ExitRefused)
 	fmt.Fprintf(&b, "StandardOutput=append:%s\nStandardError=append:%s\n", pct(s.LogPath), pct(s.LogPath))
 	b.WriteString("\n[Install]\nWantedBy=default.target\n")
 	return []byte(b.String()), nil

@@ -255,7 +255,8 @@ type DrainResult struct {
 
 // Drain lets the open tunnels finish before Close (#362). It closes the
 // listener, so a new connection is refused, and answers a CONNECT still being
-// set up with 503. A tunnel that carries no byte for quiet is closed: an idle
+// set up with 503, without a row, like the cap's 503 (one already resolving or
+// dialling finishes that first: Drain does not cancel it). A tunnel that carries no byte for quiet is closed: an idle
 // keep-alive connection would otherwise hold the drain to its bound, and its
 // client opens a new one when it needs it. Drain returns once no tunnel is
 // left, or when ctx ends with some still open; Close cuts those. Every tunnel
