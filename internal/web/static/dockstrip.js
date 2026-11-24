@@ -92,7 +92,7 @@ function dkTabBuild() {
   x.type = "button";
   x.className = "dk-x";
   x.tabIndex = -1; // the tab itself is the Tab stop, and Delete closes it
-  x.textContent = "✕";
+  x.append(uiIcon(ICON_ACTION.close));
   const lock = dkSpan("dk-lock"); // drawn by CSS, like the dot; shown for a read-only file
   lock.setAttribute("role", "img");
   lock.setAttribute("aria-label", "Read-only");

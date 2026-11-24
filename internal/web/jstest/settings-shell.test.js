@@ -4,6 +4,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { iconStubs } = require("./iconpage.js");
 
 // The desktop Settings frame (UI plan 4, #174, Task 1; frame M2, digest-design §B1): one 212px nav on every
 // tab with Sign out… at its foot, no top bar, and a content column that starts 32px right of the nav and is
@@ -441,6 +442,7 @@ function makeDom({ page = true, version = "CuliBox v0.24.2 · commit abc1234", a
   };
   const ctx = {
     document: doc, console,
+    ...iconStubs(() => new FNode("svg")),
     acctNew: () => calls.push("acctNew"),
     createToken: () => calls.push("createToken"),
     openBugReport: () => calls.push("openBugReport"),
@@ -693,11 +695,13 @@ test("Esc ✕ is a button named Close (Esc), not data-close", () => {
   assert.deepStrictEqual(classesOf(b), ["btn", "btn-ghost", "btn-sm", "set-esc"]);
   assert.strictEqual(b.getAttribute("aria-label"), "Close (Esc)");
   assert.strictEqual(b.getAttribute("title"), "Close (Esc)");
-  // Mono "Esc" (the kit's .kbd-hint) then ✕ U+2715: frame A9.
+  // Mono "Esc" (the kit's .kbd-hint) then the shared x glyph at 12 (#168; the ✕ text is gone): frame A9.
   assert.deepStrictEqual(b.children.map((c) => [c.nodeType, c.tag || "", classesOf(c).join(" "), c.textContent]), [
     [1, "span", "kbd-hint", "Esc"],
-    [3, "", "", "✕"],
+    [1, "svg", "ui-icon", ""],
   ]);
+  assert.deepStrictEqual([b.children[1].getAttribute("data-icon"), b.children[1].getAttribute("width")], ["x", "12"]);
+  assert.ok(!b.textContent.includes("✕"));
   // desktop.css hides [data-close] (Done is modal chrome), so the page's own close must not carry it.
   assert.strictEqual(b.hasAttribute("data-close"), false);
   assert.deepStrictEqual(b.dataset, {});

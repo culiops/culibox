@@ -13,6 +13,7 @@ const { meterModel } = require("../static/usage.js");
 const { acctWinAge, acctAgeNote } = require("../static/accounts.js");
 const DS = require("../static/drawersize.js");
 const { railItems } = require("../static/steerrail.js");
+const { iconStubs } = require("./iconpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const read = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
@@ -45,8 +46,20 @@ class El {
   set textContent(v) { this.text = String(v); }
   get textContent() { return this.text; }
   append(...cs) { cs.forEach((c) => this.children.push(c)); }
+  // The one selector the row painter uses: a descendant by class.
+  querySelector(sel) {
+    const cls = sel.slice(1);
+    for (const c of this.children) {
+      if (c && typeof c === "object") {
+        if ((c.className || "").split(/\s+/).includes(cls)) return c;
+        const d = c.querySelector && c.querySelector(sel);
+        if (d) return d;
+      }
+    }
+    return null;
+  }
   appendChild(c) { this.children.push(c); return c; }
-  replaceChildren(...cs) { this.children = cs; }
+  replaceChildren(...cs) { this.children = cs; this.text = ""; }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
   addEventListener(t, f) { this.handlers[t] = f; }
@@ -193,7 +206,7 @@ test("the sidebar top's palette and collapse are kit ghost icon buttons; the pal
   assert.ok(svg, "the palette button holds an empty svg placeholder");
   for (const a of ['data-uicon="search"', 'width="14"', 'height="14"', 'aria-hidden="true"']) assert.ok(svg[0].includes(a), a);
   assert.ok(!/&#8984;|⌘|&#8981;|⌕/.test(pal), "no font glyph is left in the palette button");
-  assert.match(tag("side-collapse")[0], /&#171;/, "the « stays the frame's text glyph");
+  assert.ok(!/&#171;|«/.test(tag("side-collapse")[0]), "the « text glyph is replaced by the panel-left-close glyph (#168)");
   // #340 S6: the layouts row is gone; New session shares one row with the layout button, the palette and «.
   const row = /<div class="xnewrow">[\s\S]*?\n {8}<\/div>/.exec(html);
   assert.ok(row, "div.xnewrow exists");
@@ -382,6 +395,7 @@ function paintRow(s, over) {
   const sname = new El("div"), grow = new El("div");
   const ctx = {
     document: { createElement: (t) => new El(t) }, Date, boxRuntime: "", window: { HOME_DIR: "" },
+    ...iconStubs(() => new El("svg")),
     rowChip: () => null, acctBadge: () => null, awsBadge: () => null, fmtSessionCost: () => "", tierBadge: () => null,
     rowSubline: D.rowSubline, rowMenuOpenFor: () => false, openSessionMenu: () => {}, openTerminal: () => {}, openPaneView: () => false, wmCopyLine: () => "", sessionWorkHome: () => "", handbackLine: () => null,
   };
@@ -433,4 +447,71 @@ test("the row's ⋯ is built collapsed, and expanded when it is the opener of th
   assert.equal(kbOf(paintRow(ASKING)).getAttribute("aria-expanded"), "false");
   assert.equal(kbOf(paintRow(ASKING, { ctx: { rowMenuOpenFor: (id) => id === "a" } })).getAttribute("aria-expanded"), "true");
   assert.equal(kbOf(paintRow(ASKING)).getAttribute("aria-haspopup"), "menu");
+});
+
+// ---- #168 S2: the sidebar's new glyph sites ---------------------------------------------------------------
+// index.html: each is an empty <svg data-uicon> placeholder painted at boot, beside the word (before it), at the
+// size the approved frame draws (after/g4-workspace.js: K.S.row = 14), and never a label or title on the placeholder.
+test("footer links carry nav glyphs: scroll-text, chart-no-axes-column, settings, each 14 before the word", () => {
+  const btn = (id) => new RegExp('<button id="' + id + '"[^>]*>([\\s\\S]*?)</button>').exec(html)[1];
+  const { ICON_NAV } = require("../static/iconmap.js");
+  for (const [id, key, word] of [["side-audit", "audit", "Audit"], ["side-analytics", "analytics", "Analytics"], ["side-settings", "settings", "Settings"]]) {
+    assert.equal(btn(id), '<svg data-uicon="' + ICON_NAV[key] + '" width="14" height="14" aria-hidden="true"></svg>' + word, id);
+  }
+  assert.equal(ICON_NAV.audit, "scroll-text");
+  assert.equal(ICON_NAV.analytics, "chart-no-axes-column");
+  assert.equal(ICON_NAV.settings, "settings");
+});
+
+test("#side-new has a plus 14 before 'New session'; #side-collapse is panel-left-close with its aria-label unchanged", () => {
+  const inner = (id) => new RegExp('<button id="' + id + '"([^>]*)>([\\s\\S]*?)</button>').exec(html);
+  const n = inner("side-new");
+  assert.equal(n[2], '<svg data-uicon="plus" width="14" height="14" aria-hidden="true"></svg>New session');
+  const c = inner("side-collapse");
+  assert.equal(c[2], '<svg data-uicon="panel-left-close" width="14" height="14" aria-hidden="true"></svg>');
+  assert.match(c[1], /aria-label="Hide sidebar"/);
+  assert.match(c[1], /title="Hide sidebar"/);
+});
+
+test("the desktop row's ⋯ holds the ellipsis glyph, keeps its name, and is no text glyph", () => {
+  const r = paintRow(ASKING);
+  const kb = r.sname.children.find((c) => c.className.includes("kbtn"));
+  assert.equal(kb.text, "", "no ⋯ text");
+  assert.equal(kb.children.length, 1);
+  assert.equal(kb.children[0].getAttribute("data-icon"), "ellipsis");
+  assert.equal(kb.children[0].getAttribute("width"), "14");
+  assert.equal(kb.getAttribute("aria-label"), "Session actions");
+  assert.equal(kb.title, "Session actions");
+});
+
+test("a nested row's ↳ is drawn as corner-down-right at 12 where renderSession builds it, aria-hidden, with no text and no later swap", () => {
+  const rs = fn(app, "renderSession");
+  const at = rs.indexOf('arrow.className = "nest-arrow"');
+  assert.ok(at > 0, "the arrow is built in renderSession's nested branch");
+  const branch = rs.slice(rs.lastIndexOf("if (nested)", at), rs.indexOf("li.insertBefore(arrow, adot)", at));
+  assert.match(branch, /arrow\.setAttribute\("aria-hidden", "true"\)/);
+  assert.match(branch, /arrow\.append\(uiIcon\(ICON_ROW\.nested, \{ size: 12 \}\)\)/);
+  assert.ok(!/u21B3|↳"/.test(branch.replace(/\/\/.*$/gm, "")), "no ↳ text left in the branch");
+  assert.ok(!fn(app, "paintCompactRow").includes("nest-arrow"), "paintCompactRow no longer touches the arrow");
+  assert.equal(require("../static/iconmap.js").ICON_ROW.nested, "corner-down-right");
+});
+
+test("phone row keeps its text glyph: renderSession writes ⋯ as text, the swap is paintCompactRow's alone", () => {
+  const rs = fn(app, "renderSession");
+  assert.match(rs, /kb\.textContent = "⋯"/);
+  assert.ok(!/uiIcon|ICON_/.test(rs.slice(rs.indexOf("const kb = document.createElement"))), "no icon in the phone's ⋯ path");
+});
+
+// #168 fix round 1: the footer links are one line at every sidebar width (200 to 560).
+test("footer link buttons are inline-flex nowrap with a 6px glyph gap, and the row drops the glyphs when they do not fit", () => {
+  const css = read("desktop.css");
+  const rule = (sel) => { const m = new RegExp("(?:^|\\n)\\s*" + sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + " \\{([^}]*)\\}").exec(css); assert.ok(m, sel); return m[1]; };
+  const b = rule("#side-foot .side-links button");
+  assert.match(b, /display: inline-flex;/);
+  assert.match(b, /align-items: center;/);
+  assert.match(b, /gap: 6px;/);
+  assert.match(b, /white-space: nowrap;/);
+  assert.match(rule("#side-foot .xlinks"), /container-type: inline-size;/);
+  assert.match(css, /@container \(max-width: 239px\) \{ #side-foot \.side-links \.ui-icon \{ display: none; \} \}/);
+  assert.match(rule("#side-foot .side-links button[hidden]"), /display: none;/);
 });

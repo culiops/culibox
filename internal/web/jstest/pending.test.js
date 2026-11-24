@@ -453,3 +453,22 @@ test("withPending: on the desktop a detached element's label is a stack entry, d
   await p;
   assert.deepStrictEqual(calls, [["show", "Starting shell…", { sticky: true }], ["dismiss", 41]]);
 });
+
+// #168 S2: a button that holds a glyph and a word (New session) gets its children back, not just its text.
+test("a button with an icon child gets the same child nodes back when the work ends", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const icon = { tag: "svg" };
+  const el = fakeEl("New session");
+  el.children = [icon, { tag: "#text" }];
+  el.childNodes = el.children.slice();
+  el.replaceChildren = (...ns) => { el.children = ns; el.restored = ns; };
+  const d = deferred();
+  const p = withPending(el, "Opening…", () => d.promise);
+  t.mock.timers.tick(PENDING_DELAY_MS);
+  assert.strictEqual(el.textContent, "Opening…");
+  el.children = [];
+  d.resolve();
+  await p;
+  assert.strictEqual(el.restored.length, 2);
+  assert.strictEqual(el.restored[0], icon);
+});

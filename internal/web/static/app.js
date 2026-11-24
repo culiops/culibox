@@ -2641,7 +2641,7 @@ function renderSession(s, opts) {
     const arrow = document.createElement("span");
     arrow.className = "nest-arrow";
     arrow.setAttribute("aria-hidden", "true");
-    arrow.textContent = "\u21B3"; // ↳
+    arrow.append(uiIcon(ICON_ROW.nested, { size: 12 })); // ↳ as the corner-down-right glyph (#168); nested is desktop-only
     li.insertBefore(arrow, adot);
   }
 
@@ -2798,7 +2798,8 @@ function paintCompactRow(li, sname, grow, s, conn) {
   kb.type = "button";
   // The kit's ghost icon button, 24px (the frames' .row-menu); .kbtn keeps the reveal on hover.
   kb.className = "kbtn btn btn-ghost btn-icon btn-sm";
-  kb.textContent = "⋯"; // U+22EF, as on the mobile row
+  // The ellipsis glyph (#168); the phone row's own ⋯ in renderSession stays text (the phone UI is frozen).
+  kb.append(uiIcon(ICON_ACTION.more, { size: 14 }));
   kb.setAttribute("aria-label", "Session actions");
   kb.setAttribute("aria-haspopup", "menu");
   // The kit's disclosure state: expanded while this row's own menu is open (desktop.css shows it pressed).
@@ -6696,9 +6697,16 @@ function emptyHint() {
   return hint;
 }
 
+// emptyHero: the 32 px muted glyph above a full-surface empty state's title, drawn for the declared kind (G4 90).
+function emptyHero(kind) {
+  const e = emptyState(kind);
+  return uiIcon(e.icon, { size: 32, cls: "empty-glyph empty-hero" });
+}
+
 function emptyNoneEl(m) {
   const root = emptyEl("div", "placeholder empst");
   root.append(
+    emptyHero("none"),
     emptyEl("h1", "empst-title", "No session open"),
     emptyEl("p", "empst-sub", "Pick a session on the left, or start an agent from a profile you used recently."),
   );
@@ -6724,6 +6732,7 @@ function emptyNoneEl(m) {
 function emptyFirstEl() {
   const root = emptyEl("div", "placeholder empst empst-first");
   root.append(
+    emptyHero("first"),
     emptyEl("h1", "empst-title", "Welcome to CuliBox"),
     emptyEl("p", "empst-sub", "Run AI agents, keep them contained, and let them touch your cloud safely. Three steps:"),
   );
@@ -7592,7 +7601,7 @@ function kitTabRow(cell, t) {
   const x = document.createElement("button");
   x.type = "button";
   x.className = "menu-x btn btn-ghost btn-icon btn-sm";
-  x.textContent = "\u00D7";
+  x.append(uiIcon(ICON_ACTION.close));
   x.title = t.kind === "terminal" ? "Close tab (the session keeps running)" : "Close tab";
   x.setAttribute("aria-label", "Close " + t.title());
   x.onclick = () => { closeSessionMenu(false); cell.closeTab(t); };
@@ -7653,7 +7662,9 @@ function sessionRowFor(id) {
 document.addEventListener("click", (e) => {
   const menu = $("session-menu");
   if (!menu || !menu.classList.contains("open")) return;
-  if (!menu.contains(e.target) && e.target !== sessionMenuAnchor) closeSessionMenu(false);
+  // The anchor is the ⋯ button, and a click on its glyph lands on the <svg> (or its shape) inside it: contains, not ===.
+  const a = sessionMenuAnchor;
+  if (!menu.contains(e.target) && !(a && a.contains(e.target))) closeSessionMenu(false);
 });
 document.addEventListener("keydown", (e) => {
   const menu = $("session-menu");

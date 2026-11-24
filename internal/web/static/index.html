@@ -58,10 +58,10 @@
           <span id="side-env" hidden></span>
         </div>
         <div class="xnewrow">
-          <button id="side-new" type="button" class="pbtn">New session</button>
+          <button id="side-new" type="button" class="pbtn"><svg data-uicon="plus" width="14" height="14" aria-hidden="true"></svg>New session</button>
           <span class="xlay-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm xlay" aria-haspopup="menu" aria-expanded="false" title="Layout: 4 panes (click to change)" aria-label="Layout: 4 panes"></button></span>
           <button id="side-palette" type="button" class="btn btn-ghost btn-icon btn-sm" title="Command palette" aria-label="Command palette"><svg data-uicon="search" width="14" height="14" aria-hidden="true"></svg></button>
-          <button id="side-collapse" type="button" class="btn btn-ghost btn-icon btn-sm" title="Hide sidebar" aria-label="Hide sidebar">&#171;</button>
+          <button id="side-collapse" type="button" class="btn btn-ghost btn-icon btn-sm" title="Hide sidebar" aria-label="Hide sidebar"><svg data-uicon="panel-left-close" width="14" height="14" aria-hidden="true"></svg></button>
         </div>
       </div>
       <!-- System banner (Plan 7 Task 7); the store banner (Task 9) has its own slot below it. Both empty and hidden until painted. -->
@@ -112,9 +112,9 @@
         <div class="xlinks">
           <span id="side-cost" class="xcost" hidden></span>
           <div class="side-links">
-            <button id="side-audit" type="button" hidden>Audit</button>
-            <button id="side-analytics" type="button" hidden>Analytics</button>
-            <button id="side-settings" type="button">Settings</button>
+            <button id="side-audit" type="button" hidden><svg data-uicon="scroll-text" width="14" height="14" aria-hidden="true"></svg>Audit</button>
+            <button id="side-analytics" type="button" hidden><svg data-uicon="chart-no-axes-column" width="14" height="14" aria-hidden="true"></svg>Analytics</button>
+            <button id="side-settings" type="button"><svg data-uicon="settings" width="14" height="14" aria-hidden="true"></svg>Settings</button>
           </div>
         </div>
       </div>
@@ -141,7 +141,7 @@
         <span id="drawer-hint" class="dr-hint">follows the focused pane</span>
         <span class="dr-fill"></span>
         <button id="drawer-pin" type="button" class="btn btn-ghost btn-icon btn-sm" title="Keep the dock on this session" aria-label="Pin the dock to this session" aria-pressed="false"><svg data-uicon="pin" width="14" height="14" aria-hidden="true"></svg></button>
-        <button id="drawer-x" type="button" title="Close the dock" aria-label="Close the dock">&#10005;</button>
+        <button id="drawer-x" type="button" title="Close the dock" aria-label="Close the dock"><svg data-uicon="x" width="14" height="14" aria-hidden="true"></svg></button>
       </div>
       <div id="drawer-body" class="dr-body">
         <div id="drawer-viewer" class="dr-viewer">
@@ -794,7 +794,7 @@
     <div class="page-head an-phead">
       <div class="page-head-text"><h1 class="page-title">Analytics</h1><p class="page-desc" id="an-pdesc"></p></div>
       <div class="page-actions"><button class="btn" id="an-rescan" type="button" title="Re-scan transcripts now">Re-scan</button>
-        <button class="btn btn-ghost page-esc" type="button" data-close="analytics-modal" aria-label="Close (Esc)" title="Close (Esc)"><span class="kbd-hint">Esc</span>✕</button></div>
+        <button class="btn btn-ghost page-esc" type="button" data-close="analytics-modal" aria-label="Close (Esc)" title="Close (Esc)"><span class="kbd-hint">Esc</span><svg data-uicon="x" width="12" height="12" aria-hidden="true"></svg></button></div>
     </div>
     <div class="toolbar an-ptools">
       <div class="seg" id="an-pview" role="group" aria-label="View">
@@ -842,7 +842,7 @@
       <div class="page-head-text"><h1 class="page-title">Audit</h1>
         <p class="page-desc">Every credential issued, write elevation, egress connection and settings change, newest first.</p></div>
       <div class="page-actions"><a class="btn" id="au-csv" href="/api/audit.csv" download>Export CSV</a>
-        <button class="btn btn-ghost page-esc" id="au-esc" type="button" data-close="audit-page" aria-label="Close (Esc)" title="Close (Esc)"><span class="kbd-hint">Esc</span>✕</button></div>
+        <button class="btn btn-ghost page-esc" id="au-esc" type="button" data-close="audit-page" aria-label="Close (Esc)" title="Close (Esc)"><span class="kbd-hint">Esc</span><svg data-uicon="x" width="12" height="12" aria-hidden="true"></svg></button></div>
     </div>
     <div class="toolbar au-tools">
       <div class="seg" id="au-filters" role="group" aria-label="Kind">

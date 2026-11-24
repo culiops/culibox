@@ -51,12 +51,16 @@ const ICON_RESOURCE = iconMapOf({
 // The tabs of a pane (G4 18-21).
 const ICON_PANE_TAB = iconMapOf({ terminal: "square-terminal", activity: "activity", access: "shield", files: "folder-tree" });
 
+// The pane's maximize toggle (G4 25): the dock's Full button draws maximize too, one concept for pane and dock.
+const ICON_PANE_CTL = iconMapOf({ maximize: "maximize", restore: "minimize" });
+
 // The kit menu's items (G4 50-61). Port picks: interrupt, bringhome, insert (G4 left-out `r` and today's drawing).
 const ICON_MENU = iconMapOf({
   rename: "pencil-line", edit: "pencil", files: "folder-tree", attribution: "chart-pie", copy: "clipboard-copy",
   split: "columns-2", duplicate: "copy-plus", end: "power", delete: "trash-2", interrupt: "pause",
   bringhome: "arrow-down-to-line", check: "check", download: "download", upload: "upload", refresh: "refresh-cw",
   collapse: "chevrons-down-up", insert: "arrow-right-to-line", "folder-plus": "folder-plus",
+  restart: "rotate-cw", "replies-on": "message-square-reply", "replies-off": "message-square-off",
 });
 
 // Where the shell bar docks a terminal. No legend covers it: the picks (port) match today's drawings (tabs.js).
@@ -73,9 +77,45 @@ const ICON_DOCK_VIEW = iconMapOf({
 // The layout picker, by pane count (G4 1; 1 matches the shape drawn today, sidechrome.js; 4 follows the approved G4 legend n1).
 const ICON_LAYOUT = iconMapOf({ 1: "square", 2: "columns-2", 4: "layout-grid" });
 
+// The system banner's glyphs by banner kind (notifymodel.js sysBannerModel): both sit after the dot in the title
+// (the action buttons stay words). Paused and updated have no drawn glyph (G4's left-out `p`
+// was a proposal, not drawn), so they are not keys.
+const ICON_SYS_BANNER = iconMapOf({ unreachable: ICON_STATUS.unreachable, signedout: ICON_STATUS["signed-out"] });
+
+// The desktop toast stack's status glyph by toast kind (G4 80, 81): warn and error carry their status glyph after the kind dot.
+// Info (a confirmation, the founder's call) stays plain and pending keeps the CSS spinner, so neither is a key.
+const ICON_TOAST = iconMapOf({ warn: ICON_STATUS.warning, error: ICON_STATUS.error });
+
+// The desktop sidebar row's own marks (G4 12): a companion shell's arrow under its parent, drawn at chip size 12.
+const ICON_ROW = iconMapOf({ nested: "corner-down-right" });
+
+// The command palette's result-type glyph by item.kind (G4 70-76): one glyph per KIND, never per command (G4 left-out
+// `n`). Session rows take their glyph from the declared agentKind instead (ICON_LOCKED "agent-claude" and "shell"), and
+// a session of no known kind draws none, so its activity dot stands alone. layout is the layout picker's four-pane glyph
+// (ICON_LAYOUT[4]): one concept, one glyph.
+const ICON_PALETTE_KIND = iconMapOf({
+  new: ICON_LOCKED.new, "session-action": "arrow-right", view: "arrow-right", kill: ICON_MENU.end, layout: ICON_LAYOUT[4],
+  settings: ICON_NAV.settings, file: "file",
+});
+
+// The four empty states (G4 90, 91, 78), by the kind the CALLER is rendering, never by the message text: none = no session
+// open, first = the first-run welcome (both full-surface: a 32 px hero), changes = the dock Changes section of a clean
+// workspace, matches = the palette with no match (both list-level: 14 px inline). `first` is a port pick: no frame draws
+// the first-run screen, so it takes the tier-box glyph's own `box`, the product's mark of a container.
+const ICON_EMPTY = iconMapOf({ none: "app-window", first: "box", changes: "git-compare", matches: "search-x" });
+const EMPTY_HERO = iconMapOf({ none: true, first: true, changes: false, matches: false });
+
+// emptyState(kind): { icon, hero } for a declared kind, null for any other (a prototype key included). `hero` true = the
+// 32 px muted block glyph above a title; false = the 14 px muted glyph before the line of text.
+function emptyState(kind) {
+  if (!Object.prototype.hasOwnProperty.call(ICON_EMPTY, kind)) return null;
+  return { icon: ICON_EMPTY[kind], hero: EMPTY_HERO[kind] };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    emptyState, ICON_EMPTY,
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE,
-    ICON_PANE_TAB, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT,
+    ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_TOAST, ICON_ROW, ICON_PALETTE_KIND,
   };
 }

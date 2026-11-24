@@ -67,6 +67,25 @@ test("rowChip: box, clone and host carry an icon; write does not", () => {
   assert.equal(d.rowChip({ ...idle, clone_of: "/r" }, NOW, "runc").text, "host", "a clone chip is for a boxed session only");
 });
 
+test("header chip declares its tier icon", () => {
+  const model = (session, narrow) => d.paneHeaderModel({ tab: { kind: "terminal" }, session, nowMs: NOW, boxRuntime: "runc", narrow: !!narrow });
+  const live = { ...working, aws_connections: [{ name: "a", label: "a", account_id: "1", role_arn: "arn:aws:iam::1:role/r", elevated_until: FUTURE }] };
+  assert.equal(model(idle).chips[0].icon, "host", "the host tier");
+  assert.equal(model({ ...working, clone_of: "/r" }).chips[0].icon, "clone", "a boxed session with a clone_of");
+  assert.equal(model(working).chips[0].icon, "box");
+  assert.equal(model({ ...idle, clone_of: "/r" }).chips[0].icon, "host", "a clone is a boxed session only, as rowChip");
+  assert.equal(model(live).chips.find((c) => c.tone === "write").icon, undefined, "the write chip has no icon");
+  const cloud = model({ ...working, aws_connections: [{ name: "a", label: "a", account_id: "1", role_arn: "arn:aws:iam::1:role/r" }] }).chips.find((c) => c.tone === "cloud");
+  assert.ok(cloud, "a read credential makes the cloud chip");
+  assert.equal(cloud.icon, undefined, "the cloud chip has no icon");
+  assert.equal(model(idle, true).chips[0].icon, "host", "narrow keeps the same icon");
+  assert.equal(model({ ...working, clone_of: "/r" }, true).chips[0].icon, "clone");
+  assert.deepEqual(d.deskContainmentChip({ ...working, clone_of: "/r" }, "runc").icon, "clone");
+  assert.equal(d.deskContainmentChip({ ...working, exited: true }, "runc"), null);
+  const row = (s) => d.rowChip(s, NOW, "runc").icon;
+  for (const s of [idle, working, { ...working, clone_of: "/r" }]) assert.equal(row(s), d.deskContainmentChip(s, "runc").icon, "rowChip and the header chip read one rule");
+});
+
 test("deskRowKind: terminal for a shell profile, the Claude mark from the session, else nothing", () => {
   assert.deepEqual(d.deskRowKind({ claude: false }, { bin: "/bin/zsh" }), { kind: "shell", title: "zsh shell" });
   assert.deepEqual(d.deskRowKind({ claude: true }, { bin: "claude" }), { kind: "claude", title: "Claude Code session" });

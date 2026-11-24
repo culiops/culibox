@@ -169,10 +169,12 @@ test("Audit head, toolbar and KPI row are the kit components", () => {
   assert.strictEqual(esc.attrs["data-close"], "audit-page", "initDialogs wires every [data-close] button: no builder");
   assert.strictEqual(esc.attrs["aria-label"], "Close (Esc)");
   assert.strictEqual(esc.attrs.title, "Close (Esc)");
-  assert.deepStrictEqual(kids(esc).map(sig), ["span.kbd-hint"]);
+  // #168: the Esc hint, then the shared x glyph (a static-chrome placeholder at 12), no ✕ text.
+  assert.deepStrictEqual(kids(esc).map(sig), ["span.kbd-hint", "svg"]);
   assert.strictEqual(text(kids(esc)[0]), "Esc");
-  assert.strictEqual(text(esc), "Esc✕", "the Esc hint, then the ✕ (U+2715) as plain text");
-  assert.ok(esc.children.some((c) => c.text && c.text.includes("✕")));
+  assert.strictEqual(text(esc), "Esc", "no ✕ text glyph");
+  assert.strictEqual(kids(esc)[1].attrs["data-uicon"], "x");
+  assert.strictEqual(kids(esc)[1].attrs.width, "12");
 
   // The toolbar: Kind seg, Session select, spacer, Range seg (§B2).
   assert.deepStrictEqual(kids(tools).map(sig), ["div.seg", "select.input", "span.grow", "div.seg"]);
@@ -1019,7 +1021,7 @@ test("Analytics and Audit share one head, toolbar and KPI component", () => {
   assert.strictEqual(shape(anActions), shape(auActions));
   assert.strictEqual(shape(kids(anActions).pop()), "button.btn.btn-ghost.page-esc");
   assert.strictEqual(shape(kids(anActions).pop()), shape(kids(auActions).pop()));
-  assert.deepStrictEqual(kids(kids(anActions).pop()).map(shape), kids(kids(auActions).pop()).map(shape), "both Esc ✕ are span.kbd-hint then ✕");
+  assert.deepStrictEqual(kids(kids(anActions).pop()).map(shape), kids(kids(auActions).pop()).map(shape), "both Esc buttons are span.kbd-hint then the x glyph");
   // The toolbar: .toolbar > .seg[role=group] > button.seg-item[aria-pressed], on both.
   assert.strictEqual(shape(anTools), "div.toolbar");
   assert.strictEqual(shape(anTools), shape(auTools));
@@ -1083,8 +1085,10 @@ test("the Analytics markup: the page's nodes in front, the phone's modal after t
   assert.strictEqual(esc.attrs["data-close"], "analytics-modal", "initDialogs wires every [data-close] button");
   assert.strictEqual(esc.attrs["aria-label"], "Close (Esc)");
   assert.strictEqual(esc.attrs.title, "Close (Esc)");
-  assert.deepStrictEqual(kids(esc).map(sig), ["span.kbd-hint"]);
-  assert.strictEqual(text(esc), "Esc✕");
+  assert.deepStrictEqual(kids(esc).map(sig), ["span.kbd-hint", "svg"]);
+  assert.strictEqual(text(esc), "Esc", "no ✕ text glyph (#168)");
+  assert.strictEqual(kids(esc)[1].attrs["data-uicon"], "x");
+  assert.strictEqual(kids(esc)[1].attrs.width, "12");
 
   // The toolbar: View seg | spacer | Range seg | Compare (§B2).
   assert.deepStrictEqual(kids(tools).map(sig), ["div.seg", "span.grow", "div.seg", "button.btn"]);

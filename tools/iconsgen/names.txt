@@ -1,7 +1,9 @@
 # One icon name per line, sorted; "si:" prefix = Simple Icons mark, else Lucide.
 # Input of tools/iconsgen (docs/ICONS.md "Regenerating").
 activity
+app-window
 arrow-down-to-line
+arrow-right
 arrow-right-to-line
 ban
 box
@@ -22,11 +24,13 @@ code
 columns-2
 copy
 copy-plus
+corner-down-right
 diff
 download
 ellipsis
 external-link
 eye
+file
 file-plus
 file-search
 file-text
@@ -48,7 +52,11 @@ loader-circle
 lock
 log-in
 maximize
+message-square-off
+message-square-reply
+minimize
 panel-bottom
+panel-left-close
 panel-right
 panel-right-close
 pause
@@ -58,8 +66,10 @@ pin
 plus
 power
 refresh-cw
+rotate-cw
 scroll-text
 search
+search-x
 settings
 shield
 si:claude

@@ -97,6 +97,21 @@ test("a tab shows its name as text, with the preview, active and dirty marks and
   } finally { p.restore(); }
 });
 
+test("every icon-only control has an aria-label: a tab's close is the x glyph, once, named Close <file>", () => {
+  const p = page();
+  try {
+    p.paint([p.item("/p/a.go", { active: true }), p.item("/p/b.go")]);
+    for (let i = 0; i < 2; i++) {
+      const x = p.part(p.tab(i), "dk-x");
+      assert.equal(x.textContent, "", "no text ✕");
+      assert.deepEqual(x.children.map((n) => [n.getAttribute("data-icon"), n.getAttribute("width")]), [["x", "14"]]);
+      assert.ok(x.getAttribute("aria-label").startsWith("Close "));
+    }
+    p.paint([p.item("/p/a.go", { active: true }), p.item("/p/b.go")]);
+    assert.equal(p.part(p.tab(0), "dk-x").children.length, 1, "a repaint does not draw it again");
+  } finally { p.restore(); }
+});
+
 test("a read-only tab carries the lock mark, a writable one does not", () => {
   const p = page();
   try {

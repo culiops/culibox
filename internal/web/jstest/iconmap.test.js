@@ -81,6 +81,10 @@ test('ICON_RESOURCE equals GLYPHS.md "Resources and credentials"', () => {
   });
 });
 
+test("ICON_PANE_CTL is G4 25: maximize and, while the pane is pinned, minimize", () => {
+  assert.deepStrictEqual({ ...maps.ICON_PANE_CTL }, { maximize: "maximize", restore: "minimize" });
+});
+
 test("every map is frozen and prototype-free", () => {
   const names = Object.keys(maps).filter((k) => k.startsWith("ICON_"));
   assert.ok(names.length >= 10, "the S1 maps: " + names.join(","));
@@ -101,4 +105,24 @@ test("one concept one glyph: tier glyphs are not reused", () => {
   for (const m of [ICON_ACTION, ICON_MENU, ICON_STATUS]) {
     for (const v of Object.values(m)) assert.ok(!["copy", "triangle-alert", "box"].includes(v), v);
   }
+});
+
+test("ICON_TOAST: warn and error carry the status glyphs (G4 80, 81); info and pending have none", () => {
+  assert.deepStrictEqual({ ...maps.ICON_TOAST }, { warn: "circle-alert", error: "circle-x" });
+  assert.equal(maps.ICON_TOAST.warn, ICON_STATUS.warning);
+  assert.equal(maps.ICON_TOAST.error, ICON_STATUS.error);
+  assert.equal(iconOf(maps.ICON_TOAST, "info"), "");
+  assert.equal(iconOf(maps.ICON_TOAST, "pending"), "");
+});
+
+test("emptyState kinds: one helper, four declared kinds (G4 90, 91, 78); hero for the full-surface empties only", () => {
+  assert.deepStrictEqual({ ...maps.ICON_EMPTY }, { none: "app-window", first: "box", changes: "git-compare", matches: "search-x" });
+  assert.deepStrictEqual(maps.emptyState("none"), { icon: "app-window", hero: true });
+  assert.deepStrictEqual(maps.emptyState("first"), { icon: "box", hero: true });
+  assert.deepStrictEqual(maps.emptyState("changes"), { icon: "git-compare", hero: false });
+  assert.deepStrictEqual(maps.emptyState("matches"), { icon: "search-x", hero: false });
+  assert.strictEqual(maps.emptyState("constructor"), null);
+  assert.strictEqual(maps.emptyState("__proto__"), null);
+  assert.strictEqual(maps.emptyState("nope"), null);
+  assert.strictEqual(maps.emptyState(undefined), null);
 });

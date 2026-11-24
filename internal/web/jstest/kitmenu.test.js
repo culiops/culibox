@@ -302,6 +302,24 @@ test("desktop: one .menu-row per tab, a kit .menu-item with its tab icon plus a 
   assert.strictEqual(t.ctx.sessionMenuSid, null, "not about one session: the list poll must not close it");
 });
 
+test("every icon-only control has an aria-label: the switcher's close is the x glyph, named Close <tab>; the phone's stays its text", () => {
+  const t = switcher(1440, [term, view, files]);
+  t.open();
+  for (const r of t.menu.children) {
+    const x = r.children[1];
+    assert.strictEqual(x.className.split(" ")[0], "menu-x");
+    assert.strictEqual(x.textContent, "", "no text ×");
+    assert.deepStrictEqual(x.children.map((n) => [n.getAttribute("data-icon"), n.getAttribute("width")]), [["x", "14"]]);
+    assert.ok(x.getAttribute("aria-label") && x.getAttribute("aria-label").startsWith("Close "), "named");
+  }
+  const phone = switcher(390, [term, view]);
+  phone.open();
+  for (const r of phone.menu.children) {
+    assert.strictEqual(r.children[1].textContent, "\u00D7", "the phone keeps its text ×");
+    assert.strictEqual(r.children[1].children.length, 0);
+  }
+});
+
 // A pane holding a Claude session, a shell, a file, a session of an agent that is neither, and one the list lost (#365).
 const S_CLAUDE = { id: "c1", kind: "terminal", title: () => "bash" };
 const S_SHELL = { id: "s1", kind: "terminal", title: () => "claude" };
@@ -398,7 +416,7 @@ test("desktop: a tab's row shows its path, or its title, on hover; Close says wh
   assert.strictEqual(x(0).getAttribute("aria-label"), "Close agent-box");
   assert.strictEqual(x(1).getAttribute("aria-label"), "Close main.go");
   assert.strictEqual(x(0).type, "button");
-  assert.strictEqual(x(0).textContent, "×");
+  assert.strictEqual(x(0).children[0].getAttribute("data-icon"), "x", "the glyph, not the text ×");
 });
 
 test("desktop: a row closes the menu, focuses the pane and activates its tab; a close closes the menu and that tab", () => {

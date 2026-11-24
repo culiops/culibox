@@ -11,6 +11,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { Node } = require("./fakedom.js");
+const { iconStubs } = require("./iconpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const src = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
@@ -49,6 +50,7 @@ function page(over) {
   const ctx = vm.createContext(Object.assign({
     console, Array, Object, Set, Map, Math, Number, JSON, Date, Promise, String, Error, AbortController,
     document: doc,
+    ...iconStubs(() => new Node("svg", doc)),
     fetch,
     localStorage: {
       getItem: (k) => (st.store.has(k) ? st.store.get(k) : null),
@@ -248,6 +250,24 @@ test("a status that is unavailable is one calm note with the reason on hover, an
   assert.ok(n <= 2, n + " requests beside the first status");
   await p.status({ state: "unavailable", reason: "Git status needs the box runtime (docker)", rootRel: "", entries: [] });
   assert.strictEqual(p.calls("/api/git/numstat").length + p.calls("/api/git/base").length, n, "no request while status is unavailable");
+});
+
+test("a clean workspace's No changes note carries a 14 px git-compare glyph before the words; other notes stay plain (G4 91)", async () => {
+  const p = page();
+  await p.status(okStatus([]));
+  const note = p.el("dock-chg-note");
+  assert.strictEqual(text(note), "No changes");
+  const g = note.children[0];
+  assert.ok(g && g.tag === "svg", "a glyph first");
+  assert.strictEqual(g.attrs["data-icon"], "git-compare");
+  assert.strictEqual(g.attrs.width, "14");
+  assert.match(g.attrs.class, /\bempty-glyph\b/);
+  assert.doesNotMatch(g.attrs.class, /empty-hero/);
+  await p.status(okStatus([]));
+  assert.strictEqual(note.children.length, 1, "a repaint does not stack a second glyph");
+  await p.status({ state: "unavailable", reason: "why", rootRel: "", entries: [] });
+  assert.strictEqual(text(note), "Status unavailable");
+  assert.strictEqual(note.children.length, 0, "a note that is not the clean state has no glyph");
 });
 
 test("a clean workspace says so, with no count in the header", async () => {

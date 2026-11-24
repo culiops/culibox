@@ -12,6 +12,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { Node } = require("./fakedom.js");
+const { iconStubs } = require("./iconpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const src = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
@@ -37,6 +38,7 @@ function watchPage(over) {
   const ctx = vm.createContext(Object.assign({
     console, Object, Array, Map, Set, Math, Number, JSON, Promise, AbortController, encodeURIComponent, Date,
     document,
+    ...iconStubs(() => new Node("svg", document)),
     setInterval: (fn, ms) => { st.intervals.push({ fn, ms, live: true }); return st.intervals.length; },
     clearInterval: (id) => { if (st.intervals[id - 1]) st.intervals[id - 1].live = false; },
     setTimeout: (fn, ms) => { st.timeouts.push({ fn, ms, live: true }); return st.timeouts.length; },
@@ -635,6 +637,7 @@ function fullPage() {
     console, Array, Object, Set, Map, Math, Number, JSON, Promise, String, Error, AbortController, encodeURIComponent,
     Date: { now: () => st.now },
     document: doc,
+    ...iconStubs(() => new Node("svg", doc)),
     fetch,
     localStorage: { getItem: () => null, setItem: () => {} },
     setTimeout: (fn, ms) => { st.timeouts.push({ fn, ms, at: st.now + ms, live: true }); return st.timeouts.length; },

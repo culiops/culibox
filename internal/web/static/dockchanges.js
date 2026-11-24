@@ -564,7 +564,16 @@ function dockChangesRender() {
   const note = dkcEl("dock-chg-note");
   const say = view.kind === "note" ? view.text : rows && view.rows.length === 0 ? "No changes" : "";
   note.hidden = say === "";
-  dkcSetText(note, say);
+  // The clean workspace is the declared "changes" empty state: its glyph goes before the words (G4 91). Any other note stays plain.
+  const clean = view.kind !== "note" && !!rows && view.rows.length === 0;
+  if (clean) {
+    if (note.children.length === 0) {
+      const e = emptyState("changes");
+      note.textContent = say;
+      note.insertBefore(uiIcon(e.icon, { size: 14, cls: "empty-glyph" }), note.firstChild);
+    }
+  } else if (note.children.length) note.textContent = say;
+  else dkcSetText(note, say);
   note.title = view.kind === "note" ? view.title : "";
   const who = name ? "changed by " + name : "changed by this session";
   dkcPaintList(dkcEl("dock-chg-list"), view, who, rv);

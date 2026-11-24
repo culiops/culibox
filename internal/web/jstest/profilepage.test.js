@@ -527,7 +527,8 @@ test("an editable profile: Start session is the primary, then ⋯, a divider and
   assert.strictEqual(sep.getAttribute("aria-hidden"), "true");
   assert.deepStrictEqual(classesOf(esc), ["btn", "btn-ghost", "btn-sm", "set-esc"], "settingsEscButton");
   assert.strictEqual(esc.getAttribute("aria-label"), "Close (Esc)");
-  assert.strictEqual(esc.textContent, "Esc✕");
+  assert.strictEqual(esc.textContent, "Esc", "the close is the x glyph (#168), not the ✕ text");
+  assert.deepStrictEqual(esc.children.filter((c) => c.tag === "svg").map((c) => [c.getAttribute("data-icon"), c.getAttribute("width")]), [["x", "12"]]);
   esc.click();
   assert.deepStrictEqual(t.calls.filter((c) => c.startsWith("close:")), ["close:settings-modal"]);
   // One primary in the whole view.

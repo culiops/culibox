@@ -607,7 +607,12 @@
   /* #side-palette (a drawn magnifier, 14px: the ⌕ glyph is ~7px in fallback fonts) and #side-collapse
      (the « text, which reads) are the kit's .btn .btn-ghost .btn-icon .btn-sm in index.html (m1-1):
      their look is the kit's, not ours. */
-  #side-palette svg { display: block; flex: none; width: 14px; height: 14px; }
+  #side-palette svg, #side-collapse svg { display: block; flex: none; width: 14px; height: 14px; }
+  /* #168: the glyph before the word of New session and of each footer link: 6px gap, the text's middle line. */
+  #side-new .ui-icon { margin-right: 6px; }
+  /* At the 200px minimum New session has 85px for its 80px label (measured): the plus would clip the word, so the row
+     (a size container, below) drops it below 190px, where only the label fits. */
+  @container (max-width: 189px) { #side-new .ui-icon { display: none; } }
   .pbtn {
     width: 100%; padding: 8px 12px; font: 600 var(--t-md) var(--font-ui); cursor: pointer;
     background: var(--accent); color: var(--on-fill); border: 0; border-radius: var(--r-ctl);
@@ -621,7 +626,7 @@
      clips (overflow: hidden), so the menu is placed against the whole row, right-aligned under « and never
      wider than the row (measured: against the 24px button it ran past the sidebar's left edge). app.css's
      fixed 232px .menu width is reset to the content's. */
-  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; position: relative; }
+  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; position: relative; container-type: inline-size; }
   /* The label is centred, so the 2px side padding only shows at the 200px sidebar, where New session gets 85px for its
      80px label (measured); the ellipsis is a guard for a wider fallback font, never a two-line button. */
   #side-top .xnewrow #side-new { flex: 1; min-width: 0; margin-right: 4px; white-space: nowrap; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; }
@@ -684,7 +689,13 @@
   /* #340 S6 (mockups t1, t3): the cost sits on the links line, "≈ $454 today" with a dotted underline that
      says it has a tooltip. When both do not fit (a narrow sidebar, a long amount) the line wraps: the cost
      keeps its own line above the links and is never cut. With the cost hidden the links keep today's place. */
-  #side-foot .xlinks { display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 2px; font-size: var(--t-sm); }
+  #side-foot .xlinks { display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 2px; font-size: var(--t-sm); container-type: inline-size; }
+  /* #168: each footer link is one line, glyph then word, 6px apart (inline-flex, nowrap: the glyph never stacks over the word).
+     When the three do not fit side by side (measured: the three need 232px of row, so the row is 240px wide at a sidebar of about 272px; the query leaves 8px spare) the row drops the glyphs, so
+     the words never wrap or clip. */
+  #side-foot .side-links button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  #side-foot .side-links button[hidden] { display: none; }
+  @container (max-width: 239px) { #side-foot .side-links .ui-icon { display: none; } }
   #side-foot .xlinks > .side-links { margin: 0 -8px 0 auto; }
   #side-foot .xcost { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; text-decoration: underline dotted var(--faint); text-underline-offset: 3px; cursor: help; }
   #side-foot .xcost[hidden] { display: none; }
@@ -900,8 +911,11 @@
      session's so the row reads as a child. */
   #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 32px; }
   #sessions .drow .nest-arrow {
-    flex: none; width: 9px; font: 400 var(--t-sm)/var(--lh-md) var(--font-ui); color: var(--muted); text-align: center;
+    flex: none; width: 12px; font: 400 var(--t-sm)/var(--lh-md) var(--font-ui); color: var(--muted); text-align: center;
   }
+  /* The ↳ is the corner-down-right glyph at 12 (#168), centred on the name's line; the ⋯ glyph is centred in its 24px button. */
+  #sessions .drow .nest-arrow .ui-icon { display: block; margin-top: calc((var(--lh-md) - 12px) / 2); }
+  #sessions .drow .kbtn .ui-icon { display: block; margin: auto; }
   #sessions .drow.nested .dot { width: 6px; height: 6px; margin-top: 7px; margin-right: 1px; }
   #sessions .drow.nested .nm { color: var(--muted); }
   #sessions .drow.nested.sel .nm, #sessions .drow.nested:hover .nm { color: var(--fg); }
@@ -940,7 +954,7 @@
   }
   .ph-switch:hover { background: var(--raise); }
   .ph-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .ph-cnt { flex: none; font-weight: 500; font-size: var(--t-sm); color: var(--muted); }
+  .ph-cnt { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 3px; font-weight: 500; font-size: var(--t-sm); color: var(--muted); }
   .ph-st { flex: none; font-size: var(--t-sm); color: var(--muted); }
   /* Neutral containment and read credential; only an open write window is
      red (D23). A short chip never shrinks (a clipped "h…" says nothing); the
@@ -954,6 +968,10 @@
   }
   .ph-chip.cloud, .ph-chip.write { flex: 0 10000 auto; min-width: 7ch; }
   .ph-chip.host { box-shadow: inset 0 0 0 1px var(--faint); }
+  /* A tier chip draws its declared glyph (11px, deskContainmentChip) before the word; the host glyph is --fg, as the sidebar chip's
+     (#sessions .dchip.host .tchip-i). The write and cloud chips have none. */
+  .ph-chip.has-tier { display: inline-flex; align-items: center; gap: 3px; }
+  .ph-chip.host .ui-icon { color: var(--fg); }
   /* The kit's .chip-write (M6.4: red tint, a 45% ring, mono 600): the same recipe as the sidebar row's .dchip.write. */
   .ph-chip.write { color: var(--red); background: var(--red-tint); box-shadow: inset 0 0 0 1px rgba(240,106,106,.45); font-family: var(--font-mono); font-weight: var(--w-semibold); }
   .ph-main .bdg.acct { flex: 0 3 auto; min-width: 0; }
@@ -1011,6 +1029,8 @@
   .ph-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--line); }
   /* + Shell is the kit's .btn .btn-ghost .btn-sm (tabs.js): its look is the kit's, not ours. */
   .ph-shell[hidden] { display: none; }
+  /* The button holds its words and the plus glyph: wide shows the words, the compact rule below swaps them. */
+  .ph-sh-i { display: none; }
   /* ⋯ ⛶ × keep their 24px at all times and only fade in while the header is hovered or holds focus,
      so the pointer entering never moves the header (F18: the meta's room is the same in or out).
      No pointer-events while they are invisible, so a click cannot land on an icon nobody sees;
@@ -1023,7 +1043,7 @@
   }
   .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { opacity: 1; pointer-events: auto; }
   .ph-ic:hover { color: var(--fg); background: var(--raise); }
-  .ph-more { font-size: var(--t-lg); }
+  .ph-ic .ui-icon { display: block; margin: auto; }
   /* A narrow header's one control is always visible, never an overlay. */
   .ph-ics.nar .ph-more { opacity: 1; pointer-events: auto; }
   .ph-max.pin { color: var(--fg); }
@@ -1046,8 +1066,11 @@
     .ph-sep { display: none; }
     .ph-tab { padding: 0 5px; }
     .ph-files { padding: 0 5px; }
-    .ph-shell { font-size: 0; padding: 0 8px; gap: 0; }
-    .ph-shell::before { content: "+"; font: 500 var(--t-md)/1 var(--font-ui); }
+    /* 14px glyph + 5px each side + the 1px border = 26px, the "+" text's own 26.7px width: the floor rules below keep their slack. */
+    .ph-shell { font-size: 0; padding: 0 5px; gap: 0; }
+    .ph-shell .ph-sh-i { display: block; }
+    /* withPending swaps the button's content for its busy label, which font-size 0 hides along with the glyph: the "…" keeps a busy mark in view. */
+    .ph-shell.busy::before { content: "…"; font: 500 var(--t-md)/1 var(--font-ui); }
   }
   /* Too narrow for three words beside Files (the compact text look needs a 439px pane,
      419px of content box, measured): the three tabs and Files as icons, 24px squares like
@@ -1092,6 +1115,14 @@
      columns at 701px. */
   @container (max-width: 210px) {
     .ph-shell { display: none; }
+  }
+  /* The tier chip's glyph costs the name 14px (11 + the 3px gap). In a pane under 262px (243px of content box) with the tab
+     switcher, that is where "agent-box ▾ · 2" ellipsized where it did not before (measured 227-255px). The chip's word still names the tier;
+     the count's chevron closes up (no gap, -2px: the glyph's own side padding stays) to give back the rest of what the text caret took. */
+  @container (max-width: 243px) {
+    .ph-chip .ui-icon { display: none; }
+    .ph-cnt { gap: 0; }
+    .ph-cnt .ui-icon { margin-right: -2px; }
   }
 
   /* Panes meet on a 1px line, edge to edge (p0/p2), instead of floating in
@@ -1251,6 +1282,7 @@
     background: transparent; border: 0; border-radius: var(--r-ctl);
   }
   #drawer-x:hover { color: var(--fg); background: var(--raise); }
+  #drawer-x .ui-icon, .dk-x .ui-icon { display: block; margin: auto; }
   /* The pin is the kit's ghost icon button (24px); pressed it takes the kit's pressed look. */
   #drawer-pin { flex: none; }
   .dr-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -1406,6 +1438,11 @@
   .dk-br-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; color: var(--fg); }
   .dk-br-sep { flex: none; }
   .dk-chg-note { flex: none; margin: 0; padding: 2px 10px 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* The empty-state glyph (G4 90, 91, 78): muted, the one 14 px inline glyph before a line of text or the 32 px hero above a title. */
+  .empty-glyph { color: var(--muted); }
+  .empty-hero { display: block; }
+  .dk-chg-note:not([hidden]):has(> .empty-glyph) { display: flex; align-items: center; gap: 6px; }
+  #pal-empty:not([hidden]):has(> .empty-glyph) { display: flex; align-items: center; gap: 8px; }
   .dk-list { container: dklist / inline-size; flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
   /* One changed file: the type icon, the name, its folder (the part that gives way), the counts and the letter. The name keeps
      its width and the folder takes what is left. The 2px bar on the left edge is the session bar, the one the tree rows wear. */
@@ -4035,6 +4072,12 @@
   #pal-list li.pal-row.sel .pal-hint { color: var(--muted); }
   #pal-list .pal-copy { border-radius: var(--r-chip); }
   #pal-list .pal-copy:hover { background: var(--line); }
+  /* The row's type icon (#168 G4 70-76): muted, full colour on the selected row; the copy button holds only its glyph. */
+  #pal-list .pal-ti { flex: none; margin: 0; color: var(--muted); }
+  #pal-list li.pal-row.sel .pal-ti { color: var(--fg); }
+  #pal-list .pal-ti-gap { flex: none; width: 14px; }
+  #pal-list .pal-copy { padding: 1px 4px; } /* 14 + 2: the selected row, which shows the button, stays as tall as the rest */
+  #pal-list .pal-copy .ui-icon { display: block; }
   #pal-empty { padding: 16px 20px; font-size: var(--t-md); color: var(--muted); }
 
   /* Toast: a --raise card, a left rule only for error (red) and warn (amber; the clone

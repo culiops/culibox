@@ -78,7 +78,7 @@ test("desktop: the row menu is four groups of kit rows, a separator between grou
   assert.deepStrictEqual(t.menu.children.map(shape), [
     btn("pencil-line", "Rename…"), SEP,
     btn("folder-tree", "Open files here"), btn("chart-pie", "Context by tool"), btn("clipboard-copy", "Copy working directory"), btn("columns-2", "Open in new pane"), SEP,
-    btn("pause", "Interrupt"), btn("", "Allow replies"), btn("arrow-down-to-line", "Bring work home now"), btn("copy-plus", "Duplicate…"), SEP,
+    btn("pause", "Interrupt"), btn("message-square-reply", "Allow replies"), btn("arrow-down-to-line", "Bring work home now"), btn("copy-plus", "Duplicate…"), SEP,
     btn("power", "End session…", true),
   ]);
   const kids = t.menu.children;
@@ -103,7 +103,7 @@ test("desktop: every icon is a vendored glyph (uiIcon, 14px), never a font glyph
   t.open({}, live);
   const slots = t.menu.children.filter((n) => n.tag === "button").map((b) => b.children[0]);
   const drawn = slots.filter((sl) => sl.children.length);
-  assert.strictEqual(drawn.length, 9, "nine of the ten rows draw an icon; Allow replies keeps an empty slot");
+  assert.strictEqual(drawn.length, 10, "all ten rows draw an icon");
   for (const sl of slots) {
     assert.strictEqual(sl.textContent, "", "no glyph text in the icon slot");
     assert.strictEqual(sl.attrs["aria-hidden"], "true");
@@ -119,6 +119,24 @@ test("desktop: every icon is a vendored glyph (uiIcon, 14px), never a font glyph
       ["0 0 24 24", "true", "none", "currentColor", "2", "round", "round", "14", "14"], kind);
     assert.ok(svg.children.length >= 1, kind + " has a shape");
   }
+});
+
+test("restart and replies kinds: each draws its own vendored glyph in the menu", () => {
+  const { menuIconSvg } = setup(1440).ctx;
+  assert.strictEqual(menuIcon("restart"), "restart");
+  assert.strictEqual(menuIcon("replies-on"), "replies-on");
+  assert.strictEqual(menuIcon("replies-off"), "replies-off");
+  assert.strictEqual(menuIconSvg("restart").attrs["data-icon"], "rotate-cw");
+  assert.strictEqual(menuIconSvg("replies-on").attrs["data-icon"], "message-square-reply");
+  assert.strictEqual(menuIconSvg("replies-off").attrs["data-icon"], "message-square-off");
+  // The rows themselves: an exited session offers Restart, a live reply-enabled one offers Stop replies.
+  const iconOfRow = (t, text) => t.menu.children.filter((n) => n.tag === "button").find((r) => r.children[1].textContent.startsWith(text)).children[0].children[0].attrs["data-icon"];
+  const ended = setup(1440);
+  ended.open({}, { id: "s3", claude: true, cwd: "/x", status: "exited", exited: true });
+  assert.strictEqual(iconOfRow(ended, "Restart"), "rotate-cw");
+  const on = setup(1440);
+  on.open({}, { id: "s4", claude: true, cwd: "/x", status: "live", replyable: true });
+  assert.strictEqual(iconOfRow(on, "Stop replies"), "message-square-off");
 });
 
 test("desktop: Duplicate and Copy working directory are two glyphs, so the two rows read apart", () => {
@@ -293,4 +311,49 @@ test("a row rebuilt under an open menu is built expanded (paintCompactRow reads 
   // The phone's row ⋯ opens the sheet and has no such state.
   const phone = app.slice(app.indexOf('kb.className = "kbtn";'));
   assert.ok(!/aria-expanded/.test(phone.slice(0, phone.indexOf("right.appendChild(kb)"))), "the phone row's ⋯ keeps its attributes");
+});
+
+// The document click that closes the row menu (app.js): a click on the glyph inside the ⋯ button lands on the <svg> (or
+// its <circle>), not on the button, and must count as a click on the anchor. Before the fix `e.target !== sessionMenuAnchor`
+// closed the menu the same click had just opened. The listener is anonymous, so it is cut out by its opening line and run
+// against a stand-in document that keeps the handler it is given.
+function closerPage(open) {
+  const src = read("app.js");
+  const start = src.indexOf('document.addEventListener("click", (e) => {\n  const menu = $("session-menu");');
+  assert.ok(start >= 0, "the row menu's click closer is in app.js");
+  const end = src.indexOf("\n});\n", start) + 4;
+  const menu = { classList: { contains: (c) => c === "open" && open }, contains: (n) => n === menu };
+  const kb = { kids: [], contains(n) { return n === this || this.kids.includes(n); } };
+  const svg = { parent: kb }, circle = { parent: svg };
+  kb.kids.push(svg, circle);
+  svg.contains = (n) => n === svg || n === circle;
+  const closed = [];
+  let handler = null;
+  const ctx = vm.createContext({
+    document: { addEventListener: (t, h) => { if (t === "click") handler = h; } },
+    $: (id) => (id === "session-menu" ? menu : null),
+    sessionMenuAnchor: kb,
+    closeSessionMenu: (r) => closed.push(r),
+  });
+  new vm.Script(src.slice(start, end)).runInContext(ctx);
+  assert.ok(handler, "the closer registered a click listener");
+  return { click: (target) => handler({ target }), closed, kb, svg, circle, menu };
+}
+
+test("a click on the glyph inside the open menu's ⋯ button keeps the menu open (#168)", () => {
+  const p = closerPage(true);
+  p.click(p.kb);
+  p.click(p.svg);
+  p.click(p.circle);
+  p.click(p.menu);
+  assert.deepStrictEqual(p.closed, [], "the button, its svg and the svg's shape are all the anchor; the menu itself is inside");
+});
+
+test("a click elsewhere still closes the open row menu, and a closed menu ignores every click", () => {
+  const open = closerPage(true);
+  open.click({});
+  assert.deepStrictEqual(open.closed, [false], "outside: closes without returning focus");
+  const shut = closerPage(false);
+  shut.click({});
+  assert.deepStrictEqual(shut.closed, []);
 });
