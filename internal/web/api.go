@@ -201,8 +201,9 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Login     bool           `json:"login"`     // sign-in session for a named claude account (host tier)
 			Clone     *bool          `json:"clone"`     // nil = the profile decides; false = in place; true = its clone (box only)
 			AddRoot   bool           `json:"add_root"`  // the New session form only: make the folder a workspace root (#343)
-			// HostDropsAck: the caller knows a host run of a profile with bindings
-			// runs without them (#359); the spawn refuses a host run of one without it.
+			// HostDropsAck: the caller knows a host run of a profile with bindings has
+			// them as its default credentials, not a limit (#360), and drops what a box
+			// setup carries (#359); the spawn refuses a host run of one without it.
 			HostDropsAck bool `json:"host_drops_bindings"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.Agent == "" {

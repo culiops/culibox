@@ -39,7 +39,10 @@ type SessionView struct {
 	Agent string
 	Nonce string
 	Boxed bool
-	Live  bool
+	// Host: the session runs on the host (not in a box) with its bindings
+	// delivered. Its token is honoured only on its own host socket.
+	Host bool
+	Live bool
 	// Box is the container the session runs in (Session.Box). A token is honoured
 	// only from this box; "" (no box known) refuses every request.
 	Box string
@@ -231,6 +234,7 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		baseWatch: map[connKey]uint64{}, reprobing: map[connKey]uint64{},
 		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
 	b.appr, _ = rec.(ApprovalRecorder)
+	b.rec = tierRecorder{Recorder: rec, lookup: lookup} // after appr: the approval recorder is the caller's own
 	return b
 }
 
@@ -328,7 +332,7 @@ func (b *Broker) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Everything on the shared socket (boxes from before the per-box
 		// sockets) is refused with a respawn message, whatever the path.
-		if _, shared := presenterOf(r.Context()); shared {
+		if _, _, shared := presenterOf(r.Context()); shared {
 			b.serveShared(w, r)
 			return
 		}
@@ -356,9 +360,9 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	// A nonce mismatch must NOT forget: the live session under this id is someone
 	// else's, and a stale token must not reset its cache or rate-limit window.
-	if o, why := b.refusal(r, sv, found, nonce, kindAWS); o != "" {
+	if o, why := b.refusal(r, sid, sv, found, nonce, kindAWS); o != "" {
 		b.recordDenied(Row{Time: now, SessionID: sid, Outcome: o, Error: why})
-		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with an AWS binding") // same text for every reason: no oracle to the box
+		replyErr(w, http.StatusForbidden, deniedReply(sv, kindAWS)) // same text for every reason: no oracle to the box
 		return
 	}
 	name, ok := readConnName(w, r)
@@ -831,7 +835,7 @@ func refusalReason(sv SessionView, found bool, nonce string, k bindingKind) stri
 		return "unknown session"
 	case !sv.Live:
 		return "not live"
-	case !sv.Boxed:
+	case !sv.Boxed && !sv.Host:
 		return "not boxed"
 	case k == kindAWS && sv.AWS == nil && len(sv.AWSConns) == 0, k == kindGitHub && sv.GitHub == nil:
 		return "no binding"

@@ -6,6 +6,8 @@
   <title>CuliBox</title>
   <meta name="robots" content="noindex, nofollow">
   <meta name="theme-color" content="#1e1e2e">
+  <!-- The server fills content with /v/<build id>, the versioned base of /vendor and /xterm (web.go); monacoload.js reads it. -->
+  <meta name="culibox-asset-base" content="">
   <link rel="icon" id="favicon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/xterm/xterm.css">
   <link rel="stylesheet" href="/vendor/highlight-theme.css">
@@ -150,7 +152,9 @@
           <div id="dock-conflict"></div>
           <div id="dock-crumbs" class="dk-crumbs" hidden>
             <nav id="dock-trail" class="dk-trail" aria-label="File path"></nav>
+            <span id="dock-outside" class="dk-outside" hidden><span class="dk-outside-t">Outside this tree</span><span aria-hidden="true">·</span><button type="button" class="link dk-outside-go" title="Show this file in the tree, rooted where it is">Reveal</button></span>
             <span id="dock-edited" class="dk-edited" hidden></span>
+            <button id="dock-blame" class="dk-blame" type="button" hidden><svg class="dk-blame-i" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="2.4"/><path d="M0.8 7h3.8M9.4 7h3.8"/></svg><span class="dk-blame-who"></span><span class="dk-blame-sep" aria-hidden="true">·</span><span class="dk-blame-when"></span><span class="dk-blame-short"></span></button>
           </div>
           <div id="drawer-vhost" class="dr-vhost" hidden></div>
           <div id="drawer-vempty" class="dr-vempty">Open a file from the tree, or click a path in the terminal</div>
@@ -171,6 +175,7 @@
                when there is nothing to say. The tree (#files-pane) is moved into this column by app.js and lands after the root header. -->
           <section id="dock-changes" aria-label="Changes" hidden>
             <div class="dk-chg-head">
+              <button id="dock-chg-chev" type="button" class="dk-chev" aria-expanded="true" aria-controls="dock-chg-list" aria-label="Changes" title="Collapse Changes"></button>
               <span class="dk-chg-title">Changes</span>
               <span id="dock-chg-count" class="dk-chg-sub"></span>
               <button id="dock-review" type="button" class="link dk-review" title="Review the changes, starting with the first file" hidden>Review</button>
@@ -184,7 +189,9 @@
             <div id="dock-chg-list" class="dk-list" role="group" aria-label="Changed files"></div>
             <div id="dock-chg-legend" class="dk-legend" hidden><i aria-hidden="true"></i><span></span></div>
           </section>
-          <button id="dock-root" type="button" class="dk-root" aria-controls="ft-root-input" title="Change the root folder"><span id="dock-root-name" class="dk-root-name"></span><span id="dock-root-path" class="dk-root-path"></span></button>
+          <!-- The divider between Changes and the tree (docksections.js): drawn only while both are open. -->
+          <div id="dock-secsplit" class="dk-secsplit" role="separator" aria-orientation="horizontal" aria-label="Resize Changes and the folder tree" aria-controls="dock-changes" tabindex="0" title="Drag to resize, double-click to reset"></div>
+          <div class="dk-roothead"><button id="dock-tree-chev" type="button" class="dk-chev" aria-expanded="true" aria-controls="files-pane" aria-label="Folder tree" title="Collapse the folder tree"></button><button id="dock-root" type="button" class="dk-root" aria-controls="ft-root-input" title="Change the root folder"><span id="dock-root-name" class="dk-root-name"></span><span id="dock-root-chip" class="chip dk-root-chip" hidden></span><span id="dock-root-path" class="dk-root-path"></span></button></div>
           <p class="dr-tnote">This session's workspace can't be browsed here.</p></div>
         <div id="drawer-strip" class="dr-strip" role="group" aria-label="Explorer">
           <button id="drawer-strip-tree" type="button" class="btn btn-ghost btn-icon" title="Explorer" aria-label="Open the explorer" aria-expanded="false" aria-controls="drawer-tree"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></button>
@@ -944,6 +951,7 @@
   <script src="/fsops.js"></script>
   <script src="/dirpicker.js"></script>
   <script src="/wspicker.js"></script>
+  <script src="/gitlast.js"></script>
   <script src="/gitstatus.js"></script>
   <script src="/filetree.js"></script>
   <script src="/toaststack.js"></script>
@@ -997,6 +1005,7 @@
   <script src="/monacotheme.js"></script>
   <script src="/monacokeys.js"></script>
   <script src="/linediff.js"></script>
+  <script src="/blamemodel.js"></script>
   <script src="/editorref.js"></script>
   <script src="/insertvisible.js"></script>
   <script src="/insertdecision.js"></script>
@@ -1016,11 +1025,15 @@
   <script src="/reviewmodel.js"></script>
   <script src="/editorreview.js"></script>
   <script src="/editornotes.js"></script>
+  <script src="/editorblame.js"></script>
   <script src="/reviewall.js"></script>
   <script src="/reviewbar.js"></script>
   <script src="/filesdrawer.js"></script>
   <script src="/dockagent.js"></script>
   <script src="/dockchanges.js"></script>
+  <script src="/docksections.js"></script>
+  <script src="/dockreveal.js"></script>
+  <script src="/dockrootchip.js"></script>
   <script src="/dockwatch.js"></script>
   <script src="/spawnpreview.js"></script>
   <script src="/handbackmodel.js"></script>

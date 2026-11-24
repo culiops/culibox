@@ -107,6 +107,21 @@ func credGuidance(bs config.Bindings) string {
 	return strings.Join(parts, " ")
 }
 
+// hostCredLine ends the credential note of a Host session (#360, D5): its
+// credentials are the same as a box's, but it is not in one, so it must also
+// be told they are a default and the machine's own logins are not to be used.
+const hostCredLine = "This session runs on the host, not in a box: these are the default credentials, not a limit. Use them, not this machine's own logins."
+
+// hostCredGuidance is credGuidance for a bound Host session: the same note and
+// hostCredLine. "" when nothing is bound.
+func hostCredGuidance(bs config.Bindings) string {
+	s := credGuidance(bs)
+	if s == "" {
+		return ""
+	}
+	return s + " " + hostCredLine
+}
+
 func prodName(name string, prod bool) string {
 	if prod {
 		return name + " (PROD)"

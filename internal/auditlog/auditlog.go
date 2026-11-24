@@ -166,7 +166,7 @@ var (
 	tEgress = table{srcEgress, "egress_audit",
 		"session_id, host, outcome, '', '', '', '', port, bytes_down, suppressed", true, ""}
 	tCred = table{srcCred, "cred_audit",
-		"'', action, kind, name, actor, '', '', 0, 0, 0", false, ""}
+		"'', action, kind, name, actor, detail, '', 0, 0, 0", false, ""}
 	tStore = table{srcStore, "store_audit",
 		"'', action, actor, detail, '', '', '', 0, 0, 0", false, ""}
 )

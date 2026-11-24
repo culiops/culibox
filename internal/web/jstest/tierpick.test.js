@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel,
-  tierHostDrops, tierDropsLine, tierHasCredentialDrop, tierHostKeeps,
+  tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine,
 } = require("../static/tierpick.js");
 
 const home = "/home/u";
@@ -11,7 +11,9 @@ const short = (p) => p.replace("/home/u", "~");
 const clone = { name: "agent-box", clone_of: "/home/u/repo", default_cwd: "/home/u/clones/repo" };
 const plain = { name: "claude" };
 const hostp = { name: "sh", runtime: "host" };
-const dropper = { name: "infra", runtime: "host", host_drops: ["AWS binding", "GitHub binding"] };
+const dropper = { name: "infra", runtime: "host", host_drops: ["context paths", "\"Sandbox\" option"] };
+const guarded = { name: "infra", runtime: "host", host_guardrail: ["AWS binding", "GitHub binding"] };
+const GUARD = "On Host: AWS and GitHub bindings are the default credentials, not a limit. The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default.";
 const bound = { name: "infra", host_block: "this profile has credential bindings (AWS sandbox, GitHub), so it runs only in a box" };
 
 // A row's text as the user reads it: the segs joined.
@@ -54,36 +56,36 @@ test("tierHostState: host_drops alone leaves Host on; only host_block turns it o
 });
 
 test("tierHostDrops: the profile's host_drops as a clean string list (#359)", () => {
-  assert.deepStrictEqual(tierHostDrops(dropper), ["AWS binding", "GitHub binding"]);
+  assert.deepStrictEqual(tierHostDrops(dropper), ["context paths", "\"Sandbox\" option"]);
   assert.deepStrictEqual(tierHostDrops(plain), []);
   assert.deepStrictEqual(tierHostDrops(null), []);
   assert.deepStrictEqual(tierHostDrops({ host_drops: "AWS binding" }), []);
   assert.deepStrictEqual(tierHostDrops({ host_drops: ["AWS binding", "", 3] }), ["AWS binding"]);
 });
 
-test("tierDropsLine joins like config.JoinKinds and says what Host does instead (#359)", () => {
-  const tail = " The agent uses this machine's own logins (~/.aws, gh) instead.";
-  assert.strictEqual(tierDropsLine(["AWS binding", "GitHub binding"]),
-    "Not on Host: AWS binding and GitHub binding." + tail);
-  assert.strictEqual(tierDropsLine(["AWS binding"]), "Not on Host: AWS binding." + tail);
-  assert.strictEqual(tierDropsLine(["AWS binding", "context paths", "token binding"]),
-    "Not on Host: AWS binding, context paths and token binding." + tail);
+test("tierDropsLine joins like config.JoinKinds, with no logins tail (#360)", () => {
+  assert.strictEqual(tierDropsLine(["context paths", "\"Sandbox\" option"]), "Not on Host: context paths and \"Sandbox\" option.");
+  assert.strictEqual(tierDropsLine(["context paths"]), "Not on Host: context paths.");
+  assert.strictEqual(tierDropsLine(["context paths", "A setting", "B setting"]), "Not on Host: context paths, A setting and B setting.");
   assert.strictEqual(tierDropsLine([]), "");
 });
 
-test("tierHasCredentialDrop: only the AWS, GitHub and token bindings count as credentials (#359)", () => {
-  assert.strictEqual(tierHasCredentialDrop(["context paths", "AWS binding"]), true);
-  assert.strictEqual(tierHasCredentialDrop(["GitHub binding"]), true);
-  assert.strictEqual(tierHasCredentialDrop(["token binding"]), true);
-  assert.strictEqual(tierHasCredentialDrop(["context paths"]), false);
-  assert.strictEqual(tierHasCredentialDrop(["context paths", "a box-only setting"]), false);
-  assert.strictEqual(tierHasCredentialDrop([]), false);
+test("tierHostGuardrail: the profile's host_guardrail as a clean string list (#360)", () => {
+  assert.deepStrictEqual(tierHostGuardrail(guarded), ["AWS binding", "GitHub binding"]);
+  assert.deepStrictEqual(tierHostGuardrail(plain), []);
+  assert.deepStrictEqual(tierHostGuardrail(null), []);
+  assert.deepStrictEqual(tierHostGuardrail({ host_guardrail: "AWS binding" }), []);
+  assert.deepStrictEqual(tierHostGuardrail({ host_guardrail: ["AWS binding", "", 3] }), ["AWS binding"]);
 });
 
-test("tierDropsLine has no logins tail when nothing credential drops (#359)", () => {
-  assert.strictEqual(tierDropsLine(["context paths"]), "Not on Host: context paths.");
-  assert.strictEqual(tierDropsLine(["context paths", "token binding"]),
-    "Not on Host: context paths and token binding. The agent uses this machine's own logins (~/.aws, gh) instead.");
+test("tierGuardrailLine says the bindings are the default credentials, not a limit (#360)", () => {
+  assert.strictEqual(tierGuardrailLine(["AWS binding", "GitHub binding"]), GUARD);
+  assert.strictEqual(tierGuardrailLine(["AWS binding", "GitHub binding", "token binding"]),
+    "On Host: AWS, GitHub and token bindings are the default credentials, not a limit. The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default.");
+  assert.strictEqual(tierGuardrailLine(["GitHub binding"]),
+    "On Host: the GitHub binding is the default credential, not a limit. The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default.");
+  assert.strictEqual(tierGuardrailLine([]), "");
+  assert.ok(!/instead/.test(tierGuardrailLine(["AWS binding"])), "never the old 'uses this machine's own logins instead'");
 });
 
 // Host review 2026-11-23 (#346): Host still passes the profile's own secrets and env, so the warning names them.
@@ -94,18 +96,20 @@ test("tierHostKeeps: the profile's host_keeps as a clean string list", () => {
 });
 
 test("tierDropsLine names what Host still passes after what it drops", () => {
-  assert.strictEqual(tierDropsLine(["GitHub binding"], ["GH_TOKEN secret", "FOO env"]),
-    "Not on Host: GitHub binding. The agent uses this machine's own logins (~/.aws, gh) instead. Still on Host: GH_TOKEN secret and FOO env.");
+  assert.strictEqual(tierDropsLine(["context paths"], ["GH_TOKEN secret", "FOO env"]),
+    "Not on Host: context paths. Still on Host: GH_TOKEN secret and FOO env.");
   assert.strictEqual(tierDropsLine([], ["GH_TOKEN secret"]), "", "nothing dropped: no warning at all");
 });
 
-test("tierModel: the Host card has a Still on Host row when the profile drops and keeps", () => {
+test("tierModel: the Host card has a Still on Host row when the profile drops or guards, and keeps", () => {
   const p = { ...dropper, host_keeps: ["GH_TOKEN secret"] };
   const host = tierModel({ profile: p, cwd: "/home/u/x", home, picked: "", short }).cards[2];
   assert.deepStrictEqual(host.rows.map((r) => r.k), ["Your folder", "Rest of machine", "Not on Host", "Still on Host"]);
   assert.strictEqual(flat(rowOf(host, "Still on Host")), "GH_TOKEN secret.");
   const plain = tierModel({ profile: { ...hostp, host_keeps: ["GH_TOKEN secret"] }, cwd: "/home/u/x", home, picked: "", short }).cards[2];
   assert.ok(!plain.rows.some((x) => x.k === "Still on Host"), "nothing dropped: the card says nothing new");
+  const g = tierModel({ profile: { ...guarded, host_keeps: ["GH_TOKEN secret"] }, cwd: "/home/u/x", home, picked: "", short }).cards[2];
+  assert.deepStrictEqual(g.rows.map((r) => r.k), ["Your folder", "Rest of machine", "On Host", "Still on Host"]);
 });
 
 test("tierPreselect: a host profile with host_drops opens on Box; a clone still wins on its workspace (#359)", () => {
@@ -130,7 +134,26 @@ test("tierModel: Host stays pickable with host_drops, and its card has the Not o
   assert.ok(!box.rows.some((x) => x.k === "Not on Host"));
 });
 
-test("tierModel: the Not on Host row has no logins tail when only non-credential items drop (#359)", () => {
+test("tierModel: a guarded profile's Host card says its bindings are the default credentials, not a limit (#360)", () => {
+  const m = tierModel({ profile: guarded, cwd: "/home/u/x", home, picked: "", short });
+  assert.strictEqual(m.pick, "box", "Host is one click away, never the default");
+  const host = m.cards[2];
+  assert.strictEqual(host.disabled, false);
+  assert.deepStrictEqual(host.rows.map((r) => r.k), ["Your folder", "Rest of machine", "On Host"]);
+  const r = rowOf(host, "On Host");
+  assert.strictEqual(r.k + ": " + flat(r), GUARD);
+  assert.strictEqual(tierModel({ profile: guarded, cwd: "/home/u/x", home, picked: "host", short }).pick, "host");
+  assert.ok(!m.cards[0].rows.some((x) => x.k === "On Host"));
+  const both = tierModel({ profile: { ...guarded, host_drops: ["context paths"] }, cwd: "/home/u/x", home, picked: "", short }).cards[2];
+  assert.deepStrictEqual(both.rows.map((r) => r.k), ["Your folder", "Rest of machine", "On Host", "Not on Host"]);
+  assert.strictEqual(flat(rowOf(both, "Not on Host")), "context paths.");
+});
+
+test("tierPreselect: a host profile with a guardrail opens on Box too (#360)", () => {
+  assert.strictEqual(tierPreselect({ profile: guarded, cwd: "/home/u/x", home }), "box");
+});
+
+test("tierModel: the Not on Host row has no logins tail (#359)", () => {
   const p = { name: "ctx", runtime: "host", host_drops: ["context paths"] };
   const host = tierModel({ profile: p, cwd: "/home/u/x", home, picked: "", short }).cards[2];
   const r = rowOf(host, "Not on Host");
@@ -917,56 +940,67 @@ test("renderTierPick syncs the critical-rm row after the cards are drawn, with o
 
 // --- the confirm before a host spawn that drops bindings (#359) ---------------------------------------------------
 
-test("hostDropsConfirm asks with the exact copy and the drops as a bullet list, Cancel focused (#359)", async () => {
+test("hostDropsConfirm with drops only asks with the drops as a bullet list, Cancel focused (#359)", async () => {
   const asked = [];
   const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; } });
-  const ok = await vm.runInContext('hostDropsConfirm("infra", ["AWS binding", "GitHub binding"])', pg.ctx);
+  const ok = await vm.runInContext('hostDropsConfirm("infra", ["context paths", "A setting"])', pg.ctx);
   assert.strictEqual(ok, true);
   const o = asked[0];
-  assert.strictEqual(o.title, "Start on Host without its bindings?");
+  assert.strictEqual(o.title, "Start on Host without its box settings?");
   assert.strictEqual(o.body, "infra will run with your user's full access to this machine. These do not apply on Host:");
-  assert.strictEqual(o.hint, undefined, "the default hint stays: the logins note is in the body, where askFitHint cannot hide it");
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(o.notes)), [["The agent uses this machine's own logins (~/.aws, gh) instead. Box keeps them."]]);
+  assert.strictEqual(o.hint, undefined);
+  assert.ok(!o.notes || o.notes.length === 0, "no logins note");
   assert.strictEqual(o.confirmLabel, "Start on Host");
   assert.strictEqual(o.danger, true);
   assert.strictEqual(o.focusCancel, true);
   const nodes = Array.isArray(o.extra) ? o.extra : [o.extra];
   const ul = nodes[0];
   assert.strictEqual(ul.tag, "ul");
-  assert.deepStrictEqual(ul.querySelectorAll("li").map((li) => li.textContent), ["AWS binding", "GitHub binding"]);
+  assert.deepStrictEqual(ul.querySelectorAll("li").map((li) => li.textContent), ["context paths", "A setting"]);
 });
 
-test("hostDropsConfirm with no credential drop names box settings and has no logins sentence (#359)", async () => {
+test("hostDropsConfirm with a guardrail only says the bindings are the default credentials, not a limit (#360)", async () => {
   const asked = [];
   const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; } });
-  await vm.runInContext('hostDropsConfirm("infra", ["context paths"])', pg.ctx);
+  await vm.runInContext('hostDropsConfirm("infra", [], [], ["AWS binding", "GitHub binding"])', pg.ctx);
+  const o = asked[0];
+  assert.strictEqual(o.title, "Start on Host?");
+  assert.strictEqual(o.body, "infra will run with your user's full access to this machine, not in a box.");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(o.notes)), [[GUARD]]);
+  assert.ok(!o.extra || (Array.isArray(o.extra) && o.extra.length === 0), "no drops list");
+  assert.strictEqual(o.confirmLabel, "Start on Host");
+  assert.strictEqual(o.danger, true);
+  assert.strictEqual(o.focusCancel, true);
+});
+
+test("hostDropsConfirm with a guardrail and drops lists the drops and the guardrail line, then what Host still passes (#360)", async () => {
+  const asked = [];
+  const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; } });
+  await vm.runInContext('hostDropsConfirm("infra", ["context paths"], ["GH_TOKEN secret", "FOO env"], ["AWS binding"])', pg.ctx);
   const o = asked[0];
   assert.strictEqual(o.title, "Start on Host without its box settings?");
-  assert.strictEqual(o.hint, undefined);
-  assert.ok(!o.notes || o.notes.length === 0, "no logins note");
+  assert.strictEqual(o.body, "infra will run with your user's full access to this machine. These do not apply on Host:");
   const ul = (Array.isArray(o.extra) ? o.extra : [o.extra])[0];
   assert.deepStrictEqual(ul.querySelectorAll("li").map((li) => li.textContent), ["context paths"]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(o.notes)), [
+    ["On Host: the AWS binding is the default credential, not a limit. The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default."],
+    ["Still passed to the agent on Host: GH_TOKEN secret and FOO env."],
+  ]);
 });
 
 test("hostDropsConfirm names the secrets and env Host still passes", async () => {
   const asked = [];
   const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; } });
-  await vm.runInContext('hostDropsConfirm("infra", ["GitHub binding"], ["GH_TOKEN secret", "FOO env"])', pg.ctx);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(asked[0].notes)), [
-    ["The agent uses this machine's own logins (~/.aws, gh) instead. Box keeps them."],
-    ["Still passed to the agent on Host: GH_TOKEN secret and FOO env."],
-  ]);
-  asked.length = 0;
   await vm.runInContext('hostDropsConfirm("infra", ["context paths"], ["GH_TOKEN secret"])', pg.ctx);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(asked[0].notes)), [["Still passed to the agent on Host: GH_TOKEN secret."]]);
 });
 
 test("hostDropsConfirm resolves what askConfirm resolves (#359)", async () => {
   const pg = tpPage({ askConfirm: async () => false });
-  assert.strictEqual(await vm.runInContext('hostDropsConfirm("infra", ["AWS binding"])', pg.ctx), false);
+  assert.strictEqual(await vm.runInContext('hostDropsConfirm("infra", ["context paths"])', pg.ctx), false);
 });
 
-test("the submit asks hostDropsConfirm only for a host spawn that drops, and leaves without spawning on a No (#359)", () => {
+test("the submit asks hostDropsConfirm only for a host spawn that drops or keeps bindings, and leaves without spawning on a No (#359, #360)", () => {
   const src = readStatic("app.js");
   const at = src.indexOf('$("spawn").addEventListener("submit"');
   assert.ok(at > 0);
@@ -976,8 +1010,21 @@ test("the submit asks hostDropsConfirm only for a host spawn that drops, and lea
   assert.ok(ask < body.indexOf("Starting…"), "before the busy state and the Starting label");
   assert.match(body, /w\.runtime === "host"/);
   assert.match(body, /tierHostDrops\(currentProfile\(\)\)/);
-  assert.match(body, /hostDrops\.length && !\(await hostDropsConfirm\(.*\)\) return;/);
+  assert.match(body, /tierHostGuardrail\(currentProfile\(\)\)/);
+  assert.match(body, /\(hostDrops\.length \|\| hostGuardrail\.length\) &&\s*!\(await hostDropsConfirm\(.*\)\) return;/);
   assert.match(body, /hostDropsBindings/);
   const call = body.slice(body.indexOf("spawnPayload({"));
-  assert.match(call, /hostDropsBindings: /);
+  assert.match(call, /hostDropsBindings: hostDrops\.length > 0 \|\| hostGuardrail\.length > 0/);
+});
+
+test("the Host card row and the Host confirm both say a shell's rc files can override the bindings (#360)", async () => {
+  const limit = "your shell's rc files can override the default";
+  for (const g of [["AWS binding"], ["AWS binding", "GitHub binding"]]) {
+    assert.ok(tierGuardrailLine(g).includes(limit), "card line: " + tierGuardrailLine(g));
+  }
+  const asked = [];
+  const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; } });
+  await vm.runInContext('hostDropsConfirm("infra", [], [], ["GitHub binding"])', pg.ctx);
+  const notes = JSON.parse(JSON.stringify(asked[0].notes)).flat();
+  assert.ok(notes.some((n) => n.includes(limit)), "confirm notes: " + JSON.stringify(notes));
 });

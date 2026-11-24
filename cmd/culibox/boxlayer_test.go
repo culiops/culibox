@@ -135,7 +135,7 @@ while [ "$1" = --host ] || [ "$1" = --config ]; do shift 2; done
 case "$1" in
 version) cat "$d/arch" 2>/dev/null || echo arm64 ;;
 image) cat "$d/image" 2>/dev/null || { echo "Error: No such image" >&2; exit 1; } ;;
-ps) case "$*" in *ca-scratch*) ;; *) cat "$d/ps" 2>/dev/null ;; esac ;;
+ps) [ -f "$d/psfail" ] && { echo "cannot connect" >&2; exit 1; }; case "$*" in *ca-scratch*) ;; *) cat "$d/ps" 2>/dev/null ;; esac ;;
 context) [ -f "$d/context" ] || { echo "cannot connect" >&2; exit 1; }; cat "$d/context" ;;
 run|exec) [ -f "$d/sleep" ] && exec sleep 5; cat "$d/probe" 2>/dev/null ;;
 info) echo '{"runc":{}}' ;;

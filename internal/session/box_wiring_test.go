@@ -64,6 +64,21 @@ type fakeBoxes struct {
 	prepares   int
 	prepareErr error
 	order      *callLog // optional: shared with fakeBundles to pin call order
+	conv       string   // ConversationsKeyOf's answer
+}
+
+// ConversationsKeyFor is the box layer's: the key under instance "TEST".
+func (f *fakeBoxes) ConversationsKeyFor(workspace, account, profile string) string {
+	if profile == "" {
+		return ""
+	}
+	return box.ConversationsKey("TEST", workspace, account, profile)
+}
+
+func (f *fakeBoxes) ConversationsKeyOf(string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.conv
 }
 
 // callLog records the order of calls across fakes.

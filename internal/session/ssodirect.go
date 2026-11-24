@@ -65,16 +65,16 @@ func ssoKeys(bs config.Bindings) []string {
 // parallel, and returns a probe result per key (a definite one: the gate
 // passed) and the info the wire view needs. Any binding the gate does not call
 // read-only refuses the spawn, as does hooks that cannot run the gate. The
-// error wraps box.ErrBoxUnavailable and is shown to the user as is; it names
+// error (ssoGateErr; host: a Host spawn) is shown to the user as is; it names
 // refused actions and reasons, never a credential.
-func gateSSODirect(hooks BrokerHooks, bs config.Bindings, agent string) (map[string]awsprobe.Result, map[string]ssoSpawnInfo, error) {
+func gateSSODirect(hooks BrokerHooks, bs config.Bindings, agent string, host bool) (map[string]awsprobe.Result, map[string]ssoSpawnInfo, error) {
 	keys := ssoKeys(bs)
 	if len(keys) == 0 {
 		return nil, nil, nil
 	}
 	chk, ok := hooks.(SSODirectChecker)
 	if !ok {
-		return nil, nil, fmt.Errorf("%w: spawn %s: this CuliBox cannot check that an SSO permission set is read-only, so it will not hand one out", box.ErrBoxUnavailable, agent)
+		return nil, nil, ssoGateErr(agent, host, "this CuliBox cannot check that an SSO permission set is read-only, so it will not hand one out")
 	}
 	type outcome struct {
 		res awsprobe.GateResult
@@ -114,9 +114,19 @@ func gateSSODirect(hooks BrokerHooks, bs config.Bindings, agent string) (map[str
 	}
 	if len(refusals) > 0 {
 		sort.Strings(refusals)
-		return nil, nil, fmt.Errorf("%w: spawn %s: %s", box.ErrBoxUnavailable, agent, strings.Join(refusals, "; "))
+		return nil, nil, ssoGateErr(agent, host, strings.Join(refusals, "; "))
 	}
 	return base, info, nil
+}
+
+// ssoGateErr is the gate's refusal: on a box spawn a containment failure
+// (box.ErrBoxUnavailable), on a Host spawn the profile's refusal, since the
+// user chose Host (#360).
+func ssoGateErr(agent string, host bool, why string) error {
+	if host {
+		return profileRefusal(agent, why)
+	}
+	return fmt.Errorf("%w: spawn %s: %s", box.ErrBoxUnavailable, agent, why)
 }
 
 // ssoRefusal is one binding's refusal as a bounded sentence: every refused

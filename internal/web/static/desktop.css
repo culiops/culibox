@@ -12,6 +12,33 @@
     font-weight: 100 900;
     font-display: swap;
   }
+  /* JetBrains Mono 5.3.0 (SIL OFL 1.1, vendor/jetbrains-mono/: fontsource's repackage, scripts/vendor-jetbrains-mono.sh), the
+     dock's code font (P5): the upright variable font in three subsets, each fetched only when text in its unicode-range is drawn
+     (the ranges are the package's). Vietnamese is there for comments written in it. */
+  @font-face {
+    font-family: "JetBrains Mono";
+    src: url("/vendor/jetbrains-mono/jetbrains-mono-latin-wght-normal.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 100 800;
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: "JetBrains Mono";
+    src: url("/vendor/jetbrains-mono/jetbrains-mono-latin-ext-wght-normal.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 100 800;
+    font-display: swap;
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  @font-face {
+    font-family: "JetBrains Mono";
+    src: url("/vendor/jetbrains-mono/jetbrains-mono-vietnamese-wght-normal.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 100 800;
+    font-display: swap;
+    unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+  }
 
   :root {
     /* New tokens. */
@@ -19,11 +46,16 @@
     --amber: #f5b94a; --red: #f06a6a;
     --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    /* The dock's code text (P5): the editor, the diffs, the read view, markdown code. Not the terminal, not --font-mono. */
+    --font-code: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --r-chip: 4px; --r-ctl: 6px; --r-card: 8px; --r-dlg: 10px;
 
     /* The existing tokens, remapped to the graphite palette. Colour roles:
        amber = needs-you only, green = status only, red = write/prod/destructive
        /error only. */
+    /* The dock tree (P5, mockup 1 T2): names, icons and the file families (never amber, green or red). */
+    --tree-file: #b6bdc6; --tree-dir: #e3e6ea; --tree-icon: #6f7884; --tree-ign: #7d838a;
+    --fam-tf: #a48cf2; --fam-yaml: #5fb6e3; --fam-md: #8ea4c8; --fam-script: #d49ad1; --fam-build: #56c2c8;
     --bg: #0d0f12; --panel: #14171b; --fg: #e6e8eb; --muted: #8b939e;
     --accent: #6ea8fe; --ok: #4ccf8a;
     /* Analytics chart palette (S4 Task 8; UI plan 5 Task 6, call 8): categorical, no green/amber/red (those are status colours)
@@ -1254,9 +1286,19 @@
   }
   .dr-count[hidden] { display: none; }
   .dr-edge:hover, .dr-edge.dragging, .dr-edge:focus-visible,
-  .dr-split:hover, .dr-split.dragging, .dr-split:focus-visible {
+  .dr-split:hover, .dr-split.dragging, .dr-split:focus-visible,
+  .dk-secsplit:hover, .dk-secsplit.dragging, .dk-secsplit:focus-visible {
     background: color-mix(in srgb, var(--accent) 40%, transparent);
   }
+  /* The grip (P3, mockup 5): a short accent pill on the column splitter and on the sections' divider, drawn only while the
+     pointer is over it, it has keyboard focus or it is being dragged (founder Q1, 2026-11-23); at rest the line is all. */
+  .dr-split::after, .dk-secsplit::after {
+    content: ""; position: absolute; left: 50%; top: 50%; border-radius: 2px; background: var(--accent); opacity: 0; pointer-events: none;
+  }
+  .dr-split::after { width: 3px; height: 32px; margin: -16px 0 0 -1px; }
+  .dk-secsplit::after { width: 32px; height: 3px; margin: -1px 0 0 -16px; }
+  .dr-split:hover::after, .dr-split:focus-visible::after, .dr-split.dragging::after,
+  .dk-secsplit:hover::after, .dk-secsplit:focus-visible::after, .dk-secsplit.dragging::after { opacity: 1; }
   /* The tree takes what the column has left (basis 0, so its content height never competes), and scrolls inside it. With basis
      auto a tree taller than the column took height from the Changes section below (rows cut, then none, the toggle painted over
      the root header). The section does not shrink either (#dock-changes). */
@@ -1330,12 +1372,17 @@
   /* The section sits between the top row and the tree and is as tall as its rows, up to 45% of the column, then its list
      scrolls (the header, toggle and branch row stay). It never shrinks for the tree: the tree is the one that gives way. Rows are the tree's size: they follow Settings' "File tree text size". */
   #dock-changes {
-    flex: 0 0 auto; min-height: 0; max-height: 45%; display: flex; flex-direction: column;
+    flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column;
+    /* A share the divider stored on a taller window still leaves the tree its header and 3 rows on a shorter one (measured:
+       31px the top row, 26px the root header, 14px the tree body's padding; the rows at the tree's text size, never under
+       their 22px minimum), the same
+       bound the divider's End key goes to. */
+    max-height: min(var(--dk-chg-max, 45%), calc(100% - 71px - 3 * max(22px, var(--fs-tree) * 22 / 12)));
     border-bottom: 1px solid var(--line);
   }
   #dock-changes[hidden], .dk-branch[hidden], .dk-chg-note[hidden], .dk-legend[hidden], .dk-review[hidden] { display: none; }
   /* The header wraps rather than cut a word: in a narrow explorer "reviewed n of m" stays whole and Review drops to a second row. */
-  .dk-chg-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; row-gap: 0; min-height: 28px; padding: 0 10px; min-width: 0; }
+  .dk-chg-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 0; min-height: 28px; padding: 0 10px 0 0; min-width: 0; cursor: pointer; }
   .dk-chg-title {
     flex: none; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
     letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg);
@@ -1388,8 +1435,9 @@
   .dk-legend span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* The root header: the folder's name, then its path. A click shows the root field (today's picker) under it; a box session's
      tree is its workspace only, so there is nothing to edit. */
+  .dk-roothead { flex: none; display: flex; align-items: center; min-width: 0; }
   .dk-root {
-    flex: none; box-sizing: border-box; width: 100%; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 2px;
+    flex: 1 1 auto; box-sizing: border-box; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 2px 4px;
     border: 0; background: transparent; color: var(--fg); text-align: left; cursor: pointer;
   }
   .dk-root:hover { background: var(--hover); }
@@ -1399,10 +1447,47 @@
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-xs); line-height: var(--lh-xs);
     font-weight: var(--w-semibold); letter-spacing: var(--track-caps); text-transform: uppercase;
   }
+  /* The root's "worktree" / "clone" chip (P4.10, founder pick B): the kit chip, one word that never shrinks; the path beside it
+     gives way first, and the name keeps its own share. Its title says of what and the branch. */
+  .dk-root-chip { flex: none; align-self: center; text-transform: none; letter-spacing: 0; }
+  .dk-root-chip[hidden] { display: none; }
   .dk-root-path { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   /* Today's root field stays in the DOM (the picker is wired to it) and is shown only while the header is being edited. */
   #drawer .dr-tree:not([data-rootedit="1"]) .ft-row { display: none; }
-  #drawer[data-noroot="1"] #dock-changes, #drawer[data-noroot="1"] .dk-root { display: none; }
+  #drawer[data-noroot="1"] #dock-changes, #drawer[data-noroot="1"] .dk-roothead { display: none; }
+  /* --- the explorer's sections collapse, and a divider sets their split (P3, mockup 5) ----------------------------------- */
+  /* docksections.js paints the state on #drawer-tree: data-chg-shut, data-tree-shut, and --dk-chg-max (the section's cap
+     the divider set; unset, today's 45%). Collapsing is these rules only: the section keeps drawing what git says, so its
+     requests are the same either way. The chevron is the tree rows' own glyph, turned when open. */
+  /* It takes the header's 10px left padding and 4px more, and the header's gaps are 4px, so "CHANGES 42 changed Review" keeps
+     the one row it had in the default 1280px column (measured: 203px wide, 3.2px to spare before and after). Its box is drawn
+     small and its press area (::after) is the 24px square a pointer needs. */
+  .dk-chev {
+    flex: none; position: relative; width: 14px; height: 20px; margin-right: -4px; padding: 0; display: inline-grid; place-items: center;
+    border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .dk-chev::after { content: ""; position: absolute; inset: -2px -5px; }
+  .dk-chev::before { content: "\203A"; font-size: var(--t-lg); line-height: 1; }
+  .dk-chev[aria-expanded="true"]::before { transform: rotate(90deg); }
+  .dk-chev:hover { background: var(--hover); color: var(--fg); }
+  .dk-chev:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  /* Collapsed Changes is its header row: the title, the count (or Updating…) and Review. */
+  #drawer-tree[data-chg-shut="1"] #dock-changes > :not(.dk-chg-head) { display: none; }
+  /* A collapsed tree gives its rows' room to Changes, which then runs as long as its rows, and its header sits at the
+     bottom of the column (mockup ③). With both collapsed, each header stays where it was (founder Q2, 2026-11-23). Only
+     while there is a Changes section: with none (not a repository) there is nothing to give the room to, so the tree is
+     drawn and its chevron is not offered; the choice is kept for the next repository. */
+  #drawer-tree[data-tree-shut="1"]:has(> #dock-changes:not([hidden])) #files-pane { display: none; }
+  #drawer-tree[data-tree-shut="1"]:has(> #dock-changes:not([hidden])) .dk-roothead { margin-top: auto; border-top: 1px solid var(--line); padding-bottom: 4px; }
+  #drawer-tree[data-tree-shut="1"]:not([data-chg-shut="1"]) #dock-changes { max-height: none; flex: 0 1 auto; border-bottom: 0; }
+  #drawer-tree:has(> #dock-changes[hidden]) #dock-tree-chev { visibility: hidden; }
+  /* The divider: zero net height (the negative margins), straddling the section's bottom line, as .dr-split straddles the
+     column's border. Drawn only while both sections are open and shown. */
+  .dk-secsplit {
+    flex: none; height: 7px; margin: -4px 0 -3px; position: relative; z-index: 2; cursor: row-resize; touch-action: none;
+  }
+  #drawer-tree[data-chg-shut="1"] .dk-secsplit, #drawer-tree[data-tree-shut="1"] .dk-secsplit,
+  #dock-changes[hidden] + .dk-secsplit, #drawer[data-noroot="1"] .dk-secsplit { display: none; }
   /* A session workspace the fs API refuses is never a root (S1): the column
      says so instead of showing whatever tree was there before. */
   .dr-tnote { display: none; margin: 0; padding: 14px 12px; color: var(--muted); font-size: var(--t-sm); line-height: 1.5; }
@@ -1484,7 +1569,33 @@
   button.dk-crumb:focus-visible { outline: var(--focus); outline-offset: -2px; }
   .dk-sep { flex: none; padding: 0 3px; }
   .dk-edited { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+  /* "Outside this tree · Reveal" (P4.5): the open file is outside the tree's root. It sits after the trail and gives way
+     before anything on the right does: the trail shrinks first, then these words (ellipsis); Reveal and "Edited by" (and P6's
+     blame header after it) never shrink. Muted, as the row is; Reveal is the kit's link. */
+  .dk-outside { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 4px; }
+  .dk-outside[hidden] { display: none; }
+  .dk-outside-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .dk-outside-go { flex: none; font: inherit; }
   .dk-edited::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  /* The file's last commit (P6, editorblame.js), after "Edited by" and giving way before it in the script's three steps
+     (data-form): icon, author and when; icon and "3d"; the icon alone, the long form in the title. "measure" draws every part
+     for the script to measure, within the same task. Muted, as the row is; a button that opens the commit's card. */
+  .dk-blame {
+    flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; overflow: hidden;
+    border: 0; border-radius: var(--r-chip); background: transparent; color: inherit; font: inherit; cursor: pointer;
+  }
+  .dk-blame[hidden] { display: none; }
+  .dk-blame:hover { background: var(--raise); color: var(--fg); }
+  .dk-blame:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  .dk-blame-i { flex: none; width: 12px; height: 12px; }
+  .dk-blame-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+  .dk-blame-sep, .dk-blame-when { flex: none; }
+  .dk-blame-short { display: none; flex: none; }
+  .dk-blame[data-form="short"] :is(.dk-blame-who, .dk-blame-sep, .dk-blame-when),
+  .dk-blame[data-form="icon"] :is(.dk-blame-who, .dk-blame-sep, .dk-blame-when) { display: none; }
+  .dk-blame[data-form="short"] .dk-blame-short, .dk-blame[data-form="measure"] .dk-blame-short { display: inline; }
+  .dk-blame:has(.dk-blame-when:empty) .dk-blame-sep { display: none; }
+  .dk-blame-muted { font-style: italic; }
   /* A read-only file's tab wears a small padlock after its name (drawn here, like the dirty dot, so no glyph has to exist in a
      font): a body and a shackle in the muted colour. */
   .dk-lock { display: none; flex: none; position: relative; width: 8px; height: 6px; margin: 5px 3px 0; border-radius: 1.5px; background: var(--muted); }
@@ -1559,6 +1670,34 @@
   .dk-sb-branch[hidden], .dk-sb-saved[hidden] { display: none; }
   .dk-sb-saved { flex: none; color: var(--ok); }
   .dk-sb-r { flex: none; display: flex; gap: 14px; margin-left: auto; }
+  /* The current line's blame when it does not fit inline (P6): after the branch and "Saved", the first thing cut: it takes only
+     the room the others leave (a basis of 0), so the branch keeps its name. */
+  .dk-sb-blame {
+    flex: 1 1 0; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate;
+    padding: 0; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer;
+  }
+  .dk-sb-blame[hidden] { display: none; }
+  .dk-sb-blame:hover { color: var(--fg); }
+  .dk-sb-blame:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+  /* The inline blame: Monaco's injected text after the cursor line's end, its gap leading in the text itself (Monaco cuts it into
+     spans, each with this class). No font or spacing of its own: editorblame.js measures it at the editor's character width.
+     Monaco's token colour (.monaco-editor .mtk1) is on the same spans, hence the id. */
+  #drawer .monaco-editor .dk-blame-inline { color: var(--muted); }
+  /* The blame card (editorblame.js): a kit panel by the header, the status item or the inline text. */
+  .dk-bcard {
+    position: fixed; z-index: 40; box-sizing: border-box; width: min(380px, calc(100vw - 16px)); padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); color: var(--fg);
+    font: var(--w-regular) var(--t-sm)/var(--lh-sm) var(--font-ui); text-align: left;
+  }
+  .dk-bcard[hidden] { display: none; }
+  .dk-bcard-h { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .dk-bcard-sha { flex: none; color: var(--accent); font-family: var(--font-code); }
+  .dk-bcard-who { flex: 0 1 auto; min-width: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--w-semibold); unicode-bidi: isolate; }
+  .dk-bcard-mail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); unicode-bidi: isolate; }
+  .dk-bcard-chip { flex: none; padding: 0 6px; border: 1px solid var(--accent); border-radius: var(--r-chip); color: var(--accent); font-size: var(--t-xs); line-height: var(--lh-xs); }
+  .dk-bcard-when { margin-top: 2px; color: var(--muted); font-size: var(--t-xs); line-height: var(--lh-xs); }
+  .dk-bcard-sum { margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; unicode-bidi: isolate; }
+  .dk-bcard-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
   /* A file that is not text (dockfileview.js, #344): the view fills the tab, with its own .dk-sb under it. The status bar's left side is the
      facts (size, type, pixel size, length), cut at the right end; the right side, the image's zoom controls, keeps its words. */
   .dk-fv { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
@@ -1720,6 +1859,16 @@
   .dk-ed-body > .dk-md { position: absolute; inset: 0; overflow: auto; background: var(--bg); }
   .dk-md:focus-visible { outline: var(--focus); outline-offset: -2px; }
   .dk-md .md-body { padding: 18px 28px 24px 36px; }
+  /* M1 (P5, mockup 3): the preview is Inter, as the rest of the app, at the reader's size and line-height (app.css: var(--fs-md),
+     1.6), the same on every OS. Prose is held to a 72-character measure; tables and code blocks may use the whole width, so the
+     document itself has no cap. The phone keeps app.css's look. */
+  .md-body { font-family: var(--font-ui); max-width: none; }
+  .md-body p, .md-body ul, .md-body ol, .md-body dl, .md-body blockquote { max-width: 72ch; }
+  /* Markdown code (inline and blocks) is the dock's code font, the face the file has in the editor (P5). */
+  .md-body code, .md-body pre { font-family: var(--font-code); }
+  /* A big document comes in chunks (editormd.js editorMdPump): the browser lays out and paints only the chunks near the view, and
+     remembers each one's height once it has been shown (measured: laying out a 2 MiB file at once was a 9.8 s task). */
+  .dk-md .md-chunk { content-visibility: auto; contain-intrinsic-size: auto 1200px; }
   /* The gutter marks of the lines that differ from git (editordiff.js), drawn by Monaco in the column beside the line numbers: a 3px
      strip, green for added lines and blue for modified ones (the theme's own colours), and a small red wedge on the line a removal
      sits in front of. Monaco sets the width of the column's box itself, so the strip's is stated over it. */
@@ -1795,7 +1944,7 @@
   .dk-agent .btn { flex: none; }
   /* Long lines scroll, never wrap. */
   /* ... unless Wrap lines is on (id + class here beats app.css's .viewer-wrap rule, so say it again). */
-  #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; }
+  #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; font-family: var(--font-code); }
   .viewer-wrap #drawer .viewer-pre { white-space: pre-wrap; width: auto; min-width: 0; }
   /* The viewer toolbar's Save is app.css's filled primary (.vt-btn.pri); its hover is the kit's (F11). */
   .vt-btn.pri:hover:not(.vt-off) { background: var(--accent-hover); border-color: var(--accent-hover); }
@@ -1833,12 +1982,30 @@
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, var(--accent-tint));
   }
   #drawer .ft-branch { display: none; }
+  /* A symlink's row ends its name with a muted ↗ (P4.9); a link to a folder the server serves expands like a folder. */
+  #drawer .ft-link .ft-linkmark { flex: none; color: var(--muted); font-size: var(--t-xs); line-height: 1; }
   /* The chevron, drawn by the row's ::before; a file's is empty, the same width, so every icon starts at the same column. */
   #drawer .ft-node::before { content: ""; flex: none; width: 14px; text-align: center; color: var(--muted); }
   #drawer .ft-node.dir::before { content: "\203A"; font-size: calc(var(--fs-tree) * 15 / 12); }
   #drawer .ft-node.dir[aria-expanded="true"]::before { transform: rotate(90deg); }
   /* A folder's name is the text colour, not app.css's accent, so that the tint below can mean "something changed in here". */
   #drawer .ft-node.dir { color: var(--fg); }
+  /* T2 (P5, mockup 1): a quiet hierarchy. File names a step under the text colour, folder names bright and medium weight, icons
+     grey (not accent); a file family colours its icon only (filetree.js fileFamily sets data-fam), in hues that are never
+     amber, green or red. Every rule here comes before the git tints below and is no stronger, so a change keeps its tint. */
+  #drawer .ft-node > .ft-name { color: var(--tree-file); }
+  #drawer .ft-node.dir > .ft-name { color: var(--tree-dir); font-weight: var(--w-medium); }
+  #drawer .ft-icon { color: var(--tree-icon); }
+  #drawer .ft-node[data-fam="tf"] > .ft-icon { color: var(--fam-tf); }
+  #drawer .ft-node[data-fam="yaml"] > .ft-icon { color: var(--fam-yaml); }
+  #drawer .ft-node[data-fam="md"] > .ft-icon { color: var(--fam-md); }
+  #drawer .ft-node[data-fam="script"] > .ft-icon { color: var(--fam-script); }
+  #drawer .ft-node[data-fam="build"] > .ft-icon { color: var(--fam-build); }
+  /* A gitignored row (git status's ignored list, gitstatus.js gitIgnoreRow) is dimmed, 4.7:1 on --panel so it still reads (the
+     mockup's 45 % measured 2.9:1), and its icon loses its family colour. A selected one reads at full colour: the dim on the
+     selection tint is under 4.5:1. As strong as the rules above and after them, so it wins over them; before the tints. */
+  #drawer .ft-ign:not(.ft-sel) > .ft-name { color: var(--tree-ign); }
+  #drawer .ft-ign:not(.ft-sel) > .ft-icon { color: var(--tree-icon); }
   /* The git letter keeps app.css's colours (M accent, A and U ok, D and C red) and takes the kit's mono step. */
   #drawer .ft-git { min-width: 12px; padding: 0; font: var(--w-semibold) var(--t-xs)/1 var(--font-mono); }
   /* Changed names: the colour of the letter, a half step toward the text colour (mockup B1's #a9c9ff and #8fe0b4; conflicts and

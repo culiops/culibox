@@ -440,12 +440,21 @@ type Manager struct {
 	// while the hook still holds the session, and drops an entry once it does
 	// not. Guarded by mu.
 	ended map[string]endedHold
+	// conv is, per box, the key of the conversations folder it mounts ("" when it
+	// mounts none: a box from before #330, or a spawn with no profile), as ensure
+	// last found or made it. Dropped when the box is gone. Guarded by mu.
+	conv map[string]string
+	// adopt, when set, is told before each move adoptConversations makes out of
+	// a home (SetAdoptHook). Guarded by mu.
+	adopt AdoptHook
 	// started is when this Manager was made: write credentials minted before a
 	// restart cannot outlive it by more than bootHoldFor, so an orphan's hold
 	// (keepEndedHold with no owner) counts from here.
 	started time.Time
 	// writeHold is the hook SetWriteHold installs (guarded by mu); nil = none.
 	writeHold WriteHold
+	// hostHolds is the hook SetHostHolds installs (guarded by mu); nil = none.
+	hostHolds HostHolds
 	// memTotal is docker's MemTotal once read (0 = not yet); memFallbackLogged
 	// stops the unreadable-MemTotal fallback from logging on every spawn. Both
 	// guarded by mu.
@@ -493,6 +502,7 @@ func New(opts Options) (*Manager, error) {
 		adoptedAt:     map[string]time.Time{},
 		ownerWS:       map[string]string{},
 		ended:         map[string]endedHold{},
+		conv:          map[string]string{},
 		started:       time.Now(),
 	}
 	if opts.LockGuards {
@@ -553,6 +563,29 @@ func (m *Manager) SetWriteHold(f WriteHold) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.writeHold = f
+}
+
+// HostHold is a Host session (#360) that may hold AWS write credentials: its
+// folder (symlink-resolved; "" = not known, which overlaps every folder) and
+// why, a WriteHold answer led by the session's name. Ended: the session has
+// ended, and write credentials it was given may still be valid (#333).
+type HostHold struct {
+	Workspace, Why string
+	Ended          bool
+}
+
+// HostHolds lists the Host sessions that hold their folder now. Host sessions
+// have no box, so no container listing shows them. It is called with opMu held,
+// so it must not call back into the Manager.
+type HostHolds func() []HostHold
+
+// SetHostHolds installs the Host-hold hook. Call it once at boot, before any
+// boxed spawn. Without it no Host session holds a folder (none can be granted
+// a window: the hook comes with the broker).
+func (m *Manager) SetHostHolds(f HostHolds) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.hostHolds = f
 }
 
 // RuntimeSysbox and RuntimeRunc are the isolation runtimes a box can get, for
@@ -756,13 +789,20 @@ type BoxKey struct {
 	// for fewer, so without it an imports-off profile could land in a live box
 	// that still mounts imports.
 	NoImports bool
+	// Profile is the name of the profile the session runs (#330). Not identity
+	// (nameFor ignores it): with it set, a box this spawn creates mounts the
+	// profile's conversations folder (ConversationsKey of the instance, the
+	// workspace's real path, the account and this name) over its projects dir,
+	// so conversations follow the profile across boxes of other scopes.
+	// "" mounts no folder.
+	Profile string
 }
 
 // CloneMounts is the clone-mode part of a BoxKey. Hash identifies the clone spec
 // (config.Clone.Hash); RO are the read-only mounts the clone needs: the source
 // repo's .git, the shared paths and the memory dir. Wrap appends them to the
-// extra read-only binds. A clone adds no writable bind (spec D12): the only
-// writable mounts of a box stay its workspace and its home.
+// extra read-only binds. A clone adds no writable bind (spec D12): the writable
+// mounts of a box stay the ones runArgs makes for every box.
 type CloneMounts struct {
 	Hash string
 	RO   []Mount
@@ -947,11 +987,17 @@ func (m *Manager) ensureStateDir(boxName, trust string, extraRO []Mount) (string
 // home in that state is one the box has rigged, and creating its container
 // anyway would hand the same path to Docker, which resolves it as root.
 func ensureMountpoints(root *os.Root, mounts []Mount) error {
+	return ensureMountpointsUnder(root, boxHome, mounts)
+}
+
+// ensureMountpointsUnder is ensureMountpoints for a root that is mounted at the
+// in-box path base (the home, or the conversations folder at ConversationsBox).
+func ensureMountpointsUnder(root *os.Root, base string, mounts []Mount) error {
 	for _, mt := range mounts {
-		rel, err := filepath.Rel(boxHome, mt.Box)
+		rel, err := filepath.Rel(base, mt.Box)
 		if err != nil || rel == "." || rel == ".." ||
 			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue // outside the home: it lands on the read-only rootfs
+			continue // outside base: it lands on the read-only rootfs (or another mount)
 		}
 		if _, err := root.Lstat(rel); err == nil {
 			continue
@@ -1219,7 +1265,10 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		m.ownerWS[name] = ws.Path // what the session's hold covers once the box is gone (#333)
 		m.mu.Unlock()
 	}
-	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
+	// The profile's conversations folder, from the same resolution as the name
+	// (#330). Not identity: the name above does not hash it.
+	conv := m.ConversationsKeyFor(ws.Path, key.Account, key.Profile)
+	if err := m.ensure(ctx, name, ws, extraRO, conv, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
 		if key.Session != "" {
 			m.mu.Lock()
 			if !m.exclusive[name] { // no box of this session counted: nothing to own
@@ -1290,7 +1339,12 @@ func withoutNames(env, names []string) []string {
 // lk, when set, are the guard locks the box must hold before anything runs in
 // it: taken right before `docker run`, or, for a box already running, before
 // the session is counted. A lock that cannot be taken refuses the spawn.
-func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, partial, bound, exclusive, preTrust, preAcceptBypass bool, lk *lockReq) error {
+//
+// conv is the key of the conversations folder the spawn asks for ("" none): a
+// box created here mounts it; a running one is judged by reuseConversations.
+// Either way the key of the folder the box ends up mounting is remembered for
+// ConversationsKeyOf.
+func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, conv string, partial, bound, exclusive, preTrust, preAcceptBypass bool, lk *lockReq) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -1334,6 +1388,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 
 	// One docker call answers both whether the box runs and what it mounts.
 	st, have, labels, err := m.opts.Client.InspectMounts(ctx, name)
+	boxConv := "" // the key of the folder the box mounts, once known
 	if err != nil {
 		m.rearmIfIdle(name)
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
@@ -1374,9 +1429,16 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		// Mounts are fixed at `docker run`, and the box key does not say which
 		// agent will run in the box, so check the box can serve this spawn
 		// before anything else trusts it (brain #131).
-		if st, err = m.reuseMounts(ctx, name, ws.Path, have, extraRO, partial); err != nil {
+		if st, err = m.reuseMounts(ctx, name, ws.Path, have, extraRO, partial, conv != ""); err != nil {
 			m.rearmIfIdle(name)
 			return err
+		}
+		// Destinations alone cannot tell one profile's folder from another's.
+		if st == StateRunning {
+			if st, boxConv, err = m.reuseConversations(ctx, name, have, conv); err != nil {
+				m.rearmIfIdle(name)
+				return err
+			}
 		}
 		// reuseMounts compares destinations only, so a box that mounts ANOTHER
 		// box's broker directory looks just like one that mounts its own.
@@ -1467,6 +1529,14 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		if bundle != "" {
 			srcs = append(srcs, bundle)
 		}
+		convDir := ""
+		if conv != "" {
+			if convDir, err = ensureConversationsDir(m.opts.StateRoot, conv); err != nil {
+				m.rearmIfIdle(name)
+				return err
+			}
+			srcs = append(srcs, convDir)
+		}
 		for _, p := range srcs {
 			if reason := MountUnsafe(p); reason != "" {
 				m.rearmIfIdle(name)
@@ -1477,9 +1547,30 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		if preTrust {
 			trust = ws.Path
 		}
-		if _, err := m.ensureStateDir(name, trust, extraRO); err != nil {
+		// With a conversations folder, the mounts that land inside it get their
+		// mountpoints there, not in the home it covers.
+		homeRO, convRO := extraRO, []Mount(nil)
+		if convDir != "" {
+			homeRO, convRO = splitUnder(extraRO, ConversationsBox)
+		}
+		if _, err := m.ensureStateDir(name, trust, homeRO); err != nil {
 			m.rearmIfIdle(name)
 			return err
+		}
+		if convDir != "" {
+			dropped, err := m.ensureConversationsMount(name, convDir, convRO)
+			if err != nil {
+				m.rearmIfIdle(name)
+				return err
+			}
+			// An optional mount whose mountpoint was not plain is left out: never
+			// handed to docker over what another box put there.
+			extraRO = slices.DeleteFunc(slices.Clone(extraRO), func(mt Mount) bool {
+				return slices.ContainsFunc(dropped, func(d Mount) bool { return d.Box == mt.Box && d.Host == mt.Host })
+			})
+			// No container, so nothing writes in the home: what it holds moves
+			// into the folder before the mount hides it.
+			m.adoptConversations(ctx, name, convDir)
 		}
 		if preAcceptBypass {
 			// Best effort, like the trust entry: without it the agent just asks.
@@ -1514,7 +1605,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, ws.Path, extraRO, fenced, exclusive, bundle, memory)); err != nil {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, ws.Path, extraRO, fenced, exclusive, bundle, memory, convDir)); err != nil {
 			// A box that never came to be holds no lock. One docker may have left
 			// behind keeps it until it is removed.
 			if m.locks != nil {
@@ -1529,6 +1620,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		}
 		created = true
 		guards = true
+		boxConv = conv
 		if verify != nil {
 			if err := verify(ctx, name); err != nil {
 				return m.refuseUnverified(ctx, name, err)
@@ -1567,6 +1659,9 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 	if exclusive {
 		m.MarkExclusive(name)
 	}
+	m.mu.Lock()
+	m.conv[name] = boxConv
+	m.mu.Unlock()
 	m.touchMarker(name)
 	return nil
 }
@@ -1585,7 +1680,9 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 // Every box this build creates also mounts the out dir (PlaywrightOutBox). It is
 // not in extraRO — the caller never asks for it — so it is judged here: present
 // is the norm, absent is a missing OPTIONAL mount (a box from before it existed
-// still runs; its screenshots just stay inside it).
+// still runs; its screenshots just stay inside it). The conversations folder
+// (ConversationsBox, wantConv) is judged the same way: never an extra mount,
+// and a missing OPTIONAL one when the spawn asks for it.
 //
 //   - Exactly what this spawn would create: reuse.
 //   - Idle (no session of this process uses it): removed and recreated, for a
@@ -1600,13 +1697,17 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 //     would start pointed at a path that is not there.
 //
 // Caller holds opMu.
-func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, have []string, extraRO []Mount, partial bool) (State, error) {
+func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, have []string, extraRO []Mount, partial, wantConv bool) (State, error) {
 	got := map[string]bool{}
-	hasOut := false
+	hasOut, hasConv := false, false
 	for _, d := range have {
 		d = filepath.Clean(d)
 		if d == PlaywrightOutBox {
 			hasOut = true // judged below, never an extra mount
+			continue
+		}
+		if d == ConversationsBox {
+			hasConv = true // like the out dir; its source is judged by reuseConversations
 			continue
 		}
 		// The two every box has, and the CA bundle: its presence is judged by
@@ -1619,6 +1720,11 @@ func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, have []stri
 	var missing, required []string
 	if !hasOut {
 		missing = append(missing, PlaywrightOutBox) // optional: never in required
+	}
+	if wantConv && !hasConv {
+		// Optional too: a live box from before #330 keeps its sessions writing
+		// in its home, where the readers still look.
+		missing = append(missing, ConversationsBox)
 	}
 	for _, mt := range extraRO {
 		d := filepath.Clean(mt.Box)
@@ -1798,8 +1904,7 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 			continue // the exclusive spawn's own grant is refused while this box runs
 		}
 		if why := m.writeHeld(b.Name); why != "" {
-			return fmt.Errorf("%w: %s is closed to other boxes while a session in it can write to AWS: %s. "+
-				"Wait for it to end (or drop the window in that session), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, why)
+			return heldByWindow(cwd, why)
 		}
 	}
 	// After the loop: removing an idle box above can leave an ended hold.
@@ -1811,10 +1916,38 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 			return fmt.Errorf("%w: a box of a session that has ended was removed, and CuliBox could not read its folder, so no other box can start in any folder "+
 				"until write credentials of that session expire: %s. Wait until then.", ErrWorkspaceHeld, h.why)
 		}
-		return fmt.Errorf("%w: %s is closed to other boxes until write credentials of a session that has ended expire: %s. "+
-			"Wait until then (drop the window first if that session is still listed), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, h.why)
+		return heldByEnded(cwd, h.why)
+	}
+	// Host sessions (#360) have no box for the loops above to see; last, so a
+	// box's refusal reads as before. A folder not known overlaps every one.
+	m.mu.Lock()
+	hostHolds := m.hostHolds
+	m.mu.Unlock()
+	if hostHolds != nil {
+		for _, h := range hostHolds() {
+			if knownWorkspace(h.Workspace) && !Overlaps(h.Workspace, cwd) {
+				continue
+			}
+			if h.Ended {
+				return heldByEnded(cwd, h.Why)
+			}
+			return heldByWindow(cwd, h.Why)
+		}
 	}
 	return nil
+}
+
+// heldByWindow refuses a spawn into cwd while a session in it may write to AWS.
+func heldByWindow(cwd, why string) error {
+	return fmt.Errorf("%w: %s is closed to other boxes while a session in it can write to AWS: %s. "+
+		"Wait for it to end (or drop the window in that session), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, why)
+}
+
+// heldByEnded refuses a spawn into cwd while write credentials of an ended
+// session may still be valid.
+func heldByEnded(cwd, why string) error {
+	return fmt.Errorf("%w: %s is closed to other boxes until write credentials of a session that has ended expire: %s. "+
+		"Wait until then (drop the window first if that session is still listed), or use a separate folder or worktree.", ErrWorkspaceHeld, cwd, why)
 }
 
 // writeHeld is why the session owning exclusive box name may hold AWS write
@@ -2113,6 +2246,13 @@ func (m *Manager) grantBlock(ctx context.Context, cwd, self string, remove bool)
 	}
 	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance)
 	if err != nil {
+		// Only the listing's own error, while ctx is live, is classified (as
+		// Ping's is): nothing answering at the daemon's endpoint is marked
+		// ErrDockerNotRunning, text unchanged, so a Host session's grant can
+		// tell "no box can be running" from any other failure (#360).
+		if ctx.Err() == nil && errors.Is(classifyDaemonErr(err), ErrDockerNotRunning) {
+			err = daemonDownErr{err}
+		}
 		return GrantBlock{}, fmt.Errorf("box: listing boxes: %w", err)
 	}
 	for _, b := range boxes {

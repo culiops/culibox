@@ -274,9 +274,9 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	if !found || !sv.Live {
 		b.Forget(sid)
 	}
-	if o, why := b.refusal(r, sv, found, nonce, kindGitHub); o != "" {
+	if o, why := b.refusal(r, sid, sv, found, nonce, kindGitHub); o != "" {
 		b.recordDenied(Row{Time: now, SessionID: sid, Provider: ProviderGitHub, Outcome: o, Error: why})
-		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with a GitHub binding") // same text for every reason: no oracle to the box
+		replyErr(w, http.StatusForbidden, deniedReply(sv, kindGitHub)) // same text for every reason: no oracle to the box
 		return
 	}
 
@@ -407,7 +407,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	// catches a new spawn under the same id. lookup runs before b.mu, as it
 	// does everywhere else.
 	cur, curFound := b.lookup(sid)
-	o, _ := b.refusal(r, cur, curFound, nonce, kindGitHub) // the same judge, with the box this request came from
+	o, _ := b.refusal(r, sid, cur, curFound, nonce, kindGitHub) // the same judge, with the box this request came from
 	stillLive := o == ""
 	b.mu.Lock()
 	if fl.dead || !stillLive || b.closing {
@@ -418,7 +418,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 			replyErr(w, http.StatusServiceUnavailable, "CuliBox is shutting down")
 			return
 		}
-		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with a GitHub binding")
+		replyErr(w, http.StatusForbidden, deniedReply(cur, kindGitHub))
 		return
 	}
 	b.ghIssued[sid] = append(b.ghIssued[sid], issued{value: m.Value, owner: entry.Owner, installation: m.InstallationID, expires: m.ExpiresAt})

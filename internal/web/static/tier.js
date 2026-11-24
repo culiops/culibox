@@ -55,10 +55,12 @@ function tierBadge(session, boxRuntime) {
 // never host. Empty when there is no box layer, so the hidden row sends no tier
 // at all and the server keeps resolving it.
 //
-// A host profile whose Host run would drop bindings (host_drops, #359) opens on box: Host is one click away, never the default.
+// A host profile whose Host run would drop box settings (host_drops, #359) or keep bindings (host_guardrail, #360) opens on box:
+// Host is one click away, never the default.
 function spawnRuntimeDefault(profile, boxRuntime) {
   if (!boxRuntime) return "";
-  if (profile && Array.isArray(profile.host_drops) && profile.host_drops.length) return TIER_BOX;
+  if (profile && ((Array.isArray(profile.host_drops) && profile.host_drops.length) ||
+    (Array.isArray(profile.host_guardrail) && profile.host_guardrail.length))) return TIER_BOX;
   const rt = profile && profile.runtime;
   return rt === TIER_HOST || rt === TIER_BOX ? rt : TIER_BOX;
 }

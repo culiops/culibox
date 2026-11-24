@@ -309,22 +309,278 @@ function mdWalkFragment(root, rewrite, where) {
   }
 }
 
-// mdRenderFragment is the only place markdown becomes DOM: marked, DOMPurify (MD_PURIFY, as a fragment), highlight.js on the
-// fenced code, then the walk. `deps` = {marked, purify, hljs (optional), rewrite, where (optional)}. Throws when the markup cannot be made; the
-// caller shows the file as plain text instead. The fragment is not yet in the page: appending it is what starts a load.
-function mdRenderFragment(text, deps) {
-  deps.marked.setOptions({ breaks: false, gfm: true }); // marked v12 removed the `highlight` option: the code is highlighted below
-  const html = deps.marked.parse(text);
+// The longest code block the dock highlights (deps.hlMaxChars): highlight.js on a block of 100 KB already takes a noticeable while,
+// and such a block is generated text nobody reads for its colours.
+const MD_HL_MAX_CHARS = 102400;
+
+// mdHlLanguage: the language a fence named, as marked writes it on the <code> ("language-go"), when highlight.js knows it; else "".
+function mdHlLanguage(el, hljs) {
+  const cls = (typeof el.getAttribute === "function" && el.getAttribute("class")) || "";
+  const m = /(?:^|\s)(?:language|lang)-(\S+)/.exec(cls);
+  return m && typeof hljs.getLanguage === "function" && hljs.getLanguage(m[1]) ? m[1] : "";
+}
+
+// mdFinish is the one way a piece of marked's HTML becomes DOM: DOMPurify (MD_PURIFY, as a fragment), highlight.js on the code blocks
+// (every block; or, with deps.hlLabelledOnly, only a block whose fence named a language highlight.js knows, so nothing is
+// auto-detected; and with deps.hlMaxChars, none longer than that), then the walk. Every render goes through it, whole or in chunks.
+function mdFinish(html, deps) {
   if (typeof html !== "string") throw new Error("markdown did not render to a string");
   const frag = deps.purify.sanitize(html, Object.assign({}, MD_PURIFY, { RETURN_DOM_FRAGMENT: true }));
   if (!frag || typeof frag.querySelectorAll !== "function") throw new Error("the sanitizer returned no fragment");
-  if (deps.hljs) frag.querySelectorAll("pre code").forEach((el) => { try { deps.hljs.highlightElement(el); } catch (_) {} });
+  if (deps.hljs) {
+    frag.querySelectorAll("pre code").forEach((el) => {
+      if (deps.hlLabelledOnly && !mdHlLanguage(el, deps.hljs)) return;
+      if (deps.hlMaxChars && el.textContent.length > deps.hlMaxChars) return;
+      try { deps.hljs.highlightElement(el); } catch (_) {}
+    });
+  }
   mdWalkFragment(frag, deps.rewrite, deps.where);
   return frag;
 }
 
+// --- chunks (the dock, for a big file) ----------------------------------------------------------------------------------------
+// One marked.lexer over a 2 MiB file was one 715 ms task, and the whole document's sanitize, highlight, walk and layout another 15 s
+// (measured, Files dock P1). So the dock can ask for the document in chunks: the text is lexed in pieces, one step each, then handed
+// back a few top-level blocks at a time, each through mdFinish. Joined, the chunks are exactly what one marked.parse makes (tested on
+// the real marked), because a piece only ever starts where every block of the one before has ended, and a group of blocks only ever
+// ends where no HTML tag is left open.
+
+// MD_HEADING_CUT: an ATX heading line at the left margin. After a blank line it ends every block that could be open (a paragraph, a
+// list, a quote, indented code, a table, an HTML block of types 6 and 7), so the text can be lexed in two parts there.
+const MD_HEADING_CUT = /^#{1,6}(?:[ \t]|$)/;
+// The HTML blocks that run across blank lines (CommonMark types 1 to 5, as marked 12 reads them): how each starts and what ends it.
+const MD_HTML_SPANS = [
+  { open: /^ {0,3}<(pre|script|style|textarea)(?=[\s>]|$)/i, close: (m) => new RegExp("</" + m[1] + ">", "i") },
+  { open: /^ {0,3}<!--/, close: () => /-->/ },
+  { open: /^ {0,3}<\?/, close: () => /\?>/ },
+  { open: /^ {0,3}<![A-Za-z]/, close: () => />/ },
+  { open: /^ {0,3}<!\[CDATA\[/, close: () => /\]\]>/ },
+];
+
+// mdLexPieces cuts `src` (newlines already \n) into pieces of at least `chunkChars` where it can: only before a heading line
+// (MD_HEADING_CUT) that follows a blank line and is outside a fenced code block and outside an HTML block of MD_HTML_SPANS. A text
+// with no such place is one piece. Joined, the pieces are `src`. mdLexPiecesIter hands them out one at a time, scanning only as far
+// as the next one (a scan of a whole 2 MiB file at once was a 50 to 65 ms step, measured).
+function* mdLexPiecesIter(src, chunkChars) {
+  let start = 0;
+  let pos = 0;
+  let fence = "";   // the open fence's backticks or tildes
+  let html = null;  // the regex that ends the open HTML block
+  let blank = false;
+  while (pos < src.length) {
+    const nl = src.indexOf("\n", pos);
+    const end = nl < 0 ? src.length : nl;
+    const line = src.slice(pos, end);
+    if (fence) {
+      const m = /^ {0,3}([`~]+) *$/.exec(line);
+      if (m && m[1].startsWith(fence)) fence = "";
+    } else if (html) {
+      if (html.test(line)) html = null;
+    } else {
+      if (blank && pos > start && pos - start >= chunkChars && MD_HEADING_CUT.test(line)) { yield src.slice(start, pos); start = pos; }
+      const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (f && !(f[1][0] === "`" && line.slice(f[0].length).includes("`"))) fence = f[1];
+      else {
+        for (const k of MD_HTML_SPANS) {
+          const m = k.open.exec(line);
+          if (!m) continue;
+          const close = k.close(m);
+          if (!close.test(line.slice(m[0].length))) html = close;
+          break;
+        }
+      }
+    }
+    blank = /^[ \t]*$/.test(line);
+    pos = end + 1;
+  }
+  yield src.slice(start);
+}
+
+function mdLexPieces(src, chunkChars) {
+  return Array.from(mdLexPiecesIter(src, chunkChars));
+}
+
+// Where a chunk may end. Once the browser parses the HTML, an element left open can hold the blocks after it (a <details> around a
+// changelog, a <span style> or <h1 align> wrapping paragraphs), and a cut inside it would draw those blocks outside it. So the rule
+// keeps blocks together whenever it is unsure, and a wrong guess only makes one step of the draw longer, never the document different:
+//  - an HTML block (a token marked.lexer calls block html) opens EVERY element it does not close, except void elements and those
+//    whose end tag is optional (the parser closes a <p>, <li>, <td>, <tbody> by itself);
+//  - inside a paragraph (an inline html token), only the formatting elements the parser reopens in the next paragraph (its "active
+//    formatting elements") and the block elements that end the <p> they appear in (MD_P_CLOSERS) open anything: any other inline
+//    element is closed by its own block's end tag;
+//  - a close tag only cancels an open element of the same name, so a stray </span> never ends a <div>.
+// Markup that is broken in rarer ways (an unclosed inline <pre>, <script>, <textarea>) swallows the rest of the document in one piece
+// and only up to the next cut in chunks: the chunked result is the more readable one, and both are sanitized the same.
+const MD_VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr", "keygen"]);
+const MD_OPTIONAL_END = new Set(["p", "li", "dt", "dd", "tr", "td", "th", "option", "optgroup", "thead", "tbody", "tfoot", "colgroup", "rb", "rt", "rtc", "rp", "html", "head", "body"]);
+const MD_NEST_INLINE = new Set(["a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]);
+const MD_P_CLOSERS = new Set(["address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "fieldset",
+  "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "main", "menu", "nav", "ol", "pre",
+  "section", "summary", "table", "ul"]);
+// A run with only formatting left open is closed anyway after this many chunks' worth of source (at least the floor): an unclosed <b>
+// in a long file would otherwise hold the rest of it in one chunk, and no cut is right for it. Any other element open is cut only past
+// MD_GROUP_MAX_BLOCK: a <details> of a few hundred KB is a normal file and must stay whole.
+const MD_GROUP_MAX_CHUNKS = 8;
+const MD_GROUP_MAX_FLOOR = 65536;
+const MD_GROUP_MAX_BLOCK = 1048576;
+
+// mdNestNew: what is open at a point of the document: per element name, how many; and how many in all, for formatting and the rest.
+function mdNestNew() {
+  return { fmt: new Map(), blk: new Map(), fmtN: 0, blkN: 0 };
+}
+
+// mdNestTag applies one tag (its lower-case name, whether it closes, whether it came from an HTML block) to `st`.
+function mdNestTag(st, name, close, block) {
+  const fmt = MD_NEST_INLINE.has(name);
+  if (!fmt && (MD_VOID_TAGS.has(name) || MD_OPTIONAL_END.has(name))) return;
+  if (!fmt && !block && !close && !MD_P_CLOSERS.has(name)) return; // closed by its own paragraph
+  const map = fmt ? st.fmt : st.blk;
+  const n = map.get(name) || 0;
+  if (close) {
+    if (n === 0) return; // nothing of that name is open: a stray close
+    map.set(name, n - 1);
+    if (fmt) st.fmtN--; else st.blkN--;
+  } else {
+    map.set(name, n + 1);
+    if (fmt) st.fmtN++; else st.blkN++;
+  }
+}
+
+// mdNestToken applies every tag of the HTML tokens in a token and the tokens inside it (a paragraph's inline tags, a list's items, a
+// table's cells), in document order, leaving code out. Comments and self-closing tags (<x/>) open nothing.
+function mdNestToken(st, token) {
+  const visit = (x) => {
+    if (!x || typeof x !== "object") return;
+    if (Array.isArray(x)) { x.forEach(visit); return; }
+    if (x.type === "code" || x.type === "codespan") return;
+    if (x.type === "html" && typeof x.raw === "string") {
+      const s = x.raw.replace(/<!--[\s\S]*?(?:-->|$)/g, "");
+      for (const m of s.matchAll(/<(\/?)([A-Za-z][A-Za-z0-9-]*)(?:\s[^<>]*)?>/g)) {
+        if (!m[1] && m[0].endsWith("/>")) continue;
+        mdNestTag(st, m[2].toLowerCase(), m[1] === "/", !!x.block);
+      }
+    }
+    for (const k of ["tokens", "items", "header", "rows"]) if (x[k]) visit(x[k]);
+  };
+  visit(token);
+}
+
+// mdChunkGroups splits the top-level tokens into runs of about `chunkChars` of source: a run ends once it holds that much and nothing
+// is open (mdNestToken); with only formatting open, once it holds MD_GROUP_MAX_CHUNKS times that (at least MD_GROUP_MAX_FLOOR); with
+// anything else open, only past MD_GROUP_MAX_BLOCK. Every run carries the document's reference links, as marked's parser expects of a
+// token list. mdChunkGroupsIter makes them one at a time (the walk over a big file's tokens is itself about 100 ms, measured, so the
+// chunked render spreads it over its steps).
+function* mdChunkGroupsIter(tokens, chunkChars) {
+  const inlineMax = Math.max(MD_GROUP_MAX_CHUNKS * chunkChars, MD_GROUP_MAX_FLOOR);
+  let cur = [];
+  let size = 0;
+  let st = mdNestNew();
+  for (const t of tokens) {
+    cur.push(t);
+    size += typeof t.raw === "string" ? t.raw.length : 0;
+    mdNestToken(st, t);
+    const cut = (size >= chunkChars && st.blkN === 0 && st.fmtN === 0) || (st.blkN === 0 && size >= inlineMax) || size >= MD_GROUP_MAX_BLOCK;
+    if (cut) {
+      cur.links = tokens.links;
+      yield cur;
+      cur = [];
+      size = 0;
+      st = mdNestNew();
+    }
+  }
+  if (cur.length) {
+    cur.links = tokens.links;
+    yield cur;
+  }
+}
+
+function mdChunkGroups(tokens, chunkChars) {
+  return Array.from(mdChunkGroupsIter(tokens, chunkChars));
+}
+
+// mdOpenAtEnd: the last block of a piece lexed on its own is one that the rest of the text could have continued: a fenced code block
+// with no closing fence, or an HTML block of MD_HTML_SPANS with no end. Those are the only blocks that run on past a blank line and a
+// heading at the margin (every other one ends there, in marked 12 as in CommonMark), so a piece whose last block is neither lexes
+// exactly as the same text does inside the whole document.
+function mdOpenAtEnd(tokens) {
+  let last = null;
+  for (let i = tokens.length - 1; i >= 0 && !last; i--) if (tokens[i].type !== "space") last = tokens[i];
+  if (!last || typeof last.raw !== "string") return false;
+  if (last.type === "code") {
+    const open = /^ {0,3}(`{3,}|~{3,})/.exec(last.raw);
+    if (!open) return false; // indented code: a heading at the margin ends it
+    // The trailing newlines go by an index scan: a regex such as /\n+$/ is quadratic on a long run of newlines followed by text,
+    // and the file is the agent's (measured: 38 s for a 209 KB fence of blank lines).
+    let end = last.raw.length;
+    while (end > 0 && last.raw.charCodeAt(end - 1) === 10) end--;
+    const lines = last.raw.slice(0, end).split("\n");
+    const close = lines.length > 1 ? /^ {0,3}([`~]+) *$/.exec(lines[lines.length - 1]) : null;
+    return !(close && close[1].startsWith(open[1]));
+  }
+  if (last.type === "html") {
+    for (const k of MD_HTML_SPANS) {
+      const m = k.open.exec(last.raw);
+      if (m) return !k.close(m).test(last.raw.slice(m[0].length));
+    }
+  }
+  return false;
+}
+
+// mdLexSteps lexes `text` as marked.lexer does, a step at a time (each yields null), and returns the tokens. The block pass runs a
+// piece (mdLexPieces) per step, each with a Lexer of its own; a piece whose last block the text after it could have continued
+// (mdOpenAtEnd: the cut fell inside a block mdLexPieces did not see, such as a fence inside an HTML block) is dropped, and everything
+// from it on is lexed in one step, correct if slower. The reference links of the pieces are merged in document order, the first
+// definition of a label winning as in marked, and the inline pass then runs over every piece's queue, in slices of about `chunkChars`,
+// on one Lexer that holds them, so a link resolves wherever its definition is.
+function* mdLexSteps(text, marked, chunkChars) {
+  const src = text.replace(/\r\n|\r/g, "\n");
+  const main = new marked.Lexer(marked.defaults);
+  const queue = [];
+  let at = 0; // where the next piece starts in src
+  for (const piece of mdLexPiecesIter(src, chunkChars)) {
+    let lx = new marked.Lexer(marked.defaults);
+    lx.blockTokens(piece, lx.tokens);
+    const rest = at + piece.length < src.length && mdOpenAtEnd(lx.tokens); // the cut was wrong: lex everything from here at once
+    if (rest) {
+      lx = new marked.Lexer(marked.defaults);
+      lx.blockTokens(src.slice(at), lx.tokens);
+    }
+    for (const t of lx.tokens) main.tokens.push(t);
+    for (const k of Object.keys(lx.tokens.links)) if (!(k in main.tokens.links)) main.tokens.links[k] = lx.tokens.links[k];
+    for (const q of lx.inlineQueue) queue.push(q);
+    yield null;
+    if (rest) break;
+    at += piece.length;
+  }
+  let done = 0;
+  for (const q of queue) {
+    main.inlineTokens(q.src, q.tokens);
+    done += q.src.length;
+    if (done >= chunkChars) { done = 0; yield null; }
+  }
+  return main.tokens;
+}
+
+// mdChunks: the chunked render. A step that only lexed yields null (nothing to show yet); every other step yields one fragment.
+function* mdChunks(text, deps) {
+  const tokens = yield* mdLexSteps(text, deps.marked, deps.chunkChars);
+  for (const group of mdChunkGroupsIter(tokens, deps.chunkChars)) yield mdFinish(deps.marked.parser(group), deps);
+}
+
+// mdRenderFragment is the only place markdown becomes DOM: marked, then mdFinish (DOMPurify, highlight.js, the walk). `deps` =
+// {marked, purify, hljs (optional), rewrite, where (optional), and, set by the dock only: hlLabelledOnly, hlMaxChars, chunkChars}.
+// Throws when the markup cannot be made; the caller shows the file as plain text instead. The fragment is not yet in the page:
+// appending it is what starts a load. With deps.chunkChars (a number of characters) it returns an iterator instead (mdChunks): its
+// steps yield null or the next fragment, in order, and may throw like the one-shot render.
+function mdRenderFragment(text, deps) {
+  deps.marked.setOptions({ breaks: false, gfm: true }); // marked v12 removed the `highlight` option: the code is highlighted below
+  if (deps.chunkChars > 0) return mdChunks(text, deps);
+  return mdFinish(deps.marked.parse(text), deps);
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    isLocalSrc, mdUnsafeAttr, MD_PURIFY, mdIsRelative, mdInertRef, mdUnsafeCss, mdUnsafeLink, mdWalkFragment, mdRenderFragment,
+    isLocalSrc, mdUnsafeAttr, MD_PURIFY, mdIsRelative, mdInertRef, mdUnsafeCss, mdUnsafeLink, mdWalkFragment, mdRenderFragment, MD_HL_MAX_CHARS,
+    mdLexPieces, mdChunkGroups, mdLexSteps,
   };
 }

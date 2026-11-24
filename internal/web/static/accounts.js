@@ -157,10 +157,11 @@ function acctSpawnPick(prefillAccount, profileAccount) {
 // rather than refusing them; any other refusal is shown by the caller. Log in
 // spawns on the host, so a profile the server would refuse there (host_block
 // set, e.g. locked to the box) is skipped, and so is one whose Host run drops
-// bindings (host_drops): that spawn needs the confirm this click does not ask.
+// bindings (host_guardrail) or box settings (host_drops): that spawn needs the confirm this click does not ask.
 function acctLoginProfile(profiles) {
   const ps = profiles || [];
-  const hostOK = (x) => !x.host_block && !(Array.isArray(x.host_drops) && x.host_drops.length);
+  const some = (a) => Array.isArray(a) && a.length > 0;
+  const hostOK = (x) => !x.host_block && !some(x.host_drops) && !some(x.host_guardrail);
   return ps.find((x) => x.claude && x.name === "claude" && hostOK(x))
     || ps.find((x) => x.claude && !x.account && hostOK(x)) || null;
 }

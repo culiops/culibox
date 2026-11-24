@@ -33,7 +33,9 @@ let dockEditorOwner = null; // the EditorTab whose model is in the editor now, o
 
 // How long "Saved" stays in the status bar.
 const EDITOR_SAVED_MS = 2000;
-const EDITOR_FONT = "ui-monospace, Menlo, monospace"; // the read view's own (app.css .viewer-pre), so a file does not change face
+// The dock's code font (desktop.css --font-code; P5): JetBrains Mono, shipped, so code looks the same on every OS. The dock's read view
+// (#drawer .viewer-pre) has the same stack, so a file does not change face. monacoload.js waits for the font before an editor is made.
+const EDITOR_FONT = '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 const EDITOR_LINE = 1.55;                             // and its line height (the read view's, in font sizes)
 
 // editorOptions: what the editor reads from the user's preferences, as updateOptions takes it: the code font size
@@ -129,7 +131,18 @@ function editorEnsure() {
   editorBindNoteKeys(dockEditor);
   dockEditor.onDidChangeCursorPosition(() => { if (dockEditorOwner) dockEditorOwner.paintStatus(); });
   editorSelBarInstall(dockEditor, dockMonaco); // editorselbar.js: the bar over a selection
+  if (typeof editorBlameWireEditor === "function") editorBlameWireEditor(dockEditor); // editorblame.js: the inline blame's hover, scroll and layout
   return dockEditor;
+}
+
+// editorNextPaint settles once the page has painted what was just put in it (the frame after the next one starts), or after 100 ms
+// when no frame comes (a page in the background paints nothing).
+function editorNextPaint() {
+  if (typeof requestAnimationFrame !== "function") return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 100);
+    requestAnimationFrame(() => setTimeout(() => { clearTimeout(timer); resolve(); }, 0));
+  });
 }
 
 // editorAccessOptions: what the shared editor is told about whether the tab it shows may be typed into, and what it says when
@@ -203,6 +216,7 @@ class EditorTab {
     this.dg = null;             // editordiff.js: the request slot, the gutter's debounce and decorations
     this.modeSeg = null;        // the Inline | Side by side control, shown while in Changes: {el, inline, side}
     this.seg = null;            // the Code | Changes toggle in the bar (Preview | Source | Changes for markdown): {el, preview, code, changes}
+    this.earlyText = null;      // a markdown file's read text while Monaco is still loading (editorMdEarly), else null
     this.md = null;             // editormd.js: a markdown file's view and its Preview pane ({view, pane, text, timer, sub, top, live})
     this.img = null;            // imagediff.js: an image's Image | Changes toggle and its comparer ({seg, on, view}), built with the bar
 
@@ -275,10 +289,16 @@ class EditorTab {
     this.sbEl.hidden = true; // not a live region: its Ln/Col changes with every key and click, and a screen reader would read out each
     this.sbBranch = span("dk-sb-branch");
     this.sbSaved = span("dk-sb-saved");
+    // The current line's blame when it does not fit inline (editorblame.js): after the branch and "Saved", the first to be cut.
+    this.sbBlame = document.createElement("button");
+    this.sbBlame.type = "button";
+    this.sbBlame.className = "dk-sb-blame";
+    this.sbBlame.hidden = true;
+    if (typeof editorBlameWireStatus === "function") editorBlameWireStatus(this, this.sbBlame);
     const right = span("dk-sb-r");
     this.sbParts = {};
     for (const k of ["pos", "indent", "enc", "eol", "lang"]) { this.sbParts[k] = span("dk-sb-" + k); right.append(this.sbParts[k]); }
-    this.sbEl.append(this.sbBranch, this.sbSaved, right);
+    this.sbEl.append(this.sbBranch, this.sbSaved, this.sbBlame, right);
   }
 
   // paintStatus writes the status bar from the editor and the model. Cheap: text is written only when it changed.
@@ -304,13 +324,14 @@ class EditorTab {
     this.sbBranch.hidden = !branch;
     set(this.sbSaved, this.statusText);
     this.sbSaved.hidden = !this.statusText;
+    if (typeof editorBlameSoon === "function") editorBlameSoon(this); // the cursor moved, or the view changed: the line's blame follows
   }
 
   // paint repaints everything this tab shows outside the editor: the read-only note, the toggle and the ⋯, the status bar.
   paint() {
     if (this.disposed) return;
     const ready = !!this.model && !this.inner;
-    this.seg.el.hidden = !ready;
+    this.seg.el.hidden = !(ready || (this.earlyText !== null && !this.inner)); // an early Preview has its toggle (Source says "loading…")
     this.moreBtn.hidden = !(ready || this.inner); // a view that is not text has its own status bar (DockFileView), so sbEl is for text only
     this.sbEl.hidden = !ready;
     const why = this.readOnlyWhy();
@@ -361,7 +382,8 @@ class EditorTab {
     this.bodyEl.replaceChildren(d);
   }
 
-  // load reads the file and, in parallel, loads Monaco (the first tab pays for it; the rest share it). An image, a video, an audio
+  // load reads the file and, in parallel, loads Monaco (the first tab pays for it; the rest share it); a markdown file opening in
+  // Preview shows the read text first and asks for Monaco after (editorMdEarly). An image, a video, an audio
   // file, a PDF and the types with no viewer are known by their extension and need no text read: one small metadata read, then the
   // view (loadView). Everything else is decided by what the server says it is (editorMode).
   async load() {
@@ -371,7 +393,25 @@ class EditorTab {
     const dock = dockKindOf(extOf(this.path));
     if (dock !== "text") { this.loadView(dock, seq); return; }
     const url = this.box ? boxFileURL(this.box, this.path) : undefined;
-    let [res, mon] = await Promise.all([fsRead(this.path, url), loadMonaco().then((m) => ({ m }), (err) => ({ err }))]);
+    const askMonaco = () => loadMonaco().then((m) => ({ m }), (err) => ({ err }));
+    // A markdown file that will open in Preview asks for Monaco only once its Preview is drawn and painted: the editor's start-up is a
+    // long task (measured: about 150 ms) that would otherwise hold the first paint of a document that never needed it.
+    const previewFirst = !dockMonaco && !this.pendingChanges && editorMdIs(this) && (!this.md || this.md.view === "preview");
+    let monaco = previewFirst ? null : askMonaco();
+    let res = await fsRead(this.path, url);
+    if (this.disposed || seq !== this.loadSeq) return;
+    // A markdown file opening in Preview does not wait for Monaco (Files dock P1): its read text is drawn now (editorMdEarly), and the
+    // model made below from the same text finds it drawn. Monaco already up, Changes asked for, or anything but a readable text file:
+    // the flow below, as for any other file.
+    const readMode = res.ok && res.data ? editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 }) : "";
+    if (!dockMonaco && readMode && readMode !== "image" && readMode !== "binary" && !this.pendingChanges && editorMdIs(this) && editorMdView(this) === "preview") {
+      this.earlyText = res.data.content || "";
+      editorMdEarly(this);
+      this.paint();
+      if (!monaco) await editorNextPaint();
+    }
+    if (!monaco) monaco = askMonaco();
+    const mon = await monaco;
     if (this.disposed || seq !== this.loadSeq) return;
     const alt = first ? this.alt : null; // the lookup is for the first read only: a file deleted later is a deletion
     this.alt = null;
@@ -396,10 +436,13 @@ class EditorTab {
     const mode = this.gone ? "read" : editorMode({ kind: res.data.kind, readonly: res.data.readonly === true, box: !!this.box, utf8: res.data.utf8 });
     if (mode === "image" || mode === "binary") { this.mountInner(mode, res.data); return; }
     if (mon.err) {
+      this.earlyText = null;
+      editorMdDispose(this); // an early Preview gives the body back for the sentence, and a draw under way stops
       // The next open tries again (loadMonaco forgets a failure), so say what failed rather than only "reload".
       showToast("The editor could not be loaded: " + (mon.err.message || "unknown error"), { error: true });
       this.setBodyMessage("The editor could not be loaded. Close this tab and open the file again, or reload the page.", "err");
       this.statusText = "";
+      this.paint(); // the early Preview's toggle goes with it
       return;
     }
     dockMonaco = mon.m;
@@ -411,8 +454,10 @@ class EditorTab {
     this.version = res.data.version || "";
     this.diskText = res.data.content || "";
     this.model = dockMonaco.editor.createModel(this.diskText, monacoLang(this.path));
+    this.earlyText = null;
     this.savedAlt = this.model.getAlternativeVersionId();
     if (typeof editorNotesTrack === "function") editorNotesTrack(this); // the file's notes follow its text for as long as the tab is open (editornotes.js)
+    if (typeof editorBlameTrack === "function") editorBlameTrack(this); // and its line blame (editorblame.js)
     this.contentSub = this.model.onDidChangeContent(() => this.onContent());
     this.optionsSub = this.model.onDidChangeOptions(() => this.paintStatus());
     if (this.attached) this.show();
@@ -515,6 +560,7 @@ class EditorTab {
     this.placeBar(true);
     if (this.inner) { this.inner.onAttach(); if (editorImageOn(this)) editorImageEnter(this); return; }
     if (this.model) this.show();
+    else if (this.earlyText !== null) { editorMdEarly(this); this.paint(); } // read, and Monaco still loading
     editorSyncStart(this); // the file on disk is asked about while this tab is the one on screen
   }
 
@@ -539,6 +585,7 @@ class EditorTab {
     this.actsEl.remove();
     this.placeBar(false);
     if (this.inner) { this.inner.onHide(); return; }
+    if (typeof editorBlameHide === "function") editorBlameHide(this);
     editorMdDetach(this);
     editorDiffDetach(this);
     this.stashView();
@@ -610,6 +657,7 @@ class EditorTab {
     editorSyncDispose(this); // before the model goes: a compare view holds it
     editorDiffDispose(this); // and so does the Changes view
     if (typeof editorNotesUntrack === "function") editorNotesUntrack(this); // its note decorations and its listener
+    if (typeof editorBlameUntrack === "function") editorBlameUntrack(this); // its blame request, decoration and listener
     if (typeof reviewBarUnmount === "function") reviewBarUnmount(this); // its review bar
     editorMdDispose(this);   // and the Preview's subscription
     if (this.savedTimer) clearTimeout(this.savedTimer);
@@ -816,7 +864,8 @@ class EditorTab {
     if (this.moreBtn && this.moreBtn.getAttribute("aria-expanded") === "true") closeRowMenu();
   }
 
-  // openMenu: Copy path, Copy relative path, Reveal in tree, Download, Wrap lines (Alt+Z; in Changes Wrap diff and Line numbers), Font size, Copy contents.
+  // openMenu: Copy path, Copy relative path, Reveal in tree, Download, Wrap lines (Alt+Z; in Changes Wrap diff and Line numbers), in Code
+  // Show line blame and Blame of this line (editorblame.js), Font size, Copy contents.
   // A file that is not text has only the first four (and a PDF, Open in new tab): nothing in it is for an editor.
   // The kit's menu, as the explorer's ⋯ is; a second press on the ⋯ closes it.
   openMenu() {
@@ -861,7 +910,7 @@ class EditorTab {
     ];
     const nodes = this.inner
       ? (this.inner.openable ? [...common, kitMenuSep(), item("Open in new tab", "", () => this.inner.open())] : common)
-      : [...common, kitMenuSep(), ...viewRows(), this.fontRow(), kitMenuSep(), item("Copy contents", "copy", () => this.copyContents())];
+      : [...common, kitMenuSep(), ...viewRows(), ...(typeof editorBlameMenuRows === "function" ? editorBlameMenuRows(this, item, check) : []), this.fontRow(), kitMenuSep(), item("Copy contents", "copy", () => this.copyContents())];
     ftShowMenu(more, nodes, false, "File actions");
     const first = menu.querySelector(".menu-item");
     if (first) first.focus();

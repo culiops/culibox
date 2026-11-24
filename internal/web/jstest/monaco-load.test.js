@@ -19,15 +19,20 @@ function fake(o) {
   const opt = Object.assign({ script: "load", module: "load", css: "late-load" }, o);
   const head = { children: [], append(el) { this.children.push(el); el.parent = this; if (el.tag === "script") setImmediate(() => el.onload && opt.script === "load" && el.onload()); if (el.tag === "script" && opt.script === "error") setImmediate(() => el.onerror && el.onerror()); }, querySelector(sel) { return this.children.find((c) => c.tag === "link" && sel.includes("editor.main.css") && c.href.endsWith("/vs/editor/editor.main.css")) || null; } };
   const timers = [];
-  const log = { required: [], removed: [], themes: 0, openers: [], gate: [], reads: [] };
+  const log = { required: [], removed: [], themes: 0, openers: [], gate: [], reads: [], fontLoads: [], remeasured: 0 };
   let moduleRan = false; // an AMD module is evaluated once: only the first require() appends the stylesheet link
   const link = () => {
     const el = { tag: "link", rel: "", href: "", sheet: null, listeners: {}, addEventListener(t, fn) { this.listeners[t] = fn; if ((opt.css === "late-load" && t === "load") || (opt.css === "late-error" && t === "error")) setImmediate(fn); }, remove() { log.removed.push(this); head.children = head.children.filter((c) => c !== this); } };
     return el;
   };
-  const doc = { head, createElement: (tag) => (tag === "link" ? link() : { tag, src: "" }) };
+  // opt.base: the content of the page's asset-base meta (index.html as the server rewrote it); undefined = no such tag.
+  // opt.fonts: "now" (document.fonts.load settles at once), "late" (it settles when f.fontLands() is called) or undefined (no
+  // FontFaceSet at all). log.fontLoads holds what was asked for; log.remeasured counts monaco.editor.remeasureFonts().
+  let fontLands = () => {};
+  const fonts = opt.fonts === undefined ? undefined : { load(spec) { log.fontLoads.push(spec); return opt.fonts === "now" ? Promise.resolve([{}]) : new Promise((r) => { fontLands = () => r([{}]); }); } };
+  const doc = { head, fonts, createElement: (tag) => (tag === "link" ? link() : { tag, src: "" }), querySelector: (sel) => (sel === 'meta[name="culibox-asset-base"]' && opt.base !== undefined ? { content: opt.base } : null) };
   const monaco = {
-    editor: { defineTheme() { log.themes++; }, addKeybindingRule() {}, registerLinkOpener(o) { log.openers.push(o); return { dispose() {} }; } },
+    editor: { defineTheme() { log.themes++; }, addKeybindingRule() {}, remeasureFonts() { log.remeasured++; }, registerLinkOpener(o) { log.openers.push(o); return { dispose() {} }; } },
     KeyCode: { F1: 59 },
     languages: {},
   };
@@ -53,12 +58,12 @@ function fake(o) {
         head.children.push(l);
       }
       setImmediate(() => ok());
-    }, { config() {} }),
+    }, { config(c) { log.config = c; } }),
   });
   if (opt.withLinks) new vm.Script(fs.readFileSync(path.join(__dirname, "..", "static", "links.js"), "utf8"), { filename: "links.js" }).runInContext(ctx);
   new vm.Script(SRC, { filename: "monacoload.js" }).runInContext(ctx);
   const loadMonaco = new vm.Script("loadMonaco", { filename: "get" }).runInContext(ctx);
-  return { ctx, head, timers, log, loadMonaco, win };
+  return { ctx, head, timers, log, loadMonaco, win, fontLands: () => fontLands() };
 }
 const live = (f) => f.timers.filter((t) => !t.dead);
 
@@ -350,4 +355,72 @@ test("a Monaco without registerLinkOpener still boots", { timeout: 4000 }, async
   const f = fake({ noOpenerApi: true });
   assert.equal(await f.loadMonaco(), f.win.monaco);
   assert.deepEqual(f.log.openers, []);
+});
+
+test("the loader, the editor module's base and the stylesheet come from the build's versioned base the page names", { timeout: 4000 }, async () => {
+  const f = fake({ base: "/v/0123456789abcdef", css: "applied" });
+  await f.loadMonaco();
+  const script = f.head.children.find((c) => c.tag === "script");
+  assert.equal(script.src, "/v/0123456789abcdef/vendor/monaco/vs/loader.js");
+  assert.deepEqual(JSON.parse(JSON.stringify(f.log.config)), { paths: { vs: "/v/0123456789abcdef/vendor/monaco/vs" } });
+});
+
+test("a page with no asset base, or one that is not /v/<16 hex>, loads from the unversioned /vendor/monaco/vs", { timeout: 4000 }, async () => {
+  for (const base of [undefined, "", "//evil.example", "https://evil.example/v/0123456789abcdef", "/v/../x", "/v/0123456789abcdeg", "/v/0123456789abcdef/", "javascript:alert(1)", "/v/0123456789ABCDEF"]) {
+    const f = fake({ base, css: "applied" });
+    await f.loadMonaco();
+    assert.equal(f.head.children.find((c) => c.tag === "script").src, "/vendor/monaco/vs/loader.js", String(base));
+    assert.equal(f.log.config.paths.vs, "/vendor/monaco/vs", String(base));
+  }
+});
+
+test("a stylesheet the loader has to add itself comes from the versioned base too", { timeout: 4000 }, async () => {
+  const f = fake({ base: "/v/0123456789abcdef", css: "late-load" });
+  // A module that does not append its stylesheet: the loader appends one.
+  f.ctx.require = Object.assign((deps, ok) => setImmediate(() => ok()), { config() {} });
+  await f.loadMonaco();
+  const l = f.head.children.find((c) => c.tag === "link");
+  assert.equal(l.href, "/v/0123456789abcdef/vendor/monaco/vs/editor/editor.main.css");
+});
+
+// The dock's code font (P5): Monaco measures its font when an editor is made and never again on its own (no FontFaceSet listener in
+// 0.57.0, read), so an editor made before JetBrains Mono arrives would lay the cursor out on the fallback's widths.
+test("the load waits for the code font before any editor is made, and asks for JetBrains Mono", { timeout: 4000 }, async () => {
+  const f = fake({ fonts: "now" });
+  await f.loadMonaco();
+  assert.deepEqual(f.log.fontLoads, ['400 13px "JetBrains Mono"']);
+  assert.equal(f.log.remeasured, 0, "in time: nothing to remeasure");
+  assert.equal(live(f).length, 0, "the font wait's timer is cleared");
+});
+
+test("a font slower than the wait does not hold the editor back; when it lands, the editors measure again, once", { timeout: 4000 }, async () => {
+  const f = fake({ fonts: "late" });
+  const p = f.loadMonaco();
+  let settled = false;
+  p.then(() => { settled = true; });
+  for (let i = 0; i < 20 && !live(f).some((t) => t.ms === 1500); i++) await new Promise((r) => setImmediate(r));
+  const wait = live(f).find((t) => t.ms === 1500);
+  assert.ok(wait, "a 1500 ms wait for the font");
+  assert.equal(settled, false, "the load waits for it");
+  wait.dead = true; wait.fn();
+  await p;
+  assert.equal(f.log.remeasured, 0);
+  f.fontLands();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(f.log.remeasured, 1);
+});
+
+test("a page with no FontFaceSet loads as before", { timeout: 4000 }, async () => {
+  const f = fake();
+  assert.equal(await f.loadMonaco(), f.win.monaco);
+  assert.equal(f.log.fontLoads.length, 0);
+});
+
+test("the font is asked for before the editor's script, so the two download side by side", { timeout: 4000 }, async () => {
+  const f = fake({ fonts: "now" });
+  let fontsAtRequire = -1;
+  const req = f.ctx.require;
+  f.ctx.require = Object.assign((...a) => { fontsAtRequire = f.log.fontLoads.length; return req(...a); }, { config: req.config });
+  await f.loadMonaco();
+  assert.equal(fontsAtRequire, 1);
 });

@@ -438,7 +438,7 @@ test("gitStatusRefreshSoon: a request that fails, or never answers, frees the sl
     assert.equal(calls.length, 2, "a failure releases it");
     g.gitStatusRefreshSoon(); t.mock.timers.tick(1000);
     assert.equal(calls.length, 2, "held behind the second");
-    t.mock.timers.tick(14000); // the second has been out for 15 s: abandoned
+    t.mock.timers.tick(g.GIT_FETCH_MS - 1000); // the second has been out for GIT_FETCH_MS: abandoned
     await settle();
     assert.equal(calls[1].aborted, true, "a request that never answers is aborted after GIT_FETCH_MS");
     assert.equal(calls.length, 3, "and the held ask is sent");
@@ -856,4 +856,112 @@ test("gitStatusAt never goes backwards for a root: a plain ask just after a fres
   calls[0].resolve(ok([]));
   await b;
   assert.equal(g.gitStatusAt(), 100000);
+});
+
+// --- P2: asks announce themselves; the last status per root paints the marks at once ---------------------------------------
+
+test("each status ask is announced to the Changes section with its root, number and freshness, before the reply lands", async () => {
+  g.gitStatusReset();
+  const heard = [];
+  global.dockChangesOnStatusAsk = (o) => heard.push(o);
+  try {
+    const calls = deferredFetch();
+    const a = g.gitStatusLoad("/r", "s1", { fresh: true });
+    await settle();
+    assert.equal(heard.length, 1, "heard at the ask, not at the landing");
+    assert.equal(heard[0].root, "/r");
+    assert.equal(heard[0].fresh, true);
+    assert.ok(Number.isInteger(heard[0].seq) && heard[0].seq > 0);
+    calls[0].resolve(ok([]));
+    await a;
+    assert.equal(g.gitStatusCurrent("/r").seq, heard[0].seq, "the status held names the ask it answers");
+    const b = g.gitStatusLoad("/r", "s1");
+    await settle();
+    assert.equal(heard[1].fresh, false);
+    assert.ok(heard[1].seq > heard[0].seq);
+    calls[1].resolve(ok([]));
+    await b;
+  } finally { delete global.dockChangesOnStatusAsk; }
+});
+
+test("with no live status for the root, the tree paints the kept status's marks; what acts on a file still reads the live one", async () => {
+  g.gitStatusReset();
+  global.ftRoot = () => "/r";
+  global.gitLastGet = (root) => (root === "/r" ? { status: ok([{ p: "a.go", x: "M" }]), view: null } : null);
+  try {
+    assert.equal(g.gitCurrentMarks().get("/r/a.go").code, "M", "kept marks are drawn");
+    assert.equal(g.gitStatusCodeFor("/r/a.go"), "", "the viewer's Changes button waits for git");
+    assert.equal(g.gitStatusCurrent("/r"), null, "the Changes section sees no status");
+    const calls = deferredFetch();
+    const a = g.gitStatusLoad("/r", "s1");
+    calls[0].resolve(ok([]));
+    await a;
+    assert.equal(g.gitCurrentMarks().size, 0, "the live status replaces the kept one");
+    global.ftRoot = () => "/other";
+    assert.equal(g.gitCurrentMarks(), null, "nothing kept for another root");
+  } finally { delete global.ftRoot; delete global.gitLastGet; }
+});
+
+test("a status that lands ok or toomany is kept for its root; one that is unavailable or failed is not", async () => {
+  g.gitStatusReset();
+  const kept = [];
+  global.gitLastSet = (root, part, v) => kept.push([root, part, v.state]);
+  try {
+    const calls = deferredFetch();
+    let p = g.gitStatusLoad("/r", "s1");
+    calls[0].resolve(ok([{ p: "a.go", x: "M" }]));
+    await p;
+    p = g.gitStatusLoad("/r", "s1");
+    calls[1].resolve({ state: "toomany", rootRel: ".", entries: [] });
+    await p;
+    p = g.gitStatusLoad("/r", "s1");
+    calls[2].resolve({ state: "unavailable", reason: "x", entries: [] });
+    await p;
+    global.fetch = () => Promise.reject(new Error("offline"));
+    await g.gitStatusLoad("/r", "s1");
+    assert.deepEqual(kept, [["/r", "status", "ok"], ["/r", "status", "toomany"]]);
+  } finally { delete global.gitLastSet; }
+});
+
+test("GIT_FETCH_MS covers the server's worst case: 5 s for a slot and 10 s for the run", () => {
+  assert.equal(g.GIT_FETCH_MS, 17000);
+});
+
+test("gitIgnored: the reply's ignored paths under the tree root, as absolute paths without the folder's slash", () => {
+  const st = ok([], { ignored: ["node_modules/", "a/x.log", "sub/build/"] });
+  assert.deepEqual([...g.gitIgnored(st, "/r")].sort(), ["/r/a/x.log", "/r/node_modules", "/r/sub/build"]);
+  assert.deepEqual([...g.gitIgnored(Object.assign({}, st, { rootRel: "sub" }), "/r/sub")], ["/r/sub/build"]);
+  assert.equal(g.gitIgnored(ok([]), "/r").size, 0, "no ignored field");
+  for (const bad of [{ state: "toomany" }, { state: "unavailable" }, { rootRel: "" }, { ignored: "node_modules/" }]) {
+    assert.equal(g.gitIgnored(Object.assign({}, st, bad), "/r").size, 0, JSON.stringify(bad));
+  }
+  assert.deepEqual([...g.gitIgnored(ok([], { ignored: [7, null, { p: "x" }, "", "ok/"] }), "/r")], ["/r/ok"], "only strings that place");
+});
+
+test("gitIgnoredAt: the path itself or a folder between the root and it is ignored", () => {
+  const set = new Set(["/r/node_modules", "/r/a/x.log"]);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/node_modules/p/q.js"), true);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/node_modules"), true);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/a/x.log"), true);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/a"), false);
+  assert.equal(g.gitIgnoredAt(set, "/r", "/r/node_modulesx/a.js"), false, "whole names only");
+  assert.equal(g.gitIgnoredAt(set, "/r", "/v/node_modules/a.js"), false, "outside the root");
+  assert.equal(g.gitIgnoredAt(new Set(), "/r", "/r/a"), false);
+});
+
+test("gitIgnoreRow marks a row from the kept status whether or not the dock is open, and takes the mark off again", () => {
+  const kept = ok([], { ignored: ["build/"] });
+  global.ftRoot = () => "/kept"; // a root no earlier test has a live status for
+  global.gitLastGet = (root) => (root === "/kept" ? { status: kept } : null);
+  global.ftDocked = () => false; // the dock is not open on Files: the row is marked all the same
+  try {
+    const cls = new Set();
+    const row = { classList: { contains: (c) => cls.has(c), toggle: (c, on) => (on ? cls.add(c) : cls.delete(c)) } };
+    g.gitIgnoreRow(row, "/kept/build/out.bin");
+    assert.ok(cls.has("ft-ign"));
+    g.gitIgnoreRow(row, "/kept/src/a.go");
+    assert.ok(!cls.has("ft-ign"));
+  } finally {
+    delete global.ftRoot; delete global.gitLastGet; delete global.ftDocked;
+  }
 });

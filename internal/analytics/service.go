@@ -174,3 +174,32 @@ func (s *Service) SessionCosts(from, to string) ([]SessionAggRow, error) {
 func (s *Service) Tools(from, to string, limit int) ([]ToolRow, error) {
 	return s.store.Tools(from, to, limit)
 }
+
+// DefaultRoots are the transcript roots used when the config sets none: the
+// host's ~/.claude/projects (all host and direct usage, the bulk), each box
+// home's projects dir, each profile's conversations folder that boxes mount
+// over it (#330), and each agent account's projects dir. Glob patterns,
+// expanded on every ingest, so boxes, folders and accounts made while the
+// daemon runs are picked up. Roots under <dataDir>/boxstate are walked through
+// an os.Root (SetBoxState).
+func DefaultRoots(home, dataDir string) []string {
+	return []string{
+		filepath.Join(home, ".claude", "projects"),
+		filepath.Join(dataDir, "boxstate", "*", ".claude", "projects"),
+		filepath.Join(dataDir, "boxstate", ".conversations", "*"),
+		filepath.Join(dataDir, "accounts", "*", "claude", "projects"),
+	}
+}
+
+// CarryOffsets gives the transcript (or folder of transcripts) about to move
+// from from to to the read offsets stored for from (Store.RewritePathPrefix), so
+// the next pass does not count it again under its new path. The box layer calls
+// it before each move it makes out of a box home into a conversations folder
+// (#330). It does not wait for a running pass: no container writes the file it
+// moves, so a pass usually has nothing new to read from it; one that reads it
+// at that moment can leave lines written since its last pass to be counted
+// again, once (accepted: waiting here would hold up the spawn).
+func (s *Service) CarryOffsets(from, to string) error {
+	_, err := s.store.RewritePathPrefix(from, to)
+	return err
+}

@@ -169,3 +169,22 @@ test("lineDiff: a pure insertion or deletion of a whole file is never capped by 
   assert.deepStrictEqual(diff(big, "").changes, [{ kind: "del", from: 1, to: 1 }]);
   assert.deepStrictEqual(diff("head", "head\n" + big, 30000).changes, [{ kind: "add", from: 2, to: 20001 }]);
 });
+
+const { lineMap } = require("../static/linediff.js");
+const mapOf = (a, b) => { const r = lineMap(a, b); return r.capped ? null : Array.from(r.map); };
+
+test("lineMap: each new line's old line number, 0 where it is new or changed", () => {
+  assert.deepStrictEqual(mapOf(L("a", "b", "c"), L("a", "b", "c")), [1, 2, 3]);
+  assert.deepStrictEqual(mapOf(L("a", "b", "c"), L("x", "a", "b", "c")), [0, 1, 2, 3]);
+  assert.deepStrictEqual(mapOf(L("a", "b", "c"), L("a", "c")), [1, 3]);
+  assert.deepStrictEqual(mapOf(L("a", "b", "c"), L("a", "B", "c")), [1, 0, 3]);
+  assert.deepStrictEqual(mapOf(L("a", "b", "c", "d"), L("a", "X", "Y", "d", "e")), [1, 0, 0, 4, 0]);
+  assert.deepStrictEqual(mapOf("", L("a", "b")), [0, 0]);
+  assert.deepStrictEqual(mapOf(L("a", "b"), ""), []);
+  // CRLF against LF is the same lines, as in lineDiff.
+  assert.deepStrictEqual(mapOf("a\r\nb\r\n", "a\nb\n"), [1, 2, 3]);
+});
+
+test("lineMap: capped like lineDiff", () => {
+  assert.deepStrictEqual(lineMap(L("a", "b"), L("a", "b", "c"), 2), { map: null, capped: true });
+});

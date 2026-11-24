@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -144,8 +145,54 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 			t.Fatalf("%s Cache-Control=%q, want no-cache", p, cc)
 		}
 	}
+	// desktop.css's @font-face for the dock's code font (P5) names these unversioned paths: served as fonts, revalidated by ETag.
+	for _, f := range []string{"latin", "latin-ext", "vietnamese"} {
+		rec := get("/vendor/jetbrains-mono/jetbrains-mono-" + f + "-wght-normal.woff2")
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "font/woff2" || rec.Header().Get("ETag") == "" {
+			t.Fatalf("%s: code=%d Content-Type=%q ETag=%q", f, rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("ETag"))
+		}
+	}
 	if cc := get("/xterm/xterm.js").Header().Get("Cache-Control"); cc == "no-cache" {
 		t.Fatal("/xterm/xterm.js should stay cacheable, got no-cache")
+	}
+	// The page names its build: its vendor and xterm URLs carry /v/<id>/, which is cached for a year.
+	index := get("/").Body.String()
+	m := regexp.MustCompile(`<meta name="culibox-asset-base" content="(/v/[0-9a-f]{16})">`).FindStringSubmatch(index)
+	if m == nil {
+		t.Fatal("index.html carries no asset base")
+	}
+	if strings.Contains(index, `="/vendor/`) || strings.Contains(index, `="/xterm/`) {
+		t.Fatal("index.html still names an unversioned vendor or xterm URL")
+	}
+	if !strings.Contains(index, `<script src="`+m[1]+`/vendor/marked.min.js"></script>`) || !strings.Contains(index, `<script src="/app.js"></script>`) {
+		t.Fatal("index.html: vendor scripts versioned, app scripts as they are")
+	}
+	for _, p := range []string{m[1] + "/vendor/marked.min.js", m[1] + "/xterm/xterm.js", m[1] + "/vendor/monaco/vs/loader.js"} {
+		rec := get(p)
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "private, max-age=31536000, immutable" {
+			t.Fatalf("%s: code=%d Cache-Control=%q", p, rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	}
+	if rec := get("/v/0123456789abcdef/vendor/marked.min.js"); rec.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatalf("another build's URL: Cache-Control=%q, want no-cache", rec.Header().Get("Cache-Control"))
+	}
+	if rec := get("/v/0123456789abcdef/app.js"); rec.Code != http.StatusNotFound {
+		t.Fatalf("/v/ serves only vendor and xterm: code=%d", rec.Code)
+	}
+	// An app file is gzipped for a client that takes it, and revalidates with a 304.
+	req := httptest.NewRequest("GET", "/app.js", nil)
+	req.AddCookie(ck)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Header().Get("Content-Encoding") != "gzip" || rec.Header().Get("ETag") == "" {
+		t.Fatalf("/app.js: Content-Encoding=%q ETag=%q", rec.Header().Get("Content-Encoding"), rec.Header().Get("ETag"))
+	}
+	req.Header.Set("If-None-Match", rec.Header().Get("ETag"))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("/app.js revalidation: code=%d, want 304", rec.Code)
 	}
 }
 
@@ -209,7 +256,8 @@ func TestSharedStylesheetsArePublic(t *testing.T) {
 	// The public set is exact files, not a prefix or subtree: nothing else under
 	// vendor/inter, no directory listing and no trailing-slash alias may be
 	// reachable without a cookie.
-	for _, p := range []string{"/vendor/inter/LICENSE.txt", "/vendor/inter/", "/vendor/", "/desktop.css/"} {
+	// The code font (P5) is not the login page's: desktop.css names it, but only the dock uses it, so it stays behind the guard.
+	for _, p := range []string{"/vendor/inter/LICENSE.txt", "/vendor/inter/", "/vendor/", "/desktop.css/", "/vendor/jetbrains-mono/jetbrains-mono-latin-wght-normal.woff2"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
 		if rec.Code == http.StatusOK {

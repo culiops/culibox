@@ -911,3 +911,59 @@ func TestKeepEndedHoldDoesNotOverwrite(t *testing.T) {
 		t.Fatalf("ended hold = %+v, want the one already recorded", e)
 	}
 }
+
+// #360: a Host session with a write window (or credentials still valid after
+// it) closes its folder to boxes of this instance, as an exclusive box's
+// window does. The refusals are the box cases' own sentences.
+func TestHostHoldClosesTheFolderToBoxes(t *testing.T) {
+	m, f := boundMgr(t)
+	newHoldSet(m)
+	dir, other := t.TempDir(), t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const why = `session "h" (h-1) has a write window open until 15:04`
+	var mu sync.Mutex
+	var holds []HostHold
+	set := func(h ...HostHold) { mu.Lock(); holds = h; mu.Unlock() }
+	m.SetHostHolds(func() []HostHold { mu.Lock(); defer mu.Unlock(); return append([]HostHold(nil), holds...) })
+
+	set(HostHold{Workspace: real, Why: why})
+	runs := f.runs()
+	want := ErrWorkspaceHeld.Error() + ": " + real + " is closed to other boxes while a session in it can write to AWS: " + why +
+		". Wait for it to end (or drop the window in that session), or use a separate folder or worktree."
+	for _, sp := range []struct {
+		name string
+		do   func() error
+	}{
+		{"plain", func() error { _, _, err := wrapPlain(m, dir, "sh-1"); return err }},
+		{"elevatable", func() error { _, err := wrapIn(m, dir, "elev-1", true); return err }},
+	} {
+		if err := sp.do(); err == nil || err.Error() != want {
+			t.Fatalf("%s: %v\nwant %s", sp.name, err, want)
+		}
+	}
+	if _, err := wrapIn(m, sub, "plain-1", false); !errors.Is(err, ErrWorkspaceHeld) || !strings.Contains(err.Error(), why) {
+		t.Fatalf("a subfolder: %v", err)
+	}
+	if f.runs() != runs {
+		t.Fatal("a box was started in the held folder")
+	}
+	if _, err := wrapIn(m, other, "plain-2", false); err != nil {
+		t.Fatalf("another folder: %v", err)
+	}
+	// An ended Host session whose credentials stay valid: the ended-hold sentence.
+	set(HostHold{Workspace: real, Why: why, Ended: true})
+	_, _, err := wrapPlain(m, dir, "sh-2")
+	want = ErrWorkspaceHeld.Error() + ": " + real + " is closed to other boxes until write credentials of a session that has ended expire: " + why +
+		". Wait until then (drop the window first if that session is still listed), or use a separate folder or worktree."
+	if err == nil || err.Error() != want {
+		t.Fatalf("ended: %v\nwant %s", err, want)
+	}
+	set() // the hold is over
+	if _, _, err := wrapPlain(m, dir, "sh-3"); err != nil {
+		t.Fatalf("after the hold: %v", err)
+	}
+}

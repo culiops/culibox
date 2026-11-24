@@ -95,6 +95,35 @@ func ParseStatus(b []byte, max int) (entries []Entry, noHead bool, tooMany bool,
 	return
 }
 
+// ParseIgnored returns the "! <path>" records of `git status --porcelain=v2 -z --ignored=matching` output: the paths
+// git ignores, relative to the checkout top (a trailing "/" marks a folder). They are not changes and never count toward
+// ParseStatus's cap. Unsafe paths are dropped as ParseStatus drops them; more than max safe ones return nil (the tree then
+// dims nothing). seen is true when any record starts the ignored section, even one cut off at the end of a capped buffer:
+// git prints that section after every other record, so every change before it is complete.
+func ParseIgnored(b []byte, max int) (paths []string, seen bool) {
+	over := false
+	for _, r := range bytes.Split(b, []byte{0}) {
+		if !bytes.HasPrefix(r, []byte("! ")) {
+			continue
+		}
+		seen = true
+		if over {
+			continue // past the cap only the section's start matters
+		}
+		if p := string(r[2:]); safePath(p) {
+			if len(paths) >= max {
+				over = true
+				continue
+			}
+			paths = append(paths, p)
+		}
+	}
+	if over {
+		return nil, seen
+	}
+	return paths, seen
+}
+
 // code maps an XY pair of an ordinary record to a badge code.
 func code(xy string) string {
 	x, y := xy[0], xy[1]
@@ -247,27 +276,30 @@ func DiffKind(b []byte) string {
 }
 
 // pickBase reads the output of BaseArgs' for-each-ref and returns the base
-// branch: origin/HEAD's symref target when git listed origin/HEAD (it lists
-// only a ref that resolves), else the first of baseCandidates git listed.
-// The output is untrusted: a record not made of exactly git's two NUL
-// terminators is skipped, and a symref target that is not a ValidBaseRef is
-// never returned, so what comes back is "" or safe to put in an argv.
-func pickBase(b []byte) string {
-	refs := map[string]string{} // listed ref -> its symref target, "" when it is not a symref
+// branch with the commit it points at: origin/HEAD's symref target when git
+// listed origin/HEAD (it lists only a ref that resolves; its own record carries
+// the target's commit), else the first of baseCandidates git listed. The output
+// is untrusted: a record not made of exactly git's three NUL terminators, or
+// whose commit is not a full object id, is skipped, and a symref target that is
+// not a ValidBaseRef is never returned, so what comes back is "" or safe to put
+// in an argv.
+func pickBase(b []byte) (ref, oid string) {
+	type rec struct{ sym, oid string }
+	refs := map[string]rec{} // listed ref -> its symref target ("" when it is not a symref) and commit
 	for _, line := range strings.Split(string(b), "\n") {
-		if f := strings.Split(line, "\x00"); len(f) == 3 && f[2] == "" {
-			refs[f[0]] = f[1]
+		if f := strings.Split(line, "\x00"); len(f) == 4 && f[3] == "" && oidRE.MatchString(f[2]) {
+			refs[f[0]] = rec{f[1], f[2]}
 		}
 	}
-	if sym := refs[originHead]; ValidBaseRef(sym) {
-		return sym
+	if r := refs[originHead]; ValidBaseRef(r.sym) {
+		return r.sym, r.oid
 	}
 	for _, c := range baseCandidates {
-		if _, ok := refs[c]; ok {
-			return c
+		if r, ok := refs[c]; ok {
+			return c, r.oid
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // baseName is the short form of a base ref shown to the user: "main" for a

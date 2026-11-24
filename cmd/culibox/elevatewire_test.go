@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,6 +98,9 @@ func TestSSOLoginRunnerFailureOffersTheCommand(t *testing.T) {
 	}
 }
 
+// A plain Host session (HostBroker false: unbound, or started without node)
+// still has no card; see TestElevationAppliesToAHostBrokerSession for one
+// that does (#360).
 func TestElevationOnlyAppliesToLiveBoxedBoundSessions(t *testing.T) {
 	host := boundSess("h-1")
 	host.Runtime = config.RuntimeHost
@@ -116,6 +121,35 @@ func TestElevationOnlyAppliesToLiveBoxedBoundSessions(t *testing.T) {
 		if _, ok := e.ssoStatus(id); ok {
 			t.Errorf("ssoStatus(%s) answered for a session the card does not apply to", id)
 		}
+	}
+}
+
+// hostBrokerSess is a bound Host session whose bindings the broker serves
+// (#360): no box, not exclusive.
+func hostBrokerSess(id string) *session.Session {
+	s := boundSess(id)
+	s.Runtime, s.Box, s.Exclusive, s.HostBroker = config.RuntimeHost, "", false, true
+	return s
+}
+
+// D8 (#360): a bound Host session served by the broker gets the same card as a
+// box: grant, drop, sign-in and its status.
+func TestElevationAppliesToAHostBrokerSession(t *testing.T) {
+	r := &fakeRunner{status: &ssologin.State{State: "waiting", Code: "ABCD-EFGH"}}
+	e := elevationService{brk: testBroker(t), runner: r,
+		get: func(id string) (*session.Session, bool) { return hostBrokerSess(id), id == "hb-1" }}
+	// The broker itself answers (it knows no session here), not the service.
+	if _, err := e.Grant("hb-1", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie}); errors.Is(err, web.ErrElevationUnknown) || !errors.Is(err, broker.ErrElevateRefused) {
+		t.Errorf("Grant: %v", err)
+	}
+	if _, err := e.Drop("hb-1", broker.CredCookie); err != nil {
+		t.Errorf("Drop: %v", err)
+	}
+	if _, err := e.SSOLogin("hb-1", ""); err != nil || r.profile != "sandbox-admin" {
+		t.Errorf("SSOLogin: %v (runner profile %q)", err, r.profile)
+	}
+	if st, ok := e.ssoStatus("hb-1"); !ok || st.Login == nil {
+		t.Errorf("ssoStatus: %+v %v", st, ok)
 	}
 }
 
@@ -261,6 +295,152 @@ func TestGrantContextListsLiveHostSessions(t *testing.T) {
 	gc := e.grantContext("aws-1")
 	if len(gc.HostSessions) != 1 || gc.HostSessions[0].ID != "zsh-1" || gc.Blocked != "" {
 		t.Fatalf("%+v", gc)
+	}
+}
+
+// A Host session being elevated is not among the "other host sessions" that
+// can reach its credentials (#360).
+func TestGrantContextLeavesOutTheElevatedHostSession(t *testing.T) {
+	e := elevationService{get: func(id string) (*session.Session, bool) { return hostBrokerSess(id), true },
+		list: func() []session.Info {
+			return []session.Info{{ID: "zsh-1", Name: "zsh", Runtime: "host"}, {ID: "hb-1", Name: "me", Runtime: "host"}}
+		},
+		blocker: func(context.Context, string, string) (box.GrantBlock, error) { return box.GrantBlock{}, nil }}
+	gc := e.grantContext("hb-1")
+	if len(gc.HostSessions) != 1 || gc.HostSessions[0].ID != "zsh-1" || gc.Blocked != "" {
+		t.Fatalf("%+v", gc)
+	}
+}
+
+// hostBroker is a broker whose lookup knows the given Host views.
+func hostBroker(t *testing.T, views map[string]broker.SessionView) *broker.Broker {
+	t.Helper()
+	audit, err := broker.OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = audit.Close() })
+	return broker.New([]byte(strings.Repeat("s", 32)),
+		func(id string) (broker.SessionView, bool) { v, ok := views[id]; return v, ok }, noMinter{}, audit)
+}
+
+// Fix round 1 (#360): a Host session's write window closes its folder to
+// boxes. The grant records the session's folder; the box layer's hook lists
+// it while the broker holds the session, and forgets it once the session has
+// ended and holds nothing. A plain Host session is never listed.
+func TestHostHoldsListTheGrantedHostSession(t *testing.T) {
+	dir := t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	hb := hostBrokerSess("hb-1")
+	hb.Cwd = dir
+	plain := hostBrokerSess("h-1")
+	plain.HostBroker = false
+	view := broker.SessionView{Agent: "aws", Host: true, Live: true, AWS: hb.AWS}
+	brk := hostBroker(t, map[string]broker.SessionView{"hb-1": view, "h-1": view})
+	sessions := map[string]*session.Session{"hb-1": hb, "h-1": plain}
+	var mu sync.Mutex
+	get := func(id string) (*session.Session, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		s, ok := sessions[id]
+		return s, ok
+	}
+	e := elevationService{brk: brk, get: get, hosts: newHostFolders()}
+
+	if got := e.hostHolds(); len(got) != 0 {
+		t.Fatalf("before any grant: %+v", got)
+	}
+	if _, err := e.Grant("h-1", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie}); !errors.Is(err, web.ErrElevationUnknown) {
+		t.Fatalf("plain host grant: %v", err)
+	}
+	if _, err := e.Grant("hb-1", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie}); err != nil {
+		t.Fatal(err)
+	}
+	got := e.hostHolds()
+	if len(got) != 1 || got[0].Workspace != real || got[0].Ended ||
+		!strings.HasPrefix(got[0].Why, "session hb-1 has a write window open until ") {
+		t.Fatalf("after the grant: %+v", got)
+	}
+	// Dropped with nothing issued: no hold, but the live session stays known.
+	if _, err := e.Drop("hb-1", broker.CredCookie); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.hostHolds(); len(got) != 0 {
+		t.Fatalf("after the drop: %+v", got)
+	}
+	if n := len(e.hosts.snapshot()); n != 1 {
+		t.Fatalf("a live session was forgotten: %d", n)
+	}
+	// Ended and holding nothing: forgotten.
+	mu.Lock()
+	delete(sessions, "hb-1")
+	mu.Unlock()
+	e.hostHolds()
+	if n := len(e.hosts.snapshot()); n != 0 {
+		t.Fatalf("an ended session with no hold is still listed: %d", n)
+	}
+}
+
+// A Host session reattached at boot may hold write credentials the broker no
+// longer knows about: it holds its folder as an adopted box does (#333).
+func TestHostHoldsSeededAtBoot(t *testing.T) {
+	hb := hostBrokerSess("hb-1")
+	plain := hostBrokerSess("h-1")
+	plain.HostBroker = false
+	box1 := boundSess("b-1")
+	sessions := map[string]*session.Session{"hb-1": hb, "h-1": plain, "b-1": box1}
+	brk := hostBroker(t, nil)
+	e := elevationService{brk: brk, get: func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		list:  func() []session.Info { return []session.Info{{ID: "hb-1"}, {ID: "h-1"}, {ID: "b-1"}} },
+		hosts: newHostFolders()}
+	e.seedHostFolders(time.Now())
+	got := e.hostHolds()
+	if len(got) != 1 || got[0].Workspace != "/w/proj" || !strings.Contains(got[0].Why, "restarted") {
+		t.Fatalf("seeded holds: %+v", got)
+	}
+}
+
+// F1 (#360): with Docker (or the Mac's VM) confirmed not running no box can be
+// running, so none uses a Host session's folder: its grant goes ahead. A box
+// session is refused as before, and any other listing failure refuses both.
+// With Docker up a box over the folder still blocks the Host grant (#325).
+func TestHostGrantWithTheBoxLayerDown(t *testing.T) {
+	down := fmt.Errorf("box: listing boxes: %w", fmt.Errorf("%w: docker ps: Cannot connect to the Docker daemon", box.ErrDockerNotRunning))
+	other := errors.New("box: listing boxes: docker ps: daemon is restarting")
+	for _, tc := range []struct {
+		name string
+		sess *session.Session
+		err  error
+		ok   bool
+	}{
+		{"host, daemon down", hostBrokerSess("s-1"), down, true},
+		{"box, daemon down", boundSess("s-1"), down, false},
+		{"host, other error", hostBrokerSess("s-1"), other, false},
+		{"plain host, daemon down", func() *session.Session { s := hostBrokerSess("s-1"); s.HostBroker = false; return s }(), down, false},
+	} {
+		check := func(context.Context, string, string) (box.GrantBlock, error) { return box.GrantBlock{}, tc.err }
+		e := elevationService{get: func(string) (*session.Session, bool) { return tc.sess, true }, claim: check, blocker: check}
+		err := e.claimCheck("s-1")
+		if tc.ok && err != nil {
+			t.Errorf("%s: claimCheck %v", tc.name, err)
+		}
+		if !tc.ok && !errors.Is(err, errClaimUnchecked) {
+			t.Errorf("%s: claimCheck %v, want %v", tc.name, err, errClaimUnchecked)
+		}
+		if tc.sess.HostBroker || tc.sess.Runtime == config.RuntimeBox { // grantContext needs a session with a card
+			gc := e.grantContext("s-1")
+			if want := map[bool]string{true: "", false: errClaimUnchecked.Error()}[tc.ok]; gc.Blocked != want {
+				t.Errorf("%s: panel blocked %q, want %q", tc.name, gc.Blocked, want)
+			}
+		}
+	}
+	// Docker up: a box over the folder blocks the Host grant, as for a box.
+	e := elevationService{get: func(string) (*session.Session, bool) { return hostBrokerSess("s-1"), true },
+		claim: func(context.Context, string, string) (box.GrantBlock, error) {
+			return box.GrantBlock{Box: "ab-box-9", Why: "another box (instance PROD) uses /w/proj; stop the session in it first"}, nil
+		}}
+	if err := e.claimCheck("s-1"); err == nil || !strings.Contains(err.Error(), "another box (instance PROD) uses /w/proj") {
+		t.Fatalf("docker up, shared folder: %v", err)
 	}
 }
 

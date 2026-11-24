@@ -11,28 +11,32 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/culiops/culibox/internal/gitrepo"
 	"github.com/culiops/culibox/internal/gitview"
 )
 
-// GitView runs git status, diff, base lookup, line counts and file-at-revision
-// reads for the file tree and the editor (gitview.Runner). Nil on the Server
+// GitView runs git status, diff, base lookup, line counts, file-at-revision
+// reads and line blame for the file tree and the editor (gitview.Runner). Nil on the Server
 // means no box runtime: every endpoint answers "unavailable". Base takes no
 // ref: the runner picks the base branch from the repository's own refs, so a
-// request can never name one. The Scope.BaseRef a handler gives Numstat and the
-// rev it gives Show are the ones Base returned (or HEAD). The Fresh
+// request can never name one. The Scope.BaseRef a handler gives Numstat is the
+// one BaseRef (or Base) returned, and the rev it gives Show is Base's (or HEAD). The Fresh
 // variants (StatusFresh, NumstatFresh) are for a request that has just changed
 // something on disk.
 type GitView interface {
 	Status(context.Context, gitview.Target) gitview.Status
 	StatusFresh(context.Context, gitview.Target) gitview.Status
+	StatusShared(context.Context, gitview.Target) gitview.Status
 	Diff(context.Context, gitview.Target, string, bool) gitview.Diff
 	Base(context.Context, gitview.Target) gitview.BaseInfo
+	BaseRef(context.Context, gitview.Target) gitview.BaseInfo
 	Numstat(context.Context, gitview.Target, gitview.Scope) gitview.Numstat
 	NumstatFresh(context.Context, gitview.Target, gitview.Scope) gitview.Numstat
 	Show(ctx context.Context, t gitview.Target, rev, rel string) gitview.Blob
 	ShowRaw(ctx context.Context, t gitview.Target, rev, rel string) ([]byte, gitview.Blob)
+	Blame(ctx context.Context, t gitview.Target, rel string, k gitview.BlameKey, still func() bool) gitview.Blame
 }
 
 // Every reason a client sees is one of these fixed messages. The runner's own
@@ -63,8 +67,9 @@ type gitBody struct {
 	// arrived, not a reused or already-running one: a client sets it when it has
 	// just changed something on disk.
 	Fresh bool `json:"fresh,omitempty"`
-	// Scope (numstat and show) is "head" or "branch", nothing else: the base
-	// branch of "branch" is derived by the server, no client field can name a ref.
+	// Scope (numstat and show) is "head" or "branch", nothing else, and for
+	// numstat also "auto" (the server picks one of the two): the base branch of
+	// "branch" is derived by the server, no client field can name a ref.
 	Scope string `json:"scope,omitempty"`
 	// Raw (show only) asks for the bytes of an image, not the JSON text.
 	Raw bool `json:"raw,omitempty"`
@@ -75,8 +80,8 @@ type gitBody struct {
 //
 // Repo discovery compares paths lexically, so it is fed a resolved path: the
 // request is resolved by the fs policy (fs errors pass through), then by
-// EvalSymlinks, and that result must still land where the request did (same
-// tree, see inGitTree). Top and Common from the checkout must each be free of
+// realAbs (a boxed remainder never through a link out of its root), and that
+// result must still land where the request did (same tree, see inGitTree). Top and Common from the checkout must each be free of
 // links, pass the fs policy in that same tree, and not hold a denied tree:
 // mounted whole, such a directory would carry agent-box's data dir or box
 // state into the container. For a boxed request Target.Root is the contained
@@ -94,7 +99,7 @@ func (s *Server) gitTarget(path string) (t gitview.Target, abs string, err error
 // Changes view shows as all removed. The leaf is accepted only when its own
 // Lstat says it does not exist (a dangling link is not that) and its PARENT
 // directory passes every check an existing path does: the fs policy, a
-// link-free EvalSymlinks result, inGitTree. The returned abs is that resolved
+// link-free realAbs result, inGitTree. The returned abs is that resolved
 // parent plus the leaf's single local name. Nothing reads or stats the leaf
 // itself afterwards (see gitShowRel); git only reads an object of the
 // repository by that name. Every other outcome is gitTarget's.
@@ -108,16 +113,21 @@ func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, a
 	if err != nil {
 		return gitview.Target{}, "", err
 	}
+	return p.gitTargetIn(path, vanishedOK)
+}
+
+// gitTargetIn is gitTargetFor under a policy the caller already built (the status request reuses it for worktreeOf).
+func (p fsPolicy) gitTargetIn(path string, vanishedOK bool) (t gitview.Target, abs string, err error) {
 	req, err := p.resolve(path)
 	if err == nil {
-		abs, err = filepath.EvalSymlinks(req.Abs)
+		abs, err = realAbs(req)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return gitview.Target{}, "", errGitOutside
 		}
 	}
 	// gone: the request names nothing that exists. The host walk says so in
 	// resolve, a boxed one (whose resolve stops at the contained root) in
-	// EvalSymlinks.
+	// realAbs.
 	gone := errors.Is(err, os.ErrNotExist)
 	if err != nil && !(gone && vanishedOK) {
 		if gone {
@@ -155,14 +165,16 @@ func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, a
 	if rel, err := filepath.Rel(repo.Top, dir); err != nil || !(rel == "." || filepath.IsLocal(rel)) {
 		return gitview.Target{}, "", errGitOutside
 	}
+	// Common comes from a .git file's text when the checkout is a linked worktree or a submodule (the agent writes it in
+	// a box): judged by path before inGitTree resolves it (#364).
 	for _, x := range []string{repo.Top, repo.Common} {
-		if !p.inGitTree(req, x) || p.holdsDenied(x) {
+		if !p.servesByPath(req, x) || !p.inGitTree(req, x) || p.holdsDenied(x) {
 			return gitview.Target{}, "", errGitOutside
 		}
 	}
 	t = gitview.Target{Top: repo.Top, Common: repo.Common}
 	if req.Strict {
-		if r, err := filepath.EvalSymlinks(req.Root); err != nil || r != req.Root {
+		if r, err := evalSymlinks(req.Root); err != nil || r != req.Root {
 			return gitview.Target{}, "", errGitOutside
 		}
 		t.Root = req.Root
@@ -171,6 +183,33 @@ func (s *Server) gitTargetFor(path string, vanishedOK bool) (t gitview.Target, a
 		return gitview.Target{}, "", errGitUnsafe
 	}
 	return t, abs, nil
+}
+
+// worktreeOf is the main checkout of t when t is a linked worktree of a repository that has one: its common dir is a
+// real <main>/.git directory that is not t's own. t's Top and Common already passed gitTarget (link-free, served in the
+// request's tree, no denied tree); the main checkout must be served by the fs policy in that same tree too (boxed when
+// t is, host when it is not), or it is not named. "" otherwise: a main checkout, a submodule, a bare repository's
+// worktree. Read from the filesystem only, like everything gitTarget decides.
+func (p fsPolicy) worktreeOf(t gitview.Target) string {
+	if filepath.Base(t.Common) != ".git" {
+		return ""
+	}
+	m := filepath.Dir(t.Common)
+	if m == t.Top {
+		return ""
+	}
+	if fi, err := os.Lstat(t.Common); err != nil || !fi.IsDir() {
+		return ""
+	}
+	// Defence in depth, not test-covered: implied by inGitTree's check of t.Common; matters only in a race.
+	if !linkFreePath(m) {
+		return ""
+	}
+	got, err := p.resolve(m)
+	if err != nil || got.Strict != (t.Root != "") || (got.Strict && got.Root != t.Root) {
+		return ""
+	}
+	return m
 }
 
 // vanishedLeaf resolves path, whose resolution failed with "does not exist",
@@ -190,7 +229,7 @@ func vanishedLeaf(p fsPolicy, path string) (preq fsTarget, parent, abs string, e
 	if preq, err = p.resolve(filepath.Dir(clean)); err != nil {
 		return fsTarget{}, "", "", err
 	}
-	if parent, err = filepath.EvalSymlinks(preq.Abs); err != nil {
+	if parent, err = realAbs(preq); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fsTarget{}, "", "", os.ErrNotExist
 		}
@@ -212,12 +251,109 @@ func vanishedLeaf(p fsPolicy, path string) (preq fsTarget, parent, abs string, e
 	return preq, parent, abs, nil
 }
 
+// evalSymlinks is filepath.EvalSymlinks for the git, alternates and where code: a variable so a test can see every path
+// that code resolves.
+var evalSymlinks = filepath.EvalSymlinks
+
+// lstatFS is os.Lstat for the same code's link-refusing walks, a variable for the same reason.
+var lstatFS = os.Lstat
+
+// linkFreePath reports whether the absolute, clean path x exists with no symlink in any component, found by Lstat'ing
+// each component in turn from "/" and stopping at the first link: the same verdict as EvalSymlinks(x) == x, without
+// ever following a link to see where it goes.
+func linkFreePath(x string) bool {
+	if !filepath.IsAbs(x) || filepath.Clean(x) != x {
+		return false
+	}
+	cur := "/"
+	parts := strings.Split(x[1:], "/")
+	for i, c := range parts {
+		if c == "" {
+			continue
+		}
+		cur = filepath.Join(cur, c)
+		fi, err := lstatFS(cur)
+		if err != nil || fi.Mode()&os.ModeSymlink != 0 || (i < len(parts)-1 && !fi.IsDir()) {
+			return false
+		}
+	}
+	return true
+}
+
+// realAbs is the link-free spelling of req's path. A host target is already resolved by the fs walk (its links are the
+// host's), so EvalSymlinks only confirms it. A boxed target's remainder below its contained root is resolved by
+// resolveIn, which follows a link only when its text stays inside that root: a link the box planted to anywhere else is
+// refused before anything looks there (#364).
+func realAbs(req fsTarget) (string, error) {
+	if !req.Strict {
+		return evalSymlinks(req.Abs)
+	}
+	return resolveIn(req.Root, req.Rel)
+}
+
+// resolveIn resolves rel below root (a link-free directory) one component at a time with Lstat, like the fs walk: a
+// link's text is read and followed only when, taken from where the link is, it stays at or below root; a link out of
+// root, or ".." above it, is refused (errOutsideHome) without touching its target. Errors otherwise match
+// EvalSymlinks: a missing component wraps os.ErrNotExist, a file with components after it is ENOTDIR.
+func resolveIn(root, rel string) (string, error) {
+	cur := root
+	pending := strings.Split(rel, "/")
+	hops := 0
+	inRoot := func(x string) bool { return x == root || strings.HasPrefix(x, root+"/") }
+	for len(pending) > 0 {
+		c := pending[0]
+		pending = pending[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			if cur == root {
+				return "", errOutsideHome
+			}
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, c)
+		fi, err := lstatFS(next)
+		if err != nil {
+			return "", err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			if hops++; hops > maxLinkHops {
+				return "", errBadPath
+			}
+			text, err := os.Readlink(next)
+			if err != nil {
+				return "", err
+			}
+			target := text
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(cur, target)
+			}
+			target = filepath.Clean(target)
+			if !inRoot(target) {
+				return "", errOutsideHome
+			}
+			rest, _ := filepath.Rel(root, target)
+			cur = root
+			pending = append(strings.Split(rest, "/"), pending...)
+			continue
+		}
+		if !fi.IsDir() && len(pending) > 0 {
+			return "", &os.PathError{Op: "lstat", Path: next, Err: syscall.ENOTDIR}
+		}
+		cur = next
+	}
+	return cur, nil
+}
+
 // inGitTree reports whether x is a link-free path that the fs policy serves in
 // the same tree as req: for a boxed request, inside the same contained root; for
-// a host request, outside every contained root. A path EvalSymlinks would
-// change has a link in it and is refused, whoever planted the link.
+// a host request, outside every contained root. A path with a link in it is
+// refused, whoever planted the link, and the link is never followed to find out
+// (linkFreePath): in a boxed tree the box chose where it leads (#364).
 func (p fsPolicy) inGitTree(req fsTarget, x string) bool {
-	if r, err := filepath.EvalSymlinks(x); err != nil || r != x {
+	if !linkFreePath(x) {
 		return false
 	}
 	got, err := p.resolve(x)
@@ -348,7 +484,13 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, unavailableGitStatus(msgGitNoRuntime))
 		return
 	}
-	t, abs, err := s.gitTarget(path)
+	// One policy snapshot for the target and its worktreeOf.
+	p, err := s.fsPolicy()
+	var t gitview.Target
+	var abs string
+	if err == nil {
+		t, abs, err = p.gitTargetIn(path, false)
+	}
 	switch {
 	case errors.Is(err, errGitNotRepo):
 		writeJSON(w, http.StatusOK, gitview.Status{State: "notrepo", Entries: []gitview.Entry{}})
@@ -369,6 +511,7 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		st = s.Git.Status(r.Context(), t)
 	}
 	st.RootRel = rootRel(t.Top, abs)
+	st.WorktreeOf = p.worktreeOf(t)
 	if st.State == "unavailable" {
 		log.Printf("git status %q: %q", t.Top, st.Reason)
 		st.Reason = gitReason(st.Reason)
@@ -601,22 +744,27 @@ func (s *Server) handleGitBase(w http.ResponseWriter, r *http.Request) {
 // handleGitNumstat is POST /api/git/numstat {"path": abs, "scope": "head" or
 // "branch", "fresh": bool}: per-file line counts of the changes in the checkout
 // holding path, against HEAD or, for "branch", against the merge base with the
-// base branch the server picks (Base). Tracked files are counted by git;
+// base branch the server picks (BaseRef: a Branch numstat needs the ref, never
+// the merge base id, so it waits for no status and no merge-base run). Tracked files are counted by git;
 // untracked ones are counted here (see withUntracked). Any other scope is a 400.
 // ok/notrepo/toomany/unavailable are all 200, and "branch" with no base branch
-// is "unavailable" with "no base branch". Fresh makes only the numstat run fresh
-// (see Runner.NumstatFresh): the status the untracked files come from is the
-// reused one, as the client refreshes status on its own.
+// is "unavailable" with "no base branch". "auto" is numstatAuto's pick, for a
+// client that has no scope to ask for yet. Every reply names its scope. Fresh
+// makes only the numstat run fresh (see Runner.NumstatFresh): the status the
+// untracked files come from is the shared one (StatusShared), as the client
+// asks for status on its own.
 func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 	body, ok := decodeGitBody(w, r)
 	if !ok {
 		return
 	}
-	var branch bool
+	var branch, auto bool
 	switch body.Scope {
 	case "head":
 	case "branch":
 		branch = true
+	case "auto":
+		auto = true
 	default:
 		writeErr(w, http.StatusBadRequest, "bad scope")
 		return
@@ -639,8 +787,8 @@ func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 	}
 	var sc gitview.Scope
 	if branch {
-		// The ref is the server's: Base derived it from the repository's refs.
-		bi := s.Git.Base(r.Context(), t)
+		// The ref is the server's: BaseRef derived it from the repository's refs.
+		bi := s.Git.BaseRef(r.Context(), t)
 		switch bi.State {
 		case "ok":
 			sc = gitview.Scope{Branch: true, BaseRef: bi.BaseRef}
@@ -661,15 +809,22 @@ func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 	// it a second cold container run, and one request would wait for two. The
 	// buffer lets the goroutine finish unobserved when the numstat is not ok.
 	stc := make(chan gitview.Status, 1)
-	go func() { stc <- s.Git.Status(r.Context(), t) }()
+	// StatusShared: the client asks a status with each numstat, and this joins it rather than racing it for a run.
+	go func() { stc <- s.Git.StatusShared(r.Context(), t) }()
 	// ns is this request's own copy (Numstat returns a value with cloned
 	// entries), so RootRel and the appended entries never reach the runner's cache.
 	var ns gitview.Numstat
-	if body.Fresh {
-		ns = s.Git.NumstatFresh(r.Context(), t, sc)
-	} else {
-		ns = s.Git.Numstat(r.Context(), t, sc)
+	scope := "head"
+	switch {
+	case auto:
+		ns, scope = s.numstatAuto(r.Context(), t, body.Fresh)
+	default:
+		if branch {
+			scope = "branch"
+		}
+		ns = s.numstatOf(r.Context(), t, sc, body.Fresh)
 	}
+	ns.Scope = scope
 	ns.RootRel = rootRel(t.Top, abs)
 	if ns.State == "unavailable" {
 		log.Printf("git numstat %q: %q", t.Top, ns.Reason)
@@ -684,6 +839,46 @@ func (s *Server) handleGitNumstat(w http.ResponseWriter, r *http.Request) {
 		ns.Entries = s.withUntracked(r.Context(), t, ns.Entries, <-stc)
 	}
 	writeJSON(w, http.StatusOK, ns)
+}
+
+// numstatOf is one numstat, fresh or not.
+func (s *Server) numstatOf(ctx context.Context, t gitview.Target, sc gitview.Scope, fresh bool) gitview.Numstat {
+	if fresh {
+		return s.Git.NumstatFresh(ctx, t, sc)
+	}
+	return s.Git.Numstat(ctx, t, sc)
+}
+
+// numstatAuto answers a numstat whose scope the client does not know yet (it
+// has no base, and no remembered pick): Branch when HEAD is ahead of the merge
+// base with the base branch, else Uncommitted, as the client's own default
+// (changesScopeFor). It asks Base and, as soon as the ref is known, the Branch
+// numstat at once, so the answer is at most two runs deep. When HEAD is not
+// ahead, HEAD is the merge base and that same Branch diff IS the Uncommitted
+// one. With no base, a base that failed, or a Branch run that did not answer, it
+// is an Uncommitted numstat: never an empty list that reads as "no changes".
+func (s *Server) numstatAuto(ctx context.Context, t gitview.Target, fresh bool) (gitview.Numstat, string) {
+	bc := make(chan gitview.BaseInfo, 1) // Base may end unobserved
+	go func() { bc <- s.Git.Base(ctx, t) }()
+	var br gitview.Numstat
+	ref := s.Git.BaseRef(ctx, t)
+	if ref.State == "ok" {
+		br = s.numstatOf(ctx, t, gitview.Scope{Branch: true, BaseRef: ref.BaseRef}, fresh)
+	}
+	bi := <-bc
+	if bi.State == "notrepo" || ref.State == "notrepo" {
+		return gitview.Numstat{State: "notrepo", Entries: []gitview.NumEntry{}}, "head"
+	}
+	if bi.State == "ok" && ref.State == "ok" && bi.BaseRef == ref.BaseRef && br.State != "unavailable" {
+		if bi.Ahead {
+			return br, "branch"
+		}
+		return br, "head"
+	}
+	if bi.State == "unavailable" {
+		log.Printf("git numstat %q: base: %q", t.Top, bi.Reason)
+	}
+	return s.numstatOf(ctx, t, gitview.Scope{}, fresh), "head"
 }
 
 const (

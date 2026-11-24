@@ -505,6 +505,7 @@ function dockCrumbsReveal(path) {
   const where = crumbReveal(path, root);
   if (where === "outside") { showToast("That folder is outside the tree's root"); return; }
   dockTreeReveal(); // a folded explorer cannot show the row: open its column
+  if (typeof dockSecOpen === "function") dockSecOpen("tree"); // and a collapsed tree its rows (P3)
   if (where === "root") {
     if (typeof ftTreeEl !== "undefined" && ftTreeEl) ftTreeEl.scrollTop = 0;
     return;
@@ -527,14 +528,23 @@ function dockRender() {
     code: (path) => (typeof gitStatusCodeFor === "function" ? gitStatusCodeFor(path) : ""),
   }), dockStripOn);
   const tab = dockTabsOf(st).find((t) => t.key === st.active) || null;
-  if (!tab || tab.review) { dockCrumbsPaint([], "", null); return; } // the All changes tab is no file: no crumbs
+  if (!tab || tab.review) { // the All changes tab is no file: no crumbs
+    dockCrumbsPaint([], "", null);
+    if (typeof editorBlameHeaderPaint === "function") editorBlameHeaderPaint(null);
+    return;
+  }
   // A box file is in no tree: its crumbs are text, and its path is read from "/".
   const crumbs = crumbsFor(tab.path, tab.box ? null : typeof ftRoot === "function" ? ftRoot() : null);
   const name = typeof drawerSessionName === "function" ? drawerSessionName(sid) : "";
   // A buffer with an unsaved edit says so on the right ("Unsaved · Ctrl+S to save"), in place of "Edited by".
   const live = mine ? dockViewers.get(tab.key) : null;
   const note = live && typeof live.crumbNote === "function" ? live.crumbNote() : "";
-  dockCrumbsPaint(crumbs, note || editedLabel(drawerChangedFiles.get(sid), tab.path, name, Date.now()), tab.box ? null : { reveal: dockCrumbsReveal });
+  // A file outside the tree's root says so beside the trail (dockreveal.js), never in place of "Edited by".
+  const outside = !tab.box && typeof dockRevealOutside === "function" && dockRevealOutside(tab.path);
+  dockCrumbsPaint(crumbs, note || editedLabel(drawerChangedFiles.get(sid), tab.path, name, Date.now()),
+    tab.box ? null : { reveal: dockCrumbsReveal, revealOutside: typeof dockRevealOutsideGo === "function" ? dockRevealOutsideGo : null }, outside);
+  // The file's last commit after "Edited by" (editorblame.js): only a host file's own tab knows it.
+  if (typeof editorBlameHeaderPaint === "function") editorBlameHeaderPaint(live && !tab.box ? live : null);
 }
 
 // --- what is stored -------------------------------------------------------------
@@ -964,6 +974,8 @@ function drawerPaint(fromViewer) {
   if (typeof reviewAllSync === "function") reviewAllSync();
   // And Follow agent listens to the session the dock shows, when it is on for it (editorfollow.js).
   if (typeof editorFollowSync === "function") editorFollowSync();
+  // And the tree shows the open file (dockreveal.js): every way the active tab changes ends here.
+  if (typeof dockRevealSync === "function") dockRevealSync();
 }
 
 initDrawerGoto();

@@ -107,7 +107,14 @@ func argv(t Target, image, name string, uid, gid int, sub ...string) []string {
 // t.Unsafe() == "" first.
 func StatusArgs(t Target, image, name string, uid, gid int) []string {
 	return argv(t, image, name, uid, gid,
-		"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all")
+		"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all",
+		// The tree dims gitignored rows from the same run (git prints these records after every other one, ParseIgnored).
+		// "matching" names an ignored folder once and does not walk into it: 50,000 ignored files cost nothing, where the
+		// default mode walked them. It does walk the whole of an UNTRACKED folder, to find ignored files inside, where
+		// -unormal alone stops at its first file: measured on Linux, warm cache, git 2.39, 100,000 untracked files took
+		// 85-93 ms instead of 7 ms. A host/Mac cold-cache timing is a row in the P5 handoff; dropping this flag (the
+		// tree then dims nothing) is the way back if it costs too much there.
+		"--ignored=matching")
 }
 
 // DiffArgs is the argv of the diff container for one file, rel being its path
@@ -147,22 +154,25 @@ func ValidBaseRef(ref string) bool {
 
 // BaseArgs is the argv of the container that lists the candidate base
 // branches in one run: origin/HEAD with the ref it points at, and each of
-// baseCandidates that exists. The names are fixed, nothing comes from a
-// caller. The caller MUST have checked t.Unsafe() == "" first.
+// baseCandidates that exists, each with the commit it points at. The names are
+// fixed, nothing comes from a caller. The caller MUST have checked
+// t.Unsafe() == "" first.
 func BaseArgs(t Target, image, name string, uid, gid int) []string {
-	sub := []string{"for-each-ref", "--format=%(refname)%00%(symref)%00", originHead}
+	sub := []string{"for-each-ref", "--format=%(refname)%00%(symref)%00%(objectname)%00", originHead}
 	return argv(t, image, name, uid, gid, append(sub, baseCandidates...)...)
 }
 
 // MergeBaseArgs is the argv of the container that prints the merge base of
-// HEAD and baseRef. It is nil for a baseRef that is not a ValidBaseRef, so a
-// caller that skips its own check runs nothing rather than a hostile ref. The
-// caller MUST have checked t.Unsafe() == "" first.
-func MergeBaseArgs(t Target, image, name string, uid, gid int, baseRef string) []string {
-	if !ValidBaseRef(baseRef) {
+// the commit head (a full object id: the HEAD a status printed, so the answer
+// is for exactly the HEAD it is kept under) and baseRef. It is nil for a head
+// that is not a full object id or a baseRef that is not a ValidBaseRef, so a
+// caller that skips its own check runs nothing rather than a hostile argument.
+// The caller MUST have checked t.Unsafe() == "" first.
+func MergeBaseArgs(t Target, image, name string, uid, gid int, head, baseRef string) []string {
+	if !oidRE.MatchString(head) || !ValidBaseRef(baseRef) {
 		return nil
 	}
-	return argv(t, image, name, uid, gid, "merge-base", "HEAD", baseRef)
+	return argv(t, image, name, uid, gid, "merge-base", head, baseRef)
 }
 
 // Scope is what a numstat compares the working tree with: HEAD, or for Branch
@@ -216,4 +226,44 @@ func ShowArgs(t Target, image, name string, uid, gid int, rev, rel string) []str
 		return nil
 	}
 	return argv(t, image, name, uid, gid, "cat-file", "blob", rev+":"+rel)
+}
+
+// IgnoreRevsName is the file at a checkout's top that lists the commits blame
+// should look through (formatting sweeps). The web handler checks that it is a
+// regular file on the host, by stat, never by asking git.
+const IgnoreRevsName = ".git-blame-ignore-revs"
+
+// LogLastArgs is the argv of the container that prints the last commit that
+// touched rel (relative to t.Top) as one NUL-terminated record: full id, author
+// name and email (both after .mailmap, as blame's porcelain), author time and
+// summary (ParseLogLast). log.showSignature is forced off twice, by config and
+// by flag: a repository that turns it on would otherwise run its own
+// gpg.program on a signed commit and mix that output into the record. The
+// caller MUST have checked t.Unsafe() == "" first. rel follows "--".
+func LogLastArgs(t Target, image, name string, uid, gid int, rel string) []string {
+	return argv(t, image, name, uid, gid,
+		"-c", "log.showSignature=false", "log", "-1", "--no-show-signature",
+		"--format=%H%x00%aN%x00%aE%x00%at%x00%s%x00", "--", rel)
+}
+
+// BlameArgs is the argv of the container that prints the porcelain blame of
+// rel (relative to t.Top) as it is in the working tree: uncommitted lines come
+// back under the all-zero id. --no-textconv is required: plain blame runs a
+// textconv command the repository's own attributes declare (measured with git
+// 2.39.5), where diff already passes the same flag. ignoreRevs adds
+// IgnoreRevsName, a path relative to t.Top (git runs with -C t.Top). noRevs
+// (the retry after a failure) passes --no-ignore-revs-file instead: it drops
+// every list, the file's and one the repository's own blame.ignoreRevsFile
+// names, which git opens before any other option could reset it (measured with
+// git 2.39.5: a config naming a missing file fails every plain blame). The
+// caller MUST have checked t.Unsafe() == "" first. rel follows "--".
+func BlameArgs(t Target, image, name string, uid, gid int, rel string, ignoreRevs, noRevs bool) []string {
+	sub := []string{"blame", "--porcelain", "--no-textconv"}
+	switch {
+	case noRevs:
+		sub = append(sub, "--no-ignore-revs-file")
+	case ignoreRevs:
+		sub = append(sub, "--ignore-revs-file", IgnoreRevsName)
+	}
+	return argv(t, image, name, uid, gid, append(sub, "--", rel)...)
 }

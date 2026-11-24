@@ -223,7 +223,7 @@ func (s *Store) RewritePathPrefix(oldRoot, newRoot string) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT path FROM ingest_state`)
+	rows, err := tx.Query(rewritePrefixQuery, underRoot(oldRoot)...)
 	if err != nil {
 		return 0, err
 	}
@@ -234,7 +234,7 @@ func (s *Store) RewritePathPrefix(oldRoot, newRoot string) (int, error) {
 			rows.Close()
 			return 0, err
 		}
-		if p == oldRoot || strings.HasPrefix(p, oldRoot+"/") {
+		if p == oldRoot || strings.HasPrefix(p, oldRoot+"/") { // what the query selects, kept as a guard
 			from = append(from, p)
 		}
 	}
@@ -263,6 +263,18 @@ SELECT ?,size,read_offset,mtime,seen_ids FROM ingest_state WHERE path=?`, newRoo
 	}
 	return int(n), nil
 }
+
+// rewritePrefixQuery selects the ingest_state paths under a root (the root
+// itself, or below it as a whole path component), with the arguments underRoot
+// gives, through the path index: adoption calls RewritePathPrefix once per moved
+// entry under the box manager's lock (#330), so it must not read the whole
+// table each time. path is TEXT with the default BINARY collation, so the
+// comparisons are bytewise: every path starting with "<root>/" is at least
+// "<root>/" and below "<root>0" ('/' is 0x2F, '0' is 0x30), and a sibling such
+// as "<root>-prod" or "<root>.bak" sorts before "<root>/".
+const rewritePrefixQuery = `SELECT path FROM ingest_state WHERE path = ? OR (path >= ? AND path < ?)`
+
+func underRoot(root string) []any { return []any{root, root + "/", root + "0"} }
 
 // State returns the recorded size and read offset for a transcript path, and the
 // message ids already counted near that offset (oldest first), which let a

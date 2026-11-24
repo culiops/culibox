@@ -138,6 +138,9 @@ function fakeEditor() {
       });
     },
     getLayoutInfo() { return { width: this.width, contentWidth: this.width, contentLeft: 60, height: 500 }; },
+    // Where a position is drawn (the line blame's fit): 7 px a column after the 60 px gutter, the font as Monaco reports it.
+    getScrolledVisiblePosition(p) { return { left: 60 + (p.column - 1) * 7 - (this.left || 0), top: 0, height: 18 }; },
+    getOption(id) { return id === 50 ? { typicalHalfwidthCharacterWidth: 7 } : id === 51 ? 5 : undefined; },
     // Overlay widgets (the notes' cards): by id, as Monaco keeps them; the scroll position the wheel over a card sets.
     overlays: new Map(),
     addOverlayWidget(w) { this.overlays.set(w.getId(), w); },
@@ -173,7 +176,7 @@ function page(over) {
     // The page's git, off until a test turns it on (on: the tree's status is known and names HEAD `head`): the scope the Changes
     // section shows, the base it names, and what POST /api/git/show answers (an object, a function of the request body, or null
     // for a request that failed), delivered after `gate` if one is set.
-    git: { on: false, head: "h1", scope: "head", base: null, answer: null, gate: null, shows: [] },
+    git: { on: false, head: "h1", scope: "head", base: null, answer: null, gate: null, shows: [], blames: [], blame: null, blameGate: null },
     metaGate: null, fullGate: null,                  // a promise a metadata / a full read waits on, after its answer is decided
   };
   const monaco = {
@@ -184,6 +187,7 @@ function page(over) {
       MouseTargetType: { GUTTER_GLYPH_MARGIN: 2, GUTTER_LINE_NUMBERS: 3, GUTTER_LINE_DECORATIONS: 4, CONTENT_TEXT: 6, CONTENT_EMPTY: 7, CONTENT_VIEW_ZONE: 8 },
       EndOfLinePreference: { TextDefined: 0 }, ScrollType: { Immediate: 1 }, ContentWidgetPositionPreference: { EXACT: 0, ABOVE: 1, BELOW: 2 },
       EndOfLineSequence: { LF: 0, CRLF: 1 },
+      EditorOption: { fontInfo: 50, scrollBeyondLastColumn: 51 },
       OverviewRulerLane: { Left: 1, Center: 2, Right: 4, Full: 7 },
       createModel(text, lang) { const m = fakeModel(text, lang, st.log, st.models.length + 1); st.models.push(m); return m; },
       create(el, opts) { const e = fakeEditor(); e.createOpts = opts; st.editors.push(e); return e; },
@@ -261,17 +265,30 @@ function page(over) {
     // The markdown Preview's render (mdsafe.js, tested on its own in md-render.test.js): here a fragment holding the text it was
     // asked for, so what a test sees is when the preview draws and from which buffer.
     MD_EXTS: new Set(["md", "markdown"]),
+    MD_HL_MAX_CHARS: 102400,
     marked: { parse: () => "" },
     DOMPurify: {},
+    // With deps.chunkChars (the dock always asks) and a text holding \f, the render comes in chunks as the real one does for a big file:
+    // an iterator whose steps yield null (lexing) then one fragment per \f-separated part. st.steps counts the steps taken.
     mdRenderFragment: (text, deps) => {
       st.renders.push({ text, deps });
-      const f = new El("div", doc);
-      f.className = "rendered";
-      f.textContent = text;
-      return f;
+      const part = (t) => { const f = new El("div", doc); f.className = "rendered"; f.textContent = t; return f; };
+      if (!(deps.chunkChars > 0 && text.includes("\f"))) return part(text);
+      return (function* () {
+        for (const t of text.split("\f")) { st.steps = (st.steps || 0) + 1; yield null; st.steps++; if (st.failAt === t) throw new Error("boom"); yield part(t); }
+      })();
     },
     fetch: async (url, init) => {
       const body = JSON.parse(init.body);
+      // POST /api/git/blame (editorblame.js): its own record and answer (an object, a function of the body, or null for a failure),
+      // after blameGate if set; an aborted request rejects as fetch does.
+      if (url === "/api/git/blame") {
+        st.git.blames.push({ body, signal: init.signal });
+        const a = typeof st.git.blame === "function" ? st.git.blame(body) : st.git.blame;
+        if (st.git.blameGate) await st.git.blameGate;
+        if (init.signal && init.signal.aborted) throw new Error("aborted");
+        return a === null ? { ok: false, status: 500, json: async () => null } : { ok: true, status: 200, json: async () => a };
+      }
       st.git.shows.push({ url, init, body });
       const a = typeof st.git.answer === "function" ? st.git.answer(body) : st.git.answer;
       if (st.git.gate) await st.git.gate;
@@ -299,7 +316,7 @@ function page(over) {
     // The diff's prefs live here for the test: the mode ("side" the default) and the diff's wrap.
     viewerPrefs: (() => {
       const v = { diffMode: "side", diffWrap: false };
-      return { getWrap: () => false, getDiffMode: () => v.diffMode, setDiffMode: (m) => { v.diffMode = m; }, getDiffWrap: () => v.diffWrap, setDiffWrap: (b) => { v.diffWrap = b; } };
+      return { getBlame: () => v.blame !== false, setBlame: (b) => { v.blame = b; }, getWrap: () => false, getDiffMode: () => v.diffMode, setDiffMode: (m) => { v.diffMode = m; }, getDiffWrap: () => v.diffWrap, setDiffWrap: (b) => { v.diffWrap = b; } };
     })(),
     toggleViewerWrap: () => {},
     // The dock builds no ViewerTab (the phone's viewer): a tab with a file that is not text mounts a DockFileView. Not defined here, so a
@@ -308,7 +325,7 @@ function page(over) {
     downloadPath: (p, isDir, url) => { st.downloads.push({ path: p, isDir, url }); },
   }, over));
   const load = (f) => new vm.Script(src(f), { filename: f }).runInContext(ctx);
-  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "filekinds.js", "dockfileview.js", "editortab.js", "reviewmodel.js", "notesmodel.js", "editorsync.js", "editordiff.js", "imagediff.js", "editorreview.js", "editormd.js", "editorselbar.js", "editorfollow.js", "dockcrumbs.js", "editornotes.js"]) load(f);
+  for (const f of ["shortcuts.js", "monacokeys.js", "monacolang.js", "editorref.js", "editorstatus.js", "fsedit.js", "copyfile.js", "viewerpath.js", "viewerlines.js", "linediff.js", "filekinds.js", "dockfileview.js", "editortab.js", "reviewmodel.js", "notesmodel.js", "editorsync.js", "editordiff.js", "imagediff.js", "editorreview.js", "editormd.js", "editorselbar.js", "editorfollow.js", "dockcrumbs.js", "editornotes.js", "blamemodel.js", "editorblame.js"]) load(f);
   const host = {
     onEditStart: () => st.host.push("start"),
     onDirtyChange: () => st.host.push("dirty"),

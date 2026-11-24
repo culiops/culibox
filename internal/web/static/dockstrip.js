@@ -185,8 +185,9 @@ function dockStripPaint(items, on) {
 // dockCrumbsPaint draws the row under the strip: the path as buttons (`crumbs`, from
 // crumbsFor; a click calls on.reveal(path), and with no on.reveal they are plain
 // text, not buttons: a file inside a box is in no tree), and on the right the "Edited by" text
-// (empty: nothing is drawn). No crumbs hides the row.
-function dockCrumbsPaint(crumbs, edited, on) {
+// (empty: nothing is drawn). No crumbs hides the row. `outside` shows the "Outside this tree · Reveal" hint after the trail
+// (static markup; its Reveal calls on.revealOutside): the file is outside the tree's root (dockreveal.js).
+function dockCrumbsPaint(crumbs, edited, on, outside) {
   dkCrumbOn = on || {};
   const row = document.getElementById("dock-crumbs");
   const trail = document.getElementById("dock-trail");
@@ -220,6 +221,12 @@ function dockCrumbsPaint(crumbs, edited, on) {
   }
   if (ed.textContent !== (edited || "")) ed.textContent = edited || "";
   ed.hidden = !edited;
+  const out = document.getElementById("dock-outside");
+  if (out) {
+    out.hidden = !outside;
+    const go = out.querySelector(".dk-outside-go");
+    if (go) go.onclick = () => dkCall(dkCrumbOn.revealOutside);
+  }
 }
 
 // dkRevealActive brings the active tab back into view after the strip changed size. The strip shrinks when the bar beside it

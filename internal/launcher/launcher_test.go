@@ -842,10 +842,59 @@ func TestHostDropsFor(t *testing.T) {
 		t.Fatalf("HostDropsFor(plain) = %q, %v, want none", d, err)
 	}
 	d, err := l.HostDropsFor("bound")
-	if err != nil || strings.Join(d, "|") != "GitHub binding|context paths" {
+	if err != nil || strings.Join(d, "|") != "context paths" {
 		t.Fatalf("HostDropsFor(bound) = %q, %v", d, err)
 	}
 	if _, err := l.HostDropsFor("missing"); err == nil {
 		t.Fatal("an unknown profile must be an error")
+	}
+}
+
+// #360: what a Host run keeps as the default credentials (config.HostGuardrail).
+func TestHostGuardrailFor(t *testing.T) {
+	l := New([]config.AgentConfig{
+		{Name: "plain", Bin: "claude", ContextPaths: []string{"/srv/docs"}},
+		{Name: "bound", Bin: "claude", GitHub: &config.GitHubBinding{}, ContextPaths: []string{"/srv/docs"}},
+	}, fakeResolver{}, nil)
+
+	if g, err := l.HostGuardrailFor("plain"); g != nil || err != nil {
+		t.Fatalf("HostGuardrailFor(plain) = %q, %v, want none", g, err)
+	}
+	g, err := l.HostGuardrailFor("bound")
+	if err != nil || strings.Join(g, "|") != "GitHub binding" {
+		t.Fatalf("HostGuardrailFor(bound) = %q, %v", g, err)
+	}
+	if _, err := l.HostGuardrailFor("missing"); err == nil {
+		t.Fatal("an unknown profile must be an error")
+	}
+}
+
+// SessionLookPath resolves a tool on the session env's PATH (the last PATH
+// entry wins, as exec does), never the daemon's, and only to an absolute path.
+func TestSessionLookPath(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(b, "node"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a, "node"), []byte("not executable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(a, "gh"), 0o755); err != nil { // a dir is not a tool
+		t.Fatal(err)
+	}
+	env := []string{"PATH=/nowhere", "TERM=xterm", "PATH=" + a + string(os.PathListSeparator) + b}
+	if got := SessionLookPath(env, "node"); got != filepath.Join(b, "node") {
+		t.Fatalf("node = %q, want %q", got, filepath.Join(b, "node"))
+	}
+	if got := SessionLookPath(env, "gh"); got != "" {
+		t.Fatalf("gh = %q, want none", got)
+	}
+	if got := SessionLookPath([]string{"TERM=xterm"}, "node"); got != "" {
+		t.Fatalf("no PATH: %q, want none", got)
+	}
+	// A relative entry is skipped: the answer must be absolute.
+	t.Chdir(b)
+	if got := SessionLookPath([]string{"PATH=."}, "node"); got != "" {
+		t.Fatalf("relative PATH entry: %q, want none", got)
 	}
 }

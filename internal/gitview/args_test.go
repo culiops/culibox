@@ -33,7 +33,9 @@ func want(mounts []string, top string, sub ...string) []string {
 	return append(w, sub...)
 }
 
-var statusSub = []string{"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all"}
+var statusSub = []string{"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all",
+	// Ignored paths come from the same run (P5): "matching" does not walk into an ignored folder, so a big node_modules costs nothing.
+	"--ignored=matching"}
 
 func TestStatusArgsGolden(t *testing.T) {
 	uid, gid := os.Getuid(), os.Getgid()
@@ -174,7 +176,7 @@ func TestTargetKeyIncludesRoot(t *testing.T) {
 	}
 }
 
-var baseSub = []string{"for-each-ref", "--format=%(refname)%00%(symref)%00",
+var baseSub = []string{"for-each-ref", "--format=%(refname)%00%(symref)%00%(objectname)%00",
 	"refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master", "refs/heads/main", "refs/heads/master"}
 
 func TestBaseArgsGolden(t *testing.T) {
@@ -197,8 +199,8 @@ func TestBaseArgsGolden(t *testing.T) {
 		if w := want(c.mounts, c.t.Top, baseSub...); !slices.Equal(got, w) {
 			t.Errorf("BaseArgs %s:\n got %q\nwant %q", c.name, got, w)
 		}
-		got = MergeBaseArgs(c.t, "img", "n", uid, gid, "refs/remotes/origin/main")
-		if w := want(c.mounts, c.t.Top, "merge-base", "HEAD", "refs/remotes/origin/main"); !slices.Equal(got, w) {
+		got = MergeBaseArgs(c.t, "img", "n", uid, gid, oid1, "refs/remotes/origin/main")
+		if w := want(c.mounts, c.t.Top, "merge-base", oid1, "refs/remotes/origin/main"); !slices.Equal(got, w) {
 			t.Errorf("MergeBaseArgs %s:\n got %q\nwant %q", c.name, got, w)
 		}
 	}
@@ -208,7 +210,7 @@ func TestBaseArgsKeepTheGuards(t *testing.T) {
 	// Same isolation as status: no network, read-only mounts, hostile-config flags.
 	for name, a := range map[string][]string{
 		"base":      BaseArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2),
-		"mergebase": MergeBaseArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2, "refs/heads/main"),
+		"mergebase": MergeBaseArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2, oid1, "refs/heads/main"),
 	} {
 		i := slices.Index(a, "--network")
 		if i < 0 || a[i+1] != "none" || !slices.Contains(a, "--read-only") || !slices.Contains(a, "core.fsmonitor=false") || !slices.Contains(a, "core.hooksPath=/dev/null") {
@@ -229,10 +231,19 @@ func TestBaseArgsKeepTheGuards(t *testing.T) {
 	}
 }
 
+// oid1 is a full commit id, the HEAD a merge base is asked for.
+const oid1 = "1111111111111111111111111111111111111111"
+
 func TestMergeBaseArgsRefusesInvalidRef(t *testing.T) {
 	for _, ref := range []string{"", "-x", "--upload-pack=x", "HEAD", "main", "refs/tags/v1", "refs/heads/../x", "refs/heads/a b"} {
-		if a := MergeBaseArgs(Target{Top: "/w/repo"}, "img", "n", 1, 2, ref); a != nil {
+		if a := MergeBaseArgs(Target{Top: "/w/repo"}, "img", "n", 1, 2, oid1, ref); a != nil {
 			t.Errorf("ref %q built an argv: %q", ref, a)
+		}
+	}
+	// The HEAD side is a full object id from git's own status, nothing else: not "HEAD", not an option.
+	for _, head := range []string{"", "HEAD", "-x", "--upload-pack=x", oid1[:39], oid1 + "0", strings.Repeat("A", 40), "refs/heads/main"} {
+		if a := MergeBaseArgs(Target{Top: "/w/repo"}, "img", "n", 1, 2, head, "refs/heads/main"); a != nil {
+			t.Errorf("head %q built an argv: %q", head, a)
 		}
 	}
 }
@@ -382,6 +393,82 @@ func TestShowArgsRefusesBadRev(t *testing.T) {
 	} {
 		if a := ShowArgs(tt, "img", "n", 1, 2, rev, "a.go"); a != nil {
 			t.Errorf("rev %q built an argv: %q", rev, a)
+		}
+	}
+}
+
+var blameTargets = []struct {
+	name   string
+	t      Target
+	mounts []string
+	rel    string
+}{
+	{"head", Target{Top: "/w/repo", Common: "/w/repo/.git"}, []string{"/w/repo"}, "src/a b.go"},
+	{"common outside top", Target{Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w/wt", "/w/main/.git"}, "x.txt"},
+	{"boxed", Target{Root: "/w", Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w"}, "*.go"},
+	// The path follows "--", so one that looks like an option is not one.
+	{"option-like path", Target{Top: "/w/repo", Common: "/w/repo/.git"}, []string{"/w/repo"}, "--output=/x"},
+}
+
+func TestLogLastArgsGolden(t *testing.T) {
+	uid, gid := os.Getuid(), os.Getgid()
+	for _, c := range blameTargets {
+		got := LogLastArgs(c.t, "img", "n", uid, gid, c.rel)
+		w := want(c.mounts, c.t.Top, "-c", "log.showSignature=false", "log", "-1", "--no-show-signature",
+			"--format=%H%x00%aN%x00%aE%x00%at%x00%s%x00", "--", c.rel)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, w)
+		}
+	}
+}
+
+func TestBlameArgsGolden(t *testing.T) {
+	uid, gid := os.Getuid(), os.Getgid()
+	for _, c := range blameTargets {
+		got := BlameArgs(c.t, "img", "n", uid, gid, c.rel, false, false)
+		w := want(c.mounts, c.t.Top, "blame", "--porcelain", "--no-textconv", "--", c.rel)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, w)
+		}
+		got = BlameArgs(c.t, "img", "n", uid, gid, c.rel, true, false)
+		w = want(c.mounts, c.t.Top, "blame", "--porcelain", "--no-textconv", "--ignore-revs-file", ".git-blame-ignore-revs", "--", c.rel)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s, ignore revs:\n got %q\nwant %q", c.name, got, w)
+		}
+		// The retry drops every list, the repository's own included; it wins over the file.
+		for _, ign := range []bool{false, true} {
+			got = BlameArgs(c.t, "img", "n", uid, gid, c.rel, ign, true)
+			w = want(c.mounts, c.t.Top, "blame", "--porcelain", "--no-textconv", "--no-ignore-revs-file", "--", c.rel)
+			if !slices.Equal(got, w) {
+				t.Errorf("%s, no revs:\n got %q\nwant %q", c.name, got, w)
+			}
+		}
+	}
+}
+
+func TestBlameArgsKeepTheGuards(t *testing.T) {
+	tt := Target{Top: "/a", Common: "/b/.git"}
+	for _, got := range [][]string{BlameArgs(tt, "img", "n", 1, 2, "f", true, false), BlameArgs(tt, "img", "n", 1, 2, "f", false, true), LogLastArgs(tt, "img", "n", 1, 2, "f")} {
+		for _, must := range []string{"core.fsmonitor=false", "--read-only", "core.hooksPath=/dev/null", "core.attributesFile=/dev/null"} {
+			if !slices.Contains(got, must) {
+				t.Errorf("argv lacks %q: %q", must, got)
+			}
+		}
+		for _, never := range []string{"--textconv", "--contents", "-S", "--show-signature", "--follow"} {
+			if slices.Contains(got, never) {
+				t.Errorf("argv has %q: %q", never, got)
+			}
+		}
+		if i := slices.Index(got, "--network"); i < 0 || got[i+1] != "none" {
+			t.Errorf("no --network none: %q", got)
+		}
+		for i, a := range got {
+			if a == "--mount" && !strings.HasSuffix(got[i+1], ",readonly") {
+				t.Errorf("mount %q not read-only", got[i+1])
+			}
+		}
+		if got[len(got)-2] != "--" {
+			t.Errorf("path does not follow --: %q", got)
 		}
 	}
 }

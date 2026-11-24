@@ -199,3 +199,97 @@ func TestReclaimBoxStateLogOmitsAgentChosenFileNames(t *testing.T) {
 		}
 	}
 }
+
+// #330: a home past the TTL that holds a conversation stays, and the log says so
+// once, naming it, not on every hourly pass. A change in the kept set is news.
+func TestReclaimBoxStateLogsKeptHomesOncePerChange(t *testing.T) {
+	l, _, d := darwinLayer(t, false)
+	d.set(t, "inspect", "false\n") // every box is gone
+	seedConv := func(name string) string {
+		dir := seedLayerHome(t, l, name, 40*24*time.Hour)
+		conv := filepath.Join(dir, ".claude", "projects", "-w")
+		if err := os.MkdirAll(conv, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(conv, "s.jsonl"), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-40 * 24 * time.Hour)
+		if err := os.Chtimes(dir, old, old); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	dir := seedConv("ab-box-aaaaaaaaaaaa")
+	out := capturedLog(t)
+	ctx := context.Background()
+	const line = "kept box state ab-box-aaaaaaaaaaaa (unused 40 days)"
+
+	l.reclaimBoxState(ctx)
+	l.reclaimBoxState(ctx)
+	if n := strings.Count(out.String(), line); n != 1 {
+		t.Fatalf("the kept home was logged %d times over two passes, want 1:\n%s", n, out)
+	}
+	if !strings.Contains(out.String(), "culibox doctor") {
+		t.Fatalf("the line must say where to see and remove kept homes:\n%s", out)
+	}
+	if strings.Contains(out.String(), "reclaimed box state") {
+		t.Fatalf("a kept home was logged as reclaimed:\n%s", out)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("the home must stay: %v", err)
+	}
+
+	// A pass that cannot list the boxes reports nothing; that is not "nothing
+	// kept", so the next clean pass does not log the same set again.
+	d.set(t, "psfail", "")
+	l.reclaimBoxState(ctx)
+	if err := os.Remove(filepath.Join(d.dir, "psfail")); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	l.reclaimBoxState(ctx)
+	if strings.Contains(out.String(), "kept box state") {
+		t.Fatalf("the same kept set was logged again after a failed pass:\n%s", out)
+	}
+
+	out.Reset()
+	seedConv("ab-box-bbbbbbbbbbbb")
+	l.reclaimBoxState(ctx)
+	if got := out.String(); !strings.Contains(got, "ab-box-aaaaaaaaaaaa") || !strings.Contains(got, "ab-box-bbbbbbbbbbbb") {
+		t.Fatalf("a new kept home must log the whole kept set again:\n%s", got)
+	}
+}
+
+// A home that will not go errs on every pass; that must not hide the kept set.
+func TestReclaimBoxStateLogsKeptHomesBesideAStuckHome(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission failure cannot be simulated")
+	}
+	l, _, d := darwinLayer(t, false)
+	d.set(t, "inspect", "false\n")
+	stuckHome := seedLayerHome(t, l, "ab-box-eeeeeeeeeeee", 40*24*time.Hour)
+	stuck := filepath.Join(stuckHome, ".npm")
+	if err := os.Chmod(stuck, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
+	kept := seedLayerHome(t, l, "ab-box-ffffffffffff", 40*24*time.Hour)
+	conv := filepath.Join(kept, ".claude", "projects", "-w")
+	if err := os.MkdirAll(conv, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(conv, "s.jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-40 * 24 * time.Hour)
+	if err := os.Chtimes(kept, old, old); err != nil {
+		t.Fatal(err)
+	}
+	out := capturedLog(t)
+	l.reclaimBoxState(context.Background())
+	got := out.String()
+	if !strings.Contains(got, "box state reclaim:") || !strings.Contains(got, "kept box state ab-box-ffffffffffff") {
+		t.Fatalf("want both the stuck home's error and the kept set:\n%s", got)
+	}
+}

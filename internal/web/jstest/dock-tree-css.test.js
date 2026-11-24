@@ -149,9 +149,51 @@ test("the rules that read --lvl, draw a ::before or select with :has() on a tree
   assert.deepStrictEqual(loose, []);
 });
 
-test("the type icons are the ones that ship: the dock does not restyle .ft-icon", () => {
-  assert.strictEqual(rulesFor(css, "#drawer .ft-icon"), "");
+test("the type icons are the ones that ship: the dock colours .ft-icon but keeps app.css's Nerd Font", () => {
+  assert.match(rulesFor(css, "#drawer .ft-icon"), /^color: var\(--tree-icon\);$/);
+  assert.ok(!/font-family/.test(rulesFor(css, "#drawer .ft-icon")));
   assert.match(rulesFor(app, ".ft-icon"), /font-family:\s*"Symbols Nerd Font"/);
+});
+
+// P5, mockup 1 T2: quiet names, file-family icon colours (filetree.js fileFamily sets data-fam), ignored rows dimmed. Every one
+// of these comes before the git tints in the source and is no stronger than they are, so a changed name keeps its tint.
+const T2 = {
+  "#drawer .ft-node > .ft-name": /^color: var\(--tree-file\);$/,
+  "#drawer .ft-node.dir > .ft-name": /^color: var\(--tree-dir\); font-weight: var\(--w-medium\);$/,
+  '#drawer .ft-node[data-fam="tf"] > .ft-icon': /^color: var\(--fam-tf\);$/,
+  '#drawer .ft-node[data-fam="yaml"] > .ft-icon': /^color: var\(--fam-yaml\);$/,
+  '#drawer .ft-node[data-fam="md"] > .ft-icon': /^color: var\(--fam-md\);$/,
+  '#drawer .ft-node[data-fam="script"] > .ft-icon': /^color: var\(--fam-script\);$/,
+  '#drawer .ft-node[data-fam="build"] > .ft-icon': /^color: var\(--fam-build\);$/,
+  "#drawer .ft-ign:not(.ft-sel) > .ft-name": /^color: var\(--tree-ign\);$/,
+  "#drawer .ft-ign:not(.ft-sel) > .ft-icon": /^color: var\(--tree-icon\);$/,
+};
+// specificity of a simple selector of ids, classes, attributes and pseudo-classes (enough for these rules).
+function spec(sel) {
+  const ids = (sel.match(/#[\w-]+/g) || []).length;
+  const cls = (sel.match(/\.[\w-]+|\[[^\]]+\]|:(?!:)[\w-]+/g) || []).filter((x) => x !== ":not").length;
+  return ids * 100 + cls * 10;
+}
+
+test("T2: names, family icons and the ignored dim are the design's tokens", () => {
+  for (const [sel, re] of Object.entries(T2)) assert.match(rulesFor(css, sel), re, sel);
+});
+
+test("T2: every new tree colour comes before the git tints and is no stronger, so git stays the strongest signal", () => {
+  const tint = "#drawer .ft-node:has(> .ft-git-m) .ft-name";
+  // The dim is as strong as the folder and family rules, so it must come after them to win over them.
+  for (const sel of ["#drawer .ft-node.dir > .ft-name", '#drawer .ft-node[data-fam="build"] > .ft-icon']) {
+    assert.ok(css.indexOf(sel) < css.indexOf("#drawer .ft-ign:not(.ft-sel)"), sel + " comes before the dim");
+  }
+  for (const sel of Object.keys(T2)) {
+    assert.ok(css.indexOf(sel) >= 0 && css.indexOf(sel) < css.indexOf(tint), sel + " comes before the tints");
+    assert.ok(spec(sel) <= 130, sel + " specificity " + spec(sel));
+  }
+});
+
+test("T2: a family colour applies to a file's icon only; the phone's app.css knows no family and no ignored row", () => {
+  assert.ok(!/data-fam|ft-ign/.test(app));
+  assert.ok(!/\.dir\[data-fam|data-fam[^\]]*\]\s*>\s*\.ft-name/.test(css));
 });
 
 test("the explorer column has a fold control for the strip's transient open, shown only then", () => {

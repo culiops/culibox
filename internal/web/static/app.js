@@ -515,6 +515,8 @@ function paintDrawerLayout(avail, over) {
   if (parts.treeFolded) dr.dataset.folded = "1";
   else delete dr.dataset.folded;
   dockDrawn = { fold, avail, dockW: full ? avail : lay.dockW, treeW: parts.treeW };
+  // An explorer that unfolds (or opens from the strip) shows the open file it could not show folded (dockreveal.js).
+  if (typeof dockRevealSync === "function") dockRevealSync();
 }
 
 // dockForcesFull: would the dock, opened now, land in forced Full mode (dockLayout full)? What the first paint of an open
@@ -581,6 +583,13 @@ function dockStripOpen() {
   dockTreeReveal();
   const to = [$("drawer-tree").querySelector('.ft-node[tabindex="0"]'), $("drawer-goto-in"), $("drawer-x")].find((n) => n && n.getClientRects().length > 0);
   if (to) to.focus();
+  // The open file is revealed now (it could not be while the column was folded), and becomes the Tab stop: focus follows it
+  // there unless the user has moved it meanwhile (dockreveal.js).
+  if (typeof dockRevealNow !== "function") return;
+  dockRevealNow().then((ok) => {
+    const row = ok && $("drawer-tree").querySelector('.ft-node[tabindex="0"]');
+    if (row && to && document.activeElement === to && row !== to) row.focus({ preventScroll: true });
+  });
 }
 
 // dockRefit: the grid's width changed (the dock opened, closed or was resized), so the visible terminals refit. Each
@@ -640,7 +649,11 @@ function paintSteerToggle() {
 $("drawer-x").onclick = () => closeDrawerFor();
 $("drawer-pin").onclick = () => toggleDrawerPin();
 $("drawer-strip-tree").onclick = () => dockStripOpen();
-$("drawer-strip-changes").onclick = () => dockStripOpen();
+$("drawer-strip-changes").onclick = () => {
+  // "Open the explorer at Changes": a collapsed Changes opens (P3).
+  if (typeof dockSecOpen === "function") dockSecOpen("changes");
+  dockStripOpen();
+};
 $("drawer-strip-goto").onclick = () => drawerGoFocus();
 $("drawer-tree-fold").onclick = () => dockTreeFoldPress();
 
@@ -6927,11 +6940,14 @@ $("spawn").addEventListener("submit", async (ev) => {
     setDialogError("spawn-modal", gate.text);
     return;
   }
-  // Host on a profile with bindings runs without them: say so first, and send the yes. Before the busy state, so a No leaves the
-  // dialog as it was. Nothing is asked when Host drops nothing (the profile is read from the same card the request is built from).
+  // Host on a profile with bindings (its default credentials there, not a limit) or box settings Host drops: say so first, and send
+  // the yes. Before the busy state, so a No leaves the dialog as it was. Nothing is asked when there is neither (the profile is read
+  // from the same card the request is built from).
   const w = spawnWhere();
   const hostDrops = w.runtime === "host" ? tierHostDrops(currentProfile()) : [];
-  if (hostDrops.length && !(await hostDropsConfirm($("agent").value, hostDrops, tierHostKeeps(currentProfile())))) return;
+  const hostGuardrail = w.runtime === "host" ? tierHostGuardrail(currentProfile()) : [];
+  if ((hostDrops.length || hostGuardrail.length) &&
+    !(await hostDropsConfirm($("agent").value, hostDrops, tierHostKeeps(currentProfile()), hostGuardrail))) return;
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
@@ -6940,7 +6956,7 @@ $("spawn").addEventListener("submit", async (ev) => {
     runtime: w.runtime || "", clone: w.clone, prompt: $("spawn-prompt").value,
     replyable: $("spawn-replyable").checked, profile: currentProfile(),
     account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
-    hostDropsBindings: hostDrops.length > 0,
+    hostDropsBindings: hostDrops.length > 0 || hostGuardrail.length > 0,
   });
   // Only this form asks: a folder outside every root becomes one when the session starts (the server decides, and only for
   // this signed-in browser). Duplicate, the bearer API and scripts never send it, nor does the phone (spawnAddsRoot).

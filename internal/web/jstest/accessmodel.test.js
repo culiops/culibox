@@ -717,3 +717,17 @@ test("accessModel: an sso_direct row without a role name shows the mode label, n
   assert.strictEqual(row.sub, "account 123456789012 · SSO role directly · eu-west-1");
   assert.doesNotMatch(row.sub, /role\s+·/);
 });
+
+// D8 (#360): a bound Host session served by the broker gets the same Write access
+// offer as a box; a Host session without bindings has no row to offer it on.
+test("a broker-served Host session offers Elevate and the grant panel like a box", () => {
+  const boxRow = model({ session: sess(), aws: status() }).creds.rows[0];
+  const m = model({ session: sess({ runtime: "host", host_broker: true }), aws: status() });
+  assert.strictEqual(m.containment.tier, "host");
+  const r = m.creds.rows[0];
+  assert.deepStrictEqual(r.actions, ["elevate"]);
+  assert.ok(r.grant, "the grant panel is there");
+  assert.deepStrictEqual(r.grant, boxRow.grant);
+  const plain = model({ session: sess({ runtime: "host", aws_connections: undefined }), aws: null });
+  assert.deepStrictEqual(plain.creds.rows, []);
+});

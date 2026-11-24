@@ -395,6 +395,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)
 	protected.HandleFunc("/api/fs/search", s.handleFsSearch)
 	protected.HandleFunc("/api/fs/alternates", s.handleFsAlternates)
+	protected.HandleFunc("/api/fs/where", s.handleFsWhere)
 	protected.HandleFunc("/api/fs/upload", s.handleFsUpload)
 	protected.HandleFunc("/api/fs/archive", s.handleFsArchive)
 	protected.HandleFunc("/api/fs/mkdir", s.handleFsMkdir)
@@ -408,6 +409,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/git/base", s.handleGitBase)
 	protected.HandleFunc("/api/git/numstat", s.handleGitNumstat)
 	protected.HandleFunc("/api/git/show", s.handleGitShow)
+	protected.HandleFunc("/api/git/blame", s.handleGitBlame)
 
 	// Analytics routes only exist when the feature is enabled; the POST /ingest
 	// inherits csrfGuard's same-origin check like every other state-changing call.
@@ -428,19 +430,42 @@ func (s *Server) Handler() http.Handler {
 
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(sub))
+	assets := newStaticAssets(sub)
 	protected.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// App HTML/CSS/JS change on every rebuild → force revalidation, otherwise
-		// browsers serve stale assets until a manual hard-refresh. The vendored
-		// /xterm/* and /vendor/* bundles are immutable and stay cacheable.
+		// Every file carries a strong ETag (staticassets.go), so whatever the browser
+		// keeps it revalidates with a 304 instead of downloading again. App HTML/CSS/JS
+		// change on every rebuild → no-cache: always revalidated, never used stale.
+		// The unversioned /xterm/* and /vendor/* paths get no Cache-Control and so
+		// revalidate too; the page itself loads them from /v/<build id>/, cached for a
+		// year (index.html is rewritten to name the current build).
 		pth := r.URL.Path
 		if pth == "/profileform.js" {
 			s.serveProfileForm(w, r)
 			return
 		}
+		if pth == "/" && assets.serveIndex(w, r) {
+			return
+		}
+		if strings.HasPrefix(pth, "/v/") {
+			assets.serveVersioned(w, r, strings.TrimPrefix(pth, "/v/"))
+			return
+		}
+		cc := ""
 		app := strings.HasSuffix(pth, ".js") || strings.HasSuffix(pth, ".css")
 		if pth == "/" || (app &&
 			!strings.HasPrefix(pth, "/xterm/") && !strings.HasPrefix(pth, "/vendor/")) {
-			w.Header().Set("Cache-Control", "no-cache")
+			cc = "no-cache"
+		}
+		name := strings.TrimPrefix(pth, "/")
+		if pth == "/" {
+			name = "index.html"
+		}
+		// /index.html itself is left to FileServer, which redirects it to "/".
+		if pth != "/index.html" && assets.serve(w, r, name, cc) {
+			return
+		}
+		if cc != "" {
+			w.Header().Set("Cache-Control", cc)
 		}
 		fileServer.ServeHTTP(w, r)
 	})

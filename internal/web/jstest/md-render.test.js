@@ -544,3 +544,37 @@ test("mdRenderFragment: markup that cannot be made throws, so the caller can sho
   const boom = deps(frag(), { purify: { sanitize: () => { throw new Error("DOMPurify says no"); } } });
   assert.throws(() => mdRenderFragment("x", boom.deps), /DOMPurify says no/);
 });
+
+// The dock's options (Files dock P1): highlight.js only on a block whose fence named a language it knows, and not on a huge block.
+// Auto-detection is what cost most of a big file's render (measured: MACOS.md 43 ms with it, 16 ms without); the phone keeps it.
+const { MD_HL_MAX_CHARS } = require("../static/mdsafe.js");
+const knows = (names) => ({ hl: [], highlightElement(el) { this.hl.push(el.textContent); }, getLanguage: (n) => (names.includes(String(n).toLowerCase()) ? {} : undefined) });
+
+test("mdRenderFragment: with no options every block is highlighted (auto-detect, the phone's render as before)", () => {
+  const hl = knows(["go"]);
+  const out = frag(h("pre", {}, h("code", { class: "language-go" }, "a")), h("pre", {}, h("code", {}, "b")), h("pre", {}, h("code", { class: "language-nosuch" }, "c")));
+  mdRenderFragment("x", deps(out, { hljs: hl }).deps);
+  assert.deepEqual(hl.hl, ["a", "b", "c"]);
+});
+
+test("mdRenderFragment: hlLabelledOnly highlights a block whose language highlight.js knows, and leaves an unlabelled or unknown one plain", () => {
+  const hl = knows(["go", "yaml", "c++"]);
+  const out = frag(
+    h("pre", {}, h("code", { class: "language-go" }, "a")),
+    h("pre", {}, h("code", {}, "b")),
+    h("pre", {}, h("code", { class: "language-nosuch" }, "c")),
+    h("pre", {}, h("code", { class: "foo language-YAML" }, "d")),
+    h("pre", {}, h("code", { class: "language-c++" }, "e")),
+    h("pre", {}, h("code", { class: "notlanguage-go" }, "f")),
+  );
+  mdRenderFragment("x", deps(out, { hljs: hl, hlLabelledOnly: true }).deps);
+  assert.deepEqual(hl.hl, ["a", "d", "e"]);
+});
+
+test("mdRenderFragment: hlMaxChars leaves a block longer than the cap plain; the dock's cap is 100 KB", () => {
+  assert.equal(MD_HL_MAX_CHARS, 102400);
+  const hl = knows(["go"]);
+  const out = frag(h("pre", {}, h("code", { class: "language-go" }, "0123456789")), h("pre", {}, h("code", { class: "language-go" }, "0123456789A")));
+  mdRenderFragment("x", deps(out, { hljs: hl, hlLabelledOnly: true, hlMaxChars: 10 }).deps);
+  assert.deepEqual(hl.hl, ["0123456789"]);
+});

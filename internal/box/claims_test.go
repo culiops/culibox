@@ -421,3 +421,47 @@ func TestGrantBlocker(t *testing.T) {
 		t.Fatal("a listing error must be an error (the caller refuses)")
 	}
 }
+
+// #360: a listing that failed because nothing answers at the daemon's endpoint
+// is marked ErrDockerNotRunning, with the same text as before, so a Host
+// session's grant can tell "no box can be running" from any other failure.
+// Only the listing's own error is read, and only while ctx is live.
+func TestGrantCheckMarksAConfirmedDaemonDown(t *testing.T) {
+	m, f := boundMgr(t)
+	dir := t.TempDir()
+	const down = "docker ps: exit status 1: Cannot connect to the Docker daemon at unix:///Users/me/.colima/default/docker.sock. Is the docker daemon running?"
+	checks := map[string]func(context.Context, string) (GrantBlock, error){
+		"GrantBlocker":  func(ctx context.Context, d string) (GrantBlock, error) { return m.GrantBlocker(ctx, d, "") },
+		"ClaimForGrant": func(ctx context.Context, d string) (GrantBlock, error) { return m.ClaimForGrant(ctx, d, "") },
+	}
+	for name, check := range checks {
+		f.listErr = errors.New(down)
+		_, err := check(context.Background(), dir)
+		if !errors.Is(err, ErrDockerNotRunning) || err.Error() != "box: listing boxes: "+down {
+			t.Fatalf("%s, daemon down: %v", name, err)
+		}
+		for _, other := range []string{
+			"docker ps: exit status 1: permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock",
+			"daemon is restarting",
+			"docker ps: signal: killed",
+		} {
+			f.listErr = errors.New(other)
+			if _, err := check(context.Background(), dir); err == nil || errors.Is(err, ErrDockerNotRunning) {
+				t.Fatalf("%s, %q: %v", name, other, err)
+			}
+		}
+	}
+	// A context that already ended: "down" would be a guess.
+	f.listErr = errors.New(down)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := m.GrantBlocker(ctx, dir, ""); err == nil || errors.Is(err, ErrDockerNotRunning) {
+		t.Fatalf("ended ctx: %v", err)
+	}
+	// A workspace that does not resolve is never "down", whatever its name says.
+	f.listErr = nil
+	gone := filepath.Join(dir, "connection refused", "cannot connect to the docker daemon")
+	if _, err := m.GrantBlocker(context.Background(), gone, ""); err == nil || errors.Is(err, ErrDockerNotRunning) {
+		t.Fatalf("unresolvable workspace: %v", err)
+	}
+}

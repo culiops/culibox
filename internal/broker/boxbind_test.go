@@ -26,12 +26,13 @@ const (
 type credPath struct {
 	name, path, body, provider string
 	uniform                    string // the 403 text the box sees for every refusal on this path
+	hostUniform                string // the same for a Host session on its own socket
 }
 
 var credPaths = []credPath{
-	{"aws", "/v1/credentials", "", "", "this session is not a live boxed session with an AWS binding"},
-	{"github", "/v1/github/token", ghBody, ProviderGitHub, "this session is not a live boxed session with a GitHub binding"},
-	{"static", "/v1/static/token", grafanaBody, ProviderStatic, "this session is not a live boxed session with a token binding"},
+	{"aws", "/v1/credentials", "", "", "this session is not a live boxed session with an AWS binding", "this session is not a live Host session with an AWS binding"},
+	{"github", "/v1/github/token", ghBody, ProviderGitHub, "this session is not a live boxed session with a GitHub binding", "this session is not a live Host session with a GitHub binding"},
+	{"static", "/v1/static/token", grafanaBody, ProviderStatic, "this session is not a live boxed session with a token binding", "this session is not a live Host session with a token binding"},
 }
 
 // boxedSession is a live boxed session in ownBox bound for all three providers.
@@ -104,10 +105,11 @@ func errorText(t *testing.T, w *httptest.ResponseRecorder) string {
 // oneRow is the only audit row, checked for outcome, session, provider, error.
 func oneRow(t *testing.T, rec *memRec, sid string, o Outcome, provider, why string) {
 	t.Helper()
-	if len(rec.rows) != 1 {
-		t.Fatalf("rows = %+v, want exactly one", rec.rows)
+	rows := rec.snapshot()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want exactly one", rows)
 	}
-	if r := rec.rows[0]; r.SessionID != sid || r.Outcome != o || r.Provider != provider || r.Error != why {
+	if r := rows[0]; r.SessionID != sid || r.Outcome != o || r.Provider != provider || r.Error != why {
 		t.Fatalf("row = %+v, want session %q outcome %s provider %q error %q", r, sid, o, provider, why)
 	}
 }
@@ -335,8 +337,8 @@ func TestSharedSocketRefusesEveryRequest(t *testing.T) {
 				t.Fatalf("status %d body %s", w.Code, w.Body)
 			}
 			oneRow(t, e.rec, "s", OutcomeDeniedBox, cp.provider, whySharedSocket)
-			if n := e.lookups.Load(); n != 0 {
-				t.Fatalf("the session was looked up %d times for a request on the shared socket", n)
+			if n := e.lookups.Load(); n != 1 { // one read-only look at the kind (box or Host) of the token's own session
+				t.Fatalf("the session was looked up %d times for a request on the shared socket, want 1", n)
 			}
 			if n := e.minted(); n != 0 {
 				t.Fatalf("a credential was fetched over the shared socket (%d calls)", n)
@@ -356,6 +358,10 @@ func TestSharedSocketRefusesEveryRequest(t *testing.T) {
 				t.Fatalf("garbage token: status %d body %s", w.Code, w.Body)
 			}
 			oneRow(t, e2.rec, "", OutcomeDeniedBox, cp.provider, whySharedSocket)
+			// Only a token whose MAC verifies may cause a session lookup.
+			if n := e2.lookups.Load(); n != 0 {
+				t.Fatalf("an unverified token caused %d session lookups, want 0", n)
+			}
 		})
 	}
 }
@@ -387,7 +393,7 @@ func TestSharedSocketRefusesNonCredentialRoutesToo(t *testing.T) {
 				provider = ProviderStatic
 			}
 			oneRow(t, e.rec, "s", OutcomeDeniedBox, provider, whySharedSocket)
-			if n := e.lookups.Load(); n != 0 || e.minted() != 0 {
+			if n := e.lookups.Load(); n != 1 || e.minted() != 0 { // the one read-only look at the session's kind
 				t.Fatalf("lookups %d, credentials %d on the shared socket", n, e.minted())
 			}
 		})

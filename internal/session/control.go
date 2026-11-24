@@ -5,13 +5,11 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/culiops/culibox/internal/account"
-	"github.com/culiops/culibox/internal/boxread"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/launcher"
 )
@@ -74,24 +72,6 @@ func dropResume(argv []string, sid string) ([]string, bool) {
 	return slices.Clone(argv), false
 }
 
-// boxedTranscriptPresent reports whether sid's transcript is in the box home
-// boxDir for one of the spawn cwd forms (C1: that project dir only). The only
-// read is boxread.Open, which refuses a symlink, a non-regular file and any path
-// out of boxDir; the file is closed again at once. An empty boxDir is "no".
-func boxedTranscriptPresent(boxDir, sid string, cwds []string) bool {
-	if boxDir == "" || !sessionIDRe.MatchString(sid) {
-		return false
-	}
-	for _, c := range cwds {
-		rel := filepath.Join(".claude", "projects", projectSlug(filepath.Clean(c)), sid+".jsonl")
-		if f, _, ok := boxread.Open(boxDir, rel); ok {
-			f.Close()
-			return true
-		}
-	}
-	return false
-}
-
 // resumeSkippedNote is Info.ResumeSkipped's text.
 const resumeSkippedNote = "the previous conversation is not in this box's home"
 
@@ -150,8 +130,10 @@ func (m *Manager) Restart(id string) (*Session, error) {
 	ns, err := m.Spawn(launcher.SpawnSpec{
 		Agent: s.Agent, Name: name, Cwd: s.Cwd, Runtime: s.Runtime, Options: opts, Account: acct,
 		Resume: resumeFor(s.Runtime, bin, sid, s.Exclusive), ParentID: s.ParentID, Clone: clone,
-		// A host session was started with its drops confirmed; the restart is that
-		// same session, so it carries the confirmation. A box session has no drops.
+		// A host session was started with its drops and its bindings' guardrail
+		// confirmed; the restart is that same session, so it carries the
+		// confirmation (and, with node on its PATH, gets its bindings through the
+		// broker again, on a new id's socket). A box session has neither.
 		HostDropsAck: s.Runtime == config.RuntimeHost,
 	})
 	if err != nil {
