@@ -12,7 +12,7 @@ import (
 	"github.com/culiops/culibox/internal/launcher"
 )
 
-const testConvKey = "0123456789ab"
+const testConvFolder = "aaaaaaaaaaaa" // a conversations folder name: 12 lowercase hex digits
 
 // writeConvTx is writeTx for a conversations folder: <conv>/<slug>/<sid>.jsonl.
 func writeConvTx(t *testing.T, conv, cwd, sid, text string, mtime time.Time) string {
@@ -37,7 +37,7 @@ func TestBoxedSpawnRecordsTheTranscriptKey(t *testing.T) {
 	if err := m.SetSidecarPath(path); err != nil {
 		t.Fatal(err)
 	}
-	boxes.conv = testConvKey
+	boxes.conv = testConvFolder
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox})
 	if err != nil {
 		t.Fatal(err)
@@ -46,10 +46,10 @@ func TestBoxedSpawnRecordsTheTranscriptKey(t *testing.T) {
 	if boxes.lastKey.Profile != "claude" {
 		t.Fatalf("BoxKey.Profile = %q, want the profile name", boxes.lastKey.Profile)
 	}
-	if s.transcriptKey != testConvKey {
+	if s.transcriptKey != testConvFolder {
 		t.Fatalf("session key = %q", s.transcriptKey)
 	}
-	if md := sidecarEntry(t, path, s.ID); md.TranscriptKey != testConvKey {
+	if md := sidecarEntry(t, path, s.ID); md.TranscriptKey != testConvFolder {
 		t.Fatalf("record key = %q", md.TranscriptKey)
 	}
 	// A malformed key from the box layer is never kept: it is joined into a path.
@@ -75,7 +75,7 @@ func TestReconcileRestoresTheTranscriptKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.sidecar.put("claude-1", sessionMeta{Agent: "claude", Cwd: t.TempDir(), Created: time.Now(), Runtime: config.RuntimeBox,
-		Box: "ab-box-live", TranscriptKey: testConvKey})
+		Box: "ab-box-live", TranscriptKey: testConvFolder})
 	m.SetBoxes(&fakeBoxes{})
 	if err := m.Reconcile(); err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestReconcileRestoresTheTranscriptKey(t *testing.T) {
 	m.mu.Lock()
 	s := m.sessions["claude-1"]
 	m.mu.Unlock()
-	if s == nil || s.transcriptKey != testConvKey {
+	if s == nil || s.transcriptKey != testConvFolder {
 		t.Fatalf("restored session %+v", s)
 	}
 }
@@ -93,7 +93,7 @@ func TestReconcileRestoresTheTranscriptKey(t *testing.T) {
 func boxedConvManager(t *testing.T) (*Manager, string, string) {
 	t.Helper()
 	m, bd := boxedRegManager(t)
-	conv := box.ConversationsDir(m.stateDir, testConvKey)
+	conv := box.ConversationsDir(m.stateDir, testConvFolder)
 	for _, sid := range []string{"aaaa-1", "bbbb-2"} {
 		home := filepath.Join(bd, ".claude", "projects", projectSlug(locCwd), sid+".jsonl")
 		dst := filepath.Join(conv, projectSlug(locCwd), sid+".jsonl")
@@ -105,7 +105,7 @@ func boxedConvManager(t *testing.T) (*Manager, string, string) {
 		}
 	}
 	for _, id := range []string{"s1", "s2"} {
-		m.sessions[id].transcriptKey = testConvKey
+		m.sessions[id].transcriptKey = testConvFolder
 	}
 	return m, bd, conv
 }
@@ -142,7 +142,7 @@ func TestBoxedReadersFindTheConversationsFolder(t *testing.T) {
 // one with a key still finds what was left in the home.
 func TestBoxedReadersFallBackToTheHome(t *testing.T) {
 	m, bd := boxedRegManager(t)
-	m.sessions["s1"].transcriptKey = testConvKey // folder empty: the home still has A
+	m.sessions["s1"].transcriptKey = testConvFolder // folder empty: the home still has A
 	if got := peekText(t, m, "s1"); got != "from A" {
 		t.Errorf("peek = %q", got)
 	}
@@ -192,15 +192,15 @@ func TestBoxedResumeGuardLooksInTheFolderTheBoxMounts(t *testing.T) {
 		return i >= 0 && i+1 < len(argv) && argv[i+1] == "abcd-1234"
 	}
 	t.Run("in the folder", func(t *testing.T) {
-		argv := run(t, testConvKey, func(m *Manager, _, cwd string) {
-			writeConvTx(t, box.ConversationsDir(m.stateDir, testConvKey), cwd, "abcd-1234", "hi", time.Now())
+		argv := run(t, testConvFolder, func(m *Manager, _, cwd string) {
+			writeConvTx(t, box.ConversationsDir(m.stateDir, testConvFolder), cwd, "abcd-1234", "hi", time.Now())
 		})
 		if !resumed(argv) {
 			t.Fatalf("argv = %v, want --resume", argv)
 		}
 	})
 	t.Run("only in the home the folder hides", func(t *testing.T) {
-		argv := run(t, testConvKey, func(_ *Manager, home, cwd string) {
+		argv := run(t, testConvFolder, func(_ *Manager, home, cwd string) {
 			writeTx(t, home, cwd, "abcd-1234", "hi", time.Now())
 		})
 		if resumed(argv) {
