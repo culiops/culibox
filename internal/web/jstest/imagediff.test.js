@@ -9,6 +9,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { iconStubs } = require("./iconpage.js");
 const { Node, Text } = require("./fakedom.js");
 
 const STATIC = path.join(__dirname, "..", "static");
@@ -48,7 +49,7 @@ function page() {
     },
     setTimeout: (fn, ms) => { st.timers.push({ fn, ms, live: true }); return st.timers.length; },
     clearTimeout: (id) => { if (st.timers[id - 1]) st.timers[id - 1].live = false; },
-    svgIcon: () => new Node("svg", doc),
+    ...iconStubs(() => new Node("svg", doc)),
     showToast: (m) => { st.toasts.push(m); },
     IS_MAC: false,
   });
@@ -314,6 +315,7 @@ test("the three modes, in the control, are Side by side, Swipe and Onion skin, a
   const seg = el.querySelector(".dk-imgmode");
   assert.ok(seg);
   assert.deepEqual(seg.querySelectorAll(".dk-seg-t").map((n) => n.textContent), ["Side by side", "Swipe", "Onion skin"]);
+  assert.deepEqual(seg.querySelectorAll("button").map((b) => b.children[0].getAttribute("data-icon")), ["columns-2", "square-split-horizontal", "layers"]);
   const pressed = () => seg.querySelectorAll("button").map((b) => b.getAttribute("aria-pressed"));
   assert.deepEqual(pressed(), ["true", "false", "false"], "side by side is the default");
   assert.equal(el.querySelector(".dk-imgd-stage").dataset.mode, "side");
@@ -505,6 +507,7 @@ test("an image the Changes section lists gets an Image | Changes toggle; one it 
   p.ctx.editorImagePaint(tab);
   assert.equal(tab.img.seg.el.hidden, false);
   assert.deepEqual(tab.img.seg.el.querySelectorAll("button").map((b) => b.getAttribute("aria-pressed")), ["true", "false"]);
+  assert.deepEqual(tab.img.seg.el.querySelectorAll("button").map((b) => b.children[0].getAttribute("data-icon")), ["image", "diff"]);
   p.s.row = null;
   p.ctx.editorImagePaint(tab);
   assert.equal(tab.img.seg.el.hidden, true, "no row, no Changes");

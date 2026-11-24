@@ -9,6 +9,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { iconStubs } = require("./iconpage.js");
 const { Node, Text } = require("./fakedom.js");
 
 const STATIC = path.join(__dirname, "..", "static");
@@ -98,7 +99,7 @@ function page() {
     document: doc, IntersectionObserver: FakeIO, fetch,
     setTimeout: (fn, ms) => { st.timers = st.timers || []; st.timers.push({ fn, ms, live: true }); return st.timers.length; },
     clearTimeout: (id) => { if (st.timers && st.timers[id - 1]) st.timers[id - 1].live = false; },
-    svgIcon: () => new El("svg", doc),
+    ...iconStubs(() => new El("svg", doc)),
     showToast: (m) => { st.toasts.push(m); },
     IS_MAC: false,
     shortcutMatches: (id, e) => e.id === id,
@@ -135,7 +136,7 @@ function page() {
     imageDiffMount: (el, p, scope, o) => { const m = { el, p, scope, o, disposed: false, dispose() { this.disposed = true; } }; st.mounts.push(m); return m; },
   });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
-  load('let dockMonaco = null; const MONACO_THEME = "culibox"; const DKC_CODE_TITLES = { M: "Modified", A: "Added", U: "Untracked", D: "Deleted", C: "Conflict" }; const DG_ICON_INLINE = [], DG_ICON_SIDE = [];', "state");
+  load('let dockMonaco = null; const MONACO_THEME = "culibox"; const DKC_CODE_TITLES = { M: "Modified", A: "Added", U: "Untracked", D: "Deleted", C: "Conflict" };', "state");
   for (const f of ["reviewmodel.js", "linediff.js", "reviewall.js"]) load(src(f), f);
   const p = { ctx, st, doc, nodes, monaco, run: (c) => load(c, "test") };
   // The answers a section's two requests get (the tests resolve them as they like).
@@ -385,6 +386,7 @@ test("a section header: name, folder, letter, counts, the notes chip, the review
   assert.strictEqual(q("dk-del").textContent, "−0");
   assert.strictEqual(q("dk-nt").hidden, false);
   assert.strictEqual(q("dk-nt").textContent, "2 notes", "pending notes of this file only");
+  assert.strictEqual(q("dk-sec-caret").children[0].getAttribute("data-icon"), "chevron-down", "the caret is the vendored chevron");
   assert.strictEqual(q("dk-sec-ck").getAttribute("aria-pressed"), "false");
   q("dk-sec-ck").click();
   assert.deepStrictEqual(p.st.marks, [["s1", "/w/a.go", "/w/a.go"]]);

@@ -194,7 +194,7 @@ test("the shared stylesheet aligns every .ui-icon, phone included", () => {
   for (const d of ["flex: none", "display: inline-block", "vertical-align: -2px"]) assert.ok(m[1].includes(d), d);
 });
 
-test("only svgicon.js builds an <svg>", { todo: "Task 1.5" }, () => {
+test("only svgicon.js builds an <svg>", () => {
   // analytics.js draws chart primitives (anSvg), notifymodel.js a favicon string.
   const skip = new Set(["svgicon.js", "analytics.js", "notifymodel.js"]);
   const dir = path.join(__dirname, "..", "static");

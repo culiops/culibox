@@ -180,14 +180,14 @@ test("kitMenuSep is a .menu-sep separator div", () => {
 test("kitMenuButton: .menu-item > .menu-icon + .menu-text, an empty slot with no icon, red when danger, the click is its run", () => {
   const { ctx } = world();
   const ran = [];
-  const b = ctx.kitMenuButton("Rename…", "pencil", false, () => ran.push("r"));
+  const b = ctx.kitMenuButton("Rename…", "rename", false, () => ran.push("r"));
   assert.strictEqual(b.tag, "button");
   assert.strictEqual(b.type, "button");
   assert.strictEqual(b.className, "menu-item");
   assert.strictEqual(b.getAttribute("role"), "menuitem");
   assert.deepStrictEqual(b.children.map((c) => c.className), ["menu-icon", "menu-text"]);
   assert.strictEqual(b.children[0].getAttribute("aria-hidden"), "true");
-  assert.strictEqual(b.children[0].children[0].getAttribute("data-icon"), "pencil");
+  assert.strictEqual(b.children[0].children[0].getAttribute("data-icon"), "pencil-line");
   assert.strictEqual(b.children[1].textContent, "Rename…");
   b.onclick();
   assert.deepStrictEqual(ran, ["r"]);
@@ -196,67 +196,56 @@ test("kitMenuButton: .menu-item > .menu-icon + .menu-text, an empty slot with no
   assert.strictEqual(bare.children[0].children.length, 0, "no icon: the 16px slot stays an empty box");
 });
 
-// ---- menuIconSvg: the kinds the other menus add ------------------------------------------------------------------------
-test("menuIconSvg: delete is the End session cross, under its own name", () => {
+// ---- menuIconSvg: every kind is an ICON_MENU glyph of the vendored set ----------------------------------------------------
+test("menu kinds draw ICON_MENU glyphs", () => {
   const { ctx } = world();
-  const del = ctx.menuIconSvg("delete");
-  const end = ctx.menuIconSvg("end");
-  assert.strictEqual(del.getAttribute("data-icon"), "delete");
-  assert.strictEqual(del.attrs.kind, "dock:hide", "built from the dock's cross, like end");
-  assert.strictEqual(end.attrs.kind, "dock:hide");
-  assert.strictEqual(del.getAttribute("stroke-linecap"), "round");
-  assert.strictEqual(del.getAttribute("stroke-linejoin"), "round");
-});
-
-test("menuIconSvg: check, download and insert are drawn in the product's icon style", () => {
-  const { ctx } = world();
-  for (const k of ["check", "download", "insert"]) {
-    const svg = ctx.menuIconSvg(k);
-    assert.ok(svg, k);
-    assert.strictEqual(svg.getAttribute("data-icon"), k);
-    assert.deepStrictEqual(
-      ["viewBox", "aria-hidden", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"].map((a) => svg.getAttribute(a)),
-      ["0 0 14 14", "true", "none", "currentColor", "1.2", "round", "round"], k);
-    assert.ok(svg.children.length >= 1, k + " has a shape");
-    for (const c of svg.children) assert.ok(c.getAttribute("d"), k + ": a path has its d");
+  for (const [kind, name] of [["rename", "pencil-line"], ["copy", "clipboard-copy"], ["duplicate", "copy-plus"], ["end", "power"],
+    ["delete", "trash-2"], ["check", "check"], ["refresh", "refresh-cw"], ["collapse", "chevrons-down-up"], ["insert", "arrow-right-to-line"],
+    ["interrupt", "pause"], ["bringhome", "arrow-down-to-line"], ["folder-plus", "folder-plus"], ["files", "folder-tree"],
+    ["attribution", "chart-pie"], ["split", "columns-2"], ["download", "download"], ["upload", "upload"], ["edit", "pencil"]]) {
+    const svg = ctx.menuIconSvg(kind);
+    assert.strictEqual(svg.getAttribute("data-icon"), name, kind);
+    assert.strictEqual(svg.getAttribute("width"), "14", kind);
+    assert.strictEqual(svg.getAttribute("viewBox"), "0 0 24 24", kind);
+    assert.strictEqual(svg.getAttribute("aria-hidden"), "true", kind);
+    assert.ok(svg.children.length >= 1, kind + " has a shape");
   }
-  assert.notStrictEqual(ctx.menuIconSvg("download").children.map((c) => c.getAttribute("d")).join(),
-    ctx.menuIconSvg("tray").children.map((c) => c.getAttribute("d")).join(), "Download is not the Bring-home tray");
+  assert.strictEqual(ctx.menuIconSvg(""), null);
+  assert.strictEqual(ctx.menuIconSvg("constructor").children.length, 0, "a kind named like an Object member is a bare icon, not a crash");
+  assert.strictEqual(ctx.menuIconSvg("nope").children.length, 0, "an unknown kind is a bare icon");
 });
 
-test("menuIconSvg: upload, refresh and collapse (the explorer's ⋯ menu) are drawn in the same style, each its own shape", () => {
+test("menu kinds each have their own glyph, and kitmenu.js carries no shapes of its own", () => {
   const { ctx } = world();
-  const ds = [];
-  for (const k of ["upload", "refresh", "collapse"]) {
-    const svg = ctx.menuIconSvg(k);
-    assert.ok(svg, k);
-    assert.strictEqual(svg.getAttribute("data-icon"), k);
-    assert.deepStrictEqual(
-      ["viewBox", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"].map((a) => svg.getAttribute(a)),
-      ["0 0 14 14", "none", "currentColor", "1.2", "round", "round"], k);
-    assert.ok(svg.children.length >= 1);
-    for (const c of svg.children) assert.ok(c.getAttribute("d"), k + ": a path has its d");
-    ds.push(svg.children.map((c) => c.getAttribute("d")).join());
+  const kinds = ["rename", "copy", "duplicate", "end", "delete", "check", "refresh", "collapse", "insert", "interrupt", "bringhome",
+    "folder-plus", "files", "attribution", "split", "download", "upload", "edit"];
+  const names = kinds.map((k) => ctx.menuIconSvg(k).getAttribute("data-icon"));
+  assert.strictEqual(new Set(names).size, kinds.length, "no two kinds share a glyph");
+  const src = read("kitmenu.js");
+  assert.ok(!/MENU_SHAPES|svgIcon\(|svgShape\(/.test(src));
+});
+
+// A kind that is no ICON_MENU key draws an empty slot, so every kind a caller passes is checked against the map here.
+test("every menu icon kind a page script passes is an ICON_MENU key", () => {
+  const { ICON_MENU } = require("../static/iconmap.js");
+  const found = new Map();
+  const note = (kind, where) => { if (kind) found.set(where + ":" + kind, kind); };
+  for (const f of ["app.js", "dockchanges.js", "dockreveal.js", "editornotes.js", "editorselbar.js", "editortab.js", "profilepage.js", "sidechrome.js", "credentials.js"]) {
+    const src = read(f);
+    for (const m of src.matchAll(/kitMenuButton\([^,]+,\s*"([^"]*)"/g)) note(m[1], f);
+    for (const m of src.matchAll(/menuIconSvg\("([^"]+)"\)/g)) note(m[1], f);
+    for (const m of src.matchAll(/\bitem\("[^"]*",\s*"([^"]*)"/g)) note(m[1], f);
+    for (const m of src.matchAll(/esbButton\((?:true|false),\s*[^,]+,\s*"([^"]*)"/g)) note(m[1], f);
+    for (const m of src.matchAll(/selBarAddAction\(\{[^}]*icon: "([^"]*)"/g)) note(m[1], f);
   }
-  ds.push(ctx.menuIconSvg("download").children.map((c) => c.getAttribute("d")).join());
-  assert.strictEqual(new Set(ds).size, 4, "Upload is not Download, and none is another's twin");
-});
-
-test("menuIconSvg: folder-plus is the pane header's folder with a plus added, as Duplicate adds one to Copy", () => {
-  const { ctx } = world();
-  const fp = ctx.menuIconSvg("folder-plus");
-  assert.strictEqual(fp.attrs.kind, "tab:files");
-  assert.strictEqual(fp.getAttribute("data-icon"), "folder-plus");
-  assert.strictEqual(fp.getAttribute("stroke-linecap"), "round");
-  assert.strictEqual(fp.children.length, 2, "the stand-in folder's one shape and the plus");
-  assert.strictEqual(ctx.menuIconSvg("files").children.length, 1, "Files stays a bare folder");
-});
-
-test("menuIconSvg: a kind named like an Object member is a bare icon, not a crash", () => {
-  const { ctx } = world();
-  const svg = ctx.menuIconSvg("constructor");
-  assert.strictEqual(svg.getAttribute("data-icon"), "constructor");
-  assert.strictEqual(svg.children.length, 0);
+  for (const [f, name] of [["sessionrow.js", "MENU_ICON"], ["filetree.js", "ROW_MENU_ICONS"]]) {
+    const src = read(f);
+    const body = new RegExp("const " + name + " = \\{([^}]*)\\}").exec(src);
+    assert.ok(body, name);
+    for (const m of body[1].matchAll(/:\s*"([^"]+)"/g)) note(m[1], f);
+  }
+  assert.ok(found.size >= 15, "the scan found the callers (" + found.size + ")");
+  for (const [where, kind] of found) assert.ok(Object.prototype.hasOwnProperty.call(ICON_MENU, kind), where + " is not an ICON_MENU key");
 });
 
 // ---- the tab switcher ---------------------------------------------------------------------------------------------------

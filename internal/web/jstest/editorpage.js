@@ -10,6 +10,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { Node, Text } = require("./fakedom.js");
+const { iconStubs } = require("./iconpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const src = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
@@ -309,7 +310,7 @@ function page(over) {
     closeTabEverywhere: () => {},
     normalizePath: (p) => p,
     clampScroll: (v) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n > 0 ? n : 0; },
-    svgIcon: () => new El("svg", doc),
+    ...iconStubs(() => new El("svg", doc)),
     showToast: (m, o) => { st.toasts.push([m, o]); },
     gitStatusRefreshSoon: () => { st.gitRefresh++; },
     fontPrefs: { get: () => 12.5, STEP: 1, BOUNDS: { min: 8, max: 32 }, set() {} },

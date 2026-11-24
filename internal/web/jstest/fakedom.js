@@ -38,7 +38,8 @@ class Node {
   get firstChild() { return this.children[0] || null; }
   get parentNode() { return this.parent; }
   get parentElement() { return this.parent; }
-  setAttribute(k, v) { this.attrs[k] = String(v); }
+  // class is a reflecting attribute (an SVG has no className setter, so uiIcon writes it through setAttribute): keep both in step.
+  setAttribute(k, v) { this.attrs[k] = String(v); if (k === "class") this.className = String(v); }
   removeAttribute(k) { delete this.attrs[k]; }
   appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }

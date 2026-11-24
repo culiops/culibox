@@ -34,11 +34,10 @@
 
 const IMG_FETCH_MS = 20000; // the old image's request is given this long (editordiff.js DG_FETCH_MS: the same patience)
 const IMG_MODES = [
-  { id: "side", label: "Side by side", icon: [["path", { d: "M2 2.5h10v9H2zM7 2.5v9" }]] },
-  { id: "swipe", label: "Swipe", icon: [["path", { d: "M2 2.5h10v9H2zM7 1.5v11M5.5 5.8L4.2 7l1.3 1.2M8.5 5.8L9.8 7 8.5 8.2" }]] },
-  { id: "onion", label: "Onion skin", icon: [["path", { d: "M2 2.5h6.5V9H2zM5.5 5h6.5v6.5H5.5z" }]] },
+  { id: "side", label: "Side by side", icon: "side" },
+  { id: "swipe", label: "Swipe", icon: "swipe" },
+  { id: "onion", label: "Onion skin", icon: "onion" },
 ];
-const IMG_ICON_IMAGE = [["path", { d: "M2 2.5h10v9H2zM2.5 10l3-3.2 2.2 2.2 1.6-1.6 3 3" }]];
 const IMG_KEY_STEP = 1;      // an arrow key moves the Swipe divider this many percent, with Shift
 const IMG_KEY_STEP_BIG = 10; // this many
 
@@ -319,8 +318,8 @@ function editorImageOn(tab) {
 // section lists, and for one that is in Changes.
 function editorImageToggle(tab) {
   const el = editorDiffSeg("View");
-  const image = editorDiffSegItem("Image", IMG_ICON_IMAGE, () => { editorImageSet(tab, false); tab.focusReader(); });
-  const changes = editorDiffSegItem("Changes", DG_ICON_CHANGES, () => { editorImageSet(tab, true); });
+  const image = editorDiffSegItem("Image", "image", () => { editorImageSet(tab, false); tab.focusReader(); });
+  const changes = editorDiffSegItem("Changes", "changes", () => { editorImageSet(tab, true); });
   el.append(image, changes);
   el.hidden = true;
   tab.img = { seg: { el, image, changes }, on: false, view: null };

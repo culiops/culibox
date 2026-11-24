@@ -133,7 +133,7 @@ function dkTabFill(el, it) {
   // The All changes tab has no file, so no file glyph: the Changes icon, drawn once (a tab element is made for one key, which stays one kind).
   if (it.review) {
     const ic = el.querySelector(".dk-ic");
-    if (ic && !ic.firstChild && typeof svgIcon === "function" && typeof DG_ICON_CHANGES !== "undefined") ic.append(svgIcon(DG_ICON_CHANGES, { icon: "changes", size: "14" }));
+    if (ic && !ic.firstChild) ic.append(uiIcon(iconOf(ICON_DOCK_VIEW, "changes"), { size: 14 }));
   } else {
     set("dk-ic", typeof iconFor === "function" ? iconFor(it.path.split("/").pop() || it.path, false, false) : "");
   }

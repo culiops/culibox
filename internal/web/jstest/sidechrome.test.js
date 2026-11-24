@@ -45,7 +45,7 @@ const { Node } = require("./fakedom.js");
 const SVG = require("../static/svgicon.js");
 const KM = require("../static/kitmenu.js");
 const MAP = require("../static/iconmap.js");
-Object.assign(global, { svgIcon: SVG.svgIcon, svgShape: SVG.svgShape, uiIcon: SVG.uiIcon, ICON_LAYOUT: MAP.ICON_LAYOUT, menuIconSvg: KM.menuIconSvg, kitMenuKeys: KM.kitMenuKeys });
+Object.assign(global, MAP, { svgIcon: SVG.svgIcon, svgShape: SVG.svgShape, uiIcon: SVG.uiIcon, menuIconSvg: KM.menuIconSvg, kitMenuKeys: KM.kitMenuKeys });
 
 function page() {
   const doc = { activeElement: null, listeners: [] };

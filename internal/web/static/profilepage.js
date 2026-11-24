@@ -62,7 +62,6 @@ let pfvRefs = { unsaved: null, edit: {}, saved: [] };
 let pfvSavedTimer = null;
 const PFV_SAVED_MS = 2000;
 
-const PFV_SVG = "http://www.w3.org/2000/svg";
 const PFV_EDIT_LABEL = {
   runs: "Edit where it runs", workspace: "Edit workspace", agent: "Edit agent", cloud: "Edit cloud and tokens",
   reachable: "Edit also reachable", network: "Edit network", advanced: "Edit advanced settings",
@@ -97,37 +96,13 @@ function pfvMk(tag, cls, text) {
   return e;
 }
 
-// pfvIcon: a small inline SVG from [shape, attributes] pairs. The class goes on
-// through the attribute: an SVG element's className is read-only.
-function pfvIcon(cls, w, h, box, shapes) {
-  const s = document.createElementNS(PFV_SVG, "svg");
-  s.setAttribute("class", cls);
-  s.setAttribute("width", String(w));
-  s.setAttribute("height", String(h));
-  s.setAttribute("viewBox", box);
-  s.setAttribute("aria-hidden", "true");
-  for (const [shape, attrs] of shapes) {
-    const n = document.createElementNS(PFV_SVG, shape);
-    for (const k of Object.keys(attrs)) n.setAttribute(k, attrs[k]);
-    s.appendChild(n);
-  }
-  return s;
-}
-// The frame's lock (M2.1 `.m2-pitem` svg, 10x12, stroke 1). Desktop only: pfvRenderNav and pfvDrawNote draw it behind pfvOnPage(), so the phone
-// never gets one.
-const PFV_STROKE = { fill: "none", stroke: "currentColor", "stroke-width": "1" };
+// The frame's lock (M2.1 `.m2-pitem`), the vendored lock at 12px. Desktop only: pfvRenderNav and pfvDrawNote draw it behind pfvOnPage(), so
+// the phone never gets one.
 function pfvLockIcon() {
-  return pfvIcon("pfv-lock", 10, 12, "0 0 10 12", [
-    ["rect", Object.assign({ x: "1.5", y: "5.5", width: "7", height: "5.5", rx: "1" }, PFV_STROKE)],
-    ["path", Object.assign({ d: "M3 5.5V3.75a2 2 0 0 1 4 0V5.5" }, PFV_STROKE)],
-  ]);
+  return uiIcon(ICON_STATUS.locked, { size: 12, cls: "pfv-lock" });
 }
 function pfvDotsIcon() {
-  return pfvIcon("pfv-dots", 14, 14, "0 0 14 14", [
-    ["circle", { cx: "2.5", cy: "7", r: "1.3", fill: "currentColor" }],
-    ["circle", { cx: "7", cy: "7", r: "1.3", fill: "currentColor" }],
-    ["circle", { cx: "11.5", cy: "7", r: "1.3", fill: "currentColor" }],
-  ]);
+  return uiIcon(iconOf(ICON_ACTION, "more"), { size: 14, cls: "pfv-dots" });
 }
 
 // pfvMonoNodes: `text` as nodes, machine text in .pfv-mono spans (or `cls`: the head's agent line wears the kit's "mono t-sm").
@@ -515,9 +490,7 @@ function pfvDrawAct(b) {
   if (pfvState.saved.includes(b.id)) {
     const note = pfvMk("span", "pfv-saved");
     note.setAttribute("role", "status");
-    note.append(pfvIcon("pfv-saved-ic", 12, 12, "0 0 12 12", [
-      ["path", { d: "M2.5 6.4l2.3 2.3 4.7-5", fill: "none", stroke: "currentColor", "stroke-width": "1.6", "stroke-linecap": "round", "stroke-linejoin": "round" }],
-    ]), "Saved");
+    note.append(uiIcon(iconOf(ICON_MENU, "check"), { size: 12, cls: "pfv-saved-ic" }), "Saved");
     pfvRefs.saved.push(note);
     act.append(note);
   }

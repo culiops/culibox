@@ -62,11 +62,12 @@ const ICON_MENU = iconMapOf({
 // Where the shell bar docks a terminal. No legend covers it: the picks (port) match today's drawings (tabs.js).
 const ICON_DOCK_PLACE = iconMapOf({ below: "panel-bottom", right: "panel-right", own: "square-stack", hide: "x" });
 
-// The Files dock's controls (G5 5-18; G5 governs the dock).
+// The Files dock's controls (G5 5-18; G5 governs the dock). Swipe and onion are the image comparer's two other
+// modes, which no legend covers: the picks (port) keep what the controls draw today, a split frame and stacked layers.
 const ICON_DOCK_VIEW = iconMapOf({
   preview: "file-text", code: "code", changes: "diff", image: "image", inline: "square-equal", side: "columns-2",
   follow: "eye", prev: "chevron-up", next: "chevron-down", caret: "chevron-down", blame: "git-commit-horizontal",
-  more: "ellipsis",
+  more: "ellipsis", swipe: "square-split-horizontal", onion: "layers",
 });
 
 // The layout picker, by pane count (G4 1; 1 and 4 match the shapes drawn today, sidechrome.js).

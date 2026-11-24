@@ -68,7 +68,7 @@ function world() {
     document: doc, console, Promise, JSON, Math, Array, Object, Set, Map, String, Number, Date, setTimeout, clearTimeout,
     tabIcon: icon, dockIcon: icon, pageLeaveHook: null, window: { HOME_DIR: "/home/you" },
   });
-  for (const f of ["svgicon.js", "kitmenu.js", "profilepage.js", "pfv-cloud.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "profilepage.js", "pfv-cloud.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   // The two things a menu row hands over to (profilepage.js's own, replaced so the click is what is measured).
   // Where focus is at the moment each runs: Delete… opens a confirm that hands focus back to whatever had it when it opened.
   const focusAt = [];
@@ -117,7 +117,7 @@ test("pfvMoreMenu: the kit menu, exactly Duplicate…, a separator and a red Del
   assert.deepStrictEqual(pop.children.filter((c) => c.tag === "button").map((c) => byCls(c, "menu-text")[0].textContent), ["Duplicate…", "Delete…"]);
   // Each row is .menu-icon (an inline SVG, aria-hidden slot) + .menu-text, as kitMenuButton draws it.
   assert.deepStrictEqual(pop.children[0].children.map((c) => c.className), ["menu-icon", "menu-text"]);
-  assert.deepStrictEqual(byCls(pop, "menu-icon").map((s) => s.children[0].getAttribute("data-icon")), ["duplicate", "delete"]);
+  assert.deepStrictEqual(byCls(pop, "menu-icon").map((s) => s.children[0].getAttribute("data-icon")), ["copy-plus", "trash-2"]);
   assert.strictEqual(btn.getAttribute("aria-haspopup"), "menu");
   assert.strictEqual(btn.getAttribute("aria-expanded"), "false");
   assert.strictEqual(btn.getAttribute("aria-label"), "More actions for agent-box");

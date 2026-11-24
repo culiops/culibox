@@ -8,4 +8,21 @@ const path = require("node:path");
 const read = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
 const ICON_SRC = ["icons.js", "iconmap.js", "svgicon.js"].map((f) => read(f).replace(/^const /gm, "var ")).join("\n");
 
-module.exports = { ICON_SRC };
+// iconStubs(make): the page globals a test that fakes the DOM gives a script that draws icons: iconmap.js whole, and a
+// uiIcon reduced to what a test reads (the glyph's name as data-icon, the width, the classes). `make()` returns the
+// test's own fake <svg> node.
+function iconStubs(make) {
+  return {
+    ...require("../static/iconmap.js"),
+    uiIcon: (name, o) => {
+      const e = make();
+      e.setAttribute("data-icon", name);
+      e.setAttribute("width", String((o && o.size) || 14));
+      e.setAttribute("class", o && o.cls ? "ui-icon " + o.cls : "ui-icon");
+      if (o && o.label) e.setAttribute("aria-label", o.label);
+      return e;
+    },
+  };
+}
+
+module.exports = { ICON_SRC, iconStubs };

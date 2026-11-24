@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { Node } = require("./fakedom.js");
+const { iconStubs } = require("./iconpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 
@@ -31,7 +32,7 @@ function page(mac) {
   // Focus is document.activeElement in the fake; a real focus() also fires the element's focus handler.
   const focus = Node.prototype.focus;
   Node.prototype.focus = function () { focus.call(this); if (this.onfocus) this.onfocus(); };
-  const ctx = vm.createContext({ console, Array, Object, Set, Map, Math, document: doc, iconFor: (n) => "<" + n + ">", IS_MAC: !!mac, ResizeObserver: FakeResizeObserver });
+  const ctx = vm.createContext({ console, Array, Object, Set, Map, Math, document: doc, iconFor: (n) => "<" + n + ">", IS_MAC: !!mac, ResizeObserver: FakeResizeObserver, ...iconStubs(() => new Node("svg", doc)) });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load(fs.readFileSync(path.join(STATIC, "docktabs.js"), "utf8"), "docktabs.js");
   load(fs.readFileSync(path.join(STATIC, "dockstrip.js"), "utf8"), "dockstrip.js");
@@ -51,6 +52,19 @@ function page(mac) {
   };
 }
 const ev = (over) => Object.assign({ stopped: false, prevented: false, stopPropagation() { this.stopped = true; }, preventDefault() { this.prevented = true; } }, over);
+
+test("the All changes tab has no file glyph: its icon is the diff, drawn once", () => {
+  const p = page();
+  try {
+    p.paint([p.item("", { key: "review", name: "All changes", review: true, active: true })]);
+    const ic = p.part(p.tab(0), "dk-ic");
+    assert.equal(ic.children.length, 1);
+    assert.equal(ic.children[0].getAttribute("data-icon"), "diff");
+    assert.equal(ic.children[0].getAttribute("width"), "14");
+    p.paint([p.item("", { key: "review", name: "All changes", review: true })]);
+    assert.equal(p.part(p.tab(0), "dk-ic").children.length, 1, "a second paint does not draw it again");
+  } finally { p.restore(); }
+});
 
 test("a tab shows its name as text, with the preview, active and dirty marks and the git letter", () => {
   const p = page();

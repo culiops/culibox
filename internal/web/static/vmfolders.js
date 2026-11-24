@@ -229,23 +229,7 @@ function vmfPhoneMode() {
 }
 
 function vmfLock() {
-  const NS = "http://www.w3.org/2000/svg";
-  const s = document.createElementNS(NS, "svg");
-  s.setAttribute("class", "vmf-lock");
-  s.setAttribute("viewBox", "0 0 16 16");
-  s.setAttribute("width", "12");
-  s.setAttribute("height", "12");
-  s.setAttribute("fill", "none");
-  s.setAttribute("stroke", "currentColor");
-  s.setAttribute("stroke-width", "1.5");
-  s.setAttribute("role", "img");
-  s.setAttribute("aria-label", "Always shared, set by CuliBox");
-  const body = document.createElementNS(NS, "rect");
-  for (const [k, v] of [["x", "3.5"], ["y", "7"], ["width", "9"], ["height", "6.5"], ["rx", "1.5"]]) body.setAttribute(k, v);
-  const arc = document.createElementNS(NS, "path");
-  arc.setAttribute("d", "M5.5 7V5a2.5 2.5 0 0 1 5 0v2");
-  s.append(body, arc);
-  return s;
+  return uiIcon(ICON_STATUS.locked, { size: 12, cls: "vmf-lock", label: "Always shared, set by CuliBox" });
 }
 
 function vmfSeg(row, locked) {

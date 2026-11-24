@@ -162,10 +162,10 @@ const ROW_MENU_GROUPS = [
 function ftMenuGroups(ids) {
   return ROW_MENU_GROUPS.map((g) => g.filter((id) => ids.includes(id))).filter((g) => g.length > 0);
 }
-// The icon of each row (kitmenu.js menuIconSvg kinds): inline SVG, never a glyph a font may lack.
+// The icon of each row (kitmenu.js menuIconSvg kinds, ICON_MENU keys): a vendored glyph, never a font's.
 const ROW_MENU_ICONS = {
   insert: "insert", copy: "copy", copyrel: "copy", copycontents: "copy",
-  download: "download", newdir: "folder-plus", rename: "pencil", delete: "delete",
+  download: "download", newdir: "folder-plus", rename: "rename", delete: "delete",
 };
 
 // ftKeyAction: what a key does on the tree row `at` (F68). `rows` is every visible row in order,

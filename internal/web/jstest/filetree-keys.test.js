@@ -228,7 +228,7 @@ function world(width, listings) {
     makeDropZone: (el, dest, opts) => zones.push({ el, dest, opts }),
   });
   const run = (src, f) => new vm.Script(src, { filename: f || "t.js" }).runInContext(ctx);
-  for (const f of ["svgicon.js", "kitmenu.js", "copyfile.js", "fsops.js", "treestate.js", "filetree.js", "insertdecision.js"]) run(read(f), f);
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "copyfile.js", "fsops.js", "treestate.js", "filetree.js", "insertdecision.js"]) run(read(f), f);
   // What initFileTree does before it wires the tree: the root and the tree element.
   run("ftRootPath = '/h/w'; ftTreeEl = document.getElementById('filetree');");
   ctx.ftTreeSetup(tree);
@@ -506,14 +506,14 @@ test("the ContextMenu key opens the same menu; on a file it is the file's (Copy 
   ]);
 });
 
-test("the menu's rows are kit rows with an inline-SVG icon each and a red Delete…", async () => {
+test("the menu's rows are kit rows with a vendored glyph each and a red Delete…", async () => {
   const w = world(1280);
   const { row } = await focused(w, "dir1");
   w.key(row, "ContextMenu");
   const rows = items(w.menu);
   assert.deepStrictEqual(rows.map((b) => [b.tag, b.attrs.role, b.className]), rows.map((b, i) => ["button", "menuitem", i === rows.length - 1 ? "menu-item is-danger" : "menu-item"]));
   const icons = rows.map((b) => byCls(b, "menu-icon")[0].children[0].attrs["data-icon"]);
-  assert.deepStrictEqual(icons, ["insert", "copy", "copy", "download", "folder-plus", "pencil", "delete"]);
+  assert.deepStrictEqual(icons, ["arrow-right-to-line", "clipboard-copy", "clipboard-copy", "download", "folder-plus", "pencil-line", "trash-2"]);
   assert.deepStrictEqual(w.menu.all((n) => n.tag === "hr" || n.className === "ft-menu-path"), [], "no legacy nodes on desktop");
 });
 
