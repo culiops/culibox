@@ -230,7 +230,27 @@ var (
 	// passphrase to type. Wrapped errors also carry the secretstore
 	// UnavailableError, whose message holds the fix.
 	ErrStoreUnavailable = errors.New("the macOS Keychain did not give CuliBox the store key")
+	// ErrSecretUnresolved refuses a spawn whose profile declares a secret no
+	// configured source has. The wrapped text names the secret and the fix (never
+	// a value), so it is shown to the caller (#336).
+	ErrSecretUnresolved = errors.New("a secret this profile declares cannot be found")
 )
+
+// storedOutside is the optional part of a SecretResolver that tells a name no
+// source has from a Stored value the configured sources never read
+// (secretchain.Chain.StoredOutsideSources).
+type storedOutside interface {
+	StoredOutsideSources(name string) bool
+}
+
+// unresolvedSecret is the refusal for a declared secret that resolved to
+// nothing: ErrSecretUnresolved, with the store's case spelled out.
+func (l *AgentLauncher) unresolvedSecret(name string) error {
+	if so, ok := l.secrets.(storedOutside); ok && so.StoredOutsideSources(name) {
+		return fmt.Errorf(`%w: %q is a Stored value, but the credential store is not one of the configured secret_sources. Add {"type": "store"} to secret_sources in the config, or give the profile a service token instead`, ErrSecretUnresolved, name)
+	}
+	return fmt.Errorf("%w: %q is not in any configured secret source. Add it to one, or give the profile a service token instead", ErrSecretUnresolved, name)
+}
 
 // storeLocked returns the ErrStoreLocked (naming the secret, for the log) to
 // use when a resolve error means "the store is locked", else nil. A Keychain
@@ -917,7 +937,7 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 			return nil, nil, fmt.Errorf("launcher: resolving secret %q for agent %q: %w", name, cfg.Name, err)
 		}
 		if !ok {
-			return nil, nil, fmt.Errorf("launcher: agent %q declares secret %q but it is not resolvable", cfg.Name, name)
+			return nil, nil, l.unresolvedSecret(name)
 		}
 		env[name] = v
 	}

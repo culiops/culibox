@@ -194,6 +194,10 @@ type Server struct {
 	// handing back the value (secretchain.Chain.Check). nil = every name reads
 	// "missing".
 	SecretCheck func(name string) (secretchain.Presence, error)
+	// SecretStoredOutside says the store holds a secret name while no store
+	// secret_source is configured (secretchain.Chain.StoredOutsideSources), so the
+	// Save warning can name that fix. nil = never.
+	SecretStoredOutside func(name string) bool
 	// SecretSources is the configured source list (cfg.SecretSources), set once
 	// at start. /api/meta summarises it by type and file path only.
 	SecretSources []config.SecretSource

@@ -777,6 +777,17 @@ func TestSaveWarningsUnresolvedSecret(t *testing.T) {
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil || strings.Join(out.Warnings, "|") != strings.Join(want, "|") {
 		t.Fatalf("checked: code %d body %s, want warnings %q", rec.Code, rec.Body, want)
 	}
+	// #336: a name the store holds while it is not a secret source says so.
+	s.SecretStoredOutside = func(name string) bool { return name == "GONE" }
+	rec = put(s, `{"name":"u1","bin":"claude","runtime":"box","secrets":["IN_ENV","IN_LOCKED_STORE","GONE","ERRS"]}`)
+	want = []string{secretStoredOutsideWarning("GONE")}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil || strings.Join(out.Warnings, "|") != strings.Join(want, "|") {
+		t.Fatalf("stored outside: code %d body %s, want warnings %q", rec.Code, rec.Body, want)
+	}
+	if w := secretStoredOutsideWarning("GONE"); !strings.Contains(w, `{"type": "store"}`) || !strings.Contains(w, "Stored value") {
+		t.Fatalf("stored-outside warning should name the store source and the Stored value: %q", w)
+	}
+	s.SecretStoredOutside = nil
 	s.SecretCheck = nil
 	rec = put(s, `{"name":"u1","bin":"claude","runtime":"box","secrets":["IN_ENV","IN_LOCKED_STORE","GONE","ERRS"]}`)
 	if !savedClean(rec) {
