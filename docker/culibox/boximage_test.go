@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2148,6 +2149,7 @@ func TestDescribeDropsInvalid(t *testing.T) {
 		`"Created":"nope","Architecture":"amd64",` +
 		`"Config":{"Labels":{"` + LabelHash + `":"abc","` + LabelClaudeCode + `":"2.1.x$(id)"}},` +
 		`"RootFS":{"Layers":["sha256:` + hexA + `","sha256:short"]}}`
+	js = strings.Replace(js, `"RepoDigests":["evil",`, `"RepoDigests":["evil","<b>x</b>@sha256:`+hexB+`","GHCR.IO/x@sha256:`+hexB+`",`, 1)
 	bin, _ := fakeDocker(t, "cat <<'EOF'\n"+js+"\nEOF\n")
 	got, err := Docker{Bin: bin}.Describe(context.Background(), "x")
 	if err != nil {
@@ -2161,5 +2163,34 @@ func TestDescribeDropsInvalid(t *testing.T) {
 	}
 	if got.Arch != "amd64" {
 		t.Fatalf("Arch = %q", got.Arch)
+	}
+	if got.Hash != "" {
+		t.Fatalf("a Dockerfile label that is not 12 hex digits survived: %q", got.Hash)
+	}
+
+	// Arch and Hash are an image's word too: a markup or oversized value is dropped.
+	for _, bad := range []string{"<script>", "AMD64", "a b", strings.Repeat("a", 17), ""} {
+		js := `{"Architecture":` + strconv.Quote(bad) + `,"Config":{"Labels":{"` + LabelHash + `":` + strconv.Quote("<i>"+bad) + `}}}`
+		bin, _ := fakeDocker(t, "cat <<'EOF'\n"+js+"\nEOF\n")
+		got, err := Docker{Bin: bin}.Describe(context.Background(), "x")
+		if err != nil || got.Arch != "" || got.Hash != "" {
+			t.Fatalf("arch %q: got %+v, %v", bad, got, err)
+		}
+	}
+}
+
+func TestImageInfoJSONNames(t *testing.T) {
+	b, err := json.Marshal(ImageInfo{Present: true, ID: "i", RepoDigests: []string{"r"}, Created: time.Unix(1, 0).UTC(),
+		Arch: "arm64", Hash: "h", ClaudeCode: "c", DiffIDs: []string{"d"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"present", "id", "repo_digests", "created", "arch", "hash", "claude_code", "diff_ids"} {
+		if !strings.Contains(string(b), `"`+k+`":`) {
+			t.Errorf("no %q in %s", k, b)
+		}
+	}
+	if b, _ := json.Marshal(ImageInfo{}); strings.Contains(string(b), "created") {
+		t.Errorf("a zero Created must be omitted: %s", b)
 	}
 }

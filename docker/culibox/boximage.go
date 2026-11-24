@@ -323,23 +323,34 @@ type ImageState struct {
 	Arch, Hash string
 }
 
+// inspectImage runs `docker image inspect --format format image` and returns its
+// stdout. A missing image is reported as missing with no error; stderr is read only
+// to tell that from a real failure.
+func (d Docker) inspectImage(ctx context.Context, image, format string) (out []byte, missing bool, err error) {
+	out, err = d.command(ctx, "image", "inspect", "--format", format, image).Output()
+	if err == nil {
+		return out, false, nil
+	}
+	var stderr string
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		stderr = strings.TrimSpace(string(ee.Stderr))
+		if strings.Contains(strings.ToLower(stderr), "no such image") {
+			return nil, true, nil
+		}
+	}
+	return nil, false, fmt.Errorf("docker image inspect: %w: %s", err, stderr)
+}
+
 // Inspect reads the image's architecture and Dockerfile label. Stdout only: a
 // CLI or context warning on stderr must not become part of the arch, or a
 // current image reads as built for another architecture. stderr is read only
 // on failure, to tell a missing image from a real error.
 func (d Docker) Inspect(ctx context.Context, image string) (ImageState, error) {
-	out, err := d.command(ctx, "image", "inspect", "--format",
-		`{{.Architecture}}|{{index .Config.Labels "`+LabelHash+`"}}`, image).Output()
-	if err != nil {
-		var stderr string
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			stderr = strings.TrimSpace(string(ee.Stderr))
-			if strings.Contains(strings.ToLower(stderr), "no such image") {
-				return ImageState{}, nil
-			}
-		}
-		return ImageState{}, fmt.Errorf("docker image inspect: %w: %s", err, stderr)
+	out, missing, err := d.inspectImage(ctx, image,
+		`{{.Architecture}}|{{index .Config.Labels "`+LabelHash+`"}}`)
+	if missing || err != nil {
+		return ImageState{}, err
 	}
 	s := strings.TrimSpace(string(out))
 	arch, hash, _ := strings.Cut(s, "|")
@@ -406,35 +417,30 @@ func mustRepo(image string) string {
 // every field comes from the image itself, so a malformed value is dropped (its
 // field left empty or nil) rather than passed on.
 type ImageInfo struct {
-	Present     bool
-	ID          string   // sha256:<64 hex>
-	RepoDigests []string // repo@sha256:<64 hex> only
-	Created     time.Time
-	Arch, Hash  string
-	ClaudeCode  string   // ValidClaudeCode only
-	DiffIDs     []string // RootFS.Layers; nil when any is malformed
+	Present     bool      `json:"present"`
+	ID          string    `json:"id,omitempty"`           // sha256:<64 hex>
+	RepoDigests []string  `json:"repo_digests,omitempty"` // repo@sha256:<64 hex> only
+	Created     time.Time `json:"created,omitzero"`
+	Arch        string    `json:"arch,omitempty"`
+	Hash        string    `json:"hash,omitempty"`        // 12 hex digits
+	ClaudeCode  string    `json:"claude_code,omitempty"` // ValidClaudeCode only
+	DiffIDs     []string  `json:"diff_ids,omitempty"`    // RootFS.Layers; nil when any is malformed
 }
 
 var (
 	sha256Ref  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	repoDigest = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
+	repoDigest = regexp.MustCompile(`^[a-z0-9./:_-]+@sha256:[0-9a-f]{64}$`)
+	hashLabel  = regexp.MustCompile(`^[0-9a-f]{12}$`)
+	archName   = regexp.MustCompile(`^[a-z0-9_-]{1,16}$`)
 )
 
 // Describe reads one image's facts with a single `docker image inspect`. Like
 // Inspect it reads stdout only and tells a missing image (Present false, no error)
 // from a real failure by stderr.
 func (d Docker) Describe(ctx context.Context, image string) (ImageInfo, error) {
-	out, err := d.command(ctx, "image", "inspect", "--format", "{{json .}}", image).Output()
-	if err != nil {
-		var stderr string
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			stderr = strings.TrimSpace(string(ee.Stderr))
-			if strings.Contains(strings.ToLower(stderr), "no such image") {
-				return ImageInfo{}, nil
-			}
-		}
-		return ImageInfo{}, fmt.Errorf("docker image inspect: %w: %s", err, stderr)
+	out, missing, err := d.inspectImage(ctx, image, "{{json .}}")
+	if missing || err != nil {
+		return ImageInfo{}, err
 	}
 	var raw struct {
 		ID           string   `json:"Id"`
@@ -451,7 +457,15 @@ func (d Docker) Describe(ctx context.Context, image string) (ImageInfo, error) {
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return ImageInfo{}, fmt.Errorf("docker image inspect: unreadable answer: %w", err)
 	}
-	info := ImageInfo{Present: true, Arch: raw.Architecture, Hash: raw.Config.Labels[LabelHash]}
+	info := ImageInfo{Present: true}
+	// An agent in a box can build an image, so what the image says about itself
+	// reaches the UI only in the shape CI would have written it.
+	if archName.MatchString(raw.Architecture) {
+		info.Arch = raw.Architecture
+	}
+	if h := raw.Config.Labels[LabelHash]; hashLabel.MatchString(h) {
+		info.Hash = h
+	}
 	if sha256Ref.MatchString(raw.ID) {
 		info.ID = raw.ID
 	}

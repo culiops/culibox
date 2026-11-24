@@ -132,10 +132,10 @@ func downloadMB(p boxregistry.Platform, have []string) string {
 			missing += p.Layers[i].Size
 		}
 	}
-	if missing == 0 {
+	mb := float64(missing) / 1e6
+	if mb < 0.05 { // would print "0.0": not worth stating
 		return ""
 	}
-	mb := float64(missing) / 1e6
 	if mb < 9.95 { // one decimal below 10, but 9.96 must not print as "10.0"
 		return fmt.Sprintf("%.1f", mb)
 	}
