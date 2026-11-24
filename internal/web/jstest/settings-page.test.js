@@ -60,7 +60,7 @@ test("the Profiles footer is the phone's (Delete, Duplicate, Save, Done); About 
   const foot = /<div class="dft" id="foot-manage">[\s\S]*?<\/div>/.exec(HTML)[0];
   assert.match(foot, /id="pf-delete"[\s\S]*id="pf-duplicate"[\s\S]*id="pf-save"[\s\S]*data-close="settings-modal"/);
   assert.doesNotMatch(foot, /pf-discard/);
-  assert.match(HTML, /<div class="dbd pad" id="about"[\s\S]*?<p id="about-runtime"><\/p>/);
+  assert.match(HTML, /<div class="dbd pad" id="about"[\s\S]*?<p id="about-runtime"><\/p>\s*<div id="about-image" hidden><\/div>/);
 });
 
 test("the New session box paints its reach rows by textContent only", () => {
