@@ -141,9 +141,9 @@ func TestHostFetchAfterTheSessionEndsIsRefused(t *testing.T) {
 			if w.Code != http.StatusForbidden || errorText(t, w) != cp.hostUniform {
 				t.Fatalf("after the end: status %d body %s", w.Code, w.Body)
 			}
-			// Ending the session revokes its cached GitHub tokens in the
-			// background (revokeAsync), which records its own row: wait for it,
-			// then check the refusal by its outcome rather than by count.
+			// The refused fetch calls Forget, which revokes the session's cached
+			// GitHub tokens in the background (revokeAsync) and records its own
+			// row: wait for it, then check the refusal by its outcome.
 			e.b.revokeWG.Wait()
 			var denied []Row
 			for _, r := range e.rec.snapshot() {
