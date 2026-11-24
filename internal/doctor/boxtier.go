@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	boximage "github.com/culiops/culibox/docker/culibox"
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boximagecheck"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credref"
@@ -194,6 +196,11 @@ type boxFacts struct {
 	// "" = not read. Legacy is what the daemon holds under it.
 	LegacyName string
 	Legacy     boximage.ImageState
+	// ImageInfo is the running image as Describe read it (nil when the daemon was
+	// not asked or could not say); ImageReport is what the update rows show, built
+	// from it, the cache and the config (nil: no rows).
+	ImageInfo   *boximage.ImageInfo
+	ImageReport *boximagecheck.Report
 }
 
 // boxTierResults turns gathered facts into doctor lines. Pure, so every row of
@@ -219,6 +226,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		}
 		out = append(out, Result{Pass, ck, "docker found"})
 		out = append(out, runtimeRows(f)...)
+		out = append(out, imageUpdateRows(f.ImageReport)...)
 		stopped()
 		// The token does not depend on the tier's state, but a tier that ended on
 		// docker not found has no token row, as on macOS.
@@ -294,6 +302,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	} else {
 		out = append(out, Result{Pass, "box image", "current, linux/" + f.ServerArch})
 	}
+	out = append(out, imageUpdateRows(f.ImageReport)...)
 	if f.ProbeRan {
 		if f.ProbeErr != nil {
 			out = append(out, Result{Fail, "containment", f.ProbeErr.Error()})
@@ -396,10 +405,19 @@ func folderRows(f boxFacts) []Result {
 	return out
 }
 
-// gatherBoxFacts asks the real world, with a 60 s overall budget. It never
+// gatherBoxFacts is gatherFacts without the running image's description, which
+// only the doctor report shows.
+func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box.ProtectedDir) boxFacts {
+	return gatherFacts(c, dataDir, home, goos, protected, false)
+}
+
+// gatherFacts asks the real world, with a 60 s overall budget. It never
 // starts the VM: a stopped VM is a normal state, reported as such.
 // protected is the directory list no VM share may overlap (protectedFor).
-func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box.ProtectedDir) boxFacts {
+// describe also reads the running image's labels and layers (Linux: once the
+// daemon answered; macOS: once the VM runs and its image was read), for the
+// image update rows.
+func gatherFacts(c config.Config, dataDir, home, goos string, protected []box.ProtectedDir, describe bool) boxFacts {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	f := boxFacts{Home: home}
@@ -421,6 +439,9 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 			f.RuntimeRan = true
 			f.Runtime, f.RuntimeErr = readRuntime(ctx, cli)
 			f.Stopped = stoppedBoxes(ctx, cli, instance)
+			if describe {
+				f.ServerArch, f.ImageInfo = describeImage(ctx, boximage.Docker{Bin: bin}, c.BoxImageOrDefault())
+			}
 		}
 		return f
 	}
@@ -504,12 +525,143 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 			f.LegacyName, f.Legacy = config.LegacyDefaultBoxImage, old
 		}
 	}
+	if describe && f.ImageErr == nil {
+		_, f.ImageInfo = describeImage(ctx, img, image)
+	}
 	if f.ImageErr == nil && f.Image.Present {
 		f.ProbeRan = true
 		f.ProbeErr = boxvm.ProbeLoopback(ctx, boxvm.ThrowawayProbe(cli, image))
 	}
 	f.Stopped = stoppedBoxes(ctx, cli, instance)
 	return f
+}
+
+// describeImage asks the daemon for its arch and the image's facts, bounded like
+// the daemon probe. Any failure leaves the facts unknown (nil): the update rows
+// are then left out, and the rows above say what is wrong with docker.
+func describeImage(ctx context.Context, d boximage.Docker, image string) (string, *boximage.ImageInfo) {
+	dctx, cancel := context.WithTimeout(ctx, box.ProbeTimeout)
+	defer cancel()
+	arch, err := d.ServerArch(dctx)
+	if err != nil {
+		return "", nil
+	}
+	info, err := d.Describe(dctx, image)
+	if err != nil {
+		return arch, nil
+	}
+	return arch, &info
+}
+
+// imageCheckTimeout bounds the live registry check the CLI doctor runs.
+const imageCheckTimeout = 15 * time.Second
+
+// imageChecker is the anonymous check's client for the CLI doctor: the default
+// transport honours HTTPS_PROXY, and nothing it sends carries a credential. A
+// variable so a test can hand in a client that fails the test when it is used.
+var imageChecker = func() boximagecheck.Checker {
+	return boximagecheck.Checker{
+		Client:    &http.Client{Timeout: imageCheckTimeout},
+		Registry:  "https://ghcr.io",
+		GitHubAPI: "https://api.github.com",
+	}
+}
+
+// imageReport compares the running image (f.ImageInfo) with the image for this
+// version. Only the CLI doctor (in.LiveImageCheck) may ask the network, and then
+// only when the cache is due or holds a failure, since a user runs doctor to
+// confirm a fix; everyone else reads the cache the server keeps. The answer is
+// used even when it could not be saved (the data dir may not exist yet). nil when
+// the daemon gave no facts.
+func imageReport(in Input, dataDir string, f boxFacts) *boximagecheck.Report {
+	if f.ImageInfo == nil {
+		return nil
+	}
+	c := in.Config
+	ii := boximagecheck.Inputs{
+		Configured: c.BoxImageOrDefault(),
+		Explicit:   c.BoxImage != "",
+		Published:  boximage.Published(),
+		CheckOn:    c.ImageCheckOn(),
+		Arch:       f.ServerArch,
+		Info:       f.ImageInfo,
+	}
+	if in.LiveImageCheck {
+		ctx, cancel := context.WithTimeout(context.Background(), imageCheckTimeout)
+		defer cancel()
+		ii.Cache, _ = boximagecheck.RunIfDue(ctx, imageChecker(), dataDir, ii, true)
+	} else if cache, err := boximagecheck.LoadCache(dataDir); err == nil {
+		ii.Cache = cache
+	}
+	r := boximagecheck.Evaluate(ii)
+	return &r
+}
+
+// imageUpdateRows says whether the image that runs is the one CI published for
+// this version, and the weekly scan's count when it is known. Pure: every value
+// comes from the validated report (doctor prints on a terminal), never from raw
+// error text. No row for an image the daemon lacks (the image row says so) or
+// facts it could not give.
+func imageUpdateRows(r *boximagecheck.Report) []Result {
+	if r == nil {
+		return nil
+	}
+	const ck, scanCk = "box image update", "box image scan"
+	var out []Result
+	switch r.Verdict {
+	case boximagecheck.Current, boximagecheck.CurrentLocal:
+		lead := "current: "
+		if r.Verdict == boximagecheck.CurrentLocal {
+			lead = "current (built here from this version's Dockerfile): "
+		}
+		detail := lead + r.Configured
+		if r.Info != nil {
+			if r.Info.ClaudeCode != "" {
+				detail += ", Claude Code " + r.Info.ClaudeCode
+			}
+			if !r.Info.Created.IsZero() {
+				detail += ", built " + r.Info.Created.UTC().Format(time.DateOnly)
+			}
+		}
+		out = append(out, Result{Pass, ck, detail})
+	case boximagecheck.Update:
+		detail := "an image for this version exists: " + r.Want
+		var facts []string
+		if r.WantClaudeCode != "" {
+			facts = append(facts, "Claude Code "+r.WantClaudeCode)
+		}
+		if !r.WantCreated.IsZero() {
+			facts = append(facts, "built "+r.WantCreated.UTC().Format(time.DateOnly))
+		}
+		if len(facts) > 0 {
+			detail += " (" + strings.Join(facts, ", ") + ")"
+		}
+		detail += "; "
+		if r.DownloadMB != "" {
+			detail += "about " + r.DownloadMB + " MB to download; "
+		}
+		if r.ConfigLine != "" {
+			detail += "set " + r.ConfigLine + " in the config, then "
+		}
+		out = append(out, Result{Warn, ck, detail + "run `" + r.SetupCmd + "`"})
+	case boximagecheck.StaleUnknown:
+		why := r.CheckErr
+		switch {
+		case !r.CheckOn:
+			why = "check off: image_check is false"
+		case why == "":
+			why = "not checked yet"
+		}
+		out = append(out, Result{Warn, ck, "built from an older Dockerfile than this CuliBox; whether CI published this version's image is unknown (" + why + ")"})
+	}
+	if s := r.Scan; s != nil {
+		if s.Count > 0 {
+			out = append(out, Result{Warn, scanCk, fmt.Sprintf("%d fixable HIGH/CRITICAL in the published images (https://github.com/culiops/culibox/issues/%d)", s.Count, s.Number)})
+		} else {
+			out = append(out, Result{Pass, scanCk, "no fixable HIGH/CRITICAL in the published images"})
+		}
+	}
+	return out
 }
 
 // noBoxRuns reports whether colima itself said the VM is not running, so no box

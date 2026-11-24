@@ -83,6 +83,10 @@ type Input struct {
 	// Start is what a running serve's start did before it resolved the config
 	// (zero for the CLI): the in-app doctor warns on the start that moved the root.
 	Start config.StartFacts
+	// LiveImageCheck lets the box image rows ask the registry (15 s, anonymous)
+	// when the cached answer is due. Only the CLI `culibox doctor` sets it: the
+	// in-app doctor, the bug report and the init wizard read the cache alone.
+	LiveImageCheck bool
 }
 
 // protectedFor is the protected-directory list serve and the CLI build
@@ -288,7 +292,7 @@ func Checks(in Input) []Result {
 	out = append(out, checkProfilesFormat(storeErr)...)
 	out = append(out, checkAWSConnsGate(context.Background(), c, stored, storeErr, boxvm.ExecRunner{},
 		newAWSProber(broker.STSMinter{}, awsprobe.IAMSimulator{}), newSSOGate(broker.STSMinter{}))...)
-	bt := gatherBoxTier(in, dataDir, vst)
+	bt := gatherBoxTier(in, dataDir, vst, true)
 	out = append(out, bt.Rows...)
 	out = append(out, guardLockRows(runtime.GOOS, bt.facts)...)
 	out = append(out, checkKeptHomes(dataDir)...)
@@ -329,14 +333,19 @@ type BoxTierReport struct {
 // still has work to do. Like every check it never starts the VM.
 func BoxTier(in Input) BoxTierReport {
 	dataDir := dataDirOf(in)
-	return gatherBoxTier(in, dataDir, StoreFor(in.Config, dataDir))
+	return gatherBoxTier(in, dataDir, StoreFor(in.Config, dataDir), false)
 }
 
 // gatherBoxTier gathers the box facts and the token row and turns them into
-// rows. vst is the store the secret sources read (StoreFor).
-func gatherBoxTier(in Input, dataDir string, vst credref.StoreGetter) BoxTierReport {
+// rows. vst is the store the secret sources read (StoreFor). withImage adds the
+// image update rows, which `culibox init` must not see: it reads every row as
+// "box setup has nothing to do", and a newer published image is not setup work.
+func gatherBoxTier(in Input, dataDir string, vst credref.StoreGetter, withImage bool) BoxTierReport {
 	c := in.Config
-	bf := gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS, protectedFor(in, dataDir))
+	bf := gatherFacts(c, dataDir, in.Home, runtime.GOOS, protectedFor(in, dataDir), withImage)
+	if withImage {
+		bf.ImageReport = imageReport(in, dataDir, bf)
+	}
 	token, lockedOnly := claudeBoxToken(c, vst, AccountStoreFor(c, dataDir), storerefs.ReadAccounts(dataDir))
 	return BoxTierReport{Rows: boxTierResults(runtime.GOOS, bf, token), Token: token, TokenLockedOnly: lockedOnly, facts: bf}
 }

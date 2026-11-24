@@ -148,6 +148,9 @@ func main() {
 			Home: home, XDGConfig: xdg, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
 			EnvNotice: envNotice, EnvErr: envErr}
 		if args.Cmd == "doctor" {
+			// Only here may doctor ask the registry; the bug report and the
+			// in-app doctor read the cache alone.
+			in.LiveImageCheck = true
 			os.Exit(doctor.Run(os.Stdout, in))
 		}
 		host, _ := os.Hostname()
