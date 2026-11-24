@@ -880,7 +880,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			}
 			return strings.TrimSpace(p.DefaultCwd)
 		}}
-	var stopBroker, stopEgress func(context.Context)
+	var stopBroker, stopEgress, drainEgress func(context.Context)
 	if brokerSvc != nil {
 		status := brokerSvc.Status // only when running: a nil service must read as "no broker", not a typed nil
 		if egressSvc != nil {
@@ -911,7 +911,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		api.Activity = brokerSvc.Activity
 	}
 	if egressSvc != nil {
-		stopEgress = egressSvc.Stop
+		stopEgress, drainEgress = egressSvc.Stop, egressSvc.Drain
 		api.Egress = web.EgressStatusAdapter{Get: web.ManagerService{M: mgr}.Get, Stats: egressSvc.Stats}
 	}
 	// The credentials screen. baseCfg is config.json before mergeCredentials.
@@ -1155,7 +1155,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// Release attach clients on the way out (stop is registered before
 	// Reconcile, above); the signal waits in the buffer until this runs.
 	go awaitShutdown(stop, shutdownSteps{
-		DetachAll: mgr.DetachAll,
+		DrainEgress: drainEgress,
+		DetachAll:   mgr.DetachAll,
 		StopAnalytics: func() {
 			analyticsCancel()
 			if analyticsSvc != nil {

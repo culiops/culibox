@@ -29,6 +29,7 @@ ExecStart="/home/u/.local/bin/culibox" "serve"
 Environment="PATH=/usr/bin:/bin"
 Environment="LANG=en_US.UTF-8"
 KillMode=process
+TimeoutStopSec=90
 Restart=on-failure
 RestartSec=5
 RestartPreventExitStatus=78

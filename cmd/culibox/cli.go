@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -293,10 +294,29 @@ func shutdownSignalsFor(ignored func(os.Signal) bool) []os.Signal {
 	return out
 }
 
+// egressDrainBound is how long a shutdown lets open egress tunnels finish
+// (#362). The systemd unit gives the daemon 90 s to stop (TimeoutStopSec in
+// internal/service). On darwin it is shorter: launchd sends SIGKILL about 20 s
+// after SIGTERM unless the plist sets ExitTimeOut (CuliBox's does not), and the
+// steps after the drain take up to about 7 s more before Close audits the
+// tunnels it cuts.
+func egressDrainBound(goos string) time.Duration {
+	if goos == "darwin" {
+		return 10 * time.Second
+	}
+	return 60 * time.Second
+}
+
 // shutdownSteps are what serve undoes on a shutdown signal, as functions so the
 // signal path is testable without a daemon.
 type shutdownSteps struct {
-	DetachAll     func() int // release attach clients; returns how many
+	// DrainEgress lets the boxes' open egress tunnels finish (#362): a restart
+	// otherwise cuts the API response an agent is streaming. It runs first, while
+	// everything else still works, with a context bounded by DrainBound that a
+	// second signal cancels. Nil when egress control is not running.
+	DrainEgress   func(context.Context)
+	DrainBound    time.Duration // 0 → egressDrainBound(runtime.GOOS)
+	DetachAll     func() int    // release attach clients; returns how many
 	StopAnalytics func()
 	// StopRetention cancels the egress audit pruning job and waits for it, so
 	// StopEgress does not close the audit store under a delete. Nil when none runs.
@@ -316,8 +336,9 @@ type shutdownSteps struct {
 	ShutdownHTTP func(context.Context) error
 }
 
-// awaitShutdown blocks until a signal arrives on stop, then releases attach
-// clients instead of leaving it to SIGHUP. SIGHUP on a closing PTY master
+// awaitShutdown blocks until a signal arrives on stop, lets open egress
+// tunnels finish (DrainEgress, bounded; a second signal cuts it), then releases
+// attach clients instead of leaving it to SIGHUP. SIGHUP on a closing PTY master
 // reaches only that terminal's foreground process group, so a client that is
 // not it survives the daemon and spins at 100% CPU forever on a hung-up fd. The
 // agents themselves are untouched — they live under abduco and are meant to
@@ -326,6 +347,23 @@ type shutdownSteps struct {
 // request is served once the console is draining.
 func awaitShutdown(stop <-chan os.Signal, s shutdownSteps, logf func(string, ...any)) {
 	sig := <-stop
+	if s.DrainEgress != nil {
+		bound := s.DrainBound
+		if bound <= 0 {
+			bound = egressDrainBound(runtime.GOOS)
+		}
+		logf("received %v: letting open egress tunnels finish (up to %s; signal again to cut them now)", sig, bound)
+		ctx, cancel := context.WithTimeout(context.Background(), bound)
+		go func() {
+			select {
+			case <-stop:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		s.DrainEgress(ctx)
+		cancel()
+	}
 	logf("received %v: releasing %d attach client(s), agents stay running", sig, s.DetachAll())
 	s.StopAnalytics()
 	if s.StopRetention != nil {

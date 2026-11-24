@@ -41,6 +41,11 @@ const (
 	// forbidden answers a CONNECT whose host the session's policy stopped
 	// allowing after it was checked (see stillHolds), also written raw.
 	forbidden = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+	// unavailable answers a CONNECT that was still being set up when a drain
+	// or Close began (see register), also written raw.
+	unavailable = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+	// drainTick is how often Drain looks for tunnels that have gone quiet.
+	drainTick = 100 * time.Millisecond
 )
 
 // lookupNetIP is the system resolver; a variable so a test can see what it is asked.
@@ -113,8 +118,10 @@ type Proxy struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup // one per held slot (reserve → release)
 
-	mu          sync.Mutex
+	mu sync.Mutex
+	// closed: no new tunnel (set by Drain or Close). shut: Close has run.
 	closed      bool
+	shut        bool
 	subnet      netip.Prefix
 	hostAddrs   []netip.Addr // the host's own interface addresses: never dialled
 	gw          netip.Addr
@@ -140,6 +147,9 @@ type tunnel struct {
 	host       string
 	port       int
 	viaPrivate bool
+	// last is when the tunnel last carried a byte either way (UnixNano), shared
+	// with splice's idle timer; Drain reads it to find quiet tunnels.
+	last atomic.Int64
 }
 
 func (t *tunnel) close() {
@@ -236,15 +246,79 @@ func (p *Proxy) SetHostAddrs(a []netip.Addr) {
 // Serve accepts on l until Close. It returns http.ErrServerClosed after Close.
 func (p *Proxy) Serve(l net.Listener) error { return p.srv.Serve(l) }
 
-// Close stops the listener, closes every open tunnel and in-flight request, and
-// waits until every tunnel's goroutines have finished and been audited.
-func (p *Proxy) Close() error {
+// DrainResult is what a drain did with the tunnels open when it began.
+type DrainResult struct {
+	Open  int // tunnels open when the drain began
+	Quiet int // closed by the drain after carrying no byte for the quiet window
+	Left  int // still open when ctx ended; Close cuts them
+}
+
+// Drain lets the open tunnels finish before Close (#362). It closes the
+// listener, so a new connection is refused, and answers a CONNECT still being
+// set up with 503, without a row, like the cap's 503 (one already resolving or
+// dialling finishes that first: Drain does not cancel it). A tunnel that carries no byte for quiet is closed: an idle
+// keep-alive connection would otherwise hold the drain to its bound, and its
+// client opens a new one when it needs it. Drain returns once no tunnel is
+// left, or when ctx ends with some still open; Close cuts those. Every tunnel
+// is audited when it ends, as always. A second call returns at once.
+func (p *Proxy) Drain(ctx context.Context, quiet time.Duration) DrainResult {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		return nil
+		return DrainResult{}
 	}
 	p.closed = true
+	res := DrainResult{Open: len(p.tunnels)}
+	p.mu.Unlock()
+	// Shutdown closes the listener at once; the rest of its wait (in-flight
+	// CONNECTs, which register now refuses) is bounded by ctx, and Close ends it.
+	go p.srv.Shutdown(ctx)
+	tick := time.NewTicker(drainTick)
+	defer tick.Stop()
+	quieted := map[*tunnel]bool{}
+	for {
+		var stale []*tunnel
+		p.mu.Lock()
+		for t := range p.tunnels {
+			if !quieted[t] && time.Since(time.Unix(0, t.last.Load())) >= quiet {
+				stale = append(stale, t)
+			}
+		}
+		busy := p.total
+		p.mu.Unlock()
+		for _, t := range stale {
+			quieted[t] = true
+			t.close()
+			res.Quiet++
+		}
+		if busy == 0 {
+			return res
+		}
+		select {
+		case <-ctx.Done():
+			p.mu.Lock()
+			for t := range p.tunnels {
+				if !quieted[t] {
+					res.Left++
+				}
+			}
+			p.mu.Unlock()
+			return res
+		case <-tick.C:
+		}
+	}
+}
+
+// Close stops the listener, closes every open tunnel and in-flight request, and
+// waits until every tunnel's goroutines have finished and been audited. After a
+// Drain it cuts whatever the drain left open.
+func (p *Proxy) Close() error {
+	p.mu.Lock()
+	if p.shut {
+		p.mu.Unlock()
+		return nil
+	}
+	p.closed, p.shut = true, true
 	ts := make([]*tunnel, 0, len(p.tunnels))
 	for t := range p.tunnels {
 		ts = append(ts, t)
@@ -655,11 +729,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	begin := time.Now()
 	conn.SetDeadline(time.Time{}) // the server's header deadline would otherwise kill the tunnel
 	t := &tunnel{sid: pr.sid, client: conn, up: up, host: name, port: portN, viaPrivate: viaPrivate}
+	t.last.Store(time.Now().UnixNano())
 	if err := p.register(t, pr); err != nil {
-		if err == errRevoked {
-			conn.SetWriteDeadline(time.Now().Add(time.Second))
+		conn.SetWriteDeadline(time.Now().Add(time.Second))
+		switch err {
+		case errRevoked:
 			conn.Write([]byte(revoked))
 			p.recordDenied(withOutcome(row, OutcomeBadAuth), pr.key)
+		case errClosed:
+			conn.Write([]byte(unavailable)) // draining or closing: no tunnel, and no row (like the cap's 503)
 		}
 		t.close()
 		return
@@ -697,7 +775,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		k, _ := up.Write(b)
 		upN += int64(k)
 	}
-	u, downN := splice(conn, up, p.o.IdleTimeout)
+	u, downN := splice(conn, up, p.o.IdleTimeout, &t.last)
 	row.Outcome, row.BytesUp, row.BytesDown, row.Duration = OutcomeAllowed, upN+u, downN, time.Since(begin)
 	if viaPrivate {
 		row.Outcome = OutcomeAllowedPrivate
@@ -986,14 +1064,14 @@ func auditPort(s string) int {
 
 // splice copies both directions until both have finished, then closes both
 // conns. The idle timer is shared: a direction keeps waiting while the other
-// one moves, so a long one-way download is not cut.
-func splice(client, up net.Conn, idle time.Duration) (upN, downN int64) {
-	var last atomic.Int64
+// one moves, so a long one-way download is not cut. last is the tunnel's
+// activity time, which Drain reads too.
+func splice(client, up net.Conn, idle time.Duration, last *atomic.Int64) (upN, downN int64) {
 	last.Store(time.Now().UnixNano())
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); upN = copyIdle(up, client, &last, idle) }()
-	go func() { defer wg.Done(); downN = copyIdle(client, up, &last, idle) }()
+	go func() { defer wg.Done(); upN = copyIdle(up, client, last, idle) }()
+	go func() { defer wg.Done(); downN = copyIdle(client, up, last, idle) }()
 	wg.Wait()
 	client.Close()
 	up.Close()
