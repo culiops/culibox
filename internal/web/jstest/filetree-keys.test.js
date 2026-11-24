@@ -147,7 +147,7 @@ class Node {
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }
   prepend(c) { if (c.parent) c.remove(); c.parent = this; this.children.unshift(c); }
   get childNodes() { return this.children.slice(); }
-  replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; cs.forEach((c) => this.appendChild(c)); }
+  replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = ""; cs.forEach((c) => this.appendChild(c)); }
   after(n) { const i = this.parent.children.indexOf(this); if (n.parent) n.remove(); n.parent = this.parent; this.parent.children.splice(i + 1, 0, n); }
   remove() { if (this.parent) { this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; } }
   addEventListener(ev, fn) { (this.handlers[ev] = this.handlers[ev] || []).push(fn); }
@@ -572,7 +572,7 @@ test("choosing a row closes the menu, puts focus on the row, then runs the actio
   const rename = items(w.menu).find((b) => text(b) === "Rename…");
   rename.click();
   assert.strictEqual(w.menu.className.split(" ").includes("open"), false, "closed first");
-  assert.deepStrictEqual(Node.log, ["focus:ft-node"], "the only focus move is to the row, before the dialog opens");
+  assert.deepStrictEqual(Node.log, ["focus:ft-node=dir1"], "the only focus move is to the row, before the dialog opens");
   assert.strictEqual(Node.focused, row);
   assert.deepStrictEqual(w.calls, ["askPrompt:Rename"]);
 });
@@ -1233,6 +1233,56 @@ test("a root load that the width crosses while it lists draws its whole subtree 
   assert.deepStrictEqual(phoneCell(iconOfRow(w.tree, "x.md")), { text: nerd(w, "x.md", false, false), kids: 0 });
 });
 
+// A folder opened by hand whose remembered-open subfolder lists while the width crosses: the rows drawn after that await
+// (z.go, after b) were drawn with the width the listing started at.
+const SPAN_LISTING = {
+  "/h/w": { entries: [{ name: "a", is_dir: true }, { name: "top.go", is_dir: false }] },
+  "/h/w/a": { entries: [{ name: "b", is_dir: true }, { name: "z.go", is_dir: false }] },
+  "/h/w/a/b": { entries: [{ name: "y.md", is_dir: false }] },
+};
+async function spanCross(from, to) {
+  const w = world(from, SPAN_LISTING);
+  w.run("addExpanded(ftExpanded, '/h/w/a/b');");
+  const c = await w.render();
+  const list = w.ctx.api;
+  w.ctx.api = async (u) => {
+    if (u.includes(encodeURIComponent("/h/w/a/b"))) { w.ctx.window.innerWidth = to; w.ctx.ftGlyphsCrossed(); }
+    return list(u);
+  };
+  await w.run("ftRowOpeners").get(rowNamed(c, "a")).setOpen(true);
+  return { w, c };
+}
+
+test("a listing that a crossing to the phone interrupts (a remembered subfolder listing) repaints the rows drawn after it", async () => {
+  const { w, c } = await spanCross(1280, 390);
+  assert.ok(rowNamed(c, "y.md") && rowNamed(c, "z.go"), "the whole subtree is drawn");
+  assert.strictEqual(c.all((n) => n.tag === "svg").length, 0, "no desktop glyph is left on the phone");
+  assert.strictEqual(byCls(c, "ft-chev").length, 0);
+  assert.deepStrictEqual(phoneCell(iconOfRow(c, "z.go")), { text: nerd(w, "z.go", false, false), kids: 0 });
+  assert.deepStrictEqual(phoneCell(byCls(rowNamed(c, "z.go"), "ft-more")[0]), { text: "\uf141", kids: 0 });
+});
+
+test("and a crossing to the desktop gives every row of that listing its svg, folders their chevrons", async () => {
+  const { c } = await spanCross(390, 1280);
+  for (const r of rowsOf(c)) {
+    const icon = byCls(r, "ft-icon")[0];
+    assert.ok(svgOf(icon), nameOf(r) + " draws the svg");
+    assert.strictEqual(icon.textContent, "", nameOf(r) + " has no Nerd text");
+    assert.strictEqual(svgOf(byCls(r, "ft-more")[0]).attrs["data-icon"], "ellipsis", nameOf(r));
+    assert.strictEqual(byCls(r, "ft-chev").length, hasCls("dir")(r) ? 1 : 0, nameOf(r));
+  }
+});
+
+test("a row carries its entry's name in data-name, and a repaint takes the glyph from it, never from the label", async () => {
+  const w = world(1280, GLYPH_LISTING);
+  const c = await w.render();
+  for (const r of rowsOf(c)) assert.strictEqual(r.attrs["data-name"], nameOf(r));
+  rowNamed(c, "main.go").setAttribute("aria-label", "label.md");
+  w.ctx.window.innerWidth = 390;
+  w.ctx.ftGlyphsCrossed();
+  assert.deepStrictEqual(phoneCell(byCls(c.all((n) => n.attrs["data-name"] === "main.go")[0], "ft-icon")[0]), { text: nerd(w, "main.go", false, false), kids: 0 });
+});
+
 test("app.js's breakpoint listener redraws the tree's glyphs", () => {
   const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8");
   const at = app.indexOf("window.matchMedia(mobileMediaQuery()).addEventListener(\"change\"");
@@ -1252,7 +1302,8 @@ test("the tree's glyph CSS: the desktop shows the svg centred, the phone never s
 test("the dock's tree rows off screen skip their style and layout (content-visibility), held at a row's height; the phone's rows do not", () => {
   const b = ruleBody(desktop, "#drawer .ft-node");
   assert.match(b, /content-visibility:\s*auto/, "a 2000-entry folder lays out only the rows near the view (#168 perf)");
-  // A row is max(22px, the --fs-tree line) high (the rule above): an unseen row is held at that, and at its own height once seen.
-  assert.match(b, /contain-intrinsic-size:\s*auto max\(22px, var\(--fs-tree\) \* 22 \/ 12\)/);
+  // A row is exactly max(22px, the --fs-tree line) high (the rule above): an unseen row is held at that.
+  assert.match(b, /contain-intrinsic-size:\s*max\(22px, var\(--fs-tree\) \* 22 \/ 12\)/);
+  assert.ok(!/contain-intrinsic-size:\s*auto/.test(b), "no remembered height: a --fs-tree change must reach the unseen rows");
   assert.ok(!/content-visibility/.test(ruleBody(app, ".ft-node")), "the phone's tree is untouched");
 });

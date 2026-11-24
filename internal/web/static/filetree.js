@@ -80,8 +80,8 @@ function ftChevrons() {
   return c;
 }
 
-// ftGlyphEpoch counts the breakpoint crossings: a subtree drawn off the page (ftLoadRoot, a remembered folder) while the width
-// crossed is redrawn before it goes on the page, as the rows already there were.
+// ftGlyphEpoch counts the breakpoint crossings: a listing the width crossed while it was drawn (ftRenderDir awaits its remembered
+// subfolders between rows, and draws off the page for ftLoadRoot) redraws its rows when it ends.
 let ftGlyphEpoch = 0;
 
 // ftGlyphsCrossed: the viewport crossed the phone breakpoint (app.js). Every row on the tree gets the new width's glyphs.
@@ -90,15 +90,15 @@ function ftGlyphsCrossed() {
   ftRepaintGlyphs(ftTreeEl);
 }
 
-// ftRepaintGlyphs redraws the glyphs of every row under `root` for the width now, from what the row says it is (its name,
-// .dir, aria-expanded): the icon, the ⋯, and a folder's chevrons (desktop only, first in the row).
+// ftRepaintGlyphs redraws the glyphs of every row under `root` for the width now, from what the row says it is (its entry's
+// name in data-name, never its label; .dir; aria-expanded): the icon, the ⋯, and a folder's chevrons (desktop only, first).
 function ftRepaintGlyphs(root) {
   if (!root) return;
   const wide = ftWideGlyphs();
   for (const row of root.querySelectorAll(".ft-node")) {
     const isDir = row.classList.contains("dir");
     const icon = row.querySelector(":scope > .ft-icon");
-    if (icon) ftSetFileGlyph(icon, row.getAttribute("aria-label"), isDir, row.getAttribute("aria-expanded") === "true", wide);
+    if (icon) ftSetFileGlyph(icon, row.getAttribute("data-name"), isDir, row.getAttribute("aria-expanded") === "true", wide);
     const more = row.querySelector(":scope > .ft-more");
     if (more) ftSetMoreGlyph(more, wide);
     const chev = row.querySelector(":scope > .ft-chev");
@@ -484,6 +484,7 @@ async function ftRenderDir(path, container, prefix, st) {
   const chg = typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerChangedFor === "function"
     ? drawerChangedFor(ftRoot()) : null;
   const wide = ftWideGlyphs(); // the whole listing draws one width's glyphs (#168)
+  const epoch = ftGlyphEpoch; // a crossing during the listing's awaits is repainted after the loop
   for (let i = 0; i < entries.length; i++) {
     const ent = entries[i];
     const isDir = ftEntryIsDir(ent, docked);
@@ -544,6 +545,7 @@ async function ftRenderDir(path, container, prefix, st) {
     row.setAttribute("role", "treeitem");
     row.setAttribute("aria-level", String(prefix.length / 2 + 1));
     row.setAttribute("aria-label", ent.name);
+    row.setAttribute("data-name", ent.name); // what ftRepaintGlyphs draws the glyph from: an icon never comes from a label
     row.setAttribute("tabindex", "-1");
     // One affordance per row. Download used to sit here as a bare ⤓ and Rename /
     // Delete behind the menu; two controls squeezed the name column (badly at
@@ -670,14 +672,10 @@ async function ftRenderDir(path, container, prefix, st) {
           // a layout per row); a folder the user closed while it listed stays closed.
           st.defer.push(async () => {
             const box = document.createElement("div");
-            const epoch = ftGlyphEpoch;
             childBox = box;
             childLoad = ftRenderDir(full, box, b.childPrefix, st);
             await childLoad;
-            if (open && childBox === box) {
-              if (epoch !== ftGlyphEpoch) ftRepaintGlyphs(box); // the width crossed while it listed
-              row.after(box);
-            }
+            if (open && childBox === box) row.after(box);
           });
         } else await openChildren();
       }
@@ -694,6 +692,8 @@ async function ftRenderDir(path, container, prefix, st) {
       row.ondblclick = () => { if (ftDocked()) drawerShowFile(full, { preview: false }); };
     }
   }
+  // The width crossed while this listing awaited (a remembered subfolder listing): the rows drawn after that used the old width.
+  if (epoch !== ftGlyphEpoch) ftRepaintGlyphs(container);
   if (rootCall) {
     // The whole tree is drawn (a restored subtree included): the Tab stop is the row the user last had
     // focus on if it is still here, else the first row. Folders opened later never take it (st.rows is gone).
@@ -727,7 +727,6 @@ async function ftLoadRoot(opts) {
   try {
     if (typeof gitStatusLoad === "function") gitStatusLoad(ftRoot(), typeof gitStatusTreeSid === "function" ? gitStatusTreeSid() : null, { fresh: !!(opts && opts.fresh) });
     const box = document.createElement("div");
-    const epoch = ftGlyphEpoch;
     // The top level renders in an off-DOM box, so the pending lines ftRenderDir
     // paints there are never seen. This one sits in the live tree, above
     // whatever it shows now.
@@ -743,7 +742,6 @@ async function ftLoadRoot(opts) {
     ftRootResolvedPath = typeof st.resolved === "string" ? st.resolved : ftRoot();
     ftRootReadOnly = ro === true;
     ftApplyReadOnly(ftRootReadOnly);
-    if (epoch !== ftGlyphEpoch) ftRepaintGlyphs(box); // the width crossed while it listed: its rows get the new glyphs
     ftTreeEl.replaceChildren(...box.childNodes);
     // A status that landed while the rows were drawn off the page painted the old ones: these get its marks now.
     if (typeof gitRepaintRows === "function") gitRepaintRows();
