@@ -35,6 +35,15 @@ npm view lucide-static@1.70.0 dist.integrity
 npm view simple-icons@16.37.0 dist.integrity
 ```
 
+`npm view` reads the registry's value; it never checks the file you downloaded. Hash each tarball and compare it, in full, to the pinned integrity in the table above before extracting. Stop if it differs:
+
+```sh
+printf 'sha512-%s\n' "$(openssl dgst -sha512 -binary lucide-static-1.70.0.tgz | openssl base64 -A)"
+printf 'sha512-%s\n' "$(openssl dgst -sha512 -binary simple-icons-16.37.0.tgz | openssl base64 -A)"
+```
+
+`openssl base64 -A` is the portable form of `base64 -w0` (macOS `base64` has no `-w`).
+
 Extract each into its own empty directory (the SVGs are under `package/icons`), then from the repo root:
 
 ```sh

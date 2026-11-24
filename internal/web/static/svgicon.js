@@ -1,7 +1,8 @@
-// svgIcon: the product's inline icons are built here and nowhere else. One <svg> preamble (a 14x14 box,
-// no fill, currentColor, 1.2 stroke, round caps and joins, hidden from assistive tech) used to be written
-// three times (tabs.js tabIcon and dockIcon, the kit menu's menuIconSvg); the glyph is decoration, its
-// meaning is carried by the text or title next to it. Classic script: the browser shares one global scope.
+// uiIcon (below) is the one builder every page icon goes through: a glyph of the vendored set (icons.js, Lucide
+// 1.70.0 outlines and Simple Icons 16.37.0 marks, see docs/ICONS.md) on a 24 grid at stroke 2. svgIcon and svgShape
+// are only the low-level <svg> wrapper uiIcon draws through: one preamble, each element made with createElementNS,
+// never parsed from HTML. The glyph is decoration; its meaning is carried by the text or title next to it.
+// Classic script: the browser shares one global scope.
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 // svgShape: one child shape, `tag` with its attributes set in the order `attrs` lists them.
@@ -11,14 +12,14 @@ function svgShape(tag, attrs) {
   return n;
 }
 
-// svgIcon(shapes, opts): `shapes` is [[tag, attrs], ...], drawn in that order. opts:
-//   viewBox      "0 0 14 14"
-//   strokeWidth  "1.2"
-//   round        true: stroke-linecap and stroke-linejoin round (tabIcon's, the menu's). false is dockIcon's
-//                preamble, which sets neither.
-//   icon         the kind, as the data-icon attribute (the kit menu tags each of its glyphs)
-//   size         width and height in px, only when given: the stylesheet sizes every icon so far (14px in
-//                a menu's 16px slot), so an unsized icon carries no width or height at all.
+// svgIcon(shapes, opts): the low-level wrapper uiIcon draws through; call sites use uiIcon, not this. `shapes` is
+// [[tag, attrs], ...], drawn in that order. opts (uiIcon passes viewBox, strokeWidth and size; the rest fall back
+// to the wrapper's own defaults):
+//   viewBox      "0 0 14 14" when not given (uiIcon passes "0 0 24 24")
+//   strokeWidth  "1.2" when not given (uiIcon passes "2")
+//   round        true: stroke-linecap and stroke-linejoin round. false sets neither.
+//   icon         the kind, as the data-icon attribute when given (uiIcon sets data-icon itself)
+//   size         width and height in px, only when given (uiIcon defaults it to 14)
 function svgIcon(shapes, opts) {
   const o = opts || {};
   const svg = document.createElementNS(SVG_NS, "svg");
