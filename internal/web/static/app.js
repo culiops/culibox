@@ -1,5 +1,11 @@
 "use strict";
 
+// --- static chrome glyphs ----------------------------------------------------------------------------------
+// index.html holds an empty <svg data-uicon="name"> where a chrome glyph goes (#168); this fills them, first of all: it
+// REPLACES each node, so anything bound to or fetched from one earlier would be lost. Every id these sit in is on the
+// <button> around the svg, which stays; the scripts that run before this one touch only those buttons.
+if (typeof document !== "undefined" && typeof paintStaticIcons === "function") paintStaticIcons(document);
+
 // --- fetch helpers -----------------------------------------------------------
 // api(path, opts) is fetch + the error shape below. opts.timeoutMs (session actions: deadline.js ACTION_*_MS) bounds the
 // whole call, body included: past it the request is aborted and the call rejects with actionTimeoutError (`timedOut`, no

@@ -27,6 +27,8 @@ download
 ellipsis
 external-link
 eye
+file-plus
+file-search
 file-text
 files
 folder
@@ -34,6 +36,7 @@ folder-open
 folder-plus
 folder-tree
 git-commit-horizontal
+git-compare
 globe
 grid-2x2
 image
@@ -44,11 +47,14 @@ list-filter
 loader-circle
 lock
 log-in
+maximize
 panel-bottom
 panel-right
+panel-right-close
 pause
 pencil
 pencil-line
+pin
 plus
 power
 refresh-cw
