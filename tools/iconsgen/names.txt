@@ -6,6 +6,7 @@ arrow-down-to-line
 arrow-right
 arrow-right-to-line
 ban
+book-open
 bot
 box
 chart-no-axes-column
@@ -78,11 +79,13 @@ pin
 plug
 plus
 power
+puzzle
 refresh-cw
 rotate-cw
 scroll-text
 search
 search-x
+server
 settings
 shield
 shield-alert

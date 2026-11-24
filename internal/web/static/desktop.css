@@ -3785,6 +3785,8 @@
      character a line. */
   #page-host > #analytics-modal.as-page .an-card .card-head { flex-wrap: wrap; }
   #page-host > #analytics-modal.as-page .an-card .card-head > :is(h2, h3) { margin: 0; }
+  /* A Tools card's kind glyph sits inside its h3, 6px before the word (the frame's .i168 margin; .ui-icon gives vertical-align -2px). */
+  #page-host > #analytics-modal.as-page .an-card .card-head > h3 > .ui-icon { margin-right: 6px; }
   #page-host > #analytics-modal.as-page .an-card .card-head > :is(h2, h3, .muted) { flex: none; white-space: nowrap; }
   #page-host > #analytics-modal.as-page .an-card-body { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
   /* A table's card clips its row hover to the 8px corners (the frame's inline overflow: hidden). */
