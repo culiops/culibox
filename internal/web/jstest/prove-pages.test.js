@@ -4,6 +4,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { ICON_SRC } = require("./iconpage.js");
 
 // The two "Prove" pages (UI plan 5, #175; frames M3.1-M3.3): desktop Audit and Analytics wear one page head, one toolbar,
 // one KPI row and one table style, all of them the kit's. This file pins the Audit page (Task 2; digest-design §B1-§B5,
@@ -1234,6 +1235,8 @@ function analyticsEnv(file = "analytics.js") {
   };
   const ctx = { document, window: { innerWidth: 1440 }, api, openDialog() {}, console };
   vm.createContext(ctx);
+  // The page's icon scripts come first: the Tools card heads draw a glyph (#168 G3), as the browser has them in the shared scope.
+  new vm.Script(ICON_SRC, { filename: "icons" }).runInContext(ctx);
   new vm.Script(read(file), { filename: file }).runInContext(ctx);
   return {
     ctx, dlg, calls, gates, document,
@@ -2083,7 +2086,9 @@ test("Models, Projects and Tools on the page: cards, kit tables and section titl
   const grid = tools.elements[0].elements[1];
   assert.strictEqual(grid.className, "an-pgrid");
   assert.deepStrictEqual(grid.elements.map((c) => c.className), ["an-card", "an-card"]);
-  assert.deepStrictEqual(grid.elements.map((c) => c.elements[0].elements[0].textContent), ["skill", "mcp_server"], "a card per kind, titled as today");
+  // The head is the kind's glyph (#168 G3, keyed on the kind) and then the kind word, as today.
+  assert.deepStrictEqual(grid.elements.map((c) => c.elements[0].elements[1].textContent), ["skill", "mcp_server"], "a card per kind, titled as today");
+  assert.deepStrictEqual(grid.elements.map((c) => c.elements[0].elements[0].attrs["data-icon"]), ["book-open", "server"]);
   assert.deepStrictEqual(grid.elements[0].elements[1].elements.map((r) => [r.elements[0].textContent, r.elements[2].textContent]), [["review", "40"], ["deploy", "7"]]);
   // No tools: today's sentence, in the section.
   loadWindow(env, { tools: [] });

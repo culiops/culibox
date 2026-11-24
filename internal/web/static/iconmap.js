@@ -161,8 +161,14 @@ const ICON_ACT_TOOL = iconMapOf({
 const ICON_ACT_TOOL_OTHER = iconMapOf({ mcp: "plug", other: "wrench" });
 const ICON_ACT_KIND = iconMapOf({ you: "message-square", clear: "eraser", ask: "hand", approval: "shield-alert" });
 
+// The Analytics Tools card head's glyph, drawn at 16 before the kind word (G3 3-6). The key is the group's declared `kind` (Go
+// analytics.AttrKey.Kind: skill | plugin | mcp_server | mcp_tool), never its words; mcp_tool is Activity's mcp__ glyph (G2 33).
+// A kind with no entry draws no glyph (left-out k).
+const ICON_TOOL_KIND = iconMapOf({ mcp_server: "server", plugin: "puzzle", mcp_tool: "plug", skill: "book-open" });
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    ICON_TOOL_KIND,
     ICON_AUDIT_KIND, ICON_CRED_PROVIDER, ICON_ACT_TOOL, ICON_ACT_TOOL_OTHER, ICON_ACT_KIND,
     emptyState, ICON_EMPTY, ICON_SETTINGS_TAB, ICON_AGENT_PROVIDER,
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_REACH,
