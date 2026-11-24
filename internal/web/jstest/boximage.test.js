@@ -124,6 +124,20 @@ test("missing and unknown: the configured ref and one line, no digest to show", 
   assert.equal(unk[unk.length - 1].text, "Box image details unknown (docker did not answer)");
 });
 
+test("unknown with a want still shows the For this version row, and nothing else of the update block", () => {
+  const rows = boxImageRows(report({
+    verdict: "unknown", info: undefined, want: NEW, want_source: "baked", want_claude_code: "2.1.311", want_created: local(2026, 11, 20, 1, 0),
+    download_mb: "212", config_line: '"box_image": "' + NEW + '"', setup_cmd: "culibox box setup", checked_at: local(2026, 11, 24, 9, 12),
+  }));
+  const want = rows.find((r) => r.label === "For this version");
+  assert.equal(want.text, REPO + "@sha256:81be…07aa");
+  assert.equal(want.title, NEW);
+  assert.equal(want.note, "(Claude Code 2.1.311, built 2026-11-20)");
+  assert.ok(!rows.some((r) => /MB to download|^run:|^then run:|Checked/.test(r.text)));
+  assert.ok(!rows.some((r) => r.copy && /box_image/.test(r.text)));
+  assert.ok(rows.indexOf(want) > rows.findIndex((r) => /docker did not answer/.test(r.text)), "after the status line");
+});
+
 test("the weekly scan row: a link to the issue built from the number, no row without a scan", () => {
   const rows = boxImageRows(report({ scan: { number: 357, count: 680 } }));
   const scan = rows[rows.length - 1];

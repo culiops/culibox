@@ -65,18 +65,21 @@ function biStatus(r) {
   return "";
 }
 
+// biWantRows is the image for this version: its digest with the Claude Code and built facts, when the report names one.
+function biWantRows(r) {
+  if (typeof r.want !== "string" || !r.want) return [];
+  const row = biDigestRow("For this version", r.want, false);
+  const facts = [];
+  if (typeof r.want_claude_code === "string" && r.want_claude_code) facts.push("Claude Code " + r.want_claude_code);
+  const built = biDate(r.want_created, false);
+  if (built) facts.push("built " + built);
+  if (facts.length) row.note = "(" + facts.join(", ") + ")";
+  return [row];
+}
+
 // biUpdateRows is what the newer image is, how much it costs to fetch and the steps to take. Read-only: nothing here runs.
 function biUpdateRows(r) {
-  const rows = [];
-  if (typeof r.want === "string" && r.want) {
-    const row = biDigestRow("For this version", r.want, false);
-    const facts = [];
-    if (typeof r.want_claude_code === "string" && r.want_claude_code) facts.push("Claude Code " + r.want_claude_code);
-    const built = biDate(r.want_created, false);
-    if (built) facts.push("built " + built);
-    if (facts.length) row.note = "(" + facts.join(", ") + ")";
-    rows.push(row);
-  }
+  const rows = biWantRows(r);
   if (typeof r.download_mb === "string" && r.download_mb) rows.push({ label: "", text: "about " + r.download_mb + " MB to download" });
   const line = typeof r.config_line === "string" ? r.config_line : "";
   if (line) rows.push(biDigestRow("", line, true));
@@ -118,6 +121,8 @@ function boxImageRows(r) {
   const status = biStatus(r);
   if (status) rows.push({ label: "", text: status });
   if (r.verdict === "update") rows.push(...biUpdateRows(r));
+  // Docker not answering hides the comparison, not what this version's image is.
+  else if (r.verdict === "unknown") rows.push(...biWantRows(r));
   const scan = biScanRow(r.scan);
   if (scan) rows.push(scan);
   return rows;
