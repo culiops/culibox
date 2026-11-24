@@ -265,6 +265,24 @@ func (s *Service) warnCIDROverlap(subnet netip.Prefix) {
 	}
 }
 
+// DrainQuiet is how long a tunnel may carry no byte before a drain closes it.
+// A streamed API response keeps bytes moving; a connection that is only kept
+// alive does not. (A guess, not measured: the drain's log line counts how many
+// tunnels it closed as quiet and how many the bound cut, #362.)
+const DrainQuiet = 10 * time.Second
+
+// Drain lets the open tunnels finish (Proxy.Drain, with DrainQuiet) until ctx
+// ends, and logs what it did. Close afterwards cuts what is left.
+func (s *Service) Drain(ctx context.Context) {
+	start := time.Now()
+	r := s.o.Proxy.Drain(ctx, DrainQuiet)
+	if r.Open == 0 {
+		return
+	}
+	log.Printf("egress: drain of %d open tunnel(s) took %s: %d ended on their own, %d closed after %s without traffic, %d still open at the bound (cut now)",
+		r.Open, time.Since(start).Round(time.Millisecond), r.Open-r.Quiet-r.Left, r.Quiet, DrainQuiet, r.Left)
+}
+
 // Close stops the listener and every tunnel, and waits until each has been
 // audited or ctx ends. The docker network stays: a restarted daemon finds it.
 func (s *Service) Close(ctx context.Context) {

@@ -1705,3 +1705,162 @@ func TestProxyProfileEgressAllow(t *testing.T) {
 		t.Fatalf("row = %+v", r)
 	}
 }
+
+// streamUp is an upstream that streams when the client's first byte is 's'
+// (n chunks, gap apart, then EOF; n < 0 never ends) and echoes otherwise.
+func streamUp(n int, gap time.Duration) func(net.Conn) {
+	return func(c net.Conn) {
+		first := make([]byte, 1)
+		if _, err := io.ReadFull(c, first); err != nil {
+			return
+		}
+		if first[0] != 's' {
+			c.Write(first)
+			io.Copy(c, c)
+			return
+		}
+		for i := 0; n < 0 || i < n; i++ {
+			if _, err := io.WriteString(c, "chunk;"); err != nil {
+				return
+			}
+			time.Sleep(gap)
+		}
+	}
+}
+
+// #362: a drain refuses new connections at once, lets a tunnel that is still
+// carrying bytes finish, closes a quiet one early, and audits both.
+func TestDrainLetsAnActiveStreamFinish(t *testing.T) {
+	h := newHarness(t, nil)
+	h.mu.Lock()
+	h.up = streamUp(12, 50*time.Millisecond)
+	h.mu.Unlock()
+	tok := h.tok("s1", nonceA)
+	_, idle := h.connect(t, "api.anthropic.com:443", "s1", tok)
+	echoRoundTrip(t, idle, "e")
+	_, stream := h.connect(t, "api.anthropic.com:443", "s1", tok)
+	if _, err := io.WriteString(stream, "s"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := make(chan DrainResult, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		got <- h.p.Drain(ctx, 200*time.Millisecond)
+	}()
+	waitFor(t, "the listener to close", func() bool {
+		c, err := net.DialTimeout("tcp", h.addr, time.Second)
+		if err != nil {
+			return true
+		}
+		c.Close()
+		return false
+	})
+	assertClosedByServer(t, idle) // quiet for the window: closed before the stream ends
+	stream.SetReadDeadline(time.Now().Add(5 * time.Second))
+	all, err := io.ReadAll(stream)
+	if err != nil || strings.Count(string(all), "chunk;") != 12 {
+		t.Fatalf("the stream was cut: %d chunks, err %v", strings.Count(string(all), "chunk;"), err)
+	}
+	stream.Close() // the client is done with it (a kept-alive one would be closed as quiet)
+	var r DrainResult
+	select {
+	case r = <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Drain did not return once every tunnel had finished")
+	}
+	if r != (DrainResult{Open: 2, Quiet: 1, Left: 0}) {
+		t.Fatalf("result = %+v, want 2 open, 1 quiet, 0 left", r)
+	}
+	if rows := h.waitRows(t, 2); len(rows) != 2 || rows[0].Outcome != OutcomeAllowed || rows[1].Outcome != OutcomeAllowed {
+		t.Fatalf("both tunnels are audited once: %+v", rows)
+	}
+	if err := h.p.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A stream that outlasts the bound is left open by Drain and cut by Close, and
+// still audited.
+func TestDrainLeavesALongStreamForClose(t *testing.T) {
+	h := newHarness(t, nil)
+	h.mu.Lock()
+	h.up = streamUp(-1, 20*time.Millisecond)
+	h.mu.Unlock()
+	_, stream := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceA))
+	if _, err := io.WriteString(stream, "s"); err != nil {
+		t.Fatal(err)
+	}
+	go io.Copy(io.Discard, stream)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	r := h.p.Drain(ctx, time.Second)
+	if d := time.Since(start); d < 250*time.Millisecond || d > 2*time.Second {
+		t.Fatalf("Drain took %s, want about the 300ms bound", d)
+	}
+	if r != (DrainResult{Open: 1, Quiet: 0, Left: 1}) {
+		t.Fatalf("result = %+v, want 1 open, 1 left", r)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- h.p.Close() }()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close after a drain did not cut the stream")
+	}
+	if row := h.onlyRow(t); row.Outcome != OutcomeAllowed {
+		t.Fatalf("the cut stream is audited: %+v", row)
+	}
+}
+
+// A CONNECT still being set up when the drain begins gets a clean 503, never a
+// tunnel; with nothing open the drain returns at once.
+func TestDrainRefusesAConnectInSetup(t *testing.T) {
+	h := newHarness(t, nil)
+	dialing, release := make(chan struct{}), make(chan struct{})
+	h.mu.Lock()
+	h.dialErr = func(netip.AddrPort) error { close(dialing); <-release; return nil }
+	h.mu.Unlock()
+	type answer struct {
+		code int
+		err  error
+	}
+	res := make(chan answer, 1)
+	go func() {
+		c, err := net.DialTimeout("tcp", h.addr, 2*time.Second)
+		if err != nil {
+			res <- answer{err: err}
+			return
+		}
+		defer c.Close()
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		io.WriteString(c, "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\nProxy-Authorization: "+basic("s1", h.tok("s1", nonceA))+"\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodConnect})
+		if err != nil {
+			res <- answer{err: err}
+			return
+		}
+		res <- answer{code: resp.StatusCode}
+	}()
+	<-dialing
+	drained := make(chan DrainResult, 1)
+	go func() { drained <- h.p.Drain(context.Background(), time.Second) }()
+	waitFor(t, "the drain to start", func() bool { h.p.mu.Lock(); defer h.p.mu.Unlock(); return h.p.closed })
+	close(release)
+	if a := <-res; a.err != nil || a.code != http.StatusServiceUnavailable {
+		t.Fatalf("CONNECT in setup during a drain: %+v, want 503", a)
+	}
+	select {
+	case r := <-drained:
+		if r != (DrainResult{}) {
+			t.Fatalf("result = %+v, want nothing open", r)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Drain with no tunnel did not return")
+	}
+	if rows := h.rows.all(); len(rows) != 0 {
+		t.Fatalf("a refused setup is not an allowed tunnel: %+v", rows)
+	}
+}

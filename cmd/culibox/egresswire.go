@@ -37,6 +37,7 @@ const bootReadyTimeout = 30 * time.Second
 type egressService struct {
 	Svc   *egress.Service                      // installed on the session manager and the box layer
 	Stats func(id string) (egress.Stats, bool) // behind the egress object of GET /api/sessions/{id}/aws
+	Drain func(context.Context)                // lets open tunnels finish before Stop (#362)
 	Stop  func(context.Context)
 	Audit *egress.Audit // the audit store the retention job prunes; closed by Stop
 }
@@ -227,6 +228,7 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 		Svc:   svc,
 		Audit: audit,
 		Stats: proxy.Stats,
+		Drain: svc.Drain,
 		Stop: func(ctx context.Context) {
 			// Close blocks until every tunnel is audited (or ctx ends); only then
 			// is the audit handle closed, so no tunnel's row is lost to a closed store.
