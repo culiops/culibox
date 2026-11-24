@@ -2989,7 +2989,7 @@
   #page-host > #settings-modal.as-page > :is(#tokens, #accounts) > :not(.set-head) .btn.dgr { background: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page .tokrow, #page-host > #settings-modal.as-page .acct-row { border-bottom-color: var(--line); font-size: var(--t-md); }
   #page-host > #settings-modal.as-page .tokrow .meta, #page-host > #settings-modal.as-page .acct-meta { font-size: var(--t-sm); }
-  /* The account row's provider mark (G2 13): 14px, 4px before the provider word. */
+  /* The account row's provider mark (G2 13): 12px, 4px before the provider word. */
   #page-host > #settings-modal.as-page .acct-prov .ui-icon { display: inline-block; margin-right: 4px; }
   #page-host > #settings-modal.as-page .tokrow.arm { border-radius: var(--r-chip); }
   #page-host > #settings-modal.as-page .reveal { border-radius: var(--r-card); }

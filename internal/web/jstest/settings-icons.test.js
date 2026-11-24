@@ -98,7 +98,7 @@ test("account row shows the provider mark from a.provider", () => {
   assert.equal(prov.textContent, "claude");
   const svg = prov.children[0];
   assert.equal(svg.getAttribute("data-icon"), "si:claude");
-  assert.equal(svg.getAttribute("width"), "14");
+  assert.equal(svg.getAttribute("width"), "12", "chip size, as the frame draws it");
   assert.equal(prov.children.length, 2, "mark, then the word");
   assert.equal(meta.textContent, "claude · " + vmText("logged_in") + " · /h/.claude-work", "the words are unchanged");
 });
@@ -114,6 +114,18 @@ test("account row: an unknown provider draws no mark and the text is unchanged",
     assert.equal(meta.querySelector("svg"), null, p + ": no svg");
     assert.equal(meta.querySelector(".acct-prov"), null, p + ": the word stays plain");
     assert.equal(meta.textContent, p + " · " + vmText("logged_in") + " · /h/.claude-work");
+  }
+});
+
+test("account row: a missing or empty provider shows no word, no mark, no undefined and no leading separator", () => {
+  const ctxRow = (a) => ctxWith(["accounts.js"], fakeDoc(), { renderRateLimitsInto: () => 0 }).acctRow(a, null, 0).querySelector(".acct-meta");
+  const base = { name: "old", login_state: "logged_in", config_dir: "/h/.claude-old", default: true };
+  for (const a of [base, { ...base, provider: "" }, { ...base, provider: null }]) {
+    const meta = ctxRow(a);
+    assert.equal(meta.querySelector("svg"), null);
+    assert.equal(meta.querySelector(".acct-prov"), null);
+    assert.equal(meta.textContent, vmText("logged_in") + " · /h/.claude-old");
+    assert.ok(!/undefined|null/.test(meta.textContent) && !meta.textContent.startsWith(" "));
   }
 });
 
