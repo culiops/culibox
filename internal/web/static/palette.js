@@ -535,6 +535,19 @@ function palBuildRow(it, idx, selected) {
   return li;
 }
 
+// palPaintEmpty: the "No matches" line. `none` shows it; on the desktop it carries the declared "matches" glyph (14 px, before
+// the words, G4 78), drawn once and kept across repaints; the phone keeps its plain text (#340 frozen), and a window that
+// became a phone drops a glyph it had.
+function palPaintEmpty(el, none, mobile) {
+  el.hidden = !none;
+  if (mobile) {
+    if (el.children.length) el.textContent = el.textContent;
+  } else if (!el.children.length) {
+    const e = emptyState("matches");
+    el.prepend(uiIcon(e.icon, { size: 14, cls: "empty-glyph" }));
+  }
+}
+
 function palRender(items, note) {
   const grouped = palGroup(items);
   palItems = grouped.map((g) => g.it);
@@ -559,7 +572,7 @@ function palRender(items, note) {
   ul.replaceChildren(...children);
   palRowEls = rowEls;
 
-  document.getElementById("pal-empty").hidden = palItems.length > 0;
+  palPaintEmpty(document.getElementById("pal-empty"), palItems.length === 0, palMobile());
   document.getElementById("pal-note").textContent = note || "";
   palPaintModHint();
 }

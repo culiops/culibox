@@ -98,8 +98,23 @@ const ICON_PALETTE_KIND = iconMapOf({
   settings: ICON_NAV.settings, file: "file",
 });
 
+// The four empty states (G4 90, 91, 78), by the kind the CALLER is rendering, never by the message text: none = no session
+// open, first = the first-run welcome (both full-surface: a 32 px hero), changes = the dock Changes section of a clean
+// workspace, matches = the palette with no match (both list-level: 14 px inline). `first` is a port pick: no frame draws
+// the first-run screen, so it takes the tier-box glyph's own `box`, the product's mark of a container.
+const ICON_EMPTY = iconMapOf({ none: "app-window", first: "box", changes: "git-compare", matches: "search-x" });
+const EMPTY_HERO = iconMapOf({ none: true, first: true, changes: false, matches: false });
+
+// emptyState(kind): { icon, hero } for a declared kind, null for any other (a prototype key included). `hero` true = the
+// 32 px muted block glyph above a title; false = the 14 px muted glyph before the line of text.
+function emptyState(kind) {
+  if (!Object.prototype.hasOwnProperty.call(ICON_EMPTY, kind)) return null;
+  return { icon: ICON_EMPTY[kind], hero: EMPTY_HERO[kind] };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    emptyState, ICON_EMPTY,
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE,
     ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_TOAST, ICON_ROW, ICON_PALETTE_KIND,
   };

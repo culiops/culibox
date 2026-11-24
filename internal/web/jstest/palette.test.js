@@ -399,11 +399,15 @@ function paletteVm(over) {
   const { createRequire } = require("node:module");
   const STATIC = path.join(__dirname, "..", "static");
   const el = (tag, ns) => ({
-    tag, namespaceURI: ns || "", className: "", textContent: "", title: "", onclick: null, onmouseenter: null, children: [], attrs: {},
+    tag, namespaceURI: ns || "", className: "", title: "", onclick: null, onmouseenter: null, children: [], attrs: {}, _t: "",
+    // As in a DOM: setting the text replaces the children.
+    get textContent() { return this._t; },
+    set textContent(v) { this._t = String(v); this.children = []; },
     classList: { add() {}, remove() {}, toggle() {} },
     setAttribute(k, v) { this.attrs[k] = String(v); },
     removeAttribute(k) { delete this.attrs[k]; },
     append(...n) { this.children.push(...n); },
+    prepend(...n) { this.children.unshift(...n); },
   });
   const ctx = vm.createContext(Object.assign({
     console, RegExp, Object, Array, Map, Math, Number, JSON, String, Error, Set,
@@ -506,4 +510,27 @@ test("palette on the phone: the text glyphs and the ⧉ stay, no icon is drawn, 
   assert.deepStrictEqual(cmd.children.map(shapeOf), ["span.pal-glyph'>'", "span.pal-label'+ Shell below'"]);
   const ses = ctx.palBuildRow({ kind: "session", label: "a", agentKind: "claude", dotCls: "dot idle" }, 0, false);
   assert.ok(!ses.children.some((c) => c.tag === "svg"), "no kind glyph on a phone session row");
+});
+
+test("palette No matches: a 14 px muted search-x before the words on the desktop, none on the phone (G4 78, #340)", () => {
+  const ctx = paletteVm();
+  const empty = ctx.document.createElement("div");
+  empty.textContent = "No matches";
+  ctx.palPaintEmpty(empty, true, false);
+  assert.strictEqual(empty.hidden, false);
+  assert.deepStrictEqual(empty.children.map(shapeOf), ["svg:search-x"]);
+  assert.strictEqual(empty.children[0].attrs.width, "14");
+  assert.match(empty.children[0].attrs.class, /\bempty-glyph\b/);
+  assert.strictEqual(empty.children[0].attrs["aria-hidden"], "true");
+  ctx.palPaintEmpty(empty, true, false);
+  assert.strictEqual(empty.children.length, 1, "a repaint does not stack a second glyph");
+  ctx.palPaintEmpty(empty, false, false);
+  assert.strictEqual(empty.hidden, true);
+  const phone = ctx.document.createElement("div");
+  phone.textContent = "No matches";
+  ctx.palPaintEmpty(phone, true, true);
+  assert.strictEqual(phone.children.length, 0);
+  assert.strictEqual(phone.textContent, "No matches");
+  ctx.palPaintEmpty(empty, true, true);
+  assert.strictEqual(empty.children.length, 0, "a window that became a phone drops the glyph");
 });

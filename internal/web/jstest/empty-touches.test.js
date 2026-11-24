@@ -69,7 +69,7 @@ function page(boxRuntime, metaLoaded = true) {
   for (const f of ["fsops.js", "profileview.js", "icons.js", "iconmap.js", "svgicon.js", "claudemark.js", "spawnpreview.js", "spawnpanel.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   // The panel's own helpers that need more DOM than this fake has; the rows themselves are the real ones.
   vm.runInContext("spawnPanelOn = () => true; spawnPlistFilter = () => {};", ctx);
-  const names = ["emptyEl", "emptyNoneEl", "emptyStateKey"];
+  const names = ["emptyEl", "emptyHero", "emptyNoneEl", "emptyStateKey"];
   if (/function profileTouches\b/.test(APP)) names.push("profileTouches"); // the old line, while it still exists
   vm.runInContext("function emptyHint() { return document.createElement('div'); }\n" + names.map((n) => fnSource(APP, n)).join("\n"), ctx);
   return { ctx, els };

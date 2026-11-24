@@ -1436,6 +1436,11 @@
   .dk-br-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; color: var(--fg); }
   .dk-br-sep { flex: none; }
   .dk-chg-note { flex: none; margin: 0; padding: 2px 10px 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* The empty-state glyph (G4 90, 91, 78): muted, the one 14 px inline glyph before a line of text or the 32 px hero above a title. */
+  .empty-glyph { color: var(--muted); }
+  .empty-hero { display: block; }
+  .dk-chg-note:not([hidden]):has(> .empty-glyph) { display: flex; align-items: center; gap: 6px; }
+  #pal-empty:not([hidden]):has(> .empty-glyph) { display: flex; align-items: center; gap: 8px; }
   .dk-list { container: dklist / inline-size; flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
   /* One changed file: the type icon, the name, its folder (the part that gives way), the counts and the letter. The name keeps
      its width and the folder takes what is left. The 2px bar on the left edge is the session bar, the one the tree rows wear. */

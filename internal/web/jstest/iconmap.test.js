@@ -114,3 +114,15 @@ test("ICON_TOAST: warn and error carry the status glyphs (G4 80, 81); info and p
   assert.equal(iconOf(maps.ICON_TOAST, "info"), "");
   assert.equal(iconOf(maps.ICON_TOAST, "pending"), "");
 });
+
+test("emptyState kinds: one helper, four declared kinds (G4 90, 91, 78); hero for the full-surface empties only", () => {
+  assert.deepStrictEqual({ ...maps.ICON_EMPTY }, { none: "app-window", first: "box", changes: "git-compare", matches: "search-x" });
+  assert.deepStrictEqual(maps.emptyState("none"), { icon: "app-window", hero: true });
+  assert.deepStrictEqual(maps.emptyState("first"), { icon: "box", hero: true });
+  assert.deepStrictEqual(maps.emptyState("changes"), { icon: "git-compare", hero: false });
+  assert.deepStrictEqual(maps.emptyState("matches"), { icon: "search-x", hero: false });
+  assert.strictEqual(maps.emptyState("constructor"), null);
+  assert.strictEqual(maps.emptyState("__proto__"), null);
+  assert.strictEqual(maps.emptyState("nope"), null);
+  assert.strictEqual(maps.emptyState(undefined), null);
+});

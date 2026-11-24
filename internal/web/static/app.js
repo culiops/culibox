@@ -6697,9 +6697,16 @@ function emptyHint() {
   return hint;
 }
 
+// emptyHero: the 32 px muted glyph above a full-surface empty state's title, drawn for the declared kind (G4 90).
+function emptyHero(kind) {
+  const e = emptyState(kind);
+  return uiIcon(e.icon, { size: 32, cls: "empty-glyph empty-hero" });
+}
+
 function emptyNoneEl(m) {
   const root = emptyEl("div", "placeholder empst");
   root.append(
+    emptyHero("none"),
     emptyEl("h1", "empst-title", "No session open"),
     emptyEl("p", "empst-sub", "Pick a session on the left, or start an agent from a profile you used recently."),
   );
@@ -6725,6 +6732,7 @@ function emptyNoneEl(m) {
 function emptyFirstEl() {
   const root = emptyEl("div", "placeholder empst empst-first");
   root.append(
+    emptyHero("first"),
     emptyEl("h1", "empst-title", "Welcome to CuliBox"),
     emptyEl("p", "empst-sub", "Run AI agents, keep them contained, and let them touch your cloud safely. Three steps:"),
   );

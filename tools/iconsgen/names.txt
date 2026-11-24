@@ -1,6 +1,7 @@
 # One icon name per line, sorted; "si:" prefix = Simple Icons mark, else Lucide.
 # Input of tools/iconsgen (docs/ICONS.md "Regenerating").
 activity
+app-window
 arrow-down-to-line
 arrow-right
 arrow-right-to-line
@@ -68,6 +69,7 @@ refresh-cw
 rotate-cw
 scroll-text
 search
+search-x
 settings
 shield
 si:claude

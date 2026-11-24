@@ -27,7 +27,7 @@ function fnSource(src, name) {
 }
 
 function page({ boxRuntime = "", reason = "", daemon = "", metaLoaded = true, desktop = true } = {}) {
-  const document = { createElement: (t) => new Node(t, document) };
+  const document = { createElement: (t) => new Node(t, document), createElementNS: (ns, t) => new Node(t, document) };
   const opened = [];
   const ctx = vm.createContext({
     document, console, boxRuntime, boxUnavailableReason: reason, boxDaemonReason: daemon, metaLoaded,
@@ -35,7 +35,8 @@ function page({ boxRuntime = "", reason = "", daemon = "", metaLoaded = true, de
     openSpawnDialog: () => opened.push("spawn"), openSettings: (t) => opened.push("settings:" + t), $: () => ({ click() { opened.push("new-profile"); } }),
   });
   new vm.Script(read("credentials.js").match(/function setDisabledReason[\s\S]*?\n}\n/)[0], { filename: "setDisabledReason" }).runInContext(ctx);
-  vm.runInContext(["emptyEl", "emptyFirstEl", "emptyStateKey"].map((n) => fnSource(APP, n)).join("\n"), ctx);
+  new vm.Script(require("./iconpage.js").ICON_SRC.replace(/^const /gm, "var "), { filename: "icons" }).runInContext(ctx);
+  vm.runInContext(["emptyEl", "emptyHero", "emptyFirstEl", "emptyStateKey"].map((n) => fnSource(APP, n)).join("\n"), ctx);
   return { ctx, opened };
 }
 const all = (n, out = []) => { out.push(n); for (const c of n.children) all(c, out); return out; };
