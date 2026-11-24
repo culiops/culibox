@@ -3681,7 +3681,7 @@ async function credAppForm(entry, opts) {
   sec.setAttribute("aria-label", "GitHub App");
   const h = credEl("div", "sec-h");
   // The Edit heading is only the entry's name: on the desktop page the GitHub kind is said once, by a glyph (G1 21). Not on a phone's modal.
-  h.appendChild(credTitleNode("span", "grow", edit ? entry.name : "GitHub App", edit && credPageMode() ? credGroupIcon({ key: "github" }) : ""));
+  h.appendChild(credTitleNode("span", "grow", edit ? entry.name : "GitHub App", edit && credPageMode() ? credIconMaps().ICON_RESOURCE.github : ""));
   const grid = credEl("div", "frow");
   const nm = credField(uid + "-name", "App name", { value: edit ? entry.name : "", readonly: edit, max: 64, placeholder: "my-bot" });
   const cid = credField(uid + "-cid", "Client ID", { value: edit ? entry.client_id || "" : "", placeholder: "Iv1.…", max: 100 });

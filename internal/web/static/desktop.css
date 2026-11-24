@@ -4238,7 +4238,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-empty { line-height: 20px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-stmt-act { margin-top: 12px; }
 
-  /* A grant is a row: kind, name (and its tag), scope in words (§B2 `.m2-rows`: 52px, the value, a 196px status column, 16px between columns and
+  /* A grant is a row: kind, name (and its tag), scope in words (§B2 `.m2-rows`: a 72px kind column (52px in a narrow container), the value, a 196px status column, 16px between columns and
      10px between rows). Three tracks only: an empty fourth one would still cost a 16px gap in every read row. Remove / Undo and the "Set in ..."
      note of a row in edit sit in column 4, the implicit auto track, which exists only on those rows. The narrow steps below put them back in
      column 3 (863px) or under the content (440px). The kind word, the status and the mono part are the frame's 12/18 `t-sm` lines (the value
@@ -4428,7 +4428,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-pick-list { min-height: min(var(--pfv-pick-min, 0px), calc(100vh - 180px)); max-height: min(580px, calc(100vh - 180px)); overflow-y: auto; overscroll-behavior: contain; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp:not([hidden]) ~ .pfv-pick-grp:not([hidden])::before { content: ""; display: block; height: 1px; margin: 6px 4px; background: var(--line); }
-  /* The glyph of a group heading (12px: the heading is 11px caps) and of an item that has no heading above it (#168 G1). */
+  /* The glyph of a group heading (12px: the heading is 11px caps) sits 6px before its words (#168 G1). */
   #page-host > #settings-modal.as-page #pfv .pfv-pick .grp-label .ui-icon { margin-right: 6px; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 0 10px 4px; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-none { padding: 6px 10px; font-size: var(--t-sm); color: var(--muted); }
@@ -4445,6 +4445,9 @@
      It is dimmed like every disabled control (the rules after #169's). */
   #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled { text-decoration: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-t { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font-weight: 500; overflow-wrap: anywhere; }
+  /* An item's own kind glyph (the Also reachable picker's Folder / Domain) sits 6px before its title, not the 8px gap the title's other
+     children keep: -2px of margin takes 2px off the glyph's gap only. */
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-t > .ui-icon { margin-right: -2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-s { display: block; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-r { flex: none; font-size: var(--t-sm); color: var(--muted); }

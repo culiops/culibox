@@ -2923,6 +2923,8 @@ test("the picker stays inside the page column: it hangs on its link's wrapper at
   assert.ok(has("pfv-opt", /text-decoration:\s*none/), "primitives.css strikes every disabled button through; an Added option is not struck");
   assert.ok(has("pfv-opt-t", /overflow-wrap:\s*anywhere/) && has("pfv-opt-s", /overflow-wrap:\s*anywhere/), "a long name breaks rather than push the popover out");
   assert.ok(rules.some((r) => /\.pfv-opt\[hidden\]/.test(r.sel) && /display:\s*none/.test(r.body)), "a grid option is hidden by the filter");
+  assert.ok(has("pfv-opt-t", /gap:\s*0 8px/), "the title's children keep an 8px gap");
+  assert.ok(rules.some((r) => /\.pfv-opt-t\s*>\s*\.ui-icon$/.test(r.sel) && /margin-right:\s*-2px/.test(r.body)), "an item's own glyph sits 6px (8px gap less 2px) before its title");
   assert.ok(rules.some((r) => /\.pfv-pick-grp\[hidden\]/.test(r.sel) && /display:\s*none/.test(r.body)));
 });
 

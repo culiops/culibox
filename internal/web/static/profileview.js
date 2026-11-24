@@ -339,7 +339,7 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon, pr
 //           empty string is a line not drawn (host Runs in has a second, "" unless
 //           boxes are unavailable). In a block with tone "error", the line at
 //           toneAt is the red one. Runs in's last line is always "New session pre-selects: ...".
-//   rows    {kind, name, sub, scope, tag, missing} (reachModel's Item) plus, only
+//   rows    {kind, kindId, name, sub, scope, tag, missing} (reachModel's Item) plus, only
 //           where it applies, fix (a Not home row), action (Old-style AWS) or
 //           original (a file shared from a private copy's original: a Files row
 //           that is not the CLAUDE.md imports one).

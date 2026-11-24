@@ -2966,7 +2966,10 @@ test("section glyph from template: free-text provider, mixed templates and a mis
 
 test("section glyph: AWS and GitHub Apps draw their kind, Stored values and Legacy secrets none", () => {
   const p = page({ width: 1200 });
-  const head = (g) => glyphsIn(p.box.credSection(g).querySelector("div.sec-h") || p.box.credSection(g));
+  const head = (g) => {
+    const sec = p.box.credSection(g);
+    return glyphsIn(sec.querySelector("div.sec-h") || sec);
+  };
   assert.deepStrictEqual(head({ key: "aws", title: "AWS", entries: [] }), ["cloud"]);
   assert.deepStrictEqual(head({ key: "github", title: "GitHub Apps", entries: [] }), ["si:github"]);
   assert.deepStrictEqual(glyphsIn(p.box.credSection({ key: "values", title: "Stored values", entries: [] })), []);
@@ -2986,10 +2989,9 @@ test("edit heading: a GitHub App edit carries si:github at 16 px before the name
   p.box.reply = credReply();
   await p.box.credAppForm({ name: "test-app", client_id: "Iv1.x", key_ref_kind: "store" });
   const title = p.byId["creds-body"].querySelector("span.grow");
-  assert.strictEqual(title.textContent, "test-app");
+  assert.strictEqual(title.textContent, "test-app", "no text from the glyph");
   assert.strictEqual(title.children[0].getAttribute("data-icon"), "si:github");
   assert.strictEqual(title.children[0].getAttribute("width"), "16");
-  assert.strictEqual(title.textContent, "test-app", "no text from the glyph");
 
   const add = page({ tab: true });
   add.box.reply = credReply();
