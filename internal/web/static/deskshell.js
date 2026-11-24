@@ -214,6 +214,25 @@ function deskRowKind(s, profile) {
   return null;
 }
 
+// TAB_TIER_LABEL: a session's tier as the pane's tab switcher words it. The keys name the glyphs, the sidebar chip's and
+// New session's (svgicon.js SVG_HOST_24, SVG_BOX_24, SVG_CLONE_24, which are tierpick.js's TP_ICONS).
+const TAB_TIER_LABEL = { host: "Host", box: "Box", clone: "Box clone" };
+
+// tabSwitchFacts: what a row of the pane's tab switcher shows for tab `t` (#365): its kind (claude, shell, file or
+// generic) and, for a session, the tier it runs on. Both come from declared fields, never the title: a viewer tab is a
+// file; a terminal tab's session (by id in `sessions`) is a Claude one or a shell by deskRowKind, the sidebar's rule;
+// the tier is the session's runtime and clone_of, read as tierBadge and rowChip read them (box, a clone when it has a
+// clone_of, else host). A session the list does not hold has no tier; an ended one keeps the tier it ran on, since
+// its tab still shows its terminal.
+function tabSwitchFacts(t, sessions, profiles) {
+  if (t && t.kind === "viewer") return { kind: "file", tier: null };
+  const s = t && t.kind === "terminal" ? (sessions || []).find((x) => x && x.id === t.id) : null;
+  if (!s) return { kind: "generic", tier: null };
+  const k = deskRowKind(s, (profiles || []).find((p) => p && p.name === s.agent));
+  const key = s.runtime === "box" ? (s.clone_of ? "clone" : "box") : "host";
+  return { kind: k ? k.kind : "generic", tier: { key, label: TAB_TIER_LABEL[key] } };
+}
+
 // rowSubline: the row's second line. What the session needs, in amber, when it
 // is blocked on you; otherwise its summary, else the activity word the old row
 // showed. A finished turn (F21-B) reads its summary like any session at rest, muted,
@@ -650,6 +669,6 @@ function paneTabsClass(defs) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskWsLabels, deskWsGroups, deskWsHeaderSig, wsCollapsedRead, wsCollapsedWrite, wsCollapsedToggle, DESK_WS_COLLAPSED_KEY, DESK_WS_COLLAPSED_CAP, deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, deskRowKind, DESK_CLONE_TITLE, rowSubline, bashCommand,
+  module.exports = { deskWsLabels, deskWsGroups, deskWsHeaderSig, wsCollapsedRead, wsCollapsedWrite, wsCollapsedToggle, DESK_WS_COLLAPSED_KEY, DESK_WS_COLLAPSED_CAP, deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, deskRowKind, tabSwitchFacts, DESK_CLONE_TITLE, rowSubline, bashCommand,
     paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneFilesToggle, paneTabsClass, modelLabel, metaUnitsOff };
 }

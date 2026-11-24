@@ -1189,6 +1189,14 @@
   #session-menu .menu-item[aria-current="true"] { font-weight: var(--w-semibold); }
   #session-menu .menu-check { flex: none; width: 16px; display: inline-flex; justify-content: center; color: var(--muted); }
   #session-menu > .menu-row > .menu-x { flex: none; font-size: var(--t-lg); line-height: 1; }
+  /* #365: a row's kind glyph and, for a session, its tier. A file's glyph is the Files tree's (.ft-icon's font); the
+     tier is the sidebar row's chip, glyph then word (.dchip, its box and host tones), kept whole while the title
+     ellipsizes before it. */
+  #session-menu .menu-item .menu-ficon { font-family: "Symbols Nerd Font"; line-height: 1; }
+  #session-menu .menu-item > .menu-tier { display: inline-flex; align-items: center; gap: 3px; }
+  #session-menu .menu-item .menu-tier .tchip-i { flex: none; }
+  #session-menu .menu-item .menu-tier.host .tchip-i { color: var(--fg); }
+  #session-menu .menu-item:hover > .menu-tier.box { background: var(--line); }
 
   /* --- the Files dock (spec 5.4, the dock design's Layout) ----------------- */
   /* A column right of the pane grid, full height: the panes shrink for it and nothing is covered. app.js sizes it
