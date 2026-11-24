@@ -40,6 +40,7 @@ type Inputs struct {
 	Arch       string              // the daemon's arch, "" when unknown
 	Info       *boximage.ImageInfo // nil when the daemon could not be asked
 	Cache      *Cache              // nil when none
+	CacheNewer bool                // the cache file is from a newer CuliBox (LoadCache said datacompat.ErrNewer)
 }
 
 // Report is the verdict and the facts it rests on, as the UI and doctor show them.
@@ -85,6 +86,9 @@ func Evaluate(in Inputs) Report {
 				r.WantCreated, r.WantClaudeCode = plat.Created, plat.ClaudeCode
 			}
 		}
+	}
+	if in.CacheNewer && NeedsNetwork(in) && in.Cache == nil {
+		r.CheckErr = ErrClassNewer
 	}
 	if r.Want == "" && in.Published != "" {
 		r.Want, r.WantSource = in.Published, SourceBaked

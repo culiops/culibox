@@ -581,9 +581,13 @@ func imageReport(in Input, dataDir string, f boxFacts) *boximagecheck.Report {
 	if in.LiveImageCheck {
 		ctx, cancel := context.WithTimeout(context.Background(), imageCheckTimeout)
 		defer cancel()
-		ii.Cache, _ = boximagecheck.RunIfDue(ctx, imageChecker(), dataDir, ii, true)
-	} else if cache, err := boximagecheck.LoadCache(dataDir); err == nil {
-		ii.Cache = cache
+		var err error
+		ii.Cache, err = boximagecheck.RunIfDue(ctx, imageChecker(), dataDir, ii, true)
+		ii.CacheNewer = errors.Is(err, datacompat.ErrNewer)
+	} else {
+		var err error
+		ii.Cache, err = boximagecheck.LoadCache(dataDir)
+		ii.CacheNewer = errors.Is(err, datacompat.ErrNewer)
 	}
 	r := boximagecheck.Evaluate(ii)
 	return &r

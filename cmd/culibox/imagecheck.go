@@ -160,9 +160,8 @@ func boxImageHook(cfg config.Config, dataDir string, d imageFacts) func(context.
 				}
 			}
 		}
-		if c, err := boximagecheck.LoadCache(dataDir); err == nil {
-			in.Cache = c
-		}
+		c, err := boximagecheck.LoadCache(dataDir)
+		in.Cache, in.CacheNewer = c, errors.Is(err, datacompat.ErrNewer)
 		return boximagecheck.Evaluate(in)
 	}
 }

@@ -209,6 +209,26 @@ func TestImageReportLiveCheckRunsAndSurvivesAFailedSave(t *testing.T) {
 	}
 }
 
+// A cache file from a newer CuliBox is named as such, with or without the live check
+// (RunIfDue returns the ErrNewer without asking anyone).
+func TestImageReportNamesANewerCheckFile(t *testing.T) {
+	useChecker(t, boximagecheck.Checker{Client: failingClient(t), Registry: "http://x.invalid", GitHubAPI: "http://x.invalid"})
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, boximagecheck.CacheFile), []byte(`{"version":9999}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := boxFacts{ServerArch: "amd64", ImageInfo: &boximage.ImageInfo{Present: true}}
+	for _, live := range []bool{false, true} {
+		r := imageReport(Input{Config: config.Config{BoxImage: "culiops/box:x"}, LiveImageCheck: live}, dir, f)
+		if r == nil || r.Verdict != boximagecheck.StaleUnknown || r.CheckErr != boximagecheck.ErrClassNewer {
+			t.Fatalf("live=%v: report = %+v", live, r)
+		}
+		if got := detail(imageUpdateRows(r)); !strings.Contains(got, "(newer check file)") {
+			t.Errorf("live=%v: row = %s", live, got)
+		}
+	}
+}
+
 func TestImageReportOffMeansNoCall(t *testing.T) {
 	useChecker(t, boximagecheck.Checker{Client: failingClient(t), Registry: "http://x.invalid", GitHubAPI: "http://x.invalid"})
 	off := false

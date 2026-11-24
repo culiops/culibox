@@ -218,6 +218,31 @@ func TestEvaluateLeftoverCacheStaysSilent(t *testing.T) {
 	}
 }
 
+// A cache file from a newer CuliBox is not "not checked yet": the caller says so
+// through CacheNewer and the report names it, where the check could have spoken.
+func TestEvaluateNewerCheckFile(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   Inputs
+		want string
+	}{
+		{"source build", Inputs{Configured: defaultImage, CheckOn: true, CacheNewer: true, Info: info("0", nil)}, ErrClassNewer},
+		{"explicit image", Inputs{Configured: defaultImage, Explicit: true, Published: ref("a"), CheckOn: true, CacheNewer: true, Info: info("0", nil)}, ErrClassNewer},
+		{"check off", Inputs{Configured: defaultImage, CacheNewer: true, Info: info("0", nil)}, ""},
+		{"release default", Inputs{Configured: defaultImage, Published: ref("a"), CheckOn: true, CacheNewer: true, Info: info("0", nil)}, ""},
+		{"not newer", Inputs{Configured: defaultImage, CheckOn: true, Info: info("0", nil)}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Evaluate(tc.in).CheckErr; got != tc.want {
+				t.Errorf("CheckErr = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if r := Evaluate(Inputs{Configured: defaultImage, CheckOn: true, CacheNewer: true, Info: info("0", nil)}); r.Verdict != StaleUnknown {
+		t.Errorf("verdict = %s, want stale-unknown", r.Verdict)
+	}
+}
+
 // Sizes are the registry's word, already capped per layer; the sum must still
 // not wrap however many layers claim the cap.
 func TestEvaluateMBDoesNotOverflow(t *testing.T) {

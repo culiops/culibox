@@ -26,6 +26,10 @@ const (
 	errScan        = "scan unreadable"
 )
 
+// ErrClassNewer is the CheckErr of a report whose cache file came from a newer
+// CuliBox: the check may have run, this build cannot read what it learned.
+const ErrClassNewer = "newer check file"
+
 // Checker runs the anonymous daily check. Client carries the caller's timeout and
 // proxy settings and is used as given; a nil Client is http.DefaultClient, so a
 // forgotten one cannot panic a background goroutine.

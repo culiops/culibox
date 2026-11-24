@@ -164,6 +164,20 @@ func TestBoxImageHookNilDockerAndBadCache(t *testing.T) {
 	}
 }
 
+// A newer CuliBox's check file reads as that, not as "not checked yet".
+func TestBoxImageHookNamesANewerCheckFile(t *testing.T) {
+	swapPublished(t, "") // a source build: the check applies
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, boximagecheck.CacheFile), []byte(`{"version":9999}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &imgFacts{arch: "amd64", info: boximage.ImageInfo{Present: true}}
+	rep := boxImageHook(config.Config{}, dir, f)(context.Background())
+	if rep.Verdict != boximagecheck.StaleUnknown || rep.CheckErr != boximagecheck.ErrClassNewer {
+		t.Fatalf("report = %+v", rep)
+	}
+}
+
 func fakeRegistryChecker(t *testing.T, hits *atomic.Int32, status int) boximagecheck.Checker {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
