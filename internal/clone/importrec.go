@@ -205,7 +205,9 @@ func openCreateRetryENOENT(open func() (*os.File, error)) (*os.File, error) {
 		if f, err = open(); !errors.Is(err, syscall.ENOENT) {
 			return f, err
 		}
-		time.Sleep(time.Duration(i+1) * time.Millisecond)
+		if i < lockOpenTries-1 {
+			time.Sleep(time.Duration(i+1) * time.Millisecond)
+		}
 	}
 	return f, err
 }

@@ -145,7 +145,11 @@ func lockReturnState(dataDir string) (*os.Root, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	f, err := dir.OpenFile(".lock", os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	// A first creation of .lock racing another writer can fail with a spurious
+	// ENOENT on macOS (#293, #346); see openCreateRetryENOENT.
+	f, err := openCreateRetryENOENT(func() (*os.File, error) {
+		return dir.OpenFile(".lock", os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	})
 	if err != nil {
 		dir.Close()
 		return nil, nil, err
