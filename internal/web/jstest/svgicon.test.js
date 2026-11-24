@@ -160,6 +160,89 @@ test("uiIcon cls appends", () => {
   assert.strictEqual(w.uiIcon("x", { cls: "" }).getAttribute("class"), "ui-icon");
 });
 
+// A stand-in document whose nodes can be deep-cloned (as a browser's can), counting the elements it creates.
+function cloneable(n) {
+  n.cloneNode = function (deep) {
+    const c = cloneable(node(this.tag, this.ns));
+    for (const [k, v] of this.attrs) c.attrs.push([k, v]);
+    if (deep) for (const ch of this.children) c.children.push(ch.cloneNode(true));
+    return c;
+  };
+  return n;
+}
+function cloneWorld() {
+  const made = { n: 0 };
+  const doc = { createElementNS: (ns, t) => { made.n++; return cloneable(node(t, ns)); } };
+  const ctx = vm.createContext({ document: doc });
+  const run = (src) => new vm.Script(src).runInContext(ctx);
+  run(read("icons.js"));
+  run(read("svgicon.js"));
+  return { w: ctx, made };
+}
+const deepDrawn = (n) => [line(n)].concat(n.children.map(deepDrawn));
+
+test("uiIcon builds a glyph once per name, size and class, then hands out deep clones with the same markup", () => {
+  const { w, made } = cloneWorld();
+  const first = w.uiIcon("chevron-right", { size: 14, cls: "ft-chev-r" });
+  const built = made.n;
+  assert.ok(built >= 2, "the first call builds the svg and its shapes");
+  const second = w.uiIcon("chevron-right", { size: 14, cls: "ft-chev-r" });
+  assert.strictEqual(made.n, built, "the second call creates no element: it clones the built one");
+  assert.notStrictEqual(first, second, "every call returns its own node");
+  assert.notStrictEqual(first.children[0], second.children[0], "and its own children");
+  assert.deepStrictEqual(deepDrawn(second), deepDrawn(first));
+  // Same markup as a build without the cache (a stand-in document with no cloneNode never caches).
+  assert.deepStrictEqual(deepDrawn(second), deepDrawn(world().uiIcon("chevron-right", { size: 14, cls: "ft-chev-r" })));
+  // Size and class are part of the key; a labelled glyph (free text) is built each time, never kept.
+  assert.strictEqual(w.uiIcon("chevron-right", { size: 12, cls: "ft-chev-r" }).getAttribute("width"), "12");
+  assert.strictEqual(w.uiIcon("chevron-right", { size: 14 }).getAttribute("class"), "ui-icon");
+  const n0 = made.n;
+  const lab = w.uiIcon("chevron-right", { size: 14, cls: "ft-chev-r", label: "Open" });
+  w.uiIcon("chevron-right", { size: 14, cls: "ft-chev-r", label: "Open" });
+  assert.strictEqual(made.n, n0 + 2 * built, "a labelled glyph is built each time");
+  assert.strictEqual(lab.getAttribute("aria-label"), "Open");
+  assert.strictEqual(lab.getAttribute("aria-hidden"), null);
+  assert.strictEqual(w.uiIcon("chevron-right", { size: 14, cls: "ft-chev-r" }).getAttribute("aria-label"), null);
+});
+
+test("uiIcon: changing a returned glyph never changes the next one", () => {
+  const { w } = cloneWorld();
+  const a = w.uiIcon("ellipsis", { size: 14 });
+  const want = deepDrawn(a);
+  a.setAttribute("class", "ui-icon changed");
+  a.setAttribute("id", "x1");
+  a.children[0].setAttribute("d", "M0 0");
+  a.children.push(node("circle", SVG_NS));
+  const b = w.uiIcon("ellipsis", { size: 14 });
+  assert.deepStrictEqual(deepDrawn(b), want);
+  b.removeAttribute("aria-hidden");
+  assert.deepStrictEqual(deepDrawn(w.uiIcon("ellipsis", { size: 14 })), want);
+});
+
+test("uiIcon: an unknown name still draws an empty glyph, every time, and is not kept", () => {
+  const { w, made } = cloneWorld();
+  for (const name of ["nope", "constructor", "__proto__", "toString", ""]) {
+    for (let i = 0; i < 2; i++) {
+      const svg = w.uiIcon(name);
+      assert.strictEqual(svg.tag, "svg");
+      assert.strictEqual(svg.children.length, 0, JSON.stringify(name) + " draws nothing");
+      assert.strictEqual(svg.getAttribute("data-icon"), name);
+    }
+  }
+  const before = made.n;
+  w.uiIcon("nope");
+  assert.strictEqual(made.n, before + 1, "an unknown name is built, not cached (a hostile name cannot grow the cache)");
+});
+
+test("uiIcon: a glyph built for one document is never handed to another", () => {
+  const { w } = cloneWorld();
+  w.uiIcon("x");
+  const other = { n: 0 };
+  w.document = { createElementNS: (ns, t) => { other.n++; return cloneable(node(t, ns)); } };
+  w.uiIcon("x");
+  assert.ok(other.n >= 2, "the new document builds its own glyph");
+});
+
 test("uiIcon never builds an icon from markup", () => {
   assert.ok(!/innerHTML|insertAdjacentHTML/.test(read("svgicon.js").replace(/\/\/.*$/gm, "")));
 });

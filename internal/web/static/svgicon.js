@@ -51,10 +51,28 @@ const iconSetOf = () => (typeof ICON_SET !== "undefined" ? ICON_SET : require(".
 //   label  makes the icon an image (role="img", aria-label) for the one place it carries meaning alone;
 //          without it the icon is decoration beside its text and hidden from assistive tech
 // A name that is not an own key of ICON_SET draws an empty <svg> (never throws, never text).
+// A known, unlabelled glyph is built once per name, size and class and every call returns a deep clone of it (#168: a 2000-row
+// tree folder asks for thousands of the same few glyphs); each call still gets its own node, so changing one changes no other.
+// The kept copies belong to one document. An unknown name or a label (free text) is never kept, so the cache is bounded by
+// the glyphs and sizes the code asks for.
+let uiIconKept = null;
+let uiIconKeptDoc = null;
 function uiIcon(name, opts) {
   const o = opts || {};
   const set = iconSetOf();
-  const entry = Object.prototype.hasOwnProperty.call(set, name) ? set[name] : null;
+  const known = Object.prototype.hasOwnProperty.call(set, name);
+  if (!known || o.label) return uiIconBuild(name, o, known ? set[name] : null);
+  if (uiIconKeptDoc !== document) { uiIconKept = new Map(); uiIconKeptDoc = document; }
+  const key = name + "\n" + (o.size || 14) + "\n" + (o.cls || "");
+  const kept = uiIconKept.get(key);
+  if (kept) return kept.cloneNode(true);
+  const svg = uiIconBuild(name, o, set[name]);
+  if (typeof svg.cloneNode === "function") uiIconKept.set(key, svg.cloneNode(true));
+  return svg;
+}
+
+// uiIconBuild draws uiIcon's glyph from its ICON_SET entry (null: an unknown name, an empty svg).
+function uiIconBuild(name, o, entry) {
   const svg = svgIcon(entry ? entry[1] : [], { viewBox: "0 0 24 24", strokeWidth: "2", size: o.size || 14 });
   svg.setAttribute("data-icon", name);
   if (entry && entry[0] === "f") {
