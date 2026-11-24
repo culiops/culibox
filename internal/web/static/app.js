@@ -7662,7 +7662,9 @@ function sessionRowFor(id) {
 document.addEventListener("click", (e) => {
   const menu = $("session-menu");
   if (!menu || !menu.classList.contains("open")) return;
-  if (!menu.contains(e.target) && e.target !== sessionMenuAnchor) closeSessionMenu(false);
+  // The anchor is the ⋯ button, and a click on its glyph lands on the <svg> (or its shape) inside it: contains, not ===.
+  const a = sessionMenuAnchor;
+  if (!menu.contains(e.target) && !(a && a.contains(e.target))) closeSessionMenu(false);
 });
 document.addEventListener("keydown", (e) => {
   const menu = $("session-menu");

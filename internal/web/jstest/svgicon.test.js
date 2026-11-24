@@ -206,3 +206,12 @@ test("only svgicon.js builds an <svg>", () => {
   }
   assert.deepStrictEqual(bad, []);
 });
+
+// An icon is decoration (aria-hidden, beside its text): a click on it belongs to the button around it, so handlers that
+// read e.target see the button and not the <svg> or its shape (#168). The one rule is in app.css, which every page loads.
+test(".ui-icon takes no pointer events, so the button stays the event target", () => {
+  const css = read("app.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const m = /(?:^|[}\s])\.ui-icon\s*\{([^}]*)\}/.exec(css);
+  assert.ok(m, "the shared .ui-icon base rule exists");
+  assert.match(m[1], /pointer-events:\s*none/);
+});

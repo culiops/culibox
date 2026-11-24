@@ -312,3 +312,48 @@ test("a row rebuilt under an open menu is built expanded (paintCompactRow reads 
   const phone = app.slice(app.indexOf('kb.className = "kbtn";'));
   assert.ok(!/aria-expanded/.test(phone.slice(0, phone.indexOf("right.appendChild(kb)"))), "the phone row's ⋯ keeps its attributes");
 });
+
+// The document click that closes the row menu (app.js): a click on the glyph inside the ⋯ button lands on the <svg> (or
+// its <circle>), not on the button, and must count as a click on the anchor. Before the fix `e.target !== sessionMenuAnchor`
+// closed the menu the same click had just opened. The listener is anonymous, so it is cut out by its opening line and run
+// against a stand-in document that keeps the handler it is given.
+function closerPage(open) {
+  const src = read("app.js");
+  const start = src.indexOf('document.addEventListener("click", (e) => {\n  const menu = $("session-menu");');
+  assert.ok(start >= 0, "the row menu's click closer is in app.js");
+  const end = src.indexOf("\n});\n", start) + 4;
+  const menu = { classList: { contains: (c) => c === "open" && open }, contains: (n) => n === menu };
+  const kb = { kids: [], contains(n) { return n === this || this.kids.includes(n); } };
+  const svg = { parent: kb }, circle = { parent: svg };
+  kb.kids.push(svg, circle);
+  svg.contains = (n) => n === svg || n === circle;
+  const closed = [];
+  let handler = null;
+  const ctx = vm.createContext({
+    document: { addEventListener: (t, h) => { if (t === "click") handler = h; } },
+    $: (id) => (id === "session-menu" ? menu : null),
+    sessionMenuAnchor: kb,
+    closeSessionMenu: (r) => closed.push(r),
+  });
+  new vm.Script(src.slice(start, end)).runInContext(ctx);
+  assert.ok(handler, "the closer registered a click listener");
+  return { click: (target) => handler({ target }), closed, kb, svg, circle, menu };
+}
+
+test("a click on the glyph inside the open menu's ⋯ button keeps the menu open (#168)", () => {
+  const p = closerPage(true);
+  p.click(p.kb);
+  p.click(p.svg);
+  p.click(p.circle);
+  p.click(p.menu);
+  assert.deepStrictEqual(p.closed, [], "the button, its svg and the svg's shape are all the anchor; the menu itself is inside");
+});
+
+test("a click elsewhere still closes the open row menu, and a closed menu ignores every click", () => {
+  const open = closerPage(true);
+  open.click({});
+  assert.deepStrictEqual(open.closed, [false], "outside: closes without returning focus");
+  const shut = closerPage(false);
+  shut.click({});
+  assert.deepStrictEqual(shut.closed, []);
+});
