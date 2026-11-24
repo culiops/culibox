@@ -15,8 +15,8 @@ import (
 func TestLockRetriesSpuriousENOENT(t *testing.T) {
 	s := Store{Dir: t.TempDir()}
 	enoent := &os.PathError{Op: "openat", Path: ".lock", Err: syscall.ENOENT}
-	real := lockOpen
-	t.Cleanup(func() { lockOpen = real })
+	orig := lockOpen
+	t.Cleanup(func() { lockOpen = orig })
 
 	calls := 0
 	lockOpen = func(dir *os.Root) (*os.File, error) {
@@ -24,7 +24,7 @@ func TestLockRetriesSpuriousENOENT(t *testing.T) {
 		if calls < 3 {
 			return nil, enoent
 		}
-		return real(dir)
+		return orig(dir)
 	}
 	if _, err := s.Merge(CloneKey("/repo", "b"), Record{Kind: "clone", CloneOf: "/repo", Branch: "b"}, time.Unix(1, 0), Report{}); err != nil || calls != 3 {
 		t.Fatalf("err=%v calls=%d; want success on the 3rd open", err, calls)

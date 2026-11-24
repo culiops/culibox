@@ -156,6 +156,9 @@ const maxGitdirBytes = 4096
 // alone, with no filesystem access, of whether the caller could serve them (a nil allow serves nothing). The dir is
 // then reached one component at a time with Lstat, so no link on the way is followed.
 //
+// common must be a real path with no link on it (callers pass a resolved one; git itself writes real paths into both
+// pointers): spelled through a link, no worktree would pass the walk or the back-pointer check.
+//
 // A pointer to any other place (/etc, another repository) fails the last check. The caller still decides whether a
 // checkout is one it may show (the fs policy); this only says which ones git has.
 func Worktrees(common string, max int, allow func(dir string) bool) []string {
