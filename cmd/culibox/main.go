@@ -821,7 +821,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// A newer profiles.json may hold overrides of the config seeds; with it
 	// unreadable, no spawn can be trusted to match what the user saved (#291).
 	lnch.SetProfilesGate(launcher.ProfilesNewerGate(parseErr))
-	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
+	// applyProfiles also re-reads running sessions' egress policy (#95); the
+	// first call, here, follows the restore above.
+	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, applyProfiles(lnch, mgr))
 	// #330: who changed which fields of which profile, and when, in the same
 	// audit as credential edits; a row that cannot be written stops the change.
 	pm.SetAudit(storeAudit)

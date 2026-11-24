@@ -839,6 +839,10 @@ type Info struct {
 	// binding's hosts), "open" (unbound, any host through the authenticated
 	// proxy) or "" (no egress control: host tier). Never the nonce.
 	Egress string `json:"egress,omitempty"`
+	// EgressChange is set when a profile edit changed the session's egress
+	// policy since spawn, or its box holds back part of what its profile asks
+	// for (#95); absent otherwise.
+	EgressChange *EgressChangeInfo `json:"egress_change,omitempty"`
 	// BundleDrops is what the box's config bundle left out and why (a config
 	// key, an MCP server, the plugin set, or the whole bundle). Boxed sessions
 	// whose bundle was consulted only; absent otherwise, so a host session's
@@ -936,9 +940,14 @@ type Session struct {
 	// edit to static_tokens never changes a running session's scope.
 	Tokens, PATs []config.StaticToken
 	// EgressAllow and EgressOpen are the profile's network policy as spawned
-	// (see config.Bindings). Immutable and read without the lock.
+	// (see config.Bindings). Immutable and read without the lock: they are in
+	// Bindings().Hash(), which names the box and the broker's binding directory.
+	// What the proxy enforces now is egress (#95).
 	EgressAllow []string
 	EgressOpen  bool
+	// egress is the live policy of a bound boxed session (#95): the spawn-time
+	// one until a profile edit changes it. Guarded by mu.
+	egress egressLive
 	// BrokerNonce is this spawn's broker-token nonce (set iff the session has
 	// any binding). Immutable, read without the lock. Never put it on the wire:
 	// Info leaves it out.
@@ -1477,7 +1486,8 @@ func (s *Session) Info() Info {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
 	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, ParentID: s.ParentID, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account, ResumeSkipped: s.resumeSkipped}
-	in.Egress = EgressMode(s.EgressNonce != "", s.Bindings().Any() && !s.EgressOpen)
+	in.Egress = EgressMode(s.EgressNonce != "", s.Bindings().Any() && !s.egressLocked().applied.Open)
+	in.EgressChange = s.egressChangeLocked()
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	in.HostDropped = slices.Clone(s.HostDropped)
 	in.HostBroker = s.HostBroker
@@ -1707,6 +1717,11 @@ type Manager struct {
 	boxes     Boxes       // nil = containment unavailable; every spawn is host tier
 	bundles   Bundles     // nil = boxed sessions run without user config
 	broker    BrokerHooks // nil = credential broker not running; bound profiles are refused
+	// egressMu serialises live egress refreshes (#95), so two never interleave
+	// a box's meet; taken before mu, never under it. egressLiveOn (guarded by
+	// mu) is set by the first RefreshEgress: per-box refreshes wait for it.
+	egressMu     sync.Mutex
+	egressLiveOn bool
 	// idMark is the highest id number ever issued per agent, persisted at
 	// idStatePath ("" = not persisted); see idfloor.go.
 	idMark      map[string]int
@@ -2908,6 +2923,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.GitHub = ghBinding
 	sess.Tokens, sess.PATs = tokens, pats
 	sess.EgressAllow, sess.EgressOpen = egressAllow, egressOpen
+	sess.egress = newEgressLive(egressPolicy{Allow: egressAllow, Open: egressOpen}, nil)
 	sess.HostDropped = slices.Clone(hostDropped)
 	sess.HostBroker, sess.HostDir = heldHost, hostDir // published: the session now owns the Host socket and dir
 	sess.BrokerNonce = nonce
@@ -2948,6 +2964,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
 	m.watchRetention(id, sess)
+	// A new member of a box whose policy may have changed live joins its
+	// meet, and pulls it down if its own profile is narrower (#95).
+	m.refreshEgressBox(sess)
 	return sess, nil
 }
 
@@ -3305,6 +3324,8 @@ func (m *Manager) egressForget(s *Session) {
 	if eg != nil {
 		eg.Forget(s.ID)
 	}
+	// The box lost a member: its meet may widen back to the others' (#95).
+	m.refreshEgressBox(s)
 }
 
 // withoutEnv drops every "NAME=..." entry whose NAME is listed.
@@ -4054,6 +4075,9 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.GitHub = md.GitHub
 	sess.Tokens, sess.PATs = md.Tokens, md.PATs
 	sess.EgressAllow, sess.EgressOpen = md.EgressAllow, md.EgressOpen
+	// A live change survives the restart, so a narrowed session is never
+	// briefly wider; the first profile-set apply then re-reads the profiles.
+	sess.egress = newEgressLive(egressPolicy{Allow: md.EgressAllow, Open: md.EgressOpen}, md.EgressLive)
 	sess.BrokerNonce = md.BrokerNonce
 	sess.EgressNonce = md.EgressNonce
 	if sess.EgressNonce == "" && md.BrokerNonce != "" {

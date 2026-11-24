@@ -494,6 +494,17 @@ func (l *AgentLauncher) EgressFor(agent string) ([]string, bool) {
 	return slices.Clone(cfg.EgressAllow), cfg.EgressOpen
 }
 
+// LiveEgressFor is EgressFor for a session already running (#95): ok is false
+// when the profile no longer exists or no longer resolves to the box tier, and
+// the session then fails closed.
+func (l *AgentLauncher) LiveEgressFor(agent string) (allow []string, open, ok bool) {
+	cfg, found := l.agent(agent)
+	if !found || l.tierOf(cfg) != config.RuntimeBox {
+		return nil, false, false
+	}
+	return slices.Clone(cfg.EgressAllow), cfg.EgressOpen, true
+}
+
 // SetStaticTokens installs the instance's static-token entries (deep-copied).
 // Safe to call again (a credential save pushes the new list); a running
 // session keeps the copy it was spawned with.
