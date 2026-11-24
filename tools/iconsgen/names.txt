@@ -2,6 +2,7 @@
 # Input of tools/iconsgen (docs/ICONS.md "Regenerating").
 activity
 arrow-down-to-line
+arrow-right
 arrow-right-to-line
 ban
 box
@@ -28,6 +29,7 @@ download
 ellipsis
 external-link
 eye
+file
 file-plus
 file-search
 file-text
@@ -49,6 +51,8 @@ loader-circle
 lock
 log-in
 maximize
+message-square-off
+message-square-reply
 minimize
 panel-bottom
 panel-left-close
@@ -61,6 +65,7 @@ pin
 plus
 power
 refresh-cw
+rotate-cw
 scroll-text
 search
 settings

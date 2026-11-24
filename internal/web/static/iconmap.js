@@ -60,6 +60,7 @@ const ICON_MENU = iconMapOf({
   split: "columns-2", duplicate: "copy-plus", end: "power", delete: "trash-2", interrupt: "pause",
   bringhome: "arrow-down-to-line", check: "check", download: "download", upload: "upload", refresh: "refresh-cw",
   collapse: "chevrons-down-up", insert: "arrow-right-to-line", "folder-plus": "folder-plus",
+  restart: "rotate-cw", "replies-on": "message-square-reply", "replies-off": "message-square-off",
 });
 
 // Where the shell bar docks a terminal. No legend covers it: the picks (port) match today's drawings (tabs.js).
@@ -84,9 +85,18 @@ const ICON_SYS_BANNER = iconMapOf({ unreachable: ICON_STATUS.unreachable, signed
 // The desktop sidebar row's own marks (G4 12): a companion shell's arrow under its parent, drawn at chip size 12.
 const ICON_ROW = iconMapOf({ nested: "corner-down-right" });
 
+// The command palette's result-type glyph by item.kind (G4 70-76): one glyph per KIND, never per command (G4 left-out
+// `n`). Session rows take their glyph from the declared agentKind instead (ICON_LOCKED "agent-claude" and "shell"), and
+// a session of no known kind draws none, so its activity dot stands alone. layout is the layout picker's four-pane glyph
+// (ICON_LAYOUT[4]): one concept, one glyph.
+const ICON_PALETTE_KIND = iconMapOf({
+  new: ICON_LOCKED.new, "session-action": "arrow-right", view: "arrow-right", kill: ICON_MENU.end, layout: ICON_LAYOUT[4],
+  settings: ICON_NAV.settings, file: "file",
+});
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE,
-    ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_ROW,
+    ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_ROW, ICON_PALETTE_KIND,
   };
 }

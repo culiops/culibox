@@ -80,6 +80,13 @@ function palSessionSub(s, mobile) {
   return (typeof plainSummary === "function" ? plainSummary : require("./attention.js").plainSummary)(sum);
 }
 
+// palAgentKind: the declared kind of a session item, "claude", "shell" or "" (unknown: the row draws its dot only). It is
+// deskRowKind's answer for the session and its profile, the sidebar row's own test, never read from a title or a command.
+function palAgentKind(s, profile) {
+  const k = (typeof deskRowKind === "function" ? deskRowKind : require("./deskshell.js").deskRowKind)(s, profile);
+  return k ? k.kind : "";
+}
+
 // palSessionDot: a session row's dot. Desktop draws deskDot, the sidebar's and the
 // pane header's dot, so a finished turn is neutral here too (F21-B: amber means
 // blocked on you); the phone keeps activityClass(s.activity) exactly as it was.
@@ -161,7 +168,7 @@ function paletteSessions(mac) {
     // colour/label for the same state.
     const act = palSessionDot(s, mobile);
     return {
-      kind: "session", label: name, hint: hintN || (s.cwd ? shortPath(s.cwd) : ""),
+      kind: "session", label: name, agentKind: palAgentKind(s, profiles.find((p) => p.name === s.agent)), hint: hintN || (s.cwd ? shortPath(s.cwd) : ""),
       sub: palSessionSub(s, mobile), match: palSessionMatchText(s),
       dotCls: act.cls, dotTitle: act.title,
       run: palSessionRun(s, isNestedShell(s, lastSessions), { reveal: revealShell, open: openTerminal }),
@@ -424,15 +431,21 @@ function palGroup(items) {
   return PAL_SECTIONS.flatMap((s) => buckets[s].map((it) => ({ it, section: s })));
 }
 
+// palMobile: the phone UI (#340 froze it: no new icon there), where a row keeps its text glyphs.
+function palMobile() {
+  return typeof mobileActive === "function" && mobileActive(window.innerWidth);
+}
+
 // palGlyph builds the leading per-row marker (mockup D4): a session's own
 // activity dot (the exact <span class="dot ..."> the sidebar renders, built
 // from the same activityClass() classes — paletteSessions already attached
-// dotCls/dotTitle for this), a file's ▸, or a command's >. The > here is a
-// separate, decorative glyph from the ">" the user can TYPE into #pal-input
-// to switch to commands-only filtering (see palRefresh's `raw.charAt(0) ===
-// ">"` check) — one lives in the search field, this one in a COMMANDS row, so
-// neither is "the same >" doing two jobs.
-function palGlyph(it) {
+// dotCls/dotTitle for this). On desktop every other row's marker is its type
+// icon (palTypeIconName), so its glyph column is an empty cell that keeps the
+// labels aligned; the phone keeps a file's ▸ and a command's >. The ">" the
+// user can TYPE into #pal-input to switch to commands-only filtering (see
+// palRefresh's `raw.charAt(0) === ">"` check) is the search field's own
+// character, a separate thing from this decorative one.
+function palGlyph(it, mobile) {
   const g = document.createElement("span");
   g.className = "pal-glyph";
   g.setAttribute("aria-hidden", "true"); // decorative; the row's own label/hint carry the meaning
@@ -441,22 +454,46 @@ function palGlyph(it) {
     dot.className = it.dotCls || "dot unknown";
     if (it.dotTitle) dot.title = it.dotTitle; // mouse-hover only; the glyph column itself is aria-hidden
     g.append(dot);
-  } else if (it.kind === "file") {
-    g.textContent = "▸";
-  } else {
-    g.textContent = ">";
+  } else if (mobile) {
+    g.textContent = it.kind === "file" ? "▸" : ">";
   }
   return g;
+}
+
+// palTypeIconName: the glyph that says what kind of result a row is, "" for none. A session's is its declared
+// agentKind (the Claude mark or the terminal; "" when the kind is unknown, so the dot stands alone); any other row's is
+// ICON_PALETTE_KIND[item.kind]: one glyph per kind, never per command.
+function palTypeIconName(it) {
+  if (it.kind === "session") {
+    return it.agentKind === "claude" ? ICON_LOCKED["agent-claude"] : it.agentKind === "shell" ? ICON_LOCKED.shell : "";
+  }
+  return iconOf(ICON_PALETTE_KIND, it.kind);
+}
+
+// palRowLabel: the text a row draws. A desktop "new" entry's "+ " prefix was the plus glyph's text stand-in (G4 72),
+// so the row drops it; the item keeps its label, which the filter matches and the failure toast names.
+function palRowLabel(it, mobile) {
+  return it.kind === "new" && !mobile ? it.label.replace(/^\+ /, "") : it.label;
 }
 
 function palBuildRow(it, idx, selected) {
   const li = document.createElement("li");
   li.className = "pal-row" + (selected ? " sel" : "");
-  li.append(palGlyph(it));
+  const mobile = palMobile();
+  li.append(palGlyph(it, mobile));
+  const typeIcon = mobile ? "" : palTypeIconName(it);
+  if (typeIcon) li.append(uiIcon(typeIcon, { size: 14, cls: "pal-ti" }));
+  else if (!mobile) {
+    // A session of no known kind draws no icon, but its label still starts where every other row's does.
+    const gap = document.createElement("span");
+    gap.className = "pal-ti-gap";
+    gap.setAttribute("aria-hidden", "true");
+    li.append(gap);
+  }
   const label = document.createElement("span");
   label.className = "pal-label";
-  label.textContent = it.label;
-  label.title = it.title || it.label;
+  label.textContent = palRowLabel(it, mobile);
+  label.title = it.title || label.textContent;
   li.append(label);
   if (it.sub) {
     // One-line summary beside the session's name (spec §2.6); clipped by CSS.
@@ -479,7 +516,8 @@ function palBuildRow(it, idx, selected) {
     const cp = document.createElement("button");
     cp.type = "button";
     cp.className = "pal-copy";
-    cp.textContent = "⧉";
+    if (mobile) cp.textContent = "⧉";
+    else cp.append(uiIcon(ICON_ACTION["copy-text"], { size: 14 }));
     cp.title = "Copy path";
     cp.setAttribute("aria-label", "Copy path");
     cp.onclick = (e) => {
@@ -606,5 +644,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palSessionSub, palSessionDot, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns, palettePageCommands };
+  module.exports = { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palSessionSub, palAgentKind, palSessionDot, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns, palettePageCommands };
 }

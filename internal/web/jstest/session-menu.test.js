@@ -78,7 +78,7 @@ test("desktop: the row menu is four groups of kit rows, a separator between grou
   assert.deepStrictEqual(t.menu.children.map(shape), [
     btn("pencil-line", "Rename…"), SEP,
     btn("folder-tree", "Open files here"), btn("chart-pie", "Context by tool"), btn("clipboard-copy", "Copy working directory"), btn("columns-2", "Open in new pane"), SEP,
-    btn("pause", "Interrupt"), btn("", "Allow replies"), btn("arrow-down-to-line", "Bring work home now"), btn("copy-plus", "Duplicate…"), SEP,
+    btn("pause", "Interrupt"), btn("message-square-reply", "Allow replies"), btn("arrow-down-to-line", "Bring work home now"), btn("copy-plus", "Duplicate…"), SEP,
     btn("power", "End session…", true),
   ]);
   const kids = t.menu.children;
@@ -103,7 +103,7 @@ test("desktop: every icon is a vendored glyph (uiIcon, 14px), never a font glyph
   t.open({}, live);
   const slots = t.menu.children.filter((n) => n.tag === "button").map((b) => b.children[0]);
   const drawn = slots.filter((sl) => sl.children.length);
-  assert.strictEqual(drawn.length, 9, "nine of the ten rows draw an icon; Allow replies keeps an empty slot");
+  assert.strictEqual(drawn.length, 10, "all ten rows draw an icon");
   for (const sl of slots) {
     assert.strictEqual(sl.textContent, "", "no glyph text in the icon slot");
     assert.strictEqual(sl.attrs["aria-hidden"], "true");
@@ -119,6 +119,24 @@ test("desktop: every icon is a vendored glyph (uiIcon, 14px), never a font glyph
       ["0 0 24 24", "true", "none", "currentColor", "2", "round", "round", "14", "14"], kind);
     assert.ok(svg.children.length >= 1, kind + " has a shape");
   }
+});
+
+test("restart and replies kinds: each draws its own vendored glyph in the menu", () => {
+  const { menuIconSvg } = setup(1440).ctx;
+  assert.strictEqual(menuIcon("restart"), "restart");
+  assert.strictEqual(menuIcon("replies-on"), "replies-on");
+  assert.strictEqual(menuIcon("replies-off"), "replies-off");
+  assert.strictEqual(menuIconSvg("restart").attrs["data-icon"], "rotate-cw");
+  assert.strictEqual(menuIconSvg("replies-on").attrs["data-icon"], "message-square-reply");
+  assert.strictEqual(menuIconSvg("replies-off").attrs["data-icon"], "message-square-off");
+  // The rows themselves: an exited session offers Restart, a live reply-enabled one offers Stop replies.
+  const iconOfRow = (t, text) => t.menu.children.filter((n) => n.tag === "button").find((r) => r.children[1].textContent.startsWith(text)).children[0].children[0].attrs["data-icon"];
+  const ended = setup(1440);
+  ended.open({}, { id: "s3", claude: true, cwd: "/x", status: "exited", exited: true });
+  assert.strictEqual(iconOfRow(ended, "Restart"), "rotate-cw");
+  const on = setup(1440);
+  on.open({}, { id: "s4", claude: true, cwd: "/x", status: "live", replyable: true });
+  assert.strictEqual(iconOfRow(on, "Stop replies"), "message-square-off");
 });
 
 test("desktop: Duplicate and Copy working directory are two glyphs, so the two rows read apart", () => {

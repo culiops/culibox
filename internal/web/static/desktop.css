@@ -4065,6 +4065,12 @@
   #pal-list li.pal-row.sel .pal-hint { color: var(--muted); }
   #pal-list .pal-copy { border-radius: var(--r-chip); }
   #pal-list .pal-copy:hover { background: var(--line); }
+  /* The row's type icon (#168 G4 70-76): muted, full colour on the selected row; the copy button holds only its glyph. */
+  #pal-list .pal-ti { flex: none; margin: 0; color: var(--muted); }
+  #pal-list li.pal-row.sel .pal-ti { color: var(--fg); }
+  #pal-list .pal-ti-gap { flex: none; width: 14px; }
+  #pal-list .pal-copy { padding: 1px 4px; } /* 14 + 2: the selected row, which shows the button, stays as tall as the rest */
+  #pal-list .pal-copy .ui-icon { display: block; }
   #pal-empty { padding: 16px 20px; font-size: var(--t-md); color: var(--muted); }
 
   /* Toast: a --raise card, a left rule only for error (red) and warn (amber; the clone

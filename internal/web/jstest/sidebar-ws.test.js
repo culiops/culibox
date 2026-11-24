@@ -432,6 +432,8 @@ test("the palette lists every session and numbers only the visible ones", () => 
     palReg: () => ({ jumpHint: (n) => "K" + n }),
     shortPath: (p) => p,
     palSessionDot: () => ({ cls: "dot", title: "" }),
+    palAgentKind: () => "",
+    profiles: [],
     palSessionSub: () => "",
     palSessionMatchText: (s) => s.name,
     palSessionRun: () => () => {},
