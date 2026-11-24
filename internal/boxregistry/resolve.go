@@ -17,6 +17,9 @@ import (
 	boximage "github.com/culiops/culibox/docker/culibox"
 )
 
+// Strings the registry supplies are printed with %q: this runs in a GitHub
+// Actions step, which reads "::" commands from a line's start.
+
 // maxBody caps every registry response: an index, a manifest or an image config
 // is a few KB.
 const maxBody = 4 << 20
@@ -45,6 +48,10 @@ type descriptor struct {
 	} `json:"platform"`
 }
 
+// maxLayerSize is the most a layer may claim: sizes are the registry's word and
+// feed a sum shown to the user.
+const maxLayerSize = 1 << 40
+
 // Layer is one compressed layer of a platform's image, as its manifest lists it.
 type Layer struct {
 	Digest string
@@ -59,6 +66,9 @@ type Platform struct {
 	DiffIDs    []string  // the config's rootfs.diff_ids; nil when there are not as many as Layers
 }
 
+// Layers and DiffIDs are nil when unusable (an implausible size, a malformed or
+// miscounted diff id): the platform still resolves, it just has no download figure.
+
 // Index is a resolved published image: the ref to pull and what each platform
 // (keyed by architecture, "amd64" or "arm64") says about it.
 type Index struct {
@@ -66,9 +76,6 @@ type Index struct {
 	Platforms map[string]Platform
 }
 
-// Strings the registry supplies are printed with %q: this runs in a GitHub
-// Actions step, which reads "::" commands from a line's start.
-//
 // Resolve finds the published box image built from the Dockerfile whose Hash is
 // hash: the index tagged dockerfile-<hash> in repoPath on registry. It returns
 // boximage.PublishedRepo@<index digest> only when the index holds exactly
@@ -160,9 +167,13 @@ func checkPlatform(get func(kind, ref, accept string) ([]byte, http.Header, erro
 	// Layer digests are only recorded, never fetched, but they reach the cache
 	// and the UI, so they get the same form check as the manifests.
 	layers := make([]Layer, 0, len(man.Layers))
+	sizesOK := true
 	for _, l := range man.Layers {
 		if !digestForm.MatchString(l.Digest) {
 			return Platform{}, fmt.Errorf("manifest %q layer digest %q is not sha256:<64 hex>", m.Digest, l.Digest)
+		}
+		if l.Size < 0 || l.Size > maxLayerSize {
+			sizesOK = false
 		}
 		layers = append(layers, Layer{Digest: l.Digest, Size: l.Size})
 	}
@@ -201,8 +212,11 @@ func checkPlatform(get func(kind, ref, accept string) ([]byte, http.Header, erro
 		facts.ClaudeCode = v
 	}
 	// A diff id per layer or none: a count that differs cannot be matched layer
-	// for layer, so it gives no download figure.
-	if len(cfg.RootFS.DiffIDs) == len(layers) {
+	// for layer, so it gives no download figure. Nor does a diff id of another
+	// form, or a size no layer has: the platform is kept, those facts are not.
+	if !sizesOK {
+		facts.Layers = nil
+	} else if len(cfg.RootFS.DiffIDs) == len(layers) && !slices.ContainsFunc(cfg.RootFS.DiffIDs, func(d string) bool { return !digestForm.MatchString(d) }) {
 		facts.DiffIDs = cfg.RootFS.DiffIDs
 	}
 	return facts, nil

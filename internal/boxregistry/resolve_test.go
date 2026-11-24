@@ -388,3 +388,45 @@ func TestResolveRejectsMalformedDigest(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A size is the registry's word and feeds a download total: an impossible one
+// drops the platform's layers and diff ids, not the platform.
+func TestResolveDropsImplausibleLayerSizes(t *testing.T) {
+	for name, size := range map[string]int64{"negative": -1, "over 1 TiB": 1<<40 + 1} {
+		t.Run(name, func(t *testing.T) {
+			r := newRegistryWith(t, func(arch string, f *fixture) {
+				if arch == "arm64" {
+					f.layers[1].size = size
+				}
+			}, both(testHash)...)
+			got, err := resolveFrom(t, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p := got.Platforms["arm64"]; p.Layers != nil || p.DiffIDs != nil {
+				t.Errorf("arm64 = %+v, want no layers and no diff ids", p)
+			}
+			if p := got.Platforms["amd64"]; len(p.Layers) != 2 || len(p.DiffIDs) != 2 {
+				t.Errorf("amd64 = %+v, want its facts kept", p)
+			}
+		})
+	}
+}
+
+func TestResolveDropsMalformedDiffIDs(t *testing.T) {
+	r := newRegistryWith(t, func(arch string, f *fixture) {
+		if arch == "arm64" {
+			f.diffIDs[0] = "sha256:ab\n::warning::x"
+		}
+	}, both(testHash)...)
+	got, err := resolveFrom(t, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := got.Platforms["arm64"]; p.DiffIDs != nil || len(p.Layers) != 2 {
+		t.Errorf("arm64 = %+v, want DiffIDs nil and its 2 layers", p)
+	}
+	if p := got.Platforms["amd64"]; len(p.DiffIDs) != 2 {
+		t.Errorf("amd64 DiffIDs = %v, want kept", p.DiffIDs)
+	}
+}
