@@ -811,9 +811,10 @@ test("a card too narrow for the fixed columns sizes them to content, in a contai
   assert.strictEqual(card.get("overflow"), "hidden", "still clips the row tint to the corners where there is room");
   const fixed = [1, 2, 3, 5].reduce((n, i) => n + parseInt(decls(AU + " .au-tbl th:nth-child(" + i + ")").get("width"), 10), 0);
   assert.strictEqual(fixed, 528);
-  // Two @containers, both on the card: the first below the fixed columns plus ~240px for What, the second (the narrow tier) below.
+  // Three @containers, all on the card: the first below the fixed columns plus ~240px for What, the second (the narrow tier) below,
+  // the third at and above the fixed layout (the Outcome's one line, next test).
   const queries = [...new Set(CONTAINER_RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(AU + " .au-tbl"))).flatMap((r) => r.at.filter((a) => a.startsWith("@container"))))];
-  assert.deepStrictEqual(queries, ["@container au-card (max-width: 769px)", "@container au-card (max-width: 479px)"]);
+  assert.deepStrictEqual(queries, ["@container au-card (max-width: 769px)", "@container au-card (max-width: 479px)", "@container au-card (min-width: 770px)"]);
   const max = Number(/max-width:\s*(\d+)px/.exec(queries[0])[1]);
   assert.ok(max + 1 >= fixed + 240, "What keeps about 240px (" + (max + 1 - fixed) + "px)");
   assert.ok(max + 1 <= fixed + 260, "and the fixed layout is not given up sooner than that");
@@ -822,13 +823,11 @@ test("a card too narrow for the fixed columns sizes them to content, in a contai
   assert.strictEqual(inside(AU + " .au-tbl").get("table-layout"), "auto");
   for (const i of [1, 2, 3, 5]) assert.strictEqual(inside(AU + " .au-tbl th:nth-child(" + i + ")").get("width"), "auto", "th " + i);
   // Nothing else changes in the narrow card: What stays the one column with no width of its own, and the wrap cells keep
-  // wrapping (the base rules above are not repeated or undone here). The one undo is the Outcome: the fixed layout keeps it on
-  // one line beside its glyph (#168 G2 22), the content-sized columns of the narrow card wrap it again.
+  // wrapping (the base rules above are not repeated or undone here).
   assert.deepStrictEqual(tier(769).filter((r) => parts(r.selector).some((s) => s.startsWith(AU))).flatMap((r) => [...r.decls.keys()]).sort(),
-    ["display", "table-layout", "white-space", "width"]);
+    ["display", "table-layout", "width"]);
   assert.strictEqual(inside(AU + " .au-tbl :is(td.au-kind, td.au-out) > .ui-icon").get("display"), "none", "no glyph where What would pay for it");
-  assert.strictEqual(decls(AU + " .au-tbl td.au-out").get("white-space"), "nowrap");
-  assert.strictEqual(inside(AU + " .au-tbl td.au-out").get("white-space"), "normal");
+
 
   // Under 480px of card (a window of 840px or less) the columns' own minimums still overran it (Gate 3 D1: What 54px at 701px, the
   // table 53px wider than its card, Outcome cut). Time, Session, Kind and Outcome are held to their narrowest (1%: a column never
@@ -853,6 +852,31 @@ test("a card too narrow for the fixed columns sizes them to content, in a contai
   // The base rules come first: a container rule has the same weight as the base one it undoes, so the later one wins.
   const src = stripComments(read("desktop.css"));
   assert.ok(src.indexOf("@container au-card") > src.indexOf(AU + " .au-tbl th:nth-child(5) { width: 150px; }"));
+});
+
+// The Outcome stays on one line only in the fixed layout (a card of 770px or more), where its glyph shows and the 150px column has
+// no room to spare (#168 G2 22). The cascade is simulated: every rule that lists the Outcome cell, in source order, whose container
+// condition holds at that card width; the last white-space wins. A container rule has no extra weight, so this fails if the
+// nowrap comes before the narrow card's wrap or is a base rule.
+test("the Outcome is one line at a card of 770px or more and wraps below, whatever the rule order", () => {
+  const sel = AU + " .au-tbl td.au-out";
+  const holds = (r, w) => r.at.filter((a) => a.startsWith("@container")).every((a) => {
+    const m = /\((min|max)-width:\s*(\d+)px\)/.exec(a);
+    return m && (m[1] === "min" ? w >= Number(m[2]) : w <= Number(m[2]));
+  });
+  const ws = (w) => {
+    let v;
+    for (const r of RULES) if (parts(r.selector).includes(sel) && r.decls.has("white-space") && holds(r, w)) v = r.decls.get("white-space");
+    return v;
+  };
+  for (const w of [340, 399, 479, 480, 600, 769]) assert.strictEqual(ws(w), "normal", w + "px card wraps");
+  for (const w of [770, 919, 1079]) assert.strictEqual(ws(w), "nowrap", w + "px card is one line");
+  // The nowrap is a container rule on the card, not a base rule.
+  assert.ok(!BASE_RULES.some((r) => parts(r.selector).includes(sel) && r.decls.get("white-space") === "nowrap"));
+  // Its glyph is hidden exactly where the Outcome wraps.
+  const hidden = (w) => CONTAINER_RULES.some((r) => parts(r.selector).includes(AU + " .au-tbl :is(td.au-kind, td.au-out) > .ui-icon") && r.decls.get("display") === "none" && holds(r, w));
+  assert.strictEqual(hidden(769), true);
+  assert.strictEqual(hidden(770), false);
 });
 
 test("the Time cell keeps its text and holds the date as one run, so a narrow card wraps it at the space", () => {
@@ -936,11 +960,11 @@ test("the Audit and Analytics pages' text sits on the kit's 20px line, not the b
   assert.strictEqual(decls(".t-sm").get("line-height"), "var(--lh-sm)");
 });
 
-test("What and Session wrap, never clip: normal white-space, anywhere, 20px lines, 6px above and below", () => {
+test("Session, What and Outcome wrap by default: normal white-space, anywhere, 20px lines, 6px above and below", () => {
   for (const cell of ["au-sess", "au-what", "au-out"]) {
     const c = decls(AU + " .au-tbl td." + cell);
-    // The Outcome is the exception in the fixed layout: one line beside its glyph (#168 G2 22); the narrow card wraps it (above).
-    assert.strictEqual(c.get("white-space"), cell === "au-out" ? "nowrap" : "normal", cell);
+    // The base rule: the Outcome's one line in the fixed layout is a container rule on top of this (next test).
+    assert.strictEqual(c.get("white-space"), "normal", cell);
     assert.strictEqual(c.get("overflow-wrap"), "anywhere", cell);
     assert.strictEqual(c.get("line-height"), "var(--lh-md)", cell);
     assert.strictEqual(c.get("padding-top"), "6px", cell);

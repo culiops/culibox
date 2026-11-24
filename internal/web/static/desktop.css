@@ -3654,7 +3654,6 @@
     /* The glyphs would take 40px of What here and push the table past its card at 760px; without them this card is what it was
        before the glyphs (#168), so the glyphs show only where the columns are fixed and What has room. */
     #page-host > #audit-page.as-page .au-tbl :is(td.au-kind, td.au-out) > .ui-icon { display: none; }
-    #page-host > #audit-page.as-page .au-tbl td.au-out { white-space: normal; }
     #page-host > #audit-page.as-page .au-tbl th:nth-child(1),
     #page-host > #audit-page.as-page .au-tbl th:nth-child(2),
     #page-host > #audit-page.as-page .au-tbl th:nth-child(3),
@@ -3689,10 +3688,15 @@
      6px gap; a seg item is not, so each glyph carries the 6px. */
   #page-host > #audit-page.as-page .au-tbl :is(td.au-kind, td.au-out) > .ui-icon,
   #page-host > #audit-page.as-page #au-filters .seg-item > .ui-icon { margin-right: 6px; }
-  /* In the fixed layout the 150px Outcome column holds 126px of text and the glyph takes 20 of it, so "unlock failed · you" (112px)
-     wrapped. There the Outcome stays on one line, spilling the few px it needs into its own right padding (the frame's gate fix);
-     the narrow card, whose columns size to content, wraps it again below. */
-  #page-host > #audit-page.as-page .au-tbl td.au-out { white-space: nowrap; }
+  /* In the fixed layout (a card of 770px or more) the Outcome stays on one line beside its glyph (the frame's gate fix): the column
+     is 150px, less 12px of padding a side, so 126px of text and glyph, and the nowrap text may spill into its own right padding,
+     about 138px of glyph plus text in all. The longest real outcomes today are about 132px (`refused · API token` with its
+     glyph); a longer one would be cut by the card's edge, not wrapped. Below 770px the columns size to content, the glyph is
+     hidden and the base rule above wraps it, as before. This rule is inside the container query, not a base rule: a container
+     rule adds no weight, so it must come after the base white-space it overrides and apply only here. */
+  @container au-card (min-width: 770px) {
+    #page-host > #audit-page.as-page .au-tbl td.au-out { white-space: nowrap; }
+  }
   /* au-ok has the muted rules' weight and comes after them, so it wins; au-bad out-weighs them. */
   #page-host > #audit-page.as-page .au-tbl td.au-ok { color: var(--ok); }
   #page-host > #audit-page.as-page .au-tbl td.au-kind.au-bad,
