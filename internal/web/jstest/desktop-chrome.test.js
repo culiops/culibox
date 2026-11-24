@@ -785,3 +785,13 @@ test("the rail: 12px above, 6px apart, dots 32x32, + the kit's 24px icon button 
   assert.match(add, /background:\s*var\(--accent\)/, "the decided accent stays");
   assert.match(decl(".ri.on"), /background:\s*var\(--raise\)[^}]*box-shadow:\s*inset 2px 0 0 var\(--accent\)/, "C1: selected = raise + the accent inset");
 });
+
+// withPending swaps the button's content for its busy label, and the compact rule sets font-size 0, so the plus glyph is
+// gone and the label is invisible: a busy ::before keeps something visible for the pending window (#168 fix wave).
+test("+ Shell: a narrow button still shows a busy mark while withPending holds its label", () => {
+  const compact = headerRule(/\.ph-sep\s*\{/).body;
+  const m = /\.ph-shell\.busy::before\s*\{([^}]*)\}/.exec(compact);
+  assert.ok(m, "the compact rule draws a busy ::before");
+  assert.match(m[1], /content:\s*"…"/);
+  assert.match(m[1], /font:\s*500 var\(--t-md\)\/1 var\(--font-ui\)/, "it sets its own font: the button's is size 0");
+});

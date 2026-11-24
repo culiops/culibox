@@ -691,7 +691,7 @@
      keeps its own line above the links and is never cut. With the cost hidden the links keep today's place. */
   #side-foot .xlinks { display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 2px; font-size: var(--t-sm); container-type: inline-size; }
   /* #168: each footer link is one line, glyph then word, 6px apart (inline-flex, nowrap: the glyph never stacks over the word).
-     When the three do not fit side by side (measured: the three need 232px of row, a sidebar under 264px; the query leaves 8px spare) the row drops the glyphs, so
+     When the three do not fit side by side (measured: the three need 232px of row, so the row is 240px wide at a sidebar of about 272px; the query leaves 8px spare) the row drops the glyphs, so
      the words never wrap or clip. */
   #side-foot .side-links button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
   #side-foot .side-links button[hidden] { display: none; }
@@ -1069,6 +1069,8 @@
     /* 14px glyph + 5px each side + the 1px border = 26px, the "+" text's own 26.7px width: the floor rules below keep their slack. */
     .ph-shell { font-size: 0; padding: 0 5px; gap: 0; }
     .ph-shell .ph-sh-i { display: block; }
+    /* withPending swaps the button's content for its busy label, which font-size 0 hides along with the glyph: the "…" keeps a busy mark in view. */
+    .ph-shell.busy::before { content: "…"; font: 500 var(--t-md)/1 var(--font-ui); }
   }
   /* Too narrow for three words beside Files (the compact text look needs a 439px pane,
      419px of content box, measured): the three tabs and Files as icons, 24px squares like
