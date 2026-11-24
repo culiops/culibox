@@ -33,6 +33,19 @@ var zshrc []byte
 // image older than this binary.
 const LabelHash = "io.culiops.agent-box.dockerfile"
 
+// LabelClaudeCode holds the Claude Code version the image was built with, so the
+// version can be read from the image without running it.
+const LabelClaudeCode = "io.culiops.agent-box.claude-code"
+
+var claudeCodeVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]{1,32})?$`)
+
+// ValidClaudeCode reports whether s has the shape of a Claude Code version: x.y.z
+// with an optional short suffix. A label value is checked with it before it is
+// taken for a version.
+func ValidClaudeCode(s string) bool {
+	return claudeCodeVersion.MatchString(s)
+}
+
 // Hash is the first 12 hex digits of the embedded Dockerfile's sha256.
 func Hash() string {
 	sum := sha256.Sum256(dockerfile)

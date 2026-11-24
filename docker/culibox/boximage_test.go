@@ -962,6 +962,37 @@ func TestDockerfileClaudeCodeIsTheLastPin(t *testing.T) {
 	}
 }
 
+// doctor and Settings read the Claude Code version back from the image label, so
+// the label must name the same ARG the install pins, in the final stage, and be
+// the file's last instruction: it moves no layer and invalidates nothing above it.
+func TestDockerfileLabelsClaudeCode(t *testing.T) {
+	df := string(dockerfile)
+	const label = `LABEL io.culiops.agent-box.claude-code="${CLAUDE_CODE_VERSION}"`
+	if LabelClaudeCode != "io.culiops.agent-box.claude-code" {
+		t.Errorf("LabelClaudeCode = %q", LabelClaudeCode)
+	}
+	final := df[strings.LastIndex(df, "\nFROM ")+1:]
+	var labels []string
+	for _, line := range strings.Split(final, "\n") {
+		if strings.HasPrefix(line, "LABEL "+LabelClaudeCode+"=") {
+			labels = append(labels, line)
+		}
+	}
+	if len(labels) != 1 || labels[0] != label {
+		t.Fatalf("want exactly one %q in the final stage, got %q", label, labels)
+	}
+	arg := strings.Index(final, "\nARG CLAUDE_CODE_VERSION=")
+	if arg < 0 {
+		t.Fatal("no ARG CLAUDE_CODE_VERSION in the final stage")
+	}
+	if strings.Index(final, label) < arg {
+		t.Error("the LABEL comes before ARG CLAUDE_CODE_VERSION")
+	}
+	if ins := dockerfileInstructions(); ins[len(ins)-1] != label {
+		t.Errorf("the LABEL must be the file's last instruction, got %q", ins[len(ins)-1])
+	}
+}
+
 // stageInstructions returns the instructions of the stage whose FROM line
 // matches header, up to (not including) the next FROM.
 func stageInstructions(t *testing.T, header *regexp.Regexp) []string {
@@ -2012,6 +2043,19 @@ func TestValidPublished(t *testing.T) {
 	} {
 		if ValidPublished(ref) {
 			t.Errorf("ValidPublished(%q) = true, want false", ref)
+		}
+	}
+}
+
+func TestValidClaudeCode(t *testing.T) {
+	for _, s := range []string{"2.1.311", "2.1.311-beta.1"} {
+		if !ValidClaudeCode(s) {
+			t.Errorf("ValidClaudeCode(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "2.1", "2.1.311; id", "2.1.311-" + strings.Repeat("a", 60)} {
+		if ValidClaudeCode(s) {
+			t.Errorf("ValidClaudeCode(%q) = true, want false", s)
 		}
 	}
 }

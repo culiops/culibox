@@ -1049,3 +1049,6 @@ WORKDIR /home/agent
 RUN chromium --version && playwright-mcp --version | grep -q "${PLAYWRIGHT_MCP_VERSION}"
 ENTRYPOINT ["/usr/local/bin/agent-box-entrypoint"]
 CMD ["bash"]
+# The Claude Code version this image was built with, read back by doctor and Settings.
+# Metadata only and last: it moves no layer and invalidates no instruction above it.
+LABEL io.culiops.agent-box.claude-code="${CLAUDE_CODE_VERSION}"
