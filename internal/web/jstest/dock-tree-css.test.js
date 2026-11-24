@@ -52,8 +52,7 @@ test("the dock tree keeps Settings' File tree text size: text and line are ratio
   assert.strictEqual(DEFAULT * line[1] / line[2], 22, "the spec's 22px rows");
   assert.ok(read("index.html").includes("filetree:['--fs-tree',12]"), "12 is the desktop default the ratios are built on");
   assert.match(read("fontprefs.js"), /DEFAULTS = \{[^}]*filetree: 12/);
-  // The chevron grows with the text as well, and the guides do not depend on it: they are geometry (14px a level).
-  assert.match(rulesFor(css, "#drawer .ft-node.dir::before"), /font-size:\s*calc\(var\(--fs-tree\) \* 15 \/ 12\)/);
+  // The guides do not depend on the text size: they are geometry (14px a level). The folder chevron is a 14px svg now (#168 G5 1).
   assert.match(rulesFor(css, "#drawer .ft-node::before"), /width:\s*14px/);
   // app.css still has its consumer (the phone's tree), so one setting drives both.
   assert.match(rulesFor(app, "#filetree"), /font-size:\s*var\(--fs-tree\)/);
@@ -79,8 +78,16 @@ test("the box-drawing branch is hidden, and a folder gets a chevron that turns w
   assert.match(spacer, /content:\s*""/);
   assert.match(spacer, /flex:\s*none/);
   assert.match(spacer, /width:\s*14px/, "one indent step, so a file's icon lines up with its folder siblings'");
-  assert.match(rulesFor(css, "#drawer .ft-node.dir::before"), /content:\s*"\\203A"/, "the frame's › glyph");
-  assert.match(rulesFor(css, '#drawer .ft-node.dir[aria-expanded="true"]::before'), /transform:\s*rotate\(90deg\)/);
+  // #168 G5 1: the "\203A" text chevron became a .ft-chev span (filetree.js) holding chevron-right and chevron-down svgs.
+  assert.match(rulesFor(css, "#drawer .ft-node.dir::before"), /content:\s*none/, "a folder's slot is its .ft-chev, not the spacer");
+  const chev = rulesFor(css, "#drawer .ft-chev");
+  assert.match(chev, /width:\s*14px/, "the same 14px slot as a file's spacer");
+  assert.match(chev, /color:\s*var\(--muted\)/);
+  assert.match(rulesFor(css, "#drawer .ft-chev > .ui-icon"), /display:\s*block/);
+  assert.match(rulesFor(css, '#drawer .ft-node.dir[aria-expanded="true"] > .ft-chev > .ft-chev-r'), /display:\s*none/);
+  assert.match(rulesFor(css, "#drawer .ft-chev > .ft-chev-d"), /display:\s*none/);
+  assert.match(rulesFor(css, '#drawer .ft-node.dir[aria-expanded="true"] > .ft-chev > .ft-chev-d'), /display:\s*block/);
+  assert.match(rulesFor(app, ".ft-chev"), /display:\s*none/, "the phone's row has no chevron");
 });
 
 test("changed names are tinted (M accent, U and A ok, conflicts red, a folder with changes below accent or red) and the folder dot is not drawn", () => {

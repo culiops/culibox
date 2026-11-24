@@ -1512,8 +1512,10 @@
     border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); cursor: pointer;
   }
   .dk-chev::after { content: ""; position: absolute; inset: -2px -5px; }
-  .dk-chev::before { content: "\203A"; font-size: var(--t-lg); line-height: 1; }
-  .dk-chev[aria-expanded="true"]::before { transform: rotate(90deg); }
+  /* The glyph is two svgs (index.html), chevron-right and chevron-down; aria-expanded shows one. */
+  .dk-chev > .ui-icon { display: block; }
+  .dk-chev > .dk-chev-d, .dk-chev[aria-expanded="true"] > .dk-chev-r { display: none; }
+  .dk-chev[aria-expanded="true"] > .dk-chev-d { display: block; }
   .dk-chev:hover { background: var(--hover); color: var(--fg); }
   .dk-chev:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
   /* Collapsed Changes is its header row: the title, the count (or Updating…) and Review. */
@@ -2029,10 +2031,19 @@
   #drawer .ft-branch { display: none; }
   /* A symlink's row ends its name with a muted ↗ (P4.9); a link to a folder the server serves expands like a folder. */
   #drawer .ft-link .ft-linkmark { flex: none; color: var(--muted); font-size: var(--t-xs); line-height: 1; }
-  /* The chevron, drawn by the row's ::before; a file's is empty, the same width, so every icon starts at the same column. */
+  /* A file's chevron slot is the row's empty ::before, 14px, so every icon starts at the same column. A folder's slot is its
+     .ft-chev (filetree.js): chevron-right and chevron-down svgs, aria-expanded shows one; the ::before steps aside. */
   #drawer .ft-node::before { content: ""; flex: none; width: 14px; text-align: center; color: var(--muted); }
-  #drawer .ft-node.dir::before { content: "\203A"; font-size: calc(var(--fs-tree) * 15 / 12); }
-  #drawer .ft-node.dir[aria-expanded="true"]::before { transform: rotate(90deg); }
+  #drawer .ft-node.dir::before { content: none; }
+  #drawer .ft-chev { flex: none; width: 14px; display: grid; place-items: center; color: var(--muted); }
+  #drawer .ft-chev > .ui-icon { display: block; }
+  #drawer .ft-chev > .ft-chev-d, #drawer .ft-node.dir[aria-expanded="true"] > .ft-chev > .ft-chev-r { display: none; }
+  #drawer .ft-node.dir[aria-expanded="true"] > .ft-chev > .ft-chev-d { display: block; }
+  /* The row's file glyph and its menu button: the Lucide svg shows, the Nerd text (the phone's) does not. The svg is a block
+     centred in the 2ch cell, so it has no line box to sit high in (the Nerd font's line box put a 14px glyph 2px high). */
+  #drawer .ft-icon > .ft-nf, #drawer .ft-more > .ft-nf { display: none; }
+  #drawer .ft-node > .ft-icon { display: flex; justify-content: center; }
+  #drawer .ft-icon > .ui-icon, #drawer .ft-more > .ui-icon { display: block; }
   /* A folder's name is the text colour, not app.css's accent, so that the tint below can mean "something changed in here". */
   #drawer .ft-node.dir { color: var(--fg); }
   /* T2 (P5, mockup 1): a quiet hierarchy. File names a step under the text colour, folder names bright and medium weight, icons

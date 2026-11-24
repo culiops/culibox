@@ -31,6 +31,7 @@ function tree(expanded) {
     n.style = Object.assign(n.style || {}, { setProperty() {} });
     return n;
   };
+  doc.createElementNS = (_ns, t) => doc.createElement(t); // the tree draws its glyphs through uiIcon (svgicon.js)
   doc.getElementById = () => null;
   doc.addEventListener = () => {};
   const st = { lists: [], git: [], repaints: 0, log: [] };
@@ -52,6 +53,7 @@ function tree(expanded) {
     gitRepaintRows: () => { st.repaints++; st.log.push("repaint"); },
   });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "copyfile.js", "filekinds.js"]) load(src(f), f);
   load(src("treestate.js"), "treestate.js");
   load(src("filetree.js"), "filetree.js");
   load("ftExpanded = new Set(" + JSON.stringify(expanded || []) + "); ftTreeEl = document.createElement('div'); ftTreeEl.setAttribute('role', 'tree'); ftRootSel = document.createElement('input');", "init");

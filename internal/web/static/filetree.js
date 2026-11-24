@@ -48,6 +48,31 @@ function iconFor(name, isDir, open) {
   return ICON_EXT[lower.slice(cut + 1)] || ICON_FILE;
 }
 
+// The tree's glyphs are drawn twice, because the tree is shared with the phone (frozen) and a row cannot know the width: the
+// Nerd Font text the phone has always shown (.ft-nf) and the Lucide glyph the desktop shows (a .ui-icon svg, fileIcon in
+// filekinds.js). app.css hides the svg and desktop.css hides the text, so each width paints one of them.
+function ftNerdSpan(glyph) {
+  const nf = document.createElement("span");
+  nf.className = "ft-nf";
+  nf.textContent = glyph;
+  return nf;
+}
+
+// ftSetFileGlyph (re)fills a row's .ft-icon with both glyphs for the file or folder state: the first draw and each toggle.
+function ftSetFileGlyph(icon, name, isDir, open) {
+  icon.replaceChildren(ftNerdSpan(iconFor(name, isDir, open)), fileIcon(name, isDir, open, 14));
+}
+
+// ftChevrons: a folder row's chevron, both directions, 14px. desktop.css shows chevron-down while the row is aria-expanded and
+// chevron-right otherwise; the phone's row has no chevron (app.css hides this).
+function ftChevrons() {
+  const c = document.createElement("span");
+  c.className = "ft-chev";
+  c.setAttribute("aria-hidden", "true");
+  c.append(uiIcon("chevron-right", { size: 14, cls: "ft-chev-r" }), uiIcon("chevron-down", { size: 14, cls: "ft-chev-d" }));
+  return c;
+}
+
 // File families for the dock tree's icon colours (P5, mockup 1 T2): desktop.css colours a file row's icon by its
 // data-fam. Ops families only, and never amber, green or red (those mean needs-you, status, write). Object.create(null)
 // for the reason given above ICON_EXACT.
@@ -448,7 +473,9 @@ async function ftRenderDir(path, container, prefix, st) {
     // that string would have to be re-derived there too.
     const icon = document.createElement("span");
     icon.className = "ft-icon";
-    icon.textContent = iconFor(ent.name, isDir, false);
+    // Two children (#168): the Nerd glyph the phone draws (.ft-nf, iconFor) and the Lucide glyph the desktop draws (fileIcon).
+    // The shared tree cannot choose by width here, so each side's CSS hides the other (app.css, desktop.css).
+    ftSetFileGlyph(icon, ent.name, isDir, false);
     icon.setAttribute("aria-hidden", "true"); // decorative: the name is the label
     // The file's family, for the dock's icon colours. Every tree gets it, whether or not the dock is open now: a tree drawn before
     // the dock opens (the root, a restored folder) is the one the dock then shows. Only desktop.css's #drawer rules draw it.
@@ -463,6 +490,9 @@ async function ftRenderDir(path, container, prefix, st) {
     // title and must keep it. The full path rather than the bare name, because
     // it also answers "which of the three index.html files is this one".
     label.title = shortPath(full);
+    // A folder's chevron, desktop only (the phone's row has none): both glyphs are built once, the CSS shows the one that
+    // aria-expanded says, so the expand toggle changes no DOM here.
+    if (isDir) row.append(ftChevrons());
     row.append(branch, icon, label);
     // A symlink says so in the dock (a folder one expands when its target is a folder the server serves, ftEntryIsDir).
     if (docked && ent.link) {
@@ -489,7 +519,8 @@ async function ftRenderDir(path, container, prefix, st) {
     // touch device can reach.
     const more = document.createElement("button");
     more.className = "ft-more nf";
-    more.textContent = "";
+    // Two children as the row's icon has: the phone's Nerd F141 and the desktop's Lucide ellipsis.
+    more.append(ftNerdSpan("\uf141"), uiIcon("ellipsis", { size: 14 }));
     // Folder vs File so a screen reader announces which kind of row this menu
     // acts on, matching the session row's kebab (app.js sets both aria-label
     // and title to the same string).
@@ -549,7 +580,7 @@ async function ftRenderDir(path, container, prefix, st) {
           return;
         }
         open = want;
-        icon.textContent = iconFor(ent.name, true, open);
+        ftSetFileGlyph(icon, ent.name, true, open);
         row.setAttribute("aria-expanded", open ? "true" : "false");
         if (open) {
           // Persist BEFORE the await: a second click that closes the row toggles
@@ -598,7 +629,7 @@ async function ftRenderDir(path, container, prefix, st) {
       // handful of folders is imperceptible on a local server.
       if (shouldAutoOpen(ftExpanded, full)) {
         open = true;
-        icon.textContent = iconFor(ent.name, true, true);
+        ftSetFileGlyph(icon, ent.name, true, true);
         row.setAttribute("aria-expanded", "true");
         if (rootCall && st.defer) {
           // Drawn off the page and put under its row whole (drawing a big folder into the live tree row by row costs

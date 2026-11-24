@@ -228,7 +228,7 @@ function world(width, listings) {
     makeDropZone: (el, dest, opts) => zones.push({ el, dest, opts }),
   });
   const run = (src, f) => new vm.Script(src, { filename: f || "t.js" }).runInContext(ctx);
-  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "copyfile.js", "fsops.js", "treestate.js", "filetree.js", "insertdecision.js"]) run(read(f), f);
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "filekinds.js", "kitmenu.js", "copyfile.js", "fsops.js", "treestate.js", "filetree.js", "insertdecision.js"]) run(read(f), f);
   // What initFileTree does before it wires the tree: the root and the tree element.
   run("ftRootPath = '/h/w'; ftTreeEl = document.getElementById('filetree');");
   ctx.ftTreeSetup(tree);
@@ -1090,4 +1090,89 @@ test("desktop.css places #ft-menu as a kit menu: its own fixed box and the kit's
 test("the legacy #ft-menu look stays in app.css for the phone", () => {
   assert.match(ruleBody(app, "#ft-menu button"), /padding:\s*6px 9px/);
   assert.match(ruleBody(app, "#ft-menu .ft-menu-path"), /word-break:\s*break-all/);
+});
+
+// ---- the tree's glyphs, two per row (#168 G5 1, 3): the phone's Nerd text and the desktop's Lucide svg -----------------------
+const GLYPH_LISTING = {
+  "/h/w": { entries: [{ name: "src", is_dir: true }, { name: "main.go", is_dir: false }, { name: "notes.bin", is_dir: false }] },
+  "/h/w/src": { entries: [{ name: "x.md", is_dir: false }] },
+};
+const kids = (n) => n.children.filter((c) => c instanceof Node);
+const nfOf = (icon) => kids(icon).find((c) => c.className === "ft-nf");
+const svgOf = (icon) => kids(icon).find((c) => hasCls("ui-icon")(c));
+
+test("row icon holds the phone glyph and the desktop glyph", async () => {
+  for (const width of [1280, 390]) { // one DOM at every width: the stylesheets choose (app.css hides the svg, desktop.css the text)
+    const c = await world(width, GLYPH_LISTING).render();
+    const go = byCls(rowNamed(c, "main.go"), "ft-icon")[0];
+    assert.strictEqual(nfOf(go).textContent, "", "today's Go Nerd glyph is still the .ft-nf text");
+    assert.strictEqual(svgOf(go).attrs["data-icon"], "file-code");
+    assert.strictEqual(svgOf(go).attrs.width, "14");
+    assert.strictEqual(go.textContent, "", "the cell's text is the Nerd glyph alone: the svg adds none");
+    assert.strictEqual(svgOf(byCls(rowNamed(c, "notes.bin"), "ft-icon")[0]).attrs["data-icon"], "file", "an unknown extension is the plain file");
+    const dir = byCls(rowNamed(c, "src"), "ft-icon")[0];
+    assert.strictEqual(nfOf(dir).textContent, "");
+    assert.strictEqual(svgOf(dir).attrs["data-icon"], "folder");
+    assert.strictEqual(kids(dir).length, 2, "exactly the two glyphs");
+  }
+});
+
+test("row icon: opening and closing a folder updates both glyphs", async () => {
+  const w = world(1280, GLYPH_LISTING);
+  const c = await w.render();
+  const row = rowNamed(c, "src");
+  const icon = byCls(row, "ft-icon")[0];
+  await w.run("ftRowOpeners").get(row).setOpen(true);
+  assert.strictEqual(nfOf(icon).textContent, "");
+  assert.strictEqual(svgOf(icon).attrs["data-icon"], "folder-open");
+  assert.strictEqual(kids(icon).length, 2, "replaced, not added to");
+  await w.run("ftRowOpeners").get(row).setOpen(false);
+  assert.strictEqual(nfOf(icon).textContent, "");
+  assert.strictEqual(svgOf(icon).attrs["data-icon"], "folder");
+});
+
+test("a remembered-open folder is drawn open: both glyphs say so on the first render", async () => {
+  const w = world(1280, GLYPH_LISTING);
+  w.run("addExpanded(ftExpanded, '/h/w/src');");
+  const c = await w.render();
+  const icon = byCls(rowNamed(c, "src"), "ft-icon")[0];
+  assert.strictEqual(nfOf(icon).textContent, "");
+  assert.strictEqual(svgOf(icon).attrs["data-icon"], "folder-open");
+});
+
+test("a row's menu button holds the phone's F141 and the desktop's ellipsis, and keeps its name", async () => {
+  const c = await world(1280, GLYPH_LISTING).render();
+  for (const r of rowsOf(c)) {
+    const more = byCls(r, "ft-more")[0];
+    assert.strictEqual(nfOf(more).textContent, "", nameOf(r));
+    assert.strictEqual(svgOf(more).attrs["data-icon"], "ellipsis", nameOf(r));
+    assert.ok(more.attrs["aria-label"], "an icon-only control keeps its accessible name");
+  }
+});
+
+test("chevrons follow aria-expanded: a folder row carries both, a file row none, and a toggle redraws neither", async () => {
+  const w = world(1280, GLYPH_LISTING);
+  const c = await w.render();
+  const row = rowNamed(c, "src");
+  const chev = byCls(row, "ft-chev")[0];
+  assert.deepStrictEqual(kids(chev).map((s) => s.attrs["data-icon"]), ["chevron-right", "chevron-down"]);
+  assert.deepStrictEqual(kids(chev).map((s) => s.className), ["ui-icon ft-chev-r", "ui-icon ft-chev-d"]);
+  assert.strictEqual(chev.attrs["aria-hidden"], "true");
+  assert.strictEqual(kids(chev)[0].attrs.width, "14");
+  assert.strictEqual(row.children.indexOf(chev), 0, "the first child, where the ::before slot was");
+  assert.strictEqual(byCls(rowNamed(c, "main.go"), "ft-chev").length, 0);
+  const before = kids(chev);
+  await w.run("ftRowOpeners").get(row).setOpen(true);
+  assert.strictEqual(row.attrs["aria-expanded"], "true", "the attribute the stylesheet reads");
+  assert.deepStrictEqual(kids(chev), before, "the same two svgs: CSS picks the one to show");
+});
+
+test("the tree's glyph CSS: the phone shows the Nerd text, the desktop the svg, the family colour keeps reaching it", () => {
+  for (const sel of [".ft-icon > .ui-icon", ".ft-more > .ui-icon", ".ft-chev"]) assert.match(ruleBody(app, sel), /display:\s*none/, "app.css hides " + sel);
+  assert.ok(!/\.ft-nf/.test(app), "app.css never hides the Nerd text: that is the phone's glyph");
+  for (const sel of ["#drawer .ft-icon > .ft-nf", "#drawer .ft-more > .ft-nf"]) assert.match(ruleBody(desktop, sel), /display:\s*none/, sel);
+  for (const sel of ["#drawer .ft-icon > .ui-icon", "#drawer .ft-more > .ui-icon"]) assert.match(ruleBody(desktop, sel), /display:\s*block/, sel);
+  assert.match(ruleBody(desktop, "#drawer .ft-node > .ft-icon"), /display:\s*flex[^}]*justify-content:\s*center/, "centred in the 2ch cell");
+  assert.match(ruleBody(desktop, "#drawer .ft-icon"), /color:\s*var\(--tree-icon\)/, "the family colours set the cell's colour, the svg is currentColor");
+  assert.ok(!/font-family/.test(ruleBody(desktop, "#drawer .ft-node > .ft-icon")));
 });

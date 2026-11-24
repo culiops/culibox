@@ -949,6 +949,9 @@
        character cells or a wide glyph shifts every name in the column. */
     .ft-icon { flex: none; width: 2ch; text-align: center; font-family: "Symbols Nerd Font"; color: var(--muted); }
     .ft-node.dir .ft-icon { color: var(--accent); }
+    /* The tree draws each glyph twice (filetree.js): the Nerd text (.ft-nf) and a Lucide svg. The phone is the Nerd text; the
+       svgs are the desktop's, shown by desktop.css. */
+    .ft-icon > .ui-icon, .ft-more > .ui-icon, .ft-chev { display: none; }
     /* Box-drawing, so it must sit on the character grid: no letter-spacing, no
        ellipsis, never shrink. --border would measure 1.38 here and vanish (the
        mistake the status-line separators made); full --muted at 5.65 competes

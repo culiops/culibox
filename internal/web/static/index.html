@@ -175,7 +175,7 @@
                when there is nothing to say. The tree (#files-pane) is moved into this column by app.js and lands after the root header. -->
           <section id="dock-changes" aria-label="Changes" hidden>
             <div class="dk-chg-head">
-              <button id="dock-chg-chev" type="button" class="dk-chev" aria-expanded="true" aria-controls="dock-chg-list" aria-label="Changes" title="Collapse Changes"></button>
+              <button id="dock-chg-chev" type="button" class="dk-chev" aria-expanded="true" aria-controls="dock-chg-list" aria-label="Changes" title="Collapse Changes"><svg data-uicon="chevron-right" class="dk-chev-r" width="14" height="14" aria-hidden="true"></svg><svg data-uicon="chevron-down" class="dk-chev-d" width="14" height="14" aria-hidden="true"></svg></button>
               <span class="dk-chg-title">Changes</span>
               <span id="dock-chg-count" class="dk-chg-sub"></span>
               <button id="dock-review" type="button" class="link dk-review" title="Review the changes, starting with the first file" hidden>Review</button>
@@ -191,7 +191,7 @@
           </section>
           <!-- The divider between Changes and the tree (docksections.js): drawn only while both are open. -->
           <div id="dock-secsplit" class="dk-secsplit" role="separator" aria-orientation="horizontal" aria-label="Resize Changes and the folder tree" aria-controls="dock-changes" tabindex="0" title="Drag to resize, double-click to reset"></div>
-          <div class="dk-roothead"><button id="dock-tree-chev" type="button" class="dk-chev" aria-expanded="true" aria-controls="files-pane" aria-label="Folder tree" title="Collapse the folder tree"></button><button id="dock-root" type="button" class="dk-root" aria-controls="ft-root-input" title="Change the root folder"><span id="dock-root-name" class="dk-root-name"></span><span id="dock-root-chip" class="chip dk-root-chip" hidden></span><span id="dock-root-path" class="dk-root-path"></span></button></div>
+          <div class="dk-roothead"><button id="dock-tree-chev" type="button" class="dk-chev" aria-expanded="true" aria-controls="files-pane" aria-label="Folder tree" title="Collapse the folder tree"><svg data-uicon="chevron-right" class="dk-chev-r" width="14" height="14" aria-hidden="true"></svg><svg data-uicon="chevron-down" class="dk-chev-d" width="14" height="14" aria-hidden="true"></svg></button><button id="dock-root" type="button" class="dk-root" aria-controls="ft-root-input" title="Change the root folder"><span id="dock-root-name" class="dk-root-name"></span><span id="dock-root-chip" class="chip dk-root-chip" hidden></span><span id="dock-root-path" class="dk-root-path"></span></button></div>
           <p class="dr-tnote">This session's workspace can't be browsed here.</p></div>
         <div id="drawer-strip" class="dr-strip" role="group" aria-label="Explorer">
           <button id="drawer-strip-tree" type="button" class="btn btn-ghost btn-icon" title="Explorer" aria-label="Open the explorer" aria-expanded="false" aria-controls="drawer-tree"><svg data-uicon="folder-tree" width="14" height="14" aria-hidden="true"></svg></button>
