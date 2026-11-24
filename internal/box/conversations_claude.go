@@ -487,8 +487,9 @@ type ConversationsStats struct {
 // ConversationsUsage counts the conversations folders under stateRoot and
 // their size, for doctor. Read-only. Boxes write in these folders while it
 // runs, so each folder is walked through an os.Root on it: no link is followed
-// (one is not descended, its own size is not counted), and a directory swapped
-// for a link while it is walked leads nowhere outside the folder. At most
+// (one is not descended, its own size is not counted), a directory swapped
+// for a link while it is walked leads nowhere outside the folder, and one
+// swapped for a FIFO fails to open (openDirIn) rather than hang doctor. At most
 // maxCacheDepth levels are read (an os.Root walk costs the square of the
 // depth); deeper, nothing is counted and Sized is false. ctx bounds the walk:
 // cut short, it returns what it has with ctx's error and Sized false.
@@ -516,7 +517,7 @@ func ConversationsUsage(ctx context.Context, stateRoot string) (ConversationsSta
 			st.Sized = false
 			continue
 		}
-		err = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
+		err = fs.WalkDir(dirFS{root}, ".", func(p string, d fs.DirEntry, err error) error {
 			if cerr := ctx.Err(); cerr != nil {
 				return cerr
 			}

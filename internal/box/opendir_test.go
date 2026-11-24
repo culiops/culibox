@@ -167,3 +167,27 @@ func TestAdoptionRefusesALinkSwappedInAfterTheCheck(t *testing.T) {
 		t.Fatal("the conversation landed in the link's target")
 	}
 }
+
+// Doctor's size walk reads folders live boxes write: a directory swapped for a
+// FIFO while it is walked is not counted (Sized false), never waited on past
+// doctor's timeout.
+func TestConversationsUsageDoesNotBlockOnAFIFO(t *testing.T) {
+	root := t.TempDir()
+	d, err := ensureConversationsDir(root, "aaaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(d, "-w")
+	if err := os.MkdirAll(filepath.Join(sub, "deeper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	swapped := swapForFIFOAt(t, "-w", sub)
+	var u ConversationsStats
+	returnsPromptly(t, "ConversationsUsage", func() { u, err = ConversationsUsage(context.Background(), root) })
+	if !*swapped {
+		t.Fatal("-w was not opened through openDirIn")
+	}
+	if err != nil || u.Folders != 1 || u.Sized {
+		t.Fatalf("usage = %+v %v, want 1 folder, not Sized", u, err)
+	}
+}
