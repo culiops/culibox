@@ -27,7 +27,8 @@ const (
 )
 
 // Checker runs the anonymous daily check. Client carries the caller's timeout and
-// proxy settings and is used as given.
+// proxy settings and is used as given; a nil Client is http.DefaultClient, so a
+// forgotten one cannot panic a background goroutine.
 type Checker struct {
 	Client    *http.Client
 	Registry  string // https://ghcr.io
@@ -47,6 +48,9 @@ func (k Checker) now() time.Time {
 // independent: one failing leaves the other's answer in place. It never returns nil;
 // a failure lands in RegistryErr or ScanErr as a short class.
 func (k Checker) Check(ctx context.Context) *Cache {
+	if k.Client == nil {
+		k.Client = http.DefaultClient
+	}
 	c := &Cache{Version: cacheVersion, CheckedAt: k.now(), Hash: boximage.Hash()}
 	idx, err := boxregistry.Resolve(ctx, k.Client, k.Registry, "culiops/culibox", boximage.Hash())
 	if err != nil {

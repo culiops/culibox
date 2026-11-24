@@ -174,7 +174,7 @@ func TestCheckRegistryDown(t *testing.T) {
 }
 
 func TestCheckUnexpectedRegistryAnswer(t *testing.T) {
-	// the token endpoint answers, but with a body that is no token
+	// the registry answers the token request with a 502 and an HTML body
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
 		if q.URL.Path == "/token" {
 			http.Error(w, "<html>boom</html>", http.StatusBadGateway)
@@ -273,5 +273,16 @@ func TestScanBodyCapped(t *testing.T) {
 	srv, _ := fakeWorld(t, worldOpts{issues: big})
 	if c := checkAt(srv).Check(context.Background()); c.ScanErr != "scan unreadable" || c.Scan != nil {
 		t.Fatalf("%+v / %q", c.Scan, c.ScanErr)
+	}
+}
+
+// A Checker with no Client must not panic a background goroutine.
+func TestCheckNilClient(t *testing.T) {
+	srv, _ := fakeWorld(t, worldOpts{issues: scanBody(357, 680)})
+	k := checkAt(srv)
+	k.Client = nil
+	c := k.Check(context.Background())
+	if c.RegistryErr != "" || c.Registry == nil || c.Scan == nil || *c.Scan != (Scan{357, 680}) {
+		t.Fatalf("%+v / %q / %+v", c.Registry, c.RegistryErr, c.Scan)
 	}
 }

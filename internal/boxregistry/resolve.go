@@ -76,16 +76,37 @@ const maxLayerSize = 1 << 40
 
 // Layer is one compressed layer of a platform's image, as its manifest lists it.
 type Layer struct {
-	Digest string
-	Size   int64
+	Digest string `json:"digest"`
+	Size   int64  `json:"size"`
 }
 
 // Platform is what one platform's manifest and image config say about the image.
 type Platform struct {
-	Created    time.Time // zero when absent or not RFC 3339
-	ClaudeCode string    // boximage.ValidClaudeCode, "" when absent or not of that shape
-	Layers     []Layer   // compressed, manifest order
-	DiffIDs    []string  // the config's rootfs.diff_ids; nil when there are not as many as Layers
+	Created    time.Time `json:"created,omitzero"`      // zero when absent or not RFC 3339
+	ClaudeCode string    `json:"claude_code,omitempty"` // boximage.ValidClaudeCode, "" when absent or not of that shape
+	Layers     []Layer   `json:"layers,omitempty"`      // compressed, manifest order
+	DiffIDs    []string  `json:"diff_ids,omitempty"`    // the config's rootfs.diff_ids; nil when there are not as many as Layers
+}
+
+// Sanitized is p with every fact that is not of the form it claims removed: a
+// Claude Code label that is not a version; no layer list unless every size is
+// plausible and every digest well formed; no diff ids unless there is one
+// well-formed id per layer. Resolve applies it to what a registry said, and the
+// cache loader to what a file said, so the two cannot disagree on what is usable.
+func (p Platform) Sanitized() Platform {
+	if !boximage.ValidClaudeCode(p.ClaudeCode) {
+		p.ClaudeCode = ""
+	}
+	layersOK := !slices.ContainsFunc(p.Layers, func(l Layer) bool {
+		return l.Size < 0 || l.Size > maxLayerSize || !digestForm.MatchString(l.Digest)
+	})
+	switch {
+	case !layersOK:
+		p.Layers, p.DiffIDs = nil, nil
+	case len(p.DiffIDs) != len(p.Layers) || slices.ContainsFunc(p.DiffIDs, func(d string) bool { return !digestForm.MatchString(d) }):
+		p.DiffIDs = nil
+	}
+	return p
 }
 
 // Layers and DiffIDs are nil when unusable (an implausible size, a malformed or
@@ -94,8 +115,8 @@ type Platform struct {
 // Index is a resolved published image: the ref to pull and what each platform
 // (keyed by architecture, "amd64" or "arm64") says about it.
 type Index struct {
-	Ref       string
-	Platforms map[string]Platform
+	Ref       string              `json:"ref"`
+	Platforms map[string]Platform `json:"platforms"`
 }
 
 // Resolve finds the published box image built from the Dockerfile whose Hash is
@@ -194,13 +215,9 @@ func checkPlatform(get func(kind, ref, accept string) ([]byte, http.Header, erro
 	// Layer digests are only recorded, never fetched, but they reach the cache
 	// and the UI, so they get the same form check as the manifests.
 	layers := make([]Layer, 0, len(man.Layers))
-	sizesOK := true
 	for _, l := range man.Layers {
 		if !digestForm.MatchString(l.Digest) {
 			return Platform{}, fmt.Errorf("manifest %q layer digest %q is not sha256:<64 hex>", m.Digest, l.Digest)
-		}
-		if l.Size < 0 || l.Size > maxLayerSize {
-			sizesOK = false
 		}
 		layers = append(layers, Layer{Digest: l.Digest, Size: l.Size})
 	}
@@ -231,21 +248,14 @@ func checkPlatform(get func(kind, ref, accept string) ([]byte, http.Header, erro
 	if l := cfg.Config.Labels[boximage.LabelHash]; l != hash {
 		return Platform{}, fmt.Errorf("label %s is %q, want %s", boximage.LabelHash, l, hash)
 	}
-	facts := Platform{Layers: layers}
+	facts := Platform{Layers: layers, DiffIDs: cfg.RootFS.DiffIDs}
 	if t, err := time.Parse(time.RFC3339Nano, cfg.Created); err == nil {
 		facts.Created = t
 	}
-	if v := cfg.Config.Labels[boximage.LabelClaudeCode]; boximage.ValidClaudeCode(v) {
-		facts.ClaudeCode = v
-	}
-	// A diff id per layer or none: a count that differs cannot be matched layer
-	// for layer, so it gives no download figure. Nor does a diff id of another
-	// form, or a size no layer has: the platform is kept, those facts are not.
-	if !sizesOK {
-		facts.Layers = nil
-	} else if len(cfg.RootFS.DiffIDs) == len(layers) && !slices.ContainsFunc(cfg.RootFS.DiffIDs, func(d string) bool { return !digestForm.MatchString(d) }) {
-		facts.DiffIDs = cfg.RootFS.DiffIDs
-	}
+	facts.ClaudeCode = cfg.Config.Labels[boximage.LabelClaudeCode]
+	// The platform is kept whatever Sanitized drops: an implausible size, a
+	// miscounted or malformed diff id only costs it the download figure.
+	facts = facts.Sanitized()
 	return facts, nil
 }
 

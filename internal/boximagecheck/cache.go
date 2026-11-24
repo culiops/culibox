@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	boximage "github.com/culiops/culibox/docker/culibox"
@@ -86,10 +87,27 @@ func LoadCache(dataDir string) (*Cache, error) {
 	if c.Registry != nil && !boximage.ValidPublished(c.Registry.Ref) {
 		c.Registry = nil
 	}
+	if c.Registry != nil {
+		for arch, p := range c.Registry.Platforms {
+			c.Registry.Platforms[arch] = p.Sanitized()
+		}
+	}
+	// Doctor and the UI print the error classes, so a text that is not one of ours
+	// never gets that far.
+	c.RegistryErr = knownClass(c.RegistryErr, errUnexpected, errUnreachable, errNotFound, errUnexpected)
+	c.ScanErr = knownClass(c.ScanErr, errScan, errScan)
 	if s := c.Scan; s != nil && (s.Number < 0 || s.Number > maxScanField || s.Count < 0 || s.Count > maxScanField) {
 		c.Scan = nil
 	}
 	return &c, nil
+}
+
+// knownClass is s when it is "" or one of classes, else fallback.
+func knownClass(s, fallback string, classes ...string) string {
+	if s == "" || slices.Contains(classes, s) {
+		return s
+	}
+	return fallback
 }
 
 // SaveCache writes the cache atomically, through os.Root with an O_EXCL temp file
@@ -150,7 +168,10 @@ func Due(c *Cache, now time.Time, retryFailed bool) bool {
 // RunIfDue runs the check when this instance may ask the network and the cache is
 // due, and saves the answer. Otherwise it returns the cache as loaded (nil when
 // there is none). A cache from a newer CuliBox is (nil, err) and is never written.
-// A failed save still returns the fresh answer, with the error.
+// A failed save still returns the fresh answer, with the error; the cache on disk
+// is then still the old one, so the check is due again on the very next call.
+// Callers that call repeatedly (the server's hourly tick) must rate-limit
+// themselves, for instance by remembering the time of their last attempt in memory.
 func RunIfDue(ctx context.Context, k Checker, dataDir string, in Inputs, retryFailed bool) (*Cache, error) {
 	c, err := LoadCache(dataDir)
 	if err != nil {

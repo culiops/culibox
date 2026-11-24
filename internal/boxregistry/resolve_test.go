@@ -463,3 +463,30 @@ func TestResolveOtherFailuresAreNotErrNotFound(t *testing.T) {
 		t.Fatalf("a missing blob: err = %v", err)
 	}
 }
+
+func TestPlatformSanitized(t *testing.T) {
+	d := func(c string) string { return "sha256:" + strings.Repeat(c, 64) }
+	ok := Platform{ClaudeCode: "2.1.311", Layers: []Layer{{d("a"), 10}, {d("b"), 0}}, DiffIDs: []string{d("c"), d("d")}}
+	if got := ok.Sanitized(); got.ClaudeCode != "2.1.311" || len(got.Layers) != 2 || len(got.DiffIDs) != 2 {
+		t.Fatalf("valid facts changed: %+v", got)
+	}
+	for name, tc := range map[string]struct {
+		edit            func(*Platform)
+		claude          string
+		layers, diffIDs bool // kept
+	}{
+		"bad claude code": {func(p *Platform) { p.ClaudeCode = "latest!" }, "", true, true},
+		"negative size":   {func(p *Platform) { p.Layers[0].Size = -1 }, "2.1.311", false, false},
+		"huge size":       {func(p *Platform) { p.Layers[1].Size = maxLayerSize + 1 }, "2.1.311", false, false},
+		"layer digest":    {func(p *Platform) { p.Layers[0].Digest = "sha256:x" }, "2.1.311", false, false},
+		"diff id":         {func(p *Platform) { p.DiffIDs[1] = "x" }, "2.1.311", true, false},
+		"diff id count":   {func(p *Platform) { p.DiffIDs = p.DiffIDs[:1] }, "2.1.311", true, false},
+	} {
+		p := Platform{ClaudeCode: ok.ClaudeCode, Layers: slices.Clone(ok.Layers), DiffIDs: slices.Clone(ok.DiffIDs)}
+		tc.edit(&p)
+		got := p.Sanitized()
+		if got.ClaudeCode != tc.claude || (got.Layers != nil) != tc.layers || (got.DiffIDs != nil) != tc.diffIDs {
+			t.Errorf("%s: %+v", name, got)
+		}
+	}
+}

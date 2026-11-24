@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,7 +32,7 @@ func TestCacheRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	want := &Cache{Version: 1, CheckedAt: t0, Hash: boximage.Hash(),
 		Registry: &boxregistry.Index{Ref: goodRef, Platforms: map[string]boxregistry.Platform{
-			"amd64": {Created: t0, ClaudeCode: "2.1.311", Layers: []boxregistry.Layer{{Digest: "sha256:aa", Size: 5}}, DiffIDs: []string{"sha256:bb"}}}},
+			"amd64": {Created: t0, ClaudeCode: "2.1.311", Layers: []boxregistry.Layer{{Digest: "sha256:" + strings.Repeat("a", 64), Size: 5}}, DiffIDs: []string{"sha256:" + strings.Repeat("b", 64)}}}},
 		Scan: &Scan{Number: 357, Count: 680}}
 	if err := SaveCache(dir, want); err != nil {
 		t.Fatal(err)
@@ -42,6 +43,9 @@ func TestCacheRoundTrip(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0o600 {
 		t.Errorf("mode %v, want 0600", fi.Mode().Perm())
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, CacheFile)); !strings.Contains(string(raw), `"version":1`) {
+		t.Errorf("version 1 is not on disk: %s", raw)
 	}
 	got, err := LoadCache(dir)
 	if err != nil {
@@ -111,7 +115,7 @@ func TestCacheNewerKept(t *testing.T) {
 func TestLoadCacheValidates(t *testing.T) {
 	dir := t.TempDir()
 	writeCache(t, dir, `{"version":1,"checked_at":"2026-11-24T10:00:00Z","hash":"h",
-		"registry":{"Ref":"ghcr.io/evil/x@sha256:00"},"scan":{"number":1000000,"count":1}}`)
+		"registry":{"ref":"ghcr.io/evil/x@sha256:00"},"scan":{"number":1000000,"count":1}}`)
 	c, err := LoadCache(dir)
 	if err != nil || c == nil {
 		t.Fatal(c, err)
@@ -133,9 +137,73 @@ func TestLoadCacheValidates(t *testing.T) {
 	if c, _ := LoadCache(dir); c == nil || c.Scan == nil || *c.Scan != (Scan{}) {
 		t.Errorf("none open dropped: %+v", c)
 	}
-	writeCache(t, dir, `{"version":1,"checked_at":"2026-11-24T10:00:00Z","hash":"h","registry":{"Ref":"`+goodRef+`"},"scan":{"number":999999,"count":999999}}`)
+	writeCache(t, dir, `{"version":1,"checked_at":"2026-11-24T10:00:00Z","hash":"h","registry":{"ref":"`+goodRef+`"},"scan":{"number":999999,"count":999999}}`)
 	if c, _ := LoadCache(dir); c.Registry == nil || c.Scan == nil {
 		t.Errorf("valid values dropped: %+v", c)
+	}
+}
+
+// Everything the cache can hand to doctor or the UI is checked on the way in.
+func TestLoadCacheSanitizesWhatItShows(t *testing.T) {
+	dir := t.TempDir()
+	good := "sha256:" + strings.Repeat("a", 64)
+	reg := func(platform string) string {
+		return `"registry":{"ref":"` + goodRef + `","platforms":{"amd64":` + platform + `}}`
+	}
+	load := func(rest string) *Cache {
+		t.Helper()
+		writeCache(t, dir, `{"version":1,"checked_at":"2026-11-24T10:00:00Z","hash":"h",`+rest+`}`)
+		c, err := LoadCache(dir)
+		if err != nil || c == nil {
+			t.Fatal(c, err)
+		}
+		return c
+	}
+	// error text: only the classes survive, anything else becomes the generic class
+	for in, want := range map[string]string{
+		"": "", "registry unreachable": "registry unreachable", "not published yet": "not published yet",
+		"unexpected registry answer": "unexpected registry answer", "scan unreadable": "unexpected registry answer",
+		"<script>alert(1)</script>": "unexpected registry answer",
+	} {
+		if got := load(`"registry_err":"` + in + `"`).RegistryErr; got != want {
+			t.Errorf("registry_err %q -> %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{
+		"": "", "scan unreadable": "scan unreadable", "registry unreachable": "scan unreadable", "boom <b>": "scan unreadable",
+	} {
+		if got := load(`"scan_err":"` + in + `"`).ScanErr; got != want {
+			t.Errorf("scan_err %q -> %q, want %q", in, got, want)
+		}
+	}
+	// platform facts
+	p := load(reg(`{"claude_code":"2.1.311","layers":[{"digest":"` + good + `","size":5}],"diff_ids":["` + good + `"]}`)).Registry.Platforms["amd64"]
+	if p.ClaudeCode != "2.1.311" || len(p.Layers) != 1 || len(p.DiffIDs) != 1 {
+		t.Errorf("valid facts dropped: %+v", p)
+	}
+	for name, plat := range map[string]string{
+		"claude code":   `{"claude_code":"<img src=x>"}`,
+		"layer size":    `{"layers":[{"digest":"` + good + `","size":-1}],"diff_ids":["` + good + `"]}`,
+		"layer too big": `{"layers":[{"digest":"` + good + `","size":1099511627777}],"diff_ids":["` + good + `"]}`,
+		"layer digest":  `{"layers":[{"digest":"sha256:zz","size":1}],"diff_ids":["` + good + `"]}`,
+		"diff id":       `{"layers":[{"digest":"` + good + `","size":1}],"diff_ids":["nope"]}`,
+		"diff id count": `{"layers":[{"digest":"` + good + `","size":1}],"diff_ids":["` + good + `","` + good + `"]}`,
+	} {
+		p := load(reg(plat)).Registry.Platforms["amd64"]
+		switch name {
+		case "claude code":
+			if p.ClaudeCode != "" {
+				t.Errorf("%s kept: %+v", name, p)
+			}
+		case "layer size", "layer too big", "layer digest":
+			if p.Layers != nil || p.DiffIDs != nil {
+				t.Errorf("%s kept: %+v", name, p)
+			}
+		default: // the layers stand, only the diff ids go
+			if p.Layers == nil || p.DiffIDs != nil {
+				t.Errorf("%s: %+v", name, p)
+			}
+		}
 	}
 }
 
