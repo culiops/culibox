@@ -114,8 +114,9 @@ function pfcInputRow(rec, o) {
 
 // --- the "+ Add" picker (spec 5.7; the mockup's `picker` state) -------------------------------------------------------------
 
-// A popover under the "+ Add" link. What it offers is data: groups [{title, note, items}], an item being {title, sub, tag,
-// added, add, create, act, key}: `add` is what pfvAddRow is given, `create` the kind of thing a "New ..." item makes (pfvOpenDrawer's),
+// A popover under the "+ Add" link. What it offers is data: groups [{title, kind, note, items}], an item being {title, kind, sub, tag,
+// added, add, create, act, key}: a group's `kind` (aws, github, token: ICON_RESOURCE's) is the glyph its heading draws, an item's `kind` (folder,
+// domain) the glyph it draws when it has no heading to say it; none declared, none drawn; `add` is what pfvAddRow is given, `create` the kind of thing a "New ..." item makes (pfvOpenDrawer's),
 // `act` a function run after the popover has closed (the Advanced block's "+ Add secret" menu: its items go to other blocks; `key`
 // names the item), `added` that the profile holds it already (drawn, disabled, "Added"). A group with no title is drawn without a heading. The popover is
 // open while rec.ui.picker is true: that is what draws it and what pfvState.picker and the Esc layering read.
@@ -133,6 +134,10 @@ function pfcPickOption(rec, it) {
   const b = pfvMk("button", "menu-item pfv-opt" + (it.create ? " pfv-create" : ""));
   b.type = "button";
   const t = pfvMk("span", "pfv-opt-t");
+  // An item draws a glyph only when it declares a kind of its own (the Also reachable picker, whose two items are the kinds and which
+  // has no heading to say it); in a group with a heading the heading carries the kind (pfcPicker), so an option draws none.
+  const kg = iconOf(ICON_RESOURCE, it.kind);
+  if (kg) t.append(uiIcon(kg, { size: 14 }));
   t.append(it.title);
   if (it.tag) t.append(" ", pfvMk("span", "pfv-tag", it.tag));
   const text = pfvMk("span", "menu-text");
@@ -223,7 +228,14 @@ function pfcPicker(rec, spec) {
     const node = pfvMk("div", "pfv-pick-grp");
     // A div, not a p: the page zeroes the padding of every p (desktop.css, `#pfv :is(h2, h3, h4, p, dl, dd)`), and the kit label's
     // own padding is what lines the heading up with the rows.
-    if (g.title) node.append(pfvMk("div", "menu-label grp-label", g.title));
+    // The heading draws the glyph of the group's declared kind (a group with none, or a kind the map has not, draws the words alone).
+    if (g.title) {
+      const head = pfvMk("div", "menu-label grp-label");
+      const gg = iconOf(ICON_RESOURCE, g.kind);
+      if (gg) head.append(uiIcon(gg, { size: 12 }));
+      head.append(g.title);
+      node.append(head);
+    }
     if (g.note) node.append(pfvMk("p", "pfv-pick-note", g.note));
     const mine = [];
     for (const it of g.items) {
@@ -570,17 +582,17 @@ function pfcCloudPick(rec) {
   // The server takes the old-style AWS setting or saved connections, never both (config/awsconn.go): while it stays, neither a
   // connection nor a new one can be added.
   const legacy = !!v.legacy && v.legacy.removed !== true;
-  const aws = { title: "AWS connections", note: legacy ? PFC_PICK_LEGACY : "", items: [] };
+  const aws = { title: "AWS connections", kind: "aws", note: legacy ? PFC_PICK_LEGACY : "", items: [] };
   if (!legacy) {
     for (const c of conns) aws.items.push({ title: c.name, tag: c.prod ? "PROD" : "", sub: pfcAwsSub(c), added: heldAws.has(c.name), add: { kind: "aws", name: c.name } });
     aws.items.push({ title: "New AWS connection…", sub: "Set it up in Credentials without leaving this page", create: "aws" });
   }
   const logins = pfcLogins("");
-  const gh = { title: "GitHub", note: logins.length ? "" : PFC_NO_LOGINS, items: [] };
+  const gh = { title: "GitHub", kind: "github", note: logins.length ? "" : PFC_NO_LOGINS, items: [] };
   // An owner signs in with a GitHub App, else a personal access token: the App's words are true only when there is an App.
   if (logins.length) gh.items.push({ title: "Another org or user", sub: logins.some((l) => l.value.startsWith("app:")) ? PFC_PICK_GH_APP : PFC_PAT_NOTE, add: { kind: "github" } });
   gh.items.push({ title: "New GitHub App…", sub: "Install the App on an org, or paste a personal access token", create: "github" });
-  const tok = { title: "Tokens", note: PFC_PICK_TOKENS, items: [] };
+  const tok = { title: "Tokens", kind: "token", note: PFC_PICK_TOKENS, items: [] };
   for (const t of tokens) {
     tok.items.push({ title: t.name, tag: t.prod === true ? "production" : "", sub: spawnJoin([t.description].concat(spawnTokenHosts(t.hosts))), added: heldTok.has(t.name), add: { kind: "token", name: t.name } });
   }
@@ -723,8 +735,8 @@ function pfcReachDraw(rec, c) {
 const pfcReachPick = (off, needsBox) => ({
   label: "Add a folder or a domain", filter: "",
   groups: [{ title: "", note: "", items: [
-    { title: "Folder it can read", sub: PFC_FOLDER_PICK, add: { kind: "folder" } },
-    { title: "Domain it can reach", sub: needsBox ? PFC_DOMAIN_PICK + ". It needs the Box tier: set Runs in to Box, or the save is refused." : off ? PFC_DOMAIN_PICK + ". It has no effect until the profile holds cloud access or a token." : PFC_DOMAIN_PICK, add: { kind: "domain" } },
+    { title: "Folder it can read", kind: "folder", sub: PFC_FOLDER_PICK, add: { kind: "folder" } },
+    { title: "Domain it can reach", kind: "domain", sub: needsBox ? PFC_DOMAIN_PICK + ". It needs the Box tier: set Runs in to Box, or the save is refused." : off ? PFC_DOMAIN_PICK + ". It has no effect until the profile holds cloud access or a token." : PFC_DOMAIN_PICK, add: { kind: "domain" } },
   ] }],
 });
 

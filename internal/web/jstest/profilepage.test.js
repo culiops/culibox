@@ -2923,6 +2923,8 @@ test("the picker stays inside the page column: it hangs on its link's wrapper at
   assert.ok(has("pfv-opt", /text-decoration:\s*none/), "primitives.css strikes every disabled button through; an Added option is not struck");
   assert.ok(has("pfv-opt-t", /overflow-wrap:\s*anywhere/) && has("pfv-opt-s", /overflow-wrap:\s*anywhere/), "a long name breaks rather than push the popover out");
   assert.ok(rules.some((r) => /\.pfv-opt\[hidden\]/.test(r.sel) && /display:\s*none/.test(r.body)), "a grid option is hidden by the filter");
+  assert.ok(has("pfv-opt-t", /gap:\s*0 8px/), "the title's children keep an 8px gap");
+  assert.ok(rules.some((r) => /\.pfv-opt-t\s*>\s*\.ui-icon$/.test(r.sel) && /margin-right:\s*-2px/.test(r.body)), "an item's own glyph sits 6px (8px gap less 2px) before its title");
   assert.ok(rules.some((r) => /\.pfv-pick-grp\[hidden\]/.test(r.sel) && /display:\s*none/.test(r.body)));
 });
 
@@ -7458,4 +7460,55 @@ test("Agent: a profile with only the older bypass bool on keeps it, and gains no
   pickModel(t, "claude-sonnet-5");
   assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
   assert.deepStrictEqual(t.box.puts[0].options, { model: "claude-sonnet-5", skip_permissions_legacy: true });
+});
+
+// #168 G1 1-6: the kind column of a Cloud and tokens / Also reachable row draws the glyph of the row's declared kindId, never of its words.
+const kindIc = (row) => byCls(row, "pfv-k")[0].children.filter((c) => c instanceof Node && c.tag === "svg");
+const kindIcons = (rows) => rows.map((r) => [texts(r, "pfv-k")[0], kindIc(r).map((s) => s.getAttribute("data-icon"))]);
+
+test("read view: the kind column of each Cloud and tokens and Also reachable row draws its declared kind's glyph, 14px", async () => {
+  const t = cloudPage({ profiles: [PROFILES[0], cloudView({ clone_share: ["CLAUDE.md"] }), PROFILES[2], PROFILES[3]] });
+  await t.box.pfvShow("aws-ops");
+  assert.deepStrictEqual(kindIcons(rowsOf(t, "cloud")), [
+    ["AWS", ["cloud"]], ["AWS", ["cloud"]], ["GitHub", ["si:github"]], ["Token", ["key-round"]], ["Token", ["key-round"]],
+  ]);
+  assert.deepStrictEqual(kindIcons(rowsOf(t, "reachable")), [
+    ["Folder", ["folder"]], ["Files", ["files"]], ["Files", ["files"]], ["Domain", ["globe"]], ["Domain", ["globe"]],
+  ]);
+  for (const r of [...rowsOf(t, "cloud"), ...rowsOf(t, "reachable")]) {
+    const k = byCls(r, "pfv-k")[0], ic = kindIc(r)[0];
+    assert.strictEqual(ic.getAttribute("width"), "14");
+    assert.strictEqual(k.children[0], ic, "the glyph comes before the word");
+    assert.ok(classesOf(k).includes("has-ic"), "the column says it holds a glyph");
+  }
+});
+
+test("read view: Workspace rows that share a kind word (Folder) with a reach row draw no glyph", async () => {
+  const t = cloudPage({ profiles: [PROFILES[0], cloudView({ clone_of: "/home/you/orig", default_cwd: "/home/you/copy" }), PROFILES[2], PROFILES[3]] });
+  await t.box.pfvShow("aws-ops");
+  for (const id of ["workspace"]) {
+    const rows = rowsOf(t, id);
+    assert.ok(rows.length > 0, id);
+    assert.deepStrictEqual(rows.filter((r) => kindIc(r).length), [], id + " rows are declared with no kindId");
+    for (const r of rows) assert.ok(!classesOf(byCls(r, "pfv-k")[0]).includes("has-ic"), id);
+  }
+});
+
+test("pfvDrawRow: the glyph follows kindId alone; Old-style AWS still draws the word AWS", () => {
+  const t = page();
+  const row = (kind, kindId, over) => t.box.pfvDrawRow(Object.assign({ kind, kindId, name: "n", sub: "", scope: "", tag: "", missing: false }, over), []);
+  const ic = (r) => kindIc(r).map((s) => s.getAttribute("data-icon"));
+  assert.deepStrictEqual(ic(row("Old-style AWS", "aws_legacy")), ["cloud"]);
+  assert.strictEqual(texts(row("Old-style AWS", "aws_legacy"), "pfv-k")[0], "AWS");
+  // Renaming the word moves nothing; the id decides.
+  assert.deepStrictEqual(ic(row("Something else", "token")), ["key-round"]);
+  assert.strictEqual(texts(row("Something else", "token"), "pfv-k")[0], "Something else");
+  assert.deepStrictEqual(ic(row("Token", "domain")), ["globe"], "the word Token with kindId domain draws the domain glyph");
+  // The old shape (no kindId) and a kindId the map does not know draw none, whatever the word says.
+  for (const id of [undefined, "", "nope", "constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    const r = row("GitHub", id);
+    assert.deepStrictEqual(ic(r), [], String(id));
+    assert.ok(!classesOf(byCls(r, "pfv-k")[0]).includes("has-ic"), String(id));
+    assert.strictEqual(texts(r, "pfv-k")[0], "GitHub");
+  }
 });

@@ -2801,13 +2801,17 @@
   #spawn #spawn-ws-row .spawn-ws-check.ck-error { color: var(--red); }
 
   /* The reach box (frame M4.1): what this session will be able to touch, from the profile. A --bg card with no border,
-     the title, then ONE label/value grid (72px | the rest, 16px and 2px apart, baselines aligned) so every value starts
+     the title, then ONE label/value grid (88px | the rest, 16px and 2px apart, baselines aligned) so every value starts
      on the same line. A row is only the grid's two cells (display: contents). A path in a value is machine text --t-sm. */
   #spawn-reach { display: flex; flex-direction: column; gap: var(--sp-2); box-sizing: border-box; padding: var(--sp-3) var(--sp-4); background: var(--bg); border-radius: var(--r-card); }
   .sr-title { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-semibold); color: var(--fg); }
-  .sr-grid { display: grid; grid-template-columns: 72px minmax(0, 1fr); column-gap: var(--sp-4); row-gap: 2px; align-items: baseline; }
+  .sr-grid { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: var(--sp-4); row-gap: 2px; align-items: baseline; }
   .sr-row { display: contents; }
   .sr-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* 88px: a 14px glyph, 6px, and Domains / Imports. A label with no glyph is indented the glyph's 20px so every label starts on one line (#168 G1). */
+  .sr-k.has-ic { white-space: nowrap; }
+  .sr-k .ui-icon { margin-right: 6px; }
+  .sr-k:not(.has-ic) { padding-left: 20px; }
   .sr-v { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
   .sr-path { font-family: var(--font-mono); font-size: var(--t-sm); line-height: var(--lh-sm); }
   #spawn-reach code { font-family: var(--font-mono); font-size: var(--t-xs); }
@@ -3476,6 +3480,8 @@
   /* Its head (§B4 `.card-head`): the title (13/20 600) and the count chip 12px beside it, 12px 16px, a hairline under it. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 0; flex-wrap: nowrap; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: var(--t-md); letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h > h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  /* The kind glyph that leads a section head (16px) or the edit heading (#168 G1): a 6px gap to the title, as the frames draw it. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .sec-h .ui-icon { margin-right: 6px; }
   /* An empty section's line sits under the head's hairline; a token provider's note is under its table (§B4 `.m2-secnote`:
      12/18 muted, 8px 16px 10px, a hairline above); Legacy secrets' note is above its table with the hairline below it. A <p>
      has the UA's 1em margin (12px at 12px type) that the frame does not draw, so these lines set their own: none. */
@@ -4232,15 +4238,20 @@
   #page-host > #settings-modal.as-page #pfv .pfv-empty { line-height: 20px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-stmt-act { margin-top: 12px; }
 
-  /* A grant is a row: kind, name (and its tag), scope in words (§B2 `.m2-rows`: 52px, the value, a 196px status column, 16px between columns and
+  /* A grant is a row: kind, name (and its tag), scope in words (§B2 `.m2-rows`: a 72px kind column (52px in a narrow container), the value, a 196px status column, 16px between columns and
      10px between rows). Three tracks only: an empty fourth one would still cost a 16px gap in every read row. Remove / Undo and the "Set in ..."
      note of a row in edit sit in column 4, the implicit auto track, which exists only on those rows. The narrow steps below put them back in
      column 3 (863px) or under the content (440px). The kind word, the status and the mono part are the frame's 12/18 `t-sm` lines (the value
      line around the mono part stays 20px). */
   #page-host > #settings-modal.as-page #pfv .pfv-rows { display: grid; gap: 10px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) 196px; column-gap: 16px; align-items: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) 196px; column-gap: 16px; align-items: start; }
   #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 4; grid-row: 1; }
   #page-host > #settings-modal.as-page #pfv .pfv-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* The kind column is 72px: a 14px glyph, 6px, and the longest word (Domain, GitHub). A kind word with no glyph is indented the glyph's 20px, so every
+     word in the card starts on one line (#168 G1). The glyph is drawn only from a row's declared kindId. */
+  #page-host > #settings-modal.as-page #pfv .pfv-k.has-ic { white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pfv .pfv-k .ui-icon { margin-right: 6px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-k:not(.has-ic) { padding-left: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-id { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-nm { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-weight: 500; line-height: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-rsub { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
@@ -4417,6 +4428,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-pick-list { min-height: min(var(--pfv-pick-min, 0px), calc(100vh - 180px)); max-height: min(580px, calc(100vh - 180px)); overflow-y: auto; overscroll-behavior: contain; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp:not([hidden]) ~ .pfv-pick-grp:not([hidden])::before { content: ""; display: block; height: 1px; margin: 6px 4px; background: var(--line); }
+  /* The glyph of a group heading (12px: the heading is 11px caps) sits 6px before its words (#168 G1). */
+  #page-host > #settings-modal.as-page #pfv .pfv-pick .grp-label .ui-icon { margin-right: 6px; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 0 10px 4px; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-none { padding: 6px 10px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-none[hidden] { display: none; }
@@ -4432,6 +4445,9 @@
      It is dimmed like every disabled control (the rules after #169's). */
   #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled { text-decoration: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-t { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font-weight: 500; overflow-wrap: anywhere; }
+  /* An item's own kind glyph (the Also reachable picker's Folder / Domain) sits 6px before its title, not the 8px gap the title's other
+     children keep: -2px of margin takes 2px off the glyph's gap only. */
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-t > .ui-icon { margin-right: -2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-s { display: block; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-r { flex: none; font-size: var(--t-sm); color: var(--muted); }
@@ -4482,7 +4498,7 @@
 
   /* Below 863px of page (a 1365px window, as the mockup draws it) the scope moves under the name, so a mono id never clips. */
   @container (max-width: 863px) {
-    #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 72px minmax(0, 1fr) auto; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-scope { grid-column: 2; margin-top: 2px; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 3; grid-row: 1; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-kv { grid-column: 2; }
@@ -4512,6 +4528,9 @@
      never sit on an input. A variable's value goes under its name, a definition under its term. */
   @container (max-width: 440px) {
     #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr); }
+    /* The 52px column here has no room for a glyph or an indent: the words stay, the glyph steps aside. */
+    #page-host > #settings-modal.as-page #pfv .pfv-k .ui-icon { display: none; }
+    #page-host > #settings-modal.as-page #pfv .pfv-k:not(.has-ic) { padding-left: 0; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn { grid-column: 2; grid-row: auto; justify-self: end; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 2; grid-row: auto; }
     #page-host > #settings-modal.as-page #pfv .pfv-kv, #page-host > #settings-modal.as-page #pfv .pfv-dl { grid-template-columns: minmax(0, 1fr); }

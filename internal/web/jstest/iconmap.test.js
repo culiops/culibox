@@ -4,7 +4,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const maps = require("../static/iconmap.js");
-const { ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_MENU, iconOf } = maps;
+const { ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_REACH, ICON_MENU, iconOf } = maps;
 
 test('ICON_LOCKED equals GLYPHS.md "Locked by earlier shipped work"', () => {
   assert.deepStrictEqual({ ...ICON_LOCKED }, {
@@ -79,6 +79,13 @@ test('ICON_RESOURCE equals GLYPHS.md "Resources and credentials"', () => {
     credential: "key-round",
     resource: "circle-dashed",
   });
+});
+
+test("ICON_REACH is G1 22-28: the seven reach rows that draw a glyph; Files, Original, Work home, Network and Account have none", () => {
+  assert.deepStrictEqual({ ...ICON_REACH }, {
+    aws: "cloud", github: "si:github", tokens: "key-round", reads: "folder", imports: "files", domains: "globe", store: "lock",
+  });
+  for (const id of ["files", "original", "workhome", "network", "account", "constructor", "__proto__"]) assert.strictEqual(iconOf(ICON_REACH, id), "", id);
 });
 
 test("ICON_PANE_CTL is G4 25: maximize and, while the pane is pinned, minimize", () => {
