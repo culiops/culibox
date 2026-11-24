@@ -150,9 +150,20 @@ const ICON_AUDIT_KIND = iconMapOf({
 // unknown one falls back to key-round at the call site.
 const ICON_CRED_PROVIDER = iconMapOf({ aws: "cloud", github: "si:github", static: "key-round" });
 
+// The Activity row's Kind glyph (G2 27-37, drawn at 14 before the word). A tool row takes its glyph from the declared `tool`
+// (a tool with no entry: mcp__* -> plug, any other -> wrench, at the call site); the rest from the declared `kind`. A credential
+// row takes its provider's glyph (ICON_CRED_PROVIDER) and the pending ask's hand is the model's own row.
+const ICON_ACT_TOOL = iconMapOf({
+  Bash: "terminal", Read: "file-text", Edit: "file-pen", Write: "file-pen", MultiEdit: "file-pen", NotebookEdit: "file-pen",
+  Grep: "text-search", Glob: "text-search", WebFetch: "globe", WebSearch: "globe", Task: "bot",
+});
+// A tool with no entry above: an MCP tool (the `mcp__` prefix, same glyph as Analytics' mcp_tool, G2 33) or any other (G2 34).
+const ICON_ACT_TOOL_OTHER = iconMapOf({ mcp: "plug", other: "wrench" });
+const ICON_ACT_KIND = iconMapOf({ you: "message-square", clear: "eraser", ask: "hand", approval: "shield-alert" });
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    ICON_AUDIT_KIND, ICON_CRED_PROVIDER,
+    ICON_AUDIT_KIND, ICON_CRED_PROVIDER, ICON_ACT_TOOL, ICON_ACT_TOOL_OTHER, ICON_ACT_KIND,
     emptyState, ICON_EMPTY, ICON_SETTINGS_TAB, ICON_AGENT_PROVIDER,
     iconOf, ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_REACH,
     ICON_PANE_TAB, ICON_PANE_CTL, ICON_MENU, ICON_TOKEN_TEMPLATE, ICON_DOCK_PLACE, ICON_DOCK_VIEW, ICON_LAYOUT, ICON_SYS_BANNER, ICON_TOAST, ICON_ROW, ICON_PALETTE_KIND,

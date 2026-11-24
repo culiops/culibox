@@ -8,6 +8,7 @@ const {
   activityModel, ACTIVITY_FILTERS, filterKind, outcomeText, actTime, actReadReply, actLoadDone,
   actSlide, actOldest, actContext, actDelta, actRowKey, actToolRows,
 } = require("../static/activitymodel.js");
+const { ICON_ACT_TOOL, ICON_ACT_KIND, ICON_CRED_PROVIDER } = require("../static/iconmap.js");
 
 const NOW = Date.parse("2026-10-27T14:35:10");
 const at = (hms) => Date.parse("2026-10-27T" + hms);
@@ -521,6 +522,75 @@ test("actLoadDone: a failed read keeps what was there and always ends the read",
 test("activitytab.js writes server text with textContent only", () => {
   const src = fs.readFileSync(path.join(__dirname, "../static/activitytab.js"), "utf8");
   assert.doesNotMatch(src.replace(/\/\/.*$/gm, ""), /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+});
+
+// #168 G2 27-37: a row carries the glyph of its declared kind (a tool row, of its declared `tool`) and, for a refusal or an error
+// only, an outcome glyph. Never from the words: a success draws none (left-out `s`), and a hostile key falls back, never undefined.
+const rowOf = (e, over) => model(Object.assign({ session: sess(), resp: resp({ events: [e] }) }, over)).rows[0];
+
+test("ICON_ACT_TOOL and ICON_ACT_KIND are the frame's tables", () => {
+  assert.deepStrictEqual(Object.assign({}, ICON_ACT_TOOL), {
+    Bash: "terminal", Read: "file-text", Edit: "file-pen", Write: "file-pen", MultiEdit: "file-pen", NotebookEdit: "file-pen",
+    Grep: "text-search", Glob: "text-search", WebFetch: "globe", WebSearch: "globe", Task: "bot",
+  });
+  assert.deepStrictEqual(Object.assign({}, ICON_ACT_KIND), { you: "message-square", clear: "eraser", ask: "hand", approval: "shield-alert" });
+  assert.ok(Object.isFrozen(ICON_ACT_TOOL) && Object.isFrozen(ICON_ACT_KIND));
+});
+
+test("a tool row's kind glyph comes from its declared tool: every named tool, mcp__ -> plug, any other -> wrench", () => {
+  for (const [tool, glyph] of Object.entries(ICON_ACT_TOOL)) assert.strictEqual(rowOf(ev({ tool })).kindIcon, glyph, tool);
+  assert.strictEqual(rowOf(ev({ tool: "mcp__github__list" })).kindIcon, "plug");
+  assert.strictEqual(rowOf(ev({ tool: "mcp__" })).kindIcon, "plug");
+  assert.strictEqual(rowOf(ev({ tool: "Frobnicate" })).kindIcon, "wrench");
+  // Keyed exactly: a different case is another tool, and a prototype key is never a hit (never undefined).
+  for (const tool of ["bash", "constructor", "__proto__", "toString", "hasOwnProperty", "", undefined, 7, null]) {
+    assert.strictEqual(rowOf(ev({ tool })).kindIcon, "wrench", String(tool));
+  }
+});
+
+test("a row's kind glyph by declared kind: you, clear, approval; a credential by provider, key-round without one", () => {
+  const k = (e, over) => rowOf(Object.assign(ev({ tool: undefined }), e), over).kindIcon;
+  assert.strictEqual(k({ kind: "you" }), "message-square");
+  assert.strictEqual(k({ kind: "clear" }), "eraser");
+  assert.strictEqual(k({ kind: "approval", state: "granted" }), "shield-alert");
+  for (const [provider, glyph] of Object.entries(ICON_CRED_PROVIDER)) assert.strictEqual(k({ kind: "credential", provider }), glyph, provider);
+  assert.deepStrictEqual(Object.assign({}, ICON_CRED_PROVIDER), { aws: "cloud", github: "si:github", static: "key-round" });
+  // An older server sends no provider; an unknown or hostile one reads the same.
+  for (const provider of [undefined, "", "gcp", "constructor", "__proto__", 3, null]) assert.strictEqual(k({ kind: "credential", provider }), "key-round", String(provider));
+  // The pending ask the model prepends is a row of its own.
+  const ask = model({ session: sess({ need: "ask", ask: "Run it?" }), resp: resp({ waiting_since: at("14:34:00") }) }).rows[0];
+  assert.strictEqual(ask.cls, "ask");
+  assert.strictEqual(ask.kindIcon, "hand");
+  assert.strictEqual(ask.outcomeIcon, "");
+});
+
+test("an outcome glyph only on a refusal (ban) or an error (circle-x); a success or anything else draws none", () => {
+  const o = (kind, state, more) => rowOf(Object.assign(ev({ kind, tool: kind === "tool" ? "Bash" : undefined, state }), more)).outcomeIcon;
+  assert.strictEqual(o("credential", "refused"), "ban");
+  assert.strictEqual(o("approval", "refused"), "ban");
+  assert.strictEqual(o("credential", "failed"), "circle-x");
+  assert.strictEqual(o("tool", "error", { exit: 1 }), "circle-x");
+  // Left out `s`: no success check. Left out `l`: a granted or extended write window is red but is not an error.
+  assert.strictEqual(o("credential", "minted"), "");
+  assert.strictEqual(o("tool", "ok", { ms: 1800 }), "");
+  assert.strictEqual(o("tool", "ok", { add: 12, del: 3 }), "");
+  assert.strictEqual(o("tool", "ok", { lines: 312 }), "");
+  assert.strictEqual(o("tool", "pending"), "");
+  for (const st of ["granted", "extended", "expired", "dropped", "ended", ""]) assert.strictEqual(o("approval", st), "", st);
+  assert.strictEqual(o("credential", ""), "");
+  assert.strictEqual(o("credential", "error"), "", "a tool word on a credential row is not its failure");
+  assert.strictEqual(o("tool", "refused"), "", "a tool refusal is not a declared thing");
+  assert.strictEqual(o("you", ""), "");
+  assert.strictEqual(o("clear", ""), "");
+});
+
+test("the glyph fields are always strings, even for a row the server wrote wrongly", () => {
+  for (const e of [{}, { kind: 7 }, { kind: "mystery" }, { kind: "tool" }, { kind: "tool", tool: {}, state: [] }, { kind: "credential", provider: {} }]) {
+    const r = model({ session: sess(), resp: resp({ events: [e] }) }).rows[0];
+    assert.strictEqual(typeof r.kindIcon, "string", JSON.stringify(e));
+    assert.strictEqual(typeof r.outcomeIcon, "string", JSON.stringify(e));
+  }
+  assert.strictEqual(rowOf({ kind: "mystery" }).kindIcon, "", "an unknown kind draws no glyph");
 });
 
 test("activitymodel.js has no DOM or network access", () => {

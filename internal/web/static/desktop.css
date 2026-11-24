@@ -2392,7 +2392,7 @@
      pending ask only, red = an error or a write window (a refusal is containment working: muted), green = status
      (ok, minted, live). A +a −d diff is neutral. The pane's width, not the window's, decides where the right column
      goes: .pane-view is the container. */
-  .pane-view[data-view="activity"] { container-type: inline-size; }
+  .pane-view[data-view="activity"] { container: act / inline-size; }
   /* §B9: the frames inherit a 20px line from the kit's .ab root and a margin-free h2 and p from its reset. .pane-view's
      `font` shorthand resets line-height to normal and the browser gives h2 and p their margins, so the view sets both. */
   .act-wrap, .act-plain { line-height: var(--lh-md); }
@@ -2428,12 +2428,13 @@
   .act-live { display: inline-flex; align-items: center; gap: 6px; }
   .act-foot[hidden] { display: none; }
 
-  /* The event table (§B3): fixed columns of 88, 104 and 124px, the Detail column takes the rest and wraps, 6px above and
+  /* The event table (§B3): fixed columns of 88, 124 (the frame's 104 and the Kind glyph) and 124px, the Detail column takes the rest and wraps, 6px above and
      below its text. Every other cell keeps the kit's 32px row. The card clips the row tint to its 8px corners. */
   .act-card { overflow: hidden; }
   .act-tbl { table-layout: fixed; }
   .act-tbl th:nth-child(1) { width: 88px; }
-  .act-tbl th:nth-child(2) { width: 104px; }
+  /* 104px + the 20px of the Kind glyph (#168): "Credential", "WebFetch" and a 10-letter tool name would otherwise lose their last letters to the ellipsis. */
+  .act-tbl th:nth-child(2) { width: 124px; }
   .act-tbl th:nth-child(4) { width: 124px; }
   .act-tbl td.act-det { white-space: normal; overflow-wrap: anywhere; height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); }
   /* Not drawn, and real: a date and clock ("28 Nov 14:12", an event from an earlier day) wraps in the 88px Time column
@@ -2441,6 +2442,8 @@
      ellipsizes in Kind instead of running into Detail. */
   .act-tbl td:first-child { white-space: normal; height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); }
   .act-tbl td:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
+  /* The Kind and Outcome glyphs (#168 G2 21, 22, 27-37, 14px) sit 6px before their word and take the cell's colour. */
+  .act-tbl td:is(:nth-child(2), :nth-child(4)) > .ui-icon { margin-right: 6px; }
   /* The pending ask is the one amber row (the frames draw none: this is the product's own, kept). The kit's row hover
      out-weighs a bare tint, as on the Audit page's elevated rows. */
   .act-tbl tbody tr.act-ask, .act-tbl tbody tr.act-ask:hover { background: var(--amber-tint); }
@@ -2474,6 +2477,15 @@
     .act-tbl { table-layout: auto; }
     .act-tbl th:nth-child(1), .act-tbl th:nth-child(2), .act-tbl th:nth-child(4) { width: auto; }
     .act-tbl td.act-det { min-width: 160px; }
+  }
+  /* The glyphs cost the table up to 40px (20 on the Kind column, 20 on the Outcome column when a refusal or an error is shown) in
+     a pane whose table already scrolls inside its card. Measured in a real browser on the frame's rows (dates for times, a long URL,
+     a Task, an error, a refusal), the card stops scrolling from a 457px pane without glyphs, 477px with the Outcome glyphs and
+     497px with the Kind glyphs too. So under 497px the Kind glyphs go; every word and the Outcome glyphs (a refusal or an error is
+     the one thing the pane must not hide) stay. The pane view is the container, named `act` beside the unnamed queries
+     above, which still read it. */
+  @container act (max-width: 496px) {
+    .act-tbl td:nth-child(2) > .ui-icon { display: none; }
   }
 
   /* --- New session dialog (spec 5.6) -------------------------------------- */
