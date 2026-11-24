@@ -89,3 +89,9 @@ func (s *Service) StripEnv() []string {
 
 // Forget drops a gone session's state at the proxy (counters, open tunnels).
 func (s *Service) Forget(id string) { s.o.Proxy.Forget(id) }
+
+// PolicyChanged closes the tunnels session id's new policy refuses and audits
+// the change (#95); see Proxy.PolicyChanged.
+func (s *Service) PolicyChanged(id, box, summary string) int {
+	return s.o.Proxy.PolicyChanged(id, box, summary)
+}

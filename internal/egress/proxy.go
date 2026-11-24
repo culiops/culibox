@@ -38,6 +38,9 @@ const (
 	// the connection is already hijacked, so it is written raw.
 	revoked = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: " + challenge +
 		"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+	// forbidden answers a CONNECT whose host the session's policy stopped
+	// allowing after it was checked (see stillHolds), also written raw.
+	forbidden = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
 )
 
 // lookupNetIP is the system resolver; a variable so a test can see what it is asked.
@@ -59,8 +62,9 @@ type SessionView struct {
 	GitHub      *config.GitHubBinding
 	Tokens      []config.StaticToken
 	PATs        []config.StaticToken
-	// EgressAllow and EgressOpen are the profile's network policy, copied at
-	// spawn. They matter only for a bound session: EgressAllow joins its
+	// EgressAllow and EgressOpen are the profile's network policy as it applies
+	// now: copied at spawn, then changed by a profile edit (#95). They matter
+	// only for a bound session: EgressAllow joins its
 	// allowlist, EgressOpen puts it in open mode (any public host on 443; the
 	// port, private-address and host-address checks still apply). An unbound
 	// session is open already.
@@ -131,6 +135,11 @@ type tunnel struct {
 	sid        string
 	client, up net.Conn
 	once       sync.Once
+	// host, port and viaPrivate are what the tunnel was opened to, so a policy
+	// change can tell whether the session may still hold it (Reconcile).
+	host       string
+	port       int
+	viaPrivate bool
 }
 
 func (t *tunnel) close() {
@@ -290,6 +299,68 @@ func (p *Proxy) Forget(id string) {
 	}
 }
 
+// Reconcile closes every tunnel of session id that its current policy no
+// longer admits, and reports how many it closed (#95). The session manager
+// calls it after it has stored a session's new policy, so the lookup here reads
+// that policy. A session the lookup no longer knows, or that has ended, keeps
+// none. A tunnel still allowed is left alone.
+func (p *Proxy) Reconcile(id string) int {
+	p.mu.Lock()
+	var ts []*tunnel
+	for t := range p.tunnels {
+		if t.sid == id {
+			ts = append(ts, t)
+		}
+	}
+	p.mu.Unlock()
+	if len(ts) == 0 {
+		return 0
+	}
+	pol, live := p.currentPolicy(id)
+	n := 0
+	for _, t := range ts {
+		if !live || !pol.holds(t.host, t.port, t.viaPrivate) {
+			t.close()
+			n++
+		}
+	}
+	return n
+}
+
+// PolicyChanged is Reconcile plus one audit row for the change: outcome
+// policy_changed, the summary (with the number of tunnels closed) as its host.
+// It is never throttled: one row per session per profile change. A failed
+// audit write is logged and the change stands, so a narrowing is never undone
+// by the audit store.
+func (p *Proxy) PolicyChanged(id, box, summary string) int {
+	n := p.Reconcile(id)
+	if n > 0 {
+		summary = strings.TrimSpace(summary + " closed:" + strconv.Itoa(n))
+	}
+	p.record(Row{Time: p.o.Now(), SessionID: id, Box: box, Host: cleanHost(summary), Outcome: OutcomePolicyChanged})
+	return n
+}
+
+// currentPolicy reads session id's policy through the lookup, with none of
+// p's locks held. live is false for a session that is unknown, has ended or is
+// not boxed: it may hold nothing.
+func (p *Proxy) currentPolicy(id string) (pol policy, live bool) {
+	if p.o.Lookup == nil {
+		return policy{}, false
+	}
+	v, found := p.o.Lookup(id)
+	if !found || !v.Live || !v.Boxed {
+		return policy{}, false
+	}
+	return policyOf(v), true
+}
+
+// stillHolds re-reads t's session policy and reports whether it still admits t.
+func (p *Proxy) stillHolds(t *tunnel) bool {
+	pol, live := p.currentPolicy(t.sid)
+	return live && pol.holds(t.host, t.port, t.viaPrivate)
+}
+
 // ProbeCredential mints a probe principal for box: a random user and password,
 // valid for 60 s, whose allowlist is only the probe host. It is good for one
 // tunnel to the probe host and one refused CONNECT elsewhere (the two proxy
@@ -330,21 +401,62 @@ func (p *Proxy) ProbeCredential(box string) (user, pass string, done func() Prob
 
 // principal is an authenticated caller: a session or a probe principal.
 type principal struct {
-	sid    string // MAC-verified session id; "" for a probe principal
-	box    string
+	policy
+	sid   string // MAC-verified session id; "" for a probe principal
+	box   string
+	key   string // cap and throttle key
+	probe *probePrincipal
+	user  string
+	epoch uint64 // p.epoch[sid] when authenticated
+}
+
+// policy is what a principal may reach, built from its session's current view
+// (policyOf) at authenticate, and again whenever a tunnel is re-checked.
+type policy struct {
 	allow  []string
-	open   bool   // open mode: unbound, or a bound profile with egress_open; no allowlist
-	github bool   // GitHub-bound: GitHub's Actions-log shard hosts are allowed
-	key    string // cap and throttle key
-	probe  *probePrincipal
-	user   string
-	epoch  uint64 // p.epoch[sid] when authenticated
+	open   bool // open mode: unbound, or a bound profile with egress_open; no allowlist
+	github bool // GitHub-bound: GitHub's Actions-log shard hosts are allowed
 	// ports maps an exact entry host to the extra (non-443) TLS ports its
-	// entries declare; private lists the (exact host, cidr) exceptions. Both
-	// are built once at authenticate. An unbound open principal has neither; a
-	// bound open one keeps its token-entry ports and private exceptions; probes have none.
+	// entries declare; private lists the (exact host, cidr) exceptions. An
+	// unbound open policy has neither; a bound open one keeps its token-entry
+	// ports and private exceptions; probes have none.
 	ports   map[string]map[int]bool
 	private []privateRule
+}
+
+// policyOf is the policy of a session view. No binding means open mode; a
+// bound session gets its allowlist, and open mode only with egress_open.
+func policyOf(v SessionView) policy {
+	bs := config.Bindings{AWS: v.AWS, AWSConns: v.AWSConns, GitHub: v.GitHub, Tokens: v.Tokens, PATs: v.PATs, EgressAllow: v.EgressAllow}
+	if !bs.Any() {
+		return policy{open: true}
+	}
+	pol := policy{allow: Effective(bs), github: v.GitHub != nil}
+	pol.ports, pol.private = entryRules(v.Tokens, v.PATs)
+	// Open mode for a bound session skips only the host allowlist: the port
+	// check and the private-address filtering run for every principal.
+	pol.open = v.EgressOpen
+	return pol
+}
+
+// portOK: 443 is fine for every allowed host; any other port only for the
+// exact host of a token entry that declares it.
+func (pol policy) portOK(name string, port int) bool {
+	return port == 443 || pol.ports[name][port]
+}
+
+// hostOK: name (normalised) passes the allowlist, or the policy is open.
+func (pol policy) hostOK(name string) bool {
+	return pol.open || hostmatch.Match(pol.allow, name) || (pol.github && GitHubResultsHost(name))
+}
+
+// holds reports whether pol still admits a tunnel opened to host:port, through
+// a private exception when viaPrivate.
+func (pol policy) holds(host string, port int, viaPrivate bool) bool {
+	if !pol.portOK(host, port) || !pol.hostOK(host) {
+		return false
+	}
+	return !viaPrivate || slices.ContainsFunc(pol.private, func(r privateRule) bool { return r.host == host })
 }
 
 // privateRule is one token entry's private exception: the exact normalised
@@ -460,11 +572,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 443 is fine for every allowed host; any other port only for the exact
 	// host of a token entry that declares it. Unbound open principals and probes have none; a bound open one keeps
 	// its token-entry ports.
-	if portN != 443 && !pr.ports[name][portN] {
+	if !pr.portOK(name, portN) {
 		p.refuse(w, http.StatusMethodNotAllowed, row, OutcomeBadMethod, pr.key)
 		return
 	}
-	if !ok || !(pr.open || hostmatch.Match(pr.allow, name) || (pr.github && GitHubResultsHost(name))) {
+	if !ok || !pr.hostOK(name) {
 		if pr.probe != nil && !p.useProbe(pr, false) {
 			p.refuse(w, http.StatusProxyAuthRequired, row, OutcomeBadAuth, pr.key)
 			return
@@ -541,7 +653,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	begin := time.Now()
 	conn.SetDeadline(time.Time{}) // the server's header deadline would otherwise kill the tunnel
-	t := &tunnel{sid: pr.sid, client: conn, up: up}
+	t := &tunnel{sid: pr.sid, client: conn, up: up, host: name, port: portN, viaPrivate: viaPrivate}
 	if err := p.register(t, pr); err != nil {
 		if err == errRevoked {
 			conn.SetWriteDeadline(time.Now().Add(time.Second))
@@ -557,6 +669,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(p.tunnels, t)
 		p.mu.Unlock()
 	}()
+	// The policy may have narrowed while this request resolved and dialled
+	// (#95). Read it again now that the tunnel is registered: a Reconcile that
+	// runs from here on sees the tunnel, and one that ran before has already
+	// stored the policy this lookup reads.
+	if pr.probe == nil && !p.stillHolds(t) {
+		conn.SetWriteDeadline(time.Now().Add(time.Second))
+		conn.Write([]byte(forbidden))
+		p.countDenied(pr)
+		p.recordDenied(withOutcome(row, OutcomeDenied), pr.key)
+		return
+	}
 	conn.SetWriteDeadline(time.Now().Add(p.o.IdleTimeout))
 	if _, err := conn.Write([]byte(established)); err != nil {
 		// The client never saw its tunnel: not an allowed tunnel. The dial
@@ -642,7 +765,7 @@ func (p *Proxy) authenticate(h http.Header) (principal, authVerdict) {
 		if expired || subtle.ConstantTimeCompare([]byte(pass), []byte(pp.pass)) != 1 {
 			return principal{}, authBad
 		}
-		return principal{box: pp.box, allow: []string{p.o.ProbeHost}, key: "probe:" + user, probe: pp, user: user}, authOK
+		return principal{policy: policy{allow: []string{p.o.ProbeHost}}, box: pp.box, key: "probe:" + user, probe: pp, user: user}, authOK
 	}
 	sid, nonce, ok := sesstoken.Parse(sesstoken.DomainEgress, p.o.Secret, pass)
 	if !ok {
@@ -662,19 +785,7 @@ func (p *Proxy) authenticate(h http.Header) (principal, authVerdict) {
 		subtle.ConstantTimeCompare([]byte(v.Nonce), []byte(nonce)) != 1 {
 		return bad, authBad
 	}
-	pr := principal{sid: sid, box: v.Box, key: sid, epoch: epoch}
-	bs := config.Bindings{AWS: v.AWS, AWSConns: v.AWSConns, GitHub: v.GitHub, Tokens: v.Tokens, PATs: v.PATs, EgressAllow: v.EgressAllow}
-	if !bs.Any() {
-		pr.open = true
-	} else {
-		pr.allow = Effective(bs)
-		pr.github = v.GitHub != nil
-		pr.ports, pr.private = entryRules(v.Tokens, v.PATs)
-		// Open mode for a bound session skips only the host allowlist: the
-		// port check and the private-address filtering run for every principal.
-		pr.open = v.EgressOpen
-	}
-	return pr, authOK
+	return principal{policy: policyOf(v), sid: sid, box: v.Box, key: sid, epoch: epoch}, authOK
 }
 
 // basicAuth parses the one Proxy-Authorization header. present is false only
