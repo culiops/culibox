@@ -607,7 +607,12 @@
   /* #side-palette (a drawn magnifier, 14px: the ⌕ glyph is ~7px in fallback fonts) and #side-collapse
      (the « text, which reads) are the kit's .btn .btn-ghost .btn-icon .btn-sm in index.html (m1-1):
      their look is the kit's, not ours. */
-  #side-palette svg { display: block; flex: none; width: 14px; height: 14px; }
+  #side-palette svg, #side-collapse svg { display: block; flex: none; width: 14px; height: 14px; }
+  /* #168: the glyph before the word of New session and of each footer link: 6px gap, the text's middle line. */
+  #side-new .ui-icon, .side-links .ui-icon { margin-right: 6px; }
+  /* At the 200px minimum New session has 85px for its 80px label (measured): the plus would clip the word, so the row
+     (a size container, below) drops it below 190px, where only the label fits. */
+  @container (max-width: 189px) { #side-new .ui-icon { display: none; } }
   .pbtn {
     width: 100%; padding: 8px 12px; font: 600 var(--t-md) var(--font-ui); cursor: pointer;
     background: var(--accent); color: var(--on-fill); border: 0; border-radius: var(--r-ctl);
@@ -621,7 +626,7 @@
      clips (overflow: hidden), so the menu is placed against the whole row, right-aligned under « and never
      wider than the row (measured: against the 24px button it ran past the sidebar's left edge). app.css's
      fixed 232px .menu width is reset to the content's. */
-  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; position: relative; }
+  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; position: relative; container-type: inline-size; }
   /* The label is centred, so the 2px side padding only shows at the 200px sidebar, where New session gets 85px for its
      80px label (measured); the ellipsis is a guard for a wider fallback font, never a two-line button. */
   #side-top .xnewrow #side-new { flex: 1; min-width: 0; margin-right: 4px; white-space: nowrap; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; }
@@ -900,8 +905,11 @@
      session's so the row reads as a child. */
   #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 32px; }
   #sessions .drow .nest-arrow {
-    flex: none; width: 9px; font: 400 var(--t-sm)/var(--lh-md) var(--font-ui); color: var(--muted); text-align: center;
+    flex: none; width: 12px; font: 400 var(--t-sm)/var(--lh-md) var(--font-ui); color: var(--muted); text-align: center;
   }
+  /* The ↳ is the corner-down-right glyph at 12 (#168), centred on the name's line; the ⋯ glyph is centred in its 24px button. */
+  #sessions .drow .nest-arrow .ui-icon { display: block; margin-top: calc((var(--lh-md) - 12px) / 2); }
+  #sessions .drow .kbtn .ui-icon { display: block; margin: auto; }
   #sessions .drow.nested .dot { width: 6px; height: 6px; margin-top: 7px; margin-right: 1px; }
   #sessions .drow.nested .nm { color: var(--muted); }
   #sessions .drow.nested.sel .nm, #sessions .drow.nested:hover .nm { color: var(--fg); }

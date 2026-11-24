@@ -2783,6 +2783,9 @@ function paintCompactRow(li, sname, grow, s, conn) {
   if (aws) facts.push("AWS: " + aws.title);
   if (s.clone_of) facts.push(wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s));
   li.title = facts.join("\n");
+  // A nested shell's ↳ (written as text by renderSession, which the phone shares) is the corner-down-right glyph on the desktop (#168).
+  const nestArrow = li.querySelector(".nest-arrow");
+  if (nestArrow) nestArrow.replaceChildren(uiIcon(ICON_ROW.nested, { size: 12 }));
   // No per-session cost on the row (the M1 frames draw none; founder 2026-11-08): the pane
   // header's meta and Analytics show it.
   if (chip) {
@@ -2798,7 +2801,8 @@ function paintCompactRow(li, sname, grow, s, conn) {
   kb.type = "button";
   // The kit's ghost icon button, 24px (the frames' .row-menu); .kbtn keeps the reveal on hover.
   kb.className = "kbtn btn btn-ghost btn-icon btn-sm";
-  kb.textContent = "⋯"; // U+22EF, as on the mobile row
+  // The ellipsis glyph (#168); the phone row's own ⋯ in renderSession stays text (the phone UI is frozen).
+  kb.append(uiIcon(ICON_ACTION.more, { size: 14 }));
   kb.setAttribute("aria-label", "Session actions");
   kb.setAttribute("aria-haspopup", "menu");
   // The kit's disclosure state: expanded while this row's own menu is open (desktop.css shows it pressed).

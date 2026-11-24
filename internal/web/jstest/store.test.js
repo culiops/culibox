@@ -348,6 +348,7 @@ test("the sidebar footer has div#side-store[hidden] on its own row, between the 
 // as in the browser) over fakedom. Fixtures use made-up names.
 const vm = require("node:vm");
 const { Node: FNode, Text: FText } = require("./fakedom.js");
+const { iconStubs } = require("./iconpage.js");
 const readStatic = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
 
 async function storePage(opts) {
@@ -361,6 +362,7 @@ async function storePage(opts) {
   for (const id of ["store-banner-slot", "store-banner", "sys-banner-slot", "sessions", "rail48"]) { els[id] = new FNode("div", doc); els[id].hidden = true; }
   doc.getElementById = (id) => els[id] || null;
   const box = {
+    ...iconStubs(() => new FNode("svg", doc)),
     document: doc, window: { innerWidth: o.phone ? 390 : 1280, location: { reload() {} } }, console, Date, Math, JSON, Promise, setImmediate,
     mobileActive: () => box.phone, phone: o.phone,
     sys: { lastOkAt: Date.now(), failSince: null, signedOut: o.signedOut, hiddenSince: null, paused: false, bootVersion: "v1", version: "v1", dismissedVersion: "" },
@@ -414,6 +416,15 @@ test("T9 desktop: a locked store paints ONE amber banner with ONE field in the s
   assert.doesNotMatch(slot.textContent, /Stays unlocked/);
   assert.strictEqual(p.els["store-banner"].hidden, true);
   assert.strictEqual(p.els["store-banner"].children.length, 0);
+});
+
+test("T9 desktop: the store banner title has the lock glyph (ICON_STATUS.locked, 14) right after its amber dot", async () => {
+  const p = await storePage();
+  const title = sidebarForm(p).slot.querySelector(".banner-title");
+  assert.strictEqual(title.children[0].className, "dot dot-needs");
+  assert.strictEqual(title.children[1].attrs["data-icon"], "lock");
+  assert.strictEqual(title.children[1].attrs.width, "14");
+  assert.strictEqual(title.textContent, "Store locked");
 });
 
 test("T9 desktop: the session card strip is the frame sentence + Unlock…, with no field", async () => {

@@ -34,6 +34,7 @@ function withPending(el, label, fn) {
   el.disabled = true;
   el.setAttribute("aria-busy", "true");
   let original = null; // the text to put back; set only once we swap in `label`
+  let held = null; // the child nodes to put back instead, when the button holds more than text
   let toastShown = null; // set when `el` was detached and the label went to a toast
   const seq = pendingToastSeq();
   const timer = setTimeout(() => {
@@ -45,6 +46,8 @@ function withPending(el, label, fn) {
       return;
     }
     original = el.textContent;
+    // A button that holds a glyph as well as its word (New session): the nodes come back as they were, not just the words.
+    if (el.children && el.children.length > 0 && el.childNodes) held = Array.from(el.childNodes);
     el.classList.add("busy");
     el.textContent = label;
   }, PENDING_DELAY_MS);
@@ -56,7 +59,10 @@ function withPending(el, label, fn) {
       clearTimeout(timer);
       el.removeAttribute("aria-busy");
       el.classList.remove("busy");
-      if (original !== null && el.textContent === label) el.textContent = original;
+      if (original !== null && el.textContent === label) {
+        if (held) el.replaceChildren(...held);
+        else el.textContent = original;
+      }
       if (el.disabled === true) el.disabled = wasDisabled;
       clearPendingToast(toastShown, label);
     }

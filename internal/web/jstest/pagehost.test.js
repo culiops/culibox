@@ -102,7 +102,7 @@ test("crossing to mobile closes the page", () => {
 
 test("the Audit link shows only when the server has an audit store", () => {
   assert.match(read("app.js"), /sideAudit\.hidden = !\(meta && meta\.audit\)/);
-  assert.match(read("index.html"), /<button id="side-audit" type="button" hidden>Audit<\/button>\s*<button id="side-analytics"/);
+  assert.match(read("index.html"), /<button id="side-audit" type="button" hidden><svg data-uicon="scroll-text" width="14" height="14" aria-hidden="true"><\/svg>Audit<\/button>\s*<button id="side-analytics"/);
 });
 
 test("#page-host sits after #drawer in #layout; pagehost.js loads after shell.js", () => {

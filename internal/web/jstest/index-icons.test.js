@@ -13,6 +13,11 @@ const html = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"),
 // the blame author, "Show terminal"]
 const CHROME = [
   ["side-palette", "search", false],
+  ["side-new", "plus", true],
+  ["side-collapse", "panel-left-close", false],
+  ["side-audit", "scroll-text", true],
+  ["side-analytics", "chart-no-axes-column", true],
+  ["side-settings", "settings", true],
   ["drawer-pin", "pin", false],
   ["drawer-max", "maximize", true],
   ["dock-blame", "git-commit-horizontal", true],

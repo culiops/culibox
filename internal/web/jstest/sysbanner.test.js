@@ -8,6 +8,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { Node, Text } = require("./fakedom.js");
+const { iconStubs } = require("./iconpage.js");
 
 const read = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
 const T = 9000000;
@@ -21,6 +22,7 @@ function page(sysOver, over) {
   const list = doc.createElement("ul");
   const rail = doc.createElement("nav");
   const box = Object.assign({
+    ...iconStubs(() => doc.createElement("svg")),
     document: doc, window: { innerWidth: 1280, location: { href: "", reload() { box.calls.reload++; } } }, console, Date, Math,
     els: { "sys-banner-slot": slot, sessions: list, rail48: rail }, calls: { retry: 0, reload: 0, rail: 0, toggle: 0 }, phone: false,
     now: T,
@@ -251,4 +253,52 @@ test("R27: phone -> the Error line as today, even after a list loaded", async ()
   await p.box.refreshSessions();
   assert.strictEqual(p.list.children[0].textContent, "Error: Failed to fetch");
   assert.strictEqual(p.list.classList.contains("sess-stale"), false);
+});
+
+// #168 S2: the banner glyphs. wifi-off sits after the dot on the unreachable title, log-in on the "Sign in again"
+// button, and paused / updated have no drawn glyph (G4's left-out proposal was not drawn).
+const iconsIn = (n) => {
+  const out = [];
+  const walk = (x) => { if (x.attrs && x.attrs["data-icon"]) out.push(x); (x.children || []).forEach(walk); };
+  walk(n);
+  return out;
+};
+
+test("banner glyphs: ICON_SYS_BANNER is the status map's wifi-off and log-in, and nothing for paused or updated", () => {
+  const { ICON_SYS_BANNER, ICON_STATUS } = require("../static/iconmap.js");
+  assert.deepStrictEqual({ ...ICON_SYS_BANNER }, { unreachable: ICON_STATUS.unreachable, signedout: ICON_STATUS["signed-out"] });
+  assert.equal(ICON_SYS_BANNER.unreachable, "wifi-off");
+  assert.equal(ICON_SYS_BANNER.signedout, "log-in");
+  assert.ok(Object.isFrozen(ICON_SYS_BANNER));
+});
+
+test("banner glyphs: unreachable has wifi-off right after the dot in its title, 14 px", () => {
+  const { box, slot } = page({ lastOkAt: T - 14000, failSince: T - 11000 });
+  box.sysBannerSync();
+  const title = slot.children[0].querySelector(".banner-title");
+  assert.strictEqual(title.children[0].className, "dot dot-detached");
+  assert.strictEqual(title.children[1].attrs["data-icon"], "wifi-off");
+  assert.strictEqual(title.children[1].attrs.width, "14");
+  assert.strictEqual(title.textContent, "Can\u2019t reach CuliBox");
+  assert.strictEqual(iconsIn(slot).length, 1);
+});
+
+test("banner glyphs: signed out has log-in before the words of its Sign in again button, and none in the title", () => {
+  const { box, slot } = page({ signedOut: true });
+  box.sysBannerSync();
+  const btn = slot.children[0].querySelector(".btn");
+  assert.strictEqual(btn.children[0].attrs["data-icon"], "log-in");
+  assert.strictEqual(btn.children[0].attrs.width, "14");
+  assert.strictEqual(btn.textContent, "Sign in again");
+  assert.strictEqual(iconsIn(slot.children[0].querySelector(".banner-title")).length, 0);
+  assert.strictEqual(btn.dataset.act, "signin");
+});
+
+test("banner glyphs: paused and updated draw no glyph (updated's close keeps its text ✕)", () => {
+  const paused = page({ paused: true });
+  paused.box.sysBannerSync();
+  assert.strictEqual(iconsIn(paused.slot).length, 0);
+  const upd = page({ version: "v0.25.0" });
+  upd.box.sysBannerSync();
+  assert.strictEqual(iconsIn(upd.slot).length, 0);
 });

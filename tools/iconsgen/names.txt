@@ -22,6 +22,7 @@ code
 columns-2
 copy
 copy-plus
+corner-down-right
 diff
 download
 ellipsis
@@ -49,6 +50,7 @@ lock
 log-in
 maximize
 panel-bottom
+panel-left-close
 panel-right
 panel-right-close
 pause
