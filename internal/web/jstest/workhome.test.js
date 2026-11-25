@@ -2,7 +2,7 @@
 // workhome.js: the wording for where a private copy's work goes and what is not home.
 const test = require("node:test");
 const assert = require("node:assert");
-const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome } = require("../static/workhome.js");
+const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome, notHomePrefix, notHomeHostSigs } = require("../static/workhome.js");
 
 const ON = " · work comes home as box/* branches";
 const OFF = " · work stays in the copy (auto-return off)";
@@ -398,4 +398,29 @@ test("sessionNotHome: the session's own latest return wins, else the profile; no
   assert.strictEqual(sessionNotHome({ id: "s1", agent: "p", clone_of: "/r" }, undefined), "");
   assert.strictEqual(sessionNotHome({ id: "s2", agent: "p", return: s.return }, prof), "");
   assert.strictEqual(sessionNotHome(null, prof), "");
+});
+
+test("notHomePrefix: the line first, joined with a middle dot; either part alone when the other is empty", () => {
+  assert.strictEqual(notHomePrefix("1 branch not home", "demo-clone · Private copy of ~/x"), "1 branch not home · demo-clone · Private copy of ~/x");
+  assert.strictEqual(notHomePrefix("1 branch not home", ""), "1 branch not home");
+  assert.strictEqual(notHomePrefix("", "summary"), "summary");
+  assert.strictEqual(notHomePrefix("", ""), "");
+  assert.strictEqual(notHomePrefix(undefined, undefined), "");
+});
+
+test("notHomeHostSigs: one sig per announced not-home set, so the profile load does not announce it again", () => {
+  const nh = [{ branch: "feat", reason: "off" }];
+  const list = [
+    { trigger: "host", profile: "p", home: [], not_home: nh },
+    { trigger: "host", profile: "p", home: [], not_home: nh },
+    { trigger: "host", profile: "q", home: ["box/x"], not_home: [] },
+    { trigger: "host", profile: "r", skipped: "other-instance", not_home: nh },
+    { trigger: "host", not_home: nh },
+    null,
+  ];
+  assert.deepStrictEqual(notHomeHostSigs(list), [notHomeSig("p", { branches: nh })]);
+  assert.deepStrictEqual(notHomeHostSigs(null), []);
+  // What the toast announced, the profile poll then finds already seen.
+  const prof = [{ name: "p", not_home: { at: "A", branches: nh } }];
+  assert.deepStrictEqual(notHomeNews(notHomeHostSigs(list), prof).toasts, []);
 });

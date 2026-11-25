@@ -165,6 +165,27 @@ function notHomeSig(name, st) {
   return name + "@" + list.map((b) => ((b && b.branch) || "") + ":" + ((b && b.reason) || "")).sort().join(",");
 }
 
+// notHomePrefix: the not-home line as the first part of a row's meta or sub-line
+// (a clipped line keeps its start, so the count is what stays readable). Either
+// part may be empty: the other stands alone.
+function notHomePrefix(line, rest) {
+  return line && rest ? line + " \u00b7 " + rest : line || rest || "";
+}
+
+// notHomeHostSigs: the notHomeSig of every clone whose not-home set the Host spawn
+// toast announced (hostReturnToast names it for a summary that was not skipped
+// and has branches not home), so the next profile load does not announce the same
+// set again. Each profile once.
+function notHomeHostSigs(list) {
+  const out = [];
+  for (const sum of Array.isArray(list) ? list : []) {
+    if (!sum || sum.skipped || !sum.profile || !Array.isArray(sum.not_home) || !sum.not_home.length) continue;
+    const sig = notHomeSig(sum.profile, { branches: sum.not_home });
+    if (!out.includes(sig)) out.push(sig);
+  }
+  return out;
+}
+
 // sessionNotHome: the not-home line for a clone session's sidebar row. The
 // session's own latest return speaks when it ran (not skipped); otherwise the
 // profile's last state does. "" for a session that is not a private copy.
@@ -231,5 +252,5 @@ function returnNews(seen, cloneIds, sessions) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome };
+  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome, notHomePrefix, notHomeHostSigs };
 }

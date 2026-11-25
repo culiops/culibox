@@ -1556,9 +1556,14 @@
     /* Work that has not come home: shown at every width, unlike .psub. */
     .pitem .pnothome, .sp-nothome {
       padding: 1px 6px; border: 1px solid var(--warn); border-radius: var(--r-chip, 3px);
-      background: var(--warn-bg); color: var(--warn-fg); font-size: 11px; line-height: 1.4; white-space: nowrap;
+      background: var(--warn-bg); color: var(--warn-fg); font-size: 11px; line-height: 1.4;
+      white-space: normal; overflow-wrap: anywhere; min-width: 0;
     }
-    .pitem .pnothome { margin-left: auto; flex: none; }
+    /* The longer line ("2 branches not home · 12+ files not committed") wraps and shrinks inside its row
+       instead of running past the edge; the name keeps a floor width and ends in an ellipsis, never a mid-word break. */
+    .pitem .pnothome { margin-left: auto; flex: 0 1 auto; max-width: 60%; }
+    .pitem .pnm { flex: 0 1 auto; min-width: 8ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sp-nothome { display: inline-block; max-width: 100%; box-sizing: border-box; vertical-align: top; }
     /* Files flagged for review (#346): the same warning tint as not-home work, never a success green. */
     .pitem .pflagged {
       padding: 1px 6px; border: 1px solid var(--warn); border-radius: var(--r-chip, 3px);
