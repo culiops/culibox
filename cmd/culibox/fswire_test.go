@@ -76,7 +76,7 @@ func TestBoxedRecorder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := boxedRecorder(reg)
+	rec := boxedRecorder(reg, nil)
 	if err := rec(""); err != nil {
 		t.Fatal(err)
 	}

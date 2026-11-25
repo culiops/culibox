@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxedws"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/session"
@@ -1737,5 +1738,118 @@ func TestReturnForRepoSkipsACopyThatWasNeverMade(t *testing.T) {
 	f.mu.Unlock()
 	if lists != 0 {
 		t.Fatalf("docker was asked %d times for a copy that does not exist", lists)
+	}
+}
+
+// inPlaceRegistry is a boxed-workspace record in a fresh data dir.
+func inPlaceRegistry(t *testing.T) (*boxedws.Registry, string) {
+	t.Helper()
+	data := t.TempDir()
+	reg, _, err := boxedws.Open(data, func(string) (string, bool) { return "", false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg, data
+}
+
+// A folder boxed in place without git is never a clone source (#371): its .git,
+// if any, was written by a box. Every path that runs host git against clone_of
+// goes through checkOf, so each refuses it; an entry with no flag (recorded
+// before the flag existed) is allowed here (the save asks for an ack instead).
+func TestCheckOfRefusesFolderBoxedInPlaceWithoutGit(t *testing.T) {
+	home := t.TempDir()
+	nongit := filepath.Join(home, "plain")
+	legacy := filepath.Join(home, "legacy")
+	free := filepath.Join(home, "free")
+	nested := filepath.Join(nongit, "sub", "repo")
+	for _, d := range []string{nongit, legacy, free, nested} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg, data := inPlaceRegistry(t)
+	if err := reg.RecordInPlace(nongit, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(legacy); err != nil {
+		t.Fatal(err)
+	}
+	h := testHooks(t, noClones)
+	h.boxed = reg
+	h.dataDir = data
+
+	for _, of := range []string{nongit, nested} {
+		err := h.checkOf(of)
+		if !errors.Is(err, box.ErrUnboxableWorkspace) {
+			t.Fatalf("checkOf(%s) = %v, want ErrUnboxableWorkspace", of, err)
+		}
+		for _, want := range []string{"boxed in place when it was not a git repo", "may be box-written", filepath.Join(data, "boxed-workspaces.json")} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("checkOf(%s) = %q, missing %q", of, err, want)
+			}
+		}
+	}
+	for _, of := range []string{legacy, free} {
+		if err := h.checkOf(of); err != nil {
+			t.Errorf("checkOf(%s) = %v, want nil (unknown and none pass here)", of, err)
+		}
+	}
+
+	// Prepare, HostOrigin, the save check and a return all refuse it.
+	ran := false
+	h.prepare = func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) {
+		ran = true
+		return box.CloneMounts{}, false, nil
+	}
+	if _, _, err := h.Prepare(context.Background(), config.Clone{Of: nongit, Dir: filepath.Join(home, "copy")}, false); !errors.Is(err, box.ErrUnboxableWorkspace) || ran {
+		t.Fatalf("Prepare: err=%v ran=%v", err, ran)
+	}
+	if _, _, err := h.Prepare(context.Background(), config.Clone{Of: legacy, Dir: filepath.Join(home, "copy")}, false); err != nil || !ran {
+		t.Fatalf("Prepare of an unknown entry: err=%v ran=%v", err, ran)
+	}
+	if err := cloneSaveCheck(h, home, nil)(config.Clone{Of: nongit, Dir: filepath.Join(home, "copy2")}); !errors.Is(err, box.ErrUnboxableWorkspace) {
+		t.Fatalf("save check: %v", err)
+	}
+	if g, err := clone.NewExecGit(); err == nil {
+		h.env.Git = g
+		if _, err := h.HostOrigin(context.Background(), nongit); !errors.Is(err, box.ErrUnboxableWorkspace) {
+			t.Fatalf("HostOrigin: %v", err)
+		}
+	}
+	retRan := false
+	h.ret = func(context.Context, clone.Git, clone.Docker, clone.ReturnRequest) clone.ReturnResult {
+		retRan = true
+		return clone.ReturnResult{}
+	}
+	s := h.doReturn(context.Background(), config.Clone{Of: nongit, Dir: filepath.Join(home, "copy"), Profile: "p"}, session.ReturnNow, clone.ReturnForced)
+	if retRan || !strings.Contains(s.Error, "boxed in place") {
+		t.Fatalf("doReturn ran=%v error=%q", retRan, s.Error)
+	}
+}
+
+func TestBoxedRecorderFlagsInPlaceSpawnsOnly(t *testing.T) {
+	data := t.TempDir()
+	reg, _, err := boxedws.Open(data, func(string) (string, bool) { return "", false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	inPlace, copyDir := t.TempDir(), t.TempDir()
+	rec := boxedRecorder(reg, func() []config.Clone {
+		return []config.Clone{{Of: "/elsewhere", Dir: copyDir, Profile: "p"}}
+	})
+	if err := rec(inPlace); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec(copyDir); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.InPlaceStatus(inPlace); got != boxedws.StatusNonGit {
+		t.Errorf("in place spawn: status %q, want nongit", got)
+	}
+	if got := reg.InPlaceStatus(copyDir); got != boxedws.StatusUnknown {
+		t.Errorf("clone dir spawn: status %q, want unknown (no flag)", got)
+	}
+	if got := reg.List(); len(got) != 2 {
+		t.Errorf("both are recorded: %v", got)
 	}
 }

@@ -84,8 +84,13 @@ func seedDirs(sessions []session.Info, clones []config.Clone, profileCwds []stri
 // boxedRecorder adapts the registry to session.Manager.SetBoxedRecorder. Spawn
 // hands over the absolute cwd its checks resolved, or "" (the daemon's own cwd
 // would be meant, which is not a workspace to record), which is ignored. A
-// relative path is still made absolute, as a backstop.
-func boxedRecorder(reg *boxedws.Registry) func(cwd string) error {
+// relative path is still made absolute, as a backstop. A cwd that is a clone
+// profile's directory is a clone spawn and is recorded as before; any other is
+// an in-place spawn, and a git work tree never boxes in place (#371), so the
+// folder is recorded as boxed in place without git (RecordInPlace false): a
+// .git a box writes there later must never become a clone source. clones is
+// read on every call (a profile saved after boot counts); nil means none.
+func boxedRecorder(reg *boxedws.Registry, clones func() []config.Clone) func(cwd string) error {
 	return func(cwd string) error {
 		if cwd == "" {
 			return nil
@@ -94,7 +99,15 @@ func boxedRecorder(reg *boxedws.Registry) func(cwd string) error {
 		if err != nil {
 			return err
 		}
-		return reg.Add(abs)
+		if clones != nil {
+			key := cloneKey(abs)
+			for _, c := range clones() {
+				if c.Dir != "" && cloneKey(c.Dir) == key {
+					return reg.Add(abs)
+				}
+			}
+		}
+		return reg.RecordInPlace(abs, false)
 	}
 }
 

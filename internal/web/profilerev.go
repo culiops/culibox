@@ -204,6 +204,10 @@ type profileDoc struct {
 	config.AgentConfig
 	Rev    *string `json:"rev,omitempty"`
 	Schema *string `json:"schema,omitempty"`
+	// AckInPlaceHistory rides on a save only (SaveOpts): the user's say-so for a
+	// clone_of folder that was boxed in place before the record kept a flag. It
+	// is never part of a stored or returned profile.
+	AckInPlaceHistory bool `json:"ack_inplace_history,omitempty"`
 }
 
 // pageOutdatedMsg is the 409 body of a save whose schema is not this build's.
@@ -252,6 +256,11 @@ func isStoreFailure(err error) bool {
 // saw is not what is there" is a 409 with a code the editor acts on; a store
 // that could not write is a 500 without the path; anything else (a validation
 // error) stays a 400 with its message, as it always was.
+func isInPlaceHistory(err error) bool {
+	var ih *InPlaceHistoryError
+	return errors.As(err, &ih)
+}
+
 func writeSaveErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrProfileChanged):
@@ -263,6 +272,10 @@ func writeSaveErr(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "profile_changed", "gone": true})
 	case errors.Is(err, ErrProfileExists):
 		writeErrCode(w, http.StatusConflict, err.Error(), "profile_exists")
+	case isInPlaceHistory(err):
+		// A 400 the editor turns into a confirmation: the same save with
+		// ack_inplace_history set goes through.
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "inplace_history", "field": "clone_of"})
 	case errors.Is(err, store.ErrChangedOnDisk):
 		writeErrCode(w, http.StatusConflict, profilesFileChangedMsg, "profiles_file_changed")
 	case errors.Is(err, store.ErrUnreadable):

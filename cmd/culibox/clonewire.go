@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxedws"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/session"
@@ -46,6 +47,10 @@ type cloneHooks struct {
 	// VM's docker sees nothing else, so a clone_of or clone dir outside it is
 	// refused (checkShared).
 	shares box.SharesFunc
+
+	// boxed is the record of boxed workspaces; nil (tests, a CLI run without a
+	// data dir) knows no in-place history, so nothing is refused for it.
+	boxed *boxedws.Registry
 
 	file    string // <dataDir>/clone-dirs
 	mu      sync.Mutex
@@ -510,6 +515,15 @@ func (h *cloneHooks) checkOf(of string) error {
 	if why, owned := h.BoxOwned(of); owned {
 		return fmt.Errorf("%w: clone_of %s is box-owned (%s); a clone must be made from a host-owned repo",
 			box.ErrUnboxableWorkspace, of, why)
+	}
+	// A folder boxed in place while it was not a git repo may hold a .git the box
+	// wrote: host git (clone, fetch, origin) would run against it (#371). Only
+	// "nongit" is refused here. An entry with no flag (recorded before the flag
+	// existed) is checked at profile save, for a new or changed clone_of only,
+	// so a clone profile accepted under the old rules keeps spawning.
+	if h.boxed != nil && h.boxed.InPlaceStatus(of) == boxedws.StatusNonGit {
+		return fmt.Errorf("%w: clone_of %s: this folder was boxed in place when it was not a git repo; a .git there may be box-written; to release it, remove its entry from %s",
+			box.ErrUnboxableWorkspace, of, h.boxed.Path())
 	}
 	return nil
 }

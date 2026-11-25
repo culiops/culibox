@@ -211,6 +211,10 @@ type ProfileManager struct {
 	// cloneCheck is the disk-side check of a clone profile's repo (clone.CheckOf,
 	// wired at boot); nil = pure validation only. Spawn re-checks.
 	cloneCheck func(config.Clone) error
+	// inPlaceHistory reports that the record of boxed workspaces holds this
+	// clone_of folder with no in-place flag (boxed before the flag existed): a
+	// box may have written a .git there. Wired at boot; nil = never asked.
+	inPlaceHistory func(of string) bool
 	// notHome reports what a clone's last return left behind (cloneHooks.NotHome,
 	// wired at boot); nil = nothing to show.
 	notHome func(config.Clone) *session.NotHomeState
@@ -404,6 +408,17 @@ func (m *ProfileManager) SetAccounts(r launcher.AccountResolver) {
 func (m *ProfileManager) SetCloneCheck(f func(config.Clone) error) {
 	m.mu.Lock()
 	m.cloneCheck = f
+	m.mu.Unlock()
+}
+
+// SetInPlaceHistoryCheck installs the save-time lookup that says a clone_of
+// folder was boxed in place before the record kept a flag (boxedws
+// StatusUnknown). Only a clone_of that is new or changed is looked up, and the
+// save then needs the user's ack (SaveOpts.AckInPlaceHistory). Call at boot; nil
+// asks nothing.
+func (m *ProfileManager) SetInPlaceHistoryCheck(f func(of string) bool) {
+	m.mu.Lock()
+	m.inPlaceHistory = f
 	m.mu.Unlock()
 }
 
@@ -852,7 +867,19 @@ func profileBinds(p config.AgentConfig, kind, name string) bool {
 // a config seed or a stored profile already holds (ErrProfileExists): a create
 // must never replace a profile it did not see.
 func (m *ProfileManager) Create(p config.AgentConfig) (string, error) {
-	return m.save(p, func() error {
+	return m.CreateWith(p, SaveOpts{})
+}
+
+// SaveOpts are what a save request carries besides the profile.
+type SaveOpts struct {
+	// AckInPlaceHistory is the user's say-so for a clone_of folder that has an
+	// in-place history of unknown content. Never stored on the profile.
+	AckInPlaceHistory bool
+}
+
+// CreateWith is Create with the request's SaveOpts.
+func (m *ProfileManager) CreateWith(p config.AgentConfig, o SaveOpts) (string, error) {
+	return m.save(p, o, func() error {
 		if _, taken := m.getLocked(p.Name); taken {
 			return ErrProfileExists
 		}
@@ -869,7 +896,12 @@ func (m *ProfileManager) Create(p config.AgentConfig) (string, error) {
 // validated first, so an invalid one is reported as such, not as stale. It
 // returns the revision of the profile it stored.
 func (m *ProfileManager) Update(p config.AgentConfig, rev string) (string, error) {
-	return m.save(p, func() error {
+	return m.UpdateWith(p, rev, SaveOpts{})
+}
+
+// UpdateWith is Update with the request's SaveOpts.
+func (m *ProfileManager) UpdateWith(p config.AgentConfig, rev string, o SaveOpts) (string, error) {
+	return m.save(p, o, func() error {
 		cur, ok := m.getLocked(p.Name)
 		if !ok {
 			return ErrProfileGone
@@ -885,7 +917,7 @@ func (m *ProfileManager) Update(p config.AgentConfig, rev string) (string, error
 // It checks no revision and no existing name: the API goes through Create and
 // Update, so Save is for tests and for callers that really mean "overwrite".
 func (m *ProfileManager) Save(p config.AgentConfig) error {
-	_, err := m.save(p, nil)
+	_, err := m.save(p, SaveOpts{}, nil)
 	return err
 }
 
@@ -894,7 +926,7 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 // cannot change before the write; an error from it is returned as it is. A
 // failed store write comes back as a *storeFailure. On success it returns the
 // revision of the stored profile as Get shows it.
-func (m *ProfileManager) save(p config.AgentConfig, guard func() error) (string, error) {
+func (m *ProfileManager) save(p config.AgentConfig, o SaveOpts, guard func() error) (string, error) {
 	if err := config.ValidateProfile(p, m.optDefs); err != nil {
 		return "", err
 	}
@@ -938,8 +970,12 @@ func (m *ProfileManager) save(p config.AgentConfig, guard func() error) (string,
 		}
 	}
 	action, detail := "created", ""
-	if cur, ok := m.getLocked(p.Name); ok {
+	cur, existed := m.getLocked(p.Name)
+	if existed {
 		action, detail = "updated", changedFields(cur, m.scopeOptions(p))
+	}
+	if err := m.checkInPlaceHistoryLocked(p, cur.CloneOf, o); err != nil {
+		return "", err
 	}
 	if err := m.recordLocked(action, p.Name, detail); err != nil {
 		return "", err
@@ -952,6 +988,35 @@ func (m *ProfileManager) save(p config.AgentConfig, guard func() error) (string,
 	// a client that keeps it can save again without a read in between.
 	saved, _ := m.getLocked(p.Name)
 	return profileRev(saved), nil
+}
+
+// InPlaceHistoryError is a save refused because its clone_of folder was boxed
+// in place before the record kept a flag: a box may have written a .git there,
+// which host git (clone, fetch) would then run against. The user's ack
+// (SaveOpts.AckInPlaceHistory) saves it.
+type InPlaceHistoryError struct{ Of string }
+
+func (e *InPlaceHistoryError) Error() string {
+	return fmt.Sprintf("clone_of %s was used by a box running in place, before CuliBox recorded whether it was a git repo; "+
+		"a box could have written a .git there, and the host's git would then run against it. "+
+		"Save again and confirm only if you trust that folder's .git", e.Of)
+}
+
+// checkInPlaceHistoryLocked asks for the user's ack when clone_of is new or
+// changed and its folder has an in-place history of unknown content (an entry
+// recorded before the flag existed). An unchanged clone_of is not asked: that
+// profile was accepted under the older rules and keeps working. An ack that was
+// needed is audited, before the write it allows, like every profile row; one
+// that was not needed leaves no row. Caller holds m.mu. prevOf is the stored
+// profile's clone_of ("" when there is none).
+func (m *ProfileManager) checkInPlaceHistoryLocked(p config.AgentConfig, prevOf string, o SaveOpts) error {
+	if p.CloneOf == "" || p.CloneOf == prevOf || m.inPlaceHistory == nil || !m.inPlaceHistory(p.CloneOf) {
+		return nil
+	}
+	if !o.AckInPlaceHistory {
+		return &InPlaceHistoryError{Of: p.CloneOf}
+	}
+	return m.recordLocked("clone_ack_inplace_history", p.Name, "clone_of "+p.CloneOf)
 }
 
 // checkClone is the save-time form of the clone checks: a clone profile must
