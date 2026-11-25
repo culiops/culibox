@@ -17,6 +17,7 @@ import (
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxedws"
+	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/session"
@@ -63,6 +64,11 @@ type cloneHooks struct {
 	listBoxes                func(context.Context) ([]box.BoxInfo, error)
 	refresh                  func(context.Context, clone.Git, clone.Docker, clone.RefreshRequest) clone.RefreshResult
 	ret                      func(context.Context, clone.Git, clone.Docker, clone.ReturnRequest) clone.ReturnResult // clone.Return, swappable for tests
+
+	// audit records an automatic merge into the host's checked-out branch (#370)
+	// before it happens. nil refuses every merge (fail closed); main sets it to
+	// the store audit.
+	audit func(broker.CredEvent) error
 
 	// handback records what a returned branch flagged for review (#346); nil
 	// records nothing.
@@ -361,9 +367,33 @@ func (h *cloneHooks) doReturn(ctx context.Context, c config.Clone, trigger strin
 	s := returnSummaryOf(trigger, c.Of, h.handback, h.ret(ctx, h.env.Git, h.docker, clone.ReturnRequest{
 		Clone: c, Mode: mode, Image: h.image, Instance: h.instance,
 		TempDir: filepath.Join(h.dataDir, "clone-fetch"), Home: h.env.Home, DataDir: h.dataDir, Protected: h.env.Protected,
+		MergeAudit: h.mergeAudit(c.Profile),
 	}))
 	s.Profile = c.Profile
 	return s
+}
+
+// mergeAudit is the request's audit hook for one profile: it writes the row
+// the merge needs before it moves the host's branch. Without an audit sink it
+// returns an error, so no merge happens unaudited.
+func (h *cloneHooks) mergeAudit(profile string) func(action, detail string) error {
+	return func(action, detail string) error {
+		if h.audit == nil {
+			return errors.New("no audit store")
+		}
+		return h.audit(broker.CredEvent{Action: action, Kind: "clone", Name: profile, Actor: "culibox", Detail: detail})
+	}
+}
+
+// mergeNoteOf is the session's independent copy of a merge result, nil for nil.
+func mergeNoteOf(m *clone.MergeResult) *session.MergeNote {
+	if m == nil {
+		return nil
+	}
+	return &session.MergeNote{
+		At: m.At, Branch: m.Branch, From: m.From, To: m.To, Merged: m.Merged, Commits: m.Commits, Files: m.Files,
+		Reason: m.Reason, Detail: m.Detail, Paths: slices.Clone(m.Paths),
+	}
 }
 
 // returnSummaryOf is the session's view of a return result. The clone layer has
@@ -374,7 +404,7 @@ func (h *cloneHooks) doReturn(ctx context.Context, c config.Clone, trigger strin
 func returnSummaryOf(trigger, of string, hb *handbackHooks, r clone.ReturnResult) session.ReturnSummary {
 	s := session.ReturnSummary{
 		Trigger: trigger, At: r.At, Base: r.Base, Home: r.Home, Warnings: r.Warnings, Error: r.Error,
-		UncommittedCut: r.UncommittedCut,
+		UncommittedCut: r.UncommittedCut, Merge: mergeNoteOf(r.Merge),
 	}
 	if r.Uncommitted != nil {
 		n := *r.Uncommitted
@@ -515,10 +545,10 @@ func (h *cloneHooks) NotHome(c config.Clone) *session.NotHomeState {
 		return &session.NotHomeState{Error: "cannot read what is not home: " + clone.Sanitize(err.Error())}
 	}
 	uncommitted := st.Uncommitted != nil && *st.Uncommitted > 0
-	if !ok || (len(st.NotHome) == 0 && st.Error == "" && !uncommitted) {
+	if !ok || (len(st.NotHome) == 0 && st.Error == "" && !uncommitted && st.Merge == nil) {
 		return nil
 	}
-	out := &session.NotHomeState{At: st.At, Base: st.Base, Error: st.Error}
+	out := &session.NotHomeState{At: st.At, Base: st.Base, Error: st.Error, Merge: mergeNoteOf(st.Merge)}
 	if uncommitted {
 		n := *st.Uncommitted
 		out.Uncommitted, out.UncommittedCut = &n, st.UncommittedCut
