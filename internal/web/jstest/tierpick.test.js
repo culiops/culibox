@@ -1069,17 +1069,47 @@ test("a git folder whose profile already has its copy: the clone card is the pic
   assert.strictEqual(m.pick, "clone");
 });
 
-test("a git folder and a clone card the server does not offer: only Host is left to pick", () => {
+// #371 C1 (Playwright D2): Host is never chosen for the user. With both Box cards off, nothing is picked and Start waits with the
+// reason; Host stays one deliberate click away.
+test("a git folder and a clone card the server does not offer: no card is picked, Host is not, and the reason is given", () => {
   const m = tierModel({ profile: plain, cwd: "/home/u/repo", home, picked: "", short, git: gitRepo, cloneUnavailable: "clone mode needs git 2.40" });
   assert.strictEqual(m.cards[1].disabled, true);
-  assert.strictEqual(m.pick, "host");
+  assert.strictEqual(m.pick, "");
+  assert.strictEqual(m.dflt, "");
+  assert.deepStrictEqual(m.cards.map((c) => c.on), [false, false, false]);
+  assert.deepStrictEqual(m.cards.map((c) => c.dflt), [false, false, false], "no card reads \"profile default\"");
+  assert.strictEqual(m.none, "A git repo boxes as a private copy, which is not available here (Clone mode needs git 2.40). Pick Host to run it outside a box.");
+  assert.strictEqual(tierModel({ profile: plain, cwd: "/home/u/repo", home, picked: "host", short, git: gitRepo, cloneUnavailable: "x" }).pick, "host",
+    "the user's own Host click stands");
+  const blocked = tierModel({ profile: bound, cwd: "/home/u/repo", home, picked: "", short, git: gitRepo, cloneUnavailable: "no git" });
+  assert.strictEqual(blocked.pick, "");
+  assert.ok(!/Host/.test(blocked.none), "no Host offer when Host is blocked: " + blocked.none);
 });
 
-test("a profile with a copy for another repo cannot convert; a git folder is then Host only", () => {
-  const m = tierModel({ profile: clone, cwd: "/home/u/other", home, picked: "", short, git: { repo: "/home/u/other", worktree: false, inside: false } });
-  assert.strictEqual(m.cards[1].disabled, true);
-  assert.strictEqual(m.cards[1].convert, false);
-  assert.strictEqual(m.pick, "host");
+test("a profile with a copy for another repo: the clone card converts, and the dialog says what blocks it", () => {
+  const other = { repo: "/home/u/other", worktree: false, inside: false };
+  const m = tierModel({ profile: clone, cwd: "/home/u/other", home, picked: "", short, git: other });
+  assert.strictEqual(m.cards[1].disabled, false);
+  assert.strictEqual(m.cards[1].convert, true);
+  assert.strictEqual(m.pick, "clone");
+  assert.strictEqual(m.none, "");
+  const { tierConvert } = require("../static/tierpick.js");
+  assert.strictEqual(tierConvert({ profile: clone, cwd: "/home/u/other", home, git: other, pick: "clone" }), true);
+  // Not a git folder: as before, the card is off with its reason.
+  const plainDir = tierModel({ profile: clone, cwd: "/home/u/other", home, picked: "", short, git: null });
+  assert.strictEqual(plainDir.cards[1].disabled, true);
+  assert.strictEqual(plainDir.cards[1].why, "This profile's clone setup is for ~/repo.");
+  assert.strictEqual(plainDir.pick, "box");
+});
+
+test("Host is preselected only for a profile saved as Host, git folder or not", () => {
+  for (const git of [null, gitRepo]) {
+    for (const p of [plain, clone, dropper, guarded]) {
+      const m = tierModel({ profile: p, cwd: "/home/u/repo", home, picked: "", short, git, cloneUnavailable: "off" });
+      assert.notStrictEqual(m.pick, "host", JSON.stringify({ p, git }));
+    }
+    assert.strictEqual(tierModel({ profile: hostp, cwd: "/home/u/repo", home, picked: "", short, git }).pick, "host");
+  }
 });
 
 test("a folder that is not git: the cards are as they were", () => {
@@ -1097,4 +1127,44 @@ test("tierConvert: the clone pick on a git folder whose profile has no copy yet 
   assert.strictEqual(tierConvert({ profile: plain, cwd: "/home/u/repo", home, git: gitRepo, pick: "host" }), false);
   assert.strictEqual(tierConvert({ profile: plain, cwd: "/home/u/x", home, git: null, pick: "clone" }), false);
   assert.strictEqual(tierConvert({ profile: clone, cwd: "/home/u/repo", home, git: gitRepo, pick: "clone" }), false);
+});
+
+// #371 C1 on the page: no card can be picked for a git folder (its private copy is not available here), so none is pressed, the
+// request names no tier, and Start waits with the reason; Host is never pressed for the user.
+test("renderTierPick: a git folder with no card to pick presses none, and tierBlock gives the reason Start waits", () => {
+  let gates = 0;
+  const pg = tpPage({
+    profile: plain, cwd: "/home/u/repo", cloneUnavailable: "clone mode needs git 2.40",
+    spawnWsCheck: { git_repo: "/home/u/repo", git_worktree: false, git_inside: false },
+    syncSpawnGate: () => { gates++; },
+  });
+  pg.run("renderTierPick()");
+  const cards = cardsOf(pg);
+  assert.deepStrictEqual(cards.map((c) => c.attrs["aria-pressed"]), ["false", "false", "false"]);
+  assert.strictEqual(pg.pick.dataset.value, "");
+  assert.ok(!pg.calls.some((c) => c[0] === "setSegValue"), "the seg is left alone: " + JSON.stringify(pg.calls));
+  assert.strictEqual(pg.run("tierBlock()"), "A git repo boxes as a private copy, which is not available here (Clone mode needs git 2.40). Pick Host to run it outside a box.");
+  assert.ok(gates > 0, "the Start gate is redrawn with the cards");
+  // The user's own Host click stands, and lifts the block.
+  pg.run('tierPick("host")');
+  assert.strictEqual(pg.pick.dataset.value, "host");
+  assert.strictEqual(pg.run("tierBlock()"), "");
+  // The phone never sees it.
+  pg.ctx.desktop = false;
+  pg.run('tierReset(); renderTierPick()');
+  assert.strictEqual(pg.run("tierBlock()"), "");
+});
+
+test("tierPick on the clone card of a git folder whose profile copies another repo opens the conversion (Start)", () => {
+  let submitted = 0;
+  const form = { requestSubmit: () => { submitted++; } };
+  const pg = tpPage({
+    profile: clone, cwd: "/home/u/other",
+    spawnWsCheck: { git_repo: "/home/u/other", git_worktree: false, git_inside: false },
+  });
+  const base = pg.ctx.$;
+  pg.ctx.$ = (id) => (id === "spawn" ? form : base(id));
+  pg.run('tierPick("clone")');
+  assert.strictEqual(submitted, 1);
+  assert.strictEqual(pg.run("tierConvertNow()"), true);
 });

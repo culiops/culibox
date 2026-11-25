@@ -13,6 +13,8 @@ const TP_VM_LINE = "Box VM is stopped; starting it takes about a minute.";
 // A git repo boxes only as a private copy (#371): the in-place card says so, and the clone card makes the copy first.
 const TP_GIT_COPY = "A git repo boxes as a private copy";
 const TP_CONVERT_LINE = "Makes a private copy of this repo first.";
+// No card can start a git folder here (#371 C1): Host is never chosen for the user, so Start waits with this reason.
+const TP_NO_CARD = "A git repo boxes as a private copy, which is not available here";
 
 // tierWhere: a card's request fields. Box · clone sends the same runtime as Box · in place; `clone` is what differs.
 function tierWhere(key) {
@@ -109,15 +111,16 @@ function tierGitRepo(git) {
   return git && typeof git.repo === "string" ? git.repo : "";
 }
 
-// tierCloneState: Box · clone needs the server to offer clone mode and a clone setup that is for this workspace. A git folder whose
-// profile has no clone setup yet is offered the conversion instead (convert: true): the card opens the private-copy dialog.
+// tierCloneState: Box · clone needs the server to offer clone mode and a clone setup that is for this workspace. A git folder the
+// profile's clone setup is not for (none yet, or one for another repo) is offered the conversion instead (convert: true): the card
+// opens the private-copy dialog, which says what blocks it, if anything ("already makes private copies of …").
 // o = {profile, cwd, home, cloneUnavailable, short, git}.
 function tierCloneState(o) {
   const p = o.profile || {};
   if (o.cloneUnavailable) return { ok: false, why: tierWhy(o.cloneUnavailable) };
-  if (!p.clone_of && tierGitRepo(o.git)) return { ok: true, why: "", convert: true };
+  if (p.clone_of && (tierSamePath(o.cwd, p.clone_of, o.home) || tierSamePath(o.cwd, p.default_cwd, o.home))) return { ok: true, why: "" };
+  if (tierGitRepo(o.git)) return { ok: true, why: "", convert: true };
   if (!p.clone_of) return { ok: false, why: TP_NO_CLONE };
-  if (tierSamePath(o.cwd, p.clone_of, o.home) || tierSamePath(o.cwd, p.default_cwd, o.home)) return { ok: true, why: "" };
   const short = typeof o.short === "function" ? o.short : (x) => x;
   return { ok: false, why: "This profile's clone setup is for " + short(p.clone_of) + "." };
 }
@@ -133,16 +136,17 @@ function tierPreselect(o) {
   return "box";
 }
 
-// tierConvert: Start would send a clone from a profile that has no copy yet, so the private-copy dialog comes first.
-// o = {profile, git, pick}.
+// tierConvert: Start would send a clone from a profile whose copy is not of this folder's repo (none yet, or another repo's), so the
+// private-copy dialog comes first. o = {profile, cwd, home, git, pick}.
 function tierConvert(o) {
-  return o.pick === "clone" && !!tierGitRepo(o.git) && !(o.profile || {}).clone_of;
+  return o.pick === "clone" && tierCloneState({ profile: o.profile, cwd: o.cwd, home: o.home, git: o.git }).convert === true;
 }
 
 // tierModel: everything the cards need. o = {profile, cwd, home, picked, cloneUnavailable, vmStopped, short, git}.
 // `picked` is the user's own choice ("" when they have not made one); it stands unless its card is now disabled.
 // `git` is the workspace check's answer for the folder ({repo, worktree, inside}), null for a folder that is not git: Box · in place
-// is then off, and the pick falls to the clone card (which converts) or Host.
+// is then off, and the pick falls to the clone card (which converts). Never to Host: Host is preselected only for a profile saved
+// as Host (tierPreselect), and a box profile whose Box cards are both off gets no pick (pick "") and `none`, the reason Start waits.
 function tierModel(o) {
   const p = o.profile || {};
   const short = typeof o.short === "function" ? o.short : (x) => x;
@@ -152,9 +156,15 @@ function tierModel(o) {
   const state = { box: git ? { ok: false, why: TP_GIT_COPY } : { ok: true, why: "" }, clone: cl, host };
 
   const pre = tierPreselect({ profile: p, cwd: o.cwd, home: o.home });
-  // In place is always on without git, so "box" is the fallback there; with git the first card still on is.
-  const dflt = state[pre].ok ? pre : TP_KEYS.find((k) => state[k].ok) || "box";
+  // In place is always on without git, so "box" is the fallback there; with git the clone card (it converts) if it is on. Never
+  // Host: an uncontained run is the user's click, not a fallback (#371 C1).
+  const dflt = state[pre].ok ? pre : ["box", "clone"].find((k) => state[k].ok) || "";
   const pick = TP_KEYS.includes(o.picked) && state[o.picked].ok ? o.picked : dflt;
+  let none = "";
+  if (pick === "") {
+    const why = state.clone.why ? " (" + state.clone.why.replace(/\.$/, "") + ")" : "";
+    none = TP_NO_CARD + why + "." + (host.ok ? " Pick Host to run it outside a box." : "");
+  }
 
   // <ws>: the folder an in-place spawn edits. On a profile's clone dir that is the repo it was cloned from, because picking
   // in place moves the workspace there.
@@ -203,7 +213,7 @@ function tierModel(o) {
     rows: rows[key],
     vm: o.vmStopped && key !== "host" ? TP_VM_LINE : "",
   }));
-  return { pick, dflt, cards };
+  return { pick, dflt, cards, none };
 }
 
 // --- the DOM part -------------------------------------------------------------------------------------------------
@@ -212,6 +222,8 @@ function tierModel(o) {
 
 // The card the user picked, "" until they do. It stands unless its card becomes disabled (tierModel), and a profile change forgets it.
 let tierPicked = "";
+// Why no card is picked (tierModel's `none`), "" while one is: the reason Start waits.
+let tierNone = "";
 // The Box VM is stopped (the S1 /api/vm-state); a Box card then says starting it takes about a minute.
 let tierVmStopped = false;
 
@@ -232,7 +244,8 @@ function tierGitNow() {
 // tierConvertNow: Start would send a clone from a profile with no copy yet, so the private-copy dialog comes first (desktop cards).
 function tierConvertNow() {
   const el = $("tierpick");
-  return !!el && drawerDesktop() && boxRuntime !== "" && tierConvert({ profile: currentProfile(), git: tierGitNow(), pick: el.dataset.value });
+  return !!el && drawerDesktop() && boxRuntime !== "" &&
+    tierConvert({ profile: currentProfile(), cwd: getCwd(), home: window.HOME_DIR || "", git: tierGitNow(), pick: el.dataset.value });
 }
 
 // tierCard: one button for one model card. It reads the card and never changes it (the box and clone cards share a row object).
@@ -281,6 +294,7 @@ function renderTierPick() {
     // No box layer: nothing is drawn, and nothing of an earlier draw stays.
     el.replaceChildren();
     el.dataset.value = "";
+    tierNone = "";
     syncCritRmRow(); // no box: the box-only rows are hidden
     return;
   }
@@ -290,10 +304,11 @@ function renderTierPick() {
   });
   el.replaceChildren(...m.cards.map(tierCard));
   el.dataset.value = m.pick;
+  tierNone = m.none;
   // The seg is the phone's control and spawnWhere reads it there, so on the desktop it follows the cards: a window narrowed below
   // the breakpoint with the dialog open then submits what the cards showed (a host profile Host is blocked for shows Box, not the
   // seg's own default). The phone never has its seg touched from here.
-  if (drawerDesktop()) {
+  if (drawerDesktop() && m.pick) {
     const seg = $("runtime-seg");
     const rt = tierWhere(m.pick).runtime;
     if (seg && segValue(seg) !== rt) setSegValue(seg, rt);
@@ -306,6 +321,13 @@ function renderTierPick() {
   }
   // The critical-rm row's line and visibility follow the card shown (clone, in place, host), however the pick came about.
   syncCritRmRow();
+  // No card picked: Start waits, with the reason (syncSpawnGate reads tierBlock).
+  if (typeof syncSpawnGate === "function") syncSpawnGate();
+}
+
+// tierBlock: why Start waits because no card can be picked ("" when one is), for syncSpawnGate. Desktop cards only.
+function tierBlock() {
+  return boxRuntime && drawerDesktop() ? tierNone : "";
 }
 
 // tierTypingCwd: the workspace field has the focus. activeElement is guarded: the fake document of the tests has none.
@@ -355,7 +377,9 @@ function tierLeaveCloneDir(p) {
 // the clone was made from (that is what "in place" edits), in the field and in the request.
 function tierPick(key) {
   tierPicked = key;
-  const convert = key === "clone" && tierConvert({ profile: currentProfile(), git: drawerDesktop() ? tierGitNow() : null, pick: key });
+  const convert = key === "clone" && tierConvert({
+    profile: currentProfile(), cwd: getCwd(), home: window.HOME_DIR || "", git: drawerDesktop() ? tierGitNow() : null, pick: key,
+  });
   if (key !== "clone") tierLeaveCloneDir(currentProfile());
   setSegValue($("runtime-seg"), tierWhere(key).runtime);
   renderTierPick();
@@ -433,7 +457,7 @@ function spawnCwdFor(w) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    TP_KEYS, tierConvert, tierGitRepo, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel, tierVmFetch,
+    TP_KEYS, TP_NO_CARD, tierConvert, tierGitRepo, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel, tierVmFetch,
     tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine,
   };
 }

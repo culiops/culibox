@@ -200,6 +200,29 @@ test("syncSpawnGate: the workspace line's block disables Start with its text, wi
   assert.strictEqual(box.syncSpawnGate().blocked, false);
 });
 
+// #371 C1: no tier card can be picked (a git folder whose private copy is not available): Start waits with tierBlock's reason, and
+// the submit handler need not re-read the box daemon for it.
+test("syncSpawnGate: no tier card to pick disables Start with its reason", () => {
+  const el = new Node("div");
+  const go = { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
+  const box = world([["spawnpanel.js", "syncSpawnGate"]], {
+    spawnPanelOn: () => true, spawnGateInput: () => ({}),
+    spawnBoxGate: () => ({ show: false, tone: "", line: "", more: "", blocked: false, noLayer: false, text: "" }),
+    $: (id) => (id === "spawn-nobox" ? el : id === "spawn" ? { querySelector: () => go } : id === "spawn-err" ? { textContent: "" } : null),
+    spawnPanelEl: () => new Node("span"), spawnBusy: false,
+    setDisabledReason: (b, off, reason) => { b.off = off; b.reason = reason; },
+    setDialogError: () => {},
+    spawnWsCheckBlock: () => "",
+    tierBlock: () => "no card",
+  });
+  vm.runInContext("var spawnGateErr = '';", box);
+  const g = box.syncSpawnGate();
+  assert.deepStrictEqual([g.blocked, g.text, g.noLayer], [true, "no card", true]);
+  assert.deepStrictEqual([go.off, go.reason], [true, "no card"]);
+  box.tierBlock = () => "";
+  assert.strictEqual(box.syncSpawnGate().blocked, false);
+});
+
 test("the picker is built with the check line on the desktop only, and the markup has the line's element", () => {
   const app = src("app.js");
   const at = app.indexOf("spawnWsPicker = createWsPicker({");

@@ -51,6 +51,10 @@ function syncSpawnGate() {
   // The workspace line's own block (app.js): the box tier is picked and the box would refuse the folder (a Mac's VM cannot see it).
   // Not a boxes-unavailable case, so the submit handler need not re-read the daemon: noLayer says so.
   const wsWhy = typeof spawnWsCheckBlock === "function" ? spawnWsCheckBlock() : "";
+  // No tier card can be picked (a git folder whose private copy is not available, #371): Start waits, Host is never chosen for
+  // the user. Also not a boxes-unavailable case (noLayer).
+  const tierWhy = typeof tierBlock === "function" ? tierBlock() : "";
+  if (!g.blocked && tierWhy) g = Object.assign({}, g, { blocked: true, noLayer: true, text: tierWhy });
   if (!g.blocked && wsWhy) g = Object.assign({}, g, { blocked: true, noLayer: true, text: wsWhy });
   const el = $("spawn-nobox");
   if (el) {
