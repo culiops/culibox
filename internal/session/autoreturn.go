@@ -120,7 +120,7 @@ func (a *autoReturner) armLocked(key string, st *cloneSched, due, now time.Time)
 // fire is the timer callback: it takes the fingerprint (before the run, so a
 // change the run itself causes is seen as new), stamps the schedule and starts
 // the run in its own goroutine. It does nothing for a stale timer, a clone with
-// no session left, or while the previous run is still going (it marks a rerun).
+// no live session left, or while the previous run is still going (it marks a rerun).
 func (a *autoReturner) fire(key string, st *cloneSched, gen uint64) {
 	a.mu.Lock()
 	if a.clones[key] != st || st.gen != gen || st.timer == nil {
@@ -128,12 +128,17 @@ func (a *autoReturner) fire(key string, st *cloneSched, gen uint64) {
 		return
 	}
 	st.timer = nil
+	// A session that ended since the timer was armed cannot run the return (its
+	// exit return owns the summary): another live session of the clone does, and
+	// with none left nothing runs and nothing is stamped as a completed run.
 	sess := st.sess
-	if _, known := st.sessions[sess]; !known {
+	if _, known := st.sessions[sess]; !known || !sess.isLive() {
 		sess = nil
 		for s := range st.sessions {
-			sess = s
-			break
+			if s.isLive() {
+				sess = s
+				break
+			}
 		}
 	}
 	if sess == nil {

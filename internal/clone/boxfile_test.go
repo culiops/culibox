@@ -363,21 +363,31 @@ func TestRefsFingerprint(t *testing.T) {
 		}
 	})
 	t.Run("a deep chain stops at the branch-name limit and stays fast", func(t *testing.T) {
+		// 150 levels of "a": a path of about 315 bytes, inside macOS's PATH_MAX of
+		// 1024, and past maxBranchLen (200) from level 101 on.
 		x := newRefsFx(t)
 		deep := ".git/refs/heads"
-		for i := 0; i < 1900; i++ {
+		for i := 0; i < 150; i++ {
 			deep += "/a"
 		}
 		if err := os.MkdirAll(filepath.Join(x.dir, deep), 0o755); err != nil {
-			t.Skipf("cannot build the chain: %v", err)
+			t.Fatalf("cannot build the chain: %v", err)
 		}
 		start := time.Now()
-		fp, ok := RefsFingerprint(x.dir)
-		if !ok || fp == "" {
-			t.Fatalf("RefsFingerprint over a 1900-deep chain = %q, %v; want ok", fp, ok)
-		}
+		before := x.fp(t)
 		if d := time.Since(start); d > 2*time.Second {
-			t.Fatalf("RefsFingerprint over a 1900-deep chain took %v; want < 2s", d)
+			t.Fatalf("RefsFingerprint over a 150-deep chain took %v; want < 2s", d)
+		}
+		// Below the cut-off the walk does not look: an entry that deep is not a
+		// valid branch, so the fingerprint need not move (a scheduling hint only).
+		x.write(t, deep+"/new", "x")
+		if x.fp(t) != before {
+			t.Fatal("the walk went below maxBranchLen into a directory no valid branch lives in")
+		}
+		// Above it, a change still moves the fingerprint.
+		x.write(t, ".git/refs/heads/a/a/new", "x")
+		if x.fp(t) == before {
+			t.Fatal("a change above the cut-off did not change the fingerprint")
 		}
 	})
 	t.Run("more than 2000 loose refs is not ok", func(t *testing.T) {

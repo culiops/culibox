@@ -305,6 +305,39 @@ func TestAutoReturnSkipsASessionThatIsNoLongerLive(t *testing.T) {
 	}
 }
 
+// The session that last ended a turn is gone but another of the clone is live:
+// the live one runs. With none live nothing runs and no run is stamped, so the
+// next turn still gets its full debounce.
+func TestAutoReturnFirePicksALiveSession(t *testing.T) {
+	f := newFakeAuto(t)
+	s1, s2 := autoSess("/c"), autoSess("/c")
+	f.a.attach(s2)
+	f.a.turnEnded(s1) // s1 is the one that last ended a turn
+	s1.mu.Lock()
+	s1.status = statusExited
+	s1.mu.Unlock()
+	f.fire(f.armed()[0])
+	f.expectRun(s2)
+}
+
+func TestAutoReturnFireWithNoLiveSessionStampsNothing(t *testing.T) {
+	f := newFakeAuto(t)
+	s := autoSess("/c")
+	f.a.turnEnded(s)
+	s.mu.Lock()
+	s.status = statusDetached
+	s.mu.Unlock()
+	f.fire(f.armed()[0])
+	f.expectNoRun()
+	f.a.mu.Lock()
+	st := f.a.clones["/c"]
+	stamped := !st.lastRun.IsZero() || st.haveFP || st.running
+	f.a.mu.Unlock()
+	if stamped {
+		t.Fatal("a fire with no live session recorded a completed run")
+	}
+}
+
 func TestAutoReturnRunWrapperEndsRun(t *testing.T) {
 	// The goroutine fire starts must call finish itself.
 	f := newFakeAuto(t)
