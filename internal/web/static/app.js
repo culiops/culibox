@@ -5748,6 +5748,9 @@ function readForm() {
     copyDir: $("pf-copy-dir").value,
     shareText: $("pf-copy-share").value,
     autoReturn: $("pf-clone-autoreturn").checked,
+    // This form has no merge switch (the profile page does): a stored one is kept, and the server asks for its ack again when
+    // the folder to copy changed (cdSendProfile opens the warning).
+    mergeHome: !!(pfLoaded && pfLoaded.clone_merge_home === true),
   }));
   const ctx = contextPathsFromText($("pf-context").value);
   if (ctx.length) p.context_paths = ctx;

@@ -130,3 +130,11 @@ test("fields to send: the auto-return switch rides only with a private copy", ()
   assert.deepStrictEqual(wmFieldsToSend("folder", { folder: "/h/r", autoReturn: false, clone_no_auto_return: true }), { default_cwd: "/h/r" });
   assert.deepStrictEqual(wmFieldsToSend("folder", { folder: "", autoReturn: false }), {});
 });
+
+test("wmFieldsToSend: the merge switch rides a private copy's save only while auto-return is on", () => {
+  const base = { folder: "/h/r", copyDir: "/h/box-clones/r" };
+  assert.deepStrictEqual(wmFieldsToSend("copy", { ...base, mergeHome: true, mergeAck: true }), { clone_of: "/h/r", default_cwd: "/h/box-clones/r", clone_merge_home: true, ack_merge_home: true });
+  assert.deepStrictEqual(wmFieldsToSend("copy", { ...base, mergeHome: false, mergeAck: true }), { clone_of: "/h/r", default_cwd: "/h/box-clones/r" });
+  assert.deepStrictEqual(wmFieldsToSend("copy", { ...base, autoReturn: false, mergeHome: true, mergeAck: true }), { clone_of: "/h/r", default_cwd: "/h/box-clones/r", clone_no_auto_return: true });
+  assert.deepStrictEqual(wmFieldsToSend("folder", { folder: "/h/r", mergeHome: true, mergeAck: true }), { default_cwd: "/h/r" });
+});

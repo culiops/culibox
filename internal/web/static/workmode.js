@@ -59,6 +59,8 @@ function wmFieldsToSend(mode, v) {
     // Unset means on. Only here: the server refuses clone_no_auto_return without
     // clone_of, so folder mode must never carry it, whatever the loaded profile had.
     Object.assign(out, wmDep("autoReturnToSend", "./profileform.js")(x.autoReturn !== false));
+    // The merge switch (#370): off unless the values say on, and never beside an auto-return opt-out.
+    Object.assign(out, wmDep("mergeHomeToSend", "./profileform.js")(x.autoReturn !== false, x.mergeHome === true, x.mergeAck === true));
     return out;
   }
   if (folder) out.default_cwd = folder;

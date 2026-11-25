@@ -683,3 +683,24 @@ test("pfvReadView: the Workspace block carries the flagged-files link only while
   const none = pfvReadView({ view: Object.assign({}, view, { flagged: 0 }), doc: {} }).blocks.find((b) => b.id === "workspace");
   assert.strictEqual(none.flagged, null);
 });
+
+test("private copy workspace with the merge switch on: its line, then the last merge or the refusal; none when off", () => {
+  const mk = (extra) => {
+    const view = Object.assign({
+      name: "m", editable: true, source: "runtime", runtime: "box", bin: "claude", claude: true,
+      default_cwd: "/home/you/box-clones/r", clone_of: "/home/you/work/r", auto_return: true, network: "allowlist",
+    }, extra);
+    const doc = { name: "m", bin: "claude", clone_of: view.clone_of, default_cwd: view.default_cwd };
+    return byId(pfvReadView({ view, doc, meta, creds, boxRuntime: "runc", bundleImports: true, defs }), "workspace").rows;
+  };
+  assert.deepStrictEqual(mk({}).map((r) => r.kind), ["Folder", "Copy"]);
+  assert.deepStrictEqual(mk({ merge_home: false }).map((r) => r.kind), ["Folder", "Copy"]);
+  const on = mk({ merge_home: true });
+  assert.deepStrictEqual(on.map((r) => r.kind), ["Folder", "Merge", "Copy"]);
+  assert.strictEqual(on[1].name, "Merges into the checked-out branch");
+  assert.strictEqual(on[1].sub, "");
+  const refused = mk({ merge_home: true, not_home: { at: "2026-11-25T10:00:00Z", merge: { at: "2026-11-25T10:00:00Z", branch: "<b>main", to: "c1", reason: "dirty" } } });
+  assert.strictEqual(refused[1].sub, "box/<b>main not merged into <b>main: <b>main has uncommitted changes", "text only: the page sets textContent");
+  const merged = mk({ merge_home: true, not_home: { at: "2026-11-25T10:00:00Z", merge: { at: "2026-11-25T10:00:00Z", branch: "main", merged: true, commits: 2, files: 3 } } });
+  assert.match(merged[1].sub, /^merged box\/main into main at .+/);
+});

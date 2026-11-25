@@ -2047,7 +2047,9 @@ test("Workspace: Work on a private copy shows the copy fields, the copy kept und
   assert.strictEqual(field(t, "copy-dir").value, "/home/you/box-clones/payments-api");
   assert.strictEqual(field(t, "share").value, "");
   assert.strictEqual(field(t, "auto-return").checked, true);
-  assert.deepStrictEqual(texts(ws, "pfv-check-t"), ["Bring work home automatically"]);
+  assert.deepStrictEqual(texts(ws, "pfv-check-t"), ["Bring work home automatically", "Merge into the checked-out branch"]);
+  assert.strictEqual(field(t, "merge-home").checked, false, "off unless the profile opted in");
+  assert.strictEqual(field(t, "merge-home").disabled, false);
   assert.deepStrictEqual(texts(ws, "pfv-hint"), [
     "A box cannot use your whole home or system folders.", "CuliBox creates it on the first session.", "Relative to the folder, one per line, at most 8.",
   ]);
@@ -7511,4 +7513,73 @@ test("pfvDrawRow: the glyph follows kindId alone; Old-style AWS still draws the 
     assert.ok(!classesOf(byCls(r, "pfv-k")[0]).includes("has-ic"), String(id));
     assert.strictEqual(texts(r, "pfv-k")[0], "GitHub");
   }
+});
+
+// --- #370: the merge switch under "Bring work home automatically" -------------------------------------------
+
+// The warning dialog is copydialog.js's: the page stands in for it and records what it was asked.
+function mergeAsk(t, answer) {
+  t.box.mergeAsked = [];
+  t.box.mergeAnswer = answer;
+  t.run("cdAskMergeHome = async (repo) => { mergeAsked.push(repo); return mergeAnswer; };");
+}
+const tickAsync = async (t, key, on) => { const cb = field(t, key); cb.checked = on; await cb.onchange(); };
+
+test("merge switch: checking it asks first with the folder to copy; Turn on sends clone_merge_home and the ack, once", async () => {
+  const t = page();
+  await openWs(t);
+  pickMode(t, "copy");
+  mergeAsk(t, true);
+  await tickAsync(t, "merge-home", true);
+  assert.deepStrictEqual(t.box.mergeAsked, ["/home/you/work/payments-api"]);
+  assert.strictEqual(field(t, "merge-home").checked, true);
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+  assert.strictEqual(t.box.puts[0].clone_merge_home, true);
+  assert.strictEqual(t.box.puts[0].ack_merge_home, true);
+});
+
+test("merge switch: Cancel unchecks it and nothing about it is sent", async () => {
+  const t = page();
+  await openWs(t);
+  pickMode(t, "copy");
+  mergeAsk(t, false);
+  await tickAsync(t, "merge-home", true);
+  assert.strictEqual(field(t, "merge-home").checked, false);
+  typeInto(field(t, "share"), "CLAUDE.md");
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+  assert.strictEqual("clone_merge_home" in t.box.puts[0], false);
+  assert.strictEqual("ack_merge_home" in t.box.puts[0], false);
+});
+
+test("merge switch: turning automatic return off unchecks and disables it, and the save sends the opt-out only", async () => {
+  const t = page();
+  await openWs(t);
+  pickMode(t, "copy");
+  mergeAsk(t, true);
+  await tickAsync(t, "merge-home", true);
+  tick(t, "auto-return", false);
+  assert.strictEqual(field(t, "merge-home").checked, false);
+  assert.strictEqual(field(t, "merge-home").disabled, true);
+  // Back on: enabled again, but off until the user asks for it (and is warned) again.
+  tick(t, "auto-return", true);
+  assert.strictEqual(field(t, "merge-home").disabled, false);
+  assert.strictEqual(field(t, "merge-home").checked, false);
+  tick(t, "auto-return", false);
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+  assert.strictEqual(t.box.puts[0].clone_no_auto_return, true);
+  assert.strictEqual("clone_merge_home" in t.box.puts[0], false);
+  assert.strictEqual("ack_merge_home" in t.box.puts[0], false);
+});
+
+test("merge switch: an unchecked box is no change; a stored switch is kept when the folder changes, and the ack is asked again for the new repo", async () => {
+  const t = clonePage();
+  t.box.docs["gitops-clone"] = Object.assign({}, CLONE_DOC, { clone_no_auto_return: undefined, clone_merge_home: true });
+  await openWs(t, "gitops-clone");
+  assert.strictEqual(field(t, "merge-home").checked, true, "the stored switch");
+  assert.ok(byCls(t.els["pfv-in"], "pfv-unsaved")[0].hidden, "opened and not touched is no change");
+  lastPicker(t).pick("/home/you/work/other");
+  await clickBtn(blockOf(t, "workspace"), "Save");
+  const body = t.box.puts[0];
+  assert.strictEqual(body.clone_merge_home, true, "kept");
+  assert.strictEqual("ack_merge_home" in body, false, "no ack from the form: the server asks, and cdSendProfile shows the warning");
 });

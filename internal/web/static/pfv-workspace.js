@@ -22,7 +22,7 @@ const PFW_HINT_SHARE = "Relative to the folder, one per line, at most 8.";
 
 // What the copy fields hold while the block is on "Work in this folder": the profile's own, as opened, so
 // "a private copy and back" is no change (see pfwPickMode).
-const pfwCopyFields = (v) => ({ copyDir: v.copyDir, shareText: v.shareText, autoReturn: v.autoReturn });
+const pfwCopyFields = (v) => ({ copyDir: v.copyDir, shareText: v.shareText, autoReturn: v.autoReturn, mergeHome: v.mergeHome, mergeAck: v.mergeAck });
 
 const pfwHome = () => (typeof window !== "undefined" && window.HOME_DIR) || "";
 const pfwUnavailable = () => (typeof cloneUnavailable === "string" ? cloneUnavailable : "");
@@ -40,6 +40,9 @@ function pfwValues(c) {
     copyDir: copy ? cwd : "",
     shareText: contextPathsToText(d.clone_share),
     autoReturn: d.clone_no_auto_return !== true,
+    // The merge switch (#370) and whether the user confirmed its warning in this form (the save then carries ack_merge_home).
+    mergeHome: d.clone_merge_home === true,
+    mergeAck: false,
   };
 }
 
@@ -88,6 +91,8 @@ function pfwPickMode(rec, mode) {
 // pfwFolderChanged: the picker's value changed (a pick, a resolved or typed path, an emptied field).
 function pfwFolderChanged(rec, path) {
   rec.values.folder = path;
+  // The warning named the repo it was confirmed for: another repo is asked about again (the server refuses the save without it).
+  rec.values.mergeAck = false;
   rec.ui.typed = undefined;
   pfwFollow(rec);
   rec.ui.clearFolder();
@@ -213,14 +218,55 @@ function pfwCopyFieldNodes(rec, storedCopy) {
   const cb = pfvMk("input");
   cb.type = "checkbox";
   cb.checked = v.autoReturn === true;
-  cb.onchange = () => { v.autoReturn = cb.checked; rec.nudge = false; pfvPaint(); };
   pfvReg(rec, "auto-return", cb);
   lab.append(cb, pfvMk("span", "pfv-check-t", "Bring work home automatically"));
-  const out = [dirBox, shareBox, lab];
+  // Merge into the checked-out branch (#370): only with automatic return (the server refuses the pair). Checking it asks first
+  // (the warning, spec 5.5); Cancel unchecks it. Unchecking automatic return unchecks and disables it.
+  const mlab = pfvMk("label", "pfv-check");
+  const mcb = pfvMk("input");
+  mcb.type = "checkbox";
+  mcb.checked = v.mergeHome === true && v.autoReturn === true;
+  mcb.disabled = v.autoReturn !== true;
+  mlab.title = v.autoReturn === true ? "" : "Merging needs automatic return";
+  pfvReg(rec, "merge-home", mcb);
+  mlab.append(mcb, pfvMk("span", "pfv-check-t", "Merge into the checked-out branch"));
+  cb.onchange = () => {
+    v.autoReturn = cb.checked;
+    if (!cb.checked) {
+      v.mergeHome = false;
+      v.mergeAck = false;
+      mcb.checked = false;
+    }
+    mcb.disabled = !cb.checked;
+    mlab.title = cb.checked ? "" : "Merging needs automatic return";
+    rec.nudge = false;
+    pfvPaint();
+  };
+  mcb.onchange = async () => {
+    if (mcb.checked) {
+      // Not on until the warning is confirmed: the dialog is modal, and the form stays as it was while it is open.
+      const yes = await cdAskMergeHome(v.folder);
+      v.mergeHome = yes;
+      v.mergeAck = yes;
+      mcb.checked = yes;
+    } else {
+      v.mergeHome = false;
+      v.mergeAck = false;
+    }
+    rec.nudge = false;
+    pfvPaint();
+  };
+  const out = [dirBox, shareBox, lab, mlab];
   const err = pfvFerr(rec, "clone_no_auto_return");
   if (err) {
     const words = pfvMk("p", "pfv-ferr", err);
     pfvBad(rec, cb, words);
+    out.push(words);
+  }
+  const merr = pfvFerr(rec, "clone_merge_home");
+  if (merr) {
+    const words = pfvMk("p", "pfv-ferr", merr);
+    pfvBad(rec, mcb, words);
     out.push(words);
   }
   return out;

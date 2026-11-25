@@ -429,6 +429,15 @@ function autoReturnToSend(checked) {
   return checked ? {} : { clone_no_auto_return: true };
 }
 
+// mergeHomeToSend: the merge switch's part of a save (#370). autoReturn is the auto-return box as the form holds it: the
+// server refuses clone_merge_home beside clone_no_auto_return, so with auto-return off nothing is sent. acked: the user
+// confirmed the warning for this save (ack_merge_home rides with it); an unticked switch sends neither key. Only a
+// private copy may carry it: wmFieldsToSend calls this for copy mode alone.
+function mergeHomeToSend(autoReturn, checked, acked) {
+  if (!autoReturn || !checked) return {};
+  return acked ? { clone_merge_home: true, ack_merge_home: true } : { clone_merge_home: true };
+}
+
 // egressAllowFromText: the Network textarea as a host list. Split on newlines
 // and commas, trim, drop blanks and repeats (first order kept). Anything else is
 // sent as typed: the server's validator refuses a bad host with its own message.
@@ -554,5 +563,5 @@ function profileListLabels(p) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, deleteProfileAsk, segValue, setSegValue, awsFieldsState, segFromRuntime, profileNeedsBox, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSavedRev, deletePath, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
+  module.exports = { autoReturnToSend, mergeHomeToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, deleteProfileAsk, segValue, setSegValue, awsFieldsState, segFromRuntime, profileNeedsBox, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSavedRev, deletePath, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
 }
