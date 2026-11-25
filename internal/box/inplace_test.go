@@ -1157,36 +1157,62 @@ func TestWrapCopyDirSkipsOnlyTheGitRefusal(t *testing.T) {
 
 // The spawn decided on its own resolution of the folder; Wrap resolves again. A
 // workspace that resolves outside the CopyDir it was handed (the folder was
-// re-pointed in between, or the key is wrong) is refused as without it.
+// re-pointed in between) is refused outright, whether the folder it now leads to
+// is git or not: it must never be judged as a plain in-place folder, which boxes
+// a non-git one with nothing recorded.
 func TestWrapRefusesWhenTheWorkspaceResolvesOutsideCopyDir(t *testing.T) {
 	refuseGitInPlace(t)
 	ctx := context.Background()
 	m, f := guardMgr(t, true)
 	copyDir := realTemp(t)
 	gitRepo(t, copyDir, "")
-	host := realTemp(t)
-	gitRepo(t, host, "")
-	// <copy>/src -> the host repo: Wrap resolves the link and boxes the host repo.
-	link := filepath.Join(copyDir, "src")
-	symlink(t, host, link)
-
-	for name, cwd := range map[string]string{"link out of the copy": link, "a sibling": host} {
-		_, _, _, err := m.Wrap(ctx, cwd, "s1", BoxKey{CopyDir: copyDir}, []string{"bash"}, nil, nil)
-		var nc *NeedsCopyError
-		if !errors.As(err, &nc) || nc.Repo != host {
-			t.Fatalf("%s: err = %v, want *NeedsCopyError for %s", name, err, host)
-		}
-	}
-	// A directory that only shares the copy's name as a prefix is not inside it.
+	hostGit := realTemp(t)
+	gitRepo(t, hostGit, "")
+	hostPlain := realTemp(t) // not a git folder: the git check alone would let it through
+	symlink(t, hostGit, filepath.Join(copyDir, "src"))
+	symlink(t, hostPlain, filepath.Join(copyDir, "docs"))
+	// A prefix sibling shares the copy's name but is not inside it.
 	sib := copyDir + "-sibling"
 	mkdirs(t, sib)
 	t.Cleanup(func() { os.RemoveAll(sib) })
-	gitRepo(t, sib, "")
-	if _, _, _, err := m.Wrap(ctx, sib, "s2", BoxKey{CopyDir: copyDir}, []string{"bash"}, nil, nil); !errors.As(err, new(*NeedsCopyError)) {
-		t.Fatalf("a prefix sibling: err = %v, want *NeedsCopyError", err)
+
+	cases := map[string]string{
+		"link to a git folder":     filepath.Join(copyDir, "src"),
+		"link to a non-git folder": filepath.Join(copyDir, "docs"),
+		"a git folder elsewhere":   hostGit,
+		"a non-git folder":         hostPlain,
+		"a prefix sibling":         sib,
+	}
+	for name, cwd := range cases {
+		_, _, _, err := m.Wrap(ctx, cwd, "s1", BoxKey{CopyDir: copyDir}, []string{"bash"}, nil, nil)
+		if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "changed since the spawn was checked") {
+			t.Fatalf("%s: err = %v, want the changed-folder refusal", name, err)
+		}
+	}
+	for _, d := range []string{hostPlain, sib, hostGit} {
+		if _, err := os.Lstat(filepath.Join(d, ".claude")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("no guard may be derived (it creates .claude) in %s: %v", d, err)
+		}
 	}
 	if f.runs() != 0 {
 		t.Fatalf("a refused workspace started a box, runs=%d", f.runs())
+	}
+}
+
+// The CopyDir skip compares exact case, even where host paths fold: a folder
+// spelled in another case than the copy is not skipped.
+func TestWrapCopyDirSkipIsExactCase(t *testing.T) {
+	refuseGitInPlace(t)
+	old := inPlaceFold
+	inPlaceFold = true
+	t.Cleanup(func() { inPlaceFold = old })
+	m, _ := guardMgr(t, true)
+	repo := filepath.Join(realTemp(t), "proj")
+	gitRepo(t, repo, "")
+	upper := filepath.Join(filepath.Dir(repo), "PROJ")
+	_, _, _, err := m.Wrap(context.Background(), repo, "s1", BoxKey{CopyDir: upper}, []string{"bash"}, nil, nil)
+	if !errors.Is(err, ErrUnboxableWorkspace) {
+		t.Fatalf("a copy dir spelled in another case: err = %v, want a refusal", err)
 	}
 }
 

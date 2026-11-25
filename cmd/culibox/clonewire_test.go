@@ -1977,13 +1977,18 @@ func TestCloneHooksCopyDirOf(t *testing.T) {
 	}
 }
 
-// A clone dir that is a symlink is resolved before the comparison, and one that
-// cannot be resolved is skipped, not matched.
-func TestCloneHooksCopyDirOfResolvesAndSkips(t *testing.T) {
+// A clone dir never has a link in its path, so a candidate that resolves to
+// anything but itself is skipped, not followed: a box can rewrite a clone dir
+// nested in another clone's tree to point at a host folder. One that cannot be
+// resolved is skipped too.
+func TestCloneHooksCopyDirOfSkipsLinkedAndUnresolvable(t *testing.T) {
 	home, _ := filepath.EvalSymlinks(t.TempDir())
 	target := filepath.Join(home, "real-clone")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatal(err)
+	hostRepo := filepath.Join(home, "code", "hostrepo")
+	for _, d := range []string{target, hostRepo} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	link := filepath.Join(home, "clone-link")
 	if err := os.Symlink(target, link); err != nil {
@@ -1993,17 +1998,36 @@ func TestCloneHooksCopyDirOfResolvesAndSkips(t *testing.T) {
 	if err := os.Symlink(loop, loop); err != nil {
 		t.Fatal(err)
 	}
+	// An outer clone holds a nested clone dir, which its box replaced by a link
+	// to a host repo.
+	outer := filepath.Join(home, "outer-clone")
+	if err := os.MkdirAll(outer, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(outer, "inner")
+	if err := os.Symlink(hostRepo, nested); err != nil {
+		t.Fatal(err)
+	}
 	h := testHooks(t, func() []config.Clone {
-		return []config.Clone{{Dir: loop}, {Dir: filepath.Join(home, "missing")}, {Dir: link}}
+		return []config.Clone{{Dir: loop}, {Dir: filepath.Join(home, "missing")}, {Dir: link}, {Dir: nested}}
 	})
-	if dir, ok := h.CopyDirOf(target); !ok || dir != target {
-		t.Fatalf("a linked clone dir resolves to %s: got %q, %v", target, dir, ok)
+	for name, real := range map[string]string{
+		"a linked clone dir":        target,
+		"the nested replaced dir":   hostRepo,
+		"a dir that does not exist": filepath.Join(home, "missing", "x"),
+		"a link loop":               loop,
+	} {
+		if dir, ok := h.CopyDirOf(real); ok {
+			t.Errorf("%s: matched %q", name, dir)
+		}
 	}
-	if _, ok := h.CopyDirOf(filepath.Join(home, "missing", "x")); ok {
-		t.Fatal("a clone dir that does not exist matched")
+	// The outer clone itself, spelled plainly, still matches.
+	h2 := testHooks(t, func() []config.Clone { return []config.Clone{{Dir: nested}, {Dir: outer}} })
+	if dir, ok := h2.CopyDirOf(outer); !ok || dir != outer {
+		t.Errorf("the plain outer clone: %q, %v", dir, ok)
 	}
-	if _, ok := h.CopyDirOf(loop); ok {
-		t.Fatal("a clone dir that cannot be resolved matched")
+	if _, ok := h2.CopyDirOf(hostRepo); ok {
+		t.Error("the host repo matched through the replaced nested dir")
 	}
 }
 

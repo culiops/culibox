@@ -189,7 +189,8 @@ func under(p, parent string) bool {
 }
 
 // CopyDirOf is the clone directory that real (absolute, symlinks resolved) is at
-// or under, resolved the same way, and whether there is one. Unlike BoxOwned it
+// or under, and whether there is one. A candidate dir must be its own resolved
+// path. Unlike BoxOwned it
 // answers only on a positive match: a candidate whose directory cannot be
 // resolved (not made yet, unreadable, a link loop) is skipped, never counted, so
 // an unknown is "no". It is for the one place that skips a refusal when a folder
@@ -203,8 +204,11 @@ func CopyDirOf(real string, clones []config.Clone) (string, bool) {
 		if c.Dir == "" || !filepath.IsAbs(c.Dir) {
 			continue
 		}
-		dir, err := filepath.EvalSymlinks(filepath.Clean(c.Dir))
-		if err != nil || dir == "/" {
+		// A clone dir never has a link in its path (the clone checks refuse one), so
+		// a candidate that resolves to anything but itself was rewritten, or is not
+		// a clone's: skipped, never followed to wherever it now leads.
+		dir := filepath.Clean(c.Dir)
+		if r, err := filepath.EvalSymlinks(dir); err != nil || r != dir || dir == "/" {
 			continue
 		}
 		if under(real, dir) {
