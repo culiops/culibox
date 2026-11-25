@@ -288,10 +288,14 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if err != nil {
 		return m.failed("cannot read core.hooksPath", err)
 	}
+	imports, err := m.importTargets(r.Home)
+	if err != nil {
+		return m.failed("cannot list the CLAUDE.md files", err)
+	}
 	var denied []string
 	dseen := map[string]bool{}
 	for _, e := range entries {
-		if (e.gitlink || mergeDenied(e.path, hooks)) && !dseen[e.path] {
+		if (e.gitlink || mergeDenied(e.path, hooks) || importDenied(e.path, imports)) && !dseen[e.path] {
 			dseen[e.path] = true
 			denied = append(denied, e.path)
 		}
@@ -601,18 +605,7 @@ func hooksDirOf(of, home, v string) string {
 	if !filepath.IsAbs(v) {
 		rel = path.Clean(filepath.ToSlash(v))
 	} else {
-		rel = relInside(of, v)
-		if rel == "" {
-			ro, err1 := filepath.EvalSymlinks(of)
-			rv, err2 := filepath.EvalSymlinks(v)
-			if err1 == nil && err2 == nil {
-				rel = relInside(ro, rv)
-			}
-		}
-		if rel == "" {
-			rel = relInside(strings.ToLower(of), strings.ToLower(v))
-		}
-		if rel == "" {
+		if rel = absInside(of, v); rel == "" {
 			return ""
 		}
 	}
@@ -620,6 +613,29 @@ func hooksDirOf(of, home, v string) string {
 		return ""
 	}
 	return strings.ToLower(rel)
+}
+
+// absInside is the absolute path v relative to of, slash-separated, when v is
+// at or below of as spelled, through symlinks (of v, or of its parent when v
+// does not exist), or with case folded; "" otherwise.
+func absInside(of, v string) string {
+	if rel := relInside(of, v); rel != "" {
+		return rel
+	}
+	if ro, err := filepath.EvalSymlinks(of); err == nil {
+		rv, err := filepath.EvalSymlinks(v)
+		if err != nil {
+			if rd, err2 := filepath.EvalSymlinks(filepath.Dir(v)); err2 == nil {
+				rv, err = filepath.Join(rd, filepath.Base(v)), nil
+			}
+		}
+		if err == nil {
+			if rel := relInside(ro, rv); rel != "" {
+				return rel
+			}
+		}
+	}
+	return relInside(strings.ToLower(of), strings.ToLower(v))
 }
 
 // relInside is v relative to dir, slash-separated, when v is at or below dir;

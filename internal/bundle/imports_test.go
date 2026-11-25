@@ -18,6 +18,16 @@ import (
 	"github.com/culiops/culibox/internal/box"
 )
 
+// ParseImports is parseImports for callers outside the package (the clone
+// merge guard, #370): the same spellings, in the same order.
+func TestParseImportsExported(t *testing.T) {
+	in := "@a.md\n```\n@hidden.md\n```\n`@code.md` @~/x.md @Design\\ Docs/api.md"
+	want := []string{"a.md", "~/x.md", "Design Docs/api.md"}
+	if got := ParseImports([]byte(in)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseImports = %q, want %q", got, want)
+	}
+}
+
 func TestParseImports(t *testing.T) {
 	cases := []struct {
 		name string

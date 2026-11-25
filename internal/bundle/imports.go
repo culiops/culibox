@@ -142,6 +142,11 @@ func closingRun(line string, from, n int) int {
 	return -1
 }
 
+// ParseImports returns the @-import spellings in a CLAUDE.md, as parseImports
+// does, for callers outside this package (the clone merge guard protects the
+// files a host CLAUDE.md imports). It never fails.
+func ParseImports(md []byte) []string { return parseImports(md) }
+
 // KindImport is the Drop.Kind for a refused import.
 const KindImport = "import"
 
