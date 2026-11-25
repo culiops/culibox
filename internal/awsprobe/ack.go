@@ -36,6 +36,10 @@ type Ack struct {
 	Caller       string    `json:"caller"`
 	Refused      []string  `json:"refused,omitempty"`       // lowercased, sorted, unique patterns
 	MissingPerms []string  `json:"missing_perms,omitempty"` // sorted, unique
+	// PolicyDigest pins an ack that holds a structural pattern (NotAction,
+	// Action): those patterns name no content, so the policy documents are
+	// pinned instead. Empty otherwise.
+	PolicyDigest string    `json:"policy_digest,omitempty"`
 	At           time.Time `json:"at"`
 	Actor        string    `json:"actor"`
 }
@@ -45,6 +49,16 @@ type Ack struct {
 // the kind an acknowledgement can cover. Stale: eligible, an ack is present,
 // but it does not cover this result.
 type Admission struct{ OK, UnderAck, Eligible, Stale bool }
+
+// isStructural reports a refusal pattern that names no content: a NotAction
+// or missing-Action statement. They stay ackable (PowerUserAccess uses
+// NotAction) but are pinned to the policy digest.
+func isStructural(p string) bool {
+	p = strings.ToLower(p)
+	return p == "notaction" || p == "action"
+}
+
+func hasStructural(pats []string) bool { return slices.ContainsFunc(pats, isStructural) }
 
 func isPseudoPattern(p string) bool {
 	switch strings.ToLower(p) {
@@ -116,6 +130,9 @@ func NewAck(res GateResult, actor string, at time.Time) Ack {
 	if res.State == GateUnverified {
 		a.Reason = res.Reason
 	}
+	if hasStructural(a.Refused) {
+		a.PolicyDigest = res.PolicyDigest
+	}
 	if len(a.Refused) == 0 {
 		a.Refused = nil
 	}
@@ -130,6 +147,9 @@ func NewAck(res GateResult, actor string, at time.Time) Ack {
 // the ack, and every missing permission already in the ack.
 func (a Ack) Covers(res GateResult) bool {
 	if a.Caller == "" || res.Caller != a.Caller {
+		return false
+	}
+	if hasStructural(a.Refused) && (res.PolicyDigest == "" || res.PolicyDigest != a.PolicyDigest) {
 		return false
 	}
 	seen := make(map[string]bool, len(a.Refused))
@@ -201,6 +221,13 @@ func (a Ack) Validate() error {
 		if err := ackItem("missing_perms", p); err != nil {
 			return err
 		}
+	}
+	if hasStructural(a.Refused) {
+		if len(a.PolicyDigest) != 64 || strings.Trim(a.PolicyDigest, "0123456789abcdef") != "" {
+			return errors.New("an acknowledgement of a NotAction or Action refusal needs a 64-hex policy_digest")
+		}
+	} else if a.PolicyDigest != "" {
+		return errors.New("policy_digest is only for an acknowledgement of a NotAction or Action refusal")
 	}
 	return nil
 }

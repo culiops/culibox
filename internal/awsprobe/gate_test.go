@@ -978,3 +978,36 @@ func TestGateCallerIsSetAfterStepOne(t *testing.T) {
 		t.Errorf("caller error: %q", r.Caller)
 	}
 }
+
+func TestGatePolicyDigest(t *testing.T) {
+	f := newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
+	r := Gate(context.Background(), f, gateAcct, time.Now())
+	if len(r.PolicyDigest) != 64 {
+		t.Fatalf("digest %q", r.PolicyDigest)
+	}
+	g := newFakeGate(t, "guardrail.json", "ReadOnlyAccess.json") // order swapped
+	if r2 := Gate(context.Background(), g, gateAcct, time.Now()); r2.PolicyDigest != r.PolicyDigest {
+		t.Errorf("order changed the digest: %s vs %s", r2.PolicyDigest, r.PolicyDigest)
+	}
+	h := newFakeGate(t, "ReadOnlyAccess.json")
+	if r3 := Gate(context.Background(), h, gateAcct, time.Now()); r3.PolicyDigest == r.PolicyDigest {
+		t.Error("different documents, same digest")
+	}
+	// Set once step 3 passed, even when a later step refuses structurally.
+	n := newFakeGate(t, "guardrail.json")
+	n.docs = append(n.docs, `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","NotAction":"iam:*","Resource":"*"}]}`)
+	if r4 := Gate(context.Background(), n, gateAcct, time.Now()); r4.PolicyDigest == "" || r4.State != GateNotReadOnly {
+		t.Errorf("NotAction: state %s digest %q", r4.State, r4.PolicyDigest)
+	}
+	// Empty before step 3 completes.
+	e := newFakeGate(t, "guardrail.json")
+	e.docsErr = errors.New("boom")
+	if r5 := Gate(context.Background(), e, gateAcct, time.Now()); r5.PolicyDigest != "" {
+		t.Errorf("digest after a PolicyDocs error: %q", r5.PolicyDigest)
+	}
+	f2 := newFakeGate(t, "guardrail.json")
+	f2.roleErr = errors.New("x")
+	if r6 := Gate(context.Background(), f2, gateAcct, time.Now()); r6.PolicyDigest != "" {
+		t.Errorf("digest after a role error: %q", r6.PolicyDigest)
+	}
+}

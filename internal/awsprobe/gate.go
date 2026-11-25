@@ -2,6 +2,8 @@ package awsprobe
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -65,7 +67,12 @@ type GateResult struct {
 	Refused      []Verdict  `json:"refused,omitempty"`       // NotReadOnly; for Unverified, the actions that proved nothing
 	MissingPerms []string   `json:"missing_perms,omitempty"` // Reason == missing_permissions
 	DataReads    []DataRead `json:"data_reads,omitempty"`    // descriptive, never blocks
-	CheckedAt    time.Time  `json:"checked_at,omitzero"`
+	// PolicyDigest is the sha256 (hex) of the permission set's policy
+	// documents, set once step 3 read them. It pins an acknowledgement of a
+	// structural refusal (NotAction, missing Action), whose pattern names no
+	// content.
+	PolicyDigest string    `json:"policy_digest,omitempty"`
+	CheckedAt    time.Time `json:"checked_at,omitzero"`
 }
 
 // SimDecision is one simulated action: its EvalDecision and whether the
@@ -126,6 +133,8 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 	if err != nil {
 		return g.failed(ctx, err, gatePolicyReads)
 	}
+
+	g.res.PolicyDigest = policyDigest(docs)
 
 	// Step 4: deny-aware residual allows.
 	residual, err := Residual(docs)
@@ -349,6 +358,20 @@ func ssoRoleARN(arn, partition, account, name string) bool {
 	}
 	path, ok := strings.CutPrefix(f[5], "role/aws-reserved/sso.amazonaws.com/")
 	return ok && (path == name || strings.HasSuffix(path, "/"+name))
+}
+
+// policyDigest is the lowercase hex sha256 of docs, sorted so that order does
+// not matter, each document prefixed by its decimal length so that no two
+// different lists share an encoding.
+func policyDigest(docs []string) string {
+	sorted := slices.Clone(docs)
+	slices.Sort(sorted)
+	h := sha256.New()
+	for _, d := range sorted {
+		fmt.Fprintf(h, "%d:", len(d))
+		h.Write([]byte(d))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // coveringAllow returns the first residual Allow pattern that matches action,

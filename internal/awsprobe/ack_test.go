@@ -170,3 +170,61 @@ func TestAckSummaryBounded(t *testing.T) {
 		t.Errorf("short %q", short)
 	}
 }
+
+func TestAckStructuralPinnedToPolicyDigest(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Example_0000000000000000"
+	d1 := strings.Repeat("a", 64)
+	d2 := strings.Repeat("b", 64)
+	mk := func(digest string, pats ...string) GateResult {
+		r := nro(role, pats...)
+		r.PolicyDigest = digest
+		return r
+	}
+	ack := ackOf(mk(d1, "NotAction"))
+	if ack.PolicyDigest != d1 {
+		t.Fatalf("ack digest %q", ack.PolicyDigest)
+	}
+	if err := ack.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	rows := []struct {
+		name string
+		res  GateResult
+		want Admission
+	}{
+		{"same digest", mk(d1, "notaction"), Admission{OK: true, UnderAck: true, Eligible: true}},
+		{"different digest", mk(d2, "NotAction"), Admission{Eligible: true, Stale: true}},
+		{"empty digest", mk("", "NotAction"), Admission{Eligible: true, Stale: true}},
+	}
+	for _, r := range rows {
+		if got := AdmitSSO(r.res, ack); got != r.want {
+			t.Errorf("%s: %+v, want %+v", r.name, got, r.want)
+		}
+	}
+	// A structural pattern the ack never held is not covered at all.
+	if got := AdmitSSO(mk(d1, "Action"), ack); !got.Stale {
+		t.Errorf("Action under a NotAction ack: %+v", got)
+	}
+	// A non-structural ack ignores the digest, and carries none.
+	plain := ackOf(mk(d1, "iam:*", "s3:PutObject"))
+	if plain.PolicyDigest != "" {
+		t.Errorf("plain ack digest %q", plain.PolicyDigest)
+	}
+	if got := AdmitSSO(mk(d2, "iam:*"), plain); !got.OK {
+		t.Errorf("narrowing with another digest: %+v", got)
+	}
+	if got := AdmitSSO(mk("", "iam:*"), plain); !got.OK {
+		t.Errorf("narrowing with no digest: %+v", got)
+	}
+	// Validate.
+	for name, a := range map[string]Ack{
+		"missing": {State: GateNotReadOnly, Caller: ackCaller, Refused: []string{"notaction"}},
+		"short":   {State: GateNotReadOnly, Caller: ackCaller, Refused: []string{"action"}, PolicyDigest: "abc"},
+		"upper":   {State: GateNotReadOnly, Caller: ackCaller, Refused: []string{"action"}, PolicyDigest: strings.Repeat("A", 64)},
+		"stray":   {State: GateNotReadOnly, Caller: ackCaller, Refused: []string{"iam:*"}, PolicyDigest: d1},
+	} {
+		if err := a.Validate(); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}
