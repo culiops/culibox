@@ -14,7 +14,7 @@ import (
 	"github.com/culiops/culibox/internal/config"
 )
 
-func TestListArgs(t *testing.T) {
+func TestListArgsRunsStatus(t *testing.T) {
 	r := ReturnRequest{
 		Clone:    config.Clone{Of: "/src/of", Dir: "/work/clone"},
 		Image:    "culiops/agent-box:2026-10-18.2",
@@ -25,15 +25,18 @@ func TestListArgs(t *testing.T) {
 		"run", "--rm", "--init", "--name", "n", "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
 		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--label", "io.culiops.agent-box.clonelist=DEV",
-		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1",
+		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_OPTIONAL_LOCKS=0",
 		"-e", "GIT_CONFIG_COUNT=1", "-e", "GIT_CONFIG_KEY_0=safe.directory", "-e", "GIT_CONFIG_VALUE_0=/work/clone",
 		"--mount", "type=bind,src=/work/clone,dst=/work/clone,readonly",
-		"--entrypoint", "git", "culiops/agent-box:2026-10-18.2",
-		"-C", "/work/clone", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-		"for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/",
+		"--entrypoint", "sh", "culiops/agent-box:2026-10-18.2",
+		"-c", listScript, "sh", "/work/clone",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("ListArgs:\n got %q\nwant %q", got, want)
+	}
+	// The clone path is the positional $1, never part of the script text.
+	if strings.Contains(listScript, "/work/clone") || !strings.Contains(listScript, `"$1"`) {
+		t.Errorf("the script must take the clone dir as $1:\n%s", listScript)
 	}
 	// The one mount is the clone, read-only; clone_of is not mounted at all, and
 	// the container carries no box label.
@@ -51,6 +54,56 @@ func TestListArgs(t *testing.T) {
 	}
 	if mounts != 1 {
 		t.Errorf("%d mounts, want only the clone", mounts)
+	}
+	// A clone path with shell metacharacters stays one argv element.
+	r.Clone.Dir = "/work/a b;$(touch x)"
+	got = ListArgs(r, "n")
+	if n := len(got); got[n-1] != r.Clone.Dir || got[n-2] != "sh" || got[n-3] != listScript {
+		t.Errorf("dir is not the last, separate argv element: %q", got[n-4:])
+	}
+}
+
+func intp(n int) *int { return &n }
+
+func TestParseListStatus(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	refs := sha + " refs/heads/main\n" + sha + " refs/heads/feat\n"
+	cases := []struct {
+		name    string
+		text    string
+		entries int
+		cut     bool
+		unc     *int
+		uncCut  bool
+	}{
+		{"two refs and three files", refs + "#culibox-status\n M a.go\n?? b.go\nA  c.go\n", 2, false, intp(3), false},
+		{"clean tree", refs + "#culibox-status\n", 2, false, intp(0), false},
+		{"blank lines do not count", refs + "#culibox-status\n\n M a.go\n\n", 2, false, intp(1), false},
+		{"no separator", refs, 2, false, nil, false},
+		{"torn before the separator", refs + "#culibox-sta", 2, true, nil, false},
+		{"status torn at the cap", refs + "#culibox-status\n M a.go\n?? b.g", 2, false, intp(1), true},
+		{"more refs than the cap still reach the status", func() string {
+			var b strings.Builder
+			for i := 0; i < maxListBranches+5; i++ {
+				fmt.Fprintf(&b, "%s refs/heads/b%03d\n", sha, i)
+			}
+			return b.String() + "#culibox-status\n M a.go\n"
+		}(), maxListBranches, true, intp(1), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var res ReturnResult
+			entries, cut := parseList(c.text, &res)
+			if len(entries) != c.entries || cut != c.cut {
+				t.Errorf("%d entries, cut=%v; want %d, %v", len(entries), cut, c.entries, c.cut)
+			}
+			if (res.Uncommitted == nil) != (c.unc == nil) || (c.unc != nil && *res.Uncommitted != *c.unc) {
+				t.Errorf("Uncommitted = %v, want %v", res.Uncommitted, c.unc)
+			}
+			if res.UncommittedCut != c.uncCut {
+				t.Errorf("UncommittedCut = %v, want %v", res.UncommittedCut, c.uncCut)
+			}
+		})
 	}
 }
 
@@ -551,5 +604,62 @@ func TestReturnCarriesHandbackPerBranch(t *testing.T) {
 	}
 	if _, ok := res.Handback["box/old"]; ok {
 		t.Error("a branch that did not come home has a report")
+	}
+}
+
+func TestReturnCountsUncommittedFromTheListing(t *testing.T) {
+	x := newReturnFx(t)
+	ld := &listDocker{fakeDocker: x.dock, out: strings.Repeat("a", 40) + " refs/heads/old\n#culibox-status\n M a\n?? b\n"}
+	res := Return(context.Background(), x.rec, ld, x.retReq(ReturnAuto))
+	if res.Uncommitted == nil || *res.Uncommitted != 2 || res.UncommittedCut {
+		t.Fatalf("Uncommitted = %v cut=%v, want 2", res.Uncommitted, res.UncommittedCut)
+	}
+	st, _, _ := ReadReturnState(x.req.DataDir, x.req.Clone.Dir)
+	if st.Uncommitted == nil || *st.Uncommitted != 2 || st.UncommittedCut {
+		t.Errorf("state = %+v, want Uncommitted 2", st)
+	}
+	// The cap cutting the status part is the status's cut, not a branch-list warning.
+	ld.out = strings.Repeat("a", 40) + " refs/heads/old\n#culibox-status\n M a\n?? b"
+	res = Return(context.Background(), x.rec, ld, x.retReq(ReturnAuto))
+	if res.Uncommitted == nil || *res.Uncommitted != 1 || !res.UncommittedCut || len(res.Warnings) != 0 {
+		t.Errorf("Uncommitted = %v cut=%v warnings=%q", res.Uncommitted, res.UncommittedCut, res.Warnings)
+	}
+	// An old image (no separator) knows nothing about the tree.
+	ld.out = strings.Repeat("a", 40) + " refs/heads/old\n"
+	if res = Return(context.Background(), x.rec, ld, x.retReq(ReturnAuto)); res.Uncommitted != nil || res.UncommittedCut {
+		t.Errorf("no separator: Uncommitted = %v cut=%v, want unknown", res.Uncommitted, res.UncommittedCut)
+	}
+}
+
+func TestReturnCountsUncommittedForReal(t *testing.T) {
+	x := newReturnFx(t)
+	if res := x.ret(ReturnAuto); res.Uncommitted == nil || *res.Uncommitted != 0 {
+		t.Fatalf("clean clone: Uncommitted = %v, want 0", res.Uncommitted)
+	}
+	dir := x.req.Clone.Dir
+	if err := os.WriteFile(filepath.Join(dir, "main.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "new.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res := x.ret(ReturnAuto); res.Uncommitted == nil || *res.Uncommitted != 2 || res.UncommittedCut {
+		t.Fatalf("Uncommitted = %v cut=%v, want 2", res.Uncommitted, res.UncommittedCut)
+	}
+}
+
+func TestReturnKeepsUncommittedOnError(t *testing.T) {
+	x := newReturnFx(t)
+	if err := WriteReturnState(x.req.DataDir, x.req.Clone.Dir, ReturnState{Base: "main", Uncommitted: intp(4), UncommittedCut: true}); err != nil {
+		t.Fatal(err)
+	}
+	x.dock.stderr = "fatal: boom"
+	res := x.ret(ReturnAuto)
+	if res.Error == "" || res.Uncommitted == nil || *res.Uncommitted != 4 || !res.UncommittedCut {
+		t.Errorf("result = %+v, want the previous 4 (cut) kept", res)
+	}
+	st, ok, err := ReadReturnState(x.req.DataDir, x.req.Clone.Dir)
+	if err != nil || !ok || st.Uncommitted == nil || *st.Uncommitted != 4 || !st.UncommittedCut {
+		t.Errorf("state = %+v, %v, %v; want Uncommitted 4 (cut) kept", st, ok, err)
 	}
 }

@@ -240,3 +240,40 @@ func TestReturnStateWritersSerialize(t *testing.T) {
 		}
 	}
 }
+
+func TestReturnStateUncommittedRoundTrip(t *testing.T) {
+	dd, dir := t.TempDir(), "/some/clone"
+	if err := WriteReturnState(dd, dir, ReturnState{Uncommitted: intp(7), UncommittedCut: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := ReadReturnState(dd, dir)
+	if err != nil || got.Uncommitted == nil || *got.Uncommitted != 7 || !got.UncommittedCut {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	// Zero is a value, not an absence.
+	if err := WriteReturnState(dd, dir, ReturnState{Uncommitted: intp(0)}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ = ReadReturnState(dd, dir); got.Uncommitted == nil || *got.Uncommitted != 0 {
+		t.Errorf("Uncommitted = %v, want 0", got.Uncommitted)
+	}
+}
+
+func TestReturnStateOldFileLoads(t *testing.T) {
+	dd, dir := t.TempDir(), "/some/clone"
+	h, _ := cloneKeyHash(dir)
+	if err := os.MkdirAll(filepath.Join(dd, returnStateDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"v":1,"at":"2026-10-31T01:02:03Z","base":"main","not_home":[{"branch":"b","reason":"off"}]}`
+	if err := os.WriteFile(filepath.Join(dd, returnStateDir, h+".json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := ReadReturnState(dd, dir)
+	if err != nil || !ok || got.V != 1 || got.Base != "main" || len(got.NotHome) != 1 {
+		t.Fatalf("got %+v, %v, %v", got, ok, err)
+	}
+	if got.Uncommitted != nil || got.UncommittedCut {
+		t.Errorf("Uncommitted = %v cut=%v, want unknown", got.Uncommitted, got.UncommittedCut)
+	}
+}
