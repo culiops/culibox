@@ -36,7 +36,7 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p := doc.AgentConfig
-		rev, err := s.Profiles.Create(p)
+		rev, err := s.Profiles.CreateWith(p, SaveOpts{AckInPlaceHistory: doc.AckInPlaceHistory})
 		if err != nil {
 			writeSaveErr(w, err)
 			return
@@ -96,7 +96,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		p := doc.AgentConfig
 		p.Name = name // the path is authoritative for the name
-		rev, err := s.Profiles.Update(p, *doc.Rev)
+		rev, err := s.Profiles.UpdateWith(p, *doc.Rev, SaveOpts{AckInPlaceHistory: doc.AckInPlaceHistory})
 		if err != nil {
 			writeSaveErr(w, err)
 			return

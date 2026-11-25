@@ -16,6 +16,7 @@ import (
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boximagecheck"
 	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
@@ -96,6 +97,10 @@ type Server struct {
 	// CloneUnavailable is why clone mode cannot run on this instance; empty when
 	// it can. Published in /api/meta as "clone_unavailable".
 	CloneUnavailable string
+	// CloneEstimate sizes a private copy of a repo and checks the free space for
+	// it (POST /api/clone/estimate). It must refuse a repo a box owns before it
+	// runs git there. nil: the route is not registered.
+	CloneEstimate func(ctx context.Context, of, dir string) (clone.Estimate, error)
 	// ShellProfile is the profile the UI's quick-shell (+sh) button spawns —
 	// the auto-detected $SHELL seed, or the user's own profile for that binary.
 	// Empty → the UI offers no quick shell.
@@ -280,6 +285,9 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/handback/", s.API.handleHandback)
 	protected.HandleFunc("/api/profiles", s.handleProfiles)
 	protected.HandleFunc("/api/profiles/", s.handleProfile)
+	if s.CloneEstimate != nil {
+		protected.HandleFunc("/api/clone/estimate", s.handleCloneEstimate)
+	}
 	if s.Accounts != nil {
 		protected.HandleFunc("/api/accounts", s.handleAccounts)
 		protected.HandleFunc("/api/accounts/", s.handleAccount)

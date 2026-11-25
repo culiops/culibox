@@ -194,6 +194,7 @@ context and never edits `~/.ssh/config`.
   needs the VM running and never starts it. See
   [Clone mode](CLONE-MODE.md#on-macos). Tested end to end on a Mac (macOS 27.2.1,
   colima 0.10.3): work comes back as a `box/<branch>` and a refresh fast-forwards the clone.
+  The returns after each agent turn and before a Host session are not yet tested on a Mac.
 - Restart `culibox serve` after any `box setup -recreate`. A running
   CuliBox keeps the VM settings it read when it started, so until the
   restart it sizes new boxes from the old VM, and a failed boxed spawn can
@@ -434,11 +435,26 @@ Bindings on Host have not been verified on a Mac yet.
 
 ### In-place guard
 
-A box started in place sees the workspace root's `.git`, `.claude/` and any
-top-level `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` or `.mcp.json` read-only,
-as on Linux, and the same repositories are refused (submodules, `core.worktree`,
-a git config `include`, and so on). What it covers and what it does not is in
+A box started in place runs only in a folder that is not a git repo. A git
+repo, or a folder inside one, boxes as a private copy (see
+[Clone mode](CLONE-MODE.md#a-git-repo-boxes-as-a-private-copy)). A box started
+in place sees the workspace root's `.claude/` and any top-level `CLAUDE.md`,
+`CLAUDE.local.md`, `AGENTS.md` or `.mcp.json` read-only, as on Linux. The git
+parts of the guard (the read-only `.git`, and the refusal of submodules,
+`core.worktree`, a git config `include`, and so on) stay in the code for now as
+a second line of defence. A folder that is not a repo does not reach them; a
+shell started inside a private copy (which is a git repo) does. What
+the guard covers and what it does not is in
 [Security model](SECURITY.md#known-limits).
+
+- The private copy's location must be inside a read-write VM folder (see
+  [VM folders](#vm-folders)). A location outside one is refused with the usual
+  "not shared" remedy (add the folder to the VM's list).
+  The refusal of a git folder in place and the copy dialog are not yet tested on
+  a Mac.
+- A linked worktree's `.git` file is no longer locked: a worktree is not boxed
+  in place, so that lock is not reached. The measurements below that name a
+  worktree's `.git` file were made before this change.
 
 - A hooks or git path through a folder that is a workspace folder under another
   path: on Linux CuliBox reads the mount table to recognise a bind mount of one
@@ -455,15 +471,16 @@ a git config `include`, and so on). What it covers and what it does not is in
   and have not been measured separately on a Mac yet.
 - Another spelling of a guarded file's name (measured on a Mac, 2026-11-10): a
   macOS volume ignores case by default, so `claude.md`, `.MCP.JSON` or `.GIT`
-  is the same Mac file as `CLAUDE.md`, `.mcp.json` or a worktree's `.git` file,
+  is the same Mac file as `CLAUDE.md` or `.mcp.json` (or a worktree's `.git` file),
   while the read-only mount in the box covers only the one spelling. Through
   another spelling the box could change the Mac file. The guarded directories
   (`.git/`, `.claude/`, the hooks directory) hold under every spelling.
 - So the guarded files are also **locked on the Mac while the box runs**. On a
   case-insensitive volume, before a box started in place starts, CuliBox sets
   the user-immutable flag (`chflags uchg`) on each guarded single file there
-  is: `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.mcp.json` and a
-  worktree's `.git` file (never a directory). Measured on a Mac (2026-11-11):
+  is: `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` and `.mcp.json` (never a
+  directory; a worktree's `.git` file was locked too, before a worktree stopped
+  being boxed in place). Measured on a Mac (2026-11-11):
   with the flag set, nothing in the box or the VM can write, truncate, remove,
   rename, replace, chmod, touch or hard-link the file, or clear the flag,
   through any spelling. A case-sensitive volume is not locked: it does not need

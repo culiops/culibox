@@ -595,7 +595,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if err != nil {
 		log.Fatalf("boxed workspace record %s: %v", filepath.Join(dataDir, "boxed-workspaces.json"), err)
 	}
-	mgr.SetBoxedRecorder(boxedRecorder(boxedReg))
+	mgr.SetBoxedRecorder(boxedRecorder(boxedReg, lnch.Clones))
 	fsDenied := []string{dataDir}
 	if layer != nil && layer.stateRoot != dataDir {
 		fsDenied = append(fsDenied, layer.stateRoot)
@@ -669,6 +669,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		log.Printf("clone mode unavailable (%v); clone-mode profiles are refused", err)
 	}
 	if h != nil { // non-nil even when unavailable: the box-owned guard stays on
+		h.boxed = boxedReg // a folder boxed in place without git is never a clone source (#371)
 		mgr.SetClone(h)
 	}
 
@@ -835,6 +836,12 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	pm.SetBuiltin(builtinProfileNames(doctorIn.Source, cfg.Agents, agents))
 	recordBoxedProfiles(boxedReg, lnch.Clones(), lnch.BoxedDefaultCwds())
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
+	// A clone_of whose folder was boxed in place before the record kept a flag
+	// needs the user's ack at save (new or changed clone_of only, #371).
+	pm.SetInPlaceHistoryCheck(func(of string) bool {
+		st, _ := boxedReg.InPlaceStatus(of)
+		return st == boxedws.StatusUnknown
+	})
 	if h != nil {
 		pm.SetNotHome(h.NotHome)
 	}
@@ -870,7 +877,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if rateLimitsFile == "" {
 		rateLimitsFile = filepath.Join(home, ".claude", "abtop-rate-limits.json")
 	}
-	api := &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd,
+	api := &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd, Home: home,
 		Handback:       flagged,
 		OptionsDropped: lnch.DroppedOptions,
 		ProfileCwd: func(name string) string {
@@ -949,6 +956,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		BoxRuntime:       layerRuntime(layer),
 		BoxImage:         boxImageHook(cfg, dataDir, layerImageFacts(layer)),
 		CloneUnavailable: cloneUnavailableReason(h),
+		CloneEstimate:    cloneEstimateFunc(h),
 		BoxTrees:         boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
 		ScratchDirs:      web.ScratchCandidates(os.Getenv, os.Getuid(), os.TempDir()),
 

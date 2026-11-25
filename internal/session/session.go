@@ -367,14 +367,27 @@ type CloneHooks interface {
 	// BoxOwned reports whether cwd is inside any profile's clone, with the
 	// reason a host-tier spawn there is refused.
 	BoxOwned(cwd string) (reason string, owned bool)
+	// CopyDirOf is the clone directory (symlinks resolved) that real, an already
+	// resolved path, is at or under, and whether there is one. Only a positive
+	// match answers ok: an unreadable record or a directory that cannot be
+	// resolved is "no", never "owned" (BoxOwned fails the other way, for the host
+	// tier).
+	CopyDirOf(real string) (dir string, ok bool)
 	// HostOrigin is the host repo's remote.origin.url ("" when unset). It reads
 	// `of`, the user's repo, never the box's clone.
 	HostOrigin(ctx context.Context, of string) (string, error)
 	// ReturnWork brings the clone's branches home (or, with c.NoAutoReturn and a
 	// non-"now" trigger, records what is not home). Never an error: failures are
-	// in the summary. It takes the clone's lock; with Trigger != ReturnNow it
-	// skips ("in-use") when o.LiveSession reports true after the lock is held.
+	// in the summary. It takes the clone's lock; with Trigger "exit" it skips
+	// ("in-use") when o.LiveSession reports true after the lock is held (idle,
+	// host and "now" returns run beside a live session).
 	ReturnWork(ctx context.Context, c config.Clone, o ReturnOpts) ReturnSummary
+	// ReturnForRepo brings home the branches of every clone whose clone_of is
+	// cwd or contains it, before a Host session starts there (trigger "host"),
+	// one summary per clone. It shares ctx's budget: a clone the budget did not
+	// reach gets a "deferred" summary and is continued in the background, so
+	// the spawn never waits past it. Never an error.
+	ReturnForRepo(ctx context.Context, cwd string) []ReturnSummary
 }
 
 // cloneRefreshTimeout bounds one Refresh. It is best-effort and never fails a
@@ -861,8 +874,13 @@ type Info struct {
 	// Clone is what refreshing the clone before this spawn did. Clone-mode
 	// sessions only; absent otherwise.
 	Clone *CloneInfo `json:"clone,omitempty"`
-	// Return is the latest exit or "Bring work home now" return of a clone-mode
-	// session; absent until one has run.
+	// HostReturn is what bringing home the clones of this folder's repo did
+	// before this Host session started (one summary per clone). Host sessions
+	// only; absent when no clone is of this repo.
+	HostReturn []ReturnSummary `json:"host_return,omitempty"`
+	// Return is the latest return of a clone-mode session (after an agent turn,
+	// at exit, or "Bring work home now"); absent until one has run. A Host
+	// session's own return is HostReturn.
 	Return *ReturnSummary `json:"return,omitempty"`
 	// Handback is what the scan of this session's in-place workspace flagged at
 	// its exit. In-place boxed sessions only; absent until a scan has run.
@@ -972,6 +990,9 @@ type Session struct {
 	// Clone is the clone refresh result for a clone-mode session. Immutable
 	// after publication, read without the lock; Info hands out a deep copy.
 	Clone *CloneInfo
+	// HostReturn is Info.HostReturn: the pre-start return of the clones of this
+	// session's repo. Immutable after publication; Info hands out a deep copy.
+	HostReturn []ReturnSummary
 	// ret is the latest exit or "now" return, returning that a "now" is running.
 	// Both guarded by mu; ret is not persisted (a restart drops it, the clone's
 	// state file keeps the truth).
@@ -1492,6 +1513,7 @@ func (s *Session) Info() Info {
 	in.HostDropped = slices.Clone(s.HostDropped)
 	in.HostBroker = s.HostBroker
 	in.Clone = s.Clone.copy()
+	in.HostReturn = copyReturns(s.HostReturn)
 	in.Return = s.ret.copy()
 	in.Handback = s.handback.copy()
 	in.ContextPaths = slices.Clone(s.ContextPaths)
@@ -1707,6 +1729,7 @@ func (s *Session) signal(sig syscall.Signal) error {
 // Manager is the in-memory session registry.
 type Manager struct {
 	mu        sync.Mutex
+	autoRet   *autoReturner // schedules idle returns of clone sessions; nil in bare test Managers
 	sessions  map[string]*Session
 	launcher  launcher.Builder
 	backend   Backend  // nil = ephemeral (daemon-owned PTY); set = abduco persistence
@@ -1717,6 +1740,9 @@ type Manager struct {
 	boxes     Boxes       // nil = containment unavailable; every spawn is host tier
 	bundles   Bundles     // nil = boxed sessions run without user config
 	broker    BrokerHooks // nil = credential broker not running; bound profiles are refused
+	// hostBudget and hostGrace override hostReturnBudget and hostReturnGrace
+	// (tests only; zero means the default).
+	hostBudget, hostGrace time.Duration
 	// egressMu serialises live egress refreshes (#95), so two never interleave
 	// a box's meet; taken before mu, never under it. egressLiveOn (guarded by
 	// mu) is set by the first RefreshEgress: per-box refreshes wait for it.
@@ -1750,7 +1776,8 @@ type Manager struct {
 	// boxedRecorder persists a workspace as box-written before a boxed Wrap
 	// starts a box in it. Nil = nothing is recorded (tests, hosts without
 	// containment).
-	boxedRecorder func(cwd string) error
+	// copyDir is the private copy the workspace is in ("" = none, an in-place spawn).
+	boxedRecorder func(cwd, copyDir string) error
 
 	// peekMu guards peekCache. It is SEPARATE from m.mu on purpose: PeekFor is
 	// called from List after m.mu is released, and sharing the mutex would make
@@ -1915,7 +1942,7 @@ func (m *Manager) SetContextCheck(f func(path string) (*box.FileID, error)) {
 // workspace the host does not know a box wrote in is one the fs API would treat
 // as host-owned. An error fails the spawn ("record boxed workspace: ...") and
 // Wrap is not called. Call once at boot. Nil records nothing.
-func (m *Manager) SetBoxedRecorder(f func(cwd string) error) {
+func (m *Manager) SetBoxedRecorder(f func(cwd, copyDir string) error) {
 	m.mu.Lock()
 	m.boxedRecorder = f
 	m.mu.Unlock()
@@ -2019,7 +2046,7 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 	if retention <= 0 {
 		retention = 5 * time.Minute
 	}
-	return &Manager{
+	m := &Manager{
 		sessions:  map[string]*Session{},
 		launcher:  l,
 		backend:   backend,
@@ -2029,6 +2056,8 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 		retention: retention,
 		procStart: procStartOf,
 	}
+	m.autoRet = m.newAutoReturner()
+	return m
 }
 
 // Spawn builds the agent command and starts a session — under the persistence
@@ -2320,6 +2349,30 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			return nil, fmt.Errorf("%w: %s%s", box.ErrBoxOwned, reason, spawnBoxOwnedHint)
 		}
 	}
+	// A git work tree never boxes in place (#371): it boxes as a private copy.
+	// Refused here, before Prepare starts the box VM; Wrap refuses it too, from
+	// its own resolution of the path. A path that does not resolve is left to
+	// Wrap, which words that refusal.
+	//
+	// copyDir: the folder (as resolved here) is at or under a known private copy,
+	// a clone directory: the quick shell beside a clone session, and its restart,
+	// run there with no clone setup of their own. The refusal does not apply, and
+	// Wrap is given the directory (BoxKey.CopyDir) to confirm against its own
+	// resolution; the guards still apply. CopyDirOf is asked only once a folder is
+	// refused, so a spawn in a folder that is not git never consults it.
+	copyDir := ""
+	if cl == nil && runtime == config.RuntimeBox && spec.Cwd != "" && absErr == nil {
+		if real, err := filepath.EvalSymlinks(absCwd); err == nil {
+			if nerr := box.NeedsCopy(real); nerr != nil {
+				if ch != nil {
+					copyDir, _ = ch.CopyDirOf(real)
+				}
+				if copyDir == "" {
+					return nil, nerr
+				}
+			}
+		}
+	}
 
 	// checkContext refuses a context path that is unsafe now: deleted, swapped
 	// for a symlink or made unsafe since the profile was saved, or overlapping
@@ -2555,7 +2608,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.mu.Unlock()
 		// Profile is not identity: it names the conversations folder a box this
 		// spawn creates mounts (#330), shared by the profile's boxes in this folder.
-		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports, Profile: spec.Agent}
+		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports, Profile: spec.Agent, CopyDir: copyDir}
 		// The bypass option the user chose for the profile or this spawn is the
 		// consent: the box home it creates pre-accepts the warning that nothing
 		// would answer in an unattended session. Not tied to the bundle or the
@@ -2699,7 +2752,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		if recordBoxed != nil {
 			// Last step before the box exists: from here the agent may write in
 			// the workspace, so the host must already remember that it did.
-			if err := recordBoxed(spec.Cwd); err != nil {
+			if err := recordBoxed(spec.Cwd, key.CopyDir); err != nil {
 				return nil, fmt.Errorf("record boxed workspace %q: %w", spec.Cwd, err)
 			}
 		}
@@ -2856,6 +2909,14 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		log.Printf("session %s: host run of profile %q without %s", id, spec.Agent, config.JoinKinds(hostDropped))
 	}
 
+	// Every refusal of a Host spawn is behind us: bring home the work of any
+	// clone of this repo, so the agent starts on what the boxes made. Never
+	// fails the spawn, and never waits past hostReturnBudget plus a short grace.
+	var hostReturn []ReturnSummary
+	if runtime != config.RuntimeBox && ch != nil && cl == nil && absErr == nil {
+		hostReturn = m.hostReturnWithin(ch, id, absCwd)
+	}
+
 	cmd, ptmx, err := m.startProcess(id, spec, argv, env)
 	if err != nil {
 		m.releaseBoxNamed(boxName) // never leak a box for a session that failed to start
@@ -2931,6 +2992,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.brokerBox = heldBrokerBox // published: the session now owns the reference
 	sess.BundleDrops = bundleDrops
 	sess.Clone = cloneInfo
+	sess.HostReturn = hostReturn
 	sess.ContextPaths = slices.Clone(ctxPaths)
 	sess.LockedFiles = slices.Clone(lockedFiles)
 	sess.CloneOf = cloneOf
@@ -2967,6 +3029,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
 	m.watchRetention(id, sess)
+	m.startAutoReturn(sess)
 	// A new member of a box whose policy may have changed live joins its
 	// meet, and pulls it down if its own profile is narrower (#95).
 	m.refreshEgressBox(sess)
@@ -4158,6 +4221,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	// tried — see adoptSurvivingBoxes.
 	sess.ForceRedraw()
 	m.watchRetention(id, sess)
+	m.startAutoReturn(sess)
 	return nil
 }
 
@@ -4292,4 +4356,34 @@ func settingsLimitedToUser(args []string) bool {
 		}
 	}
 	return false
+}
+
+// hostReturnWithin runs the Host-spawn return for the clones of cwd and waits for
+// it at most the budget plus a grace, so a hung docker (a killed run waits out
+// its own cleanup) cannot hold the spawn. Past that the spawn proceeds with no
+// summary; the return keeps running in its goroutine, whose own background
+// continuation still applies, and its result is dropped.
+func (m *Manager) hostReturnWithin(ch CloneHooks, id, cwd string) []ReturnSummary {
+	budget, grace := m.hostBudget, m.hostGrace
+	if budget <= 0 {
+		budget = hostReturnBudget
+	}
+	if grace <= 0 {
+		grace = hostReturnGrace
+	}
+	rctx, cancel := context.WithTimeout(context.Background(), budget)
+	done := make(chan []ReturnSummary, 1)
+	go func() {
+		defer cancel()
+		done <- ch.ReturnForRepo(rctx, cwd)
+	}()
+	t := time.NewTimer(budget + grace)
+	defer t.Stop()
+	select {
+	case sums := <-done:
+		return sums
+	case <-t.C:
+		log.Printf("session %s: the host return of %s did not finish within %s; starting without it", id, cwd, budget+grace)
+		return nil
+	}
 }

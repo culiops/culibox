@@ -55,6 +55,7 @@ type mockSvc struct {
 	answerSHA        string
 	answerErr        error
 	restartID        string
+	getAgent         string // Get's Info.Agent
 	restartInfo      session.Info
 	restartErr       error
 	bringHomeID      string
@@ -151,7 +152,7 @@ func TestAPI_SpawnAccountRefusalsAreShown(t *testing.T) {
 
 func (m *mockSvc) Kill(id string) error { m.killed = id; return nil }
 func (m *mockSvc) Get(id string) (session.Info, bool) {
-	return session.Info{ID: id, Name: m.renamedName}, m.getOK
+	return session.Info{ID: id, Name: m.renamedName, Agent: m.getAgent}, m.getOK
 }
 func (m *mockSvc) Rename(id, name string) error {
 	m.renamedID, m.renamedName = id, name
@@ -1142,7 +1143,7 @@ func TestBringHomeEndpoint(t *testing.T) {
 // like ErrUnboxableWorkspace, instead of the generic message.
 func TestSpawnErrShowsBoxUnavailableMessage(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeSpawnErr(rec, "claude", fmt.Errorf("%w: run culibox box setup", box.ErrBoxUnavailable))
+	writeSpawnErr(rec, "claude", "", fmt.Errorf("%w: run culibox box setup", box.ErrBoxUnavailable))
 	if !strings.Contains(rec.Body.String(), "culibox box setup") {
 		t.Fatalf("the remedy must reach the user: %s", rec.Body.String())
 	}
@@ -1154,7 +1155,7 @@ func TestSpawnErrShowsBoxUnavailableMessage(t *testing.T) {
 func TestSpawnErrBoxUnavailableHasACode(t *testing.T) {
 	msg := `this session asks for runtime box, and this instance has no box layer (see the boot log); set the profile's tier to host (or send runtime "host") or fix containment`
 	rec := httptest.NewRecorder()
-	writeSpawnErr(rec, "claude", fmt.Errorf("%w: %s", box.ErrBoxUnavailable, msg))
+	writeSpawnErr(rec, "claude", "", fmt.Errorf("%w: %s", box.ErrBoxUnavailable, msg))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
@@ -1167,17 +1168,17 @@ func TestSpawnErrBoxUnavailableHasACode(t *testing.T) {
 	}
 	// Wrapped deeper (clone creation, SSO checks, the daemon probe): the same code.
 	rec = httptest.NewRecorder()
-	writeSpawnErr(rec, "claude", fmt.Errorf("spawn: %w", fmt.Errorf("%w: Docker is not running", box.ErrBoxUnavailable)))
+	writeSpawnErr(rec, "claude", "", fmt.Errorf("spawn: %w", fmt.Errorf("%w: Docker is not running", box.ErrBoxUnavailable)))
 	if !strings.Contains(rec.Body.String(), `"code":"box_unavailable"`) {
 		t.Fatalf("a wrapped refusal lost its code: %s", rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
-	writeSpawnErr(rec, "claude", fmt.Errorf("%w: /c is inside the clone", box.ErrBoxOwned))
+	writeSpawnErr(rec, "claude", "", fmt.Errorf("%w: /c is inside the clone", box.ErrBoxOwned))
 	if strings.Contains(rec.Body.String(), `"code"`) {
 		t.Fatalf("a box-owned refusal must not borrow the containment code: %s", rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
-	writeSpawnErr(rec, "claude", box.ErrVMRestarting)
+	writeSpawnErr(rec, "claude", "", box.ErrVMRestarting)
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"code":"vm_restarting"`) {
 		t.Fatalf("vm restarting changed: %d %s", rec.Code, rec.Body.String())
 	}
@@ -1187,7 +1188,7 @@ func TestSpawnErrBoxUnavailableHasACode(t *testing.T) {
 // is shown as a 400 with its message.
 func TestWriteSpawnErrShowsBoxOwned(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeSpawnErr(rec, "claude", fmt.Errorf("%w: /c/clone is inside the clone /c/clone of a clone-mode profile", box.ErrBoxOwned))
+	writeSpawnErr(rec, "claude", "", fmt.Errorf("%w: /c/clone is inside the clone /c/clone of a clone-mode profile", box.ErrBoxOwned))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("code = %d, want 400", rec.Code)
 	}
@@ -1200,7 +1201,7 @@ func TestWriteSpawnErrShowsBoxOwned(t *testing.T) {
 // value), so it is shown as a 400 with its message, not "could not start session".
 func TestWriteSpawnErrShowsUnresolvedSecret(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeSpawnErr(rec, "claude", fmt.Errorf("%w: \"MY_TOKEN\" is a Stored value", launcher.ErrSecretUnresolved))
+	writeSpawnErr(rec, "claude", "", fmt.Errorf("%w: \"MY_TOKEN\" is a Stored value", launcher.ErrSecretUnresolved))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "MY_TOKEN") {
 		t.Fatalf("the reason must reach the user: %d %s", rec.Code, rec.Body.String())
 	}

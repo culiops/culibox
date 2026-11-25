@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -1073,6 +1074,61 @@ func GitConfigValues(data []byte, section, key string) (vals []string, ok bool) 
 	return vals, true
 }
 
+// GitConfigPromisor reports whether one git config file declares a partial
+// clone or a promisor remote, as git reads the keys: extensions.partialClone
+// (any value), or in any remote section (named, unnamed, or named "")
+// partialclonefilter (any value) or promisor (unless git reads it as false, see
+// gitBool). git then fetches any object the repo lacks from that remote, which
+// runs the commands its config names for it (uploadpack, core.sshCommand, an
+// insteadOf rewrite to ssh). worktreeConfig is extensions.worktreeConfig as git
+// reads it: git then also reads .git/config.worktree, which the caller must test
+// the same way. Section bases and keys compare case-insensitively, as git's do.
+// valid is false when git would reject the file (nothing after the error is
+// read, so a declaration could hide behind it). An [include] is not followed: a
+// declaration in an included file is not seen here.
+func GitConfigPromisor(data []byte) (declares, worktreeConfig, valid bool) {
+	_, valid = cfgEntries(data, func(section, key, val string, hasVal bool) bool {
+		base, _, _ := strings.Cut(section, ".")
+		switch {
+		case section == "extensions" && key == "partialclone",
+			base == "remote" && key == "partialclonefilter",
+			base == "remote" && key == "promisor" && gitBool(val, hasVal):
+			declares = true
+			return true
+		case section == "extensions" && key == "worktreeconfig":
+			worktreeConfig = gitBool(val, hasVal) // the last one wins, as in git
+		}
+		return false
+	})
+	return declares, worktreeConfig, valid
+}
+
+// gitBool is git's reading of a boolean value (git_parse_maybe_bool, then
+// git_parse_int): a key with no value is true; true, yes and on are true; false,
+// no, off and the empty value are false; an integer (any base strtoimax takes,
+// with an optional k, m or g unit) is true unless it is 0 (0, 00, 0x0, -0, 0k).
+// Anything else git rejects as a bad boolean; it reads as true here, which is
+// the side that refuses.
+func gitBool(val string, hasVal bool) bool {
+	if !hasVal {
+		return true
+	}
+	switch strings.ToLower(val) {
+	case "true", "yes", "on":
+		return true
+	case "false", "no", "off", "":
+		return false
+	}
+	n := val
+	if l := len(n); l > 1 && strings.ContainsRune("kKmMgG", rune(n[l-1])) {
+		n = n[:l-1]
+	}
+	if i, err := strconv.ParseInt(n, 0, 64); err == nil {
+		return i != 0
+	}
+	return true
+}
+
 // gitFalse: v is one of git's spellings of boolean false. An empty value is
 // false to git too, but is not accepted here: only a spelled-out false is.
 func gitFalse(v string) bool {
@@ -1213,3 +1269,149 @@ func cfgLower(c byte) byte {
 	}
 	return c
 }
+
+// GitShape is what a workspace is in git terms (#371). The zero value is a
+// folder that is not in a git work tree.
+type GitShape struct {
+	// Repo is the work tree root: ws itself when it holds a .git, else the
+	// nearest ancestor that does (Inside). "" = not in a git work tree.
+	Repo string
+	// Worktree: the .git at Repo is a file (a linked worktree or a separate git
+	// directory), not a directory.
+	Worktree bool
+	// Inside: ws is below Repo, not at it.
+	Inside bool
+	// LFS: Repo's top-level .gitattributes names filter=lfs.
+	LFS bool
+}
+
+// maxGitAttributes bounds the .gitattributes read for the LFS hint.
+const maxGitAttributes = 64 << 10
+
+// GitShapeOf reports whether ws (absolute, symlinks resolved) is a git work
+// tree or inside one, with the same reading of .git the in-place guards use
+// (an lstat at ws, then the enclosingRepo walk). It reads one file at most,
+// .gitattributes at the repo root, through an os.Root and never through a
+// symlink. A folder that is not git is the zero GitShape and a nil error.
+func GitShapeOf(ws string) (GitShape, error) {
+	var s GitShape
+	dotgit := filepath.Join(ws, ".git")
+	switch fi, err := os.Lstat(dotgit); {
+	case err == nil:
+		s.Repo, s.Worktree = ws, fi.Mode().IsRegular()
+	case errors.Is(err, fs.ErrNotExist):
+		top, err := enclosingRepo(ws)
+		if err != nil || top == "" {
+			return GitShape{}, err
+		}
+		s.Repo, s.Inside = top, true
+		if fi, err := os.Lstat(filepath.Join(top, ".git")); err == nil {
+			s.Worktree = fi.Mode().IsRegular()
+		}
+	case errors.Is(err, syscall.ENOTDIR):
+		// ws is not a directory: there is nothing here to be a repo, and the
+		// workspace checks word that refusal.
+		return GitShape{}, nil
+	default:
+		return GitShape{}, unreadable(dotgit, err)
+	}
+	s.LFS = usesLFS(s.Repo)
+	return s, nil
+}
+
+// gitattributesLstatHook, when set, runs between usesLFS's Lstat and its open: a
+// test swaps the file there, as a box could.
+var gitattributesLstatHook func(repo string)
+
+// usesLFS is whether the top-level .gitattributes of repo names filter=lfs. A
+// symlink, a file that is not regular, one over maxGitAttributes or anything
+// unreadable is "no": this is a hint for the user, never a gate.
+func usesLFS(repo string) bool {
+	root, err := os.OpenRoot(repo)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	fi, err := root.Lstat(".gitattributes")
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxGitAttributes {
+		return false
+	}
+	if gitattributesLstatHook != nil {
+		gitattributesLstatHook(repo)
+	}
+	// Not root.Open: a box can swap the file for a FIFO between the Lstat and
+	// here, and a plain open of one blocks; O_NONBLOCK makes the open return. A
+	// symlink swapped in is followed by os.Root inside the root (O_NOFOLLOW does
+	// not stop that), so what makes the read safe is the check below: the open
+	// file must be regular and the very file that was Lstat'ed.
+	f, err := root.OpenFile(".gitattributes", os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if fi2, err := f.Stat(); err != nil || !fi2.Mode().IsRegular() || !os.SameFile(fi, fi2) {
+		return false
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxGitAttributes+1))
+	return err == nil && len(b) <= maxGitAttributes && strings.Contains(string(b), "filter=lfs")
+}
+
+// NeedsCopyError is the refusal to box a git work tree in place (#371): a git
+// repo boxes as a private copy. It wraps ErrUnboxableWorkspace. HomeRepo: the
+// repo is the user's home directory (a dotfiles repo), which is never copied, so
+// the message offers Host or a move, not a copy of the repo root.
+type NeedsCopyError struct {
+	Repo                            string
+	Worktree, Inside, LFS, HomeRepo bool
+}
+
+func (e *NeedsCopyError) Unwrap() error { return ErrUnboxableWorkspace }
+
+func (e *NeedsCopyError) Error() string {
+	switch {
+	case e.Inside && e.Worktree:
+		return fmt.Sprintf("this folder is inside the linked git worktree %s, which cannot be boxed yet. "+
+			"Run it on Host, box its main repo as a private copy, or move the folder out of the worktree", e.Repo)
+	case e.HomeRepo:
+		return fmt.Sprintf("this folder is inside the git repo at your home directory (%s), which is never copied. "+
+			"Run it on Host, or move the folder out of that repo", e.Repo)
+	case e.Inside:
+		return fmt.Sprintf("this folder is inside the git repo %s. A git repo boxes as a private copy: box the repo root "+
+			"as a copy (Settings › Profiles › Work on a private copy), pick Host, or move the folder out of the repo", e.Repo)
+	case e.Worktree:
+		return "a linked git worktree cannot be boxed yet: run it on Host, or box its main repo as a private copy"
+	}
+	return "a git repo boxes as a private copy: make one (Settings › Profiles › Work on a private copy) or pick Host"
+}
+
+// NeedsCopy is the refusal for ws, or nil when ws is not in a git work tree.
+// A folder whose git state cannot be read is refused with that reason.
+func NeedsCopy(ws string) error {
+	s, err := GitShapeOf(ws)
+	if err != nil {
+		return err
+	}
+	if s.Repo == "" {
+		return nil
+	}
+	return &NeedsCopyError{Repo: s.Repo, Worktree: s.Worktree, Inside: s.Inside, LFS: s.LFS, HomeRepo: s.Repo == resolvedHome()}
+}
+
+// resolvedHome is the user's home directory with symlinks resolved, as the repo
+// GitShapeOf finds is; "" when there is none. A variable so a test can set it.
+var resolvedHome = func() string {
+	h, err := os.UserHomeDir()
+	if err != nil || h == "" {
+		return ""
+	}
+	if r, err := filepath.EvalSymlinks(h); err == nil {
+		return r
+	}
+	return filepath.Clean(h)
+}
+
+// gitInPlaceRefusal is NeedsCopy; a variable so a test of the guards as the
+// second net can reach them through Wrap with a git workspace. The box package's
+// TestMain turns it off: a Wrap test of the refusal itself must opt back in with
+// refuseGitInPlace(t).
+var gitInPlaceRefusal = NeedsCopy

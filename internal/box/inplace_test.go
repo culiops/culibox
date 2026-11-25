@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // realTemp is t.TempDir() with symlinks resolved, as Wrap hands inPlaceMounts.
@@ -917,5 +918,430 @@ func TestInPlaceSubdirGitPathsThroughWorkspace(t *testing.T) {
 				t.Fatalf("want a leads-into-the-workspace refusal, got %v (mounts %v)", err, got)
 			}
 		})
+	}
+}
+
+func TestGitShapeOf(t *testing.T) {
+	t.Run("not git", func(t *testing.T) {
+		ws := realTemp(t)
+		got, err := GitShapeOf(ws)
+		if err != nil || got != (GitShape{}) {
+			t.Fatalf("GitShapeOf = %+v, %v; want the zero value", got, err)
+		}
+	})
+	t.Run("a file is not a repo", func(t *testing.T) {
+		f := filepath.Join(realTemp(t), "file")
+		writeFile(t, f, "x")
+		if got, err := GitShapeOf(f); err != nil || got != (GitShape{}) {
+			t.Fatalf("GitShapeOf = %+v, %v; want the zero value", got, err)
+		}
+	})
+	t.Run("plain repo", func(t *testing.T) {
+		ws := realTemp(t)
+		gitRepo(t, ws, "")
+		got, err := GitShapeOf(ws)
+		if err != nil || got != (GitShape{Repo: ws}) {
+			t.Fatalf("GitShapeOf = %+v, %v; want Repo=%s only", got, err, ws)
+		}
+	})
+	t.Run("linked worktree", func(t *testing.T) {
+		ws := realTemp(t)
+		writeFile(t, filepath.Join(ws, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n")
+		got, err := GitShapeOf(ws)
+		if err != nil || got != (GitShape{Repo: ws, Worktree: true}) {
+			t.Fatalf("GitShapeOf = %+v, %v; want a worktree at %s", got, err, ws)
+		}
+	})
+	t.Run("subdirectory of a repo", func(t *testing.T) {
+		top := realTemp(t)
+		gitRepo(t, top, "")
+		ws := filepath.Join(top, "a", "b")
+		mkdirs(t, ws)
+		got, err := GitShapeOf(ws)
+		if err != nil || got != (GitShape{Repo: top, Inside: true}) {
+			t.Fatalf("GitShapeOf = %+v, %v; want Inside, Repo=%s", got, err, top)
+		}
+	})
+	t.Run("subdirectory of a linked worktree", func(t *testing.T) {
+		top := realTemp(t)
+		writeFile(t, filepath.Join(top, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n")
+		ws := filepath.Join(top, "sub")
+		mkdirs(t, ws)
+		got, err := GitShapeOf(ws)
+		if err != nil || got != (GitShape{Repo: top, Inside: true, Worktree: true}) {
+			t.Fatalf("GitShapeOf = %+v, %v; want Inside a worktree at %s", got, err, top)
+		}
+	})
+	t.Run("lfs", func(t *testing.T) {
+		ws := realTemp(t)
+		gitRepo(t, ws, "")
+		writeFile(t, filepath.Join(ws, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n")
+		got, err := GitShapeOf(ws)
+		if err != nil || got != (GitShape{Repo: ws, LFS: true}) {
+			t.Fatalf("GitShapeOf = %+v, %v; want LFS", got, err)
+		}
+	})
+	t.Run("lfs named at the repo root of a subdirectory", func(t *testing.T) {
+		top := realTemp(t)
+		gitRepo(t, top, "")
+		writeFile(t, filepath.Join(top, ".gitattributes"), "*.bin filter=lfs\n")
+		ws := filepath.Join(top, "sub")
+		mkdirs(t, ws)
+		if got, err := GitShapeOf(ws); err != nil || !got.LFS || !got.Inside {
+			t.Fatalf("GitShapeOf = %+v, %v; want Inside and LFS", got, err)
+		}
+	})
+	t.Run("gitattributes without lfs", func(t *testing.T) {
+		ws := realTemp(t)
+		gitRepo(t, ws, "")
+		writeFile(t, filepath.Join(ws, ".gitattributes"), "*.sh text eol=lf\n")
+		if got, err := GitShapeOf(ws); err != nil || got.LFS {
+			t.Fatalf("GitShapeOf = %+v, %v; want no LFS", got, err)
+		}
+	})
+	t.Run("gitattributes symlink is not read", func(t *testing.T) {
+		ws := realTemp(t)
+		gitRepo(t, ws, "")
+		real := filepath.Join(realTemp(t), "attrs")
+		writeFile(t, real, "*.bin filter=lfs\n")
+		symlink(t, real, filepath.Join(ws, ".gitattributes"))
+		got, err := GitShapeOf(ws)
+		if err != nil || got != (GitShape{Repo: ws}) {
+			t.Fatalf("GitShapeOf = %+v, %v; want a repo without LFS and no error", got, err)
+		}
+	})
+	t.Run("gitattributes over 64 KiB is not read", func(t *testing.T) {
+		ws := realTemp(t)
+		gitRepo(t, ws, "")
+		writeFile(t, filepath.Join(ws, ".gitattributes"), strings.Repeat("# pad\n", 12000)+"*.bin filter=lfs\n")
+		if got, err := GitShapeOf(ws); err != nil || got.LFS {
+			t.Fatalf("GitShapeOf = %+v, %v; want no LFS for an oversized file", got, err)
+		}
+	})
+}
+
+func TestNeedsCopyErrorMessages(t *testing.T) {
+	cases := []struct {
+		name string
+		e    NeedsCopyError
+		want []string
+	}{
+		{"repo", NeedsCopyError{Repo: "/r"}, []string{"private copy", "Host"}},
+		{"worktree", NeedsCopyError{Repo: "/r", Worktree: true}, []string{"linked git worktree cannot be boxed yet", "Host", "main repo"}},
+		{"inside", NeedsCopyError{Repo: "/home/u", Inside: true}, []string{"/home/u", "repo root", "Host", "move the folder"}},
+		{"inside worktree", NeedsCopyError{Repo: "/w", Inside: true, Worktree: true}, []string{"/w", "worktree", "Host", "main repo"}},
+		{"inside the home repo", NeedsCopyError{Repo: "/home/u", Inside: true, HomeRepo: true}, []string{"/home/u", "home directory", "Host", "move the folder"}},
+	}
+	for _, c := range cases {
+		e := c.e
+		for _, w := range c.want {
+			if !strings.Contains(e.Error(), w) {
+				t.Errorf("%s: %q lacks %q", c.name, e.Error(), w)
+			}
+		}
+		if !errors.Is(&e, ErrUnboxableWorkspace) {
+			t.Errorf("%s: must wrap ErrUnboxableWorkspace", c.name)
+		}
+	}
+	// The home directory is never copied: its message must not offer to box it as a copy (#371 C5).
+	home := NeedsCopyError{Repo: "/home/u", Inside: true, HomeRepo: true}
+	for _, bad := range []string{"repo root", "Work on a private copy"} {
+		if strings.Contains(home.Error(), bad) {
+			t.Errorf("home repo: %q offers %q", home.Error(), bad)
+		}
+	}
+}
+
+// NeedsCopy says when the repo it found is the home directory, on resolved paths.
+func TestNeedsCopyKnowsTheHomeRepo(t *testing.T) {
+	home := realTemp(t)
+	gitRepo(t, home, "")
+	ws := filepath.Join(home, "notes")
+	mkdirs(t, ws)
+	old := resolvedHome
+	t.Cleanup(func() { resolvedHome = old })
+	resolvedHome = func() string { return home }
+	var nc *NeedsCopyError
+	if err := NeedsCopy(ws); !errors.As(err, &nc) || !nc.HomeRepo || !nc.Inside || !strings.Contains(err.Error(), "home directory") {
+		t.Fatalf("NeedsCopy(%s) = %v, want the home-repo refusal", ws, err)
+	}
+	resolvedHome = func() string { return realTemp(t) }
+	if err := NeedsCopy(ws); !errors.As(err, &nc) || nc.HomeRepo || !strings.Contains(err.Error(), "repo root") {
+		t.Fatalf("NeedsCopy(%s) with another home = %v, want the plain inside refusal", ws, err)
+	}
+}
+
+// refuseGitInPlace turns the refusal of a git work tree back on (TestMain turns
+// it off for the guard tests, which reach the guards through Wrap).
+func refuseGitInPlace(t *testing.T) {
+	t.Helper()
+	old := gitInPlaceRefusal
+	gitInPlaceRefusal = NeedsCopy
+	t.Cleanup(func() { gitInPlaceRefusal = old })
+}
+
+func TestWrapRefusesInPlaceGitRepo(t *testing.T) {
+	refuseGitInPlace(t)
+	ctx := context.Background()
+	m, f := guardMgr(t, true)
+
+	repo := realTemp(t)
+	gitRepo(t, repo, "")
+	_, _, _, err := m.Wrap(ctx, repo, "s1", BoxKey{}, []string{"bash"}, nil, nil)
+	var nc *NeedsCopyError
+	if !errors.As(err, &nc) || nc.Repo != repo || nc.Inside || nc.Worktree {
+		t.Fatalf("a git repo in place: err = %v, want *NeedsCopyError for %s", err, repo)
+	}
+	if !errors.Is(err, ErrUnboxableWorkspace) {
+		t.Fatalf("must be an ErrUnboxableWorkspace: %v", err)
+	}
+	if f.runs() != 0 {
+		t.Fatalf("a refused workspace must not start a box, runs=%d", f.runs())
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".claude")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the refusal comes before the guards, which create .claude: %v", err)
+	}
+
+	// A folder inside a repo: refused, naming the repo root.
+	sub := filepath.Join(repo, "pkg")
+	mkdirs(t, sub)
+	_, _, _, err = m.Wrap(ctx, sub, "s2", BoxKey{}, []string{"bash"}, nil, nil)
+	if !errors.As(err, &nc) || nc.Repo != repo || !nc.Inside || !strings.Contains(err.Error(), repo) {
+		t.Fatalf("a folder inside a repo: err = %v, want *NeedsCopyError naming %s", err, repo)
+	}
+
+	// Not git: the guards as today.
+	plain := realTemp(t)
+	if _, _, _, err := m.Wrap(ctx, plain, "s3", BoxKey{}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatalf("a non-git folder boxes in place: %v", err)
+	}
+	if !hasDst(f.runArgs[0], filepath.Join(plain, ".claude")) {
+		t.Fatalf("a non-git folder is still guarded: %q", f.runArgs[0])
+	}
+
+	// A clone spawn is not affected, whatever its workspace holds.
+	cl := realTemp(t)
+	gitRepo(t, cl, "")
+	if _, _, _, err := m.Wrap(ctx, cl, "s4", BoxKey{Clone: &CloneMounts{Hash: "h"}}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatalf("a clone workspace boxes: %v", err)
+	}
+}
+
+func TestWrapRefusesAnEnclosingRepoAtHome(t *testing.T) {
+	refuseGitInPlace(t)
+	m, _ := guardMgr(t, true)
+	home := realTemp(t)
+	gitRepo(t, home, "") // a dotfiles repo at ~
+	ws := filepath.Join(home, "projects", "app")
+	mkdirs(t, ws)
+	_, _, _, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"bash"}, nil, nil)
+	var nc *NeedsCopyError
+	if !errors.As(err, &nc) || nc.Repo != home {
+		t.Fatalf("err = %v, want a refusal naming %s", err, home)
+	}
+	for _, w := range []string{home, "Host", "move the folder"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("the message %q must say %q", err, w)
+		}
+	}
+}
+
+// CopyDir (a shell beside a clone session, in the clone's directory) skips the git
+// refusal when Wrap's own resolution of the workspace is at or under it, and
+// skips nothing else: the guards are derived as for any in-place workspace.
+func TestWrapCopyDirSkipsOnlyTheGitRefusal(t *testing.T) {
+	refuseGitInPlace(t)
+	ctx := context.Background()
+	m, f := guardMgr(t, true)
+	repo := realTemp(t)
+	gitRepo(t, repo, "")
+	sub := filepath.Join(repo, "pkg")
+	mkdirs(t, sub)
+
+	if _, _, _, err := m.Wrap(ctx, repo, "s1", BoxKey{}, []string{"bash"}, nil, nil); !errors.As(err, new(*NeedsCopyError)) {
+		t.Fatalf("no CopyDir: err = %v, want *NeedsCopyError", err)
+	}
+	if _, _, _, err := m.Wrap(ctx, repo, "s2", BoxKey{CopyDir: repo}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatalf("CopyDir at the workspace: %v", err)
+	}
+	for _, rel := range []string{".git", ".claude"} {
+		if !hasDst(f.runArgs[0], filepath.Join(repo, rel)) {
+			t.Errorf("CopyDir set: %s must still be guarded: %q", rel, f.runArgs[0])
+		}
+	}
+	// A workspace below the copy: still inside it. Its enclosing repo is the copy.
+	if _, _, _, err := m.Wrap(ctx, sub, "s3", BoxKey{CopyDir: repo}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatalf("CopyDir above the workspace: %v", err)
+	}
+	// A guard refusal still refuses with CopyDir set.
+	bad := realTemp(t)
+	gitRepo(t, bad, "")
+	writeFile(t, filepath.Join(bad, ".gitmodules"), "")
+	if _, _, _, err := m.Wrap(ctx, bad, "s4", BoxKey{CopyDir: bad}, []string{"bash"}, nil, nil); !errors.Is(err, ErrUnboxableWorkspace) || errors.As(err, new(*NeedsCopyError)) {
+		t.Fatalf("CopyDir set, submodules: err = %v, want the guard's refusal", err)
+	}
+}
+
+// The spawn decided on its own resolution of the folder; Wrap resolves again. A
+// workspace that resolves outside the CopyDir it was handed (the folder was
+// re-pointed in between) is refused outright, whether the folder it now leads to
+// is git or not: it must never be judged as a plain in-place folder, which boxes
+// a non-git one with nothing recorded.
+func TestWrapRefusesWhenTheWorkspaceResolvesOutsideCopyDir(t *testing.T) {
+	refuseGitInPlace(t)
+	ctx := context.Background()
+	m, f := guardMgr(t, true)
+	copyDir := realTemp(t)
+	gitRepo(t, copyDir, "")
+	hostGit := realTemp(t)
+	gitRepo(t, hostGit, "")
+	hostPlain := realTemp(t) // not a git folder: the git check alone would let it through
+	symlink(t, hostGit, filepath.Join(copyDir, "src"))
+	symlink(t, hostPlain, filepath.Join(copyDir, "docs"))
+	// A prefix sibling shares the copy's name but is not inside it.
+	sib := copyDir + "-sibling"
+	mkdirs(t, sib)
+	t.Cleanup(func() { os.RemoveAll(sib) })
+
+	cases := map[string]string{
+		"link to a git folder":     filepath.Join(copyDir, "src"),
+		"link to a non-git folder": filepath.Join(copyDir, "docs"),
+		"a git folder elsewhere":   hostGit,
+		"a non-git folder":         hostPlain,
+		"a prefix sibling":         sib,
+	}
+	for name, cwd := range cases {
+		_, _, _, err := m.Wrap(ctx, cwd, "s1", BoxKey{CopyDir: copyDir}, []string{"bash"}, nil, nil)
+		if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "changed since the spawn was checked") {
+			t.Fatalf("%s: err = %v, want the changed-folder refusal", name, err)
+		}
+	}
+	for _, d := range []string{hostPlain, sib, hostGit} {
+		if _, err := os.Lstat(filepath.Join(d, ".claude")); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("no guard may be derived (it creates .claude) in %s: %v", d, err)
+		}
+	}
+	if f.runs() != 0 {
+		t.Fatalf("a refused workspace started a box, runs=%d", f.runs())
+	}
+}
+
+// The CopyDir skip compares exact case, even where host paths fold: a folder
+// spelled in another case than the copy is not skipped.
+func TestWrapCopyDirSkipIsExactCase(t *testing.T) {
+	refuseGitInPlace(t)
+	old := inPlaceFold
+	inPlaceFold = true
+	t.Cleanup(func() { inPlaceFold = old })
+	m, _ := guardMgr(t, true)
+	repo := filepath.Join(realTemp(t), "proj")
+	gitRepo(t, repo, "")
+	upper := filepath.Join(filepath.Dir(repo), "PROJ")
+	_, _, _, err := m.Wrap(context.Background(), repo, "s1", BoxKey{CopyDir: upper}, []string{"bash"}, nil, nil)
+	if !errors.Is(err, ErrUnboxableWorkspace) {
+		t.Fatalf("a copy dir spelled in another case: err = %v, want a refusal", err)
+	}
+}
+
+// CopyDir is not identity: the box a spawn gets is named as without it, so it
+// neither splits a box nor reuses another's.
+func TestCopyDirDoesNotChangeTheBoxName(t *testing.T) {
+	m, _ := guardMgr(t, true)
+	ws := realTemp(t)
+	a, err := m.boxName(ws, BoxKey{Session: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := m.boxName(ws, BoxKey{Session: "s", CopyDir: ws})
+	if err != nil || a != b {
+		t.Fatalf("name with CopyDir %q (%v), without %q", b, err, a)
+	}
+}
+
+// A box can swap .gitattributes for a FIFO between the Lstat and the open; a plain
+// open of one would block the spawn forever. And one that is a FIFO from the start
+// is rejected by the Lstat.
+func TestGitShapeOfFIFOGitattributesDoesNotBlock(t *testing.T) {
+	for _, swap := range []bool{false, true} {
+		ws := realTemp(t)
+		gitRepo(t, ws, "")
+		attrs := filepath.Join(ws, ".gitattributes")
+		if swap {
+			writeFile(t, attrs, "*.bin filter=lfs\n")
+			gitattributesLstatHook = func(string) {
+				if err := os.Remove(attrs); err != nil {
+					t.Error(err)
+				}
+				if err := syscall.Mkfifo(attrs, 0o644); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { gitattributesLstatHook = nil })
+		} else if err := syscall.Mkfifo(attrs, 0o644); err != nil {
+			t.Skipf("no FIFOs here: %v", err)
+		}
+		done := make(chan GitShape, 1)
+		go func() { s, _ := GitShapeOf(ws); done <- s }()
+		select {
+		case s := <-done:
+			if s.Repo != ws || s.LFS {
+				t.Fatalf("swap=%v: GitShapeOf = %+v, want the repo without LFS", swap, s)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("swap=%v: GitShapeOf blocked on a FIFO .gitattributes", swap)
+		}
+		gitattributesLstatHook = nil
+	}
+}
+
+// A partial clone or a promisor remote, as git reads the keys (#371 N-1, and
+// the second follow-up: any remote section, partialclonefilter, git's booleans):
+// git lazy-fetches from it, running commands its config names.
+func TestGitConfigPromisor(t *testing.T) {
+	for _, c := range []struct {
+		name, cfg           string
+		declares, wt, valid bool
+	}{
+		{"plain", "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = /x\n", false, false, true},
+		{"partialClone", "[extensions]\n\tpartialClone = origin\n", true, false, true},
+		{"partialclone any case, bare", "[EXTENSIONS]\n\tPARTIALCLONE\n", true, false, true},
+		{"promisor true", "[remote \"Origin\"]\n\tpromisor = true\n", true, false, true},
+		{"promisor bare key", "[remote \"o\"]\n\tProMisor\n", true, false, true},
+		{"promisor old-style section", "[remote.o]\n\tpromisor = yes\n", true, false, true},
+		{"promisor on the header line", "[remote \"o\"] promisor = 1\n", true, false, true},
+		{"(B) promisor in an unnamed [remote]", "[remote]\n\tpromisor = true\n", true, false, true},
+		{"(C) promisor in [remote \"\"]", "[remote \"\"]\n\tpromisor = true\n", true, false, true},
+		{"(F) partialclonefilter", "[remote \"o\"]\n\tpartialCloneFilter = blob:none\n", true, false, true},
+		{"(F) partialclonefilter, empty", "[remote]\n\tpartialclonefilter =\n", true, false, true},
+		{"promisor read as false by git", "[remote \"o\"]\n\tpromisor = false\n\tpromisor = No\n\tpromisor =\n\tpromisor = 0\n\tpromisor = 0x0\n\tpromisor = -0\n\tpromisor = 0k\n", false, false, true},
+		{"promisor any non-zero integer", "[remote \"o\"]\n\tpromisor = 2\n", true, false, true},
+		{"promisor git rejects as a boolean", "[remote \"o\"]\n\tpromisor = maybe\n", true, false, true},
+		{"the word in a comment or a value", "# promisor\n[remote \"o\"]\n\turl = /promisor/partialclone\n", false, false, true},
+		{"extension in a subsection is another key", "[extensions \"x\"]\n\tpartialclone = o\n", false, false, true},
+		{"(D) worktreeConfig on", "[extensions]\n\tworktreeConfig = true\n", false, true, true},
+		{"(D) worktreeConfig, the last one wins", "[extensions]\n\tworktreeConfig\n\tworktreeconfig = 0\n", false, false, true},
+		{"after a line git rejects", "[core\n[remote \"o\"]\n\tpromisor = true\n", false, false, false},
+	} {
+		d, wt, v := GitConfigPromisor([]byte(c.cfg))
+		if d != c.declares || wt != c.wt || v != c.valid {
+			t.Errorf("%s: GitConfigPromisor = %v, %v, %v; want %v, %v, %v", c.name, d, wt, v, c.declares, c.wt, c.valid)
+		}
+	}
+}
+
+// git's booleans (git_parse_maybe_bool, then git_parse_int).
+func TestGitBool(t *testing.T) {
+	for _, v := range []string{"", "false", "No", "OFF", "0", "00", "0x0", "0X0", "-0", "+0", "0k", "0M", "0g"} {
+		if gitBool(v, true) {
+			t.Errorf("gitBool(%q) = true, want false", v)
+		}
+	}
+	for _, v := range []string{"true", "YES", "on", "1", "2", "-1", "0x1", "1k", "k", "maybe", "0x"} {
+		if !gitBool(v, true) {
+			t.Errorf("gitBool(%q) = false, want true", v)
+		}
+	}
+	if !gitBool("", false) {
+		t.Error("a key with no value is true")
 	}
 }

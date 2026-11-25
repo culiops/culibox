@@ -263,7 +263,8 @@ function pfvWorkspaceBlock(view, doc, host, edit) {
     }
     const label = pfvDep("notHomeLabel", "./workhome.js")(nh);
     if (!branches.length && nh && nh.error) rows.push(pfvRow("Not home", "", { scope: label + ": " + nh.error, fix: "" }));
-    if (label) notHome = { label, title: pfvDep("notHomeTitle", "./workhome.js")(nh) };
+    const line = pfvDep("notHomeLine", "./workhome.js")(nh);
+    if (line) notHome = { label: line, title: pfvDep("notHomeTitle", "./workhome.js")(nh) };
   } else if (host) {
     rows.push(pfvRow("Folder", cwd ? short(cwd) : "No default folder", { sub: cwd ? "Sessions start here" : "Picked in New session", scope: PFV_HOST_SCOPE }));
   } else {

@@ -1275,7 +1275,7 @@
     #ask-modal .lk-trust { margin: 10px 0 0; }
     #ask-modal .lk-check { display: flex; align-items: center; gap: 6px; font-size: 13px; }
     #ask-modal .lk-sub { margin: 6px 0 0 22px; color: var(--muted); }
-    #ask-modal .lk-sub[hidden], #ask-modal .lk-hint[hidden] { display: none; }
+    #ask-modal .lk-sub[hidden], #ask-modal .lk-hint[hidden], #ask-modal .lk-warn[hidden] { display: none; }
     /* The read-only Keyboard shortcuts dialog (askDialog info:true), ~33 lines.
        It is bounded by the dialog's OWN height cap (dialog { max-height: 88vh },
        and #ask-modal is already a column flex via dialog[box-][open]), never by
@@ -1556,9 +1556,14 @@
     /* Work that has not come home: shown at every width, unlike .psub. */
     .pitem .pnothome, .sp-nothome {
       padding: 1px 6px; border: 1px solid var(--warn); border-radius: var(--r-chip, 3px);
-      background: var(--warn-bg); color: var(--warn-fg); font-size: 11px; line-height: 1.4; white-space: nowrap;
+      background: var(--warn-bg); color: var(--warn-fg); font-size: 11px; line-height: 1.4;
+      white-space: normal; overflow-wrap: anywhere; min-width: 0;
     }
-    .pitem .pnothome { margin-left: auto; flex: none; }
+    /* The longer line ("2 branches not home · 12+ files not committed") wraps and shrinks inside its row
+       instead of running past the edge; the name keeps a floor width and ends in an ellipsis, never a mid-word break. */
+    .pitem .pnothome { margin-left: auto; flex: 0 1 auto; max-width: 60%; }
+    .pitem .pnm { flex: 0 1 auto; min-width: 8ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sp-nothome { display: inline-block; max-width: 100%; box-sizing: border-box; vertical-align: top; }
     /* Files flagged for review (#346): the same warning tint as not-home work, never a success green. */
     .pitem .pflagged {
       padding: 1px 6px; border: 1px solid var(--warn); border-radius: var(--r-chip, 3px);

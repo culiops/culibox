@@ -17,7 +17,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/culiops/culibox/internal/datacompat"
@@ -35,7 +37,31 @@ type fileFormat struct {
 	// and is re-seeded, which is additive and harmless.
 	Seeded     bool     `json:"seeded"`
 	Workspaces []string `json:"workspaces"`
+	// GitGuarded says, per recorded workspace, whether a git repo there was
+	// ever refused for boxing in place: false means the folder was boxed in
+	// place while it was NOT a git repo, so the box may have written a .git
+	// there. An absent key is unknown (an entry recorded before the flag
+	// existed, or one recorded without a spawn). The map is optional: a file
+	// from an older build has none and loads, with every entry unknown.
+	GitGuarded map[string]bool `json:"git_guarded,omitempty"`
 }
+
+// The statuses InPlaceStatus returns.
+const (
+	// StatusNone: the path is not inside any recorded workspace.
+	StatusNone = "none"
+	// StatusNonGit: inside a workspace recorded as boxed in place when it was
+	// not a git repo. A .git there may be box-written.
+	StatusNonGit = "nongit"
+	// StatusUnknown: inside a recorded workspace with no flag.
+	StatusUnknown = "unknown"
+)
+
+// foldCase makes InPlaceStatus ignore case, as a default macOS volume does: a
+// clone_of spelled in another case is the same folder there, and must meet the
+// same refusal (#371 S2). Folding only adds matches, so only adds refusals. A
+// variable so a test can set it (wsroots and box/protected.go fold the same way).
+var foldCase = runtime.GOOS == "darwin"
 
 // Registry is the set of boxed workspaces, persisted in <dataDir>/boxed-workspaces.json.
 type Registry struct {
@@ -43,6 +69,7 @@ type Registry struct {
 	dataDir   string
 	unboxable func(string) (string, bool)
 	set       map[string]struct{}
+	guard     map[string]bool // GitGuarded, only for keys of set
 	seeded    bool
 }
 
@@ -58,7 +85,7 @@ func Open(dataDir string, unboxable func(string) (string, bool)) (r *Registry, s
 	if unboxable == nil {
 		unboxable = func(string) (string, bool) { return "", false }
 	}
-	r = &Registry{dataDir: dataDir, unboxable: unboxable, set: map[string]struct{}{}}
+	r = &Registry{dataDir: dataDir, unboxable: unboxable, set: map[string]struct{}{}, guard: map[string]bool{}}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, false, err
 	}
@@ -92,9 +119,17 @@ func Open(dataDir string, unboxable func(string) (string, bool)) (r *Registry, s
 	for _, w := range f.Workspaces {
 		r.set[w] = struct{}{}
 	}
+	for w, g := range f.GitGuarded {
+		if _, ok := r.set[w]; ok {
+			r.guard[w] = g
+		}
+	}
 	r.seeded = f.Seeded
 	return r, f.Seeded, nil
 }
+
+// Path is the record file, for a message that tells the user where to look.
+func (r *Registry) Path() string { return filepath.Join(r.dataDir, fileName) }
 
 // List returns a sorted copy of the recorded workspaces.
 func (r *Registry) List() []string {
@@ -113,7 +148,106 @@ func (r *Registry) Add(dir string) error {
 	if !r.addLocked(next, dir) {
 		return nil
 	}
-	return r.commitLocked(next, r.seeded)
+	return r.commitLocked(next, r.guard, r.seeded)
+}
+
+// RecordInPlace records ws (EvalSymlinks'd, so it must exist) as boxed in
+// place and says whether it was a git-guarded folder. A spawn passes false:
+// the folder was boxed in place without git, so whatever .git appears there
+// later is the box's. A false is never cleared (a later true or a plain Add
+// leaves it); an entry recorded without a flag takes the flag. An entry
+// unboxable refuses, or one that does not resolve, is logged and skipped (nil
+// error); only a write failure is an error.
+func (r *Registry) RecordInPlace(ws string, gitGuarded bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	next := cloneSet(r.set)
+	r.addLocked(next, ws)
+	resolved, err := filepath.EvalSymlinks(ws)
+	if err != nil {
+		return nil // addLocked logged it
+	}
+	if _, ok := next[resolved]; !ok {
+		return nil // refused, logged
+	}
+	if cur, has := r.guard[resolved]; has && (!cur || cur == gitGuarded) {
+		if len(next) == len(r.set) {
+			return nil // nothing changes
+		}
+		return r.commitLocked(next, r.guard, r.seeded)
+	}
+	guard := cloneGuard(r.guard)
+	guard[resolved] = gitGuarded
+	return r.commitLocked(next, guard, r.seeded)
+}
+
+// InPlaceStatus says what the record knows of p: StatusNone when p is not a
+// recorded workspace or inside one, StatusNonGit when it is inside one recorded
+// as boxed in place without git, StatusUnknown when it is inside one with no
+// flag. p is resolved through symlinks as far as it exists (the record holds
+// resolved paths); a nested entry's stricter status wins. Every folder inside
+// an entry has its status: boxing ~/code in place makes every repo under it
+// nongit. entry is the recorded workspace that decided the status (the
+// innermost one of that status), the key to name when telling the user where
+// to look; "" with StatusNone. On darwin case is ignored (foldCase).
+func (r *Registry) InPlaceStatus(p string) (status, entry string) {
+	p = resolveBest(p)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var nongit, unknown string
+	// inner: w is deeper than cur, or as deep and first in order, so the
+	// answer does not depend on the map's order.
+	inner := func(w, cur string) bool { return cur == "" || len(w) > len(cur) || (len(w) == len(cur) && w < cur) }
+	for w := range r.set {
+		if !within(p, w) {
+			continue
+		}
+		g, has := r.guard[w]
+		switch {
+		case has && !g && inner(w, nongit):
+			nongit = w
+		case !has && inner(w, unknown):
+			unknown = w
+		}
+	}
+	switch {
+	case nongit != "":
+		return StatusNonGit, nongit
+	case unknown != "":
+		return StatusUnknown, unknown
+	}
+	return StatusNone, ""
+}
+
+// within reports whether p is dir or below it, by whole path components,
+// ignoring case when foldCase is set.
+func within(p, dir string) bool {
+	if foldCase {
+		p, dir = strings.ToLower(p), strings.ToLower(dir)
+	}
+	if p == dir {
+		return true
+	}
+	return strings.HasPrefix(p, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
+}
+
+// resolveBest resolves symlinks in the longest existing prefix of p and
+// appends the rest, so a path that does not exist yet still compares in the
+// form the record keeps. A relative or unresolvable path comes back cleaned.
+func resolveBest(p string) string {
+	p = filepath.Clean(p)
+	rest := ""
+	for cur := p; ; {
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // Seed adds every dir and always writes the file, even if empty. complete says
@@ -128,7 +262,7 @@ func (r *Registry) Seed(dirs []string, complete bool) error {
 	for _, d := range dirs {
 		r.addLocked(next, d)
 	}
-	return r.commitLocked(next, r.seeded || complete)
+	return r.commitLocked(next, r.guard, r.seeded || complete)
 }
 
 // addLocked resolves dir and inserts it into set, reporting whether the set
@@ -155,8 +289,8 @@ func (r *Registry) addLocked(set map[string]struct{}, dir string) bool {
 // The write goes through os.Root: the data dir sits next to box-writable
 // directories, and a plain write on a joined path would follow a planted
 // symlink. The temp file is O_EXCL so a pre-planted name is never reused.
-func (r *Registry) commitLocked(next map[string]struct{}, seeded bool) error {
-	b, err := json.Marshal(fileFormat{Version: version, Seeded: seeded, Workspaces: sortedLocked(next)})
+func (r *Registry) commitLocked(next map[string]struct{}, guard map[string]bool, seeded bool) error {
+	b, err := json.Marshal(fileFormat{Version: version, Seeded: seeded, Workspaces: sortedLocked(next), GitGuarded: guard})
 	if err != nil {
 		return err
 	}
@@ -191,6 +325,7 @@ func (r *Registry) commitLocked(next map[string]struct{}, seeded bool) error {
 		return err
 	}
 	r.set = next
+	r.guard = guard
 	r.seeded = seeded
 	return nil
 }
@@ -199,6 +334,14 @@ func cloneSet(s map[string]struct{}) map[string]struct{} {
 	out := make(map[string]struct{}, len(s)+1)
 	for k := range s {
 		out[k] = struct{}{}
+	}
+	return out
+}
+
+func cloneGuard(g map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(g)+1)
+	for k, v := range g {
+		out[k] = v
 	}
 	return out
 }

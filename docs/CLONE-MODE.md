@@ -6,12 +6,29 @@ Two profile fields turn it on:
 
 | Field | Meaning |
 |---|---|
-| `clone_of` | Absolute path of the host repo to copy. It must be a plain git repo with a `.git` directory (no worktree, no `commondir`, no `objects/info/alternates`), not a symlink, and not your home directory or any directory above it. |
+| `clone_of` | Absolute path of the host repo to copy. It must be a plain git repo with a `.git` directory (no worktree, no `commondir`, no `objects/info/alternates`) whose `.git/config` git can read, not a symlink, and not your home directory or any directory above it. A partial clone (`git clone --filter=…`) works, except in a folder that was once boxed in place before CuliBox classified it (see [below](#a-git-repo-boxes-as-a-private-copy)). |
 | `clone_share` | Up to 8 paths, relative to `clone_of`, that the box can read. Example: `["CLAUDE.md", "docs/notes"]`. |
 
-The profile's `default_cwd` is the clone's directory. The two must not overlap: neither may be inside the other. The profile must be boxed: `runtime: "host"` is refused, and so is a profile that sets no runtime while the instance's `default_runtime` is `host`, both when you save it and when you spawn it. The one exception is a spawn that sends `clone: false`, which runs the profile without its clone: in a box in place, or on the host when it also sends `runtime: "host"`. Picking Host in New session does this for you: the session runs in place in the folder the profile clones (`clone_of`), not in the clone's directory, and the profile's context paths do not apply there. A host spawn of a profile with bindings or context paths needs `host_drops_bindings: true` (New session asks you to confirm), and `box_only` still refuses it. On Host the bindings are the default credentials, not a limit (see [Security](SECURITY.md#known-limits)); the context paths are dropped. Omitting the runtime never reaches the host. A restart keeps the choice. The first spawn creates the clone with host `git clone`. Spawn the session in the clone's root, not a subdirectory.
+The profile's `default_cwd` is the clone's directory. The two must not overlap: neither may be inside the other. The profile must be boxed: `runtime: "host"` is refused, and so is a profile that sets no runtime while the instance's `default_runtime` is `host`, both when you save it and when you spawn it. The one exception is a spawn that sends `clone: false` and `runtime: "host"`, which runs the profile without its clone, on the host. `clone: false` with a box tier is refused at a git repo, like any other boxed spawn in place there (see [below](#a-git-repo-boxes-as-a-private-copy)). Picking Host in New session does this for you: the session runs in place in the folder the profile clones (`clone_of`), not in the clone's directory, and the profile's context paths do not apply there. A host spawn of a profile with bindings or context paths needs `host_drops_bindings: true` (New session asks you to confirm), and `box_only` still refuses it. On Host the bindings are the default credentials, not a limit (see [Security](SECURITY.md#known-limits)); the context paths are dropped. Omitting the runtime never reaches the host. A restart keeps the choice. The first spawn creates the clone with host `git clone`. Spawn the session in the clone's root, not a subdirectory.
 
 In the web UI, pick **Work on a private copy** in Settings › Profiles: the folder field is `clone_of`, **Copy lives in** is `default_cwd`, and **Read-only paths** is `clone_share`.
+
+## A git repo boxes as a private copy
+
+A boxed session never runs in place in a git repo. If the folder is a git repo, or a folder inside one (in a repo's work tree), a boxed spawn in place there is refused, and it runs as a private copy instead. In place is only for folders that are not git repos.
+
+- **New session.** For a git folder the "Box · in place" card is disabled ("A git repo boxes as a private copy"). The private-copy card opens a dialog, also for a profile whose copy is of another repo (the dialog then says why it cannot convert). It shows the repo, the copy location (editable; the default is `~/box-clones/<profile>`), the copy's estimated size and the free disk space, and what the box will not see: uncommitted, untracked and gitignored files. When the repo uses Git LFS, its files arrive as pointer files. It names the profile it changes: one click saves that profile as a clone profile (`clone_of` is the repo root, `default_cwd` is the copy location) for good, and starts it. Nothing is copied before that click. When no private copy can be made here (clone mode is unavailable), no card is selected and Start says why: Host is never selected for you, only by a click on its card or for a profile saved as Host.
+- **A refused restart, or a phone or API spawn,** opens the same dialog. An API caller gets HTTP 400 with the code `needs_copy`.
+- **`clone: false` with a box tier** on a git repo is refused the same way. Host (`runtime: "host"`) is unchanged and always runs in place.
+- **Free space.** A first copy is refused when the disk cannot hold it: the free space must be at least the estimated size × 1.1 + 512 MiB. If the estimate fails, the copy goes ahead.
+- **Not offered:**
+  - A linked git worktree. Run it on Host, or box its main repo as a copy.
+  - A folder inside the git repo at your home directory. Run it on Host, or move the folder.
+  - A built-in profile, a profile defined in `config.json` (duplicate it in Settings first), a Host profile, or a profile that already copies another repo. Use a separate profile.
+  - A profile whose folder (`default_cwd`) is elsewhere, outside the repo. Set the profile's folder to the repo first.
+  - The profile "+ Shell" starts: as a copy of one repo, every later "+ Shell" would open in that copy. Use another profile.
+- **A shell inside a private copy** (the "+ Shell" beside a box session) still runs there.
+- **A folder boxed in place before it was a repo.** A folder that was boxed in place while it was not a git repo can never become `clone_of`, and neither can any folder inside it: a box may have created their `.git`. So boxing a parent such as `~/code` in place blocks every repo under it as a `clone_of`. The refusal names the recorded folder. If you are sure the `.git` is your own, stop CuliBox, set that folder's value under `"git_guarded"` in `<data dir>/boxed-workspaces.json` to `true`, and start CuliBox again. Do not delete the folder's entry: it also keeps the web file API contained in that folder. For a folder CuliBox recorded before this rule and cannot classify, saving a new or changed `clone_of` there asks you to confirm that the `.git` existed before any box ran. The confirmation is audited. Existing clone profiles are not asked. There, a partial clone is refused, confirmed or not: a box may have written the config that declares its promisor remote, and host git would run a command named there.
 
 ## What the box gets
 
@@ -31,7 +48,19 @@ Everything else is as in any boxed session: no host home, no Docker socket, egre
 
 ## Bringing code home
 
-Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included, when the session's agent exits and at each spawn of the clone. It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. The profile field `clone_no_auto_return` turns this off (the checkbox is "Bring work home automatically", on by default); the profile then only reports what is not home. `culibox clone fetch` stays the manual override: it forces the update. "Bring work home now" in the session forces it too, but still never moves a `box/<branch>` you have checked out.
+Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included. It comes home:
+
+- after each agent turn of the box session, at most every 30 seconds while the clone's refs change. When they have not changed, CuliBox waits until 5 minutes have passed since the last check, so the count of uncommitted files stays current. It judges whether the refs changed from file metadata that the host reads without running git;
+- when you start or restart a Host session on the same repo. CuliBox waits up to 20 seconds, then finishes in the background. The toast of a newly started Host session says what came home, how many branches are not home and how many files are not committed (a restart does not show it);
+- when the session's agent exits;
+- at each spawn of the clone;
+- when you press "Bring work home now" in the session.
+
+It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. "Not home" also counts the files in the clone that are not committed: tracked changes and untracked files, but not gitignored files. The count shows on the profile, in the session row and in the Host spawn toast. A count that could not be read is not shown, and a very long list shows as "N+".
+
+CuliBox never commits for the agent. Uncommitted files do not come home, so the boxed agent is told to commit its work on a branch when it finishes a task. The profile field `clone_no_auto_return` turns the automatic return off (the checkbox is "Bring work home automatically", on by default); every trigger above then only reports what is not home. `culibox clone fetch` stays the manual override: it forces the update. "Bring work home now" in the session forces it too, but still never moves a `box/<branch>` you have checked out.
+
+`box/main` can move while you review it. Review the commit the box's handoff names (`git log -p main..<sha>`), not the moving `box/main`.
 
 ```sh
 culibox clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>
@@ -72,7 +101,9 @@ Clone mode works as on Linux, with the boxes in CuliBox's box VM (see [Running C
 ## Known limits
 
 - When branches come home, CuliBox flags executables, disguised files, archives and outward symlinks, in the toast and in `culibox clone fetch`. It is a signal to review, not a malware scan; see the "CuliBox does not scan files for malware" entry in [Known limits](SECURITY.md#known-limits) in docs/SECURITY.md.
-- Never put `clone_of` inside a boxed workspace (or any other directory a box can write): a box could plant git hooks in that repo, and the host runs git there during `clone fetch`. CuliBox refuses a `clone_of` that is inside a clone or a recorded clone directory, and runs its own git calls with hooks disabled, but it cannot see every directory a box can write. A spawn that runs a profile in a box in place (`clone: false`) at your `clone_of` makes that repo a boxed workspace: the agent in the box can write its files and its `.git`. CuliBox's own git runs there with hooks and fsmonitor off, but review that repo before you run host git in it.
+- Never put `clone_of` inside a boxed workspace (or any other directory a box can write): a box could plant git hooks in that repo, and the host runs git there during `clone fetch`. CuliBox refuses a `clone_of` that is inside a clone or a recorded clone directory, and runs its own git calls with hooks disabled, but it cannot see every directory a box can write. A spawn that runs a profile in a box in place (`clone: false`) at your `clone_of` is refused, because `clone_of` is a git repo. A folder that was boxed in place while it was not a repo can never become `clone_of`, because a box may have created its `.git` (see [above](#a-git-repo-boxes-as-a-private-copy)).
+- A linked git worktree cannot be boxed: not as a copy, and not in place. Run it on Host, or box its main repo as a copy.
+- A box does not see what git does not carry: uncommitted, untracked and gitignored files stay out of the copy. A repo that uses Git LFS arrives with pointer files, not the large files.
 - Never run a host-tier agent session in a directory above the clones (for example your home). Claude Code lazily loads nested `CLAUDE.md` and `.claude/` files from any subdirectory it reads, so files a box wrote under a clone could steer a host agent. Keep clones outside every tree where host sessions run.
 - Your own shell inside a clone cannot be policed. A box can plant git hooks, config and aliases in the clone's `.git`, so never run git or other host tools there. Review through `clone_of` after a fetch, not in the clone.
 - A file you copy out of a clone by hand might be a symlink the box planted, and `cp` would copy its target. Check that it is a regular file first.

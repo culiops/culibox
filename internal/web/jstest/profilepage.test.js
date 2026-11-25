@@ -200,7 +200,7 @@ function page(over) {
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "fsops.js", "handbackmodel.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "fsops.js", "handbackmodel.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "copydialog.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);

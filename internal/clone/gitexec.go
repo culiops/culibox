@@ -48,6 +48,15 @@ func NewExecGit() (ExecGit, error) {
 // (no GIT_DIR, GIT_EXEC_PATH, GIT_SSH_COMMAND, credentials, proxies), no system
 // or user config, no prompts. Callers that need the user's global config
 // replace GIT_CONFIG_GLOBAL and HOME explicitly (see globalEnv).
+//
+// GIT_NO_LAZY_FETCH=1: a repo whose config declares a promisor remote
+// (extensions.partialClone, remote.<name>.promisor) makes git fetch any object
+// it lacks from that remote, which runs the remote's uploadpack or
+// core.sshCommand, both commands from that config (#371 S1, reproduced with git
+// 2.39.5). A box that once wrote clone_of's .git can declare one. The variable
+// turns the lazy fetch off (measured: git 2.39.5 honours it; a git older than
+// the May 2024 releases ignores it, which is why hardenFlags also forbids every
+// transport).
 func CleanEnv() []string {
 	return []string{
 		"PATH=/usr/bin:/bin",
@@ -57,6 +66,7 @@ func CleanEnv() []string {
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_PAGER=cat",
+		"GIT_NO_LAZY_FETCH=1",
 	}
 }
 
@@ -72,8 +82,27 @@ func CleanEnv() []string {
 // (cruft pack, multi-pack-index, info/refs) after the fetch had returned.
 // maintenance.auto=false and gc.auto=0 turn that off for CuliBox's own calls
 // only; the user's git still maintains the repo as before.
+//
+// protocol.allow=never: no call here needs a transport, and a lazy fetch (see
+// CleanEnv) goes through one, so forbidding them all closes it on a git that
+// ignores GIT_NO_LAZY_FETCH (measured, git 2.39.5: "transport 'file' not
+// allowed", "transport 'ssh' not allowed", nothing run). It also refuses a
+// fetch from a bundle file, so the bundle fetch into clone_of re-allows the file
+// transport alone (fileTransport). That call and the first copy's `git clone`
+// (create.go: not hardened, it runs in no repo, and its -c configures the new
+// repo, so it may use any transport) are the two that read clone_of through a
+// transport; on a git without GIT_NO_LAZY_FETCH they could still lazy-fetch.
+// The daemon refuses a partial clone as clone_of where a box may have written
+// its config (PartialCloneWhy); the user's own partial clone is allowed.
 var hardenFlags = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-	"-c", "maintenance.auto=false", "-c", "gc.auto=0"}
+	"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "protocol.allow=never"}
+
+// fileTransport, after hardenFlags, lets one call read a local file through
+// git's transport (a bundle) while every other transport stays forbidden. A
+// lazy fetch over the file transport is then stopped by GIT_NO_LAZY_FETCH alone
+// (and, where a box may have written clone_of's config, by the daemon's refusal
+// of a partial clone).
+var fileTransport = []string{"-c", "protocol.file.allow=always"}
 
 // hardened is args with hardenFlags in front, before the subcommand (and before
 // any caller -c, which is for the fetch's fsck options).

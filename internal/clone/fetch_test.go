@@ -142,11 +142,18 @@ func (f *fakeDocker) RunStream(ctx context.Context, args []string, stdout io.Wri
 		}
 	}
 	i := slices.Index(args, "--entrypoint")
-	if i < 0 || args[i+1] != "git" {
-		f.t.Fatalf("no git entrypoint in %q", args)
+	if i < 0 || (args[i+1] != "git" && args[i+1] != "sh") {
+		f.t.Fatalf("no git or sh entrypoint in %q", args)
 	}
-	gitArgs := args[i+3:] // skip --entrypoint git <image>
-	cmd := exec.CommandContext(ctx, "git", gitArgs...)
+	// The listing runs a fixed sh script; GIT_OPTIONAL_LOCKS reaches the git it starts.
+	if slices.Contains(args, "GIT_OPTIONAL_LOCKS=0") {
+		cfgEnv = append(cfgEnv, "GIT_OPTIONAL_LOCKS=0")
+	}
+	if args[i+1] == "sh" {
+		cfgEnv = append(cfgEnv, "HOME="+f.t.TempDir()) // the script's scratch file lives under the container's HOME tmpfs
+	}
+	gitArgs := args[i+3:] // skip --entrypoint git|sh <image>
+	cmd := exec.CommandContext(ctx, args[i+1], gitArgs...)
 	cmd.Env = append(append(append(CleanEnv(), "GIT_ALTERNATE_OBJECT_DIRECTORIES="+alt), cfgEnv...), f.env...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -724,7 +731,7 @@ func TestExecDockerCancelLeavesNoGoroutine(t *testing.T) {
 
 // hardenedPrefix is what every host git call in clone_of must start with.
 var hardenedPrefix = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-	"-c", "maintenance.auto=false", "-c", "gc.auto=0"}
+	"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "protocol.allow=never"}
 
 // traceGit adds a trace2 event target to every call, so a test can see the
 // children git itself starts (CleanEnv drops any trace variable the test sets).

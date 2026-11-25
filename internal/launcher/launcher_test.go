@@ -898,3 +898,15 @@ func TestSessionLookPath(t *testing.T) {
 		t.Fatalf("relative PATH entry: %q, want none", got)
 	}
 }
+
+// A clone entry names the profile it came from, for a summary the user reads.
+// A fallback entry (an invalid spec kept only for its dir) has no trusted name.
+func TestClonesOfSetsProfile(t *testing.T) {
+	all := ClonesOf([]config.AgentConfig{
+		{Name: "good", Bin: "claude", CloneOf: "/home/u/repo", DefaultCwd: "/home/u/c/good"},
+		{Name: "badshare", Bin: "claude", CloneOf: "/home/u/repo", DefaultCwd: "/home/u/c/bad", CloneShare: []string{"../x"}},
+	})
+	if len(all) != 2 || all[0].Dir != "/home/u/c/bad" || all[0].Profile != "" || all[1].Dir != "/home/u/c/good" || all[1].Profile != "good" {
+		t.Fatalf("ClonesOf = %+v, want bad with no profile and good named", all)
+	}
+}

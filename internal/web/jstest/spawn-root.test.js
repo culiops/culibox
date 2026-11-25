@@ -37,7 +37,7 @@ function spawnWorld(reply) {
     loadWorkspaces: async () => { log.push("workspaces"); },
     loadWorkspaceRoots: async () => { log.push("roots"); },
     showToast: (m, o) => { log.push(["toast", m, !!(o && o.warn === true)]); },
-    mobileActive: () => false, shortPath: (p) => p, toastDropsSuffix: () => "", toastCloneSuffix: () => "", toastReturnSuffix: () => "", cloneLevel: () => "",
+    mobileActive: () => false, shortPath: (p) => p, toastDropsSuffix: () => "", toastCloneSuffix: () => "", toastReturnSuffix: () => "", toastHostReturnSuffix: () => "", markHostNotHomeSeen: () => {}, cloneLevel: () => "",
     killSession() {},
   });
   return { box, log };
@@ -116,6 +116,7 @@ function lineWorld(state) {
     $: (id) => (id === "spawn-ws-check" ? el : null),
     document: { createElement: (t) => new Node(t) },
     drawerDesktop: () => true,
+    renderTierPick: () => {}, // setSpawnWsCheck redraws the cards: a git folder turns Box · in place off
     spawnWhere: () => ({ runtime: "box", clone: false }),
     spawnCurrentTier: () => "box",
     syncSpawnGate: () => calls.push("gate"),
@@ -196,6 +197,29 @@ test("syncSpawnGate: the workspace line's block disables Start with its text, wi
   assert.strictEqual(box.syncSpawnGate().blocked, false);
   // The page may not define it at all (older load order, tests): no block.
   delete box.spawnWsCheckBlock;
+  assert.strictEqual(box.syncSpawnGate().blocked, false);
+});
+
+// #371 C1: no tier card can be picked (a git folder whose private copy is not available): Start waits with tierBlock's reason, and
+// the submit handler need not re-read the box daemon for it.
+test("syncSpawnGate: no tier card to pick disables Start with its reason", () => {
+  const el = new Node("div");
+  const go = { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
+  const box = world([["spawnpanel.js", "syncSpawnGate"]], {
+    spawnPanelOn: () => true, spawnGateInput: () => ({}),
+    spawnBoxGate: () => ({ show: false, tone: "", line: "", more: "", blocked: false, noLayer: false, text: "" }),
+    $: (id) => (id === "spawn-nobox" ? el : id === "spawn" ? { querySelector: () => go } : id === "spawn-err" ? { textContent: "" } : null),
+    spawnPanelEl: () => new Node("span"), spawnBusy: false,
+    setDisabledReason: (b, off, reason) => { b.off = off; b.reason = reason; },
+    setDialogError: () => {},
+    spawnWsCheckBlock: () => "",
+    tierBlock: () => "no card",
+  });
+  vm.runInContext("var spawnGateErr = '';", box);
+  const g = box.syncSpawnGate();
+  assert.deepStrictEqual([g.blocked, g.text, g.noLayer], [true, "no card", true]);
+  assert.deepStrictEqual([go.off, go.reason], [true, "no card"]);
+  box.tierBlock = () => "";
   assert.strictEqual(box.syncSpawnGate().blocked, false);
 });
 

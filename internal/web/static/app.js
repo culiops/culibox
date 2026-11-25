@@ -2105,6 +2105,30 @@ function toastReturnSuffix(s) {
   return t ? " \u00b7 " + t : "";
 }
 
+// toastHostReturnSuffix: the Host spawn toast's tail: what bringing home the
+// clones of this folder's repo said before the session started (profile names
+// are text in the toast, never markup). "" when it has nothing to say.
+function toastHostReturnSuffix(s) {
+  const t = hostReturnToast(s.host_return);
+  return t ? " \u00b7 " + t : "";
+}
+
+// sessionNotHomeLine: the clone session row's not-home line ("1 branch not home ·
+// 3 files not committed"), or "" for none. The rows put it FIRST in their line
+// (notHomePrefix): both clip it, and a clipped line keeps its start.
+function sessionNotHomeLine(s) {
+  return sessionNotHome(s, profiles.find((x) => x.name === s.agent));
+}
+
+// markHostNotHomeSeen: the Host spawn toast just announced these clones' not-home
+// sets, so the next profile load must not toast them again. With no stored list
+// there is nothing to add to: the next load seeds it whole.
+function markHostNotHomeSeen(hostReturn) {
+  const sigs = notHomeHostSigs(hostReturn);
+  const stored = sigs.length ? notHomeSeenRead() : null;
+  if (stored) notHomeSeenWrite(stored.concat(sigs));
+}
+
 // What the last sessions poll showed, for returnNews: seen is null until the
 // first poll after boot, which seeds it silently (returns that finished before
 // the page opened are not news).
@@ -2195,6 +2219,21 @@ async function restartSession(s, trigger) {
   }
 }
 
+// restartNeedsCopy: the restart of a session in a git folder was refused (needs_copy). The conversion dialog; when the profile holds
+// its copy, the same agent, name, options and account start there as a new session (an ended in-place session cannot come back).
+async function restartNeedsCopy(s, refusal) {
+  const prof = profiles.find((x) => x.name === s.agent);
+  const r = await copyDialogRun(refusal, { profileName: s.agent, profile: prof, home: window.HOME_DIR || "", hostOk: false });
+  if (!r || r.host) return;
+  try {
+    await spawnSession(spawnPayload({
+      agent: s.agent, name: s.name, cwd: r.dir, options: s.options || {}, runtime: "box", clone: true, account: s.account || "", profile: prof,
+    }));
+  } catch (e) {
+    showToast("Start failed: " + e.message, { error: true });
+  }
+}
+
 async function restartSessionRun(s) {
   endedMark(endedByMe, s.id, Date.now()); // the old session leaves on purpose
   let res;
@@ -2209,8 +2248,14 @@ async function restartSessionRun(s) {
   }
   if (!res.ok) {
     endedByMe.delete(s.id);
-    let msg = "", code = "";
-    try { const b = (await res.json()) || {}; msg = b.error || ""; code = b.code || ""; } catch (_) {}
+    let msg = "", code = "", body = {};
+    try { body = (await res.json()) || {}; msg = body.error || ""; code = body.code || ""; } catch (_) {}
+    // A git folder boxes only as a private copy (#371): the conversion dialog, then a new session in the copy.
+    if (res.status === 400 && spawnRefusedNeedsCopy(res.status, code) && body.repo) {
+      await restartNeedsCopy(s, body);
+      await refreshSessions();
+      return;
+    }
     // 423 = the store is locked: its message names the way out, and the banner
     // (refreshStore) is where the passphrase goes. 503 store_unavailable = the
     // Keychain failed: its message names the fix, and there is nothing to type.
@@ -2648,7 +2693,8 @@ function renderSession(s, opts) {
   if (!compact) {
     const smeta = document.createElement("div");
     smeta.className = "smeta";
-    smeta.textContent = sessionMeta(s, s.clone_of ? wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s) : s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
+    smeta.textContent = notHomePrefix(s.clone_of ? sessionNotHomeLine(s) : "",
+      sessionMeta(s, s.clone_of ? wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s) : s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title));
     grow.appendChild(smeta);
   }
   li.appendChild(grow);
@@ -2782,6 +2828,9 @@ function paintCompactRow(li, sname, grow, s, conn) {
   const aws = awsBadge(s, nowMs);
   if (aws) facts.push("AWS: " + aws.title);
   if (s.clone_of) facts.push(wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s));
+  // Work that has not come home: a prefix of the sub-line below (no chip: the row keeps one) and a line of the tooltip.
+  const nh = s.clone_of && !li.classList.contains("nested") ? sessionNotHomeLine(s) : "";
+  if (nh) facts.push(nh);
   li.title = facts.join("\n");
   // No per-session cost on the row (the M1 frames draw none; founder 2026-11-08): the pane
   // header's meta and Analytics show it.
@@ -2809,10 +2858,14 @@ function paintCompactRow(li, sname, grow, s, conn) {
   kb.onclick = () => openSessionMenu(kb, s);
   sname.appendChild(kb); // on the name line, after the chip
   // A nested shell has no sub-line: it has no summary and no ask to show.
-  const sub = li.classList.contains("nested") ? { text: "" } : rowSubline(s, conn);
+  let sub = li.classList.contains("nested") ? { text: "" } : rowSubline(s, conn);
+  // An ask or sign-in (amber) stays first and whole: what blocks the session outranks the count, which the tooltip still carries.
+  const withNh = !!nh && !sub.amber;
+  if (withNh) sub = { ...sub, text: notHomePrefix(nh, sub.text) };
   if (sub.text) {
     const d = document.createElement("div");
     d.className = sub.amber ? "sub amber" : "sub";
+    if (withNh) d.title = sub.text; // the sub-line clips: its whole text is the tooltip
     if (sub.mono) {
       // An ask: "Asks to run" and the tool call after it, the call in mono (machine text, frame m1-1).
       const m = document.createElement("span");
@@ -5613,6 +5666,14 @@ function renderPfNotHome(name) {
     row.textContent = notHomeLabel(nh) + ": " + nh.error;
     rows.push(row);
   }
+  // Files in the copy that no commit has: they do not come home, so the editor says so beside the branches.
+  const uncText = uncommittedLabel(nh && nh.uncommitted, nh && nh.uncommitted_cut);
+  if (uncText) {
+    const row = document.createElement("div");
+    row.className = "pf-nh-row";
+    row.textContent = uncText;
+    rows.push(row);
+  }
   // Files flagged for review (#346): the count opens the review of this profile's records.
   const flText = handbackCountText(view && view.flagged);
   if (flText && !mobileActive(window.innerWidth)) {
@@ -5760,7 +5821,7 @@ async function saveProfile() {
       $("pf-copy-err").hidden = true;
       let saved = null;
       try {
-        saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(withSchema(editing ? withRev(p, pfLoaded) : p, pfSchema.get())) });
+        saved = await cdSendProfile(path, editing ? "PUT" : "POST", withSchema(editing ? withRev(p, pfLoaded) : p, pfSchema.get()));
       } catch (e) {
         // A save from a form the server has moved past keeps what the user typed
         // and offers Load latest; no other refusal is cured by a reload, so the
@@ -5922,6 +5983,7 @@ function renderProfileList() {
     b.type = "button";
     b.className = "pitem" + (p.name === selectedProfile ? " on" : "");
     const nm = document.createElement("span");
+    nm.className = "pnm"; // never broken mid-word: app.css gives it a floor width and an ellipsis
     nm.textContent = p.name;
     b.appendChild(nm);
     // Where a read-only profile came from (built-in, config.json), by its `source`.
@@ -5933,7 +5995,7 @@ function renderProfileList() {
       b.appendChild(lk);
     }
     // Work that has not come home sits on the name's line, at every width.
-    const nhLabel = notHomeLabel(p.not_home);
+    const nhLabel = notHomeLine(p.not_home);
     if (nhLabel) {
       const nh = document.createElement("span");
       nh.className = "pnothome";
@@ -6121,6 +6183,7 @@ function spawnWsCheckOn() { return drawerDesktop() && !!spawnWsCheck && !spawnWh
 function spawnWsCheckBlock() { return spawnWsCheckOn() ? wsCheckBlock(spawnWsCheck, spawnCurrentTier()) : ""; }
 function setSpawnWsCheck(check) {
   spawnWsCheck = check;
+  renderTierPick(); // a git folder turns Box · in place off and the clone card into the conversion (the check carries git_repo)
   paintSpawnWsCheck();
   syncSpawnGate();
 }
@@ -6348,8 +6411,9 @@ async function spawnSession(req, opts) {
   if (opts.toast !== false) {
     // Report the directory the SERVER chose, not the one requested.
     const where = s.cwd || req.cwd;
-    showToast((mobileActive(window.innerWidth) ? "Spawned" : "Started") + ' "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s),
+    showToast((mobileActive(window.innerWidth) ? "Spawned" : "Started") + ' "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s) + toastHostReturnSuffix(s),
       { undo: () => killSession(s.id), warn: cloneLevel(s.clone) === "warn" });
+    markHostNotHomeSeen(s.host_return);
   }
   return s;
 }
@@ -6927,6 +6991,41 @@ function showSpawnUnlock(message, opts) {
   refreshStore(); // the banner behind the dialog shows the same lock
 }
 
+// spawnCopyRefusal: the card path has no refusal yet, so the server is asked about the folder in the field for this profile now (not the
+// check drawn under the field, which may be about another profile): the refusal it would give, with the server's own suggested copy
+// folder and home verdict. null, with the reason on the dialog's error line, when it cannot say.
+async function spawnCopyRefusal() {
+  try {
+    const chk = await api("/api/workspace/check?path=" + encodeURIComponent(getCwd()) + "&profile=" + encodeURIComponent($("agent").value));
+    const r = cdRefusalFromCheck(chk);
+    if (r) return r;
+    setDialogError("spawn-modal", "This folder is no longer a git repo. Press Start again.");
+  } catch (e) {
+    setDialogError("spawn-modal", "Could not check this folder: " + e.message);
+  }
+  return null;
+}
+
+// spawnNeedsCopy: a git folder reached Start (the cards knew, or the server refused with needs_copy, #371): the private-copy dialog.
+// Resolves {dir}, the folder the profile now holds its copy in, or null (the user backed out, or chose Host: the card then shows
+// Host and Start is theirs to press). The workspace becomes the repo, which is what a copy setup of this profile is for.
+async function spawnNeedsCopy(refusal) {
+  const prof = currentProfile();
+  const home = window.HOME_DIR || "";
+  const r = await copyDialogRun(refusal, { profileName: $("agent").value, profile: prof, home, hostOk: tierHostState(prof).ok });
+  if (!r) return null;
+  if (r.host) {
+    if (drawerDesktop()) tierPick("host");
+    else { setSegValue($("runtime-seg"), "host"); tierSegChanged("host"); }
+    return null;
+  }
+  if (!tierSamePath(getCwd(), refusal.repo, home)) {
+    setSpawnCwd(refusal.repo, "");
+    onSpawnCwdChanged();
+  }
+  return r;
+}
+
 $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (spawnBusy) return;
@@ -6960,6 +7059,15 @@ $("spawn").addEventListener("submit", async (ev) => {
   const hostGuardrail = w.runtime === "host" ? tierHostGuardrail(currentProfile()) : [];
   if ((hostDrops.length || hostGuardrail.length) &&
     !(await hostDropsConfirm($("agent").value, hostDrops, tierHostKeeps(currentProfile()), hostGuardrail))) return;
+  // A git folder on the clone card of a profile with no copy yet: the private-copy dialog first (it makes the profile's copy), then the
+  // session starts in it. Before the busy state, like the Host question above: backing out leaves the dialog as it was.
+  let copied = null;
+  if (tierConvertNow()) {
+    const refusal = await spawnCopyRefusal();
+    if (!refusal) return;
+    copied = await spawnNeedsCopy(refusal);
+    if (!copied) return;
+  }
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
@@ -6973,6 +7081,7 @@ $("spawn").addEventListener("submit", async (ev) => {
   // Only this form asks: a folder outside every root becomes one when the session starts (the server decides, and only for
   // this signed-in browser). Duplicate, the bearer API and scripts never send it, nor does the phone (spawnAddsRoot).
   if (spawnAddsRoot()) req.add_root = true;
+  if (copied) Object.assign(req, { runtime: "box", clone: true, cwd: copied.dir });
   const draft = $("spawn-prompt").value;
   // The dialog closes the moment the session exists, before the toast: a
   // fixed-position toast renders *beneath* a modal dialog's backdrop, so an Undo
@@ -6995,9 +7104,39 @@ $("spawn").addEventListener("submit", async (ev) => {
   const paintProg = () => { prog.textContent = spawnProgressText((Date.now() - t0) / 1000, rt); };
   paintProg();
   prog.hidden = false;
-  const progTimer = setInterval(paintProg, 1000);
+  let progTimer = setInterval(paintProg, 1000);
+  // The conversion dialog is asked outside the busy state (no "Starting…" under it, as on the card path), then busy again.
+  const spawnIdle = () => {
+    clearInterval(progTimer);
+    prog.hidden = true;
+    spawnBusy = false;
+    if (goBtn) { goBtn.disabled = false; goBtn.classList.remove("busy"); goBtn.removeAttribute("aria-busy"); goBtn.textContent = spawnSubmitLabel(drawerDesktop()); }
+  };
+  const spawnBusyAgain = () => {
+    spawnBusy = true;
+    if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
+    prog.hidden = false;
+    progTimer = setInterval(paintProg, 1000);
+  };
   try {
-    await spawnSession(req, { onCreated: closeSpawn });
+    // A needs_copy refusal (a git folder the page did not know about: the phone, a stale check) opens the same dialog once, then the
+    // start is sent again, from the profile's new copy. Backing out ends the try with the dialog as it was.
+    let toSend = req;
+    for (let again = true, asked = false; again;) {
+      again = false;
+      try {
+        await spawnSession(toSend, { onCreated: closeSpawn });
+      } catch (e) {
+        if (asked || !spawnRefusedNeedsCopy(e.status, e.code) || !e.body || !e.body.repo) throw e;
+        asked = true;
+        spawnIdle();
+        const made = await spawnNeedsCopy(e.body);
+        if (!made) break;
+        spawnBusyAgain();
+        toSend = Object.assign({}, req, { runtime: "box", clone: true, cwd: made.dir });
+        again = true;
+      }
+    }
   } catch (e) {
     if (spawnRefusedLocked(e.status, e.code)) {
       showSpawnUnlock(e.message); // dialog and form values stay as they were

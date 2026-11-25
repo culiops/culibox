@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxedws"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
@@ -120,9 +121,16 @@ func runClone(a cliArgs, cfg config.Config, home, goos string, cfgFiles []string
 			all = append(all, s)
 		}
 	}
+	// The record of boxed workspaces too: a folder boxed in place without git is
+	// never a clone source. An unreadable record fails closed, as in the daemon.
+	boxed, _, err := boxedws.Open(dataDir, nil)
+	if err != nil {
+		return fail("boxed workspace record: %v", err)
+	}
 	owner := &cloneHooks{
 		clones: func() []config.Clone { return launcher.ClonesOf(all) },
 		file:   filepath.Join(dataDir, cloneDirsFile),
+		boxed:  boxed,
 	}
 	if err := owner.checkOf(c.Of); err != nil {
 		return fail("%v", err)

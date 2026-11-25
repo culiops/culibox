@@ -25,6 +25,9 @@ type Env struct {
 	// is under a folder the VM shares). nil = every path is visible. An invisible
 	// memory folder is skipped, never a reason to refuse a spawn.
 	Visible func(host string) bool
+	// Estimate sizes the copy before the first clone is made and refuses one the
+	// disk cannot hold (EstimateCopy with the host git). nil = no check.
+	Estimate EstimateFunc
 }
 
 // memorySkipLogged remembers the memory folders already reported as unshared,
@@ -34,8 +37,10 @@ var memorySkipLogged sync.Map
 // CheckOf refuses a clone_of agent-box must not clone from or mount the .git of
 // (spec correction 8): it must be a real directory (not a symlink), not /, the
 // home or an ancestor of it, and hold a real .git directory that borrows no
-// objects or refs from elsewhere (no commondir, no alternates), whose path is
-// safe to mount and overlaps no protected dir.
+// objects or refs from elsewhere (no commondir, no alternates) and whose
+// .git/config git can read (configWhy), whose path is safe to mount and
+// overlaps no protected dir. A partial clone passes: it is refused only where a
+// box may have written its config (PartialCloneWhy, the daemon's checkOf).
 func CheckOf(of, home string, protected []box.ProtectedDir) error {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: clone_of %s %s", box.ErrUnboxableWorkspace, of, why)
@@ -73,6 +78,9 @@ func CheckOf(of, home string, protected []box.ProtectedDir) error {
 			return refuse("has " + p + "; a repo that borrows objects or refs from elsewhere cannot be cloned from")
 		}
 	}
+	if why := configWhy(root); why != "" {
+		return refuse(why)
+	}
 	gitDir := filepath.Join(of, ".git")
 	if why := box.MountUnsafe(gitDir); why != "" {
 		return refuse("cannot be mounted: " + why)
@@ -81,6 +89,74 @@ func CheckOf(of, home string, protected []box.ProtectedDir) error {
 		return refuse("cannot be mounted: its .git: " + why)
 	}
 	return nil
+}
+
+// maxOfConfig bounds the read of clone_of's .git/config: a user repo's config
+// grows with its branches and remotes, so the bound is well above a clone's.
+const maxOfConfig = 1 << 20
+
+// configWhy says why clone_of's .git/config cannot be used, "" when it can: it
+// must be a plain file (read with the box-file discipline: no symlink, FIFO or
+// directory, bounded) that git would accept, since nothing after a line git
+// rejects can be read for what PartialCloneWhy looks for. An absent config is
+// git's defaults.
+func configWhy(root *os.Root) string {
+	_, why := ofConfig(root, ".git/config")
+	return why
+}
+
+// ofConfig reads one config file of clone_of under root: its bytes, or why it
+// cannot be read as git would ("" and nil data when it is absent).
+func ofConfig(root *os.Root, name string) ([]byte, string) {
+	data, err := readBoxFile(root, name, maxOfConfig)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, ""
+	case err != nil:
+		return nil, "has a " + name + " that cannot be read as a plain file (" + err.Error() + "); it must be a regular file of at most 1 MiB"
+	}
+	if _, _, valid := box.GitConfigPromisor(data); !valid {
+		return nil, "has a " + name + " that git would not read; fix it with git config"
+	}
+	return data, ""
+}
+
+// PartialCloneWhy says why the repo of is, or may be, a partial clone, "" when
+// it is not: its .git/config (and .git/config.worktree when it turns
+// extensions.worktreeConfig on) declares a partial clone or a promisor remote
+// (box.GitConfigPromisor), or cannot be read as git would. git then fetches any
+// object the repo lacks from that remote, running the commands the config names.
+// Every host git call in clone_of that needs no transport forbids them all; the
+// two that read clone_of through one, the first copy's git clone and the bundle
+// import, rely on GIT_NO_LAZY_FETCH, which an older git ignores. A partial clone
+// of the user's own is a working clone_of, so this is not a CheckOf rule: the
+// daemon refuses it only for a folder whose .git a box may have written (#371).
+// A declaration in a file an [include] pulls in is not seen (a stated limit). A
+// repo that does not exist is "": the checks that need it report that.
+func PartialCloneWhy(of string) string {
+	root, err := os.OpenRoot(of)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ""
+	}
+	if err != nil {
+		return "cannot be opened (" + err.Error() + ")"
+	}
+	defer root.Close()
+	files := []string{".git/config"}
+	for i := 0; i < len(files); i++ {
+		data, why := ofConfig(root, files[i])
+		if why != "" {
+			return why
+		}
+		declares, worktree, _ := box.GitConfigPromisor(data)
+		if declares {
+			return "is a partial clone: its " + files[i] + " declares a promisor remote (extensions.partialClone, or a remote's promisor or partialclonefilter)"
+		}
+		if worktree && i == 0 {
+			files = append(files, ".git/config.worktree")
+		}
+	}
+	return ""
 }
 
 // isHomeOrAbove reports whether of is home or an ancestor of it, comparing both
@@ -145,7 +221,7 @@ func Prepare(ctx context.Context, e Env, c config.Clone, withMemory bool) (cm bo
 	// The tip is read before the clone, so the record never holds a commit the
 	// clone could not have had. A failure only means there is no record to start.
 	_, tip, _ := BaseBranch(ctx, e.Git, c.Of)
-	created, err = EnsureClone(ctx, e.Git, c, e.Home)
+	created, err = ensureClone(ctx, e.Git, c, e.Home, e.Estimate)
 	if err != nil {
 		return box.CloneMounts{}, false, err
 	}
