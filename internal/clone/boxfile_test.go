@@ -362,6 +362,24 @@ func TestRefsFingerprint(t *testing.T) {
 			t.Fatal("the fingerprint walked into a symlinked directory")
 		}
 	})
+	t.Run("a deep chain stops at the branch-name limit and stays fast", func(t *testing.T) {
+		x := newRefsFx(t)
+		deep := ".git/refs/heads"
+		for i := 0; i < 1900; i++ {
+			deep += "/a"
+		}
+		if err := os.MkdirAll(filepath.Join(x.dir, deep), 0o755); err != nil {
+			t.Skipf("cannot build the chain: %v", err)
+		}
+		start := time.Now()
+		fp, ok := RefsFingerprint(x.dir)
+		if !ok || fp == "" {
+			t.Fatalf("RefsFingerprint over a 1900-deep chain = %q, %v; want ok", fp, ok)
+		}
+		if d := time.Since(start); d > 2*time.Second {
+			t.Fatalf("RefsFingerprint over a 1900-deep chain took %v; want < 2s", d)
+		}
+	})
 	t.Run("more than 2000 loose refs is not ok", func(t *testing.T) {
 		x := newRefsFx(t)
 		for i := 0; i < 2001; i++ {

@@ -192,7 +192,7 @@ func RefsFingerprint(cloneDir string) (fp string, ok bool) {
 		add(heads, st) // a symlink or file in its place: recorded, not walked
 	} else {
 		n := 0
-		if err := walkBoxDir(root, heads, &n, add); err != nil {
+		if err := walkBoxDir(root, heads, "", &n, add); err != nil {
 			return "", false
 		}
 	}
@@ -200,7 +200,8 @@ func RefsFingerprint(cloneDir string) (fp string, ok bool) {
 }
 
 // walkBoxDir hashes the entries under dir depth-first, each directory's names
-// in sorted order so the result is stable. A directory is opened the way
+// in sorted order so the result is stable. rel is dir's path below
+// .git/refs/heads ("" for heads itself). A directory is opened the way
 // openBoxFile opens a file (O_NONBLOCK, O_NOFOLLOW, O_DIRECTORY, then an
 // fstat that must say directory and match the Lstat that chose to descend):
 // a box that swaps it for a FIFO or a link between the listing and the open
@@ -208,43 +209,18 @@ func RefsFingerprint(cloneDir string) (fp string, ok bool) {
 // root.Lstat, and one that vanished since the listing (a transient .lock) is
 // skipped. n counts entries across the whole walk and is checked while a
 // directory is read, so a huge directory is never listed in full.
-func walkBoxDir(root *os.Root, dir string, n *int, add func(string, fs.FileInfo)) error {
-	lst, err := root.Lstat(dir)
+//
+// Every root call re-resolves its path from the root, so a deep chain costs
+// about depth squared syscalls. No valid branch lives deeper than
+// maxBranchLen bytes, so a directory whose rel path is longer than that is
+// hashed (its metadata) but not opened: changes below the cut-off need not
+// move the fingerprint, which is only a scheduling hint. Each directory's
+// handle is closed before its subdirectories are walked.
+func walkBoxDir(root *os.Root, dir, rel string, n *int, add func(string, fs.FileInfo)) error {
+	names, err := listBoxDir(root, dir, n)
 	if err != nil {
 		return err
 	}
-	if !lst.IsDir() {
-		return fmt.Errorf("%s is not a directory", dir)
-	}
-	f, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	fst, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if !fst.IsDir() || !os.SameFile(lst, fst) {
-		return fmt.Errorf("%s changed while it was read", dir)
-	}
-	var names []string
-	for {
-		batch, err := f.ReadDir(256)
-		for _, d := range batch {
-			if *n++; *n > maxFingerprintEntries {
-				return errTooManyRefs
-			}
-			names = append(names, d.Name())
-		}
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return err
-		}
-	}
-	sort.Strings(names)
 	for _, name := range names {
 		full := dir + "/" + name
 		info, err := root.Lstat(full)
@@ -255,11 +231,61 @@ func walkBoxDir(root *os.Root, dir string, n *int, add func(string, fs.FileInfo)
 			return err
 		}
 		add(full, info)
-		if info.IsDir() {
-			if err := walkBoxDir(root, full, n, add); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
+		if !info.IsDir() {
+			continue
+		}
+		childRel := name
+		if rel != "" {
+			childRel = rel + "/" + name
+		}
+		if len(childRel) > maxBranchLen {
+			continue // deeper than any valid branch: metadata only
+		}
+		if err := walkBoxDir(root, full, childRel, n, add); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
 		}
 	}
 	return nil
+}
+
+// listBoxDir opens dir without following links or blocking, reads its entry
+// names (counting them in n), closes the handle, and returns them sorted.
+func listBoxDir(root *os.Root, dir string, n *int) ([]string, error) {
+	lst, err := root.Lstat(dir)
+	if err != nil {
+		return nil, err
+	}
+	if !lst.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", dir)
+	}
+	f, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fst, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fst.IsDir() || !os.SameFile(lst, fst) {
+		return nil, fmt.Errorf("%s changed while it was read", dir)
+	}
+	var names []string
+	for {
+		batch, err := f.ReadDir(256)
+		for _, d := range batch {
+			if *n++; *n > maxFingerprintEntries {
+				return nil, errTooManyRefs
+			}
+			names = append(names, d.Name())
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
