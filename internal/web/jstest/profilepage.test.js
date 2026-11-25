@@ -7583,3 +7583,48 @@ test("merge switch: an unchecked box is no change; a stored switch is kept when 
   assert.strictEqual(body.clone_merge_home, true, "kept");
   assert.strictEqual("ack_merge_home" in body, false, "no ack from the form: the server asks, and cdSendProfile shows the warning");
 });
+
+// --- #370 fix round 1: the ack names the repo the dialog showed ---------------------------------------------
+
+test("merge switch: an ack does not survive a round trip through Work in this folder with another folder picked", async () => {
+  const t = page();
+  await openWs(t);
+  pickMode(t, "copy");
+  mergeAsk(t, true);
+  await tickAsync(t, "merge-home", true);
+  assert.deepStrictEqual(t.box.mergeAsked, ["/home/you/work/payments-api"]);
+  pickMode(t, "folder");
+  lastPicker(t).pick("/home/you/work/other");
+  pickMode(t, "copy");
+  assert.strictEqual(field(t, "folder").value, "/home/you/work/other");
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+  const body = t.box.puts[0];
+  assert.strictEqual(body.clone_of, "/home/you/work/other");
+  assert.strictEqual("ack_merge_home" in body, false, "the dialog never named /home/you/work/other");
+});
+
+test("merge switch: the same round trip with the folder unchanged keeps the ack; a folder picked and picked back too", async () => {
+  const t = page();
+  await openWs(t);
+  pickMode(t, "copy");
+  mergeAsk(t, true);
+  await tickAsync(t, "merge-home", true);
+  pickMode(t, "folder");
+  pickMode(t, "copy");
+  lastPicker(t).pick("/home/you/work/other");
+  lastPicker(t).pick("/home/you/work/payments-api");
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+  assert.strictEqual(t.box.puts[0].ack_merge_home, true);
+  assert.strictEqual(t.box.puts[0].clone_merge_home, true);
+});
+
+test("merge switch: with no folder the dialog is not opened and the box stays unchecked", async () => {
+  const t = page();
+  await openWs(t);
+  pickMode(t, "copy");
+  lastPicker(t).pick("");
+  mergeAsk(t, true);
+  await tickAsync(t, "merge-home", true);
+  assert.deepStrictEqual(t.box.mergeAsked, []);
+  assert.strictEqual(field(t, "merge-home").checked, false);
+});

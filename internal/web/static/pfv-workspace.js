@@ -22,7 +22,7 @@ const PFW_HINT_SHARE = "Relative to the folder, one per line, at most 8.";
 
 // What the copy fields hold while the block is on "Work in this folder": the profile's own, as opened, so
 // "a private copy and back" is no change (see pfwPickMode).
-const pfwCopyFields = (v) => ({ copyDir: v.copyDir, shareText: v.shareText, autoReturn: v.autoReturn, mergeHome: v.mergeHome, mergeAck: v.mergeAck });
+const pfwCopyFields = (v) => ({ copyDir: v.copyDir, shareText: v.shareText, autoReturn: v.autoReturn, mergeHome: v.mergeHome, mergeAckRepo: v.mergeAckRepo });
 
 const pfwHome = () => (typeof window !== "undefined" && window.HOME_DIR) || "";
 const pfwUnavailable = () => (typeof cloneUnavailable === "string" ? cloneUnavailable : "");
@@ -40,10 +40,20 @@ function pfwValues(c) {
     copyDir: copy ? cwd : "",
     shareText: contextPathsToText(d.clone_share),
     autoReturn: d.clone_no_auto_return !== true,
-    // The merge switch (#370) and whether the user confirmed its warning in this form (the save then carries ack_merge_home).
+    // The merge switch (#370) and the repo whose warning the user confirmed in this form ("" for none). The save carries
+    // ack_merge_home only while the folder still is that repo (pfwMergeValues).
     mergeHome: d.clone_merge_home === true,
-    mergeAck: false,
+    mergeAckRepo: "",
   };
+}
+
+// pfwMergeValues: the values a save is built from: mergeAck is true only when the switch is on and the dialog the user
+// confirmed named the folder being saved (the folder is shared between the two ways of working, so it can change after the ack).
+function pfwMergeValues(rec) {
+  const v = Object.assign({}, rec.values);
+  v.mergeAck = v.mergeHome === true && v.mergeAckRepo !== "" && v.mergeAckRepo === String(v.folder || "").trim();
+  delete v.mergeAckRepo;
+  return v;
 }
 
 // pfwSuggestion: where a copy of `folder` could live: ~/box-clones/<name>, never a folder another profile
@@ -91,8 +101,6 @@ function pfwPickMode(rec, mode) {
 // pfwFolderChanged: the picker's value changed (a pick, a resolved or typed path, an emptied field).
 function pfwFolderChanged(rec, path) {
   rec.values.folder = path;
-  // The warning named the repo it was confirmed for: another repo is asked about again (the server refuses the save without it).
-  rec.values.mergeAck = false;
   rec.ui.typed = undefined;
   pfwFollow(rec);
   rec.ui.clearFolder();
@@ -234,7 +242,7 @@ function pfwCopyFieldNodes(rec, storedCopy) {
     v.autoReturn = cb.checked;
     if (!cb.checked) {
       v.mergeHome = false;
-      v.mergeAck = false;
+      v.mergeAckRepo = "";
       mcb.checked = false;
     }
     mcb.disabled = !cb.checked;
@@ -244,14 +252,16 @@ function pfwCopyFieldNodes(rec, storedCopy) {
   };
   mcb.onchange = async () => {
     if (mcb.checked) {
-      // Not on until the warning is confirmed: the dialog is modal, and the form stays as it was while it is open.
-      const yes = await cdAskMergeHome(v.folder);
+      // Not on until the warning is confirmed: the dialog is modal, and the form stays as it was while it is open. It names the
+      // repo, so with no folder there is nothing to ask about: the box stays off (the folder field says what is missing).
+      const repo = String(v.folder || "").trim();
+      const yes = repo !== "" && (await cdAskMergeHome(repo));
       v.mergeHome = yes;
-      v.mergeAck = yes;
+      v.mergeAckRepo = yes ? repo : "";
       mcb.checked = yes;
     } else {
       v.mergeHome = false;
-      v.mergeAck = false;
+      v.mergeAckRepo = "";
     }
     rec.nudge = false;
     pfvPaint();
@@ -316,6 +326,7 @@ function pfwCheck(rec) {
 
 pfvRegisterEditor("workspace", {
   values: pfwValues,
+  merge: pfwMergeValues,
   draw: pfwDraw,
   check: pfwCheck,
   // What a forced close keeps with the edit (see PFV_EDITORS): the copy fields stashed and as opened, the copy folder that follows the
