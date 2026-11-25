@@ -584,6 +584,39 @@ func TestMergeHomeMoved(t *testing.T) {
 	}
 }
 
+// dirtyingGit edits a tracked file right after the guard's check-attr call.
+type dirtyingGit struct {
+	*recGit
+	x       *mergeFx
+	dirtied bool
+}
+
+func (d *dirtyingGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	out, err := d.recGit.RunStdin(ctx, dir, env, stdin, args...)
+	if !d.dirtied && slices.Contains(args, "check-attr") {
+		d.dirtied = true
+		d.x.write("a.txt", "edited while checked")
+	}
+	return out, err
+}
+
+// The tree is clean when checked and again right before the merge: an edit
+// made while the guard ran is never merged over.
+func TestMergeHomeDirtiedWhileChecked(t *testing.T) {
+	x := newMergeFx(t, "main")
+	before := x.tip()
+	x.box("main", map[string]string{"b.txt": "b"})
+	d := &dirtyingGit{recGit: newRec(t), x: x}
+	a := &auditRec{}
+	wantMergeReason(t, x.run(d, a), MergeDirty)
+	if !d.dirtied {
+		t.Fatal("check-attr was not called")
+	}
+	if x.tip() != before || x.read("a.txt") != "edited while checked" || len(a.calls) != 0 || mergeCalled(d.recGit) {
+		t.Fatalf("main moved, the edit was lost or audit written: %q", a.calls)
+	}
+}
+
 func TestMergeHomeAuditFailsClosed(t *testing.T) {
 	for _, nilAudit := range []bool{false, true} {
 		x := newMergeFx(t, "main")

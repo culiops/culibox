@@ -242,16 +242,12 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	}
 
 	// 3. A clean tree (tracked files; git itself refuses to overwrite an untracked one).
-	out, err := m.run(append(m.env(), "GIT_OPTIONAL_LOCKS=0"), "status", "--porcelain=v1", "-z", "--untracked-files=no")
-	if err != nil {
-		return m.failed("cannot read the work tree's status", err)
-	}
-	if len(out) > 0 {
-		return m.result(MergeDirty, "the work tree has uncommitted changes to tracked files", nil)
+	if res := m.clean(); res != nil {
+		return res
 	}
 
 	// 4a. Every path and mode of every commit in the range.
-	out, err = m.run(m.env(), "log", "--root", "--no-show-signature", "--no-ext-diff", "--no-textconv",
+	out, err := m.run(m.env(), "log", "--root", "--no-show-signature", "--no-ext-diff", "--no-textconv",
 		"--format=%H", "--raw", "-r", "-z", "--no-renames", "--no-abbrev", "--diff-merges=first-parent",
 		m.from+".."+m.to, "--")
 	if err != nil {
@@ -341,6 +337,9 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	} else if tip != m.from {
 		return m.result(MergeMoved, x+" moved while it was being checked", nil)
 	}
+	if res := m.clean(); res != nil { // never merge over an edit made while the guard ran
+		return res
+	}
 
 	// A merge git refused for this same range is retried at most every 30 min,
 	// so a persistent refusal does not write audit rows on every pass.
@@ -368,6 +367,19 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	res := m.result("", "", nil)
 	res.Merged = true
 	return res
+}
+
+// clean returns nil when no tracked file has staged or unstaged changes, the
+// dirty (or failed) result otherwise.
+func (m *merger) clean() *MergeResult {
+	out, err := m.run(append(m.env(), "GIT_OPTIONAL_LOCKS=0"), "status", "--porcelain=v1", "-z", "--untracked-files=no")
+	if err != nil {
+		return m.failed("cannot read the work tree's status", err)
+	}
+	if len(out) > 0 {
+		return m.result(MergeDirty, "the work tree has uncommitted changes to tracked files", nil)
+	}
+	return nil
 }
 
 // mergeEntry is one raw-log line of the range: a path and whether either side
