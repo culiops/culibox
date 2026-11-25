@@ -3,6 +3,8 @@ package clone
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -136,4 +138,79 @@ func branchSHA(root *os.Root, branch string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// maxFingerprintEntries bounds the loose refs RefsFingerprint walks.
+const maxFingerprintEntries = 2000
+
+var errTooManyRefs = errors.New("too many refs to fingerprint")
+
+// RefsFingerprint is a hex sha256 over the metadata (name, size, mode, mtime
+// in ns) of .git/HEAD, .git/packed-refs, .git/index and every entry under
+// .git/refs/heads of the clone at cloneDir: a cheap "did the refs move" test
+// with no git exec and no file read. The three files are each optional (absent
+// hashes as "absent"). Every entry is taken with Lstat semantics and a symlink
+// is recorded, never followed, so a box cannot make the host look outside the
+// clone. ok is false when cloneDir cannot be opened, .git is not a directory,
+// or the walk passes 2000 entries.
+//
+// The clone is box-owned, so the box can forge any of this: the result is a
+// scheduling hint (skip a return when nothing changed) and never a security
+// input.
+func RefsFingerprint(cloneDir string) (fp string, ok bool) {
+	root, err := os.OpenRoot(cloneDir)
+	if err != nil {
+		return "", false
+	}
+	defer root.Close()
+	if st, err := root.Lstat(".git"); err != nil || !st.IsDir() {
+		return "", false
+	}
+	h := sha256.New()
+	add := func(name string, st fs.FileInfo) {
+		fmt.Fprintf(h, "%q %d %d %d\n", name, st.Size(), uint32(st.Mode()), st.ModTime().UnixNano())
+	}
+	for _, name := range []string{".git/HEAD", ".git/packed-refs", ".git/index"} {
+		st, err := root.Lstat(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintf(h, "%q absent\n", name)
+			continue
+		}
+		if err != nil {
+			return "", false
+		}
+		add(name, st)
+	}
+	const heads = ".git/refs/heads"
+	st, err := root.Lstat(heads)
+	if errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(h, "%q absent\n", heads)
+	} else if err != nil {
+		return "", false
+	} else if !st.IsDir() {
+		add(heads, st) // a symlink or file in its place: recorded, not walked
+	} else {
+		n := 0
+		err := fs.WalkDir(root.FS(), heads, func(name string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if name == heads {
+				return nil
+			}
+			if n++; n > maxFingerprintEntries {
+				return errTooManyRefs
+			}
+			info, err := d.Info() // from the directory listing: Lstat, never the link target
+			if err != nil {
+				return err
+			}
+			add(name, info)
+			return nil
+		})
+		if err != nil {
+			return "", false
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), true
 }

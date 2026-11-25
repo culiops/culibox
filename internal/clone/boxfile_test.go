@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,4 +243,158 @@ func TestCheckExistingRefusesFIFOConfig(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("EnsureClone blocked on a FIFO .git/config")
 	}
+}
+
+// refsFx is a clone fixture of plain files: RefsFingerprint reads metadata
+// only, so no git is needed.
+type refsFx struct {
+	dir string
+}
+
+func newRefsFx(t *testing.T) *refsFx {
+	t.Helper()
+	x := &refsFx{dir: t.TempDir()}
+	x.write(".git/HEAD", "ref: refs/heads/main\n")
+	x.write(".git/index", "index")
+	x.write(".git/refs/heads/main", "0123456789012345678901234567890123456789\n")
+	return x
+}
+
+func (x *refsFx) write(name, content string) {
+	p := filepath.Join(x.dir, name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		panic(err)
+	}
+}
+
+func (x *refsFx) fp(t *testing.T) string {
+	t.Helper()
+	fp, ok := RefsFingerprint(x.dir)
+	if !ok || fp == "" {
+		t.Fatalf("RefsFingerprint(%s) = %q, %v; want a fingerprint", x.dir, fp, ok)
+	}
+	return fp
+}
+
+func TestRefsFingerprint(t *testing.T) {
+	t.Run("same repo twice is equal", func(t *testing.T) {
+		x := newRefsFx(t)
+		if a, b := x.fp(t), x.fp(t); a != b {
+			t.Fatalf("fingerprint changed with no change: %s vs %s", a, b)
+		}
+	})
+	t.Run("a new loose ref changes it", func(t *testing.T) {
+		x := newRefsFx(t)
+		before := x.fp(t)
+		x.write(".git/refs/heads/feat", "0123456789012345678901234567890123456789\n")
+		if x.fp(t) == before {
+			t.Fatal("a new loose ref did not change the fingerprint")
+		}
+	})
+	t.Run("a nested loose ref changes it", func(t *testing.T) {
+		x := newRefsFx(t)
+		before := x.fp(t)
+		x.write(".git/refs/heads/feat/deep/x", "0123456789012345678901234567890123456789\n")
+		if x.fp(t) == before {
+			t.Fatal("a nested loose ref did not change the fingerprint")
+		}
+	})
+	t.Run("rewriting packed-refs changes it", func(t *testing.T) {
+		x := newRefsFx(t)
+		before := x.fp(t) // packed-refs absent
+		x.write(".git/packed-refs", "# pack-refs\n")
+		withPacked := x.fp(t)
+		if withPacked == before {
+			t.Fatal("creating packed-refs did not change the fingerprint")
+		}
+		x.write(".git/packed-refs", "# pack-refs with: peeled\n0123456789012345678901234567890123456789 refs/heads/main\n")
+		if x.fp(t) == withPacked {
+			t.Fatal("rewriting packed-refs did not change the fingerprint")
+		}
+	})
+	t.Run("touching the index mtime changes it", func(t *testing.T) {
+		x := newRefsFx(t)
+		before := x.fp(t)
+		later := time.Now().Add(time.Hour)
+		if err := os.Chtimes(filepath.Join(x.dir, ".git/index"), later, later); err != nil {
+			t.Fatal(err)
+		}
+		if x.fp(t) == before {
+			t.Fatal("touching .git/index did not change the fingerprint")
+		}
+	})
+	t.Run("a symlinked ref is recorded, never followed", func(t *testing.T) {
+		x := newRefsFx(t)
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(outside, []byte("one"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(x.dir, ".git/refs/heads/x")); err != nil {
+			t.Fatal(err)
+		}
+		before := x.fp(t)
+		if err := os.WriteFile(outside, []byte("changed and longer"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		later := time.Now().Add(time.Hour)
+		if err := os.Chtimes(outside, later, later); err != nil {
+			t.Fatal(err)
+		}
+		if x.fp(t) != before {
+			t.Fatal("the fingerprint followed a symlink out of the clone")
+		}
+	})
+	t.Run("a symlinked directory under refs/heads is not descended", func(t *testing.T) {
+		x := newRefsFx(t)
+		outDir := t.TempDir()
+		if err := os.Symlink(outDir, filepath.Join(x.dir, ".git/refs/heads/d")); err != nil {
+			t.Fatal(err)
+		}
+		before := x.fp(t)
+		if err := os.WriteFile(filepath.Join(outDir, "new"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if x.fp(t) != before {
+			t.Fatal("the fingerprint walked into a symlinked directory")
+		}
+	})
+	t.Run("more than 2000 loose refs is not ok", func(t *testing.T) {
+		x := newRefsFx(t)
+		for i := 0; i < 2001; i++ {
+			x.write(fmt.Sprintf(".git/refs/heads/r%04d", i), "x")
+		}
+		if fp, ok := RefsFingerprint(x.dir); ok {
+			t.Fatalf("RefsFingerprint over 2001 refs = %q, true; want ok=false", fp)
+		}
+	})
+	t.Run("exactly 2000 entries is ok", func(t *testing.T) {
+		x := newRefsFx(t)
+		x.write(".git/refs/heads/r0", "x")
+		for i := 1; i < 1999; i++ { // main + r0..r1998 = 2000
+			x.write(fmt.Sprintf(".git/refs/heads/r%04d", i), "x")
+		}
+		x.fp(t)
+	})
+	t.Run("no .git is not ok", func(t *testing.T) {
+		if fp, ok := RefsFingerprint(t.TempDir()); ok {
+			t.Fatalf("RefsFingerprint with no .git = %q, true", fp)
+		}
+	})
+	t.Run(".git a file is not ok", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: elsewhere\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if fp, ok := RefsFingerprint(dir); ok {
+			t.Fatalf("RefsFingerprint with .git as a file = %q, true", fp)
+		}
+	})
+	t.Run("a missing clone dir is not ok", func(t *testing.T) {
+		if fp, ok := RefsFingerprint(filepath.Join(t.TempDir(), "nope")); ok {
+			t.Fatalf("RefsFingerprint of a missing dir = %q, true", fp)
+		}
+	})
 }
