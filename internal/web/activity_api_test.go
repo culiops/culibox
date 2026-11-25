@@ -471,3 +471,52 @@ func TestCredentialStateSplitsRefusalFromFailure(t *testing.T) {
 		}
 	}
 }
+
+// stubActivityRows serves canned broker rows to credentialEvents.
+type stubActivityRows struct{ rows []broker.Row }
+
+func (s stubActivityRows) ActivityCredentials(string, int64, int64, int) ([]broker.Row, error) {
+	return s.rows, nil
+}
+func (stubActivityRows) ActivityApprovals(string, int64, int64, int) ([]broker.ApprovalRow, error) {
+	return nil, nil
+}
+func (stubActivityRows) ActivityMinted(string, int64) (int, error) { return 0, nil }
+
+// A credential row mirrors the broker provider (empty is AWS) so the page picks
+// a glyph from a declared field; an approval row has none, and the field is
+// left out of the JSON when empty.
+func TestCredentialEventsProvider(t *testing.T) {
+	at := activityCreated.Add(time.Minute)
+	rows := []broker.Row{
+		credRow(at, "github", "", broker.OutcomeMinted),
+		credRow(at, "static", "datadog-read", broker.OutcomeFetched),
+		credRow(at, "", "culipulse-prod", broker.OutcomeMinted),
+		credRow(at, "aws", "culipulse-prod", broker.OutcomeMinted),
+	}
+	evs, _, err := credentialEvents(stubActivityRows{rows}, "s1", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"github", "static", "aws", "aws"}
+	if len(evs) != len(want) {
+		t.Fatalf("events = %+v", evs)
+	}
+	for i, w := range want {
+		if evs[i].Kind != "credential" || evs[i].Provider != w {
+			t.Errorf("event %d: kind %q provider %q, want credential %q", i, evs[i].Kind, evs[i].Provider, w)
+		}
+	}
+
+	// Through the handler: credential rows carry it, approval rows do not.
+	creds := []broker.Row{credRow(activityCreated.Add(20*time.Second), "github", "", broker.OutcomeMinted)}
+	appr := []broker.ApprovalRow{{Time: activityCreated.Add(10 * time.Second), Action: broker.ActionGranted, Minutes: 15}}
+	a := auditAPI(t, newActivitySvc(), creds, appr)
+	got := activityEvents(t, decodeActivity(t, activityGet(a, "/api/sessions/s1/activity", credCookie)))
+	if len(got) != 2 || got[0]["kind"] != "credential" || got[0]["provider"] != "github" {
+		t.Fatalf("credential row: %v", got)
+	}
+	if _, has := got[1]["provider"]; got[1]["kind"] != "approval" || has {
+		t.Fatalf("approval row must carry no provider: %v", got[1])
+	}
+}

@@ -102,7 +102,7 @@ function page({ asPage = true, width = 800, tab = false } = {}) {
   const listeners = {};
   Node.active = null;
   const doc = {
-    createElement: (t) => new Node(t), createTextNode: (t) => new Text(t),
+    createElement: (t) => new Node(t), createElementNS: (_ns, t) => new Node(t), createTextNode: (t) => new Text(t),
     getElementById: (id) => byId[id] || null,
     addEventListener: (t, f) => { (listeners[t] = listeners[t] || []).push(f); },
     get activeElement() { return Node.active; },
@@ -120,8 +120,9 @@ function page({ asPage = true, width = 800, tab = false } = {}) {
   };
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  // kitmenu.js loads before credentials.js on the page (index.html): the header menu is built from its rows.
-  for (const f of ["pending.js", "store.js", "kitmenu.js", "credentials.js"]) {
+  // kitmenu.js loads before credentials.js on the page (index.html): the header menu is built from its rows. The glyph set,
+  // its maps and the builder (icons.js, iconmap.js, svgicon.js) load before kitmenu.js, as there.
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "pending.js", "store.js", "kitmenu.js", "credentials.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   // The reload every action ends in repaints the whole screen; here it only counts.
@@ -2926,4 +2927,79 @@ test("AWS add: the source profile stays read-only with no list, and region sugge
   const rg = listOptions(opts.host, "region");
   assert.strictEqual(rg.values[0], "eu-west-1");
   assert.strictEqual(rg.values.filter((r) => r === "eu-west-1").length, 1);
+});
+
+// --- #168 G1: kind glyphs on the Add credential menu, the section heads and the edit heading ----------------------------------
+const glyphsIn = (root) => root.querySelectorAll("svg").map((n) => n.getAttribute("data-icon"));
+const tokenGroup = (entries) => ({ key: "token:x", title: "X", entries });
+
+test("Add credential menu: the three rows carry cloud, si:github and key-round, each hidden from assistive tech", () => {
+  const p = page();
+  const { pop } = headWithTrigger(p);
+  const rows = menuRows(pop);
+  assert.deepStrictEqual(rows.map((r) => glyphsIn(r)), [["cloud"], ["si:github"], ["key-round"]]);
+  for (const r of rows) {
+    const slot = r.querySelector("span.menu-icon");
+    assert.strictEqual(slot.getAttribute("aria-hidden"), "true");
+    assert.strictEqual(slot.querySelector("svg").getAttribute("width"), "14");
+  }
+});
+
+test("section glyph from template: the table head draws it at 16 px before the title, the count chip stays last", () => {
+  const p = page({ width: 1200 });
+  const sec = p.box.credSection(tokenGroup([{ ...tok("s", {}), template: "sentry" }]));
+  assert.ok(classesOf(sec).includes("ctab-sec"), "table mode");
+  const h2 = sec.querySelector("h2");
+  assert.deepStrictEqual(glyphsIn(sec.querySelector("div.sec-h")), ["si:sentry"]);
+  assert.strictEqual(h2.children[0].getAttribute("data-icon"), "si:sentry", "first in the heading, before its text");
+  assert.strictEqual(h2.children[0].getAttribute("width"), "16");
+  assert.strictEqual(h2.textContent, "X", "the glyph adds no text");
+  assert.strictEqual(sec.querySelector("span.chip").textContent, "1");
+});
+
+test("section glyph from template: free-text provider, mixed templates and a missing template draw key-round", () => {
+  const p = page({ width: 1200 });
+  for (const entries of [[{ ...tok("a", {}), provider: "sentry" }], [{ ...tok("a", {}), template: "sentry" }, { ...tok("b", {}), template: "other" }], [{ ...tok("a", {}), template: "constructor" }]]) {
+    assert.deepStrictEqual(glyphsIn(p.box.credSection(tokenGroup(entries)).querySelector("div.sec-h")), ["key-round"]);
+  }
+});
+
+test("section glyph: AWS and GitHub Apps draw their kind, Stored values and Legacy secrets none", () => {
+  const p = page({ width: 1200 });
+  const head = (g) => {
+    const sec = p.box.credSection(g);
+    return glyphsIn(sec.querySelector("div.sec-h") || sec);
+  };
+  assert.deepStrictEqual(head({ key: "aws", title: "AWS", entries: [] }), ["cloud"]);
+  assert.deepStrictEqual(head({ key: "github", title: "GitHub Apps", entries: [] }), ["si:github"]);
+  assert.deepStrictEqual(glyphsIn(p.box.credSection({ key: "values", title: "Stored values", entries: [] })), []);
+  assert.deepStrictEqual(glyphsIn(p.box.credSection({ key: "legacy", title: "Legacy secrets", entries: [{ name: "l", status: "ok", kind: "legacy" }] })), []);
+});
+
+test("section glyph: the card layout (a phone's modal, or a narrow window) gains no glyph", () => {
+  for (const q of [page({ asPage: false, width: 1200 }), page({ width: 300 })]) {
+    for (const g of [{ key: "aws", title: "AWS", entries: [] }, { key: "github", title: "GitHub Apps", entries: [] }, tokenGroup([{ ...tok("s", {}), template: "sentry" }])]) {
+      assert.deepStrictEqual(glyphsIn(q.box.credSection(g)), [], g.key);
+    }
+  }
+});
+
+test("edit heading: a GitHub App edit carries si:github at 16 px before the name, an Add has none, a phone's modal has none", async () => {
+  const p = page({ tab: true });
+  p.box.reply = credReply();
+  await p.box.credAppForm({ name: "test-app", client_id: "Iv1.x", key_ref_kind: "store" });
+  const title = p.byId["creds-body"].querySelector("span.grow");
+  assert.strictEqual(title.textContent, "test-app", "no text from the glyph");
+  assert.strictEqual(title.children[0].getAttribute("data-icon"), "si:github");
+  assert.strictEqual(title.children[0].getAttribute("width"), "16");
+
+  const add = page({ tab: true });
+  add.box.reply = credReply();
+  await add.box.credAppForm(null);
+  assert.deepStrictEqual(glyphsIn(add.byId["creds-body"].querySelector("span.grow")), [], "the Add heading says GitHub App in words");
+
+  const phone = page({ tab: true, asPage: false });
+  phone.box.reply = credReply();
+  await phone.box.credAppForm({ name: "test-app", client_id: "Iv1.x", key_ref_kind: "store" });
+  assert.deepStrictEqual(glyphsIn(phone.byId["creds-body"].querySelector("span.grow")), [], "phone frozen");
 });

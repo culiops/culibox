@@ -562,8 +562,38 @@ test("+ Shell is the kit's ghost button: the header keeps no look of its own for
   assert.ok(rulesFor(".ph-shell").every((b) => !look(b)), "only the compact + label's size and padding, never a fill, colour or border");
   assert.deepStrictEqual(rulesFor(".ph-shell:hover"), [], "hover is .btn-ghost:hover");
   assert.ok(rulesFor(".ph-shell[hidden]").some((b) => /display:\s*none/.test(b)), "a header with no shell profile hides it");
-  // The compact "+": the kit button's 6px gap would sit between the label's empty text and the glyph (+6px), so it is 0.
-  assert.match(headerRule(/\.ph-sep\s*\{/).body, /\.ph-shell \{ font-size: 0; padding: 0 8px; gap: 0; \}/);
+  // The compact plus: the kit button's 6px gap would sit between the label's empty text and the glyph (+6px), so it is 0; 5px padding keeps the old 26.7px width (the thresholds below were measured with it).
+  assert.match(headerRule(/\.ph-sep\s*\{/).body, /\.ph-shell \{ font-size: 0; padding: 0 5px; gap: 0; \}/);
+});
+
+// #168: the compact + is the vendored plus (.ph-sh-i, in the button beside its words), not a CSS "+" ::before. Wide, the
+// button is its words alone (the glyph is hidden); the compact rule shows the glyph and takes the words' size to 0.
+test("+ Shell: the plus glyph is hidden wide and shown by the compact rule, which draws no text '+'", () => {
+  assert.ok(rulesFor(".ph-sh-i").some((b) => /display:\s*none/.test(b)), "hidden by default: a wide header keeps its words");
+  const compact = headerRule(/\.ph-sep\s*\{/).body;
+  assert.match(compact, /\.ph-shell \.ph-sh-i \{ display: block; \}/, "the compact rule shows it");
+  assert.ok(!/ph-shell::before/.test(compact) && rulesFor(".ph-shell::before").length === 0, "no text plus");
+});
+
+test("a pane under 262px hides the chip's tier glyph, so the name keeps the 14px it costs; the word still names the tier", () => {
+  const rule = headerRule(/^\s*\.ph-chip \.ui-icon\s*\{/);
+  assert.ok(rule, "the rule exists, inside a container query");
+  assert.ok(/\.ph-chip \.ui-icon \{ display: none; \}/.test(rule.body.replace(/\s+/g, " ")));
+  assert.strictEqual(rule.px, 243, "243px of content box = a 262px pane (measured: the name ellipsized at 227-255 with the glyph)");
+  assert.ok(rule.px + 18 > 255 && rule.px < headerRule(/^\s*\.ph-tabs:not\(\.one\), \.ph-files\s*\{/).px, "above the widest measured loss, below the collapse rule");
+  const flat = rule.body.replace(/\s+/g, " ");
+  assert.ok(!/\.ph-sh-i|\.ph-ic\b/.test(flat) && !/\.ph-cnt[^}]*display/.test(flat), "only the chip's glyph goes: the switcher chevron and the controls stay");
+  assert.ok(/\.ph-cnt \{ gap: 0; \}/.test(flat) && /\.ph-cnt \.ui-icon \{ margin-right: -2px; \}/.test(flat), "the count's chevron closes up in the same pane widths");
+});
+
+test("the header's chip, switcher count and icon buttons lay their glyphs out", () => {
+  assert.ok(rulesFor(".ph-chip.has-tier").some((b) => /display:\s*inline-flex/.test(b) && /align-items:\s*center/.test(b) && /gap:\s*3px/.test(b)), "a tier chip: glyph, 3px, word");
+  assert.ok(rulesFor(".ph-chip.host .ui-icon").some((b) => /color:\s*var\(--fg\)/.test(b)), "the host glyph is --fg, as the sidebar's");
+  assert.ok(rulesFor(".ph-cnt").some((b) => /display:\s*inline-flex/.test(b) && /align-items:\s*center/.test(b)), "the count: chevron beside ' · N'");
+  // (.menu-x is a kit .btn-icon: its own flex centres the glyph.)
+  for (const sel of [".ph-ic .ui-icon", "#drawer-x .ui-icon", ".dk-x .ui-icon"]) {
+    assert.ok(rulesFor(sel).some((b) => /display:\s*block/.test(b)), sel + " is a centred block in its button");
+  }
 });
 
 // F18 / ruling 2: hovering the header never moves it. ⋯ ⛶ × keep their 24px at all times and only fade in
@@ -754,4 +784,14 @@ test("the rail: 12px above, 6px apart, dots 32x32, + the kit's 24px icon button 
   assert.match(add, /height:\s*var\(--h-sm\)/);
   assert.match(add, /background:\s*var\(--accent\)/, "the decided accent stays");
   assert.match(decl(".ri.on"), /background:\s*var\(--raise\)[^}]*box-shadow:\s*inset 2px 0 0 var\(--accent\)/, "C1: selected = raise + the accent inset");
+});
+
+// withPending swaps the button's content for its busy label, and the compact rule sets font-size 0, so the plus glyph is
+// gone and the label is invisible: a busy ::before keeps something visible for the pending window (#168 fix wave).
+test("+ Shell: a narrow button still shows a busy mark while withPending holds its label", () => {
+  const compact = headerRule(/\.ph-sep\s*\{/).body;
+  const m = /\.ph-shell\.busy::before\s*\{([^}]*)\}/.exec(compact);
+  assert.ok(m, "the compact rule draws a busy ::before");
+  assert.match(m[1], /content:\s*"…"/);
+  assert.match(m[1], /font:\s*500 var\(--t-md\)\/1 var\(--font-ui\)/, "it sets its own font: the button's is size 0");
 });

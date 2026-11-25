@@ -79,7 +79,7 @@ test("aws-ops read view has the eight blocks in order", () => {
 test("the Cloud, Also reachable and Network values are reachModel's, unchanged", () => {
   const v = pfvReadView(awsIn());
   const m = reachModel({ profile: awsOpsView, tier: "box", cwd: awsOpsView.default_cwd, meta, creds, bundleImports: true });
-  const strip = (it) => ({ kind: it.kind, name: it.name, sub: it.sub, scope: it.scope, tag: it.tag, missing: it.missing, applies: "" });
+  const strip = (it) => ({ kind: it.kind, name: it.name, sub: it.sub, scope: it.scope, tag: it.tag, missing: it.missing, applies: "", kindId: it.kindId });
   assert.deepStrictEqual(byId(v, "cloud").rows, m.cloud.map(strip));
   assert.deepStrictEqual(byId(v, "reachable").rows, m.reachable.map(strip));
   assert.deepStrictEqual(byId(v, "network").lines, [m.network.line, m.network.sub]);

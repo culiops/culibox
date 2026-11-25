@@ -172,6 +172,7 @@ func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 		errors.Is(err, launcher.ErrBadPrompt),
 		errors.Is(err, launcher.ErrPromptUnsupported),
 		errors.Is(err, launcher.ErrCodexAccount), errors.Is(err, account.ErrUnknown),
+		errors.Is(err, launcher.ErrSecretUnresolved),
 		errors.Is(err, launcher.ErrAccountConflict):
 		writeErr(w, http.StatusBadRequest, err.Error())
 	default:

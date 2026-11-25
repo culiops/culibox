@@ -20,6 +20,14 @@ const AUD_BAD = new Set(["dial_error", "failed"]);
 // dropped, expired or ended elevation opened nothing (UI plan 5, digest-design §B9).
 const AUD_ELEV_LIVE = new Set(["granted", "extended"]);
 
+// iconmap.js's lookup and maps: page globals in the browser, required under node (as accessmodel.js does for credentials.js).
+const AUD_ICON_MAPS = typeof iconOf === "function" ? { iconOf, ICON_AUDIT_KIND, ICON_CRED_PROVIDER } : require("./iconmap.js");
+
+// A refusal is containment working: neutral in colour, but the glyph says it was stopped (G2 21).
+function audRefused(o) {
+  return o === "denied" || o.startsWith("denied_") || o === "bad_auth" || o === "bad_method" || o === "private_addr" || o === "refused";
+}
+
 function audTone(outcome) {
   return (typeof accTone === "function" ? accTone : require("./accessmodel.js").accTone)(outcome);
 }
@@ -76,13 +84,24 @@ function auditRowView(ev, names) {
   if (Number.isFinite(e.count) && e.count > 1) outcome += " ×" + e.count;
   const id = e.session ? String(e.session) : "";
   const known = id && names && Object.prototype.hasOwnProperty.call(names, id) ? names[id] : "";
+  // The Outcome glyph pairs with the colour: a check where the tone is ok, an x where it is bad, a ban on a refusal. A granted
+  // or extended elevation is red because it is a live write, not an error, so it gets none (G2 left-out l); every other
+  // neutral outcome (created, unlocked, dropped, allowed_private ...) gets none too.
+  let outcomeIcon = "";
+  if (!elevated) {
+    if (tone === "ok") outcomeIcon = "circle-check";
+    else if (audRefused(o)) outcomeIcon = "ban";
+    else if (tone === "bad") outcomeIcon = "circle-x";
+  }
+  const m = AUD_ICON_MAPS;
+  const kindIcon = e.kind === "credential" ? m.iconOf(m.ICON_CRED_PROVIDER, e.provider, "key-round") : m.iconOf(m.ICON_AUDIT_KIND, e.kind);
   return {
     time: audTime(e.ts),
     session: known || id || "—",
     kind: AUD_KINDS[e.kind] || String(e.kind || ""),
     what: String(e.what || ""),
     reason: e.reason ? String(e.reason) : "",
-    outcome, tone, elevated,
+    outcome, tone, elevated, kindIcon, outcomeIcon,
   };
 }
 

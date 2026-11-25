@@ -694,3 +694,24 @@ func TestLoopbackBind(t *testing.T) {
 		}
 	}
 }
+
+func TestImageCheckOn(t *testing.T) {
+	f, tr := false, true
+	for _, tc := range []struct {
+		name string
+		c    Config
+		want bool
+	}{
+		{"absent", Config{}, true},
+		{"false", Config{ImageCheck: &f}, false},
+		{"true", Config{ImageCheck: &tr}, true},
+	} {
+		if got := tc.c.ImageCheckOn(); got != tc.want {
+			t.Errorf("%s: ImageCheckOn() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	var c Config
+	if err := json.Unmarshal([]byte(`{"image_check": false}`), &c); err != nil || c.ImageCheckOn() {
+		t.Fatalf("image_check:false parsed to ImageCheckOn=%v (err %v)", c.ImageCheckOn(), err)
+	}
+}

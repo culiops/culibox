@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/mask"
 )
 
@@ -41,6 +42,7 @@ func describe(r rawRow) Event {
 	switch r.src {
 	case srcCredential:
 		ev.Kind, ev.Outcome, ev.Elevated = KindCredential, r.f, r.n1 != 0
+		ev.Provider = broker.NormalizeProvider(r.a)
 		parts = credentialParts(r)
 	case srcApproval:
 		parts = approvalEvent(&ev, r)
@@ -161,8 +163,17 @@ func approvalEvent(ev *Event, r rawRow) []Part {
 	return p
 }
 
-// egressParts: "host:port", then " · 14 MB down" from one megabyte up.
+// egressPolicyChanged is egress.OutcomePolicyChanged, spelled out like the
+// outcomes in egressCountsSQL.
+const egressPolicyChanged = "policy_changed"
+
+// egressParts: "host:port", then " · 14 MB down" from one megabyte up. A
+// policy change is no tunnel: "policy " and the summary the proxy stored as its
+// host (#95).
 func egressParts(r rawRow) []Part {
+	if r.b == egressPolicyChanged {
+		return []Part{txt("policy "), ident(r.a)}
+	}
 	p := []Part{ident(r.a + ":" + strconv.FormatInt(r.n1, 10))}
 	if r.n2 >= oneMB {
 		p = append(p, txt(" · "+sizeMB(r.n2)+" down"))

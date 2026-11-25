@@ -238,7 +238,7 @@ wait_until_up() {
   done
 }
 
-echo "restarting $SERVICE"
+echo "restarting $SERVICE (the stop lets boxed agents' open egress connections finish first: up to 60 s)"
 systemctl --user restart "$SERVICE"
 echo "waiting for $SERVICE itself to answer on $ADDR (up to ${LISTEN_WAIT} polls, one a second), then to stay up for ${STABLE} more polls"
 

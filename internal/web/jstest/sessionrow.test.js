@@ -202,20 +202,24 @@ test("menuGroups: an id that is an Object.prototype name joins the control group
   assert.deepStrictEqual(gids(groups), [["rename"], protoIds, ["end"]]);
 });
 
-// The icon is a KIND the DOM code draws as inline SVG (a font glyph is tofu where no installed font has it).
-test("menuIcon: the kind of drawing each row has, and none for the two the frame draws no icon for", () => {
+// The icon is an ICON_MENU kind the DOM code draws as a vendored glyph (a font glyph is tofu where no installed font has it).
+test("menuIcon: the kind of drawing each row has, and none for an unknown id", () => {
   assert.deepStrictEqual(
     ["rename", "files", "attribution", "copycwd", "newpane", "interrupt", "bringhome", "duplicate", "end"].map(menuIcon),
-    ["pencil", "files", "pie", "copy", "split", "pause", "tray", "duplicate", "end"]);
-  for (const id of ["replies-on", "replies-off", "restart", "nope", undefined]) assert.strictEqual(menuIcon(id), "", String(id));
+    ["rename", "files", "attribution", "copy", "split", "interrupt", "bringhome", "duplicate", "end"]);
+  assert.strictEqual(menuIcon("copycwd"), "copy");
+  assert.deepStrictEqual(["restart", "replies-on", "replies-off"].map(menuIcon), ["restart", "replies-on", "replies-off"]);
+  for (const id of ["nope", undefined]) assert.strictEqual(menuIcon(id), "", String(id));
   // Every id menuItems can produce has an answer (a string), so the builder never prints "undefined".
   const every = menuItems({ claude: true, cwd: "/x", status: "live", activity: "working", clone_of: "/r", runtime: "box" })
-    .concat(menuItems({ status: "exited", exited: true }));
+    .concat(menuItems({ status: "exited", exited: true }), menuItems({ claude: true, status: "live", replyable: true }));
   for (const i of every) assert.strictEqual(typeof menuIcon(i.id), "string", i.id);
   // No two rows share a drawing: Copy working directory and Duplicate in particular stay apart.
   const kinds = new Map(every.map((i) => [i.id, menuIcon(i.id)]));
   const drawn = [...kinds.values()].filter((k) => k !== "");
   assert.strictEqual(new Set(drawn).size, drawn.length, "one kind per id");
+  const { ICON_MENU } = require("../static/iconmap.js");
+  for (const k of drawn) assert.ok(Object.prototype.hasOwnProperty.call(ICON_MENU, k), k + " is an ICON_MENU key");
 });
 
 // The number keys address the sidebar list the operator is looking at, 1-based.

@@ -607,7 +607,12 @@
   /* #side-palette (a drawn magnifier, 14px: the ⌕ glyph is ~7px in fallback fonts) and #side-collapse
      (the « text, which reads) are the kit's .btn .btn-ghost .btn-icon .btn-sm in index.html (m1-1):
      their look is the kit's, not ours. */
-  #side-palette svg { display: block; flex: none; width: 14px; height: 14px; }
+  #side-palette svg, #side-collapse svg { display: block; flex: none; width: 14px; height: 14px; }
+  /* #168: the glyph before the word of New session and of each footer link: 6px gap, the text's middle line. */
+  #side-new .ui-icon { margin-right: 6px; }
+  /* At the 200px minimum New session has 85px for its 80px label (measured): the plus would clip the word, so the row
+     (a size container, below) drops it below 190px, where only the label fits. */
+  @container (max-width: 189px) { #side-new .ui-icon { display: none; } }
   .pbtn {
     width: 100%; padding: 8px 12px; font: 600 var(--t-md) var(--font-ui); cursor: pointer;
     background: var(--accent); color: var(--on-fill); border: 0; border-radius: var(--r-ctl);
@@ -621,7 +626,7 @@
      clips (overflow: hidden), so the menu is placed against the whole row, right-aligned under « and never
      wider than the row (measured: against the 24px button it ran past the sidebar's left edge). app.css's
      fixed 232px .menu width is reset to the content's. */
-  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; position: relative; }
+  #side-top .xnewrow { display: flex; align-items: center; gap: 2px; position: relative; container-type: inline-size; }
   /* The label is centred, so the 2px side padding only shows at the 200px sidebar, where New session gets 85px for its
      80px label (measured); the ellipsis is a guard for a wider fallback font, never a two-line button. */
   #side-top .xnewrow #side-new { flex: 1; min-width: 0; margin-right: 4px; white-space: nowrap; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; }
@@ -684,7 +689,13 @@
   /* #340 S6 (mockups t1, t3): the cost sits on the links line, "≈ $454 today" with a dotted underline that
      says it has a tooltip. When both do not fit (a narrow sidebar, a long amount) the line wraps: the cost
      keeps its own line above the links and is never cut. With the cost hidden the links keep today's place. */
-  #side-foot .xlinks { display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 2px; font-size: var(--t-sm); }
+  #side-foot .xlinks { display: flex; flex-wrap: wrap; align-items: center; column-gap: 4px; row-gap: 2px; font-size: var(--t-sm); container-type: inline-size; }
+  /* #168: each footer link is one line, glyph then word, 6px apart (inline-flex, nowrap: the glyph never stacks over the word).
+     When the three do not fit side by side (measured: the three need 232px of row, so the row is 240px wide at a sidebar of about 272px; the query leaves 8px spare) the row drops the glyphs, so
+     the words never wrap or clip. */
+  #side-foot .side-links button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  #side-foot .side-links button[hidden] { display: none; }
+  @container (max-width: 239px) { #side-foot .side-links .ui-icon { display: none; } }
   #side-foot .xlinks > .side-links { margin: 0 -8px 0 auto; }
   #side-foot .xcost { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; text-decoration: underline dotted var(--faint); text-underline-offset: 3px; cursor: help; }
   #side-foot .xcost[hidden] { display: none; }
@@ -900,8 +911,11 @@
      session's so the row reads as a child. */
   #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 32px; }
   #sessions .drow .nest-arrow {
-    flex: none; width: 9px; font: 400 var(--t-sm)/var(--lh-md) var(--font-ui); color: var(--muted); text-align: center;
+    flex: none; width: 12px; font: 400 var(--t-sm)/var(--lh-md) var(--font-ui); color: var(--muted); text-align: center;
   }
+  /* The ↳ is the corner-down-right glyph at 12 (#168), centred on the name's line; the ⋯ glyph is centred in its 24px button. */
+  #sessions .drow .nest-arrow .ui-icon { display: block; margin-top: calc((var(--lh-md) - 12px) / 2); }
+  #sessions .drow .kbtn .ui-icon { display: block; margin: auto; }
   #sessions .drow.nested .dot { width: 6px; height: 6px; margin-top: 7px; margin-right: 1px; }
   #sessions .drow.nested .nm { color: var(--muted); }
   #sessions .drow.nested.sel .nm, #sessions .drow.nested:hover .nm { color: var(--fg); }
@@ -940,7 +954,7 @@
   }
   .ph-switch:hover { background: var(--raise); }
   .ph-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .ph-cnt { flex: none; font-weight: 500; font-size: var(--t-sm); color: var(--muted); }
+  .ph-cnt { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 3px; font-weight: 500; font-size: var(--t-sm); color: var(--muted); }
   .ph-st { flex: none; font-size: var(--t-sm); color: var(--muted); }
   /* Neutral containment and read credential; only an open write window is
      red (D23). A short chip never shrinks (a clipped "h…" says nothing); the
@@ -954,6 +968,10 @@
   }
   .ph-chip.cloud, .ph-chip.write { flex: 0 10000 auto; min-width: 7ch; }
   .ph-chip.host { box-shadow: inset 0 0 0 1px var(--faint); }
+  /* A tier chip draws its declared glyph (11px, deskContainmentChip) before the word; the host glyph is --fg, as the sidebar chip's
+     (#sessions .dchip.host .tchip-i). The write and cloud chips have none. */
+  .ph-chip.has-tier { display: inline-flex; align-items: center; gap: 3px; }
+  .ph-chip.host .ui-icon { color: var(--fg); }
   /* The kit's .chip-write (M6.4: red tint, a 45% ring, mono 600): the same recipe as the sidebar row's .dchip.write. */
   .ph-chip.write { color: var(--red); background: var(--red-tint); box-shadow: inset 0 0 0 1px rgba(240,106,106,.45); font-family: var(--font-mono); font-weight: var(--w-semibold); }
   .ph-main .bdg.acct { flex: 0 3 auto; min-width: 0; }
@@ -1011,6 +1029,8 @@
   .ph-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--line); }
   /* + Shell is the kit's .btn .btn-ghost .btn-sm (tabs.js): its look is the kit's, not ours. */
   .ph-shell[hidden] { display: none; }
+  /* The button holds its words and the plus glyph: wide shows the words, the compact rule below swaps them. */
+  .ph-sh-i { display: none; }
   /* ⋯ ⛶ × keep their 24px at all times and only fade in while the header is hovered or holds focus,
      so the pointer entering never moves the header (F18: the meta's room is the same in or out).
      No pointer-events while they are invisible, so a click cannot land on an icon nobody sees;
@@ -1023,7 +1043,7 @@
   }
   .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { opacity: 1; pointer-events: auto; }
   .ph-ic:hover { color: var(--fg); background: var(--raise); }
-  .ph-more { font-size: var(--t-lg); }
+  .ph-ic .ui-icon { display: block; margin: auto; }
   /* A narrow header's one control is always visible, never an overlay. */
   .ph-ics.nar .ph-more { opacity: 1; pointer-events: auto; }
   .ph-max.pin { color: var(--fg); }
@@ -1046,8 +1066,11 @@
     .ph-sep { display: none; }
     .ph-tab { padding: 0 5px; }
     .ph-files { padding: 0 5px; }
-    .ph-shell { font-size: 0; padding: 0 8px; gap: 0; }
-    .ph-shell::before { content: "+"; font: 500 var(--t-md)/1 var(--font-ui); }
+    /* 14px glyph + 5px each side + the 1px border = 26px, the "+" text's own 26.7px width: the floor rules below keep their slack. */
+    .ph-shell { font-size: 0; padding: 0 5px; gap: 0; }
+    .ph-shell .ph-sh-i { display: block; }
+    /* withPending swaps the button's content for its busy label, which font-size 0 hides along with the glyph: the "…" keeps a busy mark in view. */
+    .ph-shell.busy::before { content: "…"; font: 500 var(--t-md)/1 var(--font-ui); }
   }
   /* Too narrow for three words beside Files (the compact text look needs a 439px pane,
      419px of content box, measured): the three tabs and Files as icons, 24px squares like
@@ -1092,6 +1115,14 @@
      columns at 701px. */
   @container (max-width: 210px) {
     .ph-shell { display: none; }
+  }
+  /* The tier chip's glyph costs the name 14px (11 + the 3px gap). In a pane under 262px (243px of content box) with the tab
+     switcher, that is where "agent-box ▾ · 2" ellipsized where it did not before (measured 227-255px). The chip's word still names the tier;
+     the count's chevron closes up (no gap, -2px: the glyph's own side padding stays) to give back the rest of what the text caret took. */
+  @container (max-width: 243px) {
+    .ph-chip .ui-icon { display: none; }
+    .ph-cnt { gap: 0; }
+    .ph-cnt .ui-icon { margin-right: -2px; }
   }
 
   /* Panes meet on a 1px line, edge to edge (p0/p2), instead of floating in
@@ -1189,6 +1220,13 @@
   #session-menu .menu-item[aria-current="true"] { font-weight: var(--w-semibold); }
   #session-menu .menu-check { flex: none; width: 16px; display: inline-flex; justify-content: center; color: var(--muted); }
   #session-menu > .menu-row > .menu-x { flex: none; font-size: var(--t-lg); line-height: 1; }
+  /* #365: a row's kind glyph and, for a session, its tier. A file's glyph is its kind's Lucide svg (fileIcon); the
+     tier is the sidebar row's chip, glyph then word (.dchip, its box and host tones), kept whole while the title
+     ellipsizes before it. */
+  #session-menu .menu-item > .menu-tier { display: inline-flex; align-items: center; gap: 3px; }
+  #session-menu .menu-item .menu-tier .tchip-i { flex: none; }
+  #session-menu .menu-item .menu-tier.host .tchip-i { color: var(--fg); }
+  #session-menu .menu-item:hover > .menu-tier.box { background: var(--line); }
 
   /* --- the Files dock (spec 5.4, the dock design's Layout) ----------------- */
   /* A column right of the pane grid, full height: the panes shrink for it and nothing is covered. app.js sizes it
@@ -1243,6 +1281,7 @@
     background: transparent; border: 0; border-radius: var(--r-ctl);
   }
   #drawer-x:hover { color: var(--fg); background: var(--raise); }
+  #drawer-x .ui-icon, .dk-x .ui-icon { display: block; margin: auto; }
   /* The pin is the kit's ghost icon button (24px); pressed it takes the kit's pressed look. */
   #drawer-pin { flex: none; }
   .dr-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -1398,6 +1437,11 @@
   .dk-br-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; color: var(--fg); }
   .dk-br-sep { flex: none; }
   .dk-chg-note { flex: none; margin: 0; padding: 2px 10px 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* The empty-state glyph (G4 90, 91, 78): muted, the one 14 px inline glyph before a line of text or the 32 px hero above a title. */
+  .empty-glyph { color: var(--muted); }
+  .empty-hero { display: block; }
+  .dk-chg-note:not([hidden]):has(> .empty-glyph) { display: flex; align-items: center; gap: 6px; }
+  #pal-empty:not([hidden]):has(> .empty-glyph) { display: flex; align-items: center; gap: 8px; }
   .dk-list { container: dklist / inline-size; flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; font-size: calc(var(--fs-tree) * 13 / 12); line-height: calc(var(--fs-tree) * 22 / 12); }
   /* One changed file: the type icon, the name, its folder (the part that gives way), the counts and the letter. The name keeps
      its width and the folder takes what is left. The 2px bar on the left edge is the session bar, the one the tree rows wear. */
@@ -1467,8 +1511,10 @@
     border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); cursor: pointer;
   }
   .dk-chev::after { content: ""; position: absolute; inset: -2px -5px; }
-  .dk-chev::before { content: "\203A"; font-size: var(--t-lg); line-height: 1; }
-  .dk-chev[aria-expanded="true"]::before { transform: rotate(90deg); }
+  /* The glyph is two svgs (index.html), chevron-right and chevron-down; aria-expanded shows one. */
+  .dk-chev > .ui-icon { display: block; }
+  .dk-chev > .dk-chev-d, .dk-chev[aria-expanded="true"] > .dk-chev-r { display: none; }
+  .dk-chev[aria-expanded="true"] > .dk-chev-d { display: block; }
   .dk-chev:hover { background: var(--hover); color: var(--fg); }
   .dk-chev:focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
   /* Collapsed Changes is its header row: the title, the count (or Updating…) and Review. */
@@ -1526,7 +1572,7 @@
   .dk-tab:focus-visible { outline: var(--focus); outline-offset: -2px; }
   /* The preview tab, the one the next single click replaces, is italic (a double-click, an edit or a save keeps it). */
   .dk-prev .dk-name { font-style: italic; }
-  .dk-ic { flex: none; width: 2ch; text-align: center; font-family: "Symbols Nerd Font"; color: var(--muted); }
+  .dk-ic { flex: none; width: 2ch; text-align: center; color: var(--muted); }
   /* The right padding keeps an italic name's last slanted letter inside the clip. */
   .dk-name { min-width: 0; padding-right: 2px; overflow: hidden; text-overflow: ellipsis; }
   /* The git letter, in the tree's colours (app.css .ft-git-*). */
@@ -1734,15 +1780,14 @@
   .dk-fv-media { display: block; }
   video.dk-fv-media { flex: 1; min-height: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
   audio.dk-fv-media { width: calc(100% - 48px); max-width: 640px; margin: auto; }
-  /* The card (mockup 344-mock-fallback): an extension badge beside the name and one meta line, the note under them, the buttons last. */
+  /* The card (mockup 344-mock-fallback): the file kind's glyph (32px, no tile) beside the name and one meta line, the note under them, the buttons last. */
   .dk-fv-cardwrap { flex: 1; min-height: 0; overflow: auto; padding: 48px 16px 16px; }
   .dk-fv-card {
     box-sizing: border-box; width: 100%; max-width: 300px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: auto minmax(0, 1fr);
     gap: 12px; align-items: start; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card);
   }
   .dk-fv-badge {
-    box-sizing: border-box; min-width: 32px; height: 32px; padding: 0 4px; display: flex; align-items: center; justify-content: center;
-    border-radius: var(--r-ctl); background: var(--raise); color: var(--muted); font: var(--w-semibold) var(--t-xs)/1 var(--font-mono);
+    box-sizing: border-box; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--muted);
   }
   .dk-fv-head { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .dk-fv-name { color: var(--fg); font: var(--w-semibold) var(--t-md)/var(--lh-md) var(--font-ui); overflow-wrap: anywhere; unicode-bidi: isolate; }
@@ -1971,6 +2016,11 @@
     background-image: repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 14px);
     background-repeat: no-repeat; background-position: 15px 0; background-size: calc(var(--lvl, 0) * 14px) 100%;
   }
+  /* #168 perf: a row's glyph is an svg, several elements per row, so a 2000-entry folder was ~70 % slower to expand than with
+     the Nerd text. A row off screen skips its style and layout (as .md-chunk does), held at a row's height: exactly max(22px,
+     the line), as above, with no remembered height, so a --fs-tree change reaches the unseen rows too. Nothing in a row draws
+     outside it (the ring and the washes are inset, a long name ellipsizes). */
+  #drawer .ft-node { content-visibility: auto; contain-intrinsic-size: max(22px, var(--fs-tree) * 22 / 12); }
   #drawer #filetree .pending-line { box-sizing: border-box; min-height: 22px; padding: 0 8px 0 calc(var(--lvl, 0) * 14px + 8px + 18px); line-height: inherit; }
   /* The hover and selected washes are background-color only: app.css's `background:` shorthand on the same rows would reset
      the image, and the guides would vanish under the pointer. Hover is the kit's, a half step under the selected row's. The
@@ -1984,10 +2034,19 @@
   #drawer .ft-branch { display: none; }
   /* A symlink's row ends its name with a muted ↗ (P4.9); a link to a folder the server serves expands like a folder. */
   #drawer .ft-link .ft-linkmark { flex: none; color: var(--muted); font-size: var(--t-xs); line-height: 1; }
-  /* The chevron, drawn by the row's ::before; a file's is empty, the same width, so every icon starts at the same column. */
+  /* A file's chevron slot is the row's empty ::before, 14px, so every icon starts at the same column. A folder's slot is its
+     .ft-chev (filetree.js): chevron-right and chevron-down svgs, aria-expanded shows one; the ::before steps aside. */
   #drawer .ft-node::before { content: ""; flex: none; width: 14px; text-align: center; color: var(--muted); }
-  #drawer .ft-node.dir::before { content: "\203A"; font-size: calc(var(--fs-tree) * 15 / 12); }
-  #drawer .ft-node.dir[aria-expanded="true"]::before { transform: rotate(90deg); }
+  #drawer .ft-node.dir::before { content: none; }
+  #drawer .ft-chev { flex: none; width: 14px; display: grid; place-items: center; color: var(--muted); }
+  #drawer .ft-chev > .ui-icon { display: block; }
+  #drawer .ft-chev > .ft-chev-d, #drawer .ft-node.dir[aria-expanded="true"] > .ft-chev > .ft-chev-r { display: none; }
+  #drawer .ft-node.dir[aria-expanded="true"] > .ft-chev > .ft-chev-d { display: block; }
+  /* The row's file glyph and its menu button: the Lucide svg (filetree.js draws it, not the phone's Nerd text, at this width).
+     The svg is a block centred in the 2ch cell, so it has no line box to sit high in (the Nerd font's line box put a 14px glyph
+     2px high). */
+  #drawer .ft-node > .ft-icon { display: flex; justify-content: center; }
+  #drawer .ft-icon > .ui-icon, #drawer .ft-more > .ui-icon { display: block; }
   /* A folder's name is the text colour, not app.css's accent, so that the tint below can mean "something changed in here". */
   #drawer .ft-node.dir { color: var(--fg); }
   /* T2 (P5, mockup 1): a quiet hierarchy. File names a step under the text colour, folder names bright and medium weight, icons
@@ -2347,7 +2406,7 @@
      pending ask only, red = an error or a write window (a refusal is containment working: muted), green = status
      (ok, minted, live). A +a −d diff is neutral. The pane's width, not the window's, decides where the right column
      goes: .pane-view is the container. */
-  .pane-view[data-view="activity"] { container-type: inline-size; }
+  .pane-view[data-view="activity"] { container: act / inline-size; }
   /* §B9: the frames inherit a 20px line from the kit's .ab root and a margin-free h2 and p from its reset. .pane-view's
      `font` shorthand resets line-height to normal and the browser gives h2 and p their margins, so the view sets both. */
   .act-wrap, .act-plain { line-height: var(--lh-md); }
@@ -2383,12 +2442,13 @@
   .act-live { display: inline-flex; align-items: center; gap: 6px; }
   .act-foot[hidden] { display: none; }
 
-  /* The event table (§B3): fixed columns of 88, 104 and 124px, the Detail column takes the rest and wraps, 6px above and
+  /* The event table (§B3): fixed columns of 88, 124 (the frame's 104 and the Kind glyph) and 124px, the Detail column takes the rest and wraps, 6px above and
      below its text. Every other cell keeps the kit's 32px row. The card clips the row tint to its 8px corners. */
   .act-card { overflow: hidden; }
   .act-tbl { table-layout: fixed; }
   .act-tbl th:nth-child(1) { width: 88px; }
-  .act-tbl th:nth-child(2) { width: 104px; }
+  /* 104px + the 20px of the Kind glyph (#168): "Credential", "WebFetch" and a 10-letter tool name would otherwise lose their last letters to the ellipsis. */
+  .act-tbl th:nth-child(2) { width: 124px; }
   .act-tbl th:nth-child(4) { width: 124px; }
   .act-tbl td.act-det { white-space: normal; overflow-wrap: anywhere; height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); }
   /* Not drawn, and real: a date and clock ("28 Nov 14:12", an event from an earlier day) wraps in the 88px Time column
@@ -2396,6 +2456,8 @@
      ellipsizes in Kind instead of running into Detail. */
   .act-tbl td:first-child { white-space: normal; height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); }
   .act-tbl td:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
+  /* The Kind and Outcome glyphs (#168 G2 21, 22, 27-37, 14px) sit 6px before their word and take the cell's colour. */
+  .act-tbl td:is(:nth-child(2), :nth-child(4)) > .ui-icon { margin-right: 6px; }
   /* The pending ask is the one amber row (the frames draw none: this is the product's own, kept). The kit's row hover
      out-weighs a bare tint, as on the Audit page's elevated rows. */
   .act-tbl tbody tr.act-ask, .act-tbl tbody tr.act-ask:hover { background: var(--amber-tint); }
@@ -2429,6 +2491,15 @@
     .act-tbl { table-layout: auto; }
     .act-tbl th:nth-child(1), .act-tbl th:nth-child(2), .act-tbl th:nth-child(4) { width: auto; }
     .act-tbl td.act-det { min-width: 160px; }
+  }
+  /* The glyphs cost the table up to 40px (20 on the Kind column, 20 on the Outcome column when a refusal or an error is shown) in
+     a pane whose table already scrolls inside its card. Measured in a real browser on the frame's rows (dates for times, a long URL,
+     a Task, an error, a refusal), the card stops scrolling from a 457px pane without glyphs, 477px with the Outcome glyphs and
+     497px with the Kind glyphs too. So under 497px the Kind glyphs go; every word and the Outcome glyphs (a refusal or an error is
+     the one thing the pane must not hide) stay. The pane view is the container, named `act` beside the unnamed queries
+     above, which still read it. */
+  @container act (max-width: 496px) {
+    .act-tbl td:nth-child(2) > .ui-icon { display: none; }
   }
 
   /* --- New session dialog (spec 5.6) -------------------------------------- */
@@ -2756,13 +2827,17 @@
   #spawn #spawn-ws-row .spawn-ws-check.ck-error { color: var(--red); }
 
   /* The reach box (frame M4.1): what this session will be able to touch, from the profile. A --bg card with no border,
-     the title, then ONE label/value grid (72px | the rest, 16px and 2px apart, baselines aligned) so every value starts
+     the title, then ONE label/value grid (88px | the rest, 16px and 2px apart, baselines aligned) so every value starts
      on the same line. A row is only the grid's two cells (display: contents). A path in a value is machine text --t-sm. */
   #spawn-reach { display: flex; flex-direction: column; gap: var(--sp-2); box-sizing: border-box; padding: var(--sp-3) var(--sp-4); background: var(--bg); border-radius: var(--r-card); }
   .sr-title { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-semibold); color: var(--fg); }
-  .sr-grid { display: grid; grid-template-columns: 72px minmax(0, 1fr); column-gap: var(--sp-4); row-gap: 2px; align-items: baseline; }
+  .sr-grid { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: var(--sp-4); row-gap: 2px; align-items: baseline; }
   .sr-row { display: contents; }
   .sr-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* 88px: a 14px glyph, 6px, and Domains / Imports. A label with no glyph is indented the glyph's 20px so every label starts on one line (#168 G1). */
+  .sr-k.has-ic { white-space: nowrap; }
+  .sr-k .ui-icon { margin-right: 6px; }
+  .sr-k:not(.has-ic) { padding-left: 20px; }
   .sr-v { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
   .sr-path { font-family: var(--font-mono); font-size: var(--t-sm); line-height: var(--lh-sm); }
   #spawn-reach code { font-family: var(--font-mono); font-size: var(--t-xs); }
@@ -2840,6 +2915,8 @@
     background: transparent; font-family: var(--font-ui); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); cursor: pointer;
   }
   #page-host > #settings-modal.as-page > #settings-tabs > #set-signout { order: 13; margin-top: auto; }
+  /* The row's glyph (G2 1-10, 15px): the row is flex with an 8px gap, so it carries no margin of its own. */
+  #page-host > #settings-modal.as-page > #settings-tabs :is(.t, #set-signout) > .ui-icon { display: inline-block; }
   #page-host > #settings-modal.as-page > #settings-tabs .t:hover,
   #page-host > #settings-modal.as-page > #settings-tabs > #set-signout:hover { background: var(--hover); color: var(--fg); }
   #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); font-weight: 500; box-shadow: none; }
@@ -2938,6 +3015,8 @@
   #page-host > #settings-modal.as-page > :is(#tokens, #accounts) > :not(.set-head) .btn.dgr { background: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page .tokrow, #page-host > #settings-modal.as-page .acct-row { border-bottom-color: var(--line); font-size: var(--t-md); }
   #page-host > #settings-modal.as-page .tokrow .meta, #page-host > #settings-modal.as-page .acct-meta { font-size: var(--t-sm); }
+  /* The account row's provider mark (G2 13): 12px, 4px before the provider word. */
+  #page-host > #settings-modal.as-page .acct-prov .ui-icon { display: inline-block; margin-right: 4px; }
   #page-host > #settings-modal.as-page .tokrow.arm { border-radius: var(--r-chip); }
   #page-host > #settings-modal.as-page .reveal { border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page .reveal .tk { border-radius: var(--r-ctl); font-family: var(--font-mono); }
@@ -3318,6 +3397,21 @@
   #page-host > #settings-modal.as-page > #accounts > #acct-list > .acct-row { padding: 14px 16px; border-bottom: 0; }
   #page-host > #settings-modal.as-page > #accounts > #acct-list > .acct-row + .acct-row { border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page > #about > #about-runtime { display: block; margin: 0; padding: 12px 16px; border-radius: var(--r-card) var(--r-card) 0 0; background: var(--panel); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
+  /* The Box image rows (boximage.js): each group (Box image, For this version, Weekly scan) is one more row of the same
+     card, divided like the others; a label column and a value column, lines 4px apart. Digests are machine text
+     (--font-code); the verdict is always said in words. Shown only once a report arrived ([hidden] otherwise; the phone's
+     own rule in app.css hides it, and this block is above 700px only). */
+  #page-host > #settings-modal.as-page > #about > #about-image { display: block; margin: 0; padding: 0; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #about > #about-image[hidden] { display: none; }
+  #page-host > #settings-modal.as-page > #about > #about-image .bi-group { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+  #page-host > #settings-modal.as-page > #about > #about-image .bi-row { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 0 12px; }
+  #page-host > #settings-modal.as-page > #about > #about-image .bi-l { color: var(--muted); }
+  #page-host > #settings-modal.as-page > #about > #about-image .bi-v { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; }
+  #page-host > #settings-modal.as-page > #about > #about-image .bi-code { font-family: var(--font-code); font-size: var(--t-sm); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page > #about > #about-image .bi-muted { color: var(--muted); }
+  #page-host > #settings-modal.as-page > #about > #about-image .bi-fine { color: var(--muted); font-size: var(--t-sm); line-height: var(--lh-sm); }
+  #page-host > #settings-modal.as-page > #about > #about-image .bi-note { color: var(--muted); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page > #about > #about-image .bi-link { color: var(--fg); text-decoration: underline; }
   #page-host > #settings-modal.as-page > #about > p:has(> #kbd-open-about) { margin: 0; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--panel); }
   #page-host > #settings-modal.as-page > #about > .hint { margin: 0; padding: 12px 16px; border-top: 1px solid var(--line); border-radius: 0 0 var(--r-card) var(--r-card); background: var(--panel); }
 
@@ -3416,6 +3510,8 @@
   /* Its head (§B4 `.card-head`): the title (13/20 600) and the count chip 12px beside it, 12px 16px, a hairline under it. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 0; flex-wrap: nowrap; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: var(--t-md); letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h > h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  /* The kind glyph that leads a section head (16px) or the edit heading (#168 G1): a 6px gap to the title, as the frames draw it. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .sec-h .ui-icon { margin-right: 6px; }
   /* An empty section's line sits under the head's hairline; a token provider's note is under its table (§B4 `.m2-secnote`:
      12/18 muted, 8px 16px 10px, a hairline above); Legacy secrets' note is above its table with the hairline below it. A <p>
      has the UA's 1em margin (12px at 12px type) that the frame does not draw, so these lines set their own: none. */
@@ -3538,6 +3634,11 @@
      a side, which brings the widest seg to 329px, inside the 340px the page has at 701px. */
   #page-host > #audit-page.as-page > .toolbar.au-tools,
   #page-host > #analytics-modal.as-page > .toolbar.an-ptools { container-name: page-tools; container-type: inline-size; }
+  /* The kind filters' glyphs (#168) make the Kind seg 469px: under that the glyphs go and the words stay, so the seg is the 389px it
+     was and the 388px rule below still applies to it. */
+  @container page-tools (max-width: 468px) {
+    #page-host > #audit-page.as-page #au-filters .seg-item > .ui-icon { display: none; }
+  }
   @container page-tools (max-width: 388px) {
     #page-host > #audit-page.as-page > .toolbar .seg > .seg-item,
     #page-host > #analytics-modal.as-page > .toolbar .seg > .seg-item { padding: 0 var(--sp-1); }
@@ -3574,8 +3675,11 @@
      about 1124px, the sidebar being 290px and the page's sides 64px) What would shrink to its cell padding and every row wrap to a
      character a line, with the card clipping whatever ran past its edge. There the table sizes its columns to their content
      instead: Time and Kind stay on one line, Session, What and Outcome wrap, nothing clips and nothing scrolls sideways. */
-  @container au-card (max-width: 769px) {
+  @container au-card (width < 770px) {
     #page-host > #audit-page.as-page .au-tbl { table-layout: auto; }
+    /* The glyphs would take 40px of What here and push the table past its card at 760px; without them this card is what it was
+       before the glyphs (#168), so the glyphs show only where the columns are fixed and What has room. */
+    #page-host > #audit-page.as-page .au-tbl :is(td.au-kind, td.au-out) > .ui-icon { display: none; }
     #page-host > #audit-page.as-page .au-tbl th:nth-child(1),
     #page-host > #audit-page.as-page .au-tbl th:nth-child(2),
     #page-host > #audit-page.as-page .au-tbl th:nth-child(3),
@@ -3605,6 +3709,20 @@
   #page-host > #audit-page.as-page .au-tbl td.au-kind,
   #page-host > #audit-page.as-page .au-tbl td.au-out { color: var(--muted); }
   #page-host > #audit-page.as-page .au-tbl td.au-what .au-reason { color: var(--muted); }
+  /* The Kind and Outcome glyphs (#168 G2 14-22, 14px) sit 6px before their word and take the cell's colour, so a red elevation
+     row and a green or red outcome carry theirs. Export CSV and the Kind filter's glyphs: the .btn is a flex box with its own
+     6px gap; a seg item is not, so each glyph carries the 6px. */
+  #page-host > #audit-page.as-page .au-tbl :is(td.au-kind, td.au-out) > .ui-icon,
+  #page-host > #audit-page.as-page #au-filters .seg-item > .ui-icon { margin-right: 6px; }
+  /* In the fixed layout (a card of 770px or more) the Outcome stays on one line beside its glyph (the frame's gate fix): the column
+     is 150px, less 12px of padding a side, so 126px of text and glyph, and the nowrap text may spill into its own right padding,
+     about 138px of glyph plus text in all. The longest real outcomes today are about 132px (`refused · API token` with its
+     glyph); a longer one would be cut by the card's edge, not wrapped. Below 770px the columns size to content, the glyph is
+     hidden and the base rule above wraps it, as before. This rule is inside the container query, not a base rule: a container
+     rule adds no weight, so it must come after the base white-space it overrides and apply only here. */
+  @container au-card (width >= 770px) {
+    #page-host > #audit-page.as-page .au-tbl td.au-out { white-space: nowrap; }
+  }
   /* au-ok has the muted rules' weight and comes after them, so it wins; au-bad out-weighs them. */
   #page-host > #audit-page.as-page .au-tbl td.au-ok { color: var(--ok); }
   #page-host > #audit-page.as-page .au-tbl td.au-kind.au-bad,
@@ -3681,6 +3799,8 @@
      character a line. */
   #page-host > #analytics-modal.as-page .an-card .card-head { flex-wrap: wrap; }
   #page-host > #analytics-modal.as-page .an-card .card-head > :is(h2, h3) { margin: 0; }
+  /* A Tools card's kind glyph sits inside its h3, 6px before the word (the frame's .i168 margin; .ui-icon gives vertical-align -2px). */
+  #page-host > #analytics-modal.as-page .an-card .card-head > h3 > .ui-icon { margin-right: 6px; }
   #page-host > #analytics-modal.as-page .an-card .card-head > :is(h2, h3, .muted) { flex: none; white-space: nowrap; }
   #page-host > #analytics-modal.as-page .an-card-body { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
   /* A table's card clips its row hover to the 8px corners (the frame's inline overflow: hidden). */
@@ -4012,6 +4132,12 @@
   #pal-list li.pal-row.sel .pal-hint { color: var(--muted); }
   #pal-list .pal-copy { border-radius: var(--r-chip); }
   #pal-list .pal-copy:hover { background: var(--line); }
+  /* The row's type icon (#168 G4 70-76): muted, full colour on the selected row; the copy button holds only its glyph. */
+  #pal-list .pal-ti { flex: none; margin: 0; color: var(--muted); }
+  #pal-list li.pal-row.sel .pal-ti { color: var(--fg); }
+  #pal-list .pal-ti-gap { flex: none; width: 14px; }
+  #pal-list .pal-copy { padding: 1px 4px; } /* 14 + 2: the selected row, which shows the button, stays as tall as the rest */
+  #pal-list .pal-copy .ui-icon { display: block; }
   #pal-empty { padding: 16px 20px; font-size: var(--t-md); color: var(--muted); }
 
   /* Toast: a --raise card, a left rule only for error (red) and warn (amber; the clone
@@ -4166,15 +4292,20 @@
   #page-host > #settings-modal.as-page #pfv .pfv-empty { line-height: 20px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-stmt-act { margin-top: 12px; }
 
-  /* A grant is a row: kind, name (and its tag), scope in words (§B2 `.m2-rows`: 52px, the value, a 196px status column, 16px between columns and
+  /* A grant is a row: kind, name (and its tag), scope in words (§B2 `.m2-rows`: a 72px kind column (52px in a narrow container), the value, a 196px status column, 16px between columns and
      10px between rows). Three tracks only: an empty fourth one would still cost a 16px gap in every read row. Remove / Undo and the "Set in ..."
      note of a row in edit sit in column 4, the implicit auto track, which exists only on those rows. The narrow steps below put them back in
      column 3 (863px) or under the content (440px). The kind word, the status and the mono part are the frame's 12/18 `t-sm` lines (the value
      line around the mono part stays 20px). */
   #page-host > #settings-modal.as-page #pfv .pfv-rows { display: grid; gap: 10px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) 196px; column-gap: 16px; align-items: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) 196px; column-gap: 16px; align-items: start; }
   #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 4; grid-row: 1; }
   #page-host > #settings-modal.as-page #pfv .pfv-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* The kind column is 72px: a 14px glyph, 6px, and the longest word (Domain, GitHub). A kind word with no glyph is indented the glyph's 20px, so every
+     word in the card starts on one line (#168 G1). The glyph is drawn only from a row's declared kindId. */
+  #page-host > #settings-modal.as-page #pfv .pfv-k.has-ic { white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pfv .pfv-k .ui-icon { margin-right: 6px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-k:not(.has-ic) { padding-left: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-id { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-nm { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-weight: 500; line-height: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-rsub { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
@@ -4351,6 +4482,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-pick-list { min-height: min(var(--pfv-pick-min, 0px), calc(100vh - 180px)); max-height: min(580px, calc(100vh - 180px)); overflow-y: auto; overscroll-behavior: contain; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp:not([hidden]) ~ .pfv-pick-grp:not([hidden])::before { content: ""; display: block; height: 1px; margin: 6px 4px; background: var(--line); }
+  /* The glyph of a group heading (12px: the heading is 11px caps) sits 6px before its words (#168 G1). */
+  #page-host > #settings-modal.as-page #pfv .pfv-pick .grp-label .ui-icon { margin-right: 6px; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 0 10px 4px; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-none { padding: 6px 10px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-none[hidden] { display: none; }
@@ -4366,6 +4499,9 @@
      It is dimmed like every disabled control (the rules after #169's). */
   #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled { text-decoration: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-t { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font-weight: 500; overflow-wrap: anywhere; }
+  /* An item's own kind glyph (the Also reachable picker's Folder / Domain) sits 6px before its title, not the 8px gap the title's other
+     children keep: -2px of margin takes 2px off the glyph's gap only. */
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-t > .ui-icon { margin-right: -2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-s { display: block; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-r { flex: none; font-size: var(--t-sm); color: var(--muted); }
@@ -4416,7 +4552,7 @@
 
   /* Below 863px of page (a 1365px window, as the mockup draws it) the scope moves under the name, so a mono id never clips. */
   @container (max-width: 863px) {
-    #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 72px minmax(0, 1fr) auto; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-scope { grid-column: 2; margin-top: 2px; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 3; grid-row: 1; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-kv { grid-column: 2; }
@@ -4446,6 +4582,9 @@
      never sit on an input. A variable's value goes under its name, a definition under its term. */
   @container (max-width: 440px) {
     #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr); }
+    /* The 52px column here has no room for a glyph or an indent: the words stay, the glyph steps aside. */
+    #page-host > #settings-modal.as-page #pfv .pfv-k .ui-icon { display: none; }
+    #page-host > #settings-modal.as-page #pfv .pfv-k:not(.has-ic) { padding-left: 0; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn { grid-column: 2; grid-row: auto; justify-self: end; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 2; grid-row: auto; }
     #page-host > #settings-modal.as-page #pfv .pfv-kv, #page-host > #settings-modal.as-page #pfv .pfv-dl { grid-template-columns: minmax(0, 1fr); }

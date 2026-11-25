@@ -105,17 +105,18 @@ class DockFileView {
     if (this.onUpdate) this.onUpdate();
   }
 
-  // badgeText: the card's badge. A database and a notebook have a short word of their own (the long extensions read as broken in four
-  // characters); any other type is its extension, upper-cased, four characters at most.
+  // badgeText: the type's short word (the card's hero is its kind glyph now, buildCard; G5 left-out g keeps the word). A database and a
+  // notebook have a short word of their own (the long extensions read as broken in four characters); any other type is its
+  // extension, upper-cased, four characters at most.
   badgeText(binary) {
     if (!this.ext) return binary ? "BIN" : "FILE";
     return DFV_BADGES[this.ext.toLowerCase()] || this.ext.toUpperCase().slice(0, 4);
   }
 
   buildCard() {
-    const binary = this.kind === "binary";
-    const badge = dfvEl("div", "dk-fv-badge", this.badgeText(binary));
+    const badge = dfvEl("div", "dk-fv-badge");
     badge.setAttribute("aria-hidden", "true");
+    badge.append(fileIcon(this.name, false, false, 32)); // the kind by the name's extension, a binary or too-large file included
     const name = dfvEl("div", "dk-fv-name", this.name);
     name.title = this.name;
     const meta = dfvEl("div", "dk-fv-meta", this.cardMeta());

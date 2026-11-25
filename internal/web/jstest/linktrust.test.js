@@ -365,7 +365,7 @@ test("linktrust.js is a classic script with lt/LT_ names, and loads in node with
 
 test("index.html: the tab button, the panel and the script, after wsroots.js; the nav puts it between Appearance and About", () => {
   const html = read("index.html");
-  assert.match(html, /<button type="button" class="t" data-tab="linktrust" role="tab" aria-selected="false" aria-controls="linktrust">Trusted hosts<\/button>/);
+  assert.match(html, /<button type="button" class="t" data-tab="linktrust" role="tab" aria-selected="false" aria-controls="linktrust">(?:<svg[^>]*><\/svg>)?Trusted hosts<\/button>/);
   assert.match(html, /<div class="dbd pad" id="linktrust" role="tabpanel" hidden>\s*<div class="set-head"><\/div>\s*<div id="lt-body"><\/div>\s*<\/div>/);
   assert.ok(html.indexOf('src="/linktrust.js"') > html.indexOf('src="/wsroots.js"'), "after wsroots.js");
   assert.ok(html.indexOf('src="/linktrust.js"') > html.indexOf('src="/linkgate.js"'), "and after the gate it asks");

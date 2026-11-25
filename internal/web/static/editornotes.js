@@ -844,4 +844,4 @@ function editorNotesFromCode(tab, range) {
   return true;
 }
 
-selBarAddAction({ key: "note", label: "Add note", icon: "pencil", run: (tab, range) => { editorNotesFromCode(tab, range); } });
+selBarAddAction({ key: "note", label: "Add note", icon: "edit", run: (tab, range) => { editorNotesFromCode(tab, range); } });

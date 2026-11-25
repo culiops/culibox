@@ -64,6 +64,15 @@ const (
 	ProviderStatic = "static"
 )
 
+// NormalizeProvider is the provider a reader shows for a stored or in-flight
+// value: empty is AWS (what Record stores for it), any other value is kept.
+func NormalizeProvider(p string) string {
+	if p == "" {
+		return ProviderAWS
+	}
+	return p
+}
+
 // Row is one audited credential request. It never carries credential values or
 // broker tokens — only identifiers and the outcome.
 type Row struct {

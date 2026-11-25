@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { Node } = require("./fakedom.js");
+const { iconStubs } = require("./iconpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 
@@ -31,8 +32,9 @@ function page(mac) {
   // Focus is document.activeElement in the fake; a real focus() also fires the element's focus handler.
   const focus = Node.prototype.focus;
   Node.prototype.focus = function () { focus.call(this); if (this.onfocus) this.onfocus(); };
-  const ctx = vm.createContext({ console, Array, Object, Set, Map, Math, document: doc, iconFor: (n) => "<" + n + ">", IS_MAC: !!mac, ResizeObserver: FakeResizeObserver });
+  const ctx = vm.createContext({ console, Array, Object, Set, Map, Math, document: doc, IS_MAC: !!mac, ResizeObserver: FakeResizeObserver, ...iconStubs(() => new Node("svg", doc)) });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
+  for (const f of ["copyfile.js", "filekinds.js"]) load(fs.readFileSync(path.join(STATIC, f), "utf8"), f); // fileIcon's kind tables (IMAGE_EXTS is copyfile.js's)
   load(fs.readFileSync(path.join(STATIC, "docktabs.js"), "utf8"), "docktabs.js");
   load(fs.readFileSync(path.join(STATIC, "dockstrip.js"), "utf8"), "dockstrip.js");
   const calls = [];
@@ -52,6 +54,43 @@ function page(mac) {
 }
 const ev = (over) => Object.assign({ stopped: false, prevented: false, stopPropagation() { this.stopped = true; }, preventDefault() { this.prevented = true; } }, over);
 
+test("the All changes tab has no file glyph: its icon is the diff, drawn once", () => {
+  const p = page();
+  try {
+    p.paint([p.item("", { key: "review", name: "All changes", review: true, active: true })]);
+    const ic = p.part(p.tab(0), "dk-ic");
+    assert.equal(ic.children.length, 1);
+    assert.equal(ic.children[0].getAttribute("data-icon"), "diff");
+    assert.equal(ic.children[0].getAttribute("width"), "14");
+    p.paint([p.item("", { key: "review", name: "All changes", review: true })]);
+    assert.equal(p.part(p.tab(0), "dk-ic").children.length, 1, "a second paint does not draw it again");
+  } finally { p.restore(); }
+});
+
+test("tab glyph by fileIconKind: the declared kind's Lucide glyph at 14, the All changes tab the diff", () => {
+  const p = page();
+  try {
+    const glyph = (i) => p.part(p.tab(i), "dk-ic").children.map((n) => [n.getAttribute("data-icon"), n.getAttribute("width")]);
+    p.paint([
+      p.item("/p/internal/web/web.go"), p.item("/p/.github/workflows/ci.yml"), p.item("/p/CONTRIBUTING.md"),
+      p.item("/p/Makefile"), p.item("/p/constructor"), p.item("/p/__proto__"), p.item("", { key: "review", name: "All changes", review: true }),
+    ]);
+    assert.deepEqual(glyph(0), [["file-code", "14"]]);
+    assert.deepEqual(glyph(1), [["file-cog", "14"]]);
+    assert.deepEqual(glyph(2), [["file-text", "14"]]);
+    assert.deepEqual(glyph(3), [["file-cog", "14"]], "a declared exact name");
+    assert.deepEqual(glyph(4), [["file", "14"]], "a hostile name is the plain file, never undefined");
+    assert.deepEqual(glyph(5), [["file", "14"]]);
+    assert.deepEqual(glyph(6), [["diff", "14"]]);
+    // a repaint that changes nothing draws nothing; a tab element reused for another file redraws its glyph
+    const first = p.part(p.tab(0), "dk-ic").children[0];
+    p.paint([p.item("/p/internal/web/web.go")]);
+    assert.equal(p.part(p.tab(0), "dk-ic").children[0], first, "same kind, same svg");
+    p.paint([p.item("/p/a.png")]);
+    assert.deepEqual(glyph(0), [["file-image", "14"]]);
+  } finally { p.restore(); }
+});
+
 test("a tab shows its name as text, with the preview, active and dirty marks and the git letter", () => {
   const p = page();
   try {
@@ -70,7 +109,8 @@ test("a tab shows its name as text, with the preview, active and dirty marks and
     assert.equal(p.part(a, "dk-st").textContent, "M");
     assert.equal(p.part(a, "dk-st").className, "dk-st dk-st-m");
     assert.equal(p.part(a, "dk-st").title, "Modified");
-    assert.equal(p.part(a, "dk-ic").textContent, "<a.go>");
+    assert.equal(p.part(a, "dk-ic").textContent, "", "the glyph is an svg, never text");
+    assert.equal(p.part(a, "dk-ic").children.length, 1);
     assert.equal(b.className, "dk-tab dk-prev", "the preview tab is the italic one");
     assert.equal(b.getAttribute("aria-selected"), "false");
     assert.equal(p.part(b, "dk-st").textContent, "");
@@ -80,6 +120,21 @@ test("a tab shows its name as text, with the preview, active and dirty marks and
     assert.equal(p.part(c, "dk-dirty").getAttribute("aria-label"), "Unsaved changes");
     assert.equal(p.part(a, "dk-x").getAttribute("aria-label"), "Close a.go");
     assert.equal(p.nodes["dock-bar"].hidden, false);
+  } finally { p.restore(); }
+});
+
+test("every icon-only control has an aria-label: a tab's close is the x glyph, once, named Close <file>", () => {
+  const p = page();
+  try {
+    p.paint([p.item("/p/a.go", { active: true }), p.item("/p/b.go")]);
+    for (let i = 0; i < 2; i++) {
+      const x = p.part(p.tab(i), "dk-x");
+      assert.equal(x.textContent, "", "no text ✕");
+      assert.deepEqual(x.children.map((n) => [n.getAttribute("data-icon"), n.getAttribute("width")]), [["x", "14"]]);
+      assert.ok(x.getAttribute("aria-label").startsWith("Close "));
+    }
+    p.paint([p.item("/p/a.go", { active: true }), p.item("/p/b.go")]);
+    assert.equal(p.part(p.tab(0), "dk-x").children.length, 1, "a repaint does not draw it again");
   } finally { p.restore(); }
 });
 

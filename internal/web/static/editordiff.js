@@ -55,13 +55,6 @@ const DG_RULER = {
   mod: "editorOverviewRuler.modifiedForeground",
   del: "editorOverviewRuler.deletedForeground",
 };
-// The toggle's icons, as svgIcon shapes (14 px grid): a page, angle brackets, a plus over a minus.
-const DG_ICON_PREVIEW = [["path", { d: "M3.5 1.5h5l2.5 2.5v8.5h-7.5z" }], ["path", { d: "M5.3 7h3.4M5.3 9.5h3.4" }]];
-const DG_ICON_CODE = [["path", { d: "M5 4L2 7l3 3M9 4l3 3-3 3" }]];
-const DG_ICON_CHANGES = [["path", { d: "M7 2.5v5M4.5 5h5M4.5 11h5" }]];
-// The mode toggle's icons: a page split in two columns, and one column with a rule through it.
-const DG_ICON_SIDE = [["path", { d: "M2 2.5h10v9H2zM7 2.5v9" }]];
-const DG_ICON_INLINE = [["path", { d: "M2 2.5h10v9H2zM4.5 5.5h5M4.5 8.5h5" }]];
 const DG_BOX_WHY = "a file in a session's box has no git history";
 const DG_RO_MSG = "Changes is a review view. Switch to Code to edit.";
 
@@ -194,12 +187,12 @@ function editorDiffWhy(tab) {
 // still reach it).
 function editorDiffToggle(tab) {
   const el = editorDiffSeg("View");
-  const preview = editorDiffSegItem("Preview", DG_ICON_PREVIEW, () => { editorMdPick(tab, "preview"); tab.focusReader(); });
-  const code = editorDiffSegItem("Code", DG_ICON_CODE, () => {
+  const preview = editorDiffSegItem("Preview", "preview", () => { editorMdPick(tab, "preview"); tab.focusReader(); });
+  const code = editorDiffSegItem("Code", "code", () => {
     if (editorMdIs(tab)) editorMdPick(tab, "source"); else tab.showChanges(false);
     tab.focusReader();
   });
-  const changes = editorDiffSegItem("Changes", DG_ICON_CHANGES, () => { tab.showChanges(true); });
+  const changes = editorDiffSegItem("Changes", "changes", () => { tab.showChanges(true); });
   preview.hidden = true; // until paint knows the file is markdown
   el.append(preview, code, changes);
   tab.seg = { el, preview, code, changes, codeText: code.querySelector(".dk-seg-t") };
@@ -217,12 +210,11 @@ function editorDiffSeg(label) {
   return el;
 }
 
-function editorDiffSegItem(label, icon, run) {
+function editorDiffSegItem(label, viewKey, run) {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "seg-item";
-  const ic = svgIcon(icon, { icon: "view", size: "14" });
-  ic.setAttribute("class", "dk-seg-ic");
+  const ic = uiIcon(iconOf(ICON_DOCK_VIEW, viewKey), { size: 14, cls: "dk-seg-ic" });
   const t = document.createElement("span");
   t.className = "dk-seg-t";
   t.textContent = label;
@@ -236,8 +228,8 @@ function editorDiffSegItem(label, icon, run) {
 // the reader's, kept for every file (diffModeSet).
 function editorDiffModeToggle(tab) {
   const el = editorDiffSeg("Diff layout");
-  const inline = editorDiffSegItem("Inline", DG_ICON_INLINE, () => diffModeSet("inline"));
-  const side = editorDiffSegItem("Side by side", DG_ICON_SIDE, () => diffModeSet("side"));
+  const inline = editorDiffSegItem("Inline", "inline", () => diffModeSet("inline"));
+  const side = editorDiffSegItem("Side by side", "side", () => diffModeSet("side"));
   side.title = "Side by side (shows inline by itself when the dock is too narrow for two sides)";
   el.append(inline, side);
   el.hidden = true;

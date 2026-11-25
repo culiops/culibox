@@ -1,5 +1,11 @@
 "use strict";
 
+// --- static chrome glyphs ----------------------------------------------------------------------------------
+// index.html holds an empty <svg data-uicon="name"> where a chrome glyph goes (#168); this fills them, first of all: it
+// REPLACES each node, so anything bound to or fetched from one earlier would be lost. Every id these sit in is on the
+// <button> around the svg, which stays; the scripts that run before this one touch only those buttons.
+if (typeof document !== "undefined" && typeof paintStaticIcons === "function") paintStaticIcons(document);
+
 // --- fetch helpers -----------------------------------------------------------
 // api(path, opts) is fetch + the error shape below. opts.timeoutMs (session actions: deadline.js ACTION_*_MS) bounds the
 // whole call, body included: past it the request is aborted and the call rejects with actionTimeoutError (`timedOut`, no
@@ -2635,7 +2641,7 @@ function renderSession(s, opts) {
     const arrow = document.createElement("span");
     arrow.className = "nest-arrow";
     arrow.setAttribute("aria-hidden", "true");
-    arrow.textContent = "\u21B3"; // ↳
+    arrow.append(uiIcon(ICON_ROW.nested, { size: 12 })); // ↳ as the corner-down-right glyph (#168); nested is desktop-only
     li.insertBefore(arrow, adot);
   }
 
@@ -2753,15 +2759,13 @@ function deskKindEl(s) {
   const ak = document.createElement("span");
   ak.className = "ak";
   ak.title = k.title;
-  ak.append(k.kind === "claude" ? claudeMarkSvg(13) : svgIcon24(SVG_TERMINAL_24, 13));
+  ak.append(uiIcon(k.kind === "claude" ? ICON_LOCKED["agent-claude"] : ICON_LOCKED.shell, { size: 13 }));
   return ak;
 }
 
 // deskChipIcon: the 11px glyph in a tier chip ("box", "clone" or "host").
 function deskChipIcon(name) {
-  const svg = svgIcon24({ box: SVG_BOX_24, clone: SVG_CLONE_24, host: SVG_HOST_24 }[name], 11);
-  svg.setAttribute("class", "tchip-i");
-  return svg;
+  return uiIcon(ICON_LOCKED["tier-" + name], { size: 11, cls: "tchip-i" });
 }
 
 // paintCompactRow adds the rest of a desktop sidebar row: ONE chip (rowChip),
@@ -2794,7 +2798,8 @@ function paintCompactRow(li, sname, grow, s, conn) {
   kb.type = "button";
   // The kit's ghost icon button, 24px (the frames' .row-menu); .kbtn keeps the reveal on hover.
   kb.className = "kbtn btn btn-ghost btn-icon btn-sm";
-  kb.textContent = "⋯"; // U+22EF, as on the mobile row
+  // The ellipsis glyph (#168); the phone row's own ⋯ in renderSession stays text (the phone UI is frozen).
+  kb.append(uiIcon(ICON_ACTION.more, { size: 14 }));
   kb.setAttribute("aria-label", "Session actions");
   kb.setAttribute("aria-haspopup", "menu");
   // The kit's disclosure state: expanded while this row's own menu is open (desktop.css shows it pressed).
@@ -2843,9 +2848,8 @@ function renderDesktopEntry(it) {
     tog.onclick = () => toggleWsGroup(it.key);
     const cv = document.createElement("span");
     cv.className = "wcv";
-    cv.append(svgIcon24(it.collapsed ? SVG_CHEVRON_RIGHT_24 : SVG_CHEVRON_DOWN_24, 12));
-    const folder = svgIcon24(SVG_FOLDER_24, 13);
-    folder.setAttribute("class", "wf");
+    cv.append(uiIcon(it.collapsed ? ICON_LOCKED.expand : ICON_LOCKED.collapse, { size: 12 }));
+    const folder = uiIcon(ICON_LOCKED.folder, { size: 13, cls: "wf" });
     const name = document.createElement("span");
     name.className = "wname";
     name.textContent = it.label;
@@ -2880,7 +2884,7 @@ function renderDesktopEntry(it) {
       plus.setAttribute("type", "button");
       plus.title = "New session in " + shortPath(it.path);
       plus.setAttribute("aria-label", "New session in " + it.label);
-      plus.append(svgIcon24(SVG_PLUS_24, 13));
+      plus.append(uiIcon(ICON_LOCKED.new, { size: 13 }));
       plus.onclick = () => openSpawnDialog(null, { cwd: it.path, source: "group" });
       h.append(plus);
     }
@@ -6693,9 +6697,16 @@ function emptyHint() {
   return hint;
 }
 
+// emptyHero: the 32 px muted glyph above a full-surface empty state's title, drawn for the declared kind (G4 90).
+function emptyHero(kind) {
+  const e = emptyState(kind);
+  return uiIcon(e.icon, { size: 32, cls: "empty-glyph empty-hero" });
+}
+
 function emptyNoneEl(m) {
   const root = emptyEl("div", "placeholder empst");
   root.append(
+    emptyHero("none"),
     emptyEl("h1", "empst-title", "No session open"),
     emptyEl("p", "empst-sub", "Pick a session on the left, or start an agent from a profile you used recently."),
   );
@@ -6721,6 +6732,7 @@ function emptyNoneEl(m) {
 function emptyFirstEl() {
   const root = emptyEl("div", "placeholder empst empst-first");
   root.append(
+    emptyHero("first"),
     emptyEl("h1", "empst-title", "Welcome to CuliBox"),
     emptyEl("p", "empst-sub", "Run AI agents, keep them contained, and let them touch your cloud safely. Three steps:"),
   );
@@ -7549,14 +7561,31 @@ function toggleSessionMenuAt(anchor, s, extra) {
   openSessionMenu(anchor, s, extra);
 }
 
-// kitTabRow: one row of the desktop tab switcher, a .menu-row of the tab as a kit row (its glyph in the
-// icon slot, its title, a check and aria-current on the shown one) and its own close. A viewer tab is a
-// file, so it wears the pane header's folder glyph.
+// kitTabRow: one row of the desktop tab switcher, a .menu-row of the tab as a kit row (its kind's glyph in
+// the icon slot, its title, a session's tier chip, a check and aria-current on the shown one) and its own
+// close. The kind and tier are tabSwitchFacts' (#365): the Claude mark or the shell's terminal as on a
+// sidebar row, a file's kind glyph (fileIcon, as the Files tree draws it), else (a session of unknown kind) the pane header's terminal glyph; the tier
+// chip is the sidebar's, glyph then word, and the word stays in the row's accessible name.
 function kitTabRow(cell, t) {
   const row = document.createElement("div");
   row.className = "menu-row";
   const b = kitMenuButton(t.title(), "", false, () => { closeSessionMenu(false); setFocusedCell(cell); cell.activate(t); });
-  b.children[0].append(tabIcon(t.kind === "terminal" ? "terminal" : "files"));
+  const facts = tabSwitchFacts(t, lastSessions, profiles);
+  let glyph;
+  if (facts.kind === "claude") glyph = uiIcon(ICON_LOCKED["agent-claude"]);
+  else if (facts.kind === "shell") glyph = uiIcon(ICON_LOCKED.shell);
+  else if (facts.kind === "file") glyph = fileIcon((t.path || "").split("/").pop() || t.title(), false, false, 13);
+  else glyph = uiIcon(ICON_PANE_TAB.terminal);
+  b.children[0].append(glyph);
+  if (facts.tier) {
+    const c = document.createElement("span");
+    c.className = "menu-tier dchip " + (facts.tier.key === "host" ? "host" : "box");
+    c.setAttribute("data-tier", facts.tier.key);
+    const word = document.createElement("span");
+    word.textContent = facts.tier.label;
+    c.append(deskChipIcon(facts.tier.key), word);
+    b.append(c);
+  }
   b.title = t.kind === "viewer" ? t.path || t.title() : t.title();
   if (t === cell.activeTab) {
     b.setAttribute("aria-current", "true");
@@ -7569,7 +7598,7 @@ function kitTabRow(cell, t) {
   const x = document.createElement("button");
   x.type = "button";
   x.className = "menu-x btn btn-ghost btn-icon btn-sm";
-  x.textContent = "\u00D7";
+  x.append(uiIcon(ICON_ACTION.close));
   x.title = t.kind === "terminal" ? "Close tab (the session keeps running)" : "Close tab";
   x.setAttribute("aria-label", "Close " + t.title());
   x.onclick = () => { closeSessionMenu(false); cell.closeTab(t); };
@@ -7630,7 +7659,9 @@ function sessionRowFor(id) {
 document.addEventListener("click", (e) => {
   const menu = $("session-menu");
   if (!menu || !menu.classList.contains("open")) return;
-  if (!menu.contains(e.target) && e.target !== sessionMenuAnchor) closeSessionMenu(false);
+  // The anchor is the ⋯ button, and a click on its glyph lands on the <svg> (or its shape) inside it: contains, not ===.
+  const a = sessionMenuAnchor;
+  if (!menu.contains(e.target) && !(a && a.contains(e.target))) closeSessionMenu(false);
 });
 document.addEventListener("keydown", (e) => {
   const menu = $("session-menu");
@@ -8134,6 +8165,8 @@ if (typeof mobileMediaQuery === "function" && window.matchMedia) {
     applyCollapsed(bootFlags(deskStorage(), mobileActive(window.innerWidth)).ignoreCollapsed ? { sessions: false, files: false } : readCollapsed());
     if (mobileActive(window.innerWidth)) restoreDrawerNodes();
     else paintSideCost(); // the footer was skipped while narrow
+    // The Files tree draws only the glyphs its width shows (#168): the phone's Nerd text or the desktop's svgs.
+    if (typeof ftGlyphsCrossed === "function") ftGlyphsCrossed();
     paintSteerToggle(); // its meaning changed with the layout (steerRailOpen)
     refreshSessions();
     // F05: the terminals were built at the old width; a desktop's graphite and a phone's black are

@@ -387,7 +387,7 @@ test("Cancel closes the card and the head's Add comes back", () => {
 
 test("the Settings page carries the tab after VM folders, the panel, its footer and the script, in order", () => {
   const html = read("index.html");
-  const tabs = [...html.matchAll(/<button type="button" class="t[^"]*" data-tab="([a-z]+)"([^>]*)>([^<]*)</g)].map((m) => [m[1], m[2], m[3]]);
+  const tabs = [...html.matchAll(/<button type="button" class="t[^"]*" data-tab="([a-z]+)"([^>]*)>(?:<svg[^>]*><\/svg>)?([^<]*)</g)].map((m) => [m[1], m[2], m[3]]);
   const names = tabs.map((t) => t[0]);
   assert.strictEqual(names.indexOf("wsroots"), names.indexOf("vmfolders") + 1);
   const t = tabs[names.indexOf("wsroots")];

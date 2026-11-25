@@ -944,8 +944,9 @@ class Cell {
       name.className = "ph-name ph-switch";
       const nm = el("span", m.name);
       nm.className = "ph-nm";
-      const cnt = el("span", "\u25BE \u00B7 " + this.tabs.length);
+      const cnt = el("span");
       cnt.className = "ph-cnt";
+      cnt.append(uiIcon(ICON_LOCKED.collapse, { size: 12 }), " \u00B7 " + this.tabs.length);
       name.append(nm, cnt);
       name.title = paneTitle(m.name, t, s, this.tabs.length);
       name.setAttribute("aria-haspopup", "menu");
@@ -968,8 +969,11 @@ class Cell {
       main.append(st);
     }
     for (const c of m.chips) {
-      const chip = el("span", c.text);
-      chip.className = "ph-chip " + c.tone;
+      // A tier chip declares its glyph (c.icon, deskContainmentChip): drawn before the word. The write and cloud chips have none.
+      const chip = el("span");
+      if (c.icon) chip.append(uiIcon(ICON_LOCKED["tier-" + c.icon], { size: 11 }), c.text);
+      else chip.textContent = c.text;
+      chip.className = "ph-chip " + c.tone + (c.icon ? " has-tier" : "");
       if (c.title) chip.title = c.title;
       main.append(chip);
     }
@@ -1101,7 +1105,11 @@ class Cell {
       filesPress(files);
       side.append(files);
     }
-    const sh = el("button", "+ Shell");
+    // The words and the plus glyph both stay: wide shows "+ Shell", the compact rule (desktop.css) hides the words and
+    // shows the glyph, so the button keeps its name (aria-label) either way.
+    const sh = el("button");
+    sh.append(uiIcon(ICON_ACTION.add, { size: 14, cls: "ph-sh-i" }), "+ Shell");
+    sh.setAttribute("aria-label", "Shell");
     sh.className = "btn btn-ghost btn-sm ph-shell";
     sh.title = "New shell for this session, same directory and tier, docked below by default (" + shortcutHint("shell.below", IS_MAC) + ")";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
@@ -1120,7 +1128,8 @@ class Cell {
     let more = null;
     if (s || narrow) {
       // The same menu as the sidebar row's ⋯, End session included (spec 7).
-      more = el("button", "\u22EF");
+      more = el("button");
+      more.append(uiIcon(ICON_ACTION.more, { size: 14 }));
       more.className = "ph-ic ph-more";
       more.title = narrow ? "Pane and session actions" : "Session actions";
       more.setAttribute("aria-label", more.title);
@@ -1133,12 +1142,14 @@ class Cell {
     }
     // ⛶ stays visible while maximized: a stored maximized pane must always have
     // its way back (spec 7, localStorage hazards).
-    const max = el("button", pinned ? "\u2750" : "\u26F6");
+    const max = el("button");
+    max.append(uiIcon(pinned ? ICON_PANE_CTL.restore : ICON_PANE_CTL.maximize, { size: 14 }));
     max.className = "ph-ic ph-max" + (pinned ? " pin" : "");
     max.title = pinned ? "Restore" : "Maximize";
     max.setAttribute("aria-label", max.title);
     max.onclick = (e) => { e.stopPropagation(); toggleMax(this); };
-    const del = el("button", "\u00D7");
+    const del = el("button");
+    del.append(uiIcon(ICON_ACTION.close, { size: 14 }));
     del.className = "ph-ic ph-del";
     del.title = "Close pane (the session keeps running)";
     del.setAttribute("aria-label", "Close pane");
@@ -1310,28 +1321,10 @@ class Cell {
   }
 }
 
-// dockIcon: the shell bar's placement glyphs as inline SVG (sl-1.png), built
-// node by node. Below and Right draw the pane with the dock's half filled; Own
-// pane two overlapping windows; Hide a cross. No round caps or joins (svgIcon's
-// round:false); menuIconSvg adds them where it reuses one of these in a menu.
+// dockIcon: the shell bar's placement glyphs (ICON_DOCK_PLACE, iconmap.js): Below and Right draw the pane with
+// the dock's half filled, Own pane two overlapping windows, Hide a cross. Any other kind draws the cross.
 function dockIcon(kind) {
-  let shapes;
-  if (kind === "below" || kind === "right") {
-    shapes = [
-      ["rect", { x: "1.5", y: "1.5", width: "11", height: "11", rx: "1.5" }],
-      ["rect", kind === "below"
-        ? { x: "1.5", y: "8", width: "11", height: "4.5", fill: "currentColor", stroke: "none" }
-        : { x: "7", y: "1.5", width: "5.5", height: "11", fill: "currentColor", stroke: "none" }],
-    ];
-  } else if (kind === "own") {
-    shapes = [
-      ["rect", { x: "1.5", y: "4.5", width: "8", height: "8", rx: "1.2" }],
-      ["path", { d: "M4.5 4.5V2.7c0-.7.5-1.2 1.2-1.2h5.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H9.5" }],
-    ];
-  } else {
-    shapes = [["path", { d: "M3.5 3.5l7 7M10.5 3.5l-7 7" }]];
-  }
-  return svgIcon(shapes, { round: false });
+  return uiIcon(iconOf(ICON_DOCK_PLACE, kind, "x"), { size: 14 });
 }
 
 // fitPaneMeta: mark the units of a pane header's meta that the wrap pushed off its line
@@ -1343,28 +1336,10 @@ function fitPaneMeta(meta) {
   units.forEach((u, i) => u.classList.toggle("mi-off", off[i]));
 }
 
-// tabIcon: the pane header's tab glyphs as inline SVG, in dockIcon's style, for a
-// pane too narrow for the tab's word (#13). Terminal a window with a prompt, Files
-// a folder, Activity a pulse line, Access a shield with a tick. The tab's title and
-// aria-label carry the meaning; the glyph is decoration.
+// tabIcon: the pane header's tab glyphs (ICON_PANE_TAB, iconmap.js), for a pane too narrow for the tab's word
+// (#13). The tab's title and aria-label carry the meaning; the glyph is decoration.
 function tabIcon(kind) {
-  let shapes;
-  if (kind === "terminal") {
-    shapes = [
-      ["rect", { x: "1.5", y: "2.5", width: "11", height: "9", rx: "1.5" }],
-      ["path", { d: "M4 5.8l2 1.7-2 1.7M7.6 9.3H10" }],
-    ];
-  } else if (kind === "files") {
-    shapes = [["path", { d: "M1.5 3.5c0-.55.45-1 1-1h2.8l1.4 1.5h4.8c.55 0 1 .45 1 1v6c0 .55-.45 1-1 1h-9c-.55 0-1-.45-1-1z" }]];
-  } else if (kind === "activity") {
-    shapes = [["path", { d: "M1 7.5h2.6l1.5-4.2 3 8.4 1.7-4.2H13" }]];
-  } else {
-    shapes = [
-      ["path", { d: "M7 1.5l4.5 1.7v3.7c0 2.6-1.9 4.4-4.5 5.6-2.6-1.2-4.5-3-4.5-5.6V3.2z" }],
-      ["path", { d: "M5 7l1.5 1.5L9.2 5.7" }],
-    ];
-  }
-  return svgIcon(shapes);
+  return uiIcon(iconOf(ICON_PANE_TAB, kind), { size: 14 });
 }
 
 // takeTerminalTab(id) takes an open session's TerminalTab out of wherever it
@@ -1387,7 +1362,7 @@ function dockHolding(id) {
 
 // buildSSODoneLine: the line a pane keeps after this tab finished an AWS sign-in
 // (F63): the toast's own words, which are the part to act on (tell the agent to
-// retry), and the kit's ghost ✕. role="status" so it is read once as it appears,
+// retry), and the kit's ghost close (the x glyph). role="status" so it is read once as it appears,
 // as the toast was: only on the line's first appearance for this sign-in
 // (ssoDoneFirstShow, app.js). The strip is rebuilt whenever something else on it
 // moves, and a rebuilt live region would read the same sentence out again.
@@ -1403,7 +1378,7 @@ function buildSSODoneLine(s) {
   x.className = "btn btn-ghost btn-icon btn-sm";
   x.setAttribute("aria-label", "Dismiss");
   x.title = "Dismiss";
-  x.textContent = "\u2715";
+  x.append(uiIcon(ICON_ACTION.close, { size: 14 }));
   x.onclick = (e) => { e.stopPropagation(); dismissSSODone(s.id); };
   row.append(txt, x);
   return row;

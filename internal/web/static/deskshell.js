@@ -182,11 +182,15 @@ function costTodayRange(nowMs) {
 }
 
 // deskContainmentChip: the tier as a chip. tierBadge's "danger" tone is the host
-// tier; null for an exited session, whose tier is not actionable.
+// tier; null for an exited session, whose tier is not actionable. It declares its
+// own glyph (icon: host, clone or box), the one rule the sidebar row and the pane
+// header both read: a boxed session that has a clone_of is a clone. Never read from
+// the text.
 function deskContainmentChip(s, boxRuntime) {
   const t = deskDep("tierBadge")(s, boxRuntime);
   if (!t) return null;
-  return { text: t.text, tone: t.tone === "danger" ? "host" : "box", title: t.title };
+  const host = t.tone === "danger";
+  return { text: t.text, tone: host ? "host" : "box", title: t.title, icon: host ? "host" : s && s.clone_of ? "clone" : "box" };
 }
 
 const DESK_CLONE_TITLE = "Contained: runs in a box on a private copy of the repo.";
@@ -194,14 +198,14 @@ const DESK_CLONE_TITLE = "Contained: runs in a box on a private copy of the repo
 // rowChip: the ONE chip on a sidebar row. An open write window outranks the
 // tier because it is the fact a reader must not miss. null when there is
 // nothing to show (an exited session that is not elevated). A tier chip names
-// its glyph (icon: box, clone or host); a boxed session that has a clone_of is
-// a clone, and says what that means. The write chip has no glyph.
+// its glyph (icon: box, clone or host, from deskContainmentChip); a boxed session
+// that has a clone_of is a clone, and says what that means. The write chip has no glyph.
 function rowChip(s, nowMs, boxRuntime) {
   if (sessionElevated(s, nowMs)) return { text: "write", tone: "write" };
   const c = deskContainmentChip(s, boxRuntime);
   if (!c) return null;
-  if (c.tone === "host") return { text: c.text, tone: c.tone, icon: "host" };
-  if (s && s.clone_of) return { text: "clone", tone: c.tone, icon: "clone", title: DESK_CLONE_TITLE };
+  if (c.icon === "host") return { text: c.text, tone: c.tone, icon: "host" };
+  if (c.icon === "clone") return { text: "clone", tone: c.tone, icon: "clone", title: DESK_CLONE_TITLE };
   return { text: c.text, tone: c.tone, icon: "box" };
 }
 
@@ -212,6 +216,25 @@ function deskRowKind(s, profile) {
   if (deskDep("spawnIsShellProfile")(profile)) return { kind: "shell", title: deskBaseName(profile.bin) + " shell" };
   if (deskDep("claudeKindOf")(s)) return { kind: "claude", title: "Claude Code session" };
   return null;
+}
+
+// TAB_TIER_LABEL: a session's tier as the pane's tab switcher words it. The keys name the glyphs, the sidebar chip's and
+// New session's (iconmap.js ICON_LOCKED "tier-host", "tier-box" and "tier-clone").
+const TAB_TIER_LABEL = { host: "Host", box: "Box", clone: "Box clone" };
+
+// tabSwitchFacts: what a row of the pane's tab switcher shows for tab `t` (#365): its kind (claude, shell, file or
+// generic) and, for a session, the tier it runs on. Both come from declared fields, never the title: a viewer tab is a
+// file; a terminal tab's session (by id in `sessions`) is a Claude one or a shell by deskRowKind, the sidebar's rule;
+// the tier is the session's runtime and clone_of, read as tierBadge and rowChip read them (box, a clone when it has a
+// clone_of, else host). A session the list does not hold has no tier; an ended one keeps the tier it ran on, since
+// its tab still shows its terminal.
+function tabSwitchFacts(t, sessions, profiles) {
+  if (t && t.kind === "viewer") return { kind: "file", tier: null };
+  const s = t && t.kind === "terminal" ? (sessions || []).find((x) => x && x.id === t.id) : null;
+  if (!s) return { kind: "generic", tier: null };
+  const k = deskRowKind(s, (profiles || []).find((p) => p && p.name === s.agent));
+  const key = s.runtime === "box" ? (s.clone_of ? "clone" : "box") : "host";
+  return { kind: k ? k.kind : "generic", tier: { key, label: TAB_TIER_LABEL[key] } };
 }
 
 // rowSubline: the row's second line. What the session needs, in amber, when it
@@ -650,6 +673,6 @@ function paneTabsClass(defs) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskWsLabels, deskWsGroups, deskWsHeaderSig, wsCollapsedRead, wsCollapsedWrite, wsCollapsedToggle, DESK_WS_COLLAPSED_KEY, DESK_WS_COLLAPSED_CAP, deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, deskRowKind, DESK_CLONE_TITLE, rowSubline, bashCommand,
+  module.exports = { deskContainmentChip, deskWsLabels, deskWsGroups, deskWsHeaderSig, wsCollapsedRead, wsCollapsedWrite, wsCollapsedToggle, DESK_WS_COLLAPSED_KEY, DESK_WS_COLLAPSED_CAP, deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, deskRowKind, tabSwitchFacts, DESK_CLONE_TITLE, rowSubline, bashCommand,
     paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneFilesToggle, paneTabsClass, modelLabel, metaUnitsOff };
 }

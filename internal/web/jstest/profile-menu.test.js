@@ -68,7 +68,7 @@ function world() {
     document: doc, console, Promise, JSON, Math, Array, Object, Set, Map, String, Number, Date, setTimeout, clearTimeout,
     tabIcon: icon, dockIcon: icon, pageLeaveHook: null, window: { HOME_DIR: "/home/you" },
   });
-  for (const f of ["svgicon.js", "kitmenu.js", "profilepage.js", "pfv-cloud.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "profilepage.js", "pfv-cloud.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   // The two things a menu row hands over to (profilepage.js's own, replaced so the click is what is measured).
   // Where focus is at the moment each runs: Delete… opens a confirm that hands focus back to whatever had it when it opened.
   const focusAt = [];
@@ -117,7 +117,7 @@ test("pfvMoreMenu: the kit menu, exactly Duplicate…, a separator and a red Del
   assert.deepStrictEqual(pop.children.filter((c) => c.tag === "button").map((c) => byCls(c, "menu-text")[0].textContent), ["Duplicate…", "Delete…"]);
   // Each row is .menu-icon (an inline SVG, aria-hidden slot) + .menu-text, as kitMenuButton draws it.
   assert.deepStrictEqual(pop.children[0].children.map((c) => c.className), ["menu-icon", "menu-text"]);
-  assert.deepStrictEqual(byCls(pop, "menu-icon").map((s) => s.children[0].getAttribute("data-icon")), ["duplicate", "delete"]);
+  assert.deepStrictEqual(byCls(pop, "menu-icon").map((s) => s.children[0].getAttribute("data-icon")), ["copy-plus", "trash-2"]);
   assert.strictEqual(btn.getAttribute("aria-haspopup"), "menu");
   assert.strictEqual(btn.getAttribute("aria-expanded"), "false");
   assert.strictEqual(btn.getAttribute("aria-label"), "More actions for agent-box");
@@ -366,4 +366,72 @@ test("desktop.css: every kit menu's icons are 14px (the rule moved off #session-
   assert.ok(css.indexOf(".menu-icon svg {") < css.indexOf("#session-menu:has("), "in the kit section, before the page rules");
   assert.strictEqual(ruleFor("#session-menu .menu-item > .menu-icon svg"), undefined, "no second copy on #session-menu");
   assert.strictEqual(decl(ruleFor("#session-menu .menu-check svg"), "width"), "14px", "the tab switcher's check keeps its own");
+});
+
+// ---- the picker's group headings carry the kind glyph (#168 G1 8-10) ----------------------------------------------------------
+
+// The glyph of a heading is read off the group's declared `kind`, never off its title: a group titled "Tokens" with another
+// kind draws that kind's glyph, and a kind the map does not have (or a prototype key) draws none.
+const headIcons = (pop) => byCls(pop, "grp-label").map((l) => l.all((n) => n.tag === "svg").map((s) => [s.getAttribute("data-icon"), s.getAttribute("width"), s.getAttribute("height")]));
+
+test("picker group headings: AWS cloud, GitHub si:github, Tokens key-round, each 12, one per heading", () => {
+  const { pop } = picker({
+    label: "Add access", filter: "",
+    groups: [
+      { title: "AWS connections", kind: "aws", items: [{ title: "a", add: { kind: "aws", name: "a" } }, { title: "New AWS connection…", create: "aws" }] },
+      { title: "GitHub", kind: "github", items: [{ title: "New GitHub App…", create: "github" }] },
+      { title: "Tokens", kind: "token", items: [{ title: "t", add: { kind: "token", name: "t" } }, { title: "New service token…", create: "token" }] },
+    ],
+  });
+  assert.deepStrictEqual(headIcons(pop), [[["cloud", "12", "12"]], [["si:github", "12", "12"]], [["key-round", "12", "12"]]]);
+  const labels = byCls(pop, "grp-label");
+  assert.deepStrictEqual(labels.map((l) => l.textContent), ["AWS connections", "GitHub", "Tokens"], "the words are the heading's, the glyph adds none");
+  assert.deepStrictEqual(labels.map((l) => l.children[0].tag), ["svg", "svg", "svg"], "the glyph comes before the words");
+  assert.strictEqual(pop.all((n) => n.tag === "svg").length, 3, "none on an item, none on a New … item");
+  for (const o of byCls(pop, "pfv-opt")) assert.strictEqual(o.all((n) => n.tag === "svg").length, 0, o.textContent);
+});
+
+test("picker group headings: no declared kind, an unknown kind or a prototype key draws no glyph, whatever the title says", () => {
+  const { pop } = picker({
+    label: "x", filter: "",
+    groups: [
+      { title: "AWS connections", items: [{ title: "a", add: { kind: "aws", name: "a" } }] },
+      { title: "Tokens", kind: "nope", items: [{ title: "b", add: { kind: "token", name: "b" } }] },
+      { title: "GitHub", kind: "constructor", items: [{ title: "c", add: { kind: "github" } }] },
+      { title: "More", kind: "__proto__", items: [{ title: "d", add: { kind: "github" } }] },
+    ],
+  });
+  assert.deepStrictEqual(headIcons(pop), [[], [], [], []]);
+});
+
+test("pfcCloudPick: its three groups declare kind aws, github and token", () => {
+  const { ctx } = world();
+  ctx.ghUsableTokens = () => [];
+  const rec = { values: { aws: [], tokens: [], legacy: null } };
+  const spec = ctx.pfcCloudPick(rec);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(spec.groups.map((g) => [g.title, g.kind]))), [["AWS connections", "aws"], ["GitHub", "github"], ["Tokens", "token"]]);
+});
+
+test("pfcCloudPick: with the old-style AWS setting held the AWS group still declares its kind", () => {
+  const { ctx } = world();
+  ctx.ghUsableTokens = () => [];
+  const spec = ctx.pfcCloudPick({ values: { aws: [], tokens: [], legacy: { removed: false } } });
+  assert.strictEqual(spec.groups[0].kind, "aws");
+});
+
+test("the Also reachable picker: its two items declare kind folder and domain and draw folder and globe; the headed pickers' items draw none", () => {
+  const { ctx } = world();
+  const spec = vm.runInContext("pfcReachPick", ctx)(false, false); // a const: not a property of the context
+  assert.deepStrictEqual(Array.from(spec.groups[0].items, (i) => i.kind), ["folder", "domain"]);
+  const w = picker(spec);
+  assert.deepStrictEqual(w.opts.map((o) => o.all((n) => n.tag === "svg").map((s) => [s.getAttribute("data-icon"), s.getAttribute("width")])), [[["folder", "14"]], [["globe", "14"]]]);
+  assert.strictEqual(byCls(w.pop, "grp-label").length, 0, "no heading, so no heading glyph");
+  assert.deepStrictEqual(w.opts.map((o) => byCls(o, "pfv-opt-t")[0].textContent), ["Folder it can read", "Domain it can reach"]);
+});
+
+test("a picker item with an unknown or prototype kind draws no glyph", () => {
+  const { opts } = picker({ label: "x", filter: "", groups: [{ title: "", items: [
+    { title: "a", kind: "constructor", add: { kind: "folder" } }, { title: "b", kind: "nope", add: { kind: "folder" } }, { title: "c", add: { kind: "folder" } },
+  ] }] });
+  for (const o of opts) assert.strictEqual(o.all((n) => n.tag === "svg").length, 0, o.textContent);
 });

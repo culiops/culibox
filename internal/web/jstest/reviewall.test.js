@@ -9,6 +9,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { iconStubs } = require("./iconpage.js");
 const { Node, Text } = require("./fakedom.js");
 
 const STATIC = path.join(__dirname, "..", "static");
@@ -98,7 +99,7 @@ function page() {
     document: doc, IntersectionObserver: FakeIO, fetch,
     setTimeout: (fn, ms) => { st.timers = st.timers || []; st.timers.push({ fn, ms, live: true }); return st.timers.length; },
     clearTimeout: (id) => { if (st.timers && st.timers[id - 1]) st.timers[id - 1].live = false; },
-    svgIcon: () => new El("svg", doc),
+    ...iconStubs(() => new El("svg", doc)),
     showToast: (m) => { st.toasts.push(m); },
     IS_MAC: false,
     shortcutMatches: (id, e) => e.id === id,
@@ -115,7 +116,6 @@ function page() {
     gitBaseFor: () => null,
     ftRoot: () => "/w",
     relativePath: (root, p) => (p.startsWith(root + "/") ? p.slice(root.length + 1) : null),
-    iconFor: () => "F",
     shortPath: (p) => p,
     drawerShowFile: (p, o) => { st.opened.push([p, o]); return true; },
     editorDiffKey: (t) => ({ known: true, scope: st.scope, baseName: "", key: [t.path, st.scope, st.head].join("\n") }),
@@ -135,8 +135,8 @@ function page() {
     imageDiffMount: (el, p, scope, o) => { const m = { el, p, scope, o, disposed: false, dispose() { this.disposed = true; } }; st.mounts.push(m); return m; },
   });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
-  load('let dockMonaco = null; const MONACO_THEME = "culibox"; const DKC_CODE_TITLES = { M: "Modified", A: "Added", U: "Untracked", D: "Deleted", C: "Conflict" }; const DG_ICON_INLINE = [], DG_ICON_SIDE = [];', "state");
-  for (const f of ["reviewmodel.js", "linediff.js", "reviewall.js"]) load(src(f), f);
+  load('let dockMonaco = null; const MONACO_THEME = "culibox"; const DKC_CODE_TITLES = { M: "Modified", A: "Added", U: "Untracked", D: "Deleted", C: "Conflict" };', "state");
+  for (const f of ["copyfile.js", "filekinds.js", "reviewmodel.js", "linediff.js", "reviewall.js"]) load(src(f), f);
   const p = { ctx, st, doc, nodes, monaco, run: (c) => load(c, "test") };
   // The answers a section's two requests get (the tests resolve them as they like).
   p.answer = async (pathOrFetch) => {
@@ -371,6 +371,15 @@ test("the sections follow the Changes list: order, additions, removals, and a fo
   assert.strictEqual(tab.noteEl.textContent, "No changes");
 });
 
+test("header glyph: a section's .dk-ic is the file kind's Lucide glyph at 14, never text, and follows a renamed row", () => {
+  const p = page();
+  const tab = p.tab([row("a.go"), row("logo.svg"), row("constructor")]);
+  const glyph = (path) => { const ic = tab.secs.get(path).el.querySelector(".dk-ic"); assert.strictEqual(ic.textContent, ""); return Array.from(ic.children, (n) => [n.getAttribute("data-icon"), n.getAttribute("width")]); };
+  assert.deepStrictEqual(glyph("/w/a.go"), [["file-code", "14"]]);
+  assert.deepStrictEqual(glyph("/w/logo.svg"), [["file-image", "14"]]);
+  assert.deepStrictEqual(glyph("/w/constructor"), [["file", "14"]], "a hostile name is the plain file");
+});
+
 test("a section header: name, folder, letter, counts, the notes chip, the reviewed circle (a toggle) and Open", () => {
   const p = page();
   const r = row("a.go", { dir: "internal/web", code: "A", add: 7, del: 0 });
@@ -385,6 +394,7 @@ test("a section header: name, folder, letter, counts, the notes chip, the review
   assert.strictEqual(q("dk-del").textContent, "−0");
   assert.strictEqual(q("dk-nt").hidden, false);
   assert.strictEqual(q("dk-nt").textContent, "2 notes", "pending notes of this file only");
+  assert.strictEqual(q("dk-sec-caret").children[0].getAttribute("data-icon"), "chevron-down", "the caret is the vendored chevron");
   assert.strictEqual(q("dk-sec-ck").getAttribute("aria-pressed"), "false");
   q("dk-sec-ck").click();
   assert.deepStrictEqual(p.st.marks, [["s1", "/w/a.go", "/w/a.go"]]);

@@ -12,6 +12,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { Node } = require("./fakedom.js");
+const { iconStubs } = require("./iconpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const src = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
@@ -37,6 +38,7 @@ function watchPage(over) {
   const ctx = vm.createContext(Object.assign({
     console, Object, Array, Map, Set, Math, Number, JSON, Promise, AbortController, encodeURIComponent, Date,
     document,
+    ...iconStubs(() => new Node("svg", document)),
     setInterval: (fn, ms) => { st.intervals.push({ fn, ms, live: true }); return st.intervals.length; },
     clearInterval: (id) => { if (st.intervals[id - 1]) st.intervals[id - 1].live = false; },
     setTimeout: (fn, ms) => { st.timeouts.push({ fn, ms, live: true }); return st.timeouts.length; },
@@ -635,6 +637,7 @@ function fullPage() {
     console, Array, Object, Set, Map, Math, Number, JSON, Promise, String, Error, AbortController, encodeURIComponent,
     Date: { now: () => st.now },
     document: doc,
+    ...iconStubs(() => new Node("svg", doc)),
     fetch,
     localStorage: { getItem: () => null, setItem: () => {} },
     setTimeout: (fn, ms) => { st.timeouts.push({ fn, ms, at: st.now + ms, live: true }); return st.timeouts.length; },
@@ -642,7 +645,6 @@ function fullPage() {
     setInterval: (fn, ms) => { st.intervals.push({ fn, ms, live: true }); return st.intervals.length; },
     clearInterval: (id) => { if (st.intervals[id - 1]) st.intervals[id - 1].live = false; },
     shortPath: (p) => p,
-    iconFor: (name, isDir) => (isDir ? "D" : "F"),
     ftRoot: () => st.root,
     drawerOwnsFileClicks: () => true,
     drawerSessionName: () => "fix-fs-cap",
@@ -652,7 +654,7 @@ function fullPage() {
   });
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load('let drawerState = { open: "files", sessionId: "s1", pinned: false }; let drawerChangedFiles = new Map(); let lastSessions = [{ id: "s1", activity: "working" }]; let ftRootSel = null;', "state");
-  for (const f of ["accessmodel.js", "drawerfiles.js", "changesmodel.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
+  for (const f of ["copyfile.js", "filekinds.js", "accessmodel.js", "drawerfiles.js", "changesmodel.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
   // filesdrawer.js's own: the list is set and the Changes section hears of it.
   load("function drawerSetChanged(sid, files) { drawerChangedFiles.set(sid, files); dockChangesRender(); }", "drawerSetChanged");
   load(src("dockwatch.js"), "dockwatch.js");

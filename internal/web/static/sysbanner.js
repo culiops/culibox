@@ -44,6 +44,9 @@ function sysBannerBuild(model) {
     dot.setAttribute("aria-hidden", "true");
     title.appendChild(dot);
   }
+  // The glyph by banner kind (#168): after the dot, on the title only (the action buttons stay words, G4 left-out j).
+  const kindIcon = iconOf(ICON_SYS_BANNER, model.kind);
+  if (kindIcon) title.appendChild(uiIcon(kindIcon, { size: 14 }));
   title.appendChild(document.createTextNode(model.title));
   root.appendChild(title);
   sysBannerBody = null;

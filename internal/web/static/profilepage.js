@@ -62,7 +62,6 @@ let pfvRefs = { unsaved: null, edit: {}, saved: [] };
 let pfvSavedTimer = null;
 const PFV_SAVED_MS = 2000;
 
-const PFV_SVG = "http://www.w3.org/2000/svg";
 const PFV_EDIT_LABEL = {
   runs: "Edit where it runs", workspace: "Edit workspace", agent: "Edit agent", cloud: "Edit cloud and tokens",
   reachable: "Edit also reachable", network: "Edit network", advanced: "Edit advanced settings",
@@ -97,37 +96,13 @@ function pfvMk(tag, cls, text) {
   return e;
 }
 
-// pfvIcon: a small inline SVG from [shape, attributes] pairs. The class goes on
-// through the attribute: an SVG element's className is read-only.
-function pfvIcon(cls, w, h, box, shapes) {
-  const s = document.createElementNS(PFV_SVG, "svg");
-  s.setAttribute("class", cls);
-  s.setAttribute("width", String(w));
-  s.setAttribute("height", String(h));
-  s.setAttribute("viewBox", box);
-  s.setAttribute("aria-hidden", "true");
-  for (const [shape, attrs] of shapes) {
-    const n = document.createElementNS(PFV_SVG, shape);
-    for (const k of Object.keys(attrs)) n.setAttribute(k, attrs[k]);
-    s.appendChild(n);
-  }
-  return s;
-}
-// The frame's lock (M2.1 `.m2-pitem` svg, 10x12, stroke 1). Desktop only: pfvRenderNav and pfvDrawNote draw it behind pfvOnPage(), so the phone
-// never gets one.
-const PFV_STROKE = { fill: "none", stroke: "currentColor", "stroke-width": "1" };
+// The frame's lock (M2.1 `.m2-pitem`), the vendored lock at 12px. Desktop only: pfvRenderNav and pfvDrawNote draw it behind pfvOnPage(), so
+// the phone never gets one.
 function pfvLockIcon() {
-  return pfvIcon("pfv-lock", 10, 12, "0 0 10 12", [
-    ["rect", Object.assign({ x: "1.5", y: "5.5", width: "7", height: "5.5", rx: "1" }, PFV_STROKE)],
-    ["path", Object.assign({ d: "M3 5.5V3.75a2 2 0 0 1 4 0V5.5" }, PFV_STROKE)],
-  ]);
+  return uiIcon(ICON_STATUS.locked, { size: 12, cls: "pfv-lock" });
 }
 function pfvDotsIcon() {
-  return pfvIcon("pfv-dots", 14, 14, "0 0 14 14", [
-    ["circle", { cx: "2.5", cy: "7", r: "1.3", fill: "currentColor" }],
-    ["circle", { cx: "7", cy: "7", r: "1.3", fill: "currentColor" }],
-    ["circle", { cx: "11.5", cy: "7", r: "1.3", fill: "currentColor" }],
-  ]);
+  return uiIcon(iconOf(ICON_ACTION, "more"), { size: 14, cls: "pfv-dots" });
 }
 
 // pfvMonoNodes: `text` as nodes, machine text in .pfv-mono spans (or `cls`: the head's agent line wears the kit's "mono t-sm").
@@ -400,10 +375,19 @@ function pfvDrawRow(r, known, err, o) {
 // in o): the profile is not in the Box tier, so the domain is refused and the reason is that.
   const off = o && typeof o.off === "boolean" ? o.off : r.off === true;
   const row = pfvMk("div", off ? "pfv-row pfv-off" : "pfv-row");
-  // The old-style AWS setting is an AWS row named for what it is (the kind column is 52px: "Old-style AWS" would wrap
+  // The old-style AWS setting is an AWS row named for what it is (the kind column is 72px, 52px in a narrow container: "Old-style AWS" would wrap
   // in three lines); the binding's own label is its sub-line.
   const old = r.kind === "Old-style AWS";
-  row.append(pfvMk("span", "pfv-k", old ? "AWS" : r.kind));
+  // The kind column draws the glyph of the row's declared kindId (reachModel's spawnItem), never of the word: a row with no kindId
+  // (Workspace, Agent, Advanced rows, or an older shape) draws the word alone.
+  const kind = pfvMk("span", "pfv-k");
+  const glyph = iconOf(ICON_RESOURCE, r.kindId);
+  if (glyph) {
+    kind.className = "pfv-k has-ic";
+    kind.append(uiIcon(glyph, { size: 14 }));
+  }
+  kind.append(old ? "AWS" : r.kind);
+  row.append(kind);
   const id = pfvMk("div", "pfv-id");
   const nm = pfvMk("p", "pfv-nm");
   // The file shared from a private copy's original is a path; the CLAUDE.md imports row, also Files, is words.
@@ -515,9 +499,7 @@ function pfvDrawAct(b) {
   if (pfvState.saved.includes(b.id)) {
     const note = pfvMk("span", "pfv-saved");
     note.setAttribute("role", "status");
-    note.append(pfvIcon("pfv-saved-ic", 12, 12, "0 0 12 12", [
-      ["path", { d: "M2.5 6.4l2.3 2.3 4.7-5", fill: "none", stroke: "currentColor", "stroke-width": "1.6", "stroke-linecap": "round", "stroke-linejoin": "round" }],
-    ]), "Saved");
+    note.append(uiIcon(iconOf(ICON_MENU, "check"), { size: 12, cls: "pfv-saved-ic" }), "Saved");
     pfvRefs.saved.push(note);
     act.append(note);
   }
@@ -831,6 +813,9 @@ function pfvRegisterEditor(id, spec) {
 }
 
 const PFV_NEW_BOX = "Saving gives the next session a new box. Running sessions keep theirs.";
+// The network settings reach running sessions too (#95): their box stays, the proxy applies the change.
+const PFV_NEW_BOX_LIVE_NET = "Saving gives the next session a new box. Running sessions keep theirs and follow this setting from their next connection.";
+const PFV_NEW_BOX_LIVE_DOMAINS = "Saving gives the next session a new box. Running sessions keep theirs; a domain change reaches them at their next connection, a folder change does not.";
 const PFV_NUDGE = "Save or discard these changes first";
 const PFV_NO_COMMAND = "A command is required.";
 // What a refused field is, for the note on the block that was being saved ("Not saved: a folder in Also reachable ...").
@@ -1509,11 +1494,15 @@ function pfvPaint() {
   for (const rec of Object.values(pfvState.edits)) pfvPaintEdit(rec);
 }
 
+// pfvBoxNote: the footer's box line, "" for none. An editor's note answers true for PFV_NEW_BOX, or its own text.
 function pfvBoxNote(rec, c) {
   const ed = PFV_EDITORS[rec.id];
-  if (ed) return !!(ed.note && ed.note(rec, c));
+  if (ed) {
+    const n = ed.note && ed.note(rec, c);
+    return typeof n === "string" ? n : n ? PFV_NEW_BOX : "";
+  }
   // A block that is only showing a refusal: its bindings and paths belong to a box.
-  return c.tier === "box" && (rec.id === "cloud" || rec.id === "reachable");
+  return c.tier === "box" && (rec.id === "cloud" || rec.id === "reachable") ? PFV_NEW_BOX : "";
 }
 
 function pfvPaintEdit(rec) {
@@ -1581,7 +1570,8 @@ function pfvStatusKids(rec, dirty, c) {
   // Both footers save the same merged profile (spec 5.6): say what else this Save takes along.
   const others = Object.values(pfvState.edits).filter((r) => r !== rec && pfvEditDirty(r)).map((r) => (r.block ? r.block.label : r.id));
   if (others.length) out.push(pfvMk("p", "pfv-fnote", "Saving also saves your " + pfvJoin(others) + (others.length > 1 ? " changes." : " change.")));
-  if (pfvBoxNote(rec, c)) out.push(pfvMk("p", "pfv-fnote", PFV_NEW_BOX));
+  const boxNote = pfvBoxNote(rec, c);
+  if (boxNote) out.push(pfvMk("p", "pfv-fnote", boxNote));
   return out;
 }
 
@@ -2180,9 +2170,9 @@ function pfvNetworkValues(c) {
   return { egress_open: c.doc.egress_open === true };
 }
 
-// Only a box has a Network block, so a save here always gives the next session a new box.
+// Only a box has a Network block, so a save here always gives the next session a new box; running ones follow it (#95).
 function pfvNetworkNote(rec, c) {
-  return c.tier === "box";
+  return c.tier === "box" ? PFV_NEW_BOX_LIVE_NET : "";
 }
 
 function pfvNetworkForm(rec) {

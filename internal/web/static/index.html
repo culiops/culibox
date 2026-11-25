@@ -58,10 +58,10 @@
           <span id="side-env" hidden></span>
         </div>
         <div class="xnewrow">
-          <button id="side-new" type="button" class="pbtn">New session</button>
+          <button id="side-new" type="button" class="pbtn"><svg data-uicon="plus" width="14" height="14" aria-hidden="true"></svg>New session</button>
           <span class="xlay-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm xlay" aria-haspopup="menu" aria-expanded="false" title="Layout: 4 panes (click to change)" aria-label="Layout: 4 panes"></button></span>
-          <button id="side-palette" type="button" class="btn btn-ghost btn-icon btn-sm" title="Command palette" aria-label="Command palette"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.2" cy="6.2" r="4"/><path d="M9.2 9.2l3.3 3.3"/></svg></button>
-          <button id="side-collapse" type="button" class="btn btn-ghost btn-icon btn-sm" title="Hide sidebar" aria-label="Hide sidebar">&#171;</button>
+          <button id="side-palette" type="button" class="btn btn-ghost btn-icon btn-sm" title="Command palette" aria-label="Command palette"><svg data-uicon="search" width="14" height="14" aria-hidden="true"></svg></button>
+          <button id="side-collapse" type="button" class="btn btn-ghost btn-icon btn-sm" title="Hide sidebar" aria-label="Hide sidebar"><svg data-uicon="panel-left-close" width="14" height="14" aria-hidden="true"></svg></button>
         </div>
       </div>
       <!-- System banner (Plan 7 Task 7); the store banner (Task 9) has its own slot below it. Both empty and hidden until painted. -->
@@ -112,9 +112,9 @@
         <div class="xlinks">
           <span id="side-cost" class="xcost" hidden></span>
           <div class="side-links">
-            <button id="side-audit" type="button" hidden>Audit</button>
-            <button id="side-analytics" type="button" hidden>Analytics</button>
-            <button id="side-settings" type="button">Settings</button>
+            <button id="side-audit" type="button" hidden><svg data-uicon="scroll-text" width="14" height="14" aria-hidden="true"></svg>Audit</button>
+            <button id="side-analytics" type="button" hidden><svg data-uicon="chart-no-axes-column" width="14" height="14" aria-hidden="true"></svg>Analytics</button>
+            <button id="side-settings" type="button"><svg data-uicon="settings" width="14" height="14" aria-hidden="true"></svg>Settings</button>
           </div>
         </div>
       </div>
@@ -140,21 +140,21 @@
         <span id="drawer-sess" class="dr-sess"><span id="drawer-sess-dot" class="dot"></span><span id="drawer-sess-name" class="dr-sess-name"></span></span>
         <span id="drawer-hint" class="dr-hint">follows the focused pane</span>
         <span class="dr-fill"></span>
-        <button id="drawer-pin" type="button" class="btn btn-ghost btn-icon btn-sm" title="Keep the dock on this session" aria-label="Pin the dock to this session" aria-pressed="false"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/></svg></button>
-        <button id="drawer-x" type="button" title="Close the dock" aria-label="Close the dock">&#10005;</button>
+        <button id="drawer-pin" type="button" class="btn btn-ghost btn-icon btn-sm" title="Keep the dock on this session" aria-label="Pin the dock to this session" aria-pressed="false"><svg data-uicon="pin" width="14" height="14" aria-hidden="true"></svg></button>
+        <button id="drawer-x" type="button" title="Close the dock" aria-label="Close the dock"><svg data-uicon="x" width="14" height="14" aria-hidden="true"></svg></button>
       </div>
       <div id="drawer-body" class="dr-body">
         <div id="drawer-viewer" class="dr-viewer">
           <div id="dock-bar" class="dk-bar" hidden>
             <div id="dock-tabs" class="dk-tabs" role="tablist" aria-label="Open files"></div>
-            <div id="dock-acts" class="dk-acts"><button id="drawer-max" type="button" class="btn btn-sm" title="Expand the dock over the panes"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span id="drawer-max-label">Full</span></button></div>
+            <div id="dock-acts" class="dk-acts"><button id="drawer-max" type="button" class="btn btn-sm" title="Expand the dock over the panes"><svg data-uicon="maximize" width="14" height="14" aria-hidden="true"></svg><span id="drawer-max-label">Full</span></button></div>
           </div>
           <div id="dock-conflict"></div>
           <div id="dock-crumbs" class="dk-crumbs" hidden>
             <nav id="dock-trail" class="dk-trail" aria-label="File path"></nav>
             <span id="dock-outside" class="dk-outside" hidden><span class="dk-outside-t">Outside this tree</span><span aria-hidden="true">·</span><button type="button" class="link dk-outside-go" title="Show this file in the tree, rooted where it is">Reveal</button></span>
             <span id="dock-edited" class="dk-edited" hidden></span>
-            <button id="dock-blame" class="dk-blame" type="button" hidden><svg class="dk-blame-i" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="2.4"/><path d="M0.8 7h3.8M9.4 7h3.8"/></svg><span class="dk-blame-who"></span><span class="dk-blame-sep" aria-hidden="true">·</span><span class="dk-blame-when"></span><span class="dk-blame-short"></span></button>
+            <button id="dock-blame" class="dk-blame" type="button" hidden><svg class="dk-blame-i" data-uicon="git-commit-horizontal" width="12" height="12" aria-hidden="true"></svg><span class="dk-blame-who"></span><span class="dk-blame-sep" aria-hidden="true">·</span><span class="dk-blame-when"></span><span class="dk-blame-short"></span></button>
           </div>
           <div id="drawer-vhost" class="dr-vhost" hidden></div>
           <div id="drawer-vempty" class="dr-vempty">Open a file from the tree, or click a path in the terminal</div>
@@ -166,16 +166,16 @@
               <input id="drawer-goto-in" type="text" placeholder="Go to file…" title="Go to file" aria-label="Go to file" role="combobox" aria-expanded="false" aria-controls="drawer-goto-list" aria-autocomplete="list" autocomplete="off" spellcheck="false">
               <span id="drawer-goto-kbd" class="kbd dr-gokbd" aria-hidden="true"></span>
             </div>
-            <button id="dock-newfile" type="button" class="btn btn-ghost btn-icon btn-sm" title="New file" aria-label="New file"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 12v6M9 15h6"/></svg></button>
-            <button id="dock-more" type="button" class="btn btn-ghost btn-icon btn-sm" title="Explorer actions" aria-label="Explorer actions" aria-haspopup="menu" aria-expanded="false" data-menu-from="1"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
-            <button id="drawer-tree-fold" type="button" class="btn btn-ghost btn-icon btn-sm" title="Fold the explorer (Esc)" aria-label="Fold the explorer"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l6 6-6 6"/><path d="M19 5v14"/></svg></button>
+            <button id="dock-newfile" type="button" class="btn btn-ghost btn-icon btn-sm" title="New file" aria-label="New file"><svg data-uicon="file-plus" width="14" height="14" aria-hidden="true"></svg></button>
+            <button id="dock-more" type="button" class="btn btn-ghost btn-icon btn-sm" title="Explorer actions" aria-label="Explorer actions" aria-haspopup="menu" aria-expanded="false" data-menu-from="1"><svg data-uicon="ellipsis" width="14" height="14" aria-hidden="true"></svg></button>
+            <button id="drawer-tree-fold" type="button" class="btn btn-ghost btn-icon btn-sm" title="Fold the explorer (Esc)" aria-label="Fold the explorer"><svg data-uicon="panel-right-close" width="14" height="14" aria-hidden="true"></svg></button>
             <div id="drawer-goto-list" role="listbox" aria-label="Matching files" hidden></div>
           </div>
           <!-- Changes: the workspace's git changes, above the tree. dockchanges.js fills it from changesRows and hides it
                when there is nothing to say. The tree (#files-pane) is moved into this column by app.js and lands after the root header. -->
           <section id="dock-changes" aria-label="Changes" hidden>
             <div class="dk-chg-head">
-              <button id="dock-chg-chev" type="button" class="dk-chev" aria-expanded="true" aria-controls="dock-chg-list" aria-label="Changes" title="Collapse Changes"></button>
+              <button id="dock-chg-chev" type="button" class="dk-chev" aria-expanded="true" aria-controls="dock-chg-list" aria-label="Changes" title="Collapse Changes"><svg data-uicon="chevron-right" class="dk-chev-r" width="14" height="14" aria-hidden="true"></svg><svg data-uicon="chevron-down" class="dk-chev-d" width="14" height="14" aria-hidden="true"></svg></button>
               <span class="dk-chg-title">Changes</span>
               <span id="dock-chg-count" class="dk-chg-sub"></span>
               <button id="dock-review" type="button" class="link dk-review" title="Review the changes, starting with the first file" hidden>Review</button>
@@ -191,12 +191,12 @@
           </section>
           <!-- The divider between Changes and the tree (docksections.js): drawn only while both are open. -->
           <div id="dock-secsplit" class="dk-secsplit" role="separator" aria-orientation="horizontal" aria-label="Resize Changes and the folder tree" aria-controls="dock-changes" tabindex="0" title="Drag to resize, double-click to reset"></div>
-          <div class="dk-roothead"><button id="dock-tree-chev" type="button" class="dk-chev" aria-expanded="true" aria-controls="files-pane" aria-label="Folder tree" title="Collapse the folder tree"></button><button id="dock-root" type="button" class="dk-root" aria-controls="ft-root-input" title="Change the root folder"><span id="dock-root-name" class="dk-root-name"></span><span id="dock-root-chip" class="chip dk-root-chip" hidden></span><span id="dock-root-path" class="dk-root-path"></span></button></div>
+          <div class="dk-roothead"><button id="dock-tree-chev" type="button" class="dk-chev" aria-expanded="true" aria-controls="files-pane" aria-label="Folder tree" title="Collapse the folder tree"><svg data-uicon="chevron-right" class="dk-chev-r" width="14" height="14" aria-hidden="true"></svg><svg data-uicon="chevron-down" class="dk-chev-d" width="14" height="14" aria-hidden="true"></svg></button><button id="dock-root" type="button" class="dk-root" aria-controls="ft-root-input" title="Change the root folder"><span id="dock-root-name" class="dk-root-name"></span><span id="dock-root-chip" class="chip dk-root-chip" hidden></span><span id="dock-root-path" class="dk-root-path"></span></button></div>
           <p class="dr-tnote">This session's workspace can't be browsed here.</p></div>
         <div id="drawer-strip" class="dr-strip" role="group" aria-label="Explorer">
-          <button id="drawer-strip-tree" type="button" class="btn btn-ghost btn-icon" title="Explorer" aria-label="Open the explorer" aria-expanded="false" aria-controls="drawer-tree"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></button>
-          <button id="drawer-strip-changes" type="button" class="btn btn-ghost btn-icon" title="Changes" aria-label="Open the explorer at Changes" aria-expanded="false" aria-controls="drawer-tree"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M6 8.2v4.3a3 3 0 0 0 3 3h6.8M18 15.8v-4.3a3 3 0 0 0-3-3H8.2"/></svg><span id="drawer-strip-count" class="dr-count" hidden></span></button>
-          <button id="drawer-strip-goto" type="button" class="btn btn-ghost btn-icon" title="Go to file" aria-label="Go to file"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg></button>
+          <button id="drawer-strip-tree" type="button" class="btn btn-ghost btn-icon" title="Explorer" aria-label="Open the explorer" aria-expanded="false" aria-controls="drawer-tree"><svg data-uicon="folder-tree" width="14" height="14" aria-hidden="true"></svg></button>
+          <button id="drawer-strip-changes" type="button" class="btn btn-ghost btn-icon" title="Changes" aria-label="Open the explorer at Changes" aria-expanded="false" aria-controls="drawer-tree"><svg data-uicon="git-compare" width="14" height="14" aria-hidden="true"></svg><span id="drawer-strip-count" class="dr-count" hidden></span></button>
+          <button id="drawer-strip-goto" type="button" class="btn btn-ghost btn-icon" title="Go to file" aria-label="Go to file"><svg data-uicon="file-search" width="14" height="14" aria-hidden="true"></svg></button>
         </div>
       </div>
       <div id="dock-agent" class="dk-agent" role="group" aria-label="Session in view">
@@ -205,7 +205,7 @@
         <span id="dock-agent-st" class="dk-ag-st"></span>
         <span id="dock-agent-last" class="dk-ag-last"></span>
         <button id="dock-agent-ins" type="button" class="btn btn-ghost btn-sm" title="Leave Full mode and type the selection's path:lines, or the file's path, at the prompt"><span>Insert at prompt</span></button>
-        <button id="dock-agent-term" type="button" class="btn btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6M12 19h8"/></svg><span>Show terminal</span><span id="dock-agent-kbd" class="kbd"></span></button>
+        <button id="dock-agent-term" type="button" class="btn btn-sm"><svg data-uicon="square-terminal" width="14" height="14" aria-hidden="true"></svg><span>Show terminal</span><span id="dock-agent-kbd" class="kbd"></span></button>
       </div>
     </aside>
     <div id="page-host" hidden></div>
@@ -349,17 +349,17 @@
       <span class="pg-group" role="presentation">Agents</span>
       <span class="pg-group" role="presentation">Access</span>
       <span class="pg-group" role="presentation">App</span>
-      <button type="button" class="t on" data-tab="manage" role="tab" aria-selected="true" aria-controls="manage">Profiles</button>
+      <button type="button" class="t on" data-tab="manage" role="tab" aria-selected="true" aria-controls="manage"><svg data-uicon="id-card" width="15" height="15" aria-hidden="true"></svg>Profiles</button>
       <div id="pf-navlist" role="group" aria-label="Profiles"></div>
-      <button type="button" class="t" data-tab="creds" role="tab" aria-selected="false" aria-controls="creds">Credentials</button>
-      <button type="button" class="t" data-tab="vmfolders" role="tab" aria-selected="false" aria-controls="vmfolders" hidden>VM folders</button>
-      <button type="button" class="t" data-tab="wsroots" role="tab" aria-selected="false" aria-controls="wsroots">Workspace roots</button>
-      <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
-      <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Device tokens</button>
-      <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
-      <button type="button" class="t" data-tab="linktrust" role="tab" aria-selected="false" aria-controls="linktrust">Trusted hosts</button>
-      <button type="button" class="t" data-tab="about" role="tab" aria-selected="false" aria-controls="about">About</button>
-      <button type="button" id="set-signout">Sign out…</button>
+      <button type="button" class="t" data-tab="creds" role="tab" aria-selected="false" aria-controls="creds"><svg data-uicon="key-round" width="15" height="15" aria-hidden="true"></svg>Credentials</button>
+      <button type="button" class="t" data-tab="vmfolders" role="tab" aria-selected="false" aria-controls="vmfolders" hidden><svg data-uicon="hard-drive" width="15" height="15" aria-hidden="true"></svg>VM folders</button>
+      <button type="button" class="t" data-tab="wsroots" role="tab" aria-selected="false" aria-controls="wsroots"><svg data-uicon="folders" width="15" height="15" aria-hidden="true"></svg>Workspace roots</button>
+      <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings"><svg data-uicon="sliders-horizontal" width="15" height="15" aria-hidden="true"></svg>Appearance</button>
+      <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens"><svg data-uicon="monitor-smartphone" width="15" height="15" aria-hidden="true"></svg>Device tokens</button>
+      <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts"><svg data-uicon="circle-user-round" width="15" height="15" aria-hidden="true"></svg>Agent accounts</button>
+      <button type="button" class="t" data-tab="linktrust" role="tab" aria-selected="false" aria-controls="linktrust"><svg data-uicon="link" width="15" height="15" aria-hidden="true"></svg>Trusted hosts</button>
+      <button type="button" class="t" data-tab="about" role="tab" aria-selected="false" aria-controls="about"><svg data-uicon="info" width="15" height="15" aria-hidden="true"></svg>About</button>
+      <button type="button" id="set-signout"><svg data-uicon="log-out" width="15" height="15" aria-hidden="true"></svg>Sign out…</button>
     </div>
 
     <div class="dbd split" id="manage" role="tabpanel" aria-labelledby="settings-tabs">
@@ -629,6 +629,7 @@
       <div class="set-head"></div>
       <p id="about-version">CuliBox</p>
       <p id="about-runtime"></p>
+      <div id="about-image" hidden></div>
       <p><button type="button" class="btn" id="kbd-open-about">Keyboard shortcuts</button></p>
       <p class="hint">Something not working? Build a report with your version, settings and a health check, with secrets and paths redacted. You review the text before anything leaves this page.</p>
       <p><button type="button" class="btn" id="bug-open">Report a problem</button></p>
@@ -792,8 +793,8 @@
          is a [data-close] button, which initDialogs wires. Everything from the title down is the phone's modal, unchanged. -->
     <div class="page-head an-phead">
       <div class="page-head-text"><h1 class="page-title">Analytics</h1><p class="page-desc" id="an-pdesc"></p></div>
-      <div class="page-actions"><button class="btn" id="an-rescan" type="button" title="Re-scan transcripts now">Re-scan</button>
-        <button class="btn btn-ghost page-esc" type="button" data-close="analytics-modal" aria-label="Close (Esc)" title="Close (Esc)"><span class="kbd-hint">Esc</span>✕</button></div>
+      <div class="page-actions"><button class="btn" id="an-rescan" type="button" title="Re-scan transcripts now"><svg data-uicon="refresh-cw" width="14" height="14" aria-hidden="true"></svg>Re-scan</button>
+        <button class="btn btn-ghost page-esc" type="button" data-close="analytics-modal" aria-label="Close (Esc)" title="Close (Esc)"><span class="kbd-hint">Esc</span><svg data-uicon="x" width="12" height="12" aria-hidden="true"></svg></button></div>
     </div>
     <div class="toolbar an-ptools">
       <div class="seg" id="an-pview" role="group" aria-label="View">
@@ -840,16 +841,16 @@
     <div class="page-head">
       <div class="page-head-text"><h1 class="page-title">Audit</h1>
         <p class="page-desc">Every credential issued, write elevation, egress connection and settings change, newest first.</p></div>
-      <div class="page-actions"><a class="btn" id="au-csv" href="/api/audit.csv" download>Export CSV</a>
-        <button class="btn btn-ghost page-esc" id="au-esc" type="button" data-close="audit-page" aria-label="Close (Esc)" title="Close (Esc)"><span class="kbd-hint">Esc</span>✕</button></div>
+      <div class="page-actions"><a class="btn" id="au-csv" href="/api/audit.csv" download><svg data-uicon="download" width="14" height="14" aria-hidden="true"></svg>Export CSV</a>
+        <button class="btn btn-ghost page-esc" id="au-esc" type="button" data-close="audit-page" aria-label="Close (Esc)" title="Close (Esc)"><span class="kbd-hint">Esc</span><svg data-uicon="x" width="12" height="12" aria-hidden="true"></svg></button></div>
     </div>
     <div class="toolbar au-tools">
       <div class="seg" id="au-filters" role="group" aria-label="Kind">
         <button class="seg-item" type="button" data-filter="" aria-pressed="true">All</button>
-        <button class="seg-item" type="button" data-filter="credentials" aria-pressed="false">Credentials</button>
-        <button class="seg-item" type="button" data-filter="elevations" aria-pressed="false">Elevations</button>
-        <button class="seg-item" type="button" data-filter="egress" aria-pressed="false">Egress</button>
-        <button class="seg-item" type="button" data-filter="settings" aria-pressed="false">Settings changes</button>
+        <button class="seg-item" type="button" data-filter="credentials" aria-pressed="false"><svg data-uicon="key-round" width="14" height="14" aria-hidden="true"></svg>Credentials</button>
+        <button class="seg-item" type="button" data-filter="elevations" aria-pressed="false"><svg data-uicon="shield-alert" width="14" height="14" aria-hidden="true"></svg>Elevations</button>
+        <button class="seg-item" type="button" data-filter="egress" aria-pressed="false"><svg data-uicon="globe" width="14" height="14" aria-hidden="true"></svg>Egress</button>
+        <button class="seg-item" type="button" data-filter="settings" aria-pressed="false"><svg data-uicon="settings" width="14" height="14" aria-hidden="true"></svg>Settings changes</button>
       </div>
       <select class="input" id="au-session" aria-label="Session"></select>
       <span class="grow"></span>
@@ -943,6 +944,8 @@
   <script src="/viewerfind.js"></script>
   <script src="/viewertoolbar.js"></script>
   <script src="/viewer-tab.js"></script>
+  <script src="/icons.js"></script>
+  <script src="/iconmap.js"></script>
   <script src="/svgicon.js"></script>
   <script src="/kitmenu.js"></script>
   <script src="/sidechrome.js"></script>
@@ -959,6 +962,7 @@
   <script src="/pagehost.js"></script>
   <script src="/tokens.js"></script>
   <script src="/bugreport.js"></script>
+  <script src="/boximage.js"></script>
   <script src="/settingshead.js"></script>
   <script src="/vmapply.js"></script>
   <script src="/vmfolders.js"></script>

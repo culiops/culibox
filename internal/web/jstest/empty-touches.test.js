@@ -66,10 +66,10 @@ function page(boxRuntime, metaLoaded = true) {
     $: (id) => els[id], notHomeLabel: () => "", notHomeTitle: () => "", openSpawnDialog: () => {},
     metaLoaded,
   });
-  for (const f of ["fsops.js", "profileview.js", "svgicon.js", "claudemark.js", "spawnpreview.js", "spawnpanel.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
+  for (const f of ["fsops.js", "profileview.js", "icons.js", "iconmap.js", "svgicon.js", "claudemark.js", "spawnpreview.js", "spawnpanel.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   // The panel's own helpers that need more DOM than this fake has; the rows themselves are the real ones.
   vm.runInContext("spawnPanelOn = () => true; spawnPlistFilter = () => {};", ctx);
-  const names = ["emptyEl", "emptyNoneEl", "emptyStateKey"];
+  const names = ["emptyEl", "emptyHero", "emptyNoneEl", "emptyStateKey"];
   if (/function profileTouches\b/.test(APP)) names.push("profileTouches"); // the old line, while it still exists
   vm.runInContext("function emptyHint() { return document.createElement('div'); }\n" + names.map((n) => fnSource(APP, n)).join("\n"), ctx);
   return { ctx, els };
@@ -183,12 +183,14 @@ test("a profile row's name starts with its kind icon: a terminal for a shell, th
   const nameOf = (n) => pg.els["spawn-plist"].find("sp-item").find((r) => r.dataset.name === n).find("sp-name")[0];
   const sh = nameOf("bash");
   assert.strictEqual(sh.children[0].tag, "svg");
+  assert.strictEqual(sh.children[0].attrs["data-icon"], "terminal");
   assert.strictEqual(sh.children[0].attrs.stroke, "currentColor");
   assert.strictEqual(sh.children[0].attrs.width, "12");
-  assert.strictEqual(sh.children[0].children[0].tag, "polyline");
   assert.strictEqual(sh.children[1].textContent, "bash", "the name text follows the icon");
   const cl = nameOf("claude");
   assert.strictEqual(cl.children[0].tag, "svg");
+  assert.strictEqual(cl.children[0].attrs["data-icon"], "si:claude");
+  assert.strictEqual(cl.children[0].attrs.width, "12");
   assert.strictEqual(cl.children[0].attrs.fill, "currentColor");
   assert.strictEqual(cl.children[0].children[0].tag, "path");
   assert.strictEqual(cl.textContent, "claude");

@@ -1196,6 +1196,16 @@ func TestWriteSpawnErrShowsBoxOwned(t *testing.T) {
 	}
 }
 
+// #336: an unresolved profile secret names the secret and the fix (never a
+// value), so it is shown as a 400 with its message, not "could not start session".
+func TestWriteSpawnErrShowsUnresolvedSecret(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeSpawnErr(rec, "claude", fmt.Errorf("%w: \"MY_TOKEN\" is a Stored value", launcher.ErrSecretUnresolved))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "MY_TOKEN") {
+		t.Fatalf("the reason must reach the user: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 type fakeAWS map[string]any
 
 func (f fakeAWS) AWSStatus(id string) (any, bool) { v, ok := f[id]; return v, ok }

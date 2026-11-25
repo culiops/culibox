@@ -377,7 +377,7 @@ function paintSideStoreBanner() {
     const title = storeEl("div", "banner-title");
     const dot = storeEl("span", "dot dot-needs");
     dot.setAttribute("aria-hidden", "true");
-    title.append(dot, document.createTextNode(m.title));
+    title.append(dot, uiIcon(ICON_STATUS.locked, { size: 14 }), document.createTextNode(m.title));
     root.appendChild(title);
     storeSideBody = storeEl("p", "t-sm", m.body);
     storeSideBody.hidden = !m.body;

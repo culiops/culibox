@@ -148,6 +148,9 @@ func main() {
 			Home: home, XDGConfig: xdg, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
 			EnvNotice: envNotice, EnvErr: envErr}
 		if args.Cmd == "doctor" {
+			// Only here may doctor ask the registry; the bug report and the
+			// in-app doctor read the cache alone.
+			in.LiveImageCheck = true
 			os.Exit(doctor.Run(os.Stdout, in))
 		}
 		host, _ := os.Hostname()
@@ -821,7 +824,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// A newer profiles.json may hold overrides of the config seeds; with it
 	// unreadable, no spawn can be trusted to match what the user saved (#291).
 	lnch.SetProfilesGate(launcher.ProfilesNewerGate(parseErr))
-	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
+	// applyProfiles also re-reads running sessions' egress policy (#95); the
+	// first call, here, follows the restore above.
+	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, applyProfiles(lnch, mgr))
 	// #330: who changed which fields of which profile, and when, in the same
 	// audit as credential edits; a row that cannot be written stops the change.
 	pm.SetAudit(storeAudit)
@@ -875,7 +880,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			}
 			return strings.TrimSpace(p.DefaultCwd)
 		}}
-	var stopBroker, stopEgress func(context.Context)
+	var stopBroker, stopEgress, drainEgress func(context.Context)
 	if brokerSvc != nil {
 		status := brokerSvc.Status // only when running: a nil service must read as "no broker", not a typed nil
 		if egressSvc != nil {
@@ -906,7 +911,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		api.Activity = brokerSvc.Activity
 	}
 	if egressSvc != nil {
-		stopEgress = egressSvc.Stop
+		stopEgress, drainEgress = egressSvc.Stop, egressSvc.Drain
 		api.Egress = web.EgressStatusAdapter{Get: web.ManagerService{M: mgr}.Get, Stats: egressSvc.Stats}
 	}
 	// The credentials screen. baseCfg is config.json before mergeCredentials.
@@ -942,6 +947,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		VMFolders:        vmFolders,
 		Terminal:         terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime:       layerRuntime(layer),
+		BoxImage:         boxImageHook(cfg, dataDir, layerImageFacts(layer)),
 		CloneUnavailable: cloneUnavailableReason(h),
 		BoxTrees:         boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
 		ScratchDirs:      web.ScratchCandidates(os.Getenv, os.Getuid(), os.TempDir()),
@@ -963,8 +969,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			return secretchain.AccountTokenPresence(resolver, acctTokenStore, a)
 		},
 		// The credentials screen's legacy-secret status: presence only, no value.
-		SecretCheck:   resolver.Check,
-		SecretSources: cfg.SecretSources,
+		SecretCheck:         resolver.Check,
+		SecretStoredOutside: resolver.StoredOutsideSources,
+		SecretSources:       cfg.SecretSources,
 
 		// vstore is never nil (the daemon always opens one), so no typed-nil
 		// interface can reach the web layer.
@@ -1134,6 +1141,11 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		stopBundleGC = layer.startBundleGC(func(ctx context.Context) { layer.bundleGCPass(ctx, bundles) }, log.Printf)
 	}
 
+	// Look daily, from the registry and GitHub, for the image published for this
+	// version. Network only: it never touches docker or a spawn lock. Whether this
+	// instance may ask at all is decided per pass from the config.
+	stopImageCheck := runImageCheck(imageCheckPass(cfg, dataDir, newImageChecker(), log.Printf), imageCheckFirst, imageCheckTick)
+
 	// No WriteTimeout, deliberately: on macOS the first boxed spawn holds its
 	// POST while the box VM starts (20-30 s, see boxLayer.prepare), and the
 	// UI's spawn request has no deadline either. Adding a write timeout here
@@ -1143,17 +1155,19 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// Release attach clients on the way out (stop is registered before
 	// Reconcile, above); the signal waits in the buffer until this runs.
 	go awaitShutdown(stop, shutdownSteps{
-		DetachAll: mgr.DetachAll,
+		DrainEgress: drainEgress,
+		DetachAll:   mgr.DetachAll,
 		StopAnalytics: func() {
 			analyticsCancel()
 			if analyticsSvc != nil {
 				_ = analyticsSvc.Close()
 			}
 		},
-		StopRetention: stopRetention,
-		StopBundleGC:  stopBundleGC,
-		StopEgress:    stopEgress,
-		StopBroker:    stopBroker,
+		StopRetention:  stopRetention,
+		StopBundleGC:   stopBundleGC,
+		StopImageCheck: stopImageCheck,
+		StopEgress:     stopEgress,
+		StopBroker:     stopBroker,
 		ShutdownHTTP: func(ctx context.Context) error {
 			// The reader closes after the drain, so no request reads a closed handle.
 			err := httpSrv.Shutdown(ctx)

@@ -136,7 +136,7 @@ func mergeClaudeState(root *os.Root, mutate func(top map[string]json.RawMessage)
 // container with restricted network access, is what a box is. Host-tier
 // sessions never reach it and keep the dialog.
 //
-// Measured on Claude Code 2.1.311 (the image's pin): with the key the dialog
+// Measured on Claude Code 2.1.311 (the image's pin then): with the key the dialog
 // does not show, and the agent moves the key on its first start into the box
 // home's settings.json as skipDangerousModePermissionPrompt. It merges like
 // trustWorkspace, and a value of false is replaced: the session's own option

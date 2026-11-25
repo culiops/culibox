@@ -16,6 +16,7 @@ import (
 	"time"
 
 	boximage "github.com/culiops/culibox/docker/culibox"
+	"github.com/culiops/culibox/internal/boxregistry"
 )
 
 func main() {
@@ -24,10 +25,10 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	c := &http.Client{Timeout: time.Minute}
-	ref, err := resolve(ctx, c, *registry, "culiops/culibox", boximage.Hash())
+	idx, err := boxregistry.Resolve(ctx, c, *registry, "culiops/culibox", boximage.Hash())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "boximage-ref:", err)
 		os.Exit(1)
 	}
-	fmt.Println(ref)
+	fmt.Println(idx.Ref)
 }

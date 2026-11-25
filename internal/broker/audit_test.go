@@ -1057,3 +1057,15 @@ func TestTierRecorderWithoutLookup(t *testing.T) {
 		t.Fatalf("rows = %+v", rec.rows)
 	}
 }
+
+// The stored provider column is "aws" for an AWS row, but a reader may meet an
+// empty one (a Row not yet written); both mean AWS. Any other value is kept.
+func TestNormalizeProvider(t *testing.T) {
+	for in, want := range map[string]string{
+		"": ProviderAWS, ProviderAWS: ProviderAWS, ProviderGitHub: ProviderGitHub, ProviderStatic: ProviderStatic, "other": "other",
+	} {
+		if got := NormalizeProvider(in); got != want {
+			t.Errorf("NormalizeProvider(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

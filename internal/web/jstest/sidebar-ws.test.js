@@ -8,6 +8,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { Node, Text } = require("./fakedom.js");
+const { ICON_SRC } = require("./iconpage.js");
 
 const read = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
 function fnSrc(src, name) {
@@ -24,8 +25,8 @@ function fnSrc(src, name) {
 
 const desk = require("../static/deskshell.js");
 
-// svgicon.js is a classic script too: run its real source in the context, so svgIcon24 and the glyph
-// constants are the page's own and read the context's document.
+// The icon scripts are classic scripts too: run their real source in the context (iconpage.js), so uiIcon and the
+// concept maps are the page's own and read the context's document.
 function makeDoc() {
   const doc = {};
   doc.createElement = (t) => new Node(t, doc);
@@ -37,7 +38,7 @@ function headerCtx(extra) {
   const ctx = vm.createContext(Object.assign({
     document: makeDoc(), String, shortPath: (p) => p.replace("/h/u", "~"), toggleWsGroup: () => {},
   }, extra));
-  vm.runInContext(read("svgicon.js").replace(/^const /gm, "var ") + "\n" + fnSrc(read("app.js"), "renderDesktopEntry") +
+  vm.runInContext(ICON_SRC + "\n" + fnSrc(read("app.js"), "renderDesktopEntry") +
     "\nglobalThis.renderDesktopEntry = renderDesktopEntry;", ctx);
   return ctx;
 }
@@ -58,7 +59,7 @@ test("renderDesktopEntry: an expanded header has the chevron, folder, name, coun
   assert.strictEqual(tog.getAttribute("aria-expanded"), "true");
   const kids = tog.children;
   assert.strictEqual(kids[0].className, "wcv");
-  assert.strictEqual(kids[1].attrs.class, "wf");
+  assert.strictEqual(kids[1].attrs.class, "ui-icon wf");
   assert.strictEqual(kids[2].className, "wname");
   assert.strictEqual(kids[2].textContent, "app");
   assert.strictEqual(kids[3].className, "wcount");
@@ -80,12 +81,29 @@ test("renderDesktopEntry: a collapsed header draws one dot per row, and Other's 
   const dots = li.querySelector(".wdots");
   assert.ok(dots, ".wdots");
   assert.deepStrictEqual(dots.children.map((d) => d.className), ["dot waiting wdot", "dot idle wdot", "dot idle wdot"]);
-  const chev = li.querySelector(".wcv").children[0];
-  assert.strictEqual(chev.children[0].attrs.d, "m9 18 6-6-6-6");
+  assert.strictEqual(li.querySelector(".wcv").children[0].attrs["data-icon"], "chevron-right");
 
   const other = ctx.renderDesktopEntry({ id: "grp:", header: true, key: "", path: "", label: "Other", count: 1, waiting: 0, dots: ["dot idle"], collapsed: false });
   assert.strictEqual(other.title, "outside a git repo");
   assert.strictEqual(other.querySelector(".wpip"), null);
+});
+
+test("workspace group glyphs: chevron 12, folder 13 with class wf, plus 13", () => {
+  const ctx = headerCtx();
+  const collapsed = ctx.renderDesktopEntry(Object.assign({}, APP, { collapsed: true }));
+  const glyph = (li, sel) => li.querySelector(sel).children[0];
+  assert.strictEqual(glyph(collapsed, ".wcv").attrs["data-icon"], "chevron-right");
+  assert.strictEqual(glyph(collapsed, ".wcv").attrs.width, "12");
+  const folder = collapsed.querySelector(".wtog").children[1];
+  assert.strictEqual(folder.attrs["data-icon"], "folder");
+  assert.strictEqual(folder.attrs.width, "13");
+  assert.ok(folder.attrs.class.split(" ").includes("wf"));
+  const plus = glyph(collapsed, ".wplus");
+  assert.strictEqual(plus.attrs["data-icon"], "plus");
+  assert.strictEqual(plus.attrs.width, "13");
+  const open = ctx.renderDesktopEntry(APP);
+  assert.strictEqual(glyph(open, ".wcv").attrs["data-icon"], "chevron-down");
+  assert.strictEqual(glyph(open, ".wcv").attrs.width, "12");
 });
 
 test("renderDesktopEntry: the toggle calls toggleWsGroup with the group's key", () => {
@@ -188,14 +206,13 @@ test("header CSS: the dots give way first, nothing paints over the pip or +", ()
 });
 
 // ---- #340 S5 (Task 4): the row's kind icon, its tier chip's glyph, the aligned sub-line ----------------------
-// deskKindEl runs the page's real svgicon.js, claudemark.js and deskshell.js's deskRowKind, with the real
+// deskKindEl runs the page's real icon scripts and deskshell.js's deskRowKind, with the real
 // spawnIsShellProfile from the New session dialog's model.
 function kindCtx(profiles) {
   const ctx = vm.createContext({
     document: makeDoc(), String, profiles, deskRowKind: desk.deskRowKind,
   });
-  vm.runInContext(read("svgicon.js").replace(/^const /gm, "var ") + "\n" + read("claudemark.js").replace(/^const /gm, "var ") +
-    "\n" + fnSrc(read("app.js"), "deskKindEl") + "\nglobalThis.deskKindEl = deskKindEl;", ctx);
+  vm.runInContext(ICON_SRC + "\n" + fnSrc(read("app.js"), "deskKindEl") + "\nglobalThis.deskKindEl = deskKindEl;", ctx);
   return ctx;
 }
 
@@ -204,14 +221,32 @@ test("deskKindEl: no profile, no terminal; the Claude mark comes from the sessio
   const sh = ctx.deskKindEl({ agent: "sh" });
   assert.strictEqual(sh.className, "ak");
   assert.strictEqual(sh.title, "bash shell");
-  assert.ok(sh.querySelector("polyline"), "the terminal's prompt chevron");
+  assert.ok(sh.querySelector('svg[data-icon="terminal"]'), "the terminal glyph");
   const cl = ctx.deskKindEl({ agent: "gone", claude: true });
   assert.strictEqual(cl.className, "ak");
   assert.strictEqual(cl.title, "Claude Code session");
-  assert.strictEqual(cl.children[0].attrs.fill, "currentColor");
+  assert.strictEqual(cl.children[0].attrs.fill, "currentColor", "the Claude mark is a filled mark");
   assert.strictEqual(ctx.deskKindEl({ agent: "gone", claude: false }), null);
   assert.doesNotThrow(() => kindCtx([]).deskKindEl({ agent: "sh" }));
   assert.strictEqual(kindCtx([]).deskKindEl({ agent: "sh" }), null);
+});
+
+test("sidebar kind and tier chip: the Claude mark and terminal at 13, the chip glyphs at 11", () => {
+  const ctx = kindCtx([{ name: "sh", bin: "/usr/bin/bash" }]);
+  const cl = ctx.deskKindEl({ agent: "gone", claude: true });
+  const mark = cl.querySelector('svg[data-icon="si:claude"]');
+  assert.ok(mark, "the Claude mark is the Simple Icons one");
+  assert.strictEqual(mark.attrs.width, "13");
+  assert.ok(mark.attrs.class.split(" ").includes("ui-icon"));
+  const sh = ctx.deskKindEl({ agent: "sh" }).querySelector('svg[data-icon="terminal"]');
+  assert.strictEqual(sh.attrs.width, "13");
+  for (const [key, name] of [["box", "box"], ["clone", "copy"], ["host", "triangle-alert"]]) {
+    const c = chipRow({ text: key, tone: key === "host" ? "host" : "box", icon: key, title: "T" });
+    const ic = c.children[0];
+    assert.ok(ic.attrs.class.split(" ").includes("tchip-i"), key + " chip glyph keeps class tchip-i");
+    assert.strictEqual(ic.attrs["data-icon"], name);
+    assert.strictEqual(ic.attrs.width, "11");
+  }
 });
 
 test("the compact row puts the kind icon before the name; the phone row has none", () => {
@@ -233,7 +268,7 @@ function chipRow(chip, tier) {
     rowSubline: () => ({ text: "" }), rowMenuOpenFor: () => false, openSessionMenu: () => {}, openTerminal: () => {},
     openPaneView: () => false, wmCopyLine: () => "", sessionWorkHome: () => "", handbackLine: () => null, li, sname, grow, s: { id: "a" },
   });
-  vm.runInContext(read("svgicon.js").replace(/^const /gm, "var ") + "\n" + fnSrc(read("app.js"), "deskChipIcon") + "\n" +
+  vm.runInContext(ICON_SRC + "\n" + fnSrc(read("app.js"), "deskChipIcon") + "\n" +
     fnSrc(read("app.js"), "paintCompactRow") + "\npaintCompactRow(li, sname, grow, s, {});", ctx);
   return sname.children[0];
 }
@@ -242,13 +277,13 @@ test("paintCompactRow: a tier chip is .tchip with its glyph then its word; write
   const c = chipRow({ text: "clone", tone: "box", icon: "clone", title: "T" });
   assert.strictEqual(c.className, "dchip box tchip");
   assert.strictEqual(c.children[0].tag, "svg");
-  assert.strictEqual(c.children[0].attrs.class, "tchip-i");
+  assert.strictEqual(c.children[0].attrs.class, "ui-icon tchip-i");
   assert.strictEqual(c.textContent, "clone");
   assert.strictEqual(c.title, "T");
   // box and host carry no title of their own: it still comes from tierBadge.
   const box = chipRow({ text: "box", tone: "box", icon: "box" }, { title: "Runs in a box" });
   assert.strictEqual(box.title, "Runs in a box");
-  assert.strictEqual(box.children[0].attrs.class, "tchip-i");
+  assert.strictEqual(box.children[0].attrs.class, "ui-icon tchip-i");
   const w = chipRow({ text: "write", tone: "write" });
   assert.strictEqual(w.className, "dchip write");
   assert.strictEqual(w.title, "AWS write window open");
@@ -397,6 +432,8 @@ test("the palette lists every session and numbers only the visible ones", () => 
     palReg: () => ({ jumpHint: (n) => "K" + n }),
     shortPath: (p) => p,
     palSessionDot: () => ({ cls: "dot", title: "" }),
+    palAgentKind: () => "",
+    profiles: [],
     palSessionSub: () => "",
     palSessionMatchText: (s) => s.name,
     palSessionRun: () => () => {},

@@ -437,3 +437,73 @@ func TestParseBoxShare(t *testing.T) {
 		t.Errorf("box setup -force = %+v, %v", a, err)
 	}
 }
+
+// #362: open egress tunnels drain first, before attach clients are released
+// (a browser that re-attached during a drain would not be released again), with
+// a context bounded by DrainBound.
+func TestAwaitShutdown_DrainsEgressFirst(t *testing.T) {
+	var steps []string
+	stop := make(chan os.Signal, 1)
+	stop <- syscall.SIGTERM
+	awaitShutdown(stop, shutdownSteps{
+		DrainBound: time.Minute,
+		DrainEgress: func(ctx context.Context) {
+			if d, ok := ctx.Deadline(); !ok || time.Until(d) < 50*time.Second {
+				t.Errorf("drain context deadline = %v (ok %v), want about a minute", d, ok)
+			}
+			steps = append(steps, "drain")
+		},
+		DetachAll:     func() int { steps = append(steps, "detach"); return 0 },
+		StopAnalytics: func() {},
+		StopEgress:    func(context.Context) { steps = append(steps, "egress") },
+		ShutdownHTTP:  func(context.Context) error { steps = append(steps, "http"); return nil },
+	}, func(string, ...any) {})
+	if got := strings.Join(steps, ","); got != "drain,detach,egress,http" {
+		t.Errorf("steps = %s, want drain,detach,egress,http", got)
+	}
+}
+
+// A second signal during the drain cuts it at once.
+func TestAwaitShutdown_SecondSignalCutsTheDrain(t *testing.T) {
+	stop := make(chan os.Signal, 1)
+	stop <- syscall.SIGTERM
+	cut := make(chan time.Duration, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		awaitShutdown(stop, shutdownSteps{
+			DrainBound: time.Minute,
+			DrainEgress: func(ctx context.Context) {
+				start := time.Now()
+				stop <- syscall.SIGINT
+				<-ctx.Done()
+				cut <- time.Since(start)
+			},
+			DetachAll:     func() int { return 0 },
+			StopAnalytics: func() {},
+			ShutdownHTTP:  func(context.Context) error { return nil },
+		}, func(string, ...any) {})
+	}()
+	select {
+	case d := <-cut:
+		if d > 5*time.Second {
+			t.Fatalf("the second signal took %s to cut the drain", d)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a second signal did not cut the drain")
+	}
+	<-done
+}
+
+// The drain bound stays under what each service manager allows a stop: 90 s
+// in the systemd unit, about 20 s for an installed LaunchAgent with no ExitTimeOut.
+func TestEgressDrainBound(t *testing.T) {
+	if got := egressDrainBound("linux"); got != time.Minute {
+		t.Errorf("linux = %s, want 1m", got)
+	}
+	// Under launchd's 20 s default with room for StopRetention, StopImageCheck
+	// (2 s each) and the 3 s stop context.
+	if got := egressDrainBound("darwin"); got+7*time.Second >= 20*time.Second {
+		t.Errorf("darwin = %s, want room under launchd's 20 s default", got)
+	}
+}

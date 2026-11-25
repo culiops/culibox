@@ -47,3 +47,39 @@ func TestLauncherEgressForClones(t *testing.T) {
 		}
 	}
 }
+
+// #95: a running session's profile policy, or ok=false (fail closed) for a
+// profile that is gone or no longer runs in a box.
+func TestLauncherLiveEgressFor(t *testing.T) {
+	l := New([]config.AgentConfig{
+		{Name: "c", Bin: "claude", Runtime: config.RuntimeBox, EgressAllow: []string{"pkg.example"}, EgressOpen: true},
+		{Name: "dflt", Bin: "claude"},
+		{Name: "h", Bin: "claude", Runtime: config.RuntimeHost},
+	}, fakeResolver{}, nil)
+	allow, open, ok := l.LiveEgressFor("c")
+	if !ok || !reflect.DeepEqual(allow, []string{"pkg.example"}) || !open {
+		t.Fatalf("c: %v %v %v", allow, open, ok)
+	}
+	allow[0] = "mutated"
+	if again, _, _ := l.LiveEgressFor("c"); again[0] != "pkg.example" {
+		t.Fatalf("LiveEgressFor must return a copy, got %v", again)
+	}
+	if a, o, ok := l.LiveEgressFor("dflt"); !ok || a != nil || o {
+		t.Fatalf("a box profile with no policy: %v %v %v", a, o, ok)
+	}
+	for _, name := range []string{"h", "missing"} {
+		if a, o, ok := l.LiveEgressFor(name); ok || a != nil || o {
+			t.Fatalf("%s: %v %v %v, want fail closed", name, a, o, ok)
+		}
+	}
+	// A profile naming no tier on a host-default instance is not "removed".
+	l.SetDefaultRuntime(config.RuntimeHost)
+	if a, o, ok := l.LiveEgressFor("dflt"); !ok || a != nil || o {
+		t.Fatalf("host-default dflt: %v %v %v", a, o, ok)
+	}
+	// Renamed: the old name is gone.
+	l.SetAgents([]config.AgentConfig{{Name: "c2", Bin: "claude", EgressAllow: []string{"pkg.example"}}})
+	if _, _, ok := l.LiveEgressFor("c"); ok {
+		t.Fatal("a renamed profile's old name must fail closed")
+	}
+}

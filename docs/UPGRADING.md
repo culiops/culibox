@@ -10,7 +10,7 @@ The rule: **rolling back means restoring a snapshot.** Restoring returns the dat
 2. **Install the new build, keeping the old binary.**
    - With `setup.sh` (recommended): run it again, the same way you installed (`sh setup.sh`, or `sh setup.sh --version vX.Y.Z`). It keeps the binary it replaces as `culibox.prev` next to `culibox` and prints the line that puts it back.
    - By hand (a downloaded release or your own build): copy the current binary to `culibox.prev` next to it (`cp -p culibox culibox.prev`), then put the new binary in place.
-3. **Restart CuliBox** (stop the old `culibox serve`, then start the new one, or restart its service). On its first start, the new version backs up the data root before `serve` changes anything else in it (see [The automatic backup](#the-automatic-backup)) and logs the line that restores it. If the backup cannot be made, it refuses to start and says why.
+3. **Restart CuliBox** (stop the old `culibox serve`, then start the new one, or restart its service). A stop first lets the boxes' open network connections finish, so an agent's streamed answer is not cut: up to 60 s on Linux, 10 s on macOS. A connection still busy then is closed, and the agent shows a connection error (type "continue" in it). A second Ctrl-C or stop signal skips the wait. On its first start, the new version backs up the data root before `serve` changes anything else in it (see [The automatic backup](#the-automatic-backup)) and logs the line that restores it. If the backup cannot be made, it refuses to start and says why.
 4. **Run `culibox doctor`.** On macOS it says when the box VM must be recreated (`culibox box setup -recreate`).
 
 ## What an upgrade keeps

@@ -1,7 +1,7 @@
 // The kit menu's builders (frame M5.1): the desktop menus (the session row's ⋯, the pane header's tab
 // switcher, the profile page's ⋯ and "+ Add" pickers, the file tree's row menu) are all `.menu-item` rows
 // built here, so their look, icons and arrow keys are one component. Classic script, loaded before tabs.js
-// (menuIconSvg reuses tabs.js's tabIcon and dockIcon, which only run once the page has loaded them all).
+// (menuIconSvg draws through uiIcon and ICON_MENU, svgicon.js and iconmap.js, which load before it).
 
 // menuNavIndex: where the arrow keys move focus inside the open menu. `count` rows, focus on row `at`
 // (-1 when it is on none of them, e.g. a tab switcher's close button). Down and Up wrap; from outside the
@@ -16,85 +16,11 @@ function menuNavIndex(count, at, key) {
   return null;
 }
 
-// MENU_SHAPES: the glyphs menuIconSvg draws itself, as svgIcon shapes (14x14). The rest reuse what the product
-// already draws (see menuIconSvg).
-const MENU_SHAPES = {
-  pencil: [
-    ["path", { d: "M2 12l.7-3L9.7 2a1.2 1.2 0 0 1 1.7 0l.6.6a1.2 1.2 0 0 1 0 1.7L5 11.3z" }],
-    ["path", { d: "M8.4 3.3l2.3 2.3" }],
-  ],
-  pie: [
-    ["circle", { cx: "7", cy: "7", r: "5.5" }],
-    ["path", { d: "M7 7V1.5A5.5 5.5 0 0 1 12.5 7z", fill: "currentColor", stroke: "none" }],
-  ],
-  split: [
-    ["rect", { x: "1.5", y: "2.5", width: "11", height: "9", rx: "1.5" }],
-    ["path", { d: "M7 2.5v9" }],
-  ],
-  pause: [
-    ["rect", { x: "3.5", y: "2.5", width: "2.5", height: "9", rx: ".8", fill: "currentColor", stroke: "none" }],
-    ["rect", { x: "8", y: "2.5", width: "2.5", height: "9", rx: ".8", fill: "currentColor", stroke: "none" }],
-  ],
-  tray: [
-    ["path", { d: "M7 2v6.5M4.2 6l2.8 2.8L9.8 6" }],
-    ["path", { d: "M2 9.5v2c0 .55.45 1 1 1h8c.55 0 1-.45 1-1v-2" }],
-  ],
-  check: [
-    ["path", { d: "M2.5 7.4l3.2 3.2 5.8-6.4" }],
-  ],
-  // An arrow down onto a line: the file leaves for the user's machine. Bring work home is the tray.
-  download: [
-    ["path", { d: "M7 1.5v7.5M3.8 6.2L7 9.4l3.2-3.2" }],
-    ["path", { d: "M2.5 12.5h9" }],
-  ],
-  // An arrow up off a line: a file goes up to the workspace (Download's mirror).
-  upload: [
-    ["path", { d: "M7 9V1.5M3.8 4.7L7 1.5l3.2 3.2" }],
-    ["path", { d: "M2.5 12.5h9" }],
-  ],
-  // A circle with its arrow: read the folder again.
-  refresh: [
-    ["path", { d: "M11.6 7a4.6 4.6 0 1 1-1.4-3.3" }],
-    ["path", { d: "M11.8 1.8v2.6H9.2" }],
-  ],
-  // Two chevrons folding up: every open folder closes.
-  collapse: [
-    ["path", { d: "M3.5 6L7 2.5 10.5 6" }],
-    ["path", { d: "M3.5 11.5L7 8l3.5 3.5" }],
-  ],
-  // An arrow into a bar: the path goes into the terminal's line.
-  insert: [
-    ["path", { d: "M1.5 7h7.2M5.9 4.2L8.7 7l-2.8 2.8" }],
-    ["path", { d: "M12 2.5v9" }],
-  ],
-};
-
-// menuIconSvg: the row icon for a kind, as inline SVG in the product's icon style (svgicon.js: 14x14, no
-// fill, currentColor, 1.2 stroke, round caps and joins), so the menu does not depend on any font having a
-// glyph. Shapes the product already draws are reused: Files is the pane header's folder (Folder-plus adds a
-// plus), Copy and Duplicate are the dock's two windows (the latter with a plus), End session and Delete are
-// the dock's cross. The rest are MENU_SHAPES. null for "".
+// menuIconSvg: the row icon for a kind, a vendored glyph (uiIcon, 14px) named by ICON_MENU (iconmap.js), so the
+// menu does not depend on any font having a glyph. data-icon is the glyph's name. A kind that is not an
+// ICON_MENU key draws an empty svg; null for "".
 function menuIconSvg(kind) {
-  if (!kind) return null;
-  let svg;
-  if (kind === "files" || kind === "folder-plus") {
-    svg = tabIcon("files");
-    if (kind === "folder-plus") svg.append(svgShape("path", { d: "M7 6v3.6M5.2 7.8h3.6" }));
-  } else if (kind === "copy" || kind === "duplicate") {
-    svg = dockIcon("own");
-    if (kind === "duplicate") svg.append(svgShape("path", { d: "M5.5 7v3M4 8.5h3" }));
-  } else if (kind === "end" || kind === "delete") {
-    svg = dockIcon("hide");
-  } else {
-    // Own properties only: a kind such as "constructor" must not find Object.prototype's member.
-    const own = Object.prototype.hasOwnProperty.call(MENU_SHAPES, kind);
-    return svgIcon(own ? MENU_SHAPES[kind] : [], { icon: kind });
-  }
-  // dockIcon draws no round caps; the menu's icons all have them.
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("data-icon", kind);
-  return svg;
+  return kind ? uiIcon(iconOf(ICON_MENU, kind), { size: 14 }) : null;
 }
 
 // One row of a desktop (kit) menu: .menu-item > .menu-icon + .menu-text, as frame M5.1 draws it. `icon` is a

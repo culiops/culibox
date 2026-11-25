@@ -11,6 +11,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { Node } = require("./fakedom.js");
+const { iconStubs } = require("./iconpage.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const src = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
@@ -49,6 +50,7 @@ function page(over) {
   const ctx = vm.createContext(Object.assign({
     console, Array, Object, Set, Map, Math, Number, JSON, Date, Promise, String, Error, AbortController,
     document: doc,
+    ...iconStubs(() => new Node("svg", doc)),
     fetch,
     localStorage: {
       getItem: (k) => (st.store.has(k) ? st.store.get(k) : null),
@@ -61,7 +63,6 @@ function page(over) {
     setTimeout: () => 1,
     clearTimeout: () => {},
     shortPath: (p) => p.replace(/^\/home\/u/, "~"),
-    iconFor: (name, isDir) => (isDir ? "D" : "F"),
     ftRoot: () => st.root,
     ftReveal: async (p) => { st.reveals.push(p); return true; },
     ftLoadRoot: (o) => { st.loads++; st.lastLoad = o; },
@@ -86,7 +87,7 @@ function page(over) {
   }, over));
   const load = (code, name) => new vm.Script(code, { filename: name }).runInContext(ctx);
   load('let drawerState = { open: "files", sessionId: "s1", pinned: false }; let drawerChangedFiles = new Map(); let ftExpanded = new Set(["/w/a", "/w/a/b", "/other/x"]); let ftRootSel = null;', "state");
-  for (const f of ["drawerfiles.js", "changesmodel.js", "gitlast.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
+  for (const f of ["copyfile.js", "filekinds.js", "drawerfiles.js", "changesmodel.js", "gitlast.js", "gitstatus.js", "reviewmodel.js", "dockchanges.js"]) load(src(f), f);
   const p = {
     ctx, st, doc, nodes,
     el: (id) => nodes[id],
@@ -248,6 +249,24 @@ test("a status that is unavailable is one calm note with the reason on hover, an
   assert.ok(n <= 2, n + " requests beside the first status");
   await p.status({ state: "unavailable", reason: "Git status needs the box runtime (docker)", rootRel: "", entries: [] });
   assert.strictEqual(p.calls("/api/git/numstat").length + p.calls("/api/git/base").length, n, "no request while status is unavailable");
+});
+
+test("a clean workspace's No changes note carries a 14 px git-compare glyph before the words; other notes stay plain (G4 91)", async () => {
+  const p = page();
+  await p.status(okStatus([]));
+  const note = p.el("dock-chg-note");
+  assert.strictEqual(text(note), "No changes");
+  const g = note.children[0];
+  assert.ok(g && g.tag === "svg", "a glyph first");
+  assert.strictEqual(g.attrs["data-icon"], "git-compare");
+  assert.strictEqual(g.attrs.width, "14");
+  assert.match(g.attrs.class, /\bempty-glyph\b/);
+  assert.doesNotMatch(g.attrs.class, /empty-hero/);
+  await p.status(okStatus([]));
+  assert.strictEqual(note.children.length, 1, "a repaint does not stack a second glyph");
+  await p.status({ state: "unavailable", reason: "why", rootRel: "", entries: [] });
+  assert.strictEqual(text(note), "Status unavailable");
+  assert.strictEqual(note.children.length, 0, "a note that is not the clean state has no glyph");
 });
 
 test("a clean workspace says so, with no count in the header", async () => {
@@ -705,6 +724,26 @@ test("rows are matched by path: a row that goes loses its element, one that move
   assert.strictEqual(p.rows()[0], a);
   assert.strictEqual(p.rows()[2], c);
   assert.ok(!cls(c).includes("dk-mine"));
+});
+
+test("Changes row glyph: the kind's Lucide glyph at 14 for a file, a folder for a folder, never text, and a row reused for another kind redraws", async () => {
+  const p = page();
+  const ent = [{ p: "ci.yml", x: "M" }, { p: "web.go", x: "U" }, { p: "notes.gz", x: "U" }, { p: "constructor", x: "U" }, { p: "newdir/", x: "U" }];
+  await p.status(okStatus(ent));
+  await p.answer("/api/git/base", baseOk());
+  await p.answer("/api/git/numstat", num([]));
+  const glyph = (r) => { const ic = r.querySelector(".dk-ic"); assert.strictEqual(ic.textContent, "", "no text glyph"); return Array.from(ic.children, (n) => [n.getAttribute("data-icon"), n.getAttribute("width")]); };
+  const byName = (n) => p.rows().find((r) => text(r.querySelector(".dk-nm")) === n);
+  assert.deepStrictEqual(glyph(byName("ci.yml")), [["file-cog", "14"]]);
+  assert.deepStrictEqual(glyph(byName("web.go")), [["file-code", "14"]]);
+  assert.deepStrictEqual(glyph(byName("notes.gz")), [["file-archive", "14"]]);
+  assert.deepStrictEqual(glyph(byName("constructor")), [["file", "14"]], "a hostile name is the plain file");
+  assert.deepStrictEqual(glyph(byName("newdir")), [["folder", "14"]]);
+  const row = byName("ci.yml");
+  await p.status(okStatus([{ p: "ci.yml", x: "M" }]));
+  await p.answer("/api/git/numstat", num([]));
+  assert.strictEqual(p.rows()[0], row);
+  assert.strictEqual(row.querySelector(".dk-ic").children.length, 1, "a repaint draws nothing twice");
 });
 
 test("a count that goes away takes its element out, and comes back into the same row", async () => {

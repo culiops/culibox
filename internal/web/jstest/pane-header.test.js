@@ -69,6 +69,7 @@ function el(tag) {
 }
 const svgIcon = () => { const s = el("svg"); s.setAttribute("aria-hidden", "true"); return s; };
 
+const { iconStubs } = require("./iconpage.js");
 const desk = require("../static/deskshell.js");
 const usage = require("../static/usage.js");
 require("../static/analytics.js");
@@ -88,13 +89,14 @@ function header(opts = {}) {
   const active = term || fileTab;
   const calls = [];
   const cell = {
-    tabs: [active], activeTab: active, view: opts.view || "terminal", _narrow: !!opts.narrow, _hdrKey: "",
+    tabs: opts.tabCount > 1 ? [active, { kind: "viewer", path: "/work/b.md", name: "b.md" }] : [active], activeTab: active, view: opts.view || "terminal", _narrow: !!opts.narrow, _hdrKey: "",
     bar: el("div"), activate() {}, setView() {}, toggleView(v) { calls.push("toggleView:" + v); }, dock: null,
     _metaRo: { disconnect() { calls.push("ro.disconnect"); }, observe(n) { calls.push("ro.observe:" + n.className); } },
   };
   const ctx = vm.createContext({
     document: { createElement: el }, window: { shellProfile: "bash" }, Date, String, JSON, Math, Number, Array, Object,
-    lastSessions: sess ? [sess] : [], boxRuntime: "runc", maximized: null, focusedCell: cell, IS_MAC: false,
+    lastSessions: sess ? [sess] : [], boxRuntime: "runc", maximized: opts.maximized ? cell : null, focusedCell: cell, IS_MAC: false,
+    ...iconStubs(svgIcon),
     paneHeaderModel: desk.paneHeaderModel, headerSyncKey: desk.headerSyncKey, headerDot: desk.headerDot,
     paneTabs: desk.paneTabs, paneFilesToggle: desk.paneFilesToggle, paneTabsClass: desk.paneTabsClass, paneTitle: desk.paneTitle,
     usageTitle: usage.usageTitle, tabIcon: () => svgIcon(), acctBadgeEl: () => null,
@@ -338,4 +340,105 @@ test("fitPaneMeta toggles .mi-off on the units the wrap left below the line, usi
   units.forEach((u, i) => { u.getBoundingClientRect = () => ({ top: 100, bottom: 116 }); });
   ctx.f(meta);
   assert.deepStrictEqual(units.map((u) => u.classes.has("mi-off")), [false, false, false]);
+});
+
+// tabIcon and dockIcon (tabs.js) are the vendored glyphs: ICON_PANE_TAB and ICON_DOCK_PLACE, drawn by uiIcon at 14px.
+function iconWorld() {
+  const { Node } = require("./fakedom.js");
+  const doc = { createElement: (t) => new Node(t, doc), createElementNS: (_ns, t) => new Node(t, doc) };
+  const ctx = vm.createContext({ document: doc, console });
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js"]) vm.runInContext(read(f), ctx, { filename: f });
+  const tabs = read("tabs.js");
+  vm.runInContext(fnSrc(tabs, "tabIcon") + "\n" + fnSrc(tabs, "dockIcon"), ctx);
+  return ctx;
+}
+
+test("view tab glyphs", () => {
+  const ctx = iconWorld();
+  for (const [kind, name] of [["terminal", "square-terminal"], ["activity", "activity"], ["access", "shield"], ["files", "folder-tree"]]) {
+    const svg = vm.runInContext("tabIcon(" + JSON.stringify(kind) + ")", ctx);
+    assert.strictEqual(svg.getAttribute("data-icon"), name, kind);
+    assert.strictEqual(svg.getAttribute("width"), "14", kind);
+    assert.strictEqual(svg.getAttribute("aria-hidden"), "true", kind);
+  }
+  assert.strictEqual(vm.runInContext('tabIcon("constructor")', ctx).children.length, 0, "an unknown tab draws nothing");
+});
+
+test("dock placement glyphs", () => {
+  const ctx = iconWorld();
+  for (const [kind, name] of [["below", "panel-bottom"], ["right", "panel-right"], ["own", "square-stack"], ["hide", "x"], ["nope", "x"]]) {
+    const svg = vm.runInContext("dockIcon(" + JSON.stringify(kind) + ")", ctx);
+    assert.strictEqual(svg.getAttribute("data-icon"), name, kind);
+    assert.strictEqual(svg.getAttribute("width"), "14", kind);
+  }
+});
+
+// #168 S2: the header's own glyphs come from the vendored set (uiIcon, through iconmap.js), never from text, and the
+// controls that are only a glyph keep their name in aria-label. The chip's glyph is declared by the model (deskshell.js).
+const iconOf = (n) => (n && n.attrs ? n.attrs["data-icon"] : undefined);
+const svgs = (n) => n.all().filter((k) => k.tag === "svg");
+
+test("header glyphs", () => {
+  const h = header({ tabCount: 2 });
+  const [more] = h.byClass("ph-more");
+  assert.deepStrictEqual(svgs(more).map((n) => [iconOf(n), n.attrs.width]), [["ellipsis", "14"]], "ph-more is the ellipsis, drawn, not the text ⋯");
+  assert.strictEqual(more.textContent, "");
+  const [max] = h.byClass("ph-max");
+  assert.deepStrictEqual(svgs(max).map((n) => [iconOf(n), n.attrs.width]), [["maximize", "14"]]);
+  assert.strictEqual(max.textContent, "");
+  const [pinnedMax] = header({ maximized: true }).byClass("ph-max");
+  assert.deepStrictEqual(svgs(pinnedMax).map(iconOf), ["minimize"], "pinned: the way back is minimize");
+  assert.ok(pinnedMax.classList.contains("pin"));
+  const [del] = h.byClass("ph-del");
+  assert.deepStrictEqual(svgs(del).map((n) => [iconOf(n), n.attrs.width]), [["x", "14"]]);
+  assert.strictEqual(del.textContent, "");
+  // The switcher's count: a 12 px chevron-down, then ` · N` as text.
+  const [cnt] = h.byClass("ph-cnt");
+  assert.deepStrictEqual(svgs(cnt).map((n) => [iconOf(n), n.attrs.width]), [["chevron-down", "12"]]);
+  assert.strictEqual(cnt.textContent, " · 2");
+  assert.ok(!cnt.textContent.includes("▾"), "no text caret");
+  assert.strictEqual(header().byClass("ph-cnt").length, 0, "one tab: no switcher");
+  // + Shell: the wide header keeps its words; the plus is there for the narrow rule (CSS) to pick, like the tabs' icons.
+  const [sh] = h.byClass("ph-shell");
+  assert.strictEqual(sh.textContent, "+ Shell", "wide keeps the words");
+  assert.deepStrictEqual(svgs(sh).map((n) => [iconOf(n), n.attrs.width, n.attrs.class.split(" ").includes("ph-sh-i")]), [["plus", "14", true]]);
+  assert.strictEqual(sh.attrs["aria-label"], "Shell");
+  // The narrow header (the JS verdict) draws the same controls the same way.
+  const nar = header({ narrow: true, tabCount: 2 });
+  assert.deepStrictEqual(svgs(nar.byClass("ph-more")[0]).map(iconOf), ["ellipsis"]);
+  assert.deepStrictEqual(svgs(nar.byClass("ph-shell")[0]).map(iconOf), ["plus"]);
+});
+
+test("header chip draws its declared tier icon before the word, 11 px; the write and cloud chips draw none", () => {
+  const chipOf = (session, narrow) => header({ session, narrow }).byClass("ph-chip");
+  const one = (chip) => svgs(chip).map((n) => [iconOf(n), n.attrs.width]);
+  const [host] = chipOf({ id: "s1", name: "a", activity: "idle", runtime: "host" });
+  assert.deepStrictEqual(one(host), [["triangle-alert", "11"]]);
+  assert.strictEqual(host.textContent, "host");
+  assert.strictEqual(host.children[0].tag, "svg", "the glyph leads the word");
+  assert.ok(host.classList.contains("host") && host.classList.contains("has-tier"));
+  const [box] = chipOf({ id: "s1", name: "a", activity: "idle", runtime: "box" });
+  assert.deepStrictEqual(one(box), [["box", "11"]]);
+  const [clone] = chipOf({ id: "s1", name: "a", activity: "idle", runtime: "box", clone_of: "/r" });
+  assert.deepStrictEqual(one(clone), [["copy", "11"]], "a clone draws the clone tier glyph");
+  assert.deepStrictEqual(one(chipOf({ id: "s1", name: "a", activity: "idle", runtime: "host" }, true)[0]), [["triangle-alert", "11"]], "narrow keeps it");
+  const soon = new Date(Date.now() + 30 * 60000).toISOString();
+  const conn = { name: "a", label: "a", account_id: "1", role_arn: "arn:aws:iam::1:role/r" };
+  const w = chipOf({ id: "s1", name: "a", activity: "idle", runtime: "box", aws_connections: [{ ...conn, elevated_until: soon }] });
+  assert.deepStrictEqual(w.map((c) => c.classList.contains("write")), [false, true]);
+  assert.deepStrictEqual(one(w[1]), [], "the write chip has no glyph");
+  const r = chipOf({ id: "s1", name: "a", activity: "idle", runtime: "box", aws_connections: [conn] });
+  assert.deepStrictEqual(r.map((c) => c.classList.contains("cloud")), [false, true]);
+  assert.deepStrictEqual(one(r[1]), [], "the cloud chip has no glyph");
+});
+
+test("every icon-only control has an aria-label", () => {
+  for (const opts of [{}, { narrow: true }, { maximized: true }, { tabCount: 2 }]) {
+    const h = header(opts);
+    for (const cls of ["ph-more", "ph-max", "ph-del", "ph-shell"]) {
+      for (const b of h.byClass(cls)) {
+        assert.ok(b.attrs["aria-label"] && b.attrs["aria-label"].trim(), cls + " names itself (" + JSON.stringify(opts) + ")");
+      }
+    }
+  }
 });

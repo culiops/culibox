@@ -388,3 +388,149 @@ test("insert path keeps its refusals: no terminal focused, control characters in
   assert.match(down.st.toasts[0][0], /not connected/);
   assert.equal(down.st.refocus, 0);
 });
+
+// --- #168 S2 Task 2.3: a result-type glyph on every row, and the declared agentKind on a session item -----------------------
+// palette.js run whole in a vm over a stand-in DOM, with the page's icon scripts (icons.js, iconmap.js, svgicon.js), so the
+// rows are built by the real palBuildRow and paletteSessions.
+function paletteVm(over) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const vm = require("node:vm");
+  const { createRequire } = require("node:module");
+  const STATIC = path.join(__dirname, "..", "static");
+  const el = (tag, ns) => ({
+    tag, namespaceURI: ns || "", className: "", title: "", onclick: null, onmouseenter: null, children: [], attrs: {}, _t: "",
+    // As in a DOM: setting the text replaces the children.
+    get textContent() { return this._t; },
+    set textContent(v) { this._t = String(v); this.children = []; },
+    classList: { add() {}, remove() {}, toggle() {} },
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    removeAttribute(k) { delete this.attrs[k]; },
+    append(...n) { this.children.push(...n); },
+    prepend(...n) { this.children.unshift(...n); },
+  });
+  const ctx = vm.createContext(Object.assign({
+    console, RegExp, Object, Array, Map, Math, Number, JSON, String, Error, Set,
+    require: createRequire(path.join(STATIC, "palette.js")),
+    document: { createElement: (t) => el(t), createElementNS: (ns, t) => el(t, ns) },
+    window: { innerWidth: 1440 },
+    mobileActive: (w) => Number(w) <= 700,
+    deskWsCollapsedSet: () => new Set(),
+    lastSessions: [], profiles: [],
+    isNestedShell: () => false, revealShell() {}, openTerminal() {},
+  }, over));
+  // `const`/`let` at line start becomes `var`, so the names are properties of the context.
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "shortcuts.js", "deskshell.js", "palette.js"]) {
+    new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8").replace(/^(const|let) /gm, "var "), { filename: f }).runInContext(ctx);
+  }
+  return ctx;
+}
+const shapeOf = (n) => (n.tag === "svg" ? "svg:" + n.attrs["data-icon"] : n.tag + "." + n.className + (n.textContent ? "'" + n.textContent + "'" : ""));
+
+test("session items declare agentKind: claude, shell, or empty (from deskRowKind, never from a title)", () => {
+  const ctx = paletteVm({
+    lastSessions: [
+      { id: "a", name: "audit-asks", claude: true, agent: "claude" },
+      { id: "b", name: "audit-shell", claude: false, agent: "bash" },
+      { id: "c", name: "mystery", claude: false, agent: "nope" },
+      // A title that says "shell" or "claude" declares nothing: the kind is the profile's and the view's.
+      { id: "d", name: "my claude shell", claude: false, agent: "nope" },
+    ],
+    profiles: [{ name: "claude", bin: "claude", claude: true }, { name: "bash", bin: "/bin/bash" }],
+  });
+  const items = ctx.paletteSessions(false);
+  assert.deepStrictEqual(Array.from(items, (i) => i.agentKind).sort(), ["", "", "claude", "shell"]);
+  const by = (label) => items.find((i) => i.label === label).agentKind;
+  assert.strictEqual(by("audit-asks"), "claude");
+  assert.strictEqual(by("audit-shell"), "shell");
+  assert.strictEqual(by("mystery"), "");
+  assert.strictEqual(by("my claude shell"), "");
+});
+
+test("palette row glyph by kind: one glyph per kind, never per command", () => {
+  const ctx = paletteVm();
+  const { ICON_PALETTE_KIND, ICON_LOCKED } = ctx;
+  assert.deepStrictEqual({ ...ICON_PALETTE_KIND }, {
+    new: "plus", "session-action": "arrow-right", view: "arrow-right", kill: "power", layout: "layout-grid", settings: "settings", file: "file",
+  });
+  assert.strictEqual(ICON_PALETTE_KIND.layout, ctx.ICON_LAYOUT[4], "one concept, one glyph: the layout picker's");
+  // The type icon of a built row: the svg beside the label (null when the row draws none).
+  const typeIcon = (it) => {
+    const li = ctx.palBuildRow(it, 0, false);
+    const svg = li.children.find((c) => c.tag === "svg");
+    return { svg, li, name: svg ? svg.attrs["data-icon"] : null };
+  };
+  for (const [kind, glyph] of Object.entries(ICON_PALETTE_KIND)) {
+    const r = typeIcon({ kind, label: "x " + kind, hint: "" });
+    assert.strictEqual(r.name, glyph, kind);
+    assert.strictEqual(r.svg.attrs["aria-hidden"], "true", kind + " is decoration");
+    assert.match(r.svg.attrs.class, /\bpal-ti\b/, kind);
+    assert.strictEqual(r.svg.attrs.width, "14", kind + " is the row size");
+  }
+  // New session · x and + Shell below are one kind, so one glyph; a view is arrow-right, never the nav glyph of its page.
+  assert.strictEqual(typeIcon({ kind: "new", label: "New session · x", hint: "" }).name, "plus");
+  assert.strictEqual(typeIcon({ kind: "new", label: "+ Shell below", hint: "" }).name, "plus");
+  assert.strictEqual(typeIcon({ kind: "view", label: "Audit", hint: "" }).name, "arrow-right");
+  assert.notStrictEqual(typeIcon({ kind: "view", label: "Audit", hint: "" }).name, "scroll-text");
+  // A session row keeps its activity dot in the glyph column and adds its agent kind beside it.
+  const claude = typeIcon({ kind: "session", label: "a", agentKind: "claude", dotCls: "dot working" });
+  assert.strictEqual(claude.name, ICON_LOCKED["agent-claude"]);
+  assert.strictEqual(claude.li.children[0].children[0].className, "dot working", "the dot stays");
+  assert.strictEqual(typeIcon({ kind: "session", label: "s", agentKind: "shell", dotCls: "dot idle" }).name, ICON_LOCKED.shell);
+  assert.strictEqual(typeIcon({ kind: "session", label: "u", agentKind: "", dotCls: "dot idle" }).svg, undefined, "unknown kind: dot only");
+  assert.deepStrictEqual(typeIcon({ kind: "session", label: "u", agentKind: "", dotCls: "dot idle" }).li.children.map(shapeOf), ["span.pal-glyph", "span.pal-ti-gap", "span.pal-label'u'"], "a blank of the icon's width keeps the label aligned");
+  // The icon sits between the glyph column and the label.
+  assert.deepStrictEqual(typeIcon({ kind: "file", label: "a.go", hint: "" }).li.children.slice(0, 3).map(shapeOf), ["span.pal-glyph", "svg:file", "span.pal-label'a.go'"]);
+});
+
+test("palette row: the + prefix of a shell spawn was the plus glyph's text stand-in, so the row drops it; the item keeps its label", () => {
+  const ctx = paletteVm();
+  const it = { kind: "new", label: "+ Shell below", hint: "" };
+  const li = ctx.palBuildRow(it, 0, false);
+  assert.strictEqual(li.children.find((c) => c.className === "pal-label").textContent, "Shell below");
+  assert.strictEqual(it.label, "+ Shell below", "filter text and the toast name keep the declared label");
+});
+
+test("palette copy-path button: the clipboard-copy glyph, its aria-label unchanged", () => {
+  const ctx = paletteVm();
+  const li = ctx.palBuildRow({ kind: "file", label: "a.go", path: "/x/a.go", hint: "" }, 0, true);
+  const cp = li.children.find((c) => c.className === "pal-copy");
+  assert.strictEqual(cp.attrs["aria-label"], "Copy path");
+  assert.strictEqual(cp.title, "Copy path");
+  assert.strictEqual(cp.textContent, "");
+  assert.deepStrictEqual(cp.children.map(shapeOf), ["svg:clipboard-copy"]);
+});
+
+test("palette on the phone: the text glyphs and the ⧉ stay, no icon is drawn, the label is as declared (#340 frozen)", () => {
+  const ctx = paletteVm({ window: { innerWidth: 390 } });
+  const file = ctx.palBuildRow({ kind: "file", label: "a.go", path: "/x/a.go", hint: "" }, 0, true);
+  assert.deepStrictEqual(file.children.map(shapeOf).slice(0, 2), ["span.pal-glyph'▸'", "span.pal-label'a.go'"]);
+  assert.strictEqual(file.children.find((c) => c.className === "pal-copy").textContent, "⧉");
+  const cmd = ctx.palBuildRow({ kind: "new", label: "+ Shell below", hint: "" }, 0, false);
+  assert.deepStrictEqual(cmd.children.map(shapeOf), ["span.pal-glyph'>'", "span.pal-label'+ Shell below'"]);
+  const ses = ctx.palBuildRow({ kind: "session", label: "a", agentKind: "claude", dotCls: "dot idle" }, 0, false);
+  assert.ok(!ses.children.some((c) => c.tag === "svg"), "no kind glyph on a phone session row");
+});
+
+test("palette No matches: a 14 px muted search-x before the words on the desktop, none on the phone (G4 78, #340)", () => {
+  const ctx = paletteVm();
+  const empty = ctx.document.createElement("div");
+  empty.textContent = "No matches";
+  ctx.palPaintEmpty(empty, true, false);
+  assert.strictEqual(empty.hidden, false);
+  assert.deepStrictEqual(empty.children.map(shapeOf), ["svg:search-x"]);
+  assert.strictEqual(empty.children[0].attrs.width, "14");
+  assert.match(empty.children[0].attrs.class, /\bempty-glyph\b/);
+  assert.strictEqual(empty.children[0].attrs["aria-hidden"], "true");
+  ctx.palPaintEmpty(empty, true, false);
+  assert.strictEqual(empty.children.length, 1, "a repaint does not stack a second glyph");
+  ctx.palPaintEmpty(empty, false, false);
+  assert.strictEqual(empty.hidden, true);
+  const phone = ctx.document.createElement("div");
+  phone.textContent = "No matches";
+  ctx.palPaintEmpty(phone, true, true);
+  assert.strictEqual(phone.children.length, 0);
+  assert.strictEqual(phone.textContent, "No matches");
+  ctx.palPaintEmpty(empty, true, true);
+  assert.strictEqual(empty.children.length, 0, "a window that became a phone drops the glyph");
+});

@@ -80,13 +80,28 @@ test("the view toggle: each item has an icon and its word, the word is the item'
   for (const k of ["preview", "code", "changes"]) {
     const b = tab.seg[k];
     assert.equal(b.children.length, 2, k + ": an icon and a word");
-    assert.equal(b.children[0].attrs.class, "dk-seg-ic");
+    assert.equal(b.children[0].attrs.class, "ui-icon dk-seg-ic");
     assert.equal(b.children[1].className, "dk-seg-t");
   }
   assert.equal(tab.seg.code.textContent, "Code");
   assert.equal(tab.seg.code.title, "Code", "the word is also the tooltip, for the bar that shows the icon only");
   assert.equal(tab.seg.preview.textContent, "Preview");
   assert.equal(tab.seg.changes.textContent, "Changes");
+});
+
+test("the dock bar's glyphs are the vendored set's: view toggle, mode toggle, Follow and the more menu", async () => {
+  const p = page();
+  const tab = await p.open("/p/a.go");
+  const glyph = (n) => [n.children[0].getAttribute("data-icon"), n.children[0].getAttribute("width")];
+  assert.deepEqual(["preview", "code", "changes"].map((k) => glyph(tab.seg[k])[0]), ["file-text", "code", "diff"]);
+  const item = p.get("editorDiffSegItem");
+  assert.deepEqual(glyph(item("Inline", "inline", () => {})), ["square-equal", "14"]);
+  assert.deepEqual(glyph(item("Side by side", "side", () => {})), ["columns-2", "14"]);
+  assert.deepEqual(glyph(item("Image", "image", () => {})), ["image", "14"]);
+  assert.deepEqual(glyph(item("Swipe", "swipe", () => {})), ["square-split-horizontal", "14"]);
+  assert.deepEqual(glyph(item("Onion skin", "onion", () => {})), ["layers", "14"]);
+  assert.deepEqual(glyph(tab.followBtn), ["eye", "14"]);
+  assert.deepEqual(glyph(tab.moreBtn), ["ellipsis", "14"]);
 });
 
 test("Follow has the eye and its word in a span of its own, which the narrow bar hides", async () => {

@@ -4,6 +4,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { iconStubs } = require("./iconpage.js");
 
 // The desktop Settings frame (UI plan 4, #174, Task 1; frame M2, digest-design §B1): one 212px nav on every
 // tab with Sign out… at its foot, no top bar, and a content column that starts 32px right of the nav and is
@@ -222,7 +223,7 @@ test("the nav order: Trusted hosts (#348) sits after Appearance and before About
 
 test("Sign out… is a neutral nav item at the nav foot, desktop only", () => {
   const tabs = HTML.slice(HTML.indexOf('id="settings-tabs"'), HTML.indexOf('<div class="dbd split" id="manage"'));
-  const m = /<button\b([^>]*)\bid="set-signout"([^>]*)>([^<]*)<\/button>/.exec(tabs);
+  const m = /<button\b([^>]*)\bid="set-signout"([^>]*)>(?:<svg[^>]*><\/svg>)?([^<]*)<\/button>/.exec(tabs);
   assert.ok(m, "button#set-signout is a child of the nav");
   assert.strictEqual(m[3], "Sign out…", "U+2026, as the frame writes it (§A1)");
   const attrs = m[1] + m[2];
@@ -441,6 +442,7 @@ function makeDom({ page = true, version = "CuliBox v0.24.2 · commit abc1234", a
   };
   const ctx = {
     document: doc, console,
+    ...iconStubs(() => new FNode("svg")),
     acctNew: () => calls.push("acctNew"),
     createToken: () => calls.push("createToken"),
     openBugReport: () => calls.push("openBugReport"),
@@ -693,11 +695,13 @@ test("Esc ✕ is a button named Close (Esc), not data-close", () => {
   assert.deepStrictEqual(classesOf(b), ["btn", "btn-ghost", "btn-sm", "set-esc"]);
   assert.strictEqual(b.getAttribute("aria-label"), "Close (Esc)");
   assert.strictEqual(b.getAttribute("title"), "Close (Esc)");
-  // Mono "Esc" (the kit's .kbd-hint) then ✕ U+2715: frame A9.
+  // Mono "Esc" (the kit's .kbd-hint) then the shared x glyph at 12 (#168; the ✕ text is gone): frame A9.
   assert.deepStrictEqual(b.children.map((c) => [c.nodeType, c.tag || "", classesOf(c).join(" "), c.textContent]), [
     [1, "span", "kbd-hint", "Esc"],
-    [3, "", "", "✕"],
+    [1, "svg", "ui-icon", ""],
   ]);
+  assert.deepStrictEqual([b.children[1].getAttribute("data-icon"), b.children[1].getAttribute("width")], ["x", "12"]);
+  assert.ok(!b.textContent.includes("✕"));
   // desktop.css hides [data-close] (Done is modal chrome), so the page's own close must not carry it.
   assert.strictEqual(b.hasAttribute("data-close"), false);
   assert.deepStrictEqual(b.dataset, {});
@@ -1015,7 +1019,7 @@ test("Agent accounts and About, which have no frame, put their body in one kit c
   assert.strictEqual(decls(rows[1]).get("border-top"), "1px solid var(--line)");
   assert.strictEqual(decls(rows[2]).get("border-top"), "1px solid var(--line)");
   assert.strictEqual(decls(rows[0]).get("display"), "block");
-  assert.match(HTML, /<p id="about-runtime"><\/p>\s*<p><button type="button" class="btn" id="kbd-open-about">Keyboard shortcuts<\/button><\/p>\s*<p class="hint">Something not working\?/);
+  assert.match(HTML, /<p id="about-runtime"><\/p>\s*<div id="about-image" hidden><\/div>\s*<p><button type="button" class="btn" id="kbd-open-about">Keyboard shortcuts<\/button><\/p>\s*<p class="hint">Something not working\?/);
 });
 
 test("desktop.css says Esc ✕ closes the page now (the stale comment is reworded)", () => {
@@ -1166,11 +1170,11 @@ test("Edit sits beside the value, on its first line, and a row does not light up
 
 // ---- Plan 4 gate fix wave: Profiles (DIFF.md §3 P1-P6, digest-design §B2 `.m2-rows` / `.m2-add` / §C6 `.check-box`) ------------------------------------
 
-test("a grant row is the frame's .m2-rows grid: 52px, the value, a 196px status column, 16px between, 10px between rows (P1)", () => {
+test("a grant row is the frame's .m2-rows grid: 72px (room for a 14px kind glyph), the value, a 196px status column, 16px between, 10px between rows (P1)", () => {
   assert.strictEqual(bdecls(PV + " .pfv-rows").get("gap"), "10px", "§B2 `.m2-rows` row-gap 10px (it was 12px)");
   const row = bdecls(PV + " .pfv-row");
   assert.strictEqual(row.get("display"), "grid");
-  assert.strictEqual(row.get("grid-template-columns"), "52px minmax(0, 1fr) 196px", "three tracks: an empty fourth one would still cost a 16px gap in every read row");
+  assert.strictEqual(row.get("grid-template-columns"), "72px minmax(0, 1fr) 196px", "three tracks: an empty fourth one would still cost a 16px gap in every read row");
   assert.strictEqual(row.get("column-gap"), "16px");
   assert.strictEqual(row.get("align-items"), "start");
   // Remove / Undo and the "Set in ..." note of a row in edit take a trailing auto track of their own (column 4, the implicit one), as they did.
@@ -1179,8 +1183,20 @@ test("a grant row is the frame's .m2-rows grid: 52px, the value, a 196px status 
   }
   // The narrow steps still put them in column 3 (863) or under the content (440): they come after the base and are not touched.
   const steps = parseRules(DESK_CSS).filter((r) => r.selector.startsWith(PV + " .pfv-row"));
-  assert.ok(steps.some((r) => r.decls.get("grid-template-columns") === "52px minmax(0, 1fr) auto"), "863px: 52px, content, auto");
+  assert.ok(steps.some((r) => r.decls.get("grid-template-columns") === "72px minmax(0, 1fr) auto"), "863px: 72px, content, auto");
   assert.ok(steps.some((r) => r.decls.get("grid-template-columns") === "52px minmax(0, 1fr)"), "440px: 52px, content");
+});
+
+test("profile kind column is 72px: a glyph-less kind word is indented 20px, the glyph has 6px after it, and the 440px step keeps 52px with no glyph and no indent (#168 G1)", () => {
+  assert.strictEqual(bdecls(PV + " .pfv-row").get("grid-template-columns"), "72px minmax(0, 1fr) 196px");
+  assert.strictEqual(bdecls(PV + " .pfv-k:not(.has-ic)").get("padding-left"), "20px");
+  assert.strictEqual(bdecls(PV + " .pfv-k .ui-icon").get("margin-right"), "6px");
+  assert.strictEqual(bdecls(PV + " .pfv-k.has-ic").get("white-space"), "nowrap");
+  const steps = parseRules(DESK_CSS).filter((r) => r.selector.startsWith(PV + " .pfv-"));
+  const at = (sel) => steps.filter((r) => r.selector === PV + " " + sel);
+  assert.ok(at(".pfv-row").some((r) => r.decls.get("grid-template-columns") === "52px minmax(0, 1fr)"), "440px keeps the 52px column");
+  assert.ok(at(".pfv-k:not(.has-ic)").some((r) => r.decls.get("padding-left") === "0"), "no indent in a 52px column");
+  assert.ok(at(".pfv-k .ui-icon").some((r) => r.decls.get("display") === "none"), "the glyph steps aside in a 52px column, the word stays");
 });
 
 test("a row's kind word, status and mono part are 12/18, as the frame's t-sm lines (P2)", () => {

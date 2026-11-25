@@ -12,10 +12,20 @@ import (
 
 // bootoutPolls × bootoutEvery is how long install and uninstall wait for
 // launchd to finish tearing a job down: bootout returns before it has, and a
-// bootstrap in that window fails.
+// bootstrap in that window fails. serve's stop first lets open egress tunnels
+// finish (up to 10 s on darwin, #362) and launchd kills it about 20 s after
+// SIGTERM, so 30 s covers it.
 const (
-	bootoutPolls = 20
+	bootoutPolls = 120
 	bootoutEvery = 250 * time.Millisecond
+)
+
+// stopTimeoutSec is the systemd unit's TimeoutStopSec: serve's stop first lets
+// open egress tunnels finish for up to 60 s (#362). manageTimeout bounds an
+// install or uninstall, whose restart or stop waits for that stop.
+const (
+	stopTimeoutSec = 90
+	manageTimeout  = (stopTimeoutSec + 30) * time.Second
 )
 
 // Reachable checks that the supervisor can be asked at all, before anything is
@@ -79,7 +89,7 @@ func (p Platform) Install(ctx context.Context, s Spec) error {
 	if err := WriteUnit(path, data); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, manageTimeout)
 	defer cancel()
 	if p.GOOS == "darwin" {
 		if err := p.bootout(ctx); err != nil {
@@ -118,7 +128,7 @@ func (p Platform) Uninstall(ctx context.Context) (removed bool, err error) {
 	case Foreign:
 		return false, fmt.Errorf("%s: %w", path, ErrForeign)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, manageTimeout)
 	defer cancel()
 	if p.GOOS == "darwin" {
 		if err := p.bootout(ctx); err != nil {

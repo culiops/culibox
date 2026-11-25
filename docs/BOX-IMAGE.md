@@ -8,7 +8,7 @@ test fails when the two drift apart.
 
 ## Base image
 
-`node:24-bookworm-slim`, pinned by digest `sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5`.
+`node:24-bookworm-slim`, pinned by digest `sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54`.
 It carries Node.js, npm and the Debian packages of the base itself, which change only when this digest is
 bumped.
 
@@ -37,7 +37,7 @@ bumped.
 | mcp-grafana | 2.0.0 | MCP server | github.com/grafana/mcp-grafana releases | sha256 per arch, pinned |
 | @sentry/mcp-server | 0.42.0 | MCP server | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here, and its dependencies resolve at build time |
 | mcp-atlassian | 0.23.1 | MCP server | PyPI | pip hash lock per arch (--require-hashes, wheels only) |
-| Claude Code (@anthropic-ai/claude-code) | 2.1.311 | tool | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here, and its dependencies resolve at build time |
+| Claude Code (@anthropic-ai/claude-code) | 2.1.325 | tool | npm registry | version pin only: npm checks the registry's integrity, no hash is pinned here, and its dependencies resolve at build time |
 
 ## Debian packages
 

@@ -287,3 +287,20 @@ test("#341: the Read & write card says boxes can change and delete files there, 
   assert.ok(call.includes('mode !== "ro", pick'), "Read & write is on unless the add asked for read only");
   assert.ok(src.includes('mode: mode === "ro" ? "ro" : "rw"'), "the default mode is rw");
 });
+
+// The data row's lock is the vendored lock; it is an image alone (nothing beside it says why the row cannot change), so it keeps its name.
+test("VM folders lock keeps its name", () => {
+  const vm = require("node:vm");
+  const { Node } = require("./fakedom.js");
+  const doc = { createElement: (t) => new Node(t), createElementNS: (_ns, t) => new Node(t) };
+  const ctx = vm.createContext({ document: doc, console });
+  const read = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "vmfolders.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
+  const lock = new vm.Script("vmfLock()").runInContext(ctx);
+  assert.strictEqual(lock.getAttribute("data-icon"), "lock");
+  assert.strictEqual(lock.getAttribute("role"), "img");
+  assert.strictEqual(lock.getAttribute("aria-label"), "Always shared, set by CuliBox");
+  assert.strictEqual(lock.getAttribute("aria-hidden"), null);
+  assert.deepStrictEqual(["width", "height", "viewBox"].map((k) => lock.getAttribute(k)), ["12", "12", "0 0 24 24"]);
+  assert.match(lock.getAttribute("class"), /\bvmf-lock\b/, "the stylesheet's hook stays");
+});

@@ -1,0 +1,135 @@
+"use strict";
+// The concept -> glyph maps of #168, pinned as literal expected values copied from the design kit's
+// GLYPHS.md (docs/superpowers is absent in CI, so the table lives here). One concept, one glyph.
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const maps = require("../static/iconmap.js");
+const { ICON_LOCKED, ICON_ACTION, ICON_NAV, ICON_STATUS, ICON_RESOURCE, ICON_REACH, ICON_MENU, iconOf } = maps;
+
+test('ICON_LOCKED equals GLYPHS.md "Locked by earlier shipped work"', () => {
+  assert.deepStrictEqual({ ...ICON_LOCKED }, {
+    "agent-claude": "si:claude",
+    shell: "terminal",
+    "tier-box": "box",
+    "tier-clone": "copy",
+    "tier-host": "triangle-alert",
+    folder: "folder",
+    "folder-open": "folder-open",
+    expand: "chevron-right",
+    collapse: "chevron-down",
+    new: "plus",
+  });
+});
+
+test('ICON_ACTION equals GLYPHS.md "Shared actions"', () => {
+  assert.deepStrictEqual({ ...ICON_ACTION }, {
+    add: "plus",
+    edit: "pencil",
+    rename: "pencil-line",
+    delete: "trash-2",
+    "copy-text": "clipboard-copy",
+    download: "download",
+    upload: "upload",
+    refresh: "refresh-cw",
+    "open-new-tab": "external-link",
+    filter: "list-filter",
+    search: "search",
+    close: "x",
+    more: "ellipsis",
+  });
+  assert.notEqual(ICON_ACTION["copy-text"], "copy");
+});
+
+test('ICON_NAV equals GLYPHS.md "Navigation"', () => {
+  assert.deepStrictEqual({ ...ICON_NAV }, {
+    audit: "scroll-text",
+    analytics: "chart-no-axes-column",
+    settings: "settings",
+    palette: "search",
+    files: "folder-tree",
+    activity: "activity",
+    access: "shield",
+  });
+});
+
+test('ICON_STATUS equals GLYPHS.md "Status"', () => {
+  assert.deepStrictEqual({ ...ICON_STATUS }, {
+    info: "info",
+    warning: "circle-alert",
+    error: "circle-x",
+    success: "circle-check",
+    refused: "ban",
+    pending: "loader-circle",
+    locked: "lock",
+    "signed-out": "log-in",
+    unreachable: "wifi-off",
+  });
+  assert.notEqual(ICON_STATUS.warning, "triangle-alert");
+});
+
+test('ICON_RESOURCE equals GLYPHS.md "Resources and credentials"', () => {
+  assert.deepStrictEqual({ ...ICON_RESOURCE }, {
+    aws: "cloud",
+    aws_legacy: "cloud",
+    github: "si:github",
+    token: "key-round",
+    domain: "globe",
+    folder: "folder",
+    files: "files",
+    credential: "key-round",
+    resource: "circle-dashed",
+  });
+});
+
+test("ICON_REACH is G1 22-28: the seven reach rows that draw a glyph; Files, Original, Work home, Network and Account have none", () => {
+  assert.deepStrictEqual({ ...ICON_REACH }, {
+    aws: "cloud", github: "si:github", tokens: "key-round", reads: "folder", imports: "files", domains: "globe", store: "lock",
+  });
+  for (const id of ["files", "original", "workhome", "network", "account", "constructor", "__proto__"]) assert.strictEqual(iconOf(ICON_REACH, id), "", id);
+});
+
+test("ICON_PANE_CTL is G4 25: maximize and, while the pane is pinned, minimize", () => {
+  assert.deepStrictEqual({ ...maps.ICON_PANE_CTL }, { maximize: "maximize", restore: "minimize" });
+});
+
+test("every map is frozen and prototype-free", () => {
+  const names = Object.keys(maps).filter((k) => k.startsWith("ICON_"));
+  assert.ok(names.length >= 10, "the S1 maps: " + names.join(","));
+  for (const n of names) {
+    assert.ok(Object.isFrozen(maps[n]), n + " is frozen");
+    assert.equal(Object.getPrototypeOf(maps[n]), null, n + " has no prototype");
+  }
+});
+
+test("iconOf ignores prototype keys", () => {
+  assert.equal(iconOf(ICON_ACTION, "constructor"), "");
+  assert.equal(iconOf(ICON_ACTION, "__proto__", "x"), "x");
+  assert.equal(iconOf(ICON_ACTION, "close"), "x");
+  assert.equal(iconOf(ICON_ACTION, "nope", "fb"), "fb");
+});
+
+test("one concept one glyph: tier glyphs are not reused", () => {
+  for (const m of [ICON_ACTION, ICON_MENU, ICON_STATUS]) {
+    for (const v of Object.values(m)) assert.ok(!["copy", "triangle-alert", "box"].includes(v), v);
+  }
+});
+
+test("ICON_TOAST: warn and error carry the status glyphs (G4 80, 81); info and pending have none", () => {
+  assert.deepStrictEqual({ ...maps.ICON_TOAST }, { warn: "circle-alert", error: "circle-x" });
+  assert.equal(maps.ICON_TOAST.warn, ICON_STATUS.warning);
+  assert.equal(maps.ICON_TOAST.error, ICON_STATUS.error);
+  assert.equal(iconOf(maps.ICON_TOAST, "info"), "");
+  assert.equal(iconOf(maps.ICON_TOAST, "pending"), "");
+});
+
+test("emptyState kinds: one helper, four declared kinds (G4 90, 91, 78); hero for the full-surface empties only", () => {
+  assert.deepStrictEqual({ ...maps.ICON_EMPTY }, { none: "app-window", first: "box", changes: "git-compare", matches: "search-x" });
+  assert.deepStrictEqual(maps.emptyState("none"), { icon: "app-window", hero: true });
+  assert.deepStrictEqual(maps.emptyState("first"), { icon: "box", hero: true });
+  assert.deepStrictEqual(maps.emptyState("changes"), { icon: "git-compare", hero: false });
+  assert.deepStrictEqual(maps.emptyState("matches"), { icon: "search-x", hero: false });
+  assert.strictEqual(maps.emptyState("constructor"), null);
+  assert.strictEqual(maps.emptyState("__proto__"), null);
+  assert.strictEqual(maps.emptyState("nope"), null);
+  assert.strictEqual(maps.emptyState(undefined), null);
+});

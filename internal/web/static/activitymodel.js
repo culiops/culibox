@@ -27,6 +27,9 @@ const actStr = (v) => (typeof v === "string" ? v : "");
 const actNum = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const actPad = (n) => String(n).padStart(2, "0");
 
+// iconmap.js's lookup and maps: page globals in the browser, required under node (as auditmodel.js does).
+const actIconMaps = () => (typeof iconOf === "function" ? { iconOf, ICON_ACT_TOOL, ICON_ACT_TOOL_OTHER, ICON_ACT_KIND, ICON_CRED_PROVIDER } : require("./iconmap.js"));
+
 // filterKind: which filter pill an event belongs to. A tool that is neither a
 // command nor a file (WebFetch, an MCP tool, Task) is "other": only All shows it.
 function filterKind(e) {
@@ -138,6 +141,33 @@ function actKindLabel(e) {
   }
 }
 
+// actKindIcon: the glyph of a row's Kind (G2 27-37), from the declared kind, and for a tool row the declared `tool`, never
+// from the words. A tool the map does not name is mcp__* -> plug, else wrench; a credential row takes its provider's glyph
+// (key-round when the server sent none, an older one); an unknown kind draws none.
+function actKindIcon(e) {
+  const m = actIconMaps();
+  switch (e.kind) {
+    case "tool": {
+      const t = actStr(e.tool);
+      return m.iconOf(m.ICON_ACT_TOOL, t) || m.ICON_ACT_TOOL_OTHER[t.startsWith("mcp__") ? "mcp" : "other"];
+    }
+    case "credential": return m.iconOf(m.ICON_CRED_PROVIDER, e.provider, "key-round");
+    default: return m.iconOf(m.ICON_ACT_KIND, e.kind);
+  }
+}
+
+// actOutcomeIcon: a refusal (ban) or an error (circle-x) only (G2 21, 22). A success draws none (left-out s: nearly every
+// tool row would carry the same check), nor does a granted or extended write window, which is red but not an error (l).
+function actOutcomeIcon(e) {
+  const st = actStr(e.state);
+  switch (e.kind) {
+    case "credential": return st === "refused" ? "ban" : st === "failed" ? "circle-x" : "";
+    case "approval": return st === "refused" ? "ban" : "";
+    case "tool": return st === "error" ? "circle-x" : "";
+    default: return "";
+  }
+}
+
 function actRow(e, nowMs) {
   const detail = actStr(e.detail) || (e.kind === "clear" ? "conversation cleared" : "");
   return {
@@ -147,6 +177,8 @@ function actRow(e, nowMs) {
     kind: actKindLabel(e),
     detail,
     outcome: { text: outcomeText(e, nowMs), tone: actTone(e) },
+    kindIcon: actKindIcon(e),
+    outcomeIcon: actOutcomeIcon(e),
     cls: e.kind === "you" || e.kind === "clear" ? "you" : "",
   };
 }
@@ -230,6 +262,8 @@ function activityModel(inp) {
       kind: "Asks to run",
       detail: actStr(s.ask_full) || actStr(s.ask) || "Waiting on a prompt in the terminal.",
       outcome: { text: outcomeText(ask, nowMs), tone: "amber" },
+      kindIcon: actKindIcon(ask),
+      outcomeIcon: "",
       cls: "ask",
     });
   }

@@ -161,10 +161,17 @@ function actTiles(tiles) {
 // (a refusal is containment working: muted), amber is the ask only, and a diff's +a −d has no tone.
 const ACT_TONE_CLS = { ok: "c-ok", err: "c-red", amber: "c-amber", muted: "sub", add: "" };
 
+// actGlyph: a cell's glyph (14, the model's kindIcon / outcomeIcon: declared fields, never the words) before its word; it takes
+// the cell's colour and "" draws none (the cell's text is unchanged).
+function actGlyph(td, icon) {
+  if (icon) td.insertBefore(uiIcon(icon, { size: 14 }), td.firstChild);
+  return td;
+}
+
 // actOutcome: the right-aligned cell, its text one word of one colour role.
-function actOutcome(o) {
+function actOutcome(o, icon) {
   const tone = ACT_TONE_CLS[o.tone];
-  return actEl("td", tone ? "num " + tone : "num", o.text);
+  return actGlyph(actEl("td", tone ? "num " + tone : "num", o.text), icon);
 }
 
 // actRowEl: one event as the frame draws it. Time and Kind are muted, except the You row's Kind (foreground, 500)
@@ -179,11 +186,11 @@ function actRowEl(r) {
   // The Kind cell is 80px and ellipsizes: an MCP tool is `mcp__server__tool`, so the whole kind rides in its title.
   const kind = actEl("td", you ? "w-500" : r.cls === "ask" ? "c-amber" : "sub", r.kind);
   kind.title = r.kind;
-  tr.appendChild(kind);
+  tr.appendChild(actGlyph(kind, r.kindIcon));
   const det = actEl("td", "act-det");
   det.appendChild(actEl("span", you ? "w-500" : cleared ? "muted" : "mono t-sm", r.detail));
   tr.appendChild(det);
-  tr.appendChild(actOutcome(r.outcome));
+  tr.appendChild(actOutcome(r.outcome, r.outcomeIcon));
   return tr;
 }
 

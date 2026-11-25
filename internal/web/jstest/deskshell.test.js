@@ -67,6 +67,25 @@ test("rowChip: box, clone and host carry an icon; write does not", () => {
   assert.equal(d.rowChip({ ...idle, clone_of: "/r" }, NOW, "runc").text, "host", "a clone chip is for a boxed session only");
 });
 
+test("header chip declares its tier icon", () => {
+  const model = (session, narrow) => d.paneHeaderModel({ tab: { kind: "terminal" }, session, nowMs: NOW, boxRuntime: "runc", narrow: !!narrow });
+  const live = { ...working, aws_connections: [{ name: "a", label: "a", account_id: "1", role_arn: "arn:aws:iam::1:role/r", elevated_until: FUTURE }] };
+  assert.equal(model(idle).chips[0].icon, "host", "the host tier");
+  assert.equal(model({ ...working, clone_of: "/r" }).chips[0].icon, "clone", "a boxed session with a clone_of");
+  assert.equal(model(working).chips[0].icon, "box");
+  assert.equal(model({ ...idle, clone_of: "/r" }).chips[0].icon, "host", "a clone is a boxed session only, as rowChip");
+  assert.equal(model(live).chips.find((c) => c.tone === "write").icon, undefined, "the write chip has no icon");
+  const cloud = model({ ...working, aws_connections: [{ name: "a", label: "a", account_id: "1", role_arn: "arn:aws:iam::1:role/r" }] }).chips.find((c) => c.tone === "cloud");
+  assert.ok(cloud, "a read credential makes the cloud chip");
+  assert.equal(cloud.icon, undefined, "the cloud chip has no icon");
+  assert.equal(model(idle, true).chips[0].icon, "host", "narrow keeps the same icon");
+  assert.equal(model({ ...working, clone_of: "/r" }, true).chips[0].icon, "clone");
+  assert.deepEqual(d.deskContainmentChip({ ...working, clone_of: "/r" }, "runc").icon, "clone");
+  assert.equal(d.deskContainmentChip({ ...working, exited: true }, "runc"), null);
+  const row = (s) => d.rowChip(s, NOW, "runc").icon;
+  for (const s of [idle, working, { ...working, clone_of: "/r" }]) assert.equal(row(s), d.deskContainmentChip(s, "runc").icon, "rowChip and the header chip read one rule");
+});
+
 test("deskRowKind: terminal for a shell profile, the Claude mark from the session, else nothing", () => {
   assert.deepEqual(d.deskRowKind({ claude: false }, { bin: "/bin/zsh" }), { kind: "shell", title: "zsh shell" });
   assert.deepEqual(d.deskRowKind({ claude: true }, { bin: "claude" }), { kind: "claude", title: "Claude Code session" });
@@ -75,19 +94,11 @@ test("deskRowKind: terminal for a shell profile, the Claude mark from the sessio
   assert.equal(d.deskRowKind({ claude: false }, { bin: "codex" }), null);
 });
 
-test("svgicon: the Lucide glyphs are 24-unit shape lists", () => {
+test("svgicon: the hand-drawn 24-unit glyph lists are gone, every glyph is uiIcon's", () => {
   const icons = require("../static/svgicon.js");
-  for (const k of ["SVG_FOLDER_24", "SVG_CHEVRON_DOWN_24", "SVG_CHEVRON_RIGHT_24", "SVG_PLUS_24", "SVG_BOX_24", "SVG_CLONE_24", "SVG_HOST_24"]) {
-    const g = icons[k];
-    assert.ok(Array.isArray(g) && g.length > 0, k);
-    for (const sh of g) assert.ok(Array.isArray(sh) && typeof sh[0] === "string" && typeof sh[1] === "object", k);
-  }
-  assert.equal(icons.SVG_CLONE_24[0][0], "rect");
-  assert.equal(typeof icons.svgIcon24, "function");
+  assert.deepEqual(Object.keys(icons).sort(), ["paintStaticIcons", "svgIcon", "svgShape", "uiIcon"]);
   const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "svgicon.js"), "utf8");
-  const notes = src.split("\n").filter((l) => l.includes("lucide.dev"));
-  assert.equal(notes.filter((l) => l.includes("ISC")).length >= 1, true);
-  assert.equal(src.split("\n").filter((l) => /^\/\/.*lucide\.dev/.test(l) && /ISC/.test(l) && /SVG_FOLDER_24/.test(l)).length, 1, "one ISC comment line covers the new glyphs");
+  assert.ok(!/SVG_[A-Z_]*_24|svgIcon24/.test(src));
 });
 
 test("rowSubline: amber needs-you text, else summary or the activity word", () => {
@@ -1077,4 +1088,60 @@ test("rowSubline: an ended session reads 'ended', a crashed one 'crashed' (the p
   // a live session is untouched: summary or the activity word
   assert.deepEqual(d.rowSubline({ activity: "working", summary: "fixing" }), { text: "fixing", amber: false });
   assert.deepEqual(d.rowSubline({ activity: "done", summary: "all fixed" }), { text: "all fixed", amber: false });
+});
+
+// ---- the pane's tab switcher rows (#365) -------------------------------------------------------------------------------
+const tabT = (id) => ({ kind: "terminal", id, title: () => "Claude Code: the title says nothing" });
+const shellProfile = { name: "sh", bin: "/bin/bash" };
+const claudeProfile = { name: "cc", bin: "claude" };
+
+test("tabSwitchFacts: kind from declared fields: the Claude mark, a shell, a file, else generic", () => {
+  const sessions = [
+    { id: "c", agent: "cc", claude: true, runtime: "box" },
+    { id: "s", agent: "sh", claude: false, runtime: "host" },
+    { id: "o", agent: "codex", claude: false, runtime: "box" },
+  ];
+  const profiles = [claudeProfile, shellProfile];
+  assert.equal(d.tabSwitchFacts(tabT("c"), sessions, profiles).kind, "claude");
+  assert.equal(d.tabSwitchFacts(tabT("s"), sessions, profiles).kind, "shell");
+  assert.equal(d.tabSwitchFacts(tabT("o"), sessions, profiles).kind, "generic", "an agent that is neither Claude nor a shell");
+  assert.equal(d.tabSwitchFacts(tabT("gone"), sessions, profiles).kind, "generic", "a session the list does not hold");
+  assert.equal(d.tabSwitchFacts({ kind: "viewer", id: "v", path: "/a/claude.sh", title: () => "claude.sh" }, sessions, profiles).kind, "file");
+  assert.equal(d.tabSwitchFacts({ kind: "something-new", id: "x", title: () => "x" }, sessions, profiles).kind, "generic");
+  // Never from the title: a shell session titled like Claude is a shell, a Claude one titled "bash" is Claude.
+  const named = [{ id: "s", agent: "sh", claude: false, runtime: "host", name: "claude" }, { id: "c", agent: "cc", claude: true, runtime: "box", name: "bash" }];
+  assert.equal(d.tabSwitchFacts({ kind: "terminal", id: "s", title: () => "claude" }, named, profiles).kind, "shell");
+  assert.equal(d.tabSwitchFacts({ kind: "terminal", id: "c", title: () => "bash" }, named, profiles).kind, "claude");
+  // Before the profile list lands a Claude session still knows itself; a shell is generic until then.
+  assert.equal(d.tabSwitchFacts(tabT("c"), sessions, []).kind, "claude");
+  assert.equal(d.tabSwitchFacts(tabT("s"), sessions, undefined).kind, "generic");
+});
+
+test("tabSwitchFacts: a session's tier is its runtime and clone_of (Host, Box, Box clone); a file or an unknown session has none", () => {
+  const sessions = [
+    { id: "h", agent: "cc", claude: true, runtime: "host" },
+    { id: "b", agent: "cc", claude: true, runtime: "box" },
+    { id: "k", agent: "cc", claude: true, runtime: "box", clone_of: "/home/u/repo" },
+    { id: "hk", agent: "cc", claude: true, runtime: "host", clone_of: "/home/u/repo" },
+    { id: "x", agent: "sh", runtime: "box", exited: true },
+  ];
+  const tier = (id) => d.tabSwitchFacts(tabT(id), sessions, [claudeProfile, shellProfile]).tier;
+  assert.deepEqual(tier("h"), { key: "host", label: "Host" });
+  assert.deepEqual(tier("b"), { key: "box", label: "Box" });
+  assert.deepEqual(tier("k"), { key: "clone", label: "Box clone" });
+  assert.deepEqual(tier("hk"), { key: "host", label: "Host" }, "a clone is a boxed session only, as the sidebar's chip");
+  assert.deepEqual(tier("x"), { key: "box", label: "Box" }, "an ended session's tab still says where it ran");
+  assert.equal(tier("gone"), null, "not in the list: no tier, never a guess");
+  assert.equal(d.tabSwitchFacts({ kind: "viewer", id: "v", path: "/a/b.go", title: () => "b.go" }, sessions, []).tier, null);
+  assert.equal(d.tabSwitchFacts(null, sessions, []).kind, "generic");
+});
+
+test("the tier glyphs are ICON_LOCKED's, so a tier looks the same on the sidebar chip, New session and the tab switcher", () => {
+  const { ICON_LOCKED } = require("../static/iconmap.js");
+  assert.deepEqual(["box", "clone", "host"].map((k) => ICON_LOCKED["tier-" + k]), ["box", "copy", "triangle-alert"]);
+  const dir = require("node:path").join(__dirname, "..", "static");
+  const read = (f) => require("node:fs").readFileSync(require("node:path").join(dir, f), "utf8");
+  assert.match(read("tierpick.js"), /ICON_LOCKED\["tier-" \+ c\.key\]/);
+  assert.match(read("app.js"), /ICON_LOCKED\["tier-" \+ name\]/);
+  assert.ok(read("deskshell.js").includes("ICON_LOCKED") && !/SVG_|TP_ICONS/.test(read("deskshell.js")), "deskshell.js names ICON_LOCKED, not the retired lists");
 });

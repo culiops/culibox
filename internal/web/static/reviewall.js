@@ -36,7 +36,6 @@ const RA_EST_BASE = 72;        // px: a section with no editor and no measure ye
 const RA_EST_LINE = 18;
 const RA_EST_MAX = 480;
 const RA_LAND_MS = 10000;      // a landing that was not taken (the section scrolled away before its diff came) is forgotten after this
-const RA_ICON_CARET = [["path", { d: "M4 5.5l3 3 3-3" }]];
 
 let raTab = null;       // the tab on screen, the one F7 and a row's click are for
 
@@ -182,8 +181,8 @@ class ReviewAllTab {
   buildActs() {
     this.actsEl = raEl("div", "dk-vact");
     const el = editorDiffSeg("Diff layout");
-    const inline = editorDiffSegItem("Inline", DG_ICON_INLINE, () => diffModeSet("inline"));
-    const side = editorDiffSegItem("Side by side", DG_ICON_SIDE, () => diffModeSet("side"));
+    const inline = editorDiffSegItem("Inline", "inline", () => diffModeSet("inline"));
+    const side = editorDiffSegItem("Side by side", "side", () => diffModeSet("side"));
     side.title = "Side by side (shows inline by itself when the dock is too narrow for two sides)";
     el.append(inline, side);
     this.modeSeg = { el, inline, side };
@@ -302,7 +301,7 @@ class ReviewAllTab {
     const head = raEl("div", "dk-sec-h");
     const caret = raEl("button", "btn btn-ghost btn-icon btn-sm dk-sec-caret");
     caret.type = "button";
-    caret.append(svgIcon(RA_ICON_CARET, { icon: "caret", size: "14" }));
+    caret.append(uiIcon(iconOf(ICON_DOCK_VIEW, "caret"), { size: 14 }));
     caret.onclick = () => this.collapse(sec, !sec.collapsed);
     const ck = raEl("button", "dk-ck dk-sec-ck");
     ck.type = "button";
@@ -335,7 +334,7 @@ class ReviewAllTab {
   paintHead(sec, row, marks, files, pend) {
     const p = sec.parts;
     const set = (n, t) => { if (n.textContent !== t) n.textContent = t; };
-    set(p.ic, typeof iconFor === "function" ? iconFor(row.name, false, false) : "");
+    fileIconInto(p.ic, row.name, false);
     set(p.nm, row.name);
     set(p.dir, row.dir);
     const full = typeof shortPath === "function" ? shortPath(row.path) : row.path;

@@ -421,3 +421,158 @@ test("anXLabels: a very wide window is index mode, where the slots are the bars,
   assert.deepStrictEqual(labels.map((l) => l.text), [days[0], days[10], days[20], days[30]].map((d) => d.day.slice(5)));
   assert.deepStrictEqual(anXLabels(stackedLayout([], "2000-01-01", "2026-08-07"), "2000-01-01", 10), []);
 });
+
+// ---- #168 G3 1, 3-6: Re-scan and the Tools card heads carry their glyphs ----------------------------------------------
+// Each head glyph is keyed on the group's declared `kind` (Go analytics.AttrKey.Kind), never on the words; the rest of the
+// page (card titles, rows, view switch, KPIs) stays plain (legend left-outs a-k).
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const { Node } = require("./fakedom.js");
+const { ICON_SRC } = require("./iconpage.js");
+const { ICON_TOOL_KIND, iconOf } = require("../static/iconmap.js");
+
+const STATIC = path.join(__dirname, "..", "static");
+const readStatic = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
+
+test("ICON_TOOL_KIND is G3 3-6, frozen and prototype-free", () => {
+  assert.deepStrictEqual({ ...ICON_TOOL_KIND }, { mcp_server: "server", plugin: "puzzle", mcp_tool: "plug", skill: "book-open" });
+  assert.ok(Object.isFrozen(ICON_TOOL_KIND));
+  assert.equal(Object.getPrototypeOf(ICON_TOOL_KIND), null);
+  for (const k of ["constructor", "__proto__", "toString", "", "other"]) assert.equal(iconOf(ICON_TOOL_KIND, k), "", k);
+});
+
+// analytics.js and the icon scripts in one vm context, on a fake document; `page` says whether the dialog is the desktop page.
+function anPage(page) {
+  const doc = { readyState: "loading", addEventListener() {} };
+  doc.createElement = (t) => new Node(t, doc);
+  doc.createElementNS = (_ns, t) => new Node(t, doc);
+  doc.createTextNode = (t) => { const n = new Node("#text", doc); n.own = String(t); return n; };
+  const dlg = new Node("dialog", doc);
+  if (page) dlg.className = "as-page";
+  doc.getElementById = (id) => (id === "analytics-modal" ? dlg : null);
+  const ctx = vm.createContext({ console, Array, Object, Math, Date, document: doc });
+  new vm.Script(ICON_SRC + "\n" + readStatic("analytics.js"), { filename: "analytics.js" }).runInContext(ctx);
+  return { ctx, doc };
+}
+const toolRows = (kinds) => kinds.map((k, i) => ({ kind: k, name: "n" + i, records: 5 + i }));
+function toolCards(page, kinds) {
+  const { ctx, doc } = anPage(page);
+  vm.runInContext("AN.data = { tools: " + JSON.stringify(toolRows(kinds)) + " }", ctx);
+  const root = new Node("div", doc);
+  ctx.anTools(root);
+  return root.querySelectorAll(".an-card");
+}
+
+test("a Tools card head draws the glyph of its declared kind at 16, inside the heading before the kind word", () => {
+  const want = { mcp_server: "server", plugin: "puzzle", mcp_tool: "plug", skill: "book-open" };
+  const kinds = Object.keys(want);
+  const cards = toolCards(true, kinds);
+  assert.equal(cards.length, 4);
+  cards.forEach((c, i) => {
+    const head = c.querySelector(".card-head");
+    const h3 = head.querySelector("h3");
+    assert.equal(h3.textContent, kinds[i], "the words are the kind, unchanged");
+    assert.equal(head.querySelectorAll("svg").length, 1, kinds[i]);
+    assert.equal(h3.children[0].tag, "svg", "the glyph is the heading's first child");
+    assert.equal(h3.children[0].getAttribute("data-icon"), want[kinds[i]], kinds[i]);
+    assert.equal(h3.children[0].getAttribute("width"), "16");
+    assert.equal(h3.children[0].getAttribute("aria-hidden"), "true");
+    assert.equal(head.children.length, 1, "the head holds only the heading (no sibling glyph for the flex gap to push away)");
+  });
+});
+
+test("the Tools glyph is 6px from its word: a margin on the h3's glyph, in the desktop page's rules", () => {
+  const css = readStatic("desktop.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(css, /#page-host > #analytics-modal\.as-page \.an-card \.card-head > h3 > \.ui-icon \{ margin-right: 6px; \}/);
+});
+
+test("anToolGroups: a hostile kind gets the default colour string, never a function", () => {
+  for (const kind of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    const [g] = anToolGroups([{ kind, name: "x", records: 3 }]);
+    assert.equal(g.kind, kind);
+    assert.equal(g.color, "var(--accent)", kind);
+    assert.equal(g.items.length, 1);
+  }
+  assert.equal(anToolGroups([{ kind: "skill", name: "x", records: 1 }])[0].color, "var(--an-2)");
+});
+
+test("a Tools card head of an unknown kind keeps its words and draws no glyph", () => {
+  const kinds = ["constructor", "__proto__", "toString", "weird"];
+  const cards = toolCards(true, kinds);
+  assert.equal(cards.length, 4, "a card per group");
+  for (const c of cards) assert.equal(c.querySelector(".card-head").querySelector("svg"), null);
+  assert.equal(cards[0].querySelector(".card-head h3").textContent, "constructor");
+});
+
+test("the Tools card rows stay plain", () => {
+  const cards = toolCards(true, ["skill", "mcp_server"]);
+  for (const c of cards) assert.equal(c.querySelector(".an-card-body").querySelector("svg"), null);
+});
+
+test("the phone's Tools boxes (not the page) draw no glyph", () => {
+  const { ctx, doc } = anPage(false);
+  vm.runInContext("AN.data = { tools: " + JSON.stringify(toolRows(["skill", "plugin", "mcp_tool", "mcp_server"])) + " }", ctx);
+  const root = new Node("div", doc);
+  ctx.anTools(root);
+  assert.equal(root.querySelectorAll("svg").length, 0);
+  assert.equal(root.querySelectorAll("h4").length, 4);
+});
+
+test("card titles stay plain: a titled card (the Overview's h2s) has no glyph", () => {
+  const { ctx } = anPage(true);
+  for (const t of ["Cost over time", "Cost by model", "Cost by project"]) {
+    const card = ctx.anCard(t, "", "h2");
+    assert.equal(card.querySelectorAll("svg").length, 0, t);
+  }
+  assert.equal(ctx.anCard("something", "cap").querySelectorAll("svg").length, 0);
+});
+
+test("Re-scan: #an-rescan holds the refresh-cw placeholder at 14 before its word", () => {
+  const html = readStatic("index.html");
+  const btn = /<button[^>]*id="an-rescan"[^>]*>[\s\S]*?<\/button>/.exec(html);
+  assert.ok(btn, "#an-rescan is in index.html");
+  assert.match(btn[0], /^<button[^>]*>\s*<svg data-uicon="refresh-cw" width="14" height="14" aria-hidden="true"><\/svg>Re-scan<\/button>$/);
+  // The phone's own Re-scan (#analytics-refresh) is unchanged: words only.
+  const ph = /<button[^>]*id="analytics-refresh"[^>]*>[\s\S]*?<\/button>/.exec(html);
+  assert.equal(ph[0].includes("<svg"), false);
+});
+
+test("anRescan keeps the glyph while it says Scanning… and after, and still works on a words-only button", async () => {
+  const { ctx, doc } = anPage(true);
+  const mk = (withIcon) => {
+    const b = new Node("button", doc);
+    if (withIcon) { const s = new Node("svg", doc); s.className = "ui-icon"; b.appendChild(s); }
+    b.own = withIcon ? "" : "Re-scan";
+    if (withIcon) b.appendChild(doc.createTextNode("Re-scan"));
+    return b;
+  };
+  const seen = [];
+  ctx.api = async () => { seen.push(b.textContent + "|" + b.querySelectorAll("svg").length); };
+  ctx.anLoad = async () => {};
+  const b = mk(true);
+  await ctx.anRescan(b);
+  assert.deepEqual(seen, ["Scanning…|1"], "glyph kept, word replaced, while it runs");
+  assert.equal(b.textContent, "Re-scan");
+  assert.equal(b.querySelectorAll("svg").length, 1);
+  assert.equal(b.disabled, false);
+  const p = mk(false);
+  seen.length = 0;
+  ctx.api = async () => { seen.push(p.textContent); };
+  await ctx.anRescan(p);
+  assert.deepEqual(seen, ["Scanning…"]);
+  assert.equal(p.textContent, "Re-scan");
+});
+
+test("anRescan: a rejected request leaves the glyph and the word in place and the button enabled", async () => {
+  const { ctx, doc } = anPage(true);
+  const b = new Node("button", doc);
+  const s = new Node("svg", doc); s.className = "ui-icon";
+  b.append(s, doc.createTextNode("Re-scan"));
+  ctx.api = async () => { throw new Error("boom"); };
+  ctx.anLoad = async () => {};
+  await ctx.anRescan(b);
+  assert.equal(b.textContent, "Re-scan");
+  assert.equal(b.querySelectorAll("svg").length, 1);
+  assert.equal(b.disabled, false);
+});

@@ -212,3 +212,39 @@ func TestCheckUnavailableStore(t *testing.T) {
 		t.Fatalf("Get path = %v %v, want StoredUnavailable", got, err)
 	}
 }
+
+// A Stored value is read for a profile secret only when secret_sources lists
+// the store (#336). StoredOutsideSources says the store holds the name while no
+// store source is configured, so a refusal can name the actual fix.
+func TestStoredOutsideSources(t *testing.T) {
+	st := probeStore{t: t, ids: []string{"MY_TOKEN"}, locked: true}
+	envOnly, err := New([]config.SecretSource{envSrc}, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !envOnly.StoredOutsideSources("MY_TOKEN") {
+		t.Fatal("MY_TOKEN in the store, store not a source: want true (also while the store is locked)")
+	}
+	if envOnly.StoredOutsideSources("OTHER") || envOnly.StoredOutsideSources("bad/name") {
+		t.Fatal("a name the store does not hold: want false")
+	}
+	none, _ := New(nil, st)
+	if !none.StoredOutsideSources("MY_TOKEN") {
+		t.Fatal("no sources at all: want true")
+	}
+	withStore, _ := New([]config.SecretSource{envSrc, storeSrc}, st)
+	if withStore.StoredOutsideSources("MY_TOKEN") {
+		t.Fatal("the store is a source: want false")
+	}
+	noProbe, _ := New([]config.SecretSource{envSrc}, fakeStore{vals: map[string][]byte{"MY_TOKEN": []byte("v")}})
+	if noProbe.StoredOutsideSources("MY_TOKEN") {
+		t.Fatal("a store that cannot list ids is never decrypted for this: want false")
+	}
+	uninit, _ := New([]config.SecretSource{envSrc}, probeStore{t: t, listEr: secretstore.ErrNotInitialized})
+	if uninit.StoredOutsideSources("MY_TOKEN") {
+		t.Fatal("no store yet: want false")
+	}
+	if (*Chain)(nil).StoredOutsideSources("MY_TOKEN") {
+		t.Fatal("nil chain: want false")
+	}
+}

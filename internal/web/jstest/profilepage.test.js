@@ -149,8 +149,6 @@ function page(over) {
     pfCredsView: { store: { initialized: true, locked: false }, aws: [] },
     secretSources: [],
     ghApps: ["acme-app"], refreshCredLists: async () => { calls.push("refreshCredLists"); },
-    // tabs.js draws the dock's glyphs (the ⋯ menu's Duplicate… and Delete… icons); a bare svg stands in here.
-    tabIcon: () => new Node("svg"), dockIcon: () => new Node("svg"),
     awsErrText: (e) => "aws: " + e.message,
     CRED_D4: "The agent will be able to change this AWS account: create, modify and delete resources.",
     CRED_D4_REMEDY: "Use a role without write access as the base and put this one under Elevate.",
@@ -202,7 +200,7 @@ function page(over) {
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["svgicon.js", "kitmenu.js", "fsops.js", "handbackmodel.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "fsops.js", "handbackmodel.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
@@ -238,7 +236,7 @@ test("a nav row is name, lock, then box only when the lock is set", () => {
   const t = page({ profiles: lockedInfra() });
   t.box.pfvRenderNav();
   const items = byCls(t.els["pf-navlist"], "pfv-ni").filter((n) => !hasCls("pfv-ni-add")(n));
-  const order = (n) => n.children.filter((c) => c instanceof Node).map((c) => c.className.split(/\s+/)[0] + (c.tag === "svg" ? "(svg)" : ""));
+  const order = (n) => n.children.filter((c) => c instanceof Node).map((c) => (c.tag === "svg" ? c.className.split(/\s+/).pop() + "(svg)" : c.className.split(/\s+/)[0]));
   assert.deepStrictEqual(order(items[0]), ["pfv-ni-name", "pfv-lock(svg)", "pfv-sr"], "claude: read-only");
   assert.deepStrictEqual(order(items[1]), ["pfv-ni-name"], "aws-ops: bound but not locked");
   assert.deepStrictEqual(order(items[2]), ["pfv-ni-name", "pfv-ni-boxonly"], "infra-terraform: locked");
@@ -262,21 +260,28 @@ test("the nav rebuilds when host_block changes, not when only runtime does", () 
   assert.deepStrictEqual(texts(now, "pfv-ni-boxonly"), ["box only"]);
 });
 
-// N2 (diff M2.1#9): the lock is the frame's glyph, 10x12 (it was 10x11). Only the desktop page draws it: pfvRenderNav and pfvDrawNote run behind
-// pfvOnPage(), and the phone's own list and its note have no lock, so the phone cannot change with it.
-test("the read-only lock is the frame's 10x12 glyph: viewBox 0 0 10 12, rect y 5.5 h 5.5 rx 1, stroke 1, the shackle M3 5.5V3.75a2 2 0 0 1 4 0V5.5", () => {
+// The lock is the vendored lock at 12px (#168). Only the desktop page draws it: pfvRenderNav and pfvDrawNote run behind pfvOnPage(), and the
+// phone's own list and its note have no lock, so the phone cannot change with it.
+test("read-only lock is the vendored lock", () => {
   const t = page();
   t.box.pfvRenderNav();
   const lock = byCls(t.els["pf-navlist"], "pfv-lock")[0];
   assert.strictEqual(lock.tag, "svg");
-  assert.deepStrictEqual(["width", "height", "viewBox", "aria-hidden"].map((k) => lock.getAttribute(k)), ["10", "12", "0 0 10 12", "true"]);
-  const [rect, shackle] = lock.children;
-  assert.deepStrictEqual([rect.tag, rect.getAttribute("x"), rect.getAttribute("y"), rect.getAttribute("width"), rect.getAttribute("height"), rect.getAttribute("rx")], ["rect", "1.5", "5.5", "7", "5.5", "1"]);
-  assert.deepStrictEqual([shackle.tag, shackle.getAttribute("d")], ["path", "M3 5.5V3.75a2 2 0 0 1 4 0V5.5"]);
-  for (const n of [rect, shackle]) assert.deepStrictEqual(["fill", "stroke", "stroke-width"].map((k) => n.getAttribute(k)), ["none", "currentColor", "1"]);
-  assert.strictEqual(lock.children.length, 2);
+  assert.strictEqual(lock.getAttribute("data-icon"), "lock");
+  assert.deepStrictEqual(["width", "height", "viewBox", "aria-hidden"].map((k) => lock.getAttribute(k)), ["12", "12", "0 0 24 24", "true"]);
+  assert.match(lock.getAttribute("class"), /\bui-icon\b.*\bpfv-lock\b/);
+  assert.ok(lock.children.length >= 1);
   assert.ok(!/pfv-lock/.test(fs.readFileSync(path.join(STATIC, "app.css"), "utf8")), "the phone's stylesheet never styles it");
   for (const f of ["app.js", "mobileterm.js", "shell.js"]) assert.ok(!/pfvLockIcon/.test(fs.readFileSync(path.join(STATIC, f), "utf8")), f + " (phone code) does not draw it");
+});
+
+test("profilepage.js draws no <svg> of its own: the lock, the ⋯ and the saved tick are the vendored set's", () => {
+  const src = fs.readFileSync(path.join(STATIC, "profilepage.js"), "utf8");
+  assert.ok(!/pfvIcon|PFV_STROKE|PFV_SVG|createElementNS/.test(src));
+  const t = page();
+  t.box.pfvRenderNav();
+  assert.strictEqual(t.box.pfvDotsIcon().getAttribute("data-icon"), "ellipsis");
+  assert.strictEqual(t.box.pfvDotsIcon().getAttribute("width"), "14");
 });
 
 test("pfvRenderNav marks the shown profile", async () => {
@@ -522,7 +527,8 @@ test("an editable profile: Start session is the primary, then ⋯, a divider and
   assert.strictEqual(sep.getAttribute("aria-hidden"), "true");
   assert.deepStrictEqual(classesOf(esc), ["btn", "btn-ghost", "btn-sm", "set-esc"], "settingsEscButton");
   assert.strictEqual(esc.getAttribute("aria-label"), "Close (Esc)");
-  assert.strictEqual(esc.textContent, "Esc✕");
+  assert.strictEqual(esc.textContent, "Esc", "the close is the x glyph (#168), not the ✕ text");
+  assert.deepStrictEqual(esc.children.filter((c) => c.tag === "svg").map((c) => [c.getAttribute("data-icon"), c.getAttribute("width")]), [["x", "12"]]);
   esc.click();
   assert.deepStrictEqual(t.calls.filter((c) => c.startsWith("close:")), ["close:settings-modal"]);
   // One primary in the whole view.
@@ -1695,7 +1701,9 @@ test("the box consequence line shows on Runs in (box) and Network, not on Agent,
   assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-fnote"), []);
   clickBtn(blockOf(t, "agent"), "Cancel");
   clickBtn(blockOf(t, "network"), "Edit");
-  assert.deepStrictEqual(texts(blockOf(t, "network"), "pfv-fnote"), [line]);
+  // #95: the network setting also reaches running sessions, and the line says so.
+  assert.deepStrictEqual(texts(blockOf(t, "network"), "pfv-fnote"),
+    ["Saving gives the next session a new box. Running sessions keep theirs and follow this setting from their next connection."]);
 
   const h = page();
   await h.box.pfvShow("runbook-host");
@@ -2915,6 +2923,8 @@ test("the picker stays inside the page column: it hangs on its link's wrapper at
   assert.ok(has("pfv-opt", /text-decoration:\s*none/), "primitives.css strikes every disabled button through; an Added option is not struck");
   assert.ok(has("pfv-opt-t", /overflow-wrap:\s*anywhere/) && has("pfv-opt-s", /overflow-wrap:\s*anywhere/), "a long name breaks rather than push the popover out");
   assert.ok(rules.some((r) => /\.pfv-opt\[hidden\]/.test(r.sel) && /display:\s*none/.test(r.body)), "a grid option is hidden by the filter");
+  assert.ok(has("pfv-opt-t", /gap:\s*0 8px/), "the title's children keep an 8px gap");
+  assert.ok(rules.some((r) => /\.pfv-opt-t\s*>\s*\.ui-icon$/.test(r.sel) && /margin-right:\s*-2px/.test(r.body)), "an item's own glyph sits 6px (8px gap less 2px) before its title");
   assert.ok(rules.some((r) => /\.pfv-pick-grp\[hidden\]/.test(r.sel) && /display:\s*none/.test(r.body)));
 });
 
@@ -3003,6 +3013,14 @@ test("Also reachable: the files the original and Advanced control are rows with 
   assert.deepStrictEqual(files.map((r) => texts(r, "pfv-inote")[0]), ["Set in Workspace", "Set in Advanced"]);
   for (const r of files) assert.strictEqual(byText(r, "button", "Remove").length, 0);
   assert.deepStrictEqual(rowsOf(t, "reachable").map((r) => texts(r, "pfv-k")[0]), ["Folder", "Files", "Files", "Domain", "Domain"]);
+});
+
+test("Also reachable: the footer says a domain change reaches running sessions and a folder change does not (#95)", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "Edit");
+  assert.deepStrictEqual(texts(blockOf(t, "reachable"), "pfv-fnote"),
+    ["Saving gives the next session a new box. Running sessions keep theirs; a domain change reaches them at their next connection, a folder change does not."]);
 });
 
 test("GitHub: the owner row shows its fields and a Read only preset; untouched, no permissions are written", async () => {
@@ -7442,4 +7460,55 @@ test("Agent: a profile with only the older bypass bool on keeps it, and gains no
   pickModel(t, "claude-sonnet-5");
   assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
   assert.deepStrictEqual(t.box.puts[0].options, { model: "claude-sonnet-5", skip_permissions_legacy: true });
+});
+
+// #168 G1 1-6: the kind column of a Cloud and tokens / Also reachable row draws the glyph of the row's declared kindId, never of its words.
+const kindIc = (row) => byCls(row, "pfv-k")[0].children.filter((c) => c instanceof Node && c.tag === "svg");
+const kindIcons = (rows) => rows.map((r) => [texts(r, "pfv-k")[0], kindIc(r).map((s) => s.getAttribute("data-icon"))]);
+
+test("read view: the kind column of each Cloud and tokens and Also reachable row draws its declared kind's glyph, 14px", async () => {
+  const t = cloudPage({ profiles: [PROFILES[0], cloudView({ clone_share: ["CLAUDE.md"] }), PROFILES[2], PROFILES[3]] });
+  await t.box.pfvShow("aws-ops");
+  assert.deepStrictEqual(kindIcons(rowsOf(t, "cloud")), [
+    ["AWS", ["cloud"]], ["AWS", ["cloud"]], ["GitHub", ["si:github"]], ["Token", ["key-round"]], ["Token", ["key-round"]],
+  ]);
+  assert.deepStrictEqual(kindIcons(rowsOf(t, "reachable")), [
+    ["Folder", ["folder"]], ["Files", ["files"]], ["Files", ["files"]], ["Domain", ["globe"]], ["Domain", ["globe"]],
+  ]);
+  for (const r of [...rowsOf(t, "cloud"), ...rowsOf(t, "reachable")]) {
+    const k = byCls(r, "pfv-k")[0], ic = kindIc(r)[0];
+    assert.strictEqual(ic.getAttribute("width"), "14");
+    assert.strictEqual(k.children[0], ic, "the glyph comes before the word");
+    assert.ok(classesOf(k).includes("has-ic"), "the column says it holds a glyph");
+  }
+});
+
+test("read view: Workspace rows that share a kind word (Folder) with a reach row draw no glyph", async () => {
+  const t = cloudPage({ profiles: [PROFILES[0], cloudView({ clone_of: "/home/you/orig", default_cwd: "/home/you/copy" }), PROFILES[2], PROFILES[3]] });
+  await t.box.pfvShow("aws-ops");
+  for (const id of ["workspace"]) {
+    const rows = rowsOf(t, id);
+    assert.ok(rows.length > 0, id);
+    assert.deepStrictEqual(rows.filter((r) => kindIc(r).length), [], id + " rows are declared with no kindId");
+    for (const r of rows) assert.ok(!classesOf(byCls(r, "pfv-k")[0]).includes("has-ic"), id);
+  }
+});
+
+test("pfvDrawRow: the glyph follows kindId alone; Old-style AWS still draws the word AWS", () => {
+  const t = page();
+  const row = (kind, kindId, over) => t.box.pfvDrawRow(Object.assign({ kind, kindId, name: "n", sub: "", scope: "", tag: "", missing: false }, over), []);
+  const ic = (r) => kindIc(r).map((s) => s.getAttribute("data-icon"));
+  assert.deepStrictEqual(ic(row("Old-style AWS", "aws_legacy")), ["cloud"]);
+  assert.strictEqual(texts(row("Old-style AWS", "aws_legacy"), "pfv-k")[0], "AWS");
+  // Renaming the word moves nothing; the id decides.
+  assert.deepStrictEqual(ic(row("Something else", "token")), ["key-round"]);
+  assert.strictEqual(texts(row("Something else", "token"), "pfv-k")[0], "Something else");
+  assert.deepStrictEqual(ic(row("Token", "domain")), ["globe"], "the word Token with kindId domain draws the domain glyph");
+  // The old shape (no kindId) and a kindId the map does not know draw none, whatever the word says.
+  for (const id of [undefined, "", "nope", "constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    const r = row("GitHub", id);
+    assert.deepStrictEqual(ic(r), [], String(id));
+    assert.ok(!classesOf(byCls(r, "pfv-k")[0]).includes("has-ic"), String(id));
+    assert.strictEqual(texts(r, "pfv-k")[0], "GitHub");
+  }
 });

@@ -168,6 +168,8 @@ async function loadAboutInfo() {
     el.textContent = "CuliBox (build unknown)";
     if (rt) rt.textContent = "";
   }
+  // The image rows are their own read-only fetch: a CuliBox without the hook (404) just leaves them hidden.
+  if (typeof loadBoxImage === "function") loadBoxImage();
   // On the desktop page the version line is the About head's description (settingshead.js reads it from here), so
   // the head is drawn again now that it has arrived.
   if (typeof paintSettingsHead === "function") paintSettingsHead("about");

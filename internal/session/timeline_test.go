@@ -833,3 +833,15 @@ func TestTimelineWorktreeMoveToASmallerFileResetsInsteadOfAppending(t *testing.T
 		}
 	}
 }
+
+// Provider is only set on credential rows; empty, it is not in the JSON.
+func TestTimelineEventProviderJSON(t *testing.T) {
+	b, _ := json.Marshal(TimelineEvent{TS: 1, Kind: "tool", Detail: "x"})
+	if strings.Contains(string(b), `"provider":`) {
+		t.Errorf("empty provider must be omitted: %s", b)
+	}
+	b, _ = json.Marshal(TimelineEvent{TS: 1, Kind: "credential", Detail: "github", Provider: "github"})
+	if !strings.Contains(string(b), `"provider":"github"`) {
+		t.Errorf("provider missing: %s", b)
+	}
+}

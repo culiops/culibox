@@ -194,37 +194,11 @@ let tierPicked = "";
 // The Box VM is stopped (the S1 /api/vm-state); a Box card then says starting it takes about a minute.
 let tierVmStopped = false;
 
-// The mockup's Lucide icons (24x24, stroke 2): package, copy, triangle-alert; and the lock before a disabled reason.
-const TP_ICONS = {
-  box: [
-    ["path", { d: "M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" }],
-    ["path", { d: "m3.3 7 8.7 5 8.7-5" }],
-    ["path", { d: "M12 22V12" }],
-  ],
-  clone: [
-    ["rect", { width: "14", height: "14", x: "8", y: "8", rx: "2" }],
-    ["path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" }],
-  ],
-  host: [
-    ["path", { d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" }],
-    ["path", { d: "M12 9v4" }],
-    ["path", { d: "M12 17h.01" }],
-  ],
-};
-const TP_LOCK_ICON = [
-  ["rect", { width: "18", height: "11", x: "3", y: "11", rx: "2" }],
-  ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }],
-];
-
 function tierEl(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
   if (text !== undefined) e.textContent = text;
   return e;
-}
-
-function tierIcon(shapes, size) {
-  return svgIcon(shapes, { viewBox: "0 0 24 24", strokeWidth: "2", size });
 }
 
 // tierCard: one button for one model card. It reads the card and never changes it (the box and clone cards share a row object).
@@ -240,7 +214,7 @@ function tierCard(c) {
   }
   b.onclick = () => tierPick(c.key);
   const ic = tierEl("span", "tp-i");
-  ic.append(tierIcon(TP_ICONS[c.key], "14"));
+  ic.append(uiIcon(ICON_LOCKED["tier-" + c.key], { size: 14 }));
   const name = tierEl("span", "tp-n", c.title);
   if (c.dflt) name.append(tierEl("span", "tp-dflt", "profile default"));
   const rows = tierEl("span", "tp-d");
@@ -256,7 +230,7 @@ function tierCard(c) {
   b.append(tierEl("span", "tp-rb"), ic, name, rows);
   if (c.disabled && c.why) {
     const why = tierEl("div", "tp-why");
-    why.append(tierIcon(TP_LOCK_ICON, "12"), tierEl("span", "", c.why));
+    why.append(uiIcon(ICON_STATUS.locked, { size: 12 }), tierEl("span", "", c.why));
     b.append(why);
   }
   if (c.vm) b.append(tierEl("div", "tp-vm", c.vm));

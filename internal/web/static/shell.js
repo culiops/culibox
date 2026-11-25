@@ -170,6 +170,7 @@ function toastView(entry, hasLink) {
     role: kind === "error" ? "alert" : "status",
     cls: cls,
     dot: kind === "error" ? "crashed" : kind === "warn" ? "needs" : null,
+    icon: iconOf(ICON_TOAST, kind, null), // #168: warn and error carry their status glyph; info stays plain, pending has the spinner
     spin: kind === "pending",
     action: entry.undo ? "undo" : hasLink ? "link" : kind === "error" && entry.detail ? "copy" : null,
   };
@@ -311,7 +312,7 @@ function renderToasts() {
   for (const e of list) {
     const link = toastLinks.get(e.id);
     const v = toastView(e, !!link);
-    const shape = [v.cls.join(" "), v.role, v.dot, v.spin, v.action, link ? link.label : "", e.kind, e.progress !== null].join("|");
+    const shape = [v.cls.join(" "), v.role, v.dot, v.icon, v.spin, v.action, link ? link.label : "", e.kind, e.progress !== null].join("|");
     let rec = toastNodes.get(e.id);
     if (!rec || rec.shape !== shape) {
       const node = toastBuild(e, v);
@@ -341,6 +342,8 @@ function toastBuild(e, v) {
   node.dataset.id = String(e.id);
   const parts = {};
   if (v.dot) node.appendChild(toastEl("span", "dot dot-" + v.dot)).setAttribute("aria-hidden", "true");
+  // The glyph is a sibling of the text, never inside it: .toast-text must keep wrapping a long message.
+  if (v.icon) node.appendChild(uiIcon(v.icon, { size: 14 }));
   if (v.spin) node.appendChild(toastEl("span", "spin")).setAttribute("aria-hidden", "true");
   parts.text = node.appendChild(toastEl("span", "toast-text"));
   if (v.action) {
@@ -352,7 +355,8 @@ function toastBuild(e, v) {
     b.onclick = v.action === "undo" ? () => toastUndoClick(e.id) : v.action === "link" ? () => toastLinkClick(e.id) : () => toastCopyClick(e.id, b);
     node.appendChild(b);
   }
-  const x = toastEl("button", "btn btn-ghost btn-icon btn-sm toast-x", "×");
+  const x = toastEl("button", "btn btn-ghost btn-icon btn-sm toast-x");
+  x.appendChild(uiIcon(ICON_ACTION.close, { size: 14 }));
   x.type = "button";
   x.title = "Dismiss";
   x.setAttribute("aria-label", "Dismiss");

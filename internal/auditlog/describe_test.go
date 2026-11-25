@@ -1,6 +1,7 @@
 package auditlog
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -50,8 +51,9 @@ func TestDescribe(t *testing.T) {
 	rec(err)
 	_, err = s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, 'unlocked', 'web', 'ttl=168h0m0s')`, ts(19))
 	rec(err)
+	rec(s.e.Record(egress.Row{Time: at(20), SessionID: "s1", Host: "+pypi.org -example.com open:on", Outcome: egress.OutcomePolicyChanged}))
 
-	p, err := s.open().Query(Query{From: ts(1), To: ts(19), Limit: 100})
+	p, err := s.open().Query(Query{From: ts(1), To: ts(20), Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,6 +86,7 @@ func TestDescribe(t *testing.T) {
 		{17, "store", "encrypted store unlocked", "unlocked", "you", "", 0, false},
 		{18, "store", "encrypted store value set · cf-token", "value_set", "daemon", "", 0, false},
 		{19, "store", "encrypted store unlocked · ttl=168h0m0s", "unlocked", "you", "", 0, false},
+		{20, "egress", "policy +pypi.org -example.com open:on", "policy_changed", "", "", 0, false},
 	}
 	for _, c := range cases {
 		e, ok := byTS[ts(c.n)]
@@ -468,5 +471,37 @@ func TestProfileRowShowsChangedFields(t *testing.T) {
 		if !got[w] {
 			t.Errorf("no event %q in %v", w, got)
 		}
+	}
+}
+
+// A credential row carries the broker provider so the page can pick a glyph
+// from a declared field; an empty provider is the AWS default. No other kind
+// has one, and the field is not part of the JSON when empty.
+func TestDescribeCredentialProvider(t *testing.T) {
+	for _, tc := range []struct{ provider, want string }{
+		{"github", "github"}, {"static", "static"}, {"", "aws"}, {"aws", "aws"},
+	} {
+		ev := describe(rawRow{src: srcCredential, a: tc.provider, b: "entry", f: "minted"})
+		if ev.Provider != tc.want {
+			t.Errorf("credential provider %q: Event.Provider = %q, want %q", tc.provider, ev.Provider, tc.want)
+		}
+	}
+	for name, r := range map[string]rawRow{
+		"approval": {src: srcApproval, a: "granted", b: "prod"},
+		"egress":   {src: srcEgress, a: "pypi.org", b: "allowed", n1: 443},
+		"settings": {src: srcCred, a: "added", b: "token", c: "x", d: "web"},
+		"store":    {src: srcStore, a: "unlocked", b: "web"},
+	} {
+		if ev := describe(r); ev.Provider != "" {
+			t.Errorf("%s: Event.Provider = %q, want empty", name, ev.Provider)
+		}
+	}
+	b, err := json.Marshal(describe(rawRow{src: srcEgress, a: "pypi.org", b: "allowed", n1: 443}))
+	if err != nil || strings.Contains(string(b), `"provider"`) {
+		t.Errorf("empty provider must be omitted from the JSON: %s (%v)", b, err)
+	}
+	b, err = json.Marshal(describe(rawRow{src: srcCredential, a: "github", b: "e", f: "minted"}))
+	if err != nil || !strings.Contains(string(b), `"provider":"github"`) {
+		t.Errorf("provider missing from the JSON: %s (%v)", b, err)
 	}
 }

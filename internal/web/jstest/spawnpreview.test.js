@@ -330,7 +330,7 @@ test("reach rows: an inline sso_direct binding ends with the mode label", () => 
 
 test("reach rows: a private copy names the read-only original right after Files", () => {
   const rows = reachRows({ profile: { clone_of: "/h/r" }, tier: "box", cwd: "~/box-clones/r" });
-  assert.deepStrictEqual(rows[1], { k: "Original", v: "/h/r/.git read-only · the box cannot change your history", path: "/h/r/.git" });
+  assert.deepStrictEqual(rows[1], { k: "Original", id: "original", v: "/h/r/.git read-only · the box cannot change your history", path: "/h/r/.git" });
   assert.strictEqual(rows[0].k, "Files");
 });
 
@@ -572,7 +572,7 @@ test("reachModel: nothing bound says any public website, not an allowlist (b-cre
   // The same unbound profile with a domain of its own listed: still nothing is bound.
   assert.strictEqual(reachModel({ profile: { ...bare, egress_allow: ["api.example.com"] }, tier: "box" }).network.line, "Any public website over HTTPS, through CuliBox's proxy");
   // The New session row is unchanged: an unbound box is open.
-  assert.deepStrictEqual(byK(reachRows({ profile: bare, tier: "box", cwd: "~/x" }), "Network"), [{ k: "Network", v: "open" }]);
+  assert.deepStrictEqual(byK(reachRows({ profile: bare, tier: "box", cwd: "~/x" }), "Network"), [{ k: "Network", id: "network", v: "open" }]);
 });
 
 test("reachModel: egress_open on a bound profile says all internet hosts, plainly", () => {
@@ -612,9 +612,9 @@ test("reachRows keeps today's rows and appends Reads, Imports, Domains", () => {
   assert.strictEqual(byK(rows, "AWS")[1].v, "staging-read · read only");
   assert.strictEqual(byK(rows, "GitHub")[0].v, "culiops/* · read, 1-hour tokens");
   assert.strictEqual(byK(rows, "Tokens")[0].v, "grafana-prod, sentry-staging");
-  assert.deepStrictEqual(byK(rows, "Reads")[0], { k: "Reads", v: "/home/you/other-repo/docs", path: "/home/you/other-repo/docs" });
-  assert.deepStrictEqual(byK(rows, "Imports")[0], { k: "Imports", v: "CLAUDE.md imports, read-only copies" });
-  assert.deepStrictEqual(byK(rows, "Domains")[0], { k: "Domains", v: "api.example.com, *.example.org" });
+  assert.deepStrictEqual(byK(rows, "Reads")[0], { k: "Reads", id: "reads", v: "/home/you/other-repo/docs", path: "/home/you/other-repo/docs" });
+  assert.deepStrictEqual(byK(rows, "Imports")[0], { k: "Imports", id: "imports", v: "CLAUDE.md imports, read-only copies" });
+  assert.deepStrictEqual(byK(rows, "Domains")[0], { k: "Domains", id: "domains", v: "api.example.com, *.example.org" });
   assert.strictEqual(byK(rows, "Network")[0].v, "allowlist only");
   // Reads is folders and the original's shared paths, in one list.
   const copy = reachRows(awsOpsIn({ profile: { ...awsOps, clone_of: "/h/r", clone_share: ["CLAUDE.md", "docs"] } }));
@@ -759,7 +759,7 @@ test("reach rows: a workspace not yet chosen, and the host's whole account, name
   assert.strictEqual(none.v, "the workspace read/write · nothing else on this machine");
   assert.ok(!none.path && !none.full);
   const host = byK(reachRows({ profile: { runtime: "host" }, tier: "host", cwd: "~/x", cwdFull: "/home/me/x" }), "Files")[0];
-  assert.deepStrictEqual(host, { k: "Files", v: "your whole user account" });
+  assert.deepStrictEqual(host, { k: "Files", id: "files", v: "your whole user account" });
 });
 
 test("reach rows: without cwdFull the text is its own full text (nothing is invented)", () => {
@@ -776,7 +776,7 @@ test("reach rows: Reads is all machine text, and only the default account's ~/.c
   assert.strictEqual(dflt.v, "default (~/.claude)");
   assert.strictEqual(dflt.path, "~/.claude");
   const named = byK(reachRows({ profile: { claude: true, runtime: "box", account: "work" }, tier: "box", cwd: "~/x" }), "Account")[0];
-  assert.deepStrictEqual(named, { k: "Account", v: "work" });
+  assert.deepStrictEqual(named, { k: "Account", id: "account", v: "work" });
 });
 
 // paintReachRows: the DOM half, run against a tiny fake DOM with the real spawnpanel.js.
@@ -786,14 +786,17 @@ class RNode {
   set textContent(t) { this.children = []; this._text = String(t); }
   append(...cs) { for (const c of cs) this.children.push(typeof c === "string" ? Object.assign(new RNode("#text"), { _text: c }) : c); }
   replaceChildren(...cs) { this.children = []; this._text = ""; this.append(...cs); }
-  setAttribute(k, v) { this.attrs[k] = String(v); }
+  setAttribute(k, v) { this.attrs[k] = String(v); if (k === "class") this.className = String(v); }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
   get classList() { const n = this; return { add: (c) => { n.className = (n.className + " " + c).trim(); } }; }
   has(cls) { return this.className.split(/\s+/).includes(cls); }
   find(cls, out = []) { if (this.has(cls)) out.push(this); for (const c of this.children) c.find(cls, out); return out; }
 }
 function reachPanel() {
   const vm = require("node:vm");
-  const ctx = vm.createContext({ document: { createElement: (t) => new RNode(t) }, console });
+  const ctx = vm.createContext({ document: { createElement: (t) => new RNode(t), createElementNS: (ns, t) => new RNode(t) }, console });
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js"]) new vm.Script(read(f).replace(/^const /gm, "var "), { filename: f }).runInContext(ctx);
   new vm.Script(read("spawnpanel.js"), { filename: "spawnpanel.js" }).runInContext(ctx);
   return ctx;
 }
@@ -896,10 +899,10 @@ test("desktop.css: the reach box is the frame's .m4-reach: --bg, 12px 16px, card
   assert.match(t, /font-weight:\s*(600|var\(--w-semibold\))/);
 });
 
-test("desktop.css: the reach grid is 72px | 1fr, 16px between the columns, 2px between rows, baseline aligned", () => {
+test("desktop.css: the reach grid is 88px | 1fr (room for a 14px glyph and Domains), 16px between the columns, 2px between rows, baseline aligned", () => {
   const g = ruleOf(".sr-grid");
   assert.match(g, /display:\s*grid/);
-  assert.match(g, /grid-template-columns:\s*72px minmax\(0, 1fr\)/);
+  assert.match(g, /grid-template-columns:\s*88px minmax\(0, 1fr\)/);
   assert.match(g, /column-gap:\s*var\(--sp-4\)/);
   assert.match(g, /row-gap:\s*2px/);
   assert.match(g, /align-items:\s*baseline/);
@@ -1207,4 +1210,94 @@ test("spawnAcctHint: only an exact no-login, the locked store, nothing else", ()
   assert.deepStrictEqual(h({ box_claude_credential: "" }, "work", host), locked, "a locked account is locked on any card");
   assert.strictEqual(h({ account: "work", box_claude_credential: "yes" }, "claude-box", box), null);
   assert.deepStrictEqual(h({ box_claude_credential: "no" }, "default", box, [{ name: "default", default: true }]), { kind: "nologin", uses: [] });
+});
+
+// #168 G1 22-28: a reach row and a profile item declare their kind, and the glyph is drawn from that id, never from the label.
+const RICH = {
+  runtime: "box", aws_connections: ["c1", "gone"], aws_inline: { name: "old" }, github_owners: ["culiops"], tokens: ["t1", "t-gone"],
+  context_paths: ["/p"], clone_share: ["CLAUDE.md"], clone_of: "/h/orig", egress_allow: ["api.example.com"], network: "allowlist", claude: true,
+};
+const RICH_META = { aws_connections: [{ name: "c1", account_id: "1" }], static_tokens: [{ name: "t1" }] };
+
+test("items declare kindId: aws_legacy, aws, github, token, folder, files, domain; the kind text is unchanged", () => {
+  const m = reachModel({ profile: RICH, tier: "box", cwd: "~/x", meta: RICH_META, creds: null, bundleImports: true });
+  const ids = (l) => l.map((i) => [i.kind, i.name, i.kindId]);
+  assert.deepStrictEqual(ids(m.cloud), [
+    ["AWS", "c1", "aws"], ["AWS", "gone", "aws"], ["Old-style AWS", "old", "aws_legacy"],
+    ["GitHub", "culiops", "github"], ["Token", "t1", "token"], ["Token", "t-gone", "token"],
+  ]);
+  assert.deepStrictEqual(ids(m.reachable), [
+    ["Folder", "/p", "folder"], ["Files", "CLAUDE.md", "files"], ["Files", "CLAUDE.md imports", "files"], ["Domain", "api.example.com", "domain"],
+  ]);
+  assert.ok(m.cloud.find((i) => i.name === "gone").missing, "the missing AWS item declares its kind too");
+  const gone = reachModel({ profile: { runtime: "box", github_owners: ["o"], tokens: ["t"] }, tier: "box", meta: { static_tokens: [], github_apps: [] }, githubLogins: { o: "app:x" } });
+  assert.deepStrictEqual(gone.cloud.map((i) => [i.kind, i.missing, i.kindId]), [["GitHub", true, "github"], ["Token", true, "token"]]);
+});
+
+test("reach rows declare id: files, original, workhome, aws, github, tokens, reads, imports, domains, network, account, store", () => {
+  const rows = reachRows({
+    profile: Object.assign({}, RICH, { account: "work" }), tier: "box", clone: true, cwd: "~/x", meta: RICH_META,
+    creds: { store: { initialized: true, locked: true, platform: "linux" }, aws: [] }, bundleImports: true,
+  });
+  assert.deepStrictEqual(rows.map((r) => [r.k, r.id]), [
+    ["Files", "files"], ["Original", "original"], ["Work home", "workhome"], ["AWS", "aws"], ["AWS", "aws"], ["AWS", "aws"],
+    ["GitHub", "github"], ["Tokens", "tokens"], ["Reads", "reads"], ["Imports", "imports"], ["Domains", "domains"],
+    ["Network", "network"], ["Account", "account"], ["Store", "store"],
+  ]);
+  const host = reachRows({ profile: { runtime: "host" }, tier: "host", cwd: "~/x" });
+  assert.ok(host.length >= 2 && host.every((r) => typeof r.id === "string" && r.id !== ""), "the host rows declare an id too");
+});
+
+const reachIcons = (rows) => {
+  const box = new RNode("div");
+  reachPanel().paintReachRows(box, rows, { title: "t" });
+  return box.children[1].children.map((row) => {
+    const k = row.children[0];
+    return { text: k.textContent, icons: k.children.filter((c) => c.tag === "svg"), cls: k.className, k };
+  });
+};
+
+test("paintReachRows: AWS, GitHub, Tokens, Reads, Imports, Domains and Store draw their glyph; Files, Original, Work home, Network, Account stay plain", () => {
+  const rows = reachRows({
+    profile: Object.assign({}, RICH, { account: "work" }), tier: "box", clone: true, cwd: "~/x", meta: RICH_META,
+    creds: { store: { initialized: true, locked: true, platform: "linux" }, aws: [] }, bundleImports: true,
+  });
+  const drawn = reachIcons(rows);
+  assert.deepStrictEqual(drawn.map((d) => [d.text, d.icons.map((s) => s.attrs["data-icon"])]), [
+    ["Files", []], ["Original", []], ["Work home", []], ["AWS", ["cloud"]], ["AWS", ["cloud"]], ["AWS", ["cloud"]],
+    ["GitHub", ["si:github"]], ["Tokens", ["key-round"]], ["Reads", ["folder"]], ["Imports", ["files"]], ["Domains", ["globe"]],
+    ["Network", []], ["Account", []], ["Store", ["lock"]],
+  ]);
+  for (const d of drawn) {
+    assert.strictEqual(d.cls.split(/\s+/).includes("has-ic"), d.icons.length === 1, d.text + " class");
+    if (d.icons.length) {
+      assert.strictEqual(d.icons[0].attrs.width, "14");
+      assert.strictEqual(d.k.children[0], d.icons[0], "the glyph comes before the label");
+    }
+  }
+});
+
+test("renaming a label does not move a glyph: the row's id decides", () => {
+  const [a, b] = reachIcons([{ k: "Something else", id: "tokens", v: "x" }, { k: "Tokens", id: "network", v: "x" }]);
+  assert.strictEqual(a.text, "Something else");
+  assert.deepStrictEqual(a.icons.map((s) => s.attrs["data-icon"]), ["key-round"]);
+  assert.deepStrictEqual(b.icons, [], "the word Tokens with the id network draws nothing");
+});
+
+test("row without an id draws no glyph (the old shape), and a hostile id draws none", () => {
+  for (const id of [undefined, "", "nope", "constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    const [d] = reachIcons([{ k: "AWS", id, v: "x" }]);
+    assert.deepStrictEqual(d.icons, [], String(id));
+    assert.strictEqual(d.text, "AWS");
+    assert.ok(!d.cls.split(/\s+/).includes("has-ic"), String(id));
+  }
+});
+
+test("desktop.css: the reach label without a glyph is indented 20px, the glyph has 6px after it, and nothing of it reaches the phone", () => {
+  assert.match(ruleOf(".sr-k:not(.has-ic)"), /padding-left:\s*20px/);
+  assert.match(ruleOf(".sr-k .ui-icon"), /margin-right:\s*6px/);
+  assert.match(ruleOf(".sr-k.has-ic"), /white-space:\s*nowrap/);
+  const all = stripC(read("desktop.css")), app = stripC(read("app.css"));
+  assert.ok(all.indexOf(".sr-k:not(.has-ic)") > all.indexOf("@media (min-width: 701px) {"), "inside the desktop block");
+  assert.doesNotMatch(app, /\.sr-(k|grid)/, "the phone's stylesheet has no reach rule");
 });

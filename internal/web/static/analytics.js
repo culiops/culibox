@@ -305,11 +305,11 @@ const AN_TOOL_COLORS = { skill: "var(--an-2)", plugin: "var(--an-4)", mcp_server
 // anToolGroups: tools rows ({kind, name, records}) as one group per kind, in the order the kinds are met: its colour (the accent
 // for a kind not listed), its first ten rows and the longest bar among them (never under 1).
 function anToolGroups(tools) {
-  const kinds = {};
+  const kinds = Object.create(null); // a kind such as "constructor" or "__proto__" is a plain key here, not an inherited one
   for (const t of tools || []) (kinds[t.kind] = kinds[t.kind] || []).push(t);
   return Object.keys(kinds).map((kind) => {
     const items = kinds[kind].slice(0, 10);
-    return { kind, color: AN_TOOL_COLORS[kind] || "var(--accent)", items, max: Math.max(1, ...items.map((t) => t.records)) };
+    return { kind, color: Object.prototype.hasOwnProperty.call(AN_TOOL_COLORS, kind) ? AN_TOOL_COLORS[kind] : "var(--accent)", items, max: Math.max(1, ...items.map((t) => t.records)) };
   });
 }
 
@@ -461,18 +461,26 @@ function anSetTab(tab) {
   anRender();
 }
 
+// anBtnWord: set a button's word, keeping the glyph the page's Re-scan carries before it (#168); a button with no glyph is
+// plain text, as the phone's is.
+function anBtnWord(btn, word) {
+  const ic = btn.querySelector(".ui-icon");
+  if (!ic) { btn.textContent = word; return; }
+  btn.replaceChildren(ic, document.createTextNode(word));
+}
+
 // anRescan: read the transcripts again, then reload the window. `btn` is the phone's #analytics-refresh or the page's
 // #an-rescan: it disables itself and says "Scanning…" meanwhile. On the page it is the control in use, so focus comes
 // back to it if the disabled button lost it (and only then: a focus the user moved on is left where they put it).
 async function anRescan(btn) {
   const keep = anIsPage() && document.activeElement === btn;
   btn.disabled = true;
-  btn.textContent = "Scanning…";
+  anBtnWord(btn, "Scanning…");
   try { await api("/api/analytics/ingest", { method: "POST" }); await anLoad(); }
   catch (_) { /* leave the current view; the range line still shows */ }
   finally {
     btn.disabled = false;
-    btn.textContent = "Re-scan";
+    anBtnWord(btn, "Re-scan");
     const now = document.activeElement;
     if (keep && (!now || now === document.body)) btn.focus();
   }
@@ -1072,7 +1080,8 @@ function anToolsPage(root) {
   }
   const g = el("div", "an-pgrid");
   for (const grp of anToolGroups(d.tools)) {
-    const card = anCard(grp.kind);
+    // The head names the tool kind and its glyph is read off that declared kind, so a kind this build does not know keeps its words only.
+    const card = anCard(grp.kind, null, null, iconOf(ICON_TOOL_KIND, grp.kind));
     const body = anCardBody(card);
     for (const t of grp.items) anHbar(body, t.name, t.records, grp.max, grp.color, fmtCompact);
     g.appendChild(card);
@@ -1274,11 +1283,16 @@ function anPSection(title, caption) {
 // anCard: a card (--panel, --r-card). A title and/or a caption give it the kit's .card-head, a hairline under it; with neither
 // it is a bare panel, as a table's card is. The title is an h3 unless `level` says otherwise (the Overview's cards are the frame's
 // h2). Content goes in anCardBody (padded) or, for a table, straight in.
-function anCard(title, caption, level) {
+function anCard(title, caption, level, glyph) {
   const card = el("div", "an-card");
   if (title || caption) {
     const head = el("div", "card-head");
-    if (title) head.appendChild(el(level || "h3", "t-md w-600", title));
+    if (title && glyph) {
+      // `glyph` is an icon name (the Tools heads, #168): it sits inside the heading, before the words, so the two wrap as one.
+      const h = el(level || "h3", "t-md w-600");
+      h.append(uiIcon(glyph, { size: 16 }), document.createTextNode(title));
+      head.appendChild(h);
+    } else if (title) head.appendChild(el(level || "h3", "t-md w-600", title));
     if (caption) head.appendChild(el("span", "t-sm muted", caption));
     card.appendChild(head);
   }

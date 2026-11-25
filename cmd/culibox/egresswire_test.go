@@ -526,6 +526,8 @@ func TestEgressLookup(t *testing.T) {
 			AWSConns: []config.AWSConnection{{Name: "sbx-a", AWSBinding: *wireBinding()}}},
 		"claude-6": {ID: "claude-6", Box: "agent-box-z", Runtime: config.RuntimeBox, EgressNonce: egressNonce,
 			Tokens: []config.StaticToken{{Name: "sentry"}}, PATs: []config.StaticToken{{Name: "gh-pat-acme"}}},
+		"claude-8": {ID: "claude-8", Box: "agent-box-v", Runtime: config.RuntimeBox, EgressNonce: egressNonce, AWS: wireBinding(),
+			EgressAllow: []string{"pkg.example"}, EgressOpen: true},
 	}
 	look := egressLookup(func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok })
 
@@ -548,6 +550,11 @@ func TestEgressLookup(t *testing.T) {
 	// session would read as unbound and get open egress.
 	if v, ok := look("claude-7"); !ok || v.AWS != nil || len(v.AWSConns) != 1 || v.AWSConns[0].Name != "sbx-a" {
 		t.Errorf("connection session: %+v %v", v, ok)
+	}
+	// The policy is the session's live one (Session.EgressPolicy, #95); with no
+	// live change that is the spawn-time pair.
+	if v, ok := look("claude-8"); !ok || !reflect.DeepEqual(v.EgressAllow, []string{"pkg.example"}) || !v.EgressOpen {
+		t.Errorf("policy session: %+v %v", v, ok)
 	}
 	// Left the registry: unknown, so the proxy refuses it (no stale admit).
 	delete(sessions, "claude-3")

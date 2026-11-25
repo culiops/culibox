@@ -55,6 +55,7 @@ type Event struct {
 	Reason   string `json:"reason,omitempty"` // elevation reason, masked
 	Count    int    `json:"count,omitempty"`  // egress: 1 + suppressed when > 1
 	Elevated bool   `json:"elevated,omitempty"`
+	Provider string `json:"provider,omitempty"` // credential rows only: aws | github | static, derived at read, not stored
 }
 
 // Part is one run of an Event's description. ID marks an identifier the page
@@ -406,10 +407,11 @@ func (r *Reader) Each(q Query, max int, fn func(Event) error) error {
 
 // egressCountsSQL counts the egress rows of the range in ONE pass: allowed rows
 // one each, refused rows 1 + suppressed (the proxy folds throttled refusals into
-// one row). Every column it reads is in idx_egress_cover, so no table lookup.
+// one row); a policy change (#95) is neither. Every column it reads is in
+// idx_egress_cover, so no table lookup.
 const egressCountsSQL = `SELECT
 	SUM(CASE WHEN outcome IN ('allowed','allowed_private') THEN 1 ELSE 0 END),
-	SUM(CASE WHEN outcome IN ('allowed','allowed_private') THEN 0 ELSE 1 + suppressed END)
+	SUM(CASE WHEN outcome IN ('allowed','allowed_private','policy_changed') THEN 0 ELSE 1 + suppressed END)
 	FROM egress_audit WHERE ts BETWEEN ?1 AND ?2`
 
 // sessionsSQL lists the range's sessions, most recently active first. Its egress

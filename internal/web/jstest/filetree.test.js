@@ -387,7 +387,7 @@ function fakeRow() {
   const el = {
     tag: "div", className: "", textContent: "", title: "", children: [], attrs: {}, style: { setProperty() {} },
     classList: { add() {}, remove() {}, contains(c) { return el.className.split(/\s+/).includes(c); } },
-    append(...n) { this.children.push(...n); }, after() {}, remove() {},
+    append(...n) { this.children.push(...n); }, replaceChildren(...n) { this.children = n; }, after() {}, remove() {},
     setAttribute(k, v) { this.attrs[k] = v; }, querySelector: () => null,
     getBoundingClientRect: () => ({ left: 0, right: 100, top: 10, bottom: 30 }),
   };
@@ -398,6 +398,9 @@ function fakeRow() {
 function renderSetup(data, zones) {
   const menu = installMenuDom();
   globalThis.document.createElement = () => fakeRow();
+  globalThis.document.createElementNS = () => fakeRow(); // the row's glyphs are uiIcon svgs
+  globalThis.uiIcon = require("../static/svgicon.js").uiIcon;
+  globalThis.fileIcon = require("../static/filekinds.js").fileIcon;
   Object.assign(globalThis, require("../static/treestate.js")); // shouldAutoOpen: nothing is remembered open
   globalThis.pendingRegion = () => () => {};
   globalThis.api = async () => data;

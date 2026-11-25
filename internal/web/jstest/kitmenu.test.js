@@ -44,7 +44,11 @@ function world(extra) {
     dockIcon: (k) => { const s = el("svg", SVG_NS); s.attrs.kind = "dock:" + k; s.append(el("path", SVG_NS)); return s; },
   }, extra || {}));
   const run = (src) => new vm.Script(src).runInContext(ctx);
+  run(read("icons.js"));
+  run(read("iconmap.js"));
   run(read("svgicon.js"));
+  run(read("copyfile.js")); // IMAGE_EXTS, which filekinds.js's fileIcon reads
+  run(read("filekinds.js"));
   run(read("kitmenu.js"));
   return { ctx, run };
 }
@@ -178,14 +182,14 @@ test("kitMenuSep is a .menu-sep separator div", () => {
 test("kitMenuButton: .menu-item > .menu-icon + .menu-text, an empty slot with no icon, red when danger, the click is its run", () => {
   const { ctx } = world();
   const ran = [];
-  const b = ctx.kitMenuButton("Rename…", "pencil", false, () => ran.push("r"));
+  const b = ctx.kitMenuButton("Rename…", "rename", false, () => ran.push("r"));
   assert.strictEqual(b.tag, "button");
   assert.strictEqual(b.type, "button");
   assert.strictEqual(b.className, "menu-item");
   assert.strictEqual(b.getAttribute("role"), "menuitem");
   assert.deepStrictEqual(b.children.map((c) => c.className), ["menu-icon", "menu-text"]);
   assert.strictEqual(b.children[0].getAttribute("aria-hidden"), "true");
-  assert.strictEqual(b.children[0].children[0].getAttribute("data-icon"), "pencil");
+  assert.strictEqual(b.children[0].children[0].getAttribute("data-icon"), "pencil-line");
   assert.strictEqual(b.children[1].textContent, "Rename…");
   b.onclick();
   assert.deepStrictEqual(ran, ["r"]);
@@ -194,71 +198,60 @@ test("kitMenuButton: .menu-item > .menu-icon + .menu-text, an empty slot with no
   assert.strictEqual(bare.children[0].children.length, 0, "no icon: the 16px slot stays an empty box");
 });
 
-// ---- menuIconSvg: the kinds the other menus add ------------------------------------------------------------------------
-test("menuIconSvg: delete is the End session cross, under its own name", () => {
+// ---- menuIconSvg: every kind is an ICON_MENU glyph of the vendored set ----------------------------------------------------
+test("menu kinds draw ICON_MENU glyphs", () => {
   const { ctx } = world();
-  const del = ctx.menuIconSvg("delete");
-  const end = ctx.menuIconSvg("end");
-  assert.strictEqual(del.getAttribute("data-icon"), "delete");
-  assert.strictEqual(del.attrs.kind, "dock:hide", "built from the dock's cross, like end");
-  assert.strictEqual(end.attrs.kind, "dock:hide");
-  assert.strictEqual(del.getAttribute("stroke-linecap"), "round");
-  assert.strictEqual(del.getAttribute("stroke-linejoin"), "round");
-});
-
-test("menuIconSvg: check, download and insert are drawn in the product's icon style", () => {
-  const { ctx } = world();
-  for (const k of ["check", "download", "insert"]) {
-    const svg = ctx.menuIconSvg(k);
-    assert.ok(svg, k);
-    assert.strictEqual(svg.getAttribute("data-icon"), k);
-    assert.deepStrictEqual(
-      ["viewBox", "aria-hidden", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"].map((a) => svg.getAttribute(a)),
-      ["0 0 14 14", "true", "none", "currentColor", "1.2", "round", "round"], k);
-    assert.ok(svg.children.length >= 1, k + " has a shape");
-    for (const c of svg.children) assert.ok(c.getAttribute("d"), k + ": a path has its d");
+  for (const [kind, name] of [["rename", "pencil-line"], ["copy", "clipboard-copy"], ["duplicate", "copy-plus"], ["end", "power"],
+    ["delete", "trash-2"], ["check", "check"], ["refresh", "refresh-cw"], ["collapse", "chevrons-down-up"], ["insert", "arrow-right-to-line"],
+    ["interrupt", "pause"], ["bringhome", "arrow-down-to-line"], ["folder-plus", "folder-plus"], ["files", "folder-tree"],
+    ["attribution", "chart-pie"], ["split", "columns-2"], ["download", "download"], ["upload", "upload"], ["edit", "pencil"]]) {
+    const svg = ctx.menuIconSvg(kind);
+    assert.strictEqual(svg.getAttribute("data-icon"), name, kind);
+    assert.strictEqual(svg.getAttribute("width"), "14", kind);
+    assert.strictEqual(svg.getAttribute("viewBox"), "0 0 24 24", kind);
+    assert.strictEqual(svg.getAttribute("aria-hidden"), "true", kind);
+    assert.ok(svg.children.length >= 1, kind + " has a shape");
   }
-  assert.notStrictEqual(ctx.menuIconSvg("download").children.map((c) => c.getAttribute("d")).join(),
-    ctx.menuIconSvg("tray").children.map((c) => c.getAttribute("d")).join(), "Download is not the Bring-home tray");
+  assert.strictEqual(ctx.menuIconSvg(""), null);
+  assert.strictEqual(ctx.menuIconSvg("constructor").children.length, 0, "a kind named like an Object member is a bare icon, not a crash");
+  assert.strictEqual(ctx.menuIconSvg("nope").children.length, 0, "an unknown kind is a bare icon");
 });
 
-test("menuIconSvg: upload, refresh and collapse (the explorer's ⋯ menu) are drawn in the same style, each its own shape", () => {
+test("menu kinds each have their own glyph, and kitmenu.js carries no shapes of its own", () => {
   const { ctx } = world();
-  const ds = [];
-  for (const k of ["upload", "refresh", "collapse"]) {
-    const svg = ctx.menuIconSvg(k);
-    assert.ok(svg, k);
-    assert.strictEqual(svg.getAttribute("data-icon"), k);
-    assert.deepStrictEqual(
-      ["viewBox", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"].map((a) => svg.getAttribute(a)),
-      ["0 0 14 14", "none", "currentColor", "1.2", "round", "round"], k);
-    assert.ok(svg.children.length >= 1);
-    for (const c of svg.children) assert.ok(c.getAttribute("d"), k + ": a path has its d");
-    ds.push(svg.children.map((c) => c.getAttribute("d")).join());
+  const kinds = ["rename", "copy", "duplicate", "end", "delete", "check", "refresh", "collapse", "insert", "interrupt", "bringhome",
+    "folder-plus", "files", "attribution", "split", "download", "upload", "edit"];
+  const names = kinds.map((k) => ctx.menuIconSvg(k).getAttribute("data-icon"));
+  assert.strictEqual(new Set(names).size, kinds.length, "no two kinds share a glyph");
+  const src = read("kitmenu.js");
+  assert.ok(!/MENU_SHAPES|svgIcon\(|svgShape\(/.test(src));
+});
+
+// A kind that is no ICON_MENU key draws an empty slot, so every kind a caller passes is checked against the map here.
+test("every menu icon kind a page script passes is an ICON_MENU key", () => {
+  const { ICON_MENU } = require("../static/iconmap.js");
+  const found = new Map();
+  const note = (kind, where) => { if (kind) found.set(where + ":" + kind, kind); };
+  for (const f of ["app.js", "dockchanges.js", "dockreveal.js", "editornotes.js", "editorselbar.js", "editortab.js", "profilepage.js", "sidechrome.js", "credentials.js"]) {
+    const src = read(f);
+    for (const m of src.matchAll(/kitMenuButton\([^,]+,\s*"([^"]*)"/g)) note(m[1], f);
+    for (const m of src.matchAll(/menuIconSvg\("([^"]+)"\)/g)) note(m[1], f);
+    for (const m of src.matchAll(/\bitem\("[^"]*",\s*"([^"]*)"/g)) note(m[1], f);
+    for (const m of src.matchAll(/esbButton\((?:true|false),\s*[^,]+,\s*"([^"]*)"/g)) note(m[1], f);
+    for (const m of src.matchAll(/selBarAddAction\(\{[^}]*icon: "([^"]*)"/g)) note(m[1], f);
   }
-  ds.push(ctx.menuIconSvg("download").children.map((c) => c.getAttribute("d")).join());
-  assert.strictEqual(new Set(ds).size, 4, "Upload is not Download, and none is another's twin");
-});
-
-test("menuIconSvg: folder-plus is the pane header's folder with a plus added, as Duplicate adds one to Copy", () => {
-  const { ctx } = world();
-  const fp = ctx.menuIconSvg("folder-plus");
-  assert.strictEqual(fp.attrs.kind, "tab:files");
-  assert.strictEqual(fp.getAttribute("data-icon"), "folder-plus");
-  assert.strictEqual(fp.getAttribute("stroke-linecap"), "round");
-  assert.strictEqual(fp.children.length, 2, "the stand-in folder's one shape and the plus");
-  assert.strictEqual(ctx.menuIconSvg("files").children.length, 1, "Files stays a bare folder");
-});
-
-test("menuIconSvg: a kind named like an Object member is a bare icon, not a crash", () => {
-  const { ctx } = world();
-  const svg = ctx.menuIconSvg("constructor");
-  assert.strictEqual(svg.getAttribute("data-icon"), "constructor");
-  assert.strictEqual(svg.children.length, 0);
+  for (const [f, name] of [["sessionrow.js", "MENU_ICON"], ["filetree.js", "ROW_MENU_ICONS"]]) {
+    const src = read(f);
+    const body = new RegExp("const " + name + " = \\{([^}]*)\\}").exec(src);
+    assert.ok(body, name);
+    for (const m of body[1].matchAll(/:\s*"([^"]+)"/g)) note(m[1], f);
+  }
+  assert.ok(found.size >= 15, "the scan found the callers (" + found.size + ")");
+  for (const [where, kind] of found) assert.ok(Object.prototype.hasOwnProperty.call(ICON_MENU, kind), where + " is not an ICON_MENU key");
 });
 
 // ---- the tab switcher ---------------------------------------------------------------------------------------------------
-function switcher(width, tabs, activeIdx) {
+function switcher(width, tabs, activeIdx, sessions, profiles) {
   const menu = el("div");
   const calls = { placed: [], closed: [], focusedCell: [], activated: [], closedTab: [] };
   const cell = {
@@ -275,9 +268,13 @@ function switcher(width, tabs, activeIdx) {
     setFocusedCell: (c) => calls.focusedCell.push(c === cell),
     placeSessionMenu: (m, a) => calls.placed.push(a),
     sessionMenuAnchor: null, sessionMenuSid: "x",
+    // The row's facts are deskshell.js's own (tested there); the Claude mark, the terminal, the tier chip's glyph and a
+    // file's kind glyph (fileIcon) are the real icons.js, iconmap.js and filekinds.js.
+    lastSessions: sessions || [], profiles: profiles || [],
+    tabSwitchFacts: require("../static/deskshell.js").tabSwitchFacts,
   });
   const app = read("app.js");
-  run(fnSrc(app, "kitTabRow") + "\n" + fnSrc(app, "openTabSwitcher") + "\nglobalThis.openTabSwitcher = openTabSwitcher;");
+  run(fnSrc(app, "deskChipIcon") + "\n" + fnSrc(app, "kitTabRow") + "\n" + fnSrc(app, "openTabSwitcher") + "\nglobalThis.openTabSwitcher = openTabSwitcher;");
   return { menu, calls, ctx, cell, classes, open: (anchor) => ctx.openTabSwitcher(anchor || {}, cell) };
 }
 const term = { id: "t1", kind: "terminal", title: () => "agent-box" };
@@ -306,16 +303,104 @@ test("desktop: one .menu-row per tab, a kit .menu-item with its tab icon plus a 
   assert.strictEqual(t.ctx.sessionMenuSid, null, "not about one session: the list poll must not close it");
 });
 
-test("desktop: the tab's icon is in the .menu-icon slot (the terminal's, the file's), the title is the .menu-text", () => {
-  const t = switcher(1440, [term, view]);
+test("every icon-only control has an aria-label: the switcher's close is the x glyph, named Close <tab>; the phone's stays its text", () => {
+  const t = switcher(1440, [term, view, files]);
+  t.open();
+  for (const r of t.menu.children) {
+    const x = r.children[1];
+    assert.strictEqual(x.className.split(" ")[0], "menu-x");
+    assert.strictEqual(x.textContent, "", "no text ×");
+    assert.deepStrictEqual(x.children.map((n) => [n.getAttribute("data-icon"), n.getAttribute("width")]), [["x", "14"]]);
+    assert.ok(x.getAttribute("aria-label") && x.getAttribute("aria-label").startsWith("Close "), "named");
+  }
+  const phone = switcher(390, [term, view]);
+  phone.open();
+  for (const r of phone.menu.children) {
+    assert.strictEqual(r.children[1].textContent, "\u00D7", "the phone keeps its text ×");
+    assert.strictEqual(r.children[1].children.length, 0);
+  }
+});
+
+// A pane holding a Claude session, a shell, a file, a session of an agent that is neither, and one the list lost (#365).
+const S_CLAUDE = { id: "c1", kind: "terminal", title: () => "bash" };
+const S_SHELL = { id: "s1", kind: "terminal", title: () => "claude" };
+const S_OTHER = { id: "o1", kind: "terminal", title: () => "codex" };
+const S_GONE = { id: "g1", kind: "terminal", title: () => "gone" };
+const S_CLONE = { id: "k1", kind: "terminal", title: () => "fix-auth" };
+const SESSIONS = [
+  { id: "c1", agent: "cc", claude: true, runtime: "box" },
+  { id: "s1", agent: "sh", claude: false, runtime: "host" },
+  { id: "o1", agent: "codex", claude: false, runtime: "box" },
+  { id: "k1", agent: "cc", claude: true, runtime: "box", clone_of: "/home/u/repo" },
+];
+const PROFILES = [{ name: "cc", bin: "claude" }, { name: "sh", bin: "/bin/bash" }];
+const iconOf = (svg) => svg.getAttribute("data-icon");
+
+test("desktop: the .menu-icon slot shows the tab's kind: the Claude mark, the shell's terminal, the file's type, else the pane header's glyph", () => {
+  const t = switcher(1440, [S_CLAUDE, S_SHELL, view, files, S_OTHER, S_GONE], 0, SESSIONS, PROFILES);
   t.open();
   const slot = (i) => t.menu.children[i].children[0].children[0];
-  assert.strictEqual(slot(0).className, "menu-icon");
-  assert.strictEqual(slot(0).getAttribute("aria-hidden"), "true");
-  assert.strictEqual(slot(0).children[0].attrs.kind, "tab:terminal");
-  assert.strictEqual(slot(1).children[0].attrs.kind, "tab:files", "a viewer tab is a file: the folder glyph tabIcon has for it");
-  assert.strictEqual(t.menu.children[0].children[0].children[1].textContent, "agent-box", "no ▸ prefix: the terminal glyph says it");
-  assert.strictEqual(t.menu.children[1].children[0].children[1].textContent, "main.go");
+  for (let i = 0; i < 6; i++) {
+    assert.strictEqual(slot(i).className, "menu-icon");
+    assert.strictEqual(slot(i).getAttribute("aria-hidden"), "true", "row " + i + ": the glyph is decoration");
+    assert.strictEqual(slot(i).children.length, 1, "row " + i + ": one glyph");
+  }
+  assert.strictEqual(iconOf(slot(0).children[0]), "si:claude", "a Claude session titled bash is still Claude");
+  const shell = slot(1).children[0];
+  assert.strictEqual(shell.tag, "svg");
+  assert.strictEqual(shell.getAttribute("viewBox"), "0 0 24 24");
+  assert.strictEqual(iconOf(shell), "terminal", "the sidebar's shell glyph, for a shell titled claude");
+  for (const i of [0, 1]) assert.strictEqual(slot(i).children[0].getAttribute("width"), "14", "the menu row's size");
+  const file = slot(2).children[0];
+  assert.strictEqual(file.tag, "svg", "a file wears its kind's glyph, drawn: no Nerd text, no .menu-ficon");
+  assert.strictEqual(iconOf(file), "file-code", "by the path's file name (main.go)");
+  assert.strictEqual(file.getAttribute("width"), "13");
+  assert.strictEqual(iconOf(slot(3).children[0]), "file", "a file with no path goes by its title (notes: no extension)");
+  assert.strictEqual(iconOf(slot(4).children[0]), "square-terminal", "neither Claude nor a shell: the pane header's terminal glyph");
+  assert.strictEqual(iconOf(slot(5).children[0]), "square-terminal", "a session the list does not hold: the same");
+  assert.strictEqual(t.menu.children[0].children[0].children[1].textContent, "bash", "the title is the .menu-text");
+  assert.strictEqual(t.menu.children[2].children[0].children[1].textContent, "main.go");
+});
+
+test("tab switcher file row: the glyph is the kind's (logo.svg is file-image), by the path's name and never the title; a hostile name is the plain file", () => {
+  const img = { id: "v3", kind: "viewer", path: "/src/assets/logo.svg", title: () => "logo" };
+  const titled = { id: "v4", kind: "viewer", path: "", title: () => "logo.svg" };
+  const hostile = { id: "v5", kind: "viewer", path: "/src/constructor", title: () => "constructor" };
+  const t = switcher(1440, [img, titled, hostile]);
+  t.open();
+  const slot = (i) => t.menu.children[i].children[0].children[0];
+  assert.strictEqual(iconOf(slot(0).children[0]), "file-image");
+  assert.strictEqual(iconOf(slot(1).children[0]), "file-image", "no path: the title's extension");
+  assert.strictEqual(iconOf(slot(2).children[0]), "file");
+  for (const i of [0, 1, 2]) assert.strictEqual(slot(i).children.length, 1);
+});
+
+test("desktop: a session's row names its tier (Host, Box, Box clone) with the sidebar's glyph; a file and an unknown session have none", () => {
+  const t = switcher(1440, [S_CLAUDE, S_SHELL, S_CLONE, view, S_GONE], 3, SESSIONS, PROFILES);
+  t.open();
+  const item = (i) => t.menu.children[i].children[0];
+  const chip = (i) => item(i).children.find((c) => (c.className || "").split(" ").includes("menu-tier"));
+  const want = [["box", "Box"], ["host", "Host"], ["clone", "Box clone"]];
+  want.forEach(([key, label], i) => {
+    const c = chip(i);
+    assert.ok(c, "row " + i + " has a tier chip");
+    assert.deepStrictEqual(c.className.split(" ").sort(), ["dchip", key === "host" ? "host" : "box", "menu-tier"].sort(), "row " + i + ": the sidebar chip's tone");
+    assert.strictEqual(c.getAttribute("data-tier"), key);
+    const [ic, word] = c.children;
+    assert.strictEqual(ic.tag, "svg");
+    assert.strictEqual(ic.getAttribute("aria-hidden"), "true");
+    assert.strictEqual(iconOf(ic), { box: "box", clone: "copy", host: "triangle-alert" }[key], "row " + i + ": the " + key + " glyph");
+    assert.strictEqual(ic.getAttribute("width"), "11");
+    assert.ok(ic.getAttribute("class").split(" ").includes("tchip-i"));
+    assert.strictEqual(word.textContent, label, "row " + i + ": the word is text, so it is part of the row's name");
+  });
+  assert.deepStrictEqual(item(0).children.map((c) => c.className.split(" ")[0]), ["menu-icon", "menu-text", "menu-tier"], "the chip follows the title");
+  assert.ok(!chip(3), "a file runs nowhere");
+  assert.ok(!chip(4), "a session the list does not hold: no tier is guessed");
+  assert.deepStrictEqual(item(3).children.map((c) => c.className), ["menu-icon", "menu-text", "menu-check"], "the shown file: the check, no chip");
+  const cur = switcher(1440, [S_CLAUDE], 0, SESSIONS, PROFILES);
+  cur.open();
+  assert.deepStrictEqual(cur.menu.children[0].children[0].children.map((c) => c.className.split(" ")[0]), ["menu-icon", "menu-text", "menu-tier", "menu-check"], "the check stays last");
 });
 
 test("desktop: only the current tab wears aria-current and the check; the rest have neither", () => {
@@ -346,7 +431,7 @@ test("desktop: a tab's row shows its path, or its title, on hover; Close says wh
   assert.strictEqual(x(0).getAttribute("aria-label"), "Close agent-box");
   assert.strictEqual(x(1).getAttribute("aria-label"), "Close main.go");
   assert.strictEqual(x(0).type, "button");
-  assert.strictEqual(x(0).textContent, "×");
+  assert.strictEqual(x(0).children[0].getAttribute("data-icon"), "x", "the glyph, not the text ×");
 });
 
 test("desktop: a row closes the menu, focuses the pane and activates its tab; a close closes the menu and that tab", () => {

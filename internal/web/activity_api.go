@@ -196,7 +196,8 @@ func credentialEvents(src ActivityAuditService, sid string, since, beforeTS int6
 		if !show || r.Time.Unix() < since || (beforeTS > 0 && r.Time.Unix() >= beforeTS) {
 			continue
 		}
-		evs = append(evs, session.TimelineEvent{TS: r.Time.UnixMilli(), Kind: "credential", Detail: credentialDetail(r), State: state})
+		// Provider is one of the broker's constants (aws | github | static), never free text, so it needs no masking.
+		evs = append(evs, session.TimelineEvent{TS: r.Time.UnixMilli(), Kind: "credential", Detail: credentialDetail(r), State: state, Provider: broker.NormalizeProvider(r.Provider)})
 	}
 	return evs, more, nil
 }
@@ -223,10 +224,7 @@ func credentialState(o broker.Outcome) (state string, show bool) {
 // credentialDetail is "<provider> <entry>", e.g. "aws culipulse-prod". The
 // entry is the named connection or token entry; a static token's is its Subject.
 func credentialDetail(r broker.Row) string {
-	provider := r.Provider
-	if provider == "" {
-		provider = broker.ProviderAWS
-	}
+	provider := broker.NormalizeProvider(r.Provider)
 	entry := r.Entry
 	if entry == "" && (provider == broker.ProviderStatic || provider == broker.ProviderGitHub) {
 		entry = r.Subject
