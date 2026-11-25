@@ -48,7 +48,8 @@ type ReturnState struct {
 	NotHome []NotHome `json:"not_home,omitempty"`
 	Error   string    `json:"error,omitempty"` // the last run could not check the clone
 	// Uncommitted is the clone's changed or untracked file count at the last
-	// listing; nil when unknown (an older state file, an image that did not say).
+	// listing; nil when unknown (an older state file, an image that did not say,
+	// a status that failed or timed out).
 	Uncommitted    *int `json:"uncommitted,omitempty"`
 	UncommittedCut bool `json:"uncommitted_cut,omitempty"` // the count is a floor: the listing was cut
 }

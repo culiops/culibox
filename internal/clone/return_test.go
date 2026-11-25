@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -54,6 +55,15 @@ func TestListArgsRunsStatus(t *testing.T) {
 	}
 	if mounts != 1 {
 		t.Errorf("%d mounts, want only the clone", mounts)
+	}
+	// The status is bounded and every untracked file counts; for-each-ref stays fatal.
+	for _, w := range []string{"timeout 10 git ", "--untracked-files=all", "for-each-ref"} {
+		if !strings.Contains(listScript, w) {
+			t.Errorf("listScript lacks %q:\n%s", w, listScript)
+		}
+	}
+	if strings.Contains(listScript, "--untracked-files=normal") {
+		t.Errorf("listScript counts untracked directories as one entry:\n%s", listScript)
 	}
 	// A clone path with shell metacharacters stays one argv element.
 	r.Clone.Dir = "/work/a b;$(touch x)"
@@ -631,7 +641,17 @@ func TestReturnCountsUncommittedFromTheListing(t *testing.T) {
 	}
 }
 
+// needTimeout skips a test that runs the real listScript on a host without
+// coreutils timeout (the container image has it).
+func needTimeout(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("timeout"); err != nil {
+		t.Skip("no timeout(1) on this host")
+	}
+}
+
 func TestReturnCountsUncommittedForReal(t *testing.T) {
+	needTimeout(t)
 	x := newReturnFx(t)
 	if res := x.ret(ReturnAuto); res.Uncommitted == nil || *res.Uncommitted != 0 {
 		t.Fatalf("clean clone: Uncommitted = %v, want 0", res.Uncommitted)
@@ -645,6 +665,41 @@ func TestReturnCountsUncommittedForReal(t *testing.T) {
 	}
 	if res := x.ret(ReturnAuto); res.Uncommitted == nil || *res.Uncommitted != 2 || res.UncommittedCut {
 		t.Fatalf("Uncommitted = %v cut=%v, want 2", res.Uncommitted, res.UncommittedCut)
+	}
+	// Every file of an untracked directory counts, not the directory once.
+	for _, n := range []string{"a", "b", "c"} {
+		if err := os.MkdirAll(filepath.Join(dir, "newdir"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "newdir", n), []byte(n), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if res := x.ret(ReturnAuto); res.Uncommitted == nil || *res.Uncommitted != 5 {
+		t.Fatalf("Uncommitted = %v, want 5 (2 + the 3 files of newdir)", res.Uncommitted)
+	}
+}
+
+// A status that fails (here a corrupt index) must not stop the branches coming
+// home: only the count is unknown.
+func TestReturnBranchesComeHomeWhenStatusFails(t *testing.T) {
+	needTimeout(t)
+	x := newReturnFx(t)
+	if err := os.WriteFile(filepath.Join(x.req.Clone.Dir, ".git", "index"), []byte("not an index"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := x.ret(ReturnAuto)
+	if res.Error != "" {
+		t.Fatalf("Error = %q; a failed status is not a failed listing", res.Error)
+	}
+	if want := []string{"box/feat", "box/main"}; !slices.Equal(res.Home, want) {
+		t.Errorf("Home = %q, want %q", res.Home, want)
+	}
+	if res.Uncommitted != nil || res.UncommittedCut {
+		t.Errorf("Uncommitted = %v cut=%v, want unknown", res.Uncommitted, res.UncommittedCut)
+	}
+	if st, _, _ := ReadReturnState(x.req.DataDir, x.req.Clone.Dir); st.Uncommitted != nil || st.Error != "" {
+		t.Errorf("state = %+v, want no count and no error", st)
 	}
 }
 

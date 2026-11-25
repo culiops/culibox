@@ -149,6 +149,9 @@ func (f *fakeDocker) RunStream(ctx context.Context, args []string, stdout io.Wri
 	if slices.Contains(args, "GIT_OPTIONAL_LOCKS=0") {
 		cfgEnv = append(cfgEnv, "GIT_OPTIONAL_LOCKS=0")
 	}
+	if args[i+1] == "sh" {
+		cfgEnv = append(cfgEnv, "HOME="+f.t.TempDir()) // the script's scratch file lives under the container's HOME tmpfs
+	}
 	gitArgs := args[i+3:] // skip --entrypoint git|sh <image>
 	cmd := exec.CommandContext(ctx, args[i+1], gitArgs...)
 	cmd.Env = append(append(append(CleanEnv(), "GIT_ALTERNATE_OBJECT_DIRECTORIES="+alt), cfgEnv...), f.env...)

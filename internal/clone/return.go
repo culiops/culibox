@@ -38,13 +38,20 @@ const (
 
 // listScript is the whole program of the listing container, fixed text: the
 // clone's path is the positional $1, never part of it. The branch lines come
-// first, then statusSep, then one `git status --porcelain=v1` line per
-// uncommitted file. GIT_OPTIONAL_LOCKS=0 (in the argv) keeps status from
-// refreshing the index of a clone it only reads.
+// first (a failing for-each-ref fails the container: set -e). The status is
+// best effort and bounded: it runs under timeout 10 into a file on the HOME
+// tmpfs, and only when it exits 0 does the script print statusSep and the
+// file, one `git status --porcelain=v1` line per uncommitted file
+// (--untracked-files=all: every untracked file, not each directory once). A
+// failed or timed-out status prints no separator, so the count is unknown and
+// the container still exits 0: the branches come home. GIT_OPTIONAL_LOCKS=0 (in
+// the argv) keeps status from refreshing the index of a clone it only reads.
 const listScript = `set -e
 git -C "$1" -c core.hooksPath=/dev/null -c core.fsmonitor=false for-each-ref --format='%(objectname) %(refname)' refs/heads/
+if timeout 10 git -C "$1" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.untrackedCache=false status --porcelain=v1 --untracked-files=all > "$HOME/culibox-status"; then
 echo '` + statusSep + `'
-git -C "$1" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.untrackedCache=false status --porcelain=v1 --untracked-files=normal
+cat "$HOME/culibox-status"
+fi
 `
 
 type ReturnMode int
@@ -70,9 +77,10 @@ type ReturnResult struct {
 	Warnings []string                   // FetchResult.Warnings of the branches that came, "box/<b>: " prefixed
 	Handback map[string]handback.Report // what each branch that came brings that needs a look, keyed "box/<b>"
 	Error    string                     // listing or host checks failed; NotHome is then the previous state's
-	// Uncommitted is how many files the clone's work tree has changed or untracked,
-	// from the same container; nil when the listing did not say (an image that
-	// predates it, a torn output) and, after an Error, the previous state's.
+	// Uncommitted is how many files the clone's work tree has changed or untracked
+	// (every untracked file counts), from the same container; nil when the listing
+	// did not say: an image that predates it, a status that failed or ran past its
+	// 10 s, a torn output. After an Error it is the previous state's.
 	Uncommitted *int
 	// UncommittedCut: the 64 KiB cap cut the status part, so Uncommitted is a floor.
 	UncommittedCut bool
@@ -295,7 +303,8 @@ func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev 
 // branch lines were lost to the cap, to the branch count or to a torn last line.
 // After statusSep every complete non-empty line is one uncommitted file and sets
 // res.Uncommitted; a torn status line sets res.UncommittedCut instead. Without
-// statusSep (an older image, a torn output) res.Uncommitted stays nil.
+// statusSep (an older image, a status that failed or timed out, a torn output)
+// res.Uncommitted stays nil.
 func parseList(text string, res *ReturnResult) (entries []listedBranch, cut bool) {
 	seen := map[string]bool{}
 	inStatus := false

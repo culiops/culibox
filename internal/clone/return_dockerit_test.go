@@ -86,20 +86,7 @@ func TestReturnInARealContainer(t *testing.T) {
 // clone's index file as it found it: status must not refresh it.
 func TestReturnCountsUncommittedDocker(t *testing.T) {
 	e := citNewRefreshEnv(t)
-	files, err := filepath.Glob(filepath.Join(e.dir, "*"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var tracked string
-	for _, f := range files {
-		if fi, err := os.Stat(f); err == nil && fi.Mode().IsRegular() {
-			tracked = f
-			break
-		}
-	}
-	if tracked == "" {
-		t.Fatal("the clone has no tracked file to modify")
-	}
+	tracked := filepath.Join(e.dir, "main.go") // a tracked file of the citOf fixture
 	citWrite(t, tracked, "modified in the box\n")
 	citWrite(t, filepath.Join(e.dir, "untracked.txt"), "new\n")
 
