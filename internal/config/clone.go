@@ -26,6 +26,9 @@ type Clone struct {
 	// NoAutoReturn is the clone_no_auto_return switch. It is deliberately left
 	// out of Hash: flipping it must not rename the box.
 	NoAutoReturn bool
+	// Profile is the name of the profile this clone belongs to, for messages.
+	// Left out of Hash: renaming a profile must not rename the box.
+	Profile string
 }
 
 // ParseShare validates one clone_share entry and returns its relative path.
@@ -72,7 +75,7 @@ func (a AgentConfig) Clone() (*Clone, error) {
 	if err := validateClone(a); err != nil {
 		return nil, err
 	}
-	return &Clone{Of: a.CloneOf, Dir: a.DefaultCwd, Shares: slices.Clone(a.CloneShare), NoAutoReturn: a.CloneNoAutoReturn}, nil
+	return &Clone{Of: a.CloneOf, Dir: a.DefaultCwd, Shares: slices.Clone(a.CloneShare), NoAutoReturn: a.CloneNoAutoReturn, Profile: a.Name}, nil
 }
 
 // Hash identifies the clone spec for the box name: two profiles that clone

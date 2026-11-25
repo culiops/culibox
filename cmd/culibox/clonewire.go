@@ -292,7 +292,8 @@ func (h *cloneHooks) HostOrigin(ctx context.Context, of string) (string, error) 
 }
 
 // returnModeOf is how a trigger returns a clone's branches: "now" forces, the
-// profile's switch off only records what is not home, otherwise fast-forward only.
+// profile's switch off only records what is not home (every other trigger,
+// idle and host included), otherwise fast-forward only.
 func returnModeOf(c config.Clone, trigger string) clone.ReturnMode {
 	switch {
 	case trigger == session.ReturnNow:
@@ -311,12 +312,14 @@ func returnModeOf(c config.Clone, trigger string) clone.ReturnMode {
 // was.
 func (h *cloneHooks) doReturn(ctx context.Context, c config.Clone, trigger string, mode clone.ReturnMode) session.ReturnSummary {
 	if err := h.checkOf(c.Of); err != nil {
-		return session.ReturnSummary{Trigger: trigger, At: time.Now(), Error: clone.Sanitize(err.Error())}
+		return session.ReturnSummary{Trigger: trigger, At: time.Now(), Profile: c.Profile, Error: clone.Sanitize(err.Error())}
 	}
-	return returnSummaryOf(trigger, c.Of, h.handback, h.ret(ctx, h.env.Git, h.docker, clone.ReturnRequest{
+	s := returnSummaryOf(trigger, c.Of, h.handback, h.ret(ctx, h.env.Git, h.docker, clone.ReturnRequest{
 		Clone: c, Mode: mode, Image: h.image, Instance: h.instance,
 		TempDir: filepath.Join(h.dataDir, "clone-fetch"), Home: h.env.Home, DataDir: h.dataDir, Protected: h.env.Protected,
 	}))
+	s.Profile = c.Profile
+	return s
 }
 
 // returnSummaryOf is the session's view of a return result. The clone layer has
@@ -327,6 +330,11 @@ func (h *cloneHooks) doReturn(ctx context.Context, c config.Clone, trigger strin
 func returnSummaryOf(trigger, of string, hb *handbackHooks, r clone.ReturnResult) session.ReturnSummary {
 	s := session.ReturnSummary{
 		Trigger: trigger, At: r.At, Base: r.Base, Home: r.Home, Warnings: r.Warnings, Error: r.Error,
+		UncommittedCut: r.UncommittedCut,
+	}
+	if r.Uncommitted != nil {
+		n := *r.Uncommitted
+		s.Uncommitted = &n
 	}
 	for _, n := range r.NotHome {
 		s.NotHome = append(s.NotHome, session.NotHomeBranch{Branch: n.Branch, Reason: n.Reason, Detail: n.Detail})
@@ -339,12 +347,13 @@ func returnSummaryOf(trigger, of string, hb *handbackHooks, r clone.ReturnResult
 
 // ReturnWork brings a clone's branches home under the clone's lock, the same
 // one a spawn's refresh holds, so the two never rewrite a clone's refs
-// together. Except for "now" it skips while another boxed session of this
-// instance uses the clone (asked once the lock is held); every trigger skips
-// when a box of another instance may hold it. Never an error: the outcome,
+// together. Only an "exit" return skips while another boxed session of this
+// instance uses the clone (asked once the lock is held): idle, host and "now"
+// returns are fast-forward only or forced and run beside a live session. Every
+// trigger skips when a box of another instance may hold it. Never an error: the outcome,
 // failures included, is in the summary.
 func (h *cloneHooks) ReturnWork(ctx context.Context, c config.Clone, o session.ReturnOpts) session.ReturnSummary {
-	sum := session.ReturnSummary{Trigger: o.Trigger, At: time.Now()}
+	sum := session.ReturnSummary{Trigger: o.Trigger, At: time.Now(), Profile: c.Profile}
 	if h.unavailable != "" {
 		sum.Skipped = "unavailable"
 		return sum
@@ -356,7 +365,7 @@ func (h *cloneHooks) ReturnWork(ctx context.Context, c config.Clone, o session.R
 		sum.Skipped = clone.SkipInUse
 		return sum
 	}
-	if o.Trigger != session.ReturnNow && o.LiveSession != nil && o.LiveSession() {
+	if o.Trigger == session.ReturnOnExit && o.LiveSession != nil && o.LiveSession() {
 		sum.Skipped = clone.SkipInUse
 		return sum
 	}
@@ -378,10 +387,15 @@ func (h *cloneHooks) NotHome(c config.Clone) *session.NotHomeState {
 	if err != nil {
 		return &session.NotHomeState{Error: "cannot read what is not home: " + clone.Sanitize(err.Error())}
 	}
-	if !ok || (len(st.NotHome) == 0 && st.Error == "") {
+	uncommitted := st.Uncommitted != nil && *st.Uncommitted > 0
+	if !ok || (len(st.NotHome) == 0 && st.Error == "" && !uncommitted) {
 		return nil
 	}
 	out := &session.NotHomeState{At: st.At, Base: st.Base, Error: st.Error}
+	if uncommitted {
+		n := *st.Uncommitted
+		out.Uncommitted, out.UncommittedCut = &n, st.UncommittedCut
+	}
 	for _, n := range st.NotHome {
 		out.Branches = append(out.Branches, session.NotHomeBranch{Branch: n.Branch, Reason: n.Reason, Detail: n.Detail})
 	}

@@ -13,19 +13,20 @@ import (
 func TestCloneGuidance(t *testing.T) {
 	const head = "CuliBox: you are working in a private copy of /home/u/repo. "
 	const pushSentences = `Commit on a branch, push it with "git push -u origin <branch>" and open a PR with "gh pr create"; pushing to main may be rejected by branch protection. `
+	const commit = " CuliBox never commits for you: commit your work on a branch when you finish a task; uncommitted files do not come home."
 	cases := []struct {
 		name             string
 		push, autoReturn bool
 		want             string
 	}{
 		{"push, auto", true, true, head + pushSentences +
-			"Your branches also come home to /home/u/repo as box/<branch> when this session ends."},
+			"Your branches also come home to /home/u/repo as box/<branch> after each turn and when this session ends." + commit},
 		{"push, no auto", true, false, head + pushSentences +
-			"Your branches reach /home/u/repo as box/<branch> when the user brings them home."},
+			"Your branches reach /home/u/repo as box/<branch> when the user brings them home." + commit},
 		{"no push, auto", false, true, head +
-			"It cannot push to GitHub from here: commit on a branch, and your branches come home to /home/u/repo as box/<branch> when this session ends."},
+			"It cannot push to GitHub from here: commit on a branch, and your branches come home to /home/u/repo as box/<branch> after each turn and when this session ends." + commit},
 		{"no push, no auto", false, false, head +
-			"It cannot push to GitHub from here: commit on a branch, and your branches reach /home/u/repo as box/<branch> when the user brings them home."},
+			"It cannot push to GitHub from here: commit on a branch, and your branches reach /home/u/repo as box/<branch> when the user brings them home." + commit},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -33,6 +34,21 @@ func TestCloneGuidance(t *testing.T) {
 				t.Fatalf("got  %q\nwant %q", got, c.want)
 			}
 		})
+	}
+}
+
+func TestCloneGuidanceCommitLine(t *testing.T) {
+	const commit = " CuliBox never commits for you: commit your work on a branch when you finish a task; uncommitted files do not come home."
+	for _, push := range []bool{true, false} {
+		for _, auto := range []bool{true, false} {
+			got := cloneGuidance("/r", push, auto)
+			if !strings.HasSuffix(got, commit) {
+				t.Errorf("push=%v auto=%v: %q does not end with the commit sentence", push, auto, got)
+			}
+			if auto != strings.Contains(got, "after each turn") {
+				t.Errorf("push=%v auto=%v: %q: \"after each turn\" must appear exactly for auto-return", push, auto, got)
+			}
+		}
 	}
 }
 

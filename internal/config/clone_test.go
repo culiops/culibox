@@ -223,3 +223,19 @@ func TestValidateCloneRefusesCaseVariantOverlapWhenFolding(t *testing.T) {
 		t.Fatalf("case-variant clone inside clone_of: got %v; want overlap refusal", err)
 	}
 }
+
+func TestCloneHashIgnoresProfile(t *testing.T) {
+	a := Clone{Of: "/r/a", Dir: "/c/a", Shares: []string{"x"}}
+	b := a
+	b.Profile = "dev"
+	if a.Hash() != b.Hash() {
+		t.Fatal("Profile changed Clone.Hash")
+	}
+}
+
+func TestCloneCarriesProfileName(t *testing.T) {
+	c, err := AgentConfig{Name: "dev", CloneOf: "/src/of", DefaultCwd: "/work/c"}.Clone()
+	if err != nil || c == nil || c.Profile != "dev" {
+		t.Fatalf("Clone() = %+v, %v; want Profile dev", c, err)
+	}
+}

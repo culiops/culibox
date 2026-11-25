@@ -976,23 +976,130 @@ func TestCloneReturnTakesTheCloneLock(t *testing.T) {
 	}
 }
 
-func TestCloneReturnSkipsLiveSessionUnlessNow(t *testing.T) {
+func TestReturnWorkLiveSkipMatrix(t *testing.T) {
+	for _, c := range []struct {
+		trig string
+		skip bool
+	}{
+		{session.ReturnOnExit, true},
+		{session.ReturnOnIdle, false},
+		{session.ReturnOnHost, false},
+		{session.ReturnNow, false},
+	} {
+		t.Run(c.trig, func(t *testing.T) {
+			f := newRefreshFake(t)
+			cl := config.Clone{Of: "/r", Dir: cloneDir(t)}
+			sum := f.h.ReturnWork(context.Background(), cl, session.ReturnOpts{Trigger: c.trig, LiveSession: func() bool { return true }})
+			if sum.Trigger != c.trig {
+				t.Fatalf("trigger %q, want %q", sum.Trigger, c.trig)
+			}
+			if c.skip {
+				if sum.Skipped != clone.SkipInUse || f.retCount() != 0 {
+					t.Fatalf("%+v, %d return call(s); want in-use and none", sum, f.retCount())
+				}
+				return
+			}
+			if sum.Skipped != "" || f.retCount() != 1 {
+				t.Fatalf("%+v, %d return call(s); want one run", sum, f.retCount())
+			}
+		})
+	}
+}
+
+// Whatever the trigger, a box of another instance still skips the return.
+func TestReturnWorkOtherInstanceSkipsEveryTrigger(t *testing.T) {
+	for _, trig := range []string{session.ReturnOnIdle, session.ReturnOnHost} {
+		f := newRefreshFake(t)
+		dir := cloneDir(t)
+		f.boxes = []box.BoxInfo{{Name: "prod-box", State: "running", Workspace: dir, Instance: "PROD"}}
+		sum := f.h.ReturnWork(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.ReturnOpts{Trigger: trig, LiveSession: never})
+		if sum.Skipped != clone.SkipOtherInstance || f.retCount() != 0 {
+			t.Fatalf("%s: %+v, %d return call(s); want other-instance and none", trig, sum, f.retCount())
+		}
+	}
+}
+
+func TestReturnModeOf(t *testing.T) {
+	for _, c := range []struct {
+		trig string
+		off  bool
+		want clone.ReturnMode
+	}{
+		{session.ReturnOnExit, false, clone.ReturnAuto},
+		{session.ReturnOnSpawn, false, clone.ReturnAuto},
+		{session.ReturnOnIdle, false, clone.ReturnAuto},
+		{session.ReturnOnHost, false, clone.ReturnAuto},
+		{session.ReturnOnExit, true, clone.ReturnDry},
+		{session.ReturnOnSpawn, true, clone.ReturnDry},
+		{session.ReturnOnIdle, true, clone.ReturnDry},
+		{session.ReturnOnHost, true, clone.ReturnDry},
+		{session.ReturnNow, false, clone.ReturnForced},
+		{session.ReturnNow, true, clone.ReturnForced},
+	} {
+		if got := returnModeOf(config.Clone{NoAutoReturn: c.off}, c.trig); got != c.want {
+			t.Errorf("%s off=%v: mode %v, want %v", c.trig, c.off, got, c.want)
+		}
+	}
+}
+
+func TestReturnSummaryOfUncommitted(t *testing.T) {
+	three := 3
+	got := returnSummaryOf(session.ReturnOnIdle, "/r", nil, clone.ReturnResult{Uncommitted: &three, UncommittedCut: true})
+	if got.Uncommitted == nil || *got.Uncommitted != 3 || !got.UncommittedCut {
+		t.Fatalf("summary = %+v, want uncommitted 3 and cut", got)
+	}
+	// The summary owns its count: changing the result's afterwards must not reach it.
+	three = 9
+	if *got.Uncommitted != 3 {
+		t.Fatalf("summary shares the result's pointer: %d", *got.Uncommitted)
+	}
+	// Unknown stays unknown, never zero.
+	got = returnSummaryOf(session.ReturnOnIdle, "/r", nil, clone.ReturnResult{})
+	if got.Uncommitted != nil || got.UncommittedCut {
+		t.Fatalf("summary = %+v, want an unknown count", got)
+	}
+	zero := 0
+	got = returnSummaryOf(session.ReturnOnIdle, "/r", nil, clone.ReturnResult{Uncommitted: &zero})
+	if got.Uncommitted == nil || *got.Uncommitted != 0 {
+		t.Fatalf("summary = %+v, want a known zero", got)
+	}
+}
+
+func TestReturnSummaryCarriesProfile(t *testing.T) {
 	f := newRefreshFake(t)
+	cl := config.Clone{Of: "/r", Dir: cloneDir(t), Profile: "dev"}
+	if sum := f.h.ReturnWork(context.Background(), cl, session.ReturnOpts{Trigger: session.ReturnOnIdle}); sum.Profile != "dev" {
+		t.Fatalf("ran: profile %q, want dev", sum.Profile)
+	}
+	f.h.unavailable = "no layer"
+	if sum := f.h.ReturnWork(context.Background(), cl, session.ReturnOpts{Trigger: session.ReturnOnIdle}); sum.Profile != "dev" {
+		t.Fatalf("skipped: profile %q, want dev", sum.Profile)
+	}
+}
+
+func TestNotHomeUncommittedOnly(t *testing.T) {
+	h := testHooks(t, noClones)
+	h.dataDir = t.TempDir()
 	dir := cloneDir(t)
 	c := config.Clone{Of: "/r", Dir: dir}
-	live := func() bool { return true }
-
-	sum := f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnExit, LiveSession: live})
-	if sum.Skipped != clone.SkipInUse || sum.Trigger != session.ReturnOnExit || f.retCount() != 0 {
-		t.Fatalf("exit with a live session: %+v, %d return call(s); want in-use and none", sum, f.retCount())
+	at := time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC)
+	two := 2
+	if err := clone.WriteReturnState(h.dataDir, dir, clone.ReturnState{At: at, Base: "main", Uncommitted: &two, UncommittedCut: true}); err != nil {
+		t.Fatal(err)
 	}
-	sum = f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnSpawn, LiveSession: live})
-	if sum.Skipped != clone.SkipInUse || f.retCount() != 0 {
-		t.Fatalf("spawn with a live session: %+v", sum)
+	got := h.NotHome(c)
+	if got == nil || got.Uncommitted == nil || *got.Uncommitted != 2 || !got.UncommittedCut || len(got.Branches) != 0 || got.Error != "" {
+		t.Fatalf("NotHome = %+v, want a state with 2 uncommitted (cut) and nothing else", got)
 	}
-	sum = f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnNow, LiveSession: live})
-	if sum.Skipped != "" || f.retCount() != 1 || f.lastRet(t).Mode != clone.ReturnForced {
-		t.Fatalf("now with a live session: %+v, %d call(s), mode %v; want one forced call", sum, f.retCount(), f.lastRet(t).Mode)
+	// Zero and unknown show nothing.
+	zero := 0
+	for _, u := range []*int{&zero, nil} {
+		if err := clone.WriteReturnState(h.dataDir, dir, clone.ReturnState{At: at, Base: "main", Uncommitted: u}); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.NotHome(c); got != nil {
+			t.Fatalf("uncommitted %v: NotHome = %+v, want nil", u, got)
+		}
 	}
 }
 
@@ -1047,6 +1154,8 @@ func TestCloneReturnModeFollowsTheSwitch(t *testing.T) {
 	}{
 		{false, session.ReturnOnExit, clone.ReturnAuto},
 		{false, session.ReturnOnSpawn, clone.ReturnAuto},
+		{false, session.ReturnOnIdle, clone.ReturnAuto},
+		{true, session.ReturnOnHost, clone.ReturnDry},
 		{true, session.ReturnOnExit, clone.ReturnDry},
 		{true, session.ReturnOnSpawn, clone.ReturnDry},
 		{false, session.ReturnNow, clone.ReturnForced},

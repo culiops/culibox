@@ -13,10 +13,13 @@ import (
 )
 
 // What started a return: the session's agent exiting, the next spawn of the
-// clone, or the user's "Bring work home now".
+// clone, the clone going idle after a turn, a host-tier spawn in the clone's
+// repo, or the user's "Bring work home now".
 const (
 	ReturnOnSpawn = "spawn"
 	ReturnOnExit  = "exit"
+	ReturnOnIdle  = "idle"
+	ReturnOnHost  = "host"
 	ReturnNow     = "now"
 )
 
@@ -68,6 +71,12 @@ type ReturnSummary struct {
 	// (#346): one note per branch, with the count and the record to read them
 	// from. Absent when nothing was flagged.
 	Flagged []HandbackNote `json:"flagged,omitempty"`
+	// Uncommitted is how many files the clone's work tree holds that no commit
+	// has: nil means unknown (never zero), UncommittedCut that the count is a
+	// floor. Profile names the profile the clone belongs to.
+	Uncommitted    *int   `json:"uncommitted,omitempty"`
+	UncommittedCut bool   `json:"uncommitted_cut,omitempty"`
+	Profile        string `json:"profile,omitempty"`
 }
 
 // copy returns an independent ReturnSummary, nil for nil.
@@ -80,6 +89,10 @@ func (r *ReturnSummary) copy() *ReturnSummary {
 	out.NotHome = slices.Clone(r.NotHome)
 	out.Warnings = slices.Clone(r.Warnings)
 	out.Flagged = slices.Clone(r.Flagged)
+	if r.Uncommitted != nil {
+		n := *r.Uncommitted
+		out.Uncommitted = &n
+	}
 	return &out
 }
 
@@ -90,6 +103,9 @@ type NotHomeState struct {
 	Base     string          `json:"base,omitempty"`
 	Branches []NotHomeBranch `json:"branches,omitempty"`
 	Error    string          `json:"error,omitempty"`
+	// Uncommitted and UncommittedCut are as on ReturnSummary.
+	Uncommitted    *int `json:"uncommitted,omitempty"`
+	UncommittedCut bool `json:"uncommitted_cut,omitempty"`
 }
 
 // cloneLive returns the scan "does a non-exited boxed session use this clone
