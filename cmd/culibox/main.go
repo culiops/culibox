@@ -838,7 +838,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
 	// A clone_of whose folder was boxed in place before the record kept a flag
 	// needs the user's ack at save (new or changed clone_of only, #371).
-	pm.SetInPlaceHistoryCheck(func(of string) bool { return boxedReg.InPlaceStatus(of) == boxedws.StatusUnknown })
+	pm.SetInPlaceHistoryCheck(func(of string) bool {
+		st, _ := boxedReg.InPlaceStatus(of)
+		return st == boxedws.StatusUnknown
+	})
 	if h != nil {
 		pm.SetNotHome(h.NotHome)
 	}

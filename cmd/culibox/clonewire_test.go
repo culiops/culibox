@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1783,11 +1784,23 @@ func TestCheckOfRefusesFolderBoxedInPlaceWithoutGit(t *testing.T) {
 		if !errors.Is(err, box.ErrUnboxableWorkspace) {
 			t.Fatalf("checkOf(%s) = %v, want ErrUnboxableWorkspace", of, err)
 		}
-		for _, want := range []string{"boxed in place when it was not a git repo", "may be box-written", filepath.Join(data, "boxed-workspaces.json")} {
+		// The release names the entry that matched (the folder boxed in place,
+		// not clone_of) and its git_guarded flag; never "remove the entry",
+		// which would also drop the folder's file-API containment (#371 C2).
+		for _, want := range []string{"boxed in place when it was not a git repo", "may be box-written",
+			filepath.Join(data, "boxed-workspaces.json"), fmt.Sprintf("set %q to true under \"git_guarded\"", nongit), "stop CuliBox"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("checkOf(%s) = %q, missing %q", of, err, want)
 			}
 		}
+		for _, bad := range []string{"remove", "delete"} {
+			if strings.Contains(err.Error(), bad) {
+				t.Errorf("checkOf(%s) = %q tells the user to %s the entry", of, err, bad)
+			}
+		}
+	}
+	if err := h.checkOf(nested); !strings.Contains(err.Error(), "it is inside "+nongit) {
+		t.Errorf("checkOf(%s) = %q, want it to say which recorded folder it is inside", nested, err)
 	}
 	for _, of := range []string{legacy, free} {
 		if err := h.checkOf(of); err != nil {
@@ -1843,10 +1856,10 @@ func TestBoxedRecorderFlagsInPlaceSpawnsOnly(t *testing.T) {
 	if err := rec(copyDir, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := reg.InPlaceStatus(inPlace); got != boxedws.StatusNonGit {
+	if got, _ := reg.InPlaceStatus(inPlace); got != boxedws.StatusNonGit {
 		t.Errorf("in place spawn: status %q, want nongit", got)
 	}
-	if got := reg.InPlaceStatus(copyDir); got != boxedws.StatusUnknown {
+	if got, _ := reg.InPlaceStatus(copyDir); got != boxedws.StatusUnknown {
 		t.Errorf("clone dir spawn: status %q, want unknown (no flag)", got)
 	}
 	if got := reg.List(); len(got) != 2 {
@@ -1864,10 +1877,10 @@ func TestBoxedRecorderFlagsInPlaceSpawnsOnly(t *testing.T) {
 	if err := rec(sub, other); err != nil {
 		t.Fatal(err)
 	}
-	if got := reg.InPlaceStatus(other); got != boxedws.StatusUnknown {
+	if got, _ := reg.InPlaceStatus(other); got != boxedws.StatusUnknown {
 		t.Errorf("a spawn in a copy: status %q, want unknown (no flag)", got)
 	}
-	if got := reg.InPlaceStatus(sub); got == boxedws.StatusNonGit {
+	if got, _ := reg.InPlaceStatus(sub); got == boxedws.StatusNonGit {
 		t.Errorf("a spawn in a copy must not be recorded non-git: %q", got)
 	}
 }

@@ -555,11 +555,26 @@ func (h *cloneHooks) checkOf(of string) error {
 	// "nongit" is refused here. An entry with no flag (recorded before the flag
 	// existed) is checked at profile save, for a new or changed clone_of only,
 	// so a clone profile accepted under the old rules keeps spawning.
-	if h.boxed != nil && h.boxed.InPlaceStatus(of) == boxedws.StatusNonGit {
-		return fmt.Errorf("%w: clone_of %s: this folder was boxed in place when it was not a git repo; a .git there may be box-written; to release it, remove its entry from %s",
-			box.ErrUnboxableWorkspace, of, h.boxed.Path())
+	if h.boxed != nil {
+		if st, entry := h.boxed.InPlaceStatus(of); st == boxedws.StatusNonGit {
+			return fmt.Errorf("%w: clone_of %s: %s", box.ErrUnboxableWorkspace, of, nonGitRelease(of, entry, h.boxed.Path()))
+		}
 	}
 	return nil
+}
+
+// nonGitRelease says why a clone_of inside a folder boxed in place without git
+// is refused, and the one way to release it: the entry's git_guarded set to true
+// by hand. Never "delete the entry": the entry is also what keeps the web file
+// API contained in that folder.
+func nonGitRelease(of, entry, file string) string {
+	where := "this folder was"
+	if entry != of {
+		where = "it is inside " + entry + ", which was"
+	}
+	return fmt.Sprintf("%s boxed in place when it was not a git repo, so a .git there may be box-written. "+
+		"If you are sure the .git in %s is your own, not a box's: stop CuliBox, set %q to true under \"git_guarded\" in %s, and start it again",
+		where, of, entry, file)
 }
 
 // checkShared refuses a clone_of or clone dir the box VM does not share; with

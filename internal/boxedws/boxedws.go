@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -55,6 +56,12 @@ const (
 	// StatusUnknown: inside a recorded workspace with no flag.
 	StatusUnknown = "unknown"
 )
+
+// foldCase makes InPlaceStatus ignore case, as a default macOS volume does: a
+// clone_of spelled in another case is the same folder there, and must meet the
+// same refusal (#371 S2). Folding only adds matches, so only adds refusals. A
+// variable so a test can set it (wsroots and box/protected.go fold the same way).
+var foldCase = runtime.GOOS == "darwin"
 
 // Registry is the set of boxed workspaces, persisted in <dataDir>/boxed-workspaces.json.
 type Registry struct {
@@ -178,29 +185,46 @@ func (r *Registry) RecordInPlace(ws string, gitGuarded bool) error {
 // recorded workspace or inside one, StatusNonGit when it is inside one recorded
 // as boxed in place without git, StatusUnknown when it is inside one with no
 // flag. p is resolved through symlinks as far as it exists (the record holds
-// resolved paths); a nested entry's stricter status wins.
-func (r *Registry) InPlaceStatus(p string) string {
+// resolved paths); a nested entry's stricter status wins. Every folder inside
+// an entry has its status: boxing ~/code in place makes every repo under it
+// nongit. entry is the recorded workspace that decided the status (the
+// innermost one of that status), the key to name when telling the user where
+// to look; "" with StatusNone. On darwin case is ignored (foldCase).
+func (r *Registry) InPlaceStatus(p string) (status, entry string) {
 	p = resolveBest(p)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	status := StatusNone
+	var nongit, unknown string
+	// inner: w is deeper than cur, or as deep and first in order, so the
+	// answer does not depend on the map's order.
+	inner := func(w, cur string) bool { return cur == "" || len(w) > len(cur) || (len(w) == len(cur) && w < cur) }
 	for w := range r.set {
 		if !within(p, w) {
 			continue
 		}
 		g, has := r.guard[w]
 		switch {
-		case has && !g:
-			return StatusNonGit
-		case !has:
-			status = StatusUnknown
+		case has && !g && inner(w, nongit):
+			nongit = w
+		case !has && inner(w, unknown):
+			unknown = w
 		}
 	}
-	return status
+	switch {
+	case nongit != "":
+		return StatusNonGit, nongit
+	case unknown != "":
+		return StatusUnknown, unknown
+	}
+	return StatusNone, ""
 }
 
-// within reports whether p is dir or below it, by whole path components.
+// within reports whether p is dir or below it, by whole path components,
+// ignoring case when foldCase is set.
 func within(p, dir string) bool {
+	if foldCase {
+		p, dir = strings.ToLower(p), strings.ToLower(dir)
+	}
 	if p == dir {
 		return true
 	}

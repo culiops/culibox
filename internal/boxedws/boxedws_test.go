@@ -344,6 +344,12 @@ func TestOpenV1WithoutSeededFieldIsUnseeded(t *testing.T) {
 	}
 }
 
+// statusOf is InPlaceStatus's status alone.
+func statusOf(r *Registry, p string) string {
+	st, _ := r.InPlaceStatus(p)
+	return st
+}
+
 func TestInPlaceStatus(t *testing.T) {
 	data := t.TempDir()
 	plain, guarded, unknown := mkdir(t, "plain"), mkdir(t, "guarded"), mkdir(t, "unknown")
@@ -374,7 +380,7 @@ func TestInPlaceStatus(t *testing.T) {
 		"elsewhere":           {mkdir(t, "elsewhere"), StatusNone},
 		"parent of an entry":  {filepath.Dir(plain), StatusNone},
 	} {
-		if got := r.InPlaceStatus(tc.p); got != tc.want {
+		if got := statusOf(r, tc.p); got != tc.want {
 			t.Errorf("%s: InPlaceStatus(%s) = %q, want %q", name, tc.p, got, tc.want)
 		}
 	}
@@ -383,10 +389,10 @@ func TestInPlaceStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := r2.InPlaceStatus(plain); got != StatusNonGit {
+	if got := statusOf(r2, plain); got != StatusNonGit {
 		t.Fatalf("after reopen: %q", got)
 	}
-	if got := r2.InPlaceStatus(unknown); got != StatusUnknown {
+	if got := statusOf(r2, unknown); got != StatusUnknown {
 		t.Fatalf("after reopen, no flag: %q", got)
 	}
 	if got := r2.List(); len(got) != 3 {
@@ -404,7 +410,7 @@ func TestInPlaceStatusSymlinkedSpelling(t *testing.T) {
 	if err := r.RecordInPlace(ws, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.InPlaceStatus(filepath.Join(link, "x")); got != StatusNonGit {
+	if got := statusOf(r, filepath.Join(link, "x")); got != StatusNonGit {
 		t.Fatalf("a symlinked spelling: %q", got)
 	}
 }
@@ -423,10 +429,10 @@ func TestInPlaceStatusNestedEntries(t *testing.T) {
 	if err := r.RecordInPlace(inner, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.InPlaceStatus(inner); got != StatusNonGit {
+	if got := statusOf(r, inner); got != StatusNonGit {
 		t.Fatalf("inner: %q", got)
 	}
-	if got := r.InPlaceStatus(outer); got != StatusUnknown {
+	if got := statusOf(r, outer); got != StatusUnknown {
 		t.Fatalf("outer: %q", got)
 	}
 }
@@ -445,7 +451,7 @@ func TestInPlaceFalseIsSticky(t *testing.T) {
 	if err := r.Add(ws); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.InPlaceStatus(ws); got != StatusNonGit {
+	if got := statusOf(r, ws); got != StatusNonGit {
 		t.Fatalf("status = %q", got)
 	}
 	// An entry recorded without a flag takes the flag on a later in-place spawn.
@@ -457,7 +463,7 @@ func TestInPlaceFalseIsSticky(t *testing.T) {
 		t.Fatal(err)
 	}
 	r2, _, _ := Open(data, none)
-	if got := r2.InPlaceStatus(other); got != StatusNonGit {
+	if got := statusOf(r2, other); got != StatusNonGit {
 		t.Fatalf("after reopen: %q", got)
 	}
 }
@@ -475,7 +481,7 @@ func TestOpenOldFileWithoutGuardMap(t *testing.T) {
 	if err != nil || !seeded {
 		t.Fatalf("Open: seeded=%v err=%v", seeded, err)
 	}
-	if got := r.InPlaceStatus(ws); got != StatusUnknown {
+	if got := statusOf(r, ws); got != StatusUnknown {
 		t.Fatalf("status = %q, want unknown", got)
 	}
 	other := mkdir(t, "other")
@@ -489,7 +495,7 @@ func TestOpenOldFileWithoutGuardMap(t *testing.T) {
 	if got := r2.List(); len(got) != 2 {
 		t.Fatalf("List = %v", got)
 	}
-	if r2.InPlaceStatus(ws) != StatusUnknown || r2.InPlaceStatus(other) != StatusNonGit {
+	if statusOf(r2, ws) != StatusUnknown || statusOf(r2, other) != StatusNonGit {
 		t.Fatal("flags lost on rewrite")
 	}
 }
@@ -518,7 +524,7 @@ func TestOpenIgnoresFlagWithoutEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := r.InPlaceStatus(ws); got != StatusNone {
+	if got := statusOf(r, ws); got != StatusNone {
 		t.Fatalf("status = %q", got)
 	}
 }
@@ -529,7 +535,96 @@ func TestRecordInPlaceSkipsRefused(t *testing.T) {
 	if err := r.RecordInPlace(ws, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.InPlaceStatus(ws); got != StatusNone || len(r.List()) != 0 {
+	if got := statusOf(r, ws); got != StatusNone || len(r.List()) != 0 {
 		t.Fatalf("a refused entry was recorded: %q %v", got, r.List())
+	}
+}
+
+// The entry that decided the status comes back with it: the innermost one of
+// that status, whatever the map's order. That is the key the refusal tells the
+// user to look at (#371 C2).
+func TestInPlaceStatusNamesTheEntry(t *testing.T) {
+	outer := mkdir(t, "outer")
+	mid := filepath.Join(outer, "mid")
+	inner := filepath.Join(mid, "inner")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, _, _ := Open(t.TempDir(), none)
+	if err := r.RecordInPlace(outer, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RecordInPlace(mid, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Add(inner); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		if st, e := r.InPlaceStatus(filepath.Join(inner, "repo")); st != StatusNonGit || e != mid {
+			t.Fatalf("InPlaceStatus = %q, %q; want nongit and the innermost nongit entry %s", st, e, mid)
+		}
+	}
+	if st, e := r.InPlaceStatus(outer); st != StatusNonGit || e != outer {
+		t.Fatalf("outer: %q, %q", st, e)
+	}
+	if st, e := r.InPlaceStatus(mkdir(t, "elsewhere")); st != StatusNone || e != "" {
+		t.Fatalf("elsewhere: %q, %q", st, e)
+	}
+	r2, _, _ := Open(t.TempDir(), none)
+	if err := r2.Add(outer); err != nil {
+		t.Fatal(err)
+	}
+	if st, e := r2.InPlaceStatus(inner); st != StatusUnknown || e != outer {
+		t.Fatalf("unknown: %q, %q", st, e)
+	}
+}
+
+// The release the refusal describes: the user sets the entry's git_guarded to
+// true in the file (CuliBox stopped); the next start reads it as checked.
+func TestInPlaceReleasedByHandEditedFlag(t *testing.T) {
+	data := t.TempDir()
+	ws := mkdir(t, "ws")
+	r, _, _ := Open(data, none)
+	if err := r.RecordInPlace(ws, false); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"version":1,"seeded":false,"workspaces":[%q],"git_guarded":{%q:true}}`, ws, ws)
+	if err := os.WriteFile(filepath.Join(data, fileName), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r2, _, err := Open(data, none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := r2.InPlaceStatus(ws); st != StatusNone {
+		t.Fatalf("after the hand edit: %q, want none", st)
+	}
+	if got := r2.List(); len(got) != 1 {
+		t.Fatalf("the entry (the fs containment) must stay: %v", got)
+	}
+}
+
+// On a case-insensitive volume (darwin) another spelling of a recorded folder
+// is that folder: folding finds it, and only adds refusals (#371 S2).
+func TestInPlaceStatusFoldsCase(t *testing.T) {
+	old := foldCase
+	t.Cleanup(func() { foldCase = old })
+	ws := mkdir(t, "Code")
+	r, _, _ := Open(t.TempDir(), none)
+	if err := r.RecordInPlace(ws, false); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(filepath.Dir(ws), "code", "App")
+	foldCase = true
+	if st, e := r.InPlaceStatus(other); st != StatusNonGit || e != ws {
+		t.Fatalf("folded: %q, %q; want nongit, %s", st, e, ws)
+	}
+	if st, _ := r.InPlaceStatus(filepath.Join(filepath.Dir(ws), "codex")); st != StatusNone {
+		t.Fatalf("folded, a sibling that shares a prefix: %q", st)
+	}
+	foldCase = false
+	if st, _ := r.InPlaceStatus(other); st != StatusNone {
+		t.Fatalf("not folded: %q, want none (another folder on a case-sensitive volume)", st)
 	}
 }
