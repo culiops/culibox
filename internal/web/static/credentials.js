@@ -466,7 +466,7 @@ function rowSaveState(row) {
     // A non-read-only result saves only when the server calls it acknowledgeable (ack_eligible === true) and
     // the operator ticked the box (or the stored connection is already acknowledged). The UI never judges the reason.
     if (g.ack_eligible !== true) return { canSave: false, needsAck: false };
-    const done = r.fullAck === true || !!(r.orig && r.orig.full_access === true);
+    const done = r.fullAck === true || (!r.ackStale && !!(r.orig && r.orig.full_access === true));
     return done ? { canSave: true, needsAck: false } : { canSave: false, needsAck: true };
   }
   if (r.unchanged === true) return { canSave: true, needsAck: false };
@@ -732,7 +732,7 @@ function awsCheckView(res) {
 // "alone": switching mode is a change, and sso_direct never counts as unchanged.
 function awsRowStateFor(row) {
   const unchanged = row.orig ? row.source_profile === row.orig.source_profile && row.role_arn === row.orig.role_arn && (row.mode || "") === (row.orig.mode || "") : undefined;
-  return rowSaveState({ assume: row.assume, verdict: row.verdict, acked: row.acked, unchanged, mode: row.mode, gate: row.gate, fullAck: row.fullAck, orig: row.orig });
+  return rowSaveState({ assume: row.assume, verdict: row.verdict, acked: row.acked, unchanged, mode: row.mode, gate: row.gate, fullAck: row.fullAck, ackStale: row.ackStale, orig: row.orig });
 }
 
 // awsAckBody: the acknowledgement a save sends, or null. Only a ticked box on an acknowledgeable gate produces one;
@@ -2036,7 +2036,7 @@ function awsNewRow(base, extra) {
   return {
     ...base, ...extra, id: ++awsRowSeq, description: "", egress: "", s3: "", elevRole: "", elevMinutes: "60", elevIAM: false, elevBoxPrefix: "", elevPass: "",
     assume: null, verdict: null, actions: [], reason: "", reasonText: "", acked: false,
-    mode: "", gate: null, hours: 0, fullAck: false,
+    mode: "", gate: null, hours: 0, fullAck: false, ackStale: false,
     busy: "", err: "", roles: null, rolesNote: "", rolesDoc: false, rolesFilter: "", rolesFilterIn: null, signIn: "", el: null, res: null, rolesBox: null, roleInput: null,
   };
 }
@@ -2244,7 +2244,7 @@ function awsField(row, key, label, opts) {
 // earlier check no longer describes this row.
 function awsInvalidate(row) {
   row.assume = null; row.verdict = null; row.actions = []; row.reason = ""; row.reasonText = ""; row.acked = false;
-  row.gate = null; row.hours = 0; row.fullAck = false;
+  row.gate = null; row.hours = 0; row.fullAck = false; row.ackStale = false;
   row.err = ""; row.signIn = "";
   awsPaintModeNote(row);
   awsPaintRes(row);
@@ -2603,6 +2603,7 @@ function awsGateNode(g) {
 // awsAckNode: the full-access acknowledgement. Unticked by default, never pre-ticked; the text covers future grants
 // because a result the gate could not read cannot pin what the permission set allows.
 const AWS_ACK_TEXT = "I understand: the agent gets everything this permission set allows, now or later, for the whole session, with no read-only default and no write window. CuliBox lists what it found above.";
+const AWS_ACK_ALREADY = "Already acknowledged; tick again only to acknowledge a change.";
 function awsAckNode(row) {
   const box = awsEl("div", "warnbox");
   const lab = awsEl("label", "pf-check");
@@ -2612,6 +2613,7 @@ function awsAckNode(row) {
   cb.onchange = () => { row.fullAck = cb.checked; awsPaintFoot(); };
   lab.append(cb, document.createTextNode(" " + AWS_ACK_TEXT));
   box.appendChild(lab);
+  if (row.orig && row.orig.full_access === true && !row.ackStale) box.appendChild(awsEl("p", "hint", AWS_ACK_ALREADY));
   const p = awsEl("p", "hint", "The agent role is the recommended default. ");
   const a = awsEl("a", null, "How to create the agent role");
   a.href = AWS_AGENT_ROLE_DOC; a.target = "_blank"; a.rel = "noopener noreferrer";
@@ -2831,7 +2833,7 @@ async function awsCheckRow(row) {
       const res = await awsPost("/api/credentials/aws/check", { mode: "sso_direct", source_profile: row.source_profile, region: row.region });
       if (awsFlow !== f) return false;
       row.gate = res.gate ? { ...res.gate, ack_eligible: res.ack_eligible === true } : { state: "unverified", reason: "error", ack_eligible: false };
-      row.fullAck = false; // a new gate result is a new thing to acknowledge
+      row.fullAck = false; row.ackStale = false; // a new gate result is a new thing to acknowledge
       row.hours = row.gate.state === "read_only" ? awsHoursFromExpiry(res.expires, Date.now()) : 0;
       awsPaintModeNote(row);
       row.busy = "";
@@ -3010,6 +3012,7 @@ async function awsSaveAll() {
         row.err = "";
         if (e.body.ack_stale === true) {
           row.fullAck = false;
+          row.ackStale = true; // the stored acknowledgement no longer counts: a new tick is needed
           row.err = "The permission set changed since you checked it; review and acknowledge again.";
         }
         // The gate did not pass, so no credential lifetime is known: a stale

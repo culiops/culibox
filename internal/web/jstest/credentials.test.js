@@ -1161,3 +1161,11 @@ test("the card: full_access (and only it) swaps the gate note for the label, wit
   const [only] = credTableRows({ key: "aws", entries: [{ ...base, full_access_ack: { state: "acknowledged", at: "2026-11-25T10:00:00Z", actor: "a" } }] });
   assert.strictEqual(only.cells[3].text, "Read-only gate runs on every use");
 });
+
+test("rowSaveState: a stale acknowledgement stops orig.full_access counting until a new tick", () => {
+  const g = { state: "not_read_only", ack_eligible: true };
+  const orig = { full_access: true };
+  assert.deepStrictEqual(rowSaveState({ mode: "sso_direct", gate: g, orig }), { canSave: true, needsAck: false });
+  assert.deepStrictEqual(rowSaveState({ mode: "sso_direct", gate: g, orig, ackStale: true }), { canSave: false, needsAck: true });
+  assert.deepStrictEqual(rowSaveState({ mode: "sso_direct", gate: g, orig, ackStale: true, fullAck: true }), { canSave: true, needsAck: false });
+});

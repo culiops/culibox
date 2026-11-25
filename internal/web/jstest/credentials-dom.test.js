@@ -3073,3 +3073,41 @@ test("sso_direct ack: a 409 ack_stale shows the new gate, the stale message and 
   assert.ok(opts.host.textContent.includes("The permission set changed since you checked it; review and acknowledge again."));
   assert.ok(opts.host.textContent.includes("iam:GetPolicy"), "the new gate is shown");
 });
+
+test("sso_direct ack on an edit of a full-access connection: the note says it is acknowledged; an ack_stale 409 needs a new tick", async () => {
+  const p = page({ tab: true });
+  const fresh = ackGate();
+  let n = 0;
+  p.box.reply = (path, opt) => {
+    if (path === "/api/credentials/aws/host-profiles") return { profiles: awsHostProfiles };
+    if (path === "/api/credentials/aws/check") return ackGate();
+    if (path.startsWith("/api/credentials/aws/") && opt && opt.method === "PUT") {
+      if (++n === 1) { const e = new Error("conflict"); e.status = 409; e.code = "not_read_only"; e.body = { code: "not_read_only", gate: fresh.gate, ack_eligible: true, ack_stale: true }; throw e; }
+      return {};
+    }
+    return {};
+  };
+  p.box.awsOpenEdit({ name: "sbx", source_profile: "acme-dev", region: "eu-west-1", mode: "sso_direct", full_access: true });
+  await settle();
+  await p.box.awsCheckAll();
+  await settle();
+  const root = p.byId["creds-body"];
+  assert.ok(ackBoxOf(root), "the box is drawn");
+  assert.strictEqual(ackBoxOf(root).checked, false);
+  assert.ok(root.textContent.includes("Already acknowledged; tick again only to acknowledge a change."));
+  await p.box.awsSaveAll();
+  await settle();
+  const puts = () => p.calls.filter((c) => c.method === "PUT");
+  assert.strictEqual(puts().length, 1);
+  assert.strictEqual("ack_full_access" in puts()[0].body, false, "stored ack covers the first save");
+  assert.ok(root.textContent.includes("The permission set changed since you checked it"));
+  assert.ok(!root.textContent.includes("Already acknowledged"), "a stale ack is not 'already acknowledged'");
+  await p.box.awsSaveAll();
+  assert.strictEqual(puts().length, 1, "blocked until the box is ticked again");
+  const cb = ackBoxOf(root);
+  assert.strictEqual(cb.checked, false);
+  cb.checked = true; cb.onchange();
+  await p.box.awsSaveAll();
+  assert.strictEqual(puts().length, 2);
+  assert.deepStrictEqual(puts()[1].body.ack_full_access, { refused: ["iam:*"], missing_perms: [] });
+});
