@@ -2105,6 +2105,23 @@ function toastReturnSuffix(s) {
   return t ? " \u00b7 " + t : "";
 }
 
+// toastHostReturnSuffix: the Host spawn toast's tail: what bringing home the
+// clones of this folder's repo said before the session started (profile names
+// are text in the toast, never markup). "" when it has nothing to say.
+function toastHostReturnSuffix(s) {
+  const t = hostReturnToast(s.host_return);
+  return t ? " \u00b7 " + t : "";
+}
+
+// sessionNotHomeSuffix: the clone session row's not-home line, as a meta suffix
+// (" · 1 branch not home · 3 files not committed"), or "" for none. The row clips
+// its meta line, so it goes right after the copy's folder, before the longer
+// "work comes home" suffix.
+function sessionNotHomeSuffix(s) {
+  const t = sessionNotHome(s, profiles.find((x) => x.name === s.agent));
+  return t ? " \u00b7 " + t : "";
+}
+
 // What the last sessions poll showed, for returnNews: seen is null until the
 // first poll after boot, which seeds it silently (returns that finished before
 // the page opened are not news).
@@ -2648,7 +2665,7 @@ function renderSession(s, opts) {
   if (!compact) {
     const smeta = document.createElement("div");
     smeta.className = "smeta";
-    smeta.textContent = sessionMeta(s, s.clone_of ? wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s) : s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
+    smeta.textContent = sessionMeta(s, s.clone_of ? wmCopyLine(s.clone_of, window.HOME_DIR) + sessionNotHomeSuffix(s) + sessionWorkHome(s) : s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
     grow.appendChild(smeta);
   }
   li.appendChild(grow);
@@ -5613,6 +5630,14 @@ function renderPfNotHome(name) {
     row.textContent = notHomeLabel(nh) + ": " + nh.error;
     rows.push(row);
   }
+  // Files in the copy that no commit has: they do not come home, so the editor says so beside the branches.
+  const uncText = uncommittedLabel(nh && nh.uncommitted, nh && nh.uncommitted_cut);
+  if (uncText) {
+    const row = document.createElement("div");
+    row.className = "pf-nh-row";
+    row.textContent = uncText;
+    rows.push(row);
+  }
   // Files flagged for review (#346): the count opens the review of this profile's records.
   const flText = handbackCountText(view && view.flagged);
   if (flText && !mobileActive(window.innerWidth)) {
@@ -5933,7 +5958,7 @@ function renderProfileList() {
       b.appendChild(lk);
     }
     // Work that has not come home sits on the name's line, at every width.
-    const nhLabel = notHomeLabel(p.not_home);
+    const nhLabel = notHomeLine(p.not_home);
     if (nhLabel) {
       const nh = document.createElement("span");
       nh.className = "pnothome";
@@ -6348,7 +6373,7 @@ async function spawnSession(req, opts) {
   if (opts.toast !== false) {
     // Report the directory the SERVER chose, not the one requested.
     const where = s.cwd || req.cwd;
-    showToast((mobileActive(window.innerWidth) ? "Spawned" : "Started") + ' "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s),
+    showToast((mobileActive(window.innerWidth) ? "Spawned" : "Started") + ' "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s) + toastHostReturnSuffix(s),
       { undo: () => killSession(s.id), warn: cloneLevel(s.clone) === "warn" });
   }
   return s;

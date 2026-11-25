@@ -36,6 +36,24 @@ function notHomeLabel(st) {
   return n === 1 ? "1 branch not home" : n + " branches not home";
 }
 
+// uncommittedLabel: how many files the copy's work tree holds that no commit
+// has. n is null/undefined when the server could not count (never shown as
+// zero); cut means n is a floor.
+function uncommittedLabel(n, cut) {
+  if (typeof n !== "number" || !(n > 0)) return "";
+  if (cut) return n + "+ files not committed";
+  return n === 1 ? "1 file not committed" : n + " files not committed";
+}
+
+// notHomeLine: the profile row's / sidebar's whole line: the branch label and
+// the uncommitted files, joined with a middle dot, each only when it has
+// something to say. st is a profile's not_home view, or the same fields built
+// from a session's return.
+function notHomeLine(st) {
+  if (!st) return "";
+  return [notHomeLabel(st), uncommittedLabel(st.uncommitted, st.uncommitted_cut)].filter(Boolean).join(" \u00b7 ");
+}
+
 // notHomeReasonText: one line saying why nh did not come home. An unknown
 // reason (a newer server) gets the generic line rather than nothing.
 function notHomeReasonText(nh) {
@@ -88,14 +106,23 @@ function workHomeHb(name) {
 // returnToastText: what one return says, or "" when there is nothing to say.
 // A skipped run attempted nothing, so it says nothing. Files flagged for review
 // (#346) end the line, and a cut-short scan says so instead of saying nothing.
+// An idle return (after each agent turn) only says what came home and what is
+// flagged: not-home state lives on the profile and the sidebar, so a turn that
+// changes nothing never repeats it. A host return (before a Host spawn) adds
+// the files not committed.
 function returnToastText(profile, sum) {
   if (!sum || sum.skipped) return "";
   const home = Array.isArray(sum.home) ? sum.home : [];
   const notHome = Array.isArray(sum.not_home) ? sum.not_home : [];
   const parts = [];
   if (home.length) parts.push(home.join(", ") + " came home");
-  if (notHome.length) parts.push(notHome.length === 1 ? "1 branch not home" : notHome.length + " branches not home");
-  if (sum.error) parts.push("work not checked");
+  const idle = sum.trigger === "idle";
+  if (notHome.length && !idle) parts.push(notHome.length === 1 ? "1 branch not home" : notHome.length + " branches not home");
+  if (sum.trigger === "host") {
+    const unc = uncommittedLabel(sum.uncommitted, sum.uncommitted_cut);
+    if (unc) parts.push(unc);
+  }
+  if (sum.error && !idle) parts.push("work not checked");
   const flagged = workHomeHb("handbackNoteText")(sum.flagged);
   if (flagged) parts.push(flagged);
   if (!parts.length) {
@@ -105,9 +132,37 @@ function returnToastText(profile, sum) {
   return profile + ": " + parts.join(" · ");
 }
 
-// returnSig: the dedupe key for one profile's last return.
+// hostReturnToast: what bringing home the clones of a Host session's repo said,
+// one part per clone that has something to say, "" when none does. Each summary
+// carries its own profile name.
+function hostReturnToast(list) {
+  if (!Array.isArray(list)) return "";
+  return list.map((sum) => returnToastText(sum && sum.profile, sum)).filter(Boolean).join(" \u00b7 ");
+}
+
+// returnSig: the dedupe key for one session's last return.
 function returnSig(key, at) {
   return key + "@" + at;
+}
+
+// notHomeSig: the dedupe key for one profile's not-home state: its name and the
+// sorted branch:reason pairs. Neither the run's time nor the uncommitted count
+// is part of it, so a repeated return with the same state is not news.
+function notHomeSig(name, st) {
+  const list = st && Array.isArray(st.branches) ? st.branches : [];
+  return name + "@" + list.map((b) => (b && b.branch) + ":" + (b && b.reason)).sort().join(",");
+}
+
+// sessionNotHome: the not-home line for a clone session's sidebar row. The
+// session's own latest return speaks when it ran (not skipped); otherwise the
+// profile's last state does. "" for a session that is not a private copy.
+function sessionNotHome(s, profile) {
+  if (!s || !s.clone_of) return "";
+  const r = s.return;
+  if (r && !r.skipped) {
+    return notHomeLine({ branches: r.not_home, error: r.error, uncommitted: r.uncommitted, uncommitted_cut: r.uncommitted_cut });
+  }
+  return notHomeLine(profile && profile.not_home);
 }
 
 // notHomeNews: a toast for each profile whose last return left branches behind
@@ -119,7 +174,7 @@ function notHomeNews(seen, profiles) {
   const next = [];
   for (const p of Array.isArray(profiles) ? profiles : []) {
     if (!p || notHomeCount(p.not_home) === 0) continue;
-    const sig = returnSig(p.name, p.not_home.at);
+    const sig = notHomeSig(p.name, p.not_home);
     next.push(sig);
     if (!known.has(sig)) toasts.push(p.name + ": " + notHomeLabel(p.not_home));
   }
@@ -129,7 +184,7 @@ function notHomeNews(seen, profiles) {
 // returnNews: what one sessions poll means for returns. seen is the array of
 // session return sigs already announced (null before the first poll, which only
 // seeds); cloneIds the clone sessions the previous poll listed. Returns the
-// toasts to show, the PROFILE sigs (returnSig(agent, at)) to mark seen for
+// toasts to show, the PROFILE sigs (notHomeSig of the return's not-home set) to mark seen for
 // notHomeNews so the same return is not announced twice, the next seen/cloneIds
 // to keep (links runs in step with toasts: the hand-back record ids each one opens, often none),
 // and whether the profile list needs a refresh: a new return landed or
@@ -151,7 +206,7 @@ function returnNews(seen, cloneIds, sessions) {
       toasts.push(text);
       links.push(workHomeHb("handbackNoteIds")(s.return.flagged)); // the records the toast opens, if any
     }
-    sigs.push(returnSig(s.agent, s.return.at));
+    sigs.push(notHomeSig(s.agent, { branches: s.return.not_home }));
   }
   const now = new Set(nextClones);
   const left = (Array.isArray(cloneIds) ? cloneIds : []).some((id) => !now.has(id));
@@ -159,5 +214,5 @@ function returnNews(seen, cloneIds, sessions) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews };
+  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome };
 }

@@ -181,7 +181,7 @@ test("bringHomeNow shows its toast once", () => {
 });
 
 test("work-home text from box and server stays text: no innerHTML in the new renderers", () => {
-  for (const fn of ["renderPfNotHome", "noteReturns", "bringHomeNow", "sessionWorkHome", "toastReturnSuffix"]) {
+  for (const fn of ["renderPfNotHome", "noteReturns", "bringHomeNow", "sessionWorkHome", "toastReturnSuffix", "toastHostReturnSuffix", "sessionNotHomeSuffix"]) {
     assert.doesNotMatch(body(app, fn), /innerHTML|insertAdjacentHTML/, fn);
   }
   assert.match(body(app, "renderPfNotHome"), /d\.textContent = b\.detail/, "nh.detail shows beside the reason");
@@ -190,7 +190,10 @@ test("work-home text from box and server stays text: no innerHTML in the new ren
 test("a session with no profile gets no work-home suffix; the spawn line and the rows call workHomeSuffix", () => {
   const b = body(app, "sessionWorkHome");
   assert.match(b, /p \? workHomeSuffix\(p, !!\(s\.clone && s\.clone\.push_repo\)\) : ""/);
-  assert.match(app, /wmCopyLine\(s\.clone_of, window\.HOME_DIR\) \+ sessionWorkHome\(s\)/);
+  assert.match(app, /wmCopyLine\(s\.clone_of, window\.HOME_DIR\) \+ sessionNotHomeSuffix\(s\) \+ sessionWorkHome\(s\)/, "the row's meta carries the not-home line before the long suffix");
+  assert.match(body(app, "sessionNotHomeSuffix"), /sessionNotHome\(s, profiles\.find/);
+  assert.match(app, /toastReturnSuffix\(s\) \+ toastHostReturnSuffix\(s\)/, "the spawn toast appends the Host return");
+  assert.match(body(app, "toastHostReturnSuffix"), /hostReturnToast\(s\.host_return\)/);
   const sp = fs.readFileSync(path.join(STATIC, "spawnpanel.js"), "utf8");
   assert.match(body(sp, "syncSpawnCopyLine"), /workHomeSuffix\(p, !!\(p\.clone_of && p\.github_write\)\)/);
   assert.match(body(sp, "renderSpawnPlist"), /sp-nothome/);

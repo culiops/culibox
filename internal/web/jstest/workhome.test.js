@@ -2,7 +2,7 @@
 // workhome.js: the wording for where a private copy's work goes and what is not home.
 const test = require("node:test");
 const assert = require("node:assert");
-const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews } = require("../static/workhome.js");
+const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome } = require("../static/workhome.js");
 
 const ON = " · work comes home as box/* branches";
 const OFF = " · work stays in the copy (auto-return off)";
@@ -144,15 +144,15 @@ test("sig: name at at", () => {
 test("news: one toast for a new sig, none for the same sig again", () => {
   const profiles = [{ name: "p", not_home: { at: "A", branches: [{ branch: "feat", reason: "off" }] } }];
   const first = notHomeNews([], profiles);
-  assert.deepStrictEqual(first, { toasts: ["p: 1 branch not home"], seen: ["p@A"] });
+  assert.deepStrictEqual(first, { toasts: ["p: 1 branch not home"], seen: ["p@feat:off"] });
   const again = notHomeNews(first.seen, profiles);
-  assert.deepStrictEqual(again, { toasts: [], seen: ["p@A"] });
+  assert.deepStrictEqual(again, { toasts: [], seen: ["p@feat:off"] });
 });
 
-test("news: a new run (new at) toasts again", () => {
-  const seen = ["p@A"];
+test("news: a different not-home set toasts again", () => {
+  const seen = ["p@feat:off"];
   const profiles = [{ name: "p", not_home: { at: "B", branches: [{ branch: "a" }, { branch: "b" }] } }];
-  assert.deepStrictEqual(notHomeNews(seen, profiles), { toasts: ["p: 2 branches not home"], seen: ["p@B"] });
+  assert.deepStrictEqual(notHomeNews(seen, profiles), { toasts: ["p: 2 branches not home"], seen: ["p@a:undefined,b:undefined"] });
 });
 
 test("news: no toast for a profile with no branches, even with an error", () => {
@@ -165,13 +165,13 @@ test("news: no toast for a profile with no branches, even with an error", () => 
 });
 
 test("news: seen is pruned to the sigs still not home, and the input is not mutated", () => {
-  const seen = ["gone@X", "p@A"];
+  const seen = ["gone@x:off", "p@feat:off"];
   const profiles = [
-    { name: "p", not_home: { at: "A", branches: [{ branch: "feat" }] } },
-    { name: "q", not_home: { at: "C", branches: [{ branch: "x" }] } },
+    { name: "p", not_home: { at: "A", branches: [{ branch: "feat", reason: "off" }] } },
+    { name: "q", not_home: { at: "C", branches: [{ branch: "x", reason: "off" }] } },
   ];
-  assert.deepStrictEqual(notHomeNews(seen, profiles), { toasts: ["q: 1 branch not home"], seen: ["p@A", "q@C"] });
-  assert.deepStrictEqual(seen, ["gone@X", "p@A"]);
+  assert.deepStrictEqual(notHomeNews(seen, profiles), { toasts: ["q: 1 branch not home"], seen: ["p@feat:off", "q@x:off"] });
+  assert.deepStrictEqual(seen, ["gone@x:off", "p@feat:off"]);
 });
 
 test("news: a box-derived branch name never reaches a toast as markup", () => {
@@ -205,7 +205,7 @@ test("returnNews: a new sig toasts once, marks the profile sig seen, and asks fo
   const list = [EXIT("s1", "p", "t1"), EXIT("s2", "p", "t2")];
   const n = returnNews(first.seen, first.cloneIds, list);
   assert.deepStrictEqual(n.toasts, ["p: feat came home"]);
-  assert.deepStrictEqual(n.sigs, [returnSig("p", "t2")]);
+  assert.deepStrictEqual(n.sigs, [notHomeSig("p", { branches: [] })]);
   assert.strictEqual(n.refetch, true);
   const again = returnNews(n.seen, n.cloneIds, list);
   assert.deepStrictEqual(again.toasts, []);
@@ -261,4 +261,108 @@ test("returnNews: a flagged return toasts once and carries the record ids for th
   assert.deepStrictEqual(n.links, [["h1"]]);
   const plain = returnNews(first.seen, first.cloneIds, [EXIT("s9", "p", "t9")]);
   assert.deepStrictEqual(plain.links, [[]], "links runs in step with toasts");
+});
+
+// --- uncommitted files and the idle/host triggers (#369) ----------------------
+test("uncommittedLabel: empty for unknown or none, singular, plural, floor when cut", () => {
+  assert.strictEqual(uncommittedLabel(null, false), "");
+  assert.strictEqual(uncommittedLabel(undefined, false), "");
+  assert.strictEqual(uncommittedLabel(0, false), "");
+  assert.strictEqual(uncommittedLabel(0, true), "");
+  assert.strictEqual(uncommittedLabel(1, false), "1 file not committed");
+  assert.strictEqual(uncommittedLabel(3, false), "3 files not committed");
+  assert.strictEqual(uncommittedLabel(3, true), "3+ files not committed");
+  assert.strictEqual(uncommittedLabel(1, true), "1+ files not committed");
+});
+
+test("notHomeLine: branches and uncommitted joined, each alone, or empty", () => {
+  const b = [{ branch: "a", reason: "off" }];
+  assert.strictEqual(notHomeLine({ branches: b, uncommitted: 3 }), "1 branch not home · 3 files not committed");
+  assert.strictEqual(notHomeLine({ branches: b }), "1 branch not home");
+  assert.strictEqual(notHomeLine({ branches: [], uncommitted: 2, uncommitted_cut: true }), "2+ files not committed");
+  assert.strictEqual(notHomeLine({ branches: [], error: "x", uncommitted: 1 }), "work not checked · 1 file not committed");
+  assert.strictEqual(notHomeLine({ branches: [], uncommitted: 0 }), "");
+  assert.strictEqual(notHomeLine(null), "");
+  assert.strictEqual(notHomeLabel({ branches: b, uncommitted: 3 }), "1 branch not home", "notHomeLabel is branches only");
+});
+
+test("toast: an idle return says only what came home and what is flagged", () => {
+  const nh = [{ branch: "a", reason: "off" }];
+  assert.strictEqual(returnToastText("p", { trigger: "idle", home: [], not_home: nh, uncommitted: 3 }), "");
+  assert.strictEqual(returnToastText("p", { trigger: "idle", home: [], error: "boom" }), "");
+  assert.strictEqual(returnToastText("p", { trigger: "idle", home: ["box/feat"], not_home: nh, error: "boom", uncommitted: 2 }), "p: box/feat came home");
+  const f = returnToastText("p", { trigger: "idle", home: [], flagged: [{ id: "h1", count: 2, branch: "feat" }] });
+  assert.match(f, /^p: /);
+});
+
+test("toast: a host return adds the uncommitted files", () => {
+  const nh = [{ branch: "a", reason: "off" }, { branch: "b", reason: "not-ff" }];
+  const t = returnToastText("p", { trigger: "host", home: [], not_home: nh, uncommitted: 3 });
+  assert.strictEqual(t, "p: 2 branches not home · 3 files not committed");
+  assert.strictEqual(returnToastText("p", { trigger: "host", home: ["box/x"], uncommitted: 1 }), "p: box/x came home · 1 file not committed");
+  assert.strictEqual(returnToastText("p", { trigger: "host", home: [], uncommitted: 4, uncommitted_cut: true }), "p: 4+ files not committed");
+  assert.strictEqual(returnToastText("p", { trigger: "host", home: [] }), "");
+  assert.strictEqual(returnToastText("p", { trigger: "host", skipped: "off", uncommitted: 3 }), "");
+});
+
+test("toast: an exit return is unchanged by uncommitted", () => {
+  assert.strictEqual(returnToastText("p", { trigger: "exit", home: [], not_home: [{ branch: "a" }], uncommitted: 3 }), "p: 1 branch not home");
+});
+
+test("hostReturnToast: one part per clone that has something to say, joined", () => {
+  assert.strictEqual(hostReturnToast(null), "");
+  assert.strictEqual(hostReturnToast([]), "");
+  assert.strictEqual(hostReturnToast([{ trigger: "host", profile: "p", home: [] }]), "");
+  const one = { trigger: "host", profile: "p", home: ["box/x"] };
+  const two = { trigger: "host", profile: "q", home: [], uncommitted: 2 };
+  const skip = { trigger: "host", profile: "r", skipped: "off", uncommitted: 9 };
+  assert.strictEqual(hostReturnToast([one]), "p: box/x came home");
+  assert.strictEqual(hostReturnToast([one, skip, two]), "p: box/x came home · q: 2 files not committed");
+});
+
+test("hostReturnToast: a profile name is passed through as text", () => {
+  assert.strictEqual(hostReturnToast([{ trigger: "host", profile: "<b>", home: ["box/x"] }]), "<b>: box/x came home");
+});
+
+test("notHomeSig: name and the sorted branch:reason list; uncommitted is not part of it", () => {
+  const a = { branches: [{ branch: "b", reason: "off" }, { branch: "a", reason: "not-ff" }], uncommitted: 3 };
+  assert.strictEqual(notHomeSig("p", a), "p@a:not-ff,b:off");
+  assert.strictEqual(notHomeSig("p", { branches: [{ branch: "a", reason: "not-ff" }, { branch: "b", reason: "off" }], uncommitted: 9 }), "p@a:not-ff,b:off");
+  assert.strictEqual(notHomeSig("p", null), "p@");
+});
+
+test("news: same not-home set with a different at is one toast; a changed reason is a second; uncommitted alone is none", () => {
+  const prof = (at, reason, uncommitted) => [{ name: "p", not_home: { at, uncommitted, branches: [{ branch: "feat", reason }] } }];
+  const first = notHomeNews([], prof("A", "off"));
+  assert.strictEqual(first.toasts.length, 1);
+  const again = notHomeNews(first.seen, prof("B", "off"));
+  assert.deepStrictEqual(again.toasts, []);
+  const unc = notHomeNews(again.seen, prof("C", "off", 7));
+  assert.deepStrictEqual(unc.toasts, []);
+  const changed = notHomeNews(unc.seen, prof("D", "not-ff", 7));
+  assert.strictEqual(changed.toasts.length, 1);
+  assert.deepStrictEqual(changed.seen, [notHomeSig("p", { branches: [{ branch: "feat", reason: "not-ff" }] })]);
+});
+
+test("returnNews: marks the profile's notHomeSig, not a per-run sig, and a later identical not-home set adds no toast", () => {
+  const nh = [{ branch: "feat", reason: "off" }];
+  const idle = (id, at) => ({ id, agent: "p", clone_of: "/r", return: { trigger: "idle", at, home: [], not_home: nh, uncommitted: 3 } });
+  const first = returnNews(null, [], [idle("s1", "t1")]);
+  const n = returnNews(first.seen, first.cloneIds, [idle("s1", "t1"), idle("s2", "t2")]);
+  assert.deepStrictEqual(n.toasts, [], "an idle return says nothing about not-home");
+  assert.deepStrictEqual(n.sigs, [notHomeSig("p", { branches: nh })]);
+});
+
+test("sessionNotHome: the session's own latest return wins, else the profile; nothing for a non-clone", () => {
+  const prof = { name: "p", not_home: { at: "A", branches: [{ branch: "x", reason: "off" }, { branch: "y", reason: "off" }], uncommitted: 5 } };
+  const s = { id: "s1", agent: "p", clone_of: "/r", return: { trigger: "idle", at: "t", home: [], not_home: [{ branch: "a", reason: "off" }], uncommitted: 3 } };
+  assert.strictEqual(sessionNotHome(s, prof), "1 branch not home · 3 files not committed");
+  const cut = { ...s, return: { ...s.return, not_home: [], uncommitted: 3, uncommitted_cut: true } };
+  assert.strictEqual(sessionNotHome(cut, prof), "3+ files not committed");
+  const skipped = { ...s, return: { trigger: "idle", at: "t", skipped: "unchanged" } };
+  assert.strictEqual(sessionNotHome(skipped, prof), "2 branches not home · 5 files not committed");
+  assert.strictEqual(sessionNotHome({ id: "s1", agent: "p", clone_of: "/r" }, prof), "2 branches not home · 5 files not committed");
+  assert.strictEqual(sessionNotHome({ id: "s1", agent: "p", clone_of: "/r" }, undefined), "");
+  assert.strictEqual(sessionNotHome({ id: "s2", agent: "p", return: s.return }, prof), "");
+  assert.strictEqual(sessionNotHome(null, prof), "");
 });
