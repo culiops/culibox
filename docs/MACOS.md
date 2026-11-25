@@ -442,7 +442,8 @@ in place sees the workspace root's `.claude/` and any top-level `CLAUDE.md`,
 `CLAUDE.local.md`, `AGENTS.md` or `.mcp.json` read-only, as on Linux. The git
 parts of the guard (the read-only `.git`, and the refusal of submodules,
 `core.worktree`, a git config `include`, and so on) stay in the code for now as
-a second line of defence; a folder that is not a repo does not reach them. What
+a second line of defence. A folder that is not a repo does not reach them; a
+shell started inside a private copy (which is a git repo) does. What
 the guard covers and what it does not is in
 [Security model](SECURITY.md#known-limits).
 
