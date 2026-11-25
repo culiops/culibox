@@ -1,13 +1,14 @@
 # Clone mode
 
-Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except as a `box/<branch>` branch that CuliBox brings home, by itself or through `culibox clone fetch`, for you to review. It works on Linux and, in the box VM, on macOS (see [On macOS](#on-macos)).
+Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except as a `box/<branch>` branch that CuliBox brings home, by itself or through `culibox clone fetch`, for you to review. One opt-in changes that: a profile can also have the returned branch merged into the branch you have checked out (see [Merging into your branch](#merging-into-your-branch)). It works on Linux and, in the box VM, on macOS (see [On macOS](#on-macos)).
 
-Two profile fields turn it on:
+Two profile fields turn it on, and a third is an opt-in for merging work home:
 
 | Field | Meaning |
 |---|---|
 | `clone_of` | Absolute path of the host repo to copy. It must be a plain git repo with a `.git` directory (no worktree, no `commondir`, no `objects/info/alternates`) whose `.git/config` git can read, not a symlink, and not your home directory or any directory above it. A partial clone (`git clone --filter=…`) works, except in a folder that was once boxed in place before CuliBox classified it (see [below](#a-git-repo-boxes-as-a-private-copy)). |
 | `clone_share` | Up to 8 paths, relative to `clone_of`, that the box can read. Example: `["CLAUDE.md", "docs/notes"]`. |
+| `clone_merge_home` | Off by default. Turns on the automatic merge of a returned `box/<branch>` into the branch you have checked out in `clone_of`. It needs `clone_of`, cannot be combined with `clone_no_auto_return`, and turning it on asks you to confirm and is audited. See [Merging into your branch](#merging-into-your-branch). |
 
 The profile's `default_cwd` is the clone's directory. The two must not overlap: neither may be inside the other. The profile must be boxed: `runtime: "host"` is refused, and so is a profile that sets no runtime while the instance's `default_runtime` is `host`, both when you save it and when you spawn it. The one exception is a spawn that sends `clone: false` and `runtime: "host"`, which runs the profile without its clone, on the host. `clone: false` with a box tier is refused at a git repo, like any other boxed spawn in place there (see [below](#a-git-repo-boxes-as-a-private-copy)). Picking Host in New session does this for you: the session runs in place in the folder the profile clones (`clone_of`), not in the clone's directory, and the profile's context paths do not apply there. A host spawn of a profile with bindings or context paths needs `host_drops_bindings: true` (New session asks you to confirm), and `box_only` still refuses it. On Host the bindings are the default credentials, not a limit (see [Security](SECURITY.md#known-limits)); the context paths are dropped. Omitting the runtime never reaches the host. A restart keeps the choice. The first spawn creates the clone with host `git clone`. Spawn the session in the clone's root, not a subdirectory.
 
@@ -68,7 +69,7 @@ culibox clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <prof
 
 **Pushing to GitHub.** When the profile's GitHub binding can push to the clone's `origin` repository (it has write on `contents`, or it uses a personal access token), CuliBox adds a push-only URL rewrite to the session's git configuration. It is set through the session's environment; nothing is written into the clone. Inside the box, `git push -u origin <branch>` then goes to GitHub, while `git fetch origin` still reads the host repo, and `gh pr create` works. The `box/*` refs come home as usual (unless auto-return is off), whether or not you push. The boxed claude is told this in one appended system-prompt line, and the session shows "work comes home as a PR". Pushes that touch `.github/workflows/` are refused by GitHub for App tokens and for PATs without the Workflows permission (see [GitHub access for agents](GITHUB.md)).
 
-The flags come before the two names. `-base` defaults to `main`. CuliBox makes a git bundle of `<branch>` from the clone inside a throwaway container with no network and the clone mounted read-only, then verifies it and fetches it into `clone_of` as `box/<branch>`, with git's object checks on. The host never runs git against the clone's own `.git`, and never merges: the branch just appears. The command prints the commits that came, a warning for any commit message that carries an AI-attribution trailer, and the review line:
+The flags come before the two names. `-base` defaults to `main`. CuliBox makes a git bundle of `<branch>` from the clone inside a throwaway container with no network and the clone mounted read-only, then verifies it and fetches it into `clone_of` as `box/<branch>`, with git's object checks on. The host never runs git against the clone's own `.git`, and this command never merges, even with `clone_merge_home` on: the branch just appears. The command prints the commits that came, a warning for any commit message that carries an AI-attribution trailer, and the review line:
 
 ```text
 fetched box/feat-x (2 commit(s) not on main):
@@ -80,6 +81,49 @@ review: git -C /home/me/repo log -p main..box/feat-x; merge per your review poli
 Commit subjects are printed with control characters replaced, because a box wrote them. Bundles over 512 MiB are refused. The container runs the global `box_image`.
 
 **Keeping the clone current.** At each spawn of an existing clone, CuliBox fast-forwards the clone's local `main` (else `master`) from the host, in a throwaway container with no network, and shows the result in the spawn toast and the steer rail. It is best effort and never fails a spawn. It skips a clone that a live session or another instance's box is using, and never touches a checked-out feature branch's work tree. `clone fetch` refuses a branch that carries history host `main` no longer has (for example after a rebase or force-push), or whose clone history CuliBox cannot verify, such as a clone with no recorded base. `clone fetch`, and auto-return, also refuse a branch that carries a commit your repo still holds but no branch or tag there reaches any more. It cannot see a commit that has since been pruned (by any means) and was never a recorded base tip, unless the latest `git filter-repo` `commit-map` names it (a second filter-repo run overwrites that map), nor a commit that was already behind a `box/*` branch when the record was first seeded. `-allow-old-history` overrides these after you have reviewed the branch. A daemon restart aborts a `clone fetch` that is in flight; run it again.
+
+## Merging into your branch
+
+By default CuliBox never changes a branch you work on: the box's work arrives as `box/<branch>` and you merge it. A profile can opt in to a merge instead, with `clone_merge_home` (a checkbox under "Bring work home automatically", which must stay on; the two fields cannot be combined). It is off by default, per profile.
+
+Read the warning before you turn it on. The box's commits then land in your branch with no review step, and anything the box wrote runs with your permissions when you or a tool runs it: a build, a test, a script. The checks below cover files that host tools load by themselves, not files a person later runs. Turning the switch on in the profile editor shows this in a dialog, and the save records an audit entry, `clone_ack_merge_home`, with the repo. The dialog comes again if you change `clone_of` while it is on. Turning it off needs no confirmation. The profile API refuses the switch without `ack_merge_home: true` on the save. A profile written in `config.json` takes the field without the dialog, because editing that file is your own act.
+
+**When it runs.** After an automatic return, and only then: not for "Bring work home now" and not for `culibox clone fetch`, which stay as they are. It also runs on a return that moved nothing, so a merge refused earlier (a dirty tree) goes through once the cause is gone. It does not run in a pass that could not check the clone.
+
+**The same-name rule.** `box/X` merges into `X` only while `X` is the branch checked out in `clone_of`'s main work tree. `X` can be any name (`main`, `master`, `develop`, a feature branch). Linked worktrees of `clone_of` are not looked at. If `box/X` is not strictly ahead of `X`, there is nothing to merge and CuliBox says nothing.
+
+**The checks.** CuliBox merges only a fast-forward (`git merge --ff-only`), of the exact commit it checked, and only when every check passes. When one fails, `box/X` stays for you to review, and the toast and the profile say why:
+
+| Reason | Shown as | Meaning |
+|---|---|---|
+| `detached` | the repo has no branch checked out | `HEAD` is not on a branch. |
+| `diverged` | X has commits the box does not have | `X` and `box/X` each have commits the other lacks. |
+| `dirty` | X has uncommitted changes | A tracked file has staged or unstaged changes. Untracked files do not count here, but git will not overwrite one (see `failed`). |
+| `guarded` | it changes files host tools load by themselves | The commits touch a protected file or a submodule (below). Up to 3 example paths are shown. |
+| `flagged` | it has files flagged for review | The commits carry a file CuliBox flags when a box hands work back (see [Known limits](SECURITY.md#known-limits)), or the check hit a cap or could not finish. Up to 3 paths are shown. |
+| `filter` | it changes files that use a git filter (such as Git LFS) | A changed path has a `filter` attribute. CuliBox runs git without your global config, where such filters usually live, so a checkout would write the wrong content. |
+| `moved` | X moved while it was checked | You switched branch or committed while the checks ran. It is tried again on the next return. |
+| `failed` | git refused, followed by git's message | A git call failed, git refused the merge (an untracked file in the way, a merge or rebase in progress), or the audit entry could not be written. |
+
+The toast for a merge reads "merged box/X into X (n commits, m files)"; for a refusal, "box/X not merged into X: <reason>", once per commit and reason, not on every turn. Toasts can be missed, so the profile shows the switch ("Merges into the checked-out branch") and the last merge or refusal, and the audit log keeps every merge.
+
+**What is never merged.** The guard looks at every commit in the range and at the net difference between your branch and `box/X`, so a file that is added and removed again, or restored by a merge commit the box made, is still seen. Names are matched without regard to case, so `.Claude/` counts as `.claude/`. A change to any of these refuses the merge:
+
+- a file named `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.mcp.json`, `.envrc`, `.gitattributes`, `.gitmodules`, `mise.toml` or `.mise.toml`, at any depth;
+- anything under a directory named `.claude`, at any depth;
+- anything under a top-level `.husky`, `.githooks`, `.vscode`, `.devcontainer` or `.mise`;
+- the folder that `core.hooksPath` names, when it is inside the repo, and any folder above it. CuliBox reads `core.hooksPath` from the repo's config, from your global git config (`~/.gitconfig`, then `$XDG_CONFIG_HOME/git/config` or `~/.config/git/config`, following includes) and from `/etc/gitconfig`, and protects every value it finds;
+- a submodule (a git link);
+- a file that uses a git filter, such as Git LFS (`filter`, above);
+- a file CuliBox flags (`flagged`, above).
+
+Known limit of the hooks check: a system config in another place (Homebrew's `$(brew --prefix)/etc/gitconfig`, the git that comes with Xcode) and `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM` set in your shell are not read. If your hooks folder is inside the repo, set `core.hooksPath` in the repo's own config, or keep the folder outside the repo.
+
+**What CuliBox does when it merges.** Every git call runs with hooks off, no replace objects (`GIT_NO_REPLACE_OBJECTS=1`) and none of your global git config, and the merge is of the commit that was checked, not of the branch name. It writes an audit row, `clone_merge_home` (the branch, the old and new short ids and the commit count), before it merges, and `clone_merge_home_failed` if git then fails; if the audit row cannot be written, nothing merges. The branch's reflog says `culibox auto-merge`, so `git reflog` shows which moves were CuliBox's. A merge git refused is tried again for the same commits at most every 30 minutes; every other refusal is checked again on each automatic return.
+
+**Branches other than `main` and `master`.** The refresh of the clone (see [below](#bringing-code-home)) updates only the clone's `main` or `master`. For another branch, the merge works while you have not committed on `X` since the box's copy of it. Once you do, `box/X` no longer contains your commits and the reason is `diverged`, until the box brings your commits in and goes on from there.
+
+**A race CuliBox does not close.** If you switch branch in the same instant between its last check and the merge, git still refuses anything that is not a fast-forward and anything that would overwrite a file, but the merge can land on the branch you switched to if `box/X` happens to fast-forward it too.
 
 ## Refusals
 
