@@ -5438,6 +5438,9 @@ let pfSavedCopyDir = "";
 // unchanged unless it was removed (awsInlineToSend).
 let pfInlineAws = null;
 let pfAwsRemoved = false;
+// The repo whose merge warning (#370) the user confirmed in this form ("" for none): a save carries ack_merge_home only
+// while the folder still is that repo (wmMergeAcked). Forgotten on every load.
+let pfMergeAckRepo = "";
 // The line shown after a convert, until the form is next filled.
 let pfAwsDone = "";
 function fillForm(p) {
@@ -5467,6 +5470,8 @@ function fillForm(p) {
   $("pf-copy-dir").value = pfSavedCopyDir;
   $("pf-copy-share").value = contextPathsToText(p.clone_share);
   $("pf-clone-autoreturn").checked = !p.clone_no_auto_return;
+  pfMergeAckRepo = "";
+  paintPfMerge(!p.clone_no_auto_return, p.clone_merge_home === true);
   renderPfNotHome(p.name);
   $("pf-copy-warn").hidden = true;
   $("pf-copy-err").hidden = true;
@@ -5632,6 +5637,16 @@ function syncPfMode() {
   const ghBinding = ghBindingFromForm({ owners: readGhRows(), permissions: readGhPerms() });
   $("pf-copy-gh").hidden = st.copyDisabled || !wmNeedsGitHubHint(mode, ghBinding, readStTicked(), stEntries);
 }
+// paintPfMerge: the merge checkbox from the auto-return box and the switch (wmMergeSwitch): off and disabled without automatic
+// return, the box and its label dimmed (.pf-off) with the reason as the title.
+function paintPfMerge(autoReturn, mergeHome) {
+  const st = wmMergeSwitch(autoReturn, mergeHome);
+  const cb = $("pf-clone-merge"), lab = $("pf-clone-merge-lab");
+  cb.checked = st.checked;
+  cb.disabled = st.disabled;
+  lab.title = st.title;
+  lab.classList.toggle("pf-off", st.disabled);
+}
 // renderPfNotHome: what the last return left behind for this profile, from the
 // profile list's view (the editor's own GET has no such state). Per branch the
 // reason, the fix and, when the server has one, the specific guard or git error.
@@ -5641,6 +5656,26 @@ function renderPfNotHome(name) {
   const view = profiles.find((x) => x.name === name);
   const nh = view && view.not_home;
   const rows = [];
+  // The merge switch (#370): its line when on, and the last merge or why it was refused (toasts can be missed). textContent only.
+  const mergeNote = mergeHomeLine(view && view.merge_home);
+  if (mergeNote) {
+    const last = nh && nh.merge;
+    const when = (at) => { const d = new Date(at); return Number.isNaN(d.getTime()) ? String(at || "") : d.toLocaleString(); };
+    const lastText = mergeLastLine(last, when);
+    const row = document.createElement("div");
+    row.className = "pf-nh-row pf-nh-merge" + (mergeRefused(last) ? " pf-nh-refused" : "");
+    const why = document.createElement("span");
+    why.className = "pf-nh-why";
+    why.textContent = mergeNote;
+    row.appendChild(why);
+    if (lastText) {
+      const d = document.createElement("span");
+      d.className = "pf-nh-detail";
+      d.textContent = lastText;
+      row.appendChild(d);
+    }
+    rows.push(row);
+  }
   for (const b of (nh && Array.isArray(nh.branches) ? nh.branches : [])) {
     const row = document.createElement("div");
     row.className = "pf-nh-row";
@@ -5748,9 +5783,10 @@ function readForm() {
     copyDir: $("pf-copy-dir").value,
     shareText: $("pf-copy-share").value,
     autoReturn: $("pf-clone-autoreturn").checked,
-    // This form has no merge switch (the profile page does): a stored one is kept, and the server asks for its ack again when
-    // the folder to copy changed (cdSendProfile opens the warning).
-    mergeHome: !!(pfLoaded && pfLoaded.clone_merge_home === true),
+    // The merge switch (#370). Its ack rides only when the warning was confirmed for this very folder; a stored switch whose
+    // folder changed is asked again by the server (400 merge_home_ack, which cdSendProfile turns into the warning).
+    mergeHome: $("pf-clone-merge").checked,
+    mergeAck: wmMergeAcked($("pf-clone-merge").checked, pfMergeAckRepo, pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value)),
   }));
   const ctx = contextPathsFromText($("pf-context").value);
   if (ctx.length) p.context_paths = ctx;
@@ -6083,6 +6119,20 @@ for (const r of document.querySelectorAll('input[name="pf-mode"]')) {
     syncEditorActions();
   });
 }
+// The merge switch (#370), the same rules as the profile page's form: it needs automatic return (unchecking that unchecks
+// and disables it), checking it opens the warning for the folder to copy, Cancel unchecks it, Turn on records the repo.
+$("pf-clone-autoreturn").addEventListener("change", () => {
+  const on = $("pf-clone-autoreturn").checked;
+  if (!on) pfMergeAckRepo = "";
+  paintPfMerge(on, on && $("pf-clone-merge").checked);
+});
+$("pf-clone-merge").addEventListener("change", async () => {
+  const cb = $("pf-clone-merge");
+  if (!cb.checked) { pfMergeAckRepo = ""; return; }
+  const got = await wmMergeTurnOn(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value), cdAskMergeHome);
+  pfMergeAckRepo = got.ackRepo;
+  cb.checked = got.mergeHome;
+});
 $("pf-copy-gh-link").addEventListener("click", (e) => {
   e.preventDefault();
   $("pf-gh-block").scrollIntoView({ block: "center" });

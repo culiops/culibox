@@ -7628,3 +7628,17 @@ test("merge switch: with no folder the dialog is not opened and the box stays un
   assert.deepStrictEqual(t.box.mergeAsked, []);
   assert.strictEqual(field(t, "merge-home").checked, false);
 });
+
+test("merge switch: while disabled the label is dimmed too (pfv-off), and the reason shows as its title", async () => {
+  const t = page();
+  await openWs(t);
+  pickMode(t, "copy");
+  const lab = () => field(t, "merge-home").parent;
+  assert.strictEqual(lab().classList.contains("pfv-off"), false);
+  tick(t, "auto-return", false);
+  assert.strictEqual(lab().classList.contains("pfv-off"), true);
+  assert.strictEqual(lab().title, "Merging needs automatic return");
+  tick(t, "auto-return", true);
+  assert.strictEqual(lab().classList.contains("pfv-off"), false);
+  assert.strictEqual(lab().title, "");
+});

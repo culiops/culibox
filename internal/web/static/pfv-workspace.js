@@ -51,7 +51,7 @@ function pfwValues(c) {
 // confirmed named the folder being saved (the folder is shared between the two ways of working, so it can change after the ack).
 function pfwMergeValues(rec) {
   const v = Object.assign({}, rec.values);
-  v.mergeAck = v.mergeHome === true && v.mergeAckRepo !== "" && v.mergeAckRepo === String(v.folder || "").trim();
+  v.mergeAck = wmMergeAcked(v.mergeHome, v.mergeAckRepo, v.folder);
   delete v.mergeAckRepo;
   return v;
 }
@@ -233,9 +233,15 @@ function pfwCopyFieldNodes(rec, storedCopy) {
   const mlab = pfvMk("label", "pfv-check");
   const mcb = pfvMk("input");
   mcb.type = "checkbox";
-  mcb.checked = v.mergeHome === true && v.autoReturn === true;
-  mcb.disabled = v.autoReturn !== true;
-  mlab.title = v.autoReturn === true ? "" : "Merging needs automatic return";
+  // Disabled: the box and its label are both dimmed (.pfv-off), so the row does not look like one that works.
+  const paintMerge = (autoReturn, mergeHome) => {
+    const st = wmMergeSwitch(autoReturn, mergeHome);
+    mcb.checked = st.checked;
+    mcb.disabled = st.disabled;
+    mlab.title = st.title;
+    mlab.classList.toggle("pfv-off", st.disabled);
+  };
+  paintMerge(v.autoReturn, v.mergeHome);
   pfvReg(rec, "merge-home", mcb);
   mlab.append(mcb, pfvMk("span", "pfv-check-t", "Merge into the checked-out branch"));
   cb.onchange = () => {
@@ -243,10 +249,8 @@ function pfwCopyFieldNodes(rec, storedCopy) {
     if (!cb.checked) {
       v.mergeHome = false;
       v.mergeAckRepo = "";
-      mcb.checked = false;
     }
-    mcb.disabled = !cb.checked;
-    mlab.title = cb.checked ? "" : "Merging needs automatic return";
+    paintMerge(cb.checked, v.mergeHome);
     rec.nudge = false;
     pfvPaint();
   };
@@ -254,11 +258,10 @@ function pfwCopyFieldNodes(rec, storedCopy) {
     if (mcb.checked) {
       // Not on until the warning is confirmed: the dialog is modal, and the form stays as it was while it is open. It names the
       // repo, so with no folder there is nothing to ask about: the box stays off (the folder field says what is missing).
-      const repo = String(v.folder || "").trim();
-      const yes = repo !== "" && (await cdAskMergeHome(repo));
-      v.mergeHome = yes;
-      v.mergeAckRepo = yes ? repo : "";
-      mcb.checked = yes;
+      const got = await wmMergeTurnOn(v.folder, cdAskMergeHome);
+      v.mergeHome = got.mergeHome;
+      v.mergeAckRepo = got.ackRepo;
+      mcb.checked = got.mergeHome;
     } else {
       v.mergeHome = false;
       v.mergeAckRepo = "";

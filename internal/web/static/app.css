@@ -1582,6 +1582,12 @@
     #pf-nothome .pf-flagged { align-self: flex-start; padding: 0; background: none; border: 0; cursor: pointer; color: var(--warn-fg); text-align: left; font: inherit; }
     #pf-nothome .pf-flagged:hover { text-decoration: underline; }
     .pf-autoreturn { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 13px; text-transform: none; letter-spacing: 0; }
+    /* The merge switch (#370) while automatic return is off: the label dims with its box, as the profile page's form does. */
+    .pf-autoreturn.pf-off { color: var(--muted); }
+    /* The merge line and its last result: plain, not warn-tinted, unless the last result is a refusal. A refused path wraps at its
+       separators and only breaks inside a name that is wider than the line (break-word, not anywhere). */
+    #pf-nothome .pf-nh-merge { overflow-wrap: break-word; word-break: normal; }
+    #pf-nothome .pf-nh-merge:not(.pf-nh-refused) { border-left-color: var(--border); background: none; }
 
     .ped { flex: 1; min-width: 0; padding: 20px 22px; overflow-y: auto; }
     /* A built-in profile, seen from the editor. Accent rather than danger: it

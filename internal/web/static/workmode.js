@@ -67,6 +67,29 @@ function wmFieldsToSend(mode, v) {
   return out;
 }
 
+// wmMergeSwitch: the merge switch's face (#370) from the auto-return box and the switch as held: it can only be on with
+// automatic return (the server refuses the pair), so without it the switch is off and disabled, with the reason as its title.
+// Both forms (the profile page and the phone's legacy form) draw from this; each dims the box and its label while disabled.
+function wmMergeSwitch(autoReturn, mergeHome) {
+  const on = autoReturn === true;
+  return { checked: on && mergeHome === true, disabled: !on, title: on ? "" : "Merging needs automatic return" };
+}
+
+// wmMergeAcked: whether a save carries ack_merge_home: the switch is on and the repo whose warning the user confirmed
+// in the form is the folder being saved (the folder can change after the confirmation).
+function wmMergeAcked(mergeHome, ackRepo, folder) {
+  return mergeHome === true && typeof ackRepo === "string" && ackRepo !== "" && ackRepo === String(folder || "").trim();
+}
+
+// wmMergeTurnOn: the switch was just checked: ask (ask(repo) -> promise of a yes, cdAskMergeHome) about the folder to copy
+// and answer what the form now holds: { mergeHome, ackRepo }. With no folder there is nothing to name, so no dialog and the
+// switch stays off (the folder field says what is missing).
+async function wmMergeTurnOn(folder, ask) {
+  const repo = String(folder || "").trim();
+  const yes = repo !== "" && (await ask(repo)) === true;
+  return { mergeHome: yes, ackRepo: yes ? repo : "" };
+}
+
 // wmFormError: what stops a save before the PUT. Copy mode needs both the
 // folder to copy and the copy's directory.
 function wmFormError(mode, v) {
@@ -160,5 +183,5 @@ function wmFolderCopy(isHost) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { wmFolderCopy, wmModeOf, wmCardState, wmFieldsToSend, wmFormError, wmErrText, wmShareWarningsText, wmCopyDirSuggestion, wmSwitchNote, wmNeedsGitHubHint, wmCopyLine };
+  module.exports = { wmMergeSwitch, wmMergeAcked, wmMergeTurnOn, wmFolderCopy, wmModeOf, wmCardState, wmFieldsToSend, wmFormError, wmErrText, wmShareWarningsText, wmCopyDirSuggestion, wmSwitchNote, wmNeedsGitHubHint, wmCopyLine };
 }

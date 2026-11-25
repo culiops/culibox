@@ -2,7 +2,7 @@
 // workmode.js: the profile editor's pure work-mode rules.
 const test = require("node:test");
 const assert = require("node:assert");
-const { wmModeOf, wmCardState, wmFieldsToSend, wmFormError, wmErrText, wmShareWarningsText, wmCopyDirSuggestion, wmSwitchNote, wmNeedsGitHubHint, wmCopyLine, wmFolderCopy } = require("../static/workmode.js");
+const { wmModeOf, wmCardState, wmFieldsToSend, wmFormError, wmErrText, wmShareWarningsText, wmCopyDirSuggestion, wmSwitchNote, wmNeedsGitHubHint, wmCopyLine, wmFolderCopy, wmMergeSwitch, wmMergeAcked, wmMergeTurnOn } = require("../static/workmode.js");
 
 test("mode: copy only for a non-empty string clone_of", () => {
   assert.strictEqual(wmModeOf({ clone_of: "/r" }), "copy");
@@ -137,4 +137,30 @@ test("wmFieldsToSend: the merge switch rides a private copy's save only while au
   assert.deepStrictEqual(wmFieldsToSend("copy", { ...base, mergeHome: false, mergeAck: true }), { clone_of: "/h/r", default_cwd: "/h/box-clones/r" });
   assert.deepStrictEqual(wmFieldsToSend("copy", { ...base, autoReturn: false, mergeHome: true, mergeAck: true }), { clone_of: "/h/r", default_cwd: "/h/box-clones/r", clone_no_auto_return: true });
   assert.deepStrictEqual(wmFieldsToSend("folder", { folder: "/h/r", mergeHome: true, mergeAck: true }), { default_cwd: "/h/r" });
+});
+
+test("merge switch state: only with automatic return; dimmed (box and label) while disabled, with the reason", () => {
+  assert.deepStrictEqual(wmMergeSwitch(true, true), { checked: true, disabled: false, title: "" });
+  assert.deepStrictEqual(wmMergeSwitch(true, false), { checked: false, disabled: false, title: "" });
+  assert.deepStrictEqual(wmMergeSwitch(false, true), { checked: false, disabled: true, title: "Merging needs automatic return" });
+  assert.deepStrictEqual(wmMergeSwitch(undefined, true), { checked: false, disabled: true, title: "Merging needs automatic return" });
+});
+
+test("merge ack: true only while the switch is on and the confirmed repo is the folder being saved", () => {
+  assert.strictEqual(wmMergeAcked(true, "/r", "/r"), true);
+  assert.strictEqual(wmMergeAcked(true, "/r", "  /r "), true);
+  assert.strictEqual(wmMergeAcked(true, "/r", "/other"), false);
+  assert.strictEqual(wmMergeAcked(true, "", ""), false);
+  assert.strictEqual(wmMergeAcked(false, "/r", "/r"), false);
+});
+
+test("merge turn-on: asks with the folder; Turn on records the repo, Cancel and an empty folder do not", async () => {
+  const asked = [];
+  const yes = async (r) => { asked.push(r); return true; };
+  const no = async (r) => { asked.push(r); return false; };
+  assert.deepStrictEqual(await wmMergeTurnOn(" /r ", yes), { mergeHome: true, ackRepo: "/r" });
+  assert.deepStrictEqual(await wmMergeTurnOn("/r", no), { mergeHome: false, ackRepo: "" });
+  assert.deepStrictEqual(asked, ["/r", "/r"]);
+  assert.deepStrictEqual(await wmMergeTurnOn("  ", yes), { mergeHome: false, ackRepo: "" });
+  assert.strictEqual(asked.length, 2, "no folder, no dialog");
 });

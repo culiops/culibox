@@ -141,8 +141,9 @@ test("cdSendProfile answers merge_home_ack: the dialog opens with the profile's 
   assert.strictEqual(no.sent.length, 1);
 });
 
-test("the one warning dialog is built once: the form's checkbox and the 400 both call cdAskMergeHome", () => {
-  assert.match(read("pfv-workspace.js"), /cdAskMergeHome\(/);
+test("the one warning dialog is built once: both forms' checkbox (through wmMergeTurnOn) and the 400 call cdAskMergeHome", () => {
+  assert.match(read("pfv-workspace.js"), /wmMergeTurnOn\([^;]*cdAskMergeHome\)/);
+  assert.match(read("app.js"), /wmMergeTurnOn\([^;]*cdAskMergeHome\)/);
   assert.match(read("copydialog.js"), /cdMergeHomeDialog\(repo\)/);
   assert.match(read("copydialog.js"), /cdAskMergeHome\(/);
 });

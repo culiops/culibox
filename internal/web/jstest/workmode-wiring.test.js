@@ -225,3 +225,26 @@ test("the not-home chips wrap and shrink; the profile name keeps a floor width",
   assert.match(nm, /text-overflow:\s*ellipsis/);
   assert.match(body(app, "renderProfileList"), /nm\.className = "pnm"/);
 });
+
+test("legacy form: the merge checkbox sits under auto-return and goes through the shared helpers (#370)", () => {
+  const i = html.indexOf('id="pf-clone-autoreturn"'), j = html.indexOf('id="pf-clone-merge"');
+  assert.ok(j > i && j < html.indexOf('id="pf-nothome"'), "right under Bring work home automatically");
+  assert.ok(html.includes("Merge into the checked-out branch"));
+  const f = body(app, "fillForm");
+  assert.match(f, /paintPfMerge\(/);
+  assert.match(body(app, "paintPfMerge"), /wmMergeSwitch\(/);
+  assert.match(f, /pfMergeAckRepo\s*=\s*""/, "a load forgets an earlier confirmation");
+  const r = body(app, "readForm");
+  assert.match(r, /mergeHome:\s*\$\("pf-clone-merge"\)\.checked/);
+  assert.match(r, /mergeAck:\s*wmMergeAcked\(/);
+  assert.doesNotMatch(r, /pfLoaded\.clone_merge_home/, "the switch is read from the form, a stored one no longer rides along");
+  assert.match(app, /\$\("pf-clone-autoreturn"\)\.addEventListener\("change"/);
+  assert.match(app, /\$\("pf-clone-merge"\)\.addEventListener\("change"[\s\S]*wmMergeTurnOn\([\s\S]*cdAskMergeHome/);
+});
+
+test("legacy form: the phone's not-home block also shows the merge line and the last merge or refusal (#370)", () => {
+  const b = body(app, "renderPfNotHome");
+  assert.match(b, /mergeHomeLine\(view && view\.merge_home\)/);
+  assert.match(b, /mergeLastLine\(/);
+  assert.doesNotMatch(b, /innerHTML/);
+});
