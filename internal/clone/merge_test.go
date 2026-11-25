@@ -528,6 +528,60 @@ func TestMergeHomeFlagged(t *testing.T) {
 	}
 }
 
+func inspected(r *recGit) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.calls {
+		if slices.Contains(c.args, "cat-file") {
+			return true
+		}
+	}
+	return false
+}
+
+// A range found to carry flagged files is not inspected again: the flags come
+// from its blobs, which do not change for the same From..To.
+func TestMergeHomeFlaggedMemo(t *testing.T) {
+	x := newMergeFx(t, "main")
+	before := x.tip()
+	x.box("main", map[string]string{"tool": string(elfBytes(128, 1))})
+	rec := newRec(t)
+	first := x.run(rec, &auditRec{})
+	wantMergeReason(t, first, MergeFlagged)
+	if !inspected(rec) {
+		t.Fatal("the first pass did not inspect the range")
+	}
+	rec = newRec(t)
+	got := MergeHome(context.Background(), rec, MergeRequest{Of: x.of, Audit: (&auditRec{}).fn, Prev: first, CloneTips: x.tips()})
+	if got != first {
+		t.Fatalf("result = %+v, want Prev %+v", got, first)
+	}
+	if inspected(rec) || mergeCalled(rec) || x.tip() != before {
+		t.Fatal("the same flagged range was inspected again, or merged")
+	}
+
+	// A refusal that found no flag (the scan could not finish: a deadline or a
+	// git failure may pass) is inspected again.
+	incomplete := &MergeResult{At: first.At, Branch: "main", From: first.From, To: first.To,
+		Reason: MergeFlagged, Detail: "the commits could not be fully inspected: could not inspect: x"}
+	rec = newRec(t)
+	got = MergeHome(context.Background(), rec, MergeRequest{Of: x.of, Audit: (&auditRec{}).fn, Prev: incomplete, CloneTips: x.tips()})
+	wantMergeReason(t, got, MergeFlagged)
+	if got == incomplete || !inspected(rec) {
+		t.Fatal("an incomplete inspection was not run again")
+	}
+
+	// Another range is inspected.
+	other := *first
+	other.To = strings.Repeat("0", 40)
+	rec = newRec(t)
+	got = MergeHome(context.Background(), rec, MergeRequest{Of: x.of, Audit: (&auditRec{}).fn, Prev: &other, CloneTips: x.tips()})
+	wantMergeReason(t, got, MergeFlagged)
+	if got == &other || !inspected(rec) {
+		t.Fatal("a different range was not inspected")
+	}
+}
+
 // plainGit hides the Stream and RunStdin methods of the recorder.
 type plainGit struct{ g Git }
 

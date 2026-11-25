@@ -94,6 +94,8 @@ const (
 	mergeTimeout    = 60 * time.Second
 	maxMergePaths   = 3
 	mergeReflog     = "GIT_REFLOG_ACTION=culibox auto-merge"
+	// mergeFlaggedDetail starts the Detail of a flagged result that found flags.
+	mergeFlaggedDetail = "the commits carry flagged files"
 )
 
 // MergeHome fast-forwards X, the branch checked out in r.Of, to box/X when box/X
@@ -300,14 +302,20 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	}
 
 	// 4b. The handback inspection of the range; anything short of a clean,
-	// complete scan refuses.
+	// complete scan refuses. Flags found in this same range are not looked for
+	// again: they come from its blobs, which the range fixes. A scan that found
+	// none but could not finish (a deadline, a git failure) is run again.
+	if p := r.Prev; p != nil && p.Reason == MergeFlagged && p.From == m.from && p.To == m.to &&
+		strings.HasPrefix(p.Detail, mergeFlaggedDetail) {
+		return p
+	}
 	rep := InspectBranch(m.ctx, m.g, m.of, m.from, m.to, r.Lim)
 	if len(rep.Flags) > 0 || rep.Truncated != "" || rep.Incomplete {
 		var fp []string
 		for _, f := range rep.Flags {
 			fp = append(fp, f.Path)
 		}
-		detail := "the commits carry flagged files"
+		detail := mergeFlaggedDetail
 		if len(rep.Flags) == 0 {
 			detail = "the commits could not be fully inspected"
 		}
