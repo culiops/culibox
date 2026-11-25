@@ -100,10 +100,31 @@ func TestSpawnSSODirectEligibleWithoutAckSaysAcknowledge(t *testing.T) {
 	}
 }
 
+func simDeniedGate(digest string) awsprobe.GateResult {
+	return awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonSimulateDenied,
+		RoleARN: ssoTestRole, Caller: ackTestCaller, PolicyDigest: digest, CheckedAt: time.Now()}
+}
+
+func TestSpawnSSODirectSimulateDenied(t *testing.T) {
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	acked := simDeniedGate(digest)
+	if _, _, _, err := spawnConn(t, ackedConn("ro", acked), acked); err != nil {
+		t.Fatalf("matching ack: %v", err)
+	}
+	_, _, _, err := spawnConn(t, ackedConn("ro", acked), simDeniedGate(strings.Repeat("b", 64)))
+	if err == nil || !strings.Contains(err.Error(), "acknowledge again") {
+		t.Fatalf("stale: err = %v", err)
+	}
+	_, _, _, err = spawnConn(t, ssoConn("ro"), acked)
+	if err == nil || !strings.Contains(err.Error(), "acknowledge full access on the Credentials screen") {
+		t.Fatalf("eligible: err = %v", err)
+	}
+}
+
 func TestSpawnSSODirectAckNeverCoversTransient(t *testing.T) {
 	acked := wideGate("s3:Put*")
 	for _, reason := range []awsprobe.Reason{awsprobe.ReasonSSOExpired, awsprobe.ReasonTimeout, awsprobe.ReasonError,
-		awsprobe.ReasonSimulateDenied, awsprobe.ReasonAssumeDenied, awsprobe.ReasonProbeDisabled} {
+		awsprobe.ReasonAssumeDenied, awsprobe.ReasonProbeDisabled} {
 		res := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: reason, Caller: ackTestCaller}
 		_, _, _, err := spawnConn(t, ackedConn("ro", acked), res)
 		if err == nil || strings.Contains(err.Error(), "acknowledge") {

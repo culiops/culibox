@@ -42,12 +42,39 @@ func TestAdmitSSO(t *testing.T) {
 	ro := GateResult{State: GateReadOnly, RoleARN: role, Caller: ackCaller}
 	roNoRole := GateResult{State: GateReadOnly, Caller: ackCaller}
 
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	sd := unv(ReasonSimulateDenied, role, nil, nil)
+	sd.PolicyDigest = digest
+	sdOther := sd
+	sdOther.PolicyDigest = strings.Repeat("a", 64)
+	sdNoDigest := sd
+	sdNoDigest.PolicyDigest = ""
+	sdNoRole := sd
+	sdNoRole.RoleARN = ""
+	sdPseudo := unv(ReasonSimulateDenied, role, []string{"account"}, nil)
+	sdPseudo.PolicyDigest = digest
+	sdPats := unv(ReasonSimulateDenied, role, []string{"s3:Put*"}, nil)
+	sdPats.PolicyDigest = digest
+	sdNarrower := unv(ReasonSimulateDenied, role, []string{"s3:Put*"}, nil)
+	sdNarrower.PolicyDigest = digest
+
 	rows := []struct {
 		name string
 		res  GateResult
 		ack  *Ack
 		want Admission
 	}{
+		{"simulate_denied no ack", sd, nil, Admission{Eligible: true}},
+		{"simulate_denied acked", sd, ackOf(sd), Admission{OK: true, UnderAck: true, Eligible: true}},
+		{"simulate_denied digest changed", sdOther, ackOf(sd), Admission{Eligible: true, Stale: true}},
+		{"simulate_denied empty digest", sdNoDigest, nil, Admission{}},
+		{"simulate_denied empty digest with ack", sdNoDigest, ackOf(sd), Admission{}},
+		{"simulate_denied empty role", sdNoRole, nil, Admission{}},
+		{"simulate_denied pseudo pattern", sdPseudo, nil, Admission{}},
+		{"simulate_denied with patterns acked", sdPats, ackOf(sdPats), Admission{OK: true, UnderAck: true, Eligible: true}},
+		{"simulate_denied wider than ack", sdPats, ackOf(sd), Admission{Eligible: true, Stale: true}},
+		{"simulate_denied narrower patterns same digest", sdNarrower, ackOf(sdPats), Admission{OK: true, UnderAck: true, Eligible: true}},
+		{"missing perms ack does not cover simulate_denied", sd, ackOf(mp), Admission{Eligible: true, Stale: true}},
 		{"read only", ro, nil, Admission{OK: true}},
 		{"read only without role", roNoRole, nil, Admission{}},
 		{"not read only no ack", both, nil, Admission{Eligible: true}},
@@ -65,7 +92,7 @@ func TestAdmitSSO(t *testing.T) {
 		{"empty caller", noCaller, nil, Admission{}},
 		{"empty caller with ack", noCaller, ackOf(nro(role, "iam:*")), Admission{}},
 	}
-	for _, r := range []Reason{ReasonSSOExpired, ReasonTimeout, ReasonError, ReasonSimulateDenied, ReasonAssumeDenied, ReasonProbeDisabled, ReasonNotChecked} {
+	for _, r := range []Reason{ReasonSSOExpired, ReasonTimeout, ReasonError, ReasonAssumeDenied, ReasonProbeDisabled, ReasonNotChecked} {
 		res := unv(r, role, nil, nil)
 		rows = append(rows, struct {
 			name string
@@ -226,5 +253,30 @@ func TestAckStructuralPinnedToPolicyDigest(t *testing.T) {
 		if err := a.Validate(); err == nil {
 			t.Errorf("%s: want error", name)
 		}
+	}
+}
+
+func TestSimulateDeniedAckPinsDigest(t *testing.T) {
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	res := unv(ReasonSimulateDenied, "arn:aws:iam::123456789012:role/x", nil, nil)
+	res.PolicyDigest = digest
+	a := NewAck(res, "web", time.Unix(1700000000, 0).UTC())
+	if a.PolicyDigest != digest || a.Reason != ReasonSimulateDenied {
+		t.Fatalf("%+v", a)
+	}
+	if err := a.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"", "short", strings.Repeat("G", 64)} {
+		b := a
+		b.PolicyDigest = d
+		if b.Validate() == nil {
+			t.Errorf("digest %q accepted", d)
+		}
+	}
+	m := NewAck(unv(ReasonMissingPerms, "", nil, []string{"iam:GetRole"}), "web", time.Time{})
+	m.PolicyDigest = digest
+	if m.Validate() == nil {
+		t.Error("a stray digest on a missing_permissions ack was accepted")
 	}
 }

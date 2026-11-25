@@ -32,7 +32,7 @@ const (
 // refused items the user saw.
 type Ack struct {
 	State        GateState `json:"state"`            // not_read_only | unverified
-	Reason       Reason    `json:"reason,omitempty"` // missing_permissions | missing_context (unverified only)
+	Reason       Reason    `json:"reason,omitempty"` // missing_permissions | missing_context | simulate_denied (unverified only)
 	Caller       string    `json:"caller"`
 	Refused      []string  `json:"refused,omitempty"`       // lowercased, sorted, unique patterns
 	MissingPerms []string  `json:"missing_perms,omitempty"` // sorted, unique
@@ -92,6 +92,18 @@ func AckEligible(res GateResult) bool {
 		switch res.Reason {
 		case ReasonMissingPerms:
 			return len(res.MissingPerms) > 0
+		case ReasonSimulateDenied:
+			// The permission set cannot simulate its own policies. The policy
+			// contents are what the ack pins, so they must be known.
+			if res.RoleARN == "" || res.PolicyDigest == "" {
+				return false
+			}
+			for _, v := range res.Refused {
+				if isPseudoPattern(v.Pattern) {
+					return false
+				}
+			}
+			return true
 		case ReasonMissingContext:
 			if len(res.Refused) == 0 {
 				return false
@@ -130,7 +142,7 @@ func NewAck(res GateResult, actor string, at time.Time) Ack {
 	if res.State == GateUnverified {
 		a.Reason = res.Reason
 	}
-	if hasStructural(a.Refused) {
+	if hasStructural(a.Refused) || a.Reason == ReasonSimulateDenied {
 		a.PolicyDigest = res.PolicyDigest
 	}
 	if len(a.Refused) == 0 {
@@ -149,7 +161,12 @@ func (a Ack) Covers(res GateResult) bool {
 	if a.Caller == "" || res.Caller != a.Caller {
 		return false
 	}
-	if hasStructural(a.Refused) && (res.PolicyDigest == "" || res.PolicyDigest != a.PolicyDigest) {
+	// A simulate_denied result is pinned to its policy contents, so only an ack
+	// made from one (which holds the digest) can cover it.
+	if res.State == GateUnverified && res.Reason == ReasonSimulateDenied && a.Reason != ReasonSimulateDenied {
+		return false
+	}
+	if (hasStructural(a.Refused) || a.Reason == ReasonSimulateDenied) && (res.PolicyDigest == "" || res.PolicyDigest != a.PolicyDigest) {
 		return false
 	}
 	seen := make(map[string]bool, len(a.Refused))
@@ -191,7 +208,7 @@ func (a Ack) Validate() error {
 			return errors.New("reason is only for an unverified acknowledgement")
 		}
 	case GateUnverified:
-		if a.Reason != ReasonMissingPerms && a.Reason != ReasonMissingContext {
+		if a.Reason != ReasonMissingPerms && a.Reason != ReasonMissingContext && a.Reason != ReasonSimulateDenied {
 			return fmt.Errorf("reason %q cannot be acknowledged", a.Reason)
 		}
 	default:
@@ -222,12 +239,12 @@ func (a Ack) Validate() error {
 			return err
 		}
 	}
-	if hasStructural(a.Refused) {
+	if hasStructural(a.Refused) || a.Reason == ReasonSimulateDenied {
 		if len(a.PolicyDigest) != 64 || strings.Trim(a.PolicyDigest, "0123456789abcdef") != "" {
-			return errors.New("an acknowledgement of a NotAction or Action refusal needs a 64-hex policy_digest")
+			return errors.New("an acknowledgement of a NotAction or Action refusal, or of a permission set that cannot simulate, needs a 64-hex policy_digest")
 		}
 	} else if a.PolicyDigest != "" {
-		return errors.New("policy_digest is only for an acknowledgement of a NotAction or Action refusal")
+		return errors.New("policy_digest is only for an acknowledgement of a NotAction or Action refusal, or of a permission set that cannot simulate")
 	}
 	return nil
 }

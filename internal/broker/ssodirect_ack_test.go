@@ -92,10 +92,41 @@ func TestServeSSODirectEligibleWithoutAckSaysAcknowledge(t *testing.T) {
 	}
 }
 
+func simDenied(digest string) awsprobe.GateResult {
+	return awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonSimulateDenied,
+		RoleARN: ssoRoleARN, Caller: ackCaller, PolicyDigest: digest}
+}
+
+func TestServeSSODirectSimulateDenied(t *testing.T) {
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	acked := simDenied(digest)
+	b, _, rec := ackedSetup(t, &fakeGate{results: []awsprobe.GateResult{simDenied(digest)}}, &acked)
+	w := callRO(b)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "ASIAFAKE") {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	if r := lastRow(rec); r.Outcome != OutcomeMinted || !strings.Contains(r.FullAccess, "simulate_denied") {
+		t.Fatalf("row %+v", r)
+	}
+	// the policy changed: stale, refused with the acknowledge hint
+	b, _, rec = ackedSetup(t, &fakeGate{results: []awsprobe.GateResult{simDenied(strings.Repeat("b", 64))}}, &acked)
+	w = callRO(b)
+	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "ASIAFAKE") ||
+		!strings.HasPrefix(lastRow(rec).Error, "not covered by the full-access acknowledgement") {
+		t.Fatalf("stale: status %d row %+v", w.Code, lastRow(rec))
+	}
+	// no ack: eligible
+	b, _, rec = ackedSetup(t, &fakeGate{results: []awsprobe.GateResult{simDenied(digest)}}, nil)
+	w = callRO(b)
+	if w.Code != http.StatusForbidden || !strings.HasPrefix(lastRow(rec).Error, "eligible for a full-access acknowledgement") {
+		t.Fatalf("eligible: status %d row %+v", w.Code, lastRow(rec))
+	}
+}
+
 func TestServeSSODirectAckNeverCoversTransient(t *testing.T) {
 	acked := wideResult("s3:Put*")
 	for _, reason := range []awsprobe.Reason{awsprobe.ReasonSSOExpired, awsprobe.ReasonTimeout, awsprobe.ReasonError,
-		awsprobe.ReasonSimulateDenied, awsprobe.ReasonAssumeDenied, awsprobe.ReasonProbeDisabled} {
+		awsprobe.ReasonAssumeDenied, awsprobe.ReasonProbeDisabled} {
 		res := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: reason, Caller: ackCaller}
 		b, _, rec := ackedSetup(t, &fakeGate{results: []awsprobe.GateResult{res}}, &acked)
 		w := callRO(b)

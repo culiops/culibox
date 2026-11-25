@@ -284,6 +284,9 @@ func ssoGateResult(check string, res awsprobe.GateResult, ack *awsprobe.Ack, can
 	if what == "" && len(res.MissingPerms) > 0 {
 		what = strings.Join(res.MissingPerms, ", ")
 	}
+	if what == "" && res.Reason == awsprobe.ReasonSimulateDenied {
+		what = awsprobe.ReasonText(res.Reason)
+	}
 	switch {
 	case adm.UnderAck:
 		d := "full access acknowledged by " + ack.Actor + " " + ack.At.UTC().Format(time.RFC3339) +

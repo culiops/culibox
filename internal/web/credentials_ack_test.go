@@ -81,9 +81,33 @@ func TestSaveSSODirectAckMissingPermsAndContext(t *testing.T) {
 	})
 }
 
+func TestSaveSSODirectAckSimulateDenied(t *testing.T) {
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	a := newAWSRoutes(t)
+	g := readOnlyGate()
+	g.State, g.Reason, g.Caller, g.PolicyDigest = awsprobe.GateUnverified, awsprobe.ReasonSimulateDenied, ackCaller, digest
+	a.svc.gate = g
+	body := strings.TrimSuffix(ssoConnJSON("ro"), "}") + `,"ack_full_access":{}}`
+	code, m, _ := a.call("POST", pathAWS, body)
+	if code != 201 {
+		t.Fatalf("%d %v", code, m)
+	}
+	ack := a.fx.file(t).AWSConnections[0].FullAccessAck
+	if ack == nil || ack.Reason != awsprobe.ReasonSimulateDenied || ack.PolicyDigest != digest {
+		t.Fatalf("%+v", ack)
+	}
+	// without an ack it is refused as eligible
+	b := newAWSRoutes(t)
+	b.svc.gate = g
+	code, m, _ = b.call("POST", pathAWS, ssoConnJSON("ro"))
+	if code != 409 || m["ack_eligible"] != true {
+		t.Fatalf("%d %v", code, m)
+	}
+}
+
 func TestSaveSSODirectAckRefusesTransient(t *testing.T) {
 	for _, r := range []awsprobe.Reason{awsprobe.ReasonSSOExpired, awsprobe.ReasonTimeout, awsprobe.ReasonError,
-		awsprobe.ReasonSimulateDenied, awsprobe.ReasonAssumeDenied, awsprobe.ReasonProbeDisabled, awsprobe.ReasonNotChecked} {
+		awsprobe.ReasonAssumeDenied, awsprobe.ReasonProbeDisabled, awsprobe.ReasonNotChecked} {
 		a := newAWSRoutes(t)
 		a.svc.gate = awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: r, Caller: ackCaller, RoleARN: readOnlyGate().RoleARN,
 			MissingPerms: []string{"iam:GetRolePolicy"}}

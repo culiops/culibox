@@ -516,15 +516,21 @@ func TestDoctorSSODirectFullAccessLines(t *testing.T) {
 	perm := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonMissingPerms, Caller: caller,
 		MissingPerms: []string{"iam:GetRolePolicy"}}
 	transient := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonTimeout, Caller: caller}
+	sim := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonSimulateDenied, Caller: caller, RoleARN: role,
+		PolicyDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+	simNew := sim
+	simNew.PolicyDigest = strings.Repeat("b", 64)
 	identity := wide("account")
 	f := &fakeAWS{profiles: []string{"p"}, sso: map[string]string{"p": "corp"}}
 	fg := &fakeGate{by: map[string]awsprobe.GateResult{
 		"acked": wide("s3:Put*"), "stale": wide("s3:Put*", "iam:Create*"), "noack": wide("s3:Put*"),
 		"permack": perm, "timeout": transient, "ident": identity,
+		"simack": sim, "simstale": simNew, "simnone": sim,
 	}}
 	c := config.Config{AWSConnections: []config.AWSConnection{
 		ackedDoctorConn("acked", wide("s3:Put*")), ackedDoctorConn("stale", wide("s3:Put*")), ssoDirectConn("noack", "p"),
-		ackedDoctorConn("permack", perm), ackedDoctorConn("timeout", wide("s3:Put*")), ackedDoctorConn("ident", wide("s3:Put*"))}}
+		ackedDoctorConn("permack", perm), ackedDoctorConn("timeout", wide("s3:Put*")), ackedDoctorConn("ident", wide("s3:Put*")),
+		ackedDoctorConn("simack", sim), ackedDoctorConn("simstale", sim), ssoDirectConn("simnone", "p")}}
 	got := byCheck(checkAWSConnsGate(context.Background(), c, nil, nil, f, noneProbe, fg.gate))
 	line := func(n string) Result { return got["aws-connection "+n+" read-only gate"] }
 
@@ -534,6 +540,16 @@ func TestDoctorSSODirectFullAccessLines(t *testing.T) {
 	}
 	if r := line("permack"); r.Status != Warn || !strings.Contains(r.Detail, "full access acknowledged") || !strings.Contains(r.Detail, "iam:GetRolePolicy") {
 		t.Errorf("permack = %s %q", r.Status, r.Detail)
+	}
+	if r := line("simack"); r.Status != Warn || !strings.Contains(r.Detail, "full access acknowledged") {
+		t.Errorf("simack = %s %q", r.Status, r.Detail)
+	}
+	if r := line("simstale"); r.Status != Fail || !strings.Contains(r.Detail, "acknowledge again on the Credentials screen") {
+		t.Errorf("simstale = %s %q", r.Status, r.Detail)
+	}
+	if r := line("simnone"); r.Status != Fail || !strings.Contains(r.Detail, "acknowledge full access on the Credentials screen") ||
+		!strings.Contains(r.Detail, "role cannot simulate itself") {
+		t.Errorf("simnone = %s %q", r.Status, r.Detail)
 	}
 	if r := line("stale"); r.Status != Fail || !strings.Contains(r.Detail, "changed since its full-access acknowledgement") ||
 		!strings.Contains(r.Detail, "acknowledge again on the Credentials screen") || !strings.Contains(r.Detail, "iam:Create*") {
