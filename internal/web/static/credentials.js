@@ -298,9 +298,18 @@ function credTableHead(key) {
 // save, spawn and mint. No verdict is cached, so none is claimed here.
 const CRED_SSO_DIRECT_LABEL = "SSO role directly";
 const CRED_SSO_DIRECT_GATE_NOTE = "Read-only gate runs on every use";
+// credFullText: sessionrow.js' label for an acknowledged full-access connection (a const there, so not on globalThis).
+const credFullText = () => (typeof AWS_FULL_ACCESS_TEXT === "string" ? AWS_FULL_ACCESS_TEXT : require("./sessionrow.js").AWS_FULL_ACCESS_TEXT);
+// credFullAckSub: "acknowledged <date> by <actor>" under the label; only what the server recorded is named.
+function credFullAckSub(a) {
+  const x = a || {};
+  const day = typeof x.at === "string" && /^\d{4}-\d{2}-\d{2}/.test(x.at) ? x.at.slice(0, 10) : "";
+  return "acknowledged" + (day ? " " + day : "") + (x.actor ? " by " + x.actor : "");
+}
 
 function credProbeCell(e) {
   if (e.status !== "ok") return { text: "–", cls: "", kind: "pv", sub: "" };
+  if (e.mode === "sso_direct" && e.full_access === true) return { text: credFullText(), cls: "bad", kind: "pv", sub: credFullAckSub(e.full_access_ack) };
   if (e.mode === "sso_direct") return { text: CRED_SSO_DIRECT_GATE_NOTE, cls: "", kind: "pv", sub: "" };
   const v = baseText(e.base);
   return { text: v.cls === "bad" ? "Can write" : v.text, cls: v.cls, kind: "pv", sub: checkedText(e.base && e.base.checked_at, new Date()) };
@@ -327,6 +336,7 @@ function credTableRow(key, e) {
         st, probe, used,
       ],
       danger: e.status === "ok" && probe.cls === "bad",
+      fullAccess: e.mode === "sso_direct" && e.full_access === true,
       entry: e,
     };
   }
@@ -449,7 +459,16 @@ function rowSaveState(row) {
   const r = row || {};
   // sso_direct has no assume step and no "I understand": only a read-only gate
   // lets it save, and an unchanged edit is not exempt (the server re-runs the gate).
-  if (r.mode === "sso_direct") return { canSave: !!r.gate && r.gate.state === "read_only", needsAck: false };
+  if (r.mode === "sso_direct") {
+    const g = r.gate;
+    if (!g) return { canSave: false, needsAck: false };
+    if (g.state === "read_only") return { canSave: true, needsAck: false };
+    // A non-read-only result saves only when the server calls it acknowledgeable (ack_eligible === true) and
+    // the operator ticked the box (or the stored connection is already acknowledged). The UI never judges the reason.
+    if (g.ack_eligible !== true) return { canSave: false, needsAck: false };
+    const done = r.fullAck === true || !!(r.orig && r.orig.full_access === true);
+    return done ? { canSave: true, needsAck: false } : { canSave: false, needsAck: true };
+  }
   if (r.unchanged === true) return { canSave: true, needsAck: false };
   if (r.assume !== "ok") return { canSave: false, needsAck: false };
   if (r.verdict === "writes") return r.acked === true ? { canSave: true, needsAck: false } : { canSave: false, needsAck: true };
@@ -554,7 +573,7 @@ function awsModeText(hours) {
   const h = Math.ceil(Number(hours));
   const n = Number.isFinite(h) && h >= 1 && h <= AWS_SSO_MAX_HOURS ? h : AWS_SSO_MAX_HOURS;
   return "SSO role directly: the agent gets your permission set's own credentials, valid for up to " + n +
-    " h. CloudTrail shows you, not the agent, and they cannot be revoked when the session ends. Read-only permission sets only.";
+    " h. CloudTrail shows you, not the agent, and they cannot be revoked when the session ends. A permission set that is not read-only needs an acknowledgement and then has full access.";
 }
 
 // awsHoursFromExpiry: whole hours from now to an RFC 3339 expiry, rounded up; 0
@@ -618,7 +637,11 @@ function awsRefusedLine(v, needsContext) {
 function awsGateView(gate) {
   const g = gate || {};
   const out = { tone: "warn", badge: "Not verified", text: "", refused: [], missing: [], signIn: false,
-    dataReads: awsDataReadSummary(g.data_reads), dataReadText: "" };
+    dataReads: awsDataReadSummary(g.data_reads), dataReadText: "", ackEligible: false };
+  // The server says whether this result can be acknowledged; the reason is never read for it.
+  const elig = g.state !== "read_only" && g.ack_eligible === true;
+  out.ackEligible = elig;
+  const ackNote = " Saving it needs your acknowledgement of full access.";
   const dr = out.dataReads;
   if (Array.isArray(g.data_reads) && g.data_reads.length) {
     out.dataReadText = "Your permission set denies: " + (dr.denied.join(", ") || "nothing") + ". Still readable: " + (dr.readable.join(", ") || "nothing") + ".";
@@ -633,7 +656,9 @@ function awsGateView(gate) {
   if (g.state === "not_read_only") {
     out.tone = "bad";
     out.badge = "Not read-only";
-    out.text = "This permission set can write or reach credentials, so it cannot be saved as SSO role directly. Use a read-only permission set, or the agent role.";
+    out.text = elig
+      ? "This permission set can write or reach credentials." + ackNote
+      : "This permission set can write or reach credentials, so it cannot be saved as SSO role directly. Use a read-only permission set, or the agent role.";
     out.refused = list.map((v) => awsRefusedLine(v, false));
     return out;
   }
@@ -646,18 +671,18 @@ function awsGateView(gate) {
     case "missing_permissions": {
       out.badge = "Cannot read its own policy";
       out.missing = (Array.isArray(g.missing_perms) ? g.missing_perms : []).map(String);
-      out.text = "The gate could not read the permission set's own policy" + (out.missing.length ? "; it needs " + out.missing.join(", ") : "") + ". Nothing is saved until it can.";
+      out.text = "The gate could not read the permission set's own policy" + (out.missing.length ? "; it needs " + out.missing.join(", ") : "") + "." + (elig ? ackNote : " Nothing is saved until it can.");
       break;
     }
     case "missing_context":
       out.badge = "Needs context";
-      out.text = "These actions depend on condition values the gate cannot know, so it could not prove them read-only. Nothing is saved until it can.";
+      out.text = "These actions depend on condition values the gate cannot know, so it could not prove them read-only." + (elig ? ackNote : " Nothing is saved until it can.");
       out.refused = list.map((v) => awsRefusedLine(v, true));
       break;
     case "timeout":
       out.text = "The check timed out. Check again."; break;
     case "simulate_denied":
-      out.text = "The permission set cannot simulate its own policy, so the gate could not verify it."; break;
+      out.text = "The permission set cannot simulate its own policy, so the gate could not verify it." + (elig ? ackNote : ""); break;
     case "probe_disabled":
       out.text = "The access check is switched off on this host, so a permission set cannot be verified."; break;
     default:
@@ -707,7 +732,16 @@ function awsCheckView(res) {
 // "alone": switching mode is a change, and sso_direct never counts as unchanged.
 function awsRowStateFor(row) {
   const unchanged = row.orig ? row.source_profile === row.orig.source_profile && row.role_arn === row.orig.role_arn && (row.mode || "") === (row.orig.mode || "") : undefined;
-  return rowSaveState({ assume: row.assume, verdict: row.verdict, acked: row.acked, unchanged, mode: row.mode, gate: row.gate });
+  return rowSaveState({ assume: row.assume, verdict: row.verdict, acked: row.acked, unchanged, mode: row.mode, gate: row.gate, fullAck: row.fullAck, orig: row.orig });
+}
+
+// awsAckBody: the acknowledgement a save sends, or null. Only a ticked box on an acknowledgeable gate produces one;
+// it carries what the operator saw (the refusing patterns and the missing grants), which the server checks against its own run.
+function awsAckBody(row) {
+  const g = row && row.gate;
+  if (!row || row.mode !== "sso_direct" || row.fullAck !== true || !g || g.state === "read_only" || g.ack_eligible !== true) return null;
+  const pat = (v) => String(v && typeof v === "object" ? (v.pattern != null ? v.pattern : v.Pattern) : v);
+  return { refused: (Array.isArray(g.refused) ? g.refused : []).map(pat), missing_perms: (Array.isArray(g.missing_perms) ? g.missing_perms : []).map(String) };
 }
 
 // awsErrText: a failed AWS-screen request in words. The server's own sentence is
@@ -928,7 +962,7 @@ if (typeof module !== "undefined" && module.exports) {
     providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, credTableRows, credTableHead, awsGateBoxEmpty,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
     AWS_REGIONS, awsRegionSuggest, awsProfileSuggest,
-    awsGateView, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
+    awsGateView, awsAckBody, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
     awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC, awsFootNote, awsFootReasons, setDisabledReason,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
     GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
@@ -1058,8 +1092,11 @@ function credAWSCard(e) {
   const si = credSignIn(e, new Date());
   if (e.status === "ok" && si.sub) meta.push(["Sign-in", si.sub]);
   const body = [credMeta(meta)];
+  const full = direct && e.full_access === true;
   if (e.status === "ok" && direct) {
-    body.push(credEl("div", "verdict", CRED_SSO_DIRECT_GATE_NOTE));
+    const v = credEl("div", "verdict" + (full ? " bad" : ""), full ? credFullText() : CRED_SSO_DIRECT_GATE_NOTE);
+    if (full) v.appendChild(credEl("div", "when", credFullAckSub(e.full_access_ack)));
+    body.push(v);
   } else if (e.status === "ok") {
     if (verdict.cls === "bad") {
       const box = credEl("div", "warnbox", verdict.text);
@@ -1080,7 +1117,7 @@ function credAWSCard(e) {
       body.push(v);
     }
   }
-  return credCard(e, e.name, e.label, body, { danger: e.status === "ok" && verdict.cls === "bad", chip: si });
+  return credCard(e, e.name, e.label, body, { danger: e.status === "ok" && (full || verdict.cls === "bad"), chip: si });
 }
 
 function credAppCard(e) {
@@ -1320,7 +1357,7 @@ function credTable(g) {
       const ex = credEntryExtra(tb);
       ex.appendChild(credEl("p", "ent-err", r.entry.error));
     }
-    if (r.danger) {
+    if (r.danger && !r.fullAccess) {
       const ex = credEntryExtra(tb);
       const box = credEl("div", "warnbox", baseText(r.entry.base).text);
       box.setAttribute("role", "alert");
@@ -1987,7 +2024,7 @@ function awsOpenEdit(entry) {
   row.elevBoxPrefix = (el && el.box_bucket_prefix) || "";
   row.elevPass = (el && el.pass_role_prefix) || "";
   row.mode = entry.mode === "sso_direct" ? "sso_direct" : "";
-  row.orig = { source_profile: row.source_profile, role_arn: row.role_arn, mode: row.mode };
+  row.orig = { source_profile: row.source_profile, role_arn: row.role_arn, mode: row.mode, full_access: entry.full_access === true };
   awsFlow = { mode: "edit", rows: [row], profiles: [], selected: new Set(), sso: {}, timers: new Set(), saving: false, msg: "", loadErr: "" };
   awsPaintFlow();
   // The form is drawn at once; its suggestion lists fill when the host's profiles are read. A failure leaves
@@ -1999,7 +2036,7 @@ function awsNewRow(base, extra) {
   return {
     ...base, ...extra, id: ++awsRowSeq, description: "", egress: "", s3: "", elevRole: "", elevMinutes: "60", elevIAM: false, elevBoxPrefix: "", elevPass: "",
     assume: null, verdict: null, actions: [], reason: "", reasonText: "", acked: false,
-    mode: "", gate: null, hours: 0,
+    mode: "", gate: null, hours: 0, fullAck: false,
     busy: "", err: "", roles: null, rolesNote: "", rolesDoc: false, rolesFilter: "", rolesFilterIn: null, signIn: "", el: null, res: null, rolesBox: null, roleInput: null,
   };
 }
@@ -2207,7 +2244,7 @@ function awsField(row, key, label, opts) {
 // earlier check no longer describes this row.
 function awsInvalidate(row) {
   row.assume = null; row.verdict = null; row.actions = []; row.reason = ""; row.reasonText = ""; row.acked = false;
-  row.gate = null; row.hours = 0;
+  row.gate = null; row.hours = 0; row.fullAck = false;
   row.err = ""; row.signIn = "";
   awsPaintModeNote(row);
   awsPaintRes(row);
@@ -2500,6 +2537,7 @@ function awsPaintRes(row) {
     if (row.gate) {
       const g = awsGateView(row.gate);
       if (!awsGateBoxEmpty(g)) nodes.push(awsGateNode(g));
+      if (g.ackEligible) nodes.push(awsAckNode(row));
       if (g.signIn) needSignIn = true;
     }
   } else if (row.assume) {
@@ -2559,6 +2597,26 @@ function awsGateNode(g) {
   }
   if (g.missing.length) box.appendChild(awsEl("div", "remedy", "Grant: " + g.missing.join(", ")));
   if (g.dataReadText) box.appendChild(awsEl("p", "hint", g.dataReadText));
+  return box;
+}
+
+// awsAckNode: the full-access acknowledgement. Unticked by default, never pre-ticked; the text covers future grants
+// because a result the gate could not read cannot pin what the permission set allows.
+const AWS_ACK_TEXT = "I understand: the agent gets everything this permission set allows, now or later, for the whole session, with no read-only default and no write window. CuliBox lists what it found above.";
+function awsAckNode(row) {
+  const box = awsEl("div", "warnbox");
+  const lab = awsEl("label", "pf-check");
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = row.fullAck === true;
+  cb.onchange = () => { row.fullAck = cb.checked; awsPaintFoot(); };
+  lab.append(cb, document.createTextNode(" " + AWS_ACK_TEXT));
+  box.appendChild(lab);
+  const p = awsEl("p", "hint", "The agent role is the recommended default. ");
+  const a = awsEl("a", null, "How to create the agent role");
+  a.href = AWS_AGENT_ROLE_DOC; a.target = "_blank"; a.rel = "noopener noreferrer";
+  p.appendChild(a);
+  box.appendChild(p);
   return box;
 }
 
@@ -2772,7 +2830,8 @@ async function awsCheckRow(row) {
     if (direct) {
       const res = await awsPost("/api/credentials/aws/check", { mode: "sso_direct", source_profile: row.source_profile, region: row.region });
       if (awsFlow !== f) return false;
-      row.gate = res.gate || { state: "unverified", reason: "error" };
+      row.gate = res.gate ? { ...res.gate, ack_eligible: res.ack_eligible === true } : { state: "unverified", reason: "error", ack_eligible: false };
+      row.fullAck = false; // a new gate result is a new thing to acknowledge
       row.hours = row.gate.state === "read_only" ? awsHoursFromExpiry(res.expires, Date.now()) : 0;
       awsPaintModeNote(row);
       row.busy = "";
@@ -2928,6 +2987,8 @@ async function awsSaveAll() {
     awsPaintRes(row);
     try {
       const body = { connection: awsConnFromRow(row), ack_write: row.acked === true };
+      const ack = awsAckBody(row);
+      if (ack) body.ack_full_access = ack;
       if (f.mode === "edit") await api("/api/credentials/aws/" + encodeURIComponent(row.name), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       else await awsPost("/api/credentials/aws", body);
       if (awsFlow !== f) return;
@@ -2945,8 +3006,12 @@ async function awsSaveAll() {
       const v = e.body && e.body.verdict;
       if (e.status === 409 && (e.code === "not_read_only" || e.code === "unverified") && e.body && e.body.gate) {
         // The server re-ran the gate (a label-only edit does too) and it did not pass.
-        row.gate = e.body.gate;
+        row.gate = { ...e.body.gate, ack_eligible: e.body.ack_eligible === true };
         row.err = "";
+        if (e.body.ack_stale === true) {
+          row.fullAck = false;
+          row.err = "The permission set changed since you checked it; review and acknowledge again.";
+        }
         // The gate did not pass, so no credential lifetime is known: a stale
         // "up to N h" from an earlier check must not stay in the note.
         row.hours = 0;
