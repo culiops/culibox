@@ -457,8 +457,8 @@ function awsRowFromProfile(p) {
 // needs no check: the server does not re-check it either.
 function rowSaveState(row) {
   const r = row || {};
-  // sso_direct has no assume step and no "I understand": only a read-only gate
-  // lets it save, and an unchanged edit is not exempt (the server re-runs the gate).
+  // sso_direct has no assume step and no write "I understand": a read-only gate lets it save, a result the server calls
+  // acknowledgeable saves with the full-access tick, and an unchanged edit is not exempt (the server re-runs the gate).
   if (r.mode === "sso_direct") {
     const g = r.gate;
     if (!g) return { canSave: false, needsAck: false };

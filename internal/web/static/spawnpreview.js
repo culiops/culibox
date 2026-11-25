@@ -176,7 +176,7 @@ function spawnAWSFacts(ent, metaConns, credConns) {
     prod: m.prod === true || c.prod === true,
     write: m.write_capable === true || !!elevate,
     max: elevate && Number(elevate.max_minutes) > 0 ? Number(elevate.max_minutes) : 0,
-    // The gate admits read-only permission sets only and there is no elevate.
+    // sso_direct: no elevate; the gate admits a read-only permission set, or one the user acknowledged as full access (below).
     direct: ent.mode === "sso_direct" || m.mode === "sso_direct" || c.mode === "sso_direct",
     // The server's own boolean (the acknowledged full access, #374); nothing here derives it.
     fullAccess: m.full_access === true || c.full_access === true,

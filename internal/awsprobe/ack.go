@@ -32,9 +32,14 @@ const (
 )
 
 // Ack is a user's acknowledgement that an sso_direct connection has full
-// access: the gate refused it for breadth and the user accepted what it found.
-// It is stored on the connection and pins the permission-set caller and the
-// refused items the user saw.
+// access: the gate refused it for breadth (not_read_only from a run that
+// finished, or one the permission set could not simulate), or could not verify
+// it for missing permissions, missing condition context or a denied
+// simulation, and the user accepted what it found. Only the Credentials
+// screen builds one, from the server's own gate run, and it is stored on the
+// connection. It pins the permission-set caller, the refused items and missing
+// permissions the user saw, and, where those cannot stand for what the set
+// grants, the policy digest.
 type Ack struct {
 	State        GateState `json:"state"`            // not_read_only | unverified
 	Reason       Reason    `json:"reason,omitempty"` // missing_permissions | missing_context | simulate_denied (unverified only)

@@ -270,11 +270,15 @@ not read-only. **The agent role stays the recommended default**; use this only w
 - **What can be acknowledged.** A permission set that is broader than read-only (`not_read_only`),
   one whose policies the gate could not fully read (`missing_permissions`), one that uses a
   condition key the gate cannot evaluate (`missing_context`), and one that cannot run
-  `iam:SimulatePrincipalPolicy` on itself (`simulate_denied`).
+  `iam:SimulatePrincipalPolicy` on itself (`simulate_denied`), also when the gate had already
+  found refused patterns before the simulation was denied.
 - **What never can.** Identity refusals (the caller, the account, the role, the source profile),
   an expired sign-in (`sso_expired`), `timeout`, `error`, `assume_denied`, `probe_disabled`,
   `not_checked`, the inline `aws` binding, and anything set in `config.json`: an acknowledgement
-  in the file is ignored. The gate still runs, and still refuses these, on every mint.
+  in the file is ignored, so a connection defined there must be re-created on the Credentials
+  screen to be acknowledged. A check cut short by a timeout, an error or an expired sign-in is
+  never acknowledgeable, even when it had already found refused patterns: check again. The gate
+  still runs, and still refuses these, on every mint.
 - **What the acknowledgement covers.** It is pinned to the permission-set caller and to the
   refused items (or missing permissions) you saw. A later result that is no wider than that still
   passes. Anything new, whether another refused item, another missing permission or a different
@@ -295,6 +299,8 @@ not read-only. **The agent role stays the recommended default**; use this only w
   could be acknowledged and has no acknowledgement.
 - **A running session keeps its spawn-time acknowledgement.** The broker mints with the
   acknowledgement the session was spawned with. After you acknowledge again, respawn the session.
+  A new acknowledgement, or clearing one, changes the connection's identity, so later sessions
+  get a new box. Running sessions keep theirs.
   When the acknowledgement stops covering the permission set, spawns and mints are refused, and
   a box gets a static message telling it to ask on the host.
 - **Withdrawing.** Delete the connection, or save it once the permission set is read-only (the
