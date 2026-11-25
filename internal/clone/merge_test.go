@@ -288,6 +288,27 @@ func TestMergeHomeUntrackedInTheWay(t *testing.T) {
 	}
 }
 
+// git merge overwrites an ignored file by default; the user's own (a .env, a
+// local config) must survive a box commit that force-added the same name.
+func TestMergeHomeIgnoredFileInTheWay(t *testing.T) {
+	x := newMergeFx(t, "main")
+	x.commit("ignore", map[string]string{".gitignore": "local.cfg\n"})
+	before := x.tip()
+	fixtureGit(t, x.of, "checkout", "-q", "-b", "side")
+	x.write("local.cfg", "box")
+	fixtureGit(t, x.of, "add", "-f", "--", "local.cfg")
+	fixtureGit(t, x.of, "commit", "-q", "-m", "box adds local.cfg")
+	fixtureGit(t, x.of, "update-ref", "refs/heads/box/main", x.out("rev-parse", "HEAD"))
+	fixtureGit(t, x.of, "checkout", "-q", "main")
+	fixtureGit(t, x.of, "branch", "-q", "-D", "side")
+	x.write("local.cfg", "mine")
+	got := x.run(newRec(t), &auditRec{})
+	wantMergeReason(t, got, MergeFailed)
+	if x.read("local.cfg") != "mine" || x.tip() != before {
+		t.Fatalf("local.cfg = %q, main moved = %v", x.read("local.cfg"), x.tip() != before)
+	}
+}
+
 func TestMergeHomeRepoMergeFFFalse(t *testing.T) {
 	x := newMergeFx(t, "main")
 	to := x.box("main", map[string]string{"b.txt": "b"})

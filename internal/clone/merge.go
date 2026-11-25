@@ -348,7 +348,7 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	mctx, cancel := context.WithTimeout(context.WithoutCancel(m.ctx), mergeTimeout)
 	defer cancel()
 	_, err = m.g.Run(mctx, m.of, append(m.env(), mergeReflog),
-		hardened("-c", "submodule.recurse=false", "merge", "--ff-only", "--no-autostash", "--no-stat", "-q", m.to)...)
+		hardened("-c", "submodule.recurse=false", "merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", "--no-stat", "-q", m.to)...)
 	if err != nil {
 		_ = r.Audit("clone_merge_home_failed", detail)
 		// ExecGit names the first argument ("-c" of hardenFlags) in its error.
