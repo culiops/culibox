@@ -34,7 +34,7 @@ Everything else is as in any boxed session: no host home, no Docker socket, egre
 Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included. It comes home:
 
 - after each agent turn of the box session, at most every 30 seconds while the clone's refs change. When they have not changed, CuliBox waits until 5 minutes have passed since the last check, so the count of uncommitted files stays current. It judges whether the refs changed from file metadata that the host reads without running git;
-- when you start or restart a Host session on the same repo. CuliBox waits up to 20 seconds, then finishes in the background. The spawn toast says what came home, how many branches are not home and how many files are not committed;
+- when you start or restart a Host session on the same repo. CuliBox waits up to 20 seconds, then finishes in the background. The toast of a newly started Host session says what came home, how many branches are not home and how many files are not committed (a restart does not show it);
 - when the session's agent exits;
 - at each spawn of the clone;
 - when you press "Bring work home now" in the session.

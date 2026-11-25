@@ -194,6 +194,7 @@ context and never edits `~/.ssh/config`.
   needs the VM running and never starts it. See
   [Clone mode](CLONE-MODE.md#on-macos). Tested end to end on a Mac (macOS 27.2.1,
   colima 0.10.3): work comes back as a `box/<branch>` and a refresh fast-forwards the clone.
+  The returns after each agent turn and before a Host session are not yet tested on a Mac.
 - Restart `culibox serve` after any `box setup -recreate`. A running
   CuliBox keeps the VM settings it read when it started, so until the
   restart it sizes new boxes from the old VM, and a failed boxed spawn can
