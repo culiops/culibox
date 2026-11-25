@@ -2516,7 +2516,7 @@ function awsPaintRoles(row) {
   if (row.rolesNote) {
     const p = awsEl("p", "hint", row.rolesNote);
     if (row.rolesDoc) {
-      const a = awsEl("a", null, "How to create the agent role");
+      const a = awsEl("a", "lnk", "How to create the agent role");
       a.href = AWS_AGENT_ROLE_DOC; a.target = "_blank"; a.rel = "noopener noreferrer";
       p.append(" ", a);
     }
@@ -2627,7 +2627,7 @@ function awsAckNode(row) {
   box.appendChild(lab);
   if (row.orig && row.orig.full_access === true && !row.ackStale) box.appendChild(awsEl("p", "hint", AWS_ACK_ALREADY));
   const p = awsEl("p", "hint", "The agent role is the recommended default. ");
-  const a = awsEl("a", null, "How to create the agent role");
+  const a = awsEl("a", "lnk", "How to create the agent role");
   a.href = AWS_AGENT_ROLE_DOC; a.target = "_blank"; a.rel = "noopener noreferrer";
   p.appendChild(a);
   box.appendChild(p);

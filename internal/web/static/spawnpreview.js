@@ -275,6 +275,8 @@ function reachModel(o) {
       cloud.push(spawnItem("AWS", ent.name, {
         kindId: "aws", sub: spawnJoin([f.m.account_id ? "account " + f.m.account_id : "", f.m.region]),
         scope: spawnAWSScope(f), tag: f.prod ? "PROD" : "", facts,
+        // danger: the part of scope drawn red, the full-access label of a connection the server marks full_access.
+        ...(f.fullAccess ? { danger: spawnFullText() } : {}),
       }));
     }
   }
@@ -399,9 +401,11 @@ function reachWorkHome(p, repo) {
 // A row is {k, id, v, prod?, name?, tone?, full?, path?}: `id` declares the row's kind (files, original, workhome, aws, github,
 // tokens, reads, imports, domains, network, account, store) and the glyph comes from it, never from the label `k`; `full` is the tooltip text when it is longer than `v` (a path
 // not abbreviated), `path` the part of `v` drawn as machine text. An AWS row with prod set is drawn by the
-// caller as name + a red PROD tag + the rest of v (v starts with name). tone:
-// "warn" (amber, needs you). Containment is never coloured: red is for PROD and
-// write only (the PROD flag), a host session is told in words.
+// caller as name + a red PROD tag + the rest of v (v starts with name). `danger` is
+// the part of v drawn red: the full-access label of a connection the server marks
+// full_access. tone: "warn" (amber, needs you). Containment is never coloured: red
+// is for PROD and write only (the PROD flag, full access), a host session is told
+// in words.
 // Reads, Imports and Domains come after Tokens; on host there are none of them.
 function reachRows(o) {
   let x = o || {};
@@ -442,6 +446,7 @@ function reachRows(o) {
     else v += " only";
     const row = { k: "AWS", id: "aws", v, name: it.name };
     if (f.prod) row.prod = true;
+    if (f.fullAccess) row.danger = spawnFullText(); // the server's full_access only
     rows.push(row);
   }
 

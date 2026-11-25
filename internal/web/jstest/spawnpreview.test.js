@@ -1313,6 +1313,7 @@ test("full access: a full_access connection says the label in the scope, the car
   assert.strictEqual(m.cloud[0].facts.fullAccess, true);
   const rows = reachRows({ profile: p, tier: "box", cwd: "/w", meta, creds: null });
   assert.strictEqual(byK(rows, "AWS")[0].v, "sbx · " + AWS_FULL_ACCESS_TEXT);
+  assert.strictEqual(byK(rows, "AWS")[0].danger, AWS_FULL_ACCESS_TEXT, "the label is drawn in the danger tone");
   // the credentials view alone is enough when meta lacks the entry
   const r2 = reachRows({ profile: p, tier: "box", cwd: "/w", meta: {}, creds: { aws: [{ name: "sbx", mode: "sso_direct", full_access: true }] } });
   assert.strictEqual(byK(r2, "AWS")[0].v, "sbx · " + AWS_FULL_ACCESS_TEXT);
@@ -1326,5 +1327,24 @@ test("full access: sso_direct without full_access keeps the read-only words, and
     assert.ok(!m.cloud[0].facts.fullAccess);
     const rows = reachRows({ profile: p, tier: "box", cwd: "/w", meta: { aws_connections: [c] }, creds: null });
     assert.ok(!byK(rows, "AWS")[0].v.includes("Full access"));
+    assert.strictEqual(byK(rows, "AWS")[0].danger, undefined);
   }
+});
+
+test("paintReachRows: a row's danger part is its own red span, also after a PROD tag (#374)", () => {
+  const ctx = reachPanel();
+  const box = new RNode("div");
+  ctx.paintReachRows(box, [
+    { k: "AWS", v: "sbx · " + AWS_FULL_ACCESS_TEXT, name: "sbx", danger: AWS_FULL_ACCESS_TEXT },
+    { k: "AWS", v: "live · " + AWS_FULL_ACCESS_TEXT, name: "live", prod: true, danger: AWS_FULL_ACCESS_TEXT },
+    { k: "AWS", v: "ro · read only", name: "ro" },
+  ], {});
+  const vals = box.find("sr-v");
+  const red = (v) => v.find("c-red").map((n) => n.textContent);
+  assert.deepStrictEqual(red(vals[0]), [AWS_FULL_ACCESS_TEXT]);
+  assert.strictEqual(vals[0].textContent, "sbx · " + AWS_FULL_ACCESS_TEXT);
+  assert.deepStrictEqual(red(vals[1]), [AWS_FULL_ACCESS_TEXT]);
+  assert.deepStrictEqual(vals[1].find("sr-prod").map((n) => n.textContent), ["PROD"]);
+  assert.strictEqual(vals[1].textContent, "livePROD · " + AWS_FULL_ACCESS_TEXT);
+  assert.deepStrictEqual(red(vals[2]), []);
 });

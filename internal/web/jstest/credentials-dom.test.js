@@ -62,7 +62,7 @@ class Node {
     return c;
   }
   appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
-  append(...cs) { cs.forEach((c) => this.appendChild(c)); }
+  append(...cs) { cs.forEach((c) => this.appendChild(typeof c === "string" ? new Text(c) : c)); } // the DOM wraps a string in a text node
   // A browser drops focus to <body> when the focused element leaves the document, and when it stops being rendered (hidden): here,
   // activeElement becomes null.
   get hidden() { return !!this._hidden; }
@@ -3025,6 +3025,22 @@ async function ackPage(checkRes, post) {
   return { p, opts };
 }
 
+test("the roles note's agent-role link carries the app's link class", async () => {
+  const p = page({ tab: true });
+  const { opts } = hostOpts();
+  p.box.reply = (path) => {
+    if (path === "/api/credentials/aws/host-profiles") return { profiles: awsHostProfiles };
+    if (path === "/api/credentials/aws/roles") return { roles: [] };
+    return {};
+  };
+  await awsTick(p, opts, "acme-dev");
+  await vmEval(p, "awsFindRoles(awsFlow.rows[0])");
+  await settle();
+  const link = opts.host.querySelectorAll("a").find((a) => a.textContent === "How to create the agent role");
+  assert.ok(link, "the roles note links the agent-role doc");
+  assert.ok(link.classList.contains("lnk"), link.className);
+});
+
 test("sso_direct ack: an eligible gate draws an unticked checkbox with the coverage text and the agent-role link; Save waits for the tick", async () => {
   const { p, opts } = await ackPage(ackGate());
   const cb = ackBoxOf(opts.host);
@@ -3034,6 +3050,7 @@ test("sso_direct ack: an eligible gate draws an unticked checkbox with the cover
   const link = opts.host.querySelectorAll("a").find((a) => a.textContent === "How to create the agent role");
   assert.ok(link, "the agent-role link");
   assert.strictEqual(link.href, vmEval(p, "AWS_AGENT_ROLE_DOC"));
+  assert.ok(link.classList.contains("lnk"), "styled as the app's links, readable on the dark-red box: " + link.className);
   assert.ok(/The agent role is the recommended default\./.test(opts.host.textContent));
   await p.box.awsSaveAll();
   assert.strictEqual(p.calls.filter((c) => c.method === "POST" && c.path === "/api/credentials/aws").length, 0, "no save without the tick");

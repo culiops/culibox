@@ -2571,6 +2571,27 @@ test("picker sub-line says full access from full_access only, never from a gate 
   const sub = (name) => texts(optsOf(t).find((b) => optName(b).startsWith(name)), "pfv-opt-s");
   assert.deepStrictEqual(sub("full-lab"), ["account 123456789012, eu-west-1. Full access: no read-only default, no write window."]);
   assert.deepStrictEqual(sub("gated-lab"), ["account 123456789012, eu-west-1. Read only. Uses the SSO role directly."]);
+  const red = (name) => texts(optsOf(t).find((b) => optName(b).startsWith(name)), "c-red");
+  assert.deepStrictEqual(red("full-lab"), ["Full access: no read-only default, no write window"], "the label is in the danger tone");
+  assert.deepStrictEqual(red("gated-lab"), []);
+});
+
+test("a bound full-access connection's row says the label in the danger tone, read and edit (#374)", async () => {
+  const t = cloudPage({ awscEntries: [
+    { name: "prod-read", mode: "sso_direct", full_access: true, account_id: "222222222222", region: "eu-west-1" },
+    { name: "staging-read", mode: "sso_direct", state: "not_read_only", account_id: "111111111111", region: "eu-west-1" },
+  ] });
+  await t.box.pfvShow("aws-ops");
+  const check = (when) => {
+    assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "prod-read"), "c-red"), ["Full access: no read-only default, no write window"], when);
+    assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "staging-read"), "c-red"), [], when + ": a gate state never makes it");
+  };
+  check("read");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  check("edit");
+  // A row pending removal mutes its red label, as it mutes the PROD tag.
+  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(css, /#pfv \.pfv-removed \.c-red \{ color: var\(--muted\); \}/);
 });
 
 test("picker sub-line shows account and region, what the connection can do, a token's description and hosts", async () => {

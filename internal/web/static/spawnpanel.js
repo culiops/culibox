@@ -274,16 +274,26 @@ function renderSpawnReach() {
 
 // paintReachRows draws reachRows' rows into `box`, replacing what it held: the title, then one label/value grid
 // (frame M4.1) with a row per key. A value's tooltip is its full text (`full` when the row abbreviates a path);
-// a path inside it is its own mono span; an AWS row on a prod connection carries the red PROD tag after its name.
+// a path inside it is its own mono span; an AWS row on a prod connection carries the red PROD tag after its name,
+// and its `danger` part (the full-access label) is a red span.
 // Every string is server or operator text, so it goes in through textContent only.
 function paintReachRows(box, rows, opts) {
   const o = opts || {};
+  // The row's danger part (a full-access label) as a red span, the text around it plain.
+  const red = (r, s) => {
+    const at = typeof r.danger === "string" && r.danger !== "" ? s.indexOf(r.danger) : -1;
+    if (at < 0) return [s];
+    const before = s.slice(0, at), after = s.slice(at + r.danger.length);
+    return [...(before ? [before] : []), spawnPanelEl("span", "c-red", r.danger), ...(after ? [after] : [])];
+  };
   const value = (r, cls) => {
     const v = spawnPanelEl("span", cls);
     v.title = r.full || r.v;
     const at = r.path ? r.v.indexOf(r.path) : -1;
     if (r.prod && r.name && r.v.startsWith(r.name)) {
-      v.append(r.name, spawnPanelEl("span", "sr-prod", "PROD"), r.v.slice(r.name.length));
+      v.append(r.name, spawnPanelEl("span", "sr-prod", "PROD"), ...red(r, r.v.slice(r.name.length)));
+    } else if (r.danger) {
+      v.append(...red(r, r.v));
     } else if (at >= 0) {
       const before = r.v.slice(0, at), after = r.v.slice(at + r.path.length);
       v.append(...(before ? [before] : []), spawnPanelEl("span", "sr-path", r.path), ...(after ? [after] : []));

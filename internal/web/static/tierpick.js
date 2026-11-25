@@ -447,8 +447,9 @@ async function hostDropsConfirm(profileName, drops, keeps, guardrail, fullAccess
   const dropped = Array.isArray(drops) ? drops : [];
   const notes = guard.length ? [[tierGuardrailLine(guard)]] : [];
   if (Array.isArray(keeps) && keeps.length) notes.push(["Still passed to the agent on Host: " + tierJoin(keeps) + "."]);
-  // fullAccess: the names of the profile's AWS connections the server marks full_access: each is named with the label.
-  for (const n of Array.isArray(fullAccess) ? fullAccess : []) notes.push([n + ": " + AWS_FULL_ACCESS_TEXT + "."]);
+  // fullAccess: the names of the profile's AWS connections the server marks full_access: each is named with the label, in the
+  // danger tone the Credentials card and the Access tab use.
+  for (const n of Array.isArray(fullAccess) ? fullAccess : []) notes.push([n + ": ", { red: AWS_FULL_ACCESS_TEXT }, "."]);
   const o = { confirmLabel: "Start on Host", danger: true, focusCancel: true, notes };
   if (!dropped.length) {
     o.title = "Start on Host?";
