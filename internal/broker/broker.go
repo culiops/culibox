@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -373,6 +374,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 	// hash and audit rows are exactly what they were before connections.
 	var conn, scope string
 	var bnd config.AWSBinding // a shallow copy: bnd.Elevate is shared with the session, read it only
+	var ack *awsprobe.Ack     // a clone of the connection's full-access acknowledgement; the legacy binding has none
 	if len(sv.AWSConns) > 0 {
 		c, boxMsg, entry, why := resolveConn(sv.AWSConns, name)
 		if why != "" {
@@ -383,6 +385,11 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		conn, bnd, scope = c.Name, c.AWSBinding, c.DefHash() // not c.Hash(): that ignores name and description
+		if c.FullAccessAck != nil {
+			a := *c.FullAccessAck
+			a.Refused, a.MissingPerms = slices.Clone(a.Refused), slices.Clone(a.MissingPerms)
+			ack = &a
+		}
 	} else {
 		if name != "" { // a legacy binding has no names: any name is unbound
 			entry := name
@@ -399,7 +406,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	ck := connKey{sid, conn}
 	if bnd.SSODirect() { // its own path (ssodirect.go): no AssumeRole, no session policy, the gate on every mint
-		b.serveSSODirect(w, r, sv.Agent, nonce, ck, scope, bnd, now)
+		b.serveSSODirect(w, r, sv.Agent, nonce, ck, scope, bnd, ack, now)
 		return
 	}
 	base := Row{Time: now, SessionID: sid, Profile: sv.Agent, AccountID: awsscope.AccountOf(bnd.RoleARN),

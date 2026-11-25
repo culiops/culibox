@@ -75,7 +75,7 @@ const boxPending = "CuliBox is still checking that this connection's SSO permiss
 // credential is cached first, so a retry after a dropped request is served
 // from the cache.
 func (b *Broker) serveSSODirect(w http.ResponseWriter, r *http.Request, agent, nonce string, ck connKey, scope string,
-	bnd config.AWSBinding, now time.Time) {
+	bnd config.AWSBinding, ack *awsprobe.Ack, now time.Time) {
 	fk := ssoFlightKey{ck, nonce, scope}
 	b.mu.Lock()
 	if c, ok := b.cache[ck]; ok && c.nonce == nonce && c.scopeKey == scope && c.creds.Expiration.Sub(now) > refreshMargin {
@@ -101,7 +101,7 @@ func (b *Broker) serveSSODirect(w http.ResponseWriter, r *http.Request, agent, n
 		f = &ssoFlight{done: make(chan struct{})}
 		b.ssoFlights[fk] = f
 		b.ssoWG.Add(1) // under mu while !probeClosing: StopProbes' Wait sees it
-		go b.runSSOFlight(fk, f, agent, bnd, now)
+		go b.runSSOFlight(fk, f, agent, bnd, ack, now)
 	}
 	f.waiters++
 	b.mu.Unlock()
@@ -128,9 +128,9 @@ func (b *Broker) serveSSODirect(w http.ResponseWriter, r *http.Request, agent, n
 // removes it); either way every waiting request gets the outcome. The cache
 // write and the removal from the table are one critical section, so a request
 // either joins the flight or finds the cached credential.
-func (b *Broker) runSSOFlight(fk ssoFlightKey, f *ssoFlight, agent string, bnd config.AWSBinding, now time.Time) {
+func (b *Broker) runSSOFlight(fk ssoFlightKey, f *ssoFlight, agent string, bnd config.AWSBinding, ack *awsprobe.Ack, now time.Time) {
 	defer b.ssoWG.Done()
-	out := b.mintAndGate(fk.ck, agent, fk.scope, bnd, now)
+	out := b.mintAndGate(fk.ck, agent, fk.scope, bnd, ack, now)
 	b.mu.Lock()
 	if b.ssoFlights[fk] == f {
 		delete(b.ssoFlights, fk)
@@ -151,7 +151,7 @@ func (b *Broker) runSSOFlight(fk ssoFlightKey, f *ssoFlight, agent string, bnd c
 // contexts of its own (never the request's). Every refusal is audited here;
 // the minted row is written only after the gate passed, and a credential
 // whose row cannot be written is withheld.
-func (b *Broker) mintAndGate(ck connKey, agent, scope string, bnd config.AWSBinding, now time.Time) ssoOutcome {
+func (b *Broker) mintAndGate(ck connKey, agent, scope string, bnd config.AWSBinding, ack *awsprobe.Ack, now time.Time) ssoOutcome {
 	row := Row{Time: now, SessionID: ck.sid, Profile: agent, ScopeHash: scope, Entry: ck.conn, Mode: config.AWSModeSSODirect}
 	// Read from the host file, so every row of a mint names the account; a
 	// failure refuses below, once the mint has said what is wrong with the profile.
@@ -198,12 +198,27 @@ func (b *Broker) mintAndGate(ck connKey, agent, scope string, bnd config.AWSBind
 	res := gate(gctx, c, bnd.Region, account, bnd.SourceProfile)
 	cancel()
 	row.RoleARN = res.RoleARN
-	if !gatePassed(res) {
+	adm := awsprobe.AdmitSSO(res, ack)
+	if !adm.OK {
 		status, boxMsg := http.StatusServiceUnavailable, boxUnverified
 		if res.State == awsprobe.GateNotReadOnly {
 			status, boxMsg = http.StatusForbidden, boxNotReadOnly
 		}
-		return b.refuse(row, OutcomeDeniedNotReadOnly, status, boxMsg, gateRefusal(res))
+		hostMsg := gateRefusal(res)
+		// Only a named connection can carry an acknowledgement; the legacy
+		// inline binding never can, so it gets no acknowledge hint.
+		if ck.conn != "" && (adm.Stale || adm.Eligible) {
+			status, boxMsg = http.StatusForbidden, boxNeedsAck
+			if adm.Stale {
+				hostMsg = ackStalePrefix + hostMsg
+			} else {
+				hostMsg = ackEligiblePrefix + hostMsg
+			}
+		}
+		return b.refuse(row, OutcomeDeniedNotReadOnly, status, boxMsg, hostMsg)
+	}
+	if adm.UnderAck {
+		row.FullAccess = gateRefusal(res) // bounded by maxGateErrLen; the outcome stays minted
 	}
 
 	row.Outcome, row.Expires = OutcomeMinted, c.Expiration
@@ -230,14 +245,20 @@ func (b *Broker) refuse(row Row, o Outcome, status int, boxMsg, hostMsg string) 
 const (
 	boxNotReadOnly = "CuliBox refused: this connection's SSO permission set is not read-only, so its credentials are not handed out; the refusing actions are in the CuliBox audit log on the host"
 	boxUnverified  = "CuliBox could not verify that this connection's SSO permission set is read-only, so no credential was issued; retry shortly (the reason is in the CuliBox audit log on the host)"
-	boxNotSSO      = "CuliBox refused: this connection's source profile is not usable for the SSO role directly (it needs an sso_account_id); see the CuliBox audit log on the host"
+	// boxNeedsAck is static: it never says which patterns the acknowledgement lacks.
+	boxNeedsAck = "CuliBox refused: this connection's SSO permission set needs a full-access acknowledgement on the host, or its acknowledgement no longer covers it; see the CuliBox audit log on the host"
+	boxNotSSO   = "CuliBox refused: this connection's source profile is not usable for the SSO role directly (it needs an sso_account_id); see the CuliBox audit log on the host"
 )
 
-// gatePassed is the one test that lets an sso_direct credential out: a
-// read-only verdict that names the role it was made for.
-func gatePassed(res awsprobe.GateResult) bool {
-	return res.State == awsprobe.GateReadOnly && res.RoleARN != ""
-}
+// Host-side prefixes of a refusal an acknowledgement could (not) cover.
+const (
+	ackStalePrefix    = "not covered by the full-access acknowledgement, acknowledge again on the Credentials screen: "
+	ackEligiblePrefix = "eligible for a full-access acknowledgement on the Credentials screen: "
+)
+
+// gatePassed is a read-only verdict that names its role, with no acknowledgement
+// in play. The decision itself is awsprobe.AdmitSSO.
+func gatePassed(res awsprobe.GateResult) bool { return awsprobe.AdmitSSO(res, nil).OK }
 
 // mintCode is a mint failure's safe code and its host-side detail.
 func mintCode(err error) (code, detail string) {
