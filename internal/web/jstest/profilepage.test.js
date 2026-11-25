@@ -1703,7 +1703,7 @@ test("the box consequence line shows on Runs in (box) and Network, not on Agent,
   clickBtn(blockOf(t, "network"), "Edit");
   // #95: the network setting also reaches running sessions, and the line says so.
   assert.deepStrictEqual(texts(blockOf(t, "network"), "pfv-fnote"),
-    ["Saving gives the next session a new box. Running sessions keep theirs and follow this setting from their next connection."]);
+    ["Running sessions follow this setting from their next connection. Saving gives the next session a new box."]);
 
   const h = page();
   await h.box.pfvShow("runbook-host");
@@ -3020,7 +3020,7 @@ test("Also reachable: the footer says a domain change reaches running sessions a
   await t.box.pfvShow("aws-ops");
   clickBtn(blockOf(t, "reachable"), "Edit");
   assert.deepStrictEqual(texts(blockOf(t, "reachable"), "pfv-fnote"),
-    ["Saving gives the next session a new box. Running sessions keep theirs; a domain change reaches them at their next connection, a folder change does not."]);
+    ["Running sessions get a domain change at their next connection; a folder change reaches only new sessions. Saving gives the next session a new box."]);
 });
 
 test("GitHub: the owner row shows its fields and a Read only preset; untouched, no permissions are written", async () => {
