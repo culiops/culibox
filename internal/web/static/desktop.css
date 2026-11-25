@@ -4100,6 +4100,8 @@
     border-left: 3px solid var(--warn); background: var(--warn-tint); font-size: var(--t-md); line-height: var(--lh-md); overflow-wrap: anywhere;
   }
   #ask-modal .lk-meta + .lk-warn { margin-top: var(--sp-3); }
+  /* display: flex above beats the hidden attribute: an empty strip read as a broken warning (#371 D1). */
+  #ask-modal .lk-warn[hidden] { display: none; }
   #ask-modal .lk-ico { flex: none; color: var(--warn); }
   #ask-modal .lk-wt .lk-mono { font-size: var(--t-sm); }
   #ask-modal .lk-trust { margin: var(--sp-3) 0 0; }

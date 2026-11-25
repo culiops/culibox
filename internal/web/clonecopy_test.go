@@ -14,6 +14,7 @@ import (
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/clone"
+	"github.com/culiops/culibox/internal/config"
 )
 
 func TestSuggestCopyDir(t *testing.T) {
@@ -92,9 +93,9 @@ func TestRestartNeedsCopySuggestsTheProfile(t *testing.T) {
 	}
 }
 
-func estimateGET(s *Server, query string) *httptest.ResponseRecorder {
+func estimatePOST(s *Server, body string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
-	s.handleCloneEstimate(rec, httptest.NewRequest(http.MethodGet, "/api/clone/estimate?"+query, nil))
+	s.handleCloneEstimate(rec, httptest.NewRequest(http.MethodPost, "/api/clone/estimate", strings.NewReader(body)))
 	return rec
 }
 
@@ -104,7 +105,7 @@ func TestEstimateHandlerReturnsSnakeCaseJSON(t *testing.T) {
 		gotOf, gotDir = of, dir
 		return clone.Estimate{GitBytes: 1, TreeBytes: 2, FreeBytes: 3, Enough: true, Partial: true, LFS: true}, nil
 	}}
-	rec := estimateGET(s, "of=/h/repo&dir=/h/box-clones/work")
+	rec := estimatePOST(s, `{"of":"/h/repo","dir":"/h/box-clones/work"}`)
 	if rec.Code != http.StatusOK || gotOf != "/h/repo" || gotDir != "/h/box-clones/work" {
 		t.Fatalf("%d %s (of=%q dir=%q)", rec.Code, rec.Body, gotOf, gotDir)
 	}
@@ -129,22 +130,95 @@ func TestEstimateHandlerValidatesPaths(t *testing.T) {
 		called = true
 		return clone.Estimate{}, nil
 	}}
-	for _, q := range []string{
-		"", "of=/h/repo", "dir=/h/copy", "of=repo&dir=/h/copy", "of=/h/repo&dir=copy",
-		"of=/h/repo/../x&dir=/h/copy", "of=/h/repo&dir=/h//copy", "of=/h/repo/&dir=/h/copy",
-		"of=/h/re%0Apo&dir=/h/copy", "of=/h/repo&dir=/h/co%00py",
+	for _, body := range []string{
+		"", "{", "[]", `{"of":"/h/repo"}`, `{"dir":"/h/copy"}`, `{"of":"repo","dir":"/h/copy"}`, `{"of":"/h/repo","dir":"copy"}`,
+		`{"of":"/h/repo/../x","dir":"/h/copy"}`, `{"of":"/h/repo","dir":"/h//copy"}`, `{"of":"/h/repo/","dir":"/h/copy"}`,
+		`{"of":"/h/re\npo","dir":"/h/copy"}`, `{"of":"/h/repo","dir":"/h/co\u0000py"}`,
+		`{"of":"/h/repo","dir":"/h/copy","free_only":true,"git_bytes":-1}`,
+		`{"of":"/h/repo","dir":"/h/copy","free_only":true,"tree_bytes":1125899906842625}`,
 	} {
-		if rec := estimateGET(s, q); rec.Code != http.StatusBadRequest {
-			t.Errorf("%q: code %d, want 400", q, rec.Code)
+		if rec := estimatePOST(s, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%q: code %d, want 400", body, rec.Code)
 		}
 	}
 	if called {
-		t.Fatal("the estimate ran for an invalid path")
+		t.Fatal("the estimate ran for an invalid request")
 	}
-	rec := httptest.NewRecorder()
-	s.handleCloneEstimate(rec, httptest.NewRequest(http.MethodPost, "/api/clone/estimate?of=/a&dir=/b", nil))
-	if rec.Code != http.StatusMethodNotAllowed || called {
-		t.Errorf("POST: code %d called %v, want 405 and not called", rec.Code, called)
+	for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete} {
+		rec := httptest.NewRecorder()
+		s.handleCloneEstimate(rec, httptest.NewRequest(m, "/api/clone/estimate?of=/a&dir=/b", nil))
+		if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost || called {
+			t.Errorf("%s: code %d Allow %q called %v, want 405, POST and not called", m, rec.Code, rec.Header().Get("Allow"), called)
+		}
+	}
+}
+
+// A location edit asks for the free space alone: the repo is not estimated
+// again, and the sizes sent back are judged with the same rule (#371 C4).
+func TestEstimateHandlerFreeOnly(t *testing.T) {
+	called := false
+	s := &Server{CloneEstimate: func(context.Context, string, string) (clone.Estimate, error) {
+		called = true
+		return clone.Estimate{}, nil
+	}}
+	dir := filepath.Join(t.TempDir(), "box-clones", "work")
+	rec := estimatePOST(s, fmt.Sprintf(`{"of":"/h/repo","dir":%q,"free_only":true,"git_bytes":1000,"tree_bytes":2000}`, dir))
+	if rec.Code != http.StatusOK || called {
+		t.Fatalf("%d %s called=%v; want 200 and no repo estimate", rec.Code, rec.Body, called)
+	}
+	var e clone.Estimate
+	if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil {
+		t.Fatal(err)
+	}
+	want, err := clone.FreeFor(dir, 1000, 2000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.GitBytes != 1000 || e.TreeBytes != 2000 || e.FreeBytes <= 0 || e.Enough != want.Enough || e.Partial || e.LFS {
+		t.Fatalf("free-only estimate %+v, want the sizes back, the free space and FreeFor's verdict %+v", e, want)
+	}
+}
+
+// The estimate does work on the host, so it is a POST behind csrfGuard: a
+// cross-site cookie POST never reaches it, and a cross-site GET navigation
+// (which SameSite=Lax would send the cookie with) is 405 (#371 S3).
+func TestEstimateCrossSiteRefusedThroughHandlerChain(t *testing.T) {
+	called := 0
+	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
+		Profiles: NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {}),
+		CloneEstimate: func(context.Context, string, string) (clone.Estimate, error) {
+			called++
+			return clone.Estimate{}, nil
+		}}
+	ck := issueCookie(t, s)
+	h := s.Handler()
+	do := func(method, target string, hdr [2]string) int {
+		r := httptest.NewRequest(method, target, strings.NewReader(`{"of":"/h/repo","dir":"/h/copy"}`))
+		r.AddCookie(ck)
+		if hdr[0] != "" {
+			r.Header.Set(hdr[0], hdr[1])
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	if got := do("POST", "/api/clone/estimate", [2]string{"Sec-Fetch-Site", "cross-site"}); got != http.StatusForbidden {
+		t.Errorf("cross-site cookie POST: got %d, want 403", got)
+	}
+	if got := do("POST", "/api/clone/estimate", [2]string{"Origin", "http://evil.example"}); got != http.StatusForbidden {
+		t.Errorf("foreign-origin cookie POST: got %d, want 403", got)
+	}
+	if got := do("GET", "/api/clone/estimate?of=/h/repo&dir=/h/copy", [2]string{"Sec-Fetch-Site", "cross-site"}); got != http.StatusMethodNotAllowed {
+		t.Errorf("cross-site GET: got %d, want 405", got)
+	}
+	if called != 0 {
+		t.Fatalf("the estimate ran %d times for refused requests", called)
+	}
+	if got := do("POST", "/api/clone/estimate", [2]string{"Sec-Fetch-Site", "same-origin"}); got != http.StatusOK {
+		t.Errorf("same-origin POST: got %d, want 200", got)
+	}
+	if called != 1 {
+		t.Fatalf("the estimate ran %d times, want 1", called)
 	}
 }
 
@@ -152,7 +226,7 @@ func TestEstimateHandlerRefusesBoxOwned(t *testing.T) {
 	s := &Server{CloneEstimate: func(_ context.Context, of, _ string) (clone.Estimate, error) {
 		return clone.Estimate{}, fmt.Errorf("%w: clone_of %s is box-owned", box.ErrUnboxableWorkspace, of)
 	}}
-	rec := estimateGET(s, "of=/h/box-clones/work&dir=/h/box-clones/other")
+	rec := estimatePOST(s, `{"of":"/h/box-clones/work","dir":"/h/box-clones/other"}`)
 	var b map[string]string
 	json.Unmarshal(rec.Body.Bytes(), &b)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(b["error"], "box-owned") {
@@ -169,7 +243,7 @@ func TestEstimateHandlerOtherErrors(t *testing.T) {
 		{errors.New("git exploded at /secret/path"), http.StatusInternalServerError},
 	} {
 		s := &Server{CloneEstimate: func(context.Context, string, string) (clone.Estimate, error) { return clone.Estimate{}, c.err }}
-		rec := estimateGET(s, "of=/h/repo&dir=/h/copy")
+		rec := estimatePOST(s, `{"of":"/h/repo","dir":"/h/copy"}`)
 		if rec.Code != c.code {
 			t.Errorf("%v: code %d, want %d", c.err, rec.Code, c.code)
 		}
@@ -187,9 +261,9 @@ func TestEstimateRouteIsProtectedAndOptional(t *testing.T) {
 		return clone.Estimate{Enough: true}, nil
 	}
 	h := s.Handler()
-	const url = "/api/clone/estimate?of=/h/repo&dir=/h/copy"
+	const url, body = "/api/clone/estimate", `{"of":"/h/repo","dir":"/h/copy"}`
 
-	req := httptest.NewRequest(http.MethodGet, url, nil)
+	req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(body))
 	req.Host = "example.com"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -197,7 +271,7 @@ func TestEstimateRouteIsProtectedAndOptional(t *testing.T) {
 		t.Errorf("no credential: code %d, want a refusal", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, url, nil)
+	req = httptest.NewRequest(http.MethodPost, url, strings.NewReader(body))
 	req.Host = "example.com"
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rec = httptest.NewRecorder()
@@ -208,7 +282,7 @@ func TestEstimateRouteIsProtectedAndOptional(t *testing.T) {
 
 	// A server without the hook has no such route: the catch-all answers, not the handler.
 	s.CloneEstimate = nil
-	req = httptest.NewRequest(http.MethodGet, url, nil)
+	req = httptest.NewRequest(http.MethodPost, url, strings.NewReader(body))
 	req.Host = "example.com"
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rec = httptest.NewRecorder()

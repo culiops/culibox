@@ -81,13 +81,28 @@ func EstimateCopy(ctx context.Context, g Git, of, dir string) (Estimate, error) 
 	return e, nil
 }
 
+// FreeFor is the free-space half of an estimate, for sizes an earlier
+// EstimateCopy of the same repo measured: the copy dialog asks only this when
+// the copy location is edited (#371 C4). Nothing in the repo is read. The sizes
+// come back as given; Partial and LFS are the earlier estimate's to keep.
+func FreeFor(dir string, gitBytes, treeBytes int64) (Estimate, error) {
+	free, err := freeBytes(dir)
+	if err != nil {
+		return Estimate{}, err
+	}
+	return Estimate{GitBytes: gitBytes, TreeBytes: treeBytes, FreeBytes: free, Enough: enoughFor(gitBytes, treeBytes, free)}, nil
+}
+
 // walkGitBytes sums the sizes of the regular files under root. Symlinks are
 // never followed (and never counted), and anything unreadable is skipped. It
 // stops after maxEntries entries or the budget and then reports partial.
+// root/lfs, Git LFS's object store, is not counted: a clone does not copy it
+// (its files arrive as pointers).
 func walkGitBytes(ctx context.Context, root string, maxEntries int, budget time.Duration) (sum int64, partial bool) {
 	deadline := time.Now().Add(budget)
 	n := 0
 	stop := errors.New("stop")
+	lfs := filepath.Join(root, "lfs")
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			partial = true // unreadable: what is below is not counted
@@ -95,6 +110,9 @@ func walkGitBytes(ctx context.Context, root string, maxEntries int, budget time.
 				return fs.SkipDir
 			}
 			return nil
+		}
+		if p == lfs && d.IsDir() {
+			return fs.SkipDir
 		}
 		if n++; n > maxEntries || (n%256 == 0 && (time.Now().After(deadline) || ctx.Err() != nil)) {
 			partial = true

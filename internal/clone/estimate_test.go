@@ -251,6 +251,19 @@ func TestDeclaresPromisor(t *testing.T) {
 	}
 }
 
+// .git/lfs (Git LFS's objects) is not copied by a clone, so it is not counted.
+func TestWalkGitBytesSkipsLFSObjects(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "lfs", "objects", "ab"), 0o755)
+	os.WriteFile(filepath.Join(root, "lfs", "objects", "ab", "big"), make([]byte, 5000), 0o644)
+	os.MkdirAll(filepath.Join(root, "objects", "lfs"), 0o755)
+	os.WriteFile(filepath.Join(root, "objects", "lfs", "x"), make([]byte, 7), 0o644)
+	os.WriteFile(filepath.Join(root, "HEAD"), make([]byte, 10), 0o644)
+	if sum, partial := walkGitBytes(context.Background(), root, 1000, time.Minute); sum != 17 || partial {
+		t.Errorf("sum = %d, partial = %v; want 17, false (only <root>/lfs is skipped)", sum, partial)
+	}
+}
+
 func TestFreeBytesUsesNearestExistingAncestor(t *testing.T) {
 	base := t.TempDir()
 	a, err := freeBytes(base)

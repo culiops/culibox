@@ -4,8 +4,8 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  copyDialogModel, cdEstimateURL, cdRefusalFromCheck, cdSavedDoc, cdIsInplaceHistory, cdSaveWithAck, cdSizeLine,
-  CD_NOT_SEE, CD_LFS, CD_NO_DISK, CD_FOLDER_FIRST, CD_HOME, CD_HOME_UNKNOWN, CD_ACK_LABEL,
+  copyDialogModel, cdEstimateBody, cdMergeFree, cdChangesLine, cdRefusalFromCheck, cdSavedDoc, cdIsInplaceHistory, cdSaveWithAck, cdSizeLine,
+  CD_NOT_SEE, CD_LFS, CD_NO_DISK, CD_FOLDER_FIRST, CD_HOME, CD_HOME_UNKNOWN, CD_ACK_LABEL, CD_BUILT_IN, CD_CONFIG, CD_SHELL, CD_BODY,
 } = require("../static/copydialog.js");
 
 const MB = 1 << 20;
@@ -118,8 +118,43 @@ test("a profile saved as Host is not converted behind the user's back", () => {
   assert.ok(m.lines.includes("This profile runs on Host. A private copy runs in a box: switch the profile to Box first."));
 });
 
-test("cdEstimateURL escapes both paths", () => {
-  assert.strictEqual(cdEstimateURL("/h/a b", "/h/c&d"), "/api/clone/estimate?of=%2Fh%2Fa%20b&dir=%2Fh%2Fc%26d");
+test("cdEstimateBody: a full estimate first; once the repo is measured, the free space alone against its sizes", () => {
+  assert.deepStrictEqual(cdEstimateBody("/h/a b", "/h/c&d", null), { of: "/h/a b", dir: "/h/c&d" });
+  assert.deepStrictEqual(cdEstimateBody("/h/r", "/h/c", est),
+    { of: "/h/r", dir: "/h/c", free_only: true, git_bytes: 100 * MB, tree_bytes: 50 * MB });
+});
+
+test("cdMergeFree: the cached sizes, partial and lfs stay; the free space and the verdict are the new answer's", () => {
+  const known = { ...est, partial: true, lfs: true };
+  const got = { git_bytes: 100 * MB, tree_bytes: 50 * MB, free_bytes: 1 * MB, enough: false, partial: false, lfs: false };
+  assert.deepStrictEqual(cdMergeFree(known, got), { ...known, free_bytes: 1 * MB, enough: false });
+});
+
+// The save rewrites the profile for good (#371 C3): the dialog says which profile and what it will do from now on.
+test("the dialog body names the profile it changes and what it does from now on", () => {
+  const m = copyDialogModel(refusal, est, plain, { home, profileName: "claude" });
+  assert.strictEqual(cdChangesLine("claude", "/home/u/repo"), "This changes the profile claude: it will work on private copies of /home/u/repo from now on.");
+  assert.strictEqual(m.body, CD_BODY + " " + cdChangesLine("claude", "/home/u/repo"));
+  assert.strictEqual(copyDialogModel(refusal, est, plain, { home }).body, m.body, "the profile's own name when none is given");
+  assert.strictEqual(copyDialogModel({ ...refusal, worktree: true }, est, plain, { home }).body, "", "nothing is changed for a worktree");
+});
+
+test("the quick-shell profile is never converted: every later + Shell would open in the copy", () => {
+  const m = copyDialogModel(refusal, est, { name: "zsh" }, { home, profileName: "zsh", shellProfile: "zsh" });
+  assert.strictEqual(m.canConvert, false);
+  assert.ok(m.lines.includes(CD_SHELL), JSON.stringify(m.lines));
+  assert.strictEqual(copyDialogModel(refusal, est, plain, { home, profileName: "claude", shellProfile: "zsh" }).canConvert, true);
+  assert.strictEqual(copyDialogModel(refusal, est, plain, { home, profileName: "claude", shellProfile: "" }).canConvert, true);
+});
+
+test("a profile that cannot be edited: built in, or defined in the config file, each said as it is", () => {
+  const b = copyDialogModel(refusal, est, { ...plain, editable: false, source: "builtin" }, { home });
+  assert.strictEqual(b.canConvert, false);
+  assert.ok(b.lines.includes(CD_BUILT_IN) && !b.lines.includes(CD_CONFIG));
+  const c = copyDialogModel(refusal, est, { ...plain, editable: false, source: "config" }, { home });
+  assert.strictEqual(c.canConvert, false);
+  assert.ok(c.lines.includes(CD_CONFIG) && !c.lines.includes(CD_BUILT_IN));
+  assert.match(CD_CONFIG, /defined in the config file/);
 });
 
 test("cdRefusalFromCheck: a workspace check of a git folder as the refusal the dialog reads, with the server's suggestion and home verdict", () => {
@@ -183,4 +218,133 @@ test("cdSaveWithAck: a second inplace_history after the ack is not asked again",
   let asks = 0;
   await assert.rejects(cdSaveWithAck(async () => { throw refuse; }, async () => { asks++; return true; }), (e) => e === refuse);
   assert.strictEqual(asks, 1);
+});
+
+// --- the DOM half, over a fake page ---------------------------------------------------------------------------
+// copyDialogAsk with askDialog, api and the timers as stand-ins: what it asks the server, and when (#371 C4, D1, C3).
+
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const { EvNode, Text } = require("./fakedom.js");
+
+const STATIC = path.join(__dirname, "..", "static");
+
+function cdPage() {
+  const doc = { activeElement: null };
+  doc.createElement = (t) => new EvNode(t, doc);
+  doc.createTextNode = (t) => new Text(t);
+  const els = { "ask-modal": new EvNode("dialog", doc), "ask-input": new EvNode("input", doc), "ask-ok": new EvNode("button", doc) };
+  els["ask-modal"].open = false;
+  els["ask-input"].value = "";
+  doc.getElementById = (id) => els[id] || null;
+  const calls = []; // every api request: {path, body, signal, resolve, reject}
+  const asks = []; // every askDialog: {opts, resolve}
+  const timers = []; // every setTimeout: {fn, ms, cleared}
+  const box = {
+    console, document: doc, window: { shellProfile: "" }, AbortController,
+    humanBytes: (n) => n + " B",
+    setTimeout: (fn, ms) => { timers.push({ fn, ms, cleared: false }); return timers.length; },
+    clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].cleared = true; },
+    api: (p, o) => new Promise((resolve, reject) => {
+      const c = { path: p, method: o && o.method, body: o && o.body ? JSON.parse(o.body) : null, signal: o && o.signal, resolve, reject };
+      if (c.signal) c.signal.addEventListener("abort", () => reject(new Error("aborted")));
+      calls.push(c);
+    }),
+    askDialog: (opts) => {
+      els["ask-input"].value = opts.value || "";
+      return new Promise((resolve) => asks.push({ opts, resolve }));
+    },
+  };
+  const ctx = vm.createContext(box);
+  vm.runInContext(fs.readFileSync(path.join(STATIC, "copydialog.js"), "utf8"), ctx);
+  // fire: the pending, uncleared timers of `ms` (the 400 ms edit debounce), as if that time had passed.
+  const fire = (ms) => timers.filter((t) => !t.cleared && t.ms === ms).forEach((t) => { t.cleared = true; t.fn(); });
+  const settle = () => new Promise((r) => setImmediate(r));
+  const edit = (v) => { els["ask-input"].value = v; els["ask-input"].dispatchEvent({ type: "input" }); };
+  return { box, ctx, els, calls, asks, fire, settle, edit };
+}
+
+test("the dialog measures the repo once, then asks only for the free space on a location edit, aborting the request still out", async () => {
+  const pg = cdPage();
+  const done = pg.box.copyDialogAsk(refusal, { profile: plain, profileName: "claude", home });
+  assert.strictEqual(pg.calls.length, 1);
+  assert.deepStrictEqual([pg.calls[0].path, pg.calls[0].method], ["/api/clone/estimate", "POST"]);
+  assert.deepStrictEqual(pg.calls[0].body, { of: "/home/u/repo", dir: "/home/u/box-clones/claude" });
+  pg.calls[0].resolve(est);
+  await pg.settle();
+  assert.strictEqual(pg.els["ask-ok"].disabled, false, "the copy fits: Start is on");
+
+  pg.edit("/home/u/elsewhere");
+  assert.strictEqual(pg.els["ask-ok"].disabled, true, "no answer for the new location yet");
+  assert.strictEqual(pg.calls.length, 1, "nothing is asked before the debounce");
+  pg.fire(400);
+  assert.deepStrictEqual(pg.calls[1].body,
+    { of: "/home/u/repo", dir: "/home/u/elsewhere", free_only: true, git_bytes: est.git_bytes, tree_bytes: est.tree_bytes });
+  pg.edit("/home/u/third");
+  pg.fire(400);
+  assert.strictEqual(pg.calls[1].signal.aborted, true, "the older request is aborted");
+  assert.strictEqual(pg.calls.length, 3);
+  pg.calls[2].resolve({ git_bytes: est.git_bytes, tree_bytes: est.tree_bytes, free_bytes: 1, enough: false, partial: false, lfs: false });
+  await pg.settle();
+  assert.strictEqual(pg.els["ask-ok"].disabled, true, "the new location does not fit");
+
+  // Closing ends it: the listener leaves #ask-input (which outlives the dialog), and the last request is aborted.
+  pg.edit("/home/u/fourth");
+  pg.asks[0].resolve({ outcome: "cancel", value: "" });
+  const r = await done;
+  assert.strictEqual(r.outcome, "cancel");
+  assert.strictEqual((pg.els["ask-input"].ev.input || []).length, 0);
+  pg.fire(400);
+  pg.edit("/home/u/fifth");
+  pg.fire(400);
+  assert.strictEqual(pg.calls.length, 3, "a closed dialog asks nothing more");
+});
+
+test("a dialog opened again for the same repo (a refused save) asks only for the free space", async () => {
+  const pg = cdPage();
+  const sizes = vm.runInContext("new Map()", pg.ctx);
+  const first = pg.box.copyDialogAsk(refusal, { profile: plain, home, sizes });
+  pg.calls[0].resolve(est);
+  await pg.settle();
+  pg.asks[0].resolve({ outcome: "cancel", value: "" });
+  await first;
+  const again = pg.box.copyDialogAsk(refusal, { profile: plain, home, sizes, note: "Could not make this profile a private copy: x" });
+  assert.strictEqual(pg.calls.length, 2);
+  assert.strictEqual(pg.calls[1].body.free_only, true);
+  pg.asks[1].resolve({ outcome: "cancel", value: "" });
+  await again;
+});
+
+test("the dialog names the profile it changes, and has a warning strip only for a note (D1)", async () => {
+  const pg = cdPage();
+  const done = pg.box.copyDialogAsk(refusal, { profile: plain, profileName: "claude", home });
+  const o = pg.asks[0].opts;
+  assert.ok(o.body.endsWith("This changes the profile claude: it will work on private copies of /home/u/repo from now on."), o.body);
+  assert.strictEqual(o.extra.filter((n) => n.className === "lk-warn").length, 0);
+  pg.asks[0].resolve({ outcome: "cancel", value: "" });
+  await done;
+  const noted = pg.box.copyDialogAsk(refusal, { profile: plain, home, note: "the server said no" });
+  const warn = pg.asks[1].opts.extra.filter((n) => n.className === "lk-warn");
+  assert.strictEqual(warn.length, 1);
+  assert.strictEqual(warn[0].textContent, "the server said no");
+  pg.asks[1].resolve({ outcome: "cancel", value: "" });
+  await noted;
+});
+
+test("the quick-shell profile is blocked in the dialog itself (window.shellProfile)", async () => {
+  const pg = cdPage();
+  pg.box.window.shellProfile = "zsh";
+  const done = pg.box.copyDialogAsk(refusal, { profile: { name: "zsh" }, profileName: "zsh", home });
+  pg.calls[0].resolve(est);
+  await pg.settle();
+  assert.strictEqual(pg.els["ask-ok"].disabled, true);
+  pg.asks[0].resolve({ outcome: "cancel", value: "" });
+  await done;
+});
+
+test("a hidden lk-warn is not drawn: display flex must not beat the hidden attribute (D1)", () => {
+  for (const f of ["app.css", "desktop.css"]) {
+    assert.match(fs.readFileSync(path.join(STATIC, f), "utf8"), /#ask-modal \.lk-warn\[hidden\][^{]*\{ display: none; \}/, f);
+  }
 });

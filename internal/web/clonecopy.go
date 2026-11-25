@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/clone"
 )
 
 // estimateTimeout bounds one estimate: the .git walk stops at 5 s, and the HEAD
@@ -22,22 +24,58 @@ func cleanAbs(p string) bool {
 		!strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
 
-// handleCloneEstimate is GET /api/clone/estimate?of=<repo>&dir=<copy>: what a
-// private copy of the repo would take and whether the disk holds it (#371). The
-// hook refuses a repo a box owns before any git runs there.
+// maxEstimateBytes bounds the sizes a free-space-only estimate is sent back:
+// far above any repo, and far below where the free-space rule would overflow.
+const maxEstimateBytes = 1 << 50
+
+// estimateRequest is the body of POST /api/clone/estimate. FreeOnly asks for
+// the free space at dir alone, judged against sizes the page already got from
+// an earlier full estimate of the same repo (GitBytes, TreeBytes): an edit of
+// the copy location does not walk the repo again (#371 C4).
+type estimateRequest struct {
+	Of        string `json:"of"`
+	Dir       string `json:"dir"`
+	FreeOnly  bool   `json:"free_only"`
+	GitBytes  int64  `json:"git_bytes"`
+	TreeBytes int64  `json:"tree_bytes"`
+}
+
+// handleCloneEstimate is POST /api/clone/estimate {of, dir}: what a private
+// copy of the repo would take and whether the disk holds it (#371). The hook
+// refuses a repo a box owns before any git runs there. It is a POST because it
+// does work on the host (a walk of the repo, host git, a statfs): a cookie POST
+// passes csrfGuard's same-origin check, a cross-site GET navigation would not.
+// With free_only it reads nothing in the repo: only the free space at dir.
 func (s *Server) handleCloneEstimate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	of, dir := r.URL.Query().Get("of"), r.URL.Query().Get("dir")
-	if !cleanAbs(of) || !cleanAbs(dir) {
+	var req estimateRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "the body must be JSON: {\"of\": <repo>, \"dir\": <copy folder>}")
+		return
+	}
+	if !cleanAbs(req.Of) || !cleanAbs(req.Dir) {
 		writeErr(w, http.StatusBadRequest, "of and dir must be absolute clean paths")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), estimateTimeout)
-	defer cancel()
-	e, err := s.CloneEstimate(ctx, of, dir)
+	var (
+		e   clone.Estimate
+		err error
+	)
+	if req.FreeOnly {
+		if req.GitBytes < 0 || req.TreeBytes < 0 || req.GitBytes > maxEstimateBytes || req.TreeBytes > maxEstimateBytes {
+			writeErr(w, http.StatusBadRequest, "git_bytes and tree_bytes must be sizes from an earlier estimate")
+			return
+		}
+		e, err = clone.FreeFor(req.Dir, req.GitBytes, req.TreeBytes)
+	} else {
+		ctx, cancel := context.WithTimeout(r.Context(), estimateTimeout)
+		defer cancel()
+		e, err = s.CloneEstimate(ctx, req.Of, req.Dir)
+	}
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, e)
@@ -46,7 +84,7 @@ func (s *Server) handleCloneEstimate(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, box.ErrBoxUnavailable):
 		writeErr(w, http.StatusServiceUnavailable, err.Error())
 	default:
-		log.Printf("clone estimate of %s: %v", of, err)
+		log.Printf("clone estimate of %s: %v", req.Of, err)
 		writeErr(w, http.StatusInternalServerError, "could not estimate the copy; see the CuliBox log")
 	}
 }

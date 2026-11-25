@@ -98,7 +98,7 @@ type Server struct {
 	// it can. Published in /api/meta as "clone_unavailable".
 	CloneUnavailable string
 	// CloneEstimate sizes a private copy of a repo and checks the free space for
-	// it (GET /api/clone/estimate). It must refuse a repo a box owns before it
+	// it (POST /api/clone/estimate). It must refuse a repo a box owns before it
 	// runs git there. nil: the route is not registered.
 	CloneEstimate func(ctx context.Context, of, dir string) (clone.Estimate, error)
 	// ShellProfile is the profile the UI's quick-shell (+sh) button spawns —
