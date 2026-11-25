@@ -139,6 +139,23 @@ test("the dialog body names the profile it changes and what it does from now on"
   assert.strictEqual(copyDialogModel({ ...refusal, worktree: true }, est, plain, { home }).body, "", "nothing is changed for a worktree");
 });
 
+// #371 N-3: a profile that cannot be changed is not told it will be.
+test("a blocked profile's dialog does not say it changes the profile", () => {
+  for (const [p, ctx] of [
+    [{ ...plain, editable: false, source: "builtin" }, {}],
+    [{ ...plain, runtime: "host" }, {}],
+    [{ ...plain, clone_of: "/home/u/other" }, {}],
+    [{ ...plain, default_cwd: "/elsewhere" }, {}],
+    [{ name: "zsh" }, { shellProfile: "zsh" }],
+  ]) {
+    const m = copyDialogModel(refusal, est, p, { home, ...ctx });
+    assert.strictEqual(m.canConvert, false, JSON.stringify(p));
+    assert.strictEqual(m.body, CD_BODY, JSON.stringify(p));
+  }
+  // Not enough disk is no block on the profile: the change is still what Start would do once there is room.
+  assert.strictEqual(copyDialogModel(refusal, { ...est, enough: false }, plain, { home }).body, CD_BODY + " " + cdChangesLine("claude", "/home/u/repo"));
+});
+
 test("the quick-shell profile is never converted: every later + Shell would open in the copy", () => {
   const m = copyDialogModel(refusal, est, { name: "zsh" }, { home, profileName: "zsh", shellProfile: "zsh" });
   assert.strictEqual(m.canConvert, false);

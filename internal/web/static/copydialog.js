@@ -66,14 +66,14 @@ function cdChangesLine(name, repo) {
 // paths for it, and a refusal without the flag (an older server) is not converted.
 // -> {repo, suggested, body, lines, canConvert, needsAck, worktreeOnly, hostOnly, loading}. `hostOnly`: nothing here can be
 // converted, so the only way on is Host (a linked worktree, or a folder inside the repo at the home directory). `body` is the
-// dialog's text: what a copy is, and which profile it changes.
+// dialog's text: what a copy is, and which profile it changes (only when nothing blocks the change).
 function copyDialogModel(refusal, estimate, profile, ctx) {
   const r = refusal || {};
   const p = profile || {};
   const c = ctx || {};
   const name = c.profileName || p.name || "";
   const m = {
-    repo: r.repo || "", suggested: r.suggested || "", body: CD_BODY + " " + cdChangesLine(name, r.repo), lines: [], canConvert: false,
+    repo: r.repo || "", suggested: r.suggested || "", body: CD_BODY, lines: [], canConvert: false,
     needsAck: !!c.ackAsked, worktreeOnly: !!r.worktree, hostOnly: false, loading: false,
   };
   if (r.worktree) {
@@ -112,6 +112,8 @@ function copyDialogModel(refusal, estimate, profile, ctx) {
   // The profile's folder is what becomes the copy's place, so one that is elsewhere is the user's to settle first.
   if (typeof p.default_cwd === "string" && p.default_cwd.trim() !== "" && !cdUnder(p.default_cwd, r.repo, c.home)) blocks.push(CD_FOLDER_FIRST);
   m.lines.push(...blocks);
+  // What Start does to the profile, only when this profile can be changed at all: a block line already says why it cannot.
+  if (blocks.length === 0) m.body = CD_BODY + " " + cdChangesLine(name, r.repo);
   m.canConvert = !!est && est.enough !== false && blocks.length === 0;
   return m;
 }

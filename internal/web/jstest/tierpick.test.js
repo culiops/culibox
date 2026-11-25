@@ -1113,6 +1113,19 @@ test("a git folder inside the repo the profile copies: the clone card is on and 
   assert.strictEqual(tierConvert({ profile: clone, cwd: "/home/u/repo/src", home, git: sub, pick: "clone" }), false);
 });
 
+// #371 N-2: a folder inside the profile's own copy (the copy is a git repo, its root the profile's default_cwd) is the profile's too.
+test("a folder inside the profile's own copy: the clone card is on and converts nothing", () => {
+  const inCopy = { repo: "/home/u/clones/repo", worktree: false, inside: true };
+  const m = tierModel({ profile: clone, cwd: "/home/u/clones/repo/src", home, picked: "", short, git: inCopy });
+  assert.strictEqual(m.cards[1].disabled, false);
+  assert.strictEqual(m.cards[1].convert, false);
+  assert.strictEqual(m.pick, "clone");
+  const { tierConvert } = require("../static/tierpick.js");
+  assert.strictEqual(tierConvert({ profile: clone, cwd: "/home/u/clones/repo/src", home, git: inCopy, pick: "clone" }), false);
+  // Spelled with ~ in the profile, as the editor may save it.
+  assert.strictEqual(tierModel({ profile: { ...clone, default_cwd: "~/clones/repo" }, cwd: "/home/u/clones/repo/src", home, picked: "", short, git: inCopy }).cards[1].convert, false);
+});
+
 test("Host is preselected only for a profile saved as Host, git folder or not", () => {
   for (const git of [null, gitRepo]) {
     for (const p of [plain, clone, dropper, guarded]) {
