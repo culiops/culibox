@@ -814,8 +814,8 @@ function pfvRegisterEditor(id, spec) {
 
 const PFV_NEW_BOX = "Saving gives the next session a new box. Running sessions keep theirs.";
 // The network settings reach running sessions too (#95): their box stays, the proxy applies the change.
-const PFV_NEW_BOX_LIVE_NET = "Saving gives the next session a new box. Running sessions keep theirs and follow this setting from their next connection.";
-const PFV_NEW_BOX_LIVE_DOMAINS = "Saving gives the next session a new box. Running sessions keep theirs; a domain change reaches them at their next connection, a folder change does not.";
+const PFV_NEW_BOX_LIVE_NET = "Running sessions follow this setting from their next connection. Saving gives the next session a new box.";
+const PFV_NEW_BOX_LIVE_DOMAINS = "Running sessions get a domain change at their next connection; a folder change reaches only new sessions. Saving gives the next session a new box.";
 const PFV_NUDGE = "Save or discard these changes first";
 const PFV_NO_COMMAND = "A command is required.";
 // What a refused field is, for the note on the block that was being saved ("Not saved: a folder in Also reachable ...").
