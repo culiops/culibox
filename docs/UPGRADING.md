@@ -166,6 +166,8 @@ Two more rules keep a binary-only rollback safe:
 - do not move or rename `store/recipient`. An older `store init` that finds none creates a new identity over `identity.age`;
 - put a restriction on existing `credentials.json` entries inside the entries, never in a new top-level key. A build with the strict per-entry decode (v0.35.0 and later) ignores a key it does not know and still uses the entries it understands, so the restriction would be lost. Inside an entry, the strict per-entry decode makes that build refuse the entry.
 
+An acknowledged `sso_direct` connection carries its `full_access_ack` inside its own `credentials.json` entry, so a build with the strict per-entry decode (v0.35.0 and later) that does not know it refuses that entry: the connection is not used until you run the newer CuliBox again. The acknowledgement is never written to `config.json`.
+
 The data root move (the agent-box to culibox rename) runs before the backup by design: the backup holds the moved root, and its rewriters (the `config_dir` in `sessions.json`, the account `statusLine`, the `analytics.db` rows) have already run.
 
 When you add a file to the data root, add it here with its writer, its format, how an older and a newer build treat it, and say whether the backup includes it. A file the backup should include goes in the list in `internal/upgradebackup`.
