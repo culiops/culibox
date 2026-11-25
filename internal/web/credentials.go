@@ -968,8 +968,11 @@ func (c *CredentialManager) PutSSODirect(ctx context.Context, conn config.AWSCon
 	if err != nil {
 		return gate, exp, err
 	}
-	adm := awsprobe.AdmitSSO(gate, nil)
-	if gate.State != awsprobe.GateReadOnly && !adm.Eligible {
+	// Every pass-or-refuse below is awsprobe.AdmitSSO's, so a rule added there
+	// reaches save too. checkSSODirect normalised the result: a read_only one
+	// names its role.
+	bare := awsprobe.AdmitSSO(gate, nil)
+	if !bare.OK && !bare.Eligible {
 		return gate, exp, ErrSSOGate{Gate: gate}
 	}
 
@@ -988,15 +991,17 @@ func (c *CredentialManager) PutSSODirect(ctx context.Context, conn config.AWSCon
 		return broker.CredEvent{Action: broker.CredFullAccessAck, Kind: credfile.KindAWS, Name: conn.Name, Actor: actor, Detail: detail}
 	}
 	switch {
-	case gate.State == awsprobe.GateReadOnly:
+	case bare.OK: // read-only
 		if old != nil && old.FullAccessAck != nil {
 			events = append(events, ackEvent("cleared: read_only"))
 		}
 	case req != nil:
+		// What the user saw, as an ack, with everything else from the gate's own
+		// run: the digest is the server's, and the comparison pins it whenever
+		// the ack must (a structural pattern, or a set that cannot simulate).
 		cand := awsprobe.Ack{State: gate.State, Reason: gate.Reason, Incomplete: gate.Incomplete, Caller: gate.Caller,
-			Refused: req.Refused, MissingPerms: req.MissingPerms,
-			PolicyDigest: gate.PolicyDigest} // the digest is the server's own; Covers reads it only for a structural pattern
-		if !cand.Covers(gate) {
+			Refused: req.Refused, MissingPerms: req.MissingPerms, PolicyDigest: gate.PolicyDigest}
+		if !awsprobe.AdmitSSO(gate, &cand).OK {
 			return gate, exp, ErrSSOGate{Gate: gate, Eligible: true, Stale: true}
 		}
 		ack := awsprobe.NewAck(gate, actor, time.Now().UTC())
@@ -1004,7 +1009,7 @@ func (c *CredentialManager) PutSSODirect(ctx context.Context, conn config.AWSCon
 		events = append(events, ackEvent(ack.Summary()))
 	case old != nil && old.FullAccessAck != nil:
 		same := old.SourceProfile == conn.SourceProfile && old.Region == conn.Region && old.Mode == conn.Mode
-		if !same || !old.FullAccessAck.Covers(gate) {
+		if !same || !awsprobe.AdmitSSO(gate, old.FullAccessAck).OK {
 			return gate, exp, ErrSSOGate{Gate: gate, Eligible: true, Stale: true}
 		}
 		keep := *old.FullAccessAck

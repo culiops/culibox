@@ -234,12 +234,17 @@ func (a Ack) Covers(res GateResult) bool {
 	return true
 }
 
+// unsafeRune is a control character (Cc) or a format character (Cf: bidi
+// overrides and isolates, zero-width characters, a soft hyphen), either of
+// which can make a stored item display as something it is not.
+func unsafeRune(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }
+
 func ackItem(kind, s string) error {
 	if len(s) > ackMaxItemLen {
 		return fmt.Errorf("%s item is longer than %d bytes", kind, ackMaxItemLen)
 	}
-	if strings.IndexFunc(s, unicode.IsControl) >= 0 {
-		return fmt.Errorf("%s item has a control character", kind)
+	if strings.IndexFunc(s, unsafeRune) >= 0 {
+		return fmt.Errorf("%s item has a control or format character", kind)
 	}
 	return nil
 }

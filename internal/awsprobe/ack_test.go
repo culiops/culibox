@@ -348,3 +348,26 @@ func TestAckIncompleteSimulateDenied(t *testing.T) {
 		}
 	}
 }
+
+func TestAckValidateRejectsFormatCharacters(t *testing.T) {
+	good := Ack{State: GateNotReadOnly, Caller: ackCaller, Refused: []string{"iam:*"}, Actor: "web",
+		MissingPerms: []string{"iam:GetRole"}}
+	if err := good.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []string{"\u202e", "\u200b", "\u2066", "\ufeff", "\u00ad"} {
+		bad := map[string]func(a *Ack){
+			"caller":        func(a *Ack) { a.Caller = ackCaller + r },
+			"actor":         func(a *Ack) { a.Actor = "w" + r + "eb" },
+			"refused":       func(a *Ack) { a.Refused = []string{"iam:*" + r} },
+			"missing_perms": func(a *Ack) { a.MissingPerms = []string{r + "iam:GetRole"} },
+		}
+		for name, mut := range bad {
+			a := good
+			mut(&a)
+			if a.Validate() == nil {
+				t.Errorf("%s with %U: want error", name, []rune(r)[0])
+			}
+		}
+	}
+}
