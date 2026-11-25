@@ -493,6 +493,11 @@ function accEventRow(e, nowMs) {
     subj.appendChild(accEl("span", "muted", " · “" + e.detail + "”"));
     subj.title = e.detail;
   }
+  // A mint made under a full-access acknowledgement: a tag, and the gate's verdict in the cell's title.
+  if (e.fullAccess) {
+    subj.appendChild(accEl("span", "c-red t-sm w-500", " \u00b7 full access"));
+    subj.title = e.fullAccess;
+  }
   tr.appendChild(subj);
   const out = accEl("td");
   if (e.provider === "approval") out.textContent = e.outcome;

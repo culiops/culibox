@@ -27,6 +27,9 @@ const ACCESS_EVENTS = 20;
 function accDep(name, file) {
   return typeof globalThis[name] === "function" ? globalThis[name] : require(file)[name];
 }
+function accFullText() {
+  return typeof AWS_FULL_ACCESS_TEXT === "string" ? AWS_FULL_ACCESS_TEXT : require("./sessionrow.js").AWS_FULL_ACCESS_TEXT;
+}
 function accNewCredMin() {
   return typeof NEW_CRED_MIN === "number" ? NEW_CRED_MIN : require("./sessionrow.js").NEW_CRED_MIN;
 }
@@ -78,13 +81,14 @@ function accEventRows(aws) {
     push({ ts: Date.parse(r.time), provider: github ? "github" : "aws",
       subject: String(github ? r.subject || "" : r.entry || roleName(r.role_arn) || ""),
       outcome: accOutcomeText(r.outcome), tone: accTone(r.outcome), elevated: !!r.elevated, detail: "",
+      fullAccess: typeof r.full_access === "string" ? r.full_access : "",
       tint: !!r.elevated, elevatedText: r.elevated ? "yes" : "no" });
   }
   for (const r of aws && Array.isArray(aws.static_recent) ? aws.static_recent : []) {
     if (!r) continue;
     push({ ts: Date.parse(r.time), provider: "token", subject: String(r.subject || r.entry || ""),
       outcome: accOutcomeText(r.outcome), tone: accTone(r.outcome), elevated: false, detail: "",
-      tint: false, elevatedText: "no" });
+      fullAccess: "", tint: false, elevatedText: "no" });
   }
   for (const a of aws && Array.isArray(aws.approvals) ? aws.approvals : []) {
     if (!a) continue;
@@ -95,7 +99,7 @@ function accEventRows(aws) {
     // Only a granted or extended window is write access (red); the Elevated column
     // is for credentials, so an approval row leaves it blank.
     push({ ts: Number(a.ts), provider: "approval", subject: label + mins + (a.name ? " on " + a.name : ""),
-      outcome: human ? "you (browser)" : "", tone: "", elevated: false, detail: String(a.reason || ""),
+      outcome: human ? "you (browser)" : "", tone: "", elevated: false, detail: String(a.reason || ""), fullAccess: "",
       tint: act === "granted" || act === "extended", elevatedText: "" });
   }
   out.sort((a, b) => b.ts - a.ts);
@@ -226,7 +230,7 @@ function accRow(c, o) {
     roleName(roleArn) ? "role " + roleName(roleArn) : roleText(c, roleArn), c.region].filter(Boolean).join(" · ");
   return {
     kind: "aws", name: c.name, conn: c.conn, prod: !!c.prod, sub,
-    scope: live ? "write (elevated)" : "read",
+    scope: live ? "write (elevated)" : b && b.full ? "full access" : "read",
     mode: c.mode === "sso_direct" ? "sso_direct" : "",
     sso: accSSO(c, aws),
     last: stats ? (t ? hhmm(stats.last_mint) : "never") : "",
@@ -238,7 +242,7 @@ function accRow(c, o) {
       blocked: gp.blocked, blockedText: gp.blockedText || "", extend: !!acts.extend && !acts.elevate,
     } : null,
     hostWarning: gp ? hostWarning : [],
-    base: b ? b.text : "", baseWarn: !!b && b.state === "writes", baseTitle: b ? b.title : "",
+    base: b ? (b.full ? b.lead + " \u00b7 " + accFullText() : b.text) : "", baseWarn: !!b && b.state === "writes", baseTitle: b ? b.title : "",
     stat: stats && stats.last_error ? String(stats.last_error) : "", status: "",
   };
 }

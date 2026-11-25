@@ -176,6 +176,7 @@ function actRow(e, nowMs) {
     time: actTime(e.ts, nowMs),
     kind: actKindLabel(e),
     detail,
+    fullAccess: e.kind === "credential" ? actStr(e.full_access) : "",
     outcome: { text: outcomeText(e, nowMs), tone: actTone(e) },
     kindIcon: actKindIcon(e),
     outcomeIcon: actOutcomeIcon(e),

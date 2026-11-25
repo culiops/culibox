@@ -743,3 +743,30 @@ test("a broker-served Host session offers Elevate and the grant panel like a box
   const plain = model({ session: sess({ runtime: "host", aws_connections: undefined }), aws: null });
   assert.deepStrictEqual(plain.creds.rows, []);
 });
+
+// --- full access (#374) ---
+
+const { AWS_FULL_ACCESS_TEXT } = require("../static/sessionrow.js");
+const SSO_CONN = { name: "sbx", label: "sbx", account_id: "123456789012", role_arn: "", mode: "sso_direct", hours: 4, base_access: "writes" };
+
+test("accessModel: a full-access connection has scope \"full access\" and a base line ending with the label", () => {
+  const row = model({ session: sess({ aws_connections: [{ ...SSO_CONN, full_access: true }] }) }).creds.rows[0];
+  assert.strictEqual(row.scope, "full access");
+  assert.ok(row.base.endsWith(AWS_FULL_ACCESS_TEXT), row.base);
+  assert.strictEqual(row.baseWarn, false, "no base-role-can-write warning beside the label");
+  assert.doesNotMatch(row.base, /read-only gate passed|role can write/);
+});
+
+test("accessModel: sso_direct without full_access stays \"read\"", () => {
+  const row = model({ session: sess({ aws_connections: [{ ...SSO_CONN, base_access: "none_found" }] }) }).creds.rows[0];
+  assert.strictEqual(row.scope, "read");
+  assert.doesNotMatch(row.base, /Full access/);
+});
+
+test("accessModel: a mint row with a full_access verdict carries it; others carry none", () => {
+  const v = "not read-only: s3:Put*: not a read verb";
+  const m = model({ session: sess(), aws: status({ recent: [
+    { time: iso(-1), provider: "aws", entry: "sbx", outcome: "minted", full_access: v },
+    { time: iso(-2), provider: "aws", entry: "sbx", outcome: "minted" }] }) });
+  assert.deepStrictEqual(m.events.map((e) => e.fullAccess), [v, ""]);
+});

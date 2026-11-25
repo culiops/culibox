@@ -313,6 +313,12 @@ function baseScope(a, desktop) {
   const state = baseState(a);
   if (state === SSO_DIRECT) {
     const h = Number(a.hours) > 0 ? " \u00b7 up to " + Math.ceil(Number(a.hours)) + " h" : "";
+    // The server's full_access boolean only: an acknowledged connection never says the gate passed, and its
+    // base_access ("writes") is not shown beside the label.
+    if (a.full_access === true) {
+      return { state, full: true, lead: SSO_DIRECT_LABEL + h, text: AWS_FULL_ACCESS_TEXT + h + " \u00b7 " + SSO_DIRECT_LABEL,
+        title: AWS_FULL_ACCESS_TEXT + " \u00b7 you acknowledged the permission set at save \u00b7 CloudTrail shows the operator, not the agent \u00b7 not revocable when the session ends" };
+    }
     return { state, text: "read-only gate passed" + h + " \u00b7 " + SSO_DIRECT_LABEL,
       title: "the permission set passed the read-only gate at " + (desktop ? "start" : "spawn") + " \u00b7 CloudTrail shows the operator, not the agent \u00b7 not revocable when the session ends" };
   }
@@ -400,13 +406,15 @@ function awsBadgeParts(s, nowMs = Date.now()) {
   const names = (state) => idle.filter((c) => baseState(c) === state).map((c) => c.name).join(", ");
   const canWrite = names("writes");
   const unverified = names("unverified");
-  const direct = names(SSO_DIRECT);
+  const full = idle.filter((c) => baseState(c) === SSO_DIRECT && c.full_access === true).map((c) => c.name).join(", ");
+  const direct = idle.filter((c) => baseState(c) === SSO_DIRECT && c.full_access !== true).map((c) => c.name).join(", ");
   return { label: "AWS \u00d7" + cs.length, prod, write, roleWrite,
     title: "AWS connections: " + cs.map((c) => c.name).join(", ") +
       live.map((c) => " \u00b7 write on " + c.name + " until " + hhmm(c.elevated_until)).join("") +
       (canWrite ? " \u00b7 role can write on " + canWrite : "") +
       (unverified ? " \u00b7 unverified on " + unverified : "") +
-      (direct ? " \u00b7 " + SSO_DIRECT_LABEL + " on " + direct : "") };
+      (direct ? " \u00b7 " + SSO_DIRECT_LABEL + " on " + direct : "") +
+      (full ? " \u00b7 " + AWS_FULL_ACCESS_TEXT + " on " + full : "") };
 }
 
 // WRITE_SUFFIX is what awsBadge appends while a window is open.
@@ -428,7 +436,7 @@ function badgeParts(ab) {
 // re-check that finds the same thing does not rebuild every tab.
 function baseSig(a) {
   const st = baseState(a);
-  return [st, st === "writes" ? baseActions(a).join(",") : "", st === "unverified" ? baseUnverifiedReason(a) : st === SSO_DIRECT ? String(Number(a.hours) || 0) : ""].join("/");
+  return [st, st === "writes" ? baseActions(a).join(",") : "", st === "unverified" ? baseUnverifiedReason(a) : st === SSO_DIRECT ? String(Number(a.hours) || 0) + (a.full_access === true ? "/full" : "") : ""].join("/");
 }
 
 // awsSig: everything the AWS chip draws, as one string. A terminal tab keeps its

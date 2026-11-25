@@ -764,3 +764,38 @@ test("actionFailText names Bring work home for its own failures", () => {
   assert.strictEqual(actionFailText("bringhome", 500), "Bring work home failed (500).");
   assert.strictEqual(actionFailText("bringhome", 0), "No connection — try again.");
 });
+
+// --- full access (#374): read from the server's full_access, never derived ------
+
+const { AWS_FULL_ACCESS_TEXT } = require("../static/sessionrow.js");
+
+test("full access: the scope row, chip title and rail say the full-access label in place of the gate text", () => {
+  const FA = { ...SSOA, full_access: true, base_access: "writes", base_write_actions: ["s3:Put*"] };
+  const scope = awsRailRows({ aws: FA }, null, NOW).find((r) => r.k === "scope");
+  assert.strictEqual(scope.v, AWS_FULL_ACCESS_TEXT + " · up to 8 h · SSO role directly");
+  assert.doesNotMatch(scope.v, /read-only gate passed/);
+  const chip = awsBadge({ aws: FA }, NOW);
+  assert.ok(chip.title.includes(AWS_FULL_ACCESS_TEXT), chip.title);
+  assert.doesNotMatch(chip.title, /read-only gate passed|role can write/);
+  assert.strictEqual(chip.roleWrite, false, "no contradictory base-role-can-write chip");
+  const b = awsConnRailRows({ aws_connections: [{ name: "sbx", ...FA }] }, null, NOW)[0];
+  assert.strictEqual(b.baseWarn, false);
+  assert.ok(b.base.includes(AWS_FULL_ACCESS_TEXT));
+  const multi = awsBadgeParts({ aws_connections: [{ name: "a", ...FA }, { name: "b", ...SSOA }] }, NOW);
+  assert.ok(multi.title.includes(AWS_FULL_ACCESS_TEXT + " on a"), multi.title);
+});
+
+test("full access: only the server's boolean true counts; sso_direct without it keeps the gate text", () => {
+  for (const v of [undefined, false, "true", 1]) {
+    const scope = awsRailRows({ aws: { ...SSOA, full_access: v } }, null, NOW).find((r) => r.k === "scope");
+    assert.strictEqual(scope.v, "read-only gate passed · up to 8 h · SSO role directly");
+  }
+  // an AssumeRole binding is never full access, whatever the field says
+  const a = { label: "x", account_id: "1", role_arn: "arn:aws:iam::1:role/x", base_access: "none_found", full_access: true };
+  assert.doesNotMatch(awsRailRows({ aws: a }, null, NOW).find((r) => r.k === "scope").v, /Full access/);
+});
+
+test("full access: awsSig changes when full_access flips", () => {
+  const cs = (c) => ({ aws_connections: [{ name: "n", ...SSOA, ...c }] });
+  assert.notStrictEqual(awsSig(cs({}), NOW), awsSig(cs({ full_access: true }), NOW));
+});
