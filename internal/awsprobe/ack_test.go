@@ -51,12 +51,21 @@ func TestAdmitSSO(t *testing.T) {
 	sdNoDigest.PolicyDigest = ""
 	sdNoRole := sd
 	sdNoRole.RoleARN = ""
-	sdPseudo := unv(ReasonSimulateDenied, role, []string{"account"}, nil)
-	sdPseudo.PolicyDigest = digest
-	sdPats := unv(ReasonSimulateDenied, role, []string{"s3:Put*"}, nil)
-	sdPats.PolicyDigest = digest
-	sdNarrower := unv(ReasonSimulateDenied, role, []string{"s3:Put*"}, nil)
-	sdNarrower.PolicyDigest = digest
+	// What the gate really returns when step 5 refused patterns and the
+	// simulation then stopped: not_read_only, Incomplete says why.
+	partial := func(why Reason, d string, pats ...string) GateResult {
+		r := nro(role, pats...)
+		r.Incomplete, r.PolicyDigest = why, d
+		return r
+	}
+	sdPats := partial(ReasonSimulateDenied, digest, "s3:Put*", "iam:*")
+	sdNarrower := partial(ReasonSimulateDenied, digest, "s3:Put*")
+	sdPatsOther := partial(ReasonSimulateDenied, strings.Repeat("a", 64), "s3:Put*")
+	sdPatsNoDigest := partial(ReasonSimulateDenied, "", "s3:Put*")
+	sdPatsPseudo := partial(ReasonSimulateDenied, digest, "s3:Put*")
+	sdPatsPseudo.Refused = verdicts("s3:Put*", "account")
+	full := nro(role, "s3:Put*", "iam:*")
+	full.PolicyDigest = digest
 
 	rows := []struct {
 		name string
@@ -70,10 +79,18 @@ func TestAdmitSSO(t *testing.T) {
 		{"simulate_denied empty digest", sdNoDigest, nil, Admission{}},
 		{"simulate_denied empty digest with ack", sdNoDigest, ackOf(sd), Admission{}},
 		{"simulate_denied empty role", sdNoRole, nil, Admission{}},
-		{"simulate_denied pseudo pattern", sdPseudo, nil, Admission{}},
-		{"simulate_denied with patterns acked", sdPats, ackOf(sdPats), Admission{OK: true, UnderAck: true, Eligible: true}},
-		{"simulate_denied wider than ack", sdPats, ackOf(sd), Admission{Eligible: true, Stale: true}},
-		{"simulate_denied narrower patterns same digest", sdNarrower, ackOf(sdPats), Admission{OK: true, UnderAck: true, Eligible: true}},
+		{"partial simulate_denied no ack", sdPats, nil, Admission{Eligible: true}},
+		{"partial simulate_denied acked", sdPats, ackOf(sdPats), Admission{OK: true, UnderAck: true, Eligible: true}},
+		{"partial simulate_denied narrower same digest", sdNarrower, ackOf(sdPats), Admission{OK: true, UnderAck: true, Eligible: true}},
+		{"partial simulate_denied digest changed", sdPatsOther, ackOf(sdPats), Admission{Eligible: true, Stale: true}},
+		{"partial simulate_denied empty digest", sdPatsNoDigest, nil, Admission{}},
+		{"partial simulate_denied empty digest with ack", sdPatsNoDigest, ackOf(sdPats), Admission{}},
+		{"partial simulate_denied pseudo pattern", sdPatsPseudo, nil, Admission{}},
+		{"partial simulate_denied wider than unverified ack", sdPats, ackOf(sd), Admission{Eligible: true, Stale: true}},
+		{"partial simulate_denied under a full-run ack", sdPats, ackOf(nro(role, "s3:Put*", "iam:*")), Admission{Eligible: true, Stale: true}},
+		{"partial simulate_denied under a full-run structural ack", partial(ReasonSimulateDenied, digest, "notaction"), ackOf(func() GateResult { r := nro(role, "notaction"); r.PolicyDigest = digest; return r }()), Admission{Eligible: true, Stale: true}},
+		{"full run under a partial simulate_denied ack same digest", full, ackOf(sdPats), Admission{OK: true, UnderAck: true, Eligible: true}},
+		{"full run under a partial simulate_denied ack other digest", nro(role, "s3:Put*"), ackOf(sdPats), Admission{Eligible: true, Stale: true}},
 		{"missing perms ack does not cover simulate_denied", sd, ackOf(mp), Admission{Eligible: true, Stale: true}},
 		{"read only", ro, nil, Admission{OK: true}},
 		{"read only without role", roNoRole, nil, Admission{}},
@@ -100,6 +117,19 @@ func TestAdmitSSO(t *testing.T) {
 			ack  *Ack
 			want Admission
 		}{"transient " + string(r), res, ackOf(both), Admission{}})
+	}
+	// A run cut short by a transient failure is never admitted, even when
+	// step 5 found refusals that a held ack covers.
+	for _, r := range []Reason{ReasonError, ReasonTimeout, ReasonSSOExpired} {
+		res := partial(r, digest, "iam:*")
+		for name, a := range map[string]*Ack{"none": nil, "breadth": ackOf(nro(role, "iam:*", "s3:Put*")), "partial": ackOf(sdPats)} {
+			rows = append(rows, struct {
+				name string
+				res  GateResult
+				ack  *Ack
+				want Admission
+			}{"partial " + string(r) + " ack " + name, res, a, Admission{}})
+		}
 	}
 	for _, p := range []string{PatternCaller, PatternAccount, PatternRole, PatternSourceProfile} {
 		for _, r := range []string{"", role} {
@@ -278,5 +308,43 @@ func TestSimulateDeniedAckPinsDigest(t *testing.T) {
 	m.PolicyDigest = digest
 	if m.Validate() == nil {
 		t.Error("a stray digest on a missing_permissions ack was accepted")
+	}
+}
+
+func TestAckIncompleteSimulateDenied(t *testing.T) {
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	res := nro("arn:aws:iam::123456789012:role/x", "s3:Put*")
+	res.Incomplete, res.PolicyDigest = ReasonSimulateDenied, digest
+	a := NewAck(res, "web", time.Unix(1700000000, 0).UTC())
+	if a.Incomplete != ReasonSimulateDenied || a.PolicyDigest != digest || a.Reason != "" || a.State != GateNotReadOnly {
+		t.Fatalf("%+v", a)
+	}
+	if err := a.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(a.Summary(), "simulate_denied") {
+		t.Errorf("summary %q", a.Summary())
+	}
+	// A full run's ack carries neither Incomplete nor a stray digest.
+	res.Incomplete = ""
+	if b := NewAck(res, "web", time.Time{}); b.Incomplete != "" || b.PolicyDigest != "" {
+		t.Errorf("full-run ack %+v", b)
+	}
+	bad := map[string]func(a *Ack){
+		"no digest":     func(a *Ack) { a.PolicyDigest = "" },
+		"short digest":  func(a *Ack) { a.PolicyDigest = "abc" },
+		"transient":     func(a *Ack) { a.Incomplete = ReasonTimeout },
+		"error":         func(a *Ack) { a.Incomplete = ReasonError },
+		"on unverified": func(a *Ack) { a.State, a.Reason = GateUnverified, ReasonSimulateDenied },
+		"on missing perms": func(a *Ack) {
+			a.State, a.Reason, a.MissingPerms = GateUnverified, ReasonMissingPerms, []string{"iam:GetRole"}
+		},
+	}
+	for name, mut := range bad {
+		b := a
+		mut(&b)
+		if b.Validate() == nil {
+			t.Errorf("%s: want error", name)
+		}
 	}
 }

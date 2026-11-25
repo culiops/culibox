@@ -1011,3 +1011,48 @@ func TestGatePolicyDigest(t *testing.T) {
 		t.Errorf("digest after a role error: %q", r6.PolicyDigest)
 	}
 }
+
+// TestGatePartialRunRecordsIncomplete: a breadth refusal found before the
+// simulation still wins the state, but a simulation cut short records why in
+// Incomplete, so an acknowledgement can tell a full run from a partial one.
+func TestGatePartialRunRecordsIncomplete(t *testing.T) {
+	breadth := `{"Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`
+	for _, tc := range []struct {
+		name string
+		mut  func(*fakeGate)
+		want Reason
+	}{
+		{"full run", func(*fakeGate) {}, ""},
+		{"simulate denied", func(f *fakeGate) { f.simErr = apiErr("AccessDenied") }, ReasonSimulateDenied},
+		{"simulate error", func(f *fakeGate) { f.simErr = errors.New("boom") }, ReasonError},
+		{"simulate timeout", func(f *fakeGate) { f.simErr = fmt.Errorf("op: %w", context.DeadlineExceeded) }, ReasonTimeout},
+		{"simulate expired", func(f *fakeGate) { f.simErr = apiErr("ExpiredToken") }, ReasonSSOExpired},
+		{"decision missing", func(f *fakeGate) { f.omit = map[string]bool{"s3:deleteobject": true} }, ReasonError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeGate(t)
+			f.docs = []string{breadth}
+			f.def = gateAllowed
+			tc.mut(f)
+			r := Gate(context.Background(), f, gateAcct, time.Now())
+			if r.State != GateNotReadOnly || !slices.Contains(refusedPatterns(r), "*") {
+				t.Fatalf("state %s refused %v", r.State, r.Refused)
+			}
+			if r.Incomplete != tc.want {
+				t.Errorf("Incomplete = %q, want %q", r.Incomplete, tc.want)
+			}
+			if r.Reason != "" {
+				t.Errorf("Reason = %q on a not_read_only result", r.Reason)
+			}
+			if len(r.PolicyDigest) != 64 || r.RoleARN == "" || r.Caller == "" {
+				t.Errorf("digest %q role %q caller %q", r.PolicyDigest, r.RoleARN, r.Caller)
+			}
+		})
+	}
+	// A run with no refusal keeps Incomplete empty: Reason carries it.
+	f := newExtendedGuardrailGate(t)
+	f.simErr = apiErr("AccessDenied")
+	if r := Gate(context.Background(), f, gateAcct, time.Now()); r.State != GateUnverified || r.Incomplete != "" {
+		t.Errorf("unverified run: state %s incomplete %q", r.State, r.Incomplete)
+	}
+}

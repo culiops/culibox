@@ -224,3 +224,28 @@ func decode(t *testing.T, w *httptest.ResponseRecorder, v any) {
 		t.Fatalf("body %q: %v", w.Body, err)
 	}
 }
+
+// An acknowledged set whose simulation is then cut short (step 5 refused the
+// same patterns first) is refused and never minted: the run is partial.
+func TestServeSSODirectAckedPartialRunRefused(t *testing.T) {
+	acked := wideResult("s3:Put*")
+	for _, reason := range []awsprobe.Reason{awsprobe.ReasonTimeout, awsprobe.ReasonError, awsprobe.ReasonSSOExpired} {
+		res := wideResult("s3:Put*")
+		res.Incomplete = reason
+		b, _, rec := ackedSetup(t, &fakeGate{results: []awsprobe.GateResult{res}}, &acked)
+		w := callRO(b)
+		if w.Code == 200 || strings.Contains(w.Body.String(), "ASIAFAKE") {
+			t.Fatalf("%s: minted: status %d %s", reason, w.Code, w.Body)
+		}
+		r := lastRow(rec)
+		if r.Outcome != OutcomeDeniedNotReadOnly || r.FullAccess != "" {
+			t.Fatalf("%s: row %+v", reason, r)
+		}
+		b.mu.Lock()
+		n := len(b.cache)
+		b.mu.Unlock()
+		if n != 0 {
+			t.Fatalf("%s: a refused credential was cached", reason)
+		}
+	}
+}

@@ -67,10 +67,18 @@ type GateResult struct {
 	Refused      []Verdict  `json:"refused,omitempty"`       // NotReadOnly; for Unverified, the actions that proved nothing
 	MissingPerms []string   `json:"missing_perms,omitempty"` // Reason == missing_permissions
 	DataReads    []DataRead `json:"data_reads,omitempty"`    // descriptive, never blocks
+	// Incomplete is why the run stopped before the simulation finished, set
+	// only on a NotReadOnly result whose refusals were found first (an
+	// Unverified result says why in Reason). Such a result is partial: the
+	// simulation could have found more. simulate_denied is a lasting state of
+	// the permission set; any other value is transient and retried.
+	Incomplete Reason `json:"incomplete,omitempty"`
 	// PolicyDigest is the sha256 (hex) of the permission set's policy
-	// documents, set once step 3 read them. It pins an acknowledgement of a
-	// structural refusal (NotAction, missing Action), whose pattern names no
-	// content.
+	// documents, set once step 3 read them. It pins an acknowledgement whose
+	// refused patterns cannot stand for what the set grants: a structural
+	// refusal (NotAction, missing Action), whose pattern names no content, or
+	// a permission set that cannot run the simulation (Reason or Incomplete
+	// simulate_denied), whose simulated refusals were never found.
 	PolicyDigest string    `json:"policy_digest,omitempty"`
 	CheckedAt    time.Time `json:"checked_at,omitzero"`
 }
@@ -96,7 +104,8 @@ const ssoRolePrefix = "AWSReservedSSO_"
 // Gate decides whether the SSO permission set behind api's credentials is
 // read-only (spec "Gate algorithm", steps 1-7). It fails closed: only a
 // definite proof returns GateReadOnly. A definite refusal wins over an
-// unverifiable step, since nothing later can make a refused set read-only.
+// unverifiable step, since nothing later can make a refused set read-only;
+// GateResult.Incomplete then says which step could not run.
 // account is the profile's sso_account_id. The time budget is ctx's.
 func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateResult {
 	g := gateRun{res: GateResult{CheckedAt: now}}
@@ -265,6 +274,9 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 
 	switch {
 	case len(g.res.Refused) > 0:
+		if incomplete { // refusals win, but the run is partial
+			g.res.Incomplete = ReasonError
+		}
 		return g.done(GateNotReadOnly)
 	case incomplete:
 		return g.unverified(ReasonError)
@@ -294,9 +306,11 @@ func (g *gateRun) refuse(v ...Verdict) GateResult {
 }
 
 // unverified ends the run Unverified, unless a definite refusal is already
-// known, which wins.
+// known, which wins. The run is then partial, and Incomplete records why it
+// stopped, so the reason is never lost.
 func (g *gateRun) unverified(r Reason) GateResult {
 	if len(g.res.Refused) > 0 {
+		g.res.Incomplete = r
 		return g.done(GateNotReadOnly)
 	}
 	g.res.Reason = r

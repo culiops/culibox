@@ -986,7 +986,7 @@ func (c *CredentialManager) PutSSODirect(ctx context.Context, conn config.AWSCon
 			events = append(events, ackEvent("cleared: read_only"))
 		}
 	case req != nil:
-		cand := awsprobe.Ack{State: gate.State, Reason: gate.Reason, Caller: gate.Caller,
+		cand := awsprobe.Ack{State: gate.State, Reason: gate.Reason, Incomplete: gate.Incomplete, Caller: gate.Caller,
 			Refused: req.Refused, MissingPerms: req.MissingPerms,
 			PolicyDigest: gate.PolicyDigest} // the digest is the server's own; Covers reads it only for a structural pattern
 		if !cand.Covers(gate) {

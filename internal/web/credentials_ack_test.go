@@ -294,3 +294,41 @@ func TestCheckSSODirectReportsAckEligible(t *testing.T) {
 		t.Fatalf("%v", m)
 	}
 }
+
+// A not_read_only result whose simulation the permission set could not run
+// saves under an ack pinned to the policy digest. One cut short by a
+// transient failure is refused as not eligible, even with every pattern
+// listed.
+func TestSaveSSODirectAckPartialRun(t *testing.T) {
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Run("simulate_denied", func(t *testing.T) {
+		a := newAWSRoutes(t)
+		g := wideGate("iam:*")
+		g.Incomplete, g.PolicyDigest = awsprobe.ReasonSimulateDenied, digest
+		a.svc.gate = g
+		code, m, _ := a.call("POST", pathAWS, ackBody(ssoConnJSON("ro"), `["iam:*"]`))
+		if code != 201 {
+			t.Fatalf("%d %v", code, m)
+		}
+		ack := a.fx.file(t).AWSConnections[0].FullAccessAck
+		if ack == nil || ack.Incomplete != awsprobe.ReasonSimulateDenied || ack.PolicyDigest != digest {
+			t.Fatalf("%+v", ack)
+		}
+	})
+	for _, r := range []awsprobe.Reason{awsprobe.ReasonTimeout, awsprobe.ReasonError, awsprobe.ReasonSSOExpired} {
+		t.Run(string(r), func(t *testing.T) {
+			a := newAWSRoutes(t)
+			g := wideGate("iam:*")
+			g.Incomplete, g.PolicyDigest = r, digest
+			a.svc.gate = g
+			code, m, _ := a.call("POST", pathAWS, ackBody(ssoConnJSON("ro"), `["iam:*"]`))
+			gm, _ := m["gate"].(map[string]any)
+			if code != 409 || m["ack_eligible"] != false || gm["incomplete"] != string(r) {
+				t.Fatalf("%d %v", code, m)
+			}
+			if a.fx.fileBytes(t) != "" || len(credEventsOf(a, broker.CredFullAccessAck)) != 0 {
+				t.Fatal("something was written")
+			}
+		})
+	}
+}
