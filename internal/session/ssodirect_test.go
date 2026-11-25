@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -305,5 +306,37 @@ func TestHoursUntil(t *testing.T) {
 		if got := hoursUntil(c.exp, now); got != c.want {
 			t.Errorf("hoursUntil(%v) = %d, want %d", c.exp.Sub(now), got, c.want)
 		}
+	}
+}
+
+// full_access on the wire comes from the connection's acknowledgement in the
+// spawn-time snapshot, only for sso_direct, and the inline binding never has it.
+func TestSessionWireFullAccess(t *testing.T) {
+	exp := time.Now().Add(time.Hour)
+	acked, plain := ssoConn("wide"), ssoConn("plain")
+	a := awsprobe.NewAck(awsprobe.GateResult{State: awsprobe.GateNotReadOnly, Caller: "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_X_1",
+		RoleARN: "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_X_1",
+		Refused: []awsprobe.Verdict{{Pattern: "iam:*"}}}, "web", time.Now())
+	acked.FullAccessAck = &a
+	m, _, _ := ssoConnManager(t, connLauncherFor(acked, plain, connA()), map[string]ssoVerdict{
+		"wide": readOnlyVerdict(exp), "plain": readOnlyVerdict(exp)})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "conn", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	got := map[string]bool{}
+	for _, c := range s.Info().AWSConnections {
+		got[c.Name] = c.FullAccess
+	}
+	if !got["wide"] || got["plain"] || got[connA().Name] {
+		t.Fatalf("full_access by connection: %v", got)
+	}
+	b, _ := json.Marshal(s.Info().AWSConnections)
+	if strings.Count(string(b), `"full_access":true`) != 1 {
+		t.Fatalf("%s", b)
+	}
+	if in := s.Info().AWS; in != nil {
+		t.Fatalf("a connections session has an inline binding: %+v", in)
 	}
 }

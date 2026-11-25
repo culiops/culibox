@@ -381,6 +381,8 @@ type AWSConnectionMeta struct {
 	Prod         bool   `json:"prod"`
 	WriteCapable bool   `json:"write_capable"`
 	Mode         string `json:"mode,omitempty"` // "" = assume_role; "sso_direct"
+	// FullAccess: an sso_direct connection with a full-access acknowledgement.
+	FullAccess bool `json:"full_access,omitempty"`
 }
 
 // AWSConnectionMetaList lists the instance's aws_connections for the profile
@@ -391,7 +393,7 @@ func (m *ProfileManager) AWSConnectionMetaList() []AWSConnectionMeta {
 	out := make([]AWSConnectionMeta, 0, len(m.awsConns))
 	for _, c := range m.awsConns {
 		out = append(out, AWSConnectionMeta{Name: c.Name, Label: c.Label, AccountID: awsscope.AccountOf(c.RoleARN),
-			Region: c.Region, Description: c.Description, Prod: c.Prod, WriteCapable: c.Elevate != nil, Mode: c.Mode})
+			Region: c.Region, Description: c.Description, Prod: c.Prod, WriteCapable: c.Elevate != nil, Mode: c.Mode, FullAccess: c.FullAccess()})
 	}
 	return out
 }

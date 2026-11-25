@@ -668,6 +668,10 @@ type AWSConnInfo struct {
 	// Mode and Hours as in AWSInfo.
 	Mode  string `json:"mode,omitempty"`
 	Hours int    `json:"hours,omitempty"`
+	// FullAccess: an sso_direct connection that carried a full-access
+	// acknowledgement when the session spawned (#374). The inline AWSInfo never
+	// has it.
+	FullAccess bool `json:"full_access,omitempty"`
 	// WriteCapable: the connection names an elevate role, so a human may widen
 	// it to write.
 	WriteCapable bool         `json:"write_capable"`
@@ -1533,6 +1537,7 @@ func (s *Session) Info() Info {
 			Fields: awsprobe.Lookup(s.base, c.Name).Fields()}
 		if c.SSODirect() {
 			ci.Mode, ci.Hours, ci.AccountID = config.AWSModeSSODirect, s.sso[c.Name].Hours, s.sso[c.Name].AccountID
+			ci.FullAccess = c.FullAccess()
 		}
 		in.AWSConnections = append(in.AWSConnections, ci)
 	}
