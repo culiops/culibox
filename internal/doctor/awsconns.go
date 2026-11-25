@@ -150,14 +150,14 @@ func checkAWSConnsGate(ctx context.Context, c config.Config, stored []config.Age
 	}
 	// gateLine is the read-only gate line of an sso_direct binding, run once
 	// per (binding, connection) and skipped when the sign-in cannot work.
-	gateLine := func(check string, b config.AWSBinding, connName, skip string) Result {
+	gateLine := func(check string, b config.AWSBinding, connName string, ack *awsprobe.Ack, skip string) Result {
 		switch {
 		case skip != "":
 			return Result{Warn, check, "read-only gate not run: " + skip}
 		case gate == nil:
 			return Result{Warn, check, "read-only gate not run: no gate available"}
 		}
-		return ssoGateResult(check, gate(ctx, b, connName))
+		return ssoGateResult(check, gate(ctx, b, connName), ack, connName != "")
 	}
 	var out []Result
 	for _, conn := range c.AWSConnections {
@@ -188,7 +188,7 @@ func checkAWSConnsGate(ctx context.Context, c config.Config, stored []config.Age
 		out = append(out, Result{status, "aws-connection " + conn.Name,
 			"source_profile " + src + " " + srcState + "; sso " + state + "; elevate " + elevate})
 		if conn.SSODirect() {
-			out = append(out, gateLine("aws-connection "+conn.Name+" read-only gate", conn.AWSBinding, conn.Name, skip))
+			out = append(out, gateLine("aws-connection "+conn.Name+" read-only gate", conn.AWSBinding, conn.Name, conn.FullAccessAck, skip))
 			continue
 		}
 		out = append(out, baseLine("aws-connection "+conn.Name+" base role", conn.AWSBinding, skip))
@@ -203,7 +203,7 @@ func checkAWSConnsGate(ctx context.Context, c config.Config, stored []config.Age
 			}
 		}
 		if p.AWS.SSODirect() {
-			out = append(out, gateLine("aws-binding "+p.Name+" read-only gate", *p.AWS, "", skip))
+			out = append(out, gateLine("aws-binding "+p.Name+" read-only gate", *p.AWS, "", nil, skip))
 			continue
 		}
 		out = append(out, baseLine("aws-binding "+p.Name, *p.AWS, skip))
@@ -262,7 +262,7 @@ const maxGateItems = 6
 // ssoGateResult renders a gate result as a doctor line. Unlike the base-role
 // line it can FAIL: a spawn of an sso_direct binding that is not read-only, or
 // cannot be verified, is refused.
-func ssoGateResult(check string, res awsprobe.GateResult) Result {
+func ssoGateResult(check string, res awsprobe.GateResult, ack *awsprobe.Ack, canAck bool) Result {
 	var items []string
 	for _, v := range res.Refused {
 		items = append(items, firstLine(v.Pattern+": "+v.Why))
@@ -273,7 +273,37 @@ func ssoGateResult(check string, res awsprobe.GateResult) Result {
 		items = items[:maxGateItems]
 	}
 	list := strings.Join(items, "; ") + more
+	// Only a named connection has a record to hold an acknowledgement; the
+	// legacy inline binding passes only on a read-only verdict.
+	adm := awsprobe.AdmitSSO(res, ack)
+	if !canAck {
+		adm = awsprobe.Admission{OK: awsprobe.AdmitSSO(res, nil).OK}
+	}
+	// What an acknowledgement is about: the refused items, else the missing reads.
+	what := list
+	if what == "" && len(res.MissingPerms) > 0 {
+		what = strings.Join(res.MissingPerms, ", ")
+	}
 	switch {
+	case adm.UnderAck:
+		d := "full access acknowledged by " + ack.Actor + " " + ack.At.UTC().Format(time.RFC3339) +
+			" (sso_direct): no read-only default, no write window"
+		if what != "" {
+			d += ": " + what
+		}
+		return Result{Warn, check, d}
+	case adm.Stale:
+		d := "SSO permission set changed since its full-access acknowledgement; spawns and mints are refused until you acknowledge again on the Credentials screen"
+		if what != "" {
+			d += ": " + what
+		}
+		return Result{Fail, check, d}
+	case adm.Eligible:
+		d := "SSO permission set is not read-only (sso_direct) and has no full-access acknowledgement; spawns are refused until you acknowledge full access on the Credentials screen"
+		if what != "" {
+			d += ": " + what
+		}
+		return Result{Fail, check, d}
 	case res.State == awsprobe.GateReadOnly && res.RoleARN != "":
 		return Result{Pass, check, "SSO permission set is read-only (sso_direct)"}
 	case res.State == awsprobe.GateNotReadOnly:

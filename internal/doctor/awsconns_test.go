@@ -495,3 +495,69 @@ func (m deadlineMinter) Mint(ctx context.Context, _ broker.MintInput) (broker.Cr
 	}
 	return broker.Creds{}, errors.New("no")
 }
+
+func ackedDoctorConn(name string, acked awsprobe.GateResult) config.AWSConnection {
+	c := ssoDirectConn(name, "p")
+	a := awsprobe.NewAck(acked, "alice", time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC))
+	c.FullAccessAck = &a
+	return c
+}
+
+func TestDoctorSSODirectFullAccessLines(t *testing.T) {
+	const caller = "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Admin_abc"
+	const role = "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_abc"
+	wide := func(p ...string) awsprobe.GateResult {
+		r := awsprobe.GateResult{State: awsprobe.GateNotReadOnly, RoleARN: role, Caller: caller}
+		for _, x := range p {
+			r.Refused = append(r.Refused, awsprobe.Verdict{Pattern: x, Why: "not a read verb"})
+		}
+		return r
+	}
+	perm := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonMissingPerms, Caller: caller,
+		MissingPerms: []string{"iam:GetRolePolicy"}}
+	transient := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonTimeout, Caller: caller}
+	identity := wide("account")
+	f := &fakeAWS{profiles: []string{"p"}, sso: map[string]string{"p": "corp"}}
+	fg := &fakeGate{by: map[string]awsprobe.GateResult{
+		"acked": wide("s3:Put*"), "stale": wide("s3:Put*", "iam:Create*"), "noack": wide("s3:Put*"),
+		"permack": perm, "timeout": transient, "ident": identity,
+	}}
+	c := config.Config{AWSConnections: []config.AWSConnection{
+		ackedDoctorConn("acked", wide("s3:Put*")), ackedDoctorConn("stale", wide("s3:Put*")), ssoDirectConn("noack", "p"),
+		ackedDoctorConn("permack", perm), ackedDoctorConn("timeout", wide("s3:Put*")), ackedDoctorConn("ident", wide("s3:Put*"))}}
+	got := byCheck(checkAWSConnsGate(context.Background(), c, nil, nil, f, noneProbe, fg.gate))
+	line := func(n string) Result { return got["aws-connection "+n+" read-only gate"] }
+
+	if r := line("acked"); r.Status != Warn || !strings.Contains(r.Detail, "full access acknowledged by alice 2026-11-25T10:00:00Z (sso_direct): no read-only default, no write window") ||
+		!strings.Contains(r.Detail, "s3:Put*") {
+		t.Errorf("acked = %s %q", r.Status, r.Detail)
+	}
+	if r := line("permack"); r.Status != Warn || !strings.Contains(r.Detail, "full access acknowledged") || !strings.Contains(r.Detail, "iam:GetRolePolicy") {
+		t.Errorf("permack = %s %q", r.Status, r.Detail)
+	}
+	if r := line("stale"); r.Status != Fail || !strings.Contains(r.Detail, "changed since its full-access acknowledgement") ||
+		!strings.Contains(r.Detail, "acknowledge again on the Credentials screen") || !strings.Contains(r.Detail, "iam:Create*") {
+		t.Errorf("stale = %s %q", r.Status, r.Detail)
+	}
+	if r := line("noack"); r.Status != Fail || !strings.Contains(r.Detail, "acknowledge full access on the Credentials screen") {
+		t.Errorf("noack = %s %q", r.Status, r.Detail)
+	}
+	for _, n := range []string{"timeout", "ident"} {
+		if r := line(n); r.Status != Fail || strings.Contains(r.Detail, "acknowledg") {
+			t.Errorf("%s = %s %q", n, r.Status, r.Detail)
+		}
+	}
+}
+
+// An inline binding has no connection record: it never reads as acknowledged
+// and never gets an acknowledge hint.
+func TestDoctorSSODirectInlineBindingNeverFullAccess(t *testing.T) {
+	f := &fakeAWS{profiles: []string{"p"}, sso: map[string]string{"p": "corp"}}
+	stored := []config.AgentConfig{{Name: "ro-agent", AWS: &config.AWSBinding{SourceProfile: "p", Region: "r", Mode: config.AWSModeSSODirect}}}
+	fg := &fakeGate{by: map[string]awsprobe.GateResult{"": {State: awsprobe.GateNotReadOnly, Caller: "arn:aws:sts::123456789012:assumed-role/X",
+		RoleARN: "arn:aws:iam::123456789012:role/X", Refused: []awsprobe.Verdict{{Pattern: "s3:Put*", Why: "w"}}}}}
+	got := byCheck(checkAWSConnsGate(context.Background(), config.Config{}, stored, nil, f, noneProbe, fg.gate))
+	if r := got["aws-binding ro-agent read-only gate"]; r.Status != Fail || strings.Contains(r.Detail, "acknowledg") {
+		t.Errorf("inline = %s %q", r.Status, r.Detail)
+	}
+}
