@@ -116,3 +116,34 @@ test("the page opens the dialog from a needs_copy refusal of a start and of a re
 test("every server string reaches the dialog as text: copydialog.js has no innerHTML", () => {
   assert.doesNotMatch(read("copydialog.js"), /innerHTML|insertAdjacentHTML|outerHTML/);
 });
+
+test("cdSendProfile answers merge_home_ack: the dialog opens with the profile's repo, Turn on resends with ack_merge_home, Cancel does not", async () => {
+  const body = { name: "p", clone_of: "/home/u/repo", clone_merge_home: true };
+  const mk = (answer) => {
+    const t = world({});
+    const sent = [];
+    const asked = [];
+    t.box.api = async (p, op) => {
+      const b = JSON.parse(op.body);
+      sent.push(b);
+      if (!b.ack_merge_home) throw Object.assign(new Error("clone_merge_home lets this box change your branch"), { status: 400, code: "merge_home_ack", body: { code: "merge_home_ack", field: "clone_merge_home" } });
+      return { rev: "r" };
+    };
+    t.box.cdAskMergeHome = async (repo) => { asked.push(repo); return answer; };
+    return { t, sent, asked };
+  };
+  const yes = mk(true);
+  await yes.t.run("cdSendProfile('/api/profiles/p', 'PUT', " + JSON.stringify(body) + ")");
+  assert.deepStrictEqual(yes.sent, [body, Object.assign({}, body, { ack_merge_home: true })]);
+  assert.deepStrictEqual(yes.asked, ["/home/u/repo"]);
+  const no = mk(false);
+  await assert.rejects(no.t.run("cdSendProfile('/api/profiles/p', 'PUT', " + JSON.stringify(body) + ")"), /clone_merge_home lets this box/);
+  assert.strictEqual(no.sent.length, 1);
+});
+
+test("the one warning dialog is built once: both forms' checkbox (through wmMergeTurnOn) and the 400 call cdAskMergeHome", () => {
+  assert.match(read("pfv-workspace.js"), /wmMergeTurnOn\([^;]*cdAskMergeHome\)/);
+  assert.match(read("app.js"), /wmMergeTurnOn\([^;]*cdAskMergeHome\)/);
+  assert.match(read("copydialog.js"), /cdMergeHomeDialog\(repo\)/);
+  assert.match(read("copydialog.js"), /cdAskMergeHome\(/);
+});

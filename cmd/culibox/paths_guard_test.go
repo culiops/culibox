@@ -57,6 +57,12 @@ var pathEscapes = map[string]int{
 	// move, not a copy (resolvedHome, #371: a path comparison only).
 	"internal/box/inplace.go os.UserHomeDir": 2,
 	"internal/box/inplace.go HomeDir":        1,
+	// The merge guard reads the user's global git config ($XDG_CONFIG_HOME/git/config,
+	// ~/.config/git/config) for core.hooksPath, so a hooks dir inside the repo is
+	// denied (a read, never a write; #370). The second .config is a deny-list
+	// name: a box commit under the repo's own top-level .config/ is not merged.
+	"internal/clone/merge.go env XDG_CONFIG_HOME": 1,
+	"internal/clone/merge.go literal .config":     2,
 	// darwin caps a socket path at 103 bytes, so the socket dir cannot live in the
 	// data root there; it is still derived from it (a hash) and holds only sockets.
 	"internal/abduco/socketpath.go literal /tmp": 1,

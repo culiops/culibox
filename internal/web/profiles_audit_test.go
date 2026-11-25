@@ -132,3 +132,125 @@ func TestChangedFieldsFitTheAuditDetail(t *testing.T) {
 		t.Fatalf("detail %q", d)
 	}
 }
+
+// mergeHomePM is a manager on box with an audit recorder, for the
+// clone_merge_home acknowledgement (#370).
+func mergeHomePM(t *testing.T) (*ProfileManager, *fakeStore, *fakeCredRec) {
+	t.Helper()
+	st := newFakeStore()
+	pm := NewProfileManager(nil, nil, config.RuntimeBox, nil, st, func([]config.AgentConfig) {})
+	pm.home = t.TempDir()
+	rec := &fakeCredRec{}
+	pm.SetAudit(rec)
+	return pm, st, rec
+}
+
+func mergeHomeProfile(on bool, of string) config.AgentConfig {
+	p := cloneProfile("")
+	p.CloneOf, p.CloneMergeHome = of, on
+	return p
+}
+
+// Turning clone_merge_home on is acknowledged once, on a save that turns it on or
+// repoints a profile that has it on; every other save needs nothing.
+func TestMergeHomeAckOnTurnOnOnly(t *testing.T) {
+	pm, st, rec := mergeHomePM(t)
+	var ack *MergeHomeAckError
+	update := func(p config.AgentConfig, o SaveOpts) error {
+		t.Helper()
+		_, err := pm.UpdateWith(p, profileRev(profileOf(t, pm, "cl")), o)
+		return err
+	}
+	acks := func() int {
+		n := 0
+		for _, a := range rec.actions() {
+			if a == "clone_ack_merge_home" {
+				n++
+			}
+		}
+		return n
+	}
+	if _, err := pm.Create(mergeHomeProfile(false, "/home/u/repo")); err != nil {
+		t.Fatal(err)
+	}
+
+	// false -> true asks, and nothing changes.
+	if err := update(mergeHomeProfile(true, "/home/u/repo"), SaveOpts{}); !errors.As(err, &ack) {
+		t.Fatalf("false->true without ack = %v, want *MergeHomeAckError", err)
+	}
+	if profileOf(t, pm, "cl").CloneMergeHome {
+		t.Fatal("stored despite the refusal")
+	}
+	if err := update(mergeHomeProfile(true, "/home/u/repo"), SaveOpts{AckMergeHome: true}); err != nil {
+		t.Fatalf("false->true with ack: %v", err)
+	}
+	if acks() != 1 {
+		t.Fatalf("ack rows = %d: %v", acks(), rec.actions())
+	}
+
+	// true -> true, unchanged clone_of: nothing to ask, no row.
+	same := mergeHomeProfile(true, "/home/u/repo")
+	same.Args = []string{"--x"}
+	if err := update(same, SaveOpts{}); err != nil {
+		t.Fatalf("true->true: %v", err)
+	}
+	// An ack nobody needed leaves no row.
+	same.Args = []string{"--y"}
+	if err := update(same, SaveOpts{AckMergeHome: true}); err != nil {
+		t.Fatal(err)
+	}
+	if acks() != 1 {
+		t.Fatalf("a save that needed no ack left a row: %v", rec.actions())
+	}
+
+	// clone_of changed while on: asks again.
+	if err := update(mergeHomeProfile(true, "/home/u/other"), SaveOpts{}); !errors.As(err, &ack) {
+		t.Fatalf("clone_of changed while on, no ack = %v", err)
+	}
+	if got := profileOf(t, pm, "cl"); got.CloneOf != "/home/u/repo" {
+		t.Fatalf("stored despite the refusal: %+v", got)
+	}
+	if err := update(mergeHomeProfile(true, "/home/u/other"), SaveOpts{AckMergeHome: true}); err != nil {
+		t.Fatal(err)
+	}
+	if acks() != 2 {
+		t.Fatalf("ack rows = %d: %v", acks(), rec.actions())
+	}
+	last := rec.events[len(rec.events)-2]
+	if last.Action != "clone_ack_merge_home" || last.Detail != "clone_of /home/u/other" || last.Name != "cl" {
+		t.Fatalf("ack row = %+v", last)
+	}
+
+	// true -> false needs none.
+	if err := update(mergeHomeProfile(false, "/home/u/other"), SaveOpts{}); err != nil {
+		t.Fatalf("true->false: %v", err)
+	}
+	if acks() != 2 {
+		t.Fatalf("ack rows = %d: %v", acks(), rec.actions())
+	}
+	// A profile stored with it on before this build (no ack ever given) is not asked on a resave.
+	old := mergeHomeProfile(true, "/home/u/other")
+	old.Name = "old"
+	if err := st.Save(old); err != nil {
+		t.Fatal(err)
+	}
+	old.Args = []string{"--z"}
+	if _, err := pm.Update(old, profileRev(profileOf(t, pm, "old"))); err != nil {
+		t.Fatalf("resave of a stored merge-home profile: %v", err)
+	}
+}
+
+// Fail closed like every profile row: an ack that cannot be recorded stops the save.
+func TestMergeHomeAckAuditFailsClosed(t *testing.T) {
+	pm, st, rec := mergeHomePM(t)
+	rec.err = errors.New("disk full")
+	if _, err := pm.CreateWith(mergeHomeProfile(true, "/home/u/repo"), SaveOpts{AckMergeHome: true}); err == nil {
+		t.Fatal("saved without its ack row")
+	}
+	if _, ok := st.Get("cl"); ok {
+		t.Fatal("stored without the ack row")
+	}
+	if len(rec.events) != 0 {
+		t.Fatalf("rows: %+v", rec.events)
+	}
+}

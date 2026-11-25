@@ -253,6 +253,14 @@ function pfvWorkspaceBlock(view, doc, host, edit) {
       sub: auto ? "Its branches come home as box/<branch>, automatically" : "Its work stays in the copy until you bring it home (auto-return is off)",
       scope: "Untouched until work comes home",
     }));
+    // The merge switch (#370): its line when on, then the last result (the merge, or why not). Toasts can be missed, so this is
+    // the record to read. Text only: the branch and the paths came from a box.
+    const mergeNote = pfvDep("mergeHomeLine", "./workhome.js")(view.merge_home);
+    if (mergeNote) {
+      const last = view.not_home && view.not_home.merge;
+      const when = (at) => { const d = new Date(at); return Number.isNaN(d.getTime()) ? String(at || "") : d.toLocaleString(); };
+      rows.push(pfvRow("Merge", mergeNote, { sub: pfvDep("mergeLastLine", "./workhome.js")(last, when), soft: true }));
+    }
     const share = pfvList(pfvField(view, doc, "clone_share"));
     if (cwd) rows.push(pfvRow("Copy", short(cwd), { sub: share.length ? "Shares " + share.join(", ") + " from the original, read only" : "", scope: "Read and write" }));
     const nh = view.not_home;

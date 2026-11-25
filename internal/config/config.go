@@ -134,8 +134,12 @@ type AgentConfig struct {
 	CloneShare     []string `json:"clone_share,omitempty"` // read-only host paths (relative to clone_of) shared into the clone
 	// CloneNoAutoReturn turns off bringing the clone's work home automatically;
 	// the work then stays in the copy until "Bring work home now".
-	CloneNoAutoReturn bool     `json:"clone_no_auto_return,omitempty"`
-	ContextPaths      []string `json:"context_paths,omitempty"` // absolute host paths a boxed agent can read, mounted read-only at the same path
+	CloneNoAutoReturn bool `json:"clone_no_auto_return,omitempty"`
+	// CloneMergeHome opts in to fast-forwarding the host's checked-out branch
+	// when the clone's work returns home (#370). Off by default; needs clone_of
+	// and automatic return.
+	CloneMergeHome bool     `json:"clone_merge_home,omitempty"`
+	ContextPaths   []string `json:"context_paths,omitempty"` // absolute host paths a boxed agent can read, mounted read-only at the same path
 
 	// Replyable is the profile's default for a spawned session's reply opt-in
 	// (the sidebar/card may type into it). Only a claude session ever honours

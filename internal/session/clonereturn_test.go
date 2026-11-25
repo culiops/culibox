@@ -351,3 +351,20 @@ func TestCloneInfoCopyCopiesReturn(t *testing.T) {
 		t.Fatal("a CloneInfo without Return must copy to one without")
 	}
 }
+
+// A stored summary hands out copies: the merge note's paths are not shared.
+func TestReturnSummaryCopyMerge(t *testing.T) {
+	r := &ReturnSummary{Merge: &MergeNote{Branch: "main", Paths: []string{"a", "b"}}}
+	c := r.copy()
+	if c.Merge == r.Merge {
+		t.Fatal("copy shares the Merge pointer")
+	}
+	c.Merge.Paths[0] = "changed"
+	c.Merge.Branch = "x"
+	if r.Merge.Paths[0] != "a" || r.Merge.Branch != "main" {
+		t.Fatalf("copy shares memory with the original: %+v", r.Merge)
+	}
+	if (&ReturnSummary{}).copy().Merge != nil {
+		t.Fatal("copy invented a Merge")
+	}
+}
