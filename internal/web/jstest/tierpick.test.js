@@ -1192,3 +1192,17 @@ test("tierPick on the clone card of a git folder whose profile copies another re
   assert.strictEqual(submitted, 1);
   assert.strictEqual(pg.run("tierConvertNow()"), true);
 });
+
+test("hostDropsConfirm names each full-access AWS connection with the label, in its own note (#374)", async () => {
+  const asked = [];
+  const FULL = "Full access: no read-only default, no write window";
+  const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; }, AWS_FULL_ACCESS_TEXT: FULL });
+  await vm.runInContext('hostDropsConfirm("infra", [], [], ["AWS binding"], ["sbx", "lab"])', pg.ctx);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(asked[0].notes)), [
+    ["On Host: the AWS binding is the default credential, not a limit. The agent keeps your full access to this machine, including its own logins, and your shell's rc files can override the default."],
+    ["sbx: " + FULL + "."],
+    ["lab: " + FULL + "."],
+  ]);
+  await vm.runInContext('hostDropsConfirm("infra", [], [], ["AWS binding"])', pg.ctx);
+  assert.strictEqual(asked[1].notes.length, 1, "no full-access connection: no extra note");
+});

@@ -565,7 +565,7 @@ function pfcCloudDraw(rec, c) {
 // pfcAwsSub: the line under a connection in the picker: where it is, then what it can do.
 function pfcAwsSub(c) {
   const place = spawnJoin([c.account_id ? "account " + c.account_id : "", c.region]);
-  const words = c.mode === "sso_direct" ? spawnAWSScope({ direct: true }) : c.write_capable === true ? PFC_PICK_AWS_WRITE : PFC_PICK_READ;
+  const words = c.mode === "sso_direct" ? spawnAWSScope({ direct: true, fullAccess: c.full_access === true }) : c.write_capable === true ? PFC_PICK_AWS_WRITE : PFC_PICK_READ;
   return place ? place + ". " + words : words;
 }
 

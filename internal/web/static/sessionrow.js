@@ -281,6 +281,9 @@ function baseReasonText(r) {
 // "none_found" for it (there is no base-role probe); every surface keys on mode.
 const SSO_DIRECT = "sso_direct";
 const SSO_DIRECT_LABEL = "SSO role directly";
+// AWS_FULL_ACCESS_TEXT: the one label of an sso_direct connection the user acknowledged as full access. Every surface shows it
+// from the server's full_access boolean (/api/meta, the session wire, /api/credentials), never from a gate state.
+const AWS_FULL_ACCESS_TEXT = "Full access: no read-only default, no write window";
 
 // baseState: the base role's measured write access of a binding, from the wire
 // fields base_access / base_write_actions / base_access_reason. A missing or
@@ -586,6 +589,6 @@ function elevActions(a, nowMs = Date.now()) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, menuGroups, menuIcon, menuPlace, MENU_GAP, ROW_MENU_GAP, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
+  module.exports = { SSO_DIRECT_LABEL, AWS_FULL_ACCESS_TEXT, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, menuGroups, menuIcon, menuPlace, MENU_GAP, ROW_MENU_GAP, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
     hhmm, minutesLeft, isElevated, elevActions };
 }

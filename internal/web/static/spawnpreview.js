@@ -14,6 +14,8 @@ function spawnDep(name, file) {
   return typeof globalThis[name] === "function" ? globalThis[name] : require(file)[name];
 }
 
+// spawnFullText: sessionrow.js' label for an acknowledged full-access connection (a const there, so not on globalThis).
+const spawnFullText = () => (typeof AWS_FULL_ACCESS_TEXT === "string" ? AWS_FULL_ACCESS_TEXT : require("./sessionrow.js").AWS_FULL_ACCESS_TEXT);
 const spawnNames = (l) => (Array.isArray(l) ? l.filter((x) => typeof x === "string" && x !== "") : []);
 // spawnAWS: the AWS entries a profile reaches, named connections first, then the
 // legacy inline binding (profile.aws_inline) named like one. An unnamed inline
@@ -176,10 +178,13 @@ function spawnAWSFacts(ent, metaConns, credConns) {
     max: elevate && Number(elevate.max_minutes) > 0 ? Number(elevate.max_minutes) : 0,
     // The gate admits read-only permission sets only and there is no elevate.
     direct: ent.mode === "sso_direct" || m.mode === "sso_direct" || c.mode === "sso_direct",
+    // The server's own boolean (the acknowledged full access, #374); nothing here derives it.
+    fullAccess: m.full_access === true || c.full_access === true,
   };
 }
 
 function spawnAWSScope(f) {
+  if (f.fullAccess) return spawnFullText() + ".";
   if (f.direct) return "Read only. Uses the SSO role directly.";
   if (!f.write) return "Read only";
   return "Read only. Write only after you grant a window" + (f.max ? ", max " + f.max + " min" : "") + ".";
@@ -261,7 +266,7 @@ function reachModel(o) {
   const cloud = [];
   for (const ent of spawnAWS(p)) {
     const f = spawnAWSFacts(ent, metaConns, credConns);
-    const facts = { write: f.write, max: f.max, direct: f.direct, prod: f.prod };
+    const facts = { write: f.write, max: f.max, direct: f.direct, prod: f.prod, fullAccess: f.fullAccess };
     if (ent.inline) {
       cloud.push(spawnItem("Old-style AWS", ent.name, { kindId: "aws_legacy", scope: spawnAWSScope(f), tag: f.prod ? "PROD" : "", facts }));
     } else if (awsKnown && !f.found) {
@@ -431,7 +436,8 @@ function reachRows(o) {
   for (const it of m.cloud.filter((i) => i.kind === "AWS" || i.kind === "Old-style AWS")) {
     const f = it.facts;
     let v = it.name + " · read";
-    if (f.direct) v += " only · SSO role directly";
+    if (f.fullAccess) v += " · " + spawnFullText();
+    else if (f.direct) v += " only · SSO role directly";
     else if (f.write) v += " · write only after you elevate" + (f.max ? " (max " + f.max + " min)" : "");
     else v += " only";
     const row = { k: "AWS", id: "aws", v, name: it.name };

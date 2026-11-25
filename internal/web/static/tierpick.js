@@ -434,11 +434,13 @@ function spawnWhere() {
 // settings Host drops (drops). Resolves true only on "Start on Host"; Cancel has the focus. The drops are text nodes in a list,
 // never markup. The sentence about the bindings is a note in the body (the footer hint is hidden when too wide).
 // keeps (ProfileView.host_keeps) are the profile's own secrets and env Host still passes: a note names them.
-async function hostDropsConfirm(profileName, drops, keeps, guardrail) {
+async function hostDropsConfirm(profileName, drops, keeps, guardrail, fullAccess) {
   const guard = Array.isArray(guardrail) ? guardrail : [];
   const dropped = Array.isArray(drops) ? drops : [];
   const notes = guard.length ? [[tierGuardrailLine(guard)]] : [];
   if (Array.isArray(keeps) && keeps.length) notes.push(["Still passed to the agent on Host: " + tierJoin(keeps) + "."]);
+  // fullAccess: the names of the profile's AWS connections the server marks full_access: each is named with the label.
+  for (const n of Array.isArray(fullAccess) ? fullAccess : []) notes.push([n + ": " + AWS_FULL_ACCESS_TEXT + "."]);
   const o = { confirmLabel: "Start on Host", danger: true, focusCancel: true, notes };
   if (!dropped.length) {
     o.title = "Start on Host?";
