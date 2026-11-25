@@ -656,10 +656,22 @@ function awsGateView(gate) {
   if (g.state === "not_read_only") {
     out.tone = "bad";
     out.badge = "Not read-only";
+    out.refused = list.map((v) => awsRefusedLine(v, false));
+    // g.incomplete (server field): why the check stopped after it had already found these.
+    if (g.incomplete === "simulate_denied") {
+      out.text = "This permission set can write or reach credentials, and it cannot simulate its own policy, so the gate could not check further." +
+        (elig ? ackNote : " Nothing is saved until it can.");
+      return out;
+    }
+    if (g.incomplete) {
+      out.signIn = g.incomplete === "sso_expired";
+      out.text = "This permission set can write or reach credentials, and the check stopped early, so nothing is saved." +
+        (out.signIn ? " Sign in again on this host, then check again." : " Check again.");
+      return out;
+    }
     out.text = elig
       ? "This permission set can write or reach credentials." + ackNote
       : "This permission set can write or reach credentials, so it cannot be saved as SSO role directly. Use a read-only permission set, or the agent role.";
-    out.refused = list.map((v) => awsRefusedLine(v, false));
     return out;
   }
   switch (g.reason) {
@@ -2768,7 +2780,7 @@ function awsAfterSignIn(f, prof) {
   for (const r of f.rows.filter((x) => x.source_profile === prof)) {
     if (r.signIn === "roles") { r.signIn = ""; awsFindRoles(r); }
     else if (r.assume === "sso_expired") awsCheckRow(r);
-    else if (r.mode === "sso_direct" && r.gate && r.gate.state === "unverified" && r.gate.reason === "sso_expired") awsCheckRow(r);
+    else if (r.mode === "sso_direct" && r.gate && awsGateView(r.gate).signIn) awsCheckRow(r); // also a not_read_only run the expiry cut short
   }
 }
 

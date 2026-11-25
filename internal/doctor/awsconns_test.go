@@ -577,3 +577,70 @@ func TestDoctorSSODirectInlineBindingNeverFullAccess(t *testing.T) {
 		t.Errorf("inline = %s %q", r.Status, r.Detail)
 	}
 }
+
+// Doctor words each line by state and reason, as the spawn refusal does: an
+// unverified set "could not be verified as read-only", keeps its grant
+// remedy, and every acknowledge hint carries the config.json remedy. A run
+// cut short says to check again.
+func TestDoctorSSODirectWordingByState(t *testing.T) {
+	const caller = "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Admin_abc"
+	const role = "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_abc"
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	wide := func(p ...string) awsprobe.GateResult {
+		r := awsprobe.GateResult{State: awsprobe.GateNotReadOnly, RoleARN: role, Caller: caller}
+		for _, x := range p {
+			r.Refused = append(r.Refused, awsprobe.Verdict{Pattern: x, Why: "not a read verb"})
+		}
+		return r
+	}
+	perm := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonMissingPerms, Caller: caller,
+		MissingPerms: []string{"iam:GetRolePolicy"}}
+	perm2 := perm
+	perm2.MissingPerms = []string{"iam:GetRolePolicy", "iam:GetPolicy"}
+	ctx := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonMissingContext, Caller: caller, RoleARN: role,
+		Refused: []awsprobe.Verdict{{Pattern: "s3:PutObject", Why: "needs context"}}}
+	sim := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonSimulateDenied, Caller: caller, RoleARN: role, PolicyDigest: digest}
+	partialTimeout := wide("s3:Put*")
+	partialTimeout.Incomplete, partialTimeout.PolicyDigest = awsprobe.ReasonTimeout, digest
+	partialSim := wide("s3:Put*")
+	partialSim.Incomplete, partialSim.PolicyDigest = awsprobe.ReasonSimulateDenied, digest
+	f := &fakeAWS{profiles: []string{"p"}, sso: map[string]string{"p": "corp"}}
+	fg := &fakeGate{by: map[string]awsprobe.GateResult{
+		"permnone": perm, "permstale": perm2, "ctxnone": ctx, "simnone": sim, "wide": wide("s3:Put*"),
+		"ptimeout": partialTimeout, "psim": partialSim,
+	}}
+	c := config.Config{AWSConnections: []config.AWSConnection{
+		ssoDirectConn("permnone", "p"), ackedDoctorConn("permstale", perm), ssoDirectConn("ctxnone", "p"), ssoDirectConn("simnone", "p"),
+		ssoDirectConn("wide", "p"), ackedDoctorConn("ptimeout", wide("s3:Put*")), ssoDirectConn("psim", "p")}}
+	got := byCheck(checkAWSConnsGate(context.Background(), c, nil, nil, f, noneProbe, fg.gate))
+	for _, tc := range []struct {
+		name    string
+		want    []string
+		mustNot []string
+	}{
+		{"permnone", []string{"could not be verified as read-only (permission set cannot read its own policies)", "grant iam:GetRolePolicy",
+			"acknowledge full access on the Credentials screen", awsprobe.AckSeedHint}, []string{"is not read-only"}},
+		{"permstale", []string{"could not be verified as read-only", "grant iam:GetRolePolicy, iam:GetPolicy", "acknowledge again on the Credentials screen",
+			awsprobe.AckSeedHint}, []string{"is not read-only"}},
+		{"ctxnone", []string{"could not be verified as read-only (simulation needs condition context)", "s3:PutObject"}, []string{"is not read-only"}},
+		{"simnone", []string{"could not be verified as read-only (role cannot simulate itself)", awsprobe.AckSeedHint}, []string{"is not read-only"}},
+		{"wide", []string{"is not read-only", "acknowledge full access on the Credentials screen", awsprobe.AckSeedHint}, nil},
+		{"ptimeout", []string{"is not read-only", "the check stopped early (timed out)", "check again"}, []string{"acknowledg"}},
+		{"psim", []string{"is not read-only", "the check stopped early (role cannot simulate itself)", "acknowledge full access"}, []string{"check again"}},
+	} {
+		r := got["aws-connection "+tc.name+" read-only gate"]
+		if r.Status != Fail {
+			t.Errorf("%s: status %s %q", tc.name, r.Status, r.Detail)
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(r.Detail, w) {
+				t.Errorf("%s lacks %q: %q", tc.name, w, r.Detail)
+			}
+		}
+		for _, w := range tc.mustNot {
+			if strings.Contains(r.Detail, w) {
+				t.Errorf("%s has %q: %q", tc.name, w, r.Detail)
+			}
+		}
+	}
+}

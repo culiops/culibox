@@ -20,6 +20,11 @@ const (
 	PatternSourceProfile = "source_profile"
 )
 
+// AckSeedHint is the remedy every acknowledge hint carries: a connection
+// defined in config.json never holds an acknowledgement (credfile.Merge
+// strips it), and only the Credentials screen can save one. Static text.
+const AckSeedHint = "a connection defined in config.json must be re-created on the Credentials screen to be acknowledged"
+
 const (
 	ackMaxItems   = 4096
 	ackMaxItemLen = 256

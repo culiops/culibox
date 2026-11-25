@@ -249,3 +249,45 @@ func TestServeSSODirectAckedPartialRunRefused(t *testing.T) {
 		}
 	}
 }
+
+// A run cut short by a transient failure tells the box to retry, and the host
+// row says why the check stopped. A partial run the set cannot simulate is
+// eligible: the box gets the static acknowledge message.
+func TestServeSSODirectPartialRunHints(t *testing.T) {
+	res := wideResult("s3:Put*")
+	res.Incomplete = awsprobe.ReasonTimeout
+	acked := wideResult("s3:Put*")
+	b, _, rec := ackedSetup(t, &fakeGate{results: []awsprobe.GateResult{res}}, &acked)
+	w := callRO(b)
+	var body struct{ Error string }
+	decode(t, w, &body)
+	if w.Code != http.StatusServiceUnavailable || body.Error != boxUnverified {
+		t.Fatalf("timeout: status %d body %s", w.Code, w.Body)
+	}
+	if r := lastRow(rec); !strings.HasPrefix(r.Error, "not read-only (the check stopped early: timeout)") || strings.Contains(r.Error, "acknowledg") {
+		t.Fatalf("timeout row %+v", r)
+	}
+
+	sd := wideResult("s3:Put*")
+	sd.Incomplete, sd.PolicyDigest = awsprobe.ReasonSimulateDenied, strings.Repeat("a", 64)
+	b, _, rec = ackedSetup(t, &fakeGate{results: []awsprobe.GateResult{sd}}, nil)
+	w = callRO(b)
+	decode(t, w, &body)
+	if w.Code != http.StatusForbidden || body.Error != boxNeedsAck {
+		t.Fatalf("simulate_denied: status %d body %s", w.Code, w.Body)
+	}
+	if r := lastRow(rec); !strings.HasPrefix(r.Error, ackEligiblePrefix+"not read-only (the check stopped early: simulate_denied)") {
+		t.Fatalf("simulate_denied row %+v", r)
+	}
+}
+
+// A connection from config.json cannot hold an acknowledgement, so every
+// acknowledge hint says it must be re-created on the Credentials screen. The
+// box text stays static.
+func TestAckHintsNameTheSeedRemedy(t *testing.T) {
+	for name, s := range map[string]string{"box": boxNeedsAck, "stale": ackStalePrefix, "eligible": ackEligiblePrefix} {
+		if !strings.Contains(s, awsprobe.AckSeedHint) {
+			t.Errorf("%s hint lacks the config.json remedy: %q", name, s)
+		}
+	}
+}

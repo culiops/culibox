@@ -201,7 +201,10 @@ func (b *Broker) mintAndGate(ck connKey, agent, scope string, bnd config.AWSBind
 	adm := awsprobe.AdmitSSO(res, ack)
 	if !adm.OK {
 		status, boxMsg := http.StatusServiceUnavailable, boxUnverified
-		if res.State == awsprobe.GateNotReadOnly {
+		// A run cut short by a transient failure is retried, even when step 5
+		// had already refused patterns.
+		transient := res.Incomplete != "" && res.Incomplete != awsprobe.ReasonSimulateDenied
+		if res.State == awsprobe.GateNotReadOnly && !transient {
 			status, boxMsg = http.StatusForbidden, boxNotReadOnly
 		}
 		hostMsg := gateRefusal(res)
@@ -246,14 +249,15 @@ const (
 	boxNotReadOnly = "CuliBox refused: this connection's SSO permission set is not read-only, so its credentials are not handed out; the refusing actions are in the CuliBox audit log on the host"
 	boxUnverified  = "CuliBox could not verify that this connection's SSO permission set is read-only, so no credential was issued; retry shortly (the reason is in the CuliBox audit log on the host)"
 	// boxNeedsAck is static: it never says which patterns the acknowledgement lacks.
-	boxNeedsAck = "CuliBox refused: this connection's SSO permission set needs a full-access acknowledgement on the host, or its acknowledgement no longer covers it; see the CuliBox audit log on the host"
-	boxNotSSO   = "CuliBox refused: this connection's source profile is not usable for the SSO role directly (it needs an sso_account_id); see the CuliBox audit log on the host"
+	boxNeedsAck = "CuliBox refused: this connection's SSO permission set needs a full-access acknowledgement on the host's Credentials screen, or its acknowledgement no longer covers it (" +
+		awsprobe.AckSeedHint + "); see the CuliBox audit log on the host"
+	boxNotSSO = "CuliBox refused: this connection's source profile is not usable for the SSO role directly (it needs an sso_account_id); see the CuliBox audit log on the host"
 )
 
 // Host-side prefixes of a refusal an acknowledgement could (not) cover.
 const (
-	ackStalePrefix    = "not covered by the full-access acknowledgement, acknowledge again on the Credentials screen: "
-	ackEligiblePrefix = "eligible for a full-access acknowledgement on the Credentials screen: "
+	ackStalePrefix    = "not covered by the full-access acknowledgement, acknowledge again on the Credentials screen (" + awsprobe.AckSeedHint + "): "
+	ackEligiblePrefix = "eligible for a full-access acknowledgement on the Credentials screen (" + awsprobe.AckSeedHint + "): "
 )
 
 // gatePassed is a read-only verdict that names its role, with no acknowledgement
@@ -271,10 +275,14 @@ func mintCode(err error) (code, detail string) {
 }
 
 // gateRefusal is a non-passing gate result as one bounded line: the state
-// (with the reason when unverified), the IAM reads to grant, then every
-// refused item as "pattern: why". Past maxGateErrLen the rest is counted.
+// (with the reason when unverified, or why a not-read-only run stopped
+// early), the IAM reads to grant, then every refused item as "pattern: why".
+// Past maxGateErrLen the rest is counted.
 func gateRefusal(res awsprobe.GateResult) string {
 	head := "not read-only"
+	if res.Incomplete != "" {
+		head += " (the check stopped early: " + string(res.Incomplete) + ")"
+	}
 	if res.State != awsprobe.GateNotReadOnly {
 		reason := string(res.Reason)
 		if reason == "" {

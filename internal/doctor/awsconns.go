@@ -279,13 +279,29 @@ func ssoGateResult(check string, res awsprobe.GateResult, ack *awsprobe.Ack, can
 	if !canAck {
 		adm = awsprobe.Admission{OK: awsprobe.AdmitSSO(res, nil).OK}
 	}
-	// What an acknowledgement is about: the refused items, else the missing reads.
+	// What an acknowledged set was acknowledged for: the refused items, else
+	// the missing reads, else the reason.
 	what := list
 	if what == "" && len(res.MissingPerms) > 0 {
 		what = strings.Join(res.MissingPerms, ", ")
 	}
 	if what == "" && res.Reason == awsprobe.ReasonSimulateDenied {
 		what = awsprobe.ReasonText(res.Reason)
+	}
+	// The refused lines are worded by state and reason, as the spawn refusal
+	// is, and keep the grant remedy.
+	subject := "SSO permission set is not read-only (sso_direct)"
+	if res.State == awsprobe.GateNotReadOnly && res.Incomplete != "" {
+		subject = "SSO permission set is not read-only (sso_direct) and the check stopped early (" + awsprobe.ReasonText(res.Incomplete) + ")"
+	} else if res.State != awsprobe.GateNotReadOnly {
+		subject = "SSO permission set could not be verified as read-only (" + gateReasonText(res.Reason) + ") (sso_direct)"
+	}
+	remedy := ""
+	if len(res.MissingPerms) > 0 {
+		remedy = "; grant " + strings.Join(res.MissingPerms, ", ")
+	}
+	if list != "" {
+		remedy += ": " + list
 	}
 	switch {
 	case adm.UnderAck:
@@ -296,30 +312,24 @@ func ssoGateResult(check string, res awsprobe.GateResult, ack *awsprobe.Ack, can
 		}
 		return Result{Warn, check, d}
 	case adm.Stale:
-		d := "SSO permission set changed since its full-access acknowledgement; spawns and mints are refused until you acknowledge again on the Credentials screen"
-		if what != "" {
-			d += ": " + what
-		}
-		return Result{Fail, check, d}
+		return Result{Fail, check, subject + "; it changed since its full-access acknowledgement, so spawns and mints are refused until you acknowledge again on the Credentials screen (" +
+			awsprobe.AckSeedHint + ")" + remedy}
 	case adm.Eligible:
-		d := "SSO permission set is not read-only (sso_direct) and has no full-access acknowledgement; spawns are refused until you acknowledge full access on the Credentials screen"
-		if what != "" {
-			d += ": " + what
-		}
-		return Result{Fail, check, d}
+		return Result{Fail, check, subject + " and has no full-access acknowledgement; spawns are refused until you acknowledge full access on the Credentials screen (" +
+			awsprobe.AckSeedHint + ")" + remedy}
 	case res.State == awsprobe.GateReadOnly && res.RoleARN != "":
 		return Result{Pass, check, "SSO permission set is read-only (sso_direct)"}
 	case res.State == awsprobe.GateNotReadOnly:
-		d := "SSO permission set is not read-only (sso_direct); spawns are refused"
+		d := subject + "; spawns are refused"
+		if res.Incomplete != "" && res.Incomplete != awsprobe.ReasonSimulateDenied {
+			d += "; check again"
+		}
 		if list != "" {
 			d += ": " + list
 		}
 		return Result{Fail, check, d}
 	}
-	reason := awsprobe.ReasonText(res.Reason)
-	if res.Reason == "" {
-		reason = "no verdict"
-	}
+	reason := gateReasonText(res.Reason)
 	d := "could not verify the SSO permission set is read-only (" + reason + "); spawns are refused"
 	if len(res.MissingPerms) > 0 {
 		d += "; grant " + strings.Join(res.MissingPerms, ", ")
@@ -342,4 +352,12 @@ func awsSourceKey(run func(args ...string) (string, error), src string) (string,
 		return src, true
 	}
 	return "", false
+}
+
+// gateReasonText is a gate reason in words, "no verdict" when there is none.
+func gateReasonText(r awsprobe.Reason) string {
+	if r == "" {
+		return "no verdict"
+	}
+	return awsprobe.ReasonText(r)
 }

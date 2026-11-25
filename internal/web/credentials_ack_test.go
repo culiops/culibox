@@ -332,3 +332,17 @@ func TestSaveSSODirectAckPartialRun(t *testing.T) {
 		})
 	}
 }
+
+// The 409 of a run cut short says to check again, not that the set is
+// simply not read-only.
+func TestErrSSOGatePartialRunText(t *testing.T) {
+	g := wideGate("iam:*")
+	g.Incomplete = awsprobe.ReasonTimeout
+	if s := (ErrSSOGate{Gate: g}).Error(); !strings.Contains(s, "the check stopped early (timed out)") || !strings.Contains(s, "check again") {
+		t.Errorf("transient: %q", s)
+	}
+	g.Incomplete = awsprobe.ReasonSimulateDenied
+	if s := (ErrSSOGate{Gate: g, Eligible: true}).Error(); strings.Contains(s, "check again") || !strings.Contains(s, "role cannot simulate itself") {
+		t.Errorf("simulate_denied: %q", s)
+	}
+}

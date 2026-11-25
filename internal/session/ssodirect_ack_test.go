@@ -179,3 +179,49 @@ func TestSSODirectAckSurvivesARestart(t *testing.T) {
 		t.Fatalf("restored session lost the ack: %+v", r.AWSConns)
 	}
 }
+
+// ssoRefusal words each kind of refusal with its own remedy: an ack hint
+// that also says a config.json connection must be re-created on the
+// Credentials screen, a retry for a run cut short, the reason for a set that
+// cannot simulate.
+func TestSSORefusalHints(t *testing.T) {
+	partial := func(r awsprobe.Reason) awsprobe.GateResult {
+		g := wideGate("s3:Put*")
+		g.Incomplete, g.PolicyDigest = r, strings.Repeat("a", 64)
+		return g
+	}
+	perm := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonMissingPerms, Caller: ackTestCaller,
+		MissingPerms: []string{"iam:GetRole"}}
+	for _, tc := range []struct {
+		name    string
+		res     awsprobe.GateResult
+		adm     awsprobe.Admission
+		want    []string
+		mustNot []string
+	}{
+		{"eligible", wideGate("s3:Put*"), awsprobe.Admission{Eligible: true},
+			[]string{"is not read-only", "acknowledge full access on the Credentials screen", awsprobe.AckSeedHint}, nil},
+		{"stale", wideGate("s3:Put*"), awsprobe.Admission{Eligible: true, Stale: true},
+			[]string{"acknowledge again on the Credentials screen", awsprobe.AckSeedHint}, nil},
+		{"missing perms", perm, awsprobe.Admission{Eligible: true},
+			[]string{"could not verify", "grant it iam:GetRole", "acknowledge full access", awsprobe.AckSeedHint}, nil},
+		{"partial timeout", partial(awsprobe.ReasonTimeout), awsprobe.Admission{},
+			[]string{"is not read-only", "the check stopped early (timed out)", "check again"}, []string{"acknowledg"}},
+		{"partial simulate denied", partial(awsprobe.ReasonSimulateDenied), awsprobe.Admission{Eligible: true},
+			[]string{"is not read-only", "the check stopped early (role cannot simulate itself)", "acknowledge full access", awsprobe.AckSeedHint}, []string{"check again"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := ssoRefusal("ro", tc.res, tc.adm)
+			for _, w := range tc.want {
+				if !strings.Contains(s, w) {
+					t.Errorf("lacks %q: %s", w, s)
+				}
+			}
+			for _, w := range tc.mustNot {
+				if strings.Contains(s, w) {
+					t.Errorf("has %q: %s", w, s)
+				}
+			}
+		})
+	}
+}

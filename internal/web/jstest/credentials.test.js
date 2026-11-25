@@ -757,6 +757,34 @@ test("awsGateView: not_read_only lists every refusing pattern with its reason", 
   assert.match(v.text, /cannot be saved/);
 });
 
+test("awsGateView: a not_read_only run cut short says to check again, and offers no acknowledgement", () => {
+  const refused = [{ pattern: "*", why: "allows every action" }];
+  for (const incomplete of ["timeout", "error"]) {
+    const v = awsGateView({ state: "not_read_only", incomplete, refused, ack_eligible: false });
+    assert.strictEqual(v.tone, "bad", incomplete);
+    assert.strictEqual(v.ackEligible, false, incomplete);
+    assert.match(v.text, /stopped early/, incomplete);
+    assert.match(v.text, /Check again/, incomplete);
+    assert.doesNotMatch(v.text, /agent role/, incomplete);
+    assert.deepStrictEqual(v.refused, ["* — allows every action"], incomplete);
+  }
+  const exp = awsGateView({ state: "not_read_only", incomplete: "sso_expired", refused, ack_eligible: false });
+  assert.strictEqual(exp.signIn, true);
+  assert.match(exp.text, /Sign in again/);
+});
+
+test("awsGateView: a not_read_only set that cannot simulate says so and follows ack_eligible", () => {
+  const g = { state: "not_read_only", incomplete: "simulate_denied", refused: [{ pattern: "s3:Put*", why: "w" }] };
+  const yes = awsGateView({ ...g, ack_eligible: true });
+  assert.strictEqual(yes.ackEligible, true);
+  assert.match(yes.text, /cannot simulate its own policy/);
+  assert.match(yes.text, /acknowledgement of full access/);
+  assert.doesNotMatch(yes.text, /Check again/);
+  const no = awsGateView({ ...g, ack_eligible: false });
+  assert.strictEqual(no.ackEligible, false);
+  assert.doesNotMatch(no.text, /acknowledgement/);
+});
+
 test("awsGateView: unverified sso_expired offers the sign-in", () => {
   const v = awsGateView({ state: "unverified", reason: "sso_expired" });
   assert.strictEqual(v.tone, "warn");

@@ -175,18 +175,26 @@ func ssoRefusal(key string, res awsprobe.GateResult, adm awsprobe.Admission) str
 		items = append(items, clip(v.Pattern+": "+v.Why))
 	}
 	// Only a named connection can carry an acknowledgement; a transient reason
-	// is never eligible, so it keeps its wording.
+	// is never eligible, so it keeps its wording. A run cut short by a
+	// transient failure after step 5 had refused patterns is retried.
 	hint := ""
 	if key != "" {
 		switch {
 		case adm.Stale:
-			hint = "; it changed since its full-access acknowledgement, acknowledge again on the Credentials screen"
+			hint = "; it changed since its full-access acknowledgement, acknowledge again on the Credentials screen (" + awsprobe.AckSeedHint + ")"
 		case adm.Eligible:
-			hint = "; acknowledge full access on the Credentials screen to use it"
+			hint = "; acknowledge full access on the Credentials screen to use it (" + awsprobe.AckSeedHint + ")"
 		}
 	}
 	if res.State == awsprobe.GateNotReadOnly {
-		s := who + " is not read-only, so its credentials are not handed out"
+		s := who + " is not read-only"
+		if res.Incomplete != "" {
+			s += " and the check stopped early (" + awsprobe.ReasonText(res.Incomplete) + ")"
+		}
+		s += ", so its credentials are not handed out"
+		if res.Incomplete != "" && res.Incomplete != awsprobe.ReasonSimulateDenied {
+			hint = "; check again shortly"
+		}
 		return s + ssoItems(items) + hint
 	}
 	reason := awsprobe.ReasonText(res.Reason)

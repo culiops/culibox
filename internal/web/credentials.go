@@ -117,6 +117,13 @@ type ErrSSOGate struct {
 
 func (e ErrSSOGate) Error() string {
 	if e.Gate.State == awsprobe.GateNotReadOnly {
+		if r := e.Gate.Incomplete; r != "" {
+			s := "the SSO permission set is not read-only and the check stopped early (" + awsprobe.ReasonText(r) + "); nothing was saved"
+			if r != awsprobe.ReasonSimulateDenied {
+				s += ", check again"
+			}
+			return s
+		}
 		return "the SSO permission set is not read-only; nothing was saved"
 	}
 	return "the SSO permission set could not be verified as read-only; nothing was saved"
