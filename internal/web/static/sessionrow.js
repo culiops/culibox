@@ -281,6 +281,9 @@ function baseReasonText(r) {
 // "none_found" for it (there is no base-role probe); every surface keys on mode.
 const SSO_DIRECT = "sso_direct";
 const SSO_DIRECT_LABEL = "SSO role directly";
+// AWS_FULL_ACCESS_TEXT: the one label of an sso_direct connection the user acknowledged as full access. Every surface shows it
+// from the server's full_access boolean (/api/meta, the session wire, /api/credentials), never from a gate state.
+const AWS_FULL_ACCESS_TEXT = "Full access: no read-only default, no write window";
 
 // baseState: the base role's measured write access of a binding, from the wire
 // fields base_access / base_write_actions / base_access_reason. A missing or
@@ -310,6 +313,12 @@ function baseScope(a, desktop) {
   const state = baseState(a);
   if (state === SSO_DIRECT) {
     const h = Number(a.hours) > 0 ? " \u00b7 up to " + Math.ceil(Number(a.hours)) + " h" : "";
+    // The server's full_access boolean only: an acknowledged connection never says the gate passed, and its
+    // base_access ("writes") is not shown beside the label.
+    if (a.full_access === true) {
+      return { state, full: true, lead: SSO_DIRECT_LABEL + h, text: AWS_FULL_ACCESS_TEXT + h + " \u00b7 " + SSO_DIRECT_LABEL,
+        title: AWS_FULL_ACCESS_TEXT + " \u00b7 you acknowledged the permission set at save \u00b7 CloudTrail shows the operator, not the agent \u00b7 not revocable when the session ends" };
+    }
     return { state, text: "read-only gate passed" + h + " \u00b7 " + SSO_DIRECT_LABEL,
       title: "the permission set passed the read-only gate at " + (desktop ? "start" : "spawn") + " \u00b7 CloudTrail shows the operator, not the agent \u00b7 not revocable when the session ends" };
   }
@@ -397,13 +406,15 @@ function awsBadgeParts(s, nowMs = Date.now()) {
   const names = (state) => idle.filter((c) => baseState(c) === state).map((c) => c.name).join(", ");
   const canWrite = names("writes");
   const unverified = names("unverified");
-  const direct = names(SSO_DIRECT);
+  const full = idle.filter((c) => baseState(c) === SSO_DIRECT && c.full_access === true).map((c) => c.name).join(", ");
+  const direct = idle.filter((c) => baseState(c) === SSO_DIRECT && c.full_access !== true).map((c) => c.name).join(", ");
   return { label: "AWS \u00d7" + cs.length, prod, write, roleWrite,
     title: "AWS connections: " + cs.map((c) => c.name).join(", ") +
       live.map((c) => " \u00b7 write on " + c.name + " until " + hhmm(c.elevated_until)).join("") +
       (canWrite ? " \u00b7 role can write on " + canWrite : "") +
       (unverified ? " \u00b7 unverified on " + unverified : "") +
-      (direct ? " \u00b7 " + SSO_DIRECT_LABEL + " on " + direct : "") };
+      (direct ? " \u00b7 " + SSO_DIRECT_LABEL + " on " + direct : "") +
+      (full ? " \u00b7 " + AWS_FULL_ACCESS_TEXT + " on " + full : "") };
 }
 
 // WRITE_SUFFIX is what awsBadge appends while a window is open.
@@ -425,7 +436,7 @@ function badgeParts(ab) {
 // re-check that finds the same thing does not rebuild every tab.
 function baseSig(a) {
   const st = baseState(a);
-  return [st, st === "writes" ? baseActions(a).join(",") : "", st === "unverified" ? baseUnverifiedReason(a) : st === SSO_DIRECT ? String(Number(a.hours) || 0) : ""].join("/");
+  return [st, st === "writes" ? baseActions(a).join(",") : "", st === "unverified" ? baseUnverifiedReason(a) : st === SSO_DIRECT ? String(Number(a.hours) || 0) + (a.full_access === true ? "/full" : "") : ""].join("/");
 }
 
 // awsSig: everything the AWS chip draws, as one string. A terminal tab keeps its
@@ -586,6 +597,6 @@ function elevActions(a, nowMs = Date.now()) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, menuGroups, menuIcon, menuPlace, MENU_GAP, ROW_MENU_GAP, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
+  module.exports = { SSO_DIRECT_LABEL, AWS_FULL_ACCESS_TEXT, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, menuGroups, menuIcon, menuPlace, MENU_GAP, ROW_MENU_GAP, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
     hhmm, minutesLeft, isElevated, elevActions };
 }

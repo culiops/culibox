@@ -2,6 +2,8 @@ package awsprobe
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -61,10 +63,24 @@ type GateResult struct {
 	State        GateState  `json:"state"`
 	Reason       Reason     `json:"reason,omitempty"`        // Unverified only
 	RoleARN      string     `json:"role_arn,omitempty"`      // the IAM role ARN, aws-reserved path included
+	Caller       string     `json:"caller,omitempty"`        // the assumed-role ARN without its session name, set once step 1 passed
 	Refused      []Verdict  `json:"refused,omitempty"`       // NotReadOnly; for Unverified, the actions that proved nothing
 	MissingPerms []string   `json:"missing_perms,omitempty"` // Reason == missing_permissions
 	DataReads    []DataRead `json:"data_reads,omitempty"`    // descriptive, never blocks
-	CheckedAt    time.Time  `json:"checked_at,omitzero"`
+	// Incomplete is why the run stopped before the simulation finished, set
+	// only on a NotReadOnly result whose refusals were found first (an
+	// Unverified result says why in Reason). Such a result is partial: the
+	// simulation could have found more. simulate_denied is a lasting state of
+	// the permission set; any other value is transient and retried.
+	Incomplete Reason `json:"incomplete,omitempty"`
+	// PolicyDigest is the sha256 (hex) of the permission set's policy
+	// documents, set once step 3 read them. It pins an acknowledgement whose
+	// refused patterns cannot stand for what the set grants: a structural
+	// refusal (NotAction, missing Action), whose pattern names no content, or
+	// a permission set that cannot run the simulation (Reason or Incomplete
+	// simulate_denied), whose simulated refusals were never found.
+	PolicyDigest string    `json:"policy_digest,omitempty"`
+	CheckedAt    time.Time `json:"checked_at,omitzero"`
 }
 
 // SimDecision is one simulated action: its EvalDecision and whether the
@@ -88,7 +104,8 @@ const ssoRolePrefix = "AWSReservedSSO_"
 // Gate decides whether the SSO permission set behind api's credentials is
 // read-only (spec "Gate algorithm", steps 1-7). It fails closed: only a
 // definite proof returns GateReadOnly. A definite refusal wins over an
-// unverifiable step, since nothing later can make a refused set read-only.
+// unverifiable step, since nothing later can make a refused set read-only;
+// GateResult.Incomplete then says which step could not run.
 // account is the profile's sso_account_id. The time budget is ctx's.
 func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateResult {
 	g := gateRun{res: GateResult{CheckedAt: now}}
@@ -101,11 +118,13 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 	}
 	partition, callerAcct, roleName, ok := ssoCaller(caller)
 	if !ok {
-		return g.refuse(Verdict{Pattern: "caller", Why: "is not an IAM Identity Center permission-set role session (assumed-role/" + ssoRolePrefix + "*)"})
+		return g.refuse(Verdict{Pattern: PatternCaller, Why: "is not an IAM Identity Center permission-set role session (assumed-role/" + ssoRolePrefix + "*)"})
 	}
 	if callerAcct != account {
-		return g.refuse(Verdict{Pattern: "account", Why: fmt.Sprintf("the credentials are for account %s, not the profile's account %q", callerAcct, account)})
+		return g.refuse(Verdict{Pattern: PatternAccount, Why: fmt.Sprintf("the credentials are for account %s, not the profile's account %q", callerAcct, account)})
 	}
+
+	g.res.Caller = "arn:" + partition + ":sts::" + callerAcct + ":assumed-role/" + roleName
 
 	// Step 2: the role's real ARN, with its aws-reserved path.
 	roleARN, err := api.RoleARN(ctx, roleName)
@@ -113,7 +132,7 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 		return g.failed(ctx, err, append([]string{gateRoleRead}, gatePolicyReads...))
 	}
 	if !ssoRoleARN(roleARN, partition, account, roleName) {
-		return g.refuse(Verdict{Pattern: "role", Why: "iam:GetRole did not return this permission set's aws-reserved/sso.amazonaws.com role"})
+		return g.refuse(Verdict{Pattern: PatternRole, Why: "iam:GetRole did not return this permission set's aws-reserved/sso.amazonaws.com role"})
 	}
 	g.res.RoleARN = roleARN
 
@@ -123,6 +142,8 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 	if err != nil {
 		return g.failed(ctx, err, gatePolicyReads)
 	}
+
+	g.res.PolicyDigest = policyDigest(docs)
 
 	// Step 4: deny-aware residual allows.
 	residual, err := Residual(docs)
@@ -253,6 +274,9 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 
 	switch {
 	case len(g.res.Refused) > 0:
+		if incomplete { // refusals win, but the run is partial
+			g.res.Incomplete = ReasonError
+		}
 		return g.done(GateNotReadOnly)
 	case incomplete:
 		return g.unverified(ReasonError)
@@ -282,9 +306,11 @@ func (g *gateRun) refuse(v ...Verdict) GateResult {
 }
 
 // unverified ends the run Unverified, unless a definite refusal is already
-// known, which wins.
+// known, which wins. The run is then partial, and Incomplete records why it
+// stopped, so the reason is never lost.
 func (g *gateRun) unverified(r Reason) GateResult {
 	if len(g.res.Refused) > 0 {
+		g.res.Incomplete = r
 		return g.done(GateNotReadOnly)
 	}
 	g.res.Reason = r
@@ -346,6 +372,20 @@ func ssoRoleARN(arn, partition, account, name string) bool {
 	}
 	path, ok := strings.CutPrefix(f[5], "role/aws-reserved/sso.amazonaws.com/")
 	return ok && (path == name || strings.HasSuffix(path, "/"+name))
+}
+
+// policyDigest is the lowercase hex sha256 of docs, sorted so that order does
+// not matter, each document prefixed by its decimal length so that no two
+// different lists share an encoding.
+func policyDigest(docs []string) string {
+	sorted := slices.Clone(docs)
+	slices.Sort(sorted)
+	h := sha256.New()
+	for _, d := range sorted {
+		fmt.Fprintf(h, "%d:", len(d))
+		h.Write([]byte(d))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // coveringAllow returns the first residual Allow pattern that matches action,

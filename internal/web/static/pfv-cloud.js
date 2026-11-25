@@ -142,7 +142,17 @@ function pfcPickOption(rec, it) {
   if (it.tag) t.append(" ", pfvMk("span", "pfv-tag", it.tag));
   const text = pfvMk("span", "menu-text");
   text.append(t);
-  if (it.sub) text.append(pfvMk("span", "pfv-opt-s", it.sub));
+  if (it.sub) {
+    const s = pfvMk("span", "pfv-opt-s");
+    // it.danger: the part of the line drawn red (a full-access label), the text around it plain.
+    const at = typeof it.danger === "string" && it.danger !== "" ? it.sub.indexOf(it.danger) : -1;
+    if (at < 0) s.append(it.sub);
+    else {
+      const before = it.sub.slice(0, at), after = it.sub.slice(at + it.danger.length);
+      s.append(...(before ? [before] : []), pfvMk("span", "c-red", it.danger), ...(after ? [after] : []));
+    }
+    text.append(s);
+  }
   b.append(text);
   if (it.added === true) {
     b.disabled = true;
@@ -565,7 +575,7 @@ function pfcCloudDraw(rec, c) {
 // pfcAwsSub: the line under a connection in the picker: where it is, then what it can do.
 function pfcAwsSub(c) {
   const place = spawnJoin([c.account_id ? "account " + c.account_id : "", c.region]);
-  const words = c.mode === "sso_direct" ? spawnAWSScope({ direct: true }) : c.write_capable === true ? PFC_PICK_AWS_WRITE : PFC_PICK_READ;
+  const words = c.mode === "sso_direct" ? spawnAWSScope({ direct: true, fullAccess: c.full_access === true }) : c.write_capable === true ? PFC_PICK_AWS_WRITE : PFC_PICK_READ;
   return place ? place + ". " + words : words;
 }
 
@@ -584,7 +594,11 @@ function pfcCloudPick(rec) {
   const legacy = !!v.legacy && v.legacy.removed !== true;
   const aws = { title: "AWS connections", kind: "aws", note: legacy ? PFC_PICK_LEGACY : "", items: [] };
   if (!legacy) {
-    for (const c of conns) aws.items.push({ title: c.name, tag: c.prod ? "PROD" : "", sub: pfcAwsSub(c), added: heldAws.has(c.name), add: { kind: "aws", name: c.name } });
+    for (const c of conns) {
+      // danger: the full-access label, drawn red, only for a connection the server marks full_access.
+      const danger = c.mode === "sso_direct" && c.full_access === true ? spawnFullText() : "";
+      aws.items.push({ title: c.name, tag: c.prod ? "PROD" : "", sub: pfcAwsSub(c), danger, added: heldAws.has(c.name), add: { kind: "aws", name: c.name } });
+    }
     aws.items.push({ title: "New AWS connection…", sub: "Set it up in Credentials without leaving this page", create: "aws" });
   }
   const logins = pfcLogins("");

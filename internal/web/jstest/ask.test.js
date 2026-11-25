@@ -487,6 +487,15 @@ test("askDialog names the alt button by the whole label when the dialog gives al
   await d;
 });
 
+test("askDialog's notes draw a { red } part in the danger tone (#374)", async () => {
+  const t = askEnv();
+  const a = t.ctx.askConfirm({ title: "t", body: "b", notes: [["sbx: ", { red: "Full access: no read-only default, no write window" }, "."]] });
+  const kids = t.els["ask-extra"].children;
+  assert.deepStrictEqual(kids.map(noteText), ["sbx: [c-red:Full access: no read-only default, no write window]."]);
+  t.els["ask-modal"].close("cancel");
+  await a;
+});
+
 test("shell.js builds notes with createElement (no innerHTML): a path in a note is text", () => {
   const src = readStatic("shell.js");
   const at = src.indexOf("function askNoteNodes(");

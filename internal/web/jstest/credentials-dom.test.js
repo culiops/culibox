@@ -62,7 +62,7 @@ class Node {
     return c;
   }
   appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
-  append(...cs) { cs.forEach((c) => this.appendChild(c)); }
+  append(...cs) { cs.forEach((c) => this.appendChild(typeof c === "string" ? new Text(c) : c)); } // the DOM wraps a string in a text node
   // A browser drops focus to <body> when the focused element leaves the document, and when it stops being rendered (hidden): here,
   // activeElement becomes null.
   get hidden() { return !!this._hidden; }
@@ -122,7 +122,7 @@ function page({ asPage = true, width = 800, tab = false } = {}) {
   const ctx = vm.createContext(box);
   // kitmenu.js loads before credentials.js on the page (index.html): the header menu is built from its rows. The glyph set,
   // its maps and the builder (icons.js, iconmap.js, svgicon.js) load before kitmenu.js, as there.
-  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "pending.js", "store.js", "kitmenu.js", "credentials.js"]) {
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "pending.js", "store.js", "kitmenu.js", "sessionrow.js", "credentials.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   // The reload every action ends in repaints the whole screen; here it only counts.
@@ -3002,4 +3002,129 @@ test("edit heading: a GitHub App edit carries si:github at 16 px before the name
   phone.box.reply = credReply();
   await phone.box.credAppForm({ name: "test-app", client_id: "Iv1.x", key_ref_kind: "store" });
   assert.deepStrictEqual(glyphsIn(phone.byId["creds-body"].querySelector("span.grow")), [], "phone frozen");
+});
+
+// #374: the acknowledgement box on an sso_direct row whose permission set is not read-only.
+const ACK_TEXT = "I understand: the agent gets everything this permission set allows, now or later, for the whole session, with no read-only default and no write window. CuliBox lists what it found above.";
+const ackGate = (over) => ({ gate: { state: "not_read_only", reason: "", role_arn: "arn:aws:iam::123456789012:role/x", refused: [{ pattern: "iam:*", why: "writes" }], missing_perms: [] }, ack_eligible: true, expires: "", ...over });
+const ackBoxOf = (root) => root.querySelectorAll("input").filter((i) => i.type === "checkbox").find((i) => i.parent && /I understand: the agent gets everything/.test(i.parent.textContent));
+
+async function ackPage(checkRes, post) {
+  const p = page({ tab: true });
+  const { opts } = hostOpts();
+  p.box.reply = (path, opt) => {
+    if (path === "/api/credentials/aws/host-profiles") return { profiles: awsHostProfiles };
+    if (path === "/api/credentials/aws/check") return typeof checkRes === "function" ? checkRes() : checkRes;
+    if (path === "/api/credentials/aws" && post) return post(JSON.parse(opt.body));
+    return {};
+  };
+  await awsTick(p, opts, "acme-dev");
+  vmEval(p, 'awsSetMode(awsFlow.rows[0], "sso_direct")');
+  await p.box.awsCheckAll();
+  await settle();
+  return { p, opts };
+}
+
+test("the roles note's agent-role link carries the app's link class", async () => {
+  const p = page({ tab: true });
+  const { opts } = hostOpts();
+  p.box.reply = (path) => {
+    if (path === "/api/credentials/aws/host-profiles") return { profiles: awsHostProfiles };
+    if (path === "/api/credentials/aws/roles") return { roles: [] };
+    return {};
+  };
+  await awsTick(p, opts, "acme-dev");
+  await vmEval(p, "awsFindRoles(awsFlow.rows[0])");
+  await settle();
+  const link = opts.host.querySelectorAll("a").find((a) => a.textContent === "How to create the agent role");
+  assert.ok(link, "the roles note links the agent-role doc");
+  assert.ok(link.classList.contains("lnk"), link.className);
+});
+
+test("sso_direct ack: an eligible gate draws an unticked checkbox with the coverage text and the agent-role link; Save waits for the tick", async () => {
+  const { p, opts } = await ackPage(ackGate());
+  const cb = ackBoxOf(opts.host);
+  assert.ok(cb, "the acknowledge checkbox is drawn");
+  assert.strictEqual(cb.checked, false);
+  assert.ok(cb.parent.textContent.includes(ACK_TEXT), cb.parent.textContent);
+  const link = opts.host.querySelectorAll("a").find((a) => a.textContent === "How to create the agent role");
+  assert.ok(link, "the agent-role link");
+  assert.strictEqual(link.href, vmEval(p, "AWS_AGENT_ROLE_DOC"));
+  assert.ok(link.classList.contains("lnk"), "styled as the app's links, readable on the dark-red box: " + link.className);
+  assert.ok(/The agent role is the recommended default\./.test(opts.host.textContent));
+  await p.box.awsSaveAll();
+  assert.strictEqual(p.calls.filter((c) => c.method === "POST" && c.path === "/api/credentials/aws").length, 0, "no save without the tick");
+  cb.checked = true; cb.onchange();
+  await p.box.awsSaveAll();
+  const posts = p.calls.filter((c) => c.method === "POST" && c.path === "/api/credentials/aws");
+  assert.strictEqual(posts.length, 1);
+  assert.deepStrictEqual(posts[0].body.ack_full_access, { refused: ["iam:*"], missing_perms: [] });
+});
+
+test("sso_direct ack: a transient or ineligible gate draws no checkbox; a read-only one saves with no ack_full_access", async () => {
+  for (const res of [ackGate({ gate: { state: "unverified", reason: "timeout", refused: [] }, ack_eligible: false }), ackGate({ ack_eligible: false }), ackGate({ ack_eligible: undefined })]) {
+    const { opts } = await ackPage(res);
+    assert.strictEqual(ackBoxOf(opts.host), undefined);
+  }
+  const { p } = await ackPage({ gate: { state: "read_only", refused: [] }, ack_eligible: false, expires: "" });
+  await p.box.awsSaveAll();
+  const post = p.calls.find((c) => c.method === "POST" && c.path === "/api/credentials/aws");
+  assert.ok(post);
+  assert.strictEqual("ack_full_access" in post.body, false);
+});
+
+test("sso_direct ack: a 409 ack_stale shows the new gate, the stale message and an unticked box", async () => {
+  const fresh = ackGate({ gate: { state: "unverified", reason: "missing_permissions", refused: [], missing_perms: ["iam:GetPolicy"] } });
+  const { p, opts } = await ackPage(ackGate(), () => {
+    const e = new Error("conflict"); e.status = 409; e.code = "not_read_only";
+    e.body = { code: "not_read_only", gate: fresh.gate, ack_eligible: true, ack_stale: true };
+    throw e;
+  });
+  const cb = ackBoxOf(opts.host);
+  cb.checked = true; cb.onchange();
+  await p.box.awsSaveAll();
+  await settle();
+  const cb2 = ackBoxOf(opts.host);
+  assert.ok(cb2, "the box is drawn again for the new gate");
+  assert.strictEqual(cb2.checked, false);
+  assert.ok(opts.host.textContent.includes("The permission set changed since you checked it; review and acknowledge again."));
+  assert.ok(opts.host.textContent.includes("iam:GetPolicy"), "the new gate is shown");
+});
+
+test("sso_direct ack on an edit of a full-access connection: the note says it is acknowledged; an ack_stale 409 needs a new tick", async () => {
+  const p = page({ tab: true });
+  const fresh = ackGate();
+  let n = 0;
+  p.box.reply = (path, opt) => {
+    if (path === "/api/credentials/aws/host-profiles") return { profiles: awsHostProfiles };
+    if (path === "/api/credentials/aws/check") return ackGate();
+    if (path.startsWith("/api/credentials/aws/") && opt && opt.method === "PUT") {
+      if (++n === 1) { const e = new Error("conflict"); e.status = 409; e.code = "not_read_only"; e.body = { code: "not_read_only", gate: fresh.gate, ack_eligible: true, ack_stale: true }; throw e; }
+      return {};
+    }
+    return {};
+  };
+  p.box.awsOpenEdit({ name: "sbx", source_profile: "acme-dev", region: "eu-west-1", mode: "sso_direct", full_access: true });
+  await settle();
+  await p.box.awsCheckAll();
+  await settle();
+  const root = p.byId["creds-body"];
+  assert.ok(ackBoxOf(root), "the box is drawn");
+  assert.strictEqual(ackBoxOf(root).checked, false);
+  assert.ok(root.textContent.includes("Already acknowledged; tick again only to acknowledge a change."));
+  await p.box.awsSaveAll();
+  await settle();
+  const puts = () => p.calls.filter((c) => c.method === "PUT");
+  assert.strictEqual(puts().length, 1);
+  assert.strictEqual("ack_full_access" in puts()[0].body, false, "stored ack covers the first save");
+  assert.ok(root.textContent.includes("The permission set changed since you checked it"));
+  assert.ok(!root.textContent.includes("Already acknowledged"), "a stale ack is not 'already acknowledged'");
+  await p.box.awsSaveAll();
+  assert.strictEqual(puts().length, 1, "blocked until the box is ticked again");
+  const cb = ackBoxOf(root);
+  assert.strictEqual(cb.checked, false);
+  cb.checked = true; cb.onchange();
+  await p.box.awsSaveAll();
+  assert.strictEqual(puts().length, 2);
+  assert.deepStrictEqual(puts()[1].body.ack_full_access, { refused: ["iam:*"], missing_perms: [] });
 });

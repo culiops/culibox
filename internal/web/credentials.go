@@ -104,13 +104,26 @@ func (e ErrNeedsAck) Error() string {
 	return "the base role can write to this AWS account; acknowledge to save"
 }
 
-// ErrSSOGate refuses an sso_direct save that the read-only gate did not pass:
-// the permission set is not read-only, or that could not be verified. There is
-// no acknowledgement for it. Gate is the result to show.
-type ErrSSOGate struct{ Gate awsprobe.GateResult }
+// ErrSSOGate refuses an sso_direct save that the read-only gate did not pass
+// and that no acknowledgement covers: the permission set is not read-only, or
+// that could not be verified. Gate is the result to show. Eligible: the
+// result is the kind a full-access acknowledgement can cover. Stale: it is
+// eligible and an acknowledgement was given or stored, but it does not cover
+// what the gate found now.
+type ErrSSOGate struct {
+	Gate            awsprobe.GateResult
+	Eligible, Stale bool
+}
 
 func (e ErrSSOGate) Error() string {
 	if e.Gate.State == awsprobe.GateNotReadOnly {
+		if r := e.Gate.Incomplete; r != "" {
+			s := "the SSO permission set is not read-only and the check stopped early (" + awsprobe.ReasonText(r) + "); nothing was saved"
+			if r != awsprobe.ReasonSimulateDenied {
+				s += ", check again"
+			}
+			return s
+		}
 		return "the SSO permission set is not read-only; nothing was saved"
 	}
 	return "the SSO permission set could not be verified as read-only; nothing was saved"
@@ -828,8 +841,10 @@ func (c *CredentialManager) checkRole(ctx context.Context, conn config.AWSConnec
 // check is made there if a concurrent save made one necessary.
 func (c *CredentialManager) PutAWS(ctx context.Context, conn config.AWSConnection, create, ackWrite bool) (awsprobe.Result, error) {
 	if conn.SSODirect() {
-		// ackWrite has no meaning here: only the gate lets this mode save.
-		_, _, err := c.PutSSODirect(ctx, conn, create)
+		// ackWrite has no meaning here, and this path carries no full-access
+		// acknowledgement: only the gate, or the Credentials screen's
+		// ack_full_access (credAWSSave), lets a refused permission set save.
+		_, _, err := c.PutSSODirect(ctx, conn, create, nil, storeActor)
 		return awsprobe.NotChecked(), err
 	}
 	conn = conn.Clone()
@@ -917,14 +932,29 @@ func (c *CredentialManager) checkSSODirect(ctx context.Context, conn config.AWSC
 	return res, exp, nil
 }
 
+// AckRequest is what the user saw and accepted when saving an sso_direct
+// connection the gate refused for breadth: the refused patterns and missing
+// permissions, as the form listed them. It is only a claim to compare with the
+// gate's own result; the stored acknowledgement is built from that result.
+type AckRequest struct {
+	Refused      []string
+	MissingPerms []string
+}
+
 // PutSSODirect creates or replaces an sso_direct AWS connection. It always runs
 // the read-only gate (create or edit: the permission set behind the profile
-// may have changed since) and saves only on GateReadOnly; a not-read-only or
-// unverified result is ErrSSOGate and nothing is written. There is no
-// override. The result is the gate's, with the credentials' expiration (zero
-// when none were fetched).
-func (c *CredentialManager) PutSSODirect(ctx context.Context, conn config.AWSConnection, create bool) (awsprobe.GateResult, time.Time, error) {
+// may have changed since). A read-only result saves (and clears an
+// acknowledgement the entry had). A result an acknowledgement can cover (see
+// awsprobe.AckEligible) saves when req lists everything the gate found now, or
+// when the entry's stored acknowledgement still covers it and the profile,
+// region and mode are unchanged. Anything else is ErrSSOGate and nothing is
+// written. The stored acknowledgement is always built from the gate's own
+// result (caller and policy digest included), never from the request, and its
+// audit row is written with the entry or not at all. The result is the gate's,
+// with the credentials' expiration (zero when none were fetched).
+func (c *CredentialManager) PutSSODirect(ctx context.Context, conn config.AWSConnection, create bool, req *AckRequest, actor string) (awsprobe.GateResult, time.Time, error) {
 	conn = conn.Clone()
+	conn.FullAccessAck = nil // only this function builds one
 	if !conn.SSODirect() {
 		return awsprobe.GateResult{}, time.Time{}, errors.New("not an sso_direct connection")
 	}
@@ -938,7 +968,11 @@ func (c *CredentialManager) PutSSODirect(ctx context.Context, conn config.AWSCon
 	if err != nil {
 		return gate, exp, err
 	}
-	if gate.State != awsprobe.GateReadOnly {
+	// Every pass-or-refuse below is awsprobe.AdmitSSO's, so a rule added there
+	// reaches save too. checkSSODirect normalised the result: a read_only one
+	// names its role.
+	bare := awsprobe.AdmitSSO(gate, nil)
+	if !bare.OK && !bare.Eligible {
 		return gate, exp, ErrSSOGate{Gate: gate}
 	}
 
@@ -947,6 +981,43 @@ func (c *CredentialManager) PutSSODirect(ctx context.Context, conn config.AWSCon
 	if _, err = c.prepAWS(conn, create); err != nil { // a concurrent save may have changed the rules
 		return gate, exp, err
 	}
+	var old *config.AWSConnection
+	if j := c.fileIndex(credfile.KindAWS, conn.Name); j >= 0 {
+		o := c.file.AWSConnections[j]
+		old = &o
+	}
+	var events []broker.CredEvent
+	ackEvent := func(detail string) broker.CredEvent {
+		return broker.CredEvent{Action: broker.CredFullAccessAck, Kind: credfile.KindAWS, Name: conn.Name, Actor: actor, Detail: detail}
+	}
+	switch {
+	case bare.OK: // read-only
+		if old != nil && old.FullAccessAck != nil {
+			events = append(events, ackEvent("cleared: read_only"))
+		}
+	case req != nil:
+		// What the user saw, as an ack, with everything else from the gate's own
+		// run: the digest is the server's, and the comparison pins it whenever
+		// the ack must (a structural pattern, or a set that cannot simulate).
+		cand := awsprobe.Ack{State: gate.State, Reason: gate.Reason, Incomplete: gate.Incomplete, Caller: gate.Caller,
+			Refused: req.Refused, MissingPerms: req.MissingPerms, PolicyDigest: gate.PolicyDigest}
+		if !awsprobe.AdmitSSO(gate, &cand).OK {
+			return gate, exp, ErrSSOGate{Gate: gate, Eligible: true, Stale: true}
+		}
+		ack := awsprobe.NewAck(gate, actor, time.Now().UTC())
+		conn.FullAccessAck = &ack
+		events = append(events, ackEvent(ack.Summary()))
+	case old != nil && old.FullAccessAck != nil:
+		same := old.SourceProfile == conn.SourceProfile && old.Region == conn.Region && old.Mode == conn.Mode
+		if !same || !awsprobe.AdmitSSO(gate, old.FullAccessAck).OK {
+			return gate, exp, ErrSSOGate{Gate: gate, Eligible: true, Stale: true}
+		}
+		keep := *old.FullAccessAck
+		conn.FullAccessAck = &keep
+	default:
+		return gate, exp, ErrSSOGate{Gate: gate, Eligible: true}
+	}
+	events = append(events, broker.CredEvent{Action: action(create), Kind: credfile.KindAWS, Name: conn.Name})
 	cand := c.cloneFile()
 	if j := c.fileIndex(credfile.KindAWS, conn.Name); j >= 0 {
 		cand.AWSConnections[j] = conn
@@ -957,7 +1028,7 @@ func (c *CredentialManager) PutSSODirect(ctx context.Context, conn config.AWSCon
 	if err != nil {
 		return gate, exp, err
 	}
-	return gate, exp, c.persistLocked(cand, merged, src, []broker.CredEvent{{Action: action(create), Kind: credfile.KindAWS, Name: conn.Name}})
+	return gate, exp, c.persistLocked(cand, merged, src, events)
 }
 
 // Delete removes a web entry. A config.json entry is ErrCredSeed; an entry any

@@ -199,6 +199,22 @@ type credAWSBody struct {
 	// (#141). Status only says the config is valid. Absent for an entry that did
 	// not merge.
 	SignIn *credSignInBody `json:"signin,omitempty"`
+	// FullAccess is true for an sso_direct connection that carries a full-access
+	// acknowledgement (config.AWSConnection.FullAccess). Every surface reads this
+	// flag and derives nothing from the gate state. FullAccessAck is the summary
+	// the card shows, never the refused list or the caller.
+	FullAccess    bool               `json:"full_access,omitempty"`
+	FullAccessAck *credFullAccessAck `json:"full_access_ack,omitempty"`
+}
+
+// credFullAccessAck is the card's view of a stored acknowledgement.
+type credFullAccessAck struct {
+	State        string    `json:"state"`
+	Reason       string    `json:"reason,omitempty"`
+	RefusedCount int       `json:"refused_count"`
+	MissingPerms []string  `json:"missing_perms,omitempty"`
+	At           time.Time `json:"at"`
+	Actor        string    `json:"actor"`
 }
 
 // credSignInBody is a source profile's sign-in state and, when a token was
@@ -429,6 +445,12 @@ func (s *Server) credView() credViewBody {
 			b.Status = credInvalid
 		} else {
 			b.SignIn = signInFor(signInCtx, e.conn.SourceProfile, e.conn.SSODirect(), signInNow, signIns)
+		}
+		if e.conn.FullAccess() {
+			a := e.conn.FullAccessAck
+			b.FullAccess = true
+			b.FullAccessAck = &credFullAccessAck{State: string(a.State), Reason: string(a.Reason), RefusedCount: len(a.Refused),
+				MissingPerms: slices.Clone(a.MissingPerms), At: a.At, Actor: a.Actor}
 		}
 		if el := e.conn.Elevate; el != nil {
 			b.Elevate = &credElevateBody{RoleARN: el.RoleARN, MaxMinutes: el.Max(), AllowIAM: el.AllowIAM, BoxBucketPrefix: el.BoxBucketPrefix, PassRolePrefix: el.PassRolePrefix}

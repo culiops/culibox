@@ -430,15 +430,26 @@ function spawnWhere() {
   return v ? { runtime: v } : {};
 }
 
+// tierHostFullAccess: the names of the profile's AWS connections the server marks full_access (/api/meta aws_connections). Only the
+// boolean true counts; a name /api/meta does not list is left out.
+function tierHostFullAccess(profile, entries) {
+  const names = profile && Array.isArray(profile.aws_connections) ? profile.aws_connections : [];
+  const list = Array.isArray(entries) ? entries : [];
+  return names.filter((n) => list.some((c) => c && c.name === n && c.full_access === true));
+}
+
 // hostDropsConfirm: the question before a Host spawn of a profile that has bindings (guardrail, ProfileView.host_guardrail) or box
 // settings Host drops (drops). Resolves true only on "Start on Host"; Cancel has the focus. The drops are text nodes in a list,
 // never markup. The sentence about the bindings is a note in the body (the footer hint is hidden when too wide).
 // keeps (ProfileView.host_keeps) are the profile's own secrets and env Host still passes: a note names them.
-async function hostDropsConfirm(profileName, drops, keeps, guardrail) {
+async function hostDropsConfirm(profileName, drops, keeps, guardrail, fullAccess) {
   const guard = Array.isArray(guardrail) ? guardrail : [];
   const dropped = Array.isArray(drops) ? drops : [];
   const notes = guard.length ? [[tierGuardrailLine(guard)]] : [];
   if (Array.isArray(keeps) && keeps.length) notes.push(["Still passed to the agent on Host: " + tierJoin(keeps) + "."]);
+  // fullAccess: the names of the profile's AWS connections the server marks full_access: each is named with the label, in the
+  // danger tone the Credentials card and the Access tab use.
+  for (const n of Array.isArray(fullAccess) ? fullAccess : []) notes.push([n + ": ", { red: AWS_FULL_ACCESS_TEXT }, "."]);
   const o = { confirmLabel: "Start on Host", danger: true, focusCancel: true, notes };
   if (!dropped.length) {
     o.title = "Start on Host?";
@@ -462,6 +473,6 @@ function spawnCwdFor(w) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     TP_KEYS, TP_NO_CARD, tierConvert, tierGitRepo, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel, tierVmFetch,
-    tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine,
+    tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine, tierHostFullAccess,
   };
 }

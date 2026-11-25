@@ -103,6 +103,9 @@ type Row struct {
 	// when unknown (a row written before the column existed, or a token that
 	// named no session).
 	Tier string `json:"tier,omitempty"`
+	// FullAccess is set on a minted row whose credential left under a full-access
+	// acknowledgement (#374): the bounded verdict the gate gave. Empty otherwise.
+	FullAccess string `json:"full_access,omitempty"`
 }
 
 // Row.Tier values.
@@ -224,6 +227,7 @@ func OpenAudit(path string) (*Audit, error) {
 		{"entry", "TEXT NOT NULL DEFAULT ''"},
 		{"mode", "TEXT NOT NULL DEFAULT ''"},
 		{"tier", "TEXT NOT NULL DEFAULT ''"},
+		{"full_access", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := addColumnIfMissing(db, "credential_audit", c[0], c[1]); err != nil {
 			db.Close()
@@ -274,10 +278,10 @@ func (a *Audit) Record(r Row) error {
 	}
 	_, err := a.db.Exec(`INSERT INTO credential_audit
 		(ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
-		 provider, subject, installation, repos, entry, mode, tier)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 provider, subject, installation, repos, entry, mode, tier, full_access)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.Time.Unix(), r.SessionID, r.Profile, r.AccountID, r.RoleARN, r.SourceIdentity, r.ScopeHash, exp, string(r.Outcome), r.Error, b2i(r.Elevated),
-		provider, r.Subject, r.Installation, r.Repos, r.Entry, r.Mode, r.Tier)
+		provider, r.Subject, r.Installation, r.Repos, r.Entry, r.Mode, r.Tier, sanitizeN(r.FullAccess, maxGateErrLen+64))
 	return err
 }
 
@@ -315,14 +319,17 @@ func (a *Audit) RecordStore(e secretstore.Event) error {
 // Actions of a CredEvent: a credential definition created, updated or deleted,
 // a write acknowledgement, and the AWS setup calls.
 const (
-	CredCreated     = "created"
-	CredUpdated     = "updated"
-	CredDeleted     = "deleted"
-	CredWriteAck    = "write_ack"
-	CredRolesListed = "aws_roles_listed"
-	CredChecked     = "aws_checked"
-	CredSSOStarted  = "aws_sso_started"
-	CredSSOResult   = "aws_sso_result"
+	CredCreated  = "created"
+	CredUpdated  = "updated"
+	CredDeleted  = "deleted"
+	CredWriteAck = "write_ack"
+	// CredFullAccessAck records the full-access acknowledgement of an
+	// sso_direct connection, or its removal (Detail "cleared: ...").
+	CredFullAccessAck = "full_access_ack"
+	CredRolesListed   = "aws_roles_listed"
+	CredChecked       = "aws_checked"
+	CredSSOStarted    = "aws_sso_started"
+	CredSSOResult     = "aws_sso_result"
 )
 
 // maxCredDetail bounds a credential event's detail in bytes.
@@ -477,7 +484,7 @@ func b2i(b bool) int {
 // auditCols is the credential_audit column list every row query selects, in
 // the order queryRows reads it.
 const auditCols = `ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
-	provider, subject, installation, repos, entry, mode, tier`
+	provider, subject, installation, repos, entry, mode, tier, full_access`
 
 // ForSession returns up to limit rows for a session, newest first.
 func (a *Audit) ForSession(sessionID string, limit int) ([]Row, error) {
@@ -536,7 +543,7 @@ func (a *Audit) queryRows(query string, args ...any) ([]Row, error) {
 		var o string
 		var elevated int
 		if err := rows.Scan(&ts, &r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &r.SourceIdentity, &r.ScopeHash, &exp, &o, &r.Error, &elevated,
-			&r.Provider, &r.Subject, &r.Installation, &r.Repos, &r.Entry, &r.Mode, &r.Tier); err != nil {
+			&r.Provider, &r.Subject, &r.Installation, &r.Repos, &r.Entry, &r.Mode, &r.Tier, &r.FullAccess); err != nil {
 			return nil, err
 		}
 		r.Time, r.Outcome, r.Elevated = time.Unix(ts, 0), Outcome(o), elevated != 0

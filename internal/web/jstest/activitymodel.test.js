@@ -597,3 +597,9 @@ test("activitymodel.js has no DOM or network access", () => {
   const src = fs.readFileSync(path.join(__dirname, "../static/activitymodel.js"), "utf8").replace(/\/\/.*$/gm, "");
   assert.doesNotMatch(src, /document\.|window\.|fetch\(|innerHTML/);
 });
+
+test("actRow: a credential row carries its full_access verdict; others none (#374)", () => {
+  const v = "not read-only: s3:Put*: not a read verb";
+  const m = model({ session: sess(), resp: resp({ events: [ev({ ts: at("14:32:51"), kind: "credential", tool: undefined, detail: "aws ops", state: "minted", full_access: v }), ev({ ts: at("14:31:02"), kind: "credential", tool: undefined, detail: "aws dev", state: "minted" })] }) });
+  assert.deepStrictEqual(m.rows.map((r) => r.fullAccess), [v, ""]);
+});

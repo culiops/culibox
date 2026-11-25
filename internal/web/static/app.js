@@ -7057,8 +7057,10 @@ $("spawn").addEventListener("submit", async (ev) => {
   const w = spawnWhere();
   const hostDrops = w.runtime === "host" ? tierHostDrops(currentProfile()) : [];
   const hostGuardrail = w.runtime === "host" ? tierHostGuardrail(currentProfile()) : [];
+  // The profile's AWS connections the server marks full_access (/api/meta), named in the confirm.
+  const hostFull = hostGuardrail.length ? tierHostFullAccess(currentProfile(), awscEntries) : [];
   if ((hostDrops.length || hostGuardrail.length) &&
-    !(await hostDropsConfirm($("agent").value, hostDrops, tierHostKeeps(currentProfile()), hostGuardrail))) return;
+    !(await hostDropsConfirm($("agent").value, hostDrops, tierHostKeeps(currentProfile()), hostGuardrail, hostFull))) return;
   // A git folder on the clone card of a profile with no copy yet: the private-copy dialog first (it makes the profile's copy), then the
   // session starts in it. Before the busy state, like the Host question above: backing out leaves the dialog as it was.
   let copied = null;

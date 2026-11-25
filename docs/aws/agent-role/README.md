@@ -104,6 +104,7 @@ Some accounts do not let you create `agentbox-agent` (a company account, say). F
 connection can opt in to `"mode": "sso_direct"`: the agent gets the SSO permission set's **own**
 credentials, with no role to create. It is opt-in per connection, for permission sets that pass a
 read-only gate (a check of the permission set's own identity policies; see Known limits below),
+or that you acknowledge as full access (see [Acknowledged full access](#acknowledged-full-access)),
 and it gives up the protections of the agent role:
 
 - **No narrowing.** There is no session policy and no S3-read scoping. The agent can do
@@ -116,7 +117,7 @@ and it gives up the protections of the agent role:
 
 The UI says this next to the mode choice (`Agent role (recommended)` / `SSO role directly`):
 
-> SSO role directly: the agent gets your permission set's own credentials, valid for up to N h. CloudTrail shows you, not the agent, and they cannot be revoked when the session ends. Read-only permission sets only.
+> SSO role directly: the agent gets your permission set's own credentials, valid for up to N h. CloudTrail shows you, not the agent, and they cannot be revoked when the session ends. A permission set that is not read-only needs an acknowledgement and then has full access.
 
 On the Credentials screen this is **Credentials the agent gets → SSO role directly**. In
 `config.json`:
@@ -144,10 +145,12 @@ permission set can read, and output redaction has not shipped.
 ### The read-only gate
 
 A permission set is used only when the **gate** passes it (see Known limits for what that
-does and does not cover). Only a definite "read-only"
-lets credentials out, a save happen or a spawn proceed. Anything the gate cannot verify (SSO
+does and does not cover). Only a definite "read-only", or a result you acknowledged as full
+access, lets credentials out, a save happen or a spawn proceed. Anything the gate cannot verify (SSO
 expired, a timeout, a throttled call, a missing permission, a policy it cannot parse) refuses.
-There is no "I understand" override. The gate runs when you save the connection, when a session
+The only way past a refusal is the audited acknowledgement under
+[Acknowledged full access](#acknowledged-full-access), and only for the kinds of result listed
+there. The gate runs when you save the connection, when a session
 spawns, in `culibox doctor`, and again on **every** credential mint, a refresh included
 (about 5 minutes before the credentials expire). A permission set that gains a write
 mid-session is refused at the next mint. Credentials already issued keep working until they
@@ -254,6 +257,61 @@ message, because it depends on the policy version and on the catalog snapshot.
 `apigateway:GET` is on the list because it also returns API key values, so a permission set
 passes only if it denies all API Gateway reads. That is the price of an unconditional rule.
 
+### Acknowledged full access
+
+A permission set the gate refuses can still be used, by acknowledging it. This is a deliberate
+exception for accounts where you cannot create the agent role and the permission set you have is
+not read-only. **The agent role stays the recommended default**; use this only when you cannot.
+
+- **Where.** Only on the Credentials screen, when you save the connection: the screen lists what
+  the gate found and asks you to tick "I understand: the agent gets everything this permission
+  set allows, now or later, for the whole session, with no read-only default and no write window.
+  CuliBox lists what it found above." The save records who acknowledged and when.
+- **What can be acknowledged.** A permission set that is broader than read-only (`not_read_only`),
+  one whose policies the gate could not fully read (`missing_permissions`), one that uses a
+  condition key the gate cannot evaluate (`missing_context`), and one that cannot run
+  `iam:SimulatePrincipalPolicy` on itself (`simulate_denied`), also when the gate had already
+  found refused patterns before the simulation was denied.
+- **What never can.** Identity refusals (the caller, the account, the role, the source profile),
+  an expired sign-in (`sso_expired`), `timeout`, `error`, `assume_denied`, `probe_disabled`,
+  `not_checked`, the inline `aws` binding, and anything set in `config.json`: an acknowledgement
+  in the file is ignored, so a connection defined there must be re-created on the Credentials
+  screen to be acknowledged. A check cut short by a timeout, an error or an expired sign-in is
+  never acknowledgeable, even when it had already found refused patterns: check again. The gate
+  still runs, and still refuses these, on every mint.
+- **What the acknowledgement covers.** It is pinned to the permission-set caller and to the
+  refused items (or missing permissions) you saw. A later result that is no wider than that still
+  passes. Anything new, whether another refused item, another missing permission or a different
+  caller, is refused until you acknowledge again on the Credentials screen, even when another
+  pattern you already acknowledged would seem to cover it. An acknowledgement of a refusal for
+  `NotAction` or a statement with no `Action`, or of `simulate_denied`, is also pinned to the
+  policy contents, so **any** change to the permission set's policies, a narrowing included,
+  needs a new acknowledgement. Other acknowledgements survive a narrowing.
+- **`missing_permissions` sees nothing.** The gate could not read the policy, so an
+  acknowledgement made from it cannot say what the permission set allows. It covers whatever
+  the permission set allows, now or later, as long as the policy stays unreadable to the gate.
+  If it becomes readable and the gate finds refused patterns, the acknowledgement no longer
+  covers them and you need a new one.
+- **The label.** Everywhere the connection appears (New session, the profile picker, the Host
+  confirm, the session row, the Access tab, the Credentials card) it reads "Full access: no
+  read-only default, no write window", and `culibox doctor` reports it as a WARN, or as a FAIL
+  when the acknowledgement no longer covers the permission set, or when the result is one that
+  could be acknowledged and has no acknowledgement.
+- **A running session keeps its spawn-time acknowledgement.** The broker mints with the
+  acknowledgement the session was spawned with. After you acknowledge again, respawn the session.
+  A new acknowledgement, or clearing one, changes the connection's identity, so later sessions
+  get a new box. Running sessions keep theirs.
+  When the acknowledgement stops covering the permission set, spawns and mints are refused, and
+  a box gets a static message telling it to ask on the host.
+- **Withdrawing.** Delete the connection, or save it once the permission set is read-only (the
+  acknowledgement is then cleared). Either takes effect at the **next spawn**: a running session
+  keeps minting under the acknowledgement it started with, and credentials already issued keep
+  working until they expire. End running sessions to stop them.
+- **Audit.** Each acknowledgement, and each clearing of one by a read-only save, is a `full_access_ack`
+  row in the credential audit, with the actor; deleting the connection is the usual `deleted` row. Every mint made under one is marked `full_access` in the mint audit.
+- **Same on Box and Host.** There is no write window and no read-only default in either tier,
+  and a connection in this mode still cannot be elevated.
+
 ### Known limits
 
 The gate is a strong check on the permission set's identity policies. It is **not** proof that
@@ -282,6 +340,13 @@ the agent can do no harm:
   by the screen (they expand to nothing) instead of being reported as unknown.
 - Credentials already issued stay valid until their own expiry (shown in the UI as up to N h),
   after the agent session ends or the permission set changes.
+- **An acknowledged connection has full access.** Every session of every profile that binds it
+  gets everything the permission set allows, now or later, on Box and on Host, with no read-only
+  default and no write window. An acknowledgement made from `missing_permissions` could not see
+  the policy at all, and holds only while the policy stays unreadable to the gate.
+- **Withdrawing an acknowledgement does not stop running sessions.** The broker mints with the
+  acknowledgement the session was spawned with. Removing it, or deleting the connection, takes
+  effect at the next spawn: end the running sessions to stop them.
 
 ## Known limits between sessions
 

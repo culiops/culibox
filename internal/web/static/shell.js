@@ -850,8 +850,9 @@ function askIsBusy(dialogIsOpen) {
   return dialogIsOpen === true;
 }
 
-// askNoteNodes: opts.notes as paragraphs. A note is a list of parts, a part a string or
-// { mono: "…" } (a path or a command, set in the mono face). Built with createElement and
+// askNoteNodes: opts.notes as paragraphs. A note is a list of parts, a part a string,
+// { mono: "…" } (a path or a command, set in the mono face) or { red: "…" } (words in the
+// danger tone, .c-red: a full-access connection's label). Built with createElement and
 // text nodes, never innerHTML: a path in a note is text.
 function askNoteNodes(notes) {
   return (Array.isArray(notes) ? notes : []).map((parts) => {
@@ -860,8 +861,9 @@ function askNoteNodes(notes) {
     for (const part of Array.isArray(parts) ? parts : [parts]) {
       if (part && typeof part === "object") {
         const m = document.createElement("span");
-        m.className = "mono";
-        m.textContent = part.mono;
+        const red = typeof part.red === "string";
+        m.className = red ? "c-red" : "mono";
+        m.textContent = red ? part.red : part.mono;
         p.appendChild(m);
       } else p.appendChild(document.createTextNode(String(part)));
     }

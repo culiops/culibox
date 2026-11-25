@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { profileTouchLine, profileKind, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnCwdReselect, spawnGroupHolds, spawnBoxOwnedHit, spawnBoxOwnedLine, spawnWsNoteFor, spawnAcctHint, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
+const { AWS_FULL_ACCESS_TEXT } = require("../static/sessionrow.js");
 const { spawnWsIdleNote } = require("../static/dirpicker.js");
 
 const sre = {
@@ -1300,4 +1301,50 @@ test("desktop.css: the reach label without a glyph is indented 20px, the glyph h
   const all = stripC(read("desktop.css")), app = stripC(read("app.css"));
   assert.ok(all.indexOf(".sr-k:not(.has-ic)") > all.indexOf("@media (min-width: 701px) {"), "inside the desktop block");
   assert.doesNotMatch(app, /\.sr-(k|grid)/, "the phone's stylesheet has no reach rule");
+});
+
+// #374: an acknowledged sso_direct connection says "Full access" from the server's full_access boolean, nothing else.
+test("full access: a full_access connection says the label in the scope, the card row and the facts (#374)", () => {
+  assert.strictEqual(AWS_FULL_ACCESS_TEXT, "Full access: no read-only default, no write window");
+  const p = { runtime: "box", bin: "claude", claude: true, aws_connections: ["sbx"], network: "allowlist" };
+  const meta = { aws_connections: [{ name: "sbx", mode: "sso_direct", full_access: true }] };
+  const m = reachModel({ profile: p, tier: "box", cwd: "/w", meta, creds: null });
+  assert.strictEqual(m.cloud[0].scope, AWS_FULL_ACCESS_TEXT + ".");
+  assert.strictEqual(m.cloud[0].facts.fullAccess, true);
+  const rows = reachRows({ profile: p, tier: "box", cwd: "/w", meta, creds: null });
+  assert.strictEqual(byK(rows, "AWS")[0].v, "sbx · " + AWS_FULL_ACCESS_TEXT);
+  assert.strictEqual(byK(rows, "AWS")[0].danger, AWS_FULL_ACCESS_TEXT, "the label is drawn in the danger tone");
+  // the credentials view alone is enough when meta lacks the entry
+  const r2 = reachRows({ profile: p, tier: "box", cwd: "/w", meta: {}, creds: { aws: [{ name: "sbx", mode: "sso_direct", full_access: true }] } });
+  assert.strictEqual(byK(r2, "AWS")[0].v, "sbx · " + AWS_FULL_ACCESS_TEXT);
+});
+
+test("full access: sso_direct without full_access keeps the read-only words, and a gate state never makes the label (#374)", () => {
+  const p = { runtime: "box", bin: "claude", claude: true, aws_connections: ["sbx"], network: "allowlist" };
+  for (const c of [{ name: "sbx", mode: "sso_direct" }, { name: "sbx", mode: "sso_direct", state: "not_read_only", full_access_ack: { state: "acknowledged" } }, { name: "sbx", mode: "sso_direct", full_access: "true" }]) {
+    const m = reachModel({ profile: p, tier: "box", cwd: "/w", meta: { aws_connections: [c] }, creds: { aws: [c] } });
+    assert.strictEqual(m.cloud[0].scope, "Read only. Uses the SSO role directly.");
+    assert.ok(!m.cloud[0].facts.fullAccess);
+    const rows = reachRows({ profile: p, tier: "box", cwd: "/w", meta: { aws_connections: [c] }, creds: null });
+    assert.ok(!byK(rows, "AWS")[0].v.includes("Full access"));
+    assert.strictEqual(byK(rows, "AWS")[0].danger, undefined);
+  }
+});
+
+test("paintReachRows: a row's danger part is its own red span, also after a PROD tag (#374)", () => {
+  const ctx = reachPanel();
+  const box = new RNode("div");
+  ctx.paintReachRows(box, [
+    { k: "AWS", v: "sbx · " + AWS_FULL_ACCESS_TEXT, name: "sbx", danger: AWS_FULL_ACCESS_TEXT },
+    { k: "AWS", v: "live · " + AWS_FULL_ACCESS_TEXT, name: "live", prod: true, danger: AWS_FULL_ACCESS_TEXT },
+    { k: "AWS", v: "ro · read only", name: "ro" },
+  ], {});
+  const vals = box.find("sr-v");
+  const red = (v) => v.find("c-red").map((n) => n.textContent);
+  assert.deepStrictEqual(red(vals[0]), [AWS_FULL_ACCESS_TEXT]);
+  assert.strictEqual(vals[0].textContent, "sbx · " + AWS_FULL_ACCESS_TEXT);
+  assert.deepStrictEqual(red(vals[1]), [AWS_FULL_ACCESS_TEXT]);
+  assert.deepStrictEqual(vals[1].find("sr-prod").map((n) => n.textContent), ["PROD"]);
+  assert.strictEqual(vals[1].textContent, "livePROD · " + AWS_FULL_ACCESS_TEXT);
+  assert.deepStrictEqual(red(vals[2]), []);
 });

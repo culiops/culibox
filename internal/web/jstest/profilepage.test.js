@@ -200,7 +200,7 @@ function page(over) {
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "fsops.js", "handbackmodel.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "copydialog.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
+  for (const f of ["icons.js", "iconmap.js", "svgicon.js", "kitmenu.js", "fsops.js", "handbackmodel.js", "workhome.js", "workmode.js", "sessionrow.js", "spawnpreview.js", "spawnform.js", "profileform.js", "copydialog.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
@@ -2560,6 +2560,38 @@ test("the + Add picker is a dialog under its link: a filter, then AWS connection
   assert.deepStrictEqual(texts(popOf(t), "pfv-pick-note"), ["Tokens are long-lived, and the agent can read them while it runs."]);
   assert.strictEqual(t.run("pfvState").picker, "cloud");
   assert.strictEqual(t.box.puts.length, 0);
+});
+
+test("picker sub-line says full access from full_access only, never from a gate state (#374)", async () => {
+  const t = pickPage({ awscEntries: [
+    { name: "full-lab", mode: "sso_direct", full_access: true, account_id: "123456789012", region: "eu-west-1" },
+    { name: "gated-lab", mode: "sso_direct", state: "not_read_only", account_id: "123456789012", region: "eu-west-1" },
+  ] });
+  await openPicker(t);
+  const sub = (name) => texts(optsOf(t).find((b) => optName(b).startsWith(name)), "pfv-opt-s");
+  assert.deepStrictEqual(sub("full-lab"), ["account 123456789012, eu-west-1. Full access: no read-only default, no write window."]);
+  assert.deepStrictEqual(sub("gated-lab"), ["account 123456789012, eu-west-1. Read only. Uses the SSO role directly."]);
+  const red = (name) => texts(optsOf(t).find((b) => optName(b).startsWith(name)), "c-red");
+  assert.deepStrictEqual(red("full-lab"), ["Full access: no read-only default, no write window"], "the label is in the danger tone");
+  assert.deepStrictEqual(red("gated-lab"), []);
+});
+
+test("a bound full-access connection's row says the label in the danger tone, read and edit (#374)", async () => {
+  const t = cloudPage({ awscEntries: [
+    { name: "prod-read", mode: "sso_direct", full_access: true, account_id: "222222222222", region: "eu-west-1" },
+    { name: "staging-read", mode: "sso_direct", state: "not_read_only", account_id: "111111111111", region: "eu-west-1" },
+  ] });
+  await t.box.pfvShow("aws-ops");
+  const check = (when) => {
+    assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "prod-read"), "c-red"), ["Full access: no read-only default, no write window"], when);
+    assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "staging-read"), "c-red"), [], when + ": a gate state never makes it");
+  };
+  check("read");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  check("edit");
+  // A row pending removal mutes its red label, as it mutes the PROD tag.
+  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(css, /#pfv \.pfv-removed \.c-red \{ color: var\(--muted\); \}/);
 });
 
 test("picker sub-line shows account and region, what the connection can do, a token's description and hosts", async () => {

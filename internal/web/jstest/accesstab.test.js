@@ -1141,3 +1141,17 @@ test("the panel is built on kit parts: a divided inset box, kit buttons, the kit
   assert.match(block, /\.ac-pbtns\s*\{[^}]*justify-content:\s*flex-end/);
   assert.doesNotMatch(block, /\.ac-[\w-]+ \.btn[^{]*\{[^}]*padding/, "no page rule resizes a kit button");
 });
+
+test("full access (#374): the connection row says \"full access\" in red and a verdict-carrying mint row is tagged with the verdict in its title", async () => {
+  const v = "not read-only: s3:Put*: not a read verb";
+  const fa = claudeBox({ aws_connections: [conn({ mode: "sso_direct", full_access: true, base_access: "writes", role_arn: "", hours: 4 })] });
+  const { host } = await mount(fa, status({ recent: [{ time: ago(2), provider: "aws", entry: "culipulse-prod", outcome: "minted", full_access: v }, { time: ago(3), provider: "aws", entry: "culipulse-prod", outcome: "minted" }] }));
+  const scope = host.querySelector(".ac-conn").children[1];
+  assert.strictEqual(scope.children[1].textContent, "full access");
+  assert.ok(has(scope.children[1].children[0], "c-red", "w-500"));
+  const rows = evRows(host);
+  const tag = rows[0].querySelectorAll("span").find((n) => n.textContent === " \u00b7 full access");
+  assert.ok(tag, "the tagged row carries a full access tag");
+  assert.strictEqual(evCells(rows[0])[2].title, v, "the subject cell title holds the verdict");
+  assert.ok(!rows[1].querySelectorAll("span").some((n) => n.textContent === " \u00b7 full access"), "an untagged mint has none");
+});

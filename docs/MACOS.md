@@ -335,6 +335,8 @@ an address inside the box subnet other than the gateway, so a box's token is
 refused when another box presents it. Any other connection is closed without a
 response, and CuliBox's log counts such refusals at most once a minute.
 
+On a Mac this binding is weaker than on Linux for a process running as you, so it matters more for an acknowledged full-access `sso_direct` connection ([SECURITY.md](SECURITY.md#known-limits)): a box token that leaks to such a process gets the permission set's full access.
+
 The secret is 32 random bytes in `relay2.secret` in the data directory, readable
 only by you. CuliBox creates it on first start, keeps it across restarts, and
 hands it to the relay container through its environment, never on a command

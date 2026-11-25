@@ -179,7 +179,7 @@ function actOutcome(o, icon) {
 // of yours (sans) and "conversation cleared" (muted). The row is not a control and its title keeps the full text.
 function actRowEl(r) {
   const tr = actEl("tr", r.cls === "ask" ? "act-ask" : "");
-  tr.title = r.detail;
+  tr.title = r.fullAccess ? r.detail + " \u00b7 " + r.fullAccess : r.detail;
   const you = r.cls === "you" && r.kind === "You";
   const cleared = r.cls === "you" && !you;
   tr.appendChild(actEl("td", "sub tnum", r.time));
@@ -189,6 +189,7 @@ function actRowEl(r) {
   tr.appendChild(actGlyph(kind, r.kindIcon));
   const det = actEl("td", "act-det");
   det.appendChild(actEl("span", you ? "w-500" : cleared ? "muted" : "mono t-sm", r.detail));
+  if (r.fullAccess) det.appendChild(actEl("span", "c-red t-sm w-500", " \u00b7 full access"));
   tr.appendChild(det);
   tr.appendChild(actOutcome(r.outcome, r.outcomeIcon));
   return tr;

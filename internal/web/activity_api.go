@@ -197,7 +197,7 @@ func credentialEvents(src ActivityAuditService, sid string, since, beforeTS int6
 			continue
 		}
 		// Provider is one of the broker's constants (aws | github | static), never free text, so it needs no masking.
-		evs = append(evs, session.TimelineEvent{TS: r.Time.UnixMilli(), Kind: "credential", Detail: credentialDetail(r), State: state, Provider: broker.NormalizeProvider(r.Provider)})
+		evs = append(evs, session.TimelineEvent{TS: r.Time.UnixMilli(), Kind: "credential", Detail: credentialDetail(r), State: state, Provider: broker.NormalizeProvider(r.Provider), FullAccess: activityText(r.FullAccess, 300)})
 	}
 	return evs, more, nil
 }

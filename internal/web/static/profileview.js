@@ -341,9 +341,11 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit, refused, daemon, pr
 //           boxes are unavailable). In a block with tone "error", the line at
 //           toneAt is the red one. Runs in's last line is always "New session pre-selects: ...".
 //   rows    {kind, kindId, name, sub, scope, tag, missing} (reachModel's Item) plus, only
-//           where it applies, fix (a Not home row), action (Old-style AWS) or
+//           where it applies, fix (a Not home row), action (Old-style AWS),
 //           original (a file shared from a private copy's original: a Files row
-//           that is not the CLAUDE.md imports one).
+//           that is not the CLAUDE.md imports one) or danger (the part of scope
+//           drawn red: a full-access connection's label, from the server's
+//           full_access only).
 //           A row with missing:true carries scope "Not found in Credentials",
 //           which the page draws red.
 //   edit    the block has an Edit link; add is "" or the "+ Add ..." link text.
@@ -382,6 +384,7 @@ function pfvReadView(o) {
   const item = (it) => {
     const r = pfvRow(it.kind, it.name, { sub: it.sub, scope: it.scope, tag: it.tag, missing: it.missing === true, kindId: it.kindId });
     if (it.original === true) r.original = true;
+    if (typeof it.danger === "string" && it.danger !== "") r.danger = it.danger;
     if (r.missing) r.scope = PFV_MISSING;
     if (it.kind === "Old-style AWS" && edit) r.action = "Move to a saved connection";
     if (it.kind === "Domain" && pfvTierOf(view, doc) !== "box") { r.off = true; r.needsBox = true; }

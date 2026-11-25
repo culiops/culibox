@@ -8,7 +8,7 @@ const {
   templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
   tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
   credTableRows, credTableHead, awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
-  awsGateView, awsGateBoxEmpty, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
+  awsGateView, awsGateBoxEmpty, awsModeText, awsAckBody, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
   GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
   credTablesAt, AWS_REGIONS, awsRegionSuggest, awsProfileSuggest, credGroupIcon,
 } = require("../static/credentials.js");
@@ -691,7 +691,7 @@ test("awsRolesNote: denied, failed and SSO-expired listings keep their own notes
 // --- sso_direct: the mode text, the gate verdict, the connection body ----------
 
 const MODE_TEXT = (n) => "SSO role directly: the agent gets your permission set's own credentials, valid for up to " + n +
-  " h. CloudTrail shows you, not the agent, and they cannot be revoked when the session ends. Read-only permission sets only.";
+  " h. CloudTrail shows you, not the agent, and they cannot be revoked when the session ends. A permission set that is not read-only needs an acknowledgement and then has full access.";
 
 test("awsModeText fills N, rounded up, and falls back to the 12 h SSO maximum", () => {
   assert.strictEqual(awsModeText(1), MODE_TEXT(1));
@@ -757,6 +757,34 @@ test("awsGateView: not_read_only lists every refusing pattern with its reason", 
   assert.match(v.text, /cannot be saved/);
 });
 
+test("awsGateView: a not_read_only run cut short says to check again, and offers no acknowledgement", () => {
+  const refused = [{ pattern: "*", why: "allows every action" }];
+  for (const incomplete of ["timeout", "error"]) {
+    const v = awsGateView({ state: "not_read_only", incomplete, refused, ack_eligible: false });
+    assert.strictEqual(v.tone, "bad", incomplete);
+    assert.strictEqual(v.ackEligible, false, incomplete);
+    assert.match(v.text, /stopped early/, incomplete);
+    assert.match(v.text, /Check again/, incomplete);
+    assert.doesNotMatch(v.text, /agent role/, incomplete);
+    assert.deepStrictEqual(v.refused, ["* — allows every action"], incomplete);
+  }
+  const exp = awsGateView({ state: "not_read_only", incomplete: "sso_expired", refused, ack_eligible: false });
+  assert.strictEqual(exp.signIn, true);
+  assert.match(exp.text, /Sign in again/);
+});
+
+test("awsGateView: a not_read_only set that cannot simulate says so and follows ack_eligible", () => {
+  const g = { state: "not_read_only", incomplete: "simulate_denied", refused: [{ pattern: "s3:Put*", why: "w" }] };
+  const yes = awsGateView({ ...g, ack_eligible: true });
+  assert.strictEqual(yes.ackEligible, true);
+  assert.match(yes.text, /cannot simulate its own policy/);
+  assert.match(yes.text, /acknowledgement of full access/);
+  assert.doesNotMatch(yes.text, /Check again/);
+  const no = awsGateView({ ...g, ack_eligible: false });
+  assert.strictEqual(no.ackEligible, false);
+  assert.doesNotMatch(no.text, /acknowledgement/);
+});
+
 test("awsGateView: unverified sso_expired offers the sign-in", () => {
   const v = awsGateView({ state: "unverified", reason: "sso_expired" });
   assert.strictEqual(v.tone, "warn");
@@ -781,7 +809,7 @@ test("awsGateView: missing_context labels the actions as needing context, not as
 });
 
 test("awsGateView: other unverified reasons are warnings, never ok; unknown input is unverified", () => {
-  for (const reason of ["timeout", "error", "simulate_denied", "probe_disabled", "weird"]) {
+  for (const reason of ["timeout", "error", "simulate_denied", "probe_disabled", "weird"]) { // simulate_denied is only ackable when the server says ack_eligible
     const v = awsGateView({ state: "unverified", reason });
     assert.strictEqual(v.tone, "warn", reason);
     assert.strictEqual(v.signIn, false, reason);
@@ -1081,4 +1109,91 @@ test("section glyph: AWS and GitHub Apps by group key, Stored values and Legacy 
   assert.strictEqual(credGroupIcon({ key: "aws" }), "cloud", "no entries field");
   const gs = credGroups(view({ tokens: [tok("a", "sentry", { template: "sentry" }), tok("b", "acme")] }));
   assert.deepStrictEqual(gs.map((g) => credGroupIcon(g)), ["cloud", "si:github", "key-round", "si:sentry", ""]);
+});
+
+// --- #374: acknowledging a non-read-only SSO permission set ---------------------------------------------------
+
+const { AWS_FULL_ACCESS_TEXT } = require("../static/sessionrow.js");
+const ELIG = { state: "not_read_only", ack_eligible: true, refused: [{ pattern: "iam:*", why: "writes" }], missing_perms: [] };
+
+test("rowSaveState sso_direct: read_only saves; an eligible gate needs the tick; anything else does not save", () => {
+  const sd = (o) => rowSaveState({ mode: "sso_direct", ...o });
+  assert.deepStrictEqual(sd({ gate: { state: "read_only" } }), { canSave: true, needsAck: false });
+  assert.deepStrictEqual(sd({ gate: ELIG }), { canSave: false, needsAck: true });
+  assert.deepStrictEqual(sd({ gate: ELIG, fullAck: false }), { canSave: false, needsAck: true });
+  assert.deepStrictEqual(sd({ gate: ELIG, fullAck: true }), { canSave: true, needsAck: false });
+  assert.deepStrictEqual(sd({ gate: ELIG, orig: { full_access: true } }), { canSave: true, needsAck: false });
+  assert.deepStrictEqual(sd({ gate: { state: "unverified", reason: "timeout", ack_eligible: false }, fullAck: true }), { canSave: false, needsAck: false });
+  assert.deepStrictEqual(sd({ gate: { state: "not_read_only" }, fullAck: true }), { canSave: false, needsAck: false }, "ack_eligible missing");
+  assert.deepStrictEqual(sd({ gate: { state: "not_read_only", ack_eligible: "yes" }, fullAck: true }), { canSave: false, needsAck: false });
+});
+
+test("awsRowStateFor passes the tick and the stored full_access to the save rule", () => {
+  const row = { mode: "sso_direct", source_profile: "p", role_arn: "", orig: { source_profile: "p", role_arn: "", mode: "sso_direct", full_access: true }, gate: ELIG };
+  assert.strictEqual(awsRowStateFor(row).canSave, true);
+  const fresh = { mode: "sso_direct", source_profile: "p", role_arn: "", gate: ELIG, fullAck: false };
+  assert.deepStrictEqual(awsRowStateFor(fresh), { canSave: false, needsAck: true });
+  fresh.fullAck = true;
+  assert.strictEqual(awsRowStateFor(fresh).canSave, true);
+});
+
+test("awsGateView: an eligible result says what was found and that saving needs the acknowledgement; transient does not", () => {
+  const v = awsGateView(ELIG);
+  assert.strictEqual(v.ackEligible, true);
+  assert.deepStrictEqual(v.refused, ["iam:* \u2014 writes"]);
+  assert.match(v.text, /acknowledg/i);
+  assert.doesNotMatch(v.text, /cannot be saved/);
+  for (const reason of ["missing_permissions", "simulate_denied"]) {
+    const e = awsGateView({ state: "unverified", reason, ack_eligible: true, missing_perms: ["iam:GetPolicy"] });
+    assert.strictEqual(e.ackEligible, true, reason);
+    assert.match(e.text, /acknowledg/i, reason);
+    assert.doesNotMatch(e.text, /Nothing is saved until/, reason);
+  }
+  for (const reason of ["timeout", "error", "sso_expired", "probe_disabled", "missing_permissions", "simulate_denied"]) {
+    const t = awsGateView({ state: "unverified", reason, ack_eligible: false });
+    assert.strictEqual(t.ackEligible, false, reason);
+    assert.doesNotMatch(t.text, /acknowledg/i, reason);
+  }
+  assert.strictEqual(awsGateView({ state: "unverified", reason: "simulate_denied" }).ackEligible, false, "no field, no box");
+  assert.strictEqual(awsGateView({ state: "read_only", ack_eligible: true }).ackEligible, false);
+  assert.strictEqual(awsGateView({ state: "not_read_only" }).ackEligible, false);
+  assert.match(awsGateView({ state: "not_read_only" }).text, /cannot be saved/);
+});
+
+test("awsAckBody: ack_full_access only with the tick, carrying the pattern strings and missing perms", () => {
+  const g = { ...ELIG, refused: [{ pattern: "iam:*", why: "w" }, { Pattern: "s3:Put*", Why: "w" }], missing_perms: ["iam:GetPolicy"] };
+  assert.deepStrictEqual(awsAckBody({ mode: "sso_direct", fullAck: true, gate: g }), { refused: ["iam:*", "s3:Put*"], missing_perms: ["iam:GetPolicy"] });
+  assert.strictEqual(awsAckBody({ mode: "sso_direct", fullAck: false, gate: g }), null);
+  assert.strictEqual(awsAckBody({ mode: "sso_direct", fullAck: true, gate: { state: "not_read_only" } }), null);
+  assert.strictEqual(awsAckBody({ mode: "", fullAck: true, gate: g }), null);
+  assert.deepStrictEqual(awsAckBody({ mode: "sso_direct", fullAck: true, gate: { ...ELIG, refused: undefined, missing_perms: undefined } }), { refused: [], missing_perms: [] });
+});
+
+test("awsModeText: a non-read-only permission set needs an acknowledgement and then has full access", () => {
+  const t = awsModeText(3);
+  assert.doesNotMatch(t, /Read-only permission sets only/);
+  assert.ok(t.endsWith("A permission set that is not read-only needs an acknowledgement and then has full access."), t);
+});
+
+test("the card: full_access (and only it) swaps the gate note for the label, with the ack line and the danger tone", () => {
+  const base = awsE("sbx", { mode: "sso_direct", role_arn: "", account_id: "123456789012", base: { state: "not_checked" } });
+  const [plain] = credTableRows({ key: "aws", entries: [base] });
+  assert.strictEqual(plain.cells[3].text, "Read-only gate runs on every use");
+  assert.strictEqual(plain.danger, false);
+  const full = { ...base, full_access: true, full_access_ack: { state: "acknowledged", at: "2026-11-25T10:00:00Z", actor: "founder" } };
+  const [r] = credTableRows({ key: "aws", entries: [full] });
+  assert.strictEqual(r.cells[3].text, AWS_FULL_ACCESS_TEXT);
+  assert.match(r.cells[3].sub, /^acknowledged 2026-11-25 by founder$/);
+  assert.strictEqual(r.danger, true);
+  // the label follows full_access, not an ack record alone
+  const [only] = credTableRows({ key: "aws", entries: [{ ...base, full_access_ack: { state: "acknowledged", at: "2026-11-25T10:00:00Z", actor: "a" } }] });
+  assert.strictEqual(only.cells[3].text, "Read-only gate runs on every use");
+});
+
+test("rowSaveState: a stale acknowledgement stops orig.full_access counting until a new tick", () => {
+  const g = { state: "not_read_only", ack_eligible: true };
+  const orig = { full_access: true };
+  assert.deepStrictEqual(rowSaveState({ mode: "sso_direct", gate: g, orig }), { canSave: true, needsAck: false });
+  assert.deepStrictEqual(rowSaveState({ mode: "sso_direct", gate: g, orig, ackStale: true }), { canSave: false, needsAck: true });
+  assert.deepStrictEqual(rowSaveState({ mode: "sso_direct", gate: g, orig, ackStale: true, fullAck: true }), { canSave: true, needsAck: false });
 });

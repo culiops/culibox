@@ -4453,6 +4453,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-miss { text-decoration: line-through; }
   #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-act-link { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-tag { color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-removed .c-red { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-inote { font-size: var(--t-sm); line-height: 20px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields { grid-column: 2 / 4; }
   #page-host > #settings-modal.as-page #pfv .pfv-rowedit { grid-column: 2 / -1; margin-top: 12px; padding: 14px 0 4px; border-top: 1px solid var(--line); }

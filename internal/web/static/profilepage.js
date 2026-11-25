@@ -352,7 +352,11 @@ function pfvDrawScope(r, known, o) {
     }
     return p;
   }
-  p.append(...pfvMonoNodes(r.scope, known));
+  // r.danger: the full-access label of a connection the server marks full_access (reachModel, never a gate state), drawn red.
+  const cut = typeof r.danger === "string" && r.danger !== "" ? String(r.scope).indexOf(r.danger) : -1;
+  if (cut >= 0) {
+    p.append(...pfvMonoNodes(r.scope.slice(0, cut), known), pfvMk("span", "c-red", r.danger), ...pfvMonoNodes(r.scope.slice(cut + r.danger.length), known));
+  } else p.append(...pfvMonoNodes(r.scope, known));
   if (r.action) {
     const act = pfvDrawLink(r.action, "pfv-act-link");
     act.onclick = () => pfvConvertAws();

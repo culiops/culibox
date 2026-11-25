@@ -520,3 +520,23 @@ func TestCredentialEventsProvider(t *testing.T) {
 		t.Fatalf("approval row must carry no provider: %v", got[1])
 	}
 }
+
+// A mint made under a full-access acknowledgement carries the gate's verdict to the
+// Activity view as full_access; a mint without one carries none (#374).
+func TestActivityCredentialCarriesFullAccess(t *testing.T) {
+	svc := newActivitySvc()
+	acked := credRow(activityCreated.Add(40*time.Second), "aws", "ops", broker.OutcomeMinted)
+	acked.FullAccess = "not read-only: s3:Put*: not a read verb"
+	plain := credRow(activityCreated.Add(10*time.Second), "aws", "dev", broker.OutcomeMinted)
+	a := auditAPI(t, svc, []broker.Row{acked, plain}, nil)
+	evs := activityEvents(t, decodeActivity(t, activityGet(a, "/api/sessions/s1/activity", credCookie)))
+	if len(evs) != 2 {
+		t.Fatalf("events = %v", evs)
+	}
+	if evs[0]["full_access"] != acked.FullAccess {
+		t.Fatalf("acked mint full_access = %v, want %q", evs[0]["full_access"], acked.FullAccess)
+	}
+	if _, ok := evs[1]["full_access"]; ok {
+		t.Fatalf("plain mint carries full_access: %v", evs[1])
+	}
+}
