@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -359,8 +360,16 @@ func Merge(cfg config.Config, f File) (merged config.Config, src Sources, errs [
 	merged = cfg
 	src = Sources{}
 	errs = slices.Clone(f.Undecodable)
-	for _, c := range cfg.AWSConnections {
+	// An acknowledgement is made on the Credentials screen only: a seed that
+	// carries one is stripped (on a copy), because Validate runs after Merge
+	// and could not tell a seed from a web entry.
+	merged.AWSConnections = slices.Clone(cfg.AWSConnections)
+	for i, c := range merged.AWSConnections {
 		src[KindAWS+"/"+c.Name] = SourceConfig
+		if c.FullAccessAck != nil {
+			log.Printf("credentials: aws connection %q: full_access_ack is set from the Credentials screen only; ignored in config.json", c.Name)
+			merged.AWSConnections[i].FullAccessAck = nil
+		}
 	}
 	for _, a := range cfg.GitHubApps {
 		src[KindGitHubApp+"/"+a.Name] = SourceConfig
@@ -368,7 +377,7 @@ func Merge(cfg config.Config, f File) (merged config.Config, src Sources, errs [
 	for _, t := range cfg.StaticTokens {
 		src[KindToken+"/"+t.Name] = SourceConfig
 	}
-	merged.AWSConnections = mergeKind(KindAWS, cfg.AWSConnections, f.AWSConnections,
+	merged.AWSConnections = mergeKind(KindAWS, merged.AWSConnections, f.AWSConnections,
 		func(c config.AWSConnection) string { return c.Name },
 		config.ValidateAWSConnections, src, &errs)
 	merged.GitHubApps = mergeKind(KindGitHubApp, cfg.GitHubApps, f.GitHubApps,

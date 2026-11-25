@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/culiops/culibox/internal/awsprobe"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/datacompat"
 )
@@ -447,5 +449,34 @@ func TestRewriteKeepsFutureVersion(t *testing.T) {
 	FormatVersion = 1 // an older build now reads the version-3 file
 	if f, bad, err = Load(dir); !bad || !errors.Is(err, datacompat.ErrNewer) || len(f.StaticTokens) != 0 {
 		t.Errorf("older build: Load = %+v bad %v err %v", f, bad, err)
+	}
+}
+
+func ssoAckConn(name string) config.AWSConnection {
+	return config.AWSConnection{Name: name, AWSBinding: config.AWSBinding{
+		SourceProfile: "p", Region: "us-east-1", Mode: config.AWSModeSSODirect},
+		FullAccessAck: &awsprobe.Ack{State: awsprobe.GateNotReadOnly,
+			Caller:  "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Example_0000000000000000",
+			Refused: []string{"iam:*"}, At: time.Unix(1700000000, 0).UTC(), Actor: "web"}}
+}
+
+func TestMergeStripsSeedAck(t *testing.T) {
+	cfg := config.Config{AWSConnections: []config.AWSConnection{ssoAckConn("seed")}}
+	m, _, errs := Merge(cfg, File{AWSConnections: []config.AWSConnection{ssoAckConn("web")}})
+	if len(errs) != 0 {
+		t.Fatalf("errs = %v", errs)
+	}
+	got := map[string]*awsprobe.Ack{}
+	for _, c := range m.AWSConnections {
+		got[c.Name] = c.FullAccessAck
+	}
+	if got["seed"] != nil {
+		t.Error("a config.json seed kept its acknowledgement")
+	}
+	if got["web"] == nil {
+		t.Error("a web entry lost its acknowledgement")
+	}
+	if cfg.AWSConnections[0].FullAccessAck == nil {
+		t.Error("Merge changed the caller's config")
 	}
 }

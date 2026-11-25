@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/culiops/culibox/internal/awsprobe"
 )
 
 func goodConn(name string) AWSConnection {
@@ -324,5 +327,82 @@ func TestAWSConnectionsRegion(t *testing.T) {
 	}
 	if got := AWSConnectionsRegion([]AWSConnection{a}); got != "ap-southeast-1" {
 		t.Errorf("single: got %q", got)
+	}
+}
+
+func ssoConnWithAck() AWSConnection {
+	c := AWSConnection{Name: "wide", Description: "d", AWSBinding: ssoBinding()}
+	c.FullAccessAck = &awsprobe.Ack{
+		State:   awsprobe.GateNotReadOnly,
+		Caller:  "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Example_0000000000000000",
+		Refused: []string{"iam:*", "s3:putobject"},
+		At:      time.Unix(1700000000, 0).UTC(),
+		Actor:   "web",
+	}
+	return c
+}
+
+func TestAWSConnectionAckOnlyForSSODirect(t *testing.T) {
+	c := ssoConnWithAck()
+	if err := c.Validate(); err != nil {
+		t.Fatalf("sso_direct with a valid ack: %v", err)
+	}
+	if !c.FullAccess() {
+		t.Error("FullAccess() = false with an ack")
+	}
+	plain := AWSConnection{Name: "wide", AWSBinding: ssoBinding()}
+	if plain.FullAccess() {
+		t.Error("FullAccess() = true without an ack")
+	}
+	am := goodConn("acme")
+	am.FullAccessAck = c.FullAccessAck
+	if err := am.Validate(); err == nil || !strings.Contains(err.Error(), "full_access_ack") {
+		t.Errorf("assume_role with an ack: %v", err)
+	}
+	if am.FullAccess() {
+		t.Error("FullAccess() = true on assume_role")
+	}
+	bad := ssoConnWithAck()
+	bad.FullAccessAck.Caller = ""
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "full_access_ack:") {
+		t.Errorf("invalid ack: %v", err)
+	}
+}
+
+func TestAWSConnectionCloneCopiesAck(t *testing.T) {
+	c := ssoConnWithAck()
+	cl := c.Clone()
+	cl.FullAccessAck.Refused[0] = "changed"
+	cl.FullAccessAck.MissingPerms = append(cl.FullAccessAck.MissingPerms, "x")
+	cl.FullAccessAck.Actor = "other"
+	if c.FullAccessAck.Refused[0] != "iam:*" || len(c.FullAccessAck.MissingPerms) != 0 || c.FullAccessAck.Actor != "web" {
+		t.Errorf("clone shares the ack: %+v", c.FullAccessAck)
+	}
+	if got, ok := AWSConnByName([]AWSConnection{c}, "wide"); !ok || got.FullAccessAck == c.FullAccessAck {
+		t.Error("AWSConnByName must return a deep copy of the ack")
+	}
+}
+
+// The literal was computed on main before FullAccessAck existed.
+func TestDefHashUnchangedWithoutAck(t *testing.T) {
+	c := AWSConnection{Name: "wide", Description: "d", AWSBinding: ssoBinding()}
+	if got := c.DefHash(); got != "06f54ebbd8c0" {
+		t.Errorf("DefHash = %s, want 06f54ebbd8c0", got)
+	}
+}
+
+func TestDefHashChangesWithAck(t *testing.T) {
+	plain := AWSConnection{Name: "wide", Description: "d", AWSBinding: ssoBinding()}
+	acked := ssoConnWithAck()
+	if plain.DefHash() == acked.DefHash() {
+		t.Error("an acknowledgement must change the DefHash")
+	}
+	re := ssoConnWithAck()
+	re.FullAccessAck.At = re.FullAccessAck.At.Add(time.Hour)
+	if re.DefHash() == acked.DefHash() {
+		t.Error("a re-acknowledgement must change the DefHash")
+	}
+	if AWSConnsHash([]AWSConnection{plain}) == AWSConnsHash([]AWSConnection{acked}) {
+		t.Error("AWSConnsHash ignores the ack")
 	}
 }

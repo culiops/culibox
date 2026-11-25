@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/culiops/culibox/internal/awsprobe"
 )
 
 // AWSConnection is a host-owned, named AWS binding. The host says which source
@@ -18,7 +20,18 @@ type AWSConnection struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	AWSBinding         // embedded, JSON flattened
+	// FullAccessAck is the user's acknowledgement that this sso_direct
+	// connection has full access (the read-only gate refused it for breadth).
+	// Only the Credentials screen sets it: credfile.Merge strips it from
+	// config.json seeds and the web save ignores a client-sent one. It is part
+	// of DefHash, so a re-acknowledgement gives later sessions a new box key.
+	// nil marshals to nothing, so existing hashes do not change.
+	FullAccessAck *awsprobe.Ack `json:"full_access_ack,omitempty"`
 }
+
+// FullAccess reports whether this is an sso_direct connection that carries a
+// full-access acknowledgement. It is the one source of the "full access" label.
+func (c AWSConnection) FullAccess() bool { return c.SSODirect() && c.FullAccessAck != nil }
 
 // maxBoundAWSConnections caps how many connections one profile may bind.
 const maxBoundAWSConnections = 16
@@ -40,6 +53,14 @@ func (c AWSConnection) Validate() error {
 	if len(c.Description) > maxTokenDesc || hasControl(c.Description) {
 		return fmt.Errorf("description: at most %d characters, no control characters", maxTokenDesc)
 	}
+	if c.FullAccessAck != nil {
+		if !c.SSODirect() {
+			return errors.New("full_access_ack: only an sso_direct connection can carry one")
+		}
+		if err := c.FullAccessAck.Validate(); err != nil {
+			return fmt.Errorf("full_access_ack: %w", err)
+		}
+	}
 	return c.AWSBinding.Validate()
 }
 
@@ -47,11 +68,18 @@ func (c AWSConnection) Validate() error {
 func (c AWSConnection) Clone() AWSConnection {
 	out := c
 	out.AWSBinding = *c.AWSBinding.Clone()
+	if c.FullAccessAck != nil {
+		a := *c.FullAccessAck
+		a.Refused = slices.Clone(a.Refused)
+		a.MissingPerms = slices.Clone(a.MissingPerms)
+		out.FullAccessAck = &a
+	}
 	return out
 }
 
-// DefHash is 12 hex over everything about a connection: its name, description
-// and its binding in the same normalised form AWSBinding.Hash digests.
+// DefHash is 12 hex over everything about a connection: its name, description,
+// its binding in the same normalised form AWSBinding.Hash digests, and its
+// full-access acknowledgement when it has one.
 func (c AWSConnection) DefHash() string {
 	n := c
 	n.AWSBinding = c.AWSBinding.normalized()
