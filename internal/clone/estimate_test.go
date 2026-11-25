@@ -175,6 +175,82 @@ func TestLsTreeSumAcrossChunks(t *testing.T) {
 	}
 }
 
+// A size git could not read (a missing object prints "BAD", exit 0) makes the
+// sum a lower bound; a submodule's "-" does not.
+func TestLsTreeSumBadSizeIsPartial(t *testing.T) {
+	var s lsTreeSum
+	s.Write([]byte("100644 blob aaaa      12\ta\n160000 commit bbbb       -\tsub\n"))
+	s.flush()
+	if s.total != 12 || s.bad {
+		t.Errorf("total = %d, bad = %v; want 12, false", s.total, s.bad)
+	}
+	s.Write([]byte("100644 blob cccc     BAD\tgone\n"))
+	s.flush()
+	if s.total != 12 || !s.bad {
+		t.Errorf("total = %d, bad = %v; want 12, true", s.total, s.bad)
+	}
+}
+
+// Host git is not run when the caller says so (g nil), nor in a repo whose
+// config may declare a promisor remote: the tree size is then unknown and the
+// estimate is partial (#371 S1).
+func TestEstimateCopyRunsNoGitWhenToldOrForAPromisor(t *testing.T) {
+	of := makeOf(t, false)
+	e, err := EstimateCopy(context.Background(), nil, of, t.TempDir())
+	if err != nil || !e.Partial || e.TreeBytes != 0 || e.GitBytes <= 0 {
+		t.Fatalf("no git: %+v, %v; want partial, tree 0, git > 0", e, err)
+	}
+	g := newRec(t)
+	fixtureGit(t, of, "config", "remote.origin.promisor", "true")
+	e, err = EstimateCopy(context.Background(), g, of, t.TempDir())
+	if err != nil || !e.Partial || e.TreeBytes != 0 {
+		t.Fatalf("promisor: %+v, %v; want partial, tree 0", e, err)
+	}
+	if len(g.calls) != 0 {
+		t.Errorf("git ran in a promisor repo: %v", g.calls)
+	}
+}
+
+func TestDeclaresPromisor(t *testing.T) {
+	cfg := func(t *testing.T, body string) string {
+		of := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(of, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(of, ".git", "config"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return of
+	}
+	for _, c := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"plain", "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = /x\n", false},
+		{"partialClone", "[extensions]\n\tpartialClone = origin\n", true},
+		{"promisor any case", "[remote \"o\"]\n\tProMisor\n", true},
+	} {
+		if got := declaresPromisor(cfg(t, c.body)); got != c.want {
+			t.Errorf("%s: declaresPromisor = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// A config that is not a plain file is a yes: git would read what it points at.
+	of := t.TempDir()
+	os.MkdirAll(filepath.Join(of, ".git"), 0o755)
+	target := filepath.Join(t.TempDir(), "cfg")
+	os.WriteFile(target, []byte("[core]\n"), 0o644)
+	if err := os.Symlink(target, filepath.Join(of, ".git", "config")); err != nil {
+		t.Fatal(err)
+	}
+	if !declaresPromisor(of) {
+		t.Error("a symlinked config must count as a promisor")
+	}
+	// No repo at all is a no: git then reports it.
+	if declaresPromisor(filepath.Join(t.TempDir(), "missing")) {
+		t.Error("a missing repo must not count as a promisor")
+	}
+}
+
 func TestFreeBytesUsesNearestExistingAncestor(t *testing.T) {
 	base := t.TempDir()
 	a, err := freeBytes(base)

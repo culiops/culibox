@@ -1920,6 +1920,36 @@ func TestEstimateCopyRefusesBoxOwnedBeforeAnyGit(t *testing.T) {
 	}
 }
 
+// Host git runs in of only when no box ever ran there: a folder with an
+// unknown in-place history passes checkOf (the save asks about it), and the
+// dialog's estimate comes before that answer, so it gets the .git walk alone,
+// partial. Prepare's first-copy check (env.Estimate) is the same (#371 S1).
+func TestCopyEstimateRunsGitOnlyWhereNoBoxRan(t *testing.T) {
+	home := t.TempDir()
+	legacy := filepath.Join(home, "legacy")
+	if err := os.MkdirAll(filepath.Join(legacy, ".git", "objects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, _ := inPlaceRegistry(t)
+	if err := reg.Add(legacy); err != nil { // unknown: recorded before the flag
+		t.Fatal(err)
+	}
+	h := testHooks(t, noClones)
+	h.boxed = reg
+	h.env = clone.Env{Git: gitMustNotRun{t}, Home: home}
+	e, err := h.EstimateCopy(context.Background(), legacy, filepath.Join(home, "box-clones", "x"))
+	if err != nil || !e.Partial || e.TreeBytes != 0 || e.GitBytes <= 0 {
+		t.Fatalf("EstimateCopy of an unknown folder = %+v, %v; want partial, tree 0, git > 0, and no git run", e, err)
+	}
+	h.env.Estimate = h.copyEstimate
+	if e, err := h.env.Estimate(context.Background(), legacy, filepath.Join(home, "box-clones", "y")); err != nil || !e.Partial {
+		t.Fatalf("Prepare's estimate of an unknown folder = %+v, %v; want partial and no git run", e, err)
+	}
+}
+
 func TestEstimateCopyOfAHostRepo(t *testing.T) {
 	g, err := clone.NewExecGit()
 	if err != nil {

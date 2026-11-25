@@ -298,9 +298,10 @@ func (h *cloneHooks) HostOrigin(ctx context.Context, of string) (string, error) 
 }
 
 // EstimateCopy sizes a private copy of the repo of and checks the free space
-// where dir would go (GET /api/clone/estimate). It runs the host's git in of, so
-// of gets the same checks Prepare gives it first: not box-owned (checkOf), then
-// a real, plain repo (clone.CheckOf). Nothing is read before they pass.
+// where dir would go (POST /api/clone/estimate). of gets the same checks
+// Prepare gives it first: not box-owned (checkOf), then a real, plain repo
+// (clone.CheckOf). Nothing is read before they pass. The estimate itself is
+// copyEstimate's: host git runs in of only when no box ever ran there.
 func (h *cloneHooks) EstimateCopy(ctx context.Context, of, dir string) (clone.Estimate, error) {
 	if h.unavailable != "" || h.env.Git == nil {
 		return clone.Estimate{}, fmt.Errorf("%w: clone mode is unavailable (%s)", box.ErrBoxUnavailable, h.unavailable)
@@ -314,7 +315,24 @@ func (h *cloneHooks) EstimateCopy(ctx context.Context, of, dir string) (clone.Es
 	if err := clone.CheckOf(of, h.env.Home, h.env.Protected); err != nil {
 		return clone.Estimate{}, err
 	}
-	return clone.EstimateCopy(ctx, h.env.Git, of, dir)
+	return h.copyEstimate(ctx, of, dir)
+}
+
+// copyEstimate is the copy estimate of both the dialog (EstimateCopy) and the
+// first-copy disk check of Prepare (clone.Env.Estimate). checkOf lets a folder
+// with an unknown in-place history through (the save asks the user about it),
+// and the dialog asks for its estimate before that answer: so host git runs in
+// of only when the boxed-workspace record knows no box ran there
+// (StatusNone). Otherwise the estimate is the .git walk alone, partial, with
+// no tree size (#371 S1).
+func (h *cloneHooks) copyEstimate(ctx context.Context, of, dir string) (clone.Estimate, error) {
+	g := h.env.Git
+	if h.boxed != nil {
+		if st, _ := h.boxed.InPlaceStatus(of); st != boxedws.StatusNone {
+			g = nil
+		}
+	}
+	return clone.EstimateCopy(ctx, g, of, dir)
 }
 
 // returnModeOf is how a trigger returns a clone's branches: "now" forces, the
@@ -818,8 +836,6 @@ func newCloneHooks(layer *boxLayer, home, memRoot, dataDir, instance string, pro
 		return h, err
 	}
 	h.env.Git = g
-	h.env.Estimate = func(ctx context.Context, of, dir string) (clone.Estimate, error) {
-		return clone.EstimateCopy(ctx, g, of, dir)
-	}
+	h.env.Estimate = h.copyEstimate
 	return h, nil
 }

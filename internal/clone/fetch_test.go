@@ -731,7 +731,7 @@ func TestExecDockerCancelLeavesNoGoroutine(t *testing.T) {
 
 // hardenedPrefix is what every host git call in clone_of must start with.
 var hardenedPrefix = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-	"-c", "maintenance.auto=false", "-c", "gc.auto=0"}
+	"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "protocol.allow=never"}
 
 // traceGit adds a trace2 event target to every call, so a test can see the
 // children git itself starts (CleanEnv drops any trace variable the test sets).
