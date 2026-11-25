@@ -90,6 +90,8 @@ Read the warning before you turn it on. The box's commits then land in your bran
 
 **When it runs.** After an automatic return, and only then: not for "Bring work home now" and not for `culibox clone fetch`, which stay as they are. It also runs on a return that moved nothing, so a merge refused earlier (a dirty tree) goes through once the cause is gone. It does not run in a pass that could not check the clone.
 
+**Only this profile's own work.** `box/X` in `clone_of` is shared: every profile that copies the repo, and `culibox clone fetch`, write to the same `box/X`. CuliBox merges `box/X` only while it is the exact commit this profile's copy has on `X`, as listed in the same return. A `box/X` that another profile or a manual fetch wrote is not merged, and CuliBox says nothing about it; it stays for you to review.
+
 **The same-name rule.** `box/X` merges into `X` only while `X` is the branch checked out in `clone_of`'s main work tree. `X` can be any name (`main`, `master`, `develop`, a feature branch). Linked worktrees of `clone_of` are not looked at. If `box/X` is not strictly ahead of `X`, there is nothing to merge and CuliBox says nothing.
 
 **The checks.** CuliBox merges only a fast-forward (`git merge --ff-only`), of the exact commit it checked, and only when every check passes. When one fails, `box/X` stays for you to review, and the toast and the profile say why:
@@ -98,20 +100,22 @@ Read the warning before you turn it on. The box's commits then land in your bran
 |---|---|---|
 | `detached` | the repo has no branch checked out | `HEAD` is not on a branch. |
 | `diverged` | X has commits the box does not have | `X` and `box/X` each have commits the other lacks. |
-| `dirty` | X has uncommitted changes | A tracked file has staged or unstaged changes. Untracked files do not count here, but git will not overwrite one (see `failed`). |
+| `dirty` | X has uncommitted changes | A tracked file has staged or unstaged changes, before the checks or again right before the merge. Untracked files do not count here, but git will not overwrite one, nor an ignored one (see `failed`). |
 | `guarded` | it changes files host tools load by themselves | The commits touch a protected file or a submodule (below). Up to 3 example paths are shown. |
 | `flagged` | it has files flagged for review | The commits carry a file CuliBox flags when a box hands work back (see [Known limits](SECURITY.md#known-limits)), or the check hit a cap or could not finish. Up to 3 paths are shown. |
 | `filter` | it changes files that use a git filter (such as Git LFS) | A changed path has a `filter` attribute. CuliBox runs git without your global config, where such filters usually live, so a checkout would write the wrong content. |
 | `moved` | X moved while it was checked | You switched branch or committed while the checks ran. It is tried again on the next return. |
-| `failed` | git refused, followed by git's message | A git call failed, git refused the merge (an untracked file in the way, a merge or rebase in progress), or the audit entry could not be written. |
+| `failed` | git refused, followed by git's message | A git call failed, git refused the merge (an untracked or ignored file of yours in the way, such as a local `.env` the box's commits also add), or the audit entry could not be written. |
 
 The toast for a merge reads "merged box/X into X (n commits, m files)"; for a refusal, "box/X not merged into X: <reason>", once per commit and reason, not on every turn. Toasts can be missed, so the profile shows the switch ("Merges into the checked-out branch") and the last merge or refusal, and the audit log keeps every merge.
 
 **What is never merged.** The guard looks at every commit in the range and at the net difference between your branch and `box/X`, so a file that is added and removed again, or restored by a merge commit the box made, is still seen. Names are matched without regard to case, so `.Claude/` counts as `.claude/`. A change to any of these refuses the merge:
 
-- a file named `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.mcp.json`, `.envrc`, `.gitattributes`, `.gitmodules`, `mise.toml` or `.mise.toml`, at any depth;
+- a file named `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.mcp.json`, `.envrc`, `.gitattributes`, `.gitmodules`, `mise.toml`, `.mise.toml`, `mise.local.toml` or `.mise.local.toml`, at any depth;
+- a git hook manager's config, at any depth: `.pre-commit-config.yaml`, `.pre-commit-hooks.yaml`, `.overcommit.yml`, and lefthook's `lefthook.yml`, `lefthook-local.yml` and their `.yaml` and dot-prefixed (`.lefthook.yml`) forms;
 - anything under a directory named `.claude`, at any depth;
-- anything under a top-level `.husky`, `.githooks`, `.vscode`, `.devcontainer` or `.mise`;
+- anything under a top-level `.husky`, `.githooks`, `.vscode`, `.devcontainer`, `.mise`, `mise` or `.config`;
+- a file that a `CLAUDE.md` imports with an `@path` line, and any folder above it, because the agent reads it as part of the `CLAUDE.md`. CuliBox reads every `CLAUDE.md` and `CLAUDE.local.md` git tracks in the repo, an untracked `CLAUDE.local.md` at its top, and your `~/.claude/CLAUDE.md`, and follows their imports as the agent does (`~/` is your home, a relative path is relative to the importing file, up to 5 imports deep);
 - the folder that `core.hooksPath` names, when it is inside the repo, and any folder above it. CuliBox reads `core.hooksPath` from the repo's config, from your global git config (`~/.gitconfig`, then `$XDG_CONFIG_HOME/git/config` or `~/.config/git/config`, following includes) and from `/etc/gitconfig`, and protects every value it finds;
 - a submodule (a git link);
 - a file that uses a git filter, such as Git LFS (`filter`, above);
@@ -119,9 +123,11 @@ The toast for a merge reads "merged box/X into X (n commits, m files)"; for a re
 
 Known limit of the hooks check: a system config in another place (Homebrew's `$(brew --prefix)/etc/gitconfig`, the git that comes with Xcode) and `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM` set in your shell are not read. If your hooks folder is inside the repo, set `core.hooksPath` in the repo's own config, or keep the folder outside the repo.
 
-**What CuliBox does when it merges.** Every git call runs with hooks off, no replace objects (`GIT_NO_REPLACE_OBJECTS=1`) and none of your global git config, and the merge is of the commit that was checked, not of the branch name. It writes an audit row, `clone_merge_home` (the branch, the old and new short ids and the commit count), before it merges, and `clone_merge_home_failed` if git then fails; if the audit row cannot be written, nothing merges. The branch's reflog says `culibox auto-merge`, so `git reflog` shows which moves were CuliBox's. A merge git refused is tried again for the same commits at most every 30 minutes; every other refusal is checked again on each automatic return.
+**What CuliBox does when it merges.** Every git call runs with hooks off, no replace objects (`GIT_NO_REPLACE_OBJECTS=1`) and none of your global git config, and the merge is of the commit that was checked, not of the branch name. It writes an audit row, `clone_merge_home` (the branch, the old and new short ids and the commit count), before it merges, and `clone_merge_home_failed` if git then fails; if the audit row cannot be written, nothing merges. The branch's reflog says `culibox auto-merge`, so `git reflog` shows which moves were CuliBox's. Once CuliBox records `failed` for some commits, whatever the cause (git refused the merge, a git call failed, the audit entry could not be written), the merge of those same commits is tried again at most every 30 minutes, so a lasting refusal does not write an audit entry on every return; the checks before it still run on each return. Commits found to carry flagged files are not scanned again either: they stay `flagged` until `X` or `box/X` moves. Every other refusal is checked again on each automatic return.
 
-**Branches other than `main` and `master`.** The refresh of the clone (see [below](#bringing-code-home)) updates only the clone's `main` or `master`. For another branch, the merge works while you have not committed on `X` since the box's copy of it. Once you do, `box/X` no longer contains your commits and the reason is `diverged`, until the box brings your commits in and goes on from there.
+**Branches other than `main` and `master`.** The refresh of the clone (see [below](#bringing-code-home)) updates only the clone's `main` or `master`. For another branch, the merge works while you have not committed on `X` since the box's copy of it. Once you do, `box/X` no longer contains your commits: while the box has nothing new on `X` there is nothing to merge and CuliBox says nothing; once the box also has new work on `X`, the reason is `diverged`, until the box brings your commits in and goes on from there.
+
+**Git version.** The merge needs git 2.31 or later on the host (the range check uses `git log --diff-merges`). With an older git every merge ends `failed`, and `box/X` stays for you to review as without the switch.
 
 **A race CuliBox does not close.** If you switch branch in the same instant between its last check and the merge, git still refuses anything that is not a fast-forward and anything that would overwrite a file, but the merge can land on the branch you switched to if `box/X` happens to fast-forward it too.
 
