@@ -398,6 +398,7 @@ function paintRow(s, over) {
     ...iconStubs(() => new El("svg")),
     rowChip: () => null, acctBadge: () => null, awsBadge: () => null, fmtSessionCost: () => "", tierBadge: () => null,
     rowSubline: D.rowSubline, rowMenuOpenFor: () => false, openSessionMenu: () => {}, openTerminal: () => {}, openPaneView: () => false, wmCopyLine: () => "", sessionWorkHome: () => "", handbackLine: () => null,
+    sessionNotHomeLine: () => "", notHomePrefix: require("../static/workhome.js").notHomePrefix,
   };
   vm.runInNewContext(fn(app, "paintCompactRow") + "\npaintCompactRow(li, sname, grow, s, {});", Object.assign(ctx, { li, sname, grow, s }, over && over.ctx));
   return { li, sname, grow, sub: grow.children[0] };
@@ -433,6 +434,41 @@ test("another tool's ask reads Asks to run Tool(args), the call mono; a plain su
   assert.equal(plain.className, "sub");
   assert.equal(plain.textContent, "fixing tests");
   assert.equal(plain.children.length, 0);
+});
+
+// A clone session's not-home line leads the sub-line (no chip: the row keeps one), with the whole text as the
+// sub-line's title and a line of the row tooltip.
+const NH = "1 branch not home · 4 files not committed";
+const nhCtx = { sessionNotHomeLine: () => NH, wmCopyLine: () => "Private copy of ~/x" };
+
+test("a clone row's not-home line prefixes its sub-line, the whole text is the title, and the tooltip has it", () => {
+  const r = paintRow({ id: "c", name: "c", clone_of: "/r", activity: "working", summary: "fixing tests" }, { ctx: nhCtx });
+  assert.equal(r.sub.textContent, NH + " · fixing tests");
+  assert.equal(r.sub.title, NH + " · fixing tests");
+  assert.deepEqual(r.li.title.split("\n"), ["c", "Private copy of ~/x", NH]);
+  assert.equal(r.sname.children.filter((c) => /chip/.test(c.className || "")).length, 0, "no new chip");
+});
+
+test("a clone row with no sub-line text shows the not-home line alone", () => {
+  const r = paintRow({ id: "c", name: "c", clone_of: "/r" }, { ctx: { ...nhCtx, rowSubline: () => ({ text: "", amber: false }) } });
+  assert.equal(r.sub.textContent, NH);
+  assert.equal(r.sub.title, NH);
+});
+
+test("a clone row that waits on an ask keeps the ask first and whole; the line is in the tooltip", () => {
+  const r = paintRow({ ...ASKING, clone_of: "/r" }, { ctx: nhCtx });
+  assert.equal(r.sub.className, "sub amber");
+  assert.equal(r.sub.children[0], "Asks to run ");
+  assert.ok(!r.sub.title, "the ask line is unchanged");
+  assert.ok(r.li.title.split("\n").includes(NH));
+});
+
+test("a row with nothing not home, and a non-clone row, are unchanged", () => {
+  const plain = paintRow({ id: "c", name: "c", clone_of: "/r", activity: "working", summary: "fixing tests" }, { ctx: { wmCopyLine: () => "Private copy of ~/x" } });
+  assert.equal(plain.sub.textContent, "fixing tests");
+  assert.ok(!plain.sub.title);
+  const host = paintRow({ id: "h", name: "h", activity: "working", summary: "s" }, { ctx: { sessionNotHomeLine: () => { throw new Error("asked for a host row"); } } });
+  assert.equal(host.sub.textContent, "s");
 });
 
 test("a sub-line click still opens the terminal (the span is inside the clickable line)", () => {

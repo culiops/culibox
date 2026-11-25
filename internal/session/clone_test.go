@@ -79,6 +79,10 @@ type fakeCloneHooks struct {
 	retSum    ReturnSummary // what ReturnWork answers (Trigger is filled in)
 	retEnter  chan struct{} // optional: signalled on entry to ReturnWork
 	retHold   chan struct{} // optional: ReturnWork waits for this to be closed
+
+	repoReturns []string        // the cwd ReturnForRepo was asked about, per call
+	repoSums    []ReturnSummary // what ReturnForRepo answers
+	repoDl      []time.Duration // the ctx budget ReturnForRepo was given, per call
 }
 
 // returnCall is one ReturnWork call: what the manager passed, and what the
@@ -103,6 +107,22 @@ func (f *fakeCloneHooks) ReturnWork(_ context.Context, c config.Clone, o ReturnO
 	sum := f.retSum
 	sum.Trigger = o.Trigger
 	return sum
+}
+
+func (f *fakeCloneHooks) ReturnForRepo(ctx context.Context, cwd string) []ReturnSummary {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.repoReturns = append(f.repoReturns, cwd)
+	if dl, ok := ctx.Deadline(); ok {
+		f.repoDl = append(f.repoDl, time.Until(dl))
+	}
+	return slices.Clone(f.repoSums)
+}
+
+func (f *fakeCloneHooks) repoCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.repoReturns)
 }
 
 func (f *fakeCloneHooks) returnCalls() []returnCall {
@@ -441,6 +461,70 @@ func TestHostSpawnOutsideBoxOwnedDirStarts(t *testing.T) {
 	_ = m.Kill(s.ID)
 	if hooks.nOwnedChecks() != 1 {
 		t.Fatalf("a host spawn must consult BoxOwned once, got %d", hooks.nOwnedChecks())
+	}
+}
+
+// A Host spawn brings the clones of its repo home first, after every refusal; the
+// outcome rides on the session's Info, deep-copied.
+func TestSpawnHostRunsRepoReturn(t *testing.T) {
+	n := 2
+	l := cloneLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeHost}}
+	hooks := &fakeCloneHooks{repoSums: []ReturnSummary{{Trigger: ReturnOnHost, Profile: "p", Home: []string{"box/x"}, Uncommitted: &n}}}
+	m, _ := cloneManager(t, l, hooks)
+	wd := t.TempDir()
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: wd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if got := hooks.repoCalls(); len(got) != 1 || got[0] != wd {
+		t.Fatalf("ReturnForRepo asked about %q, want [%s]", got, wd)
+	}
+	hooks.mu.Lock()
+	dl := hooks.repoDl
+	hooks.mu.Unlock()
+	if len(dl) != 1 || dl[0] <= 0 || dl[0] > 20*time.Second {
+		t.Fatalf("the return budget was %v, want within 20s", dl)
+	}
+	info := s.Info()
+	if len(info.HostReturn) != 1 || info.HostReturn[0].Profile != "p" || info.HostReturn[0].Home[0] != "box/x" {
+		t.Fatalf("Info.HostReturn = %+v", info.HostReturn)
+	}
+	*info.HostReturn[0].Uncommitted = 9
+	info.HostReturn[0].Home[0] = "changed"
+	again := s.Info().HostReturn[0]
+	if again.Home[0] != "box/x" || *again.Uncommitted != 2 {
+		t.Fatal("Info handed out the session's own HostReturn, not a copy")
+	}
+}
+
+func TestSpawnHostReturnSkippedWhenNotHost(t *testing.T) {
+	l := cloneLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}}
+	hooks := &fakeCloneHooks{repoSums: []ReturnSummary{{Trigger: ReturnOnHost}}}
+	m, _ := cloneManager(t, l, hooks)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if got := hooks.repoCalls(); len(got) != 0 {
+		t.Fatalf("a box spawn ran the host return: %v", got)
+	}
+	if len(s.Info().HostReturn) != 0 {
+		t.Fatal("a box session carries a host return")
+	}
+}
+
+func TestSpawnHostRefusedNeverReturns(t *testing.T) {
+	l := cloneLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeHost}}
+	hooks := &fakeCloneHooks{owned: "inside a clone", repoSums: []ReturnSummary{{Trigger: ReturnOnHost}}}
+	m, _ := cloneManager(t, l, hooks)
+	if s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()}); err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("a host spawn in a box-owned dir started")
+	}
+	if got := hooks.repoCalls(); len(got) != 0 {
+		t.Fatalf("a refused spawn ran the host return: %v", got)
 	}
 }
 
@@ -1423,4 +1507,45 @@ func TestRestartInPlaceOnCloneProfileStaysInPlace(t *testing.T) {
 			t.Fatalf("CloneOf=%q prepares=%d, want the clone again", ns.Info().CloneOf, hooks.nPrepares())
 		}
 	})
+}
+
+// slowRepoHooks is a fakeCloneHooks whose ReturnForRepo ignores its budget and
+// blocks until released, like a docker run that outlives its kill.
+type slowRepoHooks struct {
+	*fakeCloneHooks
+	release chan struct{}
+	called  chan struct{}
+}
+
+func (h *slowRepoHooks) ReturnForRepo(ctx context.Context, cwd string) []ReturnSummary {
+	h.called <- struct{}{}
+	<-h.release
+	return []ReturnSummary{{Trigger: ReturnOnHost, Profile: "late"}}
+}
+
+// M1: a Host spawn waits at most the budget plus the grace for the return; past
+// that it starts without a summary and the return's result is dropped.
+func TestSpawnHostReturnIsAHardLimit(t *testing.T) {
+	l := cloneLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeHost}}
+	hooks := &slowRepoHooks{fakeCloneHooks: &fakeCloneHooks{}, release: make(chan struct{}), called: make(chan struct{}, 1)}
+	defer close(hooks.release)
+	m, _ := cloneManager(t, l, hooks)
+	m.hostBudget, m.hostGrace = 50*time.Millisecond, 100*time.Millisecond
+	start := time.Now()
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Spawn took %v with a hung return; want about budget+grace", d)
+	}
+	select {
+	case <-hooks.called:
+	default:
+		t.Fatal("ReturnForRepo was never called")
+	}
+	if got := s.Info().HostReturn; got != nil {
+		t.Fatalf("HostReturn = %+v, want nil when the return outlived its limit", got)
+	}
 }

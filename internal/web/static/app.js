@@ -2105,6 +2105,30 @@ function toastReturnSuffix(s) {
   return t ? " \u00b7 " + t : "";
 }
 
+// toastHostReturnSuffix: the Host spawn toast's tail: what bringing home the
+// clones of this folder's repo said before the session started (profile names
+// are text in the toast, never markup). "" when it has nothing to say.
+function toastHostReturnSuffix(s) {
+  const t = hostReturnToast(s.host_return);
+  return t ? " \u00b7 " + t : "";
+}
+
+// sessionNotHomeLine: the clone session row's not-home line ("1 branch not home ·
+// 3 files not committed"), or "" for none. The rows put it FIRST in their line
+// (notHomePrefix): both clip it, and a clipped line keeps its start.
+function sessionNotHomeLine(s) {
+  return sessionNotHome(s, profiles.find((x) => x.name === s.agent));
+}
+
+// markHostNotHomeSeen: the Host spawn toast just announced these clones' not-home
+// sets, so the next profile load must not toast them again. With no stored list
+// there is nothing to add to: the next load seeds it whole.
+function markHostNotHomeSeen(hostReturn) {
+  const sigs = notHomeHostSigs(hostReturn);
+  const stored = sigs.length ? notHomeSeenRead() : null;
+  if (stored) notHomeSeenWrite(stored.concat(sigs));
+}
+
 // What the last sessions poll showed, for returnNews: seen is null until the
 // first poll after boot, which seeds it silently (returns that finished before
 // the page opened are not news).
@@ -2648,7 +2672,8 @@ function renderSession(s, opts) {
   if (!compact) {
     const smeta = document.createElement("div");
     smeta.className = "smeta";
-    smeta.textContent = sessionMeta(s, s.clone_of ? wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s) : s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
+    smeta.textContent = notHomePrefix(s.clone_of ? sessionNotHomeLine(s) : "",
+      sessionMeta(s, s.clone_of ? wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s) : s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title));
     grow.appendChild(smeta);
   }
   li.appendChild(grow);
@@ -2782,6 +2807,9 @@ function paintCompactRow(li, sname, grow, s, conn) {
   const aws = awsBadge(s, nowMs);
   if (aws) facts.push("AWS: " + aws.title);
   if (s.clone_of) facts.push(wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s));
+  // Work that has not come home: a prefix of the sub-line below (no chip: the row keeps one) and a line of the tooltip.
+  const nh = s.clone_of && !li.classList.contains("nested") ? sessionNotHomeLine(s) : "";
+  if (nh) facts.push(nh);
   li.title = facts.join("\n");
   // No per-session cost on the row (the M1 frames draw none; founder 2026-11-08): the pane
   // header's meta and Analytics show it.
@@ -2809,10 +2837,14 @@ function paintCompactRow(li, sname, grow, s, conn) {
   kb.onclick = () => openSessionMenu(kb, s);
   sname.appendChild(kb); // on the name line, after the chip
   // A nested shell has no sub-line: it has no summary and no ask to show.
-  const sub = li.classList.contains("nested") ? { text: "" } : rowSubline(s, conn);
+  let sub = li.classList.contains("nested") ? { text: "" } : rowSubline(s, conn);
+  // An ask or sign-in (amber) stays first and whole: what blocks the session outranks the count, which the tooltip still carries.
+  const withNh = !!nh && !sub.amber;
+  if (withNh) sub = { ...sub, text: notHomePrefix(nh, sub.text) };
   if (sub.text) {
     const d = document.createElement("div");
     d.className = sub.amber ? "sub amber" : "sub";
+    if (withNh) d.title = sub.text; // the sub-line clips: its whole text is the tooltip
     if (sub.mono) {
       // An ask: "Asks to run" and the tool call after it, the call in mono (machine text, frame m1-1).
       const m = document.createElement("span");
@@ -5613,6 +5645,14 @@ function renderPfNotHome(name) {
     row.textContent = notHomeLabel(nh) + ": " + nh.error;
     rows.push(row);
   }
+  // Files in the copy that no commit has: they do not come home, so the editor says so beside the branches.
+  const uncText = uncommittedLabel(nh && nh.uncommitted, nh && nh.uncommitted_cut);
+  if (uncText) {
+    const row = document.createElement("div");
+    row.className = "pf-nh-row";
+    row.textContent = uncText;
+    rows.push(row);
+  }
   // Files flagged for review (#346): the count opens the review of this profile's records.
   const flText = handbackCountText(view && view.flagged);
   if (flText && !mobileActive(window.innerWidth)) {
@@ -5922,6 +5962,7 @@ function renderProfileList() {
     b.type = "button";
     b.className = "pitem" + (p.name === selectedProfile ? " on" : "");
     const nm = document.createElement("span");
+    nm.className = "pnm"; // never broken mid-word: app.css gives it a floor width and an ellipsis
     nm.textContent = p.name;
     b.appendChild(nm);
     // Where a read-only profile came from (built-in, config.json), by its `source`.
@@ -5933,7 +5974,7 @@ function renderProfileList() {
       b.appendChild(lk);
     }
     // Work that has not come home sits on the name's line, at every width.
-    const nhLabel = notHomeLabel(p.not_home);
+    const nhLabel = notHomeLine(p.not_home);
     if (nhLabel) {
       const nh = document.createElement("span");
       nh.className = "pnothome";
@@ -6348,8 +6389,9 @@ async function spawnSession(req, opts) {
   if (opts.toast !== false) {
     // Report the directory the SERVER chose, not the one requested.
     const where = s.cwd || req.cwd;
-    showToast((mobileActive(window.innerWidth) ? "Spawned" : "Started") + ' "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s),
+    showToast((mobileActive(window.innerWidth) ? "Spawned" : "Started") + ' "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s) + toastHostReturnSuffix(s),
       { undo: () => killSession(s.id), warn: cloneLevel(s.clone) === "warn" });
+    markHostNotHomeSeen(s.host_return);
   }
   return s;
 }

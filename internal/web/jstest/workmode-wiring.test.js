@@ -181,7 +181,7 @@ test("bringHomeNow shows its toast once", () => {
 });
 
 test("work-home text from box and server stays text: no innerHTML in the new renderers", () => {
-  for (const fn of ["renderPfNotHome", "noteReturns", "bringHomeNow", "sessionWorkHome", "toastReturnSuffix"]) {
+  for (const fn of ["renderPfNotHome", "noteReturns", "bringHomeNow", "sessionWorkHome", "toastReturnSuffix", "toastHostReturnSuffix", "sessionNotHomeLine", "markHostNotHomeSeen"]) {
     assert.doesNotMatch(body(app, fn), /innerHTML|insertAdjacentHTML/, fn);
   }
   assert.match(body(app, "renderPfNotHome"), /d\.textContent = b\.detail/, "nh.detail shows beside the reason");
@@ -190,7 +190,11 @@ test("work-home text from box and server stays text: no innerHTML in the new ren
 test("a session with no profile gets no work-home suffix; the spawn line and the rows call workHomeSuffix", () => {
   const b = body(app, "sessionWorkHome");
   assert.match(b, /p \? workHomeSuffix\(p, !!\(s\.clone && s\.clone\.push_repo\)\) : ""/);
-  assert.match(app, /wmCopyLine\(s\.clone_of, window\.HOME_DIR\) \+ sessionWorkHome\(s\)/);
+  assert.match(app, /smeta\.textContent = notHomePrefix\(s\.clone_of \? sessionNotHomeLine\(s\) : "",\s*sessionMeta\(s, s\.clone_of \? wmCopyLine\(s\.clone_of, window\.HOME_DIR\) \+ sessionWorkHome\(s\)/, "the phone row's meta starts with the not-home line");
+  assert.match(body(app, "sessionNotHomeLine"), /sessionNotHome\(s, profiles\.find/);
+  assert.match(app, /toastHostReturnSuffix\(s\),\s*\{ undo[^\n]*\n\s*markHostNotHomeSeen\(s\.host_return\)/, "the Host toast marks what it announced as seen");
+  assert.match(app, /toastReturnSuffix\(s\) \+ toastHostReturnSuffix\(s\)/, "the spawn toast appends the Host return");
+  assert.match(body(app, "toastHostReturnSuffix"), /hostReturnToast\(s\.host_return\)/);
   const sp = fs.readFileSync(path.join(STATIC, "spawnpanel.js"), "utf8");
   assert.match(body(sp, "syncSpawnCopyLine"), /workHomeSuffix\(p, !!\(p\.clone_of && p\.github_write\)\)/);
   assert.match(body(sp, "renderSpawnPlist"), /sp-nothome/);
@@ -203,4 +207,21 @@ test("the profile row shows work that has not come home, and the menu dispatches
   assert.match(body(app, "bringHomeNow"), /postSessionAction\(s\.id, "bring-home"\)/);
   const css = fs.readFileSync(path.join(STATIC, "app.css"), "utf8");
   assert.doesNotMatch(css, /\.pnothome[^{]*\{[^}]*display:\s*none/, "never hidden");
+});
+
+test("the not-home chips wrap and shrink; the profile name keeps a floor width", () => {
+  const css = fs.readFileSync(path.join(STATIC, "app.css"), "utf8");
+  const rule = (sel) => new RegExp("(?:^|\\n)\\s*" + sel.replace(/[.]/g, "\\.") + "\\s*\\{([^}]*)\\}").exec(css);
+  const shared = /\.pitem \.pnothome, \.sp-nothome \{([^}]*)\}/.exec(css)[1];
+  assert.match(shared, /white-space:\s*normal/);
+  assert.match(shared, /min-width:\s*0/);
+  assert.doesNotMatch(shared, /nowrap/);
+  const pn = rule(".pitem .pnothome")[1];
+  assert.match(pn, /flex:\s*0 1 auto/);
+  assert.match(pn, /max-width:\s*60%/);
+  assert.match(rule(".sp-nothome")[1], /max-width:\s*100%/);
+  const nm = rule(".pitem .pnm")[1];
+  assert.match(nm, /min-width:\s*8ch/);
+  assert.match(nm, /text-overflow:\s*ellipsis/);
+  assert.match(body(app, "renderProfileList"), /nm\.className = "pnm"/);
 });

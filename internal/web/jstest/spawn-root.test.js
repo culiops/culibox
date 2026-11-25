@@ -37,7 +37,7 @@ function spawnWorld(reply) {
     loadWorkspaces: async () => { log.push("workspaces"); },
     loadWorkspaceRoots: async () => { log.push("roots"); },
     showToast: (m, o) => { log.push(["toast", m, !!(o && o.warn === true)]); },
-    mobileActive: () => false, shortPath: (p) => p, toastDropsSuffix: () => "", toastCloneSuffix: () => "", toastReturnSuffix: () => "", cloneLevel: () => "",
+    mobileActive: () => false, shortPath: (p) => p, toastDropsSuffix: () => "", toastCloneSuffix: () => "", toastReturnSuffix: () => "", toastHostReturnSuffix: () => "", markHostNotHomeSeen: () => {}, cloneLevel: () => "",
     killSession() {},
   });
   return { box, log };

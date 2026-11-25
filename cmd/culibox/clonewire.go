@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -292,7 +293,8 @@ func (h *cloneHooks) HostOrigin(ctx context.Context, of string) (string, error) 
 }
 
 // returnModeOf is how a trigger returns a clone's branches: "now" forces, the
-// profile's switch off only records what is not home, otherwise fast-forward only.
+// profile's switch off only records what is not home (every other trigger,
+// idle and host included), otherwise fast-forward only.
 func returnModeOf(c config.Clone, trigger string) clone.ReturnMode {
 	switch {
 	case trigger == session.ReturnNow:
@@ -311,12 +313,14 @@ func returnModeOf(c config.Clone, trigger string) clone.ReturnMode {
 // was.
 func (h *cloneHooks) doReturn(ctx context.Context, c config.Clone, trigger string, mode clone.ReturnMode) session.ReturnSummary {
 	if err := h.checkOf(c.Of); err != nil {
-		return session.ReturnSummary{Trigger: trigger, At: time.Now(), Error: clone.Sanitize(err.Error())}
+		return session.ReturnSummary{Trigger: trigger, At: time.Now(), Profile: c.Profile, Error: clone.Sanitize(err.Error())}
 	}
-	return returnSummaryOf(trigger, c.Of, h.handback, h.ret(ctx, h.env.Git, h.docker, clone.ReturnRequest{
+	s := returnSummaryOf(trigger, c.Of, h.handback, h.ret(ctx, h.env.Git, h.docker, clone.ReturnRequest{
 		Clone: c, Mode: mode, Image: h.image, Instance: h.instance,
 		TempDir: filepath.Join(h.dataDir, "clone-fetch"), Home: h.env.Home, DataDir: h.dataDir, Protected: h.env.Protected,
 	}))
+	s.Profile = c.Profile
+	return s
 }
 
 // returnSummaryOf is the session's view of a return result. The clone layer has
@@ -327,6 +331,11 @@ func (h *cloneHooks) doReturn(ctx context.Context, c config.Clone, trigger strin
 func returnSummaryOf(trigger, of string, hb *handbackHooks, r clone.ReturnResult) session.ReturnSummary {
 	s := session.ReturnSummary{
 		Trigger: trigger, At: r.At, Base: r.Base, Home: r.Home, Warnings: r.Warnings, Error: r.Error,
+		UncommittedCut: r.UncommittedCut,
+	}
+	if r.Uncommitted != nil {
+		n := *r.Uncommitted
+		s.Uncommitted = &n
 	}
 	for _, n := range r.NotHome {
 		s.NotHome = append(s.NotHome, session.NotHomeBranch{Branch: n.Branch, Reason: n.Reason, Detail: n.Detail})
@@ -339,12 +348,13 @@ func returnSummaryOf(trigger, of string, hb *handbackHooks, r clone.ReturnResult
 
 // ReturnWork brings a clone's branches home under the clone's lock, the same
 // one a spawn's refresh holds, so the two never rewrite a clone's refs
-// together. Except for "now" it skips while another boxed session of this
-// instance uses the clone (asked once the lock is held); every trigger skips
-// when a box of another instance may hold it. Never an error: the outcome,
+// together. Only an "exit" return skips while another boxed session of this
+// instance uses the clone (asked once the lock is held): idle, host and "now"
+// returns are fast-forward only or forced and run beside a live session. Every
+// trigger skips when a box of another instance may hold it. Never an error: the outcome,
 // failures included, is in the summary.
 func (h *cloneHooks) ReturnWork(ctx context.Context, c config.Clone, o session.ReturnOpts) session.ReturnSummary {
-	sum := session.ReturnSummary{Trigger: o.Trigger, At: time.Now()}
+	sum := session.ReturnSummary{Trigger: o.Trigger, At: time.Now(), Profile: c.Profile}
 	if h.unavailable != "" {
 		sum.Skipped = "unavailable"
 		return sum
@@ -356,7 +366,7 @@ func (h *cloneHooks) ReturnWork(ctx context.Context, c config.Clone, o session.R
 		sum.Skipped = clone.SkipInUse
 		return sum
 	}
-	if o.Trigger != session.ReturnNow && o.LiveSession != nil && o.LiveSession() {
+	if o.Trigger == session.ReturnOnExit && o.LiveSession != nil && o.LiveSession() {
 		sum.Skipped = clone.SkipInUse
 		return sum
 	}
@@ -365,6 +375,89 @@ func (h *cloneHooks) ReturnWork(ctx context.Context, c config.Clone, o session.R
 		return sum
 	}
 	return h.doReturn(ctx, c, o.Trigger, returnModeOf(c, o.Trigger))
+}
+
+// ReturnForRepo brings home the clones whose clone_of is cwd or holds it, before
+// a Host session starts there, one summary each in Dir order. Paths compare with
+// symlinks resolved. Profile-less entries (the fallback ones for an invalid
+// config) have no profile to return for and are skipped. The ctx is one budget
+// for the lot: once it is done the clones it did not reach get a "deferred"
+// summary, and every clone the budget cut short (skipped as deferred, with a
+// branch not home as deferred, or, once the budget is done, one that ended in
+// an error or skipped in-use: a check or a lock wait the deadline cut) is
+// continued in the background, so the spawn never waits on it. A clone whose
+// directory does not exist yet (no box has been spawned) has nothing to return
+// and gets no summary. A box of another instance or a docker that is down is
+// ReturnWork's "skipped" summary, never a block.
+func (h *cloneHooks) ReturnForRepo(ctx context.Context, cwd string) []session.ReturnSummary {
+	here := cloneKey(cwd)
+	var match []config.Clone
+	for _, c := range h.clones() {
+		if c.Profile == "" || !pathWithin(here, cloneKey(c.Of)) {
+			continue
+		}
+		// The copy exists only after the profile's first box spawn: with no
+		// directory there is nothing to return, and a return would only record
+		// an error against a clone that was never made.
+		if st, err := os.Lstat(c.Dir); err != nil || !st.IsDir() {
+			continue
+		}
+		match = append(match, c)
+	}
+	slices.SortStableFunc(match, func(a, b config.Clone) int { return strings.Compare(a.Dir, b.Dir) })
+	var sums []session.ReturnSummary
+	var later []config.Clone
+	for _, c := range match {
+		var s session.ReturnSummary
+		cut := false
+		if ctx.Err() != nil {
+			s = session.ReturnSummary{Trigger: session.ReturnOnHost, At: time.Now(), Profile: c.Profile, Skipped: clone.ReasonDeferred}
+		} else {
+			s = h.ReturnWork(ctx, c, session.ReturnOpts{Trigger: session.ReturnOnHost})
+			s.Profile = c.Profile
+			// A deadline that cut a listing or host check (an Error) or a lock
+			// wait (in-use) left work unchecked: continue it like a deferred one.
+			cut = ctx.Err() != nil && (s.Error != "" || s.Skipped == clone.SkipInUse)
+		}
+		if cut || returnDeferred(s) {
+			later = append(later, c)
+		}
+		sums = append(sums, s)
+	}
+	if len(later) > 0 {
+		go func() {
+			for _, c := range later {
+				bctx, cancel := context.WithTimeout(context.Background(), session.BackgroundReturnTimeout)
+				s := h.ReturnWork(bctx, c, session.ReturnOpts{Trigger: session.ReturnOnHost})
+				cancel()
+				log.Printf("clone %s: the return continued after a host spawn: %d branch(es) home, %d not home, skipped %q",
+					c.Profile, len(s.Home), len(s.NotHome), s.Skipped)
+			}
+		}()
+	}
+	return sums
+}
+
+// returnDeferred reports that a return was cut short by time: it was skipped as
+// deferred, or a branch is not home for that reason.
+func returnDeferred(s session.ReturnSummary) bool {
+	if s.Skipped == clone.ReasonDeferred {
+		return true
+	}
+	for _, n := range s.NotHome {
+		if n.Reason == clone.ReasonDeferred {
+			return true
+		}
+	}
+	return false
+}
+
+// pathWithin reports whether p is dir or below it, by whole components.
+func pathWithin(p, dir string) bool {
+	if p == dir {
+		return true
+	}
+	return strings.HasPrefix(p, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
 }
 
 // NotHome is what the clone's return state says did not come home, for the
@@ -378,10 +471,15 @@ func (h *cloneHooks) NotHome(c config.Clone) *session.NotHomeState {
 	if err != nil {
 		return &session.NotHomeState{Error: "cannot read what is not home: " + clone.Sanitize(err.Error())}
 	}
-	if !ok || (len(st.NotHome) == 0 && st.Error == "") {
+	uncommitted := st.Uncommitted != nil && *st.Uncommitted > 0
+	if !ok || (len(st.NotHome) == 0 && st.Error == "" && !uncommitted) {
 		return nil
 	}
 	out := &session.NotHomeState{At: st.At, Base: st.Base, Error: st.Error}
+	if uncommitted {
+		n := *st.Uncommitted
+		out.Uncommitted, out.UncommittedCut = &n, st.UncommittedCut
+	}
 	for _, n := range st.NotHome {
 		out.Branches = append(out.Branches, session.NotHomeBranch{Branch: n.Branch, Reason: n.Reason, Detail: n.Detail})
 	}

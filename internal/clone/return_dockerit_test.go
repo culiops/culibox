@@ -5,6 +5,7 @@ package clone
 import (
 	"context"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -77,5 +78,39 @@ func TestReturnInARealContainer(t *testing.T) {
 	res = Return(ctx, e.g, e.d, req)
 	if len(res.Home) != 0 || len(res.NotHome) != 0 || res.Error != "" {
 		t.Errorf("second pass = %+v", res)
+	}
+}
+
+// TestReturnCountsUncommittedDocker has the listing container count the clone's
+// uncommitted files (one modified tracked file, one untracked) and leave the
+// clone's index file as it found it: status must not refresh it.
+func TestReturnCountsUncommittedDocker(t *testing.T) {
+	e := citNewRefreshEnv(t)
+	tracked := filepath.Join(e.dir, "main.go") // a tracked file of the citOf fixture
+	citWrite(t, tracked, "modified in the box\n")
+	citWrite(t, filepath.Join(e.dir, "untracked.txt"), "new\n")
+
+	idx := filepath.Join(e.dir, ".git", "index")
+	before, err := os.Stat(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	res := Return(ctx, e.g, e.d, ReturnRequest{Clone: e.c, Mode: ReturnAuto, Image: e.image, Instance: citInstance,
+		TempDir: filepath.Join(e.data, "clone-fetch"), Home: e.home, DataDir: e.data})
+	t.Logf("Return: %+v", res)
+	if res.Error != "" {
+		t.Fatalf("Error = %q", res.Error)
+	}
+	if res.Uncommitted == nil || *res.Uncommitted != 2 || res.UncommittedCut {
+		t.Errorf("Uncommitted = %v cut=%v, want 2", res.Uncommitted, res.UncommittedCut)
+	}
+	after, err := os.Stat(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+		t.Errorf(".git/index changed: %v %d -> %v %d", before.ModTime(), before.Size(), after.ModTime(), after.Size())
 	}
 }

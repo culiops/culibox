@@ -3,11 +3,14 @@ package clone
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -136,4 +139,153 @@ func branchSHA(root *os.Root, branch string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// maxFingerprintEntries bounds the loose refs RefsFingerprint walks.
+const maxFingerprintEntries = 2000
+
+var errTooManyRefs = errors.New("too many refs to fingerprint")
+
+// RefsFingerprint is a hex sha256 over the metadata (name, size, mode, mtime
+// in ns) of .git/HEAD, .git/packed-refs, .git/index and every entry under
+// .git/refs/heads of the clone at cloneDir: a cheap "did the refs move" test
+// with no git exec and no file read. The three files are each optional (absent
+// hashes as "absent"). Every entry is taken with Lstat semantics and a symlink
+// is recorded, never followed, so a box cannot make the host look outside the
+// clone. ok is false when cloneDir cannot be opened, .git is not a directory,
+// or the walk passes 2000 entries.
+//
+// The clone is box-owned, so the box can forge any of this: the result is a
+// scheduling hint (skip a return when nothing changed) and never a security
+// input.
+func RefsFingerprint(cloneDir string) (fp string, ok bool) {
+	root, err := os.OpenRoot(cloneDir)
+	if err != nil {
+		return "", false
+	}
+	defer root.Close()
+	if st, err := root.Lstat(".git"); err != nil || !st.IsDir() {
+		return "", false
+	}
+	h := sha256.New()
+	add := func(name string, st fs.FileInfo) {
+		fmt.Fprintf(h, "%q %d %d %d\n", name, st.Size(), uint32(st.Mode()), st.ModTime().UnixNano())
+	}
+	for _, name := range []string{".git/HEAD", ".git/packed-refs", ".git/index"} {
+		st, err := root.Lstat(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintf(h, "%q absent\n", name)
+			continue
+		}
+		if err != nil {
+			return "", false
+		}
+		add(name, st)
+	}
+	const heads = ".git/refs/heads"
+	st, err := root.Lstat(heads)
+	if errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(h, "%q absent\n", heads)
+	} else if err != nil {
+		return "", false
+	} else if !st.IsDir() {
+		add(heads, st) // a symlink or file in its place: recorded, not walked
+	} else {
+		n := 0
+		if err := walkBoxDir(root, heads, "", &n, add); err != nil {
+			return "", false
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), true
+}
+
+// walkBoxDir hashes the entries under dir depth-first, each directory's names
+// in sorted order so the result is stable. rel is dir's path below
+// .git/refs/heads ("" for heads itself). A directory is opened the way
+// openBoxFile opens a file (O_NONBLOCK, O_NOFOLLOW, O_DIRECTORY, then an
+// fstat that must say directory and match the Lstat that chose to descend):
+// a box that swaps it for a FIFO or a link between the listing and the open
+// gets an error, never a blocked host goroutine. Entries are stat'ed with
+// root.Lstat, and one that vanished since the listing (a transient .lock) is
+// skipped. n counts entries across the whole walk and is checked while a
+// directory is read, so a huge directory is never listed in full.
+//
+// Every root call re-resolves its path from the root, so a deep chain costs
+// about depth squared syscalls. No valid branch lives deeper than
+// maxBranchLen bytes, so a directory whose rel path is longer than that is
+// hashed (its metadata) but not opened: changes below the cut-off need not
+// move the fingerprint, which is only a scheduling hint. Each directory's
+// handle is closed before its subdirectories are walked.
+func walkBoxDir(root *os.Root, dir, rel string, n *int, add func(string, fs.FileInfo)) error {
+	names, err := listBoxDir(root, dir, n)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		full := dir + "/" + name
+		info, err := root.Lstat(full)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		add(full, info)
+		if !info.IsDir() {
+			continue
+		}
+		childRel := name
+		if rel != "" {
+			childRel = rel + "/" + name
+		}
+		if len(childRel) > maxBranchLen {
+			continue // deeper than any valid branch: metadata only
+		}
+		if err := walkBoxDir(root, full, childRel, n, add); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+// listBoxDir opens dir without following links or blocking, reads its entry
+// names (counting them in n), closes the handle, and returns them sorted.
+func listBoxDir(root *os.Root, dir string, n *int) ([]string, error) {
+	lst, err := root.Lstat(dir)
+	if err != nil {
+		return nil, err
+	}
+	if !lst.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", dir)
+	}
+	f, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fst, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fst.IsDir() || !os.SameFile(lst, fst) {
+		return nil, fmt.Errorf("%s changed while it was read", dir)
+	}
+	var names []string
+	for {
+		batch, err := f.ReadDir(256)
+		for _, d := range batch {
+			if *n++; *n > maxFingerprintEntries {
+				return nil, errTooManyRefs
+			}
+			names = append(names, d.Name())
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }

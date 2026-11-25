@@ -30,7 +30,29 @@ const (
 	maxListLine = 64 + len(" refs/heads/") + maxBranchLen
 
 	noBaseDetail = "host repo has neither main nor master"
+
+	// statusSep is the line the listing script prints between the branch lines
+	// and the status lines.
+	statusSep = "#culibox-status"
 )
+
+// listScript is the whole program of the listing container, fixed text: the
+// clone's path is the positional $1, never part of it. The branch lines come
+// first (a failing for-each-ref fails the container: set -e). The status is
+// best effort and bounded: it runs under timeout 10 into a file on the HOME
+// tmpfs, and only when it exits 0 does the script print statusSep and the
+// file, one `git status --porcelain=v1` line per uncommitted file
+// (--untracked-files=all: every untracked file, not each directory once). A
+// failed or timed-out status prints no separator, so the count is unknown and
+// the container still exits 0: the branches come home. GIT_OPTIONAL_LOCKS=0 (in
+// the argv) keeps status from refreshing the index of a clone it only reads.
+const listScript = `set -e
+git -C "$1" -c core.hooksPath=/dev/null -c core.fsmonitor=false for-each-ref --format='%(objectname) %(refname)' refs/heads/
+if timeout 10 git -C "$1" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.untrackedCache=false status --porcelain=v1 --untracked-files=all > "$HOME/culibox-status"; then
+echo '` + statusSep + `'
+cat "$HOME/culibox-status"
+fi
+`
 
 type ReturnMode int
 
@@ -55,12 +77,20 @@ type ReturnResult struct {
 	Warnings []string                   // FetchResult.Warnings of the branches that came, "box/<b>: " prefixed
 	Handback map[string]handback.Report // what each branch that came brings that needs a look, keyed "box/<b>"
 	Error    string                     // listing or host checks failed; NotHome is then the previous state's
+	// Uncommitted is how many files the clone's work tree has changed or untracked
+	// (every untracked file counts), from the same container; nil when the listing
+	// did not say: an image that predates it, a status that failed or ran past its
+	// 10 s, a torn output. After an Error it is the previous state's.
+	Uncommitted *int
+	// UncommittedCut: the 64 KiB cap cut the status part, so Uncommitted is a floor.
+	UncommittedCut bool
 }
 
 // ListArgs is the docker argv (after "docker") of the listing container. It has
 // the isolation of BundleArgs and mounts nothing but the clone, read-only:
-// clone_of is not needed to list refs. The git config flags are belt and braces
-// over a read-only for-each-ref.
+// clone_of is not needed to list refs. The container runs listScript through sh
+// (the clone dir is its $1, a separate argv element); the git config flags in it
+// are belt and braces over read-only commands.
 func ListArgs(r ReturnRequest, name string) []string {
 	dir := r.Clone.Dir
 	args := []string{
@@ -68,14 +98,13 @@ func ListArgs(r ReturnRequest, name string) []string {
 		"--tmpfs", boxTmp + ":rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"--label", LabelCloneList + "=" + r.Instance,
-		"-e", "HOME=" + boxTmp, "-e", "GIT_CONFIG_NOSYSTEM=1",
+		"-e", "HOME=" + boxTmp, "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_OPTIONAL_LOCKS=0",
 	}
 	args = append(args, safeDirEnv(dir)...)
 	return append(args,
 		"--mount", "type=bind,src="+dir+",dst="+dir+",readonly",
-		"--entrypoint", "git", r.Image,
-		"-C", dir, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-		"for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/",
+		"--entrypoint", "sh", r.Image,
+		"-c", listScript, "sh", dir,
 	)
 }
 
@@ -94,6 +123,11 @@ func Return(ctx context.Context, g Git, d Docker, r ReturnRequest) ReturnResult 
 	if res.Error != "" {
 		// Nothing was checked, so nothing is learned: what was not home stays so.
 		res.Home, res.NotHome = nil, slices.Clone(prev.NotHome)
+		res.Uncommitted, res.UncommittedCut = nil, prev.UncommittedCut
+		if prev.Uncommitted != nil {
+			res.Uncommitted = new(int)
+			*res.Uncommitted = *prev.Uncommitted
+		}
 		if res.Base == "" {
 			res.Base = prev.Base
 		}
@@ -102,7 +136,8 @@ func Return(ctx context.Context, g Git, d Docker, r ReturnRequest) ReturnResult 
 		slices.SortFunc(res.NotHome, func(a, b NotHome) int { return strings.Compare(a.Branch, b.Branch) })
 	}
 	if r.DataDir != "" {
-		st := ReturnState{At: res.At, Base: res.Base, NotHome: res.NotHome, Error: res.Error}
+		st := ReturnState{At: res.At, Base: res.Base, NotHome: res.NotHome, Error: res.Error,
+			Uncommitted: res.Uncommitted, UncommittedCut: res.UncommittedCut}
 		if err := WriteReturnState(r.DataDir, r.Clone.Dir, st); err != nil {
 			res.Warnings = append(res.Warnings, "could not record what is not home: "+sanitizeN(err.Error(), maxErrRunes))
 		}
@@ -145,7 +180,12 @@ func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev 
 		return
 	}
 	entries, cut := parseList(out.buf.String(), res)
-	if cut || out.over {
+	if out.over && res.Uncommitted != nil {
+		res.UncommittedCut = true // the cap fell in the status part
+	} else if out.over {
+		cut = true
+	}
+	if cut {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("the clone's branch list was cut at %d branches or %d bytes; some branches were not looked at",
 			maxListBranches, maxListBytes))
 	}
@@ -257,18 +297,38 @@ func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev 
 	}
 }
 
-// parseList reads the listing: complete lines only, each "<sha> refs/heads/<name>",
-// and drops everything else. A name that is not a safe branch name is recorded
-// in res as ReasonName and not returned. cut is true when lines were lost to the
-// cap or to a torn last line.
+// parseList reads the listing: complete lines only, each "<sha> refs/heads/<name>"
+// up to statusSep, and drops everything else. A name that is not a safe branch
+// name is recorded in res as ReasonName and not returned. cut is true when
+// branch lines were lost to the cap, to the branch count or to a torn last line.
+// After statusSep every complete non-empty line is one uncommitted file and sets
+// res.Uncommitted; a torn status line sets res.UncommittedCut instead. Without
+// statusSep (an older image, a status that failed or timed out, a torn output)
+// res.Uncommitted stays nil.
 func parseList(text string, res *ReturnResult) (entries []listedBranch, cut bool) {
 	seen := map[string]bool{}
+	inStatus := false
 	for text != "" {
 		line, rest, complete := strings.Cut(text, "\n")
 		if !complete {
+			if inStatus {
+				res.UncommittedCut = true
+				return entries, cut
+			}
 			return entries, true
 		}
 		text = rest
+		if inStatus {
+			if line != "" {
+				*res.Uncommitted++
+			}
+			continue
+		}
+		if line == statusSep {
+			inStatus = true
+			res.Uncommitted = new(int)
+			continue
+		}
 		if len(line) > maxListLine {
 			continue
 		}
@@ -277,15 +337,16 @@ func parseList(text string, res *ReturnResult) (entries []listedBranch, cut bool
 		if !ok || !shaRE.MatchString(sha) || !isHead || name == "" || seen[name] {
 			continue
 		}
-		seen[name] = true
-		if len(seen) > maxListBranches {
-			return entries, true
+		if len(seen) >= maxListBranches {
+			cut = true // keep reading: the status part is still wanted
+			continue
 		}
+		seen[name] = true
 		if err := ValidBranch(name); err != nil {
 			res.NotHome = append(res.NotHome, NotHome{Branch: sanitize(name), Reason: ReasonName, Detail: sanitizeN(err.Error(), maxErrRunes)})
 			continue
 		}
 		entries = append(entries, listedBranch{name: name, sha: sha})
 	}
-	return entries, false
+	return entries, cut
 }

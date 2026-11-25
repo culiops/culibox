@@ -31,7 +31,19 @@ Everything else is as in any boxed session: no host home, no Docker socket, egre
 
 ## Bringing code home
 
-Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included, when the session's agent exits and at each spawn of the clone. It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. The profile field `clone_no_auto_return` turns this off (the checkbox is "Bring work home automatically", on by default); the profile then only reports what is not home. `culibox clone fetch` stays the manual override: it forces the update. "Bring work home now" in the session forces it too, but still never moves a `box/<branch>` you have checked out.
+Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included. It comes home:
+
+- after each agent turn of the box session, at most every 30 seconds while the clone's refs change. When they have not changed, CuliBox waits until 5 minutes have passed since the last check, so the count of uncommitted files stays current. It judges whether the refs changed from file metadata that the host reads without running git;
+- when you start or restart a Host session on the same repo. CuliBox waits up to 20 seconds, then finishes in the background. The toast of a newly started Host session says what came home, how many branches are not home and how many files are not committed (a restart does not show it);
+- when the session's agent exits;
+- at each spawn of the clone;
+- when you press "Bring work home now" in the session.
+
+It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. "Not home" also counts the files in the clone that are not committed: tracked changes and untracked files, but not gitignored files. The count shows on the profile, in the session row and in the Host spawn toast. A count that could not be read is not shown, and a very long list shows as "N+".
+
+CuliBox never commits for the agent. Uncommitted files do not come home, so the boxed agent is told to commit its work on a branch when it finishes a task. The profile field `clone_no_auto_return` turns the automatic return off (the checkbox is "Bring work home automatically", on by default); every trigger above then only reports what is not home. `culibox clone fetch` stays the manual override: it forces the update. "Bring work home now" in the session forces it too, but still never moves a `box/<branch>` you have checked out.
+
+`box/main` can move while you review it. Review the commit the box's handoff names (`git log -p main..<sha>`), not the moving `box/main`.
 
 ```sh
 culibox clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>

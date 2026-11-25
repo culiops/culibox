@@ -11,21 +11,23 @@ import (
 // cloneGuidance is the one line a boxed claude in a private copy is told at
 // start (claude --append-system-prompt): where its work goes. push says the
 // binding can push to the clone's origin; autoReturn says the branches come
-// home on their own when the session ends.
+// home on their own after each turn and when the session ends. Every variant
+// ends by saying CuliBox never commits: uncommitted files do not come home.
 func cloneGuidance(of string, push, autoReturn bool) string {
+	const commit = " CuliBox never commits for you: commit your work on a branch when you finish a task; uncommitted files do not come home."
 	s := "CuliBox: you are working in a private copy of " + of + ". "
 	if push {
 		s += `Commit on a branch, push it with "git push -u origin <branch>" and open a PR with "gh pr create"; pushing to main may be rejected by branch protection. `
 		if autoReturn {
-			return s + "Your branches also come home to " + of + " as box/<branch> when this session ends."
+			return s + "Your branches also come home to " + of + " as box/<branch> after each turn and when this session ends." + commit
 		}
-		return s + "Your branches reach " + of + " as box/<branch> when the user brings them home."
+		return s + "Your branches reach " + of + " as box/<branch> when the user brings them home." + commit
 	}
 	s += "It cannot push to GitHub from here: commit on a branch, and your branches "
 	if autoReturn {
-		return s + "come home to " + of + " as box/<branch> when this session ends."
+		return s + "come home to " + of + " as box/<branch> after each turn and when this session ends." + commit
 	}
-	return s + "reach " + of + " as box/<branch> when the user brings them home."
+	return s + "reach " + of + " as box/<branch> when the user brings them home." + commit
 }
 
 // maxGuidanceNames caps how many names of one kind credGuidance lists, so a

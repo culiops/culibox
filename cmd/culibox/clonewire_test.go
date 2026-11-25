@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -976,23 +977,130 @@ func TestCloneReturnTakesTheCloneLock(t *testing.T) {
 	}
 }
 
-func TestCloneReturnSkipsLiveSessionUnlessNow(t *testing.T) {
+func TestReturnWorkLiveSkipMatrix(t *testing.T) {
+	for _, c := range []struct {
+		trig string
+		skip bool
+	}{
+		{session.ReturnOnExit, true},
+		{session.ReturnOnIdle, false},
+		{session.ReturnOnHost, false},
+		{session.ReturnNow, false},
+	} {
+		t.Run(c.trig, func(t *testing.T) {
+			f := newRefreshFake(t)
+			cl := config.Clone{Of: "/r", Dir: cloneDir(t)}
+			sum := f.h.ReturnWork(context.Background(), cl, session.ReturnOpts{Trigger: c.trig, LiveSession: func() bool { return true }})
+			if sum.Trigger != c.trig {
+				t.Fatalf("trigger %q, want %q", sum.Trigger, c.trig)
+			}
+			if c.skip {
+				if sum.Skipped != clone.SkipInUse || f.retCount() != 0 {
+					t.Fatalf("%+v, %d return call(s); want in-use and none", sum, f.retCount())
+				}
+				return
+			}
+			if sum.Skipped != "" || f.retCount() != 1 {
+				t.Fatalf("%+v, %d return call(s); want one run", sum, f.retCount())
+			}
+		})
+	}
+}
+
+// Whatever the trigger, a box of another instance still skips the return.
+func TestReturnWorkOtherInstanceSkipsEveryTrigger(t *testing.T) {
+	for _, trig := range []string{session.ReturnOnIdle, session.ReturnOnHost} {
+		f := newRefreshFake(t)
+		dir := cloneDir(t)
+		f.boxes = []box.BoxInfo{{Name: "prod-box", State: "running", Workspace: dir, Instance: "PROD"}}
+		sum := f.h.ReturnWork(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.ReturnOpts{Trigger: trig, LiveSession: never})
+		if sum.Skipped != clone.SkipOtherInstance || f.retCount() != 0 {
+			t.Fatalf("%s: %+v, %d return call(s); want other-instance and none", trig, sum, f.retCount())
+		}
+	}
+}
+
+func TestReturnModeOf(t *testing.T) {
+	for _, c := range []struct {
+		trig string
+		off  bool
+		want clone.ReturnMode
+	}{
+		{session.ReturnOnExit, false, clone.ReturnAuto},
+		{session.ReturnOnSpawn, false, clone.ReturnAuto},
+		{session.ReturnOnIdle, false, clone.ReturnAuto},
+		{session.ReturnOnHost, false, clone.ReturnAuto},
+		{session.ReturnOnExit, true, clone.ReturnDry},
+		{session.ReturnOnSpawn, true, clone.ReturnDry},
+		{session.ReturnOnIdle, true, clone.ReturnDry},
+		{session.ReturnOnHost, true, clone.ReturnDry},
+		{session.ReturnNow, false, clone.ReturnForced},
+		{session.ReturnNow, true, clone.ReturnForced},
+	} {
+		if got := returnModeOf(config.Clone{NoAutoReturn: c.off}, c.trig); got != c.want {
+			t.Errorf("%s off=%v: mode %v, want %v", c.trig, c.off, got, c.want)
+		}
+	}
+}
+
+func TestReturnSummaryOfUncommitted(t *testing.T) {
+	three := 3
+	got := returnSummaryOf(session.ReturnOnIdle, "/r", nil, clone.ReturnResult{Uncommitted: &three, UncommittedCut: true})
+	if got.Uncommitted == nil || *got.Uncommitted != 3 || !got.UncommittedCut {
+		t.Fatalf("summary = %+v, want uncommitted 3 and cut", got)
+	}
+	// The summary owns its count: changing the result's afterwards must not reach it.
+	three = 9
+	if *got.Uncommitted != 3 {
+		t.Fatalf("summary shares the result's pointer: %d", *got.Uncommitted)
+	}
+	// Unknown stays unknown, never zero.
+	got = returnSummaryOf(session.ReturnOnIdle, "/r", nil, clone.ReturnResult{})
+	if got.Uncommitted != nil || got.UncommittedCut {
+		t.Fatalf("summary = %+v, want an unknown count", got)
+	}
+	zero := 0
+	got = returnSummaryOf(session.ReturnOnIdle, "/r", nil, clone.ReturnResult{Uncommitted: &zero})
+	if got.Uncommitted == nil || *got.Uncommitted != 0 {
+		t.Fatalf("summary = %+v, want a known zero", got)
+	}
+}
+
+func TestReturnSummaryCarriesProfile(t *testing.T) {
 	f := newRefreshFake(t)
+	cl := config.Clone{Of: "/r", Dir: cloneDir(t), Profile: "dev"}
+	if sum := f.h.ReturnWork(context.Background(), cl, session.ReturnOpts{Trigger: session.ReturnOnIdle}); sum.Profile != "dev" {
+		t.Fatalf("ran: profile %q, want dev", sum.Profile)
+	}
+	f.h.unavailable = "no layer"
+	if sum := f.h.ReturnWork(context.Background(), cl, session.ReturnOpts{Trigger: session.ReturnOnIdle}); sum.Profile != "dev" {
+		t.Fatalf("skipped: profile %q, want dev", sum.Profile)
+	}
+}
+
+func TestNotHomeUncommittedOnly(t *testing.T) {
+	h := testHooks(t, noClones)
+	h.dataDir = t.TempDir()
 	dir := cloneDir(t)
 	c := config.Clone{Of: "/r", Dir: dir}
-	live := func() bool { return true }
-
-	sum := f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnExit, LiveSession: live})
-	if sum.Skipped != clone.SkipInUse || sum.Trigger != session.ReturnOnExit || f.retCount() != 0 {
-		t.Fatalf("exit with a live session: %+v, %d return call(s); want in-use and none", sum, f.retCount())
+	at := time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC)
+	two := 2
+	if err := clone.WriteReturnState(h.dataDir, dir, clone.ReturnState{At: at, Base: "main", Uncommitted: &two, UncommittedCut: true}); err != nil {
+		t.Fatal(err)
 	}
-	sum = f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnSpawn, LiveSession: live})
-	if sum.Skipped != clone.SkipInUse || f.retCount() != 0 {
-		t.Fatalf("spawn with a live session: %+v", sum)
+	got := h.NotHome(c)
+	if got == nil || got.Uncommitted == nil || *got.Uncommitted != 2 || !got.UncommittedCut || len(got.Branches) != 0 || got.Error != "" {
+		t.Fatalf("NotHome = %+v, want a state with 2 uncommitted (cut) and nothing else", got)
 	}
-	sum = f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnNow, LiveSession: live})
-	if sum.Skipped != "" || f.retCount() != 1 || f.lastRet(t).Mode != clone.ReturnForced {
-		t.Fatalf("now with a live session: %+v, %d call(s), mode %v; want one forced call", sum, f.retCount(), f.lastRet(t).Mode)
+	// Zero and unknown show nothing.
+	zero := 0
+	for _, u := range []*int{&zero, nil} {
+		if err := clone.WriteReturnState(h.dataDir, dir, clone.ReturnState{At: at, Base: "main", Uncommitted: u}); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.NotHome(c); got != nil {
+			t.Fatalf("uncommitted %v: NotHome = %+v, want nil", u, got)
+		}
 	}
 }
 
@@ -1047,6 +1155,8 @@ func TestCloneReturnModeFollowsTheSwitch(t *testing.T) {
 	}{
 		{false, session.ReturnOnExit, clone.ReturnAuto},
 		{false, session.ReturnOnSpawn, clone.ReturnAuto},
+		{false, session.ReturnOnIdle, clone.ReturnAuto},
+		{true, session.ReturnOnHost, clone.ReturnDry},
 		{true, session.ReturnOnExit, clone.ReturnDry},
 		{true, session.ReturnOnSpawn, clone.ReturnDry},
 		{false, session.ReturnNow, clone.ReturnForced},
@@ -1396,4 +1506,236 @@ func resolvedTemp(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// ReturnForRepo runs the host-trigger return for each clone whose clone_of is
+// the folder or holds it, by whole path components and with symlinks resolved;
+// a profile-less (fallback) entry is never returned.
+func TestReturnForRepoMatching(t *testing.T) {
+	base := resolvedTemp(t)
+	of, sibling := filepath.Join(base, "b"), filepath.Join(base, "bc")
+	inside := filepath.Join(of, "sub", "deep")
+	for _, d := range []string{inside, sibling} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(of, link); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		cwd   string
+		of    string
+		prof  string
+		wantN int
+	}{
+		{"same folder", of, of, "p", 1},
+		{"folder inside the repo", inside, of, "p", 1},
+		{"sibling with a shared prefix", sibling, of, "p", 0},
+		{"the parent of the repo", base, of, "p", 0},
+		{"clone_of reached through a symlink", inside, link, "p", 1},
+		{"cwd reached through a symlink", filepath.Join(link, "sub"), of, "p", 1},
+		{"a profile-less fallback entry", of, of, "", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRefreshFake(t)
+			dir := cloneDir(t)
+			f.h.clones = func() []config.Clone { return []config.Clone{{Of: tc.of, Dir: dir, Profile: tc.prof}} }
+			sums := f.h.ReturnForRepo(context.Background(), tc.cwd)
+			if len(sums) != tc.wantN || f.retCount() != tc.wantN {
+				t.Fatalf("%d summaries, %d returns, want %d", len(sums), f.retCount(), tc.wantN)
+			}
+			if tc.wantN == 1 && (sums[0].Trigger != session.ReturnOnHost || sums[0].Profile != tc.prof) {
+				t.Fatalf("summary = %+v, want trigger host and profile %q", sums[0], tc.prof)
+			}
+		})
+	}
+}
+
+// Clones of the repo come back in Dir order, each with its own profile.
+func TestReturnForRepoDirOrder(t *testing.T) {
+	f := newRefreshFake(t)
+	of := resolvedTemp(t)
+	a, b := cloneDir(t), cloneDir(t)
+	if a > b {
+		a, b = b, a
+	}
+	f.h.clones = func() []config.Clone {
+		return []config.Clone{{Of: of, Dir: b, Profile: "pb"}, {Of: of, Dir: a, Profile: "pa"}}
+	}
+	sums := f.h.ReturnForRepo(context.Background(), of)
+	if len(sums) != 2 || sums[0].Profile != "pa" || sums[1].Profile != "pb" {
+		t.Fatalf("summaries = %+v, want pa then pb", sums)
+	}
+}
+
+// The ctx is one budget. The clone running when it ends reports whatever its
+// return gave; the clones after it are "deferred" without running, and each
+// clone the budget cut short continues in the background under the host trigger.
+func TestReturnForRepoBudget(t *testing.T) {
+	f := newRefreshFake(t)
+	of := resolvedTemp(t)
+	d1, d2, d3 := cloneDir(t), cloneDir(t), cloneDir(t)
+	f.h.clones = func() []config.Clone {
+		return []config.Clone{{Of: of, Dir: d1, Profile: "p1"}, {Of: of, Dir: d2, Profile: "p2"}, {Of: of, Dir: d3, Profile: "p3"}}
+	}
+	var first atomic.Bool
+	bg := make(chan clone.ReturnRequest, 4)
+	f.h.ret = func(ctx context.Context, _ clone.Git, _ clone.Docker, r clone.ReturnRequest) clone.ReturnResult {
+		if r.Clone.Dir == d1 && first.CompareAndSwap(false, true) {
+			<-ctx.Done() // the foreground run of the first clone outlives the budget
+			return clone.ReturnResult{NotHome: []clone.NotHome{{Branch: "box/x", Reason: clone.ReasonDeferred}}}
+		}
+		bg <- r
+		return clone.ReturnResult{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	sums := f.h.ReturnForRepo(ctx, of)
+	if len(sums) != 3 {
+		t.Fatalf("%d summaries, want 3", len(sums))
+	}
+	if len(sums[0].NotHome) != 1 || sums[0].NotHome[0].Reason != clone.ReasonDeferred || sums[0].Skipped != "" {
+		t.Fatalf("the clone running at the deadline: %+v", sums[0])
+	}
+	for i, p := range []string{"p2", "p3"} {
+		s := sums[i+1]
+		if s.Skipped != clone.ReasonDeferred || s.Trigger != session.ReturnOnHost || s.Profile != p {
+			t.Fatalf("summary %d = %+v, want host/deferred for %s", i+1, s, p)
+		}
+	}
+	// Background: all three clones continue, host trigger, a fresh long budget.
+	seen := map[string]bool{}
+	for range 3 {
+		select {
+		case r := <-bg:
+			seen[r.Clone.Profile] = true
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the background return did not run for every clone: %v", seen)
+		}
+	}
+	if !seen["p1"] || !seen["p2"] || !seen["p3"] {
+		t.Fatalf("background ran for %v, want all three", seen)
+	}
+}
+
+// A clone whose return finished in budget is not continued; neither is a
+// summary that only failed.
+func TestReturnForRepoNoBackgroundWhenDone(t *testing.T) {
+	f := newRefreshFake(t)
+	of, dir := resolvedTemp(t), cloneDir(t)
+	f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+	f.retResult = clone.ReturnResult{Home: []string{"box/a"}, NotHome: []clone.NotHome{{Branch: "box/b", Reason: clone.ReasonNotFF}}}
+	sums := f.h.ReturnForRepo(context.Background(), of)
+	time.Sleep(50 * time.Millisecond)
+	if len(sums) != 1 || f.retCount() != 1 {
+		t.Fatalf("%d summaries, %d returns, want 1 and 1 (no background run)", len(sums), f.retCount())
+	}
+}
+
+// Review focus 3: with docker down (the box listing fails) the host spawn is not
+// blocked and the summary says the work was not checked.
+func TestReturnForRepoDockerDownDoesNotBlock(t *testing.T) {
+	f := newRefreshFake(t)
+	of, dir := resolvedTemp(t), cloneDir(t)
+	f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+	f.err = errors.New("cannot connect to the docker daemon")
+	start := time.Now()
+	sums := f.h.ReturnForRepo(context.Background(), of)
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("a failing box listing held the spawn")
+	}
+	if len(sums) != 1 || sums[0].Skipped == "" || sums[0].Error == "" || f.retCount() != 0 {
+		t.Fatalf("summary = %+v (returns %d), want a skip that carries the listing error and no return run", sums, f.retCount())
+	}
+}
+
+// I3: a listing or host check cut by the budget (an Error) and a lock wait cut
+// by it (skipped in-use) both leave work unchecked, so each continues in the
+// background like a deferred one.
+func TestReturnForRepoContinuesWorkCutByTheBudget(t *testing.T) {
+	t.Run("a check cut by the deadline carries an error", func(t *testing.T) {
+		f := newRefreshFake(t)
+		of, dir := resolvedTemp(t), cloneDir(t)
+		f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+		bg := make(chan struct{}, 4)
+		var first atomic.Bool
+		f.h.ret = func(ctx context.Context, _ clone.Git, _ clone.Docker, _ clone.ReturnRequest) clone.ReturnResult {
+			if first.CompareAndSwap(false, true) {
+				<-ctx.Done()
+				return clone.ReturnResult{Error: "timed out"}
+			}
+			bg <- struct{}{}
+			return clone.ReturnResult{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		sums := f.h.ReturnForRepo(ctx, of)
+		if len(sums) != 1 || sums[0].Error == "" {
+			t.Fatalf("summaries = %+v, want the clone's own error kept", sums)
+		}
+		select {
+		case <-bg:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a return cut by the deadline was not continued in the background")
+		}
+	})
+	t.Run("a lock wait cut by the deadline is in-use", func(t *testing.T) {
+		f := newRefreshFake(t)
+		of, dir := resolvedTemp(t), cloneDir(t)
+		f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+		release, ok := f.h.lockClone(context.Background(), cloneKey(dir))
+		if !ok {
+			t.Fatal("could not take the clone lock")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		sums := f.h.ReturnForRepo(ctx, of)
+		if len(sums) != 1 || sums[0].Skipped != clone.SkipInUse || f.retCount() != 0 {
+			t.Fatalf("summaries = %+v (returns %d), want skipped in-use and no return yet", sums, f.retCount())
+		}
+		release() // the background continuation waits on the same lock
+		deadline := time.After(5 * time.Second)
+		for f.retCount() == 0 {
+			select {
+			case <-deadline:
+				t.Fatal("a lock wait cut by the deadline was not continued in the background")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	})
+}
+
+// I5: a profile whose copy was never made (no box spawned yet) has nothing to
+// return: no summary, no return, nothing recorded.
+func TestReturnForRepoSkipsACopyThatWasNeverMade(t *testing.T) {
+	base := resolvedTemp(t)
+	of := filepath.Join(base, "repo")
+	missing := filepath.Join(base, "never-made")
+	notDir := filepath.Join(base, "afile")
+	for _, d := range []string{of} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(notDir, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := newRefreshFake(t)
+	f.h.clones = func() []config.Clone {
+		return []config.Clone{{Of: of, Dir: missing, Profile: "a"}, {Of: of, Dir: notDir, Profile: "b"}}
+	}
+	sums := f.h.ReturnForRepo(context.Background(), of)
+	if len(sums) != 0 || f.retCount() != 0 {
+		t.Fatalf("%d summaries, %d returns, want none for a copy that does not exist", len(sums), f.retCount())
+	}
+	f.mu.Lock()
+	lists := f.lists
+	f.mu.Unlock()
+	if lists != 0 {
+		t.Fatalf("docker was asked %d times for a copy that does not exist", lists)
+	}
 }
