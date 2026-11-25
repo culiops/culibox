@@ -29,6 +29,9 @@ const (
 const (
 	cloneSpawnReturnBudget = 60 * time.Second
 	cloneExitReturnTimeout = 15 * time.Minute
+	// cloneIdleReturnTimeout bounds one idle-triggered return: the agent may be
+	// working again by then, so it is shorter than an exit return.
+	cloneIdleReturnTimeout = 5 * time.Minute
 )
 
 var (
@@ -138,6 +141,12 @@ func (m *Manager) cloneLive(dir string, except *Session) func() bool {
 // when the profile still names this session's clone, never on the strength of a
 // stale spawn-time snapshot.
 func (m *Manager) returnWork(sess *Session, trigger string) {
+	m.returnWorkTimeout(sess, trigger, cloneExitReturnTimeout)
+}
+
+// returnWorkTimeout is returnWork with the return's time limit chosen by the
+// caller: exit and "now" use cloneExitReturnTimeout, idle a shorter one.
+func (m *Manager) returnWorkTimeout(sess *Session, trigger string, timeout time.Duration) {
 	m.mu.Lock()
 	h := m.clone
 	m.mu.Unlock()
@@ -160,7 +169,7 @@ func (m *Manager) returnWork(sess *Session, trigger string) {
 		}
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), cloneExitReturnTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	sum := h.ReturnWork(ctx, *cl, ReturnOpts{Trigger: trigger, LiveSession: m.cloneLive(cl.Dir, sess)})
 	sess.setReturn(&sum)

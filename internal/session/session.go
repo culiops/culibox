@@ -1707,6 +1707,7 @@ func (s *Session) signal(sig syscall.Signal) error {
 // Manager is the in-memory session registry.
 type Manager struct {
 	mu        sync.Mutex
+	autoRet   *autoReturner // schedules idle returns of clone sessions; nil in bare test Managers
 	sessions  map[string]*Session
 	launcher  launcher.Builder
 	backend   Backend  // nil = ephemeral (daemon-owned PTY); set = abduco persistence
@@ -2019,7 +2020,7 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 	if retention <= 0 {
 		retention = 5 * time.Minute
 	}
-	return &Manager{
+	m := &Manager{
 		sessions:  map[string]*Session{},
 		launcher:  l,
 		backend:   backend,
@@ -2029,6 +2030,8 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 		retention: retention,
 		procStart: procStartOf,
 	}
+	m.autoRet = m.newAutoReturner()
+	return m
 }
 
 // Spawn builds the agent command and starts a session — under the persistence
@@ -2967,6 +2970,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
 	m.watchRetention(id, sess)
+	m.startAutoReturn(sess)
 	// A new member of a box whose policy may have changed live joins its
 	// meet, and pulls it down if its own profile is narrower (#95).
 	m.refreshEgressBox(sess)
@@ -4158,6 +4162,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	// tried — see adoptSurvivingBoxes.
 	sess.ForceRedraw()
 	m.watchRetention(id, sess)
+	m.startAutoReturn(sess)
 	return nil
 }
 
