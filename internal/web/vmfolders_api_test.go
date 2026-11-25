@@ -234,7 +234,7 @@ func TestMetaVMFoldersFlag(t *testing.T) {
 func TestSpawnErrNotSharedShape(t *testing.T) {
 	rec := httptest.NewRecorder()
 	err := fmt.Errorf("spawn: %w", &box.NotSharedError{Dir: "/Users/u/code/x", Pending: true, Home: "/Users/u"})
-	writeSpawnErr(rec, "claude", err)
+	writeSpawnErr(rec, "claude", "", err)
 	var b map[string]any
 	json.Unmarshal(rec.Body.Bytes(), &b)
 	if rec.Code != 400 || b["code"] != "not_shared" || b["path"] != "~/code/x" || b["pending"] != true || b["read_only"] != false {
@@ -247,7 +247,7 @@ func TestSpawnErrNotSharedShape(t *testing.T) {
 
 func TestSpawnErrVMRestarting(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeSpawnErr(rec, "claude", fmt.Errorf("x: %w", box.ErrVMRestarting))
+	writeSpawnErr(rec, "claude", "", fmt.Errorf("x: %w", box.ErrVMRestarting))
 	if rec.Code != 503 || !strings.Contains(rec.Body.String(), `"code":"vm_restarting"`) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
@@ -258,7 +258,7 @@ func TestSpawnErrVMRestarting(t *testing.T) {
 func TestSpawnErrNotSharedNeedWrite(t *testing.T) {
 	for _, need := range []bool{false, true} {
 		rec := httptest.NewRecorder()
-		writeSpawnErr(rec, "claude", &box.NotSharedError{Dir: "/Users/u/orig", NeedWrite: need, Home: "/Users/u"})
+		writeSpawnErr(rec, "claude", "", &box.NotSharedError{Dir: "/Users/u/orig", NeedWrite: need, Home: "/Users/u"})
 		var b map[string]any
 		json.Unmarshal(rec.Body.Bytes(), &b)
 		if b["need_write"] != need {

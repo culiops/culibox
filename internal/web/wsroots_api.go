@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/gitrepo"
 	"github.com/culiops/culibox/internal/session"
@@ -222,6 +223,18 @@ func (s *Server) handleWorkspaceCheck(w http.ResponseWriter, r *http.Request) {
 	if bad && code == "" {
 		code = "unboxable"
 	}
+	// A git folder boxes only as a private copy (#371): the page disables
+	// "Box · in place" and opens the conversion from these. An unreadable .git
+	// is left to the spawn refusal, which words it.
+	var shape box.GitShape
+	suggested := ""
+	if isDir {
+		shape, _ = box.GitShapeOf(path)
+		if shape.Repo != "" {
+			// Where this profile's private copy would go, by the same rule a needs_copy refusal uses.
+			suggested = suggestCopyDir(s.Home, r.URL.Query().Get("profile"), shape.Repo)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"path":          path,
 		"exists":        exists,
@@ -232,6 +245,11 @@ func (s *Server) handleWorkspaceCheck(w http.ResponseWriter, r *http.Request) {
 		"refused":       refused,
 		"box":           map[string]any{"ok": !bad, "reason": reason, "code": code},
 		"vm_shared":     s.vmShared(addRoot),
+		"git_repo":      shape.Repo,
+		"git_worktree":  shape.Worktree,
+		"git_inside":    shape.Inside,
+		"git_home":      gitIsHome(s.Home, shape.Repo),
+		"suggested":     suggested,
 	})
 }
 

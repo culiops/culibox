@@ -367,6 +367,12 @@ type CloneHooks interface {
 	// BoxOwned reports whether cwd is inside any profile's clone, with the
 	// reason a host-tier spawn there is refused.
 	BoxOwned(cwd string) (reason string, owned bool)
+	// CopyDirOf is the clone directory (symlinks resolved) that real, an already
+	// resolved path, is at or under, and whether there is one. Only a positive
+	// match answers ok: an unreadable record or a directory that cannot be
+	// resolved is "no", never "owned" (BoxOwned fails the other way, for the host
+	// tier).
+	CopyDirOf(real string) (dir string, ok bool)
 	// HostOrigin is the host repo's remote.origin.url ("" when unset). It reads
 	// `of`, the user's repo, never the box's clone.
 	HostOrigin(ctx context.Context, of string) (string, error)
@@ -1770,7 +1776,8 @@ type Manager struct {
 	// boxedRecorder persists a workspace as box-written before a boxed Wrap
 	// starts a box in it. Nil = nothing is recorded (tests, hosts without
 	// containment).
-	boxedRecorder func(cwd string) error
+	// copyDir is the private copy the workspace is in ("" = none, an in-place spawn).
+	boxedRecorder func(cwd, copyDir string) error
 
 	// peekMu guards peekCache. It is SEPARATE from m.mu on purpose: PeekFor is
 	// called from List after m.mu is released, and sharing the mutex would make
@@ -1935,7 +1942,7 @@ func (m *Manager) SetContextCheck(f func(path string) (*box.FileID, error)) {
 // workspace the host does not know a box wrote in is one the fs API would treat
 // as host-owned. An error fails the spawn ("record boxed workspace: ...") and
 // Wrap is not called. Call once at boot. Nil records nothing.
-func (m *Manager) SetBoxedRecorder(f func(cwd string) error) {
+func (m *Manager) SetBoxedRecorder(f func(cwd, copyDir string) error) {
 	m.mu.Lock()
 	m.boxedRecorder = f
 	m.mu.Unlock()
@@ -2342,6 +2349,30 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			return nil, fmt.Errorf("%w: %s%s", box.ErrBoxOwned, reason, spawnBoxOwnedHint)
 		}
 	}
+	// A git work tree never boxes in place (#371): it boxes as a private copy.
+	// Refused here, before Prepare starts the box VM; Wrap refuses it too, from
+	// its own resolution of the path. A path that does not resolve is left to
+	// Wrap, which words that refusal.
+	//
+	// copyDir: the folder (as resolved here) is at or under a known private copy,
+	// a clone directory: the quick shell beside a clone session, and its restart,
+	// run there with no clone setup of their own. The refusal does not apply, and
+	// Wrap is given the directory (BoxKey.CopyDir) to confirm against its own
+	// resolution; the guards still apply. CopyDirOf is asked only once a folder is
+	// refused, so a spawn in a folder that is not git never consults it.
+	copyDir := ""
+	if cl == nil && runtime == config.RuntimeBox && spec.Cwd != "" && absErr == nil {
+		if real, err := filepath.EvalSymlinks(absCwd); err == nil {
+			if nerr := box.NeedsCopy(real); nerr != nil {
+				if ch != nil {
+					copyDir, _ = ch.CopyDirOf(real)
+				}
+				if copyDir == "" {
+					return nil, nerr
+				}
+			}
+		}
+	}
 
 	// checkContext refuses a context path that is unsafe now: deleted, swapped
 	// for a symlink or made unsafe since the profile was saved, or overlapping
@@ -2577,7 +2608,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.mu.Unlock()
 		// Profile is not identity: it names the conversations folder a box this
 		// spawn creates mounts (#330), shared by the profile's boxes in this folder.
-		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports, Profile: spec.Agent}
+		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports, Profile: spec.Agent, CopyDir: copyDir}
 		// The bypass option the user chose for the profile or this spawn is the
 		// consent: the box home it creates pre-accepts the warning that nothing
 		// would answer in an unattended session. Not tied to the bundle or the
@@ -2721,7 +2752,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		if recordBoxed != nil {
 			// Last step before the box exists: from here the agent may write in
 			// the workspace, so the host must already remember that it did.
-			if err := recordBoxed(spec.Cwd); err != nil {
+			if err := recordBoxed(spec.Cwd, key.CopyDir); err != nil {
 				return nil, fmt.Errorf("record boxed workspace %q: %w", spec.Cwd, err)
 			}
 		}

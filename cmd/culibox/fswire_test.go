@@ -76,8 +76,8 @@ func TestBoxedRecorder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := boxedRecorder(reg)
-	if err := rec(""); err != nil {
+	rec := boxedRecorder(reg, nil)
+	if err := rec("", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := reg.List(); len(got) != 0 {
@@ -86,7 +86,7 @@ func TestBoxedRecorder(t *testing.T) {
 	// A relative cwd is recorded as the absolute path it names from the daemon's cwd.
 	dir := t.TempDir()
 	t.Chdir(dir)
-	if err := rec("."); err != nil {
+	if err := rec(".", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := reg.List(); len(got) != 1 || got[0] != dir {

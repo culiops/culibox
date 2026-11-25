@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxedws"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/session"
@@ -46,6 +47,10 @@ type cloneHooks struct {
 	// VM's docker sees nothing else, so a clone_of or clone dir outside it is
 	// refused (checkShared).
 	shares box.SharesFunc
+
+	// boxed is the record of boxed workspaces; nil (tests, a CLI run without a
+	// data dir) knows no in-place history, so nothing is refused for it.
+	boxed *boxedws.Registry
 
 	file    string // <dataDir>/clone-dirs
 	mu      sync.Mutex
@@ -292,6 +297,44 @@ func (h *cloneHooks) HostOrigin(ctx context.Context, of string) (string, error) 
 	return clone.HostOriginURL(ctx, h.env.Git, of)
 }
 
+// EstimateCopy sizes a private copy of the repo of and checks the free space
+// where dir would go (POST /api/clone/estimate). of gets the same checks
+// Prepare gives it first: not box-owned (checkOf), then a real, plain repo
+// (clone.CheckOf). Nothing is read before they pass. The estimate itself is
+// copyEstimate's: host git runs in of only when no box ever ran there.
+func (h *cloneHooks) EstimateCopy(ctx context.Context, of, dir string) (clone.Estimate, error) {
+	if h.unavailable != "" || h.env.Git == nil {
+		return clone.Estimate{}, fmt.Errorf("%w: clone mode is unavailable (%s)", box.ErrBoxUnavailable, h.unavailable)
+	}
+	if !usableDir(of) || !usableDir(dir) {
+		return clone.Estimate{}, fmt.Errorf("%w: the repo and the copy folder must be absolute clean paths", box.ErrUnboxableWorkspace)
+	}
+	if err := h.checkOf(of); err != nil {
+		return clone.Estimate{}, err
+	}
+	if err := clone.CheckOf(of, h.env.Home, h.env.Protected); err != nil {
+		return clone.Estimate{}, err
+	}
+	return h.copyEstimate(ctx, of, dir)
+}
+
+// copyEstimate is the copy estimate of both the dialog (EstimateCopy) and the
+// first-copy disk check of Prepare (clone.Env.Estimate). checkOf lets a folder
+// with an unknown in-place history through (the save asks the user about it),
+// and the dialog asks for its estimate before that answer: so host git runs in
+// of only when the boxed-workspace record knows no box ran there
+// (StatusNone). Otherwise the estimate is the .git walk alone, partial, with
+// no tree size (#371 S1).
+func (h *cloneHooks) copyEstimate(ctx context.Context, of, dir string) (clone.Estimate, error) {
+	g := h.env.Git
+	if h.boxed != nil {
+		if st, _ := h.boxed.InPlaceStatus(of); st != boxedws.StatusNone {
+			g = nil
+		}
+	}
+	return clone.EstimateCopy(ctx, g, of, dir)
+}
+
 // returnModeOf is how a trigger returns a clone's branches: "now" forces, the
 // profile's switch off only records what is not home (every other trigger,
 // idle and host included), otherwise fast-forward only.
@@ -501,6 +544,20 @@ func (h *cloneHooks) BoxOwned(cwd string) (string, bool) {
 	return clone.BoxOwned(cwd, all)
 }
 
+// CopyDirOf is the clone directory (resolved) that real, an already resolved path,
+// is at or under: a positive match against the live profiles' clones and the
+// recorded dirs, never "owned by default". An unreadable or corrupt record
+// contributes nothing, so the answer is no (#371).
+func (h *cloneHooks) CopyDirOf(real string) (string, bool) {
+	all := h.clones()
+	if dirs, err := h.recorded(); err == nil {
+		for _, d := range dirs {
+			all = append(all, config.Clone{Dir: d})
+		}
+	}
+	return clone.CopyDirOf(real, all)
+}
+
 // checkOf refuses a clone_of that is box-owned: another profile's clone dir, a
 // dir in the durable clone-dirs record, or anything inside one. The owning box
 // can plant .git/hooks or core.hooksPath there, so a host git run in it (the
@@ -511,7 +568,44 @@ func (h *cloneHooks) checkOf(of string) error {
 		return fmt.Errorf("%w: clone_of %s is box-owned (%s); a clone must be made from a host-owned repo",
 			box.ErrUnboxableWorkspace, of, why)
 	}
+	// A folder boxed in place while it was not a git repo may hold a .git the box
+	// wrote: host git (clone, fetch, origin) would run against it (#371). That
+	// "nongit" status is refused here. An entry with no flag (recorded before the
+	// flag existed) is asked about at profile save, for a new or changed
+	// clone_of only, so a clone profile accepted under the old rules keeps
+	// spawning; but its config may be box-written too, and a promisor remote
+	// declared there would make the copy's git clone or the bundle import, the
+	// two calls that read clone_of through a transport, run a command it names
+	// on a git without GIT_NO_LAZY_FETCH. So there, and only there, a partial
+	// clone is refused. A folder no box ran in ("none") is the user's own: a
+	// partial clone of theirs is a working clone_of.
+	if h.boxed != nil {
+		switch st, entry := h.boxed.InPlaceStatus(of); st {
+		case boxedws.StatusNonGit:
+			return fmt.Errorf("%w: clone_of %s: %s", box.ErrUnboxableWorkspace, of, nonGitRelease(of, entry, h.boxed.Path()))
+		case boxedws.StatusUnknown:
+			if why := clone.PartialCloneWhy(of); why != "" {
+				return fmt.Errorf("%w: clone_of %s %s, and %s was boxed in place before CuliBox recorded whether it was a git repo, "+
+					"so a box may have written that config; a partial clone there cannot be the source of a private copy",
+					box.ErrUnboxableWorkspace, of, why, entry)
+			}
+		}
+	}
 	return nil
+}
+
+// nonGitRelease says why a clone_of inside a folder boxed in place without git
+// is refused, and the one way to release it: the entry's git_guarded set to true
+// by hand. Never "delete the entry": the entry is also what keeps the web file
+// API contained in that folder.
+func nonGitRelease(of, entry, file string) string {
+	where := "this folder was"
+	if entry != of {
+		where = "it is inside " + entry + ", which was"
+	}
+	return fmt.Sprintf("%s boxed in place when it was not a git repo, so a .git there may be box-written. "+
+		"If you are sure the .git in %s is your own, not a box's: stop CuliBox, set %q to true under \"git_guarded\" in %s, and start it again",
+		where, of, entry, file)
 }
 
 // checkShared refuses a clone_of or clone dir the box VM does not share; with
@@ -693,6 +787,15 @@ func cloneUnavailableReason(h *cloneHooks) string {
 	return h.unavailable
 }
 
+// cloneEstimateFunc is the hooks' copy estimate for the web server; nil when
+// there are no hooks, which leaves the route unregistered.
+func cloneEstimateFunc(h *cloneHooks) func(context.Context, string, string) (clone.Estimate, error) {
+	if h == nil {
+		return nil
+	}
+	return h.EstimateCopy
+}
+
 // newCloneHooks builds the clone-mode hooks, on Linux and macOS alike: what
 // differs is the box layer's (its docker flags and VM shares). It ALWAYS
 // returns hooks: the host-tier box-owned guard (BoxOwned) needs neither the
@@ -746,5 +849,6 @@ func newCloneHooks(layer *boxLayer, home, memRoot, dataDir, instance string, pro
 		return h, err
 	}
 	h.env.Git = g
+	h.env.Estimate = h.copyEstimate
 	return h, nil
 }

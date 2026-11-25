@@ -241,6 +241,12 @@ function spawnRefusedNotShared(status, code) {
   return status === 400 && code === "not_shared";
 }
 
+// spawnRefusedNeedsCopy: a boxed in-place start of a git folder was refused (HTTP 400, code "needs_copy", #371): a git repo boxes only
+// as a private copy. The page opens the conversion dialog from the body ({repo, suggested, worktree, inside, lfs}).
+function spawnRefusedNeedsCopy(status, code) {
+  return status === 400 && code === "needs_copy";
+}
+
 // spawnRefusedRestarting: refused because the box VM is restarting (HTTP 503, code "vm_restarting"). The dialog shows the
 // server's sentence in its error line and starts following the apply.
 function spawnRefusedRestarting(status, code) {
@@ -312,7 +318,7 @@ function spawnProgressText(seconds, runtime) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    spawnRefusedLocked, spawnRefusedUnavailable, spawnRefusedBoxUnavailable, spawnRefusedNotShared, spawnRefusedRestarting, spawnNotSharedLine, vmShareFilter, spawnShareMode, spawnVMFilterFor, spawnLatest,
+    spawnRefusedLocked, spawnRefusedUnavailable, spawnRefusedBoxUnavailable, spawnRefusedNotShared, spawnRefusedNeedsCopy, spawnRefusedRestarting, spawnNotSharedLine, vmShareFilter, spawnShareMode, spawnVMFilterFor, spawnLatest,
     SPAWN_NOT_SHARED_TAIL, SPAWN_VM_SEES_HELP, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
     runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText, spawnSubmitLabel, spawnFootHint,
     PLIST_SEARCH_MIN, profileMatches,

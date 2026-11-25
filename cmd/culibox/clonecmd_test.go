@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxedws"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/handback"
@@ -484,6 +485,37 @@ func TestRunCloneRefusesBoxOwnedCloneOf(t *testing.T) {
 	// The victim itself (host-owned clone_of) still works.
 	if rc, out := runCloneArgs(e, "victim", "b", "main"); rc != 0 {
 		t.Fatalf("victim: rc=%d out=%q", rc, out)
+	}
+}
+
+// The CLI runs host git in clone_of like the daemon, so it refuses a folder the
+// record says was boxed in place without git (#371), and a corrupt record fails
+// closed.
+func TestRunCloneRefusesFolderBoxedInPlaceWithoutGit(t *testing.T) {
+	plain := t.TempDir()
+	e := newCloneEnv(t, nil, []config.AgentConfig{
+		cloneProfile("plain", filepath.Join(plain, "repo"), "/clones/plain"),
+		cloneProfile("ok", "/src/r", "/clones/ok"),
+	})
+	reg, _, err := boxedws.Open(e.data, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RecordInPlace(plain, false); err != nil {
+		t.Fatal(err)
+	}
+	rc, out := runCloneArgs(e, "plain", "b", "main")
+	if rc != 1 || !strings.Contains(out, "boxed in place when it was not a git repo") || e.req.Branch != "" {
+		t.Fatalf("rc=%d out=%q", rc, out)
+	}
+	if rc, out := runCloneArgs(e, "ok", "b", "main"); rc != 0 {
+		t.Fatalf("a repo outside the record: rc=%d out=%q", rc, out)
+	}
+	if err := os.WriteFile(filepath.Join(e.data, "boxed-workspaces.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if rc, out := runCloneArgs(e, "ok", "b", "main"); rc != 1 || !strings.Contains(out, "boxed workspace record") {
+		t.Fatalf("corrupt record: rc=%d out=%q", rc, out)
 	}
 }
 

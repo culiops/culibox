@@ -764,6 +764,14 @@ type BoxKey struct {
 	Expect        string
 	PartialMounts bool
 	Clone         *CloneMounts
+	// CopyDir is the private copy (a clone directory, symlinks resolved) this spawn
+	// runs in without a clone setup of its own, as the quick shell beside a clone
+	// session does (#371); "" = none. Wrap skips the refusal of a git work tree in
+	// place, and only that, when its own resolution of the workspace is at or under
+	// CopyDir; a workspace that resolves anywhere else is refused as without it.
+	// Every guard is derived as for any in-place workspace. Set by the session
+	// layer from the clone hooks' positive match. Not identity: nameFor ignores it.
+	CopyDir string
 	// Context is config.ContextHash of the profile's context_paths ("" = none).
 	// It is part of the identity for the same reason Clone's hash is: reuseMounts
 	// compares in-box destinations only, so a changed list must not land in a box
@@ -1237,9 +1245,32 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		// all see them, and runArgs renders every extra read-only.
 		extraRO = append(slices.Clip(extraRO), key.Clone.RO...)
 	}
+	// The spawn checked this folder inside a private copy (key.CopyDir). Wrap
+	// resolved the path again, seconds later and after the copy's box may have run:
+	// if it now leads outside the copy, the folder was re-pointed (a link planted
+	// in the copy). Refused outright, never judged as a plain in-place folder: a
+	// folder that is not git would box in place with nothing recorded. Exact case,
+	// component-wise: folding the case here would only widen what is skipped.
+	copied := false
+	if key.CopyDir != "" && key.Clone == nil {
+		if !pathWithin(ws.Path, key.CopyDir, false) {
+			return nil, nil, "", fmt.Errorf("%w: %s is not inside the private copy %s it was checked in: the folder changed since the spawn was checked. "+
+				"Start the session again", ErrUnboxableWorkspace, ws.Path, key.CopyDir)
+		}
+		copied = true
+	}
 	// A clone workspace is the box's own tree, rewritable by the box by design;
 	// guarding its .git/.claude would only protect the box from itself.
 	if m.opts.GuardInPlace && key.Clone == nil {
+		// A git work tree never boxes in place (#371): it boxes as a private copy.
+		// Before the guards, which stay as the second net for what this misses.
+		// Read from ws, the single resolution above, as the guards are. A folder
+		// inside the private copy it was checked in is skipped, and only that.
+		if !copied {
+			if err := gitInPlaceRefusal(ws.Path); err != nil {
+				return nil, nil, "", err
+			}
+		}
 		// Derived from ws, the single resolution above, which is what docker
 		// mounts. Appended as ordinary read-only extras, so MountUnsafe,
 		// reuseMounts (a live box without a guard is refused, an idle one

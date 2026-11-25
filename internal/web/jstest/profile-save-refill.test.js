@@ -35,7 +35,7 @@ test("renderPfRuntime's buttons both carry a real tier value", () => {
 
 test("saveProfile re-fills the editor from the server after the write", () => {
   const b = body("saveProfile");
-  const write = b.search(/method:\s*editing/);
+  const write = b.search(/cdSendProfile\(path,\s*editing/); // the write, through the inplace_history question (copydialog.js)
   const refill = b.search(/fillForm\(/);
   assert.ok(write >= 0, "saveProfile no longer writes");
   assert.ok(refill > write, "saveProfile must fillForm( after the PUT/POST");
@@ -67,7 +67,7 @@ test("saveProfile wraps the save chain in withPending after the confirm", () => 
   const b = body("saveProfile");
   const confirm = b.indexOf("await askConfirm(");
   const wrap = b.indexOf("withPending(");
-  const write = b.search(/method:\s*editing/);
+  const write = b.search(/cdSendProfile\(path,\s*editing/); // the write, through the inplace_history question (copydialog.js)
   assert.ok(confirm >= 0, "saveProfile no longer confirms");
   assert.ok(wrap > confirm, "withPending( must come after the askConfirm");
   assert.ok(write > wrap, "withPending( must come before the PUT/POST");
@@ -92,7 +92,7 @@ const HTML = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"),
 test("saveProfile sends the opened revision on PUT and nothing extra on POST", () => {
   const b = body("saveProfile");
   // Both carry the schema the page pinned at load; only the PUT carries a rev.
-  assert.match(b, /JSON\.stringify\(withSchema\(editing \? withRev\(p, pfLoaded\) : p, pfSchema\.get\(\)\)\)/);
+  assert.match(b, /cdSendProfile\(path, editing \? "PUT" : "POST", withSchema\(editing \? withRev\(p, pfLoaded\) : p, pfSchema\.get\(\)\)\)/);
 });
 
 // #120: the schema is baked into profileform.js by the server (PROFILE_SCHEMA_BAKED), so the

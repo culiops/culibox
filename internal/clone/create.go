@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,17 @@ func originURL(of string) string { return of }
 // and its top-level entries are moved INTO the existing directory, which keeps
 // its inode.
 func EnsureClone(ctx context.Context, g Git, c config.Clone, home string) (created bool, err error) {
+	return ensureClone(ctx, g, c, home, nil)
+}
+
+// EstimateFunc sizes a private copy of of and checks the free space where dir
+// would be made (EstimateCopy, or a stand-in in tests).
+type EstimateFunc func(ctx context.Context, of, dir string) (Estimate, error)
+
+// ensureClone is EnsureClone with the first-copy disk check: when est is set and
+// the clone has to be made, a definite "the disk cannot hold it" refuses before
+// anything is created. An estimate that fails is logged and does not block.
+func ensureClone(ctx context.Context, g Git, c config.Clone, home string, est EstimateFunc) (created bool, err error) {
 	if err := checkParents(c); err != nil {
 		return false, err
 	}
@@ -59,6 +71,16 @@ func EnsureClone(ctx context.Context, g Git, c config.Clone, home string) (creat
 	}
 	fail := func(err error) (bool, error) {
 		return false, fmt.Errorf("%w: creating the clone %s from %s: %w", box.ErrBoxUnavailable, c.Dir, c.Of, err)
+	}
+	if est != nil {
+		switch e, err := est(ctx, c.Of, c.Dir); {
+		case err != nil:
+			log.Printf("clone: cannot estimate the copy of %s (continuing): %v", c.Of, err)
+		case !e.Enough:
+			return false, fmt.Errorf("%w: not enough free disk for a private copy of %s at %s: it needs about %s (.git %s + files %s, plus 10%% and 512 MiB spare) and %s is free%s; free some space or choose another copy folder",
+				box.ErrBoxUnavailable, c.Of, c.Dir, humanBytes((e.GitBytes+e.TreeBytes)*11/10+copyHeadroom),
+				humanBytes(e.GitBytes), humanBytes(e.TreeBytes), humanBytes(e.FreeBytes), partialNote(e.Partial))
+		}
 	}
 	parent := filepath.Dir(c.Dir)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
@@ -285,4 +307,25 @@ func checkExisting(c config.Clone) (exists bool, err error) {
 		return refuse(fmt.Sprintf("its origin is %q", urls[0])) // %q: .git/config is box-written text
 	}
 	return true, nil
+}
+
+// humanBytes is n in the largest of B, KiB, MiB, GiB, TiB that keeps it readable.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit && exp < 3; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
+}
+
+func partialNote(partial bool) string {
+	if partial {
+		return " (the size is a lower bound: the repo is very large)"
+	}
+	return ""
 }

@@ -538,10 +538,11 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 
 	// 7. Into clone_of's quarantine ref, forced. The checks below use the SHA
 	// read here, never the ref again, so what moves to box/<branch> is exactly
-	// what was checked.
-	if _, err := hostGit("-c", "fetch.fsckObjects=true", "-c", "transfer.fsckObjects=true",
+	// what was checked. A bundle is read through the file transport, which the
+	// hardened flags forbid: this call alone gets it back (fileTransport).
+	if _, err := hostGit(append(slices.Clone(fileTransport), "-c", "fetch.fsckObjects=true", "-c", "transfer.fsckObjects=true",
 		"fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules",
-		tmp, "+refs/heads/"+r.Branch+":"+quarantine); err != nil {
+		tmp, "+refs/heads/"+r.Branch+":"+quarantine)...); err != nil {
 		return res, fmt.Errorf("clone fetch: %w", err)
 	}
 	out, err = hostGit("rev-parse", "--verify", "--end-of-options", quarantine+"^{commit}")
