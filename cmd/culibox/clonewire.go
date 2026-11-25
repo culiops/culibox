@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -374,6 +375,75 @@ func (h *cloneHooks) ReturnWork(ctx context.Context, c config.Clone, o session.R
 		return sum
 	}
 	return h.doReturn(ctx, c, o.Trigger, returnModeOf(c, o.Trigger))
+}
+
+// ReturnForRepo brings home the clones whose clone_of is cwd or holds it, before
+// a Host session starts there, one summary each in Dir order. Paths compare with
+// symlinks resolved. Profile-less entries (the fallback ones for an invalid
+// config) have no profile to return for and are skipped. The ctx is one budget
+// for the lot: once it is done the clones it did not reach get a "deferred"
+// summary, and every clone the budget cut short (skipped as deferred, or with a
+// branch not home as deferred) is continued in the background, so the spawn
+// never waits on it. A box of another instance or a docker that is down is
+// ReturnWork's "skipped" summary, never a block.
+func (h *cloneHooks) ReturnForRepo(ctx context.Context, cwd string) []session.ReturnSummary {
+	here := cloneKey(cwd)
+	var match []config.Clone
+	for _, c := range h.clones() {
+		if c.Profile != "" && pathWithin(here, cloneKey(c.Of)) {
+			match = append(match, c)
+		}
+	}
+	slices.SortStableFunc(match, func(a, b config.Clone) int { return strings.Compare(a.Dir, b.Dir) })
+	var sums []session.ReturnSummary
+	var later []config.Clone
+	for _, c := range match {
+		var s session.ReturnSummary
+		if ctx.Err() != nil {
+			s = session.ReturnSummary{Trigger: session.ReturnOnHost, At: time.Now(), Profile: c.Profile, Skipped: clone.ReasonDeferred}
+		} else {
+			s = h.ReturnWork(ctx, c, session.ReturnOpts{Trigger: session.ReturnOnHost})
+			s.Profile = c.Profile
+		}
+		if returnDeferred(s) {
+			later = append(later, c)
+		}
+		sums = append(sums, s)
+	}
+	if len(later) > 0 {
+		go func() {
+			for _, c := range later {
+				bctx, cancel := context.WithTimeout(context.Background(), session.BackgroundReturnTimeout)
+				s := h.ReturnWork(bctx, c, session.ReturnOpts{Trigger: session.ReturnOnHost})
+				cancel()
+				log.Printf("clone %s: the return continued after a host spawn: %d branch(es) home, %d not home, skipped %q",
+					c.Profile, len(s.Home), len(s.NotHome), s.Skipped)
+			}
+		}()
+	}
+	return sums
+}
+
+// returnDeferred reports that a return was cut short by time: it was skipped as
+// deferred, or a branch is not home for that reason.
+func returnDeferred(s session.ReturnSummary) bool {
+	if s.Skipped == clone.ReasonDeferred {
+		return true
+	}
+	for _, n := range s.NotHome {
+		if n.Reason == clone.ReasonDeferred {
+			return true
+		}
+	}
+	return false
+}
+
+// pathWithin reports whether p is dir or below it, by whole components.
+func pathWithin(p, dir string) bool {
+	if p == dir {
+		return true
+	}
+	return strings.HasPrefix(p, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
 }
 
 // NotHome is what the clone's return state says did not come home, for the

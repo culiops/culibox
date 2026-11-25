@@ -28,6 +28,9 @@ const (
 // return: it runs after the agent is gone, so nothing waits on it.
 const (
 	cloneSpawnReturnBudget = 60 * time.Second
+	// hostReturnBudget bounds the return run before a Host spawn on a repo that
+	// has clones; what it does not reach continues in the background.
+	hostReturnBudget       = 20 * time.Second
 	cloneExitReturnTimeout = 15 * time.Minute
 	// cloneIdleReturnTimeout bounds one idle-triggered return: the agent may be
 	// working again by then, so it is shorter than an exit return.
@@ -97,6 +100,23 @@ func (r *ReturnSummary) copy() *ReturnSummary {
 		out.Uncommitted = &n
 	}
 	return &out
+}
+
+// BackgroundReturnTimeout bounds a return that continues in the background after
+// a host spawn's budget ran out: it runs under no spawn, so it gets the exit
+// return's time.
+const BackgroundReturnTimeout = cloneExitReturnTimeout
+
+// copyReturns is an independent copy of a list of summaries, nil for empty.
+func copyReturns(in []ReturnSummary) []ReturnSummary {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ReturnSummary, len(in))
+	for i := range in {
+		out[i] = *in[i].copy()
+	}
+	return out
 }
 
 // NotHomeState is the profile row's view of a clone's state file: what was

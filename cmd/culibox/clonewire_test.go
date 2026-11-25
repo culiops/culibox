@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1505,4 +1506,149 @@ func resolvedTemp(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// ReturnForRepo runs the host-trigger return for each clone whose clone_of is
+// the folder or holds it, by whole path components and with symlinks resolved;
+// a profile-less (fallback) entry is never returned.
+func TestReturnForRepoMatching(t *testing.T) {
+	base := resolvedTemp(t)
+	of, sibling := filepath.Join(base, "b"), filepath.Join(base, "bc")
+	inside := filepath.Join(of, "sub", "deep")
+	for _, d := range []string{inside, sibling} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(of, link); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		cwd   string
+		of    string
+		prof  string
+		wantN int
+	}{
+		{"same folder", of, of, "p", 1},
+		{"folder inside the repo", inside, of, "p", 1},
+		{"sibling with a shared prefix", sibling, of, "p", 0},
+		{"the parent of the repo", base, of, "p", 0},
+		{"clone_of reached through a symlink", inside, link, "p", 1},
+		{"cwd reached through a symlink", filepath.Join(link, "sub"), of, "p", 1},
+		{"a profile-less fallback entry", of, of, "", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRefreshFake(t)
+			dir := cloneDir(t)
+			f.h.clones = func() []config.Clone { return []config.Clone{{Of: tc.of, Dir: dir, Profile: tc.prof}} }
+			sums := f.h.ReturnForRepo(context.Background(), tc.cwd)
+			if len(sums) != tc.wantN || f.retCount() != tc.wantN {
+				t.Fatalf("%d summaries, %d returns, want %d", len(sums), f.retCount(), tc.wantN)
+			}
+			if tc.wantN == 1 && (sums[0].Trigger != session.ReturnOnHost || sums[0].Profile != tc.prof) {
+				t.Fatalf("summary = %+v, want trigger host and profile %q", sums[0], tc.prof)
+			}
+		})
+	}
+}
+
+// Clones of the repo come back in Dir order, each with its own profile.
+func TestReturnForRepoDirOrder(t *testing.T) {
+	f := newRefreshFake(t)
+	of := resolvedTemp(t)
+	a, b := cloneDir(t), cloneDir(t)
+	if a > b {
+		a, b = b, a
+	}
+	f.h.clones = func() []config.Clone {
+		return []config.Clone{{Of: of, Dir: b, Profile: "pb"}, {Of: of, Dir: a, Profile: "pa"}}
+	}
+	sums := f.h.ReturnForRepo(context.Background(), of)
+	if len(sums) != 2 || sums[0].Profile != "pa" || sums[1].Profile != "pb" {
+		t.Fatalf("summaries = %+v, want pa then pb", sums)
+	}
+}
+
+// The ctx is one budget. The clone running when it ends reports whatever its
+// return gave; the clones after it are "deferred" without running, and each
+// clone the budget cut short continues in the background under the host trigger.
+func TestReturnForRepoBudget(t *testing.T) {
+	f := newRefreshFake(t)
+	of := resolvedTemp(t)
+	d1, d2, d3 := cloneDir(t), cloneDir(t), cloneDir(t)
+	f.h.clones = func() []config.Clone {
+		return []config.Clone{{Of: of, Dir: d1, Profile: "p1"}, {Of: of, Dir: d2, Profile: "p2"}, {Of: of, Dir: d3, Profile: "p3"}}
+	}
+	var first atomic.Bool
+	bg := make(chan clone.ReturnRequest, 4)
+	f.h.ret = func(ctx context.Context, _ clone.Git, _ clone.Docker, r clone.ReturnRequest) clone.ReturnResult {
+		if r.Clone.Dir == d1 && first.CompareAndSwap(false, true) {
+			<-ctx.Done() // the foreground run of the first clone outlives the budget
+			return clone.ReturnResult{NotHome: []clone.NotHome{{Branch: "box/x", Reason: clone.ReasonDeferred}}}
+		}
+		bg <- r
+		return clone.ReturnResult{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	sums := f.h.ReturnForRepo(ctx, of)
+	if len(sums) != 3 {
+		t.Fatalf("%d summaries, want 3", len(sums))
+	}
+	if len(sums[0].NotHome) != 1 || sums[0].NotHome[0].Reason != clone.ReasonDeferred || sums[0].Skipped != "" {
+		t.Fatalf("the clone running at the deadline: %+v", sums[0])
+	}
+	for i, p := range []string{"p2", "p3"} {
+		s := sums[i+1]
+		if s.Skipped != clone.ReasonDeferred || s.Trigger != session.ReturnOnHost || s.Profile != p {
+			t.Fatalf("summary %d = %+v, want host/deferred for %s", i+1, s, p)
+		}
+	}
+	// Background: all three clones continue, host trigger, a fresh long budget.
+	seen := map[string]bool{}
+	for range 3 {
+		select {
+		case r := <-bg:
+			seen[r.Clone.Profile] = true
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the background return did not run for every clone: %v", seen)
+		}
+	}
+	if !seen["p1"] || !seen["p2"] || !seen["p3"] {
+		t.Fatalf("background ran for %v, want all three", seen)
+	}
+}
+
+// A clone whose return finished in budget is not continued; neither is a
+// summary that only failed.
+func TestReturnForRepoNoBackgroundWhenDone(t *testing.T) {
+	f := newRefreshFake(t)
+	of, dir := resolvedTemp(t), cloneDir(t)
+	f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+	f.retResult = clone.ReturnResult{Home: []string{"box/a"}, NotHome: []clone.NotHome{{Branch: "box/b", Reason: clone.ReasonNotFF}}}
+	sums := f.h.ReturnForRepo(context.Background(), of)
+	time.Sleep(50 * time.Millisecond)
+	if len(sums) != 1 || f.retCount() != 1 {
+		t.Fatalf("%d summaries, %d returns, want 1 and 1 (no background run)", len(sums), f.retCount())
+	}
+}
+
+// Review focus 3: with docker down (the box listing fails) the host spawn is not
+// blocked and the summary says the work was not checked.
+func TestReturnForRepoDockerDownDoesNotBlock(t *testing.T) {
+	f := newRefreshFake(t)
+	of, dir := resolvedTemp(t), cloneDir(t)
+	f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+	f.err = errors.New("cannot connect to the docker daemon")
+	start := time.Now()
+	sums := f.h.ReturnForRepo(context.Background(), of)
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("a failing box listing held the spawn")
+	}
+	if len(sums) != 1 || sums[0].Skipped == "" || sums[0].Error == "" || f.retCount() != 0 {
+		t.Fatalf("summary = %+v (returns %d), want a skip that carries the listing error and no return run", sums, f.retCount())
+	}
 }

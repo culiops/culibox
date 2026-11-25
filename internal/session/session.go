@@ -375,6 +375,12 @@ type CloneHooks interface {
 	// in the summary. It takes the clone's lock; with Trigger != ReturnNow it
 	// skips ("in-use") when o.LiveSession reports true after the lock is held.
 	ReturnWork(ctx context.Context, c config.Clone, o ReturnOpts) ReturnSummary
+	// ReturnForRepo brings home the branches of every clone whose clone_of is
+	// cwd or contains it, before a Host session starts there (trigger "host"),
+	// one summary per clone. It shares ctx's budget: a clone the budget did not
+	// reach gets a "deferred" summary and is continued in the background, so
+	// the spawn never waits past it. Never an error.
+	ReturnForRepo(ctx context.Context, cwd string) []ReturnSummary
 }
 
 // cloneRefreshTimeout bounds one Refresh. It is best-effort and never fails a
@@ -861,6 +867,10 @@ type Info struct {
 	// Clone is what refreshing the clone before this spawn did. Clone-mode
 	// sessions only; absent otherwise.
 	Clone *CloneInfo `json:"clone,omitempty"`
+	// HostReturn is what bringing home the clones of this folder's repo did
+	// before this Host session started (one summary per clone). Host sessions
+	// only; absent when no clone is of this repo.
+	HostReturn []ReturnSummary `json:"host_return,omitempty"`
 	// Return is the latest exit or "Bring work home now" return of a clone-mode
 	// session; absent until one has run.
 	Return *ReturnSummary `json:"return,omitempty"`
@@ -972,6 +982,9 @@ type Session struct {
 	// Clone is the clone refresh result for a clone-mode session. Immutable
 	// after publication, read without the lock; Info hands out a deep copy.
 	Clone *CloneInfo
+	// HostReturn is Info.HostReturn: the pre-start return of the clones of this
+	// session's repo. Immutable after publication; Info hands out a deep copy.
+	HostReturn []ReturnSummary
 	// ret is the latest exit or "now" return, returning that a "now" is running.
 	// Both guarded by mu; ret is not persisted (a restart drops it, the clone's
 	// state file keeps the truth).
@@ -1492,6 +1505,7 @@ func (s *Session) Info() Info {
 	in.HostDropped = slices.Clone(s.HostDropped)
 	in.HostBroker = s.HostBroker
 	in.Clone = s.Clone.copy()
+	in.HostReturn = copyReturns(s.HostReturn)
 	in.Return = s.ret.copy()
 	in.Handback = s.handback.copy()
 	in.ContextPaths = slices.Clone(s.ContextPaths)
@@ -2859,6 +2873,16 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		log.Printf("session %s: host run of profile %q without %s", id, spec.Agent, config.JoinKinds(hostDropped))
 	}
 
+	// Every refusal of a Host spawn is behind us: bring home the work of any
+	// clone of this repo, so the agent starts on what the boxes made. Never
+	// fails the spawn, and never waits past hostReturnBudget.
+	var hostReturn []ReturnSummary
+	if runtime != config.RuntimeBox && ch != nil && cl == nil && absErr == nil {
+		rctx, cancel := context.WithTimeout(context.Background(), hostReturnBudget)
+		hostReturn = ch.ReturnForRepo(rctx, absCwd)
+		cancel()
+	}
+
 	cmd, ptmx, err := m.startProcess(id, spec, argv, env)
 	if err != nil {
 		m.releaseBoxNamed(boxName) // never leak a box for a session that failed to start
@@ -2934,6 +2958,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.brokerBox = heldBrokerBox // published: the session now owns the reference
 	sess.BundleDrops = bundleDrops
 	sess.Clone = cloneInfo
+	sess.HostReturn = hostReturn
 	sess.ContextPaths = slices.Clone(ctxPaths)
 	sess.LockedFiles = slices.Clone(lockedFiles)
 	sess.CloneOf = cloneOf
