@@ -335,7 +335,7 @@ async function pfnCreate(rec) {
     doc = pfvToHost(doc);
   }
   const body = withSchema(doc, pfSchema.get());
-  const post = () => api("/api/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const post = () => cdSendProfile("/api/profiles", "POST", body);
   rec.ui.creating = true;
   let created;
   try {

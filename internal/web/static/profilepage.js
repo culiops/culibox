@@ -2276,7 +2276,7 @@ async function pfvSaveBlock(id) {
   delete send.rev;
   delete send.schema;
   const body = withSchema(withRev(send, pfvState.doc), pfSchema.get());
-  const put = () => api("/api/profiles/" + encodeURIComponent(name), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const put = () => cdSendProfile("/api/profiles/" + encodeURIComponent(name), "PUT", body);
   pfvState.saving = true;
   pfvState.warnings = [];
   // saving stays set until the save has run its course, whatever happens in it: a throw must not leave Save and Edit refused for good.

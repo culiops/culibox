@@ -1037,3 +1037,64 @@ test("the Host card row and the Host confirm both say a shell's rc files can ove
   const notes = JSON.parse(JSON.stringify(asked[0].notes)).flat();
   assert.ok(notes.some((n) => n.includes(limit)), "confirm notes: " + JSON.stringify(notes));
 });
+
+// A git folder boxes only as a private copy (#371): Box · in place is off, and the clone card converts the profile.
+const gitRepo = { repo: "/home/u/repo", worktree: false, inside: false };
+
+test("a git folder: Box · in place is disabled with its reason; the clone card is enabled and converts, and is the pick", () => {
+  const m = tierModel({ profile: plain, cwd: "/home/u/repo", home, picked: "", short, git: gitRepo });
+  const [box, cl, h] = m.cards;
+  assert.strictEqual(box.disabled, true);
+  assert.strictEqual(box.why, "A git repo boxes as a private copy");
+  assert.strictEqual(cl.disabled, false);
+  assert.strictEqual(cl.convert, true);
+  assert.strictEqual(h.disabled, false);
+  assert.strictEqual(m.pick, "clone");
+  assert.strictEqual(m.dflt, "clone");
+});
+
+test("a git folder: a picked Box · in place does not stand; Host does", () => {
+  assert.strictEqual(tierModel({ profile: plain, cwd: "/home/u/repo", home, picked: "box", short, git: gitRepo }).pick, "clone");
+  assert.strictEqual(tierModel({ profile: plain, cwd: "/home/u/repo", home, picked: "host", short, git: gitRepo }).pick, "host");
+});
+
+test("a git folder with a host profile opens on Host, not on a conversion", () => {
+  assert.strictEqual(tierModel({ profile: hostp, cwd: "/home/u/repo", home, picked: "", short, git: gitRepo }).pick, "host");
+});
+
+test("a git folder whose profile already has its copy: the clone card is the pick and converts nothing", () => {
+  const m = tierModel({ profile: clone, cwd: "/home/u/repo", home, picked: "", short, git: gitRepo });
+  assert.strictEqual(m.cards[0].disabled, true);
+  assert.strictEqual(m.cards[1].convert, false);
+  assert.strictEqual(m.pick, "clone");
+});
+
+test("a git folder and a clone card the server does not offer: only Host is left to pick", () => {
+  const m = tierModel({ profile: plain, cwd: "/home/u/repo", home, picked: "", short, git: gitRepo, cloneUnavailable: "clone mode needs git 2.40" });
+  assert.strictEqual(m.cards[1].disabled, true);
+  assert.strictEqual(m.pick, "host");
+});
+
+test("a profile with a copy for another repo cannot convert; a git folder is then Host only", () => {
+  const m = tierModel({ profile: clone, cwd: "/home/u/other", home, picked: "", short, git: { repo: "/home/u/other", worktree: false, inside: false } });
+  assert.strictEqual(m.cards[1].disabled, true);
+  assert.strictEqual(m.cards[1].convert, false);
+  assert.strictEqual(m.pick, "host");
+});
+
+test("a folder that is not git: the cards are as they were", () => {
+  const m = tierModel({ profile: plain, cwd: "/home/u/x", home, picked: "", short, git: null });
+  assert.strictEqual(m.cards[0].disabled, false);
+  assert.strictEqual(m.cards[0].why, "");
+  assert.strictEqual(m.cards[1].convert, false);
+  assert.strictEqual(m.pick, "box");
+  assert.deepStrictEqual(tierModel({ profile: plain, cwd: "/home/u/x", home, picked: "", short }), m);
+});
+
+test("tierConvert: the clone pick on a git folder whose profile has no copy yet needs the conversion before Start", () => {
+  const { tierConvert } = require("../static/tierpick.js");
+  assert.strictEqual(tierConvert({ profile: plain, cwd: "/home/u/repo", home, git: gitRepo, pick: "clone" }), true);
+  assert.strictEqual(tierConvert({ profile: plain, cwd: "/home/u/repo", home, git: gitRepo, pick: "host" }), false);
+  assert.strictEqual(tierConvert({ profile: plain, cwd: "/home/u/x", home, git: null, pick: "clone" }), false);
+  assert.strictEqual(tierConvert({ profile: clone, cwd: "/home/u/repo", home, git: gitRepo, pick: "clone" }), false);
+});

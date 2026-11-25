@@ -372,7 +372,10 @@ type checkResp struct {
 		Reason string `json:"reason"`
 		Code   string `json:"code"`
 	} `json:"box"`
-	VMShared bool `json:"vm_shared"`
+	VMShared    bool   `json:"vm_shared"`
+	GitRepo     string `json:"git_repo"`
+	GitWorktree bool   `json:"git_worktree"`
+	GitInside   bool   `json:"git_inside"`
 }
 
 func decodeCheck(t *testing.T, w *httptest.ResponseRecorder) checkResp {
@@ -627,5 +630,43 @@ func TestRootsAPIBearerGetDoesNotScan(t *testing.T) {
 	}
 	if v := decodeRoots(t, g.roots("GET", "")); len(v.Elsewhere) != 1 || spy.n != 1 {
 		t.Fatalf("a cookie GET must still scan: %+v, %d", v.Elsewhere, spy.n)
+	}
+}
+
+// The check says whether the folder is a git work tree (or inside one), so the
+// New session dialog can disable "Box · in place" and offer the private copy (#371).
+func TestWorkspaceCheckGitShape(t *testing.T) {
+	g := newRootsAPIRig(t)
+	repo := realTemp(t)
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := decodeCheck(t, g.check(repo))
+	if c.GitRepo != repo || c.GitWorktree || c.GitInside {
+		t.Fatalf("a repo root: %+v", c)
+	}
+	sub := filepath.Join(repo, "pkg")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c = decodeCheck(t, g.check(sub))
+	if c.GitRepo != repo || c.GitWorktree || !c.GitInside {
+		t.Fatalf("inside a repo: %+v", c)
+	}
+	wt := realTemp(t)
+	mustWrite(t, filepath.Join(wt, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n")
+	c = decodeCheck(t, g.check(wt))
+	if c.GitRepo != wt || !c.GitWorktree || c.GitInside {
+		t.Fatalf("a linked worktree: %+v", c)
+	}
+	plain := realTemp(t)
+	c = decodeCheck(t, g.check(plain))
+	if c.GitRepo != "" || c.GitWorktree || c.GitInside {
+		t.Fatalf("a plain folder: %+v", c)
+	}
+	// A file or a missing path is never a repo.
+	c = decodeCheck(t, g.check(filepath.Join(plain, "nope")))
+	if c.GitRepo != "" {
+		t.Fatalf("missing: %+v", c)
 	}
 }

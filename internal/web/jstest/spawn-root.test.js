@@ -116,6 +116,7 @@ function lineWorld(state) {
     $: (id) => (id === "spawn-ws-check" ? el : null),
     document: { createElement: (t) => new Node(t) },
     drawerDesktop: () => true,
+    renderTierPick: () => {}, // setSpawnWsCheck redraws the cards: a git folder turns Box · in place off
     spawnWhere: () => ({ runtime: "box", clone: false }),
     spawnCurrentTier: () => "box",
     syncSpawnGate: () => calls.push("gate"),
