@@ -382,30 +382,44 @@ func (h *cloneHooks) ReturnWork(ctx context.Context, c config.Clone, o session.R
 // symlinks resolved. Profile-less entries (the fallback ones for an invalid
 // config) have no profile to return for and are skipped. The ctx is one budget
 // for the lot: once it is done the clones it did not reach get a "deferred"
-// summary, and every clone the budget cut short (skipped as deferred, or with a
-// branch not home as deferred) is continued in the background, so the spawn
-// never waits on it. A box of another instance or a docker that is down is
+// summary, and every clone the budget cut short (skipped as deferred, with a
+// branch not home as deferred, or, once the budget is done, one that ended in
+// an error or skipped in-use: a check or a lock wait the deadline cut) is
+// continued in the background, so the spawn never waits on it. A clone whose
+// directory does not exist yet (no box has been spawned) has nothing to return
+// and gets no summary. A box of another instance or a docker that is down is
 // ReturnWork's "skipped" summary, never a block.
 func (h *cloneHooks) ReturnForRepo(ctx context.Context, cwd string) []session.ReturnSummary {
 	here := cloneKey(cwd)
 	var match []config.Clone
 	for _, c := range h.clones() {
-		if c.Profile != "" && pathWithin(here, cloneKey(c.Of)) {
-			match = append(match, c)
+		if c.Profile == "" || !pathWithin(here, cloneKey(c.Of)) {
+			continue
 		}
+		// The copy exists only after the profile's first box spawn: with no
+		// directory there is nothing to return, and a return would only record
+		// an error against a clone that was never made.
+		if st, err := os.Lstat(c.Dir); err != nil || !st.IsDir() {
+			continue
+		}
+		match = append(match, c)
 	}
 	slices.SortStableFunc(match, func(a, b config.Clone) int { return strings.Compare(a.Dir, b.Dir) })
 	var sums []session.ReturnSummary
 	var later []config.Clone
 	for _, c := range match {
 		var s session.ReturnSummary
+		cut := false
 		if ctx.Err() != nil {
 			s = session.ReturnSummary{Trigger: session.ReturnOnHost, At: time.Now(), Profile: c.Profile, Skipped: clone.ReasonDeferred}
 		} else {
 			s = h.ReturnWork(ctx, c, session.ReturnOpts{Trigger: session.ReturnOnHost})
 			s.Profile = c.Profile
+			// A deadline that cut a listing or host check (an Error) or a lock
+			// wait (in-use) left work unchecked: continue it like a deferred one.
+			cut = ctx.Err() != nil && (s.Error != "" || s.Skipped == clone.SkipInUse)
 		}
-		if returnDeferred(s) {
+		if cut || returnDeferred(s) {
 			later = append(later, c)
 		}
 		sums = append(sums, s)

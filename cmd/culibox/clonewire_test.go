@@ -1652,3 +1652,90 @@ func TestReturnForRepoDockerDownDoesNotBlock(t *testing.T) {
 		t.Fatalf("summary = %+v (returns %d), want a skip that carries the listing error and no return run", sums, f.retCount())
 	}
 }
+
+// I3: a listing or host check cut by the budget (an Error) and a lock wait cut
+// by it (skipped in-use) both leave work unchecked, so each continues in the
+// background like a deferred one.
+func TestReturnForRepoContinuesWorkCutByTheBudget(t *testing.T) {
+	t.Run("a check cut by the deadline carries an error", func(t *testing.T) {
+		f := newRefreshFake(t)
+		of, dir := resolvedTemp(t), cloneDir(t)
+		f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+		bg := make(chan struct{}, 4)
+		var first atomic.Bool
+		f.h.ret = func(ctx context.Context, _ clone.Git, _ clone.Docker, _ clone.ReturnRequest) clone.ReturnResult {
+			if first.CompareAndSwap(false, true) {
+				<-ctx.Done()
+				return clone.ReturnResult{Error: "timed out"}
+			}
+			bg <- struct{}{}
+			return clone.ReturnResult{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		sums := f.h.ReturnForRepo(ctx, of)
+		if len(sums) != 1 || sums[0].Error == "" {
+			t.Fatalf("summaries = %+v, want the clone's own error kept", sums)
+		}
+		select {
+		case <-bg:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a return cut by the deadline was not continued in the background")
+		}
+	})
+	t.Run("a lock wait cut by the deadline is in-use", func(t *testing.T) {
+		f := newRefreshFake(t)
+		of, dir := resolvedTemp(t), cloneDir(t)
+		f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+		release, ok := f.h.lockClone(context.Background(), cloneKey(dir))
+		if !ok {
+			t.Fatal("could not take the clone lock")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		sums := f.h.ReturnForRepo(ctx, of)
+		if len(sums) != 1 || sums[0].Skipped != clone.SkipInUse || f.retCount() != 0 {
+			t.Fatalf("summaries = %+v (returns %d), want skipped in-use and no return yet", sums, f.retCount())
+		}
+		release() // the background continuation waits on the same lock
+		deadline := time.After(5 * time.Second)
+		for f.retCount() == 0 {
+			select {
+			case <-deadline:
+				t.Fatal("a lock wait cut by the deadline was not continued in the background")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	})
+}
+
+// I5: a profile whose copy was never made (no box spawned yet) has nothing to
+// return: no summary, no return, nothing recorded.
+func TestReturnForRepoSkipsACopyThatWasNeverMade(t *testing.T) {
+	base := resolvedTemp(t)
+	of := filepath.Join(base, "repo")
+	missing := filepath.Join(base, "never-made")
+	notDir := filepath.Join(base, "afile")
+	for _, d := range []string{of} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(notDir, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := newRefreshFake(t)
+	f.h.clones = func() []config.Clone {
+		return []config.Clone{{Of: of, Dir: missing, Profile: "a"}, {Of: of, Dir: notDir, Profile: "b"}}
+	}
+	sums := f.h.ReturnForRepo(context.Background(), of)
+	if len(sums) != 0 || f.retCount() != 0 {
+		t.Fatalf("%d summaries, %d returns, want none for a copy that does not exist", len(sums), f.retCount())
+	}
+	f.mu.Lock()
+	lists := f.lists
+	f.mu.Unlock()
+	if lists != 0 {
+		t.Fatalf("docker was asked %d times for a copy that does not exist", lists)
+	}
+}
