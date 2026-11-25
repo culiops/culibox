@@ -187,3 +187,29 @@ func under(p, parent string) bool {
 	}
 	return strings.HasPrefix(p, parent+"/")
 }
+
+// CopyDirOf is the clone directory that real (absolute, symlinks resolved) is at
+// or under, resolved the same way, and whether there is one. Unlike BoxOwned it
+// answers only on a positive match: a candidate whose directory cannot be
+// resolved (not made yet, unreadable, a link loop) is skipped, never counted, so
+// an unknown is "no". It is for the one place that skips a refusal when a folder
+// is a private copy; a path that merely spells or links into a clone does not
+// match, because real is already where the path leads.
+func CopyDirOf(real string, clones []config.Clone) (string, bool) {
+	if !filepath.IsAbs(real) || filepath.Clean(real) != real {
+		return "", false
+	}
+	for _, c := range clones {
+		if c.Dir == "" || !filepath.IsAbs(c.Dir) {
+			continue
+		}
+		dir, err := filepath.EvalSymlinks(filepath.Clean(c.Dir))
+		if err != nil || dir == "/" {
+			continue
+		}
+		if under(real, dir) {
+			return dir, true
+		}
+	}
+	return "", false
+}

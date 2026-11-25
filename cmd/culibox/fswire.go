@@ -83,21 +83,26 @@ func seedDirs(sessions []session.Info, clones []config.Clone, profileCwds []stri
 
 // boxedRecorder adapts the registry to session.Manager.SetBoxedRecorder. Spawn
 // hands over the absolute cwd its checks resolved, or "" (the daemon's own cwd
-// would be meant, which is not a workspace to record), which is ignored. A
-// relative path is still made absolute, as a backstop. A cwd that is a clone
-// profile's directory is a clone spawn and is recorded as before; any other is
-// an in-place spawn, and a git work tree never boxes in place (#371), so the
-// folder is recorded as boxed in place without git (RecordInPlace false): a
-// .git a box writes there later must never become a clone source. clones is
-// read on every call (a profile saved after boot counts); nil means none.
-func boxedRecorder(reg *boxedws.Registry, clones func() []config.Clone) func(cwd string) error {
-	return func(cwd string) error {
+// would be meant, which is not a workspace to record), which is ignored, and the
+// private copy the cwd is in (copyDir, "" when none). A relative path is still
+// made absolute, as a backstop. A spawn in a copy, or at a clone profile's
+// directory, is a copy and is recorded as before (the copy's directory, with no
+// in-place flag). Any other is an in-place spawn, and a git work tree never boxes
+// in place (#371), so the folder is recorded as boxed in place without git
+// (RecordInPlace false): a .git a box writes there later must never become a
+// clone source. clones is read on every call (a profile saved after boot
+// counts); nil means none.
+func boxedRecorder(reg *boxedws.Registry, clones func() []config.Clone) func(cwd, copyDir string) error {
+	return func(cwd, copyDir string) error {
 		if cwd == "" {
 			return nil
 		}
 		abs, err := filepath.Abs(cwd)
 		if err != nil {
 			return err
+		}
+		if copyDir != "" {
+			return reg.Add(copyDir)
 		}
 		if clones != nil {
 			key := cloneKey(abs)

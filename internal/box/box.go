@@ -764,12 +764,14 @@ type BoxKey struct {
 	Expect        string
 	PartialMounts bool
 	Clone         *CloneMounts
-	// InCopy: the workspace is a box-owned private copy (a clone directory) that
-	// this spawn runs in without a clone setup of its own, as the quick shell beside
-	// a clone session does (#371). Wrap then skips the refusal of a git work tree in
-	// place, and only that: every guard is derived as for any in-place workspace.
-	// Set by the session layer from the clone hooks' BoxOwned. Not identity.
-	InCopy bool
+	// CopyDir is the private copy (a clone directory, symlinks resolved) this spawn
+	// runs in without a clone setup of its own, as the quick shell beside a clone
+	// session does (#371); "" = none. Wrap skips the refusal of a git work tree in
+	// place, and only that, when its own resolution of the workspace is at or under
+	// CopyDir; a workspace that resolves anywhere else is refused as without it.
+	// Every guard is derived as for any in-place workspace. Set by the session
+	// layer from the clone hooks' positive match. Not identity: nameFor ignores it.
+	CopyDir string
 	// Context is config.ContextHash of the profile's context_paths ("" = none).
 	// It is part of the identity for the same reason Clone's hash is: reuseMounts
 	// compares in-box destinations only, so a changed list must not land in a box
@@ -1249,7 +1251,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		// A git work tree never boxes in place (#371): it boxes as a private copy.
 		// Before the guards, which stay as the second net for what this misses.
 		// Read from ws, the single resolution above, as the guards are.
-		if !key.InCopy {
+		if key.CopyDir == "" || !underWS(ws.Path, key.CopyDir) {
 			if err := gitInPlaceRefusal(ws.Path); err != nil {
 				return nil, nil, "", err
 			}

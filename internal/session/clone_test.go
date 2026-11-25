@@ -52,15 +52,17 @@ func (l cloneLauncher) AccountFor(launcher.SpawnSpec) (account.Resolved, error) 
 
 // fakeCloneHooks records Prepare and BoxOwned calls and returns fixed answers.
 type fakeCloneHooks struct {
-	mu          sync.Mutex
-	prepares    []config.Clone
-	withMemory  []bool
-	prepareErr  error
-	owned       string // non-empty = BoxOwned reports this reason
-	ownedChecks []string
-	origin      string // HostOrigin's answer
-	originErr   error
-	originOf    []string // the clone_of paths HostOrigin was asked about
+	mu           sync.Mutex
+	prepares     []config.Clone
+	withMemory   []bool
+	prepareErr   error
+	owned        string // non-empty = BoxOwned reports this reason
+	copyDir      string // non-empty = CopyDirOf matches a cwd at or under it
+	ownedChecks  []string
+	copyDirAsked []string // the resolved paths CopyDirOf was asked about
+	origin       string   // HostOrigin's answer
+	originErr    error
+	originOf     []string // the clone_of paths HostOrigin was asked about
 
 	created   bool // Prepare's "created" answer
 	info      CloneInfo
@@ -206,6 +208,16 @@ func (f *fakeCloneHooks) BoxOwned(cwd string) (string, bool) {
 	defer f.mu.Unlock()
 	f.ownedChecks = append(f.ownedChecks, cwd)
 	return f.owned, f.owned != ""
+}
+
+func (f *fakeCloneHooks) CopyDirOf(real string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.copyDirAsked = append(f.copyDirAsked, real)
+	if f.copyDir != "" && (real == f.copyDir || strings.HasPrefix(real, f.copyDir+"/")) {
+		return f.copyDir, true
+	}
+	return "", false
 }
 
 func (f *fakeCloneHooks) nPrepares() int {
@@ -968,7 +980,7 @@ func TestCloneSpawnReleasesOnEarlyFailure(t *testing.T) {
 	l, dir := testCloneLauncher(t, config.RuntimeBox)
 	hooks := &fakeCloneHooks{}
 	m, boxes := cloneManager(t, l, hooks)
-	m.SetBoxedRecorder(func(string) error { return errors.New("x") })
+	m.SetBoxedRecorder(func(string, string) error { return errors.New("x") })
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
 	if err == nil {
 		_ = m.Kill(s.ID)

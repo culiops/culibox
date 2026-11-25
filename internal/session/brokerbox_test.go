@@ -157,7 +157,7 @@ func TestBoundSpawnFailureAfterAcquireReleasesTheBrokerBox(t *testing.T) {
 			return err
 		}},
 		{"boxed workspace cannot be recorded", func(t *testing.T, m *Manager, _ *fakeBoxes, _ *fakeEgressHooks) error {
-			m.SetBoxedRecorder(func(string) error { return errors.New("disk full") })
+			m.SetBoxedRecorder(func(string, string) error { return errors.New("disk full") })
 			_, err := spawnAWS(m, t.TempDir())
 			return err
 		}},

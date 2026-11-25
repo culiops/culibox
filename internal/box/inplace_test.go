@@ -1119,32 +1119,89 @@ func TestWrapRefusesAnEnclosingRepoAtHome(t *testing.T) {
 	}
 }
 
-// InCopy (a shell beside a clone session, in the clone's directory) skips the git
-// refusal and nothing else: the guards are derived as for any in-place workspace.
-func TestWrapInCopySkipsOnlyTheGitRefusal(t *testing.T) {
+// CopyDir (a shell beside a clone session, in the clone's directory) skips the git
+// refusal when Wrap's own resolution of the workspace is at or under it, and
+// skips nothing else: the guards are derived as for any in-place workspace.
+func TestWrapCopyDirSkipsOnlyTheGitRefusal(t *testing.T) {
 	refuseGitInPlace(t)
 	ctx := context.Background()
 	m, f := guardMgr(t, true)
 	repo := realTemp(t)
 	gitRepo(t, repo, "")
+	sub := filepath.Join(repo, "pkg")
+	mkdirs(t, sub)
 
 	if _, _, _, err := m.Wrap(ctx, repo, "s1", BoxKey{}, []string{"bash"}, nil, nil); !errors.As(err, new(*NeedsCopyError)) {
-		t.Fatalf("flag off: err = %v, want *NeedsCopyError", err)
+		t.Fatalf("no CopyDir: err = %v, want *NeedsCopyError", err)
 	}
-	if _, _, _, err := m.Wrap(ctx, repo, "s2", BoxKey{InCopy: true}, []string{"bash"}, nil, nil); err != nil {
-		t.Fatalf("flag on: %v", err)
+	if _, _, _, err := m.Wrap(ctx, repo, "s2", BoxKey{CopyDir: repo}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatalf("CopyDir at the workspace: %v", err)
 	}
 	for _, rel := range []string{".git", ".claude"} {
 		if !hasDst(f.runArgs[0], filepath.Join(repo, rel)) {
-			t.Errorf("flag on: %s must still be guarded: %q", rel, f.runArgs[0])
+			t.Errorf("CopyDir set: %s must still be guarded: %q", rel, f.runArgs[0])
 		}
 	}
-	// A guard refusal still refuses with the flag on.
+	// A workspace below the copy: still inside it. Its enclosing repo is the copy.
+	if _, _, _, err := m.Wrap(ctx, sub, "s3", BoxKey{CopyDir: repo}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatalf("CopyDir above the workspace: %v", err)
+	}
+	// A guard refusal still refuses with CopyDir set.
 	bad := realTemp(t)
 	gitRepo(t, bad, "")
 	writeFile(t, filepath.Join(bad, ".gitmodules"), "")
-	if _, _, _, err := m.Wrap(ctx, bad, "s3", BoxKey{InCopy: true}, []string{"bash"}, nil, nil); !errors.Is(err, ErrUnboxableWorkspace) || errors.As(err, new(*NeedsCopyError)) {
-		t.Fatalf("flag on, submodules: err = %v, want the guard's refusal", err)
+	if _, _, _, err := m.Wrap(ctx, bad, "s4", BoxKey{CopyDir: bad}, []string{"bash"}, nil, nil); !errors.Is(err, ErrUnboxableWorkspace) || errors.As(err, new(*NeedsCopyError)) {
+		t.Fatalf("CopyDir set, submodules: err = %v, want the guard's refusal", err)
+	}
+}
+
+// The spawn decided on its own resolution of the folder; Wrap resolves again. A
+// workspace that resolves outside the CopyDir it was handed (the folder was
+// re-pointed in between, or the key is wrong) is refused as without it.
+func TestWrapRefusesWhenTheWorkspaceResolvesOutsideCopyDir(t *testing.T) {
+	refuseGitInPlace(t)
+	ctx := context.Background()
+	m, f := guardMgr(t, true)
+	copyDir := realTemp(t)
+	gitRepo(t, copyDir, "")
+	host := realTemp(t)
+	gitRepo(t, host, "")
+	// <copy>/src -> the host repo: Wrap resolves the link and boxes the host repo.
+	link := filepath.Join(copyDir, "src")
+	symlink(t, host, link)
+
+	for name, cwd := range map[string]string{"link out of the copy": link, "a sibling": host} {
+		_, _, _, err := m.Wrap(ctx, cwd, "s1", BoxKey{CopyDir: copyDir}, []string{"bash"}, nil, nil)
+		var nc *NeedsCopyError
+		if !errors.As(err, &nc) || nc.Repo != host {
+			t.Fatalf("%s: err = %v, want *NeedsCopyError for %s", name, err, host)
+		}
+	}
+	// A directory that only shares the copy's name as a prefix is not inside it.
+	sib := copyDir + "-sibling"
+	mkdirs(t, sib)
+	t.Cleanup(func() { os.RemoveAll(sib) })
+	gitRepo(t, sib, "")
+	if _, _, _, err := m.Wrap(ctx, sib, "s2", BoxKey{CopyDir: copyDir}, []string{"bash"}, nil, nil); !errors.As(err, new(*NeedsCopyError)) {
+		t.Fatalf("a prefix sibling: err = %v, want *NeedsCopyError", err)
+	}
+	if f.runs() != 0 {
+		t.Fatalf("a refused workspace started a box, runs=%d", f.runs())
+	}
+}
+
+// CopyDir is not identity: the box a spawn gets is named as without it, so it
+// neither splits a box nor reuses another's.
+func TestCopyDirDoesNotChangeTheBoxName(t *testing.T) {
+	m, _ := guardMgr(t, true)
+	ws := realTemp(t)
+	a, err := m.boxName(ws, BoxKey{Session: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := m.boxName(ws, BoxKey{Session: "s", CopyDir: ws})
+	if err != nil || a != b {
+		t.Fatalf("name with CopyDir %q (%v), without %q", b, err, a)
 	}
 }
 

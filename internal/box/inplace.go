@@ -1283,8 +1283,11 @@ func usesLFS(repo string) bool {
 	if gitattributesLstatHook != nil {
 		gitattributesLstatHook(repo)
 	}
-	// Not root.Open: a box can swap the file for a FIFO between the Lstat and here,
-	// and a plain open of one blocks. No follow, no wait; then it must be regular.
+	// Not root.Open: a box can swap the file for a FIFO between the Lstat and
+	// here, and a plain open of one blocks; O_NONBLOCK makes the open return. A
+	// symlink swapped in is followed by os.Root inside the root (O_NOFOLLOW does
+	// not stop that), so what makes the read safe is the check below: the open
+	// file must be regular and the very file that was Lstat'ed.
 	f, err := root.OpenFile(".gitattributes", os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return false

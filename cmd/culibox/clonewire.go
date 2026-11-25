@@ -526,6 +526,20 @@ func (h *cloneHooks) BoxOwned(cwd string) (string, bool) {
 	return clone.BoxOwned(cwd, all)
 }
 
+// CopyDirOf is the clone directory (resolved) that real, an already resolved path,
+// is at or under: a positive match against the live profiles' clones and the
+// recorded dirs, never "owned by default". An unreadable or corrupt record
+// contributes nothing, so the answer is no (#371).
+func (h *cloneHooks) CopyDirOf(real string) (string, bool) {
+	all := h.clones()
+	if dirs, err := h.recorded(); err == nil {
+		for _, d := range dirs {
+			all = append(all, config.Clone{Dir: d})
+		}
+	}
+	return clone.CopyDirOf(real, all)
+}
+
 // checkOf refuses a clone_of that is box-owned: another profile's clone dir, a
 // dir in the durable clone-dirs record, or anything inside one. The owning box
 // can plant .git/hooks or core.hooksPath there, so a host git run in it (the

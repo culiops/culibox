@@ -744,7 +744,7 @@ func TestBoxedSpawnRecordsWorkspaceBeforeWrap(t *testing.T) {
 	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
 	boxes.order = order
 	cwd := t.TempDir()
-	m.SetBoxedRecorder(func(c string) error {
+	m.SetBoxedRecorder(func(c, _ string) error {
 		order.add("record:" + c)
 		return nil
 	})
@@ -763,7 +763,7 @@ func TestBoxedSpawnRecordsWorkspaceBeforeWrap(t *testing.T) {
 // boxed workspace is exactly the hole the record closes.
 func TestBoxedSpawnRecorderErrorRefusesSpawn(t *testing.T) {
 	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
-	m.SetBoxedRecorder(func(string) error { return errors.New("disk full") })
+	m.SetBoxedRecorder(func(string, string) error { return errors.New("disk full") })
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox, Cwd: t.TempDir()})
 	if err == nil {
 		_ = m.Kill(s.ID)
@@ -781,7 +781,7 @@ func TestBoxedSpawnRecorderErrorRefusesSpawn(t *testing.T) {
 func TestHostSpawnDoesNotRecordWorkspace(t *testing.T) {
 	m, _ := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
 	called := false
-	m.SetBoxedRecorder(func(string) error { called = true; return nil })
+	m.SetBoxedRecorder(func(string, string) error { called = true; return nil })
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeHost, Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)

@@ -1837,10 +1837,10 @@ func TestBoxedRecorderFlagsInPlaceSpawnsOnly(t *testing.T) {
 	rec := boxedRecorder(reg, func() []config.Clone {
 		return []config.Clone{{Of: "/elsewhere", Dir: copyDir, Profile: "p"}}
 	})
-	if err := rec(inPlace); err != nil {
+	if err := rec(inPlace, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := rec(copyDir); err != nil {
+	if err := rec(copyDir, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := reg.InPlaceStatus(inPlace); got != boxedws.StatusNonGit {
@@ -1851,6 +1851,24 @@ func TestBoxedRecorderFlagsInPlaceSpawnsOnly(t *testing.T) {
 	}
 	if got := reg.List(); len(got) != 2 {
 		t.Errorf("both are recorded: %v", got)
+	}
+
+	// A spawn in a private copy the profiles do not name (a recorded old clone
+	// dir, a subfolder of one) is a copy too: the copy's directory is recorded,
+	// with no in-place flag, and the cwd is not recorded as non-git.
+	other, sub := t.TempDir(), ""
+	sub = filepath.Join(other, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec(sub, other); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.InPlaceStatus(other); got != boxedws.StatusUnknown {
+		t.Errorf("a spawn in a copy: status %q, want unknown (no flag)", got)
+	}
+	if got := reg.InPlaceStatus(sub); got == boxedws.StatusNonGit {
+		t.Errorf("a spawn in a copy must not be recorded non-git: %q", got)
 	}
 }
 
@@ -1913,5 +1931,104 @@ func TestEstimateCopyOfAHostRepo(t *testing.T) {
 	e, err := h.EstimateCopy(context.Background(), of, filepath.Join(home, "box-clones", "x"))
 	if err != nil || e.TreeBytes != 5 || e.GitBytes <= 0 || !e.Enough {
 		t.Fatalf("EstimateCopy = %+v, %v; want tree 5, git > 0, enough", e, err)
+	}
+}
+
+// CopyDirOf answers only on a positive match of an already resolved path (#371).
+func TestCloneHooksCopyDirOf(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloneDir := filepath.Join(home, "box-clones", "work")
+	hostRepo := filepath.Join(home, "code", "hostrepo")
+	for _, d := range []string{filepath.Join(cloneDir, "sub"), hostRepo} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := testHooks(t, func() []config.Clone { return []config.Clone{{Of: hostRepo, Dir: cloneDir}} })
+
+	if dir, ok := h.CopyDirOf(cloneDir); !ok || dir != cloneDir {
+		t.Fatalf("the clone dir: %q, %v", dir, ok)
+	}
+	if dir, ok := h.CopyDirOf(filepath.Join(cloneDir, "sub")); !ok || dir != cloneDir {
+		t.Fatalf("below the clone dir: %q, %v", dir, ok)
+	}
+	// A box plants <clone>/src -> a host repo. The spawn resolves the path first,
+	// so the answer is asked about the host repo, which is not a copy.
+	if err := os.Symlink(hostRepo, filepath.Join(cloneDir, "src")); err != nil {
+		t.Fatal(err)
+	}
+	real, err := filepath.EvalSymlinks(filepath.Join(cloneDir, "src"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir, ok := h.CopyDirOf(real); ok {
+		t.Fatalf("a host repo reached through a planted link is a copy: %q", dir)
+	}
+	// A sibling that only shares the name prefix is not inside.
+	if _, ok := h.CopyDirOf(cloneDir + "-other"); ok {
+		t.Fatal("a sibling with a common prefix matched")
+	}
+	// A relative or unclean path never matches.
+	if _, ok := h.CopyDirOf("work/sub"); ok {
+		t.Fatal("a relative path matched")
+	}
+}
+
+// A clone dir that is a symlink is resolved before the comparison, and one that
+// cannot be resolved is skipped, not matched.
+func TestCloneHooksCopyDirOfResolvesAndSkips(t *testing.T) {
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	target := filepath.Join(home, "real-clone")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "clone-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	loop := filepath.Join(home, "loop")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatal(err)
+	}
+	h := testHooks(t, func() []config.Clone {
+		return []config.Clone{{Dir: loop}, {Dir: filepath.Join(home, "missing")}, {Dir: link}}
+	})
+	if dir, ok := h.CopyDirOf(target); !ok || dir != target {
+		t.Fatalf("a linked clone dir resolves to %s: got %q, %v", target, dir, ok)
+	}
+	if _, ok := h.CopyDirOf(filepath.Join(home, "missing", "x")); ok {
+		t.Fatal("a clone dir that does not exist matched")
+	}
+	if _, ok := h.CopyDirOf(loop); ok {
+		t.Fatal("a clone dir that cannot be resolved matched")
+	}
+}
+
+// The clone-dirs record counts when it is readable, and contributes nothing when
+// it is not: unlike BoxOwned, which then reports everything owned.
+func TestCloneHooksCopyDirOfRecord(t *testing.T) {
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	dir := filepath.Join(home, "old-clone")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := testHooks(t, noClones)
+	if err := os.WriteFile(h.file, []byte(dir+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := h.CopyDirOf(dir); !ok || got != dir {
+		t.Fatalf("a recorded dir: %q, %v", got, ok)
+	}
+	if err := os.WriteFile(h.file, []byte("not/absolute\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.CopyDirOf(dir); ok {
+		t.Fatal("a corrupt record matched")
+	}
+	if _, owned := h.BoxOwned(dir); !owned {
+		t.Fatal("precondition: BoxOwned fails closed on the same record")
 	}
 }
