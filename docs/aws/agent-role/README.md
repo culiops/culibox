@@ -285,11 +285,14 @@ not read-only. **The agent role stays the recommended default**; use this only w
   needs a new acknowledgement. Other acknowledgements survive a narrowing.
 - **`missing_permissions` sees nothing.** The gate could not read the policy, so an
   acknowledgement made from it cannot say what the permission set allows. It covers whatever
-  the permission set allows, now or later.
+  the permission set allows, now or later, as long as the policy stays unreadable to the gate.
+  If it becomes readable and the gate finds refused patterns, the acknowledgement no longer
+  covers them and you need a new one.
 - **The label.** Everywhere the connection appears (New session, the profile picker, the Host
   confirm, the session row, the Access tab, the Credentials card) it reads "Full access: no
   read-only default, no write window", and `culibox doctor` reports it as a WARN, or as a FAIL
-  when the acknowledgement no longer covers the permission set.
+  when the acknowledgement no longer covers the permission set, or when the result is one that
+  could be acknowledged and has no acknowledgement.
 - **A running session keeps its spawn-time acknowledgement.** The broker mints with the
   acknowledgement the session was spawned with. After you acknowledge again, respawn the session.
   When the acknowledgement stops covering the permission set, spawns and mints are refused, and
@@ -298,8 +301,8 @@ not read-only. **The agent role stays the recommended default**; use this only w
   acknowledgement is then cleared). Either takes effect at the **next spawn**: a running session
   keeps minting under the acknowledgement it started with, and credentials already issued keep
   working until they expire. End running sessions to stop them.
-- **Audit.** Each acknowledgement and each removal is a `full_access_ack` row in the credential
-  audit, with the actor. Every mint made under one is marked `full_access` in the mint audit.
+- **Audit.** Each acknowledgement, and each clearing of one by a read-only save, is a `full_access_ack`
+  row in the credential audit, with the actor; deleting the connection is the usual `deleted` row. Every mint made under one is marked `full_access` in the mint audit.
 - **Same on Box and Host.** There is no write window and no read-only default in either tier,
   and a connection in this mode still cannot be elevated.
 
@@ -334,7 +337,7 @@ the agent can do no harm:
 - **An acknowledged connection has full access.** Every session of every profile that binds it
   gets everything the permission set allows, now or later, on Box and on Host, with no read-only
   default and no write window. An acknowledgement made from `missing_permissions` could not see
-  the policy at all.
+  the policy at all, and holds only while the policy stays unreadable to the gate.
 - **Withdrawing an acknowledgement does not stop running sessions.** The broker mints with the
   acknowledgement the session was spawned with. Removing it, or deleting the connection, takes
   effect at the next spawn: end the running sessions to stop them.
