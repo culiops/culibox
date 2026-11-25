@@ -1301,10 +1301,12 @@ func usesLFS(repo string) bool {
 }
 
 // NeedsCopyError is the refusal to box a git work tree in place (#371): a git
-// repo boxes as a private copy. It wraps ErrUnboxableWorkspace.
+// repo boxes as a private copy. It wraps ErrUnboxableWorkspace. HomeRepo: the
+// repo is the user's home directory (a dotfiles repo), which is never copied, so
+// the message offers Host or a move, not a copy of the repo root.
 type NeedsCopyError struct {
-	Repo                  string
-	Worktree, Inside, LFS bool
+	Repo                            string
+	Worktree, Inside, LFS, HomeRepo bool
 }
 
 func (e *NeedsCopyError) Unwrap() error { return ErrUnboxableWorkspace }
@@ -1314,6 +1316,9 @@ func (e *NeedsCopyError) Error() string {
 	case e.Inside && e.Worktree:
 		return fmt.Sprintf("this folder is inside the linked git worktree %s, which cannot be boxed yet. "+
 			"Run it on Host, box its main repo as a private copy, or move the folder out of the worktree", e.Repo)
+	case e.HomeRepo:
+		return fmt.Sprintf("this folder is inside the git repo at your home directory (%s), which is never copied. "+
+			"Run it on Host, or move the folder out of that repo", e.Repo)
 	case e.Inside:
 		return fmt.Sprintf("this folder is inside the git repo %s. A git repo boxes as a private copy: box the repo root "+
 			"as a copy (Settings › Profiles › Work on a private copy), pick Host, or move the folder out of the repo", e.Repo)
@@ -1333,7 +1338,20 @@ func NeedsCopy(ws string) error {
 	if s.Repo == "" {
 		return nil
 	}
-	return &NeedsCopyError{Repo: s.Repo, Worktree: s.Worktree, Inside: s.Inside, LFS: s.LFS}
+	return &NeedsCopyError{Repo: s.Repo, Worktree: s.Worktree, Inside: s.Inside, LFS: s.LFS, HomeRepo: s.Repo == resolvedHome()}
+}
+
+// resolvedHome is the user's home directory with symlinks resolved, as the repo
+// GitShapeOf finds is; "" when there is none. A variable so a test can set it.
+var resolvedHome = func() string {
+	h, err := os.UserHomeDir()
+	if err != nil || h == "" {
+		return ""
+	}
+	if r, err := filepath.EvalSymlinks(h); err == nil {
+		return r
+	}
+	return filepath.Clean(h)
 }
 
 // gitInPlaceRefusal is NeedsCopy; a variable so a test of the guards as the

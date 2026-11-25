@@ -252,15 +252,18 @@ func isStoreFailure(err error) bool {
 	return errors.As(err, &sf)
 }
 
-// writeSaveErr answers a failed profile save. A refusal that means "what you
-// saw is not what is there" is a 409 with a code the editor acts on; a store
-// that could not write is a 500 without the path; anything else (a validation
-// error) stays a 400 with its message, as it always was.
+// isInPlaceHistory reports whether err is a save refused for its clone_of's
+// in-place history (an *InPlaceHistoryError), which the editor answers with the
+// user's ack.
 func isInPlaceHistory(err error) bool {
 	var ih *InPlaceHistoryError
 	return errors.As(err, &ih)
 }
 
+// writeSaveErr answers a failed profile save. A refusal that means "what you
+// saw is not what is there" is a 409 with a code the editor acts on; a store
+// that could not write is a 500 without the path; anything else (a validation
+// error) stays a 400 with its message, as it always was.
 func writeSaveErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrProfileChanged):

@@ -1030,6 +1030,7 @@ func TestNeedsCopyErrorMessages(t *testing.T) {
 		{"worktree", NeedsCopyError{Repo: "/r", Worktree: true}, []string{"linked git worktree cannot be boxed yet", "Host", "main repo"}},
 		{"inside", NeedsCopyError{Repo: "/home/u", Inside: true}, []string{"/home/u", "repo root", "Host", "move the folder"}},
 		{"inside worktree", NeedsCopyError{Repo: "/w", Inside: true, Worktree: true}, []string{"/w", "worktree", "Host", "main repo"}},
+		{"inside the home repo", NeedsCopyError{Repo: "/home/u", Inside: true, HomeRepo: true}, []string{"/home/u", "home directory", "Host", "move the folder"}},
 	}
 	for _, c := range cases {
 		e := c.e
@@ -1041,6 +1042,32 @@ func TestNeedsCopyErrorMessages(t *testing.T) {
 		if !errors.Is(&e, ErrUnboxableWorkspace) {
 			t.Errorf("%s: must wrap ErrUnboxableWorkspace", c.name)
 		}
+	}
+	// The home directory is never copied: its message must not offer to box it as a copy (#371 C5).
+	home := NeedsCopyError{Repo: "/home/u", Inside: true, HomeRepo: true}
+	for _, bad := range []string{"repo root", "Work on a private copy"} {
+		if strings.Contains(home.Error(), bad) {
+			t.Errorf("home repo: %q offers %q", home.Error(), bad)
+		}
+	}
+}
+
+// NeedsCopy says when the repo it found is the home directory, on resolved paths.
+func TestNeedsCopyKnowsTheHomeRepo(t *testing.T) {
+	home := realTemp(t)
+	gitRepo(t, home, "")
+	ws := filepath.Join(home, "notes")
+	mkdirs(t, ws)
+	old := resolvedHome
+	t.Cleanup(func() { resolvedHome = old })
+	resolvedHome = func() string { return home }
+	var nc *NeedsCopyError
+	if err := NeedsCopy(ws); !errors.As(err, &nc) || !nc.HomeRepo || !nc.Inside || !strings.Contains(err.Error(), "home directory") {
+		t.Fatalf("NeedsCopy(%s) = %v, want the home-repo refusal", ws, err)
+	}
+	resolvedHome = func() string { return realTemp(t) }
+	if err := NeedsCopy(ws); !errors.As(err, &nc) || nc.HomeRepo || !strings.Contains(err.Error(), "repo root") {
+		t.Fatalf("NeedsCopy(%s) with another home = %v, want the plain inside refusal", ws, err)
 	}
 }
 
