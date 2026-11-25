@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,7 +50,7 @@ func TestWriteSpawnErrNeedsCopy(t *testing.T) {
 	}
 	want := map[string]any{
 		"error": err.Error(), "code": "needs_copy", "repo": "/h/code/app",
-		"suggested": filepath.FromSlash("/h/box-clones/work"), "worktree": false, "inside": true, "lfs": true,
+		"suggested": filepath.FromSlash("/h/box-clones/work"), "worktree": false, "inside": true, "lfs": true, "git_home": false,
 	}
 	if rec.Code != http.StatusBadRequest || len(b) != len(want) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
@@ -214,5 +215,50 @@ func TestEstimateRouteIsProtectedAndOptional(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	if strings.Contains(rec.Body.String(), "git_bytes") {
 		t.Errorf("no CloneEstimate but the estimate route answered: %s", rec.Body)
+	}
+}
+
+// The server decides whether a refused folder sits in the repo at the home directory, on resolved paths: a home that is a symlink
+// still matches its target, and a repo elsewhere does not (#371).
+func TestGitIsHomeResolvesSymlinks(t *testing.T) {
+	real := realTemp(t)
+	link := filepath.Join(realTemp(t), "home-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	other := realTemp(t)
+	for _, c := range []struct {
+		name, home, repo string
+		want             bool
+	}{
+		{"same", real, real, true},
+		{"home is a symlink to the repo", link, real, true},
+		{"repo is a symlink to home", real, link, true},
+		{"trailing slash", real + "/", real, true},
+		{"another repo", real, other, false},
+		{"a repo under home", real, filepath.Join(real, "code"), false},
+		{"no home", "", real, false},
+		{"no repo", real, "", false},
+	} {
+		if got := gitIsHome(c.home, c.repo); got != c.want {
+			t.Errorf("%s: gitIsHome(%q, %q) = %v, want %v", c.name, c.home, c.repo, got, c.want)
+		}
+	}
+}
+
+func TestWriteSpawnErrNeedsCopyFlagsTheHomeRepo(t *testing.T) {
+	real := realTemp(t)
+	link := filepath.Join(realTemp(t), "home-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	writeSpawnErr(rec, "work", link, &box.NeedsCopyError{Repo: real, Inside: true})
+	var b map[string]any
+	if e := json.Unmarshal(rec.Body.Bytes(), &b); e != nil {
+		t.Fatal(e)
+	}
+	if b["code"] != "needs_copy" || b["git_home"] != true {
+		t.Fatalf("a symlinked home: %s", rec.Body)
 	}
 }

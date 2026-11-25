@@ -376,6 +376,8 @@ type checkResp struct {
 	GitRepo     string `json:"git_repo"`
 	GitWorktree bool   `json:"git_worktree"`
 	GitInside   bool   `json:"git_inside"`
+	GitHome     bool   `json:"git_home"`
+	Suggested   string `json:"suggested"`
 }
 
 func decodeCheck(t *testing.T, w *httptest.ResponseRecorder) checkResp {
@@ -668,5 +670,48 @@ func TestWorkspaceCheckGitShape(t *testing.T) {
 	c = decodeCheck(t, g.check(filepath.Join(plain, "nope")))
 	if c.GitRepo != "" {
 		t.Fatalf("missing: %+v", c)
+	}
+}
+
+// The check carries the server's own verdict on the home repo (resolved paths, so a symlinked home counts) and where the copy of
+// this profile would go, so the page never rebuilds either (#371).
+func TestWorkspaceCheckGitHomeAndSuggested(t *testing.T) {
+	g := newRootsAPIRig(t)
+	// The rig's home is a real temp dir; a repo AT home is the dotfiles case.
+	if err := os.Mkdir(filepath.Join(g.home, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(g.home, "proj")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := decodeCheck(t, g.check(sub))
+	if c.GitRepo != g.home || !c.GitInside || !c.GitHome {
+		t.Fatalf("a folder in the repo at home: %+v", c)
+	}
+	// The same home reached through a symlink: the server still knows.
+	link := filepath.Join(realTemp(t), "h")
+	if err := os.Symlink(g.home, link); err != nil {
+		t.Fatal(err)
+	}
+	g.s.Home = link
+	c = decodeCheck(t, g.check(sub))
+	if !c.GitHome {
+		t.Fatalf("a symlinked home: %+v", c)
+	}
+	// Another repo is not the home repo, and the suggestion follows the profile asked for (the same rule as a refusal).
+	g.s.Home = g.home
+	repo := realTemp(t)
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w := do(g.s.handleWorkspaceCheck, storeReq("GET", "/api/workspace/check?profile=work&path="+url.QueryEscape(repo), "", "", credCookie))
+	c = decodeCheck(t, w)
+	if c.GitHome || c.Suggested != suggestCopyDir(g.home, "work", repo) || !strings.HasSuffix(c.Suggested, filepath.Join("box-clones", "work")) {
+		t.Fatalf("another repo: %+v", c)
+	}
+	// No repo, no suggestion.
+	if c = decodeCheck(t, g.check(realTemp(t))); c.Suggested != "" || c.GitHome {
+		t.Fatalf("a plain folder: %+v", c)
 	}
 }

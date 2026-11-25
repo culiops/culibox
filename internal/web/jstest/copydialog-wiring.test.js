@@ -24,7 +24,7 @@ function world(over) {
   new vm.Script(read("copydialog.js"), { filename: "copydialog.js" }).runInContext(ctx);
   return { box, ctx, calls, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
-const refusal = { repo: "/home/u/repo", suggested: "/home/u/box-clones/claude", worktree: false, inside: false, lfs: false };
+const refusal = { repo: "/home/u/repo", suggested: "/home/u/box-clones/claude", worktree: false, inside: false, lfs: false, git_home: false };
 const o = { profileName: "claude", profile: { name: "claude" }, home: "/home/u", hostOk: true };
 
 test("copyDialogRun: a confirmed dialog saves the profile as a copy (clone_of, default_cwd, rev, schema) and refreshes the list", async () => {
@@ -102,7 +102,10 @@ test("the page opens the dialog from a needs_copy refusal of a start and of a re
   const app = read("app.js");
   assert.match(app, /spawnRefusedNeedsCopy\(e\.status, e\.code\)/);
   assert.match(app, /await restartNeedsCopy\(s, body\)/);
-  assert.match(app, /if \(tierConvertNow\(\)\) \{\s*copied = await spawnNeedsCopy\(cdRefusalFromCheck\(spawnWsCheck/);
+  assert.match(app, /if \(tierConvertNow\(\)\) \{\s*const refusal = await spawnCopyRefusal\(\);\s*if \(!refusal\) return;\s*copied = await spawnNeedsCopy\(refusal\);/);
+  // The card path asks the server for this profile (its suggested folder and home verdict), and the retry asks outside the busy state.
+  assert.match(app, /"\/api\/workspace\/check\?path=" \+ encodeURIComponent\(getCwd\(\)\) \+ "&profile=" \+ encodeURIComponent\(\$\("agent"\)\.value\)/);
+  assert.match(app, /asked = true;\s*spawnIdle\(\);\s*const made = await spawnNeedsCopy\(e\.body\);\s*if \(!made\) break;\s*spawnBusyAgain\(\);/);
   // The cards follow the check: a git answer turns Box · in place off.
   assert.match(app, /function setSpawnWsCheck\(check\) \{\s*spawnWsCheck = check;\s*renderTierPick\(\);/);
   const html = read("index.html");

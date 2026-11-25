@@ -14,6 +14,7 @@ const CD_LFS = "Git LFS files arrive as pointer files.";
 const CD_NO_DISK = "Not enough free disk";
 const CD_FOLDER_FIRST = "Set this profile's folder to the repo first.";
 const CD_HOME = "This folder is inside the git repo at your home directory. Pick Host, or move the folder out of that repo.";
+const CD_HOME_UNKNOWN = "CuliBox could not tell whether this repo is your home directory. Pick Host, or update CuliBox.";
 const CD_HOST_PROFILE = "This profile runs on Host. A private copy runs in a box: switch the profile to Box first.";
 const CD_BUILT_IN = "This profile is built in and cannot be changed. Duplicate it in Settings first.";
 const CD_WORKTREE = "A linked git worktree cannot be boxed or copied.";
@@ -50,7 +51,9 @@ function cdSizeLine(est) {
 //   refusal  the needs_copy body ({error, repo, suggested, worktree, inside, lfs}) or cdRefusalFromCheck's likeness
 //   estimate GET /api/clone/estimate's answer, null while it is out or when it was refused (ctx.estimateError says why)
 //   profile  the profile that would be converted (a ProfileView)
-//   ctx      {home, ackAsked, estimateError}
+//   ctx      {home, ackAsked, estimateError}; home only expands a ~ in the profile's own folder
+// The refusal's git_home is the SERVER's verdict that the repo is the home directory (resolved paths): the page never compares
+// paths for it, and a refusal without the flag (an older server) is not converted.
 // -> {repo, suggested, lines, canConvert, needsAck, worktreeOnly, hostOnly, loading}. `hostOnly`: nothing here can be converted, so
 // the only way on is Host (a linked worktree, or a folder inside the repo at the home directory).
 function copyDialogModel(refusal, estimate, profile, ctx) {
@@ -63,10 +66,10 @@ function copyDialogModel(refusal, estimate, profile, ctx) {
     m.lines = [r.error || CD_WORKTREE];
     return m;
   }
-  // A folder inside the repo at ~ (a dotfiles repo) would copy the whole home directory.
-  if (r.inside && c.home && cdNorm(r.repo, c.home) === cdNorm(c.home, c.home)) {
+  // A repo at ~ (a dotfiles repo) would copy the whole home directory. Only the server knows (git_home); no flag, no conversion.
+  if (r.git_home !== false) {
     m.hostOnly = true;
-    m.lines = [CD_HOME];
+    m.lines = [r.git_home === true ? CD_HOME : CD_HOME_UNKNOWN];
     return m;
   }
   const est = estimate || null;
@@ -83,6 +86,10 @@ function copyDialogModel(refusal, estimate, profile, ctx) {
   const blocks = [];
   if (p.editable === false) blocks.push(CD_BUILT_IN);
   if (p.runtime === "host") blocks.push(CD_HOST_PROFILE);
+  // A profile that already makes copies of another repo would have that replaced by the save: a separate profile is the way.
+  if (typeof p.clone_of === "string" && p.clone_of.trim() !== "" && cdNorm(p.clone_of, c.home) !== cdNorm(r.repo, c.home)) {
+    blocks.push("This profile already makes private copies of " + p.clone_of + ". Use a separate profile for this repo.");
+  }
   // The profile's folder is what becomes the copy's place, so one that is elsewhere is the user's to settle first.
   if (typeof p.default_cwd === "string" && p.default_cwd.trim() !== "" && !cdUnder(p.default_cwd, r.repo, c.home)) blocks.push(CD_FOLDER_FIRST);
   m.lines.push(...blocks);
@@ -94,14 +101,16 @@ function cdEstimateURL(repo, dir) {
   return "/api/clone/estimate?of=" + encodeURIComponent(repo) + "&dir=" + encodeURIComponent(dir);
 }
 
-// cdRefusalFromCheck: the refusal a spawn would get, built from /api/workspace/check's git fields, for the New session card path
-// (nothing was refused yet). The suggestion is the server's own rule, <home>/box-clones/<profile>. null for a folder that is not git.
-function cdRefusalFromCheck(check, profileName, home) {
+// cdRefusalFromCheck: the refusal a spawn would get, built from /api/workspace/check's answer (asked with the profile's name), for the
+// New session card path (nothing was refused yet). The suggested folder and the home verdict are the server's. null for a folder
+// that is not git.
+function cdRefusalFromCheck(check) {
   if (!check || typeof check.git_repo !== "string" || check.git_repo === "") return null;
   return {
     error: "", code: "needs_copy", repo: check.git_repo,
-    suggested: String(home || "").replace(/\/+$/, "") + "/box-clones/" + profileName,
+    suggested: typeof check.suggested === "string" ? check.suggested : "",
     worktree: check.git_worktree === true, inside: check.git_inside === true, lfs: false,
+    git_home: typeof check.git_home === "boolean" ? check.git_home : undefined,
   };
 }
 
@@ -304,6 +313,6 @@ async function copyDialogRun(refusal, o) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     copyDialogModel, cdEstimateURL, cdRefusalFromCheck, cdSavedDoc, cdIsInplaceHistory, cdSaveWithAck, cdSizeLine,
-    CD_NOT_SEE, CD_LFS, CD_NO_DISK, CD_FOLDER_FIRST, CD_HOME, CD_ACK_LABEL,
+    CD_NOT_SEE, CD_LFS, CD_NO_DISK, CD_FOLDER_FIRST, CD_HOME, CD_HOME_UNKNOWN, CD_ACK_LABEL,
   };
 }

@@ -82,3 +82,14 @@ func suggestCopyDir(home, profile, repo string) string {
 	}
 	return filepath.Join(home, "box-clones", name)
 }
+
+// gitIsHome reports whether repo, a git repo root, is the user's home directory:
+// the repo is a dotfiles repo at ~ and copying it would copy the whole home
+// (#371). Both sides are resolved (the page's home may be unloaded or a
+// symlink; the server's is the one that counts). No repo or no home is false.
+func gitIsHome(home, repo string) bool {
+	if home == "" || repo == "" {
+		return false
+	}
+	return resolvedOrClean(home) == resolvedOrClean(repo)
+}

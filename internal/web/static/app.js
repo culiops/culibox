@@ -6991,6 +6991,21 @@ function showSpawnUnlock(message, opts) {
   refreshStore(); // the banner behind the dialog shows the same lock
 }
 
+// spawnCopyRefusal: the card path has no refusal yet, so the server is asked about the folder in the field for this profile now (not the
+// check drawn under the field, which may be about another profile): the refusal it would give, with the server's own suggested copy
+// folder and home verdict. null, with the reason on the dialog's error line, when it cannot say.
+async function spawnCopyRefusal() {
+  try {
+    const chk = await api("/api/workspace/check?path=" + encodeURIComponent(getCwd()) + "&profile=" + encodeURIComponent($("agent").value));
+    const r = cdRefusalFromCheck(chk);
+    if (r) return r;
+    setDialogError("spawn-modal", "This folder is no longer a git repo. Press Start again.");
+  } catch (e) {
+    setDialogError("spawn-modal", "Could not check this folder: " + e.message);
+  }
+  return null;
+}
+
 // spawnNeedsCopy: a git folder reached Start (the cards knew, or the server refused with needs_copy, #371): the private-copy dialog.
 // Resolves {dir}, the folder the profile now holds its copy in, or null (the user backed out, or chose Host: the card then shows
 // Host and Start is theirs to press). The workspace becomes the repo, which is what a copy setup of this profile is for.
@@ -7048,7 +7063,9 @@ $("spawn").addEventListener("submit", async (ev) => {
   // session starts in it. Before the busy state, like the Host question above: backing out leaves the dialog as it was.
   let copied = null;
   if (tierConvertNow()) {
-    copied = await spawnNeedsCopy(cdRefusalFromCheck(spawnWsCheck, $("agent").value, window.HOME_DIR || ""));
+    const refusal = await spawnCopyRefusal();
+    if (!refusal) return;
+    copied = await spawnNeedsCopy(refusal);
     if (!copied) return;
   }
   spawnBusy = true;
@@ -7087,7 +7104,20 @@ $("spawn").addEventListener("submit", async (ev) => {
   const paintProg = () => { prog.textContent = spawnProgressText((Date.now() - t0) / 1000, rt); };
   paintProg();
   prog.hidden = false;
-  const progTimer = setInterval(paintProg, 1000);
+  let progTimer = setInterval(paintProg, 1000);
+  // The conversion dialog is asked outside the busy state (no "Starting…" under it, as on the card path), then busy again.
+  const spawnIdle = () => {
+    clearInterval(progTimer);
+    prog.hidden = true;
+    spawnBusy = false;
+    if (goBtn) { goBtn.disabled = false; goBtn.classList.remove("busy"); goBtn.removeAttribute("aria-busy"); goBtn.textContent = spawnSubmitLabel(drawerDesktop()); }
+  };
+  const spawnBusyAgain = () => {
+    spawnBusy = true;
+    if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
+    prog.hidden = false;
+    progTimer = setInterval(paintProg, 1000);
+  };
   try {
     // A needs_copy refusal (a git folder the page did not know about: the phone, a stale check) opens the same dialog once, then the
     // start is sent again, from the profile's new copy. Backing out ends the try with the dialog as it was.
@@ -7099,8 +7129,10 @@ $("spawn").addEventListener("submit", async (ev) => {
       } catch (e) {
         if (asked || !spawnRefusedNeedsCopy(e.status, e.code) || !e.body || !e.body.repo) throw e;
         asked = true;
+        spawnIdle();
         const made = await spawnNeedsCopy(e.body);
         if (!made) break;
+        spawnBusyAgain();
         toSend = Object.assign({}, req, { runtime: "box", clone: true, cwd: made.dir });
         again = true;
       }

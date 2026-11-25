@@ -5,12 +5,12 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   copyDialogModel, cdEstimateURL, cdRefusalFromCheck, cdSavedDoc, cdIsInplaceHistory, cdSaveWithAck, cdSizeLine,
-  CD_NOT_SEE, CD_LFS, CD_NO_DISK, CD_FOLDER_FIRST, CD_HOME, CD_ACK_LABEL,
+  CD_NOT_SEE, CD_LFS, CD_NO_DISK, CD_FOLDER_FIRST, CD_HOME, CD_HOME_UNKNOWN, CD_ACK_LABEL,
 } = require("../static/copydialog.js");
 
 const MB = 1 << 20;
 const GB = 1 << 30;
-const refusal = { error: "a git repo boxes as a private copy", code: "needs_copy", repo: "/home/u/repo", suggested: "/home/u/box-clones/claude", worktree: false, inside: false, lfs: false };
+const refusal = { error: "a git repo boxes as a private copy", code: "needs_copy", repo: "/home/u/repo", suggested: "/home/u/box-clones/claude", worktree: false, inside: false, lfs: false, git_home: false };
 const est = { git_bytes: 100 * MB, tree_bytes: 50 * MB, free_bytes: 10 * GB, enough: true, partial: false, lfs: false };
 const plain = { name: "claude" };
 const home = "/home/u";
@@ -65,15 +65,34 @@ test("a profile folder outside the repo must be set to the repo first; the repo 
   assert.strictEqual(copyDialogModel(refusal, est, { ...plain, default_cwd: "/home/u/repo2" }, { home }).canConvert, false);
 });
 
-test("a folder inside the repo at the home directory is never converted: Host, or move the folder", () => {
-  const m = copyDialogModel({ ...refusal, repo: "/home/u", inside: true }, est, plain, { home });
+test("the server's git_home verdict decides: a home repo is never converted, whatever the page's own home says", () => {
+  const m = copyDialogModel({ ...refusal, git_home: true, inside: true }, est, plain, { home });
   assert.strictEqual(m.canConvert, false);
+  assert.strictEqual(m.hostOnly, true);
   assert.deepStrictEqual(m.lines, [CD_HOME]);
   assert.strictEqual(CD_HOME, "This folder is inside the git repo at your home directory. Pick Host, or move the folder out of that repo.");
-  // The home directory itself as the repo (not inside it) is the same repo.
-  assert.strictEqual(copyDialogModel({ ...refusal, repo: "/home/u/", inside: true }, est, plain, { home }).canConvert, false);
-  // Another repo that is inside, or home as a repo with the folder not inside, follow the normal rules.
-  assert.strictEqual(copyDialogModel({ ...refusal, inside: true }, est, plain, { home }).canConvert, true);
+  // The same with a home the page has not loaded (or a symlinked one): the page's own comparison is not consulted.
+  assert.strictEqual(copyDialogModel({ ...refusal, git_home: true }, est, plain, { home: "" }).canConvert, false);
+  assert.strictEqual(copyDialogModel({ ...refusal, git_home: true, repo: "/elsewhere/real-home" }, est, plain, { home }).canConvert, false);
+  // A repo whose path equals the page's home string but that the server says is not home converts: the server decides.
+  assert.strictEqual(copyDialogModel({ ...refusal, repo: "/home/u", git_home: false }, est, plain, { home }).canConvert, true);
+});
+
+test("a refusal without git_home (an older server) is not converted", () => {
+  const old = { ...refusal };
+  delete old.git_home;
+  const m = copyDialogModel(old, est, plain, { home });
+  assert.strictEqual(m.canConvert, false);
+  assert.strictEqual(m.hostOnly, true);
+  assert.deepStrictEqual(m.lines, [CD_HOME_UNKNOWN]);
+});
+
+test("a profile that already makes copies of another repo is not converted; the same repo or none is", () => {
+  const other = copyDialogModel(refusal, est, { ...plain, clone_of: "/home/u/other", default_cwd: "" }, { home });
+  assert.strictEqual(other.canConvert, false);
+  assert.ok(other.lines.includes("This profile already makes private copies of /home/u/other. Use a separate profile for this repo."));
+  assert.strictEqual(copyDialogModel(refusal, est, { ...plain, clone_of: "~/repo/" }, { home }).canConvert, true);
+  assert.strictEqual(copyDialogModel(refusal, est, { ...plain, clone_of: "" }, { home }).canConvert, true);
 });
 
 test("no estimate yet or a refused one: nothing to convert with, and the error is said", () => {
@@ -103,11 +122,17 @@ test("cdEstimateURL escapes both paths", () => {
   assert.strictEqual(cdEstimateURL("/h/a b", "/h/c&d"), "/api/clone/estimate?of=%2Fh%2Fa%20b&dir=%2Fh%2Fc%26d");
 });
 
-test("cdRefusalFromCheck: a workspace check of a git folder as the refusal the dialog reads, suggesting <home>/box-clones/<profile>", () => {
-  const r = cdRefusalFromCheck({ git_repo: "/home/u/repo", git_worktree: true, git_inside: true }, "claude", "/home/u/");
-  assert.deepStrictEqual(r, { error: "", code: "needs_copy", repo: "/home/u/repo", suggested: "/home/u/box-clones/claude", worktree: true, inside: true, lfs: false });
-  assert.strictEqual(cdRefusalFromCheck({ git_repo: "" }, "claude", "/home/u"), null);
-  assert.strictEqual(cdRefusalFromCheck(null, "claude", "/home/u"), null);
+test("cdRefusalFromCheck: a workspace check of a git folder as the refusal the dialog reads, with the server's suggestion and home verdict", () => {
+  const chk = { git_repo: "/home/u/repo", git_worktree: true, git_inside: true, git_home: false, suggested: "/home/u/box-clones/claude" };
+  assert.deepStrictEqual(cdRefusalFromCheck(chk), { error: "", code: "needs_copy", repo: "/home/u/repo", suggested: "/home/u/box-clones/claude", worktree: true, inside: true, lfs: false, git_home: false });
+  assert.strictEqual(cdRefusalFromCheck({ ...chk, git_home: true }).git_home, true);
+  // An older server's check has neither: no suggestion, and no home verdict, so the model will not convert.
+  const old = cdRefusalFromCheck({ git_repo: "/home/u/repo" });
+  assert.strictEqual(old.suggested, "");
+  assert.strictEqual(old.git_home, undefined);
+  assert.strictEqual(copyDialogModel(old, est, plain, { home }).canConvert, false);
+  assert.strictEqual(cdRefusalFromCheck({ git_repo: "" }), null);
+  assert.strictEqual(cdRefusalFromCheck(null), null);
 });
 
 test("cdSavedDoc: the stored profile with clone_of and default_cwd set, and nothing else touched; rev and schema stay out", () => {

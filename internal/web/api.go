@@ -166,7 +166,7 @@ func writeSpawnErr(w http.ResponseWriter, agent, home string, err error) {
 		errors.As(err, &nc)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "code": "needs_copy",
 			"repo": nc.Repo, "suggested": suggestCopyDir(home, agent, nc.Repo),
-			"worktree": nc.Worktree, "inside": nc.Inside, "lfs": nc.LFS})
+			"worktree": nc.Worktree, "inside": nc.Inside, "lfs": nc.LFS, "git_home": gitIsHome(home, nc.Repo)})
 	case errors.Is(err, launcher.ErrProfilesNewer):
 		// A fixed text: the wrapped error names the host path of profiles.json,
 		// which stays in the log above (as writeSaveErr does for a save).
