@@ -436,7 +436,7 @@ function reachRows(o) {
   for (const it of m.cloud.filter((i) => i.kind === "AWS" || i.kind === "Old-style AWS")) {
     const f = it.facts;
     let v = it.name + " · read";
-    if (f.fullAccess) v += " · " + spawnFullText();
+    if (f.fullAccess) v = it.name + " · " + spawnFullText();
     else if (f.direct) v += " only · SSO role directly";
     else if (f.write) v += " · write only after you elevate" + (f.max ? " (max " + f.max + " min)" : "");
     else v += " only";

@@ -4,7 +4,7 @@ const { ICON_SRC } = require("./iconpage.js");
 const assert = require("node:assert");
 const {
   TP_KEYS, tierWhere, tierSamePath, tierWhy, tierHostState, tierCloneState, tierPreselect, tierModel,
-  tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine,
+  tierHostDrops, tierDropsLine, tierHostKeeps, tierHostGuardrail, tierGuardrailLine, tierHostFullAccess,
 } = require("../static/tierpick.js");
 
 const home = "/home/u";
@@ -1195,7 +1195,8 @@ test("tierPick on the clone card of a git folder whose profile copies another re
 
 test("hostDropsConfirm names each full-access AWS connection with the label, in its own note (#374)", async () => {
   const asked = [];
-  const FULL = "Full access: no read-only default, no write window";
+  const FULL = require("../static/sessionrow.js").AWS_FULL_ACCESS_TEXT;
+  assert.strictEqual(FULL, "Full access: no read-only default, no write window");
   const pg = tpPage({ askConfirm: async (o) => { asked.push(o); return true; }, AWS_FULL_ACCESS_TEXT: FULL });
   await vm.runInContext('hostDropsConfirm("infra", [], [], ["AWS binding"], ["sbx", "lab"])', pg.ctx);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(asked[0].notes)), [
@@ -1205,4 +1206,13 @@ test("hostDropsConfirm names each full-access AWS connection with the label, in 
   ]);
   await vm.runInContext('hostDropsConfirm("infra", [], [], ["AWS binding"])', pg.ctx);
   assert.strictEqual(asked[1].notes.length, 1, "no full-access connection: no extra note");
+});
+
+test("tierHostFullAccess picks only the profile's connections the server marks full_access === true (#374)", () => {
+  const entries = [{ name: "a", full_access: true }, { name: "b" }, { name: "c", full_access: false }, { name: "d", full_access: "true" }, { name: "e", full_access: true }];
+  assert.deepStrictEqual(tierHostFullAccess({ aws_connections: ["a", "b", "c", "d", "gone"] }, entries), ["a"]);
+  assert.deepStrictEqual(tierHostFullAccess({ aws_connections: ["a", "e"] }, entries), ["a", "e"]);
+  assert.deepStrictEqual(tierHostFullAccess({ name: "p" }, entries), [], "no aws_connections");
+  assert.deepStrictEqual(tierHostFullAccess(null, entries), []);
+  assert.deepStrictEqual(tierHostFullAccess({ aws_connections: ["a"] }, undefined), []);
 });

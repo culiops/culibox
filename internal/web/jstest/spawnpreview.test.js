@@ -1312,10 +1312,10 @@ test("full access: a full_access connection says the label in the scope, the car
   assert.strictEqual(m.cloud[0].scope, AWS_FULL_ACCESS_TEXT + ".");
   assert.strictEqual(m.cloud[0].facts.fullAccess, true);
   const rows = reachRows({ profile: p, tier: "box", cwd: "/w", meta, creds: null });
-  assert.strictEqual(byK(rows, "AWS")[0].v, "sbx · read · " + AWS_FULL_ACCESS_TEXT);
+  assert.strictEqual(byK(rows, "AWS")[0].v, "sbx · " + AWS_FULL_ACCESS_TEXT);
   // the credentials view alone is enough when meta lacks the entry
   const r2 = reachRows({ profile: p, tier: "box", cwd: "/w", meta: {}, creds: { aws: [{ name: "sbx", mode: "sso_direct", full_access: true }] } });
-  assert.strictEqual(byK(r2, "AWS")[0].v, "sbx · read · " + AWS_FULL_ACCESS_TEXT);
+  assert.strictEqual(byK(r2, "AWS")[0].v, "sbx · " + AWS_FULL_ACCESS_TEXT);
 });
 
 test("full access: sso_direct without full_access keeps the read-only words, and a gate state never makes the label (#374)", () => {
