@@ -1263,6 +1263,10 @@ func GitShapeOf(ws string) (GitShape, error) {
 	return s, nil
 }
 
+// gitattributesLstatHook, when set, runs between usesLFS's Lstat and its open: a
+// test swaps the file there, as a box could.
+var gitattributesLstatHook func(repo string)
+
 // usesLFS is whether the top-level .gitattributes of repo names filter=lfs. A
 // symlink, a file that is not regular, one over maxGitAttributes or anything
 // unreadable is "no": this is a hint for the user, never a gate.
@@ -1276,12 +1280,17 @@ func usesLFS(repo string) bool {
 	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxGitAttributes {
 		return false
 	}
-	f, err := root.Open(".gitattributes")
+	if gitattributesLstatHook != nil {
+		gitattributesLstatHook(repo)
+	}
+	// Not root.Open: a box can swap the file for a FIFO between the Lstat and here,
+	// and a plain open of one blocks. No follow, no wait; then it must be regular.
+	f, err := root.OpenFile(".gitattributes", os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return false
 	}
 	defer f.Close()
-	if fi2, err := f.Stat(); err != nil || !os.SameFile(fi, fi2) {
+	if fi2, err := f.Stat(); err != nil || !fi2.Mode().IsRegular() || !os.SameFile(fi, fi2) {
 		return false
 	}
 	b, err := io.ReadAll(io.LimitReader(f, maxGitAttributes+1))
@@ -1325,5 +1334,7 @@ func NeedsCopy(ws string) error {
 }
 
 // gitInPlaceRefusal is NeedsCopy; a variable so a test of the guards as the
-// second net can reach them through Wrap with a git workspace.
+// second net can reach them through Wrap with a git workspace. The box package's
+// TestMain turns it off: a Wrap test of the refusal itself must opt back in with
+// refuseGitInPlace(t).
 var gitInPlaceRefusal = NeedsCopy

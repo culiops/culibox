@@ -2342,14 +2342,27 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			return nil, fmt.Errorf("%w: %s%s", box.ErrBoxOwned, reason, spawnBoxOwnedHint)
 		}
 	}
+	// A git work tree never boxes in place (#371): it boxes as a private copy.
+	// Refused here, before Prepare starts the box VM; Wrap refuses it too, from
+	// its own resolution of the path. A path that does not resolve is left to
+	// Wrap, which words that refusal.
+	//
+	// inCopy: the folder is a box-owned directory (a clone dir, or one a clone-dirs
+	// record names), which is already a private copy: the quick shell beside a
+	// clone session, and its restart, run there with no clone setup of their own.
+	// The refusal does not apply and Wrap is told (BoxKey.InCopy); the guards still
+	// do. BoxOwned is asked only once a folder is refused, so a spawn in a folder
+	// that is not git never consults it.
+	inCopy := false
 	if cl == nil && runtime == config.RuntimeBox && spec.Cwd != "" && absErr == nil {
-		// A git work tree never boxes in place (#371): it boxes as a private copy.
-		// Refused here, before Prepare starts the box VM; Wrap refuses it too, from
-		// its own resolution of the path. A path that does not resolve is left to
-		// Wrap, which words that refusal.
 		if real, err := filepath.EvalSymlinks(absCwd); err == nil {
-			if err := box.NeedsCopy(real); err != nil {
-				return nil, err
+			if nerr := box.NeedsCopy(real); nerr != nil {
+				if ch == nil {
+					return nil, nerr
+				}
+				if _, inCopy = ch.BoxOwned(absCwd); !inCopy {
+					return nil, nerr
+				}
 			}
 		}
 	}
@@ -2588,7 +2601,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.mu.Unlock()
 		// Profile is not identity: it names the conversations folder a box this
 		// spawn creates mounts (#330), shared by the profile's boxes in this folder.
-		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports, Profile: spec.Agent}
+		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports, Profile: spec.Agent, InCopy: inCopy}
 		// The bypass option the user chose for the profile or this spawn is the
 		// consent: the box home it creates pre-accepts the warning that nothing
 		// would answer in an unattended session. Not tied to the bundle or the

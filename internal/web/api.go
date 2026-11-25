@@ -629,7 +629,14 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, session.ErrNotExited), errors.Is(err, session.ErrRestarting):
 			writeErr(w, http.StatusConflict, err.Error())
 		default:
-			writeSpawnErr(w, "(restart "+strings.TrimSuffix(id, "/restart")+")", a.Home, err)
+			// The restarted session's profile name, so a needs_copy suggestion is
+			// <home>/box-clones/<profile>; the label is the fallback.
+			sid := strings.TrimSuffix(id, "/restart")
+			agent := "(restart " + sid + ")"
+			if info, ok := a.Sessions.Get(sid); ok && info.Agent != "" {
+				agent = info.Agent
+			}
+			writeSpawnErr(w, agent, a.Home, err)
 		}
 		return
 	}

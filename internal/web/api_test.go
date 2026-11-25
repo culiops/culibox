@@ -55,6 +55,7 @@ type mockSvc struct {
 	answerSHA        string
 	answerErr        error
 	restartID        string
+	getAgent         string // Get's Info.Agent
 	restartInfo      session.Info
 	restartErr       error
 	bringHomeID      string
@@ -151,7 +152,7 @@ func TestAPI_SpawnAccountRefusalsAreShown(t *testing.T) {
 
 func (m *mockSvc) Kill(id string) error { m.killed = id; return nil }
 func (m *mockSvc) Get(id string) (session.Info, bool) {
-	return session.Info{ID: id, Name: m.renamedName}, m.getOK
+	return session.Info{ID: id, Name: m.renamedName, Agent: m.getAgent}, m.getOK
 }
 func (m *mockSvc) Rename(id, name string) error {
 	m.renamedID, m.renamedName = id, name

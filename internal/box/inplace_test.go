@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // realTemp is t.TempDir() with symlinks resolved, as Wrap hands inPlaceMounts.
@@ -1115,5 +1116,70 @@ func TestWrapRefusesAnEnclosingRepoAtHome(t *testing.T) {
 		if !strings.Contains(err.Error(), w) {
 			t.Errorf("the message %q must say %q", err, w)
 		}
+	}
+}
+
+// InCopy (a shell beside a clone session, in the clone's directory) skips the git
+// refusal and nothing else: the guards are derived as for any in-place workspace.
+func TestWrapInCopySkipsOnlyTheGitRefusal(t *testing.T) {
+	refuseGitInPlace(t)
+	ctx := context.Background()
+	m, f := guardMgr(t, true)
+	repo := realTemp(t)
+	gitRepo(t, repo, "")
+
+	if _, _, _, err := m.Wrap(ctx, repo, "s1", BoxKey{}, []string{"bash"}, nil, nil); !errors.As(err, new(*NeedsCopyError)) {
+		t.Fatalf("flag off: err = %v, want *NeedsCopyError", err)
+	}
+	if _, _, _, err := m.Wrap(ctx, repo, "s2", BoxKey{InCopy: true}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatalf("flag on: %v", err)
+	}
+	for _, rel := range []string{".git", ".claude"} {
+		if !hasDst(f.runArgs[0], filepath.Join(repo, rel)) {
+			t.Errorf("flag on: %s must still be guarded: %q", rel, f.runArgs[0])
+		}
+	}
+	// A guard refusal still refuses with the flag on.
+	bad := realTemp(t)
+	gitRepo(t, bad, "")
+	writeFile(t, filepath.Join(bad, ".gitmodules"), "")
+	if _, _, _, err := m.Wrap(ctx, bad, "s3", BoxKey{InCopy: true}, []string{"bash"}, nil, nil); !errors.Is(err, ErrUnboxableWorkspace) || errors.As(err, new(*NeedsCopyError)) {
+		t.Fatalf("flag on, submodules: err = %v, want the guard's refusal", err)
+	}
+}
+
+// A box can swap .gitattributes for a FIFO between the Lstat and the open; a plain
+// open of one would block the spawn forever. And one that is a FIFO from the start
+// is rejected by the Lstat.
+func TestGitShapeOfFIFOGitattributesDoesNotBlock(t *testing.T) {
+	for _, swap := range []bool{false, true} {
+		ws := realTemp(t)
+		gitRepo(t, ws, "")
+		attrs := filepath.Join(ws, ".gitattributes")
+		if swap {
+			writeFile(t, attrs, "*.bin filter=lfs\n")
+			gitattributesLstatHook = func(string) {
+				if err := os.Remove(attrs); err != nil {
+					t.Error(err)
+				}
+				if err := syscall.Mkfifo(attrs, 0o644); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { gitattributesLstatHook = nil })
+		} else if err := syscall.Mkfifo(attrs, 0o644); err != nil {
+			t.Skipf("no FIFOs here: %v", err)
+		}
+		done := make(chan GitShape, 1)
+		go func() { s, _ := GitShapeOf(ws); done <- s }()
+		select {
+		case s := <-done:
+			if s.Repo != ws || s.LFS {
+				t.Fatalf("swap=%v: GitShapeOf = %+v, want the repo without LFS", swap, s)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("swap=%v: GitShapeOf blocked on a FIFO .gitattributes", swap)
+		}
+		gitattributesLstatHook = nil
 	}
 }

@@ -72,3 +72,17 @@ func TestSpawnNeedsCopyThroughTheHandler(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }
+
+// A restart refused with needs_copy suggests the restarted session's profile
+// name, not the "(restart <id>)" log label.
+func TestRestartNeedsCopySuggestsTheProfile(t *testing.T) {
+	svc := &mockSvc{restartErr: &box.NeedsCopyError{Repo: "/h/code/app"}, getOK: true, getAgent: "work"}
+	a := &API{Sessions: svc, Home: "/h"}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest(http.MethodPost, "/api/sessions/claude-3/restart", nil))
+	var b map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &b)
+	if rec.Code != http.StatusBadRequest || b["code"] != "needs_copy" || b["suggested"] != filepath.FromSlash("/h/box-clones/work") {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}

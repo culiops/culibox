@@ -14,7 +14,8 @@ import (
 // It also turns the git refusal off (#371). Most of this package's Wrap tests box
 // a git repo in place to test the guards (.git, hooks, the macOS locks), which
 // stay as the second net behind that refusal; they reach them through Wrap with
-// a git fixture. TestWrapRefusesInPlaceGitRepo turns the refusal back on.
+// a git fixture. A new Wrap test of the refusal must opt back in with
+// refuseGitInPlace(t) (inplace_test.go); without it, Wrap never refuses a git repo here.
 func TestMain(m *testing.M) {
 	gitInPlaceRefusal = func(string) error { return nil }
 	if real, err := filepath.EvalSymlinks(os.TempDir()); err == nil && real != os.TempDir() {
