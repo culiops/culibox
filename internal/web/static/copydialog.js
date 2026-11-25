@@ -226,7 +226,7 @@ async function cdConvertProfile(name, repo, dir, ack) {
   return api(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
-// cdEstimateTimeoutMs: how long one estimate may take before the dialog says so (the server stops the walk at 5 s and the listing
+// CD_ESTIMATE_TIMEOUT_MS: how long one estimate may take before the dialog says so (the server stops the walk at 5 s and the listing
 // of a very large repo gets the rest of its 30 s; a location edit asks only for the free space).
 const CD_ESTIMATE_TIMEOUT_MS = 15000;
 

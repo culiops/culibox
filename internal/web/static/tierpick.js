@@ -111,14 +111,17 @@ function tierGitRepo(git) {
   return git && typeof git.repo === "string" ? git.repo : "";
 }
 
-// tierCloneState: Box · clone needs the server to offer clone mode and a clone setup that is for this workspace. A git folder the
-// profile's clone setup is not for (none yet, or one for another repo) is offered the conversion instead (convert: true): the card
-// opens the private-copy dialog, which says what blocks it, if anything ("already makes private copies of …").
+// tierCloneState: Box · clone needs the server to offer clone mode and a clone setup that is for this workspace: its repo or its
+// clone dir, or a folder inside the repo it copies (the session then starts in the copy). A git folder the profile's clone setup is
+// not for (none yet, or one for another repo) is offered the conversion instead (convert: true): the card opens the private-copy
+// dialog, which says what blocks it, if anything ("already makes private copies of …").
 // o = {profile, cwd, home, cloneUnavailable, short, git}.
 function tierCloneState(o) {
   const p = o.profile || {};
   if (o.cloneUnavailable) return { ok: false, why: tierWhy(o.cloneUnavailable) };
-  if (p.clone_of && (tierSamePath(o.cwd, p.clone_of, o.home) || tierSamePath(o.cwd, p.default_cwd, o.home))) return { ok: true, why: "" };
+  const mine = tierSamePath(o.cwd, p.clone_of, o.home) || tierSamePath(o.cwd, p.default_cwd, o.home) ||
+    tierSamePath(tierGitRepo(o.git), p.clone_of, o.home);
+  if (p.clone_of && mine) return { ok: true, why: "" };
   if (tierGitRepo(o.git)) return { ok: true, why: "", convert: true };
   if (!p.clone_of) return { ok: false, why: TP_NO_CLONE };
   const short = typeof o.short === "function" ? o.short : (x) => x;

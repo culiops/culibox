@@ -1102,6 +1102,17 @@ test("a profile with a copy for another repo: the clone card converts, and the d
   assert.strictEqual(plainDir.pick, "box");
 });
 
+// A folder inside the repo the profile already copies is that profile's: no conversion (it would only say "set the folder first").
+test("a git folder inside the repo the profile copies: the clone card is on and converts nothing", () => {
+  const sub = { repo: "/home/u/repo", worktree: false, inside: true };
+  const m = tierModel({ profile: clone, cwd: "/home/u/repo/src", home, picked: "", short, git: sub });
+  assert.strictEqual(m.cards[1].disabled, false);
+  assert.strictEqual(m.cards[1].convert, false);
+  assert.strictEqual(m.pick, "clone");
+  const { tierConvert } = require("../static/tierpick.js");
+  assert.strictEqual(tierConvert({ profile: clone, cwd: "/home/u/repo/src", home, git: sub, pick: "clone" }), false);
+});
+
 test("Host is preselected only for a profile saved as Host, git folder or not", () => {
   for (const git of [null, gitRepo]) {
     for (const p of [plain, clone, dropper, guarded]) {
