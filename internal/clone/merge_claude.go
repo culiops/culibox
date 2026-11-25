@@ -13,8 +13,9 @@ import (
 
 // Claude Code reads the files a CLAUDE.md @-imports as it reads the CLAUDE.md
 // itself, so a box commit that changes one is as trusted by the host's agent as
-// a change to CLAUDE.md, which the merge refuses (#370). importTargets finds
-// them the way Claude Code resolves them, from the host's side only: the start
+// a change to CLAUDE.md, which the merge refuses (#370). This file is the
+// Claude-specific part of the merge guard; merge.go reaches it only through
+// agentImportDenies. importTargets finds them the way Claude Code resolves them, from the host's side only: the start
 // files and every file read are the work tree before the merge, which the box
 // has not written.
 
@@ -23,6 +24,17 @@ const (
 	mergeImportFiles = 200     // files read per check
 	mergeImportBytes = 1 << 20 // read per file; an import past it is not seen
 )
+
+// agentImportDenies returns whether a repo-relative path from the range is at,
+// under or a parent of a file a host CLAUDE.md imports (importTargets). The
+// error is the ls-files call's; the merge then does not happen.
+func (m *merger) agentImportDenies(home string) (func(p string) bool, error) {
+	targets, err := m.importTargets(home)
+	if err != nil {
+		return nil, err
+	}
+	return func(p string) bool { return importDenied(p, targets) }, nil
+}
 
 // importTargets returns the repo-relative (slash-separated) paths of every
 // file inside m.of that a host CLAUDE.md imports, directly or through up to

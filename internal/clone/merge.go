@@ -288,14 +288,14 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if err != nil {
 		return m.failed("cannot read core.hooksPath", err)
 	}
-	imports, err := m.importTargets(r.Home)
+	agentDenied, err := m.agentImportDenies(r.Home)
 	if err != nil {
 		return m.failed("cannot list the CLAUDE.md files", err)
 	}
 	var denied []string
 	dseen := map[string]bool{}
 	for _, e := range entries {
-		if (e.gitlink || mergeDenied(e.path, hooks) || importDenied(e.path, imports)) && !dseen[e.path] {
+		if (e.gitlink || mergeDenied(e.path, hooks) || agentDenied(e.path)) && !dseen[e.path] {
 			dseen[e.path] = true
 			denied = append(denied, e.path)
 		}
