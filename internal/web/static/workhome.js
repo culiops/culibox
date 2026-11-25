@@ -149,6 +149,23 @@ function mergeToastPart(m) {
   return "box/" + x + " not merged into " + x + ": " + mergeReasonText(m);
 }
 
+// pathBreakParts: `text` cut after each "/", so a long path can wrap between names: a browser offers no break after a slash by
+// itself, and overflow-wrap alone breaks inside a name ("CLAUDE.md" as "C" / "LAUDE.md"). The parts join back to `text`.
+function pathBreakParts(text) {
+  return String(text == null ? "" : text).match(/[^/]*\/|[^/]+/g) || [];
+}
+
+// pathBreakNodes: `text` as DOM nodes with a <wbr> after each slash: text nodes only, never innerHTML, and the text (what is
+// copied, what a test reads) is unchanged. doc is the page's document.
+function pathBreakNodes(text, doc) {
+  const out = [];
+  for (const part of pathBreakParts(text)) {
+    if (out.length) out.push(doc.createElement("wbr"));
+    out.push(doc.createTextNode(part));
+  }
+  return out;
+}
+
 // mergeRefused: a result that was refused (it carries a reason and did not merge).
 function mergeRefused(m) {
   return !!m && !m.merged && typeof m.reason === "string" && m.reason !== "";
@@ -349,5 +366,5 @@ function returnNews(seen, cloneIds, sessions) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome, notHomePrefix, notHomeHostSigs, mergeReasonText, mergeToastPart, mergeSig, mergeLastLine, mergeHomeLine, mergeRefused };
+  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome, notHomePrefix, notHomeHostSigs, mergeReasonText, mergeToastPart, mergeSig, mergeLastLine, mergeHomeLine, mergeRefused, pathBreakParts, pathBreakNodes };
 }

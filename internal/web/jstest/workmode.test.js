@@ -164,3 +164,8 @@ test("merge turn-on: asks with the folder; Turn on records the repo, Cancel and 
   assert.deepStrictEqual(await wmMergeTurnOn("  ", yes), { mergeHome: false, ackRepo: "" });
   assert.strictEqual(asked.length, 2, "no folder, no dialog");
 });
+
+test("merge switch state: a locked profile keeps it disabled whatever auto-return says", () => {
+  assert.deepStrictEqual(wmMergeSwitch(true, true, true), { checked: true, disabled: true, title: "" });
+  assert.deepStrictEqual(wmMergeSwitch(false, true, true), { checked: false, disabled: true, title: "Merging needs automatic return" });
+});

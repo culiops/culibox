@@ -5530,6 +5530,8 @@ function syncEditorActions() {
     f.classList.toggle("off", st.locked);
     f.disabled = st.locked;
   }
+  // After the loop above, which re-enables every unlocked checkbox: the merge switch also needs automatic return (#370).
+  paintPfMerge($("pf-clone-autoreturn").checked, $("pf-clone-merge").checked, st.locked);
   // After the loop above, which re-enables every unlocked field.
   const nm = $("pf-name");
   nm.classList.toggle("off", st.nameLocked);
@@ -5639,8 +5641,8 @@ function syncPfMode() {
 }
 // paintPfMerge: the merge checkbox from the auto-return box and the switch (wmMergeSwitch): off and disabled without automatic
 // return, the box and its label dimmed (.pf-off) with the reason as the title.
-function paintPfMerge(autoReturn, mergeHome) {
-  const st = wmMergeSwitch(autoReturn, mergeHome);
+function paintPfMerge(autoReturn, mergeHome, locked) {
+  const st = wmMergeSwitch(autoReturn, mergeHome, locked);
   const cb = $("pf-clone-merge"), lab = $("pf-clone-merge-lab");
   cb.checked = st.checked;
   cb.disabled = st.disabled;
@@ -5656,26 +5658,6 @@ function renderPfNotHome(name) {
   const view = profiles.find((x) => x.name === name);
   const nh = view && view.not_home;
   const rows = [];
-  // The merge switch (#370): its line when on, and the last merge or why it was refused (toasts can be missed). textContent only.
-  const mergeNote = mergeHomeLine(view && view.merge_home);
-  if (mergeNote) {
-    const last = nh && nh.merge;
-    const when = (at) => { const d = new Date(at); return Number.isNaN(d.getTime()) ? String(at || "") : d.toLocaleString(); };
-    const lastText = mergeLastLine(last, when);
-    const row = document.createElement("div");
-    row.className = "pf-nh-row pf-nh-merge" + (mergeRefused(last) ? " pf-nh-refused" : "");
-    const why = document.createElement("span");
-    why.className = "pf-nh-why";
-    why.textContent = mergeNote;
-    row.appendChild(why);
-    if (lastText) {
-      const d = document.createElement("span");
-      d.className = "pf-nh-detail";
-      d.textContent = lastText;
-      row.appendChild(d);
-    }
-    rows.push(row);
-  }
   for (const b of (nh && Array.isArray(nh.branches) ? nh.branches : [])) {
     const row = document.createElement("div");
     row.className = "pf-nh-row";
@@ -5700,6 +5682,26 @@ function renderPfNotHome(name) {
     row.className = "pf-nh-row";
     row.textContent = notHomeLabel(nh) + ": " + nh.error;
     rows.push(row);
+  }
+  // The merge switch (#370), built after the error check above (a row of its own would hide "could not be read"): its line when on, and the last merge or why it was refused (toasts can be missed). textContent only.
+  const mergeNote = mergeHomeLine(view && view.merge_home);
+  if (mergeNote) {
+    const last = nh && nh.merge;
+    const when = (at) => { const d = new Date(at); return Number.isNaN(d.getTime()) ? String(at || "") : d.toLocaleString(); };
+    const lastText = mergeLastLine(last, when);
+    const row = document.createElement("div");
+    row.className = "pf-nh-row pf-nh-merge" + (mergeRefused(last) ? " pf-nh-refused" : "");
+    const why = document.createElement("span");
+    why.className = "pf-nh-why";
+    why.textContent = mergeNote;
+    row.appendChild(why);
+    if (lastText) {
+      const d = document.createElement("span");
+      d.className = "pf-nh-detail";
+      d.append(...pathBreakNodes(lastText, document));
+      row.appendChild(d);
+    }
+    rows.unshift(row);
   }
   // Files in the copy that no commit has: they do not come home, so the editor says so beside the branches.
   const uncText = uncommittedLabel(nh && nh.uncommitted, nh && nh.uncommitted_cut);

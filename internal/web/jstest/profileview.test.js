@@ -699,6 +699,8 @@ test("private copy workspace with the merge switch on: its line, then the last m
   assert.deepStrictEqual(on.map((r) => r.kind), ["Folder", "Merge", "Copy"]);
   assert.strictEqual(on[1].name, "Merges into the checked-out branch");
   assert.strictEqual(on[1].sub, "");
+  assert.strictEqual(on[1].soft, true, "the merge row's sub-line wraps between words and at separators (a long refused path)");
+  assert.ok(on.filter((r) => r.kind !== "Merge").every((r) => !r.soft), "other rows keep their wrapping");
   const refused = mk({ merge_home: true, not_home: { at: "2026-11-25T10:00:00Z", merge: { at: "2026-11-25T10:00:00Z", branch: "<b>main", to: "c1", reason: "dirty" } } });
   assert.strictEqual(refused[1].sub, "box/<b>main not merged into <b>main: <b>main has uncommitted changes", "text only: the page sets textContent");
   const merged = mk({ merge_home: true, not_home: { at: "2026-11-25T10:00:00Z", merge: { at: "2026-11-25T10:00:00Z", branch: "main", merged: true, commits: 2, files: 3 } } });

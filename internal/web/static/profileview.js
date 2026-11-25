@@ -259,7 +259,7 @@ function pfvWorkspaceBlock(view, doc, host, edit) {
     if (mergeNote) {
       const last = view.not_home && view.not_home.merge;
       const when = (at) => { const d = new Date(at); return Number.isNaN(d.getTime()) ? String(at || "") : d.toLocaleString(); };
-      rows.push(pfvRow("Merge", mergeNote, { sub: pfvDep("mergeLastLine", "./workhome.js")(last, when) }));
+      rows.push(pfvRow("Merge", mergeNote, { sub: pfvDep("mergeLastLine", "./workhome.js")(last, when), soft: true }));
     }
     const share = pfvList(pfvField(view, doc, "clone_share"));
     if (cwd) rows.push(pfvRow("Copy", short(cwd), { sub: share.length ? "Shares " + share.join(", ") + " from the original, read only" : "", scope: "Read and write" }));

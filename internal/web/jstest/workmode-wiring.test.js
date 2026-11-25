@@ -248,3 +248,63 @@ test("legacy form: the phone's not-home block also shows the merge line and the 
   assert.match(b, /mergeLastLine\(/);
   assert.doesNotMatch(b, /innerHTML/);
 });
+
+// run: a function of app.js built from its source with the globals it reads, over the fake DOM.
+const { Node, Text } = require("./fakedom.js");
+function harness(names, globals) {
+  const doc = { createElement: (t) => new Node(t, doc), createTextNode: (t) => new Text(t) };
+  const els = {};
+  const $ = (id) => (els[id] = els[id] || new Node("div", doc));
+  const g = Object.assign({ $, document: doc, mobileActive: () => false, window: { innerWidth: 390 } }, globals);
+  const src = names.map((n) => "function " + n + body(app, n).replace(/^\{/, "(" + /function [\w]+\(([^)]*)\)/.exec(app.slice(app.indexOf("function " + n + "(")))[1] + ") {")).join("\n");
+  const keys = Object.keys(g);
+  const fn = new Function(...keys, src + "\nreturn {" + names.join(",") + "};")(...keys.map((k) => g[k]));
+  return { fn, $, els };
+}
+const wm = require("../static/workmode.js"), wh = require("../static/workhome.js");
+
+test("the lock pass of syncEditorActions repaints the merge switch after it re-enables every checkbox (#370)", () => {
+  const b = body(app, "syncEditorActions");
+  const loop = b.indexOf(".ped input[type=checkbox]");
+  const paint = b.indexOf("paintPfMerge(");
+  assert.ok(loop > 0 && paint > loop, "paintPfMerge runs after the loop that sets disabled = locked");
+  assert.match(b.slice(paint, paint + 160), /st\.locked/);
+});
+
+test("paintPfMerge: no auto-return keeps the box off and disabled, also after a lock pass (#370)", () => {
+  const { fn, $ } = harness(["paintPfMerge"], { wmMergeSwitch: wm.wmMergeSwitch });
+  for (const id of ["pf-clone-merge", "pf-clone-merge-lab"]) $(id);
+  fn.paintPfMerge(false, true, false);
+  assert.strictEqual($("pf-clone-merge").checked, false);
+  assert.strictEqual($("pf-clone-merge").disabled, true);
+  $("pf-clone-merge").disabled = false; // what the lock loop does to every unlocked checkbox
+  fn.paintPfMerge(false, false, false);
+  assert.strictEqual($("pf-clone-merge").disabled, true);
+  assert.strictEqual($("pf-clone-merge-lab").classList.contains("pf-off"), true);
+  fn.paintPfMerge(true, true, true);
+  assert.strictEqual($("pf-clone-merge").disabled, true, "locked");
+  fn.paintPfMerge(true, true, false);
+  assert.strictEqual($("pf-clone-merge").disabled, false);
+  assert.strictEqual($("pf-clone-merge").checked, true);
+});
+
+test("renderPfNotHome: a merge-on profile still shows 'could not be read' when the last check failed (#370)", () => {
+  const view = { name: "p", merge_home: true, not_home: { at: "2026-11-25T10:00:00Z", error: "git said no", merge: { branch: "main", to: "c1", reason: "dirty" } } };
+  const g = Object.assign({ profiles: [view], handbackCountText: () => "", openHandback: () => {}, handbackProfileSel: () => ({}) }, wh);
+  const { fn, $ } = harness(["renderPfNotHome"], g);
+  fn.renderPfNotHome("p");
+  const text = $("pf-nothome").children.map((r) => r.textContent);
+  assert.strictEqual(text.length, 2, JSON.stringify(text));
+  assert.match(text[0], /^Merges into the checked-out branch/);
+  assert.match(text[1], /git said no/, "the error row is not hidden by the merge row");
+});
+
+test("renderPfNotHome: the last-merge line has a break opportunity after every slash and its text is unchanged (#370)", () => {
+  const view = { name: "p", merge_home: true, not_home: { at: "2026-11-25T10:00:00Z", merge: { branch: "main", to: "c1", reason: "guarded", paths: ["docs/handover/deep/CLAUDE.md"] } } };
+  const g = Object.assign({ profiles: [view], handbackCountText: () => "", openHandback: () => {}, handbackProfileSel: () => ({}) }, wh);
+  const { fn, $ } = harness(["renderPfNotHome"], g);
+  fn.renderPfNotHome("p");
+  const detail = $("pf-nothome").children[0].children[1];
+  assert.ok(detail.children.some((n) => n.tag === "wbr"), "wbr nodes, never innerHTML");
+  assert.match(detail.textContent, /docs\/handover\/deep\/CLAUDE\.md$/);
+});

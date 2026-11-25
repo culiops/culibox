@@ -527,3 +527,23 @@ test("profile line: the switch's words when on, then the last merge or the refus
   assert.strictEqual(mergeLastLine(null, fmt), "");
   assert.strictEqual(mergeLastLine(MG({}), fmt), "");
 });
+
+test("pathBreakParts: split after each slash so a long path can wrap between names (#370)", () => {
+  const { pathBreakParts } = require("../static/workhome.js");
+  assert.deepStrictEqual(pathBreakParts("docs/handover/CLAUDE.md"), ["docs/", "handover/", "CLAUDE.md"]);
+  assert.deepStrictEqual(pathBreakParts("a b/c"), ["a b/", "c"]);
+  assert.deepStrictEqual(pathBreakParts("/a//b/"), ["/", "a/", "/", "b/"]);
+  assert.deepStrictEqual(pathBreakParts("none"), ["none"]);
+  assert.deepStrictEqual(pathBreakParts(""), []);
+  assert.strictEqual(pathBreakParts("x/y/z").join(""), "x/y/z", "the words are unchanged");
+});
+
+test("pathBreakNodes: text nodes with a wbr after each slash, the text itself unchanged (#370)", () => {
+  const { pathBreakNodes } = require("../static/workhome.js");
+  const { Node, Text } = require("./fakedom.js");
+  const doc = { createElement: (t) => new Node(t, doc), createTextNode: (t) => new Text(t) };
+  const nodes = pathBreakNodes("a/b/c.md", doc);
+  assert.deepStrictEqual(nodes.map((n) => (n instanceof Text ? "t:" + n.textContent : n.tag)), ["t:a/", "wbr", "t:b/", "wbr", "t:c.md"]);
+  assert.strictEqual(nodes.map((n) => n.textContent).join(""), "a/b/c.md");
+  assert.deepStrictEqual(pathBreakNodes("", doc), []);
+});

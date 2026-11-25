@@ -70,9 +70,10 @@ function wmFieldsToSend(mode, v) {
 // wmMergeSwitch: the merge switch's face (#370) from the auto-return box and the switch as held: it can only be on with
 // automatic return (the server refuses the pair), so without it the switch is off and disabled, with the reason as its title.
 // Both forms (the profile page and the phone's legacy form) draw from this; each dims the box and its label while disabled.
-function wmMergeSwitch(autoReturn, mergeHome) {
+// locked: a read-only profile closes every control, this one too.
+function wmMergeSwitch(autoReturn, mergeHome, locked) {
   const on = autoReturn === true;
-  return { checked: on && mergeHome === true, disabled: !on, title: on ? "" : "Merging needs automatic return" };
+  return { checked: on && mergeHome === true, disabled: !on || locked === true, title: on ? "" : "Merging needs automatic return" };
 }
 
 // wmMergeAcked: whether a save carries ack_merge_home: the switch is on and the repo whose warning the user confirmed
