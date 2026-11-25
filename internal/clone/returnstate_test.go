@@ -277,3 +277,18 @@ func TestReturnStateOldFileLoads(t *testing.T) {
 		t.Errorf("Uncommitted = %v cut=%v, want unknown", got.Uncommitted, got.UncommittedCut)
 	}
 }
+
+func TestCleanReturnStateMerge(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	st := cleanReturnState(ReturnState{Merge: &MergeResult{Branch: "m\x1b[31main", Detail: long, Paths: []string{"a\x1b[2J", long}}})
+	m := st.Merge
+	if m == nil {
+		t.Fatal("Merge dropped")
+	}
+	if strings.ContainsRune(m.Branch, 0x1b) || strings.ContainsRune(m.Paths[0], 0x1b) {
+		t.Errorf("control characters survived: %q %q", m.Branch, m.Paths[0])
+	}
+	if len([]rune(m.Detail)) > maxErrRunes || len([]rune(m.Paths[1])) > maxErrRunes {
+		t.Errorf("long strings not capped: %d %d", len(m.Detail), len(m.Paths[1]))
+	}
+}
