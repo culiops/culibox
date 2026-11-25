@@ -155,6 +155,11 @@ func (a *autoReturner) fire(key string, st *cloneSched, gen uint64) {
 	a.mu.Unlock()
 	go func() {
 		defer a.finish(key, st)
+		// The session may have ended since the timer fired; its exit return
+		// owns the summary then, so an idle one must not start (or overwrite).
+		if !sess.isLive() {
+			return
+		}
 		a.run(sess)
 	}()
 }

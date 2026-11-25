@@ -1508,3 +1508,44 @@ func TestRestartInPlaceOnCloneProfileStaysInPlace(t *testing.T) {
 		}
 	})
 }
+
+// slowRepoHooks is a fakeCloneHooks whose ReturnForRepo ignores its budget and
+// blocks until released, like a docker run that outlives its kill.
+type slowRepoHooks struct {
+	*fakeCloneHooks
+	release chan struct{}
+	called  chan struct{}
+}
+
+func (h *slowRepoHooks) ReturnForRepo(ctx context.Context, cwd string) []ReturnSummary {
+	h.called <- struct{}{}
+	<-h.release
+	return []ReturnSummary{{Trigger: ReturnOnHost, Profile: "late"}}
+}
+
+// M1: a Host spawn waits at most the budget plus the grace for the return; past
+// that it starts without a summary and the return's result is dropped.
+func TestSpawnHostReturnIsAHardLimit(t *testing.T) {
+	l := cloneLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeHost}}
+	hooks := &slowRepoHooks{fakeCloneHooks: &fakeCloneHooks{}, release: make(chan struct{}), called: make(chan struct{}, 1)}
+	defer close(hooks.release)
+	m, _ := cloneManager(t, l, hooks)
+	m.hostBudget, m.hostGrace = 50*time.Millisecond, 100*time.Millisecond
+	start := time.Now()
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Spawn took %v with a hung return; want about budget+grace", d)
+	}
+	select {
+	case <-hooks.called:
+	default:
+		t.Fatal("ReturnForRepo was never called")
+	}
+	if got := s.Info().HostReturn; got != nil {
+		t.Fatalf("HostReturn = %+v, want nil when the return outlived its limit", got)
+	}
+}

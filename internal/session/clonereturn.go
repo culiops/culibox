@@ -30,7 +30,10 @@ const (
 	cloneSpawnReturnBudget = 60 * time.Second
 	// hostReturnBudget bounds the return run before a Host spawn on a repo that
 	// has clones; what it does not reach continues in the background.
-	hostReturnBudget       = 20 * time.Second
+	hostReturnBudget = 20 * time.Second
+	// hostReturnGrace is how long a Host spawn waits past the budget for the
+	// return to hand back its summaries (a run killed at the deadline cleans up).
+	hostReturnGrace        = 2 * time.Second
 	cloneExitReturnTimeout = 15 * time.Minute
 	// cloneIdleReturnTimeout bounds one idle-triggered return: the agent may be
 	// working again by then, so it is shorter than an exit return.

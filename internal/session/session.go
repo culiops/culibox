@@ -372,8 +372,9 @@ type CloneHooks interface {
 	HostOrigin(ctx context.Context, of string) (string, error)
 	// ReturnWork brings the clone's branches home (or, with c.NoAutoReturn and a
 	// non-"now" trigger, records what is not home). Never an error: failures are
-	// in the summary. It takes the clone's lock; with Trigger != ReturnNow it
-	// skips ("in-use") when o.LiveSession reports true after the lock is held.
+	// in the summary. It takes the clone's lock; with Trigger "exit" it skips
+	// ("in-use") when o.LiveSession reports true after the lock is held (idle,
+	// host and "now" returns run beside a live session).
 	ReturnWork(ctx context.Context, c config.Clone, o ReturnOpts) ReturnSummary
 	// ReturnForRepo brings home the branches of every clone whose clone_of is
 	// cwd or contains it, before a Host session starts there (trigger "host"),
@@ -871,8 +872,9 @@ type Info struct {
 	// before this Host session started (one summary per clone). Host sessions
 	// only; absent when no clone is of this repo.
 	HostReturn []ReturnSummary `json:"host_return,omitempty"`
-	// Return is the latest exit or "Bring work home now" return of a clone-mode
-	// session; absent until one has run.
+	// Return is the latest return of a clone-mode session (after an agent turn,
+	// at exit, or "Bring work home now"); absent until one has run. A Host
+	// session's own return is HostReturn.
 	Return *ReturnSummary `json:"return,omitempty"`
 	// Handback is what the scan of this session's in-place workspace flagged at
 	// its exit. In-place boxed sessions only; absent until a scan has run.
@@ -1732,6 +1734,9 @@ type Manager struct {
 	boxes     Boxes       // nil = containment unavailable; every spawn is host tier
 	bundles   Bundles     // nil = boxed sessions run without user config
 	broker    BrokerHooks // nil = credential broker not running; bound profiles are refused
+	// hostBudget and hostGrace override hostReturnBudget and hostReturnGrace
+	// (tests only; zero means the default).
+	hostBudget, hostGrace time.Duration
 	// egressMu serialises live egress refreshes (#95), so two never interleave
 	// a box's meet; taken before mu, never under it. egressLiveOn (guarded by
 	// mu) is set by the first RefreshEgress: per-box refreshes wait for it.
@@ -2875,12 +2880,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 
 	// Every refusal of a Host spawn is behind us: bring home the work of any
 	// clone of this repo, so the agent starts on what the boxes made. Never
-	// fails the spawn, and never waits past hostReturnBudget.
+	// fails the spawn, and never waits past hostReturnBudget plus a short grace.
 	var hostReturn []ReturnSummary
 	if runtime != config.RuntimeBox && ch != nil && cl == nil && absErr == nil {
-		rctx, cancel := context.WithTimeout(context.Background(), hostReturnBudget)
-		hostReturn = ch.ReturnForRepo(rctx, absCwd)
-		cancel()
+		hostReturn = m.hostReturnWithin(ch, id, absCwd)
 	}
 
 	cmd, ptmx, err := m.startProcess(id, spec, argv, env)
@@ -4322,4 +4325,34 @@ func settingsLimitedToUser(args []string) bool {
 		}
 	}
 	return false
+}
+
+// hostReturnWithin runs the Host-spawn return for the clones of cwd and waits for
+// it at most the budget plus a grace, so a hung docker (a killed run waits out
+// its own cleanup) cannot hold the spawn. Past that the spawn proceeds with no
+// summary; the return keeps running in its goroutine, whose own background
+// continuation still applies, and its result is dropped.
+func (m *Manager) hostReturnWithin(ch CloneHooks, id, cwd string) []ReturnSummary {
+	budget, grace := m.hostBudget, m.hostGrace
+	if budget <= 0 {
+		budget = hostReturnBudget
+	}
+	if grace <= 0 {
+		grace = hostReturnGrace
+	}
+	rctx, cancel := context.WithTimeout(context.Background(), budget)
+	done := make(chan []ReturnSummary, 1)
+	go func() {
+		defer cancel()
+		done <- ch.ReturnForRepo(rctx, cwd)
+	}()
+	t := time.NewTimer(budget + grace)
+	defer t.Stop()
+	select {
+	case sums := <-done:
+		return sums
+	case <-t.C:
+		log.Printf("session %s: the host return of %s did not finish within %s; starting without it", id, cwd, budget+grace)
+		return nil
+	}
 }

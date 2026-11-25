@@ -17,6 +17,7 @@ type fakeAuto struct {
 	timers []*fakeTimer
 	fp     string
 	fpOK   bool
+	fpN    int // fingerprint calls: one per turnEnded and one per fire
 	ran    chan *Session
 	block  chan struct{} // when set, a run waits for it to close
 }
@@ -44,7 +45,7 @@ func newFakeAuto(t *testing.T) *fakeAuto {
 			f.timers = append(f.timers, tm)
 			return tm
 		},
-		func(string) (string, bool) { f.mu.Lock(); defer f.mu.Unlock(); return f.fp, f.fpOK },
+		func(string) (string, bool) { f.mu.Lock(); defer f.mu.Unlock(); f.fpN++; return f.fp, f.fpOK },
 		func(s *Session) {
 			f.ran <- s
 			f.mu.Lock()
@@ -272,8 +273,40 @@ func TestAutoReturnNoOverlappingRuns(t *testing.T) {
 	}
 }
 
+// A timer that fires as its session ends must not start a run: its idle summary
+// could overwrite the exit return's.
+func TestAutoReturnSkipsASessionThatIsNoLongerLive(t *testing.T) {
+	for _, status := range []string{statusExited, statusDetached} {
+		t.Run(status, func(t *testing.T) {
+			f := newFakeAuto(t)
+			s := autoSess("/c")
+			f.a.turnEnded(s)
+			arm := f.armed()[0]
+			s.mu.Lock()
+			s.status = status
+			s.mu.Unlock()
+			f.fire(arm)
+			f.expectNoRun()
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				f.a.mu.Lock()
+				st := f.a.clones["/c"]
+				running := st != nil && st.running
+				f.a.mu.Unlock()
+				if !running {
+					return
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the skipped run was never marked done")
+				}
+				time.Sleep(time.Millisecond)
+			}
+		})
+	}
+}
+
 func TestAutoReturnRunWrapperEndsRun(t *testing.T) {
-	// The goroutine fire starts must call runDone itself.
+	// The goroutine fire starts must call finish itself.
 	f := newFakeAuto(t)
 	s := autoSess("/c")
 	f.a.turnEnded(s)
@@ -294,7 +327,7 @@ func TestAutoReturnRunWrapperEndsRun(t *testing.T) {
 	}
 }
 
-// watchHarness drives watchTurnsWith with a scripted working sequence.
+// runWatch drives watchTurnsWith with a scripted working sequence.
 func runWatch(t *testing.T, f *fakeAuto, s *Session, seq []bool) {
 	t.Helper()
 	tick := make(chan time.Time)
@@ -325,8 +358,13 @@ func TestWatchTurnsFiresOnWorkingToIdle(t *testing.T) {
 	s.done = make(chan struct{})
 	s.detachedCh = make(chan struct{})
 	runWatch(t, f, s, []bool{true, true, false, false})
-	if n := len(f.timers); n != 1 {
-		t.Fatalf("turnEnded fired %d times (timers armed), want exactly 1", n)
+	// turnEnded takes one fingerprint per call and a second call would keep the
+	// armed timer, so the timer count alone cannot see a double fire.
+	f.mu.Lock()
+	calls := f.fpN
+	f.mu.Unlock()
+	if n := len(f.timers); n != 1 || calls != 1 {
+		t.Fatalf("turnEnded fired %d times (fingerprints), %d timers armed; want exactly 1 and 1", calls, n)
 	}
 	// The watcher exited: the clone's timer is gone with the last session.
 	if n := len(f.armed()); n != 0 {
