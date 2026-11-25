@@ -1,11 +1,13 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/gitrepo"
 	"github.com/culiops/culibox/internal/launcher"
@@ -85,12 +87,13 @@ func TestSpawnCloneWorkspaceRootIsCloneOf(t *testing.T) {
 }
 
 // clone:false on a clone profile makes an in-place session: it has no CloneOf,
-// so its workspace comes from its cwd.
+// so its workspace comes from its cwd. On Host: a box refuses a git repo in
+// place (#371, TestSpawnBoxInPlaceGitRefusedEarly).
 func TestSpawnCloneFalseWorkspaceRootIsTheCwdRepo(t *testing.T) {
 	l, _ := testCloneLauncher(t, config.RuntimeBox)
 	repo, sub := wsRepo(t, "inplace")
 	m, _ := cloneManager(t, l, &fakeCloneHooks{})
-	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeBox, Clone: boolPtr(false), Cwd: sub})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeHost, Clone: boolPtr(false), Cwd: sub})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,4 +216,66 @@ func TestWorkspaceRootOneRepoThroughASymlink(t *testing.T) {
 	if a, b := cs.Info().WorkspaceRoot, ps.Info().WorkspaceRoot; a == "" || a != b {
 		t.Fatalf("clone via symlink %q, in place via real dir %q: want one string", a, b)
 	}
+}
+
+// A git work tree never boxes in place (#371): the spawn is refused before the
+// box layer is prepared (the VM start) or any bundle or Wrap work, whether the
+// folder is the repo or inside it. A folder that is not git still boxes.
+func TestSpawnBoxInPlaceGitRefusedEarly(t *testing.T) {
+	repo, sub := wsRepo(t, "r")
+	for name, cwd := range map[string]string{"repo": repo, "inside": sub} {
+		t.Run(name, func(t *testing.T) {
+			m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+			_, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox, Cwd: cwd})
+			var nc *box.NeedsCopyError
+			if !errors.As(err, &nc) || nc.Repo != repo || nc.Inside != (name == "inside") {
+				t.Fatalf("err = %v, want *box.NeedsCopyError for %s", err, repo)
+			}
+			if !errors.Is(err, box.ErrUnboxableWorkspace) {
+				t.Fatalf("must be an ErrUnboxableWorkspace: %v", err)
+			}
+			if wraps, _, _ := boxes.counts(); boxes.prepares != 0 || wraps != 0 {
+				t.Fatalf("the refusal must come before Prepare and Wrap: prepares=%d wraps=%d", boxes.prepares, wraps)
+			}
+		})
+	}
+	t.Run("not git", func(t *testing.T) {
+		m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+		s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox, Cwd: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Kill(s.ID) })
+		if boxes.prepares != 1 {
+			t.Fatalf("prepares = %d, want 1", boxes.prepares)
+		}
+	})
+}
+
+// The Host tier always runs in place: a git repo is no reason to refuse it.
+func TestSpawnHostInGitRepoUnaffected(t *testing.T) {
+	_, sub := wsRepo(t, "r")
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeHost, Cwd: sub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if wraps, _, _ := boxes.counts(); wraps != 0 || boxes.prepares != 0 {
+		t.Fatalf("host tier touched the box layer: prepares=%d wraps=%d", boxes.prepares, wraps)
+	}
+}
+
+// A clone spawn is not affected: its workspace is the box's own copy, a git repo.
+func TestSpawnCloneInGitDirUnaffected(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := cloneManager(t, l, &fakeCloneHooks{})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Runtime: config.RuntimeBox, Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
 }

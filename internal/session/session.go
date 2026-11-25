@@ -2342,6 +2342,17 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			return nil, fmt.Errorf("%w: %s%s", box.ErrBoxOwned, reason, spawnBoxOwnedHint)
 		}
 	}
+	if cl == nil && runtime == config.RuntimeBox && spec.Cwd != "" && absErr == nil {
+		// A git work tree never boxes in place (#371): it boxes as a private copy.
+		// Refused here, before Prepare starts the box VM; Wrap refuses it too, from
+		// its own resolution of the path. A path that does not resolve is left to
+		// Wrap, which words that refusal.
+		if real, err := filepath.EvalSymlinks(absCwd); err == nil {
+			if err := box.NeedsCopy(real); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	// checkContext refuses a context path that is unsafe now: deleted, swapped
 	// for a symlink or made unsafe since the profile was saved, or overlapping

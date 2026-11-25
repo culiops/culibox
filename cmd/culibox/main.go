@@ -870,7 +870,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if rateLimitsFile == "" {
 		rateLimitsFile = filepath.Join(home, ".claude", "abtop-rate-limits.json")
 	}
-	api := &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd,
+	api := &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd, Home: home,
 		Handback:       flagged,
 		OptionsDropped: lnch.DroppedOptions,
 		ProfileCwd: func(name string) string {

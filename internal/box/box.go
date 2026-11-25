@@ -1240,6 +1240,12 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	// A clone workspace is the box's own tree, rewritable by the box by design;
 	// guarding its .git/.claude would only protect the box from itself.
 	if m.opts.GuardInPlace && key.Clone == nil {
+		// A git work tree never boxes in place (#371): it boxes as a private copy.
+		// Before the guards, which stay as the second net for what this misses.
+		// Read from ws, the single resolution above, as the guards are.
+		if err := gitInPlaceRefusal(ws.Path); err != nil {
+			return nil, nil, "", err
+		}
 		// Derived from ws, the single resolution above, which is what docker
 		// mounts. Appended as ordinary read-only extras, so MountUnsafe,
 		// reuseMounts (a live box without a guard is refused, an idle one

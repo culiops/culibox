@@ -1213,3 +1213,117 @@ func cfgLower(c byte) byte {
 	}
 	return c
 }
+
+// GitShape is what a workspace is in git terms (#371). The zero value is a
+// folder that is not in a git work tree.
+type GitShape struct {
+	// Repo is the work tree root: ws itself when it holds a .git, else the
+	// nearest ancestor that does (Inside). "" = not in a git work tree.
+	Repo string
+	// Worktree: the .git at Repo is a file (a linked worktree or a separate git
+	// directory), not a directory.
+	Worktree bool
+	// Inside: ws is below Repo, not at it.
+	Inside bool
+	// LFS: Repo's top-level .gitattributes names filter=lfs.
+	LFS bool
+}
+
+// maxGitAttributes bounds the .gitattributes read for the LFS hint.
+const maxGitAttributes = 64 << 10
+
+// GitShapeOf reports whether ws (absolute, symlinks resolved) is a git work
+// tree or inside one, with the same reading of .git the in-place guards use
+// (an lstat at ws, then the enclosingRepo walk). It reads one file at most,
+// .gitattributes at the repo root, through an os.Root and never through a
+// symlink. A folder that is not git is the zero GitShape and a nil error.
+func GitShapeOf(ws string) (GitShape, error) {
+	var s GitShape
+	dotgit := filepath.Join(ws, ".git")
+	switch fi, err := os.Lstat(dotgit); {
+	case err == nil:
+		s.Repo, s.Worktree = ws, fi.Mode().IsRegular()
+	case errors.Is(err, fs.ErrNotExist):
+		top, err := enclosingRepo(ws)
+		if err != nil || top == "" {
+			return GitShape{}, err
+		}
+		s.Repo, s.Inside = top, true
+		if fi, err := os.Lstat(filepath.Join(top, ".git")); err == nil {
+			s.Worktree = fi.Mode().IsRegular()
+		}
+	case errors.Is(err, syscall.ENOTDIR):
+		// ws is not a directory: there is nothing here to be a repo, and the
+		// workspace checks word that refusal.
+		return GitShape{}, nil
+	default:
+		return GitShape{}, unreadable(dotgit, err)
+	}
+	s.LFS = usesLFS(s.Repo)
+	return s, nil
+}
+
+// usesLFS is whether the top-level .gitattributes of repo names filter=lfs. A
+// symlink, a file that is not regular, one over maxGitAttributes or anything
+// unreadable is "no": this is a hint for the user, never a gate.
+func usesLFS(repo string) bool {
+	root, err := os.OpenRoot(repo)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	fi, err := root.Lstat(".gitattributes")
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxGitAttributes {
+		return false
+	}
+	f, err := root.Open(".gitattributes")
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if fi2, err := f.Stat(); err != nil || !os.SameFile(fi, fi2) {
+		return false
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxGitAttributes+1))
+	return err == nil && len(b) <= maxGitAttributes && strings.Contains(string(b), "filter=lfs")
+}
+
+// NeedsCopyError is the refusal to box a git work tree in place (#371): a git
+// repo boxes as a private copy. It wraps ErrUnboxableWorkspace.
+type NeedsCopyError struct {
+	Repo                  string
+	Worktree, Inside, LFS bool
+}
+
+func (e *NeedsCopyError) Unwrap() error { return ErrUnboxableWorkspace }
+
+func (e *NeedsCopyError) Error() string {
+	switch {
+	case e.Inside && e.Worktree:
+		return fmt.Sprintf("this folder is inside the linked git worktree %s, which cannot be boxed yet. "+
+			"Run it on Host, box its main repo as a private copy, or move the folder out of the worktree", e.Repo)
+	case e.Inside:
+		return fmt.Sprintf("this folder is inside the git repo %s. A git repo boxes as a private copy: box the repo root "+
+			"as a copy (Settings › Profiles › Work on a private copy), pick Host, or move the folder out of the repo", e.Repo)
+	case e.Worktree:
+		return "a linked git worktree cannot be boxed yet: run it on Host, or box its main repo as a private copy"
+	}
+	return "a git repo boxes as a private copy: make one (Settings › Profiles › Work on a private copy) or pick Host"
+}
+
+// NeedsCopy is the refusal for ws, or nil when ws is not in a git work tree.
+// A folder whose git state cannot be read is refused with that reason.
+func NeedsCopy(ws string) error {
+	s, err := GitShapeOf(ws)
+	if err != nil {
+		return err
+	}
+	if s.Repo == "" {
+		return nil
+	}
+	return &NeedsCopyError{Repo: s.Repo, Worktree: s.Worktree, Inside: s.Inside, LFS: s.LFS}
+}
+
+// gitInPlaceRefusal is NeedsCopy; a variable so a test of the guards as the
+// second net can reach them through Wrap with a git workspace.
+var gitInPlaceRefusal = NeedsCopy

@@ -51,6 +51,9 @@ type SessionService interface {
 type API struct {
 	Sessions   SessionService
 	DefaultCwd string // used when a spawn request omits cwd (e.g. $HOME)
+	// Home is the user's home directory; the default place of a private copy
+	// (<Home>/box-clones/<name>) in a needs_copy spawn refusal is under it.
+	Home string
 	// ProfileCwd returns the named profile's default_cwd ("" = none); a spawn
 	// that omits cwd uses it before DefaultCwd. nil = no profile defaults.
 	ProfileCwd func(agent string) string
@@ -136,7 +139,7 @@ var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // anything else stays generic
 // and the detail goes to the server log only. None of these messages carries
 // the prompt text.
-func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
+func writeSpawnErr(w http.ResponseWriter, agent, home string, err error) {
 	log.Printf("spawn agent=%q: %v", agent, err)
 	switch {
 	case errors.Is(err, launcher.ErrStoreLocked):
@@ -156,6 +159,14 @@ func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 		errors.As(err, &ns)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "code": "not_shared",
 			"path": vmDisplay(ns.Dir, ns.Home), "pending": ns.Pending, "read_only": ns.ReadOnly, "need_write": ns.NeedWrite})
+	case errors.As(err, new(*box.NeedsCopyError)):
+		// A git repo boxes as a private copy (#371): the page opens its conversion
+		// dialog from this. Before the generic ErrUnboxableWorkspace case.
+		var nc *box.NeedsCopyError
+		errors.As(err, &nc)
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "code": "needs_copy",
+			"repo": nc.Repo, "suggested": suggestCopyDir(home, agent, nc.Repo),
+			"worktree": nc.Worktree, "inside": nc.Inside, "lfs": nc.LFS})
 	case errors.Is(err, launcher.ErrProfilesNewer):
 		// A fixed text: the wrapped error names the host path of profiles.json,
 		// which stays in the log above (as writeSaveErr does for a save).
@@ -247,7 +258,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		info, err := a.Sessions.Spawn(spec)
 		if err != nil {
-			writeSpawnErr(w, req.Agent, err)
+			writeSpawnErr(w, req.Agent, a.Home, err)
 			return
 		}
 		// A rejected override must not look accepted: say which were dropped.
@@ -327,7 +338,7 @@ func (a *API) handleSpawnShell(w http.ResponseWriter, r *http.Request, targetID 
 	spec.Agent, spec.Name = shell, "sh:"+filepath.Base(spec.Cwd)
 	info, err := a.Sessions.Spawn(spec)
 	if err != nil {
-		writeSpawnErr(w, shell, err)
+		writeSpawnErr(w, shell, a.Home, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, info)
@@ -618,7 +629,7 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, session.ErrNotExited), errors.Is(err, session.ErrRestarting):
 			writeErr(w, http.StatusConflict, err.Error())
 		default:
-			writeSpawnErr(w, "(restart "+strings.TrimSuffix(id, "/restart")+")", err)
+			writeSpawnErr(w, "(restart "+strings.TrimSuffix(id, "/restart")+")", a.Home, err)
 		}
 		return
 	}

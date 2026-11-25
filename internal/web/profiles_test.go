@@ -1186,7 +1186,7 @@ func TestNewerProfilesFileRefusesConfigSeedSpawn(t *testing.T) {
 		}
 	}
 	rec := httptest.NewRecorder()
-	writeSpawnErr(rec, "claude", err)
+	writeSpawnErr(rec, "claude", "", err)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "docs/UPGRADING.md") {
 		t.Errorf("API: %d %s", rec.Code, rec.Body.String())
 	}
