@@ -315,14 +315,17 @@ func (a *Audit) RecordStore(e secretstore.Event) error {
 // Actions of a CredEvent: a credential definition created, updated or deleted,
 // a write acknowledgement, and the AWS setup calls.
 const (
-	CredCreated     = "created"
-	CredUpdated     = "updated"
-	CredDeleted     = "deleted"
-	CredWriteAck    = "write_ack"
-	CredRolesListed = "aws_roles_listed"
-	CredChecked     = "aws_checked"
-	CredSSOStarted  = "aws_sso_started"
-	CredSSOResult   = "aws_sso_result"
+	CredCreated  = "created"
+	CredUpdated  = "updated"
+	CredDeleted  = "deleted"
+	CredWriteAck = "write_ack"
+	// CredFullAccessAck records the full-access acknowledgement of an
+	// sso_direct connection, or its removal (Detail "cleared: ...").
+	CredFullAccessAck = "full_access_ack"
+	CredRolesListed   = "aws_roles_listed"
+	CredChecked       = "aws_checked"
+	CredSSOStarted    = "aws_sso_started"
+	CredSSOResult     = "aws_sso_result"
 )
 
 // maxCredDetail bounds a credential event's detail in bytes.

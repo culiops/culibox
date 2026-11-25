@@ -469,7 +469,7 @@ func gateBody(res awsprobe.GateResult, exp time.Time) map[string]any {
 	if !exp.IsZero() {
 		e = exp.UTC().Format(time.RFC3339)
 	}
-	return map[string]any{"gate": res, "expires": e}
+	return map[string]any{"gate": res, "expires": e, "ack_eligible": awsprobe.AdmitSSO(res, nil).Eligible}
 }
 
 // credAWSSSO is POST (start) and GET (status) .../sso-login.
@@ -527,6 +527,13 @@ func (s *Server) credAWSSSO(w http.ResponseWriter, r *http.Request, _ string) {
 type awsSaveReq struct {
 	Connection config.AWSConnection `json:"connection"`
 	AckWrite   bool                 `json:"ack_write"`
+	// AckFullAccess carries the items the user saw and accepted for an
+	// sso_direct connection the gate refused for breadth. The server compares it
+	// with its own gate run and builds the stored acknowledgement from that run.
+	AckFullAccess *struct {
+		Refused      []string `json:"refused"`
+		MissingPerms []string `json:"missing_perms"`
+	} `json:"ack_full_access,omitempty"`
 }
 
 // credAWSCreate is POST /api/credentials/aws.
@@ -544,6 +551,7 @@ func (s *Server) credAWSSave(w http.ResponseWriter, r *http.Request, name string
 		return
 	}
 	conn := req.Connection
+	conn.FullAccessAck = nil // never from the client: only the manager's gate run builds one
 	if !create {
 		if conn.Name == "" {
 			conn.Name = name
@@ -558,10 +566,14 @@ func (s *Server) credAWSSave(w http.ResponseWriter, r *http.Request, name string
 		return
 	}
 	if conn.SSODirect() {
-		// No acknowledgement exists for this mode: ack_write is not read.
+		// ack_write is not read for this mode; ack_full_access is.
 		ctx, cancel := context.WithTimeout(r.Context(), ssoCheckTimeout)
 		defer cancel()
-		gate, exp, err := s.Creds.PutSSODirect(ctx, conn, create)
+		var ackReq *AckRequest
+		if a := req.AckFullAccess; a != nil {
+			ackReq = &AckRequest{Refused: a.Refused, MissingPerms: a.MissingPerms}
+		}
+		gate, exp, err := s.Creds.PutSSODirect(ctx, conn, create, ackReq, storeActor)
 		if err != nil {
 			writeCredErr(w, err)
 			return
@@ -616,7 +628,8 @@ func writeCredErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.As(err, &gate):
 		g, _ := normalizeGate(gate.Gate, time.Time{})
-		writeJSON(w, http.StatusConflict, map[string]any{"error": gate.Error(), "code": gate.Code(), "gate": g})
+		writeJSON(w, http.StatusConflict, map[string]any{"error": gate.Error(), "code": gate.Code(), "gate": g,
+			"ack_eligible": gate.Eligible, "ack_stale": gate.Stale})
 	case errors.Is(err, secretstore.ErrTooLarge):
 		writeErrCode(w, http.StatusRequestEntityTooLarge, "the value is larger than 64 KiB", "too_large")
 	case errors.Is(err, secretstore.ErrNoSuchValue):
