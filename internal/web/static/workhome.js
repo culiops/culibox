@@ -72,11 +72,17 @@ function notHomeReasonText(nh) {
 }
 
 // notHomeTitle: the reason lines behind the short count, one per branch, for a
-// hover title. An error with no branches gets the error itself.
+// hover title. An error with no branches gets the error itself, and with
+// neither, the uncommitted files label.
 function notHomeTitle(st) {
   if (!st) return "";
   const lines = Array.isArray(st.branches) ? st.branches.map(notHomeReasonText) : [];
   if (!lines.length && st.error) lines.push(st.error);
+  // A chip with only uncommitted files still says what it counts.
+  if (!lines.length) {
+    const unc = uncommittedLabel(st.uncommitted, st.uncommitted_cut);
+    if (unc) lines.push(unc);
+  }
   return lines.join("\n");
 }
 
@@ -104,14 +110,20 @@ function workHomeHb(name) {
 }
 
 // returnToastText: what one return says, or "" when there is nothing to say.
-// A skipped run attempted nothing, so it says nothing. Files flagged for review
+// A skipped run attempted nothing, so it says nothing, except before a Host
+// session, where silence would read as "all home": "still coming home" when
+// the time budget cut it, "work not checked" otherwise. Files flagged for review
 // (#346) end the line, and a cut-short scan says so instead of saying nothing.
 // An idle return (after each agent turn) only says what came home and what is
 // flagged: not-home state lives on the profile and the sidebar, so a turn that
 // changes nothing never repeats it. A host return (before a Host spawn) adds
 // the files not committed.
 function returnToastText(profile, sum) {
-  if (!sum || sum.skipped) return "";
+  if (!sum) return "";
+  if (sum.skipped) {
+    if (sum.trigger !== "host") return "";
+    return profile + ": " + (sum.skipped === "deferred" ? "still coming home" : "work not checked");
+  }
   const home = Array.isArray(sum.home) ? sum.home : [];
   const notHome = Array.isArray(sum.not_home) ? sum.not_home : [];
   const parts = [];
@@ -150,7 +162,7 @@ function returnSig(key, at) {
 // is part of it, so a repeated return with the same state is not news.
 function notHomeSig(name, st) {
   const list = st && Array.isArray(st.branches) ? st.branches : [];
-  return name + "@" + list.map((b) => (b && b.branch) + ":" + (b && b.reason)).sort().join(",");
+  return name + "@" + list.map((b) => ((b && b.branch) || "") + ":" + ((b && b.reason) || "")).sort().join(",");
 }
 
 // sessionNotHome: the not-home line for a clone session's sidebar row. The
@@ -184,7 +196,8 @@ function notHomeNews(seen, profiles) {
 // returnNews: what one sessions poll means for returns. seen is the array of
 // session return sigs already announced (null before the first poll, which only
 // seeds); cloneIds the clone sessions the previous poll listed. Returns the
-// toasts to show, the PROFILE sigs (notHomeSig of the return's not-home set) to mark seen for
+// toasts to show, the PROFILE sigs (notHomeSig of the return's not-home set; none
+// for an idle return, whose toast omits not-home) to mark seen for
 // notHomeNews so the same return is not announced twice, the next seen/cloneIds
 // to keep (links runs in step with toasts: the hand-back record ids each one opens, often none),
 // and whether the profile list needs a refresh: a new return landed or
@@ -199,18 +212,22 @@ function returnNews(seen, cloneIds, sessions) {
   const toasts = [];
   const links = [];
   const sigs = [];
+  let fresh = false;
   for (const s of list) {
     if (!s || !s.return || known.has(returnSig(s.id, s.return.at))) continue;
+    fresh = true;
     const text = returnToastText(s.agent, s.return);
     if (text) {
       toasts.push(text);
       links.push(workHomeHb("handbackNoteIds")(s.return.flagged)); // the records the toast opens, if any
     }
-    sigs.push(notHomeSig(s.agent, { branches: s.return.not_home }));
+    // An idle toast omits not-home, so it must not mark the set seen: the next
+    // profile poll announces a set first found by an idle return, once.
+    if (s.return.trigger !== "idle") sigs.push(notHomeSig(s.agent, { branches: s.return.not_home }));
   }
   const now = new Set(nextClones);
   const left = (Array.isArray(cloneIds) ? cloneIds : []).some((id) => !now.has(id));
-  return { toasts, links, sigs, seen: nextSeen, cloneIds: nextClones, refetch: sigs.length > 0 || left };
+  return { toasts, links, sigs, seen: nextSeen, cloneIds: nextClones, refetch: fresh || left };
 }
 
 if (typeof module !== "undefined" && module.exports) {
