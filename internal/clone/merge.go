@@ -71,7 +71,11 @@ type MergeRequest struct {
 // happen: files host tools (an agent, direnv, mise, git) load and act on by
 // themselves. Entries may be added, never dropped.
 var MergeDenyNames = append(slices.Clone(box.InPlaceGuardFiles),
-	".envrc", ".gitattributes", ".gitmodules", "mise.toml", ".mise.toml")
+	".envrc", ".gitattributes", ".gitmodules", "mise.toml", ".mise.toml",
+	"mise.local.toml", ".mise.local.toml",
+	".pre-commit-config.yaml", ".pre-commit-hooks.yaml", ".overcommit.yml",
+	"lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml",
+	"lefthook-local.yml", "lefthook-local.yaml", ".lefthook-local.yml", ".lefthook-local.yaml")
 
 // MergeDenyDirs are directory names, matched case-insensitively against every
 // path component, under which a box's commits block the merge: an agent's
@@ -80,9 +84,10 @@ var MergeDenyDirs = []string{".claude"}
 
 // MergeDenyTop are top-level directories (case-insensitive) under which a box's
 // commits block the merge: git hook managers, editor tasks, dev containers and
-// tool configs, which run commands when the host opens or commits in the repo.
-// clone_of's own core.hooksPath is added at run time when it is inside the repo.
-var MergeDenyTop = []string{".husky", ".githooks", ".vscode", ".devcontainer", ".mise"}
+// tool configs (mise reads mise/ and .config/mise/), which run commands when the
+// host opens or commits in the repo. clone_of's own core.hooksPath is added at
+// run time when it is inside the repo.
+var MergeDenyTop = []string{".husky", ".githooks", ".vscode", ".devcontainer", ".mise", "mise", ".config"}
 
 const (
 	mergeRetryAfter = 30 * time.Minute
@@ -440,27 +445,27 @@ func octalMode(s string) bool {
 
 // mergeDenied reports whether p (a repo-relative path from the range) is a
 // file host tools trust: MergeDenyNames, MergeDenyDirs, MergeDenyTop, or at,
-// under or a parent of one of hookDirs (lower-cased repo-relative directories,
-// "." for the whole repo). Case-insensitive throughout: on a case-insensitive file system
-// (macOS) .Claude/ is .claude/, and folding only adds refusals elsewhere.
+// under or a parent of one of hookDirs (repo-relative directories, "." for the
+// whole repo). Case-insensitive throughout, by strings.EqualFold per path
+// component: on a case-insensitive file system (macOS) .Claude/ is .claude/,
+// and folding only adds refusals elsewhere.
 func mergeDenied(p string, hookDirs []string) bool {
-	lp := strings.ToLower(p)
-	comps := strings.Split(lp, "/")
+	comps := strings.Split(p, "/")
 	for _, c := range comps {
 		for _, d := range MergeDenyDirs {
-			if c == strings.ToLower(d) {
+			if strings.EqualFold(c, d) {
 				return true
 			}
 		}
 	}
 	base := comps[len(comps)-1]
 	for _, n := range MergeDenyNames {
-		if base == strings.ToLower(n) {
+		if strings.EqualFold(base, n) {
 			return true
 		}
 	}
 	for _, d := range MergeDenyTop {
-		if comps[0] == strings.ToLower(d) {
+		if strings.EqualFold(comps[0], d) {
 			return true
 		}
 	}
@@ -470,11 +475,28 @@ func mergeDenied(p string, hookDirs []string) bool {
 		}
 		// At, under, or above it: a symlink at a parent (tools -> evil)
 		// re-points the hooks dir tools/hk at evil/hk.
-		if hooks != "" && (lp == hooks || strings.HasPrefix(lp, hooks+"/") || strings.HasPrefix(hooks, lp+"/")) {
-			return true
+		if hooks != "" {
+			hc := strings.Split(hooks, "/")
+			if foldPrefix(hc, comps) || foldPrefix(comps, hc) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// foldPrefix reports whether the path components pre are the first components
+// of p (or all of them), each compared with strings.EqualFold.
+func foldPrefix(pre, p []string) bool {
+	if len(pre) > len(p) {
+		return false
+	}
+	for i := range pre {
+		if !strings.EqualFold(pre[i], p[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // mergeSystemGitConfig is the system git config the user's git reads. A var so
