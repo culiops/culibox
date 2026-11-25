@@ -1853,3 +1853,65 @@ func TestBoxedRecorderFlagsInPlaceSpawnsOnly(t *testing.T) {
 		t.Errorf("both are recorded: %v", got)
 	}
 }
+
+// gitMustNotRun fails the test if the host git is asked to run.
+type gitMustNotRun struct{ t *testing.T }
+
+func (g gitMustNotRun) Run(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
+	g.t.Errorf("host git ran: %v", args)
+	return nil, errors.New("git must not run")
+}
+
+// The estimate endpoint's hook runs checkOf before any git or walk: a repo a
+// box owns gets the refusal and git never runs there.
+func TestEstimateCopyRefusesBoxOwnedBeforeAnyGit(t *testing.T) {
+	home := t.TempDir()
+	otherClone := filepath.Join(home, "work", "other-clone")
+	if err := os.MkdirAll(filepath.Join(otherClone, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := testHooks(t, func() []config.Clone {
+		return []config.Clone{{Of: filepath.Join(home, "repo"), Dir: otherClone}}
+	})
+	h.env = clone.Env{Git: gitMustNotRun{t}, Home: home}
+	_, err := h.EstimateCopy(context.Background(), otherClone, filepath.Join(home, "box-clones", "x"))
+	if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "is box-owned") {
+		t.Fatalf("EstimateCopy of a box-owned repo = %v, want the box-owned refusal", err)
+	}
+	for _, bad := range [][2]string{{"relative", "/abs"}, {"/abs", "relative"}} {
+		if _, err := h.EstimateCopy(context.Background(), bad[0], bad[1]); !errors.Is(err, box.ErrUnboxableWorkspace) {
+			t.Errorf("EstimateCopy(%q, %q) = %v, want ErrUnboxableWorkspace", bad[0], bad[1], err)
+		}
+	}
+	h.unavailable = "no git"
+	if _, err := h.EstimateCopy(context.Background(), filepath.Join(home, "repo"), filepath.Join(home, "c")); !errors.Is(err, box.ErrBoxUnavailable) {
+		t.Errorf("an unavailable clone mode = %v, want ErrBoxUnavailable", err)
+	}
+}
+
+func TestEstimateCopyOfAHostRepo(t *testing.T) {
+	g, err := clone.NewExecGit()
+	if err != nil {
+		t.Skip("git not on PATH")
+	}
+	home := t.TempDir()
+	of := filepath.Join(home, "repo")
+	if err := os.MkdirAll(of, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := append(clone.CleanEnv(), "GIT_AUTHOR_NAME=F", "GIT_AUTHOR_EMAIL=f@x", "GIT_COMMITTER_NAME=F", "GIT_COMMITTER_EMAIL=f@x")
+	if err := os.WriteFile(filepath.Join(of, "f"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "f"}, {"commit", "-q", "-m", "x"}} {
+		if _, err := g.Run(context.Background(), of, env, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := testHooks(t, noClones)
+	h.env = clone.Env{Git: g, Home: home}
+	e, err := h.EstimateCopy(context.Background(), of, filepath.Join(home, "box-clones", "x"))
+	if err != nil || e.TreeBytes != 5 || e.GitBytes <= 0 || !e.Enough {
+		t.Fatalf("EstimateCopy = %+v, %v; want tree 5, git > 0, enough", e, err)
+	}
+}

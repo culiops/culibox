@@ -953,6 +953,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		BoxRuntime:       layerRuntime(layer),
 		BoxImage:         boxImageHook(cfg, dataDir, layerImageFacts(layer)),
 		CloneUnavailable: cloneUnavailableReason(h),
+		CloneEstimate:    cloneEstimateFunc(h),
 		BoxTrees:         boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
 		ScratchDirs:      web.ScratchCandidates(os.Getenv, os.Getuid(), os.TempDir()),
 

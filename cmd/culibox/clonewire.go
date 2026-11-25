@@ -297,6 +297,26 @@ func (h *cloneHooks) HostOrigin(ctx context.Context, of string) (string, error) 
 	return clone.HostOriginURL(ctx, h.env.Git, of)
 }
 
+// EstimateCopy sizes a private copy of the repo of and checks the free space
+// where dir would go (GET /api/clone/estimate). It runs the host's git in of, so
+// of gets the same checks Prepare gives it first: not box-owned (checkOf), then
+// a real, plain repo (clone.CheckOf). Nothing is read before they pass.
+func (h *cloneHooks) EstimateCopy(ctx context.Context, of, dir string) (clone.Estimate, error) {
+	if h.unavailable != "" || h.env.Git == nil {
+		return clone.Estimate{}, fmt.Errorf("%w: clone mode is unavailable (%s)", box.ErrBoxUnavailable, h.unavailable)
+	}
+	if !usableDir(of) || !usableDir(dir) {
+		return clone.Estimate{}, fmt.Errorf("%w: the repo and the copy folder must be absolute clean paths", box.ErrUnboxableWorkspace)
+	}
+	if err := h.checkOf(of); err != nil {
+		return clone.Estimate{}, err
+	}
+	if err := clone.CheckOf(of, h.env.Home, h.env.Protected); err != nil {
+		return clone.Estimate{}, err
+	}
+	return clone.EstimateCopy(ctx, h.env.Git, of, dir)
+}
+
 // returnModeOf is how a trigger returns a clone's branches: "now" forces, the
 // profile's switch off only records what is not home (every other trigger,
 // idle and host included), otherwise fast-forward only.
@@ -707,6 +727,15 @@ func cloneUnavailableReason(h *cloneHooks) string {
 	return h.unavailable
 }
 
+// cloneEstimateFunc is the hooks' copy estimate for the web server; nil when
+// there are no hooks, which leaves the route unregistered.
+func cloneEstimateFunc(h *cloneHooks) func(context.Context, string, string) (clone.Estimate, error) {
+	if h == nil {
+		return nil
+	}
+	return h.EstimateCopy
+}
+
 // newCloneHooks builds the clone-mode hooks, on Linux and macOS alike: what
 // differs is the box layer's (its docker flags and VM shares). It ALWAYS
 // returns hooks: the host-tier box-owned guard (BoxOwned) needs neither the
@@ -760,5 +789,8 @@ func newCloneHooks(layer *boxLayer, home, memRoot, dataDir, instance string, pro
 		return h, err
 	}
 	h.env.Git = g
+	h.env.Estimate = func(ctx context.Context, of, dir string) (clone.Estimate, error) {
+		return clone.EstimateCopy(ctx, g, of, dir)
+	}
 	return h, nil
 }

@@ -25,6 +25,9 @@ type Env struct {
 	// is under a folder the VM shares). nil = every path is visible. An invisible
 	// memory folder is skipped, never a reason to refuse a spawn.
 	Visible func(host string) bool
+	// Estimate sizes the copy before the first clone is made and refuses one the
+	// disk cannot hold (EstimateCopy with the host git). nil = no check.
+	Estimate EstimateFunc
 }
 
 // memorySkipLogged remembers the memory folders already reported as unshared,
@@ -145,7 +148,7 @@ func Prepare(ctx context.Context, e Env, c config.Clone, withMemory bool) (cm bo
 	// The tip is read before the clone, so the record never holds a commit the
 	// clone could not have had. A failure only means there is no record to start.
 	_, tip, _ := BaseBranch(ctx, e.Git, c.Of)
-	created, err = EnsureClone(ctx, e.Git, c, e.Home)
+	created, err = ensureClone(ctx, e.Git, c, e.Home, e.Estimate)
 	if err != nil {
 		return box.CloneMounts{}, false, err
 	}
