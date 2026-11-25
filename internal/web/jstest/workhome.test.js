@@ -519,7 +519,10 @@ test("profile line: the switch's words when on, then the last merge or the refus
   assert.strictEqual(mergeHomeLine(false), "");
   assert.strictEqual(mergeHomeLine(undefined), "");
   const fmt = (at) => "<" + at + ">";
-  assert.strictEqual(mergeLastLine(MG({ merged: true, commits: 2, files: 1, at: "T" }), fmt), "merged box/main into main at <T>");
+  assert.strictEqual(mergeLastLine(MG({ merged: true, commits: 2, files: 1, at: "T" }), fmt), "merged box/main into main (aaa1111..bbb2222) at <T>");
+  const full = MG({ merged: true, at: "T", from: "0123456789abcdef0123456789abcdef01234567", to: "fedcba9876543210fedcba9876543210fedcba98" });
+  assert.strictEqual(mergeLastLine(full, fmt), "merged box/main into main (0123456..fedcba9) at <T>");
+  assert.strictEqual(mergeLastLine(MG({ merged: true, at: "T", from: "", to: "" }), fmt), "merged box/main into main at <T>");
   assert.strictEqual(mergeLastLine(MG({ reason: "dirty" }), fmt), "box/main not merged into main: main has uncommitted changes");
   assert.strictEqual(mergeLastLine(null, fmt), "");
   assert.strictEqual(mergeLastLine(MG({}), fmt), "");

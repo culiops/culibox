@@ -165,13 +165,14 @@ function mergeHomeLine(on) {
   return on === true ? "Merges into the checked-out branch" : "";
 }
 
-// mergeLastLine: the profile view's line for the last merge result: the merge and its time, or the refusal. fmt turns
-// the result's time into text (the page's locale); "" when there is no result to show.
+// mergeLastLine: the profile view's line for the last merge result: the merge, its range (short ids) and its time, or
+// the refusal. fmt turns the result's time into text (the page's locale); "" when there is no result to show.
 function mergeLastLine(m, fmt) {
   if (!m) return "";
   if (m.merged) {
     const at = typeof fmt === "function" ? fmt(m.at) : String(m.at || "");
-    return "merged box/" + (m.branch || "") + " into " + (m.branch || "") + " at " + at;
+    const range = m.from && m.to ? " (" + String(m.from).slice(0, 7) + ".." + String(m.to).slice(0, 7) + ")" : "";
+    return "merged box/" + (m.branch || "") + " into " + (m.branch || "") + range + " at " + at;
   }
   return mergeToastPart(m);
 }
