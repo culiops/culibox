@@ -596,3 +596,150 @@ func TestParseMergeLog(t *testing.T) {
 		}
 	}
 }
+
+// A box merge commit whose first parent is an older host commit restores that
+// commit's version of a guarded file: the first-parent log of From..To does
+// not list it, the From..To tree diff does.
+func TestMergeHomeMergeRestoresOldGuardedFile(t *testing.T) {
+	x := newMergeFx(t, "main")
+	x.commit("O", map[string]string{".claude/settings.json": `{"hooks":"evil-old"}`})
+	o := x.tip()
+	x.commit("From", map[string]string{".claude/settings.json": "{}"})
+	from := x.tip()
+	fixtureGit(t, x.of, "checkout", "-q", "-b", "side", o)
+	x.write("x", "x")
+	fixtureGit(t, x.of, "add", "x")
+	fixtureGit(t, x.of, "commit", "-q", "-m", "O plus x")
+	tree := x.out("rev-parse", "HEAD^{tree}")
+	m := x.out("commit-tree", tree, "-p", o, "-p", from, "-m", "m")
+	fixtureGit(t, x.of, "update-ref", "refs/heads/box/main", m)
+	fixtureGit(t, x.of, "checkout", "-q", "main")
+	fixtureGit(t, x.of, "branch", "-q", "-D", "side")
+
+	got := x.run(newRec(t), &auditRec{})
+	wantMergeReason(t, got, MergeGuarded)
+	if !slices.Contains(got.Paths, ".claude/settings.json") {
+		t.Fatalf("Paths = %q, want .claude/settings.json", got.Paths)
+	}
+	if got.Files != 2 { // x, and the settings file the tree diff adds
+		t.Fatalf("Files = %d, want 2 (log and tree diff union)", got.Files)
+	}
+	if x.tip() != from || x.read(".claude/settings.json") != "{}" {
+		t.Fatal("main or the settings file changed")
+	}
+}
+
+// The user's own git reads a global or system core.hooksPath that CleanEnv
+// hides; a relative one names a directory inside every repo.
+func TestMergeHomeGlobalHooksPathDenied(t *testing.T) {
+	type setup func(t *testing.T, home string)
+	put := func(t *testing.T, p, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hk := "[core]\n\thooksPath = scripts/hooks\n"
+	cases := []struct {
+		name    string
+		setup   setup
+		guarded bool
+	}{
+		{"home .gitconfig", func(t *testing.T, home string) { put(t, filepath.Join(home, ".gitconfig"), hk) }, true},
+		{"home .config/git/config", func(t *testing.T, home string) { put(t, filepath.Join(home, ".config", "git", "config"), hk) }, true},
+		{"XDG_CONFIG_HOME", func(t *testing.T, home string) {
+			xdg := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", xdg)
+			put(t, filepath.Join(xdg, "git", "config"), hk)
+		}, true},
+		{"system", func(t *testing.T, home string) {
+			p := filepath.Join(t.TempDir(), "gitconfig")
+			put(t, p, hk)
+			old := mergeSystemGitConfig
+			mergeSystemGitConfig = p
+			t.Cleanup(func() { mergeSystemGitConfig = old })
+		}, true},
+		{"included from ~", func(t *testing.T, home string) {
+			put(t, filepath.Join(home, ".gitconfig"), "[include]\n\tpath = ~/.gitconfig.local\n")
+			put(t, filepath.Join(home, ".gitconfig.local"), hk)
+		}, true},
+		{"global outside the repo", func(t *testing.T, home string) {
+			put(t, filepath.Join(home, ".gitconfig"), "[core]\n\thooksPath = /elsewhere/hooks\n")
+		}, false},
+		{"no global config", func(t *testing.T, home string) {}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", "")
+			old := mergeSystemGitConfig
+			mergeSystemGitConfig = filepath.Join(t.TempDir(), "none")
+			t.Cleanup(func() { mergeSystemGitConfig = old })
+			home := t.TempDir()
+			c.setup(t, home)
+			x := newMergeFx(t, "main")
+			x.box("main", map[string]string{"scripts/hooks/pre-commit": "#!/bin/sh\n"})
+			got := MergeHome(context.Background(), newRec(t), MergeRequest{Of: x.of, Home: home, Audit: (&auditRec{}).fn})
+			if !c.guarded {
+				wantMerged(t, got)
+				return
+			}
+			wantMergeReason(t, got, MergeGuarded)
+			if !slices.Contains(got.Paths, "scripts/hooks/pre-commit") {
+				t.Fatalf("Paths = %q", got.Paths)
+			}
+		})
+	}
+}
+
+// A symlink at a parent of a nested hooks dir re-points it: tools -> evil makes
+// tools/hk evil/hk.
+func TestMergeHomeHooksParentSymlinkDenied(t *testing.T) {
+	x := newMergeFx(t, "main")
+	fixtureGit(t, x.of, "config", "core.hooksPath", "tools/hk")
+	fixtureGit(t, x.of, "checkout", "-q", "-b", "side")
+	x.write("evil/hk/pre-commit", "#!/bin/sh\n")
+	if err := os.Symlink("evil", filepath.Join(x.of, "tools")); err != nil {
+		t.Fatal(err)
+	}
+	fixtureGit(t, x.of, "add", "evil", "tools")
+	fixtureGit(t, x.of, "commit", "-q", "-m", "link")
+	fixtureGit(t, x.of, "update-ref", "refs/heads/box/main", x.out("rev-parse", "HEAD"))
+	fixtureGit(t, x.of, "checkout", "-q", "main")
+	got := x.run(newRec(t), &auditRec{})
+	wantMergeReason(t, got, MergeGuarded)
+	if !slices.Contains(got.Paths, "tools") {
+		t.Fatalf("Paths = %q, want tools", got.Paths)
+	}
+}
+
+func TestMergeDeniedHooksParent(t *testing.T) {
+	for p, want := range map[string]bool{"tools": true, "Tools": true, "tools/hk": true, "tools/hk/x": true,
+		"tool": false, "tools/h": false, "toolsx": false} {
+		if got := mergeDenied(p, []string{"tools/hk"}); got != want {
+			t.Errorf("mergeDenied(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+func TestParseDiffTree(t *testing.T) {
+	meta := ":160000 100644 " + strings.Repeat("0", 40) + " " + strings.Repeat("1", 40) + " T"
+	ents, err := parseDiffTree([]byte(meta + "\x00lib\x00"))
+	if err != nil || len(ents) != 1 || ents[0].path != "lib" || !ents[0].gitlink {
+		t.Fatalf("ents=%+v err=%v", ents, err)
+	}
+	if ents, err := parseDiffTree(nil); err != nil || ents != nil {
+		t.Fatalf("empty: ents=%+v err=%v", ents, err)
+	}
+	for name, bad := range map[string]string{
+		"commit id": strings.Repeat("a", 40) + "\x00" + meta + "\x00p\x00",
+		"no path":   meta + "\x00",
+		"cut short": meta + "\x00p",
+	} {
+		if _, err := parseDiffTree([]byte(bad)); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+}

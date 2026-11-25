@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -52,6 +54,7 @@ type MergeResult struct {
 // MergeRequest is one MergeHome call.
 type MergeRequest struct {
 	Of    string          // the host repo (clone_of)
+	Home  string          // the user's home, for their global git config; "" skips it
 	Lim   handback.Limits // for the handback inspection of the range
 	Prev  *MergeResult    // the last persisted result, for the retry rule
 	Audit func(action, detail string) error
@@ -248,6 +251,21 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		return m.failed("cannot read the commit list", err)
 	}
 	m.commits = n
+	// The first-parent log misses what a box merge commit takes from a parent
+	// other than its first: with an older host commit as first parent and From
+	// as second, the merge restores that commit's version of a file and the log
+	// lists none of it. The From..To tree diff is what the checkout writes, so
+	// its entries join the log's (which still show an add-then-delete).
+	out, err = m.run(m.env(), "diff-tree", "-r", "-z", "--raw", "--no-renames", "--no-abbrev",
+		"--no-ext-diff", "--no-textconv", m.from, m.to, "--")
+	if err != nil {
+		return m.failed("cannot diff the range", err)
+	}
+	tree, err := parseDiffTree(out)
+	if err != nil {
+		return m.failed("cannot read the range's diff", err)
+	}
+	entries = append(entries, tree...)
 	var paths []string // distinct, first seen first
 	seen := map[string]bool{}
 	for _, e := range entries {
@@ -257,7 +275,7 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		}
 	}
 	m.files = len(paths)
-	hooks, err := m.hooksDir()
+	hooks, err := m.hookDirs(r.Home)
 	if err != nil {
 		return m.failed("cannot read core.hooksPath", err)
 	}
@@ -353,18 +371,40 @@ type mergeEntry struct {
 // <old id> <new id> <status>" lines (the first after a newline) each followed
 // by one path. Anything else is an error: the caller then does not merge.
 func parseMergeLog(out []byte) (commits int, entries []mergeEntry, err error) {
+	commits, entries, err = parseRaw(out, true)
+	if err == nil && commits == 0 {
+		return 0, nil, errors.New("the log lists no commits")
+	}
+	return commits, entries, err
+}
+
+// parseDiffTree reads `diff-tree -r -z --raw --no-renames --no-abbrev A B`
+// output: change lines each followed by one path, no commit ids. Empty output
+// (the same tree) is no entries.
+func parseDiffTree(out []byte) ([]mergeEntry, error) {
+	if len(out) == 0 {
+		return nil, nil
+	}
+	_, entries, err := parseRaw(out, false)
+	return entries, err
+}
+
+// parseRaw reads NUL-terminated raw-diff tokens; with log, change lines must
+// follow a commit id. The read is a strict alternation of change line and
+// path, so a path shaped like a change line or an id is never taken for one.
+func parseRaw(out []byte, log bool) (commits int, entries []mergeEntry, err error) {
 	if len(out) == 0 || out[len(out)-1] != 0 {
-		return 0, nil, errors.New("the log output is empty or cut short")
+		return 0, nil, errors.New("the raw diff output is empty or cut short")
 	}
 	toks := bytes.Split(out[:len(out)-1], []byte{0})
 	for i := 0; i < len(toks); i++ {
 		tok := bytes.TrimPrefix(toks[i], []byte("\n"))
-		if blobIDRE.Match(tok) {
+		if log && blobIDRE.Match(tok) {
 			commits++
 			continue
 		}
-		if len(tok) == 0 || tok[0] != ':' || commits == 0 {
-			return 0, nil, errors.New("unexpected token in the log output")
+		if len(tok) == 0 || tok[0] != ':' || (log && commits == 0) {
+			return 0, nil, errors.New("unexpected token in the raw diff output")
 		}
 		f := strings.Fields(string(tok[1:]))
 		if len(f) != 5 || !octalMode(f[0]) || !octalMode(f[1]) || !blobIDRE.MatchString(f[2]) ||
@@ -376,9 +416,6 @@ func parseMergeLog(out []byte) (commits int, entries []mergeEntry, err error) {
 			return 0, nil, errors.New("a change line without a path in the log output")
 		}
 		entries = append(entries, mergeEntry{path: string(toks[i]), gitlink: f[0] == "160000" || f[1] == "160000"})
-	}
-	if commits == 0 {
-		return 0, nil, errors.New("the log lists no commits")
 	}
 	return commits, entries, nil
 }
@@ -396,11 +433,11 @@ func octalMode(s string) bool {
 }
 
 // mergeDenied reports whether p (a repo-relative path from the range) is a
-// file host tools trust: MergeDenyNames, MergeDenyDirs, MergeDenyTop, or under
-// hooks (lower-cased repo-relative directory, "." for the whole repo, "" for
-// none). Case-insensitive throughout: on a case-insensitive file system
+// file host tools trust: MergeDenyNames, MergeDenyDirs, MergeDenyTop, or at,
+// under or a parent of one of hookDirs (lower-cased repo-relative directories,
+// "." for the whole repo). Case-insensitive throughout: on a case-insensitive file system
 // (macOS) .Claude/ is .claude/, and folding only adds refusals elsewhere.
-func mergeDenied(p, hooks string) bool {
+func mergeDenied(p string, hookDirs []string) bool {
 	lp := strings.ToLower(p)
 	comps := strings.Split(lp, "/")
 	for _, c := range comps {
@@ -421,41 +458,96 @@ func mergeDenied(p, hooks string) bool {
 			return true
 		}
 	}
-	if hooks == "." {
-		return true
+	for _, hooks := range hookDirs {
+		if hooks == "." {
+			return true
+		}
+		// At, under, or above it: a symlink at a parent (tools -> evil)
+		// re-points the hooks dir tools/hk at evil/hk.
+		if hooks != "" && (lp == hooks || strings.HasPrefix(lp, hooks+"/") || strings.HasPrefix(hooks, lp+"/")) {
+			return true
+		}
 	}
-	return hooks != "" && (lp == hooks || strings.HasPrefix(lp, hooks+"/"))
+	return false
 }
 
-// hooksDir returns the repo-relative directory (lower-cased) clone_of's own
-// core.hooksPath names when it is inside the repo: the user's git runs hooks
-// from there, so a box commit writing into it would run on the host at the
-// next commit. "" when it is unset or outside the repo.
+// mergeSystemGitConfig is the system git config the user's git reads. A var so
+// a test can point it elsewhere.
+var mergeSystemGitConfig = "/etc/gitconfig"
+
+// hookDirs returns the repo-relative directories (lower-cased) that any
+// core.hooksPath the user's own git may read names inside clone_of: the user's
+// git runs hooks from there, so a box commit writing into one would run on the
+// host at the next commit. Every value found counts, whatever its precedence.
 //
-// It cannot be read with `config --get`: hardenFlags set core.hooksPath on the
-// command line, which that would print (measured, git 2.39.5). The last value
-// from any scope but "command" is the repo's own.
-func (m *merger) hooksDir() (string, error) {
+// The repo's own value cannot be read with `config --get`: hardenFlags set
+// core.hooksPath on the command line, which that would print (measured, git
+// 2.39.5), so every value from any scope but "command" is taken. CleanEnv
+// hides the global and system config, which the user's git reads: each file
+// is read on its own with --file (which leaves out the command line), with
+// HOME set to home so a ~ include resolves as for the user. home == "" skips
+// the global files.
+func (m *merger) hookDirs(home string) ([]string, error) {
 	out, err := m.run(m.env(), "config", "-z", "--show-scope", "--get-all", "core.hooksPath")
 	if err != nil {
-		if code, ok := exitCode(err); ok && code == 1 {
-			return "", nil
+		if code, ok := exitCode(err); !ok || code != 1 {
+			return nil, err
 		}
-		return "", err
 	}
+	var vals []string
 	toks := strings.Split(string(out), "\x00")
-	val := ""
 	for i := 0; i+1 < len(toks); i += 2 {
 		if toks[i] != "command" {
-			val = toks[i+1]
+			vals = append(vals, toks[i+1])
 		}
 	}
-	return hooksDirOf(m.of, val), nil
+	var files []string
+	env := m.env()
+	if home != "" {
+		files = append(files, filepath.Join(home, ".gitconfig"))
+		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+			files = append(files, filepath.Join(xdg, "git", "config"))
+		} else {
+			files = append(files, filepath.Join(home, ".config", "git", "config"))
+		}
+		env = append(globalEnv(home), "GIT_NO_REPLACE_OBJECTS=1")
+	}
+	files = append(files, mergeSystemGitConfig)
+	for _, f := range files {
+		if _, err := os.Stat(f); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		out, err := m.run(env, "config", "-z", "--includes", "--file", f, "--get-all", "core.hooksPath")
+		if err != nil {
+			if code, ok := exitCode(err); ok && code == 1 {
+				continue
+			}
+			return nil, fmt.Errorf("%s: %w", f, err)
+		}
+		for _, v := range strings.Split(string(out), "\x00") {
+			if v != "" {
+				vals = append(vals, v)
+			}
+		}
+	}
+	var dirs []string
+	for _, v := range vals {
+		if d := hooksDirOf(m.of, home, v); d != "" && !slices.Contains(dirs, d) {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs, nil
 }
 
-func hooksDirOf(of, v string) string {
+// hooksDirOf is the lower-cased repo-relative directory the hooksPath value v
+// names when it is relative (to the work tree's top, where hooks run) or
+// absolute inside of; "" otherwise.
+func hooksDirOf(of, home, v string) string {
+	if home != "" && (v == "~" || strings.HasPrefix(v, "~/")) {
+		v = filepath.Join(home, v[1:])
+	}
 	if v == "" || strings.HasPrefix(v, "~") {
-		return "" // a home directory: not one the repo's commits write
+		return "" // another user's home: not one the repo's commits write
 	}
 	rel := ""
 	if !filepath.IsAbs(v) {
