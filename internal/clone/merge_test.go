@@ -119,9 +119,19 @@ func (a *auditRec) actions() []string {
 	return out
 }
 
+// tips is the CloneTips of a clone whose own branch is where box/<br> is now:
+// the box/<br> in the repo is this clone's work. Empty when there is no box/<br>.
+func (x *mergeFx) tips() map[string]string {
+	x.t.Helper()
+	if sha := x.out("for-each-ref", "--format=%(objectname)", "refs/heads/box/"+x.br); sha != "" {
+		return map[string]string{x.br: sha}
+	}
+	return map[string]string{}
+}
+
 func (x *mergeFx) run(g Git, a *auditRec) *MergeResult {
 	x.t.Helper()
-	return MergeHome(context.Background(), g, MergeRequest{Of: x.of, Audit: a.fn})
+	return MergeHome(context.Background(), g, MergeRequest{Of: x.of, Audit: a.fn, CloneTips: x.tips()})
 }
 
 func wantMergeReason(t *testing.T, got *MergeResult, reason string) {
@@ -197,6 +207,44 @@ func TestMergeHomeNothingToDo(t *testing.T) {
 			t.Fatalf("audit = %q, want none", a.calls)
 		}
 	})
+}
+
+// box/X is shared by every clone of the repo and written by `culibox clone
+// fetch` too: only a box/X at this clone's own tip for X is merged.
+func TestMergeHomeOnlyThisClonesTip(t *testing.T) {
+	cases := []struct {
+		name  string
+		tips  func(x *mergeFx, to string) map[string]string
+		merge bool
+	}{
+		{"own tip", func(x *mergeFx, to string) map[string]string { return map[string]string{"main": to} }, true},
+		{"another clone's", func(x *mergeFx, to string) map[string]string { return map[string]string{"main": x.tip()} }, false},
+		{"no entry", func(x *mergeFx, to string) map[string]string { return map[string]string{"feat": to} }, false},
+		{"nil map", func(x *mergeFx, to string) map[string]string { return nil }, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			x := newMergeFx(t, "main")
+			before := x.tip()
+			to := x.box("main", map[string]string{"b.txt": "b"})
+			rec := newRec(t)
+			a := &auditRec{}
+			got := MergeHome(context.Background(), rec, MergeRequest{Of: x.of, Audit: a.fn, CloneTips: c.tips(x, to)})
+			if c.merge {
+				wantMerged(t, got)
+				if x.tip() != to {
+					t.Fatalf("main = %s, want %s", x.tip(), to)
+				}
+				return
+			}
+			if got != nil {
+				t.Fatalf("result = %+v, want nil (not this clone's work)", got)
+			}
+			if x.tip() != before || len(a.calls) != 0 || mergeCalled(rec) {
+				t.Fatalf("main moved or audit written: %q", a.calls)
+			}
+		})
+	}
 }
 
 func TestMergeHomeSameNameOnly(t *testing.T) {
@@ -521,7 +569,7 @@ func TestMergeHomeAuditFailsClosed(t *testing.T) {
 		before := x.tip()
 		x.box("main", map[string]string{"b.txt": "b"})
 		rec := newRec(t)
-		req := MergeRequest{Of: x.of, Audit: (&auditRec{err: errors.New("disk full")}).fn}
+		req := MergeRequest{Of: x.of, Audit: (&auditRec{err: errors.New("disk full")}).fn, CloneTips: x.tips()}
 		if nilAudit {
 			req.Audit = nil
 		}
@@ -555,7 +603,7 @@ func TestMergeHomeRetryWindow(t *testing.T) {
 	prev := &MergeResult{At: now.Add(-10 * time.Minute), Branch: "main", From: from, To: to, Reason: MergeFailed, Detail: "x"}
 	rec := newRec(t)
 	a := &auditRec{}
-	got := MergeHome(context.Background(), rec, MergeRequest{Of: x.of, Audit: a.fn, Prev: prev, Now: func() time.Time { return now }})
+	got := MergeHome(context.Background(), rec, MergeRequest{Of: x.of, Audit: a.fn, Prev: prev, Now: func() time.Time { return now }, CloneTips: x.tips()})
 	if got != prev {
 		t.Fatalf("result = %+v, want Prev unchanged", got)
 	}
@@ -565,7 +613,7 @@ func TestMergeHomeRetryWindow(t *testing.T) {
 
 	prev.At = now.Add(-31 * time.Minute)
 	rec = newRec(t)
-	got = MergeHome(context.Background(), rec, MergeRequest{Of: x.of, Audit: a.fn, Prev: prev, Now: func() time.Time { return now }})
+	got = MergeHome(context.Background(), rec, MergeRequest{Of: x.of, Audit: a.fn, Prev: prev, Now: func() time.Time { return now }, CloneTips: x.tips()})
 	wantMerged(t, got)
 	if !mergeCalled(rec) || !got.At.Equal(now) {
 		t.Fatalf("not attempted after the window, or At = %v", got.At)
@@ -702,7 +750,7 @@ func TestMergeHomeGlobalHooksPathDenied(t *testing.T) {
 			c.setup(t, home)
 			x := newMergeFx(t, "main")
 			x.box("main", map[string]string{"scripts/hooks/pre-commit": "#!/bin/sh\n"})
-			got := MergeHome(context.Background(), newRec(t), MergeRequest{Of: x.of, Home: home, Audit: (&auditRec{}).fn})
+			got := MergeHome(context.Background(), newRec(t), MergeRequest{Of: x.of, Home: home, Audit: (&auditRec{}).fn, CloneTips: x.tips()})
 			if !c.guarded {
 				wantMerged(t, got)
 				return

@@ -59,6 +59,11 @@ type MergeRequest struct {
 	Prev  *MergeResult    // the last persisted result, for the retry rule
 	Audit func(action, detail string) error
 	Now   func() time.Time // nil: time.Now
+	// CloneTips is this clone's own listing, branch name -> commit. box/X in
+	// r.Of is shared by every clone of the repo and written by `culibox clone
+	// fetch` too, so only a box/X at this clone's tip for X is merged: another
+	// profile's work (or a manual fetch) never is. A missing entry merges nothing.
+	CloneTips map[string]string
 }
 
 // MergeDenyNames are file names, matched case-insensitively against the
@@ -87,8 +92,9 @@ const (
 )
 
 // MergeHome fast-forwards X, the branch checked out in r.Of, to box/X when box/X
-// is strictly ahead, the tree is clean and the guard passes. It returns nil when
-// there is nothing to do or report: no box/X, or box/X is not ahead of X.
+// is this clone's own tip for X (r.CloneTips) and strictly ahead, the tree is
+// clean and the guard passes. It returns nil when there is nothing to do or
+// report: no box/X, a box/X this clone did not write, or box/X not ahead of X.
 //
 // Every git call is the hardened one in r.Of with CleanEnv plus
 // GIT_NO_REPLACE_OBJECTS, so the checks and the merge read the same objects the
@@ -207,8 +213,8 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if m.to, err = m.commitOf("refs/heads/box/" + x); err != nil {
 		return m.failed("cannot read box/"+x, err)
 	}
-	if m.to == "" {
-		return nil
+	if m.to == "" || r.CloneTips[x] != m.to {
+		return nil // no box/X, or not this clone's: nothing of this profile's to merge
 	}
 	if m.from, err = m.commitOf("refs/heads/" + x); err != nil {
 		return m.failed("cannot read "+x, err)

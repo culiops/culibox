@@ -821,6 +821,35 @@ func TestReturnMergesWhenNothingMoved(t *testing.T) {
 	}
 }
 
+// box/X in clone_of is shared by every clone of the repo: a box/main another
+// clone wrote (here one the clone's main cannot fast-forward, so this return
+// leaves it) is not this profile's work and is never merged.
+func TestReturnDoesNotMergeAnotherClonesBox(t *testing.T) {
+	x := newReturnFx(t)
+	env := append(CleanEnv(), "GIT_AUTHOR_NAME=F", "GIT_AUTHOR_EMAIL=f@x", "GIT_COMMITTER_NAME=F", "GIT_COMMITTER_EMAIL=f@x")
+	out, err := x.rec.g.Run(context.Background(), x.of, env, "commit-tree", "-m", "another clone", "-p", "refs/heads/main", "refs/heads/main^{tree}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := strings.TrimSpace(string(out))
+	fixtureGit(t, x.of, "update-ref", "refs/heads/box/main", other)
+	before := x.hostTip("main")
+	a := &auditRec{}
+	res := Return(context.Background(), x.rec, x.dock, x.mergeReq(ReturnAuto, a))
+	if res.Error != "" {
+		t.Fatalf("Error = %q", res.Error)
+	}
+	if got, _ := x.ofRev("refs/heads/box/main"); got != other {
+		t.Fatalf("box/main = %s, want the other clone's %s left in place", got, other)
+	}
+	if res.Merge != nil {
+		t.Fatalf("Merge = %+v, want nil: box/main is not this clone's", res.Merge)
+	}
+	if x.hostTip("main") != before || len(a.calls) != 0 {
+		t.Fatalf("host main moved or audit written: %q", a.calls)
+	}
+}
+
 func TestReturnMergeOffIsUnchanged(t *testing.T) {
 	x := newReturnFx(t)
 	res := x.ret(ReturnAuto)

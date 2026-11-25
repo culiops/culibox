@@ -126,7 +126,7 @@ func Return(ctx context.Context, g Git, d Docker, r ReturnRequest) ReturnResult 
 			prev = st
 		}
 	}
-	returnBranches(ctx, g, d, r, prev, &res)
+	tips := returnBranches(ctx, g, d, r, prev, &res)
 	if res.Error != "" {
 		// Nothing was checked, so nothing is learned: what was not home stays so.
 		res.Home, res.NotHome = nil, slices.Clone(prev.NotHome)
@@ -145,7 +145,7 @@ func Return(ctx context.Context, g Git, d Docker, r ReturnRequest) ReturnResult 
 	// Merging home runs after every automatic pass that could check the clone,
 	// also when nothing moved: a refusal (a dirty tree) may have cleared since.
 	if r.Clone.MergeHome && r.Mode == ReturnAuto && res.Error == "" && res.Base != "" {
-		res.Merge = MergeHome(ctx, g, MergeRequest{Of: r.Clone.Of, Home: r.Home, Prev: prev.Merge, Audit: r.MergeAudit})
+		res.Merge = MergeHome(ctx, g, MergeRequest{Of: r.Clone.Of, Home: r.Home, Prev: prev.Merge, Audit: r.MergeAudit, CloneTips: tips})
 	}
 	if r.DataDir != "" {
 		st := ReturnState{At: res.At, Base: res.Base, NotHome: res.NotHome, Error: res.Error,
@@ -167,7 +167,9 @@ func Return(ctx context.Context, g Git, d Docker, r ReturnRequest) ReturnResult 
 
 type listedBranch struct{ name, sha string }
 
-func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev ReturnState, res *ReturnResult) {
+// returnBranches does the pass and returns this clone's listing, branch name
+// -> commit (nil when the listing did not run or failed).
+func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev ReturnState, res *ReturnResult) (tips map[string]string) {
 	of := r.Clone.Of
 	stopped := func() string {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -200,6 +202,10 @@ func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev 
 		return
 	}
 	entries, cut := parseList(out.buf.String(), res)
+	tips = make(map[string]string, len(entries))
+	for _, e := range entries {
+		tips[e.name] = e.sha
+	}
 	if out.over && res.Uncommitted != nil {
 		res.UncommittedCut = true // the cap fell in the status part
 	} else if out.over {
@@ -315,6 +321,7 @@ func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev 
 			res.Warnings = append(res.Warnings, "box/"+b+": "+w)
 		}
 	}
+	return tips
 }
 
 // parseList reads the listing: complete lines only, each "<sha> refs/heads/<name>"
