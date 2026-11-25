@@ -218,25 +218,19 @@ func (s *lsTreeSum) line(l []byte) {
 	}
 }
 
-// declaresPromisor is whether of's .git/config may declare a promisor remote
-// (extensions.partialClone, remote.<name>.promisor), read as a file through
-// os.Root with the box-file discipline, never through git. It errs towards yes:
-// the word anywhere in the file counts, and a config that is not a plain,
-// bounded, readable file (a symlink, a FIFO) is a yes. Only an absent one is a
-// no, left for git to report. A config an include pulls in is not read: the
-// hardened flags and the clean environment are what keep git from fetching.
+// declaresPromisor is whether host git in of could lazy-fetch: CheckOf's
+// partial-clone test (partialCloneWhy, the same reading of .git/config), so
+// also a config that is not a plain readable file or one git would reject. Only
+// an absent repo is a no, left for git to report. A config an include pulls in
+// is not read: the hardened flags and the clean environment are what keep git
+// from fetching.
 func declaresPromisor(of string) bool {
 	root, err := os.OpenRoot(of)
 	if err != nil {
 		return !errors.Is(err, fs.ErrNotExist)
 	}
 	defer root.Close()
-	data, err := readBoxFile(root, ".git/config", maxGitConfig)
-	if err != nil {
-		return !errors.Is(err, fs.ErrNotExist)
-	}
-	low := strings.ToLower(string(data))
-	return strings.Contains(low, "partialclone") || strings.Contains(low, "promisor")
+	return partialCloneWhy(root) != ""
 }
 
 // usesLFS is whether the top-level .gitattributes of repo names filter=lfs. A

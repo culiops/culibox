@@ -229,6 +229,9 @@ func TestDeclaresPromisor(t *testing.T) {
 		{"plain", "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = /x\n", false},
 		{"partialClone", "[extensions]\n\tpartialClone = origin\n", true},
 		{"promisor any case", "[remote \"o\"]\n\tProMisor\n", true},
+		{"promisor spelled false", "[remote \"o\"]\n\tpromisor = false\n", false},
+		{"the word only in a value", "[remote \"o\"]\n\turl = /srv/promisor\n", false},
+		{"a config git would reject", "[core\n", true},
 	} {
 		if got := declaresPromisor(cfg(t, c.body)); got != c.want {
 			t.Errorf("%s: declaresPromisor = %v, want %v", c.name, got, c.want)

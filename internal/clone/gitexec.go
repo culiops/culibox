@@ -87,15 +87,19 @@ func CleanEnv() []string {
 // CleanEnv) goes through one, so forbidding them all closes it on a git that
 // ignores GIT_NO_LAZY_FETCH (measured, git 2.39.5: "transport 'file' not
 // allowed", "transport 'ssh' not allowed", nothing run). It also refuses a
-// fetch from a bundle file, so the bundle fetch into clone_of, the one call
-// that reads through a transport, re-allows the file transport alone
-// (fileTransport).
+// fetch from a bundle file, so the bundle fetch into clone_of re-allows the file
+// transport alone (fileTransport). That call and the first copy's `git clone`
+// (create.go, not hardened: it runs in no repo) are the two that read clone_of
+// through a transport; on a git without GIT_NO_LAZY_FETCH they could still
+// lazy-fetch, which is why CheckOf refuses a clone_of that declares a partial
+// clone or a promisor remote before either runs (partialCloneWhy).
 var hardenFlags = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
 	"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "protocol.allow=never"}
 
 // fileTransport, after hardenFlags, lets one call read a local file through
 // git's transport (a bundle) while every other transport stays forbidden. A
-// lazy fetch over the file transport is then stopped by GIT_NO_LAZY_FETCH only.
+// lazy fetch over the file transport is then stopped by GIT_NO_LAZY_FETCH and by
+// CheckOf's refusal of a partial clone.
 var fileTransport = []string{"-c", "protocol.file.allow=always"}
 
 // hardened is args with hardenFlags in front, before the subcommand (and before

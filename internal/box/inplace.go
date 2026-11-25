@@ -1073,6 +1073,29 @@ func GitConfigValues(data []byte, section, key string) (vals []string, ok bool) 
 	return vals, true
 }
 
+// GitConfigPromisor reports whether one git config file declares a partial
+// clone (extensions.partialClone, with any value) or a promisor remote
+// (remote.<name>.promisor, unless spelled false). git then fetches any object
+// the repo lacks from that remote, which runs the commands the config names for
+// it (uploadpack, core.sshCommand). Section bases and keys compare
+// case-insensitively, as git's do; the remote's name is any. valid is false when
+// git would reject the file (nothing after the error is read, so a declaration
+// could hide behind it). An [include] is not followed: a declaration in an
+// included file is not seen here.
+func GitConfigPromisor(data []byte) (declares, valid bool) {
+	_, valid = cfgEntries(data, func(section, key, val string, hasVal bool) bool {
+		base, sub, hasSub := strings.Cut(section, ".")
+		switch {
+		case section == "extensions" && key == "partialclone",
+			base == "remote" && hasSub && sub != "" && key == "promisor" && !(hasVal && gitFalse(val)):
+			declares = true
+			return true
+		}
+		return false
+	})
+	return declares, valid
+}
+
 // gitFalse: v is one of git's spellings of boolean false. An empty value is
 // false to git too, but is not accepted here: only a spelled-out false is.
 func gitFalse(v string) bool {

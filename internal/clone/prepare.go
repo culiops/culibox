@@ -37,8 +37,9 @@ var memorySkipLogged sync.Map
 // CheckOf refuses a clone_of agent-box must not clone from or mount the .git of
 // (spec correction 8): it must be a real directory (not a symlink), not /, the
 // home or an ancestor of it, and hold a real .git directory that borrows no
-// objects or refs from elsewhere (no commondir, no alternates), whose path is
-// safe to mount and overlaps no protected dir.
+// objects or refs from elsewhere (no commondir, no alternates) and is no partial
+// clone (partialCloneWhy), whose path is safe to mount and overlaps no protected
+// dir.
 func CheckOf(of, home string, protected []box.ProtectedDir) error {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: clone_of %s %s", box.ErrUnboxableWorkspace, of, why)
@@ -76,6 +77,9 @@ func CheckOf(of, home string, protected []box.ProtectedDir) error {
 			return refuse("has " + p + "; a repo that borrows objects or refs from elsewhere cannot be cloned from")
 		}
 	}
+	if why := partialCloneWhy(root); why != "" {
+		return refuse(why)
+	}
 	gitDir := filepath.Join(of, ".git")
 	if why := box.MountUnsafe(gitDir); why != "" {
 		return refuse("cannot be mounted: " + why)
@@ -84,6 +88,40 @@ func CheckOf(of, home string, protected []box.ProtectedDir) error {
 		return refuse("cannot be mounted: its .git: " + why)
 	}
 	return nil
+}
+
+// maxOfConfig bounds the read of clone_of's .git/config: a user repo's config
+// grows with its branches and remotes, so the bound is well above a clone's.
+const maxOfConfig = 1 << 20
+
+// partialCloneWhy says why the repo under root cannot be a copy's source because
+// of its .git/config, "" when it can (#371 N-1). A partial clone or a promisor
+// remote makes git fetch any object the repo lacks from that remote, running the
+// commands the config names (uploadpack, core.sshCommand). The two host git
+// calls that read through a transport, the first copy's `git clone` and the
+// bundle import, cannot forbid every transport, so on a git without
+// GIT_NO_LAZY_FETCH they would run them: the repo is refused before either. The
+// file is read as a plain file (no symlink, FIFO or directory, bounded), with
+// git's own reading of the keys; one that cannot be read so, or that git would
+// reject, is refused too. An absent config is git's defaults: no promisor. A
+// declaration in a file an [include] pulls in is not seen (a stated limit).
+func partialCloneWhy(root *os.Root) string {
+	data, err := readBoxFile(root, ".git/config", maxOfConfig)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return ""
+	case err != nil:
+		return "has a .git/config that cannot be read as a plain file (" + err.Error() + "); it must be a regular file of at most 1 MiB"
+	}
+	declares, valid := box.GitConfigPromisor(data)
+	switch {
+	case !valid:
+		return "has a .git/config that git would not read; fix it with git config"
+	case declares:
+		return "is a partial clone (its .git/config sets extensions.partialClone or a remote's promisor), and git would fetch the " +
+			"objects it lacks from that remote, running commands its config names; a partial clone cannot be the source of a private copy"
+	}
+	return ""
 }
 
 // isHomeOrAbove reports whether of is home or an ancestor of it, comparing both

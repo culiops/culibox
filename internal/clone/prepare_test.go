@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -118,6 +119,28 @@ func TestCheckOfRefuses(t *testing.T) {
 		{"of does not exist", func(t *testing.T, of string) (string, string, []box.ProtectedDir) {
 			return filepath.Join(of, "nope"), t.TempDir(), nil
 		}},
+		// #371 N-1: git would lazy-fetch through the copy's clone or the bundle import.
+		{"a partial clone", func(t *testing.T, of string) (string, string, []box.ProtectedDir) {
+			fixtureGit(t, of, "config", "extensions.partialClone", "origin")
+			return of, t.TempDir(), nil
+		}},
+		{"a promisor remote", func(t *testing.T, of string) (string, string, []box.ProtectedDir) {
+			fixtureGit(t, of, "config", "remote.origin.promisor", "true")
+			return of, t.TempDir(), nil
+		}},
+		{".git/config a symlink", func(t *testing.T, of string) (string, string, []box.ProtectedDir) {
+			target := filepath.Join(t.TempDir(), "config")
+			mustWrite(t, target, "[core]\n")
+			if err := os.Remove(filepath.Join(of, ".git", "config")); err != nil {
+				t.Fatal(err)
+			}
+			mustSymlink(t, target, filepath.Join(of, ".git", "config"))
+			return of, t.TempDir(), nil
+		}},
+		{".git/config git would reject", func(t *testing.T, of string) (string, string, []box.ProtectedDir) {
+			mustWrite(t, filepath.Join(of, ".git", "config"), "[core\n[remote \"o\"]\n\tpromisor = true\n")
+			return of, t.TempDir(), nil
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,6 +159,29 @@ func TestCheckOfRefuses(t *testing.T) {
 			}
 		})
 	}
+	// A promisor spelled false is none; a large config is still read; an
+	// [include] is not followed (a founder trade-off, stated in SECURITY.md).
+	t.Run("not a partial clone passes", func(t *testing.T) {
+		for _, set := range [][2]string{{"remote.origin.promisor", "false"}, {"include.path", "/elsewhere/config"}} {
+			of := makeOf(t, false)
+			fixtureGit(t, of, "config", set[0], set[1])
+			if err := CheckOf(of, t.TempDir(), nil); err != nil {
+				t.Errorf("%s=%s: CheckOf = %v, want nil", set[0], set[1], err)
+			}
+		}
+		of := makeOf(t, false)
+		f, err := os.OpenFile(filepath.Join(of, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 2000; i++ { // ~100 KiB of branch sections, over a clone's 64 KiB bound
+			fmt.Fprintf(f, "[branch \"b%04d\"]\n\tremote = origin\n\tmerge = refs/heads/b%04d\n", i, i)
+		}
+		f.Close()
+		if err := CheckOf(of, t.TempDir(), nil); err != nil {
+			t.Errorf("a large config: CheckOf = %v, want nil", err)
+		}
+	})
 	t.Run("a plain repo passes", func(t *testing.T) {
 		of := makeOf(t, false)
 		if err := CheckOf(of, t.TempDir(), nil); err != nil {
