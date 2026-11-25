@@ -52,8 +52,10 @@ var pathEscapes = map[string]int{
 	// Refuses $HOME as a boxed workspace (it would mount the whole home).
 	"internal/box/box.go os.UserHomeDir": 1,
 	// Expands a "~" / "~user" core.hooksPath the way host git does, to decide
-	// whether the hooks dir lies in an in-place workspace (a read, never a write).
-	"internal/box/inplace.go os.UserHomeDir": 1,
+	// whether the hooks dir lies in an in-place workspace (a read, never a write);
+	// and tells a git refusal whose repo is the home directory to say Host or a
+	// move, not a copy (resolvedHome, #371: a path comparison only).
+	"internal/box/inplace.go os.UserHomeDir": 2,
 	"internal/box/inplace.go HomeDir":        1,
 	// darwin caps a socket path at 103 bytes, so the socket dir cannot live in the
 	// data root there; it is still derived from it (a hash) and holds only sockets.
