@@ -1294,29 +1294,54 @@ func TestGitShapeOfFIFOGitattributesDoesNotBlock(t *testing.T) {
 	}
 }
 
-// A partial clone or a promisor remote, as git reads the keys (#371 N-1): git
-// lazy-fetches from it, running commands its config names.
+// A partial clone or a promisor remote, as git reads the keys (#371 N-1, and
+// the second follow-up: any remote section, partialclonefilter, git's booleans):
+// git lazy-fetches from it, running commands its config names.
 func TestGitConfigPromisor(t *testing.T) {
 	for _, c := range []struct {
-		name, cfg       string
-		declares, valid bool
+		name, cfg           string
+		declares, wt, valid bool
 	}{
-		{"plain", "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = /x\n", false, true},
-		{"partialClone", "[extensions]\n\tpartialClone = origin\n", true, true},
-		{"partialclone any case, bare", "[EXTENSIONS]\n\tPARTIALCLONE\n", true, true},
-		{"promisor true", "[remote \"Origin\"]\n\tpromisor = true\n", true, true},
-		{"promisor bare key", "[remote \"o\"]\n\tProMisor\n", true, true},
-		{"promisor old-style section", "[remote.o]\n\tpromisor = yes\n", true, true},
-		{"promisor on the header line", "[remote \"o\"] promisor = 1\n", true, true},
-		{"promisor spelled false", "[remote \"o\"]\n\tpromisor = false\n\tpromisor = No\n", false, true},
-		{"the word in a comment or a value", "# promisor\n[remote \"o\"]\n\turl = /promisor/partialclone\n", false, true},
-		{"promisor without a remote name", "[remote]\n\tpromisor = true\n", false, true},
-		{"extension in a subsection is another key", "[extensions \"x\"]\n\tpartialclone = o\n", false, true},
-		{"after a line git rejects", "[core\n[remote \"o\"]\n\tpromisor = true\n", false, false},
+		{"plain", "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = /x\n", false, false, true},
+		{"partialClone", "[extensions]\n\tpartialClone = origin\n", true, false, true},
+		{"partialclone any case, bare", "[EXTENSIONS]\n\tPARTIALCLONE\n", true, false, true},
+		{"promisor true", "[remote \"Origin\"]\n\tpromisor = true\n", true, false, true},
+		{"promisor bare key", "[remote \"o\"]\n\tProMisor\n", true, false, true},
+		{"promisor old-style section", "[remote.o]\n\tpromisor = yes\n", true, false, true},
+		{"promisor on the header line", "[remote \"o\"] promisor = 1\n", true, false, true},
+		{"(B) promisor in an unnamed [remote]", "[remote]\n\tpromisor = true\n", true, false, true},
+		{"(C) promisor in [remote \"\"]", "[remote \"\"]\n\tpromisor = true\n", true, false, true},
+		{"(F) partialclonefilter", "[remote \"o\"]\n\tpartialCloneFilter = blob:none\n", true, false, true},
+		{"(F) partialclonefilter, empty", "[remote]\n\tpartialclonefilter =\n", true, false, true},
+		{"promisor read as false by git", "[remote \"o\"]\n\tpromisor = false\n\tpromisor = No\n\tpromisor =\n\tpromisor = 0\n\tpromisor = 0x0\n\tpromisor = -0\n\tpromisor = 0k\n", false, false, true},
+		{"promisor any non-zero integer", "[remote \"o\"]\n\tpromisor = 2\n", true, false, true},
+		{"promisor git rejects as a boolean", "[remote \"o\"]\n\tpromisor = maybe\n", true, false, true},
+		{"the word in a comment or a value", "# promisor\n[remote \"o\"]\n\turl = /promisor/partialclone\n", false, false, true},
+		{"extension in a subsection is another key", "[extensions \"x\"]\n\tpartialclone = o\n", false, false, true},
+		{"(D) worktreeConfig on", "[extensions]\n\tworktreeConfig = true\n", false, true, true},
+		{"(D) worktreeConfig, the last one wins", "[extensions]\n\tworktreeConfig\n\tworktreeconfig = 0\n", false, false, true},
+		{"after a line git rejects", "[core\n[remote \"o\"]\n\tpromisor = true\n", false, false, false},
 	} {
-		d, v := GitConfigPromisor([]byte(c.cfg))
-		if d != c.declares || v != c.valid {
-			t.Errorf("%s: GitConfigPromisor = %v, %v; want %v, %v", c.name, d, v, c.declares, c.valid)
+		d, wt, v := GitConfigPromisor([]byte(c.cfg))
+		if d != c.declares || wt != c.wt || v != c.valid {
+			t.Errorf("%s: GitConfigPromisor = %v, %v, %v; want %v, %v, %v", c.name, d, wt, v, c.declares, c.wt, c.valid)
 		}
+	}
+}
+
+// git's booleans (git_parse_maybe_bool, then git_parse_int).
+func TestGitBool(t *testing.T) {
+	for _, v := range []string{"", "false", "No", "OFF", "0", "00", "0x0", "0X0", "-0", "+0", "0k", "0M", "0g"} {
+		if gitBool(v, true) {
+			t.Errorf("gitBool(%q) = true, want false", v)
+		}
+	}
+	for _, v := range []string{"true", "YES", "on", "1", "2", "-1", "0x1", "1k", "k", "maybe", "0x"} {
+		if !gitBool(v, true) {
+			t.Errorf("gitBool(%q) = false, want true", v)
+		}
+	}
+	if !gitBool("", false) {
+		t.Error("a key with no value is true")
 	}
 }

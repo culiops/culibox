@@ -119,15 +119,7 @@ func TestCheckOfRefuses(t *testing.T) {
 		{"of does not exist", func(t *testing.T, of string) (string, string, []box.ProtectedDir) {
 			return filepath.Join(of, "nope"), t.TempDir(), nil
 		}},
-		// #371 N-1: git would lazy-fetch through the copy's clone or the bundle import.
-		{"a partial clone", func(t *testing.T, of string) (string, string, []box.ProtectedDir) {
-			fixtureGit(t, of, "config", "extensions.partialClone", "origin")
-			return of, t.TempDir(), nil
-		}},
-		{"a promisor remote", func(t *testing.T, of string) (string, string, []box.ProtectedDir) {
-			fixtureGit(t, of, "config", "remote.origin.promisor", "true")
-			return of, t.TempDir(), nil
-		}},
+		// A config that cannot be read as git reads it: nothing in it can be checked.
 		{".git/config a symlink", func(t *testing.T, of string) (string, string, []box.ProtectedDir) {
 			target := filepath.Join(t.TempDir(), "config")
 			mustWrite(t, target, "[core]\n")
@@ -159,10 +151,12 @@ func TestCheckOfRefuses(t *testing.T) {
 			}
 		})
 	}
-	// A promisor spelled false is none; a large config is still read; an
+	// A partial clone is a working clone_of (the daemon refuses one only where a
+	// box may have written its config); a large config is still read; an
 	// [include] is not followed (a founder trade-off, stated in SECURITY.md).
-	t.Run("not a partial clone passes", func(t *testing.T) {
-		for _, set := range [][2]string{{"remote.origin.promisor", "false"}, {"include.path", "/elsewhere/config"}} {
+	t.Run("a partial clone and an include and a large config pass", func(t *testing.T) {
+		for _, set := range [][2]string{{"extensions.partialClone", "origin"}, {"remote.origin.promisor", "true"},
+			{"remote.origin.partialclonefilter", "blob:none"}, {"include.path", "/elsewhere/config"}} {
 			of := makeOf(t, false)
 			fixtureGit(t, of, "config", set[0], set[1])
 			if err := CheckOf(of, t.TempDir(), nil); err != nil {
@@ -582,5 +576,82 @@ func TestCheckOfAndShareSourceAcceptAProgramDir(t *testing.T) {
 		if err := c.run([]box.ProtectedDir{box.ConfigDirProtected(c.dir)}); !errors.Is(err, box.ErrUnboxableWorkspace) {
 			t.Errorf("%s: a config folder must still refuse: %v", name, err)
 		}
+	}
+}
+
+// A real partial clone (git clone --filter=blob:none) is a working clone_of: the
+// first copy is made from it with the host git and has HEAD checked out (#371,
+// the regression the second follow-up fixed).
+func TestARealPartialCloneIsACloneOf(t *testing.T) {
+	g := newRec(t)
+	src := makeOf(t, false)
+	fixtureGit(t, src, "config", "uploadpack.allowFilter", "true")
+	base := t.TempDir()
+	of := filepath.Join(base, "partial")
+	// Built with lazy fetching on: the partial clone's own checkout fetches HEAD's blobs.
+	env := append(lazyEnv(), "GIT_AUTHOR_NAME=F", "GIT_AUTHOR_EMAIL=f@x", "GIT_COMMITTER_NAME=F", "GIT_COMMITTER_EMAIL=f@x")
+	if _, err := g.g.Run(context.Background(), "", env, "clone", "-q", "--filter=blob:none", "file://"+src, of); err != nil {
+		t.Fatal(err)
+	}
+	if why := PartialCloneWhy(of); why == "" {
+		t.Fatal("the fixture is not a partial clone")
+	}
+	home := filepath.Join(base, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOf(of, home, nil); err != nil {
+		t.Fatalf("CheckOf of a partial clone = %v, want nil", err)
+	}
+	c := config.Clone{Of: of, Dir: filepath.Join(base, "copy")}
+	created, err := EnsureClone(context.Background(), g, c, home)
+	if err != nil || !created {
+		t.Fatalf("EnsureClone = %v, %v; want a new copy", created, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(c.Dir, "a")); err != nil || string(b) != "a" {
+		t.Fatalf("the copy's work tree: %q, %v", b, err)
+	}
+}
+
+// PartialCloneWhy reads .git/config, and .git/config.worktree when
+// extensions.worktreeConfig is on, as git would (#371).
+func TestPartialCloneWhy(t *testing.T) {
+	repo := func(t *testing.T, cfg, wt string) string {
+		of := t.TempDir()
+		mustWrite(t, filepath.Join(of, ".git", "config"), cfg)
+		if wt != "" {
+			mustWrite(t, filepath.Join(of, ".git", "config.worktree"), wt)
+		}
+		return of
+	}
+	const promisor = "[remote \"o\"]\n\tpromisor = true\n"
+	for _, c := range []struct {
+		name, cfg, wt string
+		want          bool
+	}{
+		{"plain", "[core]\n\tbare = false\n", "", false},
+		{"partialClone", "[extensions]\n\tpartialClone = o\n", "", true},
+		{"(B) an unnamed [remote]", "[remote]\n\tpromisor = true\n", "", true},
+		{"(C) [remote \"\"]", "[remote \"\"]\n\tpromisor = true\n", "", true},
+		{"(F) partialclonefilter", "[remote \"o\"]\n\tpartialclonefilter = blob:none\n", "", true},
+		{"promisor = 0x0 is false", "[remote \"o\"]\n\tpromisor = 0x0\n", "", false},
+		{"(D) config.worktree with worktreeConfig on", "[extensions]\n\tworktreeConfig = true\n", promisor, true},
+		{"config.worktree with worktreeConfig off is not read", "[core]\n", promisor, false},
+		{"a config git would reject", "[core\n", "", true},
+		{"a config.worktree git would reject", "[extensions]\n\tworktreeConfig\n", "[core\n", true},
+	} {
+		if got := PartialCloneWhy(repo(t, c.cfg, c.wt)) != ""; got != c.want {
+			t.Errorf("%s: PartialCloneWhy != \"\" is %v, want %v", c.name, got, c.want)
+		}
+	}
+	of := repo(t, "[extensions]\n\tworktreeConfig = 1\n", "")
+	target := filepath.Join(t.TempDir(), "wt")
+	mustWrite(t, target, promisor)
+	mustSymlink(t, target, filepath.Join(of, ".git", "config.worktree"))
+	if PartialCloneWhy(of) == "" {
+		t.Error("a symlinked config.worktree must not pass")
+	}
+	if why := PartialCloneWhy(filepath.Join(t.TempDir(), "missing")); why != "" {
+		t.Errorf("a missing repo: %q, want \"\" (the other checks report it)", why)
 	}
 }

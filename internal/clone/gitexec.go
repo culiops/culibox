@@ -89,17 +89,19 @@ func CleanEnv() []string {
 // allowed", "transport 'ssh' not allowed", nothing run). It also refuses a
 // fetch from a bundle file, so the bundle fetch into clone_of re-allows the file
 // transport alone (fileTransport). That call and the first copy's `git clone`
-// (create.go, not hardened: it runs in no repo) are the two that read clone_of
-// through a transport; on a git without GIT_NO_LAZY_FETCH they could still
-// lazy-fetch, which is why CheckOf refuses a clone_of that declares a partial
-// clone or a promisor remote before either runs (partialCloneWhy).
+// (create.go: not hardened, it runs in no repo, and its -c configures the new
+// repo, so it may use any transport) are the two that read clone_of through a
+// transport; on a git without GIT_NO_LAZY_FETCH they could still lazy-fetch.
+// The daemon refuses a partial clone as clone_of where a box may have written
+// its config (PartialCloneWhy); the user's own partial clone is allowed.
 var hardenFlags = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
 	"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "protocol.allow=never"}
 
 // fileTransport, after hardenFlags, lets one call read a local file through
 // git's transport (a bundle) while every other transport stays forbidden. A
-// lazy fetch over the file transport is then stopped by GIT_NO_LAZY_FETCH and by
-// CheckOf's refusal of a partial clone.
+// lazy fetch over the file transport is then stopped by GIT_NO_LAZY_FETCH alone
+// (and, where a box may have written clone_of's config, by the daemon's refusal
+// of a partial clone).
 var fileTransport = []string{"-c", "protocol.file.allow=always"}
 
 // hardened is args with hardenFlags in front, before the subcommand (and before

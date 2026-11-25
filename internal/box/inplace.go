@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -1074,26 +1075,58 @@ func GitConfigValues(data []byte, section, key string) (vals []string, ok bool) 
 }
 
 // GitConfigPromisor reports whether one git config file declares a partial
-// clone (extensions.partialClone, with any value) or a promisor remote
-// (remote.<name>.promisor, unless spelled false). git then fetches any object
-// the repo lacks from that remote, which runs the commands the config names for
-// it (uploadpack, core.sshCommand). Section bases and keys compare
-// case-insensitively, as git's do; the remote's name is any. valid is false when
-// git would reject the file (nothing after the error is read, so a declaration
-// could hide behind it). An [include] is not followed: a declaration in an
-// included file is not seen here.
-func GitConfigPromisor(data []byte) (declares, valid bool) {
+// clone or a promisor remote, as git reads the keys: extensions.partialClone
+// (any value), or in any remote section (named, unnamed, or named "")
+// partialclonefilter (any value) or promisor (unless git reads it as false, see
+// gitBool). git then fetches any object the repo lacks from that remote, which
+// runs the commands its config names for it (uploadpack, core.sshCommand, an
+// insteadOf rewrite to ssh). worktreeConfig is extensions.worktreeConfig as git
+// reads it: git then also reads .git/config.worktree, which the caller must test
+// the same way. Section bases and keys compare case-insensitively, as git's do.
+// valid is false when git would reject the file (nothing after the error is
+// read, so a declaration could hide behind it). An [include] is not followed: a
+// declaration in an included file is not seen here.
+func GitConfigPromisor(data []byte) (declares, worktreeConfig, valid bool) {
 	_, valid = cfgEntries(data, func(section, key, val string, hasVal bool) bool {
-		base, sub, hasSub := strings.Cut(section, ".")
+		base, _, _ := strings.Cut(section, ".")
 		switch {
 		case section == "extensions" && key == "partialclone",
-			base == "remote" && hasSub && sub != "" && key == "promisor" && !(hasVal && gitFalse(val)):
+			base == "remote" && key == "partialclonefilter",
+			base == "remote" && key == "promisor" && gitBool(val, hasVal):
 			declares = true
 			return true
+		case section == "extensions" && key == "worktreeconfig":
+			worktreeConfig = gitBool(val, hasVal) // the last one wins, as in git
 		}
 		return false
 	})
-	return declares, valid
+	return declares, worktreeConfig, valid
+}
+
+// gitBool is git's reading of a boolean value (git_parse_maybe_bool, then
+// git_parse_int): a key with no value is true; true, yes and on are true; false,
+// no, off and the empty value are false; an integer (any base strtoimax takes,
+// with an optional k, m or g unit) is true unless it is 0 (0, 00, 0x0, -0, 0k).
+// Anything else git rejects as a bad boolean; it reads as true here, which is
+// the side that refuses.
+func gitBool(val string, hasVal bool) bool {
+	if !hasVal {
+		return true
+	}
+	switch strings.ToLower(val) {
+	case "true", "yes", "on":
+		return true
+	case "false", "no", "off", "":
+		return false
+	}
+	n := val
+	if l := len(n); l > 1 && strings.ContainsRune("kKmMgG", rune(n[l-1])) {
+		n = n[:l-1]
+	}
+	if i, err := strconv.ParseInt(n, 0, 64); err == nil {
+		return i != 0
+	}
+	return true
 }
 
 // gitFalse: v is one of git's spellings of boolean false. An empty value is

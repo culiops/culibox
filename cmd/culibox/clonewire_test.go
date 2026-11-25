@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2098,4 +2100,161 @@ func TestCloneHooksCopyDirOfRecord(t *testing.T) {
 	if _, owned := h.BoxOwned(dir); !owned {
 		t.Fatal("precondition: BoxOwned fails closed on the same record")
 	}
+}
+
+// lazyGit is the host git with lazy fetching left on, as a git that predates
+// GIT_NO_LAZY_FETCH (or ignores it) runs: =0 also keeps git upload-pack, which a
+// local clone runs in the source repo, from turning it off by itself.
+type lazyGit struct{ g clone.ExecGit }
+
+func lazyOn(env []string) []string {
+	out := append([]string(nil), env...)
+	for i, kv := range out {
+		if strings.HasPrefix(kv, "GIT_NO_LAZY_FETCH=") {
+			out[i] = "GIT_NO_LAZY_FETCH=0"
+		}
+	}
+	return out
+}
+
+func (l lazyGit) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	return l.g.Run(ctx, dir, lazyOn(env), args...)
+}
+
+func (l lazyGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	return l.g.RunStdin(ctx, dir, lazyOn(env), stdin, args...)
+}
+
+func (l lazyGit) Stream(ctx context.Context, dir string, env []string, stdin io.Reader, stdout io.Writer, args ...string) error {
+	return l.g.Stream(ctx, dir, lazyOn(env), stdin, stdout, args...)
+}
+
+// noContainer is a docker that runs nothing: the refusals below come first.
+type noContainer struct{}
+
+func (noContainer) RunStream(context.Context, []string, io.Writer) error {
+	return errors.New("no container in this test")
+}
+func (noContainer) Remove(context.Context, string) error { return nil }
+
+// A partial clone is refused as clone_of only where a box may have written its
+// config: inside a folder boxed in place before CuliBox classified it (#371,
+// second follow-up). The first copy's git clone and the bundle import read
+// clone_of through a transport and rely on GIT_NO_LAZY_FETCH, which an older git
+// ignores; the fixture proves the clone then runs the promisor remote's command.
+// checkOf gates Prepare (the clone), a return (the bundle import), the save
+// check and the estimate, so each refuses before any git runs. A folder no box
+// ran in is the user's own: the same repo passes there.
+func TestCheckOfRefusesAPartialCloneABoxMayHaveWritten(t *testing.T) {
+	g, err := clone.NewExecGit()
+	if err != nil {
+		t.Skip("git not on PATH")
+	}
+	ctx := context.Background()
+	home := t.TempDir()
+	of := filepath.Join(home, "legacy")
+	marker := filepath.Join(t.TempDir(), "MARKER")
+	if strings.Contains(marker, "'") {
+		t.Skip("the temp dir has a quote in it")
+	}
+	if err := os.MkdirAll(of, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := append(clone.CleanEnv(), "GIT_AUTHOR_NAME=F", "GIT_AUTHOR_EMAIL=f@x", "GIT_COMMITTER_NAME=F", "GIT_COMMITTER_EMAIL=f@x")
+	run := func(args ...string) string {
+		out, err := g.Run(ctx, of, env, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if err := os.WriteFile(filepath.Join(of, "f.txt"), []byte("secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("init", "-q", "-b", "master")
+	run("add", "f.txt")
+	run("commit", "-q", "-m", "f")
+	blob := run("rev-parse", "HEAD:f.txt")
+	if err := os.Remove(filepath.Join(of, ".git", "objects", blob[:2], blob[2:])); err != nil {
+		t.Skipf("the blob is not a loose object (%v)", err)
+	}
+	// A ref naming a missing commit: what makes the copy's clone lazy-fetch.
+	if err := os.WriteFile(filepath.Join(of, ".git", "refs", "heads", "main"), []byte(strings.Repeat("2", 40)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("config", "remote.origin.url", filepath.Join(home, "nowhere"))
+	run("config", "remote.origin.promisor", "true")
+	run("config", "remote.origin.uploadpack", "touch '"+marker+"'; false")
+	noMarker := func(t *testing.T) {
+		t.Helper()
+		if _, err := os.Stat(marker); err == nil {
+			os.Remove(marker)
+			t.Fatal("host git lazy-fetched: the promisor remote's upload-pack command ran on the host")
+		}
+	}
+	old := lazyGit{g}
+
+	t.Run("fixture: the copy's git clone fires on a git without GIT_NO_LAZY_FETCH", func(t *testing.T) {
+		_, _ = clone.EnsureClone(ctx, old, config.Clone{Of: of, Dir: filepath.Join(t.TempDir(), "copy")}, home)
+		if _, err := os.Stat(marker); err != nil {
+			t.Skip("this git does not lazy-fetch through a local clone of the fixture")
+		}
+		os.Remove(marker)
+	})
+
+	reg, _ := inPlaceRegistry(t)
+	if err := reg.Add(of); err != nil { // no flag: boxed in place before the record kept one
+		t.Fatal(err)
+	}
+	h := testHooks(t, noClones)
+	h.boxed = reg
+	h.env = clone.Env{Git: old, Home: home}
+	h.prepare = clone.Prepare
+	h.ret = clone.Return
+	h.docker = noContainer{}
+	h.image = "img"
+	refused := func(t *testing.T, err error) {
+		t.Helper()
+		if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(fmt.Sprint(err), "is a partial clone") ||
+			!strings.Contains(fmt.Sprint(err), of+" was boxed in place before CuliBox recorded whether it was a git repo") {
+			t.Fatalf("err = %v, want the partial-clone refusal naming the entry", err)
+		}
+	}
+	t.Run("checkOf", func(t *testing.T) { refused(t, h.checkOf(of)) })
+	t.Run("Prepare: the first copy", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "copy")
+		_, _, err := h.Prepare(ctx, config.Clone{Of: of, Dir: dir}, false)
+		noMarker(t)
+		refused(t, err)
+		if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the copy dir was made: %v", err)
+		}
+	})
+	t.Run("a return: the bundle import", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "copy")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		s := h.doReturn(ctx, config.Clone{Of: of, Dir: dir, Profile: "p"}, session.ReturnNow, clone.ReturnForced)
+		noMarker(t)
+		if !strings.Contains(s.Error, "is a partial clone") {
+			t.Fatalf("doReturn error = %q, want the partial-clone refusal", s.Error)
+		}
+	})
+	t.Run("the save check and the estimate", func(t *testing.T) {
+		refused(t, cloneSaveCheck(h, home, nil)(config.Clone{Of: of, Dir: filepath.Join(home, "copy")}))
+		_, err := h.EstimateCopy(ctx, of, filepath.Join(home, "box-clones", "x"))
+		refused(t, err)
+		noMarker(t)
+	})
+	t.Run("a folder no box ran in is the user's own: allowed", func(t *testing.T) {
+		mine, _ := inPlaceRegistry(t)
+		h.boxed = mine
+		if err := h.checkOf(of); err != nil {
+			t.Fatalf("checkOf of the user's own partial clone = %v, want nil", err)
+		}
+		if err := clone.CheckOf(of, home, nil); err != nil {
+			t.Fatalf("clone.CheckOf of a partial clone = %v, want nil", err)
+		}
+	})
 }

@@ -569,13 +569,26 @@ func (h *cloneHooks) checkOf(of string) error {
 			box.ErrUnboxableWorkspace, of, why)
 	}
 	// A folder boxed in place while it was not a git repo may hold a .git the box
-	// wrote: host git (clone, fetch, origin) would run against it (#371). Only
-	// "nongit" is refused here. An entry with no flag (recorded before the flag
-	// existed) is checked at profile save, for a new or changed clone_of only,
-	// so a clone profile accepted under the old rules keeps spawning.
+	// wrote: host git (clone, fetch, origin) would run against it (#371). That
+	// "nongit" status is refused here. An entry with no flag (recorded before the
+	// flag existed) is asked about at profile save, for a new or changed
+	// clone_of only, so a clone profile accepted under the old rules keeps
+	// spawning; but its config may be box-written too, and a promisor remote
+	// declared there would make the copy's git clone or the bundle import, the
+	// two calls that read clone_of through a transport, run a command it names
+	// on a git without GIT_NO_LAZY_FETCH. So there, and only there, a partial
+	// clone is refused. A folder no box ran in ("none") is the user's own: a
+	// partial clone of theirs is a working clone_of.
 	if h.boxed != nil {
-		if st, entry := h.boxed.InPlaceStatus(of); st == boxedws.StatusNonGit {
+		switch st, entry := h.boxed.InPlaceStatus(of); st {
+		case boxedws.StatusNonGit:
 			return fmt.Errorf("%w: clone_of %s: %s", box.ErrUnboxableWorkspace, of, nonGitRelease(of, entry, h.boxed.Path()))
+		case boxedws.StatusUnknown:
+			if why := clone.PartialCloneWhy(of); why != "" {
+				return fmt.Errorf("%w: clone_of %s %s, and %s was boxed in place before CuliBox recorded whether it was a git repo, "+
+					"so a box may have written that config; a partial clone there cannot be the source of a private copy",
+					box.ErrUnboxableWorkspace, of, why, entry)
+			}
 		}
 	}
 	return nil

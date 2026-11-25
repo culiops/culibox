@@ -3,16 +3,13 @@ package clone
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
 )
 
@@ -27,9 +24,11 @@ func lazyEnv() []string {
 // command that writes marker, the blob of HEAD's file is missing, and
 // refs/heads/main names a commit that is not there. A host git that
 // lazy-fetches a missing object runs that command on the host. missing is a
-// commit SHA the repo does not have. The test is skipped when this git cannot
-// be made to run the command: the fixture is the proof that the class exists.
-func promisorFixture(t *testing.T) (of, marker, missing string) {
+// commit SHA the repo does not have. With viaInclude the remote is declared in a
+// file .git/config pulls in with [include] (no extensions.partialClone), which
+// no check of CuliBox's reads. The test is skipped when this git cannot be made
+// to run the command: the fixture is the proof that the class exists.
+func promisorFixture(t *testing.T, viaInclude bool) (of, marker, missing string) {
 	t.Helper()
 	g, err := NewExecGit()
 	if err != nil {
@@ -58,14 +57,21 @@ func promisorFixture(t *testing.T) (of, marker, missing string) {
 	if err := os.WriteFile(filepath.Join(of, ".git", "refs", "heads", "main"), []byte(missing+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, kv := range [][2]string{
-		{"core.repositoryformatversion", "1"},
-		{"extensions.partialClone", "origin"},
+	remote := [][2]string{
 		{"remote.origin.url", filepath.Join(base, "nowhere")},
 		{"remote.origin.promisor", "true"},
 		{"remote.origin.uploadpack", "touch '" + marker + "'; false"},
-	} {
-		fixtureGit(t, of, "config", kv[0], kv[1])
+	}
+	if viaInclude {
+		inc := filepath.Join(base, "included.cfg")
+		for _, kv := range remote {
+			fixtureGit(t, of, "config", "--file", inc, kv[0], kv[1])
+		}
+		fixtureGit(t, of, "config", "include.path", inc)
+	} else {
+		for _, kv := range append([][2]string{{"core.repositoryformatversion", "1"}, {"extensions.partialClone", "origin"}}, remote...) {
+			fixtureGit(t, of, "config", kv[0], kv[1])
+		}
 	}
 	// The class is real on this git: an unhardened read of a missing object
 	// runs the box's command.
@@ -99,10 +105,13 @@ func (listOnlyDocker) Remove(context.Context, string) error { return nil }
 // the copy estimate, not the refresh's and the return's checks (BaseBranch,
 // HeadInHost, StaleSHAs). Each of the two layers (GIT_NO_LAZY_FETCH in CleanEnv,
 // protocol.allow=never in the hardened flags) holds on its own, for a git that
-// knows only one of them. The two calls that do use a transport (the first
-// copy's git clone, the bundle import) are TestPartialCloneIsNeverACopySource's.
+// knows only one of them. The two calls that read clone_of through a transport
+// (the first copy's git clone, which may use any transport, and the bundle
+// import, the file transport only) rely on GIT_NO_LAZY_FETCH alone; where a box
+// may have written clone_of's config, the daemon refuses a partial clone before
+// either runs (cmd/culibox TestCheckOfRefusesAPartialCloneABoxMayHaveWritten).
 func TestHostGitNeverLazyFetches(t *testing.T) {
-	of, marker, missing := promisorFixture(t)
+	of, marker, missing := promisorFixture(t, false)
 	g, _ := NewExecGit()
 	ctx := context.Background()
 	noMarker := func(t *testing.T) {
@@ -176,7 +185,13 @@ func TestHardenedFlagsAllowNoTransport(t *testing.T) {
 // oldGit is the real git with lazy fetching left on, as a git that predates
 // GIT_NO_LAZY_FETCH (or ignores it) runs: =0 also keeps git upload-pack, which
 // a local clone runs in the source repo, from turning it off by itself.
-type oldGit struct{ g ExecGit }
+type oldGit struct{ g fullGit }
+
+// fullGit is a Git that can also feed stdin and stream, as ExecGit can.
+type fullGit interface {
+	StdinGit
+	StreamGit
+}
 
 func oldEnv(env []string) []string {
 	out := slices.Clone(env)
@@ -200,82 +215,76 @@ func (o oldGit) Stream(ctx context.Context, dir string, env []string, stdin io.R
 	return o.g.Stream(ctx, dir, oldEnv(env), stdin, stdout, args...)
 }
 
-// The two host git calls that read through a transport, the first copy's
-// `git clone -- <clone_of>` and the bundle import into clone_of, cannot forbid
-// every transport, and a git without GIT_NO_LAZY_FETCH lazy-fetches through
-// them. So a clone_of whose config declares a partial clone or a promisor
-// remote is refused by CheckOf, which runs before both (Prepare, Fetch through
-// checkMounts, Return), before any git runs (#371 N-1). A declaration through
-// an [include] is not seen: a stated limit.
-func TestPartialCloneIsNeverACopySource(t *testing.T) {
-	of, marker, missing := promisorFixture(t)
+// anyTransport drops the hardened flags' transport rules (protocol.allow=never
+// and the file transport given back) from every call: what is left between a
+// promisor remote and its command is GIT_NO_LAZY_FETCH alone.
+type anyTransport struct{ g fullGit }
+
+func dropTransportRules(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-c" && i+1 < len(args) && (args[i+1] == "protocol.allow=never" || args[i+1] == "protocol.file.allow=always") {
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
+}
+
+func (a anyTransport) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	return a.g.Run(ctx, dir, env, dropTransportRules(args)...)
+}
+
+func (a anyTransport) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	return a.g.RunStdin(ctx, dir, env, stdin, dropTransportRules(args)...)
+}
+
+func (a anyTransport) Stream(ctx context.Context, dir string, env []string, stdin io.Reader, stdout io.Writer, args ...string) error {
+	return a.g.Stream(ctx, dir, env, stdin, stdout, dropTransportRules(args)...)
+}
+
+// A promisor remote declared through an [include] passes every check of
+// CuliBox's by design (a stated limit), so it reaches a return's host calls.
+// There GIT_NO_LAZY_FETCH alone stops it: the same return with the transport
+// rules dropped from the flags writes no marker, and with the variable off too
+// it does (which proves the return reaches the lazy fetch at all).
+func TestReturnIncludedPromisorStoppedByTheEnvironment(t *testing.T) {
+	of, marker, missing := promisorFixture(t, true)
 	g, _ := NewExecGit()
-	old := oldGit{g}
 	ctx := context.Background()
-	noMarker := func(t *testing.T) {
-		t.Helper()
-		if _, err := os.Stat(marker); err == nil {
-			os.Remove(marker)
-			t.Fatal("host git lazy-fetched: the promisor remote's upload-pack command ran on the host")
-		}
-	}
-	partial := func(t *testing.T, err error) {
-		t.Helper()
-		if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(fmt.Sprint(err), "partial clone cannot be the source of a private copy") {
-			t.Fatalf("err = %v, want the partial-clone refusal", err)
-		}
-	}
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	copyDir := func(t *testing.T) string { return filepath.Join(t.TempDir(), "copy") }
-
-	// The class is real for the clone: without the refusal, the first copy's
-	// git clone runs the box's command on such a git.
-	t.Run("fixture: the copy's git clone fires on a git without GIT_NO_LAZY_FETCH", func(t *testing.T) {
-		_, _ = EnsureClone(ctx, old, config.Clone{Of: of, Dir: copyDir(t)}, home)
-		if _, err := os.Stat(marker); err != nil {
-			t.Skip("this git does not lazy-fetch through a local clone of the fixture")
-		}
-		os.Remove(marker)
-	})
-	t.Run("CheckOf", func(t *testing.T) {
-		partial(t, CheckOf(of, home, nil))
-	})
-	t.Run("Prepare: the first copy", func(t *testing.T) {
-		dir := copyDir(t)
-		_, _, err := Prepare(ctx, Env{Git: old, Home: home}, config.Clone{Of: of, Dir: dir}, false)
-		noMarker(t)
-		partial(t, err)
-		if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("the copy dir was made: %v", err)
-		}
-	})
-	t.Run("Fetch: the bundle import", func(t *testing.T) {
-		dir := copyDir(t)
+	if err := CheckOf(of, home, nil); err != nil {
+		t.Fatalf("an [include]d promisor is allowed by design: CheckOf = %v", err)
+	}
+	ret := func(t *testing.T, gg Git) ReturnResult {
+		dir := filepath.Join(t.TempDir(), "copy")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Fetch(ctx, old, listOnlyDocker{}, FetchRequest{
-			Clone: config.Clone{Of: of, Dir: dir}, Branch: "feat", Base: "master", Image: "img", Instance: "T",
-			TempDir: t.TempDir(), Home: home,
-		})
-		noMarker(t)
-		partial(t, err)
-	})
-	t.Run("Return", func(t *testing.T) {
-		dir := copyDir(t)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		res := Return(ctx, old, listOnlyDocker{listing: missing + " refs/heads/feat\n#culibox-status\n"}, ReturnRequest{
+		return Return(ctx, gg, listOnlyDocker{listing: missing + " refs/heads/feat\n#culibox-status\n"}, ReturnRequest{
 			Clone: config.Clone{Of: of, Dir: dir, Profile: "p"}, Mode: ReturnAuto,
 			Image: "img", Instance: "T", TempDir: t.TempDir(), Home: home,
 		})
-		noMarker(t)
-		if !strings.Contains(res.Error, "partial clone cannot be the source of a private copy") {
-			t.Errorf("the return was not refused before any git: %+v", res)
+	}
+	t.Run("fixture: with neither layer the return fires", func(t *testing.T) {
+		ret(t, anyTransport{oldGit{g}})
+		if _, err := os.Stat(marker); err != nil {
+			t.Fatal("the return wrote no marker with lazy fetching on and every transport allowed: the subtest below would prove nothing")
+		}
+		os.Remove(marker)
+	})
+	t.Run("GIT_NO_LAZY_FETCH alone", func(t *testing.T) {
+		res := ret(t, anyTransport{g})
+		if _, err := os.Stat(marker); err == nil {
+			os.Remove(marker)
+			t.Fatal("host git lazy-fetched with GIT_NO_LAZY_FETCH=1: the promisor remote's upload-pack command ran on the host")
+		}
+		if res.Error != "" || res.Base != "master" || len(res.NotHome) != 1 {
+			t.Errorf("the return did not reach its host checks: %+v", res)
 		}
 	})
 }

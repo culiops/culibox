@@ -218,19 +218,13 @@ func (s *lsTreeSum) line(l []byte) {
 	}
 }
 
-// declaresPromisor is whether host git in of could lazy-fetch: CheckOf's
-// partial-clone test (partialCloneWhy, the same reading of .git/config), so
-// also a config that is not a plain readable file or one git would reject. Only
-// an absent repo is a no, left for git to report. A config an include pulls in
-// is not read: the hardened flags and the clean environment are what keep git
-// from fetching.
+// declaresPromisor is whether host git in of could lazy-fetch: PartialCloneWhy
+// says so, or cannot tell (a config that is not a plain readable file, or one
+// git would reject). Only an absent repo is a no, left for git to report. A
+// config an include pulls in is not read: the hardened flags and the clean
+// environment are what keep git from fetching.
 func declaresPromisor(of string) bool {
-	root, err := os.OpenRoot(of)
-	if err != nil {
-		return !errors.Is(err, fs.ErrNotExist)
-	}
-	defer root.Close()
-	return partialCloneWhy(root) != ""
+	return PartialCloneWhy(of) != ""
 }
 
 // usesLFS is whether the top-level .gitattributes of repo names filter=lfs. A
