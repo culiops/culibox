@@ -1252,3 +1252,50 @@ func TestProfileSaveCriticalRmNeedsBypass(t *testing.T) {
 		t.Errorf("bypass + critical-rm: code %d body %s, want 201", rec.Code, rec.Body)
 	}
 }
+
+// #370: the API answers a save that turns clone_merge_home on with a 400
+// merge_home_ack; the same save with ack_merge_home goes through, audited
+// (ack row, then created), and the ack is never stored. The view says merge_home.
+func TestMergeHomeNeedsAck(t *testing.T) {
+	pm, st, rec := mergeHomePM(t)
+	s := &Server{Profiles: pm}
+	body := `{"name":"cl","bin":"claude","runtime":"box","clone_of":"/home/u/repo","default_cwd":"/home/u/clones/repo","clone_merge_home":true`
+	r := postProfile(s, body+`}`)
+	if r.Code != 400 || apiCode(t, r) != "merge_home_ack" {
+		t.Fatalf("POST without ack: %d %s", r.Code, r.Body)
+	}
+	if got := apiBody(t, r); got["field"] != "clone_merge_home" {
+		t.Fatalf("body = %v", got)
+	}
+	if _, ok := st.Get("cl"); ok {
+		t.Fatal("stored")
+	}
+	if len(rec.events) != 0 {
+		t.Fatalf("a refused save left audit rows: %+v", rec.events)
+	}
+	r = postProfile(s, body+`,"ack_merge_home":true}`)
+	if r.Code != 201 {
+		t.Fatalf("POST with ack: %d %s", r.Code, r.Body)
+	}
+	if got := rec.actions(); len(got) != 2 || got[0] != "clone_ack_merge_home" || got[1] != "created" {
+		t.Fatalf("audit rows = %v, want [clone_ack_merge_home created]", got)
+	}
+	if e := rec.events[0]; e.Name != "cl" || e.Detail != "clone_of /home/u/repo" {
+		t.Fatalf("ack row = %+v", e)
+	}
+	if b, _ := json.Marshal(profileOf(t, pm, "cl")); strings.Contains(string(b), "ack_merge_home") {
+		t.Fatalf("the ack is part of the stored profile: %s", b)
+	}
+	if v := pm.Views(); len(v) != 1 || !v[0].MergeHome || !v[0].AutoReturn {
+		t.Fatalf("view = %+v", v)
+	}
+
+	// PUT: a clone_of change while on asks; the ack saves.
+	other := strings.Replace(body, "/home/u/repo", "/home/u/other", 1) + `}`
+	if r := putProfile(t, s, "cl", other); r.Code != 400 || apiCode(t, r) != "merge_home_ack" {
+		t.Fatalf("PUT repoint: %d %s", r.Code, r.Body)
+	}
+	if r := putProfile(t, s, "cl", strings.Replace(other, `}`, `,"ack_merge_home":true}`, 1)); r.Code != 200 {
+		t.Fatalf("PUT with ack: %d %s", r.Code, r.Body)
+	}
+}
