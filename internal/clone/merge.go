@@ -1,0 +1,535 @@
+package clone
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"path"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/handback"
+)
+
+// The opt-in merge of a returned box/X into X (#370). Box-written commits are
+// untrusted and this step puts them in the host's work tree, where a human or a
+// host tool may run them, so it is a fast-forward only, of a clean tree, with
+// no hooks, after a guard that refuses commits touching files host tools load
+// by themselves, commits carrying any handback flag, and paths a git filter
+// would process. When it does not merge, box/X stays for the user to review.
+
+// MergeResult reasons, mirrored verbatim by the web UI.
+const (
+	MergeDetached = "detached" // HEAD is not on a branch
+	MergeDiverged = "diverged" // X and box/X both have commits the other lacks
+	MergeDirty    = "dirty"    // tracked files have uncommitted changes
+	MergeGuarded  = "guarded"  // the commits touch a file host tools trust, or a submodule
+	MergeFlagged  = "flagged"  // the commits carry a handback flag, or could not be inspected
+	MergeFilter   = "filter"   // a path the commits change has a git filter attribute
+	MergeMoved    = "moved"    // X changed while it was being checked
+	MergeFailed   = "failed"   // a git call failed, the audit failed, or git refused the merge
+)
+
+// MergeResult is what one MergeHome call did or why it did not.
+type MergeResult struct {
+	At      time.Time `json:"at"`
+	Branch  string    `json:"branch"`            // X
+	From    string    `json:"from,omitempty"`    // full SHA of X before
+	To      string    `json:"to,omitempty"`      // full SHA of box/X checked
+	Merged  bool      `json:"merged,omitempty"`  // X is now To
+	Commits int       `json:"commits,omitempty"` // in From..To
+	Files   int       `json:"files,omitempty"`   // distinct paths in From..To
+	Reason  string    `json:"reason,omitempty"`  // "" when Merged
+	Detail  string    `json:"detail,omitempty"`  // sanitized, <= maxErrRunes
+	Paths   []string  `json:"paths,omitempty"`   // <= 3 examples for guarded/flagged/filter, sanitized
+}
+
+// MergeRequest is one MergeHome call.
+type MergeRequest struct {
+	Of    string          // the host repo (clone_of)
+	Lim   handback.Limits // for the handback inspection of the range
+	Prev  *MergeResult    // the last persisted result, for the retry rule
+	Audit func(action, detail string) error
+	Now   func() time.Time // nil: time.Now
+}
+
+// MergeDenyNames are file names, matched case-insensitively against the
+// basename at any depth, that a box's commits must not touch for the merge to
+// happen: files host tools (an agent, direnv, mise, git) load and act on by
+// themselves. Entries may be added, never dropped.
+var MergeDenyNames = append(slices.Clone(box.InPlaceGuardFiles),
+	".envrc", ".gitattributes", ".gitmodules", "mise.toml", ".mise.toml")
+
+// MergeDenyDirs are directory names, matched case-insensitively against every
+// path component, under which a box's commits block the merge: an agent's
+// project settings and hooks live there.
+var MergeDenyDirs = []string{".claude"}
+
+// MergeDenyTop are top-level directories (case-insensitive) under which a box's
+// commits block the merge: git hook managers, editor tasks, dev containers and
+// tool configs, which run commands when the host opens or commits in the repo.
+// clone_of's own core.hooksPath is added at run time when it is inside the repo.
+var MergeDenyTop = []string{".husky", ".githooks", ".vscode", ".devcontainer", ".mise"}
+
+const (
+	mergeRetryAfter = 30 * time.Minute
+	mergeTimeout    = 60 * time.Second
+	maxMergePaths   = 3
+	mergeReflog     = "GIT_REFLOG_ACTION=culibox auto-merge"
+)
+
+// MergeHome fast-forwards X, the branch checked out in r.Of, to box/X when box/X
+// is strictly ahead, the tree is clean and the guard passes. It returns nil when
+// there is nothing to do or report: no box/X, or box/X is not ahead of X.
+//
+// Every git call is the hardened one in r.Of with CleanEnv plus
+// GIT_NO_REPLACE_OBJECTS, so the checks and the merge read the same objects the
+// handback inspection reads (a refs/replace/ entry cannot make the merge check
+// out a commit other than the one checked). The merge is of the To SHA, not the
+// ref, so what lands is exactly what was checked.
+func MergeHome(ctx context.Context, g Git, r MergeRequest) (res *MergeResult) {
+	now := r.Now
+	if now == nil {
+		now = time.Now
+	}
+	m := &merger{ctx: ctx, g: g, of: r.Of}
+	defer func() {
+		// Parsing what a box wrote must never take the daemon down; a panic
+		// before the merge call means nothing was merged.
+		if p := recover(); p != nil {
+			log.Printf("clone: merging into %s stopped with an internal error: %v", r.Of, p)
+			res = m.result(MergeFailed, "internal error", nil)
+			res.At = now()
+		}
+	}()
+	res = m.check(r, now)
+	if res != nil && res.At.IsZero() {
+		res.At = now()
+	}
+	return res
+}
+
+type merger struct {
+	ctx            context.Context
+	g              Git
+	of             string
+	branch         string // X, as git printed it
+	from, to       string
+	commits, files int
+}
+
+func (m *merger) env() []string { return noReplaceEnv() }
+
+func (m *merger) run(env []string, args ...string) ([]byte, error) {
+	return m.g.Run(m.ctx, m.of, env, hardened(args...)...)
+}
+
+func (m *merger) result(reason, detail string, paths []string) *MergeResult {
+	res := &MergeResult{Branch: sanitizeN(m.branch, maxErrRunes), From: m.from, To: m.to,
+		Commits: m.commits, Files: m.files, Reason: reason, Detail: sanitizeN(detail, maxErrRunes)}
+	for _, p := range paths {
+		if len(res.Paths) == maxMergePaths {
+			break
+		}
+		res.Paths = append(res.Paths, sanitizeN(p, maxErrRunes))
+	}
+	return res
+}
+
+func (m *merger) failed(what string, err error) *MergeResult {
+	return m.result(MergeFailed, what+": "+err.Error(), nil)
+}
+
+// headBranch returns X when HEAD is a branch ("" when detached).
+func (m *merger) headBranch() (string, error) {
+	out, err := m.run(m.env(), "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		if code, ok := exitCode(err); ok && code == 1 {
+			return "", nil
+		}
+		return "", err
+	}
+	ref := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(ref, "refs/heads/") || len(ref) == len("refs/heads/") {
+		return "", nil
+	}
+	return strings.TrimPrefix(ref, "refs/heads/"), nil
+}
+
+// commitOf returns the full id of the commit ref names, "" when there is none.
+func (m *merger) commitOf(ref string) (string, error) {
+	out, err := m.run(m.env(), "rev-parse", "--verify", "-q", ref+"^{commit}")
+	if err != nil {
+		if code, ok := exitCode(err); ok && code == 1 {
+			return "", nil
+		}
+		return "", err
+	}
+	id := strings.TrimSpace(string(out))
+	if !blobIDRE.MatchString(id) {
+		return "", fmt.Errorf("rev-parse printed no object id for %s", ref)
+	}
+	return id, nil
+}
+
+// isAncestor reports whether commit a is an ancestor of (or equal to) b.
+func (m *merger) isAncestor(a, b string) (bool, error) {
+	_, err := m.run(m.env(), "merge-base", "--is-ancestor", a, b)
+	if err == nil {
+		return true, nil
+	}
+	if code, ok := exitCode(err); ok && code == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
+func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
+	// 1. The checked-out branch.
+	x, err := m.headBranch()
+	if err != nil {
+		return m.failed("cannot read HEAD", err)
+	}
+	if x == "" {
+		return m.result(MergeDetached, "HEAD is not on a branch", nil)
+	}
+	m.branch = x
+
+	// 2. Tips: only box/X, and only when it is strictly ahead of X.
+	if m.to, err = m.commitOf("refs/heads/box/" + x); err != nil {
+		return m.failed("cannot read box/"+x, err)
+	}
+	if m.to == "" {
+		return nil
+	}
+	if m.from, err = m.commitOf("refs/heads/" + x); err != nil {
+		return m.failed("cannot read "+x, err)
+	}
+	if m.from == "" { // an unborn branch: nothing to fast-forward from
+		return nil
+	}
+	if m.from == m.to {
+		return nil
+	}
+	if behind, err := m.isAncestor(m.to, m.from); err != nil {
+		return m.failed("cannot compare "+x+" and box/"+x, err)
+	} else if behind {
+		return nil // the host is ahead: nothing to bring
+	}
+	if ahead, err := m.isAncestor(m.from, m.to); err != nil {
+		return m.failed("cannot compare "+x+" and box/"+x, err)
+	} else if !ahead {
+		return m.result(MergeDiverged, x+" and box/"+x+" both have commits the other lacks", nil)
+	}
+
+	// 3. A clean tree (tracked files; git itself refuses to overwrite an untracked one).
+	out, err := m.run(append(m.env(), "GIT_OPTIONAL_LOCKS=0"), "status", "--porcelain=v1", "-z", "--untracked-files=no")
+	if err != nil {
+		return m.failed("cannot read the work tree's status", err)
+	}
+	if len(out) > 0 {
+		return m.result(MergeDirty, "the work tree has uncommitted changes to tracked files", nil)
+	}
+
+	// 4a. Every path and mode of every commit in the range.
+	out, err = m.run(m.env(), "log", "--root", "--no-show-signature", "--no-ext-diff", "--no-textconv",
+		"--format=%H", "--raw", "-r", "-z", "--no-renames", "--no-abbrev", "--diff-merges=first-parent",
+		m.from+".."+m.to, "--")
+	if err != nil {
+		return m.failed("cannot list the commits", err)
+	}
+	n, entries, err := parseMergeLog(out)
+	if err != nil {
+		return m.failed("cannot read the commit list", err)
+	}
+	m.commits = n
+	var paths []string // distinct, first seen first
+	seen := map[string]bool{}
+	for _, e := range entries {
+		if !seen[e.path] {
+			seen[e.path] = true
+			paths = append(paths, e.path)
+		}
+	}
+	m.files = len(paths)
+	hooks, err := m.hooksDir()
+	if err != nil {
+		return m.failed("cannot read core.hooksPath", err)
+	}
+	var denied []string
+	dseen := map[string]bool{}
+	for _, e := range entries {
+		if (e.gitlink || mergeDenied(e.path, hooks)) && !dseen[e.path] {
+			dseen[e.path] = true
+			denied = append(denied, e.path)
+		}
+	}
+	if len(denied) > 0 {
+		return m.result(MergeGuarded, "the commits touch files host tools load by themselves "+
+			"(agent settings, hooks, attributes, editor tasks) or a submodule", denied)
+	}
+
+	// 4b. The handback inspection of the range; anything short of a clean,
+	// complete scan refuses.
+	rep := InspectBranch(m.ctx, m.g, m.of, m.from, m.to, r.Lim)
+	if len(rep.Flags) > 0 || rep.Truncated != "" || rep.Incomplete {
+		var fp []string
+		for _, f := range rep.Flags {
+			fp = append(fp, f.Path)
+		}
+		detail := "the commits carry flagged files"
+		if len(rep.Flags) == 0 {
+			detail = "the commits could not be fully inspected"
+		}
+		if rep.Truncated != "" {
+			detail += ": " + rep.Truncated
+		}
+		return m.result(MergeFlagged, detail, fp)
+	}
+
+	// 4c. No path a git filter would process on checkout.
+	filtered, err := m.filtered(paths)
+	if err != nil {
+		return m.failed("cannot check git attributes", err)
+	}
+	if len(filtered) > 0 {
+		return m.result(MergeFilter, "a file the commits change has a git filter attribute (e.g. Git LFS)", filtered)
+	}
+
+	// 5. Nothing moved while it was being checked.
+	if again, err := m.headBranch(); err != nil {
+		return m.failed("cannot read HEAD", err)
+	} else if again != x {
+		return m.result(MergeMoved, "the checked-out branch changed while it was being checked", nil)
+	}
+	if tip, err := m.commitOf("refs/heads/" + x); err != nil {
+		return m.failed("cannot read "+x, err)
+	} else if tip != m.from {
+		return m.result(MergeMoved, x+" moved while it was being checked", nil)
+	}
+
+	// A merge git refused for this same range is retried at most every 30 min,
+	// so a persistent refusal does not write audit rows on every pass.
+	if p := r.Prev; p != nil && p.Reason == MergeFailed && p.From == m.from && p.To == m.to &&
+		now().Sub(p.At) < mergeRetryAfter {
+		return p
+	}
+
+	// 6. Audit, fail closed, then merge.
+	detail := fmt.Sprintf("%s %s..%s %d commits", sanitizeN(x, maxErrRunes), m.from[:7], m.to[:7], m.commits)
+	if r.Audit == nil || r.Audit("clone_merge_home", detail) != nil {
+		return m.result(MergeFailed, "audit unavailable", nil)
+	}
+	// Detached from the caller's budget, so git is never killed half way
+	// through a checkout, with its own cap.
+	mctx, cancel := context.WithTimeout(context.WithoutCancel(m.ctx), mergeTimeout)
+	defer cancel()
+	_, err = m.g.Run(mctx, m.of, append(m.env(), mergeReflog),
+		hardened("-c", "submodule.recurse=false", "merge", "--ff-only", "--no-autostash", "--no-stat", "-q", m.to)...)
+	if err != nil {
+		_ = r.Audit("clone_merge_home_failed", detail)
+		// ExecGit names the first argument ("-c" of hardenFlags) in its error.
+		return m.result(MergeFailed, "git merge: "+strings.TrimPrefix(err.Error(), "git -c: "), nil)
+	}
+	res := m.result("", "", nil)
+	res.Merged = true
+	return res
+}
+
+// mergeEntry is one raw-log line of the range: a path and whether either side
+// of the change is a gitlink.
+type mergeEntry struct {
+	path    string
+	gitlink bool
+}
+
+// parseMergeLog reads `log --format=%H --raw -z --no-renames --no-abbrev`
+// output: commit ids, each followed by zero or more ":<old mode> <new mode>
+// <old id> <new id> <status>" lines (the first after a newline) each followed
+// by one path. Anything else is an error: the caller then does not merge.
+func parseMergeLog(out []byte) (commits int, entries []mergeEntry, err error) {
+	if len(out) == 0 || out[len(out)-1] != 0 {
+		return 0, nil, errors.New("the log output is empty or cut short")
+	}
+	toks := bytes.Split(out[:len(out)-1], []byte{0})
+	for i := 0; i < len(toks); i++ {
+		tok := bytes.TrimPrefix(toks[i], []byte("\n"))
+		if blobIDRE.Match(tok) {
+			commits++
+			continue
+		}
+		if len(tok) == 0 || tok[0] != ':' || commits == 0 {
+			return 0, nil, errors.New("unexpected token in the log output")
+		}
+		f := strings.Fields(string(tok[1:]))
+		if len(f) != 5 || !octalMode(f[0]) || !octalMode(f[1]) || !blobIDRE.MatchString(f[2]) ||
+			!blobIDRE.MatchString(f[3]) || len(f[4]) != 1 || !strings.Contains("ADMT", f[4]) {
+			return 0, nil, errors.New("unexpected change line in the log output")
+		}
+		i++
+		if i >= len(toks) || len(toks[i]) == 0 {
+			return 0, nil, errors.New("a change line without a path in the log output")
+		}
+		entries = append(entries, mergeEntry{path: string(toks[i]), gitlink: f[0] == "160000" || f[1] == "160000"})
+	}
+	if commits == 0 {
+		return 0, nil, errors.New("the log lists no commits")
+	}
+	return commits, entries, nil
+}
+
+func octalMode(s string) bool {
+	if len(s) != 6 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '7' {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeDenied reports whether p (a repo-relative path from the range) is a
+// file host tools trust: MergeDenyNames, MergeDenyDirs, MergeDenyTop, or under
+// hooks (lower-cased repo-relative directory, "." for the whole repo, "" for
+// none). Case-insensitive throughout: on a case-insensitive file system
+// (macOS) .Claude/ is .claude/, and folding only adds refusals elsewhere.
+func mergeDenied(p, hooks string) bool {
+	lp := strings.ToLower(p)
+	comps := strings.Split(lp, "/")
+	for _, c := range comps {
+		for _, d := range MergeDenyDirs {
+			if c == strings.ToLower(d) {
+				return true
+			}
+		}
+	}
+	base := comps[len(comps)-1]
+	for _, n := range MergeDenyNames {
+		if base == strings.ToLower(n) {
+			return true
+		}
+	}
+	for _, d := range MergeDenyTop {
+		if comps[0] == strings.ToLower(d) {
+			return true
+		}
+	}
+	if hooks == "." {
+		return true
+	}
+	return hooks != "" && (lp == hooks || strings.HasPrefix(lp, hooks+"/"))
+}
+
+// hooksDir returns the repo-relative directory (lower-cased) clone_of's own
+// core.hooksPath names when it is inside the repo: the user's git runs hooks
+// from there, so a box commit writing into it would run on the host at the
+// next commit. "" when it is unset or outside the repo.
+//
+// It cannot be read with `config --get`: hardenFlags set core.hooksPath on the
+// command line, which that would print (measured, git 2.39.5). The last value
+// from any scope but "command" is the repo's own.
+func (m *merger) hooksDir() (string, error) {
+	out, err := m.run(m.env(), "config", "-z", "--show-scope", "--get-all", "core.hooksPath")
+	if err != nil {
+		if code, ok := exitCode(err); ok && code == 1 {
+			return "", nil
+		}
+		return "", err
+	}
+	toks := strings.Split(string(out), "\x00")
+	val := ""
+	for i := 0; i+1 < len(toks); i += 2 {
+		if toks[i] != "command" {
+			val = toks[i+1]
+		}
+	}
+	return hooksDirOf(m.of, val), nil
+}
+
+func hooksDirOf(of, v string) string {
+	if v == "" || strings.HasPrefix(v, "~") {
+		return "" // a home directory: not one the repo's commits write
+	}
+	rel := ""
+	if !filepath.IsAbs(v) {
+		rel = path.Clean(filepath.ToSlash(v))
+	} else {
+		rel = relInside(of, v)
+		if rel == "" {
+			ro, err1 := filepath.EvalSymlinks(of)
+			rv, err2 := filepath.EvalSymlinks(v)
+			if err1 == nil && err2 == nil {
+				rel = relInside(ro, rv)
+			}
+		}
+		if rel == "" {
+			rel = relInside(strings.ToLower(of), strings.ToLower(v))
+		}
+		if rel == "" {
+			return ""
+		}
+	}
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return ""
+	}
+	return strings.ToLower(rel)
+}
+
+// relInside is v relative to dir, slash-separated, when v is at or below dir;
+// "" otherwise.
+func relInside(dir, v string) string {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(v))
+	if err != nil {
+		return ""
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return ""
+	}
+	return rel
+}
+
+// filtered returns the paths that have a filter attribute in the clean work
+// tree. g must be a StdinGit.
+func (m *merger) filtered(paths []string) ([]string, error) {
+	sg, ok := m.g.(StdinGit)
+	if !ok {
+		return nil, errors.New("attribute check unavailable")
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	var in bytes.Buffer
+	for _, p := range paths {
+		in.WriteString(p)
+		in.WriteByte(0)
+	}
+	out, err := sg.RunStdin(m.ctx, m.of, m.env(), &in, hardened("check-attr", "-z", "--stdin", "filter")...)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 || out[len(out)-1] != 0 {
+		return nil, errors.New("check-attr output is cut short")
+	}
+	toks := strings.Split(string(out[:len(out)-1]), "\x00")
+	if len(toks) != 3*len(paths) {
+		return nil, fmt.Errorf("check-attr printed %d fields for %d paths", len(toks), len(paths))
+	}
+	var hit []string
+	for i := 0; i < len(toks); i += 3 {
+		if toks[i+1] != "filter" {
+			return nil, errors.New("check-attr printed an unexpected attribute")
+		}
+		if v := toks[i+2]; v != "unspecified" && v != "unset" {
+			hit = append(hit, toks[i])
+		}
+	}
+	return hit, nil
+}
