@@ -61,6 +61,7 @@ type GateResult struct {
 	State        GateState  `json:"state"`
 	Reason       Reason     `json:"reason,omitempty"`        // Unverified only
 	RoleARN      string     `json:"role_arn,omitempty"`      // the IAM role ARN, aws-reserved path included
+	Caller       string     `json:"caller,omitempty"`        // the assumed-role ARN without its session name, set once step 1 passed
 	Refused      []Verdict  `json:"refused,omitempty"`       // NotReadOnly; for Unverified, the actions that proved nothing
 	MissingPerms []string   `json:"missing_perms,omitempty"` // Reason == missing_permissions
 	DataReads    []DataRead `json:"data_reads,omitempty"`    // descriptive, never blocks
@@ -101,11 +102,13 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 	}
 	partition, callerAcct, roleName, ok := ssoCaller(caller)
 	if !ok {
-		return g.refuse(Verdict{Pattern: "caller", Why: "is not an IAM Identity Center permission-set role session (assumed-role/" + ssoRolePrefix + "*)"})
+		return g.refuse(Verdict{Pattern: PatternCaller, Why: "is not an IAM Identity Center permission-set role session (assumed-role/" + ssoRolePrefix + "*)"})
 	}
 	if callerAcct != account {
-		return g.refuse(Verdict{Pattern: "account", Why: fmt.Sprintf("the credentials are for account %s, not the profile's account %q", callerAcct, account)})
+		return g.refuse(Verdict{Pattern: PatternAccount, Why: fmt.Sprintf("the credentials are for account %s, not the profile's account %q", callerAcct, account)})
 	}
+
+	g.res.Caller = "arn:" + partition + ":sts::" + callerAcct + ":assumed-role/" + roleName
 
 	// Step 2: the role's real ARN, with its aws-reserved path.
 	roleARN, err := api.RoleARN(ctx, roleName)
@@ -113,7 +116,7 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 		return g.failed(ctx, err, append([]string{gateRoleRead}, gatePolicyReads...))
 	}
 	if !ssoRoleARN(roleARN, partition, account, roleName) {
-		return g.refuse(Verdict{Pattern: "role", Why: "iam:GetRole did not return this permission set's aws-reserved/sso.amazonaws.com role"})
+		return g.refuse(Verdict{Pattern: PatternRole, Why: "iam:GetRole did not return this permission set's aws-reserved/sso.amazonaws.com role"})
 	}
 	g.res.RoleARN = roleARN
 

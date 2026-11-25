@@ -948,3 +948,33 @@ func TestGateConfigIgnoresABogusEnvProfile(t *testing.T) {
 		t.Fatalf("a bogus AWS_PROFILE broke the gate: %v", err)
 	}
 }
+
+func TestGateCallerIsSetAfterStepOne(t *testing.T) {
+	f := newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
+	r := Gate(context.Background(), f, gateAcct, time.Now())
+	if want := "arn:aws:sts::" + gateAcct + ":assumed-role/" + gateRole; r.Caller != want {
+		t.Errorf("Caller = %q, want %q", r.Caller, want)
+	}
+	// role lookup fails: the caller is still known, the role ARN is not.
+	f = newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
+	f.roleErr = &smithy.GenericAPIError{Code: "AccessDenied"}
+	r = Gate(context.Background(), f, gateAcct, time.Now())
+	if r.RoleARN != "" || r.Caller == "" {
+		t.Errorf("role %q caller %q", r.RoleARN, r.Caller)
+	}
+	// step 1 refusals carry no caller.
+	f = newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
+	f.caller = "arn:aws:iam::" + gateAcct + ":user/alice"
+	if r = Gate(context.Background(), f, gateAcct, time.Now()); r.Caller != "" {
+		t.Errorf("not-sso caller: %q", r.Caller)
+	}
+	f = newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
+	if r = Gate(context.Background(), f, "999999999999", time.Now()); r.Caller != "" {
+		t.Errorf("account mismatch: %q", r.Caller)
+	}
+	f = newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
+	f.callerErr = errors.New("boom")
+	if r = Gate(context.Background(), f, gateAcct, time.Now()); r.Caller != "" {
+		t.Errorf("caller error: %q", r.Caller)
+	}
+}

@@ -317,7 +317,7 @@ func (b *Broker) checkSSODirect(ctx context.Context, bnd config.AWSBinding, scop
 		b.record(row)
 		if code, detail := mintCode(err); code == codeNotSSOProfile || code == codeNotSSOCredentials {
 			return awsprobe.GateResult{State: awsprobe.GateNotReadOnly, CheckedAt: now,
-				Refused: []awsprobe.Verdict{{Pattern: "source_profile", Why: sanitize(detail)}}}, time.Time{}
+				Refused: []awsprobe.Verdict{{Pattern: awsprobe.PatternSourceProfile, Why: sanitize(detail)}}}, time.Time{}
 		}
 		return awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: mintReason(ctx, err), CheckedAt: now}, time.Time{}
 	}
@@ -326,7 +326,7 @@ func (b *Broker) checkSSODirect(ctx context.Context, bnd config.AWSBinding, scop
 	switch {
 	case errors.Is(accErr, ErrNoSSOAccount): // the profile can never pass
 		res = awsprobe.GateResult{State: awsprobe.GateNotReadOnly, CheckedAt: now,
-			Refused: []awsprobe.Verdict{{Pattern: "source_profile", Why: sanitize(accErr.Error())}}}
+			Refused: []awsprobe.Verdict{{Pattern: awsprobe.PatternSourceProfile, Why: sanitize(accErr.Error())}}}
 		row.Error = "not read-only: " + sanitize(accErr.Error())
 	case accErr != nil: // the host file could not be read: retry
 		res = awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonError, CheckedAt: now}
