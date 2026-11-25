@@ -101,22 +101,55 @@ func gateSSODirect(hooks BrokerHooks, bs config.Bindings, agent string, host boo
 	now := time.Now()
 	for i, k := range keys {
 		res := outs[i].res
-		if res.State != awsprobe.GateReadOnly || res.RoleARN == "" {
-			refusals = append(refusals, ssoRefusal(k, res))
+		adm := awsprobe.AdmitSSO(res, ssoAckOf(bs, k))
+		if !adm.OK {
+			refusals = append(refusals, ssoRefusal(k, res, adm))
 			continue
 		}
 		at := res.CheckedAt
 		if at.IsZero() {
 			at = now
 		}
-		base[k] = awsprobe.Result{State: awsprobe.NoneFound, CheckedAt: at}
-		info[k] = ssoSpawnInfo{Hours: hoursUntil(outs[i].exp, now), AccountID: awsscope.AccountOf(res.RoleARN)}
+		// Read-only: nothing was found that writes. Under an acknowledgement the
+		// honest worst case is Writes; it is definite, so it is never re-probed.
+		state := awsprobe.NoneFound
+		if adm.UnderAck {
+			state = awsprobe.Writes
+		}
+		base[k] = awsprobe.Result{State: state, CheckedAt: at}
+		acct := awsscope.AccountOf(res.RoleARN)
+		if acct == "" {
+			acct = accountOfCaller(res.Caller)
+		}
+		info[k] = ssoSpawnInfo{Hours: hoursUntil(outs[i].exp, now), AccountID: acct}
 	}
 	if len(refusals) > 0 {
 		sort.Strings(refusals)
 		return nil, nil, ssoGateErr(agent, host, strings.Join(refusals, "; "))
 	}
 	return base, info, nil
+}
+
+// ssoAckOf is the full-access acknowledgement of the binding with the given
+// key. The legacy inline binding (key "") has no connection record, so it never has one.
+func ssoAckOf(bs config.Bindings, key string) *awsprobe.Ack {
+	if key == "" {
+		return nil
+	}
+	if c, ok := config.AWSConnByName(bs.AWSConns, key); ok {
+		return c.FullAccessAck
+	}
+	return nil
+}
+
+// accountOfCaller is the account id of an assumed-role ARN
+// ("arn:aws:sts::<account>:assumed-role/..."), "" when it is not one.
+func accountOfCaller(caller string) string {
+	parts := strings.SplitN(caller, ":", 6)
+	if len(parts) == 6 && parts[0] == "arn" && len(parts[4]) == 12 {
+		return parts[4]
+	}
+	return ""
 }
 
 // ssoGateErr is the gate's refusal: on a box spawn a containment failure
@@ -132,7 +165,7 @@ func ssoGateErr(agent string, host bool, why string) error {
 // ssoRefusal is one binding's refusal as a bounded sentence: every refused
 // item as "pattern: why" (past maxRefusedShown the rest are counted), or the
 // reason the permission set could not be checked and the IAM reads it lacks.
-func ssoRefusal(key string, res awsprobe.GateResult) string {
+func ssoRefusal(key string, res awsprobe.GateResult, adm awsprobe.Admission) string {
 	who := "the SSO permission set"
 	if key != "" {
 		who = fmt.Sprintf("connection %q SSO permission set", key)
@@ -141,9 +174,20 @@ func ssoRefusal(key string, res awsprobe.GateResult) string {
 	for _, v := range res.Refused {
 		items = append(items, clip(v.Pattern+": "+v.Why))
 	}
+	// Only a named connection can carry an acknowledgement; a transient reason
+	// is never eligible, so it keeps its wording.
+	hint := ""
+	if key != "" {
+		switch {
+		case adm.Stale:
+			hint = "; it changed since its full-access acknowledgement, acknowledge again on the Credentials screen"
+		case adm.Eligible:
+			hint = "; acknowledge full access on the Credentials screen to use it"
+		}
+	}
 	if res.State == awsprobe.GateNotReadOnly {
 		s := who + " is not read-only, so its credentials are not handed out"
-		return s + ssoItems(items)
+		return s + ssoItems(items) + hint
 	}
 	reason := awsprobe.ReasonText(res.Reason)
 	if res.Reason == "" {
@@ -153,7 +197,7 @@ func ssoRefusal(key string, res awsprobe.GateResult) string {
 	if len(res.MissingPerms) > 0 {
 		s += "; grant it " + clip(strings.Join(res.MissingPerms, ", "))
 	}
-	return s + ssoItems(items)
+	return s + ssoItems(items) + hint
 }
 
 // ssoItems renders refused items as ": a; b; … and N more".
