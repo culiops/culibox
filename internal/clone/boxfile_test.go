@@ -254,19 +254,20 @@ type refsFx struct {
 func newRefsFx(t *testing.T) *refsFx {
 	t.Helper()
 	x := &refsFx{dir: t.TempDir()}
-	x.write(".git/HEAD", "ref: refs/heads/main\n")
-	x.write(".git/index", "index")
-	x.write(".git/refs/heads/main", "0123456789012345678901234567890123456789\n")
+	x.write(t, ".git/HEAD", "ref: refs/heads/main\n")
+	x.write(t, ".git/index", "index")
+	x.write(t, ".git/refs/heads/main", "0123456789012345678901234567890123456789\n")
 	return x
 }
 
-func (x *refsFx) write(name, content string) {
+func (x *refsFx) write(t *testing.T, name, content string) {
+	t.Helper()
 	p := filepath.Join(x.dir, name)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 }
 
@@ -289,7 +290,7 @@ func TestRefsFingerprint(t *testing.T) {
 	t.Run("a new loose ref changes it", func(t *testing.T) {
 		x := newRefsFx(t)
 		before := x.fp(t)
-		x.write(".git/refs/heads/feat", "0123456789012345678901234567890123456789\n")
+		x.write(t, ".git/refs/heads/feat", "0123456789012345678901234567890123456789\n")
 		if x.fp(t) == before {
 			t.Fatal("a new loose ref did not change the fingerprint")
 		}
@@ -297,7 +298,7 @@ func TestRefsFingerprint(t *testing.T) {
 	t.Run("a nested loose ref changes it", func(t *testing.T) {
 		x := newRefsFx(t)
 		before := x.fp(t)
-		x.write(".git/refs/heads/feat/deep/x", "0123456789012345678901234567890123456789\n")
+		x.write(t, ".git/refs/heads/feat/deep/x", "0123456789012345678901234567890123456789\n")
 		if x.fp(t) == before {
 			t.Fatal("a nested loose ref did not change the fingerprint")
 		}
@@ -305,12 +306,12 @@ func TestRefsFingerprint(t *testing.T) {
 	t.Run("rewriting packed-refs changes it", func(t *testing.T) {
 		x := newRefsFx(t)
 		before := x.fp(t) // packed-refs absent
-		x.write(".git/packed-refs", "# pack-refs\n")
+		x.write(t, ".git/packed-refs", "# pack-refs\n")
 		withPacked := x.fp(t)
 		if withPacked == before {
 			t.Fatal("creating packed-refs did not change the fingerprint")
 		}
-		x.write(".git/packed-refs", "# pack-refs with: peeled\n0123456789012345678901234567890123456789 refs/heads/main\n")
+		x.write(t, ".git/packed-refs", "# pack-refs with: peeled\n0123456789012345678901234567890123456789 refs/heads/main\n")
 		if x.fp(t) == withPacked {
 			t.Fatal("rewriting packed-refs did not change the fingerprint")
 		}
@@ -364,7 +365,7 @@ func TestRefsFingerprint(t *testing.T) {
 	t.Run("more than 2000 loose refs is not ok", func(t *testing.T) {
 		x := newRefsFx(t)
 		for i := 0; i < 2001; i++ {
-			x.write(fmt.Sprintf(".git/refs/heads/r%04d", i), "x")
+			x.write(t, fmt.Sprintf(".git/refs/heads/r%04d", i), "x")
 		}
 		if fp, ok := RefsFingerprint(x.dir); ok {
 			t.Fatalf("RefsFingerprint over 2001 refs = %q, true; want ok=false", fp)
@@ -372,11 +373,103 @@ func TestRefsFingerprint(t *testing.T) {
 	})
 	t.Run("exactly 2000 entries is ok", func(t *testing.T) {
 		x := newRefsFx(t)
-		x.write(".git/refs/heads/r0", "x")
+		x.write(t, ".git/refs/heads/r0", "x")
 		for i := 1; i < 1999; i++ { // main + r0..r1998 = 2000
-			x.write(fmt.Sprintf(".git/refs/heads/r%04d", i), "x")
+			x.write(t, fmt.Sprintf(".git/refs/heads/r%04d", i), "x")
 		}
 		x.fp(t)
+	})
+	t.Run("changing HEAD changes it", func(t *testing.T) {
+		x := newRefsFx(t)
+		before := x.fp(t)
+		x.write(t, ".git/HEAD", "ref: refs/heads/other-branch\n")
+		if x.fp(t) == before {
+			t.Fatal("rewriting .git/HEAD did not change the fingerprint")
+		}
+	})
+	t.Run("refs/heads absent is ok and stable", func(t *testing.T) {
+		x := newRefsFx(t)
+		if err := os.RemoveAll(filepath.Join(x.dir, ".git/refs")); err != nil {
+			t.Fatal(err)
+		}
+		if a, b := x.fp(t), x.fp(t); a != b {
+			t.Fatalf("fingerprint with no refs/heads is unstable: %s vs %s", a, b)
+		}
+	})
+	t.Run("refs/heads itself a symlink is recorded, not followed", func(t *testing.T) {
+		x := newRefsFx(t)
+		outDir := t.TempDir()
+		if err := os.RemoveAll(filepath.Join(x.dir, ".git/refs/heads")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outDir, filepath.Join(x.dir, ".git/refs/heads")); err != nil {
+			t.Fatal(err)
+		}
+		before := x.fp(t)
+		if err := os.WriteFile(filepath.Join(outDir, "new"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if x.fp(t) != before {
+			t.Fatal("the fingerprint followed a symlinked refs/heads")
+		}
+	})
+	t.Run("a FIFO under refs/heads does not block", func(t *testing.T) {
+		x := newRefsFx(t)
+		if err := syscall.Mkfifo(filepath.Join(x.dir, ".git/refs/heads/x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan bool, 1)
+		go func() {
+			_, ok := RefsFingerprint(x.dir)
+			done <- ok
+		}()
+		select {
+		case ok := <-done:
+			if !ok {
+				t.Fatal("a FIFO ref (metadata only) should still fingerprint")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("RefsFingerprint blocked on a FIFO")
+		}
+	})
+	t.Run("a FIFO in place of refs/heads does not block", func(t *testing.T) {
+		x := newRefsFx(t)
+		if err := os.RemoveAll(filepath.Join(x.dir, ".git/refs/heads")); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Mkfifo(filepath.Join(x.dir, ".git/refs/heads"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			RefsFingerprint(x.dir)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("RefsFingerprint blocked on a FIFO refs/heads")
+		}
+	})
+	t.Run("removing an entry changes it", func(t *testing.T) {
+		x := newRefsFx(t)
+		x.write(t, ".git/refs/heads/a.lock", "x")
+		with := x.fp(t)
+		if err := os.Remove(filepath.Join(x.dir, ".git/refs/heads/a.lock")); err != nil {
+			t.Fatal(err)
+		}
+		if x.fp(t) == with {
+			t.Fatal("removing an entry did not change the fingerprint")
+		}
+	})
+	t.Run("the cap is enforced while reading a directory", func(t *testing.T) {
+		x := newRefsFx(t)
+		for i := 0; i < 2600; i++ { // several 256-entry batches past the cap
+			x.write(t, fmt.Sprintf(".git/refs/heads/r%04d", i), "x")
+		}
+		if _, ok := RefsFingerprint(x.dir); ok {
+			t.Fatal("2601 refs in one directory should be refused")
+		}
 	})
 	t.Run("no .git is not ok", func(t *testing.T) {
 		if fp, ok := RefsFingerprint(t.TempDir()); ok {

@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -191,26 +192,74 @@ func RefsFingerprint(cloneDir string) (fp string, ok bool) {
 		add(heads, st) // a symlink or file in its place: recorded, not walked
 	} else {
 		n := 0
-		err := fs.WalkDir(root.FS(), heads, func(name string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if name == heads {
-				return nil
-			}
-			if n++; n > maxFingerprintEntries {
-				return errTooManyRefs
-			}
-			info, err := d.Info() // from the directory listing: Lstat, never the link target
-			if err != nil {
-				return err
-			}
-			add(name, info)
-			return nil
-		})
-		if err != nil {
+		if err := walkBoxDir(root, heads, &n, add); err != nil {
 			return "", false
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil)), true
+}
+
+// walkBoxDir hashes the entries under dir depth-first, each directory's names
+// in sorted order so the result is stable. A directory is opened the way
+// openBoxFile opens a file (O_NONBLOCK, O_NOFOLLOW, O_DIRECTORY, then an
+// fstat that must say directory and match the Lstat that chose to descend):
+// a box that swaps it for a FIFO or a link between the listing and the open
+// gets an error, never a blocked host goroutine. Entries are stat'ed with
+// root.Lstat, and one that vanished since the listing (a transient .lock) is
+// skipped. n counts entries across the whole walk and is checked while a
+// directory is read, so a huge directory is never listed in full.
+func walkBoxDir(root *os.Root, dir string, n *int, add func(string, fs.FileInfo)) error {
+	lst, err := root.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !lst.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	f, err := root.OpenFile(dir, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fst, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !fst.IsDir() || !os.SameFile(lst, fst) {
+		return fmt.Errorf("%s changed while it was read", dir)
+	}
+	var names []string
+	for {
+		batch, err := f.ReadDir(256)
+		for _, d := range batch {
+			if *n++; *n > maxFingerprintEntries {
+				return errTooManyRefs
+			}
+			names = append(names, d.Name())
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		full := dir + "/" + name
+		info, err := root.Lstat(full)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		add(full, info)
+		if info.IsDir() {
+			if err := walkBoxDir(root, full, n, add); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+	}
+	return nil
 }
