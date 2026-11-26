@@ -178,7 +178,7 @@ var recipeValueLetters = map[string]string{"make": "CIjloW", "just": "dEscC", "t
 func recipeFilesIn(runner string, args []string) (files []string, bad bool) {
 	opt := recipeFileOpt[runner]
 	add := func(val string) {
-		if val == "" || strings.ContainsAny(val, "$(`") || strings.Contains(val, "{{") {
+		if val == "" || strings.ContainsAny(val, "$(`") || strings.Contains(val, "{{") || val != strings.TrimSpace(val) {
 			bad = true
 			return
 		}
@@ -197,7 +197,7 @@ func recipeFilesIn(runner string, args []string) (files []string, bad bool) {
 		switch {
 		case strings.HasPrefix(a, "--"):
 			name, val, hasVal := strings.Cut(a, "=")
-			if !slices.Contains(opt.long, name) {
+			if !isFileOpt(opt.long, name) {
 				continue
 			}
 			if !hasVal {
@@ -222,6 +222,162 @@ func recipeFilesIn(runner string, args []string) (files []string, bad bool) {
 		}
 	}
 	return files, bad
+}
+
+// isFileOpt reports whether the long option name ("--...") is one of the file
+// options or a prefix of one ("--mak", "--fi"), as GNU getopt takes an
+// abbreviation; one that fits two options counts too (an over-read).
+func isFileOpt(long []string, name string) bool {
+	if len(name) <= 2 {
+		return false
+	}
+	for _, l := range long {
+		if strings.HasPrefix(l, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// shellWord is one word of a command line as sh reads it: text is unquoted,
+// start and end its span in the line; ok is false for a word whose quote does
+// not close (always the last).
+type shellWord struct {
+	text       string
+	start, end int
+	ok         bool
+}
+
+// shellWords splits one simple command into words the way sh treats quotes:
+// white space separates words outside quotes, '...' is literal, "..." keeps
+// its text with a backslash escaping $ ` " \ and a newline, and outside quotes
+// a backslash escapes the next character (a backslash-newline is removed).
+// Nothing else is expanded.
+func shellWords(s string) []shellWord {
+	var (
+		out   []shellWord
+		b     strings.Builder
+		start = -1
+		quote byte // 0, '\'' or '"'
+	)
+	flush := func(end int, ok bool) {
+		if start >= 0 {
+			out = append(out, shellWord{text: b.String(), start: start, end: end, ok: ok})
+		}
+		b.Reset()
+		start = -1
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch quote {
+		case '\'':
+			if c == '\'' {
+				quote = 0
+			} else {
+				b.WriteByte(c)
+			}
+			continue
+		case '"':
+			switch {
+			case c == '"':
+				quote = 0
+			case c == '\\' && i+1 < len(s) && strings.IndexByte("$`\"\\\n", s[i+1]) >= 0:
+				i++
+				if s[i] != '\n' {
+					b.WriteByte(s[i])
+				}
+			default:
+				b.WriteByte(c)
+			}
+			continue
+		}
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			flush(i, true)
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '\\':
+			if i+1 < len(s) {
+				i++
+				if s[i] != '\n' {
+					b.WriteByte(s[i])
+				}
+			}
+		default:
+			b.WriteByte(c)
+		}
+	}
+	flush(len(s), quote == 0)
+	return out
+}
+
+// maxQuoteDepth is how deep recipeArgs follows a runner quoted inside a word
+// ("bash -c \"make -f x.mk\"").
+const maxQuoteDepth = 4
+
+// recipeArgs returns the words after the recipe runner whose token starts at
+// byte off of seg, unquoted (shellWords), for its file options. A runner quoted
+// inside a longer word is found in that word's own words, first match. bad is
+// true when the runner cannot be placed, sits in an unclosed quote, or an
+// unclosed word after it starts with a dash (an option the scan cannot read).
+func recipeArgs(seg string, off int, runner string) (args []string, bad bool) {
+	words := shellWords(seg)
+	for k, w := range words {
+		if off < w.start || off >= w.end {
+			continue
+		}
+		if !w.ok {
+			return nil, true
+		}
+		if strings.ContainsAny(w.text, " \t\n") { // "bash -c \"make -f x\"": the runner is in the word
+			args, bad, found := quotedRecipeArgs(w.text, runner, maxQuoteDepth)
+			return args, bad || !found
+		}
+		return wordsAfter(words[k+1:])
+	}
+	return nil, true
+}
+
+// quotedRecipeArgs finds runner among the words of text (a word that held it)
+// and returns the words after it, as recipeArgs; found is false when no word is
+// the runner.
+func quotedRecipeArgs(text, runner string, depth int) (args []string, bad, found bool) {
+	if depth == 0 {
+		return nil, true, true
+	}
+	words := shellWords(text)
+	for k, w := range words {
+		if path.Base(strings.TrimRight(strings.TrimLeft(w.text, "!{"), "}")) == runner {
+			if !w.ok {
+				return nil, true, true
+			}
+			args, bad = wordsAfter(words[k+1:])
+			return args, bad, true
+		}
+		if strings.ContainsAny(w.text, " \t\n") {
+			if args, bad, found = quotedRecipeArgs(w.text, runner, depth-1); found {
+				return args, bad, true
+			}
+		}
+	}
+	return nil, false, false
+}
+
+// wordsAfter returns the texts of words; an unclosed word is left out, and
+// makes bad when it starts with a dash.
+func wordsAfter(words []shellWord) (args []string, bad bool) {
+	for _, a := range words {
+		if !a.ok {
+			return args, strings.HasPrefix(a.text, "-")
+		}
+		args = append(args, a.text)
+	}
+	return args, false
 }
 
 // nodeScriptRunners read package.json scripts; recipeRunners read a recipe file.
@@ -577,12 +733,18 @@ func parseCommand(of, s string) cmdInfo {
 			return !scriptDone && (interpreterRE.MatchString(b) || fetchers[b] || commandWrappers[b])
 		}
 		toks := strings.FieldsFunc(seg, commandDelim)
+		offs := fieldStarts(seg, commandDelim) // where each token starts in seg
 		for i := 0; i < len(toks); i++ {
 			tok := strings.TrimRight(strings.TrimLeft(toks[i], "!{"), "}") // git's "!" alias prefix, a shell function's braces
 			if tok == "" {
 				continue // a lone "!" or brace: the next word is still the command word
 			}
 			if ref, ok := scriptCall(tok, toks[i+1:]); ok {
+				if recipeRunners[ref.runner] { // its options as sh unquotes them: -"f"x.mk, -f\ x
+					args, bad := recipeArgs(seg, offs[i], ref.runner)
+					ref.files, ref.badFile = recipeFilesIn(ref.runner, args)
+					ref.badFile = ref.badFile || bad
+				}
 				if len(ci.scripts) >= mergeRefPaths {
 					ci.over = true
 				} else {
@@ -788,6 +950,22 @@ func parseCommand(of, s string) cmdInfo {
 		}
 	}
 	return ci
+}
+
+// fieldStarts returns the byte offset in s where each field strings.FieldsFunc
+// (s, f) returns starts.
+func fieldStarts(s string, f func(rune) bool) []int {
+	var out []int
+	in := false
+	for i, r := range s {
+		if f(r) {
+			in = false
+		} else if !in {
+			in = true
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // shellRunsArg reports whether a shell option makes the next word a command

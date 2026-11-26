@@ -798,6 +798,17 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 		{"included file's glob refuses an added match at the top", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include sub/a.mk\n", "sub/a.mk": "include *.inc\n"}, "z.inc", true},
 		{"just import glob refuses an added match", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "import 'j*.just'\n"}, "jx.just", true},
 		{"include glob: a path it does not match merges", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include *.mk\n"}, "notes.txt", false},
+		{"make -f\"FILE\"", map[string]string{".claude/settings.json": hookSettings(`make -f\"q1.mk\" fmt`), "q1.mk": "fmt:\n\t./oq1/x.sh\n"}, "oq1/x.sh", true},
+		{"make '-f' FILE", map[string]string{".claude/settings.json": hookSettings(`make '-f' q2.mk fmt`), "q2.mk": "fmt:\n\t./oq2/x.sh\n"}, "oq2/x.sh", true},
+		{"make \"--file=FILE\"", map[string]string{".claude/settings.json": hookSettings(`make \"--file=q3.mk\" fmt`), "q3.mk": "fmt:\n\t./oq3/x.sh\n"}, "oq3/x.sh", true},
+		{"make -\"f\"FILE", map[string]string{".claude/settings.json": hookSettings(`make -\"f\"q4.mk fmt`), "q4.mk": "fmt:\n\t./oq4/x.sh\n"}, "oq4/x.sh", true},
+		{"make -f \"a file\"", map[string]string{".claude/settings.json": hookSettings(`make -f \"my q5.mk\" fmt`), "my q5.mk": "fmt:\n\t./oq5/x.sh\n"}, "oq5/x.sh", true},
+		{"make -f\\FILE", map[string]string{".claude/settings.json": hookSettings(`make -f\\q6.mk fmt`), "q6.mk": "fmt:\n\t./oq6/x.sh\n"}, "oq6/x.sh", true},
+		{"bash -c make -f", map[string]string{".claude/settings.json": hookSettings(`bash -c \"make -f q7.mk fmt\"`), "q7.mk": "fmt:\n\t./oq7/x.sh\n"}, "oq7/x.sh", true},
+		{"make --mak=FILE", map[string]string{".claude/settings.json": hookSettings("make --mak=a1.mk fmt"), "a1.mk": "fmt:\n\t./ab1/x.sh\n"}, "ab1/x.sh", true},
+		{"make --fi FILE", map[string]string{".claude/settings.json": hookSettings("make --fi a2.mk fmt"), "a2.mk": "fmt:\n\t./ab2/x.sh\n"}, "ab2/x.sh", true},
+		{"just --just=FILE", map[string]string{".claude/settings.json": hookSettings("just --just=a3.just fmt"), "a3.just": "fmt:\n  ./ab3/x.sh\n"}, "ab3/x.sh", true},
+		{"task --task=FILE", map[string]string{".claude/settings.json": hookSettings("task --task=a4.yml lint"), "a4.yml": "tasks:\n  lint:\n    cmds:\n      - ./ab4/x.sh\n"}, "ab4/x.sh", true},
 		{"a recipe file nobody calls merges", map[string]string{".claude/settings.json": hookSettings("true"), "Makefile": "fmt:\n\t./tools/fmt.sh\n"}, "tools/fmt.sh", false},
 	}
 	for _, c := range cases {
@@ -915,6 +926,9 @@ func TestMergeHomeRecipeUnknownFileFails(t *testing.T) {
 		{"make -f with no value", map[string]string{".claude/settings.json": hookSettings("make -f")}},
 		{"task -t with a variable", map[string]string{".claude/settings.json": hookSettings("task --taskfile=$T lint")}},
 		{"glob in the folder", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include */x.mk\n"}},
+		{"make -f\\ FILE (a name with a leading space)", map[string]string{".claude/settings.json": hookSettings(`make -f\\ x.mk fmt`)}},
+		{"unbalanced quote on an option", map[string]string{".claude/settings.json": hookSettings(`make '-f x.mk fmt`)}},
+		{"unbalanced quote after the options", map[string]string{".claude/settings.json": hookSettings(`make fmt \"-f`)}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

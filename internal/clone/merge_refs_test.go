@@ -265,11 +265,96 @@ func TestRecipeFilesIn(t *testing.T) {
 		{"make", "--file={{x}}", nil, true},
 		{"make", "fmt", nil, false},
 		{"make", "fmt -- -f", nil, false},
+		// GNU getopt abbreviations of a file option; an ambiguous one counts too.
+		{"make", "--mak=a.mk", []string{"a.mk"}, false},
+		{"make", "--fi a.mk", []string{"a.mk"}, false},
+		{"make", "--f a.mk", []string{"a.mk"}, false},
+		{"make", "--make a.mk", []string{"a.mk"}, false},
+		{"just", "--just=x", []string{"x"}, false},
+		{"task", "--task x.yml", []string{"x.yml"}, false},
+		{"make", "--files a.mk", nil, false},
+		{"make", "--debug a.mk", nil, false},
+		{"just", "--file x", nil, false},
 	}
 	for _, c := range cases {
 		files, bad := recipeFilesIn(c.runner, strings.Fields(c.args))
 		if !slices.Equal(files, c.files) || bad != c.bad {
 			t.Errorf("recipeFilesIn(%q, %q) = %q, %v; want %q, %v", c.runner, c.args, files, bad, c.files, c.bad)
+		}
+	}
+	// A value with white space at an end cannot be named faithfully.
+	if _, bad := recipeFilesIn("make", []string{"-f", " x.mk"}); !bad {
+		t.Error("a value with a leading space is not bad")
+	}
+}
+
+// shellWords unquotes the way sh does; a word whose quote does not close is
+// not ok.
+func TestShellWords(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+		ok   []bool
+	}{
+		{`make -f"x.mk" fmt`, []string{"make", "-fx.mk", "fmt"}, []bool{true, true, true}},
+		{`make '-f' x.mk`, []string{"make", "-f", "x.mk"}, []bool{true, true, true}},
+		{`"--file=x.mk"`, []string{"--file=x.mk"}, []bool{true}},
+		{`-f\ x.mk`, []string{"-f x.mk"}, []bool{true}},
+		{`-"f"x.mk --fi""le=y`, []string{"-fx.mk", "--file=y"}, []bool{true, true}},
+		{`"a \"b\" \$c \x" 'd\e'`, []string{`a "b" $c \x`, `d\e`}, []bool{true, true}},
+		{"a\\\nb", []string{"ab"}, []bool{true}},
+		{`make '-f x.mk`, []string{"make", "-f x.mk"}, []bool{true, false}},
+		{`x "y`, []string{"x", "y"}, []bool{true, false}},
+		{`  `, nil, nil},
+	}
+	for _, c := range cases {
+		ws := shellWords(c.in)
+		var got []string
+		var oks []bool
+		for _, w := range ws {
+			got = append(got, w.text)
+			oks = append(oks, w.ok)
+			if w.start < 0 || w.end > len(c.in) || w.start >= w.end {
+				t.Errorf("shellWords(%q): bad span %d..%d", c.in, w.start, w.end)
+			}
+		}
+		if !slices.Equal(got, c.want) || !slices.Equal(oks, c.ok) {
+			t.Errorf("shellWords(%q) = %q %v, want %q %v", c.in, got, oks, c.want, c.ok)
+		}
+	}
+}
+
+// A recipe runner's options are read from the unquoted words of the command.
+func TestParseCommandRecipeQuoting(t *testing.T) {
+	cases := []struct {
+		cmd   string
+		files []string
+		bad   bool
+	}{
+		{`make -f"q.mk" fmt`, []string{"q.mk"}, false},
+		{`make '-f' q.mk fmt`, []string{"q.mk"}, false},
+		{`make "--file=q.mk" fmt`, []string{"q.mk"}, false},
+		{`make -"f"q.mk fmt`, []string{"q.mk"}, false},
+		{`make --fi""le=q.mk fmt`, []string{"q.mk"}, false},
+		{`make -f "my file.mk" fmt`, []string{"my file.mk"}, false},
+		{`make -f\q.mk fmt`, []string{"q.mk"}, false},
+		{`bash -c "make -f q.mk fmt"`, []string{"q.mk"}, false},
+		{`bash -c "bash -c 'make -f q.mk fmt'"`, []string{"q.mk"}, false},
+		{`cd w && make -f q.mk fmt`, []string{"q.mk"}, false},
+		{`make fmt; make -f q.mk fmt`, []string{"q.mk"}, false},
+		{`make -f\ q.mk fmt`, nil, true},
+		{`make '-f q.mk fmt`, nil, true},
+		{`make fmt "-f`, nil, true},
+		{`make -f "q.mk`, nil, true},
+		{`make fmt "x`, nil, false},
+		{`bash -c "sh -c 'nice make'"`, nil, false},
+		{`bash -c "sh -c 'nice make -f q.mk'"`, []string{"q.mk"}, false},
+	}
+	for _, c := range cases {
+		ci := parseCommand("", c.cmd)
+		r := ci.scripts[len(ci.scripts)-1]
+		if r.runner != "make" || !slices.Equal(r.files, c.files) || r.badFile != c.bad {
+			t.Errorf("parseCommand(%q) make ref files %q bad %v, want %q %v", c.cmd, r.files, r.badFile, c.files, c.bad)
 		}
 	}
 }
