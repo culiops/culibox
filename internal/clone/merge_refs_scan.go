@@ -97,6 +97,7 @@ type refSink struct {
 
 	listings  map[string]*dirListing // folders read for plain words, by repo-relative path
 	plainSeen map[string]bool        // plain word look-ups made, "base\x00word" (+ "\x00t" with the prefix rule)
+	pm        plainMatcher           // the same look-ups, matched against the paths a range adds
 	err       error                  // the first cap or listing error
 }
 
@@ -306,6 +307,7 @@ func (s *refSink) plainWord(pw plainWord) {
 			return
 		}
 		s.plainSeen[key] = true
+		s.pm.add(base, pw.word, pw.tool)
 		l := s.listing(base)
 		for _, cand := range append([]string{""}, scriptExts...) {
 			if name, ok := l.names[strings.ToLower(pw.word+cand)]; ok {
@@ -322,6 +324,87 @@ func (s *refSink) plainWord(pw plainWord) {
 			}
 		}
 	}
+}
+
+// plainPattern is one plain word looked up in a folder: word is
+// foldKey(strings.ToLower(word)); tool adds the tool-config prefix rule.
+type plainPattern struct {
+	word string
+	tool bool
+}
+
+// plainMatcher holds the look-ups plainWord made, by folder (foldKey of the
+// repo-relative path, "." for the top), so that a path the range ADDS is matched
+// by the same rules as an entry the host has: plainWord lists what is there, the
+// matcher answers for what is not there yet.
+type plainMatcher struct {
+	byBase map[string][]plainPattern
+}
+
+// add records a look-up of word in base.
+func (pm *plainMatcher) add(base, word string, tool bool) {
+	if pm.byBase == nil {
+		pm.byBase = map[string][]plainPattern{}
+	}
+	k := foldKey(base)
+	pp := plainPattern{word: foldKey(strings.ToLower(word)), tool: tool}
+	if !slices.Contains(pm.byBase[k], pp) {
+		pm.byBase[k] = append(pm.byBase[k], pp)
+	}
+}
+
+// merge adds the look-ups of o.
+func (pm *plainMatcher) merge(o *plainMatcher) {
+	for base, pps := range o.byBase {
+		for _, pp := range pps {
+			pm.add(base, pp.word, pp.tool)
+		}
+	}
+}
+
+// denied reports whether p (repo-relative, slash-separated) is, or is under, an
+// entry plainWord would have denied in one of the folders: the component of p
+// right after the folder is the word, the word with a script extension, or, for
+// a tool word, "<word>.*" or ".<word>*" (plainWord's rules, case-folded).
+func (pm *plainMatcher) denied(p string) bool {
+	pc := strings.Split(p, "/")
+	for base, pps := range pm.byBase {
+		n := 0
+		if base != "." {
+			bc := strings.Split(base, "/")
+			if len(bc) >= len(pc) {
+				continue
+			}
+			ok := true
+			for i := range bc {
+				if foldKey(pc[i]) != bc[i] {
+					ok = false
+					break
+				}
+			}
+			if !ok {
+				continue
+			}
+			n = len(bc)
+		}
+		c := foldKey(pc[n])
+		for _, pp := range pps {
+			w := pp.word
+			if c == w {
+				return true
+			}
+			for _, ext := range scriptExts {
+				if c == w+foldKey(ext) {
+					return true
+				}
+			}
+			if pp.tool && len(w) >= 2 && !toolConfigSkip[strings.ToLower(w)] &&
+				(strings.HasPrefix(c, w+".") || strings.HasPrefix(c, "."+w)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // listing reads the folder base (repo-relative, "." for the top) through the
@@ -418,25 +501,34 @@ func cleanRaw(tok string) string {
 // with the concrete list for the symlink check. It makes no git call. The error
 // is a user file that is there and cannot be read or parsed: the merge then does
 // not happen.
-func (m *merger) configRefDenies(home string, hooks []string) (func(p string) bool, []string, error) {
+func (m *merger) configRefDenies(home string, hooks []string) (*refDenies, error) {
 	sink, err := scanConfigRefs(m.of, hooks, home)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	refs := sink.paths()
 	split := make([][]string, len(refs))
 	for i, r := range refs {
 		split[i] = strings.Split(r, "/")
 	}
-	return func(p string) bool {
+	return &refDenies{denied: func(p string) bool {
 		pc := strings.Split(p, "/")
 		for _, tc := range split {
 			if foldPrefix(pc, tc) || foldPrefix(tc, pc) {
 				return true
 			}
 		}
-		return false
-	}, refs, nil
+		return sink.pm.denied(p)
+	}, paths: refs}, nil
+}
+
+// refDenies is what configRefDenies returns: denied answers for a path of the
+// range, paths is the concrete list for the symlink check, quiet is the paths
+// to keep out of the refused list (filled by a later step; nil until then).
+type refDenies struct {
+	denied func(p string) bool
+	paths  []string
+	quiet  map[string]bool
 }
 
 // ---- JSON: .mcp.json and .claude/settings*.json

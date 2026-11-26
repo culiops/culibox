@@ -68,8 +68,9 @@ func parseConfigList(out []byte, scoped bool) ([]configEntry, error) {
 // gitConfigScan is what the user's git config says that the merge must keep a
 // box from changing.
 type gitConfigScan struct {
-	hooks  []string // repo-relative core.hooksPath directories, as spelled
-	denied []string // repo-relative files and folders, as importDenied reads them
+	hooks  []string     // repo-relative core.hooksPath directories, as spelled
+	denied []string     // repo-relative files and folders, as importDenied reads them
+	plain  plainMatcher // the plain words of the program values, for the paths a range adds
 }
 
 // gitConfig reads the config the user's git reads for clone_of, one git call
@@ -204,6 +205,7 @@ func (sc *gitConfigScan) scan(of, home string, es []configEntry, hookVals []stri
 		}
 	}
 	clear(cmds.runners)
+	sc.plain.merge(&cmds.pm)
 	for _, rel := range cmds.paths() {
 		deny(rel)
 	}

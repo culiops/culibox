@@ -141,7 +141,7 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 		{"plain word, file with extension", map[string]string{".mcp.json": mcpCmd("node", "srv2"), "srv2.js": "h\n"}, nil, "srv2.js", true},
 		{"plain word, python file", map[string]string{".mcp.json": mcpCmd("python", "srv3"), "srv3.py": "h\n"}, nil, "srv3.py", true},
 		{"plain word, file without extension", map[string]string{".mcp.json": mcpCmd("bash", "runner"), "runner": "h\n"}, nil, "runner", true},
-		{"plain word, nothing there", map[string]string{".mcp.json": mcpCmd("node", "nothere")}, nil, "nothere/x.js", false},
+		{"plain word, nothing there", map[string]string{".mcp.json": mcpCmd("node", "nothere")}, nil, "nothere/x.js", true},
 		{"plain word, other entries stay free", map[string]string{".mcp.json": mcpCmd("node", "server"), "server/index.js": "h\n"}, nil, "README.md", false},
 		{"plain word in a hook", map[string]string{".claude/settings.json": hookSettings("node hookdir"), "hookdir/main.js": "h\n"}, nil, "hookdir/main.js", true},
 		{"an argument of a non-interpreter is not looked up", map[string]string{".envrc": "tool envdir\n", "envdir/x.sh": "h\n"}, nil, "envdir/x.sh", false},
@@ -157,6 +157,14 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 		{"tool config, README still merges", map[string]string{".claude/settings.json": hookSettings("npx eslint --fix"), "eslint.config.js": "h\n"}, nil, "README.md", false},
 		{"tool config, tsc has none", map[string]string{".claude/settings.json": hookSettings("tsc --noEmit"), "tsconfig.json": "{}\n"}, nil, "tsconfig.json", false},
 		{"tool config, a name that only contains the word", map[string]string{".claude/settings.json": hookSettings("jest --bail"), "myjest.config.ts": "h\n"}, nil, "myjest.config.ts", false},
+		// A file the range ADDS is matched by the same rules (A2-I2).
+		{"added eslint.config.js ahead of the host's .mjs", map[string]string{".claude/settings.json": hookSettings("npx eslint --fix"), "eslint.config.mjs": "h\n"}, nil, "eslint.config.js", true},
+		{"added prettier config when the host has none", map[string]string{".claude/settings.json": hookSettings("prettier --write .")}, nil, "prettier.config.js", true},
+		{"added word.js next to the host's word/ folder", map[string]string{".mcp.json": mcpCmd("node", "srvq"), "srvq/index.js": "h\n"}, nil, "srvq.js", true},
+		{"added mypy.ini", map[string]string{".claude/settings.json": hookSettings("mypy ."), "pyproject.toml": "[tool.mypy]\n"}, nil, "mypy.ini", true},
+		{"added name folds case", map[string]string{".claude/settings.json": hookSettings("npx eslint")}, nil, "ESLint.Config.JS", true},
+		{"added unrelated file merges", map[string]string{".claude/settings.json": hookSettings("npx eslint")}, nil, "docs/new.md", false},
+		{"script word does not get the prefix rule", map[string]string{".mcp.json": mcpCmd("node", "srvp")}, nil, "srvp.config.js", false},
 		{"tool config, git keeps .gitignore free", map[string]string{".claude/settings.json": hookSettings("git diff --stat"), ".gitignore": "x\n"}, nil, ".gitignore", false},
 		{"tool config, git keeps .github free", map[string]string{".claude/settings.json": hookSettings("git status"), ".github/workflows/ci.yml": "x\n"}, nil, ".github/workflows/ci.yml", false},
 		{"tool config, bash keeps .bashrc free", map[string]string{".claude/settings.json": hookSettings("bash -c true"), ".bashrc": "x\n"}, nil, ".bashrc", false},
@@ -504,7 +512,8 @@ func TestConfigRefDeniesList(t *testing.T) {
 	x := newMergeFx(t, "main")
 	x.commit("host", map[string]string{".mcp.json": mcpNode})
 	m := &merger{of: x.of}
-	deny, refs, err := m.configRefDenies("", nil)
+	rd, err := m.configRefDenies("", nil)
+	deny, refs := rd.denied, rd.paths
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,10 +537,11 @@ func TestConfigRefDeniesList(t *testing.T) {
 
 // An empty or unreadable repo scans without a word.
 func TestConfigRefsNoRepo(t *testing.T) {
-	deny, refs, err := (&merger{of: filepath.Join(t.TempDir(), "missing")}).configRefDenies("", nil)
+	rd, err := (&merger{of: filepath.Join(t.TempDir(), "missing")}).configRefDenies("", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	deny, refs := rd.denied, rd.paths
 	if len(refs) != 0 || deny("a") {
 		t.Fatalf("refs = %q", refs)
 	}
@@ -643,5 +653,23 @@ func TestMergeHomePlainWordShapes(t *testing.T) {
 				t.Fatal("main moved")
 			}
 		})
+	}
+}
+
+// The matcher answers for a path that is not there yet with the rules plainWord
+// lists the host's entries by.
+func TestPlainMatcher(t *testing.T) {
+	var pm plainMatcher
+	pm.add(".", "eslint", true)
+	pm.add(".", "server", false)
+	pm.add("web", "jest", true)
+	for p, want := range map[string]bool{
+		"eslint.config.js": true, ".eslintrc.cjs": true, "server.js": true, "server/index.js": true,
+		"server.config.js": false, "web/jest.config.ts": true, "Web/JEST.CONFIG.TS": true,
+		"jest.config.ts": false, "src/eslint.config.js": false, "myeslint.js": false, "web": false,
+	} {
+		if got := pm.denied(p); got != want {
+			t.Errorf("denied(%q) = %v, want %v", p, got, want)
+		}
 	}
 }

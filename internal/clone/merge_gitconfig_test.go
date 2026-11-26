@@ -159,7 +159,7 @@ func TestMergeHomeGitConfigDenied(t *testing.T) {
 		{"filter python -mmodule", "[filter \"x\"]\n\tclean = python -mcleaner2\n", nil, "cleaner2/__main__.py", true},
 		{"pager's own config at the top", "[core]\n\tpager = mypager\n", map[string]string{".mypagerrc": "h\n"}, ".mypagerrc", true},
 		{"textconv plain word, README still merges", "[diff \"x\"]\n\ttextconv = node conv\n", map[string]string{"conv.js": "h\n"}, "README.md", false},
-		{"textconv plain word, nothing there", "[diff \"x\"]\n\ttextconv = node nothere\n", nil, "nothere.js", false},
+		{"textconv plain word, nothing there", "[diff \"x\"]\n\ttextconv = node nothere\n", nil, "nothere.js", true},
 		{"textconv runner manifest is not added", "[diff \"x\"]\n\ttextconv = node conv\n", nil, "package.json", false},
 		// What is not a program or an include is not denied.
 		{"alias that is not a shell command", "[alias]\n\tst = status ./bin/st.sh\n", nil, "bin/st.sh", false},

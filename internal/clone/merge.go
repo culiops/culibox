@@ -403,14 +403,14 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if err != nil {
 		return m.failed("cannot list the CLAUDE.md files", err)
 	}
-	refDenied, refPaths, err := m.configRefDenies(r.Home, gc.hooks)
+	rd, err := m.configRefDenies(r.Home, gc.hooks)
 	if err != nil {
 		return m.scanFailed("cannot read the Claude Code config", err)
 	}
 	var denied []string
 	dseen := map[string]bool{}
 	for _, e := range entries {
-		if (e.gitlink || mergeDenied(e.path, gc.hooks) || importDenied(e.path, gc.denied) || agentDenied(e.path) || refDenied(e.path)) && !dseen[e.path] {
+		if (e.gitlink || mergeDenied(e.path, gc.hooks) || importDenied(e.path, gc.denied) || agentDenied(e.path) || rd.denied(e.path) || gc.plain.denied(e.path)) && !dseen[e.path] {
 			dseen[e.path] = true
 			denied = append(denied, e.path)
 		}
@@ -423,7 +423,7 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	// 4a'. The files those names really lead to: a protected name that is a
 	// symbolic link in the host's work tree sends its tools to another file.
 	// Only when nothing above refused, so a refused merge costs no more.
-	links, lres := m.linkDenies(gc.hooks, gc.denied, importPaths, refPaths)
+	links, lres := m.linkDenies(gc.hooks, gc.denied, importPaths, rd.paths)
 	if lres != nil {
 		return lres
 	}
