@@ -5,9 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
-	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -330,9 +328,9 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		}
 	}
 	m.files = len(paths)
-	hooks, err := m.hookDirs(r.Home)
+	gc, err := m.gitConfig(r.Home)
 	if err != nil {
-		return m.failed("cannot read core.hooksPath", err)
+		return m.failed("cannot read git config", err)
 	}
 	agentDenied, err := m.agentImportDenies(r.Home)
 	if err != nil {
@@ -341,14 +339,14 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	var denied []string
 	dseen := map[string]bool{}
 	for _, e := range entries {
-		if (e.gitlink || mergeDenied(e.path, hooks) || agentDenied(e.path)) && !dseen[e.path] {
+		if (e.gitlink || mergeDenied(e.path, gc.hooks) || importDenied(e.path, gc.denied) || agentDenied(e.path)) && !dseen[e.path] {
 			dseen[e.path] = true
 			denied = append(denied, e.path)
 		}
 	}
 	if len(denied) > 0 {
 		return m.result(MergeGuarded, "the commits touch files host tools load by themselves "+
-			"(agent settings, hooks, attributes, editor tasks) or a submodule", denied)
+			"(agent settings, hooks, attributes, editor tasks, git config) or a submodule", denied)
 	}
 
 	// 4b. No path a git filter would process on checkout (one cheap check-attr,
@@ -568,70 +566,6 @@ func foldPrefix(pre, p []string) bool {
 // mergeSystemGitConfig is the system git config the user's git reads. A var so
 // a test can point it elsewhere.
 var mergeSystemGitConfig = "/etc/gitconfig"
-
-// hookDirs returns the repo-relative directories (lower-cased) that any
-// core.hooksPath the user's own git may read names inside clone_of: the user's
-// git runs hooks from there, so a box commit writing into one would run on the
-// host at the next commit. Every value found counts, whatever its precedence.
-//
-// The repo's own value cannot be read with `config --get`: hardenFlags set
-// core.hooksPath on the command line, which that would print (measured, git
-// 2.39.5), so every value from any scope but "command" is taken. CleanEnv
-// hides the global and system config, which the user's git reads: each file
-// is read on its own with --file (which leaves out the command line), with
-// HOME set to home so a ~ include resolves as for the user. home == "" skips
-// the global files.
-func (m *merger) hookDirs(home string) ([]string, error) {
-	out, err := m.run(m.env(), "config", "-z", "--show-scope", "--get-all", "core.hooksPath")
-	if err != nil {
-		if code, ok := exitCode(err); !ok || code != 1 {
-			return nil, err
-		}
-	}
-	var vals []string
-	toks := strings.Split(string(out), "\x00")
-	for i := 0; i+1 < len(toks); i += 2 {
-		if toks[i] != "command" {
-			vals = append(vals, toks[i+1])
-		}
-	}
-	var files []string
-	env := m.env()
-	if home != "" {
-		files = append(files, filepath.Join(home, ".gitconfig"))
-		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-			files = append(files, filepath.Join(xdg, "git", "config"))
-		} else {
-			files = append(files, filepath.Join(home, ".config", "git", "config"))
-		}
-		env = append(globalEnv(home), "GIT_NO_REPLACE_OBJECTS=1")
-	}
-	files = append(files, mergeSystemGitConfig)
-	for _, f := range files {
-		if _, err := os.Stat(f); errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		out, err := m.run(env, "config", "-z", "--includes", "--file", f, "--get-all", "core.hooksPath")
-		if err != nil {
-			if code, ok := exitCode(err); ok && code == 1 {
-				continue
-			}
-			return nil, fmt.Errorf("%s: %w", f, err)
-		}
-		for _, v := range strings.Split(string(out), "\x00") {
-			if v != "" {
-				vals = append(vals, v)
-			}
-		}
-	}
-	var dirs []string
-	for _, v := range vals {
-		if d := hooksDirOf(m.of, home, v); d != "" && !slices.Contains(dirs, d) {
-			dirs = append(dirs, d)
-		}
-	}
-	return dirs, nil
-}
 
 // hooksDirOf is the lower-cased repo-relative directory the hooksPath value v
 // names when it is relative (to the work tree's top, where hooks run) or
