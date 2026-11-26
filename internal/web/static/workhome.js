@@ -109,6 +109,93 @@ function workHomeHb(name) {
   return typeof globalThis[name] === "function" ? globalThis[name] : require("./handbackmodel.js")[name];
 }
 
+// --- opt-in merge into the checked-out branch (#370) -------------------------------------------------------------
+// A return's merge result m: {at, branch, from, to, merged, commits, files, reason, detail, paths, attempted}. X is m.branch: the
+// host branch has the box branch's name. Every string in m came from the box or the host repo: plain text only.
+
+// mergePlural: "1 commit", "3 commits".
+function mergePlural(n, one) {
+  return n + " " + one + (n === 1 ? "" : "s");
+}
+
+// mergePathsText: the example paths a refusal names, joined for a sentence.
+function mergePathsText(m) {
+  return Array.isArray(m && m.paths) ? m.paths.join(", ") : "";
+}
+
+// mergeReasonText: why box/X was not merged into X. An unknown reason (a newer server) gets the generic line.
+function mergeReasonText(m) {
+  const x = (m && m.branch) || "";
+  switch (m && m.reason) {
+    case "detached": return "the repo has no branch checked out";
+    case "diverged": return x + " has commits the box does not have";
+    case "dirty": return x + " has uncommitted changes";
+    case "guarded": return "it changes files host tools load by themselves: " + mergePathsText(m);
+    case "flagged": return "it has files flagged for review: " + mergePathsText(m);
+    case "filter": return "it changes files that use a git filter (such as Git LFS): " + mergePathsText(m);
+    case "moved": return x + " moved while it was checked; it is tried again on the next return";
+    case "failed": return (m.attempted ? "git refused: " : "could not merge: ") + (m.detail || "");
+    default: return "it was not merged";
+  }
+}
+
+// mergeToastPart: what a merge result says in a toast, "" when it says nothing (no result, or one that neither merged nor
+// was refused).
+function mergeToastPart(m) {
+  if (!m) return "";
+  const x = m.branch || "";
+  if (m.merged) return "merged box/" + x + " into " + x + " (" + mergePlural(m.commits || 0, "commit") + ", " + mergePlural(m.files || 0, "file") + ")";
+  if (!m.reason) return "";
+  // No branch (a detached HEAD): "box/ not merged into :" would name nothing.
+  if (!x) return "box work not merged: " + mergeReasonText(m);
+  return "box/" + x + " not merged into " + x + ": " + mergeReasonText(m);
+}
+
+// pathBreakParts: `text` cut after each "/", so a long path can wrap between names: a browser offers no break after a slash by
+// itself, and overflow-wrap alone breaks inside a name ("CLAUDE.md" as "C" / "LAUDE.md"). The parts join back to `text`.
+function pathBreakParts(text) {
+  return String(text == null ? "" : text).match(/[^/]*\/|[^/]+/g) || [];
+}
+
+// pathBreakNodes: `text` as DOM nodes with a <wbr> after each slash: text nodes only, never innerHTML, and the text (what is
+// copied, what a test reads) is unchanged. doc is the page's document.
+function pathBreakNodes(text, doc) {
+  const out = [];
+  for (const part of pathBreakParts(text)) {
+    if (out.length) out.push(doc.createElement("wbr"));
+    out.push(doc.createTextNode(part));
+  }
+  return out;
+}
+
+// mergeRefused: a result that was refused (it carries a reason and did not merge).
+function mergeRefused(m) {
+  return !!m && !m.merged && typeof m.reason === "string" && m.reason !== "";
+}
+
+// mergeSig: the announce-once key of a refusal: the profile, the commit it tried and why it was refused, so a repeated
+// refusal of the same tip is news once, and a new tip or a new reason is news again.
+function mergeSig(profile, m) {
+  return profile + "|" + (m && m.to) + "|" + (m && m.reason);
+}
+
+// mergeHomeLine: the profile view's line for the switch, "" when it is off.
+function mergeHomeLine(on) {
+  return on === true ? "Merges into the checked-out branch" : "";
+}
+
+// mergeLastLine: the profile view's line for the last merge result: the merge, its range (short ids) and its time, or
+// the refusal. fmt turns the result's time into text (the page's locale); "" when there is no result to show.
+function mergeLastLine(m, fmt) {
+  if (!m) return "";
+  if (m.merged) {
+    const at = typeof fmt === "function" ? fmt(m.at) : String(m.at || "");
+    const range = m.from && m.to ? " (" + String(m.from).slice(0, 7) + ".." + String(m.to).slice(0, 7) + ")" : "";
+    return "merged box/" + (m.branch || "") + " into " + (m.branch || "") + range + " at " + at;
+  }
+  return mergeToastPart(m);
+}
+
 // returnToastText: what one return says, or "" when there is nothing to say.
 // A skipped run attempted nothing, so it says nothing, except before a Host
 // session, where silence would read as "all home": "still coming home" when
@@ -117,8 +204,9 @@ function workHomeHb(name) {
 // An idle return (after each agent turn) only says what came home and what is
 // flagged: not-home state lives on the profile and the sidebar, so a turn that
 // changes nothing never repeats it. A host return (before a Host spawn) adds
-// the files not committed.
-function returnToastText(profile, sum) {
+// the files not committed. A merge result (#370) adds its part: the merge, or the refusal, which a caller that has
+// announced it already leaves out (quietMerge).
+function returnToastText(profile, sum, quietMerge) {
   if (!sum) return "";
   if (sum.skipped) {
     if (sum.trigger !== "host") return "";
@@ -135,6 +223,10 @@ function returnToastText(profile, sum) {
     if (unc) parts.push(unc);
   }
   if (sum.error && !idle) parts.push("work not checked");
+  if (sum.merge && !(quietMerge && mergeRefused(sum.merge))) {
+    const m = mergeToastPart(sum.merge);
+    if (m) parts.push(m);
+  }
   const flagged = workHomeHb("handbackNoteText")(sum.flagged);
   if (flagged) parts.push(flagged);
   if (!parts.length) {
@@ -179,9 +271,11 @@ function notHomePrefix(line, rest) {
 function notHomeHostSigs(list) {
   const out = [];
   for (const sum of Array.isArray(list) ? list : []) {
-    if (!sum || sum.skipped || !sum.profile || !Array.isArray(sum.not_home) || !sum.not_home.length) continue;
-    const sig = notHomeSig(sum.profile, { branches: sum.not_home });
-    if (!out.includes(sig)) out.push(sig);
+    if (!sum || sum.skipped || !sum.profile) continue;
+    const sigs = [];
+    if (Array.isArray(sum.not_home) && sum.not_home.length) sigs.push(notHomeSig(sum.profile, { branches: sum.not_home }));
+    if (mergeRefused(sum.merge)) sigs.push(mergeSig(sum.profile, sum.merge));
+    for (const sig of sigs) if (!out.includes(sig)) out.push(sig);
   }
   return out;
 }
@@ -206,10 +300,21 @@ function notHomeNews(seen, profiles) {
   const toasts = [];
   const next = [];
   for (const p of Array.isArray(profiles) ? profiles : []) {
-    if (!p || notHomeCount(p.not_home) === 0) continue;
-    const sig = notHomeSig(p.name, p.not_home);
-    next.push(sig);
-    if (!known.has(sig)) toasts.push(p.name + ": " + notHomeLabel(p.not_home));
+    if (!p) continue;
+    const parts = [];
+    if (notHomeCount(p.not_home) > 0) {
+      const sig = notHomeSig(p.name, p.not_home);
+      next.push(sig);
+      if (!known.has(sig)) parts.push(notHomeLabel(p.not_home));
+    }
+    // A refused merge (#370) is news once per (tip, reason), with or without branches left behind.
+    const m = p.not_home && p.not_home.merge;
+    if (mergeRefused(m)) {
+      const sig = mergeSig(p.name, m);
+      next.push(sig);
+      if (!known.has(sig)) parts.push(mergeToastPart(m));
+    }
+    if (parts.length) toasts.push(p.name + ": " + parts.join(" \u00b7 "));
   }
   return { toasts, seen: next };
 }
@@ -228,6 +333,10 @@ function returnNews(seen, cloneIds, sessions) {
   const list = Array.isArray(sessions) ? sessions : [];
   const nextClones = list.filter((s) => s && s.clone_of).map((s) => s.id);
   const nextSeen = list.filter((s) => s && s.return).map((s) => returnSig(s.id, s.return.at));
+  // A refused merge is announced once per (tip, reason), not once per return: its sig rides in seen with the
+  // return sigs (and goes with the session), so the same refusal on the next return is silent.
+  const refusals = list.filter((s) => s && s.return && mergeRefused(s.return.merge)).map((s) => mergeSig(s.agent, s.return.merge));
+  for (const sig of refusals) if (!nextSeen.includes(sig)) nextSeen.push(sig);
   if (!Array.isArray(seen)) return { toasts: [], links: [], sigs: [], seen: nextSeen, cloneIds: nextClones, refetch: false };
   const known = new Set(seen);
   const toasts = [];
@@ -237,7 +346,9 @@ function returnNews(seen, cloneIds, sessions) {
   for (const s of list) {
     if (!s || !s.return || known.has(returnSig(s.id, s.return.at))) continue;
     fresh = true;
-    const text = returnToastText(s.agent, s.return);
+    const refused = mergeRefused(s.return.merge);
+    const msig = refused ? mergeSig(s.agent, s.return.merge) : "";
+    const text = returnToastText(s.agent, s.return, refused && known.has(msig));
     if (text) {
       toasts.push(text);
       links.push(workHomeHb("handbackNoteIds")(s.return.flagged)); // the records the toast opens, if any
@@ -245,6 +356,11 @@ function returnNews(seen, cloneIds, sessions) {
     // An idle toast omits not-home, so it must not mark the set seen: the next
     // profile poll announces a set first found by an idle return, once.
     if (s.return.trigger !== "idle") sigs.push(notHomeSig(s.agent, { branches: s.return.not_home }));
+    // The merge refusal is in the toast on every trigger, so the profile load must find it seen.
+    if (refused) {
+      sigs.push(msig);
+      known.add(msig); // two sessions of one profile refused alike in one poll: one toast
+    }
   }
   const now = new Set(nextClones);
   const left = (Array.isArray(cloneIds) ? cloneIds : []).some((id) => !now.has(id));
@@ -252,5 +368,5 @@ function returnNews(seen, cloneIds, sessions) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome, notHomePrefix, notHomeHostSigs };
+  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome, notHomePrefix, notHomeHostSigs, mergeReasonText, mergeToastPart, mergeSig, mergeLastLine, mergeHomeLine, mergeRefused, pathBreakParts, pathBreakNodes };
 }

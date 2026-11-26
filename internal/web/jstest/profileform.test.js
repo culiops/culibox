@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, profileNeedsBox, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels, deletePath, withSavedRev } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, profileNeedsBox, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, mergeHomeToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels, deletePath, withSavedRev } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -664,4 +664,13 @@ test("withSavedRev keeps the old revision when the answer carries none", () => {
   for (const saved of [null, undefined, {}, { rev: "" }, { rev: 7 }, "x"]) {
     assert.deepStrictEqual(withSavedRev({ name: "a", rev: "old" }, saved), { name: "a", rev: "old" }, JSON.stringify(saved));
   }
+});
+
+test("mergeHomeToSend: checked + acked sends the flag and the ack; unchecked sends neither; auto-return off sends none", () => {
+  assert.deepStrictEqual(mergeHomeToSend(true, true, true), { clone_merge_home: true, ack_merge_home: true });
+  assert.deepStrictEqual(mergeHomeToSend(true, true, false), { clone_merge_home: true });
+  assert.deepStrictEqual(mergeHomeToSend(true, false, true), {});
+  assert.deepStrictEqual(mergeHomeToSend(true, false, false), {});
+  // The server refuses clone_merge_home with clone_no_auto_return.
+  assert.deepStrictEqual(mergeHomeToSend(false, true, true), {});
 });

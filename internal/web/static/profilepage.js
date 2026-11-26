@@ -403,8 +403,10 @@ function pfvDrawRow(r, known, err, o) {
   id.append(nm);
   const sub = old ? r.name : r.sub;
   if (sub) {
+    // soft: a sub-line that may hold a long path (the merge row): a break opportunity after each "/" (overflow-wrap stays the
+    // last resort for one name wider than the line), so a path wraps between names, not inside one.
     const s = pfvMk("p", "pfv-rsub");
-    s.append(...pfvMonoNodes(sub, known));
+    s.append(...(r.soft === true ? pathBreakNodes(sub, document) : pfvMonoNodes(sub, known)));
     id.append(s);
   }
   if (off && r.kind === "Domain") id.append(pfvMk("p", "pfv-hint", (o && o.needsBox === true) || r.needsBox === true ? PFV_DOMAIN_NEEDS_BOX : PFV_DOMAIN_NO_EFFECT));

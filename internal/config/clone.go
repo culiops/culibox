@@ -26,6 +26,9 @@ type Clone struct {
 	// NoAutoReturn is the clone_no_auto_return switch. It is deliberately left
 	// out of Hash: flipping it must not rename the box.
 	NoAutoReturn bool
+	// MergeHome is the clone_merge_home switch. Left out of Hash for the same
+	// reason as NoAutoReturn.
+	MergeHome bool
 	// Profile is the name of the profile this clone belongs to, for messages.
 	// Left out of Hash: renaming a profile must not rename the box.
 	Profile string
@@ -75,7 +78,7 @@ func (a AgentConfig) Clone() (*Clone, error) {
 	if err := validateClone(a); err != nil {
 		return nil, err
 	}
-	return &Clone{Of: a.CloneOf, Dir: a.DefaultCwd, Shares: slices.Clone(a.CloneShare), NoAutoReturn: a.CloneNoAutoReturn, Profile: a.Name}, nil
+	return &Clone{Of: a.CloneOf, Dir: a.DefaultCwd, Shares: slices.Clone(a.CloneShare), NoAutoReturn: a.CloneNoAutoReturn, MergeHome: a.CloneMergeHome, Profile: a.Name}, nil
 }
 
 // Hash identifies the clone spec for the box name: two profiles that clone
@@ -121,6 +124,9 @@ func validateClone(a AgentConfig) error {
 		if a.CloneNoAutoReturn {
 			return errors.New("clone_no_auto_return requires clone_of")
 		}
+		if a.CloneMergeHome {
+			return WithField("clone_merge_home", errors.New("clone_merge_home requires clone_of"))
+		}
 		return nil
 	}
 	if err := absClean("clone_of", a.CloneOf); err != nil {
@@ -137,6 +143,9 @@ func validateClone(a AgentConfig) error {
 	}
 	if a.Runtime == RuntimeHost {
 		return WithField("clone_of", errors.New("clone mode runs only in a box; remove runtime \"host\" or clone_of"))
+	}
+	if a.CloneMergeHome && a.CloneNoAutoReturn {
+		return WithField("clone_merge_home", errors.New("clone_merge_home cannot be combined with clone_no_auto_return: merging needs automatic return"))
 	}
 	if len(a.CloneShare) > maxCloneShares {
 		return WithField("clone_share", fmt.Errorf("clone_share has %d entries; at most %d", len(a.CloneShare), maxCloneShares))

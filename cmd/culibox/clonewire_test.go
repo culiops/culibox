@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxedws"
+	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/session"
@@ -1713,6 +1715,98 @@ func TestReturnForRepoContinuesWorkCutByTheBudget(t *testing.T) {
 	})
 }
 
+// A merge that failed before git merge ran (a pre-check the deadline cut) was
+// not decided, so it continues in the background; a merge git refused is a
+// settled answer and does not.
+func TestReturnForRepoContinuesAMergeCutBeforeGit(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		attempted bool
+		wantBg    bool
+	}{{"failed before git merge", false, true}, {"refused by git merge", true, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRefreshFake(t)
+			of, dir := resolvedTemp(t), cloneDir(t)
+			f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+			bg := make(chan struct{}, 4)
+			var first atomic.Bool
+			f.h.ret = func(ctx context.Context, _ clone.Git, _ clone.Docker, _ clone.ReturnRequest) clone.ReturnResult {
+				if first.CompareAndSwap(false, true) {
+					<-ctx.Done()
+					return clone.ReturnResult{Merge: &clone.MergeResult{Branch: "main", Reason: clone.MergeFailed, Attempted: tc.attempted}}
+				}
+				bg <- struct{}{}
+				return clone.ReturnResult{}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			sums := f.h.ReturnForRepo(ctx, of)
+			if len(sums) != 1 || sums[0].Merge == nil || sums[0].Merge.Attempted != tc.attempted {
+				t.Fatalf("summaries = %+v, want the merge result kept with Attempted = %v", sums, tc.attempted)
+			}
+			select {
+			case <-bg:
+				if !tc.wantBg {
+					t.Fatal("a merge git refused was continued in the background")
+				}
+			case <-time.After(300 * time.Millisecond):
+				if tc.wantBg {
+					t.Fatal("a merge cut before git merge was not continued in the background")
+				}
+			}
+		})
+	}
+}
+
+// A flagged merge whose scan found no flag could not finish (the deadline cut
+// it), so it continues in the background; flags found are a settled answer.
+func TestReturnForRepoContinuesAScanCutShort(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason string
+		detail string
+		wantBg bool
+	}{
+		{"scan ran out of time", clone.MergeFlagged, "the commits could not be fully inspected: ran out of time or was cancelled before it finished", true},
+		{"scan found no flag and failed", clone.MergeFlagged, "the commits could not be fully inspected: could not inspect: x", true},
+		{"flags found", clone.MergeFlagged, "the commits carry flagged files", false},
+		{"flags found, scan also cut", clone.MergeFlagged, "the commits carry flagged files: ran out of time or was cancelled before it finished", false},
+		{"another refusal", clone.MergeGuarded, "the commits touch files host tools load", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRefreshFake(t)
+			of, dir := resolvedTemp(t), cloneDir(t)
+			f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+			bg := make(chan struct{}, 4)
+			var first atomic.Bool
+			f.h.ret = func(ctx context.Context, _ clone.Git, _ clone.Docker, _ clone.ReturnRequest) clone.ReturnResult {
+				if first.CompareAndSwap(false, true) {
+					<-ctx.Done()
+					return clone.ReturnResult{Merge: &clone.MergeResult{Branch: "main", Reason: tc.reason, Detail: tc.detail}}
+				}
+				bg <- struct{}{}
+				return clone.ReturnResult{}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			sums := f.h.ReturnForRepo(ctx, of)
+			if len(sums) != 1 || sums[0].Merge == nil || sums[0].Merge.Reason != tc.reason {
+				t.Fatalf("summaries = %+v, want the merge result kept", sums)
+			}
+			select {
+			case <-bg:
+				if !tc.wantBg {
+					t.Fatal("a settled merge result was continued in the background")
+				}
+			case <-time.After(300 * time.Millisecond):
+				if tc.wantBg {
+					t.Fatal("a flagged scan cut short was not continued in the background")
+				}
+			}
+		})
+	}
+}
+
 // I5: a profile whose copy was never made (no box spawned yet) has nothing to
 // return: no summary, no return, nothing recorded.
 func TestReturnForRepoSkipsACopyThatWasNeverMade(t *testing.T) {
@@ -2257,4 +2351,88 @@ func TestCheckOfRefusesAPartialCloneABoxMayHaveWritten(t *testing.T) {
 			t.Fatalf("clone.CheckOf of a partial clone = %v, want nil", err)
 		}
 	})
+}
+
+func TestDoReturnPassesMergeAudit(t *testing.T) {
+	var req clone.ReturnRequest
+	h := &cloneHooks{
+		clones: func() []config.Clone { return nil },
+		file:   filepath.Join(t.TempDir(), cloneDirsFile),
+		ret: func(_ context.Context, _ clone.Git, _ clone.Docker, r clone.ReturnRequest) clone.ReturnResult {
+			req = r
+			return clone.ReturnResult{}
+		},
+	}
+	c := config.Clone{Of: "/home/u/repo", Dir: "/c/r", Profile: "dev"}
+
+	// No audit sink: the closure fails closed.
+	h.doReturn(context.Background(), c, session.ReturnOnIdle, clone.ReturnAuto)
+	if req.MergeAudit == nil {
+		t.Fatal("MergeAudit not set")
+	}
+	if err := req.MergeAudit("clone_merge_home", "d"); err == nil {
+		t.Fatal("MergeAudit with no audit sink returned nil, want an error")
+	}
+
+	var got []broker.CredEvent
+	h.audit = func(e broker.CredEvent) error { got = append(got, e); return nil }
+	h.doReturn(context.Background(), c, session.ReturnOnIdle, clone.ReturnAuto)
+	if err := req.MergeAudit("clone_merge_home", "d"); err != nil {
+		t.Fatal(err)
+	}
+	want := broker.CredEvent{Action: "clone_merge_home", Kind: "clone", Name: "dev", Actor: "culibox", Detail: "d"}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("events = %+v, want [%+v]", got, want)
+	}
+
+	// The sink's error reaches the caller.
+	h.audit = func(broker.CredEvent) error { return errors.New("db locked") }
+	if err := req.MergeAudit("clone_merge_home", "d"); err == nil {
+		t.Fatal("audit error swallowed")
+	}
+}
+
+func TestReturnSummaryOfMerge(t *testing.T) {
+	at := time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC)
+	m := &clone.MergeResult{
+		At: at, Branch: "main", From: "aaa", To: "bbb", Merged: false, Commits: 2, Files: 5,
+		Reason: clone.MergeGuarded, Detail: "d", Paths: []string{".envrc", ".claude/x"}, Attempted: true,
+	}
+	got := returnSummaryOf(session.ReturnOnIdle, "/r", nil, clone.ReturnResult{Merge: m})
+	g := got.Merge
+	if g == nil || !g.At.Equal(at) || g.Branch != "main" || g.From != "aaa" || g.To != "bbb" || g.Merged ||
+		g.Commits != 2 || g.Files != 5 || g.Reason != "guarded" || g.Detail != "d" || !g.Attempted || !slices.Equal(g.Paths, []string{".envrc", ".claude/x"}) {
+		t.Fatalf("Merge = %+v, want a field-by-field copy of %+v", g, m)
+	}
+	m.Paths[0] = "changed"
+	m.Branch = "other"
+	if g.Paths[0] != ".envrc" || g.Branch != "main" {
+		t.Fatalf("summary shares the result's memory: %+v", g)
+	}
+	if got := returnSummaryOf(session.ReturnOnIdle, "/r", nil, clone.ReturnResult{}); got.Merge != nil {
+		t.Fatalf("Merge = %+v, want nil without a merge", got.Merge)
+	}
+}
+
+func TestNotHomeShowsMerge(t *testing.T) {
+	h := testHooks(t, noClones)
+	h.dataDir = t.TempDir()
+	dir := cloneDir(t)
+	c := config.Clone{Of: "/r", Dir: dir}
+	at := time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC)
+	st := clone.ReturnState{At: at, Base: "main", Merge: &clone.MergeResult{
+		At: at, Branch: "main", From: "aaa", To: "bbb", Merged: true, Commits: 1, Files: 2,
+	}}
+	if err := clone.WriteReturnState(h.dataDir, dir, st); err != nil {
+		t.Fatal(err)
+	}
+	got := h.NotHome(c)
+	if got == nil || got.Merge == nil || !got.Merge.Merged || got.Merge.To != "bbb" || got.Merge.Commits != 1 || len(got.Branches) != 0 {
+		t.Fatalf("NotHome = %+v, want a state carrying only the merge", got)
+	}
+	got.Merge.Branch = "x"
+	st.Merge.Paths = append(st.Merge.Paths, "p")
+	if again := h.NotHome(c); again.Merge.Branch != "main" || len(again.Merge.Paths) != 0 {
+		t.Fatalf("NotHome shares memory: %+v", again.Merge)
+	}
 }

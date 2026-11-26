@@ -208,6 +208,9 @@ type profileDoc struct {
 	// clone_of folder that was boxed in place before the record kept a flag. It
 	// is never part of a stored or returned profile.
 	AckInPlaceHistory bool `json:"ack_inplace_history,omitempty"`
+	// AckMergeHome rides on a save only (SaveOpts): the user's say-so for turning
+	// clone_merge_home on. Never part of a stored or returned profile.
+	AckMergeHome bool `json:"ack_merge_home,omitempty"`
 }
 
 // pageOutdatedMsg is the 409 body of a save whose schema is not this build's.
@@ -260,6 +263,13 @@ func isInPlaceHistory(err error) bool {
 	return errors.As(err, &ih)
 }
 
+// isMergeHomeAck reports whether err is a save refused until the user
+// acknowledges turning clone_merge_home on (a *MergeHomeAckError).
+func isMergeHomeAck(err error) bool {
+	var mh *MergeHomeAckError
+	return errors.As(err, &mh)
+}
+
 // writeSaveErr answers a failed profile save. A refusal that means "what you
 // saw is not what is there" is a 409 with a code the editor acts on; a store
 // that could not write is a 500 without the path; anything else (a validation
@@ -279,6 +289,10 @@ func writeSaveErr(w http.ResponseWriter, err error) {
 		// A 400 the editor turns into a confirmation: the same save with
 		// ack_inplace_history set goes through.
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "inplace_history", "field": "clone_of"})
+	case isMergeHomeAck(err):
+		// A 400 the editor turns into a confirmation: the same save with
+		// ack_merge_home set goes through.
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "merge_home_ack", "field": "clone_merge_home"})
 	case errors.Is(err, store.ErrChangedOnDisk):
 		writeErrCode(w, http.StatusConflict, profilesFileChangedMsg, "profiles_file_changed")
 	case errors.Is(err, store.ErrUnreadable):

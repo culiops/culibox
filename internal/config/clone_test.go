@@ -239,3 +239,34 @@ func TestCloneCarriesProfileName(t *testing.T) {
 		t.Fatalf("Clone() = %+v, %v; want Profile dev", c, err)
 	}
 }
+
+func TestCloneMergeHomeCopied(t *testing.T) {
+	a := AgentConfig{Name: "p", CloneOf: "/src/of", DefaultCwd: "/work/c", CloneMergeHome: true}
+	c, err := a.Clone()
+	if err != nil || c == nil || !c.MergeHome {
+		t.Fatalf("Clone() = %+v, %v", c, err)
+	}
+}
+
+func TestCloneMergeHomeNotInHash(t *testing.T) {
+	a := Clone{Of: "/src/of", Dir: "/work/c"}
+	b := a
+	b.MergeHome = true
+	if a.Hash() != b.Hash() {
+		t.Fatal("MergeHome changed Clone.Hash")
+	}
+}
+
+func TestCloneMergeHomeNeedsCloneOf(t *testing.T) {
+	err := validateClone(AgentConfig{Name: "p", CloneMergeHome: true})
+	if err == nil || !strings.Contains(err.Error(), "clone_merge_home") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCloneMergeHomeNeedsAutoReturn(t *testing.T) {
+	err := validateClone(AgentConfig{Name: "p", CloneOf: "/src/of", DefaultCwd: "/work/c", CloneMergeHome: true, CloneNoAutoReturn: true})
+	if err == nil || !strings.Contains(err.Error(), "merging needs automatic return") {
+		t.Fatalf("err = %v", err)
+	}
+}

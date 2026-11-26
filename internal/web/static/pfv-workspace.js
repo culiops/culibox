@@ -22,7 +22,7 @@ const PFW_HINT_SHARE = "Relative to the folder, one per line, at most 8.";
 
 // What the copy fields hold while the block is on "Work in this folder": the profile's own, as opened, so
 // "a private copy and back" is no change (see pfwPickMode).
-const pfwCopyFields = (v) => ({ copyDir: v.copyDir, shareText: v.shareText, autoReturn: v.autoReturn });
+const pfwCopyFields = (v) => ({ copyDir: v.copyDir, shareText: v.shareText, autoReturn: v.autoReturn, mergeHome: v.mergeHome, mergeAckRepo: v.mergeAckRepo });
 
 const pfwHome = () => (typeof window !== "undefined" && window.HOME_DIR) || "";
 const pfwUnavailable = () => (typeof cloneUnavailable === "string" ? cloneUnavailable : "");
@@ -40,7 +40,20 @@ function pfwValues(c) {
     copyDir: copy ? cwd : "",
     shareText: contextPathsToText(d.clone_share),
     autoReturn: d.clone_no_auto_return !== true,
+    // The merge switch (#370) and the repo whose warning the user confirmed in this form ("" for none). The save carries
+    // ack_merge_home only while the folder still is that repo (pfwMergeValues).
+    mergeHome: d.clone_merge_home === true,
+    mergeAckRepo: "",
   };
+}
+
+// pfwMergeValues: the values a save is built from: mergeAck is true only when the switch is on and the dialog the user
+// confirmed named the folder being saved (the folder is shared between the two ways of working, so it can change after the ack).
+function pfwMergeValues(rec) {
+  const v = Object.assign({}, rec.values);
+  v.mergeAck = wmMergeAcked(v.mergeHome, v.mergeAckRepo, v.folder);
+  delete v.mergeAckRepo;
+  return v;
 }
 
 // pfwSuggestion: where a copy of `folder` could live: ~/box-clones/<name>, never a folder another profile
@@ -213,14 +226,60 @@ function pfwCopyFieldNodes(rec, storedCopy) {
   const cb = pfvMk("input");
   cb.type = "checkbox";
   cb.checked = v.autoReturn === true;
-  cb.onchange = () => { v.autoReturn = cb.checked; rec.nudge = false; pfvPaint(); };
   pfvReg(rec, "auto-return", cb);
   lab.append(cb, pfvMk("span", "pfv-check-t", "Bring work home automatically"));
-  const out = [dirBox, shareBox, lab];
+  // Merge into the checked-out branch (#370): only with automatic return (the server refuses the pair). Checking it asks first
+  // (the warning, spec 5.5); Cancel unchecks it. Unchecking automatic return unchecks and disables it.
+  const mlab = pfvMk("label", "pfv-check");
+  const mcb = pfvMk("input");
+  mcb.type = "checkbox";
+  // Disabled: the box and its label are both dimmed (.pfv-off), so the row does not look like one that works.
+  const paintMerge = (autoReturn, mergeHome) => {
+    const st = wmMergeSwitch(autoReturn, mergeHome);
+    mcb.checked = st.checked;
+    mcb.disabled = st.disabled;
+    mlab.title = st.title;
+    mlab.classList.toggle("pfv-off", st.disabled);
+  };
+  paintMerge(v.autoReturn, v.mergeHome);
+  pfvReg(rec, "merge-home", mcb);
+  mlab.append(mcb, pfvMk("span", "pfv-check-t", "Merge into the checked-out branch"));
+  cb.onchange = () => {
+    v.autoReturn = cb.checked;
+    if (!cb.checked) {
+      v.mergeHome = false;
+      v.mergeAckRepo = "";
+    }
+    paintMerge(cb.checked, v.mergeHome);
+    rec.nudge = false;
+    pfvPaint();
+  };
+  mcb.onchange = async () => {
+    if (mcb.checked) {
+      // Not on until the warning is confirmed: the dialog is modal, and the form stays as it was while it is open. It names the
+      // repo, so with no folder there is nothing to ask about: the box stays off (the folder field says what is missing).
+      const got = await wmMergeTurnOn(v.folder, cdAskMergeHome);
+      v.mergeHome = got.mergeHome;
+      v.mergeAckRepo = got.ackRepo;
+      mcb.checked = got.mergeHome;
+    } else {
+      v.mergeHome = false;
+      v.mergeAckRepo = "";
+    }
+    rec.nudge = false;
+    pfvPaint();
+  };
+  const out = [dirBox, shareBox, lab, mlab];
   const err = pfvFerr(rec, "clone_no_auto_return");
   if (err) {
     const words = pfvMk("p", "pfv-ferr", err);
     pfvBad(rec, cb, words);
+    out.push(words);
+  }
+  const merr = pfvFerr(rec, "clone_merge_home");
+  if (merr) {
+    const words = pfvMk("p", "pfv-ferr", merr);
+    pfvBad(rec, mcb, words);
     out.push(words);
   }
   return out;
@@ -270,6 +329,7 @@ function pfwCheck(rec) {
 
 pfvRegisterEditor("workspace", {
   values: pfwValues,
+  merge: pfwMergeValues,
   draw: pfwDraw,
   check: pfwCheck,
   // What a forced close keeps with the edit (see PFV_EDITORS): the copy fields stashed and as opened, the copy folder that follows the

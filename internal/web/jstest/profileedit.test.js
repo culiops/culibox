@@ -261,7 +261,7 @@ test("blockForField maps context_paths[0] to reachable and clone_share[2] to wor
 test("blockForField maps every path the server emits to its block", () => {
   const rows = {
     runtime: "runs",
-    default_cwd: "workspace", clone_of: "workspace", clone_share: "workspace", "clone_share[0]": "workspace", clone_no_auto_return: "workspace",
+    default_cwd: "workspace", clone_of: "workspace", clone_share: "workspace", "clone_share[0]": "workspace", clone_no_auto_return: "workspace", clone_merge_home: "workspace",
     bin: "agent", account: "agent",
     aws: "cloud", aws_connections: "cloud", "aws_connections[3]": "cloud", github: "cloud", "github.owners": "cloud",
     "github.owners[0].owner": "cloud", "github.owners[0].app": "cloud", "github.owners[1].token": "cloud", "github.owners[0].repos": "cloud",
@@ -823,4 +823,30 @@ test("index.html loads profileedit.js once, after profileview.js and before the 
   assert.strictEqual(tags.filter((t) => t === "profileedit.js").length, 1);
   assert.ok(tags.indexOf("profileedit.js") > tags.indexOf("profileview.js"));
   assert.ok(tags.indexOf("profileedit.js") < tags.indexOf("profilepage.js"));
+});
+
+// --- #370: the merge switch in the workspace block ------------------------------------------------------
+
+test("mergeBlock workspace: the merge switch is written, kept when not given, and dropped with auto-return or the copy", () => {
+  const on = { name: "p", bin: "claude", runtime: "box", clone_of: "/src/repo", default_cwd: "/home/you/box-clones/repo", clone_merge_home: true };
+  const v = { mode: "copy", folder: "/src/repo", copyDir: on.default_cwd };
+  // Not mentioned: kept (an editor that has no value for it must not turn it off).
+  assert.deepStrictEqual(pfvMergeBlock(on, "workspace", v), on);
+  // Given: written, with its ack only on the wire (never in the stored profile).
+  const off = pfvMergeBlock(on, "workspace", Object.assign({ mergeHome: false }, v));
+  assert.strictEqual("clone_merge_home" in off, false);
+  const plain = { name: "p", bin: "claude", runtime: "box", clone_of: "/src/repo", default_cwd: on.default_cwd };
+  assert.deepStrictEqual(pfvMergeBlock(plain, "workspace", Object.assign({ mergeHome: true, mergeAck: true }, v)), Object.assign({}, on, { ack_merge_home: true }));
+  assert.deepStrictEqual(pfvMergeBlock(plain, "workspace", Object.assign({ mergeHome: true }, v)), on);
+  // Auto-return off: the server refuses the pair, so the switch is not sent.
+  assert.strictEqual("clone_merge_home" in pfvMergeBlock(on, "workspace", Object.assign({ autoReturn: false }, v)), false);
+  // Back to a folder: the copy's keys go.
+  assert.deepStrictEqual(pfvMergeBlock(on, "workspace", { mode: "folder", folder: "/home/you/work" }), { name: "p", bin: "claude", runtime: "box", default_cwd: "/home/you/work" });
+});
+
+test("mergeBlock workspace: an ack left from an earlier save is not carried into the next", () => {
+  const plain = { name: "p", bin: "claude", runtime: "box", clone_of: "/src/repo", default_cwd: "/home/you/box-clones/repo" };
+  const acked = pfvMergeBlock(plain, "workspace", { mode: "copy", folder: "/src/repo", copyDir: plain.default_cwd, mergeHome: true, mergeAck: true });
+  const again = pfvMergeBlock(acked, "workspace", { mode: "copy", folder: "/src/repo", copyDir: plain.default_cwd, mergeHome: true });
+  assert.strictEqual("ack_merge_home" in again, false);
 });

@@ -52,6 +52,9 @@ type ReturnState struct {
 	// a status that failed or timed out).
 	Uncommitted    *int `json:"uncommitted,omitempty"`
 	UncommittedCut bool `json:"uncommitted_cut,omitempty"` // the count is a floor: the listing was cut
+	// Merge is the last result of merging into the checked-out branch; absent
+	// when the profile never opted in or the last word was "nothing to do".
+	Merge *MergeResult `json:"merge,omitempty"`
 }
 
 // ReadReturnState reads the state of cloneDir. ok is false when there is no
@@ -208,6 +211,21 @@ func cleanReturnState(st ReturnState) ReturnState {
 	}
 	for i, n := range st.NotHome {
 		st.NotHome[i] = NotHome{Branch: sanitize(n.Branch), Reason: sanitize(n.Reason), Detail: sanitize(n.Detail)}
+	}
+	if m := st.Merge; m != nil {
+		c := *m
+		c.Branch = sanitizeN(m.Branch, maxErrRunes)
+		c.From, c.To = sanitize(m.From), sanitize(m.To)
+		c.Reason = sanitize(m.Reason)
+		c.Detail = sanitizeN(m.Detail, maxErrRunes)
+		c.Paths = nil
+		for i, p := range m.Paths {
+			if i == maxMergePaths {
+				break
+			}
+			c.Paths = append(c.Paths, sanitizeN(p, maxErrRunes))
+		}
+		st.Merge = &c
 	}
 	return st
 }

@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -55,8 +56,13 @@ func underWS(p, ws string) bool { return underMount(p, []string{ws}, inPlaceFold
 const inPlaceTrustedHost = "Run it on the trusted host instead (clone-mode profiles are coming)"
 
 // inPlaceGuardFiles are guarded only when present: binding a file that does not
-// exist would make docker create it.
+// exist would make docker create it. clone.MergeDenyNames starts from this list
+// (InPlaceGuardFiles): a box commit touching one of these is never merged into
+// the host's branch. Unexported, so no other package can shorten it.
 var inPlaceGuardFiles = []string{"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json"}
+
+// InPlaceGuardFiles returns a copy of the guarded file names.
+func InPlaceGuardFiles() []string { return slices.Clone(inPlaceGuardFiles) }
 
 const (
 	maxGitFile        = 1 << 20 // config, gitfile, commondir: larger is not a real repo's

@@ -159,17 +159,48 @@ function cdIsInplaceHistory(err) {
   return !!err && err.status === 400 && (err.code === "inplace_history" || (!!err.body && err.body.code === "inplace_history"));
 }
 
-// cdSaveWithAck: run a profile save (send(ack) -> promise) and, when the server asks about the .git history, put the server's words
-// to the user (ask(message) -> promise of a yes) and send the same save again with the ack. A no throws the refusal as it came, so
-// the caller's own error line shows it; a second refusal after the ack is not asked again.
-async function cdSaveWithAck(send, ask) {
-  try {
-    return await send(false);
-  } catch (e) {
-    if (!cdIsInplaceHistory(e)) throw e;
-    if (!(await ask(e.message))) throw e;
-    return await send(true);
+// cdIsMergeHomeAck: the save was refused because it turns clone_merge_home on and the user has not confirmed (400 merge_home_ack, #370).
+function cdIsMergeHomeAck(err) {
+  return !!err && err.status === 400 && (err.code === "merge_home_ack" || (!!err.body && err.body.code === "merge_home_ack"));
+}
+
+// cdMergeHomeDialog: the words of the dialog that opens when "Merge into the checked-out branch" is turned on, from the
+// founder-approved copy (spec 5.5), re-approved 2026-11-26 with the guard's gaps named. repo is the profile's clone_of: text, never a replacement pattern.
+function cdMergeHomeDialog(repo) {
+  return {
+    title: "Merge box work into your branch?",
+    body: "The box's commits will land in the branch you have checked out in " + repo + ", with no review step. " +
+      "Anything the box wrote then runs with your permissions when you or a tool runs it: a build, a test, a script. " +
+      "CuliBox does not merge changes to files host tools load by themselves (.claude/, CLAUDE.md, .mcp.json, .envrc, mise, git config, attributes and hooks, editor tasks), " +
+      "to the scripts and folders those files name, or flagged files (executables, links out of the repo, archives); those stay as box/<branch> for you to review. " +
+      "It cannot follow what those scripts import from elsewhere in the repo, and your CI runs the box's workflow changes on your next push. " +
+      "A dirty work tree is never touched.",
+    confirmLabel: "Turn on",
+    cancelLabel: "Cancel",
+  };
+}
+
+// cdSaveWithAcks: run a profile save (send(acks) -> promise, acks = {inplace, merge}) and answer what the server asks:
+// the .git history question (asks.inplace(message) -> promise of a yes) and the merge warning (asks.merge(message)). Each
+// question is asked once; a yes sends the same save again with that ack. A no, a question with no asker, or a second
+// refusal after the ack throws the refusal as it came, so the caller's own error line shows it.
+async function cdSaveWithAcks(send, asks) {
+  const acks = { inplace: false, merge: false };
+  for (;;) {
+    try {
+      return await send(Object.assign({}, acks));
+    } catch (e) {
+      const which = !acks.inplace && cdIsInplaceHistory(e) ? "inplace" : !acks.merge && cdIsMergeHomeAck(e) ? "merge" : "";
+      const ask = which && asks ? asks[which] : null;
+      if (!ask || !(await ask(e.message))) throw e;
+      acks[which] = true;
+    }
   }
+}
+
+// cdSaveWithAck: the .git question alone (cdSaveWithAcks with one asker); send(ack) takes the one boolean.
+function cdSaveWithAck(send, ask) {
+  return cdSaveWithAcks((acks) => send(acks.inplace), { inplace: ask });
 }
 
 // --- the DOM part -------------------------------------------------------------------------------------------------
@@ -210,14 +241,31 @@ function cdAskAck(message) {
   return p;
 }
 
+// cdAskMergeHome: the merge warning (spec 5.5) for the repo `repo`: Turn on resolves true, Cancel, Esc and a dialog already
+// open resolve false. Cancel is where focus starts: the yes is never one keypress away. The one dialog both the profile form's
+// checkbox and a save the server refused with merge_home_ack open.
+function cdAskMergeHome(repo) {
+  const d = document.getElementById("ask-modal");
+  if (!d || d.open) return Promise.resolve(false);
+  const m = cdMergeHomeDialog(repo);
+  return askConfirm({ title: m.title, body: m.body, confirmLabel: m.confirmLabel, cancelLabel: m.cancelLabel, focusCancel: true, cls: "lk-ask", wide: false });
+}
+
 // cdSendProfile: a profile editor's save (POST or PUT of `body` to `path`) that answers the server's inplace_history question: the
 // server's words and a box to tick, then the same save again with ack_inplace_history. Every editor sends its save through this, so
-// a profile whose clone_of is a folder boxed in place before the record kept a flag can still be saved from any of them.
+// a profile whose clone_of is a folder boxed in place before the record kept a flag can still be saved from any of them. A save
+// the server refuses with merge_home_ack (clone_merge_home turned on, or its clone_of changed while on, with no ack: an old page, a
+// path that skipped the form's dialog) opens the merge warning for the repo being saved and goes again with ack_merge_home.
 function cdSendProfile(path, method, body) {
-  return cdSaveWithAck((ack) => api(path, {
-    method, headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(ack ? Object.assign({}, body, { ack_inplace_history: true }) : body),
-  }), cdAskAck);
+  return cdSaveWithAcks((acks) => {
+    const extra = {};
+    if (acks.inplace) extra.ack_inplace_history = true;
+    if (acks.merge) extra.ack_merge_home = true;
+    return api(path, {
+      method, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.keys(extra).length ? Object.assign({}, body, extra) : body),
+    });
+  }, { inplace: cdAskAck, merge: () => cdAskMergeHome(body && body.clone_of) });
 }
 
 // cdConvertProfile: make the profile a private copy: read it, set clone_of and default_cwd, save it. cdSaveWithAck's `send`.
@@ -373,7 +421,7 @@ async function copyDialogRun(refusal, o) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    copyDialogModel, cdEstimateBody, cdMergeFree, cdChangesLine, cdRefusalFromCheck, cdSavedDoc, cdIsInplaceHistory, cdSaveWithAck, cdSizeLine,
+    copyDialogModel, cdEstimateBody, cdMergeFree, cdChangesLine, cdRefusalFromCheck, cdSavedDoc, cdIsInplaceHistory, cdSaveWithAck, cdSaveWithAcks, cdIsMergeHomeAck, cdMergeHomeDialog, cdSizeLine,
     CD_NOT_SEE, CD_LFS, CD_NO_DISK, CD_FOLDER_FIRST, CD_HOME, CD_HOME_UNKNOWN, CD_ACK_LABEL, CD_BUILT_IN, CD_CONFIG, CD_SHELL, CD_BODY,
   };
 }

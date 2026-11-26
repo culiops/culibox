@@ -4,7 +4,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  copyDialogModel, cdEstimateBody, cdMergeFree, cdChangesLine, cdRefusalFromCheck, cdSavedDoc, cdIsInplaceHistory, cdSaveWithAck, cdSizeLine,
+  copyDialogModel, cdEstimateBody, cdMergeFree, cdChangesLine, cdRefusalFromCheck, cdSavedDoc, cdIsInplaceHistory, cdSaveWithAck, cdSaveWithAcks, cdIsMergeHomeAck, cdMergeHomeDialog, cdSizeLine,
   CD_NOT_SEE, CD_LFS, CD_NO_DISK, CD_FOLDER_FIRST, CD_HOME, CD_HOME_UNKNOWN, CD_ACK_LABEL, CD_BUILT_IN, CD_CONFIG, CD_SHELL, CD_BODY,
 } = require("../static/copydialog.js");
 
@@ -228,6 +228,61 @@ test("cdSaveWithAck: declining throws the server's refusal and sends nothing mor
   assert.deepStrictEqual(sent, [false]);
   const other = Object.assign(new Error("boom"), { status: 500 });
   await assert.rejects(cdSaveWithAck(async () => { throw other; }, async () => { throw new Error("not asked"); }), (e) => e === other);
+});
+
+// --- #370: the merge warning and the 400 that asks for it ---------------------------------------------------
+
+test("cdMergeHomeDialog: the founder-approved words (re-approved 2026-11-26), the profile's repo in the body", () => {
+  const d = cdMergeHomeDialog("/home/u/repo");
+  assert.strictEqual(d.title, "Merge box work into your branch?");
+  assert.strictEqual(d.confirmLabel, "Turn on");
+  assert.strictEqual(d.cancelLabel, "Cancel");
+  assert.strictEqual(d.body,
+    "The box's commits will land in the branch you have checked out in /home/u/repo, with no review step. " +
+    "Anything the box wrote then runs with your permissions when you or a tool runs it: a build, a test, a script. " +
+    "CuliBox does not merge changes to files host tools load by themselves (.claude/, CLAUDE.md, .mcp.json, .envrc, mise, git config, attributes and hooks, editor tasks), " +
+    "to the scripts and folders those files name, or flagged files (executables, links out of the repo, archives); those stay as box/<branch> for you to review. " +
+    "It cannot follow what those scripts import from elsewhere in the repo, and your CI runs the box's workflow changes on your next push. " +
+    "A dirty work tree is never touched.");
+  // A repo name is text: it is never read as a replacement pattern.
+  assert.match(cdMergeHomeDialog("/x/$&/y").body, /checked out in \/x\/\$&\/y, with/);
+});
+
+test("cdIsMergeHomeAck: the 400 code, from the error or its body", () => {
+  assert.strictEqual(cdIsMergeHomeAck(Object.assign(new Error("x"), { status: 400, code: "merge_home_ack" })), true);
+  assert.strictEqual(cdIsMergeHomeAck(Object.assign(new Error("x"), { status: 400, body: { code: "merge_home_ack", field: "clone_merge_home" } })), true);
+  assert.strictEqual(cdIsMergeHomeAck(Object.assign(new Error("x"), { status: 500, code: "merge_home_ack" })), false);
+  assert.strictEqual(cdIsMergeHomeAck(Object.assign(new Error("x"), { status: 400, code: "inplace_history" })), false);
+  assert.strictEqual(cdIsMergeHomeAck(null), false);
+});
+
+test("cdSaveWithAcks: a merge_home_ack opens the warning and the same save goes again with ack_merge_home; Cancel resends nothing", async () => {
+  const refuse = Object.assign(new Error("clone_merge_home lets this box change your branch"), { status: 400, code: "merge_home_ack" });
+  const sent = [];
+  const asks = [];
+  const send = async (acks) => { sent.push(Object.assign({}, acks)); if (!acks.merge) throw refuse; return "saved"; };
+  const out = await cdSaveWithAcks(send, { merge: async () => { asks.push("merge"); return true; } });
+  assert.strictEqual(out, "saved");
+  assert.deepStrictEqual(sent, [{ inplace: false, merge: false }, { inplace: false, merge: true }]);
+  assert.deepStrictEqual(asks, ["merge"]);
+  const sent2 = [];
+  await assert.rejects(cdSaveWithAcks(async (a) => { sent2.push(a); throw refuse; }, { merge: async () => false }), (e) => e === refuse);
+  assert.strictEqual(sent2.length, 1, "no resend after Cancel");
+});
+
+test("cdSaveWithAcks: both questions can come, each asked once, and an ack already given is not asked again", async () => {
+  const inplace = Object.assign(new Error("git"), { status: 400, code: "inplace_history" });
+  const merge = Object.assign(new Error("merge"), { status: 400, code: "merge_home_ack" });
+  const asked = [];
+  const send = async (a) => { if (!a.inplace) throw inplace; if (!a.merge) throw merge; return "ok"; };
+  const out = await cdSaveWithAcks(send, { inplace: async (m) => { asked.push(m); return true; }, merge: async (m) => { asked.push(m); return true; } });
+  assert.strictEqual(out, "ok");
+  assert.deepStrictEqual(asked, ["git", "merge"]);
+  let n = 0;
+  await assert.rejects(cdSaveWithAcks(async () => { throw merge; }, { merge: async () => { n++; return true; } }), (e) => e === merge);
+  assert.strictEqual(n, 1);
+  // No asker for it: the refusal passes through untouched.
+  await assert.rejects(cdSaveWithAcks(async () => { throw merge; }, {}), (e) => e === merge);
 });
 
 test("cdSaveWithAck: a second inplace_history after the ack is not asked again", async () => {

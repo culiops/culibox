@@ -140,8 +140,11 @@ type ProfileView struct {
 	BoxClaudeCredential string `json:"box_claude_credential,omitempty"`
 	// AutoReturn: a clone profile whose work comes home on its own (the switch
 	// is on). NotHome is what the clone's last return left behind, if anything.
-	AutoReturn bool                  `json:"auto_return,omitempty"`
-	NotHome    *session.NotHomeState `json:"not_home,omitempty"`
+	AutoReturn bool `json:"auto_return,omitempty"`
+	// MergeHome: a clone profile whose returned work is also fast-forwarded into
+	// the host's checked-out branch (clone_merge_home, #370).
+	MergeHome bool                  `json:"merge_home"`
+	NotHome   *session.NotHomeState `json:"not_home,omitempty"`
 	// Flagged counts the files its box handed back that are still waiting for
 	// the user's review (#346): the clone's returned branches, or the folder an
 	// in-place box wrote into. A count of flags; absent when none.
@@ -750,6 +753,7 @@ func (m *ProfileManager) viewsLocked() ([]ProfileView, func(config.AgentConfig) 
 		}
 		if c, err := a.Clone(); err == nil && c != nil {
 			pv.AutoReturn = !c.NoAutoReturn
+			pv.MergeHome = c.MergeHome
 			if m.notHome != nil {
 				pv.NotHome = m.notHome(*c)
 			}
@@ -877,6 +881,9 @@ type SaveOpts struct {
 	// AckInPlaceHistory is the user's say-so for a clone_of folder that has an
 	// in-place history of unknown content. Never stored on the profile.
 	AckInPlaceHistory bool
+	// AckMergeHome is the user's say-so for turning clone_merge_home on (or
+	// pointing a profile that has it on at another repo). Never stored.
+	AckMergeHome bool
 }
 
 // CreateWith is Create with the request's SaveOpts.
@@ -979,6 +986,9 @@ func (m *ProfileManager) save(p config.AgentConfig, o SaveOpts, guard func() err
 	if err := m.checkInPlaceHistoryLocked(p, cur.CloneOf, o); err != nil {
 		return "", err
 	}
+	if err := m.checkMergeHomeAckLocked(p, cur.CloneMergeHome, cur.CloneOf, o); err != nil {
+		return "", err
+	}
 	if err := m.recordLocked(action, p.Name, detail); err != nil {
 		return "", err
 	}
@@ -1019,6 +1029,34 @@ func (m *ProfileManager) checkInPlaceHistoryLocked(p config.AgentConfig, prevOf 
 		return &InPlaceHistoryError{Of: p.CloneOf}
 	}
 	return m.recordLocked("clone_ack_inplace_history", p.Name, "clone_of "+p.CloneOf)
+}
+
+// MergeHomeAckError is a save refused because it turns clone_merge_home on: the
+// profile's returned work would then be merged into the checked-out branch of Of
+// on this machine, which only the user may allow. The user's ack
+// (SaveOpts.AckMergeHome) saves it.
+type MergeHomeAckError struct{ Of string }
+
+func (e *MergeHomeAckError) Error() string {
+	return fmt.Sprintf("clone_merge_home lets this profile's box change the branch you have checked out in %s on this machine "+
+		"(only by fast-forward, never over uncommitted work). Save again and confirm to turn it on", e.Of)
+}
+
+// checkMergeHomeAckLocked asks for the user's ack when a save turns
+// clone_merge_home on, or changes clone_of while it is on. A profile that
+// already had it on at the same clone_of, and any save that leaves it off, asks
+// nothing. An ack that was needed is audited, before the write it allows, like
+// every profile row; one that was not needed leaves no row. Caller holds m.mu.
+// prevOn and prevOf are the stored profile's values (false and "" when there is
+// none).
+func (m *ProfileManager) checkMergeHomeAckLocked(p config.AgentConfig, prevOn bool, prevOf string, o SaveOpts) error {
+	if !p.CloneMergeHome || (prevOn && p.CloneOf == prevOf) {
+		return nil
+	}
+	if !o.AckMergeHome {
+		return &MergeHomeAckError{Of: p.CloneOf}
+	}
+	return m.recordLocked("clone_ack_merge_home", p.Name, "clone_of "+p.CloneOf)
 }
 
 // checkClone is the save-time form of the clone checks: a clone profile must

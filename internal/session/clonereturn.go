@@ -64,6 +64,36 @@ type NotHomeBranch struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// MergeNote is the last automatic merge of a returned box/X into the host's
+// checked-out X (#370): what it did, or the reason it did not. It mirrors
+// clone.MergeResult field for field (session does not import clone). Strings
+// are sanitized by the clone layer.
+type MergeNote struct {
+	At      time.Time `json:"at"`
+	Branch  string    `json:"branch"`
+	From    string    `json:"from,omitempty"`
+	To      string    `json:"to,omitempty"`
+	Merged  bool      `json:"merged,omitempty"`
+	Commits int       `json:"commits,omitempty"`
+	Files   int       `json:"files,omitempty"`
+	Reason  string    `json:"reason,omitempty"`
+	Detail  string    `json:"detail,omitempty"`
+	Paths   []string  `json:"paths,omitempty"`
+	// Attempted: `git merge` ran and git refused it (reason "failed"); false for a
+	// failure before it, which the UI words differently.
+	Attempted bool `json:"attempted,omitempty"`
+}
+
+// copy returns an independent MergeNote, nil for nil.
+func (m *MergeNote) copy() *MergeNote {
+	if m == nil {
+		return nil
+	}
+	out := *m
+	out.Paths = slices.Clone(m.Paths)
+	return &out
+}
+
 // ReturnSummary is the outcome of one return. Skipped is why nothing was
 // attempted ("in-use", "other-instance", "unavailable"). Immutable once stored
 // on a session; Info hands out copies.
@@ -86,6 +116,9 @@ type ReturnSummary struct {
 	Uncommitted    *int   `json:"uncommitted,omitempty"`
 	UncommittedCut bool   `json:"uncommitted_cut,omitempty"`
 	Profile        string `json:"profile,omitempty"`
+	// Merge is what the automatic merge into the checked-out branch did; absent
+	// when the profile does not opt in or the return did not reach it.
+	Merge *MergeNote `json:"merge,omitempty"`
 }
 
 // copy returns an independent ReturnSummary, nil for nil.
@@ -102,6 +135,7 @@ func (r *ReturnSummary) copy() *ReturnSummary {
 		n := *r.Uncommitted
 		out.Uncommitted = &n
 	}
+	out.Merge = r.Merge.copy()
 	return &out
 }
 
@@ -132,6 +166,8 @@ type NotHomeState struct {
 	// Uncommitted and UncommittedCut are as on ReturnSummary.
 	Uncommitted    *int `json:"uncommitted,omitempty"`
 	UncommittedCut bool `json:"uncommitted_cut,omitempty"`
+	// Merge is the last automatic merge result, as on ReturnSummary.
+	Merge *MergeNote `json:"merge,omitempty"`
 }
 
 // cloneLive returns the scan "does a non-exited boxed session use this clone

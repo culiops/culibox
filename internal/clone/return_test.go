@@ -718,3 +718,207 @@ func TestReturnKeepsUncommittedOnError(t *testing.T) {
 		t.Errorf("state = %+v, %v, %v; want Uncommitted 4 (cut) kept", st, ok, err)
 	}
 }
+
+// mergeReq is retReq with the profile opted in to merging home and an audit
+// recorder.
+func (x *fetchFx) mergeReq(mode ReturnMode, a *auditRec) ReturnRequest {
+	r := x.retReq(mode)
+	r.Clone.MergeHome = true
+	r.MergeAudit = a.fn
+	return r
+}
+
+func (x *fetchFx) hostTip(branch string) string {
+	x.t.Helper()
+	got, err := x.ofRev("refs/heads/" + branch)
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	return got
+}
+
+func TestReturnMergesWhenOptedIn(t *testing.T) {
+	x := newReturnFx(t)
+	a := &auditRec{}
+	before := x.hostTip("main")
+	res := Return(context.Background(), x.rec, x.dock, x.mergeReq(ReturnAuto, a))
+	if res.Error != "" {
+		t.Fatalf("Error = %q", res.Error)
+	}
+	if res.Merge == nil || !res.Merge.Merged || res.Merge.Branch != "main" {
+		t.Fatalf("Merge = %+v, want main merged", res.Merge)
+	}
+	want := strings.TrimSpace(gitIn(t, x.req.Clone.Dir, "", "rev-parse", "refs/heads/main"))
+	if got := x.hostTip("main"); got != want || got == before {
+		t.Errorf("host main = %s, want the clone's main %s", got, want)
+	}
+	if !slices.Equal(a.actions(), []string{"clone_merge_home"}) {
+		t.Errorf("audit = %q", a.calls)
+	}
+	st, ok, err := ReadReturnState(x.req.DataDir, x.req.Clone.Dir)
+	if err != nil || !ok || st.Merge == nil || !st.Merge.Merged || st.Merge.To != want {
+		t.Errorf("state = %+v, %v, %v; want the merge recorded", st, ok, err)
+	}
+}
+
+func TestReturnNoMergeForForcedDryOrError(t *testing.T) {
+	cases := []struct {
+		name string
+		mode ReturnMode
+		edit func(r *ReturnRequest)
+		err  bool
+	}{
+		{"forced", ReturnForced, func(*ReturnRequest) {}, false},
+		{"dry", ReturnDry, func(*ReturnRequest) {}, false},
+		{"listing failure", ReturnAuto, func(r *ReturnRequest) { r.Image = "" }, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			x := newReturnFx(t)
+			a := &auditRec{}
+			req := x.mergeReq(c.mode, a)
+			c.edit(&req)
+			before := x.hostTip("main")
+			res := Return(context.Background(), x.rec, x.dock, req)
+			if (res.Error != "") != c.err {
+				t.Fatalf("Error = %q, want error=%v", res.Error, c.err)
+			}
+			if res.Merge != nil {
+				t.Errorf("Merge = %+v, want nil", res.Merge)
+			}
+			if x.hostTip("main") != before || len(a.calls) != 0 {
+				t.Errorf("host main moved or audit written: %q", a.calls)
+			}
+			if st, ok, err := ReadReturnState(x.req.DataDir, x.req.Clone.Dir); err != nil || !ok || st.Merge != nil {
+				t.Errorf("state = %+v, %v, %v; want no merge", st, ok, err)
+			}
+		})
+	}
+}
+
+func TestReturnMergesWhenNothingMoved(t *testing.T) {
+	x := newReturnFx(t)
+	a := &auditRec{}
+	// A tracked file of the host is edited: the first pass is refused.
+	if err := os.WriteFile(filepath.Join(x.of, "a"), []byte("edited"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := Return(context.Background(), x.rec, x.dock, x.mergeReq(ReturnAuto, a))
+	if res.Merge == nil || res.Merge.Reason != MergeDirty {
+		t.Fatalf("first Merge = %+v, want dirty", res.Merge)
+	}
+	if st, _, _ := ReadReturnState(x.req.DataDir, x.req.Clone.Dir); st.Merge == nil || st.Merge.Reason != MergeDirty {
+		t.Errorf("state Merge = %+v, want dirty", st.Merge)
+	}
+	fixtureGit(t, x.of, "checkout", "-q", "--", "a")
+	// Second pass: no new box commit, nothing comes home, the merge is still tried.
+	res = Return(context.Background(), x.rec, x.dock, x.mergeReq(ReturnAuto, a))
+	if len(res.Home) != 0 {
+		t.Fatalf("Home = %q, want nothing moved", res.Home)
+	}
+	if res.Merge == nil || !res.Merge.Merged {
+		t.Fatalf("second Merge = %+v, want merged", res.Merge)
+	}
+}
+
+// box/X in clone_of is shared by every clone of the repo: a box/main another
+// clone wrote (here one the clone's main cannot fast-forward, so this return
+// leaves it) is not this profile's work and is never merged.
+func TestReturnDoesNotMergeAnotherClonesBox(t *testing.T) {
+	x := newReturnFx(t)
+	env := append(CleanEnv(), "GIT_AUTHOR_NAME=F", "GIT_AUTHOR_EMAIL=f@x", "GIT_COMMITTER_NAME=F", "GIT_COMMITTER_EMAIL=f@x")
+	out, err := x.rec.g.Run(context.Background(), x.of, env, "commit-tree", "-m", "another clone", "-p", "refs/heads/main", "refs/heads/main^{tree}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := strings.TrimSpace(string(out))
+	fixtureGit(t, x.of, "update-ref", "refs/heads/box/main", other)
+	before := x.hostTip("main")
+	a := &auditRec{}
+	res := Return(context.Background(), x.rec, x.dock, x.mergeReq(ReturnAuto, a))
+	if res.Error != "" {
+		t.Fatalf("Error = %q", res.Error)
+	}
+	if got, _ := x.ofRev("refs/heads/box/main"); got != other {
+		t.Fatalf("box/main = %s, want the other clone's %s left in place", got, other)
+	}
+	if res.Merge != nil {
+		t.Fatalf("Merge = %+v, want nil: box/main is not this clone's", res.Merge)
+	}
+	if x.hostTip("main") != before || len(a.calls) != 0 {
+		t.Fatalf("host main moved or audit written: %q", a.calls)
+	}
+}
+
+func TestReturnMergeOffIsUnchanged(t *testing.T) {
+	x := newReturnFx(t)
+	res := x.ret(ReturnAuto)
+	if res.Merge != nil {
+		t.Fatalf("Merge = %+v with the flag off", res.Merge)
+	}
+	for _, c := range x.rec.calls {
+		if c.dir != x.of {
+			continue
+		}
+		for _, a := range c.args {
+			if a == "symbolic-ref" || a == "merge" || a == "check-attr" {
+				t.Errorf("clone_of git call %q with the flag off", c.args)
+			}
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(x.req.DataDir, returnStateDir, mustStateName(t, x.req.Clone.Dir)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"merge"`) {
+		t.Errorf("state has a merge key: %s", raw)
+	}
+}
+
+func mustStateName(t *testing.T, dir string) string {
+	t.Helper()
+	n, err := returnStateName(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestReturnStateMergeCarry(t *testing.T) {
+	// A nil result after a merge keeps the merge; after a refusal it clears it.
+	x := newReturnFx(t)
+	a := &auditRec{}
+	res := Return(context.Background(), x.rec, x.dock, x.mergeReq(ReturnAuto, a))
+	if res.Merge == nil || !res.Merge.Merged {
+		t.Fatalf("Merge = %+v, want merged", res.Merge)
+	}
+	merged := *res.Merge
+	res = Return(context.Background(), x.rec, x.dock, x.mergeReq(ReturnAuto, a)) // X == box/X: nothing to do
+	if res.Merge != nil {
+		t.Fatalf("second Merge = %+v, want nil", res.Merge)
+	}
+	st, _, err := ReadReturnState(x.req.DataDir, x.req.Clone.Dir)
+	if err != nil || st.Merge == nil || !st.Merge.Merged || st.Merge.To != merged.To || !st.Merge.At.Equal(merged.At) {
+		t.Fatalf("state Merge = %+v, %v; want the previous merge kept", st.Merge, err)
+	}
+
+	y := newReturnFx(t)
+	if err := os.WriteFile(filepath.Join(y.of, "a"), []byte("edited"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res = Return(context.Background(), y.rec, y.dock, y.mergeReq(ReturnAuto, a))
+	if res.Merge == nil || res.Merge.Reason != MergeDirty {
+		t.Fatalf("Merge = %+v, want dirty", res.Merge)
+	}
+	// The host moves ahead of box/main: nothing to bring, so no result.
+	fixtureGit(t, y.of, "checkout", "-q", "--", "a")
+	fixtureGit(t, y.of, "merge", "-q", "--ff-only", "box/main")
+	y.hostCommit("h.txt", "h", "host ahead")
+	res = Return(context.Background(), y.rec, y.dock, y.mergeReq(ReturnAuto, a))
+	if res.Merge != nil {
+		t.Fatalf("Merge = %+v, want nil", res.Merge)
+	}
+	if st, _, err := ReadReturnState(y.req.DataDir, y.req.Clone.Dir); err != nil || st.Merge != nil {
+		t.Errorf("state Merge = %+v, %v; want it dropped after a refusal", st.Merge, err)
+	}
+}

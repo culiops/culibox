@@ -19,11 +19,13 @@
 //                runtime, through runtimeToSend (always explicit). It reads the whole profile, so
 //                it is merged after every other block's keys are in. box_only is written only when
 //                the values name boxOnly (false removes the key); without it box_only stays as stored.
-//   workspace  { mode: "folder"|"copy", folder, copyDir, shareText, autoReturn }
-//                default_cwd, clone_of, clone_share, clone_no_auto_return, through
-//                wmFieldsToSend; the four are replaced as a unit, and no mode writes nothing.
-//                In copy mode a shareText or autoReturn that is omitted (or undefined) keeps the
-//                stored share list and auto-return opt-out; folder mode drops all four
+//   workspace  { mode: "folder"|"copy", folder, copyDir, shareText, autoReturn, mergeHome, mergeAck }
+//                default_cwd, clone_of, clone_share, clone_no_auto_return, clone_merge_home
+//                (and, for one save only, ack_merge_home), through wmFieldsToSend; they are
+//                replaced as a unit, and no mode writes nothing.
+//                In copy mode a shareText, autoReturn or mergeHome that is omitted (or undefined)
+//                keeps the stored share list, auto-return opt-out and merge switch; folder mode
+//                drops them all
 //   agent      { bin, account, options: { model, effort, effortLevel }, dropOptions: [key] }
 //                dropOptions: options removed whatever their value, the ones the new command does not take
 //                (the caller knows the option definitions; the server refuses such an option)
@@ -63,7 +65,7 @@ const pfeGhWritable = () => (typeof GH_WRITABLE !== "undefined" ? GH_WRITABLE : 
 const PFE_AGENT_OPTIONS = ["model", "effort", "effortLevel", "permission_mode", "skip_critical_rm_prompt"];
 
 // The keys the Workspace block replaces as a unit.
-const PFE_WORKSPACE_KEYS = ["default_cwd", "clone_of", "clone_share", "clone_no_auto_return"];
+const PFE_WORKSPACE_KEYS = ["default_cwd", "clone_of", "clone_share", "clone_no_auto_return", "clone_merge_home", "ack_merge_home"];
 
 // What a box gives that the host tier cannot hold: the server refuses each of
 // these on host (config/aws.go, awsconn.go, clone.go, the egress checks).
@@ -73,7 +75,7 @@ const PFE_BOX_ONLY = ["aws_connections", "aws", "github", "tokens", "context_pat
 // and the block that edits it. `options.<key>` and `name` are handled apart.
 const PFE_FIELD_BLOCK = new Map([
   ["runtime", "runs"], ["box_only", "runs"],
-  ["default_cwd", "workspace"], ["clone_of", "workspace"], ["clone_share", "workspace"], ["clone_no_auto_return", "workspace"],
+  ["default_cwd", "workspace"], ["clone_of", "workspace"], ["clone_share", "workspace"], ["clone_no_auto_return", "workspace"], ["clone_merge_home", "workspace"],
   ["bin", "agent"], ["account", "agent"],
   ["aws", "cloud"], ["aws_connections", "cloud"], ["github", "cloud"], ["tokens", "cloud"],
   ["context_paths", "reachable"], ["egress_allow", "reachable"],
@@ -199,6 +201,7 @@ const PFE_MERGE = {
     if (v.mode === "copy") {
       if (given.shareText === undefined) given.shareText = pfeLines(doc.clone_share).join("\n");
       if (given.autoReturn === undefined) given.autoReturn = doc.clone_no_auto_return !== true;
+      if (given.mergeHome === undefined) given.mergeHome = doc.clone_merge_home === true;
     }
     for (const k of PFE_WORKSPACE_KEYS) delete out[k];
     Object.assign(out, pfeDep("wmFieldsToSend", "./workmode.js")(v.mode, given));
@@ -396,7 +399,7 @@ function pfvDuplicateDoc(src, name, o) {
     pfeSet(out, "default_cwd", fresh);
   } else if (wasCopy) {
     // The folder to copy was emptied: nothing of the copy is left to keep (the page refuses this before it gets here).
-    for (const k of ["default_cwd", "clone_share", "clone_no_auto_return"]) delete out[k];
+    for (const k of ["default_cwd", "clone_share", "clone_no_auto_return", "clone_merge_home"]) delete out[k];
   }
   return out;
 }

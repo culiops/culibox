@@ -1345,3 +1345,16 @@ func TestGitBool(t *testing.T) {
 		t.Error("a key with no value is true")
 	}
 }
+
+// The in-place guard list seeds the merge guard, so it must not be a slice any
+// package can shrink: the func hands out a copy (#370).
+func TestInPlaceGuardFilesIsACopy(t *testing.T) {
+	a := InPlaceGuardFiles()
+	if !slices.Contains(a, "CLAUDE.md") || !slices.Contains(a, ".mcp.json") {
+		t.Fatalf("InPlaceGuardFiles() = %q, want the instruction and MCP files", a)
+	}
+	a[0] = "changed"
+	if b := InPlaceGuardFiles(); b[0] == "changed" {
+		t.Fatalf("a change to the returned slice reached the list: %q", b)
+	}
+}

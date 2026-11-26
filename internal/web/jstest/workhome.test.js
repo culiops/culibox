@@ -2,7 +2,7 @@
 // workhome.js: the wording for where a private copy's work goes and what is not home.
 const test = require("node:test");
 const assert = require("node:assert");
-const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome, notHomePrefix, notHomeHostSigs } = require("../static/workhome.js");
+const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews, uncommittedLabel, notHomeLine, hostReturnToast, notHomeSig, sessionNotHome, notHomePrefix, notHomeHostSigs, mergeReasonText, mergeToastPart, mergeSig, mergeLastLine, mergeHomeLine } = require("../static/workhome.js");
 
 const ON = " · work comes home as box/* branches";
 const OFF = " · work stays in the copy (auto-return off)";
@@ -423,4 +423,135 @@ test("notHomeHostSigs: one sig per announced not-home set, so the profile load d
   // What the toast announced, the profile poll then finds already seen.
   const prof = [{ name: "p", not_home: { at: "A", branches: nh } }];
   assert.deepStrictEqual(notHomeNews(notHomeHostSigs(list), prof).toasts, []);
+});
+
+// --- opt-in merge into the checked-out branch (#370) --------------------------
+const MG = (over) => Object.assign({ at: "t1", branch: "main", from: "aaa1111", to: "bbb2222", merged: false }, over);
+
+test("merge toast parts: the merged line, singular and plural", () => {
+  assert.strictEqual(mergeToastPart(MG({ merged: true, commits: 3, files: 5 })), "merged box/main into main (3 commits, 5 files)");
+  assert.strictEqual(mergeToastPart(MG({ merged: true, commits: 1, files: 1 })), "merged box/main into main (1 commit, 1 file)");
+  assert.strictEqual(mergeToastPart(null), "");
+  assert.strictEqual(mergeToastPart(MG({})), "", "neither merged nor refused: nothing to say");
+});
+
+test("merge toast parts: each refusal reason has its exact words", () => {
+  const part = (reason, extra) => mergeToastPart(MG(Object.assign({ reason }, extra)));
+  assert.strictEqual(part("detached"), "box/main not merged into main: the repo has no branch checked out");
+  assert.strictEqual(part("diverged"), "box/main not merged into main: main has commits the box does not have");
+  assert.strictEqual(part("dirty"), "box/main not merged into main: main has uncommitted changes");
+  assert.strictEqual(part("guarded", { paths: [".claude/x", "CLAUDE.md"] }), "box/main not merged into main: it changes files host tools load by themselves: .claude/x, CLAUDE.md");
+  assert.strictEqual(part("flagged", { paths: ["run.sh"] }), "box/main not merged into main: it has files flagged for review: run.sh");
+  assert.strictEqual(part("filter", { paths: ["big.bin"] }), "box/main not merged into main: it changes files that use a git filter (such as Git LFS): big.bin");
+  assert.strictEqual(part("moved"), "box/main not merged into main: main moved while it was checked; it is tried again on the next return");
+  assert.strictEqual(part("failed", { attempted: true, detail: "untracked file in the way" }), "box/main not merged into main: git refused: untracked file in the way");
+  assert.strictEqual(part("failed", { detail: "cannot check git attributes: x" }), "box/main not merged into main: could not merge: cannot check git attributes: x");
+  assert.strictEqual(mergeReasonText(MG({ reason: "dirty" })), "main has uncommitted changes");
+  assert.strictEqual(mergeReasonText(MG({ reason: "from-a-newer-server" })), "it was not merged");
+});
+
+test("merge toast parts: a refusal with no branch does not name empty branches", () => {
+  const part = (m) => mergeToastPart({ at: "t1", branch: "", merged: false, ...m });
+  assert.strictEqual(part({ reason: "detached" }), "box work not merged: the repo has no branch checked out");
+  assert.strictEqual(part({ reason: "failed", detail: "cannot read HEAD: x" }), "box work not merged: could not merge: cannot read HEAD: x");
+  assert.strictEqual(mergeLastLine({ at: "t1", branch: "", reason: "detached" }), "box work not merged: the repo has no branch checked out");
+});
+
+test("mergeSig: profile, to and reason", () => {
+  assert.strictEqual(mergeSig("p", MG({ reason: "dirty" })), "p|bbb2222|dirty");
+});
+
+test("a returned summary's merge rides the toast: merged shows on an idle return too", () => {
+  const merged = MG({ merged: true, commits: 2, files: 4 });
+  assert.strictEqual(returnToastText("p", { trigger: "idle", home: [], merge: merged }), "p: merged box/main into main (2 commits, 4 files)");
+  assert.strictEqual(returnToastText("p", { trigger: "exit", home: ["main"], merge: merged }), "p: main came home · merged box/main into main (2 commits, 4 files)");
+  assert.strictEqual(returnToastText("p", { trigger: "idle", home: [], merge: MG({ reason: "dirty" }) }), "p: box/main not merged into main: main has uncommitted changes");
+});
+
+test("merge refusal is announced once: a new at with the same (to, reason) is silent; a new to is a second toast", () => {
+  const poll = (at, to, reason) => [{ id: "s1", agent: "p", clone_of: "/r", return: { trigger: "idle", at, home: [], merge: MG({ at, to, reason }) } }];
+  const first = returnNews(null, [], [{ id: "s1", agent: "p", clone_of: "/r" }]);
+  const a = returnNews(first.seen, first.cloneIds, poll("t1", "c1", "dirty"));
+  assert.deepStrictEqual(a.toasts, ["p: box/main not merged into main: main has uncommitted changes"]);
+  assert.ok(a.sigs.includes(mergeSig("p", MG({ to: "c1", reason: "dirty" }))), "the profile load must find it seen");
+  const b = returnNews(a.seen, a.cloneIds, poll("t2", "c1", "dirty"));
+  assert.deepStrictEqual(b.toasts, [], "same (to, reason), new at");
+  const c = returnNews(b.seen, b.cloneIds, poll("t3", "c2", "dirty"));
+  assert.strictEqual(c.toasts.length, 1, "a new to is news");
+  const d = returnNews(c.seen, c.cloneIds, poll("t4", "c2", "diverged"));
+  assert.strictEqual(d.toasts.length, 1, "a new reason is news");
+});
+
+test("a merged line is announced on every merge, however alike", () => {
+  const poll = (at) => [{ id: "s1", agent: "p", clone_of: "/r", return: { trigger: "idle", at, home: [], merge: MG({ at, merged: true, commits: 1, files: 1 }) } }];
+  const first = returnNews(null, [], [{ id: "s1", agent: "p", clone_of: "/r" }]);
+  const a = returnNews(first.seen, first.cloneIds, poll("t1"));
+  const b = returnNews(a.seen, a.cloneIds, poll("t2"));
+  assert.strictEqual(a.toasts.length, 1);
+  assert.strictEqual(b.toasts.length, 1);
+  assert.deepStrictEqual(a.sigs, [], "a merged line is not a refusal: nothing for the profile load to dedupe");
+});
+
+test("merge refusal from the profile load: once per (to, reason), also with nothing else not home", () => {
+  const prof = (at, to, reason) => [{ name: "p", not_home: { at, merge: MG({ at, to, reason }) } }];
+  const first = notHomeNews([], prof("A", "c1", "dirty"));
+  assert.deepStrictEqual(first.toasts, ["p: box/main not merged into main: main has uncommitted changes"]);
+  assert.deepStrictEqual(first.seen, ["p|c1|dirty"]);
+  const again = notHomeNews(first.seen, prof("B", "c1", "dirty"));
+  assert.deepStrictEqual(again.toasts, []);
+  const moved = notHomeNews(again.seen, prof("C", "c2", "dirty"));
+  assert.strictEqual(moved.toasts.length, 1);
+  assert.deepStrictEqual(moved.seen, ["p|c2|dirty"], "pruned to the current one");
+  // A merged state, or none, announces nothing and prunes.
+  const ok = notHomeNews(moved.seen, [{ name: "p", not_home: { at: "D", merge: MG({ merged: true, commits: 1, files: 1 }) } }]);
+  assert.deepStrictEqual(ok, { toasts: [], seen: [] });
+});
+
+test("the session toast and the profile load do not both announce one refusal", () => {
+  const list = [{ id: "s1", agent: "p", clone_of: "/r", return: { trigger: "exit", at: "t1", home: [], merge: MG({ to: "c1", reason: "dirty" }) } }];
+  const first = returnNews(null, [], [{ id: "s1", agent: "p", clone_of: "/r" }]);
+  const n = returnNews(first.seen, first.cloneIds, list);
+  assert.strictEqual(n.toasts.length, 1);
+  const prof = [{ name: "p", not_home: { at: "t1", merge: MG({ to: "c1", reason: "dirty" }) } }];
+  assert.deepStrictEqual(notHomeNews(n.sigs, prof).toasts, []);
+});
+
+test("a host return's merge refusal is marked seen like its not-home set", () => {
+  const sum = { trigger: "host", profile: "p", home: [], not_home: [], merge: MG({ to: "c1", reason: "dirty" }) };
+  assert.deepStrictEqual(notHomeHostSigs([sum]), ["p|c1|dirty"]);
+  assert.strictEqual(hostReturnToast([sum]), "p: box/main not merged into main: main has uncommitted changes");
+});
+
+test("profile line: the switch's words when on, then the last merge or the refusal", () => {
+  assert.strictEqual(mergeHomeLine(true), "Merges into the checked-out branch");
+  assert.strictEqual(mergeHomeLine(false), "");
+  assert.strictEqual(mergeHomeLine(undefined), "");
+  const fmt = (at) => "<" + at + ">";
+  assert.strictEqual(mergeLastLine(MG({ merged: true, commits: 2, files: 1, at: "T" }), fmt), "merged box/main into main (aaa1111..bbb2222) at <T>");
+  const full = MG({ merged: true, at: "T", from: "0123456789abcdef0123456789abcdef01234567", to: "fedcba9876543210fedcba9876543210fedcba98" });
+  assert.strictEqual(mergeLastLine(full, fmt), "merged box/main into main (0123456..fedcba9) at <T>");
+  assert.strictEqual(mergeLastLine(MG({ merged: true, at: "T", from: "", to: "" }), fmt), "merged box/main into main at <T>");
+  assert.strictEqual(mergeLastLine(MG({ reason: "dirty" }), fmt), "box/main not merged into main: main has uncommitted changes");
+  assert.strictEqual(mergeLastLine(null, fmt), "");
+  assert.strictEqual(mergeLastLine(MG({}), fmt), "");
+});
+
+test("pathBreakParts: split after each slash so a long path can wrap between names (#370)", () => {
+  const { pathBreakParts } = require("../static/workhome.js");
+  assert.deepStrictEqual(pathBreakParts("docs/handover/CLAUDE.md"), ["docs/", "handover/", "CLAUDE.md"]);
+  assert.deepStrictEqual(pathBreakParts("a b/c"), ["a b/", "c"]);
+  assert.deepStrictEqual(pathBreakParts("/a//b/"), ["/", "a/", "/", "b/"]);
+  assert.deepStrictEqual(pathBreakParts("none"), ["none"]);
+  assert.deepStrictEqual(pathBreakParts(""), []);
+  assert.strictEqual(pathBreakParts("x/y/z").join(""), "x/y/z", "the words are unchanged");
+});
+
+test("pathBreakNodes: text nodes with a wbr after each slash, the text itself unchanged (#370)", () => {
+  const { pathBreakNodes } = require("../static/workhome.js");
+  const { Node, Text } = require("./fakedom.js");
+  const doc = { createElement: (t) => new Node(t, doc), createTextNode: (t) => new Text(t) };
+  const nodes = pathBreakNodes("a/b/c.md", doc);
+  assert.deepStrictEqual(nodes.map((n) => (n instanceof Text ? "t:" + n.textContent : n.tag)), ["t:a/", "wbr", "t:b/", "wbr", "t:c.md"]);
+  assert.strictEqual(nodes.map((n) => n.textContent).join(""), "a/b/c.md");
+  assert.deepStrictEqual(pathBreakNodes("", doc), []);
 });

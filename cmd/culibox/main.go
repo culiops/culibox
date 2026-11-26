@@ -669,7 +669,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		log.Printf("clone mode unavailable (%v); clone-mode profiles are refused", err)
 	}
 	if h != nil { // non-nil even when unavailable: the box-owned guard stays on
-		h.boxed = boxedReg // a folder boxed in place without git is never a clone source (#371)
+		h.audit = storeAudit.RecordCred // every automatic merge is audited before it happens (#370)
+		h.boxed = boxedReg              // a folder boxed in place without git is never a clone source (#371)
 		mgr.SetClone(h)
 	}
 

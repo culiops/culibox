@@ -67,6 +67,9 @@ type ReturnRequest struct {
 	Mode                                    ReturnMode
 	Image, Instance, TempDir, Home, DataDir string // as in FetchRequest
 	Protected                               []box.ProtectedDir
+	// MergeAudit writes the audit row MergeHome needs before it moves the host's
+	// checked-out branch; nil means no row can be written and nothing is merged.
+	MergeAudit func(action, detail string) error
 }
 
 type ReturnResult struct {
@@ -84,6 +87,10 @@ type ReturnResult struct {
 	Uncommitted *int
 	// UncommittedCut: the 64 KiB cap cut the status part, so Uncommitted is a floor.
 	UncommittedCut bool
+	// Merge is what merging home did or why it did not (see MergeHome); nil when
+	// the profile does not opt in, the pass was not an automatic one or failed,
+	// or there was nothing to merge.
+	Merge *MergeResult
 }
 
 // ListArgs is the docker argv (after "docker") of the listing container. It has
@@ -119,7 +126,7 @@ func Return(ctx context.Context, g Git, d Docker, r ReturnRequest) ReturnResult 
 			prev = st
 		}
 	}
-	returnBranches(ctx, g, d, r, prev, &res)
+	tips := returnBranches(ctx, g, d, r, prev, &res)
 	if res.Error != "" {
 		// Nothing was checked, so nothing is learned: what was not home stays so.
 		res.Home, res.NotHome = nil, slices.Clone(prev.NotHome)
@@ -135,9 +142,22 @@ func Return(ctx context.Context, g Git, d Docker, r ReturnRequest) ReturnResult 
 		slices.Sort(res.Home)
 		slices.SortFunc(res.NotHome, func(a, b NotHome) int { return strings.Compare(a.Branch, b.Branch) })
 	}
+	// Merging home runs after every automatic pass that could check the clone,
+	// also when nothing moved: a refusal (a dirty tree) may have cleared since.
+	if r.Clone.MergeHome && r.Mode == ReturnAuto && res.Error == "" && res.Base != "" {
+		res.Merge = MergeHome(ctx, g, MergeRequest{Of: r.Clone.Of, Home: r.Home, Prev: prev.Merge, Audit: r.MergeAudit, CloneTips: tips})
+	}
 	if r.DataDir != "" {
 		st := ReturnState{At: res.At, Base: res.Base, NotHome: res.NotHome, Error: res.Error,
 			Uncommitted: res.Uncommitted, UncommittedCut: res.UncommittedCut}
+		switch {
+		case res.Merge != nil:
+			m := *res.Merge
+			m.Paths = slices.Clone(m.Paths)
+			st.Merge = &m
+		case r.Clone.MergeHome && prev.Merge != nil && prev.Merge.Merged:
+			st.Merge = prev.Merge // a merge stays the last word until something else is said
+		}
 		if err := WriteReturnState(r.DataDir, r.Clone.Dir, st); err != nil {
 			res.Warnings = append(res.Warnings, "could not record what is not home: "+sanitizeN(err.Error(), maxErrRunes))
 		}
@@ -147,7 +167,9 @@ func Return(ctx context.Context, g Git, d Docker, r ReturnRequest) ReturnResult 
 
 type listedBranch struct{ name, sha string }
 
-func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev ReturnState, res *ReturnResult) {
+// returnBranches does the pass and returns this clone's listing, branch name
+// -> commit (nil when the listing did not run or failed).
+func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev ReturnState, res *ReturnResult) (tips map[string]string) {
 	of := r.Clone.Of
 	stopped := func() string {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -180,6 +202,10 @@ func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev 
 		return
 	}
 	entries, cut := parseList(out.buf.String(), res)
+	tips = make(map[string]string, len(entries))
+	for _, e := range entries {
+		tips[e.name] = e.sha
+	}
 	if out.over && res.Uncommitted != nil {
 		res.UncommittedCut = true // the cap fell in the status part
 	} else if out.over {
@@ -295,6 +321,7 @@ func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev 
 			res.Warnings = append(res.Warnings, "box/"+b+": "+w)
 		}
 	}
+	return tips
 }
 
 // parseList reads the listing: complete lines only, each "<sha> refs/heads/<name>"
