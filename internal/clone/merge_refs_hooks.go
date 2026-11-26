@@ -294,7 +294,7 @@ func stripJSONC(b []byte) []byte {
 
 var (
 	recipeKeyRE     = regexp.MustCompile(`^[A-Za-z0-9_./-]+:(?:\s+|$)`)
-	recipeIncludeRE = regexp.MustCompile(`^(include|-include|sinclude|import|mod)\s+(.*)$`)
+	recipeIncludeRE = regexp.MustCompile(`^(include|-include|sinclude|import\??|mod\??)\s+(.*)$`)
 	taskIncludeRE   = regexp.MustCompile(`^\s*(?:-\s+)?taskfile:\s*(\S.*)$`)
 	taskEntryRE     = regexp.MustCompile(`^\s+[A-Za-z0-9_.-]+:\s+(\S.*)$`)
 )
@@ -399,11 +399,12 @@ func (s *refSink) scanRecipesIn(data []byte, dir string) {
 			continue
 		}
 		if m := recipeIncludeRE.FindStringSubmatch(t); m != nil {
-			for _, a := range strings.Fields(m[2]) {
-				s.pathArg(a)
-				if m[1] == "mod" {
-					s.recipeInclude(dir, []string{a + ".just", a + "/mod.just", a + "/justfile", a})
-				} else {
+			kw, args := strings.TrimSuffix(m[1], "?"), strings.Fields(m[2])
+			if kw == "mod" {
+				s.justMod(dir, args)
+			} else {
+				for _, a := range args {
+					s.pathArg(a)
 					s.recipeInclude(dir, []string{a})
 				}
 			}
@@ -411,6 +412,40 @@ func (s *refSink) scanRecipesIn(data []byte, dir string) {
 		s.command(t)
 		if dir != "." { // an included file's recipes may run in its folder
 			s.command("cd " + dir + " && " + t)
+		}
+	}
+}
+
+// justMod reads "mod NAME [PATH]": the module is PATH when given (a file, or a
+// folder holding mod.just or a justfile), else NAME.just or a folder NAME with
+// mod.just, justfile or .justfile (found case-insensitively). Every candidate
+// is also denied, found or not.
+func (s *refSink) justMod(dir string, args []string) {
+	if len(args) == 0 {
+		return
+	}
+	base := cleanRaw(args[0])
+	if len(args) > 1 {
+		base = cleanRaw(args[len(args)-1])
+	}
+	if base == "" || strings.ContainsAny(base, "$*(") {
+		return
+	}
+	cands := []string{base + ".just", base + "/mod.just", base + "/justfile", base + "/.justfile"}
+	if len(args) > 1 {
+		cands = append([]string{base}, cands[1:]...)
+	}
+	for _, c := range cands {
+		s.pathArg(c)
+		for _, d := range []string{dir, "."} {
+			rel := path.Join(d, c)
+			l := s.listing(path.Dir(rel))
+			if name, ok := l.names[strings.ToLower(path.Base(rel))]; ok {
+				s.readRecipe(path.Join(path.Dir(rel), name))
+			}
+			if dir == "." {
+				break
+			}
 		}
 	}
 }

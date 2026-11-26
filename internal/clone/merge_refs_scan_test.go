@@ -445,6 +445,18 @@ func TestConfigRefsBounded(t *testing.T) {
 			t.Fatalf("err = %v, want errScanCap", err)
 		}
 	})
+	t.Run("envrc line count", func(t *testing.T) {
+		files := map[string]string{".envrc": strings.Repeat("true\n", mergeRefLines) + "source_env late/b.sh\n"}
+		if _, err := scanRefsErr(t, files); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
+		}
+	})
+	t.Run("mise line count", func(t *testing.T) {
+		files := map[string]string{"mise.toml": strings.Repeat("# c\n", mergeRefLines) + "[hooks]\nenter = \"./late/b.sh\"\n"}
+		if _, err := scanRefsErr(t, files); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
+		}
+	})
 	t.Run("hook script line count", func(t *testing.T) {
 		files := map[string]string{".husky/pre-commit": strings.Repeat("true\n", mergeRefLines) + "./late/b.sh\n"}
 		if _, err := scanRefsErr(t, files); !errors.Is(err, errScanCap) {
@@ -726,8 +738,6 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 		{"a script's tool config, added by the box", map[string]string{".claude/settings.json": hookSettings("npm run lint:js"), "package.json": lint}, "eslint.config.js", true},
 		{"a script that is not run merges", map[string]string{".claude/settings.json": hookSettings("npm run lint"), "package.json": `{"scripts":{"lint":"true","build":"node bld/build.js"}}`}, "bld/build.js", false},
 		{"undetermined name reads every script", map[string]string{".claude/settings.json": hookSettings(`npm run \"$TASK\"`), "package.json": `{"scripts":{"lint":"true","build":"node bld/build.js"}}`}, "bld/build.js", true},
-		{"workspaces flag", map[string]string{".claude/settings.json": hookSettings("npm run lint --workspaces"), "package.json": `{"scripts":{"lint":"node ws/l.js"}}`}, "ws/l.js", true},
-		{"workspaces: a package's own scripts are a documented gap", map[string]string{".claude/settings.json": hookSettings("npm run lint --workspaces"), "package.json": `{"scripts":{"lint":"true"}}`, "packages/a/package.json": `{"scripts":{"lint":"node x.js"}}`}, "packages/a/x.js", false},
 		{"husky npm test reads test", map[string]string{".husky/pre-commit": "npm test\n", "package.json": `{"scripts":{"test":"vitest run"}}`}, "vitest.config.ts", true},
 		{"script loop ends", map[string]string{".claude/settings.json": hookSettings("npm run a"), "package.json": `{"scripts":{"a":"npm run b","b":"npm run a && node lp/x.js"}}`}, "lp/x.js", true},
 		{"malformed package.json", map[string]string{".claude/settings.json": hookSettings("npm run lint"), "package.json": `{"scripts":`}, "src/x.js", false},
@@ -750,6 +760,22 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 		{"taskfile includes, taskfile key and a folder", map[string]string{".claude/settings.json": hookSettings("task lint"), "Taskfile.yml": "version: '3'\nincludes:\n  sub:\n    taskfile: ./sub\n    dir: ./sub\n", "sub/Taskfile.yml": "tasks:\n  lint:\n    cmds:\n      - ./inc8/x.sh\n"}, "inc8/x.sh", true},
 		{"include loop ends", map[string]string{".claude/settings.json": hookSettings("make a"), "Makefile": "include b.mk\n", "b.mk": "include Makefile\n./inc9/x.sh\n"}, "inc9/x.sh", true},
 		{"an include nobody reaches merges", map[string]string{".claude/settings.json": hookSettings("true"), "Makefile": "include mk/rules.mk\n", "mk/rules.mk": "fmt:\n\t./inc10/x.sh\n"}, "inc10/x.sh", false},
+		{"Taskfile.dist.yml is a manifest", map[string]string{".claude/settings.json": hookSettings("task lint"), "Taskfile.dist.yml": "version: '3'\n"}, "Taskfile.dist.yml", true},
+		{"Taskfile.dist.yaml is a manifest", map[string]string{".claude/settings.json": hookSettings("task lint"), "Taskfile.yml": "version: '3'\n"}, "Taskfile.dist.yaml", true},
+		{"package.json with a BOM", map[string]string{".claude/settings.json": hookSettings("npm run lint"), "package.json": "\xef\xbb\xbf" + `{"scripts":{"lint":"node bomx/l.js"}}`}, "bomx/l.js", true},
+		{"just import?", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "import? 'opt/x.just'\n", "opt/x.just": "fmt:\n  ./inc11/x.sh\n"}, "inc11/x.sh", true},
+		{"just mod?", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "mod? foo\n", "foo.just": "fmt:\n  ./inc12/x.sh\n"}, "inc12/x.sh", true},
+		{"just mod folder .justfile", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "mod foo\n", "foo/.justfile": "fmt:\n  ./inc13/x.sh\n"}, "inc13/x.sh", true},
+		{"just mod folder Justfile, any case", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "mod foo\n", "foo/Justfile": "fmt:\n  ./inc14/x.sh\n"}, "inc14/x.sh", true},
+		{"just mod NAME PATH reads PATH", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "mod foo 'bar/m.just'\n", "bar/m.just": "fmt:\n  ./inc15/x.sh\n"}, "inc15/x.sh", true},
+		{"just mod NAME PATH does not read NAME", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "mod foo 'bar/m.just'\n", "foo.just": "fmt:\n  ./inc16/x.sh\n"}, "inc16/x.sh", false},
+		{"npm publish runs prepublishOnly", map[string]string{".claude/settings.json": hookSettings("npm publish"), "package.json": `{"scripts":{"prepublishOnly":"node pub/x.js"}}`}, "pub/x.js", true},
+		{"npm pack runs prepack", map[string]string{".claude/settings.json": hookSettings("npm pack"), "package.json": `{"scripts":{"prepack":"node pk/x.js"}}`}, "pk/x.js", true},
+		{"npm version runs preversion", map[string]string{".claude/settings.json": hookSettings("npm version patch"), "package.json": `{"scripts":{"preversion":"node ver/x.js"}}`}, "ver/x.js", true},
+		{"npm rebuild runs install", map[string]string{".claude/settings.json": hookSettings("npm rebuild"), "package.json": `{"scripts":{"install":"node rb/x.js"}}`}, "rb/x.js", true},
+		{"npm it runs test", map[string]string{".claude/settings.json": hookSettings("npm it"), "package.json": `{"scripts":{"test":"node it/x.js"}}`}, "it/x.js", true},
+		{"node --run runs the script", map[string]string{".claude/settings.json": hookSettings("node --run lint"), "package.json": `{"scripts":{"lint":"node nr/x.js"}}`}, "nr/x.js", true},
+		{"node --run runs no pre script", map[string]string{".claude/settings.json": hookSettings("node --run lint"), "package.json": `{"scripts":{"prelint":"node nr2/x.js","lint":"true"}}`}, "nr2/x.js", false},
 		{"a recipe file nobody calls merges", map[string]string{".claude/settings.json": hookSettings("true"), "Makefile": "fmt:\n\t./tools/fmt.sh\n"}, "tools/fmt.sh", false},
 	}
 	for _, c := range cases {
@@ -770,6 +796,30 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 			wantMergeReason(t, got, MergeGuarded)
 			if !slices.Contains(got.Paths, c.change) || x.tip() != before || len(a.calls) != 0 {
 				t.Fatalf("Paths = %q, main moved or audit written: %q", got.Paths, a.calls)
+			}
+		})
+	}
+}
+
+// A call that runs the scripts of workspace packages cannot be followed: the
+// merge fails with a fixed reason (#370).
+func TestMergeHomeWorkspaceCallFails(t *testing.T) {
+	for _, cmd := range []string{"npm run lint --workspaces", "npm run lint -w pkg", "npm run lint --workspace=pkg",
+		"pnpm --filter web lint", "pnpm -r lint", "pnpm run -F web lint", "yarn workspace web lint", "yarn workspaces foreach run lint",
+		"bun --filter '*' lint"} {
+		t.Run(cmd, func(t *testing.T) {
+			old := mergeSystemGitConfig
+			mergeSystemGitConfig = filepath.Join(t.TempDir(), "none")
+			t.Cleanup(func() { mergeSystemGitConfig = old })
+			x := newMergeFx(t, "main")
+			x.commit("host", map[string]string{".claude/settings.json": hookSettings(cmd), "package.json": `{"scripts":{"lint":"true"}}`})
+			before := x.tip()
+			x.box("main", map[string]string{"src/x.js": "box\n"})
+			a := &auditRec{}
+			got := x.run(newRec(t), a)
+			wantMergeReason(t, got, MergeFailed)
+			if !strings.Contains(got.Detail, "cannot follow workspace package scripts") || x.tip() != before || len(a.calls) != 0 {
+				t.Fatalf("Detail = %q, main moved or audit written", got.Detail)
 			}
 		})
 	}

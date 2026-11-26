@@ -180,6 +180,12 @@ func TestScriptNames(t *testing.T) {
 		{"npm", []string{"--prefix", "w", "start"}, nil, true},
 		{"npm", []string{"run", "-w", "pkg", "lint"}, nil, true},
 		{"npm", []string{"run", "lint", "--workspaces"}, set("lint"), false},
+		{"npm", []string{"pack"}, []string{"prepack", "prepare", "postpack", "prepublishOnly", "prepublish", "publish", "postpublish"}, false},
+		{"npm", []string{"publish"}, []string{"prepack", "prepare", "postpack", "prepublishOnly", "prepublish", "publish", "postpublish"}, false},
+		{"npm", []string{"it"}, append(slices.Clone(install), set("test")...), false},
+		{"npm", []string{"install-ci-test"}, append(slices.Clone(install), set("test")...), false},
+		{"npm", []string{"rebuild"}, []string{"preinstall", "install", "postinstall", "prepare"}, false},
+		{"npm", []string{"version", "patch"}, set("version"), false},
 		{"yarn", []string{"dlx", "x"}, nil, false},
 		{"pnpm", []string{"exec", "x"}, nil, false},
 		{"npm", []string{"exec", "x"}, nil, false},
@@ -202,5 +208,30 @@ func TestParseCommandScripts(t *testing.T) {
 	}
 	if r := ci.scripts[1]; r.runner != "make" || !r.all || !slices.Equal(r.dirs, []string{".", "w", "sub", "w/sub"}) {
 		t.Errorf("make ref = %+v", r)
+	}
+}
+
+func TestWorkspaceCall(t *testing.T) {
+	cases := []struct {
+		runner string
+		args   string
+		want   bool
+	}{
+		{"npm", "run lint --workspaces", true}, {"npm", "run lint --workspace=pkg", true}, {"npm", "run lint -w pkg", true},
+		{"pnpm", "--filter web lint", true}, {"pnpm", "-F web lint", true}, {"pnpm", "-r lint", true}, {"pnpm", "run lint --recursive", true},
+		{"yarn", "workspace web lint", true}, {"yarn", "workspaces foreach run lint", true},
+		{"pnpm", "--filter web exec eslint", false}, {"npm", "run lint", false}, {"yarn", "lint", false}, {"npm", "run test -- -w", false}, {"yarn", "-w", false},
+	}
+	for _, c := range cases {
+		if got := workspaceCall(c.runner, strings.Fields(c.args)); got != c.want {
+			t.Errorf("workspaceCall(%q, %q) = %v, want %v", c.runner, c.args, got, c.want)
+		}
+	}
+}
+
+func TestParseCommandNodeRun(t *testing.T) {
+	ci := parseCommand("", "node --run lint; node server.js; node --run $X")
+	if len(ci.scripts) != 2 || ci.scripts[0].runner != "node" || !slices.Equal(ci.scripts[0].names, []string{"lint"}) || ci.scripts[0].all || !ci.scripts[1].all {
+		t.Fatalf("scripts = %+v", ci.scripts)
 	}
 }

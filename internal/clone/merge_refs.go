@@ -148,11 +148,12 @@ type cmdInfo struct {
 // task run recipes. dirs are the folders it may run in: "." and the folders the
 // command moved to.
 type scriptRef struct {
-	runner string
-	names  []string // package scripts the call runs, with their pre and post scripts
-	all    bool     // the name is not known: every script (a recipe runner: the whole file)
-	dirs   []string
-	files  []string // recipe files the call names ("make -f x.mk", "just --justfile x", "task -t x")
+	runner    string
+	names     []string // package scripts the call runs, with their pre and post scripts
+	all       bool     // the name is not known: every script (a recipe runner: the whole file)
+	dirs      []string
+	workspace bool     // a workspace call: the scripts of other packages cannot be followed
+	files     []string // recipe files the call names ("make -f x.mk", "just --justfile x", "task -t x")
 }
 
 // recipeFileFlags are the options that name the recipe file of a runner.
@@ -223,8 +224,94 @@ func scriptNames(runner string, args []string) (names []string, all bool) {
 		return slices.Clone(installScripts), false
 	case "exec", "x", "dlx":
 		return nil, false
+	case "pack", "publish":
+		return []string{"prepack", "prepare", "postpack", "prepublishOnly", "prepublish", "publish", "postpublish"}, false
+	case "it", "install-test", "cit", "install-ci-test":
+		return slices.Concat(installScripts, wrap("test")), false
+	case "rebuild":
+		return []string{"preinstall", "install", "postinstall", "prepare"}, false
+	case "version":
+		return wrap("version"), false
 	}
 	return wrap(first), false
+}
+
+// workspaceFlags make a package manager run a script in other workspace
+// packages; -w is npm's and pnpm's.
+var workspaceFlags = map[string]bool{"--workspaces": true, "--workspace": true, "-ws": true, "--filter": true,
+	"-F": true, "-r": true, "--recursive": true}
+
+// workspaceCall reports whether "<runner> args..." runs scripts of workspace
+// packages (an option, or yarn's workspace subcommands). Their package.json
+// files are not followed: the scan fails. Arguments after "--" belong to the
+// script.
+func workspaceCall(runner string, args []string) bool {
+	if runner == "yarn" && len(args) > 0 && (args[0] == "workspace" || args[0] == "workspaces") {
+		return true
+	}
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "exec" || a == "dlx" { // runs a program, not a package script
+			return false
+		}
+	}
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		name, _, _ := strings.Cut(a, "=")
+		if workspaceFlags[name] || (name == "-w" && (runner == "npm" || runner == "pnpm")) {
+			return true
+		}
+	}
+	return false
+}
+
+// scriptCall reads tok (with the words after it) as a call of a runner that
+// runs scripts or recipes kept in the repo.
+func scriptCall(tok string, args []string) (scriptRef, bool) {
+	rb := path.Base(tok)
+	if !(nodeScriptRunners[rb] || recipeRunners[rb] || rb == "node") || strings.HasPrefix(tok, "-") ||
+		strings.HasPrefix(tok, "$") || envAssignRE.MatchString(tok) {
+		return scriptRef{}, false
+	}
+	ref := scriptRef{runner: rb, all: recipeRunners[rb]}
+	switch {
+	case rb == "node": // "node --run name" runs that script only
+		n, ok := nodeRunName(args)
+		if !ok {
+			return scriptRef{}, false
+		}
+		ref.all = n == "" || strings.HasPrefix(n, "$") || strings.HasPrefix(n, "-")
+		if !ref.all {
+			ref.names = []string{n}
+		}
+	case nodeScriptRunners[rb]:
+		ref.workspace = workspaceCall(rb, args)
+		ref.names, ref.all = scriptNames(rb, args)
+	default:
+		ref.files = recipeFilesIn(rb, args)
+	}
+	return ref, true
+}
+
+// nodeRunName returns the script "node --run NAME" runs ("" when it is not
+// that call); nameKnown is false for a variable.
+func nodeRunName(args []string) (name string, ok bool) {
+	for i, a := range args {
+		if v, found := strings.CutPrefix(a, "--run="); found {
+			return strings.Trim(v, "\"'"), true
+		}
+		if a == "--run" {
+			if i+1 < len(args) {
+				return strings.Trim(args[i+1], "\"'"), true
+			}
+			return "", true
+		}
+	}
+	return "", false
 }
 
 // commandPaths is parseCommand's paths and runners, for callers with no work
@@ -418,15 +505,7 @@ func parseCommand(of, s string) cmdInfo {
 			if tok == "" {
 				continue // a lone "!" or brace: the next word is still the command word
 			}
-			if rb := path.Base(tok); (nodeScriptRunners[rb] || recipeRunners[rb]) && !strings.HasPrefix(tok, "-") &&
-				!strings.HasPrefix(tok, "$") && !envAssignRE.MatchString(tok) {
-				ref := scriptRef{runner: rb, all: recipeRunners[rb]}
-				if recipeRunners[rb] {
-					ref.files = recipeFilesIn(rb, toks[i+1:])
-				}
-				if nodeScriptRunners[rb] {
-					ref.names, ref.all = scriptNames(rb, toks[i+1:])
-				}
+			if ref, ok := scriptCall(tok, toks[i+1:]); ok {
 				if len(ci.scripts) >= mergeRefPaths {
 					ci.over = true
 				} else {

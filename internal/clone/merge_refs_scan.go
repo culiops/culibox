@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +46,11 @@ const (
 // configs name, so the merge must not go on.
 var errScanCap = errors.New("too many paths to check")
 
+// errWorkspaceScripts is a call that runs the scripts of workspace packages
+// (--workspaces, --filter, yarn workspace ...): their package.json files are
+// not followed, so the merge must not go on.
+var errWorkspaceScripts = errors.New("cannot follow workspace package scripts")
+
 // mergeRefPlain is the number of plain word look-ups made per check (a var so a
 // test can lower it).
 var mergeRefPlain = 8192
@@ -55,9 +61,9 @@ var runnerManifests = map[string][]string{
 	"npm": nodeManifests, "npx": nodeManifests, "pnpm": nodeManifests, "pnpx": nodeManifests,
 	"yarn": nodeManifests, "bun": nodeManifests, "bunx": nodeManifests, "node": nodeManifests,
 	"deno":   {"deno.json", "deno.jsonc", "package.json"},
-	"make":   {"Makefile", "GNUmakefile"},
-	"just":   {"justfile", ".justfile"},
-	"task":   {"Taskfile.yml", "Taskfile.yaml"},
+	"make":   recipeFiles["make"],
+	"just":   recipeFiles["just"],
+	"task":   recipeFiles["task"],
 	"uv":     {"pyproject.toml"},
 	"poetry": {"pyproject.toml"},
 	"pipenv": {"Pipfile"},
@@ -293,6 +299,10 @@ var recipeFiles = map[string][]string{
 // (errScanCap). The files are the host's own: parsed with jsonDoc, bounded by
 // file's size limit.
 func (s *refSink) runScripts(r scriptRef) {
+	if r.workspace {
+		s.fail(errWorkspaceScripts)
+		return
+	}
 	if s.root == nil {
 		return
 	}
@@ -317,6 +327,7 @@ func (s *refSink) runScripts(r scriptRef) {
 			scripts = map[string]string{}
 			s.pkgScripts[dir] = scripts
 			s.file(path.Join(dir, "package.json"), func(_ *refSink, data []byte) {
+				data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")) // npm reads a BOM file
 				doc, _ := jsonDoc(data)["scripts"].(map[string]any)
 				for k, v := range doc {
 					if c, ok := v.(string); ok {
@@ -755,8 +766,12 @@ func commandsIn(v any, depth int, f func(string)) {
 // content, but what it sources, loads or watches is read again without a new
 // "direnv allow". Every line is also read as a command.
 func scanEnvrc(s *refSink, data []byte) {
-	for i, line := range strings.Split(string(data), "\n") {
+	all := strings.Split(string(data), "\n")
+	for i, line := range all {
 		if i >= mergeRefLines {
+			if moreLines(all, i) {
+				s.fail(errScanCap)
+			}
 			return
 		}
 		t := strings.TrimSpace(line)
@@ -861,6 +876,9 @@ var (
 func scanMise(s *refSink, data []byte) {
 	lines := strings.Split(string(data), "\n")
 	if len(lines) > mergeRefLines {
+		if moreLines(lines, mergeRefLines) {
+			s.fail(errScanCap)
+		}
 		lines = lines[:mergeRefLines]
 	}
 	sec := ""

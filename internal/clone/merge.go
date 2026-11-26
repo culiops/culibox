@@ -189,6 +189,9 @@ func (m *merger) scanFailed(what string, err error) *MergeResult {
 	if errors.Is(err, errScanCap) {
 		return m.result(MergeFailed, "cannot check what host tools run: "+errScanCap.Error(), nil)
 	}
+	if errors.Is(err, errWorkspaceScripts) {
+		return m.result(MergeFailed, "cannot check what host tools run: "+errWorkspaceScripts.Error(), nil)
+	}
 	return m.failed(what, err)
 }
 
