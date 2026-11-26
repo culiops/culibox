@@ -155,3 +155,74 @@ func TestMergeHomeClaudeImportCapsFail(t *testing.T) {
 		wantMerged(t, run(t, nil, map[string]string{".claude/rules/a.md": "a\n", ".claude/rules/b.md": "b\n"}))
 	})
 }
+
+// An imported file is read whole or the merge fails: one over mergeImportBytes
+// or one that cannot be read fails it, and an import that is a link out of the
+// repo is read at its target (#370 R17).
+func TestMergeHomeClaudeImportReadFailsClosed(t *testing.T) {
+	big := strings.Repeat("x", mergeImportBytes) + "\n@tail.md\n"
+	cases := []struct {
+		name    string
+		host    map[string]string // committed
+		untrack map[string]string // written after the box commit
+		links   map[string]string // repo path -> target; "<OUT>" is a folder outside the repo
+		out     map[string]string // files in that outside folder
+		chmod   string            // a repo file made unreadable
+		change  string
+		want    string // "" merged
+	}{
+		{"import over the size cap", map[string]string{"CLAUDE.md": "@big.md\n"}, map[string]string{"big.md": big}, nil, nil, "", "other.txt", MergeFailed},
+		{"import at the size cap merges", map[string]string{"CLAUDE.md": "@ok.md\n"}, map[string]string{"ok.md": strings.Repeat("x", mergeImportBytes)}, nil, nil, "", "other.txt", ""},
+		{"import that cannot be read", map[string]string{"CLAUDE.md": "@locked.md\n"}, map[string]string{"locked.md": "@deep.md\n"}, nil, nil, "locked.md", "other.txt", MergeFailed},
+		{"import that is a folder is skipped", map[string]string{"CLAUDE.md": "@docs\n", "docs/a.md": "h\n"}, nil, nil, nil, "", "other.txt", ""},
+		{"missing import is skipped", map[string]string{"CLAUDE.md": "@none.md\n"}, nil, nil, nil, "", "other.txt", ""},
+		{"import linked out of the repo is read at its target", map[string]string{"CLAUDE.md": "@notes.md\n"}, nil, map[string]string{"notes.md": "<OUT>/n.md"}, map[string]string{"n.md": "@deep.md\n"}, "", "deep.md", MergeGuarded},
+		{"import linked out to a target over the cap", map[string]string{"CLAUDE.md": "@notes.md\n"}, nil, map[string]string{"notes.md": "<OUT>/n.md"}, map[string]string{"n.md": big}, "", "other.txt", MergeFailed},
+		{"import linked out to a missing target is skipped", map[string]string{"CLAUDE.md": "@notes.md\n"}, nil, map[string]string{"notes.md": "<OUT>/none.md"}, nil, "", "other.txt", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.chmod != "" && os.Geteuid() == 0 {
+				t.Skip("root reads a mode 000 file")
+			}
+			old := mergeSystemGitConfig
+			mergeSystemGitConfig = filepath.Join(t.TempDir(), "none")
+			t.Cleanup(func() { mergeSystemGitConfig = old })
+			out := t.TempDir()
+			for rel, content := range c.out {
+				if err := os.WriteFile(filepath.Join(out, rel), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			x := newMergeFx(t, "main")
+			x.commit("host", c.host)
+			before := x.tip()
+			x.box("main", map[string]string{c.change: "box\n"})
+			for rel, content := range c.untrack {
+				x.write(rel, content)
+			}
+			for rel, target := range c.links {
+				x.linkUntracked(rel, strings.ReplaceAll(target, "<OUT>", out))
+			}
+			if c.chmod != "" {
+				p := filepath.Join(x.of, c.chmod)
+				if err := os.Chmod(p, 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(p, 0o644) })
+			}
+			got := MergeHome(context.Background(), newRec(t), MergeRequest{Of: x.of, Home: t.TempDir(), Audit: (&auditRec{}).fn, CloneTips: x.tips()})
+			if c.want == "" {
+				wantMerged(t, got)
+				return
+			}
+			wantMergeReason(t, got, c.want)
+			if c.want == MergeGuarded && !slices.Contains(got.Paths, c.change) {
+				t.Fatalf("Paths = %q, want %q", got.Paths, c.change)
+			}
+			if x.tip() != before {
+				t.Fatal("main moved")
+			}
+		})
+	}
+}

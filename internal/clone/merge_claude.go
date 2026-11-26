@@ -23,7 +23,7 @@ import (
 
 const (
 	mergeImportHops  = 5       // Claude Code's import depth
-	mergeImportBytes = 1 << 20 // read per file; an import past it is not seen
+	mergeImportBytes = 1 << 20 // per file; an import over it fails the merge (#370 R17)
 	mergeRulesDepth  = 4       // folders below .claude/rules that are walked
 )
 
@@ -52,10 +52,11 @@ func (m *merger) agentImportDenies(home string) (func(p string) bool, []string, 
 // CLAUDE.local.md at the top, and <home>/.claude/CLAUDE.md when home is set. A
 // spelling "~/X" is X under home, an absolute one is itself, any other is
 // relative to the importing file's directory. A target counts whether or not it
-// exists. A file that cannot be read is skipped and parsing never fails, but a
-// walk past mergeImportFiles files, a rules folder past mergeRulesEntries
-// entries or one that cannot be listed is errScanCap or the listing error: the
-// merge then fails instead of seeing fewer imports (#370 I-2). The ls-files call
+// exists. A file that is not there, or is not a regular file, is skipped and
+// parsing never fails. A file over mergeImportBytes (errTooBig) or that cannot
+// be read, a walk past mergeImportFiles files, a rules folder past
+// mergeRulesEntries entries or one that cannot be listed is an error: the merge
+// then fails instead of seeing fewer imports (#370 I-2, R17). The ls-files call
 // can fail too.
 func (m *merger) importTargets(home string) ([]string, error) {
 	out, err := m.run(m.env(), "ls-files", "-z", "--", ":(icase,glob)**/CLAUDE.md", ":(icase,glob)**/CLAUDE.local.md",
@@ -146,7 +147,15 @@ func (w *importGuard) walk(file string, hop int) {
 	w.seen[file] = hop
 	w.reads++
 	md, err := w.read(file)
-	if err != nil {
+	switch {
+	case err == nil:
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR), errors.Is(err, errNotRegular):
+		return
+	case errors.Is(err, errTooBig):
+		w.err = fmt.Errorf("%s %w", file, errTooBig)
+		return
+	default:
+		w.err = fmt.Errorf("cannot read %s: %w", file, err)
 		return
 	}
 	for _, sp := range bundle.ParseImports(md) {
@@ -181,21 +190,28 @@ func (w *importGuard) resolve(sp, dir string) string {
 	return filepath.Join(dir, sp)
 }
 
-// read returns up to mergeImportBytes of file when it is a regular file: in
-// the repo through w.root (no link out of it is followed), elsewhere by path.
-// The open never blocks on a FIFO.
+// read returns all of file when it is a regular file of at most
+// mergeImportBytes (errNotRegular, errTooBig otherwise): in the repo through
+// w.root, where a link out of the repo is read at its target by path
+// (openLinkOutAt, as for a protected config); elsewhere by path. The open never
+// blocks on a FIFO.
 func (w *importGuard) read(file string) ([]byte, error) {
 	var f *os.File
 	var err error
 	if rel := relInside(w.of, file); rel != "" && w.root != nil {
 		f, err = w.root.OpenFile(filepath.FromSlash(rel), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			if f, err = openLinkOutAt(w.of, w.root, rel, err); err == nil && f == nil {
+				return nil, fs.ErrNotExist // the link's target is not there
+			}
+		}
 	} else {
 		f, err = os.OpenFile(file, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return readRegular(f)
+	return readRegularMax(f, mergeImportBytes)
 }
 
 // errNotRegular is a file that is a device, a FIFO or a folder.

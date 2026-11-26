@@ -237,7 +237,12 @@ func (s *refSink) file(rel string, scan func(*refSink, []byte)) {
 // repo. A missing target is nil, nil (skipped). Any other failure, a loop or no
 // permission, is an error; so is a refusal that is not about a link.
 func (s *refSink) openLinkOut(rel string, rootErr error) (*os.File, error) {
-	real, err := filepath.EvalSymlinks(filepath.Join(s.of, filepath.FromSlash(rel)))
+	return openLinkOutAt(s.of, s.root, rel, rootErr)
+}
+
+// openLinkOutAt is openLinkOut for the repo of (opened as root).
+func openLinkOutAt(of string, root *os.Root, rel string, rootErr error) (*os.File, error) {
+	real, err := filepath.EvalSymlinks(filepath.Join(of, filepath.FromSlash(rel)))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			return nil, nil
@@ -246,12 +251,12 @@ func (s *refSink) openLinkOut(rel string, rootErr error) (*os.File, error) {
 	}
 	flags := os.O_RDONLY | syscall.O_NONBLOCK
 	var f *os.File
-	if realOf, err := filepath.EvalSymlinks(s.of); err == nil && absInside(realOf, real) != "" {
+	if realOf, err := filepath.EvalSymlinks(of); err == nil && absInside(realOf, real) != "" {
 		in := absInside(realOf, real)
 		if in == "." {
 			return nil, rootErr
 		}
-		f, err = s.root.OpenFile(filepath.FromSlash(in), flags, 0)
+		f, err = root.OpenFile(filepath.FromSlash(in), flags, 0)
 		if err != nil {
 			return nil, rootErr
 		}
