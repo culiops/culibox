@@ -3,8 +3,10 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,11 +16,47 @@ import (
 	"github.com/culiops/culibox/internal/launcher"
 )
 
-// ownLoginHarness is the harness the host_own_login tests run on. It is
-// newDropsHarness today; a later task makes it install the fake audit.
+// fakeSpawnAudit records what the Manager asks it to audit.
+type fakeSpawnAudit struct {
+	mu   sync.Mutex
+	recs []HostOwnLoginRecord
+	err  error
+}
+
+func (f *fakeSpawnAudit) RecordHostOwnLogin(r HostOwnLoginRecord) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	f.recs = append(f.recs, r)
+	return nil
+}
+
+func (f *fakeSpawnAudit) records() []HostOwnLoginRecord {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.recs)
+}
+
+// ownLoginAudits is the fake audit ownLoginHarness installed, by manager.
+var ownLoginAudits sync.Map
+
+func auditOf(h *dropsHarness) *fakeSpawnAudit {
+	v, _ := ownLoginAudits.Load(h.m)
+	return v.(*fakeSpawnAudit)
+}
+
+// ownLoginHarness is the harness the host_own_login tests run on: it is
+// newDropsHarness with a fake spawn audit installed.
 func ownLoginHarness(t *testing.T, l dropsLauncher) *dropsHarness {
 	t.Helper()
-	return newDropsHarness(t, l)
+	h := newDropsHarness(t, l)
+	fa := &fakeSpawnAudit{}
+	h.m.SetSpawnAudit(fa)
+	ownLoginAudits.Store(h.m, fa)
+	t.Cleanup(func() { ownLoginAudits.Delete(h.m) })
+	return h
 }
 
 func ownSpec(t *testing.T, kinds ...string) launcher.SpawnSpec {
@@ -93,6 +131,9 @@ func TestHostOwnLoginAllKindsIsAPlainHostRun(t *testing.T) {
 	}
 	if calls, _, _ := h.hooks.hostState(); len(calls) != 0 {
 		t.Fatalf("HostFor called for a plain host run: %+v", calls)
+	}
+	if recs := auditOf(h).records(); len(recs) != 1 || !slices.Equal(recs[0].Kinds, []string{launcher.OwnLoginGitHub, launcher.OwnLoginAWS}) {
+		t.Fatalf("audit rows = %+v, want one for github and aws", recs)
 	}
 }
 
@@ -218,7 +259,9 @@ func TestSidecarRestoresHostOwnLogin(t *testing.T) {
 	h := ownLoginHarness(t, l)
 	fb := newFakeBackend()
 	h.m.backend = fb
-	s, err := h.m.Spawn(ownSpec(t, launcher.OwnLoginGitHub))
+	spec := ownSpec(t, launcher.OwnLoginGitHub)
+	spec.Actor = "bearer"
+	s, err := h.m.Spawn(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +280,7 @@ func TestSidecarRestoresHostOwnLogin(t *testing.T) {
 		t.Fatal("session not restored")
 	}
 	want := []string{launcher.OwnLoginGitHub}
-	if !slices.Equal(r.HostOwnLogin, want) || !slices.Equal(r.Info().HostOwnLogin, want) || r.hostOwnActor != "web" {
+	if !slices.Equal(r.HostOwnLogin, want) || !slices.Equal(r.Info().HostOwnLogin, want) || r.hostOwnActor != "bearer" {
 		t.Fatalf("restored HostOwnLogin = %q by %q", r.Info().HostOwnLogin, r.hostOwnActor)
 	}
 }
@@ -322,5 +365,100 @@ func TestBoxSessionRecordsNoHostOwnLogin(t *testing.T) {
 	}
 	if e := sidecarEntry(t, h.path, s.ID); e.HostOwnLogin != nil || e.HostOwnActor != "" {
 		t.Fatalf("sidecar = %q by %q for a box session", e.HostOwnLogin, e.HostOwnActor)
+	}
+}
+
+func TestHostOwnLoginAuditedBeforeStart(t *testing.T) {
+	l, _ := hostBoundLauncher(t, envDumpArgv)
+	h := ownLoginHarness(t, l)
+	spec := ownSpec(t, launcher.OwnLoginGitHub, launcher.OwnLoginAWS)
+	s, err := h.m.Spawn(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	want := HostOwnLoginRecord{SessionID: s.ID, Profile: spec.Agent, Cwd: spec.Cwd, Actor: "web",
+		Kinds: []string{launcher.OwnLoginGitHub, launcher.OwnLoginAWS}}
+	recs := auditOf(h).records()
+	if len(recs) != 1 || !reflect.DeepEqual(recs[0], want) {
+		t.Fatalf("audit rows = %+v, want [%+v]", recs, want)
+	}
+}
+
+func TestHostOwnLoginAuditFailureRefusesSpawn(t *testing.T) {
+	l, _ := hostBoundLauncher(t, envDumpArgv)
+	h := ownLoginHarness(t, l)
+	auditOf(h).err = errors.New("disk full")
+	_, err := h.m.Spawn(ownSpec(t, launcher.OwnLoginGitHub))
+	if !errors.Is(err, ErrSpawnAudit) {
+		t.Fatalf("err = %v, want ErrSpawnAudit", err)
+	}
+	if n := len(h.m.List()); n != 0 {
+		t.Fatalf("%d sessions after a refused spawn", n)
+	}
+	calls, rels, _ := h.hooks.hostState()
+	if len(calls) != 1 || len(rels) != 1 || rels[0].id != calls[0].id || !rels[0].remove {
+		t.Fatalf("host socket calls=%+v releases=%+v, want it released with remove", calls, rels)
+	}
+}
+
+func TestHostOwnLoginWithoutAuditorIsRefused(t *testing.T) {
+	l, _ := hostBoundLauncher(t, envDumpArgv)
+	h := newDropsHarness(t, l)
+	_, err := h.m.Spawn(ownSpec(t, launcher.OwnLoginGitHub))
+	if !errors.Is(err, ErrSpawnAudit) {
+		t.Fatalf("err = %v, want ErrSpawnAudit", err)
+	}
+	if n := len(h.m.List()); n != 0 {
+		t.Fatalf("%d sessions after a refused spawn", n)
+	}
+}
+
+func TestNoHostOwnLoginRowWithoutAChoice(t *testing.T) {
+	// A plain bound Host spawn.
+	l, _ := hostBoundLauncher(t, envDumpArgv)
+	h := ownLoginHarness(t, l)
+	s, err := h.m.Spawn(ownSpec(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	// A Host spawn refused (the profile does not bind aws).
+	l2, _ := hostBoundLauncher(t, envDumpArgv)
+	l2.noAWS = true
+	h2 := ownLoginHarness(t, l2)
+	if _, err := h2.m.Spawn(ownSpec(t, launcher.OwnLoginAWS)); err == nil {
+		t.Fatal("want a refusal")
+	}
+	// A Box spawn carrying the field.
+	lb := boundDropsLauncher([]string{"sh", "-c", "sleep 30"}, config.RuntimeBox)
+	hb := ownLoginHarness(t, lb)
+	bs, err := hb.m.Spawn(launcher.SpawnSpec{Agent: "p", Cwd: t.TempDir(), HostDropsAck: true,
+		HostOwnLogin: []string{launcher.OwnLoginGitHub}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hb.m.Kill(bs.ID) })
+	for name, hh := range map[string]*dropsHarness{"plain": h, "refused": h2, "box": hb} {
+		if recs := auditOf(hh).records(); len(recs) != 0 {
+			t.Errorf("%s: %d audit rows, want none", name, len(recs))
+		}
+	}
+}
+
+func TestRestartAuditsTheChoiceAgain(t *testing.T) {
+	l, _ := hostBoundLauncher(t, []string{"sh", "-c", "exit 0"})
+	h := ownLoginHarness(t, l)
+	spec := ownSpec(t, launcher.OwnLoginGitHub)
+	spec.Actor = "bearer"
+	old := exitedSession(t, h.m, spec)
+	ns, err := h.m.Restart(old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(ns.ID) })
+	recs := auditOf(h).records()
+	if len(recs) != 2 || recs[0].Actor != "bearer" || recs[1].Actor != "bearer" || recs[1].SessionID != ns.ID {
+		t.Fatalf("audit rows = %+v, want two by bearer, the second for %s", recs, ns.ID)
 	}
 }

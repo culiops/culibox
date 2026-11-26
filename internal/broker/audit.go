@@ -330,6 +330,9 @@ const (
 	CredChecked       = "aws_checked"
 	CredSSOStarted    = "aws_sso_started"
 	CredSSOResult     = "aws_sso_result"
+	// CredHostOwnLogin records a Host session started on this machine's own
+	// GitHub and/or AWS login instead of the credential binding (#375).
+	CredHostOwnLogin = "host_own_login"
 )
 
 // maxCredDetail bounds a credential event's detail in bytes.

@@ -1,6 +1,8 @@
 package session
 
 import (
+	"errors"
+	"log"
 	"slices"
 
 	"github.com/culiops/culibox/internal/config"
@@ -63,4 +65,45 @@ func (m *Manager) ownLoginStillBound(agent string, kinds []string) []string {
 		}
 	}
 	return out
+}
+
+// HostOwnLoginRecord is what a Host spawn that takes GitHub and/or AWS from
+// this machine's own login asks to have audited: who, for which profile, in
+// which directory, which kinds. Kinds are the effective ones.
+type HostOwnLoginRecord struct {
+	SessionID, Profile, Cwd, Actor string
+	Kinds                          []string
+}
+
+// SpawnAudit writes the audit row of a host_own_login spawn. It is called
+// before the process starts; an error refuses the spawn.
+type SpawnAudit interface {
+	RecordHostOwnLogin(HostOwnLoginRecord) error
+}
+
+// ErrSpawnAudit refuses a Host spawn that uses this machine's login when its
+// audit row cannot be written (or no auditor is wired): nothing is started.
+var ErrSpawnAudit = errors.New("CuliBox could not audit this Host session's use of this machine's login, so it was not started; retry shortly")
+
+// SetSpawnAudit installs the auditor of host_own_login spawns. Without one a
+// spawn that needs it is refused (fail closed).
+func (m *Manager) SetSpawnAudit(a SpawnAudit) {
+	m.mu.Lock()
+	m.spawnAudit = a
+	m.mu.Unlock()
+}
+
+// auditHostOwnLogin writes the row for a Host spawn with a non-empty choice.
+func (m *Manager) auditHostOwnLogin(r HostOwnLoginRecord) error {
+	m.mu.Lock()
+	a := m.spawnAudit
+	m.mu.Unlock()
+	if a == nil {
+		return ErrSpawnAudit
+	}
+	if err := a.RecordHostOwnLogin(r); err != nil {
+		log.Printf("session %s: host_own_login audit: %v", r.SessionID, err)
+		return ErrSpawnAudit
+	}
+	return nil
 }

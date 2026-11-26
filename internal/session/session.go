@@ -1774,6 +1774,7 @@ type Manager struct {
 	egressAll   bool          // every boxed spawn needs egress; see SetEgressAll
 	clone       CloneHooks    // nil = clone mode unavailable; clone profiles are refused
 	handback    HandbackHooks // nil = no scan of an in-place workspace at a session's exit
+	spawnAudit  SpawnAudit    // nil = a host_own_login spawn is refused (#375)
 	home        string        // daemon user's home; where a host session's ~/.claude lives
 	stateDir    string        // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
 	costSrc     CostSource    // prices a session's conversations (analytics); nil = off, no session reports a cost
@@ -2957,6 +2958,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	}
 	if len(own) > 0 {
 		log.Printf("session %s: host run of profile %q uses this machine's login for %s", id, spec.Agent, config.JoinKinds(own))
+		// The row is written before the process starts, and a failed write
+		// refuses the spawn: the deferred cleanup releases the Host socket.
+		if err := m.auditHostOwnLogin(HostOwnLoginRecord{SessionID: id, Profile: spec.Agent, Cwd: spec.Cwd, Actor: ownActor, Kinds: slices.Clone(own)}); err != nil {
+			return nil, err
+		}
 	}
 
 	// Every refusal of a Host spawn is behind us: bring home the work of any
