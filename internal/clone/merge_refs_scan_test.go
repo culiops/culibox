@@ -424,6 +424,21 @@ func TestConfigRefsBounded(t *testing.T) {
 			t.Fatalf("err = %v, want errScanCap", err)
 		}
 	})
+	t.Run("script count", func(t *testing.T) {
+		var b strings.Builder
+		b.WriteString(`{"scripts":{`)
+		for i := 0; i < 2*mergeRefScripts; i++ {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(`"s` + strconv.Itoa(i) + `":"npm run s` + strconv.Itoa(i+1) + `"`)
+		}
+		b.WriteString(`}}`)
+		files := map[string]string{"package.json": b.String(), ".envrc": "npm run s0\n"}
+		if _, err := scanRefsErr(t, files); !errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want errScanCap", err)
+		}
+	})
 	t.Run("too many cd folders fails closed", func(t *testing.T) {
 		if _, err := scanRefsErr(t, map[string]string{".envrc": strings.Repeat("cd a && ", 20) + "./x\n"}); !errors.Is(err, errScanCap) {
 			t.Fatalf("err = %v, want errScanCap", err)
@@ -679,5 +694,60 @@ func TestPlainMatcher(t *testing.T) {
 		if got := pm.denied(p); got != want {
 			t.Errorf("denied(%q) = %v, want %v", p, got, want)
 		}
+	}
+}
+
+// A runner call reads the package script or recipe it runs, for the files they
+// run (#370).
+func TestMergeHomeRunnerScriptsRead(t *testing.T) {
+	lint := `{"scripts":{"lint":"npm run lint:js && npm run lint:css","lint:js":"eslint . && node tools/check.js","lint:css":"true"}}`
+	cases := []struct {
+		name    string
+		host    map[string]string
+		change  string
+		guarded bool
+	}{
+		{"npm run reads the script", map[string]string{".claude/settings.json": hookSettings("npm run lint"), "package.json": `{"scripts":{"lint":"node scripts/lint.mjs"}}`}, "scripts/lint.mjs", true},
+		{"pre script", map[string]string{".claude/settings.json": hookSettings("npm run lint"), "package.json": `{"scripts":{"prelint":"bash pre/p.sh","lint":"true"}}`}, "pre/p.sh", true},
+		{"script calls another script", map[string]string{".claude/settings.json": hookSettings("npm run lint"), "package.json": lint}, "tools/check.js", true},
+		{"script names with a colon", map[string]string{".claude/settings.json": hookSettings("npm run lint:js"), "package.json": lint}, "tools/check.js", true},
+		{"a script's tool config, added by the box", map[string]string{".claude/settings.json": hookSettings("npm run lint:js"), "package.json": lint}, "eslint.config.js", true},
+		{"a script that is not run merges", map[string]string{".claude/settings.json": hookSettings("npm run lint"), "package.json": `{"scripts":{"lint":"true","build":"node bld/build.js"}}`}, "bld/build.js", false},
+		{"undetermined name reads every script", map[string]string{".claude/settings.json": hookSettings(`npm run \"$TASK\"`), "package.json": `{"scripts":{"lint":"true","build":"node bld/build.js"}}`}, "bld/build.js", true},
+		{"workspaces flag", map[string]string{".claude/settings.json": hookSettings("npm run lint --workspaces"), "package.json": `{"scripts":{"lint":"node ws/l.js"}}`}, "ws/l.js", true},
+		{"workspaces: a package's own scripts are a documented gap", map[string]string{".claude/settings.json": hookSettings("npm run lint --workspaces"), "package.json": `{"scripts":{"lint":"true"}}`, "packages/a/package.json": `{"scripts":{"lint":"node x.js"}}`}, "packages/a/x.js", false},
+		{"husky npm test reads test", map[string]string{".husky/pre-commit": "npm test\n", "package.json": `{"scripts":{"test":"vitest run"}}`}, "vitest.config.ts", true},
+		{"script loop ends", map[string]string{".claude/settings.json": hookSettings("npm run a"), "package.json": `{"scripts":{"a":"npm run b","b":"npm run a && node lp/x.js"}}`}, "lp/x.js", true},
+		{"malformed package.json", map[string]string{".claude/settings.json": hookSettings("npm run lint"), "package.json": `{"scripts":`}, "src/x.js", false},
+		{"malformed package.json, the manifest stays guarded", map[string]string{".claude/settings.json": hookSettings("npm run lint"), "package.json": `{"scripts":`}, "package.json", true},
+		{"make recipe", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "fmt:\n\t@./tools/fmt.sh\n"}, "tools/fmt.sh", true},
+		{"make include", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include mk/rules.mk\n"}, "mk/rules.mk", true},
+		{"make shell call", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "V := $(shell ./tools/v.sh)\n"}, "tools/v.sh", true},
+		{"lower-case makefile", map[string]string{".claude/settings.json": hookSettings("make x"), "makefile": "x:\n\t./mk2/x.sh\n"}, "mk2/x.sh", true},
+		{"just recipe", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "fmt:\n  ./j/fmt.sh\n"}, "j/fmt.sh", true},
+		{"task cmds", map[string]string{".claude/settings.json": hookSettings("task lint"), "Taskfile.yml": "version: '3'\ntasks:\n  lint:\n    cmds:\n      - ./t/x.sh\n"}, "t/x.sh", true},
+		{"Taskfile.dist.yml", map[string]string{".claude/settings.json": hookSettings("task lint"), "Taskfile.dist.yml": "version: '3'\ntasks:\n  lint:\n    cmds:\n      - ./t/x.sh\n"}, "t/x.sh", true},
+		{"a recipe file nobody calls merges", map[string]string{".claude/settings.json": hookSettings("true"), "Makefile": "fmt:\n\t./tools/fmt.sh\n"}, "tools/fmt.sh", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			old := mergeSystemGitConfig
+			mergeSystemGitConfig = filepath.Join(t.TempDir(), "none")
+			t.Cleanup(func() { mergeSystemGitConfig = old })
+			x := newMergeFx(t, "main")
+			x.commit("host", c.host)
+			before := x.tip()
+			x.box("main", map[string]string{c.change: "box\n"})
+			a := &auditRec{}
+			got := x.run(newRec(t), a)
+			if !c.guarded {
+				wantMerged(t, got)
+				return
+			}
+			wantMergeReason(t, got, MergeGuarded)
+			if !slices.Contains(got.Paths, c.change) || x.tip() != before || len(a.calls) != 0 {
+				t.Fatalf("Paths = %q, main moved or audit written: %q", got.Paths, a.calls)
+			}
+		})
 	}
 }

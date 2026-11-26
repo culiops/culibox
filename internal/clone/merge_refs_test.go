@@ -154,3 +154,53 @@ func TestParseCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestScriptNames(t *testing.T) {
+	set := func(n string) []string { return []string{"pre" + n, n, "post" + n} }
+	install := []string{"preinstall", "install", "postinstall", "prepublish", "preprepare", "prepare", "postprepare"}
+	restart := append(append(set("restart"), set("stop")...), set("start")...)
+	cases := []struct {
+		runner string
+		args   []string
+		names  []string
+		all    bool
+	}{
+		{"npm", []string{"run", "lint"}, set("lint"), false},
+		{"npm", []string{"run-script", "lint:js"}, set("lint:js"), false},
+		{"npm", []string{"test"}, set("test"), false},
+		{"npm", []string{"t"}, set("test"), false},
+		{"npm", []string{"restart"}, restart, false},
+		{"npm", []string{"ci"}, install, false},
+		{"yarn", nil, install, false},
+		{"yarn", []string{"lint"}, set("lint"), false},
+		{"bun", []string{"dev"}, set("dev"), false},
+		{"pnpm", []string{"run", "build"}, set("build"), false},
+		{"npm", []string{"run"}, nil, true},
+		{"npm", []string{"run", "$TASK"}, nil, true},
+		{"npm", []string{"--prefix", "w", "start"}, nil, true},
+		{"npm", []string{"run", "-w", "pkg", "lint"}, nil, true},
+		{"npm", []string{"run", "lint", "--workspaces"}, set("lint"), false},
+		{"yarn", []string{"dlx", "x"}, nil, false},
+		{"pnpm", []string{"exec", "x"}, nil, false},
+		{"npm", []string{"exec", "x"}, nil, false},
+	}
+	for _, c := range cases {
+		names, all := scriptNames(c.runner, c.args)
+		if !slices.Equal(names, c.names) || all != c.all {
+			t.Errorf("scriptNames(%q, %q) = %q, %v; want %q, %v", c.runner, c.args, names, all, c.names, c.all)
+		}
+	}
+}
+
+func TestParseCommandScripts(t *testing.T) {
+	ci := parseCommand("", "cd w && npm run lint; make -C sub fmt")
+	if len(ci.scripts) != 2 {
+		t.Fatalf("scripts = %+v", ci.scripts)
+	}
+	if r := ci.scripts[0]; r.runner != "npm" || !slices.Equal(r.dirs, []string{".", "w"}) || !slices.Equal(r.names, []string{"prelint", "lint", "postlint"}) {
+		t.Errorf("npm ref = %+v", r)
+	}
+	if r := ci.scripts[1]; r.runner != "make" || !r.all || !slices.Equal(r.dirs, []string{".", "w", "sub", "w/sub"}) {
+		t.Errorf("make ref = %+v", r)
+	}
+}

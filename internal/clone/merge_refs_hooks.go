@@ -288,3 +288,47 @@ func stripJSONC(b []byte) []byte {
 	}
 	return res
 }
+
+var (
+	recipeKeyRE     = regexp.MustCompile(`^[A-Za-z0-9_./-]+:(?:\s+|$)`)
+	recipeIncludeRE = regexp.MustCompile(`^(include|-include|sinclude|import|mod)\s+(.*)$`)
+)
+
+// scanRecipes reads a make, just or task recipe file line by line (no parser):
+// every line that is not empty or a comment is a command, after the recipe
+// prefixes (@ - +), a "- " list marker and a leading "key:" are stripped, so the
+// lines of a Makefile, a justfile and the cmds of a Taskfile all read as
+// commands. The files make includes and just imports or mods are paths too.
+func scanRecipes(s *refSink, data []byte) {
+	for i, line := range strings.Split(string(data), "\n") {
+		if i >= mergeRefLines {
+			return
+		}
+		t := strings.TrimSpace(line)
+		if t == "" || t[0] == '#' {
+			continue
+		}
+		for n := 0; n < 8; n++ { // a few prefixes: "- @cmd", "- key: cmd"
+			switch {
+			case strings.ContainsRune("@-+", rune(t[0])):
+				t = strings.TrimSpace(t[1:])
+			case recipeKeyRE.MatchString(t):
+				t = strings.TrimSpace(t[strings.IndexByte(t, ':')+1:])
+			default:
+				n = 8
+			}
+			if t == "" {
+				break
+			}
+		}
+		if t == "" {
+			continue
+		}
+		if m := recipeIncludeRE.FindStringSubmatch(t); m != nil {
+			for _, a := range strings.Fields(m[2]) {
+				s.pathArg(a)
+			}
+		}
+		s.command(t)
+	}
+}

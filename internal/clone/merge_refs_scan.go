@@ -38,6 +38,7 @@ const (
 	mergeRefStmtLines = 200 // lines one TOML statement may span
 	mergeRefDepth     = 24  // JSON nesting followed
 	mergeRefListings  = 64  // folders read for plain words
+	mergeRefScripts   = 512 // package scripts run per check
 )
 
 // errScanCap is a scan that hit one of its caps: it saw fewer paths than the
@@ -98,7 +99,13 @@ type refSink struct {
 	listings  map[string]*dirListing // folders read for plain words, by repo-relative path
 	plainSeen map[string]bool        // plain word look-ups made, "base\x00word" (+ "\x00t" with the prefix rule)
 	pm        plainMatcher           // the same look-ups, matched against the paths a range adds
-	err       error                  // the first cap or listing error
+
+	pkgScripts map[string]map[string]string // folder -> package.json scripts, parsed once
+	scriptSeen map[string]bool              // "folder\x00name": a package script already run
+	scriptsRun int                          // package scripts read, against mergeRefScripts
+	recipeSeen map[string]bool              // "folder\x00file": a recipe file already read
+
+	err error // the first cap or listing error
 }
 
 // fail keeps the first error only.
@@ -122,7 +129,8 @@ type dirListing struct {
 // not list.
 func scanConfigRefs(of string, hooks []string, home string) (*refSink, error) {
 	s := &refSink{of: filepath.Clean(of), runners: map[string]bool{},
-		listings: map[string]*dirListing{}, plainSeen: map[string]bool{}}
+		listings: map[string]*dirListing{}, plainSeen: map[string]bool{},
+		pkgScripts: map[string]map[string]string{}, scriptSeen: map[string]bool{}, recipeSeen: map[string]bool{}}
 	if root, err := os.OpenRoot(s.of); err == nil {
 		defer root.Close()
 		s.root = root
@@ -265,6 +273,84 @@ func (s *refSink) command(c string) {
 	}
 	for _, pw := range ci.plain {
 		s.plainWord(pw)
+	}
+	for _, r := range ci.scripts {
+		s.runScripts(r)
+	}
+}
+
+// recipeFiles are the recipe files a runner reads, found case-insensitively.
+var recipeFiles = map[string][]string{
+	"make": {"Makefile", "makefile", "GNUmakefile"},
+	"just": {"justfile", ".justfile", "Justfile"},
+	"task": {"Taskfile.yml", "Taskfile.yaml", "Taskfile.dist.yml", "Taskfile.dist.yaml"},
+}
+
+// runScripts reads what a runner call runs from the host work tree: the named
+// package.json scripts (all of them when the name is not known), each read as a
+// command line in the folder, and the whole recipe file of make, just or task.
+// Each script and file is read once; past mergeRefScripts scripts the scan fails
+// (errScanCap). The files are the host's own: parsed with jsonDoc, bounded by
+// file's size limit.
+func (s *refSink) runScripts(r scriptRef) {
+	if s.root == nil {
+		return
+	}
+	for _, dir := range r.dirs {
+		if recipeRunners[r.runner] {
+			l := s.listing(dir)
+			for _, f := range recipeFiles[r.runner] {
+				name, ok := l.names[strings.ToLower(f)]
+				if !ok {
+					continue
+				}
+				k := dir + "\x00" + name
+				if s.recipeSeen[k] {
+					continue
+				}
+				s.recipeSeen[k] = true
+				s.file(path.Join(dir, name), scanRecipes)
+			}
+			continue
+		}
+		scripts, ok := s.pkgScripts[dir]
+		if !ok {
+			scripts = map[string]string{}
+			s.pkgScripts[dir] = scripts
+			s.file(path.Join(dir, "package.json"), func(_ *refSink, data []byte) {
+				doc, _ := jsonDoc(data)["scripts"].(map[string]any)
+				for k, v := range doc {
+					if c, ok := v.(string); ok {
+						scripts[k] = c
+					}
+				}
+			})
+		}
+		names := r.names
+		if r.all {
+			names = make([]string, 0, len(scripts))
+			for n := range scripts {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+		}
+		for _, n := range names {
+			c, ok := scripts[n]
+			k := dir + "\x00" + n
+			if !ok || s.scriptSeen[k] {
+				continue
+			}
+			s.scriptSeen[k] = true
+			if s.scriptsRun >= mergeRefScripts {
+				s.fail(errScanCap)
+				return
+			}
+			s.scriptsRun++
+			if dir != "." {
+				c = "cd " + dir + " && " + c
+			}
+			s.command(c)
+		}
 	}
 }
 

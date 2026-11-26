@@ -139,7 +139,70 @@ type cmdInfo struct {
 	dirs    []string    // repo-relative folders named by a flag or cd: denied as themselves
 	runners []string    // commandRunners the command calls
 	plain   []plainWord // words that name an entry only if one exists
+	scripts []scriptRef // package scripts and recipes the runners called run
 	over    bool        // a cap stopped the parse: mergeRefPaths or maxCommandCwds
+}
+
+// scriptRef is a call of a runner that runs scripts or recipes kept in the
+// repo (#370): npm, pnpm, yarn and bun run package.json scripts, make, just and
+// task run recipes. dirs are the folders it may run in: "." and the folders the
+// command moved to.
+type scriptRef struct {
+	runner string
+	names  []string // package scripts the call runs, with their pre and post scripts
+	all    bool     // the name is not known: every script (a recipe runner: the whole file)
+	dirs   []string
+}
+
+// nodeScriptRunners read package.json scripts; recipeRunners read a recipe file.
+var (
+	nodeScriptRunners = map[string]bool{"npm": true, "pnpm": true, "yarn": true, "bun": true}
+	recipeRunners     = map[string]bool{"make": true, "just": true, "task": true}
+)
+
+var installScripts = []string{"preinstall", "install", "postinstall", "prepublish", "preprepare", "prepare", "postprepare"}
+
+// scriptNames returns the package scripts "<runner> args..." runs (args are the
+// words after the runner up to the end of the command): the script named, with
+// its pre and post scripts, or all when the name is not known (an option came
+// first, or the name is a variable). npm's own names (test, start, install ...)
+// map to the scripts they run; a first word that is no subcommand is read as a
+// script name too (yarn, pnpm and bun run a script by its bare name), which
+// over-reads npm's other subcommands and only adds refusals.
+func scriptNames(runner string, args []string) (names []string, all bool) {
+	wrap := func(n string) []string { return []string{"pre" + n, n, "post" + n} }
+	if len(args) == 0 {
+		if runner == "npm" {
+			return nil, false
+		}
+		return slices.Clone(installScripts), false
+	}
+	first := strings.Trim(args[0], "\"'")
+	if first == "" || strings.HasPrefix(first, "-") || strings.HasPrefix(first, "$") {
+		return nil, true
+	}
+	switch first {
+	case "run", "run-script", "rum", "urn":
+		if len(args) < 2 {
+			return nil, true
+		}
+		n := strings.Trim(args[1], "\"'")
+		if n == "" || strings.HasPrefix(n, "-") || strings.HasPrefix(n, "$") {
+			return nil, true
+		}
+		return wrap(n), false
+	case "test", "t", "tst":
+		return wrap("test"), false
+	case "start", "stop":
+		return wrap(first), false
+	case "restart":
+		return slices.Concat(wrap("restart"), wrap("stop"), wrap("start")), false
+	case "install", "i", "ci", "add":
+		return slices.Clone(installScripts), false
+	case "exec", "x", "dlx":
+		return nil, false
+	}
+	return wrap(first), false
 }
 
 // commandPaths is parseCommand's paths and runners, for callers with no work
@@ -275,6 +338,7 @@ func parseCommand(of, s string) cmdInfo {
 			// scriptDone: an interpreter's script was read; what follows is its
 			// own arguments, not a new command.
 			scriptDone bool
+			segRefs    []int // ci.scripts made in this segment: their folders are set at its end
 		)
 		// classify sets the role of the word after the command word b.
 		classify := func(b string, maybeValue bool) {
@@ -331,6 +395,19 @@ func parseCommand(of, s string) cmdInfo {
 			tok := strings.TrimRight(strings.TrimLeft(toks[i], "!{"), "}") // git's "!" alias prefix, a shell function's braces
 			if tok == "" {
 				continue // a lone "!" or brace: the next word is still the command word
+			}
+			if rb := path.Base(tok); (nodeScriptRunners[rb] || recipeRunners[rb]) && !strings.HasPrefix(tok, "-") &&
+				!strings.HasPrefix(tok, "$") && !envAssignRE.MatchString(tok) {
+				ref := scriptRef{runner: rb, all: recipeRunners[rb]}
+				if nodeScriptRunners[rb] {
+					ref.names, ref.all = scriptNames(rb, toks[i+1:])
+				}
+				if len(ci.scripts) >= mergeRefPaths {
+					ci.over = true
+				} else {
+					ci.scripts = append(ci.scripts, ref)
+					segRefs = append(segRefs, len(ci.scripts)-1)
+				}
 			}
 			cands := []string{tok}
 			direct := false // a word of its own, not a value read out of an option or assignment
@@ -513,6 +590,10 @@ func parseCommand(of, s string) cmdInfo {
 		}
 		if pending != "" && !remote {
 			addRunner(pending)
+		}
+		// The folders the segment moved to (cd, -C, --prefix) apply to its runners.
+		for _, k := range segRefs {
+			ci.scripts[k].dirs = append([]string{"."}, cwds...)
 		}
 	}
 	return ci
