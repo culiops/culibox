@@ -66,6 +66,11 @@ var (
 		".config/mise.toml", ".config/mise/config.toml", ".config/mise/config.local.toml"}
 )
 
+// refConfigFiles are the files scanConfigRefs reads, besides the mise ones
+// (miseNames and the top mise.<env>.toml files). The symlink check follows
+// each one: a link there leads the read to another file.
+var refConfigFiles = []string{".mcp.json", ".claude/settings.json", ".claude/settings.local.json", ".envrc", ".envrc.local"}
+
 // refSink collects what the scanners find, as path spellings.
 type refSink struct {
 	of      string
@@ -86,15 +91,11 @@ func scanConfigRefs(of string) *refSink {
 	}
 	defer root.Close()
 	s.root = root
-	for _, f := range []string{".mcp.json"} {
-		s.file(f, scanMCPFile)
-	}
-	for _, f := range []string{".claude/settings.json", ".claude/settings.local.json"} {
-		s.file(f, scanClaudeSettings)
-	}
-	for _, f := range []string{".envrc", ".envrc.local"} {
-		s.file(f, scanEnvrc)
-	}
+	s.file(".mcp.json", scanMCPFile)
+	s.file(".claude/settings.json", scanClaudeSettings)
+	s.file(".claude/settings.local.json", scanClaudeSettings)
+	s.file(".envrc", scanEnvrc)
+	s.file(".envrc.local", scanEnvrc)
 	miseSeen := map[string]bool{}
 	for _, f := range miseNames {
 		miseSeen[strings.ToLower(f)] = true

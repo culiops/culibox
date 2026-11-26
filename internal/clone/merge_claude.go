@@ -28,14 +28,15 @@ const (
 )
 
 // agentImportDenies returns whether a repo-relative path from the range is at,
-// under or a parent of a file a host CLAUDE.md imports (importTargets). The
-// error is the ls-files call's; the merge then does not happen.
-func (m *merger) agentImportDenies(home string) (func(p string) bool, error) {
+// under or a parent of a file a host CLAUDE.md imports (importTargets), with
+// the list of those files for the symlink check. The error is the ls-files
+// call's; the merge then does not happen.
+func (m *merger) agentImportDenies(home string) (func(p string) bool, []string, error) {
 	targets, err := m.importTargets(home)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return func(p string) bool { return importDenied(p, targets) }, nil
+	return func(p string) bool { return importDenied(p, targets) }, targets, nil
 }
 
 // importTargets returns the repo-relative (slash-separated) paths of every

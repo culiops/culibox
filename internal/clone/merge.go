@@ -347,11 +347,11 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if err != nil {
 		return m.failed("cannot read git config", err)
 	}
-	agentDenied, err := m.agentImportDenies(r.Home)
+	agentDenied, importPaths, err := m.agentImportDenies(r.Home)
 	if err != nil {
 		return m.failed("cannot list the CLAUDE.md files", err)
 	}
-	refDenied, _ := m.configRefDenies()
+	refDenied, refPaths := m.configRefDenies()
 	var denied []string
 	dseen := map[string]bool{}
 	for _, e := range entries {
@@ -363,6 +363,24 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if len(denied) > 0 {
 		return m.result(MergeGuarded, "the commits touch files host tools load or run by themselves "+
 			"(agent, direnv and mise settings and the files they name, hooks, attributes, editor tasks, git config) or a submodule", denied)
+	}
+
+	// 4a'. The files those names really lead to: a protected name that is a
+	// symbolic link in the host's work tree sends its tools to another file.
+	// Only when nothing above refused, so a refused merge costs no more.
+	links, lres := m.linkDenies(gc.hooks, gc.denied, importPaths, refPaths)
+	if lres != nil {
+		return lres
+	}
+	for _, e := range entries {
+		if links.denied(e.path) && !dseen[e.path] {
+			dseen[e.path] = true
+			denied = append(denied, e.path)
+		}
+	}
+	if len(denied) > 0 {
+		return m.result(MergeGuarded, "the commits touch a file a protected name links to "+
+			"(agent, direnv and mise settings and the files they name, hooks, git config)", denied)
 	}
 
 	// 4b. No path a git filter would process on checkout (one cheap check-attr,
@@ -608,7 +626,7 @@ func foldPrefix(pre, p []string) bool {
 // a test can point it elsewhere.
 var mergeSystemGitConfig = "/etc/gitconfig"
 
-// hooksDirOf is the lower-cased repo-relative directory the hooksPath value v
+// hooksDirOf is the repo-relative directory the hooksPath value v
 // names when it is relative (to the work tree's top, where hooks run) or
 // absolute inside of; "" otherwise.
 func hooksDirOf(of, home, v string) string {
@@ -629,7 +647,7 @@ func hooksDirOf(of, home, v string) string {
 	if rel == ".." || strings.HasPrefix(rel, "../") {
 		return ""
 	}
-	return strings.ToLower(rel)
+	return rel
 }
 
 // absInside is the absolute path v relative to of, slash-separated, when v is

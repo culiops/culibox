@@ -68,7 +68,7 @@ func parseConfigList(out []byte, scoped bool) ([]configEntry, error) {
 // gitConfigScan is what the user's git config says that the merge must keep a
 // box from changing.
 type gitConfigScan struct {
-	hooks  []string // lower-cased repo-relative core.hooksPath directories
+	hooks  []string // repo-relative core.hooksPath directories, as spelled
 	denied []string // repo-relative files and folders, as importDenied reads them
 }
 
