@@ -291,9 +291,6 @@ var toolConfigSkip = map[string]bool{
 // with no such entry names nothing. Past the look-up caps, or in a folder too
 // big to list, the scan fails (errScanCap): never fewer refusals.
 func (s *refSink) plainWord(pw plainWord) {
-	if s.root == nil {
-		return
-	}
 	for _, base := range pw.bases {
 		key := base + "\x00" + pw.word
 		if pw.tool {
@@ -307,7 +304,10 @@ func (s *refSink) plainWord(pw plainWord) {
 			return
 		}
 		s.plainSeen[key] = true
-		s.pm.add(base, pw.word, pw.tool)
+		s.pm.add(base, pw.word, pw.tool) // the range match applies with or without a work tree
+		if s.root == nil {
+			continue
+		}
 		l := s.listing(base)
 		for _, cand := range append([]string{""}, scriptExts...) {
 			if name, ok := l.names[strings.ToLower(pw.word+cand)]; ok {
@@ -578,6 +578,7 @@ func (s *refSink) mcpServers(v any) {
 			s.envValue(k, str(env[k]))
 		}
 		s.dir(str(srv["cwd"]))
+		s.command(str(srv["headersHelper"])) // http, sse and ws servers: run in the project folder
 	}
 }
 
@@ -591,21 +592,44 @@ func scanClaudeSettings(s *refSink, data []byte) {
 
 // scanClaudeSettingsDoc is scanClaudeSettings on a parsed settings object.
 func scanClaudeSettingsDoc(s *refSink, m map[string]any) {
-	commandsIn(m["hooks"], 0, s.command)
-	switch v := m["statusLine"].(type) {
-	case string:
-		s.command(v)
-	case map[string]any:
-		s.command(str(v["command"]))
+	// Every string under a "command" or "headersHelper" key runs as a command:
+	// hooks, statusLine, fileSuggestion, sandbox.ripgrep, sshHostCommands, a
+	// marketplace's headersHelper and keys Claude Code adds later. The servers
+	// are read below with their args, not as a bare command.
+	doc := make(map[string]any, len(m))
+	for k, v := range m {
+		if k != "mcpServers" && k != "managedMcpServers" {
+			doc[k] = v
+		}
 	}
-	for _, k := range []string{"apiKeyHelper", "otelHeadersHelper", "awsAuthRefresh", "awsCredentialExport"} {
+	commandsIn(doc, 0, s.command)
+	for _, k := range []string{"statusLine", "fileSuggestion"} {
+		if v, ok := m[k].(string); ok {
+			s.command(v)
+		}
+	}
+	for _, k := range settingsCommandKeys {
 		s.command(str(m[k]))
 	}
+	sb, _ := m["sandbox"].(map[string]any)
+	if rg, ok := sb["ripgrep"].(map[string]any); ok {
+		line := []string{str(rg["command"])}
+		args, _ := rg["args"].([]any)
+		for _, a := range args {
+			line = append(line, str(a))
+		}
+		s.command(strings.Join(line, " "))
+	}
+	s.command(str(sb["bwrapPath"]))
+	s.command(str(sb["socatPath"]))
+	ph, _ := m["policyHelper"].(map[string]any)
+	s.command(str(ph["path"]))
 	env, _ := m["env"].(map[string]any)
 	for _, k := range sortedKeys(env) {
 		s.envValue(k, str(env[k])) // BASH_ENV and the like name a file the shell sources
 	}
 	s.mcpServers(m["mcpServers"])
+	s.mcpServers(m["managedMcpServers"])
 	mk, _ := m["extraKnownMarketplaces"].(map[string]any)
 	for _, k := range sortedKeys(mk) {
 		entry, _ := mk[k].(map[string]any)
@@ -614,7 +638,12 @@ func scanClaudeSettingsDoc(s *refSink, m map[string]any) {
 	}
 }
 
-// commandsIn calls f with every string under a "command" key in v.
+// settingsCommandKeys are the settings keys whose string value Claude Code runs
+// as a command (docs: settings reference, "Any file" scope and the managed and
+// user-only ones, which the user's own files share with the project's).
+var settingsCommandKeys = []string{"apiKeyHelper", "otelHeadersHelper", "awsAuthRefresh", "awsCredentialExport", "gcpAuthRefresh", "proxyAuthHelper", "processWrapper"}
+
+// commandsIn calls f with every string under a "command" or "headersHelper" key in v.
 func commandsIn(v any, depth int, f func(string)) {
 	if depth > mergeRefDepth {
 		return
@@ -622,7 +651,7 @@ func commandsIn(v any, depth int, f func(string)) {
 	switch t := v.(type) {
 	case map[string]any:
 		for _, k := range sortedKeys(t) {
-			if c, ok := t[k].(string); ok && k == "command" {
+			if c, ok := t[k].(string); ok && (k == "command" || k == "headersHelper") {
 				f(c)
 			} else {
 				commandsIn(t[k], depth+1, f)

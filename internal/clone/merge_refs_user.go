@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -21,7 +22,8 @@ import (
 //
 //   - <home>/.claude.json: mcpServers (user scope) and projects[<clone_of>].mcpServers;
 //   - <home>/.claude/settings.json and settings.local.json;
-//   - the managed settings (mergeManagedSettings).
+//   - the managed settings (mergeManagedSettings), its managed-settings.d/*.json
+//     drop-ins and the managed-mcp.json beside it.
 //
 // Unlike the host's work tree, these are the user's files and the merge cannot
 // do without them, so it fails closed: a file that is there and cannot be read,
@@ -64,8 +66,65 @@ func (s *refSink) scanUser(home string) error {
 		}
 	}
 	if mergeManagedSettings != "" {
-		return s.userSettings(mergeManagedSettings)
+		if err := s.userSettings(mergeManagedSettings); err != nil {
+			return err
+		}
+		dropIns, mcp := managedSiblings(mergeManagedSettings)
+		if err := s.userManagedDropIns(dropIns); err != nil {
+			return err
+		}
+		return s.userMCPFile(mcp)
 	}
+	return nil
+}
+
+// managedSiblings are the managed drop-in folder and managed-mcp.json that sit
+// in the same folder as the managed settings file.
+func managedSiblings(settings string) (dropIns, mcp string) {
+	dir := filepath.Dir(settings)
+	return filepath.Join(dir, "managed-settings.d"), filepath.Join(dir, "managed-mcp.json")
+}
+
+// userManagedDropIns reads the managed-settings.d/*.json drop-ins in name order.
+// A folder that is not there is nothing; one that is there and cannot be read is
+// an error, as it is to Claude Code. Past mergeRefFiles entries the scan fails.
+func (s *refSink) userManagedDropIns(dir string) error {
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	var names []string
+	for _, e := range ents {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			names = append(names, e.Name())
+		}
+	}
+	if len(names) > mergeRefFiles {
+		return errScanCap
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if err := s.userSettings(filepath.Join(dir, n)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// userMCPFile reads managed-mcp.json: a JSON object whose mcpServers are read
+// like a project's .mcp.json.
+func (s *refSink) userMCPFile(p string) error {
+	v, found, err := readUserJSON(p)
+	if !found || err != nil {
+		return err
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s: not a JSON object", p)
+	}
+	s.mcpServers(m["mcpServers"])
 	return nil
 }
 
@@ -94,28 +153,33 @@ func openUserFile(p string, limit int64) (*os.File, error) {
 	return f, nil
 }
 
-// userSettings reads a Claude Code settings file like the project's.
-func (s *refSink) userSettings(p string) error {
+// readUserJSON reads and parses a user file; found is false when it is not there.
+func readUserJSON(p string) (v any, found bool, err error) {
 	f, err := openUserFile(p, mergeUserSettingsBytes)
 	if f == nil {
-		return err
+		return nil, false, err
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, mergeUserSettingsBytes+1))
 	if err != nil {
-		return err
+		return nil, true, err
 	}
 	if len(data) > mergeUserSettingsBytes {
-		return fmt.Errorf("%s is over %d MiB", p, mergeUserSettingsBytes>>20)
+		return nil, true, fmt.Errorf("%s is over %d MiB", p, mergeUserSettingsBytes>>20)
 	}
-	var v any
 	if err := json.Unmarshal(data, &v); err != nil {
-		return fmt.Errorf("%s: %w", p, err)
+		return nil, true, fmt.Errorf("%s: %w", p, err)
 	}
+	return v, true, nil
+}
+
+// userSettings reads a Claude Code settings file like the project's.
+func (s *refSink) userSettings(p string) error {
+	v, _, err := readUserJSON(p)
 	if m, ok := v.(map[string]any); ok {
 		scanClaudeSettingsDoc(s, m)
 	}
-	return nil
+	return err
 }
 
 // userClaudeJSON reads the servers of ~/.claude.json: the user-scope ones and

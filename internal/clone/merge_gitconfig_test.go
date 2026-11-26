@@ -158,6 +158,7 @@ func TestMergeHomeGitConfigDenied(t *testing.T) {
 		{"filter plain word, a folder", "[filter \"x\"]\n\tclean = node cleaner\n", map[string]string{"cleaner/index.js": "h\n"}, "cleaner/index.js", true},
 		{"filter python -mmodule", "[filter \"x\"]\n\tclean = python -mcleaner2\n", nil, "cleaner2/__main__.py", true},
 		{"pager's own config at the top", "[core]\n\tpager = mypager\n", map[string]string{".mypagerrc": "h\n"}, ".mypagerrc", true},
+		{"textconv tool prefix rule", "[diff \"x\"]\n\ttextconv = npx eslint\n", nil, "eslint.config.js", true},
 		{"textconv plain word, README still merges", "[diff \"x\"]\n\ttextconv = node conv\n", map[string]string{"conv.js": "h\n"}, "README.md", false},
 		{"textconv plain word, nothing there", "[diff \"x\"]\n\ttextconv = node nothere\n", nil, "nothere.js", true},
 		{"textconv runner manifest is not added", "[diff \"x\"]\n\ttextconv = node conv\n", nil, "package.json", false},
