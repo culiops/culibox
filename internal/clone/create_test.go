@@ -55,6 +55,12 @@ func fixtureGit(t *testing.T, dir string, args ...string) {
 		t.Skip("no git on PATH")
 	}
 	env := append(CleanEnv(), "GIT_AUTHOR_NAME=F", "GIT_AUTHOR_EMAIL=f@x", "GIT_COMMITTER_NAME=F", "GIT_COMMITTER_EMAIL=f@x")
+	// No automatic maintenance: since git 2.47 a commit starts it detached, and it
+	// keeps rewriting the fixture's .git after the call returns (see
+	// TestFetchStartsNoAutomaticMaintenance), racing the test that reads it next.
+	// On the darwin runner (git 2.56) it made the .git walk of
+	// TestEstimateCopyOfARealRepo partial.
+	args = append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)
 	if _, err := g.Run(context.Background(), dir, env, args...); err != nil {
 		t.Fatal(err)
 	}
