@@ -316,29 +316,27 @@ func moreLines(lines []string, i int) bool {
 	return false
 }
 
-// scanRecipes reads a make, just or task recipe file at the repo top.
-func scanRecipes(s *refSink, data []byte) { s.scanRecipesIn(data, ".") }
-
-// readRecipe reads the recipe file rel (repo-relative) once, whatever named it.
-func (s *refSink) readRecipe(rel string) {
+// readRecipe reads the recipe file rel (repo-relative) once per kind (the
+// runner whose file it is: make, just or task), whatever named it.
+func (s *refSink) readRecipe(rel, kind string) {
 	rel = path.Clean(rel)
 	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) {
 		return
 	}
-	k := path.Dir(rel) + "\x00" + path.Base(rel)
+	k := path.Dir(rel) + "\x00" + path.Base(rel) + "\x00" + kind
 	if s.recipeSeen[k] {
 		return
 	}
 	s.recipeSeen[k] = true
 	dir := path.Dir(rel)
-	s.file(rel, func(s *refSink, data []byte) { s.scanRecipesIn(data, dir) })
+	s.file(rel, func(s *refSink, data []byte) { s.scanRecipesIn(data, dir, kind) })
 }
 
 // recipeInclude reads the file a recipe file (in dir) includes, imports or
 // names: relative to dir, then to the repo top. A name with "*" or "?" is
 // expanded over the folder's listing; one that is not a literal ("$", "(",
 // "{{", a backtick) fails the scan.
-func (s *refSink) recipeInclude(dir string, cands []string) {
+func (s *refSink) recipeInclude(dir string, cands []string, kind string) {
 	for _, c := range cands {
 		if strings.ContainsAny(c, "$(`") || strings.Contains(c, "{{") || strings.HasPrefix(strings.Trim(c, "\"'"), "~") {
 			s.fail(errScanCap)
@@ -348,11 +346,11 @@ func (s *refSink) recipeInclude(dir string, cands []string) {
 			continue
 		}
 		if path.IsAbs(c) {
-			s.recipeAbs(c, dir)
+			s.recipeAbs(c, dir, kind)
 			continue
 		}
 		for _, d := range []string{dir, "."} {
-			s.readRecipeName(path.Join(d, c))
+			s.readRecipeName(path.Join(d, c), kind)
 			if dir == "." {
 				break
 			}
@@ -363,25 +361,25 @@ func (s *refSink) recipeInclude(dir string, cands []string) {
 // recipeAbs reads a recipe file named by an absolute path: inside the repo as
 // that repo path, outside it at its real path (readOutsideRecipe). A glob
 // outside the repo fails the scan.
-func (s *refSink) recipeAbs(c, dir string) {
+func (s *refSink) recipeAbs(c, dir, kind string) {
 	if rel := absInside(s.of, filepath.FromSlash(c)); rel != "" {
-		s.readRecipeName(rel)
+		s.readRecipeName(rel, kind)
 		return
 	}
 	if strings.ContainsAny(c, "*?[") {
 		s.fail(errScanCap)
 		return
 	}
-	s.readOutsideRecipe(filepath.FromSlash(c), dir)
+	s.readOutsideRecipe(filepath.FromSlash(c), dir, kind)
 }
 
 // readOutsideRecipe reads a recipe file outside the repo (host-owned) once, by
 // its path, and scans it as run from dir. A missing file or a folder is
 // skipped; a file that is not regular, cannot be read or is over the size cap
 // fails the scan; it counts against mergeRefFiles.
-func (s *refSink) readOutsideRecipe(abs, dir string) {
+func (s *refSink) readOutsideRecipe(abs, dir, kind string) {
 	abs = filepath.Clean(abs)
-	k := "\x00abs\x00" + abs
+	k := "\x00abs\x00" + abs + "\x00" + kind
 	if s.recipeSeen[k] {
 		return
 	}
@@ -422,11 +420,11 @@ func (s *refSink) readOutsideRecipe(abs, dir string) {
 		s.fail(errScanCap)
 		return
 	}
-	s.scanRecipesIn(data, dir)
+	s.scanRecipesIn(data, dir, kind)
 }
 
 // readRecipeName reads rel, or every file a glob in its last element matches.
-func (s *refSink) readRecipeName(rel string) {
+func (s *refSink) readRecipeName(rel, kind string) {
 	d, pat := path.Split(rel)
 	d = path.Clean(d)
 	if strings.ContainsAny(d, "*?[") {
@@ -434,7 +432,7 @@ func (s *refSink) readRecipeName(rel string) {
 		return
 	}
 	if !strings.ContainsAny(pat, "*?[") {
-		s.readRecipe(rel)
+		s.readRecipe(rel, kind)
 		return
 	}
 	pat = strings.ToLower(pat)
@@ -448,7 +446,7 @@ func (s *refSink) readRecipeName(rel string) {
 		if ok, _ := path.Match(pat, k); ok {
 			name := path.Join(d, l.names[k])
 			s.pathArg(name)
-			s.readRecipe(name)
+			s.readRecipe(name, kind)
 		}
 	}
 }
@@ -460,16 +458,35 @@ func (s *refSink) readRecipeName(rel string) {
 // Taskfile all read as commands. The files make includes, just imports or mods
 // and a Taskfile's includes name are paths and are read too (recipeInclude). A
 // file with more than mergeRefLines lines fails the scan.
-func (s *refSink) scanRecipesIn(data []byte, dir string) {
+//
+// In a make file (kind "make") no "key:" is stripped: a rule line
+// ("targets: prerequisites") is a header, whose prerequisites are targets and
+// not commands (#370 M1), so only what follows its ";" is read; a header whose
+// prerequisites hold "$", a backtick or "=" (a function call, a target-specific
+// variable) is read whole, as is every recipe line (tab-indented, or continued
+// with a backslash), every line of a define block and every other line. A make
+// file that sets .RECIPEPREFIX
+// has recipe lines a header could be mistaken for, so none of its lines is
+// taken as a header.
+func (s *refSink) scanRecipesIn(data []byte, dir, kind string) {
 	lines := strings.Split(string(data), "\n")
 	includesIndent := -1 // indent of a Taskfile "includes:" key, -1 outside it
 	entryIndent := -1    // indent of its entries, -1 until the first
+	isMake := kind == "make"
+	headers := isMake && !strings.Contains(string(data), ".RECIPEPREFIX")
+	cont := contNone // how the next line continues this one
+	define := 0      // depth of make define ... endef: its text may be a recipe
 	for i, line := range lines {
 		if i >= mergeRefLines {
 			if moreLines(lines, i) {
 				s.fail(errScanCap)
 			}
 			return
+		}
+		prev := cont
+		cont = contNone
+		if isMake && strings.HasSuffix(strings.TrimRight(line, " \t\r"), `\`) {
+			cont = contRead
 		}
 		t := strings.TrimSpace(line)
 		if t == "" || t[0] == '#' {
@@ -494,7 +511,7 @@ func (s *refSink) scanRecipesIn(data []byte, dir string) {
 				continue
 			}
 			s.pathArg(v)
-			s.recipeInclude(dir, []string{v, v + "/Taskfile.yml", v + "/Taskfile.yaml"})
+			s.recipeInclude(dir, []string{v, v + "/Taskfile.yml", v + "/Taskfile.yaml"}, kind)
 		} else if includesIndent >= 0 {
 			if entryIndent < 0 {
 				entryIndent = indent
@@ -508,14 +525,50 @@ func (s *refSink) scanRecipesIn(data []byte, dir string) {
 					continue
 				}
 				s.pathArg(v)
-				s.recipeInclude(dir, []string{v, v + "/Taskfile.yml", v + "/Taskfile.yaml"})
+				s.recipeInclude(dir, []string{v, v + "/Taskfile.yml", v + "/Taskfile.yaml"}, kind)
+			}
+		}
+		if headers && prev == contNone {
+			if f := strings.Fields(t); slices.Contains(f, "define") && (f[0] == "define" || len(f) > 1 && f[1] == "define") {
+				define++
+			} else if f[0] == "endef" && define > 0 {
+				define--
+			}
+		}
+		if headers && define == 0 {
+			switch {
+			case prev == contSkip: // more prerequisites
+				if !strings.ContainsAny(t, "$`;=") {
+					if cont == contRead {
+						cont = contSkip
+					}
+					continue
+				}
+			case prev == contRead || strings.HasPrefix(line, "\t"): // a recipe line
+			default:
+				if rest, ok := makeRuleHeader(t); ok {
+					switch j := strings.IndexByte(rest, ';'); {
+					case strings.ContainsAny(rest, "$`="):
+						t = rest
+					case j >= 0:
+						t = rest[j+1:] // "target: prereqs ; recipe"
+					default:
+						if cont == contRead {
+							cont = contSkip
+						}
+						continue
+					}
+				}
+			}
+			if t = strings.TrimSpace(t); t == "" {
+				continue
 			}
 		}
 		for n := 0; n < 8; n++ { // a few prefixes: "- @cmd", "- key: cmd"
 			switch {
 			case strings.ContainsRune("@-+", rune(t[0])):
 				t = strings.TrimSpace(t[1:])
-			case recipeKeyRE.MatchString(t):
+			case !isMake && recipeKeyRE.MatchString(t):
 				t = strings.TrimSpace(t[strings.IndexByte(t, ':')+1:])
 			default:
 				n = 8
@@ -534,7 +587,7 @@ func (s *refSink) scanRecipesIn(data []byte, dir string) {
 			} else {
 				for _, a := range args {
 					s.pathArg(a)
-					s.recipeInclude(dir, []string{a})
+					s.recipeInclude(dir, []string{a}, kind)
 				}
 			}
 		}
@@ -569,18 +622,41 @@ func (s *refSink) justMod(dir string, args []string) {
 	for _, c := range cands {
 		s.pathArg(c)
 		if path.IsAbs(c) {
-			s.recipeAbs(c, dir)
+			s.recipeAbs(c, dir, "just")
 			continue
 		}
 		for _, d := range []string{dir, "."} {
 			rel := path.Join(d, c)
 			l := s.listing(path.Dir(rel))
 			if name, ok := l.names[strings.ToLower(path.Base(rel))]; ok {
-				s.readRecipe(path.Join(path.Dir(rel), name))
+				s.readRecipe(path.Join(path.Dir(rel), name), "just")
 			}
 			if dir == "." {
 				break
 			}
 		}
 	}
+}
+
+// How a make line continues the one before it (a trailing backslash).
+const (
+	contNone = iota
+	contRead // a recipe or other line: read
+	contSkip // a header's prerequisites: not commands
+)
+
+// makeRuleHeader returns what follows the colon of a make rule line ("targets:
+// prerequisites", "targets:: ...", "a b &: ..."), ok false for any other line:
+// an assignment (":=", "::=", "=" before the colon) or a line whose targets are
+// computed ("$", a backtick, parentheses), which is read as before.
+func makeRuleHeader(t string) (string, bool) {
+	i := strings.IndexByte(t, ':')
+	if i <= 0 || strings.ContainsAny(t[:i], "=$`(){}") {
+		return "", false
+	}
+	rest := strings.TrimLeft(t[i+1:], ":")
+	if strings.HasPrefix(rest, "=") {
+		return "", false
+	}
+	return rest, true
 }

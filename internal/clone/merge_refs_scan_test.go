@@ -911,6 +911,19 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 		{"bash -c: a second make after && reads its -f file", map[string]string{".claude/settings.json": hookSettings(`bash -c \"make fmt && make -f x2.mk lint\"`), "x2.mk": "lint:\n\t./xm2/x.sh\n"}, "xm2/x.sh", true},
 		{"make 2>&1 -f FILE", map[string]string{".claude/settings.json": hookSettings("make 2>&1 -f r1.mk lint"), "r1.mk": "lint:\n\t./rd1/x.sh\n"}, "rd1/x.sh", true},
 		{"a recipe file nobody calls merges", map[string]string{".claude/settings.json": hookSettings("true"), "Makefile": "fmt:\n\t./tools/fmt.sh\n"}, "tools/fmt.sh", false},
+		// A make rule's prerequisites are targets, not commands (#370 M1).
+		{"make .PHONY prerequisites: test/ merges", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": ".PHONY: test lint\nlint:\n\tgolangci-lint run\n"}, "test/a_test.go", false},
+		{"make rule prerequisites: build.sh merges", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": "all: build test\nlint: build\n\tgolangci-lint run\n"}, "build.sh", false},
+		{"make prerequisites continued: build.sh merges", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": "lint: fmt \\\n  build test\n\tgolangci-lint run\n"}, "build.sh", false},
+		{"make recipe line: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": ".PHONY: lint\nlint:\n\t./tools/x.sh\n"}, "tools/x.sh", true},
+		{"make recipe after ; on a rule line: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": "lint: deps ; ./tools/y.sh\n"}, "tools/y.sh", true},
+		{"make recipe line with a colon: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": "lint:\n\t./tools/z.sh --opt a: b\n"}, "tools/z.sh", true},
+		{"make recipe continued with a colon: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": "lint:\n\tgolangci-lint run \\\n   ./tools/w.sh: x\n"}, "tools/w.sh", true},
+		{"make prerequisite with a function call: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": "lint: $(shell ./tools/v.sh)\n\ttrue\n"}, "tools/v.sh", true},
+		{"make target-specific shell variable: refused", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": "lint: V := $(shell ./tools/u.sh)\nlint:\n\ttrue\n"}, "tools/u.sh", true},
+		{"make define block: a line in it is read whole", map[string]string{".claude/settings.json": hookSettings("make lint"), "Makefile": "define RUN\n./tools/d.sh: arg\nendef\nlint:\n\t$(RUN)\n"}, "tools/d.sh", true},
+		{"make after a define block: prerequisites skipped", map[string]string{".claude/settings.json": hookSettings("make lint"), "build.sh": "h\n", "Makefile": "define RUN\ntrue\nendef\nlint: build\n\t$(RUN)\n"}, "build.sh", false},
+		{"make .RECIPEPREFIX: every line read", map[string]string{".claude/settings.json": hookSettings("make lint"), "test/a_test.go": "h\n", "build.sh": "h\n", "Makefile": ".RECIPEPREFIX = >\nlint:\n>build.sh x: y\n"}, "build.sh", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
