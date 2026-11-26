@@ -1250,3 +1250,24 @@ func TestMergeHomeEnvRefNotEchoed(t *testing.T) {
 		}
 	})
 }
+
+// A path an env value named never shows in the Detail text either, even when
+// the link check fails on it with an error that names the path (#370 M3).
+func TestMergeHomeEnvRefNotInDetail(t *testing.T) {
+	long := strings.Repeat("s", 300) // an Lstat error: the name is too long
+	x := newMergeFx(t, "main")
+	x.commit("host", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"srv","env":{"X":"./envdir/` + long + `"}}}}`,
+		"envdir/keep": "h\n"})
+	x.box("main", map[string]string{"b.txt": "b\n"})
+	got := x.run(newRec(t), &auditRec{})
+	wantMergeReason(t, got, MergeGuarded)
+	if len(got.Paths) != 0 {
+		t.Fatalf("Paths = %q, want none", got.Paths)
+	}
+	if strings.Contains(got.Detail, "envdir") || strings.Contains(got.Detail, long[:40]) {
+		t.Fatalf("Detail = %q, names the env value", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "environment value") {
+		t.Fatalf("Detail = %q", got.Detail)
+	}
+}

@@ -407,7 +407,7 @@ func (m *merger) linkDenies(hooks, gitDenied, imports, refs []string, quiet map[
 			return nil, full()
 		case err != nil && quiet[foldKey(s)]: // named by an environment value: not shown
 			return nil, m.result(MergeGuarded, "a path named in an environment value is a symbolic link the merge cannot follow ("+
-				linkErrText(err)+"), so it cannot tell what the link leads to", nil)
+				linkErrQuiet(err)+"), so it cannot tell what the link leads to", nil)
 		case err != nil:
 			return nil, m.result(MergeGuarded, "a protected file or folder is a symbolic link the merge cannot follow ("+
 				linkErrText(err)+"), so it cannot tell what the link leads to", []string{s})
@@ -500,6 +500,19 @@ func linkErrText(err error) string {
 		return errLinkLoop.Error()
 	}
 	return fmt.Sprintf("%v", err)
+}
+
+// linkErrQuiet is linkErrText without the path: an Lstat or Readlink error
+// names the path, and one an environment value named is never shown (#370 M3).
+func linkErrQuiet(err error) string {
+	var pe *fs.PathError
+	switch {
+	case errors.Is(err, errLinkLoop):
+		return errLinkLoop.Error()
+	case errors.As(err, &pe):
+		return pe.Err.Error()
+	}
+	return "it cannot be read"
 }
 
 // sameComps compares a resolved path with a spelling, ignoring "." and case.
