@@ -165,14 +165,15 @@ function cdIsMergeHomeAck(err) {
 }
 
 // cdMergeHomeDialog: the words of the dialog that opens when "Merge into the checked-out branch" is turned on, from the
-// founder-approved copy (spec 5.5). repo is the profile's clone_of: text, never a replacement pattern.
+// founder-approved copy (spec 5.5), re-approved 2026-11-26 with the guard's gaps named. repo is the profile's clone_of: text, never a replacement pattern.
 function cdMergeHomeDialog(repo) {
   return {
     title: "Merge box work into your branch?",
     body: "The box's commits will land in the branch you have checked out in " + repo + ", with no review step. " +
       "Anything the box wrote then runs with your permissions when you or a tool runs it: a build, a test, a script. " +
-      "CuliBox never merges changes to files host tools load by themselves (.claude/, CLAUDE.md, .mcp.json, .envrc, git attributes and hooks, editor tasks) " +
-      "or flagged files (executables, links out of the repo, archives); those stay as box/<branch> for you to review. " +
+      "CuliBox does not merge changes to files host tools load by themselves (.claude/, CLAUDE.md, .mcp.json, .envrc, mise, git config, attributes and hooks, editor tasks), " +
+      "to the scripts and folders those files name, or flagged files (executables, links out of the repo, archives); those stay as box/<branch> for you to review. " +
+      "It cannot follow what those scripts import from elsewhere in the repo, and your CI runs the box's workflow changes on your next push. " +
       "A dirty work tree is never touched.",
     confirmLabel: "Turn on",
     cancelLabel: "Cancel",

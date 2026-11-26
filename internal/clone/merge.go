@@ -5,14 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
-	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/handback"
@@ -47,8 +45,11 @@ type MergeResult struct {
 	Commits int       `json:"commits,omitempty"` // in From..To
 	Files   int       `json:"files,omitempty"`   // distinct paths in From..To
 	Reason  string    `json:"reason,omitempty"`  // "" when Merged
-	Detail  string    `json:"detail,omitempty"`  // sanitized, <= maxErrRunes
-	Paths   []string  `json:"paths,omitempty"`   // <= 3 examples for guarded/flagged/filter, sanitized
+	// Attempted is true only when `git merge` ran and git refused it: the one
+	// failure the retry window holds. A failed pre-check or audit is not.
+	Attempted bool     `json:"attempted,omitempty"`
+	Detail    string   `json:"detail,omitempty"` // sanitized, <= maxErrRunes
+	Paths     []string `json:"paths,omitempty"`  // <= 3 examples for guarded/flagged/filter, sanitized
 }
 
 // MergeRequest is one MergeHome call.
@@ -70,12 +71,20 @@ type MergeRequest struct {
 // basename at any depth, that a box's commits must not touch for the merge to
 // happen: files host tools (an agent, direnv, mise, git) load and act on by
 // themselves. Entries may be added, never dropped.
-var MergeDenyNames = append(slices.Clone(box.InPlaceGuardFiles),
+var MergeDenyNames = append(box.InPlaceGuardFiles(),
 	".envrc", ".gitattributes", ".gitmodules", "mise.toml", ".mise.toml",
 	"mise.local.toml", ".mise.local.toml",
 	".pre-commit-config.yaml", ".pre-commit-hooks.yaml", ".overcommit.yml",
 	"lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml",
-	"lefthook-local.yml", "lefthook-local.yaml", ".lefthook-local.yml", ".lefthook-local.yaml")
+	"lefthook-local.yml", "lefthook-local.yaml", ".lefthook-local.yml", ".lefthook-local.yaml",
+	// direnv's dotenv, nix-direnv and devenv load these on the next prompt in the
+	// folder, node and yarn run what these name on every call.
+	".env", "flake.nix", "flake.lock", "shell.nix", "default.nix", "devenv.nix", "devenv.yaml",
+	"devenv.lock", "devbox.json", ".npmrc", ".yarnrc.yml", ".yarnrc")
+
+// MergeDenyPatterns are path.Match patterns for more file names, matched like
+// MergeDenyNames (any depth, case-insensitive, by the basename).
+var MergeDenyPatterns = []string{".env.*", ".envrc*", "mise.*.toml", ".mise.*.toml", "*.code-workspace", ".aider*"}
 
 // MergeDenyDirs are directory names, matched case-insensitively against every
 // path component, under which a box's commits block the merge: an agent's
@@ -87,7 +96,14 @@ var MergeDenyDirs = []string{".claude"}
 // tool configs (mise reads mise/ and .config/mise/), which run commands when the
 // host opens or commits in the repo. clone_of's own core.hooksPath is added at
 // run time when it is inside the repo.
-var MergeDenyTop = []string{".husky", ".githooks", ".vscode", ".devcontainer", ".mise", "mise", ".config"}
+var MergeDenyTop = []string{".husky", ".githooks", ".vscode", ".devcontainer", ".mise", "mise", ".config",
+	".idea", ".zed", ".cursor", ".gemini", ".codex", ".windsurf", ".continue"}
+
+// MergeDenyTopPaths are repo-relative paths (a file or a folder, matched by
+// whole components, case-insensitive) a box's commits must not touch: other
+// agents' instructions that load by themselves. CI definitions are not here:
+// they run on the user's next push.
+var MergeDenyTopPaths = []string{".github/copilot-instructions.md", ".github/instructions", ".github/prompts"}
 
 const (
 	mergeRetryAfter = 30 * time.Minute
@@ -97,6 +113,12 @@ const (
 	// mergeFlaggedDetail starts the Detail of a flagged result that found flags.
 	mergeFlaggedDetail = "the commits carry flagged files"
 )
+
+// MergeFlaggedFound reports whether the Detail of a flagged result says the
+// inspection found flagged files, a settled answer for its range. A flagged
+// result without it is a scan that could not finish (a deadline, a git failure),
+// which is run again.
+func MergeFlaggedFound(detail string) bool { return strings.HasPrefix(detail, mergeFlaggedDetail) }
 
 // MergeHome fast-forwards X, the branch checked out in r.Of, to box/X when box/X
 // is this clone's own tip for X (r.CloneTips) and strictly ahead, the tree is
@@ -177,6 +199,58 @@ func (m *merger) headBranch() (string, error) {
 	return strings.TrimPrefix(ref, "refs/heads/"), nil
 }
 
+// boxWorkWaiting reports whether some branch x of this clone's own listing has
+// refs/heads/box/x at the clone's tip for x and different from refs/heads/x: box
+// work is waiting to be merged, so a detached HEAD is worth saying.
+//
+// One for-each-ref lists every local branch and the answer is compared here, so
+// the cost does not grow with the number of branches. The branch names in tips
+// and in the listing are box-controlled text: they are only compared as
+// strings, never passed back to git, and a line that is not exactly
+// "refs/heads/<name> <type> <id>" is an error (fail closed).
+func (m *merger) boxWorkWaiting(tips map[string]string) (bool, error) {
+	want := false
+	for x, tip := range tips {
+		if x != "" && tip != "" {
+			want = true
+			break
+		}
+	}
+	if !want {
+		return false, nil
+	}
+	out, err := m.run(m.env(), "for-each-ref", "--format=%(refname) %(objecttype) %(objectname)", "refs/heads/")
+	if err != nil {
+		return false, err
+	}
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		return false, errors.New("the branch list is cut short")
+	}
+	heads := map[string]string{} // branch name -> commit id
+	for _, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+		if line == "" && len(out) == 0 {
+			break
+		}
+		f := strings.Split(line, " ")
+		name, ok := strings.CutPrefix(f[0], "refs/heads/")
+		if len(f) != 3 || !ok || name == "" || !blobIDRE.MatchString(f[2]) {
+			return false, errors.New("unexpected line in the branch list")
+		}
+		if f[1] == "commit" {
+			heads[name] = f[2]
+		}
+	}
+	for x, tip := range tips {
+		if x == "" || tip == "" {
+			continue
+		}
+		if box := heads["box/"+x]; box != "" && box == tip && heads[x] != box {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // commitOf returns the full id of the commit ref names, "" when there is none.
 func (m *merger) commitOf(ref string) (string, error) {
 	out, err := m.run(m.env(), "rev-parse", "--verify", "-q", ref+"^{commit}")
@@ -212,6 +286,13 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		return m.failed("cannot read HEAD", err)
 	}
 	if x == "" {
+		waiting, err := m.boxWorkWaiting(r.CloneTips)
+		if err != nil {
+			return m.failed("cannot read box branches", err)
+		}
+		if !waiting {
+			return nil // nothing of this profile's to merge, so nothing to report
+		}
 		return m.result(MergeDetached, "HEAD is not on a branch", nil)
 	}
 	m.branch = x
@@ -241,6 +322,27 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		return m.failed("cannot compare "+x+" and box/"+x, err)
 	} else if !ahead {
 		return m.result(MergeDiverged, x+" and box/"+x+" both have commits the other lacks", nil)
+	}
+
+	// A merge git refused for this same range is retried at most every 30 min,
+	// so a persistent refusal does not write audit rows on every pass. Only that
+	// failure holds the window (a pre-check or audit failure may have cleared),
+	// and it is checked before the scan: nothing merges inside the window, so
+	// the dirty check and the scan would only repeat.
+	if p := r.Prev; p != nil && p.Reason == MergeFailed && p.Attempted && p.From == m.from && p.To == m.to &&
+		now().Sub(p.At) < mergeRetryAfter {
+		return p
+	}
+
+	// Flags found in this same range are not looked for again, and nothing else
+	// is either: they come from its blobs, which the range fixes, and a flagged
+	// range does not merge whatever the tree, the config or the guard now say, so
+	// every scan below would only repeat a refusal (the same reasoning as the
+	// retry window above). A scan that found no flag but could not finish (a
+	// deadline, a git failure) is not held: it runs again, in full.
+	if p := r.Prev; p != nil && p.Reason == MergeFlagged && p.From == m.from && p.To == m.to &&
+		MergeFlaggedFound(p.Detail) {
+		return p
 	}
 
 	// 3. A clean tree (tracked files; git itself refuses to overwrite an untracked one).
@@ -284,35 +386,62 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		}
 	}
 	m.files = len(paths)
-	hooks, err := m.hookDirs(r.Home)
+	gc, err := m.gitConfig(r.Home)
 	if err != nil {
-		return m.failed("cannot read core.hooksPath", err)
+		return m.failed("cannot read git config", err)
 	}
-	agentDenied, err := m.agentImportDenies(r.Home)
+	agentDenied, importPaths, err := m.agentImportDenies(r.Home)
 	if err != nil {
 		return m.failed("cannot list the CLAUDE.md files", err)
+	}
+	refDenied, refPaths, err := m.configRefDenies(r.Home, gc.hooks)
+	if err != nil {
+		return m.failed("cannot read the Claude Code config", err)
 	}
 	var denied []string
 	dseen := map[string]bool{}
 	for _, e := range entries {
-		if (e.gitlink || mergeDenied(e.path, hooks) || agentDenied(e.path)) && !dseen[e.path] {
+		if (e.gitlink || mergeDenied(e.path, gc.hooks) || importDenied(e.path, gc.denied) || agentDenied(e.path) || refDenied(e.path)) && !dseen[e.path] {
 			dseen[e.path] = true
 			denied = append(denied, e.path)
 		}
 	}
 	if len(denied) > 0 {
-		return m.result(MergeGuarded, "the commits touch files host tools load by themselves "+
-			"(agent settings, hooks, attributes, editor tasks) or a submodule", denied)
+		return m.result(MergeGuarded, "the commits touch files host tools load or run by themselves "+
+			"(agent, direnv and mise settings and the files they name, hooks, attributes, editor tasks, git config) or a submodule", denied)
 	}
 
-	// 4b. The handback inspection of the range; anything short of a clean,
-	// complete scan refuses. Flags found in this same range are not looked for
-	// again: they come from its blobs, which the range fixes. A scan that found
-	// none but could not finish (a deadline, a git failure) is run again.
-	if p := r.Prev; p != nil && p.Reason == MergeFlagged && p.From == m.from && p.To == m.to &&
-		strings.HasPrefix(p.Detail, mergeFlaggedDetail) {
-		return p
+	// 4a'. The files those names really lead to: a protected name that is a
+	// symbolic link in the host's work tree sends its tools to another file.
+	// Only when nothing above refused, so a refused merge costs no more.
+	links, lres := m.linkDenies(gc.hooks, gc.denied, importPaths, refPaths)
+	if lres != nil {
+		return lres
 	}
+	for _, e := range entries {
+		if links.denied(e.path) && !dseen[e.path] {
+			dseen[e.path] = true
+			denied = append(denied, e.path)
+		}
+	}
+	if len(denied) > 0 {
+		return m.result(MergeGuarded, "the commits touch a file a protected name links to "+
+			"(agent, direnv and mise settings and the files they name, hooks, git config)", denied)
+	}
+
+	// 4b. No path a git filter would process on checkout (one cheap check-attr,
+	// before the full scan).
+	filtered, err := m.filtered(paths)
+	if err != nil {
+		return m.failed("cannot check git attributes", err)
+	}
+	if len(filtered) > 0 {
+		return m.result(MergeFilter, "a file the commits change has a git filter attribute (e.g. Git LFS)", filtered)
+	}
+
+	// 4c. The handback inspection of the range; anything short of a clean,
+	// complete scan refuses. A scan that found none but could not finish (a
+	// deadline, a git failure) is run again; flags found are held above.
 	rep := InspectBranch(m.ctx, m.g, m.of, m.from, m.to, r.Lim)
 	if len(rep.Flags) > 0 || rep.Truncated != "" || rep.Incomplete {
 		var fp []string
@@ -327,15 +456,6 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 			detail += ": " + rep.Truncated
 		}
 		return m.result(MergeFlagged, detail, fp)
-	}
-
-	// 4c. No path a git filter would process on checkout.
-	filtered, err := m.filtered(paths)
-	if err != nil {
-		return m.failed("cannot check git attributes", err)
-	}
-	if len(filtered) > 0 {
-		return m.result(MergeFilter, "a file the commits change has a git filter attribute (e.g. Git LFS)", filtered)
 	}
 
 	// 5. Nothing moved while it was being checked.
@@ -353,13 +473,6 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		return res
 	}
 
-	// A merge git refused for this same range is retried at most every 30 min,
-	// so a persistent refusal does not write audit rows on every pass.
-	if p := r.Prev; p != nil && p.Reason == MergeFailed && p.From == m.from && p.To == m.to &&
-		now().Sub(p.At) < mergeRetryAfter {
-		return p
-	}
-
 	// 6. Audit, fail closed, then merge.
 	detail := fmt.Sprintf("%s %s..%s %d commits", sanitizeN(x, maxErrRunes), m.from[:7], m.to[:7], m.commits)
 	if r.Audit == nil || r.Audit("clone_merge_home", detail) != nil {
@@ -374,7 +487,9 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if err != nil {
 		_ = r.Audit("clone_merge_home_failed", detail)
 		// ExecGit names the first argument ("-c" of hardenFlags) in its error.
-		return m.result(MergeFailed, "git merge: "+strings.TrimPrefix(err.Error(), "git -c: "), nil)
+		res := m.result(MergeFailed, "git merge: "+strings.TrimPrefix(err.Error(), "git -c: "), nil)
+		res.Attempted = true
+		return res
 	}
 	res := m.result("", "", nil)
 	res.Merged = true
@@ -468,7 +583,8 @@ func octalMode(s string) bool {
 }
 
 // mergeDenied reports whether p (a repo-relative path from the range) is a
-// file host tools trust: MergeDenyNames, MergeDenyDirs, MergeDenyTop, or at,
+// file host tools trust: MergeDenyNames, MergeDenyPatterns, MergeDenyDirs,
+// MergeDenyTop, MergeDenyTopPaths, or at,
 // under or a parent of one of hookDirs (repo-relative directories, "." for the
 // whole repo). Case-insensitive throughout, by strings.EqualFold per path
 // component: on a case-insensitive file system (macOS) .Claude/ is .claude/,
@@ -485,6 +601,17 @@ func mergeDenied(p string, hookDirs []string) bool {
 	base := comps[len(comps)-1]
 	for _, n := range MergeDenyNames {
 		if strings.EqualFold(base, n) {
+			return true
+		}
+	}
+	fb := foldKey(base)
+	for _, pat := range MergeDenyPatterns {
+		if ok, _ := path.Match(foldKey(pat), fb); ok {
+			return true
+		}
+	}
+	for _, tp := range MergeDenyTopPaths {
+		if foldPrefix(strings.Split(tp, "/"), comps) {
 			return true
 		}
 	}
@@ -509,6 +636,19 @@ func mergeDenied(p string, hookDirs []string) bool {
 	return false
 }
 
+// foldKey maps every letter of s to the smallest member of its case-folding
+// orbit, so two strings that strings.EqualFold match have the same key, and a
+// pattern keyed the same way matches what EqualFold would.
+func foldKey(s string) string {
+	return strings.Map(func(r rune) rune {
+		m := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			m = min(m, f)
+		}
+		return m
+	}, s)
+}
+
 // foldPrefix reports whether the path components pre are the first components
 // of p (or all of them), each compared with strings.EqualFold.
 func foldPrefix(pre, p []string) bool {
@@ -527,71 +667,7 @@ func foldPrefix(pre, p []string) bool {
 // a test can point it elsewhere.
 var mergeSystemGitConfig = "/etc/gitconfig"
 
-// hookDirs returns the repo-relative directories (lower-cased) that any
-// core.hooksPath the user's own git may read names inside clone_of: the user's
-// git runs hooks from there, so a box commit writing into one would run on the
-// host at the next commit. Every value found counts, whatever its precedence.
-//
-// The repo's own value cannot be read with `config --get`: hardenFlags set
-// core.hooksPath on the command line, which that would print (measured, git
-// 2.39.5), so every value from any scope but "command" is taken. CleanEnv
-// hides the global and system config, which the user's git reads: each file
-// is read on its own with --file (which leaves out the command line), with
-// HOME set to home so a ~ include resolves as for the user. home == "" skips
-// the global files.
-func (m *merger) hookDirs(home string) ([]string, error) {
-	out, err := m.run(m.env(), "config", "-z", "--show-scope", "--get-all", "core.hooksPath")
-	if err != nil {
-		if code, ok := exitCode(err); !ok || code != 1 {
-			return nil, err
-		}
-	}
-	var vals []string
-	toks := strings.Split(string(out), "\x00")
-	for i := 0; i+1 < len(toks); i += 2 {
-		if toks[i] != "command" {
-			vals = append(vals, toks[i+1])
-		}
-	}
-	var files []string
-	env := m.env()
-	if home != "" {
-		files = append(files, filepath.Join(home, ".gitconfig"))
-		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-			files = append(files, filepath.Join(xdg, "git", "config"))
-		} else {
-			files = append(files, filepath.Join(home, ".config", "git", "config"))
-		}
-		env = append(globalEnv(home), "GIT_NO_REPLACE_OBJECTS=1")
-	}
-	files = append(files, mergeSystemGitConfig)
-	for _, f := range files {
-		if _, err := os.Stat(f); errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		out, err := m.run(env, "config", "-z", "--includes", "--file", f, "--get-all", "core.hooksPath")
-		if err != nil {
-			if code, ok := exitCode(err); ok && code == 1 {
-				continue
-			}
-			return nil, fmt.Errorf("%s: %w", f, err)
-		}
-		for _, v := range strings.Split(string(out), "\x00") {
-			if v != "" {
-				vals = append(vals, v)
-			}
-		}
-	}
-	var dirs []string
-	for _, v := range vals {
-		if d := hooksDirOf(m.of, home, v); d != "" && !slices.Contains(dirs, d) {
-			dirs = append(dirs, d)
-		}
-	}
-	return dirs, nil
-}
-
-// hooksDirOf is the lower-cased repo-relative directory the hooksPath value v
+// hooksDirOf is the repo-relative directory the hooksPath value v
 // names when it is relative (to the work tree's top, where hooks run) or
 // absolute inside of; "" otherwise.
 func hooksDirOf(of, home, v string) string {
@@ -612,7 +688,7 @@ func hooksDirOf(of, home, v string) string {
 	if rel == ".." || strings.HasPrefix(rel, "../") {
 		return ""
 	}
-	return strings.ToLower(rel)
+	return rel
 }
 
 // absInside is the absolute path v relative to of, slash-separated, when v is

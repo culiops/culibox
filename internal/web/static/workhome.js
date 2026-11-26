@@ -110,7 +110,7 @@ function workHomeHb(name) {
 }
 
 // --- opt-in merge into the checked-out branch (#370) -------------------------------------------------------------
-// A return's merge result m: {at, branch, from, to, merged, commits, files, reason, detail, paths}. X is m.branch: the
+// A return's merge result m: {at, branch, from, to, merged, commits, files, reason, detail, paths, attempted}. X is m.branch: the
 // host branch has the box branch's name. Every string in m came from the box or the host repo: plain text only.
 
 // mergePlural: "1 commit", "3 commits".
@@ -134,7 +134,7 @@ function mergeReasonText(m) {
     case "flagged": return "it has files flagged for review: " + mergePathsText(m);
     case "filter": return "it changes files that use a git filter (such as Git LFS): " + mergePathsText(m);
     case "moved": return x + " moved while it was checked; it is tried again on the next return";
-    case "failed": return "git refused: " + ((m && m.detail) || "");
+    case "failed": return (m.attempted ? "git refused: " : "could not merge: ") + (m.detail || "");
     default: return "it was not merged";
   }
 }
@@ -146,6 +146,8 @@ function mergeToastPart(m) {
   const x = m.branch || "";
   if (m.merged) return "merged box/" + x + " into " + x + " (" + mergePlural(m.commits || 0, "commit") + ", " + mergePlural(m.files || 0, "file") + ")";
   if (!m.reason) return "";
+  // No branch (a detached HEAD): "box/ not merged into :" would name nothing.
+  if (!x) return "box work not merged: " + mergeReasonText(m);
   return "box/" + x + " not merged into " + x + ": " + mergeReasonText(m);
 }
 

@@ -392,7 +392,7 @@ func mergeNoteOf(m *clone.MergeResult) *session.MergeNote {
 	}
 	return &session.MergeNote{
 		At: m.At, Branch: m.Branch, From: m.From, To: m.To, Merged: m.Merged, Commits: m.Commits, Files: m.Files,
-		Reason: m.Reason, Detail: m.Detail, Paths: slices.Clone(m.Paths),
+		Reason: m.Reason, Detail: m.Detail, Paths: slices.Clone(m.Paths), Attempted: m.Attempted,
 	}
 }
 
@@ -490,7 +490,10 @@ func (h *cloneHooks) ReturnForRepo(ctx context.Context, cwd string) []session.Re
 			s.Profile = c.Profile
 			// A deadline that cut a listing or host check (an Error) or a lock
 			// wait (in-use) left work unchecked: continue it like a deferred one.
-			cut = ctx.Err() != nil && (s.Error != "" || s.Skipped == clone.SkipInUse)
+			// So does a merge that failed before git merge ran (a pre-check the
+			// deadline cut), or a flagged one whose scan found no flag and could not
+			// finish: only a merge git refused, or flags found, is a settled answer.
+			cut = ctx.Err() != nil && (s.Error != "" || s.Skipped == clone.SkipInUse || mergeCutShort(s.Merge))
 		}
 		if cut || returnDeferred(s) {
 			later = append(later, c)
@@ -509,6 +512,22 @@ func (h *cloneHooks) ReturnForRepo(ctx context.Context, cwd string) []session.Re
 		}()
 	}
 	return sums
+}
+
+// mergeCutShort reports a merge result that was not decided, which a deadline
+// can cause: one that failed before git merge ran, or a flagged one whose scan
+// found no flag (it could not finish). It is tried again.
+func mergeCutShort(m *session.MergeNote) bool {
+	if m == nil {
+		return false
+	}
+	switch m.Reason {
+	case clone.MergeFailed:
+		return !m.Attempted
+	case clone.MergeFlagged:
+		return !clone.MergeFlaggedFound(m.Detail)
+	}
+	return false
 }
 
 // returnDeferred reports that a return was cut short by time: it was skipped as

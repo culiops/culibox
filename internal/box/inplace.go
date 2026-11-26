@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -54,10 +55,14 @@ func underWS(p, ws string) bool { return underMount(p, []string{ws}, inPlaceFold
 // inPlaceTrustedHost is the way out of a refusal that has no local fix.
 const inPlaceTrustedHost = "Run it on the trusted host instead (clone-mode profiles are coming)"
 
-// InPlaceGuardFiles are guarded only when present: binding a file that does not
-// exist would make docker create it. clone.MergeDenyNames starts from this list:
-// a box commit touching one of these is never merged into the host's branch.
-var InPlaceGuardFiles = []string{"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json"}
+// inPlaceGuardFiles are guarded only when present: binding a file that does not
+// exist would make docker create it. clone.MergeDenyNames starts from this list
+// (InPlaceGuardFiles): a box commit touching one of these is never merged into
+// the host's branch. Unexported, so no other package can shorten it.
+var inPlaceGuardFiles = []string{"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json"}
+
+// InPlaceGuardFiles returns a copy of the guarded file names.
+func InPlaceGuardFiles() []string { return slices.Clone(inPlaceGuardFiles) }
 
 const (
 	maxGitFile        = 1 << 20 // config, gitfile, commondir: larger is not a real repo's
@@ -142,7 +147,7 @@ func inPlaceDerive(wsp workspace, files *[]guardFile) ([]Mount, error) {
 
 	// 2. A symlink at a guarded name is a redirect the box can re-point.
 	info := map[string]fs.FileInfo{}
-	for _, name := range append([]string{".git", ".claude"}, InPlaceGuardFiles...) {
+	for _, name := range append([]string{".git", ".claude"}, inPlaceGuardFiles...) {
 		fi, err := root.Lstat(name)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -194,7 +199,7 @@ func inPlaceDerive(wsp workspace, files *[]guardFile) ([]Mount, error) {
 	guard(filepath.Join(ws, ".claude"), claude)
 
 	// 5. Instruction and MCP files, when present.
-	for _, name := range InPlaceGuardFiles {
+	for _, name := range inPlaceGuardFiles {
 		fi := info[name]
 		if fi == nil {
 			continue

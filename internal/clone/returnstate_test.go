@@ -280,10 +280,13 @@ func TestReturnStateOldFileLoads(t *testing.T) {
 
 func TestCleanReturnStateMerge(t *testing.T) {
 	long := strings.Repeat("x", 5000)
-	st := cleanReturnState(ReturnState{Merge: &MergeResult{Branch: "m\x1b[31main", Detail: long, Paths: []string{"a\x1b[2J", long}}})
+	st := cleanReturnState(ReturnState{Merge: &MergeResult{Branch: "m\x1b[31main", Attempted: true, Detail: long, Paths: []string{"a\x1b[2J", long}}})
 	m := st.Merge
 	if m == nil {
 		t.Fatal("Merge dropped")
+	}
+	if !m.Attempted {
+		t.Error("Attempted dropped: the retry window would not hold after a restart")
 	}
 	if strings.ContainsRune(m.Branch, 0x1b) || strings.ContainsRune(m.Paths[0], 0x1b) {
 		t.Errorf("control characters survived: %q %q", m.Branch, m.Paths[0])

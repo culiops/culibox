@@ -58,11 +58,21 @@ var pathEscapes = map[string]int{
 	"internal/box/inplace.go os.UserHomeDir": 2,
 	"internal/box/inplace.go HomeDir":        1,
 	// The merge guard reads the user's global git config ($XDG_CONFIG_HOME/git/config,
-	// ~/.config/git/config) for core.hooksPath, so a hooks dir inside the repo is
-	// denied (a read, never a write; #370). The second .config is a deny-list
-	// name: a box commit under the repo's own top-level .config/ is not merged.
-	"internal/clone/merge.go env XDG_CONFIG_HOME": 1,
-	"internal/clone/merge.go literal .config":     2,
+	// ~/.config/git/config) for core.hooksPath, includes and programs, so a file
+	// or hooks dir inside the repo is denied (a read, never a write; #370). The
+	// .config in merge.go is a deny-list name: a box commit under the repo's own
+	// top-level .config/ is not merged.
+	"internal/clone/merge_gitconfig.go env XDG_CONFIG_HOME": 1,
+	"internal/clone/merge_gitconfig.go literal .config":     1,
+	"internal/clone/merge.go literal .config":               1,
+	// The scan of the host repo's own configs (#370) reads mise's .config/mise.*
+	// files inside the repo top: names under the repo, never a write.
+	"internal/clone/merge_refs_scan.go literal .config": 3,
+	// The same guard reads the user's Claude Code config (~/.claude.json,
+	// ~/.claude/settings*.json under the home it is handed) and the managed settings
+	// (/etc/claude-code on Linux, /Library/Application Support/ClaudeCode on macOS) for
+	// the repo paths they name: reads only, never a write (#370).
+	"internal/clone/merge_refs_user.go literal Library": 1,
 	// darwin caps a socket path at 103 bytes, so the socket dir cannot live in the
 	// data root there; it is still derived from it (a hash) and holds only sockets.
 	"internal/abduco/socketpath.go literal /tmp": 1,
