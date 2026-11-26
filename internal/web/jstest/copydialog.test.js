@@ -232,7 +232,7 @@ test("cdSaveWithAck: declining throws the server's refusal and sends nothing mor
 
 // --- #370: the merge warning and the 400 that asks for it ---------------------------------------------------
 
-test("cdMergeHomeDialog: the founder-approved words, the profile's repo in the body", () => {
+test("cdMergeHomeDialog: the founder-approved words (re-approved 2026-11-26), the profile's repo in the body", () => {
   const d = cdMergeHomeDialog("/home/u/repo");
   assert.strictEqual(d.title, "Merge box work into your branch?");
   assert.strictEqual(d.confirmLabel, "Turn on");
@@ -240,8 +240,9 @@ test("cdMergeHomeDialog: the founder-approved words, the profile's repo in the b
   assert.strictEqual(d.body,
     "The box's commits will land in the branch you have checked out in /home/u/repo, with no review step. " +
     "Anything the box wrote then runs with your permissions when you or a tool runs it: a build, a test, a script. " +
-    "CuliBox never merges changes to files host tools load by themselves (.claude/, CLAUDE.md, .mcp.json, .envrc, git attributes and hooks, editor tasks) " +
-    "or flagged files (executables, links out of the repo, archives); those stay as box/<branch> for you to review. " +
+    "CuliBox does not merge changes to files host tools load by themselves (.claude/, CLAUDE.md, .mcp.json, .envrc, mise, git config, attributes and hooks, editor tasks), " +
+    "to the scripts and folders those files name, or flagged files (executables, links out of the repo, archives); those stay as box/<branch> for you to review. " +
+    "It cannot follow what those scripts import from elsewhere in the repo, and your CI runs the box's workflow changes on your next push. " +
     "A dirty work tree is never touched.");
   // A repo name is text: it is never read as a replacement pattern.
   assert.match(cdMergeHomeDialog("/x/$&/y").body, /checked out in \/x\/\$&\/y, with/);
