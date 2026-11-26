@@ -329,15 +329,50 @@ func (s *refSink) readRecipe(rel string) {
 }
 
 // recipeInclude reads the file a recipe file (in dir) includes, imports or
-// names: relative to dir, then to the repo top. Only literal names are read.
+// names: relative to dir, then to the repo top. A name with "*" or "?" is
+// expanded over the folder's listing; one that is not a literal ("$", "(",
+// "{{", a backtick) fails the scan.
 func (s *refSink) recipeInclude(dir string, cands []string) {
 	for _, c := range cands {
-		if c = cleanRaw(c); c == "" || strings.ContainsAny(c, "$*(") {
+		if strings.ContainsAny(c, "$(`") || strings.Contains(c, "{{") {
+			s.fail(errScanCap)
 			continue
 		}
-		s.readRecipe(path.Join(dir, c))
-		if dir != "." {
-			s.readRecipe(c)
+		if c = cleanRaw(c); c == "" {
+			continue
+		}
+		for _, d := range []string{dir, "."} {
+			s.readRecipeName(path.Join(d, c))
+			if dir == "." {
+				break
+			}
+		}
+	}
+}
+
+// readRecipeName reads rel, or every file a glob in its last element matches.
+func (s *refSink) readRecipeName(rel string) {
+	d, pat := path.Split(rel)
+	d = path.Clean(d)
+	if strings.ContainsAny(d, "*?[") {
+		s.fail(errScanCap)
+		return
+	}
+	if !strings.ContainsAny(pat, "*?[") {
+		s.readRecipe(rel)
+		return
+	}
+	pat = strings.ToLower(pat)
+	if _, err := path.Match(pat, ""); err != nil {
+		s.fail(errScanCap)
+		return
+	}
+	l := s.listing(d)
+	for _, k := range l.sorted {
+		if ok, _ := path.Match(pat, k); ok {
+			name := path.Join(d, l.names[k])
+			s.pathArg(name)
+			s.readRecipe(name)
 		}
 	}
 }

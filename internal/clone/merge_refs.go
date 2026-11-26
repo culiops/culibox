@@ -153,28 +153,75 @@ type scriptRef struct {
 	all       bool     // the name is not known: every script (a recipe runner: the whole file)
 	dirs      []string
 	workspace bool     // a workspace call: the scripts of other packages cannot be followed
+	badFile   bool     // a file option whose value is no literal path
 	files     []string // recipe files the call names ("make -f x.mk", "just --justfile x", "task -t x")
 }
 
-// recipeFileFlags are the options that name the recipe file of a runner.
-var recipeFileFlags = map[string][]string{"make": {"-f", "--file", "--makefile"}, "just": {"-f", "--justfile"}, "task": {"-t", "--taskfile"}}
+// recipeFileOpt is the option that names the recipe file of a runner: its long
+// names and its short letter. recipeValueLetters are the short options of the
+// runner that take a value of their own (a cluster stops at one).
+var recipeFileOpt = map[string]struct {
+	long   []string
+	letter byte
+}{
+	"make": {[]string{"--file", "--makefile"}, 'f'},
+	"just": {[]string{"--justfile"}, 'f'},
+	"task": {[]string{"--taskfile"}, 't'},
+}
 
-// recipeFilesIn returns the values of the runner's file options in args.
-func recipeFilesIn(runner string, args []string) []string {
-	var out []string
+var recipeValueLetters = map[string]string{"make": "CIjloW", "just": "dEscC", "task": "dCoJ"}
+
+// recipeFilesIn returns the values of the runner's file options in args: "-f x",
+// "-fx", a cluster such as "-sf x" or "-sfx", "--file x" and "--file=x". bad is
+// true when a value is missing or is not a literal path ($, parentheses, "{{",
+// a backtick): the file cannot be known.
+func recipeFilesIn(runner string, args []string) (files []string, bad bool) {
+	opt := recipeFileOpt[runner]
+	add := func(val string) {
+		if val == "" || strings.ContainsAny(val, "$(`") || strings.Contains(val, "{{") {
+			bad = true
+			return
+		}
+		files = append(files, val)
+	}
+	next := func(i int) string {
+		if i+1 < len(args) {
+			return args[i+1]
+		}
+		return ""
+	}
 	for i, a := range args {
-		name, val, hasVal := strings.Cut(a, "=")
-		if !slices.Contains(recipeFileFlags[runner], name) {
-			continue
+		if a == "--" {
+			break
 		}
-		if !hasVal && i+1 < len(args) {
-			val = args[i+1]
-		}
-		if val != "" {
-			out = append(out, val)
+		switch {
+		case strings.HasPrefix(a, "--"):
+			name, val, hasVal := strings.Cut(a, "=")
+			if !slices.Contains(opt.long, name) {
+				continue
+			}
+			if !hasVal {
+				val = next(i)
+			}
+			add(val)
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			cluster := a[1:]
+			for k := 0; k < len(cluster); k++ {
+				if cluster[k] == opt.letter {
+					val := cluster[k+1:]
+					if val == "" {
+						val = next(i)
+					}
+					add(val)
+					break
+				}
+				if strings.IndexByte(recipeValueLetters[runner], cluster[k]) >= 0 {
+					break // this option takes the rest as its value
+				}
+			}
 		}
 	}
-	return out
+	return files, bad
 }
 
 // nodeScriptRunners read package.json scripts; recipeRunners read a recipe file.
@@ -292,7 +339,7 @@ func scriptCall(tok string, args []string) (scriptRef, bool) {
 		ref.workspace = workspaceCall(rb, args)
 		ref.names, ref.all = scriptNames(rb, args)
 	default:
-		ref.files = recipeFilesIn(rb, args)
+		ref.files, ref.badFile = recipeFilesIn(rb, args)
 	}
 	return ref, true
 }

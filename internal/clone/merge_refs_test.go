@@ -235,3 +235,36 @@ func TestParseCommandNodeRun(t *testing.T) {
 		t.Fatalf("scripts = %+v", ci.scripts)
 	}
 }
+
+func TestRecipeFilesIn(t *testing.T) {
+	cases := []struct {
+		runner, args string
+		files        []string
+		bad          bool
+	}{
+		{"make", "-f a.mk x", []string{"a.mk"}, false},
+		{"make", "-fa.mk", []string{"a.mk"}, false},
+		{"make", "-sf a.mk", []string{"a.mk"}, false},
+		{"make", "-sfa.mk", []string{"a.mk"}, false},
+		{"make", "--file=a.mk", []string{"a.mk"}, false},
+		{"make", "--makefile a.mk", []string{"a.mk"}, false},
+		{"make", "-Cfoo x", nil, false},
+		{"make", "-j4 -f a.mk", []string{"a.mk"}, false},
+		{"just", "-fx.just", []string{"x.just"}, false},
+		{"just", "--justfile=x", []string{"x"}, false},
+		{"task", "-tx.yml", []string{"x.yml"}, false},
+		{"task", "--taskfile x.yml", []string{"x.yml"}, false},
+		{"task", "-f lint", nil, false},
+		{"make", "-f", nil, true},
+		{"make", "-f $F", nil, true},
+		{"make", "--file={{x}}", nil, true},
+		{"make", "fmt", nil, false},
+		{"make", "fmt -- -f", nil, false},
+	}
+	for _, c := range cases {
+		files, bad := recipeFilesIn(c.runner, strings.Fields(c.args))
+		if !slices.Equal(files, c.files) || bad != c.bad {
+			t.Errorf("recipeFilesIn(%q, %q) = %q, %v; want %q, %v", c.runner, c.args, files, bad, c.files, c.bad)
+		}
+	}
+}

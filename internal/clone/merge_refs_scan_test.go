@@ -776,6 +776,19 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 		{"npm it runs test", map[string]string{".claude/settings.json": hookSettings("npm it"), "package.json": `{"scripts":{"test":"node it/x.js"}}`}, "it/x.js", true},
 		{"node --run runs the script", map[string]string{".claude/settings.json": hookSettings("node --run lint"), "package.json": `{"scripts":{"lint":"node nr/x.js"}}`}, "nr/x.js", true},
 		{"node --run runs no pre script", map[string]string{".claude/settings.json": hookSettings("node --run lint"), "package.json": `{"scripts":{"prelint":"node nr2/x.js","lint":"true"}}`}, "nr2/x.js", false},
+		{"include glob reads every match", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include mk/*.mk\n", "mk/a.mk": "fmt:\n\t./tools/a.sh\n", "mk/notes.txt": "x\n"}, "tools/a.sh", true},
+		{"include glob, upper case file name", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include mk/*.mk\n", "mk/A.MK": "fmt:\n\t./tools/b.sh\n"}, "tools/b.sh", true},
+		{"include glob with ?", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include mk/?.mk\n", "mk/a.mk": "fmt:\n\t./tools/c.sh\n"}, "tools/c.sh", true},
+		{"make -fFILE", map[string]string{".claude/settings.json": hookSettings("make -fother.mk fmt"), "other.mk": "fmt:\n\t./of1/x.sh\n"}, "of1/x.sh", true},
+		{"make -sf FILE", map[string]string{".claude/settings.json": hookSettings("make -sf other.mk fmt"), "other.mk": "fmt:\n\t./of2/x.sh\n"}, "of2/x.sh", true},
+		{"make -sfFILE", map[string]string{".claude/settings.json": hookSettings("make -sfother.mk fmt"), "other.mk": "fmt:\n\t./of3/x.sh\n"}, "of3/x.sh", true},
+		{"make --file=FILE", map[string]string{".claude/settings.json": hookSettings("make --file=other.mk fmt"), "other.mk": "fmt:\n\t./of4/x.sh\n"}, "of4/x.sh", true},
+		{"make --makefile FILE", map[string]string{".claude/settings.json": hookSettings("make --makefile other.mk fmt"), "other.mk": "fmt:\n\t./of5/x.sh\n"}, "of5/x.sh", true},
+		{"just -fFILE", map[string]string{".claude/settings.json": hookSettings("just -fx.just fmt"), "x.just": "fmt:\n  ./of6/x.sh\n"}, "of6/x.sh", true},
+		{"just --justfile=FILE", map[string]string{".claude/settings.json": hookSettings("just --justfile=x.just fmt"), "x.just": "fmt:\n  ./of7/x.sh\n"}, "of7/x.sh", true},
+		{"task -tFILE", map[string]string{".claude/settings.json": hookSettings("task -tx.yml lint"), "x.yml": "tasks:\n  lint:\n    cmds:\n      - ./of8/x.sh\n"}, "of8/x.sh", true},
+		{"task --taskfile=FILE", map[string]string{".claude/settings.json": hookSettings("task --taskfile=x.yml lint"), "x.yml": "tasks:\n  lint:\n    cmds:\n      - ./of9/x.sh\n"}, "of9/x.sh", true},
+		{"make -C is not a file option", map[string]string{".claude/settings.json": hookSettings("make -Cfoo fmt"), "oo": "x\n"}, "unrelated/x.sh", false},
 		{"a recipe file nobody calls merges", map[string]string{".claude/settings.json": hookSettings("true"), "Makefile": "fmt:\n\t./tools/fmt.sh\n"}, "tools/fmt.sh", false},
 	}
 	for _, c := range cases {
@@ -820,6 +833,39 @@ func TestMergeHomeWorkspaceCallFails(t *testing.T) {
 			wantMergeReason(t, got, MergeFailed)
 			if !strings.Contains(got.Detail, "cannot follow workspace package scripts") || x.tip() != before || len(a.calls) != 0 {
 				t.Fatalf("Detail = %q, main moved or audit written", got.Detail)
+			}
+		})
+	}
+}
+
+// A recipe file or include the scan cannot name fails the merge (#370).
+func TestMergeHomeRecipeUnknownFileFails(t *testing.T) {
+	cases := []struct {
+		name string
+		host map[string]string
+	}{
+		{"include $(wildcard)", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include $(wildcard mk/*.mk)\n"}},
+		{"-include $(DEPS)", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "-include $(DEPS)\n"}},
+		{"just import with a template", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "import '{{x}}.just'\n"}},
+		{"make -f $F", map[string]string{".claude/settings.json": hookSettings("make -f $F fmt")}},
+		{"make -f with no value", map[string]string{".claude/settings.json": hookSettings("make -f")}},
+		{"task -t with a variable", map[string]string{".claude/settings.json": hookSettings("task --taskfile=$T lint")}},
+		{"glob in the folder", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include */x.mk\n"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			old := mergeSystemGitConfig
+			mergeSystemGitConfig = filepath.Join(t.TempDir(), "none")
+			t.Cleanup(func() { mergeSystemGitConfig = old })
+			x := newMergeFx(t, "main")
+			x.commit("host", c.host)
+			before := x.tip()
+			x.box("main", map[string]string{"src/x.js": "box\n"})
+			a := &auditRec{}
+			got := x.run(newRec(t), a)
+			wantMergeReason(t, got, MergeFailed)
+			if x.tip() != before || len(a.calls) != 0 {
+				t.Fatalf("main moved or audit written")
 			}
 		})
 	}

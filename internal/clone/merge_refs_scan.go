@@ -303,6 +303,10 @@ func (s *refSink) runScripts(r scriptRef) {
 		s.fail(errWorkspaceScripts)
 		return
 	}
+	if r.badFile {
+		s.fail(errScanCap) // "make -f $F": the file cannot be known
+		return
+	}
 	if s.root == nil {
 		return
 	}
