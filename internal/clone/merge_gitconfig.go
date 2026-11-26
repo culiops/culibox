@@ -184,7 +184,8 @@ func withHome(env []string, home string) []string {
 func (sc *gitConfigScan) scan(of, home string, es []configEntry, hookVals []string) ([]string, error) {
 	// The program values are read as command lines, with the same look-up of
 	// plain words in the repo top as the agent configs get ("node conv" runs
-	// conv.js). The manifests of a runner they call are not added.
+	// conv.js). The manifest of a runner or fetcher they call is refused too, as
+	// for a hook (#370 R1c).
 	cmds := newRefSink(of)
 	if root, err := os.OpenRoot(cmds.of); err == nil {
 		defer root.Close()
@@ -226,7 +227,6 @@ func (sc *gitConfigScan) scan(of, home string, es []configEntry, hookVals []stri
 			cmds.command(e.value)
 		}
 	}
-	clear(cmds.runners)
 	sc.plain.merge(&cmds.pm)
 	for _, rel := range cmds.paths() {
 		deny(rel)

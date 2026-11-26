@@ -165,7 +165,12 @@ func TestMergeHomeGitConfigDenied(t *testing.T) {
 		{"alias runs npm test", "[alias]\n\tt = !npm test\n", map[string]string{"package.json": `{"scripts":{"test":"node gt/t.js"}}`}, "gt/t.js", true},
 		{"core pager runs make", "[core]\n\tpager = make x\n", map[string]string{"Makefile": "x:\n\t./gp/x.sh\n"}, "gp/x.sh", true},
 		{"alias runs npm test, an unrelated file merges", "[alias]\n\tt = !npm test\n", map[string]string{"package.json": `{"scripts":{"test":"node gt/t.js"}}`}, "README.md", false},
-		{"textconv runner manifest is not added", "[diff \"x\"]\n\ttextconv = node conv\n", nil, "package.json", false},
+		// A program value that calls a runner or fetcher refuses its manifest,
+		// as a hook does (#370 R1c).
+		{"textconv runner manifest is added", "[diff \"x\"]\n\ttextconv = node conv\n", nil, "package.json", true},
+		{"core pager npx -y prettier: package.json", "[core]\n\tpager = npx -y prettier\n", nil, "package.json", true},
+		{"alias npx prettier: package.json", "[alias]\n\tf = !npx prettier --write .\n", nil, "package.json", true},
+		{"alias uvx mypy: pyproject.toml", "[alias]\n\tm = !uvx mypy .\n", nil, "pyproject.toml", true},
 		// What is not a program or an include is not denied.
 		{"alias that is not a shell command", "[alias]\n\tst = status ./bin/st.sh\n", nil, "bin/st.sh", false},
 		{"unrelated key naming a path", "[core]\n\texcludesFile = tools/ignore\n[user]\n\tsigningkey = keys/me.pub\n", nil, "tools/ignore", false},
