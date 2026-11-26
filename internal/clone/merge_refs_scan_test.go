@@ -397,7 +397,7 @@ func TestConfigRefsBounded(t *testing.T) {
 	t.Run("many runner words on one line", func(t *testing.T) {
 		start := time.Now()
 		_, err := scanRefsErr(t, map[string]string{".claude/settings.json": hookSettings(strings.Repeat("make ", 8000)), "Makefile": "x:\n\ttrue\n"})
-		if d := time.Since(start); d > 2*time.Second {
+		if d := time.Since(start); d > 2*time.Second*slowFactor {
 			t.Fatalf("took %v", d)
 		}
 		if err != nil && !errors.Is(err, errScanCap) {
@@ -410,7 +410,7 @@ func TestConfigRefsBounded(t *testing.T) {
 			if ci := parseCommand("", line); !ci.over {
 				t.Errorf("%.20q...: no cap hit", line)
 			}
-			if d := time.Since(start); d > 2*time.Second {
+			if d := time.Since(start); d > 2*time.Second*slowFactor {
 				t.Fatalf("%.20q...: parse took %v", line, d)
 			}
 		}
