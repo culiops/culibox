@@ -65,6 +65,11 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 		{"hook npm run, other manifests are free", map[string]string{".claude/settings.json": hookSettings("npm run lint")}, nil, "Cargo.toml", false},
 		{"hook make", map[string]string{".claude/settings.json": hookSettings("make fmt")}, nil, "Makefile", true},
 		{"hook just", map[string]string{".claude/settings.json": hookSettings("just fmt")}, nil, "justfile", true},
+		{"hook uv sync, setup.py", map[string]string{".claude/settings.json": hookSettings("uv sync"), "pyproject.toml": "[project]\n"}, nil, "setup.py", true},
+		{"hook poetry install, setup.cfg", map[string]string{".claude/settings.json": hookSettings("poetry install")}, nil, "setup.cfg", true},
+		{"hook pip install, setup.cfg", map[string]string{".claude/settings.json": hookSettings("pip install -e .")}, nil, "setup.cfg", true},
+		{"hook pip3 install, pyproject.toml", map[string]string{".claude/settings.json": hookSettings("pip3 install .")}, nil, "pyproject.toml", true},
+		{"hook pip install, setup.py", map[string]string{".claude/settings.json": hookSettings("pip install -e .")}, nil, "setup.py", true},
 		{"hook task", map[string]string{".claude/settings.json": hookSettings("task fmt")}, nil, "Taskfile.yml", true},
 		{"hook cargo", map[string]string{".claude/settings.json": hookSettings("cargo fmt")}, nil, "build.rs", true},
 		{"hook go", map[string]string{".claude/settings.json": hookSettings("go vet ./...")}, nil, "go.mod", true},
@@ -173,7 +178,9 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 		{"added name folds case", map[string]string{".claude/settings.json": hookSettings("npx eslint")}, nil, "ESLint.Config.JS", true},
 		{"added unrelated file merges", map[string]string{".claude/settings.json": hookSettings("npx eslint")}, nil, "docs/new.md", false},
 		{"script word does not get the prefix rule", map[string]string{".mcp.json": mcpCmd("node", "srvp")}, nil, "srvp.config.js", false},
-		{"tool config, git keeps .gitignore free", map[string]string{".claude/settings.json": hookSettings("git diff --stat"), ".gitignore": "x\n"}, nil, ".gitignore", false},
+		{"tool config, git keeps .gitkeep free", map[string]string{".claude/settings.json": hookSettings("git diff --stat"), ".gitkeep": "x\n"}, nil, ".gitkeep", false},
+		{".gitignore is protected whatever the hook", nil, nil, ".gitignore", true}, // R7: a rule dropped now decides what a later merge may add
+		{".gitignore is protected at any depth", nil, nil, "sub/.gitignore", true},
 		{"tool config, git keeps .github free", map[string]string{".claude/settings.json": hookSettings("git status"), ".github/workflows/ci.yml": "x\n"}, nil, ".github/workflows/ci.yml", false},
 		{"tool config, bash keeps .bashrc free", map[string]string{".claude/settings.json": hookSettings("bash -c true"), ".bashrc": "x\n"}, nil, ".bashrc", false},
 		{"tool config, a one-character word", map[string]string{".claude/settings.json": hookSettings("x run"), "x.txt": "h\n"}, nil, "x.txt", false},
@@ -366,10 +373,16 @@ func TestConfigRefsMalformedInputs(t *testing.T) {
 func TestConfigRefsBounded(t *testing.T) {
 	t.Run("size", func(t *testing.T) {
 		pad := strings.Repeat("# padding\n", (mergeImportBytes/10)+10)
-		s := scanRefs(t, map[string]string{".envrc": "source_env early/a.sh\n" + pad + "source_env late/b.sh\n"})
-		got := s.paths()
-		if !slices.Contains(got, "early/a.sh") || slices.Contains(got, "late/b.sh") {
-			t.Fatalf("paths = %q, want the early one only", got)
+		_, err := scanRefsErr(t, map[string]string{".envrc": "source_env early/a.sh\n" + pad + "source_env late/b.sh\n"})
+		if !errors.Is(err, errTooBig) {
+			t.Fatalf("err = %v, want errTooBig", err)
+		}
+	})
+	t.Run("package.json size", func(t *testing.T) {
+		pad := strings.Repeat(" ", mergeImportBytes+10)
+		_, err := scanRefsErr(t, map[string]string{".envrc": "npm test\n", "package.json": `{"scripts":{"test":"node t.js"}}` + pad})
+		if !errors.Is(err, errTooBig) {
+			t.Fatalf("err = %v, want errTooBig", err)
 		}
 	})
 	t.Run("file count", func(t *testing.T) {
@@ -413,10 +426,9 @@ func TestConfigRefsBounded(t *testing.T) {
 	})
 	t.Run("hook script size", func(t *testing.T) {
 		pad := strings.Repeat("# padding\n", (mergeImportBytes/10)+10)
-		s := scanRefs(t, map[string]string{".husky/pre-commit": "./early/a.sh\n" + pad + "./late/b.sh\n"})
-		got := s.paths()
-		if !slices.Contains(got, "early/a.sh") || slices.Contains(got, "late/b.sh") {
-			t.Fatalf("paths = %q, want the early one only", got)
+		_, err := scanRefsErr(t, map[string]string{".husky/pre-commit": "./early/a.sh\n" + pad + "./late/b.sh\n"})
+		if !errors.Is(err, errTooBig) {
+			t.Fatalf("err = %v, want errTooBig", err)
 		}
 	})
 	t.Run("folder listings", func(t *testing.T) {
@@ -553,8 +565,44 @@ func TestConfigRefsBounded(t *testing.T) {
 		if err := os.Symlink(out, filepath.Join(of, ".mcp.json")); err != nil {
 			t.Fatal(err)
 		}
-		if s, _ := scanConfigRefs(of, nil, ""); len(s.paths()) != 0 {
-			t.Fatalf("paths = %q through a link out of the repo", s.paths())
+		// A link out of the repo is read at its target (#370 R4a): dotfiles links are normal.
+		s, err := scanConfigRefs(of, nil, "")
+		if err != nil || errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if !slices.Contains(s.paths(), "tools/mcp/server.js") {
+			t.Fatalf("paths = %q, want the server script named by the target", s.paths())
+		}
+	})
+	t.Run("link out of the repo, a loop", func(t *testing.T) {
+		of := t.TempDir()
+		if err := os.Symlink(".mcp.json", filepath.Join(of, ".mcp.json")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := scanConfigRefs(of, nil, ""); err == nil || errors.Is(err, errScanCap) {
+			t.Fatalf("err = %v, want a read error", err)
+		}
+	})
+	t.Run("link out of the repo, a missing target", func(t *testing.T) {
+		of := t.TempDir()
+		if err := os.Symlink(filepath.Join(t.TempDir(), "none.json"), filepath.Join(of, ".mcp.json")); err != nil {
+			t.Fatal(err)
+		}
+		if s, err := scanConfigRefs(of, nil, ""); err != nil || len(s.paths()) != 0 {
+			t.Fatalf("err = %v, paths = %q, want nothing", err, s.paths())
+		}
+	})
+	t.Run("link out of the repo, over 1 MiB", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "big.json")
+		if err := os.WriteFile(out, []byte(mcpNode+strings.Repeat(" ", mergeImportBytes+10)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		of := t.TempDir()
+		if err := os.Symlink(out, filepath.Join(of, ".mcp.json")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := scanConfigRefs(of, nil, ""); !errors.Is(err, errTooBig) {
+			t.Fatalf("err = %v, want errTooBig", err)
 		}
 	})
 	t.Run("link inside the repo", func(t *testing.T) {
@@ -1084,4 +1132,76 @@ func TestMergeHomeRecipeUnknownFileFails(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An env value is read by its key (#370 A2-M6, R3): the keys that name a file or
+// a command are parsed for it, any other key only for path-shaped words.
+func TestConfigRefsEnvKeys(t *testing.T) {
+	cases := []struct {
+		name  string
+		env   string
+		files map[string]string
+		want  string // "" none
+		not   string
+	}{
+		{"a command is no command", `{"FOO":"npm run x"}`, map[string]string{"package.json": `{"scripts":{"x":"node tools/x.js"}}`}, "", "package.json"},
+		{"a plain word is no look-up", `{"FOO":"server"}`, map[string]string{"server.js": "h\n"}, "", "server.js"},
+		{"a path-shaped word", `{"FOO":"./cfg/x.js"}`, nil, "cfg/x.js", ""},
+		{"a word with a script extension", `{"FOO":"x.sh"}`, nil, "x.sh", ""},
+		{"PATH", `{"PATH":"./bin:$PATH"}`, nil, "bin", ""},
+		{"LD_PRELOAD", `{"LD_PRELOAD":"./lib/a.so"}`, nil, "lib/a.so", ""},
+		{"PYTHONPATH", `{"PYTHONPATH":"./py:/usr/lib"}`, nil, "py", ""},
+		{"NODE_OPTIONS", `{"NODE_OPTIONS":"--require boot4"}`, nil, "boot4.js", ""},
+		{"PERL5OPT", `{"PERL5OPT":"-Mfoo ./pl/x.pl"}`, nil, "pl/x.pl", ""},
+		{"RUBYOPT", `{"RUBYOPT":"-r ./rb/x.rb"}`, nil, "rb/x.rb", ""},
+		{"BASH_ENV a bare name", `{"BASH_ENV":"envfile"}`, nil, "envfile", ""},
+		{"GIT_SSH_COMMAND", `{"GIT_SSH_COMMAND":"ssh -F cfg/ssh"}`, nil, "cfg/ssh", ""},
+		{"GIT_EDITOR runs a runner", `{"GIT_EDITOR":"npm run edit"}`, map[string]string{"package.json": `{"scripts":{"edit":"node tools/ed.js"}}`}, "tools/ed.js", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			files := map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"srv","env":` + c.env + `}}}`}
+			for k, v := range c.files {
+				files[k] = v
+			}
+			s := scanRefs(t, files)
+			got := s.paths()
+			if c.want != "" && !slices.Contains(got, c.want) {
+				t.Errorf("paths = %q, want %q", got, c.want)
+			}
+			if c.not != "" && slices.Contains(got, c.not) {
+				t.Errorf("paths = %q, must not have %q", got, c.not)
+			}
+		})
+	}
+}
+
+// A spelling that came from an env value is never shown in the refused list,
+// even when the link check cannot follow it.
+func TestMergeHomeEnvRefNotEchoed(t *testing.T) {
+	run := func(t *testing.T, mcp string, loop string) *MergeResult {
+		t.Helper()
+		x := newMergeFx(t, "main")
+		x.commit("host", map[string]string{".mcp.json": mcp})
+		x.linkUntracked(loop, "a")
+		x.box("main", map[string]string{"b.txt": "b\n"})
+		return x.run(newRec(t), &auditRec{})
+	}
+	t.Run("env value", func(t *testing.T) {
+		got := run(t, `{"mcpServers":{"s":{"command":"srv","env":{"X":"./envloop/a"}}}}`, "envloop/a")
+		wantMergeReason(t, got, MergeGuarded)
+		if len(got.Paths) != 0 {
+			t.Fatalf("Paths = %q, want none", got.Paths)
+		}
+		if !strings.Contains(got.Detail, "environment value") {
+			t.Fatalf("Detail = %q", got.Detail)
+		}
+	})
+	t.Run("args path control", func(t *testing.T) {
+		got := run(t, `{"mcpServers":{"s":{"command":"srv","args":["./argloop/a"]}}}`, "argloop/a")
+		wantMergeReason(t, got, MergeGuarded)
+		if !slices.Equal(got.Paths, []string{"argloop/a"}) {
+			t.Fatalf("Paths = %q, want [argloop/a]", got.Paths)
+		}
+	})
 }

@@ -352,9 +352,9 @@ func (s *protectedSet) add(p string) bool {
 // config files, import targets, config refs). A tracked file that is not a
 // link needs no walk: git tracks nothing below a link, so its path is real.
 //
-// A non-nil result is the refusal: guarded and naming the path for a loop or
-// an Lstat error, failed when a cap is hit or the repo cannot be read.
-func (m *merger) linkDenies(hooks, gitDenied, imports, refs []string) (*linkDenies, *MergeResult) {
+// A non-nil result is the refusal: guarded and naming the path (not one an
+// environment value named: quiet) for a loop or an Lstat error, failed when a cap is hit or the repo cannot be read.
+func (m *merger) linkDenies(hooks, gitDenied, imports, refs []string, quiet map[string]bool) (*linkDenies, *MergeResult) {
 	set := &protectedSet{seen: map[string]bool{}}
 	full := func() *MergeResult {
 		return m.result(MergeFailed, "cannot check symbolic links: "+errLinkCap.Error(), nil)
@@ -402,6 +402,9 @@ func (m *merger) linkDenies(hooks, gitDenied, imports, refs []string) (*linkDeni
 		switch {
 		case errors.Is(err, errLinkCap):
 			return nil, full()
+		case err != nil && quiet[foldKey(s)]: // named by an environment value: not shown
+			return nil, m.result(MergeGuarded, "a path named in an environment value is a symbolic link the merge cannot follow ("+
+				linkErrText(err)+"), so it cannot tell what the link leads to", nil)
 		case err != nil:
 			return nil, m.result(MergeGuarded, "a protected file or folder is a symbolic link the merge cannot follow ("+
 				linkErrText(err)+"), so it cannot tell what the link leads to", []string{s})

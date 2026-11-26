@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode"
 )
 
 // The configs a host agent, direnv and mise read by themselves name files in
@@ -60,12 +61,11 @@ var mergeRefPlain = 8192
 var runnerManifests = map[string][]string{
 	"npm": nodeManifests, "npx": nodeManifests, "pnpm": nodeManifests, "pnpx": nodeManifests,
 	"yarn": nodeManifests, "bun": nodeManifests, "bunx": nodeManifests, "node": nodeManifests,
-	"deno":   {"deno.json", "deno.jsonc", "package.json"},
-	"make":   recipeFiles["make"],
-	"just":   recipeFiles["just"],
-	"task":   recipeFiles["task"],
-	"uv":     {"pyproject.toml"},
-	"poetry": {"pyproject.toml"},
+	"deno": {"deno.json", "deno.jsonc", "package.json"},
+	"make": recipeFiles["make"],
+	"just": recipeFiles["just"],
+	"task": recipeFiles["task"],
+	"uv":   pythonManifests, "poetry": pythonManifests, "pip": pythonManifests, "pip3": pythonManifests,
 	"pipenv": {"Pipfile"},
 	"cargo":  {"Cargo.toml", "build.rs"},
 	"go":     {"go.mod"},
@@ -78,8 +78,11 @@ var runnerManifests = map[string][]string{
 }
 
 var (
-	nodeManifests = []string{"package.json", ".npmrc", ".yarnrc.yml", ".pnpmfile.cjs"}
-	devenvNames   = []string{"devenv.nix", "devenv.yaml", "devenv.lock", "devenv.local.nix", "devenv.local.yaml"}
+	// pythonManifests: pip builds a project from setup.py or setup.cfg and runs
+	// what they say, as uv and poetry do.
+	pythonManifests = []string{"pyproject.toml", "setup.py", "setup.cfg"}
+	nodeManifests   = []string{"package.json", ".npmrc", ".yarnrc.yml", ".pnpmfile.cjs"}
+	devenvNames     = []string{"devenv.nix", "devenv.yaml", "devenv.lock", "devenv.local.nix", "devenv.local.yaml"}
 	// miseNames are the fixed places mise reads config from; mise.<env>.toml
 	// files are found by listing the repo top (MergeDenyPatterns covers them).
 	miseNames = []string{"mise.toml", ".mise.toml", "mise.local.toml", ".mise.local.toml",
@@ -111,6 +114,9 @@ type refSink struct {
 	scriptsRun int                          // package scripts read, against mergeRefScripts
 	recipeSeen map[string]bool              // "folder\x00file": a recipe file already read
 	npmrcWs    map[string]bool              // folder -> its .npmrc sets a workspace key, read once
+
+	inEnv   bool     // an environment value is being read: what it names is not shown
+	envRaws []string // the spellings added while reading environment values
 
 	err error // the first cap or listing error
 }
@@ -184,9 +190,11 @@ func (s *refSink) scanRepo(hooks []string) {
 	}
 }
 
-// file reads rel (a regular file, through the root, so no link out of the
-// repo is followed) and hands what it holds to scan. A file that is absent,
-// not regular or unreadable is skipped. Past mergeRefFiles files the scan fails.
+// file reads rel (a regular file, through the root) and hands what it holds to
+// scan. A file that is absent, or not a regular file, is skipped. A link out of
+// the repo is read at its target (openLinkOut). Any other open error, a file
+// over 1 MiB (the scan would see part of it) and a read error fail the scan, as
+// does going past mergeRefFiles files.
 func (s *refSink) file(rel string, scan func(*refSink, []byte)) {
 	if s.root == nil {
 		return
@@ -197,12 +205,65 @@ func (s *refSink) file(rel string, scan func(*refSink, []byte)) {
 	}
 	f, err := s.root.OpenFile(filepath.FromSlash(rel), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return
+		}
+		if f, err = s.openLinkOut(rel, err); err != nil {
+			s.fail(fmt.Errorf("cannot read %s: %w", rel, err))
+			return
+		}
+		if f == nil {
+			return
+		}
 	}
 	s.reads++
-	if data, err := readRegular(f); err == nil {
+	data, err := readRegularMax(f, mergeImportBytes)
+	switch {
+	case errors.Is(err, errNotRegular):
+	case errors.Is(err, errTooBig):
+		s.fail(fmt.Errorf("%s %w", rel, errTooBig))
+	case err != nil:
+		s.fail(fmt.Errorf("cannot read %s: %w", rel, err))
+	default:
 		scan(s, data)
 	}
+}
+
+// openLinkOut is what file does when the root refused to open rel (rootErr): a
+// link that leaves the root, or points at an absolute path, is read at its
+// target by path, because the link is the host's own (a dotfiles link is
+// normal). The target is opened through the root again when it is inside the
+// repo. A missing target is nil, nil (skipped). Any other failure, a loop or no
+// permission, is an error; so is a refusal that is not about a link.
+func (s *refSink) openLinkOut(rel string, rootErr error) (*os.File, error) {
+	real, err := filepath.EvalSymlinks(filepath.Join(s.of, filepath.FromSlash(rel)))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	flags := os.O_RDONLY | syscall.O_NONBLOCK
+	var f *os.File
+	if realOf, err := filepath.EvalSymlinks(s.of); err == nil && absInside(realOf, real) != "" {
+		in := absInside(realOf, real)
+		if in == "." {
+			return nil, rootErr
+		}
+		f, err = s.root.OpenFile(filepath.FromSlash(in), flags, 0)
+		if err != nil {
+			return nil, rootErr
+		}
+		return f, nil
+	}
+	f, err = os.OpenFile(real, flags, 0)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return f, nil
 }
 
 // topMiseFiles lists the repo top's mise.<env>.toml and .mise.<env>.toml.
@@ -248,6 +309,9 @@ func (s *refSink) addRaw(p string) {
 		return
 	}
 	s.raws = append(s.raws, p)
+	if s.inEnv {
+		s.envRaws = append(s.envRaws, p)
+	}
 }
 
 // pathArg keeps a token the config names as a path whatever it looks like
@@ -265,6 +329,9 @@ func (s *refSink) dir(tok string) {
 		return
 	}
 	s.exact = append(s.exact, t)
+	if s.inEnv {
+		s.envRaws = append(s.envRaws, t)
+	}
 }
 
 // command reads a command line for the paths it names and the runners it calls.
@@ -634,13 +701,48 @@ func (s *refSink) listing(base string) *dirListing {
 	return l
 }
 
-// envValue reads an environment value as a command line; NODE_OPTIONS holds
-// node's own options.
+// envCommandKeys are the environment keys whose value is a command line the
+// tool runs: the prefix is the program whose own options the value holds.
+var envCommandKeys = map[string]string{
+	"NODE_OPTIONS": "node ", "PERL5OPT": "perl ", "RUBYOPT": "ruby ",
+	"GIT_SSH": "", "GIT_SSH_COMMAND": "", "GIT_ASKPASS": "", "GIT_EDITOR": "", "GIT_SEQUENCE_EDITOR": "",
+	"GIT_PAGER": "", "GIT_EXTERNAL_DIFF": "", "GIT_PROXY_COMMAND": "",
+}
+
+// envValue reads an environment value by its key (#370 A2-M6, R3). Keys that
+// run a command are read as one; BASH_ENV, ENV and PYTHONSTARTUP name a file the
+// shell or Python loads; PATH, PYTHONPATH, LD_PRELOAD and DYLD_INSERT_LIBRARIES
+// hold folders and libraries. Any other key is read only for path-shaped words:
+// no plain word, runner or script is looked up for it. What a value names goes
+// to envRaws as well, so a refusal never shows it.
 func (s *refSink) envValue(key, v string) {
-	if strings.EqualFold(key, "NODE_OPTIONS") {
-		v = "node " + v
+	was := s.inEnv
+	s.inEnv = true
+	defer func() { s.inEnv = was }()
+	k := strings.ToUpper(key)
+	if pre, ok := envCommandKeys[k]; ok {
+		s.command(pre + v)
+		return
 	}
-	s.command(v)
+	switch k {
+	case "BASH_ENV", "ENV", "PYTHONSTARTUP":
+		s.pathArg(v)
+	case "PATH", "PYTHONPATH", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES":
+		for _, part := range strings.FieldsFunc(v, func(r rune) bool { return r == ':' || unicode.IsSpace(r) }) {
+			s.pathArg(part)
+		}
+	default:
+		ci := parseCommand(s.of, v)
+		if ci.over {
+			s.fail(errScanCap)
+		}
+		for _, p := range ci.paths {
+			s.addRaw(p)
+		}
+		for _, d := range ci.dirs {
+			s.dir(d)
+		}
+	}
 }
 
 // paths returns the repo-relative, slash-separated paths to refuse: each
@@ -696,7 +798,11 @@ func (m *merger) configRefDenies(home string, hooks []string) (*refDenies, error
 	for i, r := range refs {
 		split[i] = strings.Split(r, "/")
 	}
-	return &refDenies{denied: func(p string) bool {
+	quiet := map[string]bool{}
+	for _, p := range repoDenyPaths(sink.of, sink.envRaws) {
+		quiet[foldKey(path.Clean(p))] = true
+	}
+	return &refDenies{quiet: quiet, denied: func(p string) bool {
 		pc := strings.Split(p, "/")
 		for _, tc := range split {
 			if foldPrefix(pc, tc) || foldPrefix(tc, pc) {
@@ -708,8 +814,8 @@ func (m *merger) configRefDenies(home string, hooks []string) (*refDenies, error
 }
 
 // refDenies is what configRefDenies returns: denied answers for a path of the
-// range, paths is the concrete list for the symlink check, quiet is the paths
-// to keep out of the refused list (filled by a later step; nil until then).
+// range, paths is the concrete list for the symlink check, quiet is the fold
+// keys of the paths an environment value named: a refusal never shows them.
 type refDenies struct {
 	denied func(p string) bool
 	paths  []string

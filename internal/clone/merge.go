@@ -80,7 +80,10 @@ var MergeDenyNames = append(box.InPlaceGuardFiles(),
 	// direnv's dotenv, nix-direnv and devenv load these on the next prompt in the
 	// folder, node and yarn run what these name on every call.
 	".env", "flake.nix", "flake.lock", "shell.nix", "default.nix", "devenv.nix", "devenv.yaml",
-	"devenv.lock", "devbox.json", ".npmrc", ".yarnrc.yml", ".yarnrc",
+	"devenv.lock", "devbox.json", ".npmrc", ".yarnrc.yml", ".yarnrc", "bunfig.toml",
+	// A rule dropped from a .gitignore decides what a later merge may add (the
+	// ignore check, 4a''), so a box never edits one.
+	".gitignore",
 	// pnpm reads its workspace (packages, catalogs, settings) from these, and
 	// runs the hooks of a pnpmfile on every install.
 	"pnpm-workspace.yaml", "pnpm-workspace.yml", ".pnpmfile.cjs", ".pnpmfile.mjs")
@@ -100,7 +103,7 @@ var MergeDenyDirs = []string{".claude"}
 // host opens or commits in the repo. clone_of's own core.hooksPath is added at
 // run time when it is inside the repo.
 var MergeDenyTop = []string{".husky", ".githooks", ".vscode", ".devcontainer", ".mise", "mise", ".config",
-	".idea", ".zed", ".cursor", ".gemini", ".codex", ".windsurf", ".continue"}
+	".idea", ".zed", ".cursor", ".gemini", ".codex", ".windsurf", ".continue", ".cargo"}
 
 // MergeDenyTopPaths are repo-relative paths (a file or a folder, matched by
 // whole components, case-insensitive) a box's commits must not touch: other
@@ -413,14 +416,9 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if err != nil {
 		return m.scanFailed("cannot read the Claude Code config", err)
 	}
-	var denied []string
-	dseen := map[string]bool{}
-	for _, e := range entries {
-		if (e.gitlink || mergeDenied(e.path, gc.hooks) || importDenied(e.path, gc.denied) || agentDenied(e.path) || rd.denied(e.path) || gc.plain.denied(e.path)) && !dseen[e.path] {
-			dseen[e.path] = true
-			denied = append(denied, e.path)
-		}
-	}
+	denied := denyFirst(entries, maxMergePaths, func(e mergeEntry) bool {
+		return e.gitlink || mergeDenied(e.path, gc.hooks) || importDenied(e.path, gc.denied) || agentDenied(e.path) || rd.denied(e.path) || gc.plain.denied(e.path)
+	})
 	if len(denied) > 0 {
 		return m.result(MergeGuarded, "the commits touch files host tools load or run by themselves "+
 			"(agent, direnv and mise settings and the files they name, hooks, attributes, editor tasks, git config) or a submodule", denied)
@@ -429,16 +427,11 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	// 4a'. The files those names really lead to: a protected name that is a
 	// symbolic link in the host's work tree sends its tools to another file.
 	// Only when nothing above refused, so a refused merge costs no more.
-	links, lres := m.linkDenies(gc.hooks, gc.denied, importPaths, rd.paths)
+	links, lres := m.linkDenies(gc.hooks, gc.denied, importPaths, rd.paths, rd.quiet)
 	if lres != nil {
 		return lres
 	}
-	for _, e := range entries {
-		if links.denied(e.path) && !dseen[e.path] {
-			dseen[e.path] = true
-			denied = append(denied, e.path)
-		}
-	}
+	denied = denyFirst(entries, maxMergePaths, func(e mergeEntry) bool { return links.denied(e.path) })
 	if len(denied) > 0 {
 		return m.result(MergeGuarded, "the commits touch a file a protected name links to "+
 			"(agent, direnv and mise settings and the files they name, hooks, git config)", denied)
@@ -608,6 +601,27 @@ func octalMode(s string) bool {
 		}
 	}
 	return true
+}
+
+// denyFirst returns the distinct paths of entries that deny says yes to, first
+// seen first, and stops asking after max of them: a refusal names a few
+// examples, so a range of thousands of paths costs no more than a few look-ups.
+func denyFirst(entries []mergeEntry, max int, deny func(mergeEntry) bool) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, e := range entries {
+		if seen[e.path] {
+			continue
+		}
+		seen[e.path] = true
+		if deny(e) {
+			out = append(out, e.path)
+			if len(out) >= max {
+				break
+			}
+		}
+	}
+	return out
 }
 
 // mergeDenied reports whether p (a repo-relative path from the range) is a

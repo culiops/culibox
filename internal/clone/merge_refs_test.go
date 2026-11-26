@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestCommandPaths(t *testing.T) {
+func TestParseCommandPathsAndRunners(t *testing.T) {
 	cases := []struct {
 		in      string
 		paths   []string
@@ -44,9 +44,9 @@ func TestCommandPaths(t *testing.T) {
 		{"", nil, nil},
 	}
 	for _, c := range cases {
-		paths, runners := commandPaths(c.in)
-		if !slices.Equal(paths, c.paths) || !slices.Equal(runners, c.runners) {
-			t.Errorf("commandPaths(%q) = %q, %q; want %q, %q", c.in, paths, runners, c.paths, c.runners)
+		ci := parseCommand("", c.in)
+		if !slices.Equal(ci.paths, c.paths) || !slices.Equal(ci.runners, c.runners) {
+			t.Errorf("parseCommand(%q) = %q, %q; want %q, %q", c.in, ci.paths, ci.runners, c.paths, c.runners)
 		}
 	}
 }
@@ -386,6 +386,11 @@ func TestParseCommandRecipeQuoting(t *testing.T) {
 		{`bash -c "make -f a.mk fmt; make lint"`, nil, false},
 		{`bash -c "x'make'y make -f q.mk"`, nil, true},               // runner tokens and words disagree
 		{`bash -c "cd make; make -f q.mk"`, []string{"q.mk"}, false}, // paired by position, not by count
+		// Both tokenizers skip the same non-runner words (R15): an assignment or a
+		// variable ending in /make is no runner on either side.
+		{`bash -c "A=x/make; make -f q.mk"`, []string{"q.mk"}, false},
+		{`bash -c "$x/make; make -f q.mk"`, []string{"q.mk"}, false},
+		{`bash -c "-x/make; make -f q.mk"`, []string{"q.mk"}, false},
 		// Redirections are not separators.
 		{`make 2>&1 -f q.mk lint`, []string{"q.mk"}, false},
 		{`make >&2 -f q.mk`, []string{"q.mk"}, false},

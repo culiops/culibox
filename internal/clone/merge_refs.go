@@ -39,7 +39,7 @@ var commandRunners = map[string]bool{
 	"npm": true, "npx": true, "pnpm": true, "pnpx": true, "yarn": true, "bun": true, "bunx": true,
 	"node": true, "deno": true, "make": true, "just": true, "task": true, "uv": true,
 	"poetry": true, "pipenv": true, "cargo": true, "go": true, "rake": true, "bundle": true,
-	"mise": true, "nix": true, "devbox": true, "devenv": true,
+	"mise": true, "nix": true, "devbox": true, "devenv": true, "pip": true, "pip3": true,
 }
 
 // Where a command line runs a word as a file (#370 B-M1). Only the command word,
@@ -488,6 +488,7 @@ func (lx *cmdLex) quotedAt(k int) *quotedRunners {
 		return q
 	}
 	q := &quotedRunners{}
+	var names []string // the runners the first tokenizer saw, to pair with runs by text
 	lx.quoted[k] = q
 	w := lx.words[k]
 	span := lx.src[w.start:w.end]
@@ -500,11 +501,19 @@ func (lx *cmdLex) quotedAt(k int) *quotedRunners {
 				return q
 			}
 			q.offs = append(q.offs, w.start+starts[i])
+			names = append(names, path.Base(tok))
 		}
 	}
 	q.collect(w.text, maxQuoteDepth, false)
 	if len(q.runs) != len(q.offs) {
 		q.bad = true
+	}
+	// The two tokenizers must agree on each runner, not only on how many there
+	// are: one that differs by text is a runner this read cannot place (R15).
+	for i := 0; !q.bad && i < len(q.runs); i++ {
+		if q.runs[i].runner != names[i] {
+			q.bad = true
+		}
 	}
 	return q
 }
@@ -525,7 +534,10 @@ func (q *quotedRunners) collect(text string, depth int, bad bool) {
 		if w.sep != 0 {
 			continue
 		}
-		if rb := path.Base(strings.TrimRight(strings.TrimLeft(w.text, "!{"), "}")); recipeRunners[rb] && !w.holdsCommand() {
+		// The same exclusions as quotedAt's first tokenizer (scriptRunnerTok), so the
+		// two lists count the same words.
+		wt := strings.TrimRight(strings.TrimLeft(w.text, "!{"), "}")
+		if rb := path.Base(wt); wt != "" && scriptRunnerTok(wt) && recipeRunners[rb] && !w.holdsCommand() {
 			if len(q.runs) >= mergeRefPaths {
 				q.over = true
 				return
@@ -717,13 +729,6 @@ func nodeRunName(args []string) (name string, ok bool) {
 		}
 	}
 	return "", false
-}
-
-// commandPaths is parseCommand's paths and runners, for callers with no work
-// tree to look plain words up in.
-func commandPaths(s string) (paths []string, runners []string) {
-	ci := parseCommand("", s)
-	return ci.paths, ci.runners
 }
 
 // parseCommand reads a command line (or a config value) the way a shell would

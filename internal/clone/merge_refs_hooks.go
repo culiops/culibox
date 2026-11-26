@@ -32,9 +32,6 @@ import (
 
 const mergeRefDirFiles = 64 // files read per hook folder
 
-// refYAMLFiles are the top-level files whose commands scanYAMLCommands reads.
-var refYAMLFiles = []string{".pre-commit-config.yaml", ".overcommit.yml"}
-
 // lefthookNames are the lefthook files at the repo top (the names of
 // MergeDenyNames that start with lefthook or .lefthook).
 func lefthookNames() []string {

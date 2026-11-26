@@ -194,15 +194,29 @@ func TestMergeHomeLinkOutsideOrUnrelatedDoesNotBlock(t *testing.T) {
 	wantMerged(t, x.run(newRec(t), &auditRec{}))
 }
 
-// A link loop at a protected name is refused, naming it.
+// A link loop at a config the scan reads fails the merge, naming it: the scan
+// cannot open the file (#370 A2-M1). A loop at a protected name the scan does not
+// read is refused by the link check, naming it.
 func TestMergeHomeLinkLoopGuarded(t *testing.T) {
 	x := newMergeFx(t, "main")
 	x.link("loop", ".mcp.json")
 	x.link(".mcp.json", "loop")
 	x.box("main", map[string]string{"src/new.go": "package x\n"})
-	got := wantGuardedBy(t, x, ".mcp.json")
-	if !strings.Contains(got.Detail, "link") {
-		t.Fatalf("Detail = %q", got.Detail)
+	before := x.tip()
+	a := &auditRec{}
+	got := x.run(newRec(t), a)
+	wantMergeReason(t, got, MergeFailed)
+	if !strings.Contains(got.Detail, ".mcp.json") || x.tip() != before || len(a.calls) != 0 {
+		t.Fatalf("result = %+v, audit %q", got, a.calls)
+	}
+
+	y := newMergeFx(t, "main")
+	y.link("loop", "CLAUDE.md")
+	y.link("CLAUDE.md", "loop")
+	y.box("main", map[string]string{"src/new.go": "package x\n"})
+	res := wantGuardedBy(t, y, "CLAUDE.md")
+	if !strings.Contains(res.Detail, "link") {
+		t.Fatalf("Detail = %q", res.Detail)
 	}
 }
 
@@ -597,4 +611,54 @@ func TestMergeHomeHooksPathScriptsRead(t *testing.T) {
 	fixtureGit(t, y.of, "config", "core.hooksPath", "tools/hooks")
 	y.box("main", map[string]string{"cm/commented.sh": "box\n"})
 	wantMerged(t, y.run(newRec(t), &auditRec{}))
+}
+
+// A protected config that is a link out of the repo (dotfiles) is read at its
+// target; an unreadable or over-1-MiB target fails the merge (#370 R4a).
+func TestMergeHomeProtectedConfigLinkOutRead(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string // of the target; "-" for no target
+		change  string
+		want    string
+	}{
+		{"the target's hook script is guarded", hookSettings("bash lo/h.sh"), "lo/h.sh", MergeGuarded},
+		{"the target's hook, an unrelated file merges", hookSettings("bash lo/h.sh"), "b.txt", ""},
+		{"a target over 1 MiB fails", hookSettings("bash lo/h.sh") + strings.Repeat(" ", mergeImportBytes+10), "b.txt", MergeFailed},
+		{"a missing target is nothing", "-", "b.txt", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			x := newMergeFx(t, "main")
+			target := filepath.Join(t.TempDir(), "settings.local.json")
+			if c.content != "-" {
+				if err := os.WriteFile(target, []byte(c.content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			x.commit("host", map[string]string{"lo/h.sh": "h\n"})
+			x.link(".claude/settings.local.json", target)
+			before := x.tip()
+			x.box("main", map[string]string{c.change: "box\n"})
+			a := &auditRec{}
+			got := x.run(newRec(t), a)
+			switch c.want {
+			case "":
+				wantMerged(t, got)
+			case MergeGuarded:
+				wantMergeReason(t, got, MergeGuarded)
+				if !slices.Contains(got.Paths, c.change) {
+					t.Fatalf("Paths = %q, want %q", got.Paths, c.change)
+				}
+			case MergeFailed:
+				wantMergeReason(t, got, MergeFailed)
+				if !strings.Contains(got.Detail, "1 MiB") {
+					t.Fatalf("Detail = %q", got.Detail)
+				}
+			}
+			if c.want != "" && (x.tip() != before || len(a.calls) != 0) {
+				t.Fatalf("main moved or audit written: %q", a.calls)
+			}
+		})
+	}
 }

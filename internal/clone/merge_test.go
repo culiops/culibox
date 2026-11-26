@@ -664,6 +664,14 @@ func TestMergeHomeDenyVariants(t *testing.T) {
 		{"src/vscode/x.go", false},
 		{"docs/husky.md", false},
 		{"sub/.vscode/tasks.json", false}, // top-level dirs only
+		{"bunfig.toml", true},
+		{"sub/bunfig.toml", true},
+		{".cargo/config.toml", true},
+		{".Cargo/config.toml", true},
+		{"src/.cargo/x", false}, // top only
+		{".gitignore", true},    // R7: a dropped rule would decide what a later merge may add
+		{"sub/.gitignore", true},
+		{"docs/gitignore.md", false},
 	}
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) {
@@ -1436,5 +1444,71 @@ func TestMergeHomeIgnoreCheckStdinOnly(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no check-ignore call")
+	}
+}
+
+// denyFirst stops asking at max hits, so a range of thousands of paths costs three look-ups.
+func TestDenyFirstStopsAtMax(t *testing.T) {
+	var entries []mergeEntry
+	for i := 0; i < 10; i++ {
+		entries = append(entries, mergeEntry{path: "p" + string(rune('0'+i))})
+	}
+	entries = append(entries, mergeEntry{path: "p0"}) // a repeat is not a second hit
+	calls := 0
+	got := denyFirst(entries, 3, func(mergeEntry) bool { calls++; return true })
+	if len(got) != 3 || calls != 3 {
+		t.Fatalf("got %q after %d calls, want 3 and 3", got, calls)
+	}
+	if got := denyFirst(entries, 3, func(e mergeEntry) bool { return e.path == "p5" }); !slices.Equal(got, []string{"p5"}) {
+		t.Fatalf("got %q, want [p5]", got)
+	}
+}
+
+// What git says of a range path it cannot check is a failure, never "not ignored".
+func TestMergeHomeIgnoreCheckBeyondSymlinkFails(t *testing.T) {
+	noSystemConfig(t)
+	x := newMergeFx(t, "main")
+	before := x.tip()
+	x.box("main", map[string]string{"lnk/x.txt": "b\n"})
+	x.linkUntracked("lnk", t.TempDir()) // the host's work tree has a link where the box has a folder
+	a := &auditRec{}
+	got := x.run(newRec(t), a)
+	wantMergeReason(t, got, MergeFailed)
+	if !strings.HasPrefix(got.Detail, "cannot check ignore rules") || len(a.calls) != 0 || x.tip() != before {
+		t.Fatalf("result = %+v, audit %q", got, a.calls)
+	}
+}
+
+// badIgnoreGit answers the check-ignore call with out.
+type badIgnoreGit struct {
+	*recGit
+	out string
+}
+
+func (b badIgnoreGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	if slices.Contains(args, "check-ignore") {
+		return []byte(b.out), nil
+	}
+	return b.recGit.RunStdin(ctx, dir, env, stdin, args...)
+}
+
+func TestMergeHomeIgnoreCheckOutputNotTrusted(t *testing.T) {
+	for name, out := range map[string]string{
+		"a path it was not given": ":(top)other.txt\x00",
+		"no prefix":               "b.txt\x00",
+		"cut short":               ":(top)b.txt",
+		"empty":                   "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := newMergeFx(t, "main")
+			before := x.tip()
+			x.box("main", map[string]string{"b.txt": "b"})
+			a := &auditRec{}
+			got := x.run(badIgnoreGit{newRec(t), out}, a)
+			wantMergeReason(t, got, MergeFailed)
+			if !strings.HasPrefix(got.Detail, "cannot check ignore rules") || len(a.calls) != 0 || x.tip() != before {
+				t.Fatalf("result = %+v, audit %q", got, a.calls)
+			}
+		})
 	}
 }

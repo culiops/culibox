@@ -166,6 +166,13 @@ func (w *importGuard) read(file string) ([]byte, error) {
 	return readRegular(f)
 }
 
+// errNotRegular is a file that is a device, a FIFO or a folder.
+var errNotRegular = errors.New("not a regular file")
+
+// errTooBig is a file over the read limit: a scan that would stop reading at
+// the limit sees part of what the tool reads, so it fails instead.
+var errTooBig = errors.New("is over 1 MiB")
+
 // readRegular returns up to mergeImportBytes of f when it is a regular file,
 // and closes it.
 func readRegular(f *os.File) ([]byte, error) {
@@ -173,9 +180,28 @@ func readRegular(f *os.File) ([]byte, error) {
 	if fi, err := f.Stat(); err != nil {
 		return nil, err
 	} else if !fi.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
+		return nil, errNotRegular
 	}
 	return io.ReadAll(io.LimitReader(f, mergeImportBytes))
+}
+
+// readRegularMax returns all of f when it is a regular file of at most limit
+// bytes, and closes it: errNotRegular for any other type, errTooBig past limit.
+func readRegularMax(f *os.File, limit int) ([]byte, error) {
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil {
+		return nil, err
+	} else if !fi.Mode().IsRegular() {
+		return nil, errNotRegular
+	}
+	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > limit {
+		return nil, errTooBig
+	}
+	return data, nil
 }
 
 // importDenied reports whether p (a repo-relative path from the range) is at,
