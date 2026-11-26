@@ -220,7 +220,12 @@ func TestWorkspaceCall(t *testing.T) {
 		{"npm", "run lint --workspaces", true}, {"npm", "run lint --workspace=pkg", true}, {"npm", "run lint -w pkg", true},
 		{"pnpm", "--filter web lint", true}, {"pnpm", "-F web lint", true}, {"pnpm", "-r lint", true}, {"pnpm", "run lint --recursive", true},
 		{"yarn", "workspace web lint", true}, {"yarn", "workspaces foreach run lint", true},
-		{"pnpm", "--filter web exec eslint", false}, {"npm", "run lint", false}, {"yarn", "lint", false}, {"npm", "run test -- -w", false}, {"yarn", "-w", false},
+		{"pnpm", "--filter web exec eslint", true}, {"pnpm", "exec --filter web eslint", true}, {"npm", "run exec --workspaces", true},
+		{"npm", "exec --workspaces -- eslint", true}, {"yarn", "dlx -w x", false},
+		{"yarn", "--cwd x workspace web lint", true}, {"yarn", "--silent workspaces foreach run lint", true},
+		{"pnpm", "recursive run lint", true}, {"pnpm", "m run lint", true}, {"pnpm", "multi run lint", true}, {"pnpm", "--silent recursive run lint", true},
+		{"pnpm", "run m", false}, {"pnpm", "run recursive", false}, {"yarn", "run workspace", false}, {"yarn", "lint workspace", false},
+		{"npm", "run lint", false}, {"yarn", "lint", false}, {"npm", "run test -- -w", false}, {"yarn", "-w", false},
 	}
 	for _, c := range cases {
 		if got := workspaceCall(c.runner, strings.Fields(c.args)); got != c.want {

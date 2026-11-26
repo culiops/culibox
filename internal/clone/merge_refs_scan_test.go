@@ -651,7 +651,6 @@ func TestMergeHomePlainWordShapes(t *testing.T) {
 		{"hook cross-env node server: server.js", map[string]string{".claude/settings.json": hookSettings("cross-env NODE_ENV=test node server"), "server.js": "h\n"}, nil, "", "server.js", true},
 		{"hook timeout node server: server.js", map[string]string{".claude/settings.json": hookSettings("timeout 60 node server"), "server.js": "h\n"}, nil, "", "server.js", true},
 		{"hook $PY script: srvp.py", map[string]string{".claude/settings.json": hookSettings("$PY srvp"), "srvp.py": "h\n"}, nil, "", "srvp.py", true},
-		{"hook pnpm --filter exec eslint: eslint.config.js", map[string]string{".claude/settings.json": hookSettings("pnpm --filter web exec eslint ."), "eslint.config.js": "h\n"}, nil, "", "eslint.config.js", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -710,10 +709,14 @@ func TestPlainMatcher(t *testing.T) {
 	pm.add(".", "eslint", true)
 	pm.add(".", "server", false)
 	pm.add("web", "jest", true)
+	pm.addGlob(".", "*.mk")
+	pm.addGlob("mk", "rules-?.MK")
 	for p, want := range map[string]bool{
 		"eslint.config.js": true, ".eslintrc.cjs": true, "server.js": true, "server/index.js": true,
 		"server.config.js": false, "web/jest.config.ts": true, "Web/JEST.CONFIG.TS": true,
 		"jest.config.ts": false, "src/eslint.config.js": false, "myeslint.js": false, "web": false,
+		"b.mk": true, "B.MK": true, "x.mk/y": true, "b.mkx": false, "src/b.mk": false,
+		"mk/rules-a.mk": true, "MK/Rules-B.Mk": true, "mk/rules-ab.mk": false, "mk/other.mk": false, "rules-a.inc": false,
 	} {
 		if got := pm.denied(p); got != want {
 			t.Errorf("denied(%q) = %v, want %v", p, got, want)
@@ -789,6 +792,12 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 		{"task -tFILE", map[string]string{".claude/settings.json": hookSettings("task -tx.yml lint"), "x.yml": "tasks:\n  lint:\n    cmds:\n      - ./of8/x.sh\n"}, "of8/x.sh", true},
 		{"task --taskfile=FILE", map[string]string{".claude/settings.json": hookSettings("task --taskfile=x.yml lint"), "x.yml": "tasks:\n  lint:\n    cmds:\n      - ./of9/x.sh\n"}, "of9/x.sh", true},
 		{"make -C is not a file option", map[string]string{".claude/settings.json": hookSettings("make -Cfoo fmt"), "oo": "x\n"}, "unrelated/x.sh", false},
+		{"include glob refuses a match the box adds", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include *.mk\n", "a.mk": "fmt:\n\ttrue\n"}, "b.mk", true},
+		{"include glob refuses an added match, any case", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include *.mk\n"}, "NEW.MK", true},
+		{"include glob with ? refuses an added match", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "-include rules-?.mk\n"}, "rules-z.mk", true},
+		{"included file's glob refuses an added match at the top", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include sub/a.mk\n", "sub/a.mk": "include *.inc\n"}, "z.inc", true},
+		{"just import glob refuses an added match", map[string]string{".claude/settings.json": hookSettings("just fmt"), "justfile": "import 'j*.just'\n"}, "jx.just", true},
+		{"include glob: a path it does not match merges", map[string]string{".claude/settings.json": hookSettings("make fmt"), "Makefile": "include *.mk\n"}, "notes.txt", false},
 		{"a recipe file nobody calls merges", map[string]string{".claude/settings.json": hookSettings("true"), "Makefile": "fmt:\n\t./tools/fmt.sh\n"}, "tools/fmt.sh", false},
 	}
 	for _, c := range cases {
@@ -819,17 +828,72 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 func TestMergeHomeWorkspaceCallFails(t *testing.T) {
 	for _, cmd := range []string{"npm run lint --workspaces", "npm run lint -w pkg", "npm run lint --workspace=pkg",
 		"pnpm --filter web lint", "pnpm -r lint", "pnpm run -F web lint", "yarn workspace web lint", "yarn workspaces foreach run lint",
-		"bun --filter '*' lint"} {
+		"bun --filter '*' lint",
+		// A workspace flag with exec or dlx: the program runs in each package's folder.
+		"pnpm --filter web exec eslint", "pnpm -r exec tsc", "npm exec --workspaces -- eslint", "yarn workspaces foreach exec tsc",
+		"npm run exec --workspaces", // exec is the script name here
+		"yarn --cwd . workspace web lint", "pnpm recursive run lint", "pnpm m run lint", "pnpm multi run lint",
+		// A workspace setting from the environment.
+		"npm_config_workspace=pkg npm run lint", "NPM_CONFIG_WORKSPACES=true npm run lint", "npm_config_filter=web pnpm lint",
+		"env npm_config_workspaces=true npm run lint", "export npm_config_workspaces=true; npm run lint"} {
 		t.Run(cmd, func(t *testing.T) {
 			old := mergeSystemGitConfig
 			mergeSystemGitConfig = filepath.Join(t.TempDir(), "none")
 			t.Cleanup(func() { mergeSystemGitConfig = old })
 			x := newMergeFx(t, "main")
-			x.commit("host", map[string]string{".claude/settings.json": hookSettings(cmd), "package.json": `{"scripts":{"lint":"true"}}`})
+			x.commit("host", map[string]string{".claude/settings.json": hookSettings(cmd), "package.json": `{"scripts":{"lint":"true","exec":"true"}}`})
 			before := x.tip()
 			x.box("main", map[string]string{"src/x.js": "box\n"})
 			a := &auditRec{}
 			got := x.run(newRec(t), a)
+			wantMergeReason(t, got, MergeFailed)
+			if !strings.Contains(got.Detail, "cannot follow workspace package scripts") || x.tip() != before || len(a.calls) != 0 {
+				t.Fatalf("Detail = %q, main moved or audit written", got.Detail)
+			}
+		})
+	}
+}
+
+// A workspace setting in the host's .npmrc makes every npm and pnpm call a
+// workspace call: the merge fails with the workspace reason (#370).
+func TestMergeHomeNpmrcWorkspaceFails(t *testing.T) {
+	cases := []struct {
+		name, npmrc, cmd string
+		fails            bool
+	}{
+		{"workspaces = true", "registry=https://r.example\nworkspaces = true\n", "npm run lint", true},
+		{"workspace=pkg", "workspace=pkg\n", "npm test", true},
+		{"workspace[] array form", "workspace[] = a\nworkspace[] = b\n", "npm run lint", true},
+		{"filter for pnpm", "  filter = web\n", "pnpm lint", true},
+		{"any case key", "Workspaces=true\n", "npm run lint", true},
+		{"pnpm exec", "filter=web\n", "pnpm exec eslint", true},
+		{"a folder's .npmrc", "", "cd sub && npm run lint", true},
+		{"comment lines do not count", "; workspaces = true\n# filter = web\n", "npm run lint", false},
+		{"other keys do not count", "workspaces-update=false\nengine-strict=true\n", "npm run lint", false},
+		{"yarn does not read it", "workspaces=true\n", "yarn lint", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			old := mergeSystemGitConfig
+			mergeSystemGitConfig = filepath.Join(t.TempDir(), "none")
+			t.Cleanup(func() { mergeSystemGitConfig = old })
+			x := newMergeFx(t, "main")
+			host := map[string]string{".claude/settings.json": hookSettings(c.cmd), "package.json": `{"scripts":{"lint":"true"}}`}
+			if c.npmrc != "" {
+				host[".npmrc"] = c.npmrc
+			} else {
+				host["sub/.npmrc"] = "workspaces=true\n"
+				host["sub/package.json"] = `{"scripts":{"lint":"true"}}`
+			}
+			x.commit("host", host)
+			before := x.tip()
+			x.box("main", map[string]string{"src/x.js": "box\n"})
+			a := &auditRec{}
+			got := x.run(newRec(t), a)
+			if !c.fails {
+				wantMerged(t, got)
+				return
+			}
 			wantMergeReason(t, got, MergeFailed)
 			if !strings.Contains(got.Detail, "cannot follow workspace package scripts") || x.tip() != before || len(a.calls) != 0 {
 				t.Fatalf("Detail = %q, main moved or audit written", got.Detail)

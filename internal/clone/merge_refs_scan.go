@@ -110,6 +110,7 @@ type refSink struct {
 	scriptSeen map[string]bool              // "folder\x00name": a package script already run
 	scriptsRun int                          // package scripts read, against mergeRefScripts
 	recipeSeen map[string]bool              // "folder\x00file": a recipe file already read
+	npmrcWs    map[string]bool              // folder -> its .npmrc sets a workspace key, read once
 
 	err error // the first cap or listing error
 }
@@ -136,7 +137,8 @@ type dirListing struct {
 func scanConfigRefs(of string, hooks []string, home string) (*refSink, error) {
 	s := &refSink{of: filepath.Clean(of), runners: map[string]bool{},
 		listings: map[string]*dirListing{}, plainSeen: map[string]bool{},
-		pkgScripts: map[string]map[string]string{}, scriptSeen: map[string]bool{}, recipeSeen: map[string]bool{}}
+		pkgScripts: map[string]map[string]string{}, scriptSeen: map[string]bool{}, recipeSeen: map[string]bool{},
+		npmrcWs: map[string]bool{}}
 	if root, err := os.OpenRoot(s.of); err == nil {
 		defer root.Close()
 		s.root = root
@@ -310,6 +312,14 @@ func (s *refSink) runScripts(r scriptRef) {
 	if s.root == nil {
 		return
 	}
+	if r.runner == "npm" || r.runner == "pnpm" {
+		for _, dir := range r.dirs {
+			if s.npmrcWorkspace(dir) { // as if every call had --workspaces or --filter
+				s.fail(errWorkspaceScripts)
+				return
+			}
+		}
+	}
 	for _, dir := range r.dirs {
 		if recipeRunners[r.runner] {
 			l := s.listing(dir)
@@ -366,6 +376,43 @@ func (s *refSink) runScripts(r scriptRef) {
 			s.command(c)
 		}
 	}
+}
+
+// npmrcWorkspace reports whether the .npmrc in dir (repo-relative, "." for the
+// top) sets workspace, workspaces or filter, read once through file (so bounded
+// by its size and file caps).
+func (s *refSink) npmrcWorkspace(dir string) bool {
+	if v, ok := s.npmrcWs[dir]; ok {
+		return v
+	}
+	ws := false
+	s.file(path.Join(dir, ".npmrc"), func(_ *refSink, data []byte) { ws = npmrcSetsWorkspace(data) })
+	s.npmrcWs[dir] = ws
+	return ws
+}
+
+// workspaceConfigKeys are the .npmrc keys that make npm and pnpm run in
+// workspace packages.
+var workspaceConfigKeys = map[string]bool{"workspace": true, "workspaces": true, "filter": true}
+
+// npmrcSetsWorkspace reads .npmrc lines the way npm's ini parser does: "key =
+// value", "key[] = value" for a list, a bare "key" for true; ";" and "#" start
+// a comment. Keys compare case-insensitively; a key under a [section] counts
+// too (an over-read, it only fails more scans).
+func npmrcSetsWorkspace(data []byte) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" || t[0] == ';' || t[0] == '#' || t[0] == '[' {
+			continue
+		}
+		k, _, _ := strings.Cut(t, "=")
+		k = strings.Trim(strings.TrimSpace(k), "\"'")
+		k = strings.ToLower(strings.TrimSuffix(k, "[]"))
+		if workspaceConfigKeys[k] {
+			return true
+		}
+	}
+	return false
 }
 
 // toolConfigSkip are words whose "<word>.*" / ".<word>*" entries are not a
@@ -436,9 +483,12 @@ type plainPattern struct {
 // plainMatcher holds the look-ups plainWord made, by folder (foldKey of the
 // repo-relative path, "." for the top), so that a path the range ADDS is matched
 // by the same rules as an entry the host has: plainWord lists what is there, the
-// matcher answers for what is not there yet.
+// matcher answers for what is not there yet. globs are the include and import
+// globs a recipe file expands in a folder ("include mk/*.mk"), for the same
+// reason.
 type plainMatcher struct {
 	byBase map[string][]plainPattern
+	globs  map[string][]string // folder -> path.Match patterns, case-folded
 }
 
 // add records a look-up of word in base.
@@ -453,6 +503,17 @@ func (pm *plainMatcher) add(base, word string, tool bool) {
 	}
 }
 
+// addGlob records a glob (one path element, path.Match syntax) expanded in base.
+func (pm *plainMatcher) addGlob(base, pat string) {
+	if pm.globs == nil {
+		pm.globs = map[string][]string{}
+	}
+	k, g := foldKey(path.Clean(base)), foldKey(strings.ToLower(pat))
+	if !slices.Contains(pm.globs[k], g) {
+		pm.globs[k] = append(pm.globs[k], g)
+	}
+}
+
 // merge adds the look-ups of o.
 func (pm *plainMatcher) merge(o *plainMatcher) {
 	for base, pps := range o.byBase {
@@ -460,34 +521,45 @@ func (pm *plainMatcher) merge(o *plainMatcher) {
 			pm.add(base, pp.word, pp.tool)
 		}
 	}
+	for base, gs := range o.globs {
+		for _, g := range gs {
+			pm.addGlob(base, g)
+		}
+	}
+}
+
+// compAfter returns the component of p (split, repo-relative) right after the
+// folder base (a foldKey'd key of byBase or globs), case-folded; ok is false
+// when p is not under base.
+func compAfter(pc []string, base string) (string, bool) {
+	n := 0
+	if base != "." {
+		bc := strings.Split(base, "/")
+		if len(bc) >= len(pc) {
+			return "", false
+		}
+		for i := range bc {
+			if foldKey(pc[i]) != bc[i] {
+				return "", false
+			}
+		}
+		n = len(bc)
+	}
+	return foldKey(pc[n]), true
 }
 
 // denied reports whether p (repo-relative, slash-separated) is, or is under, an
 // entry plainWord would have denied in one of the folders: the component of p
 // right after the folder is the word, the word with a script extension, or, for
-// a tool word, "<word>.*" or ".<word>*" (plainWord's rules, case-folded).
+// a tool word, "<word>.*" or ".<word>*" (plainWord's rules, case-folded); or
+// that component matches a recipe glob kept for the folder.
 func (pm *plainMatcher) denied(p string) bool {
 	pc := strings.Split(p, "/")
 	for base, pps := range pm.byBase {
-		n := 0
-		if base != "." {
-			bc := strings.Split(base, "/")
-			if len(bc) >= len(pc) {
-				continue
-			}
-			ok := true
-			for i := range bc {
-				if foldKey(pc[i]) != bc[i] {
-					ok = false
-					break
-				}
-			}
-			if !ok {
-				continue
-			}
-			n = len(bc)
+		c, ok := compAfter(pc, base)
+		if !ok {
+			continue
 		}
-		c := foldKey(pc[n])
 		for _, pp := range pps {
 			w := pp.word
 			if c == w {
@@ -500,6 +572,17 @@ func (pm *plainMatcher) denied(p string) bool {
 			}
 			if pp.tool && len(w) >= 2 && !toolConfigSkip[strings.ToLower(w)] &&
 				(strings.HasPrefix(c, w+".") || strings.HasPrefix(c, "."+w)) {
+				return true
+			}
+		}
+	}
+	for base, gs := range pm.globs {
+		c, ok := compAfter(pc, base)
+		if !ok {
+			continue
+		}
+		for _, g := range gs {
+			if m, err := path.Match(g, c); m || err != nil { // a bad pattern refuses
 				return true
 			}
 		}

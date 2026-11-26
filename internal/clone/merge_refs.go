@@ -288,20 +288,25 @@ func scriptNames(runner string, args []string) (names []string, all bool) {
 var workspaceFlags = map[string]bool{"--workspaces": true, "--workspace": true, "-ws": true, "--filter": true,
 	"-F": true, "-r": true, "--recursive": true}
 
-// workspaceCall reports whether "<runner> args..." runs scripts of workspace
-// packages (an option, or yarn's workspace subcommands). Their package.json
-// files are not followed: the scan fails. Arguments after "--" belong to the
-// script.
+// workspaceSubs are the subcommands that run in workspace packages.
+var workspaceSubs = map[string]map[string]bool{
+	"yarn": {"workspace": true, "workspaces": true},
+	"pnpm": {"recursive": true, "m": true, "multi": true},
+}
+
+// workspaceEnvKeys are the environment settings (case-insensitive, npm reads
+// them so) that make npm and pnpm run in workspace packages.
+var workspaceEnvKeys = map[string]bool{"npm_config_workspace": true, "npm_config_workspaces": true, "npm_config_filter": true}
+
+// workspaceCall reports whether "<runner> args..." runs in workspace packages:
+// a workspace option anywhere before "--" (with exec and dlx too: the program
+// then runs in each package's folder), or a workspace subcommand in the
+// subcommand slot. Their package.json files are not followed: the scan fails.
+// Arguments after "--" belong to the script.
 func workspaceCall(runner string, args []string) bool {
-	if runner == "yarn" && len(args) > 0 && (args[0] == "workspace" || args[0] == "workspaces") {
-		return true
-	}
-	for _, a := range args {
-		if a == "--" {
-			break
-		}
-		if a == "exec" || a == "dlx" { // runs a program, not a package script
-			return false
+	for _, w := range subcommandWords(args) {
+		if workspaceSubs[runner][w] {
+			return true
 		}
 	}
 	for _, a := range args {
@@ -314,6 +319,30 @@ func workspaceCall(runner string, args []string) bool {
 		}
 	}
 	return false
+}
+
+// subcommandWords returns the words that may be the subcommand of a runner
+// call: the first word that is no option, and, when an option with no "=" comes
+// right before it (its value, maybe), the word after that too.
+func subcommandWords(args []string) []string {
+	var out []string
+	maybeValue := false
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if strings.HasPrefix(a, "-") && len(a) > 1 {
+			_, _, hasVal := strings.Cut(a, "=")
+			maybeValue = !hasVal
+			continue
+		}
+		out = append(out, strings.Trim(a, "\"'"))
+		if !maybeValue {
+			break
+		}
+		maybeValue = false
+	}
+	return out
 }
 
 // scriptCall reads tok (with the words after it) as a call of a runner that
@@ -408,6 +437,7 @@ func parseCommand(of, s string) cmdInfo {
 		pyish, nodeish   bool
 		plainSeen        = map[string]bool{}
 		emit, emitModule func(string)
+		wsEnv            bool // a workspace setting is assigned: npm_config_workspaces=true
 	)
 	emit = func(p string) {
 		if len(ci.paths) >= mergeRefPaths { // the sink keeps no more than that anyway
@@ -615,6 +645,9 @@ func parseCommand(of, s string) cmdInfo {
 				cands = []string{val}
 			case envAssignRE.MatchString(tok):
 				loc := envAssignRE.FindStringIndex(tok)
+				if workspaceEnvKeys[strings.ToLower(tok[:loc[1]-1])] {
+					wsEnv = true
+				}
 				if strings.HasPrefix(tok, "NODE_OPTIONS=") {
 					nodeish = true
 				}
@@ -745,6 +778,13 @@ func parseCommand(of, s string) cmdInfo {
 		// The folders the segment moved to (cd, -C, --prefix) apply to its runners.
 		for _, k := range segRefs {
 			ci.scripts[k].dirs = append([]string{"."}, cwds...)
+		}
+	}
+	if wsEnv { // in any segment: "export npm_config_workspaces=true; npm run lint"
+		for k := range ci.scripts {
+			if nodeScriptRunners[ci.scripts[k].runner] {
+				ci.scripts[k].workspace = true
+			}
 		}
 	}
 	return ci

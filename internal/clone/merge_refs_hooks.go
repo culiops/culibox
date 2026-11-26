@@ -367,6 +367,7 @@ func (s *refSink) readRecipeName(rel string) {
 		s.fail(errScanCap)
 		return
 	}
+	s.pm.addGlob(d, pat) // a file the range adds that matches is refused too
 	l := s.listing(d)
 	for _, k := range l.sorted {
 		if ok, _ := path.Match(pat, k); ok {
