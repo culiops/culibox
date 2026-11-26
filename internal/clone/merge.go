@@ -80,7 +80,9 @@ var MergeDenyNames = append(box.InPlaceGuardFiles(),
 	// direnv's dotenv, nix-direnv and devenv load these on the next prompt in the
 	// folder, node and yarn run what these name on every call.
 	".env", "flake.nix", "flake.lock", "shell.nix", "default.nix", "devenv.nix", "devenv.yaml",
-	"devenv.lock", "devbox.json", ".npmrc", ".yarnrc.yml", ".yarnrc")
+	"devenv.lock", "devbox.json", ".npmrc", ".yarnrc.yml", ".yarnrc",
+	// pnpm reads its workspace (packages, catalogs, settings) from these.
+	"pnpm-workspace.yaml", "pnpm-workspace.yml")
 
 // MergeDenyPatterns are path.Match patterns for more file names, matched like
 // MergeDenyNames (any depth, case-insensitive, by the basename).

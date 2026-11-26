@@ -299,6 +299,12 @@ var (
 	taskEntryRE     = regexp.MustCompile(`^\s+[A-Za-z0-9_.-]+:\s+(\S.*)$`)
 )
 
+// flowYAML reports whether a YAML value is written in flow form ({...} or [...]).
+func flowYAML(v string) bool {
+	v = strings.TrimSpace(v)
+	return strings.HasPrefix(v, "{") || strings.HasPrefix(v, "[")
+}
+
 // moreLines reports whether lines (from index i) hold a line that is not empty
 // or a comment: a cap that stops before one of those must fail.
 func moreLines(lines []string, i int) bool {
@@ -334,11 +340,15 @@ func (s *refSink) readRecipe(rel string) {
 // "{{", a backtick) fails the scan.
 func (s *refSink) recipeInclude(dir string, cands []string) {
 	for _, c := range cands {
-		if strings.ContainsAny(c, "$(`") || strings.Contains(c, "{{") {
+		if strings.ContainsAny(c, "$(`") || strings.Contains(c, "{{") || strings.HasPrefix(strings.Trim(c, "\"'"), "~") {
 			s.fail(errScanCap)
 			continue
 		}
 		if c = cleanRaw(c); c == "" {
+			continue
+		}
+		if path.IsAbs(c) {
+			s.recipeAbs(c, dir)
 			continue
 		}
 		for _, d := range []string{dir, "."} {
@@ -348,6 +358,60 @@ func (s *refSink) recipeInclude(dir string, cands []string) {
 			}
 		}
 	}
+}
+
+// recipeAbs reads a recipe file named by an absolute path: inside the repo as
+// that repo path, outside it at its real path (readOutsideRecipe). A glob
+// outside the repo fails the scan.
+func (s *refSink) recipeAbs(c, dir string) {
+	if rel := absInside(s.of, filepath.FromSlash(c)); rel != "" {
+		s.readRecipeName(rel)
+		return
+	}
+	if strings.ContainsAny(c, "*?[") {
+		s.fail(errScanCap)
+		return
+	}
+	s.readOutsideRecipe(filepath.FromSlash(c), dir)
+}
+
+// readOutsideRecipe reads a recipe file outside the repo (host-owned) once, by
+// its path, and scans it as run from dir. A missing file or a folder is
+// skipped; a file that is not regular, cannot be read or is over the size cap
+// fails the scan; it counts against mergeRefFiles.
+func (s *refSink) readOutsideRecipe(abs, dir string) {
+	abs = filepath.Clean(abs)
+	k := "\x00abs\x00" + abs
+	if s.recipeSeen[k] {
+		return
+	}
+	s.recipeSeen[k] = true
+	if s.reads >= mergeRefFiles {
+		s.fail(errScanCap)
+		return
+	}
+	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			s.fail(fmt.Errorf("cannot read %s: %w", abs, err))
+		}
+		return
+	}
+	s.reads++
+	if fi, err := f.Stat(); err == nil && fi.IsDir() {
+		f.Close()
+		return
+	}
+	data, err := readRegular(f)
+	if err != nil {
+		s.fail(fmt.Errorf("cannot read %s: %w", abs, err))
+		return
+	}
+	if len(data) >= mergeImportBytes {
+		s.fail(errScanCap)
+		return
+	}
+	s.scanRecipesIn(data, dir)
 }
 
 // readRecipeName reads rel, or every file a glob in its last element matches.
@@ -388,6 +452,7 @@ func (s *refSink) readRecipeName(rel string) {
 func (s *refSink) scanRecipesIn(data []byte, dir string) {
 	lines := strings.Split(string(data), "\n")
 	includesIndent := -1 // indent of a Taskfile "includes:" key, -1 outside it
+	entryIndent := -1    // indent of its entries, -1 until the first
 	for i, line := range lines {
 		if i >= mergeRefLines {
 			if moreLines(lines, i) {
@@ -401,19 +466,36 @@ func (s *refSink) scanRecipesIn(data []byte, dir string) {
 		}
 		indent := len(line) - len(strings.TrimLeft(line, " \t"))
 		if includesIndent >= 0 && indent <= includesIndent {
-			includesIndent = -1
+			includesIndent, entryIndent = -1, -1
 		}
 		if t == "includes:" {
 			includesIndent = indent
 			continue
 		}
+		if v, ok := strings.CutPrefix(t, "includes:"); ok && flowYAML(v) {
+			s.fail(errScanCap) // "includes: {a: ./a}": a flow map is not followed (#370)
+			continue
+		}
 		if m := taskIncludeRE.FindStringSubmatch(line); m != nil {
 			v := strings.TrimSpace(m[1])
+			if flowYAML(v) {
+				s.fail(errScanCap)
+				continue
+			}
 			s.pathArg(v)
 			s.recipeInclude(dir, []string{v, v + "/Taskfile.yml", v + "/Taskfile.yaml"})
 		} else if includesIndent >= 0 {
-			if m := taskEntryRE.FindStringSubmatch(line); m != nil {
+			if entryIndent < 0 {
+				entryIndent = indent
+			}
+			// An entry ("name: ./path" or "name: {taskfile: ...}"); the deeper
+			// lines of a block entry are its keys (taskfile:, dir:, vars:).
+			if m := taskEntryRE.FindStringSubmatch(line); m != nil && indent == entryIndent {
 				v := strings.TrimSpace(m[1])
+				if flowYAML(v) {
+					s.fail(errScanCap) // "sub: {taskfile: ./sub}": not followed (#370)
+					continue
+				}
 				s.pathArg(v)
 				s.recipeInclude(dir, []string{v, v + "/Taskfile.yml", v + "/Taskfile.yaml"})
 			}
@@ -460,11 +542,13 @@ func (s *refSink) justMod(dir string, args []string) {
 	if len(args) == 0 {
 		return
 	}
-	base := cleanRaw(args[0])
+	raw := args[0]
 	if len(args) > 1 {
-		base = cleanRaw(args[len(args)-1])
+		raw = args[len(args)-1]
 	}
-	if base == "" || strings.ContainsAny(base, "$*(") {
+	base := cleanRaw(raw)
+	if base == "" || strings.ContainsAny(raw, "$*?[(`~") || strings.Contains(raw, "{{") {
+		s.fail(errScanCap) // a module path the scan cannot name (#370 R9b)
 		return
 	}
 	cands := []string{base + ".just", base + "/mod.just", base + "/justfile", base + "/.justfile"}
@@ -473,6 +557,10 @@ func (s *refSink) justMod(dir string, args []string) {
 	}
 	for _, c := range cands {
 		s.pathArg(c)
+		if path.IsAbs(c) {
+			s.recipeAbs(c, dir)
+			continue
+		}
 		for _, d := range []string{dir, "."} {
 			rel := path.Join(d, c)
 			l := s.listing(path.Dir(rel))

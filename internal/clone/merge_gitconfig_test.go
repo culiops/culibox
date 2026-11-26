@@ -161,6 +161,10 @@ func TestMergeHomeGitConfigDenied(t *testing.T) {
 		{"textconv tool prefix rule", "[diff \"x\"]\n\ttextconv = npx eslint\n", nil, "eslint.config.js", true},
 		{"textconv plain word, README still merges", "[diff \"x\"]\n\ttextconv = node conv\n", map[string]string{"conv.js": "h\n"}, "README.md", false},
 		{"textconv plain word, nothing there", "[diff \"x\"]\n\ttextconv = node nothere\n", nil, "nothere.js", true},
+		// A program value that calls a runner reads the scripts it runs (#370).
+		{"alias runs npm test", "[alias]\n\tt = !npm test\n", map[string]string{"package.json": `{"scripts":{"test":"node gt/t.js"}}`}, "gt/t.js", true},
+		{"core pager runs make", "[core]\n\tpager = make x\n", map[string]string{"Makefile": "x:\n\t./gp/x.sh\n"}, "gp/x.sh", true},
+		{"alias runs npm test, an unrelated file merges", "[alias]\n\tt = !npm test\n", map[string]string{"package.json": `{"scripts":{"test":"node gt/t.js"}}`}, "README.md", false},
 		{"textconv runner manifest is not added", "[diff \"x\"]\n\ttextconv = node conv\n", nil, "package.json", false},
 		// What is not a program or an include is not denied.
 		{"alias that is not a shell command", "[alias]\n\tst = status ./bin/st.sh\n", nil, "bin/st.sh", false},

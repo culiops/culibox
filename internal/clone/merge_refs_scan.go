@@ -135,10 +135,7 @@ type dirListing struct {
 // error is a user file the scan could not read, errScanCap, or a folder it could
 // not list.
 func scanConfigRefs(of string, hooks []string, home string) (*refSink, error) {
-	s := &refSink{of: filepath.Clean(of), runners: map[string]bool{},
-		listings: map[string]*dirListing{}, plainSeen: map[string]bool{},
-		pkgScripts: map[string]map[string]string{}, scriptSeen: map[string]bool{}, recipeSeen: map[string]bool{},
-		npmrcWs: map[string]bool{}}
+	s := newRefSink(of)
 	if root, err := os.OpenRoot(s.of); err == nil {
 		defer root.Close()
 		s.root = root
@@ -148,6 +145,15 @@ func scanConfigRefs(of string, hooks []string, home string) (*refSink, error) {
 		return s, err
 	}
 	return s, s.err
+}
+
+// newRefSink is the one constructor of a refSink (every scan: the configs, git
+// config's program values), so no map a reader writes is ever nil.
+func newRefSink(of string) *refSink {
+	return &refSink{of: filepath.Clean(of), runners: map[string]bool{},
+		listings: map[string]*dirListing{}, plainSeen: map[string]bool{},
+		pkgScripts: map[string]map[string]string{}, scriptSeen: map[string]bool{}, recipeSeen: map[string]bool{},
+		npmrcWs: map[string]bool{}}
 }
 
 // scanRepo reads the host work tree's own configs.
@@ -379,7 +385,7 @@ func (s *refSink) runScripts(r scriptRef) {
 }
 
 // npmrcWorkspace reports whether the .npmrc in dir (repo-relative, "." for the
-// top) sets workspace, workspaces or filter, read once through file (so bounded
+// top) sets a workspace* or filter* key, read once through file (so bounded
 // by its size and file caps).
 func (s *refSink) npmrcWorkspace(dir string) bool {
 	if v, ok := s.npmrcWs[dir]; ok {
@@ -390,10 +396,6 @@ func (s *refSink) npmrcWorkspace(dir string) bool {
 	s.npmrcWs[dir] = ws
 	return ws
 }
-
-// workspaceConfigKeys are the .npmrc keys that make npm and pnpm run in
-// workspace packages.
-var workspaceConfigKeys = map[string]bool{"workspace": true, "workspaces": true, "filter": true}
 
 // npmrcSetsWorkspace reads .npmrc lines the way npm's ini parser does: "key =
 // value", "key[] = value" for a list, a bare "key" for true; ";" and "#" start
@@ -408,7 +410,7 @@ func npmrcSetsWorkspace(data []byte) bool {
 		k, _, _ := strings.Cut(t, "=")
 		k = strings.Trim(strings.TrimSpace(k), "\"'")
 		k = strings.ToLower(strings.TrimSuffix(k, "[]"))
-		if workspaceConfigKeys[k] {
+		if strings.HasPrefix(k, "workspace") || strings.HasPrefix(k, "filter") { // workspace*, filter* (#370 R12)
 			return true
 		}
 	}

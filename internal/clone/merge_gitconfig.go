@@ -185,8 +185,7 @@ func (sc *gitConfigScan) scan(of, home string, es []configEntry, hookVals []stri
 	// The program values are read as command lines, with the same look-up of
 	// plain words in the repo top as the agent configs get ("node conv" runs
 	// conv.js). The manifests of a runner they call are not added.
-	cmds := &refSink{of: filepath.Clean(of), runners: map[string]bool{},
-		listings: map[string]*dirListing{}, plainSeen: map[string]bool{}}
+	cmds := newRefSink(of)
 	if root, err := os.OpenRoot(cmds.of); err == nil {
 		defer root.Close()
 		cmds.root = root

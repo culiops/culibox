@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -171,14 +172,23 @@ var recipeFileOpt = map[string]struct {
 
 var recipeValueLetters = map[string]string{"make": "CIjloW", "just": "dEscC", "task": "dCoJ"}
 
+// mergeRecipeFileOpts is the number of file options one recipe runner call may
+// give; past it the call is bad.
+const mergeRecipeFileOpts = 64
+
 // recipeFilesIn returns the values of the runner's file options in args: "-f x",
 // "-fx", a cluster such as "-sf x" or "-sfx", "--file x" and "--file=x". bad is
 // true when a value is missing or is not a literal path ($, parentheses, "{{",
 // a backtick): the file cannot be known.
 func recipeFilesIn(runner string, args []string) (files []string, bad bool) {
+	if len(args) > mergeRefPaths { // no real call has that many: bounded work per call
+		return nil, true
+	}
 	opt := recipeFileOpt[runner]
 	add := func(val string) {
-		if val == "" || strings.ContainsAny(val, "$(`") || strings.Contains(val, "{{") || val != strings.TrimSpace(val) {
+		// Not a literal path: a variable, a substitution, a template, a glob,
+		// a brace or tilde expansion, white space at an end (#370 R13).
+		if val == "" || strings.ContainsAny(val, "$(`{}*?[~,") || val != strings.TrimSpace(val) {
 			bad = true
 			return
 		}
@@ -191,8 +201,11 @@ func recipeFilesIn(runner string, args []string) (files []string, bad bool) {
 		return ""
 	}
 	for i, a := range args {
-		if a == "--" {
+		if a == "--" || bad {
 			break
+		}
+		if len(files) > mergeRecipeFileOpts {
+			return nil, true
 		}
 		switch {
 		case strings.HasPrefix(a, "--"):
@@ -241,18 +254,25 @@ func isFileOpt(long []string, name string) bool {
 
 // shellWord is one word of a command line as sh reads it: text is unquoted,
 // start and end its span in the line; ok is false for a word whose quote does
-// not close (always the last).
+// not close, or that ends in a lone backslash (always the last). sep is set
+// (to the character) for an unquoted command delimiter: ; & | ( ) ` or a
+// newline, each its own entry.
 type shellWord struct {
 	text       string
 	start, end int
 	ok         bool
+	sep        byte
 }
 
-// shellWords splits one simple command into words the way sh treats quotes:
+// shellDelims are the characters that end a simple command when unquoted.
+const shellDelims = ";&|()`\n"
+
+// shellWords splits a command line into words the way sh treats quotes:
 // white space separates words outside quotes, '...' is literal, "..." keeps
 // its text with a backslash escaping $ ` " \ and a newline, and outside quotes
-// a backslash escapes the next character (a backslash-newline is removed).
-// Nothing else is expanded.
+// a backslash escapes the next character (a backslash-newline is removed). An
+// unquoted delimiter (shellDelims) is an entry of its own. Nothing else is
+// expanded: this is not a shell, and recipeArgs refuses what it cannot read.
 func shellWords(s string) []shellWord {
 	var (
 		out   []shellWord
@@ -291,8 +311,20 @@ func shellWords(s string) []shellWord {
 			}
 			continue
 		}
-		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+		if c == '\\' && i+1 < len(s) && s[i+1] == '\n' { // a line continuation
+			if start < 0 {
+				start = i
+			}
+			i++
+			continue
+		}
+		if c == ' ' || c == '\t' || c == '\r' {
 			flush(i, true)
+			continue
+		}
+		if strings.IndexByte(shellDelims, c) >= 0 {
+			flush(i, true)
+			out = append(out, shellWord{text: string(c), start: i, end: i + 1, ok: true, sep: c})
 			continue
 		}
 		if start < 0 {
@@ -302,12 +334,12 @@ func shellWords(s string) []shellWord {
 		case '\'', '"':
 			quote = c
 		case '\\':
-			if i+1 < len(s) {
-				i++
-				if s[i] != '\n' {
-					b.WriteByte(s[i])
-				}
+			if i+1 == len(s) { // a lone backslash at the end
+				flush(len(s), false)
+				return out
 			}
+			i++
+			b.WriteByte(s[i])
 		default:
 			b.WriteByte(c)
 		}
@@ -316,31 +348,78 @@ func shellWords(s string) []shellWord {
 	return out
 }
 
+// cmdLex is a command line split once by shellWords, with look-ups that make
+// each runner's arguments O(1) to find: stop[k] is the first delimiter at or
+// after k, dirty[k] the first word at or after k that is not clean (an unclosed
+// quote, a lone backslash, or a delimiter inside quotes: "a;b", "$(pwd)").
+type cmdLex struct {
+	words []shellWord
+	texts []string
+	stop  []int
+	dirty []int
+}
+
+func newCmdLex(s string) *cmdLex {
+	lx := &cmdLex{words: shellWords(s)}
+	n := len(lx.words)
+	lx.texts = make([]string, n)
+	lx.stop, lx.dirty = make([]int, n+1), make([]int, n+1)
+	lx.stop[n], lx.dirty[n] = n, n
+	for k := n - 1; k >= 0; k-- {
+		w := lx.words[k]
+		lx.texts[k] = w.text
+		lx.stop[k], lx.dirty[k] = lx.stop[k+1], lx.dirty[k+1]
+		if w.sep != 0 {
+			lx.stop[k] = k
+		} else if !w.ok || strings.ContainsAny(w.text, shellDelims) {
+			lx.dirty[k] = k
+		}
+	}
+	return lx
+}
+
+// at returns the index of the word whose span holds byte off, -1 for none.
+func (lx *cmdLex) at(off int) int {
+	k := sort.Search(len(lx.words), func(i int) bool { return lx.words[i].end > off })
+	if k < len(lx.words) && lx.words[k].start <= off {
+		return k
+	}
+	return -1
+}
+
+// after returns the words after word k up to the next delimiter. bad is true
+// when one of them is not clean, or the delimiter starts a substitution or a
+// subshell ("(" or a backtick): the runner's options cannot be known.
+func (lx *cmdLex) after(k int) (args []string, bad bool) {
+	st := lx.stop[k+1]
+	if lx.dirty[k+1] < st {
+		return nil, true
+	}
+	if st < len(lx.words) && (lx.words[st].sep == '(' || lx.words[st].sep == '`') {
+		return nil, true
+	}
+	return lx.texts[k+1 : st], false
+}
+
 // maxQuoteDepth is how deep recipeArgs follows a runner quoted inside a word
 // ("bash -c \"make -f x.mk\"").
 const maxQuoteDepth = 4
 
 // recipeArgs returns the words after the recipe runner whose token starts at
-// byte off of seg, unquoted (shellWords), for its file options. A runner quoted
-// inside a longer word is found in that word's own words, first match. bad is
-// true when the runner cannot be placed, sits in an unclosed quote, or an
-// unclosed word after it starts with a dash (an option the scan cannot read).
-func recipeArgs(seg string, off int, runner string) (args []string, bad bool) {
-	words := shellWords(seg)
-	for k, w := range words {
-		if off < w.start || off >= w.end {
-			continue
-		}
-		if !w.ok {
-			return nil, true
-		}
-		if strings.ContainsAny(w.text, " \t\n") { // "bash -c \"make -f x\"": the runner is in the word
-			args, bad, found := quotedRecipeArgs(w.text, runner, maxQuoteDepth)
-			return args, bad || !found
-		}
-		return wordsAfter(words[k+1:])
+// byte off of the command lx was made from, for its file options. A runner
+// quoted inside a longer word (bash -c "make fmt && echo ok") is found among
+// that word's own words, first match. bad is true when the runner cannot be
+// placed or sits in a word that is not clean, or lx.after says so.
+func recipeArgs(lx *cmdLex, off int, runner string) (args []string, bad bool) {
+	k := lx.at(off)
+	if k < 0 || !lx.words[k].ok {
+		return nil, true
 	}
-	return nil, true
+	if t := lx.texts[k]; strings.ContainsAny(t, " \t"+shellDelims) {
+		args, bad, found := quotedRecipeArgs(t, runner, maxQuoteDepth)
+		return args, bad || !found
+	}
+	return lx.after(k)
 }
 
 // quotedRecipeArgs finds runner among the words of text (a word that held it)
@@ -350,34 +429,25 @@ func quotedRecipeArgs(text, runner string, depth int) (args []string, bad, found
 	if depth == 0 {
 		return nil, true, true
 	}
-	words := shellWords(text)
-	for k, w := range words {
+	lx := newCmdLex(text)
+	for k, w := range lx.words {
+		if w.sep != 0 {
+			continue
+		}
 		if path.Base(strings.TrimRight(strings.TrimLeft(w.text, "!{"), "}")) == runner {
 			if !w.ok {
 				return nil, true, true
 			}
-			args, bad = wordsAfter(words[k+1:])
+			args, bad = lx.after(k)
 			return args, bad, true
 		}
-		if strings.ContainsAny(w.text, " \t\n") {
+		if strings.ContainsAny(w.text, " \t"+shellDelims) {
 			if args, bad, found = quotedRecipeArgs(w.text, runner, depth-1); found {
-				return args, bad, true
+				return args, bad || !w.ok, true
 			}
 		}
 	}
 	return nil, false, false
-}
-
-// wordsAfter returns the texts of words; an unclosed word is left out, and
-// makes bad when it starts with a dash.
-func wordsAfter(words []shellWord) (args []string, bad bool) {
-	for _, a := range words {
-		if !a.ok {
-			return args, strings.HasPrefix(a.text, "-")
-		}
-		args = append(args, a.text)
-	}
-	return args, false
 }
 
 // nodeScriptRunners read package.json scripts; recipeRunners read a recipe file.
@@ -440,7 +510,8 @@ func scriptNames(runner string, args []string) (names []string, all bool) {
 }
 
 // workspaceFlags make a package manager run a script in other workspace
-// packages; -w is npm's and pnpm's.
+// packages; -w is npm's and pnpm's. Any --filter* and --workspace* option
+// counts too (--filter-prod, --workspace-root: over-read).
 var workspaceFlags = map[string]bool{"--workspaces": true, "--workspace": true, "-ws": true, "--filter": true,
 	"-F": true, "-r": true, "--recursive": true}
 
@@ -450,9 +521,13 @@ var workspaceSubs = map[string]map[string]bool{
 	"pnpm": {"recursive": true, "m": true, "multi": true},
 }
 
-// workspaceEnvKeys are the environment settings (case-insensitive, npm reads
-// them so) that make npm and pnpm run in workspace packages.
-var workspaceEnvKeys = map[string]bool{"npm_config_workspace": true, "npm_config_workspaces": true, "npm_config_filter": true}
+// workspaceEnvKey reports whether an environment key (case-insensitive, npm
+// reads them so) is a setting that makes npm and pnpm run in workspace
+// packages: npm_config_workspace*, npm_config_filter* (#370 R12).
+func workspaceEnvKey(k string) bool {
+	k = strings.ToLower(k)
+	return strings.HasPrefix(k, "npm_config_workspace") || strings.HasPrefix(k, "npm_config_filter")
+}
 
 // workspaceCall reports whether "<runner> args..." runs in workspace packages:
 // a workspace option anywhere before "--" (with exec and dlx too: the program
@@ -470,7 +545,8 @@ func workspaceCall(runner string, args []string) bool {
 			break
 		}
 		name, _, _ := strings.Cut(a, "=")
-		if workspaceFlags[name] || (name == "-w" && (runner == "npm" || runner == "pnpm")) {
+		if workspaceFlags[name] || strings.HasPrefix(name, "--filter") || strings.HasPrefix(name, "--workspace") ||
+			(name == "-w" && (runner == "npm" || runner == "pnpm")) {
 			return true
 		}
 	}
@@ -503,12 +579,13 @@ func subcommandWords(args []string) []string {
 
 // scriptCall reads tok (with the words after it) as a call of a runner that
 // runs scripts or recipes kept in the repo.
+// A recipe runner's file options are read by the caller (recipeArgs, over the
+// unquoted words of the whole command).
 func scriptCall(tok string, args []string) (scriptRef, bool) {
-	rb := path.Base(tok)
-	if !(nodeScriptRunners[rb] || recipeRunners[rb] || rb == "node") || strings.HasPrefix(tok, "-") ||
-		strings.HasPrefix(tok, "$") || envAssignRE.MatchString(tok) {
+	if !scriptRunnerTok(tok) {
 		return scriptRef{}, false
 	}
+	rb := path.Base(tok)
 	ref := scriptRef{runner: rb, all: recipeRunners[rb]}
 	switch {
 	case rb == "node": // "node --run name" runs that script only
@@ -523,10 +600,15 @@ func scriptCall(tok string, args []string) (scriptRef, bool) {
 	case nodeScriptRunners[rb]:
 		ref.workspace = workspaceCall(rb, args)
 		ref.names, ref.all = scriptNames(rb, args)
-	default:
-		ref.files, ref.badFile = recipeFilesIn(rb, args)
 	}
 	return ref, true
+}
+
+// scriptRunnerTok reports whether tok may be a call of a runner scriptCall reads.
+func scriptRunnerTok(tok string) bool {
+	rb := path.Base(tok)
+	return (nodeScriptRunners[rb] || recipeRunners[rb] || rb == "node") && !strings.HasPrefix(tok, "-") &&
+		!strings.HasPrefix(tok, "$") && !envAssignRE.MatchString(tok)
 }
 
 // nodeRunName returns the script "node --run NAME" runs ("" when it is not
@@ -670,7 +752,9 @@ func parseCommand(of, s string) cmdInfo {
 			ci.dirs = append(ci.dirs, n)
 		}
 	}
-	for _, seg := range strings.FieldsFunc(s, segmentDelim) {
+	segStarts := fieldStarts(s, segmentDelim) // where each segment starts in s
+	var lex *cmdLex                           // s split once by shellWords, when a recipe runner is seen
+	for si, seg := range strings.FieldsFunc(s, segmentDelim) {
 		var (
 			role    = roleCmd
 			cmd     string // the base of the last command word
@@ -739,18 +823,21 @@ func parseCommand(of, s string) cmdInfo {
 			if tok == "" {
 				continue // a lone "!" or brace: the next word is still the command word
 			}
-			if ref, ok := scriptCall(tok, toks[i+1:]); ok {
+			if len(ci.scripts) >= mergeRefPaths || len(toks)-i-1 > mergeRefPaths { // checked first: no work past a cap
+				if scriptRunnerTok(tok) {
+					ci.over = true
+				}
+			} else if ref, ok := scriptCall(tok, toks[i+1:]); ok {
 				if recipeRunners[ref.runner] { // its options as sh unquotes them: -"f"x.mk, -f\ x
-					args, bad := recipeArgs(seg, offs[i], ref.runner)
+					if lex == nil {
+						lex = newCmdLex(s)
+					}
+					args, bad := recipeArgs(lex, segStarts[si]+offs[i], ref.runner)
 					ref.files, ref.badFile = recipeFilesIn(ref.runner, args)
 					ref.badFile = ref.badFile || bad
 				}
-				if len(ci.scripts) >= mergeRefPaths {
-					ci.over = true
-				} else {
-					ci.scripts = append(ci.scripts, ref)
-					segRefs = append(segRefs, len(ci.scripts)-1)
-				}
+				ci.scripts = append(ci.scripts, ref)
+				segRefs = append(segRefs, len(ci.scripts)-1)
 			}
 			cands := []string{tok}
 			direct := false // a word of its own, not a value read out of an option or assignment
@@ -807,7 +894,7 @@ func parseCommand(of, s string) cmdInfo {
 				cands = []string{val}
 			case envAssignRE.MatchString(tok):
 				loc := envAssignRE.FindStringIndex(tok)
-				if workspaceEnvKeys[strings.ToLower(tok[:loc[1]-1])] {
+				if workspaceEnvKey(tok[:loc[1]-1]) {
 					wsEnv = true
 				}
 				if strings.HasPrefix(tok, "NODE_OPTIONS=") {

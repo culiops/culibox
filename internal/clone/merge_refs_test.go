@@ -225,7 +225,10 @@ func TestWorkspaceCall(t *testing.T) {
 		{"yarn", "--cwd x workspace web lint", true}, {"yarn", "--silent workspaces foreach run lint", true},
 		{"pnpm", "recursive run lint", true}, {"pnpm", "m run lint", true}, {"pnpm", "multi run lint", true}, {"pnpm", "--silent recursive run lint", true},
 		{"pnpm", "run m", false}, {"pnpm", "run recursive", false}, {"yarn", "run workspace", false}, {"yarn", "lint workspace", false},
+		{"pnpm", "--filter-prod web lint", true}, {"pnpm", "--filter-prod=web lint", true}, {"npm", "run lint --workspace-x", true},
+		{"pnpm", "--workspace-root lint", true},
 		{"npm", "run lint", false}, {"yarn", "lint", false}, {"npm", "run test -- -w", false}, {"yarn", "-w", false},
+		{"npm", "run lint --work", false},
 	}
 	for _, c := range cases {
 		if got := workspaceCall(c.runner, strings.Fields(c.args)); got != c.want {
@@ -275,6 +278,10 @@ func TestRecipeFilesIn(t *testing.T) {
 		{"make", "--files a.mk", nil, false},
 		{"make", "--debug a.mk", nil, false},
 		{"just", "--file x", nil, false},
+		// A value the shell would expand cannot be named (#370 R13).
+		{"make", "-f a*.mk", nil, true}, {"make", "-f a?.mk", nil, true}, {"make", "-f [ab].mk", nil, true},
+		{"make", "-f {a,b}.mk", nil, true}, {"make", "-f a,b.mk", nil, true}, {"make", "-f ~/x.mk", nil, true},
+		{"make", "--file=x}.mk", nil, true},
 	}
 	for _, c := range cases {
 		files, bad := recipeFilesIn(c.runner, strings.Fields(c.args))
@@ -346,7 +353,18 @@ func TestParseCommandRecipeQuoting(t *testing.T) {
 		{`make '-f q.mk fmt`, nil, true},
 		{`make fmt "-f`, nil, true},
 		{`make -f "q.mk`, nil, true},
-		{`make fmt "x`, nil, false},
+		{`make fmt "x`, nil, true}, // R13: an unclosed word after the runner
+		{`make "a;b" -f q.mk`, nil, true},
+		{`make -C "$(pwd)" -f q.mk lint`, nil, true},
+		{`make $(x) -f q.mk`, nil, true},
+		{"make `x` -f q.mk", nil, true},
+		{`make a\;b -f q.mk`, nil, true},
+		{`make fmt \`, nil, true},
+		{`bash -c "make -f q.mk lint && echo ok"`, []string{"q.mk"}, false},
+		{`sh -c 'make -f q.mk fmt || true'`, []string{"q.mk"}, false},
+		{`(cd w && make -f q.mk fmt)`, []string{"q.mk"}, false},
+		{`make -f q.mk fmt | tee log`, []string{"q.mk"}, false},
+		{`make -f q.mk fmt; echo "a;b"`, []string{"q.mk"}, false},
 		{`bash -c "sh -c 'nice make'"`, nil, false},
 		{`bash -c "sh -c 'nice make -f q.mk'"`, []string{"q.mk"}, false},
 	}
