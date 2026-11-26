@@ -505,3 +505,36 @@ func TestDescribeCredentialProvider(t *testing.T) {
 		t.Errorf("provider missing from the JSON: %s (%v)", b, err)
 	}
 }
+
+func TestDescribeHostOwnLogin(t *testing.T) {
+	s := newSeeder(t)
+	for i, row := range [][3]string{
+		{"claude", "web", "github,aws · claude-3 · /home/u/r"},
+		{"claude", "bearer", "github,aws · claude-3 · /home/u/r"},
+		{"claude", "web", "github · claude-4 · /x"},
+	} {
+		if _, err := s.raw.Exec(`INSERT INTO cred_audit (ts, action, kind, name, actor, detail) VALUES (?, 'host_own_login', 'session', ?, ?, ?)`,
+			1_800_000_001+i, row[0], row[1], row[2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := s.open().Query(Query{From: 1_800_000_000, To: 1_800_000_010, Limit: 10})
+	if err != nil || len(p.Events) != 3 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	// Newest first.
+	want := []struct{ what, actor string }{
+		{"Host session of claude uses this machine's login for GitHub", "you"},
+		{"Host session of claude uses this machine's login for GitHub, AWS", "API token"},
+		{"Host session of claude uses this machine's login for GitHub, AWS", "you"},
+	}
+	for i, w := range want {
+		e := p.Events[i]
+		if e.What != w.what || e.Actor != w.actor || e.Kind != KindSettings {
+			t.Errorf("event %d = %q by %q kind %q, want %q by %q", i, e.What, e.Actor, e.Kind, w.what, w.actor)
+		}
+		if strings.Contains(e.What, "/home/u") || strings.Contains(e.What, "claude-") {
+			t.Errorf("event %d leaks the cwd or session id: %q", i, e.What)
+		}
+	}
+}

@@ -172,6 +172,9 @@ func writeSpawnErr(w http.ResponseWriter, agent, home string, err error) {
 		// A fixed text: the wrapped error names the host path of profiles.json,
 		// which stays in the log above (as writeSaveErr does for a save).
 		writeErr(w, http.StatusBadRequest, profilesNewerSpawnMsg)
+	case errors.Is(err, session.ErrSpawnAudit):
+		// Nothing was started: the audit row of a Host session on this machine's login could not be written.
+		writeErrCode(w, http.StatusServiceUnavailable, session.ErrSpawnAudit.Error(), "audit_unavailable")
 	case errors.Is(err, box.ErrVMRestarting):
 		writeErrCode(w, http.StatusServiceUnavailable, err.Error(), "vm_restarting")
 	case errors.Is(err, box.ErrBoxUnavailable):

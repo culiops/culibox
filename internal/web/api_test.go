@@ -1454,3 +1454,15 @@ func TestAPI_SpawnActorFromCredential(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteSpawnErrAuditUnavailableIs503(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeSpawnErr(rec, "p", "", fmt.Errorf("x: %w", session.ErrSpawnAudit))
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusServiceUnavailable || body["code"] != "audit_unavailable" || body["error"] != session.ErrSpawnAudit.Error() {
+		t.Fatalf("got %d %v", rec.Code, body)
+	}
+}
