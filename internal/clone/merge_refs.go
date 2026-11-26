@@ -31,12 +31,12 @@ var projectDirSpellings = []string{
 }
 
 // commandRunners are programs that read a manifest at the repo top (a script
-// table, a build file, a lock-in config) and run what it says. npx, pnpx and
-// bunx run a local bin (which reads its config from package.json) unless the
-// spec is clearly remote (fetchRemote); uvx always fetches into an isolated
-// environment, so it is no runner.
+// table, a build file, a lock-in config) and run what it says. A fetcher (npx,
+// pnpx, bunx, uvx and the fetch subcommands) runs a local bin or a tool that
+// reads its config from the project manifest (package.json, pyproject.toml)
+// unless the fetched spec carries a version or tag (versionedSpec, #370 R1b).
 var commandRunners = map[string]bool{
-	"npm": true, "npx": true, "pnpm": true, "pnpx": true, "yarn": true, "bun": true, "bunx": true,
+	"npm": true, "npx": true, "pnpm": true, "pnpx": true, "yarn": true, "bun": true, "bunx": true, "uvx": true,
 	"node": true, "deno": true, "make": true, "just": true, "task": true, "uv": true,
 	"poetry": true, "pipenv": true, "cargo": true, "go": true, "rake": true, "bundle": true,
 	"mise": true, "nix": true, "devbox": true, "devenv": true, "pip": true, "pip3": true,
@@ -59,9 +59,6 @@ var fetchers = map[string]bool{"npx": true, "bunx": true, "pnpx": true, "uvx": t
 var fetchSubs = map[string]map[string]bool{"pnpm": {"dlx": true, "exec": true}, "yarn": {"dlx": true, "exec": true},
 	"npm": {"exec": true, "x": true}, "pipx": {"run": true}, "bun": {"x": true}}
 
-// noManifestSubs always fetch into an isolated environment: they add no runner.
-var noManifestSubs = map[string]map[string]bool{"pnpm": {"dlx": true}, "yarn": {"dlx": true}}
-
 // restartSubs: the next non-option word is a new command word (they run a
 // command, so reading it as one only adds refusals).
 var restartSubs = map[string]map[string]bool{"uv": {"run": true}, "poetry": {"run": true}, "pipenv": {"run": true},
@@ -76,8 +73,23 @@ var commandWrappers = map[string]bool{"env": true, "exec": true, "command": true
 var shellKeywords = map[string]bool{"if": true, "then": true, "else": true, "elif": true, "do": true,
 	"while": true, "until": true}
 
-// fetchRemoteFlags make a fetcher fetch the package, not run a local bin.
-var fetchRemoteFlags = map[string]bool{"-y": true, "--yes": true, "-p": true, "--package": true}
+// versionedSpec reports whether a fetched package spec carries a version or
+// tag ("pkg@1", "@scope/pkg@latest"): only then does a fetcher run the fetched
+// package and not a local bin or a tool reading the project manifest (#370
+// R1b). "-y", "--yes", "-p" and a bare "@scope/pkg" say nothing about that: a
+// hook has no TTY, so npx assumes --yes anyway, and a spec with no version
+// matches the local install.
+func versionedSpec(spec string) bool {
+	if rest, ok := strings.CutPrefix(spec, "@"); ok {
+		_, after, ok := strings.Cut(rest, "/")
+		if !ok {
+			return false
+		}
+		spec = after
+	}
+	_, v, ok := strings.Cut(spec, "@")
+	return ok && v != ""
+}
 
 // wordRole is what the next plain word of a simple command is.
 type wordRole int
@@ -754,9 +766,9 @@ func nodeRunName(args []string) (name string, ok bool) {
 //     Subcommands, flag values and other arguments are not looked up. The
 //     command word and a fetcher's tool also get the tool-config prefix rule
 //     (plainWord.tool);
-//   - runners: every word whose base is a commandRunner, except a fetcher whose
-//     spec is clearly remote (a version, a scope, or -y/--yes/-p/--package), and
-//     "pnpm dlx" / "yarn dlx", which add none.
+//   - runners: every word whose base is a commandRunner, and "pipx run", except
+//     a fetcher whose spec (the tool, or the value of -p/--package) carries a
+//     version or tag (versionedSpec): -y, --yes and a bare scope do not count.
 //
 // Skipped: other options (the value of --flag=value is read), URLs, "~" and
 // "$VAR" spellings, ".", "..". It over-approximates on purpose: a wrong path only
@@ -941,8 +953,8 @@ func parseCommand(of, s string) cmdInfo {
 			switch {
 			case strings.HasPrefix(tok, "-"):
 				name, val, hasVal := strings.Cut(tok, "=")
-				if role == roleTool && pending != "" && fetchRemoteFlags[name] {
-					remote = true
+				if role == roleTool && pending != "" && hasVal && (name == "-p" || name == "--package") && versionedSpec(val) {
+					remote = true // "--package=pkg@1"; the spaced form is read as the tool word below
 				}
 				if role == roleScript && shellRE.MatchString(cmd) && shellRunsArg(name) {
 					role, tries = roleCmd, 0 // bash -c "node x": node is a command word
@@ -1049,8 +1061,11 @@ func parseCommand(of, s string) cmdInfo {
 					switch {
 					case fetchSubs[cmd][tok]:
 						role, tries = roleTool, 0
-						if noManifestSubs[cmd][tok] {
-							pending = ""
+						if !commandRunners[cmd] { // "pipx run": the tool reads pyproject.toml unless fetched
+							if pending != "" && !remote {
+								addRunner(pending)
+							}
+							pending, remote = cmd, false
 						}
 					case restartSubs[cmd][tok]:
 						role, tries = roleCmd, 0
@@ -1087,7 +1102,7 @@ func parseCommand(of, s string) cmdInfo {
 						scriptDone = true
 					}
 				case roleTool:
-					if pending != "" && strings.Contains(tok, "@") { // a scope or a version: fetched
+					if pending != "" && versionedSpec(tok) { // a version or tag: fetched
 						remote = true
 					}
 					w := tok

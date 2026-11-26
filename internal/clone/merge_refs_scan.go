@@ -61,6 +61,7 @@ var mergeRefPlain = 8192
 var runnerManifests = map[string][]string{
 	"npm": nodeManifests, "npx": nodeManifests, "pnpm": nodeManifests, "pnpx": nodeManifests,
 	"yarn": nodeManifests, "bun": nodeManifests, "bunx": nodeManifests, "node": nodeManifests,
+	"uvx": {"pyproject.toml"}, "pipx": {"pyproject.toml"}, // the tool's own [tool.x] config
 	"deno": {"deno.json", "deno.jsonc", "package.json"},
 	"make": recipeFiles["make"],
 	"just": recipeFiles["just"],
