@@ -135,6 +135,9 @@ func yamlCommands(keys ...string) func(*refSink, []byte) {
 	return func(s *refSink, data []byte) {
 		lines := strings.Split(string(data), "\n")
 		if len(lines) > mergeRefLines {
+			if moreLines(lines, mergeRefLines) {
+				s.fail(errScanCap)
+			}
 			lines = lines[:mergeRefLines]
 		}
 		for i := 0; i < len(lines); i++ {

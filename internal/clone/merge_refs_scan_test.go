@@ -496,6 +496,21 @@ func TestConfigRefsBounded(t *testing.T) {
 			t.Fatalf("err = %v, want errScanCap", err)
 		}
 	})
+	t.Run("yaml hook config line count", func(t *testing.T) {
+		pad := strings.Repeat("# c\n", mergeRefLines)
+		for name, body := range map[string]string{
+			".pre-commit-config.yaml": pad + "  - entry: ./late/b.sh\n",
+			"lefthook.yml":            pad + "pre-commit:\n  commands:\n    a:\n      run: ./late/b.sh\n",
+		} {
+			if _, err := scanRefsErr(t, map[string]string{name: body}); !errors.Is(err, errScanCap) {
+				t.Errorf("%s: err = %v, want errScanCap", name, err)
+			}
+		}
+		// a blank or comment tail past the cap is not a refusal
+		if _, err := scanRefsErr(t, map[string]string{".pre-commit-config.yaml": strings.Repeat("# c\n", mergeRefLines+5)}); err != nil {
+			t.Errorf("comment tail: err = %v, want nil", err)
+		}
+	})
 	t.Run("too many cd folders fails closed", func(t *testing.T) {
 		if _, err := scanRefsErr(t, map[string]string{".envrc": strings.Repeat("cd a && ", 20) + "./x\n"}); !errors.Is(err, errScanCap) {
 			t.Fatalf("err = %v, want errScanCap", err)
