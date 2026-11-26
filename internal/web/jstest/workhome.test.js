@@ -444,9 +444,17 @@ test("merge toast parts: each refusal reason has its exact words", () => {
   assert.strictEqual(part("flagged", { paths: ["run.sh"] }), "box/main not merged into main: it has files flagged for review: run.sh");
   assert.strictEqual(part("filter", { paths: ["big.bin"] }), "box/main not merged into main: it changes files that use a git filter (such as Git LFS): big.bin");
   assert.strictEqual(part("moved"), "box/main not merged into main: main moved while it was checked; it is tried again on the next return");
-  assert.strictEqual(part("failed", { detail: "untracked file in the way" }), "box/main not merged into main: git refused: untracked file in the way");
+  assert.strictEqual(part("failed", { attempted: true, detail: "untracked file in the way" }), "box/main not merged into main: git refused: untracked file in the way");
+  assert.strictEqual(part("failed", { detail: "cannot check git attributes: x" }), "box/main not merged into main: could not merge: cannot check git attributes: x");
   assert.strictEqual(mergeReasonText(MG({ reason: "dirty" })), "main has uncommitted changes");
   assert.strictEqual(mergeReasonText(MG({ reason: "from-a-newer-server" })), "it was not merged");
+});
+
+test("merge toast parts: a refusal with no branch does not name empty branches", () => {
+  const part = (m) => mergeToastPart({ at: "t1", branch: "", merged: false, ...m });
+  assert.strictEqual(part({ reason: "detached" }), "box work not merged: the repo has no branch checked out");
+  assert.strictEqual(part({ reason: "failed", detail: "cannot read HEAD: x" }), "box work not merged: could not merge: cannot read HEAD: x");
+  assert.strictEqual(mergeLastLine({ at: "t1", branch: "", reason: "detached" }), "box work not merged: the repo has no branch checked out");
 });
 
 test("mergeSig: profile, to and reason", () => {
