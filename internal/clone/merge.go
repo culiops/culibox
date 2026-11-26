@@ -202,23 +202,49 @@ func (m *merger) headBranch() (string, error) {
 // boxWorkWaiting reports whether some branch x of this clone's own listing has
 // refs/heads/box/x at the clone's tip for x and different from refs/heads/x: box
 // work is waiting to be merged, so a detached HEAD is worth saying.
+//
+// One for-each-ref lists every local branch and the answer is compared here, so
+// the cost does not grow with the number of branches. The branch names in tips
+// and in the listing are box-controlled text: they are only compared as
+// strings, never passed back to git, and a line that is not exactly
+// "refs/heads/<name> <type> <id>" is an error (fail closed).
 func (m *merger) boxWorkWaiting(tips map[string]string) (bool, error) {
+	want := false
+	for x, tip := range tips {
+		if x != "" && tip != "" {
+			want = true
+			break
+		}
+	}
+	if !want {
+		return false, nil
+	}
+	out, err := m.run(m.env(), "for-each-ref", "--format=%(refname) %(objecttype) %(objectname)", "refs/heads/")
+	if err != nil {
+		return false, err
+	}
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		return false, errors.New("the branch list is cut short")
+	}
+	heads := map[string]string{} // branch name -> commit id
+	for _, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+		if line == "" && len(out) == 0 {
+			break
+		}
+		f := strings.Split(line, " ")
+		name, ok := strings.CutPrefix(f[0], "refs/heads/")
+		if len(f) != 3 || !ok || name == "" || !blobIDRE.MatchString(f[2]) {
+			return false, errors.New("unexpected line in the branch list")
+		}
+		if f[1] == "commit" {
+			heads[name] = f[2]
+		}
+	}
 	for x, tip := range tips {
 		if x == "" || tip == "" {
 			continue
 		}
-		box, err := m.commitOf("refs/heads/box/" + x)
-		if err != nil {
-			return false, err
-		}
-		if box == "" || box != tip {
-			continue
-		}
-		host, err := m.commitOf("refs/heads/" + x)
-		if err != nil {
-			return false, err
-		}
-		if host != box {
+		if box := heads["box/"+x]; box != "" && box == tip && heads[x] != box {
 			return true, nil
 		}
 	}

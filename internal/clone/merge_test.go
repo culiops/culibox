@@ -305,6 +305,112 @@ func TestMergeHomeDetachedNeedsBoxWork(t *testing.T) {
 	wantMergeReason(t, z.run(newRec(t), &auditRec{}), MergeDetached)
 }
 
+// The detached check lists the branches once, whatever the number of tips, and
+// never passes a branch name back to git.
+func TestMergeHomeDetachedListsBranchesOnce(t *testing.T) {
+	x := newMergeFx(t, "main")
+	tips := map[string]string{}
+	for _, n := range []string{"b1", "b2", "b3", "d\u00e9j\u00e0", "feat/x", "feat/-y"} {
+		fixtureGit(t, x.of, "update-ref", "refs/heads/"+n, x.tip())
+		tips[n] = x.tip() // box/<n> does not exist: nothing waits
+	}
+	to := x.box("main", map[string]string{"b.txt": "b"}) // box/main, ahead
+	tips["main"] = to
+	fixtureGit(t, x.of, "checkout", "-q", "--detach")
+	rec := newRec(t)
+	got := MergeHome(context.Background(), rec, MergeRequest{Of: x.of, Audit: (&auditRec{}).fn, CloneTips: tips})
+	wantMergeReason(t, got, MergeDetached)
+	refs, others := 0, 0
+	for _, c := range rec.calls {
+		switch {
+		case slices.Contains(c.args, "for-each-ref"):
+			refs++
+		case slices.Contains(c.args, "rev-parse"):
+			others++
+		}
+		for _, a := range c.args {
+			for n := range tips {
+				if a == n || strings.HasSuffix(a, "refs/heads/"+n) || strings.HasSuffix(a, "refs/heads/box/"+n) {
+					t.Fatalf("a branch name went back into argv: %q", c.args)
+				}
+			}
+		}
+	}
+	if refs != 1 || others != 0 {
+		t.Fatalf("for-each-ref ran %d times, rev-parse %d times; want 1 and 0 (%d calls)", refs, others, len(rec.calls))
+	}
+
+	// Nothing waiting: the same single listing says so.
+	y := newMergeFx(t, "main")
+	ytips := map[string]string{}
+	for _, n := range []string{"b1", "b2", "b3"} {
+		fixtureGit(t, y.of, "update-ref", "refs/heads/"+n, y.tip())
+		fixtureGit(t, y.of, "update-ref", "refs/heads/box/"+n, y.tip()) // at the host's own tip
+		ytips[n] = y.tip()
+	}
+	ytips["gone"] = y.tip() // a branch the host does not have, with no box/gone either
+	fixtureGit(t, y.of, "checkout", "-q", "--detach")
+	rec = newRec(t)
+	if got := MergeHome(context.Background(), rec, MergeRequest{Of: y.of, Audit: (&auditRec{}).fn, CloneTips: ytips}); got != nil {
+		t.Fatalf("nothing waiting: result = %+v, want nil", got)
+	}
+	if len(rec.calls) != 2 { // symbolic-ref, for-each-ref
+		t.Fatalf("calls = %d, want 2: %q", len(rec.calls), rec.calls)
+	}
+	// No usable tip: no listing at all.
+	rec = newRec(t)
+	MergeHome(context.Background(), rec, MergeRequest{Of: y.of, Audit: (&auditRec{}).fn, CloneTips: map[string]string{"": "x", "b1": ""}})
+	if len(rec.calls) != 1 {
+		t.Fatalf("calls = %d, want only the symbolic-ref", len(rec.calls))
+	}
+}
+
+// listGit answers for-each-ref with canned output, everything else from git.
+type listGit struct {
+	*recGit
+	out string
+}
+
+func (l listGit) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	if slices.Contains(args, "for-each-ref") {
+		return []byte(l.out), nil
+	}
+	return l.recGit.Run(ctx, dir, env, args...)
+}
+
+// A branch list that does not read exactly as expected is a failure, not "nothing waits".
+func TestMergeHomeDetachedMalformedBranchList(t *testing.T) {
+	id := strings.Repeat("a", 40)
+	for name, out := range map[string]string{
+		"cut short":       "refs/heads/main commit " + id,
+		"two fields":      "refs/heads/main " + id + "\n",
+		"four fields":     "refs/heads/main commit " + id + " x\n",
+		"not a branch":    "refs/tags/main commit " + id + "\n",
+		"bad id":          "refs/heads/main commit zz\n",
+		"empty name":      "refs/heads/ commit " + id + "\n",
+		"blank line":      "refs/heads/main commit " + id + "\n\n",
+		"garbage":         "hello\n",
+		"first line fine": "refs/heads/main commit " + id + "\nrefs/heads/x commit\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := newMergeFx(t, "main")
+			fixtureGit(t, x.of, "checkout", "-q", "--detach")
+			got := MergeHome(context.Background(), listGit{newRec(t), out}, MergeRequest{Of: x.of, Audit: (&auditRec{}).fn,
+				CloneTips: map[string]string{"main": id}})
+			wantMergeReason(t, got, MergeFailed)
+		})
+	}
+	t.Run("a well-formed list that is empty", func(t *testing.T) {
+		x := newMergeFx(t, "main")
+		fixtureGit(t, x.of, "checkout", "-q", "--detach")
+		got := MergeHome(context.Background(), listGit{newRec(t), ""}, MergeRequest{Of: x.of, Audit: (&auditRec{}).fn,
+			CloneTips: map[string]string{"main": id}})
+		if got != nil {
+			t.Fatalf("result = %+v, want nil", got)
+		}
+	})
+}
+
 func TestMergeHomeDiverged(t *testing.T) {
 	x := newMergeFx(t, "main")
 	x.box("main", map[string]string{"b.txt": "b"})
