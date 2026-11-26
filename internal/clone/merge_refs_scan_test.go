@@ -271,7 +271,8 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 				x.commit("host", sub(c.host))
 			}
 			before := x.tip()
-			x.box("main", map[string]string{c.change: "box\n"})
+			// boxPlumb, not box: "folds case" must reach the guard on macOS too.
+			x.boxPlumb("main", map[string]string{c.change: "box\n"})
 			for rel, content := range sub(c.untrack) {
 				x.write(rel, content)
 			}

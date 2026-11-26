@@ -1271,6 +1271,39 @@ func (x *mergeFx) boxForce(name string, files map[string]string) string {
 	return sha
 }
 
+// boxPlumb is box with one commit built in a private index, never checked out:
+// the host's work tree is not touched. On a case-insensitive file system
+// (macOS APFS) box's checkout makes a case twin of a tracked file (jest.config.ts
+// next to Jest.Config.ts) the same file, and the host tree then reads dirty.
+func (x *mergeFx) boxPlumb(name string, files map[string]string) string {
+	x.t.Helper()
+	g, err := NewExecGit()
+	if err != nil {
+		x.t.Skip("no git on PATH")
+	}
+	env := append(CleanEnv(), "GIT_INDEX_FILE="+filepath.Join(x.t.TempDir(), "index"),
+		"GIT_AUTHOR_NAME=F", "GIT_AUTHOR_EMAIL=f@x", "GIT_COMMITTER_NAME=F", "GIT_COMMITTER_EMAIL=f@x")
+	run := func(stdin string, args ...string) string {
+		x.t.Helper()
+		// core.ignorecase=false: the index keeps each path as spelled.
+		args = append([]string{"-c", "core.ignorecase=false"}, args...)
+		b, err := g.RunStdin(context.Background(), x.of, env, strings.NewReader(stdin), args...)
+		if err != nil {
+			x.t.Fatal(err)
+		}
+		return strings.TrimSpace(string(b))
+	}
+	tip := x.tip()
+	run("", "read-tree", tip)
+	for rel, c := range files {
+		blob := run(c, "hash-object", "-w", "--stdin")
+		run("", "update-index", "--add", "--cacheinfo", "100644,"+blob+","+rel)
+	}
+	sha := run("", "commit-tree", run("", "write-tree"), "-p", tip, "-m", "box 1")
+	fixtureGit(x.t, x.of, "update-ref", "refs/heads/box/"+name, sha)
+	return sha
+}
+
 // A path the commits add or change that the host's ignore rules match (the
 // repo's .gitignore files, info/exclude, the user's global ignores) is where
 // host tools load from (a .venv, node_modules), so it refuses the merge, even
