@@ -58,7 +58,6 @@ var runnerManifests = map[string][]string{
 	"just":   {"justfile", ".justfile"},
 	"task":   {"Taskfile.yml", "Taskfile.yaml"},
 	"uv":     {"pyproject.toml"},
-	"uvx":    {"pyproject.toml"},
 	"poetry": {"pyproject.toml"},
 	"pipenv": {"Pipfile"},
 	"cargo":  {"Cargo.toml", "build.rs"},
@@ -97,7 +96,7 @@ type refSink struct {
 	runners map[string]bool
 
 	listings  map[string]*dirListing // folders read for plain words, by repo-relative path
-	plainSeen map[string]bool        // plain word look-ups made, "base\x00word"
+	plainSeen map[string]bool        // plain word look-ups made, "base\x00word" (+ "\x00t" with the prefix rule)
 	err       error                  // the first cap or listing error
 }
 
@@ -268,31 +267,37 @@ func (s *refSink) command(c string) {
 	}
 }
 
-// plainWord denies the entries a plain word of a command names: an entry of
-// that name in the repo top or in a folder the command moved to (a script, a
-// program's folder), the same with a script extension ("node server" runs
-// server.js or server/index.js), and a tool's own config, any entry named
-// "<word>.*" or ".<word>*" ("eslint" reads eslint.config.js and .eslintrc.cjs,
-// "prettier" reads .prettierrc.js; not for a word of one character). A word
-// with no such entry names nothing. Past the look-up caps, or in a folder too
-// big to list, the scan fails (errScanCap): never fewer refusals.
 // toolConfigSkip are words whose "<word>.*" / ".<word>*" entries are not a
 // config the tool runs from the repo: git's own trusted files are denied by
 // name already, and refusing .gitignore or .github/ for every hook that calls
 // git would block ordinary work. Shells and interpreters read their rc files
-// from the user's home, not the repo.
+// from the user's home, not the repo. Docker and Podman read .dockerignore only
+// for a build context, never for "docker run".
 var toolConfigSkip = map[string]bool{
 	"git": true, "sh": true, "bash": true, "zsh": true, "dash": true, "fish": true,
 	"env": true, "exec": true, "cd": true, "echo": true, "cat": true, "test": true, "true": true,
 	"node": true, "python": true, "python3": true, "ruby": true, "perl": true,
+	"docker": true, "podman": true,
 }
 
+// plainWord denies the entries a plain word of a command names: an entry of
+// that name in the repo top or in a folder the command moved to (a script, a
+// program's folder), the same with a script extension ("node server" runs
+// server.js or server/index.js), and, for a command word or a fetcher's tool
+// (pw.tool), the tool's own config, any entry named "<word>.*" or ".<word>*"
+// ("eslint" reads eslint.config.js and .eslintrc.cjs, "prettier" reads
+// .prettierrc.js; not for a word of one character, nor toolConfigSkip). A word
+// with no such entry names nothing. Past the look-up caps, or in a folder too
+// big to list, the scan fails (errScanCap): never fewer refusals.
 func (s *refSink) plainWord(pw plainWord) {
 	if s.root == nil {
 		return
 	}
 	for _, base := range pw.bases {
 		key := base + "\x00" + pw.word
+		if pw.tool {
+			key += "\x00t"
+		}
 		if s.plainSeen[key] {
 			continue
 		}
@@ -308,7 +313,7 @@ func (s *refSink) plainWord(pw plainWord) {
 			}
 		}
 		w := strings.ToLower(pw.word)
-		if len(w) < 2 || toolConfigSkip[w] {
+		if !pw.tool || len(w) < 2 || toolConfigSkip[w] {
 			continue
 		}
 		for _, prefix := range []string{w + ".", "." + w} {

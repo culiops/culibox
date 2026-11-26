@@ -1223,6 +1223,7 @@ func TestParseDiffTree(t *testing.T) {
 func TestMergeHomeHugeTopFailsClosed(t *testing.T) {
 	noSystemConfig(t)
 	x := newMergeFx(t, "main")
+	noManagedSettings(t)
 	before := x.tip()
 	x.box("main", map[string]string{"b.txt": "b"})
 	for i := 0; i < mergeLinkTop+10; i++ {

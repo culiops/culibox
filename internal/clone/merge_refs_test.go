@@ -73,42 +73,67 @@ func TestRepoDenyPaths(t *testing.T) {
 func TestParseCommand(t *testing.T) {
 	of := t.TempDir()
 	cases := []struct {
-		in    string
-		paths []string
-		dirs  []string
-		plain []string // "word@base,base"
+		in      string
+		paths   []string
+		dirs    []string
+		plain   []string // "word@base,base", a trailing "*" when the tool-config rule applies
+		runners []string
 	}{
-		{"python -m a.b.c", []string{"a", "a.py"}, nil, []string{"python@."}},
-		{"python3 -m pkg", []string{"pkg", "pkg.py"}, nil, []string{"python3@."}},
-		{"uv run -m svc.app", []string{"svc", "svc.py"}, nil, []string{"uv@.", "run@."}},
-		{"python -mfoo.bar", []string{"foo", "foo.py"}, nil, []string{"python@."}},
-		{"uv run -mfoo", []string{"foo", "foo.py"}, nil, []string{"uv@.", "run@."}},
-		{"git commit -mmsg", nil, nil, []string{"git@.", "commit@."}},
-		{"python --mfoo", nil, nil, []string{"python@."}},
-		{"git commit -m msg", nil, nil, []string{"git@.", "commit@.", "msg@."}},
-		{"node --import reg app.js", []string{"reg", "reg.js", "reg.mjs", "reg.cjs", "reg.ts", "reg.mts", "app.js"}, nil, []string{"node@.", "reg@."}},
-		{"node -r ./pre/x.js", []string{"./pre/x.js"}, nil, []string{"node@."}},
-		{"uv run --directory mcp srv", []string{}, []string{"mcp"}, []string{"uv@.", "run@.", "srv@.,mcp"}},
-		{"srv --cwd=w1 ./run", []string{"./run", "w1/run"}, []string{"w1"}, []string{"srv@."}},
-		{"cd tools && ./run", []string{"./run", "tools/run"}, []string{"tools"}, nil},
-		{"cd a && cd b && x.sh", []string{"x.sh", "a/x.sh", "b/x.sh", "a/b/x.sh"}, []string{"a", "b", "a/b"}, nil},
-		{"cd -P tools; ./run", []string{"./run", "tools/run"}, []string{"tools"}, nil},
-		{"cd .. && ./run", []string{"./run"}, nil, nil},
-		{"cd . && ./run", []string{"./run"}, nil, nil},
-		{"cd $HOME && ./run", []string{"./run"}, nil, nil},
-		{"make -C sub all", nil, []string{"sub"}, []string{"make@.", "all@.,sub"}},
-		{"echo a.b FOO=bar -x", nil, nil, []string{"echo@."}},
+		{"python -m a.b.c", []string{"a", "a.py"}, nil, []string{"python@.*"}, nil},
+		{"python3 -m pkg", []string{"pkg", "pkg.py"}, nil, []string{"python3@.*"}, nil},
+		{"uv run -m svc.app", []string{"svc", "svc.py"}, nil, []string{"uv@.*"}, []string{"uv"}},
+		{"python -mfoo.bar", []string{"foo", "foo.py"}, nil, []string{"python@.*"}, nil},
+		{"uv run -mfoo", []string{"foo", "foo.py"}, nil, []string{"uv@.*"}, []string{"uv"}},
+		{"git commit -mmsg", nil, nil, []string{"git@.*"}, nil},
+		{"python --mfoo", nil, nil, []string{"python@.*"}, nil},
+		{"git commit -m msg", nil, nil, []string{"git@.*"}, nil},
+		{"node --import reg app.js", []string{"reg", "reg.js", "reg.mjs", "reg.cjs", "reg.ts", "reg.mts", "app.js"}, nil, []string{"node@.*", "reg@."}, []string{"node"}},
+		{"node -r ./pre/x.js", []string{"./pre/x.js"}, nil, []string{"node@.*"}, []string{"node"}},
+		{"uv run --directory mcp srv", []string{}, []string{"mcp"}, []string{"uv@.*", "srv@.,mcp*"}, []string{"uv"}},
+		{"srv --cwd=w1 ./run", []string{"./run", "w1/run"}, []string{"w1"}, []string{"srv@.*"}, nil},
+		{"cd tools && ./run", []string{"./run", "tools/run"}, []string{"tools"}, nil, nil},
+		{"cd a && cd b && x.sh", []string{"x.sh", "a/x.sh", "b/x.sh", "a/b/x.sh"}, []string{"a", "b", "a/b"}, nil, nil},
+		{"cd -P tools; ./run", []string{"./run", "tools/run"}, []string{"tools"}, nil, nil},
+		{"cd .. && ./run", []string{"./run"}, nil, nil, nil},
+		{"cd . && ./run", []string{"./run"}, nil, nil, nil},
+		{"cd $HOME && ./run", []string{"./run"}, nil, nil, nil},
+		{"make -C sub all", nil, []string{"sub"}, []string{"make@.*"}, []string{"make"}},
+		{"echo a.b FOO=bar -x", nil, nil, []string{"echo@.*"}, nil},
+		// Plain words are looked up only as the command, an interpreter's script
+		// or a fetcher's tool (#370 B-M1).
+		{"node server", nil, nil, []string{"node@.*", "server@."}, []string{"node"}},
+		{"npx -y @playwright/mcp@latest --headless --browser chrome", []string{"@playwright/mcp@latest"}, nil, []string{"npx@.*"}, nil},
+		{"uvx awslabs.x@latest", nil, nil, []string{"uvx@.*"}, nil},
+		{"npx eslint --fix", nil, nil, []string{"npx@.*", "eslint@.*"}, []string{"npx"}},
+		{"npx eslint@9 --fix", nil, nil, []string{"npx@.*", "eslint@.*"}, nil},
+		{"npx --yes some-server", nil, nil, []string{"npx@.*", "some-server@.*"}, nil},
+		{"pnpm dlx create-x", nil, nil, []string{"pnpm@.*", "create-x@.*"}, nil},
+		{"pnpm exec tsc", nil, nil, []string{"pnpm@.*", "tsc@.*"}, []string{"pnpm"}},
+		{"npm exec -y cowsay@1", nil, nil, []string{"npm@.*", "cowsay@.*"}, nil},
+		{"docker run -i --rm img", nil, nil, []string{"docker@.*"}, nil},
+		{"!/usr/bin/gh auth git-credential", []string{"/usr/bin/gh"}, nil, nil, nil},
+		{"npm test", nil, nil, []string{"npm@.*"}, []string{"npm"}},
+		{"go test ./...", []string{"./..."}, nil, []string{"go@.*"}, []string{"go"}},
+		{"bash -c \"node srvz\"", nil, nil, []string{"bash@.*", "node@.*", "srvz@."}, []string{"node"}},
+		{"env FOO=1 node srvw", nil, nil, []string{"env@.*", "node@.*", "srvw@."}, []string{"node"}},
+		{"uv run pytest -q", nil, nil, []string{"uv@.*", "pytest@.*"}, []string{"uv"}},
+		{"python -X dev script", nil, nil, []string{"python@.*", "dev@.", "script@."}, nil},
+		{"npx -y pkg@1 && npm test", nil, nil, []string{"npx@.*", "pkg@.*", "npm@.*"}, []string{"npm"}},
 	}
 	for _, c := range cases {
 		ci := parseCommand(of, c.in)
 		var plain []string
 		for _, p := range ci.plain {
-			plain = append(plain, p.word+"@"+strings.Join(p.bases, ","))
+			w := p.word + "@" + strings.Join(p.bases, ",")
+			if p.tool {
+				w += "*"
+			}
+			plain = append(plain, w)
 		}
-		if !slices.Equal(ci.paths, c.paths) && !(len(ci.paths) == 0 && len(c.paths) == 0) ||
-			!slices.Equal(ci.dirs, c.dirs) && !(len(ci.dirs) == 0 && len(c.dirs) == 0) ||
-			!slices.Equal(plain, c.plain) && !(len(plain) == 0 && len(c.plain) == 0) {
-			t.Errorf("parseCommand(%q) = paths %q dirs %q plain %q; want %q %q %q", c.in, ci.paths, ci.dirs, plain, c.paths, c.dirs, c.plain)
+		same := func(a, b []string) bool { return slices.Equal(a, b) || len(a) == 0 && len(b) == 0 }
+		if !same(ci.paths, c.paths) || !same(ci.dirs, c.dirs) || !same(plain, c.plain) || !same(ci.runners, c.runners) {
+			t.Errorf("parseCommand(%q) = paths %q dirs %q plain %q runners %q; want %q %q %q %q",
+				c.in, ci.paths, ci.dirs, plain, ci.runners, c.paths, c.dirs, c.plain, c.runners)
 		}
 	}
 }

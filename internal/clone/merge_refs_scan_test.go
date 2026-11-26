@@ -48,7 +48,8 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 		{"mcp unrelated source", map[string]string{".mcp.json": mcpNode}, nil, "src/app.js", false},
 		{"mcp uv script", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"uv","args":["run","tools/mcp.py"]}}}`}, nil, "tools/helper.py", true},
 		{"mcp uv runs pyproject", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"uv","args":["run","tools/mcp.py"]}}}`}, nil, "pyproject.toml", true},
-		{"mcp npx runs package.json and .npmrc", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"npx","args":["-y","some-server"]}}}`}, nil, "package.json", true},
+		{"mcp npx fetches, package.json merges", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"npx","args":["-y","some-server"]}}}`}, nil, "package.json", false},
+		{"mcp local npx runs package.json", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"npx","args":["some-server"]}}}`}, nil, "package.json", true},
 		{"mcp flag value", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"srv","args":["--config=./conf/s.json"]}}}`}, nil, "conf/s.json", true},
 		{"mcp env value", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"srv","env":{"NODE_OPTIONS":"--require ./hooks/r.js"}}}}`}, nil, "hooks/r.js", true},
 		{"mcp top-level script names only itself", map[string]string{".mcp.json": `{"mcpServers":{"s":{"command":"bash","args":["server.sh"]}}}`}, nil, "server.sh", true},
@@ -143,7 +144,8 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 		{"plain word, nothing there", map[string]string{".mcp.json": mcpCmd("node", "nothere")}, nil, "nothere/x.js", false},
 		{"plain word, other entries stay free", map[string]string{".mcp.json": mcpCmd("node", "server"), "server/index.js": "h\n"}, nil, "README.md", false},
 		{"plain word in a hook", map[string]string{".claude/settings.json": hookSettings("node hookdir"), "hookdir/main.js": "h\n"}, nil, "hookdir/main.js", true},
-		{"plain word in an envrc", map[string]string{".envrc": "tool envdir\n", "envdir/x.sh": "h\n"}, nil, "envdir/x.sh", true},
+		{"an argument of a non-interpreter is not looked up", map[string]string{".envrc": "tool envdir\n", "envdir/x.sh": "h\n"}, nil, "envdir/x.sh", false},
+		{"plain word in an envrc", map[string]string{".envrc": "node envdir2\n", "envdir2/x.js": "h\n"}, nil, "envdir2/x.js", true},
 		// A tool's own config at the repo top (R2-I1).
 		{"tool config: eslint.config.js", map[string]string{".claude/settings.json": hookSettings("npx eslint --fix"), "eslint.config.js": "h\n"}, nil, "eslint.config.js", true},
 		{"tool config: .eslintrc.cjs", map[string]string{".claude/settings.json": hookSettings("npx eslint --fix"), ".eslintrc.cjs": "h\n"}, nil, ".eslintrc.cjs", true},
@@ -212,6 +214,8 @@ func TestMergeHomeConfigRefsDenied(t *testing.T) {
 		{"vscode task args", map[string]string{".vscode/tasks.json": `{"tasks":[{"label":"b","command":"python","args":["${workspaceFolder}/vs2/gen.py","--x"]}]}`}, nil, "vs2/gen.py", true},
 		{"vscode task args objects", map[string]string{".vscode/tasks.json": `{"tasks":[{"label":"b","command":"bash","args":[{"value":"vs3/a b.sh","quoting":"strong"}]}]}`}, nil, "vs3/a", true},
 		{"vscode task os sub-objects", map[string]string{".vscode/tasks.json": `{"tasks":[{"label":"b","command":"true","linux":{"command":"./vs4/l.sh"},"osx":{"command":"vs5/m.sh"},"windows":{"command":"vs6/w.bat","args":["vs7/x.bat"]}}]}`}, nil, "vs7/x.bat", true},
+		{"vscode windows backslash path merges", map[string]string{".vscode/tasks.json": `{"tasks":[{"label":"b","command":"true","windows":{"command":".\\tools\\w.bat"}}]}`}, nil, "tools/w.bat", false},
+		{"vscode linux variant still refused", map[string]string{".vscode/tasks.json": `{"tasks":[{"label":"b","command":"true","linux":{"command":"./tools/l.sh"}}]}`}, nil, "tools/l.sh", true},
 		{"vscode task os sub-object osx", map[string]string{".vscode/tasks.json": `{"tasks":[{"label":"b","command":"true","osx":{"command":"vs5/m.sh"}}]}`}, nil, "vs5/m.sh", true},
 		{"vscode jsonc comments and trailing commas", map[string]string{".vscode/tasks.json": "{\n // build\n \"version\": \"2.0.0\", /* x */\n \"tasks\": [\n  {\"label\": \"http://x//y\", \"command\": \"./vs8/b.sh\",},\n ],\n}\n"}, nil, "vs8/b.sh", true},
 		{"vscode top-level command", map[string]string{".vscode/tasks.json": `{"version":"0.1.0","command":"./vs9/t.sh","tasks":[]}`}, nil, "vs9/t.sh", true},
@@ -313,6 +317,7 @@ func TestConfigRefsMalformedInputs(t *testing.T) {
 		"entry: |\n" + strings.Repeat("  x\n", 1000), "command:\n" + strings.Repeat("- ./a.sh\n", 1000),
 		"cd", "cd ..", "cd -", "python -m", "python -m ..", "node --require", "uv run --directory", "-C", "--cwd=", "--directory ../../x",
 		"cd /abs/outside && ./x", "cd " + strings.Repeat("d/", 500) + " && ./x", strings.Repeat("cd a && ", 100) + "./x",
+		".\\tools\\x.bat C:\\x\\y.ps1", "bash -c", "npx", "pnpm dlx", "env", "sudo",
 		"/* unterminated", "// only a comment", `{"tasks":[{"command":"a",}],}`, "{\"a\":\"/*\"}", "\"unterminated",
 		`{"tasks":[{"command":{"value":5},"args":[{"value":{}},[],null]}]}`,
 	}
@@ -552,5 +557,83 @@ func TestMergeHomeConfigRefCapFailsClosed(t *testing.T) {
 	}
 	if len(a.calls) != 0 || x.tip() != before {
 		t.Fatalf("audited or merged: %q", a.calls)
+	}
+}
+
+// Plain words are looked up only where a tool runs them as files: the command
+// word, an interpreter's script and a fetcher's tool. Subcommands, flag values
+// and other arguments name nothing, and a fetched remote package adds no
+// manifest (#370 B-M1). The shapes are the ones real configs use.
+func TestMergeHomePlainWordShapes(t *testing.T) {
+	const pw = `{"mcpServers":{"pw":{"command":"npx","args":["-y","@playwright/mcp@latest","--headless","--browser","chrome"]}}}`
+	cases := []struct {
+		name      string
+		host      map[string]string // committed on the host after the common files
+		home      map[string]string // under the user's home
+		gitConfig string            // appended to .git/config
+		change    string
+		guarded   bool
+	}{
+		{"user npx playwright: package.json merges", nil, map[string]string{".claude.json": pw}, "", "package.json", false},
+		{"user npx playwright: a flag value merges", nil, map[string]string{".claude.json": pw}, "", "chrome.cfg", false},
+		{"mcp uvx: pyproject.toml merges", map[string]string{".mcp.json": mcpCmd("uvx", "awslabs.x@latest")}, nil, "", "pyproject.toml", false},
+		{"mcp docker run: .dockerignore merges", map[string]string{".mcp.json": mcpCmd("docker", "run", "-i", "--rm", "img")}, nil, "", ".dockerignore", false},
+		{"mcp docker run: run.sh merges", map[string]string{".mcp.json": mcpCmd("docker", "run", "-i", "--rm", "img")}, nil, "", "run.sh", false},
+		{"git credential helper gh: auth/ merges", nil, nil, "[credential]\n\thelper = !/usr/bin/gh auth git-credential\n", "auth/x", false},
+		{"husky npm test: test/ merges", map[string]string{".husky/pre-commit": "npm test\n"}, nil, "", "test/a_test.js", false},
+		{"husky npm test: package.json stays refused", map[string]string{".husky/pre-commit": "npm test\n"}, nil, "", "package.json", true},
+		{"hook go test: test/ merges", map[string]string{".claude/settings.json": hookSettings("go test ./...")}, nil, "", "test/a_test.js", false},
+		{"hook go test: go.mod stays refused", map[string]string{".claude/settings.json": hookSettings("go test ./...")}, nil, "", "go.mod", true},
+		// Still refused.
+		{"mcp node server: server.js", map[string]string{".mcp.json": mcpCmd("node", "server"), "server.js": "h\n"}, nil, "", "server.js", true},
+		{"hook npx eslint: eslint.config.js", map[string]string{".claude/settings.json": hookSettings("npx eslint --fix"), "eslint.config.js": "h\n"}, nil, "", "eslint.config.js", true},
+		{"mcp bash -c node: srvz.js", map[string]string{".mcp.json": mcpCmd("bash", "-c", "node srvz"), "srvz.js": "h\n"}, nil, "", "srvz.js", true},
+		{"hook uv run pytest: pytest.ini", map[string]string{".claude/settings.json": hookSettings("uv run pytest -q"), "pytest.ini": "h\n"}, nil, "", "pytest.ini", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			noSystemConfig(t)
+			home := t.TempDir()
+			x := newMergeFx(t, "main")
+			noManagedSettings(t)
+			x.commit("common", map[string]string{"package.json": "{}\n", "pyproject.toml": "h\n", ".dockerignore": "h\n",
+				"run.sh": "h\n", "chrome.cfg": "h\n", "auth/x": "h\n", "test/a_test.js": "h\n", "go.mod": "module x\n", "go.sum": "h\n"})
+			if c.host != nil {
+				x.commit("host", c.host)
+			}
+			for rel, content := range c.home {
+				p := filepath.Join(home, filepath.FromSlash(rel))
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.gitConfig != "" {
+				f, err := os.OpenFile(filepath.Join(x.of, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.WriteString(c.gitConfig); err != nil {
+					t.Fatal(err)
+				}
+				f.Close()
+			}
+			before := x.tip()
+			x.box("main", map[string]string{c.change: "box\n"})
+			got := x.runHome(home)
+			if !c.guarded {
+				wantMerged(t, got)
+				return
+			}
+			wantMergeReason(t, got, MergeGuarded)
+			if !slices.Contains(got.Paths, c.change) {
+				t.Fatalf("Paths = %q, want %q", got.Paths, c.change)
+			}
+			if x.tip() != before {
+				t.Fatal("main moved")
+			}
+		})
 	}
 }

@@ -30,13 +30,64 @@ var projectDirSpellings = []string{
 }
 
 // commandRunners are programs that read a manifest at the repo top (a script
-// table, a build file, a lock-in config) and run what it says.
+// table, a build file, a lock-in config) and run what it says. npx, pnpx and
+// bunx run a local bin (which reads its config from package.json) unless the
+// spec is clearly remote (fetchRemote); uvx always fetches into an isolated
+// environment, so it is no runner.
 var commandRunners = map[string]bool{
 	"npm": true, "npx": true, "pnpm": true, "pnpx": true, "yarn": true, "bun": true, "bunx": true,
-	"node": true, "deno": true, "make": true, "just": true, "task": true, "uv": true, "uvx": true,
+	"node": true, "deno": true, "make": true, "just": true, "task": true, "uv": true,
 	"poetry": true, "pipenv": true, "cargo": true, "go": true, "rake": true, "bundle": true,
 	"mise": true, "nix": true, "devbox": true, "devenv": true,
 }
+
+// Where a command line runs a word as a file (#370 B-M1). Only the command word,
+// an interpreter's script and the tool a fetcher runs are looked up as plain
+// words; a subcommand, a flag value or another argument is not.
+var (
+	// interpreterRE: their first non-option argument is a script file.
+	interpreterRE = regexp.MustCompile(`^(node|nodejs|python[0-9.]*|pypy[0-9.]*|py|bash|sh|zsh|dash|ksh|fish|deno|bun|ruby|perl|php|tsx|ts-node|lua)$`)
+	// shellRE: "-c" makes what follows a new command.
+	shellRE = regexp.MustCompile(`^(bash|sh|zsh|dash|ksh|fish)$`)
+)
+
+// fetchers: the next non-option word is the tool they run.
+var fetchers = map[string]bool{"npx": true, "bunx": true, "pnpx": true, "uvx": true}
+
+// fetchSubs: after the subcommand, the next non-option word is the tool.
+var fetchSubs = map[string]map[string]bool{"pnpm": {"dlx": true, "exec": true}, "yarn": {"dlx": true, "exec": true},
+	"npm": {"exec": true, "x": true}, "pipx": {"run": true}, "bun": {"x": true}}
+
+// noManifestSubs always fetch into an isolated environment: they add no runner.
+var noManifestSubs = map[string]map[string]bool{"pnpm": {"dlx": true}, "yarn": {"dlx": true}}
+
+// restartSubs: the next non-option word is a new command word (they run a
+// command, so reading it as one only adds refusals).
+var restartSubs = map[string]map[string]bool{"uv": {"run": true}, "poetry": {"run": true}, "pipenv": {"run": true},
+	"pdm": {"run": true}, "hatch": {"run": true}, "rye": {"run": true}, "bundle": {"exec": true}}
+
+// commandWrappers: the next word is still the command word.
+var commandWrappers = map[string]bool{"env": true, "exec": true, "command": true, "builtin": true, "nohup": true,
+	"time": true, "nice": true, "sudo": true, "xargs": true}
+
+// shellKeywords start a compound command: the next word is still the command
+// word, and the keyword itself names nothing.
+var shellKeywords = map[string]bool{"if": true, "then": true, "else": true, "elif": true, "do": true,
+	"while": true, "until": true}
+
+// fetchRemoteFlags make a fetcher fetch the package, not run a local bin.
+var fetchRemoteFlags = map[string]bool{"-y": true, "--yes": true, "-p": true, "--package": true}
+
+// wordRole is what the next plain word of a simple command is.
+type wordRole int
+
+const (
+	roleCmd    wordRole = iota // the command word
+	roleSub                    // a subcommand of the command word (fetchSubs, restartSubs)
+	roleScript                 // an interpreter's script argument
+	roleTool                   // the tool a fetcher runs
+	roleNone                   // an argument: not looked up
+)
 
 var scriptExts = []string{".js", ".mjs", ".cjs", ".ts", ".mts", ".py", ".sh", ".bash", ".zsh", ".rb", ".pl",
 	".php", ".nix", ".toml", ".json", ".yaml", ".yml", ".lua"}
@@ -79,6 +130,7 @@ const maxCommandCwds = 16
 type plainWord struct {
 	word  string
 	bases []string // repo-relative folders to look in, "." for the repo top
+	tool  bool     // the tool-config prefix rule applies: the command word and a fetcher's tool
 }
 
 // cmdInfo is what parseCommand finds in a command line.
@@ -107,7 +159,17 @@ func commandPaths(s string) (paths []string, runners []string) {
 //     argument of cd and pushd, is a folder (dirs); every path or plain word that
 //     follows is also resolved against it (of makes an absolute folder repo-relative);
 //   - a plain word (no "/", no extension) is kept for a look-up at the repo top
-//     and in those folders.
+//     and in those folders only where a tool runs it as a file: the command word
+//     of each simple command (after env assignments, wrappers such as env, sudo
+//     or xargs, shell keywords, "uv run" / "bundle exec" and the like, and
+//     "bash -c"), the script argument of an interpreter (interpreterRE; after an
+//     option with no "=", the next two words), and the tool a fetcher runs
+//     (fetchers, fetchSubs; its "@version" cut). Subcommands, flag values and
+//     other arguments are not looked up. The command word and a fetcher's tool
+//     also get the tool-config prefix rule (plainWord.tool);
+//   - runners: every word whose base is a commandRunner, except a fetcher whose
+//     spec is clearly remote (a version, a scope, or -y/--yes/-p/--package), and
+//     "pnpm dlx" / "yarn dlx", which add none.
 //
 // Skipped: other options (the value of --flag=value is read), URLs, "~" and
 // "$VAR" spellings, ".", "..". It over-approximates on purpose: a wrong path only
@@ -150,15 +212,27 @@ func parseCommand(of, s string) cmdInfo {
 			}
 		}
 	}
-	plain := func(w string) {
+	plain := func(w string, tool bool) {
+		if !plainWordRE.MatchString(w) {
+			return
+		}
 		bases := append([]string{"."}, cwds...)
-		if k := w + "\x00" + strings.Join(bases, "\x00"); !plainSeen[k] {
+		k := w + "\x00" + strings.Join(bases, "\x00")
+		if tool {
+			k += "\x00t"
+		}
+		if !plainSeen[k] {
 			if len(ci.plain) >= mergeRefPaths {
 				ci.over = true
 				return
 			}
 			plainSeen[k] = true
-			ci.plain = append(ci.plain, plainWord{word: w, bases: bases})
+			ci.plain = append(ci.plain, plainWord{word: w, bases: bases, tool: tool})
+		}
+	}
+	addRunner := func(b string) {
+		if !slices.Contains(ci.runners, b) {
+			ci.runners = append(ci.runners, b)
 		}
 	}
 	addDir := func(raw string) {
@@ -190,17 +264,58 @@ func parseCommand(of, s string) cmdInfo {
 		}
 	}
 	for _, seg := range strings.FieldsFunc(s, segmentDelim) {
+		var (
+			role    = roleCmd
+			cmd     string // the base of the last command word
+			tries   int    // > 0: an option came first, so its value may come before the word
+			pending string // a fetcher runner waiting to see whether its spec is remote
+			remote  bool
+		)
+		// classify sets the role of the word after the command word b.
+		classify := func(b string, maybeValue bool) {
+			cmd = b
+			switch {
+			case commandWrappers[b] || shellKeywords[b]:
+				role = roleCmd
+			case fetchSubs[b] != nil || restartSubs[b] != nil:
+				role = roleSub
+			case fetchers[b]:
+				role = roleTool
+			case interpreterRE.MatchString(b) || b == "source" || b == ".":
+				role = roleScript
+			default:
+				role = roleNone
+			}
+			if maybeValue && role == roleNone { // "sudo -u root node x": root may be the -u value
+				role = roleCmd
+			}
+		}
+		// next ends the script or tool slot, or keeps it for one more word.
+		next := func() {
+			if tries > 1 {
+				tries--
+				return
+			}
+			role, tries = roleNone, 0
+		}
 		toks := strings.FieldsFunc(seg, commandDelim)
 		for i := 0; i < len(toks); i++ {
 			tok := strings.TrimRight(strings.TrimLeft(toks[i], "!{"), "}") // git's "!" alias prefix, a shell function's braces
 			if tok == "" {
-				continue
+				continue // a lone "!" or brace: the next word is still the command word
 			}
 			cands := []string{tok}
 			direct := false // a word of its own, not a value read out of an option or assignment
 			switch {
 			case strings.HasPrefix(tok, "-"):
 				name, val, hasVal := strings.Cut(tok, "=")
+				if role == roleTool && pending != "" && fetchRemoteFlags[name] {
+					remote = true
+				}
+				if role == roleScript && shellRE.MatchString(cmd) && shellRunsArg(name) {
+					role, tries = roleCmd, 0 // bash -c "node x": node is a command word
+					continue
+				}
 				switch {
 				case dirFlags[name]:
 					if !hasVal && i+1 < len(toks) {
@@ -212,9 +327,11 @@ func parseCommand(of, s string) cmdInfo {
 				case name == "-m" && pyish && !hasVal && i+1 < len(toks):
 					i++
 					emitModule(toks[i])
+					role, tries = roleNone, 0 // the module is the program
 					continue
 				case pyish && !hasVal && len(name) > 2 && strings.HasPrefix(name, "-m"):
 					emitModule(name[2:]) // "-mmodule", no space
+					role, tries = roleNone, 0
 					continue
 				case nodeModuleFlags[name] && nodeish:
 					if !hasVal && i+1 < len(toks) {
@@ -227,11 +344,16 @@ func parseCommand(of, s string) cmdInfo {
 						}
 					} else if val != "" {
 						emitModule(val)
-						plain(val)
+						plain(val, false)
 					}
 					continue
 				}
 				if !hasVal {
+					// An option with no "=" may take the next word as its value:
+					// the word after it is tried too.
+					if role == roleScript || role == roleCmd || role == roleTool && (name == "-p" || name == "--package") {
+						tries = 2
+					}
 					continue
 				}
 				cands = []string{val}
@@ -260,23 +382,102 @@ func parseCommand(of, s string) cmdInfo {
 				}
 			}
 			for _, tok := range cands {
-				if tok == "" || tok == "." || tok == ".." || strings.HasPrefix(tok, "-") ||
-					strings.HasPrefix(tok, "$") || strings.HasPrefix(tok, "~") || strings.Contains(tok, "://") {
+				skip := tok == "" || tok == "." || tok == ".." || strings.HasPrefix(tok, "-") ||
+					strings.HasPrefix(tok, "$") || strings.HasPrefix(tok, "~") || strings.Contains(tok, "://")
+				b := path.Base(tok)
+				if skip {
+					if direct && role == roleCmd && tok != "" && tok != ".." { // "$PY srv", ". ./env.sh"
+						classify(b, tries > 0)
+						tries = 0
+					} else if direct && (role == roleScript || role == roleTool) {
+						next()
+					}
 					continue
 				}
-				if b := path.Base(tok); commandRunners[b] && !slices.Contains(ci.runners, b) {
-					ci.runners = append(ci.runners, b)
-				}
-				switch {
-				case strings.Contains(tok, "/") || strings.HasPrefix(tok, ".") || hasScriptExt(tok):
+				pathy := strings.Contains(tok, "/") || strings.HasPrefix(tok, ".") || hasScriptExt(tok)
+				if pathy {
 					emit(tok)
-				case direct && plainWordRE.MatchString(tok):
-					plain(tok)
+				}
+				if !direct {
+					if commandRunners[b] {
+						addRunner(b)
+					}
+					continue
+				}
+				switch role {
+				case roleCmd:
+					maybeValue := tries > 0
+					tries = 0
+					if !pathy && !shellKeywords[tok] {
+						plain(tok, true)
+					}
+					if (fetchers[b] || fetchSubs[b] != nil) && commandRunners[b] {
+						if pending != "" && !remote {
+							addRunner(pending)
+						}
+						pending, remote = b, false
+					} else if commandRunners[b] {
+						addRunner(b)
+					}
+					classify(b, maybeValue)
+				case roleSub:
+					if commandRunners[b] {
+						addRunner(b)
+					}
+					switch {
+					case fetchSubs[cmd][tok]:
+						role = roleTool
+						if noManifestSubs[cmd][tok] {
+							pending = ""
+						}
+					case restartSubs[cmd][tok]:
+						role = roleCmd
+					case interpreterRE.MatchString(cmd): // "bun server": the script
+						if !pathy {
+							plain(tok, false)
+						}
+						role = roleNone
+					default:
+						role = roleNone
+					}
+				case roleScript:
+					if !pathy {
+						plain(tok, false)
+					}
+					if commandRunners[b] {
+						addRunner(b)
+					}
+					next()
+				case roleTool:
+					if pending != "" && strings.Contains(tok, "@") { // a scope or a version: fetched
+						remote = true
+					}
+					if !pathy {
+						w := tok
+						if !strings.HasPrefix(w, "@") {
+							w, _, _ = strings.Cut(w, "@")
+						}
+						plain(w, true)
+					}
+					next()
+				default:
+					if commandRunners[b] {
+						addRunner(b)
+					}
 				}
 			}
 		}
+		if pending != "" && !remote {
+			addRunner(pending)
+		}
 	}
 	return ci
+}
+
+// shellRunsArg reports whether a shell option makes the next word a command
+// line: "-c", or a cluster of short options holding c ("-ec", "-lc").
+func shellRunsArg(name string) bool {
+	return len(name) > 1 && name[0] == '-' && name[1] != '-' && strings.ContainsRune(name[1:], 'c')
 }
 
 func hasScriptExt(tok string) bool {
