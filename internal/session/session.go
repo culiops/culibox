@@ -2220,6 +2220,34 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if r, ok := m.launcher.(EgressResolver); ok && runtime == config.RuntimeBox {
 		egressAllow, egressOpen = r.EgressFor(spec.Agent)
 	}
+	// host_own_login (#375): a Host run takes GitHub and/or AWS from this
+	// machine's own login. The kind leaves the bindings here, before the guard
+	// and the broker see them. A Box run ignores the field.
+	own, err := launcher.NormalizeHostOwnLogin(spec.HostOwnLogin)
+	if err != nil {
+		return nil, profileRefusal(spec.Agent, err.Error())
+	}
+	if runtime == config.RuntimeBox {
+		own = nil
+	}
+	if len(own) > 0 {
+		bound := boundOwnLoginKinds(binding, awsConns, ghBinding, pats)
+		var missing []string
+		for _, k := range own {
+			if !slices.Contains(bound, k) {
+				missing = append(missing, k)
+			}
+		}
+		if len(missing) > 0 {
+			return nil, profileRefusal(spec.Agent, "host_own_login names "+strings.Join(missing, " and ")+", which this profile does not bind")
+		}
+		if slices.Contains(own, launcher.OwnLoginGitHub) {
+			ghBinding, pats = nil, nil
+		}
+		if slices.Contains(own, launcher.OwnLoginAWS) {
+			binding, awsConns = nil, nil
+		}
+	}
 	bs := config.Bindings{AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats,
 		EgressAllow: egressAllow, EgressOpen: egressOpen}
 	if !bs.Any() {
@@ -2912,6 +2940,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 
 	if len(hostDropped) > 0 {
 		log.Printf("session %s: host run of profile %q without %s", id, spec.Agent, config.JoinKinds(hostDropped))
+	}
+	if len(own) > 0 {
+		log.Printf("session %s: host run of profile %q uses this machine's login for %s", id, spec.Agent, config.JoinKinds(own))
 	}
 
 	// Every refusal of a Host spawn is behind us: bring home the work of any

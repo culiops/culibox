@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +30,12 @@ type dropsLauncher struct {
 	bound     bool     // AWS + GitHub + token bindings, context paths, egress
 	badConn   bool     // AWSConnectionsFor errors (an undefined connection name)
 	clone     *config.Clone
+	noTokens  bool         // a bound profile with no non-PAT token binding
+	noAWS     bool         // a bound profile without an AWS binding
+	ghOff     *atomic.Bool // true: GitHubFor answers nil and TokensFor lists no PAT (nil or false = GitHub bound)
 }
+
+func (l dropsLauncher) ghIsOff() bool { return l.ghOff != nil && l.ghOff.Load() }
 
 func (l dropsLauncher) HostBlockFor(string) (string, error)   { return l.hostBlock, nil }
 func (l dropsLauncher) HostDropsFor(string) ([]string, error) { return slices.Clone(l.drops), nil }
@@ -48,14 +54,14 @@ func (l dropsLauncher) Build(spec launcher.SpawnSpec) ([]string, []string, error
 }
 
 func (l dropsLauncher) AWSFor(string) *config.AWSBinding {
-	if !l.bound {
+	if !l.bound || l.noAWS {
 		return nil
 	}
 	return testBinding()
 }
 
 func (l dropsLauncher) GitHubFor(string) *config.GitHubBinding {
-	if !l.bound {
+	if !l.bound || l.ghIsOff() {
 		return nil
 	}
 	return testGitHub()
@@ -72,7 +78,14 @@ func (l dropsLauncher) TokensFor(string) ([]config.StaticToken, []config.StaticT
 	if !l.bound {
 		return nil, nil, nil
 	}
-	return []config.StaticToken{grafanaEntry()}, []config.StaticToken{patEntry()}, nil
+	var tokens, pats []config.StaticToken
+	if !l.noTokens {
+		tokens = []config.StaticToken{grafanaEntry()}
+	}
+	if !l.ghIsOff() {
+		pats = []config.StaticToken{patEntry()}
+	}
+	return tokens, pats, nil
 }
 
 func (l dropsLauncher) EgressFor(string) ([]string, bool) {
