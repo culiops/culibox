@@ -140,6 +140,9 @@ func hostConfig(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", cfg)
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none"))
 	t.Setenv("AWS_PROFILE", "")
+	// A Host session bound to an AWS connection exports a region; the profile's own region must win.
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
 }
 
 func rolesSvc(f *fakeIAM) *awsCredService {
