@@ -872,6 +872,10 @@ type Info struct {
 	// a profile only; absent otherwise, so every other session's wire shape is
 	// unchanged.
 	HostDropped []string `json:"host_dropped,omitempty"`
+	// HostOwnLogin is what this host session takes from the machine's own
+	// login instead of its profile's binding (#375): "github" and/or "aws".
+	// Absent for a box session and for a host session that kept every binding.
+	HostOwnLogin []string `json:"host_own_login,omitempty"`
 	// HostBroker: a host session whose bindings reach it through the broker, on
 	// its own socket (#360). Absent otherwise.
 	HostBroker bool `json:"host_broker,omitempty"`
@@ -985,6 +989,11 @@ type Session struct {
 	// HostDropped is Info.HostDropped; immutable after publication, read
 	// without the lock; Info hands out a copy.
 	HostDropped []string
+	// HostOwnLogin is Info.HostOwnLogin; hostOwnActor is who asked for it (the
+	// spawn's Actor, "web" when empty), so a Restart audits the same actor.
+	// Both immutable after publication; neither is on the wire but the first.
+	HostOwnLogin []string
+	hostOwnActor string
 	// HostBroker is Info.HostBroker: a host session holding (or, restored after
 	// a restart whose HostFor failed, owning) its own broker socket and dir.
 	// HostDir is that dir ("" when unknown); never on the wire. Both immutable
@@ -1515,6 +1524,7 @@ func (s *Session) Info() Info {
 	in.EgressChange = s.egressChangeLocked()
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	in.HostDropped = slices.Clone(s.HostDropped)
+	in.HostOwnLogin = slices.Clone(s.HostOwnLogin)
 	in.HostBroker = s.HostBroker
 	in.Clone = s.Clone.copy()
 	in.HostReturn = copyReturns(s.HostReturn)
@@ -2229,6 +2239,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	}
 	if runtime == config.RuntimeBox {
 		own = nil
+	}
+	ownActor := spec.Actor
+	if ownActor == "" {
+		ownActor = "web"
 	}
 	if len(own) > 0 {
 		bound := boundOwnLoginKinds(binding, awsConns, ghBinding, pats)
@@ -3022,6 +3036,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.EgressAllow, sess.EgressOpen = egressAllow, egressOpen
 	sess.egress = newEgressLive(egressPolicy{Allow: egressAllow, Open: egressOpen}, nil)
 	sess.HostDropped = slices.Clone(hostDropped)
+	sess.HostOwnLogin = slices.Clone(own)
+	if len(own) > 0 {
+		sess.hostOwnActor = ownActor
+	}
 	sess.HostBroker, sess.HostDir = heldHost, hostDir // published: the session now owns the Host socket and dir
 	sess.BrokerNonce = nonce
 	sess.EgressNonce = enonce
@@ -3060,7 +3078,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Workspace: wsPath, TranscriptKey: transcriptKey, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, EgressLive: liveMeta, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), HostBroker: heldHost, Clone: cloneInfo.copy(), Exclusive: exclusive,
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, EgressLive: liveMeta, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), HostOwnLogin: slices.Clone(own), HostOwnActor: sess.hostOwnActor, HostBroker: heldHost, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, WorkspaceRoot: wsRoot, LockedFiles: slices.Clone(lockedFiles),
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
@@ -4191,6 +4209,10 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	}
 	sess.BundleDrops = md.BundleDrops
 	sess.HostDropped = slices.Clone(md.HostDropped)
+	if runtime == config.RuntimeHost {
+		sess.HostOwnLogin = slices.Clone(md.HostOwnLogin)
+		sess.hostOwnActor = md.HostOwnActor
+	}
 	sess.HostBroker = md.HostBroker && runtime == config.RuntimeHost
 	sess.HostDir = hostDir
 	sess.Clone = md.Clone.copy()

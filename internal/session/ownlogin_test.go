@@ -1,11 +1,13 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
@@ -150,7 +152,7 @@ func TestHostOwnLoginAWSKeepsTheUsersAWSEnv(t *testing.T) {
 }
 
 func TestHostOwnLoginGitHubKeepsTheUsersGitHubEnvAndTokens(t *testing.T) {
-	l, tools := hostBoundLauncher(t, envDumpArgv, "GH_TOKEN=user-own", "GH_CONFIG_DIR=/home/u/.config/gh")
+	l, _ := hostBoundLauncher(t, envDumpArgv, "GH_TOKEN=user-own", "GH_CONFIG_DIR=/home/u/.config/gh")
 	h := ownLoginHarness(t, l)
 	s, err := h.m.Spawn(ownSpec(t, launcher.OwnLoginGitHub))
 	if err != nil {
@@ -168,8 +170,157 @@ func TestHostOwnLoginGitHubKeepsTheUsersGitHubEnvAndTokens(t *testing.T) {
 	if env["AGENTBOX_BROKER"] == "" || !strings.HasPrefix(env["PATH"], dir+"/bin") {
 		t.Fatalf("the token binding was not delivered: AGENTBOX_BROKER=%q PATH=%q", env["AGENTBOX_BROKER"], env["PATH"])
 	}
-	_ = tools
-	if _, err := os.Stat(filepath.Join(dir, "bin", "gh")); err == nil {
-		t.Fatal("a gh shim was written for a session whose GitHub is on the machine login")
+	// That no bin/gh shim is written is pinned by TestHostForFilesPerKind
+	// (internal/broker/hostfiles_test.go): the fake HostFor here writes no files.
+}
+
+func TestHostOwnLoginOnSessionInfoAndSidecar(t *testing.T) {
+	l, _ := hostBoundLauncher(t, envDumpArgv)
+	h := ownLoginHarness(t, l)
+	spec := ownSpec(t, launcher.OwnLoginGitHub)
+	spec.Actor = "bearer"
+	s, err := h.m.Spawn(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	want := []string{launcher.OwnLoginGitHub}
+	if !slices.Equal(s.HostOwnLogin, want) || !slices.Equal(s.Info().HostOwnLogin, want) {
+		t.Fatalf("HostOwnLogin = %q / %q", s.HostOwnLogin, s.Info().HostOwnLogin)
+	}
+	e := sidecarEntry(t, h.path, s.ID)
+	if !slices.Equal(e.HostOwnLogin, want) || e.HostOwnActor != "bearer" {
+		t.Fatalf("sidecar = %q by %q", e.HostOwnLogin, e.HostOwnActor)
+	}
+
+	plain, err := h.m.Spawn(hostAckSpec(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(plain.ID) })
+	if plain.Info().HostOwnLogin != nil {
+		t.Fatalf("HostOwnLogin = %q on a spawn without the field", plain.Info().HostOwnLogin)
+	}
+	raw, err := json.Marshal(plain.Info())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "host_own_login") {
+		t.Fatalf("Info JSON carries host_own_login: %s", raw)
+	}
+	if e := sidecarEntry(t, h.path, plain.ID); e.HostOwnLogin != nil || e.HostOwnActor != "" {
+		t.Fatalf("sidecar = %q by %q for a spawn without the field", e.HostOwnLogin, e.HostOwnActor)
+	}
+}
+
+func TestSidecarRestoresHostOwnLogin(t *testing.T) {
+	l, _ := hostBoundLauncher(t, []string{"sh", "-c", "sleep 30"})
+	h := ownLoginHarness(t, l)
+	fb := newFakeBackend()
+	h.m.backend = fb
+	s, err := h.m.Spawn(ownSpec(t, launcher.OwnLoginGitHub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	fb.seedLive(s.ID)
+	m2 := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m2.SetSidecarPath(h.path); err != nil {
+		t.Fatal(err)
+	}
+	m2.SetBoxes(&fakeBoxes{})
+	if err := m2.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m2.Get(s.ID)
+	if !ok {
+		t.Fatal("session not restored")
+	}
+	want := []string{launcher.OwnLoginGitHub}
+	if !slices.Equal(r.HostOwnLogin, want) || !slices.Equal(r.Info().HostOwnLogin, want) || r.hostOwnActor != "web" {
+		t.Fatalf("restored HostOwnLogin = %q by %q", r.Info().HostOwnLogin, r.hostOwnActor)
+	}
+}
+
+func TestSidecarWithoutHostOwnLoginReadsNone(t *testing.T) {
+	var md sessionMeta
+	if err := json.Unmarshal([]byte(`{"agent":"p","runtime":"host"}`), &md); err != nil {
+		t.Fatal(err)
+	}
+	if md.HostOwnLogin != nil || md.HostOwnActor != "" {
+		t.Fatalf("an old record reads %q by %q", md.HostOwnLogin, md.HostOwnActor)
+	}
+}
+
+func TestRestartKeepsHostOwnLogin(t *testing.T) {
+	l, _ := hostBoundLauncher(t, []string{"sh", "-c", "exit 0"})
+	h := ownLoginHarness(t, l)
+	spec := ownSpec(t, launcher.OwnLoginGitHub)
+	spec.Actor = "bearer"
+	old := exitedSession(t, h.m, spec)
+	ns, err := h.m.Restart(old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(ns.ID) })
+	if !slices.Equal(ns.HostOwnLogin, []string{launcher.OwnLoginGitHub}) || ns.GitHub != nil || ns.hostOwnActor != "bearer" {
+		t.Fatalf("restarted: own=%q github=%v actor=%q", ns.HostOwnLogin, ns.GitHub, ns.hostOwnActor)
+	}
+	calls, _, _ := h.hooks.hostState()
+	if len(calls) != 2 || calls[1].bs.GitHub != nil || calls[1].bs.AWS == nil {
+		t.Fatalf("HostFor calls = %+v, want a second one without GitHub and with AWS", calls)
+	}
+}
+
+func TestRestartDropsAKindTheProfileNoLongerBinds(t *testing.T) {
+	var off atomic.Bool
+	l, _ := hostBoundLauncher(t, []string{"sh", "-c", "exit 0"})
+	l.ghOff = &off
+	h := ownLoginHarness(t, l)
+	old := exitedSession(t, h.m, ownSpec(t, launcher.OwnLoginGitHub))
+	off.Store(true)
+	ns, err := h.m.Restart(old.ID)
+	if err != nil {
+		t.Fatalf("a restart after the profile lost GitHub: %v", err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(ns.ID) })
+	if ns.HostOwnLogin != nil || ns.GitHub != nil {
+		t.Fatalf("restarted: own=%q github=%v", ns.HostOwnLogin, ns.GitHub)
+	}
+
+	// The reverse: GitHub gained since the spawn goes through the broker.
+	off.Store(true)
+	l2, _ := hostBoundLauncher(t, []string{"sh", "-c", "exit 0"})
+	l2.ghOff = &off
+	h2 := ownLoginHarness(t, l2)
+	old2 := exitedSession(t, h2.m, ownSpec(t, launcher.OwnLoginAWS))
+	if old2.GitHub != nil {
+		t.Fatalf("GitHub bound while off: %v", old2.GitHub)
+	}
+	off.Store(false)
+	ns2, err := h2.m.Restart(old2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h2.m.Kill(ns2.ID) })
+	if ns2.GitHub == nil || !slices.Equal(ns2.HostOwnLogin, []string{launcher.OwnLoginAWS}) {
+		t.Fatalf("restarted: own=%q github=%v", ns2.HostOwnLogin, ns2.GitHub)
+	}
+}
+
+func TestBoxSessionRecordsNoHostOwnLogin(t *testing.T) {
+	l := boundDropsLauncher([]string{"sh", "-c", "sleep 30"}, config.RuntimeBox)
+	h := ownLoginHarness(t, l)
+	s, err := h.m.Spawn(launcher.SpawnSpec{Agent: "p", Cwd: t.TempDir(), Actor: "bearer",
+		HostOwnLogin: []string{launcher.OwnLoginGitHub}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	if s.HostOwnLogin != nil || s.Info().HostOwnLogin != nil {
+		t.Fatalf("HostOwnLogin = %q on a box session", s.Info().HostOwnLogin)
+	}
+	if e := sidecarEntry(t, h.path, s.ID); e.HostOwnLogin != nil || e.HostOwnActor != "" {
+		t.Fatalf("sidecar = %q by %q for a box session", e.HostOwnLogin, e.HostOwnActor)
 	}
 }
