@@ -1715,6 +1715,49 @@ func TestReturnForRepoContinuesWorkCutByTheBudget(t *testing.T) {
 	})
 }
 
+// A merge that failed before git merge ran (a pre-check the deadline cut) was
+// not decided, so it continues in the background; a merge git refused is a
+// settled answer and does not.
+func TestReturnForRepoContinuesAMergeCutBeforeGit(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		attempted bool
+		wantBg    bool
+	}{{"failed before git merge", false, true}, {"refused by git merge", true, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRefreshFake(t)
+			of, dir := resolvedTemp(t), cloneDir(t)
+			f.h.clones = func() []config.Clone { return []config.Clone{{Of: of, Dir: dir, Profile: "p"}} }
+			bg := make(chan struct{}, 4)
+			var first atomic.Bool
+			f.h.ret = func(ctx context.Context, _ clone.Git, _ clone.Docker, _ clone.ReturnRequest) clone.ReturnResult {
+				if first.CompareAndSwap(false, true) {
+					<-ctx.Done()
+					return clone.ReturnResult{Merge: &clone.MergeResult{Branch: "main", Reason: clone.MergeFailed, Attempted: tc.attempted}}
+				}
+				bg <- struct{}{}
+				return clone.ReturnResult{}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			sums := f.h.ReturnForRepo(ctx, of)
+			if len(sums) != 1 || sums[0].Merge == nil || sums[0].Merge.Attempted != tc.attempted {
+				t.Fatalf("summaries = %+v, want the merge result kept with Attempted = %v", sums, tc.attempted)
+			}
+			select {
+			case <-bg:
+				if !tc.wantBg {
+					t.Fatal("a merge git refused was continued in the background")
+				}
+			case <-time.After(300 * time.Millisecond):
+				if tc.wantBg {
+					t.Fatal("a merge cut before git merge was not continued in the background")
+				}
+			}
+		})
+	}
+}
+
 // I5: a profile whose copy was never made (no box spawned yet) has nothing to
 // return: no summary, no return, nothing recorded.
 func TestReturnForRepoSkipsACopyThatWasNeverMade(t *testing.T) {
@@ -2304,12 +2347,12 @@ func TestReturnSummaryOfMerge(t *testing.T) {
 	at := time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC)
 	m := &clone.MergeResult{
 		At: at, Branch: "main", From: "aaa", To: "bbb", Merged: false, Commits: 2, Files: 5,
-		Reason: clone.MergeGuarded, Detail: "d", Paths: []string{".envrc", ".claude/x"},
+		Reason: clone.MergeGuarded, Detail: "d", Paths: []string{".envrc", ".claude/x"}, Attempted: true,
 	}
 	got := returnSummaryOf(session.ReturnOnIdle, "/r", nil, clone.ReturnResult{Merge: m})
 	g := got.Merge
 	if g == nil || !g.At.Equal(at) || g.Branch != "main" || g.From != "aaa" || g.To != "bbb" || g.Merged ||
-		g.Commits != 2 || g.Files != 5 || g.Reason != "guarded" || g.Detail != "d" || !slices.Equal(g.Paths, []string{".envrc", ".claude/x"}) {
+		g.Commits != 2 || g.Files != 5 || g.Reason != "guarded" || g.Detail != "d" || !g.Attempted || !slices.Equal(g.Paths, []string{".envrc", ".claude/x"}) {
 		t.Fatalf("Merge = %+v, want a field-by-field copy of %+v", g, m)
 	}
 	m.Paths[0] = "changed"

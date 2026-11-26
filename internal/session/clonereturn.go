@@ -79,6 +79,9 @@ type MergeNote struct {
 	Reason  string    `json:"reason,omitempty"`
 	Detail  string    `json:"detail,omitempty"`
 	Paths   []string  `json:"paths,omitempty"`
+	// Attempted: `git merge` ran and git refused it (reason "failed"); false for a
+	// failure before it, which the UI words differently.
+	Attempted bool `json:"attempted,omitempty"`
 }
 
 // copy returns an independent MergeNote, nil for nil.

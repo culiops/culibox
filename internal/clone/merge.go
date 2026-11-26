@@ -47,8 +47,11 @@ type MergeResult struct {
 	Commits int       `json:"commits,omitempty"` // in From..To
 	Files   int       `json:"files,omitempty"`   // distinct paths in From..To
 	Reason  string    `json:"reason,omitempty"`  // "" when Merged
-	Detail  string    `json:"detail,omitempty"`  // sanitized, <= maxErrRunes
-	Paths   []string  `json:"paths,omitempty"`   // <= 3 examples for guarded/flagged/filter, sanitized
+	// Attempted is true only when `git merge` ran and git refused it: the one
+	// failure the retry window holds. A failed pre-check or audit is not.
+	Attempted bool     `json:"attempted,omitempty"`
+	Detail    string   `json:"detail,omitempty"` // sanitized, <= maxErrRunes
+	Paths     []string `json:"paths,omitempty"`  // <= 3 examples for guarded/flagged/filter, sanitized
 }
 
 // MergeRequest is one MergeHome call.
@@ -177,6 +180,32 @@ func (m *merger) headBranch() (string, error) {
 	return strings.TrimPrefix(ref, "refs/heads/"), nil
 }
 
+// boxWorkWaiting reports whether some branch x of this clone's own listing has
+// refs/heads/box/x at the clone's tip for x and different from refs/heads/x: box
+// work is waiting to be merged, so a detached HEAD is worth saying.
+func (m *merger) boxWorkWaiting(tips map[string]string) (bool, error) {
+	for x, tip := range tips {
+		if x == "" || tip == "" {
+			continue
+		}
+		box, err := m.commitOf("refs/heads/box/" + x)
+		if err != nil {
+			return false, err
+		}
+		if box == "" || box != tip {
+			continue
+		}
+		host, err := m.commitOf("refs/heads/" + x)
+		if err != nil {
+			return false, err
+		}
+		if host != box {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // commitOf returns the full id of the commit ref names, "" when there is none.
 func (m *merger) commitOf(ref string) (string, error) {
 	out, err := m.run(m.env(), "rev-parse", "--verify", "-q", ref+"^{commit}")
@@ -212,6 +241,13 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		return m.failed("cannot read HEAD", err)
 	}
 	if x == "" {
+		waiting, err := m.boxWorkWaiting(r.CloneTips)
+		if err != nil {
+			return m.failed("cannot read box branches", err)
+		}
+		if !waiting {
+			return nil // nothing of this profile's to merge, so nothing to report
+		}
 		return m.result(MergeDetached, "HEAD is not on a branch", nil)
 	}
 	m.branch = x
@@ -241,6 +277,16 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		return m.failed("cannot compare "+x+" and box/"+x, err)
 	} else if !ahead {
 		return m.result(MergeDiverged, x+" and box/"+x+" both have commits the other lacks", nil)
+	}
+
+	// A merge git refused for this same range is retried at most every 30 min,
+	// so a persistent refusal does not write audit rows on every pass. Only that
+	// failure holds the window (a pre-check or audit failure may have cleared),
+	// and it is checked before the scan: nothing merges inside the window, so
+	// the dirty check and the scan would only repeat.
+	if p := r.Prev; p != nil && p.Reason == MergeFailed && p.Attempted && p.From == m.from && p.To == m.to &&
+		now().Sub(p.At) < mergeRetryAfter {
+		return p
 	}
 
 	// 3. A clean tree (tracked files; git itself refuses to overwrite an untracked one).
@@ -305,7 +351,17 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 			"(agent settings, hooks, attributes, editor tasks) or a submodule", denied)
 	}
 
-	// 4b. The handback inspection of the range; anything short of a clean,
+	// 4b. No path a git filter would process on checkout (one cheap check-attr,
+	// before the full scan).
+	filtered, err := m.filtered(paths)
+	if err != nil {
+		return m.failed("cannot check git attributes", err)
+	}
+	if len(filtered) > 0 {
+		return m.result(MergeFilter, "a file the commits change has a git filter attribute (e.g. Git LFS)", filtered)
+	}
+
+	// 4c. The handback inspection of the range; anything short of a clean,
 	// complete scan refuses. Flags found in this same range are not looked for
 	// again: they come from its blobs, which the range fixes. A scan that found
 	// none but could not finish (a deadline, a git failure) is run again.
@@ -329,15 +385,6 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 		return m.result(MergeFlagged, detail, fp)
 	}
 
-	// 4c. No path a git filter would process on checkout.
-	filtered, err := m.filtered(paths)
-	if err != nil {
-		return m.failed("cannot check git attributes", err)
-	}
-	if len(filtered) > 0 {
-		return m.result(MergeFilter, "a file the commits change has a git filter attribute (e.g. Git LFS)", filtered)
-	}
-
 	// 5. Nothing moved while it was being checked.
 	if again, err := m.headBranch(); err != nil {
 		return m.failed("cannot read HEAD", err)
@@ -351,13 +398,6 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	}
 	if res := m.clean(); res != nil { // never merge over an edit made while the guard ran
 		return res
-	}
-
-	// A merge git refused for this same range is retried at most every 30 min,
-	// so a persistent refusal does not write audit rows on every pass.
-	if p := r.Prev; p != nil && p.Reason == MergeFailed && p.From == m.from && p.To == m.to &&
-		now().Sub(p.At) < mergeRetryAfter {
-		return p
 	}
 
 	// 6. Audit, fail closed, then merge.
@@ -374,7 +414,9 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 	if err != nil {
 		_ = r.Audit("clone_merge_home_failed", detail)
 		// ExecGit names the first argument ("-c" of hardenFlags) in its error.
-		return m.result(MergeFailed, "git merge: "+strings.TrimPrefix(err.Error(), "git -c: "), nil)
+		res := m.result(MergeFailed, "git merge: "+strings.TrimPrefix(err.Error(), "git -c: "), nil)
+		res.Attempted = true
+		return res
 	}
 	res := m.result("", "", nil)
 	res.Merged = true

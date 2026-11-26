@@ -274,6 +274,36 @@ func TestMergeHomeDetached(t *testing.T) {
 	wantMergeReason(t, x.run(newRec(t), &auditRec{}), MergeDetached)
 }
 
+// A detached HEAD is reported only when this clone's work is waiting: a repo
+// with no box work of this profile has nothing to say about it.
+func TestMergeHomeDetachedNeedsBoxWork(t *testing.T) {
+	// No box/main at all.
+	x := newMergeFx(t, "main")
+	fixtureGit(t, x.of, "checkout", "-q", "--detach")
+	if got := x.run(newRec(t), &auditRec{}); got != nil {
+		t.Fatalf("no box work: result = %+v, want nil", got)
+	}
+	// A box/main this clone did not write.
+	y := newMergeFx(t, "main")
+	to := y.box("main", map[string]string{"b.txt": "b"})
+	fixtureGit(t, y.of, "checkout", "-q", "--detach")
+	got := MergeHome(context.Background(), newRec(t), MergeRequest{Of: y.of, Audit: (&auditRec{}).fn,
+		CloneTips: map[string]string{"main": strings.Repeat("0", 40)}})
+	if got != nil {
+		t.Fatalf("another clone's box/main: result = %+v, want nil", got)
+	}
+	// This clone's box/main, already the branch's own tip: nothing waits.
+	fixtureGit(t, y.of, "update-ref", "refs/heads/main", to)
+	if got := y.run(newRec(t), &auditRec{}); got != nil {
+		t.Fatalf("box/main equals main: result = %+v, want nil", got)
+	}
+	// This clone's box/main is ahead of main: waiting work, detached is news.
+	z := newMergeFx(t, "main")
+	z.box("main", map[string]string{"b.txt": "b"})
+	fixtureGit(t, z.of, "checkout", "-q", "--detach")
+	wantMergeReason(t, z.run(newRec(t), &auditRec{}), MergeDetached)
+}
+
 func TestMergeHomeDiverged(t *testing.T) {
 	x := newMergeFx(t, "main")
 	x.box("main", map[string]string{"b.txt": "b"})
@@ -589,11 +619,34 @@ func (p plainGit) Run(ctx context.Context, dir string, env []string, args ...str
 	return p.g.Run(ctx, dir, env, args...)
 }
 
+// noStreamStdinGit hides only the Stream method: the attribute check works, the
+// handback inspection cannot.
+type noStreamStdinGit struct{ r *recGit }
+
+func (n noStreamStdinGit) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	return n.r.Run(ctx, dir, env, args...)
+}
+
+func (n noStreamStdinGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	return n.r.RunStdin(ctx, dir, env, stdin, args...)
+}
+
 func TestMergeHomeInspectionUnavailable(t *testing.T) {
 	x := newMergeFx(t, "main")
 	x.box("main", map[string]string{"b.txt": "b"})
-	got := x.run(plainGit{newRec(t)}, &auditRec{})
+	got := x.run(noStreamStdinGit{newRec(t)}, &auditRec{})
 	wantMergeReason(t, got, MergeFlagged) // no StreamGit: the inspection is a refusal, fail closed
+}
+
+// With neither method the attribute check, which runs first, cannot be made.
+func TestMergeHomeAttributeCheckUnavailable(t *testing.T) {
+	x := newMergeFx(t, "main")
+	x.box("main", map[string]string{"b.txt": "b"})
+	got := x.run(plainGit{newRec(t)}, &auditRec{})
+	wantMergeReason(t, got, MergeFailed)
+	if got.Attempted {
+		t.Fatalf("result = %+v, a failed pre-check is not an attempted merge", got)
+	}
 }
 
 func TestMergeHomeFilter(t *testing.T) {
@@ -601,8 +654,12 @@ func TestMergeHomeFilter(t *testing.T) {
 	x.commit("attrs", map[string]string{".gitattributes": "*.bin filter=lfs\n", "a.bin": "one"})
 	before := x.tip()
 	x.box("main", map[string]string{"a.bin": "two"})
-	got := x.run(newRec(t), &auditRec{})
+	rec := newRec(t)
+	got := x.run(rec, &auditRec{})
 	wantMergeReason(t, got, MergeFilter)
+	if inspected(rec) {
+		t.Fatal("the full handback scan ran before the cheap attribute check")
+	}
 	if !slices.Contains(got.Paths, "a.bin") || x.tip() != before {
 		t.Fatalf("result = %+v, main moved = %v", got, x.tip() != before)
 	}
@@ -703,12 +760,59 @@ func mergeCalled(r *recGit) bool {
 	return false
 }
 
+// gitCalled reports whether any recorded call ran the git subcommand sub.
+func gitCalled(r *recGit, sub string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.calls {
+		if slices.Contains(c.args, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// failMergeGit fails the merge call, as git refusing it would.
+type failMergeGit struct{ *recGit }
+
+func (f failMergeGit) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	if slices.Contains(args, "merge") {
+		f.recGit.mu.Lock()
+		f.recGit.calls = append(f.recGit.calls, call{dir, slices.Clone(env), slices.Clone(args)})
+		f.recGit.mu.Unlock()
+		return nil, errors.New("git -c: exit status 128: untracked file in the way")
+	}
+	return f.recGit.Run(ctx, dir, env, args...)
+}
+
+// Only a merge git refused is Attempted; the audit failing is not.
+func TestMergeHomeAttemptedOnlyForARefusedMerge(t *testing.T) {
+	x := newMergeFx(t, "main")
+	x.box("main", map[string]string{"b.txt": "b"})
+	got := x.run(failMergeGit{newRec(t)}, &auditRec{})
+	wantMergeReason(t, got, MergeFailed)
+	if !got.Attempted || !strings.HasPrefix(got.Detail, "git merge: ") {
+		t.Fatalf("result = %+v, want attempted with a git merge detail", got)
+	}
+
+	y := newMergeFx(t, "main")
+	y.box("main", map[string]string{"b.txt": "b"})
+	got = y.run(newRec(t), &auditRec{err: errors.New("disk full")})
+	wantMergeReason(t, got, MergeFailed)
+	if got.Attempted {
+		t.Fatalf("result = %+v, audit unavailable is not an attempted merge", got)
+	}
+}
+
+// A merge git refused for this range is not tried again inside the window, and
+// nothing is scanned or inspected either: nothing merges in the window, so the
+// checks would only repeat.
 func TestMergeHomeRetryWindow(t *testing.T) {
 	x := newMergeFx(t, "main")
 	from := x.tip()
 	to := x.box("main", map[string]string{"b.txt": "b"})
 	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
-	prev := &MergeResult{At: now.Add(-10 * time.Minute), Branch: "main", From: from, To: to, Reason: MergeFailed, Detail: "x"}
+	prev := &MergeResult{At: now.Add(-10 * time.Minute), Branch: "main", From: from, To: to, Reason: MergeFailed, Attempted: true, Detail: "x"}
 	rec := newRec(t)
 	a := &auditRec{}
 	got := MergeHome(context.Background(), rec, MergeRequest{Of: x.of, Audit: a.fn, Prev: prev, Now: func() time.Time { return now }, CloneTips: x.tips()})
@@ -718,6 +822,11 @@ func TestMergeHomeRetryWindow(t *testing.T) {
 	if mergeCalled(rec) || len(a.calls) != 0 {
 		t.Fatalf("retried inside the window: audit %q", a.calls)
 	}
+	for _, sub := range []string{"log", "status", "diff-tree", "check-attr", "cat-file"} {
+		if gitCalled(rec, sub) {
+			t.Fatalf("git %s ran inside the retry window", sub)
+		}
+	}
 
 	prev.At = now.Add(-31 * time.Minute)
 	rec = newRec(t)
@@ -725,6 +834,20 @@ func TestMergeHomeRetryWindow(t *testing.T) {
 	wantMerged(t, got)
 	if !mergeCalled(rec) || !got.At.Equal(now) {
 		t.Fatalf("not attempted after the window, or At = %v", got.At)
+	}
+}
+
+// An earlier failure that never reached git merge (a pre-check, the audit) does
+// not hold the window: the cause may be gone and the merge is checked again.
+func TestMergeHomeRetryWindowIgnoresPreCheckFailure(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	for _, detail := range []string{"cannot check git attributes: x", "audit unavailable"} {
+		x := newMergeFx(t, "main")
+		from := x.tip()
+		to := x.box("main", map[string]string{"b.txt": "b"})
+		prev := &MergeResult{At: now.Add(-time.Minute), Branch: "main", From: from, To: to, Reason: MergeFailed, Detail: detail}
+		got := MergeHome(context.Background(), newRec(t), MergeRequest{Of: x.of, Audit: (&auditRec{}).fn, Prev: prev, Now: func() time.Time { return now }, CloneTips: x.tips()})
+		wantMerged(t, got)
 	}
 }
 
@@ -744,6 +867,9 @@ func TestMergeHomeHardened(t *testing.T) {
 		}
 		if slices.Contains(c.args, "merge") && !slices.Contains(c.args, "submodule.recurse=false") {
 			t.Fatalf("merge call %q lacks submodule.recurse=false", c.args)
+		}
+		if slices.Contains(c.args, "merge") && !slices.Contains(c.env, "GIT_NO_REPLACE_OBJECTS=1") {
+			t.Fatalf("merge call env %q lacks GIT_NO_REPLACE_OBJECTS=1", c.env)
 		}
 	}
 }
