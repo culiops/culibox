@@ -578,6 +578,20 @@ func TestBrokerSessionViewCarriesHost(t *testing.T) {
 	}
 }
 
+// #375: a Host session that took GitHub from the machine login reaches the
+// broker with no GitHub binding and no PATs, still as a Host view.
+func TestBrokerSessionViewOfAMachineLoginKind(t *testing.T) {
+	s := boundSess("aws-1")
+	s.Runtime, s.Box, s.Exclusive = config.RuntimeHost, "", false
+	s.BrokerNonce = wireNonce
+	s.HostBroker = true
+	s.GitHub, s.PATs = nil, nil
+	v := brokerSessionView(s, definedTokens(nil))
+	if v.GitHub != nil || v.PATs != nil || !v.Host {
+		t.Fatalf("view = %+v, want Host with no GitHub and no PATs", v)
+	}
+}
+
 // postCredsBody is postCreds with the reply body.
 func postCredsBody(t *testing.T, sock, token string) (int, string) {
 	t.Helper()

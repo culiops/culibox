@@ -14,6 +14,7 @@ import (
 
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/launcher"
 	"github.com/culiops/culibox/internal/secretstore"
@@ -171,6 +172,9 @@ func writeSpawnErr(w http.ResponseWriter, agent, home string, err error) {
 		// A fixed text: the wrapped error names the host path of profiles.json,
 		// which stays in the log above (as writeSaveErr does for a save).
 		writeErr(w, http.StatusBadRequest, profilesNewerSpawnMsg)
+	case errors.Is(err, session.ErrSpawnAudit):
+		// Nothing was started: the audit row of a Host session on this machine's login could not be written.
+		writeErrCode(w, http.StatusServiceUnavailable, session.ErrSpawnAudit.Error(), "audit_unavailable")
 	case errors.Is(err, box.ErrVMRestarting):
 		writeErrCode(w, http.StatusServiceUnavailable, err.Error(), "vm_restarting")
 	case errors.Is(err, box.ErrBoxUnavailable):
@@ -195,6 +199,15 @@ func writeSpawnErr(w http.ResponseWriter, agent, home string, err error) {
 // written by a newer CuliBox (#291); `culibox doctor` shows the versions.
 const profilesNewerSpawnMsg = "no session can start: profiles.json was written by a newer CuliBox. Run that CuliBox again, or restore the pre-upgrade backup (docs/UPGRADING.md); culibox doctor shows the versions"
 
+// spawnActor is who the audit names for a spawn: "bearer" for a bearer token,
+// else the signed-in browser's "web".
+func spawnActor(r *http.Request) string {
+	if credKindOf(r) == credBearer {
+		return broker.CredBearer
+	}
+	return storeActor
+}
+
 // handleSessions serves GET (list) and POST (spawn) on /api/sessions.
 func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -217,6 +230,11 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			// them as its default credentials, not a limit (#360), and drops what a box
 			// setup carries (#359); the spawn refuses a host run of one without it.
 			HostDropsAck bool `json:"host_drops_bindings"`
+			// HostOwnLogin: kinds ("github", "aws") a host run takes from this
+			// machine's own login instead of the binding (#375). Shape is checked
+			// here; whether the profile binds the kind, and the Box tier ignoring
+			// it, are the session layer's.
+			HostOwnLogin []string `json:"host_own_login"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.Agent == "" {
 			writeErr(w, http.StatusBadRequest, "agent required")
@@ -234,6 +252,11 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		// A clone is a box's own copy of the repo: the host tier never gets one.
 		if req.Clone != nil && *req.Clone && req.Runtime == config.RuntimeHost {
 			writeErr(w, http.StatusBadRequest, "a clone runs only in a box")
+			return
+		}
+		own, err := launcher.NormalizeHostOwnLogin(req.HostOwnLogin)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		cwd := strings.TrimSpace(req.Cwd)
@@ -254,7 +277,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		spec := launcher.SpawnSpec{
 			Agent: req.Agent, Name: req.Name, Cwd: cwd, Options: req.Options, Runtime: req.Runtime,
 			Prompt: req.Prompt, Replyable: req.Replyable, Account: req.Account, Login: req.Login, Clone: req.Clone,
-			HostDropsAck: req.HostDropsAck,
+			HostDropsAck: req.HostDropsAck, HostOwnLogin: own, Actor: spawnActor(r),
 		}
 		info, err := a.Sessions.Spawn(spec)
 		if err != nil {

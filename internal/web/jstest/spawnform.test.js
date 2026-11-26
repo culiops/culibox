@@ -348,3 +348,11 @@ test("T15: only the newest request is current", () => {
   assert.strictEqual(l.current(a), false);
   assert.strictEqual(l.current(b), true);
 });
+
+test("spawnPayload sends host_own_login only when it holds a kind; Duplicate never carries it (#375)", () => {
+  assert.deepEqual(spawnPayload({ agent: "p", runtime: "host", hostOwnLogin: ["github"] }).host_own_login, ["github"]);
+  assert.ok(!("host_own_login" in spawnPayload({ agent: "p", runtime: "host", hostOwnLogin: [] })));
+  assert.ok(!("host_own_login" in spawnPayload({ agent: "p", runtime: "host" })));
+  const pre = spawnPrefill({ agent: "p", runtime: "host", host_own_login: ["github"] });
+  assert.ok(!("host_own_login" in pre) && !("hostOwnLogin" in pre));
+});

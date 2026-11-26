@@ -1155,3 +1155,14 @@ test("full access (#374): the connection row says \"full access\" in red and a v
   assert.strictEqual(evCells(rows[0])[2].title, v, "the subject cell title holds the verdict");
   assert.ok(!rows[1].querySelectorAll("span").some((n) => n.textContent === " \u00b7 full access"), "an untagged mint has none");
 });
+
+test("a host session on this machine's login shows 'Uses this machine's login' after 'Dropped on Host', in the same grid (#375)", async () => {
+  const { host } = await mount(claudeBox({ runtime: "host", host_dropped: ["AWS binding"], host_own_login: ["github"] }), status());
+  const kvs = host.querySelector(".ac-kvs");
+  const at = kvs.children.findIndex((c) => c.textContent === "Uses this machine's login");
+  assert.ok(at >= 0 && at % 2 === 0, "a label cell");
+  assert.strictEqual(kvs.children[at + 1].textContent, "GitHub");
+  assert.strictEqual(kvs.children[at - 1].textContent, "AWS binding", "right after the Dropped on Host value");
+  const none = await mount(claudeBox({ runtime: "host" }), status());
+  assert.ok(!none.host.querySelector(".ac-kvs").children.some((c) => c.textContent === "Uses this machine's login"));
+});

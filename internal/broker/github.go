@@ -361,7 +361,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	if c, ok := b.ghCache[key]; ok && c.nonce == nonce && c.scopeKey == base.ScopeHash &&
 		c.expires.Sub(now) > ghRefreshMargin {
 		b.mu.Unlock()
-		writeGitHubToken(w, c.token, c.expires)
+		writeGitHubToken(w, c.token, c.expires, gb.EffectivePermissions())
 		return
 	}
 	if !b.allowLocked(sid, bucketMint, now) {
@@ -424,7 +424,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	b.ghIssued[sid] = append(b.ghIssued[sid], issued{value: m.Value, owner: entry.Owner, installation: m.InstallationID, expires: m.ExpiresAt})
 	b.ghCache[key] = ghCached{token: m.Value, expires: m.ExpiresAt, nonce: nonce, scopeKey: base.ScopeHash}
 	b.mu.Unlock()
-	writeGitHubToken(w, m.Value, m.ExpiresAt)
+	writeGitHubToken(w, m.Value, m.ExpiresAt, gb.EffectivePermissions())
 }
 
 // serveGitHubPAT answers for an owner bound to a PAT entry: the value is read
@@ -480,7 +480,7 @@ func (b *Broker) serveGitHubPAT(w http.ResponseWriter, base Row, sv SessionView,
 		replyErr(w, http.StatusServiceUnavailable, "CuliBox could not audit this token fetch, so it was not issued; retry shortly")
 		return
 	}
-	writeGitHubToken(w, string(value), time.Time{})
+	writeGitHubToken(w, string(value), time.Time{}, nil)
 }
 
 // ghMintFailed maps a minter error to its outcome, audit row and reply.
@@ -524,12 +524,18 @@ func hasRepo(repos []string, name string) bool {
 	return false
 }
 
-func writeGitHubToken(w http.ResponseWriter, token string, expires time.Time) {
+// writeGitHubToken answers a token request. perms (an App binding's effective
+// permissions) lets the Host git helper say before the 403 that the binding
+// cannot push; a PAT reply passes nil and stays {"token"} only.
+func writeGitHubToken(w http.ResponseWriter, token string, expires time.Time, perms map[string]string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	out := map[string]string{"token": token}
+	out := map[string]any{"token": token}
 	if !expires.IsZero() { // a PAT has no expiry the broker knows
 		out["expires_at"] = expires.UTC().Format(time.RFC3339)
+	}
+	if perms != nil {
+		out["permissions"] = perms
 	}
 	_ = json.NewEncoder(w).Encode(out)
 }

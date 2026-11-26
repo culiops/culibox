@@ -326,7 +326,7 @@ func TestHostForEnvHasNoSecretAndExactNames(t *testing.T) {
 		t.Error("AGENTBOX_GH_REAL set without a real gh")
 	}
 	// Every name HostFor sets is in the strip list, so a profile cannot shadow one.
-	strip := h.HostStripEnv(allKinds())
+	strip := h.HostStripEnv(allKinds(), false)
 	for k := range want {
 		if !slices.Contains(strip, k) {
 			t.Errorf("HostStripEnv lacks %s", k)
@@ -339,7 +339,7 @@ func TestHostForEnvHasNoSecretAndExactNames(t *testing.T) {
 			t.Errorf("HostStripEnv lacks %s", k)
 		}
 	}
-	if s := h.HostStripEnv(config.Bindings{AWSConns: twoConns()}); slices.Contains(s, "GH_TOKEN") {
+	if s := h.HostStripEnv(config.Bindings{AWSConns: twoConns()}, false); slices.Contains(s, "GH_TOKEN") {
 		t.Error("an AWS-only session strips GH_TOKEN")
 	}
 	// A relative gh would run the shim again: refused.
@@ -740,5 +740,59 @@ func TestWriteHostMCPNeedsItsDir(t *testing.T) {
 	h := hostHooks(t, shortDir(t), nil)
 	if _, err := h.WriteHostMCP("nobody", []byte("{}")); err == nil {
 		t.Fatal("wrote an MCP config for a session with no dir")
+	}
+}
+
+// #375: only a Host session that takes AWS from this machine's login keeps the
+// user's AWS names; every other bound Host session strips them as before.
+func TestHostStripEnvPerKind(t *testing.T) {
+	h := Hooks{}
+	awsNames := []string{"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_CONFIG_FILE", "TF_CLI_ARGS_plan"}
+	always := []string{"AGENTBOX_BROKER", TokenEnv, HostDirEnv, GHRealEnv}
+	has := func(s []string, names ...string) bool {
+		for _, n := range names {
+			if !slices.Contains(s, n) {
+				return false
+			}
+		}
+		return true
+	}
+	hasAny := func(s []string, names ...string) bool {
+		for _, n := range names {
+			if slices.Contains(s, n) {
+				return true
+			}
+		}
+		return false
+	}
+	for name, bs := range map[string]config.Bindings{
+		"github only": {GitHub: ghTwoOwners()},
+		"aws only":    {AWSConns: twoConns()},
+		"tokens only": {Tokens: []config.StaticToken{{Name: "t"}}},
+	} {
+		s := h.HostStripEnv(bs, false)
+		if !has(s, awsNames...) || !has(s, always...) {
+			t.Errorf("%s, keepAWS=false: strip %v lacks an AWS or always name", name, s)
+		}
+		if got := slices.Contains(s, "GH_TOKEN"); got != (bs.GitHub != nil) {
+			t.Errorf("%s: GH_TOKEN stripped = %v", name, got)
+		}
+	}
+	s := h.HostStripEnv(config.Bindings{GitHub: ghTwoOwners()}, true)
+	if hasAny(s, awsNames...) || hasAny(s, StaticCredEnv...) || !slices.Contains(s, "GH_TOKEN") || !has(s, always...) {
+		t.Errorf("keepAWS with GitHub bound: strip = %v", s)
+	}
+	s = h.HostStripEnv(config.Bindings{Tokens: []config.StaticToken{{Name: "t"}}}, true)
+	if hasAny(s, awsNames...) || slices.Contains(s, "GH_TOKEN") || !has(s, always...) {
+		t.Errorf("keepAWS, tokens only: strip = %v", s)
+	}
+	// The box list is unchanged.
+	want := append(slices.Clone(StaticCredEnv), "AWS_CONFIG_FILE", "AWS_PROFILE", "AWS_DEFAULT_PROFILE",
+		"AWS_REGION", "AWS_DEFAULT_REGION", "AGENTBOX_BROKER", TokenEnv, "TF_CLI_ARGS_plan")
+	got := StripEnv()
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("StripEnv = %v, want %v", got, want)
 	}
 }

@@ -167,6 +167,9 @@ function spawnPayload(f) {
   if (v.login) req.login = true;
   // host_drops_bindings: the user said yes to a Host run of a profile with bindings (its default credentials there, #360) or box settings Host drops (hostDropsConfirm). Without it the server refuses.
   if (v.hostDropsBindings === true) req.host_drops_bindings = true;
+  // host_own_login (#375): the kinds the user put on this machine's login for a Host session. Only a non-empty pick is sent;
+  // spawnPrefill never carries it, so Duplicate and the next spawn start on the binding.
+  if (Array.isArray(v.hostOwnLogin) && v.hostOwnLogin.length) req.host_own_login = [...v.hostOwnLogin];
   const prompt = String(v.prompt || "").trim();
   if (prompt && promptFieldVisible(v.profile)) req.prompt = prompt;
   if (repliesFieldVisible(v.profile)) req.replyable = !!v.replyable;

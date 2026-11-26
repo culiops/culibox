@@ -770,3 +770,11 @@ test("accessModel: a mint row with a full_access verdict carries it; others carr
     { time: iso(-2), provider: "aws", entry: "sbx", outcome: "minted" }] }) });
   assert.deepStrictEqual(m.events.map((e) => e.fullAccess), [v, ""]);
 });
+
+test("containment.hostOwnLogin: the row for a Host session on this machine's login, null without a choice (#375)", () => {
+  const row = (s) => model({ session: s, aws: null }).containment.hostOwnLogin;
+  const c = row(sess({ runtime: "host", host_own_login: ["github", "aws"] }));
+  assert.strictEqual(c.k + ": " + c.v, "Uses this machine's login: GitHub, AWS");
+  assert.strictEqual(row(sess({ runtime: "host" })), null);
+  assert.strictEqual(row(sess({ runtime: "box", host_own_login: ["github"] })), null);
+});

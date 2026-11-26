@@ -117,6 +117,11 @@ type sessionMeta struct {
 	// so the card still says so after a daemon restart. Records from before
 	// lack it and read as none.
 	HostDropped []string `json:"host_dropped,omitempty"`
+	// HostOwnLogin and HostOwnActor are Session.HostOwnLogin and who chose it
+	// (#375), so the card still says so after a daemon restart and a Restart
+	// carries both. Records from before lack them and read as none.
+	HostOwnLogin []string `json:"host_own_login,omitempty"`
+	HostOwnActor string   `json:"host_own_login_actor,omitempty"`
 	// HostBroker marks a host session whose bindings reach it through its own
 	// broker socket (#360), so a daemon restart reopens that socket (with the
 	// stored nonce) and the start-up sweep keeps its dir. Records from before

@@ -2724,6 +2724,7 @@
   #spawn > #spawn-replies-row { order: 7; }
   #spawn > #spawn-warn-row { order: 8; }
   #spawn > #spawn-adv { order: 9; }
+  #spawn > #spawn-ownlogin { order: 10; }
   #spawn > #spawn-reach { order: 10; }
   #spawn > #spawn-unlock { order: 11; }
   #spawn > #spawn-err { order: 12; }
@@ -2829,7 +2830,7 @@
   /* The reach box (frame M4.1): what this session will be able to touch, from the profile. A --bg card with no border,
      the title, then ONE label/value grid (88px | the rest, 16px and 2px apart, baselines aligned) so every value starts
      on the same line. A row is only the grid's two cells (display: contents). A path in a value is machine text --t-sm. */
-  #spawn-reach { display: flex; flex-direction: column; gap: var(--sp-2); box-sizing: border-box; padding: var(--sp-3) var(--sp-4); background: var(--bg); border-radius: var(--r-card); }
+  #spawn-reach, #spawn-ownlogin:not([hidden]) { display: flex; flex-direction: column; gap: var(--sp-2); box-sizing: border-box; padding: var(--sp-3) var(--sp-4); background: var(--bg); border-radius: var(--r-card); }
   .sr-title { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-semibold); color: var(--fg); }
   .sr-grid { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: var(--sp-4); row-gap: 2px; align-items: baseline; }
   .sr-row { display: contents; }
@@ -2840,6 +2841,11 @@
   .sr-k:not(.has-ic) { padding-left: 20px; }
   .sr-v { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
   .sr-path { font-family: var(--font-mono); font-size: var(--t-sm); line-height: var(--lh-sm); }
+  /* #375: the per-kind "Use the binding / Use this machine's login" choice, a Host session on a profile with bindings. */
+  .sr-own { display: flex; flex-direction: column; gap: 2px; }
+  .sr-own-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .sr-own-opts { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); }
+  .sr-own-note { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--amber); }
   #spawn-reach code { font-family: var(--font-mono); font-size: var(--t-xs); }
   .sr-row.tone-warn .sr-v { color: var(--amber); }
   .sr-prod {

@@ -246,6 +246,18 @@ function hostDroppedRow(s) {
   return { k: "Dropped on Host", v: join(d) };
 }
 
+// hostOwnLoginRow: the Access tab's row for a Host session that took GitHub and/or AWS from this machine's own login instead of
+// the binding (Info.host_own_login, #375): "Uses this machine's login: GitHub". null for a Box session or without one.
+function hostOwnLoginRow(s) {
+  if (!s || s.runtime !== "host") return null;
+  const t = ownLoginDep();
+  const v = t.ownLoginText(s.host_own_login);
+  return v ? { k: t.OWN_LOGIN_ROW, v } : null;
+}
+function ownLoginDep() {
+  return typeof ownLoginText === "function" ? { ownLoginText, OWN_LOGIN_ROW } : require("./tier.js");
+}
+
 // lockedRow: the rail's "locked" row for a boxed session whose workspace files
 // are locked on the Mac while it runs (Info.locked_files, macOS #96). null
 // without any, like dropsRow. The names are workspace file names the server
@@ -1418,5 +1430,5 @@ function stRailRows(st) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, policyRow, dropLabel, toastDropsSuffix, dropsRow, hostDroppedRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
+  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, policyRow, dropLabel, toastDropsSuffix, dropsRow, hostDroppedRow, hostOwnLoginRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
 }

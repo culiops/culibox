@@ -604,7 +604,7 @@ type BrokerHooks interface {
 	SweepHostDirs(keep []string)
 	// HostStripEnv names every variable a bound Host session must not inherit
 	// before HostFor's env is added (token entries' names excepted).
-	HostStripEnv(bs config.Bindings) []string
+	HostStripEnv(bs config.Bindings, keepAWS bool) []string
 }
 
 // EgressHooks is what spawning a bound session needs from the egress proxy,
@@ -872,6 +872,10 @@ type Info struct {
 	// a profile only; absent otherwise, so every other session's wire shape is
 	// unchanged.
 	HostDropped []string `json:"host_dropped,omitempty"`
+	// HostOwnLogin is what this host session takes from the machine's own
+	// login instead of its profile's binding (#375): "github" and/or "aws".
+	// Absent for a box session and for a host session that kept every binding.
+	HostOwnLogin []string `json:"host_own_login,omitempty"`
 	// HostBroker: a host session whose bindings reach it through the broker, on
 	// its own socket (#360). Absent otherwise.
 	HostBroker bool `json:"host_broker,omitempty"`
@@ -985,6 +989,11 @@ type Session struct {
 	// HostDropped is Info.HostDropped; immutable after publication, read
 	// without the lock; Info hands out a copy.
 	HostDropped []string
+	// HostOwnLogin is Info.HostOwnLogin; hostOwnActor is who asked for it (the
+	// spawn's Actor, "web" when empty), so a Restart audits the same actor.
+	// Both immutable after publication; neither is on the wire but the first.
+	HostOwnLogin []string
+	hostOwnActor string
 	// HostBroker is Info.HostBroker: a host session holding (or, restored after
 	// a restart whose HostFor failed, owning) its own broker socket and dir.
 	// HostDir is that dir ("" when unknown); never on the wire. Both immutable
@@ -1515,6 +1524,7 @@ func (s *Session) Info() Info {
 	in.EgressChange = s.egressChangeLocked()
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	in.HostDropped = slices.Clone(s.HostDropped)
+	in.HostOwnLogin = slices.Clone(s.HostOwnLogin)
 	in.HostBroker = s.HostBroker
 	in.Clone = s.Clone.copy()
 	in.HostReturn = copyReturns(s.HostReturn)
@@ -1764,6 +1774,7 @@ type Manager struct {
 	egressAll   bool          // every boxed spawn needs egress; see SetEgressAll
 	clone       CloneHooks    // nil = clone mode unavailable; clone profiles are refused
 	handback    HandbackHooks // nil = no scan of an in-place workspace at a session's exit
+	spawnAudit  SpawnAudit    // nil = a host_own_login spawn is refused (#375)
 	home        string        // daemon user's home; where a host session's ~/.claude lives
 	stateDir    string        // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
 	costSrc     CostSource    // prices a session's conversations (analytics); nil = off, no session reports a cost
@@ -2219,6 +2230,38 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// its policy must not split the binding hash a host session's files carry.
 	if r, ok := m.launcher.(EgressResolver); ok && runtime == config.RuntimeBox {
 		egressAllow, egressOpen = r.EgressFor(spec.Agent)
+	}
+	// host_own_login (#375): a Host run takes GitHub and/or AWS from this
+	// machine's own login. The kind leaves the bindings here, before the guard
+	// and the broker see them. A Box run ignores the field.
+	own, err := launcher.NormalizeHostOwnLogin(spec.HostOwnLogin)
+	if err != nil {
+		return nil, profileRefusal(spec.Agent, err.Error())
+	}
+	if runtime == config.RuntimeBox {
+		own = nil
+	}
+	ownActor := spec.Actor
+	if ownActor == "" {
+		ownActor = "web"
+	}
+	if len(own) > 0 {
+		bound := boundOwnLoginKinds(binding, awsConns, ghBinding, pats)
+		var missing []string
+		for _, k := range own {
+			if !slices.Contains(bound, k) {
+				missing = append(missing, k)
+			}
+		}
+		if len(missing) > 0 {
+			return nil, profileRefusal(spec.Agent, "host_own_login names "+strings.Join(missing, " and ")+", which this profile does not bind")
+		}
+		if slices.Contains(own, launcher.OwnLoginGitHub) {
+			ghBinding, pats = nil, nil
+		}
+		if slices.Contains(own, launcher.OwnLoginAWS) {
+			binding, awsConns = nil, nil
+		}
 	}
 	bs := config.Bindings{AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats,
 		EgressAllow: egressAllow, EgressOpen: egressOpen}
@@ -2847,7 +2890,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// the session itself will have, never install it (D7). Without it the
 		// run goes ahead without its bindings, and says why.
 		if launcher.SessionLookPath(env, "node") == "" {
-			hostDropped = append([]string{hostNodeMissingItem(hostGuard)}, hostDropped...)
+			hostDropped = append([]string{hostNodeMissingItem(ownLoginGuard(hostGuard, own))}, hostDropped...)
 			log.Printf("session %s: profile %q runs on Host without its %s: node was not found on this session's PATH; CuliBox's credential helpers need it",
 				id, spec.Agent, bindingNames(bs))
 			binding, awsConns, ghBinding, tokens, pats = nil, nil, nil, nil, nil
@@ -2872,7 +2915,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// after the launcher (a box's flags are known before it): with
 			// something to add, the launcher runs again with them, and its env
 			// replaces the first run's.
-			flags, drops, ferr := hostAgentFlags(brk, id, dir, bin, bs, env, bundleDrops)
+			flags, drops, ferr := hostAgentFlags(brk, id, dir, bin, bs, own, env, bundleDrops)
 			if ferr != nil {
 				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, ferr)
 			}
@@ -2893,7 +2936,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// env says about AWS, GitHub or a token entry must neither bypass the
 			// broker nor shadow one of its values. Every name set below is set
 			// exactly once.
-			strip := append(slices.Clone(brk.HostStripEnv(bs)), brokerTokenEnv, "PATH") // never append into the hooks' own slice
+			strip := append(slices.Clone(brk.HostStripEnv(bs, slices.Contains(own, launcher.OwnLoginAWS))), brokerTokenEnv, "PATH") // never append into the hooks' own slice
 			for _, e := range bs.Tokens {
 				strip = append(strip, e.Names()...)
 			}
@@ -2912,6 +2955,14 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 
 	if len(hostDropped) > 0 {
 		log.Printf("session %s: host run of profile %q without %s", id, spec.Agent, config.JoinKinds(hostDropped))
+	}
+	if len(own) > 0 {
+		log.Printf("session %s: host run of profile %q uses this machine's login for %s", id, spec.Agent, config.JoinKinds(own))
+		// The row is written before the process starts, and a failed write
+		// refuses the spawn: the deferred cleanup releases the Host socket.
+		if err := m.auditHostOwnLogin(HostOwnLoginRecord{SessionID: id, Profile: spec.Agent, Cwd: spec.Cwd, Actor: ownActor, Kinds: slices.Clone(own)}); err != nil {
+			return nil, err
+		}
 	}
 
 	// Every refusal of a Host spawn is behind us: bring home the work of any
@@ -2991,6 +3042,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.EgressAllow, sess.EgressOpen = egressAllow, egressOpen
 	sess.egress = newEgressLive(egressPolicy{Allow: egressAllow, Open: egressOpen}, nil)
 	sess.HostDropped = slices.Clone(hostDropped)
+	sess.HostOwnLogin = slices.Clone(own)
+	if len(own) > 0 {
+		sess.hostOwnActor = ownActor
+	}
 	sess.HostBroker, sess.HostDir = heldHost, hostDir // published: the session now owns the Host socket and dir
 	sess.BrokerNonce = nonce
 	sess.EgressNonce = enonce
@@ -3029,7 +3084,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Workspace: wsPath, TranscriptKey: transcriptKey, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, EgressLive: liveMeta, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), HostBroker: heldHost, Clone: cloneInfo.copy(), Exclusive: exclusive,
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, EgressLive: liveMeta, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, HostDropped: slices.Clone(hostDropped), HostOwnLogin: slices.Clone(own), HostOwnActor: sess.hostOwnActor, HostBroker: heldHost, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, WorkspaceRoot: wsRoot, LockedFiles: slices.Clone(lockedFiles),
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
@@ -3173,7 +3228,7 @@ func tokenServers(bs config.Bindings, drops []bundle.Drop) ([]bundle.EntryServer
 // --mcp-config stays, and --strict-mcp-config is never added, so the user's
 // own servers keep working. drops is what the caller holds; the result adds a
 // row for each server left out.
-func hostAgentFlags(brk BrokerHooks, id, dir, bin string, bs config.Bindings, env []string, drops []bundle.Drop) ([]string, []bundle.Drop, error) {
+func hostAgentFlags(brk BrokerHooks, id, dir, bin string, bs config.Bindings, own []string, env []string, drops []bundle.Drop) ([]string, []bundle.Drop, error) {
 	var flags []string
 	if takesMCPConfig(bin) && len(bs.Tokens) > 0 {
 		entries, d := tokenServers(bs, drops)
@@ -3204,7 +3259,7 @@ func hostAgentFlags(brk BrokerHooks, id, dir, bin string, bs config.Bindings, en
 		}
 	}
 	if appendsSystemPrompt(bin) {
-		if note := hostCredGuidance(bs); note != "" {
+		if note := hostCredGuidance(bs, own); note != "" {
 			flags = append(flags, "--append-system-prompt", note)
 		}
 	}
@@ -4160,6 +4215,10 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	}
 	sess.BundleDrops = md.BundleDrops
 	sess.HostDropped = slices.Clone(md.HostDropped)
+	if runtime == config.RuntimeHost {
+		sess.HostOwnLogin = slices.Clone(md.HostOwnLogin)
+		sess.hostOwnActor = md.HostOwnActor
+	}
 	sess.HostBroker = md.HostBroker && runtime == config.RuntimeHost
 	sess.HostDir = hostDir
 	sess.Clone = md.Clone.copy()

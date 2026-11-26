@@ -66,6 +66,16 @@ type SpawnSpec struct {
 	// lift a box_only lock, and it is never persisted: a restart of a host
 	// session sets it itself.
 	HostDropsAck bool
+	// HostOwnLogin names the credential kinds (OwnLoginGitHub, OwnLoginAWS) a
+	// host run takes from this machine's own login instead of the profile's
+	// binding for that kind. Chosen per spawn, never stored in the profile.
+	// Normalized by NormalizeHostOwnLogin. Applied by the session layer's Spawn
+	// (ignored for a box run); Build never reads it.
+	HostOwnLogin []string
+	// Actor is who asked for the spawn, as the audit names it ("web" for the
+	// signed-in browser, "bearer" for a token). "" means "web". Set by the web
+	// layer; the session layer's audit reads it; Build never reads it.
+	Actor string
 	// ExtraArgs are flags the session layer adds (the boxed config bundle's).
 	// Build places them after the option flags and BEFORE the "--" that ends
 	// options — appended afterwards, they would become operands.
@@ -74,6 +84,37 @@ type SpawnSpec struct {
 	// the web layer's shell endpoint, never from a spawn request body. Build
 	// ignores it; it is never put in an agent's env.
 	ParentID string
+}
+
+// The credential kinds a host run can take from this machine's own login.
+const (
+	OwnLoginGitHub = "github"
+	OwnLoginAWS    = "aws"
+)
+
+// NormalizeHostOwnLogin validates a host_own_login list: only the two known
+// kinds, duplicates collapsed, in a fixed order (github, then aws). An empty
+// list is nil. The error names the offending value.
+func NormalizeHostOwnLogin(kinds []string) ([]string, error) {
+	var gh, aws bool
+	for _, k := range kinds {
+		switch k {
+		case OwnLoginGitHub:
+			gh = true
+		case OwnLoginAWS:
+			aws = true
+		default:
+			return nil, fmt.Errorf("host_own_login: unknown kind %q (want %s or %s)", k, OwnLoginGitHub, OwnLoginAWS)
+		}
+	}
+	var out []string
+	if gh {
+		out = append(out, OwnLoginGitHub)
+	}
+	if aws {
+		out = append(out, OwnLoginAWS)
+	}
+	return out, nil
 }
 
 // Builder composes argv + env for a spawn.

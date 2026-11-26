@@ -186,6 +186,9 @@ func egressParts(r rawRow) []Part {
 // A profile row adds " · <detail>": the names of the fields an update changed
 // (#330), never their values. Other kinds keep their detail off the page.
 func settingsParts(r rawRow) []Part {
+	if r.b == sessionKind && r.a == hostOwnLoginAction {
+		return hostOwnLoginParts(r)
+	}
 	kind, action := words(r.b), words(r.a)
 	if r.c == "" {
 		return compact(txt(joinNonEmpty(kind, action)))
@@ -201,6 +204,33 @@ func settingsParts(r rawRow) []Part {
 		tail += " · " + r.e
 	}
 	return compact(txt(lead), ident(r.c), txt(tail))
+}
+
+// sessionKind and hostOwnLoginAction are the cred_audit kind and action of a
+// Host session started on this machine's own login (web/broker.CredHostOwnLogin).
+const (
+	sessionKind        = "session"
+	hostOwnLoginAction = "host_own_login"
+)
+
+// hostOwnLoginParts: "Host session of <name> uses this machine's login for
+// GitHub, AWS". The detail is "<kinds> · <session id> · <cwd>"; only the kinds
+// reach the page.
+func hostOwnLoginParts(r rawRow) []Part {
+	kinds, _, _ := strings.Cut(r.e, " · ")
+	var labels []string
+	for _, k := range strings.Split(kinds, ",") {
+		switch k = strings.TrimSpace(k); k {
+		case "":
+		case "github":
+			labels = append(labels, "GitHub")
+		case "aws":
+			labels = append(labels, "AWS")
+		default:
+			labels = append(labels, k)
+		}
+	}
+	return compact(txt("Host session of "), ident(r.c), txt(" uses this machine's login for "+strings.Join(labels, ", ")))
 }
 
 // profileKind is the cred_audit kind of a profile change (web.profileKind).
@@ -297,10 +327,13 @@ func joinNonEmpty(parts ...string) string {
 }
 
 // actorName shows the web UI's own audit actor ("web", see web.storeActor) as
-// "you"; any other actor is shown as recorded.
+// "you" and an API bearer token as "API token"; any other actor is shown as recorded.
 func actorName(a string) string {
-	if a == "web" {
+	switch a {
+	case "web":
 		return "you"
+	case "bearer":
+		return "API token"
 	}
 	return a
 }

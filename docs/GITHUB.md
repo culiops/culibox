@@ -63,6 +63,16 @@ An owner bound with a personal access token shows `permissions: the token's own 
 
 **Egress.** A GitHub-bound box may also reach `api.github.com`, `codeload.github.com`, `results-receiver.actions.githubusercontent.com` and `productionresultssa<N>.blob.core.windows.net` (the Actions log shards `productionresultssa0` to `productionresultssa199` except 22, never `*.blob.core.windows.net`), plus the binding's `egress_allow`. `github.com` is already in the default allowlist.
 
+### Push from Host
+
+A binding made with `contents: read` cannot push. On Host, pick "Use this machine's login" for GitHub in New session: the session then uses your own git credential helpers, `gh` login and SSH keys, and CuliBox sets and strips nothing for GitHub. The choice is per spawn and is never stored in the profile. The first time a Host session fetches a GitHub credential from a binding that cannot push (any git network command: fetch, clone or push), the git helper prints this once per session on stderr:
+
+```text
+agentbox: the GitHub binding can read but not push (contents: read); to push from Host, start a session with "Use this machine's login" for GitHub.
+```
+
+A broker refusal on Host gets the same pointer. A box never pushes through your login, and its helpers never print this hint.
+
 ## What this does and does not protect against
 
 - **The agent can read the token while it runs.** It can run `git credential fill`, read the `gh` child's environment, or call the broker socket itself. The helper design prevents accidental exposure only: the token is not inherited by every child process or MCP server, does not show up in `env` dumps and is not pasted into transcripts. It does not stop a deliberate read.

@@ -433,7 +433,12 @@ makes the Host start fail with the path and the cap in the message, and you
 shorten the directory. The helpers need `node` on the session's PATH (a
 Homebrew `node` counts when `/opt/homebrew/bin` is on the PATH the session
 gets); without it the session starts without its bindings and says why.
-Bindings on Host have not been verified on a Mac yet.
+When a Host session uses this machine's login for a kind (GitHub or AWS),
+CuliBox sets and strips nothing for that kind. So `osxkeychain`, a
+Keychain-backed `gh` and your `~/.aws` (SSO cache included) apply. What a
+daemon started by launchd passes to the session follows `base: login`.
+Bindings on Host, and your own login on Host, have not been verified on a
+Mac yet (see the Mac test guide, section 31).
 
 ### In-place guard
 

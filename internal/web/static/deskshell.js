@@ -29,13 +29,14 @@ function deskDep(name) {
     connStateLabel: typeof connStateLabel === "function" ? connStateLabel : null,
     spawnIsShellProfile: typeof spawnIsShellProfile === "function" ? spawnIsShellProfile : null,
     claudeKindOf: typeof claudeKindOf === "function" ? claudeKindOf : null,
+    hostOwnLoginRow: typeof hostOwnLoginRow === "function" ? hostOwnLoginRow : null,
   };
   if (g[name]) return g[name];
   const mod = { needsYou: "./attention.js", attentionClass: "./attention.js", activityClass: "./activity.js", cardContent: "./attention.js", plainSummary: "./attention.js",
     needLabel: "./attention.js", connSSOSources: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
     isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js",
     isNestedShell: "./shellnest.js", shellChildren: "./shellnest.js", shortModel: "./analytics.js", connStateLabel: "./activity.js",
-    spawnIsShellProfile: "./spawnpreview.js", claudeKindOf: "./claudemark.js" }[name];
+    spawnIsShellProfile: "./spawnpreview.js", claudeKindOf: "./claudemark.js", hostOwnLoginRow: "./steerrail.js" }[name];
   return require(mod)[name];
 }
 
@@ -190,7 +191,10 @@ function deskContainmentChip(s, boxRuntime) {
   const t = deskDep("tierBadge")(s, boxRuntime);
   if (!t) return null;
   const host = t.tone === "danger";
-  return { text: t.text, tone: host ? "host" : "box", title: t.title, icon: host ? "host" : s && s.clone_of ? "clone" : "box" };
+  // #375: a Host session that took GitHub and/or AWS from this machine's login says so after the tier's own title.
+  const own = host ? deskDep("hostOwnLoginRow")(s) : null;
+  const title = own ? t.title + " " + own.k + ": " + own.v + "." : t.title;
+  return { text: t.text, tone: host ? "host" : "box", title, icon: host ? "host" : s && s.clone_of ? "clone" : "box" };
 }
 
 const DESK_CLONE_TITLE = "Contained: runs in a box on a private copy of the repo.";

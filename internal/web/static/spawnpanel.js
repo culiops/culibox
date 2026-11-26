@@ -239,6 +239,74 @@ function spawnPlistSelect() {
   }
 }
 
+// #375: which credential kinds a Host session takes from this machine's own login instead of the binding. Per spawn: forgotten
+// on a profile change (spawnOwnLoginReset), never stored, never sent from the phone or for a Box.
+let spawnOwnLogin = [];
+
+function spawnOwnLoginReset() {
+  spawnOwnLogin = [];
+}
+
+function spawnOwnLoginSet(kind, mine) {
+  spawnOwnLogin = spawnOwnLogin.filter((k) => k !== kind);
+  if (mine) spawnOwnLogin.push(kind);
+  renderSpawnOwnLogin();
+  if (typeof renderTierPick === "function") renderTierPick();
+  syncSpawnPreview();
+}
+
+// spawnOwnLoginPicked: the kinds on this machine's login, in the wire's fixed order, only those the profile on screen offers,
+// and only on the desktop with the Host tier picked.
+function spawnOwnLoginPicked() {
+  if (!spawnPanelOn() || spawnCurrentTier() !== "host") return [];
+  const offered = ownLoginChoices(currentProfile()).map((c) => c.kind);
+  return ["github", "aws"].filter((k) => offered.includes(k) && spawnOwnLogin.includes(k));
+}
+
+// renderSpawnOwnLogin: one row per offered kind, "Use the binding" (default) or "Use this machine's login", and the GitHub
+// note when the binding cannot push. Hidden and empty off the desktop, on Box, or when the profile binds neither kind.
+function renderSpawnOwnLogin() {
+  const box = $("spawn-ownlogin");
+  if (!box) return;
+  // The rebuild below replaces the focused radio: remember it and focus its twin, so arrow keys keep working.
+  const ae = typeof document !== "undefined" ? document.activeElement : null;
+  const fname = ae && ae.getAttribute && box.contains && box.contains(ae) ? ae.getAttribute("name") : null;
+  const fval = fname ? ae.getAttribute("value") : null;
+  const choices = spawnPanelOn() && spawnCurrentTier() === "host" ? ownLoginChoices(currentProfile()) : [];
+  if (!choices.length) {
+    box.hidden = true;
+    box.replaceChildren();
+    return;
+  }
+  box.hidden = false;
+  const kids = [spawnPanelEl("div", "sr-title", "Credentials on Host")];
+  for (const c of choices) {
+    const mine = spawnOwnLogin.includes(c.kind);
+    const row = spawnPanelEl("div", "sr-own");
+    const opts = spawnPanelEl("div", "sr-own-opts");
+    const opt = (value, text, on) => {
+      const lab = spawnPanelEl("label", "spawn-check");
+      const r = spawnPanelEl("input");
+      r.type = "radio";
+      r.setAttribute("name", "ownlogin-" + c.kind);
+      r.setAttribute("value", value);
+      r.checked = on;
+      r.onchange = () => spawnOwnLoginSet(c.kind, value === "machine");
+      lab.append(r, spawnPanelEl("span", "", text));
+      return lab;
+    };
+    opts.append(opt("binding", OWN_LOGIN_BINDING, !mine), opt("machine", OWN_LOGIN_MACHINE, mine));
+    row.append(spawnPanelEl("div", "sr-own-k", c.label), opts);
+    if (c.note && !mine) row.append(spawnPanelEl("div", "sr-own-note", c.note));
+    kids.push(row);
+  }
+  box.replaceChildren(...kids);
+  if (fname) {
+    const again = box.querySelector('input[name="' + fname + '"][value="' + fval + '"]');
+    if (again && again.focus) again.focus();
+  }
+}
+
 // renderSpawnReach paints the "This agent will be able to" box for what the form
 // holds right now: the picked profile, the account and tier on screen, the
 // workspace typed. The instance's connections and tokens come from /api/meta
@@ -266,6 +334,7 @@ function renderSpawnReach() {
     cwdFull: spawnCwdFor(w),
     meta: { aws_connections: awscEntries, static_tokens: stEntries },
     creds: spawnCreds,
+    ownLogin: spawnOwnLoginPicked(),
     bundleImports,
     desktop: !mobileActive(window.innerWidth), // "starting" on the desktop, the phone's "spawn" otherwise
   });
@@ -336,6 +405,7 @@ function syncSpawnPreview() {
     return;
   }
   spawnPlistSelect();
+  renderSpawnOwnLogin();
   renderSpawnReach();
   if (nm) nm.placeholder = spawnNamePlaceholder(getCwd());
 }

@@ -223,10 +223,16 @@ func hostEnv(bs config.Bindings, dir, realGH string) []string {
 }
 
 // HostStripEnv is every variable a bound Host session must not inherit before
-// HostFor's env is added: StripEnv, StripGitHubEnv and the SSH rewrites' git
-// config pair when there is a GitHub binding, and the names only Host sets.
-func (h Hooks) HostStripEnv(bs config.Bindings) []string {
-	s := StripEnv()
+// HostFor's env is added: the AWS family (unless keepAWS: the session takes AWS
+// from this machine's login), the broker's own names, StripGitHubEnv and the
+// SSH rewrites' git config pair when there is a GitHub binding, and the names
+// only Host sets.
+func (h Hooks) HostStripEnv(bs config.Bindings, keepAWS bool) []string {
+	var s []string
+	if !keepAWS {
+		s = awsStripEnv()
+	}
+	s = append(s, "AGENTBOX_BROKER", TokenEnv)
 	if bs.GitHub != nil {
 		s = append(s, StripGitHubEnv()...)
 		// StripGitHubEnv covers 0..2; Host uses up to the push rewrite's index.

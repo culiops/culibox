@@ -1,12 +1,14 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1402,5 +1404,76 @@ func TestSpawnStoreUnavailableIs503(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "DB_PASSWORD") {
 		t.Fatal("the secret name leaked into the response")
+	}
+}
+
+func TestAPI_HostOwnLoginPassedThrough(t *testing.T) {
+	m := &mockSvc{}
+	a := &API{Sessions: m}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"p","runtime":"host","host_drops_bindings":true,"host_own_login":["aws","github","aws"]}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("code %d want 201: %s", rec.Code, rec.Body)
+	}
+	if want := []string{"github", "aws"}; !slices.Equal(m.spawnedSpec.HostOwnLogin, want) {
+		t.Fatalf("HostOwnLogin = %v, want %v", m.spawnedSpec.HostOwnLogin, want)
+	}
+
+	m = &mockSvc{}
+	a = &API{Sessions: m}
+	rec = httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"p","runtime":"host"}`))
+	if rec.Code != http.StatusCreated || m.spawnedSpec.HostOwnLogin != nil {
+		t.Fatalf("code %d, HostOwnLogin = %#v, want 201 and nil", rec.Code, m.spawnedSpec.HostOwnLogin)
+	}
+}
+
+func TestAPI_HostOwnLoginUnknownKindIs400(t *testing.T) {
+	m := &mockSvc{}
+	a := &API{Sessions: m}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"p","runtime":"host","host_own_login":["gitlab"]}`))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `\"gitlab\"`) {
+		t.Fatalf("code %d body %s, want 400 naming gitlab", rec.Code, rec.Body)
+	}
+	if m.spawnedSpec.Agent != "" {
+		t.Fatalf("Spawn ran: %+v", m.spawnedSpec)
+	}
+}
+
+func TestAPI_HostOwnLoginKindTheProfileDoesNotBindIs400(t *testing.T) {
+	refusal := fmt.Errorf("profile %q: host_own_login names github, which this profile does not bind: %w", "p", box.ErrUnboxableWorkspace)
+	m := &mockSvc{spawnErr: refusal}
+	a := &API{Sessions: m}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"p","runtime":"host","host_own_login":["github"]}`))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "does not bind") {
+		t.Fatalf("code %d body %s, want 400 with the refusal", rec.Code, rec.Body)
+	}
+}
+
+func TestAPI_SpawnActorFromCredential(t *testing.T) {
+	for kind, want := range map[credKind]string{credBearer: "bearer", credCookie: "web"} {
+		m := &mockSvc{}
+		a := &API{Sessions: m}
+		r := postReq("/api/sessions", `{"agent":"p"}`)
+		r = r.WithContext(context.WithValue(r.Context(), credKindKey, kind))
+		rec := httptest.NewRecorder()
+		a.handleSessions(rec, r)
+		if rec.Code != http.StatusCreated || m.spawnedSpec.Actor != want {
+			t.Errorf("kind %v: code %d actor %q, want %q", kind, rec.Code, m.spawnedSpec.Actor, want)
+		}
+	}
+}
+
+func TestWriteSpawnErrAuditUnavailableIs503(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeSpawnErr(rec, "p", "", fmt.Errorf("x: %w", session.ErrSpawnAudit))
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusServiceUnavailable || body["code"] != "audit_unavailable" || body["error"] != session.ErrSpawnAudit.Error() {
+		t.Fatalf("got %d %v", rec.Code, body)
 	}
 }

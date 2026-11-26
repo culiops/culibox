@@ -183,7 +183,10 @@ func TestHostNoteOnlyWhenCredsReady(t *testing.T) {
 	t.Run("bound, node present", func(t *testing.T) {
 		h := newHostFlagHarness(t, true, nil)
 		s, args := spawnHostFlags(t, h)
-		want := credGuidance(s.Bindings()) + " " + hostCredLine
+		want := hostCredGuidance(s.Bindings(), nil)
+		if !strings.HasSuffix(want, hostNoPushLine(contentsOf(s.Bindings()))) {
+			t.Fatalf("the fixture's GitHub binding is read-only, so the note ends with the no-push line: %q", want)
+		}
 		if got := argAfter(args, "--append-system-prompt"); got != want {
 			t.Fatalf("note = %q\nwant   %q", got, want)
 		}
@@ -219,4 +222,59 @@ func TestHostNoteOnlyWhenCredsReady(t *testing.T) {
 			t.Fatalf("hostCredLine = %q", hostCredLine)
 		}
 	})
+}
+
+func TestHostNoteNamesMachineLoginKinds(t *testing.T) {
+	bs := config.Bindings{AWS: testBinding()}
+	base := credGuidance(bs) + " " + hostCredLine
+	if got, want := hostCredGuidance(bs, []string{"github"}), base+" Exception to that, for this session only: for GitHub the user chose this machine's own login, so use it."; got != want {
+		t.Fatalf("github:\n got %q\nwant %q", got, want)
+	}
+	if got := hostCredGuidance(bs, []string{"github", "aws"}); !strings.HasSuffix(got, " Exception to that, for this session only: for GitHub and AWS the user chose this machine's own login, so use it.") {
+		t.Fatalf("both: %q", got)
+	}
+	if got := hostCredGuidance(bs, nil); got != base {
+		t.Fatalf("none: %q", got)
+	}
+	if got := hostCredGuidance(config.Bindings{}, []string{"github"}); got != "" {
+		t.Fatalf("nothing bound: %q", got)
+	}
+}
+
+func TestHostNoteSaysAReadOnlyGitHubBindingCannotPush(t *testing.T) {
+	ro := config.Bindings{GitHub: testGitHub()}
+	if ro.GitHub.PushRoute() {
+		t.Fatal("fixture should be read-only")
+	}
+	if got := hostCredGuidance(ro, nil); !strings.Contains(got, hostNoPushLine(contentsOf(ro))) {
+		t.Fatalf("read-only binding: no push line in %q", got)
+	}
+	if strings.Contains(credGuidance(ro), "refuses a push") {
+		t.Fatal("the box note must not carry the Host push line")
+	}
+	rw := testGitHub()
+	rw.Permissions = map[string]string{"contents": "write"}
+	if got := hostCredGuidance(config.Bindings{GitHub: rw}, nil); strings.Contains(got, "refuses a push") {
+		t.Fatalf("write binding: push line in %q", got)
+	}
+}
+
+func contentsOf(bs config.Bindings) string { return bs.GitHub.EffectivePermissions()["contents"] }
+
+func TestHostNoPushLineNamesTheRealContentsValue(t *testing.T) {
+	if got := hostNoPushLine("read"); !strings.Contains(got, "(contents: read)") {
+		t.Fatalf("read: %q", got)
+	}
+	if got := hostNoPushLine(""); !strings.Contains(got, "(contents: none)") {
+		t.Fatalf("unset: %q", got)
+	}
+}
+
+func TestHostNoteMachineLoginLineReadsAsAnExceptionNotAContradiction(t *testing.T) {
+	bs := config.Bindings{AWS: testBinding()}
+	got := hostCredGuidance(bs, []string{"github"})
+	i, j := strings.Index(got, "not this machine's own logins."), strings.Index(got, "Exception to that")
+	if i < 0 || j < i {
+		t.Fatalf("the exception must follow the default line: %q", got)
+	}
 }

@@ -685,6 +685,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		return owned
 	})
 	mgr.SetHandback(hb)
+	mgr.SetSpawnAudit(spawnAudit{rec: storeAudit})
 	if h != nil {
 		h.handback = hb
 	}

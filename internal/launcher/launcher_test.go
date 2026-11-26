@@ -910,3 +910,22 @@ func TestClonesOfSetsProfile(t *testing.T) {
 		t.Fatalf("ClonesOf = %+v, want bad with no profile and good named", all)
 	}
 }
+
+func TestNormalizeHostOwnLogin(t *testing.T) {
+	for _, in := range [][]string{nil, {}} {
+		if got, err := NormalizeHostOwnLogin(in); err != nil || got != nil {
+			t.Errorf("%#v -> %#v, %v; want nil, nil", in, got, err)
+		}
+	}
+	got, err := NormalizeHostOwnLogin([]string{"aws", "github", "aws"})
+	if err != nil || !slices.Equal(got, []string{"github", "aws"}) {
+		t.Errorf("got %v, %v; want [github aws]", got, err)
+	}
+	for _, bad := range []string{"gitlab", "GitHub", ""} {
+		_, err := NormalizeHostOwnLogin([]string{"github", bad})
+		want := fmt.Sprintf("host_own_login: unknown kind %q (want github or aws)", bad)
+		if err == nil || err.Error() != want {
+			t.Errorf("%q: err = %v, want %q", bad, err, want)
+		}
+	}
+}

@@ -127,6 +127,16 @@ func (m *Manager) Restart(id string) (*Session, error) {
 	if s.CloneOf == "" {
 		clone = boolPtr(false)
 	}
+	// A host session keeps its machine-login choice (#375), minus any kind its
+	// profile no longer binds; a box session carries neither field.
+	var ownLogin []string
+	ownActor := ""
+	if s.Runtime == config.RuntimeHost {
+		ownLogin = m.ownLoginStillBound(s.Agent, s.HostOwnLogin)
+		if len(ownLogin) > 0 {
+			ownActor = s.hostOwnActor
+		}
+	}
 	ns, err := m.Spawn(launcher.SpawnSpec{
 		Agent: s.Agent, Name: name, Cwd: s.Cwd, Runtime: s.Runtime, Options: opts, Account: acct,
 		Resume: resumeFor(s.Runtime, bin, sid, s.Exclusive), ParentID: s.ParentID, Clone: clone,
@@ -135,6 +145,7 @@ func (m *Manager) Restart(id string) (*Session, error) {
 		// confirmation (and, with node on its PATH, gets its bindings through the
 		// broker again, on a new id's socket). A box session has neither.
 		HostDropsAck: s.Runtime == config.RuntimeHost,
+		HostOwnLogin: ownLogin, Actor: ownActor,
 	})
 	if err != nil {
 		s.mu.Lock()

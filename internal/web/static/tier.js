@@ -168,8 +168,18 @@ function shellSpawnPlan(neighbour) {
   return { mode: "spawn", cwd: neighbour.cwd, runtime: neighbour.runtime || "" };
 }
 
+// #375: a Host session can take GitHub and/or AWS from this machine's own login instead of the binding. The session
+// row says so with this label and the kinds (ownLoginText); the kinds are the wire's provider-neutral "github" / "aws".
+const OWN_LOGIN_ROW = "Uses this machine's login";
+const OWN_LOGIN_NAMES = { github: "GitHub", aws: "AWS" };
+function ownLoginText(kinds) {
+  const k = Array.isArray(kinds) ? kinds : [];
+  return ["github", "aws"].filter((n) => k.includes(n)).map((n) => OWN_LOGIN_NAMES[n]).join(", ");
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    OWN_LOGIN_ROW, ownLoginText,
     tierBadge, tierRuntimeLabel, spawnRuntimeDefault, tierJoinWords,
     workspaceOptions, defaultWorkspace, workspaceSelectionForCwd, unboxableCwdReason,
     pfCwdValue, shellSpawnPlan, TIER_BOX, TIER_HOST,

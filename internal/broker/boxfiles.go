@@ -75,9 +75,17 @@ const TokenEnv = "AGENTBOX_BROKER_TOKEN"
 // TokenEnv), so a profile can never shadow or duplicate them. It is the single
 // list the session layer strips before adding the broker's values.
 func StripEnv() []string {
+	return append(awsStripEnv(), "AGENTBOX_BROKER", TokenEnv)
+}
+
+// awsStripEnv is the AWS family of StripEnv: the static-credential routes, the
+// profile and region selectors, the config file and the Terraform plan flags a
+// bound session must not inherit. A Host session that takes AWS from this
+// machine's login keeps all of them (#375).
+func awsStripEnv() []string {
 	return append(slices.Clone(StaticCredEnv),
 		"AWS_CONFIG_FILE", "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
-		"AGENTBOX_BROKER", TokenEnv, "TF_CLI_ARGS_plan")
+		"TF_CLI_ARGS_plan")
 }
 
 // StripGitHubEnv is what a session with a GitHub binding must also not inherit,
