@@ -10,6 +10,7 @@
 //                                 installation token for the repo git is asking about.
 'use strict';
 const http = require('http');
+const fs = require('fs');
 
 const ep = process.env.AGENTBOX_BROKER || '';
 const tok = process.env.AGENTBOX_BROKER_TOKEN || '';
@@ -75,6 +76,22 @@ function awsCredentialProcess(conn) {
   });
 }
 
+const HOST_PUSH_POINTER = 'to push from Host, start a session with "Use this machine\'s login" for GitHub.';
+
+// hostPushHint says once per Host session that the GitHub binding cannot push.
+// AGENTBOX_DIR is set only on Host; the marker file is the once-per-session memory
+// (EEXIST = already shown, any other error still prints).
+function hostPushHint(contents) {
+  const dir = process.env.AGENTBOX_DIR || '';
+  if (!dir) return;
+  try {
+    fs.writeFileSync(dir + '/push-hint-shown', '', { flag: 'wx', mode: 0o600 });
+  } catch (e) {
+    if (e && e.code === 'EEXIST') return;
+  }
+  process.stderr.write('agentbox: the GitHub binding can read but not push (contents: ' + contents + '); ' + HOST_PUSH_POINTER + '\n');
+}
+
 // githubGit answers git's credential protocol. Anything it does not serve
 // (store, erase, another host, another protocol) is a silent no-op, and a broker
 // refusal prints to stderr but still exits 0 with nothing on stdout, so git fails
@@ -100,11 +117,17 @@ function githubGit(op) {
     if (!ep || !tok) return warn('not a CuliBox GitHub session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
     request('/v1/github/token', { owner: seg[0], repo: seg[1] }, 15000, (err, status, body) => {
       if (err) return warn(err.message);
-      if (status !== 200) return warn(brokerMessage(body, status));
+      if (status !== 200) {
+        warn(brokerMessage(body, status));
+        if (process.env.AGENTBOX_DIR) warn(HOST_PUSH_POINTER);
+        return;
+      }
       let t = '';
-      try { t = JSON.parse(body).token || ''; } catch (e) { /* handled below */ }
+      let perms = null;
+      try { const r = JSON.parse(body); t = r.token || ''; perms = r.permissions || null; } catch (e) { /* handled below */ }
       if (!t) return warn('broker reply had no token');
       process.stdout.write('username=x-access-token\npassword=' + t + '\n');
+      if (perms && perms.contents !== 'write') hostPushHint(perms.contents || 'none');
     });
   };
   process.stdin.setEncoding('utf8');

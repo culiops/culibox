@@ -100,13 +100,25 @@ func ghCall(b *Broker, tok, body string) *httptest.ResponseRecorder {
 
 const ghBody = `{"owner":"culiops","repo":"agent-box"}`
 
-func ghReply(t *testing.T, w *httptest.ResponseRecorder) (string, string) {
+type ghReplyBody struct {
+	Token       string            `json:"token"`
+	ExpiresAt   string            `json:"expires_at"`
+	Permissions map[string]string `json:"permissions"`
+}
+
+func ghReplyFull(t *testing.T, w *httptest.ResponseRecorder) ghReplyBody {
 	t.Helper()
-	var out map[string]string
+	var out ghReplyBody
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("reply: %v: %s", err, w.Body)
 	}
-	return out["token"], out["expires_at"]
+	return out
+}
+
+func ghReply(t *testing.T, w *httptest.ResponseRecorder) (string, string) {
+	t.Helper()
+	r := ghReplyFull(t, w)
+	return r.Token, r.ExpiresAt
 }
 
 func TestGitHubMintHappyPath(t *testing.T) {
@@ -928,6 +940,33 @@ func TestGitHubAppMintUnavailableStore(t *testing.T) {
 		assertBoxUnavailable(t, w, rec.rows[0], ue)
 		if b.StoreLockedFor("claude-3") {
 			t.Fatal("an unavailable Keychain must not flag the session store-locked")
+		}
+	}
+}
+
+func TestGitHubMintReplyCarriesPermissions(t *testing.T) {
+	b, fg, _, _ := ghSetup(t, map[string]SessionView{"s": ghLive()})
+	first := ghCall(b, tokA("s"), ghBody)
+	if first.Code != 200 || fg.callCount() != 1 {
+		t.Fatalf("fresh mint: %d %s", first.Code, first.Body)
+	}
+	cached := ghCall(b, tokA("s"), ghBody)
+	if cached.Code != 200 || fg.callCount() != 1 {
+		t.Fatalf("cached call must not mint again: %d calls=%d", cached.Code, fg.callCount())
+	}
+	want := fg.calls[0].Permissions
+	if want["contents"] != "read" {
+		t.Fatalf("fixture binding should be read-only: %v", want)
+	}
+	for name, w := range map[string]*httptest.ResponseRecorder{"fresh": first, "cached": cached} {
+		got := ghReplyFull(t, w).Permissions
+		if len(got) != len(want) {
+			t.Fatalf("%s: permissions %v want %v", name, got, want)
+		}
+		for k, v := range want {
+			if got[k] != v {
+				t.Fatalf("%s: permissions %v want %v", name, got, want)
+			}
 		}
 	}
 }

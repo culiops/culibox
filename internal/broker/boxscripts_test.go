@@ -24,7 +24,8 @@ type fakeTokenBroker struct {
 	mu     sync.Mutex
 	bodies []map[string]string
 	auths  []string
-	status int // 0 = 200
+	status int               // 0 = 200
+	perms  map[string]string // nil = a reply without permissions (a PAT)
 	sock   string
 	// static answers /v1/static/token per entry name; a name not in the map is
 	// 403. hang makes the route never answer (until the test ends).
@@ -66,13 +67,18 @@ func newFakeTokenBroker(t *testing.T) *fakeTokenBroker {
 		f.bodies = append(f.bodies, body)
 		f.auths = append(f.auths, r.Header.Get("Authorization"))
 		status := f.status
+		perms := f.perms
 		f.mu.Unlock()
 		if status != 0 {
 			w.WriteHeader(status)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "owner not allowed"})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": "ghs_tok_" + body["owner"], "expires_at": "2027-01-15T08:15:00Z"})
+		reply := map[string]any{"token": "ghs_tok_" + body["owner"], "expires_at": "2027-01-15T08:15:00Z"}
+		if perms != nil {
+			reply["permissions"] = perms
+		}
+		_ = json.NewEncoder(w).Encode(reply)
 	})
 	mux.HandleFunc("/v1/static/token", func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -227,6 +233,71 @@ func TestGitHelperBrokerErrorNoStdout(t *testing.T) {
 		"AGENTBOX_BROKER=unix://"+filepath.Join(t.TempDir(), "none.sock"), "AGENTBOX_BROKER_TOKEN=tok-secret-xyz")
 	if code != 0 || out != "" || !strings.HasPrefix(stderr, "agentbox: ") || strings.Contains(stderr, "tok-secret-xyz") {
 		t.Fatalf("unreachable: code=%d out=%q stderr=%q", code, out, stderr)
+	}
+}
+
+const hostHint = "agentbox: the GitHub binding can read but not push (contents: read); to push from Host, start a session with \"Use this machine's login\" for GitHub.\n"
+
+const hostGitIn = "protocol=https\nhost=github.com\npath=culiops/x\n\n"
+
+func TestGitHelperHostReadOnlyHintOnce(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	f.perms = map[string]string{"contents": "read"}
+	js := filepath.Join(ghScriptDir(t), "agentbox-cred.js")
+	env := append(brokerEnv(f), "AGENTBOX_DIR="+t.TempDir())
+	want := "username=x-access-token\npassword=ghs_tok_culiops\n"
+	out, stderr, code := runNode(t, "", hostGitIn, []string{js, "github-git", "get"}, env...)
+	if code != 0 || out != want || stderr != hostHint {
+		t.Fatalf("first: code=%d out=%q stderr=%q", code, out, stderr)
+	}
+	out, stderr, code = runNode(t, "", hostGitIn, []string{js, "github-git", "get"}, env...)
+	if code != 0 || out != want || stderr != "" {
+		t.Fatalf("second: code=%d out=%q stderr=%q", code, out, stderr)
+	}
+}
+
+func TestGitHelperHostCanPushNoHint(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	f.perms = map[string]string{"contents": "write"}
+	js := filepath.Join(ghScriptDir(t), "agentbox-cred.js")
+	env := append(brokerEnv(f), "AGENTBOX_DIR="+t.TempDir())
+	_, stderr, code := runNode(t, "", hostGitIn, []string{js, "github-git", "get"}, env...)
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+}
+
+func TestGitHelperBoxNeverHints(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	f.perms = map[string]string{"contents": "read"}
+	js := filepath.Join(ghScriptDir(t), "agentbox-cred.js")
+	_, stderr, code := runNode(t, "", hostGitIn, []string{js, "github-git", "get"}, brokerEnv(f)...)
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+}
+
+func TestGitHelperNoPermissionsNoHint(t *testing.T) {
+	f := newFakeTokenBroker(t) // perms nil: a PAT reply carries only the token
+	js := filepath.Join(ghScriptDir(t), "agentbox-cred.js")
+	env := append(brokerEnv(f), "AGENTBOX_DIR="+t.TempDir())
+	_, stderr, code := runNode(t, "", hostGitIn, []string{js, "github-git", "get"}, env...)
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+}
+
+func TestGitHelperHostRefusalPointsToMachineLogin(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	f.status = 403
+	js := filepath.Join(ghScriptDir(t), "agentbox-cred.js")
+	env := append(brokerEnv(f), "AGENTBOX_DIR="+t.TempDir())
+	want := "agentbox: owner not allowed\nagentbox: to push from Host, start a session with \"Use this machine's login\" for GitHub.\n"
+	for i := 0; i < 2; i++ { // every refusal, not once
+		out, stderr, code := runNode(t, "", hostGitIn, []string{js, "github-git", "get"}, env...)
+		if code != 0 || out != "" || stderr != want {
+			t.Fatalf("run %d: code=%d out=%q stderr=%q", i, code, out, stderr)
+		}
 	}
 }
 
