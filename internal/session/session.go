@@ -2890,7 +2890,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// the session itself will have, never install it (D7). Without it the
 		// run goes ahead without its bindings, and says why.
 		if launcher.SessionLookPath(env, "node") == "" {
-			hostDropped = append([]string{hostNodeMissingItem(hostGuard)}, hostDropped...)
+			hostDropped = append([]string{hostNodeMissingItem(ownLoginGuard(hostGuard, own))}, hostDropped...)
 			log.Printf("session %s: profile %q runs on Host without its %s: node was not found on this session's PATH; CuliBox's credential helpers need it",
 				id, spec.Agent, bindingNames(bs))
 			binding, awsConns, ghBinding, tokens, pats = nil, nil, nil, nil, nil
@@ -2915,7 +2915,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// after the launcher (a box's flags are known before it): with
 			// something to add, the launcher runs again with them, and its env
 			// replaces the first run's.
-			flags, drops, ferr := hostAgentFlags(brk, id, dir, bin, bs, env, bundleDrops)
+			flags, drops, ferr := hostAgentFlags(brk, id, dir, bin, bs, own, env, bundleDrops)
 			if ferr != nil {
 				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, ferr)
 			}
@@ -3228,7 +3228,7 @@ func tokenServers(bs config.Bindings, drops []bundle.Drop) ([]bundle.EntryServer
 // --mcp-config stays, and --strict-mcp-config is never added, so the user's
 // own servers keep working. drops is what the caller holds; the result adds a
 // row for each server left out.
-func hostAgentFlags(brk BrokerHooks, id, dir, bin string, bs config.Bindings, env []string, drops []bundle.Drop) ([]string, []bundle.Drop, error) {
+func hostAgentFlags(brk BrokerHooks, id, dir, bin string, bs config.Bindings, own []string, env []string, drops []bundle.Drop) ([]string, []bundle.Drop, error) {
 	var flags []string
 	if takesMCPConfig(bin) && len(bs.Tokens) > 0 {
 		entries, d := tokenServers(bs, drops)
@@ -3259,7 +3259,7 @@ func hostAgentFlags(brk BrokerHooks, id, dir, bin string, bs config.Bindings, en
 		}
 	}
 	if appendsSystemPrompt(bin) {
-		if note := hostCredGuidance(bs); note != "" {
+		if note := hostCredGuidance(bs, own); note != "" {
 			flags = append(flags, "--append-system-prompt", note)
 		}
 	}

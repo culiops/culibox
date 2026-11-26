@@ -107,3 +107,18 @@ func (m *Manager) auditHostOwnLogin(r HostOwnLoginRecord) error {
 	}
 	return nil
 }
+
+// ownLoginGuard is the Host guardrail without the kinds the user took from this
+// machine's own login: they never went through a binding, so the node-missing
+// item must not name them.
+func ownLoginGuard(guard, own []string) []string {
+	var out []string
+	for _, g := range guard {
+		if g == "GitHub binding" && slices.Contains(own, launcher.OwnLoginGitHub) ||
+			g == "AWS binding" && slices.Contains(own, launcher.OwnLoginAWS) {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
+}

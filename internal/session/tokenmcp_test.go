@@ -381,7 +381,13 @@ func newHostFlagHarness(t *testing.T, node bool, lead []string, cmds ...string) 
 // args the process got.
 func spawnHostFlags(t *testing.T, h *hostFlagHarness) (*Session, []string) {
 	t.Helper()
-	s, err := h.m.Spawn(hostAckSpec(t))
+	return spawnHostFlagsSpec(t, h, hostAckSpec(t))
+}
+
+// spawnHostFlagsSpec is spawnHostFlags for a spec the test built.
+func spawnHostFlagsSpec(t *testing.T, h *hostFlagHarness, spec launcher.SpawnSpec) (*Session, []string) {
+	t.Helper()
+	s, err := h.m.Spawn(spec)
 	if err != nil {
 		t.Fatal(err)
 	}

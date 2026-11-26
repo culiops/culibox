@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 // cloneGuidance is the one line a boxed claude in a private copy is told at
@@ -114,14 +115,41 @@ func credGuidance(bs config.Bindings) string {
 // be told they are a default and the machine's own logins are not to be used.
 const hostCredLine = "This session runs on the host, not in a box: these are the default credentials, not a limit. Use them, not this machine's own logins."
 
+// hostNoPushLine is added to a Host note whose GitHub binding cannot push: the
+// user's way to a push is this machine's own login (#375).
+const hostNoPushLine = "GitHub refuses a push through the GitHub binding (contents: read); to push from Host, the user can start a session with \"Use this machine's login\" for GitHub."
+
+// hostOwnLoginLine names the kinds the user took from this machine's own login
+// for this session (own: "github" / "aws").
+func hostOwnLoginLine(own []string) string {
+	var labels []string
+	for _, k := range own {
+		switch k {
+		case launcher.OwnLoginGitHub:
+			labels = append(labels, "GitHub")
+		case launcher.OwnLoginAWS:
+			labels = append(labels, "AWS")
+		}
+	}
+	return "For " + strings.Join(labels, " and ") + " the user chose this machine's own login for this session: use it."
+}
+
 // hostCredGuidance is credGuidance for a bound Host session: the same note and
-// hostCredLine. "" when nothing is bound.
-func hostCredGuidance(bs config.Bindings) string {
+// hostCredLine, then the kinds on this machine's own login, then (a GitHub
+// binding that cannot push) hostNoPushLine. "" when nothing is bound.
+func hostCredGuidance(bs config.Bindings, own []string) string {
 	s := credGuidance(bs)
 	if s == "" {
 		return ""
 	}
-	return s + " " + hostCredLine
+	s += " " + hostCredLine
+	if len(own) > 0 {
+		s += " " + hostOwnLoginLine(own)
+	}
+	if bs.GitHub != nil && !bs.GitHub.PushRoute() {
+		s += " " + hostNoPushLine
+	}
+	return s
 }
 
 func prodName(name string, prod bool) string {

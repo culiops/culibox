@@ -462,3 +462,26 @@ func TestRestartAuditsTheChoiceAgain(t *testing.T) {
 		t.Fatalf("audit rows = %+v, want two by bearer, the second for %s", recs, ns.ID)
 	}
 }
+
+func TestHostOwnLoginNodeMissingNamesOnlyTheKindsLeft(t *testing.T) {
+	l := dropsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, bound: true,
+		guardrail: threeGuard, path: sessionTools(t, false, false)}
+	h := ownLoginHarness(t, l)
+	s, err := h.m.Spawn(ownSpec(t, launcher.OwnLoginGitHub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	if len(s.HostDropped) == 0 || s.HostDropped[0] != hostNodeMissingItem([]string{"AWS binding", "token binding"}) {
+		t.Fatalf("HostDropped = %q", s.HostDropped)
+	}
+}
+
+func TestHostOwnLoginGuidanceInTheSpawnFlags(t *testing.T) {
+	h := newHostFlagHarness(t, true, nil)
+	h.m.SetSpawnAudit(&fakeSpawnAudit{})
+	_, args := spawnHostFlagsSpec(t, h, ownSpec(t, launcher.OwnLoginAWS))
+	if got := argAfter(args, "--append-system-prompt"); !strings.Contains(got, "For AWS the user chose this machine's own login") {
+		t.Fatalf("note = %q", got)
+	}
+}

@@ -183,7 +183,10 @@ func TestHostNoteOnlyWhenCredsReady(t *testing.T) {
 	t.Run("bound, node present", func(t *testing.T) {
 		h := newHostFlagHarness(t, true, nil)
 		s, args := spawnHostFlags(t, h)
-		want := credGuidance(s.Bindings()) + " " + hostCredLine
+		want := hostCredGuidance(s.Bindings(), nil)
+		if !strings.HasSuffix(want, hostNoPushLine) {
+			t.Fatalf("the fixture's GitHub binding is read-only, so the note ends with the no-push line: %q", want)
+		}
 		if got := argAfter(args, "--append-system-prompt"); got != want {
 			t.Fatalf("note = %q\nwant   %q", got, want)
 		}
@@ -219,4 +222,39 @@ func TestHostNoteOnlyWhenCredsReady(t *testing.T) {
 			t.Fatalf("hostCredLine = %q", hostCredLine)
 		}
 	})
+}
+
+func TestHostNoteNamesMachineLoginKinds(t *testing.T) {
+	bs := config.Bindings{AWS: testBinding()}
+	base := credGuidance(bs) + " " + hostCredLine
+	if got, want := hostCredGuidance(bs, []string{"github"}), base+" For GitHub the user chose this machine's own login for this session: use it."; got != want {
+		t.Fatalf("github:\n got %q\nwant %q", got, want)
+	}
+	if got := hostCredGuidance(bs, []string{"github", "aws"}); !strings.HasSuffix(got, " For GitHub and AWS the user chose this machine's own login for this session: use it.") {
+		t.Fatalf("both: %q", got)
+	}
+	if got := hostCredGuidance(bs, nil); got != base {
+		t.Fatalf("none: %q", got)
+	}
+	if got := hostCredGuidance(config.Bindings{}, []string{"github"}); got != "" {
+		t.Fatalf("nothing bound: %q", got)
+	}
+}
+
+func TestHostNoteSaysAReadOnlyGitHubBindingCannotPush(t *testing.T) {
+	ro := config.Bindings{GitHub: testGitHub()}
+	if ro.GitHub.PushRoute() {
+		t.Fatal("fixture should be read-only")
+	}
+	if got := hostCredGuidance(ro, nil); !strings.Contains(got, hostNoPushLine) {
+		t.Fatalf("read-only binding: no push line in %q", got)
+	}
+	if strings.Contains(credGuidance(ro), "refuses a push") {
+		t.Fatal("the box note must not carry the Host push line")
+	}
+	rw := testGitHub()
+	rw.Permissions = map[string]string{"contents": "write"}
+	if got := hostCredGuidance(config.Bindings{GitHub: rw}, nil); strings.Contains(got, hostNoPushLine) {
+		t.Fatalf("write binding: push line in %q", got)
+	}
 }
