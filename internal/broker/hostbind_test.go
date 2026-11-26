@@ -185,3 +185,30 @@ func TestHostTokenOnTheSharedSocketIsAHostRefusal(t *testing.T) {
 		})
 	}
 }
+
+// #375: a Host session whose profile lost a kind (it took that one from the
+// machine login) has no binding for it: the socket refuses it, mints nothing.
+func TestHostSessionRefusesAKindItDoesNotCarry(t *testing.T) {
+	for _, cp := range credPaths {
+		if cp.name == "static" {
+			continue
+		}
+		t.Run(cp.name, func(t *testing.T) {
+			v := hostSession()
+			switch cp.name {
+			case "github":
+				v.GitHub, v.PATs = nil, nil
+			case "aws":
+				v.AWS, v.AWSConns = nil, nil
+			}
+			e := boxSetup(t, map[string]SessionView{"s1": v})
+			if w := present(e.b, cp, tokA("s1"), onHostSocket("s1")); w.Code != http.StatusForbidden {
+				t.Fatalf("status %d: %s", w.Code, w.Body)
+			}
+			if e.minted() != 0 {
+				t.Fatalf("minted %d, want 0", e.minted())
+			}
+			oneRow(t, e.rec, "s1", OutcomeDeniedSession, cp.provider, "no binding")
+		})
+	}
+}

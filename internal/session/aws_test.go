@@ -184,8 +184,8 @@ func (f *fakeBrokerHooks) SweepHostDirs(keep []string) {
 }
 
 // HostStripEnv is the real list, like StripEnv.
-func (f *fakeBrokerHooks) HostStripEnv(bs config.Bindings) []string {
-	return broker.Hooks{}.HostStripEnv(bs)
+func (f *fakeBrokerHooks) HostStripEnv(bs config.Bindings, keepAWS bool) []string {
+	return broker.Hooks{}.HostStripEnv(bs, keepAWS)
 }
 
 // hostState is a snapshot of the Host socket calls.

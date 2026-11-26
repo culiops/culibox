@@ -2,6 +2,8 @@ package session
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,7 +120,6 @@ func TestHostOwnLoginUnknownKindRefusedInSpawn(t *testing.T) {
 
 func TestBoxSpawnIgnoresHostOwnLogin(t *testing.T) {
 	l := boundDropsLauncher([]string{"sh", "-c", "sleep 30"}, config.RuntimeBox)
-	l.noAWS = true
 	h := ownLoginHarness(t, l)
 	s, err := h.m.Spawn(launcher.SpawnSpec{Agent: "p", Cwd: t.TempDir(), HostDropsAck: true,
 		HostOwnLogin: []string{launcher.OwnLoginGitHub, launcher.OwnLoginAWS}})
@@ -126,7 +127,49 @@ func TestBoxSpawnIgnoresHostOwnLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
-	if s.Runtime != config.RuntimeBox || s.GitHub == nil {
-		t.Fatalf("a box spawn lost a binding: runtime=%s github=%v", s.Runtime, s.GitHub)
+	if s.Runtime != config.RuntimeBox || s.GitHub == nil || (s.AWS == nil && len(s.AWSConns) == 0) {
+		t.Fatalf("a box spawn lost a binding: runtime=%s github=%v aws=%v", s.Runtime, s.GitHub, s.AWS)
+	}
+}
+
+func TestHostOwnLoginAWSKeepsTheUsersAWSEnv(t *testing.T) {
+	l, _ := hostBoundLauncher(t, envDumpArgv, "AWS_PROFILE=mine", "AWS_ACCESS_KEY_ID=AKIAEXAMPLEONLY")
+	h := ownLoginHarness(t, l)
+	s, err := h.m.Spawn(ownSpec(t, launcher.OwnLoginAWS))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	env := envOfHostProcessKV(t, s)
+	if env["AWS_PROFILE"] != "mine" || env["AWS_ACCESS_KEY_ID"] != "AKIAEXAMPLEONLY" {
+		t.Fatalf("the user's AWS env was stripped: AWS_PROFILE=%q AWS_ACCESS_KEY_ID=%q", env["AWS_PROFILE"], env["AWS_ACCESS_KEY_ID"])
+	}
+	if v, ok := env["AWS_CONFIG_FILE"]; ok {
+		t.Fatalf("AWS_CONFIG_FILE=%q set by CuliBox for a session whose AWS is on the machine login", v)
+	}
+}
+
+func TestHostOwnLoginGitHubKeepsTheUsersGitHubEnvAndTokens(t *testing.T) {
+	l, tools := hostBoundLauncher(t, envDumpArgv, "GH_TOKEN=user-own", "GH_CONFIG_DIR=/home/u/.config/gh")
+	h := ownLoginHarness(t, l)
+	s, err := h.m.Spawn(ownSpec(t, launcher.OwnLoginGitHub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.m.Kill(s.ID) })
+	env := envOfHostProcessKV(t, s)
+	if env["GH_TOKEN"] != "user-own" || env["GH_CONFIG_DIR"] != "/home/u/.config/gh" {
+		t.Fatalf("the user's GitHub env was stripped: GH_TOKEN=%q GH_CONFIG_DIR=%q", env["GH_TOKEN"], env["GH_CONFIG_DIR"])
+	}
+	if v, ok := env["GIT_CONFIG_COUNT"]; ok {
+		t.Fatalf("GIT_CONFIG_COUNT=%q set for a session whose GitHub is on the machine login", v)
+	}
+	dir := h.hooks.hostDirFor(s.ID)
+	if env["AGENTBOX_BROKER"] == "" || !strings.HasPrefix(env["PATH"], dir+"/bin") {
+		t.Fatalf("the token binding was not delivered: AGENTBOX_BROKER=%q PATH=%q", env["AGENTBOX_BROKER"], env["PATH"])
+	}
+	_ = tools
+	if _, err := os.Stat(filepath.Join(dir, "bin", "gh")); err == nil {
+		t.Fatal("a gh shim was written for a session whose GitHub is on the machine login")
 	}
 }

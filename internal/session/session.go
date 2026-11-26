@@ -604,7 +604,7 @@ type BrokerHooks interface {
 	SweepHostDirs(keep []string)
 	// HostStripEnv names every variable a bound Host session must not inherit
 	// before HostFor's env is added (token entries' names excepted).
-	HostStripEnv(bs config.Bindings) []string
+	HostStripEnv(bs config.Bindings, keepAWS bool) []string
 }
 
 // EgressHooks is what spawning a bound session needs from the egress proxy,
@@ -2921,7 +2921,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// env says about AWS, GitHub or a token entry must neither bypass the
 			// broker nor shadow one of its values. Every name set below is set
 			// exactly once.
-			strip := append(slices.Clone(brk.HostStripEnv(bs)), brokerTokenEnv, "PATH") // never append into the hooks' own slice
+			strip := append(slices.Clone(brk.HostStripEnv(bs, slices.Contains(own, launcher.OwnLoginAWS))), brokerTokenEnv, "PATH") // never append into the hooks' own slice
 			for _, e := range bs.Tokens {
 				strip = append(strip, e.Names()...)
 			}
