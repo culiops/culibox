@@ -71,6 +71,13 @@ type gitConfigScan struct {
 	hooks  []string     // repo-relative core.hooksPath directories, as spelled
 	denied []string     // repo-relative files and folders, as importDenied reads them
 	plain  plainMatcher // the plain words of the program values, for the paths a range adds
+	// excludesFile is the core.excludesFile value the user's git uses when the
+	// repo sets none: the first of ~/.gitconfig, the XDG (or ~/.config) file and
+	// the system file that sets it, the last entry in that file (git's own
+	// precedence). "" when the repo sets it (the check-ignore call reads that one
+	// itself) or nothing does.
+	excludesFile string
+	xdgConfig    string // the daemon's XDG_CONFIG_HOME when home is set, "" otherwise
 }
 
 // gitConfig reads the config the user's git reads for clone_of, one git call
@@ -107,6 +114,7 @@ func (m *merger) gitConfig(home string) (*gitConfigScan, error) {
 		return nil, err
 	}
 	es = slices.DeleteFunc(es, func(e configEntry) bool { return e.scope == "command" })
+	_, excludesSet := lastValue(es, "core.excludesfile")
 	hookVals, err = sc.scan(m.of, home, es, hookVals)
 	if err != nil {
 		return nil, fmt.Errorf("repository config: %w", err)
@@ -117,6 +125,7 @@ func (m *merger) gitConfig(home string) (*gitConfigScan, error) {
 	if home != "" {
 		files = append(files, filepath.Join(home, ".gitconfig"))
 		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+			sc.xdgConfig = xdg
 			files = append(files, filepath.Join(xdg, "git", "config"))
 		} else {
 			files = append(files, filepath.Join(home, ".config", "git", "config"))
@@ -136,6 +145,9 @@ func (m *merger) gitConfig(home string) (*gitConfigScan, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f, err)
 		}
+		if !excludesSet { // files is in git's precedence order, highest first
+			sc.excludesFile, excludesSet = lastValue(es, "core.excludesfile")
+		}
 		hookVals, err = sc.scan(m.of, home, es, hookVals)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f, err)
@@ -147,6 +159,17 @@ func (m *merger) gitConfig(home string) (*gitConfigScan, error) {
 		}
 	}
 	return sc, nil
+}
+
+// lastValue is the value of the last entry for key (as git prints it, lower
+// case) and whether any entry sets it; an entry with no value counts as set.
+func lastValue(es []configEntry, key string) (string, bool) {
+	for i := len(es) - 1; i >= 0; i-- {
+		if strings.EqualFold(es[i].key, key) {
+			return es[i].value, true
+		}
+	}
+	return "", false
 }
 
 // withHome is env with HOME set to home.

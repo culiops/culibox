@@ -438,6 +438,19 @@ func (m *merger) check(r MergeRequest, now func() time.Time) *MergeResult {
 			"(agent, direnv and mise settings and the files they name, hooks, git config)", denied)
 	}
 
+	// 4a''. No path the host's ignore rules match (the repo's .gitignore files,
+	// info/exclude, the user's global ignores): host tools load from such
+	// folders (a .venv's .pth files, node_modules) and git status hides a change
+	// there. One check-ignore call over every path, tracked ones too.
+	hits, err := m.ignored(paths, gc, r.Home)
+	if err != nil {
+		return m.failed("cannot check ignore rules", err)
+	}
+	if len(hits) > 0 {
+		return m.result(MergeGuarded, "the commits add or change files your ignore rules match "+
+			"(such as a .venv or node_modules folder host tools load from)", hits)
+	}
+
 	// 4b. No path a git filter would process on checkout (one cheap check-attr,
 	// before the full scan).
 	filtered, err := m.filtered(paths)
@@ -770,6 +783,73 @@ func (m *merger) filtered(paths []string) ([]string, error) {
 		}
 		if v := toks[i+2]; v != "unspecified" && v != "unset" {
 			hit = append(hit, toks[i])
+		}
+	}
+	return hit, nil
+}
+
+// ignoreTop starts every path the ignore check reads. check-ignore refuses
+// GIT_LITERAL_PATHSPECS on every path ("pathspec magic not supported by this
+// command: 'literal'", measured, git 2.43), and without it a range path such as
+// ":(top)x" or ":!x" would be read as pathspec magic. After an explicit long
+// magic git takes the rest as written, so ":(top)" + p checks the name p
+// (measured: ":(top):(top)foo" is checked as ":(top)foo").
+const ignoreTop = ":(top)"
+
+// ignored returns the paths the host's ignore rules match: the work tree's
+// .gitignore files, info/exclude and the user's global excludes file
+// (core.excludesFile from gc when the repo sets none, else git's default
+// ~/.config/git/ignore, so HOME is home), tracked paths too (--no-index). The
+// paths go only on stdin, NUL-terminated. g must be a StdinGit. Exit 1 is none;
+// any other failure, or output that is not the given paths, is an error.
+func (m *merger) ignored(paths []string, gc *gitConfigScan, home string) ([]string, error) {
+	sg, ok := m.g.(StdinGit)
+	if !ok {
+		return nil, errors.New("ignore check unavailable")
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	env := m.env()
+	if home != "" {
+		env = withHome(env, home)
+		if gc.xdgConfig != "" { // git's default excludes file is then $XDG_CONFIG_HOME/git/ignore
+			env = append(env, "XDG_CONFIG_HOME="+gc.xdgConfig)
+		}
+	}
+	var args []string
+	if gc.excludesFile != "" { // a value from the user's own config files, never from the range
+		args = append(args, "-c", "core.excludesFile="+gc.excludesFile)
+	}
+	args = append(args, "check-ignore", "--stdin", "-z", "--no-index")
+	var in bytes.Buffer
+	given := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		given[p] = true
+		in.WriteString(ignoreTop)
+		in.WriteString(p)
+		in.WriteByte(0)
+	}
+	out, err := sg.RunStdin(m.ctx, m.of, env, &in, hardened(args...)...)
+	if err != nil {
+		if code, ok := exitCode(err); ok && code == 1 {
+			return nil, nil // none of the paths is ignored
+		}
+		return nil, err
+	}
+	if len(out) == 0 || out[len(out)-1] != 0 {
+		return nil, errors.New("check-ignore output is empty or cut short")
+	}
+	var hit []string
+	seen := map[string]bool{}
+	for _, tok := range strings.Split(string(out[:len(out)-1]), "\x00") {
+		p, ok := strings.CutPrefix(tok, ignoreTop)
+		if !ok || !given[p] {
+			return nil, errors.New("check-ignore printed a path it was not given")
+		}
+		if !seen[p] {
+			seen[p] = true
+			hit = append(hit, p)
 		}
 	}
 	return hit, nil

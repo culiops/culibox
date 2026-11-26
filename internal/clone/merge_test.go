@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -488,10 +489,12 @@ func TestMergeHomeIgnoredFileInTheWay(t *testing.T) {
 	fixtureGit(t, x.of, "checkout", "-q", "main")
 	fixtureGit(t, x.of, "branch", "-q", "-D", "side")
 	x.write("local.cfg", "mine")
-	got := x.run(newRec(t), &auditRec{})
-	wantMergeReason(t, got, MergeFailed)
-	if x.read("local.cfg") != "mine" || x.tip() != before {
-		t.Fatalf("local.cfg = %q, main moved = %v", x.read("local.cfg"), x.tip() != before)
+	a := &auditRec{}
+	got := x.run(newRec(t), a)
+	// The ignore check refuses it before git runs (#370).
+	wantMergeReason(t, got, MergeGuarded)
+	if x.read("local.cfg") != "mine" || x.tip() != before || len(a.calls) != 0 {
+		t.Fatalf("local.cfg = %q, main moved = %v, audit %q", x.read("local.cfg"), x.tip() != before, a.calls)
 	}
 }
 
@@ -1233,5 +1236,200 @@ func TestMergeHomeHugeTopFailsClosed(t *testing.T) {
 	wantMergeReason(t, x.run(newRec(t), a), MergeFailed)
 	if x.tip() != before || len(a.calls) != 0 {
 		t.Fatal("merged or audited")
+	}
+}
+
+// boxForce is box with one commit whose files are added with -f and literal
+// pathspecs: an ignored path or a name shaped like pathspec magic is committed
+// as written.
+func (x *mergeFx) boxForce(name string, files map[string]string) string {
+	x.t.Helper()
+	fixtureGit(x.t, x.of, "checkout", "-q", "-b", "side")
+	for rel, c := range files {
+		x.write(rel, c)
+		fixtureGit(x.t, x.of, "--literal-pathspecs", "add", "-f", "--", rel)
+	}
+	fixtureGit(x.t, x.of, "commit", "-q", "-m", "box forces")
+	sha := x.out("rev-parse", "HEAD")
+	fixtureGit(x.t, x.of, "update-ref", "refs/heads/box/"+name, sha)
+	fixtureGit(x.t, x.of, "checkout", "-q", x.br)
+	fixtureGit(x.t, x.of, "branch", "-q", "-D", "side")
+	return sha
+}
+
+// A path the commits add or change that the host's ignore rules match (the
+// repo's .gitignore files, info/exclude, the user's global ignores) is where
+// host tools load from (a .venv, node_modules), so it refuses the merge, even
+// when the host tracks it (#370).
+func TestMergeHomeIgnoredPathGuarded(t *testing.T) {
+	put := func(t *testing.T, p, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hostForce := func(x *mergeFx, files map[string]string) {
+		x.t.Helper()
+		for rel, c := range files {
+			x.write(rel, c)
+			fixtureGit(x.t, x.of, "add", "-f", "--", rel)
+		}
+		fixtureGit(x.t, x.of, "commit", "-q", "-m", "host forces")
+	}
+	cases := []struct {
+		name   string
+		setup  func(x *mergeFx, home string)
+		change string
+		want   string // MergeGuarded, or "" for merged
+	}{
+		{".gitignore .venv/, a .pth added", func(x *mergeFx, home string) {
+			x.commit("ignore", map[string]string{".gitignore": ".venv/\n"})
+		}, ".venv/lib/python3.12/site-packages/x.pth", MergeGuarded},
+		{"info/exclude rule", func(x *mergeFx, home string) {
+			put(x.t, filepath.Join(x.of, ".git", "info", "exclude"), "build-out/\n")
+		}, "build-out/x.js", MergeGuarded},
+		{"global default ignore file", func(x *mergeFx, home string) {
+			put(x.t, filepath.Join(home, ".config", "git", "ignore"), ".direnv/\n")
+		}, ".direnv/x", MergeGuarded},
+		{"XDG default ignore file", func(x *mergeFx, home string) {
+			xdg := x.t.TempDir()
+			x.t.Setenv("XDG_CONFIG_HOME", xdg)
+			put(x.t, filepath.Join(xdg, "git", "ignore"), ".xd/\n")
+		}, ".xd/x", MergeGuarded},
+		{"global core.excludesFile", func(x *mergeFx, home string) {
+			put(x.t, filepath.Join(home, ".gitconfig"), "[core]\n\texcludesFile = ~/.gi\n")
+			put(x.t, filepath.Join(home, ".gi"), "secret-cache/\n")
+		}, "secret-cache/a", MergeGuarded},
+		{"system core.excludesFile", func(x *mergeFx, home string) {
+			sys := filepath.Join(x.t.TempDir(), "gitconfig")
+			ex := filepath.Join(x.t.TempDir(), "sysignore")
+			put(x.t, sys, "[core]\n\texcludesFile = "+ex+"\n")
+			put(x.t, ex, "sys-cache/\n")
+			mergeSystemGitConfig = sys // restored by the case's noSystemConfig
+		}, "sys-cache/a", MergeGuarded},
+		{"repo core.excludesFile is not overridden", func(x *mergeFx, home string) {
+			ex := filepath.Join(x.t.TempDir(), "repoignore")
+			put(x.t, ex, "rp/\n")
+			fixtureGit(x.t, x.of, "config", "core.excludesFile", ex)
+			put(x.t, filepath.Join(home, ".gitconfig"), "[core]\n\texcludesFile = ~/.gi\n")
+			put(x.t, filepath.Join(home, ".gi"), "hm/\n")
+		}, "rp/a", MergeGuarded},
+		{"force-added tracked file under an ignored folder", func(x *mergeFx, home string) {
+			x.commit("ignore", map[string]string{".gitignore": "dist/\n"})
+			hostForce(x, map[string]string{"dist/app.js": "host"})
+		}, "dist/app.js", MergeGuarded},
+		{"tracked .venv, not ignored, merges", func(x *mergeFx, home string) {
+			x.commit("venv", map[string]string{".venv/lib/site.py": "host"})
+		}, ".venv/lib/site.py", ""},
+		{"tracked .venv, ignored, guarded", func(x *mergeFx, home string) {
+			x.commit("ignore", map[string]string{".gitignore": ".venv/\n"})
+			hostForce(x, map[string]string{".venv/lib/site.py": "host"})
+		}, ".venv/lib/site.py", MergeGuarded},
+		{"a pathspec-looking name is a name", func(x *mergeFx, home string) {}, ":(top)x.txt", ""},
+		{"a glob-magic name is a name", func(x *mergeFx, home string) {}, ":(glob)y.txt", ""},
+		{"an ignored colon name is checked as written", func(x *mergeFx, home string) {
+			x.commit("ignore", map[string]string{".gitignore": ":*\n"})
+		}, ":(top)x.txt", MergeGuarded},
+		{"nothing ignored merges", func(x *mergeFx, home string) {}, "src/a.go", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			noSystemConfig(t)
+			home := t.TempDir()
+			x := newMergeFx(t, "main")
+			c.setup(x, home)
+			before := x.tip()
+			to := x.boxForce("main", map[string]string{c.change: "box"})
+			a := &auditRec{}
+			got := MergeHome(context.Background(), newRec(t), MergeRequest{Of: x.of, Home: home, Audit: a.fn, CloneTips: x.tips()})
+			if c.want == "" {
+				wantMerged(t, got)
+				if x.tip() != to {
+					t.Fatalf("main = %s, want %s", x.tip(), to)
+				}
+				return
+			}
+			wantMergeReason(t, got, c.want)
+			if !slices.Contains(got.Paths, c.change) || len(a.calls) != 0 || x.tip() != before {
+				t.Fatalf("result = %+v, audit %q, main moved = %v", got, a.calls, x.tip() != before)
+			}
+		})
+	}
+}
+
+// failIgnoreGit fails the check-ignore call.
+type failIgnoreGit struct{ *recGit }
+
+func (f failIgnoreGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	if slices.Contains(args, "check-ignore") {
+		return nil, errors.New("git -c: exit status 128: fatal: boom")
+	}
+	return f.recGit.RunStdin(ctx, dir, env, stdin, args...)
+}
+
+func TestMergeHomeIgnoreCheckFailsClosed(t *testing.T) {
+	x := newMergeFx(t, "main")
+	before := x.tip()
+	x.box("main", map[string]string{"b.txt": "b"})
+	a := &auditRec{}
+	got := x.run(failIgnoreGit{newRec(t)}, a)
+	wantMergeReason(t, got, MergeFailed)
+	if !strings.HasPrefix(got.Detail, "cannot check ignore rules") || len(a.calls) != 0 || x.tip() != before {
+		t.Fatalf("result = %+v, audit %q", got, a.calls)
+	}
+}
+
+// stdinRecGit keeps what the check-ignore call read on its stdin.
+type stdinRecGit struct {
+	*recGit
+	in *bytes.Buffer
+}
+
+func (s stdinRecGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	if slices.Contains(args, "check-ignore") && stdin != nil {
+		stdin = io.TeeReader(stdin, s.in)
+	}
+	return s.recGit.RunStdin(ctx, dir, env, stdin, args...)
+}
+
+// The range paths reach check-ignore only on its stdin, each under an explicit
+// ":(top)" so the rest is read as a name, never as pathspec magic; the call is
+// hardened like every other.
+func TestMergeHomeIgnoreCheckStdinOnly(t *testing.T) {
+	x := newMergeFx(t, "main")
+	x.box("main", map[string]string{"zz-unique-name.txt": "b"})
+	rec := stdinRecGit{newRec(t), &bytes.Buffer{}}
+	wantMerged(t, x.run(rec, &auditRec{}))
+	if got := rec.in.String(); got != ":(top)zz-unique-name.txt\x00" {
+		t.Fatalf("check-ignore stdin = %q", got)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	found := false
+	for _, c := range rec.calls {
+		for _, a := range c.args {
+			if strings.Contains(a, "zz-unique-name") {
+				t.Fatalf("call %q names a range path in its arguments", c.args)
+			}
+		}
+		if !slices.Contains(c.args, "check-ignore") {
+			continue
+		}
+		found = true
+		if !slices.Contains(c.args, "core.hooksPath=/dev/null") || !slices.Contains(c.args, "--no-index") ||
+			!slices.Contains(c.args, "--stdin") || !slices.Contains(c.args, "-z") {
+			t.Fatalf("check-ignore args %q", c.args)
+		}
+		if !slices.Contains(c.env, "GIT_CONFIG_GLOBAL=/dev/null") || slices.Contains(c.env, "GIT_LITERAL_PATHSPECS=1") {
+			// check-ignore refuses literal pathspecs on every path (git 2.43:
+			// "pathspec magic not supported by this command: 'literal'").
+			t.Fatalf("check-ignore env %q", c.env)
+		}
+	}
+	if !found {
+		t.Fatal("no check-ignore call")
 	}
 }
