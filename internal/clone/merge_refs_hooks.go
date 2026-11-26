@@ -390,16 +390,27 @@ func (s *refSink) readOutsideRecipe(abs, dir string) {
 		s.fail(errScanCap)
 		return
 	}
-	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
+	s.reads++ // a look-up counts, found or not
+	// The type first: a device or FIFO is never opened.
+	fi, err := os.Stat(abs)
+	switch {
+	case err != nil:
 		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
 			s.fail(fmt.Errorf("cannot read %s: %w", abs, err))
 		}
 		return
+	case fi.IsDir():
+		return
+	case !fi.Mode().IsRegular():
+		s.fail(fmt.Errorf("cannot read %s: not a regular file", abs))
+		return
+	case fi.Size() >= mergeImportBytes:
+		s.fail(errScanCap)
+		return
 	}
-	s.reads++
-	if fi, err := f.Stat(); err == nil && fi.IsDir() {
-		f.Close()
+	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		s.fail(fmt.Errorf("cannot read %s: %w", abs, err))
 		return
 	}
 	data, err := readRegular(f)

@@ -313,6 +313,7 @@ func TestShellWords(t *testing.T) {
 		{`make '-f x.mk`, []string{"make", "-f x.mk"}, []bool{true, false}},
 		{`x "y`, []string{"x", "y"}, []bool{true, false}},
 		{`  `, nil, nil},
+		{`a 2>&1 &>x b &`, []string{"a", "2>&1", "&>x", "b", "&"}, []bool{true, true, true, true, true}},
 	}
 	for _, c := range cases {
 		ws := shellWords(c.in)
@@ -327,6 +328,20 @@ func TestShellWords(t *testing.T) {
 		}
 		if !slices.Equal(got, c.want) || !slices.Equal(oks, c.ok) {
 			t.Errorf("shellWords(%q) = %q %v, want %q %v", c.in, got, oks, c.want, c.ok)
+		}
+	}
+}
+
+// Every runner in one quoted word is read with its own options.
+func TestParseCommandQuotedRunners(t *testing.T) {
+	ci := parseCommand("", `bash -c "make -f a.mk fmt && just --justfile b.just x; make -f c.mk y"`)
+	want := [][]string{{"a.mk"}, {"b.just"}, {"c.mk"}}
+	if len(ci.scripts) != len(want) {
+		t.Fatalf("scripts = %+v", ci.scripts)
+	}
+	for i, w := range want {
+		if r := ci.scripts[i]; !slices.Equal(r.files, w) || r.badFile {
+			t.Errorf("ref %d (%s) files %q bad %v, want %q", i, r.runner, r.files, r.badFile, w)
 		}
 	}
 }
@@ -365,6 +380,18 @@ func TestParseCommandRecipeQuoting(t *testing.T) {
 		{`(cd w && make -f q.mk fmt)`, []string{"q.mk"}, false},
 		{`make -f q.mk fmt | tee log`, []string{"q.mk"}, false},
 		{`make -f q.mk fmt; echo "a;b"`, []string{"q.mk"}, false},
+		// Each runner in one quoted word gets its own options (#370 7a review).
+		{`bash -c "make fmt; make -f q.mk lint"`, []string{"q.mk"}, false},
+		{`bash -c "make fmt && make -f q.mk lint"`, []string{"q.mk"}, false},
+		{`bash -c "make -f a.mk fmt; make lint"`, nil, false},
+		{`bash -c "x'make'y make -f q.mk"`, nil, true},               // runner tokens and words disagree
+		{`bash -c "cd make; make -f q.mk"`, []string{"q.mk"}, false}, // paired by position, not by count
+		// Redirections are not separators.
+		{`make 2>&1 -f q.mk lint`, []string{"q.mk"}, false},
+		{`make >&2 -f q.mk`, []string{"q.mk"}, false},
+		{`make &>log -f q.mk`, []string{"q.mk"}, false},
+		{`make <&0 -f q.mk`, []string{"q.mk"}, false},
+		{`make -f a.mk fmt & make lint`, nil, false},
 		{`bash -c "sh -c 'nice make'"`, nil, false},
 		{`bash -c "sh -c 'nice make -f q.mk'"`, []string{"q.mk"}, false},
 	}

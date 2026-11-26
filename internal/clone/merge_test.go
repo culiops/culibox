@@ -617,6 +617,8 @@ func TestMergeHomeDenyVariants(t *testing.T) {
 		{"pnpm-workspace.yaml", true},
 		{"packages/a/pnpm-workspace.yml", true},
 		{"PNPM-Workspace.YAML", true},
+		{".pnpmfile.cjs", true},
+		{"sub/.pnpmfile.mjs", true},
 		{".env.local", true},
 		{"sub/.env.production", true},
 		{".envrc.local", true},

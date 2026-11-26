@@ -390,7 +390,9 @@ func TestConfigRefsBounded(t *testing.T) {
 		if err != nil && !errors.Is(err, errScanCap) {
 			t.Fatalf("err = %v, want nil or errScanCap", err)
 		}
-		for _, line := range []string{strings.Repeat("make -f a.mk ", 8000), strings.Repeat("npm run x ", 8000), strings.Repeat(`bash -c "make x" `, 8000)} {
+		for _, line := range []string{strings.Repeat("make -f a.mk ", 8000), strings.Repeat("npm run x ", 8000), strings.Repeat(`bash -c "make x" `, 8000),
+			`bash -c "` + strings.Repeat("make;", 100000) + `"`, `bash -c "` + strings.Repeat("make x ", 100000) + `"`,
+			`bash -c "` + strings.Repeat("just&", 100000) + `"`} {
 			start = time.Now()
 			if ci := parseCommand("", line); !ci.over {
 				t.Errorf("%.20q...: no cap hit", line)
@@ -831,6 +833,9 @@ func TestMergeHomeRunnerScriptsRead(t *testing.T) {
 		{"bash -c make && echo reads the recipe", map[string]string{".claude/settings.json": hookSettings(`bash -c \"make fmt && echo ok\"`), "Makefile": "fmt:\n\t./bc/x.sh\n"}, "bc/x.sh", true},
 		{"bash -c make && echo, an unrelated file merges", map[string]string{".claude/settings.json": hookSettings(`bash -c \"make fmt && echo ok\"`), "Makefile": "fmt:\n\t./bc/x.sh\n"}, "unrelated/y.sh", false},
 		{"taskfile include with nested vars holding a template", map[string]string{".claude/settings.json": hookSettings("task lint"), "Taskfile.yml": "version: '3'\nincludes:\n  sub:\n    taskfile: ./sub\n    vars:\n      X: '{{.Y}}'\n", "sub/Taskfile.yml": "tasks:\n  lint:\n    cmds:\n      - ./tv/x.sh\n"}, "tv/x.sh", true},
+		{"bash -c: a second make in the word reads its -f file", map[string]string{".claude/settings.json": hookSettings(`bash -c \"make fmt; make -f x1.mk lint\"`), "x1.mk": "lint:\n\t./xm1/x.sh\n"}, "xm1/x.sh", true},
+		{"bash -c: a second make after && reads its -f file", map[string]string{".claude/settings.json": hookSettings(`bash -c \"make fmt && make -f x2.mk lint\"`), "x2.mk": "lint:\n\t./xm2/x.sh\n"}, "xm2/x.sh", true},
+		{"make 2>&1 -f FILE", map[string]string{".claude/settings.json": hookSettings("make 2>&1 -f r1.mk lint"), "r1.mk": "lint:\n\t./rd1/x.sh\n"}, "rd1/x.sh", true},
 		{"a recipe file nobody calls merges", map[string]string{".claude/settings.json": hookSettings("true"), "Makefile": "fmt:\n\t./tools/fmt.sh\n"}, "tools/fmt.sh", false},
 	}
 	for _, c := range cases {
@@ -869,7 +874,9 @@ func TestMergeHomeWorkspaceCallFails(t *testing.T) {
 		// A workspace setting from the environment.
 		"npm_config_workspace=pkg npm run lint", "NPM_CONFIG_WORKSPACES=true npm run lint", "npm_config_filter=web pnpm lint",
 		"env npm_config_workspaces=true npm run lint", "export npm_config_workspaces=true; npm run lint",
-		"npm_config_filter_prod=web pnpm lint", "npm_config_workspace_x=1 npm run lint", "pnpm --filter-prod web lint"} {
+		"npm_config_filter_prod=web pnpm lint", "npm_config_workspace_x=1 npm run lint", "pnpm --filter-prod web lint",
+		// Any npm or pnpm setting from the environment (#370 R14b).
+		"npm_config_registry=http://r.example npm ci", "pnpm_config_x=1 pnpm lint", "PNPM_CONFIG_FOO=1 pnpm lint"} {
 		t.Run(cmd, func(t *testing.T) {
 			old := mergeSystemGitConfig
 			mergeSystemGitConfig = filepath.Join(t.TempDir(), "none")
@@ -983,6 +990,7 @@ func TestMergeHomeRecipeAbsoluteInclude(t *testing.T) {
 		{"outside include that is a folder is skipped", map[string]string{"Makefile": "-include /OUT/d\n"}, map[string]string{"d/x": "x\n"}, "src/x.js", ""},
 		{"outside include that is a FIFO", map[string]string{"Makefile": "include /OUT/fifo\n"}, map[string]string{"fifo": "FIFO"}, "src/x.js", MergeFailed},
 		{"outside include over the size cap", map[string]string{"Makefile": "include /OUT/big.mk\n"}, map[string]string{"big.mk": strings.Repeat("# pad\n", mergeImportBytes/6+10)}, "src/x.js", MergeFailed},
+		{"outside include that is a device", map[string]string{"Makefile": "include /dev/null\n"}, nil, "src/x.js", MergeFailed},
 		{"outside include with a glob", map[string]string{"Makefile": "include /OUT/*.mk\n"}, map[string]string{"x.mk": "x\n"}, "src/x.js", MergeFailed},
 	}
 	for _, c := range cases {
